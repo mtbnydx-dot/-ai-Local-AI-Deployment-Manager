@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Runtime logs and ledgers
+logs/
+*.log
+*.pid
+*.tmp
+.manager.pid
+stats-ledger.json
+jobs-ledger.json
+
+# Downloaded models and local caches
+models/
+cache/
+.cache/
+
+# Local audit/export/runtime data
+audit-logs/
+openwebui-exports/
+projects/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local virtual environments and Python cache
+venvs/
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets and local-only config
+.env
+.env.*
+*.local.json
+*.secret.json
+service-api-key.json
+service-exposure.json
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
