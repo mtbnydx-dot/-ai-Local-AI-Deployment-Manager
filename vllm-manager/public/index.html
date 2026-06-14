@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>vLLM Manager</title>
+    <link rel="stylesheet" href="/styles.css?v=20260613-ext1" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">V</div>
+          <div>
+            <h1>vLLM Manager</h1>
+            <p>Local inference console</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a href="#service" class="active" data-view="service"><i data-lucide="activity"></i><span>服务</span></a>
+          <a href="#models" data-view="models"><i data-lucide="database"></i><span>模型</span></a>
+          <a href="#download" data-view="download"><i data-lucide="download"></i><span>下载</span></a>
+          <a href="#external-access" data-view="external-access"><i data-lucide="radio-tower"></i><span>外来访问</span></a>
+          <a href="#tools" data-view="tools"><i data-lucide="wrench"></i><span>工具</span></a>
+          <a href="#stats" data-view="stats"><i data-lucide="bar-chart-3"></i><span>统计</span></a>
+          <a href="#audit" data-view="audit"><i data-lucide="shield-check"></i><span>审计</span></a>
+          <a href="#logs" data-view="logs"><i data-lucide="terminal"></i><span>日志</span></a>
+        </nav>
+        <div class="paths">
+          <div><span>Models</span><strong id="modelsRoot">-</strong></div>
+          <div><span>Cache</span><strong id="hfCache">-</strong></div>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <h2>本地模型控制台</h2>
+            <p id="subtitle">vLLM / Docker / GPU 自动识别</p>
+          </div>
+          <div class="top-actions">
+            <div class="ui-preferences">
+              <select id="themeMode" title="主题模式">
+                <option value="auto">自动主题</option>
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+              </select>
+              <select id="languageMode" title="语言模式">
+                <option value="auto">语言自动</option>
+                <option value="zh-CN">中文</option>
+                <option value="en-US">English</option>
+              </select>
+            </div>
+            <button class="icon-button" id="refreshBtn" title="刷新"><i data-lucide="refresh-cw"></i></button>
+            <a class="ghost-link" id="apiDocsLink" href="http://127.0.0.1:8000/docs" target="_blank">API Docs</a>
+          </div>
+        </header>
+
+        <section class="status-grid view-panel active" id="service" data-view-panel="service">
+          <div class="metric">
+            <span>Docker</span>
+            <strong id="dockerStatus">-</strong>
+          </div>
+          <div class="metric">
+            <span>GPU</span>
+            <strong id="gpuStatus">-</strong>
+          </div>
+          <div class="metric">
+            <span>vLLM</span>
+            <strong id="serviceStatus">-</strong>
+          </div>
+          <div class="metric">
+            <span>当前模型</span>
+            <strong id="servedModel">-</strong>
+          </div>
+        </section>
+
+        <section class="workspace view-panel active" data-view-panel="service">
+          <div class="panel launch-panel">
+            <div class="panel-head">
+              <h3>启动服务</h3>
+              <div class="panel-actions">
+                <button class="secondary-button compact-button" id="autoTuneBtn" type="button" title="按当前模型和所选 GPU 自动填上下文、显存比例和并行参数"><i data-lucide="wand-2"></i><span>自动调优</span></button>
+                <button class="danger-button compact-button" id="stopBtn"><i data-lucide="square"></i><span>停止</span></button>
+              </div>
+            </div>
+            <div class="recent-launches" id="recentLaunches" hidden></div>
+            <form id="startForm" class="form-grid">
+              <div class="form-field model-picker-field">
+                <span>模型 ID 或本地路径</span>
+                <div class="model-input-shell">
+                  <input id="startModel" name="model" value="Qwen/Qwen3-0.6B" autocomplete="off" />
+                  <button class="model-picker-toggle" id="modelPickerToggle" type="button"><i data-lucide="database"></i><span>选择</span></button>
+                </div>
+                <div class="model-picker-popover hidden" id="modelPickerPopover">
+                  <div class="model-picker-toolbar">
+                    <input id="modelPickerSearch" placeholder="搜索本地、缓存、收藏或在线模型" autocomplete="off" />
+                    <button class="ghost-mini-button runnable-toggle" id="modelPickerRunnableOnly" type="button" title="仅显示 vLLM 可直接启动的模型"><i data-lucide="badge-check"></i><span>仅可运行</span></button>
+                    <button class="icon-button" id="modelPickerRefresh" type="button" title="刷新模型列表"><i data-lucide="refresh-cw"></i></button>
+                  </div>
+                  <div class="model-picker-tabs" id="modelPickerTabs">
+                    <button class="active" type="button" data-model-source="all">全部</button>
+                    <button type="button" data-model-source="favorite">收藏</button>
+                    <button type="button" data-model-source="local">本地</button>
+                    <button type="button" data-model-source="cached">缓存</button>
+                    <button type="button" data-model-source="remote">在线</button>
+                  </div>
+                  <div class="model-picker-list" id="modelPickerList">
+                    <div class="empty compact">正在读取模型列表...</div>
+                  </div>
+                </div>
+              </div>
+              <label>
+                <span>服务名</span>
+                <input id="servedName" name="name" value="qwen3-0.6b" autocomplete="off" />
+              </label>
+              <label>
+                <span>端口</span>
+                <input id="servicePort" name="port" type="number" value="8000" min="1024" max="65535" />
+                <small class="port-status" id="portStatus"></small>
+              </label>
+              <div class="form-section context-section">
+                <div class="section-title">
+                  <span>上下文与显存</span>
+                  <small>这些参数共同决定可用上下文、启动显存和并发能力。</small>
+                </div>
+                <div class="context-control-grid">
+                  <label>
+                    <span>上下文长度 max_model_len</span>
+                    <input id="maxModelLen" name="maxModelLen" type="number" value="8192" min="512" step="512" />
+                  </label>
+                  <label>
+                    <span>并发序列数 max_num_seqs</span>
+                    <input id="maxNumSeqs" name="maxNumSeqs" type="number" value="4" min="1" step="1" />
+                  </label>
+                  <label>
+                    <span>显存占用比例</span>
+                    <input id="gpuMemoryUtilization" name="gpuMemoryUtilization" type="number" value="0.9" min="0.1" max="0.98" step="0.01" />
+                  </label>
+                  <label>
+                    <span>KV cache 精度</span>
+                    <select id="kvCacheDtype" name="kvCacheDtype">
+                      <option value="auto">auto</option>
+                      <option value="fp8">FP8</option>
+                      <option value="fp8_e5m2">FP8 E5M2</option>
+                      <option value="fp8_e4m3">FP8 E4M3</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>CPU offload GB / 每卡</span>
+                    <input id="cpuOffloadGb" name="cpuOffloadGb" type="number" value="0" min="0" step="1" />
+                  </label>
+                  <label>
+                    <span>KV offload GB / 总量</span>
+                    <input id="kvOffloadingSize" name="kvOffloadingSize" type="number" value="0" min="0" step="1" />
+                  </label>
+                  <label>
+                    <span>多模态缓存 GB</span>
+                    <input id="mmProcessorCacheGb" name="mmProcessorCacheGb" type="number" value="4" min="0" step="0.5" />
+                  </label>
+                  <label class="check-row context-check-row">
+                    <input id="enablePrefixCaching" name="enablePrefixCaching" type="checkbox" />
+                    <span>启用 prefix cache</span>
+                  </label>
+                  <label class="check-row context-check-row">
+                    <input id="languageModelOnly" name="languageModelOnly" type="checkbox" />
+                    <span>仅语言模式</span>
+                  </label>
+                </div>
+                <div class="context-tip-grid">
+                  <div><strong>本地 Claude 推荐</strong><span>单人聊天用 4；冲 128K/192K 长上下文时用 1-2。</span></div>
+                  <div><strong>KV cache</strong><span>FP8 最省显存，长上下文优先用 FP8；auto 通常会按模型 dtype 使用更大缓存。</span></div>
+                  <div><strong>Offload</strong><span>CPU/KV offload 可以换更长上下文，但会牺牲速度，先从 4-8 GB 小步尝试。</span></div>
+                  <div><strong>仅语言模式</strong><span>不用图片/视频时可开启，减少多模态 encoder 和缓存开销。</span></div>
+                </div>
+                <div class="context-presets" id="contextPresetButtons">
+                  <button type="button" data-context-preset="4096">4K</button>
+                  <button type="button" data-context-preset="8192">8K</button>
+                  <button type="button" data-context-preset="16384">16K</button>
+                  <button type="button" data-context-preset="32768">32K</button>
+                  <button type="button" data-context-preset="65536">64K</button>
+                  <button type="button" data-context-preset="131072">128K</button>
+                  <button type="button" data-context-preset="196608">192K</button>
+                  <button type="button" data-context-preset="262144">256K</button>
+                </div>
+                <div class="estimate-grid" id="memoryEstimate">
+                  <div class="empty compact">输入模型后会估算对应上下文长度的显存占用。</div>
+                </div>
+                <div class="memory-bars" id="memoryGpuBars"></div>
+                <div class="form-note memory-note" id="memoryEstimateNote">
+                  模型名里包含 7B、14B、27B 这类规格时估算最准确；长上下文主要增加 KV cache 显存。
+                </div>
+              </div>
+              <label>
+                <span>dtype</span>
+                <select id="launchDtype" name="dtype">
+                  <option value="auto">auto</option>
+                  <option value="bfloat16">bfloat16</option>
+                  <option value="float16">float16</option>
+                  <option value="float32">float32</option>
+                </select>
+              </label>
+              <label>
+                <span>量化</span>
+                <select id="launchQuantization" name="quantization">
+                  <option value="">Auto</option>
+                  <option value="awq">AWQ</option>
+                  <option value="gptq">GPTQ</option>
+                  <option value="bitsandbytes">BitsAndBytes</option>
+                  <option value="fp8">FP8</option>
+                  <option value="modelopt">ModelOpt FP8</option>
+                  <option value="modelopt_fp4">NVFP4</option>
+                  <option value="compressed-tensors">Compressed</option>
+                </select>
+              </label>
+              <label>
+                <span>加载格式</span>
+                <select id="loadFormat" name="loadFormat">
+                  <option value="auto">Auto</option>
+                  <option value="hf">HF / safetensors</option>
+                  <option value="gguf">GGUF 单文件</option>
+                </select>
+              </label>
+              <div class="form-section gguf-section" id="ggufSection">
+                <div class="section-title">
+                  <span>GGUF 启动参数</span>
+                  <small>vLLM 的 GGUF 支持仍偏实验；推荐只用单文件 GGUF。</small>
+                </div>
+                <div class="gguf-fields">
+                  <label>
+                    <span>tokenizer</span>
+                    <input id="ggufTokenizer" name="tokenizer" placeholder="例如 google/gemma-3-27b-it 或对应基础模型" autocomplete="off" />
+                  </label>
+                  <label>
+                    <span>hf config path</span>
+                    <input id="ggufHfConfigPath" name="hfConfigPath" placeholder="可选；例如 google/gemma-3-27b-it" autocomplete="off" />
+                  </label>
+                </div>
+                <div class="form-note gguf-note" id="ggufNote">
+                  选择 GGUF 时会直接把 .gguf 文件传给 vLLM，并忽略 AWQ/GPTQ/Compressed 这类额外权重量化参数。
+                </div>
+              </div>
+              <label>
+                <span>调用工具预设</span>
+                <select id="clientPreset" name="clientPreset">
+                  <option value="openwebui">Open WebUI</option>
+                  <option value="claude-code">Claude Code 桥接</option>
+                  <option value="claude-cowork">Claude Cowork 桥接</option>
+                  <option value="generic">通用 OpenAI 兼容</option>
+                </select>
+              </label>
+              <label>
+                <span>reasoning parser</span>
+                <select id="reasoningParser" name="reasoningParser">
+                  <option value="auto">自动建议</option>
+                  <option value="">关闭 / 原样输出</option>
+                  <option value="qwen3">qwen3</option>
+                  <option value="deepseek_r1">deepseek_r1</option>
+                  <option value="deepseek_v3">deepseek_v3</option>
+                  <option value="gemma4">gemma4</option>
+                  <option value="gptoss">gptoss</option>
+                  <option value="kimi_k2">kimi_k2</option>
+                  <option value="mistral">mistral</option>
+                  <option value="granite">granite</option>
+                  <option value="identity">identity</option>
+                </select>
+              </label>
+              <div class="form-note reasoning-note" id="reasoningNote">
+                Open WebUI 建议用 qwen3 / deepseek_r1 这类 parser 输出结构化 reasoning；Claude Code 或 Claude Cowork 通过 OpenAI 兼容桥接时，要看桥接器是否转发 reasoning_content，不支持时可关闭。
+              </div>
+              <div class="form-section tool-section">
+                <div class="section-title">
+                  <span>工具调用桥接</span>
+                  <small>Claude 会把工具 schema 发给管理器，管理器再转成 vLLM/OpenAI tools。</small>
+                </div>
+                <div class="context-control-grid">
+                  <label class="check-row context-check-row">
+                    <input id="enableAutoToolChoice" name="enableAutoToolChoice" type="checkbox" checked />
+                    <span>启用 vLLM 自动工具调用</span>
+                  </label>
+                  <label>
+                    <span>tool call parser</span>
+                    <select id="toolCallParser" name="toolCallParser">
+                      <option value="auto">自动建议</option>
+                      <option value="">关闭</option>
+                      <option value="qwen3_coder">qwen3_coder</option>
+                      <option value="qwen3_xml">qwen3_xml</option>
+                      <option value="hermes">hermes</option>
+                      <option value="deepseek_v3">deepseek_v3</option>
+                      <option value="gemma4">gemma4</option>
+                      <option value="mistral">mistral</option>
+                      <option value="llama3_json">llama3_json</option>
+                      <option value="xlam">xlam</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="form-note reasoning-note" id="toolCallNote">
+                  Qwen3.6 / Qwen3-Coder 推荐 qwen3_coder；DeepSeek 推荐 deepseek_v3；Qwen2.5 常用 hermes。
+                </div>
+              </div>
+              <div class="form-section compression-section">
+                <div class="section-title">
+                  <span>Claude 上下文自动压缩</span>
+                  <small>仅作用于 Claude 兼容桥；触发后保留最近原文，把更旧内容压成结构化摘要。</small>
+                </div>
+                <div class="context-control-grid">
+                  <label class="check-row context-check-row">
+                    <input id="claudeCompressionEnabled" type="checkbox" checked />
+                    <span>启用自动压缩</span>
+                  </label>
+                  <label>
+                    <span>触发阈值 %</span>
+                    <input id="claudeCompressionTrigger" type="number" value="90" min="50" max="99" step="1" />
+                  </label>
+                  <label>
+                    <span>最近原文保留 %</span>
+                    <input id="claudeCompressionRecent" type="number" value="20" min="5" max="50" step="1" />
+                  </label>
+                  <label>
+                    <span>摘要预算 %</span>
+                    <input id="claudeCompressionSummary" type="number" value="20" min="5" max="50" step="1" />
+                  </label>
+                </div>
+                <div class="form-note reasoning-note" id="claudeCompressionNote">
+                  默认 90% 触发、20% 最近原文、20% 摘要预算；错误、路径、目标、硬性要求和工具结果会优先保护。
+                </div>
+                <button class="secondary-button compact-button" id="saveClaudeCompressionBtn" type="button"><i data-lucide="badge-check"></i><span>保存压缩设置</span></button>
+              </div>
+              <label class="wide-field">
+                <span>服务访问范围</span>
+                <select id="networkAccess" name="networkAccess">
+                  <option value="local">仅本机访问</option>
+                  <option value="lan">局域网设备可访问</option>
+                </select>
+              </label>
+              <label class="wide-field">
+                <span>API Key（可选）</span>
+                <input id="vllmApiKey" name="apiKey" type="password" autocomplete="off" placeholder="留空则不鉴权；开放局域网时强烈建议设置" />
+              </label>
+              <div class="form-note network-note" id="networkNote">
+                仅本机访问会绑定 127.0.0.1；局域网访问会绑定本机 IPv4 地址。设置 API Key 后，客户端需以 Bearer Token 携带。
+              </div>
+              <div class="form-section gpu-section">
+                <div class="section-title">
+                  <span>GPU 设备</span>
+                  <small>勾选要暴露给 vLLM 的显卡；单卡机器会自动选中 GPU 0。</small>
+                </div>
+                <div class="gpu-picker" id="gpuPicker">
+                  <div class="empty compact">正在读取 GPU...</div>
+                </div>
+              </div>
+              <label class="wide-field">
+                <span>多 GPU 利用方式</span>
+                <select id="multiGpuMode" name="multiGpuMode">
+                  <option value="single">单卡 / 指定设备</option>
+                  <option value="tensor">Tensor Parallel 张量并行</option>
+                  <option value="pipeline">Pipeline Parallel 流水线并行</option>
+                  <option value="data">Data Parallel 数据并行</option>
+                </select>
+              </label>
+              <label class="wide-field">
+                <span>执行后端</span>
+                <select name="distributedExecutorBackend">
+                  <option value="auto">auto</option>
+                  <option value="mp">mp 单机多进程</option>
+                  <option value="ray">ray 多机/集群</option>
+                </select>
+              </label>
+              <div class="parallel-size-grid">
+                <label>
+                  <span>TP 数</span>
+                  <input id="tensorParallelSize" name="tensorParallelSize" type="number" value="1" min="1" />
+                </label>
+                <label>
+                  <span>PP 数</span>
+                  <input id="pipelineParallelSize" name="pipelineParallelSize" type="number" value="1" min="1" />
+                </label>
+                <label>
+                  <span>DP 数</span>
+                  <input id="dataParallelSize" name="dataParallelSize" type="number" value="1" min="1" />
+                </label>
+              </div>
+              <label class="check-row">
+                <input name="enableExpertParallel" type="checkbox" />
+                <span>MoE expert parallel</span>
+              </label>
+              <div class="form-note" id="parallelHintNote">
+                Tensor Parallel 适合把大模型切到多张同规格 GPU；Pipeline Parallel 适合超大模型分层放置；Data Parallel 更偏吞吐扩展，普通非 MoE 模型通常用多实例更直接。TP/PP/DP 数会根据多 GPU 模式自动填写。
+              </div>
+              <label class="check-row">
+                <input name="trustRemoteCode" type="checkbox" />
+                <span>trust remote code</span>
+              </label>
+              <button class="primary-button" type="submit"><i data-lucide="play"></i><span>启动 vLLM</span></button>
+            </form>
+            <div class="service-job-list" id="serviceJobList">
+              <div class="empty compact">暂无启动任务</div>
+            </div>
+          </div>
+
+          <div class="service-side">
+          <div class="panel running-panel">
+            <div class="panel-head">
+              <div>
+                <h3>运行中模型</h3>
+                <p>显示当前 vLLM 容器实际暴露的模型；卸载会停止该 vLLM 容器。</p>
+              </div>
+              <div class="panel-actions">
+                <button class="secondary-button compact-button" id="claudeSetupBtn" type="button"><i data-lucide="badge-check"></i><span>一键 Claude</span></button>
+                <button class="icon-button" id="reloadRunningModelsBtn" title="刷新运行中模型"><i data-lucide="refresh-cw"></i></button>
+              </div>
+            </div>
+            <div class="running-model-list" id="runningModelList">
+              <div class="empty compact">正在读取运行状态...</div>
+            </div>
+            <div class="runtime-facts-grid" id="runtimeFactsGrid">
+              <div class="empty compact">启动模型后这里会显示当前运行实例的实测上下文和 KV cache。</div>
+            </div>
+            <div class="runtime-note">
+              <strong>为什么启动慢、显存高？</strong>
+              <span>vLLM 启动会经历读权重、初始化 CUDA/FlashInfer、torch.compile、profiling 和 warmup；显存还会预留 KV cache、CUDA graph、encoder cache 和并发余量。</span>
+            </div>
+          </div>
+
+          <div class="panel test-panel">
+            <div class="panel-head">
+              <h3>接口测试</h3>
+            </div>
+            <form id="testForm" class="test-form">
+              <input id="testModel" value="qwen3-0.6b" autocomplete="off" />
+              <textarea id="testPrompt" rows="5">用一句中文回答：本地 vLLM 服务是否可用？</textarea>
+              <button class="secondary-button" type="submit"><i data-lucide="send"></i><span>发送</span></button>
+            </form>
+            <pre id="testResult" class="result-box">等待测试</pre>
+          </div>
+          </div>
+        </section>
+
+        <section class="models-page view-panel" id="models" data-view-panel="models">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>模型库</h3>
+              <button class="icon-button" id="reloadModelsBtn" title="刷新模型"><i data-lucide="rotate-cw"></i></button>
+            </div>
+            <div class="model-list" id="modelList"></div>
+          </div>
+
+          <div class="panel remote-panel">
+            <div class="panel-head">
+              <div>
+                <h3>在线模型</h3>
+                <p>从 Hugging Face Hub 实时获取，适合找最新、热门、蒸馏和去审查模型。</p>
+              </div>
+              <button class="icon-button" id="reloadRemoteModelsBtn" title="刷新在线模型"><i data-lucide="rotate-cw"></i></button>
+            </div>
+            <div class="remote-toolbar">
+              <label class="remote-source-field">
+                <span>来源</span>
+                <select id="remoteSource">
+                  <option value="huggingface">Hugging Face</option>
+                  <option value="modelscope">ModelScope 魔搭</option>
+                </select>
+              </label>
+              <label class="remote-search-field">
+                <span>搜索关键词</span>
+                <input id="remoteSearch" placeholder="Qwen3, DeepSeek, gpt-oss... 留空看榜单" autocomplete="off" />
+              </label>
+              <button class="secondary-button remote-search-btn" id="remoteSearchBtn" type="button"><i data-lucide="search"></i><span>联网查询</span></button>
+            </div>
+            <div class="remote-facets">
+              <label>
+                <span>排序</span>
+                <select id="remoteSort">
+                  <option value="trending">🔥 热度趋势</option>
+                  <option value="downloads">下载量</option>
+                  <option value="likes">点赞数</option>
+                  <option value="lastModified">最近更新</option>
+                </select>
+              </label>
+              <label>
+                <span>模型类型</span>
+                <select id="remoteTask">
+                  <option value="all">全部类型</option>
+                  <option value="text">纯文本 LLM</option>
+                  <option value="vision">多模态 / 视觉</option>
+                </select>
+              </label>
+              <label>
+                <span>特征</span>
+                <select id="remoteFeature">
+                  <option value="all">不限特征</option>
+                  <option value="reasoning">推理 / 思考</option>
+                  <option value="moe">MoE 混合专家</option>
+                  <option value="distilled">蒸馏版</option>
+                  <option value="uncensored">去审查 / Abliterated</option>
+                </select>
+              </label>
+              <label>
+                <span>参数规模</span>
+                <select id="remoteSizeFilter">
+                  <option value="">全部规模</option>
+                  <option value="small">≤ 8B 单卡友好</option>
+                  <option value="medium">8B - 14B</option>
+                  <option value="large">14B - 32B</option>
+                  <option value="xlarge">32B+ 需多卡/量化</option>
+                </select>
+              </label>
+              <label>
+                <span>量化精度</span>
+                <select id="remoteQuantFilter">
+                  <option value="">全部精度</option>
+                  <option value="quantized">任意量化</option>
+                  <option value="fp8">FP8</option>
+                  <option value="nvfp4">NVFP4</option>
+                  <option value="mxfp4">MXFP4</option>
+                  <option value="awq">AWQ</option>
+                  <option value="gptq">GPTQ</option>
+                  <option value="int4">INT4 / NF4</option>
+                  <option value="gguf">GGUF</option>
+                </select>
+              </label>
+              <label>
+                <span>发布时间</span>
+                <select id="remoteFreshness">
+                  <option value="auto">自动过滤旧模型</option>
+                  <option value="all">不过滤时间</option>
+                  <option value="2025">2025 年后</option>
+                  <option value="2026">2026 年后</option>
+                </select>
+              </label>
+              <label>
+                <span>数量上限</span>
+                <input id="remoteLimit" type="number" min="12" max="120" step="12" value="48" />
+              </label>
+              <button class="ghost-mini-button runnable-toggle" id="remoteRunnableOnly" type="button" title="仅显示 vLLM 可直接运行的模型"><i data-lucide="badge-check"></i><span>仅 vLLM 可运行</span></button>
+            </div>
+            <div class="selection-hint" id="remoteHint">在线列表按公开模型元数据返回；gated 模型下载前需要配置对应 token。</div>
+            <div class="remote-model-list" id="remoteModelList"></div>
+            <button class="ghost-mini-button remote-load-more" id="remoteLoadMoreBtn" type="button"><i data-lucide="plus"></i><span>加载更多</span></button>
+          </div>
+        </section>
+
+        <section class="download-page view-panel" id="download" data-view-panel="download">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>下载模型</h3>
+              <div class="panel-actions">
+                <label class="queue-toggle" title="开启后多个下载任务排队顺序执行，避免同时抢带宽和磁盘 IO">
+                  <input type="checkbox" id="downloadQueueMode" />
+                  <span>顺序下载队列</span>
+                </label>
+                <button class="ghost-mini-button" id="downloadRunnableModelsBtn" type="button"><i data-lucide="badge-check"></i><span>选择可运行模型</span></button>
+              </div>
+            </div>
+            <form id="downloadForm" class="download-form">
+              <div class="link-resolver">
+                <label>
+                  <span>模型介绍页链接</span>
+                  <input id="modelPageUrl" placeholder="https://huggingface.co/Qwen/Qwen3-8B" autocomplete="off" />
+                </label>
+                <button class="secondary-button" id="resolveModelLinkBtn" type="button"><i data-lucide="download"></i><span>解析链接</span></button>
+              </div>
+              <div class="selection-hint" id="linkResolveResult">粘贴 Hugging Face 或 ModelScope 的模型页面链接，可自动填入模型 ID、保存名和下载来源。</div>
+              <div class="selection-note">
+                <strong>选择预设后仍可手动改模型 ID。</strong>
+                <span>规格越大效果通常越好但更吃显存；量化精度越低越省显存，可能损失一点质量。</span>
+              </div>
+              <div class="preset-grid">
+                <label>
+                  <span>开发商</span>
+                  <select id="downloadDeveloper" name="developer"></select>
+                </label>
+                <label>
+                  <span>模型版本</span>
+                  <select id="downloadVersion" name="modelVersion"></select>
+                </label>
+                <label>
+                  <span>规格</span>
+                  <select id="downloadSpec" name="spec"></select>
+                </label>
+                <label>
+                  <span>量化精度</span>
+                  <select id="downloadPrecision" name="precision"></select>
+                </label>
+                <label>
+                  <span>下载来源</span>
+                  <select id="downloadSource" name="source">
+                    <option value="huggingface">Hugging Face</option>
+                    <option value="modelscope">ModelScope 魔搭</option>
+                  </select>
+                </label>
+              </div>
+              <div class="selection-hint" id="downloadPresetHint">Hugging Face 通用性最好；ModelScope 在国内网络环境通常更顺手。</div>
+              <div class="quant-finder" id="downloadQuantFinder" hidden></div>
+              <label>
+                <span>模型 ID</span>
+                <input id="downloadModel" name="model" placeholder="Qwen/Qwen3-8B" autocomplete="off" />
+              </label>
+              <label>
+                <span>保存名称</span>
+                <input id="downloadOutputName" name="outputName" placeholder="qwen3-8b" autocomplete="off" />
+              </label>
+              <label>
+                <span>HF Token（可选）</span>
+                <input id="downloadHfToken" name="hfToken" type="password" placeholder="下载 gated / 私有模型时填写；留空使用环境变量 HF_TOKEN" autocomplete="off" />
+              </label>
+              <div class="download-estimate" id="downloadEstimate" hidden>
+                <i data-lucide="hard-drive"></i>
+                <span id="downloadEstimateText">填入模型 ID 后会预估下载体积。</span>
+              </div>
+              <button class="primary-button" type="submit"><i data-lucide="download"></i><span>开始下载</span></button>
+            </form>
+            <div class="job-list" id="jobList"></div>
+          </div>
+        </section>
+
+        <section class="tools-page view-panel" id="tools" data-view-panel="tools">
+          <div class="panel tool-hero-panel">
+            <div class="panel-head">
+              <div>
+                <h3>实用工具</h3>
+                <p>把健康检查、启动方案、模型兼容性、日志摘要、测速、连接和自动保护放在一起。</p>
+              </div>
+              <button class="secondary-button compact-button" id="refreshToolsBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新工具状态</span></button>
+            </div>
+            <div class="tool-health-score" id="healthScoreBox">等待健康检查</div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>一键健康检查</h3>
+                <p>检查 Docker、GPU、镜像、API、目录、token、CLI 和最近错误。</p>
+              </div>
+              <button class="secondary-button compact-button" id="runHealthBtn" type="button"><i data-lucide="activity"></i><span>检查</span></button>
+            </div>
+            <div class="tool-grid" id="healthGrid"><div class="empty compact">点击检查后显示环境状态。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>启动配置方案</h3>
+                <p>保存和套用 Claude 长上下文、OpenWebUI、低显存、多卡等启动参数。</p>
+              </div>
+              <button class="secondary-button compact-button" id="saveProfileBtn" type="button"><i data-lucide="badge-check"></i><span>保存当前表单</span></button>
+            </div>
+            <div class="profile-save-row">
+              <input id="profileNameInput" placeholder="给当前启动表单起个名字" autocomplete="off" />
+              <input id="profileDescInput" placeholder="可选说明，例如 128K Claude 工具调用" autocomplete="off" />
+            </div>
+            <div class="profile-list" id="profileList"><div class="empty compact">正在读取配置方案...</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型兼容性检查</h3>
+                <p>启动前判断 vLLM / GGUF / token / parser / 量化参数风险。</p>
+              </div>
+              <button class="secondary-button compact-button" id="runModelCheckBtn" type="button"><i data-lucide="shield-check"></i><span>检查模型</span></button>
+            </div>
+            <div class="tool-inline-form">
+              <input id="modelCheckInput" placeholder="模型 ID 或本地路径，留空则使用启动表单" autocomplete="off" />
+            </div>
+            <div class="tool-result" id="modelCheckResult"><div class="empty compact">尚未检查模型。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>日志智能摘要</h3>
+                <p>把 vLLM 最近日志整理成阶段、错误、原因和建议操作。</p>
+              </div>
+              <button class="secondary-button compact-button" id="runLogSummaryBtn" type="button"><i data-lucide="scroll-text"></i><span>摘要</span></button>
+            </div>
+            <div class="tool-result" id="logSummaryPanel"><div class="empty compact">尚未读取日志摘要。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>空闲卸载与显存保护</h3>
+                <p>默认关闭。开启后管理器会按空闲时间或显存阈值提醒/卸载 vLLM 容器。</p>
+              </div>
+              <button class="secondary-button compact-button" id="saveAutomationBtn" type="button"><i data-lucide="badge-check"></i><span>保存保护设置</span></button>
+            </div>
+            <div class="automation-grid">
+              <label class="check-row context-check-row"><input id="idleUnloadEnabled" type="checkbox" /><span>空闲自动卸载</span></label>
+              <label><span>空闲分钟</span><input id="idleMinutes" type="number" min="5" max="1440" value="30" /></label>
+              <label class="check-row context-check-row"><input id="vramGuardEnabled" type="checkbox" /><span>显存保护</span></label>
+              <label><span>显存阈值 %</span><input id="vramPercent" type="number" min="70" max="99" value="94" /></label>
+              <label><span>阈值动作</span><select id="vramAction"><option value="warn">只提醒</option><option value="unload">空闲时卸载</option></select></label>
+            </div>
+            <div class="selection-hint" id="automationStatus">自动保护默认关闭，不会影响当前模型。</div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型测速基准</h3>
+                <p>对当前运行模型做短测，记录延迟、输出速度和返回预览。</p>
+              </div>
+            </div>
+            <form id="benchmarkForm" class="benchmark-form">
+              <input id="benchmarkModel" placeholder="模型名，留空使用当前运行模型" autocomplete="off" />
+              <input id="benchmarkRequests" type="number" min="1" max="5" value="3" />
+              <input id="benchmarkMaxTokens" type="number" min="16" max="1024" value="160" />
+              <textarea id="benchmarkPrompt" rows="4">用中文简要说明本地模型是否可以稳定完成工具调用、长上下文和代码任务。</textarea>
+              <button class="primary-button" type="submit"><i data-lucide="play"></i><span>开始测速</span></button>
+            </form>
+            <div class="service-job-list" id="benchmarkJobList"><div class="empty compact">暂无测速任务。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>客户端连接向导</h3>
+                <p>OpenWebUI、Claude Desktop / ccswitch、curl 测试命令集中展示。</p>
+              </div>
+              <button class="secondary-button compact-button" id="reloadConnectionBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新连接</span></button>
+            </div>
+            <div class="tool-result" id="connectionGuide"><div class="empty compact">正在读取连接信息...</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>上下文压缩可视化</h3>
+                <p>只显示压缩统计和最近会话，不读取原始对话正文。</p>
+              </div>
+              <button class="secondary-button compact-button" id="reloadCompressionInsightsBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新压缩统计</span></button>
+            </div>
+            <div class="tool-result" id="compressionInsights"><div class="empty compact">正在读取压缩统计...</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型收藏与标签</h3>
+                <p>给常用模型标记用途，例如 Claude、长上下文、去审查、多模态、容易报错。</p>
+              </div>
+              <button class="secondary-button compact-button" id="saveModelNoteBtn" type="button"><i data-lucide="badge-check"></i><span>保存标签</span></button>
+            </div>
+            <div class="model-note-form">
+              <input id="modelNoteModel" placeholder="模型 ID 或本地路径" autocomplete="off" />
+              <input id="modelNoteTags" placeholder="标签，用逗号分隔，例如 Claude, 长上下文, NVFP4" autocomplete="off" />
+              <label class="check-row context-check-row"><input id="modelNoteFavorite" type="checkbox" /><span>收藏</span></label>
+              <textarea id="modelNoteText" rows="3" placeholder="备注，例如推荐参数、已知问题、适合场景"></textarea>
+            </div>
+            <div class="profile-list" id="modelNotesList"><div class="empty compact">暂无收藏标签。</div></div>
+          </div>
+        </section>
+
+        <section class="external-access-page view-panel" id="external-access" data-view-panel="external-access">
+          <div class="panel stats-summary-panel">
+            <div class="panel-head">
+              <div>
+                <h3>外来访问统计</h3>
+                <p>按局域网/外部客户端聚合模型网关访问，不读取或展示聊天正文。</p>
+              </div>
+              <div class="panel-actions">
+                <span class="stats-freshness" id="externalAccessFreshness"></span>
+                <button class="icon-button" id="reloadExternalAccessBtn" title="刷新外来访问"><i data-lucide="refresh-cw"></i></button>
+              </div>
+            </div>
+            <div class="stats-grid" id="externalAccessSummary">
+              <div class="empty compact">正在读取外来访问统计...</div>
+            </div>
+            <div class="external-access-note" id="externalAccessPrivacy"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>对外入口</h3>
+                <p>当前可给局域网设备使用的网关地址、鉴权和限流状态。</p>
+              </div>
+            </div>
+            <div class="external-endpoint-grid" id="externalAccessEndpoints"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>近期窗口</h3>
+                <p>最近 5 分钟、15 分钟、1 小时和 24 小时的外来请求活跃度。</p>
+              </div>
+            </div>
+            <div class="external-window-grid" id="externalAccessWindows"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>外部客户端</h3>
+                <p>按来源 IP 聚合请求量、错误率、延迟、模型和认证方式。</p>
+              </div>
+            </div>
+            <div class="stats-model-list" id="externalAccessClients"></div>
+          </div>
+
+          <div class="external-breakdown-grid">
+            <div class="panel">
+              <div class="panel-head"><div><h3>路径</h3><p>接口路径调用分布。</p></div></div>
+              <div class="external-compact-list" id="externalAccessPaths"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><div><h3>模型</h3><p>请求模型名和别名使用情况。</p></div></div>
+              <div class="external-compact-list" id="externalAccessModels"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><div><h3>认证</h3><p>客户端实际使用的 Key 字段。</p></div></div>
+              <div class="external-compact-list" id="externalAccessAuth"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><div><h3>状态码</h3><p>成功、认证失败、限流和上游错误。</p></div></div>
+              <div class="external-compact-list" id="externalAccessStatuses"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>近 2 小时趋势</h3>
+                <p>每 5 分钟聚合一次外部请求、错误和平均延迟。</p>
+              </div>
+            </div>
+            <div class="trend-grid" id="externalAccessTimeline"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>最近访问</h3>
+                <p>只显示访问元数据：来源、路径、模型、状态、认证字段、耗时和 token 计数。</p>
+              </div>
+            </div>
+            <div class="external-recent-list" id="externalAccessRecent"></div>
+          </div>
+        </section>
+
+        <section class="stats-page view-panel" id="stats" data-view-panel="stats">
+          <div class="panel stats-summary-panel">
+            <div class="panel-head">
+              <div>
+                <h3>统计总览</h3>
+                <p>来自 vLLM /metrics 与本地累计账本，统计请求、速度、上下文和等价 API 价值。</p>
+              </div>
+              <div class="panel-actions">
+                <span class="stats-freshness" id="statsFreshness"></span>
+                <button class="icon-button" id="reloadStatsBtn" title="刷新统计"><i data-lucide="refresh-cw"></i></button>
+              </div>
+            </div>
+            <div class="stats-grid" id="statsSummary">
+              <div class="empty compact">正在读取统计...</div>
+            </div>
+          </div>
+
+          <div class="panel stats-summary-panel">
+            <div class="panel-head">
+              <div>
+                <h3>实时趋势</h3>
+                <p>停留在本页时按 5 秒采样累积，展示速度、并发和显存的近期变化。</p>
+              </div>
+            </div>
+            <div class="trend-grid" id="statsTrends">
+              <div class="empty compact">启动模型并产生请求后，这里会显示实时趋势曲线。</div>
+            </div>
+          </div>
+
+          <div class="panel stats-summary-panel">
+            <div class="panel-head">
+              <div>
+                <h3>负载构成</h3>
+                <p>输入/缓存/输出 token 占比、请求结果分布和 prefix cache 命中。</p>
+              </div>
+            </div>
+            <div class="composition-grid" id="statsComposition"></div>
+          </div>
+
+          <div class="panel stats-summary-panel" id="statsGpuPanel" hidden>
+            <div class="panel-head">
+              <div>
+                <h3>GPU 明细</h3>
+                <p>每张显卡的利用率、显存占用和温度。</p>
+              </div>
+            </div>
+            <div class="gpu-detail-grid" id="statsGpuDetail"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型占比</h3>
+                <p>按模型名聚合 token、请求、上下文和速度。</p>
+              </div>
+            </div>
+            <div class="stats-model-list" id="statsModelList"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>Claude 调用情况</h3>
+                <p>把 Claude Desktop / Claude Code / Cowork 经过管理器的调用，和 OpenWebUI 聊天或直连 API 分开统计。</p>
+              </div>
+            </div>
+            <div class="stats-model-list" id="statsClientBreakdown"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>等价 API 价值</h3>
+                <p>按官方公开价格估算，如果这些 token 调用 GPT 或 Claude 大概值多少钱。</p>
+              </div>
+            </div>
+            <div class="cost-table" id="statsCostTable"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>性能细节</h3>
+                <p>延迟、队列、KV cache、prefix cache 和启动阶段指标。</p>
+              </div>
+            </div>
+            <div class="stats-detail-grid" id="statsDetailGrid"></div>
+          </div>
+        </section>
+
+        <section class="audit-page view-panel" id="audit" data-view-panel="audit">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>用户审计</h3>
+                <p>模型卸载或手动导出时生成本地完整 Markdown，对话正文需要审计密码后才会在浏览器中读取。</p>
+              </div>
+              <button class="icon-button" id="reloadAuditBtn" title="刷新审计"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="selection-hint audit-status" id="auditStatusBox">正在读取审计状态...</div>
+            <div class="audit-error" id="auditError"></div>
+
+            <div class="audit-login-panel" id="auditLoginPanel">
+              <form class="audit-login-form" id="auditLoginForm">
+                <label>
+                  <span>审计密码</span>
+                  <input id="auditPassword" type="password" autocomplete="current-password" placeholder="输入本机审计密码" />
+                </label>
+                <button class="primary-button" type="submit"><i data-lucide="lock-keyhole"></i><span>解锁审计后台</span></button>
+              </form>
+              <div class="form-note">
+                首次使用会自动生成密码文件；路径会显示在上方状态里。这个页面只在密码通过后读取完整对话。
+              </div>
+            </div>
+
+            <div class="audit-admin-panel hidden" id="auditAdminPanel">
+              <div class="audit-toolbar">
+                <button class="secondary-button" id="manualAuditExportBtn" type="button"><i data-lucide="download"></i><span>手动生成审计</span></button>
+                <button class="danger-button" id="auditLogoutBtn" type="button"><i data-lucide="square"></i><span>锁定</span></button>
+              </div>
+              <div class="audit-grid">
+                <div class="audit-list" id="auditList">
+                  <div class="empty compact">暂无审计导出。</div>
+                </div>
+                <div class="audit-viewer-shell">
+                  <div class="selection-hint audit-selected" id="auditSelectedMeta">选择一条审计记录查看完整 Markdown。</div>
+                  <pre class="audit-markdown" id="auditMarkdownViewer">未打开审计 Markdown。</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel logs-panel view-panel" id="logs" data-view-panel="logs">
+          <div class="panel-head">
+            <h3>运行日志</h3>
+            <button class="icon-button" id="reloadLogsBtn" title="刷新日志"><i data-lucide="scroll-text"></i></button>
+          </div>
+          <pre id="logsBox" class="logs-box">暂无日志</pre>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-root" id="toastRoot" aria-live="polite" aria-atomic="false"></div>
+
+    <script src="/js/formatters.js?v=20260526-modular-ui" defer></script>
+    <script src="/js/api-client.js?v=20260526-modular-ui" defer></script>
+    <script src="/js/runtime-insights.js?v=20260526-modular-ui" defer></script>
+    <script src="/app.js?v=20260613-ext1" defer></script>
+    <script src="https://unpkg.com/lucide@0.454.0/dist/umd/lucide.min.js" defer onload="window.renderIcons && window.renderIcons()"></script>
+  </body>
+</html>

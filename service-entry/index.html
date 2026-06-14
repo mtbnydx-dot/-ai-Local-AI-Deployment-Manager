@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>本地模型服务统一入口</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f6fb;
+      --surface: #ffffff;
+      --surface-2: #eef3f7;
+      --surface-3: #e4ebf3;
+      --line: #d9e2ea;
+      --ink: #14202b;
+      --muted: #607284;
+      --blue: #2563eb;
+      --teal: #0f9f8f;
+      --green: #16a34a;
+      --amber: #d97706;
+      --red: #dc2626;
+      --shadow: 0 14px 32px rgba(22, 34, 51, 0.09);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0a1017;
+        --surface: #111923;
+        --surface-2: #192432;
+        --surface-3: #223144;
+        --line: #2b3a4a;
+        --ink: #e9f0f8;
+        --muted: #9aaec0;
+        --blue: #6aa4ff;
+        --teal: #2dd4bf;
+        --green: #4ade80;
+        --amber: #fbbf24;
+        --red: #f87171;
+        --shadow: 0 18px 38px rgba(0, 0, 0, 0.34);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+    main {
+      width: min(1220px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 34px 0;
+      display: grid;
+      gap: 18px;
+    }
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 8px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(24px, 3vw, 34px); letter-spacing: 0; }
+    h2 { font-size: 21px; }
+    h3 { font-size: 15px; }
+    p { color: var(--muted); line-height: 1.6; }
+    a { color: inherit; text-decoration: none; }
+    button, .button {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 14px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--ink);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover, .button:hover { background: var(--surface-3); }
+    .button.primary, button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .button.teal { background: var(--teal); border-color: var(--teal); color: #06201c; }
+    button.danger { color: var(--red); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.ok { color: var(--green); }
+    .badge.warn { color: var(--amber); }
+    .badge.fail { color: var(--red); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      min-height: 76px;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      display: grid;
+      gap: 6px;
+    }
+    .metric span { color: var(--muted); font-size: 12px; }
+    .metric strong { font-size: 17px; overflow-wrap: anywhere; }
+    .links {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .quick-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .endpoint-list { display: grid; gap: 10px; }
+    .endpoint {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    code {
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      padding: 9px 11px;
+      border-radius: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .note > p code {
+      min-height: auto;
+      display: inline-flex;
+      padding: 2px 6px;
+      vertical-align: middle;
+    }
+    .note {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+    }
+    .empty {
+      min-height: 180px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    .gateway-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
+    }
+    .doc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .doc-card {
+      min-height: 118px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .doc-card strong { font-size: 15px; }
+    .doc-card span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(360px, calc(100vw - 36px));
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      color: var(--ink);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: 160ms ease;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    @media (max-width: 960px) {
+      header { display: grid; align-items: start; }
+      .toolbar { justify-content: flex-start; }
+      .grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100vw - 20px, 1220px); padding: 20px 0; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .endpoint { grid-template-columns: 1fr; }
+      button, .button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>本地模型服务统一入口</h1>
+        <p>统一查看 vLLM / llama.cpp 管理器、服务网关、Docker 状态和客户端 Key。对外客户端优先走管理器的 OpenAI 网关。</p>
+      </div>
+      <div class="toolbar">
+        <button id="refreshBtn" type="button">刷新状态</button>
+        <button id="stopBtn" class="danger" type="button">关闭管理界面</button>
+      </div>
+    </header>
+
+    <section id="managerGrid" class="grid">
+      <div class="empty">正在读取本地服务状态...</div>
+    </section>
+
+    <section class="note">
+      <h3>统一自动路由</h3>
+      <p>给新设备优先使用这里的 auto 地址；后台会自动转到当前可用的 vLLM 或 llama.cpp 管理器。</p>
+      <div class="gateway-strip" id="entryGatewayStrip">
+        <div class="empty">正在读取统一网关地址...</div>
+      </div>
+    </section>
+
+    <section class="note">
+      <h3>推荐接入方式</h3>
+      <p>OpenWebUI、Claude Desktop 转发器、OpenCode 等客户端优先填写 <strong>OpenAI Gateway Base URL</strong>，模型名用 <strong>local-current</strong>。需要给局域网设备使用时，先进入对应“服务后台”打开局域网提供服务，再创建独立客户端 API Key。</p>
+    </section>
+
+    <section class="note">
+      <h3>文档与排错</h3>
+      <p>局域网访问请用发布目录根部的 <code>start-service-entry-lan.cmd</code> 启动统一入口；默认双击 <code>start-service-entry.cmd</code> 仍只开放本机。</p>
+      <div class="doc-grid">
+        <a class="doc-card" href="/docs/service-runbook.md" target="_blank" rel="noreferrer">
+          <strong>服务运行手册</strong>
+          <span>启动、关闭、Docker 转发、鉴权、访问统计和常见错误。</span>
+        </a>
+        <a class="doc-card" href="/docs/client-setup-guide.md" target="_blank" rel="noreferrer">
+          <strong>客户端连接指南</strong>
+          <span>OpenWebUI、ccswitch、Claude/Cowork、OpenCode 和 curl 配置。</span>
+        </a>
+        <a class="doc-card" href="/docs/model-service-platform-workplan.md" target="_blank" rel="noreferrer">
+          <strong>平台改进计划</strong>
+          <span>长期工程路线图、验收标准和后续优化批次。</span>
+        </a>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const grid = document.querySelector("#managerGrid");
+    const entryGatewayStrip = document.querySelector("#entryGatewayStrip");
+    const toast = document.querySelector("#toast");
+    const refreshBtn = document.querySelector("#refreshBtn");
+    const stopBtn = document.querySelector("#stopBtn");
+
+    refreshBtn.addEventListener("click", refresh);
+    stopBtn.addEventListener("click", stopAll);
+    document.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-copy]");
+      if (button) {
+        const value = button.getAttribute("data-copy") || "";
+        try {
+          await navigator.clipboard.writeText(value);
+          showToast("已复制地址");
+        } catch {
+          showToast(value);
+        }
+        return;
+      }
+      const actionButton = event.target.closest("[data-action][data-manager]");
+      if (actionButton) {
+        await runManagerAction(actionButton);
+      }
+    });
+
+    refresh();
+
+    async function refresh() {
+      refreshBtn.disabled = true;
+      try {
+        const response = await fetch("/api/status", { cache: "no-store" });
+        const data = await response.json();
+        renderEntryGateway(data.entry || {});
+        renderManagers(data.managers || []);
+      } catch (error) {
+        grid.innerHTML = `<div class="empty">统一入口服务异常：${escapeHtml(error.message)}</div>`;
+      } finally {
+        refreshBtn.disabled = false;
+      }
+    }
+
+    function renderEntryGateway(entry) {
+      const gateway = entry.gateway || {};
+      const access = entry.gatewayAccess || {};
+      const requests = access.totals?.requests || {};
+      const rows = [
+        ["Auto OpenAI", gateway.autoOpenAi],
+        ["Auto Claude", gateway.autoClaude],
+        ["Auto OpenCode", gateway.autoOpenCode],
+        ["LAN Auto OpenAI", gateway.lanAutoOpenAi],
+        ["LAN Auto Claude", gateway.lanAutoClaude],
+      ].filter(([, value]) => value);
+      const stats = [
+        metric("统一网关请求", String(requests.total || 0)),
+        metric("统一网关错误率", formatPercent(requests.errorRate || 0)),
+      ].join("");
+      entryGatewayStrip.innerHTML = rows.length
+        ? rows.map(([label, value]) => endpoint(label, value)).join("")
+        : `<div class="empty">统一入口当前只监听本机；如需局域网 auto 地址，请调整 SERVICE_ENTRY_HOST。</div>`;
+      entryGatewayStrip.innerHTML += stats;
+    }
+
+    async function stopAll() {
+      if (!confirm("只关闭统一入口和两个管理器网页，不会停止后台模型容器。继续吗？")) return;
+      stopBtn.disabled = true;
+      try {
+        await fetch("/api/stop-all", { method: "POST" });
+        showToast("已发送关闭请求，后台模型容器不会被停止。");
+      } catch (error) {
+        showToast(`关闭失败：${error.message}`);
+      }
+    }
+
+    async function runManagerAction(button) {
+      const id = button.getAttribute("data-manager");
+      const action = button.getAttribute("data-action");
+      if (!id || !action) return;
+      if (action === "stop" && !confirm("只关闭这个管理器网页，不会停止后台模型容器。继续吗？")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/managers/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, { method: "POST" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
+        showToast(action === "start" ? "启动请求已完成" : "关闭请求已发送");
+        await refresh();
+      } catch (error) {
+        showToast(`${action === "start" ? "启动" : "关闭"}失败：${error.message}`);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function renderManagers(managers) {
+      if (!managers.length) {
+        grid.innerHTML = `<div class="empty">没有发现管理器配置。</div>`;
+        return;
+      }
+      grid.innerHTML = managers.map(renderManager).join("");
+    }
+
+    function renderManager(manager) {
+      const exposure = manager.exposure || {};
+      const service = exposure.actual?.service || {};
+      const docker = exposure.actual?.docker || {};
+      const settings = exposure.settings || {};
+      const clients = service.clients || {};
+      const process = manager.process || {};
+      const external = manager.externalAccess?.external || {};
+      const externalRequests = external.requests?.total || 0;
+      const checks = Array.isArray(exposure.checks) ? exposure.checks : [];
+      const hasFail = checks.some((item) => item.status === "fail");
+      const hasWarn = checks.some((item) => item.status === "warn");
+      const healthClass = !process.portListening || !manager.ok || hasFail ? "fail" : hasWarn || process.stalePidFile ? "warn" : "ok";
+      const healthText = !process.portListening ? "未监听" : !manager.ok ? "管理器异常" : hasFail ? "需要处理" : hasWarn || process.stalePidFile ? "可用但有提醒" : "状态良好";
+      const endpoints = [
+        ["统一 OpenAI", manager.gatewayUrls?.openAi],
+        ["统一 Claude", manager.gatewayUrls?.claude],
+        ["统一 OpenCode", manager.gatewayUrls?.openCode],
+        ["OpenAI Gateway Base URL", service.openAiGatewayLocalBaseUrl],
+        ["OpenAI Gateway LAN", service.openAiGatewayLanBaseUrl],
+        ["Claude Messages", service.claudeLocalMessagesUrl],
+        ["OpenCode Base URL", service.openCodeBaseUrl],
+      ].filter(([, value]) => value);
+      return `
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>${escapeHtml(manager.name)}</h2>
+              <p>${escapeHtml(manager.mode || "")}</p>
+            </div>
+            <span class="badge ${healthClass}">${healthText}</span>
+          </div>
+          <div class="metrics">
+            ${metric("管理端口", process.portListening ? `监听 ${manager.port}` : `未监听 ${manager.port}`)}
+            ${metric("PID", process.pid ? `${process.pid}${process.stalePidFile ? " / 陈旧" : ""}` : "无")}
+            ${metric("模型服务", service.running ? "运行中" : "未运行")}
+            ${metric("Docker", docker.ok ? "可用" : "未就绪")}
+            ${metric("客户端 Key", `${clients.active || 0} / ${clients.total || 0}`)}
+            ${metric("鉴权", settings.requireApiKey ? "已开启" : "未开启")}
+            ${metric("外来请求", String(externalRequests))}
+            ${metric("错误率", formatPercent(external.requests?.errorRate || 0))}
+          </div>
+          <div class="quick-row">
+            <button type="button" data-manager="${escapeHtml(manager.id)}" data-action="start">启动管理器</button>
+            <button class="danger" type="button" data-manager="${escapeHtml(manager.id)}" data-action="stop">关闭管理器</button>
+            ${manager.error ? `<span class="subtle">最近错误：${escapeHtml(manager.error)}</span>` : `<span class="subtle">健康接口：${escapeHtml(process.health?.host || "-")}:${escapeHtml(process.health?.port || manager.port)}</span>`}
+          </div>
+          <div class="links">
+            <a class="button ${manager.accent === "teal" ? "teal" : "primary"}" href="${manager.servicePageUrl}">服务后台</a>
+            <a class="button" href="${manager.launchPageUrl}">启动模型</a>
+            <a class="button" href="${manager.statsPageUrl}">统计</a>
+            <a class="button" href="${manager.externalPageUrl}">外来访问</a>
+            <a class="button" href="${manager.logsPageUrl}">日志</a>
+          </div>
+          <div class="endpoint-list">
+            ${endpoints.length ? endpoints.map(([label, value]) => endpoint(label, value)).join("") : `<p>管理器离线或尚未返回网关地址。</p>`}
+          </div>
+        </article>
+      `;
+    }
+
+    function metric(label, value) {
+      return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    }
+
+    function endpoint(label, value) {
+      const safe = escapeHtml(value);
+      return `
+        <div class="endpoint">
+          <code><strong>${escapeHtml(label)}:</strong>&nbsp;${safe}</code>
+          <button type="button" data-copy="${safe}">复制</button>
+        </div>
+      `;
+    }
+
+    function formatPercent(value) {
+      const number = Number(value || 0);
+      return `${(number * 100).toFixed(number > 0 && number < 0.1 ? 1 : 0)}%`;
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[char]));
+    }
+  </script>
+</body>
+</html>

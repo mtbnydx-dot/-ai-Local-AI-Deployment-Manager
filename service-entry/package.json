@@ -1,0 +1,14 @@
+{
+  "name": "model-service-entry",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unified local entrypoint and gateway for AI model managers.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

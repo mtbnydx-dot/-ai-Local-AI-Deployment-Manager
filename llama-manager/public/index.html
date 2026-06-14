@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>llama.cpp Manager</title>
+    <link rel="stylesheet" href="/styles.css?v=20260609-gpu96-guard1" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">V</div>
+          <div>
+            <h1>llama.cpp Manager</h1>
+            <p>Local inference console</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a href="#service" class="active" data-view="service"><i data-lucide="activity"></i><span>服务</span></a>
+          <a href="#models" data-view="models"><i data-lucide="database"></i><span>模型</span></a>
+          <a href="#download" data-view="download"><i data-lucide="download"></i><span>下载</span></a>
+          <a href="#external-access" data-view="external-access"><i data-lucide="radio-tower"></i><span>外来访问</span></a>
+          <a href="#tools" data-view="tools"><i data-lucide="wrench"></i><span>工具</span></a>
+          <a href="#stats" data-view="stats"><i data-lucide="bar-chart-3"></i><span>统计</span></a>
+          <a href="#audit" data-view="audit"><i data-lucide="shield-check"></i><span>审计</span></a>
+          <a href="#logs" data-view="logs"><i data-lucide="terminal"></i><span>日志</span></a>
+        </nav>
+        <div class="paths">
+          <div><span>Models</span><strong id="modelsRoot">-</strong></div>
+          <div><span>Cache</span><strong id="hfCache">-</strong></div>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <h2>本地模型控制台</h2>
+            <p id="subtitle">llama.cpp / Docker / GPU 自动识别</p>
+          </div>
+          <div class="top-actions">
+            <div class="ui-preferences">
+              <select id="themeMode" title="主题模式">
+                <option value="auto">自动主题</option>
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+              </select>
+              <select id="languageMode" title="语言模式">
+                <option value="auto">语言自动</option>
+                <option value="zh-CN">中文</option>
+                <option value="en-US">English</option>
+              </select>
+            </div>
+            <button class="icon-button" id="refreshBtn" title="刷新"><i data-lucide="refresh-cw"></i></button>
+            <a class="ghost-link" id="apiDocsLink" href="http://127.0.0.1:8080/docs" target="_blank">API Docs</a>
+          </div>
+        </header>
+
+        <section class="status-grid view-panel active" id="service" data-view-panel="service">
+          <div class="metric">
+            <span>Docker</span>
+            <strong id="dockerStatus">-</strong>
+          </div>
+          <div class="metric">
+            <span>GPU</span>
+            <strong id="gpuStatus">-</strong>
+          </div>
+          <div class="metric">
+            <span>llama.cpp</span>
+            <strong id="serviceStatus">-</strong>
+          </div>
+          <div class="metric">
+            <span>当前模型</span>
+            <strong id="servedModel">-</strong>
+          </div>
+        </section>
+
+        <section class="workspace view-panel active" data-view-panel="service">
+          <div class="panel launch-panel">
+            <div class="panel-head">
+              <h3>启动服务</h3>
+              <button class="danger-button" id="stopBtn"><i data-lucide="square"></i><span>停止</span></button>
+            </div>
+            <form id="startForm" class="form-grid">
+              <div class="form-field model-picker-field">
+                <span>模型 ID 或本地路径</span>
+                <div class="model-input-shell">
+                  <input id="startModel" name="model" value="Qwen/Qwen3-0.6B" autocomplete="off" />
+                  <button class="model-picker-toggle" id="modelPickerToggle" type="button" aria-expanded="false">
+                    <i data-lucide="database"></i><span>选择</span>
+                  </button>
+                </div>
+                <div class="model-picker-popover hidden" id="modelPickerPopover">
+                  <div class="model-picker-toolbar">
+                    <input id="modelPickerSearch" placeholder="搜索本地、缓存或在线模型" autocomplete="off" />
+                    <button class="ghost-mini-button runnable-toggle" id="modelPickerRunnableOnly" type="button" title="仅显示 llama.cpp 可直接启动的 GGUF 模型"><i data-lucide="badge-check"></i><span>仅可运行</span></button>
+                    <button class="icon-button" id="modelPickerRefresh" type="button" title="刷新模型列表"><i data-lucide="refresh-cw"></i></button>
+                  </div>
+                  <div class="model-picker-tabs" id="modelPickerTabs">
+                    <button class="active" type="button" data-model-source="all">全部</button>
+                    <button type="button" data-model-source="favorite">收藏</button>
+                    <button type="button" data-model-source="local">本地</button>
+                    <button type="button" data-model-source="cached">缓存</button>
+                    <button type="button" data-model-source="remote">在线</button>
+                    <button type="button" data-model-source="running">运行中</button>
+                  </div>
+                  <div class="model-picker-list" id="modelPickerList">
+                    <div class="empty compact">正在读取模型列表...</div>
+                  </div>
+                </div>
+              </div>
+              <label>
+                <span>服务名</span>
+                <input id="servedName" name="name" value="qwen3-0.6b" autocomplete="off" />
+              </label>
+              <label>
+                <span>端口</span>
+                <input id="servicePort" name="port" type="number" value="8080" min="1024" max="65535" />
+              </label>
+              <label>
+                <span>上下文长度</span>
+                <input id="maxModelLen" name="maxModelLen" type="number" value="8192" min="512" step="512" />
+              </label>
+              <label>
+                <span>并行槽数</span>
+                <input id="maxNumSeqs" name="maxNumSeqs" type="number" value="4" min="1" step="1" />
+              </label>
+              <label>
+                <span>显存分配比例</span>
+                <input id="gpuMemoryUtilization" name="gpuMemoryUtilization" type="number" value="0.92" min="0.1" max="0.98" step="0.01" />
+              </label>
+              <label>
+                <span>GPU layers（all 或层数）</span>
+                <input id="gpuLayers" name="gpuLayers" value="all" autocomplete="off" />
+              </label>
+              <label>
+                <span>batch</span>
+                <input id="batchSize" name="batchSize" type="number" value="2048" min="1" step="1" />
+              </label>
+              <label>
+                <span>ubatch</span>
+                <input id="ubatchSize" name="ubatchSize" type="number" value="512" min="1" step="1" />
+              </label>
+              <div class="form-section gguf-section" id="ggufSection">
+                <div class="section-title">
+                  <span>GGUF 与远程仓库</span>
+                  <small>llama.cpp 原生使用 GGUF；本地目录会自动选择最大的 .gguf 文件。</small>
+                </div>
+                <div class="gguf-fields">
+                  <label>
+                    <span>加载格式</span>
+                    <select id="loadFormat" name="loadFormat">
+                      <option value="auto">Auto</option>
+                      <option value="gguf">GGUF 本地文件/目录</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>HF repo 量化</span>
+                    <input id="hfQuantHint" placeholder="远程 repo 可用 owner/model:Q4_K_M" autocomplete="off" disabled />
+                  </label>
+                </div>
+                <div class="form-note gguf-note" id="ggufNote">
+                  本地路径请指向 .gguf 文件或包含 .gguf 的目录；远程仓库可填 TheBloke/xxx-GGUF:Q4_K_M 这类 llama.cpp 支持的 repo:quant。
+                </div>
+              </div>
+              <label>
+                <span>K cache</span>
+                <select id="cacheTypeK" name="cacheTypeK">
+                  <option value="f16">f16</option>
+                  <option value="q8_0">q8_0</option>
+                  <option value="q5_1">q5_1</option>
+                  <option value="q4_0">q4_0</option>
+                  <option value="bf16">bf16</option>
+                  <option value="f32">f32</option>
+                </select>
+              </label>
+              <label>
+                <span>V cache</span>
+                <select id="cacheTypeV" name="cacheTypeV">
+                  <option value="f16">f16</option>
+                  <option value="q8_0">q8_0</option>
+                  <option value="q5_1">q5_1</option>
+                  <option value="q4_0">q4_0</option>
+                  <option value="bf16">bf16</option>
+                  <option value="f32">f32</option>
+                </select>
+              </label>
+              <label>
+                <span>Flash Attention</span>
+                <select id="flashAttention" name="flashAttention">
+                  <option value="auto">auto</option>
+                  <option value="on">on</option>
+                  <option value="off">off</option>
+                </select>
+              </label>
+              <label>
+                <span>调用工具预设</span>
+                <select id="clientPreset" name="clientPreset">
+                  <option value="openwebui">Open WebUI</option>
+                  <option value="claude-code">Claude Code 桥接</option>
+                  <option value="claude-cowork">Claude Cowork 桥接</option>
+                  <option value="generic">通用 OpenAI 兼容</option>
+                </select>
+              </label>
+              <label>
+                <span>reasoning</span>
+                <select id="reasoningMode" name="reasoning">
+                  <option value="auto">auto</option>
+                  <option value="on">on</option>
+                  <option value="off">off</option>
+                </select>
+              </label>
+              <label>
+                <span>reasoning format</span>
+                <select id="reasoningParser" name="reasoningFormat">
+                  <option value="auto">auto</option>
+                  <option value="none">none</option>
+                  <option value="deepseek">deepseek / reasoning_content</option>
+                  <option value="deepseek-legacy">deepseek-legacy / 保留 think</option>
+                </select>
+              </label>
+              <div class="form-note reasoning-note" id="reasoningNote">
+                llama.cpp 可用 reasoning-format deepseek 把思考放进 reasoning_content；Open WebUI 通常能分离显示，普通客户端可用 none 原样保留。
+              </div>
+              <div class="form-section context-section">
+                <div class="section-title">
+                  <span>上下文与显存估算</span>
+                  <small>权重 + KV cache + 运行余量；实际以 llama.cpp 日志为准。</small>
+                </div>
+                <label class="check-row context-check-row text-only-control">
+                  <input id="textOnlyMode" name="textOnlyMode" type="checkbox" checked />
+                  <span>仅文本模式</span>
+                </label>
+                <div class="form-note text-only-note" id="textOnlyNote">
+                  llama.cpp 不传 mmproj 时就是纯文本服务；开启后会在配置和估算里明确不预留视觉 projector。
+                </div>
+                <div class="context-presets" id="contextPresetButtons">
+                  <button type="button" data-context-preset="4096">4K</button>
+                  <button type="button" data-context-preset="8192">8K</button>
+                  <button type="button" data-context-preset="16384">16K</button>
+                  <button type="button" data-context-preset="32768">32K</button>
+                  <button type="button" data-context-preset="65536">64K</button>
+                  <button type="button" data-context-preset="131072">128K</button>
+                  <button type="button" data-context-preset="196608">192K</button>
+                  <button type="button" data-context-preset="262144">256K</button>
+                </div>
+                <div class="estimate-grid" id="memoryEstimate">
+                  <div class="empty compact">输入模型后会估算对应上下文长度的显存占用。</div>
+                </div>
+                <div class="memory-bars" id="memoryGpuBars"></div>
+                <div class="form-note memory-note" id="memoryEstimateNote">
+                  模型名里包含 7B、14B、27B 这类规格时估算最准确；长上下文主要增加 KV cache 显存。
+                </div>
+              </div>
+              <label class="wide-field">
+                <span>服务访问范围</span>
+                <select id="networkAccess" name="networkAccess">
+                  <option value="local">仅本机访问</option>
+                  <option value="lan">局域网设备可访问</option>
+                </select>
+              </label>
+              <div class="form-note network-note" id="networkNote">
+                仅本机访问会绑定 127.0.0.1；局域网访问会绑定本机 IPv4 地址。
+              </div>
+              <div class="form-section gpu-section">
+                <div class="section-title">
+                  <span>GPU 设备</span>
+                  <small>勾选要暴露给 llama.cpp 的显卡；异构双卡会按可用显存建议 tensor split。</small>
+                </div>
+                <div class="gpu-picker" id="gpuPicker">
+                  <div class="empty compact">正在读取 GPU...</div>
+                </div>
+              </div>
+              <div class="form-section hetero-section">
+                <div class="section-title">
+                  <span>异构双卡优化</span>
+                  <small>为显存和算力不一致的多 GPU 组合生成 llama.cpp split；单 96GB 卡会自动走单卡方案。</small>
+                </div>
+                <div class="hetero-plan" id="heteroPlan">
+                  <div class="empty compact">选择 GPU 后会显示推荐方案。</div>
+                </div>
+                <div class="hetero-actions" id="heteroPresetButtons"></div>
+                <div class="hetero-control-grid">
+                  <label>
+                    <span>多 GPU 模式</span>
+                    <select id="multiGpuMode" name="multiGpuMode">
+                      <option value="layer">layer 分层切分（推荐异构双卡）</option>
+                      <option value="row">row 行切分（并行，KV 在 main GPU）</option>
+                      <option value="tensor">tensor 张量切分（实验）</option>
+                      <option value="none">单卡 / 不切分</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>tensor split</span>
+                    <input id="tensorSplit" name="tensorSplit" placeholder="例如 24,8；留空自动按推荐方案" autocomplete="off" />
+                  </label>
+                  <label>
+                    <span>main GPU</span>
+                    <input id="mainGpu" name="mainGpu" type="number" value="0" min="0" />
+                  </label>
+                  <label>
+                    <span>分层比例</span>
+                    <input id="tensorParallelSize" type="number" value="1" min="1" disabled />
+                  </label>
+                  <label>
+                    <span>槽数</span>
+                    <input id="dataParallelSize" type="number" value="4" min="1" disabled />
+                  </label>
+                  <label class="check-row">
+                    <input name="noMmap" type="checkbox" />
+                    <span>禁用 mmap（加载更慢，但有时能减少页面换出）</span>
+                  </label>
+                </div>
+                <div class="form-note">
+                  layer 模式按层把权重放到不同 GPU，最适合异构双卡；row/tensor 可能提高吞吐，但慢卡更容易拖低单路延迟。main GPU 在启动命令里使用容器内可见序号，管理器会自动映射宿主机 GPU 编号。
+                </div>
+                <div class="selection-hint multi-gpu-mode-guide" id="multiGpuModeGuide">
+                  本地 Claude 单路优先选 layer；想测试吞吐可以试 row；tensor 是实验项，异构双卡上通常不如 layer 稳。
+                </div>
+              </div>
+              <button class="primary-button" type="submit"><i data-lucide="play"></i><span>启动 llama.cpp</span></button>
+            </form>
+            <div class="service-job-list" id="serviceJobList">
+              <div class="empty compact">暂无启动任务</div>
+            </div>
+          </div>
+
+          <div class="service-side">
+          <div class="panel running-panel">
+            <div class="panel-head">
+              <div>
+                <h3>运行中模型</h3>
+                <p>显示当前 llama.cpp 容器实际暴露的模型；卸载会停止该 llama.cpp 容器。</p>
+              </div>
+              <button class="icon-button" id="reloadRunningModelsBtn" title="刷新运行中模型"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="running-model-list" id="runningModelList">
+              <div class="empty compact">正在读取运行状态...</div>
+            </div>
+            <div class="runtime-note">
+              <strong>为什么启动慢、显存高？</strong>
+              <span>llama.cpp 启动会读取 GGUF、建立 KV cache、按 GPU layers 与 split-mode 分配权重；异构双卡时 tensor-split 比例会明显影响显存分布。</span>
+            </div>
+          </div>
+
+          <div class="panel test-panel">
+            <div class="panel-head">
+              <h3>接口测试</h3>
+            </div>
+            <form id="testForm" class="test-form">
+              <input id="testModel" value="qwen3-0.6b" autocomplete="off" />
+              <textarea id="testPrompt" rows="5">用一句中文回答：本地 llama.cpp 服务是否可用？</textarea>
+              <button class="secondary-button" type="submit"><i data-lucide="send"></i><span>发送</span></button>
+            </form>
+            <pre id="testResult" class="result-box">等待测试</pre>
+          </div>
+          </div>
+        </section>
+
+        <section class="models-page view-panel" id="models" data-view-panel="models">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>模型库</h3>
+              <button class="icon-button" id="reloadModelsBtn" title="刷新模型"><i data-lucide="rotate-cw"></i></button>
+            </div>
+            <div class="model-list" id="modelList"></div>
+          </div>
+
+          <div class="panel remote-panel">
+            <div class="panel-head">
+              <div>
+                <h3>在线模型</h3>
+                <p>从 Hugging Face Hub 实时获取，适合找最新、热门、蒸馏和去审查模型。</p>
+              </div>
+              <button class="icon-button" id="reloadRemoteModelsBtn" title="刷新在线模型"><i data-lucide="rotate-cw"></i></button>
+            </div>
+            <div class="remote-toolbar">
+              <label>
+                <span>分类</span>
+                <select id="remoteCategory">
+                  <option value="popular">热门下载</option>
+                  <option value="latest">最新更新</option>
+                  <option value="distilled">蒸馏版</option>
+                  <option value="uncensored">去审查 / Abliterated</option>
+                  <option value="quantized">量化版本</option>
+                </select>
+              </label>
+              <label>
+                <span>搜索</span>
+                <input id="remoteSearch" placeholder="Qwen3, DeepSeek, AWQ, uncensored..." autocomplete="off" />
+              </label>
+              <label>
+                <span>数量</span>
+                <input id="remoteLimit" type="number" min="12" max="120" step="12" value="48" />
+              </label>
+              <label>
+                <span>规格</span>
+                <select id="remoteSizeFilter">
+                  <option value="">全部规格</option>
+                  <option value="small">≤ 8B</option>
+                  <option value="medium">7B - 14B</option>
+                  <option value="large">14B - 32B</option>
+                  <option value="xlarge">32B+</option>
+                </select>
+              </label>
+              <label>
+                <span>量化</span>
+                <select id="remoteQuantFilter">
+                  <option value="">全部 GGUF</option>
+                  <option value="quantized">任意量化</option>
+                  <option value="q4_k_m">Q4_K_M</option>
+                  <option value="q5_k_m">Q5_K_M</option>
+                  <option value="q8_0">Q8_0</option>
+                  <option value="iq4_xs">IQ4_XS</option>
+                  <option value="q4">Q4 / IQ4</option>
+                  <option value="gguf">所有 GGUF</option>
+                </select>
+              </label>
+              <label>
+                <span>时间</span>
+                <select id="remoteFreshness">
+                  <option value="auto">自动过滤旧模型</option>
+                  <option value="all">不过滤时间</option>
+                  <option value="2025">2025+</option>
+                  <option value="2026">2026+</option>
+                </select>
+              </label>
+              <button class="ghost-mini-button runnable-toggle" id="remoteRunnableOnly" type="button" title="仅显示 llama.cpp 可直接运行的 GGUF 模型"><i data-lucide="badge-check"></i><span>仅可运行</span></button>
+              <button class="secondary-button" id="remoteSearchBtn" type="button"><i data-lucide="database"></i><span>联网查询</span></button>
+            </div>
+            <div class="selection-hint" id="remoteHint">在线列表按公开模型元数据返回；gated 模型下载前需要配置对应 token。</div>
+            <div class="remote-model-list" id="remoteModelList"></div>
+            <button class="ghost-mini-button remote-load-more" id="remoteLoadMoreBtn" type="button"><i data-lucide="plus"></i><span>加载更多</span></button>
+          </div>
+        </section>
+
+        <section class="download-page view-panel" id="download" data-view-panel="download">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>下载模型</h3>
+              <button class="ghost-mini-button" id="downloadRunnableModelsBtn" type="button"><i data-lucide="badge-check"></i><span>选择可运行模型</span></button>
+            </div>
+            <form id="downloadForm" class="download-form">
+              <div class="link-resolver">
+                <label>
+                  <span>模型介绍页链接</span>
+                  <input id="modelPageUrl" placeholder="https://huggingface.co/Qwen/Qwen3-8B" autocomplete="off" />
+                </label>
+                <button class="secondary-button" id="resolveModelLinkBtn" type="button"><i data-lucide="download"></i><span>解析链接</span></button>
+              </div>
+              <div class="selection-hint" id="linkResolveResult">粘贴 Hugging Face 或 ModelScope 的模型页面链接，可自动填入模型 ID、保存名和下载来源。</div>
+              <div class="selection-note">
+                <strong>选择预设后仍可手动改模型 ID。</strong>
+                <span>规格越大效果通常越好但更吃显存；量化精度越低越省显存，可能损失一点质量。</span>
+              </div>
+              <div class="preset-grid">
+                <label>
+                  <span>开发商</span>
+                  <select id="downloadDeveloper" name="developer"></select>
+                </label>
+                <label>
+                  <span>模型版本</span>
+                  <select id="downloadVersion" name="modelVersion"></select>
+                </label>
+                <label>
+                  <span>规格</span>
+                  <select id="downloadSpec" name="spec"></select>
+                </label>
+                <label>
+                  <span>量化精度</span>
+                  <select id="downloadPrecision" name="precision"></select>
+                </label>
+                <label>
+                  <span>下载来源</span>
+                  <select id="downloadSource" name="source">
+                    <option value="huggingface">Hugging Face</option>
+                    <option value="modelscope">ModelScope 魔搭</option>
+                  </select>
+                </label>
+              </div>
+              <div class="selection-hint" id="downloadPresetHint">Hugging Face 通用性最好；ModelScope 在国内网络环境通常更顺手。</div>
+              <label>
+                <span>模型 ID</span>
+                <input id="downloadModel" name="model" placeholder="Qwen/Qwen3-8B" autocomplete="off" />
+              </label>
+              <label>
+                <span>保存名称</span>
+                <input id="downloadOutputName" name="outputName" placeholder="qwen3-8b" autocomplete="off" />
+              </label>
+              <button class="primary-button" type="submit"><i data-lucide="download"></i><span>开始下载</span></button>
+            </form>
+            <div class="job-list" id="jobList"></div>
+          </div>
+        </section>
+
+        <section class="external-access-page view-panel" id="external-access" data-view-panel="external-access">
+          <div class="panel stats-summary-panel">
+            <div class="panel-head">
+              <div>
+                <h3>外来访问统计</h3>
+                <p>按局域网/外部客户端聚合 llama.cpp 网关访问，只记录元数据，不读取聊天正文。</p>
+              </div>
+              <div class="panel-actions">
+                <span class="stats-freshness" id="externalAccessFreshness"></span>
+                <button class="icon-button" id="reloadExternalAccessBtn" title="刷新外来访问"><i data-lucide="refresh-cw"></i></button>
+              </div>
+            </div>
+            <div class="stats-grid" id="externalAccessSummary">
+              <div class="empty compact">正在读取外来访问统计...</div>
+            </div>
+            <div class="external-access-note" id="externalAccessPrivacy"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>对外入口</h3>
+                <p>当前可给局域网设备使用的 OpenAI / Claude 兼容地址，以及鉴权和限流状态。</p>
+              </div>
+            </div>
+            <div class="external-endpoint-grid" id="externalAccessEndpoints"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>近期窗口</h3>
+                <p>最近 5 分钟、15 分钟、1 小时和 24 小时的外来请求活跃度。</p>
+              </div>
+            </div>
+            <div class="external-window-grid" id="externalAccessWindows"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>外部客户端</h3>
+                <p>按来源 IP 聚合请求量、错误率、延迟、模型和认证方式。</p>
+              </div>
+            </div>
+            <div class="stats-model-list" id="externalAccessClients"></div>
+          </div>
+
+          <div class="external-breakdown-grid">
+            <div class="panel">
+              <div class="panel-head"><div><h3>路径</h3><p>接口路径调用分布。</p></div></div>
+              <div class="external-compact-list" id="externalAccessPaths"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><div><h3>模型</h3><p>请求模型名和别名使用情况。</p></div></div>
+              <div class="external-compact-list" id="externalAccessModels"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><div><h3>认证</h3><p>客户端实际使用的 Key 字段。</p></div></div>
+              <div class="external-compact-list" id="externalAccessAuth"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><div><h3>状态码</h3><p>成功、认证失败、限流和上游错误。</p></div></div>
+              <div class="external-compact-list" id="externalAccessStatuses"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>最近访问</h3>
+                <p>只显示来源、路径、模型、状态、认证字段、耗时和 token 计数。</p>
+              </div>
+            </div>
+            <div class="external-recent-list" id="externalAccessRecent"></div>
+          </div>
+        </section>
+
+        <section class="tools-page view-panel" id="tools" data-view-panel="tools">
+          <div class="panel tool-hero-panel">
+            <div class="panel-head">
+              <div>
+                <h3>实用工具</h3>
+                <p>把健康检查、启动方案、模型兼容性、日志摘要、测速、连接和自动保护放在一起。</p>
+              </div>
+              <button class="secondary-button compact-button" id="refreshToolsBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新工具状态</span></button>
+            </div>
+            <div class="tool-health-score" id="healthScoreBox">等待健康检查</div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>一键健康检查</h3>
+                <p>检查 Docker、GPU、镜像、API、目录、token、CLI 和最近错误。</p>
+              </div>
+              <button class="secondary-button compact-button" id="runHealthBtn" type="button"><i data-lucide="activity"></i><span>检查</span></button>
+            </div>
+            <div class="tool-grid" id="healthGrid"><div class="empty compact">点击检查后显示环境状态。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>启动配置方案</h3>
+                <p>保存和套用 Claude 长上下文、OpenWebUI、低显存、异构双卡等启动参数。</p>
+              </div>
+              <button class="secondary-button compact-button" id="saveProfileBtn" type="button"><i data-lucide="badge-check"></i><span>保存当前表单</span></button>
+            </div>
+            <div class="profile-save-row">
+              <input id="profileNameInput" placeholder="给当前启动表单起个名字" autocomplete="off" />
+              <input id="profileDescInput" placeholder="可选说明，例如 256K Claude 异构双卡" autocomplete="off" />
+            </div>
+            <div class="profile-list" id="profileList"><div class="empty compact">正在读取配置方案...</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型兼容性检查</h3>
+                <p>启动前判断 GGUF、token、路径、reasoning、KV cache 和长上下文风险。</p>
+              </div>
+              <button class="secondary-button compact-button" id="runModelCheckBtn" type="button"><i data-lucide="shield-check"></i><span>检查模型</span></button>
+            </div>
+            <div class="tool-inline-form">
+              <input id="modelCheckInput" placeholder="模型 ID 或本地路径，留空则使用启动表单" autocomplete="off" />
+            </div>
+            <div class="tool-result" id="modelCheckResult"><div class="empty compact">尚未检查模型。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>日志智能摘要</h3>
+                <p>把 llama.cpp 最近日志整理成阶段、错误、原因和建议操作。</p>
+              </div>
+              <button class="secondary-button compact-button" id="runLogSummaryBtn" type="button"><i data-lucide="scroll-text"></i><span>摘要</span></button>
+            </div>
+            <div class="tool-result" id="logSummaryPanel"><div class="empty compact">尚未读取日志摘要。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>空闲卸载与显存保护</h3>
+                <p>默认关闭。开启后管理器会按空闲时间或显存阈值提醒/卸载 llama.cpp 容器。</p>
+              </div>
+              <button class="secondary-button compact-button" id="saveAutomationBtn" type="button"><i data-lucide="badge-check"></i><span>保存保护设置</span></button>
+            </div>
+            <div class="automation-grid">
+              <label class="check-row context-check-row"><input id="idleUnloadEnabled" type="checkbox" /><span>空闲自动卸载</span></label>
+              <label><span>空闲分钟</span><input id="idleMinutes" type="number" min="5" max="1440" value="30" /></label>
+              <label class="check-row context-check-row"><input id="vramGuardEnabled" type="checkbox" /><span>显存保护</span></label>
+              <label><span>显存阈值 %</span><input id="vramPercent" type="number" min="70" max="99" value="94" /></label>
+              <label><span>阈值动作</span><select id="vramAction"><option value="warn">只提醒</option><option value="unload">空闲时卸载</option></select></label>
+            </div>
+            <div class="selection-hint" id="automationStatus">自动保护默认关闭，不会影响当前模型。</div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型测速基准</h3>
+                <p>对当前运行模型做短测，记录延迟、输出速度和返回预览。</p>
+              </div>
+            </div>
+            <form id="benchmarkForm" class="benchmark-form">
+              <input id="benchmarkModel" placeholder="模型名，留空使用当前运行模型" autocomplete="off" />
+              <input id="benchmarkRequests" type="number" min="1" max="5" value="3" />
+              <input id="benchmarkMaxTokens" type="number" min="16" max="1024" value="160" />
+              <textarea id="benchmarkPrompt" rows="4">用中文简要说明本地 llama.cpp 模型是否可以稳定完成工具调用、长上下文和代码任务。</textarea>
+              <button class="primary-button" type="submit"><i data-lucide="play"></i><span>开始测速</span></button>
+            </form>
+            <div class="service-job-list" id="benchmarkJobList"><div class="empty compact">暂无测速任务。</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>客户端连接向导</h3>
+                <p>OpenWebUI、Claude Desktop / ccswitch、curl 测试命令集中展示。</p>
+              </div>
+              <button class="secondary-button compact-button" id="reloadConnectionBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新连接</span></button>
+            </div>
+            <div class="tool-result" id="connectionGuide"><div class="empty compact">正在读取连接信息...</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>上下文压缩可视化</h3>
+                <p>只显示压缩统计和最近会话，不读取原始对话正文。</p>
+              </div>
+              <button class="secondary-button compact-button" id="reloadCompressionInsightsBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新压缩统计</span></button>
+            </div>
+            <div class="tool-result" id="compressionInsights"><div class="empty compact">正在读取压缩统计...</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型收藏与标签</h3>
+                <p>给常用 GGUF 标记用途，例如 Claude、长上下文、去审查、多模态、容易报错。</p>
+              </div>
+              <button class="secondary-button compact-button" id="saveModelNoteBtn" type="button"><i data-lucide="badge-check"></i><span>保存标签</span></button>
+            </div>
+            <div class="model-note-form">
+              <input id="modelNoteModel" placeholder="模型 ID 或本地路径" autocomplete="off" />
+              <input id="modelNoteTags" placeholder="标签，用逗号分隔，例如 Claude, 长上下文, GGUF" autocomplete="off" />
+              <label class="check-row context-check-row"><input id="modelNoteFavorite" type="checkbox" /><span>收藏</span></label>
+              <textarea id="modelNoteText" rows="3" placeholder="备注，例如推荐参数、已知问题、适合场景"></textarea>
+            </div>
+            <div class="profile-list" id="modelNotesList"><div class="empty compact">暂无收藏标签。</div></div>
+          </div>
+        </section>
+
+        <section class="stats-page view-panel" id="stats" data-view-panel="stats">
+          <div class="panel stats-summary-panel">
+            <div class="panel-head">
+              <div>
+                <h3>统计总览</h3>
+                <p>来自 llama.cpp /metrics 与本地累计账本，统计请求、速度、上下文和等价 API 价值。</p>
+              </div>
+              <button class="icon-button" id="reloadStatsBtn" title="刷新统计"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="stats-grid" id="statsSummary">
+              <div class="empty compact">正在读取统计...</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>模型占比</h3>
+                <p>按模型名聚合 token、请求、上下文和速度。</p>
+              </div>
+            </div>
+            <div class="stats-model-list" id="statsModelList"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>Claude 调用情况</h3>
+                <p>把 Claude Desktop / Claude Code / Cowork 经过管理器的调用，和 OpenWebUI 聊天或直连 API 分开统计。</p>
+              </div>
+            </div>
+            <div class="stats-model-list" id="statsClientBreakdown"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>等价 API 价值</h3>
+                <p>按官方公开价格估算，如果这些 token 调用 GPT 或 Claude 大概值多少钱。</p>
+              </div>
+            </div>
+            <div class="cost-table" id="statsCostTable"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>性能细节</h3>
+                <p>延迟、队列、KV cache、prefix cache 和启动阶段指标。</p>
+              </div>
+            </div>
+            <div class="stats-detail-grid" id="statsDetailGrid"></div>
+          </div>
+        </section>
+
+        <section class="audit-page view-panel" id="audit" data-view-panel="audit">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>用户审计</h3>
+                <p>模型卸载或手动导出时生成本地完整 Markdown，对话正文需要审计密码后才会在浏览器中读取。</p>
+              </div>
+              <button class="icon-button" id="reloadAuditBtn" title="刷新审计"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="selection-hint audit-status" id="auditStatusBox">正在读取审计状态...</div>
+            <div class="audit-error" id="auditError"></div>
+
+            <div class="audit-login-panel" id="auditLoginPanel">
+              <form class="audit-login-form" id="auditLoginForm">
+                <label>
+                  <span>审计密码</span>
+                  <input id="auditPassword" type="password" autocomplete="current-password" placeholder="输入本机审计密码" />
+                </label>
+                <button class="primary-button" type="submit"><i data-lucide="lock-keyhole"></i><span>解锁审计后台</span></button>
+              </form>
+              <div class="form-note">
+                首次使用会自动生成密码文件；路径会显示在上方状态里。这个页面只在密码通过后读取完整对话。
+              </div>
+            </div>
+
+            <div class="audit-admin-panel hidden" id="auditAdminPanel">
+              <div class="audit-toolbar">
+                <button class="secondary-button" id="manualAuditExportBtn" type="button"><i data-lucide="download"></i><span>手动生成审计</span></button>
+                <button class="danger-button" id="auditLogoutBtn" type="button"><i data-lucide="square"></i><span>锁定</span></button>
+              </div>
+              <div class="audit-grid">
+                <div class="audit-list" id="auditList">
+                  <div class="empty compact">暂无审计导出。</div>
+                </div>
+                <div class="audit-viewer-shell">
+                  <div class="selection-hint audit-selected" id="auditSelectedMeta">选择一条审计记录查看完整 Markdown。</div>
+                  <pre class="audit-markdown" id="auditMarkdownViewer">未打开审计 Markdown。</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel logs-panel view-panel" id="logs" data-view-panel="logs">
+          <div class="panel-head">
+            <h3>运行日志</h3>
+            <button class="icon-button" id="reloadLogsBtn" title="刷新日志"><i data-lucide="scroll-text"></i></button>
+          </div>
+          <pre id="logsBox" class="logs-box">暂无日志</pre>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-root" id="toastRoot" aria-live="polite" aria-atomic="false"></div>
+    <script src="/app.js?v=20260609-gpu96-guard1" defer></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer onload="window.renderIcons && window.renderIcons()"></script>
+  </body>
+</html>
+
