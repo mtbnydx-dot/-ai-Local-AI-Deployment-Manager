@@ -1,0 +1,91 @@
+function createVllmDefaultLaunchProfiles(normalizeLaunchConfig) {
+  return [
+    {
+      id: "blackwell-96gb-256k",
+      name: "96GB 单卡 256K",
+      description: "RTX PRO 6000 / 80GB+ 单卡优先方案：单路长上下文，保守显存占用，适合本地 Claude。",
+      source: "builtin",
+      config: normalizeLaunchConfig({
+        maxModelLen: 262144,
+        maxNumSeqs: 1,
+        gpuMemoryUtilization: 0.9,
+        kvCacheDtype: "fp8",
+        gpuDeviceIds: ["0"],
+        multiGpuMode: "single",
+        clientPreset: "claude-cowork",
+        reasoningParser: "qwen3",
+        toolCallParser: "qwen3_coder",
+        enableAutoToolChoice: true,
+        enablePrefixCaching: true,
+        languageModelOnly: true,
+      }),
+    },
+    {
+      id: "claude-long-context-64k",
+      name: "Claude 长上下文 64K",
+      description: "本地 Claude 单人使用，启动更稳，适合日常编码和工具调用。",
+      source: "builtin",
+      config: normalizeLaunchConfig({
+        maxModelLen: 65536,
+        maxNumSeqs: 2,
+        gpuMemoryUtilization: 0.9,
+        kvCacheDtype: "fp8",
+        clientPreset: "claude-cowork",
+        reasoningParser: "qwen3",
+        toolCallParser: "qwen3_coder",
+        enableAutoToolChoice: true,
+        enablePrefixCaching: true,
+      }),
+    },
+    {
+      id: "claude-maximum-context",
+      name: "Claude 极限上下文",
+      description: "冲 128K/192K/256K 时使用，牺牲并发换上下文。",
+      source: "builtin",
+      config: normalizeLaunchConfig({
+        maxModelLen: 262144,
+        maxNumSeqs: 1,
+        gpuMemoryUtilization: 0.94,
+        kvCacheDtype: "fp8",
+        clientPreset: "claude-cowork",
+        reasoningParser: "qwen3",
+        toolCallParser: "qwen3_coder",
+        enableAutoToolChoice: true,
+        enablePrefixCaching: true,
+        languageModelOnly: true,
+      }),
+    },
+    {
+      id: "openwebui-chat",
+      name: "OpenWebUI 日常聊天",
+      description: "偏稳定和吞吐，适合 OpenWebUI 直接聊天。",
+      source: "builtin",
+      config: normalizeLaunchConfig({
+        maxModelLen: 32768,
+        maxNumSeqs: 4,
+        gpuMemoryUtilization: 0.9,
+        clientPreset: "openwebui",
+        reasoningParser: "qwen3",
+        enablePrefixCaching: true,
+      }),
+    },
+    {
+      id: "low-vram-safe",
+      name: "低显存保守模式",
+      description: "启动失败或显存吃紧时先用这个排查。",
+      source: "builtin",
+      config: normalizeLaunchConfig({
+        maxModelLen: 16384,
+        maxNumSeqs: 1,
+        gpuMemoryUtilization: 0.82,
+        kvCacheDtype: "fp8",
+        clientPreset: "generic",
+        languageModelOnly: true,
+      }),
+    },
+  ];
+}
+
+module.exports = {
+  createVllmDefaultLaunchProfiles,
+};

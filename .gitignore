@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+playwright-report/
+test-results/
+output/playwright/
 
 # Runtime logs and ledgers
 logs/

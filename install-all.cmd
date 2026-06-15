@@ -2,6 +2,7 @@
 setlocal
 set "ROOT=%~dp0"
 
+call :install "." || exit /b 1
 call :install "vllm-manager" || exit /b 1
 call :install "llama-manager" || exit /b 1
 

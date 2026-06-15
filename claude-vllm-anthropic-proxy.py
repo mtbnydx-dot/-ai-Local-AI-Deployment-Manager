@@ -147,23 +147,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         try:
             with urlopen(req, timeout=None) as resp:
-                response_body = resp.read()
-                self.send_response(resp.status, resp.reason)
-                for key, value in resp.headers.items():
-                    if key.lower() not in HOP_BY_HOP_HEADERS:
-                        self.send_header(key, value)
-                self.send_header("Content-Length", str(len(response_body)))
-                self.end_headers()
-                self.wfile.write(response_body)
+                if self.should_stream_response(resp, raw_body):
+                    self.stream_response(resp)
+                else:
+                    self.send_buffered_response(resp.status, resp.reason, resp.headers, resp.read())
         except HTTPError as exc:
             error_body = exc.read()
-            self.send_response(exc.code, exc.reason)
-            for key, value in exc.headers.items():
-                if key.lower() not in HOP_BY_HOP_HEADERS:
-                    self.send_header(key, value)
-            self.send_header("Content-Length", str(len(error_body)))
-            self.end_headers()
-            self.wfile.write(error_body)
+            self.send_buffered_response(exc.code, exc.reason, exc.headers, error_body)
         except URLError as exc:
             msg = f"Backend unavailable: {exc}".encode("utf-8")
             self.send_response(502, "Bad Gateway")
@@ -171,6 +161,50 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(msg)))
             self.end_headers()
             self.wfile.write(msg)
+
+    def should_stream_response(self, resp, raw_body):
+        content_type = (resp.headers.get("Content-Type") or "").lower()
+        if "text/event-stream" in content_type:
+            return True
+        if self.command in {"POST", "PUT", "PATCH"} and raw_body:
+            try:
+                payload = json.loads(raw_body.decode("utf-8"))
+                return payload.get("stream") is True
+            except Exception:
+                return False
+        return False
+
+    def copy_response_headers(self, headers, streamed=False):
+        for key, value in headers.items():
+            lower = key.lower()
+            if lower not in HOP_BY_HOP_HEADERS and not (streamed and lower == "cache-control"):
+                self.send_header(key, value)
+        if streamed:
+            self.send_header("Cache-Control", headers.get("Cache-Control") or "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.close_connection = True
+
+    def send_buffered_response(self, status, reason, headers, body):
+        self.send_response(status, reason)
+        self.copy_response_headers(headers, streamed=False)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def stream_response(self, resp, chunk_size=65536):
+        self.send_response(resp.status, resp.reason)
+        self.copy_response_headers(resp.headers, streamed=True)
+        self.end_headers()
+        read_chunk = getattr(resp, "read1", resp.read)
+        try:
+            while True:
+                chunk = read_chunk(chunk_size)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            sys.stderr.write("Client disconnected during proxied stream.\n")
 
 
 def main():

@@ -1,5 +1,7 @@
+const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { ensureDirs } = require("./file-utils");
 const { isPortListening } = require("./network");
 
 async function readPidFilePid(file) {
@@ -61,10 +63,56 @@ async function buildProcessHealth(options = {}) {
   };
 }
 
+function healthCheck(id, label, status, detail, actions = []) {
+  return { id, label, status, detail: String(detail || ""), actions };
+}
+
+async function directoryHealth(id, label, dir, options = {}) {
+  const ensure = options.ensureDirs || ensureDirs;
+  try {
+    await ensure(dir);
+    await fs.access(dir, fsSync.constants.R_OK | fsSync.constants.W_OK);
+    return healthCheck(id, label, "ok", dir);
+  } catch (error) {
+    return healthCheck(id, label, "fail", `${dir}: ${error.message}`);
+  }
+}
+
+async function commandHealth(id, label, command, args = ["--help"], options = {}) {
+  const missingStatus = options.missingStatus || "fail";
+  const execFileAsync = options.execFileAsync;
+  if (!command) return healthCheck(id, label, missingStatus, "未配置命令路径");
+  if (typeof execFileAsync !== "function") return healthCheck(id, label, missingStatus, "execFileAsync is not configured");
+  try {
+    const out = await execFileAsync(command, args, { rejectOnError: false, timeout: options.timeout || 8000, maxBuffer: options.maxBuffer || 256 * 1024 });
+    const text = `${out.stdout}${out.stderr}`.trim().split(/\r?\n/)[0] || command;
+    return healthCheck(id, label, out.error ? "warn" : "ok", text);
+  } catch (error) {
+    return healthCheck(id, label, missingStatus, error.message);
+  }
+}
+
+function createHealthProbe(options = {}) {
+  return {
+    healthCheck,
+    directoryHealth: (id, label, dir) => directoryHealth(id, label, dir, { ensureDirs: options.ensureDirs }),
+    commandHealth: (id, label, command, args = ["--help"], missingStatus = "fail") => commandHealth(id, label, command, args, {
+      execFileAsync: options.execFileAsync,
+      missingStatus,
+      timeout: options.timeout,
+      maxBuffer: options.maxBuffer,
+    }),
+  };
+}
+
 module.exports = {
   readPidFilePid,
   isProcessAlive,
   preparePidFile,
   writePidFile,
   buildProcessHealth,
+  healthCheck,
+  directoryHealth,
+  commandHealth,
+  createHealthProbe,
 };

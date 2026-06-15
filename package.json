@@ -1,0 +1,12 @@
+{
+  "name": "local-ai-deployment-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Release-level checks for the Local AI Deployment Manager.",
+  "scripts": {
+    "test:frontend-smoke": "playwright test tests/frontend-smoke.spec.cjs --config=playwright.config.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.0"
+  }
+}

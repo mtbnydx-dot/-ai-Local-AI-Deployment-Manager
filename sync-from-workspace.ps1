@@ -27,6 +27,7 @@ function Test-ExcludedFileName {
 $directories = @(
   ".github",
   "docs",
+  "tests",
   "manager-core",
   "service-entry",
   "vllm-manager",
@@ -38,6 +39,9 @@ $directories = @(
 $files = @(
   ".gitignore",
   "README.md",
+  "package.json",
+  "package-lock.json",
+  "playwright.config.cjs",
   "SYNC_POLICY.md",
   "install-all.cmd",
   "test-all.cmd",

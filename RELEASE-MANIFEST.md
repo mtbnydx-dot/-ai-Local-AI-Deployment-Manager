@@ -1,12 +1,13 @@
 ﻿# Release Manifest
 
 Synced from: D:\AI
-Synced at: 2026-06-15 00:49:30 +10:00
+Synced at: 2026-06-15 20:46:09 +10:00
 
 ## Directories
 
 - .github
 - docs
+- tests
 - manager-core
 - service-entry
 - vllm-manager
@@ -18,6 +19,9 @@ Synced at: 2026-06-15 00:49:30 +10:00
 
 - .gitignore
 - README.md
+- package.json
+- package-lock.json
+- playwright.config.cjs
 - SYNC_POLICY.md
 - install-all.cmd
 - test-all.cmd

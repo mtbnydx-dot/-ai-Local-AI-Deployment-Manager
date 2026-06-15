@@ -47,388 +47,189 @@ const state = {
 const $ = (selector) => document.querySelector(selector);
 const { fmtBytes, fmtNumber, fmtTokens, fmtPct, fmtRate, fmtMoney, escapeHtml, escapeAttr } = window.VllmFormat;
 const { api, auditApi } = window.VllmApi.create(() => state.auditToken);
+const { DOWNLOAD_SOURCES, PRECISION_PRESETS, MODEL_PRESETS, DTYPE_BYTES, KV_DTYPE_BYTES, QUANTIZATION_PROFILES, ICON_FALLBACKS } = window.VllmCatalog;
+const {
+  normalizedOptions,
+  normalizedPrecisionOptions,
+  chooseDownloadPrecision,
+  normalizeDownloadQuantValue,
+  inferDownloadSelection,
+  normalizeSummary,
+  inferModelQuantLabel,
+  quantBytesForLabel,
+  isManagerRunnableModelItem,
+  isManagerRunnableRemoteModel,
+  modelRemoteSizeMatches,
+  modelRemoteQuantMatches,
+  formatParamsB,
+} = window.VllmModelUtils;
+const { jobStatusInfo, jobTypeLabel, isDockerDaemonIssue, formatDuration } = window.VllmJobUtils;
+const { inferGpuGeneration } = window.GpuPlanningUtils;
 
-const UI_COPY = {
-  "zh-CN": {
-    "app.title": "本地模型控制台",
-    "app.subtitle.fallback": "vLLM / Docker",
-    "brand.subtitle": "本地推理控制台",
-    "nav.service": "服务",
-    "nav.models": "模型",
-    "nav.download": "下载",
-    "nav.exposure": "对外服务",
-    "nav.externalAccess": "外来访问",
-    "nav.tools": "工具",
-    "nav.stats": "统计",
-    "nav.audit": "审计",
-    "nav.logs": "日志",
-    "theme.auto": "自动主题",
-    "theme.light": "浅色",
-    "theme.dark": "深色",
-    "language.auto": "语言自动",
-    "language.zh": "中文",
-    "language.en": "English",
-    "modelPicker.label": "模型 ID 或本地路径",
-    "modelPicker.toggle": "选择",
-    "modelPicker.search": "搜索本地、缓存、收藏或在线模型",
-    "modelPicker.refresh": "刷新模型列表",
-    "modelPicker.all": "全部",
-    "modelPicker.favorite": "收藏",
-    "modelPicker.local": "本地",
-    "modelPicker.cached": "缓存",
-    "modelPicker.remote": "在线",
-    "modelPicker.runnableOnly": "仅可运行",
-    "modelPicker.runnableTitle": "仅显示 vLLM 可直接启动的模型",
-    "modelPicker.empty": "没有匹配的模型。可以换个关键词，或先刷新本地/在线列表。",
-    "modelPicker.loading": "正在读取模型列表...",
-    "modelPicker.running": "运行中",
-    "modelPicker.gated": "需授权",
-    "modelPicker.updated": "更新",
-    "modelPicker.selected": "已填入启动表单",
-    "modelPicker.refreshing": "刷新中...",
-    "remote.runnableOnly": "仅可运行",
-    "remote.runnableTitle": "仅显示 vLLM 可直接运行的模型",
-    "download.runnableModels": "选择可运行模型",
-    "refresh": "刷新",
+const { UI_COPY, UI_TEXT_TRANSLATIONS, UI_TRANSLATION_PATTERNS, UI_PARTIAL_TRANSLATIONS } = window.VllmI18n;
+const { notify, setButtonBusy, reportActionError } = window.VllmUiUtils.create({ $, escapeHtml, renderIcons: () => renderIcons() });
+const serviceClientRenderer = window.LocalAiServiceClients.create({
+  $,
+  state,
+  escapeHtml,
+  escapeAttr,
+  fmtTokens,
+  formatDateTime,
+});
+const profileRenderer = window.LocalAiProfileRenderer.create({
+  $,
+  state,
+  escapeHtml,
+  escapeAttr,
+  fmtTokens,
+  copy: {
+    empty: "暂无配置方案。",
+    builtin: "内置",
+    noDescription: "无说明",
+    apply: "套用",
+    remove: "删除",
+    noOptions: "暂无方案",
+    defaultSummary: "常用参数可在这里快速套用；完整管理仍在工具页。",
   },
-  "en-US": {
-    "app.title": "Local Model Console",
-    "app.subtitle.fallback": "vLLM / Docker",
-    "brand.subtitle": "Local inference console",
-    "nav.service": "Service",
-    "nav.models": "Models",
-    "nav.download": "Download",
-    "nav.exposure": "Serving",
-    "nav.externalAccess": "External Access",
-    "nav.tools": "Tools",
-    "nav.stats": "Stats",
-    "nav.audit": "Audit",
-    "nav.logs": "Logs",
-    "theme.auto": "Auto theme",
-    "theme.light": "Light",
-    "theme.dark": "Dark",
-    "language.auto": "Auto language",
-    "language.zh": "中文",
-    "language.en": "English",
-    "modelPicker.label": "Model ID or local path",
-    "modelPicker.toggle": "Choose",
-    "modelPicker.search": "Search local, cached, favorite, or online models",
-    "modelPicker.refresh": "Refresh model list",
-    "modelPicker.all": "All",
-    "modelPicker.favorite": "Favorites",
-    "modelPicker.local": "Local",
-    "modelPicker.cached": "Cache",
-    "modelPicker.remote": "Online",
-    "modelPicker.runnableOnly": "Runnable only",
-    "modelPicker.runnableTitle": "Only show models vLLM can launch directly",
-    "modelPicker.empty": "No matching models. Try another keyword or refresh local/online lists.",
-    "modelPicker.loading": "Reading model list...",
-    "modelPicker.running": "Running",
-    "modelPicker.gated": "Gated",
-    "modelPicker.updated": "Updated",
-    "modelPicker.selected": "Filled launch form",
-    "modelPicker.refreshing": "Refreshing...",
-    "remote.runnableOnly": "Runnable only",
-    "remote.runnableTitle": "Only show models vLLM can run directly",
-    "download.runnableModels": "Choose runnable model",
-    "refresh": "Refresh",
+  metrics(profile) {
+    const cfg = profile.config || {};
+    return [
+      `${fmtTokens(cfg.maxModelLen || 0)} 上下文`,
+      `${fmtTokens(cfg.maxNumSeqs || 0)} 并发`,
+      `${cfg.kvCacheDtype || "auto"} KV`,
+      cfg.clientPreset || "generic",
+    ];
   },
-};
-
-const UI_TEXT_TRANSLATIONS = {
-  "可用": "Available",
-  "异常": "Error",
-  "未检测到": "Not detected",
-  "运行中": "Running",
-  "已停止": "Stopped",
-  "未启动": "Not started",
-  "当前模型": "Current Model",
-  "启动服务": "Start Service",
-  "停止": "Stop",
-  "仅可运行": "Runnable only",
-  "选择可运行模型": "Choose runnable model",
-  "vLLM 可运行": "vLLM runnable",
-  "需换管理器": "Use another manager",
-  "服务名": "Service name",
-  "端口": "Port",
-  "上下文与显存": "Context and VRAM",
-  "这些参数共同决定可用上下文、启动显存和并发能力。": "These settings jointly determine available context, startup VRAM use, and concurrency.",
-  "上下文长度 max_model_len": "Context length max_model_len",
-  "并发序列数 max_num_seqs": "Concurrent sequences max_num_seqs",
-  "显存占用比例": "GPU memory utilization",
-  "KV cache 精度": "KV cache precision",
-  "多模态缓存 GB": "Multimodal cache GB",
-  "启用 prefix cache": "Enable prefix cache",
-  "仅语言模式": "Language-only mode",
-  "本地 Claude 推荐": "Recommended for local Claude",
-  "单人聊天用 4；冲 128K/192K 长上下文时用 1-2。": "Use 4 for solo chat; use 1-2 when pushing 128K/192K long context.",
-  "FP8 最省显存，长上下文优先用 FP8；auto 通常会按模型 dtype 使用更大缓存。": "FP8 saves the most VRAM. Prefer FP8 for long context; auto usually follows the model dtype and uses a larger cache.",
-  "CPU/KV offload 可以换更长上下文，但会牺牲速度，先从 4-8 GB 小步尝试。": "CPU/KV offload can buy more context at a speed cost. Start with small 4-8 GB steps.",
-  "不用图片/视频时可开启，减少多模态 encoder 和缓存开销。": "Enable this when image/video input is not needed to reduce multimodal encoder and cache overhead.",
-  "模型规模": "Model size",
-  "权重显存": "Weight VRAM",
-  "每张 GPU": "Per GPU",
-  "单卡或未分摊": "Single GPU or not split",
-  "预计可运行": "Likely runnable",
-  "估算包含权重、当前上下文需要的 KV cache 和运行余量；vLLM 可能继续按显存占用比例预留更多 KV cache。 权重量化：按模型配置或 dtype 估算。 未开启仅语言模式，多模态模型会保留视觉/视频相关开销。": "The estimate includes weights, KV cache for the selected context, and runtime headroom. vLLM may reserve more KV cache according to the memory utilization ratio. Weight quantization: estimated from model config or dtype. Language-only mode is off, so multimodal models keep vision/video overhead.",
-  "量化": "Quantization",
-  "加载格式": "Load format",
-  "调用工具预设": "Client/tool preset",
-  "本次启动会使用 --reasoning-parser qwen3。 Open WebUI 能把 reasoning_content / reasoning / thinking 分离成思考块，推荐启用匹配模型的 parser。": "This launch will use --reasoning-parser qwen3. OpenWebUI can separate reasoning_content / reasoning / thinking into thinking blocks. Use the parser that matches the model.",
-  "工具调用桥接": "Tool-call bridge",
-  "Claude 会把工具 schema 发给管理器，管理器再转成 vLLM/OpenAI tools。": "Claude sends tool schemas to the manager; the manager converts them to vLLM/OpenAI tools.",
-  "启用 vLLM 自动工具调用": "Enable vLLM automatic tool choice",
-  "本次启动会使用 --enable-auto-tool-choice --tool-call-parser qwen3_coder。 Open WebUI 的函数调用会直接走 OpenAI tools；模型支持 parser 时可开启。": "This launch will use --enable-auto-tool-choice --tool-call-parser qwen3_coder. OpenWebUI function calls go through OpenAI tools directly; enable this when the model supports the parser.",
-  "Claude 上下文自动压缩": "Claude automatic context compression",
-  "仅作用于 Claude 兼容桥；触发后保留最近原文，把更旧内容压成结构化摘要。": "Only applies to the Claude compatibility bridge. When triggered, recent original messages are kept and older content is compressed into a structured summary.",
-  "启用自动压缩": "Enable automatic compression",
-  "触发阈值 %": "Trigger threshold %",
-  "最近原文保留 %": "Recent original retention %",
-  "摘要预算 %": "Summary budget %",
-  "谨慎模式": "Cautious mode",
-  "自动压缩已启用：估算 prompt + 输出预算达到上下文 90% 时触发；最近 20% 原文不压缩，旧内容压成 20% 结构化摘要。 错误、路径、模型名、端口、用户硬性要求和最近工具调用会优先保留。": "Automatic compression is enabled: it triggers when estimated prompt + output budget reaches 90% of context. The latest 20% remains uncompressed, and older content is compressed into a 20% structured summary. Errors, paths, model names, ports, hard user requirements, and recent tool calls are preserved first.",
-  "保存压缩设置": "Save compression settings",
-  "服务访问范围": "Service access scope",
-  "当前仅本机访问。OpenAI 兼容地址为 http://127.0.0.1:8000/v1；Claude 兼容地址为 http://127.0.0.1:5177/claude/v1/messages。": "Localhost only. OpenAI-compatible base URL: http://127.0.0.1:8000/v1. Claude-compatible endpoint: http://127.0.0.1:5177/claude/v1/messages.",
-  "GPU 设备": "GPU devices",
-  "勾选要暴露给 vLLM 的显卡；单卡机器会自动选中 GPU 0。": "Select the GPUs exposed to vLLM. Single-GPU machines automatically select GPU 0.",
-  "多 GPU 利用方式": "Multi-GPU mode",
-  "执行后端": "Execution backend",
-  "TP 数": "TP size",
-  "PP 数": "PP size",
-  "DP 数": "DP size",
-  "Tensor Parallel 适合把大模型切到多张同规格 GPU；Pipeline Parallel 适合超大模型分层放置；Data Parallel 更偏吞吐扩展，普通非 MoE 模型通常用多实例更直接。": "Tensor Parallel splits large models across matched GPUs. Pipeline Parallel places layers across GPUs for very large models. Data Parallel is for throughput scaling; for ordinary non-MoE models, multiple instances are often more direct.",
-  "启动 vLLM": "Start vLLM",
-  "暂无启动任务": "No startup jobs",
-  "运行中模型": "Running Models",
-  "显示当前 vLLM 容器实际暴露的模型；卸载会停止该 vLLM 容器。": "Shows the models actually exposed by the current vLLM container. Unload stops that vLLM container.",
-  "一键 Claude": "One-click Claude",
-  "OpenAI 兼容": "OpenAI compatible",
-  "/chat/completions、/models 由模型服务原生提供": "/chat/completions and /models are provided directly by the model service.",
-  "Claude 兼容": "Claude compatible",
-  "Base URL 用 http://127.0.0.1:5177/claude；模型名用 claude-opus-4-7": "Use Base URL http://127.0.0.1:5177/claude and model name claude-opus-4-7.",
-  "卸载": "Unload",
-  "实测上限": "Measured limit",
-  "来自 /v1/models 的 max_model_len": "max_model_len from /v1/models",
-  "KV 容量": "KV capacity",
-  "来自启动日志并持久化保存": "Persisted from startup logs",
-  "当前活跃 KV": "Current active KV",
-  "只代表正在运行的请求": "Only active running requests",
-  "累计吞吐": "Cumulative throughput",
-  "为什么启动慢、显存高？": "Why startup is slow and VRAM is high",
-  "vLLM 启动会经历读权重、初始化 CUDA/FlashInfer、torch.compile、profiling 和 warmup；显存还会预留 KV cache、CUDA graph、encoder cache 和并发余量。": "vLLM startup reads weights, initializes CUDA/FlashInfer, runs torch.compile, profiling, and warmup. VRAM is also reserved for KV cache, CUDA graphs, encoder cache, and concurrency headroom.",
-  "接口测试": "API Test",
-  "用一句中文回答：本地 vLLM 服务是否可用？": "Answer briefly: is the local vLLM service available?",
-  "发送": "Send",
-  "等待测试": "Waiting for test",
-  "模型库": "Model Library",
-  "在线模型": "Online Models",
-  "从 Hugging Face Hub 实时获取，适合找最新、热门、蒸馏和去审查模型。": "Fetched live from Hugging Face Hub, useful for finding latest, popular, distilled, and uncensored models.",
-  "分类": "Category",
-  "搜索": "Search",
-  "联网查询": "Search online",
-  "在线列表按公开模型元数据返回；gated 模型下载前需要配置对应 token。": "The online list uses public model metadata. Gated models require the matching token before download.",
-  "下载模型": "Download Model",
-  "模型介绍页链接": "Model page link",
-  "解析链接": "Parse link",
-  "粘贴 Hugging Face 或 ModelScope 的模型页面链接，可自动填入模型 ID、保存名和下载来源。": "Paste a Hugging Face or ModelScope model page link to auto-fill model ID, save name, and source.",
-  "选择预设后仍可手动改模型 ID。": "You can still edit the model ID after choosing a preset.",
-  "规格越大效果通常越好但更吃显存；量化精度越低越省显存，可能损失一点质量。": "Larger specs usually perform better but use more VRAM. Lower quantization saves VRAM but may lose some quality.",
-  "开发商": "Developer",
-  "模型版本": "Model version",
-  "规格": "Size",
-  "量化精度": "Quantization precision",
-  "下载来源": "Download source",
-  "Hugging Face 通用性最好，私有或 gated 模型需要提前配置 HF_TOKEN。 原始权重质量最好，显存占用也最高。 轻量验证和低显存测试。": "Hugging Face has the best general compatibility. Private or gated models require HF_TOKEN. Original weights have the best quality and the highest VRAM use. Good for lightweight validation and low-VRAM tests.",
-  "模型 ID": "Model ID",
-  "保存名称": "Save name",
-  "开始下载": "Start download",
-  "暂无下载任务": "No download jobs",
-  "实用工具": "Utilities",
-  "把健康检查、启动方案、模型兼容性、日志摘要、测速、连接和自动保护放在一起。": "Health checks, launch profiles, model compatibility, log summaries, benchmarks, connection guides, and protections in one place.",
-  "刷新工具状态": "Refresh tools",
-  "环境可用": "Environment available",
-  "一键健康检查": "One-click health check",
-  "检查 Docker、GPU、镜像、API、目录、token、CLI 和最近错误。": "Check Docker, GPU, image, API, directories, tokens, CLI tools, and recent errors.",
-  "检查": "Check",
-  "vLLM 镜像": "vLLM image",
-  "镜像版本": "Image version",
-  "vLLM 容器": "vLLM container",
-  "OpenAI 兼容 API": "OpenAI-compatible API",
-  "模型目录": "Model directory",
-  "HF 缓存目录": "HF cache directory",
-  "下载 gated 模型前需要配置 HF_TOKEN": "Set HF_TOKEN before downloading gated models",
-  "最近日志": "Recent logs",
-  "启动配置方案": "Launch profiles",
-  "保存和套用 Claude 长上下文、OpenWebUI、低显存、多卡等启动参数。": "Save and apply launch settings for Claude long context, OpenWebUI, low VRAM, and multi-GPU use.",
-  "保存当前表单": "Save current form",
-  "Claude 长上下文 64K": "Claude long context 64K",
-  "本地 Claude 单人使用，启动更稳，适合日常编码和工具调用。": "For solo local Claude use. More stable startup; suitable for daily coding and tool calls.",
-  "Claude 极限上下文": "Claude maximum context",
-  "冲 128K/192K/256K 时使用，牺牲并发换上下文。": "Use when pushing 128K/192K/256K. Trades concurrency for context.",
-  "OpenWebUI 日常聊天": "OpenWebUI daily chat",
-  "偏稳定和吞吐，适合 OpenWebUI 直接聊天。": "Optimized for stability and throughput; suitable for direct OpenWebUI chat.",
-  "低显存保守模式": "Low-VRAM conservative mode",
-  "启动失败或显存吃紧时先用这个排查。": "Use this first when startup fails or VRAM is tight.",
-  "内置": "Built-in",
-  "套用": "Apply",
-  "模型兼容性检查": "Model compatibility check",
-  "启动前判断 vLLM / GGUF / token / parser / 量化参数风险。": "Check vLLM / GGUF / token / parser / quantization risks before startup.",
-  "检查模型": "Check model",
-  "尚未检查模型。": "Model has not been checked yet.",
-  "日志智能摘要": "Smart log summary",
-  "把 vLLM 最近日志整理成阶段、错误、原因和建议操作。": "Summarize recent vLLM logs into phases, errors, causes, and suggested actions.",
-  "摘要": "Summarize",
-  "尚未读取日志摘要。": "No log summary loaded yet.",
-  "空闲卸载与显存保护": "Idle unload and VRAM protection",
-  "默认关闭。开启后管理器会按空闲时间或显存阈值提醒/卸载 vLLM 容器。": "Disabled by default. When enabled, the manager can warn or unload vLLM based on idle time or VRAM threshold.",
-  "保存保护设置": "Save protection settings",
-  "空闲自动卸载": "Idle auto-unload",
-  "空闲分钟": "Idle minutes",
-  "显存保护": "VRAM protection",
-  "显存阈值 %": "VRAM threshold %",
-  "阈值动作": "Threshold action",
-  "自动保护关闭": "Auto protection off",
-  "空闲 30 分钟 · 显存阈值 94% · 只提醒": "Idle 30 minutes · VRAM threshold 94% · warn only",
-  "模型测速基准": "Model benchmark",
-  "对当前运行模型做短测，记录延迟、输出速度和返回预览。": "Run a short benchmark against the current model and record latency, output speed, and a preview.",
-  "用中文简要说明本地模型是否可以稳定完成工具调用、长上下文和代码任务。": "Briefly explain whether the local model can reliably handle tool calls, long context, and coding tasks.",
-  "开始测速": "Start benchmark",
-  "暂无测速任务": "No benchmark jobs",
-  "客户端连接向导": "Client connection guide",
-  "OpenWebUI、Claude Desktop / ccswitch、curl 测试命令集中展示。": "OpenWebUI, Claude Desktop / ccswitch, and curl test commands in one place.",
-  "刷新连接": "Refresh connection",
-  "API Key 可填任意占位字符串；模型名：qwen3.6-27b-aeon-ultimate-uncensored-multimodal-nvfp4-mtp-xs": "API key can be any placeholder string. Model name: qwen3.6-27b-aeon-ultimate-uncensored-multimodal-nvfp4-mtp-xs",
-  "模型别名：claude-opus-4-7": "Model alias: claude-opus-4-7",
-  "curl 测试": "curl test",
-  "用于确认本地服务是否返回模型列表。": "Use this to confirm the local service returns the model list.",
-  "管理器地址": "Manager address",
-  "当前管理器只绑定本机。": "The manager is currently bound to localhost only.",
-  "上下文压缩可视化": "Context compression view",
-  "只显示压缩统计和最近会话，不读取原始对话正文。": "Only compression statistics and recent sessions are shown. Raw conversation text is not read.",
-  "刷新压缩统计": "Refresh compression stats",
-  "触发次数": "Triggers",
-  "Claude 桥自动压缩": "Claude bridge auto-compression",
-  "节省 tokens": "Saved tokens",
-  "最近原文": "Recent originals",
-  "压缩后保留的最近消息": "Recent messages kept after compression",
-  "摘要消息": "Summary messages",
-  "被压缩进摘要的旧消息": "Older messages compressed into summaries",
-  "这里只显示压缩统计和最近会话摘要，不返回原始对话正文。": "Only compression statistics and recent session summaries are shown here. Raw conversation text is not returned.",
-  "模型收藏与标签": "Model favorites and tags",
-  "给常用模型标记用途，例如 Claude、长上下文、去审查、多模态、容易报错。": "Tag common models by purpose, such as Claude, long context, uncensored, multimodal, or error-prone.",
-  "保存标签": "Save tag",
-  "收藏": "Favorite",
-  "暂无收藏标签。": "No favorite tags yet.",
-  "统计总览": "Statistics Overview",
-  "来自 vLLM /metrics 与本地累计账本，统计请求、速度、上下文和等价 API 价值。": "Request, speed, context, and API-equivalent value from vLLM /metrics and the local cumulative ledger.",
-  "累计 tokens": "Total tokens",
-  "请求数": "Requests",
-  "当前实例": "Current instance",
-  "当前输出速度": "Current output speed",
-  "平均延迟": "Average latency",
-  "活跃 KV cache": "Active KV cache",
-  "只表示当前正在推理的请求；聊天历史在 Open WebUI 侧保存": "Only active inference requests are shown. Chat history is stored by OpenWebUI.",
-  "错误率": "Error rate",
-  "当前累计未记录错误请求": "No cumulative error requests recorded",
-  "运行时长": "Uptime",
-  "模型占比": "Model Share",
-  "按模型名聚合 token、请求、上下文和速度。": "Tokens, requests, context, and speed grouped by model name.",
-  "Token 占比": "Token share",
-  "请求占比": "Request share",
-  "输出速度": "Output speed",
-  "活跃 KV": "Active KV",
-  "历史累计": "Historical total",
-  "Claude 调用情况": "Claude Usage",
-  "把 Claude Desktop / Claude Code / Cowork 经过管理器的调用，和 OpenWebUI 聊天或直连 API 分开统计。": "Separates Claude Desktop / Claude Code / Cowork calls through the manager from OpenWebUI chat or direct API traffic.",
-  "Claude 兼容桥": "Claude compatibility bridge",
-  "经管理器 /claude/v1/messages 进入本地 vLLM 的 Claude Desktop / Claude Code / Cowork 请求。": "Claude Desktop / Claude Code / Cowork requests entering local vLLM through the manager's /claude/v1/messages endpoint.",
-  "请求": "Requests",
-  "工具": "Tools",
-  "上下文压缩": "Context compression",
-  "平均耗时": "Average duration",
-  "Claude 当前任务": "Current Claude task",
-  "聊天 / 直连 OpenAI": "Chat / Direct OpenAI",
-  "OpenWebUI、API Docs 测试页或其他直接访问 vLLM /v1 的请求。这里按 vLLM 总量减去 Claude 桥接量估算。": "OpenWebUI, API Docs test page, or other requests directly accessing vLLM /v1. Estimated as total vLLM traffic minus Claude bridge traffic.",
-  "暂无最后调用": "No last call",
-  "Claude 只统计通过管理器 Claude 兼容桥的请求；OpenWebUI 或直接访问 vLLM /v1 的请求会归入聊天/直连。": "Claude only counts requests through the manager's Claude bridge. OpenWebUI or direct vLLM /v1 traffic is grouped under chat/direct.",
-  "等价 API 价值": "Equivalent API Value",
-  "按官方公开价格估算，如果这些 token 调用 GPT 或 Claude 大概值多少钱。": "Estimated from public official pricing: what these tokens would roughly cost with GPT or Claude.",
-  "模型": "Model",
-  "输入/输出": "Input/Output",
-  "标准等值": "Standard value",
-  "含缓存等值": "Cached value",
-  "价格按 2026-05-25 官方公开价估算；本地 vLLM 不会产生这些 API 费用，仅用于对比价值。": "Pricing is estimated from public official rates on 2026-05-25. Local vLLM does not incur these API fees; this is only for value comparison.",
-  "性能细节": "Performance Details",
-  "延迟、队列、KV cache、prefix cache 和启动阶段指标。": "Latency, queue, KV cache, prefix cache, and startup phase metrics.",
-  "平均端到端": "Average end-to-end",
-  "请求完成平均耗时": "Average request completion time",
-  "平均首 token": "Average first token",
-  "平均单输出 token": "Average per output token",
-  "越低越快": "Lower is faster",
-  "KV cache 容量": "KV cache capacity",
-  "最大并发": "Maximum concurrency",
-  "加载权重": "Load weights",
-  "模型载入阶段": "Model loading phase",
-  "首次启动主要耗时之一": "One of the main first-start costs",
-  "graph pool 实占": "Graph pool actual",
-  "采集源": "Collection source",
-  "用户审计": "User Audit",
-  "模型卸载或手动导出时生成本地完整 Markdown，对话正文需要审计密码后才会在浏览器中读取。": "A complete local Markdown export is generated when a model is unloaded or exported manually. Conversation text is read in the browser only after the audit password is provided.",
-  "审计密码": "Audit password",
-  "解锁审计后台": "Unlock audit backend",
-  "首次使用会自动生成密码文件；路径会显示在上方状态里。这个页面只在密码通过后读取完整对话。": "A password file is generated on first use and shown above. This page reads complete conversations only after the password is accepted.",
-  "运行日志": "Runtime Logs",
-};
-
-const UI_TRANSLATION_PATTERNS = [
-  [/^(.+) 分$/u, "$1 pts"],
-  [/^环境可用 · (.+)$/u, "Environment available · $1"],
-  [/^(.+) · 更新 (.+)$/u, "$1 · Updated $2"],
-  [/^下载 (.+)$/u, "Downloads $1"],
-  [/^喜欢 (.+)$/u, "Likes $1"],
-  [/^(.+) 输入 · (.+) 输出$/u, "$1 input · $2 output"],
-  [/^(.+) 错误 · (.+) 中止$/u, "$1 errors · $2 aborted"],
-  [/^(.+) 成功 · (.+) 错误$/u, "$1 success · $2 errors"],
-  [/^(.+) 个 schema · (.+) 流式$/u, "$1 schemas · $2 streaming"],
-  [/^(.+) 次 · 节省 tokens$/u, "$1 times · saved tokens"],
-  [/^上下文：(.+)$/u, "Context: $1"],
-  [/^活跃 KV：(.+)$/u, "Active KV: $1"],
-  [/^启动：(.+)$/u, "Started: $1"],
-  [/^容器：(.+)$/u, "Container: $1"],
-  [/^(.+) 个请求$/u, "$1 requests"],
-  [/^(.+) 请求$/u, "$1 requests"],
-  [/^(.+) 上下文$/u, "$1 context"],
-  [/^(.+) 并发$/u, "$1 concurrent"],
-  [/^平均 (.+)$/u, "Avg $1"],
-  [/^最近 (.+)$/u, "Recent $1"],
-  [/^最后 (.+)$/u, "Last $1"],
-  [/^生命周期 (.+)$/u, "Lifetime $1"],
-  [/^平均输入 (.+)$/u, "Avg input $1"],
-  [/^最大并发 (.+)$/u, "Max concurrency $1"],
-  [/^审计目录：(.+)$/u, "Audit directory: $1"],
-  [/^Open WebUI 容器：(.+) · 运行中$/u, "OpenWebUI container: $1 · running"],
-  [/^密码文件：(.+)$/u, "Password file: $1"],
-  [/^(.+) 个历史模型保留累计消耗$/u, "$1 historical model(s) retained cumulative usage"],
-  [/^(.+) 个$/u, "$1"],
-  [/^(.+)小时(.+)分$/u, "$1h $2m"],
-  [/^(.+) 层 · KV heads (.+)$/u, "$1 layers · KV heads $2"],
-  [/^(.+)：(.+) tokens \/ (.+) 请求$/u, "$1: $2 tokens / $3 requests"],
-  [/^(.+)：(.+) saved$/u, "$1: $2 saved"],
-  [/^自动清理 (.+) 次 · 最近 (.+)$/u, "Auto cleanup $1 times · recent $2"],
-  [/^(.+) · 切换 (.+) 次$/u, "$1 · switched $2 times"],
-];
-
-const UI_PARTIAL_TRANSLATIONS = [
-  [/中文/g, "Chinese"],
-  [/截断/g, "truncated"],
-  [/输入/g, "input"],
-  [/输出/g, "output"],
-  [/错误/g, "errors"],
-  [/中止/g, "aborted"],
-  [/成功/g, "success"],
-  [/请求/g, "requests"],
-];
+  summaryParts(profile) {
+    const cfg = profile.config || {};
+    return [
+      profile.description || "无说明",
+      cfg.maxModelLen ? `${fmtTokens(cfg.maxModelLen)} 上下文` : "",
+      cfg.multiGpuMode ? `${cfg.multiGpuMode} GPU` : "",
+      cfg.clientPreset || "",
+    ];
+  },
+});
+const externalAccessRenderer = window.LocalAiExternalAccess.create({
+  $,
+  escapeHtml,
+  escapeAttr,
+  fmtTokens,
+  fmtPct,
+  fmtRate,
+  fmtMs,
+  formatDateTime,
+  statsMetric,
+  miniStat,
+  shareBar,
+  sparkline,
+  renderIcons,
+  summaryHeroClass: "stats-metric-hero",
+  endpointDetails: {
+    claude: "给 Claude Desktop / CC Switch 使用，客户端再拼 /v1/messages。",
+    openai: "给 OpenWebUI、OpenCode 或 OpenAI SDK 使用，路径为 /v1/chat/completions。",
+  },
+});
+const jobRenderer = window.LocalAiJobRenderer.create({
+  $,
+  state,
+  escapeHtml,
+  escapeAttr,
+  fmtBytes,
+  formatDuration,
+  formatDateTime,
+  jobStatusInfo,
+  jobTypeLabel,
+  renderServeProgress,
+  renderBenchmarkProgress,
+  renderAutomationJobProgress,
+  showMeta: true,
+  showLogActions: true,
+  showVerifyActions: true,
+});
+const serviceExposureRenderer = window.LocalAiServiceExposureRenderer.create({
+  $,
+  state,
+  escapeHtml,
+  escapeAttr,
+  fmtTokens,
+  defaultServicePort: 8000,
+  includeOpenCode: true,
+  apiKeySummary: (service) => (service.apiKeyRequired ? "运行中已启用" : "运行中未启用"),
+});
+const uiArchitecture = window.LocalAiUiArchitecture.create({ $, escapeHtml });
+const runtimeStatusRenderer = window.LocalAiRuntimeStatusRenderer.create({
+  $,
+  state,
+  escapeHtml,
+  escapeAttr,
+  fmtBytes,
+  fmtNumber,
+  fmtTokens,
+  fmtPct,
+  fmtRate,
+  formatDuration,
+  inferGpuGeneration,
+  renderIcons: () => renderIcons(),
+  setMetricState,
+  getLiveTokensPerSecond,
+  getVisibleGpus,
+  updateParallelDefaults,
+  updateMemoryEstimate,
+  renderGpuPlan: () => renderVllmGpuPlan(),
+  renderRuntimeFacts: (status) => renderRuntimeFacts(status),
+  options: {
+    subtitlePrefix: "vLLM",
+    defaultContainerName: "vllm-local",
+    noRunningText: "当前没有运行中的 vLLM 模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。",
+    loadingTitle: "vLLM 容器正在运行",
+    includeApiKeyBadge: true,
+    includeClaudeModelAlias: true,
+    showSpeed: true,
+    showKvBar: true,
+    defaultGpuSelection: "first",
+    contextWarnPct: 85,
+    vramWarnPct: 92,
+    syncTestModelFromRunning: true,
+    onGpuPickerStable: () => renderVllmGpuPlan(),
+  },
+});
+const toolPanelRenderer = window.LocalAiToolPanelRenderer.create({
+  $,
+  state,
+  escapeHtml,
+  escapeAttr,
+  fmtNumber,
+  fmtTokens,
+  formatDateTime,
+  miniStat,
+  renderIcons: () => renderIcons(),
+  onApplyModelCheck: (result) => {
+    applyLaunchProfile(result.recommendations || {});
+    notify("已套用兼容性推荐", result.model, "success");
+    showView("service");
+  },
+  options: {
+    showCompressionSessions: true,
+  },
+});
+const statsSummaryRenderer = window.LocalAiStatsSummaryRenderer.create({
+  $,
+  state,
+  statsMetric,
+  fmtTokens,
+  fmtRate,
+  fmtPct,
+  fmtSeconds,
+  formatDuration,
+  formatContextUsage,
+  options: {
+    totalTokensLabel: "累计 tokens",
+    heroFirstMetric: true,
+    includeRuntimeModels: true,
+    includePrefixCache: true,
+  },
+});
 
 const originalTextNodes = new WeakMap();
 const originalAttributes = new WeakMap();
@@ -653,154 +454,6 @@ function applyPartialTranslations(value) {
   return translated;
 }
 
-function notify(title, detail = "", type = "info") {
-  const root = $("#toastRoot");
-  if (!root) return;
-  const toast = document.createElement("div");
-  toast.className = `toast toast-${type}`;
-  toast.setAttribute("role", type === "error" ? "alert" : "status");
-  toast.innerHTML = `
-    <div class="toast-icon" aria-hidden="true">${type === "error" ? "!" : type === "success" ? "✓" : "i"}</div>
-    <div>
-      <strong>${escapeHtml(title)}</strong>
-      ${detail ? `<span>${escapeHtml(detail)}</span>` : ""}
-    </div>
-    <button type="button" class="toast-close" aria-label="关闭提示">×</button>
-  `;
-  root.appendChild(toast);
-  const close = () => {
-    toast.classList.add("toast-exit");
-    window.setTimeout(() => toast.remove(), 180);
-  };
-  toast.querySelector(".toast-close").addEventListener("click", close);
-  window.setTimeout(close, type === "error" ? 9000 : 4800);
-}
-
-function setButtonBusy(button, label = "处理中...") {
-  if (!button) return () => {};
-  const originalHtml = button.innerHTML;
-  button.disabled = true;
-  button.classList.add("is-busy");
-  button.innerHTML = `<span class="button-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
-  return () => {
-    button.disabled = false;
-    button.classList.remove("is-busy");
-    button.innerHTML = originalHtml;
-    renderIcons();
-  };
-}
-
-function reportActionError(title, error) {
-  // 只弹 toast，不要把无关错误写进「接口测试」结果框
-  notify(title, error?.message || String(error || "未知错误"), "error");
-}
-
-const DOWNLOAD_SOURCES = {
-  huggingface: {
-    label: "Hugging Face",
-    hint: "Hugging Face 通用性最好，私有或 gated 模型需要提前配置 HF_TOKEN。",
-  },
-  modelscope: {
-    label: "ModelScope 魔搭",
-    hint: "ModelScope 在国内网络环境通常更顺手，需要本机可调用 modelscope CLI。",
-  },
-};
-
-// 量化精度不再用来拼仓库后缀（-AWQ/-FP8 这类仓库多半不存在）。
-// base 直接下载原始仓库；其它精度引导到在线搜索按 quantFilter 找真实存在的量化仓库。
-const PRECISION_PRESETS = [
-  { value: "base", label: "原始 BF16/FP16", quantFilter: "", launchQuantization: "" },
-  { value: "fp8", label: "FP8", quantFilter: "fp8", launchQuantization: "fp8" },
-  { value: "awq", label: "AWQ INT4", quantFilter: "awq", launchQuantization: "awq" },
-  { value: "gptq", label: "GPTQ INT4", quantFilter: "gptq", launchQuantization: "gptq" },
-  { value: "nvfp4", label: "NVFP4", quantFilter: "nvfp4", launchQuantization: "modelopt_fp4" },
-  { value: "int4", label: "INT4 / NF4", quantFilter: "int4", launchQuantization: "bitsandbytes" },
-  { value: "gguf", label: "GGUF", quantFilter: "gguf", launchQuantization: "" },
-];
-
-const MODEL_PRESETS = [
-  // Qwen3 稠密：单卡主力，覆盖从验证到 32B
-  { developer: "Qwen", version: "Qwen3 稠密", spec: "0.6B", repo: "Qwen/Qwen3-0.6B", note: "极轻量，用于跑通流程和低显存验证。" },
-  { developer: "Qwen", version: "Qwen3 稠密", spec: "1.7B", repo: "Qwen/Qwen3-1.7B", note: "小显存设备也能流畅运行。" },
-  { developer: "Qwen", version: "Qwen3 稠密", spec: "4B", repo: "Qwen/Qwen3-4B", note: "单卡友好的日常中文模型。" },
-  { developer: "Qwen", version: "Qwen3 稠密", spec: "8B", repo: "Qwen/Qwen3-8B", note: "质量与速度均衡，单卡通用首选。" },
-  { developer: "Qwen", version: "Qwen3 稠密", spec: "14B", repo: "Qwen/Qwen3-14B", note: "更强推理，建议 24GB+ 或量化。" },
-  { developer: "Qwen", version: "Qwen3 稠密", spec: "32B", repo: "Qwen/Qwen3-32B", note: "高质量稠密模型，建议大显存或量化。" },
-  // Qwen3 MoE：激活参数少、吞吐高
-  { developer: "Qwen", version: "Qwen3 MoE", spec: "30B-A3B", repo: "Qwen/Qwen3-30B-A3B", note: "激活仅 3B，吞吐高且质量接近 32B 稠密。" },
-  { developer: "Qwen", version: "Qwen3 MoE", spec: "235B-A22B", repo: "Qwen/Qwen3-235B-A22B", note: "旗舰 MoE，需多卡或低比特量化。" },
-  // Qwen3-VL：多模态
-  { developer: "Qwen", version: "Qwen3-VL 多模态", spec: "8B", repo: "Qwen/Qwen3-VL-8B-Instruct", note: "图文理解，单卡可跑。" },
-  { developer: "Qwen", version: "Qwen3-VL 多模态", spec: "30B-A3B", repo: "Qwen/Qwen3-VL-30B-A3B-Instruct", note: "MoE 多模态，吞吐高。" },
-  // OpenAI gpt-oss：原生 MXFP4 开源权重
-  { developer: "OpenAI", version: "gpt-oss", spec: "20B", repo: "openai/gpt-oss-20b", note: "原生 MXFP4 量化，单卡即可运行。" },
-  { developer: "OpenAI", version: "gpt-oss", spec: "120B", repo: "openai/gpt-oss-120b", note: "大号开源权重，需多卡或大显存。" },
-  // NVIDIA DiffusionGemma：需要 vLLM Gemma 专用镜像与 gemma4 parser
-  { developer: "NVIDIA", version: "DiffusionGemma", spec: "26B-A4B IT", repo: "nvidia/diffusiongemma-26B-A4B-it-NVFP4", precision: "nvfp4", note: "NVFP4 多模态/扩散式 Gemma 架构；启动时管理器会自动切换 Gemma vLLM 镜像、V2 runner、TRITON_ATTN 与 gemma4 parser。" },
-  // DeepSeek R1 蒸馏：强推理小模型
-  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "1.5B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", note: "最小的强推理蒸馏模型。" },
-  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "7B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", note: "单卡推理蒸馏小规格。" },
-  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "14B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", note: "推理更稳，显存需求更高。" },
-  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "32B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", note: "蒸馏旗舰，建议多卡或量化。" },
-  { developer: "DeepSeek", version: "R1 Distill Llama", spec: "8B", repo: "deepseek-ai/DeepSeek-R1-Distill-Llama-8B", note: "Llama 架构的推理蒸馏版。" },
-  { developer: "DeepSeek", version: "R1 Distill Llama", spec: "70B", repo: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B", note: "高质量推理，需多卡或量化。" },
-  // Meta Llama：英文/通用，多数需授权 token
-  { developer: "Meta", version: "Llama 3.3", spec: "70B", repo: "meta-llama/Llama-3.3-70B-Instruct", note: "强英文/通用模型，需授权 token，建议多卡。" },
-  { developer: "Meta", version: "Llama 3.1", spec: "8B", repo: "meta-llama/Llama-3.1-8B-Instruct", note: "单卡通用英文模型，需授权 token。" },
-  // Google Gemma 3：轻量多语言，多数需授权 token
-  { developer: "Google", version: "Gemma 3", spec: "1B", repo: "google/gemma-3-1b-it", note: "超轻量，需授权 token。" },
-  { developer: "Google", version: "Gemma 3", spec: "4B", repo: "google/gemma-3-4b-it", note: "轻量多语言 instruction 模型。" },
-  { developer: "Google", version: "Gemma 3", spec: "12B", repo: "google/gemma-3-12b-it", note: "单卡可跑的中端模型。" },
-  { developer: "Google", version: "Gemma 3", spec: "27B", repo: "google/gemma-3-27b-it", note: "Gemma 旗舰，建议大显存或量化。" },
-  // Mistral：欧洲通用模型
-  { developer: "Mistral", version: "Small 3.2", spec: "24B", repo: "mistralai/Mistral-Small-3.2-24B-Instruct-2506", note: "中等规模通用模型，建议高显存。" },
-];
-
-const DTYPE_BYTES = {
-  auto: 2,
-  bfloat16: 2,
-  float16: 2,
-  float32: 4,
-};
-
-const KV_DTYPE_BYTES = {
-  auto: null,
-  fp8: 1,
-  fp8_e5m2: 1,
-  fp8_e4m3: 1,
-};
-
-const QUANTIZATION_PROFILES = {
-  "": { label: "Auto", bytesPerParam: null, note: "按模型配置或 dtype 估算" },
-  awq: { label: "AWQ INT4", bytesPerParam: 0.58, note: "4-bit 权重量化，另含 scale/zero 开销" },
-  gptq: { label: "GPTQ INT4", bytesPerParam: 0.58, note: "4-bit 权重量化，另含 scale 开销" },
-  bitsandbytes: { label: "BitsAndBytes 4-bit", bytesPerParam: 0.62, note: "通常按 NF4/INT4 估算" },
-  fp8: { label: "FP8", bytesPerParam: 1.08, note: "FP8 权重，预留少量 scale 开销" },
-  modelopt: { label: "ModelOpt FP8", bytesPerParam: 1.08, note: "ModelOpt FP8 权重" },
-  modelopt_fp4: { label: "NVFP4", bytesPerParam: 0.62, note: "FP4 权重，预留 scale 开销" },
-  "compressed-tensors": { label: "Compressed", bytesPerParam: 0.62, note: "按常见 4-bit 压缩估算" },
-};
-
-const ICON_FALLBACKS = {
-  activity: "~",
-  database: "DB",
-  download: "DL",
-  terminal: ">_",
-  "refresh-cw": "R",
-  "rotate-cw": "R",
-  "scroll-text": "LOG",
-  play: ">",
-  square: "STOP",
-  send: ">",
-  "trash-2": "DEL",
-  "bar-chart-3": "STAT",
-  "shield-check": "AUD",
-  "lock-keyhole": "KEY",
-  eye: "VIEW",
-  wrench: "TOOL",
-  "badge-check": "OK",
-};
-
 function enhanceUiArchitecture() {
   ensureServiceExposureUi();
   ensureModelPickerRunningTab();
@@ -810,141 +463,12 @@ function enhanceUiArchitecture() {
 }
 
 function ensureServiceExposureUi() {
-  const nav = document.querySelector(".nav");
-  if (nav && !nav.querySelector("[data-view='exposure']")) {
-    const link = document.createElement("a");
-    link.href = "#exposure";
-    link.dataset.view = "exposure";
-    link.innerHTML = `<i data-lucide="globe-2"></i><span>${t("nav.exposure")}</span>`;
-    nav.querySelector("[data-view='download']")?.after(link);
-  }
-  if ($("#exposure")) return;
-  const tools = $("#tools");
-  const section = document.createElement("section");
-  section.className = "service-exposure-page view-panel";
-  section.id = "exposure";
-  section.dataset.viewPanel = "exposure";
-  section.innerHTML = `
-    <div class="panel exposure-hero-panel">
-      <div>
-        <h3>对外提供模型服务</h3>
-        <p>集中管理访问范围、鉴权、客户端入口和上线前检查。这里保存的是服务化策略；模型参数仍在“服务”页启动。</p>
-      </div>
-      <div class="panel-actions">
-        <button class="secondary-button compact-button" id="refreshServiceExposureBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新状态</span></button>
-        <button class="secondary-button compact-button" id="applyExposureToLaunchBtn" type="button"><i data-lucide="send"></i><span>应用到启动表单</span></button>
-      </div>
-    </div>
-    <div class="service-exposure-grid">
-      <form class="panel exposure-settings-panel" id="serviceExposureForm">
-        <div class="panel-head">
-          <h3>服务化策略</h3>
-          <button class="primary-button compact-button" type="submit"><i data-lucide="save"></i><span>保存</span></button>
-        </div>
-        <div class="exposure-form-grid">
-          <label class="check-row">
-            <input id="exposureEnabled" name="enabled" type="checkbox" />
-            <span>启用服务化配置</span>
-          </label>
-          <label>
-            <span>开放方式</span>
-            <select id="exposureMode" name="exposureMode">
-              <option value="local">仅本机客户端</option>
-              <option value="lan">局域网服务</option>
-              <option value="reverse-proxy">公网/反向代理</option>
-            </select>
-          </label>
-          <label class="check-row">
-            <input id="exposureRequireApiKey" name="requireApiKey" type="checkbox" />
-            <span>对外访问必须使用 API Key</span>
-          </label>
-          <label>
-            <span>API Key</span>
-            <div class="inline-input-action">
-              <input id="exposureApiKey" name="apiKey" type="password" autocomplete="off" placeholder="留空表示保持现有密钥" />
-              <button class="ghost-mini-button" id="generateExposureApiKey" type="button">生成</button>
-            </div>
-            <small id="exposureApiKeyState">未保存密钥</small>
-          </label>
-          <label class="check-row">
-            <input id="exposureClearApiKey" name="clearApiKey" type="checkbox" />
-            <span>清除已保存 API Key</span>
-          </label>
-          <label>
-            <span>公网 Base URL</span>
-            <input id="exposurePublicBaseUrl" name="publicBaseUrl" placeholder="https://llm.example.com" />
-          </label>
-          <label>
-            <span>每分钟请求上限</span>
-            <input id="exposureRateLimitRpm" name="rateLimitRpm" type="number" min="1" max="5000" value="120" />
-          </label>
-          <label>
-            <span>最大并发请求</span>
-            <input id="exposureMaxConcurrentRequests" name="maxConcurrentRequests" type="number" min="1" max="256" value="4" />
-          </label>
-          <label>
-            <span>请求超时秒数</span>
-            <input id="exposureRequestTimeoutSeconds" name="requestTimeoutSeconds" type="number" min="10" max="7200" value="600" />
-          </label>
-          <label class="wide-field">
-            <span>允许来源 / 客户端备注</span>
-            <textarea id="exposureAllowedOrigins" name="allowedOrigins" rows="3" placeholder="每行一个域名、IP 或客户端名称"></textarea>
-          </label>
-          <div class="exposure-toggle-grid wide-field">
-            <label class="check-row"><input id="exposureOpenAI" name="exposeOpenAI" type="checkbox" /><span>OpenAI 兼容接口</span></label>
-            <label class="check-row"><input id="exposureClaude" name="exposeClaude" type="checkbox" /><span>Claude 兼容桥</span></label>
-            <label class="check-row"><input id="exposureOpenCode" name="exposeOpenCode" type="checkbox" /><span>OpenCode 代理</span></label>
-            <label class="check-row"><input id="exposureMetrics" name="exposeMetrics" type="checkbox" /><span>暴露 metrics</span></label>
-            <label class="check-row"><input id="exposureAllowManagerRemote" name="allowManagerRemote" type="checkbox" /><span>允许远程管理器桥接</span></label>
-          </div>
-          <label class="wide-field">
-            <span>运维备注</span>
-            <textarea id="exposureNotes" name="notes" rows="3" placeholder="服务对象、端口、防火墙、反代、密钥轮换计划等"></textarea>
-          </label>
-        </div>
-        <div class="form-note">
-          局域网或公网服务建议同时使用 API Key、固定模型别名、日志统计和反向代理限流。保存后如需生效到容器，请点“应用到启动表单”并重启模型。
-        </div>
-      </form>
-      <div class="panel exposure-status-panel">
-        <div class="panel-head">
-          <h3>当前入口</h3>
-        </div>
-        <div class="exposure-endpoints" id="serviceExposureEndpoints">
-          <div class="empty compact">正在读取服务入口...</div>
-        </div>
-      </div>
-      <div class="panel exposure-check-panel">
-        <div class="panel-head">
-          <h3>上线前检查</h3>
-        </div>
-        <div class="exposure-checks" id="serviceExposureChecks">
-          <div class="empty compact">正在生成检查项...</div>
-        </div>
-      </div>
-      <div class="panel exposure-clients-panel">
-        <div class="panel-head">
-          <div>
-            <h3>客户端 API Key</h3>
-            <p>给 OpenWebUI、Claude、OpenCode 或局域网设备单独发 Key，并限制模型、速率和并发。</p>
-          </div>
-        </div>
-        <form class="service-client-form" id="serviceClientForm">
-          <input name="name" placeholder="客户端名称，例如 OpenWebUI iPad" />
-          <input name="allowedModels" placeholder="允许模型，留空=全部；多个用逗号分隔" />
-          <input name="rateLimitRpm" type="number" min="1" max="5000" value="120" title="每分钟请求上限" />
-          <input name="maxConcurrentRequests" type="number" min="1" max="256" value="4" title="最大并发" />
-          <input name="requestTimeoutSeconds" type="number" min="10" max="7200" value="600" title="超时秒数" />
-          <input name="expiresAt" type="datetime-local" title="过期时间，可留空" />
-          <textarea name="notes" rows="2" placeholder="备注"></textarea>
-          <button class="primary-button compact-button" type="submit"><i data-lucide="key-round"></i><span>创建 Key</span></button>
-        </form>
-        <div class="service-client-secret" id="serviceClientSecret" hidden></div>
-        <div class="service-client-list" id="serviceClientList"><div class="empty compact">暂无客户端 Key。</div></div>
-      </div>
-    </div>
-  `;
-  tools?.before(section);
+  uiArchitecture.ensureServiceExposureUi({
+    navLabel: t("nav.exposure"),
+    includeOpenCode: true,
+    formNote: "局域网或公网服务建议同时使用 API Key、固定模型别名、日志统计和反向代理限流。保存后如需生效到容器，请点“应用到启动表单”并重启模型。",
+    clientDescription: "给 OpenWebUI、Claude、OpenCode 或局域网设备单独发 Key，并限制模型、速率和并发。",
+  });
 }
 
 function ensureModelPickerRunningTab() {
@@ -1628,7 +1152,7 @@ function applyDownloadModelSelection(model) {
   setSelectOptions($("#downloadVersion"), normalizedOptions(options.modelVersions, modelVersion));
   setSelectOptions($("#downloadSpec"), normalizedOptions(options.specs, spec));
   const precisionOptions = normalizedPrecisionOptions([...(options.precisions || []), ...(model.quantFormats || [])], precision);
-  const selectedPrecision = chooseDownloadPrecision(precision, precisionOptions);
+  const selectedPrecision = chooseDownloadPrecision(precision, precisionOptions, $("#remoteQuantFilter")?.value || "");
   state.downloadPrecisionOptions = precisionOptions;
   setSelectOptions($("#downloadPrecision"), precisionOptions);
   $("#downloadDeveloper").value = developer;
@@ -1647,129 +1171,6 @@ function applyDownloadModelSelection(model) {
     summary,
   ].filter(Boolean).join(" ");
   renderQuantFinder(null, getSelectedPrecision());
-}
-
-function normalizedOptions(values, fallback) {
-  const options = Array.isArray(values) ? values : [fallback];
-  return unique(options.map((item) => String(item || "").trim()).filter(Boolean));
-}
-
-function normalizedPrecisionOptions(values, fallback) {
-  return unique(normalizedOptions(values, fallback)
-    .map(normalizeDownloadPrecisionOption)
-    .filter(Boolean));
-}
-
-function normalizeDownloadPrecisionOption(value) {
-  const normalized = normalizeDownloadQuantValue(value);
-  if (!normalized || normalized === "MTP") return "";
-  if (normalized === "BASE" || normalized === "BF16" || normalized === "FP16") return "原始 BF16/FP16";
-  return normalized;
-}
-
-function chooseDownloadPrecision(preferred, options) {
-  const values = normalizedOptions(options, preferred);
-  const remoteQuant = normalizeDownloadQuantValue($("#remoteQuantFilter")?.value || "");
-  const remoteChoice = remoteQuant
-    ? values.find((item) => downloadPrecisionMatchesFilter(item, remoteQuant))
-    : "";
-  if (remoteChoice) return remoteChoice;
-  if (values.includes(preferred)) return preferred;
-  return values[0] || preferred || "原始 BF16/FP16";
-}
-
-function downloadPrecisionMatchesFilter(precision, filter) {
-  const value = normalizeDownloadQuantValue(precision);
-  if (!filter) return true;
-  if (filter === "quantized") return value && value !== "BASE" && value !== "GGUF";
-  if (filter === "Q4") return value.startsWith("Q4") || value.startsWith("IQ4");
-  if (filter === "IQ4") return value.startsWith("IQ4");
-  if (filter === "INT4") return value.includes("INT4") || value.startsWith("Q4") || value.startsWith("IQ4") || value === "NF4" || value === "NVFP4" || value === "MXFP4";
-  return value === filter;
-}
-
-function normalizeDownloadQuantValue(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  if (/原始|BF16\/FP16|base/i.test(raw)) return "BASE";
-  const upper = raw.replace(/\s+/g, "_").replace(/-/g, "_").toUpperCase();
-  const aliases = {
-    ALL: "",
-    AUTO: "",
-    ANY: "",
-    QUANTIZED: "quantized",
-    AWQ_INT4: "AWQ",
-    GPTQ_INT4: "GPTQ",
-    Q4KM: "Q4_K_M",
-    Q5KM: "Q5_K_M",
-    Q8: "Q8_0",
-    IQ4XS: "IQ4_XS",
-    BNB_4BIT: "BNB-4bit",
-    MODEL_OPT_FP4: "NVFP4",
-    MODELOPT_FP4: "NVFP4",
-    NVFP4_FP4: "NVFP4",
-    FP4_NVFP4: "NVFP4",
-    NVFP4_MTP: "NVFP4",
-    MTP_NVFP4: "NVFP4",
-    MXFP4_MTP: "MXFP4",
-    MTP_MXFP4: "MXFP4",
-    FP8_MTP: "FP8",
-    MTP_FP8: "FP8",
-    MTP_GGUF: "GGUF",
-    GGUF_MTP: "GGUF",
-  };
-  return aliases[upper] ?? upper;
-}
-
-function inferDownloadSelection(modelId, author, source = "huggingface") {
-  const owner = author || String(modelId || "").split("/")[0] || "custom";
-  const repoName = String(modelId || "").split("/").filter(Boolean).pop() || String(modelId || "");
-  const tokens = repoName.split(/[-_\s]+/).map((token) => token.trim()).filter(Boolean);
-  const sizeIndex = tokens.findIndex(isDownloadSizeToken);
-  const versionTokens = sizeIndex > 0 ? tokens.slice(0, sizeIndex) : tokens.slice(0, Math.min(tokens.length, 4));
-  const specTokens = sizeIndex >= 0 ? collectDownloadSpecTokens(tokens, sizeIndex) : [];
-  const precisionTokens = tokens.map(normalizeDownloadPrecisionToken).filter(Boolean);
-  return {
-    developer: owner,
-    modelVersion: unique(versionTokens.filter((token) => !normalizeDownloadPrecisionToken(token))).join(" ") || repoName || modelId,
-    spec: unique(specTokens).join(" ") || "未标注规格",
-    precision: unique(precisionTokens).join(" ") || "原始 BF16/FP16",
-    source,
-  };
-}
-
-function collectDownloadSpecTokens(tokens, sizeIndex) {
-  const spec = [tokens[sizeIndex]];
-  for (let index = sizeIndex + 1; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (normalizeDownloadPrecisionToken(token)) break;
-    if (/^(?:text|chat|instruct|coder|code|vl|vision|audio|base|it|math|reasoning|distill|distilled|sft|rl|reasoner|thinking)$/i.test(token) || /^\d{3,4}$/.test(token)) {
-      spec.push(token);
-    }
-  }
-  return spec;
-}
-
-function normalizeDownloadPrecisionToken(token) {
-  const clean = String(token || "").replace(/[^a-zA-Z0-9.]+/g, "").trim();
-  if (!clean) return "";
-  const upper = clean.toUpperCase();
-  if (["AWQ", "GPTQ", "GGUF", "GGML", "EXL2", "EETQ", "HQQ", "AQLM", "NF4", "NVFP4", "MXFP4", "MTP"].includes(upper)) return upper;
-  if (/^(?:BF|FP|INT)\d+$/i.test(clean)) return upper;
-  if (/^Q\d(?:[A-Z0-9]+)?$/i.test(clean)) return upper;
-  if (/^IQ\d(?:[A-Z0-9]+)?$/i.test(clean)) return upper;
-  return "";
-}
-
-function isDownloadSizeToken(token) {
-  return /^\d+(?:\.\d+)?[BM]$/i.test(String(token || ""))
-    || /^\d+(?:\.\d+)?x\d+(?:\.\d+)?[BM]$/i.test(String(token || ""));
-}
-
-function normalizeSummary(value) {
-  if (!value) return "";
-  if (Array.isArray(value)) return value.join(", ");
-  return String(value);
 }
 
 async function refreshStatus() {
@@ -2060,36 +1461,21 @@ function inferLaunchFormat(model) {
 }
 
 function renderModelPicker() {
-  const popover = $("#modelPickerPopover");
-  const list = $("#modelPickerList");
-  if (!popover || !list) return;
-
-  popover.classList.toggle("hidden", !state.modelPickerOpen);
-  $("#modelPickerToggle")?.setAttribute("aria-expanded", state.modelPickerOpen ? "true" : "false");
-  renderRunnableFilterToggles();
-  document.querySelectorAll("#modelPickerTabs [data-model-source]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.modelSource === state.modelPickerSource);
+  window.modelPickerRenderer?.render({
+    state,
+    getElement: $,
+    buildItems: buildModelPickerItems,
+    isRunnableItem: isManagerRunnableModelItem,
+    renderRunnableFilterToggles,
+    renderIcons,
+    escapeHtml,
+    escapeAttr,
+    fmtBytes,
+    formatDate,
+    estimateModelFit,
+    favoriteLabel: t("modelPicker.favorite"),
+    emptyMessage: t("modelPicker.empty"),
   });
-
-  const search = ($("#modelPickerSearch")?.value || "").trim().toLowerCase();
-  const source = state.modelPickerSource || "all";
-  let items = buildModelPickerItems();
-  if (source !== "all") items = items.filter((item) => item.source === source);
-  if (state.runnableOnly) items = items.filter(isManagerRunnableModelItem);
-  if (search) {
-    items = items.filter((item) => [item.label, item.model, item.detail, ...(item.badges || [])]
-      .join(" ")
-      .toLowerCase()
-      .includes(search));
-  }
-
-  if (!items.length) {
-    list.innerHTML = `<div class="empty compact">${escapeHtml(t("modelPicker.empty"))}</div>`;
-    return;
-  }
-
-  list.innerHTML = items.slice(0, 80).map(renderModelPickerItem).join("");
-  renderIcons();
 }
 
 function buildModelPickerItems() {
@@ -2209,51 +1595,14 @@ function findModelNote(noteMap, ...values) {
 }
 
 function renderModelPickerItem(item) {
-  const badges = (item.badges || []).slice(0, 8).map((badge) => {
-    const className = item.favorite && badge === t("modelPicker.favorite") ? "favorite" : "";
-    return `<span class="${className}">${escapeHtml(badge)}</span>`;
-  }).join("");
-  const fit = estimateModelFit(item);
-  const metrics = [
-    item.sizeBytes ? { label: "Size", value: fmtBytes(item.sizeBytes) } : null,
-    item.quantLabel ? { label: "Quant", value: item.quantLabel } : null,
-    fit ? { label: "GPU", value: fit.label, state: fit.state } : null,
-    item.runningSpeed ? { label: "Speed", value: `${Number(item.runningSpeed).toFixed(1)} tok/s` } : null,
-    item.updatedAt ? { label: "Updated", value: formatDate(item.updatedAt) } : null,
-  ].filter(Boolean).map((metric) => `
-    <span class="model-picker-metric ${metric.state ? `fit-${escapeAttr(metric.state)}` : ""}">
-      <em>${escapeHtml(metric.label)}</em><b>${escapeHtml(metric.value)}</b>
-    </span>
-  `).join("");
-  return `
-    <button class="model-picker-item" type="button"
-      data-picker-model="${escapeAttr(item.model)}"
-      data-picker-name="${escapeAttr(item.label || item.model)}"
-      data-picker-format="${escapeAttr(item.format || "auto")}"
-      data-picker-source="${escapeAttr(item.source)}">
-      <span class="model-picker-main">
-        <strong>${escapeHtml(item.label || item.model)}</strong>
-        <small>${escapeHtml(item.detail || item.model)}</small>
-        ${metrics ? `<span class="model-picker-metrics">${metrics}</span>` : ""}
-      </span>
-      <span class="model-picker-badges">${badges}</span>
-    </button>
-  `;
-}
-
-function inferModelQuantLabel(value) {
-  const text = String(value || "");
-  const lower = text.toLowerCase();
-  const gguf = text.match(/\bI?Q\d(?:_[A-Z0-9]+)+\b/i) || text.match(/\bQ\d\b/i);
-  if (gguf) return gguf[0].toUpperCase();
-  if (lower.includes("nvfp4") || lower.includes("mxfp4") || lower.includes("fp4")) return "NVFP4/FP4";
-  if (lower.includes("fp8")) return "FP8";
-  if (lower.includes("awq")) return "AWQ";
-  if (lower.includes("gptq")) return "GPTQ";
-  if (lower.includes("int4") || lower.includes("nf4")) return "INT4/NF4";
-  if (lower.includes("bf16")) return "BF16";
-  if (lower.includes("fp16")) return "FP16";
-  return "";
+  return window.modelPickerRenderer?.renderItem(item, {
+    escapeHtml,
+    escapeAttr,
+    fmtBytes,
+    formatDate,
+    estimateModelFit,
+    favoriteLabel: t("modelPicker.favorite"),
+  }) || "";
 }
 
 function estimateModelFit(item) {
@@ -2273,17 +1622,6 @@ function estimateModelFit(item) {
   if (modelGb + headroomGb <= maxFreeGb) return { label: `单卡可跑${peerSuffix}`, state: "ok" };
   if (selected.length > 1 && modelGb + headroomGb <= totalFreeGb * 0.82) return { label: `需多卡${peerSuffix}`, state: "warn" };
   return { label: `偏紧${peerSuffix}`, state: "fail" };
-}
-
-function quantBytesForLabel(label) {
-  const text = String(label || "").toLowerCase();
-  if (text.includes("q2")) return 0.34;
-  if (text.includes("q3")) return 0.45;
-  if (text.includes("q4") || text.includes("fp4") || text.includes("int4") || text.includes("nf4")) return 0.56;
-  if (text.includes("q5")) return 0.68;
-  if (text.includes("q6")) return 0.8;
-  if (text.includes("q8") || text.includes("fp8")) return 1.05;
-  return 2;
 }
 
 async function refreshLogSummary(event) {
@@ -2381,36 +1719,7 @@ async function refreshAuditExports() {
 }
 
 function renderStatus() {
-  const status = state.status;
-  $("#dockerStatus").textContent = status.docker.ok ? "可用" : "异常";
-  setMetricState("dockerStatus", status.docker.ok ? "ok" : "fail");
-  if (status.gpu.ok) {
-    const gpuLabel = status.gpu.count > 1 ? `${status.gpu.count} 张 GPU` : status.gpu.name;
-    $("#gpuStatus").textContent = `${gpuLabel} · ${status.gpu.usedMb}/${status.gpu.totalMb} MB`;
-    setMetricState("gpuStatus", status.gpu.util > 90 ? "warn" : "ok");
-    $("#subtitle").textContent = `vLLM / Docker / ${gpuLabel}`;
-  } else {
-    $("#gpuStatus").textContent = "未检测到";
-    setMetricState("gpuStatus", "warn");
-    $("#subtitle").textContent = "vLLM / Docker";
-  }
-  if (status.container.running) {
-    $("#serviceStatus").textContent = status.container.status || "运行中";
-    setMetricState("serviceStatus", "ok");
-  } else if (status.container.exists) {
-    $("#serviceStatus").textContent = status.container.status || "已停止";
-    setMetricState("serviceStatus", "warn");
-  } else {
-    $("#serviceStatus").textContent = "未启动";
-    setMetricState("serviceStatus", "warn");
-  }
-  const served = status.servedModels || [];
-  $("#servedModel").textContent = served.length ? served.map((item) => item.id).join(", ") : "-";
-  setMetricState("servedModel", served.length ? "ok" : "warn");
-  if (served[0]) $("#testModel").value = served[0].id;
-  if (status.endpoint?.port) {
-    $("#apiDocsLink").href = `http://127.0.0.1:${status.endpoint.port}/docs`;
-  }
+  runtimeStatusRenderer.renderStatusSummary();
   renderRunningModels();
   renderGpuPicker();
   updateMemoryEstimate();
@@ -2422,40 +1731,7 @@ function setMetricState(strongId, stateName) {
 }
 
 function renderStatusInsights() {
-  if (!$("#vramStatus")) return;
-  const gpu = state.status?.gpu || {};
-  if (gpu.ok && gpu.totalMb) {
-    const usedPct = (Number(gpu.usedMb || 0) / Number(gpu.totalMb || 1)) * 100;
-    $("#vramStatus").textContent = `${usedPct.toFixed(1)}% · ${fmtBytes(Number(gpu.usedMb || 0) * 1024 ** 2)} / ${fmtBytes(Number(gpu.totalMb || 0) * 1024 ** 2)}`;
-    setMetricState("vramStatus", usedPct > 92 ? "warn" : "ok");
-  } else {
-    $("#vramStatus").textContent = "-";
-    setMetricState("vramStatus", "warn");
-  }
-
-  const model = (state.status?.runningModels || [])[0] || {};
-  const contextCapacity = model.contextCapacityTokens || model.maxModelLen || 0;
-  const contextUsed = model.contextUsedTokens || model.contextUsed || 0;
-  if (contextCapacity) {
-    const pct = contextUsed ? (contextUsed / contextCapacity) * 100 : 0;
-    $("#contextStatus").textContent = `${fmtTokens(contextUsed)} / ${fmtTokens(contextCapacity)} · ${pct.toFixed(1)}%`;
-    setMetricState("contextStatus", pct > 85 ? "warn" : "ok");
-  } else {
-    $("#contextStatus").textContent = state.status?.container?.running ? "等待指标" : "-";
-    setMetricState("contextStatus", state.status?.container?.running ? "warn" : "warn");
-  }
-
-  const speed = getLiveTokensPerSecond();
-  $("#speedStatus").textContent = speed ? `${speed.toFixed(1)} tok/s` : "-";
-  setMetricState("speedStatus", speed ? "ok" : "warn");
-
-  const automation = state.automationSettings || {};
-  const idleEnabled = Boolean(automation.idleUnload?.enabled || automation.idleUnloadEnabled);
-  const vramEnabled = Boolean(automation.vramGuard?.enabled || automation.vramGuardEnabled);
-  $("#idleStatus").textContent = idleEnabled || vramEnabled
-    ? `${idleEnabled ? "空闲卸载" : ""}${idleEnabled && vramEnabled ? " · " : ""}${vramEnabled ? "显存保护" : ""}`
-    : "未开启";
-  setMetricState("idleStatus", idleEnabled || vramEnabled ? "ok" : "warn");
+  runtimeStatusRenderer.renderStatusInsights();
 }
 
 function getLiveTokensPerSecond() {
@@ -2475,92 +1751,19 @@ function getLiveTokensPerSecond() {
 }
 
 function renderHealth() {
-  const report = state.health;
-  const scoreBox = $("#healthScoreBox");
-  if (!report) {
-    $("#healthGrid").innerHTML = `<div class="empty compact">点击检查后显示环境状态。</div>`;
-    if (scoreBox) scoreBox.textContent = "等待健康检查";
-    return;
-  }
-  if (scoreBox) {
-    scoreBox.innerHTML = `
-      <strong>${fmtNumber(report.score)} 分</strong>
-      <span>${report.ok ? "环境可用" : "发现需要处理的问题"} · ${formatDateTime(report.generatedAt)}</span>
-    `;
-  }
-  $("#healthGrid").innerHTML = (report.checks || []).map((check) => `
-    <article class="tool-card tool-${escapeAttr(check.status)}">
-      <div>
-        <span class="tool-status-dot"></span>
-        <strong>${escapeHtml(check.label)}</strong>
-      </div>
-      <p>${escapeHtml(check.detail || "")}</p>
-    </article>
-  `).join("");
+  toolPanelRenderer.renderHealth();
 }
 
 function renderProfiles() {
-  const root = $("#profileList");
-  if (!root) return;
-  const profiles = [...(state.profiles.builtin || []), ...(state.profiles.profiles || [])];
-  renderServiceProfileOptions(profiles);
-  if (!profiles.length) {
-    root.innerHTML = `<div class="empty compact">暂无配置方案。</div>`;
-    return;
-  }
-  root.innerHTML = profiles.map((profile) => `
-    <article class="profile-card">
-      <div>
-        <h4>${escapeHtml(profile.name)}${profile.source === "builtin" ? `<span class="pill">内置</span>` : ""}</h4>
-        <p>${escapeHtml(profile.description || "无说明")}</p>
-        <div class="running-meta">
-          <span>${fmtTokens(profile.config?.maxModelLen || 0)} 上下文</span>
-          <span>${fmtTokens(profile.config?.maxNumSeqs || 0)} 并发</span>
-          <span>${escapeHtml(profile.config?.kvCacheDtype || "auto")} KV</span>
-          <span>${escapeHtml(profile.config?.clientPreset || "generic")}</span>
-        </div>
-      </div>
-      <div class="job-actions">
-        <button class="job-action-button primary" type="button" data-profile-action="apply" data-profile-id="${escapeAttr(profile.id)}">套用</button>
-        ${profile.source !== "builtin" ? `<button class="job-action-button danger" type="button" data-profile-action="delete" data-profile-id="${escapeAttr(profile.id)}">删除</button>` : ""}
-      </div>
-    </article>
-  `).join("");
+  profileRenderer.renderProfiles();
 }
 
 function renderServiceProfileOptions(profiles = [...(state.profiles.builtin || []), ...(state.profiles.profiles || [])]) {
-  const select = $("#serviceProfileSelect");
-  if (!select) return;
-  const current = select.value;
-  if (!profiles.length) {
-    select.innerHTML = `<option value="">暂无方案</option>`;
-    renderServiceProfileSummary();
-    return;
-  }
-  select.innerHTML = profiles.map((profile) => `
-    <option value="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}${profile.source === "builtin" ? " · 内置" : ""}</option>
-  `).join("");
-  if (profiles.some((profile) => profile.id === current)) select.value = current;
-  renderServiceProfileSummary();
+  profileRenderer.renderServiceProfileOptions(profiles);
 }
 
 function renderServiceProfileSummary() {
-  const summary = $("#serviceProfileSummary");
-  const select = $("#serviceProfileSelect");
-  if (!summary || !select) return;
-  const profiles = [...(state.profiles.builtin || []), ...(state.profiles.profiles || [])];
-  const profile = profiles.find((item) => item.id === select.value);
-  if (!profile) {
-    summary.textContent = "常用参数可在这里快速套用；完整管理仍在工具页。";
-    return;
-  }
-  const cfg = profile.config || {};
-  summary.textContent = [
-    profile.description || "无说明",
-    cfg.maxModelLen ? `${fmtTokens(cfg.maxModelLen)} 上下文` : "",
-    cfg.multiGpuMode ? `${cfg.multiGpuMode} GPU` : "",
-    cfg.clientPreset || "",
-  ].filter(Boolean).join(" · ");
+  profileRenderer.renderServiceProfileSummary();
 }
 
 function applySelectedServiceProfile() {
@@ -2689,66 +1892,15 @@ async function runModelCheck(event) {
 }
 
 function renderModelCheck() {
-  const root = $("#modelCheckResult");
-  const result = state.modelCheck;
-  if (!result) return;
-  root.innerHTML = `
-    <div class="tool-result-head">
-      <strong>${escapeHtml(result.model)}</strong>
-      <span class="pill ${result.severity === "fail" ? "fail" : result.severity === "warn" ? "warn" : "ok"}">${escapeHtml(result.severity)}</span>
-    </div>
-    <div class="tool-list">
-      ${(result.findings || []).map((item) => `
-        <article class="tool-card tool-${escapeAttr(item.severity)}">
-          <div><span class="tool-status-dot"></span><strong>${escapeHtml(item.title)}</strong></div>
-          <p>${escapeHtml(item.detail)}</p>
-        </article>
-      `).join("")}
-    </div>
-    <div class="job-actions">
-      <button class="job-action-button primary" type="button" id="applyModelCheckBtn">套用推荐参数</button>
-    </div>
-  `;
-  $("#applyModelCheckBtn")?.addEventListener("click", () => {
-    applyLaunchProfile(result.recommendations || {});
-    notify("已套用兼容性推荐", result.model, "success");
-    showView("service");
-  });
-  renderIcons();
+  toolPanelRenderer.renderModelCheck();
 }
 
 function renderLogSummary() {
-  const root = $("#logSummaryPanel");
-  const summary = state.logSummary;
-  if (!summary) return;
-  root.innerHTML = `
-    <div class="tool-result-head">
-      <strong>${escapeHtml(summary.stage || "未知阶段")}</strong>
-      <span class="pill ${summary.ok ? "ok" : "fail"}">${summary.ok ? "正常" : "有错误"}</span>
-    </div>
-    <div class="tool-list">
-      ${(summary.issues || []).map((item) => `
-        <article class="tool-card tool-${escapeAttr(item.severity)}">
-          <div><span class="tool-status-dot"></span><strong>${escapeHtml(item.message)}</strong></div>
-          <p>${escapeHtml(item.hint || "")}</p>
-        </article>
-      `).join("") || `<div class="empty compact">最近日志没有明显错误。</div>`}
-    </div>
-    <div class="selection-hint">${(summary.suggestions || []).map(escapeHtml).join(" · ")}</div>
-  `;
+  toolPanelRenderer.renderLogSummary();
 }
 
 function renderAutomationSettings() {
-  const settings = state.automationSettings || {};
-  $("#idleUnloadEnabled").checked = Boolean(settings.idleUnloadEnabled);
-  $("#idleMinutes").value = settings.idleMinutes || 30;
-  $("#vramGuardEnabled").checked = Boolean(settings.vramGuardEnabled);
-  $("#vramPercent").value = settings.vramPercent || 94;
-  $("#vramAction").value = settings.vramAction || "warn";
-  $("#automationStatus").innerHTML = `
-    <strong>${settings.idleUnloadEnabled || settings.vramGuardEnabled ? "自动保护已配置" : "自动保护关闭"}</strong>
-    <span>空闲 ${fmtTokens(settings.idleMinutes || 30)} 分钟 · 显存阈值 ${fmtTokens(settings.vramPercent || 94)}% · ${settings.vramAction === "unload" ? "空闲时卸载" : "只提醒"}</span>
-  `;
+  toolPanelRenderer.renderAutomationSettings();
 }
 
 async function saveAutomationSettings(event) {
@@ -2797,59 +1949,15 @@ async function startBenchmark(event) {
 }
 
 function renderConnectionGuide() {
-  const root = $("#connectionGuide");
-  const guide = state.connectionGuide;
-  if (!guide) return;
-  root.innerHTML = `
-    <div class="compat-endpoints">
-      <div><strong>OpenWebUI / OpenAI Base URL</strong><code>${escapeHtml(guide.openai?.baseUrl || "-")}</code><span>API Key 可填任意占位字符串；模型名：${escapeHtml(guide.model || "-")}</span></div>
-      <div><strong>Claude / ccswitch Base URL</strong><code>${escapeHtml(guide.claude?.baseUrl || "-")}</code><span>模型别名：${escapeHtml(guide.claude?.modelAlias || "-")}</span></div>
-      <div><strong>curl 测试</strong><code>${escapeHtml(guide.openai?.curl || "-")}</code><span>用于确认本地服务是否返回模型列表。</span></div>
-      <div><strong>管理器地址</strong><code>${escapeHtml(guide.manager?.local || "-")}</code><span>${guide.manager?.lan ? `局域网：${escapeHtml(guide.manager.lan)}` : "当前管理器只绑定本机。"}</span></div>
-    </div>
-  `;
+  toolPanelRenderer.renderConnectionGuide();
 }
 
 function renderCompressionInsights() {
-  const root = $("#compressionInsights");
-  const data = state.compressionInsights;
-  if (!data) return;
-  const totals = data.totals || {};
-  const last = data.last || {};
-  root.innerHTML = `
-    <div class="stats-row-grid">
-      ${miniStat("触发次数", fmtTokens(totals.applied || 0), "Claude 桥自动压缩")}
-      ${miniStat("节省 tokens", fmtTokens(totals.savedTokens || 0), `最近 ${fmtTokens(last.savedTokens || 0)}`)}
-      ${miniStat("最近原文", fmtTokens(last.recentMessageCount || 0), "压缩后保留的最近消息")}
-      ${miniStat("摘要消息", fmtTokens(last.summarizedMessageCount || 0), "被压缩进摘要的旧消息")}
-    </div>
-    <div class="client-session-list">
-      ${(data.sessions || []).slice(0, 6).map((item) => `<span>${escapeHtml(item.label || item.id)}：${fmtTokens(item.compression?.savedTokens || 0)} saved</span>`).join("")}
-    </div>
-    <div class="selection-hint">${escapeHtml(data.note || "")}</div>
-  `;
+  toolPanelRenderer.renderCompressionInsights();
 }
 
 function renderModelNotes() {
-  const root = $("#modelNotesList");
-  const notes = Object.values(state.modelNotes?.notes || {}).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-  if (!notes.length) {
-    root.innerHTML = `<div class="empty compact">暂无收藏标签。</div>`;
-    return;
-  }
-  root.innerHTML = notes.map((note) => `
-    <article class="profile-card">
-      <div>
-        <h4>${note.favorite ? "★ " : ""}${escapeHtml(note.model)}</h4>
-        <p>${escapeHtml(note.note || "无备注")}</p>
-        <div class="pill-row">${(note.tags || []).map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join("")}</div>
-      </div>
-      <div class="job-actions">
-        <button class="job-action-button primary" type="button" data-note-action="use" data-model="${escapeAttr(note.model)}">填入启动</button>
-        <button class="job-action-button danger" type="button" data-note-action="delete" data-note-key="${escapeAttr(note.key)}">删除</button>
-      </div>
-    </article>
-  `).join("");
+  toolPanelRenderer.renderModelNotes();
 }
 
 async function saveModelNote(event) {
@@ -2899,220 +2007,27 @@ async function handleBenchmarkJobAction(event) {
 }
 
 function renderRunningModels() {
-  const root = $("#runningModelList");
-  if (!root || !state.status) return;
-  const status = state.status;
-  const models = status.runningModels || [];
-  const endpoint = status.endpoint || {};
-  const compatEndpoints = renderCompatEndpoints(endpoint);
-
-  if (!status.container?.running) {
-    root.innerHTML = `
-      <div class="empty compact">
-        当前没有运行中的 vLLM 模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。
-      </div>
-    `;
-    renderRuntimeFacts();
-    renderIcons();
-    return;
-  }
-
-  if (!models.length) {
-    root.innerHTML = `
-      <div class="running-model-row">
-        <div>
-          <h4>vLLM 容器正在运行</h4>
-          <p>API 还没有返回模型列表，可能仍在加载权重、编译或 warmup。</p>
-          <div class="running-meta">
-            <span>容器：${escapeHtml(status.container.name || "vllm-local")}</span>
-            <span>状态：${escapeHtml(status.container.status || "running")}</span>
-            <span>API：${escapeHtml(endpoint.localUrl || "-")}</span>
-          </div>
-          ${compatEndpoints}
-        </div>
-        <button class="job-action-button danger" data-running-action="unload-model">
-          <i data-lucide="trash-2"></i><span>卸载</span>
-        </button>
-      </div>
-    `;
-    renderRuntimeFacts(status);
-    renderIcons();
-    return;
-  }
-
-  root.innerHTML = models.map((model) => {
-    const maxLen = model.maxModelLen ? `${fmtNumber(model.maxModelLen)} tokens` : "未报告";
-    const created = model.createdAt ? new Date(model.createdAt).toLocaleString() : "运行中";
-    const gpu = model.gpu || (status.gpu?.ok ? `${status.gpu.usedMb}/${status.gpu.totalMb} MB (${status.gpu.util}%)` : "未检测到");
-    return `
-      <div class="running-model-row">
-        <div>
-          <h4>${escapeHtml(model.id || "未命名模型")}</h4>
-          <p>${escapeHtml(model.apiBaseUrl || endpoint.localUrl || "-")}</p>
-          ${compatEndpoints}
-          <div class="running-meta">
-            <span>上下文：${escapeHtml(maxLen)}</span>
-            <span>GPU：${escapeHtml(gpu)}</span>
-            <span>启动：${escapeHtml(created)}</span>
-            <span>容器：${escapeHtml(model.containerStatus || status.container.status || "running")}</span>
-            ${status.apiKeyRequired ? `<span class="pill warn" title="该服务已启用 API Key，客户端需要以 Bearer Token 方式携带">API Key 已启用</span>` : ""}
-          </div>
-          ${renderRunningSpeed(model)}
-          ${renderRunningKvBar(model)}
-        </div>
-        <button class="job-action-button danger" data-running-action="unload-model" data-model="${escapeAttr(model.id || "")}" title="停止 vLLM 容器并释放显存">
-          <i data-lucide="trash-2"></i><span>卸载</span>
-        </button>
-      </div>
-    `;
-  }).join("");
-  injectRunningContextBadges(root, models);
-  renderRuntimeFacts(status);
-  const testModel = $("#testModel");
-  if (testModel && testModel.dataset.userEdited !== "true" && models[0]?.id && testModel.value !== models[0].id) {
-    testModel.value = models[0].id;
-  }
-  renderIcons();
+  runtimeStatusRenderer.renderRunningModels();
 }
 
 function renderRuntimeFacts(status = state.status) {
   window.VllmRuntimeInsights?.renderRuntimeFacts(status, {
-    formatContextUsage,
+    formatContextUsage: runtimeStatusRenderer.formatContextUsage,
     fmtTokens,
     escapeHtml,
   });
 }
 
 function renderCompatEndpoints(endpoint) {
-  const openai = endpoint.compat?.openai || {};
-  const claude = endpoint.compat?.claude || {};
-  const modelAlias = claude.modelAlias || "claude-opus-4-7";
-  return `
-    <div class="compat-endpoints">
-      <div>
-        <strong>OpenAI 兼容</strong>
-        <code>${escapeHtml(openai.baseUrl || endpoint.localUrl || "-")}</code>
-        <span>/chat/completions、/models 由模型服务原生提供</span>
-      </div>
-      <div>
-        <strong>Claude 兼容</strong>
-        <code>${escapeHtml(claude.messagesUrl || "-")}</code>
-        <span>Base URL 用 ${escapeHtml(claude.baseUrl || "-")}；模型名用 ${escapeHtml(modelAlias)}</span>
-      </div>
-    </div>
-  `;
-}
-
-function injectRunningContextBadges(root, models) {
-  root.querySelectorAll(".running-model-row .running-meta").forEach((meta, index) => {
-    const model = models[index];
-    if (!model) return;
-    const badge = document.createElement("span");
-    badge.textContent = `活跃 KV：${formatContextUsage(model.contextUsedTokens, model.contextCapacityTokens, model.contextUsagePercent)}`;
-    meta.insertBefore(badge, meta.children[1] || null);
-  });
+  return runtimeStatusRenderer.renderCompatEndpoints(endpoint);
 }
 
 function formatContextUsage(used, capacity, percent) {
-  const usedText = fmtTokens(used);
-  if (capacity) return `${usedText} / ${fmtTokens(capacity)} tokens · KV ${fmtPct(percent)}`;
-  return `${usedText} tokens · KV ${fmtPct(percent)}`;
-}
-
-// 运行中模型的平均输出速度：以「启动以来的活跃时间」为基准（累计生成 token ÷ 实际生成耗时），
-// 不受空闲时间稀释。实时速度和并发作为次要信息。
-function renderRunningSpeed(model) {
-  const lifetime = Number(model.lifetimeOutputTokensPerSecond || 0);
-  const activeSeconds = Number(model.activeSeconds || 0);
-  const recent = Number(model.recentOutputTokensPerSecond || 0);
-  const running = Number(model.runningRequests || 0);
-  const waiting = Number(model.waitingRequests || 0);
-  const outputTokens = Number(model.outputTokens || 0);
-  // 完全没产生过输出时不显示速度
-  if (!lifetime && !recent && !running && !waiting && !outputTokens) {
-    return `<div class="running-speed idle"><div class="running-speed-main"><span>启动以来平均速度</span><strong>等待首个请求</strong></div><div class="running-speed-meta"><span>产生输出后会显示活跃时间内的平均 tok/s</span></div></div>`;
-  }
-  const liveClass = running > 0 ? "active" : "";
-  const metaParts = [];
-  if (outputTokens) {
-    metaParts.push(`累计输出 ${fmtTokens(outputTokens)} tokens`);
-  }
-  if (activeSeconds > 0) {
-    metaParts.push(`活跃约 ${formatDuration(activeSeconds)}`);
-  }
-  if (recent > 0) {
-    metaParts.push(`实时 ${fmtRate(recent, " tok/s")}`);
-  }
-  metaParts.push(`<span class="running-activity ${liveClass}">${fmtNumber(running)} 进行中 · ${fmtNumber(waiting)} 排队</span>`);
-  return `
-    <div class="running-speed">
-      <div class="running-speed-main">
-        <span title="累计生成 token ÷ 实际生成耗时，覆盖整个启动周期，不含空闲等待">启动以来平均速度（活跃时间）</span>
-        <strong>${escapeHtml(lifetime ? fmtRate(lifetime, " tok/s") : "-")}</strong>
-      </div>
-      <div class="running-speed-meta">${metaParts.join("<span class=\"dot-sep\">·</span>")}</div>
-    </div>
-  `;
-}
-
-// 运行中模型的实时 KV cache 占用条：数据来自 vLLM /metrics 经 /api/status 透出
-function renderRunningKvBar(model) {
-  const percent = Number(model.contextUsagePercent || 0);
-  const used = Number(model.contextUsedTokens || 0);
-  const capacity = Number(model.contextCapacityTokens || 0);
-  if (!capacity && !used && !percent) return "";
-  const pct = Math.min(100, Math.max(0, percent));
-  const stateClass = pct > 90 ? "fail" : pct > 70 ? "warn" : "ok";
-  const label = capacity
-    ? `${fmtTokens(used)} / ${fmtTokens(capacity)} tokens · ${fmtPct(percent)}`
-    : `${fmtTokens(used)} tokens · ${fmtPct(percent)}`;
-  return `
-    <div class="kv-usage">
-      <div class="kv-usage-head"><span>实时 KV cache 占用</span><span>${escapeHtml(label)}</span></div>
-      <div class="kv-usage-track"><div class="kv-usage-fill ${stateClass}" style="width:${pct}%"></div></div>
-    </div>
-  `;
+  return runtimeStatusRenderer.formatContextUsage(used, capacity, percent);
 }
 
 function renderGpuPicker() {
-  const root = $("#gpuPicker");
-  const gpus = getVisibleGpus();
-  if (!root) return;
-  if (!gpus.length) {
-    root.innerHTML = `<div class="empty compact">未检测到 NVIDIA GPU；启动时会保留 Docker 默认 GPU 设置。</div>`;
-    state.gpuSignature = "";
-    renderVllmGpuPlan();
-    updateMemoryEstimate();
-    return;
-  }
-
-  const signature = gpus.map((gpu) => `${gpu.id}:${gpu.name}:${gpu.totalMb}`).join("|");
-  if (!state.gpuSelectionTouched && !state.selectedGpuIds.size) {
-    state.selectedGpuIds = new Set([gpus[0].id]);
-  }
-  if (state.gpuSignature === signature && root.querySelector("[name='gpuDeviceIds']")) {
-    renderVllmGpuPlan();
-    return;
-  }
-  state.gpuSignature = signature;
-
-  root.innerHTML = gpus.map((gpu) => {
-    const checked = state.selectedGpuIds.has(gpu.id) ? "checked" : "";
-    const freeMb = Math.max(0, Number(gpu.totalMb || 0) - Number(gpu.usedMb || 0));
-    const generation = inferGpuGeneration(gpu.name);
-    const usage = `free ${fmtBytes(freeMb * 1024 ** 2)} · used ${gpu.usedMb}/${gpu.totalMb} MB · ${gpu.util}% · ${gpu.temp}°C${generation ? ` · ${generation}` : ""}`;
-    return `
-      <label class="gpu-card">
-        <input type="checkbox" name="gpuDeviceIds" value="${escapeAttr(gpu.id)}" ${checked} />
-        <span>
-          <strong>GPU ${escapeHtml(gpu.id)} · ${escapeHtml(gpu.name)}</strong>
-          <small>${escapeHtml(usage)}</small>
-        </span>
-      </label>
-    `;
-  }).join("");
-  updateParallelDefaults();
-  renderVllmGpuPlan();
+  runtimeStatusRenderer.renderGpuPicker();
 }
 
 function getVisibleGpus() {
@@ -3179,12 +2094,12 @@ function renderVllmGpuPlan() {
 }
 
 function buildVllmGpuPlan() {
-  const selected = getSelectedGpuObjects().map(normalizeVllmGpu);
+  const selected = getSelectedGpuObjects().map(normalizeVllmPlanGpu);
   const mode = $("#multiGpuMode")?.value || "single";
-  const hetero = isVllmHeterogeneous(selected);
+  const hetero = window.GpuPlanningUtils.isHeterogeneous(selected);
   const count = Math.max(1, selected.length);
   const primary = selected[0] || null;
-  const primaryLabel = primary ? shortGpuLabel(primary.name, primary.id) : "当前 GPU";
+  const primaryLabel = primary ? window.GpuPlanningUtils.shortGpuLabel(primary.name, primary.id) : "当前 GPU";
   const modeLabel = {
     single: "单卡",
     tensor: `TP=${Math.max(1, Number($("#tensorParallelSize")?.value || count))}`,
@@ -3239,49 +2154,12 @@ function buildVllmGpuPlan() {
   };
 }
 
-function normalizeVllmGpu(gpu) {
-  const totalMb = Number(gpu.totalMb || 0);
-  const usedMb = Number(gpu.usedMb || 0);
-  const freeMb = Math.max(0, totalMb - usedMb);
-  const utilization = Math.min(0.98, Math.max(0.1, Number($("#gpuMemoryUtilization")?.value || 0.9)));
-  return {
-    ...gpu,
-    id: String(gpu.id ?? gpu.index ?? "0"),
-    totalGb: totalMb / 1024,
-    usedGb: usedMb / 1024,
-    freeGb: freeMb / 1024,
-    usableGb: Math.max(0, Math.min(totalMb * utilization, freeMb - 1024) / 1024),
-    generation: inferGpuGeneration(gpu.name),
-  };
-}
-
-function isVllmHeterogeneous(gpus) {
-  if (gpus.length < 2) return false;
-  const totals = gpus.map((gpu) => Number(gpu.totalGb || 0));
-  const min = Math.min(...totals);
-  const max = Math.max(...totals);
-  if (min && max / min > 1.2) return true;
-  const names = new Set(gpus.map((gpu) => String(gpu.name || "").replace(/\s+/g, " ").toLowerCase()));
-  return names.size > 1;
-}
-
-function inferGpuGeneration(name) {
-  const text = String(name || "").toLowerCase();
-  if (text.includes("blackwell") || text.includes("rtx pro 6000") || text.includes("pro 6000")) return "Blackwell 96GB";
-  if (text.includes("rtx 50") || text.includes("5090") || text.includes("5080") || text.includes("5070")) return "RTX 50";
-  if (text.includes("rtx 40") || text.includes("4090") || text.includes("4080") || text.includes("4070")) return "RTX 40";
-  if (text.includes("a100")) return "A100";
-  if (text.includes("h100")) return "H100";
-  return "";
-}
-
-function shortGpuLabel(name, fallbackId = "0") {
-  const text = String(name || "").replace(/^NVIDIA\s+/i, "").trim();
-  if (!text) return `GPU ${fallbackId}`;
-  if (/RTX PRO 6000/i.test(text)) return "RTX PRO 6000";
-  if (/RTX 6000/i.test(text)) return "RTX 6000";
-  const match = text.match(/(RTX\s+\d{4}(?:\s*Ti)?|A100|H100|H200|B200|L40S)/i);
-  return match ? match[1].replace(/\s+/g, " ") : `GPU ${fallbackId}`;
+function normalizeVllmPlanGpu(gpu) {
+  return window.GpuPlanningUtils.normalizeGpuForPlan(gpu, {
+    utilization: $("#gpuMemoryUtilization")?.value || 0.9,
+    defaultUtilization: 0.9,
+    minUsableMb: 0,
+  });
 }
 
 function handleVllmGpuPresetClick(event) {
@@ -3560,7 +2438,7 @@ function estimateMemoryUsage(contextOverride) {
   const perGpuGb = weightPerGpuGb + kvPerGpuGb + overheadGb;
   const totalGb = perGpuGb * memorySplitFactor;
   const utilization = Math.min(0.98, Math.max(0.1, Number($("#gpuMemoryUtilization")?.value || 0.9)));
-  const selectedGpus = getSelectedGpuObjects().map(normalizeVllmGpu);
+  const selectedGpus = getSelectedGpuObjects().map(normalizeVllmPlanGpu);
   const minUsableGb = selectedGpus.length
     ? Math.min(...selectedGpus.map((gpu) => Number(gpu.usableGb || 0)))
     : 0;
@@ -4175,90 +3053,15 @@ function renderNetworkNote() {
 }
 
 function renderServiceExposure() {
-  const payload = state.serviceExposure;
-  if (!payload) return;
-  const settings = payload.settings || {};
-  const form = $("#serviceExposureForm");
-  if (form && !form.matches(":focus-within")) {
-    $("#exposureEnabled").checked = Boolean(settings.enabled);
-    $("#exposureMode").value = settings.exposureMode || "local";
-    $("#exposureRequireApiKey").checked = Boolean(settings.requireApiKey);
-    $("#exposureClearApiKey").checked = false;
-    $("#exposurePublicBaseUrl").value = settings.publicBaseUrl || "";
-    $("#exposureRateLimitRpm").value = settings.rateLimitRpm || 120;
-    $("#exposureMaxConcurrentRequests").value = settings.maxConcurrentRequests || 4;
-    $("#exposureRequestTimeoutSeconds").value = settings.requestTimeoutSeconds || 600;
-    $("#exposureAllowedOrigins").value = (settings.allowedOrigins || []).join("\n");
-    $("#exposureOpenAI").checked = settings.exposeOpenAI !== false;
-    $("#exposureClaude").checked = settings.exposeClaude !== false;
-    $("#exposureOpenCode").checked = settings.exposeOpenCode !== false;
-    $("#exposureMetrics").checked = Boolean(settings.exposeMetrics);
-    $("#exposureAllowManagerRemote").checked = Boolean(settings.allowManagerRemote);
-    $("#exposureNotes").value = settings.notes || "";
-    $("#exposureApiKey").value = "";
-  }
-  const keyState = $("#exposureApiKeyState");
-  if (keyState) keyState.textContent = settings.hasApiKey ? `已保存：${settings.apiKeyPreview}` : "未保存密钥";
-  renderServiceExposureEndpoints(payload);
-  renderServiceExposureChecks(payload);
+  serviceExposureRenderer.renderServiceExposure();
 }
 
 function renderServiceExposureEndpoints(payload) {
-  const root = $("#serviceExposureEndpoints");
-  if (!root || !payload) return;
-  const actual = payload.actual || {};
-  const service = actual.service || {};
-  const manager = actual.manager || {};
-  const settings = payload.settings || {};
-  const selectedMode = $("#exposureMode")?.value || settings.exposureMode || "local";
-  const lanAddress = state.config?.lanAddress || service.lanHost || "127.0.0.1";
-  const servicePort = Number(service.port || state.config?.defaultPort || 8000);
-  const plannedOpenAiLan = selectedMode === "lan" && !service.openAiLanBaseUrl
-    ? `http://${lanAddress}:${servicePort}/v1`
-    : "";
-  const publicOpenAi = settings.publicBaseUrl ? `${settings.publicBaseUrl.replace(/\/$/, "")}/serve/v1` : "";
-  root.innerHTML = `
-    ${exposureEndpointCard("OpenAI 网关（推荐）", service.openAiGatewayLocalBaseUrl || "-", "鉴权、限流、并发和超时都在这里执行；模型名可用 local-current")}
-    ${service.openAiGatewayLanBaseUrl ? exposureEndpointCard("OpenAI 网关局域网", service.openAiGatewayLanBaseUrl, "局域网设备优先使用这个地址") : ""}
-    ${publicOpenAi ? exposureEndpointCard("OpenAI 网关公网", publicOpenAi, "反向代理后提供给外部客户端") : ""}
-    ${exposureEndpointCard("OpenAI 直连容器", service.openAiLocalBaseUrl || "-", "本机调试用；不经过管理器网关限流")}
-    ${service.openAiLanBaseUrl ? exposureEndpointCard("OpenAI 容器局域网", service.openAiLanBaseUrl, `Docker 已把容器端口转发到 ${service.lanHost || "本机局域网 IP"}；直连容器端口，外部使用前需确认容器自身鉴权`) : ""}
-    ${plannedOpenAiLan ? exposureEndpointCard("OpenAI 容器局域网（下次启动）", plannedOpenAiLan, "保存并按局域网模式启动/重启模型后，Docker 会把容器端口转发到这个本机 IP。") : ""}
-    ${settings.exposeClaude !== false ? exposureEndpointCard("Claude 桥", service.claudeLocalMessagesUrl || "-", "Claude Desktop / Cowork / Claude Code") : ""}
-    ${settings.exposeOpenCode !== false ? exposureEndpointCard("OpenCode", service.openCodeBaseUrl || "-", "模型名可用 local-current") : ""}
-    ${exposureEndpointCard("Manager", manager.localBaseUrl || "-", manager.remoteManagementAllowed ? "管理器允许远程访问" : "管理器仅建议本机访问")}
-    <div class="exposure-runtime-summary">
-      <span>状态：${escapeHtml(service.running ? service.containerStatus || "运行中" : "未运行")}</span>
-      <span>模型：${escapeHtml((service.modelIds || []).join(", ") || "-")}</span>
-      <span>上下文：${service.maxModelLen ? fmtTokens(service.maxModelLen) : "-"}</span>
-      <span>客户端 Key：${fmtTokens(service.clients?.active || 0)} / ${fmtTokens(service.clients?.total || 0)}</span>
-      <span>API Key：${service.apiKeyRequired ? "运行中已启用" : "运行中未启用"}</span>
-    </div>
-  `;
-}
-
-function exposureEndpointCard(title, value, detail) {
-  return `
-    <article class="exposure-endpoint-card">
-      <span>${escapeHtml(title)}</span>
-      <code>${escapeHtml(value)}</code>
-      <small>${escapeHtml(detail || "")}</small>
-    </article>
-  `;
+  serviceExposureRenderer.renderServiceExposureEndpoints(payload);
 }
 
 function renderServiceExposureChecks(payload) {
-  const root = $("#serviceExposureChecks");
-  if (!root || !payload) return;
-  const checks = payload.checks || [];
-  root.innerHTML = checks.length
-    ? checks.map((check) => `
-      <article class="exposure-check-row ${escapeAttr(check.status || "warn")}">
-        <span class="tool-status-dot"></span>
-        <div><strong>${escapeHtml(check.title || "")}</strong><small>${escapeHtml(check.detail || "")}</small></div>
-      </article>
-    `).join("")
-    : `<div class="empty compact">暂无检查项。</div>`;
+  serviceExposureRenderer.renderServiceExposureChecks(payload);
 }
 
 async function saveServiceExposure(event) {
@@ -4314,32 +3117,7 @@ function generateExposureApiKey() {
 }
 
 function renderServiceClients() {
-  const root = $("#serviceClientList");
-  if (!root) return;
-  const clients = state.serviceClients?.clients || [];
-  if (!clients.length) {
-    root.innerHTML = `<div class="empty compact">暂无客户端 Key。创建后明文只显示一次。</div>`;
-    return;
-  }
-  root.innerHTML = clients.map((client) => `
-    <article class="service-client-card ${client.enabled ? "enabled" : "disabled"}" data-client-id="${escapeAttr(client.id)}">
-      <div class="service-client-main">
-        <strong>${escapeHtml(client.name || client.id)}</strong>
-        <code>${escapeHtml(client.keyPreview || "-")}</code>
-        <span>${client.enabled ? "启用" : "停用"} · ${escapeHtml((client.allowedModels || []).join(", ") || "全部模型")} · ${fmtTokens(client.rateLimitRpm || 0)} req/min · 并发 ${fmtTokens(client.maxConcurrentRequests || 0)}</span>
-      </div>
-      <div class="service-client-usage">
-        <span>${fmtTokens(client.usage?.requests?.total || 0)} 请求</span>
-        <span>${fmtTokens(client.usage?.tokens?.total || 0)} tokens</span>
-        <span>${client.lastUsedAt ? new Date(client.lastUsedAt).toLocaleString() : "未使用"}</span>
-      </div>
-      <div class="service-client-actions">
-        <button class="ghost-mini-button" data-client-action="toggle" type="button">${client.enabled ? "停用" : "启用"}</button>
-        <button class="ghost-mini-button" data-client-action="rotate" type="button">轮换</button>
-        <button class="ghost-mini-button danger-text" data-client-action="delete" type="button">删除</button>
-      </div>
-    </article>
-  `).join("");
+  serviceClientRenderer.renderServiceClients();
 }
 
 async function createServiceClient(event) {
@@ -4390,43 +3168,14 @@ async function handleServiceClientAction(event) {
 }
 
 function showServiceClientSecret(apiKey, title) {
-  const box = $("#serviceClientSecret");
-  if (!box) return;
-  box.hidden = false;
-  box.innerHTML = `
-    <strong>${escapeHtml(title || "客户端 Key")}</strong>
-    <code>${escapeHtml(apiKey || "")}</code>
-    <small>只显示这一次。请放入客户端的 Bearer Token / API Key 字段。</small>
-  `;
+  serviceClientRenderer.showServiceClientSecret(apiKey, title);
 }
 
 function renderStats() {
   const stats = state.stats;
   if (!stats) return;
-  const totals = stats.totals || {};
-  const tokens = totals.tokens || {};
-  const requests = totals.requests || {};
-  const speed = totals.speed || {};
-  const latency = totals.latency || {};
-  const context = totals.context || {};
-  const liveModelCount = stats.live?.models?.length || state.status?.runningModels?.length || 0;
-  const historicalModelCount = Math.max(0, (stats.models || []).length - liveModelCount);
-  const errorRate = requests.total ? (Number(requests.error || 0) + Number(requests.aborted || 0)) / requests.total : 0;
-  const cacheHit = tokens.prompt ? Number(tokens.cachedPrompt || 0) / tokens.prompt : 0;
-
   accumulateStatsSample(stats);
-
-  $("#statsSummary").innerHTML = [
-    statsMetric("累计 tokens", fmtTokens(tokens.total), `${fmtTokens(tokens.prompt)} 输入 · ${fmtTokens(tokens.generation)} 输出`, "stats-metric-hero"),
-    statsMetric("请求数", fmtTokens(requests.total), `${fmtTokens(requests.success)} 成功 · ${fmtTokens(requests.error)} 错误 · ${fmtTokens(requests.aborted)} 中止`),
-    statsMetric("当前实例", `${fmtTokens(liveModelCount)} 个`, `${fmtTokens(historicalModelCount)} 个历史模型保留累计消耗`),
-    statsMetric("当前输出速度", fmtRate(speed.recentOutputTokensPerSecond, " tok/s"), `${fmtRate(speed.recentPromptTokensPerSecond, " in/s")} · ${fmtRate(speed.recentRequestsPerMinute, " req/min")}`),
-    statsMetric("平均延迟", fmtSeconds(latency.avgE2eSeconds), `TTFT ${fmtSeconds(latency.avgTtftSeconds)}`),
-    statsMetric("活跃 KV cache", formatContextUsage(context.activeTokens, context.capacityTokens, context.kvUsagePercent), "只表示当前正在推理的请求；聊天历史在 Open WebUI 侧保存"),
-    statsMetric("Prefix cache 命中", fmtPct(cacheHit), `${fmtTokens(tokens.cachedPrompt || 0)} / ${fmtTokens(tokens.prompt)} 输入 token 命中`),
-    statsMetric("运行时长", stats.uptimeSeconds ? formatDuration(stats.uptimeSeconds) : "-", `生命周期 ${fmtRate(speed.lifetimeTokensPerSecond, " tok/s")}`),
-  ].join("");
-
+  statsSummaryRenderer.render(stats);
   renderStatsFreshness(stats);
   renderStatsTrends();
   renderStatsComposition(stats);
@@ -4439,291 +3188,7 @@ function renderStats() {
 }
 
 function renderExternalAccess() {
-  const data = state.externalAccess;
-  if (!data) return;
-  const totals = data.totals || {};
-  const external = data.external || {};
-  const local = data.local || {};
-  const totalRequests = totals.requests || {};
-  const externalRequests = external.requests || {};
-  const externalTokens = external.tokens || {};
-  const externalLatency = external.latency || {};
-  const externalClients = external.clients || {};
-  const service = data.service || {};
-  const lastAt = external.lastAt || totals.lastAt;
-  const externalShare = totalRequests.total ? (externalRequests.total || 0) / totalRequests.total : 0;
-  const summaryRoot = $("#externalAccessSummary");
-  if (summaryRoot) {
-    summaryRoot.innerHTML = [
-      statsMetric("外部请求", fmtTokens(externalRequests.total || 0), `${fmtTokens(externalRequests.success || 0)} 成功 · ${fmtTokens(externalRequests.error || 0)} 错误`, "stats-metric-hero"),
-      statsMetric("外部客户端", fmtTokens(externalClients.unique || 0), `${fmtPct(externalShare)} 来自非本机地址`),
-      statsMetric("错误率", fmtPct(externalRequests.errorRate || 0), `${fmtTokens(externalRequests.authFailures || 0)} 鉴权失败 · ${fmtTokens(externalRequests.rateLimited || 0)} 限流`),
-      statsMetric("平均延迟", fmtMs(externalLatency.avgMs || 0), `P50 ${fmtMs(externalLatency.p50Ms || 0)} · P95 ${fmtMs(externalLatency.p95Ms || 0)} · Max ${fmtMs(externalLatency.maxMs || 0)}`),
-      statsMetric("外部 Tokens", fmtTokens(externalTokens.total || 0), `${fmtTokens(externalTokens.input || 0)} 输入 · ${fmtTokens(externalTokens.output || 0)} 输出`),
-      statsMetric("本机请求", fmtTokens(local.requests?.total || 0), "127.0.0.1 / 本机 LAN 地址会归到这里"),
-      statsMetric("流式请求", fmtTokens(externalRequests.streamed || 0), `${fmtPct(externalRequests.total ? (externalRequests.streamed || 0) / externalRequests.total : 0)} 外部请求为 stream`),
-      statsMetric("最后访问", lastAt ? formatDateTime(lastAt) : "-", data.logPath || "访问日志尚未产生"),
-    ].join("");
-  }
-
-  const freshness = $("#externalAccessFreshness");
-  if (freshness) {
-    const ageMs = data.updatedAt ? Date.now() - new Date(data.updatedAt).getTime() : 0;
-    const ageSec = Math.max(0, Math.round(ageMs / 1000));
-    freshness.textContent = data.updatedAt ? (ageSec < 5 ? "刚刚更新" : `更新于 ${ageSec} 秒前`) : "";
-  }
-  const privacy = $("#externalAccessPrivacy");
-  if (privacy) {
-    privacy.innerHTML = `<i data-lucide="shield-check"></i><span>${escapeHtml(data.privacy || "只展示访问元数据，不展示聊天正文。")}</span>`;
-  }
-
-  renderExternalEndpoints(service);
-  renderExternalWindows(external.windows || {});
-  renderExternalClients(data.clients || [], externalRequests.total || 0);
-  renderExternalCompactList("#externalAccessPaths", data.paths || [], totalRequests.total || 0, "暂无路径访问记录。", renderExternalPathDetail);
-  renderExternalModels(data);
-  renderExternalCompactList("#externalAccessAuth", data.authSources || [], totalRequests.total || 0, "暂无认证字段记录。", renderExternalAuthDetail);
-  renderExternalCompactList("#externalAccessStatuses", data.statuses || [], totalRequests.total || 0, "暂无状态码记录。", renderExternalStatusDetail);
-  renderExternalTimeline(data.timeline || []);
-  renderExternalRecent(data.recent || []);
-  renderIcons();
-}
-
-function renderExternalEndpoints(service = {}) {
-  const root = $("#externalAccessEndpoints");
-  if (!root) return;
-  const apiKeyLabel = service.requireApiKey ? "需要 API Key" : "未强制 API Key";
-  const runningLabel = service.running ? "模型服务运行中" : "模型服务未运行";
-  const cards = [
-    renderExternalEndpointCard("Claude 兼容入口", service.claudeBaseUrl || "-", "给 Claude Desktop / CC Switch 使用，客户端再拼 /v1/messages。", service.running ? "ok" : "warn"),
-    renderExternalEndpointCard("OpenAI 兼容入口", service.openAiGatewayBaseUrl || "-", "给 OpenWebUI、OpenCode 或 OpenAI SDK 使用，路径为 /v1/chat/completions。", service.running ? "ok" : "warn"),
-    renderExternalEndpointCard("容器直连入口", service.openAiContainerBaseUrl || "-", "仅用于故障排查；它会绕过管理器的 API Key、限流、审计与客户端策略，外部服务请用上面的兼容入口。", "warn"),
-    renderExternalEndpointCard("访问策略", `${apiKeyLabel} · ${fmtTokens(service.rateLimitRpm || 0)} rpm · 并发 ${fmtTokens(service.maxConcurrentRequests || 0)}`, `${runningLabel} · LAN ${service.lanAddress || "-"}`, service.requireApiKey ? "ok" : "warn"),
-  ];
-  root.innerHTML = cards.join("");
-}
-
-function renderExternalEndpointCard(label, value, detail, stateName = "ok") {
-  return `
-    <article class="external-endpoint-card ${escapeAttr(stateName)}">
-      <span>${escapeHtml(label)}</span>
-      <code>${escapeHtml(value || "-")}</code>
-      <small>${escapeHtml(detail || "")}</small>
-    </article>
-  `;
-}
-
-function renderExternalWindows(windows = {}) {
-  const root = $("#externalAccessWindows");
-  if (!root) return;
-  const rows = [
-    ["m5", "最近 5 分钟"],
-    ["m15", "最近 15 分钟"],
-    ["h1", "最近 1 小时"],
-    ["h24", "最近 24 小时"],
-  ];
-  root.innerHTML = rows.map(([key, label]) => {
-    const item = windows[key] || {};
-    const stateName = item.errorRate >= 0.2 ? "fail" : item.errorRate > 0 ? "warn" : "ok";
-    return `
-      <article class="external-window-card ${stateName}">
-        <div class="external-window-head">
-          <span>${escapeHtml(label)}</span>
-          <strong>${fmtTokens(item.total || 0)}</strong>
-        </div>
-        <div class="stats-row-grid external-window-stats">
-          ${miniStat("客户端", fmtTokens(item.uniqueClients || 0), "唯一外部 IP")}
-          ${miniStat("速度", fmtRate(item.requestsPerMinute || 0, " req/min"), "窗口平均")}
-          ${miniStat("错误", fmtTokens(item.error || 0), fmtPct(item.errorRate || 0))}
-          ${miniStat("Tokens", fmtTokens(item.totalTokens || 0), "输入 + 输出")}
-        </div>
-      </article>
-    `;
-  }).join("");
-}
-
-function renderExternalClients(clients, totalRequests) {
-  const root = $("#externalAccessClients");
-  if (!root) return;
-  if (!clients.length) {
-    root.innerHTML = `<div class="empty compact">暂无外部客户端访问。其他机器连上后会按 IP 显示在这里。</div>`;
-    return;
-  }
-  root.innerHTML = clients.map((client) => renderExternalClientRow(client, totalRequests)).join("");
-}
-
-function renderExternalClientRow(client, totalRequests) {
-  const share = totalRequests ? Number(client.count || 0) / totalRequests : 0;
-  const stateName = client.errorRate >= 0.2 ? "fail" : client.errorRate > 0 ? "warn" : "ok";
-  const topModel = formatAccessCounterPair(client.topModel);
-  const topPath = formatAccessCounterPair(client.topPath);
-  const topAuth = formatAccessCounterPair(client.topAuthSource);
-  return `
-    <article class="stats-model-row external-client-row">
-      <div>
-        <h4>
-          <span>${escapeHtml(client.key || "unknown")}</span>
-          <em class="status-pill ${stateName}">${escapeHtml(stateName === "ok" ? "正常" : stateName === "warn" ? "注意" : "错误")}</em>
-        </h4>
-        <p>首次 ${escapeHtml(client.firstAt ? formatDateTime(client.firstAt) : "-")} · 最后 ${escapeHtml(client.lastAt ? formatDateTime(client.lastAt) : "-")}</p>
-        <div class="stats-row-grid">
-          ${miniStat("请求", fmtTokens(client.count || 0), `${fmtTokens(client.success || 0)} 成功 · ${fmtTokens(client.error || 0)} 错误`)}
-          ${miniStat("错误率", fmtPct(client.errorRate || 0), `状态 ${topStatusLabel(client.topStatus)}`)}
-          ${miniStat("延迟", fmtMs(client.avgDurationMs || 0), `Max ${fmtMs(client.maxDurationMs || 0)}`)}
-          ${miniStat("Tokens", fmtTokens(client.totalTokens || 0), `${fmtTokens(client.inputTokens || 0)} 输入 · ${fmtTokens(client.outputTokens || 0)} 输出`)}
-          ${miniStat("常用路径", topPath, "按请求数排序")}
-          ${miniStat("请求模型", topModel, "客户端传入的 model")}
-          ${miniStat("认证字段", topAuth, "实际命中的 Header")}
-          ${miniStat("流式", fmtTokens(client.streamed || 0), `${fmtPct(client.count ? (client.streamed || 0) / client.count : 0)} 请求`)}
-        </div>
-        ${shareBar("外部请求占比", share)}
-      </div>
-    </article>
-  `;
-}
-
-function renderExternalCompactList(selector, items, totalRequests, emptyText, detailFn) {
-  const root = $(selector);
-  if (!root) return;
-  if (!items.length) {
-    root.innerHTML = `<div class="empty compact">${escapeHtml(emptyText)}</div>`;
-    return;
-  }
-  root.innerHTML = items.map((item) => {
-    const share = totalRequests ? Number(item.count || 0) / totalRequests : 0;
-    const stateName = item.errorRate >= 0.2 ? "fail" : item.errorRate > 0 ? "warn" : "ok";
-    return `
-      <div class="external-compact-row">
-        <div>
-          <strong>${escapeHtml(item.key || "-")}</strong>
-          <span>${escapeHtml(detailFn ? detailFn(item) : `${fmtTokens(item.success || 0)} 成功 · ${fmtTokens(item.error || 0)} 错误`)}</span>
-          ${shareBar("占比", share)}
-        </div>
-        <em class="status-pill ${stateName}">${fmtTokens(item.count || 0)}</em>
-      </div>
-    `;
-  }).join("");
-}
-
-function renderExternalModels(data = {}) {
-  const root = $("#externalAccessModels");
-  if (!root) return;
-  const requested = data.models || [];
-  const resolved = data.resolvedModels || [];
-  if (!requested.length && !resolved.length) {
-    root.innerHTML = `<div class="empty compact">暂无模型调用记录。</div>`;
-    return;
-  }
-  const total = data.totals?.requests?.total || 0;
-  root.innerHTML = `
-    ${requested.length ? `<div class="external-list-heading">请求模型名</div>${renderExternalCompactRows(requested, total, renderExternalModelDetail)}` : ""}
-    ${resolved.length ? `<div class="external-list-heading">实际解析模型</div>${renderExternalCompactRows(resolved, total, renderExternalModelDetail)}` : ""}
-  `;
-}
-
-function renderExternalCompactRows(items, totalRequests, detailFn) {
-  return items.map((item) => {
-    const share = totalRequests ? Number(item.count || 0) / totalRequests : 0;
-    const stateName = item.errorRate >= 0.2 ? "fail" : item.errorRate > 0 ? "warn" : "ok";
-    return `
-      <div class="external-compact-row">
-        <div>
-          <strong>${escapeHtml(item.key || "-")}</strong>
-          <span>${escapeHtml(detailFn ? detailFn(item) : "")}</span>
-          ${shareBar("占比", share)}
-        </div>
-        <em class="status-pill ${stateName}">${fmtTokens(item.count || 0)}</em>
-      </div>
-    `;
-  }).join("");
-}
-
-function renderExternalTimeline(timeline) {
-  const root = $("#externalAccessTimeline");
-  if (!root) return;
-  const hasData = timeline.some((item) => Number(item.total || 0) > 0);
-  if (!hasData) {
-    root.innerHTML = `<div class="empty compact">近 2 小时暂无外部请求。</div>`;
-    return;
-  }
-  const cards = [
-    { label: "请求数", key: "total", color: "var(--blue)", fmt: (v) => fmtTokens(v), detail: "每 5 分钟" },
-    { label: "错误数", key: "error", color: "var(--red)", fmt: (v) => fmtTokens(v), detail: "非 2xx/3xx" },
-    { label: "Tokens", key: "totalTokens", color: "var(--teal)", fmt: (v) => fmtTokens(v), detail: "输入 + 输出" },
-    { label: "平均延迟", key: "avgDurationMs", color: "var(--amber)", fmt: (v) => fmtMs(v), detail: "每桶平均" },
-  ];
-  root.innerHTML = cards.map((card) => {
-    const values = timeline.map((item) => Number(item[card.key] || 0));
-    const current = values.at(-1) || 0;
-    const peak = Math.max(...values);
-    return `
-      <div class="trend-card">
-        <div class="trend-head">
-          <span>${escapeHtml(card.label)}</span>
-          <strong>${escapeHtml(card.fmt(current))}</strong>
-        </div>
-        ${sparkline(values, { color: card.color })}
-        <div class="trend-foot"><span>${escapeHtml(card.detail)}</span><span>峰值 ${escapeHtml(card.fmt(peak))}</span></div>
-      </div>
-    `;
-  }).join("");
-}
-
-function renderExternalRecent(events) {
-  const root = $("#externalAccessRecent");
-  if (!root) return;
-  const rows = events.slice(0, 80);
-  if (!rows.length) {
-    root.innerHTML = `<div class="empty compact">暂无访问记录。远端客户端请求后会显示最近访问元数据。</div>`;
-    return;
-  }
-  root.innerHTML = rows.map((event) => {
-    const stateName = event.status >= 500 ? "fail" : event.status >= 400 ? "warn" : "ok";
-    const modelText = event.model && event.resolvedModel && event.model !== event.resolvedModel
-      ? `${event.model} → ${event.resolvedModel}`
-      : event.model || event.resolvedModel || "-";
-    return `
-      <div class="external-recent-row">
-        <em class="status-pill ${stateName}">${escapeHtml(String(event.status || "-"))}</em>
-        <div>
-          <strong>${escapeHtml(`${event.method || "-"} ${event.path || "-"}`)}</strong>
-          <span>${escapeHtml(event.remoteAddress || "-")} · ${escapeHtml(event.at ? formatDateTime(event.at) : "-")} · ${escapeHtml(event.kind || "-")}</span>
-        </div>
-        <div class="external-recent-meta">
-          <span>${escapeHtml(modelText)}</span>
-          <span>${escapeHtml(event.authSource || "none")} · ${event.stream ? "stream" : "non-stream"} · ${fmtMs(event.durationMs || 0)}</span>
-          <span>${fmtTokens(event.totalTokens || 0)} tokens · tools ${fmtTokens(event.toolUseCount || 0)}/${fmtTokens(event.toolSchemaCount || 0)}</span>
-          ${event.error ? `<span class="external-error-text">${escapeHtml(event.error)}</span>` : ""}
-        </div>
-      </div>
-    `;
-  }).join("");
-}
-
-function renderExternalPathDetail(item) {
-  return `${fmtTokens(item.success || 0)} 成功 · ${fmtTokens(item.error || 0)} 错误 · ${formatAccessCounterPair(item.topModel, "模型 -")}`;
-}
-
-function renderExternalModelDetail(item) {
-  return `${fmtTokens(item.totalTokens || 0)} tokens · ${fmtTokens(item.streamed || 0)} 流式 · 错误率 ${fmtPct(item.errorRate || 0)}`;
-}
-
-function renderExternalAuthDetail(item) {
-  return `${fmtTokens(item.success || 0)} 成功 · ${fmtTokens(item.error || 0)} 错误 · ${formatAccessCounterPair(item.topPath, "路径 -")}`;
-}
-
-function renderExternalStatusDetail(item) {
-  return `${fmtTokens(item.totalTokens || 0)} tokens · ${formatAccessCounterPair(item.topPath, "路径 -")} · ${formatAccessCounterPair(item.topAuthSource, "认证 -")}`;
-}
-
-function formatAccessCounterPair(pair, fallback = "-") {
-  if (!Array.isArray(pair) || !pair.length) return fallback;
-  return `${pair[0] || "-"} (${fmtTokens(pair[1] || 0)})`;
-}
-
-function topStatusLabel(pair) {
-  if (!Array.isArray(pair) || !pair.length) return "-";
-  return String(pair[0] || "-");
+  externalAccessRenderer.renderExternalAccess(state.externalAccess);
 }
 
 // 累积轮询样本用于实时趋势图；模型实例（进程）变化时清空
@@ -4897,261 +3362,187 @@ function renderStatsGpuDetail(stats) {
 }
 
 function renderAudit() {
-  const status = state.auditStatus;
-  const authed = Boolean(state.auditToken);
-  const statusRoot = $("#auditStatusBox");
-  const loginPanel = $("#auditLoginPanel");
-  const adminPanel = $("#auditAdminPanel");
-  if (!statusRoot || !loginPanel || !adminPanel) return;
-
-  statusRoot.innerHTML = status ? `
-    <strong>审计目录：${escapeHtml(status.auditRoot || "-")}</strong>
-    <span>Open WebUI 容器：${escapeHtml(status.openWebuiContainer || "-")} · ${status.container?.running ? "运行中" : status.container?.exists ? "已停止" : "未找到"}</span>
-    <span>密码文件：${escapeHtml(status.passwordFile || "-")}</span>
-  ` : "正在读取审计状态...";
-
-  loginPanel.classList.toggle("hidden", authed);
-  adminPanel.classList.toggle("hidden", !authed);
-  $("#auditError").textContent = state.auditError || "";
-
-  if (!authed) {
-    $("#auditList").innerHTML = `<div class="empty compact">输入审计密码后才能查看完整对话记录。</div>`;
-    $("#auditMarkdownViewer").textContent = "审计内容未解锁。";
-    $("#auditSelectedMeta").textContent = "完整 Markdown 只会在密码通过后由浏览器读取。";
-    renderIcons();
-    return;
-  }
-
-  const exports = state.auditExports || [];
-  if (!exports.length) {
-    $("#auditList").innerHTML = `<div class="empty compact">暂无审计导出。卸载模型后会自动生成，也可以手动生成一次。</div>`;
-  } else {
-    $("#auditList").innerHTML = exports.map((item) => `
-      <article class="audit-row ${item.auditId === state.selectedAuditId ? "selected" : ""}">
-        <div>
-          <h4>${escapeHtml(item.auditId)}</h4>
-          <p>${escapeHtml(item.auditDir || "")}</p>
-          <div class="running-meta">
-            <span>${escapeHtml(item.reason || "manual")}</span>
-            <span>${escapeHtml(item.manager || "-")}</span>
-            <span>${escapeHtml(formatDate(item.createdAt))}</span>
-            <span>${fmtTokens(item.chatCount)} chats</span>
-            <span>${fmtTokens(item.messageCount)} messages</span>
-            <span>${fmtBytes(item.mdBytes)}</span>
-          </div>
-        </div>
-        <button class="job-action-button" data-audit-action="view-md" data-audit-id="${escapeAttr(item.auditId)}">
-          <i data-lucide="eye"></i><span>查看完整 Markdown</span>
-        </button>
-      </article>
-    `).join("");
-  }
-
-  const selected = exports.find((item) => item.auditId === state.selectedAuditId);
-  $("#auditSelectedMeta").textContent = selected
-    ? `${selected.auditId}\n${selected.auditDir}\n${selected.chatCount} chats · ${selected.messageCount} messages`
-    : "选择一条审计记录查看完整 Markdown。";
-  $("#auditMarkdownViewer").textContent = state.auditMarkdown || "未打开审计 Markdown。";
-  renderIcons();
+  window.LocalAiAuditRenderer.render({
+    state,
+    getElement: $,
+    escapeHtml,
+    escapeAttr,
+    formatDate,
+    fmtTokens,
+    fmtBytes,
+    renderIcons,
+  });
 }
 
 function statsMetric(label, value, detail, className = "") {
-  return `
-    <div class="stats-metric ${escapeAttr(className)}">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value)}</strong>
-      <small>${escapeHtml(detail || "")}</small>
-    </div>
-  `;
+  return window.statsUiRenderer.statsMetric(label, value, detail, { className, escapeHtml, escapeAttr });
 }
 
 function renderStatsModels(stats) {
-  const root = $("#statsModelList");
-  const models = stats.models || [];
-  if (!models.length) {
-    root.innerHTML = `<div class="empty compact">暂无模型统计。启动模型并产生请求后这里会显示占比。</div>`;
-    return;
-  }
-  const totalTokens = Math.max(1, stats.totals?.tokens?.total || 0);
-  const totalRequests = Math.max(1, stats.totals?.requests?.total || 0);
-  root.innerHTML = models.map((model) => {
-    const tokenShare = model.tokens.total / totalTokens;
-    const requestShare = model.requests.total / totalRequests;
-    const liveContext = Boolean(model.context?.capacityTokens);
-    const rowClass = liveContext ? "is-live" : "is-inactive";
-    const stateLabel = liveContext ? "运行中" : "历史累计";
-    return `
-      <article class="stats-model-row ${rowClass}">
-        <div>
-          <h4><span>${escapeHtml(model.name)}</span><em class="runtime-state">${stateLabel}</em></h4>
-          <p>${escapeHtml(model.root || "vLLM model")}</p>
-          <div class="stats-row-grid">
-            ${miniStat("Token 占比", fmtPct(tokenShare), `${fmtTokens(model.tokens.total)} tokens`)}
-            ${miniStat("请求占比", fmtPct(requestShare), `${fmtTokens(model.requests.total)} requests`)}
-            ${miniStat("输出速度", fmtRate(model.speed.recentOutputTokensPerSecond, " tok/s"), `平均 ${fmtRate(model.speed.averageOutputTokensPerSecond, " tok/s")}`)}
-            ${miniStat("活跃 KV", formatContextUsage(model.context.activeTokens, model.context.capacityTokens, model.context.kvUsagePercent), `平均输入 ${fmtTokens(model.averages.promptTokensPerRequest)} tokens`)}
-          </div>
-          ${shareBar("tokens", tokenShare)}
-          ${shareBar("requests", requestShare)}
-        </div>
-      </article>
-    `;
-  }).join("");
+  window.statsListRenderer.renderModels(stats, {
+    root: $("#statsModelList"),
+    showRuntimeState: true,
+    escapeHtml,
+    miniStat,
+    shareBar,
+    fmtPct,
+    fmtTokens,
+    fmtRate,
+    formatContextUsage,
+    labels: {
+      modelEmpty: "暂无模型统计。启动模型并产生请求后这里会显示占比。",
+      modelFallbackRoot: "vLLM model",
+      tokenShare: "Token 占比",
+      requestShare: "请求占比",
+      outputSpeed: "输出速度",
+      activeKv: "活跃 KV",
+      average: "平均",
+      avgInput: "平均输入",
+      running: "运行中",
+      historical: "历史累计",
+    },
+  });
 }
 
 function renderStatsClients(stats) {
-  const root = $("#statsClientBreakdown");
-  if (!root) return;
-  const usage = stats.clientUsage || {};
-  const clients = usage.clients || [];
-  if (!clients.length) {
-    root.innerHTML = `<div class="empty compact">暂无调用来源统计。Claude 桥接产生请求后，这里会和聊天/直连分开显示。</div>`;
-    return;
-  }
-  root.innerHTML = `
-    ${clients.map((client) => renderStatsClientRow(client)).join("")}
-    <div class="stats-source-note">${escapeHtml(usage.note || "Claude 统计只包含经过管理器 Claude 兼容桥的请求。")}</div>
-  `;
+  window.statsListRenderer.renderClients(stats, {
+    root: $("#statsClientBreakdown"),
+    showSessions: true,
+    escapeHtml,
+    miniStat,
+    shareBar,
+    fmtTokens,
+    fmtMs,
+    formatDateTime,
+    labels: statsClientLabels(false),
+  });
 }
 
 function renderStatsClientRow(client) {
-  const tokens = client.tokens || {};
-  const requests = client.requests || {};
-  const tools = client.tools || {};
-  const compression = client.compression || {};
-  const latency = client.latency || {};
-  const share = client.share || {};
-  const last = client.last || {};
-  const modelLine = renderClientModelLine(client);
-  const sessionLine = renderClientSessionLine(client);
-  return `
-    <article class="stats-model-row">
-      <div>
-        <h4>${escapeHtml(client.label || client.id || "-")}</h4>
-        <p>${escapeHtml(client.description || "")}</p>
-        <div class="stats-row-grid">
-          ${miniStat("Tokens", fmtTokens(tokens.total), `${fmtTokens(tokens.prompt)} 输入 · ${fmtTokens(tokens.generation)} 输出`)}
-          ${miniStat("请求", fmtTokens(requests.total), `${fmtTokens(requests.success)} 成功 · ${fmtTokens(requests.error)} 错误`)}
-          ${miniStat("工具", fmtTokens(tools.toolUse), `${fmtTokens(tools.schemas)} 个 schema · ${fmtTokens(requests.streamed)} 流式`)}
-          ${miniStat("上下文压缩", fmtTokens(compression.savedTokens || 0), `${fmtTokens(compression.applied || 0)} 次 · 节省 tokens`)}
-          ${miniStat("平均耗时", fmtMs(latency.avgMs), last.at ? `最后 ${formatDateTime(last.at)}` : "暂无最后调用")}
-        </div>
-        ${sessionLine}
-        ${modelLine}
-        ${shareBar("tokens", share.tokens || 0)}
-        ${shareBar("requests", share.requests || 0)}
-      </div>
-    </article>
-  `;
+  return window.statsListRenderer.renderClientRow(client, {
+    showSessions: true,
+    escapeHtml,
+    miniStat,
+    shareBar,
+    fmtTokens,
+    fmtMs,
+    formatDateTime,
+    labels: statsClientLabels(false),
+  });
 }
 
 function renderClientSessionLine(client) {
-  const session = client.session || {};
-  const sessions = Array.isArray(client.sessions) ? client.sessions : [];
-  if (!session.currentId && !sessions.length) return "";
-  const currentId = String(session.currentId || "");
-  const shortId = currentId.replace(/^claude-/, "").slice(0, 12) || "-";
-  const current = sessions.find((item) => item.id === currentId) || sessions[0] || {};
-  const recent = sessions.slice(0, 4);
-  const detail = session.contextClearedAt
-    ? `自动清理 ${fmtTokens(session.resets || 0)} 次 · 最近 ${formatDateTime(session.contextClearedAt)}`
-    : "等待 Claude 任务请求";
-  return `
-    <div class="client-session-panel">
-      <div>
-        <span>Claude 当前任务</span>
-        <strong>${escapeHtml(current.label || session.currentLabel || shortId)}</strong>
-        <small>${escapeHtml(`session ${shortId} · ${session.currentSource || current.source || "auto"} · 切换 ${fmtTokens(session.switches || 0)} 次`)}</small>
-        <small>${escapeHtml(detail)}</small>
-      </div>
-      ${recent.length ? `
-        <div class="client-session-list">
-          ${recent.map((item) => `
-            <span>${escapeHtml(item.label || item.id || "Claude task")}：${fmtTokens(item.tokens?.total || 0)} tokens / ${fmtTokens(item.requests?.total || 0)} 请求</span>
-          `).join("")}
-        </div>
-      ` : ""}
-    </div>
-  `;
+  return window.statsListRenderer.renderClientSessionLine(client, {
+    escapeHtml,
+    fmtTokens,
+    formatDateTime,
+    labels: statsClientLabels(false),
+  });
 }
 
 function renderClientModelLine(client) {
-  const models = (client.models || []).slice(0, 3);
-  if (!models.length) return "";
-  return `
-    <div class="client-model-breakdown">
-      ${models.map((model) => `
-        <span>${escapeHtml(model.name)}：${fmtTokens(model.tokens.total)} tokens / ${fmtTokens(model.requests.total)} 请求</span>
-      `).join("")}
-    </div>
-  `;
+  return window.statsListRenderer.renderClientModelLine(client, {
+    escapeHtml,
+    fmtTokens,
+    labels: statsClientLabels(false),
+  });
+}
+
+function statsClientLabels(en) {
+  return en ? {
+    clientsEmpty: "No client usage yet. Claude bridge calls will be separated from chat and direct API usage here.",
+    clientsNote: "Claude statistics include only requests through the manager Claude-compatible bridge.",
+  } : {
+    clientsEmpty: "暂无调用来源统计。Claude 桥接产生请求后，这里会和聊天/直连分开显示。",
+    clientsNote: "Claude 统计只包含经过管理器 Claude 兼容桥的请求。",
+    clientTokens: "Tokens",
+    clientRequests: "请求",
+    clientTools: "工具",
+    clientCompression: "上下文压缩",
+    clientLatency: "平均耗时",
+    input: "输入",
+    output: "输出",
+    success: "成功",
+    error: "错误",
+    schemas: "个 schema",
+    streamed: "流式",
+    times: "次",
+    saved: "节省 tokens",
+    last: "最后",
+    noLast: "暂无最后调用",
+    modelSeparator: "：",
+    modelRequests: "请求",
+    sessionTask: "Claude 当前任务",
+    sessionLabel: "session",
+    sessionSourceFallback: "auto",
+    sessionSwitches: "切换",
+    sessionAutoClean: "自动清理",
+    sessionRecent: "最近",
+    sessionWaiting: "等待 Claude 任务请求",
+    sessionDefaultTask: "Claude task",
+    separator: " · ",
+    detailSeparator: " · ",
+  };
 }
 
 function renderStatsCosts(stats) {
-  const rows = stats.costComparison || [];
-  if (!rows.length) {
-    $("#statsCostTable").innerHTML = `<div class="empty compact">暂无价格折算。</div>`;
-    return;
-  }
-  $("#statsCostTable").innerHTML = `
-    <div class="cost-row cost-head">
-      <span>模型</span>
-      <span>输入/输出</span>
-      <span>标准等值</span>
-      <span>含缓存等值</span>
-    </div>
-    ${rows.map((row) => `
-      <div class="cost-row">
-        <span><strong>${escapeHtml(row.provider)}</strong> ${escapeHtml(row.label)}</span>
-        <span>$${row.inputPerM}/M · $${row.outputPerM}/M</span>
-        <span>${fmtMoney(row.standardCost)}</span>
-        <span>${fmtMoney(row.cachedEquivalentCost)}</span>
-      </div>
-    `).join("")}
-    <div class="stats-source-note">
-      价格按 ${escapeHtml(stats.pricingAsOf || "current")} 官方公开价估算；本地 vLLM 不会产生这些 API 费用，仅用于对比价值。
-    </div>
-  `;
+  window.statsUiRenderer.renderCosts(stats, {
+    root: $("#statsCostTable"),
+    managerName: "vLLM",
+    escapeHtml,
+    fmtMoney,
+    labels: {
+      empty: "暂无价格折算。",
+      model: "模型",
+      price: "输入/输出",
+      standard: "标准等值",
+      cached: "含缓存等值",
+      priceAsOf: "价格按",
+      publicPrice: "官方公开价估算",
+      localPrefix: "本地",
+      localNote: "不会产生这些 API 费用，仅用于对比价值。",
+      priceSeparator: " · ",
+    },
+  });
 }
 
 function renderStatsDetails(stats) {
-  const facts = stats.facts || {};
-  const totals = stats.totals || {};
-  const latency = totals.latency || {};
-  const gpu = stats.gpu?.ok ? `${stats.gpu.usedMb}/${stats.gpu.totalMb} MB · ${stats.gpu.util}% · ${stats.gpu.temp}°C` : "未检测到";
-  $("#statsDetailGrid").innerHTML = [
-    miniStat("平均端到端", fmtSeconds(latency.avgE2eSeconds), "请求完成平均耗时"),
-    miniStat("平均首 token", fmtSeconds(latency.avgTtftSeconds), "time to first token"),
-    miniStat("平均单输出 token", fmtSeconds(latency.avgTimePerOutputTokenSeconds), "越低越快"),
-    miniStat("GPU", gpu, stats.gpu?.name || ""),
-    miniStat("KV cache 容量", facts.kvCacheTokens ? `${fmtTokens(facts.kvCacheTokens)} tokens` : "-", facts.maxConcurrency ? `最大并发 ${facts.maxConcurrency}x` : ""),
-    miniStat("加载权重", facts.modelLoadSeconds ? `${fmtSeconds(facts.modelLoadSeconds)} · ${facts.modelLoadMemoryGiB} GiB` : "-", "模型载入阶段"),
-    miniStat("torch.compile", fmtSeconds(facts.torchCompileSeconds), "首次启动主要耗时之一"),
-    miniStat("warmup", fmtSeconds(facts.warmupSeconds), "profiling / warmup"),
-    miniStat("CUDA graph", facts.graphCaptureGiB ? `${facts.graphCaptureGiB} GiB` : "-", "graph pool 实占"),
-    miniStat("采集源", stats.source || "-", `${fmtTokens(stats.rawMetricCount)} metrics`),
-  ].join("");
+  window.statsUiRenderer.renderDetails(stats, {
+    root: $("#statsDetailGrid"),
+    miniStat,
+    fmtSeconds,
+    fmtTokens,
+    labels: {
+      endToEnd: "平均端到端",
+      endToEndDetail: "请求完成平均耗时",
+      ttft: "平均首 token",
+      perOutputToken: "平均单输出 token",
+      lowerIsBetter: "越低越快",
+      gpu: "GPU",
+      gpuMissing: "未检测到",
+      kvCapacity: "KV cache 容量",
+      maxConcurrency: "最大并发",
+      loadWeights: "加载权重",
+      loadStage: "模型载入阶段",
+      torchCompile: "torch.compile",
+      firstStartCost: "首次启动主要耗时之一",
+      warmup: "warmup",
+      warmupDetail: "profiling / warmup",
+      cudaGraph: "CUDA graph",
+      graphPool: "graph pool 实占",
+      source: "采集源",
+      separator: " · ",
+      temperatureUnit: "°C",
+    },
+  });
 }
 
 function miniStat(label, value, detail) {
-  return `
-    <div class="mini-stat">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value ?? "-")}</strong>
-      <small>${escapeHtml(detail || "")}</small>
-    </div>
-  `;
+  return window.statsUiRenderer.miniStat(label, value, detail, { escapeHtml });
 }
 
 function shareBar(label, value) {
-  const percent = Math.min(100, Math.max(0, Number(value || 0) * 100));
-  return `
-    <div class="share-bar">
-      <span>${escapeHtml(label)}</span>
-      <div><b style="width:${percent}%"></b></div>
-      <em>${percent.toFixed(1)}%</em>
-    </div>
-  `;
+  return window.statsUiRenderer.shareBar(label, value, { escapeHtml });
 }
 
 function fmtSeconds(value) {
@@ -5184,48 +3575,19 @@ function updateSidebarFoot() {
 }
 
 function renderModels() {
-  const root = $("#modelList");
-  const items = [
-    ...state.models.local.map((model) => ({ ...model, badge: "Local" })),
-    ...state.models.cached.map((model) => ({ ...model, badge: "HF Cache" })),
-  ];
-  if (!items.length) {
-    root.innerHTML = `<div class="empty">还没有模型，先从右侧下载或直接输入 Hugging Face ID 启动。</div>`;
-    return;
-  }
-  root.innerHTML = items.map((model) => `
-    <article class="model-row">
-      <div>
-        <h4>${escapeHtml(model.label)}</h4>
-        <p>${escapeHtml(model.path)}</p>
-        <div>
-          <span class="pill">${model.badge}</span>
-          <span class="pill">${fmtBytes(model.size)}</span>
-          ${model.hasConfig ? `<span class="pill ok">config</span>` : ""}
-          ${model.hasGguf ? `<span class="pill warn">GGUF</span>` : ""}
-          ${model.ggufFiles?.[0] ? `<span class="pill">${escapeHtml(model.ggufFiles[0].name || "single file")}</span>` : ""}
-        </div>
-      </div>
-      <div class="mini-actions">
-        <button title="填入启动表单" data-action="use-model" data-model="${escapeAttr(model.launchModel)}" data-name="${escapeAttr(model.label)}" data-format="${model.hasGguf && !model.hasConfig ? "gguf" : "auto"}"><i data-lucide="play"></i></button>
-        ${model.kind === "local" ? `<button class="danger" title="删除本地模型文件" data-action="delete-model" data-name="${escapeAttr(model.id)}" data-size="${escapeAttr(fmtBytes(model.size))}"><i data-lucide="trash-2"></i></button>` : ""}
-      </div>
-    </article>
-  `).join("");
-  root.querySelectorAll("[data-action='use-model']").forEach((button) => {
-    button.addEventListener("click", () => {
-      const model = button.dataset.model;
-      selectLaunchModel(model, {
-        name: button.dataset.name || model,
-        format: button.dataset.format || "auto",
-        silent: true,
-      });
-    });
-  });
-  root.querySelectorAll("[data-action='delete-model']").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const name = button.dataset.name || "";
-      const ok = window.confirm(`删除本地模型 ${name}（${button.dataset.size || "未知大小"}）？\n会从磁盘移除整个目录，无法恢复；正在运行的服务不会自动停止。`);
+  window.LocalAiLocalModelRenderer.render({
+    state,
+    root: $("#modelList"),
+    escapeHtml,
+    escapeAttr,
+    fmtBytes,
+    renderIcons,
+    allowDeleteLocal: true,
+    onUse: ({ model, name, format }) => {
+      selectLaunchModel(model, { name: name || model, format: format || "auto", silent: true });
+    },
+    onDelete: async ({ button, name, size }) => {
+      const ok = window.confirm(`删除本地模型 ${name}（${size || "未知大小"}）？\n会从磁盘移除整个目录，无法恢复；正在运行的服务不会自动停止。`);
       if (!ok) return;
       button.disabled = true;
       try {
@@ -5239,15 +3601,19 @@ function renderModels() {
         button.disabled = false;
         reportActionError("删除本地模型失败", error);
       }
-    });
+    },
   });
-  renderIcons();
 }
 
 function renderRemoteModels() {
   const root = $("#remoteModelList");
   if (state.remoteError) {
-    root.innerHTML = `<div class="empty">联网模型列表加载失败：${escapeHtml(state.remoteError)}</div>`;
+    window.remoteModelRenderer?.render({
+      root,
+      error: state.remoteError,
+      errorMessage: `联网模型列表加载失败：${state.remoteError}`,
+      escapeHtml,
+    });
     return;
   }
   const models = getVisibleRemoteModels();
@@ -5262,72 +3628,51 @@ function renderRemoteModels() {
     hint.textContent = `按「${sortFilter}」排序 · ${taskFilter} · ${sizeFilter} ${featureFilter} · 返回 ${fmtNumber(state.remoteModels.length)} 个，显示 ${fmtNumber(models.length)} 个。参数和文件大小按公开元数据估算，gated 模型下载前需配置 token。`;
   }
   $("#remoteLoadMoreBtn")?.toggleAttribute("disabled", getRemoteLimit() >= 120);
-  if (!models.length) {
-    root.innerHTML = `<div class="empty">没有找到匹配的在线模型。换个关键词再试。</div>`;
-    return;
-  }
-  root.innerHTML = models.map((model) => {
-    const badges = (model.badges || []).slice(0, 7).map((badge) => `<span class="pill">${escapeHtml(badge)}</span>`).join("");
-    const gated = model.gated ? `<span class="pill warn">gated</span>` : "";
-    const runnableOk = effectiveLanguage() === "en-US" ? "vLLM runnable" : "vLLM 可运行";
-    const runnableWarn = effectiveLanguage() === "en-US" ? "Use another manager" : "需换管理器";
-    const runnable = isManagerRunnableRemoteModel(model) ? `<span class="pill ok">${runnableOk}</span>` : `<span class="pill warn">${runnableWarn}</span>`;
-    const format = model.hasGguf ? `<span class="pill warn">GGUF</span>` : model.hasSafetensors ? `<span class="pill ok">safetensors</span>` : "";
-    const quant = (model.quantFormats || []).slice(0, 4).map((item) => `<span class="pill ok">${escapeHtml(item)}</span>`).join("");
-    const metrics = [
-      model.paramsB ? `参数 ${formatParamsB(model.paramsB)}` : "",
-      model.fileSizeBytes ? `文件 ${fmtBytes(model.fileSizeBytes)}` : "",
-      model.largestFileBytes ? `最大 ${fmtBytes(model.largestFileBytes)}` : "",
-      model.fileCount ? `${fmtNumber(model.fileCount)} files` : "",
-      model.pipelineTag || model.libraryName || "",
-    ].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
-    return `
-      <article class="remote-model-card">
-        <div>
-          <h4>${escapeHtml(model.label || model.id)}</h4>
-          <p>${escapeHtml(model.author || "Hugging Face")} · 更新 ${escapeHtml(formatDate(model.lastModified))}</p>
-          <div class="remote-meta">
-            <span>下载 ${fmtNumber(model.downloads)}</span>
-            <span>喜欢 ${fmtNumber(model.likes)}</span>
-            ${metrics}
-          </div>
-          <div class="pill-row">${runnable}${format}${quant}${gated}${badges}</div>
-          <div class="remote-readme" data-readme-for="${escapeAttr(model.id)}" hidden></div>
-        </div>
-        <div class="remote-actions">
-          <button title="填入下载页" data-action="remote-download" data-model="${escapeAttr(model.id)}" data-output="${escapeAttr(model.outputName)}"><i data-lucide="download"></i></button>
-          <button title="填入启动表单" data-action="remote-start" data-model="${escapeAttr(model.id)}"><i data-lucide="play"></i></button>
-          ${model.source !== "modelscope" ? `<button title="查看模型说明" data-action="remote-readme" data-model="${escapeAttr(model.id)}"><i data-lucide="file-text"></i></button>` : ""}
-          <a title="打开介绍页" href="${escapeAttr(model.url)}" target="_blank"><i data-lucide="database"></i></a>
-        </div>
-      </article>
-    `;
-  }).join("");
-  root.querySelectorAll("[data-action='remote-readme']").forEach((button) => {
-    button.addEventListener("click", () => loadRemoteReadme(button.dataset.model));
-  });
-  root.querySelectorAll("[data-action='remote-download']").forEach((button) => {
-    button.addEventListener("click", () => {
-      const selected = state.remoteModels.find((model) => model.id === button.dataset.model);
+  const english = effectiveLanguage() === "en-US";
+  window.remoteModelRenderer?.render({
+    root,
+    models,
+    allModels: state.remoteModels,
+    emptyMessage: english ? "No matching online models. Try another keyword." : "没有找到匹配的在线模型。换个关键词再试。",
+    labels: {
+      updated: english ? "Updated" : "更新",
+      downloads: english ? "Downloads" : "下载",
+      likes: english ? "Likes" : "喜欢",
+      params: english ? "Params" : "参数",
+      file: english ? "File" : "文件",
+      largest: english ? "Largest" : "最大",
+      runnableOk: english ? "vLLM runnable" : "vLLM 可运行",
+      runnableWarn: english ? "Use another manager" : "需换管理器",
+      downloadTitle: english ? "Use in download form" : "填入下载页",
+      startTitle: english ? "Use in launch form" : "填入启动表单",
+      readmeTitle: english ? "View model notes" : "查看模型说明",
+      openTitle: english ? "Open model page" : "打开介绍页",
+    },
+    escapeHtml,
+    escapeAttr,
+    fmtNumber,
+    fmtBytes,
+    formatDate,
+    formatParamsB,
+    isRunnableRemoteModel: isManagerRunnableRemoteModel,
+    canShowReadme: (model) => model.source !== "modelscope",
+    renderIcons,
+    onReadme: loadRemoteReadme,
+    onDownload: (selected, fallback) => {
       fillDownloadForm(selected ? {
         ...selected,
         source: selected.source || "huggingface",
         summary: selected.summary || "已从在线模型列表填入下载信息。",
       } : {
-        source: "huggingface",
-        model: button.dataset.model,
-        outputName: button.dataset.output,
+        ...fallback,
         summary: "已从在线模型列表填入下载信息。",
       });
       showView("download");
-    });
+    },
+    onStart: (modelId) => {
+      selectLaunchModel(modelId, { format: "auto", silent: true });
+    },
   });
-  root.querySelectorAll("[data-action='remote-start']").forEach((button) => {
-    button.addEventListener("click", () => {
-      selectLaunchModel(button.dataset.model, { format: "auto", silent: true });
-    });
-  });
-  renderIcons();
 }
 
 async function loadRemoteReadme(modelId) {
@@ -5364,90 +3709,6 @@ function getVisibleRemoteModels() {
   });
 }
 
-function isManagerRunnableModelItem(item) {
-  if (item?.source === "running") return true;
-  const text = [
-    item?.source,
-    item?.label,
-    item?.model,
-    item?.detail,
-    item?.format,
-    item?.quantLabel,
-    ...(item?.badges || []),
-  ].filter(Boolean).join(" ").toLowerCase();
-  if (!text.trim()) return false;
-  if (isBlockedForVllm(text)) return false;
-  if (item?.format === "gguf" || /\.gguf(?:\b|$)/i.test(text) || /\bgguf\b/i.test(text)) return false;
-  return true;
-}
-
-function isManagerRunnableRemoteModel(model) {
-  const text = remoteModelCompatibilityText(model);
-  if (!model?.id || isBlockedForVllm(text)) return false;
-  if (model.hasGguf && !model.hasSafetensors) return false;
-  if (/\bgguf\b|\bggml\b/i.test(text) && !model.hasSafetensors) return false;
-  return true;
-}
-
-function remoteModelCompatibilityText(model) {
-  return [
-    model?.id,
-    model?.label,
-    model?.author,
-    model?.pipelineTag,
-    model?.libraryName,
-    ...(model?.badges || []),
-    ...(model?.quantFormats || []),
-  ].filter(Boolean).join(" ").toLowerCase();
-}
-
-function isBlockedForVllm(text) {
-  const lower = String(text || "").toLowerCase();
-  return [
-    "qwen35moe",
-    "gemma4",
-    "embedding",
-    "embeddings",
-    "rerank",
-    "sentence-transformers",
-    "feature-extraction",
-    "text-classification",
-    "token-classification",
-    "zero-shot-classification",
-    "translation",
-    "fill-mask",
-  ].some((token) => lower.includes(token));
-}
-
-function modelRemoteSizeMatches(model, size) {
-  const params = Number(model.paramsB || 0);
-  if (!params) return false;
-  if (size === "small") return params <= 8;
-  if (size === "medium") return params > 8 && params <= 14;
-  if (size === "large") return params > 14 && params <= 32;
-  if (size === "xlarge") return params > 32;
-  return true;
-}
-
-function modelRemoteQuantMatches(model, quant) {
-  const filter = normalizeDownloadQuantValue(quant);
-  if (!filter) return true;
-  if (filter === "quantized") return Boolean(model.hasQuantizedFiles);
-  const formats = new Set((model.quantFormats || []).map(normalizeDownloadQuantValue).filter(Boolean));
-  if (filter === "GGUF") return Boolean(model.hasGguf) || formats.has("GGUF");
-  if (formats.has(filter)) return true;
-  if (filter === "Q4") return Array.from(formats).some((item) => item.startsWith("Q4") || item.startsWith("IQ4"));
-  if (filter === "IQ4") return Array.from(formats).some((item) => item.startsWith("IQ4"));
-  if (filter === "INT4") return Array.from(formats).some((item) => item.includes("INT4") || item.startsWith("Q4") || item.startsWith("IQ4") || item === "NF4" || item === "NVFP4" || item === "MXFP4");
-  return false;
-}
-
-function formatParamsB(value) {
-  const number = Number(value || 0);
-  if (!number) return "-";
-  return `${number >= 10 ? number.toFixed(0) : number.toFixed(1)}B`;
-}
-
 function formatDate(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -5463,134 +3724,7 @@ function formatDateTime(value) {
 }
 
 function renderJobs() {
-  renderJobList($("#jobList"), (state.jobs || []).filter((job) => job.type === "download").slice(0, 6), "暂无下载任务");
-  renderJobList($("#serviceJobList"), (state.jobs || []).filter((job) => job.type === "serve").slice(0, 4), "暂无启动任务");
-  renderJobList($("#benchmarkJobList"), (state.jobs || []).filter((job) => job.type === "benchmark" || job.type === "automation").slice(0, 5), "暂无测速任务");
-}
-
-function renderJobList(root, jobs, emptyText) {
-  if (!root) return;
-  const html = !jobs.length
-    ? `<div class="empty">${escapeHtml(emptyText)}</div>`
-    : jobs.map((job) => {
-      const status = jobStatusInfo(job.status);
-      const tail = (job.logs || []).slice(-3).join(" | ");
-      const updatedAt = job.updatedAt || job.finishedAt || job.createdAt;
-      const expanded = state.expandedJobLogs.has(job.id);
-      return `
-        <article class="job-row ${status.rowClass}">
-          <div>
-            <div class="job-title-line">
-              <h4>${escapeHtml(job.title)}</h4>
-              <span class="pill ${status.pillClass}">${escapeHtml(status.label)}</span>
-            </div>
-            <div class="job-meta-line">
-              <span>${escapeHtml(jobTypeLabel(job.type))}</span>
-              <span>${escapeHtml(formatDateTime(updatedAt))}</span>
-              ${job.error ? `<span class="job-error-text">${escapeHtml(job.error)}</span>` : ""}
-            </div>
-            <p class="job-log-tail">${escapeHtml(tail || status.detail)}</p>
-            ${renderJobProgress(job)}
-            ${expanded ? `<pre class="job-log-full">${escapeHtml((job.logs || []).join("\n") || "暂无日志")}</pre>` : ""}
-          </div>
-        </article>
-      `;
-    }).join("");
-  // 内容没变就不重绘，避免 3 秒轮询导致按钮闪烁和点击丢失
-  if (root.__jobsHtml === html) return;
-  root.__jobsHtml = html;
-  root.innerHTML = html;
-}
-
-function jobStatusInfo(status) {
-  if (status === "success") return { label: "完成", pillClass: "ok", rowClass: "is-success", detail: "任务已完成" };
-  if (status === "failed") return { label: "失败", pillClass: "fail", rowClass: "is-failed", detail: "任务失败，查看日志尾部或一键重试" };
-  if (status === "cancelled") return { label: "已取消", pillClass: "fail", rowClass: "is-failed", detail: "下载已取消，部分文件已清理" };
-  if (status === "paused") return { label: "已暂停", pillClass: "warn", rowClass: "is-queued", detail: "下载已暂停，可以继续" };
-  if (status === "interrupted") return { label: "中断", pillClass: "warn", rowClass: "is-queued", detail: "管理器重启时任务仍在运行" };
-  if (status === "queued") return { label: "等待", pillClass: "warn", rowClass: "is-queued", detail: "等待后台开始处理" };
-  return { label: "运行中", pillClass: "warn", rowClass: "is-running", detail: "后台正在处理" };
-}
-
-function jobTypeLabel(type) {
-  if (type === "download") return "模型下载";
-  if (type === "serve") return "服务启动";
-  return type || "任务";
-}
-
-function renderJobProgress(job) {
-  if (job.type === "serve") return renderServeProgress(job);
-  if (job.type === "benchmark") return renderBenchmarkProgress(job);
-  if (job.type === "automation") return renderAutomationJobProgress(job);
-  if (job.type !== "download") return "";
-  const progress = job.progress || {};
-  const totalBytes = Number(progress.totalBytes || job.meta?.expectedBytes || 0);
-  const downloadedBytes = Number(progress.downloadedBytes || 0);
-  const isDone = job.status === "success";
-  const percent = totalBytes
-    ? Math.min(100, Math.max(0, Number(progress.percent ?? (downloadedBytes / totalBytes) * 100)))
-    : (isDone ? 100 : null);
-  const fillStyle = percent === null ? "" : `style="width:${percent}%"`;
-  const fillClass = percent === null && job.status === "running" ? "indeterminate" : "";
-  const mainText = totalBytes
-    ? `${fmtBytes(downloadedBytes)} / ${fmtBytes(totalBytes)} · ${percent.toFixed(1)}%`
-    : downloadedBytes
-      ? `${fmtBytes(downloadedBytes)} 已下载`
-      : "等待下载开始";
-  const speed = progress.speedBytesPerSec > 0 ? `${fmtBytes(progress.speedBytesPerSec)}/s` : "";
-  const eta = progress.etaSeconds > 0 && job.status === "running" ? `剩余约 ${formatDuration(progress.etaSeconds)}` : "";
-  const detail = [speed, eta, progress.error].filter(Boolean).join(" · ");
-
-  return `
-    <div class="job-progress">
-      <div class="download-progress-track">
-        <div class="download-progress-fill ${fillClass}" ${fillStyle}></div>
-      </div>
-      <div class="download-progress-meta">
-        <span>${escapeHtml(mainText)}</span>
-        <small>${escapeHtml(detail || (totalBytes ? "按本地目录大小估算" : "无法读取总大小时显示已落盘大小"))}</small>
-      </div>
-      ${renderDownloadActions(job)}
-    </div>
-  `;
-}
-
-function renderDownloadActions(job) {
-  const logsButton = `<button type="button" class="job-action-button" data-download-action="logs" data-job="${escapeAttr(job.id)}">${state.expandedJobLogs.has(job.id) ? "收起日志" : "查看日志"}</button>`;
-  if (job.status === "running") {
-    return `
-      <div class="job-actions">
-        <button type="button" class="job-action-button" data-download-action="pause" data-job="${escapeAttr(job.id)}">暂停</button>
-        <button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并删除</button>
-        ${logsButton}
-      </div>
-    `;
-  }
-  if (job.status === "queued") {
-    return `
-      <div class="job-actions">
-        <button type="button" class="job-action-button" data-download-action="pause" data-job="${escapeAttr(job.id)}">暂停排队</button>
-        <button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并删除</button>
-        ${logsButton}
-      </div>
-    `;
-  }
-  const meta = job.meta || {};
-  const canResume = meta.model && ["paused", "interrupted", "failed", "cancelled"].includes(job.status);
-  const resumeButton = canResume
-    ? `<button type="button" class="job-action-button primary" data-download-action="resume" data-job="${escapeAttr(job.id)}">继续下载</button>`
-    : "";
-  const cleanupButton = meta.localDir && ["paused", "interrupted", "failed"].includes(job.status)
-    ? `<button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并删除</button>`
-    : "";
-  const verifyButton = meta.localDir || meta.outputName
-    ? `<button type="button" class="job-action-button" data-download-action="verify" data-job="${escapeAttr(job.id)}">校验文件</button>`
-    : "";
-  const startButton = job.status === "success" && (meta.localDir || meta.outputName)
-    ? `<button type="button" class="job-action-button primary" data-download-action="use-start" data-job="${escapeAttr(job.id)}">填入启动</button>`
-    : "";
-  const actions = [resumeButton, cleanupButton, verifyButton, startButton, logsButton].filter(Boolean).join("");
-  return actions ? `<div class="job-actions">${actions}</div>` : "";
+  jobRenderer.renderJobs();
 }
 
 function renderBenchmarkProgress(job) {
@@ -5666,32 +3800,6 @@ function renderServeActions(job) {
     : "";
   if (!dockerButton && job.status !== "failed") return "";
   return `<div class="job-actions">${dockerButton}${retryButton}</div>`;
-}
-
-function isDockerDaemonIssue(job) {
-  const progress = job.progress || {};
-  const text = [
-    job.error,
-    progress.detail,
-    ...(progress.issues || []),
-    ...(job.logs || []),
-  ].filter(Boolean).join("\n").toLowerCase();
-  return text.includes("dockerdesktoplinuxengine")
-    || text.includes("docker api")
-    || text.includes("daemon is running")
-    || text.includes("cannot connect to the docker daemon")
-    || text.includes("docker daemon")
-    || text.includes("docker desktop");
-}
-
-function formatDuration(seconds) {
-  const total = Math.max(0, Math.round(Number(seconds || 0)));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  if (hours) return `${hours}小时${minutes}分`;
-  if (minutes) return `${minutes}分${secs}秒`;
-  return `${secs}秒`;
 }
 
 function fillDownloadForm(model) {

@@ -36,9 +36,12 @@ This is a local model service control panel for high-end personal workstations a
 ├─ vllm-manager/           # vLLM 管理后台
 ├─ llama-manager/          # llama.cpp / GGUF 管理后台
 ├─ manager-core/           # 共用网络、密钥、统计、显存估算工具
+├─ tests/                  # 跨管理器前端烟测
 ├─ model-capability-tests/ # 长任务能力测试提示词
 ├─ vllm/                   # 轻量 vLLM helper 脚本
 ├─ docs/                   # 使用手册和设计/审计文档
+├─ package.json            # 根目录测试依赖，主要用于 Playwright smoke test
+├─ playwright.config.cjs   # 浏览器烟测配置
 ├─ install-all.cmd         # 安装 Node 依赖
 ├─ test-all.cmd            # 运行核心测试
 ├─ start-service-entry.cmd # 启动本机模式
@@ -51,6 +54,7 @@ This is a local model service control panel for high-end personal workstations a
 - Node.js 20 或更高版本。
 - Docker Desktop。
 - NVIDIA 驱动；运行 vLLM/llama.cpp CUDA 容器时需要可用 GPU。
+- Chrome 或 Edge；前端 smoke test 默认使用本机 Chrome，也可以设置 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` 使用 Edge。
 - 可选：Hugging Face CLI、ModelScope CLI、CUDA Toolkit、PowerShell 7。
 
 ### 快速开始
@@ -135,6 +139,20 @@ test-all.cmd
 - vLLM / llama.cpp 显存估算。
 - llama 任务账本规范化。
 - JSON 并发写入安全。
+- vLLM / llama 前端真实浏览器 smoke test：启动两个管理器、打开首页、切换服务/下载/外来访问/统计页面，并检查脚本、样式和控制台错误。
+
+单独运行前端 smoke test：
+
+```cmd
+npm run test:frontend-smoke
+```
+
+如果机器没有 Chrome，但有 Edge：
+
+```cmd
+set PLAYWRIGHT_BROWSER_CHANNEL=msedge
+npm run test:frontend-smoke
+```
 
 ### 发布同步
 
@@ -145,6 +163,24 @@ sync-github-release.cmd
 ```
 
 同步脚本会复制源码和文档，并主动移除发布目录里的运行时残留，例如 `node_modules`、`logs`、`models`、`cache`、数据库和密钥文件。
+
+发布到 GitHub 前请使用 `git add -A`，因为项目拆分后经常会新增 `manager-core/*`、`*/lib/*`、`public/js/*` 和测试文件；只用 `git commit -am` 会漏掉新文件。
+
+```cmd
+sync-github-release.cmd
+cd github-release
+git status -sb
+git add -A
+git commit -m "Update local model service platform"
+git push origin main
+```
+
+建议每次发布前在 `github-release` 目录再跑一遍：
+
+```cmd
+install-all.cmd
+test-all.cmd
+```
 
 ---
 
@@ -178,9 +214,12 @@ sync-github-release.cmd
 ├─ vllm-manager/           # vLLM control panel
 ├─ llama-manager/          # llama.cpp / GGUF control panel
 ├─ manager-core/           # Shared networking, secret, stats, and memory-estimation helpers
+├─ tests/                  # Cross-manager frontend smoke tests
 ├─ model-capability-tests/ # Long-running model capability prompts
 ├─ vllm/                   # Lightweight vLLM helper scripts
 ├─ docs/                   # Runbooks, design notes, and audit documents
+├─ package.json            # Root test dependencies, mainly Playwright smoke tests
+├─ playwright.config.cjs   # Browser smoke-test configuration
 ├─ install-all.cmd         # Install Node dependencies
 ├─ test-all.cmd            # Run core tests
 ├─ start-service-entry.cmd # Start local-only mode
@@ -193,6 +232,7 @@ sync-github-release.cmd
 - Node.js 20 or newer.
 - Docker Desktop.
 - NVIDIA driver and GPU access for vLLM/llama.cpp CUDA containers.
+- Chrome or Edge. The frontend smoke test uses local Chrome by default; set `PLAYWRIGHT_BROWSER_CHANNEL=msedge` to use Edge.
 - Optional: Hugging Face CLI, ModelScope CLI, CUDA Toolkit, PowerShell 7.
 
 ### Quick Start
@@ -269,7 +309,20 @@ Generate API keys from the manager's service/external access page. Do not put re
 test-all.cmd
 ```
 
-The tests cover gateway routing, OpenAI/Claude message conversion, service API keys, access policies, vLLM/llama.cpp memory estimation, llama job ledger normalization, and JSON write safety.
+The tests cover gateway routing, OpenAI/Claude message conversion, service API keys, access policies, vLLM/llama.cpp memory estimation, llama job ledger normalization, JSON write safety, and real browser frontend smoke tests for both managers.
+
+Run only the frontend smoke test:
+
+```cmd
+npm run test:frontend-smoke
+```
+
+Use Edge instead of Chrome:
+
+```cmd
+set PLAYWRIGHT_BROWSER_CHANNEL=msedge
+npm run test:frontend-smoke
+```
 
 ### Release Sync
 
@@ -280,3 +333,21 @@ sync-github-release.cmd
 ```
 
 The sync script copies source files and docs, then removes runtime leftovers such as `node_modules`, `logs`, `models`, `cache`, databases, and secret files from the release mirror.
+
+Before pushing to GitHub, always stage with `git add -A`. The project now has many split modules and generated release-safe source files; `git commit -am` does not add new files.
+
+```cmd
+sync-github-release.cmd
+cd github-release
+git status -sb
+git add -A
+git commit -m "Update local model service platform"
+git push origin main
+```
+
+Recommended release check:
+
+```cmd
+install-all.cmd
+test-all.cmd
+```

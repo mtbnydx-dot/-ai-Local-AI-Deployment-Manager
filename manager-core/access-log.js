@@ -1,3 +1,5 @@
+const fsp = require("node:fs/promises");
+const path = require("node:path");
 const { isExternalAddress, normalizeRemoteAddress } = require("./network");
 
 function normalizeAccessEvent(entry = {}, lanAddress = "") {
@@ -170,10 +172,183 @@ function percentile(sortedValues, p) {
   return sortedValues[index] || 0;
 }
 
+async function appendAccessLog(file, entry) {
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
+}
+
+async function readAccessLogEvents(file, maxLines = 12000, parseJsonSafe = parseJsonLine) {
+  try {
+    const text = await fsp.readFile(file, "utf8");
+    return text
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-maxLines)
+      .map((line) => parseJsonSafe(line, null))
+      .filter((entry) => entry && typeof entry === "object");
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonLine(line, fallback = null) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return fallback;
+  }
+}
+
+function buildAccessTimeline(events, now = Date.now(), options = {}) {
+  const bucketMs = Number(options.bucketMs || 5 * 60 * 1000);
+  const windowMs = Number(options.windowMs || 2 * 60 * 60 * 1000);
+  const start = now - windowMs;
+  const buckets = new Map();
+  for (let time = Math.floor(start / bucketMs) * bucketMs; time <= now; time += bucketMs) {
+    buckets.set(time, {
+      at: new Date(time).toISOString(),
+      total: 0,
+      success: 0,
+      error: 0,
+      totalTokens: 0,
+      avgDurationMs: 0,
+      durationTotalMs: 0,
+    });
+  }
+  for (const entry of events) {
+    if (entry.atMs < start) continue;
+    const key = Math.floor(entry.atMs / bucketMs) * bucketMs;
+    const bucket = buckets.get(key);
+    if (!bucket) continue;
+    bucket.total += 1;
+    if (entry.ok) bucket.success += 1;
+    else bucket.error += 1;
+    bucket.totalTokens += Number(entry.totalTokens || 0);
+    bucket.durationTotalMs += Number(entry.durationMs || 0);
+  }
+  return Array.from(buckets.values()).map((bucket) => ({
+    ...bucket,
+    avgDurationMs: bucket.total ? bucket.durationTotalMs / bucket.total : 0,
+  }));
+}
+
+function buildExternalAccessStats(input = {}) {
+  const limit = Math.min(500, Math.max(20, Number(input.limit || 160)));
+  const maxLines = Math.min(50000, Math.max(limit, Number(input.maxLines || 12000)));
+  const now = Number(input.now || Date.now());
+  const lanAddress = String(input.lanAddress || "");
+  const host = String(input.host || "127.0.0.1");
+  const port = Number(input.port || 0);
+  const settings = input.settings || {};
+  const container = input.container || {};
+  const endpoint = input.endpoint || {};
+  const events = Array.isArray(input.events) ? input.events : [];
+  const normalized = events
+    .map((entry) => normalizeAccessEvent(entry, lanAddress))
+    .filter((entry) => entry.atMs > 0)
+    .sort((a, b) => a.atMs - b.atMs);
+  const external = normalized.filter((entry) => entry.external);
+  const local = normalized.filter((entry) => !entry.external);
+  const managerLanBaseUrl = host === "127.0.0.1" ? null : `http://${lanAddress}:${port}`;
+  const claudeBasePath = String(input.claudeBasePath || "/claude").replace(/\/$/, "") || "/claude";
+  return {
+    ok: true,
+    updatedAt: new Date(now).toISOString(),
+    logPath: input.logPath || "",
+    maxLines,
+    privacy: input.privacy || "只记录访问元数据：时间、来源 IP、路径、状态、模型名、认证头类型、延迟和 token 计数；不记录提示词或响应正文。",
+    service: {
+      managerLanBaseUrl,
+      claudeBaseUrl: managerLanBaseUrl ? `${managerLanBaseUrl}${claudeBasePath}` : null,
+      openAiGatewayBaseUrl: managerLanBaseUrl ? `${managerLanBaseUrl}/serve/v1` : null,
+      openAiContainerBaseUrl: endpoint.lanUrl || null,
+      exposureMode: settings.exposureMode,
+      requireApiKey: Boolean(settings.requireApiKey),
+      rateLimitRpm: Number(settings.rateLimitRpm || 0),
+      maxConcurrentRequests: Number(settings.maxConcurrentRequests || 0),
+      running: Boolean(container.running),
+      containerStatus: container.status || "",
+      lanAddress,
+    },
+    totals: summarizeAccessEvents(normalized, now),
+    external: summarizeAccessEvents(external, now),
+    local: summarizeAccessEvents(local, now),
+    clients: groupAccessEvents(external, (entry) => entry.remoteAddress || "unknown", { limit: 40 }),
+    paths: groupAccessEvents(normalized, (entry) => entry.path || "-", { limit: 30 }),
+    models: groupAccessEvents(normalized.filter((entry) => entry.model || entry.resolvedModel), (entry) => entry.model || entry.resolvedModel || "-", { limit: 30 }),
+    resolvedModels: groupAccessEvents(normalized.filter((entry) => entry.resolvedModel), (entry) => entry.resolvedModel || "-", { limit: 20 }),
+    authSources: groupAccessEvents(normalized, (entry) => entry.authSource || "none", { limit: 20 }),
+    kinds: groupAccessEvents(normalized, (entry) => entry.kind || "-", { limit: 10 }),
+    statuses: groupAccessEvents(normalized, (entry) => String(entry.status || 0), { limit: 20 }),
+    timeline: buildAccessTimeline(external, now),
+    recent: normalized.slice(-limit).reverse(),
+  };
+}
+
+function createServiceGatewayAccessLogStore(options = {}) {
+  const file = options.file;
+  const parseJsonSafe = options.parseJsonSafe || parseJsonLine;
+
+  async function appendServiceGatewayAccessLog(entry) {
+    return appendAccessLog(file, entry);
+  }
+
+  async function readServiceGatewayAccessEvents(maxLines = 12000) {
+    return readAccessLogEvents(file, maxLines, parseJsonSafe);
+  }
+
+  async function collectExternalAccessStats(query = {}) {
+    const limit = Math.min(500, Math.max(20, Number(query.limit || 160)));
+    const maxLines = Math.min(50000, Math.max(limit, Number(query.maxLines || 12000)));
+    const lanAddress = options.getLanAddress ? options.getLanAddress() : "";
+    const [settings, container, events] = await Promise.all([
+      Promise.resolve()
+        .then(() => options.getServiceExposureSettings?.())
+        .catch(() => options.normalizeServiceExposureSettings?.({}) || {}),
+      Promise.resolve()
+        .then(() => options.getContainerStatus?.())
+        .catch(() => ({ running: false })),
+      readServiceGatewayAccessEvents(maxLines),
+    ]);
+    const endpoint = options.getContainerEndpoint ? options.getContainerEndpoint(container) : {};
+    return buildExternalAccessStats({
+      limit,
+      maxLines,
+      now: Date.now(),
+      logPath: file,
+      host: options.host,
+      port: options.port,
+      lanAddress,
+      settings,
+      container,
+      endpoint,
+      events,
+      claudeBasePath: options.claudeBasePath,
+      privacy: options.privacy,
+    });
+  }
+
+  return {
+    appendServiceGatewayAccessLog,
+    readServiceGatewayAccessEvents,
+    collectExternalAccessStats,
+    normalizeServiceGatewayAccessEvent: normalizeAccessEvent,
+    summarizeAccessEvents,
+    groupAccessEvents,
+    buildAccessTimeline,
+  };
+}
+
 module.exports = {
   normalizeAccessEvent,
+  normalizeServiceGatewayAccessEvent: normalizeAccessEvent,
   summarizeAccessEvents,
   summarizeAccessWindow,
   groupAccessEvents,
   percentile,
+  appendAccessLog,
+  readAccessLogEvents,
+  buildAccessTimeline,
+  buildExternalAccessStats,
+  createServiceGatewayAccessLogStore,
 };
