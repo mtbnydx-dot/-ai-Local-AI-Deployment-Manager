@@ -43,6 +43,51 @@ function openAiGatewayError(code, message) {
   };
 }
 
+const DEFAULT_OPENAI_BASE_URL_HINT_ROUTES = [
+  "/v1",
+  "/v1/",
+  "/v1/models",
+  "/v1/chat/completions",
+  "/v1/completions",
+  "/models",
+  "/chat/completions",
+  "/completions",
+];
+
+function buildGatewayBaseUrl(req, basePath = "/serve/v1") {
+  const host = String(req?.headers?.host || "127.0.0.1").trim() || "127.0.0.1";
+  const protoHeader = String(req?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = protoHeader || req?.protocol || "http";
+  const path = String(basePath || "/serve/v1").startsWith("/") ? String(basePath || "/serve/v1") : `/${basePath}`;
+  return `${protocol}://${host}${path.replace(/\/$/, "")}`;
+}
+
+function wrongOpenAiBaseUrlError(req, options = {}) {
+  const correctBaseUrl = options.correctBaseUrl || buildGatewayBaseUrl(req, options.openAiGatewayPath || "/serve/v1");
+  const requestedPath = String(req?.originalUrl || req?.url || "").split("?")[0] || "/";
+  return openAiGatewayError(
+    "wrong_base_url",
+    `Wrong OpenAI-compatible base URL. Use ${correctBaseUrl} as the Base URL; do not use ${requestedPath} directly on the manager.`,
+  );
+}
+
+function registerOpenAiBaseUrlHintRoutes(app, options = {}) {
+  const routes = options.routes || DEFAULT_OPENAI_BASE_URL_HINT_ROUTES;
+  const handler = (req, res) => {
+    const status = Number(options.status || 400);
+    return res.status(status).json(wrongOpenAiBaseUrlError(req, options));
+  };
+  for (const route of routes) {
+    if (typeof app.all === "function") app.all(route, handler);
+    else {
+      app.get?.(route, handler);
+      app.post?.(route, handler);
+      app.options?.(route, handler);
+    }
+  }
+  return routes.slice();
+}
+
 function claudeError(type, message) {
   return {
     type: "error",
@@ -489,6 +534,10 @@ module.exports = {
   serviceApiKeySource,
   extractServiceApiKey,
   openAiGatewayError,
+  DEFAULT_OPENAI_BASE_URL_HINT_ROUTES,
+  buildGatewayBaseUrl,
+  wrongOpenAiBaseUrlError,
+  registerOpenAiBaseUrlHintRoutes,
   claudeError,
   claudeGatewayError,
   upstreamErrorMessage,

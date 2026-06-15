@@ -384,6 +384,9 @@ const DEFAULT_SERVICE_EXPOSURE_COPY = {
   lanOk: ({ lanAddress }) => `Docker 已把容器端口转发到本机地址 ${lanAddress}。`,
   lanMissing: "需要在启动表单里把服务访问范围改为“局域网设备可访问”并重启模型。",
   apiKeyTitle: "API Key",
+  gatewayTitle: "服务网关",
+  gatewayEnabled: "管理器网关已开启，会按下方接口开关、鉴权、限流和并发策略处理请求。",
+  gatewayDisabled: "管理器网关已关闭，/serve/v1、/claude 和 /opencode 请求都会被拒绝；不需要重启模型即可重新开启。",
   gatewayApiKeyOk: "管理器网关会强制 Bearer Token；对外推荐使用 /serve/v1 或 /claude。",
   runtimeApiKeyOk: "运行中的推理服务已启用 Bearer Token。",
   apiKeyMissing: "计划对外提供服务，但尚未配置可执行的 API Key。",
@@ -446,6 +449,12 @@ function buildServiceExposurePayloadSnapshot(settings = {}, context = {}, option
   const claudeMessagesPath = normalizeGatewayPath(options.claudeMessagesPath || `${claudeBasePath}/v1/messages`);
   const openCodeBasePath = normalizeGatewayPath(options.openCodeBasePath || "");
   const defaultServicePort = options.defaultServicePort || endpoint.port || null;
+  const clientsSummary = buildServiceClientsSummary(clientsLedger);
+  const gatewayHasGlobalApiKey = hasGlobalServiceApiKey(settings);
+  const gatewayHasActiveClients = clientsSummary.active > 0;
+  const gatewayApiKeyRequired = Boolean(settings.requireApiKey);
+  const gatewayApiKeyEnforced = Boolean(settings.enabled !== false && gatewayApiKeyRequired && (gatewayHasGlobalApiKey || gatewayHasActiveClients));
+  const runtimeApiKeyRequired = Boolean(options.runtimeApiKeySupported && runtime.apiKeyRequired);
   const enrichedContext = {
     ...context,
     endpoint,
@@ -490,8 +499,13 @@ function buildServiceExposurePayloadSnapshot(settings = {}, context = {}, option
         openCodeBaseUrl: openCodeBasePath ? joinBaseAndPath(managerLocalBaseUrl, openCodeBasePath) : "",
         modelIds: (runtime.servedModels || []).map((model) => model.id).filter(Boolean),
         maxModelLen: runtime.servedModels?.[0]?.max_model_len || runtime.models?.[0]?.maxModelLen || null,
-        apiKeyRequired: Boolean(options.runtimeApiKeySupported && runtime.apiKeyRequired),
-        clients: buildServiceClientsSummary(clientsLedger),
+        apiKeyRequired: runtimeApiKeyRequired,
+        runtimeApiKeyRequired,
+        gatewayApiKeyRequired,
+        gatewayApiKeyEnforced,
+        gatewayHasGlobalApiKey,
+        gatewayHasActiveClients,
+        clients: clientsSummary,
       },
       docker,
     },
@@ -506,6 +520,7 @@ function buildServiceExposureChecks(settings = {}, context = {}, options = {}) {
   const lanAddress = context.endpoint?.lanHost || context.lanAddress || "127.0.0.1";
   const serviceRunning = Boolean(context.container?.running);
   const lanBound = Boolean(context.endpoint?.lanUrl);
+  const gatewayEnabled = settings.enabled !== false;
   const runtimeApiKeyActive = Boolean(context.runtime?.apiKeyRequired);
   const gatewayApiKeyActive = Boolean(settings.requireApiKey && (hasGlobalServiceApiKey(settings) || hasActiveServiceClients(context.clientsLedger || {})));
   const allowRuntimeApiKey = options.allowRuntimeApiKey === true;
@@ -524,6 +539,13 @@ function buildServiceExposureChecks(settings = {}, context = {}, options = {}) {
     serviceExposureCopy(copy, "dockerTitle"),
     serviceExposureCopy(copy, context.docker?.ok ? "dockerOk" : "dockerFail"),
   ));
+  checks.push(serviceCheck(
+    gatewayEnabled ? "ok" : "warn",
+    serviceExposureCopy(copy, "gatewayTitle"),
+    serviceExposureCopy(copy, gatewayEnabled ? "gatewayEnabled" : "gatewayDisabled"),
+  ));
+
+  if (!gatewayEnabled) return checks;
 
   if (mode === "local") {
     checks.push(serviceCheck(

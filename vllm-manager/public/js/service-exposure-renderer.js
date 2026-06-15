@@ -8,7 +8,6 @@
       fmtTokens,
       defaultServicePort,
       includeOpenCode = false,
-      apiKeySummary = (service) => (service.apiKeyRequired ? "运行中已启用" : "运行中未启用"),
     } = deps;
 
     function renderServiceExposure() {
@@ -17,7 +16,14 @@
       const settings = payload.settings || {};
       fillExposureForm(settings);
       const keyState = $("#exposureApiKeyState");
-      if (keyState) keyState.textContent = settings.hasApiKey ? `已保存：${settings.apiKeyPreview}` : "未保存密钥";
+      const activeClients = Number(payload.actual?.service?.clients?.active || 0);
+      if (keyState) {
+        keyState.textContent = settings.hasApiKey
+          ? `全局 Key 已保存：${settings.apiKeyPreview}`
+          : activeClients
+            ? `未保存全局 Key；已有 ${activeClients} 个客户端 Key 可用`
+            : "未保存全局 Key";
+      }
       renderServiceExposureEndpoints(payload);
       renderServiceExposureChecks(payload);
     }
@@ -82,9 +88,25 @@
           <span>模型：${escapeHtml((service.modelIds || []).join(", ") || "-")}</span>
           <span>上下文：${service.maxModelLen ? fmtTokens(service.maxModelLen) : "-"}</span>
           <span>客户端 Key：${fmtTokens(service.clients?.active || 0)} / ${fmtTokens(service.clients?.total || 0)}</span>
-          <span>API Key：${escapeHtml(apiKeySummary(service))}</span>
+          <span>网关鉴权：${escapeHtml(gatewayAuthSummary(service, settings))}</span>
+          <span>容器鉴权：${escapeHtml(runtimeAuthSummary(service))}</span>
         </div>
       `;
+    }
+
+    function gatewayAuthSummary(service, settings) {
+      if (!settings.requireApiKey) return "未强制";
+      if (service.gatewayApiKeyEnforced) {
+        const parts = [];
+        if (service.gatewayHasGlobalApiKey) parts.push("全局 Key");
+        if (Number(service.clients?.active || 0)) parts.push(`${service.clients.active} 个客户端 Key`);
+        return `已强制（${parts.join(" + ") || "已配置"}）`;
+      }
+      return "已要求但未配置 Key";
+    }
+
+    function runtimeAuthSummary(service) {
+      return service.runtimeApiKeyRequired || service.apiKeyRequired ? "容器已启用" : "容器未启用";
     }
 
     function exposureLiveControls(settings, showOpenCode) {

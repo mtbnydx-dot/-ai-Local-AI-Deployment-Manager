@@ -72,7 +72,7 @@
               <label><span>每分钟请求上限</span><input id="exposureRateLimitRpm" name="rateLimitRpm" type="number" min="1" max="5000" value="120" /></label>
               <label><span>最大并发请求</span><input id="exposureMaxConcurrentRequests" name="maxConcurrentRequests" type="number" min="1" max="256" value="4" /></label>
               <label><span>请求超时秒数</span><input id="exposureRequestTimeoutSeconds" name="requestTimeoutSeconds" type="number" min="10" max="7200" value="600" /></label>
-              <label class="wide-field"><span>允许来源 / 客户端备注</span><textarea id="exposureAllowedOrigins" name="allowedOrigins" rows="3" placeholder="每行一个域名、IP 或客户端名称"></textarea></label>
+              <label class="wide-field"><span>浏览器允许来源（CORS，可选）</span><textarea id="exposureAllowedOrigins" name="allowedOrigins" rows="3" placeholder="留空=允许任意 Origin；每行一个 http://192.168.1.20:3000 或 https://example.com"></textarea></label>
               <div class="exposure-toggle-grid wide-field">
                 <label class="check-row"><input id="exposureOpenAI" name="exposeOpenAI" type="checkbox" /><span>OpenAI 兼容接口</span></label>
                 <label class="check-row"><input id="exposureClaude" name="exposeClaude" type="checkbox" /><span>Claude 兼容桥</span></label>

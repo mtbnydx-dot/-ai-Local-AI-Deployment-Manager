@@ -38,6 +38,23 @@ test("gateway helpers extract common auth fields", () => {
   }), "Qwen/Qwen3-27B");
 });
 
+test("gateway helpers explain wrong OpenAI-compatible base URLs", () => {
+  const error = core.wrongOpenAiBaseUrlError({
+    headers: { host: "192.168.31.209:5178" },
+    originalUrl: "/v1/chat/completions",
+  });
+  assert.equal(error.error.code, "wrong_base_url");
+  assert.match(error.error.message, /192\.168\.31\.209:5178\/serve\/v1/);
+  assert.match(error.error.message, /do not use \/v1\/chat\/completions/);
+
+  const routes = [];
+  core.registerOpenAiBaseUrlHintRoutes({
+    all: (route, handler) => routes.push({ route, handler }),
+  });
+  assert.ok(routes.some((item) => item.route === "/v1/models"));
+  assert.ok(routes.some((item) => item.route === "/v1/chat/completions"));
+});
+
 test("gateway helpers format Claude upstream errors and expected disconnects", async () => {
   assert.deepEqual(core.claudeError("api_error", "failed"), {
     type: "error",
@@ -643,6 +660,25 @@ test("service exposure checks warn for llama direct LAN ports and summarize clie
   assert.equal(checks.find((item) => item.title === "网关限流")?.status, "warn");
 });
 
+test("service exposure checks stop API key failures when gateway is disabled", () => {
+  const checks = core.buildServiceExposureChecks({
+    enabled: false,
+    exposureMode: "lan",
+    requireApiKey: true,
+    rateLimitRpm: 120,
+    maxConcurrentRequests: 4,
+  }, {
+    docker: { ok: true },
+    container: { running: true },
+    endpoint: { lanUrl: "http://192.168.1.2:8080", lanHost: "192.168.1.2" },
+    clientsLedger: { clients: [] },
+  });
+
+  assert.equal(checks.find((item) => item.title === "服务网关")?.status, "warn");
+  assert.equal(checks.some((item) => item.title === "API Key"), false);
+  assert.equal(checks.some((item) => item.title === "网关限流"), false);
+});
+
 test("service exposure payload snapshot builds shared manager and service addresses", () => {
   const payload = core.buildServiceExposurePayloadSnapshot({
     exposureMode: "lan",
@@ -694,6 +730,11 @@ test("service exposure payload snapshot builds shared manager and service addres
   assert.equal(payload.actual.service.openCodeBaseUrl, "http://127.0.0.1:5177/opencode/v1");
   assert.equal(payload.actual.service.maxModelLen, 65536);
   assert.equal(payload.actual.service.apiKeyRequired, true);
+  assert.equal(payload.actual.service.runtimeApiKeyRequired, true);
+  assert.equal(payload.actual.service.gatewayApiKeyRequired, true);
+  assert.equal(payload.actual.service.gatewayApiKeyEnforced, true);
+  assert.equal(payload.actual.service.gatewayHasGlobalApiKey, true);
+  assert.equal(payload.actual.service.gatewayHasActiveClients, true);
   assert.equal(payload.actual.service.clients.total, 1);
   assert.equal(payload.checks.find((item) => item.title === "API Key")?.status, "ok");
 });

@@ -154,7 +154,6 @@ const serviceExposureRenderer = window.LocalAiServiceExposureRenderer.create({
   escapeAttr,
   fmtTokens,
   defaultServicePort: 8080,
-  apiKeySummary: () => "建议由反向代理强制",
 });
 const uiArchitecture = window.LocalAiUiArchitecture.create({ $, escapeHtml });
 const runtimeStatusRenderer = window.LocalAiRuntimeStatusRenderer.create({

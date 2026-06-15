@@ -5,7 +5,7 @@ set "ROOT=%~dp0"
 if not defined NODE_EXE set "NODE_EXE=node"
 set "URL=http://127.0.0.1:5178"
 set "PORT=5178"
-set "LLAMA_MANAGER_HOST=127.0.0.1"
+set "LLAMA_MANAGER_HOST=0.0.0.0"
 set "LLAMA_MANAGER_PORT=5178"
 
 if not exist "%ROOT%logs" mkdir "%ROOT%logs"

@@ -453,6 +453,7 @@ const {
   buildManagerHealth,
 } = managerLifecycle;
 
+core.registerOpenAiBaseUrlHintRoutes(app, { openAiGatewayPath: "/serve/v1" });
 app.use(managerSecurityGuard);
 app.use(express.json({ limit: "32mb" }));
 app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude"], serviceGatewayMiddleware);

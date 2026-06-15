@@ -155,7 +155,6 @@ const serviceExposureRenderer = window.LocalAiServiceExposureRenderer.create({
   fmtTokens,
   defaultServicePort: 8000,
   includeOpenCode: true,
-  apiKeySummary: (service) => (service.apiKeyRequired ? "运行中已启用" : "运行中未启用"),
 });
 const uiArchitecture = window.LocalAiUiArchitecture.create({ $, escapeHtml });
 const runtimeStatusRenderer = window.LocalAiRuntimeStatusRenderer.create({
