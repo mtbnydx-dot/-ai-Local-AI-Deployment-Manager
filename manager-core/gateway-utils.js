@@ -325,7 +325,7 @@ function getServiceGatewayKind(req, supportedKinds = ["openai", "claude"]) {
 }
 
 function isServiceKindEnabled(settings = {}, kind) {
-  if (!settings.enabled) return true;
+  if (settings.enabled === false) return false;
   if (kind === "openai") return settings.exposeOpenAI !== false;
   if (kind === "claude") return settings.exposeClaude !== false;
   if (kind === "opencode") return settings.exposeOpenCode !== false;

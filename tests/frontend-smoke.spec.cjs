@@ -110,9 +110,13 @@ async function smokePage(page, baseUrl, label) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page.locator("[data-view-panel='service']").first()).toBeVisible();
-  for (const view of ["download", "external-access", "stats"]) {
+  for (const view of ["download", "exposure", "external-access", "stats"]) {
     await page.locator(`[data-view='${view}']`).click();
     await expect(page.locator(`[data-view-panel='${view}']`).first()).toBeVisible();
+    if (view === "exposure") {
+      await expect(page.locator("#serviceExposureEndpoints")).toContainText("网关即时开关");
+      await expect(page.locator("#serviceExposureEndpoints [data-exposure-field='enabled']").first()).toBeVisible();
+    }
   }
   await page.waitForTimeout(500);
   expect(failures, `${label} frontend errors`).toEqual([]);

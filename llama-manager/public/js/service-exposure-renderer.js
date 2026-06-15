@@ -61,12 +61,16 @@
       const openAiLocalGateway = service.openAiGatewayLocalBaseUrl || "-";
       const claudeClientBase = service.claudeLanBaseUrl || service.claudePublicBaseUrl || service.claudeLocalBaseUrl || "-";
       const claudeMessagesUrl = service.claudeLanMessagesUrl || service.claudeLocalMessagesUrl || "-";
+      const gatewayEnabled = settings.enabled !== false;
+      const openAiEnabled = gatewayEnabled && settings.exposeOpenAI !== false;
+      const claudeEnabled = gatewayEnabled && settings.exposeClaude !== false;
       root.innerHTML = `
-        ${exposureEndpointCard("Chatbox / OpenWebUI / OpenAI SDK", openAiClientBase, "Provider 选 OpenAI Compatible；Base URL 必须以 /serve/v1 结尾，API Key 填客户端 Key / Bearer Token，不要填 /claude。", "recommended")}
+        ${exposureLiveControls(settings, includeOpenCode)}
+        ${exposureEndpointCard("Chatbox / OpenWebUI / OpenAI SDK", openAiClientBase, `${openAiEnabled ? "当前已开放。" : "当前已关闭。"}Provider 选 OpenAI Compatible；Base URL 必须以 /serve/v1 结尾，API Key 填客户端 Key / Bearer Token，不要填 /claude。`, openAiEnabled ? "recommended" : "disabled", endpointToggleAction(gatewayEnabled ? "exposeOpenAI" : "enabled", true, openAiEnabled ? "关闭 OpenAI" : gatewayEnabled ? "开启 OpenAI" : "开启总开关", openAiEnabled))}
         ${openAiLocalGateway !== openAiClientBase ? exposureEndpointCard("OpenAI 本机网关", openAiLocalGateway, "本机客户端使用；同样走鉴权、限流、并发、审计。") : ""}
         ${publicOpenAi ? exposureEndpointCard("OpenAI 网关公网", publicOpenAi, "反向代理后提供给外部客户端") : ""}
-        ${settings.exposeClaude !== false ? exposureEndpointCard("Claude / Cowork / CC Switch", claudeClientBase, "Provider 选 Anthropic / Claude；Base URL 填 /claude，认证字段用 ANTHROPIC_API_KEY 或 Bearer Token。", "recommended") : ""}
-        ${settings.exposeClaude !== false ? exposureEndpointCard("Claude messages 完整 URL", claudeMessagesUrl, "只有客户端明确要求完整 messages endpoint 时才填；一般不要手动追加 /v1/messages。") : ""}
+        ${exposureEndpointCard("Claude / Cowork / CC Switch", claudeClientBase, `${claudeEnabled ? "当前已开放。" : "当前已关闭。"}Provider 选 Anthropic / Claude；Base URL 填 /claude，认证字段用 ANTHROPIC_API_KEY 或 Bearer Token。`, claudeEnabled ? "recommended" : "disabled", endpointToggleAction(gatewayEnabled ? "exposeClaude" : "enabled", true, claudeEnabled ? "关闭 Claude" : gatewayEnabled ? "开启 Claude" : "开启总开关", claudeEnabled))}
+        ${exposureEndpointCard("Claude messages 完整 URL", claudeMessagesUrl, "只有客户端明确要求完整 messages endpoint 时才填；一般不要手动追加 /v1/messages。", claudeEnabled ? "" : "disabled")}
         ${exposureEndpointCard("仅调试：OpenAI 容器直连", service.openAiLocalBaseUrl || "-", "本机排错用；不经过管理器的客户端 Key、限流、并发和审计，不建议给 Chatbox/OpenWebUI。", "debug")}
         ${service.openAiLanBaseUrl ? exposureEndpointCard("仅调试：容器局域网直连", service.openAiLanBaseUrl, `Docker 已转发到 ${service.lanHost || "本机局域网 IP"}；外部服务优先使用 /serve/v1 网关。`, "debug") : ""}
         ${plannedOpenAiLan ? exposureEndpointCard("容器局域网直连（下次启动）", plannedOpenAiLan, "保存并按局域网模式启动/重启模型后才会生效；外部客户端仍优先使用 /serve/v1。", "debug") : ""}
@@ -82,10 +86,63 @@
       `;
     }
 
-    function exposureEndpointCard(title, value, detail, kind = "") {
+    function exposureLiveControls(settings, showOpenCode) {
+      const gatewayEnabled = settings.enabled !== false;
+      const mode = settings.exposureMode || "local";
+      const buttons = [
+        exposureControlButton("总开关", "enabled", !gatewayEnabled, gatewayEnabled ? "已开启" : "已关闭", gatewayEnabled),
+        exposureControlButton("OpenAI", "exposeOpenAI", settings.exposeOpenAI === false, settings.exposeOpenAI !== false ? "已开放" : "已关闭", settings.exposeOpenAI !== false),
+        exposureControlButton("Claude", "exposeClaude", settings.exposeClaude === false, settings.exposeClaude !== false ? "已开放" : "已关闭", settings.exposeClaude !== false),
+        showOpenCode ? exposureControlButton("OpenCode", "exposeOpenCode", settings.exposeOpenCode === false, settings.exposeOpenCode !== false ? "已开放" : "已关闭", settings.exposeOpenCode !== false) : "",
+        exposureControlButton("API Key", "requireApiKey", !settings.requireApiKey, settings.requireApiKey ? "必填" : "未强制", Boolean(settings.requireApiKey)),
+        exposureModeButton("本机", "local", mode === "local"),
+        exposureModeButton("局域网", "lan", mode === "lan"),
+      ].filter(Boolean).join("");
+      return `
+        <section class="exposure-live-controls">
+          <div>
+            <strong>网关即时开关</strong>
+            <span>这里会直接修改管理器网关策略，不会重启模型；Docker 容器端口绑定仍在下次启动时应用。</span>
+          </div>
+          <div class="exposure-control-buttons">${buttons}</div>
+        </section>
+      `;
+    }
+
+    function exposureControlButton(label, field, nextValue, stateText, active) {
+      return `
+        <button class="exposure-state-button ${active ? "active" : "off"}" type="button" data-exposure-action="set" data-exposure-field="${escapeAttr(field)}" data-exposure-value="${escapeAttr(String(Boolean(nextValue)))}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(stateText)}</strong>
+        </button>
+      `;
+    }
+
+    function exposureModeButton(label, value, active) {
+      return `
+        <button class="exposure-state-button ${active ? "active" : "off"}" type="button" data-exposure-action="set" data-exposure-field="exposureMode" data-exposure-value="${escapeAttr(value)}">
+          <span>模式</span>
+          <strong>${escapeHtml(label)}</strong>
+        </button>
+      `;
+    }
+
+    function endpointToggleAction(field, enableValue, enableLabel, currentlyEnabled) {
+      const nextValue = currentlyEnabled ? false : enableValue;
+      return `
+        <button class="ghost-mini-button exposure-card-action" type="button" data-exposure-action="set" data-exposure-field="${escapeAttr(field)}" data-exposure-value="${escapeAttr(String(nextValue))}">
+          ${escapeHtml(enableLabel)}
+        </button>
+      `;
+    }
+
+    function exposureEndpointCard(title, value, detail, kind = "", actionHtml = "") {
       return `
         <article class="exposure-endpoint-card ${escapeAttr(kind)}">
-          <span>${escapeHtml(title)}</span>
+          <div class="exposure-endpoint-head">
+            <span>${escapeHtml(title)}</span>
+            ${actionHtml || ""}
+          </div>
           <code>${escapeHtml(value)}</code>
           <small>${escapeHtml(detail || "")}</small>
         </article>

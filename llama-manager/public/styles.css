@@ -2453,6 +2453,65 @@ textarea:focus {
   gap: 10px;
 }
 
+.exposure-live-controls {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
+}
+
+.exposure-live-controls strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.exposure-live-controls span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.exposure-control-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.exposure-state-button {
+  min-height: 54px;
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.exposure-state-button span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.exposure-state-button strong {
+  font-size: 13px;
+}
+
+.exposure-state-button.active {
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
+  background: color-mix(in srgb, var(--teal) 10%, var(--surface));
+}
+
+.exposure-state-button.off {
+  border-color: color-mix(in srgb, var(--amber) 32%, var(--line));
+  background: color-mix(in srgb, var(--amber) 7%, var(--surface));
+}
+
 .exposure-endpoint-card {
   display: grid;
   gap: 5px;
@@ -2471,9 +2530,26 @@ textarea:focus {
   opacity: 0.82;
 }
 
-.exposure-endpoint-card span {
+.exposure-endpoint-card.disabled {
+  opacity: 0.76;
+  border-style: dashed;
+}
+
+.exposure-endpoint-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.exposure-endpoint-card span,
+.exposure-endpoint-head span {
   font-size: 12px;
   color: var(--muted);
+}
+
+.exposure-card-action {
+  white-space: nowrap;
 }
 
 .exposure-endpoint-card code {

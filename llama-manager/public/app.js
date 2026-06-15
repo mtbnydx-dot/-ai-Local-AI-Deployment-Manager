@@ -128,8 +128,8 @@ const externalAccessRenderer = window.LocalAiExternalAccess.create({
   shareBar,
   renderIcons,
   endpointDetails: {
-    claude: "给 Claude Desktop / CC Switch 使用，客户端再拼 /messages 或 /v1/messages。",
-    openai: "给 OpenWebUI、OpenCode 或 OpenAI SDK 使用，路径为 /chat/completions。",
+    claude: "给 Claude Desktop / CC Switch 使用，Base URL 填 /claude。",
+    openai: "给 Chatbox、OpenWebUI 或 OpenAI SDK 使用，Base URL 填 /serve/v1。",
   },
 });
 const jobRenderer = window.LocalAiJobRenderer.create({
@@ -488,6 +488,7 @@ function bindEvents() {
   window.addEventListener("hashchange", () => showView(location.hash.replace("#", "") || "service", false));
   $("#refreshBtn").addEventListener("click", () => Promise.all([refreshStatus(), refreshModels(), refreshLogs()]));
   $("#serviceExposureForm")?.addEventListener("submit", saveServiceExposure);
+  $("#serviceExposureEndpoints")?.addEventListener("click", handleServiceExposureEndpointAction);
   $("#exposureMode")?.addEventListener("change", () => {
     renderServiceExposureEndpoints(state.serviceExposure);
     renderServiceExposureChecks(state.serviceExposure);
@@ -2461,11 +2462,32 @@ function renderServiceExposureChecks(payload) {
   serviceExposureRenderer.renderServiceExposureChecks(payload);
 }
 
+function buildServiceExposurePayload(overrides = {}) {
+  const settings = state.serviceExposure?.settings || {};
+  const payload = {
+    enabled: Boolean(settings.enabled),
+    exposureMode: settings.exposureMode || "local",
+    requireApiKey: Boolean(settings.requireApiKey),
+    publicBaseUrl: settings.publicBaseUrl || "",
+    allowedOrigins: (settings.allowedOrigins || []).join("\n"),
+    rateLimitRpm: Number(settings.rateLimitRpm || 120),
+    maxConcurrentRequests: Number(settings.maxConcurrentRequests || 4),
+    requestTimeoutSeconds: Number(settings.requestTimeoutSeconds || 600),
+    exposeOpenAI: settings.exposeOpenAI !== false,
+    exposeClaude: settings.exposeClaude !== false,
+    exposeMetrics: Boolean(settings.exposeMetrics),
+    allowManagerRemote: Boolean(settings.allowManagerRemote),
+    notes: settings.notes || "",
+  };
+  if ("exposeOpenCode" in settings) payload.exposeOpenCode = settings.exposeOpenCode !== false;
+  return { ...payload, ...overrides };
+}
+
 async function saveServiceExposure(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const fields = form.elements;
-  const payload = {
+  const payload = buildServiceExposurePayload({
     enabled: fields.enabled.checked,
     exposureMode: fields.exposureMode.value,
     requireApiKey: fields.requireApiKey.checked,
@@ -2481,14 +2503,43 @@ async function saveServiceExposure(event) {
     exposeMetrics: fields.exposeMetrics.checked,
     allowManagerRemote: fields.allowManagerRemote.checked,
     notes: fields.notes.value,
-  };
+  });
   const result = await api("/api/service-exposure", {
     method: "POST",
     body: JSON.stringify(payload),
   });
   state.serviceExposure = result;
   renderServiceExposure();
-  notify("服务化设置已保存", "需要改变实际开放范围时，请应用到启动表单并重启模型。", "success");
+  notify("服务化设置已保存", "网关开关、鉴权、限流和客户端 Key 已即时生效；只有容器端口绑定需下次启动。", "success");
+}
+
+async function handleServiceExposureEndpointAction(event) {
+  const button = event.target.closest("[data-exposure-action='set']");
+  if (!button) return;
+  event.preventDefault();
+  const field = button.dataset.exposureField || "";
+  if (!["enabled", "exposeOpenAI", "exposeClaude", "exposeOpenCode", "requireApiKey", "exposureMode"].includes(field)) return;
+  const rawValue = button.dataset.exposureValue || "";
+  const value = field === "exposureMode" ? rawValue : rawValue === "true";
+  const restoreButton = setButtonBusy(button, "保存中...");
+  try {
+    const result = await api("/api/service-exposure", {
+      method: "POST",
+      body: JSON.stringify(buildServiceExposurePayload({ [field]: value })),
+    });
+    state.serviceExposure = result;
+    renderServiceExposure();
+    await Promise.all([
+      refreshConnectionGuide().catch(() => {}),
+      refreshExternalAccess().catch(() => {}),
+    ]);
+    const labels = { enabled: "总开关", exposeOpenAI: "OpenAI", exposeClaude: "Claude", exposeOpenCode: "OpenCode", requireApiKey: "API Key", exposureMode: "访问模式" };
+    notify("对外服务已更新", `${labels[field] || field} 已即时生效，不需要重启模型。`, "success");
+  } catch (error) {
+    reportActionError("更新对外服务失败", error);
+  } finally {
+    restoreButton();
+  }
 }
 
 function applyExposureToLaunchForm() {

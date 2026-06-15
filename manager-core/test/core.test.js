@@ -845,6 +845,52 @@ test("service gateway middleware enforces auth, CORS, limits, and emits metadata
   assert.equal(logs.length, 1);
   assert.equal(logs[0].resolvedModel, "actual");
   assert.equal(logs[0].totalTokens, 13);
+
+  let liveSettings = {
+    enabled: false,
+    exposureMode: "lan",
+    requireApiKey: false,
+    exposeOpenAI: true,
+    exposeClaude: true,
+    rateLimitRpm: 120,
+    maxConcurrentRequests: 4,
+    requestTimeoutSeconds: 600,
+  };
+  const toggleMiddleware = core.createServiceGatewayMiddleware({
+    gatewayName: "toggle-manager",
+    supportedKinds: ["openai", "claude"],
+    getServiceExposureSettings: async () => liveSettings,
+    getServiceClientsLedger: async () => ({ clients: [] }),
+    resolveServiceClientForApiKey: async () => null,
+    rateBuckets: new Map(),
+    concurrencyBuckets: new Map(),
+    appendAccessLog: async () => {},
+  });
+
+  response = makeResponse();
+  nextCalled = 0;
+  await toggleMiddleware({
+    method: "POST",
+    originalUrl: "/serve/v1/chat/completions",
+    headers: {},
+    socket: { remoteAddress: "127.0.0.1" },
+    body: {},
+  }, response.res, () => { nextCalled += 1; });
+  assert.equal(nextCalled, 0);
+  assert.equal(response.state.statusCode, 404);
+  assert.equal(response.state.json.error.code, "endpoint_disabled");
+
+  liveSettings = { ...liveSettings, enabled: true, exposeClaude: false };
+  response = makeResponse();
+  await toggleMiddleware({
+    method: "POST",
+    originalUrl: "/claude/v1/messages",
+    headers: {},
+    socket: { remoteAddress: "127.0.0.1" },
+    body: {},
+  }, response.res, () => { nextCalled += 1; });
+  assert.equal(response.state.statusCode, 404);
+  assert.equal(response.state.json.error.code, "endpoint_disabled");
 });
 
 test("OpenAI gateway handlers proxy models and non-stream completions with usage metadata", async () => {
