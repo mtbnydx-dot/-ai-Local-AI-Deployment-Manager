@@ -1979,11 +1979,13 @@ test("model route registrar wires shared and optional model download endpoints",
     return { res, state };
   }
 
+  let startDownloadImpl = async (body) => ({ job: { id: "job-1", model: body.model } });
+
   core.registerModelRoutes(app, {
     listModels: async () => ({ local: ["local"], cached: ["cached"] }),
     deleteLocalModel: async (body) => ({ deleted: body.name }),
     searchRemoteModels: async (query) => ({ source: query.source || "huggingface", models: [] }),
-    startDownload: async (body) => ({ job: { id: "job-1", model: body.model } }),
+    startDownload: async (body) => startDownloadImpl(body),
     estimateDownload: async (query) => ({ model: query.model, bytes: 123 }),
     getModelConfig: async (query) => ({ model: query.model, hiddenSize: 4096 }),
     getModelReadme: async (query) => ({ model: query.model, readme: "# Model" }),
@@ -2006,6 +2008,16 @@ test("model route registrar wires shared and optional model download endpoints",
   response = makeResponse();
   await routes.get("POST /api/download")({ body: { model: "owner/model" } }, response.res);
   assert.deepEqual(response.state.json[0], { job: { id: "job-1", model: "owner/model" } });
+
+  startDownloadImpl = async () => {
+    const error = new Error("bad source");
+    error.status = 400;
+    throw error;
+  };
+  response = makeResponse();
+  await routes.get("POST /api/download")({ body: { model: "owner/model" } }, response.res);
+  assert.equal(response.state.statusCode, 400);
+  assert.deepEqual(response.state.json[0], { error: "bad source" });
 
   response = makeResponse();
   await routes.get("GET /api/download/estimate")({ query: { model: "owner/model" } }, response.res);
@@ -2811,6 +2823,20 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
     { rfilename: "tokenizer.json" },
   ];
   assert.deepEqual(core.filterDownloadSiblings(siblings, "Q8_0"), [{ rfilename: "model-Q8_0.gguf" }]);
+  assert.deepEqual(core.selectDownloadSiblings(siblings, "Q8_0"), {
+    siblings: [{ rfilename: "model-Q8_0.gguf" }],
+    includePatterns: ["*Q8_0*.gguf"],
+    filtered: true,
+    matched: 1,
+    total: 3,
+  });
+  assert.deepEqual(core.selectDownloadSiblings(siblings, "Q6_K"), {
+    siblings: [],
+    includePatterns: ["*Q6_K*.gguf"],
+    filtered: true,
+    matched: 0,
+    total: 3,
+  });
 
   const builder = core.createDownloadCommandBuilder({
     hfCli: "hf",
@@ -2871,6 +2897,8 @@ test("remote model helpers share search, size, and quant filtering semantics", (
   assert.equal(core.remoteFamilyKey(model), "example-27b");
   assert.equal(core.matchesRemoteSizeFilter(model, "large"), true);
   assert.equal(core.matchesRemoteSizeFilter(model, "medium"), false);
+  assert.equal(core.matchesRemoteSizeFilter({ id: "maker/Unknown-GGUF" }, "unknown"), true);
+  assert.equal(core.matchesRemoteSizeFilter({ id: "maker/Unknown-GGUF" }, "small"), false);
   assert.equal(core.matchesRemoteQuantFilter(model, "GGUF"), true);
   assert.equal(core.matchesRemoteQuantFilter(model, "4bit"), true);
   assert.equal(core.matchesRemoteQuantFilter({ quantFormats: ["NVFP4"] }, "INT4"), true);

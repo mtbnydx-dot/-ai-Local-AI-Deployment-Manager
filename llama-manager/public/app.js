@@ -31,6 +31,7 @@ const state = {
   tensorSplitTouched: false,
   modelPickerOpen: false,
   modelPickerSource: "all",
+  expandedJobLogs: new Set(),
   runnableOnly: localStorage.getItem("llamaRunnableOnly") === "1",
   uiPrefs: {
     theme: localStorage.getItem("llamaThemeMode") || "auto",
@@ -40,6 +41,9 @@ const state = {
 
 let memoryEstimateTimer = null;
 let memoryEstimateSeq = 0;
+let downloadEstimateTimer = null;
+let downloadEstimateSeq = 0;
+let remoteSearchSeq = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const { fmtBytes, fmtNumber, fmtTokens, fmtPct, fmtRate, fmtMoney, escapeHtml, escapeAttr } = window.LlamaFormat;
@@ -139,6 +143,9 @@ const jobRenderer = window.LocalAiJobRenderer.create({
   renderServeProgress,
   renderBenchmarkProgress,
   renderAutomationJobProgress,
+  showMeta: true,
+  showLogActions: true,
+  showVerifyActions: true,
 });
 const serviceExposureRenderer = window.LocalAiServiceExposureRenderer.create({
   $,
@@ -431,6 +438,7 @@ async function init() {
     refreshExternalAccess().catch(() => {});
     refreshAuditStatus().catch(() => {});
     refreshProfiles().catch(() => renderServiceProfileOptions([]));
+    loadDownloadSettings().catch(() => {});
     setInterval(refreshStatus, 5000);
     setInterval(refreshJobs, 3000);
     setInterval(() => {
@@ -492,7 +500,8 @@ function bindEvents() {
   $("#reloadModelsBtn").addEventListener("click", refreshModels);
   $("#reloadRemoteModelsBtn").addEventListener("click", refreshRemoteModels);
   $("#remoteSearchBtn").addEventListener("click", refreshRemoteModels);
-  $("#remoteCategory").addEventListener("change", refreshRemoteModels);
+  $("#remoteSort")?.addEventListener("change", refreshRemoteModels);
+  $("#remoteFeature")?.addEventListener("change", refreshRemoteModels);
   $("#remoteLimit")?.addEventListener("change", refreshRemoteModels);
   $("#remoteFreshness")?.addEventListener("change", refreshRemoteModels);
   $("#remoteQuantFilter")?.addEventListener("change", refreshRemoteModels);
@@ -546,6 +555,11 @@ function bindEvents() {
   $("#jobList").addEventListener("click", handleDownloadJobAction);
   $("#resolveModelLinkBtn").addEventListener("click", resolveModelLink);
   $("#downloadForm").addEventListener("submit", downloadModel);
+  $("#downloadQuantFinder")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-quant-search]");
+    if (!button) return;
+    openQuantSearch(button.dataset.quantSearch, button.dataset.quantFilter);
+  });
   $("#startForm").addEventListener("submit", startService);
   $("#serviceJobList").addEventListener("click", handleServiceJobAction);
   $("#testForm").addEventListener("submit", testService);
@@ -585,6 +599,20 @@ function bindEvents() {
   ["#downloadDeveloper", "#downloadVersion", "#downloadSpec", "#downloadPrecision", "#downloadSource"].forEach((selector) => {
     $(selector).addEventListener("change", updateDownloadPreset);
   });
+  ["#downloadModel", "#downloadPrecision", "#downloadSource"].forEach((selector) => {
+    $(selector)?.addEventListener("change", scheduleDownloadEstimate);
+  });
+  $("#downloadModel")?.addEventListener("input", scheduleDownloadEstimate);
+  $("#downloadModel")?.addEventListener("input", syncDownloadOutputNameFromModel);
+  $("#downloadOutputName")?.addEventListener("input", (event) => {
+    if (event.currentTarget.value.trim()) {
+      event.currentTarget.dataset.userEdited = "true";
+    } else {
+      delete event.currentTarget.dataset.userEdited;
+      syncDownloadOutputNameFromModel();
+    }
+  });
+  $("#downloadQueueMode")?.addEventListener("change", saveDownloadQueueMode);
   $("#multiGpuMode").addEventListener("change", () => {
     updateParallelDefaults();
     renderMultiGpuModeGuide();
@@ -752,26 +780,34 @@ function syncPresetSelects(changedField) {
 }
 
 function updateDownloadPreset(event) {
-  if (event?.target?.id === "downloadDeveloper") syncPresetSelects("developer");
-  if (event?.target?.id === "downloadVersion") syncPresetSelects("version");
+  const changedField = event?.target?.id || "";
+  if (changedField === "downloadDeveloper") syncPresetSelects("developer");
+  if (changedField === "downloadVersion") syncPresetSelects("version");
 
   const preset = getSelectedPreset();
+  const presetSelectionChanged = !event || ["downloadDeveloper", "downloadVersion", "downloadSpec"].includes(changedField);
+  if (presetSelectionChanged && preset?.precision && $("#downloadPrecision")) {
+    $("#downloadPrecision").value = preset.precision;
+  }
   const precision = getSelectedPrecision();
   const source = $("#downloadSource").value || "huggingface";
-  const repo = preset ? buildPresetRepo(preset, precision) : "";
-  const outputName = repo ? deriveName(repo) : "";
-  if (repo) $("#downloadModel").value = repo;
-  if (outputName) $("#downloadOutputName").value = outputName;
+  const repo = preset ? preset.repo : "";
+  if (presetSelectionChanged && repo) {
+    $("#downloadModel").value = repo;
+    setDownloadOutputName(deriveName(repo));
+  }
 
   const sourceHint = DOWNLOAD_SOURCES[source]?.hint || "";
-  const knownPrecision = PRECISION_PRESETS.some((item) => item.value === precision.value);
+  const wantsQuant = precision.value !== "base" && Boolean(precision.quantFilter);
   const precisionHint = precision.value === "base"
-    ? "原始权重质量最好，显存占用也最高。"
-    : knownPrecision
-      ? `${precision.label} 会优先按常见仓库后缀生成 ID，下载前可以手动确认仓库名。`
+    ? "原始仓库可能不是 GGUF；llama.cpp 建议优先选择 GGUF/Q 格式。"
+    : wantsQuant
+      ? `${precision.label} 会作为 HF 文件过滤或在线搜索条件；不会把基础仓库自动转换成量化仓库。`
       : `当前模型解析出的精度：${precision.label || precision.value}。`;
   const selectionHint = preset?.note || "当前下拉项来自已选择的在线模型；仍可手动修改模型 ID 和保存名称。";
   $("#downloadPresetHint").textContent = [sourceHint, precisionHint, selectionHint].filter(Boolean).join(" ");
+  renderQuantFinder(preset, precision);
+  scheduleDownloadEstimate();
 }
 
 function getSelectedPreset() {
@@ -779,11 +815,6 @@ function getSelectedPreset() {
   const version = $("#downloadVersion").value;
   const spec = $("#downloadSpec").value;
   return MODEL_PRESETS.find((item) => item.developer === developer && item.version === version && item.spec === spec);
-}
-
-function buildPresetRepo(preset, precision) {
-  if (!preset) return "";
-  return precision.value === "base" ? preset.repo : `${preset.repo}${precision.suffix}`;
 }
 
 function unique(values) {
@@ -800,16 +831,69 @@ function getSelectedPrecision() {
   const value = $("#downloadPrecision").value;
   const known = PRECISION_PRESETS.find((item) => item.value === value);
   if (known) return known;
+  const normalized = normalizeDownloadQuantValue(value);
+  if (normalized === "BASE") {
+    return {
+      value: "base",
+      label: selectedOptionLabel($("#downloadPrecision")) || "原始 BF16/FP16",
+      quantFilter: "",
+      launchQuantization: "",
+    };
+  }
   return {
     value,
     label: selectedOptionLabel($("#downloadPrecision")) || value || "未标注",
-    suffix: "",
+    quantFilter: normalized.toLowerCase(),
     launchQuantization: "",
   };
 }
 
 function selectedOptionLabel(select) {
   return select.options[select.selectedIndex]?.textContent?.trim() || "";
+}
+
+function setDownloadOutputName(name) {
+  const input = $("#downloadOutputName");
+  if (!input) return;
+  input.value = name || "";
+  delete input.dataset.userEdited;
+}
+
+function syncDownloadOutputNameFromModel() {
+  const input = $("#downloadOutputName");
+  if (!input || input.dataset.userEdited === "true") return;
+  const model = $("#downloadModel").value.trim();
+  input.value = model ? deriveName(model) : "";
+}
+
+function renderQuantFinder(preset, precision) {
+  const finder = $("#downloadQuantFinder");
+  if (!finder) return;
+  const wantsQuant = precision && precision.value !== "base" && Boolean(precision.quantFilter);
+  const repo = preset?.repo || $("#downloadModel")?.value.trim() || "";
+  const leaf = repo.split("/").filter(Boolean).pop() || "";
+  if (!wantsQuant || !leaf) {
+    finder.hidden = true;
+    finder.innerHTML = "";
+    return;
+  }
+  finder.hidden = false;
+  finder.innerHTML = `<button type="button" class="ghost-mini-button" data-quant-search="${escapeAttr(leaf)}" data-quant-filter="${escapeAttr(precision.quantFilter)}"><i data-lucide="search"></i><span>在线查找 ${escapeHtml(leaf)} 的 ${escapeHtml(precision.label)} GGUF</span></button>`;
+  renderIcons();
+}
+
+function openQuantSearch(searchTerm, quantFilter) {
+  const sizeFilter = $("#remoteSizeFilter");
+  if (sizeFilter) sizeFilter.value = "";
+  if ($("#remoteSearch")) $("#remoteSearch").value = searchTerm;
+  if ($("#remoteQuantFilter")) $("#remoteQuantFilter").value = quantFilter || "gguf";
+  if ($("#remoteFeature")) $("#remoteFeature").value = "quantized";
+  if ($("#remoteSort")) $("#remoteSort").value = "downloads";
+  showView("models");
+  refreshRemoteModels().catch((error) => {
+    state.remoteError = error.message;
+    renderRemoteModels();
+  });
 }
 
 function applyDownloadModelSelection(model) {
@@ -844,6 +928,121 @@ function applyDownloadModelSelection(model) {
     sourceHint,
     summary,
   ].filter(Boolean).join(" ");
+  renderQuantFinder(null, getSelectedPrecision());
+  scheduleDownloadEstimate();
+}
+
+function downloadIncludePatternsForPrecision(precision) {
+  const value = normalizeDownloadQuantValue(precision);
+  if (!value || value === "BASE" || value === "quantized") return [];
+  if (value === "GGUF") return ["*.gguf"];
+  if (value === "Q4") return ["*Q4*.gguf", "*IQ4*.gguf"];
+  if (value === "IQ4") return ["*IQ4*.gguf"];
+  if (/^I?Q[2-8](?:_[A-Z0-9]+)*$/.test(value)) return [`*${value}*.gguf`];
+  return [];
+}
+
+function updateDownloadPlanPreview(extra = {}) {
+  const root = $("#downloadPlanPreview");
+  if (!root) return;
+  const model = $("#downloadModel")?.value.trim() || "";
+  if (!model) {
+    root.innerHTML = "";
+    root.hidden = true;
+    return;
+  }
+  const source = $("#downloadSource")?.value || "huggingface";
+  const precision = $("#downloadPrecision")?.value || "";
+  const normalized = normalizeDownloadQuantValue(precision);
+  const precisionLabel = selectedOptionLabel($("#downloadPrecision")) || normalized || "未指定";
+  const includePatterns = Array.isArray(extra.includePatterns) ? extra.includePatterns : downloadIncludePatternsForPrecision(precision);
+  const sourceLabel = DOWNLOAD_SOURCES[source]?.label || source;
+  const outputName = $("#downloadOutputName")?.value.trim() || deriveName(model);
+  let behavior = "";
+  let stateClass = "info";
+  if (source !== "huggingface") {
+    behavior = "ModelScope CLI 暂不支持按精度过滤，管理器会下载该模型仓库到本地目录。";
+  } else if (includePatterns.length) {
+    const matched = Number(extra.matchedFiles);
+    const total = Number(extra.totalFiles);
+    const matchText = Number.isFinite(matched) && Number.isFinite(total)
+      ? matched > 0
+        ? `当前元数据匹配 ${matched}/${total} 个文件。`
+        : `当前元数据没有匹配文件，请先确认仓库内真的存在 ${precisionLabel}。`
+      : "下载时会给 hf CLI 附加 include 过滤。";
+    stateClass = matched === 0 ? "warn" : "ok";
+    behavior = `只下载匹配 ${includePatterns.join(", ")} 的文件。${matchText}`;
+  } else if (normalized && normalized !== "BASE") {
+    stateClass = "warn";
+    behavior = `${precisionLabel} 不会自动改写仓库 ID，也没有安全的文件过滤规则；将下载整个仓库。建议先用在线列表选择真实 GGUF 量化仓库。`;
+  } else {
+    stateClass = "warn";
+    behavior = "将下载整个仓库；如果这是 safetensors 原始权重，llama.cpp 不能直接启动，请优先选择 GGUF/Q 文件。";
+  }
+  root.hidden = false;
+  root.dataset.state = stateClass;
+  root.innerHTML = `
+    <strong>下载预览</strong>
+    <span>${escapeHtml(sourceLabel)} · ${escapeHtml(model)} → ${escapeHtml(outputName)}</span>
+    <small>${escapeHtml(behavior)}</small>
+  `;
+}
+
+function scheduleDownloadEstimate() {
+  updateDownloadPlanPreview();
+  if (downloadEstimateTimer) clearTimeout(downloadEstimateTimer);
+  downloadEstimateTimer = setTimeout(requestDownloadEstimate, 450);
+}
+
+async function requestDownloadEstimate() {
+  const box = $("#downloadEstimate");
+  const textEl = $("#downloadEstimateText");
+  if (!box || !textEl) return;
+  const model = $("#downloadModel").value.trim();
+  const source = $("#downloadSource").value || "huggingface";
+  const precision = $("#downloadPrecision").value || "";
+  if (!model || !model.includes("/")) {
+    box.hidden = true;
+    updateDownloadPlanPreview();
+    return;
+  }
+  if (source !== "huggingface") {
+    box.hidden = false;
+    box.dataset.state = "info";
+    textEl.textContent = "ModelScope 暂不支持下载体积预估，下载时会显示实际进度。";
+    updateDownloadPlanPreview();
+    return;
+  }
+  const seq = ++downloadEstimateSeq;
+  box.hidden = false;
+  box.dataset.state = "loading";
+  textEl.textContent = "正在估算下载体积...";
+  try {
+    const params = new URLSearchParams({ model, source, precision });
+    const result = await api(`/api/download/estimate?${params}`);
+    if (seq !== downloadEstimateSeq) return;
+    updateDownloadPlanPreview(result);
+    const diskText = result.diskFreeBytes ? `模型盘剩余 ${fmtBytes(result.diskFreeBytes)}` : "";
+    if (result.bytes) {
+      const free = Number(result.diskFreeBytes || 0);
+      const insufficient = free && result.bytes > free - Math.max(free * 0.05, 10 * 1024 ** 3);
+      box.dataset.state = insufficient ? "warn" : "ok";
+      const sizeText = `预计下载约 ${fmtBytes(result.bytes)}（${fmtNumber(result.fileCount || 0)} 个文件）`;
+      textEl.textContent = insufficient
+        ? `${sizeText}，但${diskText}，磁盘空间可能不足，请清理或换盘。`
+        : `${sizeText}。${diskText ? diskText + "，空间充足。" : "请确认本地磁盘空间充足。"}`;
+    } else {
+      box.dataset.state = "info";
+      const noMatch = Array.isArray(result.includePatterns) && result.includePatterns.length && Number(result.fileCount || 0) === 0
+        ? `没有匹配 ${result.includePatterns.join(", ")} 的文件，请换真实 GGUF 仓库或改成下载整个仓库。`
+        : "无法读取该仓库的文件体积（可能是 gated 或私有），下载时会显示实际进度。";
+      textEl.textContent = noMatch + (diskText ? ` ${diskText}。` : "");
+    }
+  } catch (error) {
+    if (seq !== downloadEstimateSeq) return;
+    box.dataset.state = "warn";
+    textEl.textContent = `体积预估失败：${error.message}`;
+  }
 }
 
 async function refreshStatus() {
@@ -871,6 +1070,31 @@ async function refreshJobs() {
   renderJobs();
 }
 
+async function loadDownloadSettings() {
+  try {
+    const data = await api("/api/download/settings");
+    const toggle = $("#downloadQueueMode");
+    if (toggle) toggle.checked = Boolean(data?.queueMode);
+  } catch {
+    // 设置读取失败不阻塞页面初始化
+  }
+}
+
+async function saveDownloadQueueMode() {
+  const toggle = $("#downloadQueueMode");
+  if (!toggle) return;
+  try {
+    await api("/api/download/settings", {
+      method: "POST",
+      body: JSON.stringify({ queueMode: toggle.checked }),
+    });
+    notify("下载队列设置已更新", toggle.checked ? "新下载将排队顺序执行。" : "下载将并发执行。", "success");
+    await refreshJobs();
+  } catch (error) {
+    reportActionError("保存下载队列设置失败", error);
+  }
+}
+
 async function refreshModels() {
   state.models = await api("/api/models");
   renderModels();
@@ -881,28 +1105,38 @@ async function refreshModels() {
 }
 
 async function refreshRemoteModels() {
+  const seq = ++remoteSearchSeq;
   const root = $("#remoteModelList");
   root.innerHTML = `<div class="empty">正在联网查询模型...</div>`;
   state.remoteError = "";
   const params = new URLSearchParams({
-    category: $("#remoteCategory").value,
+    sort: $("#remoteSort")?.value || "downloads",
+    feature: $("#remoteFeature")?.value || "all",
     search: $("#remoteSearch").value.trim(),
     limit: String(getRemoteLimit()),
     size: $("#remoteSizeFilter")?.value || "",
     quant: $("#remoteQuantFilter")?.value || "",
     freshness: $("#remoteFreshness")?.value || "auto",
   });
-  const result = await api(`/api/remote-models?${params}`);
-  state.remoteModels = result.models || [];
-  state.remoteMeta = {
-    limit: result.limit || getRemoteLimit(),
-    source: result.source || "huggingface",
-    category: result.category || $("#remoteCategory").value,
-    freshness: result.freshness || $("#remoteFreshness")?.value || "auto",
-    quant: result.quant || $("#remoteQuantFilter")?.value || "",
-  };
-  renderRemoteModels();
-  renderModelPicker();
+  try {
+    const result = await api(`/api/remote-models?${params}`);
+    if (seq !== remoteSearchSeq) return;
+    state.remoteModels = result.models || [];
+    state.remoteMeta = {
+      limit: result.limit || getRemoteLimit(),
+      source: result.source || "huggingface",
+      sort: result.sort || $("#remoteSort")?.value || "downloads",
+      feature: result.feature || $("#remoteFeature")?.value || "all",
+      freshness: result.freshness || $("#remoteFreshness")?.value || "auto",
+      quant: result.quant || $("#remoteQuantFilter")?.value || "",
+    };
+    renderRemoteModels();
+    renderModelPicker();
+  } catch (error) {
+    if (seq !== remoteSearchSeq) return;
+    state.remoteError = error.message;
+    renderRemoteModels();
+  }
 }
 
 function getRemoteLimit() {
@@ -2603,6 +2837,7 @@ function inferLaunchFormat(model) {
 }
 
 function renderModelPicker() {
+  const english = effectiveLanguage() === "en-US";
   window.modelPickerRenderer?.render({
     state,
     getElement: $,
@@ -2617,6 +2852,7 @@ function renderModelPicker() {
     estimateModelFit,
     favoriteLabel: "收藏",
     emptyMessage: "没有匹配的模型。可以换个关键词，或刷新本地/在线列表。",
+    limitMessage: english ? "Showing first 80 models. Keep typing to narrow results." : "当前只显示前 80 个结果，继续输入关键词可以缩小范围。",
   });
 }
 
@@ -2799,7 +3035,9 @@ function renderRemoteModels() {
     const limit = state.remoteMeta?.limit || getRemoteLimit();
     const sizeFilter = $("#remoteSizeFilter")?.selectedOptions?.[0]?.textContent || "全部规格";
     const quantFilter = $("#remoteQuantFilter")?.selectedOptions?.[0]?.textContent || "全部 GGUF";
-    hint.textContent = `已返回 ${fmtNumber(state.remoteModels.length)} 个在线模型，当前显示 ${fmtNumber(models.length)} 个 · ${sizeFilter} · ${quantFilter} · 上限 ${limit}。列表按公开元数据和 GGUF 文件名估算，gated 模型下载前需要配置 token。`;
+    const unknownCount = (state.remoteModels || []).filter((model) => !Number(model.paramsB || 0)).length;
+    const unknownHint = unknownCount ? ` · ${fmtNumber(unknownCount)} 个未知规格可单独筛选` : "";
+    hint.textContent = `已返回 ${fmtNumber(state.remoteModels.length)} 个在线模型，当前显示 ${fmtNumber(models.length)} 个 · ${sizeFilter} · ${quantFilter} · 上限 ${limit}${unknownHint}。列表按公开元数据和 GGUF 文件名估算，gated 模型下载前需要配置 token。`;
   }
   $("#remoteLoadMoreBtn")?.toggleAttribute("disabled", getRemoteLimit() >= 120);
   const english = effectiveLanguage() === "en-US";
@@ -2818,7 +3056,9 @@ function renderRemoteModels() {
       runnableOk: english ? "llama runnable" : "llama 可运行",
       runnableWarn: english ? "Use another manager" : "需换管理器",
       downloadTitle: english ? "Use in download form" : "填入下载页",
+      downloadLabel: english ? "Download" : "下载",
       startTitle: english ? "Use in launch form" : "填入启动表单",
+      startLabel: english ? "Launch" : "启动",
       openTitle: english ? "Open model page" : "打开介绍页",
     },
     escapeHtml,
@@ -2975,26 +3215,36 @@ async function resolveModelLink() {
 
 async function downloadModel(event) {
   event.preventDefault();
+  const clearBusy = setButtonBusy(event.submitter || event.currentTarget.querySelector("button[type='submit']"), "创建下载...");
   const form = new FormData(event.currentTarget);
-  let model = String(form.get("model") || "").trim();
-  let outputName = String(form.get("outputName") || "").trim();
-  let source = String(form.get("source") || "huggingface");
-  let precision = String(form.get("precision") || "").trim();
-  if (!model && $("#modelPageUrl").value.trim()) {
-    const resolved = await resolveModelLink();
-    model = resolved?.model || "";
-    outputName = resolved?.outputName || "";
-    source = resolved?.source || source;
-    precision = resolved?.selection?.precision || precision;
+  try {
+    let model = String(form.get("model") || "").trim();
+    let outputName = String(form.get("outputName") || "").trim();
+    let source = String(form.get("source") || "huggingface");
+    let precision = String(form.get("precision") || "").trim();
+    const hfToken = String(form.get("hfToken") || "").trim();
+    if (!model && $("#modelPageUrl").value.trim()) {
+      const resolved = await resolveModelLink();
+      model = resolved?.model || "";
+      outputName = resolved?.outputName || "";
+      source = resolved?.source || source;
+      precision = resolved?.selection?.precision || precision;
+    }
+    if (!model) {
+      notify("没有可下载的模型 ID", "请选择预设、粘贴模型链接，或手动填写模型 ID。", "info");
+      return;
+    }
+    await api("/api/download", {
+      method: "POST",
+      body: JSON.stringify({ model, outputName, source, precision, ...(hfToken ? { hfToken } : {}) }),
+    });
+    notify("下载任务已创建", model, "success");
+    await refreshJobs();
+  } catch (error) {
+    reportActionError("下载任务创建失败", error);
+  } finally {
+    clearBusy();
   }
-  if (!model) return;
-  await api("/api/download", {
-    method: "POST",
-    body: JSON.stringify({ model, outputName, source, precision }),
-  });
-  event.currentTarget.reset();
-  initDownloadSelectors();
-  await refreshJobs();
 }
 
 async function startService(event) {
@@ -3062,6 +3312,12 @@ async function handleDownloadJobAction(event) {
   const job = state.jobs.find((item) => item.id === button.dataset.job);
   if (!job) return;
   const meta = job.meta || {};
+  if (button.dataset.downloadAction === "logs") {
+    if (state.expandedJobLogs.has(job.id)) state.expandedJobLogs.delete(job.id);
+    else state.expandedJobLogs.add(job.id);
+    renderJobs();
+    return;
+  }
   if (button.dataset.downloadAction === "pause") {
     const clearBusy = setButtonBusy(button, "暂停中...");
     try {
@@ -3101,6 +3357,31 @@ async function handleDownloadJobAction(event) {
     } finally {
       clearBusy();
     }
+    return;
+  }
+  if (button.dataset.downloadAction === "use-start") {
+    const model = meta.localDir || meta.model || "";
+    $("#startModel").value = model;
+    $("#servedName").value = deriveName(meta.outputName || meta.model || model);
+    $("#loadFormat").value = inferLaunchFormat(model);
+    setLaunchQuantizationFromModel(model);
+    showView("service");
+    notify("已填入启动表单", meta.outputName || meta.model || model, "success");
+    return;
+  }
+  if (button.dataset.downloadAction !== "verify") return;
+  const clearBusy = setButtonBusy(button, "校验中...");
+  try {
+    const result = await api("/api/download/verify", {
+      method: "POST",
+      body: JSON.stringify({ outputName: meta.outputName, localDir: meta.localDir }),
+    });
+    notify(result.ok ? "模型文件校验完成" : "模型文件可能不完整", `${fmtBytes(result.size || 0)} · ${fmtTokens(result.fileCount || 0)} files`, result.ok ? "success" : "error");
+    showTestResult(result);
+  } catch (error) {
+    reportActionError("模型文件校验失败", error);
+  } finally {
+    clearBusy();
   }
 }
 

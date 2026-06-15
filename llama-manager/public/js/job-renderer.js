@@ -20,16 +20,21 @@
 
     function renderJobs() {
       const jobs = state.jobs || [];
-      renderJobList($("#jobList"), jobs.filter((job) => job.type === "download").slice(0, 6), "暂无下载任务");
-      renderJobList($("#serviceJobList"), jobs.filter((job) => job.type === "serve").slice(0, 4), "暂无启动任务");
-      renderJobList($("#benchmarkJobList"), jobs.filter((job) => job.type === "benchmark" || job.type === "automation").slice(0, 5), "暂无测速任务");
+      renderJobList($("#jobList"), jobs.filter((job) => job.type === "download"), "暂无下载任务", 6);
+      renderJobList($("#serviceJobList"), jobs.filter((job) => job.type === "serve"), "暂无启动任务", 4);
+      renderJobList($("#benchmarkJobList"), jobs.filter((job) => job.type === "benchmark" || job.type === "automation"), "暂无测速任务", 5);
     }
 
-    function renderJobList(root, jobs, emptyText) {
+    function renderJobList(root, jobs, emptyText, maxItems) {
       if (!root) return;
+      const visibleJobs = Number(maxItems) > 0 ? jobs.slice(0, maxItems) : jobs;
+      const hiddenCount = Math.max(0, jobs.length - visibleJobs.length);
+      const footer = hiddenCount
+        ? `<div class="job-list-footer">还有 ${hiddenCount} 个历史任务未展示，刷新后仍会保留在后台任务列表中。</div>`
+        : "";
       const html = !jobs.length
         ? `<div class="empty">${escapeHtml(emptyText)}</div>`
-        : jobs.map((job) => renderJobRow(job)).join("");
+        : visibleJobs.map((job) => renderJobRow(job)).join("") + footer;
       if (root.__jobsHtml === html) return;
       root.__jobsHtml = html;
       root.innerHTML = html;

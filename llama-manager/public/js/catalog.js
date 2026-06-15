@@ -11,10 +11,15 @@ const DOWNLOAD_SOURCES = {
 };
 
 const PRECISION_PRESETS = [
-  { value: "base", label: "原始 BF16/FP16", suffix: "", launchQuantization: "" },
-  { value: "fp8", label: "FP8", suffix: "-FP8", launchQuantization: "fp8" },
-  { value: "awq", label: "AWQ INT4", suffix: "-AWQ", launchQuantization: "awq" },
-  { value: "gptq", label: "GPTQ INT4", suffix: "-GPTQ-Int4", launchQuantization: "gptq" },
+  { value: "gguf", label: "GGUF 全部", quantFilter: "gguf", launchQuantization: "" },
+  { value: "q4_k_m", label: "Q4_K_M", quantFilter: "q4_k_m", launchQuantization: "" },
+  { value: "iq4_xs", label: "IQ4_XS", quantFilter: "iq4_xs", launchQuantization: "" },
+  { value: "q5_k_m", label: "Q5_K_M", quantFilter: "q5_k_m", launchQuantization: "" },
+  { value: "q6_k", label: "Q6_K", quantFilter: "q6_k", launchQuantization: "" },
+  { value: "q8_0", label: "Q8_0", quantFilter: "q8_0", launchQuantization: "" },
+  { value: "q3_k_m", label: "Q3_K_M", quantFilter: "q3_k_m", launchQuantization: "" },
+  { value: "q2_k", label: "Q2_K", quantFilter: "q2_k", launchQuantization: "" },
+  { value: "base", label: "原始仓库 / 不筛选", quantFilter: "", launchQuantization: "" },
 ];
 
 const MODEL_PRESETS = [

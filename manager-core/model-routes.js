@@ -41,7 +41,11 @@ function registerModelRoutes(app, deps = {}) {
   });
 
   app.post("/api/download", async (req, res) => {
-    res.json(await startDownload(req.body || {}));
+    try {
+      res.json(await startDownload(req.body || {}));
+    } catch (error) {
+      sendError(res, error);
+    }
   });
 
   if (estimateDownload) {

@@ -76,11 +76,12 @@ function isAfterDate(value, cutoff) {
 
 function matchesRemoteSizeFilter(model, filter) {
   const params = Number(model?.paramsB || 0);
-  if (!params) return false;
+  if (!params) return filter === "unknown";
   if (filter === "small") return params <= 8;
   if (filter === "medium") return params > 8 && params <= 14;
   if (filter === "large") return params > 14 && params <= 32;
   if (filter === "xlarge") return params > 32;
+  if (filter === "unknown") return false;
   return true;
 }
 

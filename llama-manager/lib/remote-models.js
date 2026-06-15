@@ -27,6 +27,9 @@ const LLAMA_REMOTE_QUANT_KEYWORDS = [
   ["q8_0", "Q8_0"],
   ["q5_k_m", "Q5_K_M"],
   ["iq4_xs", "IQ4_XS"],
+  ["q6_k", "Q6_K"],
+  ["q3_k_m", "Q3_K_M"],
+  ["q2_k", "Q2_K"],
   ["awq", "AWQ"],
   ["gptq", "GPTQ"],
   ["fp8", "FP8"],
@@ -59,14 +62,17 @@ function createLlamaRemoteModelService({
   }
 
   async function searchRemoteModelCatalog(query = {}) {
-    const category = String(query.category || "popular");
+    const legacyCategory = String(query.category || "").trim();
+    const sort = normalizeRemoteSort(query.sort || (legacyCategory === "latest" ? "lastModified" : "downloads"));
+    const feature = normalizeRemoteFeature(query.feature || (["distilled", "uncensored", "quantized"].includes(legacyCategory) ? legacyCategory : "all"));
+    const category = feature === "all" ? (sort === "lastModified" ? "latest" : "popular") : feature;
     const search = String(query.search || "").trim();
     const limit = normalizeRemoteLimit(query.limit);
     const size = String(query.size || "").trim();
     const freshness = String(query.freshness || "auto").trim();
     const quant = core.normalizeRemoteQuantFilter(query.quant);
-    const models = await searchHuggingFaceModels({ category, search, limit, size, freshness, quant });
-    return { source: "huggingface", category, search, limit, size, freshness, quant, models };
+    const models = await searchHuggingFaceModels({ category, sort, search, limit, size, freshness, quant });
+    return { source: "huggingface", category, sort, feature, search, limit, size, freshness, quant, models };
   }
 
   async function resolveModelLinkRequest(body = {}) {
@@ -98,8 +104,9 @@ function createLlamaRemoteModelService({
     };
   }
 
-  async function searchHuggingFaceModels({ category, search, limit, size, freshness, quant }) {
+  async function searchHuggingFaceModels({ category, sort, search, limit, size, freshness, quant }) {
     const profile = remoteSearchProfile(category, search, freshness);
+    profile.sort = normalizeRemoteSort(sort || profile.sort);
     const quantFilter = core.normalizeRemoteQuantFilter(quant);
     const searches = core.remoteSearchesWithQuant(Array.isArray(profile.search) ? profile.search : [profile.search], quantFilter);
     const seen = new Set();
@@ -108,7 +115,7 @@ function createLlamaRemoteModelService({
 
     for (const query of searches) {
       const params = new URLSearchParams({
-        sort: profile.sort,
+        sort: profile.sort === "trending" ? "trendingScore" : profile.sort,
         direction: "-1",
         limit: String(requestLimit),
         full: "true",
@@ -135,7 +142,8 @@ function createLlamaRemoteModelService({
 
   async function getHuggingFaceDownloadEstimate(modelId, precision = "") {
     const data = await fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}?blobs=true`);
-    const siblings = core.filterDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision);
+    const selected = core.selectDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision);
+    const siblings = selected.siblings;
     const bytes = siblings.reduce((sum, file) => {
       const size = Number(file.size || file.lfs?.size || 0);
       return Number.isFinite(size) && size > 0 ? sum + size : sum;
@@ -143,6 +151,10 @@ function createLlamaRemoteModelService({
     return {
       bytes: bytes || null,
       fileCount: siblings.length,
+      includePatterns: selected.includePatterns,
+      filtered: selected.filtered,
+      matchedFiles: selected.matched,
+      totalFiles: selected.total,
     };
   }
 
@@ -239,6 +251,20 @@ function normalizeRemoteLimit(value) {
   const number = Number(value || 48);
   if (!Number.isFinite(number)) return 48;
   return Math.min(120, Math.max(12, Math.floor(number)));
+}
+
+function normalizeRemoteSort(value) {
+  const sort = String(value || "downloads").trim().toLowerCase();
+  if (["downloads", "likes"].includes(sort)) return sort;
+  if (["lastmodified", "latest", "updated"].includes(sort)) return "lastModified";
+  if (sort === "trending") return "trending";
+  return "downloads";
+}
+
+function normalizeRemoteFeature(value) {
+  const feature = String(value || "all").trim().toLowerCase();
+  if (["distilled", "uncensored", "quantized"].includes(feature)) return feature;
+  return "all";
 }
 
 function remoteSearchProfile(category, search, freshness = "auto") {

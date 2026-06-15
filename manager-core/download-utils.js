@@ -82,6 +82,28 @@ function filterDownloadSiblings(siblings, precision) {
   return matched.length ? matched : siblings;
 }
 
+function selectDownloadSiblings(siblings, precision) {
+  const includePatterns = buildDownloadIncludePatterns(precision);
+  const files = Array.isArray(siblings) ? siblings : [];
+  if (!includePatterns.length) {
+    return {
+      siblings: files,
+      includePatterns,
+      filtered: false,
+      matched: files.length,
+      total: files.length,
+    };
+  }
+  const matched = files.filter((file) => matchesDownloadPrecisionFile(file.rfilename, precision));
+  return {
+    siblings: matched,
+    includePatterns,
+    filtered: true,
+    matched: matched.length,
+    total: files.length,
+  };
+}
+
 function buildDownloadEnv(hfCache, env = process.env) {
   return {
     ...env,
@@ -178,6 +200,7 @@ module.exports = {
   buildDownloadIncludePatterns,
   matchesDownloadPrecisionFile,
   filterDownloadSiblings,
+  selectDownloadSiblings,
   buildDownloadEnv,
   createDownloadCommandBuilder,
   buildDownloadCommand,

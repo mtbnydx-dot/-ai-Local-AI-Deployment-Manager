@@ -549,6 +549,7 @@ core.registerModelRoutes(app, {
   listModels: listModelCollections,
   searchRemoteModels: remoteModelService.searchRemoteModelCatalog,
   startDownload: startDownloadRequest,
+  estimateDownload: estimateDownloadRequest,
   getDownloadSettings: () => downloadJobController.getDownloadSettings(),
   saveDownloadSettings: saveDownloadSettingsRequest,
   resolveModelLink: remoteModelService.resolveModelLinkRequest,
@@ -602,6 +603,44 @@ async function startDownloadRequest(body = {}) {
   if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI when available.");
   if (download.includePatterns?.length) appendLog(job, `Download include filter: ${download.includePatterns.join(", ")}`);
   return { job };
+}
+
+async function estimateDownloadRequest(query = {}) {
+  const source = cleanDownloadSource(query.source || "huggingface");
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  const diskFreeBytes = await getModelsDiskFreeBytes();
+  if (source !== "huggingface") {
+    return { source, model: reference.model, bytes: null, fileCount: null, supported: false, diskFreeBytes };
+  }
+  const estimate = await remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision);
+  return {
+    source,
+    model: reference.model,
+    precision: reference.precision || "",
+    bytes: estimate.bytes,
+    fileCount: estimate.fileCount,
+    includePatterns: estimate.includePatterns || [],
+    filtered: Boolean(estimate.filtered),
+    matchedFiles: estimate.matchedFiles ?? estimate.fileCount ?? null,
+    totalFiles: estimate.totalFiles ?? null,
+    supported: true,
+    diskFreeBytes,
+  };
+}
+
+async function getModelsDiskFreeBytes() {
+  try {
+    const stat = await fsp.statfs(CONFIG.modelsRoot);
+    const free = Number(stat.bavail) * Number(stat.bsize);
+    return Number.isFinite(free) && free > 0 ? free : null;
+  } catch {
+    return null;
+  }
 }
 
 async function saveDownloadSettingsRequest(body = {}) {

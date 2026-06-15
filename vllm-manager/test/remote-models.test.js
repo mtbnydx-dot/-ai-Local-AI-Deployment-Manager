@@ -78,4 +78,8 @@ test("vLLM remote model service estimates selected HF download files", async () 
   const estimate = await service.getHuggingFaceDownloadEstimate("owner/model", "Q4");
   assert.equal(estimate.bytes, 10);
   assert.equal(estimate.fileCount, 1);
+  assert.deepEqual(estimate.includePatterns, ["*Q4*.gguf", "*IQ4*.gguf"]);
+  assert.equal(estimate.filtered, true);
+  assert.equal(estimate.matchedFiles, 1);
+  assert.equal(estimate.totalFiles, 3);
 });

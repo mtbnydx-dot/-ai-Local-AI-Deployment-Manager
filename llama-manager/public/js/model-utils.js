@@ -188,11 +188,12 @@
 
   function modelRemoteSizeMatches(model, size) {
     const params = Number(model.paramsB || 0);
-    if (!params) return false;
+    if (!params) return size === "unknown";
     if (size === "small") return params <= 8;
     if (size === "medium") return params > 8 && params <= 14;
     if (size === "large") return params > 14 && params <= 32;
     if (size === "xlarge") return params > 32;
+    if (size === "unknown") return false;
     return true;
   }
 

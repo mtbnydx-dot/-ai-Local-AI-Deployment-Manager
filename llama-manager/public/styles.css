@@ -1265,6 +1265,16 @@ label span {
   background: var(--surface-hover);
 }
 
+.model-picker-footer {
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .model-picker-main {
   display: grid;
   gap: 4px;
@@ -1399,6 +1409,84 @@ textarea:focus {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.download-estimate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.download-estimate i[data-lucide] {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.download-estimate[data-state="ok"] {
+  border-color: var(--metric-ok-border);
+  background: var(--ok-soft-bg);
+}
+
+.download-estimate[data-state="warn"] {
+  border-color: var(--metric-warn-border);
+  background: var(--warn-soft-bg);
+}
+
+.download-estimate[data-state="loading"] {
+  opacity: 0.8;
+}
+
+.download-plan-preview {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.download-plan-preview:empty,
+.download-plan-preview[hidden] {
+  display: none;
+}
+
+.download-plan-preview strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.download-plan-preview span,
+.download-plan-preview small {
+  overflow-wrap: anywhere;
+}
+
+.download-plan-preview[data-state="ok"] {
+  border-color: var(--metric-ok-border);
+  background: var(--ok-soft-bg);
+}
+
+.download-plan-preview[data-state="warn"] {
+  border-color: var(--metric-warn-border);
+  background: var(--warn-soft-bg);
+}
+
+.quant-finder {
+  display: flex;
+}
+
+.quant-finder .ghost-mini-button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
 .remote-load-more {
   justify-self: center;
   width: min(240px, 100%);
@@ -1435,6 +1523,16 @@ textarea:focus {
   display: grid;
   gap: 10px;
   align-content: start;
+}
+
+.job-list-footer {
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .tool-grid {
@@ -1929,6 +2027,9 @@ textarea:focus {
 .remote-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .mini-actions button,
@@ -1944,6 +2045,32 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   text-decoration: none;
+}
+
+.remote-actions button span {
+  display: none;
+}
+
+.remote-actions .remote-action-primary {
+  width: auto;
+  min-width: 88px;
+  gap: 7px;
+  padding: 0 12px;
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+
+.remote-actions .remote-action-primary span,
+.remote-actions button[data-action="remote-start"] span {
+  display: inline;
+}
+
+.remote-actions button[data-action="remote-start"] {
+  width: auto;
+  min-width: 78px;
+  gap: 7px;
+  padding: 0 12px;
 }
 
 .job-progress {

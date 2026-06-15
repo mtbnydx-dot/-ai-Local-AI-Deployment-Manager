@@ -503,6 +503,7 @@
                   <option value="medium">8B - 14B</option>
                   <option value="large">14B - 32B</option>
                   <option value="xlarge">32B+ 需多卡/量化</option>
+                  <option value="unknown">未知规格</option>
                 </select>
               </label>
               <label>
@@ -608,6 +609,7 @@
                 <i data-lucide="hard-drive"></i>
                 <span id="downloadEstimateText">填入模型 ID 后会预估下载体积。</span>
               </div>
+              <div class="download-plan-preview" id="downloadPlanPreview"></div>
               <button class="primary-button" type="submit"><i data-lucide="download"></i><span>开始下载</span></button>
             </form>
             <div class="job-list" id="jobList"></div>

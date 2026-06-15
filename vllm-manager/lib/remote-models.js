@@ -37,7 +37,7 @@ const VLLM_REMOTE_QUANT_KEYWORDS = [
 
 const REMOTE_FEATURE_SEARCHES = {
   distilled: ["distill", "distilled", "R1-Distill"],
-  uncensored: ["uncensored", "abliterated", "abliteration"],
+  uncensored: ["uncensored", "abliterated", "abliteration", "unfiltered", "no-filter", "nofilter", "uncens"],
   moe: ["MoE", "A3B", "A22B"],
   reasoning: ["reasoning", "thinking", "R1"],
 };
@@ -282,7 +282,8 @@ function createVllmRemoteModelService({
 
   async function getHuggingFaceDownloadEstimate(modelId, precision = "") {
     const data = await fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}?blobs=true`);
-    const siblings = core.filterDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision);
+    const selected = core.selectDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision);
+    const siblings = selected.siblings;
     const bytes = siblings.reduce((sum, file) => {
       const size = Number(file.size || file.lfs?.size || 0);
       return Number.isFinite(size) && size > 0 ? sum + size : sum;
@@ -290,6 +291,10 @@ function createVllmRemoteModelService({
     return {
       bytes: bytes || null,
       fileCount: siblings.length,
+      includePatterns: selected.includePatterns,
+      filtered: selected.filtered,
+      matchedFiles: selected.matched,
+      totalFiles: selected.total,
     };
   }
 

@@ -114,7 +114,12 @@
       return [];
     }
 
-    list.innerHTML = items.slice(0, options.maxItems || 80).map((item) => renderItem(item, options)).join("");
+    const maxItems = options.maxItems || 80;
+    const visibleItems = items.slice(0, maxItems);
+    const footer = items.length > maxItems
+      ? `<div class="model-picker-footer">${defaultEscape(options.limitMessage || `Showing first ${maxItems} of ${items.length}. Keep typing to narrow results.`)}</div>`
+      : "";
+    list.innerHTML = visibleItems.map((item) => renderItem(item, options)).join("") + footer;
     if (typeof options.renderIcons === "function") options.renderIcons();
     return items;
   }

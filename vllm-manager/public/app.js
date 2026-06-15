@@ -1034,8 +1034,65 @@ function getSelectedPreset() {
 
 let downloadEstimateTimer = null;
 let downloadEstimateSeq = 0;
+let remoteSearchSeq = 0;
+
+function downloadIncludePatternsForPrecision(precision) {
+  const value = normalizeDownloadQuantValue(precision);
+  if (!value || value === "BASE" || value === "quantized") return [];
+  if (value === "GGUF") return ["*.gguf"];
+  if (value === "Q4") return ["*Q4*.gguf", "*IQ4*.gguf"];
+  if (value === "IQ4") return ["*IQ4*.gguf"];
+  if (/^I?Q[2-8](?:_[A-Z0-9]+)*$/.test(value)) return [`*${value}*.gguf`];
+  return [];
+}
+
+function updateDownloadPlanPreview(extra = {}) {
+  const root = $("#downloadPlanPreview");
+  if (!root) return;
+  const model = $("#downloadModel")?.value.trim() || "";
+  if (!model) {
+    root.innerHTML = "";
+    root.hidden = true;
+    return;
+  }
+  const source = $("#downloadSource")?.value || "huggingface";
+  const precision = $("#downloadPrecision")?.value || "";
+  const normalized = normalizeDownloadQuantValue(precision);
+  const precisionLabel = selectedOptionLabel($("#downloadPrecision")) || normalized || "未指定";
+  const includePatterns = Array.isArray(extra.includePatterns) ? extra.includePatterns : downloadIncludePatternsForPrecision(precision);
+  const sourceLabel = DOWNLOAD_SOURCES[source]?.label || source;
+  const outputName = $("#downloadOutputName")?.value.trim() || deriveName(model);
+  let behavior = "";
+  let stateClass = "info";
+  if (source !== "huggingface") {
+    behavior = "ModelScope CLI 暂不支持按精度过滤，管理器会下载该模型仓库到本地目录。";
+  } else if (includePatterns.length) {
+    const matched = Number(extra.matchedFiles);
+    const total = Number(extra.totalFiles);
+    const matchText = Number.isFinite(matched) && Number.isFinite(total)
+      ? matched > 0
+        ? `当前元数据匹配 ${matched}/${total} 个文件。`
+        : `当前元数据没有匹配文件，请先确认仓库内真的存在 ${precisionLabel}。`
+      : "下载时会给 hf CLI 附加 include 过滤。";
+    stateClass = matched === 0 ? "warn" : "ok";
+    behavior = `只下载匹配 ${includePatterns.join(", ")} 的文件。${matchText}`;
+  } else if (normalized && normalized !== "BASE") {
+    stateClass = "warn";
+    behavior = `${precisionLabel} 不会自动改写仓库 ID，也没有安全的文件过滤规则；将下载整个仓库。建议先用“在线查找”选择真实量化仓库。`;
+  } else {
+    behavior = "下载整个仓库，适合原始 BF16/FP16 或已经确认的量化仓库。";
+  }
+  root.hidden = false;
+  root.dataset.state = stateClass;
+  root.innerHTML = `
+    <strong>下载预览</strong>
+    <span>${escapeHtml(sourceLabel)} · ${escapeHtml(model)} → ${escapeHtml(outputName)}</span>
+    <small>${escapeHtml(behavior)}</small>
+  `;
+}
 
 function scheduleDownloadEstimate() {
+  updateDownloadPlanPreview();
   if (downloadEstimateTimer) clearTimeout(downloadEstimateTimer);
   downloadEstimateTimer = setTimeout(requestDownloadEstimate, 450);
 }
@@ -1049,12 +1106,14 @@ async function requestDownloadEstimate() {
   const precision = $("#downloadPrecision").value || "";
   if (!model || !model.includes("/")) {
     box.hidden = true;
+    updateDownloadPlanPreview();
     return;
   }
   if (source !== "huggingface") {
     box.hidden = false;
     box.dataset.state = "info";
     textEl.textContent = "ModelScope 暂不支持下载体积预估，下载时会显示实际进度。";
+    updateDownloadPlanPreview();
     return;
   }
   const seq = ++downloadEstimateSeq;
@@ -1065,6 +1124,7 @@ async function requestDownloadEstimate() {
     const params = new URLSearchParams({ model, source, precision });
     const result = await api(`/api/download/estimate?${params}`);
     if (seq !== downloadEstimateSeq) return; // 已有更新的请求，丢弃过期结果
+    updateDownloadPlanPreview(result);
     const diskText = result.diskFreeBytes ? `模型盘剩余 ${fmtBytes(result.diskFreeBytes)}` : "";
     if (result.bytes) {
       const free = Number(result.diskFreeBytes || 0);
@@ -1077,7 +1137,10 @@ async function requestDownloadEstimate() {
         : `${sizeText}。${diskText ? diskText + "，空间充足。" : "请确认本地磁盘空间充足。"}`;
     } else {
       box.dataset.state = "info";
-      textEl.textContent = "无法读取该仓库的文件体积（可能是 gated 或私有），下载时会显示实际进度。"
+      const noMatch = Array.isArray(result.includePatterns) && result.includePatterns.length && Number(result.fileCount || 0) === 0
+        ? `没有匹配 ${result.includePatterns.join(", ")} 的文件，请换真实量化仓库或改成下载整个仓库。`
+        : "无法读取该仓库的文件体积（可能是 gated 或私有），下载时会显示实际进度。";
+      textEl.textContent = noMatch
         + (diskText ? ` ${diskText}。` : "");
     }
   } catch (error) {
@@ -1208,6 +1271,7 @@ async function refreshModels() {
 }
 
 async function refreshRemoteModels() {
+  const seq = ++remoteSearchSeq;
   const root = $("#remoteModelList");
   root.innerHTML = `<div class="empty">正在联网查询模型...</div>`;
   state.remoteError = "";
@@ -1222,19 +1286,26 @@ async function refreshRemoteModels() {
     quant: $("#remoteQuantFilter")?.value || "",
     freshness: $("#remoteFreshness")?.value || "auto",
   });
-  const result = await api(`/api/remote-models?${params}`);
-  state.remoteModels = result.models || [];
-  state.remoteMeta = {
-    limit: result.limit || getRemoteLimit(),
-    source: result.source || "huggingface",
-    sort: result.sort || $("#remoteSort")?.value || "trending",
-    task: result.task || $("#remoteTask")?.value || "all",
-    feature: result.feature || $("#remoteFeature")?.value || "all",
-    freshness: result.freshness || $("#remoteFreshness")?.value || "auto",
-    quant: result.quant || $("#remoteQuantFilter")?.value || "",
-  };
-  renderRemoteModels();
-  renderModelPicker();
+  try {
+    const result = await api(`/api/remote-models?${params}`);
+    if (seq !== remoteSearchSeq) return;
+    state.remoteModels = result.models || [];
+    state.remoteMeta = {
+      limit: result.limit || getRemoteLimit(),
+      source: result.source || "huggingface",
+      sort: result.sort || $("#remoteSort")?.value || "trending",
+      task: result.task || $("#remoteTask")?.value || "all",
+      feature: result.feature || $("#remoteFeature")?.value || "all",
+      freshness: result.freshness || $("#remoteFreshness")?.value || "auto",
+      quant: result.quant || $("#remoteQuantFilter")?.value || "",
+    };
+    renderRemoteModels();
+    renderModelPicker();
+  } catch (error) {
+    if (seq !== remoteSearchSeq) return;
+    state.remoteError = error.message;
+    renderRemoteModels();
+  }
 }
 
 function getRemoteLimit() {
@@ -1461,6 +1532,7 @@ function inferLaunchFormat(model) {
 }
 
 function renderModelPicker() {
+  const english = effectiveLanguage() === "en-US";
   window.modelPickerRenderer?.render({
     state,
     getElement: $,
@@ -1475,6 +1547,7 @@ function renderModelPicker() {
     estimateModelFit,
     favoriteLabel: t("modelPicker.favorite"),
     emptyMessage: t("modelPicker.empty"),
+    limitMessage: english ? "Showing first 80 models. Keep typing to narrow results." : "当前只显示前 80 个结果，继续输入关键词可以缩小范围。",
   });
 }
 
@@ -3625,7 +3698,9 @@ function renderRemoteModels() {
       ? `· ${$("#remoteFeature").selectedOptions[0].textContent}`
       : "";
     const sizeFilter = $("#remoteSizeFilter")?.selectedOptions?.[0]?.textContent || "全部规模";
-    hint.textContent = `按「${sortFilter}」排序 · ${taskFilter} · ${sizeFilter} ${featureFilter} · 返回 ${fmtNumber(state.remoteModels.length)} 个，显示 ${fmtNumber(models.length)} 个。参数和文件大小按公开元数据估算，gated 模型下载前需配置 token。`;
+    const unknownCount = (state.remoteModels || []).filter((model) => !Number(model.paramsB || 0)).length;
+    const unknownHint = unknownCount ? ` · ${fmtNumber(unknownCount)} 个未知规格可单独筛选` : "";
+    hint.textContent = `按「${sortFilter}」排序 · ${taskFilter} · ${sizeFilter} ${featureFilter} · 返回 ${fmtNumber(state.remoteModels.length)} 个，显示 ${fmtNumber(models.length)} 个${unknownHint}。参数和文件大小按公开元数据估算，gated 模型下载前需配置 token。`;
   }
   $("#remoteLoadMoreBtn")?.toggleAttribute("disabled", getRemoteLimit() >= 120);
   const english = effectiveLanguage() === "en-US";
@@ -3644,7 +3719,9 @@ function renderRemoteModels() {
       runnableOk: english ? "vLLM runnable" : "vLLM 可运行",
       runnableWarn: english ? "Use another manager" : "需换管理器",
       downloadTitle: english ? "Use in download form" : "填入下载页",
+      downloadLabel: english ? "Download" : "下载",
       startTitle: english ? "Use in launch form" : "填入启动表单",
+      startLabel: english ? "Launch" : "启动",
       readmeTitle: english ? "View model notes" : "查看模型说明",
       openTitle: english ? "Open model page" : "打开介绍页",
     },

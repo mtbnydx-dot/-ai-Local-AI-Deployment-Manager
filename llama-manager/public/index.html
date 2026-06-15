@@ -376,10 +376,18 @@
             </div>
             <div class="remote-toolbar">
               <label>
-                <span>分类</span>
-                <select id="remoteCategory">
-                  <option value="popular">热门下载</option>
-                  <option value="latest">最新更新</option>
+                <span>排序</span>
+                <select id="remoteSort">
+                  <option value="downloads">下载量</option>
+                  <option value="lastModified">最近更新</option>
+                  <option value="likes">点赞数</option>
+                  <option value="trending">热度趋势</option>
+                </select>
+              </label>
+              <label>
+                <span>特征</span>
+                <select id="remoteFeature">
+                  <option value="all">不限特征</option>
                   <option value="distilled">蒸馏版</option>
                   <option value="uncensored">去审查 / Abliterated</option>
                   <option value="quantized">量化版本</option>
@@ -401,6 +409,7 @@
                   <option value="medium">7B - 14B</option>
                   <option value="large">14B - 32B</option>
                   <option value="xlarge">32B+</option>
+                  <option value="unknown">未知规格</option>
                 </select>
               </label>
               <label>
@@ -410,8 +419,11 @@
                   <option value="quantized">任意量化</option>
                   <option value="q4_k_m">Q4_K_M</option>
                   <option value="q5_k_m">Q5_K_M</option>
+                  <option value="q6_k">Q6_K</option>
                   <option value="q8_0">Q8_0</option>
                   <option value="iq4_xs">IQ4_XS</option>
+                  <option value="q3_k_m">Q3_K_M</option>
+                  <option value="q2_k">Q2_K</option>
                   <option value="q4">Q4 / IQ4</option>
                   <option value="gguf">所有 GGUF</option>
                 </select>
@@ -438,7 +450,13 @@
           <div class="panel">
             <div class="panel-head">
               <h3>下载模型</h3>
-              <button class="ghost-mini-button" id="downloadRunnableModelsBtn" type="button"><i data-lucide="badge-check"></i><span>选择可运行模型</span></button>
+              <div class="panel-actions">
+                <label class="queue-toggle" title="开启后多个下载任务排队顺序执行，避免同时抢带宽和磁盘 IO">
+                  <input type="checkbox" id="downloadQueueMode" />
+                  <span>顺序下载队列</span>
+                </label>
+                <button class="ghost-mini-button" id="downloadRunnableModelsBtn" type="button"><i data-lucide="badge-check"></i><span>选择可运行模型</span></button>
+              </div>
             </div>
             <form id="downloadForm" class="download-form">
               <div class="link-resolver">
@@ -479,6 +497,7 @@
                 </label>
               </div>
               <div class="selection-hint" id="downloadPresetHint">Hugging Face 通用性最好；ModelScope 在国内网络环境通常更顺手。</div>
+              <div class="quant-finder" id="downloadQuantFinder" hidden></div>
               <label>
                 <span>模型 ID</span>
                 <input id="downloadModel" name="model" placeholder="Qwen/Qwen3-8B" autocomplete="off" />
@@ -487,6 +506,15 @@
                 <span>保存名称</span>
                 <input id="downloadOutputName" name="outputName" placeholder="qwen3-8b" autocomplete="off" />
               </label>
+              <label>
+                <span>HF Token（可选）</span>
+                <input id="downloadHfToken" name="hfToken" type="password" placeholder="下载 gated / 私有 GGUF 时填写；留空使用环境变量 HF_TOKEN" autocomplete="off" />
+              </label>
+              <div class="download-estimate" id="downloadEstimate" hidden>
+                <i data-lucide="hard-drive"></i>
+                <span id="downloadEstimateText">填入模型 ID 后会预估下载体积。</span>
+              </div>
+              <div class="download-plan-preview" id="downloadPlanPreview"></div>
               <button class="primary-button" type="submit"><i data-lucide="download"></i><span>开始下载</span></button>
             </form>
             <div class="job-list" id="jobList"></div>

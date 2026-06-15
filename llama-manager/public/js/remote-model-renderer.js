@@ -31,7 +31,9 @@
       runnableOk: "Runnable",
       runnableWarn: "Use another manager",
       downloadTitle: "Use in download form",
+      downloadLabel: "Download",
       startTitle: "Use in launch form",
+      startLabel: "Launch",
       readmeTitle: "View model notes",
       openTitle: "Open model page",
       ...(options.labels || {}),
@@ -91,8 +93,8 @@
           ${readme}
         </div>
         <div class="remote-actions">
-          <button title="${escapeAttr(labels.downloadTitle)}" data-action="remote-download" data-model="${escapeAttr(model.id)}" data-output="${escapeAttr(model.outputName)}"><i data-lucide="download"></i></button>
-          <button title="${escapeAttr(labels.startTitle)}" data-action="remote-start" data-model="${escapeAttr(model.id)}"><i data-lucide="play"></i></button>
+          <button class="remote-action-primary" title="${escapeAttr(labels.downloadTitle)}" data-action="remote-download" data-model="${escapeAttr(model.id)}" data-output="${escapeAttr(model.outputName)}" data-source="${escapeAttr(model.source || "huggingface")}"><i data-lucide="download"></i><span>${escapeHtml(labels.downloadLabel)}</span></button>
+          <button title="${escapeAttr(labels.startTitle)}" data-action="remote-start" data-model="${escapeAttr(model.id)}"><i data-lucide="play"></i><span>${escapeHtml(labels.startLabel)}</span></button>
           ${readmeButton}
           <a title="${escapeAttr(labels.openTitle)}" href="${escapeAttr(model.url)}" target="_blank"><i data-lucide="database"></i></a>
         </div>
@@ -122,7 +124,7 @@
       button.addEventListener("click", () => {
         const selected = allModels.find((model) => model.id === button.dataset.model);
         options.onDownload?.(selected, {
-          source: "huggingface",
+          source: button.dataset.source || "huggingface",
           model: button.dataset.model,
           outputName: button.dataset.output,
         });

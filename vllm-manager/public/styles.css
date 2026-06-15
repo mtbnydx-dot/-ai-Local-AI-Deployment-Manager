@@ -1463,6 +1463,16 @@ textarea {
   transform: none;
 }
 
+.model-picker-footer {
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .model-picker-main {
   display: grid;
   gap: 4px;
@@ -1606,6 +1616,42 @@ textarea:focus {
   opacity: 0.8;
 }
 
+.download-plan-preview {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.download-plan-preview:empty,
+.download-plan-preview[hidden] {
+  display: none;
+}
+
+.download-plan-preview strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.download-plan-preview span,
+.download-plan-preview small {
+  overflow-wrap: anywhere;
+}
+
+.download-plan-preview[data-state="ok"] {
+  border-color: var(--metric-ok-border);
+  background: var(--ok-soft-bg);
+}
+
+.download-plan-preview[data-state="warn"] {
+  border-color: var(--metric-warn-border);
+  background: var(--warn-soft-bg);
+}
+
 .quant-finder {
   display: flex;
 }
@@ -1696,6 +1742,16 @@ textarea:focus {
 
 .job-row.is-queued::before {
   background: var(--amber);
+}
+
+.job-list-footer {
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .job-title-line {
@@ -2360,6 +2416,9 @@ textarea:focus {
 .remote-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .mini-actions button,
@@ -2381,6 +2440,32 @@ textarea:focus {
   color: var(--danger-ink);
   background: var(--danger-bg);
   border-color: var(--danger-bg);
+}
+
+.remote-actions button span {
+  display: none;
+}
+
+.remote-actions .remote-action-primary {
+  width: auto;
+  min-width: 88px;
+  gap: 7px;
+  padding: 0 12px;
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+
+.remote-actions .remote-action-primary span,
+.remote-actions button[data-action="remote-start"] span {
+  display: inline;
+}
+
+.remote-actions button[data-action="remote-start"] {
+  width: auto;
+  min-width: 78px;
+  gap: 7px;
+  padding: 0 12px;
 }
 
 .job-progress {

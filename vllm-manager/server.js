@@ -724,6 +724,10 @@ async function estimateDownloadRequest(query = {}) {
     precision: reference.precision || "",
     bytes: estimate.bytes,
     fileCount: estimate.fileCount,
+    includePatterns: estimate.includePatterns || [],
+    filtered: Boolean(estimate.filtered),
+    matchedFiles: estimate.matchedFiles ?? estimate.fileCount ?? null,
+    totalFiles: estimate.totalFiles ?? null,
     supported: true,
     diskFreeBytes,
   };
