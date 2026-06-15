@@ -1228,6 +1228,7 @@ async function buildServiceExposurePayload(settings) {
     lanAddress: getLanAddress(),
     remoteManagementAllowed: ALLOW_REMOTE_MANAGEMENT,
     defaultServicePort: CONFIG.defaultPort,
+    claudeBasePath: "/claude",
     claudeMessagesPath: "/claude/v1/messages",
     openCodeBasePath: "/opencode/v1",
     runtimeApiKeySupported: true,

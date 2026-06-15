@@ -127,10 +127,13 @@
       const root = $("#connectionGuide");
       const guide = state.connectionGuide;
       if (!root || !guide) return;
+      const openAiClientUrl = guide.openai?.lanBaseUrl || guide.openai?.baseUrl || "-";
+      const claudeClientUrl = guide.claude?.publicBaseUrl || guide.ccswitch?.providerBaseUrl || guide.claude?.baseUrl || "-";
       root.innerHTML = `
         <div class="compat-endpoints">
-          <div><strong>OpenWebUI / OpenAI Base URL</strong><code>${escapeHtml(guide.openai?.baseUrl || "-")}</code><span>API Key 可填任意占位字符串；模型名：${escapeHtml(guide.model || "-")}</span></div>
-          <div><strong>Claude / ccswitch Base URL</strong><code>${escapeHtml(guide.claude?.baseUrl || "-")}</code><span>模型别名：${escapeHtml(guide.claude?.modelAlias || "-")}</span></div>
+          <div><strong>Chatbox / OpenWebUI / OpenAI Compatible</strong><code>${escapeHtml(openAiClientUrl)}</code><span>Provider 选 OpenAI Compatible；路径必须是 /serve/v1；模型名：${escapeHtml(guide.model || "local-current")}</span></div>
+          <div><strong>Claude / Cowork / CC Switch</strong><code>${escapeHtml(claudeClientUrl)}</code><span>Provider 选 Anthropic / Claude；模型别名：${escapeHtml(guide.claude?.modelAlias || guide.ccswitch?.modelAlias || "-")}</span></div>
+          <div><strong>路径不要混用</strong><code>OpenAI = /serve/v1 · Claude = /claude</code><span>Chatbox/OpenWebUI 不要填 /claude；Claude 客户端不要填 /serve/v1。</span></div>
           <div><strong>curl 测试</strong><code>${escapeHtml(guide.openai?.curl || "-")}</code><span>用于确认本地服务是否返回模型列表。</span></div>
           <div><strong>管理器地址</strong><code>${escapeHtml(guide.manager?.local || "-")}</code><span>${guide.manager?.lan ? `局域网：${escapeHtml(guide.manager.lan)}` : "当前管理器只绑定本机。"}</span></div>
         </div>

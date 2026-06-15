@@ -89,10 +89,12 @@ test("connection guide snapshot builds OpenAI, Claude, OpenWebUI, and ccswitch h
   assert.equal(guide.ok, true);
   assert.equal(guide.manager.lan, "http://192.168.1.27:5177");
   assert.equal(guide.openai.baseUrl, "http://127.0.0.1:5177/serve/v1");
+  assert.equal(guide.openai.lanBaseUrl, "http://192.168.1.27:5177/serve/v1");
   assert.equal(guide.openai.directBaseUrl, "http://127.0.0.1:8080/v1");
+  assert.equal(guide.openwebui.baseUrl, "http://192.168.1.27:5177/serve/v1");
   assert.equal(guide.openwebui.model, "local-model");
   assert.equal(guide.claude.modelAlias, "claude-opus-4-7");
-  assert.equal(guide.ccswitch.providerBaseUrl, "http://127.0.0.1:5177/claude");
+  assert.equal(guide.ccswitch.providerBaseUrl, "http://192.168.1.27:5177/claude");
 });
 
 test("compatibility endpoints normalize local, LAN, and Claude URLs", () => {
@@ -685,7 +687,10 @@ test("service exposure payload snapshot builds shared manager and service addres
   assert.equal(payload.settings.apiKeyHash, "");
   assert.equal(payload.actual.manager.lanBaseUrl, "http://192.168.1.2:5177");
   assert.equal(payload.actual.service.openAiGatewayLanBaseUrl, "http://192.168.1.2:5177/serve/v1");
+  assert.equal(payload.actual.service.claudeLocalBaseUrl, "http://127.0.0.1:5177/claude");
+  assert.equal(payload.actual.service.claudeLanBaseUrl, "http://192.168.1.2:5177/claude");
   assert.equal(payload.actual.service.claudeLocalMessagesUrl, "http://127.0.0.1:5177/claude/v1/messages");
+  assert.equal(payload.actual.service.claudeLanMessagesUrl, "http://192.168.1.2:5177/claude/v1/messages");
   assert.equal(payload.actual.service.openCodeBaseUrl, "http://127.0.0.1:5177/opencode/v1");
   assert.equal(payload.actual.service.maxModelLen, 65536);
   assert.equal(payload.actual.service.apiKeyRequired, true);
@@ -2469,7 +2474,7 @@ test("service gateway access log store reads JSONL and builds external stats", a
     normalizeServiceExposureSettings: core.normalizeServiceExposureSettings,
     getContainerStatus: async () => ({ running: true, status: "running" }),
     getContainerEndpoint: () => ({ lanUrl: "http://192.168.1.2:8000" }),
-    claudeBasePath: "/claude/v1",
+    claudeBasePath: "/claude",
   });
 
   await store.appendServiceGatewayAccessLog({
@@ -2492,7 +2497,7 @@ test("service gateway access log store reads JSONL and builds external stats", a
   });
 
   const stats = await store.collectExternalAccessStats({ limit: 20, maxLines: 100 });
-  assert.equal(stats.service.claudeBaseUrl, "http://192.168.1.2:5177/claude/v1");
+  assert.equal(stats.service.claudeBaseUrl, "http://192.168.1.2:5177/claude");
   assert.equal(stats.service.openAiContainerBaseUrl, "http://192.168.1.2:8000");
   assert.equal(stats.totals.requests.total, 2);
   assert.equal(stats.external.requests.total, 1);

@@ -442,7 +442,8 @@ function buildServiceExposurePayloadSnapshot(settings = {}, context = {}, option
       ? null
       : `http://${lanAddress}:${managerPort}`;
   const openAiGatewayPath = normalizeGatewayPath(options.openAiGatewayPath || "/serve/v1");
-  const claudeMessagesPath = normalizeGatewayPath(options.claudeMessagesPath || "/claude/messages");
+  const claudeBasePath = normalizeGatewayPath(options.claudeBasePath || "/claude");
+  const claudeMessagesPath = normalizeGatewayPath(options.claudeMessagesPath || `${claudeBasePath}/v1/messages`);
   const openCodeBasePath = normalizeGatewayPath(options.openCodeBasePath || "");
   const defaultServicePort = options.defaultServicePort || endpoint.port || null;
   const enrichedContext = {
@@ -481,7 +482,10 @@ function buildServiceExposurePayloadSnapshot(settings = {}, context = {}, option
         openAiGatewayLanBaseUrl: managerLanBaseUrl ? joinBaseAndPath(managerLanBaseUrl, openAiGatewayPath) : null,
         openAiLocalBaseUrl: endpoint.compat?.openai?.baseUrl || endpoint.localUrl || "",
         openAiLanBaseUrl: endpoint.compat?.openai?.lanBaseUrl || null,
+        claudeLocalBaseUrl: endpoint.compat?.claude?.baseUrl || joinBaseAndPath(managerLocalBaseUrl, claudeBasePath),
+        claudeLanBaseUrl: endpoint.compat?.claude?.publicBaseUrl || (managerLanBaseUrl ? joinBaseAndPath(managerLanBaseUrl, claudeBasePath) : null),
         claudeLocalMessagesUrl: endpoint.compat?.claude?.messagesUrl || joinBaseAndPath(managerLocalBaseUrl, claudeMessagesPath),
+        claudeLanMessagesUrl: managerLanBaseUrl ? joinBaseAndPath(managerLanBaseUrl, claudeMessagesPath) : null,
         claudePublicBaseUrl: endpoint.compat?.claude?.publicBaseUrl || null,
         openCodeBaseUrl: openCodeBasePath ? joinBaseAndPath(managerLocalBaseUrl, openCodeBasePath) : "",
         modelIds: (runtime.servedModels || []).map((model) => model.id).filter(Boolean),

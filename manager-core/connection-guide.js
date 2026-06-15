@@ -64,11 +64,13 @@ function buildConnectionGuideSnapshot(options = {}) {
   const managerLan = options.managerLan ? String(options.managerLan).replace(/\/$/, "") : null;
   const aliases = Array.isArray(options.claudeModelAliases) ? options.claudeModelAliases.filter(Boolean) : [];
   const openAiGatewayBase = `${managerLocal}/serve/v1`;
+  const openAiGatewayLanBase = managerLan ? `${managerLan}/serve/v1` : null;
   const model = runtime?.models?.[0]?.id || runtime?.servedModels?.[0]?.id || "";
   const claude = {
     ...(endpoint.compat?.claude || {}),
     ...(options.claude || {}),
   };
+  const claudeLanBase = claude.publicBaseUrl || (managerLan ? `${managerLan}/claude` : null);
   if (!claude.modelAlias && aliases[0]) claude.modelAlias = aliases[0];
   return {
     ok: Boolean(runtime?.container?.running),
@@ -77,22 +79,24 @@ function buildConnectionGuideSnapshot(options = {}) {
     model,
     openai: {
       baseUrl: openAiGatewayBase,
+      lanBaseUrl: openAiGatewayLanBase,
       chatCompletionsUrl: `${openAiGatewayBase}/chat/completions`,
       modelsUrl: `${openAiGatewayBase}/models`,
+      lanModelsUrl: openAiGatewayLanBase ? `${openAiGatewayLanBase}/models` : null,
       directBaseUrl: endpoint.compat?.openai?.baseUrl || endpoint.localUrl || "",
       apiKey: options.apiKeyLabel || "service-exposure-api-key",
-      curl: `curl ${openAiGatewayBase}/models`,
+      curl: `curl ${openAiGatewayLanBase || openAiGatewayBase}/models`,
     },
     claude,
     openwebui: {
-      baseUrl: openAiGatewayBase,
+      baseUrl: openAiGatewayLanBase || openAiGatewayBase,
       model: model || "local-current",
       note: options.openwebuiNote || "OpenWebUI 的 OpenAI API Base URL 建议填管理器 /serve/v1；API Key 使用对外服务页保存的密钥。",
     },
     ccswitch: {
-      providerBaseUrl: `${managerLocal}/claude`,
+      providerBaseUrl: claudeLanBase || `${managerLocal}/claude`,
       modelAlias: claude.modelAlias || aliases[0] || "",
-      healthUrl: `${managerLocal}/api/tools/health`,
+      healthUrl: `${managerLan || managerLocal}/api/tools/health`,
       ...(options.ccswitch || {}),
     },
     ...(options.extra || {}),

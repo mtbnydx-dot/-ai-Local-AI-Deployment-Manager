@@ -384,7 +384,7 @@ const serviceGatewayAccessLogStore = core.createServiceGatewayAccessLogStore({
   normalizeServiceExposureSettings,
   getContainerStatus: () => getContainerStatus(CONFIG.containerName),
   getContainerEndpoint,
-  claudeBasePath: "/claude/v1",
+  claudeBasePath: "/claude",
   parseJsonSafe,
 });
 const {
@@ -1058,7 +1058,8 @@ async function buildServiceExposurePayload(settings) {
     lanAddress: getLanAddress(),
     remoteManagementAllowed: ALLOW_REMOTE_MANAGEMENT,
     defaultServicePort: CONFIG.defaultPort,
-    claudeMessagesPath: "/claude/messages",
+    claudeBasePath: "/claude",
+    claudeMessagesPath: "/claude/v1/messages",
     runtimeApiKeySupported: false,
     checkOptions: SERVICE_EXPOSURE_CHECK_OPTIONS,
   });

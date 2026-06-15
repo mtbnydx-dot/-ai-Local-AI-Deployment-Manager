@@ -2462,6 +2462,15 @@ textarea:focus {
   background: color-mix(in srgb, var(--surface-2) 56%, var(--surface));
 }
 
+.exposure-endpoint-card.recommended {
+  border-color: color-mix(in srgb, var(--teal) 38%, var(--line));
+  background: color-mix(in srgb, var(--teal) 9%, var(--surface));
+}
+
+.exposure-endpoint-card.debug {
+  opacity: 0.82;
+}
+
 .exposure-endpoint-card span {
   font-size: 12px;
   color: var(--muted);

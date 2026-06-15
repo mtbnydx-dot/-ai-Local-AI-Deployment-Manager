@@ -57,14 +57,19 @@
         ? `http://${lanAddress}:${servicePort}/v1`
         : "";
       const publicOpenAi = settings.publicBaseUrl ? `${settings.publicBaseUrl.replace(/\/$/, "")}/serve/v1` : "";
+      const openAiClientBase = service.openAiGatewayLanBaseUrl || service.openAiGatewayLocalBaseUrl || "-";
+      const openAiLocalGateway = service.openAiGatewayLocalBaseUrl || "-";
+      const claudeClientBase = service.claudeLanBaseUrl || service.claudePublicBaseUrl || service.claudeLocalBaseUrl || "-";
+      const claudeMessagesUrl = service.claudeLanMessagesUrl || service.claudeLocalMessagesUrl || "-";
       root.innerHTML = `
-        ${exposureEndpointCard("OpenAI 网关（推荐）", service.openAiGatewayLocalBaseUrl || "-", "鉴权、限流、并发和超时都在这里执行；模型名可用 local-current")}
-        ${service.openAiGatewayLanBaseUrl ? exposureEndpointCard("OpenAI 网关局域网", service.openAiGatewayLanBaseUrl, "局域网设备优先使用这个地址") : ""}
+        ${exposureEndpointCard("Chatbox / OpenWebUI / OpenAI SDK", openAiClientBase, "Provider 选 OpenAI Compatible；Base URL 必须以 /serve/v1 结尾，API Key 填客户端 Key / Bearer Token，不要填 /claude。", "recommended")}
+        ${openAiLocalGateway !== openAiClientBase ? exposureEndpointCard("OpenAI 本机网关", openAiLocalGateway, "本机客户端使用；同样走鉴权、限流、并发、审计。") : ""}
         ${publicOpenAi ? exposureEndpointCard("OpenAI 网关公网", publicOpenAi, "反向代理后提供给外部客户端") : ""}
-        ${exposureEndpointCard("OpenAI 直连容器", service.openAiLocalBaseUrl || "-", "本机调试用；不经过管理器网关限流")}
-        ${service.openAiLanBaseUrl ? exposureEndpointCard("OpenAI 容器局域网", service.openAiLanBaseUrl, `Docker 已把容器端口转发到 ${service.lanHost || "本机局域网 IP"}；直连容器端口，外部使用前需确认容器自身或反向代理鉴权`) : ""}
-        ${plannedOpenAiLan ? exposureEndpointCard("OpenAI 容器局域网（下次启动）", plannedOpenAiLan, "保存并按局域网模式启动/重启模型后，Docker 会把容器端口转发到这个本机 IP。") : ""}
-        ${settings.exposeClaude !== false ? exposureEndpointCard("Claude 桥", service.claudeLocalMessagesUrl || "-", "Claude Desktop / Cowork / Claude Code") : ""}
+        ${settings.exposeClaude !== false ? exposureEndpointCard("Claude / Cowork / CC Switch", claudeClientBase, "Provider 选 Anthropic / Claude；Base URL 填 /claude，认证字段用 ANTHROPIC_API_KEY 或 Bearer Token。", "recommended") : ""}
+        ${settings.exposeClaude !== false ? exposureEndpointCard("Claude messages 完整 URL", claudeMessagesUrl, "只有客户端明确要求完整 messages endpoint 时才填；一般不要手动追加 /v1/messages。") : ""}
+        ${exposureEndpointCard("仅调试：OpenAI 容器直连", service.openAiLocalBaseUrl || "-", "本机排错用；不经过管理器的客户端 Key、限流、并发和审计，不建议给 Chatbox/OpenWebUI。", "debug")}
+        ${service.openAiLanBaseUrl ? exposureEndpointCard("仅调试：容器局域网直连", service.openAiLanBaseUrl, `Docker 已转发到 ${service.lanHost || "本机局域网 IP"}；外部服务优先使用 /serve/v1 网关。`, "debug") : ""}
+        ${plannedOpenAiLan ? exposureEndpointCard("容器局域网直连（下次启动）", plannedOpenAiLan, "保存并按局域网模式启动/重启模型后才会生效；外部客户端仍优先使用 /serve/v1。", "debug") : ""}
         ${includeOpenCode && settings.exposeOpenCode !== false ? exposureEndpointCard("OpenCode", service.openCodeBaseUrl || "-", "模型名可用 local-current") : ""}
         ${exposureEndpointCard("Manager", manager.localBaseUrl || "-", manager.remoteManagementAllowed ? "管理器允许远程访问" : "管理器仅建议本机访问")}
         <div class="exposure-runtime-summary">
@@ -77,9 +82,9 @@
       `;
     }
 
-    function exposureEndpointCard(title, value, detail) {
+    function exposureEndpointCard(title, value, detail, kind = "") {
       return `
-        <article class="exposure-endpoint-card">
+        <article class="exposure-endpoint-card ${escapeAttr(kind)}">
           <span>${escapeHtml(title)}</span>
           <code>${escapeHtml(value)}</code>
           <small>${escapeHtml(detail || "")}</small>

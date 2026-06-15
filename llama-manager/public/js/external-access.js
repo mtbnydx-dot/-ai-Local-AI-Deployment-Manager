@@ -74,9 +74,9 @@
       const apiKeyLabel = service.requireApiKey ? "需要 API Key" : "未强制 API Key";
       const runningLabel = service.running ? "模型服务运行中" : "模型服务未运行";
       const cards = [
-        renderExternalEndpointCard("Claude 兼容入口", service.claudeBaseUrl || "-", endpointDetails.claude || "给 Claude Desktop / CC Switch 使用。", service.running ? "ok" : "warn"),
-        renderExternalEndpointCard("OpenAI 兼容入口", service.openAiGatewayBaseUrl || "-", endpointDetails.openai || "给 OpenWebUI、OpenCode 或 OpenAI SDK 使用。", service.running ? "ok" : "warn"),
-        renderExternalEndpointCard("容器直连入口", service.openAiContainerBaseUrl || "-", "仅用于故障排查；它会绕过管理器的 API Key、限流、审计与客户端策略，外部服务请用上面的兼容入口。", "warn"),
+        renderExternalEndpointCard("Chatbox / OpenWebUI / OpenAI SDK", service.openAiGatewayBaseUrl || "-", endpointDetails.openai || "Provider 选 OpenAI Compatible；Base URL 必须以 /serve/v1 结尾，不要填 /claude 或 /v1/messages。", service.running ? "ok" : "warn"),
+        renderExternalEndpointCard("Claude / Cowork / CC Switch", service.claudeBaseUrl || "-", endpointDetails.claude || "Provider 选 Anthropic / Claude；Base URL 填 /claude，只有客户端要求完整 endpoint 时才填 /claude/v1/messages。", service.running ? "ok" : "warn"),
+        renderExternalEndpointCard("仅调试：容器直连入口", service.openAiContainerBaseUrl || "-", "排错用；它会绕过管理器的 API Key、限流、审计与客户端策略，外部客户端优先用 /serve/v1。", "warn"),
         renderExternalEndpointCard("访问策略", `${apiKeyLabel} · ${fmtTokens(service.rateLimitRpm || 0)} rpm · 并发 ${fmtTokens(service.maxConcurrentRequests || 0)}`, `${runningLabel} · LAN ${service.lanAddress || "-"}`, service.requireApiKey ? "ok" : "warn"),
       ];
       root.innerHTML = cards.join("");
