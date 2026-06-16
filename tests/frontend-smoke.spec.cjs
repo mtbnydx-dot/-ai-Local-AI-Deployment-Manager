@@ -107,9 +107,35 @@ async function smokePage(page, baseUrl, label) {
       body: "window.lucide={createIcons(){}};",
     });
   });
+  await page.route("**/api/models", async (route) => {
+    const local = Array.from({ length: 12 }, (_, index) => ({
+      id: `${label.toLowerCase()}-smoke-model-${index + 1}`,
+      label: `${label} Smoke Model ${index + 1}`,
+      launchModel: `D:/AI/models/${label.toLowerCase()}-smoke-model-${index + 1}`,
+      path: `D:/AI/models/${label.toLowerCase()}-smoke-model-${index + 1}`,
+      size: 4_000_000_000 + index,
+      hasConfig: label === "vLLM",
+      hasGguf: label !== "vLLM",
+      ggufFiles: label !== "vLLM" ? [{ name: `smoke-${index + 1}.Q4_K_M.gguf` }] : [],
+    }));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ local, cached: [] }),
+    });
+  });
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page.locator("[data-view-panel='service']").first()).toBeVisible();
+  await page.locator("#modelPickerToggle").click();
+  await expect(page.locator(".model-picker-item")).toHaveCount(12);
+  const pickerScroll = await page.locator("#modelPickerList").evaluate((node) => ({
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    overflowY: getComputedStyle(node).overflowY,
+  }));
+  expect(pickerScroll.scrollHeight, `${label} picker should expose more than four models`).toBeGreaterThan(pickerScroll.clientHeight);
+  expect(pickerScroll.overflowY).toMatch(/auto|scroll/);
+  await page.locator("#modelPickerToggle").click();
   for (const view of ["download", "exposure", "external-access", "stats"]) {
     await page.locator(`[data-view='${view}']`).click();
     await expect(page.locator(`[data-view-panel='${view}']`).first()).toBeVisible();

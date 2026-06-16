@@ -1397,6 +1397,7 @@ textarea {
   max-height: min(620px, 72vh);
   overflow: hidden;
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -1437,6 +1438,7 @@ textarea {
 .model-picker-list {
   display: grid;
   gap: 8px;
+  min-height: 0;
   overflow: auto;
   padding-right: 2px;
 }
