@@ -3758,6 +3758,15 @@ pre {
   gap: 7px;
 }
 
+.app-signature {
+  padding: 10px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: center;
+}
+
 .danger-text {
   color: var(--red);
 }

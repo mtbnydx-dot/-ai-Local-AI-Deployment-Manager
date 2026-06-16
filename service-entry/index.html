@@ -319,6 +319,14 @@
       pointer-events: none;
     }
     .toast.show { opacity: 1; transform: translateY(0); }
+    .app-signature {
+      padding: 6px 0 2px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+      letter-spacing: 0;
+    }
     @media (max-width: 960px) {
       header { display: grid; align-items: start; }
       .toolbar { justify-content: flex-start; }
@@ -411,6 +419,7 @@
         </a>
       </div>
     </section>
+    <footer class="app-signature">© 2026 mtbnydx-dot</footer>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

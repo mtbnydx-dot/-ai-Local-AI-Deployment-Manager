@@ -126,6 +126,7 @@ async function smokePage(page, baseUrl, label) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page.locator("[data-view-panel='service']").first()).toBeVisible();
+  await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
   await page.locator("#modelPickerToggle").click();
   await expect(page.locator(".model-picker-item")).toHaveCount(12);
   const pickerScroll = await page.locator("#modelPickerList").evaluate((node) => ({
@@ -165,6 +166,7 @@ async function smokeEntryPage(page, baseUrl) {
   await expect(page.locator("#entrySummary")).toBeVisible();
   await expect(page.locator("#managerGrid")).toBeVisible();
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
+  await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
   await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });
   expect(failures, "service-entry frontend errors").toEqual([]);
 }
