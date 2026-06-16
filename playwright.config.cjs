@@ -1,5 +1,7 @@
 const { defineConfig } = require("@playwright/test");
 
+const browserChannel = process.env.PLAYWRIGHT_BROWSER_CHANNEL || "";
+
 module.exports = defineConfig({
   testDir: "./tests",
   timeout: 60_000,
@@ -8,7 +10,7 @@ module.exports = defineConfig({
   reporter: [["list"]],
   use: {
     browserName: "chromium",
-    channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL || "chrome",
+    ...(browserChannel ? { channel: browserChannel } : {}),
     headless: true,
     viewport: { width: 1440, height: 960 },
     ignoreHTTPSErrors: true,
