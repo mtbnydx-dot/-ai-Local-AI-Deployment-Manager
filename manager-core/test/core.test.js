@@ -15,6 +15,16 @@ test("network helpers normalize local, lan, and host values", () => {
   assert.equal(core.extractHostname("http://192.168.1.2:5177/path"), "192.168.1.2");
 });
 
+test("network helpers prefer physical LAN addresses over virtual adapters", () => {
+  const address = core.getLanAddress({
+    "vEthernet (WSL)": [{ family: "IPv4", internal: false, address: "172.28.192.1" }],
+    "VMware Network Adapter VMnet8": [{ family: "IPv4", internal: false, address: "192.168.153.1" }],
+    "以太网 5": [{ family: "IPv4", internal: false, address: "192.168.31.209" }],
+    Loopback: [{ family: "IPv4", internal: true, address: "127.0.0.1" }],
+  });
+  assert.equal(address, "192.168.31.209");
+});
+
 test("secret records migrate legacy plaintext to hash-only shape", () => {
   const record = core.normalizeSecretRecord({ apiKey: "sk-local-secret" });
   assert.equal(record.secret, "");

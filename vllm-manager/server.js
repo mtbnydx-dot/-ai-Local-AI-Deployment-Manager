@@ -72,6 +72,7 @@ try {
 const app = express();
 const PORT = Number(process.env.VLLM_MANAGER_PORT || 5177);
 const HOST = process.env.VLLM_MANAGER_HOST || "127.0.0.1";
+const SHARED_PUBLIC_JS_DIR = path.join(__dirname, "..", "shared-public", "js");
 const ALLOW_REMOTE_MANAGEMENT = process.env.VLLM_MANAGER_ALLOW_REMOTE === "1";
 const DEFAULT_VLLM_IMAGE = `vllm/vllm-openai:${process.env.VLLM_IMAGE_VERSION || "v0.21.0"}`;
 const DEFAULT_GEMMA_VLLM_IMAGE = "vllm/vllm-openai:gemma";
@@ -498,6 +499,7 @@ core.registerOpenAiBaseUrlHintRoutes(app, { openAiGatewayPath: "/serve/v1" });
 app.use(managerSecurityGuard);
 app.use(express.json({ limit: "32mb" }));
 app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude", "/opencode/v1"], serviceGatewayMiddleware);
+app.use("/shared-js", express.static(SHARED_PUBLIC_JS_DIR));
 app.use(express.static(path.join(__dirname, "public")));
 
 core.registerManagerRoutes(app, {

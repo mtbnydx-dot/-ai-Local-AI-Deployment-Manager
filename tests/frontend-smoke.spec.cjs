@@ -122,6 +122,27 @@ async function smokePage(page, baseUrl, label) {
   expect(failures, `${label} frontend errors`).toEqual([]);
 }
 
+async function smokeEntryPage(page, baseUrl) {
+  const failures = [];
+  page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") failures.push(`console: ${message.text()}`);
+  });
+  page.on("response", (response) => {
+    const type = response.request().resourceType();
+    if (["document", "script", "stylesheet"].includes(type) && response.status() >= 400) {
+      failures.push(`${type} ${response.status()}: ${response.url()}`);
+    }
+  });
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("h1")).toContainText("本地模型服务统一入口");
+  await expect(page.locator("#entrySummary")).toBeVisible();
+  await expect(page.locator("#managerGrid")).toBeVisible();
+  await expect(page.locator("#entryAccessPanel")).toBeVisible();
+  await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });
+  expect(failures, "service-entry frontend errors").toEqual([]);
+}
+
 test.describe("manager frontends", () => {
   let managers = [];
 
@@ -156,6 +177,27 @@ test.describe("manager frontends", () => {
     try {
       await smokePage(await context.newPage(), managers[0].url, "vLLM");
       await smokePage(await context.newPage(), managers[1].url, "llama");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("service-entry dashboard loads", async ({ browser }) => {
+    const entryPort = await getFreePort();
+    managers = [
+      await startManager({
+        cwd: path.join(ROOT, "service-entry"),
+        port: entryPort,
+        env: {
+          SERVICE_ENTRY_HOST: "127.0.0.1",
+          SERVICE_ENTRY_PORT: String(entryPort),
+        },
+      }),
+    ];
+
+    const context = await browser.newContext();
+    try {
+      await smokeEntryPage(await context.newPage(), managers[0].url);
     } finally {
       await context.close();
     }

@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { parseJsonSafe } = require("./common-utils");
 const {
   buildEffectiveServiceSettings,
   enterServiceConcurrency,
@@ -127,14 +128,6 @@ function isExpectedStreamDisconnect(error, res = null) {
     || message.includes("aborted")
     || message.includes("premature close")
   );
-}
-
-function parseJsonSafe(text, fallback = null) {
-  try {
-    return text ? JSON.parse(text) : fallback;
-  } catch {
-    return fallback;
-  }
 }
 
 function uniqueModelsById(models) {

@@ -1,50 +1,73 @@
-module.exports = {
-  ...require("./common-utils"),
-  ...require("./network"),
-  ...require("./connection-guide"),
-  ...require("./compatibility-utils"),
-  ...require("./health"),
-  ...require("./secrets"),
-  ...require("./gateway-utils"),
-  ...require("./access-log"),
-  ...require("./prometheus-utils"),
-  ...require("./stats-utils"),
-  ...require("./stats-ledger-store"),
-  ...require("./file-utils"),
-  ...require("./docker-utils"),
-  ...require("./docker-runtime"),
-  ...require("./gpu-runtime"),
-  ...require("./download-utils"),
-  ...require("./download-job-controller"),
-  ...require("./job-utils"),
-  ...require("./jobs-ledger-store"),
-  ...require("./process-job-runner"),
-  ...require("./remote-model-utils"),
-  ...require("./memory-estimator"),
-  ...require("./claude-bridge"),
-  ...require("./claude-compression"),
-  ...require("./claude-routes"),
-  ...require("./service-policy"),
-  ...require("./service-exposure-store"),
-  ...require("./service-clients-store"),
-  ...require("./service-usage-store"),
-  ...require("./service-policy-routes"),
-  ...require("./job-routes"),
-  ...require("./audit-store"),
-  ...require("./audit-routes"),
-  ...require("./tools-routes"),
-  ...require("./benchmark-runner"),
-  ...require("./manager-routes"),
-  ...require("./manager-security"),
-  ...require("./manager-lifecycle"),
-  ...require("./settings-stores"),
-  ...require("./model-routes"),
-  ...require("./model-filesystem-store"),
-  ...require("./runtime-routes"),
-  ...require("./runtime-request-utils"),
-  ...require("./runtime-control"),
-  ...require("./runtime-wait"),
-  ...require("./runtime-log-summary"),
-  ...require("./integration-routes"),
-  ...require("./openwebui-audit-exporter"),
-};
+const MODULES = [
+  "./common-utils",
+  "./network",
+  "./connection-guide",
+  "./compatibility-utils",
+  "./health",
+  "./secrets",
+  "./gateway-utils",
+  "./access-log",
+  "./prometheus-utils",
+  "./stats-utils",
+  "./stats-ledger-store",
+  "./file-utils",
+  "./docker-utils",
+  "./docker-runtime",
+  "./gpu-runtime",
+  "./download-utils",
+  "./download-job-controller",
+  "./job-utils",
+  "./jobs-ledger-store",
+  "./process-job-runner",
+  "./remote-model-utils",
+  "./memory-estimator",
+  "./claude-bridge",
+  "./claude-compression",
+  "./claude-routes",
+  "./service-policy",
+  "./service-exposure-store",
+  "./service-clients-store",
+  "./service-usage-store",
+  "./service-policy-routes",
+  "./job-routes",
+  "./audit-store",
+  "./audit-routes",
+  "./tools-routes",
+  "./benchmark-runner",
+  "./manager-routes",
+  "./manager-security",
+  "./manager-lifecycle",
+  "./settings-stores",
+  "./model-routes",
+  "./model-filesystem-store",
+  "./runtime-routes",
+  "./runtime-request-utils",
+  "./runtime-control",
+  "./runtime-wait",
+  "./runtime-log-summary",
+  "./integration-routes",
+  "./openwebui-audit-exporter",
+];
+
+function mergeExports(moduleNames) {
+  const merged = {};
+  const owners = {};
+  for (const moduleName of moduleNames) {
+    const exports = require(moduleName);
+    for (const [key, value] of Object.entries(exports)) {
+      if (Object.hasOwn(merged, key) && merged[key] !== value) {
+        process.emitWarning(
+          `manager-core export "${key}" from ${moduleName} overrides ${owners[key]}.`,
+          { code: "MANAGER_CORE_EXPORT_COLLISION" },
+        );
+      }
+      merged[key] = value;
+      owners[key] = moduleName;
+    }
+  }
+  return merged;
+}
+
+module.exports = mergeExports(MODULES);
+module.exports.MODULES = MODULES.slice();
+module.exports.mergeExports = mergeExports;

@@ -2,12 +2,43 @@ const net = require("node:net");
 const os = require("node:os");
 
 function getLanAddress(interfaces = os.networkInterfaces()) {
-  for (const values of Object.values(interfaces || {})) {
+  const candidates = [];
+  for (const [name, values] of Object.entries(interfaces || {})) {
     for (const item of values || []) {
-      if (item.family === "IPv4" && !item.internal) return item.address;
+      if (item.family !== "IPv4" || item.internal || !item.address) continue;
+      if (item.address === "127.0.0.1" || item.address.startsWith("169.254.")) continue;
+      candidates.push({
+        address: item.address,
+        name,
+        virtual: isVirtualInterfaceName(name) || isVirtualLanAddress(item.address),
+        privateLan: isPrivateLanAddress(item.address),
+      });
     }
   }
-  return "127.0.0.1";
+  const preferred = candidates
+    .filter((item) => item.privateLan && !item.virtual)
+    .sort((a, b) => lanAddressRank(a.address) - lanAddressRank(b.address))[0];
+  return preferred?.address || candidates.find((item) => item.privateLan)?.address || candidates[0]?.address || "127.0.0.1";
+}
+
+function isVirtualInterfaceName(name = "") {
+  return /docker|wsl|vethernet|hyper-v|virtualbox|vmware|loopback|tailscale|zerotier/i.test(String(name));
+}
+
+function isVirtualLanAddress(address = "") {
+  // Docker Desktop and WSL commonly occupy 172.16/12. Prefer 192.168/10.x physical LANs when present.
+  return /^172\.(1[6-9]|2\d|3[0-1])\./.test(String(address));
+}
+
+function isPrivateLanAddress(address = "") {
+  return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(String(address));
+}
+
+function lanAddressRank(address = "") {
+  if (String(address).startsWith("192.168.")) return 0;
+  if (String(address).startsWith("10.")) return 1;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(String(address))) return 2;
+  return 3;
 }
 
 function normalizeRemoteAddress(value) {

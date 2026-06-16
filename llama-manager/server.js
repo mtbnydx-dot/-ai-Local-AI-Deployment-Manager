@@ -68,6 +68,7 @@ try {
 const app = express();
 const PORT = Number(process.env.LLAMA_MANAGER_PORT || 5178);
 const HOST = process.env.LLAMA_MANAGER_HOST || "127.0.0.1";
+const SHARED_PUBLIC_JS_DIR = path.join(__dirname, "..", "shared-public", "js");
 const ALLOW_REMOTE_MANAGEMENT = process.env.LLAMA_MANAGER_ALLOW_REMOTE === "1";
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || (process.platform === "win32" ? "D:\\AI" : path.join(os.homedir(), "AI"));
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || (process.platform === "win32" ? "D:\\DevTools" : "");
@@ -457,6 +458,7 @@ core.registerOpenAiBaseUrlHintRoutes(app, { openAiGatewayPath: "/serve/v1" });
 app.use(managerSecurityGuard);
 app.use(express.json({ limit: "32mb" }));
 app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude"], serviceGatewayMiddleware);
+app.use("/shared-js", express.static(SHARED_PUBLIC_JS_DIR));
 app.use(express.static(path.join(__dirname, "public")));
 
 core.registerManagerRoutes(app, {
@@ -1456,7 +1458,8 @@ function getLanAddress() {
 }
 
 function dockerGpuArg(gpuDeviceIds) {
-  return "all";
+  const ids = normalizeGpuIds(gpuDeviceIds);
+  return ids.length ? `device=${ids.join(",")}` : "all";
 }
 
 function windowsPathToContainerPath(value) {

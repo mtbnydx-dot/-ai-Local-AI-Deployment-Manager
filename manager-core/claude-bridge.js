@@ -1,14 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-
-function parseJsonSafe(value, fallback = null) {
-  try {
-    return JSON.parse(String(value));
-  } catch {
-    return fallback;
-  }
-}
+const { parseJsonSafe } = require("./common-utils");
 
 function anthropicMessagesToOpenAi(body = {}) {
   const messages = [];

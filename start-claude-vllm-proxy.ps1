@@ -9,9 +9,9 @@ try {
     $models = Invoke-RestMethod -Uri "$backend/v1/models" -TimeoutSec 10
     $modelId = $models.data[0].id
     if ($modelId) {
-        [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $proxyBaseUrl, "User")
-        [Environment]::SetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN", "local-vllm", "User")
-        [Environment]::SetEnvironmentVariable("ANTHROPIC_MODEL", $modelId, "User")
+        $env:ANTHROPIC_BASE_URL = $proxyBaseUrl
+        $env:ANTHROPIC_AUTH_TOKEN = "local-vllm"
+        $env:ANTHROPIC_MODEL = $modelId
     }
 } catch {
     # Keep the proxy startup best-effort even if vLLM is still warming up.

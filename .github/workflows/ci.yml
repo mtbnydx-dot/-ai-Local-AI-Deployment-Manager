@@ -16,6 +16,14 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install root dependencies
+        shell: cmd
+        run: npm ci
+
+      - name: Install Playwright browser
+        shell: cmd
+        run: npx playwright install chromium
+
       - name: Install package dependencies
         shell: pwsh
         run: |

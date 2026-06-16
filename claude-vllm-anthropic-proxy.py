@@ -104,6 +104,7 @@ def normalize_anthropic_messages(body, model_id=None):
 class ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     backend = "http://127.0.0.1:8000"
+    upstream_timeout = 600
     model_id = None
     model_cache_seconds = 30
     model_cache_expires_at = 0
@@ -146,7 +147,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         req = Request(target, data=body if self.command != "GET" else None, headers=headers, method=self.command)
 
         try:
-            with urlopen(req, timeout=None) as resp:
+            with urlopen(req, timeout=self.upstream_timeout) as resp:
                 if self.should_stream_response(resp, raw_body):
                     self.stream_response(resp)
                 else:
@@ -212,10 +213,12 @@ def main():
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--backend", default="http://127.0.0.1:8000")
+    parser.add_argument("--upstream-timeout", type=float, default=600)
     parser.add_argument("--model-cache-seconds", type=int, default=30)
     args = parser.parse_args()
 
     ProxyHandler.backend = args.backend
+    ProxyHandler.upstream_timeout = max(args.upstream_timeout, 1)
     ProxyHandler.model_cache_seconds = max(args.model_cache_seconds, 0)
     model_id = get_current_model()
     server = ThreadingHTTPServer((args.listen, args.port), ProxyHandler)

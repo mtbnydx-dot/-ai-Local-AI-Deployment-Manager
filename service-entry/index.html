@@ -91,6 +91,11 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 16px;
     }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
     .card {
       background: var(--surface);
       border: 1px solid var(--line);
@@ -139,6 +144,9 @@
     }
     .metric span { color: var(--muted); font-size: 12px; }
     .metric strong { font-size: 17px; overflow-wrap: anywhere; }
+    .metric.ok strong { color: var(--green); }
+    .metric.warn strong { color: var(--amber); }
+    .metric.fail strong { color: var(--red); }
     .links {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -156,6 +164,76 @@
       overflow-wrap: anywhere;
     }
     .endpoint-list { display: grid; gap: 10px; }
+    .health-list,
+    .access-list,
+    .model-list {
+      display: grid;
+      gap: 8px;
+    }
+    .health-row,
+    .access-row,
+    .model-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .health-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .health-row.ok .health-dot,
+    .access-row.ok .health-dot,
+    .model-row .health-dot { background: var(--green); }
+    .health-row.warn .health-dot,
+    .access-row.warn .health-dot { background: var(--amber); }
+    .health-row.fail .health-dot,
+    .access-row.fail .health-dot { background: var(--red); }
+    .row-main {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+    .row-main strong,
+    .row-main span {
+      overflow-wrap: anywhere;
+    }
+    .row-main span,
+    .row-side {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .access-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 14px;
+    }
+    .timeline {
+      min-height: 92px;
+      display: flex;
+      align-items: end;
+      gap: 3px;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .bar {
+      flex: 1;
+      min-width: 3px;
+      min-height: 3px;
+      border-radius: 999px 999px 0 0;
+      background: var(--blue);
+      opacity: 0.72;
+    }
+    .bar.error { background: var(--red); }
     .endpoint {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
@@ -245,11 +323,16 @@
       header { display: grid; align-items: start; }
       .toolbar { justify-content: flex-start; }
       .grid { grid-template-columns: 1fr; }
+      .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .access-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 620px) {
       main { width: min(100vw - 20px, 1220px); padding: 20px 0; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .endpoint { grid-template-columns: 1fr; }
+      .health-row, .access-row, .model-row { grid-template-columns: auto minmax(0, 1fr); }
+      .row-side { grid-column: 2; }
       button, .button { width: 100%; }
     }
   </style>
@@ -267,6 +350,19 @@
       </div>
     </header>
 
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>服务总览</h2>
+          <p>统一入口、两个管理器、模型容器和外来访问的当前状态。</p>
+        </div>
+        <span class="badge" id="lastUpdatedBadge">等待刷新</span>
+      </div>
+      <div class="summary-grid" id="entrySummary">
+        <div class="empty">正在生成总览...</div>
+      </div>
+    </section>
+
     <section id="managerGrid" class="grid">
       <div class="empty">正在读取本地服务状态...</div>
     </section>
@@ -276,6 +372,19 @@
       <p>给新设备优先使用这里的 auto 地址；后台会自动转到当前可用的 vLLM 或 llama.cpp 管理器。</p>
       <div class="gateway-strip" id="entryGatewayStrip">
         <div class="empty">正在读取统一网关地址...</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>统一网关访问</h2>
+          <p>只统计 service-entry 入口转发的请求元数据，不记录提示词或响应正文。</p>
+        </div>
+        <a class="button" href="/api/gateway-access" target="_blank" rel="noreferrer">原始统计 JSON</a>
+      </div>
+      <div class="access-grid" id="entryAccessPanel">
+        <div class="empty">正在读取统一网关访问统计...</div>
       </div>
     </section>
 
@@ -307,10 +416,14 @@
 
   <script>
     const grid = document.querySelector("#managerGrid");
+    const entrySummary = document.querySelector("#entrySummary");
+    const entryAccessPanel = document.querySelector("#entryAccessPanel");
     const entryGatewayStrip = document.querySelector("#entryGatewayStrip");
+    const lastUpdatedBadge = document.querySelector("#lastUpdatedBadge");
     const toast = document.querySelector("#toast");
     const refreshBtn = document.querySelector("#refreshBtn");
     const stopBtn = document.querySelector("#stopBtn");
+    let refreshTimer = null;
 
     refreshBtn.addEventListener("click", refresh);
     stopBtn.addEventListener("click", stopAll);
@@ -333,19 +446,42 @@
     });
 
     refresh();
+    refreshTimer = setInterval(refresh, 15000);
 
     async function refresh() {
       refreshBtn.disabled = true;
       try {
         const response = await fetch("/api/status", { cache: "no-store" });
         const data = await response.json();
+        renderSummary(data.entry || {}, data.managers || []);
         renderEntryGateway(data.entry || {});
+        renderEntryAccess(data.entry?.gatewayAccess || {});
         renderManagers(data.managers || []);
+        if (lastUpdatedBadge) lastUpdatedBadge.textContent = `已刷新 ${new Date().toLocaleTimeString()}`;
       } catch (error) {
         grid.innerHTML = `<div class="empty">统一入口服务异常：${escapeHtml(error.message)}</div>`;
       } finally {
         refreshBtn.disabled = false;
       }
+    }
+
+    function renderSummary(entry, managers) {
+      const access = entry.gatewayAccess || {};
+      const totals = access.totals || {};
+      const requests = totals.requests || {};
+      const runningManagers = managers.filter((manager) => manager.process?.portListening).length;
+      const runningModels = managers.reduce((count, manager) => count + (manager.exposure?.actual?.service?.running ? 1 : 0), 0);
+      const activeClients = managers.reduce((count, manager) => count + Number(manager.exposure?.actual?.service?.clients?.active || 0), 0);
+      const gpu = managers.map((manager) => manager.runtime?.gpu).find(Boolean);
+      const gpuText = gpu?.totalMb ? `${formatBytes(gpu.usedMb * 1024 * 1024)} / ${formatBytes(gpu.totalMb * 1024 * 1024)}` : "-";
+      entrySummary.innerHTML = [
+        metric("统一入口", `${entry.host || "127.0.0.1"}:${entry.port || "-"}`, "ok"),
+        metric("管理器在线", `${runningManagers} / ${managers.length}`, runningManagers === managers.length ? "ok" : "warn"),
+        metric("运行中模型", String(runningModels), runningModels ? "ok" : "warn"),
+        metric("客户端 Key", String(activeClients), activeClients ? "ok" : "warn"),
+        metric("GPU 显存", gpuText, "ok"),
+        metric("网关错误率", formatPercent(requests.errorRate || 0), requests.errorRate ? "warn" : "ok"),
+      ].join("");
     }
 
     function renderEntryGateway(entry) {
@@ -367,6 +503,54 @@
         ? rows.map(([label, value]) => endpoint(label, value)).join("")
         : `<div class="empty">统一入口当前只监听本机；如需局域网 auto 地址，请调整 SERVICE_ENTRY_HOST。</div>`;
       entryGatewayStrip.innerHTML += stats;
+    }
+
+    function renderEntryAccess(access) {
+      const totals = access.totals || {};
+      const requests = totals.requests || {};
+      const recent = Array.isArray(access.recent) ? access.recent.slice(0, 8) : [];
+      const paths = Array.isArray(access.paths) ? access.paths.slice(0, 5) : [];
+      const timeline = Array.isArray(access.timeline) ? access.timeline.slice(-24) : [];
+      entryAccessPanel.innerHTML = `
+        <div class="access-list">
+          ${[
+            metric("总请求", String(requests.total || 0)),
+            metric("成功 / 错误", `${requests.success || 0} / ${requests.error || 0}`, requests.error ? "warn" : "ok"),
+            metric("流式请求", String(requests.streamed || 0)),
+            metric("Token", String(totals.tokens?.total || 0)),
+          ].join("")}
+          <div class="timeline" title="最近约 2 小时，每 5 分钟一格">
+            ${renderTimeline(timeline)}
+          </div>
+          <div class="access-list">
+            ${paths.length ? paths.map((item) => accessRow(item.key, `${item.count} 次 · 错误率 ${formatPercent(item.errorRate || 0)}`, item.error ? "warn" : "ok")).join("") : `<p class="subtle">暂无路径统计。</p>`}
+          </div>
+        </div>
+        <div class="access-list">
+          ${recent.length ? recent.map((item) => accessRow(`${item.method || "-"} ${item.path || "-"}`, `${item.status || 0} · ${item.kind || "-"} · ${item.remoteAddress || "-"} · ${formatDuration(item.durationMs || 0)}`, item.ok ? "ok" : "fail")).join("") : `<div class="empty">暂无统一网关请求。</div>`}
+        </div>
+      `;
+    }
+
+    function renderTimeline(timeline) {
+      const max = Math.max(1, ...timeline.map((item) => Number(item.total || 0)));
+      return timeline.length
+        ? timeline.map((item) => {
+          const height = Math.max(3, Math.round((Number(item.total || 0) / max) * 72));
+          const cls = Number(item.error || 0) ? "bar error" : "bar";
+          return `<span class="${cls}" style="height:${height}px" title="${escapeHtml(item.at || "")}: ${Number(item.total || 0)} requests"></span>`;
+        }).join("")
+        : `<span class="subtle">暂无时间线。</span>`;
+    }
+
+    function accessRow(title, detail, state = "ok") {
+      return `
+        <div class="access-row ${escapeHtml(state)}">
+          <span class="health-dot"></span>
+          <div class="row-main"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>
+          <span class="row-side">${escapeHtml(state)}</span>
+        </div>
+      `;
     }
 
     async function stopAll() {
@@ -414,6 +598,9 @@
       const settings = exposure.settings || {};
       const clients = service.clients || {};
       const process = manager.process || {};
+      const runtime = manager.runtime || {};
+      const runningModels = Array.isArray(runtime.runningModels) ? runtime.runningModels : [];
+      const gpu = runtime.gpu || {};
       const external = manager.externalAccess?.external || {};
       const externalRequests = external.requests?.total || 0;
       const checks = Array.isArray(exposure.checks) ? exposure.checks : [];
@@ -444,15 +631,23 @@
             ${metric("PID", process.pid ? `${process.pid}${process.stalePidFile ? " / 陈旧" : ""}` : "无")}
             ${metric("模型服务", service.running ? "运行中" : "未运行")}
             ${metric("Docker", docker.ok ? "可用" : "未就绪")}
+            ${metric("GPU 显存", gpu.totalMb ? `${formatBytes(gpu.usedMb * 1024 * 1024)} / ${formatBytes(gpu.totalMb * 1024 * 1024)}` : "-")}
+            ${metric("上下文", runningModels[0]?.contextCapacityTokens ? `${runningModels[0].contextUsedTokens || 0} / ${runningModels[0].contextCapacityTokens}` : service.maxModelLen || "-")}
             ${metric("客户端 Key", `${clients.active || 0} / ${clients.total || 0}`)}
             ${metric("鉴权", settings.requireApiKey ? "已开启" : "未开启")}
             ${metric("外来请求", String(externalRequests))}
             ${metric("错误率", formatPercent(external.requests?.errorRate || 0))}
           </div>
+          <div class="model-list">
+            ${renderModelRows(runningModels, service)}
+          </div>
           <div class="quick-row">
             <button type="button" data-manager="${escapeHtml(manager.id)}" data-action="start">启动管理器</button>
             <button class="danger" type="button" data-manager="${escapeHtml(manager.id)}" data-action="stop">关闭管理器</button>
             ${manager.error ? `<span class="subtle">最近错误：${escapeHtml(manager.error)}</span>` : `<span class="subtle">健康接口：${escapeHtml(process.health?.host || "-")}:${escapeHtml(process.health?.port || manager.port)}</span>`}
+          </div>
+          <div class="health-list">
+            ${renderHealthRows(checks)}
           </div>
           <div class="links">
             <a class="button ${manager.accent === "teal" ? "teal" : "primary"}" href="${manager.servicePageUrl}">服务后台</a>
@@ -468,8 +663,45 @@
       `;
     }
 
-    function metric(label, value) {
-      return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    function renderModelRows(runningModels, service) {
+      if (runningModels.length) {
+        return runningModels.slice(0, 3).map((model) => `
+          <div class="model-row">
+            <span class="health-dot"></span>
+            <div class="row-main">
+              <strong>${escapeHtml(model.id || "local-current")}</strong>
+              <span>${escapeHtml(model.containerStatus || service.containerStatus || "")}</span>
+            </div>
+            <span class="row-side">${escapeHtml(model.gpu || "")}</span>
+          </div>
+        `).join("");
+      }
+      const ids = Array.isArray(service.modelIds) ? service.modelIds : [];
+      return ids.length
+        ? ids.slice(0, 3).map((id) => `
+          <div class="model-row">
+            <span class="health-dot"></span>
+            <div class="row-main"><strong>${escapeHtml(id)}</strong><span>${escapeHtml(service.containerStatus || "")}</span></div>
+            <span class="row-side">${service.running ? "running" : "stopped"}</span>
+          </div>
+        `).join("")
+        : `<p class="subtle">当前没有运行中的模型。</p>`;
+    }
+
+    function renderHealthRows(checks) {
+      return checks.length
+        ? checks.map((check) => `
+          <div class="health-row ${escapeHtml(check.status || "warn")}">
+            <span class="health-dot"></span>
+            <div class="row-main"><strong>${escapeHtml(check.title || "")}</strong><span>${escapeHtml(check.detail || "")}</span></div>
+            <span class="row-side">${escapeHtml(check.status || "warn")}</span>
+          </div>
+        `).join("")
+        : `<p class="subtle">暂无上线检查项。</p>`;
+    }
+
+    function metric(label, value, state = "") {
+      return `<div class="metric ${escapeHtml(state)}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
     }
 
     function endpoint(label, value) {
@@ -485,6 +717,26 @@
     function formatPercent(value) {
       const number = Number(value || 0);
       return `${(number * 100).toFixed(number > 0 && number < 0.1 ? 1 : 0)}%`;
+    }
+
+    function formatBytes(value) {
+      const bytes = Number(value || 0);
+      if (!bytes) return "0 B";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let amount = bytes;
+      let unit = 0;
+      while (amount >= 1024 && unit < units.length - 1) {
+        amount /= 1024;
+        unit += 1;
+      }
+      return `${amount.toFixed(unit >= 3 ? 1 : 0)} ${units[unit]}`;
+    }
+
+    function formatDuration(ms) {
+      const value = Number(ms || 0);
+      if (value < 1000) return `${Math.round(value)} ms`;
+      if (value < 60000) return `${(value / 1000).toFixed(1)} s`;
+      return `${Math.round(value / 60000)} min`;
     }
 
     function showToast(message) {

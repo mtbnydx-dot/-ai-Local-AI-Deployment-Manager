@@ -159,7 +159,7 @@ npm run test:frontend-smoke
 开发目录里的成品同步到 `github-release`：
 
 ```cmd
-sync-github-release.cmd
+powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
 ```
 
 同步脚本会复制源码和文档，并主动移除发布目录里的运行时残留，例如 `node_modules`、`logs`、`models`、`cache`、数据库和密钥文件。
@@ -167,7 +167,7 @@ sync-github-release.cmd
 发布到 GitHub 前请使用 `git add -A`，因为项目拆分后经常会新增 `manager-core/*`、`*/lib/*`、`public/js/*` 和测试文件；只用 `git commit -am` 会漏掉新文件。
 
 ```cmd
-sync-github-release.cmd
+powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
 cd github-release
 git status -sb
 git add -A
@@ -329,7 +329,7 @@ npm run test:frontend-smoke
 To sync the working project into `github-release`:
 
 ```cmd
-sync-github-release.cmd
+powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
 ```
 
 The sync script copies source files and docs, then removes runtime leftovers such as `node_modules`, `logs`, `models`, `cache`, databases, and secret files from the release mirror.
@@ -337,7 +337,7 @@ The sync script copies source files and docs, then removes runtime leftovers suc
 Before pushing to GitHub, always stage with `git add -A`. The project now has many split modules and generated release-safe source files; `git commit -am` does not add new files.
 
 ```cmd
-sync-github-release.cmd
+powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
 cd github-release
 git status -sb
 git add -A

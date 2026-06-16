@@ -49,6 +49,10 @@ async function handleRequest(req, res) {
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       return serveFile(res, path.join(ROOT, "index.html"), "text/html; charset=utf-8");
     }
+    if (req.method === "GET" && url.pathname === "/favicon.ico") {
+      res.writeHead(204);
+      return res.end();
+    }
     if (req.method === "GET" && url.pathname.startsWith("/docs/")) {
       return serveDoc(res, url.pathname);
     }
@@ -143,9 +147,10 @@ async function buildManagerStatus(manager) {
   const baseUrl = `http://127.0.0.1:${manager.port}`;
   const pidFile = path.join(manager.root, ".manager.pid");
   const pid = await core.readPidFilePid(pidFile);
-  const [portListening, health, exposure, clients, externalAccess] = await Promise.all([
+  const [portListening, health, runtimeStatus, exposure, clients, externalAccess] = await Promise.all([
     core.isPortListening("127.0.0.1", manager.port),
     fetchJson(`${baseUrl}/api/manager/health`),
+    fetchJson(`${baseUrl}/api/status`),
     fetchJson(`${baseUrl}/api/service-exposure`),
     fetchJson(`${baseUrl}/api/service-clients`),
     fetchJson(`${baseUrl}/api/external-access?limit=20`),
@@ -169,10 +174,11 @@ async function buildManagerStatus(manager) {
       stalePidFile: Boolean(pid && !pidAlive),
       health: health.data || null,
     },
+    runtime: runtimeStatus.data || null,
     exposure: exposure.data || null,
     clients: clients.data || null,
     externalAccess: externalAccess.data || null,
-    error: health.error || exposure.error || clients.error || externalAccess.error || "",
+    error: health.error || runtimeStatus.error || exposure.error || clients.error || externalAccess.error || "",
   };
 }
 
@@ -322,6 +328,7 @@ async function collectEntryGatewayAccessStats(options = {}) {
     authSources: core.groupAccessEvents(events, (entry) => entry.authSource || "none", { limit: 20 }),
     kinds: core.groupAccessEvents(events, (entry) => entry.kind || "-", { limit: 10 }),
     statuses: core.groupAccessEvents(events, (entry) => String(entry.status || 0), { limit: 20 }),
+    timeline: core.buildAccessTimeline(events, now),
     recent: events.slice(-limit).reverse(),
   };
 }

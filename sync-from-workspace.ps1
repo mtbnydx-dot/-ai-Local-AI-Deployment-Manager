@@ -29,6 +29,7 @@ $directories = @(
   "docs",
   "tests",
   "manager-core",
+  "shared-public",
   "service-entry",
   "vllm-manager",
   "llama-manager",
@@ -48,9 +49,9 @@ $files = @(
   "start-service-entry.cmd",
   "start-service-entry-lan.cmd",
   "stop-service-entry.cmd",
+  "status-service-entry.cmd",
   "start-claude-vllm-proxy.ps1",
-  "claude-vllm-anthropic-proxy.py",
-  "repair-windows-admin.ps1"
+  "claude-vllm-anthropic-proxy.py"
 )
 
 $excludeDirs = @(
@@ -81,6 +82,7 @@ $excludeFiles = @(
   "jobs-ledger.json",
   "service-exposure.json",
   "service-api-key.json",
+  "repair-windows-admin.ps1",
   ".env",
   ".env.*"
 )

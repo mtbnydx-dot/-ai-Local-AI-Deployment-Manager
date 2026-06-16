@@ -1,7 +1,7 @@
 ﻿# Release Manifest
 
 Synced from: D:\AI
-Synced at: 2026-06-16 01:10:20 +10:00
+Synced at: 2026-06-16 13:00:36 +10:00
 
 ## Directories
 
@@ -9,6 +9,7 @@ Synced at: 2026-06-16 01:10:20 +10:00
 - docs
 - tests
 - manager-core
+- shared-public
 - service-entry
 - vllm-manager
 - llama-manager
@@ -28,9 +29,9 @@ Synced at: 2026-06-16 01:10:20 +10:00
 - start-service-entry.cmd
 - start-service-entry-lan.cmd
 - stop-service-entry.cmd
+- status-service-entry.cmd
 - start-claude-vllm-proxy.ps1
 - claude-vllm-anthropic-proxy.py
-- repair-windows-admin.ps1
 
 ## Excluded Runtime Data
 

@@ -5,7 +5,7 @@
 For every product change:
 
 1. Modify and test the working project.
-2. Run `sync-github-release.cmd`.
+2. Run `powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1` from the working project root.
 3. Verify `github-release` contains the same functional source files.
 4. Do not publish models, caches, logs, secrets, PID files, runtime ledgers, databases, or `node_modules`.
 
