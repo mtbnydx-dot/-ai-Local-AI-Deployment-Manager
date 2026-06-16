@@ -123,6 +123,75 @@ async function smokePage(page, baseUrl, label) {
       body: JSON.stringify({ local, cached: [] }),
     });
   });
+  await page.route("**/api/service-exposure", async (route) => {
+    const port = new URL(baseUrl).port || "5177";
+    const modelId = `${label.toLowerCase()}-smoke-model-1`;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        settings: {
+          enabled: true,
+          exposureMode: "lan",
+          requireApiKey: true,
+          hasApiKey: true,
+          apiKeyPreview: "sk-...123456",
+          exposeOpenAI: true,
+          exposeClaude: true,
+          exposeOpenCode: true,
+          exposeMetrics: false,
+          allowManagerRemote: false,
+          rateLimitRpm: 120,
+          maxConcurrentRequests: 4,
+          requestTimeoutSeconds: 600,
+          allowedOrigins: [],
+          publicBaseUrl: "",
+          notes: "",
+        },
+        actual: {
+          manager: {
+            localBaseUrl: `http://127.0.0.1:${port}`,
+            lanBaseUrl: `http://192.168.1.27:${port}`,
+            host: "127.0.0.1",
+            port: Number(port),
+            remoteManagementAllowed: false,
+          },
+          service: {
+            running: true,
+            containerStatus: "running",
+            boundHost: "127.0.0.1",
+            localHost: "127.0.0.1",
+            lanHost: "192.168.1.27",
+            dockerPublishedHosts: ["127.0.0.1"],
+            port: label === "vLLM" ? 8000 : 8080,
+            openAiGatewayLocalBaseUrl: `http://127.0.0.1:${port}/serve/v1`,
+            openAiGatewayLanBaseUrl: `http://192.168.1.27:${port}/serve/v1`,
+            openAiLocalBaseUrl: `http://127.0.0.1:${label === "vLLM" ? 8000 : 8080}/v1`,
+            openAiLanBaseUrl: null,
+            claudeLocalBaseUrl: `http://127.0.0.1:${port}/claude`,
+            claudeLanBaseUrl: `http://192.168.1.27:${port}/claude`,
+            claudeLocalMessagesUrl: `http://127.0.0.1:${port}/claude/v1/messages`,
+            claudeLanMessagesUrl: `http://192.168.1.27:${port}/claude/v1/messages`,
+            claudePublicBaseUrl: null,
+            openCodeBaseUrl: `http://127.0.0.1:${port}/opencode/v1`,
+            modelIds: [modelId],
+            maxModelLen: 262144,
+            apiKeyRequired: false,
+            runtimeApiKeyRequired: false,
+            gatewayApiKeyRequired: true,
+            gatewayApiKeyEnforced: true,
+            gatewayHasGlobalApiKey: true,
+            gatewayHasActiveClients: false,
+            clients: { total: 0, active: 0 },
+          },
+          docker: { ok: false, text: "", error: "smoke mock" },
+        },
+        checks: [
+          { status: "ok", title: "模型服务", detail: "smoke mock running" },
+          { status: "ok", title: "管理器网关", detail: "smoke mock enabled" },
+        ],
+      }),
+    });
+  });
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page.locator("[data-view-panel='service']").first()).toBeVisible();
