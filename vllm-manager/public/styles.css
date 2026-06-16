@@ -1445,12 +1445,12 @@ textarea {
 
 .model-picker-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
-  align-items: center;
+  align-items: start;
   width: 100%;
-  min-height: 72px;
-  padding: 10px 12px;
+  min-height: 96px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--input-bg);
@@ -1477,7 +1477,7 @@ textarea {
 
 .model-picker-main {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -1495,7 +1495,9 @@ textarea {
 .model-picker-badges {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-start;
   gap: 5px;
+  min-width: 0;
 }
 
 .model-picker-badges span {
@@ -1505,6 +1507,7 @@ textarea {
   background: var(--surface-2);
   color: var(--muted);
   font-size: 11px;
+  line-height: 1.25;
 }
 
 .model-picker-badges .favorite {
