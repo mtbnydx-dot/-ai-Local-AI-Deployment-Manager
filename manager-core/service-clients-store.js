@@ -16,7 +16,10 @@ function createServiceClientsStore(options = {}) {
   const writeJsonFile = options.writeJsonFile;
   const usageStore = options.usageStore || null;
   const engine = options.engine || inferServiceClientEngine(options.managerId);
+  const usageSaveDelayMs = Math.max(0, Number(options.usageSaveDelayMs ?? 1000));
   let cache = null;
+  let usageSaveTimer = null;
+  let usageWrite = Promise.resolve();
 
   async function getServiceClientsLedger() {
     if (cache) return cache;
@@ -25,6 +28,7 @@ function createServiceClientsStore(options = {}) {
   }
 
   async function saveServiceClientsLedger(ledger) {
+    await flushUsageLedgerWrites();
     cache = normalizeServiceClientsLedger({
       ...ledger,
       updatedAt: new Date().toISOString(),
@@ -32,6 +36,34 @@ function createServiceClientsStore(options = {}) {
     await writeJsonFile(file, cache);
     persistClients(cache);
     return cache;
+  }
+
+  function scheduleUsageLedgerSave() {
+    if (usageSaveTimer) return;
+    usageSaveTimer = setTimeout(() => {
+      usageSaveTimer = null;
+      const snapshot = cache;
+      usageWrite = usageWrite.catch(() => {}).then(async () => {
+        if (!snapshot) return;
+        await writeJsonFile(file, snapshot);
+        persistClients(snapshot);
+      });
+    }, usageSaveDelayMs);
+    usageSaveTimer.unref?.();
+  }
+
+  async function flushUsageLedgerWrites() {
+    if (usageSaveTimer) {
+      clearTimeout(usageSaveTimer);
+      usageSaveTimer = null;
+      const snapshot = cache;
+      usageWrite = usageWrite.catch(() => {}).then(async () => {
+        if (!snapshot) return;
+        await writeJsonFile(file, snapshot);
+        persistClients(snapshot);
+      });
+    }
+    await usageWrite.catch(() => {});
   }
 
   function persistClients(ledger) {
@@ -97,7 +129,8 @@ function createServiceClientsStore(options = {}) {
     const result = applyServiceClientUsage(ledger.clients[index], event);
     if (!result) return;
     ledger.clients[index] = result.client;
-    await saveServiceClientsLedger(ledger);
+    cache = normalizeServiceClientsLedger({ ...ledger, updatedAt: new Date().toISOString() });
+    scheduleUsageLedgerSave();
     persistUsageEvent(result.event);
   }
 
@@ -111,6 +144,7 @@ function createServiceClientsStore(options = {}) {
     deleteServiceClient,
     resolveServiceClientForApiKey: resolveForApiKey,
     recordServiceClientGatewayUsage: recordUsage,
+    flushUsageLedgerWrites,
   };
 }
 

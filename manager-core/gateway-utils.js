@@ -7,6 +7,7 @@ const {
   hasActiveServiceClients,
   hasGlobalServiceApiKey,
   isGlobalServiceApiKeyAccepted,
+  DEFAULT_GATEWAY_MAX_CONCURRENT,
 } = require("./service-policy");
 
 function serviceApiKeySource(headers = {}) {
@@ -148,6 +149,69 @@ function servedModelIds(runtime = {}) {
     .filter(Boolean);
 }
 
+function pushUniqueModelAlias(result, seen, alias) {
+  const value = String(alias || "").trim();
+  if (!value) return;
+  const key = value.toLowerCase();
+  if (seen.has(key)) return;
+  seen.add(key);
+  result.push(value);
+}
+
+function deriveOpenAiGatewayModelAliases(modelId) {
+  const id = String(typeof modelId === "string" ? modelId : modelId?.id || "").trim();
+  if (!id) return [];
+  const result = [];
+  const seen = new Set();
+  const bare = id.split(/[\\/]/).pop().trim();
+  if (bare && bare !== id) pushUniqueModelAlias(result, seen, bare);
+  const candidates = [id, bare].filter(Boolean);
+  for (const candidate of candidates) {
+    const text = candidate.toLowerCase();
+    const qwen = text.match(/(?:^|[^a-z0-9])qwen[-_\s]?(\d+(?:\.\d+)?)/i);
+    if (qwen) pushUniqueModelAlias(result, seen, `qwen${qwen[1]}`);
+    const llama = text.match(/(?:^|[^a-z0-9])llama[-_\s]?(\d+(?:\.\d+)?)/i);
+    if (llama) pushUniqueModelAlias(result, seen, `llama${llama[1]}`);
+    const gemma = text.match(/(?:^|[^a-z0-9])gemma[-_\s]?(\d+(?:\.\d+)?)/i);
+    if (gemma) pushUniqueModelAlias(result, seen, `gemma${gemma[1]}`);
+    const deepseek = text.match(/(?:^|[^a-z0-9])deepseek[-_\s]?r[-_\s]?(\d+)/i);
+    if (deepseek) pushUniqueModelAlias(result, seen, `deepseek-r${deepseek[1]}`);
+  }
+  return result;
+}
+
+function buildOpenAiGatewayAliasList({ aliases = [], models = [], runtime = {} } = {}) {
+  const result = [];
+  const seen = new Set();
+  for (const alias of Array.isArray(aliases) ? aliases : []) {
+    pushUniqueModelAlias(result, seen, alias);
+  }
+  const modelIds = [
+    ...servedModelIds(runtime),
+    ...(Array.isArray(models) ? models.map((model) => (typeof model === "string" ? model : model?.id)).filter(Boolean) : []),
+  ];
+  for (const id of modelIds) {
+    for (const alias of deriveOpenAiGatewayModelAliases(id)) {
+      pushUniqueModelAlias(result, seen, alias);
+    }
+  }
+  return result;
+}
+
+function findOpenAiGatewayDynamicAlias(requestedModel, modelIds = []) {
+  const value = String(requestedModel || "").trim();
+  if (!value) return "";
+  const bareValue = value.split(/[\\/]/).pop();
+  for (const id of modelIds) {
+    for (const alias of deriveOpenAiGatewayModelAliases(id)) {
+      if (alias.toLowerCase() === value.toLowerCase() || alias.toLowerCase() === bareValue.toLowerCase()) {
+        return id;
+      }
+    }
+  }
+  return "";
+}
+
 function resolveOpenAiGatewayModel(requestedModel, runtime = {}, options = {}) {
   const aliases = Array.isArray(options.aliases) ? options.aliases : [];
   const served = servedModelIds(runtime);
@@ -158,15 +222,18 @@ function resolveOpenAiGatewayModel(requestedModel, runtime = {}, options = {}) {
   if (aliases.some((alias) => alias.toLowerCase() === value.toLowerCase() || alias.toLowerCase() === bareValue.toLowerCase())) return fallback;
   const exact = served.find((id) => id === value || id.toLowerCase() === value.toLowerCase());
   if (exact) return exact;
+  const dynamicAlias = findOpenAiGatewayDynamicAlias(value, served);
+  if (dynamicAlias) return dynamicAlias;
   const rootMappings = typeof options.getRootMappings === "function" ? options.getRootMappings(runtime) : options.rootMappings;
   const rootMatch = (Array.isArray(rootMappings) ? rootMappings : [])
     .find((entry) => entry?.root === value || String(entry?.root || "").toLowerCase() === value.toLowerCase());
-  return rootMatch?.id || "";
+  return rootMatch?.id || fallback;
 }
 
 function buildOpenAiGatewayModelList({ models = [], runtime = {}, aliases = [], owner = "local-manager" } = {}) {
   const fallback = models[0] || runtime.servedModels?.[0] || runtime.models?.[0] || {};
-  const aliasModels = aliases.map((id) => ({
+  const allAliases = buildOpenAiGatewayAliasList({ aliases, models, runtime });
+  const aliasModels = allAliases.map((id) => ({
     id,
     object: "model",
     created: fallback.created || Math.floor(Date.now() / 1000),
@@ -239,6 +306,7 @@ function createOpenAiGatewayHandlers(options = {}) {
     aliases = [],
     owner = "local-manager",
     getRunningModelSummary,
+    listRunningModelSummaries,
     getUpstreamHeaders = () => ({}),
     serviceClientAllowsModel = () => true,
     recordUsage = async () => {},
@@ -246,26 +314,110 @@ function createOpenAiGatewayHandlers(options = {}) {
     isExpectedStreamDisconnect = () => false,
     setAccessUsage = () => {},
     getRootMappings = () => [],
+    prepareRequestBody = (body) => body,
     fetchFn = (...args) => fetch(...args),
   } = options;
 
+  async function getAvailableRuntimes() {
+    if (typeof listRunningModelSummaries === "function") {
+      const runtimes = await listRunningModelSummaries();
+      const running = (Array.isArray(runtimes) ? runtimes : []).filter((runtime) => runtime?.container?.running);
+      if (running.length) return running;
+    }
+    const primary = await getRunningModelSummary();
+    return primary ? [primary] : [];
+  }
+
+  function runtimeHasRequestedModel(runtime, requestedModel) {
+    const value = String(requestedModel || "").trim();
+    if (!value) return false;
+    const served = servedModelIds(runtime);
+    if (served.some((id) => id === value || id.toLowerCase() === value.toLowerCase())) return true;
+    if (findOpenAiGatewayDynamicAlias(value, served)) return true;
+    const roots = getRootMappings(runtime) || [];
+    return roots.some((entry) => entry?.root === value || String(entry?.root || "").toLowerCase() === value.toLowerCase());
+  }
+
+  async function selectRuntime(requestedModel = "") {
+    const runtimes = await getAvailableRuntimes();
+    if (!runtimes.length) return null;
+    const value = String(requestedModel || "").trim();
+    const bareValue = value.split("/").pop();
+    if (!value || aliases.some((alias) => alias.toLowerCase() === value.toLowerCase() || alias.toLowerCase() === bareValue.toLowerCase())) {
+      return runtimes[0];
+    }
+    return runtimes.find((runtime) => runtimeHasRequestedModel(runtime, value)) || runtimes[0];
+  }
+
+  async function fetchRuntimeModels(runtime) {
+    const response = await fetchFn(`http://127.0.0.1:${runtime.endpoint.port}/v1/models`, {
+      signal: AbortSignal.timeout(5000),
+      headers: getUpstreamHeaders(runtime),
+    });
+    const text = await response.text();
+    const data = parseJsonSafe(text, {});
+    if (!response.ok) throw Object.assign(new Error(upstreamErrorMessage(data, text)), { status: response.status });
+    return Array.isArray(data.data) ? data.data : [];
+  }
+
   async function handleModels(_req, res) {
     try {
-      const runtime = await getRunningModelSummary();
-      if (!runtime.container.running) {
+      const runtimes = await getAvailableRuntimes();
+      const runtime = runtimes[0];
+      if (!runtime?.container?.running) {
         return res.status(503).json(openAiGatewayError("service_unavailable", "Model service is not running."));
       }
-      const response = await fetchFn(`http://127.0.0.1:${runtime.endpoint.port}/v1/models`, {
-        signal: AbortSignal.timeout(5000),
-        headers: getUpstreamHeaders(runtime),
-      });
-      const text = await response.text();
-      const data = parseJsonSafe(text, {});
-      if (!response.ok) {
-        return res.status(response.status).json(openAiGatewayError("upstream_error", upstreamErrorMessage(data, text)));
+      const results = await Promise.allSettled(runtimes.map((item) => fetchRuntimeModels(item)));
+      const models = uniqueModelsById(results.filter((item) => item.status === "fulfilled").flatMap((item) => item.value));
+      if (!models.length) {
+        const firstError = results.find((item) => item.status === "rejected")?.reason;
+        return res.status(503).json(openAiGatewayError(
+          "service_unavailable",
+          firstError?.message || "Running model services did not return any models yet.",
+        ));
       }
-      const models = Array.isArray(data.data) ? data.data : [];
       return res.json(buildOpenAiGatewayModelList({ models, runtime, aliases, owner }));
+    } catch (error) {
+      return res.status(500).json(openAiGatewayError("gateway_error", error.message));
+    }
+  }
+
+  async function handleProps(_req, res) {
+    try {
+      const runtimes = await getAvailableRuntimes();
+      const runtime = runtimes[0];
+      if (!runtime?.container?.running) {
+        return res.status(503).json(openAiGatewayError("service_unavailable", "Model service is not running."));
+      }
+      const results = await Promise.allSettled(runtimes.map((item) => fetchRuntimeModels(item)));
+      const models = uniqueModelsById(results.filter((item) => item.status === "fulfilled").flatMap((item) => item.value));
+      if (!models.length) {
+        const firstError = results.find((item) => item.status === "rejected")?.reason;
+        return res.status(503).json(openAiGatewayError(
+          "service_unavailable",
+          firstError?.message || "Running model services did not return any models yet.",
+        ));
+      }
+      const modelList = buildOpenAiGatewayModelList({ models, runtime, aliases, owner });
+      return res.json({
+        object: "gateway.props",
+        type: "openai-compatible",
+        basePath: "/serve/v1",
+        defaultModel: aliases[0] || modelList.data[0]?.id || "",
+        models: modelList.data.map((model) => model.id).filter(Boolean),
+        capabilities: {
+          models: true,
+          chatCompletions: true,
+          completions: true,
+          responses: true,
+          embeddings: true,
+          pooling: true,
+          scoring: true,
+          reranking: true,
+          classification: true,
+          streaming: true,
+        },
+      });
     } catch (error) {
       return res.status(500).json(openAiGatewayError("gateway_error", error.message));
     }
@@ -274,8 +426,8 @@ function createOpenAiGatewayHandlers(options = {}) {
   async function handleCompletionProxy(req, res, upstreamPath) {
     const body = req.body && typeof req.body === "object" ? { ...req.body } : {};
     try {
-      const runtime = await getRunningModelSummary();
-      if (!runtime.container.running) {
+      const runtime = await selectRuntime(body.model);
+      if (!runtime?.container?.running) {
         setAccessUsage(req, { error: "Model service is not running." });
         return res.status(503).json(openAiGatewayError("service_unavailable", "Model service is not running."));
       }
@@ -291,13 +443,17 @@ function createOpenAiGatewayHandlers(options = {}) {
         return res.status(403).json(openAiGatewayError("model_forbidden", "This service client is not allowed to use the requested model."));
       }
       body.model = model;
-      const stream = body.stream === true;
+      const prepared = await prepareRequestBody(body, runtime, model, { req, upstreamPath });
+      const requestBody = prepared && typeof prepared === "object" && !Array.isArray(prepared)
+        ? { ...prepared, model }
+        : body;
+      const stream = requestBody.stream === true;
       const upstreamControl = createServiceUpstreamControl(req, res);
       try {
         const upstream = await fetchFn(`http://127.0.0.1:${runtime.endpoint.port}/v1/${upstreamPath}`, {
           method: "POST",
           headers: getUpstreamHeaders(runtime, { "content-type": "application/json" }),
-          body: JSON.stringify(body),
+          body: JSON.stringify(requestBody),
           signal: upstreamControl.signal,
         });
         if (stream) {
@@ -346,8 +502,15 @@ function createOpenAiGatewayHandlers(options = {}) {
 
   return {
     handleModels,
+    handleProps,
     handleChatCompletions: (req, res) => handleCompletionProxy(req, res, "chat/completions"),
     handleCompletions: (req, res) => handleCompletionProxy(req, res, "completions"),
+    handleResponses: (req, res) => handleCompletionProxy(req, res, "responses"),
+    handleEmbeddings: (req, res) => handleCompletionProxy(req, res, "embeddings"),
+    handlePooling: (req, res) => handleCompletionProxy(req, res, "pooling"),
+    handleScore: (req, res) => handleCompletionProxy(req, res, "score"),
+    handleRerank: (req, res) => handleCompletionProxy(req, res, "rerank"),
+    handleClassify: (req, res) => handleCompletionProxy(req, res, "classify"),
     handleCompletionProxy,
     resolveModel: (requestedModel, runtime) => resolveOpenAiGatewayModel(requestedModel, runtime, { aliases, getRootMappings }),
   };
@@ -376,25 +539,55 @@ function appendVaryHeader(current, value) {
   return entries.join(", ");
 }
 
-function isServiceOriginAllowed(origin, allowedOrigins = []) {
+const DEFAULT_SERVICE_CORS_ALLOW_HEADERS = "authorization,content-type,user-agent,x-api-key,api-key,anthropic-api-key,anthropic_api_key,anthropic-version,x-requested-with";
+
+function isServiceOriginAllowed(origin, allowedOrigins = [], allowWhenEmpty = true) {
   const entries = allowedOrigins.map((item) => String(item || "").trim()).filter(Boolean);
-  if (!entries.length) return true;
+  if (!entries.length) return allowWhenEmpty;
   if (entries.includes("*")) return true;
   return entries.some((entry) => entry === origin);
 }
 
-function applyServiceCorsHeaders(req, res, settings = {}, allowHeaders = "authorization,content-type,x-api-key,api-key,anthropic-api-key,anthropic_api_key,anthropic-version,x-requested-with") {
+function normalizeServiceCorsHeaderNames(value) {
+  return Array.from(new Set(String(value || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => /^[a-z0-9!#$%&'*+.^_`|~-]+$/i.test(item))));
+}
+
+function applyServiceCorsHeaders(req, res, settings = {}, allowHeaders = DEFAULT_SERVICE_CORS_ALLOW_HEADERS) {
   const origin = String(req.headers.origin || "").trim();
   if (!origin) return { ok: true };
-  if (!isServiceOriginAllowed(origin, settings.allowedOrigins || [])) {
+  const configuredOrigins = Array.isArray(settings.allowedOrigins) ? settings.allowedOrigins : [];
+  const corsMode = settings.corsMode
+    ? String(settings.corsMode).toLowerCase()
+    : configuredOrigins.length ? "restricted" : "open";
+  const openCors = corsMode !== "restricted";
+  if (!openCors && !isServiceOriginAllowed(origin, configuredOrigins, false)) {
     return { ok: false, message: `Origin is not allowed: ${origin}` };
   }
+  const requestedHeaders = normalizeServiceCorsHeaderNames(req.headers["access-control-request-headers"]);
+  const defaultHeaders = normalizeServiceCorsHeaderNames(allowHeaders || DEFAULT_SERVICE_CORS_ALLOW_HEADERS);
+  const configuredHeaders = Array.isArray(settings.allowedHeaders)
+    ? settings.allowedHeaders.flatMap(normalizeServiceCorsHeaderNames)
+    : normalizeServiceCorsHeaderNames(settings.allowedHeaders);
+  const resolvedHeaders = openCors && requestedHeaders.length
+    ? requestedHeaders
+    : Array.from(new Set([...defaultHeaders, ...configuredHeaders]));
   res.setHeader("access-control-allow-origin", origin);
   res.setHeader("vary", appendVaryHeader(res.getHeader("vary"), "Origin"));
+  res.setHeader("vary", appendVaryHeader(res.getHeader("vary"), "Access-Control-Request-Headers"));
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
-  res.setHeader("access-control-allow-headers", allowHeaders);
+  res.setHeader("access-control-allow-headers", resolvedHeaders.join(","));
   res.setHeader("access-control-max-age", "600");
-  return { ok: true };
+  if (openCors) {
+    res.setHeader("access-control-allow-credentials", "true");
+    res.setHeader("access-control-expose-headers", "*");
+  }
+  if (String(req.headers["access-control-request-private-network"] || "").toLowerCase() === "true") {
+    res.setHeader("access-control-allow-private-network", "true");
+  }
+  return { ok: true, mode: openCors ? "open" : "restricted", allowedHeaders: resolvedHeaders };
 }
 
 function isLocalRequester(req) {
@@ -413,11 +606,26 @@ function serviceGatewayReject(res, status, code, message, headers = {}) {
   return res.status(status).json(openAiGatewayError(code, message));
 }
 
+function gatewayHeaderValue(headers = {}, name, maxLength = 240) {
+  return String(headers[name] || headers[String(name || "").toLowerCase()] || "").trim().slice(0, maxLength);
+}
+
+function gatewayHeaderHost(headers = {}, name) {
+  const value = gatewayHeaderValue(headers, name);
+  if (!value) return "";
+  try {
+    return new URL(value).host || value;
+  } catch {
+    return value.replace(/^https?:\/\//i, "").split(/[/?#]/)[0].slice(0, 160);
+  }
+}
+
 function buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource) {
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const usage = req.serviceGatewayAccessUsage || {};
   const inputTokens = Number(usage.inputTokens ?? usage.promptTokens ?? 0);
   const outputTokens = Number(usage.outputTokens ?? usage.generationTokens ?? 0);
+  const headers = req.headers || {};
   return {
     at: new Date().toISOString(),
     remoteAddress: req.socket?.remoteAddress || req.ip || "",
@@ -430,7 +638,11 @@ function buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource
     stream: body.stream === true,
     authSource,
     clientId: req.serviceGateway?.clientId || "",
+    userAgent: gatewayHeaderValue(headers, "user-agent"),
+    origin: gatewayHeaderValue(headers, "origin"),
+    refererHost: gatewayHeaderHost(headers, "referer"),
     durationMs: Date.now() - startedAt,
+    queuedMs: Number(req.serviceGateway?.queuedMs || 0),
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
@@ -450,6 +662,108 @@ function attachServiceGatewayAccessLog(req, res, kind, appendAccessLog) {
   });
 }
 
+function clampServiceGatewayNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(number)));
+}
+
+function serviceGatewayQueueLimit(settings) {
+  const concurrency = clampServiceGatewayNumber(settings.maxConcurrentRequests, 1, 256, DEFAULT_GATEWAY_MAX_CONCURRENT);
+  return clampServiceGatewayNumber(settings.maxQueuedRequests, 0, 4096, Math.min(256, concurrency * 32));
+}
+
+function serviceGatewayQueueTimeoutMs(settings, requestTimeoutMs) {
+  const seconds = clampServiceGatewayNumber(settings.queueTimeoutSeconds, 1, 600, 30);
+  return Math.min(requestTimeoutMs, seconds * 1000);
+}
+
+function removeServiceGatewayWaiter(queue, waiter) {
+  const index = queue.indexOf(waiter);
+  if (index >= 0) queue.splice(index, 1);
+}
+
+function resolveNextServiceGatewayWaiter(settings, clientKey, concurrencyBuckets, concurrencyQueues) {
+  const queue = concurrencyQueues.get(clientKey);
+  if (!queue) return;
+  while (queue.length) {
+    const waiter = queue.shift();
+    if (!waiter || waiter.cancelled) continue;
+    const concurrency = enterServiceConcurrency(settings, clientKey, concurrencyBuckets);
+    if (!concurrency.ok) {
+      queue.unshift(waiter);
+      break;
+    }
+    waiter.resolve(concurrency);
+    break;
+  }
+  if (!queue.length) concurrencyQueues.delete(clientKey);
+}
+
+async function waitForServiceGatewayConcurrency(settings, clientKey, concurrencyBuckets, concurrencyQueues, res, requestTimeoutMs) {
+  const concurrency = enterServiceConcurrency(settings, clientKey, concurrencyBuckets);
+  if (concurrency.ok) return { ok: true, concurrency, queuedMs: 0 };
+
+  const queueLimit = serviceGatewayQueueLimit(settings);
+  if (queueLimit <= 0) {
+    return {
+      ok: false,
+      statusCode: 429,
+      code: "concurrency_limit_exceeded",
+      message: "Too many concurrent requests for this service key.",
+    };
+  }
+
+  const queue = concurrencyQueues.get(clientKey) || [];
+  if (queue.length >= queueLimit) {
+    return {
+      ok: false,
+      statusCode: 429,
+      code: "concurrency_queue_full",
+      message: "Too many queued requests for this service key.",
+    };
+  }
+
+  concurrencyQueues.set(clientKey, queue);
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    let settled = false;
+    let timer = null;
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (typeof res.off === "function") res.off("close", onClose);
+      resolve(result);
+    };
+    const waiter = {
+      cancelled: false,
+      resolve(nextConcurrency) {
+        settle({ ok: true, concurrency: nextConcurrency, queuedMs: Date.now() - startedAt });
+      },
+    };
+    const onClose = () => {
+      waiter.cancelled = true;
+      removeServiceGatewayWaiter(queue, waiter);
+      if (!queue.length) concurrencyQueues.delete(clientKey);
+      settle({ ok: false, aborted: true });
+    };
+    timer = setTimeout(() => {
+      waiter.cancelled = true;
+      removeServiceGatewayWaiter(queue, waiter);
+      if (!queue.length) concurrencyQueues.delete(clientKey);
+      settle({
+        ok: false,
+        statusCode: 429,
+        code: "concurrency_queue_timeout",
+        message: "Timed out waiting for a service gateway concurrency slot.",
+      });
+    }, serviceGatewayQueueTimeoutMs(settings, requestTimeoutMs));
+    if (typeof res.once === "function") res.once("close", onClose);
+    queue.push(waiter);
+  });
+}
+
 function createServiceGatewayMiddleware(options = {}) {
   const {
     gatewayName = "local-manager",
@@ -459,6 +773,7 @@ function createServiceGatewayMiddleware(options = {}) {
     resolveServiceClientForApiKey,
     rateBuckets,
     concurrencyBuckets,
+    concurrencyQueues = new Map(),
     appendAccessLog = async () => {},
     corsAllowHeaders,
     acceptRawAuthorization = false,
@@ -497,21 +812,24 @@ function createServiceGatewayMiddleware(options = {}) {
       if (!rate.ok) {
         return serviceGatewayReject(res, 429, "rate_limit_exceeded", `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`, { "retry-after": String(rate.retryAfterSeconds) });
       }
-      const concurrency = enterServiceConcurrency(effectiveSettings, clientKey, concurrencyBuckets);
-      if (!concurrency.ok) {
-        return serviceGatewayReject(res, 429, "concurrency_limit_exceeded", "Too many concurrent requests for this service key.");
+      const timeoutMs = Math.min(7200, Math.max(10, Number(effectiveSettings.requestTimeoutSeconds || 600))) * 1000;
+      const concurrencySlot = await waitForServiceGatewayConcurrency(effectiveSettings, clientKey, concurrencyBuckets, concurrencyQueues, res, timeoutMs);
+      if (!concurrencySlot.ok) {
+        if (concurrencySlot.aborted || res.writableEnded) return undefined;
+        return serviceGatewayReject(res, concurrencySlot.statusCode || 429, concurrencySlot.code, concurrencySlot.message);
       }
       let released = false;
       const release = () => {
         if (released) return;
         released = true;
-        concurrency.release();
+        concurrencySlot.concurrency.release();
+        resolveNextServiceGatewayWaiter(effectiveSettings, clientKey, concurrencyBuckets, concurrencyQueues);
       };
       res.once("finish", release);
       res.once("close", release);
-      const timeoutMs = Math.min(7200, Math.max(10, Number(effectiveSettings.requestTimeoutSeconds || 600))) * 1000;
-      req.serviceGateway = { kind, settings: effectiveSettings, baseSettings: settings, client: serviceClient, clientId: serviceClient?.id || "", clientKey, timeoutMs };
+      req.serviceGateway = { kind, settings: effectiveSettings, baseSettings: settings, client: serviceClient, clientId: serviceClient?.id || "", clientKey, timeoutMs, queuedMs: concurrencySlot.queuedMs || 0 };
       res.setHeader("x-local-llm-gateway", gatewayName);
+      res.setHeader("x-local-llm-queued-ms", String(concurrencySlot.queuedMs || 0));
       res.setTimeout?.(timeoutMs, () => {
         if (!res.headersSent) res.status(504).json(openAiGatewayError("request_timeout", "Service gateway request timed out."));
         if (!res.writableEnded) res.end();
@@ -538,6 +856,8 @@ module.exports = {
   isExpectedStreamDisconnect,
   uniqueModelsById,
   servedModelIds,
+  deriveOpenAiGatewayModelAliases,
+  buildOpenAiGatewayAliasList,
   resolveOpenAiGatewayModel,
   buildOpenAiGatewayModelList,
   createServiceUpstreamControl,

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>vLLM Manager</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/styles.css?v=20260613-ext1" />
+    <link rel="stylesheet" href="/styles.css?v=20260711-guided-flow4" />
   </head>
   <body>
     <div class="app-shell">
@@ -17,7 +17,7 @@
             <p>Local inference console</p>
           </div>
         </div>
-        <nav class="nav">
+        <nav class="nav" aria-label="主要导航">
           <a href="#service" class="active" data-view="service"><i data-lucide="activity"></i><span>服务</span></a>
           <a href="#models" data-view="models"><i data-lucide="database"></i><span>模型</span></a>
           <a href="#download" data-view="download"><i data-lucide="download"></i><span>下载</span></a>
@@ -90,12 +90,12 @@
               <div class="form-field model-picker-field">
                 <span>模型 ID 或本地路径</span>
                 <div class="model-input-shell">
-                  <input id="startModel" name="model" value="Qwen/Qwen3-0.6B" autocomplete="off" />
+                  <input id="startModel" name="model" value="Qwen/Qwen3-0.6B" autocomplete="off" aria-label="模型 ID 或本地路径" />
                   <button class="model-picker-toggle" id="modelPickerToggle" type="button"><i data-lucide="database"></i><span>选择</span></button>
                 </div>
                 <div class="model-picker-popover hidden" id="modelPickerPopover">
                   <div class="model-picker-toolbar">
-                    <input id="modelPickerSearch" placeholder="搜索本地、缓存、收藏或在线模型" autocomplete="off" />
+                    <input id="modelPickerSearch" placeholder="搜索本地、缓存、收藏或在线模型" autocomplete="off" aria-label="搜索模型" />
                     <button class="ghost-mini-button runnable-toggle" id="modelPickerRunnableOnly" type="button" title="仅显示 vLLM 可直接启动的模型"><i data-lucide="badge-check"></i><span>仅可运行</span></button>
                     <button class="icon-button" id="modelPickerRefresh" type="button" title="刷新模型列表"><i data-lucide="refresh-cw"></i></button>
                   </div>
@@ -120,6 +120,18 @@
                 <input id="servicePort" name="port" type="number" value="8000" min="1024" max="65535" />
                 <small class="port-status" id="portStatus"></small>
               </label>
+              <label>
+                <span>启动方式</span>
+                <select id="instanceMode" name="instanceMode">
+                  <option value="replace">替换主实例</option>
+                  <option value="parallel">新增并行实例</option>
+                </select>
+              </label>
+              <label id="instanceIdField" hidden>
+                <span>并行实例标识</span>
+                <input id="instanceId" name="instanceId" placeholder="例如 code-35b" maxlength="36" autocomplete="off" />
+              </label>
+              <div class="selection-hint instance-mode-hint" id="instanceModeHint">替换主实例：只替换主容器。上下文、并发、端口和其他启动参数全部严格采用当前输入值。</div>
               <div class="form-section context-section">
                 <div class="section-title">
                   <span>上下文与显存</span>
@@ -160,12 +172,25 @@
                     <input id="mmProcessorCacheGb" name="mmProcessorCacheGb" type="number" value="4" min="0" step="0.5" />
                   </label>
                   <label class="check-row context-check-row">
-                    <input id="enablePrefixCaching" name="enablePrefixCaching" type="checkbox" />
-                    <span>启用 prefix cache</span>
+                    <input id="disablePrefixCaching" name="disablePrefixCaching" type="checkbox" />
+                    <span>禁用 prefix cache（高级）</span>
                   </label>
                   <label class="check-row context-check-row">
                     <input id="languageModelOnly" name="languageModelOnly" type="checkbox" />
                     <span>仅语言模式</span>
+                  </label>
+                  <label>
+                    <span>推测解码 / MTP</span>
+                    <select id="speculativeMode" name="speculativeMode">
+                      <option value="off" selected>关闭（稳定优先）</option>
+                      <option value="auto">按模型自动（实验）</option>
+                      <option value="mtp">MTP</option>
+                      <option value="ngram">N-gram</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>推测 token 数</span>
+                    <input id="numSpeculativeTokens" name="numSpeculativeTokens" type="number" value="1" min="1" max="8" step="1" />
                   </label>
                 </div>
                 <div class="context-tip-grid">
@@ -173,6 +198,7 @@
                   <div><strong>KV cache</strong><span>FP8 最省显存，长上下文优先用 FP8；auto 通常会按模型 dtype 使用更大缓存。</span></div>
                   <div><strong>Offload</strong><span>CPU/KV offload 可以换更长上下文，但会牺牲速度，先从 4-8 GB 小步尝试。</span></div>
                   <div><strong>仅语言模式</strong><span>不用图片/视频时可开启，减少多模态 encoder 和缓存开销。</span></div>
+                  <div><strong>MTP</strong><span>稳定默认关闭；“按模型自动”属于实验选项。确认基础生成正常后再显式启用，并观察接受率、显存和输出正确性。</span></div>
                 </div>
                 <div class="context-presets" id="contextPresetButtons">
                   <button type="button" data-context-preset="4096">4K</button>
@@ -251,7 +277,7 @@
                 </select>
               </label>
               <label>
-                <span>reasoning parser</span>
+                <span>思考内容解析（不控制是否思考）</span>
                 <select id="reasoningParser" name="reasoningParser">
                   <option value="auto">自动建议</option>
                   <option value="">关闭 / 原样输出</option>
@@ -263,7 +289,8 @@
                   <option value="kimi_k2">kimi_k2</option>
                   <option value="mistral">mistral</option>
                   <option value="granite">granite</option>
-                  <option value="identity">identity</option>
+                      <option value="identity">identity</option>
+                      <option value="nano_v3">nano_v3</option>
                 </select>
               </label>
               <div class="form-note reasoning-note" id="reasoningNote">
@@ -423,6 +450,17 @@
             </div>
           </div>
 
+          <div class="panel runtime-instances-panel">
+            <div class="panel-head">
+              <div>
+                <h3>多模型实例</h3>
+                <p>统一查看主实例和并行实例；停止某一项不会影响其他容器。</p>
+              </div>
+              <button class="icon-button" id="reloadInstancesBtn" type="button" title="刷新实例"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="runtime-instance-list" id="runtimeInstancesList"><div class="empty compact">正在读取运行实例...</div></div>
+          </div>
+
           <div class="panel test-panel">
             <div class="panel-head">
               <h3>接口测试</h3>
@@ -555,6 +593,11 @@
               </div>
             </div>
             <form id="downloadForm" class="download-form">
+              <div class="download-policy-grid">
+                <label><span>任务优先级</span><select id="downloadPriority" name="priority"><option value="high">高</option><option value="normal" selected>普通</option><option value="low">低</option></select></label>
+                <label><span>失败自动重试次数</span><input id="downloadAutoRetryCount" type="number" min="0" max="10" value="2" /></label>
+                <label><span>重试间隔（秒）</span><input id="downloadAutoRetryDelaySeconds" type="number" min="1" max="3600" value="10" /></label>
+              </div>
               <div class="link-resolver">
                 <label>
                   <span>模型介绍页链接</span>
@@ -753,6 +796,20 @@
             </div>
             <div class="profile-list" id="modelNotesList"><div class="empty compact">暂无收藏标签。</div></div>
           </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>管理器配置备份</h3>
+                <p>备份启动方案、服务设置、客户端策略和自动化配置；不包含模型权重、日志或明文密钥。</p>
+              </div>
+              <div class="panel-actions">
+                <button class="secondary-button compact-button" id="createManagerBackupBtn" type="button"><i data-lucide="archive"></i><span>创建备份</span></button>
+                <button class="icon-button" id="reloadManagerBackupsBtn" type="button" title="刷新备份"><i data-lucide="refresh-cw"></i></button>
+              </div>
+            </div>
+            <div class="manager-backup-list" id="managerBackupList"><div class="empty compact">正在读取管理器备份...</div></div>
+          </div>
         </section>
 
         <section class="external-access-page view-panel" id="external-access" data-view-panel="external-access">
@@ -832,6 +889,31 @@
             <div class="trend-grid" id="externalAccessTimeline"></div>
           </div>
 
+          <div class="panel access-log-browser-panel">
+            <div class="panel-head">
+              <div>
+                <h3>访问日志检索</h3>
+                <p>按关键词、时间、状态和来源过滤元数据，并导出当前筛选结果。</p>
+              </div>
+              <div class="panel-actions">
+                <button class="secondary-button compact-button" id="exportAccessLogCsvBtn" type="button"><i data-lucide="table"></i><span>CSV</span></button>
+                <button class="secondary-button compact-button" id="exportAccessLogJsonlBtn" type="button"><i data-lucide="braces"></i><span>JSONL</span></button>
+              </div>
+            </div>
+            <form class="access-log-search-form" id="accessLogSearchForm">
+              <label><span>关键词</span><input name="keyword" placeholder="模型、路径、IP、客户端、错误" autocomplete="off" /></label>
+              <label><span>开始时间</span><input name="from" type="datetime-local" /></label>
+              <label><span>结束时间</span><input name="to" type="datetime-local" /></label>
+              <label><span>状态</span><select name="status"><option value="">全部</option><option value="2xx">2xx</option><option value="4xx">4xx</option><option value="5xx">5xx</option><option value="429">429</option></select></label>
+              <label><span>协议</span><select name="kind"><option value="">全部</option><option value="openai">OpenAI</option><option value="claude">Claude</option><option value="opencode">OpenCode</option></select></label>
+              <label><span>位置</span><select name="external"><option value="">全部</option><option value="external">外部</option><option value="local">本机</option></select></label>
+              <label><span>来源程序</span><input name="source" placeholder="OpenWebUI、SDK..." autocomplete="off" /></label>
+              <div class="access-log-search-actions"><button class="primary-button" type="submit"><i data-lucide="search"></i><span>检索</span></button><button class="secondary-button" id="resetAccessLogSearchBtn" type="button"><i data-lucide="rotate-ccw"></i><span>重置</span></button></div>
+            </form>
+            <div class="selection-hint" id="accessLogResultMeta">尚未检索。</div>
+            <div class="access-log-results" id="accessLogResults"><div class="empty compact">设置筛选条件后检索访问日志。</div></div>
+          </div>
+
           <div class="panel">
             <div class="panel-head">
               <div>
@@ -852,6 +934,7 @@
               </div>
               <div class="panel-actions">
                 <span class="stats-freshness" id="statsFreshness"></span>
+                <button class="secondary-button compact-button" id="openBenchmarkBtn" type="button"><i data-lucide="gauge"></i><span>运行基准</span></button>
                 <button class="icon-button" id="reloadStatsBtn" title="刷新统计"><i data-lucide="refresh-cw"></i></button>
               </div>
             </div>
@@ -863,8 +946,8 @@
           <div class="panel stats-summary-panel">
             <div class="panel-head">
               <div>
-                <h3>实时趋势</h3>
-                <p>停留在本页时按 5 秒采样累积，展示速度、并发和显存的近期变化。</p>
+                <h3>24 小时性能趋势</h3>
+                <p>管理器每分钟持久化 TTFT、TPOT、吞吐、排队和 GPU / MTP 指标，离开页面后仍会保留。</p>
               </div>
             </div>
             <div class="trend-grid" id="statsTrends">
@@ -886,7 +969,7 @@
             <div class="panel-head">
               <div>
                 <h3>GPU 明细</h3>
-                <p>每张显卡的利用率、显存占用和温度。</p>
+                <p>每张显卡的利用率、显存、温度、功耗和风扇转速。</p>
               </div>
             </div>
             <div class="gpu-detail-grid" id="statsGpuDetail"></div>
@@ -910,6 +993,16 @@
               </div>
             </div>
             <div class="stats-model-list" id="statsClientBreakdown"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h3>调用来源程序</h3>
+                <p>按最近 1 小时网关访问记录聚合 WorkBuddy、OpenWebUI、SDK 或浏览器来源。</p>
+              </div>
+            </div>
+            <div class="stats-model-list" id="statsSourcePrograms"></div>
           </div>
 
           <div class="panel">
@@ -997,23 +1090,26 @@
     <script src="/js/model-utils.js?v=20260615-model-utils" defer></script>
     <script src="/shared-js/gpu-planning-utils.js?v=20260615-gpu-planning" defer></script>
     <script src="/js/job-utils.js?v=20260615-job-utils" defer></script>
-    <script src="/shared-js/job-renderer.js?v=20260615-job-renderer" defer></script>
+    <script src="/shared-js/job-renderer.js?v=20260711-guided-flow3" defer></script>
     <script src="/shared-js/local-model-renderer.js?v=20260615-local-models" defer></script>
-    <script src="/shared-js/model-picker-renderer.js?v=20260615-model-picker" defer></script>
+    <script src="/shared-js/model-picker-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/remote-model-renderer.js?v=20260615-remote-models" defer></script>
-  <script src="/js/service-exposure-renderer.js?v=20260615-exposure-renderer" defer></script>
+  <script src="/js/service-exposure-renderer.js?v=20260720-cors-policy" defer></script>
   <script src="/shared-js/service-client-renderer.js?v=20260615-service-clients" defer></script>
-  <script src="/shared-js/runtime-status-renderer.js?v=20260615-runtime-status" defer></script>
+  <script src="/shared-js/runtime-status-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/tool-panel-renderer.js?v=20260615-tool-panel" defer></script>
-  <script src="/shared-js/profile-renderer.js?v=20260615-profile-renderer" defer></script>
+  <script src="/shared-js/profile-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/stats-ui.js?v=20260615-stats-ui" defer></script>
     <script src="/shared-js/stats-summary-renderer.js?v=20260615-stats-summary" defer></script>
     <script src="/shared-js/stats-list-renderer.js?v=20260615-stats-list" defer></script>
     <script src="/shared-js/audit-renderer.js?v=20260615-audit-renderer" defer></script>
     <script src="/js/runtime-insights.js?v=20260526-modular-ui" defer></script>
-    <script src="/shared-js/external-access.js?v=20260615-external-access" defer></script>
-    <script src="/shared-js/ui-architecture.js?v=20260615-ui-architecture" defer></script>
-    <script src="/app.js?v=20260615-audit-renderer" defer></script>
-    <script src="https://unpkg.com/lucide@0.454.0/dist/umd/lucide.min.js" defer onload="window.renderIcons && window.renderIcons()"></script>
+  <script src="/shared-js/external-access.js?v=20260615-external-access" defer></script>
+  <script src="/shared-js/runtime-instances.js?v=20260716-instances" defer></script>
+  <script src="/shared-js/access-log-browser.js?v=20260716-log-search" defer></script>
+  <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
+    <script src="/shared-js/ui-architecture.js?v=20260720-cors-policy" defer></script>
+    <script src="/app.js?v=20260720-cors-policy" defer></script>
+    <script src="/shared-js/lucide.min.js?v=0.454.0" defer onload="window.renderIcons && window.renderIcons()"></script>
   </body>
 </html>

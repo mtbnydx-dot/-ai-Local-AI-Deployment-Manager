@@ -12,14 +12,20 @@ function formatBytes(bytes) {
 function normalizePersistedJob(value, options = {}) {
   const maxLogLines = Number(options.maxLogLines || 500);
   if (!value || typeof value !== "object") return null;
+  const type = String(value.type || "job");
+  const status = String(value.status || "unknown");
+  const progress = value.progress && typeof value.progress === "object" ? { ...value.progress } : null;
+  if (type === "download" && status !== "success" && Number(progress?.percent) >= 100) {
+    progress.percent = 99;
+  }
   return {
     id: String(value.id || ""),
-    type: String(value.type || "job"),
+    type,
     title: String(value.title || value.type || "job"),
-    status: String(value.status || "unknown"),
-    logs: Array.isArray(value.logs) ? value.logs.map(String).slice(-maxLogLines) : [],
+    status,
+    logs: Array.isArray(value.logs) ? value.logs.map(sanitizeJobLogText).filter(Boolean).slice(-maxLogLines) : [],
     meta: value.meta && typeof value.meta === "object" ? value.meta : {},
-    progress: value.progress && typeof value.progress === "object" ? value.progress : null,
+    progress,
     pid: value.pid || null,
     exitCode: value.exitCode ?? null,
     error: value.error || null,
@@ -63,7 +69,7 @@ function markInterruptedJob(job, options = {}) {
 function appendJobLog(job, data, options = {}) {
   if (!Array.isArray(job.logs)) job.logs = [];
   const maxLogLines = Number(options.maxLogLines || 500);
-  const text = String(data || "").replace(/\r/g, "");
+  const text = sanitizeJobLogText(data);
   let added = 0;
   for (const line of text.split("\n")) {
     if (!line) continue;
@@ -73,6 +79,15 @@ function appendJobLog(job, data, options = {}) {
   if (job.logs.length > maxLogLines) job.logs.splice(0, job.logs.length - maxLogLines);
   job.updatedAt = options.now || new Date().toISOString();
   return added;
+}
+
+function sanitizeJobLogText(data) {
+  return String(data || "")
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\uFFFD+/g, "[旧日志含无法解码字节]")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g, "");
 }
 
 function applyJobProgress(job, progress = {}, options = {}) {
@@ -113,7 +128,7 @@ function markJobSuccess(job, options = {}) {
     applyJobProgress(job, {
       percent: 100,
       stage: options.serveStage || "服务已就绪",
-      detail: options.serveDetail || "API 已返回模型列表。",
+      detail: options.serveDetail || "API 与最小生成自检均已通过。",
       state: "ok",
     }, { now });
   } else if (job.progress) {
@@ -239,7 +254,8 @@ function extractLogIssues(text, options = {}) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => /(^|\s)(error|exception|traceback|failed|fatal)\b|out of memory|no such|cannot|not found|runtimeerror|valueerror|typeerror|validationerror|invalid repository|configuration file|config\.json|params\.json|enginedeaderror|device-side assert|scattergatherkernel|uva is not available/i.test(line))
+    .filter((line) => !/\bINFO\b.*not found.*trying vendored/i.test(line))
+    .filter((line) => /(^|\s)(error|exception|traceback|failed|fatal)\b|out of memory|no such|cannot|not found|runtimeerror|valueerror|typeerror|keyerror|assertionerror|validationerror|invalid repository|configuration file|config\.json|params\.json|enginedeaderror|device-side assert|scattergatherkernel|uva is not available/i.test(line))
     .slice(-limit);
 }
 
@@ -250,6 +266,7 @@ module.exports = {
   isActiveJob,
   markInterruptedJob,
   appendJobLog,
+  sanitizeJobLogText,
   applyJobProgress,
   markProcessJobStarted,
   markJobSuccess,

@@ -123,7 +123,7 @@ function buildOpenAiChatBodyFromClaude(body = {}, model, options = {}) {
   const chatTemplateKwargs = body.chat_template_kwargs && typeof body.chat_template_kwargs === "object" && !Array.isArray(body.chat_template_kwargs)
     ? { ...body.chat_template_kwargs }
     : {};
-  if (options.disableQwenThinking !== false && /qwen/i.test(String(model || "")) && chatTemplateKwargs.enable_thinking === undefined) {
+  if (options.disableQwenThinking === true && /qwen/i.test(String(model || "")) && chatTemplateKwargs.enable_thinking === undefined) {
     chatTemplateKwargs.enable_thinking = false;
   }
   if (Object.keys(chatTemplateKwargs).length) payload.chat_template_kwargs = chatTemplateKwargs;

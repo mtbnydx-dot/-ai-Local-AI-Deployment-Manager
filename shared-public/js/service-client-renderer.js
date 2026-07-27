@@ -47,7 +47,7 @@
           <div class="service-client-main">
             <strong>${escapeHtml(client.name || client.id)}</strong>
             <code>${escapeHtml(client.keyPreview || "-")}</code>
-            <span>${enabled ? text.enabled : text.disabled} · ${escapeHtml(allowedModels)} · ${fmtTokens(client.rateLimitRpm || 0)} req/min · 并发 ${fmtTokens(client.maxConcurrentRequests || 0)}</span>
+            <span>${enabled ? text.enabled : text.disabled} · ${escapeHtml(allowedModels)} · ${fmtTokens(client.rateLimitRpm || 0)} req/min · 并发 ${fmtTokens(client.maxConcurrentRequests || 0)} · 队列 ${fmtTokens(client.maxQueuedRequests || 0)} / ${fmtTokens(client.queueTimeoutSeconds || 0)}s</span>
           </div>
           <div class="service-client-usage">
             <span>${fmtTokens(client.usage?.requests?.total || 0)} ${escapeHtml(text.requests)}</span>

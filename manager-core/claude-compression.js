@@ -3,6 +3,12 @@ const {
   normalizeAnthropicContentBlocks,
 } = require("./claude-bridge");
 
+// How aggressive the cheap estimator's pre-screen is. When the estimate falls
+// below this fraction of the context limit we trust it and skip the vLLM
+// /tokenize round-trip entirely -- short requests never touch the network.
+const ESTIMATOR_TRUST_RATIO = 0.6;
+const TOKENIZER_TIMEOUT_MS = 4000;
+
 function estimateTokenCount(text) {
   const value = String(text || "");
   if (!value) return 0;
@@ -10,6 +16,36 @@ function estimateTokenCount(text) {
   const words = (value.replace(/[\u3400-\u9fff]/g, " ").match(/[A-Za-z0-9_./:-]+/g) || []).length;
   const punctuation = (value.match(/[^\sA-Za-z0-9_\u3400-\u9fff]/g) || []).length;
   return Math.max(1, Math.ceil(cjk * 0.9 + words * 1.3 + punctuation * 0.35));
+}
+
+// Ask the running model service for an exact token count via /tokenize.
+// Returns null on any failure or when no tokenizer endpoint is configured so
+// callers can fall back to the cheap estimator instead of blocking the request.
+async function countTokensViaTokenizer(text, options = {}) {
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const endpoint = options.tokenizerEndpoint || "";
+  const value = String(text || "");
+  if (!fetchImpl || !endpoint || !value) return null;
+  try {
+    const response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(options.headers || {}) },
+      body: JSON.stringify({ prompt: value }),
+      signal: AbortSignal.timeout(Number(options.timeoutMs || TOKENIZER_TIMEOUT_MS)),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const count = Number(data?.count);
+    return Number.isFinite(count) && count >= 0 ? count : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveTokenizerEndpoint(runtime = {}, options = {}) {
+  const port = Number(runtime?.endpoint?.port || runtime?.port || options.port || 0);
+  if (!port) return "";
+  return options.tokenizerEndpoint || `http://127.0.0.1:${port}/tokenize`;
 }
 
 function anthropicMessageToSummaryText(message) {
@@ -119,34 +155,40 @@ function buildClaudeCompressionSummaryText(messages, options = {}) {
   return buildClaudeCompressionSummary(messages, options).text;
 }
 
-function applyClaudeContextCompression(body = {}, runtime = {}, model = "", settings = {}, options = {}) {
+async function applyClaudeContextCompression(body = {}, runtime = {}, model = "", settings = {}, options = {}) {
   const config = normalizeCompressionRuntimeSettings(settings);
   const contextLimit = resolveClaudeContextLimit(runtime, model, body, options.defaultContextLimit || 8192);
   const maxTokens = Math.max(1, Number(body.max_tokens || body.maxTokens || options.defaultMaxTokens || 1024));
-  const originalPromptTokens = estimateClaudeBodyTokens(body);
+  const estimatedPromptTokens = estimateClaudeBodyTokens(body);
   const triggerTokens = Math.floor(contextLimit * config.triggerRatio);
+  const tokenizerOptions = {
+    fetchImpl: options.fetchImpl || globalThis.fetch,
+    timeoutMs: options.tokenizerTimeoutMs,
+    headers: options.tokenizerHeaders,
+    tokenizerEndpoint: resolveTokenizerEndpoint(runtime, options),
+  };
+
+  // Cheap pre-screen: if even the (usually conservative) estimate is far below
+  // the trigger, skip the vLLM /tokenize round-trip entirely. Short requests
+  // never touch the network here.
+  const preScreenThreshold = Math.floor(contextLimit * ESTIMATOR_TRUST_RATIO);
+  const preScreenTrigger = estimatedPromptTokens + maxTokens >= preScreenThreshold;
+  if (!config.enabled || contextLimit <= 0 || !Array.isArray(body.messages) || body.messages.length < config.minMessages || !preScreenTrigger) {
+    return compressionResultBase(config, contextLimit, estimatedPromptTokens, triggerTokens, body);
+  }
+
+  // Estimate landed in the trigger region: ask the model service for an exact
+  // count before deciding to compress. Falls back to the estimate if the
+  // tokenizer endpoint is unavailable or slow.
+  const exactPromptTokens = await countTokensViaTokenizer(estimateClaudeBodyText(body), tokenizerOptions);
+  const originalPromptTokens = exactPromptTokens ?? estimatedPromptTokens;
   const shouldCompress = config.enabled
     && contextLimit > 0
     && Array.isArray(body.messages)
     && body.messages.length >= config.minMessages
     && originalPromptTokens + maxTokens >= triggerTokens;
 
-  const base = {
-    applied: false,
-    enabled: config.enabled,
-    mode: config.mode,
-    contextLimit,
-    triggerRatio: config.triggerRatio,
-    triggerTokens,
-    recentRatio: config.recentRatio,
-    summaryRatio: config.summaryRatio,
-    originalPromptTokens,
-    compressedPromptTokens: originalPromptTokens,
-    savedTokens: 0,
-    recentMessageCount: 0,
-    summarizedMessageCount: 0,
-    body,
-  };
+  const base = compressionResultBase(config, contextLimit, originalPromptTokens, triggerTokens, body);
   if (!shouldCompress) return base;
 
   const recentBudget = Math.max(512, Math.floor(contextLimit * config.recentRatio));
@@ -181,6 +223,40 @@ function applyClaudeContextCompression(body = {}, runtime = {}, model = "", sett
   };
 }
 
+// The plain-text projection of a Claude request body that both the estimator
+// and the vLLM /tokenize endpoint count over. Keeping them on the same text
+// makes the estimate-vs-exact comparison meaningful.
+function estimateClaudeBodyText(body = {}) {
+  const parts = [];
+  const system = anthropicContentToText(body.system);
+  if (system) parts.push(system);
+  if (Array.isArray(body.tools) && body.tools.length) parts.push(JSON.stringify(body.tools));
+  for (const message of Array.isArray(body.messages) ? body.messages : []) {
+    parts.push(message.role || "user");
+    parts.push(anthropicMessageToSummaryText(message));
+  }
+  return parts.join("\n");
+}
+
+function compressionResultBase(config, contextLimit, originalPromptTokens, triggerTokens, body) {
+  return {
+    applied: false,
+    enabled: config.enabled,
+    mode: config.mode,
+    contextLimit,
+    triggerRatio: config.triggerRatio,
+    triggerTokens,
+    recentRatio: config.recentRatio,
+    summaryRatio: config.summaryRatio,
+    originalPromptTokens,
+    compressedPromptTokens: originalPromptTokens,
+    savedTokens: 0,
+    recentMessageCount: 0,
+    summarizedMessageCount: 0,
+    body,
+  };
+}
+
 function resolveClaudeContextLimit(runtime = {}, model = "", body = {}, fallback = 8192) {
   const candidates = [];
   const served = [...(runtime?.servedModels || []), ...(runtime?.models || [])];
@@ -200,15 +276,7 @@ function resolveClaudeContextLimit(runtime = {}, model = "", body = {}, fallback
 }
 
 function estimateClaudeBodyTokens(body = {}) {
-  const parts = [];
-  const system = anthropicContentToText(body.system);
-  if (system) parts.push(system);
-  if (Array.isArray(body.tools) && body.tools.length) parts.push(JSON.stringify(body.tools));
-  for (const message of Array.isArray(body.messages) ? body.messages : []) {
-    parts.push(message.role || "user");
-    parts.push(anthropicMessageToSummaryText(message));
-  }
-  return estimateTokenCount(parts.join("\n"));
+  return estimateTokenCount(estimateClaudeBodyText(body));
 }
 
 function normalizeCompressionSummarySettings(options = {}) {
@@ -430,6 +498,9 @@ const SUMMARY_COPY = {
 module.exports = {
   estimateTokenCount,
   estimateClaudeBodyTokens,
+  estimateClaudeBodyText,
+  countTokensViaTokenizer,
+  resolveTokenizerEndpoint,
   anthropicMessageToSummaryText,
   applyClaudeContextCompression,
   resolveClaudeContextLimit,

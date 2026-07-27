@@ -39,8 +39,8 @@ const MODEL_PRESETS = [
   // OpenAI gpt-oss：原生 MXFP4 开源权重
   { developer: "OpenAI", version: "gpt-oss", spec: "20B", repo: "openai/gpt-oss-20b", note: "原生 MXFP4 量化，单卡即可运行。" },
   { developer: "OpenAI", version: "gpt-oss", spec: "120B", repo: "openai/gpt-oss-120b", note: "大号开源权重，需多卡或大显存。" },
-  // NVIDIA DiffusionGemma：需要 vLLM Gemma 专用镜像与 gemma4 parser
-  { developer: "NVIDIA", version: "DiffusionGemma", spec: "26B-A4B IT", repo: "nvidia/diffusiongemma-26B-A4B-it-NVFP4", precision: "nvfp4", note: "NVFP4 多模态/扩散式 Gemma 架构；启动时管理器会自动切换 Gemma vLLM 镜像、V2 runner、TRITON_ATTN 与 gemma4 parser。" },
+  // NVIDIA DiffusionGemma：Windows Docker/WSL 下当前不稳定
+  { developer: "NVIDIA", version: "DiffusionGemma", spec: "26B-A4B IT", repo: "nvidia/diffusiongemma-26B-A4B-it-NVFP4", precision: "nvfp4", note: "NVFP4 多模态/扩散式 Gemma 架构；Windows Docker/WSL 下 V2 runner 会遇到 UVA 限制，V1 fallback 首次推理可能触发 CUDA assert。建议原生 Linux 运行，Windows 上优先用常规 Gemma-4。" },
   // DeepSeek R1 蒸馏：强推理小模型
   { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "1.5B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", note: "最小的强推理蒸馏模型。" },
   { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "7B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", note: "单卡推理蒸馏小规格。" },

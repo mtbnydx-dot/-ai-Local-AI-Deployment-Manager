@@ -77,7 +77,7 @@
         renderExternalEndpointCard("Chatbox / OpenWebUI / OpenAI SDK", service.openAiGatewayBaseUrl || "-", endpointDetails.openai || "Provider 选 OpenAI Compatible；Base URL 必须以 /serve/v1 结尾，不要填 /claude 或 /v1/messages。", service.running ? "ok" : "warn"),
         renderExternalEndpointCard("Claude / Cowork / CC Switch", service.claudeBaseUrl || "-", endpointDetails.claude || "Provider 选 Anthropic / Claude；Base URL 填 /claude，只有客户端要求完整 endpoint 时才填 /claude/v1/messages。", service.running ? "ok" : "warn"),
         renderExternalEndpointCard("仅调试：容器直连入口", service.openAiContainerBaseUrl || "-", "排错用；它会绕过管理器的 API Key、限流、审计与客户端策略，外部客户端优先用 /serve/v1。", "warn"),
-        renderExternalEndpointCard("访问策略", `${apiKeyLabel} · ${fmtTokens(service.rateLimitRpm || 0)} rpm · 并发 ${fmtTokens(service.maxConcurrentRequests || 0)}`, `${runningLabel} · LAN ${service.lanAddress || "-"}`, service.requireApiKey ? "ok" : "warn"),
+        renderExternalEndpointCard("访问策略", `${apiKeyLabel} · ${fmtTokens(service.rateLimitRpm || 0)} rpm · 并发 ${fmtTokens(service.maxConcurrentRequests || 0)}`, `${runningLabel} · 排队 ${fmtTokens(service.maxQueuedRequests || 0)} / ${fmtTokens(service.queueTimeoutSeconds || 0)}s · LAN ${service.lanAddress || "-"}`, service.requireApiKey ? "ok" : "warn"),
       ];
       root.innerHTML = cards.join("");
     }
@@ -257,7 +257,7 @@
             </div>
             <div class="external-recent-meta">
               <span>${escapeHtml(modelText)}</span>
-              <span>${escapeHtml(event.authSource || "none")} · ${event.stream ? "stream" : "non-stream"} · ${fmtMs(event.durationMs || 0)}</span>
+              <span>${escapeHtml(event.authSource || "none")} · ${event.stream ? "stream" : "non-stream"} · ${fmtMs(event.durationMs || 0)}${Number(event.queuedMs || 0) > 0 ? ` · queue ${fmtMs(event.queuedMs)}` : ""}</span>
               <span>${fmtTokens(event.totalTokens || 0)} tokens · tools ${fmtTokens(event.toolUseCount || 0)}/${fmtTokens(event.toolSchemaCount || 0)}</span>
               ${event.error ? `<span class="external-error-text">${escapeHtml(event.error)}</span>` : ""}
             </div>

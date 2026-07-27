@@ -6,6 +6,17 @@ const path = require("node:path");
 const { EventEmitter } = require("node:events");
 const core = require("..");
 
+function fakeSafetensorsFile() {
+  const json = Buffer.from("{}", "utf8");
+  const header = Buffer.alloc(8);
+  header.writeBigUInt64LE(BigInt(json.length));
+  return Buffer.concat([header, json]);
+}
+
+function fakeGgufFile(payload = "") {
+  return Buffer.concat([Buffer.from("GGUF", "ascii"), Buffer.from([3, 0, 0, 0]), Buffer.from(payload)]);
+}
+
 test("network helpers normalize local, lan, and host values", () => {
   assert.equal(core.normalizeRemoteAddress("::ffff:192.168.1.2"), "192.168.1.2");
   assert.equal(core.isLocalAddress("127.0.0.1"), true);
@@ -46,6 +57,40 @@ test("gateway helpers extract common auth fields", () => {
   }, {
     rootMappings: [{ id: "Qwen/Qwen3-27B", root: "root-alias" }],
   }), "Qwen/Qwen3-27B");
+});
+
+test("OpenAI gateway derives short aliases from served model ids", () => {
+  const actualModel = "nv-community-qwen3.6-35b-a3b-nvfp4";
+  assert.deepEqual(core.deriveOpenAiGatewayModelAliases(actualModel), ["qwen3.6"]);
+  assert.equal(core.resolveOpenAiGatewayModel("qwen3.6", {
+    servedModels: [{ id: actualModel }],
+  }, {
+    aliases: ["local-current", "current", "auto", "default"],
+  }), actualModel);
+  assert.equal(core.resolveOpenAiGatewayModel("qwen3.6 35b", {
+    servedModels: [{ id: actualModel }],
+  }, {
+    aliases: ["local-current", "current", "auto", "default"],
+  }), actualModel);
+  assert.equal(core.resolveOpenAiGatewayModel("some-client-local-model", {
+    servedModels: [{ id: actualModel }],
+  }, {
+    aliases: ["local-current", "current", "auto", "default"],
+  }), actualModel);
+
+  const list = core.buildOpenAiGatewayModelList({
+    models: [{ id: actualModel, created: 42 }],
+    aliases: ["local-current", "current", "auto", "default"],
+    owner: "test-manager",
+  });
+  assert.deepEqual(list.data.map((model) => model.id), [
+    "local-current",
+    "current",
+    "auto",
+    "default",
+    "qwen3.6",
+    actualModel,
+  ]);
 });
 
 test("gateway helpers explain wrong OpenAI-compatible base URLs", () => {
@@ -118,10 +163,33 @@ test("connection guide snapshot builds OpenAI, Claude, OpenWebUI, and ccswitch h
   assert.equal(guide.openai.baseUrl, "http://127.0.0.1:5177/serve/v1");
   assert.equal(guide.openai.lanBaseUrl, "http://192.168.1.27:5177/serve/v1");
   assert.equal(guide.openai.directBaseUrl, "http://127.0.0.1:8080/v1");
-  assert.equal(guide.openwebui.baseUrl, "http://192.168.1.27:5177/serve/v1");
-  assert.equal(guide.openwebui.model, "local-model");
+  assert.equal(guide.openai.dockerBaseUrl, "http://host.docker.internal:8080/v1");
+  assert.equal(guide.openai.apiKeyRequired, false);
+  assert.equal(guide.openai.recommendedModel, "local-current");
+  assert.deepEqual(guide.openai.modelAliases, ["local-current", "current", "auto", "default"]);
+  assert.equal(guide.openwebui.baseUrl, "http://host.docker.internal:8080/v1");
+  assert.equal(guide.openwebui.gatewayBaseUrl, "http://192.168.1.27:5177/serve/v1");
+  assert.equal(guide.openwebui.model, "local-current");
+  assert.equal(guide.openwebui.actualModel, "local-model");
+  assert.match(guide.openwebui.note, /host\.docker\.internal/);
   assert.equal(guide.claude.modelAlias, "claude-opus-4-7");
   assert.equal(guide.ccswitch.providerBaseUrl, "http://192.168.1.27:5177/claude");
+});
+
+test("connection guide includes dynamic OpenAI model aliases", () => {
+  const guide = core.buildConnectionGuideSnapshot({
+    runtime: {
+      container: { running: true },
+      servedModels: [{ id: "nv-community-qwen3.6-35b-a3b-nvfp4" }],
+    },
+    endpoint: {},
+    managerLocal: "http://127.0.0.1:5177",
+    openAiModelAliases: ["local-current", "current", "auto", "default"],
+    generatedAt: "2026-06-15T00:00:00.000Z",
+  });
+  assert.equal(guide.openwebui.model, "local-current");
+  assert.equal(guide.openwebui.actualModel, "nv-community-qwen3.6-35b-a3b-nvfp4");
+  assert.ok(guide.openai.modelAliases.includes("qwen3.6"));
 });
 
 test("compatibility endpoints normalize local, LAN, and Claude URLs", () => {
@@ -137,6 +205,7 @@ test("compatibility endpoints normalize local, LAN, and Claude URLs", () => {
   });
   assert.equal(endpoint.openai.baseUrl, "http://127.0.0.1:8000/v1");
   assert.equal(endpoint.openai.serviceBaseUrl, "http://192.168.1.27:8000/v1");
+  assert.equal(endpoint.openai.dockerBaseUrl, "http://host.docker.internal:8000/v1");
   assert.equal(endpoint.openai.lanBaseUrl, "http://192.168.1.27:8000/v1");
   assert.equal(endpoint.openai.chatCompletionsUrl, "http://127.0.0.1:8000/v1/chat/completions");
   assert.equal(endpoint.claude.baseUrl, "http://127.0.0.1:5177/claude");
@@ -264,6 +333,19 @@ test("manager security guard preserves host, gateway, remote, and origin policy"
   vllm(makeReq({ headers: { host: "evil.example" } }), response.res, response.next);
   assert.equal(response.state.statusCode, 403);
   assert.match(response.state.json.error, /Host/);
+
+  response = makeResponse();
+  vllm(makeReq({ headers: { host: "host.docker.internal:5177" } }), response.res, response.next);
+  assert.equal(response.state.statusCode, 403);
+  assert.match(response.state.json.error, /Host/);
+
+  response = makeResponse();
+  vllm(makeReq({
+    path: "/serve/v1/models",
+    originalUrl: "/serve/v1/models",
+    headers: { host: "host.docker.internal:5177" },
+  }), response.res, response.next);
+  assert.equal(response.state.next, 1);
 
   response = makeResponse();
   vllm(makeReq({ headers: { host: "192.168.1.27:5177" } }), response.res, response.next);
@@ -890,9 +972,79 @@ test("service gateway middleware enforces auth, CORS, limits, and emits metadata
   assert.equal(req.serviceGateway.clientId, "client-1");
   assert.equal(response.headers.get("x-local-llm-gateway"), "test-manager");
   assert.equal(response.headers.get("access-control-allow-origin"), "http://client.local");
+  const requestResponse = response;
+
+  response = makeResponse();
+  await middleware({
+    method: "OPTIONS",
+    originalUrl: "/serve/v1/chat/completions",
+    headers: {
+      origin: "http://client.local",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "authorization, content-type, user-agent",
+    },
+    socket: { remoteAddress: "192.168.1.50" },
+    body: {},
+  }, response.res, () => {});
+  assert.equal(response.state.statusCode, 204);
+  assert.equal(response.state.ended, true);
+  assert.match(response.headers.get("access-control-allow-headers"), /user-agent/);
+
+  response = makeResponse();
+  await middleware({
+    method: "OPTIONS",
+    originalUrl: "/serve/v1/chat/completions",
+    headers: {
+      origin: "http://blocked.local",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "content-type",
+    },
+    socket: { remoteAddress: "192.168.1.50" },
+    body: {},
+  }, response.res, () => {});
+  assert.equal(response.state.statusCode, 403);
+  assert.equal(response.state.json.error.code, "origin_not_allowed");
+
+  const openCorsMiddleware = core.createServiceGatewayMiddleware({
+    gatewayName: "open-cors-manager",
+    supportedKinds: ["openai"],
+    getServiceExposureSettings: async () => ({
+      enabled: true,
+      exposureMode: "lan",
+      corsMode: "open",
+      allowedOrigins: ["https://ignored-in-open-mode.example"],
+      requireApiKey: false,
+      exposeOpenAI: true,
+    }),
+    getServiceClientsLedger: async () => ({ clients: [] }),
+    resolveServiceClientForApiKey: async () => null,
+    rateBuckets: new Map(),
+    concurrencyBuckets: new Map(),
+    appendAccessLog: async () => {},
+  });
+  response = makeResponse();
+  await openCorsMiddleware({
+    method: "OPTIONS",
+    originalUrl: "/serve/v1/chat/completions",
+    headers: {
+      origin: "capacitor://localhost",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "authorization, content-type, user-agent, x-chatbox-custom",
+      "access-control-request-private-network": "true",
+    },
+    socket: { remoteAddress: "192.168.1.117" },
+    body: {},
+  }, response.res, () => {});
+  assert.equal(response.state.statusCode, 204);
+  assert.equal(response.headers.get("access-control-allow-origin"), "capacitor://localhost");
+  assert.equal(response.headers.get("access-control-allow-headers"), "authorization,content-type,user-agent,x-chatbox-custom");
+  assert.equal(response.headers.get("access-control-allow-credentials"), "true");
+  assert.equal(response.headers.get("access-control-allow-private-network"), "true");
+  assert.match(response.headers.get("vary"), /Access-Control-Request-Headers/);
+
   req.serviceGatewayAccessUsage = { resolvedModel: "actual", inputTokens: 5, outputTokens: 8, toolUseCount: 1 };
-  response.res.statusCode = 200;
-  response.res.trigger("finish");
+  requestResponse.res.statusCode = 200;
+  requestResponse.res.trigger("finish");
   assert.equal(logs.length, 1);
   assert.equal(logs[0].resolvedModel, "actual");
   assert.equal(logs[0].totalTokens, 13);
@@ -944,6 +1096,129 @@ test("service gateway middleware enforces auth, CORS, limits, and emits metadata
   assert.equal(response.state.json.error.code, "endpoint_disabled");
 });
 
+test("service gateway middleware queues short concurrency bursts", async () => {
+  function makeResponse() {
+    const events = new Map();
+    const headers = new Map();
+    const state = { statusCode: 200, json: null, ended: false };
+    const res = {
+      statusCode: 200,
+      headersSent: false,
+      writableEnded: false,
+      status(code) {
+        this.statusCode = code;
+        state.statusCode = code;
+        return this;
+      },
+      json(value) {
+        this.headersSent = true;
+        state.json = value;
+        return value;
+      },
+      end() {
+        this.writableEnded = true;
+        state.ended = true;
+      },
+      setHeader(key, value) {
+        headers.set(String(key).toLowerCase(), value);
+      },
+      getHeader(key) {
+        return headers.get(String(key).toLowerCase());
+      },
+      setTimeout(_timeout, handler) {
+        this.timeoutHandler = handler;
+      },
+      once(event, handler) {
+        const handlers = events.get(event) || [];
+        handlers.push(handler);
+        events.set(event, handlers);
+        return this;
+      },
+      off(event, handler) {
+        const handlers = events.get(event) || [];
+        const index = handlers.indexOf(handler);
+        if (index >= 0) handlers.splice(index, 1);
+        if (!handlers.length) events.delete(event);
+        return this;
+      },
+      trigger(event) {
+        for (const handler of [...(events.get(event) || [])]) handler();
+      },
+    };
+    return { res, state, headers };
+  }
+
+  const rateBuckets = new Map();
+  const concurrencyBuckets = new Map();
+  const concurrencyQueues = new Map();
+  const middleware = core.createServiceGatewayMiddleware({
+    gatewayName: "queue-manager",
+    supportedKinds: ["openai"],
+    getServiceExposureSettings: async () => ({
+      enabled: true,
+      exposureMode: "lan",
+      requireApiKey: true,
+      allowedOrigins: [],
+      exposeOpenAI: true,
+      rateLimitRpm: 60,
+      maxConcurrentRequests: 1,
+      maxQueuedRequests: 2,
+      queueTimeoutSeconds: 5,
+      requestTimeoutSeconds: 10,
+      apiKey: "",
+      apiKeyHash: "",
+    }),
+    getServiceClientsLedger: async () => ({ clients: [{ id: "client-1", enabled: true }] }),
+    resolveServiceClientForApiKey: async (key) => (key === "sk-client" ? {
+      id: "client-1",
+      enabled: true,
+      rateLimitRpm: 60,
+      maxConcurrentRequests: 1,
+      requestTimeoutSeconds: 10,
+    } : null),
+    rateBuckets,
+    concurrencyBuckets,
+    concurrencyQueues,
+    appendAccessLog: async () => {},
+  });
+
+  const firstResponse = makeResponse();
+  const firstReq = {
+    method: "POST",
+    originalUrl: "/serve/v1/chat/completions",
+    headers: { authorization: "Bearer sk-client" },
+    socket: { remoteAddress: "192.168.1.50" },
+    body: { model: "requested" },
+  };
+  let firstNextCalled = 0;
+  await middleware(firstReq, firstResponse.res, () => { firstNextCalled += 1; });
+  assert.equal(firstNextCalled, 1);
+  assert.equal(concurrencyBuckets.get("client-1"), 1);
+
+  const secondResponse = makeResponse();
+  const secondReq = {
+    method: "POST",
+    originalUrl: "/serve/v1/chat/completions",
+    headers: { authorization: "Bearer sk-client" },
+    socket: { remoteAddress: "192.168.1.50" },
+    body: { model: "requested" },
+  };
+  let secondNextCalled = 0;
+  const secondPending = middleware(secondReq, secondResponse.res, () => { secondNextCalled += 1; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(secondNextCalled, 0);
+  assert.equal(concurrencyQueues.get("client-1").length, 1);
+
+  firstResponse.res.trigger("finish");
+  await secondPending;
+  assert.equal(secondNextCalled, 1);
+  assert.equal(secondReq.serviceGateway.queuedMs >= 0, true);
+  assert.equal(concurrencyBuckets.get("client-1"), 1);
+
+  secondResponse.res.trigger("finish");
+  assert.equal(concurrencyBuckets.has("client-1"), false);
+});
+
 test("OpenAI gateway handlers proxy models and non-stream completions with usage metadata", async () => {
   const fetchCalls = [];
   const usageEvents = [];
@@ -959,6 +1234,7 @@ test("OpenAI gateway handlers proxy models and non-stream completions with usage
     serviceClientAllowsModel: (_client, model) => model !== "blocked",
     recordUsage: async (clientId, event) => usageEvents.push({ clientId, event }),
     setAccessUsage: (req, usage) => { req.serviceGatewayAccessUsage = usage; },
+    prepareRequestBody: (body, _runtime, model) => ({ ...body, preparedFor: model }),
     fetchFn: async (url, options = {}) => {
       fetchCalls.push({ url, options });
       const body = url.endsWith("/v1/models")
@@ -1009,15 +1285,24 @@ test("OpenAI gateway handlers proxy models and non-stream completions with usage
   assert.equal(response.state.json[0].data[0].owned_by, "test-manager");
 
   response = makeResponse();
+  await handlers.handleProps({}, response.res);
+  assert.equal(response.state.statusCode, 200);
+  assert.equal(response.state.json[0].object, "gateway.props");
+  assert.equal(response.state.json[0].defaultModel, "local-current");
+  assert.deepEqual(response.state.json[0].models, ["local-current", "actual-model"]);
+  assert.equal(response.state.json[0].capabilities.chatCompletions, true);
+
+  response = makeResponse();
   const req = {
-    body: { model: "local-current", stream: false },
+    body: { model: "qwen3.6 35b", stream: false },
     serviceGateway: { clientId: "client-1", timeoutMs: 5000 },
   };
   await handlers.handleChatCompletions(req, response.res);
   assert.equal(response.state.statusCode, 200);
   assert.equal(response.state.type, "application/json");
-  assert.equal(JSON.parse(fetchCalls[1].options.body).model, "actual-model");
-  assert.equal(fetchCalls[1].options.headers.authorization, "Bearer local-key");
+  assert.equal(JSON.parse(fetchCalls[2].options.body).model, "actual-model");
+  assert.equal(JSON.parse(fetchCalls[2].options.body).preparedFor, "actual-model");
+  assert.equal(fetchCalls[2].options.headers.authorization, "Bearer local-key");
   assert.deepEqual(req.serviceGatewayAccessUsage, {
     resolvedModel: "actual-model",
     inputTokens: 7,
@@ -1306,9 +1591,14 @@ test("docker helpers build and parse engine-specific publish args", () => {
 test("docker helpers classify image tags and publish bind errors", () => {
   assert.equal(core.isPinnedImageReference("vllm/vllm-openai:v0.21.0"), true);
   assert.equal(core.isPinnedImageReference("vllm/vllm-openai:latest"), false);
-  assert.equal(core.isPinnedImageReference("repo/image@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), true);
+  assert.equal(core.isPinnedImageReference("repo/image@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), true);
   assert.equal(core.isDockerPublishBindError({ stderr: "port is already allocated" }), true);
   assert.equal(core.isDockerPublishBindError({ stderr: "model config failed" }), false);
+  assert.equal(core.isContainerNameConflictError({
+    stderr: 'docker: Error response from daemon: Conflict. The container name "/vllm-local" is already in use by container "bf64ab93".',
+  }), true);
+  assert.equal(core.isContainerNameConflictError({ stderr: "port is already allocated" }), false);
+  assert.equal(core.isContainerNameConflictError({ message: "something else failed" }), false);
 });
 
 test("docker runtime wraps CLI checks, image status, and Desktop startup", async () => {
@@ -1316,12 +1606,13 @@ test("docker runtime wraps CLI checks, image status, and Desktop startup", async
     { stdout: "Docker version 27.0.0\n" },
     { stdout: "27.0.0\n" },
     { stdout: "sha256:abc\t2048\t[\"repo/image:tag\"]\t[\"repo/image@sha256:digest\"]\n" },
+    { error: new Error("inspect failed"), stderr: "Error response from daemon: No such image: repo/missing:tag\n" },
   ];
   const calls = [];
   const runtime = core.createDockerRuntime({
     dockerExe: "docker-test",
     execFileCommand: (file, args, options, callback) => {
-      calls.push([file, args, options.rejectOnError]);
+      calls.push([file, args, options.rejectOnError, options.timeout]);
       const response = responses.shift();
       callback(response?.error || null, response?.stdout || "", response?.stderr || "");
     },
@@ -1333,7 +1624,14 @@ test("docker runtime wraps CLI checks, image status, and Desktop startup", async
   assert.equal(image.ok, true);
   assert.equal(image.id, "sha256:abc");
   assert.equal(image.text, "repo/image:tag\t2.0 KB");
-  assert.deepEqual(calls.map((call) => call[0]), ["docker-test", "docker-test", "docker-test"]);
+  const missingImage = await runtime.getImageStatus("repo/missing:tag");
+  assert.equal(missingImage.ok, false);
+  assert.equal(missingImage.reason, "missing-image");
+  assert.equal(missingImage.text, "镜像未下载：repo/missing:tag");
+  assert.deepEqual(calls.map((call) => call[0]), ["docker-test", "docker-test", "docker-test", "docker-test"]);
+  assert.equal(calls[0][3], 10000);
+  assert.equal(calls[1][3], 8000);
+  assert.equal(calls[2][3], 10000);
 
   const startupResponses = [
     { error: new Error("daemon missing"), stderr: "open //./pipe/dockerDesktopLinuxEngine" },
@@ -1364,10 +1662,65 @@ test("docker runtime wraps CLI checks, image status, and Desktop startup", async
   assert.equal(core.timestampToSeconds("2026-06-15T00:00:00.000Z"), 1781481600);
 });
 
+test("docker image pull retries transient registry failures with backoff", async () => {
+  let calls = 0;
+  const delays = [];
+  const failures = [];
+  const runtime = core.createDockerRuntime({
+    dockerExe: "docker-test",
+    delay: async (ms) => delays.push(ms),
+    execFileCommand: (_file, args, _options, callback) => {
+      calls += 1;
+      if (calls < 3) {
+        const error = new Error("registry EOF");
+        callback(error, "", "failed to copy: EOF");
+        return;
+      }
+      callback(null, `${args.at(-1)} pulled\n`, "");
+    },
+  });
+  const pulled = await runtime.pullImageWithRetry("repo/image:v1", {
+    attempts: 3,
+    initialDelayMs: 10,
+    onFailure: (event) => failures.push(event.detail),
+  });
+  assert.equal(pulled.attempt, 3);
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [10, 20]);
+  assert.equal(failures.length, 2);
+});
+
+test("operational snapshots coalesce concurrent Docker and runtime probes", async () => {
+  const calls = { docker: 0, gpu: 0, container: 0, image: 0, runtime: 0, resources: 0 };
+  const store = core.createManagerOperationalSnapshotStore({
+    ttlMs: 5000,
+    containerName: "vllm-local",
+    image: "repo/default:v1",
+    getDockerVersion: async () => { calls.docker += 1; return { ok: true }; },
+    getGpuStatus: async () => { calls.gpu += 1; return { ok: true }; },
+    getContainerStatus: async (name) => { calls.container += 1; return { name, image: "repo/running:v2" }; },
+    getImageStatus: async (image) => { calls.image += 1; return { image }; },
+    getRunningModelSummary: async (container) => { calls.runtime += 1; return { container, models: [{ id: "model-a" }] }; },
+    getManagerResourceSummary: async () => { calls.resources += 1; return { ok: true }; },
+  });
+  const [first, second, third] = await Promise.all([
+    store.getSnapshot(),
+    store.getSnapshot(),
+    store.getSnapshot(),
+  ]);
+  assert.equal(first, second);
+  assert.equal(second, third);
+  assert.deepEqual(calls, { docker: 1, gpu: 1, container: 1, image: 1, runtime: 1, resources: 1 });
+  assert.equal(first.image.image, "repo/running:v2");
+  store.clear();
+  await store.getSnapshot();
+  assert.equal(calls.container, 2);
+});
+
 test("GPU runtime parses nvidia-smi and normalizes selected device ids", async () => {
   const parsed = core.parseNvidiaSmiGpuCsv([
-    "0, NVIDIA RTX PRO 6000 Blackwell, 97871, 12000, 80, 59",
-    "1, NVIDIA GeForce RTX 5090, 32607, 4000, 20, 45",
+    "0, NVIDIA RTX PRO 6000 Blackwell, 12.0, 97871, 12000, 80, 59",
+    "1, NVIDIA GeForce RTX 5090, 12.0, 32607, 4000, 20, 45",
   ].join("\n"));
   assert.equal(parsed.ok, true);
   assert.equal(parsed.count, 2);
@@ -1375,9 +1728,14 @@ test("GPU runtime parses nvidia-smi and normalizes selected device ids", async (
   assert.equal(parsed.usedMb, 16000);
   assert.equal(parsed.util, 50);
   assert.equal(parsed.gpus[0].id, "0");
+  assert.equal(parsed.gpus[0].computeCap, "12.0");
+
+  const legacyParsed = core.parseNvidiaSmiGpuCsv("0, GPU Legacy, 100, 10, 10, 40");
+  assert.equal(legacyParsed.ok, true);
+  assert.equal(legacyParsed.gpus[0].computeCap, "");
 
   const runtime = core.createGpuRuntime({
-    execFileAsync: async () => ({ stdout: "0, GPU A, 100, 10, 10, 40\n1, GPU B, 50, 5, 30, 41\n" }),
+    execFileAsync: async () => ({ stdout: "0, GPU A, 12.0, 100, 10, 10, 40\n1, GPU B, 8.9, 50, 5, 30, 41\n" }),
   });
   const status = await runtime.getGpuStatus();
   assert.equal(status.ok, true);
@@ -1403,6 +1761,7 @@ test("service policy normalizes exposure settings and migrates secrets", () => {
     exposureMode: "lan",
     apiKey: "sk-local-secret",
     allowedOrigins: "192.168.1.2\n192.168.1.2, laptop",
+    allowedHeaders: "User-Agent\nX-Client-Version\nbad header",
     publicBaseUrl: "https://llm.example.com/",
     rateLimitRpm: 99999,
   }, {}, { allowExposeOpenCode: true, exposeOpenCodeDefault: true });
@@ -1412,11 +1771,26 @@ test("service policy normalizes exposure settings and migrates secrets", () => {
   assert.equal(vllm.apiKeyHash, core.hashServiceApiKey("sk-local-secret"));
   assert.equal(vllm.apiKeyPreview, "sk-loca...cret");
   assert.equal(vllm.publicBaseUrl, "https://llm.example.com");
+  assert.equal(vllm.corsMode, "restricted");
   assert.deepEqual(vllm.allowedOrigins, ["192.168.1.2", "laptop"]);
+  assert.deepEqual(vllm.allowedHeaders, ["user-agent", "x-client-version"]);
   assert.equal(vllm.rateLimitRpm, 5000);
   assert.equal(vllm.exposeOpenCode, true);
 
+  const openCors = core.normalizeServiceExposureSettings({
+    corsMode: "open",
+    allowedOrigins: "https://ignored-in-open-mode.example",
+  });
+  assert.equal(openCors.corsMode, "open");
+
+  const partialCorsUpdate = core.normalizeServiceExposureSettings(
+    { corsMode: "open" },
+    { exposureMode: "lan", requireApiKey: false },
+  );
+  assert.equal(partialCorsUpdate.requireApiKey, false);
+
   const llama = core.normalizeServiceExposureSettings({ exposeOpenCode: true }, {}, { allowExposeOpenCode: false });
+  assert.equal(llama.corsMode, "open");
   assert.equal(llama.exposeOpenCode, false);
   assert.equal(core.redactServiceExposureSettings(vllm).apiKeyHash, "");
   assert.equal(core.redactServiceExposureSettings(vllm).hasApiKey, true);
@@ -1537,7 +1911,7 @@ test("service clients store persists JSON and syncs usage store hooks", async ()
   const deleted = await store.deleteServiceClient(created.client.id);
   assert.equal(deleted.removed, 1);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(usageCalls.map((call) => call[0]), ["clients", "clients", "clients", "clients", "usage", "clients", "delete"]);
+  assert.deepEqual(usageCalls.map((call) => call[0]), ["clients", "clients", "clients", "usage", "clients", "clients", "delete"]);
   assert.equal(JSON.parse(await fs.readFile(file, "utf8")).clients.length, 0);
 });
 
@@ -2406,7 +2780,7 @@ test("Claude bridge converts Anthropic messages and tools to OpenAI chat format"
   assert.equal(core.anthropicToolChoiceToOpenAi({ type: "tool", name: "search" }, tools).function.name, "search");
 });
 
-test("Claude bridge builds OpenAI chat payloads with tools, stream options, and Qwen thinking defaults", () => {
+test("Claude bridge leaves Qwen thinking to the client unless explicitly disabled", () => {
   const payload = core.buildOpenAiChatBodyFromClaude({
     max_tokens: 2048,
     temperature: "0.3",
@@ -2428,7 +2802,12 @@ test("Claude bridge builds OpenAI chat payloads with tools, stream options, and 
   assert.equal(payload.parallel_tool_calls, false);
   assert.equal(payload.tools[0].function.name, "search");
   assert.equal(payload.tool_choice.function.name, "search");
-  assert.equal(payload.chat_template_kwargs.enable_thinking, false);
+  assert.equal(payload.chat_template_kwargs, undefined);
+
+  const explicitlyDisabled = core.buildOpenAiChatBodyFromClaude({
+    messages: [{ role: "user", content: "hello" }],
+  }, "Qwen3-local", { disableQwenThinking: true });
+  assert.equal(explicitlyDisabled.chat_template_kwargs.enable_thinking, false);
 
   const explicitThinking = core.buildOpenAiChatBodyFromClaude({
     chat_template_kwargs: { enable_thinking: true },
@@ -2498,7 +2877,7 @@ test("Claude compression preserves hard instructions, errors, and tool pairs", (
   assert.match(core.appendClaudeCompressionSummary("system", "summary"), /system\n\nsummary/);
 });
 
-test("Claude compression applies from core with context limits and summary metadata", () => {
+test("Claude compression applies from core with context limits and summary metadata", async () => {
   const messages = Array.from({ length: 10 }, (_, index) => ({
     role: index % 2 ? "assistant" : "user",
     content: `Message ${index}. Goal: keep the Docker/vLLM task moving. Must preserve D:\\AI paths and error details. `.repeat(60),
@@ -2506,7 +2885,10 @@ test("Claude compression applies from core with context limits and summary metad
   messages[8] = { role: "assistant", content: [{ type: "tool_use", id: "toolu_keep", name: "read_logs", input: { path: "D:\\AI\\logs" } }] };
   messages[9] = { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_keep", content: "error: model failed on http://127.0.0.1:8000/v1" }] };
 
-  const compression = core.applyClaudeContextCompression({
+  // No tokenizer endpoint is provided (no runtime.endpoint.port), so the
+  // pre-screen falls back to the estimator -- mirroring how a manager with no
+  // reachable /tokenize endpoint behaves.
+  const compression = await core.applyClaudeContextCompression({
     system: "system rules",
     model: "local",
     max_tokens: 512,
@@ -2539,11 +2921,13 @@ test("Claude compression applies from core with context limits and summary metad
 test("access events summarize request, latency, token, and group data", () => {
   const now = Date.parse("2026-06-14T12:10:00.000Z");
   const events = [
-    core.normalizeAccessEvent({ at: "2026-06-14T12:00:00.000Z", remoteAddress: "192.168.1.9", status: 200, durationMs: 100, inputTokens: 10, outputTokens: 5, path: "/serve/v1/chat/completions", model: "local" }, "192.168.1.2"),
+    core.normalizeAccessEvent({ at: "2026-06-14T12:00:00.000Z", remoteAddress: "192.168.1.9", status: 200, durationMs: 100, inputTokens: 10, outputTokens: 5, path: "/serve/v1/chat/completions", model: "local", userAgent: "WorkBuddy/5.1.7" }, "192.168.1.2"),
     core.normalizeAccessEvent({ at: "2026-06-14T12:01:00.000Z", remoteAddress: "127.0.0.1", status: 401, durationMs: 20, path: "/claude/messages" }, "192.168.1.2"),
   ];
   assert.equal(events[0].external, true);
   assert.equal(events[1].external, false);
+  assert.equal(events[0].sourceProgram, "WorkBuddy");
+  assert.equal(events[1].sourceProgram, "Claude 兼容客户端");
   const summary = core.summarizeAccessEvents(events, now);
   assert.equal(summary.requests.total, 2);
   assert.equal(summary.requests.success, 1);
@@ -2552,6 +2936,9 @@ test("access events summarize request, latency, token, and group data", () => {
   const grouped = core.groupAccessEvents(events, (event) => event.path);
   assert.equal(grouped.length, 2);
   assert.equal(grouped[0].count, 1);
+  const workBuddyGroup = grouped.find((item) => item.topSourceProgram[0] === "WorkBuddy");
+  assert.ok(workBuddyGroup);
+  assert.equal(workBuddyGroup.count, 1);
 });
 
 test("service gateway access log store reads JSONL and builds external stats", async () => {
@@ -2584,6 +2971,7 @@ test("service gateway access log store reads JSONL and builds external stats", a
     path: "/serve/v1/chat/completions",
     model: "requested",
     resolvedModel: "served",
+    userAgent: "WorkBuddy/5.1.7",
     prompt: "should not be copied into stats",
   });
   await store.appendServiceGatewayAccessLog({
@@ -2601,6 +2989,18 @@ test("service gateway access log store reads JSONL and builds external stats", a
   assert.equal(stats.local.requests.authFailures, 1);
   assert.equal(stats.resolvedModels[0].key, "served");
   assert.equal(Object.prototype.hasOwnProperty.call(stats.recent[0], "prompt"), false);
+
+  const recent = await store.collectRecentAccessStats({
+    now: Date.parse("2026-06-14T12:30:00.000Z"),
+    windowMs: 60 * 60 * 1000,
+    limit: 20,
+    maxLines: 100,
+  });
+  assert.equal(recent.totals.requests.total, 2);
+  const workBuddySource = recent.sources.find((source) => source.key === "WorkBuddy");
+  assert.ok(workBuddySource);
+  assert.equal(workBuddySource.count, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(recent.recent[0], "prompt"), false);
 });
 
 test("runtime wait resolves when served models appear", async () => {
@@ -2680,6 +3080,77 @@ test("runtime wait detects stalled logs before global timeout", async () => {
 
   assert.equal(job.progress.stage, "启动停滞");
   assert.equal(job.progress.state, "fail");
+});
+
+test("runtime wait retries through transient docker status errors instead of failing", async () => {
+  const job = { progress: {} };
+  const logs = [];
+  let now = 0;
+  let statusCalls = 0;
+  let finished = null;
+  await core.waitForRuntimeReady({
+    job,
+    port: 8000,
+    serviceUrl: "http://127.0.0.1:8000/v1",
+    engineName: "vLLM",
+    containerName: "vllm-local",
+    startupTimeoutMs: 60_000,
+    fetchServedModels: async () => (statusCalls === 0 ? [] : [{ id: "local-model" }]),
+    getContainerStatus: async () => {
+      statusCalls += 1;
+      // 首次轮询：docker ps 瞬时失败，返回 exists:false 且带 error —— 必须重试而非判"容器消失"。
+      if (statusCalls === 1) return { exists: false, running: false, error: "docker daemon hiccup" };
+      return { exists: true, running: true };
+    },
+    docker: async () => ({ stdout: "", stderr: "" }),
+    extractLogIssues: () => [],
+    setJobProgress: (_job, value) => { job.progress = value; },
+    appendLog: (_job, line) => { logs.push(line); },
+    finishJob: (_job, meta) => { finished = meta; },
+    delayFn: async (ms) => { now += ms; },
+    nowFn: () => now,
+  });
+
+  assert.equal(job.progress.state, "ok");
+  assert.deepEqual(finished.servedModels, [{ id: "local-model" }]);
+  assert.ok(logs.some((line) => /容器状态查询失败/.test(line)));
+});
+
+test("runtime wait requires a generation probe and de-duplicates Docker log snapshots", async () => {
+  let now = 2;
+  let probes = 0;
+  let finished = null;
+  const appended = [];
+  const job = { status: "running", meta: {}, progress: {} };
+  await core.waitForRuntimeReady({
+    job,
+    port: 8000,
+    serviceUrl: "http://127.0.0.1:8000/v1",
+    engineName: "vLLM",
+    containerName: "vllm-local",
+    startupTimeoutMs: 60_000,
+    probeRetryIntervalMs: 1,
+    fetchServedModels: async () => [{ id: "local-model" }],
+    probeRuntime: async () => {
+      probes += 1;
+      return probes === 1 ? { ok: false, detail: "empty output" } : { ok: true, detail: "OK" };
+    },
+    getContainerStatus: async () => ({ exists: true, running: true, status: "Up" }),
+    docker: async () => ({ stdout: "line one\nline two\n", stderr: "" }),
+    extractLogIssues: () => [],
+    setJobProgress: (_job, value) => { job.progress = value; },
+    appendLog: (_job, value) => appended.push(value),
+    finishJob: (_job, meta) => { finished = meta; },
+    delayFn: async (ms) => { now += ms; },
+    nowFn: () => now,
+    logPollIntervalMs: 1,
+  });
+  assert.equal(probes, 2);
+  assert.equal(job.progress.state, "ok");
+  assert.equal(finished.readinessProbe.ok, true);
+  assert.equal(appended.filter((line) => line === "line one\nline two\n").length, 1);
+  assert.equal(core.logSnapshotDelta("a\nb\n", "a\nb\nc\n"), "c\n");
+  assert.equal(core.logSnapshotDelta("a\nb\n", "a\nb\n"), "");
 });
 
 test("runtime log summary reads Docker logs and keeps engine hooks", async () => {
@@ -2780,6 +3251,53 @@ test("runtime request helpers clamp logs and test OpenAI chat completions", asyn
   assert.equal(handlerCalls[2][1], "http://127.0.0.1:8000/v1/chat/completions");
   assert.equal(handlerCalls[2][2], "Bearer sk-local");
   assert.equal(handlerCalls[2][3].messages[0].content, "manager OK");
+});
+
+test("generation readiness probe accepts useful text, falls back to completions, and rejects degeneration", async () => {
+  const calls = [];
+  const result = await core.probeOpenAiGeneration({
+    port: 8000,
+    model: "model-a",
+    apiKey: "secret",
+    fetchImpl: async (url, request) => {
+      calls.push({ url, request });
+      if (url.endsWith("/chat/completions")) {
+        return { ok: false, status: 400, text: async () => "chat template missing" };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ text: "OK" }] }) };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.endpoint, "completion");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].request.headers.authorization, "Bearer secret");
+  assert.equal(JSON.parse(calls[0].request.body).chat_template_kwargs.enable_thinking, false);
+
+  const reasoning = await core.probeOpenAiGeneration({
+    port: 8000,
+    model: "reasoning-model",
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ choices: [{ message: { content: null, reasoning: "The readiness answer is OK." } }] }),
+    }),
+  });
+  assert.equal(reasoning.ok, true);
+  assert.equal(reasoning.endpoint, "chat");
+  assert.match(reasoning.preview, /readiness answer/);
+
+  const degenerate = await core.probeOpenAiGeneration({
+    port: 8000,
+    model: "model-a",
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ choices: [{ message: { content: "!!!!!!!!!!!!!!!!" } }] }),
+    }),
+  });
+  assert.equal(degenerate.ok, false);
+  assert.match(degenerate.detail, /重复符号/);
+  assert.equal(core.validateGeneratedProbeText("abc\uFFFD").ok, false);
 });
 
 test("runtime stop handlers stop and unload with audit payloads", async () => {
@@ -2945,7 +3463,7 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
     modelScopeCli: "modelscope",
     hfCache: "cache-root",
     modelsRoot: "D:/models",
-    env: { BASE: "1" },
+    env: { BASE: "1", HTTP_PROXY: "http://proxy.local:7890", https_proxy: "http://proxy.local:7890" },
     cleanRequired: core.cleanRequired,
     resolveModelPath: (value) => String(value).replace(/\\/g, "/"),
     safeOutputName: (value) => String(value).replace(/[\\/]/g, "__"),
@@ -2957,8 +3475,22 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
   assert.equal(spec.command, "hf");
   assert.deepEqual(spec.args, ["download", "owner/model", "--include", "*Q4*.gguf", "--include", "*IQ4*.gguf", "--local-dir", "D:/models/owner__model"]);
   assert.equal(spec.options.env.HF_HOME, "cache-root");
+  assert.equal(spec.options.env.PYTHONUTF8, "1");
+  assert.equal(spec.options.env.PYTHONIOENCODING, "utf-8");
+  assert.equal(spec.options.env.HF_HUB_DISABLE_PROGRESS_BARS, "1");
   assert.equal(spec.options.meta.localDir, "D:/models/owner__model");
   assert.equal(spec.options.countExistingProgress, true);
+  const modelScopeSpec = builder.buildDownloadSpecFromJob({
+    meta: { model: "owner/model", source: "modelscope" },
+  });
+  assert.equal(modelScopeSpec.command, "modelscope");
+  assert.deepEqual(modelScopeSpec.args, ["download", "--model", "owner/model", "--local_dir", "D:/models/owner__model"]);
+  assert.equal(modelScopeSpec.options.env.HTTP_PROXY, undefined);
+  assert.equal(modelScopeSpec.options.env.https_proxy, undefined);
+  assert.equal(modelScopeSpec.options.env.NO_PROXY, "*");
+  assert.equal(modelScopeSpec.options.env.no_proxy, "*");
+  assert.equal(modelScopeSpec.options.env.MODELSCOPE_DIRECT_DNS, "1");
+  assert.match(modelScopeSpec.options.env.PYTHONPATH, /python-direct-dns/);
 });
 
 test("remote model helpers share search, size, and quant filtering semantics", () => {
@@ -3046,8 +3578,8 @@ test("model filesystem store scans local, cached, and GGUF models safely", async
   await fs.mkdir(cachedModel, { recursive: true });
   await fs.writeFile(path.join(localModel, "config.json"), "{}");
   await fs.writeFile(path.join(localModel, "weights.bin"), "12345");
-  await fs.writeFile(path.join(ggufDir, "small.gguf"), "1");
-  await fs.writeFile(path.join(ggufDir, "large.gguf"), "123456789");
+  await fs.writeFile(path.join(ggufDir, "small.gguf"), fakeGgufFile("1"));
+  await fs.writeFile(path.join(ggufDir, "large.gguf"), fakeGgufFile("123456789"));
   await fs.writeFile(path.join(cachedModel, "refs.json"), "{}");
 
   const store = core.createModelFilesystemStore({ modelsRoot, hfCache });
@@ -3072,10 +3604,49 @@ test("model filesystem store scans local, cached, and GGUF models safely", async
   });
   assert.equal(verifiedGguf.ok, true);
   assert.equal(verifiedGguf.gguf, 2);
-  assert.equal(verifiedGguf.largestFiles[0].name, path.join("sub", "large.gguf"));
+  assert.equal(verifiedGguf.largestFiles[0].name, "sub/large.gguf");
 
   const missing = await store.verifyDownloadedModel({ outputName: "missing" });
   assert.equal(missing.status, "missing");
+
+  const brokenModel = path.join(modelsRoot, "Broken-Shards");
+  await fs.mkdir(path.join(brokenModel, ".cache", "huggingface", "download"), { recursive: true });
+  await fs.writeFile(path.join(brokenModel, "config.json"), "{}");
+  await fs.writeFile(path.join(brokenModel, "tokenizer.json"), "{}");
+  await fs.writeFile(path.join(brokenModel, "model-00001-of-00002.safetensors"), fakeSafetensorsFile());
+  await fs.writeFile(path.join(brokenModel, "model.safetensors.index.json"), JSON.stringify({
+    weight_map: {
+      a: "model-00001-of-00002.safetensors",
+      b: "model-00002-of-00002.safetensors",
+    },
+  }));
+  await fs.writeFile(path.join(brokenModel, ".cache", "huggingface", "download", "model-00002.incomplete"), "partial");
+  const broken = await store.verifyDownloadedModel({ localDir: brokenModel });
+  assert.equal(broken.ok, false);
+  assert.deepEqual(broken.missingWeightFiles, ["model-00002-of-00002.safetensors"]);
+  assert.equal(broken.incomplete, 1);
+  await fs.writeFile(path.join(brokenModel, "model-00002-of-00002.safetensors"), fakeSafetensorsFile());
+  const completeWithStaleCache = await store.verifyDownloadedModel({ localDir: brokenModel });
+  assert.equal(completeWithStaleCache.ok, true);
+  assert.ok(completeWithStaleCache.issues.some((item) => item.severity === "warn" && /缓存残留/.test(item.title)));
+  const strictDownloadCompletion = await store.verifyDownloadedModel({ localDir: brokenModel }, { strictIncomplete: true });
+  assert.equal(strictDownloadCompletion.ok, true);
+  assert.ok(strictDownloadCompletion.issues.some((item) => item.severity === "warn" && /缓存残留/.test(item.title)));
+
+  const mlxModel = path.join(modelsRoot, "converted-mlx");
+  await fs.mkdir(mlxModel, { recursive: true });
+  await fs.writeFile(path.join(mlxModel, "config.json"), JSON.stringify({ quantization: { mode: "affine", bits: 4, group_size: 64 } }));
+  await fs.writeFile(path.join(mlxModel, "tokenizer.json"), "{}");
+  await fs.writeFile(path.join(mlxModel, "model.safetensors"), fakeSafetensorsFile());
+  const mlx = await store.verifyDownloadedModel({ localDir: mlxModel });
+  assert.equal(mlx.ok, false);
+  assert.equal(mlx.modelFormat, "mlx");
+  assert.ok(mlx.issues.some((item) => /MLX/.test(item.title)));
+
+  const progress = await store.scanDownloadProgress(brokenModel);
+  assert.equal(progress.incompleteFiles, 1);
+  assert.equal(progress.partialBytes, 7);
+  assert.ok(progress.finalizedBytes > 0);
 });
 
 test("model reference helpers parse links and build safe names", () => {
@@ -3139,6 +3710,14 @@ test("job helpers normalize persistence, logs, issues, and byte labels", () => {
   assert.deepEqual(normalized.logs, ["b", "c"]);
   assert.deepEqual(normalized.meta, { model: "x" });
 
+  const legacyIncomplete = core.normalizePersistedJob({
+    id: "legacy-download",
+    type: "download",
+    status: "paused",
+    progress: { percent: 100, downloadedBytes: 200, totalBytes: 100 },
+  });
+  assert.equal(legacyIncomplete.progress.percent, 99);
+
   core.markInterruptedJob(normalized, {
     now: "2026-06-15T00:01:00.000Z",
     maxLogLines: 2,
@@ -3151,6 +3730,9 @@ test("job helpers normalize persistence, logs, issues, and byte labels", () => {
   assert.equal(core.appendJobLog(logJob, "one\n\ntwo\nthree", { maxLogLines: 2, now: "now" }), 3);
   assert.deepEqual(logJob.logs, ["two", "three"]);
   assert.equal(logJob.updatedAt, "now");
+  const ansiJob = { logs: [] };
+  core.appendJobLog(ansiJob, "\u001b[31m错误\u001b[0m\r进度\uFFFD\uFFFD", { maxLogLines: 5 });
+  assert.deepEqual(ansiJob.logs, ["错误", "进度[旧日志含无法解码字节]"]);
 
   const jobs = core.serializeJobs([
     { id: "old", createdAt: "2026-06-15T00:00:00.000Z", logs: ["x"] },
@@ -3158,9 +3740,11 @@ test("job helpers normalize persistence, logs, issues, and byte labels", () => {
   ], { maxPersistedJobs: 1 });
   assert.deepEqual(jobs.map((job) => job.id), ["new"]);
 
-  assert.deepEqual(core.extractLogIssues("ok\nRuntimeError: bad\nCUDA out of memory\nfine"), [
+  assert.deepEqual(core.extractLogIssues("ok\nRuntimeError: bad\nCUDA out of memory\nINFO deep_gemm not found in site-packages, trying vendored vllm.third_party.deep_gemm\nKeyError: 'layers.0.mlp.experts.w2_input_scale'\nAssertionError: In Mamba cache align mode, block_size (2096) must be <= max_num_batched_tokens (2048).\nfine"), [
     "RuntimeError: bad",
     "CUDA out of memory",
+    "KeyError: 'layers.0.mlp.experts.w2_input_scale'",
+    "AssertionError: In Mamba cache align mode, block_size (2096) must be <= max_num_batched_tokens (2048).",
   ]);
 });
 
@@ -3414,6 +3998,13 @@ test("stats ledger store persists deltas, Claude usage, and runtime facts", asyn
   const merged = core.mergeLiveAndStatsLedgerInactive({ models: [], uptimeSeconds: null, totals: { context: { activeTokens: 0, capacityTokens: null, kvUsagePercent: 0 } } }, ledger);
   assert.equal(merged.models[0].context.activeTokens, 0);
   assert.equal(merged.models[0].context.maxModelLen, 8192);
+
+  // The debounced Claude-usage save must actually persist to disk when flushed,
+  // so a fresh process reading the raw file sees the recorded usage.
+  await store.flushClaudeUsageWrites();
+  const persisted = await core.readJsonFile(file, {});
+  assert.equal(persisted.clients.claude.tokens.total, 40);
+  assert.equal(persisted.clients.claude.compression.savedTokens, 100);
 });
 
 test("stats ledger store can protect llama counters from metric resets", async () => {
@@ -3493,4 +4084,135 @@ test("process job runner handles logs, exits, cancellation, and cleanup hooks", 
   assert.equal(failedJob.status, "failed");
   assert.equal(failedJob.error, "Process exited with code 7");
   assert.deepEqual(calls.filter((call) => call[0] === "done").map((call) => call[1]), ["proc-1", "proc-2", "proc-3"]);
+});
+
+test("process job runner decodes split UTF-8 buffers and verifies successful downloads before commit", async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = 42;
+  const events = [];
+  const job = core.createJobRecord("download", "Download", {}, { id: "utf8-job" });
+  const runner = core.createProcessJobRunner({
+    spawnCommand: () => child,
+    appendLog: (target, data) => core.appendJobLog(target, data),
+    handleProcessSuccess: async () => events.push("verified"),
+    finishJob: (target) => {
+      events.push("finished");
+      core.markJobSuccess(target);
+    },
+    failJob: (target, error) => core.markJobFailed(target, error),
+  });
+  runner(job, "hf", ["download"]);
+  const utf8 = Buffer.from("下载完成\n", "utf8");
+  child.stdout.emit("data", utf8.subarray(0, 2));
+  child.stdout.emit("data", utf8.subarray(2, 7));
+  child.stdout.emit("data", utf8.subarray(7));
+  child.emit("close", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(job.logs.includes("下载完成"));
+  assert.equal(job.logs.some((line) => line.includes("\uFFFD")), false);
+  assert.deepEqual(events, ["verified", "finished"]);
+});
+
+function createContainerReplacementDocker(initial = {}) {
+  const containers = new Map(Object.entries(initial));
+  const calls = [];
+  const docker = async (args) => {
+    calls.push(args.slice());
+    const [command, ...rest] = args;
+    const name = rest.find((item) => containers.has(item));
+    if (command === "inspect") {
+      const target = rest[0];
+      if (!containers.has(target)) {
+        const error = new Error(`No such container: ${target}`);
+        return { stdout: "", stderr: error.message, error };
+      }
+      return { stdout: `${JSON.stringify(containers.get(target))}\n`, stderr: "", error: null };
+    }
+    if (command === "stop") {
+      containers.get(name).State.Running = false;
+      return { stdout: `${name}\n`, stderr: "", error: null };
+    }
+    if (command === "start") {
+      containers.get(name).State.Running = true;
+      return { stdout: `${name}\n`, stderr: "", error: null };
+    }
+    if (command === "rename") {
+      const [from, to] = rest;
+      const value = containers.get(from);
+      containers.delete(from);
+      containers.set(to, value);
+      return { stdout: "", stderr: "", error: null };
+    }
+    if (command === "rm") {
+      const target = rest.at(-1);
+      if (!containers.has(target)) {
+        const error = new Error(`No such container: ${target}`);
+        return { stdout: "", stderr: error.message, error };
+      }
+      containers.delete(target);
+      return { stdout: `${target}\n`, stderr: "", error: null };
+    }
+    return { stdout: "", stderr: "", error: null };
+  };
+  return { docker, containers, calls };
+}
+
+test("container replacement restores the exact previous container after a failed launch", async () => {
+  const previous = {
+    Config: { Labels: { "ai.manager": "vllm-manager" }, Cmd: ["--max-model-len", "262144", "--max-num-seqs", "4"] },
+    State: { Running: true },
+  };
+  const mock = createContainerReplacementDocker({ "vllm-local": previous });
+  const replacement = await core.beginContainerReplacement({
+    docker: mock.docker,
+    containerName: "vllm-local",
+    managerId: "vllm-manager",
+  });
+  assert.equal(mock.containers.has("vllm-local"), false);
+  assert.equal(mock.containers.has(replacement.backupName), true);
+  mock.containers.set("vllm-local", { Config: { Labels: { "ai.manager": "vllm-manager" } }, State: { Running: false } });
+  const result = await replacement.rollback(new Error("new model failed"));
+  assert.equal(result.restoredPrevious, true);
+  assert.equal(mock.containers.get("vllm-local"), previous);
+  assert.equal(previous.State.Running, true);
+  assert.deepEqual(previous.Config.Cmd, ["--max-model-len", "262144", "--max-num-seqs", "4"]);
+});
+
+test("container replacement commit removes only the rollback checkpoint", async () => {
+  const mock = createContainerReplacementDocker({
+    "llama-local": { Config: { Labels: { "ai.manager": "llama-manager" } }, State: { Running: true } },
+  });
+  const replacement = await core.beginContainerReplacement({
+    docker: mock.docker,
+    containerName: "llama-local",
+    managerId: "llama-manager",
+  });
+  mock.containers.set("llama-local", { Config: { Labels: { "ai.manager": "llama-manager" } }, State: { Running: true } });
+  await replacement.commit();
+  assert.equal(mock.containers.has("llama-local"), true);
+  assert.equal(mock.containers.has(replacement.backupName), false);
+});
+
+test("status job summaries omit full logs", () => {
+  const summary = core.summarizeStatusJob({
+    id: "job-1",
+    type: "serve",
+    status: "failed",
+    logs: Array.from({ length: 500 }, (_, index) => `line ${index}`),
+    meta: { model: "model-a" },
+  });
+  assert.equal(summary.logCount, 500);
+  assert.equal(summary.lastLog, "line 499");
+  assert.equal(Object.hasOwn(summary, "logs"), false);
+});
+
+test("GGUF selection skips mmproj and chooses the first split shard", () => {
+  const files = [
+    { path: "D:/models/mmproj-F16.gguf", size: 900 },
+    { path: "D:/models/model-00002-of-00002.gguf", size: 2000 },
+    { path: "D:/models/model-00001-of-00002.gguf", size: 1900 },
+  ];
+  assert.equal(core.chooseGgufFile(files).path, "D:/models/model-00001-of-00002.gguf");
 });

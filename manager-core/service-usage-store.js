@@ -103,6 +103,7 @@ function createServiceUsageStore(options = {}) {
   const file = options.file || "";
   const managerId = options.managerId || "";
   let db = null;
+  let stmts = null;
 
   function getDb() {
     if (!DatabaseSync || !file) return null;
@@ -110,23 +111,86 @@ function createServiceUsageStore(options = {}) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     db = new DatabaseSync(file);
     ensureServiceUsageSchema(db);
+    // Prepare once and reuse. These run on every inference request, so
+    // re-preparing per call would re-block the event loop needlessly.
+    stmts = {
+      upsertClient: db.prepare(`
+        INSERT INTO service_clients (client_id, name, enabled, key_preview, allowed_models, rate_limit_rpm, max_concurrent_requests, request_timeout_seconds, expires_at, notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(client_id) DO UPDATE SET
+          name=excluded.name,
+          enabled=excluded.enabled,
+          key_preview=excluded.key_preview,
+          allowed_models=excluded.allowed_models,
+          rate_limit_rpm=excluded.rate_limit_rpm,
+          max_concurrent_requests=excluded.max_concurrent_requests,
+          request_timeout_seconds=excluded.request_timeout_seconds,
+          expires_at=excluded.expires_at,
+          notes=excluded.notes,
+          updated_at=excluded.updated_at
+      `),
+      insertUsageEvent: db.prepare(`
+        INSERT INTO service_usage_events (event_id, at, manager, client_id, model, status, ok, prompt_tokens, generation_tokens, total_tokens)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `),
+      deleteClient: db.prepare("DELETE FROM service_clients WHERE client_id = ?"),
+    };
     return db;
+  }
+
+  function getStatements() {
+    if (!stmts) getDb();
+    return stmts;
   }
 
   return {
     getDb,
     persistClients(ledger) {
-      persistServiceClientsToDb(getDb(), ledger);
+      const stmt = getStatements()?.upsertClient;
+      if (!stmt) return;
+      const updatedAt = new Date().toISOString();
+      for (const client of ledger.clients || []) {
+        stmt.run(
+          client.id,
+          client.name,
+          client.enabled ? 1 : 0,
+          client.keyPreview || "",
+          JSON.stringify(client.allowedModels || []),
+          client.rateLimitRpm,
+          client.maxConcurrentRequests,
+          client.requestTimeoutSeconds,
+          client.expiresAt || "",
+          client.notes || "",
+          updatedAt,
+        );
+      }
     },
     persistUsageEvent(event) {
-      persistServiceUsageEventToDb(getDb(), event, { managerId });
+      const stmt = getStatements()?.insertUsageEvent;
+      if (!stmt || !event.clientId) return;
+      const at = new Date().toISOString();
+      stmt.run(
+        (options.randomUUID || crypto.randomUUID)(),
+        at,
+        managerId,
+        String(event.clientId || ""),
+        String(event.model || ""),
+        Number(event.status || 0),
+        event.ok === false ? 0 : 1,
+        Number(event.promptTokens || 0),
+        Number(event.generationTokens || 0),
+        Number(event.totalTokens || 0),
+      );
     },
     deleteClient(id) {
-      deleteServiceClientFromDb(getDb(), id);
+      const stmt = getStatements()?.deleteClient;
+      if (!stmt) return;
+      stmt.run(String(id || ""));
     },
     close() {
       if (db && typeof db.close === "function") db.close();
       db = null;
+      stmts = null;
     },
   };
 }

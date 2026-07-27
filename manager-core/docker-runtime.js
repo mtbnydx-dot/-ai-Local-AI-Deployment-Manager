@@ -12,6 +12,7 @@ function createDockerRuntime(options = {}) {
   const wait = options.delay || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const parseJson = options.parseJsonSafe || parseJsonSafe;
   const formatSize = options.formatBytes || formatBytes;
+  const readTimeoutMs = Math.max(1000, Number(options.readTimeoutMs || 10000));
 
   function execFileAsync(file, args, execOptions = {}) {
     return new Promise((resolve, reject) => {
@@ -28,7 +29,11 @@ function createDockerRuntime(options = {}) {
   }
 
   function docker(args, dockerOptions = {}) {
-    return execFileAsync(dockerExe, args, dockerOptions);
+    const effectiveOptions = { ...dockerOptions };
+    if (!Object.hasOwn(effectiveOptions, "timeout") && isDockerReadOnlyCommand(args)) {
+      effectiveOptions.timeout = readTimeoutMs;
+    }
+    return execFileAsync(dockerExe, args, effectiveOptions);
   }
 
   async function getDockerVersion() {
@@ -147,6 +152,9 @@ function createDockerRuntime(options = {}) {
       const line = out.stdout.trim();
       if (out.error) {
         const raw = out.stderr.trim() || out.error.message;
+        if (isDockerImageMissingError(raw)) {
+          return { ok: false, text: `镜像未下载：${image}`, reason: "missing-image", raw };
+        }
         return { ok: false, text: formatDockerDaemonError(raw), reason: "docker-daemon", raw };
       }
       if (!line) return { ok: false, text: "missing" };
@@ -162,6 +170,27 @@ function createDockerRuntime(options = {}) {
     }
   }
 
+  async function pullImageWithRetry(image, pullOptions = {}) {
+    const attempts = Math.min(6, Math.max(1, Number(pullOptions.attempts || 3)));
+    const initialDelayMs = Math.max(0, Number(pullOptions.initialDelayMs ?? 3000));
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        pullOptions.onAttempt?.({ attempt, attempts, image });
+        const result = await docker(["pull", image], pullOptions.dockerOptions || {});
+        return { ...result, attempt, attempts };
+      } catch (error) {
+        lastError = error;
+        const detail = String(error?.stderr || error?.stdout || error?.message || error).trim();
+        pullOptions.onFailure?.({ attempt, attempts, image, error, detail });
+        if (attempt >= attempts) break;
+        const delayMs = Math.min(30000, initialDelayMs * (2 ** (attempt - 1)));
+        if (delayMs > 0) await wait(delayMs);
+      }
+    }
+    throw lastError || new Error(`docker pull failed: ${image}`);
+  }
+
   return {
     execFileAsync,
     docker,
@@ -171,11 +200,18 @@ function createDockerRuntime(options = {}) {
     ensureDockerDaemonRunning,
     startDockerDesktop,
     getImageStatus,
+    pullImageWithRetry,
     formatDockerDaemonError,
     normalizeDockerContainerName,
     normalizeDockerTimestamp,
     timestampToSeconds,
   };
+}
+
+function isDockerReadOnlyCommand(args = []) {
+  const command = String(args[0] || "").toLowerCase();
+  if (["--version", "version", "info", "inspect", "ps", "logs", "stats", "port", "images"].includes(command)) return true;
+  return command === "image" && String(args[1] || "").toLowerCase() === "inspect";
 }
 
 function formatDockerDaemonError(raw) {
@@ -187,6 +223,10 @@ function formatDockerDaemonError(raw) {
     return `Docker daemon 未就绪：${text}`;
   }
   return text || "Docker daemon 未就绪。";
+}
+
+function isDockerImageMissingError(raw) {
+  return /no such image/i.test(String(raw || ""));
 }
 
 function normalizeDockerContainerName(value) {
@@ -210,6 +250,7 @@ function timestampToSeconds(value) {
 
 module.exports = {
   createDockerRuntime,
+  isDockerReadOnlyCommand,
   formatDockerDaemonError,
   normalizeDockerContainerName,
   normalizeDockerTimestamp,

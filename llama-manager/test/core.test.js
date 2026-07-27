@@ -183,6 +183,7 @@ test("service exposure settings normalize and redact secrets", () => {
     apiKey: "sk-local-secret",
     publicBaseUrl: "ftp://not-accepted.example",
     allowedOrigins: ["https://a.example", "", "https://b.example"],
+    allowedHeaders: ["User-Agent", "X-Client-Version", "invalid header"],
     rateLimitRpm: -1,
     maxConcurrentRequests: 999,
     requestTimeoutSeconds: 99_999,
@@ -190,7 +191,9 @@ test("service exposure settings normalize and redact secrets", () => {
 
   assert.equal(settings.exposureMode, "reverse-proxy");
   assert.equal(settings.publicBaseUrl, "");
+  assert.equal(settings.corsMode, "restricted");
   assert.deepEqual(settings.allowedOrigins, ["https://a.example", "https://b.example"]);
+  assert.deepEqual(settings.allowedHeaders, ["user-agent", "x-client-version"]);
   assert.equal(settings.rateLimitRpm, 1);
   assert.equal(settings.maxConcurrentRequests, 256);
   assert.equal(settings.requestTimeoutSeconds, 7200);
@@ -240,6 +243,9 @@ test("service gateway auth, rate limit, concurrency, and model aliasing", () => 
   assert.equal(manager.enterServiceConcurrency(settings, "client", concurrencyBuckets).ok, true);
 
   assert.equal(manager.resolveOpenAiGatewayModel("local-current", {
+    servedModels: [{ id: "model.gguf" }],
+  }), "model.gguf");
+  assert.equal(manager.resolveOpenAiGatewayModel("some-client-model", {
     servedModels: [{ id: "model.gguf" }],
   }), "model.gguf");
 });

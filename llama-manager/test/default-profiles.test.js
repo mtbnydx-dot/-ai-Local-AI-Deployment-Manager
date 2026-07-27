@@ -20,6 +20,8 @@ test("llama default profiles keep builtin IDs and normalize configs", () => {
   assert.equal(normalized.length, profiles.length);
   assert.equal(profiles.every((profile) => profile.source === "builtin"), true);
   assert.equal(profiles.every((profile) => profile.config.normalized), true);
+  assert.equal(profiles.find((profile) => profile.id === "llama-96gb-single-256k").requirements.minSingleGpuMemoryGb, 80);
+  assert.equal(profiles.find((profile) => profile.id === "llama-hetero-64k-safe").requirements.minGpuCount, 2);
 
   const hetero = profiles.find((profile) => profile.id === "llama-hetero-256k-max");
   assert.equal(hetero.config.maxModelLen, 262144);

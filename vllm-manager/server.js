@@ -11,6 +11,7 @@ const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
 const { createVllmRuntimeCommandBuilder } = require("./lib/runtime-command");
+const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService } = require("./lib/remote-models");
 const {
   firstExisting,
@@ -63,6 +64,7 @@ const {
   encodeRepoId,
   deriveName,
   createDockerRuntime,
+  isContainerNameConflictError,
 } = core;
 let DatabaseSync = null;
 try {
@@ -74,10 +76,11 @@ const PORT = Number(process.env.VLLM_MANAGER_PORT || 5177);
 const HOST = process.env.VLLM_MANAGER_HOST || "127.0.0.1";
 const SHARED_PUBLIC_JS_DIR = path.join(__dirname, "..", "shared-public", "js");
 const ALLOW_REMOTE_MANAGEMENT = process.env.VLLM_MANAGER_ALLOW_REMOTE === "1";
-const DEFAULT_VLLM_IMAGE = `vllm/vllm-openai:${process.env.VLLM_IMAGE_VERSION || "v0.21.0"}`;
-const DEFAULT_GEMMA_VLLM_IMAGE = "vllm/vllm-openai:gemma";
-const DEFAULT_AI_ROOT = process.env.AI_ROOT || (process.platform === "win32" ? "D:\\AI" : path.join(os.homedir(), "AI"));
-const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || (process.platform === "win32" ? "D:\\DevTools" : "");
+const DEFAULT_VLLM_IMAGE = `vllm/vllm-openai:${process.env.VLLM_IMAGE_VERSION || "v0.23.0"}`;
+const DEFAULT_GEMMA_VLLM_IMAGE = "vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b";
+const DEFAULT_QWEN_MOE_VLLM_IMAGE = "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb";
+const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
+const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
 const MANAGER_APIKEY_LABEL_KEY = "ai.manager.api-key";
@@ -117,11 +120,14 @@ const CONFIG = {
   hfCache: process.env.HF_HOME || defaultAiPath("cache", "huggingface"),
   image: process.env.VLLM_IMAGE || DEFAULT_VLLM_IMAGE,
   gemmaImage: process.env.VLLM_GEMMA_IMAGE || DEFAULT_GEMMA_VLLM_IMAGE,
+  qwenMoeImage: process.env.VLLM_QWEN_MOE_IMAGE || DEFAULT_QWEN_MOE_VLLM_IMAGE,
   containerName: process.env.VLLM_CONTAINER_NAME || "vllm-local",
   managerId: process.env.VLLM_MANAGER_ID || "vllm-manager",
   defaultPort: Number(process.env.VLLM_PORT || 8000),
   pidFile: path.join(__dirname, ".manager.pid"),
   statsLedger: path.join(__dirname, "logs", "stats-ledger.json"),
+  metricsHistory: path.join(__dirname, "logs", "metrics-history.json"),
+  managerBackups: path.join(__dirname, "logs", "backups"),
   jobsLedger: path.join(__dirname, "logs", "jobs-ledger.json"),
   claudeCompressionSettings: path.join(__dirname, "logs", "claude-context-compression.json"),
   launchProfiles: path.join(__dirname, "logs", "launch-profiles.json"),
@@ -152,6 +158,7 @@ const {
   ensureDockerDaemonRunning,
   checkDockerDaemon,
   getImageStatus,
+  pullImageWithRetry,
   normalizeDockerContainerName,
 } = dockerRuntime;
 const {
@@ -182,6 +189,7 @@ const {
   listModelCollections,
   looksLikeGgufReference,
   resolveModelsRootChild,
+  scanDownloadProgress,
 } = modelFilesystemStore;
 
 const ccSwitchTools = createCcSwitchProviderTools({
@@ -271,9 +279,28 @@ const progressTimers = new Map();
 const statsSamples = new Map();
 const serviceRateBuckets = new Map();
 const serviceConcurrencyBuckets = new Map();
+const GATEWAY_RUNTIME_CACHE_MS = Math.max(0, Number(process.env.VLLM_GATEWAY_RUNTIME_CACHE_MS || 5000));
+let gatewayRuntimeCache = {
+  value: null,
+  expiresAt: 0,
+  promise: null,
+};
+let runtimeInstancesCache = { value: null, expiresAt: 0, promise: null };
 let automationMonitorTimer = null;
 let recentLaunches = [];
 const MAX_RECENT_LAUNCHES = 8;
+// 启动任务串行化：同一管理器内同一时刻只允许一个 serve 启动流程在跑，
+// 避免并发 docker run 竞争同一个容器名（vllm-local）造成 "container name already in use"。
+// 第二个启动请求会排队等待前一个完成（成功或失败）后再执行，保留"启动即替换"语义。
+let serveChain = Promise.resolve();
+let serveBusy = false;
+function serializeServeJob(work) {
+  const queued = serveBusy;
+  serveBusy = true;
+  const result = serveChain.then(() => work());
+  serveChain = result.then(() => { serveBusy = false; }, () => { serveBusy = false; });
+  return { result, queued };
+}
 let runtimeActivity = {
   initialized: false,
   lastActivityAt: null,
@@ -283,8 +310,8 @@ let runtimeActivity = {
   lastWarnAt: null,
   unloading: false,
 };
-const MAX_LOG_LINES = 500;
-const MAX_PERSISTED_JOBS = 100;
+const MAX_LOG_LINES = 1000;
+const MAX_PERSISTED_JOBS = 60;
 const jobsLedgerStore = core.createJobsLedgerStore({
   jobs,
   file: CONFIG.jobsLedger,
@@ -292,7 +319,7 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   writeJsonFile,
   maxLogLines: MAX_LOG_LINES,
   maxPersistedJobs: MAX_PERSISTED_JOBS,
-  serveDetail: "vLLM API 已返回模型列表。",
+  serveDetail: "vLLM API 与最小生成自检均已通过。",
   stopProgressTracker,
   onJobSuccess: (job) => {
     if (job.type === "serve") recordRecentLaunch(job.meta);
@@ -318,6 +345,7 @@ const {
   loadStatsLedger,
   updateStatsLedger,
   recordClaudeBridgeUsage,
+  flushClaudeUsageWrites,
   getPersistedRuntimeFacts,
   waitForStatsLedgerWrites,
 } = statsLedgerStore;
@@ -431,7 +459,34 @@ const serviceGatewayAccessLogStore = core.createServiceGatewayAccessLogStore({
 const {
   appendServiceGatewayAccessLog,
   collectExternalAccessStats,
+  collectRecentAccessStats,
+  searchServiceGatewayAccessLogs,
+  exportServiceGatewayAccessLogs,
 } = serviceGatewayAccessLogStore;
+
+const metricsHistoryStore = core.createMetricsHistoryStore({
+  file: CONFIG.metricsHistory,
+  engine: "vllm",
+  readJsonFile,
+  writeJsonFile,
+});
+
+const managerBackupStore = core.createManagerBackupStore({
+  managerId: CONFIG.managerId,
+  backupDir: CONFIG.managerBackups,
+  readJsonFile,
+  writeJsonFile,
+  files: {
+    launchProfiles: CONFIG.launchProfiles,
+    recentLaunches: CONFIG.recentLaunches,
+    downloadSettings: CONFIG.downloadSettings,
+    modelNotes: CONFIG.modelNotes,
+    automationSettings: CONFIG.automationSettings,
+    serviceExposureSettings: CONFIG.serviceExposureSettings,
+    serviceClients: CONFIG.serviceClients,
+    claudeCompressionSettings: CONFIG.claudeCompressionSettings,
+  },
+});
 
 const serviceGatewayMiddleware = core.createServiceGatewayMiddleware({
   gatewayName: "vllm-manager",
@@ -470,8 +525,8 @@ const managerLifecycle = core.createManagerLifecycle({
   afterPreparePid: async () => {
     await loadJobsLedgerIntoMemory();
     await loadRecentLaunches().catch((error) => console.warn(`Unable to load recent launches: ${error.message}`));
-    const downloadSettings = await readJsonFile(CONFIG.downloadSettings, { queueMode: false });
-    downloadQueueMode = Boolean(downloadSettings?.queueMode);
+    const downloadSettings = await readJsonFile(CONFIG.downloadSettings, { queueMode: false, autoRetryCount: 2, autoRetryDelaySeconds: 10 });
+    downloadJobController.applyDownloadSettings(downloadSettings || {});
   },
   beforeListen: () => startAutomationMonitor(),
   onShutdown: async () => {
@@ -480,6 +535,7 @@ const managerLifecycle = core.createManagerLifecycle({
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
+    await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
     await Promise.allSettled([
       waitForStatsLedgerWrites(),
       jobsLedgerStore.waitForJobsLedgerWrites(),
@@ -502,6 +558,24 @@ app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude", "/opencode/v1"], 
 app.use("/shared-js", express.static(SHARED_PUBLIC_JS_DIR));
 app.use(express.static(path.join(__dirname, "public")));
 
+const operationalSnapshotStore = core.createManagerOperationalSnapshotStore({
+  ttlMs: Number(process.env.MANAGER_OPERATIONAL_SNAPSHOT_MS || 10000),
+  containerName: CONFIG.containerName,
+  image: CONFIG.image,
+  getDockerVersion,
+  getGpuStatus,
+  getContainerStatus,
+  getImageStatus,
+  getRunningModelSummary: (container, gpu) => getRunningModelSummary(container, gpu).catch(() => ({
+    container,
+    endpoint: getContainerEndpoint(container),
+    servedModels: [],
+    models: [],
+  })),
+  getManagerResourceSummary,
+});
+const getOperationalSnapshot = (request) => operationalSnapshotStore.getSnapshot(request);
+
 core.registerManagerRoutes(app, {
   config: CONFIG,
   host: HOST,
@@ -517,15 +591,17 @@ core.registerManagerRoutes(app, {
   shutdownManager,
   exitProcessOnShutdownError: require.main === module,
   buildManagerHealth,
-  getDockerVersion,
-  getGpuStatus,
-  getContainerStatus,
-  getImageStatus,
-  getRunningModelSummary,
-  getManagerResourceSummary,
+  getDockerVersion: async () => (await getOperationalSnapshot()).docker,
+  getGpuStatus: async () => (await getOperationalSnapshot()).gpu,
+  getContainerStatus: async () => (await getOperationalSnapshot()).container,
+  getImageStatus: async () => (await getOperationalSnapshot()).image,
+  getRunningModelSummary: async () => (await getOperationalSnapshot()).runtime,
+  getManagerResourceSummary: async () => (await getOperationalSnapshot()).resources,
   buildMemoryEstimate: buildVllmMemoryEstimate,
   collectStats,
   collectExternalAccessStats,
+  searchAccessLogs: searchServiceGatewayAccessLogs,
+  exportAccessLogs: exportServiceGatewayAccessLogs,
   buildExternalAccessOptions: (query) => {
     const limit = Math.min(500, Math.max(20, Number(query.limit || 160)));
     const maxLines = Math.min(50000, Math.max(limit, Number(query.maxLines || 12000)));
@@ -533,6 +609,7 @@ core.registerManagerRoutes(app, {
   },
   getClaudeCompressionSettings,
   saveClaudeCompressionSettings,
+  ...managerBackupStore,
 });
 
 core.registerServicePolicyRoutes(app, {
@@ -554,8 +631,10 @@ core.registerIntegrationRoutes(app, {
 const openAiGatewayHandlers = core.createOpenAiGatewayHandlers({
   aliases: OPENAI_GATEWAY_MODEL_ALIASES,
   owner: "vllm-manager",
-  getRunningModelSummary,
+  getRunningModelSummary: getGatewayRunningModelSummary,
+  listRunningModelSummaries: getRunningModelSummaries,
   getUpstreamHeaders: (runtime, headers = {}) => vllmAuthHeaders(runtime.vllmApiKey, headers),
+  prepareRequestBody: applyVllmRequestDefaults,
   serviceClientAllowsModel,
   recordUsage: recordServiceClientGatewayUsage,
   upstreamErrorMessage,
@@ -588,13 +667,20 @@ core.registerClaudeRoutes(app, {
   countTokens: handleClaudeCountTokens,
 });
 app.get("/serve/v1/models", openAiGatewayHandlers.handleModels);
+app.get("/serve/v1/props", openAiGatewayHandlers.handleProps);
 app.post("/serve/v1/chat/completions", openAiGatewayHandlers.handleChatCompletions);
 app.post("/serve/v1/completions", openAiGatewayHandlers.handleCompletions);
+app.post("/serve/v1/responses", openAiGatewayHandlers.handleResponses);
+app.post("/serve/v1/embeddings", openAiGatewayHandlers.handleEmbeddings);
+app.post("/serve/v1/pooling", openAiGatewayHandlers.handlePooling);
+app.post("/serve/v1/score", openAiGatewayHandlers.handleScore);
+app.post("/serve/v1/rerank", openAiGatewayHandlers.handleRerank);
+app.post("/serve/v1/classify", openAiGatewayHandlers.handleClassify);
 app.get("/opencode/v1/models", handleOpenCodeModels);
 app.post("/opencode/v1/chat/completions", handleOpenCodeChatCompletions);
 
 core.registerModelRoutes(app, {
-  listModels: listModelCollections,
+  listModels: listVllmModelCollections,
   deleteLocalModel: deleteLocalModelRequest,
   searchRemoteModels: remoteModelService.searchRemoteModelCatalog,
   startDownload: startDownloadRequest,
@@ -607,6 +693,30 @@ core.registerModelRoutes(app, {
   saveDownloadSettings: saveDownloadSettingsRequest,
   resolveModelLink: remoteModelService.resolveModelLinkRequest,
 });
+
+async function listVllmModelCollections() {
+  const collections = await listModelCollections();
+  const local = (collections.local || []).map((model) => {
+    const config = readLocalModelConfig(model.path) || {};
+    const capabilities = resolveVllmModelCapabilities({
+      model: model.path,
+      localPath: model.path,
+      config,
+      speculativeMode: "off",
+    });
+    const blockReason = capabilities.unsupportedReason
+      || (isDiffusionGemmaModel(model.path, config) ? diffusionGemmaWindowsBlockReason() : "");
+    if (!blockReason) return model;
+    const issue = finding("fail", "vLLM 运行时不兼容", blockReason);
+    return {
+      ...model,
+      runnable: false,
+      verificationStatus: "fail",
+      verificationIssues: [...(model.verificationIssues || []), issue],
+    };
+  });
+  return { ...collections, local };
+}
 
 core.registerJobRoutes(app, {
   jobs,
@@ -621,8 +731,13 @@ core.registerJobRoutes(app, {
         job.cancel();
       } else if (job.type === "serve") {
         markJobCancelRequested(job, "cancel");
-        await removeManagedContainer("cancel").catch(() => {});
-        failJob(job, new Error("启动已被用户取消，容器已移除"));
+        const targetContainerName = job.meta?.containerName || CONFIG.containerName;
+        if (job.meta?.runtimeLaunchStarted) {
+          await removeManagedContainer("cancel", targetContainerName, job.id).catch((error) => {
+            appendLog(job, `取消时未删除容器：${error.message}`);
+          });
+        }
+        failJob(job, new Error(job.meta?.runtimeLaunchStarted ? "启动已被用户取消" : "排队中的启动已被用户取消"));
       } else {
         return res.status(400).json({ error: "该任务类型不支持取消。" });
       }
@@ -676,7 +791,7 @@ async function startDownloadRequest(body = {}) {
   const localDir = path.join(CONFIG.modelsRoot, outputName);
   await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, localDir);
 
-  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env);
+  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, { source });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
   const download = buildDownloadCommand(source, model, localDir, { precision });
@@ -692,6 +807,7 @@ async function startDownloadRequest(body = {}) {
       localDir,
       source,
       precision,
+      priority: core.normalizeDownloadPriority(body.priority),
       expectedBytes: expected?.bytes || null,
       expectedFiles: expected?.fileCount || null,
     },
@@ -703,7 +819,7 @@ async function startDownloadRequest(body = {}) {
   } else if (expected?.error) {
     appendLog(job, `Download size estimate unavailable: ${expected.error}`);
   }
-  if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI when available.");
+  if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI with proxy env disabled.");
   if (download.includePatterns?.length) appendLog(job, `Download include filter: ${download.includePatterns.join(", ")}`);
   return { job };
 }
@@ -737,14 +853,15 @@ async function estimateDownloadRequest(query = {}) {
 }
 
 async function getModelConfigRequest(query = {}) {
-  const source = cleanDownloadSource(query.source || "huggingface");
+  const requestedSource = String(query.source || "huggingface").trim().toLowerCase();
+  const source = requestedSource === "local" ? "local" : cleanDownloadSource(requestedSource);
   const model = String(query.model || "").trim();
   if (!model) {
     const error = new Error("model is required");
     error.status = 400;
     throw error;
   }
-  return getModelConfig(model, source);
+  return getModelConfig(model, source, String(query.quantization || "").trim());
 }
 
 async function getModelReadmeRequest(query = {}) {
@@ -821,10 +938,15 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   normalizeToolCallParser,
   inferToolCallParser,
   normalizeNetworkAccess,
+  normalizeSpeculativeMode,
+  checkModelCompatibility,
   getLanAddress,
   createJob,
   runStartJob,
   failJob,
+  normalizeRuntimeInstanceMode: core.normalizeRuntimeInstanceMode,
+  normalizeRuntimeInstanceId: core.normalizeRuntimeInstanceId,
+  buildRuntimeContainerName: core.buildRuntimeContainerName,
 });
 
 core.registerRuntimeRoutes(app, {
@@ -834,6 +956,8 @@ core.registerRuntimeRoutes(app, {
   unloadRunningModel: unloadRunningModelRequest,
   readRuntimeLogs: readRuntimeLogsRequest,
   testRuntimeCompletion: testRuntimeCompletionRequest,
+  listRuntimeInstances: listRuntimeInstancesRequest,
+  stopRuntimeInstance: stopRuntimeInstanceRequest,
 });
 
 core.registerAuditRoutes(app, {
@@ -914,6 +1038,8 @@ async function loadRecentLaunches() {
 // 启动成功后记录配置，按 model+name 去重，最新的排最前
 function recordRecentLaunch(meta) {
   if (!meta || !meta.model) return;
+  clearGatewayRuntimeCache();
+  clearRuntimeInstancesCache();
   const config = normalizeLaunchConfig(meta);
   const entry = {
     model: config.model,
@@ -996,6 +1122,7 @@ function normalizeLaunchConfig(config = {}) {
     kvCacheDtype: normalizeKvCacheDtype(config.kvCacheDtype),
     trustRemoteCode: Boolean(config.trustRemoteCode),
     enablePrefixCaching: Boolean(config.enablePrefixCaching),
+    disablePrefixCaching: Boolean(config.disablePrefixCaching),
     languageModelOnly: Boolean(config.languageModelOnly),
     networkAccess: normalizeNetworkAccess(config.networkAccess),
     clientPreset: normalizeClientPreset(config.clientPreset),
@@ -1009,6 +1136,8 @@ function normalizeLaunchConfig(config = {}) {
     dataParallelSize: positiveInt(config.dataParallelSize, 1),
     distributedExecutorBackend: String(config.distributedExecutorBackend || "auto"),
     enableExpertParallel: Boolean(config.enableExpertParallel),
+    speculativeMode: normalizeSpeculativeMode(config.speculativeMode),
+    numSpeculativeTokens: positiveInt(config.numSpeculativeTokens, 1),
   };
 }
 
@@ -1043,6 +1172,27 @@ async function checkModelCompatibility(input = {}) {
   const lower = model.toLowerCase();
   const looksGguf = looksLikeGgufReference(model) || local?.ggufFiles?.length || lower.endsWith(".gguf");
   const localConfig = local ? readLocalModelConfig(local.path) : null;
+  const capabilities = resolveVllmModelCapabilities({
+    model,
+    localPath: local?.path,
+    config: localConfig || {},
+    quantization: input.quantization,
+    speculativeMode: input.speculativeMode || "off",
+    numSpeculativeTokens: input.numSpeculativeTokens,
+  });
+  recommendations.speculativeMode = capabilities.speculativeConfig
+    ? normalizeSpeculativeMode(input.speculativeMode, "off")
+    : "off";
+  recommendations.numSpeculativeTokens = capabilities.speculativeConfig?.num_speculative_tokens || 1;
+  if (capabilities.reasoningParser) recommendations.reasoningParser = capabilities.reasoningParser;
+  if (capabilities.toolCallParser) recommendations.toolCallParser = capabilities.toolCallParser;
+  if (capabilities.enableAutoToolChoice) recommendations.enableAutoToolChoice = true;
+  if (capabilities.nativeMtp.supported) {
+    findings.push(finding("ok", "原生 MTP", capabilities.speculativeConfig
+      ? `模型声明 ${capabilities.nativeMtp.layers || 1} 层 MTP；本次显式/自动档案将使用 ${capabilities.speculativeConfig.method} / ${capabilities.speculativeConfig.num_speculative_tokens} tokens。`
+      : `模型声明原生 MTP，但稳定默认关闭，以减少显存占用和量化/内核耦合；基线生成通过后可显式开启。${capabilities.notes[0] ? ` ${capabilities.notes[0]}` : ""}`));
+  }
+  if (capabilities.unsupportedReason) findings.push(finding("fail", "模型专用依赖缺失", capabilities.unsupportedReason));
   if (looksGguf) {
     findings.push(finding("warn", "GGUF 模型", "vLLM 的 GGUF 支持偏实验；如果是常规 llama.cpp GGUF，优先用 llama.cpp/llama-server。"));
     recommendations.loadFormat = "gguf";
@@ -1050,6 +1200,15 @@ async function checkModelCompatibility(input = {}) {
   }
   if (local) {
     findings.push(finding("ok", "本地路径可用", local.path));
+    if (local.stat?.isDirectory()) {
+      const verification = await modelFilesystemStore.verifyDownloadedModel({ localDir: local.path });
+      for (const issue of verification.issues || []) {
+        findings.push(finding(issue.severity, issue.title, issue.detail));
+      }
+      if (verification.ok) {
+        findings.push(finding("ok", "模型文件完整性", `${verification.modelFormat || "unknown"} · ${verification.fileCount} 个有效文件 · 权重分片齐全`));
+      }
+    }
     const configQuantization = readLocalModelQuantizationMethod(local.path);
     if (configQuantization) {
       findings.push(finding("ok", "模型配置量化", `config.json 声明 ${configQuantization}，启动时应优先使用这个量化方法。`));
@@ -1083,14 +1242,29 @@ async function checkModelCompatibility(input = {}) {
     recommendations.reasoningParser = "qwen3";
     recommendations.toolCallParser = "qwen3_coder";
   }
+  const qwen36MoeNvfp4 = isQwen36MoeNvfp4Model(model, localConfig);
+  const qwen36DenseNvfp4 = isQwen36DenseNvfp4Model(model, localConfig);
+  if (qwen36MoeNvfp4 || qwen36DenseNvfp4) {
+    findings.push(finding("warn", "Qwen3.6 / NVFP4 运行时", `该模型卡建议使用 vLLM nightly，并设置 --max-num-batched-tokens 8192；固定旧版镜像可能在 ModelOpt 权重布局处失败（例如 scale 名称或维度不匹配）。管理器启动时会自动使用 ${CONFIG.qwenMoeImage} 并补齐这些专用参数。`));
+    recommendations.quantization = "modelopt";
+    recommendations.kvCacheDtype = qwen36MoeNvfp4 ? "fp8" : "auto";
+    recommendations.reasoningParser = "qwen3";
+    recommendations.toolCallParser = "qwen3_xml";
+    recommendations.enableAutoToolChoice = true;
+    recommendations.loadFormat = "auto";
+    recommendations.maxNumBatchedTokens = 8192;
+  }
   if (/deepseek/i.test(model)) {
     recommendations.reasoningParser = "deepseek_r1";
     recommendations.toolCallParser = "deepseek_v3";
   }
   if (isDiffusionGemmaModel(model, localConfig)) {
     const runnerMode = gemmaModelRunnerEnvValue() === "0" ? "V1 runner（Windows/WSL UVA fallback）" : "V2 runner";
-    findings.push(finding("warn", "DiffusionGemma / Gemma4 专用启动", `该架构需要 Gemma 专用 vLLM 镜像；管理器会自动使用 ${CONFIG.gemmaImage}、${runnerMode}，并补齐 trust-remote-code、TRITON_ATTN、gemma4 parser。Windows/WSL fallback 会启用 eager mode，避开 CUDA graph 断言。`));
-    if (gemmaModelRunnerEnvValue() === "0") {
+    const windowsBlockReason = diffusionGemmaWindowsBlockReason();
+    findings.push(finding("warn", "DiffusionGemma / Gemma4 专用启动", `该架构需要 Gemma 专用 vLLM 镜像；管理器会自动使用 ${CONFIG.gemmaImage}、${runnerMode}，并补齐 trust-remote-code、TRITON_ATTN、gemma4 parser。Windows/WSL fallback 只用于绕过 V2 UVA 初始化失败，不代表推理稳定。`));
+    if (windowsBlockReason) {
+      findings.push(finding("fail", "Windows Docker/WSL 不建议启动", windowsBlockReason));
+    } else if (gemmaModelRunnerEnvValue() === "0") {
       findings.push(finding("warn", "Windows Docker/WSL 推理风险", "当前环境下 V2 runner 会因为 WSL 不支持 pinned memory / UVA 失败；V1 fallback 可以加载，但 DiffusionGemma NVFP4 在首个 chat 请求可能触发 CUDA device-side assert。建议在原生 Linux 上用 V2 runner，或改用常规 Qwen/Gemma 模型。"));
     }
     recommendations.trustRemoteCode = true;
@@ -1133,6 +1307,7 @@ function finding(severity, title, detail) {
 
 function inferReasoningParser(model) {
   const text = String(model || "").toLowerCase();
+  if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "nano_v3";
   if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) return "gemma4";
   if (text.includes("qwen3")) return "qwen3";
   if (text.includes("deepseek-r1") || text.includes("deepseek_r1")) return "deepseek_r1";
@@ -1169,6 +1344,10 @@ function detectLogStage(text) {
 
 function logIssueHint(message) {
   const text = String(message || "").toLowerCase();
+  if (text.includes("mamba cache align") || text.includes("max_num_batched_tokens") || (text.includes("block_size") && text.includes("batched_tokens"))) return "这是 Qwen3.6 混合/Mamba cache align 下的调度 token 上限过低；把 --max-num-batched-tokens 提高到 8192 后重试。";
+  if (text.includes("w2_input_scale") || text.includes("modelopt_mixed") || text.includes("exceeds dimension size")) return "这是 Qwen3.6/NVFP4 的 ModelOpt 权重布局与当前 vLLM 加载器不匹配；优先换 vllm/vllm-openai:nightly 或模型卡指定的 vLLM 版本。";
+  if (text.includes("batchprefillwithpagedkvcache") || text.includes("illegal memory access")) return "这是 Qwen3.6/NVFP4 在 FlashInfer + FP8 KV prefill 路径上的 CUDA 崩溃风险；dense 模型改用 --attention-backend TRITON_ATTN，是否启用 thinking 由客户端请求决定。";
+  if (text.includes("here's a thinking process") || text.includes("!!!!!!!!!!!!!!!!")) return "这是 Qwen3.6/NVFP4 thinking 或生成退化循环；dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 由客户端按需传 chat_template_kwargs.enable_thinking 控制。";
   if (text.includes("uva is not available")) return "这是 Windows Docker/WSL 的 pinned memory / UVA 限制；DiffusionGemma 的 V2 runner 需要 UVA，建议换原生 Linux 或使用非 DiffusionGemma 模型。";
   if (text.includes("scattergatherkernel") || text.includes("device-side assert")) return "这是推理期 CUDA kernel 断言，不是端口或显存占满；DiffusionGemma NVFP4 在 Windows Docker/WSL fallback 路径下可能无法稳定生成。";
   if (text.includes("out of memory") || text.includes("cuda")) return "降低 max_model_len / max_num_seqs，启用 FP8 KV cache，或降低 gpu-memory-utilization。";
@@ -1181,6 +1360,15 @@ function logIssueHint(message) {
 
 function buildLogSuggestions(issues, stage) {
   const suggestions = [];
+  if (issues.some((item) => /mamba cache align|max_num_batched_tokens|block_size .*batched_tokens/i.test(item.message))) {
+    suggestions.push("Mamba cache align 断言：max_num_batched_tokens 太小，Qwen3.6 MoE/NVFP4 用 --max-num-batched-tokens 8192 后重试。");
+  }
+  if (issues.some((item) => /w2_input_scale|modelopt_mixed|qwen3_5\.py|exceeds dimension size/i.test(item.message))) {
+    suggestions.push("Qwen3.6/NVFP4 加载失败：当前 vLLM 镜像可能不支持该 ModelOpt 权重布局，换 vllm/vllm-openai:nightly 或模型卡指定版本后重试。");
+  }
+  if (issues.some((item) => /BatchPrefillWithPagedKVCache|illegal memory access|Here's a thinking process|!{16,}/i.test(item.message))) {
+    suggestions.push("Qwen3.6/NVFP4 推理退化或 FlashInfer prefill 崩溃：dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 开关应由客户端通过 chat_template_kwargs.enable_thinking 控制。");
+  }
   if (issues.some((item) => /uva is not available|scattergatherkernel|device-side assert/i.test(item.message))) {
     suggestions.push("DiffusionGemma NVFP4 当前在 Windows Docker/WSL 路径不稳：优先换原生 Linux + V2 runner，或改跑常规 Qwen/Gemma 模型。");
   }
@@ -1206,18 +1394,11 @@ const SERVICE_EXPOSURE_CHECK_OPTIONS = {
 };
 
 async function buildServiceExposurePayload(settings) {
-  const [docker, gpu, container, clientsLedger] = await Promise.all([
-    getDockerVersion().catch((error) => ({ ok: false, text: "", error: error.message })),
-    getGpuStatus().catch(() => ({ ok: false })),
-    getContainerStatus(CONFIG.containerName),
+  const [snapshot, clientsLedger] = await Promise.all([
+    getOperationalSnapshot(),
     getServiceClientsLedger().catch(() => ({ clients: [] })),
   ]);
-  const runtime = await getRunningModelSummary(container, gpu).catch(() => ({
-    container,
-    endpoint: getContainerEndpoint(container),
-    servedModels: [],
-    models: [],
-  }));
+  const { docker, container, runtime } = snapshot;
   const endpoint = runtime.endpoint || getContainerEndpoint(container);
   return core.buildServiceExposurePayloadSnapshot(settings, {
     docker,
@@ -1255,9 +1436,25 @@ function serviceClientAllowsModel(client, model, runtime = null) {
 function startAutomationMonitor() {
   if (automationMonitorTimer) return;
   automationMonitorTimer = setInterval(() => {
+    sampleMetricsHistory().catch((error) => console.warn(`metrics history sample failed: ${error.message}`));
     inspectAutomationRules().catch((error) => console.warn(`automation monitor failed: ${error.message}`));
   }, 60 * 1000);
   automationMonitorTimer.unref?.();
+  sampleMetricsHistory().catch((error) => console.warn(`initial metrics history sample failed: ${error.message}`));
+}
+
+async function sampleMetricsHistory() {
+  const [gpu, container] = await Promise.all([getGpuStatus(), getContainerStatus(CONFIG.containerName)]);
+  if (!container?.running) return null;
+  const live = await collectVllmMetricsSummary(container, gpu, { updateSamples: false });
+  return metricsHistoryStore.recordMetricsHistory({
+    updatedAt: new Date().toISOString(),
+    container,
+    gpu,
+    live,
+    totals: live.totals,
+    models: live.models,
+  });
 }
 
 async function inspectAutomationRules() {
@@ -1313,20 +1510,16 @@ async function inspectAutomationRules() {
   }
 }
 
-async function verifyDownloadedModel(input = {}) {
-  return modelFilesystemStore.verifyDownloadedModel(input, {
-    buildIssues: (summary, makeFinding) => {
-      const issues = [];
-      if (!summary.hasConfig && !summary.gguf) issues.push(makeFinding("warn", "缺少模型配置", "没有 config.json/params.json；如果不是 GGUF，vLLM 可能无法启动。"));
-      if (!summary.hasTokenizer && !summary.gguf) issues.push(makeFinding("warn", "缺少 tokenizer", "未发现 tokenizer 文件；远程 repo 启动可能会补取，本地离线启动可能失败。"));
-      if (!summary.safetensors && !summary.gguf) issues.push(makeFinding("warn", "未发现权重文件", "没有 .safetensors 或 .gguf 文件。"));
-      return issues;
-    },
-  });
+async function verifyDownloadedModel(input = {}, options = {}) {
+  return modelFilesystemStore.verifyDownloadedModel(input, options);
 }
 
 async function buildConnectionGuide() {
-  const [gpu, container] = await Promise.all([getGpuStatus(), getContainerStatus(CONFIG.containerName)]);
+  const [gpu, container, exposureSettings] = await Promise.all([
+    getGpuStatus(),
+    getContainerStatus(CONFIG.containerName),
+    getServiceExposureSettings(),
+  ]);
   const runtime = await getRunningModelSummary(container, gpu).catch(() => null);
   const endpoint = runtime?.endpoint || getContainerEndpoint(container);
   const managerLocal = `http://127.0.0.1:${PORT}`;
@@ -1337,6 +1530,8 @@ async function buildConnectionGuide() {
     managerLocal,
     managerLan,
     claudeModelAliases: CLAUDE_MODEL_ALIASES,
+    openAiModelAliases: OPENAI_GATEWAY_MODEL_ALIASES,
+    apiKeyRequired: exposureSettings.enabled !== false && exposureSettings.requireApiKey === true,
   });
 }
 
@@ -1367,7 +1562,7 @@ async function buildClaudeCompressionInsights() {
 
 async function handleClaudeModels(_req, res) {
   try {
-    const runtime = await getRunningModelSummary();
+    const runtime = await getGatewayRunningModelSummary();
     if (!runtime.container.running) {
       return res.status(503).json(claudeError("service_unavailable", "Model service is not running."));
     }
@@ -1415,11 +1610,12 @@ async function handleClaudeCountTokens(req, res) {
 
 async function handleOpenCodeModels(_req, res) {
   try {
-    const runtime = await getRunningModelSummary();
-    if (!runtime.container.running) {
+    const runtimes = (await getRunningModelSummaries()).filter((item) => item.container?.running);
+    const runtime = runtimes[0];
+    if (!runtime?.container?.running) {
       return res.status(503).json({ error: { message: "Model service is not running.", type: "service_unavailable" } });
     }
-    const served = runtime.servedModels || [];
+    const served = uniqueModelsById(runtimes.flatMap((item) => item.servedModels || []));
     const fallback = served[0] || runtime.models?.[0] || null;
     const created = fallback?.created || Math.floor(Date.now() / 1000);
     const aliases = OPENCODE_MODEL_ALIASES.map((id) => ({
@@ -1443,8 +1639,8 @@ async function handleOpenCodeModels(_req, res) {
 async function handleOpenCodeChatCompletions(req, res) {
   const body = req.body && typeof req.body === "object" ? { ...req.body } : {};
   try {
-    const runtime = await getRunningModelSummary();
-    if (!runtime.container.running) {
+    const runtime = await getOpenCodeRuntime(String(body.model || ""));
+    if (!runtime?.container?.running) {
       return res.status(503).json({ error: { message: "Model service is not running.", type: "service_unavailable" } });
     }
     const resolvedModel = resolveOpenCodeRequestedModel(String(body.model || ""), runtime);
@@ -1457,13 +1653,7 @@ async function handleOpenCodeChatCompletions(req, res) {
       return res.status(403).json(openAiGatewayError("model_forbidden", "This service client is not allowed to use the requested model."));
     }
     body.model = resolvedModel;
-    if (shouldDisableThinkingForOpenCode(resolvedModel, runtime)) {
-      const kwargs = body.chat_template_kwargs && typeof body.chat_template_kwargs === "object" && !Array.isArray(body.chat_template_kwargs)
-        ? { ...body.chat_template_kwargs }
-        : {};
-      if (kwargs.enable_thinking === undefined) kwargs.enable_thinking = false;
-      body.chat_template_kwargs = kwargs;
-    }
+    Object.assign(body, applyVllmRequestDefaults(body, runtime, resolvedModel, { upstreamPath: "chat/completions" }));
     const stream = body.stream === true;
     const upstreamAbort = new AbortController();
     if (stream) {
@@ -1509,9 +1699,17 @@ async function handleOpenCodeChatCompletions(req, res) {
   }
 }
 
-function shouldDisableThinkingForOpenCode(model, runtime) {
-  const root = getServedModelRootMappings(runtime).find((entry) => entry.id === model)?.root || "";
-  return /qwen/i.test(`${model} ${root}`);
+async function getOpenCodeRuntime(requestedModel = "") {
+  const runtimes = (await getRunningModelSummaries()).filter((item) => item.container?.running);
+  if (!runtimes.length) return null;
+  const value = String(requestedModel || "").trim().toLowerCase();
+  const bare = value.split("/").pop();
+  if (!value || OPENCODE_MODEL_ALIASES.some((alias) => [value, bare].includes(alias.toLowerCase()))) return runtimes[0];
+  return runtimes.find((runtime) => (runtime.servedModels || []).some((model) => {
+    const id = String(model.id || "").toLowerCase();
+    const root = String(model.root || "").toLowerCase();
+    return value === id || value === root || bare === id.split("/").pop();
+  })) || runtimes[0];
 }
 
 function normalizeOpenCodeChatPayload(data) {
@@ -1570,7 +1768,7 @@ async function handleClaudeMessages(req, res) {
   let toolSchemaCount = 0;
   let claudeSession = deriveClaudeTaskSession(req, body, String(body.model || ""));
   try {
-    const runtime = await getRunningModelSummary();
+    const runtime = await getGatewayRunningModelSummary();
     if (!runtime.container.running) {
       req.serviceGatewayAccessUsage = { error: "Model service is not running.", toolSchemaCount };
       await recordClaudeBridgeUsage({
@@ -1611,10 +1809,15 @@ async function handleClaudeMessages(req, res) {
     }
 
     const compressionSettings = await getClaudeCompressionSettings();
-    const compression = applyClaudeContextCompression(body, runtime, model, compressionSettings);
+    const compression = await applyClaudeContextCompression(body, runtime, model, compressionSettings);
     const effectiveBody = compression.body;
     const stream = body.stream === true;
-    const openAiBody = buildOpenAiBodyFromClaude(effectiveBody, model);
+    const openAiBody = applyVllmRequestDefaults(
+      buildOpenAiBodyFromClaude(effectiveBody, model),
+      runtime,
+      model,
+      { upstreamPath: "chat/completions" },
+    );
     const upstreamAbort = new AbortController();
     if (stream) {
       // If the client goes away mid-stream, stop consuming the vLLM response too.
@@ -1814,7 +2017,7 @@ function resolveClaudeRequestedModel(requestedModel, runtime) {
   const rootMatch = getServedModelRootMappings(runtime).find((entry) => entry.root === value || entry.root.toLowerCase() === lowerValue || entry.root === bareValue || entry.root.toLowerCase() === lowerBareValue);
   if (rootMatch) return rootMatch.id;
   if (getClaudeModelAliases(runtime).some((alias) => alias.toLowerCase() === lowerValue || alias.toLowerCase() === lowerBareValue) || lowerValue.startsWith("claude-")) return served[0];
-  return value;
+  return served[0];
 }
 
 function resolveOpenCodeRequestedModel(requestedModel, runtime) {
@@ -1828,7 +2031,7 @@ function resolveOpenCodeRequestedModel(requestedModel, runtime) {
   const rootMatch = getServedModelRootMappings(runtime).find((entry) => entry.root === value || entry.root.toLowerCase() === value.toLowerCase());
   if (rootMatch) return rootMatch.id;
   if (OPENCODE_MODEL_ALIASES.some((alias) => alias.toLowerCase() === value.toLowerCase() || alias.toLowerCase() === bareValue.toLowerCase())) return served[0];
-  return value;
+  return served[0];
 }
 
 function getClaudeModelAliases(runtime, models = []) {
@@ -1916,9 +2119,9 @@ async function getModelsDiskFreeBytes() {
 }
 
 // 端口预检：先看是否被其它托管容器发布占用，再尝试在本机绑定该端口探测 OS 占用
-async function checkPortAvailability(port) {
+async function checkPortAvailability(port, targetContainerName = CONFIG.containerName) {
   const containers = await listManagedContainers().catch(() => []);
-  const ownName = normalizeDockerContainerName(CONFIG.containerName);
+  const ownName = normalizeDockerContainerName(targetContainerName);
   const conflict = containers.find((container) => {
     const published = parseDockerPortPublish(container.ports);
     return published?.port === port;
@@ -1959,14 +2162,14 @@ function isPortInUseOnHost(port) {
 
 // 读取模型 config.json：本地模型从磁盘读，HF 从 resolve/main 拉。
 // 用于精确显存估算（真实层数/头数/维度）与原生上下文长度提示。
-async function getModelConfig(model, source = "huggingface") {
+async function getModelConfig(model, source = "huggingface", quantization = "") {
   const input = String(model || "").trim();
   const local = describeLocalModelPath(input);
   if (local?.stat?.isDirectory()) {
     const configPath = path.join(local.path, "config.json");
     if (fs.existsSync(configPath)) {
       const raw = parseJsonSafe(await fsp.readFile(configPath, "utf8"), null);
-      if (raw) return { ...normalizeModelConfig(raw), source: "local", model: input, found: true };
+      if (raw) return { ...normalizeModelConfig(raw), ...summarizeModelConfigCapabilities(raw, input, local.path, quantization), source: "local", model: input, found: true };
     }
     return { source: "local", model: input, found: false, reason: "本地目录没有 config.json（可能是 GGUF）。" };
   }
@@ -1994,7 +2197,36 @@ async function getModelConfig(model, source = "huggingface") {
   }
   const raw = parseJsonSafe(await response.text(), null);
   if (!raw) return { source: "huggingface", model: input, found: false, reason: "config.json 解析失败。" };
-  return { ...normalizeModelConfig(raw), source: "huggingface", model: input, found: true };
+  return { ...normalizeModelConfig(raw), ...summarizeModelConfigCapabilities(raw, input, "", quantization), source: "huggingface", model: input, found: true };
+}
+
+function summarizeModelConfigCapabilities(raw, model, localPath = "", quantization = "") {
+  // Prefer the user's chosen quantization over whatever is baked into config.json:
+  // the dropdown is what actually ships to vLLM, and the MTP/compat decision
+  // (e.g. auto-off for Qwen3.5/3.6 + NVFP4) must match it, not a stale file value.
+  const effectiveQuantization = String(quantization || "").trim()
+    || raw?.quantization_config?.quant_method
+    || "";
+  const capabilities = resolveVllmModelCapabilities({
+    model,
+    localPath,
+    config: raw || {},
+    quantization: effectiveQuantization,
+    speculativeMode: "auto",
+    numSpeculativeTokens: 1,
+  });
+  return {
+    speculative: {
+      enabled: Boolean(capabilities.speculativeConfig),
+      mode: capabilities.speculativeConfig?.method || "off",
+      numSpeculativeTokens: capabilities.speculativeConfig?.num_speculative_tokens || 1,
+      nativeMtp: Boolean(capabilities.nativeMtp?.supported),
+      nativeMtpLayers: Number(capabilities.nativeMtp?.layers || 0),
+      reason: capabilities.notes.find((note) => /MTP|Speculative decoding/i.test(note)) || "",
+    },
+    recommendedReasoningParser: capabilities.reasoningParser || "",
+    recommendedToolCallParser: capabilities.toolCallParser || "",
+  };
 }
 
 function normalizeModelConfig(raw) {
@@ -2006,12 +2238,24 @@ function normalizeModelConfig(raw) {
   const headDim = Number(pick("head_dim")) || (numHeads ? Math.round(hiddenSize / numHeads) : 0);
   const kvHeads = Number(pick("num_key_value_heads")) || numHeads || 0;
   const quant = raw.quantization_config || {};
+  const numLayers = Number(pick("num_hidden_layers")) || null;
+  // 混合架构（Qwen3.5/3.6、Qwen3-Next 等）只有 full_attention 层消耗 KV cache，
+  // linear/mamba 层用常量状态缓存；KV 估算必须用注意力层数而非总层数
+  const layerTypes = Array.isArray(raw.layer_types) ? raw.layer_types : (Array.isArray(text.layer_types) ? text.layer_types : []);
+  const fullAttentionCount = layerTypes.filter((item) => /full_attention/i.test(String(item))).length;
+  const attentionInterval = Number(pick("full_attention_interval"));
+  const kvLayers = fullAttentionCount > 0
+    ? fullAttentionCount
+    : numLayers && Number.isFinite(attentionInterval) && attentionInterval > 0
+      ? Math.max(1, Math.ceil(numLayers / attentionInterval))
+      : null;
   return {
     architectures: Array.isArray(raw.architectures) ? raw.architectures : [],
     modelType: String(raw.model_type || text.model_type || ""),
     maxPositionEmbeddings: Number(pick("max_position_embeddings")) || null,
     ropeScaling: raw.rope_scaling || text.rope_scaling || null,
-    numHiddenLayers: Number(pick("num_hidden_layers")) || null,
+    numHiddenLayers: numLayers,
+    numAttentionLayers: kvLayers,
     numAttentionHeads: numHeads || null,
     numKeyValueHeads: kvHeads || null,
     hiddenSize: hiddenSize || null,
@@ -2020,6 +2264,7 @@ function normalizeModelConfig(raw) {
     quantMethod: String(quant.quant_method || quant.quant_algo || "") || (raw.quantization_config ? "quantized" : ""),
     numExperts: Number(pick("num_experts") ?? pick("n_routed_experts")) || null,
     isMultimodal: Boolean(raw.vision_config || raw.text_config || raw.vision_tower || raw.image_token_id),
+    mtpNumHiddenLayers: Number(pick("mtp_num_hidden_layers")) || 0,
   };
 }
 
@@ -2100,6 +2345,7 @@ function normalizeReasoningParser(value) {
     "step3",
     "step3p5",
     "identity",
+    "nano_v3",
   ]);
   return allowed.has(parser) ? parser : "";
 }
@@ -2127,6 +2373,7 @@ function normalizeToolCallParser(value) {
 
 function inferToolCallParser(model, preset = "generic") {
   const text = `${model || ""} ${preset || ""}`.toLowerCase();
+  if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "qwen3_coder";
   if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) {
     return "gemma4";
   }
@@ -2245,16 +2492,174 @@ function isDiffusionGemmaModel(model, config = null) {
     || architectures.includes("diffusiongemma");
 }
 
+function qwen36Nvfp4ModelFlags(model, config = null) {
+  const text = String(model || "").toLowerCase();
+  const modelType = String(config?.model_type || config?.text_config?.model_type || "").toLowerCase();
+  const architectures = Array.isArray(config?.architectures) ? config.architectures.join(" ").toLowerCase() : "";
+  const quantization = JSON.stringify(config?.quantization_config || {}).toLowerCase();
+  const hasQuantizationConfig = Boolean(config?.quantization_config);
+  const qwen36Moe = text.includes("qwen3.6-35b-a3b")
+    || text.includes("qwen3_5_moe")
+    || modelType.includes("qwen3_5_moe")
+    || architectures.includes("qwen3_5moe")
+    || architectures.includes("qwen3_5_moe");
+  const qwen36Hybrid = text.includes("qwen3.6")
+    || text.includes("qwen3_6")
+    || text.includes("qwen3-6")
+    || modelType.includes("qwen3_5")
+    || architectures.includes("qwen3_5");
+  const modeloptNvfp4 = (!hasQuantizationConfig && text.includes("nvfp4"))
+    || quantization.includes("nvfp4")
+    || quantization.includes("w4a16_nvfp4")
+    || (quantization.includes("mixed_precision") && quantization.includes("modelopt"))
+    || (quantization.includes("modelopt") && quantization.includes("fp4"));
+  return { qwen36Moe, qwen36Hybrid, modeloptNvfp4 };
+}
+
+function isQwen36MoeNvfp4Model(model, config = null) {
+  const { qwen36Moe, modeloptNvfp4 } = qwen36Nvfp4ModelFlags(model, config);
+  return qwen36Moe && modeloptNvfp4;
+}
+
+function isQwen36DenseNvfp4Model(model, config = null) {
+  const { qwen36Moe, qwen36Hybrid, modeloptNvfp4 } = qwen36Nvfp4ModelFlags(model, config);
+  return qwen36Hybrid && !qwen36Moe && modeloptNvfp4;
+}
+
+function selectedHostGpus(opts = {}) {
+  const gpus = Array.isArray(opts.hostGpus) ? opts.hostGpus : [];
+  const selectedIds = new Set(normalizeGpuIds(opts.gpuDeviceIds || []).map(String));
+  if (!selectedIds.size) return gpus;
+  return gpus.filter((gpu) => selectedIds.has(String(gpu.id)) || selectedIds.has(String(gpu.index)));
+}
+
+function hasSm12Gpu(opts = {}) {
+  return selectedHostGpus(opts).some((gpu) => {
+    const computeCap = String(gpu.computeCap || gpu.compute_cap || "").trim();
+    const name = String(gpu.name || "").toLowerCase();
+    return computeCap.startsWith("12") || (name.includes("blackwell") && /rtx\s+pro\s+[56]000/.test(name));
+  });
+}
+
+function qwenMoeNvfp4BackendValue(opts = {}) {
+  const configured = String(process.env.VLLM_QWEN_MOE_BACKEND || "").trim().toLowerCase();
+  const allowed = new Set([
+    "auto",
+    "cutlass",
+    "emulation",
+    "flashinfer_b12x",
+    "flashinfer_cutedsl",
+    "flashinfer_cutlass",
+    "flashinfer_trtllm",
+    "marlin",
+    "triton",
+    "triton_unfused",
+  ]);
+  if (configured && allowed.has(configured)) return configured;
+  return hasSm12Gpu(opts) ? "flashinfer_b12x" : "marlin";
+}
+
 function resolveVllmRuntimePreset(opts = {}, launch = {}) {
   const localConfig = readLocalModelConfig(launch.localPath);
-  if (!isDiffusionGemmaModel(opts.model || launch.modelArg, localConfig)) return { id: "", env: {} };
+  const capabilities = resolveVllmModelCapabilities({
+    model: opts.model || launch.modelArg,
+    localPath: launch.localPath,
+    config: localConfig || {},
+    quantization: opts.quantization,
+    speculativeMode: opts.speculativeMode,
+    numSpeculativeTokens: opts.numSpeculativeTokens,
+  });
+  const withCapabilities = (preset = {}) => {
+    const hasCapabilityPreset = Boolean(
+      capabilities.speculativeConfig
+      || capabilities.reasoningParser
+      || capabilities.toolCallParser
+      || capabilities.reasoningParserPlugin
+      || capabilities.unsupportedReason
+      || Object.keys(capabilities.env || {}).length
+    );
+    return {
+      ...preset,
+      id: preset.id || (hasCapabilityPreset ? `model-${capabilities.modelType || "capabilities"}` : ""),
+      label: preset.label || (hasCapabilityPreset ? `${capabilities.architecture || capabilities.modelType || "Model"} capability profile` : ""),
+      env: { ...(capabilities.env || {}), ...(preset.env || {}) },
+      forceTrustRemoteCode: Boolean(preset.forceTrustRemoteCode || capabilities.forceTrustRemoteCode),
+      reasoningParser: preset.reasoningParser || capabilities.reasoningParser,
+      reasoningParserPlugin: preset.reasoningParserPlugin || capabilities.reasoningParserPlugin,
+      toolCallParser: preset.toolCallParser || capabilities.toolCallParser,
+      enableAutoToolChoice: Boolean(preset.enableAutoToolChoice || capabilities.enableAutoToolChoice),
+      speculativeConfig: preset.speculativeConfig || capabilities.speculativeConfig,
+      unsupportedReason: preset.unsupportedReason || capabilities.unsupportedReason,
+      notes: [...(preset.notes || []), ...(capabilities.notes || [])],
+      capabilities,
+    };
+  };
+  if (isQwen36MoeNvfp4Model(opts.model || launch.modelArg, localConfig)) {
+    const effectiveKvCacheDtype = !opts.kvCacheDtype || opts.kvCacheDtype === "auto" ? "fp8" : opts.kvCacheDtype;
+    const moeBackend = qwenMoeNvfp4BackendValue(opts);
+    return withCapabilities({
+      id: "qwen3.6-moe-nvfp4",
+      label: "Qwen3.6 MoE / NVFP4",
+      image: CONFIG.qwenMoeImage,
+      dtype: moeBackend === "flashinfer_b12x" ? "bfloat16" : undefined,
+      forceTrustRemoteCode: true,
+      attentionBackend: "flashinfer",
+      moeBackend,
+      generationConfig: "vllm",
+      reasoningParser: "qwen3",
+      toolCallParser: "qwen3_xml",
+      enableAutoToolChoice: true,
+      kvCacheDtype: effectiveKvCacheDtype,
+      maxNumBatchedTokens: 8192,
+      asyncScheduling: true,
+      notes: [
+        "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
+        "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
+        "adds --attention-backend flashinfer for the Qwen3.6 MoE path that previously validated locally",
+        `uses --moe-backend ${moeBackend}${moeBackend === "flashinfer_b12x" ? " on SM12x Blackwell to avoid the Marlin NVFP4 output degeneration seen on this host" : ""}`,
+        "uses --generation-config vllm because the checkpoint generation_config caused repeated ! output on this host",
+        "uses FP8 KV cache for the Qwen3.6 MoE ModelOpt checkpoint unless the launch form explicitly selects another dtype",
+        "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
+        "leaves thinking mode to request-level chat_template_kwargs from the client",
+        "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance",
+      ],
+    });
+  }
+  if (isQwen36DenseNvfp4Model(opts.model || launch.modelArg, localConfig)) {
+    return withCapabilities({
+      id: "qwen3.6-dense-nvfp4",
+      label: "Qwen3.6 Dense / NVFP4",
+      image: CONFIG.qwenMoeImage,
+      forceTrustRemoteCode: true,
+      attentionBackend: "TRITON_ATTN",
+      reasoningParser: "qwen3",
+      toolCallParser: "qwen3_xml",
+      enableAutoToolChoice: true,
+      disableQuantizationArg: true,
+      disableKvCacheDtypeArg: true,
+      maxNumBatchedTokens: 8192,
+      asyncScheduling: true,
+      notes: [
+        "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
+        "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
+        "lets vLLM auto-detect ModelOpt mixed quantization and KV cache dtype from the dense checkpoint",
+        "uses --attention-backend TRITON_ATTN because FlashInfer can crash or degenerate with the dense Qwen3.6 NVFP4 FP8 KV prefill path",
+        "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
+        "leaves thinking mode to request-level chat_template_kwargs from the client",
+        "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance",
+      ],
+    });
+  }
+  if (!isDiffusionGemmaModel(opts.model || launch.modelArg, localConfig)) return withCapabilities({ id: "", env: {} });
   const effectiveKvCacheDtype = !opts.kvCacheDtype || opts.kvCacheDtype === "auto" ? "fp8" : opts.kvCacheDtype;
   const gemmaModelRunner = gemmaModelRunnerEnvValue();
   const gemmaMaxNewTokens = gemmaMaxNewTokensValue();
-  return {
+  const unsupportedReason = diffusionGemmaWindowsBlockReason();
+  return withCapabilities({
     id: "diffusion-gemma",
     label: "DiffusionGemma / Gemma4",
     image: CONFIG.gemmaImage,
+    unsupportedReason,
     env: { VLLM_USE_V2_MODEL_RUNNER: gemmaModelRunner },
     forceTrustRemoteCode: true,
     enforceEager: gemmaModelRunner === "0",
@@ -2266,16 +2671,17 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
     disablePrefixCaching: true,
     disableLanguageModelOnly: true,
     overrideGenerationConfig: JSON.stringify({ max_new_tokens: gemmaMaxNewTokens }),
-    defaultChatTemplateKwargs: JSON.stringify({ enable_thinking: true }),
     notes: [
       "uses vllm/vllm-openai:gemma-compatible runtime",
       `sets VLLM_USE_V2_MODEL_RUNNER=${gemmaModelRunner}${gemmaModelRunner === "0" ? " to avoid WSL UVA initialization failures" : ""}`,
       "adds --attention-backend TRITON_ATTN",
       ...(gemmaModelRunner === "0" ? ["adds --enforce-eager to avoid CUDA graph profiling assertion failures"] : []),
       `caps default generation to ${gemmaMaxNewTokens} tokens so clients that omit max_tokens do not request the full context window`,
+      "leaves thinking mode to request-level chat_template_kwargs from the client",
       "uses gemma4 reasoning/tool parsers",
+      ...(unsupportedReason ? [`blocked on this host: ${unsupportedReason}`] : []),
     ],
-  };
+  });
 }
 
 function gemmaMaxNewTokensValue() {
@@ -2291,6 +2697,20 @@ function gemmaModelRunnerEnvValue() {
   // Docker Desktop on Windows runs Linux containers through WSL2. vLLM disables
   // pinned memory there, so V2 Model Runner's UVA buffers fail during init.
   return process.platform === "win32" ? "0" : "1";
+}
+
+function envFlagEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function diffusionGemmaWindowsBlockReason(platform = process.platform, env = process.env) {
+  if (platform !== "win32" || envFlagEnabled(env.VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA)) return "";
+  return "DiffusionGemma NVFP4 在 Windows Docker/WSL 下当前不可稳定运行：V2 runner 会因 UVA 不可用启动失败，V1 fallback 可加载但首个 chat 请求可能触发 CUDA device-side assert。请改用常规 Gemma-4/Qwen，或在原生 Linux 上运行；确认要自行承担风险时设置 VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1。";
+}
+
+function previewVllmRuntimePreset(opts = {}) {
+  const launch = resolveLaunchModel(opts.model, opts.loadFormat);
+  return resolveVllmRuntimePreset(opts, launch);
 }
 
 function effectiveLaunchQuantization(requested, launch) {
@@ -2376,23 +2796,34 @@ async function listManagedContainers() {
       ports: info.Ports || "",
       manager: labels[MANAGER_LABEL_KEY] || "",
       engine: labels[MANAGER_ENGINE_LABEL_KEY] || "",
+      labels,
     });
   }
   return containers.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
 }
 
-async function removeManagedContainer(reason = "replace") {
-  const container = await getContainerStatus(CONFIG.containerName);
-  if (!container.exists) return { removed: false, containerName: CONFIG.containerName };
+async function removeManagedContainer(reason = "replace", containerName = CONFIG.containerName, expectedJobId = "") {
+  const targetContainerName = normalizeDockerContainerName(containerName || CONFIG.containerName);
+  const container = await getContainerStatus(targetContainerName);
+  if (!container.exists) return { removed: false, containerName: targetContainerName };
   const owner = container.labels?.[MANAGER_LABEL_KEY] || "";
   if (owner && owner !== CONFIG.managerId) {
-    const error = new Error(`Refusing to remove ${CONFIG.containerName}; it belongs to ${owner}.`);
+    const error = new Error(`Refusing to remove ${targetContainerName}; it belongs to ${owner}.`);
     error.code = "CONTAINER_OWNED_BY_OTHER_MANAGER";
     error.status = 409;
     throw error;
   }
-  await docker(["rm", "-f", CONFIG.containerName]);
-  return { removed: true, containerName: CONFIG.containerName, owner: owner || null, reason };
+  const containerJobId = String(container.labels?.["ai.manager.job"] || "");
+  if (expectedJobId && containerJobId !== String(expectedJobId)) {
+    const error = new Error(`Refusing to remove ${targetContainerName}; it belongs to serve job ${containerJobId || "unknown"}, not ${expectedJobId}.`);
+    error.code = "CONTAINER_OWNED_BY_OTHER_JOB";
+    error.status = 409;
+    throw error;
+  }
+  await docker(["rm", "-f", targetContainerName]);
+  clearGatewayRuntimeCache();
+  clearRuntimeInstancesCache();
+  return { removed: true, containerName: targetContainerName, owner: owner || null, jobId: containerJobId || null, reason };
 }
 
 function getVllmApiKey(container) {
@@ -2401,6 +2832,16 @@ function getVllmApiKey(container) {
 
 function vllmAuthHeaders(apiKey, base = {}) {
   return apiKey ? { ...base, authorization: `Bearer ${apiKey}` } : base;
+}
+
+function applyVllmRequestDefaults(body = {}, _runtime = null, model = "", context = {}) {
+  if (context.upstreamPath && context.upstreamPath !== "chat/completions") return body;
+  if (!/qwen3[_\-.]?(?:5|6)|qwen3\.6/i.test(String(model || body.model || ""))) return body;
+  const next = { ...body };
+  if (body.temperature === undefined || body.temperature === null || body.temperature === "") next.temperature = 1.0;
+  if (body.top_p === undefined || body.top_p === null || body.top_p === "") next.top_p = 0.95;
+  if (body.top_k === undefined || body.top_k === null || body.top_k === "") next.top_k = 20;
+  return next;
 }
 
 async function getServedModels(port, apiKey = "") {
@@ -2417,12 +2858,39 @@ async function getServedModels(port, apiKey = "") {
   }
 }
 
-async function getRunningModelSummary(container = null, gpu = null) {
+function clearGatewayRuntimeCache() {
+  gatewayRuntimeCache = {
+    value: null,
+    expiresAt: 0,
+    promise: null,
+  };
+}
+
+async function getGatewayRunningModelSummary() {
+  const now = Date.now();
+  if (GATEWAY_RUNTIME_CACHE_MS > 0 && gatewayRuntimeCache.value && gatewayRuntimeCache.expiresAt > now) {
+    return gatewayRuntimeCache.value;
+  }
+  if (gatewayRuntimeCache.promise) return gatewayRuntimeCache.promise;
+  gatewayRuntimeCache.promise = getRunningModelSummary(null, null, { includeMetrics: false })
+    .then((summary) => {
+      gatewayRuntimeCache.value = summary;
+      gatewayRuntimeCache.expiresAt = Date.now() + GATEWAY_RUNTIME_CACHE_MS;
+      return summary;
+    })
+    .finally(() => {
+      gatewayRuntimeCache.promise = null;
+    });
+  return gatewayRuntimeCache.promise;
+}
+
+async function getRunningModelSummary(container = null, gpu = null, options = {}) {
   const activeContainer = container || await getContainerStatus(CONFIG.containerName);
   const endpoint = getContainerEndpoint(activeContainer);
   const vllmApiKey = getVllmApiKey(activeContainer);
   const servedModels = activeContainer.running ? await getServedModels(endpoint.port, vllmApiKey) : [];
-  const runtimeStats = activeContainer.running
+  const includeMetrics = options.includeMetrics !== false;
+  const runtimeStats = activeContainer.running && includeMetrics
     ? await collectVllmMetricsSummary(activeContainer, gpu, { updateSamples: false }).catch(() => null)
     : null;
   const gpuText = gpu?.ok
@@ -2478,6 +2946,91 @@ async function getRunningModelSummary(container = null, gpu = null) {
     unloadStopsContainer: true,
     note: "vLLM keeps one model resident in the server process. Unloading from this manager stops the managed vLLM container, but leaves the manager and other Docker services alone.",
   };
+}
+
+function clearRuntimeInstancesCache() {
+  runtimeInstancesCache = { value: null, expiresAt: 0, promise: null };
+}
+
+async function getRunningModelSummaries() {
+  const now = Date.now();
+  if (runtimeInstancesCache.value && runtimeInstancesCache.expiresAt > now) return runtimeInstancesCache.value;
+  if (runtimeInstancesCache.promise) return runtimeInstancesCache.promise;
+  runtimeInstancesCache.promise = Promise.resolve().then(async () => {
+    const managed = (await listManagedContainers()).filter((container) => (
+      container.manager === CONFIG.managerId && container.engine === "vllm"
+    ));
+    const primary = await getContainerStatus(CONFIG.containerName);
+    const primaryOwner = primary.labels?.[MANAGER_LABEL_KEY] || "";
+    if (primary.exists && (!primaryOwner || primaryOwner === CONFIG.managerId) && !managed.some((item) => item.name === CONFIG.containerName)) {
+      managed.unshift(primary);
+    }
+    const summaries = await Promise.all(managed.map(async (container) => {
+      const status = await getContainerStatus(container.name);
+      return getRunningModelSummary(status, null, { includeMetrics: false });
+    }));
+    summaries.sort((a, b) => Number(b.container?.name === CONFIG.containerName) - Number(a.container?.name === CONFIG.containerName));
+    runtimeInstancesCache.value = summaries;
+    runtimeInstancesCache.expiresAt = Date.now() + GATEWAY_RUNTIME_CACHE_MS;
+    return summaries;
+  }).finally(() => {
+    runtimeInstancesCache.promise = null;
+  });
+  return runtimeInstancesCache.promise;
+}
+
+async function listRuntimeInstancesRequest() {
+  const summaries = await getRunningModelSummaries();
+  return {
+    ok: true,
+    primaryContainer: CONFIG.containerName,
+    supportsParallel: true,
+    instances: summaries.map((runtime) => {
+      const container = runtime.container || {};
+      const labels = container.labels || {};
+      const primary = container.name === CONFIG.containerName;
+      return {
+        id: primary ? "primary" : labels["ai.manager.instance"] || container.name,
+        instanceMode: primary ? "replace" : labels["ai.manager.instance-mode"] || "parallel",
+        primary,
+        containerName: container.name,
+        running: Boolean(container.running),
+        status: container.status || "",
+        image: container.image || "",
+        port: runtime.endpoint?.port || Number(labels["ai.manager.port"] || 0),
+        localBaseUrl: runtime.endpoint?.localUrl || null,
+        lanBaseUrl: runtime.endpoint?.lanUrl || null,
+        models: (runtime.servedModels || []).map((model) => ({
+          id: model.id,
+          root: model.root || "",
+          maxModelLen: model.max_model_len || model.maxModelLen || null,
+        })),
+      };
+    }),
+  };
+}
+
+async function stopRuntimeInstanceRequest({ id } = {}) {
+  const requested = decodeURIComponent(String(id || ""));
+  if (requested === "primary") {
+    const existing = await getContainerStatus(CONFIG.containerName);
+    if (!existing.exists) throw Object.assign(new Error("Runtime instance not found."), { status: 404 });
+    await snapshotCurrentStats("before-stop").catch(() => {});
+    await removeManagedContainer("instance-stop");
+    return { ok: true, id: requested, containerName: CONFIG.containerName, stopped: true };
+  }
+  const managed = (await listManagedContainers()).filter((container) => (
+    container.manager === CONFIG.managerId && container.engine === "vllm"
+  ));
+  const target = managed.find((container) => (
+    container.name === requested
+    || container.labels?.["ai.manager.instance"] === requested
+  ));
+  if (!target) throw Object.assign(new Error("Runtime instance not found."), { status: 404 });
+  await docker(["rm", "-f", target.name]);
+  clearGatewayRuntimeCache();
+  clearRuntimeInstancesCache();
+  return { ok: true, id: requested, containerName: target.name, stopped: true };
 }
 
 function getContainerEndpoint(container) {
@@ -2615,7 +3168,12 @@ async function collectStats() {
   const summary = core.mergeLiveAndStatsLedgerInactive(liveSummary, ledger);
   const costComparison = PRICE_PROFILES.map((profile) => calculateCost(summary.totals.tokens, profile));
   const clientUsage = buildClientUsageSummary(summary.totals, ledger);
-  return {
+  const recentAccess = await collectRecentAccessStats({
+    windowMs: 60 * 60 * 1000,
+    limit: 30,
+    maxLines: 5000,
+  }).catch((error) => ({ ok: false, error: error.message, sources: [] }));
+  const response = {
     ok: true,
     updatedAt: new Date().toISOString(),
     container,
@@ -2631,8 +3189,12 @@ async function collectStats() {
     live: liveSummary,
     historical: core.statsLedgerToSummary(ledger),
     clientUsage,
+    recentAccess,
     costComparison,
   };
+  await metricsHistoryStore.recordMetricsHistory(response).catch(() => {});
+  response.trends = await metricsHistoryStore.getMetricsHistory({ hours: 24 }).catch(() => ({ hours: 24, samples: [] }));
+  return response;
 }
 
 async function snapshotCurrentStats(reason = "snapshot") {
@@ -2648,6 +3210,7 @@ async function snapshotCurrentStats(reason = "snapshot") {
 
 async function collectVllmMetricsSummary(container, gpu, options = {}) {
   const endpoint = getContainerEndpoint(container);
+  const vllmApiKey = getVllmApiKey(container);
   const empty = core.emptyStatsSummary(container, endpoint, {
     stoppedNote: "vLLM container is not running.",
     missingNote: "No managed vLLM container is running.",
@@ -2656,14 +3219,17 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
 
   let metricsText = "";
   try {
-    const response = await fetch(`http://127.0.0.1:${endpoint.port}/metrics`, { signal: AbortSignal.timeout(4000) });
+    const response = await fetch(`http://127.0.0.1:${endpoint.port}/metrics`, {
+      signal: AbortSignal.timeout(4000),
+      headers: vllmAuthHeaders(vllmApiKey),
+    });
     if (!response.ok) throw new Error(`metrics returned ${response.status}`);
     metricsText = await response.text();
   } catch (error) {
     return { ...empty, error: error.message };
   }
 
-  const servedModels = await getServedModels(endpoint.port).catch(() => []);
+  const servedModels = await getServedModels(endpoint.port, vllmApiKey).catch(() => []);
   const factModelHints = Array.from(new Set(servedModels
     .flatMap((model) => [model.id, model.root])
     .filter(Boolean)));
@@ -2732,6 +3298,16 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const promptBySource = sumByLabel(scoped, "vllm:prompt_tokens_by_source_total", "source");
     const prefixQueries = sumMetric(scoped, "vllm:prefix_cache_queries_total");
     const prefixHits = sumMetric(scoped, "vllm:prefix_cache_hits_total");
+    const speculativeDraftTokens = firstNonZeroMetricSum(scoped, [
+      "vllm:spec_decode_num_draft_tokens_total",
+      "vllm:spec_decode_num_drafts",
+      "vllm:spec_decode_draft_tokens_total",
+    ]);
+    const speculativeAcceptedTokens = firstNonZeroMetricSum(scoped, [
+      "vllm:spec_decode_num_accepted_tokens_total",
+      "vllm:spec_decode_num_accepted_tokens",
+      "vllm:spec_decode_accepted_tokens_total",
+    ]);
     const recent = core.calculateRecentRates(statsSamples, name, nowSeconds, {
       promptTokens,
       generationTokens,
@@ -2780,6 +3356,12 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
         prefixHits,
         prefixHitRate: prefixQueries ? prefixHits / prefixQueries : 0,
       },
+      speculative: {
+        enabled: speculativeDraftTokens > 0,
+        draftTokens: speculativeDraftTokens,
+        acceptedTokens: speculativeAcceptedTokens,
+        acceptanceRate: speculativeDraftTokens ? speculativeAcceptedTokens / speculativeDraftTokens : 0,
+      },
       context: {
         activeTokens,
         capacityTokens,
@@ -2790,6 +3372,14 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     });
   }
   return models.sort((a, b) => b.tokens.total - a.tokens.total);
+}
+
+function firstNonZeroMetricSum(metrics, names) {
+  for (const name of names) {
+    const value = sumMetric(metrics, name);
+    if (value) return value;
+  }
+  return 0;
 }
 
 function deriveKvCapacityTokens(metrics, servedModel, facts) {
@@ -2882,7 +3472,31 @@ const spawnJobProcess = createProcessJobRunner({
     else await finalizeDownloadCancel(job, { deletePartial: true });
   },
   cancelNonDownloadMessage: "任务已被用户取消",
-  closeHandlerErrorMode: "log",
+  handleProcessSuccess: async (job) => {
+    if (job.type !== "download") return;
+    const verification = await verifyDownloadedModel({ localDir: job.meta?.localDir }, { strictIncomplete: true });
+    job.meta = {
+      ...(job.meta || {}),
+      verification: {
+        ok: verification.ok,
+        status: verification.status,
+        modelFormat: verification.modelFormat,
+        expectedWeightFiles: verification.expectedWeightFiles,
+        missingWeightFiles: verification.missingWeightFiles,
+        checkedAt: new Date().toISOString(),
+      },
+    };
+    if (!verification.ok) {
+      const detail = (verification.issues || [])
+        .filter((item) => item.severity === "fail")
+        .map((item) => `${item.title}: ${item.detail}`)
+        .join("；");
+      appendLog(job, `Download verification failed: ${detail}`);
+      throw new Error(`下载命令已结束，但模型完整性校验失败：${detail || "模型文件不完整"}`);
+    }
+    appendLog(job, `Download verification passed: ${verification.modelFormat}; ${verification.expectedWeightFiles || verification.safetensors || verification.gguf} weight file(s).`);
+  },
+  closeHandlerErrorMode: "fail",
   onDone: (job) => {
     if (job.type === "download") drainDownloadQueue();
   },
@@ -2904,7 +3518,7 @@ const downloadJobController = core.createDownloadJobController({
   setQueueMode: (value) => {
     downloadQueueMode = Boolean(value);
   },
-  saveQueueMode: (queueMode) => atomicWriteJsonFile(CONFIG.downloadSettings, { queueMode }),
+  saveQueueMode: (settings) => atomicWriteJsonFile(CONFIG.downloadSettings, settings),
   resolvePartialPath: resolveModelsRootChild,
 });
 const {
@@ -2942,13 +3556,17 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
     tracker.scanning = true;
     try {
       const now = Date.now();
-      const currentBytes = await dirSize(targetDir);
+      const snapshot = await scanDownloadProgress(targetDir);
+      const currentBytes = snapshot.downloadedBytes;
       if (tracker.baseBytes === null) tracker.baseBytes = options.countExistingProgress ? 0 : currentBytes;
-      const downloadedBytes = Math.max(0, currentBytes - tracker.baseBytes);
+      const rawDownloadedBytes = Math.max(0, currentBytes - tracker.baseBytes);
+      const downloadedBytes = totalBytes ? Math.min(totalBytes, rawDownloadedBytes) : rawDownloadedBytes;
       const elapsed = Math.max(0.001, (now - tracker.lastAt) / 1000);
       const delta = Math.max(0, downloadedBytes - tracker.lastBytes);
       const speedBytesPerSec = delta / elapsed;
-      const percent = totalBytes ? Math.min(100, (downloadedBytes / totalBytes) * 100) : null;
+      const rawPercent = totalBytes ? (downloadedBytes / totalBytes) * 100 : null;
+      // 运行中的进程永远不显示 100%；只有进程退出且完整性校验通过后 finishJob 才能置为 100%。
+      const percent = rawPercent === null ? null : Math.min(99, rawPercent);
       const remainingBytes = totalBytes ? Math.max(0, totalBytes - downloadedBytes) : null;
       const etaSeconds = remainingBytes && speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : null;
       job.progress = {
@@ -2958,6 +3576,9 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
         percent,
         speedBytesPerSec,
         etaSeconds,
+        finalizedBytes: snapshot.finalizedBytes,
+        partialBytes: snapshot.partialBytes,
+        incompleteFiles: snapshot.incompleteFiles,
         updatedAt: new Date(now).toISOString(),
       };
       job.updatedAt = job.progress.updatedAt;
@@ -2975,7 +3596,7 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
   };
 
   tick();
-  const timer = setInterval(tick, 2500);
+  const timer = setInterval(tick, Math.max(2500, Number(process.env.MODEL_DOWNLOAD_PROGRESS_INTERVAL_MS || 10000)));
   timer.unref?.();
   progressTimers.set(job.id, timer);
 }
@@ -2988,6 +3609,39 @@ function stopProgressTracker(job) {
 }
 
 async function runStartJob(job, opts) {
+  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts));
+  if (queued) {
+    appendLog(job, "已有启动任务进行中，排队等待其完成后再启动，避免容器名冲突。");
+    setJobProgress(job, {
+      percent: 1,
+      stage: "等待前一个启动任务",
+      detail: "已有启动任务正在进行，排队等待其完成后再启动，避免容器名冲突。",
+    });
+  }
+  return result;
+}
+
+async function runStartJobOnce(job, opts) {
+  // 排队期间任务可能已被用户取消（cancel -> failJob）。拿到锁后若已不在 running 态，直接放弃，
+  // 避免给一个已取消的任务启动容器、再被 finishJob 复活。
+  if (job.status !== "running") {
+    appendLog(job, `任务已不再运行（status=${job.status}），跳过启动。`);
+    return;
+  }
+  const compatibility = await checkModelCompatibility({ ...opts, model: opts.model, remote: false });
+  if (!compatibility.ok) {
+    const issues = compatibility.findings.filter((item) => item.severity === "fail");
+    const detail = issues.map((item) => `${item.title}: ${item.detail}`).join("；") || "模型文件或运行时不兼容";
+    setJobProgress(job, {
+      percent: 2,
+      stage: "模型预检失败",
+      detail,
+      state: "fail",
+      issues: issues.map((item) => item.detail),
+    });
+    throw new Error(`模型启动前校验失败：${detail}`);
+  }
+  assertStartJobActive(job);
   setJobProgress(job, {
     percent: 3,
     stage: "检查 Docker",
@@ -3023,25 +3677,32 @@ async function runStartJob(job, opts) {
   if (!gpuProbe.ok) {
     appendLog(job, `GPU warning: 未检测到可用的 NVIDIA GPU（${gpuProbe.text || "nvidia-smi 不可用"}）。vLLM 官方镜像依赖 NVIDIA GPU，容器很可能启动失败。`);
   }
+  const runtimeOpts = {
+    ...opts,
+    hostGpus: Array.isArray(gpuProbe.gpus) ? gpuProbe.gpus : [],
+  };
+
+  const runtimePreset = previewVllmRuntimePreset(runtimeOpts);
+  if (runtimePreset.unsupportedReason) {
+    appendLog(job, `Runtime preset blocked: ${runtimePreset.label || runtimePreset.id}`);
+    appendLog(job, runtimePreset.unsupportedReason);
+    setJobProgress(job, {
+      percent: 8,
+      stage: "当前环境不支持该模型",
+      detail: runtimePreset.unsupportedReason,
+      state: "fail",
+      issues: [runtimePreset.unsupportedReason],
+    });
+    throw new Error(runtimePreset.unsupportedReason);
+  }
 
   setJobProgress(job, {
-    percent: 5,
-    stage: "清理旧容器",
-    detail: `正在停止并移除 ${CONFIG.containerName}`,
+    percent: 8,
+    stage: "启动前预检",
+    detail: "正在校验端口、模型档案并生成完整 Docker 命令；此阶段不会停止当前模型。",
   });
-  appendLog(job, `Stopping existing ${CONFIG.containerName}, if present`);
-  await snapshotCurrentStats("before-start").catch(() => {});
-  await removeManagedContainer("replace").catch((error) => {
-    if (error.code === "CONTAINER_OWNED_BY_OTHER_MANAGER") throw error;
-  });
-  setJobProgress(job, {
-    percent: 18,
-    stage: "准备 Docker 参数",
-    detail: "旧容器已处理，正在生成 vLLM 启动命令。",
-  });
-
-  // 旧容器已移除，此时端口若仍被占用，说明是别的进程/容器，docker run 会失败得很隐晦
-  const portStatus = await checkPortAvailability(opts.port).catch(() => null);
+  const targetContainerName = opts.containerName || CONFIG.containerName;
+  const portStatus = await checkPortAvailability(opts.port, targetContainerName).catch(() => null);
   if (portStatus && !portStatus.available && !portStatus.isOwnContainer) {
     appendLog(job, `Port check failed: ${portStatus.detail}`);
     setJobProgress(job, {
@@ -3054,60 +3715,130 @@ async function runStartJob(job, opts) {
     throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
   }
 
-  let { runArgs, activePublishArgs } = buildVllmRuntimeCommand(job, opts);
-
-  setJobProgress(job, {
-    percent: 32,
-    stage: "启动 Docker 容器",
-    detail: "Docker run 已开始；如果镜像不存在，这一步会等待拉取镜像。",
-  });
-  appendLog(job, `> docker ${redactDockerArgs(runArgs, opts).join(" ")}`);
-  let launched;
-  try {
-    launched = await docker(runArgs);
-  } catch (error) {
-    if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
-      throw error;
-    }
-    activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
-    const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
-    appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
-    appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
-    appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
-    launched = await docker(retryArgs);
+  let { runArgs, activePublishArgs, runtimeImage } = buildVllmRuntimeCommand(job, runtimeOpts);
+  const imageStatus = await getImageStatus(runtimeImage);
+  if (!imageStatus.ok) {
+    appendLog(job, `Runtime image preflight: ${imageStatus.text || runtimeImage}. Pulling before current model is stopped.`);
+    const pulled = await pullImageWithRetry(runtimeImage, {
+      attempts: Math.max(1, Number(process.env.VLLM_IMAGE_PULL_RETRIES || 3)),
+      initialDelayMs: Math.max(0, Number(process.env.VLLM_IMAGE_PULL_RETRY_DELAY_MS || 3000)),
+      onAttempt: ({ attempt, attempts }) => appendLog(job, `Docker image pull attempt ${attempt}/${attempts}: ${runtimeImage}`),
+      onFailure: ({ attempt, attempts, detail }) => appendLog(job, `Docker image pull ${attempt}/${attempts} failed: ${detail}`),
+    });
+    appendLog(job, pulled.stdout || pulled.stderr);
   }
-  appendLog(job, launched.stdout || launched.stderr);
+  assertStartJobActive(job);
 
+  await snapshotCurrentStats("before-start").catch(() => {});
   setJobProgress(job, {
-    percent: 45,
-    stage: "等待模型加载",
-    detail: "容器已创建，正在等待 vLLM API 返回 /v1/models。",
+    percent: 18,
+    stage: "创建可回滚切换点",
+    detail: `正在保留 ${targetContainerName} 的完整容器配置，若新实例失败会自动恢复。`,
   });
-  // 硬上限默认 60 分钟（容器内现拉权重的大模型可能很慢）；
-  // 真正的失败判定靠「日志停滞」：日志持续无变化才认为卡死。
-  const startTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000));
-  const stallTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_STALL_TIMEOUT_MS || 10 * 60 * 1000));
-  return core.waitForRuntimeReady({
-    job,
-    port: opts.port,
-    apiKey: opts.vllmApiKey,
-    serviceUrl: opts.serviceUrl,
-    engineName: "vLLM",
-    apiLabel: "vLLM API",
-    containerName: CONFIG.containerName,
-    startupTimeoutMs: startTimeoutMs,
-    stallTimeoutMs,
-    fetchServedModels: () => getServedModels(opts.port, opts.vllmApiKey),
-    getContainerStatus,
+  const replacement = await core.beginContainerReplacement({
     docker,
-    extractLogIssues,
-    setJobProgress,
-    appendLog,
-    finishJob,
-    delayFn: delay,
-    noLogIssue: "vLLM 启动日志长时间无变化。",
-    pollDetail: ({ elapsed, formatElapsed }) => `已等待 ${formatElapsed(elapsed)}。正在轮询 vLLM API，并读取容器日志检查错误。`,
+    containerName: targetContainerName,
+    managerId: CONFIG.managerId,
+    ownerLabelKey: MANAGER_LABEL_KEY,
+    onEvent: (event) => {
+      if (event.type === "backup-ready") appendLog(job, `Rollback checkpoint ready: ${event.backupName}`);
+    },
   });
+
+  try {
+    setJobProgress(job, {
+      percent: 32,
+      stage: "启动 Docker 容器",
+      detail: "Docker run 已开始；旧模型容器已保留为回滚点。",
+    });
+    const redactedLaunchCommand = `docker ${redactDockerArgs(runArgs, opts).join(" ")}`;
+    job.meta = {
+      ...(job.meta || {}),
+      launchCommand: redactedLaunchCommand,
+      runtimeLaunchStarted: true,
+      runtimeContainerCreated: false,
+    };
+    scheduleJobsSave(0);
+    appendLog(job, `> ${redactedLaunchCommand}`);
+    assertStartJobActive(job);
+    let launched;
+    try {
+      launched = await docker(runArgs);
+    } catch (error) {
+      if (isContainerNameConflictError(error)) {
+        appendLog(job, `容器名冲突，清理本次残留容器后重试：${error.stderr || error.message}`);
+        await core.removeContainerIfPresent(docker, targetContainerName);
+        launched = await docker(runArgs);
+      } else if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
+        throw error;
+      } else {
+        activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
+        const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
+        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
+        appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
+        appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
+        launched = await docker(retryArgs);
+      }
+    }
+    job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
+    scheduleJobsSave(0);
+    assertStartJobActive(job);
+    appendLog(job, launched.stdout || launched.stderr);
+
+    setJobProgress(job, {
+      percent: 45,
+      stage: "等待模型加载",
+      detail: "容器已创建，正在等待 vLLM API 返回 /v1/models。",
+    });
+    const startTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000));
+    const stallTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_STALL_TIMEOUT_MS || 10 * 60 * 1000));
+    const result = await core.waitForRuntimeReady({
+      job,
+      port: opts.port,
+      apiKey: opts.vllmApiKey,
+      serviceUrl: opts.serviceUrl,
+      engineName: "vLLM",
+      apiLabel: "vLLM API",
+      containerName: targetContainerName,
+      startupTimeoutMs: startTimeoutMs,
+      stallTimeoutMs,
+      fetchServedModels: () => getServedModels(opts.port, opts.vllmApiKey),
+      getContainerStatus,
+      docker,
+      extractLogIssues,
+      setJobProgress,
+      appendLog,
+      finishJob,
+      delayFn: delay,
+      probeRuntime: ({ servedModels }) => core.probeOpenAiGeneration({
+        fetchImpl: fetch,
+        servedModels,
+        port: opts.port,
+        apiKey: opts.vllmApiKey,
+        timeoutMs: Math.max(30000, Number(process.env.VLLM_READY_PROBE_REQUEST_TIMEOUT_MS || 180000)),
+        maxTokens: 32,
+      }),
+      readyProbeTimeoutMs: Math.max(60000, Number(process.env.VLLM_READY_PROBE_TIMEOUT_MS || 5 * 60 * 1000)),
+      noLogIssue: "vLLM 启动日志长时间无变化。",
+      pollDetail: ({ elapsed, formatElapsed }) => `已等待 ${formatElapsed(elapsed)}。正在轮询 vLLM API，并读取容器日志检查错误。`,
+    });
+    await replacement.commit().catch((error) => appendLog(job, `新模型已就绪，但清理回滚快照失败：${error.message}`));
+    clearGatewayRuntimeCache();
+    clearRuntimeInstancesCache();
+    return result;
+  } catch (error) {
+    const rollback = await replacement.rollback(error).catch((rollbackError) => ({ rollbackError }));
+    if (rollback?.restoredPrevious) appendLog(job, `新模型启动失败，已恢复原容器 ${targetContainerName}。`);
+    else if (rollback?.rollbackError) appendLog(job, `自动回滚失败：${rollback.rollbackError.message}`);
+    throw error;
+  }
+}
+
+function assertStartJobActive(job) {
+  if (job?.status === "running" && !job?.meta?.cancelRequested) return;
+  const error = new Error("启动任务已被取消，停止后续容器操作。");
+  error.code = "START_CANCELLED";
+  throw error;
 }
 
 function delay(ms) {
@@ -3150,6 +3881,15 @@ module.exports = {
   buildEffectiveServiceSettings: core.buildEffectiveServiceSettings,
   extractHostname,
   streamOpenAiAsClaude,
+  applyVllmRequestDefaults,
   normalizeModelConfig,
+  summarizeModelConfigCapabilities,
+  getModelConfigRequest,
   buildVllmMemoryEstimate,
+  checkModelCompatibility,
+  resolveVllmRuntimePreset,
+  isDiffusionGemmaModel,
+  isQwen36MoeNvfp4Model,
+  isQwen36DenseNvfp4Model,
+  diffusionGemmaWindowsBlockReason,
 };

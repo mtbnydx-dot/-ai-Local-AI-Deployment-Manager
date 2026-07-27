@@ -53,9 +53,17 @@
         <em>${escapeHtml(metric.label)}</em><b>${escapeHtml(metric.value)}</b>
       </span>
     `).join("");
+    const accessibleName = [
+      item.label || item.model,
+      item.sourceLabel,
+      fit?.label,
+      item.disabledReason,
+    ].filter(Boolean).join(" / ");
 
     return `
-      <button class="model-picker-item" type="button"
+      <button class="model-picker-item" type="button" ${item.disabled ? "disabled" : ""}
+        title="${escapeAttr(item.disabledReason || "")}"
+        aria-label="${escapeAttr(accessibleName)}"
         data-picker-model="${escapeAttr(item.model)}"
         data-picker-name="${escapeAttr(item.label || item.model)}"
         data-picker-format="${escapeAttr(item.format || "auto")}"
@@ -84,9 +92,16 @@
     const list = getElement(options, options.listSelector || "#modelPickerList");
     if (!popover || !list) return [];
 
+    ensureDialogStructure(popover, options);
+
     popover.classList.toggle("hidden", !state.modelPickerOpen);
-    getElement(options, options.toggleSelector || "#modelPickerToggle")
-      ?.setAttribute("aria-expanded", state.modelPickerOpen ? "true" : "false");
+    const toggle = getElement(options, options.toggleSelector || "#modelPickerToggle");
+    toggle?.setAttribute("aria-expanded", state.modelPickerOpen ? "true" : "false");
+    const backdrop = document.querySelector(".model-picker-backdrop");
+    backdrop?.classList.toggle("hidden", !state.modelPickerOpen);
+    document.body.classList.toggle("model-picker-open", Boolean(state.modelPickerOpen));
+    if (!state.modelPickerOpen && popover.dataset.wasOpen === "true") toggle?.focus({ preventScroll: true });
+    popover.dataset.wasOpen = state.modelPickerOpen ? "true" : "false";
 
     if (typeof options.renderRunnableFilterToggles === "function") {
       options.renderRunnableFilterToggles();
@@ -122,6 +137,56 @@
     list.innerHTML = visibleItems.map((item) => renderItem(item, options)).join("") + footer;
     if (typeof options.renderIcons === "function") options.renderIcons();
     return items;
+  }
+
+  function ensureDialogStructure(popover, options) {
+    const dialogId = popover.id || "modelPickerPopover";
+    const titleId = `${dialogId}Title`;
+    popover.setAttribute("role", "dialog");
+    popover.setAttribute("aria-modal", "true");
+    popover.setAttribute("aria-labelledby", titleId);
+    if (!popover.querySelector(".model-picker-dialog-head")) {
+      const head = document.createElement("div");
+      head.className = "model-picker-dialog-head";
+      head.innerHTML = `
+        <div><strong id="${titleId}">${defaultEscape(options.dialogTitle || "选择模型")}</strong><span>${defaultEscape(options.dialogDescription || "按来源、格式和可用资源筛选启动模型。")}</span></div>
+        <button class="icon-button model-picker-close" type="button" aria-label="关闭模型选择器" title="关闭"><span aria-hidden="true">×</span></button>
+      `;
+      popover.prepend(head);
+      head.querySelector(".model-picker-close")?.addEventListener("click", () => options.onClose?.());
+    }
+    let backdrop = document.querySelector(".model-picker-backdrop");
+    if (!backdrop) {
+      backdrop = document.createElement("div");
+      backdrop.className = "model-picker-backdrop hidden";
+      backdrop.setAttribute("aria-hidden", "true");
+      document.body.appendChild(backdrop);
+      backdrop.addEventListener("click", () => backdrop.__onClose?.());
+    }
+    backdrop.__onClose = options.onClose;
+    if (!popover.__dialogKeyboardBound) {
+      popover.__dialogKeyboardBound = true;
+      document.addEventListener("keydown", (event) => {
+        if (popover.classList.contains("hidden")) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          options.onClose?.();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const focusable = Array.from(popover.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      });
+    }
   }
 
   window.modelPickerRenderer = {

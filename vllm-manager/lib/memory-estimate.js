@@ -49,6 +49,9 @@ function buildVllmMemoryEstimate(input = {}) {
   const mode = String(input.multiGpuMode || input.mode || "single").toLowerCase();
   const normalizedMode = mode === "none" ? "single" : mode;
   const arch = normalizeMemoryEstimateArch(input.arch || input.modelConfig || input.config);
+  const speculativeMode = String(input.speculativeMode || "off").toLowerCase();
+  const speculativeTokens = Math.min(8, Math.max(1, Math.floor(memoryEstimateNumber(input.numSpeculativeTokens, 1))));
+  const speculativeReserveGb = speculativeMode === "off" ? 0 : Math.min(6, 0.75 + speculativeTokens * 0.5);
   const plan = core.estimateVllmMemoryPlan({
     paramsB: memoryEstimateNumber(input.paramsB, 0),
     contextTokens: Math.max(1, memoryEstimateNumber(input.contextTokens ?? input.maxModelLen, 8192)),
@@ -62,8 +65,9 @@ function buildVllmMemoryEstimate(input = {}) {
     pipelineParallelSize: Math.max(1, Math.floor(memoryEstimateNumber(input.pipelineParallelSize ?? input.ppSize, normalizedMode === "pipeline" ? selectedGpus.length || 1 : 1))),
     cpuOffloadGb: Math.max(0, memoryEstimateNumber(input.cpuOffloadGb, 0)),
     kvOffloadGb: Math.max(0, memoryEstimateNumber(input.kvOffloadGb ?? input.kvOffloadingSize, 0)),
-    multimodalReserveGb: Math.max(0, memoryEstimateNumber(input.multimodalReserveGb, input.arch?.isMultimodal ? 2 : 0)),
+    multimodalReserveGb: Math.max(0, memoryEstimateNumber(input.multimodalReserveGb, input.arch?.isMultimodal ? 2 : 0)) + speculativeReserveGb,
   });
+  plan.speculativeReserveGb = speculativeReserveGb;
   const suggestions = [];
   if (!plan.selectedGpus.length) {
     suggestions.push("没有传入 GPU 显存数据，只能给出模型本身的理论占用。");
@@ -82,6 +86,9 @@ function buildVllmMemoryEstimate(input = {}) {
   }
   if (plan.recommendedKvOffloadGb > plan.kvOffloadTotalGb) {
     suggestions.push(`权重已难以下放时，可尝试 KV offload 总量 ${plan.recommendedKvOffloadGb.toFixed(1)} GiB。`);
+  }
+  if (speculativeReserveGb > 0) {
+    suggestions.push(`已为 ${speculativeMode} 推测解码额外预留约 ${speculativeReserveGb.toFixed(1)} GiB；最终是否提速应以接受率和输出吞吐为准。`);
   }
   return {
     ok: true,

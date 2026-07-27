@@ -39,7 +39,8 @@ This is a local model service control panel for high-end personal workstations a
 ├─ tests/                  # 跨管理器前端烟测
 ├─ model-capability-tests/ # 长任务能力测试提示词
 ├─ vllm/                   # 轻量 vLLM helper 脚本
-├─ docs/                   # 使用手册和设计/审计文档
+├─ deploy/public/          # 公网 TLS / OpenWebUI 可选模板
+├─ docs/                   # 使用手册与客户端连接指南
 ├─ package.json            # 根目录测试依赖，主要用于 Playwright smoke test
 ├─ playwright.config.cjs   # 浏览器烟测配置
 ├─ install-all.cmd         # 安装 Node 依赖
@@ -66,6 +67,8 @@ install-all.cmd
 test-all.cmd
 start-service-entry.cmd
 ```
+
+模型、缓存和运行数据默认保存在发布目录内。需要放到其它磁盘时，请在启动前设置 `AI_ROOT`；也可以分别用 `VLLM_MODELS_ROOT`、`LLAMA_MODELS_ROOT` 和 `HF_HOME` 覆盖模型或缓存目录。
 
 浏览器打开：
 
@@ -131,6 +134,8 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 test-all.cmd
 ```
 
+公网 TLS / OpenWebUI 部署模板位于 `deploy/public/`；本次平台审计与整改记录见 `docs/platform-audit-remediation-2026-07-10.md`。
+
 当前测试覆盖：
 
 - 统一网关路由。
@@ -154,33 +159,15 @@ set PLAYWRIGHT_BROWSER_CHANNEL=msedge
 npm run test:frontend-smoke
 ```
 
-### 发布同步
+### 构建 GitHub 发布包
 
-开发目录里的成品同步到 `github-release`：
+在项目根目录运行：
 
-```cmd
-powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ```
 
-同步脚本会复制源码和文档，并主动移除发布目录里的运行时残留，例如 `node_modules`、`logs`、`models`、`cache`、数据库和密钥文件。
-
-发布到 GitHub 前请使用 `git add -A`，因为项目拆分后经常会新增 `manager-core/*`、`*/lib/*`、`public/js/*` 和测试文件；只用 `git commit -am` 会漏掉新文件。
-
-```cmd
-powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
-cd github-release
-git status -sb
-git add -A
-git commit -m "Update local model service platform"
-git push origin main
-```
-
-建议每次发布前在 `github-release` 目录再跑一遍：
-
-```cmd
-install-all.cmd
-test-all.cmd
-```
+脚本会在 `artifacts/github-release/` 生成带版本号的 ZIP，并只收录发布所需源码、用户文档和示例配置。`node_modules`、日志、模型、缓存、数据库、PID、`.env`、本机代理配置、内部审计文档和测试产物均会排除；打包结束前还会检查本机用户名、用户目录、计算机名和常见密钥格式。
 
 ---
 
@@ -217,7 +204,8 @@ test-all.cmd
 ├─ tests/                  # Cross-manager frontend smoke tests
 ├─ model-capability-tests/ # Long-running model capability prompts
 ├─ vllm/                   # Lightweight vLLM helper scripts
-├─ docs/                   # Runbooks, design notes, and audit documents
+├─ deploy/public/          # Optional public TLS / OpenWebUI templates
+├─ docs/                   # Runbooks and client setup guides
 ├─ package.json            # Root test dependencies, mainly Playwright smoke tests
 ├─ playwright.config.cjs   # Browser smoke-test configuration
 ├─ install-all.cmd         # Install Node dependencies
@@ -244,6 +232,8 @@ install-all.cmd
 test-all.cmd
 start-service-entry.cmd
 ```
+
+Models, caches, and runtime data are stored inside the release directory by default. Set `AI_ROOT` before startup to use another drive, or override `VLLM_MODELS_ROOT`, `LLAMA_MODELS_ROOT`, and `HF_HOME` individually.
 
 Open:
 
@@ -324,30 +314,12 @@ set PLAYWRIGHT_BROWSER_CHANNEL=msedge
 npm run test:frontend-smoke
 ```
 
-### Release Sync
+### Build A GitHub Release Archive
 
-To sync the working project into `github-release`:
+Run from the project root:
 
-```cmd
-powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ```
 
-The sync script copies source files and docs, then removes runtime leftovers such as `node_modules`, `logs`, `models`, `cache`, databases, and secret files from the release mirror.
-
-Before pushing to GitHub, always stage with `git add -A`. The project now has many split modules and generated release-safe source files; `git commit -am` does not add new files.
-
-```cmd
-powershell -ExecutionPolicy Bypass -File github-release\sync-from-workspace.ps1
-cd github-release
-git status -sb
-git add -A
-git commit -m "Update local model service platform"
-git push origin main
-```
-
-Recommended release check:
-
-```cmd
-install-all.cmd
-test-all.cmd
-```
+The script creates a versioned ZIP under `artifacts/github-release/` containing only release source, user documentation, and example configuration. It excludes dependencies, logs, models, caches, databases, PIDs, `.env`, machine-local proxy data, internal audit notes, and test artifacts. Before completing, it also checks for the current username, user profile, computer name, and common credential formats.

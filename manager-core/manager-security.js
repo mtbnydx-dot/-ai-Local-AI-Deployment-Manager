@@ -29,6 +29,12 @@ function createManagerSecurityGuard(options = {}) {
   const hostExtractor = options.extractHostname || extractHostname;
   const gatewayKind = options.getServiceGatewayKind || getServiceGatewayKind;
   const gatewayKinds = options.gatewayKinds || ["openai", "claude"];
+  const configuredGatewayHostnames = Array.isArray(options.gatewayHostnames)
+    ? options.gatewayHostnames
+    : String(options.gatewayHostnames || "host.docker.internal").split(",");
+  const gatewayHostnames = new Set(configuredGatewayHostnames
+    .map((value) => hostExtractor(String(value || "").trim()))
+    .filter(Boolean));
   const allowRemoteManagement = Boolean(options.allowRemoteManagement);
   const blockRemoteReads = Boolean(options.blockRemoteReads);
   const remoteManagementError = options.remoteManagementError
@@ -37,11 +43,13 @@ function createManagerSecurityGuard(options = {}) {
 
   function managerSecurityGuard(req, res, next) {
     const hostname = hostExtractor(req.headers?.host);
-    if (!hostname || !allowedRequestHostnames().has(hostname)) {
+    const requestGatewayKind = gatewayKind(req, gatewayKinds);
+    const allowedGatewayHost = Boolean(requestGatewayKind && gatewayHostnames.has(hostname));
+    if (!hostname || (!allowedRequestHostnames().has(hostname) && !allowedGatewayHost)) {
       return res.status(403).json({ error: `请求的 Host 不在白名单内：${hostname || "(空)"}` });
     }
     const isLocal = localRequest(req);
-    if (!isLocal && gatewayKind(req, gatewayKinds)) return next();
+    if (!isLocal && requestGatewayKind) return next();
     const mutating = !["GET", "HEAD", "OPTIONS"].includes(String(req.method || "GET").toUpperCase());
     if (!isLocal && !allowRemoteManagement && (blockRemoteReads || mutating)) {
       return res.status(403).json({ error: remoteManagementError });

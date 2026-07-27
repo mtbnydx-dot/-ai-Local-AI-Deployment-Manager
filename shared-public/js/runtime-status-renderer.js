@@ -99,15 +99,16 @@
       const model = (state.status?.runningModels || [])[0] || {};
       const capacity = model.contextCapacityTokens || model.maxModelLen || 0;
       const used = model.contextUsedTokens || model.contextUsed || 0;
+      const requestLimit = model.maxModelLen || 0;
       const contextPct = capacity ? (used / capacity) * 100 : 0;
       $("#contextStatus").textContent = capacity
-        ? `${fmtTokens(used)} / ${fmtTokens(capacity)} · ${contextPct.toFixed(1)}%`
+        ? `${fmtTokens(used)} / ${fmtTokens(capacity)} KV${requestLimit ? ` · 单请求 ${fmtTokens(requestLimit)}` : ""}`
         : state.status?.container?.running ? "等待指标" : "-";
       applyMetricState("contextStatus", capacity ? metricStateFromPct(contextPct, copy.contextWarnPct, copy.contextFailPct) : "warn");
 
       const speed = getLiveTokensPerSecond();
       $("#speedStatus").textContent = speed ? `${speed.toFixed(1)} tok/s` : "-";
-      applyMetricState("speedStatus", speed ? "ok" : "warn");
+      applyMetricState("speedStatus", speed ? "ok" : "neutral");
 
       const automation = state.automationSettings || {};
       const idleEnabled = Boolean(automation.idleUnload?.enabled || automation.idleUnloadEnabled);
@@ -115,7 +116,7 @@
       $("#idleStatus").textContent = idleEnabled || vramEnabled
         ? `${idleEnabled ? "空闲卸载" : ""}${idleEnabled && vramEnabled ? " · " : ""}${vramEnabled ? "显存保护" : ""}`
         : "未开启";
-      applyMetricState("idleStatus", idleEnabled || vramEnabled ? "ok" : "warn");
+      applyMetricState("idleStatus", idleEnabled || vramEnabled ? "ok" : "neutral");
     }
 
     function renderRunningModels() {

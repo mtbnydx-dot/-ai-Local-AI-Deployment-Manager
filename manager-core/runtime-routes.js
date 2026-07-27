@@ -32,6 +32,8 @@ function registerRuntimeRoutes(app, deps = {}) {
     unloadRunningModel,
     readRuntimeLogs,
     testRuntimeCompletion,
+    listRuntimeInstances,
+    stopRuntimeInstance,
   } = deps;
 
   if (typeof startRuntime === "function") {
@@ -90,6 +92,26 @@ function registerRuntimeRoutes(app, deps = {}) {
       try {
         const result = normalizeProxyResult(await testRuntimeCompletion({ req, body: req.body || {} }));
         res.status(result.status).type(result.type).send(result.body);
+      } catch (error) {
+        sendJsonError(res, error);
+      }
+    });
+  }
+
+  if (typeof listRuntimeInstances === "function") {
+    app.get("/api/instances", async (req, res) => {
+      try {
+        res.json(await listRuntimeInstances({ req, query: req.query || {} }));
+      } catch (error) {
+        sendJsonError(res, error);
+      }
+    });
+  }
+
+  if (typeof stopRuntimeInstance === "function") {
+    app.post("/api/instances/:id/stop", async (req, res) => {
+      try {
+        res.json(await stopRuntimeInstance({ req, id: req.params.id, body: req.body || {} }));
       } catch (error) {
         sendJsonError(res, error);
       }

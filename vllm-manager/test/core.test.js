@@ -187,6 +187,7 @@ test("service exposure settings normalize and redact secrets", () => {
     apiKey: "sk-local-secret",
     publicBaseUrl: "https://models.example.test/base/",
     allowedOrigins: "https://a.example\nhttps://b.example",
+    allowedHeaders: "User-Agent\nX-Client-Version\ninvalid header",
     rateLimitRpm: 99999,
     maxConcurrentRequests: 0,
     requestTimeoutSeconds: 3,
@@ -194,7 +195,9 @@ test("service exposure settings normalize and redact secrets", () => {
 
   assert.equal(settings.exposureMode, "reverse-proxy");
   assert.equal(settings.publicBaseUrl, "https://models.example.test/base");
+  assert.equal(settings.corsMode, "restricted");
   assert.deepEqual(settings.allowedOrigins, ["https://a.example", "https://b.example"]);
+  assert.deepEqual(settings.allowedHeaders, ["user-agent", "x-client-version"]);
   assert.equal(settings.rateLimitRpm, 5000);
   assert.equal(settings.maxConcurrentRequests, 1);
   assert.equal(settings.requestTimeoutSeconds, 10);
@@ -245,6 +248,9 @@ test("service gateway auth, rate limit, concurrency, and model aliasing", () => 
   assert.equal(manager.enterServiceConcurrency(settings, "client", concurrencyBuckets).ok, true);
 
   assert.equal(manager.resolveOpenAiGatewayModel("local-current", {
+    servedModels: [{ id: "Qwen/Qwen3-27B" }],
+  }), "Qwen/Qwen3-27B");
+  assert.equal(manager.resolveOpenAiGatewayModel("qwen3.6 35b", {
     servedModels: [{ id: "Qwen/Qwen3-27B" }],
   }), "Qwen/Qwen3-27B");
 });
@@ -351,6 +357,50 @@ test("normalizeModelConfig extracts dims, native context, and nested text_config
   assert.equal(vision.isMultimodal, true);
 });
 
+test("model config capability summary keeps automatic MTP off for Qwen ModelOpt NVFP4", () => {
+  const summary = manager.summarizeModelConfigCapabilities({
+    architectures: ["Qwen3_5MoeForConditionalGeneration"],
+    model_type: "qwen3_5_moe",
+    text_config: { model_type: "qwen3_5_moe_text", mtp_num_hidden_layers: 1 },
+    quantization_config: { quant_method: "modelopt" },
+  }, "nv-community/Qwen3.6-35B-A3B-NVFP4");
+
+  assert.equal(summary.speculative.nativeMtp, true);
+  assert.equal(summary.speculative.enabled, false);
+  assert.equal(summary.speculative.mode, "off");
+  assert.match(summary.speculative.reason, /MTP/i);
+});
+
+test("local model config request accepts the frontend local source", async () => {
+  const result = await manager.getModelConfigRequest({ model: "D:/AI/models/not-present-for-test", source: "local" });
+  assert.equal(result.found, false);
+  assert.equal(result.source, "local");
+  assert.match(result.reason, /本地模型目录|Hugging Face/);
+});
+
+test("Qwen request defaults fill safe sampling values without overriding the client", () => {
+  assert.deepEqual(manager.applyVllmRequestDefaults({ model: "Qwen3.6-35B" }), {
+    model: "Qwen3.6-35B",
+    temperature: 1,
+    top_p: 0.95,
+    top_k: 20,
+  });
+  assert.deepEqual(manager.applyVllmRequestDefaults({
+    model: "Qwen3.6-35B",
+    temperature: 0,
+    top_p: 0.8,
+    top_k: 7,
+    chat_template_kwargs: { enable_thinking: false },
+  }), {
+    model: "Qwen3.6-35B",
+    temperature: 0,
+    top_p: 0.8,
+    top_k: 7,
+    chat_template_kwargs: { enable_thinking: false },
+  });
+  assert.deepEqual(manager.applyVllmRequestDefaults({ model: "Llama-3" }), { model: "Llama-3" });
+});
+
 test("memory estimate helper uses shared vLLM semantics for DP and TP", () => {
   const base = {
     paramsB: 27,
@@ -372,6 +422,106 @@ test("memory estimate helper uses shared vLLM semantics for DP and TP", () => {
   assert.equal(tensorParallel.plan.memorySplitFactor, 2);
   assert.ok(dataParallel.plan.perGpuGb > tensorParallel.plan.perGpuGb);
   assert.match(dataParallel.recommendations.suggestions.join(" "), /Data Parallel/);
+});
+
+test("Qwen3.6 MoE NVFP4 uses the nightly runtime preset", () => {
+  const qwenMoeConfig = {
+    architectures: ["Qwen3_5MoeForConditionalGeneration"],
+    model_type: "qwen3_5_moe",
+    quantization_config: {
+      quant_method: "modelopt",
+      quant_algo: "MIXED_PRECISION",
+      kv: { quant_algo: "W4A16_NVFP4" },
+    },
+  };
+
+  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/nv-community-Qwen3.6-35B-A3B-NVFP4", qwenMoeConfig), true);
+  const qwenDenseConfig = {
+    architectures: ["Qwen3_5ForConditionalGeneration"],
+    model_type: "qwen3_5",
+    quantization_config: {
+      quant_method: "modelopt",
+      quant_algo: "MIXED_PRECISION",
+      lm_head: { quant_algo: "W4A16_NVFP4" },
+    },
+  };
+  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/nv-community-Qwen3.6-27B-NVFP4", qwenDenseConfig), false);
+  assert.equal(manager.isQwen36DenseNvfp4Model("D:/AI/models/nv-community-Qwen3.6-27B-NVFP4", qwenDenseConfig), true);
+  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/unsloth-Qwen3.6-27B-NVFP4", {
+    architectures: ["Qwen3_5ForConditionalGeneration"],
+    quantization_config: { quant_method: "compressed-tensors" },
+  }), false);
+  assert.equal(manager.isQwen36DenseNvfp4Model("D:/AI/models/unsloth-Qwen3.6-27B-NVFP4", {
+    architectures: ["Qwen3_5ForConditionalGeneration"],
+    quantization_config: { quant_method: "compressed-tensors" },
+  }), false);
+  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/Qwen-Qwen3.6-27B-FP8", {
+    architectures: ["Qwen3_5ForConditionalGeneration"],
+    model_type: "qwen3_5",
+    quantization_config: { quant_method: "fp8" },
+  }), false);
+  assert.equal(manager.isQwen36DenseNvfp4Model("D:/AI/models/Qwen-Qwen3.6-27B-FP8", {
+    architectures: ["Qwen3_5ForConditionalGeneration"],
+    model_type: "qwen3_5",
+    quantization_config: { quant_method: "fp8" },
+  }), false);
+
+  const preset = manager.resolveVllmRuntimePreset({
+    model: "nvidia/Qwen3.6-35B-A3B-NVFP4",
+    kvCacheDtype: "auto",
+    hostGpus: [{ id: "0", name: "NVIDIA RTX PRO 5000 Blackwell", computeCap: "12.0" }],
+  }, {});
+
+  assert.equal(preset.id, "qwen3.6-moe-nvfp4");
+  assert.equal(preset.image, manager.CONFIG.qwenMoeImage);
+  assert.equal(preset.forceTrustRemoteCode, true);
+  assert.equal(preset.attentionBackend, "flashinfer");
+  assert.equal(preset.moeBackend, "flashinfer_b12x");
+  assert.equal(preset.dtype, "bfloat16");
+  assert.equal(preset.generationConfig, "vllm");
+  assert.equal(preset.kvCacheDtype, "fp8");
+  assert.equal(preset.disableQuantizationArg, undefined);
+  assert.equal(preset.disableKvCacheDtypeArg, undefined);
+  assert.equal(preset.defaultChatTemplateKwargs, undefined);
+  assert.equal(preset.toolCallParser, "qwen3_xml");
+  assert.equal(preset.maxNumBatchedTokens, 8192);
+
+  const nonSm12Preset = manager.resolveVllmRuntimePreset({
+    model: "nvidia/Qwen3.6-35B-A3B-NVFP4",
+    kvCacheDtype: "auto",
+    hostGpus: [{ id: "0", name: "NVIDIA RTX 4090", computeCap: "8.9" }],
+  }, {});
+
+  assert.equal(nonSm12Preset.moeBackend, "marlin");
+  assert.equal(nonSm12Preset.dtype, undefined);
+
+  const densePreset = manager.resolveVllmRuntimePreset({
+    model: "nvidia/Qwen3.6-27B-NVFP4",
+    kvCacheDtype: "auto",
+  }, {});
+
+  assert.equal(densePreset.id, "qwen3.6-dense-nvfp4");
+  assert.equal(densePreset.attentionBackend, "TRITON_ATTN");
+  assert.equal(densePreset.disableQuantizationArg, true);
+  assert.equal(densePreset.disableKvCacheDtypeArg, true);
+  assert.equal(densePreset.defaultChatTemplateKwargs, undefined);
+  assert.equal(densePreset.toolCallParser, "qwen3_xml");
+  assert.equal(densePreset.maxNumBatchedTokens, 8192);
+});
+
+test("DiffusionGemma is blocked by default on Windows Docker WSL", () => {
+  const diffusionConfig = {
+    architectures: ["DiffusionGemmaForBlockDiffusion"],
+    model_type: "diffusion_gemma",
+  };
+
+  assert.equal(manager.isDiffusionGemmaModel("D:/AI/models/nv-community-diffusiongemma-26B-A4B-it-NVFP4", diffusionConfig), true);
+  assert.equal(manager.resolveVllmRuntimePreset({
+    model: "D:/AI/models/nv-community-diffusiongemma-26B-A4B-it-NVFP4",
+  }, { localPath: "" }).id, "diffusion-gemma");
+  assert.match(manager.diffusionGemmaWindowsBlockReason("win32", {}), /UVA.*device-side assert/);
+  assert.equal(manager.diffusionGemmaWindowsBlockReason("win32", { VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA: "1" }), "");
+  assert.equal(manager.diffusionGemmaWindowsBlockReason("linux", {}), "");
 });
 
 test("streamOpenAiAsClaude reports upstream failures as SSE error events", async () => {
