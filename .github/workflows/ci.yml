@@ -104,6 +104,9 @@ jobs:
           trap 'bash "${{ matrix.launcher }}" stop || true' EXIT
           bash "${{ matrix.launcher }}" start local
           owned_pid="$(cat service-entry/.subscription-proxy-runtime/cliproxy.pid)"
+          CLIPROXY_BASE_URL=http://127.0.0.1:18319 SERVICE_ENTRY_PORT=15178 \
+            bash "${{ matrix.launcher }}" stop
+          kill -0 "$owned_pid"
           bash "${{ matrix.launcher }}" stop
           for _ in 1 2 3 4 5 6 7 8; do
             kill -0 "$owned_pid" 2>/dev/null || break

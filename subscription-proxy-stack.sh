@@ -19,6 +19,7 @@ NODE_EXE="${NODE_EXE:-}"
 PROXY_PID_FILE="$RUNTIME_DIR/cliproxy.pid"
 PROXY_START_FILE="$RUNTIME_DIR/cliproxy.start"
 PROXY_EXE_FILE="$RUNTIME_DIR/cliproxy.executable"
+PROXY_URL_FILE="$RUNTIME_DIR/cliproxy.url"
 ENTRY_PID_FILE="$RUNTIME_DIR/service-entry.pid"
 ENTRY_START_FILE="$RUNTIME_DIR/service-entry.start"
 PROXY_LOG="$LOG_DIR/subscription-proxy.log"
@@ -257,6 +258,16 @@ wait_for_proxy() {
   return 1
 }
 
+wait_for_existing_proxy() {
+  local count=0
+  while (( count < 8 )); do
+    proxy_is_ready && return 0
+    sleep 0.25
+    count=$((count + 1))
+  done
+  return 1
+}
+
 wait_for_entry_mode() {
   local expected="$1"
   local count=0
@@ -349,6 +360,10 @@ start_proxy() {
     printf 'CLIProxyAPI is already reachable at %s; reusing it without taking ownership.\n' "$PROXY_BASE_URL"
     return 0
   fi
+  if wait_for_existing_proxy; then
+    printf 'CLIProxyAPI became reachable at %s; reusing it without taking ownership.\n' "$PROXY_BASE_URL"
+    return 0
+  fi
 
   is_loopback_host "$PROXY_HOST" ||
     die "Configured remote CLIProxyAPI is unreachable: $PROXY_BASE_URL"
@@ -395,6 +410,7 @@ start_proxy() {
   printf '%s\n' "$proxy_pid" >"$PROXY_PID_FILE"
   printf '%s\n' "$proxy_start" >"$PROXY_START_FILE"
   printf '%s\n' "$proxy_executable" >"$PROXY_EXE_FILE"
+  printf '%s\n' "$PROXY_BASE_URL" >"$PROXY_URL_FILE"
   printf 'Started CLIProxyAPI PID %s at %s.\n' "$proxy_pid" "$PROXY_BASE_URL"
 }
 
@@ -447,7 +463,7 @@ start_entry() {
 }
 
 clear_proxy_record() {
-  rm -f "$PROXY_PID_FILE" "$PROXY_START_FILE" "$PROXY_EXE_FILE"
+  rm -f "$PROXY_PID_FILE" "$PROXY_START_FILE" "$PROXY_EXE_FILE" "$PROXY_URL_FILE"
 }
 
 clear_entry_record() {
@@ -458,8 +474,9 @@ stop_owned_proxy() {
   local pid
   local expected_start
   local expected_executable
+  local expected_url
 
-  if [[ ! -f "$PROXY_PID_FILE" || ! -f "$PROXY_START_FILE" || ! -f "$PROXY_EXE_FILE" ]]; then
+  if [[ ! -f "$PROXY_PID_FILE" || ! -f "$PROXY_START_FILE" || ! -f "$PROXY_EXE_FILE" || ! -f "$PROXY_URL_FILE" ]]; then
     printf 'No launcher-owned CLIProxyAPI process is recorded; independently started services are left running.\n'
     return 0
   fi
@@ -467,6 +484,12 @@ stop_owned_proxy() {
   pid="$(cat "$PROXY_PID_FILE")"
   expected_start="$(cat "$PROXY_START_FILE")"
   expected_executable="$(cat "$PROXY_EXE_FILE")"
+  expected_url="$(cat "$PROXY_URL_FILE")"
+  if [[ "$expected_url" != "$PROXY_BASE_URL" ]]; then
+    printf 'The launcher-owned CLIProxyAPI belongs to %s; the current %s stack will not stop it.\n' \
+      "$expected_url" "$PROXY_BASE_URL"
+    return 0
+  fi
   if ! process_matches_record "$pid" "$expected_start" "$expected_executable"; then
     warn "The recorded CLIProxyAPI PID no longer matches the owned process; it will not be stopped."
     clear_proxy_record
