@@ -580,7 +580,7 @@ show_status() {
 }
 
 open_dashboard() {
-  local dashboard_url="http://127.0.0.1:$ENTRY_PORT/"
+  local dashboard_url="http://127.0.0.1:$ENTRY_PORT/subscription-console.html"
   local browser_executable=""
 
   [[ "${SUBSCRIPTION_PROXY_NO_OPEN:-0}" == "1" ]] && return 0

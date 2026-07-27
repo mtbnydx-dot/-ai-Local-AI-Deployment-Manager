@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>订阅反代控制台</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f6fb;
+      --surface: #fff;
+      --surface-2: #eef3f7;
+      --line: #d9e2ea;
+      --ink: #14202b;
+      --muted: #607284;
+      --blue: #2563eb;
+      --green: #16a34a;
+      --amber: #d97706;
+      --red: #dc2626;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0a1017;
+        --surface: #111923;
+        --surface-2: #192432;
+        --line: #2b3a4a;
+        --ink: #e9f0f8;
+        --muted: #9aaec0;
+        --blue: #6aa4ff;
+        --green: #4ade80;
+        --amber: #fbbf24;
+        --red: #f87171;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+    main {
+      width: min(1160px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0;
+      display: grid;
+      gap: 18px;
+    }
+    header, .head, .step-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(26px, 4vw, 36px); }
+    h2 { font-size: 20px; }
+    h3 { font-size: 16px; }
+    p { color: var(--muted); line-height: 1.6; }
+    a { color: inherit; text-decoration: none; }
+    button, .button {
+      min-height: 42px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--ink);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.primary, .button.primary {
+      color: #fff;
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .nav { display: flex; flex-wrap: wrap; gap: 9px; }
+    .shell {
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 8px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .tab {
+      flex: 1 1 0;
+      min-height: 48px;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+    .tab[aria-selected="true"] {
+      border-color: var(--line);
+      background: var(--surface);
+      color: var(--blue);
+      box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 10%, transparent);
+    }
+    .tabpanel {
+      padding: 18px;
+      display: grid;
+      gap: 15px;
+    }
+    .tabpanel[hidden] { display: none; }
+    .badge {
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.ok { color: var(--green); }
+    .badge.warn { color: var(--amber); }
+    .badge.fail { color: var(--red); }
+    .status-list { display: grid; gap: 8px; }
+    .status-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface-2);
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+    .status-row.ok .dot { background: var(--green); }
+    .status-row.warn .dot { background: var(--amber); }
+    .status-row.fail .dot { background: var(--red); }
+    .row-main { min-width: 0; display: grid; gap: 3px; }
+    .row-main span, .row-side {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 13px;
+    }
+    .step, .scope {
+      min-width: 0;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+    }
+    .scope.active { border-color: color-mix(in srgb, var(--green) 50%, var(--line)); }
+    .scope.preview { border-color: color-mix(in srgb, var(--amber) 52%, var(--line)); }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .actions button { flex: 1 1 145px; }
+    .message, .secret {
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .message.warn, .secret {
+      border-color: color-mix(in srgb, var(--amber) 50%, var(--line));
+    }
+    .message.fail { border-color: color-mix(in srgb, var(--red) 50%, var(--line)); }
+    .message.ok { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+    .secret { display: grid; gap: 8px; }
+    code {
+      min-height: 44px;
+      display: grid;
+      gap: 3px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    code strong { color: var(--muted); font-family: inherit; font-size: 11px; }
+    code span { font-size: 12px; }
+    .copy-row, .endpoint, .input-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+    .scope-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 13px;
+    }
+    .endpoint-list { display: grid; gap: 9px; }
+    form { display: grid; gap: 8px; }
+    label { font-size: 13px; font-weight: 700; }
+    input {
+      min-height: 42px;
+      width: 100%;
+      padding: 0 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--ink);
+      font: inherit;
+    }
+    .empty {
+      min-height: 240px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface);
+      opacity: 0;
+      transition: 160ms ease;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    @media (max-width: 940px) { .scope-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 760px) {
+      header { display: grid; }
+      .grid { grid-template-columns: 1fr; }
+      .nav, .nav .button { width: 100%; }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100% - 20px, 1160px); padding: 18px 0; }
+      .tabs { display: grid; grid-template-columns: 1fr 1fr; }
+      .tabpanel { padding: 12px; }
+      .head, .step-head { display: grid; }
+      .input-row, .endpoint, .copy-row { grid-template-columns: 1fr; }
+      .endpoint button, .copy-row button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>订阅反代控制台</h1>
+        <p>CLIProxyAPI、前端与统一网关一起启动；在同一页面完成账号登录和服务发布配置。</p>
+      </div>
+      <nav class="nav">
+        <a class="button" href="/">返回运行总览</a>
+      </nav>
+    </header>
+
+    <section class="shell">
+      <div class="tabs" role="tablist" aria-label="订阅反代配置">
+        <button
+          class="tab"
+          id="loginTab"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="loginPanel"
+          data-tab="login"
+        >反代账号</button>
+        <button
+          class="tab"
+          id="serviceTab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="servicePanel"
+          tabindex="-1"
+          data-tab="service"
+        >服务发布</button>
+      </div>
+
+      <section
+        class="tabpanel"
+        id="loginPanel"
+        role="tabpanel"
+        aria-labelledby="loginTab"
+        data-panel="login"
+      >
+        <div class="head">
+          <div>
+            <h2>反代账号配置</h2>
+            <p>配置 CLIProxyAPI 客户端 Key 与订阅账号登录；不会读取已有 Key 或授权文件内容。</p>
+          </div>
+          <span class="badge ok">仅本机可操作</span>
+        </div>
+        <div id="loginPanelContent"><div class="empty">正在读取配置状态…</div></div>
+      </section>
+
+      <section
+        class="tabpanel"
+        id="servicePanel"
+        role="tabpanel"
+        aria-labelledby="serviceTab"
+        data-panel="service"
+        hidden
+      >
+        <div class="head">
+          <div>
+            <h2>统一网关服务发布</h2>
+            <p>集中查看本机、局域网和可选公网地址；黄色“待启用”表示地址已算出，但服务仍只监听本机。</p>
+          </div>
+          <span class="badge" id="modeBadge">读取中</span>
+        </div>
+        <div id="servicePanelContent"><div class="empty">正在生成三组服务地址…</div></div>
+      </section>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const loginPanelContent = document.querySelector("#loginPanelContent");
+    const servicePanelContent = document.querySelector("#servicePanelContent");
+    const modeBadge = document.querySelector("#modeBadge");
+    const toast = document.querySelector("#toast");
+    const tabs = [...document.querySelectorAll("[role='tab']")];
+    const tabPanels = [...document.querySelectorAll("[role='tabpanel']")];
+    let generatedApiKey = "";
+    let loginPollTimer = null;
+
+    document.addEventListener("click", async (event) => {
+      const tab = event.target.closest("[data-tab]");
+      if (tab) {
+        selectTab(tab.dataset.tab);
+        return;
+      }
+      const copy = event.target.closest("[data-copy]");
+      if (copy) {
+        const value = copy.getAttribute("data-copy") || "";
+        try {
+          await navigator.clipboard.writeText(value);
+          showToast("已复制");
+        } catch {
+          showToast(value);
+        }
+        return;
+      }
+      const keyButton = event.target.closest("[data-generate-key]");
+      if (keyButton) {
+        await generateKey(keyButton);
+        return;
+      }
+      const loginButton = event.target.closest("[data-provider]");
+      if (loginButton) await startLogin(loginButton);
+    });
+    document.addEventListener("submit", savePublicBaseUrl);
+    document.querySelector("[role='tablist']").addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      const currentIndex = tabs.indexOf(document.activeElement);
+      if (currentIndex < 0) return;
+      event.preventDefault();
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      const next = tabs[(currentIndex + direction + tabs.length) % tabs.length];
+      selectTab(next.dataset.tab);
+      next.focus();
+    });
+    window.addEventListener("hashchange", () => selectTab(tabFromHash(), false));
+
+    selectTab(tabFromHash(), false);
+    refreshLogin();
+    refreshService();
+    setInterval(refreshService, 15000);
+
+    function tabFromHash() {
+      return location.hash === "#service" ? "service" : "login";
+    }
+
+    function selectTab(name, updateHash = true) {
+      const selected = name === "service" ? "service" : "login";
+      tabs.forEach((tab) => {
+        const active = tab.dataset.tab === selected;
+        tab.setAttribute("aria-selected", String(active));
+        tab.tabIndex = active ? 0 : -1;
+      });
+      tabPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.panel !== selected;
+      });
+      if (updateHash && location.hash !== `#${selected}`) {
+        history.replaceState(null, "", `#${selected}`);
+      }
+    }
+
+    async function refreshLogin() {
+      try {
+        const response = await fetch("/api/subscription-proxy/setup", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(6000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "本机配置接口不可用。");
+        renderLogin(data);
+        clearTimeout(loginPollTimer);
+        if (["starting", "waiting"].includes(data.loginSession?.status)) {
+          loginPollTimer = setTimeout(refreshLogin, 1800);
+        }
+      } catch (error) {
+        loginPanelContent.innerHTML = `<div class="message warn">${escapeHtml(error.message)} 请在服务机上通过 127.0.0.1 打开本页。</div>`;
+      }
+    }
+
+    function renderLogin(data) {
+      const executable = data.executable || {};
+      const config = data.config || {};
+      const auth = data.auth || {};
+      const session = data.loginSession || null;
+      const loginRunning = ["starting", "waiting"].includes(session?.status);
+      const ready = executable.found && config.found;
+      const keyState = config.safeApiKeyConfigured
+        ? [`已配置 ${config.safeApiKeyCount || 0} 个有效 Key`, "ok"]
+        : config.unsafeApiKeyCount
+          ? ["仍是示例 Key", "warn"]
+          : ["尚未配置", "warn"];
+      loginPanelContent.innerHTML = `
+        <div class="status-list">
+          ${statusRow("CLIProxyAPI 程序", executable.found ? executable.path : "未找到可执行文件", executable.found ? "ok" : "fail")}
+          ${statusRow("配置文件", config.found ? config.path : "未找到；可设置 CLIPROXY_CONFIG", config.found ? "ok" : "fail")}
+          ${statusRow(
+            "上游监听",
+            config.loopbackOnly ? `${config.host}:${config.port}` : `${config.host || "全部接口"}:${config.port} · 建议改为 127.0.0.1`,
+            config.loopbackOnly ? "ok" : "warn",
+          )}
+        </div>
+        <div class="grid">
+          <section class="step">
+            <div class="step-head">
+              <div>
+                <h3>1. 客户端 API Key</h3>
+                <p>客户端连接统一网关时使用，不等于订阅账号登录。</p>
+              </div>
+              <span class="badge ${keyState[1]}">${escapeHtml(keyState[0])}</span>
+            </div>
+            <button class="primary" type="button" data-generate-key ${config.found ? "" : "disabled"}>
+              ${config.safeApiKeyConfigured ? "再生成一个 API Key" : "生成安全 API Key"}
+            </button>
+            ${generatedApiKey ? `
+              <div class="secret">
+                <strong>请立即复制，这个新 Key 只显示一次。</strong>
+                <div class="copy-row">
+                  <code>${escapeHtml(generatedApiKey)}</code>
+                  <button type="button" data-copy="${escapeHtml(generatedApiKey)}">复制</button>
+                </div>
+              </div>
+            ` : ""}
+            <p>写入时会移除官方示例 Key，并保留已有的有效 Key。</p>
+          </section>
+          <section class="step">
+            <div class="step-head">
+              <div>
+                <h3>2. 订阅账号登录</h3>
+                <p>检测到 ${Number(auth.accountFiles || 0)} 个本地授权文件；不读取文件内容。</p>
+              </div>
+              <span class="badge ${auth.accountFiles ? "ok" : "warn"}">${auth.accountFiles ? "已有授权" : "待登录"}</span>
+            </div>
+            <div class="actions">
+              ${(data.providers || []).map((provider) => `
+                <button
+                  type="button"
+                  class="${provider.id === "codex" ? "primary" : ""}"
+                  data-provider="${escapeHtml(provider.id)}"
+                  ${ready && !loginRunning ? "" : "disabled"}
+                >登录 ${escapeHtml(provider.label)}</button>
+              `).join("")}
+            </div>
+            ${renderLoginSession(session)}
+            ${session?.authUrl ? `<a class="button primary" href="${escapeHtml(session.authUrl)}" target="_blank" rel="noreferrer">打开授权页面</a>` : ""}
+          </section>
+        </div>
+        ${!config.safeApiKeyConfigured ? `<div class="message warn">请先生成安全 API Key；否则即使 OAuth 登录成功，CLIProxyAPI 也会拒绝 API 请求。</div>` : ""}
+      `;
+    }
+
+    function renderLoginSession(session) {
+      if (!session) return `<div class="message">尚未发起登录。</div>`;
+      const state = session.status === "succeeded" ? "ok" : session.status === "failed" ? "fail" : "warn";
+      return `<div class="message ${state}"><strong>${escapeHtml(session.providerLabel || "订阅服务")}：</strong> ${escapeHtml(session.message || session.status)}</div>`;
+    }
+
+    async function generateKey(button) {
+      if (!confirm("生成新的客户端 API Key？已有有效 Key 会保留，示例 Key 会移除。")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/subscription-proxy/api-key", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "API Key 写入失败。");
+        generatedApiKey = data.apiKey || "";
+        showToast("新 API Key 已写入，请立即复制");
+        await refreshLogin();
+      } catch (error) {
+        showToast(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function startLogin(button) {
+      const provider = button.getAttribute("data-provider") || "";
+      const label = button.textContent.trim().replace(/^登录\s*/, "");
+      if (!confirm(`启动 ${label} 登录？浏览器将打开服务商授权页面。`)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/subscription-proxy/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "登录启动失败。");
+        showToast(`${label} 登录已启动`);
+        await refreshLogin();
+      } catch (error) {
+        showToast(error.message);
+        await refreshLogin();
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function refreshService() {
+      try {
+        const response = await fetch("/api/subscription-service", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(6000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "服务发布状态不可用。");
+        renderService(data);
+      } catch (error) {
+        servicePanelContent.innerHTML = `<div class="message warn">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderService(data) {
+      modeBadge.textContent = data.lan?.active ? "局域网模式已启用" : "当前仅本机";
+      modeBadge.className = `badge ${data.lan?.active ? "ok" : "warn"}`;
+      servicePanelContent.innerHTML = `
+        <div class="scope-grid">
+          <section class="scope active">
+            <div class="head">
+              <div>
+                <h3>本机</h3>
+                <p>${escapeHtml(data.local?.baseUrl || "")}</p>
+              </div>
+              <span class="badge ok">已启用</span>
+            </div>
+            ${endpointList(data.local?.endpoints)}
+          </section>
+          <section class="scope ${data.lan?.active ? "active" : "preview"}">
+            <div class="head">
+              <div>
+                <h3>局域网</h3>
+                <p>${escapeHtml(data.lan?.baseUrl || "")}</p>
+              </div>
+              <span class="badge ${data.lan?.active ? "ok" : "warn"}">${data.lan?.active ? "已启用" : "地址预览 · 待启用"}</span>
+            </div>
+            ${endpointList(data.lan?.endpoints)}
+            ${data.lan?.active ? `
+              <div class="message ok">统一入口已监听局域网。请在防火墙中只允许可信网段，并始终使用 API Key。</div>
+            ` : `
+              <div class="message warn">要让其它设备访问，请在终端运行下面的重启命令：</div>
+              <div class="endpoint">
+                <code><strong>LAN 启动命令</strong><span>${escapeHtml(data.lan?.startCommand || "")}</span></code>
+                <button type="button" data-copy="${escapeHtml(data.lan?.startCommand || "")}">复制</button>
+              </div>
+            `}
+          </section>
+          <section class="scope ${data.public?.configured ? "active" : "preview"}">
+            <div class="head">
+              <div>
+                <h3>可选公网</h3>
+                <p>${data.public?.configured ? escapeHtml(data.public.baseUrl) : "填写你的 HTTPS 域名后立即生成地址"}</p>
+              </div>
+              <span class="badge ${data.public?.configured ? "ok" : "warn"}">${data.public?.configured ? "地址已配置" : "未配置"}</span>
+            </div>
+            <form id="publicForm">
+              <label for="publicBaseUrl">公网 HTTPS 基础地址</label>
+              <div class="input-row">
+                <input
+                  id="publicBaseUrl"
+                  name="publicBaseUrl"
+                  type="url"
+                  inputmode="url"
+                  placeholder="https://ai.example.com"
+                  value="${escapeHtml(data.public?.baseUrl || "")}"
+                  ${data.localControl ? "" : "disabled"}
+                />
+                <button class="primary" type="submit" ${data.localControl ? "" : "disabled"}>保存并生成</button>
+              </div>
+            </form>
+            ${data.public?.configured ? endpointList(data.public.endpoints) : ""}
+            <div class="message warn">
+              这里只保存并展示公开地址，不会自动创建域名、HTTPS、隧道或防火墙规则。真正公网发布前必须另行配置可信反向代理或隧道。
+            </div>
+            ${data.localControl ? "" : `<p>通过局域网打开时只能查看，请回到服务机的 127.0.0.1 页面修改。</p>`}
+          </section>
+        </div>
+      `;
+    }
+
+    async function savePublicBaseUrl(event) {
+      if (!(event.target instanceof HTMLFormElement) || event.target.id !== "publicForm") return;
+      event.preventDefault();
+      const button = event.target.querySelector("button[type='submit']");
+      const publicBaseUrl = event.target.elements.publicBaseUrl.value.trim();
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/subscription-service/public-base-url", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ publicBaseUrl }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "公网地址保存失败。");
+        renderService(data);
+        showToast(publicBaseUrl ? "公网地址已保存" : "公网地址已清除");
+      } catch (error) {
+        showToast(error.message);
+        button.disabled = false;
+      }
+    }
+
+    function endpointList(endpoints) {
+      if (!endpoints) return `<div class="message">暂无地址。</div>`;
+      const labels = { openAi: "OpenAI", claude: "Claude", codex: "Codex", openCode: "OpenCode" };
+      return `
+        <div class="endpoint-list">
+          ${Object.entries(endpoints).map(([protocol, value]) => `
+            <div class="endpoint">
+              <code><strong>${escapeHtml(labels[protocol] || protocol)}</strong><span>${escapeHtml(value)}</span></code>
+              <button type="button" data-copy="${escapeHtml(value)}">复制</button>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function statusRow(title, detail, state) {
+      return `
+        <div class="status-row ${state}">
+          <span class="dot"></span>
+          <div class="row-main"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>
+          <span class="row-side">${escapeHtml(state)}</span>
+        </div>
+      `;
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[char]));
+    }
+  </script>
+</body>
+</html>

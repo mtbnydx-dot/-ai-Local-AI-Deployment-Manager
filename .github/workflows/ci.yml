@@ -86,9 +86,9 @@ jobs:
           mock_pid=$!
           trap 'bash "${{ matrix.launcher }}" stop || true; kill "$mock_pid" 2>/dev/null || true' EXIT
           bash "${{ matrix.one_click }}"
-          test "$(cat "$SUBSCRIPTION_PROXY_BROWSER_MARKER")" = "http://127.0.0.1:15176/"
+          test "$(cat "$SUBSCRIPTION_PROXY_BROWSER_MARKER")" = "http://127.0.0.1:15176/subscription-console.html"
           bash ./start-subscription-proxy.sh
-          test "$(cat "$SUBSCRIPTION_PROXY_BROWSER_MARKER")" = "http://127.0.0.1:15176/"
+          test "$(cat "$SUBSCRIPTION_PROXY_BROWSER_MARKER")" = "http://127.0.0.1:15176/subscription-console.html"
           bash "${{ matrix.launcher }}" status
           curl --fail --silent http://127.0.0.1:15176/api/status |
             node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const v=JSON.parse(d);if(v.entry.mode!=="subscription"||v.managers.length!==0)process.exit(1)})'

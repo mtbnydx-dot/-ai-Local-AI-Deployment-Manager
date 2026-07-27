@@ -153,7 +153,7 @@ OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1
 
 安装、OAuth 登录和凭据边界见 [`docs/subscription-proxy-guide.md`](docs/subscription-proxy-guide.md)。
 
-一键启动后直接打开 `http://127.0.0.1:5176/`：进入“反代账号配置”生成 Key 和登录订阅；进入“服务发布配置”直接查看本机、局域网地址，并填写可选公网 HTTPS 基础地址。
+一键启动会直接打开 `http://127.0.0.1:5176/subscription-console.html`。同一个“订阅反代控制台”内可切换“反代账号”和“服务发布”两个页签：前者用于生成 Key 和登录订阅，后者用于查看本机、局域网地址，并填写可选公网 HTTPS 基础地址。
 
 ### 客户端配置建议
 
@@ -318,7 +318,7 @@ open ./start-subscription-proxy-macos.command
 
 You can also double-click `start-subscription-proxy-macos.command` in Finder. If CLIProxyAPI is missing, the launcher offers to install it with Homebrew and then continues startup.
 
-You can also run `./start-subscription-proxy.sh` to auto-detect Ubuntu or macOS. The launcher waits for the frontend and gateway to become ready, then opens the dashboard in the browser.
+You can also run `./start-subscription-proxy.sh` to auto-detect Ubuntu or macOS. The launcher waits for the frontend and gateway to become ready, then opens the unified subscription console with account and service tabs in the browser.
 
 Use `subscription-proxy-ubuntu.sh` or `subscription-proxy-macos.sh` for advanced `start lan`, `status`, and `stop` operations. They require Node.js 20+, Bash, and curl, but do not require Docker or an NVIDIA GPU.
 

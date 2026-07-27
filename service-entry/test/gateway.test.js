@@ -198,13 +198,20 @@ test("entry server serves only whitelisted docs", async () => {
     const missingResponse = await fetch(`http://127.0.0.1:${port}/docs/server.js`);
     assert.equal(missingResponse.status, 404);
 
-    const loginPage = await fetch(`http://127.0.0.1:${port}/subscription-login.html`);
-    assert.equal(loginPage.status, 200);
-    assert.match(await loginPage.text(), /反代账号配置/);
+    const consolePage = await fetch(`http://127.0.0.1:${port}/subscription-console.html`);
+    assert.equal(consolePage.status, 200);
+    const consoleHtml = await consolePage.text();
+    assert.match(consoleHtml, /订阅反代控制台/);
+    assert.match(consoleHtml, /data-tab="login"/);
+    assert.match(consoleHtml, /data-tab="service"/);
 
-    const servicePage = await fetch(`http://127.0.0.1:${port}/subscription-service.html`);
-    assert.equal(servicePage.status, 200);
-    assert.match(await servicePage.text(), /服务发布配置/);
+    const loginPage = await fetch(`http://127.0.0.1:${port}/subscription-login.html`, { redirect: "manual" });
+    assert.equal(loginPage.status, 302);
+    assert.equal(loginPage.headers.get("location"), "/subscription-console.html#login");
+
+    const servicePage = await fetch(`http://127.0.0.1:${port}/subscription-service.html`, { redirect: "manual" });
+    assert.equal(servicePage.status, 302);
+    assert.equal(servicePage.headers.get("location"), "/subscription-console.html#service");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

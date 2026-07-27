@@ -283,7 +283,7 @@ switch ($Action) {
         Write-Host "LAN dashboard: http://$lanAddress`:$EntryPort/"
       }
     }
-    Start-Process "http://127.0.0.1:$EntryPort/"
+    Start-Process "http://127.0.0.1:$EntryPort/subscription-console.html"
   }
   "stop" {
     Stop-SubscriptionStack

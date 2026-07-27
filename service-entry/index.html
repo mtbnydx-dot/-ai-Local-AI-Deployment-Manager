@@ -475,13 +475,13 @@
       </div>
       <p class="proxy-declaration"><strong>范围声明：</strong>反代能力不局限于“对外服务”；同一套入口适用于本机、局域网，也可在你完成鉴权与网络保护后用于可选公网。</p>
       <div class="doc-grid">
-        <a class="doc-card" href="/subscription-login.html">
+        <a class="doc-card" href="/subscription-console.html#login">
           <strong>反代账号配置</strong>
           <span>生成 CLIProxyAPI 客户端 Key，登录 Codex、Claude、Kimi、xAI 或 Antigravity。</span>
         </a>
-        <a class="doc-card" href="/subscription-service.html">
+        <a class="doc-card" href="/subscription-console.html#service">
           <strong>服务发布配置</strong>
-          <span>独立查看本机、局域网和可选公网地址；局域网地址会直接预览，公网域名可在本机填写。</span>
+          <span>切换到同一控制台的服务发布页签，查看本机、局域网和可选公网地址。</span>
         </a>
       </div>
       <div id="subscriptionProxyPanel">
@@ -710,7 +710,7 @@
           ${accessRow("CLIProxyAPI 状态", proxy.message || "等待状态探测。", proxy.reachable ? "ok" : proxy.state === "disabled" ? "warn" : "fail")}
           ${accessRow("凭据边界", proxy.credentialBoundary || "service-entry 不保存订阅凭据。", "ok")}
         </div>
-        <p class="subtle">账号登录与服务发布已拆分为两个独立页面。局域网地址会在“服务发布配置”中直接预览；公网域名也在该页面填写。</p>
+        <p class="subtle">账号登录与服务发布在同一个订阅反代控制台中通过页签切换；局域网地址和公网域名配置都在“服务发布”页签。</p>
         <p class="subtle">CLIProxyAPI 是第三方项目，不是 OpenAI 官方组件。订阅计划、账号权限及服务商条款仍然适用；需要 WebSocket 时请直接连接 CLIProxyAPI，本统一入口当前负责 HTTP/SSE。</p>
       `;
     }

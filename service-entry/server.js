@@ -87,11 +87,14 @@ async function handleRequest(req, res, options = {}) {
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       return serveFile(res, path.join(ROOT, "index.html"), "text/html; charset=utf-8");
     }
+    if (req.method === "GET" && url.pathname === "/subscription-console.html") {
+      return serveFile(res, path.join(ROOT, "subscription-console.html"), "text/html; charset=utf-8");
+    }
     if (req.method === "GET" && url.pathname === "/subscription-login.html") {
-      return serveFile(res, path.join(ROOT, "subscription-login.html"), "text/html; charset=utf-8");
+      return sendRedirect(res, "/subscription-console.html#login");
     }
     if (req.method === "GET" && url.pathname === "/subscription-service.html") {
-      return serveFile(res, path.join(ROOT, "subscription-service.html"), "text/html; charset=utf-8");
+      return sendRedirect(res, "/subscription-console.html#service");
     }
     if (req.method === "GET" && url.pathname === "/favicon.ico") {
       res.writeHead(204);
@@ -1121,6 +1124,14 @@ function sendJson(res, data, status = 200, extraHeaders = {}) {
     ...extraHeaders,
   });
   res.end(JSON.stringify(data));
+}
+
+function sendRedirect(res, location) {
+  res.writeHead(302, {
+    location,
+    "cache-control": "no-store",
+  });
+  res.end();
 }
 
 function shutdownSoon() {

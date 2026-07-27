@@ -271,17 +271,24 @@ async function smokeEntryPage(page, baseUrl, mode = "full") {
   await expect(page.locator("#subscription-proxy")).toBeVisible();
   await expect(page.locator("#subscription-proxy")).toContainText("本机、局域网");
   await expect(page.locator("#subscriptionProxyPanel")).toContainText("CLIProxyAPI", { timeout: 15_000 });
-  await expect(page.locator("a[href='/subscription-login.html']")).toContainText("反代账号配置");
-  await expect(page.locator("a[href='/subscription-service.html']")).toContainText("服务发布配置");
+  await expect(page.locator("a[href='/subscription-console.html#login']")).toContainText("反代账号配置");
+  await expect(page.locator("a[href='/subscription-console.html#service']")).toContainText("服务发布配置");
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
   await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
-  await page.goto(new URL("/subscription-login.html", baseUrl).href, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("h1")).toContainText("反代账号配置");
+  await page.goto(new URL("/subscription-console.html", baseUrl).href, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("h1")).toContainText("订阅反代控制台");
+  await expect(page.locator("[role='tab']")).toHaveCount(2);
+  await expect(page.locator("[data-tab='login']")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#loginPanel")).toBeVisible();
   await expect(page.locator("[data-provider]")).toHaveCount(5);
-  await page.goto(new URL("/subscription-service.html", baseUrl).href, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("h1")).toContainText("服务发布配置");
-  await expect(page.locator("#panel")).toContainText("/gateway/subscription/openai/v1", { timeout: 15_000 });
+  await page.locator("[data-tab='service']").click();
+  await expect(page.locator("[data-tab='service']")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#servicePanel")).toBeVisible();
+  await expect(page.locator("#servicePanelContent")).toContainText("/gateway/subscription/openai/v1", { timeout: 15_000 });
   await expect(page.locator("#publicBaseUrl")).toBeVisible();
+  await page.locator("[data-tab='login']").click();
+  await expect(page.locator("#loginPanel")).toBeVisible();
+  await page.locator("[data-tab='service']").click();
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileLayout = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
