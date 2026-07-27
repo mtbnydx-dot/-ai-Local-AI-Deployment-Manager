@@ -43,6 +43,7 @@ const MODULES = [
   "./manager-lifecycle",
   "./settings-stores",
   "./manager-backup",
+  "./subscription-proxy",
   "./model-routes",
   "./model-filesystem-store",
   "./runtime-routes",

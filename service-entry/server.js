@@ -15,6 +15,7 @@ const GATEWAY_MAX_BODY_BYTES = Math.max(1024 * 1024, Number(process.env.SERVICE_
 const MODEL_DISCOVERY_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_MODEL_CACHE_MS || 3000));
 const MANAGER_STATUS_CACHE_MS = Math.max(500, Number(process.env.SERVICE_ENTRY_STATUS_CACHE_MS || 5000));
 const PUBLIC_BASE_URL = String(process.env.SERVICE_ENTRY_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
+const SUBSCRIPTION_PROXY_CONFIG = core.normalizeSubscriptionProxyConfig(process.env);
 const ALLOWED_ORIGINS = String(process.env.SERVICE_ENTRY_ALLOWED_ORIGINS || "")
   .split(/[;,]/)
   .map((item) => item.trim())
@@ -48,6 +49,7 @@ const MANAGERS = [
 let server = null;
 const managerModelCache = new Map();
 const managerStatusCache = new Map();
+const subscriptionProxyStatusCache = new Map();
 // Manager liveness rarely flips, so a short probe cache turns the per-request
 // TCP connect probe into an in-memory lookup for the common steady-state case.
 const PORT_PROBE_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_PORT_PROBE_CACHE_MS || 2000));
@@ -70,11 +72,11 @@ async function isManagerPortListening(port) {
   }
 }
 
-function createServiceEntryServer() {
-  return http.createServer(handleRequest);
+function createServiceEntryServer(options = {}) {
+  return http.createServer((req, res) => handleRequest(req, res, options));
 }
 
-async function handleRequest(req, res) {
+async function handleRequest(req, res, options = {}) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
@@ -88,7 +90,14 @@ async function handleRequest(req, res) {
       return serveDoc(res, url.pathname);
     }
     if (url.pathname.startsWith("/gateway/")) {
-      return proxyGatewayRequest(req, res, url);
+      return proxyGatewayRequest(req, res, url, options);
+    }
+    if (req.method === "GET" && url.pathname === "/api/subscription-proxy") {
+      return sendJson(res, await getSubscriptionProxyStatus({
+        config: options.subscriptionProxyConfig,
+        fetchImpl: options.fetchImpl,
+        force: true,
+      }));
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       return sendJson(res, {
@@ -99,10 +108,14 @@ async function handleRequest(req, res) {
           lanAddress: core.getLanAddress(),
           pid: process.pid,
           uptimeSeconds: process.uptime(),
-          gateway: buildEntryGatewayUrls(),
+          gateway: buildEntryGatewayUrls(options),
           gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20, maxLines: 2000 }),
         },
         managers: await Promise.all(MANAGERS.map(buildManagerStatus)),
+        subscriptionProxy: await getSubscriptionProxyStatus({
+          config: options.subscriptionProxyConfig,
+          fetchImpl: options.fetchImpl,
+        }),
       });
     }
     if (req.method === "GET" && url.pathname === "/api/gateway-access") {
@@ -169,6 +182,7 @@ async function serveDoc(res, pathname) {
     "client-setup-guide.md",
     "model-service-platform-workplan.md",
     "service-runbook.md",
+    "subscription-proxy-guide.md",
   ]);
   if (!allowed.has(name)) return sendJson(res, { error: "Document not found" }, 404);
   return serveFile(res, path.join(AI_ROOT, "docs", name), "text/markdown; charset=utf-8");
@@ -244,9 +258,13 @@ function findManager(id) {
   return MANAGERS.find((manager) => manager.id === key) || null;
 }
 
-function buildEntryGatewayUrls() {
-  const localBase = `http://127.0.0.1:${PORT}`;
-  const lanBase = HOST === "127.0.0.1" ? null : `http://${core.getLanAddress()}:${PORT}`;
+function buildEntryGatewayUrls(options = {}) {
+  const entryPort = Number(options.entryPort || PORT);
+  const entryHost = String(options.entryHost || HOST);
+  const lanAddress = String(options.lanAddress || core.getLanAddress());
+  const publicBaseUrl = String(options.publicBaseUrl ?? PUBLIC_BASE_URL).trim().replace(/\/+$/, "");
+  const localBase = `http://127.0.0.1:${entryPort}`;
+  const lanBase = entryHost === "127.0.0.1" || entryHost === "localhost" ? null : `http://${lanAddress}:${entryPort}`;
   return {
     localBase,
     lanBase,
@@ -256,9 +274,15 @@ function buildEntryGatewayUrls() {
     lanAutoOpenAi: lanBase ? `${lanBase}/gateway/auto/openai/v1` : null,
     lanAutoClaude: lanBase ? `${lanBase}/gateway/auto/claude` : null,
     lanAutoOpenCode: lanBase ? `${lanBase}/gateway/auto/opencode/v1` : null,
-    publicOpenAi: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/openai/v1` : null,
-    publicClaude: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/claude` : null,
-    publicOpenCode: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/opencode/v1` : null,
+    publicOpenAi: publicBaseUrl ? `${publicBaseUrl}/gateway/auto/openai/v1` : null,
+    publicClaude: publicBaseUrl ? `${publicBaseUrl}/gateway/auto/claude` : null,
+    publicOpenCode: publicBaseUrl ? `${publicBaseUrl}/gateway/auto/opencode/v1` : null,
+    subscription: core.buildSubscriptionProxyGatewayUrls({
+      entryHost,
+      entryPort,
+      lanAddress,
+      publicBaseUrl,
+    }),
   };
 }
 
@@ -275,7 +299,7 @@ function buildManagerGatewayUrls(manager) {
   };
 }
 
-async function proxyGatewayRequest(req, res, url) {
+async function proxyGatewayRequest(req, res, url, options = {}) {
   const route = parseGatewayRoute(url.pathname);
   if (!route) return sendJson(res, core.openAiGatewayError("not_found", "Unknown gateway route."), 404);
   if (req.method === "OPTIONS") {
@@ -295,6 +319,9 @@ async function proxyGatewayRequest(req, res, url) {
   }
   const parsedBody = parseRequestJsonBody(body);
   const requestedModel = String(parsedBody?.model || "").trim();
+  if (route.engine === "subscription") {
+    return proxySubscriptionRequest(req, res, url, route, body, startedAt, options);
+  }
   const manager = await resolveGatewayManager(route.engine, route.protocol, requestedModel);
   if (!manager) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, body, "No matching manager is available.")).catch(() => {});
@@ -310,10 +337,11 @@ async function proxyGatewayRequest(req, res, url) {
   target.search = url.search;
   const upstreamControl = createUpstreamControl(req, res);
   try {
-    const upstream = await fetch(target, {
+    const upstream = await (options.fetchImpl || fetch)(target, {
       method: req.method,
       headers: buildProxyHeaders(req.headers, req),
       body,
+      redirect: "manual",
       signal: upstreamControl.signal,
     });
     res.writeHead(upstream.status, buildResponseHeaders(upstream.headers, req));
@@ -335,6 +363,88 @@ async function proxyGatewayRequest(req, res, url) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, error.status || 502, startedAt, body, error.message)).catch(() => {});
     if (!res.headersSent) {
       sendJson(res, core.openAiGatewayError("gateway_proxy_error", error.message), error.status || (error.name === "TimeoutError" ? 504 : 502));
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  }
+}
+
+async function proxySubscriptionRequest(req, res, url, route, body, startedAt, options = {}) {
+  const config = options.subscriptionProxyConfig || SUBSCRIPTION_PROXY_CONFIG;
+  const provider = { id: "subscription", name: config.provider || "CLIProxyAPI" };
+  if (!config.enabled) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(
+      req,
+      route,
+      provider,
+      503,
+      startedAt,
+      body,
+      "Subscription proxy is disabled.",
+    )).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("subscription_proxy_disabled", "Subscription proxy is disabled."), 503);
+  }
+  let targetPath;
+  let target;
+  try {
+    targetPath = core.buildSubscriptionProxyPath(route.protocol, route.rest);
+    target = core.buildSubscriptionProxyTarget(config.baseUrl, targetPath, url.search);
+  } catch (error) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(
+      req,
+      route,
+      provider,
+      400,
+      startedAt,
+      body,
+      error.message,
+    )).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("invalid_subscription_proxy_path", error.message), 400);
+  }
+  const upstreamControl = createUpstreamControl(req, res);
+  try {
+    const upstream = await (options.fetchImpl || fetch)(target, {
+      method: req.method,
+      headers: buildProxyHeaders(req.headers, req),
+      body,
+      signal: upstreamControl.signal,
+    });
+    res.writeHead(upstream.status, buildResponseHeaders(upstream.headers, req));
+    res.once("finish", () => {
+      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(
+        req,
+        route,
+        provider,
+        upstream.status,
+        startedAt,
+        body,
+        "",
+      )).catch(() => {});
+    });
+    if (upstream.body) {
+      const stream = Readable.fromWeb(upstream.body);
+      stream.once("end", upstreamControl.clear);
+      stream.once("error", upstreamControl.clear);
+      stream.pipe(res);
+    } else {
+      upstreamControl.clear();
+      res.end();
+    }
+    console.log(`gateway subscription/${route.protocol} -> ${config.provider} ${upstream.status} ${Date.now() - startedAt}ms ${targetPath}`);
+  } catch (error) {
+    upstreamControl.clear();
+    const message = safeSubscriptionProxyError(error);
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(
+      req,
+      route,
+      provider,
+      error.status || 502,
+      startedAt,
+      body,
+      message,
+    )).catch(() => {});
+    if (!res.headersSent) {
+      sendJson(res, core.openAiGatewayError("subscription_proxy_error", message), error.status || 502);
     } else if (!res.writableEnded) {
       res.end();
     }
@@ -466,13 +576,107 @@ async function readEntryGatewayAccessEvents(maxLines = 12000) {
 }
 
 function parseGatewayRoute(pathname) {
-  const match = String(pathname || "").match(/^\/gateway\/(vllm|llama|auto)\/(openai|claude|opencode)(?:\/(.*))?$/);
+  const match = String(pathname || "").match(/^\/gateway\/(vllm|llama|auto|subscription)\/(openai|claude|opencode|codex)(?:\/(.*))?$/);
   if (!match) return null;
+  if (match[2] === "codex" && match[1] !== "subscription") return null;
   return {
     engine: match[1],
     protocol: match[2],
     rest: String(match[3] || ""),
   };
+}
+
+async function probeSubscriptionProxy(options = {}) {
+  const config = options.config || SUBSCRIPTION_PROXY_CONFIG;
+  const endpoints = buildEntryGatewayUrls(options.entryOptions || {}).subscription;
+  const base = {
+    ok: false,
+    enabled: Boolean(config.enabled),
+    provider: config.provider || "CLIProxyAPI",
+    baseUrl: config.baseUrl,
+    authMode: config.authMode || "passthrough",
+    upstreamScope: config.upstreamScope || "loopback",
+    docsUrl: config.docsUrl || core.SUBSCRIPTION_PROXY_DOCS_URL,
+    declaration: "订阅反代不局限于对外服务；同一入口适用于本机、局域网和可选公网。",
+    credentialBoundary: "service-entry 不读取或保存 OAuth 文件、账号口令或订阅凭据；认证头原样交给 CLIProxyAPI 校验。",
+    endpoints,
+    models: [],
+    checkedAt: new Date().toISOString(),
+  };
+  if (!config.enabled) return { ...base, state: "disabled", message: "订阅反代已禁用。" };
+  try {
+    const target = core.buildSubscriptionProxyTarget(config.baseUrl, "/v1/models");
+    const response = await (options.fetchImpl || fetch)(target, {
+      method: "GET",
+      headers: { accept: "application/json", "x-service-entry-status-probe": "1" },
+      cache: "no-store",
+      redirect: "manual",
+      signal: AbortSignal.timeout(config.statusTimeoutMs || 2500),
+    });
+    if (response.ok) {
+      const text = await response.text();
+      const payload = parseJsonSafe(text, null);
+      return {
+        ...base,
+        ok: true,
+        reachable: true,
+        state: "ready",
+        status: response.status,
+        models: core.extractSubscriptionProxyModels(payload).slice(0, 100),
+        message: "CLIProxyAPI 已连通，可通过统一入口使用。",
+      };
+    }
+    if ([401, 403].includes(response.status)) {
+      response.body?.cancel?.().catch?.(() => {});
+      return {
+        ...base,
+        ok: true,
+        reachable: true,
+        state: "auth-required",
+        status: response.status,
+        message: "CLIProxyAPI 已连通；状态探测未携带 API Key，调用时需由客户端提供。",
+      };
+    }
+    response.body?.cancel?.().catch?.(() => {});
+    return {
+      ...base,
+      reachable: true,
+      state: "upstream-error",
+      status: response.status,
+      message: `CLIProxyAPI 返回 HTTP ${response.status}。`,
+    };
+  } catch (error) {
+    return {
+      ...base,
+      reachable: false,
+      state: "offline",
+      status: 0,
+      message: safeSubscriptionProxyError(error),
+    };
+  }
+}
+
+async function getSubscriptionProxyStatus(options = {}) {
+  const config = options.config || SUBSCRIPTION_PROXY_CONFIG;
+  const key = `${config.enabled}:${config.baseUrl}:${config.statusTimeoutMs}`;
+  const now = Date.now();
+  const cached = subscriptionProxyStatusCache.get(key);
+  if (!options.force && !options.fetchImpl && cached?.value && cached.expiresAt > now) return cached.value;
+  if (!options.force && !options.fetchImpl && cached?.promise) return cached.promise;
+  const promise = probeSubscriptionProxy(options);
+  if (!options.fetchImpl) subscriptionProxyStatusCache.set(key, { promise, value: cached?.value || null, expiresAt: 0 });
+  const value = await promise;
+  if (!options.fetchImpl) {
+    subscriptionProxyStatusCache.set(key, { value, promise: null, expiresAt: Date.now() + 3000 });
+  }
+  return value;
+}
+
+function safeSubscriptionProxyError(error) {
+  if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+    return "CLIProxyAPI 状态或代理请求超时。";
+  }
+  return "无法连接 CLIProxyAPI；请确认它已启动并监听配置的本机地址。";
 }
 
 async function resolveGatewayManager(engine, protocol, requestedModel = "") {
@@ -740,11 +944,15 @@ module.exports = {
   emptyManagerCatalog,
   findManager,
   getManagerModelCatalog,
+  getSubscriptionProxyStatus,
   handleRequest,
   isAggregatedModelListRequest,
   mergeManagerModelCatalogs,
   parseGatewayRoute,
+  probeSubscriptionProxy,
+  proxySubscriptionRequest,
   resolveGatewayManager,
+  safeSubscriptionProxyError,
   selectGatewayManager,
   sendAggregatedModelList,
   startServiceEntry,

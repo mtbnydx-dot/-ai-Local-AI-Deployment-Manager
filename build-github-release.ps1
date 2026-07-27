@@ -165,6 +165,7 @@ foreach ($file in $releaseFiles) {
 Copy-ReleaseFile -RelativeSource "deploy\public\.env.example"
 Copy-ReleaseFile -RelativeSource "docs\client-setup-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\service-runbook.md"
+Copy-ReleaseFile -RelativeSource "docs\subscription-proxy-guide.md"
 
 $manifest = @(
   "# Release Manifest",

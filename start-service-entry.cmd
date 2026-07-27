@@ -38,11 +38,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Write-Host 'Auto OpenAI local:    http://127.0.0.1:5176/gateway/auto/openai/v1';" ^
   "Write-Host 'Auto Claude local:    http://127.0.0.1:5176/gateway/auto/claude';" ^
   "Write-Host 'Auto OpenCode local:  http://127.0.0.1:5176/gateway/auto/opencode/v1';" ^
+  "Write-Host 'Subscription OpenAI:  http://127.0.0.1:5176/gateway/subscription/openai/v1';" ^
+  "Write-Host 'Subscription Claude:  http://127.0.0.1:5176/gateway/subscription/claude';" ^
+  "Write-Host 'Subscription Codex:   http://127.0.0.1:5176/gateway/subscription/codex/v1';" ^
+  "Write-Host 'Subscription OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1';" ^
   "if ($entryHost -ne '127.0.0.1' -and $lan) {" ^
   "  Write-Host ''; Write-Host ('Service Entry LAN:    http://' + $lan + ':5176/');" ^
   "  Write-Host ('Auto OpenAI LAN:      http://' + $lan + ':5176/gateway/auto/openai/v1');" ^
   "  Write-Host ('Auto Claude LAN:      http://' + $lan + ':5176/gateway/auto/claude');" ^
   "  Write-Host ('Auto OpenCode LAN:    http://' + $lan + ':5176/gateway/auto/opencode/v1');" ^
+  "  Write-Host ('Subscription OpenAI:  http://' + $lan + ':5176/gateway/subscription/openai/v1');" ^
+  "  Write-Host ('Subscription Claude:  http://' + $lan + ':5176/gateway/subscription/claude');" ^
+  "  Write-Host ('Subscription Codex:   http://' + $lan + ':5176/gateway/subscription/codex/v1');" ^
+  "  Write-Host ('Subscription OpenCode:http://' + $lan + ':5176/gateway/subscription/opencode/v1');" ^
   "} elseif ($entryHost -eq '127.0.0.1') { Write-Host ''; Write-Host 'LAN mode is off. Run: start-service-entry.cmd lan' }" ^
   "Start-Process 'http://127.0.0.1:5176/'"
 

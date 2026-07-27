@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>本地模型服务统一入口</title>
+  <title>AI 服务统一入口</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -99,7 +99,7 @@
     }
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 10px;
     }
     .card {
@@ -246,6 +246,18 @@
       gap: 8px;
       align-items: center;
     }
+    .endpoint code {
+      display: grid;
+      align-content: center;
+      gap: 3px;
+    }
+    .endpoint code strong {
+      color: var(--muted);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .endpoint code span { font-size: 12px; }
     code {
       min-height: 40px;
       display: flex;
@@ -308,6 +320,37 @@
       font-size: 13px;
       line-height: 1.5;
     }
+    .proxy-declaration {
+      padding: 13px 14px;
+      border-left: 4px solid var(--teal);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--teal) 9%, var(--surface-2));
+      color: var(--ink);
+      line-height: 1.65;
+    }
+    .scope-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .scope-panel {
+      min-width: 0;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface-2);
+      display: grid;
+      align-content: start;
+      gap: 10px;
+    }
+    .scope-panel .endpoint code { background: var(--surface); }
+    #subscriptionProxyPanel { display: grid; gap: 14px; }
+    .setup-list {
+      margin: 0;
+      padding-left: 22px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
     .toast {
       position: fixed;
       right: 18px;
@@ -339,6 +382,7 @@
       .grid { grid-template-columns: 1fr; }
       .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .access-grid { grid-template-columns: 1fr; }
+      .scope-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 620px) {
       main { width: min(100vw - 20px, 1220px); padding: 20px 0; }
@@ -405,8 +449,8 @@
   <main>
     <header>
       <div>
-        <h1>本地模型服务统一入口</h1>
-        <p>统一查看 vLLM / llama.cpp 管理器、服务网关、Docker 状态和客户端 Key。对外客户端优先走管理器的 OpenAI 网关。</p>
+        <h1>AI 服务统一入口</h1>
+        <p>统一管理本地模型与订阅反代。既可只在本机使用，也可按需提供给局域网或受控公网客户端。</p>
       </div>
       <div class="toolbar">
         <button id="refreshBtn" type="button">刷新状态</button>
@@ -436,6 +480,24 @@
       <p>给新设备优先使用这里的 auto 地址；后台会自动转到当前可用的 vLLM 或 llama.cpp 管理器。</p>
       <div class="gateway-strip" id="entryGatewayStrip">
         <div class="empty">正在读取统一网关地址...</div>
+      </div>
+    </section>
+
+    <section class="card" id="subscription-proxy">
+      <div class="card-head">
+        <div>
+          <h2>订阅反代 · CLIProxyAPI</h2>
+          <p>把你已获授权的订阅服务转换成 OpenAI、Claude、Codex 与 OpenCode 可连接的统一 API。</p>
+        </div>
+        <span class="badge" id="subscriptionProxyBadge">等待探测</span>
+      </div>
+      <p class="proxy-declaration"><strong>范围声明：</strong>反代能力不局限于“对外服务”；同一套入口适用于本机、局域网，也可在你完成鉴权与网络保护后用于可选公网。</p>
+      <div id="subscriptionProxyPanel">
+        <div class="empty">正在探测 CLIProxyAPI...</div>
+      </div>
+      <div class="quick-row">
+        <a class="button primary" href="/docs/subscription-proxy-guide.md" target="_blank" rel="noreferrer">打开配置指南</a>
+        <a class="button" href="/api/subscription-proxy" target="_blank" rel="noreferrer">查看状态 JSON</a>
       </div>
     </section>
 
@@ -469,6 +531,10 @@
           <strong>客户端连接指南</strong>
           <span>OpenWebUI、ccswitch、Claude/Cowork、OpenCode 和 curl 配置。</span>
         </a>
+        <a class="doc-card" href="/docs/subscription-proxy-guide.md" target="_blank" rel="noreferrer">
+          <strong>订阅反代指南</strong>
+          <span>CLIProxyAPI 安装、OAuth 登录、四种客户端协议，以及本机、局域网和可选公网入口。</span>
+        </a>
         <a class="doc-card" href="/docs/model-service-platform-workplan.md" target="_blank" rel="noreferrer">
           <strong>平台改进计划</strong>
           <span>长期工程路线图、验收标准和后续优化批次。</span>
@@ -484,6 +550,8 @@
     const entrySummary = document.querySelector("#entrySummary");
     const entryAccessPanel = document.querySelector("#entryAccessPanel");
     const entryGatewayStrip = document.querySelector("#entryGatewayStrip");
+    const subscriptionProxyPanel = document.querySelector("#subscriptionProxyPanel");
+    const subscriptionProxyBadge = document.querySelector("#subscriptionProxyBadge");
     const lastUpdatedBadge = document.querySelector("#lastUpdatedBadge");
     const toast = document.querySelector("#toast");
     const refreshBtn = document.querySelector("#refreshBtn");
@@ -523,8 +591,9 @@
       try {
         const response = await fetch("/api/status", { cache: "no-store", signal: AbortSignal.timeout(8000) });
         const data = await response.json();
-        renderSummary(data.entry || {}, data.managers || []);
+        renderSummary(data.entry || {}, data.managers || [], data.subscriptionProxy || {});
         renderEntryGateway(data.entry || {});
+        renderSubscriptionProxy(data.subscriptionProxy || {});
         renderEntryAccess(data.entry?.gatewayAccess || {});
         renderManagers(data.managers || []);
         if (lastUpdatedBadge) lastUpdatedBadge.textContent = `已刷新 ${new Date().toLocaleTimeString()}`;
@@ -536,7 +605,7 @@
       }
     }
 
-    function renderSummary(entry, managers) {
+    function renderSummary(entry, managers, subscriptionProxy) {
       const access = entry.gatewayAccess || {};
       const totals = access.totals || {};
       const requests = totals.requests || {};
@@ -552,6 +621,11 @@
         metric("客户端 Key", String(activeClients), activeClients ? "ok" : "warn"),
         metric("GPU 显存", gpuText, "ok"),
         metric("网关错误率", formatPercent(requests.errorRate || 0), requests.errorRate ? "warn" : "ok"),
+        metric(
+          "订阅反代",
+          subscriptionProxy.state === "ready" ? "可用" : subscriptionProxy.state === "auth-required" ? "在线 · 需 Key" : subscriptionProxy.state === "disabled" ? "已禁用" : "未连接",
+          ["ready", "auth-required"].includes(subscriptionProxy.state) ? "ok" : subscriptionProxy.state === "disabled" ? "warn" : "fail",
+        ),
       ].join("");
     }
 
@@ -574,6 +648,65 @@
         ? rows.map(([label, value]) => endpoint(label, value)).join("")
         : `<div class="empty">统一入口当前只监听本机；如需局域网 auto 地址，请调整 SERVICE_ENTRY_HOST。</div>`;
       entryGatewayStrip.innerHTML += stats;
+    }
+
+    function renderSubscriptionProxy(proxy) {
+      const stateMap = {
+        ready: ["状态良好", "ok"],
+        "auth-required": ["在线 · 调用需 Key", "ok"],
+        disabled: ["已禁用", "warn"],
+        "upstream-error": ["上游异常", "warn"],
+        offline: ["未连接", "fail"],
+      };
+      const [badgeText, badgeClass] = stateMap[proxy.state] || ["等待探测", ""];
+      subscriptionProxyBadge.textContent = badgeText;
+      subscriptionProxyBadge.className = `badge ${badgeClass}`;
+      const models = Array.isArray(proxy.models) ? proxy.models : [];
+      const endpointGroups = [
+        ["本机", proxy.endpoints?.local],
+        ["局域网", proxy.endpoints?.lan],
+        ["可选公网", proxy.endpoints?.public],
+      ];
+      subscriptionProxyPanel.innerHTML = `
+        <div class="metrics">
+          ${metric("上游", proxy.provider || "CLIProxyAPI", proxy.reachable ? "ok" : "warn")}
+          ${metric("监听边界", proxy.upstreamScope === "loopback" ? "仅本机回环" : "远程上游", proxy.upstreamScope === "loopback" ? "ok" : "warn")}
+          ${metric("认证方式", proxy.authMode === "passthrough" ? "客户端透传" : proxy.authMode || "-", "ok")}
+          ${metric("可见模型", models.length ? String(models.length) : "需授权后读取", models.length ? "ok" : "warn")}
+        </div>
+        <div class="health-list">
+          ${accessRow("CLIProxyAPI 状态", proxy.message || "等待状态探测。", proxy.reachable ? "ok" : proxy.state === "disabled" ? "warn" : "fail")}
+          ${accessRow("凭据边界", proxy.credentialBoundary || "service-entry 不保存订阅凭据。", "ok")}
+        </div>
+        <div class="scope-grid">
+          ${endpointGroups.map(([label, values]) => `
+            <div class="scope-panel">
+              <h3>${escapeHtml(label)}</h3>
+              ${values
+                ? Object.entries(values).map(([protocol, value]) => endpoint(protocolLabel(protocol), value)).join("")
+                : `<p class="subtle">${label === "局域网" ? "用 LAN 模式启动统一入口后显示。" : "配置 SERVICE_ENTRY_PUBLIC_BASE_URL 后显示。"}</p>`}
+            </div>
+          `).join("")}
+        </div>
+        <div>
+          <h3>接入顺序</h3>
+          <ol class="setup-list">
+            <li>安装并启动 CLIProxyAPI，默认仅监听 <strong>127.0.0.1:8317</strong>。</li>
+            <li>在 CLIProxyAPI 中完成你有权使用的服务登录，并配置独立 API Key。</li>
+            <li>客户端使用上方统一入口，并把该 API Key 放在 Authorization、x-api-key 或 anthropic-api-key。</li>
+          </ol>
+        </div>
+        <p class="subtle">CLIProxyAPI 是第三方项目，不是 OpenAI 官方组件。订阅计划、账号权限及服务商条款仍然适用；需要 WebSocket 时请直接连接 CLIProxyAPI，本统一入口当前负责 HTTP/SSE。</p>
+      `;
+    }
+
+    function protocolLabel(value) {
+      return {
+        openAi: "OpenAI",
+        claude: "Claude",
+        codex: "Codex",
+        openCode: "OpenCode",
+      }[value] || value;
     }
 
     function renderEntryAccess(access) {
@@ -796,7 +929,7 @@
       const safe = escapeHtml(value);
       return `
         <div class="endpoint">
-          <code><strong>${escapeHtml(label)}:</strong>&nbsp;${safe}</code>
+          <code><strong>${escapeHtml(label)}</strong><span>${safe}</span></code>
           <button type="button" data-copy="${safe}">复制</button>
         </div>
       `;

@@ -8,8 +8,9 @@
 - `vllm-manager`：vLLM 管理器，默认端口 `5177`。
 - `llama-manager`：llama.cpp 管理器，默认端口 `5178`。
 - `manager-core`：三者共用的网络、鉴权、健康检查和访问统计工具。
+- 可选 `CLIProxyAPI`：在本机 `127.0.0.1:8317` 管理已获授权订阅的 OAuth 和协议转换。
 
-统一入口不直接跑模型。它负责启动/检查两个管理器，并提供统一网关，把 OpenAI、Claude、OpenCode 请求转发给正在运行的后端。
+统一入口不直接跑模型，也不保存订阅 OAuth 凭据。它负责启动/检查两个管理器，并把本地模型请求或显式的订阅反代请求转发给对应后端。
 
 ## 2. 启动
 
@@ -56,6 +57,17 @@
 - OpenCode：`http://<本机局域网IP>:5176/gateway/auto/opencode/v1`
 
 `auto` 会优先选择正在运行且监听中的后端。OpenCode 当前只走 vLLM。
+
+### 3A. 订阅反代地址
+
+反代能力不局限于公网“对外服务”，同样适用于本机和局域网：
+
+- OpenAI：`http://127.0.0.1:5176/gateway/subscription/openai/v1`
+- Claude：`http://127.0.0.1:5176/gateway/subscription/claude`
+- Codex：`http://127.0.0.1:5176/gateway/subscription/codex/v1`
+- OpenCode：`http://127.0.0.1:5176/gateway/subscription/opencode/v1`
+
+局域网设备把 `127.0.0.1` 换成本机局域网 IP。订阅反代不会加入 `auto`，并且客户端必须携带 CLIProxyAPI API Key。完整安装、OAuth 与客户端示例见[订阅反代指南](subscription-proxy-guide.md)。
 
 ## 4. 直接管理器地址
 
@@ -144,6 +156,7 @@ llama.cpp：
 ## 9. 安全默认值
 
 - 默认启动脚本只开放本机。
+- CLIProxyAPI 默认应只监听 `127.0.0.1:8317`，由统一入口决定本机、局域网或可选公网范围。
 - 局域网模式需要显式执行 `start-service-entry.cmd lan`。
 - 对外服务建议始终启用 API Key。
 - 公网暴露前应使用反向代理、TLS、访问控制和速率限制。

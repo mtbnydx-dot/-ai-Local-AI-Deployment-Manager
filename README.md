@@ -1,8 +1,8 @@
 # Local Model Service Platform / 本地模型服务平台
 
-一个面向高端个人工作站和小团队局域网的本地大模型服务控制台。它把 vLLM、llama.cpp、模型下载、显存估算、多 GPU 配置、OpenAI/Claude 兼容接口、局域网服务、访问统计和基础审计整合在同一套本地管理工具里。
+一个面向高端个人工作站和小团队局域网的 AI 服务控制台。它把 vLLM、llama.cpp、本地模型管理，以及由 CLIProxyAPI 提供的可选订阅反代整合在同一套统一入口里。
 
-This is a local model service control panel for high-end personal workstations and small LAN teams. It combines vLLM, llama.cpp, model download workflows, VRAM estimation, multi-GPU configuration, OpenAI/Claude-compatible gateways, LAN serving, access statistics, and basic audit exports in one local toolkit.
+This is an AI service control panel for high-end personal workstations and small LAN teams. It combines vLLM, llama.cpp, local model management, and an optional CLIProxyAPI subscription adapter behind one entrypoint.
 
 ---
 
@@ -19,6 +19,7 @@ This is a local model service control panel for high-end personal workstations a
 ### 主要功能
 
 - **统一入口**：`service-entry` 提供一级控制台和自动网关。
+- **订阅反代**：可连接本机 CLIProxyAPI，把已获授权的订阅服务提供为 OpenAI、Claude、Codex、OpenCode API；适用于本机、局域网和受控的可选公网，不只用于“对外服务”。
 - **vLLM 管理器**：下载模型、启动 vLLM 容器、OpenAI/Claude 兼容接口、工具调用桥接、上下文压缩、统计和日志。
 - **llama.cpp 管理器**：管理 GGUF 模型，重点支持异构双卡、GPU layers、tensor split、长上下文和 RAM fallback。
 - **模型下载**：支持 Hugging Face / ModelScope 链接解析、在线模型搜索、量化筛选、下载进度、暂停、继续和取消。
@@ -57,6 +58,7 @@ This is a local model service control panel for high-end personal workstations a
 - NVIDIA 驱动；运行 vLLM/llama.cpp CUDA 容器时需要可用 GPU。
 - Chrome 或 Edge；前端 smoke test 默认使用本机 Chrome，也可以设置 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` 使用 Edge。
 - 可选：Hugging Face CLI、ModelScope CLI、CUDA Toolkit、PowerShell 7。
+- 可选：[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)，用于订阅反代；它是第三方项目，不是 OpenAI 官方组件。
 
 ### 快速开始
 
@@ -107,6 +109,17 @@ OpenCode: http://<本机局域网 IP>:5176/gateway/auto/opencode/v1
 ```
 
 `auto` 会自动选择当前可用的 vLLM 或 llama.cpp 后端。需要固定后端时，可以把 `auto` 换成 `vllm` 或 `llama`。
+
+可选订阅反代使用独立路径，不加入 `auto`，避免本地模型请求意外消耗订阅配额：
+
+```text
+OpenAI:  http://127.0.0.1:5176/gateway/subscription/openai/v1
+Claude:  http://127.0.0.1:5176/gateway/subscription/claude
+Codex:   http://127.0.0.1:5176/gateway/subscription/codex/v1
+OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1
+```
+
+安装、OAuth 登录和凭据边界见 [`docs/subscription-proxy-guide.md`](docs/subscription-proxy-guide.md)。
 
 ### 客户端配置建议
 
@@ -184,6 +197,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ### Key Features
 
 - **Unified entrypoint**: `service-entry` provides the first-level console and automatic gateway.
+- **Subscription adapter**: optionally connects a loopback CLIProxyAPI instance and exposes authorized subscriptions through OpenAI, Claude, Codex, and OpenCode routes for local, LAN, or controlled public use.
 - **vLLM manager**: model download, Docker launch, OpenAI/Claude-compatible APIs, tool-call bridging, context compression, stats, and logs.
 - **llama.cpp manager**: GGUF model management with heterogeneous GPU support, GPU layers, tensor split, long context, and RAM fallback.
 - **Model downloads**: Hugging Face / ModelScope link parsing, remote search, quantization filters, progress bars, pause/resume/cancel.
@@ -222,6 +236,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 - NVIDIA driver and GPU access for vLLM/llama.cpp CUDA containers.
 - Chrome or Edge. The frontend smoke test uses local Chrome by default; set `PLAYWRIGHT_BROWSER_CHANNEL=msedge` to use Edge.
 - Optional: Hugging Face CLI, ModelScope CLI, CUDA Toolkit, PowerShell 7.
+- Optional: [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) for subscription routing. It is a third-party project, not an official OpenAI component.
 
 ### Quick Start
 
@@ -272,6 +287,17 @@ OpenCode: http://<LAN IP>:5176/gateway/auto/opencode/v1
 ```
 
 `auto` routes to the currently available vLLM or llama.cpp backend. Replace it with `vllm` or `llama` to pin a backend.
+
+The optional subscription adapter uses explicit routes and is intentionally excluded from `auto`:
+
+```text
+OpenAI:  http://127.0.0.1:5176/gateway/subscription/openai/v1
+Claude:  http://127.0.0.1:5176/gateway/subscription/claude
+Codex:   http://127.0.0.1:5176/gateway/subscription/codex/v1
+OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1
+```
+
+See [`docs/subscription-proxy-guide.md`](docs/subscription-proxy-guide.md) for setup, OAuth, and credential-boundary details.
 
 ### Client Setup Tips
 

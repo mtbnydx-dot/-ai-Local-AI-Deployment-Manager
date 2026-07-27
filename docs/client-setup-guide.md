@@ -37,6 +37,19 @@ http://<HOST>:5176/gateway/auto/opencode/v1
 
 `auto` 会自动转发到可用的 vLLM 或 llama 后端。想固定后端时，把 `auto` 换成 `vllm` 或 `llama`。
 
+### 1A. 订阅反代入口
+
+如果已经按[订阅反代指南](subscription-proxy-guide.md)启动 CLIProxyAPI，可显式使用：
+
+```text
+OpenAI:  http://<HOST>:5176/gateway/subscription/openai/v1
+Claude:  http://<HOST>:5176/gateway/subscription/claude
+Codex:   http://<HOST>:5176/gateway/subscription/codex/v1
+OpenCode:http://<HOST>:5176/gateway/subscription/opencode/v1
+```
+
+这套反代入口同时适用于本机和局域网，不局限于公网“对外服务”。它不会加入 `auto`；客户端必须明确选择 `subscription`，并携带 CLIProxyAPI 配置的 API Key。
+
 ## 2. ccswitch / Claude Cowork
 
 推荐配置：
@@ -158,6 +171,7 @@ curl http://<HOST>:5176/gateway/auto/claude/v1/messages \
 - 404：URL 模式错，Base URL 和完整 URL 混用了。
 - 502：网关收到请求，但后端模型服务不可达。
 - 503：统一入口找不到可用管理器。
+- 订阅反代 502：CLIProxyAPI 未启动，或 `CLIPROXY_BASE_URL` 不可达。
 - 模型不可用：模型名或 alias 配置错。
 
 ## 9. 隐私和审计

@@ -258,9 +258,12 @@ async function smokeEntryPage(page, baseUrl) {
     }
   });
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("h1")).toContainText("本地模型服务统一入口");
+  await expect(page.locator("h1")).toContainText("AI 服务统一入口");
   await expect(page.locator("#entrySummary")).toBeVisible();
   await expect(page.locator("#managerGrid")).toBeVisible();
+  await expect(page.locator("#subscription-proxy")).toBeVisible();
+  await expect(page.locator("#subscription-proxy")).toContainText("本机、局域网");
+  await expect(page.locator("#subscriptionProxyPanel")).toContainText("CLIProxyAPI", { timeout: 15_000 });
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
   await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
   await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });
