@@ -47,6 +47,7 @@ module.exports = defineConfig({
     browserName: "chromium",
     ...(browserChannel ? { channel: browserChannel } : {}),
     headless: true,
+    reducedMotion: "reduce",
     viewport: { width: 1440, height: 960 },
     ignoreHTTPSErrors: true,
     actionTimeout: 10_000,

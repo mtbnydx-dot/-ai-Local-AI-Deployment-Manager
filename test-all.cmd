@@ -5,6 +5,7 @@ set "ROOT=%~dp0"
 call :check "vllm-manager\server.js" || exit /b 1
 call :check "llama-manager\server.js" || exit /b 1
 call :check "service-entry\server.js" || exit /b 1
+call :check "service-entry\subscription-setup.js" || exit /b 1
 call :check "tests\frontend-smoke.spec.cjs" || exit /b 1
 call :checkPowerShell "subscription-proxy-stack.ps1" || exit /b 1
 call :test "manager-core" || exit /b 1
