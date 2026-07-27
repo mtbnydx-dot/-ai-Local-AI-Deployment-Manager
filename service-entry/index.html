@@ -376,11 +376,14 @@
       text-align: center;
       letter-spacing: 0;
     }
+    body.subscription-only [data-local-model-only] { display: none !important; }
+    body.subscription-only .summary-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
     @media (max-width: 960px) {
       header { display: grid; align-items: start; }
       .toolbar { justify-content: flex-start; }
       .grid { grid-template-columns: 1fr; }
       .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      body.subscription-only .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .access-grid { grid-template-columns: 1fr; }
       .scope-grid { grid-template-columns: 1fr; }
     }
@@ -388,6 +391,7 @@
       main { width: min(100vw - 20px, 1220px); padding: 20px 0; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      body.subscription-only .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .endpoint { grid-template-columns: 1fr; }
       .health-row, .access-row, .model-row { grid-template-columns: auto minmax(0, 1fr); }
       .row-side { grid-column: 2; }
@@ -449,10 +453,11 @@
   <main>
     <header>
       <div>
-        <h1>AI 服务统一入口</h1>
-        <p>统一管理本地模型与订阅反代。既可只在本机使用，也可按需提供给局域网或受控公网客户端。</p>
+        <h1 id="entryTitle">AI 服务统一入口</h1>
+        <p id="entrySubtitle">统一管理本地模型与订阅反代。既可只在本机使用，也可按需提供给局域网或受控公网客户端。</p>
       </div>
       <div class="toolbar">
+        <span class="badge" id="entryModeBadge">完整模式</span>
         <button id="refreshBtn" type="button">刷新状态</button>
         <button id="stopBtn" class="danger" type="button">关闭管理界面</button>
       </div>
@@ -462,7 +467,7 @@
       <div class="card-head">
         <div>
           <h2>服务总览</h2>
-          <p>统一入口、两个管理器、模型容器和外来访问的当前状态。</p>
+          <p id="entrySummarySubtitle">统一入口、两个管理器、模型容器和外来访问的当前状态。</p>
         </div>
         <span class="badge" id="lastUpdatedBadge">等待刷新</span>
       </div>
@@ -471,11 +476,11 @@
       </div>
     </section>
 
-    <section id="managerGrid" class="grid">
+    <section id="managerGrid" class="grid" data-local-model-only>
       <div class="empty">正在读取本地服务状态...</div>
     </section>
 
-    <section class="note">
+    <section class="note" data-local-model-only>
       <h3>统一自动路由</h3>
       <p>给新设备优先使用这里的 auto 地址；后台会自动转到当前可用的 vLLM 或 llama.cpp 管理器。</p>
       <div class="gateway-strip" id="entryGatewayStrip">
@@ -514,14 +519,14 @@
       </div>
     </section>
 
-    <section class="note">
+    <section class="note" data-local-model-only>
       <h3>推荐接入方式</h3>
       <p>OpenWebUI、Claude Desktop 转发器、OpenCode 等客户端优先填写 <strong>OpenAI Gateway Base URL</strong>，模型名用 <strong>local-current</strong>。需要给局域网设备使用时，先进入对应“服务后台”打开局域网提供服务；如需隔离不同客户端，再创建独立客户端 API Key。</p>
     </section>
 
     <section class="note">
       <h3>文档与排错</h3>
-      <p>局域网访问请用发布目录根部的 <code>start-service-entry-lan.cmd</code> 启动统一入口；默认双击 <code>start-service-entry.cmd</code> 仍只开放本机。</p>
+      <p id="docsStartupHint">局域网访问请用发布目录根部的 <code>start-service-entry-lan.cmd</code> 启动统一入口；默认双击 <code>start-service-entry.cmd</code> 仍只开放本机。</p>
       <div class="doc-grid">
         <a class="doc-card" href="/docs/service-runbook.md" target="_blank" rel="noreferrer">
           <strong>服务运行手册</strong>
@@ -552,11 +557,17 @@
     const entryGatewayStrip = document.querySelector("#entryGatewayStrip");
     const subscriptionProxyPanel = document.querySelector("#subscriptionProxyPanel");
     const subscriptionProxyBadge = document.querySelector("#subscriptionProxyBadge");
+    const entryTitle = document.querySelector("#entryTitle");
+    const entrySubtitle = document.querySelector("#entrySubtitle");
+    const entryModeBadge = document.querySelector("#entryModeBadge");
+    const entrySummarySubtitle = document.querySelector("#entrySummarySubtitle");
+    const docsStartupHint = document.querySelector("#docsStartupHint");
     const lastUpdatedBadge = document.querySelector("#lastUpdatedBadge");
     const toast = document.querySelector("#toast");
     const refreshBtn = document.querySelector("#refreshBtn");
     const stopBtn = document.querySelector("#stopBtn");
     let refreshTimer = null;
+    let currentEntryMode = "full";
 
     refreshBtn.addEventListener("click", refresh);
     stopBtn.addEventListener("click", stopAll);
@@ -591,6 +602,7 @@
       try {
         const response = await fetch("/api/status", { cache: "no-store", signal: AbortSignal.timeout(8000) });
         const data = await response.json();
+        renderEntryMode(data.entry || {});
         renderSummary(data.entry || {}, data.managers || [], data.subscriptionProxy || {});
         renderEntryGateway(data.entry || {});
         renderSubscriptionProxy(data.subscriptionProxy || {});
@@ -605,6 +617,25 @@
       }
     }
 
+    function renderEntryMode(entry) {
+      currentEntryMode = entry.mode === "subscription" ? "subscription" : "full";
+      const subscriptionOnly = currentEntryMode === "subscription";
+      document.body.classList.toggle("subscription-only", subscriptionOnly);
+      entryTitle.textContent = subscriptionOnly ? "订阅反代独立入口" : "AI 服务统一入口";
+      entrySubtitle.textContent = subscriptionOnly
+        ? "当前只运行 CLIProxyAPI、前端与统一网关；不会启动 vLLM、llama.cpp 管理器或模型容器。"
+        : "统一管理本地模型与订阅反代。既可只在本机使用，也可按需提供给局域网或受控公网客户端。";
+      entryModeBadge.textContent = subscriptionOnly ? "反代独立模式" : "完整模式";
+      entryModeBadge.className = `badge ${subscriptionOnly ? "ok" : ""}`;
+      entrySummarySubtitle.textContent = subscriptionOnly
+        ? "仅显示订阅反代、前端和统一网关的当前状态。"
+        : "统一入口、两个管理器、模型容器和外来访问的当前状态。";
+      docsStartupHint.innerHTML = subscriptionOnly
+        ? "本机模式运行 <code>start-subscription-proxy.cmd</code>；局域网模式运行 <code>start-subscription-proxy-lan.cmd</code>。"
+        : "局域网访问请用发布目录根部的 <code>start-service-entry-lan.cmd</code> 启动统一入口；默认双击 <code>start-service-entry.cmd</code> 仍只开放本机。";
+      stopBtn.textContent = subscriptionOnly ? "关闭反代前端与网关" : "关闭管理界面";
+    }
+
     function renderSummary(entry, managers, subscriptionProxy) {
       const access = entry.gatewayAccess || {};
       const totals = access.totals || {};
@@ -614,8 +645,26 @@
       const activeClients = managers.reduce((count, manager) => count + Number(manager.exposure?.actual?.service?.clients?.active || 0), 0);
       const gpu = managers.map((manager) => manager.runtime?.gpu).find(Boolean);
       const gpuText = gpu?.totalMb ? `${formatBytes(gpu.usedMb * 1024 * 1024)} / ${formatBytes(gpu.totalMb * 1024 * 1024)}` : "-";
-      entrySummary.innerHTML = [
+      const common = [
         metric("统一入口", `${entry.host || "127.0.0.1"}:${entry.port || "-"}`, "ok"),
+      ];
+      if (entry.mode === "subscription") {
+        entrySummary.innerHTML = [
+          ...common,
+          metric("运行模式", "订阅反代独立", "ok"),
+          metric("启动模块", "反代 / 前端 / 网关", "ok"),
+          metric(
+            "订阅反代",
+            subscriptionProxy.state === "ready" ? "可用" : subscriptionProxy.state === "auth-required" ? "在线 · 需 Key" : subscriptionProxy.state === "disabled" ? "已禁用" : "未连接",
+            ["ready", "auth-required"].includes(subscriptionProxy.state) ? "ok" : subscriptionProxy.state === "disabled" ? "warn" : "fail",
+          ),
+          metric("上游边界", subscriptionProxy.upstreamScope === "loopback" ? "仅本机回环" : "远程上游", subscriptionProxy.upstreamScope === "loopback" ? "ok" : "warn"),
+          metric("网关请求", String(requests.total || 0), "ok"),
+        ].join("");
+        return;
+      }
+      entrySummary.innerHTML = [
+        ...common,
         metric("管理器在线", `${runningManagers} / ${managers.length}`, runningManagers === managers.length ? "ok" : "warn"),
         metric("运行中模型", String(runningModels), runningModels ? "ok" : "warn"),
         metric("客户端 Key", String(activeClients), activeClients ? "ok" : "warn"),
@@ -758,7 +807,10 @@
     }
 
     async function stopAll() {
-      if (!confirm("只关闭统一入口和两个管理器网页，不会停止后台模型容器。继续吗？")) return;
+      const message = currentEntryMode === "subscription"
+        ? "关闭反代前端与统一网关？CLIProxyAPI 如由独立脚本启动，请使用 stop-subscription-proxy.cmd 一并关闭。"
+        : "只关闭统一入口和两个管理器网页，不会停止后台模型容器。继续吗？";
+      if (!confirm(message)) return;
       stopBtn.disabled = true;
       try {
         await fetch("/api/stop-all", { method: "POST", signal: AbortSignal.timeout(5000) });
@@ -778,8 +830,8 @@
       document.querySelector("main").innerHTML = `
         <section class="card shutdown-state">
           <h1>管理界面已关闭</h1>
-          <p>统一入口和两个管理器网页已停止；后台模型容器不受影响，仍在继续提供服务。</p>
-          <p>需要重新打开时，在发布目录运行 <code>start-service-entry.cmd</code>（局域网用 <code>start-service-entry-lan.cmd</code>），然后刷新本页。</p>
+          <p>${currentEntryMode === "subscription" ? "反代前端与统一网关已停止；CLIProxyAPI 由独立启动脚本管理。" : "统一入口和两个管理器网页已停止；后台模型容器不受影响，仍在继续提供服务。"}</p>
+          <p>${currentEntryMode === "subscription" ? "需要重新打开时运行 start-subscription-proxy.cmd；局域网模式使用 start-subscription-proxy-lan.cmd。" : "需要重新打开时，在发布目录运行 start-service-entry.cmd（局域网用 start-service-entry-lan.cmd），然后刷新本页。"}</p>
           <div class="quick-row"><button type="button" onclick="location.reload()">刷新页面</button></div>
         </section>
       `;

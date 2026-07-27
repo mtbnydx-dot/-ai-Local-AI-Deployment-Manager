@@ -12,6 +12,7 @@ logs/
 *.pid
 *.tmp
 .manager.pid
+.cliproxy-process.json
 stats-ledger.json
 jobs-ledger.json
 

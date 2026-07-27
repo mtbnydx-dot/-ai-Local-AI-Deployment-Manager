@@ -53,6 +53,27 @@ test("rejects unknown gateway routes", () => {
   assert.equal(entry.parseGatewayRoute("/api/status"), null);
 });
 
+test("normalizes full and subscription-only service entry modes", () => {
+  assert.equal(entry.normalizeServiceEntryMode("full"), "full");
+  assert.equal(entry.normalizeServiceEntryMode("subscription"), "subscription");
+  assert.equal(entry.normalizeServiceEntryMode("subscription-only"), "subscription");
+  assert.equal(entry.normalizeServiceEntryMode("proxy"), "subscription");
+  assert.equal(entry.normalizeServiceEntryMode("unknown"), "full");
+});
+
+test("subscription-only mode exposes only subscription gateway URLs", () => {
+  const urls = entry.buildEntryGatewayUrls({
+    serviceEntryMode: "subscription",
+    entryHost: "0.0.0.0",
+    entryPort: 5176,
+    lanAddress: "192.168.1.27",
+  });
+  assert.equal(urls.autoOpenAi, null);
+  assert.equal(urls.lanAutoClaude, null);
+  assert.equal(urls.subscription.local.openAi, "http://127.0.0.1:5176/gateway/subscription/openai/v1");
+  assert.equal(urls.subscription.lan.codex, "http://192.168.1.27:5176/gateway/subscription/codex/v1");
+});
+
 test("normalizes CLIProxyAPI configuration and exposes local, LAN, and public endpoints", () => {
   const config = core.normalizeSubscriptionProxyConfig({
     CLIPROXY_BASE_URL: "http://127.0.0.1:8317/v1/",
@@ -170,6 +191,35 @@ test("entry server serves only whitelisted docs", async () => {
 
     const missingResponse = await fetch(`http://127.0.0.1:${port}/docs/server.js`);
     assert.equal(missingResponse.status, 404);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("subscription-only entry skips managers and rejects local-model routes", async () => {
+  const server = entry.createServiceEntryServer({
+    serviceEntryMode: "subscription",
+    subscriptionProxyConfig: core.normalizeSubscriptionProxyConfig({
+      CLIPROXY_ENABLED: "0",
+    }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const statusResponse = await fetch(`http://127.0.0.1:${port}/api/status`);
+    assert.equal(statusResponse.status, 200);
+    const status = await statusResponse.json();
+    assert.equal(status.entry.mode, "subscription");
+    assert.deepEqual(status.entry.modules, ["frontend", "gateway", "subscription-proxy"]);
+    assert.deepEqual(status.managers, []);
+    assert.equal(status.entry.gateway.autoOpenAi, null);
+
+    const localRoute = await fetch(`http://127.0.0.1:${port}/gateway/auto/openai/v1/models`);
+    assert.equal(localRoute.status, 404);
+    assert.match((await localRoute.json()).error.message, /disabled in subscription-only mode/);
+
+    const managerStart = await fetch(`http://127.0.0.1:${port}/api/managers/vllm/start`, { method: "POST" });
+    assert.equal(managerStart.status, 409);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

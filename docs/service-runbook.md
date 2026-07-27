@@ -20,6 +20,20 @@
 .\start-service-entry.cmd
 ```
 
+只启动 CLIProxyAPI、前端和统一网关，不启动两个本地模型管理器：
+
+```bat
+.\start-subscription-proxy.cmd
+```
+
+对应的局域网独立模式：
+
+```bat
+.\start-subscription-proxy-lan.cmd
+```
+
+反代独立模式可用 `status-subscription-proxy.cmd` 查看，用 `stop-subscription-proxy.cmd` 停止。
+
 局域网模式：
 
 ```bat

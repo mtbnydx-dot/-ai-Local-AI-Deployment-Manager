@@ -47,7 +47,8 @@ This is an AI service control panel for high-end personal workstations and small
 ├─ install-all.cmd         # 安装 Node 依赖
 ├─ test-all.cmd            # 运行核心测试
 ├─ start-service-entry.cmd # 启动本机模式
-└─ start-service-entry-lan.cmd # 启动局域网模式
+├─ start-service-entry-lan.cmd # 启动局域网模式
+└─ start-subscription-proxy.cmd # 只启动订阅反代、前端和网关
 ```
 
 ### 系统要求
@@ -77,6 +78,14 @@ start-service-entry.cmd
 ```text
 http://127.0.0.1:5176/
 ```
+
+如果只需要订阅反代，不启动 vLLM、llama.cpp 管理器或模型容器：
+
+```cmd
+start-subscription-proxy.cmd
+```
+
+局域网使用 `start-subscription-proxy-lan.cmd`，停止使用 `stop-subscription-proxy.cmd`。
 
 如果要让局域网其它设备访问：
 
@@ -225,7 +234,8 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ install-all.cmd         # Install Node dependencies
 ├─ test-all.cmd            # Run core tests
 ├─ start-service-entry.cmd # Start local-only mode
-└─ start-service-entry-lan.cmd # Start LAN mode
+├─ start-service-entry-lan.cmd # Start LAN mode
+└─ start-subscription-proxy.cmd # Start only subscription proxy, frontend, and gateway
 ```
 
 ### Requirements
@@ -255,6 +265,14 @@ Open:
 ```text
 http://127.0.0.1:5176/
 ```
+
+To run only CLIProxyAPI, the frontend, and the gateway—without either local model manager or any model container:
+
+```cmd
+start-subscription-proxy.cmd
+```
+
+Use `start-subscription-proxy-lan.cmd` for LAN mode and `stop-subscription-proxy.cmd` to stop the isolated stack.
 
 To serve other LAN devices:
 

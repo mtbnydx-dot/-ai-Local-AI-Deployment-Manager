@@ -97,6 +97,47 @@ CLIPROXY_STATUS_TIMEOUT_MS=2500
 
 这些环境变量只保存上游地址和开关，不保存 CLIProxyAPI API Key。修改后重启 `service-entry`。
 
+### 一键启动反代独立模式
+
+CLIProxyAPI 已安装并配置后，在发布目录运行：
+
+```powershell
+.\start-subscription-proxy.cmd
+```
+
+这个模式只启动：
+
+1. CLIProxyAPI 订阅反代（若 8317 已有实例，则复用现有实例）。
+2. `service-entry` 前端。
+3. `service-entry` 统一网关。
+
+它不会启动 vLLM manager、llama.cpp manager 或任何模型容器。控制台会显示“反代独立模式”，并隐藏本地模型管理区。
+
+局域网模式：
+
+```powershell
+.\start-subscription-proxy-lan.cmd
+```
+
+查看状态和停止：
+
+```powershell
+.\status-subscription-proxy.cmd
+.\stop-subscription-proxy.cmd
+```
+
+停止脚本只会关闭反代独立模式的前端/网关，以及由该启动脚本亲自启动并准确记录的 CLIProxyAPI 进程。若 CLIProxyAPI 在启动前已经运行，停止脚本会保留它。
+
+CLIProxyAPI 不在 PATH 时，可先设置：
+
+```powershell
+$env:CLIPROXY_EXE = "D:\Apps\CLIProxyAPI\cli-proxy-api.exe"
+$env:CLIPROXY_CONFIG = "D:\Apps\CLIProxyAPI\config.yaml"
+.\start-subscription-proxy.cmd
+```
+
+如果 `5176` 已运行完整模式的 `service-entry`，独立启动流程会中止并提示，不会擅自关闭或替换现有服务。
+
 在控制台打开“订阅反代 · CLIProxyAPI”即可查看：
 
 - `状态良好`：无需认证即可读取模型列表。
@@ -114,10 +155,16 @@ Codex:   http://127.0.0.1:5176/gateway/subscription/codex/v1
 OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1
 ```
 
-局域网模式先运行：
+完整平台的局域网模式可运行：
 
 ```powershell
 .\start-service-entry.cmd lan
+```
+
+只运行订阅反代、前端和网关时，改用：
+
+```powershell
+.\start-subscription-proxy-lan.cmd
 ```
 
 然后把地址中的 `127.0.0.1` 换成本机局域网 IP。可选公网地址由 `SERVICE_ENTRY_PUBLIC_BASE_URL` 生成；这只是地址声明，不会自动创建隧道、TLS 或防火墙规则。

@@ -245,7 +245,7 @@ async function smokePage(page, baseUrl, label) {
   expect(failures, `${label} frontend errors`).toEqual([]);
 }
 
-async function smokeEntryPage(page, baseUrl) {
+async function smokeEntryPage(page, baseUrl, mode = "full") {
   const failures = [];
   page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
@@ -258,15 +258,21 @@ async function smokeEntryPage(page, baseUrl) {
     }
   });
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("h1")).toContainText("AI 服务统一入口");
+  await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });
+  await expect(page.locator("h1")).toContainText(mode === "subscription" ? "订阅反代独立入口" : "AI 服务统一入口");
   await expect(page.locator("#entrySummary")).toBeVisible();
-  await expect(page.locator("#managerGrid")).toBeVisible();
+  if (mode === "subscription") {
+    await expect(page.locator("#managerGrid")).toBeHidden();
+    await expect(page.locator("#entryModeBadge")).toContainText("反代独立模式");
+    await expect(page.locator("#entrySummary")).toContainText("反代 / 前端 / 网关");
+  } else {
+    await expect(page.locator("#managerGrid")).toBeVisible();
+  }
   await expect(page.locator("#subscription-proxy")).toBeVisible();
   await expect(page.locator("#subscription-proxy")).toContainText("本机、局域网");
   await expect(page.locator("#subscriptionProxyPanel")).toContainText("CLIProxyAPI", { timeout: 15_000 });
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
   await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
-  await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });
   expect(failures, "service-entry frontend errors").toEqual([]);
 }
 
@@ -325,6 +331,29 @@ test.describe("manager frontends", () => {
     const context = await browser.newContext();
     try {
       await smokeEntryPage(await context.newPage(), managers[0].url);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("subscription-only dashboard hides local model managers", async ({ browser }) => {
+    const entryPort = await getFreePort();
+    managers = [
+      await startManager({
+        cwd: path.join(ROOT, "service-entry"),
+        port: entryPort,
+        env: {
+          SERVICE_ENTRY_HOST: "127.0.0.1",
+          SERVICE_ENTRY_PORT: String(entryPort),
+          SERVICE_ENTRY_MODE: "subscription",
+          CLIPROXY_ENABLED: "0",
+        },
+      }),
+    ];
+
+    const context = await browser.newContext();
+    try {
+      await smokeEntryPage(await context.newPage(), managers[0].url, "subscription");
     } finally {
       await context.close();
     }

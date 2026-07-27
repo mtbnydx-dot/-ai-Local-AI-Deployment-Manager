@@ -6,6 +6,7 @@ call :check "vllm-manager\server.js" || exit /b 1
 call :check "llama-manager\server.js" || exit /b 1
 call :check "service-entry\server.js" || exit /b 1
 call :check "tests\frontend-smoke.spec.cjs" || exit /b 1
+call :checkPowerShell "subscription-proxy-stack.ps1" || exit /b 1
 call :test "manager-core" || exit /b 1
 call :test "service-entry" || exit /b 1
 call :test "vllm-manager" || exit /b 1
@@ -36,6 +37,13 @@ call npm test
 set "CODE=%ERRORLEVEL%"
 popd >nul
 exit /b %CODE%
+
+:checkPowerShell
+set "FILE=%~1"
+echo.
+echo == PowerShell syntax check %FILE% ==
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('%ROOT%%FILE%', [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }"
+exit /b %ERRORLEVEL%
 
 :frontendSmoke
 if not exist "%ROOT%package.json" (

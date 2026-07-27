@@ -16,6 +16,7 @@ const MODEL_DISCOVERY_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_
 const MANAGER_STATUS_CACHE_MS = Math.max(500, Number(process.env.SERVICE_ENTRY_STATUS_CACHE_MS || 5000));
 const PUBLIC_BASE_URL = String(process.env.SERVICE_ENTRY_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
 const SUBSCRIPTION_PROXY_CONFIG = core.normalizeSubscriptionProxyConfig(process.env);
+const SERVICE_ENTRY_MODE = normalizeServiceEntryMode(process.env.SERVICE_ENTRY_MODE);
 const ALLOWED_ORIGINS = String(process.env.SERVICE_ENTRY_ALLOWED_ORIGINS || "")
   .split(/[;,]/)
   .map((item) => item.trim())
@@ -78,6 +79,7 @@ function createServiceEntryServer(options = {}) {
 
 async function handleRequest(req, res, options = {}) {
   try {
+    const entryMode = getServiceEntryMode(options);
     const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       return serveFile(res, path.join(ROOT, "index.html"), "text/html; charset=utf-8");
@@ -97,6 +99,7 @@ async function handleRequest(req, res, options = {}) {
         config: options.subscriptionProxyConfig,
         fetchImpl: options.fetchImpl,
         force: true,
+        entryOptions: options,
       }));
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
@@ -105,16 +108,19 @@ async function handleRequest(req, res, options = {}) {
         entry: {
           host: HOST,
           port: PORT,
+          mode: entryMode,
+          modules: entryMode === "subscription" ? ["frontend", "gateway", "subscription-proxy"] : ["frontend", "gateway", "local-model-managers", "subscription-proxy"],
           lanAddress: core.getLanAddress(),
           pid: process.pid,
           uptimeSeconds: process.uptime(),
           gateway: buildEntryGatewayUrls(options),
           gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20, maxLines: 2000 }),
         },
-        managers: await Promise.all(MANAGERS.map(buildManagerStatus)),
+        managers: entryMode === "subscription" ? [] : await Promise.all(MANAGERS.map(buildManagerStatus)),
         subscriptionProxy: await getSubscriptionProxyStatus({
           config: options.subscriptionProxyConfig,
           fetchImpl: options.fetchImpl,
+          entryOptions: options,
         }),
       });
     }
@@ -127,6 +133,7 @@ async function handleRequest(req, res, options = {}) {
     const managerStartMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/start$/);
     if (req.method === "POST" && managerStartMatch) {
       if (!core.isLocalRequest(req)) return sendJson(res, { ok: false, error: "Start is only available from localhost." }, 403);
+      if (entryMode === "subscription") return sendJson(res, { ok: false, error: "Local model managers are disabled in subscription-only mode." }, 409);
       const manager = findManager(managerStartMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
       return sendJson(res, await startDetachedManager(manager));
@@ -134,13 +141,15 @@ async function handleRequest(req, res, options = {}) {
     const managerStopMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/stop$/);
     if (req.method === "POST" && managerStopMatch) {
       if (!core.isLocalRequest(req)) return sendJson(res, { ok: false, error: "Stop is only available from localhost." }, 403);
+      if (entryMode === "subscription") return sendJson(res, { ok: false, error: "Local model managers are disabled in subscription-only mode." }, 409);
       const manager = findManager(managerStopMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
       return sendJson(res, await stopManager(manager));
     }
     if (req.method === "POST" && url.pathname === "/api/stop-all") {
       if (!core.isLocalRequest(req)) return sendJson(res, { ok: false, error: "Stop is only available from localhost." }, 403);
-      const stopped = await Promise.all(MANAGERS.map((manager) => postJson(`http://127.0.0.1:${manager.port}/api/manager/shutdown`)));
+      const managers = entryMode === "subscription" ? [] : MANAGERS;
+      const stopped = await Promise.all(managers.map((manager) => postJson(`http://127.0.0.1:${manager.port}/api/manager/shutdown`)));
       sendJson(res, { ok: true, stopped });
       return shutdownSoon();
     }
@@ -258,25 +267,35 @@ function findManager(id) {
   return MANAGERS.find((manager) => manager.id === key) || null;
 }
 
+function normalizeServiceEntryMode(value) {
+  const mode = String(value || "full").trim().toLowerCase();
+  return ["subscription", "subscription-only", "proxy"].includes(mode) ? "subscription" : "full";
+}
+
+function getServiceEntryMode(options = {}) {
+  return normalizeServiceEntryMode(options.serviceEntryMode ?? SERVICE_ENTRY_MODE);
+}
+
 function buildEntryGatewayUrls(options = {}) {
   const entryPort = Number(options.entryPort || PORT);
   const entryHost = String(options.entryHost || HOST);
   const lanAddress = String(options.lanAddress || core.getLanAddress());
   const publicBaseUrl = String(options.publicBaseUrl ?? PUBLIC_BASE_URL).trim().replace(/\/+$/, "");
+  const subscriptionOnly = getServiceEntryMode(options) === "subscription";
   const localBase = `http://127.0.0.1:${entryPort}`;
   const lanBase = entryHost === "127.0.0.1" || entryHost === "localhost" ? null : `http://${lanAddress}:${entryPort}`;
   return {
     localBase,
     lanBase,
-    autoOpenAi: `${localBase}/gateway/auto/openai/v1`,
-    autoClaude: `${localBase}/gateway/auto/claude`,
-    autoOpenCode: `${localBase}/gateway/auto/opencode/v1`,
-    lanAutoOpenAi: lanBase ? `${lanBase}/gateway/auto/openai/v1` : null,
-    lanAutoClaude: lanBase ? `${lanBase}/gateway/auto/claude` : null,
-    lanAutoOpenCode: lanBase ? `${lanBase}/gateway/auto/opencode/v1` : null,
-    publicOpenAi: publicBaseUrl ? `${publicBaseUrl}/gateway/auto/openai/v1` : null,
-    publicClaude: publicBaseUrl ? `${publicBaseUrl}/gateway/auto/claude` : null,
-    publicOpenCode: publicBaseUrl ? `${publicBaseUrl}/gateway/auto/opencode/v1` : null,
+    autoOpenAi: subscriptionOnly ? null : `${localBase}/gateway/auto/openai/v1`,
+    autoClaude: subscriptionOnly ? null : `${localBase}/gateway/auto/claude`,
+    autoOpenCode: subscriptionOnly ? null : `${localBase}/gateway/auto/opencode/v1`,
+    lanAutoOpenAi: !subscriptionOnly && lanBase ? `${lanBase}/gateway/auto/openai/v1` : null,
+    lanAutoClaude: !subscriptionOnly && lanBase ? `${lanBase}/gateway/auto/claude` : null,
+    lanAutoOpenCode: !subscriptionOnly && lanBase ? `${lanBase}/gateway/auto/opencode/v1` : null,
+    publicOpenAi: !subscriptionOnly && publicBaseUrl ? `${publicBaseUrl}/gateway/auto/openai/v1` : null,
+    publicClaude: !subscriptionOnly && publicBaseUrl ? `${publicBaseUrl}/gateway/auto/claude` : null,
+    publicOpenCode: !subscriptionOnly && publicBaseUrl ? `${publicBaseUrl}/gateway/auto/opencode/v1` : null,
     subscription: core.buildSubscriptionProxyGatewayUrls({
       entryHost,
       entryPort,
@@ -302,6 +321,12 @@ function buildManagerGatewayUrls(manager) {
 async function proxyGatewayRequest(req, res, url, options = {}) {
   const route = parseGatewayRoute(url.pathname);
   if (!route) return sendJson(res, core.openAiGatewayError("not_found", "Unknown gateway route."), 404);
+  if (getServiceEntryMode(options) === "subscription" && route.engine !== "subscription") {
+    return sendJson(res, core.openAiGatewayError(
+      "route_disabled",
+      "Local model routes are disabled in subscription-only mode.",
+    ), 404);
+  }
   if (req.method === "OPTIONS") {
     res.writeHead(204, gatewayCorsHeaders(req));
     return res.end();
@@ -948,6 +973,7 @@ module.exports = {
   handleRequest,
   isAggregatedModelListRequest,
   mergeManagerModelCatalogs,
+  normalizeServiceEntryMode,
   parseGatewayRoute,
   probeSubscriptionProxy,
   proxySubscriptionRequest,
@@ -955,5 +981,6 @@ module.exports = {
   safeSubscriptionProxyError,
   selectGatewayManager,
   sendAggregatedModelList,
+  getServiceEntryMode,
   startServiceEntry,
 };
