@@ -12,6 +12,7 @@ const PORT = Number(process.env.SERVICE_ENTRY_PORT || 5176);
 const ROOT = __dirname;
 const AI_ROOT = path.dirname(ROOT);
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
+const SUBSCRIPTION_SERVICE_CONFIG_PATH = path.join(ROOT, "subscription-service.local.json");
 const GATEWAY_MAX_BODY_BYTES = Math.max(1024 * 1024, Number(process.env.SERVICE_ENTRY_MAX_BODY_BYTES || 32 * 1024 * 1024));
 const MODEL_DISCOVERY_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_MODEL_CACHE_MS || 3000));
 const MANAGER_STATUS_CACHE_MS = Math.max(500, Number(process.env.SERVICE_ENTRY_STATUS_CACHE_MS || 5000));
@@ -86,6 +87,12 @@ async function handleRequest(req, res, options = {}) {
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       return serveFile(res, path.join(ROOT, "index.html"), "text/html; charset=utf-8");
     }
+    if (req.method === "GET" && url.pathname === "/subscription-login.html") {
+      return serveFile(res, path.join(ROOT, "subscription-login.html"), "text/html; charset=utf-8");
+    }
+    if (req.method === "GET" && url.pathname === "/subscription-service.html") {
+      return serveFile(res, path.join(ROOT, "subscription-service.html"), "text/html; charset=utf-8");
+    }
     if (req.method === "GET" && url.pathname === "/favicon.ico") {
       res.writeHead(204);
       return res.end();
@@ -129,6 +136,23 @@ async function handleRequest(req, res, options = {}) {
         ok: true,
         loginSession: await getSubscriptionSetupController(options).startLogin(body.provider),
       }, 202);
+    }
+    if (req.method === "GET" && url.pathname === "/api/subscription-service") {
+      return sendJson(res, getSubscriptionServiceStatus({
+        ...options,
+        localControl: core.isLocalRequest(req),
+      }));
+    }
+    if (req.method === "POST" && url.pathname === "/api/subscription-service/public-base-url") {
+      if (!core.isLocalRequest(req)) {
+        return sendJson(res, { ok: false, error: "公网地址配置仅允许从本机操作。" }, 403);
+      }
+      const body = await readJsonControlBody(req);
+      await saveSubscriptionServiceConfig(body.publicBaseUrl, options);
+      return sendJson(res, getSubscriptionServiceStatus({
+        ...options,
+        localControl: true,
+      }));
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       return sendJson(res, {
@@ -308,11 +332,116 @@ function getServiceEntryMode(options = {}) {
   return normalizeServiceEntryMode(options.serviceEntryMode ?? SERVICE_ENTRY_MODE);
 }
 
+function getSubscriptionServiceConfigPath(options = {}) {
+  return options.subscriptionServiceConfigPath || SUBSCRIPTION_SERVICE_CONFIG_PATH;
+}
+
+function readSubscriptionServiceConfig(options = {}) {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(getSubscriptionServiceConfigPath(options), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizePublicBaseUrl(value, options = {}) {
+  const input = String(value || "").trim();
+  if (!input && options.allowEmpty !== false) return "";
+  let parsed;
+  try {
+    parsed = new URL(input);
+  } catch {
+    throw Object.assign(new Error("公网入口必须是完整的 HTTPS URL。"), { status: 400 });
+  }
+  if (parsed.protocol !== "https:") {
+    throw Object.assign(new Error("公网入口必须使用 HTTPS。"), { status: 400 });
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw Object.assign(new Error("公网入口不能包含账号、密码、查询参数或锚点。"), { status: 400 });
+  }
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+}
+
+function getConfiguredPublicBaseUrl(options = {}) {
+  if (Object.hasOwn(options, "publicBaseUrl")) {
+    return String(options.publicBaseUrl || "").trim().replace(/\/+$/, "");
+  }
+  const saved = readSubscriptionServiceConfig(options);
+  return String(saved.publicBaseUrl || PUBLIC_BASE_URL).trim().replace(/\/+$/, "");
+}
+
+async function saveSubscriptionServiceConfig(publicBaseUrl, options = {}) {
+  const normalized = normalizePublicBaseUrl(publicBaseUrl);
+  const filePath = getSubscriptionServiceConfigPath(options);
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  const payload = `${JSON.stringify({
+    version: 1,
+    publicBaseUrl: normalized,
+    updatedAt: new Date().toISOString(),
+  }, null, 2)}\n`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await fs.writeFile(tempPath, payload, { encoding: "utf8", mode: 0o600 });
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
+  return normalized;
+}
+
+function getSubscriptionServiceStatus(options = {}) {
+  const entryPort = Number(options.entryPort || PORT);
+  const entryHost = String(options.entryHost || HOST);
+  const lanAddress = String(options.lanAddress || core.getLanAddress());
+  const publicBaseUrl = getConfiguredPublicBaseUrl(options);
+  const preview = core.buildSubscriptionProxyGatewayUrls({
+    entryHost: "0.0.0.0",
+    entryPort,
+    lanAddress,
+    publicBaseUrl,
+  });
+  const lanActive = !["127.0.0.1", "localhost", "::1"].includes(entryHost);
+  const platform = options.platform || process.platform;
+  const lanCommand = platform === "win32"
+    ? "stop-subscription-proxy.cmd && start-subscription-proxy-lan.cmd"
+    : platform === "darwin"
+      ? "bash ./subscription-proxy-macos.sh stop && bash ./subscription-proxy-macos.sh start lan"
+      : "bash ./subscription-proxy-ubuntu.sh stop && bash ./subscription-proxy-ubuntu.sh start lan";
+  return {
+    ok: true,
+    localControl: Boolean(options.localControl),
+    entry: {
+      host: entryHost,
+      port: entryPort,
+      mode: getServiceEntryMode(options),
+    },
+    local: {
+      active: true,
+      baseUrl: `http://127.0.0.1:${entryPort}`,
+      endpoints: preview.local,
+    },
+    lan: {
+      active: lanActive,
+      address: lanAddress,
+      baseUrl: `http://${lanAddress}:${entryPort}`,
+      endpoints: preview.lan,
+      startCommand: lanCommand,
+    },
+    public: {
+      configured: Boolean(publicBaseUrl),
+      baseUrl: publicBaseUrl,
+      endpoints: preview.public,
+    },
+  };
+}
+
 function buildEntryGatewayUrls(options = {}) {
   const entryPort = Number(options.entryPort || PORT);
   const entryHost = String(options.entryHost || HOST);
   const lanAddress = String(options.lanAddress || core.getLanAddress());
-  const publicBaseUrl = String(options.publicBaseUrl ?? PUBLIC_BASE_URL).trim().replace(/\/+$/, "");
+  const publicBaseUrl = getConfiguredPublicBaseUrl(options);
   const subscriptionOnly = getServiceEntryMode(options) === "subscription";
   const localBase = `http://127.0.0.1:${entryPort}`;
   const lanBase = entryHost === "127.0.0.1" || entryHost === "localhost" ? null : `http://${lanAddress}:${entryPort}`;
@@ -1017,16 +1146,19 @@ module.exports = {
   emptyManagerCatalog,
   findManager,
   getManagerModelCatalog,
+  getSubscriptionServiceStatus,
   getSubscriptionProxyStatus,
   handleRequest,
   isAggregatedModelListRequest,
   mergeManagerModelCatalogs,
   normalizeServiceEntryMode,
+  normalizePublicBaseUrl,
   parseGatewayRoute,
   probeSubscriptionProxy,
   proxySubscriptionRequest,
   resolveGatewayManager,
   safeSubscriptionProxyError,
+  saveSubscriptionServiceConfig,
   selectGatewayManager,
   sendAggregatedModelList,
   getServiceEntryMode,

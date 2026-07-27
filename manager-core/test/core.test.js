@@ -34,6 +34,12 @@ test("network helpers prefer physical LAN addresses over virtual adapters", () =
     Loopback: [{ family: "IPv4", internal: true, address: "127.0.0.1" }],
   });
   assert.equal(address, "192.168.31.209");
+
+  const macAddress = core.getLanAddress({
+    en0: [{ family: "IPv4", internal: false, address: "100.50.44.4" }],
+    bridge100: [{ family: "IPv4", internal: false, address: "10.211.55.2" }],
+  });
+  assert.equal(macAddress, "100.50.44.4");
 });
 
 test("secret records migrate legacy plaintext to hash-only shape", () => {

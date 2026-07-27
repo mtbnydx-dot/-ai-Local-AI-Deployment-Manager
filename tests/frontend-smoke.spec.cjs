@@ -271,19 +271,26 @@ async function smokeEntryPage(page, baseUrl, mode = "full") {
   await expect(page.locator("#subscription-proxy")).toBeVisible();
   await expect(page.locator("#subscription-proxy")).toContainText("本机、局域网");
   await expect(page.locator("#subscriptionProxyPanel")).toContainText("CLIProxyAPI", { timeout: 15_000 });
-  await expect(page.locator("#subscriptionSetupPanel")).toContainText("订阅登录与统一网关配置", { timeout: 15_000 });
-  await expect(page.locator("[data-subscription-provider]")).toHaveCount(5);
+  await expect(page.locator("a[href='/subscription-login.html']")).toContainText("反代账号配置");
+  await expect(page.locator("a[href='/subscription-service.html']")).toContainText("服务发布配置");
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
   await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
+  await page.goto(new URL("/subscription-login.html", baseUrl).href, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("h1")).toContainText("反代账号配置");
+  await expect(page.locator("[data-provider]")).toHaveCount(5);
+  await page.goto(new URL("/subscription-service.html", baseUrl).href, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("h1")).toContainText("服务发布配置");
+  await expect(page.locator("#panel")).toContainText("/gateway/subscription/openai/v1", { timeout: 15_000 });
+  await expect(page.locator("#publicBaseUrl")).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileLayout = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
-    setupColumns: getComputedStyle(document.querySelector(".setup-grid")).gridTemplateColumns,
+    scopeColumns: getComputedStyle(document.querySelector(".scope-grid")).gridTemplateColumns,
   }));
   expect(mobileLayout.scrollWidth, "service-entry mobile page should not overflow horizontally")
     .toBeLessThanOrEqual(mobileLayout.clientWidth + 1);
-  expect(mobileLayout.setupColumns.split(" ")).toHaveLength(1);
+  expect(mobileLayout.scopeColumns.split(" ")).toHaveLength(1);
   expect(failures, "service-entry frontend errors").toEqual([]);
 }
 

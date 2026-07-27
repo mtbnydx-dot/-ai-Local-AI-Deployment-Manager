@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>反代账号配置</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f6fb;
+      --surface: #fff;
+      --surface-2: #eef3f7;
+      --line: #d9e2ea;
+      --ink: #14202b;
+      --muted: #607284;
+      --blue: #2563eb;
+      --green: #16a34a;
+      --amber: #d97706;
+      --red: #dc2626;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0a1017;
+        --surface: #111923;
+        --surface-2: #192432;
+        --line: #2b3a4a;
+        --ink: #e9f0f8;
+        --muted: #9aaec0;
+        --blue: #6aa4ff;
+        --green: #4ade80;
+        --amber: #fbbf24;
+        --red: #f87171;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+    main {
+      width: min(1080px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0;
+      display: grid;
+      gap: 18px;
+    }
+    header, .head, .step-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(26px, 4vw, 36px); }
+    h2 { font-size: 20px; }
+    h3 { font-size: 16px; }
+    p { color: var(--muted); line-height: 1.6; }
+    a { color: inherit; text-decoration: none; }
+    button, .button {
+      min-height: 42px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--ink);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.primary, .button.primary {
+      color: #fff;
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .nav { display: flex; flex-wrap: wrap; gap: 9px; }
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--surface);
+      display: grid;
+      gap: 15px;
+    }
+    .badge {
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.ok { color: var(--green); }
+    .badge.warn { color: var(--amber); }
+    .badge.fail { color: var(--red); }
+    .status-list { display: grid; gap: 8px; }
+    .status-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface-2);
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+    .status-row.ok .dot { background: var(--green); }
+    .status-row.warn .dot { background: var(--amber); }
+    .status-row.fail .dot { background: var(--red); }
+    .row-main { min-width: 0; display: grid; gap: 3px; }
+    .row-main span, .row-side { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 13px;
+    }
+    .step {
+      min-width: 0;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .actions button { flex: 1 1 145px; }
+    .message, .secret {
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .message.warn, .secret { border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); }
+    .message.fail { border-color: color-mix(in srgb, var(--red) 50%, var(--line)); }
+    .message.ok { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+    .secret { display: grid; gap: 8px; }
+    code {
+      display: block;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow-wrap: anywhere;
+    }
+    .copy-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+    .empty { min-height: 240px; display: grid; place-items: center; color: var(--muted); }
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface);
+      opacity: 0;
+      transition: 160ms ease;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    @media (max-width: 760px) {
+      header { display: grid; }
+      .grid { grid-template-columns: 1fr; }
+      .nav, .nav .button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>反代账号配置</h1>
+        <p>只负责 CLIProxyAPI 客户端 Key 与订阅账号登录，不在这里配置局域网或公网发布。</p>
+      </div>
+      <nav class="nav">
+        <a class="button" href="/">返回总览</a>
+        <a class="button primary" href="/subscription-service.html">服务发布配置</a>
+      </nav>
+    </header>
+    <section class="card">
+      <div class="head">
+        <div>
+          <h2>CLIProxyAPI 本机控制</h2>
+          <p>配置文件和 OAuth 凭据留在 CLIProxyAPI；本页不会读取已有 Key 或授权文件内容。</p>
+        </div>
+        <span class="badge ok">仅本机可操作</span>
+      </div>
+      <div id="panel"><div class="empty">正在读取配置状态…</div></div>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const panel = document.querySelector("#panel");
+    const toast = document.querySelector("#toast");
+    let generatedApiKey = "";
+    let pollTimer = null;
+
+    document.addEventListener("click", async (event) => {
+      const copy = event.target.closest("[data-copy]");
+      if (copy) {
+        const value = copy.getAttribute("data-copy") || "";
+        try {
+          await navigator.clipboard.writeText(value);
+          showToast("已复制");
+        } catch {
+          showToast(value);
+        }
+        return;
+      }
+      const keyButton = event.target.closest("[data-generate-key]");
+      if (keyButton) {
+        await generateKey(keyButton);
+        return;
+      }
+      const loginButton = event.target.closest("[data-provider]");
+      if (loginButton) await startLogin(loginButton);
+    });
+
+    refresh();
+
+    async function refresh() {
+      try {
+        const response = await fetch("/api/subscription-proxy/setup", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(6000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "本机配置接口不可用。");
+        render(data);
+        clearTimeout(pollTimer);
+        if (["starting", "waiting"].includes(data.loginSession?.status)) {
+          pollTimer = setTimeout(refresh, 1800);
+        }
+      } catch (error) {
+        panel.innerHTML = `<div class="message warn">${escapeHtml(error.message)} 请在服务机上通过 127.0.0.1 打开本页。</div>`;
+      }
+    }
+
+    function render(data) {
+      const executable = data.executable || {};
+      const config = data.config || {};
+      const auth = data.auth || {};
+      const session = data.loginSession || null;
+      const loginRunning = ["starting", "waiting"].includes(session?.status);
+      const ready = executable.found && config.found;
+      const keyState = config.safeApiKeyConfigured
+        ? [`已配置 ${config.safeApiKeyCount || 0} 个有效 Key`, "ok"]
+        : config.unsafeApiKeyCount
+          ? ["仍是示例 Key", "warn"]
+          : ["尚未配置", "warn"];
+      panel.innerHTML = `
+        <div class="status-list">
+          ${statusRow("CLIProxyAPI 程序", executable.found ? executable.path : "未找到可执行文件", executable.found ? "ok" : "fail")}
+          ${statusRow("配置文件", config.found ? config.path : "未找到；可设置 CLIPROXY_CONFIG", config.found ? "ok" : "fail")}
+          ${statusRow(
+            "上游监听",
+            config.loopbackOnly ? `${config.host}:${config.port}` : `${config.host || "全部接口"}:${config.port} · 建议改为 127.0.0.1`,
+            config.loopbackOnly ? "ok" : "warn",
+          )}
+        </div>
+        <div class="grid">
+          <section class="step">
+            <div class="step-head">
+              <div>
+                <h3>1. 客户端 API Key</h3>
+                <p>客户端连接统一网关时使用，不等于订阅账号登录。</p>
+              </div>
+              <span class="badge ${keyState[1]}">${escapeHtml(keyState[0])}</span>
+            </div>
+            <button class="primary" type="button" data-generate-key ${config.found ? "" : "disabled"}>
+              ${config.safeApiKeyConfigured ? "再生成一个 API Key" : "生成安全 API Key"}
+            </button>
+            ${generatedApiKey ? `
+              <div class="secret">
+                <strong>请立即复制，这个新 Key 只显示一次。</strong>
+                <div class="copy-row">
+                  <code>${escapeHtml(generatedApiKey)}</code>
+                  <button type="button" data-copy="${escapeHtml(generatedApiKey)}">复制</button>
+                </div>
+              </div>
+            ` : ""}
+            <p>写入时会移除官方示例 Key，并保留已有的有效 Key。</p>
+          </section>
+          <section class="step">
+            <div class="step-head">
+              <div>
+                <h3>2. 订阅账号登录</h3>
+                <p>检测到 ${Number(auth.accountFiles || 0)} 个本地授权文件；不读取文件内容。</p>
+              </div>
+              <span class="badge ${auth.accountFiles ? "ok" : "warn"}">${auth.accountFiles ? "已有授权" : "待登录"}</span>
+            </div>
+            <div class="actions">
+              ${(data.providers || []).map((provider) => `
+                <button
+                  type="button"
+                  class="${provider.id === "codex" ? "primary" : ""}"
+                  data-provider="${escapeHtml(provider.id)}"
+                  ${ready && !loginRunning ? "" : "disabled"}
+                >登录 ${escapeHtml(provider.label)}</button>
+              `).join("")}
+            </div>
+            ${renderSession(session)}
+            ${session?.authUrl ? `<a class="button primary" href="${escapeHtml(session.authUrl)}" target="_blank" rel="noreferrer">打开授权页面</a>` : ""}
+          </section>
+        </div>
+        ${!config.safeApiKeyConfigured ? `<div class="message warn">请先生成安全 API Key；否则即使 OAuth 登录成功，CLIProxyAPI 也会拒绝 API 请求。</div>` : ""}
+      `;
+    }
+
+    function renderSession(session) {
+      if (!session) return `<div class="message">尚未发起登录。</div>`;
+      const state = session.status === "succeeded" ? "ok" : session.status === "failed" ? "fail" : "warn";
+      return `<div class="message ${state}"><strong>${escapeHtml(session.providerLabel || "订阅服务")}：</strong> ${escapeHtml(session.message || session.status)}</div>`;
+    }
+
+    async function generateKey(button) {
+      if (!confirm("生成新的客户端 API Key？已有有效 Key 会保留，示例 Key 会移除。")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/subscription-proxy/api-key", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "API Key 写入失败。");
+        generatedApiKey = data.apiKey || "";
+        showToast("新 API Key 已写入，请立即复制");
+        await refresh();
+      } catch (error) {
+        showToast(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function startLogin(button) {
+      const provider = button.getAttribute("data-provider") || "";
+      const label = button.textContent.trim().replace(/^登录\s*/, "");
+      if (!confirm(`启动 ${label} 登录？浏览器将打开服务商授权页面。`)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/subscription-proxy/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "登录启动失败。");
+        showToast(`${label} 登录已启动`);
+        await refresh();
+      } catch (error) {
+        showToast(error.message);
+        await refresh();
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function statusRow(title, detail, state) {
+      return `
+        <div class="status-row ${state}">
+          <span class="dot"></span>
+          <div class="row-main"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>
+          <span class="row-side">${escapeHtml(state)}</span>
+        </div>
+      `;
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[char]));
+    }
+  </script>
+</body>
+</html>

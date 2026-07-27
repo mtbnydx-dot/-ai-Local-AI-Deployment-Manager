@@ -153,7 +153,7 @@ OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1
 
 安装、OAuth 登录和凭据边界见 [`docs/subscription-proxy-guide.md`](docs/subscription-proxy-guide.md)。
 
-一键启动后直接打开 `http://127.0.0.1:5176/`，在“订阅登录与统一网关配置”里先生成并复制 API Key，再点击需要的订阅登录按钮。
+一键启动后直接打开 `http://127.0.0.1:5176/`：进入“反代账号配置”生成 Key 和登录订阅；进入“服务发布配置”直接查看本机、局域网地址，并填写可选公网 HTTPS 基础地址。
 
 ### 客户端配置建议
 

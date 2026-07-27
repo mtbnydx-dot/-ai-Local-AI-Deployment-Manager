@@ -18,11 +18,16 @@ function getLanAddress(interfaces = os.networkInterfaces()) {
   const preferred = candidates
     .filter((item) => item.privateLan && !item.virtual)
     .sort((a, b) => lanAddressRank(a.address) - lanAddressRank(b.address))[0];
-  return preferred?.address || candidates.find((item) => item.privateLan)?.address || candidates[0]?.address || "127.0.0.1";
+  const physical = candidates.find((item) => !item.virtual);
+  return preferred?.address
+    || physical?.address
+    || candidates.find((item) => item.privateLan)?.address
+    || candidates[0]?.address
+    || "127.0.0.1";
 }
 
 function isVirtualInterfaceName(name = "") {
-  return /docker|wsl|vethernet|hyper-v|virtualbox|vmware|loopback|tailscale|zerotier/i.test(String(name));
+  return /bridge|docker|wsl|vethernet|hyper-v|virtualbox|vmware|loopback|tailscale|zerotier/i.test(String(name));
 }
 
 function isVirtualLanAddress(address = "") {

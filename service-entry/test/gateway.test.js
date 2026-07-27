@@ -197,6 +197,14 @@ test("entry server serves only whitelisted docs", async () => {
 
     const missingResponse = await fetch(`http://127.0.0.1:${port}/docs/server.js`);
     assert.equal(missingResponse.status, 404);
+
+    const loginPage = await fetch(`http://127.0.0.1:${port}/subscription-login.html`);
+    assert.equal(loginPage.status, 200);
+    assert.match(await loginPage.text(), /反代账号配置/);
+
+    const servicePage = await fetch(`http://127.0.0.1:${port}/subscription-service.html`);
+    assert.equal(servicePage.status, 200);
+    assert.match(await servicePage.text(), /服务发布配置/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -363,6 +371,64 @@ test("subscription setup controller writes a key and launches the selected offic
     child.emit("exit", 0, null);
     assert.equal((await controller.getStatus()).loginSession.status, "succeeded");
   } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("subscription service status always previews LAN endpoints and validates public HTTPS URLs", () => {
+  const status = entry.getSubscriptionServiceStatus({
+    serviceEntryMode: "subscription",
+    entryHost: "127.0.0.1",
+    entryPort: 5176,
+    lanAddress: "192.168.1.27",
+    publicBaseUrl: "",
+    platform: "darwin",
+    localControl: true,
+  });
+  assert.equal(status.lan.active, false);
+  assert.equal(status.lan.baseUrl, "http://192.168.1.27:5176");
+  assert.equal(status.lan.endpoints.openAi, "http://192.168.1.27:5176/gateway/subscription/openai/v1");
+  assert.match(status.lan.startCommand, /subscription-proxy-macos\.sh start lan/);
+  assert.equal(status.public.configured, false);
+  assert.equal(status.public.endpoints, null);
+  assert.equal(
+    entry.normalizePublicBaseUrl("https://ai.example.com/proxy/"),
+    "https://ai.example.com/proxy",
+  );
+  assert.throws(() => entry.normalizePublicBaseUrl("http://ai.example.com"), /must use HTTPS|必须使用 HTTPS/);
+});
+
+test("subscription service page can save a public base URL from localhost", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "subscription-service-"));
+  const configPath = path.join(tempDir, "subscription-service.local.json");
+  const server = entry.createServiceEntryServer({
+    serviceEntryMode: "subscription",
+    entryHost: "127.0.0.1",
+    entryPort: 5176,
+    lanAddress: "192.168.1.27",
+    subscriptionServiceConfigPath: configPath,
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const previewResponse = await fetch(`http://127.0.0.1:${port}/api/subscription-service`);
+    assert.equal(previewResponse.status, 200);
+    const preview = await previewResponse.json();
+    assert.equal(preview.lan.endpoints.codex, "http://192.168.1.27:5176/gateway/subscription/codex/v1");
+    assert.equal(preview.public.configured, false);
+
+    const saveResponse = await fetch(`http://127.0.0.1:${port}/api/subscription-service/public-base-url`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ publicBaseUrl: "https://ai.example.com/" }),
+    });
+    assert.equal(saveResponse.status, 200);
+    const saved = await saveResponse.json();
+    assert.equal(saved.public.baseUrl, "https://ai.example.com");
+    assert.equal(saved.public.endpoints.claude, "https://ai.example.com/gateway/subscription/claude");
+    assert.equal(JSON.parse(await fs.readFile(configPath, "utf8")).publicBaseUrl, "https://ai.example.com");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 });
