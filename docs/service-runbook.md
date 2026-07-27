@@ -34,6 +34,20 @@
 
 反代独立模式可用 `status-subscription-proxy.cmd` 查看，用 `stop-subscription-proxy.cmd` 停止。
 
+Ubuntu 只反代模式：
+
+```bash
+bash ./subscription-proxy-ubuntu.sh start local
+```
+
+macOS 只反代模式：
+
+```bash
+bash ./subscription-proxy-macos.sh start local
+```
+
+两个 Unix 版本都支持把 `local` 改成 `lan`，并支持 `status`、`stop` 操作。它们不会启动本地模型管理器或模型容器。
+
 局域网模式：
 
 ```bat

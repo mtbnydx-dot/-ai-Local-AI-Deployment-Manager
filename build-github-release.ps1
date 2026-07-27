@@ -81,6 +81,7 @@ function Copy-ReleaseDirectory {
     ".env.*",
     ".manager.pid",
     ".cliproxy-process.json",
+    ".subscription-proxy-runtime",
     "*.log",
     "*.pid",
     "*.tmp",
@@ -161,6 +162,9 @@ $releaseFiles = @(
   "start-subscription-proxy-lan.cmd",
   "stop-subscription-proxy.cmd",
   "status-subscription-proxy.cmd",
+  "subscription-proxy-stack.sh",
+  "subscription-proxy-ubuntu.sh",
+  "subscription-proxy-macos.sh",
   "start-claude-vllm-proxy.ps1",
   "claude-vllm-anthropic-proxy.py",
   "build-github-release.ps1"
@@ -183,7 +187,7 @@ $manifest = @(
   "",
   "- Application source for service-entry, vLLM manager, llama.cpp manager, and shared manager core",
   "- User documentation, tests, GitHub Actions CI, and public deployment examples",
-  "- Windows install, start, stop, status, test, and packaging scripts",
+  "- Windows management scripts plus Ubuntu and macOS isolated subscription-proxy launchers",
   "",
   "## Intentionally excluded",
   "",
@@ -216,7 +220,7 @@ $credentialPatterns = @(
   '\bxox[baprs]-[A-Za-z0-9-]{10,}\b'
 )
 $privacyHits = [System.Collections.Generic.List[string]]::new()
-$textExtensions = @('.cmd', '.cjs', '.example', '.html', '.js', '.json', '.md', '.ps1', '.py', '.txt', '.yaml', '.yml')
+$textExtensions = @('.cmd', '.cjs', '.example', '.html', '.js', '.json', '.md', '.ps1', '.py', '.sh', '.txt', '.yaml', '.yml')
 $stagedTextFiles = Get-ChildItem -LiteralPath $stagingRoot -Recurse -Force -File | Where-Object {
   ($textExtensions -contains $_.Extension.ToLowerInvariant()) -or ($_.Name -eq '.gitignore')
 }

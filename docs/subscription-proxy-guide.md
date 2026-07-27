@@ -138,6 +138,44 @@ $env:CLIPROXY_CONFIG = "D:\Apps\CLIProxyAPI\config.yaml"
 
 如果 `5176` 已运行完整模式的 `service-entry`，独立启动流程会中止并提示，不会擅自关闭或替换现有服务。
 
+#### Ubuntu 版本
+
+Ubuntu 20.04、22.04、24.04 可在发布目录运行：
+
+```bash
+bash ./subscription-proxy-ubuntu.sh start local
+```
+
+局域网模式、状态和停止：
+
+```bash
+bash ./subscription-proxy-ubuntu.sh start lan
+bash ./subscription-proxy-ubuntu.sh status
+bash ./subscription-proxy-ubuntu.sh stop
+```
+
+依赖 Bash、curl 和 Node.js 20+。CLIProxyAPI 可在 PATH 中，也可通过 `CLIPROXY_EXE` 指定；配置文件可通过 `CLIPROXY_CONFIG` 指定。脚本不需要 root 权限，也不会自动修改 systemd、防火墙或开放端口。如果 CLIProxyAPI 已由 systemd 或其它方式运行，脚本只复用它，停止时不会关闭该外部进程。
+
+#### macOS 版本
+
+Intel 与 Apple Silicon Mac 可在发布目录运行：
+
+```bash
+bash ./subscription-proxy-macos.sh start local
+```
+
+局域网模式、状态和停止：
+
+```bash
+bash ./subscription-proxy-macos.sh start lan
+bash ./subscription-proxy-macos.sh status
+bash ./subscription-proxy-macos.sh stop
+```
+
+脚本会从 PATH、Homebrew 常见命令名或 `CLIPROXY_EXE` 查找 CLIProxyAPI。若已通过 `brew services start cliproxyapi` 运行，它会复用 Homebrew 服务且不会在停止时关闭它。启动成功后 macOS 会打开控制台；设置 `SUBSCRIPTION_PROXY_NO_OPEN=1` 可禁止自动打开浏览器。
+
+Ubuntu、macOS 与 Windows 版本遵循相同边界：只运行 CLIProxyAPI、`service-entry` 前端和统一网关，不启动 vLLM、llama.cpp 管理器或任何模型容器。运行记录只包含 PID、进程启动时间和可执行文件路径，不包含 API Key 或 OAuth 数据。
+
 在控制台打开“订阅反代 · CLIProxyAPI”即可查看：
 
 - `状态良好`：无需认证即可读取模型列表。

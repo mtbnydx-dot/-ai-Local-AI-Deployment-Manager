@@ -13,6 +13,7 @@ logs/
 *.tmp
 .manager.pid
 .cliproxy-process.json
+.subscription-proxy-runtime/
 stats-ledger.json
 jobs-ledger.json
 

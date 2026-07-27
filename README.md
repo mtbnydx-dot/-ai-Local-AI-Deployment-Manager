@@ -48,12 +48,15 @@ This is an AI service control panel for high-end personal workstations and small
 ├─ test-all.cmd            # 运行核心测试
 ├─ start-service-entry.cmd # 启动本机模式
 ├─ start-service-entry-lan.cmd # 启动局域网模式
-└─ start-subscription-proxy.cmd # 只启动订阅反代、前端和网关
+├─ start-subscription-proxy.cmd # Windows 只反代模式
+├─ subscription-proxy-ubuntu.sh # Ubuntu 只反代模式
+└─ subscription-proxy-macos.sh  # macOS 只反代模式
 ```
 
 ### 系统要求
 
 - Windows 10/11。
+- Ubuntu 与 macOS 当前用于下文的“只反代模式”；完整本地模型管理仍以 Windows 为主。
 - Node.js 20 或更高版本。
 - Docker Desktop。
 - NVIDIA 驱动；运行 vLLM/llama.cpp CUDA 容器时需要可用 GPU。
@@ -86,6 +89,20 @@ start-subscription-proxy.cmd
 ```
 
 局域网使用 `start-subscription-proxy-lan.cmd`，停止使用 `stop-subscription-proxy.cmd`。
+
+Ubuntu：
+
+```bash
+bash ./subscription-proxy-ubuntu.sh start local
+```
+
+macOS：
+
+```bash
+bash ./subscription-proxy-macos.sh start local
+```
+
+两个版本均支持 `start lan`、`status` 和 `stop`，只运行 CLIProxyAPI、前端和统一网关。它们需要 Node.js 20+、Bash 和 curl，不需要 Docker 或 NVIDIA GPU。
 
 如果要让局域网其它设备访问：
 
@@ -235,12 +252,15 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ test-all.cmd            # Run core tests
 ├─ start-service-entry.cmd # Start local-only mode
 ├─ start-service-entry-lan.cmd # Start LAN mode
-└─ start-subscription-proxy.cmd # Start only subscription proxy, frontend, and gateway
+├─ start-subscription-proxy.cmd # Windows subscription-only mode
+├─ subscription-proxy-ubuntu.sh # Ubuntu subscription-only mode
+└─ subscription-proxy-macos.sh  # macOS subscription-only mode
 ```
 
 ### Requirements
 
 - Windows 10/11.
+- Ubuntu and macOS currently support the subscription-only mode documented below; full local-model management remains Windows-focused.
 - Node.js 20 or newer.
 - Docker Desktop.
 - NVIDIA driver and GPU access for vLLM/llama.cpp CUDA containers.
@@ -273,6 +293,20 @@ start-subscription-proxy.cmd
 ```
 
 Use `start-subscription-proxy-lan.cmd` for LAN mode and `stop-subscription-proxy.cmd` to stop the isolated stack.
+
+Ubuntu:
+
+```bash
+bash ./subscription-proxy-ubuntu.sh start local
+```
+
+macOS:
+
+```bash
+bash ./subscription-proxy-macos.sh start local
+```
+
+Both launchers also support `start lan`, `status`, and `stop`. They require Node.js 20+, Bash, and curl, but do not require Docker or an NVIDIA GPU.
 
 To serve other LAN devices:
 

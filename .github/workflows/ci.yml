@@ -39,3 +39,67 @@ jobs:
       - name: Run tests
         shell: cmd
         run: test-all.cmd
+
+  unix-launchers:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            launcher: ./subscription-proxy-ubuntu.sh
+          - os: macos-latest
+            launcher: ./subscription-proxy-macos.sh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Validate launcher syntax
+        shell: bash
+        run: |
+          bash -n subscription-proxy-stack.sh
+          bash -n subscription-proxy-ubuntu.sh
+          bash -n subscription-proxy-macos.sh
+          bash "${{ matrix.launcher }}" --help
+
+      - name: Exercise isolated frontend and gateway
+        shell: bash
+        env:
+          CLIPROXY_BASE_URL: http://127.0.0.1:18317
+          SERVICE_ENTRY_PORT: "15176"
+          SUBSCRIPTION_PROXY_NO_OPEN: "1"
+        run: |
+          node -e 'require("node:http").createServer((req,res)=>{res.writeHead(req.url==="/v1/models"?200:404,{"content-type":"application/json"});res.end(req.url==="/v1/models"?"{\"data\":[]}":"{}")}).listen(18317,"127.0.0.1")' &
+          mock_pid=$!
+          trap 'bash "${{ matrix.launcher }}" stop || true; kill "$mock_pid" 2>/dev/null || true' EXIT
+          bash "${{ matrix.launcher }}" start local
+          bash "${{ matrix.launcher }}" status
+          curl --fail --silent http://127.0.0.1:15176/api/status |
+            node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const v=JSON.parse(d);if(v.entry.mode!=="subscription"||v.managers.length!==0)process.exit(1)})'
+          bash "${{ matrix.launcher }}" stop
+          kill -0 "$mock_pid"
+          kill "$mock_pid"
+          wait "$mock_pid" 2>/dev/null || true
+          trap - EXIT
+
+          export CLIPROXY_BASE_URL=http://127.0.0.1:18318
+          export SERVICE_ENTRY_PORT=15177
+          export CLIPROXY_EXE="$PWD/tests/mock-cliproxy-api.cjs"
+          trap 'bash "${{ matrix.launcher }}" stop || true' EXIT
+          bash "${{ matrix.launcher }}" start local
+          owned_pid="$(cat service-entry/.subscription-proxy-runtime/cliproxy.pid)"
+          bash "${{ matrix.launcher }}" stop
+          for _ in 1 2 3 4 5 6 7 8; do
+            kill -0 "$owned_pid" 2>/dev/null || break
+            sleep 0.25
+          done
+          if kill -0 "$owned_pid" 2>/dev/null; then
+            echo "Launcher-owned CLIProxyAPI process was not stopped."
+            exit 1
+          fi
+          trap - EXIT
