@@ -165,6 +165,9 @@ $releaseFiles = @(
   "subscription-proxy-stack.sh",
   "subscription-proxy-ubuntu.sh",
   "subscription-proxy-macos.sh",
+  "start-subscription-proxy.sh",
+  "start-subscription-proxy-ubuntu.sh",
+  "start-subscription-proxy-macos.command",
   "start-claude-vllm-proxy.ps1",
   "claude-vllm-anthropic-proxy.py",
   "build-github-release.ps1"
@@ -220,7 +223,7 @@ $credentialPatterns = @(
   '\bxox[baprs]-[A-Za-z0-9-]{10,}\b'
 )
 $privacyHits = [System.Collections.Generic.List[string]]::new()
-$textExtensions = @('.cmd', '.cjs', '.example', '.html', '.js', '.json', '.md', '.ps1', '.py', '.sh', '.txt', '.yaml', '.yml')
+$textExtensions = @('.cmd', '.cjs', '.command', '.example', '.html', '.js', '.json', '.md', '.ps1', '.py', '.sh', '.txt', '.yaml', '.yml')
 $stagedTextFiles = Get-ChildItem -LiteralPath $stagingRoot -Recurse -Force -File | Where-Object {
   ($textExtensions -contains $_.Extension.ToLowerInvariant()) -or ($_.Name -eq '.gitignore')
 }

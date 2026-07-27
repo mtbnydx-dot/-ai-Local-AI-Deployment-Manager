@@ -37,16 +37,18 @@
 Ubuntu 只反代模式：
 
 ```bash
-bash ./subscription-proxy-ubuntu.sh start local
+./start-subscription-proxy-ubuntu.sh
 ```
 
 macOS 只反代模式：
 
 ```bash
-bash ./subscription-proxy-macos.sh start local
+open ./start-subscription-proxy-macos.command
 ```
 
-两个 Unix 版本都支持把 `local` 改成 `lan`，并支持 `status`、`stop` 操作。它们不会启动本地模型管理器或模型容器。
+也可以运行 `./start-subscription-proxy.sh` 自动识别系统。一键入口会在前端和网关确认可用后自动打开浏览器。
+
+局域网模式和 `status`、`stop` 操作继续使用 `subscription-proxy-ubuntu.sh` 或 `subscription-proxy-macos.sh`。它们不会启动本地模型管理器或模型容器。
 
 局域网模式：
 

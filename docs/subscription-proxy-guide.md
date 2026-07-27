@@ -143,8 +143,10 @@ $env:CLIPROXY_CONFIG = "D:\Apps\CLIProxyAPI\config.yaml"
 Ubuntu 20.04、22.04、24.04 可在发布目录运行：
 
 ```bash
-bash ./subscription-proxy-ubuntu.sh start local
+./start-subscription-proxy-ubuntu.sh
 ```
+
+这个一键入口会启动反代独立栈，确认前端可用后自动打开浏览器。如果从 ZIP 解压后没有执行权限，先运行 `chmod +x ./*.sh ./*.command`。
 
 局域网模式、状态和停止：
 
@@ -158,11 +160,13 @@ bash ./subscription-proxy-ubuntu.sh stop
 
 #### macOS 版本
 
-Intel 与 Apple Silicon Mac 可在发布目录运行：
+Intel 与 Apple Silicon Mac 可在 Finder 中双击 `start-subscription-proxy-macos.command`。也可在终端运行：
 
 ```bash
-bash ./subscription-proxy-macos.sh start local
+open ./start-subscription-proxy-macos.command
 ```
+
+如果 macOS 首次阻止运行，可在 Finder 里右键该文件并选择“打开”。启动失败时终端窗口会保留错误提示；成功后会直接打开前端。
 
 局域网模式、状态和停止：
 
@@ -173,6 +177,8 @@ bash ./subscription-proxy-macos.sh stop
 ```
 
 脚本会从 PATH、Homebrew 常见命令名或 `CLIPROXY_EXE` 查找 CLIProxyAPI。若已通过 `brew services start cliproxyapi` 运行，它会复用 Homebrew 服务且不会在停止时关闭它。启动成功后 macOS 会打开控制台；设置 `SUBSCRIPTION_PROXY_NO_OPEN=1` 可禁止自动打开浏览器。
+
+Ubuntu 与 macOS 也可以统一运行 `./start-subscription-proxy.sh`；它会自动识别当前系统并选择对应版本。
 
 Ubuntu、macOS 与 Windows 版本遵循相同边界：只运行 CLIProxyAPI、`service-entry` 前端和统一网关，不启动 vLLM、llama.cpp 管理器或任何模型容器。运行记录只包含 PID、进程启动时间和可执行文件路径，不包含 API Key 或 OAuth 数据。
 

@@ -53,6 +53,7 @@ Environment:
   SERVICE_ENTRY_PORT  Frontend/gateway port (default 5176).
   SERVICE_ENTRY_HOST  Explicit bind host; overrides local/lan mode.
   SUBSCRIPTION_PROXY_NO_OPEN=1  Do not open a browser after startup.
+  SUBSCRIPTION_PROXY_BROWSER_EXE  Optional browser/opener executable.
 EOF
 }
 
@@ -512,11 +513,34 @@ show_status() {
 }
 
 open_dashboard() {
+  local dashboard_url="http://127.0.0.1:$ENTRY_PORT/"
+  local browser_executable=""
+
   [[ "${SUBSCRIPTION_PROXY_NO_OPEN:-0}" == "1" ]] && return 0
-  if [[ "$PLATFORM" == "macos" ]] && command -v open >/dev/null 2>&1; then
-    open "http://127.0.0.1:$ENTRY_PORT/" >/dev/null 2>&1 || true
+  if [[ -n "${SUBSCRIPTION_PROXY_BROWSER_EXE:-}" ]]; then
+    if ! browser_executable="$(resolve_executable "$SUBSCRIPTION_PROXY_BROWSER_EXE")"; then
+      warn "Browser opener was not found. Open $dashboard_url manually."
+      return 0
+    fi
+    if "$browser_executable" "$dashboard_url"; then
+      printf 'Opened dashboard: %s\n' "$dashboard_url"
+    else
+      warn "Browser opener failed. Open $dashboard_url manually."
+    fi
+  elif [[ "$PLATFORM" == "macos" ]] && command -v open >/dev/null 2>&1; then
+    if open "$dashboard_url" >/dev/null 2>&1; then
+      printf 'Opened dashboard: %s\n' "$dashboard_url"
+    else
+      warn "Could not open the default browser. Open $dashboard_url manually."
+    fi
   elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "http://127.0.0.1:$ENTRY_PORT/" >/dev/null 2>&1 || true
+    if xdg-open "$dashboard_url" >/dev/null 2>&1; then
+      printf 'Opened dashboard: %s\n' "$dashboard_url"
+    else
+      warn "Could not open the default browser. Open $dashboard_url manually."
+    fi
+  else
+    warn "No desktop browser opener was detected. Open $dashboard_url manually."
   fi
 }
 

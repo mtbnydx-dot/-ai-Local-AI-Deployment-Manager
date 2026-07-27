@@ -49,8 +49,9 @@ This is an AI service control panel for high-end personal workstations and small
 ├─ start-service-entry.cmd # 启动本机模式
 ├─ start-service-entry-lan.cmd # 启动局域网模式
 ├─ start-subscription-proxy.cmd # Windows 只反代模式
-├─ subscription-proxy-ubuntu.sh # Ubuntu 只反代模式
-└─ subscription-proxy-macos.sh  # macOS 只反代模式
+├─ start-subscription-proxy.sh # Ubuntu/macOS 自动识别一键启动
+├─ start-subscription-proxy-ubuntu.sh # Ubuntu 一键启动
+└─ start-subscription-proxy-macos.command # macOS 双击启动
 ```
 
 ### 系统要求
@@ -93,16 +94,18 @@ start-subscription-proxy.cmd
 Ubuntu：
 
 ```bash
-bash ./subscription-proxy-ubuntu.sh start local
+./start-subscription-proxy-ubuntu.sh
 ```
 
 macOS：
 
 ```bash
-bash ./subscription-proxy-macos.sh start local
+open ./start-subscription-proxy-macos.command
 ```
 
-两个版本均支持 `start lan`、`status` 和 `stop`，只运行 CLIProxyAPI、前端和统一网关。它们需要 Node.js 20+、Bash 和 curl，不需要 Docker 或 NVIDIA GPU。
+也可直接运行 `./start-subscription-proxy.sh`，脚本会自动识别 Ubuntu 或 macOS。启动器会等待前端和网关可用后自动打开浏览器。
+
+局域网、状态和停止等高级操作继续使用 `subscription-proxy-ubuntu.sh` 或 `subscription-proxy-macos.sh`。两个版本都只运行 CLIProxyAPI、前端和统一网关，需要 Node.js 20+、Bash 和 curl，不需要 Docker 或 NVIDIA GPU。
 
 如果要让局域网其它设备访问：
 
@@ -253,8 +256,9 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ start-service-entry.cmd # Start local-only mode
 ├─ start-service-entry-lan.cmd # Start LAN mode
 ├─ start-subscription-proxy.cmd # Windows subscription-only mode
-├─ subscription-proxy-ubuntu.sh # Ubuntu subscription-only mode
-└─ subscription-proxy-macos.sh  # macOS subscription-only mode
+├─ start-subscription-proxy.sh # Auto-detect Ubuntu/macOS and start
+├─ start-subscription-proxy-ubuntu.sh # Ubuntu one-click launcher
+└─ start-subscription-proxy-macos.command # macOS Finder launcher
 ```
 
 ### Requirements
@@ -297,16 +301,18 @@ Use `start-subscription-proxy-lan.cmd` for LAN mode and `stop-subscription-proxy
 Ubuntu:
 
 ```bash
-bash ./subscription-proxy-ubuntu.sh start local
+./start-subscription-proxy-ubuntu.sh
 ```
 
 macOS:
 
 ```bash
-bash ./subscription-proxy-macos.sh start local
+open ./start-subscription-proxy-macos.command
 ```
 
-Both launchers also support `start lan`, `status`, and `stop`. They require Node.js 20+, Bash, and curl, but do not require Docker or an NVIDIA GPU.
+You can also run `./start-subscription-proxy.sh` to auto-detect Ubuntu or macOS. The launcher waits for the frontend and gateway to become ready, then opens the dashboard in the browser.
+
+Use `subscription-proxy-ubuntu.sh` or `subscription-proxy-macos.sh` for advanced `start lan`, `status`, and `stop` operations. They require Node.js 20+, Bash, and curl, but do not require Docker or an NVIDIA GPU.
 
 To serve other LAN devices:
 
