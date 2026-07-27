@@ -5,6 +5,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { Readable } = require("node:stream");
 const core = require("../manager-core");
+const { createSubscriptionSetupController } = require("./subscription-setup");
 
 const HOST = process.env.SERVICE_ENTRY_HOST || "127.0.0.1";
 const PORT = Number(process.env.SERVICE_ENTRY_PORT || 5176);
@@ -51,6 +52,7 @@ let server = null;
 const managerModelCache = new Map();
 const managerStatusCache = new Map();
 const subscriptionProxyStatusCache = new Map();
+const defaultSubscriptionSetupController = createSubscriptionSetupController();
 // Manager liveness rarely flips, so a short probe cache turns the per-request
 // TCP connect probe into an in-memory lookup for the common steady-state case.
 const PORT_PROBE_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_PORT_PROBE_CACHE_MS || 2000));
@@ -101,6 +103,32 @@ async function handleRequest(req, res, options = {}) {
         force: true,
         entryOptions: options,
       }));
+    }
+    if (req.method === "GET" && url.pathname === "/api/subscription-proxy/setup") {
+      if (!core.isLocalRequest(req)) {
+        return sendJson(res, { ok: false, error: "订阅配置与登录仅允许从本机访问。" }, 403);
+      }
+      return sendJson(res, await getSubscriptionSetupController(options).getStatus());
+    }
+    if (req.method === "POST" && url.pathname === "/api/subscription-proxy/api-key") {
+      if (!core.isLocalRequest(req)) {
+        return sendJson(res, { ok: false, error: "API Key 配置仅允许从本机操作。" }, 403);
+      }
+      const body = await readJsonControlBody(req);
+      if (body.confirm !== true) {
+        return sendJson(res, { ok: false, error: "需要明确确认后才能写入 CLIProxyAPI 配置。" }, 400);
+      }
+      return sendJson(res, await getSubscriptionSetupController(options).generateApiKey());
+    }
+    if (req.method === "POST" && url.pathname === "/api/subscription-proxy/login") {
+      if (!core.isLocalRequest(req)) {
+        return sendJson(res, { ok: false, error: "订阅登录仅允许从本机发起。" }, 403);
+      }
+      const body = await readJsonControlBody(req);
+      return sendJson(res, {
+        ok: true,
+        loginSession: await getSubscriptionSetupController(options).startLogin(body.provider),
+      }, 202);
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       return sendJson(res, {
@@ -159,8 +187,12 @@ async function handleRequest(req, res, options = {}) {
     }
     sendJson(res, { error: "Not found" }, 404);
   } catch (error) {
-    sendJson(res, { error: error.message || "Service entry error." }, 500);
+    sendJson(res, { ok: false, error: error.message || "Service entry error." }, error.status || 500);
   }
+}
+
+function getSubscriptionSetupController(options = {}) {
+  return options.subscriptionSetupController || defaultSubscriptionSetupController;
 }
 
 function startServiceEntry() {
@@ -857,6 +889,22 @@ async function readRequestBody(req, maxBytes) {
     chunks.push(chunk);
   }
   return chunks.length ? Buffer.concat(chunks) : undefined;
+}
+
+async function readJsonControlBody(req) {
+  if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+    const error = new Error("本机控制接口只接受 application/json 请求。");
+    error.status = 415;
+    throw error;
+  }
+  const raw = await readRequestBody(req, 64 * 1024);
+  const body = parseJsonSafe(raw?.toString("utf8") || "{}", null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    const error = new Error("请求 JSON 格式无效。");
+    error.status = 400;
+    throw error;
+  }
+  return body;
 }
 
 async function startDetachedManager(manager) {

@@ -345,6 +345,69 @@
     }
     .scope-panel .endpoint code { background: var(--surface); }
     #subscriptionProxyPanel { display: grid; gap: 14px; }
+    #subscriptionSetupPanel { display: grid; gap: 12px; }
+    .setup-console {
+      display: grid;
+      gap: 14px;
+      padding: 16px;
+      border: 1px solid color-mix(in srgb, var(--blue) 42%, var(--line));
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--blue) 5%, var(--surface));
+    }
+    .setup-console-head,
+    .setup-step-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .setup-console-head > div,
+    .setup-step-head > div {
+      display: grid;
+      gap: 4px;
+    }
+    .setup-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .setup-step {
+      min-width: 0;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .setup-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .setup-actions button { flex: 1 1 140px; }
+    .secret-reveal {
+      display: grid;
+      gap: 8px;
+      padding: 11px;
+      border: 1px solid color-mix(in srgb, var(--amber) 55%, var(--line));
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--amber) 7%, var(--surface-2));
+    }
+    .secret-reveal .endpoint code { background: var(--surface); }
+    .setup-message {
+      padding: 10px 11px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .setup-message.ok { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+    .setup-message.warn { border-color: color-mix(in srgb, var(--amber) 55%, var(--line)); }
+    .setup-message.fail { border-color: color-mix(in srgb, var(--red) 50%, var(--line)); }
     .setup-list {
       margin: 0;
       padding-left: 22px;
@@ -386,6 +449,7 @@
       body.subscription-only .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .access-grid { grid-template-columns: 1fr; }
       .scope-grid { grid-template-columns: 1fr; }
+      .setup-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 620px) {
       main { width: min(100vw - 20px, 1220px); padding: 20px 0; }
@@ -497,6 +561,9 @@
         <span class="badge" id="subscriptionProxyBadge">等待探测</span>
       </div>
       <p class="proxy-declaration"><strong>范围声明：</strong>反代能力不局限于“对外服务”；同一套入口适用于本机、局域网，也可在你完成鉴权与网络保护后用于可选公网。</p>
+      <div id="subscriptionSetupPanel">
+        <div class="empty">正在读取订阅登录与配置状态...</div>
+      </div>
       <div id="subscriptionProxyPanel">
         <div class="empty">正在探测 CLIProxyAPI...</div>
       </div>
@@ -556,6 +623,7 @@
     const entryAccessPanel = document.querySelector("#entryAccessPanel");
     const entryGatewayStrip = document.querySelector("#entryGatewayStrip");
     const subscriptionProxyPanel = document.querySelector("#subscriptionProxyPanel");
+    const subscriptionSetupPanel = document.querySelector("#subscriptionSetupPanel");
     const subscriptionProxyBadge = document.querySelector("#subscriptionProxyBadge");
     const entryTitle = document.querySelector("#entryTitle");
     const entrySubtitle = document.querySelector("#entrySubtitle");
@@ -568,6 +636,8 @@
     const stopBtn = document.querySelector("#stopBtn");
     let refreshTimer = null;
     let currentEntryMode = "full";
+    let subscriptionSetupPollTimer = null;
+    let generatedSubscriptionApiKey = "";
 
     refreshBtn.addEventListener("click", refresh);
     stopBtn.addEventListener("click", stopAll);
@@ -586,6 +656,16 @@
       const actionButton = event.target.closest("[data-action][data-manager]");
       if (actionButton) {
         await runManagerAction(actionButton);
+        return;
+      }
+      const setupAction = event.target.closest("[data-subscription-action]");
+      if (setupAction?.dataset.subscriptionAction === "generate-api-key") {
+        await generateSubscriptionApiKey(setupAction);
+        return;
+      }
+      const loginButton = event.target.closest("[data-subscription-provider]");
+      if (loginButton) {
+        await startSubscriptionLogin(loginButton);
       }
     });
 
@@ -606,6 +686,7 @@
         renderSummary(data.entry || {}, data.managers || [], data.subscriptionProxy || {});
         renderEntryGateway(data.entry || {});
         renderSubscriptionProxy(data.subscriptionProxy || {});
+        await refreshSubscriptionSetup();
         renderEntryAccess(data.entry?.gatewayAccess || {});
         renderManagers(data.managers || []);
         if (lastUpdatedBadge) lastUpdatedBadge.textContent = `已刷新 ${new Date().toLocaleTimeString()}`;
@@ -747,6 +828,202 @@
         </div>
         <p class="subtle">CLIProxyAPI 是第三方项目，不是 OpenAI 官方组件。订阅计划、账号权限及服务商条款仍然适用；需要 WebSocket 时请直接连接 CLIProxyAPI，本统一入口当前负责 HTTP/SSE。</p>
       `;
+    }
+
+    async function refreshSubscriptionSetup() {
+      try {
+        const response = await fetch("/api/subscription-proxy/setup", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(6000),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          renderSubscriptionSetupBlocked(data.error || "订阅配置只能从本机打开。");
+          return;
+        }
+        renderSubscriptionSetup(data);
+        const waiting = ["starting", "waiting"].includes(data.loginSession?.status);
+        clearTimeout(subscriptionSetupPollTimer);
+        if (waiting) {
+          subscriptionSetupPollTimer = setTimeout(refreshSubscriptionSetup, 1800);
+        }
+      } catch (error) {
+        renderSubscriptionSetupBlocked(
+          error.name === "TimeoutError" || error.name === "AbortError"
+            ? "读取配置状态超时。"
+            : error.message,
+        );
+      }
+    }
+
+    function renderSubscriptionSetupBlocked(message) {
+      clearTimeout(subscriptionSetupPollTimer);
+      subscriptionSetupPanel.innerHTML = `
+        <div class="setup-console">
+          <div class="setup-console-head">
+            <div>
+              <h3>订阅登录与统一网关配置</h3>
+              <p>敏感操作不会向局域网或公网控制台开放。</p>
+            </div>
+            <span class="badge warn">仅限本机</span>
+          </div>
+          <div class="setup-message warn">${escapeHtml(message || "请在运行服务的电脑上通过 127.0.0.1 打开本页。")}</div>
+        </div>
+      `;
+    }
+
+    function renderSubscriptionSetup(setup) {
+      const config = setup.config || {};
+      const executable = setup.executable || {};
+      const auth = setup.auth || {};
+      const session = setup.loginSession || null;
+      const readyForLogin = Boolean(executable.found && config.found);
+      const safeKey = Boolean(config.safeApiKeyConfigured);
+      const configMessage = !config.found
+        ? ["未找到配置文件", "fail"]
+        : safeKey
+          ? [`已配置 ${config.safeApiKeyCount || 0} 个有效 Key`, "ok"]
+          : config.unsafeApiKeyCount
+            ? ["仍是示例 Key，API 调用已被 CLIProxyAPI 禁用", "warn"]
+            : ["尚未配置客户端 API Key", "warn"];
+      const hostMessage = !config.found
+        ? "等待配置"
+        : config.loopbackOnly
+          ? `仅本机 ${config.host}:${config.port}`
+          : `${config.host || "全部接口"}:${config.port} · 建议限制到 127.0.0.1`;
+      const loginMessage = renderLoginMessage(session);
+      const authUrl = session?.authUrl && /^https?:\/\//i.test(session.authUrl)
+        ? `
+          <a class="button primary" href="${escapeHtml(session.authUrl)}" target="_blank" rel="noreferrer">
+            打开授权页面
+          </a>
+        `
+        : "";
+      subscriptionSetupPanel.innerHTML = `
+        <div class="setup-console">
+          <div class="setup-console-head">
+            <div>
+              <h3>订阅登录与统一网关配置</h3>
+              <p>先生成客户端 API Key，再选择订阅服务登录；配置和 OAuth 文件均留在本机 CLIProxyAPI。</p>
+            </div>
+            <span class="badge ok">本机控制</span>
+          </div>
+          <div class="health-list">
+            ${accessRow("CLIProxyAPI 程序", executable.found ? executable.path : "未找到可执行文件", executable.found ? "ok" : "fail")}
+            ${accessRow("配置文件", config.found ? config.path : "未找到；可设置 CLIPROXY_CONFIG", config.found ? "ok" : "fail")}
+            ${accessRow("上游监听", hostMessage, config.loopbackOnly ? "ok" : "warn")}
+          </div>
+          <div class="setup-grid">
+            <section class="setup-step">
+              <div class="setup-step-head">
+                <div>
+                  <h3>1. 配置客户端 API Key</h3>
+                  <p>客户端连接统一网关时使用；不会替代订阅账号登录。</p>
+                </div>
+                <span class="badge ${configMessage[1]}">${escapeHtml(configMessage[0])}</span>
+              </div>
+              <button
+                type="button"
+                class="primary"
+                data-subscription-action="generate-api-key"
+                ${config.found ? "" : "disabled"}
+              >${safeKey ? "再生成一个 API Key" : "生成安全 API Key"}</button>
+              ${generatedSubscriptionApiKey ? `
+                <div class="secret-reveal">
+                  <p><strong>请现在复制：</strong>这个新 Key 只在本页本次打开期间显示，刷新后不会再从配置文件读取。</p>
+                  ${endpoint("新 API Key", generatedSubscriptionApiKey)}
+                </div>
+              ` : ""}
+              <p class="subtle">写入时会移除官方示例 Key，并保留你已有的有效 Key。CLIProxyAPI 会监视配置变化并自动重新加载。</p>
+            </section>
+            <section class="setup-step">
+              <div class="setup-step-head">
+                <div>
+                  <h3>2. 登录订阅服务</h3>
+                  <p>当前检测到 ${Number(auth.accountFiles || 0)} 个本地授权文件；平台不读取其中内容。</p>
+                </div>
+                <span class="badge ${auth.accountFiles ? "ok" : "warn"}">${auth.accountFiles ? "已有授权" : "待登录"}</span>
+              </div>
+              <div class="setup-actions">
+                ${(setup.providers || []).map((provider) => `
+                  <button
+                    type="button"
+                    class="${provider.id === "codex" ? "primary" : ""}"
+                    data-subscription-provider="${escapeHtml(provider.id)}"
+                    ${readyForLogin || ["starting", "waiting"].includes(session?.status) ? "" : "disabled"}
+                    ${["starting", "waiting"].includes(session?.status) ? "disabled" : ""}
+                  >登录 ${escapeHtml(provider.label)}</button>
+                `).join("")}
+              </div>
+              ${loginMessage}
+              ${authUrl}
+              <p class="subtle">点击后由 CLIProxyAPI 官方登录命令打开浏览器。请只登录你本人有权使用的账号；授权凭据不会经过统一网关。</p>
+            </section>
+          </div>
+          ${!safeKey ? `<div class="setup-message warn">当前 API Key 仍未安全配置。即使 OAuth 登录成功，CLIProxyAPI 也会继续拒绝 API 请求；请先完成第 1 步。</div>` : ""}
+        </div>
+      `;
+    }
+
+    function renderLoginMessage(session) {
+      if (!session) return `<div class="setup-message">尚未发起登录。选择上方服务后，浏览器会打开官方授权页面。</div>`;
+      const state = session.status === "succeeded"
+        ? "ok"
+        : session.status === "failed"
+          ? "fail"
+          : "warn";
+      return `
+        <div class="setup-message ${state}" role="status" aria-live="polite">
+          <strong>${escapeHtml(session.providerLabel || "订阅服务")}：</strong>
+          ${escapeHtml(session.message || session.status || "处理中")}
+        </div>
+      `;
+    }
+
+    async function generateSubscriptionApiKey(button) {
+      if (!confirm("生成一个新的客户端 API Key 并写入 CLIProxyAPI 配置？已有的有效 Key 会保留，示例 Key 会移除。")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/subscription-proxy/api-key", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "API Key 写入失败。");
+        generatedSubscriptionApiKey = data.apiKey || "";
+        showToast("新 API Key 已写入，请立即复制");
+        await refreshSubscriptionSetup();
+      } catch (error) {
+        showToast(error.message || "API Key 写入失败");
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function startSubscriptionLogin(button) {
+      const provider = button.getAttribute("data-subscription-provider") || "";
+      const label = button.textContent.trim().replace(/^登录\s*/, "");
+      if (!confirm(`启动 ${label} 的订阅登录？浏览器将打开对应授权页面。`)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/subscription-proxy/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "登录流程启动失败。");
+        showToast(`${label} 登录已启动`);
+        await refreshSubscriptionSetup();
+      } catch (error) {
+        showToast(error.message || "登录流程启动失败");
+        await refreshSubscriptionSetup();
+      } finally {
+        button.disabled = false;
+      }
     }
 
     function protocolLabel(value) {

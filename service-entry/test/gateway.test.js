@@ -1,9 +1,15 @@
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
+const fs = require("node:fs/promises");
 const http = require("node:http");
+const os = require("node:os");
+const path = require("node:path");
+const { PassThrough } = require("node:stream");
 const test = require("node:test");
 
 const core = require("../../manager-core");
 const entry = require("../server");
+const subscriptionSetup = require("../subscription-setup");
 
 test("parses gateway routes and maps them to manager paths", () => {
   const openAiRoute = entry.parseGatewayRoute("/gateway/auto/openai/v1/chat/completions");
@@ -222,6 +228,142 @@ test("subscription-only entry skips managers and rejects local-model routes", as
     assert.equal(managerStart.status, 409);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("subscription setup config replaces unsafe examples and preserves valid API keys", () => {
+  const original = [
+    'host: ""',
+    "port: 8317",
+    'auth-dir: "~/.cli-proxy-api"',
+    "api-keys:",
+    '  - "your-api-key-1"',
+    '  - "existing-client-key-that-is-long-enough"',
+    "debug: false",
+    "",
+  ].join("\n");
+  const before = subscriptionSetup.inspectCliProxyConfig(original);
+  assert.equal(before.loopbackOnly, false);
+  assert.equal(before.safeApiKeyCount, 1);
+  assert.equal(before.unsafeApiKeyCount, 1);
+
+  const updated = subscriptionSetup.updateCliProxyApiKeys(
+    original,
+    "sk-proxy-generated-client-key-that-is-long-enough",
+  );
+  const after = subscriptionSetup.inspectCliProxyConfig(updated);
+  assert.equal(after.safeApiKeyCount, 2);
+  assert.equal(after.unsafeApiKeyCount, 0);
+  assert.match(updated, /existing-client-key-that-is-long-enough/);
+  assert.match(updated, /sk-proxy-generated-client-key-that-is-long-enough/);
+  assert.doesNotMatch(updated, /your-api-key-1/);
+  assert.match(updated, /debug: false/);
+});
+
+test("subscription setup APIs are actionable from localhost", async () => {
+  const calls = [];
+  const controller = {
+    async getStatus() {
+      calls.push(["status"]);
+      return {
+        ok: true,
+        localOnly: true,
+        executable: { found: true, path: "/test/cliproxyapi" },
+        config: { found: true, path: "/test/config.yaml", safeApiKeyConfigured: false },
+        auth: { accountFiles: 0 },
+        providers: [{ id: "codex", label: "OpenAI / Codex" }],
+        loginSession: null,
+      };
+    },
+    async generateApiKey() {
+      calls.push(["api-key"]);
+      return { ok: true, apiKey: "sk-proxy-test-value" };
+    },
+    async startLogin(provider) {
+      calls.push(["login", provider]);
+      return { id: "login-test", provider, status: "waiting" };
+    },
+  };
+  const server = entry.createServiceEntryServer({
+    serviceEntryMode: "subscription",
+    subscriptionSetupController: controller,
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const statusResponse = await fetch(`http://127.0.0.1:${port}/api/subscription-proxy/setup`);
+    assert.equal(statusResponse.status, 200);
+    assert.equal((await statusResponse.json()).localOnly, true);
+
+    const mediaTypeResponse = await fetch(`http://127.0.0.1:${port}/api/subscription-proxy/api-key`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    });
+    assert.equal(mediaTypeResponse.status, 415);
+
+    const keyResponse = await fetch(`http://127.0.0.1:${port}/api/subscription-proxy/api-key`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+    assert.equal(keyResponse.status, 200);
+    assert.equal((await keyResponse.json()).apiKey, "sk-proxy-test-value");
+
+    const loginResponse = await fetch(`http://127.0.0.1:${port}/api/subscription-proxy/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "codex" }),
+    });
+    assert.equal(loginResponse.status, 202);
+    assert.equal((await loginResponse.json()).loginSession.status, "waiting");
+    assert.deepEqual(calls, [["status"], ["api-key"], ["login", "codex"]]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("subscription setup controller writes a key and launches the selected official login flag", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "subscription-setup-"));
+  const configPath = path.join(tempDir, "config.yaml");
+  await fs.writeFile(configPath, [
+    'host: "127.0.0.1"',
+    "port: 8317",
+    `auth-dir: ${JSON.stringify(path.join(tempDir, "auth"))}`,
+    "api-keys:",
+    '  - "your-api-key-1"',
+    "",
+  ].join("\n"));
+  const spawnCalls = [];
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => true;
+  const controller = subscriptionSetup.createSubscriptionSetupController({
+    executable: process.execPath,
+    configPath,
+    loginTimeoutMs: 1000,
+    spawnImpl(executable, args, options) {
+      spawnCalls.push({ executable, args, options });
+      return child;
+    },
+  });
+  try {
+    const generated = await controller.generateApiKey();
+    assert.match(generated.apiKey, /^sk-proxy-[A-Za-z0-9_-]+$/);
+    const written = subscriptionSetup.inspectCliProxyConfig(await fs.readFile(configPath, "utf8"));
+    assert.equal(written.safeApiKeyCount, 1);
+    assert.equal(written.unsafeApiKeyCount, 0);
+
+    const login = await controller.startLogin("codex");
+    assert.equal(login.provider, "codex");
+    assert.deepEqual(spawnCalls[0].args, ["-config", configPath, "-codex-login"]);
+    assert.equal(spawnCalls[0].executable, process.execPath);
+    child.emit("spawn");
+    assert.equal((await controller.getStatus()).loginSession.status, "waiting");
+    child.emit("exit", 0, null);
+    assert.equal((await controller.getStatus()).loginSession.status, "succeeded");
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
   }
 });
 

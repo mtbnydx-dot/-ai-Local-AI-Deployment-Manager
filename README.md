@@ -20,6 +20,7 @@ This is an AI service control panel for high-end personal workstations and small
 
 - **统一入口**：`service-entry` 提供一级控制台和自动网关。
 - **订阅反代**：可连接本机 CLIProxyAPI，把已获授权的订阅服务提供为 OpenAI、Claude、Codex、OpenCode API；适用于本机、局域网和受控的可选公网，不只用于“对外服务”。
+- **订阅登录前端**：本机控制台可生成 CLIProxyAPI 客户端 Key，并启动 Codex、Claude、Kimi、xAI、Antigravity 登录；局域网访问只能查看状态。
 - **vLLM 管理器**：下载模型、启动 vLLM 容器、OpenAI/Claude 兼容接口、工具调用桥接、上下文压缩、统计和日志。
 - **llama.cpp 管理器**：管理 GGUF 模型，重点支持异构双卡、GPU layers、tensor split、长上下文和 RAM fallback。
 - **模型下载**：支持 Hugging Face / ModelScope 链接解析、在线模型搜索、量化筛选、下载进度、暂停、继续和取消。
@@ -152,6 +153,8 @@ OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1
 
 安装、OAuth 登录和凭据边界见 [`docs/subscription-proxy-guide.md`](docs/subscription-proxy-guide.md)。
 
+一键启动后直接打开 `http://127.0.0.1:5176/`，在“订阅登录与统一网关配置”里先生成并复制 API Key，再点击需要的订阅登录按钮。
+
 ### 客户端配置建议
 
 - OpenWebUI / OpenAI SDK：使用 OpenAI Base URL，认证字段使用 `Authorization: Bearer <API_KEY>`。
@@ -229,6 +232,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 
 - **Unified entrypoint**: `service-entry` provides the first-level console and automatic gateway.
 - **Subscription adapter**: optionally connects a loopback CLIProxyAPI instance and exposes authorized subscriptions through OpenAI, Claude, Codex, and OpenCode routes for local, LAN, or controlled public use.
+- **Subscription login UI**: the localhost dashboard can generate CLIProxyAPI client keys and launch supported provider logins; LAN visitors remain read-only.
 - **vLLM manager**: model download, Docker launch, OpenAI/Claude-compatible APIs, tool-call bridging, context compression, stats, and logs.
 - **llama.cpp manager**: GGUF model management with heterogeneous GPU support, GPU layers, tensor split, long context, and RAM fallback.
 - **Model downloads**: Hugging Face / ModelScope link parsing, remote search, quantization filters, progress bars, pause/resume/cancel.

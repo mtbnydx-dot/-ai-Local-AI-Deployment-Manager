@@ -8,7 +8,7 @@
 - 局域网：手机、笔记本或另一台工作站连接这台服务机。
 - 可选公网：仅在已配置 HTTPS、强 API Key、访问控制和可信隧道后使用。
 
-本平台采用截图所示的 CLIProxyAPI 技术路线：CLIProxyAPI 负责你已获授权账号的 OAuth 登录、协议转换和模型路由，`service-entry` 只提供统一地址、状态展示和 HTTP/SSE 转发。
+本平台采用截图所示的 CLIProxyAPI 技术路线：CLIProxyAPI 负责你已获授权账号的 OAuth 登录、协议转换和模型路由，`service-entry` 提供本机配置入口、统一地址、状态展示和 HTTP/SSE 转发。
 
 > CLIProxyAPI 是第三方开源项目，不是 OpenAI 官方组件。订阅计划、账号权限、配额和各服务商条款仍然适用。请只连接你有权使用的账号与服务。
 
@@ -24,7 +24,18 @@ CLIProxyAPI 127.0.0.1:8317
 已授权的订阅服务
 ```
 
-`service-entry` 不读取或保存 CLIProxyAPI 的 OAuth 文件、账号口令或订阅凭据。客户端携带的 `Authorization`、`x-api-key` 或 `anthropic-api-key` 会原样交给 CLIProxyAPI 校验；统一入口日志只保存请求元数据，不保存提示词和响应正文。
+`service-entry` 不读取或保存 CLIProxyAPI 的 OAuth 文件内容、账号口令或订阅凭据。控制台只统计本地授权文件数量，并调用 CLIProxyAPI 自带的登录命令；客户端携带的 `Authorization`、`x-api-key` 或 `anthropic-api-key` 会原样交给 CLIProxyAPI 校验。统一入口日志只保存请求元数据，不保存提示词和响应正文。
+
+## 最快配置方式：使用本机控制台
+
+一键启动后打开 `http://127.0.0.1:5176/`，在“订阅登录与统一网关配置”中依次操作：
+
+1. 点击“生成安全 API Key”，立即复制只显示一次的新 Key。
+2. 点击“登录 OpenAI / Codex”或其它受支持服务。
+3. 在浏览器打开的服务商授权页完成登录。
+4. 回到控制台，确认“本地授权文件”数量增加，再把刚复制的 Key 配置到客户端。
+
+配置写入和登录接口只接受来自本机回环地址的 JSON 请求；通过局域网或公网打开控制台时只能查看反代状态，不能生成 Key 或发起登录。控制台不会回读已有 API Key，也不会展示 OAuth 文件名或内容。
 
 ## 1. 安装 CLIProxyAPI
 
@@ -72,16 +83,16 @@ cli-proxy-api --config /path/to/config.yaml
 macOS / Linux：
 
 ```bash
-cli-proxy-api --codex-login
+cli-proxy-api -codex-login
 ```
 
 Windows：
 
 ```powershell
-.\cli-proxy-api.exe --codex-login
+.\cli-proxy-api.exe -codex-login
 ```
 
-无图形界面环境可追加 `--no-browser`，在另一台设备打开输出的登录地址。OAuth 回调默认需要本机端口 `1455`。登录流程和 OAuth 文件都由 CLIProxyAPI 管理。
+无图形界面环境可追加 `-no-browser`，在另一台设备打开输出的登录地址。OAuth 回调默认需要本机端口 `1455`。登录流程和 OAuth 文件都由 CLIProxyAPI 管理。
 
 参考：[Codex OAuth 配置](https://help.router-for.me/configuration/provider/codex)
 
@@ -184,7 +195,10 @@ Ubuntu 与 macOS 也可以统一运行 `./start-subscription-proxy.sh`；它会�
 
 Ubuntu、macOS 与 Windows 版本遵循相同边界：只运行 CLIProxyAPI、`service-entry` 前端和统一网关，不启动 vLLM、llama.cpp 管理器或任何模型容器。运行记录只包含 PID、进程启动时间和可执行文件路径，不包含 API Key 或 OAuth 数据。
 
-在控制台打开“订阅反代 · CLIProxyAPI”即可查看：
+在控制台打开“订阅反代 · CLIProxyAPI”即可配置和查看：
+
+- “订阅登录与统一网关配置”：生成客户端 API Key，发起 Codex、Claude、Kimi、xAI 或 Antigravity 登录。
+- “上游监听”：若显示“全部接口”，应把 CLIProxyAPI 配置的 `host` 改为 `127.0.0.1` 并重启 CLIProxyAPI。
 
 - `状态良好`：无需认证即可读取模型列表。
 - `在线 · 调用需 Key`：CLIProxyAPI 已连通，状态探测因未携带 Key 返回 401/403，这是启用鉴权时的正常状态。
