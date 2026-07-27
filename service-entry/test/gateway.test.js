@@ -202,8 +202,8 @@ test("entry server serves only whitelisted docs", async () => {
     assert.equal(consolePage.status, 200);
     const consoleHtml = await consolePage.text();
     assert.match(consoleHtml, /订阅反代控制台/);
-    assert.match(consoleHtml, /data-tab="login"/);
-    assert.match(consoleHtml, /data-tab="service"/);
+    assert.match(consoleHtml, /data-open-account/);
+    assert.match(consoleHtml, /<dialog class="account-dialog"/);
 
     const loginPage = await fetch(`http://127.0.0.1:${port}/subscription-login.html`, { redirect: "manual" });
     assert.equal(loginPage.status, 302);

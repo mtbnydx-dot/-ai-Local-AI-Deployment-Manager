@@ -481,7 +481,7 @@
         </a>
         <a class="doc-card" href="/subscription-console.html#service">
           <strong>服务发布配置</strong>
-          <span>切换到同一控制台的服务发布页签，查看本机、局域网和可选公网地址。</span>
+          <span>打开同一控制台的服务发布主界面，查看本机、局域网和可选公网地址。</span>
         </a>
       </div>
       <div id="subscriptionProxyPanel">
@@ -710,7 +710,7 @@
           ${accessRow("CLIProxyAPI 状态", proxy.message || "等待状态探测。", proxy.reachable ? "ok" : proxy.state === "disabled" ? "warn" : "fail")}
           ${accessRow("凭据边界", proxy.credentialBoundary || "service-entry 不保存订阅凭据。", "ok")}
         </div>
-        <p class="subtle">账号登录与服务发布在同一个订阅反代控制台中通过页签切换；局域网地址和公网域名配置都在“服务发布”页签。</p>
+        <p class="subtle">账号登录与服务发布在同一个订阅反代控制台中；账号配置使用弹窗，局域网地址和公网域名配置保留在服务发布主界面。</p>
         <p class="subtle">CLIProxyAPI 是第三方项目，不是 OpenAI 官方组件。订阅计划、账号权限及服务商条款仍然适用；需要 WebSocket 时请直接连接 CLIProxyAPI，本统一入口当前负责 HTTP/SSE。</p>
       `;
     }

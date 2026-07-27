@@ -85,32 +85,61 @@
       background: var(--surface);
       overflow: hidden;
     }
-    .tabs {
-      display: flex;
-      gap: 4px;
-      padding: 8px;
-      border-bottom: 1px solid var(--line);
-      background: var(--surface-2);
-    }
-    .tab {
-      flex: 1 1 0;
-      min-height: 48px;
-      border-color: transparent;
-      background: transparent;
-      color: var(--muted);
-    }
-    .tab[aria-selected="true"] {
-      border-color: var(--line);
-      background: var(--surface);
-      color: var(--blue);
-      box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 10%, transparent);
-    }
-    .tabpanel {
+    .panel {
       padding: 18px;
       display: grid;
       gap: 15px;
     }
-    .tabpanel[hidden] { display: none; }
+    .account-dialog {
+      width: min(980px, calc(100vw - 32px));
+      max-height: calc(100vh - 48px);
+      margin: auto;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: 0 24px 70px color-mix(in srgb, #000 48%, transparent);
+      overflow: hidden;
+    }
+    .account-dialog::backdrop {
+      background: color-mix(in srgb, #02070d 78%, transparent);
+      backdrop-filter: blur(4px);
+    }
+    .dialog-shell {
+      max-height: calc(100vh - 48px);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    .dialog-head, .dialog-footer {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 18px;
+    }
+    .dialog-head {
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .dialog-body {
+      padding: 18px;
+      display: grid;
+      gap: 15px;
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
+    .dialog-footer {
+      justify-content: flex-end;
+      border-top: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .icon-button {
+      width: 42px;
+      min-width: 42px;
+      padding: 0;
+    }
+    .icon-button svg { width: 19px; height: 19px; }
     .badge {
       padding: 5px 9px;
       border: 1px solid var(--line);
@@ -240,11 +269,16 @@
     }
     @media (max-width: 620px) {
       main { width: min(100% - 20px, 1160px); padding: 18px 0; }
-      .tabs { display: grid; grid-template-columns: 1fr 1fr; }
-      .tabpanel { padding: 12px; }
+      .panel { padding: 12px; }
       .head, .step-head { display: grid; }
       .input-row, .endpoint, .copy-row { grid-template-columns: 1fr; }
       .endpoint button, .copy-row button { width: 100%; }
+      .account-dialog {
+        width: calc(100vw - 20px);
+        max-height: calc(100vh - 20px);
+      }
+      .dialog-shell { max-height: calc(100vh - 20px); }
+      .dialog-head, .dialog-body, .dialog-footer { padding: 13px; }
     }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   </style>
@@ -258,56 +292,14 @@
       </div>
       <nav class="nav">
         <a class="button" href="/">返回运行总览</a>
+        <button class="button primary" type="button" data-open-account>反代账号配置</button>
       </nav>
     </header>
 
     <section class="shell">
-      <div class="tabs" role="tablist" aria-label="订阅反代配置">
-        <button
-          class="tab"
-          id="loginTab"
-          type="button"
-          role="tab"
-          aria-selected="true"
-          aria-controls="loginPanel"
-          data-tab="login"
-        >反代账号</button>
-        <button
-          class="tab"
-          id="serviceTab"
-          type="button"
-          role="tab"
-          aria-selected="false"
-          aria-controls="servicePanel"
-          tabindex="-1"
-          data-tab="service"
-        >服务发布</button>
-      </div>
-
       <section
-        class="tabpanel"
-        id="loginPanel"
-        role="tabpanel"
-        aria-labelledby="loginTab"
-        data-panel="login"
-      >
-        <div class="head">
-          <div>
-            <h2>反代账号配置</h2>
-            <p>配置 CLIProxyAPI 客户端 Key 与订阅账号登录；不会读取已有 Key 或授权文件内容。</p>
-          </div>
-          <span class="badge ok">仅本机可操作</span>
-        </div>
-        <div id="loginPanelContent"><div class="empty">正在读取配置状态…</div></div>
-      </section>
-
-      <section
-        class="tabpanel"
+        class="panel"
         id="servicePanel"
-        role="tabpanel"
-        aria-labelledby="serviceTab"
-        data-panel="service"
-        hidden
       >
         <div class="head">
           <div>
@@ -321,21 +313,55 @@
     </section>
   </main>
 
+  <dialog class="account-dialog" id="accountDialog" aria-labelledby="accountDialogTitle">
+    <div class="dialog-shell">
+      <div class="dialog-head">
+        <div>
+          <h2 id="accountDialogTitle">反代账号配置</h2>
+          <p>配置 CLIProxyAPI 客户端 Key 与订阅账号登录；不会读取已有 Key 或授权文件内容。</p>
+        </div>
+        <button class="icon-button" type="button" data-close-account aria-label="关闭反代账号配置">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="head">
+          <div>
+            <h3>CLIProxyAPI 本机控制</h3>
+            <p>账号操作只允许从服务机的 127.0.0.1 发起。</p>
+          </div>
+          <span class="badge ok">仅本机可操作</span>
+        </div>
+        <div id="loginPanelContent"><div class="empty">正在读取配置状态…</div></div>
+      </div>
+      <div class="dialog-footer">
+        <button type="button" data-close-account>关闭</button>
+      </div>
+    </div>
+  </dialog>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script>
     const loginPanelContent = document.querySelector("#loginPanelContent");
     const servicePanelContent = document.querySelector("#servicePanelContent");
     const modeBadge = document.querySelector("#modeBadge");
     const toast = document.querySelector("#toast");
-    const tabs = [...document.querySelectorAll("[role='tab']")];
-    const tabPanels = [...document.querySelectorAll("[role='tabpanel']")];
+    const accountDialog = document.querySelector("#accountDialog");
     let generatedApiKey = "";
     let loginPollTimer = null;
+    let accountTrigger = null;
 
     document.addEventListener("click", async (event) => {
-      const tab = event.target.closest("[data-tab]");
-      if (tab) {
-        selectTab(tab.dataset.tab);
+      const openAccount = event.target.closest("[data-open-account]");
+      if (openAccount) {
+        openAccountDialog(openAccount);
+        return;
+      }
+      const closeAccount = event.target.closest("[data-close-account]");
+      if (closeAccount) {
+        closeAccountDialog();
         return;
       }
       const copy = event.target.closest("[data-copy]");
@@ -358,40 +384,43 @@
       if (loginButton) await startLogin(loginButton);
     });
     document.addEventListener("submit", savePublicBaseUrl);
-    document.querySelector("[role='tablist']").addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
-      const currentIndex = tabs.indexOf(document.activeElement);
-      if (currentIndex < 0) return;
+    accountDialog.addEventListener("cancel", (event) => {
       event.preventDefault();
-      const direction = event.key === "ArrowRight" ? 1 : -1;
-      const next = tabs[(currentIndex + direction + tabs.length) % tabs.length];
-      selectTab(next.dataset.tab);
-      next.focus();
+      closeAccountDialog();
     });
-    window.addEventListener("hashchange", () => selectTab(tabFromHash(), false));
+    accountDialog.addEventListener("click", (event) => {
+      if (event.target === accountDialog) closeAccountDialog();
+    });
+    window.addEventListener("hashchange", applyHashRoute);
 
-    selectTab(tabFromHash(), false);
+    applyHashRoute();
     refreshLogin();
     refreshService();
     setInterval(refreshService, 15000);
 
-    function tabFromHash() {
-      return location.hash === "#service" ? "service" : "login";
+    function applyHashRoute() {
+      if (location.hash === "#login") {
+        openAccountDialog(null, false);
+      } else {
+        closeAccountDialog(false);
+      }
     }
 
-    function selectTab(name, updateHash = true) {
-      const selected = name === "service" ? "service" : "login";
-      tabs.forEach((tab) => {
-        const active = tab.dataset.tab === selected;
-        tab.setAttribute("aria-selected", String(active));
-        tab.tabIndex = active ? 0 : -1;
-      });
-      tabPanels.forEach((panel) => {
-        panel.hidden = panel.dataset.panel !== selected;
-      });
-      if (updateHash && location.hash !== `#${selected}`) {
-        history.replaceState(null, "", `#${selected}`);
+    function openAccountDialog(trigger, updateHash = true) {
+      if (trigger) accountTrigger = trigger;
+      if (!accountDialog.open) accountDialog.showModal();
+      if (updateHash && location.hash !== "#login") {
+        history.replaceState(null, "", "#login");
       }
+    }
+
+    function closeAccountDialog(updateHash = true) {
+      if (accountDialog.open) accountDialog.close();
+      if (updateHash && location.hash !== "#service") {
+        history.replaceState(null, "", "#service");
+      }
+      if (accountTrigger?.isConnected) accountTrigger.focus();
+      accountTrigger = null;
     }
 
     async function refreshLogin() {

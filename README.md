@@ -153,7 +153,7 @@ OpenCode:http://127.0.0.1:5176/gateway/subscription/opencode/v1
 
 安装、OAuth 登录和凭据边界见 [`docs/subscription-proxy-guide.md`](docs/subscription-proxy-guide.md)。
 
-一键启动会直接打开 `http://127.0.0.1:5176/subscription-console.html`。同一个“订阅反代控制台”内可切换“反代账号”和“服务发布”两个页签：前者用于生成 Key 和登录订阅，后者用于查看本机、局域网地址，并填写可选公网 HTTPS 基础地址。
+一键启动会直接打开 `http://127.0.0.1:5176/subscription-console.html`。服务发布是控制台主界面，用于查看本机、局域网地址并填写可选公网 HTTPS 基础地址；点击“反代账号配置”会在当前页面弹出 Key 与订阅登录窗口。
 
 ### 客户端配置建议
 

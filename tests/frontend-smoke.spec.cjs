@@ -277,27 +277,32 @@ async function smokeEntryPage(page, baseUrl, mode = "full") {
   await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
   await page.goto(new URL("/subscription-console.html", baseUrl).href, { waitUntil: "domcontentloaded" });
   await expect(page.locator("h1")).toContainText("订阅反代控制台");
-  await expect(page.locator("[role='tab']")).toHaveCount(2);
-  await expect(page.locator("[data-tab='login']")).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#loginPanel")).toBeVisible();
-  await expect(page.locator("[data-provider]")).toHaveCount(5);
-  await page.locator("[data-tab='service']").click();
-  await expect(page.locator("[data-tab='service']")).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("#servicePanel")).toBeVisible();
   await expect(page.locator("#servicePanelContent")).toContainText("/gateway/subscription/openai/v1", { timeout: 15_000 });
   await expect(page.locator("#publicBaseUrl")).toBeVisible();
-  await page.locator("[data-tab='login']").click();
-  await expect(page.locator("#loginPanel")).toBeVisible();
-  await page.locator("[data-tab='service']").click();
+  await expect(page.locator("#accountDialog")).not.toBeVisible();
+  await page.locator("[data-open-account]").click();
+  await expect(page.locator("#accountDialog")).toBeVisible();
+  await expect(page.locator("[data-provider]")).toHaveCount(5);
+  await expect(page).toHaveURL(/#login$/);
+  await page.getByRole("button", { name: "关闭反代账号配置" }).click();
+  await expect(page.locator("#accountDialog")).not.toBeVisible();
+  await expect(page.locator("#servicePanel")).toBeVisible();
+  await expect(page).toHaveURL(/#service$/);
+  await page.locator("[data-open-account]").click();
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileLayout = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
     scopeColumns: getComputedStyle(document.querySelector(".scope-grid")).gridTemplateColumns,
+    dialogWidth: document.querySelector("#accountDialog").getBoundingClientRect().width,
+    loginColumns: getComputedStyle(document.querySelector("#loginPanelContent .grid")).gridTemplateColumns,
   }));
   expect(mobileLayout.scrollWidth, "service-entry mobile page should not overflow horizontally")
     .toBeLessThanOrEqual(mobileLayout.clientWidth + 1);
   expect(mobileLayout.scopeColumns.split(" ")).toHaveLength(1);
+  expect(mobileLayout.dialogWidth).toBeLessThanOrEqual(mobileLayout.clientWidth);
+  expect(mobileLayout.loginColumns.split(" ")).toHaveLength(1);
   expect(failures, "service-entry frontend errors").toEqual([]);
 }
 
