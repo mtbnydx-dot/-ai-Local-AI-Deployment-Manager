@@ -53,6 +53,16 @@
       sessionRecent: "recent",
       sessionWaiting: "Waiting for Claude task requests",
       sessionDefaultTask: "Claude task",
+      sourcesEmpty: "No gateway calls in the last hour.",
+      sourcesNote: "Grouped from gateway metadata in the last hour; prompts and responses are not stored.",
+      sourceRequests: "Requests",
+      sourceTokens: "Tokens",
+      sourceLatency: "Average latency",
+      sourceResult: "Result",
+      sourcePath: "Main path",
+      sourceModel: "Main model",
+      sourceRemote: "Remote",
+      sourceUserAgent: "User-Agent",
       separator: " / ",
       detailSeparator: " - ",
       ...(options?.labels || {}),
@@ -210,11 +220,75 @@
     `;
   }
 
+  function renderSourcePrograms(stats, options = {}) {
+    const root = options.root || document.querySelector(options.rootSelector || "#statsSourcePrograms");
+    if (!root) return;
+    const labels = getLabels(options);
+    const escapeHtml = helper(options, "escapeHtml", defaultEscape);
+    const usage = stats.recentAccess || {};
+    const sources = usage.sources || [];
+    if (!sources.length) {
+      root.innerHTML = `<div class="empty compact">${escapeHtml(labels.sourcesEmpty)}</div>`;
+      return;
+    }
+    const totalRequests = Math.max(1, Number(usage.totals?.requests?.total || sources.reduce((sum, item) => sum + Number(item.count || 0), 0)));
+    const formatDateTime = helper(options, "formatDateTime", (value) => String(value || ""));
+    root.innerHTML = `
+      ${sources.map((source) => renderSourceProgramRow(source, {
+        ...options,
+        labels,
+        totalRequests,
+      })).join("")}
+      <div class="stats-source-note">${escapeHtml(usage.privacy || labels.sourcesNote)}${usage.startAt ? ` ${escapeHtml(formatDateTime(usage.startAt))} - ${escapeHtml(formatDateTime(usage.endAt))}` : ""}</div>
+    `;
+  }
+
+  function renderSourceProgramRow(source, options = {}) {
+    const labels = getLabels(options);
+    const escapeHtml = helper(options, "escapeHtml", defaultEscape);
+    const miniStat = helper(options, "miniStat", () => "");
+    const shareBar = helper(options, "shareBar", () => "");
+    const fmtTokens = helper(options, "fmtTokens", (value) => String(value ?? 0));
+    const fmtMs = helper(options, "fmtMs", (value) => String(value ?? "-"));
+    const formatDateTime = helper(options, "formatDateTime", (value) => String(value || ""));
+    const totalRequests = Math.max(1, Number(options.totalRequests || source.count || 1));
+    const requestShare = Number(source.count || 0) / totalRequests;
+    const topPath = Array.isArray(source.topPath) ? source.topPath[0] : "";
+    const topModel = Array.isArray(source.topModel) ? source.topModel[0] : "";
+    const topRemote = Array.isArray(source.topRemoteAddress) ? source.topRemoteAddress[0] : "";
+    const topUserAgent = Array.isArray(source.topUserAgent) ? source.topUserAgent[0] : "";
+    const remote = topRemote || Object.keys(source.remoteAddresses || {})[0] || "-";
+    const userAgent = topUserAgent && topUserAgent !== "none" ? topUserAgent : "";
+    const detailLine = [
+      topPath && `${labels.sourcePath}${labels.modelSeparator}${topPath}`,
+      topModel && topModel !== "-" && `${labels.sourceModel}${labels.modelSeparator}${topModel}`,
+      remote && `${labels.sourceRemote}${labels.modelSeparator}${remote}`,
+    ].filter(Boolean).join(labels.separator);
+    return `
+      <article class="stats-model-row">
+        <div>
+          <h4>${escapeHtml(source.label || source.key || "-")}</h4>
+          <p>${escapeHtml(userAgent || detailLine || "")}</p>
+          <div class="stats-row-grid">
+            ${miniStat(labels.sourceRequests, fmtTokens(source.count || 0), `${fmtTokens(source.success || 0)} ${labels.success}${labels.detailSeparator}${fmtTokens(source.error || 0)} ${labels.error}`)}
+            ${miniStat(labels.sourceTokens, fmtTokens(source.totalTokens || 0), `${fmtTokens(source.inputTokens || 0)} ${labels.input}${labels.detailSeparator}${fmtTokens(source.outputTokens || 0)} ${labels.output}`)}
+            ${miniStat(labels.sourceLatency, fmtMs(source.avgDurationMs || 0), `${labels.last} ${formatDateTime(source.lastAt)}`)}
+            ${miniStat(labels.sourceResult, `${(Number(source.errorRate || 0) * 100).toFixed(1)}%`, labels.error)}
+          </div>
+          ${detailLine ? `<div class="client-model-breakdown"><span>${escapeHtml(detailLine)}</span></div>` : ""}
+          ${shareBar("requests", requestShare)}
+        </div>
+      </article>
+    `;
+  }
+
   window.statsListRenderer = {
     renderModels,
     renderClients,
     renderClientRow,
     renderClientSessionLine,
     renderClientModelLine,
+    renderSourcePrograms,
+    renderSourceProgramRow,
   };
 }());

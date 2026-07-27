@@ -161,6 +161,7 @@
 
   function isManagerRunnableModelItem(item) {
     if (item?.source === "running") return true;
+    if (item?.runnable === false || item?.disabled === true) return false;
     const text = [
       item?.source,
       item?.label,

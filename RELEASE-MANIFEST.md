@@ -1,39 +1,15 @@
 ﻿# Release Manifest
 
-Synced from: D:\AI
-Synced at: 2026-06-16 15:35:23 +10:00
+- Package: local-model-service-platform-v0.1.0
+- Built: 2026-07-22 23:04:54 +08:00
 
-## Directories
+## Included
 
-- .github
-- docs
-- tests
-- manager-core
-- shared-public
-- service-entry
-- vllm-manager
-- llama-manager
-- model-capability-tests
-- vllm
+- Application source for service-entry, vLLM manager, llama.cpp manager, and shared manager core
+- User documentation, tests, GitHub Actions CI, and public deployment examples
+- Windows install, start, stop, status, test, and packaging scripts
 
-## Files
+## Intentionally excluded
 
-- .gitignore
-- README.md
-- package.json
-- package-lock.json
-- playwright.config.cjs
-- SYNC_POLICY.md
-- install-all.cmd
-- test-all.cmd
-- start-service-entry.cmd
-- start-service-entry-lan.cmd
-- stop-service-entry.cmd
-- status-service-entry.cmd
-- start-claude-vllm-proxy.ps1
-- claude-vllm-anthropic-proxy.py
-
-## Excluded Runtime Data
-
-- models, caches, logs, node_modules
-- local secrets, PID files, ledgers, SQLite/database files
+- node_modules, models, caches, logs, runtime ledgers, databases, PID files, and test output
+- .env files, local secrets, machine-local proxy data, screenshots, and internal audit/work files

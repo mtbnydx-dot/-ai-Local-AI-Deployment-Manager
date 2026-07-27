@@ -129,11 +129,20 @@
       if (!root || !guide) return;
       const openAiClientUrl = guide.openai?.lanBaseUrl || guide.openai?.baseUrl || "-";
       const claudeClientUrl = guide.claude?.publicBaseUrl || guide.ccswitch?.providerBaseUrl || guide.claude?.baseUrl || "-";
+      const openAiModel = guide.openwebui?.model || guide.openai?.recommendedModel || guide.model || "local-current";
+      const aliasText = (guide.openai?.modelAliases || []).length ? `可用别名：${guide.openai.modelAliases.join(" / ")}` : "";
+      const actualModelText = guide.openwebui?.actualModel && guide.openwebui.actualModel !== openAiModel
+        ? `当前实际模型：${guide.openwebui.actualModel}`
+        : "";
+      const authText = guide.openai?.authNote || "按服务暴露页设置填写 API Key。";
+      const reasoningText = guide.openai?.reasoningNote || "";
       root.innerHTML = `
         <div class="compat-endpoints">
-          <div><strong>Chatbox / OpenWebUI / OpenAI Compatible</strong><code>${escapeHtml(openAiClientUrl)}</code><span>Provider 选 OpenAI Compatible；路径必须是 /serve/v1；模型名：${escapeHtml(guide.model || "local-current")}</span></div>
+          <div><strong>Chatbox / OpenWebUI / OpenAI Compatible</strong><code>${escapeHtml(openAiClientUrl)}</code><span>Provider 选 OpenAI Compatible；Base URL 填到 /serve/v1；模型名优先用 ${escapeHtml(openAiModel)}。${escapeHtml([aliasText, actualModelText].filter(Boolean).join("；"))}</span></div>
+          <div><strong>OpenAI 鉴权</strong><code>${escapeHtml(guide.openai?.apiKeyRequired ? "Authorization: Bearer <API_KEY>" : "API Key 可留空")}</code><span>${escapeHtml(authText)}</span></div>
           <div><strong>Claude / Cowork / CC Switch</strong><code>${escapeHtml(claudeClientUrl)}</code><span>Provider 选 Anthropic / Claude；模型别名：${escapeHtml(guide.claude?.modelAlias || guide.ccswitch?.modelAlias || "-")}</span></div>
           <div><strong>路径不要混用</strong><code>OpenAI = /serve/v1 · Claude = /claude</code><span>Chatbox/OpenWebUI 不要填 /claude；Claude 客户端不要填 /serve/v1。</span></div>
+          ${reasoningText ? `<div><strong>reasoning 模型提示</strong><code>max_tokens 建议 >= 256</code><span>${escapeHtml(reasoningText)}</span></div>` : ""}
           <div><strong>curl 测试</strong><code>${escapeHtml(guide.openai?.curl || "-")}</code><span>用于确认本地服务是否返回模型列表。</span></div>
           <div><strong>管理器地址</strong><code>${escapeHtml(guide.manager?.local || "-")}</code><span>${guide.manager?.lan ? `局域网：${escapeHtml(guide.manager.lan)}` : "当前管理器只绑定本机。"}</span></div>
         </div>

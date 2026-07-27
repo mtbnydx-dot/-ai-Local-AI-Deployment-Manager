@@ -46,6 +46,14 @@ function createVllmRemoteModelService({
   fetchImpl = globalThis.fetch,
   getHfToken = () => process.env.HF_TOKEN,
 } = {}) {
+  const useSystemProxyFallback = fetchImpl === globalThis.fetch;
+
+  function remoteFetch(url, options) {
+    return core.fetchWithSystemProxyFallback(fetchImpl, url, options, {
+      allowProxyFallback: useSystemProxyFallback,
+    });
+  }
+
   function authHeaders(extra = {}) {
     const token = getHfToken();
     return {
@@ -55,7 +63,7 @@ function createVllmRemoteModelService({
   }
 
   async function fetchJson(url) {
-    const response = await fetchImpl(url, {
+    const response = await remoteFetch(url, {
       headers: authHeaders({
         accept: "application/json",
         "user-agent": "vllm-manager/0.1",
@@ -70,7 +78,7 @@ function createVllmRemoteModelService({
   }
 
   async function fetchJsonPost(url, body, method = "POST") {
-    const response = await fetchImpl(url, {
+    const response = await remoteFetch(url, {
       method,
       headers: {
         accept: "application/json",

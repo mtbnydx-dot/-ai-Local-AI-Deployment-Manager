@@ -192,11 +192,20 @@ async function smokePage(page, baseUrl, label) {
       }),
     });
   });
+  const modelsLoaded = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/models" && response.request().method() === "GET" && response.ok();
+  });
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await modelsLoaded;
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page.locator("[data-view-panel='service']").first()).toBeVisible();
+  await expect(page.locator(".launch-flow-tab")).toHaveCount(4);
+  await expect(page.locator("[data-launch-stage='model']")).toBeVisible();
   await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
   await page.locator("#modelPickerToggle").click();
+  await expect(page.locator(".model-picker-backdrop")).toBeVisible();
+  await expect(page.locator("#modelPickerPopover")).toHaveAttribute("role", "dialog");
   await expect(page.locator(".model-picker-item")).toHaveCount(12);
   const pickerScroll = await page.locator("#modelPickerList").evaluate((node) => ({
     clientHeight: node.clientHeight,
@@ -205,15 +214,33 @@ async function smokePage(page, baseUrl, label) {
   }));
   expect(pickerScroll.scrollHeight, `${label} picker should expose more than four models`).toBeGreaterThan(pickerScroll.clientHeight);
   expect(pickerScroll.overflowY).toMatch(/auto|scroll/);
-  await page.locator("#modelPickerToggle").click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".model-picker-backdrop")).toBeHidden();
+  await page.locator("[data-launch-stage='model'] [data-launch-stage-next]").click();
+  await expect(page.locator("[data-launch-stage='resources']")).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   for (const view of ["download", "exposure", "external-access", "stats"]) {
     await page.locator(`[data-view='${view}']`).click();
     await expect(page.locator(`[data-view-panel='${view}']`).first()).toBeVisible();
+    expect(await page.evaluate(() => window.scrollY), `${label} ${view} view should open at its saved top position`).toBeLessThan(100);
     if (view === "exposure") {
       await expect(page.locator("#serviceExposureEndpoints")).toContainText("网关即时开关");
       await expect(page.locator("#serviceExposureEndpoints [data-exposure-field='enabled']").first()).toBeVisible();
+      await page.locator("#exposureMode").selectOption("reverse-proxy");
+      await expect(page.locator("#exposurePublicBaseUrl")).toHaveAttribute("required", "");
+      await expect(page.locator(".exposure-mode-guidance")).toContainText("HTTPS");
     }
   }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator("[data-view='service']").click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const mobileShell = await page.evaluate(() => ({
+    sidebarHeight: document.querySelector(".sidebar")?.getBoundingClientRect().height || 0,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(mobileShell.sidebarHeight, `${label} mobile navigation should stay compact`).toBeLessThan(120);
+  expect(mobileShell.scrollWidth, `${label} mobile page should not overflow horizontally`).toBeLessThanOrEqual(mobileShell.clientWidth + 1);
   await page.waitForTimeout(500);
   expect(failures, `${label} frontend errors`).toEqual([]);
 }

@@ -1,4 +1,5 @@
 const { spawn } = require("child_process");
+const { StringDecoder } = require("node:string_decoder");
 const { markJobCancelRequested, markProcessJobStarted } = require("./job-utils");
 
 function terminateProcessTree(pid, options = {}) {
@@ -29,6 +30,9 @@ function createProcessJobRunner(handlers = {}) {
   const handleDownloadCancel = handlers.handleDownloadCancel || null;
   const cancelNonDownloadMessage = handlers.cancelNonDownloadMessage || null;
   const closeHandlerErrorMode = handlers.closeHandlerErrorMode || "fail";
+  const handleProcessSuccess = typeof handlers.handleProcessSuccess === "function"
+    ? handlers.handleProcessSuccess
+    : null;
 
   const handleCloseError = (job, error) => {
     if (closeHandlerErrorMode === "log") {
@@ -55,8 +59,16 @@ function createProcessJobRunner(handlers = {}) {
         countExistingProgress: Boolean(options.countExistingProgress),
       });
     }
-    if (child.stdout?.on) child.stdout.on("data", (data) => appendLog(job, data));
-    if (child.stderr?.on) child.stderr.on("data", (data) => appendLog(job, data));
+    const stdoutForwarder = createUtf8LogForwarder((data) => appendLog(job, data));
+    const stderrForwarder = createUtf8LogForwarder((data) => appendLog(job, data));
+    if (child.stdout?.on) {
+      child.stdout.on("data", stdoutForwarder.write);
+      child.stdout.on("end", stdoutForwarder.flush);
+    }
+    if (child.stderr?.on) {
+      child.stderr.on("data", stderrForwarder.write);
+      child.stderr.on("end", stderrForwarder.flush);
+    }
     const done = () => {
       try {
         onDone(job);
@@ -70,6 +82,8 @@ function createProcessJobRunner(handlers = {}) {
         done();
       });
       child.on("close", (code) => {
+        stdoutForwarder.flush();
+        stderrForwarder.flush();
         job.exitCode = code;
         Promise.resolve()
           .then(async () => {
@@ -78,6 +92,7 @@ function createProcessJobRunner(handlers = {}) {
             } else if (job.meta?.cancelRequested && cancelNonDownloadMessage) {
               failJob(job, new Error(cancelNonDownloadMessage));
             } else if (code === 0) {
+              if (handleProcessSuccess) await handleProcessSuccess(job, options);
               finishJob(job);
             } else {
               failJob(job, new Error(`Process exited with code ${code}`));
@@ -96,7 +111,45 @@ function createProcessJobRunner(handlers = {}) {
   };
 }
 
+function createUtf8LogForwarder(append) {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  let flushed = false;
+
+  const forwardCompleteLines = (text, final = false) => {
+    pending += String(text || "").replace(/\r/g, "\n");
+    const lines = pending.split("\n");
+    pending = final ? "" : lines.pop();
+    const ready = final ? lines : lines;
+    for (const line of ready) {
+      if (line) append(line);
+    }
+    if (final && pending) append(pending);
+  };
+
+  return {
+    write(data) {
+      if (flushed) return;
+      const text = Buffer.isBuffer(data) || ArrayBuffer.isView(data)
+        ? decoder.write(Buffer.from(data.buffer || data, data.byteOffset || 0, data.byteLength || data.length))
+        : String(data || "");
+      forwardCompleteLines(text);
+    },
+    flush() {
+      if (flushed) return;
+      flushed = true;
+      const tail = decoder.end();
+      const text = pending + tail;
+      pending = "";
+      for (const line of text.replace(/\r/g, "\n").split("\n")) {
+        if (line) append(line);
+      }
+    },
+  };
+}
+
 module.exports = {
+  createUtf8LogForwarder,
   createProcessJobRunner,
   terminateProcessTree,
 };

@@ -33,6 +33,7 @@ test("vLLM model utils infer model metadata from repo names", () => {
 test("vLLM runnable filters reject GGUF-only and unsupported remote models", () => {
   const utils = loadUtils();
   assert.equal(utils.isManagerRunnableModelItem({ model: "foo.gguf", format: "gguf" }), false);
+  assert.equal(utils.isManagerRunnableModelItem({ model: "D:/models/broken", source: "local", runnable: false }), false);
   assert.equal(utils.isManagerRunnableRemoteModel({ id: "org/model-GGUF", hasGguf: true, hasSafetensors: false }), false);
   assert.equal(utils.isManagerRunnableRemoteModel({ id: "org/model-AWQ", hasSafetensors: true, quantFormats: ["AWQ"] }), true);
   assert.equal(utils.isManagerRunnableRemoteModel({ id: "org/embedding-model", hasSafetensors: true }), false);

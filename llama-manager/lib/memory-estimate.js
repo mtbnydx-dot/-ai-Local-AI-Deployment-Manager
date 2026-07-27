@@ -54,9 +54,13 @@ function parseMemoryEstimateWeights(value) {
 function buildLlamaMemoryEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
   const arch = normalizeMemoryEstimateArch(input.arch || input.modelConfig || input.config);
+  const parallelSlots = Math.max(1, Math.floor(memoryEstimateNumber(input.maxNumSeqs ?? input.parallelSlots, 1)));
+  const speculativeMode = String(input.speculativeMode || "off").toLowerCase();
+  const speculativeTokens = Math.min(16, Math.max(1, Math.floor(memoryEstimateNumber(input.numSpeculativeTokens, 3))));
+  const speculativeReserveGb = speculativeMode === "off" ? 0 : Math.min(4, 0.5 + speculativeTokens * 0.25);
   const plan = core.estimateLlamaMemoryPlan({
     paramsB: memoryEstimateNumber(input.paramsB, 0),
-    contextTokens: Math.max(1, memoryEstimateNumber(input.contextTokens ?? input.maxModelLen, 8192)),
+    contextTokens: Math.max(1, memoryEstimateNumber(input.contextTokens ?? input.maxModelLen, 8192)) * parallelSlots,
     // GGUF usually has lower transient overhead than safetensors, so the default bytes/param is intentionally lower.
     bytesPerParam: Math.max(0.125, memoryEstimateNumber(input.bytesPerParam, 0.56)),
     kvBytes: Math.max(0.125, memoryEstimateNumber(input.kvBytes, 2)),
@@ -65,8 +69,10 @@ function buildLlamaMemoryEstimate(input = {}) {
     utilization: memoryEstimateNumber(input.gpuMemoryUtilization ?? input.utilization, 0.9),
     gpuLayers: input.gpuLayers ?? input.nGpuLayers ?? "all",
     tensorSplitWeights: parseMemoryEstimateWeights(input.tensorSplitWeights ?? input.tensorSplit),
-    multimodalReserveGb: Math.max(0, memoryEstimateNumber(input.multimodalReserveGb, input.arch?.isMultimodal ? 2 : 0)),
+    multimodalReserveGb: Math.max(0, memoryEstimateNumber(input.multimodalReserveGb, input.arch?.isMultimodal ? 2 : 0)) + speculativeReserveGb,
   });
+  plan.parallelSlots = parallelSlots;
+  plan.speculativeReserveGb = speculativeReserveGb;
   const suggestions = [];
   if (!plan.selectedGpus.length) {
     suggestions.push("没有传入 GPU 显存数据，只能给出模型本身的理论占用。");
@@ -81,6 +87,7 @@ function buildLlamaMemoryEstimate(input = {}) {
     const suggestedSplit = selectedGpus.map((gpu) => Math.max(1, Math.round(gpu.freeGb || gpu.totalGb || 1))).join(",");
     suggestions.push(`异构多卡建议 tensor split 按可用显存近似填写：${suggestedSplit}。`);
   }
+  if (speculativeReserveGb > 0) suggestions.push(`已为 ${speculativeMode} 推测解码预留约 ${speculativeReserveGb.toFixed(1)} GiB。`);
   return {
     ok: true,
     engine: "llama.cpp",

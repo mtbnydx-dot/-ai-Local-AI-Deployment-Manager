@@ -11,6 +11,14 @@ const PORT = Number(process.env.SERVICE_ENTRY_PORT || 5176);
 const ROOT = __dirname;
 const AI_ROOT = path.dirname(ROOT);
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
+const GATEWAY_MAX_BODY_BYTES = Math.max(1024 * 1024, Number(process.env.SERVICE_ENTRY_MAX_BODY_BYTES || 32 * 1024 * 1024));
+const MODEL_DISCOVERY_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_MODEL_CACHE_MS || 3000));
+const MANAGER_STATUS_CACHE_MS = Math.max(500, Number(process.env.SERVICE_ENTRY_STATUS_CACHE_MS || 5000));
+const PUBLIC_BASE_URL = String(process.env.SERVICE_ENTRY_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
+const ALLOWED_ORIGINS = String(process.env.SERVICE_ENTRY_ALLOWED_ORIGINS || "")
+  .split(/[;,]/)
+  .map((item) => item.trim())
+  .filter(Boolean);
 
 const MANAGERS = [
   {
@@ -38,6 +46,29 @@ const MANAGERS = [
 ];
 
 let server = null;
+const managerModelCache = new Map();
+const managerStatusCache = new Map();
+// Manager liveness rarely flips, so a short probe cache turns the per-request
+// TCP connect probe into an in-memory lookup for the common steady-state case.
+const PORT_PROBE_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_PORT_PROBE_CACHE_MS || 2000));
+const portProbeCache = new Map();
+
+async function isManagerPortListening(port) {
+  const now = Date.now();
+  const cached = portProbeCache.get(port);
+  if (cached && cached.expiresAt > now) return cached.value;
+  if (cached?.promise) return cached.promise;
+  const promise = core.isPortListening("127.0.0.1", port).catch(() => false);
+  portProbeCache.set(port, { value: cached?.value ?? false, expiresAt: cached?.expiresAt ?? 0, promise });
+  try {
+    const value = await promise;
+    portProbeCache.set(port, { value, expiresAt: now + PORT_PROBE_CACHE_MS, promise: null });
+    return value;
+  } catch (error) {
+    portProbeCache.delete(port);
+    throw error;
+  }
+}
 
 function createServiceEntryServer() {
   return http.createServer(handleRequest);
@@ -143,17 +174,43 @@ async function serveDoc(res, pathname) {
   return serveFile(res, path.join(AI_ROOT, "docs", name), "text/markdown; charset=utf-8");
 }
 
-async function buildManagerStatus(manager) {
+async function buildManagerStatus(manager, options = {}) {
+  const now = Date.now();
+  const cached = managerStatusCache.get(manager.id);
+  if (!options.force && cached?.value) {
+    if (cached.expiresAt <= now && !cached.promise) {
+      buildManagerStatus(manager, { force: true }).catch(() => {});
+    }
+    return cached.value;
+  }
+  if (!options.force && cached?.promise) return cached.promise;
+  const promise = buildManagerStatusFresh(manager);
+  managerStatusCache.set(manager.id, {
+    value: cached?.value || null,
+    expiresAt: cached?.expiresAt || 0,
+    promise,
+  });
+  try {
+    const value = await promise;
+    managerStatusCache.set(manager.id, { value, expiresAt: Date.now() + MANAGER_STATUS_CACHE_MS, promise: null });
+    return value;
+  } catch (error) {
+    managerStatusCache.delete(manager.id);
+    throw error;
+  }
+}
+
+async function buildManagerStatusFresh(manager) {
   const baseUrl = `http://127.0.0.1:${manager.port}`;
   const pidFile = path.join(manager.root, ".manager.pid");
   const pid = await core.readPidFilePid(pidFile);
   const [portListening, health, runtimeStatus, exposure, clients, externalAccess] = await Promise.all([
     core.isPortListening("127.0.0.1", manager.port),
-    fetchJson(`${baseUrl}/api/manager/health`),
-    fetchJson(`${baseUrl}/api/status`),
-    fetchJson(`${baseUrl}/api/service-exposure`),
-    fetchJson(`${baseUrl}/api/service-clients`),
-    fetchJson(`${baseUrl}/api/external-access?limit=20`),
+    fetchJson(`${baseUrl}/api/manager/health`, 5000),
+    fetchJson(`${baseUrl}/api/status`, 8000),
+    fetchJson(`${baseUrl}/api/service-exposure`, 8000),
+    fetchJson(`${baseUrl}/api/service-clients`, 5000),
+    fetchJson(`${baseUrl}/api/external-access?limit=20`, 8000),
   ]);
   const pidAlive = pid ? core.isProcessAlive(pid) : false;
   return {
@@ -199,6 +256,9 @@ function buildEntryGatewayUrls() {
     lanAutoOpenAi: lanBase ? `${lanBase}/gateway/auto/openai/v1` : null,
     lanAutoClaude: lanBase ? `${lanBase}/gateway/auto/claude` : null,
     lanAutoOpenCode: lanBase ? `${lanBase}/gateway/auto/opencode/v1` : null,
+    publicOpenAi: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/openai/v1` : null,
+    publicClaude: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/claude` : null,
+    publicOpenCode: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/opencode/v1` : null,
   };
 }
 
@@ -208,10 +268,10 @@ function buildManagerGatewayUrls(manager) {
   return {
     openAi: `${localBase}/gateway/${manager.id}/openai/v1`,
     claude: `${localBase}/gateway/${manager.id}/claude`,
-    openCode: manager.id === "vllm" ? `${localBase}/gateway/${manager.id}/opencode/v1` : null,
+    openCode: `${localBase}/gateway/${manager.id}/opencode/v1`,
     lanOpenAi: lanBase ? `${lanBase}/gateway/${manager.id}/openai/v1` : null,
     lanClaude: lanBase ? `${lanBase}/gateway/${manager.id}/claude` : null,
-    lanOpenCode: lanBase && manager.id === "vllm" ? `${lanBase}/gateway/${manager.id}/opencode/v1` : null,
+    lanOpenCode: lanBase ? `${lanBase}/gateway/${manager.id}/opencode/v1` : null,
   };
 }
 
@@ -222,12 +282,25 @@ async function proxyGatewayRequest(req, res, url) {
     res.writeHead(204, gatewayCorsHeaders(req));
     return res.end();
   }
-  const manager = await resolveGatewayManager(route.engine, route.protocol);
+  if (isAggregatedModelListRequest(req, route)) {
+    return sendAggregatedModelList(req, res);
+  }
+  const startedAt = Date.now();
+  let body;
+  try {
+    body = ["GET", "HEAD"].includes(req.method) ? undefined : await readRequestBody(req, GATEWAY_MAX_BODY_BYTES);
+  } catch (error) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, error.status || 400, startedAt, null, error.message)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("invalid_request", error.message), error.status || 400);
+  }
+  const parsedBody = parseRequestJsonBody(body);
+  const requestedModel = String(parsedBody?.model || "").trim();
+  const manager = await resolveGatewayManager(route.engine, route.protocol, requestedModel);
   if (!manager) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, Date.now(), null, "No matching manager is available.")).catch(() => {});
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, body, "No matching manager is available.")).catch(() => {});
     return sendJson(res, core.openAiGatewayError("manager_unavailable", "No matching manager is available."), 503);
   }
-  if (!(await core.isPortListening("127.0.0.1", manager.port))) {
+  if (!(await isManagerPortListening(manager.port))) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, 503, Date.now(), null, `${manager.name} is not listening on port ${manager.port}.`)).catch(() => {});
     return sendJson(res, core.openAiGatewayError("manager_offline", `${manager.name} is not listening on port ${manager.port}.`), 503);
   }
@@ -235,27 +308,30 @@ async function proxyGatewayRequest(req, res, url) {
   if (!targetPath) return sendJson(res, core.openAiGatewayError("protocol_not_supported", `${manager.name} does not support ${route.protocol}.`), 404);
   const target = new URL(`http://127.0.0.1:${manager.port}${targetPath}`);
   target.search = url.search;
-  const startedAt = Date.now();
-  let body = null;
+  const upstreamControl = createUpstreamControl(req, res);
   try {
-    body = ["GET", "HEAD"].includes(req.method) ? undefined : await readRequestBody(req, 64 * 1024 * 1024);
     const upstream = await fetch(target, {
       method: req.method,
       headers: buildProxyHeaders(req.headers, req),
       body,
-      signal: AbortSignal.timeout(Number(process.env.SERVICE_ENTRY_GATEWAY_TIMEOUT_MS || 30 * 60 * 1000)),
+      signal: upstreamControl.signal,
     });
     res.writeHead(upstream.status, buildResponseHeaders(upstream.headers, req));
     res.once("finish", () => {
       appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, upstream.status, startedAt, body, "")).catch(() => {});
     });
     if (upstream.body) {
-      Readable.fromWeb(upstream.body).pipe(res);
+      const stream = Readable.fromWeb(upstream.body);
+      stream.once("end", upstreamControl.clear);
+      stream.once("error", upstreamControl.clear);
+      stream.pipe(res);
     } else {
+      upstreamControl.clear();
       res.end();
     }
     console.log(`gateway ${route.engine}/${route.protocol} -> ${manager.id} ${upstream.status} ${Date.now() - startedAt}ms ${targetPath}`);
   } catch (error) {
+    upstreamControl.clear();
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, error.status || 502, startedAt, body, error.message)).catch(() => {});
     if (!res.headersSent) {
       sendJson(res, core.openAiGatewayError("gateway_proxy_error", error.message), error.status || (error.name === "TimeoutError" ? 504 : 502));
@@ -265,8 +341,44 @@ async function proxyGatewayRequest(req, res, url) {
   }
 }
 
+function isAggregatedModelListRequest(req, route) {
+  if (req.method !== "GET" || route.engine !== "auto" || route.protocol !== "openai") return false;
+  return buildManagerGatewayPath(route).replace(/\/$/, "") === "/serve/v1/models";
+}
+
+async function sendAggregatedModelList(req, res) {
+  const catalogs = await Promise.all(MANAGERS.map((manager) => getManagerModelCatalog(manager)));
+  const data = mergeManagerModelCatalogs(catalogs);
+  if (!data.length) {
+    return sendJson(res, core.openAiGatewayError("service_unavailable", "No running model service reported any models."), 503, gatewayCorsHeaders(req));
+  }
+  return sendJson(res, { object: "list", data }, 200, gatewayCorsHeaders(req));
+}
+
+function mergeManagerModelCatalogs(catalogs = []) {
+  const data = [];
+  const seen = new Set();
+  for (const catalog of catalogs) {
+    for (const model of catalog.models) {
+      const id = String(model.id || "").trim();
+      const key = id.toLowerCase();
+      if (!id || seen.has(key)) continue;
+      seen.add(key);
+      data.push({
+        ...model,
+        id,
+        object: model.object || "model",
+        owned_by: model.owned_by || catalog.manager.id,
+        manager_engine: catalog.manager.id,
+      });
+    }
+  }
+  return data;
+}
+
 function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, body, error) {
   const parsedBody = parseRequestJsonBody(body);
+  const headers = req.headers || {};
   return {
     at: new Date().toISOString(),
     remoteAddress: req.socket?.remoteAddress || "",
@@ -281,6 +393,9 @@ function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, bo
     stream: parsedBody?.stream === true,
     authSource: core.serviceApiKeySource(req.headers || {}),
     clientId: "",
+    userAgent: headerValue(headers, "user-agent"),
+    origin: headerValue(headers, "origin"),
+    refererHost: headerHost(headers, "referer"),
     durationMs: Date.now() - startedAt,
     inputTokens: 0,
     outputTokens: 0,
@@ -291,6 +406,20 @@ function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, bo
   };
 }
 
+function headerValue(headers = {}, name, maxLength = 240) {
+  return String(headers[name] || headers[String(name || "").toLowerCase()] || "").trim().slice(0, maxLength);
+}
+
+function headerHost(headers = {}, name) {
+  const value = headerValue(headers, name);
+  if (!value) return "";
+  try {
+    return new URL(value).host || value;
+  } catch {
+    return value.replace(/^https?:\/\//i, "").split(/[/?#]/)[0].slice(0, 160);
+  }
+}
+
 function parseRequestJsonBody(body) {
   if (!body || !Buffer.isBuffer(body)) return null;
   const text = body.toString("utf8", 0, Math.min(body.length, 1024 * 1024));
@@ -299,8 +428,7 @@ function parseRequestJsonBody(body) {
 }
 
 async function appendEntryGatewayAccessLog(entry) {
-  await fs.mkdir(path.dirname(GATEWAY_ACCESS_LOG), { recursive: true });
-  await fs.appendFile(GATEWAY_ACCESS_LOG, `${JSON.stringify(entry)}\n`, "utf8");
+  return core.appendAccessLog(GATEWAY_ACCESS_LOG, entry);
 }
 
 async function collectEntryGatewayAccessStats(options = {}) {
@@ -334,17 +462,7 @@ async function collectEntryGatewayAccessStats(options = {}) {
 }
 
 async function readEntryGatewayAccessEvents(maxLines = 12000) {
-  try {
-    const text = await fs.readFile(GATEWAY_ACCESS_LOG, "utf8");
-    return text
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .slice(-maxLines)
-      .map((line) => parseJsonSafe(line, null))
-      .filter((entry) => entry && typeof entry === "object");
-  } catch {
-    return [];
-  }
+  return core.readAccessLogEvents(GATEWAY_ACCESS_LOG, maxLines, parseJsonSafe);
 }
 
 function parseGatewayRoute(pathname) {
@@ -357,18 +475,65 @@ function parseGatewayRoute(pathname) {
   };
 }
 
-async function resolveGatewayManager(engine, protocol) {
-  if (protocol === "opencode") return findManager("vllm");
+async function resolveGatewayManager(engine, protocol, requestedModel = "") {
   if (engine !== "auto") return findManager(engine);
-  const statuses = await Promise.all(MANAGERS.map(async (manager) => ({
-    manager,
-    listening: await core.isPortListening("127.0.0.1", manager.port),
-    status: await fetchJson(`http://127.0.0.1:${manager.port}/api/status`),
-  })));
-  const running = statuses.find((item) => item.listening && item.status.data?.container?.running);
-  if (running) return running.manager;
-  const listening = statuses.find((item) => item.listening);
-  return listening?.manager || findManager("vllm");
+  const catalogs = await Promise.all(MANAGERS.map((manager) => getManagerModelCatalog(manager)));
+  return selectGatewayManager(catalogs, requestedModel) || findManager("vllm");
+}
+
+function selectGatewayManager(catalogs = [], requestedModel = "") {
+  const value = String(requestedModel || "").trim().toLowerCase();
+  if (value && !["auto", "current", "default", "local-current"].includes(value)) {
+    const exact = catalogs.find((catalog) => catalog.modelIds.has(value) || catalog.aliases.has(value));
+    if (exact) return exact.manager;
+  }
+  return catalogs.find((catalog) => catalog.running && catalog.models.length)?.manager
+    || catalogs.find((catalog) => catalog.listening)?.manager
+    || null;
+}
+
+async function getManagerModelCatalog(manager, options = {}) {
+  const now = Date.now();
+  const cached = managerModelCache.get(manager.id);
+  if (!options.force && cached?.value && cached.expiresAt > now) return cached.value;
+  if (!options.force && cached?.promise) return cached.promise;
+  const promise = (async () => {
+    const listening = await core.isPortListening("127.0.0.1", manager.port);
+    if (!listening) return emptyManagerCatalog(manager, false);
+    const runtime = await fetchJson(`http://127.0.0.1:${manager.port}/api/running-models`, 5000);
+    const data = runtime.data || {};
+    const rawModels = Array.isArray(data.servedModels) && data.servedModels.length
+      ? data.servedModels
+      : Array.isArray(data.models) ? data.models : [];
+    const models = rawModels
+      .map((model) => typeof model === "string" ? { id: model, object: "model" } : model)
+      .filter((model) => String(model?.id || "").trim());
+    const modelIds = new Set(models.map((model) => String(model.id).toLowerCase()));
+    const aliases = new Set(core.buildOpenAiGatewayAliasList({ models, runtime: data }).map((alias) => alias.toLowerCase()));
+    return {
+      manager,
+      listening,
+      running: Boolean(data.container?.running && models.length),
+      models,
+      modelIds,
+      aliases,
+      error: runtime.error || "",
+    };
+  })();
+  managerModelCache.set(manager.id, { promise, value: cached?.value || null, expiresAt: cached?.expiresAt || 0 });
+  try {
+    const value = await promise;
+    managerModelCache.set(manager.id, { value, expiresAt: Date.now() + MODEL_DISCOVERY_CACHE_MS, promise: null });
+    return value;
+  } catch (error) {
+    const value = emptyManagerCatalog(manager, true, error.message);
+    managerModelCache.set(manager.id, { value, expiresAt: Date.now() + 500, promise: null });
+    return value;
+  }
+}
+
+function emptyManagerCatalog(manager, listening, error = "") {
+  return { manager, listening, running: false, models: [], modelIds: new Set(), aliases: new Set(), error };
 }
 
 function buildManagerGatewayPath(route) {
@@ -416,10 +581,37 @@ function buildResponseHeaders(headers, req) {
 
 function gatewayCorsHeaders(req) {
   const origin = String(req.headers.origin || "");
+  const allowedOrigin = !origin || !ALLOWED_ORIGINS.length || ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin)
+    ? origin || (ALLOWED_ORIGINS.includes("*") ? "*" : "")
+    : "";
   return {
-    "access-control-allow-origin": origin || "*",
+    ...(allowedOrigin ? { "access-control-allow-origin": allowedOrigin } : {}),
+    ...(origin ? { vary: "Origin" } : {}),
     "access-control-allow-methods": "GET,POST,OPTIONS",
     "access-control-allow-headers": "authorization,content-type,x-api-key,anthropic-api-key,api-key",
+  };
+}
+
+function createUpstreamControl(req, res) {
+  const controller = new AbortController();
+  const timeoutMs = Math.max(1000, Number(process.env.SERVICE_ENTRY_GATEWAY_TIMEOUT_MS || 30 * 60 * 1000));
+  const timer = setTimeout(() => controller.abort(new Error("Gateway request timed out.")), timeoutMs);
+  timer.unref?.();
+  const abort = () => {
+    if (!res.writableEnded) controller.abort(new Error("Client disconnected."));
+  };
+  req.once?.("aborted", abort);
+  res.once?.("close", abort);
+  let cleared = false;
+  return {
+    signal: controller.signal,
+    clear: () => {
+      if (cleared) return;
+      cleared = true;
+      clearTimeout(timer);
+      req.off?.("aborted", abort);
+      res.off?.("close", abort);
+    },
   };
 }
 
@@ -440,7 +632,7 @@ async function readRequestBody(req, maxBytes) {
 
 async function startDetachedManager(manager) {
   if (await core.isPortListening("127.0.0.1", manager.port)) {
-    return { ok: true, alreadyRunning: true, status: await buildManagerStatus(manager) };
+    return { ok: true, alreadyRunning: true, status: await buildManagerStatus(manager, { force: true }) };
   }
   await fs.mkdir(path.join(manager.root, "logs"), { recursive: true });
   const nodeExe = process.env.NODE_EXE || process.execPath || "node";
@@ -465,13 +657,13 @@ async function startDetachedManager(manager) {
   child.unref();
   await fs.writeFile(path.join(manager.root, ".manager.pid"), `${child.pid}\n`, "utf8");
   const ready = await waitForManagerReady(manager, 12000);
-  return { ok: ready, pid: child.pid, ready, status: await buildManagerStatus(manager) };
+  return { ok: ready, pid: child.pid, ready, status: await buildManagerStatus(manager, { force: true }) };
 }
 
 async function stopManager(manager) {
   const baseUrl = `http://127.0.0.1:${manager.port}`;
   const stopped = await postJson(`${baseUrl}/api/manager/shutdown`);
-  return { ok: stopped.ok, stopped, status: await buildManagerStatus(manager) };
+  return { ok: stopped.ok, stopped, status: await buildManagerStatus(manager, { force: true }) };
 }
 
 async function waitForManagerReady(manager, timeoutMs) {
@@ -485,9 +677,9 @@ async function waitForManagerReady(manager, timeoutMs) {
   return false;
 }
 
-async function fetchJson(url) {
+async function fetchJson(url, timeoutMs = 2500) {
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(Math.max(250, Number(timeoutMs) || 2500)) });
     const text = await response.text();
     return { ok: response.ok, status: response.status, data: parseJsonSafe(text, null), error: response.ok ? "" : text };
   } catch (error) {
@@ -516,10 +708,11 @@ function parseJsonSafe(text, fallback) {
   }
 }
 
-function sendJson(res, data, status = 200) {
+function sendJson(res, data, status = 200, extraHeaders = {}) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    ...extraHeaders,
   });
   res.end(JSON.stringify(data));
 }
@@ -542,9 +735,17 @@ module.exports = {
   buildManagerGatewayUrls,
   buildProxyHeaders,
   collectEntryGatewayAccessStats,
+  createUpstreamControl,
   createServiceEntryServer,
+  emptyManagerCatalog,
   findManager,
+  getManagerModelCatalog,
   handleRequest,
+  isAggregatedModelListRequest,
+  mergeManagerModelCatalogs,
   parseGatewayRoute,
+  resolveGatewayManager,
+  selectGatewayManager,
+  sendAggregatedModelList,
   startServiceEntry,
 };

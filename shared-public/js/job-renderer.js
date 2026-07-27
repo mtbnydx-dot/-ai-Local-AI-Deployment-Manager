@@ -42,7 +42,14 @@
 
     function renderJobRow(job) {
       const status = jobStatusInfo(job.status);
-      const tail = (job.logs || []).slice(-3).join(" | ");
+      const priority = job.type === "download" ? String(job.meta?.priority || "normal") : "";
+      const priorityLabel = priority === "high" ? "高优先级" : priority === "low" ? "低优先级" : priority ? "普通优先级" : "";
+      const retryCount = Number(job.meta?.retryCount || 0);
+      const maxRetries = Number(job.meta?.maxRetries || 0);
+      const retryLabel = job.type === "download" && maxRetries > 0
+        ? `自动重试 ${retryCount}/${maxRetries}${job.meta?.retryScheduledAt ? ` · 计划 ${formatDateTime(job.meta.retryScheduledAt)}` : ""}`
+        : "";
+      const tail = compactLogText((job.logs || []).slice(-3).join(" | "), 420);
       const expanded = Boolean(showLogActions && state.expandedJobLogs?.has(job.id));
       const updatedAt = job.updatedAt || job.finishedAt || job.createdAt;
       if (!showMeta) {
@@ -67,14 +74,24 @@
             <div class="job-meta-line">
               <span>${escapeHtml(jobTypeLabel(job.type))}</span>
               <span>${escapeHtml(formatDateTime(updatedAt))}</span>
+              ${priorityLabel ? `<span>${escapeHtml(priorityLabel)}</span>` : ""}
+              ${retryLabel ? `<span>${escapeHtml(retryLabel)}</span>` : ""}
               ${job.error ? `<span class="job-error-text">${escapeHtml(job.error)}</span>` : ""}
             </div>
             <p class="job-log-tail">${escapeHtml(tail || status.detail)}</p>
             ${renderJobProgress(job)}
-            ${expanded ? `<pre class="job-log-full">${escapeHtml((job.logs || []).join("\n") || "暂无日志")}</pre>` : ""}
+            ${expanded ? `<pre class="job-log-full">${escapeHtml(compactLogText((job.logs || []).join("\n") || "暂无日志", 30000, true))}</pre>` : ""}
           </div>
         </article>
       `;
+    }
+
+    function compactLogText(value, maxChars, keepLineBreaks = false) {
+      const normalized = keepLineBreaks
+        ? String(value || "").replace(/\r/g, "").replace(/[\t ]+/g, " ")
+        : String(value || "").replace(/\s+/g, " ").trim();
+      if (normalized.length <= maxChars) return normalized;
+      return `...${normalized.slice(normalized.length - maxChars + 3)}`;
     }
 
     function renderJobProgress(job) {

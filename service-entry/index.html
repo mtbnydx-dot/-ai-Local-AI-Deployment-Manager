@@ -82,6 +82,12 @@
       cursor: pointer;
     }
     button:hover, .button:hover { background: var(--surface-3); }
+    button:disabled, .button.disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    button:disabled:hover { background: var(--surface-2); }
     .button.primary, button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
     .button.teal { background: var(--teal); border-color: var(--teal); color: #06201c; }
     button.danger { color: var(--red); }
@@ -343,6 +349,56 @@
       .row-side { grid-column: 2; }
       button, .button { width: 100%; }
     }
+
+    /* ===== 2026-07 视觉打磨：与 manager 控制台对齐 ===== */
+    button, .button {
+      transition: background 160ms ease, border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+    }
+    button:not(:disabled):hover, .button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(22, 34, 51, 0.12);
+    }
+    .button.primary, button.primary {
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      border-color: transparent;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.24);
+    }
+    .button.teal {
+      background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
+      border-color: transparent;
+      box-shadow: 0 4px 12px rgba(15, 159, 143, 0.22);
+    }
+    .metric { position: relative; overflow: hidden; transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
+    .metric:hover { transform: translateY(-1px); }
+    .metric::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: transparent; }
+    .metric.ok::after { background: var(--green); }
+    .metric.warn::after { background: var(--amber); }
+    .metric.fail::after { background: var(--red); }
+    .doc-card {
+      transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    }
+    .doc-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--blue);
+      box-shadow: 0 12px 26px rgba(22, 34, 51, 0.12);
+    }
+    .bar { border-radius: 999px 999px 2px 2px; transition: height 200ms ease; }
+    .empty {
+      border-color: color-mix(in srgb, var(--line) 62%, var(--blue));
+      background: linear-gradient(135deg, color-mix(in srgb, var(--surface-2) 55%, transparent), transparent 75%);
+    }
+    .shutdown-state {
+      min-height: 60vh;
+      align-content: center;
+      justify-items: center;
+      text-align: center;
+      gap: 12px;
+    }
+    .shutdown-state h1 { font-size: 26px; }
+    .shutdown-state .quick-row { justify-content: center; }
+    @media (prefers-reduced-motion: reduce) {
+      button, .button, .metric, .doc-card, .bar { transition: none; }
+    }
   </style>
 </head>
 <body>
@@ -398,7 +454,7 @@
 
     <section class="note">
       <h3>推荐接入方式</h3>
-      <p>OpenWebUI、Claude Desktop 转发器、OpenCode 等客户端优先填写 <strong>OpenAI Gateway Base URL</strong>，模型名用 <strong>local-current</strong>。需要给局域网设备使用时，先进入对应“服务后台”打开局域网提供服务，再创建独立客户端 API Key。</p>
+      <p>OpenWebUI、Claude Desktop 转发器、OpenCode 等客户端优先填写 <strong>OpenAI Gateway Base URL</strong>，模型名用 <strong>local-current</strong>。需要给局域网设备使用时，先进入对应“服务后台”打开局域网提供服务；如需隔离不同客户端，再创建独立客户端 API Key。</p>
     </section>
 
     <section class="note">
@@ -454,13 +510,18 @@
       }
     });
 
+    let refreshInFlight = false;
+    let shutdown = false;
+
     refresh();
     refreshTimer = setInterval(refresh, 15000);
 
     async function refresh() {
+      if (shutdown || refreshInFlight) return;
+      refreshInFlight = true;
       refreshBtn.disabled = true;
       try {
-        const response = await fetch("/api/status", { cache: "no-store" });
+        const response = await fetch("/api/status", { cache: "no-store", signal: AbortSignal.timeout(8000) });
         const data = await response.json();
         renderSummary(data.entry || {}, data.managers || []);
         renderEntryGateway(data.entry || {});
@@ -468,8 +529,9 @@
         renderManagers(data.managers || []);
         if (lastUpdatedBadge) lastUpdatedBadge.textContent = `已刷新 ${new Date().toLocaleTimeString()}`;
       } catch (error) {
-        grid.innerHTML = `<div class="empty">统一入口服务异常：${escapeHtml(error.message)}</div>`;
+        grid.innerHTML = `<div class="empty">统一入口服务异常：${escapeHtml(error.name === "AbortError" || error.name === "TimeoutError" ? "请求超时，统一入口未响应。" : error.message)}</div>`;
       } finally {
+        refreshInFlight = false;
         refreshBtn.disabled = false;
       }
     }
@@ -566,11 +628,28 @@
       if (!confirm("只关闭统一入口和两个管理器网页，不会停止后台模型容器。继续吗？")) return;
       stopBtn.disabled = true;
       try {
-        await fetch("/api/stop-all", { method: "POST" });
-        showToast("已发送关闭请求，后台模型容器不会被停止。");
+        await fetch("/api/stop-all", { method: "POST", signal: AbortSignal.timeout(5000) });
+        shutdown = true;
+        clearInterval(refreshTimer);
+        renderShutdownState();
       } catch (error) {
-        showToast(`关闭失败：${error.message}`);
+        // 服务可能已先关闭：本地页面同样进入终态，避免持续轮询报错
+        shutdown = true;
+        clearInterval(refreshTimer);
+        renderShutdownState();
       }
+    }
+
+    function renderShutdownState() {
+      document.title = "管理界面已关闭";
+      document.querySelector("main").innerHTML = `
+        <section class="card shutdown-state">
+          <h1>管理界面已关闭</h1>
+          <p>统一入口和两个管理器网页已停止；后台模型容器不受影响，仍在继续提供服务。</p>
+          <p>需要重新打开时，在发布目录运行 <code>start-service-entry.cmd</code>（局域网用 <code>start-service-entry-lan.cmd</code>），然后刷新本页。</p>
+          <div class="quick-row"><button type="button" onclick="location.reload()">刷新页面</button></div>
+        </section>
+      `;
     }
 
     async function runManagerAction(button) {
@@ -651,8 +730,8 @@
             ${renderModelRows(runningModels, service)}
           </div>
           <div class="quick-row">
-            <button type="button" data-manager="${escapeHtml(manager.id)}" data-action="start">启动管理器</button>
-            <button class="danger" type="button" data-manager="${escapeHtml(manager.id)}" data-action="stop">关闭管理器</button>
+            <button type="button" data-manager="${escapeHtml(manager.id)}" data-action="start" ${process.portListening ? "disabled" : ""}>启动管理器</button>
+            <button class="danger" type="button" data-manager="${escapeHtml(manager.id)}" data-action="stop" ${process.portListening ? "" : "disabled"}>关闭管理器</button>
             ${manager.error ? `<span class="subtle">最近错误：${escapeHtml(manager.error)}</span>` : `<span class="subtle">健康接口：${escapeHtml(process.health?.host || "-")}:${escapeHtml(process.health?.port || manager.port)}</span>`}
           </div>
           <div class="health-list">

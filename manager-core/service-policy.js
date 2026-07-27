@@ -2,6 +2,12 @@
 
 const crypto = require("crypto");
 
+// Default gateway throttling for a single service key. Local agentic clients
+// (Claude Code / Cowork) routinely issue >4 parallel tool calls, so the old
+// defaults of 4 concurrent / 120 rpm would queue or 429 legitimate local load.
+const DEFAULT_GATEWAY_MAX_CONCURRENT = 16;
+const DEFAULT_GATEWAY_RATE_LIMIT_RPM = 480;
+
 function clampNumber(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -20,6 +26,17 @@ function normalizeExposureMode(value) {
 function normalizeCsvList(value) {
   const raw = Array.isArray(value) ? value : String(value || "").split(/[,\n]/);
   return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
+function normalizeCorsMode(value, fallback = "open") {
+  const mode = String(value || fallback || "open").trim().toLowerCase();
+  return mode === "restricted" ? "restricted" : "open";
+}
+
+function normalizeCorsHeaderList(value) {
+  return normalizeCsvList(value)
+    .map((item) => item.toLowerCase())
+    .filter((item) => /^[a-z0-9!#$%&'*+.^_`|~-]+$/i.test(item));
 }
 
 function normalizeUrlText(value) {
@@ -87,6 +104,12 @@ function normalizeServiceExposureSecret(value = {}, previous = {}) {
 function normalizeServiceExposureSettings(value = {}, previous = {}, options = {}) {
   const mode = normalizeExposureMode(value.exposureMode || value.mode || previous.exposureMode);
   const apiKeySecret = normalizeServiceExposureSecret(value, previous);
+  const allowedOrigins = normalizeCsvList(value.allowedOrigins !== undefined ? value.allowedOrigins : previous.allowedOrigins).slice(0, 20);
+  const inferredCorsMode = allowedOrigins.length ? "restricted" : "open";
+  const corsMode = normalizeCorsMode(
+    value.corsMode !== undefined ? value.corsMode : previous.corsMode,
+    inferredCorsMode,
+  );
   const allowExposeOpenCode = options.allowExposeOpenCode !== false;
   const defaultExposeOpenCode = Boolean(options.exposeOpenCodeDefault);
   const exposeOpenCode = allowExposeOpenCode
@@ -100,7 +123,11 @@ function normalizeServiceExposureSettings(value = {}, previous = {}, options = {
     version: 1,
     enabled: value.enabled !== undefined ? Boolean(value.enabled) : Boolean(previous.enabled),
     exposureMode: mode,
-    requireApiKey: value.requireApiKey !== undefined ? Boolean(value.requireApiKey) : mode !== "local",
+    requireApiKey: value.requireApiKey !== undefined
+      ? Boolean(value.requireApiKey)
+      : previous.requireApiKey !== undefined
+        ? Boolean(previous.requireApiKey)
+        : mode !== "local",
     apiKey: "",
     apiKeyHash: apiKeySecret.hash,
     apiKeyPreview: apiKeySecret.preview,
@@ -110,9 +137,13 @@ function normalizeServiceExposureSettings(value = {}, previous = {}, options = {
     exposeMetrics: Boolean(value.exposeMetrics !== undefined ? value.exposeMetrics : previous.exposeMetrics),
     allowManagerRemote: Boolean(value.allowManagerRemote !== undefined ? value.allowManagerRemote : previous.allowManagerRemote),
     publicBaseUrl: normalizeUrlText(value.publicBaseUrl !== undefined ? value.publicBaseUrl : previous.publicBaseUrl),
-    allowedOrigins: normalizeCsvList(value.allowedOrigins !== undefined ? value.allowedOrigins : previous.allowedOrigins).slice(0, 20),
-    rateLimitRpm: clampNumber(value.rateLimitRpm !== undefined ? value.rateLimitRpm : previous.rateLimitRpm, 1, 5000, 120),
-    maxConcurrentRequests: clampNumber(value.maxConcurrentRequests !== undefined ? value.maxConcurrentRequests : previous.maxConcurrentRequests, 1, 256, 4),
+    corsMode,
+    allowedOrigins,
+    allowedHeaders: normalizeCorsHeaderList(value.allowedHeaders !== undefined ? value.allowedHeaders : previous.allowedHeaders).slice(0, 64),
+    rateLimitRpm: clampNumber(value.rateLimitRpm !== undefined ? value.rateLimitRpm : previous.rateLimitRpm, 1, 5000, DEFAULT_GATEWAY_RATE_LIMIT_RPM),
+    maxConcurrentRequests: clampNumber(value.maxConcurrentRequests !== undefined ? value.maxConcurrentRequests : previous.maxConcurrentRequests, 1, 256, DEFAULT_GATEWAY_MAX_CONCURRENT),
+    maxQueuedRequests: clampNumber(value.maxQueuedRequests !== undefined ? value.maxQueuedRequests : previous.maxQueuedRequests, 0, 4096, 128),
+    queueTimeoutSeconds: clampNumber(value.queueTimeoutSeconds !== undefined ? value.queueTimeoutSeconds : previous.queueTimeoutSeconds, 1, 600, 30),
     requestTimeoutSeconds: clampNumber(value.requestTimeoutSeconds !== undefined ? value.requestTimeoutSeconds : previous.requestTimeoutSeconds, 10, 7200, 600),
     notes: String(value.notes !== undefined ? value.notes : previous.notes || "").slice(0, 2000),
     updatedAt: new Date().toISOString(),
@@ -150,8 +181,10 @@ function normalizeServiceClient(value = {}) {
     keyHash: String(item.keyHash || ""),
     keyPreview: String(item.keyPreview || ""),
     allowedModels: normalizeCsvList(item.allowedModels).slice(0, 24),
-    rateLimitRpm: clampNumber(item.rateLimitRpm, 1, 5000, 120),
-    maxConcurrentRequests: clampNumber(item.maxConcurrentRequests, 1, 256, 4),
+    rateLimitRpm: clampNumber(item.rateLimitRpm, 1, 5000, DEFAULT_GATEWAY_RATE_LIMIT_RPM),
+    maxConcurrentRequests: clampNumber(item.maxConcurrentRequests, 1, 256, DEFAULT_GATEWAY_MAX_CONCURRENT),
+    maxQueuedRequests: clampNumber(item.maxQueuedRequests, 0, 4096, 128),
+    queueTimeoutSeconds: clampNumber(item.queueTimeoutSeconds, 1, 600, 30),
     requestTimeoutSeconds: clampNumber(item.requestTimeoutSeconds, 10, 7200, 600),
     expiresAt: normalizeDateText(item.expiresAt),
     notes: clipText(item.notes || "", 500),
@@ -183,6 +216,8 @@ function createServiceClientRecord(ledger, input = {}, options = {}) {
     allowedModels: input.allowedModels || [],
     rateLimitRpm: input.rateLimitRpm,
     maxConcurrentRequests: input.maxConcurrentRequests,
+    maxQueuedRequests: input.maxQueuedRequests,
+    queueTimeoutSeconds: input.queueTimeoutSeconds,
     requestTimeoutSeconds: input.requestTimeoutSeconds,
     expiresAt: input.expiresAt,
     notes: input.notes,
@@ -327,6 +362,8 @@ function redactServiceClient(client = {}) {
     allowedModels: client.allowedModels || [],
     rateLimitRpm: client.rateLimitRpm,
     maxConcurrentRequests: client.maxConcurrentRequests,
+    maxQueuedRequests: client.maxQueuedRequests,
+    queueTimeoutSeconds: client.queueTimeoutSeconds,
     requestTimeoutSeconds: client.requestTimeoutSeconds,
     expiresAt: client.expiresAt || "",
     notes: client.notes || "",
@@ -387,6 +424,9 @@ const DEFAULT_SERVICE_EXPOSURE_COPY = {
   gatewayTitle: "服务网关",
   gatewayEnabled: "管理器网关已开启，会按下方接口开关、鉴权、限流和并发策略处理请求。",
   gatewayDisabled: "管理器网关已关闭，/serve/v1、/claude 和 /opencode 请求都会被拒绝；不需要重启模型即可重新开启。",
+  corsTitle: "浏览器跨域（CORS）",
+  corsOpen: "当前为临时全开放：允许任意浏览器 Origin，并反射预检请求头。API Key、限流和模型权限仍独立生效。",
+  corsRestricted: "当前为限制模式：只允许配置的 Origin，以及内置或额外配置的请求头。",
   gatewayApiKeyOk: "管理器网关会强制 Bearer Token；对外推荐使用 /serve/v1 或 /claude。",
   runtimeApiKeyOk: "运行中的推理服务已启用 Bearer Token。",
   apiKeyMissing: "计划对外提供服务，但尚未配置可执行的 API Key。",
@@ -397,8 +437,11 @@ const DEFAULT_SERVICE_EXPOSURE_COPY = {
   publicTitle: "公网入口",
   publicOk: "已填写公网/反代地址。",
   publicMissing: "反代模式需要填写 public base URL，建议由 Caddy/Nginx/Cloudflare Tunnel 处理 TLS 和鉴权。",
+  tlsTitle: "公网 HTTPS",
+  tlsOk: "公网地址使用 HTTPS；TLS 证书和续期由反向代理或 Tunnel 负责。",
+  tlsMissing: "公网地址不是 HTTPS。请在 Caddy/Nginx/Cloudflare Tunnel 完成 TLS 终止后填写 https:// 地址，不要直接暴露管理器或容器 HTTP 端口。",
   rateTitle: "网关限流",
-  rateDetail: ({ rateLimitRpm, maxConcurrentRequests }) => `管理器网关强制 ${rateLimitRpm} req/min、最大并发 ${maxConcurrentRequests}；直连容器端口不受此限制。`,
+  rateDetail: ({ rateLimitRpm, maxConcurrentRequests, maxQueuedRequests, queueTimeoutSeconds }) => `管理器网关强制 ${rateLimitRpm} req/min、最大并发 ${maxConcurrentRequests}；并发打满后最多排队 ${maxQueuedRequests} 个请求、等待 ${queueTimeoutSeconds} 秒。直连容器端口不经过该队列。`,
 };
 
 function serviceExposureCopy(copy, key, context = {}) {
@@ -526,8 +569,10 @@ function buildServiceExposureChecks(settings = {}, context = {}, options = {}) {
   const allowRuntimeApiKey = options.allowRuntimeApiKey === true;
   const remoteManagementAllowed = Boolean(context.remoteManagementAllowed);
   const remoteRequiresClaudeExposure = options.remoteRequiresClaudeExposure === true;
-  const rateLimitRpm = clampNumber(settings.rateLimitRpm, 1, 5000, 120);
-  const maxConcurrentRequests = clampNumber(settings.maxConcurrentRequests, 1, 256, 4);
+  const rateLimitRpm = clampNumber(settings.rateLimitRpm, 1, 5000, DEFAULT_GATEWAY_RATE_LIMIT_RPM);
+  const maxConcurrentRequests = clampNumber(settings.maxConcurrentRequests, 1, 256, DEFAULT_GATEWAY_MAX_CONCURRENT);
+  const maxQueuedRequests = clampNumber(settings.maxQueuedRequests, 0, 4096, Math.min(256, maxConcurrentRequests * 32));
+  const queueTimeoutSeconds = clampNumber(settings.queueTimeoutSeconds, 1, 600, 30);
 
   checks.push(serviceCheck(
     serviceRunning ? "ok" : "warn",
@@ -546,6 +591,15 @@ function buildServiceExposureChecks(settings = {}, context = {}, options = {}) {
   ));
 
   if (!gatewayEnabled) return checks;
+
+  const corsOpen = settings.corsMode
+    ? String(settings.corsMode).toLowerCase() !== "restricted"
+    : !(Array.isArray(settings.allowedOrigins) && settings.allowedOrigins.length);
+  checks.push(serviceCheck(
+    corsOpen ? "warn" : "ok",
+    serviceExposureCopy(copy, "corsTitle"),
+    serviceExposureCopy(copy, corsOpen ? "corsOpen" : "corsRestricted"),
+  ));
 
   if (mode === "local") {
     checks.push(serviceCheck(
@@ -587,10 +641,17 @@ function buildServiceExposureChecks(settings = {}, context = {}, options = {}) {
   }
 
   if (mode === "reverse-proxy") {
+    const publicBaseUrl = String(settings.publicBaseUrl || "").trim();
+    const publicHttps = /^https:\/\//i.test(publicBaseUrl);
     checks.push(serviceCheck(
-      settings.publicBaseUrl ? "ok" : "warn",
+      publicBaseUrl ? "ok" : "warn",
       serviceExposureCopy(copy, "publicTitle"),
-      serviceExposureCopy(copy, settings.publicBaseUrl ? "publicOk" : "publicMissing"),
+      serviceExposureCopy(copy, publicBaseUrl ? "publicOk" : "publicMissing"),
+    ));
+    checks.push(serviceCheck(
+      publicHttps ? "ok" : "fail",
+      serviceExposureCopy(copy, "tlsTitle"),
+      serviceExposureCopy(copy, publicHttps ? "tlsOk" : "tlsMissing"),
     ));
   }
 
@@ -608,7 +669,7 @@ function buildServiceExposureChecks(settings = {}, context = {}, options = {}) {
   checks.push(serviceCheck(
     rateLimitRpm <= 600 ? "ok" : "warn",
     serviceExposureCopy(copy, "rateTitle"),
-    serviceExposureCopy(copy, "rateDetail", { rateLimitRpm, maxConcurrentRequests }),
+    serviceExposureCopy(copy, "rateDetail", { rateLimitRpm, maxConcurrentRequests, maxQueuedRequests, queueTimeoutSeconds }),
   ));
   return checks;
 }
@@ -619,12 +680,14 @@ function buildEffectiveServiceSettings(settings, client) {
     ...settings,
     rateLimitRpm: client.rateLimitRpm || settings.rateLimitRpm,
     maxConcurrentRequests: client.maxConcurrentRequests || settings.maxConcurrentRequests,
+    maxQueuedRequests: client.maxQueuedRequests ?? settings.maxQueuedRequests,
+    queueTimeoutSeconds: client.queueTimeoutSeconds || settings.queueTimeoutSeconds,
     requestTimeoutSeconds: client.requestTimeoutSeconds || settings.requestTimeoutSeconds,
   };
 }
 
 function enterServiceRateLimit(settings, clientKey, buckets, now = Date.now()) {
-  const limit = clampNumber(settings.rateLimitRpm, 1, 5000, 120);
+  const limit = clampNumber(settings.rateLimitRpm, 1, 5000, DEFAULT_GATEWAY_RATE_LIMIT_RPM);
   const windowMs = 60 * 1000;
   const windowStart = Math.floor(now / windowMs) * windowMs;
   const previous = buckets.get(clientKey);
@@ -648,7 +711,7 @@ function pruneServiceRateBuckets(buckets, currentWindowStart) {
 }
 
 function enterServiceConcurrency(settings, clientKey, buckets) {
-  const limit = clampNumber(settings.maxConcurrentRequests, 1, 256, 4);
+  const limit = clampNumber(settings.maxConcurrentRequests, 1, 256, DEFAULT_GATEWAY_MAX_CONCURRENT);
   const current = Number(buckets.get(clientKey) || 0);
   if (current >= limit) return { ok: false };
   buckets.set(clientKey, current + 1);
@@ -663,6 +726,8 @@ function enterServiceConcurrency(settings, clientKey, buckets) {
 }
 
 module.exports = {
+  DEFAULT_GATEWAY_MAX_CONCURRENT,
+  DEFAULT_GATEWAY_RATE_LIMIT_RPM,
   applyServiceClientUsage,
   buildEffectiveServiceSettings,
   buildServiceClientsSummary,
@@ -679,6 +744,8 @@ module.exports = {
   isGlobalServiceApiKeyAccepted,
   isServiceApiKeyAccepted,
   normalizeCsvList,
+  normalizeCorsHeaderList,
+  normalizeCorsMode,
   normalizeDateText,
   normalizeExposureMode,
   normalizeServiceClient,

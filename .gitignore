@@ -3,6 +3,8 @@ node_modules/
 playwright-report/
 test-results/
 output/playwright/
+artifacts/
+.claude/
 
 # Runtime logs and ledgers
 logs/
@@ -25,6 +27,7 @@ projects/
 *.db
 *.sqlite
 *.sqlite3
+lan-proxy-gateway/data/
 
 # Local virtual environments and Python cache
 venvs/
@@ -35,6 +38,7 @@ __pycache__/
 # Secrets and local-only config
 .env
 .env.*
+!.env.example
 *.local.json
 *.secret.json
 service-api-key.json

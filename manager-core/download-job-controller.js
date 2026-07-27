@@ -7,6 +7,21 @@ const {
   prepareDownloadResume,
 } = require("./job-utils");
 
+function clampInteger(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(number)));
+}
+
+function normalizeDownloadPriority(value) {
+  const text = String(value || "normal").toLowerCase();
+  return ["high", "normal", "low"].includes(text) ? text : "normal";
+}
+
+function downloadPriorityScore(value) {
+  return { high: 2, normal: 1, low: 0 }[normalizeDownloadPriority(value)];
+}
+
 function createDownloadJobController(options = {}) {
   const jobs = options.jobs;
   const downloadSpecs = options.downloadSpecs || new Map();
@@ -51,6 +66,18 @@ function createDownloadJobController(options = {}) {
   const removePartialPath = typeof options.removePartialPath === "function"
     ? options.removePartialPath
     : (target) => fsp.rm(target, { recursive: true, force: true });
+  const setRetryTimeout = typeof options.setRetryTimeout === "function" ? options.setRetryTimeout : setTimeout;
+  const clearRetryTimeout = typeof options.clearRetryTimeout === "function" ? options.clearRetryTimeout : clearTimeout;
+  const retryTimers = new Map();
+  let autoRetryCount = clampInteger(options.autoRetryCount, 0, 10, 2);
+  let autoRetryDelaySeconds = clampInteger(options.autoRetryDelaySeconds, 1, 3600, 10);
+
+  function applyDownloadSettings(input = {}) {
+    if (input.queueMode !== undefined) setQueueMode(Boolean(input.queueMode));
+    if (input.autoRetryCount !== undefined) autoRetryCount = clampInteger(input.autoRetryCount, 0, 10, autoRetryCount);
+    if (input.autoRetryDelaySeconds !== undefined) autoRetryDelaySeconds = clampInteger(input.autoRetryDelaySeconds, 1, 3600, autoRetryDelaySeconds);
+    return getDownloadSettings();
+  }
 
   function hasRunningDownload() {
     return Array.from(jobs.values()).some((job) => job.type === "download" && job.status === "running");
@@ -63,7 +90,13 @@ function createDownloadJobController(options = {}) {
   function enqueueOrStartDownload(command, args, jobOptions = {}) {
     healDownloadQueue();
     const shouldQueue = Boolean(getQueueMode()) && hasRunningDownload();
-    const job = options.createJob("download", jobOptions.title || "download", jobOptions.meta || {});
+    const meta = {
+      ...(jobOptions.meta || {}),
+      priority: normalizeDownloadPriority(jobOptions.meta?.priority || jobOptions.priority),
+      retryCount: clampInteger(jobOptions.meta?.retryCount, 0, 10, 0),
+      maxRetries: clampInteger(jobOptions.meta?.maxRetries, 0, 10, autoRetryCount),
+    };
+    const job = options.createJob("download", jobOptions.title || "download", meta);
     if (shouldQueue) {
       job.status = "queued";
       downloadSpecs.set(job.id, { command, args, options: jobOptions });
@@ -104,6 +137,7 @@ function createDownloadJobController(options = {}) {
   }
 
   async function cancelDownloadJob(job) {
+    clearAutoRetry(job);
     if (job.status === "queued") {
       downloadSpecs.delete(job.id);
       await finalizeDownloadCancel(job, { deletePartial: true });
@@ -139,6 +173,7 @@ function createDownloadJobController(options = {}) {
   function resumeDownloadJob(job) {
     if (job.status === "running" || job.status === "queued") return job;
     if (job.status === "success") throw new Error("该下载任务已完成，不需要继续。");
+    clearAutoRetry(job);
     const spec = options.buildDownloadSpecFromJob(job);
     prepareDownloadResume(job, spec.options.meta || {});
     if (Boolean(getQueueMode()) && hasRunningDownload()) {
@@ -165,19 +200,25 @@ function createDownloadJobController(options = {}) {
   }
 
   async function saveDownloadSettings(body = {}) {
-    const queueMode = Boolean(body.queueMode);
-    setQueueMode(queueMode);
-    await saveQueueMode(queueMode);
-    if (!queueMode) startQueuedDownloadsNow();
-    return { queueMode };
+    const previousQueueMode = Boolean(getQueueMode());
+    const settings = applyDownloadSettings({
+      queueMode: body.queueMode !== undefined ? Boolean(body.queueMode) : previousQueueMode,
+      autoRetryCount: body.autoRetryCount !== undefined ? body.autoRetryCount : autoRetryCount,
+      autoRetryDelaySeconds: body.autoRetryDelaySeconds !== undefined ? body.autoRetryDelaySeconds : autoRetryDelaySeconds,
+    });
+    await saveQueueMode(settings);
+    if (previousQueueMode && !settings.queueMode) startQueuedDownloadsNow();
+    return settings;
   }
 
   function drainDownloadQueue() {
     healDownloadQueue({ skipDrain: true });
+    scheduleFailedDownloadRetries();
     if (hasRunningDownload()) return;
     const next = Array.from(jobs.values())
       .filter((job) => job.type === "download" && job.status === "queued" && downloadSpecs.has(job.id))
-      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))[0];
+      .sort((a, b) => downloadPriorityScore(b.meta?.priority) - downloadPriorityScore(a.meta?.priority)
+        || String(a.createdAt).localeCompare(String(b.createdAt)))[0];
     if (!next) return;
     const spec = downloadSpecs.get(next.id);
     downloadSpecs.delete(next.id);
@@ -203,7 +244,53 @@ function createDownloadJobController(options = {}) {
   }
 
   function getDownloadSettings() {
-    return { queueMode: Boolean(getQueueMode()) };
+    return {
+      queueMode: Boolean(getQueueMode()),
+      autoRetryCount,
+      autoRetryDelaySeconds,
+    };
+  }
+
+  function clearAutoRetry(job) {
+    const timer = retryTimers.get(job?.id);
+    if (timer) clearRetryTimeout(timer);
+    retryTimers.delete(job?.id);
+    if (job?.meta) delete job.meta.retryScheduledAt;
+  }
+
+  function scheduleFailedDownloadRetries() {
+    for (const job of jobs.values()) {
+      if (job.type !== "download" || job.status !== "failed" || job.meta?.cancelRequested) continue;
+      const retries = clampInteger(job.meta?.retryCount, 0, 10, 0);
+      const maxRetries = clampInteger(job.meta?.maxRetries, 0, 10, autoRetryCount);
+      if (retries >= maxRetries || retryTimers.has(job.id)) continue;
+      const delaySeconds = autoRetryDelaySeconds;
+      job.meta = {
+        ...(job.meta || {}),
+        retryCount: retries,
+        maxRetries,
+        retryScheduledAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),
+      };
+      options.appendLog(job, `下载失败，将在 ${delaySeconds} 秒后自动续传（${retries + 1}/${maxRetries}）。`);
+      scheduleSave(0);
+      const timer = setRetryTimeout(() => {
+        retryTimers.delete(job.id);
+        if (job.status !== "failed") return;
+        delete job.meta.retryScheduledAt;
+        job.meta.retryCount = retries + 1;
+        options.appendLog(job, `开始第 ${job.meta.retryCount}/${maxRetries} 次自动续传。`);
+        try {
+          resumeDownloadJob(job);
+        } catch (error) {
+          failJob(job, error);
+          options.appendLog(job, `自动续传准备失败：${error.message}`);
+          scheduleSave(0);
+          setImmediate(scheduleFailedDownloadRetries);
+        }
+      }, delaySeconds * 1000);
+      timer.unref?.();
+      retryTimers.set(job.id, timer);
+    }
   }
 
   return {
@@ -219,6 +306,7 @@ function createDownloadJobController(options = {}) {
     resumeDownloadJob,
     saveDownloadSettings,
     getDownloadSettings,
+    applyDownloadSettings,
     drainDownloadQueue,
     healDownloadQueue,
     startQueuedDownloadsNow,
@@ -227,4 +315,6 @@ function createDownloadJobController(options = {}) {
 
 module.exports = {
   createDownloadJobController,
+  normalizeDownloadPriority,
+  downloadPriorityScore,
 };

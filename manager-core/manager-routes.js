@@ -22,10 +22,16 @@ function registerManagerRoutes(app, deps = {}) {
     buildMemoryEstimate,
     collectStats,
     collectExternalAccessStats,
+    searchAccessLogs,
+    exportAccessLogs,
     buildExternalAccessOptions = (query) => ({ limit: query.limit, maxLines: query.maxLines }),
     formatExternalAccessError = (error) => ({ error: error.message }),
     getClaudeCompressionSettings,
     saveClaudeCompressionSettings,
+    createManagerBackup,
+    listManagerBackups,
+    getManagerBackup,
+    restoreManagerBackup,
   } = deps;
 
   app.get("/api/config", (_req, res) => {
@@ -59,12 +65,12 @@ function registerManagerRoutes(app, deps = {}) {
   });
 
   app.get("/api/status", async (_req, res) => {
-    const [docker, gpu, container, image] = await Promise.all([
+    const [docker, gpu, container] = await Promise.all([
       getDockerVersion(),
       getGpuStatus(),
       getContainerStatus(config.containerName),
-      getImageStatus(config.image),
     ]);
+    const image = await getImageStatus(container?.image || config.image);
     const runtime = await getRunningModelSummary(container, gpu);
     const resources = await getManagerResourceSummary(gpu, container);
     const status = {
@@ -76,7 +82,7 @@ function registerManagerRoutes(app, deps = {}) {
       runningModels: runtime.models,
       endpoint: runtime.endpoint,
       image,
-      jobs: Array.from(jobs.values()).slice(-10).reverse(),
+      jobs: Array.from(jobs.values()).slice(-10).reverse().map(summarizeStatusJob),
       ...(await buildStatusExtras({ docker, gpu, container, image, runtime, resources })),
     };
     if (Object.prototype.hasOwnProperty.call(runtime, "apiKeyRequired")) {
@@ -129,6 +135,29 @@ function registerManagerRoutes(app, deps = {}) {
     });
   }
 
+  if (searchAccessLogs) {
+    app.get("/api/access-logs/search", async (req, res) => {
+      try {
+        res.json(await searchAccessLogs(req.query || {}));
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+  }
+
+  if (exportAccessLogs) {
+    app.get("/api/access-logs/export", async (req, res) => {
+      try {
+        const output = await exportAccessLogs(req.query || {});
+        res.setHeader("content-type", output.contentType);
+        res.setHeader("content-disposition", `attachment; filename="${output.filename}"`);
+        res.send(output.text);
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+  }
+
   if (getClaudeCompressionSettings && saveClaudeCompressionSettings) {
     app.get("/api/claude/context-compression", async (_req, res) => {
       try {
@@ -146,8 +175,64 @@ function registerManagerRoutes(app, deps = {}) {
       }
     });
   }
+
+  if (createManagerBackup && listManagerBackups && getManagerBackup && restoreManagerBackup) {
+    app.get("/api/backups", async (_req, res) => {
+      try {
+        res.json(await listManagerBackups());
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    app.post("/api/backups", async (_req, res) => {
+      try {
+        res.json({ ok: true, backup: await createManagerBackup() });
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    app.get("/api/backups/:id/download", async (req, res) => {
+      try {
+        const { id, backup } = await getManagerBackup(req.params.id);
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.setHeader("content-disposition", `attachment; filename="${id}"`);
+        res.send(`${JSON.stringify(backup, null, 2)}\n`);
+      } catch (error) {
+        res.status(error.status || 500).json({ ok: false, error: error.message });
+      }
+    });
+
+    app.post("/api/backups/:id/restore", async (req, res) => {
+      try {
+        res.json(await restoreManagerBackup(req.params.id));
+      } catch (error) {
+        res.status(error.status || 500).json({ ok: false, error: error.message });
+      }
+    });
+  }
+}
+
+function summarizeStatusJob(job = {}) {
+  const logs = Array.isArray(job.logs) ? job.logs : [];
+  return {
+    id: job.id,
+    type: job.type,
+    title: job.title,
+    status: job.status,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    finishedAt: job.finishedAt,
+    error: job.error || null,
+    progress: job.progress || null,
+    meta: job.meta || {},
+    logCount: logs.length,
+    lastLog: logs.at(-1) || "",
+  };
 }
 
 module.exports = {
   registerManagerRoutes,
+  summarizeStatusJob,
 };

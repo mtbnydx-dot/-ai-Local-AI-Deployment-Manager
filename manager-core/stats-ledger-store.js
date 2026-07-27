@@ -23,7 +23,16 @@ function createStatsLedgerStore(options = {}) {
   const claudeUsageOptions = options.claudeUsageOptions || {};
   const persistRuntimeFacts = Boolean(options.persistRuntimeFacts);
   const useMonotonicRuntimeCounters = Boolean(options.monotonicRuntimeCounters);
+  const claudeUsageSaveDelayMs = Math.max(0, Number(options.claudeUsageSaveDelayMs ?? 1000));
   let writeQueue = Promise.resolve();
+
+  // In-memory Claude usage counter so the request path does not pay a full
+  // stats-ledger.json read+write per request. Mirrors the service-clients-store
+  // pattern: accumulate in memory, persist via a debounced save. Stays null
+  // until the first request so the first load reads the persisted ledger.
+  let claudeUsageCache = null;
+  let claudeUsageSaveTimer = null;
+  let claudeUsageWrite = Promise.resolve();
 
   if (!file || typeof readJsonFile !== "function" || typeof writeJsonFile !== "function") {
     throw new Error("createStatsLedgerStore requires file, readJsonFile, and writeJsonFile.");
@@ -45,10 +54,53 @@ function createStatsLedgerStore(options = {}) {
 
   async function waitForStatsLedgerWrites() {
     await writeQueue.catch(() => {});
+    await claudeUsageWrite.catch(() => {});
+  }
+
+  function scheduleClaudeUsageSave() {
+    if (claudeUsageSaveTimer) return;
+    claudeUsageSaveTimer = setTimeout(() => {
+      claudeUsageSaveTimer = null;
+      const snapshot = claudeUsageCache;
+      claudeUsageWrite = claudeUsageWrite.catch(() => {}).then(async () => {
+        if (!snapshot) return;
+        await withStatsLedgerWrite(async () => {
+          const ledger = normalizeStatsLedger(await readJsonFile(file, {}));
+          ledger.clients = normalizeClients({ ...ledger.clients, claude: snapshot });
+          ledger.updatedAt = new Date().toISOString();
+          await writeJsonFile(file, normalizeStatsLedger(ledger));
+        });
+      });
+    }, claudeUsageSaveDelayMs);
+    claudeUsageSaveTimer.unref?.();
+  }
+
+  async function flushClaudeUsageWrites() {
+    if (claudeUsageSaveTimer) {
+      clearTimeout(claudeUsageSaveTimer);
+      claudeUsageSaveTimer = null;
+      const snapshot = claudeUsageCache;
+      claudeUsageWrite = claudeUsageWrite.catch(() => {}).then(async () => {
+        if (!snapshot) return;
+        await withStatsLedgerWrite(async () => {
+          const ledger = normalizeStatsLedger(await readJsonFile(file, {}));
+          ledger.clients = normalizeClients({ ...ledger.clients, claude: snapshot });
+          ledger.updatedAt = new Date().toISOString();
+          await writeJsonFile(file, normalizeStatsLedger(ledger));
+        });
+      });
+    }
+    await claudeUsageWrite.catch(() => {});
   }
 
   async function loadStatsLedger() {
-    return normalizeStatsLedger(await readJsonFile(file, {}));
+    const ledger = normalizeStatsLedger(await readJsonFile(file, {}));
+    // Overlay the in-memory Claude counter so reads (UI, insights) see the
+    // latest usage even before the debounced save has flushed.
+    if (claudeUsageCache) {
+      ledger.clients = normalizeClients({ ...ledger.clients, claude: claudeUsageCache });
+    }
+    return ledger;
   }
 
   async function saveStatsLedger(ledger) {
@@ -73,7 +125,12 @@ function createStatsLedgerStore(options = {}) {
 
   async function updateStatsLedger(summary, reason = "collect") {
     return withStatsLedgerWrite(async () => {
-      const ledger = await loadStatsLedger();
+      const ledger = normalizeStatsLedger(await readJsonFile(file, {}));
+      // Preserve the latest in-memory Claude usage so the background metric
+      // sweep does not clobber requests recorded since the last debounced save.
+      if (claudeUsageCache) {
+        ledger.clients = normalizeClients({ ...ledger.clients, claude: claudeUsageCache });
+      }
       if (!summary?.processStartSeconds || !Array.isArray(summary.models) || !summary.models.length) {
         return ledger;
       }
@@ -89,22 +146,25 @@ function createStatsLedgerStore(options = {}) {
       }
       ledger.updatedAt = new Date().toISOString();
       ledger.version = 1;
-      await saveStatsLedger(ledger);
+      await writeJsonFile(file, normalizeStatsLedger(ledger));
       return ledger;
     });
   }
 
+  // Hot-path entry: accumulate in memory and schedule a debounced save. Does
+  // not await any file I/O and does not take the write mutex, so concurrent
+  // Claude requests are no longer serialized by stats persistence.
   async function recordClaudeBridgeUsage(event = {}) {
-    return withStatsLedgerWrite(async () => {
-      const ledger = await loadStatsLedger();
-      const clients = ledger.clients && typeof ledger.clients === "object" ? ledger.clients : {};
-      const claude = applyClaudeBridgeUsage(clients.claude, event, claudeUsageOptions);
-      clients.claude = claude;
-      ledger.clients = normalizeClients(clients);
-      ledger.updatedAt = new Date().toISOString();
-      await saveStatsLedger(ledger);
-      return claude;
-    });
+    if (!claudeUsageCache) {
+      const ledger = normalizeStatsLedger(await readJsonFile(file, {}));
+      claudeUsageCache = ledger.clients && ledger.clients.claude
+        ? normalizeClientUsageCounters(ledger.clients.claude, claudeUsageOptions.id || "claude", claudeUsageOptions.label || "Claude compatible bridge")
+        : null;
+    }
+    const claude = applyClaudeBridgeUsage(claudeUsageCache, event, claudeUsageOptions);
+    claudeUsageCache = claude;
+    scheduleClaudeUsageSave();
+    return claude;
   }
 
   function mergeRuntimeFactsLedger(ledger, model, summary, reason) {
@@ -172,6 +232,7 @@ function createStatsLedgerStore(options = {}) {
     normalizeStatsLedger,
     updateStatsLedger,
     recordClaudeBridgeUsage,
+    flushClaudeUsageWrites,
     getPersistedRuntimeFacts,
     mergeRuntimeFactsLedger,
   };

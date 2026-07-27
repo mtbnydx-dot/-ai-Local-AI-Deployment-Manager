@@ -12,6 +12,10 @@
     return typeof options?.[name] === "function" ? options[name] : fallback;
   }
 
+  function hasFiniteNumber(value) {
+    return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+  }
+
   function statsMetric(label, value, detail, options = {}) {
     const escapeHtml = helper(options, "escapeHtml", defaultEscape);
     const escapeAttr = helper(options, "escapeAttr", defaultEscape);
@@ -125,7 +129,16 @@
     const facts = stats.facts || {};
     const totals = stats.totals || {};
     const latency = totals.latency || {};
-    const gpu = stats.gpu?.ok ? `${stats.gpu.usedMb}/${stats.gpu.totalMb} MB${labels.separator}${stats.gpu.util}%${labels.separator}${stats.gpu.temp}${labels.temperatureUnit}` : labels.gpuMissing;
+    const gpuParts = stats.gpu?.ok
+      ? [
+          `${stats.gpu.usedMb}/${stats.gpu.totalMb} MB`,
+          `${stats.gpu.util}%`,
+          `${stats.gpu.temp}${labels.temperatureUnit}`,
+          hasFiniteNumber(stats.gpu.powerWatts) ? `${Number(stats.gpu.powerWatts).toFixed(0)} W` : "",
+          hasFiniteNumber(stats.gpu.fanPercent) ? `${Number(stats.gpu.fanPercent).toFixed(0)}% fan` : "",
+        ].filter(Boolean)
+      : [];
+    const gpu = gpuParts.length ? gpuParts.join(labels.separator) : labels.gpuMissing;
     root.innerHTML = [
       renderMiniStat(labels.endToEnd, fmtSeconds(latency.avgE2eSeconds), labels.endToEndDetail),
       renderMiniStat(labels.ttft, fmtSeconds(latency.avgTtftSeconds), "time to first token"),
@@ -140,11 +153,105 @@
     ].join("");
   }
 
+  function renderHistoryTrends(stats, options = {}) {
+    const root = options.root || document.querySelector(options.rootSelector || "#statsTrends");
+    if (!root) return;
+    const escapeHtml = helper(options, "escapeHtml", defaultEscape);
+    const samples = Array.isArray(stats?.trends?.samples) ? stats.trends.samples : [];
+    const labels = {
+      empty: "No persisted performance samples yet. The manager records one sample per minute while it is running.",
+      current: "Current",
+      average: "Average",
+      range: "24-hour persisted history",
+      ttft: "TTFT",
+      tpot: "TPOT",
+      e2e: "End-to-end",
+      queue: "Queue wait",
+      outputTps: "Output throughput",
+      rpm: "Requests/min",
+      waiting: "Waiting requests",
+      gpuTemp: "GPU temperature",
+      gpuPower: "GPU power",
+      gpuFan: "GPU fan",
+      mtpAcceptance: "MTP acceptance",
+      ...(options.labels || {}),
+    };
+    if (!samples.length) {
+      root.innerHTML = `<div class="empty compact">${escapeHtml(labels.empty)}</div>`;
+      return;
+    }
+    const fmtMs = helper(options, "fmtMs", (value) => `${Number(value || 0).toFixed(0)} ms`);
+    const fmtRate = helper(options, "fmtRate", (value, suffix = "") => `${Number(value || 0).toFixed(1)}${suffix}`);
+    const formatDateTime = helper(options, "formatDateTime", (value) => String(value || ""));
+    const definitions = [
+      { label: labels.ttft, path: "latency.ttftMs", color: "var(--blue)", format: fmtMs },
+      { label: labels.tpot, path: "latency.tpotMs", color: "var(--teal)", format: fmtMs },
+      { label: labels.e2e, path: "latency.e2eMs", color: "var(--amber)", format: fmtMs },
+      { label: labels.queue, path: "latency.queueMs", color: "var(--red)", format: fmtMs },
+      { label: labels.outputTps, path: "throughput.outputTokensPerSecond", color: "var(--green)", format: (value) => fmtRate(value, " tok/s") },
+      { label: labels.rpm, path: "throughput.requestsPerMinute", color: "var(--blue)", format: (value) => fmtRate(value, " rpm") },
+      { label: labels.waiting, path: "requests.waiting", color: "var(--amber)", format: (value) => String(Math.round(Number(value || 0))) },
+      { label: labels.gpuTemp, path: "gpu.temperatureC", color: "var(--red)", format: (value) => `${Number(value || 0).toFixed(0)} C`, optional: true },
+      { label: labels.gpuPower, path: "gpu.powerWatts", color: "var(--amber)", format: (value) => `${Number(value || 0).toFixed(0)} W`, optional: true },
+      { label: labels.gpuFan, path: "gpu.fanPercent", color: "var(--teal)", format: (value) => `${Number(value || 0).toFixed(0)}%`, optional: true },
+      { label: labels.mtpAcceptance, path: "speculative.acceptanceRate", color: "var(--green)", format: (value) => `${(Number(value || 0) * 100).toFixed(1)}%`, optional: true, speculative: true },
+    ];
+    const cards = definitions.map((definition) => {
+      const rawValues = samples.map((sample) => nestedValue(sample, definition.path));
+      const finiteValues = rawValues.filter((value) => Number.isFinite(value));
+      const hasSpeculative = samples.some((sample) => sample.speculative?.enabled || Number(sample.speculative?.draftTokens || 0) > 0);
+      if (!finiteValues.length || (definition.optional && definition.speculative && !hasSpeculative)) return "";
+      const values = fillTrendGaps(rawValues);
+      const current = finiteValues.at(-1) || 0;
+      const average = finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length;
+      return `
+        <article class="trend-card">
+          <div class="trend-head"><span>${escapeHtml(definition.label)}</span><strong>${escapeHtml(definition.format(current))}</strong></div>
+          ${renderSparkline(values, definition.color)}
+          <div class="trend-foot"><span>${escapeHtml(`${labels.average} ${definition.format(average)}`)}</span><span>${escapeHtml(labels.range)}</span></div>
+        </article>
+      `;
+    }).filter(Boolean);
+    const range = `${formatDateTime(samples[0]?.at)} - ${formatDateTime(samples.at(-1)?.at)}`;
+    root.innerHTML = `${cards.join("")}<div class="trend-range-note">${escapeHtml(range)}</div>`;
+  }
+
+  function nestedValue(object, path) {
+    const value = String(path || "").split(".").reduce((current, key) => current?.[key], object);
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function fillTrendGaps(values) {
+    let last = 0;
+    return values.map((value) => {
+      if (Number.isFinite(value)) last = value;
+      return last;
+    });
+  }
+
+  function renderSparkline(values, color) {
+    const width = 240;
+    const height = 64;
+    const points = Array.isArray(values) && values.length ? values : [0];
+    const min = Math.min(...points);
+    const max = Math.max(...points);
+    const range = max - min || 1;
+    const coords = points.map((value, index) => {
+      const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * width;
+      const y = height - 5 - ((value - min) / range) * (height - 10);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    return `<svg class="sparkline" viewBox="0 0 ${width} ${height}" role="img" aria-label="trend"><polyline fill="none" stroke="${defaultEscape(color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${coords}" /></svg>`;
+  }
+
   window.statsUiRenderer = {
     statsMetric,
     miniStat,
     shareBar,
     renderCosts,
     renderDetails,
+    renderHistoryTrends,
   };
 }());

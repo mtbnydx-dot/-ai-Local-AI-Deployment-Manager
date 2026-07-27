@@ -1,3 +1,10 @@
+const THEME_STORAGE_KEY = "llmManager.themeMode";
+const LEGACY_THEME_STORAGE_KEY = "llamaThemeMode";
+
+function getStoredThemePreference() {
+  return localStorage.getItem(THEME_STORAGE_KEY) || localStorage.getItem(LEGACY_THEME_STORAGE_KEY) || "auto";
+}
+
 const state = {
   config: null,
   models: { local: [], cached: [] },
@@ -31,21 +38,36 @@ const state = {
   tensorSplitTouched: false,
   modelPickerOpen: false,
   modelPickerSource: "all",
+  launchFormTouched: false,
+  launchFormHydrated: false,
   expandedJobLogs: new Set(),
   runnableOnly: localStorage.getItem("llamaRunnableOnly") === "1",
   uiPrefs: {
-    theme: localStorage.getItem("llamaThemeMode") || "auto",
+    theme: getStoredThemePreference(),
     language: localStorage.getItem("llamaLanguageMode") || "auto",
   },
 };
 
 let memoryEstimateTimer = null;
 let memoryEstimateSeq = 0;
+let memoryEstimateSignature = "";
 let downloadEstimateTimer = null;
 let downloadEstimateSeq = 0;
 let remoteSearchSeq = 0;
 
 const $ = (selector) => document.querySelector(selector);
+
+// 轮询防叠加：上一次调用未结束时复用同一个 Promise，避免慢响应下请求堆积
+function withFlightGuard(fn) {
+  let inFlight = null;
+  return (...args) => {
+    if (inFlight) return inFlight;
+    inFlight = Promise.resolve()
+      .then(() => fn(...args))
+      .finally(() => { inFlight = null; });
+    return inFlight;
+  };
+}
 const { fmtBytes, fmtNumber, fmtTokens, fmtPct, fmtRate, fmtMoney, escapeHtml, escapeAttr } = window.LlamaFormat;
 const { api, auditApi } = window.LlamaApi.create(() => state.auditToken);
 
@@ -84,6 +106,7 @@ const profileRenderer = window.LocalAiProfileRenderer.create({
   escapeHtml,
   escapeAttr,
   fmtTokens,
+  availability: getProfileAvailability,
   copy: {
     empty: "暂无配置方案。",
     builtin: "内置",
@@ -91,6 +114,7 @@ const profileRenderer = window.LocalAiProfileRenderer.create({
     apply: "套用",
     remove: "删除",
     noOptions: "暂无方案",
+    chooseProfile: "请选择启动方案（不会自动套用）",
     defaultSummary: "常用参数可在这里快速套用；完整管理仍在工具页。",
   },
   metrics(profile) {
@@ -154,8 +178,47 @@ const serviceExposureRenderer = window.LocalAiServiceExposureRenderer.create({
   escapeAttr,
   fmtTokens,
   defaultServicePort: 8080,
+  includeOpenCode: true,
 });
 const uiArchitecture = window.LocalAiUiArchitecture.create({ $, escapeHtml });
+const runtimeInstancesController = window.LocalAiRuntimeInstances.create({
+  $,
+  api,
+  escapeHtml,
+  escapeAttr,
+  fmtTokens,
+  formatDateTime,
+  renderIcons: () => renderIcons(),
+  notify,
+  reportError: reportActionError,
+  getLanguage: effectiveLanguage,
+  engineLabel: "llama.cpp",
+  onInstancesChanged: () => Promise.all([refreshStatus(), refreshStats().catch(() => {})]),
+});
+const accessLogBrowser = window.LocalAiAccessLogBrowser.create({
+  $,
+  api,
+  escapeHtml,
+  escapeAttr,
+  fmtTokens,
+  fmtMs,
+  formatDateTime,
+  renderIcons: () => renderIcons(),
+  notify,
+  reportError: reportActionError,
+  getLanguage: effectiveLanguage,
+});
+const managerBackupsController = window.LocalAiManagerBackups.create({
+  $,
+  api,
+  escapeHtml,
+  escapeAttr,
+  formatDateTime,
+  renderIcons: () => renderIcons(),
+  notify,
+  reportError: reportActionError,
+  getLanguage: effectiveLanguage,
+});
 const runtimeStatusRenderer = window.LocalAiRuntimeStatusRenderer.create({
   $,
   state,
@@ -228,9 +291,10 @@ function enhanceUiArchitecture() {
 function ensureServiceExposureUi() {
   uiArchitecture.ensureServiceExposureUi({
     navLabel: "对外服务",
+    includeOpenCode: true,
     apiKeyLabel: "API Key 规划",
     formNote: "llama.cpp 对外服务建议优先放在 Caddy/Nginx/Cloudflare Tunnel 后面做 TLS、鉴权和限流。保存后如需改变局域网绑定，请应用到启动表单并重启模型。",
-    clientDescription: "给 OpenWebUI、Claude 或局域网设备单独发 Key，并限制模型、速率和并发。",
+    clientDescription: "给 OpenWebUI、Claude、OpenCode 或局域网设备单独发 Key，并限制模型、速率和并发。",
   });
 }
 
@@ -249,9 +313,9 @@ function ensureStatusInsightMetrics() {
   if (!grid || $("#vramStatus")) return;
   [
     ["VRAM", "vramStatus"],
-    ["Context", "contextStatus"],
+    ["KV 使用 / 单请求上限", "contextStatus"],
     ["Speed", "speedStatus"],
-    ["Idle guard", "idleStatus"],
+    ["保护策略", "idleStatus"],
   ].forEach(([label, id]) => {
     const metric = document.createElement("div");
     metric.className = "metric metric-extra";
@@ -266,7 +330,155 @@ function enhanceLaunchFormLayout() {
   form.dataset.enhancedLayout = "true";
   ensureServiceProfileShortcut(form);
   groupContextControls();
-  moveAdvancedFields(form);
+  ensureLaunchWorkflow();
+}
+
+let launchWorkflowController = null;
+
+function ensureLaunchWorkflow() {
+  launchWorkflowController = uiArchitecture.createLaunchWorkflow({
+    formSelector: "#startForm",
+    ariaLabel: "llama.cpp 启动流程",
+    requiredSelectors: ["#startModel", "#servedName", "#servicePort", "#maxModelLen", "#maxNumSeqs"],
+    stages: [
+      {
+        id: "model",
+        label: "选择模型",
+        description: "GGUF、服务名和方案",
+        help: "先选择 GGUF 文件、目录或仓库。套用方案时会检查当前 GPU 数量和单卡显存。",
+        selectors: ["#serviceProfileStrip", "#startModel", "#servedName", "#servicePort", "#instanceMode", "#instanceId", "#instanceModeHint"],
+      },
+      {
+        id: "resources",
+        label: "资源配置",
+        description: "上下文、KV 和 GPU",
+        help: "llama.cpp 的总 KV 预算等于每槽上下文乘以槽数；异构多卡选项只在检测到多卡时提供。",
+        selectors: ["#ggufSection", ".context-section", "#gpuLayers", "#batchSize", "#ubatchSize", "#cacheTypeK", "#cacheTypeV", "#flashAttention", ".gpu-section", ".hetero-section"],
+      },
+      {
+        id: "capabilities",
+        label: "模型能力",
+        description: "思考与客户端格式",
+        help: "Reasoning 格式决定输出如何拆分；客户端仍可按请求控制是否启用思考。",
+        selectors: ["#clientPreset", "#reasoningMode", "#reasoningParser", "#reasoningNote", "[name='noMmap']"],
+      },
+      {
+        id: "access",
+        label: "访问与确认",
+        description: "网络、鉴权和最终参数",
+        help: "检查最终配置。替换模式只替换主实例；并行模式保留现有实例。所有资源参数都以表单值为准。",
+        selectors: ["#networkAccess", "#llamaApiKey", "#networkNote", "#startForm button[type='submit']"],
+      },
+    ],
+    renderReview: renderLlamaLaunchReview,
+    onRefresh: updateLaunchActionState,
+  });
+}
+
+function renderLlamaLaunchReview() {
+  const running = (state.status?.runningModels || [])[0];
+  const model = $("#startModel")?.value.trim() || "未选择";
+  const name = $("#servedName")?.value.trim() || deriveName(model);
+  const selectedGpus = getSelectedGpuObjects();
+  const network = $("#networkAccess")?.value === "lan" ? "局域网" : "仅本机";
+  const instanceMode = $("#instanceMode")?.value === "parallel" ? "parallel" : "replace";
+  const instanceId = $("#instanceId")?.value.trim() || name;
+  const transition = instanceMode === "parallel"
+    ? `新增并行实例 ${instanceId}`
+    : running
+      ? normalizePathKey(running.root || running.id) === normalizePathKey(model) || running.id === name
+        ? `重启 ${running.id} 并应用当前参数`
+        : `从 ${running.id} 切换到 ${name}`
+      : `启动主实例 ${name}`;
+  return `
+    <div class="launch-review-head"><strong>启动前确认</strong><span>${escapeHtml(transition)}</span></div>
+    <div class="launch-review-grid">
+      <div><span>模型</span><strong>${escapeHtml(model)}</strong></div>
+      <div><span>每槽上下文 / 槽数</span><strong>${fmtTokens(Number($("#maxModelLen")?.value || 0))} / ${fmtNumber(Number($("#maxNumSeqs")?.value || 0))}</strong></div>
+      <div><span>GPU</span><strong>${escapeHtml(selectedGpus.map((gpu) => gpu.id).join(", ") || "未检测")}</strong></div>
+      <div><span>KV cache</span><strong>${escapeHtml($("#cacheTypeK")?.value || "f16")} / ${escapeHtml($("#cacheTypeV")?.value || "f16")}</strong></div>
+      <div><span>多 GPU</span><strong>${escapeHtml($("#multiGpuMode")?.value || "none")} / ${escapeHtml($("#tensorSplit")?.value || "自动")}</strong></div>
+      <div><span>实例 / 端口</span><strong>${escapeHtml(instanceMode === "parallel" ? `并行 ${instanceId}` : "替换主实例")} / ${escapeHtml($("#servicePort")?.value || "-")}</strong></div>
+      <div><span>访问</span><strong>${network}${$("#llamaApiKey")?.value.trim() ? " / 已设置 Key" : " / 无 Key"}</strong></div>
+    </div>
+    <p class="launch-review-note">${instanceMode === "parallel" ? "确认后保留所有现有实例并新建独立容器；请确保端口和 GPU 显存可用。表单值不会被自动改写。" : running ? "确认后只替换主 llama.cpp 容器；上下文、槽数和 KV 精度以本页最终值为准。" : "确认后创建主实例启动任务；所有参数以本页最终值为准。"}</p>
+  `;
+}
+
+function llamaLaunchTransitionInfo() {
+  const running = (state.status?.runningModels || [])[0] || null;
+  const model = $("#startModel")?.value.trim() || "";
+  const name = $("#servedName")?.value.trim() || deriveName(model);
+  const same = Boolean(running && (normalizePathKey(running.root || running.id) === normalizePathKey(model) || running.id === name));
+  return { running, model, name, same };
+}
+
+function updateLaunchActionState() {
+  const button = $("#startForm button[type='submit']");
+  if (!button || button.disabled) return;
+  const { running, same } = llamaLaunchTransitionInfo();
+  const parallel = $("#instanceMode")?.value === "parallel";
+  const label = parallel ? "新增并行实例" : running ? (same ? "重启并应用参数" : "切换并启动") : "启动 llama.cpp";
+  const span = button.querySelector("span");
+  if (span) span.textContent = label;
+  else button.textContent = label;
+  button.dataset.transition = parallel ? "parallel" : running ? (same ? "restart" : "switch") : "start";
+}
+
+async function confirmLlamaLaunch(payload) {
+  const { running, same, name } = llamaLaunchTransitionInfo();
+  const parallel = payload.instanceMode === "parallel";
+  const unsecuredLan = payload.networkAccess === "lan" && !String(payload.apiKey || "").trim();
+  if (!running && !unsecuredLan && !parallel) return true;
+  const warning = unsecuredLan
+    ? `<div class="launch-confirm-warning"><strong>局域网未设置 API Key</strong><span>同一网络的客户端可直接调用该模型。此项不会阻止启动。</span></div>`
+    : "";
+  return uiArchitecture.confirmLaunch({
+    title: parallel ? "确认新增并行实例" : running ? (same ? "确认重启当前模型" : "确认切换模型") : "确认局域网启动",
+    body: `${renderLlamaLaunchReview()}${warning}`,
+    confirmLabel: parallel ? "创建并行实例" : running ? (same ? "确认重启" : `切换到 ${name}`) : "仍然启动",
+  });
+}
+
+function updateLaunchOptionStates() {
+  const speculativeMode = $("#speculativeMode")?.value || "auto";
+  const speculativeTokens = $("#numSpeculativeTokens");
+  if (speculativeTokens) speculativeTokens.disabled = speculativeMode !== "draft-mtp";
+  const speculativeLabel = speculativeTokens?.closest("label");
+  let speculativeNote = speculativeLabel?.querySelector(".option-state-note");
+  if (speculativeLabel && !speculativeNote) {
+    speculativeNote = document.createElement("small");
+    speculativeNote.className = "option-state-note";
+    speculativeLabel.appendChild(speculativeNote);
+  }
+  if (speculativeNote) {
+    speculativeNote.textContent = speculativeMode === "auto"
+      ? "仅模型名称或元数据明确声明 MTP 时自动启用，否则关闭。"
+      : speculativeMode === "off"
+        ? "已关闭，不预留推测解码显存。"
+        : speculativeMode === "draft-mtp"
+          ? "显式启用 MTP；token 数会传给 llama.cpp。"
+          : "N-gram 模式不使用推测 token 数。";
+  }
+  const gpuCount = getVisibleGpus().length;
+  const mode = $("#multiGpuMode");
+  if (mode) {
+    Array.from(mode.options).forEach((option) => {
+      if (option.value !== "none") option.disabled = gpuCount > 0 && gpuCount < 2;
+    });
+    if (gpuCount === 1 && mode.value !== "none") mode.value = "none";
+  }
+  const splitDisabled = gpuCount < 2 || mode?.value === "none";
+  if ($("#tensorSplit")) $("#tensorSplit").disabled = splitDisabled;
+  if ($("#mainGpu")) $("#mainGpu").disabled = gpuCount < 2;
+  launchWorkflowController?.refresh();
+  updateLaunchActionState();
+}
+
+function effectiveLlamaSpeculativeModeForEstimate() {
+  const mode = $("#speculativeMode")?.value || "auto";
+  if (mode !== "auto") return mode;
+  return /(?:^|[-_/.])mtp(?:$|[-_/.])/i.test($("#startModel")?.value || "") ? "draft-mtp" : "off";
 }
 
 function ensureServiceProfileShortcut(form) {
@@ -383,7 +595,9 @@ function handleToolTabClick(event) {
 function setToolGroup(group) {
   localStorage.setItem("llamaToolGroup", group);
   document.querySelectorAll("#toolTabs [data-tool-group]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.toolGroup === group);
+    const active = button.dataset.toolGroup === group;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
   });
   document.querySelectorAll("#tools .panel[data-tool-group]").forEach((panel) => {
     panel.classList.toggle("tool-panel-hidden", panel.dataset.toolGroup !== group);
@@ -393,7 +607,7 @@ function setToolGroup(group) {
 function formatDateTime(value) {
   if (!value) return "-";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
+  if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString(effectiveLanguage(), { hour12: false });
 }
 
@@ -418,6 +632,7 @@ function updateSidebarFoot() {
 }
 
 async function init() {
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   initUiPreferences();
   initDownloadSelectors();
   enhanceUiArchitecture();
@@ -428,7 +643,9 @@ async function init() {
     $("#modelsRoot").textContent = state.config.modelsRoot;
     $("#hfCache").textContent = state.config.hfCache;
     updateSidebarFoot();
-    await Promise.all([refreshStatus(), refreshModels(), refreshModelNotes(), refreshLogs(), refreshServiceExposure(), refreshServiceClients()]);
+    await Promise.all([refreshStatus(), refreshJobs(), refreshModels(), refreshModelNotes(), refreshLogs(), refreshServiceExposure(), refreshServiceClients()]);
+    runtimeInstancesController.refresh({ silent: true }).catch(() => {});
+    managerBackupsController.refresh({ silent: true }).catch(() => {});
     refreshRemoteModels().catch((error) => {
       state.remoteError = error.message;
       renderRemoteModels();
@@ -438,9 +655,17 @@ async function init() {
     refreshAuditStatus().catch(() => {});
     refreshProfiles().catch(() => renderServiceProfileOptions([]));
     loadDownloadSettings().catch(() => {});
-    setInterval(refreshStatus, 5000);
-    setInterval(refreshJobs, 3000);
     setInterval(() => {
+      if (!document.hidden) refreshStatus().catch(() => {});
+    }, 5000);
+    setInterval(() => {
+      if (!document.hidden) refreshJobs().catch(() => {});
+    }, 3000);
+    setInterval(() => {
+      if (!document.hidden && (activeViewName === "service" || location.hash === "#service")) runtimeInstancesController.refresh({ silent: true }).catch(() => {});
+    }, 10000);
+    setInterval(() => {
+      if (document.hidden) return;
       if (location.hash === "#stats") refreshStats().catch(() => {});
       if (location.hash === "#external-access") refreshExternalAccess().catch(() => {});
     }, 5000);
@@ -450,15 +675,19 @@ async function init() {
   updateGgufModeState();
   updateReasoningNote();
   updateTextOnlyNote();
+  updateLaunchOptionStates();
   renderModelPicker();
   renderHeteroPlan();
   renderIcons();
 }
 
 function bindEvents() {
+  runtimeInstancesController.bind();
+  accessLogBrowser.bind();
+  managerBackupsController.bind();
   $("#themeMode")?.addEventListener("change", (event) => {
     state.uiPrefs.theme = event.currentTarget.value || "auto";
-    localStorage.setItem("llamaThemeMode", state.uiPrefs.theme);
+    localStorage.setItem(THEME_STORAGE_KEY, state.uiPrefs.theme);
     applyThemeMode();
   });
   $("#languageMode")?.addEventListener("change", (event) => {
@@ -485,12 +714,16 @@ function bindEvents() {
     });
   });
   window.addEventListener("hashchange", () => showView(location.hash.replace("#", "") || "service", false));
-  $("#refreshBtn").addEventListener("click", () => Promise.all([refreshStatus(), refreshModels(), refreshLogs()]));
+  $("#refreshBtn").addEventListener("click", () => Promise.all([refreshStatus(), refreshJobs(), refreshModels(), refreshLogs()]));
   $("#serviceExposureForm")?.addEventListener("submit", saveServiceExposure);
   $("#serviceExposureEndpoints")?.addEventListener("click", handleServiceExposureEndpointAction);
   $("#exposureMode")?.addEventListener("change", () => {
     renderServiceExposureEndpoints(state.serviceExposure);
     renderServiceExposureChecks(state.serviceExposure);
+  });
+  $("#exposurePublicBaseUrl")?.addEventListener("input", () => {
+    // 公网地址未保存时也即时预览公网入口与部署清单
+    renderServiceExposureEndpoints(state.serviceExposure);
   });
   $("#refreshServiceExposureBtn")?.addEventListener("click", () => refreshServiceExposure().catch((error) => notify("服务化状态刷新失败", error.message, "error")));
   $("#serviceClientForm")?.addEventListener("submit", createServiceClient);
@@ -520,6 +753,10 @@ function bindEvents() {
   });
   $("#reloadLogsBtn").addEventListener("click", refreshLogs);
   $("#reloadStatsBtn").addEventListener("click", refreshStats);
+  $("#openBenchmarkBtn")?.addEventListener("click", () => {
+    showView("tools");
+    requestAnimationFrame(() => $("#benchmarkForm")?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  });
   $("#reloadExternalAccessBtn")?.addEventListener("click", refreshExternalAccess);
   $("#refreshToolsBtn")?.addEventListener("click", refreshToolData);
   $("#runHealthBtn")?.addEventListener("click", refreshHealth);
@@ -561,11 +798,17 @@ function bindEvents() {
     openQuantSearch(button.dataset.quantSearch, button.dataset.quantFilter);
   });
   $("#startForm").addEventListener("submit", startService);
+  ["input", "change"].forEach((eventName) => {
+    $("#startForm").addEventListener(eventName, (event) => {
+      if (event.isTrusted) state.launchFormTouched = true;
+      updateLaunchOptionStates();
+    });
+  });
   $("#serviceJobList").addEventListener("click", handleServiceJobAction);
   $("#testForm").addEventListener("submit", testService);
   $("#networkAccess").addEventListener("change", renderNetworkNote);
   $("#servicePort").addEventListener("input", renderNetworkNote);
-  ["#startModel", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#gpuLayers", "#batchSize", "#ubatchSize", "#loadFormat", "#cacheTypeK", "#cacheTypeV", "#multiGpuMode", "#tensorSplit", "#mainGpu", "#textOnlyMode"].forEach((selector) => {
+  ["#startModel", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#gpuLayers", "#batchSize", "#ubatchSize", "#loadFormat", "#cacheTypeK", "#cacheTypeV", "#multiGpuMode", "#tensorSplit", "#mainGpu", "#textOnlyMode", "#mmproj", "#speculativeMode", "#numSpeculativeTokens"].forEach((selector) => {
     const node = $(selector);
     if (!node) return;
     node.addEventListener("input", updateMemoryEstimate);
@@ -613,6 +856,8 @@ function bindEvents() {
     }
   });
   $("#downloadQueueMode")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadAutoRetryCount")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadAutoRetryDelaySeconds")?.addEventListener("change", saveDownloadQueueMode);
   $("#multiGpuMode").addEventListener("change", () => {
     updateParallelDefaults();
     renderMultiGpuModeGuide();
@@ -634,7 +879,7 @@ function syncUiPreferenceControls() {
   const themeValue = $("#themeMode")?.value;
   if (themeValue && themeValue !== state.uiPrefs.theme) {
     state.uiPrefs.theme = themeValue;
-    localStorage.setItem("llamaThemeMode", themeValue);
+    localStorage.setItem(THEME_STORAGE_KEY, themeValue);
     applyThemeMode();
   }
   const languageValue = $("#languageMode")?.value;
@@ -715,20 +960,34 @@ function translateUiAttributes() {
   if ($("#modelPickerRunnableOnly")) $("#modelPickerRunnableOnly").title = attrText.runnableOnly;
   if ($("#remoteRunnableOnly")) $("#remoteRunnableOnly").title = attrText.runnableOnly;
   renderRunnableFilterToggles();
+  syncAccessibleControls();
 }
+
+const viewScrollPositions = new Map();
+let activeViewName = "";
 
 function showView(view, updateHash = true) {
   const known = new Set(["service", "models", "download", "exposure", "external-access", "tools", "stats", "audit", "logs"]);
   const next = known.has(view) ? view : "service";
+  if (activeViewName && activeViewName !== next) viewScrollPositions.set(activeViewName, window.scrollY);
   document.querySelectorAll("[data-view-panel]").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.viewPanel === next);
   });
   document.querySelectorAll("[data-view]").forEach((link) => {
-    link.classList.toggle("active", link.dataset.view === next);
+    const active = link.dataset.view === next;
+    link.classList.toggle("active", active);
+    if (active) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
   });
   if (updateHash && location.hash !== `#${next}`) {
     history.pushState(null, "", `#${next}`);
   }
+  const changed = activeViewName !== next;
+  activeViewName = next;
+  if (changed) window.requestAnimationFrame(() => window.scrollTo({ top: viewScrollPositions.get(next) || 0, behavior: "auto" }));
   if (next === "models" && !state.remoteModels.length && !state.remoteError) {
     refreshRemoteModels().catch((error) => {
       state.remoteError = error.message;
@@ -1045,15 +1304,15 @@ async function requestDownloadEstimate() {
   }
 }
 
-async function refreshStatus() {
+const refreshStatus = withFlightGuard(async () => {
   state.status = await api("/api/status");
   renderStatus();
   renderNetworkNote();
-  state.jobs = state.status.jobs || [];
-  renderJobs();
   renderStatusInsights();
   updateSidebarFoot();
-}
+  maybeHydrateLaunchFormFromRuntime();
+  updateLaunchOptionStates();
+});
 
 async function refreshServiceExposure() {
   state.serviceExposure = await api("/api/service-exposure");
@@ -1065,16 +1324,20 @@ async function refreshServiceClients() {
   renderServiceClients();
 }
 
-async function refreshJobs() {
+const refreshJobs = withFlightGuard(async () => {
   state.jobs = await api("/api/jobs");
   renderJobs();
-}
+  renderModels();
+  maybeHydrateLaunchFormFromRuntime();
+});
 
 async function loadDownloadSettings() {
   try {
     const data = await api("/api/download/settings");
     const toggle = $("#downloadQueueMode");
     if (toggle) toggle.checked = Boolean(data?.queueMode);
+    if ($("#downloadAutoRetryCount")) $("#downloadAutoRetryCount").value = String(data?.autoRetryCount ?? 2);
+    if ($("#downloadAutoRetryDelaySeconds")) $("#downloadAutoRetryDelaySeconds").value = String(data?.autoRetryDelaySeconds ?? 10);
   } catch {
     // 设置读取失败不阻塞页面初始化
   }
@@ -1084,11 +1347,16 @@ async function saveDownloadQueueMode() {
   const toggle = $("#downloadQueueMode");
   if (!toggle) return;
   try {
+    const settings = {
+      queueMode: toggle.checked,
+      autoRetryCount: Number($("#downloadAutoRetryCount")?.value ?? 2),
+      autoRetryDelaySeconds: Number($("#downloadAutoRetryDelaySeconds")?.value ?? 10),
+    };
     await api("/api/download/settings", {
       method: "POST",
-      body: JSON.stringify({ queueMode: toggle.checked }),
+      body: JSON.stringify(settings),
     });
-    notify("下载队列设置已更新", toggle.checked ? "新下载将排队顺序执行。" : "下载将并发执行。", "success");
+    notify("下载策略已更新", `${toggle.checked ? "顺序队列" : "并行下载"} · 失败重试 ${settings.autoRetryCount} 次 / ${settings.autoRetryDelaySeconds} 秒`, "success");
     await refreshJobs();
   } catch (error) {
     reportActionError("保存下载队列设置失败", error);
@@ -1174,6 +1442,7 @@ function renderRunnableFilterToggles() {
     button.classList.toggle("active", state.runnableOnly);
     button.setAttribute("aria-pressed", state.runnableOnly ? "true" : "false");
     button.setAttribute("title", title);
+    button.setAttribute("aria-label", title);
   });
 }
 
@@ -1218,16 +1487,16 @@ async function refreshLogs() {
   }
 }
 
-async function refreshStats() {
+const refreshStats = withFlightGuard(async () => {
   state.stats = await api("/api/stats");
   renderStats();
   renderStatusInsights();
-}
+});
 
-async function refreshExternalAccess() {
+const refreshExternalAccess = withFlightGuard(async () => {
   state.externalAccess = await api("/api/external-access?limit=220");
   renderExternalAccess();
-}
+});
 
 async function refreshAuditStatus() {
   state.auditStatus = await api("/api/audit/status");
@@ -1317,6 +1586,7 @@ async function refreshCompressionInsights(event) {
 async function refreshModelNotes() {
   state.modelNotes = await api("/api/tools/model-notes");
   renderModelNotes();
+  renderModels();
   renderModelPicker();
 }
 
@@ -1336,11 +1606,36 @@ function renderServiceProfileSummary() {
   profileRenderer.renderServiceProfileSummary();
 }
 
+function getProfileAvailability(profile) {
+  const requirements = profile?.requirements || {};
+  if (!Object.keys(requirements).length) return { compatible: true, state: "ok", label: "", reason: "" };
+  const gpus = getVisibleGpus();
+  if (!gpus.length) return { compatible: true, state: "warn", label: "待检测", reason: "GPU 状态就绪后会检查该方案。" };
+  const minCount = Math.max(0, Number(requirements.minGpuCount || 0));
+  const minSingleGb = Math.max(0, Number(requirements.minSingleGpuMemoryGb || 0));
+  const maxSingleGb = Math.max(...gpus.map((gpu) => Number(gpu.totalMb || 0) / 1024));
+  if (minCount && gpus.length < minCount) {
+    return { compatible: false, state: "fail", label: "硬件不匹配", reason: `需要至少 ${minCount} 张 GPU，当前检测到 ${gpus.length} 张。` };
+  }
+  if (minSingleGb && maxSingleGb < minSingleGb) {
+    return { compatible: false, state: "fail", label: "硬件不匹配", reason: `需要单卡至少 ${minSingleGb} GB，当前最大单卡约 ${formatGbNumber(maxSingleGb)} GB。` };
+  }
+  return { compatible: true, state: "ok", label: "硬件匹配", reason: "已按当前 GPU 数量和显存通过基础检查。" };
+}
+
 function applySelectedServiceProfile() {
   const select = $("#serviceProfileSelect");
   const profiles = [...(state.profiles.builtin || []), ...(state.profiles.profiles || [])];
   const profile = profiles.find((item) => item.id === select?.value);
-  if (!profile) return;
+  if (!profile) {
+    notify("尚未选择启动方案", "先选择方案，再点击套用。当前表单不会自动改写。", "info");
+    return;
+  }
+  const fit = getProfileAvailability(profile);
+  if (fit.compatible === false) {
+    notify("启动方案不可用", fit.reason, "info");
+    return;
+  }
   applyLaunchProfile(profile.config || {});
   notify("已套用启动方案", profile.name, "success");
 }
@@ -1372,6 +1667,11 @@ async function handleProfileAction(event) {
   const profile = profiles.find((item) => item.id === button.dataset.profileId);
   if (!profile) return;
   if (button.dataset.profileAction === "apply") {
+    const fit = getProfileAvailability(profile);
+    if (fit.compatible === false) {
+      notify("启动方案不可用", fit.reason, "info");
+      return;
+    }
     applyLaunchProfile(profile.config || {});
     notify("已套用启动方案", profile.name, "success");
     showView("service");
@@ -1399,7 +1699,8 @@ function getLaunchFormConfig() {
   return payload;
 }
 
-function applyLaunchProfile(config = {}) {
+function applyLaunchProfile(config = {}, options = {}) {
+  if (!options.hydrating) state.launchFormTouched = true;
   const set = (selector, value) => {
     const element = $(selector);
     if (element && value !== undefined && value !== null && value !== "") element.value = value;
@@ -1424,6 +1725,9 @@ function applyLaunchProfile(config = {}) {
   set("#multiGpuMode", config.multiGpuMode);
   set("#tensorSplit", config.tensorSplit);
   set("#mainGpu", config.mainGpu);
+  set("#mmproj", config.mmproj);
+  set("#speculativeMode", config.speculativeMode);
+  set("#numSpeculativeTokens", config.numSpeculativeTokens);
   const noMmap = $("#startForm [name='noMmap']");
   if (noMmap && config.noMmap !== undefined) noMmap.checked = Boolean(config.noMmap);
   const textOnlyMode = $("#textOnlyMode");
@@ -1442,6 +1746,40 @@ function applyLaunchProfile(config = {}) {
   updateMemoryEstimate();
   renderNetworkNote();
   renderMultiGpuModeGuide();
+  updateLaunchOptionStates();
+}
+
+function maybeHydrateLaunchFormFromRuntime() {
+  if (state.launchFormHydrated || state.launchFormTouched) return;
+  const running = (state.status?.runningModels || [])[0];
+  if (!running || !Array.isArray(state.jobs) || !state.jobs.length) return;
+  const runningKeys = [running.id, running.root].map(normalizePathKey).filter(Boolean);
+  const job = state.jobs.find((item) => {
+    if (item.type !== "serve" || item.status !== "success" || !item.meta) return false;
+    const servedModels = Array.isArray(item.meta.servedModels) ? item.meta.servedModels : [];
+    const keys = [item.meta.name, item.meta.model, ...servedModels.flatMap((model) => [model.id, model.root])]
+      .map(normalizePathKey)
+      .filter(Boolean);
+    return keys.some((key) => runningKeys.includes(key));
+  });
+  if (!job) return;
+  state.launchFormHydrated = true;
+  applyLaunchProfile(job.meta, { hydrating: true });
+  renderRuntimeConfigBanner(job.meta, running.id);
+  launchWorkflowController?.refresh();
+}
+
+function renderRuntimeConfigBanner(config, modelId) {
+  const stage = document.querySelector("[data-launch-stage='model'] .launch-stage-grid");
+  if (!stage) return;
+  let banner = $("#runtimeConfigBanner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.className = "runtime-config-banner";
+    banner.id = "runtimeConfigBanner";
+    stage.prepend(banner);
+  }
+  banner.innerHTML = `<strong>已载入当前运行参数</strong><span>${escapeHtml(modelId)} · ${fmtTokens(Number(config.maxModelLen || 0))} 每槽上下文 · ${fmtNumber(Number(config.maxNumSeqs || 0))} 槽。套用方案前会先检查硬件。</span>`;
 }
 
 async function runModelCheck(event) {
@@ -1704,6 +2042,9 @@ function scheduleServerMemoryEstimate(estimate) {
   if (memoryEstimateTimer) clearTimeout(memoryEstimateTimer);
   const requestId = ++memoryEstimateSeq;
   const payload = buildLlamaMemoryEstimatePayload(estimate);
+  // 启动参数没有变化时不重复请求服务端估算（状态轮询也会触发本函数）
+  const signature = JSON.stringify(payload);
+  if (signature === memoryEstimateSignature) return;
   memoryEstimateTimer = setTimeout(async () => {
     try {
       const result = await api("/api/memory-estimate", {
@@ -1711,6 +2052,7 @@ function scheduleServerMemoryEstimate(estimate) {
         body: JSON.stringify(payload),
       });
       if (requestId !== memoryEstimateSeq) return;
+      memoryEstimateSignature = signature;
       renderLlamaMemoryEstimate(mergeLlamaServerMemoryEstimate(estimate, result));
     } catch {
       // Keep the immediate local estimate visible if the backend estimate is unavailable.
@@ -1725,19 +2067,34 @@ function buildLlamaMemoryEstimatePayload(estimate) {
     bytesPerParam: estimate.bytesPerParam,
     kvBytes: estimate.kvBytes,
     arch: estimate.arch,
-    selectedGpus: estimate.selectedGpus,
+    selectedGpus: estimate.selectedGpus.map((gpu, index) => normalizeFrontendPlanGpu(gpu, index)),
     gpuMemoryUtilization: estimate.utilization,
     gpuLayers: $("#gpuLayers")?.value || "all",
     tensorSplit: $("#tensorSplit")?.value || "",
     multimodalReserveGb: estimate.multimodalReserveGb,
+    maxNumSeqs: Number($("#maxNumSeqs")?.value || 1),
+    speculativeMode: effectiveLlamaSpeculativeModeForEstimate(),
+    numSpeculativeTokens: Number($("#numSpeculativeTokens")?.value || 3),
   };
 }
 
 function mergeLlamaServerMemoryEstimate(estimate, result) {
   const plan = result?.plan;
   if (!plan) return estimate;
-  const allocations = Array.isArray(plan.allocations) && plan.allocations.length ? plan.allocations : estimate.gpuAllocations;
-  const selectedGpus = Array.isArray(plan.selectedGpus) && plan.selectedGpus.length ? plan.selectedGpus : estimate.selectedGpus;
+  const allocations = Array.isArray(plan.allocations) && plan.allocations.length
+    ? plan.allocations.map((item) => {
+        const id = String(item.gpu?.id ?? "");
+        const local = estimate.gpuAllocations.find((candidate) => String(candidate.gpu?.id) === id) || {};
+        return { ...item, currentFreeGb: local.currentFreeGb, capacityMode: local.capacityMode, weightLabel: local.weightLabel };
+      })
+    : estimate.gpuAllocations;
+  const selectedGpus = Array.isArray(plan.selectedGpus) && plan.selectedGpus.length
+    ? plan.selectedGpus.map((gpu) => {
+        const local = estimate.selectedGpus.find((candidate) => String(candidate.id) === String(gpu.id));
+        const normalized = local ? normalizeFrontendPlanGpu(local, Number(gpu.visibleIndex || 0)) : {};
+        return { ...gpu, currentFreeGb: normalized.currentFreeGb, capacityMode: normalized.capacityMode };
+      })
+    : estimate.selectedGpus;
   return {
     ...estimate,
     serverBacked: true,
@@ -1790,19 +2147,19 @@ function updateTextOnlyNote() {
   const en = effectiveLanguage() === "en-US";
   const multimodalHint = isLikelyMultimodalModel(model)
     ? en
-      ? " The model name looks multimodal; image input would need a separate mmproj/projector later."
-      : " 检测到模型名像多模态模型；如果以后要图片输入，需要单独接入 mmproj/projector。"
+      ? " The model name looks multimodal; the manager will auto-discover mmproj or use the explicit projector path."
+      : " 检测到模型名像多模态模型；管理器会自动查找 mmproj，或使用显式 projector 路径。"
     : "";
   const title = enabled
     ? en ? "Text / tool calling" : "纯文本 / 工具调用"
-    : en ? "Multimodal reserve not active" : "多模态预留未启用";
+    : en ? "Multimodal projector" : "多模态 projector";
   const text = enabled
     ? en
       ? `Text-only mode is on: no mmproj/projector is loaded, which fits Claude, OpenWebUI, tool calling, and long context. The VRAM estimate does not reserve a vision module.${multimodalHint}`
       : `仅文本模式开启：不会加载 mmproj/projector，适合 Claude、OpenWebUI、工具调用和长上下文，显存估算不预留视觉模块。${multimodalHint}`
     : en
-      ? `Text-only mode is off, but this manager has no mmproj field yet, so llama.cpp still launches as text. A future projector option would add VRAM use.${multimodalHint}`
-      : `仅文本模式关闭：当前管理器仍未提供 mmproj 字段，llama.cpp 实际仍会按文本启动；后续接入 projector 时会额外占用显存。${multimodalHint}`;
+      ? `Text-only mode is off: llama.cpp will load the discovered or explicitly configured mmproj and reserve projector memory.${multimodalHint}`
+      : `仅文本模式关闭：llama.cpp 会加载自动发现或显式配置的 mmproj，并预留 projector 显存。${multimodalHint}`;
   note.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(text)}</span>`;
 }
 
@@ -1841,6 +2198,8 @@ function normalizePathKey(value) {
 function estimateMemoryUsage() {
   const model = $("#startModel")?.value.trim() || "";
   const contextTokens = Math.max(512, Number($("#maxModelLen")?.value || 8192));
+  const parallelSlots = Math.max(1, Number($("#maxNumSeqs")?.value || 1));
+  const totalContextTokens = contextTokens * parallelSlots;
   const textOnlyMode = $("#textOnlyMode")?.checked !== false;
   const paramsB = inferParamBillions(model);
   const dtype = "f16";
@@ -1858,7 +2217,7 @@ function estimateMemoryUsage() {
   const weightsGb = totalWeightsGb * gpuLayerRatio;
   const cpuWeightsGb = Math.max(0, totalWeightsGb - weightsGb);
   const totalKvGb = paramsB && arch
-    ? contextTokens * 2 * arch.layers * arch.kvHeads * arch.headDim * kvBytes / 1024 ** 3
+    ? totalContextTokens * 2 * arch.layers * arch.kvHeads * arch.headDim * kvBytes / 1024 ** 3
     : 0;
   // In layer/offload mode the KV cache follows the layer placement; CPU layers keep their KV in system RAM.
   const kvGb = totalKvGb * gpuLayerRatio;
@@ -1893,6 +2252,8 @@ function estimateMemoryUsage() {
   return {
     model,
     contextTokens,
+    totalContextTokens,
+    parallelSlots,
     textOnlyMode,
     multimodalReserveGb,
     paramsB,
@@ -1965,7 +2326,7 @@ function renderGpuMemoryBars(estimate) {
       <div class="gpu-bar">
         <div class="gpu-bar-head">
           <strong>GPU ${escapeHtml(gpu.id)} · ${escapeHtml(gpu.name || "NVIDIA")}</strong>
-          <span>${formatGbNumber(item.allocatedGb)} / 可用 ${formatGbNumber(item.usableGb)} GB · 空闲 ${formatGbNumber(freeGb)} GB · 权重 ${escapeHtml(weightLabel)}</span>
+          <span>${formatGbNumber(item.allocatedGb)} GB / ${item.capacityMode === "replacement" ? "换模后预算" : "可用"} ${formatGbNumber(item.usableGb)} GB · 当前空闲 ${formatGbNumber(item.currentFreeGb ?? freeGb)} GB · 权重 ${escapeHtml(weightLabel)}</span>
         </div>
         <div class="gpu-bar-track">
           <div class="gpu-bar-fill ${stateClass}" style="width:${percent}%"></div>
@@ -1996,7 +2357,8 @@ function renderMemoryEstimateNote(estimate) {
     : estimate.multimodalReserveGb > 0
       ? ` 已关闭仅文本模式，并为可能的多模态 projector 预留约 ${formatGbNumber(estimate.multimodalReserveGb)} GB。`
       : " 已关闭仅文本模式；当前未识别到多模态特征，暂不增加额外预留。";
-  const confidenceLine = `<span class="memory-headroom">估算可信度：${estimate.estimateConfidence === "medium" ? "中：按参数量、GGUF 量化和常见层数/KV 结构估算" : "低：缺少参数量或架构信息"}。显存可用值按当前空闲显存减保护余量与利用率取较小值。</span>`;
+  const replacementBudget = estimate.gpuAllocations.some((item) => item.capacityMode === "replacement");
+  const confidenceLine = `<span class="memory-headroom">估算可信度：${estimate.estimateConfidence === "medium" ? "中：按参数量、GGUF 量化和常见层数/KV 结构估算" : "低：缺少参数量或架构信息"}。${replacementBudget ? "当前 llama.cpp 容器会在换模前释放，容量按替换后预算计算。" : "显存可用值按当前空闲显存减保护余量与利用率取较小值。"}</span>`;
   const ramLine = estimate.systemMemoryResidentGb > 0
     ? `<span class="memory-headroom">系统内存驻留约 ${formatGbNumber(estimate.systemMemoryResidentGb)} GB：这些权重/KV 未放入显存，会减少 OOM 风险但降低速度。</span>`
     : `<span class="memory-headroom">当前估算为全层 GPU offload；如果启动 OOM，可降低 GPU layers，让更多权重留在系统内存。</span>`;
@@ -2040,7 +2402,9 @@ function calculateGpuAllocations(selectedGpus, totalGb, utilization) {
   return selectedGpus.map((gpu, index) => {
     const total = Number(gpu.totalMb || 0) / 1024;
     const used = Number(gpu.usedMb || 0) / 1024;
-    const free = Math.max(0, total - used);
+    const currentFree = Math.max(0, total - used);
+    const replacingManagedContainer = Boolean(state.status?.container?.running && !state.status?.resources?.hasPeerRunning);
+    const free = replacingManagedContainer ? total : currentFree;
     const usableGb = Math.max(1, Math.min(total * utilization, Math.max(1, free - 1)));
     const weight = mode === "none" ? (index === 0 ? 1 : 0) : (weights[index] || 1);
     const allocatedGb = mode === "none"
@@ -2053,6 +2417,8 @@ function calculateGpuAllocations(selectedGpus, totalGb, utilization) {
       allocatedGb,
       usableGb,
       freeGb: free,
+      currentFreeGb: currentFree,
+      capacityMode: replacingManagedContainer ? "replacement" : "current",
     };
   }).filter((item) => item.allocatedGb > 0 || mode !== "none");
 }
@@ -2389,13 +2755,16 @@ function buildFrontendGpuPlan() {
 }
 
 function normalizeFrontendPlanGpu(gpu, visibleIndex) {
-  return window.GpuPlanningUtils.normalizeGpuForPlan(gpu, {
+  const currentFreeGb = Math.max(0, Number(gpu.totalMb || 0) - Number(gpu.usedMb || 0)) / 1024;
+  const replacingManagedContainer = Boolean(state.status?.container?.running && !state.status?.resources?.hasPeerRunning);
+  const normalized = window.GpuPlanningUtils.normalizeGpuForPlan(replacingManagedContainer ? { ...gpu, usedMb: 0 } : gpu, {
     visibleIndex,
     utilization: $("#gpuMemoryUtilization")?.value || 0.92,
     defaultUtilization: 0.92,
     minUsableMb: 1024,
     includePerformance: true,
   });
+  return { ...normalized, currentFreeGb, capacityMode: replacingManagedContainer ? "replacement" : "current" };
 }
 
 function updateReasoningNote() {
@@ -2419,7 +2788,7 @@ function updateReasoningNote() {
     : "本次启动会把思考留在正文，或交给模型模板自动处理。";
   $("#reasoningNote").innerHTML = `
     <strong>${escapeHtml(active || "auto")}</strong>
-    <span>${escapeHtml(parserText)} ${escapeHtml(presetText)}</span>
+    <span>${escapeHtml(parserText)} 这里设置服务默认格式；支持请求级模板参数的客户端仍可按单次请求控制是否思考。 ${escapeHtml(presetText)}</span>
   `;
 }
 
@@ -2451,6 +2820,7 @@ function renderNetworkNote() {
 
 function renderServiceExposure() {
   serviceExposureRenderer.renderServiceExposure();
+  uiArchitecture.updateServiceExposureOptionStates();
 }
 
 function renderServiceExposureEndpoints(payload) {
@@ -2468,9 +2838,13 @@ function buildServiceExposurePayload(overrides = {}) {
     exposureMode: settings.exposureMode || "local",
     requireApiKey: Boolean(settings.requireApiKey),
     publicBaseUrl: settings.publicBaseUrl || "",
+    corsMode: settings.corsMode || ((settings.allowedOrigins || []).length ? "restricted" : "open"),
     allowedOrigins: (settings.allowedOrigins || []).join("\n"),
+    allowedHeaders: (settings.allowedHeaders || []).join("\n"),
     rateLimitRpm: Number(settings.rateLimitRpm || 120),
     maxConcurrentRequests: Number(settings.maxConcurrentRequests || 4),
+    maxQueuedRequests: Number(settings.maxQueuedRequests ?? 128),
+    queueTimeoutSeconds: Number(settings.queueTimeoutSeconds || 30),
     requestTimeoutSeconds: Number(settings.requestTimeoutSeconds || 600),
     exposeOpenAI: settings.exposeOpenAI !== false,
     exposeClaude: settings.exposeClaude !== false,
@@ -2493,9 +2867,13 @@ async function saveServiceExposure(event) {
     apiKey: fields.apiKey.value.trim(),
     clearApiKey: fields.clearApiKey.checked,
     publicBaseUrl: fields.publicBaseUrl.value.trim(),
+    corsMode: fields.corsMode?.value || "open",
     allowedOrigins: fields.allowedOrigins.value,
+    allowedHeaders: fields.allowedHeaders?.value || "",
     rateLimitRpm: Number(fields.rateLimitRpm.value || 120),
     maxConcurrentRequests: Number(fields.maxConcurrentRequests.value || 4),
+    maxQueuedRequests: Number(fields.maxQueuedRequests.value || 0),
+    queueTimeoutSeconds: Number(fields.queueTimeoutSeconds.value || 30),
     requestTimeoutSeconds: Number(fields.requestTimeoutSeconds.value || 600),
     exposeOpenAI: fields.exposeOpenAI.checked,
     exposeClaude: fields.exposeClaude.checked,
@@ -2513,6 +2891,18 @@ async function saveServiceExposure(event) {
 }
 
 async function handleServiceExposureEndpointAction(event) {
+  const copyButton = event.target.closest("[data-exposure-action='copy']");
+  if (copyButton) {
+    event.preventDefault();
+    const value = copyButton.dataset.exposureCopy || "";
+    try {
+      await navigator.clipboard.writeText(value);
+      notify("已复制地址", value, "success");
+    } catch {
+      notify("复制失败，请手动选择地址", value, "info");
+    }
+    return;
+  }
   const button = event.target.closest("[data-exposure-action='set']");
   if (!button) return;
   event.preventDefault();
@@ -2572,6 +2962,8 @@ async function createServiceClient(event) {
     allowedModels: fields.allowedModels.value,
     rateLimitRpm: Number(fields.rateLimitRpm.value || 120),
     maxConcurrentRequests: Number(fields.maxConcurrentRequests.value || 4),
+    maxQueuedRequests: Number(fields.maxQueuedRequests.value || 0),
+    queueTimeoutSeconds: Number(fields.queueTimeoutSeconds.value || 30),
     requestTimeoutSeconds: Number(fields.requestTimeoutSeconds.value || 600),
     expiresAt: fields.expiresAt.value,
     notes: fields.notes.value,
@@ -2618,8 +3010,33 @@ function renderStats() {
   const stats = state.stats;
   if (!stats) return;
   statsSummaryRenderer.render(stats);
+  window.statsUiRenderer.renderHistoryTrends(stats, {
+    root: $("#statsTrends"),
+    escapeHtml,
+    fmtMs,
+    fmtRate,
+    formatDateTime,
+    labels: effectiveLanguage() === "en-US" ? {} : {
+      empty: "暂无持久化性能样本。管理器运行时每分钟记录一次。",
+      current: "当前",
+      average: "平均",
+      range: "24 小时持久化历史",
+      ttft: "首 token 延迟 TTFT",
+      tpot: "单 token 延迟 TPOT",
+      e2e: "端到端延迟",
+      queue: "排队等待",
+      outputTps: "输出吞吐",
+      rpm: "每分钟请求",
+      waiting: "等待请求",
+      gpuTemp: "GPU 温度",
+      gpuPower: "GPU 功耗",
+      gpuFan: "GPU 风扇",
+      mtpAcceptance: "MTP 接受率",
+    },
+  });
   renderStatsModels(stats);
   renderStatsClients(stats);
+  renderStatsSources(stats);
   renderStatsCosts(stats);
   renderStatsDetails(stats);
   renderIcons();
@@ -2634,6 +3051,7 @@ function renderAudit() {
     formatDate,
     fmtTokens,
     fmtBytes,
+    formatDateTime,
     renderIcons,
   });
 }
@@ -2672,6 +3090,20 @@ function renderStatsClients(stats) {
     fmtMs,
     formatDateTime,
     labels: statsClientLabels(en),
+  });
+}
+
+function renderStatsSources(stats) {
+  const en = effectiveLanguage() === "en-US";
+  window.statsListRenderer.renderSourcePrograms(stats, {
+    root: $("#statsSourcePrograms"),
+    escapeHtml,
+    miniStat,
+    shareBar,
+    fmtTokens,
+    fmtMs,
+    formatDateTime,
+    labels: statsSourceLabels(en),
   });
 }
 
@@ -2761,6 +3193,48 @@ function statsClientLabels(en) {
     noLast: "暂无最后调用",
     modelSeparator: "：",
     modelRequests: "请求",
+    detailSeparator: " · ",
+  };
+}
+
+function statsSourceLabels(en) {
+  return en ? {
+    sourcesEmpty: "No gateway calls in the last hour.",
+    sourcesNote: "Grouped from gateway metadata in the last hour; prompts and responses are not stored.",
+    sourceRequests: "Requests",
+    sourceTokens: "Tokens",
+    sourceLatency: "Average latency",
+    sourceResult: "Error rate",
+    sourcePath: "Path",
+    sourceModel: "Model",
+    sourceRemote: "Remote",
+    sourceUserAgent: "User-Agent",
+    input: "input",
+    output: "output",
+    success: "success",
+    error: "errors",
+    last: "last",
+    modelSeparator: ": ",
+    separator: " / ",
+    detailSeparator: " - ",
+  } : {
+    sourcesEmpty: "最近 1 小时暂无网关调用。",
+    sourcesNote: "按最近 1 小时网关访问元数据聚合；不记录提示词或响应正文。",
+    sourceRequests: "请求",
+    sourceTokens: "Tokens",
+    sourceLatency: "平均耗时",
+    sourceResult: "错误率",
+    sourcePath: "路径",
+    sourceModel: "模型",
+    sourceRemote: "来源地址",
+    sourceUserAgent: "User-Agent",
+    input: "输入",
+    output: "输出",
+    success: "成功",
+    error: "错误",
+    last: "最后",
+    modelSeparator: "：",
+    separator: " · ",
     detailSeparator: " · ",
   };
 }
@@ -2871,12 +3345,14 @@ function handleModelPickerSelection(event) {
 function selectLaunchModel(model, options = {}) {
   const value = String(model || "").trim();
   if (!value) return;
+  state.launchFormTouched = true;
   $("#startModel").value = value;
   $("#servedName").value = deriveName(options.name || value);
   $("#loadFormat").value = options.format || inferLaunchFormat(value);
   setLaunchQuantizationFromModel(value);
   closeModelPicker();
   showView("service");
+  launchWorkflowController?.setStage("resources", false);
 }
 
 function inferLaunchFormat(model) {
@@ -2900,6 +3376,9 @@ function renderModelPicker() {
     fmtBytes,
     formatDate,
     estimateModelFit,
+    onClose: closeModelPicker,
+    dialogTitle: english ? "Choose a llama.cpp model" : "选择 llama.cpp 模型",
+    dialogDescription: english ? "Filter GGUF models by source and available GPU capacity." : "按来源、GGUF 格式和可用 GPU 容量筛选。",
     favoriteLabel: "收藏",
     emptyMessage: "没有匹配的模型。可以换个关键词，或刷新本地/在线列表。",
     limitMessage: english ? "Showing first 80 models. Keep typing to narrow results." : "当前只显示前 80 个结果，继续输入关键词可以缩小范围。",
@@ -3037,16 +3516,17 @@ function estimateModelFit(item) {
   const bytesPerParam = quantBytesForLabel(quant);
   const modelGb = item.sizeBytes ? item.sizeBytes / 1024 ** 3 : paramsB ? paramsB * bytesPerParam * 0.93 : 0;
   if (!modelGb) return null;
-  const selectedFreeGb = selected.map((gpu) => Math.max(0, Number(gpu.totalMb || 0) - Number(gpu.usedMb || 0)) / 1024);
-  const maxFreeGb = Math.max(...selectedFreeGb);
-  const totalFreeGb = selectedFreeGb.reduce((sum, value) => sum + value, 0);
+  const planned = selected.map((gpu, index) => normalizeFrontendPlanGpu(gpu, index));
+  const selectedCapacityGb = planned.map((gpu) => Number(gpu.usableGb || 0));
+  const maxFreeGb = Math.max(...selectedCapacityGb);
+  const totalFreeGb = selectedCapacityGb.reduce((sum, value) => sum + value, 0);
   // GGUF/llama.cpp generally needs a little less runtime headroom than vLLM safetensors,
   // so keep this intentionally below the vLLM picker estimate instead of normalizing them.
   const headroomGb = Math.max(2, modelGb * 0.18);
-  const peerSuffix = state.status?.resources?.hasPeerRunning ? "·已扣占用" : "";
-  if (modelGb + headroomGb <= maxFreeGb) return { label: `单卡可跑${peerSuffix}`, state: "ok" };
-  if (selected.length > 1 && modelGb + headroomGb <= totalFreeGb * 0.86) return { label: `需多卡${peerSuffix}`, state: "warn" };
-  return { label: `偏紧${peerSuffix}`, state: "fail" };
+  const capacitySuffix = planned.some((gpu) => gpu.capacityMode === "replacement") ? "·换模后" : state.status?.resources?.hasPeerRunning ? "·已扣占用" : "";
+  if (modelGb + headroomGb <= maxFreeGb) return { label: `单卡可跑${capacitySuffix}`, state: "ok" };
+  if (selected.length > 1 && modelGb + headroomGb <= totalFreeGb * 0.86) return { label: `需多卡${capacitySuffix}`, state: "warn" };
+  return { label: `偏紧${capacitySuffix}`, state: "fail" };
 }
 
 function renderModels() {
@@ -3056,6 +3536,7 @@ function renderModels() {
     escapeHtml,
     escapeAttr,
     fmtBytes,
+    formatDateTime,
     renderIcons,
     requireGgufForLocal: true,
     onUse: ({ model, name, format }) => {
@@ -3299,12 +3780,32 @@ async function downloadModel(event) {
 
 async function startService(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  const payload = buildLlamaLaunchPayload(event.currentTarget);
+  if (!await confirmLlamaLaunch(payload)) return;
+  const clearBusy = setButtonBusy(event.submitter || event.currentTarget.querySelector("button[type='submit']"), "创建启动...");
+  try {
+    await api("/api/start", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    notify("启动任务已创建", `${payload.name || payload.model} · ${fmtTokens(payload.maxModelLen)} 上下文`, "success");
+    await refreshJobs();
+  } catch (error) {
+    reportActionError("启动任务创建失败", error);
+  } finally {
+    clearBusy();
+  }
+}
+
+function buildLlamaLaunchPayload(formElement) {
+  const form = new FormData(formElement);
   const payload = Object.fromEntries(form.entries());
   payload.gpuDeviceIds = form.getAll("gpuDeviceIds");
   payload.noMmap = form.get("noMmap") === "on";
   payload.textOnlyMode = form.get("textOnlyMode") === "on";
   payload.languageModelOnly = payload.textOnlyMode;
+  payload.instanceMode = payload.instanceMode === "parallel" ? "parallel" : "replace";
+  payload.instanceId = payload.instanceMode === "parallel" ? String(payload.instanceId || payload.name || "").trim() : "";
   payload.networkAccess = String(payload.networkAccess || "local");
   payload.clientPreset = String(payload.clientPreset || "openwebui");
   payload.reasoningFormat = payload.reasoningFormat === "auto"
@@ -3323,17 +3824,26 @@ async function startService(event) {
   payload.maxModelLen = Number(payload.maxModelLen || 8192);
   payload.maxNumSeqs = Number(payload.maxNumSeqs || 4);
   payload.gpuMemoryUtilization = Number(payload.gpuMemoryUtilization || 0.92);
-  await api("/api/start", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  await refreshJobs();
+  payload.mmproj = String(payload.mmproj || "");
+  payload.speculativeMode = String(payload.speculativeMode || "auto");
+  payload.numSpeculativeTokens = Number(payload.numSpeculativeTokens || 3);
+  return payload;
 }
 
 async function handleRunningModelAction(event) {
   const button = event.target.closest("[data-running-action]");
   if (!button) return;
   const action = button.dataset.runningAction;
+  if (action === "unload-model") {
+    const modelLabel = button.dataset.model || "当前模型";
+    const ok = await uiArchitecture.confirmAction({
+      title: "卸载运行中的模型？",
+      body: `<p>将停止 llama.cpp 容器（${escapeHtml(modelLabel)}），正在使用模型的客户端会立即断开。模型文件保留在磁盘上，管理器和其他 Docker 服务不受影响。</p>`,
+      confirmLabel: "卸载模型",
+      danger: true,
+    });
+    if (!ok) return;
+  }
   button.disabled = true;
   const originalHtml = button.innerHTML;
   try {
@@ -3395,7 +3905,12 @@ async function handleDownloadJobAction(event) {
     return;
   }
   if (button.dataset.downloadAction === "cancel") {
-    const ok = window.confirm("取消下载会停止任务，并删除该模型已下载的部分文件。确定继续吗？");
+    const ok = await uiArchitecture.confirmAction({
+      title: "取消下载？",
+      body: `<p>将停止任务并删除该模型已下载的部分文件（${escapeHtml(meta.outputName || meta.model || job.title)}）。</p>`,
+      confirmLabel: "取消下载并清理",
+      danger: true,
+    });
     if (!ok) return;
     const clearBusy = setButtonBusy(button, "取消中...");
     try {
@@ -3573,10 +4088,22 @@ async function handleAuditListAction(event) {
 }
 
 async function stopService() {
-  const result = await api("/api/stop", { method: "POST", body: "{}" });
-  showTestResult({ stopped: result.removed, audit: result.audit });
-  await Promise.all([refreshStatus(), refreshLogs()]);
-  if (state.auditToken) refreshAuditExports().catch(() => {});
+  const ok = await uiArchitecture.confirmAction({
+    title: "停止 llama.cpp 服务？",
+    body: `<p>将停止并移除受管的 llama.cpp 容器，正在使用模型的客户端会立即断开。模型文件保留在磁盘上，其他 Docker 服务不受影响。</p>`,
+    confirmLabel: "停止服务",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    const result = await api("/api/stop", { method: "POST", body: "{}" });
+    notify("llama.cpp 已停止", result.removed ? "容器已移除。" : "没有需要停止的 llama.cpp 容器。", "success");
+    showTestResult({ stopped: result.removed, audit: result.audit });
+    await Promise.all([refreshStatus(), refreshLogs()]);
+    if (state.auditToken) refreshAuditExports().catch(() => {});
+  } catch (error) {
+    reportActionError("停止 llama.cpp 失败", error);
+  }
 }
 
 async function testService(event) {
@@ -3607,17 +4134,38 @@ function deriveName(value) {
   return leaf.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
 }
 
+function syncAccessibleControls() {
+  document.querySelectorAll("button.icon-button[title], button.runnable-toggle[title], button[data-action][title], a[title]").forEach((control) => {
+    const label = control.getAttribute("title");
+    if (label) control.setAttribute("aria-label", label);
+  });
+  document.querySelectorAll("i[data-lucide], svg.lucide").forEach((icon) => {
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("focusable", "false");
+  });
+  document.querySelectorAll('a[target="_blank"]').forEach((link) => {
+    const rel = new Set(String(link.getAttribute("rel") || "").split(/\s+/).filter(Boolean));
+    rel.add("noopener");
+    rel.add("noreferrer");
+    link.setAttribute("rel", Array.from(rel).join(" "));
+  });
+}
+
 function renderIcons() {
   if (window.lucide) {
-    window.lucide.createIcons();
+    window.lucide.createIcons({ attrs: { "aria-hidden": "true", focusable: "false" } });
   } else {
     document.querySelectorAll("i[data-lucide]").forEach((icon) => {
+      icon.setAttribute("aria-hidden", "true");
+      icon.setAttribute("focusable", "false");
       icon.textContent = ICON_FALLBACKS[icon.dataset.lucide] || "";
     });
   }
+  syncAccessibleControls();
   translateVisibleText();
   translateUiAttributes();
 }
 
+window.renderIcons = renderIcons;
 init();
 

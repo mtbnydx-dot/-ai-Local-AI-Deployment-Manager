@@ -16,7 +16,7 @@ function createJobsLedgerStore(options = {}) {
   const writeJsonFile = options.writeJsonFile;
   const maxLogLines = Number(options.maxLogLines || 500);
   const maxPersistedJobs = Number(options.maxPersistedJobs || 100);
-  const saveDelayMs = Number(options.saveDelayMs || 600);
+  const saveDelayMs = Number(options.saveDelayMs || 1500);
   const onError = typeof options.onError === "function" ? options.onError : () => {};
   let writeQueue = Promise.resolve();
   let saveTimer = null;

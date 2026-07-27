@@ -8,6 +8,7 @@
       fmtTokens,
       metrics = defaultMetrics,
       summaryParts = defaultSummaryParts,
+      availability = () => ({ compatible: true, state: "ok", label: "", reason: "" }),
       copy = {},
     } = deps;
 
@@ -18,6 +19,7 @@
       apply: "Apply",
       remove: "Delete",
       noOptions: "No profiles",
+      chooseProfile: "Choose a profile...",
       defaultSummary: "Use common parameter presets here; full management is still in Tools.",
       ...copy,
     };
@@ -40,17 +42,20 @@
 
     function renderProfileCard(profile) {
       const metricItems = metrics(profile).filter(Boolean);
+      const fit = availability(profile) || { compatible: true };
+      const disabled = fit.compatible === false;
       return `
-        <article class="profile-card">
+        <article class="profile-card" data-profile-state="${escapeAttr(fit.state || (disabled ? "fail" : "ok"))}">
           <div>
-            <h4>${escapeHtml(profile.name)}${profile.source === "builtin" ? `<span class="pill">${escapeHtml(text.builtin)}</span>` : ""}</h4>
+            <h4>${escapeHtml(profile.name)}${profile.source === "builtin" ? `<span class="pill">${escapeHtml(text.builtin)}</span>` : ""}${fit.label ? `<span class="profile-fit-badge">${escapeHtml(fit.label)}</span>` : ""}</h4>
             <p>${escapeHtml(profile.description || text.noDescription)}</p>
+            ${fit.reason ? `<small class="profile-fit-reason">${escapeHtml(fit.reason)}</small>` : ""}
             <div class="running-meta">
               ${metricItems.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
             </div>
           </div>
           <div class="job-actions">
-            <button class="job-action-button primary" type="button" data-profile-action="apply" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(text.apply)}</button>
+            <button class="job-action-button primary" type="button" data-profile-action="apply" data-profile-id="${escapeAttr(profile.id)}" ${disabled ? `disabled title="${escapeAttr(fit.reason || "当前硬件不满足该方案")}"` : ""}>${escapeHtml(text.apply)}</button>
             ${profile.source !== "builtin" ? `<button class="job-action-button danger" type="button" data-profile-action="delete" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(text.remove)}</button>` : ""}
           </div>
         </article>
@@ -66,10 +71,19 @@
         renderServiceProfileSummary();
         return;
       }
-      select.innerHTML = profiles.map((profile) => `
-        <option value="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}${profile.source === "builtin" ? ` · ${escapeHtml(text.builtin)}` : ""}</option>
-      `).join("");
-      if (profiles.some((profile) => profile.id === current)) select.value = current;
+      select.innerHTML = `<option value="">${escapeHtml(text.chooseProfile)}</option>` + profiles.map((profile) => {
+        const fit = availability(profile) || { compatible: true };
+        return `
+        <option value="${escapeAttr(profile.id)}" ${fit.compatible === false ? "disabled" : ""}>${escapeHtml(profile.name)}${profile.source === "builtin" ? ` · ${escapeHtml(text.builtin)}` : ""}${fit.label ? ` · ${escapeHtml(fit.label)}` : ""}</option>
+      `;
+      }).join("");
+      const currentProfile = profiles.find((profile) => profile.id === current);
+      const currentFit = currentProfile ? availability(currentProfile) : null;
+      if (currentProfile && currentFit?.compatible !== false) {
+        select.value = current;
+      } else {
+        select.value = "";
+      }
       renderServiceProfileSummary();
     }
 
@@ -82,7 +96,8 @@
         summary.textContent = text.defaultSummary;
         return;
       }
-      summary.textContent = summaryParts(profile).filter(Boolean).join(" · ");
+      const fit = availability(profile) || { compatible: true };
+      summary.textContent = [...summaryParts(profile), fit.reason].filter(Boolean).join(" · ");
     }
 
     function defaultMetrics(profile) {

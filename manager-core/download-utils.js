@@ -104,13 +104,41 @@ function selectDownloadSiblings(siblings, precision) {
   };
 }
 
-function buildDownloadEnv(hfCache, env = process.env) {
-  return {
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+];
+const PYTHON_DIRECT_DNS_PATH = path.join(__dirname, "python-direct-dns");
+
+function buildDownloadEnv(hfCache, env = process.env, options = {}) {
+  const downloadEnv = {
     ...env,
     HF_HOME: hfCache,
     HUGGINGFACE_HUB_CACHE: path.join(hfCache, "hub"),
     MODELSCOPE_CACHE: path.join(hfCache, "modelscope"),
+    PYTHONUTF8: "1",
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUNBUFFERED: "1",
+    NO_COLOR: "1",
+    CLICOLOR: "0",
+    CLICOLOR_FORCE: "0",
+    TERM: "dumb",
+    HF_HUB_DISABLE_PROGRESS_BARS: "1",
+    TQDM_DISABLE: "1",
   };
+  if (options.source === "modelscope") {
+    for (const key of PROXY_ENV_KEYS) delete downloadEnv[key];
+    downloadEnv.NO_PROXY = "*";
+    downloadEnv.no_proxy = "*";
+    downloadEnv.MODELSCOPE_DIRECT_DNS = "1";
+    downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS = downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS || "223.5.5.5,119.29.29.29,1.1.1.1";
+    downloadEnv.PYTHONPATH = [PYTHON_DIRECT_DNS_PATH, downloadEnv.PYTHONPATH].filter(Boolean).join(path.delimiter);
+  }
+  return downloadEnv;
 }
 
 function createDownloadCommandBuilder(options = {}) {
@@ -152,7 +180,7 @@ function createDownloadCommandBuilder(options = {}) {
       command: download.command,
       args: download.args,
       options: {
-        env: buildDownloadEnv(hfCache, env),
+        env: buildDownloadEnv(hfCache, env, { source }),
         title: job.title || `Download ${model} (${download.label})`,
         meta: {
           ...meta,

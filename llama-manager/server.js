@@ -59,6 +59,7 @@ const {
   normalizeDownloadModelReference,
   deriveName,
   createDockerRuntime,
+  isContainerNameConflictError,
 } = core;
 let DatabaseSync = null;
 try {
@@ -70,11 +71,12 @@ const PORT = Number(process.env.LLAMA_MANAGER_PORT || 5178);
 const HOST = process.env.LLAMA_MANAGER_HOST || "127.0.0.1";
 const SHARED_PUBLIC_JS_DIR = path.join(__dirname, "..", "shared-public", "js");
 const ALLOW_REMOTE_MANAGEMENT = process.env.LLAMA_MANAGER_ALLOW_REMOTE === "1";
-const DEFAULT_AI_ROOT = process.env.AI_ROOT || (process.platform === "win32" ? "D:\\AI" : path.join(os.homedir(), "AI"));
-const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || (process.platform === "win32" ? "D:\\DevTools" : "");
+const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
+const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 const DEFAULT_LLAMA_IMAGE = process.env.LLAMA_IMAGE_DIGEST || "ghcr.io/ggml-org/llama.cpp@sha256:e8d36f4dc2a72a1df323748f6219c9dd11f662f7cb3b06a6b2916c9bf3866d89";
 const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
+const MANAGER_APIKEY_LABEL_KEY = "ai.manager.api-key";
 
 const CONFIG = {
   dockerExe: firstExisting([
@@ -109,6 +111,8 @@ const CONFIG = {
   startupTimeoutMs: positiveTimeoutMs(process.env.LLAMA_STARTUP_TIMEOUT_MS, 20 * 60 * 1000),
   pidFile: path.join(__dirname, ".manager.pid"),
   statsLedger: path.join(__dirname, "logs", "stats-ledger.json"),
+  metricsHistory: path.join(__dirname, "logs", "metrics-history.json"),
+  managerBackups: path.join(__dirname, "logs", "backups"),
   jobsLedger: path.join(__dirname, "logs", "jobs-ledger.json"),
   downloadSettings: path.join(__dirname, "logs", "download-settings.json"),
   claudeCompressionSettings: path.join(__dirname, "logs", "claude-context-compression.json"),
@@ -187,7 +191,7 @@ const serviceExposureStore = core.createServiceExposureSettingsStore({
   file: CONFIG.serviceExposureSettings,
   readJsonFile,
   writeJsonFile,
-  normalizeOptions: { allowExposeOpenCode: false, exposeOpenCodeDefault: false },
+  normalizeOptions: { allowExposeOpenCode: true, exposeOpenCodeDefault: true },
 });
 const {
   getServiceClientsLedger,
@@ -226,16 +230,19 @@ const {
 const {
   buildLlamaRuntimeCommand,
   formatDockerPublishArgs,
+  redactDockerArgs,
 } = createLlamaRuntimeCommandBuilder({
   CONFIG,
   MANAGER_LABEL_KEY,
   MANAGER_ENGINE_LABEL_KEY,
+  MANAGER_APIKEY_LABEL_KEY,
   appendLog,
   dockerGpuArg,
   dockerPublishArgs,
   publishArgsToDockerRunArgs,
   normalizeGpuIds,
   normalizeDefaultTrueBoolean,
+  windowsPathToContainerPath,
   resolveLaunchModel,
 });
 
@@ -244,7 +251,21 @@ const progressTimers = new Map();
 const statsSamples = new Map();
 const serviceRateBuckets = new Map();
 const serviceConcurrencyBuckets = new Map();
+const RUNTIME_INSTANCES_CACHE_MS = Math.max(0, Number(process.env.LLAMA_RUNTIME_INSTANCES_CACHE_MS || 5000));
+let runtimeInstancesCache = { value: null, expiresAt: 0, promise: null };
 let automationMonitorTimer = null;
+// 启动任务串行化：同一管理器内同一时刻只允许一个 serve 启动流程在跑，
+// 避免并发 docker run 竞争同一个容器名（llama-local）造成 "container name already in use"。
+// 第二个启动请求会排队等待前一个完成（成功或失败）后再执行，保留"启动即替换"语义。
+let serveChain = Promise.resolve();
+let serveBusy = false;
+function serializeServeJob(work) {
+  const queued = serveBusy;
+  serveBusy = true;
+  const result = serveChain.then(() => work());
+  serveChain = result.then(() => { serveBusy = false; }, () => { serveBusy = false; });
+  return { result, queued };
+}
 let runtimeActivity = {
   initialized: false,
   lastActivityAt: null,
@@ -254,8 +275,8 @@ let runtimeActivity = {
   lastTokenCount: null,
   unloading: false,
 };
-const MAX_LOG_LINES = 500;
-const MAX_PERSISTED_JOBS = 100;
+const MAX_LOG_LINES = 200;
+const MAX_PERSISTED_JOBS = 60;
 const jobsLedgerStore = core.createJobsLedgerStore({
   jobs,
   file: CONFIG.jobsLedger,
@@ -285,6 +306,7 @@ const {
   loadStatsLedger,
   updateStatsLedger,
   recordClaudeBridgeUsage,
+  flushClaudeUsageWrites,
   waitForStatsLedgerWrites,
 } = statsLedgerStore;
 const AUDIT_PASSWORD_FILE = process.env.AI_AUDIT_PASSWORD_FILE || path.join(CONFIG.auditRoot, "audit-admin-password.txt");
@@ -391,11 +413,37 @@ const serviceGatewayAccessLogStore = core.createServiceGatewayAccessLogStore({
 const {
   appendServiceGatewayAccessLog,
   collectExternalAccessStats,
+  collectRecentAccessStats,
+  searchServiceGatewayAccessLogs,
+  exportServiceGatewayAccessLogs,
 } = serviceGatewayAccessLogStore;
+
+const metricsHistoryStore = core.createMetricsHistoryStore({
+  file: CONFIG.metricsHistory,
+  engine: "llama",
+  readJsonFile,
+  writeJsonFile,
+});
+
+const managerBackupStore = core.createManagerBackupStore({
+  managerId: CONFIG.managerId,
+  backupDir: CONFIG.managerBackups,
+  readJsonFile,
+  writeJsonFile,
+  files: {
+    launchProfiles: CONFIG.launchProfiles,
+    downloadSettings: CONFIG.downloadSettings,
+    modelNotes: CONFIG.modelNotes,
+    automationSettings: CONFIG.automationSettings,
+    serviceExposureSettings: CONFIG.serviceExposureSettings,
+    serviceClients: CONFIG.serviceClients,
+    claudeCompressionSettings: CONFIG.claudeCompressionSettings,
+  },
+});
 
 const serviceGatewayMiddleware = core.createServiceGatewayMiddleware({
   gatewayName: "llama-manager",
-  supportedKinds: ["openai", "claude"],
+  supportedKinds: ["openai", "claude", "opencode"],
   getServiceExposureSettings,
   getServiceClientsLedger,
   resolveServiceClientForApiKey,
@@ -409,7 +457,7 @@ const { managerSecurityGuard } = core.createManagerSecurityGuard({
   host: HOST,
   getLanAddress,
   isLocalRequest,
-  gatewayKinds: ["openai", "claude"],
+  gatewayKinds: ["openai", "claude", "opencode"],
   allowRemoteManagement: ALLOW_REMOTE_MANAGEMENT,
   blockRemoteReads: false,
   remoteManagementError: "管理操作默认仅允许本机访问。如需远程管理，请设置环境变量 LLAMA_MANAGER_ALLOW_REMOTE=1。",
@@ -429,8 +477,8 @@ const managerLifecycle = core.createManagerLifecycle({
   },
   afterPreparePid: async () => {
     await loadJobsLedgerIntoMemory();
-    const downloadSettings = await readJsonFile(CONFIG.downloadSettings, { queueMode: false });
-    downloadQueueMode = Boolean(downloadSettings?.queueMode);
+    const downloadSettings = await readJsonFile(CONFIG.downloadSettings, { queueMode: false, autoRetryCount: 2, autoRetryDelaySeconds: 10 });
+    downloadJobController.applyDownloadSettings(downloadSettings || {});
   },
   beforeListen: () => startAutomationMonitor(),
   onShutdown: async () => {
@@ -439,6 +487,7 @@ const managerLifecycle = core.createManagerLifecycle({
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
+    await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
     await Promise.allSettled([
       waitForStatsLedgerWrites(),
       jobsLedgerStore.waitForJobsLedgerWrites(),
@@ -457,9 +506,27 @@ const {
 core.registerOpenAiBaseUrlHintRoutes(app, { openAiGatewayPath: "/serve/v1" });
 app.use(managerSecurityGuard);
 app.use(express.json({ limit: "32mb" }));
-app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude"], serviceGatewayMiddleware);
+app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude", "/opencode/v1"], serviceGatewayMiddleware);
 app.use("/shared-js", express.static(SHARED_PUBLIC_JS_DIR));
 app.use(express.static(path.join(__dirname, "public")));
+
+const operationalSnapshotStore = core.createManagerOperationalSnapshotStore({
+  ttlMs: Number(process.env.MANAGER_OPERATIONAL_SNAPSHOT_MS || 10000),
+  containerName: CONFIG.containerName,
+  image: CONFIG.image,
+  getDockerVersion,
+  getGpuStatus,
+  getContainerStatus,
+  getImageStatus,
+  getRunningModelSummary: (container, gpu) => getRunningModelSummary(container, gpu).catch(() => ({
+    container,
+    endpoint: getContainerEndpoint(container),
+    servedModels: [],
+    models: [],
+  })),
+  getManagerResourceSummary,
+});
+const getOperationalSnapshot = (request) => operationalSnapshotStore.getSnapshot(request);
 
 core.registerManagerRoutes(app, {
   config: CONFIG,
@@ -472,18 +539,20 @@ core.registerManagerRoutes(app, {
   shutdownManager,
   exitProcessOnShutdownError: require.main === module,
   buildManagerHealth,
-  getDockerVersion,
-  getGpuStatus,
-  getContainerStatus,
-  getImageStatus,
-  getRunningModelSummary,
-  getManagerResourceSummary,
+  getDockerVersion: async () => (await getOperationalSnapshot()).docker,
+  getGpuStatus: async () => (await getOperationalSnapshot()).gpu,
+  getContainerStatus: async () => (await getOperationalSnapshot()).container,
+  getImageStatus: async () => (await getOperationalSnapshot()).image,
+  getRunningModelSummary: async () => (await getOperationalSnapshot()).runtime,
+  getManagerResourceSummary: async () => (await getOperationalSnapshot()).resources,
   buildMemoryEstimate: buildLlamaMemoryEstimate,
   buildStatusExtras: ({ gpu }) => ({
     gpuPlan: buildLlamaGpuPlan(gpu, [], 0.92, "layer"),
   }),
   collectStats,
   collectExternalAccessStats,
+  searchAccessLogs: searchServiceGatewayAccessLogs,
+  exportAccessLogs: exportServiceGatewayAccessLogs,
   buildExternalAccessOptions: (query) => ({
     limit: query.limit,
     maxLines: query.maxLines,
@@ -491,6 +560,7 @@ core.registerManagerRoutes(app, {
   formatExternalAccessError: (error) => ({ ok: false, error: error.message }),
   getClaudeCompressionSettings,
   saveClaudeCompressionSettings,
+  ...managerBackupStore,
 });
 
 core.registerServicePolicyRoutes(app, {
@@ -520,7 +590,8 @@ const openAiGatewayHandlers = core.createOpenAiGatewayHandlers({
   aliases: OPENAI_GATEWAY_MODEL_ALIASES,
   owner: "llama-manager",
   getRunningModelSummary,
-  getUpstreamHeaders: (_runtime, headers = {}) => headers,
+  listRunningModelSummaries: getRunningModelSummaries,
+  getUpstreamHeaders: (runtime, headers = {}) => llamaAuthHeaders(runtime.llamaApiKey, headers),
   serviceClientAllowsModel: core.serviceClientAllowsModel,
   recordUsage: recordServiceClientGatewayUsage,
   upstreamErrorMessage,
@@ -535,6 +606,7 @@ const benchmarkRunner = core.createBenchmarkRunner({
   runtimeLabel: "llama.cpp",
   requestDetail: "Sending chat completion request to local llama.cpp.",
   getRunningModelSummary,
+  getHeaders: (runtime) => llamaAuthHeaders(runtime.llamaApiKey),
   upstreamErrorMessage,
   appendLog,
   setJobProgress,
@@ -545,8 +617,17 @@ const {
   runBenchmarkJob,
 } = benchmarkRunner;
 app.get("/serve/v1/models", openAiGatewayHandlers.handleModels);
+app.get("/serve/v1/props", openAiGatewayHandlers.handleProps);
 app.post("/serve/v1/chat/completions", openAiGatewayHandlers.handleChatCompletions);
 app.post("/serve/v1/completions", openAiGatewayHandlers.handleCompletions);
+app.post("/serve/v1/responses", openAiGatewayHandlers.handleResponses);
+app.post("/serve/v1/embeddings", openAiGatewayHandlers.handleEmbeddings);
+app.post("/serve/v1/pooling", openAiGatewayHandlers.handlePooling);
+app.post("/serve/v1/score", openAiGatewayHandlers.handleScore);
+app.get("/opencode/v1/models", openAiGatewayHandlers.handleModels);
+app.post("/opencode/v1/chat/completions", openAiGatewayHandlers.handleChatCompletions);
+app.post("/serve/v1/rerank", openAiGatewayHandlers.handleRerank);
+app.post("/serve/v1/classify", openAiGatewayHandlers.handleClassify);
 
 core.registerModelRoutes(app, {
   listModels: listModelCollections,
@@ -576,7 +657,7 @@ async function startDownloadRequest(body = {}) {
   const localDir = path.join(CONFIG.modelsRoot, outputName);
   await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, localDir);
 
-  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env);
+  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, { source });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
   const download = buildDownloadCommand(source, model, localDir, { precision });
@@ -592,6 +673,7 @@ async function startDownloadRequest(body = {}) {
       localDir,
       source,
       precision,
+      priority: core.normalizeDownloadPriority(body.priority),
       expectedBytes: expected?.bytes || null,
       expectedFiles: expected?.fileCount || null,
     },
@@ -603,7 +685,7 @@ async function startDownloadRequest(body = {}) {
   } else if (expected?.error) {
     appendLog(job, `Download size estimate unavailable: ${expected.error}`);
   }
-  if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI when available.");
+  if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI with proxy env disabled.");
   if (download.includePatterns?.length) appendLog(job, `Download include filter: ${download.includePatterns.join(", ")}`);
   return { job };
 }
@@ -721,6 +803,9 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   createJob,
   runStartJob,
   failJob,
+  normalizeRuntimeInstanceMode: core.normalizeRuntimeInstanceMode,
+  normalizeRuntimeInstanceId: core.normalizeRuntimeInstanceId,
+  buildRuntimeContainerName: core.buildRuntimeContainerName,
 });
 
 core.registerRuntimeRoutes(app, {
@@ -730,6 +815,8 @@ core.registerRuntimeRoutes(app, {
   unloadRunningModel: unloadRunningModelRequest,
   readRuntimeLogs: readRuntimeLogsRequest,
   testRuntimeCompletion: testRuntimeCompletionRequest,
+  listRuntimeInstances: listRuntimeInstancesRequest,
+  stopRuntimeInstance: stopRuntimeInstanceRequest,
 });
 
 core.registerAuditRoutes(app, {
@@ -863,6 +950,9 @@ function normalizeLaunchConfig(config = {}) {
     tensorSplit: cleanOptionalLaunchArg(config.tensorSplit),
     mainGpu: Number(config.mainGpu || 0),
     noMmap: Boolean(config.noMmap),
+    mmproj: cleanOptionalLaunchArg(config.mmproj),
+    speculativeMode: String(config.speculativeMode || "auto"),
+    numSpeculativeTokens: positiveInt(config.numSpeculativeTokens, 3),
   };
 }
 
@@ -911,12 +1001,13 @@ async function checkModelCompatibility(input = {}) {
     }
     if (local.stat?.isDirectory()) {
       if (local.ggufFiles.length) {
-        findings.push(finding("ok", "检测到 GGUF", `${local.ggufFiles.length} 个 GGUF 文件，启动时会自动选择最大文件。`));
+        findings.push(finding("ok", "检测到 GGUF", `${local.ggufFiles.length} 个 GGUF 文件，启动时会排除 mmproj 并正确选择单文件或首个分片。`));
       } else {
         findings.push(finding("fail", "缺少 GGUF 文件", "目录内没有 .gguf；llama.cpp 无法直接加载 safetensors 目录。"));
       }
       if (local.ggufFiles.length > 1) {
-        findings.push(finding("warn", "多个 GGUF", `会优先选择最大文件：${path.basename(local.ggufFiles[0].path)}`));
+        const selected = chooseGgufFile(local.ggufFiles);
+        findings.push(finding("info", "多个 GGUF", `主模型文件：${path.basename(selected.path)}`));
       }
     }
   } else if (path.isAbsolute(model)) {
@@ -942,7 +1033,15 @@ async function checkModelCompatibility(input = {}) {
     findings.push(finding("ok", "量化权重", "GGUF 权重量化已经包含在文件中，启动时不用再设置 vLLM 那类 quantization。"));
   }
   if (isLikelyMultimodalModel(model)) {
-    findings.push(finding("info", "Text-only mode", "llama.cpp only processes images when an mmproj/projector is supplied. Text-only mode keeps this launch as pure text/tool-calling and avoids projector VRAM."));
+    const projector = local?.ggufFiles?.find((item) => /(?:^|[\\/])mmproj[^\\/]*\.gguf$/i.test(String(item.path || item.name || "")));
+    findings.push(finding(projector || input.mmproj || !local ? "ok" : "warn", "Multimodal projector", projector
+      ? `已检测到 ${path.basename(projector.path)}；关闭仅文本模式后会自动加载。`
+      : input.mmproj ? "会使用显式配置的 mmproj。" : "本地目录未检测到 mmproj；多模态启动前需要补充 projector。"));
+  }
+  recommendations.speculativeMode = /(?:^|[-_/])mtp(?:$|[-_/])/i.test(model) ? "auto" : "off";
+  recommendations.numSpeculativeTokens = 3;
+  if (Number(input.maxNumSeqs || 1) > 1) {
+    findings.push(finding("info", "llama.cpp 上下文预算", `每槽 ${Number(input.maxModelLen || 32768).toLocaleString()} × ${Number(input.maxNumSeqs)} 槽；启动时会把 --ctx-size 设为总 KV 预算。`));
   }
   if (Number(input.maxModelLen || 0) >= 131072 && !/q4|q5|q8/i.test(String(input.cacheTypeK || input.cacheTypeV || ""))) {
     findings.push(finding("warn", "长上下文 KV 显存", "128K 以上建议 K/V cache 用 q8_0、q5_1 或 q4_0，并把并行槽数降到 1。"));
@@ -1036,18 +1135,11 @@ const SERVICE_EXPOSURE_CHECK_OPTIONS = {
 };
 
 async function buildServiceExposurePayload(settings) {
-  const [docker, gpu, container, clientsLedger] = await Promise.all([
-    getDockerVersion().catch((error) => ({ ok: false, text: "", error: error.message })),
-    getGpuStatus().catch(() => ({ ok: false })),
-    getContainerStatus(CONFIG.containerName),
+  const [snapshot, clientsLedger] = await Promise.all([
+    getOperationalSnapshot(),
     getServiceClientsLedger().catch(() => ({ clients: [] })),
   ]);
-  const runtime = await getRunningModelSummary(container, gpu).catch(() => ({
-    container,
-    endpoint: getContainerEndpoint(container),
-    servedModels: [],
-    models: [],
-  }));
+  const { docker, container, runtime } = snapshot;
   const endpoint = runtime.endpoint || getContainerEndpoint(container);
   return core.buildServiceExposurePayloadSnapshot(settings, {
     docker,
@@ -1063,7 +1155,8 @@ async function buildServiceExposurePayload(settings) {
     defaultServicePort: CONFIG.defaultPort,
     claudeBasePath: "/claude",
     claudeMessagesPath: "/claude/v1/messages",
-    runtimeApiKeySupported: false,
+    openCodeBasePath: "/opencode/v1",
+    runtimeApiKeySupported: true,
     checkOptions: SERVICE_EXPOSURE_CHECK_OPTIONS,
   });
 }
@@ -1079,9 +1172,25 @@ function buildServiceExposureChecks(settings, context) {
 function startAutomationMonitor() {
   if (automationMonitorTimer) return;
   automationMonitorTimer = setInterval(() => {
+    sampleMetricsHistory().catch((error) => console.warn(`metrics history sample failed: ${error.message}`));
     inspectAutomationRules().catch((error) => console.warn(`automation monitor failed: ${error.message}`));
   }, 60 * 1000);
   automationMonitorTimer.unref?.();
+  sampleMetricsHistory().catch((error) => console.warn(`initial metrics history sample failed: ${error.message}`));
+}
+
+async function sampleMetricsHistory() {
+  const [gpu, container] = await Promise.all([getGpuStatus(), getContainerStatus(CONFIG.containerName)]);
+  if (!container?.running) return null;
+  const live = await collectVllmMetricsSummary(container, gpu, { updateSamples: false });
+  return metricsHistoryStore.recordMetricsHistory({
+    updatedAt: new Date().toISOString(),
+    container,
+    gpu,
+    live,
+    totals: live.totals,
+    models: live.models,
+  });
 }
 
 async function inspectAutomationRules() {
@@ -1146,7 +1255,11 @@ async function verifyDownloadedModel(input = {}) {
 }
 
 async function buildConnectionGuide() {
-  const [gpu, container] = await Promise.all([getGpuStatus(), getContainerStatus(CONFIG.containerName)]);
+  const [gpu, container, exposureSettings] = await Promise.all([
+    getGpuStatus(),
+    getContainerStatus(CONFIG.containerName),
+    getServiceExposureSettings(),
+  ]);
   const runtime = await getRunningModelSummary(container, gpu).catch(() => null);
   const endpoint = runtime?.endpoint || getContainerEndpoint(container);
   const managerLocal = `http://127.0.0.1:${PORT}`;
@@ -1157,6 +1270,8 @@ async function buildConnectionGuide() {
     managerLocal,
     managerLan,
     claudeModelAliases: CLAUDE_MODEL_ALIASES,
+    openAiModelAliases: OPENAI_GATEWAY_MODEL_ALIASES,
+    apiKeyRequired: exposureSettings.enabled !== false && exposureSettings.requireApiKey === true,
     claude: { modelAlias: CLAUDE_MODEL_ALIASES[0] },
   });
 }
@@ -1193,6 +1308,7 @@ async function handleClaudeModels(_req, res) {
     }
     const response = await fetch(`http://127.0.0.1:${runtime.endpoint.port}/v1/models`, {
       signal: AbortSignal.timeout(5000),
+      headers: llamaAuthHeaders(runtime.llamaApiKey),
     });
     const text = await response.text();
     const data = parseJsonSafe(text, {});
@@ -1255,17 +1371,23 @@ async function handleClaudeMessages(req, res) {
     }
 
     const compressionSettings = await getClaudeCompressionSettings();
-    const compression = applyClaudeContextCompression(body, runtime, model, compressionSettings);
+    const compression = await applyClaudeContextCompression(body, runtime, model, compressionSettings);
     const effectiveBody = compression.body;
     const stream = body.stream === true;
     const toolSchemaCount = Array.isArray(body.tools) ? body.tools.length : 0;
     const openAiBody = buildOpenAiBodyFromClaude(effectiveBody, model);
+    const upstreamAbort = new AbortController();
+    if (stream) {
+      res.once("close", () => {
+        if (!res.writableEnded) upstreamAbort.abort();
+      });
+    }
     const fetchOptions = {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: llamaAuthHeaders(runtime.llamaApiKey, { "content-type": "application/json" }),
       body: JSON.stringify(openAiBody),
+      signal: stream ? upstreamAbort.signal : AbortSignal.timeout(Number(req.serviceGateway?.timeoutMs || 120000)),
     };
-    if (!stream) fetchOptions.signal = AbortSignal.timeout(Number(req.serviceGateway?.timeoutMs || 120000));
     const upstream = await fetch(`http://127.0.0.1:${runtime.endpoint.port}/v1/chat/completions`, fetchOptions);
 
     if (stream) {
@@ -1337,7 +1459,7 @@ function resolveClaudeRequestedModel(requestedModel, runtime) {
   if (!requestedModel) return served[0];
   if (served.includes(requestedModel)) return requestedModel;
   if (getClaudeModelAliases(runtime).includes(requestedModel) || requestedModel.startsWith("claude-")) return served[0];
-  return requestedModel;
+  return served[0];
 }
 
 function getClaudeModelAliases(runtime, models = []) {
@@ -1603,6 +1725,7 @@ async function listManagedContainers() {
       ports: info.Ports || "",
       manager: labels[MANAGER_LABEL_KEY] || "",
       engine: labels[MANAGER_ENGINE_LABEL_KEY] || "",
+      labels,
     });
   }
   return containers.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
@@ -1619,12 +1742,24 @@ async function removeManagedContainer(reason = "replace") {
     throw error;
   }
   await docker(["rm", "-f", CONFIG.containerName]);
+  clearRuntimeInstancesCache();
   return { removed: true, containerName: CONFIG.containerName, owner: owner || null, reason };
 }
 
-async function getServedModels(port) {
+function getLlamaApiKey(container) {
+  return String(container?.labels?.[MANAGER_APIKEY_LABEL_KEY] || "");
+}
+
+function llamaAuthHeaders(apiKey, base = {}) {
+  return apiKey ? { ...base, authorization: `Bearer ${apiKey}` } : base;
+}
+
+async function getServedModels(port, apiKey = "") {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/v1/models`, { signal: AbortSignal.timeout(2500) });
+    const response = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+      signal: AbortSignal.timeout(2500),
+      headers: llamaAuthHeaders(apiKey),
+    });
     if (!response.ok) return [];
     const data = await response.json();
     return Array.isArray(data.data) ? data.data : [];
@@ -1633,16 +1768,18 @@ async function getServedModels(port) {
   }
 }
 
-async function getRunningModelSummary(container = null, gpu = null) {
+async function getRunningModelSummary(container = null, gpu = null, options = {}) {
   const activeContainer = container || await getContainerStatus(CONFIG.containerName);
   const endpoint = getContainerEndpoint(activeContainer);
-  const servedModels = activeContainer.running ? await getServedModels(endpoint.port) : [];
-  const runtimeStats = activeContainer.running
+  const llamaApiKey = getLlamaApiKey(activeContainer);
+  const servedModels = activeContainer.running ? await getServedModels(endpoint.port, llamaApiKey) : [];
+  const includeMetrics = options.includeMetrics !== false;
+  const runtimeStats = activeContainer.running && includeMetrics
     ? await collectVllmMetricsSummary(activeContainer, gpu, { updateSamples: false }).catch(() => null)
     : null;
-  const historicalStats = await loadStatsLedger()
-    .then((ledger) => core.statsLedgerToSummary(ledger))
-    .catch(() => null);
+  const historicalStats = includeMetrics
+    ? await loadStatsLedger().then((ledger) => core.statsLedgerToSummary(ledger)).catch(() => null)
+    : null;
   const gpuText = gpu?.ok
     ? `${gpu.usedMb}/${gpu.totalMb} MB (${gpu.util}%)`
     : "";
@@ -1681,10 +1818,96 @@ async function getRunningModelSummary(container = null, gpu = null) {
     endpoint,
     servedModels,
     models,
+    llamaApiKey,
+    apiKeyRequired: Boolean(llamaApiKey),
     canUnload: activeContainer.exists,
     unloadStopsContainer: true,
     note: "llama.cpp keeps one model resident in the server process. Unloading from this manager stops the managed llama.cpp container, but leaves the manager and other Docker services alone.",
   };
+}
+
+function clearRuntimeInstancesCache() {
+  runtimeInstancesCache = { value: null, expiresAt: 0, promise: null };
+}
+
+async function getRunningModelSummaries() {
+  const now = Date.now();
+  if (runtimeInstancesCache.value && runtimeInstancesCache.expiresAt > now) return runtimeInstancesCache.value;
+  if (runtimeInstancesCache.promise) return runtimeInstancesCache.promise;
+  runtimeInstancesCache.promise = Promise.resolve().then(async () => {
+    const managed = (await listManagedContainers()).filter((container) => (
+      container.manager === CONFIG.managerId && container.engine === "llama"
+    ));
+    const primary = await getContainerStatus(CONFIG.containerName);
+    const primaryOwner = primary.labels?.[MANAGER_LABEL_KEY] || "";
+    if (primary.exists && (!primaryOwner || primaryOwner === CONFIG.managerId) && !managed.some((item) => item.name === CONFIG.containerName)) {
+      managed.unshift(primary);
+    }
+    const summaries = await Promise.all(managed.map(async (container) => {
+      const status = await getContainerStatus(container.name);
+      return getRunningModelSummary(status, null, { includeMetrics: false });
+    }));
+    summaries.sort((a, b) => Number(b.container?.name === CONFIG.containerName) - Number(a.container?.name === CONFIG.containerName));
+    runtimeInstancesCache.value = summaries;
+    runtimeInstancesCache.expiresAt = Date.now() + RUNTIME_INSTANCES_CACHE_MS;
+    return summaries;
+  }).finally(() => {
+    runtimeInstancesCache.promise = null;
+  });
+  return runtimeInstancesCache.promise;
+}
+
+async function listRuntimeInstancesRequest() {
+  const summaries = await getRunningModelSummaries();
+  return {
+    ok: true,
+    primaryContainer: CONFIG.containerName,
+    supportsParallel: true,
+    instances: summaries.map((runtime) => {
+      const container = runtime.container || {};
+      const labels = container.labels || {};
+      const primary = container.name === CONFIG.containerName;
+      return {
+        id: primary ? "primary" : labels["ai.manager.instance"] || container.name,
+        instanceMode: primary ? "replace" : labels["ai.manager.instance-mode"] || "parallel",
+        primary,
+        containerName: container.name,
+        running: Boolean(container.running),
+        status: container.status || "",
+        image: container.image || "",
+        port: runtime.endpoint?.port || Number(labels["ai.manager.port"] || 0),
+        localBaseUrl: runtime.endpoint?.localUrl || null,
+        lanBaseUrl: runtime.endpoint?.lanUrl || null,
+        models: (runtime.servedModels || []).map((model) => ({
+          id: model.id,
+          root: model.root || "",
+          maxModelLen: model.max_model_len || model.maxModelLen || null,
+        })),
+      };
+    }),
+  };
+}
+
+async function stopRuntimeInstanceRequest({ id } = {}) {
+  const requested = decodeURIComponent(String(id || ""));
+  if (requested === "primary") {
+    const existing = await getContainerStatus(CONFIG.containerName);
+    if (!existing.exists) throw Object.assign(new Error("Runtime instance not found."), { status: 404 });
+    await snapshotCurrentStats("before-stop").catch(() => {});
+    await removeManagedContainer("instance-stop");
+    return { ok: true, id: requested, containerName: CONFIG.containerName, stopped: true };
+  }
+  const managed = (await listManagedContainers()).filter((container) => (
+    container.manager === CONFIG.managerId && container.engine === "llama"
+  ));
+  const target = managed.find((container) => (
+    container.name === requested
+    || container.labels?.["ai.manager.instance"] === requested
+  ));
+  if (!target) throw Object.assign(new Error("Runtime instance not found."), { status: 404 });
+  await docker(["rm", "-f", target.name]);
+  clearRuntimeInstancesCache();
+  return { ok: true, id: requested, containerName: target.name, stopped: true };
 }
 
 function getContainerEndpoint(container) {
@@ -1735,7 +1958,12 @@ async function collectStats() {
   const summary = core.mergeLiveAndStatsLedger(liveSummary, ledger);
   const costComparison = PRICE_PROFILES.map((profile) => calculateCost(summary.totals.tokens, profile));
   const clientUsage = buildClientUsageSummary(summary.totals, ledger);
-  return {
+  const recentAccess = await collectRecentAccessStats({
+    windowMs: 60 * 60 * 1000,
+    limit: 30,
+    maxLines: 5000,
+  }).catch((error) => ({ ok: false, error: error.message, sources: [] }));
+  const response = {
     ok: true,
     updatedAt: new Date().toISOString(),
     container,
@@ -1751,8 +1979,12 @@ async function collectStats() {
     live: liveSummary,
     historical: core.statsLedgerToSummary(ledger),
     clientUsage,
+    recentAccess,
     costComparison,
   };
+  await metricsHistoryStore.recordMetricsHistory(response).catch(() => {});
+  response.trends = await metricsHistoryStore.getMetricsHistory({ hours: 24 }).catch(() => ({ hours: 24, samples: [] }));
+  return response;
 }
 
 async function snapshotCurrentStats(reason = "snapshot") {
@@ -1768,6 +2000,7 @@ async function snapshotCurrentStats(reason = "snapshot") {
 
 async function collectVllmMetricsSummary(container, gpu, options = {}) {
   const endpoint = getContainerEndpoint(container);
+  const llamaApiKey = getLlamaApiKey(container);
   const empty = core.emptyStatsSummary(container, endpoint, {
     stoppedNote: "llama.cpp container is not running.",
     missingNote: "No managed llama.cpp container is running.",
@@ -1776,14 +2009,17 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
 
   let metricsText = "";
   try {
-    const response = await fetch(`http://127.0.0.1:${endpoint.port}/metrics`, { signal: AbortSignal.timeout(4000) });
+    const response = await fetch(`http://127.0.0.1:${endpoint.port}/metrics`, {
+      signal: AbortSignal.timeout(4000),
+      headers: llamaAuthHeaders(llamaApiKey),
+    });
     if (!response.ok) throw new Error(`metrics returned ${response.status}`);
     metricsText = await response.text();
   } catch (error) {
     return { ...empty, error: error.message };
   }
 
-  const servedModels = await getServedModels(endpoint.port).catch(() => []);
+  const servedModels = await getServedModels(endpoint.port, llamaApiKey).catch(() => []);
   const factModelHints = Array.from(new Set(servedModels
     .flatMap((model) => [model.id, model.root])
     .filter(Boolean)));
@@ -2063,7 +2299,7 @@ const downloadJobController = core.createDownloadJobController({
   setQueueMode: (value) => {
     downloadQueueMode = Boolean(value);
   },
-  saveQueueMode: (queueMode) => atomicWriteJsonFile(CONFIG.downloadSettings, { queueMode }),
+  saveQueueMode: (settings) => atomicWriteJsonFile(CONFIG.downloadSettings, settings),
   resolvePartialPath: resolveModelsRootChild,
 });
 const {
@@ -2137,7 +2373,7 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
   };
 
   tick();
-  const timer = setInterval(tick, 2500);
+  const timer = setInterval(tick, Math.max(2500, Number(process.env.MODEL_DOWNLOAD_PROGRESS_INTERVAL_MS || 10000)));
   timer.unref?.();
   progressTimers.set(job.id, timer);
 }
@@ -2150,11 +2386,39 @@ function stopProgressTracker(job) {
 }
 
 async function runStartJob(job, opts) {
+  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts));
+  if (queued) {
+    appendLog(job, "已有启动任务进行中，排队等待其完成后再启动，避免容器名冲突。");
+    setJobProgress(job, {
+      percent: 1,
+      stage: "等待前一个启动任务",
+      detail: "已有启动任务正在进行，排队等待其完成后再启动，避免容器名冲突。",
+    });
+  }
+  return result;
+}
+
+async function runStartJobOnce(job, opts) {
+  // 排队期间任务可能已被用户取消（cancel -> failJob）。拿到锁后若已不在 running 态，直接放弃，
+  // 避免给一个已取消的任务启动容器、再被 finishJob 复活。
+  if (job.status !== "running") {
+    appendLog(job, `任务已不再运行（status=${job.status}），跳过启动。`);
+    return;
+  }
   setJobProgress(job, {
     percent: 3,
     stage: "准备启动",
     detail: "正在准备 llama.cpp 启动任务。",
   });
+
+  const targetContainerName = opts.containerName || CONFIG.containerName;
+  const portConflict = (await listManagedContainers().catch(() => [])).find((container) => (
+    parseDockerPortPublish(container.ports)?.port === opts.port
+    && normalizeDockerContainerName(container.name) !== normalizeDockerContainerName(targetContainerName)
+  ));
+  if (portConflict) {
+    throw new Error(`端口 ${opts.port} 已被托管容器 ${portConflict.name} 占用；并行实例必须使用独立端口。`);
+  }
 
   setJobProgress(job, {
     percent: 4,
@@ -2177,70 +2441,88 @@ async function runStartJob(job, opts) {
   for (const warning of opts.gpuWarnings || []) appendLog(job, `GPU selection warning: ${warning}`);
 
   setJobProgress(job, {
-    percent: 5,
-    stage: "清理旧容器",
-    detail: `正在停止并移除 ${CONFIG.containerName}`,
+    percent: 8,
+    stage: "启动前预检",
+    detail: "正在校验模型并生成完整 Docker 命令；此阶段不会停止当前模型。",
   });
-  appendLog(job, `Stopping existing ${CONFIG.containerName}, if present`);
+
+  let { runArgs, activePublishArgs, runtimeImage } = buildLlamaRuntimeCommand(job, opts);
+  const imageStatus = await getImageStatus(runtimeImage);
+  if (!imageStatus.ok) {
+    appendLog(job, `Runtime image preflight: ${imageStatus.text || runtimeImage}. Pulling before current model is stopped.`);
+    const pulled = await docker(["pull", runtimeImage]);
+    appendLog(job, pulled.stdout || pulled.stderr);
+  }
   await snapshotCurrentStats("before-start").catch(() => {});
-  await removeManagedContainer("replace").catch((error) => {
-    if (error.code === "CONTAINER_OWNED_BY_OTHER_MANAGER") throw error;
-  });
   setJobProgress(job, {
     percent: 18,
-    stage: "准备 Docker 参数",
-    detail: "旧容器已处理，正在生成 llama.cpp 启动命令。",
+    stage: "创建可回滚切换点",
+    detail: `正在保留 ${targetContainerName} 的完整容器配置，若新实例失败会自动恢复。`,
   });
-
-  let { runArgs, activePublishArgs } = buildLlamaRuntimeCommand(job, opts);
-
-  setJobProgress(job, {
-    percent: 32,
-    stage: "启动 Docker 容器",
-    detail: "Docker run 已开始；如果镜像不存在，这一步会等待拉取镜像。",
-  });
-  appendLog(job, `> docker ${runArgs.join(" ")}`);
-  let launched;
-  try {
-    launched = await docker(runArgs);
-  } catch (error) {
-    if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
-      throw error;
-    }
-    activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
-    const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
-    appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
-    appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
-    appendLog(job, `> docker ${retryArgs.join(" ")}`);
-    launched = await docker(retryArgs);
-  }
-  appendLog(job, launched.stdout || launched.stderr);
-
-  setJobProgress(job, {
-    percent: 45,
-    stage: "等待模型加载",
-    detail: "容器已创建，正在等待 llama.cpp server 返回 /v1/models。",
-  });
-  const startupTimeoutMs = CONFIG.startupTimeoutMs;
-  return core.waitForRuntimeReady({
-    job,
-    port: opts.port,
-    serviceUrl: opts.serviceUrl,
-    engineName: "llama.cpp",
-    apiLabel: "llama.cpp API",
-    containerName: CONFIG.containerName,
-    startupTimeoutMs,
-    finalReadyCheck: true,
-    timeoutBudgetLog: `Startup timeout budget: ${Math.round(startupTimeoutMs / 60_000)} minutes`,
-    fetchServedModels: () => getServedModels(opts.port),
-    getContainerStatus,
+  const replacement = await core.beginContainerReplacement({
     docker,
-    extractLogIssues,
-    setJobProgress,
-    appendLog,
-    finishJob,
-    delayFn: delay,
+    containerName: targetContainerName,
+    managerId: CONFIG.managerId,
+    ownerLabelKey: MANAGER_LABEL_KEY,
+    onEvent: (event) => {
+      if (event.type === "backup-ready") appendLog(job, `Rollback checkpoint ready: ${event.backupName}`);
+    },
   });
+
+  try {
+    setJobProgress(job, { percent: 32, stage: "启动 Docker 容器", detail: "Docker run 已开始；旧模型容器已保留为回滚点。" });
+    appendLog(job, `> docker ${redactDockerArgs(runArgs, opts).join(" ")}`);
+    let launched;
+    try {
+      launched = await docker(runArgs);
+    } catch (error) {
+      if (isContainerNameConflictError(error)) {
+        appendLog(job, `容器名冲突，清理本次残留容器后重试：${error.stderr || error.message}`);
+        await core.removeContainerIfPresent(docker, targetContainerName);
+        launched = await docker(runArgs);
+      } else if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
+        throw error;
+      } else {
+        activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
+        const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
+        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
+        appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
+        appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
+        launched = await docker(retryArgs);
+      }
+    }
+    appendLog(job, launched.stdout || launched.stderr);
+
+    setJobProgress(job, { percent: 45, stage: "等待模型加载", detail: "容器已创建，正在等待 llama.cpp server 返回 /v1/models。" });
+    const startupTimeoutMs = CONFIG.startupTimeoutMs;
+    const result = await core.waitForRuntimeReady({
+      job,
+      port: opts.port,
+      serviceUrl: opts.serviceUrl,
+      engineName: "llama.cpp",
+      apiLabel: "llama.cpp API",
+      containerName: targetContainerName,
+      startupTimeoutMs,
+      finalReadyCheck: true,
+      timeoutBudgetLog: `Startup timeout budget: ${Math.round(startupTimeoutMs / 60_000)} minutes`,
+      fetchServedModels: () => getServedModels(opts.port, opts.llamaApiKey),
+      getContainerStatus,
+      docker,
+      extractLogIssues,
+      setJobProgress,
+      appendLog,
+      finishJob,
+      delayFn: delay,
+    });
+    await replacement.commit().catch((error) => appendLog(job, `新模型已就绪，但清理回滚快照失败：${error.message}`));
+    clearRuntimeInstancesCache();
+    return result;
+  } catch (error) {
+    const rollback = await replacement.rollback(error).catch((rollbackError) => ({ rollbackError }));
+    if (rollback?.restoredPrevious) appendLog(job, `新模型启动失败，已恢复原容器 ${targetContainerName}。`);
+    else if (rollback?.rollbackError) appendLog(job, `自动回滚失败：${rollback.rollbackError.message}`);
+    throw error;
+  }
 }
 
 function delay(ms) {

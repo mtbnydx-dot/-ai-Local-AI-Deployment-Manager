@@ -88,6 +88,13 @@ function isDockerPublishBindError(error) {
   return /bind|port is already allocated|cannot assign requested address|listen tcp|driver failed programming external connectivity|ports are not available/.test(text);
 }
 
+function isContainerNameConflictError(error) {
+  const text = `${error?.stderr || ""}\n${error?.stdout || ""}\n${error?.message || ""}`;
+  // docker: Error response from daemon: Conflict. The container name "/vllm-local" is already in use by container "..."
+  return /Conflict\.\s*The container name .* is already in use/i.test(text)
+    || /container name .* is already in use/i.test(text);
+}
+
 function stripHostBrackets(value) {
   return String(value || "").trim().replace(/^\[|\]$/g, "");
 }
@@ -123,6 +130,7 @@ module.exports = {
   publishArgsToDockerRunArgs,
   replaceDockerPublishArgs,
   isDockerPublishBindError,
+  isContainerNameConflictError,
   stripHostBrackets,
   isLoopbackHost,
   isWildcardHost,

@@ -44,9 +44,17 @@ function createLlamaRemoteModelService({
   fetchImpl = globalThis.fetch,
   getHfToken = () => process.env.HF_TOKEN,
 } = {}) {
+  const useSystemProxyFallback = fetchImpl === globalThis.fetch;
+
+  function remoteFetch(url, options) {
+    return core.fetchWithSystemProxyFallback(fetchImpl, url, options, {
+      allowProxyFallback: useSystemProxyFallback,
+    });
+  }
+
   async function fetchJson(url) {
     const token = getHfToken();
-    const response = await fetchImpl(url, {
+    const response = await remoteFetch(url, {
       headers: {
         accept: "application/json",
         "user-agent": "llama-manager/0.1",

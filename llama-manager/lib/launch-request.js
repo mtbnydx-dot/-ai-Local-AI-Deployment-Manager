@@ -22,12 +22,29 @@ function createLlamaStartRuntimeRequest(deps) {
     createJob,
     runStartJob,
     failJob,
+    normalizeRuntimeInstanceMode = (value) => String(value || "replace").toLowerCase() === "parallel" ? "parallel" : "replace",
+    normalizeRuntimeInstanceId = (value, fallback) => String(value || fallback || "model").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "model",
+    buildRuntimeContainerName = (base, mode, id) => mode === "parallel" ? `${base}-${id}` : base,
   } = deps;
 
   return async function startRuntimeRequest({ body = {} } = {}) {
     const model = cleanRequired(body.model, "model");
     const name = String(body.name || deriveName(model));
-    const port = Number(body.port || CONFIG.defaultPort);
+    const instanceMode = normalizeRuntimeInstanceMode(body.instanceMode);
+    const instanceId = normalizeRuntimeInstanceId(body.instanceId, name);
+    const containerName = buildRuntimeContainerName(CONFIG.containerName, instanceMode, instanceId);
+    const hasExplicitPort = body.port !== undefined && body.port !== null && String(body.port).trim() !== "";
+    if (instanceMode === "parallel" && !hasExplicitPort) {
+      const error = new Error("并行实例必须明确填写独立端口；管理器不会自动修改端口或其他启动参数。");
+      error.status = 400;
+      throw error;
+    }
+    const port = Number(hasExplicitPort ? body.port : CONFIG.defaultPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      const error = new Error("port 必须是 1 到 65535 之间的整数。");
+      error.status = 400;
+      throw error;
+    }
     const maxModelLen = Number(body.maxModelLen || 8192);
     const maxNumSeqs = positiveInt(body.maxNumSeqs, 4);
     const gpuMemoryUtilization = Number(body.gpuMemoryUtilization || 0.92);
@@ -48,6 +65,10 @@ function createLlamaStartRuntimeRequest(deps) {
     const reasoning = normalizeOnOffAuto(body.reasoning);
     const reasoningFormat = normalizeLlamaReasoningFormat(body.reasoningFormat || body.reasoningParser);
     const textOnlyMode = normalizeDefaultTrueBoolean(body.textOnlyMode, body.languageModelOnly);
+    const mmproj = cleanOptionalLaunchArg(body.mmproj);
+    const speculativeMode = String(body.speculativeMode || "auto").trim().toLowerCase();
+    const numSpeculativeTokens = positiveInt(body.numSpeculativeTokens, 3);
+    const llamaApiKey = String(body.apiKey || "").trim();
     const networkAccess = normalizeNetworkAccess(body.networkAccess);
     const lanAddress = getLanAddress();
     const serviceHost = networkAccess === "lan" ? lanAddress : "127.0.0.1";
@@ -60,6 +81,9 @@ function createLlamaStartRuntimeRequest(deps) {
     const job = createJob("serve", `Start ${name}`, {
       model,
       name,
+      instanceMode,
+      instanceId,
+      containerName,
       port,
       maxModelLen,
       maxNumSeqs,
@@ -87,11 +111,18 @@ function createLlamaStartRuntimeRequest(deps) {
       networkAccess,
       serviceHost,
       serviceUrl,
+      mmproj,
+      speculativeMode,
+      numSpeculativeTokens,
+      hasApiKey: Boolean(llamaApiKey),
     });
 
     runStartJob(job, {
       model,
       name,
+      instanceMode,
+      instanceId,
+      containerName,
       port,
       maxModelLen,
       maxNumSeqs,
@@ -119,6 +150,10 @@ function createLlamaStartRuntimeRequest(deps) {
       networkAccess,
       serviceHost,
       serviceUrl,
+      mmproj,
+      speculativeMode,
+      numSpeculativeTokens,
+      llamaApiKey,
     }).catch((error) => failJob(job, error));
 
     return { job };

@@ -12,6 +12,14 @@ test("parses gateway routes and maps them to manager paths", () => {
   });
   assert.equal(entry.buildManagerGatewayPath(openAiRoute), "/serve/v1/chat/completions");
 
+  const openAiPropsRoute = entry.parseGatewayRoute("/gateway/auto/openai/v1/props");
+  assert.deepEqual(openAiPropsRoute, {
+    engine: "auto",
+    protocol: "openai",
+    rest: "v1/props",
+  });
+  assert.equal(entry.buildManagerGatewayPath(openAiPropsRoute), "/serve/v1/props");
+
   const claudeRoute = entry.parseGatewayRoute("/gateway/vllm/claude/v1/messages");
   assert.deepEqual(claudeRoute, {
     engine: "vllm",
@@ -73,7 +81,12 @@ test("gateway access entries contain metadata but not prompt content", () => {
       socket: { remoteAddress: "::ffff:192.168.1.50" },
       method: "POST",
       url: "/gateway/auto/claude/v1/messages?debug=1",
-      headers: { authorization: "Bearer service-key" },
+      headers: {
+        authorization: "Bearer service-key",
+        "user-agent": "WorkBuddy/5.1.7",
+        origin: "http://127.0.0.1:3000",
+        referer: "http://127.0.0.1:3000/chat",
+      },
     },
     route,
     manager,
@@ -90,6 +103,9 @@ test("gateway access entries contain metadata but not prompt content", () => {
   assert.equal(event.model, "local-model");
   assert.equal(event.stream, true);
   assert.equal(event.authSource, "authorization-bearer");
+  assert.equal(event.userAgent, "WorkBuddy/5.1.7");
+  assert.equal(event.origin, "http://127.0.0.1:3000");
+  assert.equal(event.refererHost, "127.0.0.1:3000");
   assert.equal(event.toolSchemaCount, 1);
   assert.equal(Object.hasOwn(event, "messages"), false);
   assert.equal(JSON.stringify(event).includes("secret prompt content"), false);
@@ -109,4 +125,56 @@ test("entry server serves only whitelisted docs", async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("auto gateway selects the manager that owns the requested model", () => {
+  const vllm = entry.findManager("vllm");
+  const llama = entry.findManager("llama");
+  const catalogs = [
+    {
+      manager: vllm,
+      listening: true,
+      running: true,
+      models: [{ id: "qwen-vllm" }],
+      modelIds: new Set(["qwen-vllm"]),
+      aliases: new Set(["qwen3.6"]),
+    },
+    {
+      manager: llama,
+      listening: true,
+      running: true,
+      models: [{ id: "gemma-gguf" }],
+      modelIds: new Set(["gemma-gguf"]),
+      aliases: new Set(["gemma4"]),
+    },
+  ];
+  assert.equal(entry.selectGatewayManager(catalogs, "gemma-gguf").id, "llama");
+  assert.equal(entry.selectGatewayManager(catalogs, "qwen3.6").id, "vllm");
+  assert.equal(entry.selectGatewayManager(catalogs, "auto").id, "vllm");
+});
+
+test("auto model catalog merges both engines without duplicate ids", () => {
+  const data = entry.mergeManagerModelCatalogs([
+    {
+      manager: entry.findManager("vllm"),
+      models: [{ id: "shared" }, { id: "vllm-only", owned_by: "vllm" }],
+    },
+    {
+      manager: entry.findManager("llama"),
+      models: [{ id: "shared" }, { id: "llama-only", owned_by: "llama.cpp" }],
+    },
+  ]);
+  assert.deepEqual(data.map((model) => model.id), ["shared", "vllm-only", "llama-only"]);
+  assert.deepEqual(data.map((model) => model.manager_engine), ["vllm", "vllm", "llama"]);
+});
+
+test("auto OpenAI model list route is detected without matching chat routes", () => {
+  assert.equal(entry.isAggregatedModelListRequest(
+    { method: "GET" },
+    entry.parseGatewayRoute("/gateway/auto/openai/v1/models"),
+  ), true);
+  assert.equal(entry.isAggregatedModelListRequest(
+    { method: "POST" },
+    entry.parseGatewayRoute("/gateway/auto/openai/v1/chat/completions"),
+  ), false);
 });
