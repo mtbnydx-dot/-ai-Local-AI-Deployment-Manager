@@ -168,6 +168,8 @@ open ./start-subscription-proxy-macos.command
 
 如果 macOS 首次阻止运行，可在 Finder 里右键该文件并选择“打开”。启动失败时终端窗口会保留错误提示；成功后会直接打开前端。
 
+如果没有检测到 CLIProxyAPI，但系统已有 Homebrew，双击启动器会询问是否执行官方的 `brew install cliproxyapi`。选择安装后会继续启动，无需重新寻找可执行文件。
+
 局域网模式、状态和停止：
 
 ```bash

@@ -299,6 +299,46 @@ is_loopback_host() {
   esac
 }
 
+resolve_clip_proxy_executable() {
+  resolve_executable "${CLIPROXY_EXE:-}" \
+    "$SCRIPT_DIR/cli-proxy-api" \
+    "$SCRIPT_DIR/CLIProxyAPI/cli-proxy-api" \
+    "$SCRIPT_DIR/cliproxyapi" \
+    "/opt/homebrew/opt/cliproxyapi/bin/cliproxyapi" \
+    "/usr/local/opt/cliproxyapi/bin/cliproxyapi" \
+    cli-proxy-api cliproxyapi
+}
+
+offer_macos_homebrew_install() {
+  local answer=""
+  local brew_executable=""
+
+  [[ "$PLATFORM" == "macos" ]] || return 1
+  [[ -z "${CLIPROXY_EXE:-}" ]] || return 1
+  brew_executable="$(resolve_executable "" \
+    "/opt/homebrew/bin/brew" \
+    "/usr/local/bin/brew" \
+    brew || true)"
+  [[ -n "$brew_executable" ]] || return 1
+  [[ -t 0 ]] || return 1
+
+  printf '\n未检测到 CLIProxyAPI。是否现在通过 Homebrew 安装？[Y/n] '
+  if ! read -r answer; then
+    return 1
+  fi
+  case "$answer" in
+    n|N|no|NO|No)
+      return 1
+      ;;
+  esac
+
+  printf '正在运行 brew install cliproxyapi ...\n'
+  if ! "$brew_executable" install cliproxyapi; then
+    die "Homebrew could not install CLIProxyAPI."
+  fi
+  hash -r
+}
+
 start_proxy() {
   local proxy_executable
   local proxy_pid
@@ -313,12 +353,16 @@ start_proxy() {
   is_loopback_host "$PROXY_HOST" ||
     die "Configured remote CLIProxyAPI is unreachable: $PROXY_BASE_URL"
 
-  proxy_executable="$(resolve_executable "${CLIPROXY_EXE:-}" \
-    "$SCRIPT_DIR/cli-proxy-api" \
-    "$SCRIPT_DIR/CLIProxyAPI/cli-proxy-api" \
-    "$SCRIPT_DIR/cliproxyapi" \
-    cli-proxy-api cliproxyapi)" ||
-    die "CLIProxyAPI was not found. Install it or set CLIPROXY_EXE."
+  if ! proxy_executable="$(resolve_clip_proxy_executable)"; then
+    offer_macos_homebrew_install || true
+    proxy_executable="$(resolve_clip_proxy_executable || true)"
+  fi
+  if [[ -z "$proxy_executable" ]]; then
+    if [[ "$PLATFORM" == "macos" ]]; then
+      die "CLIProxyAPI was not found. Install it with 'brew install cliproxyapi' or set CLIPROXY_EXE."
+    fi
+    die "CLIProxyAPI was not found. Install it with the official Linux installer or set CLIPROXY_EXE."
+  fi
 
   proxy_directory="$(dirname "$proxy_executable")"
   if [[ -n "${CLIPROXY_CONFIG:-}" ]]; then

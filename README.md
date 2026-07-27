@@ -103,6 +103,8 @@ macOS：
 open ./start-subscription-proxy-macos.command
 ```
 
+也可以直接在 Finder 中双击 `start-subscription-proxy-macos.command`。如果尚未安装 CLIProxyAPI，启动器会询问是否通过 Homebrew 安装并在安装后继续启动。
+
 也可直接运行 `./start-subscription-proxy.sh`，脚本会自动识别 Ubuntu 或 macOS。启动器会等待前端和网关可用后自动打开浏览器。
 
 局域网、状态和停止等高级操作继续使用 `subscription-proxy-ubuntu.sh` 或 `subscription-proxy-macos.sh`。两个版本都只运行 CLIProxyAPI、前端和统一网关，需要 Node.js 20+、Bash 和 curl，不需要 Docker 或 NVIDIA GPU。
@@ -309,6 +311,8 @@ macOS:
 ```bash
 open ./start-subscription-proxy-macos.command
 ```
+
+You can also double-click `start-subscription-proxy-macos.command` in Finder. If CLIProxyAPI is missing, the launcher offers to install it with Homebrew and then continues startup.
 
 You can also run `./start-subscription-proxy.sh` to auto-detect Ubuntu or macOS. The launcher waits for the frontend and gateway to become ready, then opens the dashboard in the browser.
 
