@@ -76,7 +76,7 @@ try {
   } finally {
     Pop-Location
   }
-  if ((Get-Content -LiteralPath $ConfigPath -Raw) -notmatch '(?m)^host: "127\.0\.0\.1"$') {
+  if ((Get-Content -LiteralPath $ConfigPath -Raw) -notmatch '(?m)^host: "127\.0\.0\.1"\r?$') {
     throw "The launcher did not correct the CLIProxyAPI host setting."
   }
   Assert-EntryHost -Expected "127.0.0.1"
