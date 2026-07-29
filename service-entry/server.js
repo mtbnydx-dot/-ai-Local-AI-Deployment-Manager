@@ -5,6 +5,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { Readable } = require("node:stream");
 const core = require("../manager-core");
+const { version: PLATFORM_VERSION } = require("../package.json");
 const { createSubscriptionSetupController } = require("./subscription-setup");
 
 const HOST = process.env.SERVICE_ENTRY_HOST || "127.0.0.1";
@@ -115,13 +116,13 @@ async function handleRequest(req, res, options = {}) {
       }));
     }
     if (req.method === "GET" && url.pathname === "/api/subscription-proxy/setup") {
-      if (!core.isLocalRequest(req)) {
+      if (!isLocalControlRequest(req)) {
         return sendJson(res, { ok: false, error: "订阅配置与登录仅允许从本机访问。" }, 403);
       }
       return sendJson(res, await getSubscriptionSetupController(options).getStatus());
     }
     if (req.method === "POST" && url.pathname === "/api/subscription-proxy/api-key") {
-      if (!core.isLocalRequest(req)) {
+      if (!isLocalControlRequest(req)) {
         return sendJson(res, { ok: false, error: "API Key 配置仅允许从本机操作。" }, 403);
       }
       const body = await readJsonControlBody(req);
@@ -131,7 +132,7 @@ async function handleRequest(req, res, options = {}) {
       return sendJson(res, await getSubscriptionSetupController(options).generateApiKey());
     }
     if (req.method === "POST" && url.pathname === "/api/subscription-proxy/login") {
-      if (!core.isLocalRequest(req)) {
+      if (!isLocalControlRequest(req)) {
         return sendJson(res, { ok: false, error: "订阅登录仅允许从本机发起。" }, 403);
       }
       const body = await readJsonControlBody(req);
@@ -143,11 +144,11 @@ async function handleRequest(req, res, options = {}) {
     if (req.method === "GET" && url.pathname === "/api/subscription-service") {
       return sendJson(res, getSubscriptionServiceStatus({
         ...options,
-        localControl: core.isLocalRequest(req),
+        localControl: isLocalControlRequest(req),
       }));
     }
     if (req.method === "POST" && url.pathname === "/api/subscription-service/public-base-url") {
-      if (!core.isLocalRequest(req)) {
+      if (!isLocalControlRequest(req)) {
         return sendJson(res, { ok: false, error: "公网地址配置仅允许从本机操作。" }, 403);
       }
       const body = await readJsonControlBody(req);
@@ -157,7 +158,18 @@ async function handleRequest(req, res, options = {}) {
         localControl: true,
       }));
     }
+    if (req.method === "GET" && url.pathname === "/api/health") {
+      return sendJson(res, {
+        ok: true,
+        service: "service-entry",
+        version: PLATFORM_VERSION,
+        mode: entryMode,
+      });
+    }
     if (req.method === "GET" && url.pathname === "/api/status") {
+      if (!isLocalControlRequest(req)) {
+        return sendJson(res, { ok: false, error: "详细状态仅允许从本机 localhost 查看。" }, 403);
+      }
       return sendJson(res, {
         ok: true,
         entry: {
@@ -180,6 +192,9 @@ async function handleRequest(req, res, options = {}) {
       });
     }
     if (req.method === "GET" && url.pathname === "/api/gateway-access") {
+      if (!isLocalControlRequest(req)) {
+        return sendJson(res, { ok: false, error: "网关访问明细仅允许从本机 localhost 查看。" }, 403);
+      }
       return sendJson(res, await collectEntryGatewayAccessStats({
         limit: url.searchParams.get("limit"),
         maxLines: url.searchParams.get("maxLines"),
@@ -187,7 +202,7 @@ async function handleRequest(req, res, options = {}) {
     }
     const managerStartMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/start$/);
     if (req.method === "POST" && managerStartMatch) {
-      if (!core.isLocalRequest(req)) return sendJson(res, { ok: false, error: "Start is only available from localhost." }, 403);
+      if (!isLocalControlRequest(req)) return sendJson(res, { ok: false, error: "Start is only available from localhost." }, 403);
       if (entryMode === "subscription") return sendJson(res, { ok: false, error: "Local model managers are disabled in subscription-only mode." }, 409);
       const manager = findManager(managerStartMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
@@ -195,20 +210,23 @@ async function handleRequest(req, res, options = {}) {
     }
     const managerStopMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/stop$/);
     if (req.method === "POST" && managerStopMatch) {
-      if (!core.isLocalRequest(req)) return sendJson(res, { ok: false, error: "Stop is only available from localhost." }, 403);
+      if (!isLocalControlRequest(req)) return sendJson(res, { ok: false, error: "Stop is only available from localhost." }, 403);
       if (entryMode === "subscription") return sendJson(res, { ok: false, error: "Local model managers are disabled in subscription-only mode." }, 409);
       const manager = findManager(managerStopMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
       return sendJson(res, await stopManager(manager));
     }
     if (req.method === "POST" && url.pathname === "/api/stop-all") {
-      if (!core.isLocalRequest(req)) return sendJson(res, { ok: false, error: "Stop is only available from localhost." }, 403);
+      if (!isLocalControlRequest(req)) return sendJson(res, { ok: false, error: "Stop is only available from localhost." }, 403);
       const managers = entryMode === "subscription" ? [] : MANAGERS;
       const stopped = await Promise.all(managers.map((manager) => postJson(`http://127.0.0.1:${manager.port}/api/manager/shutdown`)));
       sendJson(res, { ok: true, stopped });
       return shutdownSoon();
     }
     if (req.method === "POST" && (url.pathname === "/api/shutdown" || url.pathname === "/api/manager/shutdown")) {
+      if (!isLocalControlRequest(req)) {
+        return sendJson(res, { ok: false, error: "关闭服务仅允许从本机 localhost 操作。" }, 403);
+      }
       sendJson(res, { ok: true });
       return shutdownSoon();
     }
@@ -220,6 +238,27 @@ async function handleRequest(req, res, options = {}) {
 
 function getSubscriptionSetupController(options = {}) {
   return options.subscriptionSetupController || defaultSubscriptionSetupController;
+}
+
+function isLocalControlRequest(req) {
+  if (!core.isLocalRequest(req)) return false;
+  const headers = req?.headers || {};
+  if ([
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+  ].some((name) => String(headers[name] || "").trim())) {
+    return false;
+  }
+  const loopbackHosts = new Set(["127.0.0.1", "localhost", "::1"]);
+  if (!loopbackHosts.has(core.extractHostname(headers.host))) return false;
+  for (const name of ["origin", "referer"]) {
+    const value = String(headers[name] || "").trim();
+    if (value && !loopbackHosts.has(core.extractHostname(value))) return false;
+  }
+  return true;
 }
 
 function startServiceEntry() {

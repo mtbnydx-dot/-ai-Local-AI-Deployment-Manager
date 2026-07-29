@@ -145,7 +145,8 @@ llama.cpp：
 统一入口访问统计：
 
 - 页面：`http://127.0.0.1:5176/`
-- API：`http://127.0.0.1:5176/api/gateway-access`
+- 详细 API（仅本机）：`http://127.0.0.1:5176/api/gateway-access`
+- 最小健康检查（可供局域网探测）：`http://<服务机-IP>:5176/api/health`
 - 日志：`service-entry\logs\gateway-access.log`
 
 管理器外来访问统计：
@@ -186,7 +187,8 @@ llama.cpp：
 ## 9. 安全默认值
 
 - 默认启动脚本只开放本机。
-- CLIProxyAPI 默认应只监听 `127.0.0.1:8317`，由统一入口决定本机、局域网或可选公网范围。
+- CLIProxyAPI 必须只监听 `127.0.0.1:8317`；反代独立启动器会修正配置并核验真实监听，由统一入口决定本机、局域网或可选公网范围。
 - 局域网模式需要显式执行 `start-service-entry.cmd lan`。
+- `/api/status`、访问明细和关闭接口只允许 localhost，并校验 Host/Origin/Referer 以阻止跨站控制；局域网只公开最小 `/api/health`。
 - 对外服务建议始终启用 API Key。
 - 公网暴露前应使用反向代理、TLS、访问控制和速率限制。

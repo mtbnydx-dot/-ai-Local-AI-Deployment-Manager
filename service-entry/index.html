@@ -590,6 +590,15 @@
       try {
         const response = await fetch("/api/status", { cache: "no-store", signal: AbortSignal.timeout(8000) });
         const data = await response.json();
+        if (response.status === 403) {
+          const healthResponse = await fetch("/api/health", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+          const health = await healthResponse.json();
+          if (!healthResponse.ok) throw new Error(health.error || `HTTP ${healthResponse.status}`);
+          renderRemoteHealth(health);
+          if (lastUpdatedBadge) lastUpdatedBadge.textContent = `只读状态 ${new Date().toLocaleTimeString()}`;
+          return;
+        }
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
         renderEntryMode(data.entry || {});
         renderSummary(data.entry || {}, data.managers || [], data.subscriptionProxy || {});
         renderEntryGateway(data.entry || {});
@@ -603,6 +612,21 @@
         refreshInFlight = false;
         refreshBtn.disabled = false;
       }
+    }
+
+    function renderRemoteHealth(health) {
+      renderEntryMode({ mode: health.mode });
+      stopBtn.hidden = true;
+      entrySummary.innerHTML = [
+        metric("服务", health.service || "service-entry", "ok"),
+        metric("版本", health.version || "-", "ok"),
+        metric("运行模式", health.mode === "subscription" ? "订阅反代独立" : "完整模式", "ok"),
+        metric("详细诊断", "请在服务主机查看", "warn"),
+      ].join("");
+      entryGatewayStrip.innerHTML = `<div class="empty">局域网页面仅显示最小健康状态；服务地址请打开“服务发布配置”，详细运行状态请在主机的 127.0.0.1 页面查看。</div>`;
+      subscriptionProxyPanel.innerHTML = `<div class="empty">订阅账号、上游状态和访问记录属于本机管理信息，不通过局域网公开。</div>`;
+      entryAccessPanel.innerHTML = `<div class="empty">网关访问明细仅允许从服务主机查看。</div>`;
+      grid.innerHTML = `<div class="empty">本地模型管理信息仅允许从服务主机查看。</div>`;
     }
 
     function renderEntryMode(entry) {

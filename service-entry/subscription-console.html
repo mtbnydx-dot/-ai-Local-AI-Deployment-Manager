@@ -350,6 +350,8 @@
     const toast = document.querySelector("#toast");
     const accountDialog = document.querySelector("#accountDialog");
     let generatedApiKey = "";
+    let generatedApiKeyTimer = null;
+    let latestLoginState = null;
     let loginPollTimer = null;
     let accountTrigger = null;
 
@@ -370,8 +372,9 @@
         try {
           await navigator.clipboard.writeText(value);
           showToast("已复制");
+          if (value && value === generatedApiKey) clearGeneratedApiKey();
         } catch {
-          showToast(value);
+          showToast("复制失败，请手动选择并复制");
         }
         return;
       }
@@ -415,6 +418,7 @@
     }
 
     function closeAccountDialog(updateHash = true) {
+      clearGeneratedApiKey();
       if (accountDialog.open) accountDialog.close();
       if (updateHash && location.hash !== "#service") {
         history.replaceState(null, "", "#service");
@@ -442,6 +446,7 @@
     }
 
     function renderLogin(data) {
+      latestLoginState = data;
       const executable = data.executable || {};
       const config = data.config || {};
       const auth = data.auth || {};
@@ -531,6 +536,8 @@
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "API Key 写入失败。");
         generatedApiKey = data.apiKey || "";
+        clearTimeout(generatedApiKeyTimer);
+        generatedApiKeyTimer = setTimeout(clearGeneratedApiKey, 60000);
         showToast("新 API Key 已写入，请立即复制");
         await refreshLogin();
       } catch (error) {
@@ -538,6 +545,14 @@
       } finally {
         button.disabled = false;
       }
+    }
+
+    function clearGeneratedApiKey() {
+      clearTimeout(generatedApiKeyTimer);
+      generatedApiKeyTimer = null;
+      if (!generatedApiKey) return;
+      generatedApiKey = "";
+      if (latestLoginState) renderLogin(latestLoginState);
     }
 
     async function startLogin(button) {

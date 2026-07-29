@@ -36,6 +36,11 @@ jobs:
             }
           }
 
+      - name: Exercise Windows subscription launcher
+        shell: pwsh
+        run: |
+          & .\tests\subscription-launcher-smoke.ps1
+
       - name: Run tests
         shell: cmd
         run: test-all.cmd
@@ -72,6 +77,8 @@ jobs:
           bash -n start-subscription-proxy-macos.command
           node --check tests/mock-cliproxy-api.cjs
           node --check tests/mock-browser-open.cjs
+          node --check service-entry/subscription-config-tool.js
+          bash -n tests/subscription-launcher-smoke.sh
           bash "${{ matrix.launcher }}" --help
 
       - name: Exercise isolated frontend and gateway
@@ -82,7 +89,7 @@ jobs:
           SUBSCRIPTION_PROXY_BROWSER_EXE: ${{ github.workspace }}/tests/mock-browser-open.cjs
           SUBSCRIPTION_PROXY_BROWSER_MARKER: ${{ runner.temp }}/subscription-proxy-browser-url.txt
         run: |
-          node -e 'require("node:http").createServer((req,res)=>{res.writeHead(req.url==="/v1/models"?200:404,{"content-type":"application/json"});res.end(req.url==="/v1/models"?"{\"data\":[]}":"{}")}).listen(18317,"127.0.0.1")' &
+          node tests/mock-cliproxy-api.cjs &
           mock_pid=$!
           trap 'bash "${{ matrix.launcher }}" stop || true; kill "$mock_pid" 2>/dev/null || true' EXIT
           bash "${{ matrix.one_click }}"
@@ -117,3 +124,6 @@ jobs:
             exit 1
           fi
           trap - EXIT
+
+          SUBSCRIPTION_TEST_PROXY_PORT=18327 SUBSCRIPTION_TEST_ENTRY_PORT=15186 \
+            bash tests/subscription-launcher-smoke.sh "${{ matrix.launcher }}"

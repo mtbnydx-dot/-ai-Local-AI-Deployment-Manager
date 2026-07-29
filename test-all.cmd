@@ -6,8 +6,11 @@ call :check "vllm-manager\server.js" || exit /b 1
 call :check "llama-manager\server.js" || exit /b 1
 call :check "service-entry\server.js" || exit /b 1
 call :check "service-entry\subscription-setup.js" || exit /b 1
+call :check "service-entry\subscription-config-tool.js" || exit /b 1
 call :check "tests\frontend-smoke.spec.cjs" || exit /b 1
+call :check "tests\mock-cliproxy-api.cjs" || exit /b 1
 call :checkPowerShell "subscription-proxy-stack.ps1" || exit /b 1
+call :checkPowerShell "tests\subscription-launcher-smoke.ps1" || exit /b 1
 call :test "manager-core" || exit /b 1
 call :test "service-entry" || exit /b 1
 call :test "vllm-manager" || exit /b 1

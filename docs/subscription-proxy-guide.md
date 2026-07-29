@@ -125,7 +125,7 @@ CLIProxyAPI 已安装并配置后，在发布目录运行：
 
 这个模式只启动：
 
-1. CLIProxyAPI 订阅反代（若 8317 已有实例，则复用现有实例）。
+1. CLIProxyAPI 订阅反代（若 8317 已有可验证且仅回环监听的实例，则复用现有实例）。
 2. `service-entry` 前端。
 3. `service-entry` 统一网关。
 
@@ -154,7 +154,7 @@ $env:CLIPROXY_CONFIG = "D:\Apps\CLIProxyAPI\config.yaml"
 .\start-subscription-proxy.cmd
 ```
 
-如果 `5176` 已运行完整模式的 `service-entry`，独立启动流程会中止并提示，不会擅自关闭或替换现有服务。
+如果 `5176` 已运行完整模式的 `service-entry`，独立启动流程会中止并提示，不会擅自关闭或替换现有服务。若同一启动器拥有的反代独立入口已经运行，执行 `start local` 或 `start lan` 会按真实监听状态安全重启并切换模式；不属于当前启动器的进程不会被接管。
 
 #### Ubuntu 版本
 
@@ -174,7 +174,7 @@ bash ./subscription-proxy-ubuntu.sh status
 bash ./subscription-proxy-ubuntu.sh stop
 ```
 
-依赖 Bash、curl 和 Node.js 20+。CLIProxyAPI 可在 PATH 中，也可通过 `CLIPROXY_EXE` 指定；配置文件可通过 `CLIPROXY_CONFIG` 指定。脚本不需要 root 权限，也不会自动修改 systemd、防火墙或开放端口。如果 CLIProxyAPI 已由 systemd 或其它方式运行，脚本只复用它，停止时不会关闭该外部进程。
+依赖 Bash、curl、Node.js 20+，以及 `lsof` 或 `ss`（Ubuntu 的 `iproute2`）。CLIProxyAPI 可在 PATH 中，也可通过 `CLIPROXY_EXE` 指定；配置文件可通过绝对或相对的 `CLIPROXY_CONFIG` 指定。脚本不需要 root 权限，也不会自动修改 systemd、防火墙或开放端口。如果 CLIProxyAPI 已由 systemd 或其它方式运行，脚本只复用通过身份和监听边界校验的实例，停止时不会关闭该外部进程。
 
 #### macOS 版本
 
@@ -196,21 +196,27 @@ bash ./subscription-proxy-macos.sh status
 bash ./subscription-proxy-macos.sh stop
 ```
 
-脚本会从 PATH、Homebrew 常见命令名或 `CLIPROXY_EXE` 查找 CLIProxyAPI。若已通过 `brew services start cliproxyapi` 运行，它会复用 Homebrew 服务且不会在停止时关闭它。启动成功后 macOS 会打开控制台；设置 `SUBSCRIPTION_PROXY_NO_OPEN=1` 可禁止自动打开浏览器。
+脚本会从 PATH、Homebrew 常见命令名或 `CLIPROXY_EXE` 查找 CLIProxyAPI。若已通过 `brew services start cliproxyapi` 运行，它只会复用通过 CLIProxyAPI 身份头和回环监听校验的 Homebrew 服务，停止时不会关闭它。启动成功后 macOS 会打开控制台；设置 `SUBSCRIPTION_PROXY_NO_OPEN=1` 可禁止自动打开浏览器。
 
 Ubuntu 与 macOS 也可以统一运行 `./start-subscription-proxy.sh`；它会自动识别当前系统并选择对应版本。
 
 Ubuntu、macOS 与 Windows 版本遵循相同边界：只运行 CLIProxyAPI、`service-entry` 前端和统一网关，不启动 vLLM、llama.cpp 管理器或任何模型容器。运行记录只包含 PID、进程启动时间和可执行文件路径，不包含 API Key 或 OAuth 数据。
 
+三个平台的启动器都会把找到的 CLIProxyAPI 配置顶层 `host` 原子更新为 `127.0.0.1`，并在启动或复用后检查真实监听地址。即使统一入口使用 LAN 模式，8317 也必须保持回环监听，由 5176 统一决定访问范围。若外部管理的 CLIProxyAPI 仍以旧配置监听全部接口，启动器会拒绝复用并提示先重启该外部服务。身份校验依赖 CLIProxyAPI 7.x 的 `X-CPA-*` 响应头；旧版本应先升级。
+
 启动器打开“订阅反代控制台”后即可配置和查看：
 
 - “反代账号配置”弹窗：生成客户端 API Key，发起 Codex、Claude、Kimi、xAI 或 Antigravity 登录。
 - 服务发布主界面：查看本机、局域网和可选公网的统一网关地址。
-- “上游监听”：若显示“全部接口”，应把 CLIProxyAPI 配置的 `host` 改为 `127.0.0.1` 并重启 CLIProxyAPI。
+- “上游监听”：正常应显示 `127.0.0.1`；启动器会自动修正配置并拒绝继续使用全部接口监听的进程。
 
 - `状态良好`：无需认证即可读取模型列表。
 - `在线 · 调用需 Key`：CLIProxyAPI 已连通，状态探测因未携带 Key 返回 401/403，这是启用鉴权时的正常状态。
 - `未连接`：CLIProxyAPI 未启动、端口不同或地址配置错误。
+
+局域网客户端只能读取 `/api/health` 的服务、版本和模式。`/api/status`、`/api/gateway-access`、关闭操作、账号登录和 Key 配置均仅允许从服务主机的 localhost 使用，并校验 Host/Origin/Referer 以拒绝浏览器跨站控制和 DNS rebinding。
+
+配置公网反向代理或隧道时，只转发 `/gateway/subscription/...` 业务路径；不要把 `/api/...` 管理路径发布到公网。最小健康检查如确有需要可单独允许 `/api/health`。
 
 ## 5. 统一入口地址
 

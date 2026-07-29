@@ -21,6 +21,14 @@ const UNSAFE_KEY_PATTERNS = [
   /^test[-_ ]?key/i,
 ];
 
+const PROVIDER_LOGIN_HOSTS = Object.freeze({
+  codex: ["auth.openai.com"],
+  claude: ["claude.ai"],
+  kimi: ["auth.kimi.com", "kimi.com"],
+  xai: ["auth.x.ai"],
+  antigravity: ["accounts.google.com"],
+});
+
 function stripYamlScalar(value) {
   const trimmed = String(value || "").trim().replace(/\s+#.*$/, "").trim();
   if (!trimmed) return "";
@@ -61,7 +69,7 @@ function isUnsafeApiKey(value) {
 }
 
 function inspectCliProxyConfig(text) {
-  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  const normalized = String(text || "").replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
   const apiKeysBlock = findTopLevelYamlBlock(lines, "api-keys");
   const apiKeys = apiKeysBlock.start < 0
@@ -121,6 +129,30 @@ function updateCliProxyApiKeys(text, newKey) {
   }
   const newline = hadCrLf ? "\r\n" : "\n";
   return `${lines.join(newline)}${trailingNewline ? newline : ""}`;
+}
+
+function updateCliProxyHost(text, host = "127.0.0.1") {
+  const normalizedHost = String(host || "").trim().toLowerCase();
+  if (!["127.0.0.1", "localhost", "::1"].includes(normalizedHost)) {
+    throw new Error("CLIProxyAPI host must be a loopback address.");
+  }
+  const input = String(text || "");
+  const byteOrderMark = input.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const hadCrLf = /\r\n/.test(input);
+  const normalized = input.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+  const trailingNewline = normalized.endsWith("\n");
+  const lines = normalized.split("\n");
+  if (trailingNewline) lines.pop();
+  const hostIndex = lines.findIndex((line) => /^host:\s*/.test(line));
+  const replacement = `host: ${JSON.stringify(normalizedHost)}`;
+  if (hostIndex < 0) {
+    lines.unshift(replacement);
+  } else {
+    const comment = lines[hostIndex].match(/\s+(#.*)$/)?.[1] || "";
+    lines[hostIndex] = `${replacement}${comment ? ` ${comment}` : ""}`;
+  }
+  const newline = hadCrLf ? "\r\n" : "\n";
+  return `${byteOrderMark}${lines.join(newline)}${trailingNewline ? newline : ""}`;
 }
 
 function expandUserPath(value) {
@@ -267,6 +299,21 @@ function sanitizeLoginSession(session) {
   };
 }
 
+function isAllowedProviderLoginUrl(providerId, value) {
+  const allowedHosts = PROVIDER_LOGIN_HOSTS[String(providerId || "").toLowerCase()] || [];
+  if (!allowedHosts.length) return false;
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "https:" || url.username || url.password) return false;
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+    return allowedHosts.some((allowedHost) => (
+      hostname === allowedHost || hostname.endsWith(`.${allowedHost}`)
+    ));
+  } catch {
+    return false;
+  }
+}
+
 function createSubscriptionSetupController(options = {}) {
   const spawnImpl = options.spawnImpl || spawn;
   const now = options.now || (() => new Date());
@@ -386,8 +433,9 @@ function createSubscriptionSetupController(options = {}) {
     const captureLoginState = (chunk) => {
       const text = String(chunk || "");
       const url = text.match(/https?:\/\/[^\s"'<>]+/)?.[0] || "";
-      if (url && /auth|oauth|login|account|openai|anthropic|moonshot|kimi|x\.ai/i.test(url)) {
-        session.authUrl = url.replace(/[),.;]+$/, "");
+      const normalizedUrl = url.replace(/[),.;]+$/, "");
+      if (normalizedUrl && isAllowedProviderLoginUrl(provider.id, normalizedUrl)) {
+        session.authUrl = normalizedUrl;
       }
       if (/success|logged in|authentication complete|authenticated/i.test(text)) {
         session.message = "登录已完成，正在保存授权…";
@@ -448,9 +496,11 @@ module.exports = {
   findCommandOnPath,
   findTopLevelYamlBlock,
   inspectCliProxyConfig,
+  isAllowedProviderLoginUrl,
   isUnsafeApiKey,
   resolveCliProxyConfigPath,
   resolveCliProxyExecutable,
   stripYamlScalar,
   updateCliProxyApiKeys,
+  updateCliProxyHost,
 };

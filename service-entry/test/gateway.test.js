@@ -11,6 +11,45 @@ const core = require("../../manager-core");
 const entry = require("../server");
 const subscriptionSetup = require("../subscription-setup");
 
+async function invokeEntryHandler({
+  method = "GET",
+  pathname,
+  remoteAddress = "127.0.0.1",
+  headers = {},
+}) {
+  return new Promise((resolve, reject) => {
+    const req = {
+      method,
+      url: pathname,
+      headers: { host: "127.0.0.1:5176", ...headers },
+      socket: { remoteAddress },
+    };
+    const response = {
+      status: 200,
+      headers: {},
+      body: "",
+      writeHead(status, headers = {}) {
+        this.status = status;
+        this.headers = headers;
+      },
+      end(body = "") {
+        this.body = String(body);
+        resolve({
+          status: this.status,
+          headers: this.headers,
+          json: this.body ? JSON.parse(this.body) : null,
+        });
+      },
+    };
+    entry.handleRequest(req, response, {
+      serviceEntryMode: "subscription",
+      subscriptionProxyConfig: core.normalizeSubscriptionProxyConfig({
+        CLIPROXY_ENABLED: "0",
+      }),
+    }).catch(reject);
+  });
+}
+
 test("parses gateway routes and maps them to manager paths", () => {
   const openAiRoute = entry.parseGatewayRoute("/gateway/auto/openai/v1/chat/completions");
   assert.deepEqual(openAiRoute, {
@@ -246,6 +285,72 @@ test("subscription-only entry skips managers and rejects local-model routes", as
   }
 });
 
+test("remote clients receive only minimal health and cannot access management APIs", async () => {
+  const health = await invokeEntryHandler({
+    pathname: "/api/health",
+    remoteAddress: "192.168.1.88",
+  });
+  assert.equal(health.status, 200);
+  assert.deepEqual(Object.keys(health.json).sort(), ["mode", "ok", "service", "version"]);
+  assert.equal(health.json.mode, "subscription");
+
+  for (const pathname of ["/api/status", "/api/gateway-access"]) {
+    const response = await invokeEntryHandler({
+      pathname,
+      remoteAddress: "192.168.1.88",
+    });
+    assert.equal(response.status, 403);
+    assert.match(response.json.error, /本机|localhost/i);
+  }
+
+  for (const pathname of ["/api/shutdown", "/api/manager/shutdown"]) {
+    const response = await invokeEntryHandler({
+      method: "POST",
+      pathname,
+      remoteAddress: "192.168.1.88",
+    });
+    assert.equal(response.status, 403);
+    assert.match(response.json.error, /本机|localhost/i);
+  }
+
+  const forwardedShutdown = await invokeEntryHandler({
+    method: "POST",
+    pathname: "/api/shutdown",
+    remoteAddress: "127.0.0.1",
+    headers: { "x-forwarded-for": "203.0.113.50" },
+  });
+  assert.equal(forwardedShutdown.status, 403);
+
+  const forwardedStatus = await invokeEntryHandler({
+    pathname: "/api/status",
+    remoteAddress: "127.0.0.1",
+    headers: { forwarded: "for=203.0.113.50;proto=https" },
+  });
+  assert.equal(forwardedStatus.status, 403);
+
+  const crossOriginShutdown = await invokeEntryHandler({
+    method: "POST",
+    pathname: "/api/shutdown",
+    headers: { origin: "https://attacker.invalid" },
+  });
+  assert.equal(crossOriginShutdown.status, 403);
+
+  const dnsRebindingStatus = await invokeEntryHandler({
+    pathname: "/api/status",
+    headers: { host: "attacker.invalid" },
+  });
+  assert.equal(dnsRebindingStatus.status, 403);
+
+  const sameOriginStatus = await invokeEntryHandler({
+    pathname: "/api/status",
+    headers: {
+      origin: "http://127.0.0.1:5176",
+      referer: "http://127.0.0.1:5176/subscription-console.html",
+    },
+  });
+  assert.equal(sameOriginStatus.status, 200);
+});
+
 test("subscription setup config replaces unsafe examples and preserves valid API keys", () => {
   const original = [
     'host: ""',
@@ -273,6 +378,29 @@ test("subscription setup config replaces unsafe examples and preserves valid API
   assert.match(updated, /sk-proxy-generated-client-key-that-is-long-enough/);
   assert.doesNotMatch(updated, /your-api-key-1/);
   assert.match(updated, /debug: false/);
+});
+
+test("subscription setup can enforce loopback host without changing unrelated config", () => {
+  const original = [
+    'host: "" # bind address',
+    "port: 8317",
+    'auth-dir: "~/.cli-proxy-api"',
+    "debug: false",
+    "",
+  ].join("\r\n");
+  const updated = subscriptionSetup.updateCliProxyHost(original);
+  assert.equal(subscriptionSetup.inspectCliProxyConfig(updated).loopbackOnly, true);
+  assert.match(updated, /^host: "127\.0\.0\.1" # bind address\r$/m);
+  assert.match(updated, /auth-dir: "~\/\.cli-proxy-api"/);
+  assert.match(updated, /debug: false/);
+  assert.match(updated, /\r\n/);
+  assert.equal(subscriptionSetup.updateCliProxyHost(updated), updated);
+
+  const bomUpdated = subscriptionSetup.updateCliProxyHost(`\uFEFFhost: ""\r\nport: 8317\r\n`);
+  assert.equal(bomUpdated.startsWith("\uFEFF"), true);
+  assert.equal(subscriptionSetup.inspectCliProxyConfig(bomUpdated).loopbackOnly, true);
+  assert.equal((bomUpdated.match(/^host:/gm) || []).length, 0);
+  assert.equal((bomUpdated.match(/host:/g) || []).length, 1);
 });
 
 test("subscription setup APIs are actionable from localhost", async () => {
@@ -375,11 +503,53 @@ test("subscription setup controller writes a key and launches the selected offic
     assert.equal(spawnCalls[0].executable, process.execPath);
     child.emit("spawn");
     assert.equal((await controller.getStatus()).loginSession.status, "waiting");
+    child.stdout.write("Open http://attacker.invalid/openai-login to continue\n");
+    assert.equal((await controller.getStatus()).loginSession.authUrl, null);
+    child.stderr.write("Visit https://auth.openai.com/oauth/authorize?state=test-state\n");
+    assert.equal(
+      (await controller.getStatus()).loginSession.authUrl,
+      "https://auth.openai.com/oauth/authorize?state=test-state",
+    );
     child.emit("exit", 0, null);
     assert.equal((await controller.getStatus()).loginSession.status, "succeeded");
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("provider login URL allowlist requires HTTPS and the official provider host", () => {
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("codex", "https://auth.openai.com/oauth/authorize"),
+    true,
+  );
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("claude", "https://claude.ai/oauth/authorize"),
+    true,
+  );
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("kimi", "https://auth.kimi.com/device"),
+    true,
+  );
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("xai", "https://auth.x.ai/activate"),
+    true,
+  );
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("antigravity", "https://accounts.google.com/o/oauth2/v2/auth"),
+    true,
+  );
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("codex", "http://auth.openai.com/oauth/authorize"),
+    false,
+  );
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("codex", "https://auth.openai.com.attacker.invalid/oauth"),
+    false,
+  );
+  assert.equal(
+    subscriptionSetup.isAllowedProviderLoginUrl("claude", "https://attacker.invalid/claude-login"),
+    false,
+  );
 });
 
 test("subscription service status always previews LAN endpoints and validates public HTTPS URLs", () => {

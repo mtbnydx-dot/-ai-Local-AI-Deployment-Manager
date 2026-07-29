@@ -320,7 +320,7 @@ You can also double-click `start-subscription-proxy-macos.command` in Finder. If
 
 You can also run `./start-subscription-proxy.sh` to auto-detect Ubuntu or macOS. The launcher waits for the frontend and gateway to become ready, then opens the unified subscription console with account and service tabs in the browser.
 
-Use `subscription-proxy-ubuntu.sh` or `subscription-proxy-macos.sh` for advanced `start lan`, `status`, and `stop` operations. They require Node.js 20+, Bash, and curl, but do not require Docker or an NVIDIA GPU.
+Use `subscription-proxy-ubuntu.sh` or `subscription-proxy-macos.sh` for advanced `start lan`, `status`, and `stop` operations. They require Node.js 20+, Bash, curl, and either `lsof` or `ss`, but do not require Docker or an NVIDIA GPU. All launchers keep CLIProxyAPI on loopback, verify its identity and actual listener, and derive local/LAN status from the live socket rather than the requested command.
 
 To serve other LAN devices:
 

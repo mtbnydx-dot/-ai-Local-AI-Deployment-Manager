@@ -27,6 +27,8 @@ ENTRY_LOG="$LOG_DIR/subscription-entry.log"
 
 PROXY_HOST=""
 PROXY_PORT=""
+PROXY_CONFIG_PATH=""
+PROXY_EXECUTABLE=""
 PROXY_STARTED_THIS_RUN=0
 START_COMPLETED=0
 
@@ -55,6 +57,10 @@ Environment:
   SERVICE_ENTRY_HOST  Explicit bind host; overrides local/lan mode.
   SUBSCRIPTION_PROXY_NO_OPEN=1  Do not open a browser after startup.
   SUBSCRIPTION_PROXY_BROWSER_EXE  Optional browser/opener executable.
+
+The launcher keeps CLIProxyAPI on 127.0.0.1 in both local and LAN modes.
+When a writable CLIProxyAPI config is found, its top-level host is corrected
+to 127.0.0.1 before a new proxy process starts.
 EOF
 }
 
@@ -176,6 +182,12 @@ validate_runtime() {
     if (!Number.isInteger(major) || major < 20) process.exit(1);
   ' || die "Node.js 20 or newer is required."
 
+  if [[ -n "${CLIPROXY_CONFIG:-}" ]]; then
+    [[ -f "$CLIPROXY_CONFIG" ]] || die "CLIPROXY_CONFIG does not exist: $CLIPROXY_CONFIG"
+    CLIPROXY_CONFIG="$(absolute_file "$CLIPROXY_CONFIG")"
+    export CLIPROXY_CONFIG
+  fi
+
   local parsed
   parsed="$("$NODE_EXE" -e '
     try {
@@ -220,32 +232,106 @@ tcp_is_open() {
   ' "$1" "$2" >/dev/null 2>&1
 }
 
-proxy_is_ready() {
-  local status
-  status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-    --connect-timeout 1 --max-time 3 "$PROXY_BASE_URL/v1/models" 2>/dev/null)" || return 1
-  case "$status" in
-    200|401|403) return 0 ;;
-    *) return 1 ;;
-  esac
+listener_addresses() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -Fn 2>/dev/null |
+      sed -n 's/^n//p'
+    return 0
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -H -ltn "sport = :$port" 2>/dev/null |
+      awk '{print $4}'
+    return 0
+  fi
+  return 2
 }
 
-entry_mode() {
+listener_scope() {
+  local port="$1"
+  local addresses
+  local address
+  local found=0
+  local non_loopback=0
+
+  addresses="$(listener_addresses "$port")" || {
+    printf 'unknown\n'
+    return 0
+  }
+  while IFS= read -r address; do
+    [[ -n "$address" ]] || continue
+    found=1
+    case "$address" in
+      127.0.0.1:*|\[::1\]:*|::1:*) ;;
+      *) non_loopback=1 ;;
+    esac
+  done <<<"$addresses"
+  if (( found == 0 )); then
+    printf 'offline\n'
+  elif (( non_loopback == 1 )); then
+    printf 'lan\n'
+  else
+    printf 'local\n'
+  fi
+}
+
+listener_matches_host() {
+  local port="$1"
+  local desired_host="$2"
+  local scope
+  scope="$(listener_scope "$port")"
+  if is_loopback_host "$desired_host"; then
+    [[ "$scope" == "local" ]]
+  else
+    [[ "$scope" == "lan" ]]
+  fi
+}
+
+assert_loopback_listener() {
+  local port="$1"
+  local scope
+  local addresses
+  scope="$(listener_scope "$port")"
+  addresses="$(listener_addresses "$port" 2>/dev/null | tr '\n' ' ' || true)"
+  [[ "$scope" == "local" ]] ||
+    die "CLIProxyAPI must listen only on 127.0.0.1/::1, but port $port is '$scope' (${addresses:-address unavailable}). Restart CLIProxyAPI after correcting its config."
+}
+
+proxy_is_ready() {
+  local response
+  local status
+  response="$(curl --silent --show-error --dump-header - --output /dev/null --write-out $'\n%{http_code}' \
+    --connect-timeout 1 --max-time 3 "$PROXY_BASE_URL/v1/models" 2>/dev/null)" || return 1
+  status="$(printf '%s\n' "$response" | tail -n 1 | tr -d '\r')"
+  case "$status" in
+    200|401|403) ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$response" | tr '[:upper:]' '[:lower:]' | grep -q 'x-cpa-' || return 1
+}
+
+entry_status_field() {
+  local field="$1"
   curl --silent --show-error --connect-timeout 1 --max-time 3 \
     "http://127.0.0.1:$ENTRY_PORT/api/status" 2>/dev/null |
     "$NODE_EXE" -e '
       let body = "";
+      const field = process.argv[1];
       process.stdin.setEncoding("utf8");
       process.stdin.on("data", (chunk) => { body += chunk; });
       process.stdin.on("end", () => {
         try {
           const value = JSON.parse(body);
-          process.stdout.write(String(value.entry && value.entry.mode || ""));
+          process.stdout.write(String(value.entry && value.entry[field] || ""));
         } catch {
           process.exit(1);
         }
       });
-    '
+    ' "$field"
+}
+
+entry_mode() {
+  entry_status_field mode
 }
 
 wait_for_proxy() {
@@ -320,6 +406,49 @@ resolve_clip_proxy_executable() {
     cli-proxy-api cliproxyapi
 }
 
+resolve_clip_proxy_config() {
+  local executable="$1"
+  local candidate
+  local executable_directory
+  executable_directory="$(dirname "$executable")"
+
+  if [[ -n "${CLIPROXY_CONFIG:-}" ]]; then
+    printf '%s\n' "$CLIPROXY_CONFIG"
+    return 0
+  fi
+  for candidate in \
+    "/opt/homebrew/etc/cliproxyapi.conf" \
+    "/usr/local/etc/cliproxyapi.conf" \
+    "$SCRIPT_DIR/config.yaml" \
+    "$SCRIPT_DIR/config.yml" \
+    "$SCRIPT_DIR/cliproxyapi.conf" \
+    "$executable_directory/config.yaml" \
+    "$executable_directory/config.yml" \
+    "${HOME}/.cli-proxy-api/config.yaml"; do
+    if [[ -f "$candidate" ]]; then
+      absolute_file "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+prepare_proxy_config() {
+  local result
+  [[ -n "$PROXY_EXECUTABLE" ]] || return 0
+  if [[ -z "$PROXY_CONFIG_PATH" ]]; then
+    PROXY_CONFIG_PATH="$(resolve_clip_proxy_config "$PROXY_EXECUTABLE" || true)"
+  fi
+  [[ -n "$PROXY_CONFIG_PATH" ]] || return 0
+  result="$("$NODE_EXE" "$ENTRY_ROOT/subscription-config-tool.js" ensure-loopback "$PROXY_CONFIG_PATH")" ||
+    die "Could not enforce the CLIProxyAPI loopback setting in $PROXY_CONFIG_PATH"
+  CLIPROXY_CONFIG="$PROXY_CONFIG_PATH"
+  export CLIPROXY_CONFIG
+  if printf '%s' "$result" | grep -q '"changed":true'; then
+    printf 'Updated CLIProxyAPI config to bind 127.0.0.1: %s\n' "$PROXY_CONFIG_PATH"
+  fi
+}
+
 offer_macos_homebrew_install() {
   local answer=""
   local brew_executable=""
@@ -351,45 +480,52 @@ offer_macos_homebrew_install() {
 }
 
 start_proxy() {
-  local proxy_executable
   local proxy_pid
   local proxy_start
   local proxy_directory
 
+  PROXY_EXECUTABLE="$(resolve_clip_proxy_executable || true)"
+  is_loopback_host "$PROXY_HOST" && prepare_proxy_config
+
   if proxy_is_ready; then
+    is_loopback_host "$PROXY_HOST" && assert_loopback_listener "$PROXY_PORT"
     printf 'CLIProxyAPI is already reachable at %s; reusing it without taking ownership.\n' "$PROXY_BASE_URL"
     return 0
   fi
   if wait_for_existing_proxy; then
+    is_loopback_host "$PROXY_HOST" && assert_loopback_listener "$PROXY_PORT"
     printf 'CLIProxyAPI became reachable at %s; reusing it without taking ownership.\n' "$PROXY_BASE_URL"
     return 0
+  fi
+  if tcp_is_open "$PROXY_HOST" "$PROXY_PORT"; then
+    die "Port $PROXY_PORT is occupied by a service that did not present the CLIProxyAPI identity headers."
   fi
 
   is_loopback_host "$PROXY_HOST" ||
     die "Configured remote CLIProxyAPI is unreachable: $PROXY_BASE_URL"
 
-  if ! proxy_executable="$(resolve_clip_proxy_executable)"; then
+  if [[ -z "$PROXY_EXECUTABLE" ]]; then
     offer_macos_homebrew_install || true
-    proxy_executable="$(resolve_clip_proxy_executable || true)"
+    PROXY_EXECUTABLE="$(resolve_clip_proxy_executable || true)"
+    is_loopback_host "$PROXY_HOST" && prepare_proxy_config
   fi
-  if [[ -z "$proxy_executable" ]]; then
+  if [[ -z "$PROXY_EXECUTABLE" ]]; then
     if [[ "$PLATFORM" == "macos" ]]; then
       die "CLIProxyAPI was not found. Install it with 'brew install cliproxyapi' or set CLIPROXY_EXE."
     fi
     die "CLIProxyAPI was not found. Install it with the official Linux installer or set CLIPROXY_EXE."
   fi
 
-  proxy_directory="$(dirname "$proxy_executable")"
-  if [[ -n "${CLIPROXY_CONFIG:-}" ]]; then
-    [[ -f "$CLIPROXY_CONFIG" ]] || die "CLIPROXY_CONFIG does not exist: $CLIPROXY_CONFIG"
+  proxy_directory="$(dirname "$PROXY_EXECUTABLE")"
+  if [[ -n "$PROXY_CONFIG_PATH" ]]; then
     (
       cd "$proxy_directory"
-      exec nohup "$proxy_executable" --config "$CLIPROXY_CONFIG"
+      exec nohup "$PROXY_EXECUTABLE" --config "$PROXY_CONFIG_PATH"
     ) >>"$PROXY_LOG" 2>&1 &
   else
     (
       cd "$proxy_directory"
-      exec nohup "$proxy_executable"
+      exec nohup "$PROXY_EXECUTABLE"
     ) >>"$PROXY_LOG" 2>&1 &
   fi
   proxy_pid=$!
@@ -400,6 +536,7 @@ start_proxy() {
     PROXY_STARTED_THIS_RUN=0
     die "CLIProxyAPI did not become ready at $PROXY_BASE_URL. Check $PROXY_LOG."
   fi
+  assert_loopback_listener "$PROXY_PORT"
 
   proxy_start="$(process_start_signature "$proxy_pid")"
   [[ -n "$proxy_start" ]] || {
@@ -409,7 +546,7 @@ start_proxy() {
   }
   printf '%s\n' "$proxy_pid" >"$PROXY_PID_FILE"
   printf '%s\n' "$proxy_start" >"$PROXY_START_FILE"
-  printf '%s\n' "$proxy_executable" >"$PROXY_EXE_FILE"
+  printf '%s\n' "$PROXY_EXECUTABLE" >"$PROXY_EXE_FILE"
   printf '%s\n' "$PROXY_BASE_URL" >"$PROXY_URL_FILE"
   printf 'Started CLIProxyAPI PID %s at %s.\n' "$proxy_pid" "$PROXY_BASE_URL"
 }
@@ -418,18 +555,7 @@ start_entry() {
   local current_mode
   local entry_pid
   local entry_start
-
-  current_mode="$(entry_mode 2>/dev/null || true)"
-  if [[ "$current_mode" == "subscription" ]]; then
-    printf 'Subscription frontend and gateway are already running on port %s.\n' "$ENTRY_PORT"
-    return 0
-  fi
-  if [[ -n "$current_mode" ]]; then
-    die "Port $ENTRY_PORT is running service-entry in '$current_mode' mode. Stop it before starting the isolated stack."
-  fi
-  if tcp_is_open 127.0.0.1 "$ENTRY_PORT"; then
-    die "Port $ENTRY_PORT is already in use and is not a verifiable subscription service-entry."
-  fi
+  local desired_scope
 
   if [[ -n "$ENTRY_HOST" ]]; then
     :
@@ -437,6 +563,30 @@ start_entry() {
     ENTRY_HOST="0.0.0.0"
   else
     ENTRY_HOST="127.0.0.1"
+  fi
+  desired_scope="lan"
+  is_loopback_host "$ENTRY_HOST" && desired_scope="local"
+
+  current_mode="$(entry_mode 2>/dev/null || true)"
+  if [[ "$current_mode" == "subscription" ]]; then
+    if listener_matches_host "$ENTRY_PORT" "$ENTRY_HOST"; then
+      printf 'Subscription frontend and gateway are already running on port %s in %s mode.\n' "$ENTRY_PORT" "$desired_scope"
+      return 0
+    fi
+    if [[ -f "$ENTRY_PID_FILE" && -f "$ENTRY_START_FILE" ]] &&
+      process_matches_record "$(cat "$ENTRY_PID_FILE")" "$(cat "$ENTRY_START_FILE")" "$NODE_EXE"; then
+      printf 'Restarting the launcher-owned frontend/gateway to switch to %s mode.\n' "$desired_scope"
+      stop_entry
+      current_mode=""
+    else
+      die "Subscription service-entry is already running with a different network binding and is not owned by this launcher. Stop it explicitly before switching modes."
+    fi
+  fi
+  if [[ -n "$current_mode" ]]; then
+    die "Port $ENTRY_PORT is running service-entry in '$current_mode' mode. Stop it before starting the isolated stack."
+  fi
+  if tcp_is_open 127.0.0.1 "$ENTRY_PORT"; then
+    die "Port $ENTRY_PORT is already in use and is not a verifiable subscription service-entry."
   fi
 
   SERVICE_ENTRY_HOST="$ENTRY_HOST" \
@@ -450,6 +600,10 @@ start_entry() {
   if ! wait_for_entry_mode subscription; then
     stop_pid_gracefully "$entry_pid"
     die "Frontend and gateway did not enter subscription mode. Check $ENTRY_LOG."
+  fi
+  if ! listener_matches_host "$ENTRY_PORT" "$ENTRY_HOST"; then
+    stop_pid_gracefully "$entry_pid"
+    die "Frontend/gateway listener does not match requested $desired_scope mode."
   fi
 
   entry_start="$(process_start_signature "$entry_pid")"
@@ -562,18 +716,22 @@ lan_address() {
 show_status() {
   local proxy_state="offline"
   local frontend_state="offline"
+  local proxy_scope
+  local frontend_scope
   local current_mode
   local address
 
   proxy_is_ready && proxy_state="reachable"
   current_mode="$(entry_mode 2>/dev/null || true)"
   [[ -n "$current_mode" ]] && frontend_state="$current_mode"
+  proxy_scope="$(listener_scope "$PROXY_PORT")"
+  frontend_scope="$(listener_scope "$ENTRY_PORT")"
 
-  printf '%-20s %-10s %-18s %s\n' "MODULE" "PORT" "STATE" "URL"
-  printf '%-20s %-10s %-18s %s\n' "CLIProxyAPI" "$PROXY_PORT" "$proxy_state" "$PROXY_BASE_URL"
-  printf '%-20s %-10s %-18s %s\n' "Frontend + Gateway" "$ENTRY_PORT" "$frontend_state" "http://127.0.0.1:$ENTRY_PORT/"
+  printf '%-20s %-10s %-18s %-8s %s\n' "MODULE" "PORT" "STATE" "BIND" "URL"
+  printf '%-20s %-10s %-18s %-8s %s\n' "CLIProxyAPI" "$PROXY_PORT" "$proxy_state" "$proxy_scope" "$PROXY_BASE_URL"
+  printf '%-20s %-10s %-18s %-8s %s\n' "Frontend + Gateway" "$ENTRY_PORT" "$frontend_state" "$frontend_scope" "http://127.0.0.1:$ENTRY_PORT/"
 
-  if [[ "$MODE" == "lan" || "${ENTRY_HOST:-}" == "0.0.0.0" ]]; then
+  if [[ "$frontend_scope" == "lan" ]]; then
     address="$(lan_address)"
     [[ -n "$address" ]] && printf 'LAN dashboard: http://%s:%s/\n' "$address" "$ENTRY_PORT"
   fi

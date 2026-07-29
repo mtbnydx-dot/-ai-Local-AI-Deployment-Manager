@@ -275,6 +275,44 @@ async function smokeEntryPage(page, baseUrl, mode = "full") {
   await expect(page.locator("a[href='/subscription-console.html#service']")).toContainText("服务发布配置");
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
   await expect(page.locator(".app-signature")).toContainText("© 2026 mtbnydx-dot");
+  await page.route("**/api/subscription-proxy/setup", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        localOnly: true,
+        executable: { found: true, path: "/test/cliproxyapi" },
+        config: {
+          found: true,
+          path: "/test/config.yaml",
+          host: "127.0.0.1",
+          port: 8317,
+          loopbackOnly: true,
+          safeApiKeyConfigured: true,
+          safeApiKeyCount: 1,
+          unsafeApiKeyCount: 0,
+        },
+        auth: { accountFiles: 1 },
+        providers: [
+          { id: "codex", label: "OpenAI / Codex" },
+          { id: "claude", label: "Claude" },
+          { id: "kimi", label: "Kimi" },
+          { id: "xai", label: "xAI" },
+          { id: "antigravity", label: "Antigravity" },
+        ],
+        loginSession: null,
+      }),
+    });
+  });
+  await page.route("**/api/subscription-proxy/api-key", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        apiKey: "sk-proxy-smoke-one-time-value",
+      }),
+    });
+  });
   await page.goto(new URL("/subscription-console.html", baseUrl).href, { waitUntil: "domcontentloaded" });
   await expect(page.locator("h1")).toContainText("订阅反代控制台");
   await expect(page.locator("#servicePanel")).toBeVisible();
@@ -285,11 +323,15 @@ async function smokeEntryPage(page, baseUrl, mode = "full") {
   await expect(page.locator("#accountDialog")).toBeVisible();
   await expect(page.locator("[data-provider]")).toHaveCount(5);
   await expect(page).toHaveURL(/#login$/);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("[data-generate-key]").click();
+  await expect(page.locator(".secret")).toContainText("sk-proxy-smoke-one-time-value");
   await page.getByRole("button", { name: "关闭反代账号配置" }).click();
   await expect(page.locator("#accountDialog")).not.toBeVisible();
   await expect(page.locator("#servicePanel")).toBeVisible();
   await expect(page).toHaveURL(/#service$/);
   await page.locator("[data-open-account]").click();
+  await expect(page.locator(".secret")).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileLayout = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

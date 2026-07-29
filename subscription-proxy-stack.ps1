@@ -26,10 +26,53 @@ $ProxyPort = $ProxyUri.Port
 $ProxyProcessFile = Join-Path $EntryRoot ".cliproxy-process.json"
 $EntryPidFile = Join-Path $EntryRoot ".manager.pid"
 $script:ProxyStartedByLauncher = $false
+$script:ProxyConfigPath = $null
+$script:NodeExecutable = $null
+
+function Get-PortListeners {
+  param([int]$Port)
+  @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+}
 
 function Get-PortListener {
   param([int]$Port)
-  Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+  Get-PortListeners -Port $Port | Select-Object -First 1
+}
+
+function Get-ListenerScope {
+  param([int]$Port)
+  $listeners = @(Get-PortListeners -Port $Port)
+  if ($listeners.Count -eq 0) { return "offline" }
+  $nonLoopback = @($listeners | Where-Object {
+    $_.LocalAddress -notin @("127.0.0.1", "::1")
+  })
+  if ($nonLoopback.Count -gt 0) { return "lan" }
+  return "local"
+}
+
+function Test-ListenerMatchesHost {
+  param(
+    [int]$Port,
+    [string]$DesiredHost
+  )
+  $scope = Get-ListenerScope -Port $Port
+  if ($DesiredHost -in @("127.0.0.1", "localhost", "::1")) {
+    return $scope -eq "local"
+  }
+  return $scope -eq "lan"
+}
+
+function Assert-LoopbackListener {
+  param(
+    [int]$Port,
+    [string]$Name
+  )
+  $listeners = @(Get-PortListeners -Port $Port)
+  $scope = Get-ListenerScope -Port $Port
+  if ($scope -ne "local") {
+    $addresses = ($listeners | ForEach-Object { $_.LocalAddress }) -join ", "
+    throw "$Name must listen only on 127.0.0.1 or ::1, but port $Port is '$scope' ($addresses). Restart it after correcting the config."
+  }
 }
 
 function Wait-PortState {
@@ -73,6 +116,90 @@ function Resolve-Executable {
   return $null
 }
 
+function Get-NodeExecutable {
+  if ($script:NodeExecutable) { return $script:NodeExecutable }
+  $script:NodeExecutable = Resolve-Executable `
+    -EnvironmentValue $env:NODE_EXE `
+    -CommandNames @("node.exe", "node") `
+    -Candidates @()
+  if (!$script:NodeExecutable) {
+    throw "Node.js was not found. Install Node.js 20+ or set NODE_EXE."
+  }
+  $major = & $script:NodeExecutable -e "process.stdout.write(process.versions.node.split('.')[0])"
+  if ([int]$major -lt 20) {
+    throw "Node.js 20 or newer is required."
+  }
+  return $script:NodeExecutable
+}
+
+function Resolve-CliProxyConfig {
+  param([string]$ProxyExecutable)
+  if ($env:CLIPROXY_CONFIG) {
+    if (!(Test-Path -LiteralPath $env:CLIPROXY_CONFIG -PathType Leaf)) {
+      throw "CLIPROXY_CONFIG does not exist: $($env:CLIPROXY_CONFIG)"
+    }
+    return (Resolve-Path -LiteralPath $env:CLIPROXY_CONFIG).Path
+  }
+  $executableDirectory = if ($ProxyExecutable) { Split-Path -Parent $ProxyExecutable } else { "" }
+  $candidates = @(
+    (Join-Path $Root "config.yaml")
+    (Join-Path $Root "config.yml")
+    (Join-Path $Root "cliproxyapi.conf")
+    if ($executableDirectory) { Join-Path $executableDirectory "config.yaml" }
+    if ($executableDirectory) { Join-Path $executableDirectory "config.yml" }
+    if ($env:USERPROFILE) { Join-Path $env:USERPROFILE ".cli-proxy-api\config.yaml" }
+  ) | Where-Object { $_ }
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      return (Resolve-Path -LiteralPath $candidate).Path
+    }
+  }
+  return $null
+}
+
+function Ensure-CliProxyLoopbackConfig {
+  param([string]$ProxyExecutable)
+  if ($ProxyUri.Host -notin @("127.0.0.1", "localhost", "::1")) { return }
+  $script:ProxyConfigPath = Resolve-CliProxyConfig -ProxyExecutable $ProxyExecutable
+  if (!$script:ProxyConfigPath) { return }
+  $nodeExecutable = Get-NodeExecutable
+  $tool = Join-Path $EntryRoot "subscription-config-tool.js"
+  $resultText = & $nodeExecutable $tool ensure-loopback $script:ProxyConfigPath
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not enforce the CLIProxyAPI loopback setting in $($script:ProxyConfigPath)."
+  }
+  $result = $resultText | ConvertFrom-Json
+  $env:CLIPROXY_CONFIG = $script:ProxyConfigPath
+  if ($result.changed) {
+    Write-Host "Updated CLIProxyAPI config to bind 127.0.0.1: $($script:ProxyConfigPath)"
+  }
+}
+
+function Test-CliProxyApiEndpoint {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "$($ProxyBaseUrl.TrimEnd('/'))/v1/models" -TimeoutSec 3
+    $status = [int]$response.StatusCode
+    $headers = $response.Headers | Out-String
+  } catch {
+    $webResponse = $_.Exception.Response
+    if (!$webResponse) { return $false }
+    $status = [int]$webResponse.StatusCode
+    $headers = $webResponse.Headers | Out-String
+  }
+  if ($status -notin @(200, 401, 403)) { return $false }
+  return $headers -match "(?i)x-cpa-"
+}
+
+function Wait-CliProxyApi {
+  param([int]$TimeoutSeconds = 15)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    if (Test-CliProxyApiEndpoint) { return $true }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
 function Resolve-LanAddress {
   $addresses = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
     $_.IPAddress -ne "127.0.0.1" -and
@@ -89,14 +216,6 @@ function Resolve-LanAddress {
 }
 
 function Start-CliProxyApi {
-  if ($ProxyUri.Host -notin @("127.0.0.1", "localhost", "::1")) {
-    Write-Host "Using configured remote CLIProxyAPI upstream: $ProxyBaseUrl"
-    return
-  }
-  if (Get-PortListener -Port $ProxyPort) {
-    Write-Host "CLIProxyAPI is already listening on $ProxyPort; it will be reused and not owned by this launcher."
-    return
-  }
   $proxyExecutable = Resolve-Executable `
     -EnvironmentValue $env:CLIPROXY_EXE `
     -CommandNames @("cli-proxy-api.exe", "cli-proxy-api", "cliproxyapi.exe", "cliproxyapi") `
@@ -105,6 +224,23 @@ function Start-CliProxyApi {
       (Join-Path $Root "CLIProxyAPI\cli-proxy-api.exe"),
       (Join-Path $Root "cliproxyapi.exe")
     )
+  Ensure-CliProxyLoopbackConfig -ProxyExecutable $proxyExecutable
+
+  if ($ProxyUri.Host -notin @("127.0.0.1", "localhost", "::1")) {
+    if (!(Test-CliProxyApiEndpoint)) {
+      throw "Configured remote upstream did not present the CLIProxyAPI identity headers: $ProxyBaseUrl"
+    }
+    Write-Host "Using verified remote CLIProxyAPI upstream: $ProxyBaseUrl"
+    return
+  }
+  if (Get-PortListener -Port $ProxyPort) {
+    if (!(Test-CliProxyApiEndpoint)) {
+      throw "Port $ProxyPort is occupied by a service that did not present the CLIProxyAPI identity headers."
+    }
+    Assert-LoopbackListener -Port $ProxyPort -Name "CLIProxyAPI"
+    Write-Host "Verified CLIProxyAPI is already listening on loopback port $ProxyPort; it will be reused and not owned by this launcher."
+    return
+  }
   if (!$proxyExecutable) {
     throw "CLIProxyAPI executable was not found. Install it or set CLIPROXY_EXE, then run this launcher again. Setup guide: docs\subscription-proxy-guide.md"
   }
@@ -114,8 +250,8 @@ function Start-CliProxyApi {
   $startInfo.WorkingDirectory = Split-Path -Parent $proxyExecutable
   $startInfo.UseShellExecute = $false
   $startInfo.CreateNoWindow = $true
-  if ($env:CLIPROXY_CONFIG) {
-    $safeConfig = $env:CLIPROXY_CONFIG.Replace('"', "")
+  if ($script:ProxyConfigPath) {
+    $safeConfig = $script:ProxyConfigPath.Replace('"', "")
     $startInfo.Arguments = '--config "' + $safeConfig + '"'
   }
   $process = New-Object System.Diagnostics.Process
@@ -128,11 +264,12 @@ function Start-CliProxyApi {
     startedAt = $process.StartTime.ToUniversalTime().ToString("o")
   }
   $record | ConvertTo-Json | Set-Content -LiteralPath $ProxyProcessFile -Encoding UTF8
-  if (!(Wait-PortState -Port $ProxyPort -Open $true -TimeoutSeconds 15)) {
+  if (!(Wait-CliProxyApi -TimeoutSeconds 15)) {
     if (!$process.HasExited) { $process.Kill() }
     Remove-Item -LiteralPath $ProxyProcessFile -Force -ErrorAction SilentlyContinue
-    throw "CLIProxyAPI did not listen on port $ProxyPort within 15 seconds. Check its config file and API-key settings."
+    throw "CLIProxyAPI did not become ready with a verifiable identity on port $ProxyPort within 15 seconds."
   }
+  Assert-LoopbackListener -Port $ProxyPort -Name "CLIProxyAPI"
   $script:ProxyStartedByLauncher = $true
   Write-Host "Started CLIProxyAPI PID $($process.Id) on $ProxyBaseUrl"
 }
@@ -142,21 +279,42 @@ function Start-SubscriptionEntry {
   if ($listener) {
     try {
       $status = Invoke-RestMethod -UseBasicParsing -Uri "http://127.0.0.1:$EntryPort/api/status" -TimeoutSec 3
-      if ($status.entry.mode -eq "subscription") {
-        Write-Host "Subscription frontend and gateway are already running on $EntryPort."
-        return
-      }
     } catch {
       throw "Port $EntryPort is already in use and its service-entry mode could not be verified."
     }
-    throw "Port $EntryPort is running the full service-entry mode. Stop it before starting the isolated subscription stack."
+    if ($status.entry.mode -ne "subscription") {
+      throw "Port $EntryPort is running the full service-entry mode. Stop it before starting the isolated subscription stack."
+    }
+    if (Test-ListenerMatchesHost -Port $EntryPort -DesiredHost $EntryHost) {
+      $scope = Get-ListenerScope -Port $EntryPort
+      Write-Host "Subscription frontend and gateway are already running on $EntryPort in $scope mode."
+      return
+    }
+    $recordedPid = if (Test-Path -LiteralPath $EntryPidFile -PathType Leaf) {
+      [int](Get-Content -LiteralPath $EntryPidFile -Raw)
+    } else {
+      0
+    }
+    $processInfo = if ($recordedPid -gt 0) {
+      Get-CimInstance Win32_Process -Filter "ProcessId = $recordedPid" -ErrorAction SilentlyContinue
+    } else {
+      $null
+    }
+    $owned = $recordedPid -eq [int]$status.entry.pid -and
+      $processInfo -and
+      [string]$processInfo.CommandLine -match "(?i)node(?:\.exe)?.*server\.js"
+    if (!$owned) {
+      throw "Subscription service-entry has a different network binding and is not owned by this launcher. Stop it explicitly before switching modes."
+    }
+    $scope = if ($EntryHost -in @("127.0.0.1", "localhost", "::1")) { "local" } else { "lan" }
+    Write-Host "Restarting the launcher-owned frontend/gateway to switch to $scope mode."
+    Invoke-RestMethod -UseBasicParsing -Method Post -Uri "http://127.0.0.1:$EntryPort/api/shutdown" -TimeoutSec 3 | Out-Null
+    if (!(Wait-PortState -Port $EntryPort -Open $false -TimeoutSeconds 8)) {
+      throw "The existing frontend/gateway did not stop for a network mode change."
+    }
   }
 
-  $nodeExecutable = Resolve-Executable `
-    -EnvironmentValue $env:NODE_EXE `
-    -CommandNames @("node.exe", "node") `
-    -Candidates @()
-  if (!$nodeExecutable) { throw "Node.js was not found. Install Node.js 20+ or set NODE_EXE." }
+  $nodeExecutable = Get-NodeExecutable
 
   $startInfo = New-Object System.Diagnostics.ProcessStartInfo
   $startInfo.FileName = $nodeExecutable
@@ -169,6 +327,9 @@ function Start-SubscriptionEntry {
   $startInfo.EnvironmentVariables["SERVICE_ENTRY_MODE"] = "subscription"
   $startInfo.EnvironmentVariables["CLIPROXY_ENABLED"] = "1"
   $startInfo.EnvironmentVariables["CLIPROXY_BASE_URL"] = [string]$ProxyBaseUrl
+  if ($script:ProxyConfigPath) {
+    $startInfo.EnvironmentVariables["CLIPROXY_CONFIG"] = [string]$script:ProxyConfigPath
+  }
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
   [void]$process.Start()
@@ -181,6 +342,9 @@ function Start-SubscriptionEntry {
     $status = Invoke-RestMethod -UseBasicParsing -Uri "http://127.0.0.1:$EntryPort/api/status" -TimeoutSec 5
     if ($status.entry.mode -ne "subscription") {
       throw "service-entry started, but it did not enter subscription-only mode."
+    }
+    if (!(Test-ListenerMatchesHost -Port $EntryPort -DesiredHost $EntryHost)) {
+      throw "Frontend/gateway listener does not match requested mode."
     }
   } catch {
     if (!$process.HasExited) { $process.Kill() }
@@ -246,6 +410,12 @@ function Stop-SubscriptionStack {
 function Show-SubscriptionStatus {
   $proxyListener = Get-PortListener -Port $ProxyPort
   $entryListener = Get-PortListener -Port $EntryPort
+  $proxyScope = if ($ProxyUri.Host -in @("127.0.0.1", "localhost", "::1")) {
+    Get-ListenerScope -Port $ProxyPort
+  } else {
+    "remote"
+  }
+  $entryScope = Get-ListenerScope -Port $EntryPort
   $entryMode = "offline"
   if ($entryListener) {
     try {
@@ -256,8 +426,8 @@ function Show-SubscriptionStatus {
     }
   }
   @(
-    [pscustomobject]@{ Module = "CLIProxyAPI"; Port = $ProxyPort; Listening = [bool]$proxyListener; Mode = "subscription upstream"; Url = $ProxyBaseUrl },
-    [pscustomobject]@{ Module = "Frontend + Gateway"; Port = $EntryPort; Listening = [bool]$entryListener; Mode = $entryMode; Url = "http://127.0.0.1:$EntryPort/" }
+    [pscustomobject]@{ Module = "CLIProxyAPI"; Port = $ProxyPort; Listening = [bool]$proxyListener; Bind = $proxyScope; Mode = "subscription upstream"; Url = $ProxyBaseUrl },
+    [pscustomobject]@{ Module = "Frontend + Gateway"; Port = $EntryPort; Listening = [bool]$entryListener; Bind = $entryScope; Mode = $entryMode; Url = "http://127.0.0.1:$EntryPort/" }
   ) | Format-Table -AutoSize
 }
 
@@ -276,14 +446,16 @@ switch ($Action) {
     Write-Host "Claude:  http://127.0.0.1:$EntryPort/gateway/subscription/claude"
     Write-Host "Codex:   http://127.0.0.1:$EntryPort/gateway/subscription/codex/v1"
     Write-Host "OpenCode:http://127.0.0.1:$EntryPort/gateway/subscription/opencode/v1"
-    if ($EntryHost -ne "127.0.0.1") {
+    if ((Get-ListenerScope -Port $EntryPort) -eq "lan") {
       $lanAddress = Resolve-LanAddress
       if ($lanAddress) {
         Write-Host ""
         Write-Host "LAN dashboard: http://$lanAddress`:$EntryPort/"
       }
     }
-    Start-Process "http://127.0.0.1:$EntryPort/subscription-console.html"
+    if ($env:SUBSCRIPTION_PROXY_NO_OPEN -ne "1") {
+      Start-Process "http://127.0.0.1:$EntryPort/subscription-console.html"
+    }
   }
   "stop" {
     Stop-SubscriptionStack
