@@ -34,7 +34,8 @@ if ($Branch.Contains('..') -or $Branch.Contains('//') -or $Branch.EndsWith('/'))
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $currentRoot = Split-Path -Parent $scriptRoot
-$repoRoot = ((Invoke-Git -GitArgs @('-C', $currentRoot, 'rev-parse', '--show-toplevel')) | Select-Object -First 1).Trim()
+$repoRootRaw = ((Invoke-Git -GitArgs @('-C', $currentRoot, 'rev-parse', '--show-toplevel')) | Select-Object -First 1).Trim()
+$repoRoot = [System.IO.Path]::GetFullPath($repoRootRaw).TrimEnd('\')
 $worktreesRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $repoRoot)).TrimEnd('\')
 
 if ([string]::IsNullOrWhiteSpace($Path)) {

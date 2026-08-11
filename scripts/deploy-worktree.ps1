@@ -46,7 +46,8 @@ function Assert-ChildPath {
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourceRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $scriptRoot)).TrimEnd('\')
-$repoRoot = ((Invoke-Git -GitArgs @('-C', $sourceRoot, 'rev-parse', '--show-toplevel')) | Select-Object -First 1).Trim()
+$repoRootRaw = ((Invoke-Git -GitArgs @('-C', $sourceRoot, 'rev-parse', '--show-toplevel')) | Select-Object -First 1).Trim()
+$repoRoot = [System.IO.Path]::GetFullPath($repoRootRaw).TrimEnd('\')
 if (-not $repoRoot.Equals($sourceRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Run this script from a platform worktree. Expected $repoRoot, got $sourceRoot."
 }
