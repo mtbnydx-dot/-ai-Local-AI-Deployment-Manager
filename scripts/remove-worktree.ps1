@@ -13,8 +13,15 @@ $ErrorActionPreference = 'Stop'
 function Invoke-Git {
   param([Parameter(Mandatory = $true)][string[]]$GitArgs)
 
-  $output = & git @GitArgs 2>&1
-  if ($LASTEXITCODE -ne 0) {
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $output = & git @GitArgs 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  if ($exitCode -ne 0) {
     throw "git $($GitArgs -join ' ') failed: $($output -join [Environment]::NewLine)"
   }
   return @($output)
