@@ -1,0 +1,14 @@
+{
+  "name": "local-ai-search-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dockerized search-aware OpenAI-compatible gateway for local model services.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test --test-isolation=none test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

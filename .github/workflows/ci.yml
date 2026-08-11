@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install root dependencies
+        shell: cmd
+        run: npm ci
+
+      - name: Install Playwright browser
+        shell: cmd
+        run: npx playwright install chromium
+
+      - name: Install package dependencies
+        shell: pwsh
+        run: |
+          foreach ($dir in @("vllm-manager", "llama-manager", "service-entry")) {
+            if (Test-Path "$dir/package-lock.json") {
+              Push-Location $dir
+              npm ci
+              Pop-Location
+            }
+          }
+
+      - name: Run tests
+        shell: cmd
+        run: test-all.cmd

@@ -1,0 +1,14 @@
+{
+  "name": "vllm-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local web console for downloading models and managing vLLM services.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

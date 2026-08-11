@@ -1,0 +1,45 @@
+name: local-ai-search
+
+services:
+  search-gateway:
+    build:
+      context: .
+    image: local-ai-search-gateway:latest
+    container_name: local-ai-search-gateway
+    restart: unless-stopped
+    depends_on:
+      - searxng
+    ports:
+      # Loopback by default. Set SEARCH_GATEWAY_BIND=0.0.0.0 to serve the LAN,
+      # and pair it with SEARCH_GATEWAY_API_KEY.
+      - "${SEARCH_GATEWAY_BIND:-127.0.0.1}:${SEARCH_GATEWAY_PUBLIC_PORT:-5180}:5180"
+    environment:
+      SEARCH_GATEWAY_HOST: "0.0.0.0"
+      SEARCH_GATEWAY_PORT: "5180"
+      UPSTREAM_BASE_URL: "${UPSTREAM_BASE_URL:-http://host.docker.internal:18080/v1}"
+      UPSTREAM_API_KEY: "${UPSTREAM_API_KEY:-}"
+      SEARCH_GATEWAY_API_KEY: "${SEARCH_GATEWAY_API_KEY:-}"
+      SEARCH_GATEWAY_ALLOW_NO_KEY: "${SEARCH_GATEWAY_ALLOW_NO_KEY:-false}"
+      SEARCH_BACKEND_URL: "http://searxng:8080"
+      SEARCH_MODE: "${SEARCH_MODE:-auto}"
+      SEARCH_MAX_RESULTS: "${SEARCH_MAX_RESULTS:-5}"
+      SEARCH_FAIL_OPEN: "${SEARCH_FAIL_OPEN:-true}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: local-ai-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SEARXNG_LOCAL_PORT:-8180}:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+    environment:
+      SEARXNG_SETTINGS_PATH: "/etc/searxng/settings.yml"
+      BASE_URL: "http://127.0.0.1:${SEARXNG_LOCAL_PORT:-8180}/"
+      INSTANCE_NAME: "Local AI Search"
+
+volumes:
+  searxng-cache:
