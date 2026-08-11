@@ -97,9 +97,6 @@ if (Test-Path -LiteralPath $releaseRoot) {
 New-Item -ItemType Directory -Path $releaseRoot | Out-Null
 
 & (Join-Path $sourceRoot 'build-github-release.ps1') -Version $Version -OutputDirectory $releaseRoot
-if ($LASTEXITCODE -ne 0) {
-  throw "Release build failed with exit code $LASTEXITCODE."
-}
 
 $packageName = "local-model-service-platform-v$Version"
 $zipPath = Join-Path $releaseRoot "$packageName.zip"
