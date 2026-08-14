@@ -37,6 +37,7 @@ function createBillingStore(options = {}) {
   const defaultEnforcementMode = normalizeEnforcementMode(options.defaultEnforcementMode || "shadow");
   const reservationTtlSeconds = boundedInteger(options.reservationTtlSeconds ?? 7200, "reservationTtlSeconds", 60, 86400);
   const busyTimeoutMs = boundedInteger(options.busyTimeoutMs ?? 5000, "busyTimeoutMs", 100, 60000);
+  const defaultTzOffsetMinutes = clampTzOffsetMinutes(options.tzOffsetMinutes ?? process.env.BILLING_TZ_OFFSET_MINUTES ?? 0);
 
   if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
@@ -561,7 +562,7 @@ function createBillingStore(options = {}) {
       const atDate = authorizationTime;
       const at = atDate.toISOString();
       const binding = getBindingRow(request.managerId, request.clientId);
-      const period = utcMonthPeriod(atDate);
+      const period = monthPeriod(atDate, defaultTzOffsetMinutes);
       const base = {
         ...request,
         reservationId: uuid(null, "reservationId", { generate: true }),
@@ -800,11 +801,17 @@ function createBillingStore(options = {}) {
     if (!["day", "month", "all"].includes(window)) throw new BillingStoreError("billing_invalid_window", "window must be day, month, or all.");
     if (window !== "all") {
       const current = nowDate();
+      const tzOffsetMinutes = query.tzOffsetMinutes == null
+        ? defaultTzOffsetMinutes
+        : clampTzOffsetMinutes(query.tzOffsetMinutes);
+      const period = window === "month"
+        ? monthPeriod(current, tzOffsetMinutes)
+        : null;
       const start = window === "month"
-        ? new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 1))
-        : new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate()));
+        ? new Date(period.start)
+        : new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate()) - tzOffsetMinutes * 60 * 1000);
       const end = window === "month"
-        ? new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() + 1, 1))
+        ? new Date(period.end)
         : new Date(start.getTime() + 24 * 60 * 60 * 1000);
       where.push("at>=? AND at<?");
       params.push(start.toISOString(), end.toISOString());
@@ -839,7 +846,7 @@ function createBillingStore(options = {}) {
   function getOverview() {
     const overviewDate = nowDate();
     const overviewAt = overviewDate.toISOString();
-    const period = utcMonthPeriod(overviewDate);
+    const period = monthPeriod(overviewDate, defaultTzOffsetMinutes);
     const customers = prepare("SELECT customer_id, status FROM billing_customers").all();
     const credentials = prepare("SELECT active FROM billing_credential_bindings").all();
     const usage = prepare("SELECT projected_microcredits, charged_microcredits, total_tokens FROM billing_usage_events").all();
@@ -1672,14 +1679,27 @@ function priceSpecificity(price, planId, managerId, model) {
   ];
 }
 
-function utcMonthPeriod(date) {
-  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
-  const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+function clampTzOffsetMinutes(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(n)));
+}
+
+function monthPeriod(date, tzOffsetMinutes = 0) {
+  const offsetMs = clampTzOffsetMinutes(tzOffsetMinutes) * 60 * 1000;
+  const shifted = new Date(date.getTime() + offsetMs);
+  const start = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), 1) - offsetMs);
+  const end = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, 1) - offsetMs);
   return {
-    key: `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}`,
+    key: `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`,
     start: start.toISOString(),
     end: end.toISOString(),
+    tzOffsetMinutes: clampTzOffsetMinutes(tzOffsetMinutes),
   };
+}
+
+function utcMonthPeriod(date, tzOffsetMinutes = 0) {
+  return monthPeriod(date, tzOffsetMinutes);
 }
 
 function limitMessage(code) {
@@ -1700,5 +1720,8 @@ module.exports = {
   BillingStoreError,
   MICROCREDS_PER_MILLION_TOKENS,
   calculateMicrocredits,
+  clampTzOffsetMinutes,
   createBillingStore,
+  monthPeriod,
+  utcMonthPeriod,
 };

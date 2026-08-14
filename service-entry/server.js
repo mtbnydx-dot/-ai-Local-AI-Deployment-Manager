@@ -44,6 +44,8 @@ const GATEWAY_TOTAL_BUFFER_BYTES = boundedByteLimit(
   512 * 1024 * 1024,
 );
 let gatewayBufferedBodyBytes = 0;
+const entryRateBuckets = new Map();
+let fleetSettingsCache = { mtimeMs: Number.NaN, value: null };
 const MODEL_DISCOVERY_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_MODEL_CACHE_MS || 3000));
 const MANAGER_STATUS_CACHE_MS = Math.max(500, Number(process.env.SERVICE_ENTRY_STATUS_CACHE_MS || 5000));
 const PUBLIC_BASE_URL = String(process.env.SERVICE_ENTRY_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
@@ -147,7 +149,10 @@ async function isManagerPortListening(port) {
 }
 
 function createServiceEntryServer() {
-  return http.createServer(handleRequest);
+  const httpServer = http.createServer(handleRequest);
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+  return httpServer;
 }
 
 async function handleRequest(req, res) {
@@ -515,6 +520,21 @@ async function proxyGatewayRequest(req, res, url) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 403, startedAt, null, message)).catch(() => {});
     return sendJson(res, core.openAiGatewayError("manager_forbidden", message), 403, gatewayCorsHeaders(req));
   }
+  const rate = core.enterServiceRateLimit(
+    { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
+    auth.client?.id || req.socket?.remoteAddress || "anonymous",
+    entryRateBuckets,
+  );
+  if (!rate.ok) {
+    const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
+    return sendJson(
+      res,
+      core.openAiGatewayError("rate_limit_exceeded", message),
+      429,
+      { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) },
+    );
+  }
   if (isAggregatedModelListRequest(req, route)) {
     return sendAggregatedModelList(req, res, route.engine, auth, authorizedManagers);
   }
@@ -610,7 +630,13 @@ async function proxyGatewayRequest(req, res, url) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, 503, startedAt, requestMetadata, `${manager.name} is not listening on port ${manager.port}.`, resolvedModel)).catch(() => {});
     return sendJson(res, core.openAiGatewayError("manager_offline", `${manager.name} is not listening on port ${manager.port}.`), 503);
   }
-  const targetPath = buildManagerGatewayPath(route);
+  let targetPath = "";
+  try {
+    targetPath = buildManagerGatewayPath(route);
+  } catch (error) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, error.status || 400, startedAt, requestMetadata, error.message, resolvedModel)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError(error.code || "invalid_gateway_path", error.message), error.status || 400, gatewayCorsHeaders(req));
+  }
   if (!targetPath) return sendJson(res, core.openAiGatewayError("protocol_not_supported", `${manager.name} does not support ${route.protocol}.`), 404);
   const target = new URL(`http://127.0.0.1:${manager.port}${targetPath}`);
   target.search = url.search;
@@ -635,7 +661,6 @@ async function proxyGatewayRequest(req, res, url) {
       appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, upstream.status, startedAt, requestMetadata, "", resolvedModel)).catch(() => {});
     });
     forwardUpstreamBody(upstream, res, upstreamControl);
-    console.log(`gateway ${route.engine}/${route.protocol} -> ${manager.id} ${upstream.status} ${Date.now() - startedAt}ms ${targetPath}`);
   } catch (error) {
     upstreamControl.clear();
     requestBody = undefined;
@@ -974,13 +999,29 @@ async function getFleetCatalogs(options = {}) {
 }
 
 async function getFleetSettings() {
+  let mtimeMs = 0;
+  try {
+    mtimeMs = (await fs.stat(FLEET_SETTINGS_FILE)).mtimeMs;
+  } catch {
+    mtimeMs = 0;
+  }
+  if (fleetSettingsCache.value && fleetSettingsCache.mtimeMs === mtimeMs) return fleetSettingsCache.value;
   const stored = await core.readJsonFile(FLEET_SETTINGS_FILE, {});
-  return normalizeFleetSettings(stored || {});
+  const value = normalizeFleetSettings(stored || {});
+  fleetSettingsCache = { mtimeMs, value };
+  return value;
 }
 
 async function saveFleetSettings(input = {}) {
   const settings = normalizeFleetSettings(input);
   await core.writeJsonFile(FLEET_SETTINGS_FILE, settings);
+  let mtimeMs = Date.now();
+  try {
+    mtimeMs = (await fs.stat(FLEET_SETTINGS_FILE)).mtimeMs;
+  } catch {
+    // Keep the in-memory value even if the follow-up stat fails.
+  }
+  fleetSettingsCache = { mtimeMs, value: settings };
   return settings;
 }
 
@@ -1099,8 +1140,42 @@ function emptyManagerCatalog(manager, listening, error = "") {
   };
 }
 
+function sanitizeGatewayRest(rest) {
+  const parts = String(rest || "").split("/").filter((part) => part !== "");
+  const safe = [];
+  for (const part of parts) {
+    let decoded = part;
+    try {
+      decoded = decodeURIComponent(part);
+    } catch {
+      const error = new Error("Invalid gateway path encoding.");
+      error.code = "invalid_gateway_path";
+      error.status = 400;
+      throw error;
+    }
+    const lower = decoded.toLowerCase();
+    if (
+      decoded === ".."
+      || decoded === "."
+      || decoded.includes("\\")
+      || decoded.includes("/")
+      || decoded.includes("\0")
+      || lower.includes("%2e")
+      || lower.includes("%2f")
+      || lower.includes("%5c")
+    ) {
+      const error = new Error("Invalid gateway path.");
+      error.code = "invalid_gateway_path";
+      error.status = 400;
+      throw error;
+    }
+    safe.push(encodeURIComponent(decoded));
+  }
+  return safe.join("/");
+}
+
 function buildManagerGatewayPath(route) {
-  const rest = route.rest.replace(/^\/+/, "");
+  const rest = sanitizeGatewayRest(route.rest);
   if (route.protocol === "openai") {
     const suffix = rest.replace(/^v1\/?/, "");
     return `/serve/v1${suffix ? `/${suffix}` : ""}`;
@@ -1391,8 +1466,13 @@ function shutdownSoon(options = {}) {
     const finish = (code = 0) => {
       if (exited) return;
       exited = true;
-      closeBillingStore();
-      exitProcess(code);
+      Promise.resolve()
+        .then(() => core.flushAllAccessLogs())
+        .catch(() => {})
+        .finally(() => {
+          closeBillingStore();
+          exitProcess(code);
+        });
     };
     if (targetServer) {
       // Let already accepted settlement requests finish, then force-close
@@ -1458,6 +1538,9 @@ module.exports = {
   selectGatewayManager,
   serializeFleetRouteTarget,
   sendAggregatedModelList,
+  resetEntryRateLimitBuckets() {
+    entryRateBuckets.clear();
+  },
   shutdownSoon,
   startServiceEntry,
 };

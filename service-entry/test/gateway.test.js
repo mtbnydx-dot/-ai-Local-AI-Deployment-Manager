@@ -495,3 +495,36 @@ test("gateway mutating requests require application/json", () => {
   );
   assert.doesNotThrow(() => entry.requireGatewayJsonContentType({ method: "GET", headers: {} }));
 });
+
+test("rejects encoded gateway path traversal", () => {
+  assert.throws(
+    () => entry.buildManagerGatewayPath({ protocol: "openai", rest: "v1/%2e%2e/admin" }),
+    (error) => error.status === 400 && error.code === "invalid_gateway_path",
+  );
+  assert.throws(
+    () => entry.buildManagerGatewayPath({ protocol: "openai", rest: "v1/../admin" }),
+    (error) => error.status === 400 && error.code === "invalid_gateway_path",
+  );
+  assert.equal(entry.buildManagerGatewayPath({ protocol: "openai", rest: "v1/chat/completions" }), "/serve/v1/chat/completions");
+});
+
+test("entry rate-limits aggregated model list after auth", async () => {
+  const previous = process.env.SERVICE_ENTRY_RATE_LIMIT_RPM;
+  process.env.SERVICE_ENTRY_RATE_LIMIT_RPM = "1";
+  entry.resetEntryRateLimitBuckets();
+  const server = entry.createServiceEntryServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const first = await fetch(`http://127.0.0.1:${port}/gateway/auto/openai/v1/models`);
+    const second = await fetch(`http://127.0.0.1:${port}/gateway/auto/openai/v1/models`);
+    assert.ok([200, 503].includes(first.status));
+    assert.equal(second.status, 429);
+    const body = await second.json();
+    assert.equal(body.error?.code || body.code, "rate_limit_exceeded");
+  } finally {
+    if (previous == null) delete process.env.SERVICE_ENTRY_RATE_LIMIT_RPM;
+    else process.env.SERVICE_ENTRY_RATE_LIMIT_RPM = previous;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

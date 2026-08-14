@@ -8,7 +8,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { DatabaseSync } = require("node:sqlite");
 
-const { BillingStoreError, createBillingStore } = require("../lib/billing-store");
+const { BillingStoreError, createBillingStore, monthPeriod } = require("../lib/billing-store");
 
 const NOW = new Date("2026-08-11T00:00:00.000Z");
 
@@ -627,4 +627,11 @@ test("strict validation, immutable ledgers, and audit secret rejection fail safe
   assert.throws(() => db.prepare("UPDATE billing_wallet_ledger SET reason='changed' WHERE entry_id=?").run(entry.entryId), /immutable/i);
   assert.throws(() => db.prepare("DELETE FROM billing_admin_audit").run(), /immutable/i);
   db.close();
+});
+
+test("month period uses tzOffsetMinutes and keeps UTC when offset is 0", () => {
+  const utc = monthPeriod(new Date("2026-08-31T17:00:00.000Z"), 0);
+  assert.equal(utc.key, "2026-08");
+  const cst = monthPeriod(new Date("2026-08-31T17:00:00.000Z"), 480);
+  assert.equal(cst.key, "2026-09");
 });

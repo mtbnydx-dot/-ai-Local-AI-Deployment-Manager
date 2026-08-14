@@ -165,10 +165,18 @@ function usageOptions(url) {
     throw billingHttpError(400, "invalid_window", "window must be day, month, or all.");
   }
   const customerId = String(url.searchParams.get("customerId") || "").trim();
+  const tzRaw = url.searchParams.get("tzOffsetMinutes");
+  const tzOffsetMinutes = tzRaw == null || tzRaw === ""
+    ? undefined
+    : Number(tzRaw);
+  if (tzOffsetMinutes !== undefined && !Number.isFinite(tzOffsetMinutes)) {
+    throw billingHttpError(400, "invalid_tz_offset", "tzOffsetMinutes must be a number of minutes.");
+  }
   return {
     ...listOptions(url),
     window,
     ...(customerId ? { customerId: cleanRouteId(customerId, "customerId") } : {}),
+    ...(tzOffsetMinutes !== undefined ? { tzOffsetMinutes } : {}),
   };
 }
 
