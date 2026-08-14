@@ -57,6 +57,47 @@ function createManagerOperationalSnapshotStore(options = {}) {
   return { clear, getSnapshot };
 }
 
+function createStaleWhileRevalidateCache(options = {}) {
+  const ttlMs = Math.max(250, Number(options.ttlMs || 5000));
+  const load = options.load;
+  if (typeof load !== "function") throw new Error("createStaleWhileRevalidateCache requires load.");
+  let cached = null;
+  let expiresAt = 0;
+  let inFlight = null;
+
+  async function get(request = {}) {
+    const force = request.force === true;
+    const now = Date.now();
+    if (!force && cached) {
+      if (expiresAt <= now && !inFlight) {
+        get({ force: true }).catch(() => {});
+      }
+      return cached;
+    }
+    if (!force && inFlight) return inFlight;
+    const promise = Promise.resolve()
+      .then(() => load(request))
+      .then((value) => {
+        cached = value;
+        expiresAt = Date.now() + ttlMs;
+        return value;
+      })
+      .finally(() => {
+        if (inFlight === promise) inFlight = null;
+      });
+    inFlight = promise;
+    return promise;
+  }
+
+  function clear() {
+    cached = null;
+    expiresAt = 0;
+  }
+
+  return { get, clear };
+}
+
 module.exports = {
   createManagerOperationalSnapshotStore,
+  createStaleWhileRevalidateCache,
 };

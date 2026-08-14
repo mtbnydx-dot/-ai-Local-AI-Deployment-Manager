@@ -138,6 +138,21 @@ function normalizeClientPreset(value) {
   return new Set(["openwebui", "claude-code", "claude-cowork", "generic"]).has(preset) ? preset : "generic";
 }
 
+function waitForWritable(res) {
+  if (!res || res.destroyed || res.writableEnded) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      res.off?.("drain", done);
+      res.off?.("close", done);
+      res.off?.("error", done);
+      resolve();
+    };
+    res.once?.("drain", done);
+    res.once?.("close", done);
+    res.once?.("error", done);
+  });
+}
+
 module.exports = {
   compactTimestamp,
   parseJsonSafe,
@@ -158,4 +173,5 @@ module.exports = {
   normalizeNetworkAccess,
   normalizeKvCacheDtype,
   normalizeClientPreset,
+  waitForWritable,
 };
