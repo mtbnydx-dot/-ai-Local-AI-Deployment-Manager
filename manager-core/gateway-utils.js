@@ -610,6 +610,13 @@ function createOpenAiSseUsageParser(options = {}) {
     }
     const payload = dataLines.join("\n").trim();
     if (!payload || payload === "[DONE]") return;
+    if (
+      !payload.includes('"usage"')
+      && !payload.includes('"delta"')
+      && !payload.includes('"content"')
+      && !payload.includes('"arguments"')
+      && !payload.includes('"reasoning"')
+    ) return;
     const data = parseJsonSafe(payload, null);
     const normalized = normalizeOpenAiUsage(extractOpenAiUsagePayload(data));
     if (normalized.usageSource !== "missing") latestUsage = normalized;
@@ -800,6 +807,7 @@ function createOpenAiUsageFinalizer(options = {}) {
     requestId = "",
     settleBilling = null,
     getBillingContext = () => null,
+    enqueuePendingBilling = null,
     onBillingError = () => {},
   } = options;
   let finalized = false;
@@ -832,6 +840,25 @@ function createOpenAiUsageFinalizer(options = {}) {
       // Usage persistence must not change the proxied API response.
     }
     const billingContext = typeof getBillingContext === "function" ? getBillingContext() : null;
+    if (billingContext?.deferred && typeof enqueuePendingBilling === "function") {
+      enqueuePendingBilling({
+        authorizeInput: billingContext.authorizeInput || null,
+        settleInput: {
+          ...billingContext,
+          model: payload.model,
+          status: payload.status,
+          ok: payload.ok,
+          terminalState: payload.terminalState,
+          usageSource: payload.usageSource,
+          stream: payload.stream,
+          ...(payload.promptTokens !== undefined ? { inputTokens: payload.promptTokens } : {}),
+          ...(payload.generationTokens !== undefined ? { outputTokens: payload.generationTokens } : {}),
+          ...(payload.totalTokens !== undefined ? { totalTokens: payload.totalTokens } : {}),
+          ...(payload.cachedTokens !== undefined ? { cachedInputTokens: payload.cachedTokens } : {}),
+        },
+      });
+      return true;
+    }
     if (billingContext && typeof settleBilling === "function") {
       try {
         const settlement = await settleBilling({
@@ -971,6 +998,7 @@ function createOpenAiGatewayHandlers(options = {}) {
     recordUsage = async () => {},
     authorizeBilling = null,
     settleBilling = null,
+    enqueuePendingBilling = null,
     onBillingError = () => {},
     upstreamErrorMessage = (data, text) => data?.error?.message || data?.message || String(text || "Upstream request failed."),
     isExpectedStreamDisconnect = () => false,
@@ -1179,15 +1207,27 @@ function createOpenAiGatewayHandlers(options = {}) {
       clientId: req.serviceGateway?.clientId,
       requestId,
       settleBilling,
-      getBillingContext: () => (billingAuthorization?.ok === true
-        && billingAuthorization?.allowed !== false
-        && billingAuthorization?.bound === true
-        ? {
-          requestId: billingRequestId,
-          externalRequestId: requestId,
-          clientId: req.serviceGateway?.clientId || "",
+      enqueuePendingBilling,
+      getBillingContext: () => {
+        if (billingAuthorization?.ok !== true || billingAuthorization?.allowed === false) return null;
+        if (billingAuthorization.deferred) {
+          return {
+            deferred: true,
+            authorizeInput: billingAuthorization.authorizeInput || null,
+            requestId: billingRequestId,
+            externalRequestId: requestId,
+            clientId: req.serviceGateway?.clientId || "",
+          };
         }
-        : null),
+        if (billingAuthorization.bound === true) {
+          return {
+            requestId: billingRequestId,
+            externalRequestId: requestId,
+            clientId: req.serviceGateway?.clientId || "",
+          };
+        }
+        return null;
+      },
       onBillingError,
     });
     const finishUsage = (event = {}) => finalizeUsage({
@@ -1269,10 +1309,20 @@ function createOpenAiGatewayHandlers(options = {}) {
             billingAuthorization = {
               ok: true,
               allowed: true,
-              bound: true,
+              bound: false,
               deferred: true,
               code: "billing_unavailable_shadow",
               enforcementMode: knownMode || "shadow",
+              authorizeInput: {
+                requestId: billingRequestId,
+                externalRequestId: requestId,
+                clientId,
+                model,
+                endpoint: `/v1/${upstreamPath}`,
+                stream,
+                estimatedInputTokens,
+                maxOutputTokens: resolveOpenAiMaxOutputTokens(requestBody, upstreamPath),
+              },
             };
           }
         }

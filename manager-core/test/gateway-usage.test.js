@@ -583,6 +583,35 @@ test("shadow clients are allowed when billing authorize is unavailable", async (
   assert.equal(response.state.statusCode, 200);
 });
 
+test("deferred billing enqueue happens instead of settle", async () => {
+  const usageEvents = [];
+  const pending = [];
+  const handlers = createHandlers(async () => ({
+    ok: true,
+    status: 200,
+    headers: responseHeaders("application/json"),
+    text: async () => JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
+  }), usageEvents, {
+    billingColdStartGraceMs: 0,
+    authorizeBilling: async () => ({ ok: false, allowed: false, code: "billing_unavailable", enforcementMode: "shadow" }),
+    settleBilling: async () => {
+      throw new Error("settle should not run for deferred authorize");
+    },
+    enqueuePendingBilling: (event) => pending.push(event),
+  });
+  const request = {
+    headers: {},
+    body: { model: "local-current", messages: [{ role: "user", content: "hello" }] },
+    serviceGateway: { clientId: "shadow-client", timeoutMs: 5000 },
+  };
+  const response = makeResponse();
+  await handlers.handleChatCompletions(request, response.res);
+  assert.equal(response.state.statusCode, 200);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].authorizeInput.clientId, "shadow-client");
+  assert.ok(pending[0].settleInput);
+});
+
 test("hard billing stays closed when authorize is unavailable after cold start", async () => {
   const usageEvents = [];
   let upstreamCalls = 0;
