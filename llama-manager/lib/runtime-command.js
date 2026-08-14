@@ -187,6 +187,7 @@ function createLlamaRuntimeCommandBuilder(deps) {
     if (museGlimmer) appendLog(job, `Muse Glimmer sampling defaults: temp=${temperature}, top-p=${topP}, top-k=${topK}.`);
     if (opts.llamaApiKey) runArgs.push("--api-key", opts.llamaApiKey);
     if (opts.tensorSplit && opts.multiGpuMode !== "none") runArgs.push("--tensor-split", opts.tensorSplit);
+    if (Number(opts.cacheReuse || 0) > 0) runArgs.push("--cache-reuse", String(Math.floor(Number(opts.cacheReuse))));
     if (opts.noMmap) runArgs.push("--no-mmap");
     if (opts.noRepack) runArgs.push("--no-repack");
 

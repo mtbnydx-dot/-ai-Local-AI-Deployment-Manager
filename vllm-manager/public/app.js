@@ -1143,6 +1143,8 @@ function bindEvents() {
   $("#downloadQueueMode")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadAutoRetryCount")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadAutoRetryDelaySeconds")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadHfMirror")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadHfTransfer")?.addEventListener("change", saveDownloadQueueMode);
   $("#remoteSource")?.addEventListener("change", refreshRemoteModels);
   ["#startModel", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#launchDtype", "#launchQuantization", "#loadFormat", "#kvCacheDtype", "#tensorParallelSize", "#pipelineParallelSize", "#dataParallelSize", "#languageModelOnly", "#speculativeMode", "#numSpeculativeTokens"].forEach((selector) => {
     const node = $(selector);
@@ -3551,6 +3553,8 @@ async function loadDownloadSettings() {
     if (toggle) toggle.checked = Boolean(data?.queueMode);
     if ($("#downloadAutoRetryCount")) $("#downloadAutoRetryCount").value = String(data?.autoRetryCount ?? 2);
     if ($("#downloadAutoRetryDelaySeconds")) $("#downloadAutoRetryDelaySeconds").value = String(data?.autoRetryDelaySeconds ?? 10);
+    if ($("#downloadHfMirror")) $("#downloadHfMirror").checked = Boolean(data?.hfMirror);
+    if ($("#downloadHfTransfer")) $("#downloadHfTransfer").checked = Boolean(data?.hfTransfer);
   } catch {
     // 设置读取失败不阻塞
   }
@@ -3564,6 +3568,8 @@ async function saveDownloadQueueMode() {
       queueMode: toggle.checked,
       autoRetryCount: Number($("#downloadAutoRetryCount")?.value ?? 2),
       autoRetryDelaySeconds: Number($("#downloadAutoRetryDelaySeconds")?.value ?? 10),
+      hfMirror: Boolean($("#downloadHfMirror")?.checked),
+      hfTransfer: Boolean($("#downloadHfTransfer")?.checked),
     };
     await api("/api/download/settings", {
       method: "POST",
@@ -4462,10 +4468,14 @@ async function resolveModelLink(event) {
       body: JSON.stringify({ url }),
     });
     fillDownloadForm(result);
+    const mirrorHint = /hf-mirror\.com/i.test(url) && !$("#downloadHfMirror")?.checked
+      ? " 检测到 hf-mirror 链接，建议开启“使用 HF 镜像”。"
+      : "";
     $("#linkResolveResult").innerHTML = `
       <strong>${escapeHtml(result.label || result.model)}</strong>
-      <span>${escapeHtml(result.source === "modelscope" ? "ModelScope" : "Hugging Face")} · ${escapeHtml(result.summary || "已解析成功，可以开始下载。")}</span>
+      <span>${escapeHtml(result.source === "modelscope" ? "ModelScope" : "Hugging Face")} · ${escapeHtml(result.summary || "已解析成功，可以开始下载。")}${escapeHtml(mirrorHint)}</span>
     `;
+    if (mirrorHint && $("#downloadHfMirror")) $("#downloadHfMirror").checked = true;
     notify("链接解析完成", result.model || result.label || url, "success");
     return result;
   } catch (error) {

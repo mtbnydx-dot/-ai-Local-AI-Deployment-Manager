@@ -555,6 +555,7 @@ const managerLifecycle = core.createManagerLifecycle({
     if (automationMonitorTimer) clearInterval(automationMonitorTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    core.interruptRunningDownloadJobs(jobs);
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
     await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
     await Promise.allSettled([
@@ -828,7 +829,12 @@ async function startDownloadRequest(body = {}) {
   const localDir = path.join(CONFIG.modelsRoot, outputName);
   await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, localDir);
 
-  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, { source });
+  const downloadSettings = downloadJobController.getDownloadSettings();
+  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, {
+    source,
+    hfMirror: downloadSettings.hfMirror,
+    hfTransfer: downloadSettings.hfTransfer,
+  });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
   const download = buildDownloadCommand(source, model, localDir, { precision });
@@ -2889,7 +2895,7 @@ async function getContainerStatus(containerName) {
     const line = out.stdout.trim();
     if (!line) return { exists: false, running: false };
     const info = JSON.parse(line);
-    const labels = await getContainerLabels(containerName);
+    const labels = core.parseDockerPsLabels(info);
     return {
       exists: true,
       running: String(info.State || "").toLowerCase() === "running",
@@ -2947,7 +2953,7 @@ async function listManagedContainers() {
     if (!info) continue;
     const name = normalizeDockerContainerName(info.Names);
     if (!name) continue;
-    const labels = await getContainerLabels(name);
+    const labels = core.parseDockerPsLabels(info);
     containers.push({
       name,
       image: info.Image || "",
@@ -3041,10 +3047,17 @@ function clearGatewayRuntimeCache() {
 
 async function getGatewayRunningModelSummary() {
   const now = Date.now();
-  if (GATEWAY_RUNTIME_CACHE_MS > 0 && gatewayRuntimeCache.value && gatewayRuntimeCache.expiresAt > now) {
+  if (GATEWAY_RUNTIME_CACHE_MS > 0 && gatewayRuntimeCache.value) {
+    if (gatewayRuntimeCache.expiresAt <= now && !gatewayRuntimeCache.promise) {
+      getGatewayRunningModelSummaryFresh().catch(() => {});
+    }
     return gatewayRuntimeCache.value;
   }
   if (gatewayRuntimeCache.promise) return gatewayRuntimeCache.promise;
+  return getGatewayRunningModelSummaryFresh();
+}
+
+function getGatewayRunningModelSummaryFresh() {
   gatewayRuntimeCache.promise = getRunningModelSummary(null, null, { includeMetrics: false })
     .then((summary) => {
       gatewayRuntimeCache.value = summary;

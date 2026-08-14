@@ -18,8 +18,8 @@ async function waitForRuntimeReady(options = {}) {
     containerName,
     startupTimeoutMs,
     stallTimeoutMs = 0,
-    pollIntervalMs = 5000,
-    logPollIntervalMs = 10000,
+    pollIntervalMs,
+    logPollIntervalMs,
     fetchServedModels,
     getContainerStatus,
     docker,
@@ -42,6 +42,10 @@ async function waitForRuntimeReady(options = {}) {
   appendLog(job, `Waiting for ${waitUrl}`);
   if (timeoutBudgetLog) appendLog(job, timeoutBudgetLog);
 
+  const adaptivePolling = pollIntervalMs == null;
+  const adaptiveLogPolling = logPollIntervalMs == null;
+  const basePollIntervalMs = adaptivePolling ? 5000 : Math.max(1, Number(pollIntervalMs));
+  const baseLogPollIntervalMs = adaptiveLogPolling ? 10000 : Math.max(1, Number(logPollIntervalMs));
   const started = nowFn();
   let lastLogCheck = 0;
   let lastLogSnapshot = "";
@@ -116,6 +120,8 @@ async function waitForRuntimeReady(options = {}) {
       throw error;
     }
     const elapsed = nowFn() - started;
+    const currentPollIntervalMs = adaptivePolling && elapsed < 60_000 ? 1500 : basePollIntervalMs;
+    const currentLogPollIntervalMs = adaptiveLogPolling && elapsed < 60_000 ? 2000 : baseLogPollIntervalMs;
     setJobProgress(job, {
       percent: Math.min(94, 45 + (elapsed / startupTimeoutMs) * 49),
       stage: "等待模型加载",
@@ -142,7 +148,7 @@ async function waitForRuntimeReady(options = {}) {
           state: "warn",
           issues: [container.error],
         });
-        await delayFn(pollIntervalMs);
+        await delayFn(currentPollIntervalMs);
         continue;
       }
       const preservedIssues = job?.meta?.runtimeDiagnostics?.lastIssue
@@ -181,7 +187,7 @@ async function waitForRuntimeReady(options = {}) {
       throw new Error(`${engineName} container exited before becoming ready: ${container.status || "stopped"}`);
     }
 
-    if (nowFn() - lastLogCheck > logPollIntervalMs) {
+    if (nowFn() - lastLogCheck > currentLogPollIntervalMs) {
       lastLogCheck = nowFn();
       const logs = await docker(["logs", "--tail", "30", containerName], { rejectOnError: false });
       const logText = `${logs.stdout}${logs.stderr}`;
@@ -215,7 +221,7 @@ async function waitForRuntimeReady(options = {}) {
       }
     }
 
-    await delayFn(pollIntervalMs);
+    await delayFn(currentPollIntervalMs);
   }
 
   if (finalReadyCheck) {

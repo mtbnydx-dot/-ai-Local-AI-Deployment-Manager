@@ -111,6 +111,7 @@ function createLlamaStartRuntimeRequest(deps) {
     const cacheTypeK = normalizeLlamaCacheType(body.cacheTypeK || body.kvCacheDtype);
     const cacheTypeV = normalizeLlamaCacheType(body.cacheTypeV || body.kvCacheDtype);
     const flashAttention = normalizeOnOffAuto(body.flashAttention);
+    const cacheReuse = boundedNonNegativeInteger(body.cacheReuse, 512, "cacheReuse", 4096);
     const noMmap = Boolean(body.noMmap);
     const noRepack = Boolean(body.noRepack);
     const gpuSelection = await normalizeLaunchGpuSelection(normalizeGpuIds(body.gpuDeviceIds));
@@ -231,6 +232,7 @@ function createLlamaStartRuntimeRequest(deps) {
         cacheTypeK,
         cacheTypeV,
         flashAttention,
+        cacheReuse,
         noMmap,
         noRepack,
         gpuDeviceIds,
@@ -287,6 +289,7 @@ function createLlamaStartRuntimeRequest(deps) {
       cacheTypeK,
       cacheTypeV,
       flashAttention,
+      cacheReuse,
       noMmap,
       noRepack,
       gpuDeviceIds,

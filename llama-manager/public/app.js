@@ -1143,6 +1143,8 @@ function bindEvents() {
   $("#downloadQueueMode")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadAutoRetryCount")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadAutoRetryDelaySeconds")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadHfMirror")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadHfTransfer")?.addEventListener("change", saveDownloadQueueMode);
   $("#multiGpuMode").addEventListener("change", () => {
     updateParallelDefaults();
     renderMultiGpuModeGuide();
@@ -1739,6 +1741,8 @@ async function loadDownloadSettings() {
     if (toggle) toggle.checked = Boolean(data?.queueMode);
     if ($("#downloadAutoRetryCount")) $("#downloadAutoRetryCount").value = String(data?.autoRetryCount ?? 2);
     if ($("#downloadAutoRetryDelaySeconds")) $("#downloadAutoRetryDelaySeconds").value = String(data?.autoRetryDelaySeconds ?? 10);
+    if ($("#downloadHfMirror")) $("#downloadHfMirror").checked = Boolean(data?.hfMirror);
+    if ($("#downloadHfTransfer")) $("#downloadHfTransfer").checked = Boolean(data?.hfTransfer);
   } catch {
     // 设置读取失败不阻塞页面初始化
   }
@@ -1752,6 +1756,8 @@ async function saveDownloadQueueMode() {
       queueMode: toggle.checked,
       autoRetryCount: Number($("#downloadAutoRetryCount")?.value ?? 2),
       autoRetryDelaySeconds: Number($("#downloadAutoRetryDelaySeconds")?.value ?? 10),
+      hfMirror: Boolean($("#downloadHfMirror")?.checked),
+      hfTransfer: Boolean($("#downloadHfTransfer")?.checked),
     };
     await api("/api/download/settings", {
       method: "POST",
@@ -2182,6 +2188,7 @@ function getLaunchFormConfig() {
   const payload = Object.fromEntries(form.entries());
   payload.gpuDeviceIds = form.getAll("gpuDeviceIds");
   payload.noMmap = form.get("noMmap") === "on";
+  payload.cacheReuse = Number(form.get("cacheReuse") || $("#cacheReuse")?.value || 512);
   payload.textOnlyMode = form.get("textOnlyMode") === "on";
   payload.languageModelOnly = payload.textOnlyMode;
   return payload;
@@ -2206,6 +2213,7 @@ function applyLaunchProfile(config = {}, options = {}) {
   set("#cacheTypeK", config.cacheTypeK);
   set("#cacheTypeV", config.cacheTypeV);
   set("#flashAttention", config.flashAttention);
+  set("#cacheReuse", config.cacheReuse ?? 512);
   set("#networkAccess", config.networkAccess);
   set("#clientPreset", config.clientPreset);
   set("#reasoningMode", config.reasoning);
@@ -4605,10 +4613,14 @@ async function resolveModelLink() {
       body: JSON.stringify({ url }),
     });
     fillDownloadForm(result);
+    const mirrorHint = /hf-mirror\.com/i.test(url) && !$("#downloadHfMirror")?.checked
+      ? " 检测到 hf-mirror 链接，建议开启“使用 HF 镜像”。"
+      : "";
     $("#linkResolveResult").innerHTML = `
       <strong>${escapeHtml(result.label || result.model)}</strong>
-      <span>${escapeHtml(result.source === "modelscope" ? "ModelScope" : "Hugging Face")} · ${escapeHtml(result.summary || "已解析成功，可以开始下载。")}</span>
+      <span>${escapeHtml(result.source === "modelscope" ? "ModelScope" : "Hugging Face")} · ${escapeHtml(result.summary || "已解析成功，可以开始下载。")}${escapeHtml(mirrorHint)}</span>
     `;
+    if (mirrorHint && $("#downloadHfMirror")) $("#downloadHfMirror").checked = true;
     return result;
   } catch (error) {
     $("#linkResolveResult").textContent = error.message;
@@ -4724,6 +4736,7 @@ function buildLlamaLaunchPayload(formElement) {
   const payload = Object.fromEntries(form.entries());
   payload.gpuDeviceIds = form.getAll("gpuDeviceIds");
   payload.noMmap = form.get("noMmap") === "on";
+  payload.cacheReuse = Number(form.get("cacheReuse") || $("#cacheReuse")?.value || 512);
   payload.textOnlyMode = form.get("textOnlyMode") === "on";
   payload.languageModelOnly = payload.textOnlyMode;
   payload.instanceMode = payload.instanceMode === "parallel" ? "parallel" : "replace";

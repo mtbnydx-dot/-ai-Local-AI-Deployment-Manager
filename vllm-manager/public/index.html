@@ -603,6 +603,8 @@
                 <label><span>任务优先级</span><select id="downloadPriority" name="priority"><option value="high">高</option><option value="normal" selected>普通</option><option value="low">低</option></select></label>
                 <label><span>失败自动重试次数</span><input id="downloadAutoRetryCount" type="number" min="0" max="10" value="2" /></label>
                 <label><span>重试间隔（秒）</span><input id="downloadAutoRetryDelaySeconds" type="number" min="1" max="3600" value="10" /></label>
+                <label class="check-row" title="开启后通过 hf-mirror.com 下载 Hugging Face 模型，适合跨境弱网"><input id="downloadHfMirror" type="checkbox" /><span>使用 HF 镜像（hf-mirror.com）</span></label>
+                <label class="check-row" title="需要先 pip install hf_transfer"><input id="downloadHfTransfer" type="checkbox" /><span>启用 hf_transfer 加速</span></label>
               </div>
               <div class="link-resolver">
                 <label>

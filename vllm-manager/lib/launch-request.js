@@ -83,8 +83,10 @@ function createVllmStartRuntimeRequest(deps) {
     const dataParallelSize = multiGpuMode === "data" ? positiveInt(body.dataParallelSize, visibleGpuCount) : 1;
     const distributedExecutorBackend = String(body.distributedExecutorBackend || "auto");
     const enableExpertParallel = Boolean(body.enableExpertParallel);
-    const enablePrefixCaching = Boolean(body.enablePrefixCaching);
     const disablePrefixCaching = Boolean(body.disablePrefixCaching);
+    const enablePrefixCaching = Object.hasOwn(body, "enablePrefixCaching")
+      ? Boolean(body.enablePrefixCaching)
+      : !disablePrefixCaching;
     const languageModelOnly = Boolean(body.languageModelOnly);
     const clientPreset = normalizeClientPreset(body.clientPreset);
     const reasoningParser = normalizeReasoningParser(body.reasoningParser);

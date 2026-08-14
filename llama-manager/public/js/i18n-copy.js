@@ -262,6 +262,7 @@ const EN_TEXT = {
   "24 小时性能趋势": "24-hour performance trends",
   "管理器每分钟持久化 TTFT、TPOT、吞吐、排队和 GPU / MTP 指标，离开页面后仍会保留。": "The manager persists TTFT, TPOT, throughput, queue, and GPU/MTP metrics every minute, even after you leave the page.",
   "Prompt 前缀缓存": "Prompt prefix cache",
+  "Cache reuse（前缀缓存）": "Cache reuse (prefix cache)",
   "负载构成": "Load composition",
   "输入、缓存复用、输出 token 与请求结果的实时构成。": "Live composition of input, cached reuse, output tokens, and request outcomes.",
   "GPU 明细": "GPU details",
@@ -329,6 +330,7 @@ const LLAMA_TRANSLATION_PATTERNS = [
   [/^(.+) · 端口 (.+)$/u, "$1 · port $2"],
   [/^模型名启发式 · 总 (.+)$/u, "Estimated from model name · $1 total"],
   [/^(.+) GB \/ 换模后预算 (.+) GB · 当前空闲 (.+) GB · 权重 (.+)$/u, "$1 GB / $2 GB replacement budget · $3 GB currently free · weight $4"],
+  [/^(.+) GB \/ 可用 (.+) GB · 当前空闲 (.+) GB · 权重 (.+)$/u, "$1 GB / $2 GB available · $3 GB currently free · weight $4"],
   [/^按当前配置二分估算的线内容量约 (.+) tokens。$/u, "Estimated in-budget capacity for the current configuration: about $1 tokens."],
   [/^只使用 GPU (.+)，main-gpu 会映射为容器内 (.+)。$/u, "Use GPU $1 only; main-gpu maps to container index $2."],
   [/^宿主 (.+) \/ 容器 (.+)$/u, "Host $1 / container $2"],
@@ -348,6 +350,7 @@ const LLAMA_PARTIAL_TRANSLATIONS = [
   [/已关闭仅文本模式；当前未识别到多模态特征，暂不增加额外预留。/g, "Text-only mode is disabled, but no multimodal feature is currently detected, so no extra reserve is added."],
   [/权重量化：GGUF 文件已预量化，llama.cpp 启动时不再叠加 AWQ\/GPTQ\/Compressed。/g, "Weight quantization: the GGUF is already quantized; llama.cpp does not layer AWQ/GPTQ/Compressed quantization on top at launch."],
   [/估算可信度：中：按参数量、GGUF 量化和常见层数\/KV 结构估算。当前 llama.cpp 容器会在换模前释放，容量按替换后预算计算。/g, "Estimate confidence: medium, based on parameter count, GGUF quantization, and common layer/KV structure. The current llama.cpp container is released before replacement, so capacity uses the post-replacement budget."],
+  [/估算可信度：中：按参数量、GGUF 量化和常见层数\/KV 结构估算。显存可用值按当前空闲显存减保护余量与利用率取较小值。/g, "Estimate confidence: medium, based on parameter count, GGUF quantization, and common layer/KV structure. Usable VRAM is the smaller of current free memory minus the safety reserve and the utilization budget."],
   ...(common.UI_PARTIAL_TRANSLATIONS || []),
 ];
 const UI_COPY = {

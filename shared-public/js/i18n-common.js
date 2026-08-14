@@ -576,6 +576,13 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
   "启动前判断 GGUF、token、路径、reasoning、KV cache 和长上下文风险。": "Check GGUF, token, path, reasoning, KV-cache, and long-context risks before launch.",
   "把 llama.cpp 最近日志整理成阶段、错误、原因和建议操作。": "Summarize recent llama.cpp logs into stages, errors, causes, and recommended actions.",
   "本地排错用；同样走鉴权、限流、并发、审计。": "For local troubleshooting; authentication, rate limits, concurrency controls, and auditing still apply.",
+  "使用 HF 镜像（hf-mirror.com）": "Use HF mirror (hf-mirror.com)",
+  "启用 hf_transfer 加速": "Enable hf_transfer acceleration",
+  "开启后通过 hf-mirror.com 下载 Hugging Face 模型，适合跨境弱网": "Download Hugging Face models via hf-mirror.com; useful on weak cross-border networks",
+  "需要先 pip install hf_transfer": "Requires pip install hf_transfer first",
+  "当前没有运行中的 llama.cpp 模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。": "No llama.cpp model is running. After you start a model, this area shows the service name, API URL, and unload button.",
+  "当前没有运行中的 vLLM 模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。": "No vLLM model is running. After you start a model, this area shows the service name, API URL, and unload button.",
+  "检测到 hf-mirror 链接，建议开启“使用 HF 镜像”。": "Detected an hf-mirror link; consider enabling “Use HF mirror”.",
 });
 
 const UI_TRANSLATION_PATTERNS = [
@@ -591,6 +598,7 @@ const UI_TRANSLATION_PATTERNS = [
   [/^(.+)% 外部请求为 stream$/u, "$1% of external requests are streaming"],
   [/^更新于 (.+) 秒前$/u, "Updated $1 seconds ago"],
   [/^模型服务运行中 · 排队 (.+) \/ (.+)s · LAN (.+)$/u, "Model service running · queue $1 / $2s · LAN $3"],
+  [/^模型服务未运行 · 排队 (.+) \/ (.+)s · LAN (.+)$/u, "Model service not running · queue $1 / $2s · LAN $3"],
   [/^请求队列：并发 (.+) · 等待 (.+) · (.+)s$/u, "Request queue: concurrency $1 · waiting $2 · $3s"],
   [/^启用 · 全部模型 · (.+) req\/min · 并发 (.+) · 队列 (.+) \/ (.+)s$/u, "Enabled · all models · $1 req/min · concurrency $2 · queue $3 / $4s"],
   [/^首次 (.+) · 最后 (.+)$/u, "First $1 · Last $2"],
@@ -638,6 +646,8 @@ const UI_TRANSLATION_PATTERNS = [
   [/^最大并发 (.+)$/u, "Max concurrency $1"],
   [/^审计目录：(.+)$/u, "Audit directory: $1"],
   [/^Open WebUI 容器：(.+) · 运行中$/u, "OpenWebUI container: $1 · running"],
+  [/^Open WebUI 容器：(.+) · 已停止$/u, "OpenWebUI container: $1 · stopped"],
+  [/^Open WebUI 容器：(.+) · 未找到$/u, "OpenWebUI container: $1 · not found"],
   [/^密码文件：(.+)$/u, "Password file: $1"],
   [/^(.+) 个历史模型保留累计消耗$/u, "$1 historical model(s) retained cumulative usage"],
   [/^(.+) 个$/u, "$1"],
