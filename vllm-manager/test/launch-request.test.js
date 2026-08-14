@@ -285,3 +285,43 @@ test("vLLM launch request rejects unsafe numeric values before creating a job", 
     (error) => error.status === 400 && /maxNumSeqs/.test(error.message),
   );
 });
+
+test("vLLM prefix caching defaults to enabled unless explicitly disabled", async () => {
+  let runOptions;
+  const request = createVllmStartRuntimeRequest({
+    CONFIG: { defaultPort: 8000, containerName: "vllm-local", managerId: "vllm-manager" },
+    cleanRequired: (value) => String(value || "model"),
+    deriveName: () => "model",
+    positiveInt: (value, fallback) => Number(value || fallback),
+    nonNegativeNumber: (value, fallback) => Number(value || fallback),
+    optionalNonNegativeNumber: () => null,
+    normalizeDtype: () => "auto",
+    normalizeQuantization: () => "",
+    normalizeLoadFormat: () => "auto",
+    cleanOptionalLaunchArg: () => "",
+    normalizeKvCacheDtype: () => "auto",
+    normalizeLaunchGpuSelection: async () => ({ gpuDeviceIds: ["0"], selectedCount: 1, warnings: [] }),
+    normalizeGpuIds: () => ["0"],
+    normalizeClientPreset: () => "openai",
+    normalizeReasoningParser: () => "",
+    normalizeToolCallParser: () => "",
+    inferToolCallParser: () => "",
+    normalizeNetworkAccess: () => "local",
+    normalizeSpeculativeMode: () => "off",
+    getLanAddress: () => "127.0.0.1",
+    createJob: (type, title, meta) => ({ id: "serve-prefix", type, title, meta }),
+    runStartJob: async (job, options) => { runOptions = options; job.status = "success"; },
+    failJob: () => {},
+    acquireGpuAdmission: async () => ({
+      summary: { id: "lease", requestedTotalMb: 1000, reservations: [] },
+      startHeartbeat: () => () => {},
+      commit: async () => {},
+      release: async () => {},
+    }),
+  });
+  const enabled = await request({ body: { model: "model", instanceMode: "parallel", port: 8127 } });
+  assert.equal(enabled.job.meta.enablePrefixCaching, true);
+  assert.equal(runOptions.enablePrefixCaching, true);
+  const disabled = await request({ body: { model: "model", instanceMode: "parallel", port: 8128, enablePrefixCaching: false } });
+  assert.equal(disabled.job.meta.enablePrefixCaching, false);
+});

@@ -147,6 +147,13 @@ const logBillingIntegrationIssue = ({ phase, requestId, code } = {}) => {
   if (["insufficient_quota", "request_limit_exceeded", "token_limit_exceeded", "spend_limit_exceeded", "customer_suspended"].includes(String(code || ""))) return;
   console.warn(`Billing ${String(phase || "request")} issue (${String(code || "unknown")}) for request ${String(requestId || "unknown")}.`);
 };
+const billingPendingQueue = core.createBillingPendingQueue({
+  file: path.join(__dirname, "logs", "billing-pending.json"),
+  readJsonFile,
+  writeJsonFile,
+  authorize: (...args) => billingClient.authorize(...args),
+  settle: (...args) => billingClient.settle(...args),
+});
 
 const dockerRuntime = createDockerRuntime({
   dockerExe: CONFIG.dockerExe,
@@ -160,7 +167,9 @@ const {
   docker,
   getDockerVersion,
   checkDockerDaemon,
+  ensureDockerDaemonRunning,
   getImageStatus,
+  pullImageWithRetry,
   normalizeDockerContainerName,
   normalizeDockerTimestamp,
   timestampToSeconds,
@@ -433,13 +442,15 @@ const MAX_RECENT_LAUNCHES = 8;
 // 启动任务串行化：同一管理器内同一时刻只允许一个 serve 启动流程在跑，
 // 避免并发 docker run 竞争同一个容器名（llama-local）造成 "container name already in use"。
 // 第二个启动请求会排队等待前一个完成（成功或失败）后再执行，保留"启动即替换"语义。
-let serveChain = Promise.resolve();
-let serveBusy = false;
-function serializeServeJob(work) {
-  const queued = serveBusy;
-  serveBusy = true;
-  const result = serveChain.then(() => work());
-  serveChain = result.then(() => { serveBusy = false; }, () => { serveBusy = false; });
+const serveQueues = new Map();
+function serializeServeJob(work, queueKey = "replace") {
+  const key = String(queueKey || "replace");
+  const state = serveQueues.get(key) || { chain: Promise.resolve(), busy: false };
+  const queued = state.busy;
+  state.busy = true;
+  const result = state.chain.then(() => work());
+  state.chain = result.then(() => { state.busy = false; }, () => { state.busy = false; });
+  serveQueues.set(key, state);
   return { result, queued };
 }
 let runtimeActivity = {
@@ -661,7 +672,11 @@ const managerLifecycle = core.createManagerLifecycle({
     const downloadSettings = await readJsonFile(CONFIG.downloadSettings, { queueMode: false, autoRetryCount: 2, autoRetryDelaySeconds: 10 });
     downloadJobController.applyDownloadSettings(downloadSettings || {});
   },
-  beforeListen: () => {
+  beforeListen: async () => {
+    await billingPendingQueue.load().catch(() => {});
+    billingPendingQueue.start();
+    billingPendingQueue.flush().catch(() => {});
+    await core.sweepStaleRollbackContainers({ docker, managerId: CONFIG.managerId }).catch(() => {});
     startAutomationMonitor();
     startCacheHitMonitor();
   },
@@ -671,13 +686,16 @@ const managerLifecycle = core.createManagerLifecycle({
     if (cacheHitMonitorTimer) clearInterval(cacheHitMonitorTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    core.interruptRunningDownloadJobs(jobs);
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
     await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
+    await billingPendingQueue.stop().catch(() => {});
     await Promise.allSettled([
       waitForStatsLedgerWrites(),
       cacheHitTracker.flush(),
       jobsLedgerStore.waitForJobsLedgerWrites(),
       flushFileWriteQueues(),
+      core.flushAllAccessLogs(),
     ]);
     serviceUsageStore.close();
   },
@@ -786,6 +804,7 @@ const openAiGatewayHandlers = core.createOpenAiGatewayHandlers({
   recordUsage: recordServiceClientGatewayUsage,
   authorizeBilling: billingClient.authorize,
   settleBilling: billingClient.settle,
+  enqueuePendingBilling: (event) => billingPendingQueue.enqueue(event),
   onBillingError: logBillingIntegrationIssue,
   upstreamErrorMessage,
   isExpectedStreamDisconnect,
@@ -916,13 +935,25 @@ async function startDownloadRequest(body = {}) {
   const localDir = path.join(CONFIG.modelsRoot, outputName);
   await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, localDir);
 
-  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, { source });
+  const downloadSettings = downloadJobController.getDownloadSettings();
+  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, {
+    source,
+    hfMirror: downloadSettings.hfMirror,
+    hfTransfer: downloadSettings.hfTransfer,
+  });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
   const download = buildDownloadCommand(source, model, localDir, { precision });
-  const expected = source === "huggingface"
-    ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision).catch((error) => ({ error: error.message }))
-    : null;
+  if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
+    throw core.missingDownloadCliError(download.command, source);
+  }
+  const expected = Number(body.expectedBytes || 0) > 0
+    ? { bytes: Number(body.expectedBytes), fileCount: Number(body.expectedFiles || 0) || null }
+    : source === "huggingface"
+      ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision).catch((error) => ({ error: error.message }))
+      : null;
+  const diskFreeBytes = await getModelsDiskFreeBytes();
+  core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
   const job = enqueueOrStartDownload(download.command, download.args, {
     env,
     title: `Download ${model} (${download.label})`,
@@ -1193,6 +1224,9 @@ async function collectHealthReport() {
   checks.push(healthCheck("container", "llama.cpp 容器", container.running ? "ok" : container.exists ? "warn" : "warn", container.status || (container.exists ? "exists" : "not started")));
   checks.push(healthCheck("api", "OpenAI 兼容 API", runtime?.models?.length ? "ok" : runtimeError ? "fail" : "warn", runtime?.models?.length ? `${runtime.models.length} model(s) served at ${runtime.endpoint.localUrl}` : runtimeError?.message || "No served model reported yet"));
   checks.push(healthCheck("runtime-secret-store", "运行时密钥存储", runtimeSecretStoreError ? "fail" : "ok", runtimeSecretStoreError?.message || "可用（密钥仅保存在受限本地文件中）"));
+  if (!process.env.VLLM_MODELS_ROOT && !process.env.LLAMA_MODELS_ROOT) {
+    checks.push(healthCheck("shared-models-root", "模型根目录隔离", "warn", "两个管理器未分别设置 VLLM_MODELS_ROOT / LLAMA_MODELS_ROOT，下载队列互不可见，可能写到同一目录。"));
+  }
   checks.push(await directoryHealth("models-root", "模型目录", CONFIG.modelsRoot));
   checks.push(await directoryHealth("hf-cache", "HF 缓存目录", CONFIG.hfCache));
   checks.push(healthCheck("hf-token", "HF Token", process.env.HF_TOKEN ? "ok" : "warn", process.env.HF_TOKEN ? "已配置" : "下载 gated 模型前需要配置 HF_TOKEN"));
@@ -2137,18 +2171,7 @@ async function getContainerStatus(containerName) {
     const line = out.stdout.trim();
     if (!line) return { exists: false, running: false };
     const info = JSON.parse(line);
-    const labels = await getContainerLabels(containerName);
-    let createdAt = null;
-    let startedAt = null;
-    try {
-      const inspected = await docker(["inspect", containerName, "--format", "{{.Created}}|{{.State.StartedAt}}"], { rejectOnError: false });
-      const [created, started] = inspected.stdout.trim().split("|");
-      createdAt = normalizeDockerTimestamp(created);
-      startedAt = normalizeDockerTimestamp(started);
-    } catch {
-      createdAt = null;
-      startedAt = null;
-    }
+    const labels = core.parseDockerPsLabels(info);
     return {
       exists: true,
       running: String(info.State || "").toLowerCase() === "running",
@@ -2157,8 +2180,8 @@ async function getContainerStatus(containerName) {
       ports: info.Ports,
       image: info.Image,
       labels,
-      createdAt,
-      startedAt,
+      createdAt: normalizeDockerTimestamp(info.CreatedAt || info.Created),
+      startedAt: normalizeDockerTimestamp(info.StartedAt || info.CreatedAt || info.Created),
     };
   } catch (error) {
     return { exists: false, running: false, error: error.message };
@@ -2208,7 +2231,7 @@ async function listManagedContainers() {
     if (!info) continue;
     const name = normalizeDockerContainerName(info.Names);
     if (!name) continue;
-    const labels = await getContainerLabels(name);
+    const labels = core.parseDockerPsLabels(info);
     containers.push({
       name,
       image: info.Image || "",
@@ -2242,6 +2265,8 @@ async function removeManagedContainer(reason = "replace", containerName = CONFIG
     error.status = 409;
     throw error;
   }
+  const leaseId = String(container.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
+  if (leaseId) await gpuAdmissionController.release(leaseId, reason || "container-stop").catch(() => {});
   await docker(["rm", "-f", targetContainerName]);
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearRuntimeInstancesCache();
@@ -2378,8 +2403,17 @@ function clearRuntimeInstancesCache() {
 
 async function getRunningModelSummaries() {
   const now = Date.now();
-  if (runtimeInstancesCache.value && runtimeInstancesCache.expiresAt > now) return runtimeInstancesCache.value;
+  if (runtimeInstancesCache.value) {
+    if (runtimeInstancesCache.expiresAt <= now && !runtimeInstancesCache.promise) {
+      getRunningModelSummariesFresh().catch(() => {});
+    }
+    return runtimeInstancesCache.value;
+  }
   if (runtimeInstancesCache.promise) return runtimeInstancesCache.promise;
+  return getRunningModelSummariesFresh();
+}
+
+function getRunningModelSummariesFresh() {
   runtimeInstancesCache.promise = Promise.resolve().then(async () => {
     const managed = (await listManagedContainers()).filter((container) => (
       container.manager === CONFIG.managerId && container.engine === "llama"
@@ -2460,6 +2494,8 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
     || container.labels?.["ai.manager.instance"] === requested
   ));
   if (!target) throw Object.assign(new Error("Runtime instance not found."), { status: 404 });
+  const leaseId = String(target.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
+  if (leaseId) await gpuAdmissionController.release(leaseId, "instance-stop").catch(() => {});
   await docker(["rm", "-f", target.name]);
   const runtimeApiKeyRef = String(target.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
@@ -2841,6 +2877,31 @@ const spawnJobProcess = createProcessJobRunner({
     if (job.meta?.cancelAction === "pause") pauseDownloadJobAfterStop(job);
     else await finalizeDownloadCancel(job, { deletePartial: true });
   },
+  handleProcessSuccess: async (job) => {
+    if (job.type !== "download") return;
+    const verification = await verifyDownloadedModel({ localDir: job.meta?.localDir }, { strictIncomplete: true });
+    job.meta = {
+      ...(job.meta || {}),
+      verification: {
+        ok: verification.ok,
+        status: verification.status,
+        modelFormat: verification.modelFormat,
+        expectedWeightFiles: verification.expectedWeightFiles,
+        missingWeightFiles: verification.missingWeightFiles,
+        checkedAt: new Date().toISOString(),
+      },
+    };
+    if (!verification.ok) {
+      const detail = (verification.issues || [])
+        .filter((item) => item.severity === "fail")
+        .map((item) => `${item.title}: ${item.detail}`)
+        .join("；");
+      appendLog(job, `Download verification failed: ${detail}`);
+      throw new Error(`下载命令已结束，但模型完整性校验失败：${detail || "模型文件不完整"}`);
+    }
+    appendLog(job, `Download verification passed: ${verification.modelFormat}; ${verification.expectedWeightFiles || verification.gguf || verification.safetensors} weight file(s).`);
+  },
+  closeHandlerErrorMode: "fail",
   onDone: (job) => {
     if (job.type === "download") drainDownloadQueue();
   },
@@ -2883,6 +2944,7 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
     lastBytes: 0,
     lastAt: Date.now(),
     scanning: false,
+    stallTicks: 0,
   };
 
   job.progress = {
@@ -2906,9 +2968,17 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
       const elapsed = Math.max(0.001, (now - tracker.lastAt) / 1000);
       const delta = Math.max(0, downloadedBytes - tracker.lastBytes);
       const speedBytesPerSec = delta / elapsed;
-      const percent = totalBytes ? Math.min(100, (downloadedBytes / totalBytes) * 100) : null;
+      const percent = totalBytes ? Math.min(99, (downloadedBytes / totalBytes) * 100) : null;
       const remainingBytes = totalBytes ? Math.max(0, totalBytes - downloadedBytes) : null;
       const etaSeconds = remainingBytes && speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : null;
+      if (delta === 0 && job.pid) tracker.stallTicks += 1;
+      else tracker.stallTicks = 0;
+      if (tracker.stallTicks >= 6) {
+        appendLog(job, "下载进度停滞，正在终止进程并按自动重试策略处理。");
+        job.cancel?.("stall");
+        return;
+      }
+      const prevPct = Number(job.progress?.percent || 0);
       job.progress = {
         kind: "download",
         downloadedBytes,
@@ -2921,7 +2991,7 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
       job.updatedAt = job.progress.updatedAt;
       tracker.lastBytes = downloadedBytes;
       tracker.lastAt = now;
-      scheduleJobsSave();
+      if (percent == null || Math.abs(percent - prevPct) >= 1) scheduleJobsSave();
     } catch (error) {
       job.progress = {
         ...job.progress,
@@ -2949,7 +3019,8 @@ function stopProgressTracker(job) {
 }
 
 async function runStartJob(job, opts) {
-  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts));
+  const queueKey = opts.instanceMode === "parallel" ? (opts.containerName || "parallel") : "replace";
+  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts), queueKey);
   if (queued) {
     appendLog(job, "已有启动任务进行中，排队等待其完成后再启动，避免容器名冲突。");
     setJobProgress(job, {
@@ -2988,7 +3059,17 @@ async function runStartJobOnce(job, opts) {
     stage: "检查 Docker",
     detail: "启动模型前先确认 Docker daemon 已经可用。",
   });
-  const dockerReady = await checkDockerDaemon();
+  let dockerReady = await checkDockerDaemon();
+  if (!dockerReady.ok) {
+    appendLog(job, dockerReady.raw || dockerReady.error);
+    setJobProgress(job, {
+      percent: 4,
+      stage: "启动 Docker Desktop",
+      detail: "Docker daemon 未就绪，正在自动启动 Docker Desktop 并等待引擎可用。",
+    });
+    appendLog(job, "Docker daemon is not ready; requesting Docker Desktop startup.");
+    dockerReady = await ensureDockerDaemonRunning(120000);
+  }
   if (!dockerReady.ok) {
     appendLog(job, dockerReady.raw || dockerReady.error);
     setJobProgress(job, {
@@ -3000,20 +3081,40 @@ async function runStartJobOnce(job, opts) {
     });
     throw new Error(dockerReady.error);
   }
-  appendLog(job, `Docker daemon ready: ${dockerReady.version}`);
+  appendLog(job, dockerReady.alreadyRunning
+    ? `Docker daemon ready: ${dockerReady.version}`
+    : `Docker Desktop started; daemon ready: ${dockerReady.version}`);
   for (const warning of opts.gpuWarnings || []) appendLog(job, `GPU selection warning: ${warning}`);
 
   setJobProgress(job, {
     percent: 8,
     stage: "启动前预检",
-    detail: "正在校验模型并生成完整 Docker 命令；此阶段不会停止当前模型。",
+    detail: "正在校验端口、模型并生成完整 Docker 命令；此阶段不会停止当前模型。",
   });
+  const portStatus = await checkPortAvailability(opts.port, targetContainerName).catch(() => null);
+  if (portStatus && !portStatus.available && !portStatus.isOwnContainer) {
+    appendLog(job, `Port check failed: ${portStatus.detail}`);
+    setJobProgress(job, {
+      percent: 18,
+      stage: "端口被占用",
+      detail: `${portStatus.detail} 请换一个端口或先停止占用方。`,
+      state: "fail",
+      issues: [portStatus.detail],
+    });
+    throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
+  }
 
   let { runArgs, activePublishArgs, runtimeImage } = buildLlamaRuntimeCommand(job, opts);
   const imageStatus = await getImageStatus(runtimeImage);
   if (!imageStatus.ok) {
+    const imageName = String(runtimeImage || "");
+    if (imageName.startsWith("local/") || imageName === CONFIG.museImage) {
+      throw new Error(`本地运行时镜像不存在：${imageName}。请先运行 scripts/build-muse-runtime.ps1 构建镜像，不要对 local/ 前缀执行 docker pull。`);
+    }
     appendLog(job, `Runtime image preflight: ${imageStatus.text || runtimeImage}. Pulling before current model is stopped.`);
-    const pulled = await docker(["pull", runtimeImage]);
+    const pulled = await pullImageWithRetry(runtimeImage, {
+      onAttempt: ({ attempt, attempts, image }) => appendLog(job, `正在拉取镜像 ${image}（第 ${attempt}/${attempts} 次）`),
+    });
     appendLog(job, pulled.stdout || pulled.stderr);
   }
   await snapshotCurrentStats("before-start").catch(() => {});
@@ -3088,14 +3189,17 @@ async function runStartJobOnce(job, opts) {
 
     setJobProgress(job, { percent: 45, stage: "等待模型加载", detail: "容器已创建，正在等待 llama.cpp server 返回 /v1/models。" });
     const startupTimeoutMs = CONFIG.startupTimeoutMs;
+    const stallTimeoutMs = Math.max(60000, Number(process.env.LLAMA_START_STALL_TIMEOUT_MS || 10 * 60 * 1000));
     const result = await core.waitForRuntimeReady({
       job,
       port: opts.port,
+      apiKey: opts.llamaApiKey,
       serviceUrl: opts.serviceUrl,
       engineName: "llama.cpp",
       apiLabel: "llama.cpp API",
       containerName: targetContainerName,
       startupTimeoutMs,
+      stallTimeoutMs,
       finalReadyCheck: true,
       timeoutBudgetLog: `Startup timeout budget: ${Math.round(startupTimeoutMs / 60_000)} minutes`,
       fetchServedModels: () => getServedModels(opts.port, opts.llamaApiKey),
@@ -3106,6 +3210,16 @@ async function runStartJobOnce(job, opts) {
       appendLog,
       finishJob,
       delayFn: delay,
+      probeRuntime: ({ servedModels }) => core.probeOpenAiGeneration({
+        fetchImpl: fetch,
+        servedModels,
+        port: opts.port,
+        apiKey: opts.llamaApiKey,
+        timeoutMs: Math.max(30000, Number(process.env.LLAMA_READY_PROBE_REQUEST_TIMEOUT_MS || 180000)),
+        maxTokens: 32,
+      }),
+      readyProbeTimeoutMs: Math.max(60000, Number(process.env.LLAMA_READY_PROBE_TIMEOUT_MS || 5 * 60 * 1000)),
+      noLogIssue: "llama.cpp 启动日志长时间无变化。",
     });
     const replacementCommit = await replacement.commit().catch((error) => {
       appendLog(job, `新模型已就绪，但清理回滚快照失败：${error.message}`);

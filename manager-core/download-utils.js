@@ -54,6 +54,8 @@ function normalizeDownloadModelReference(model, precision) {
   };
 }
 
+const SAFETENSORS_QUANT_VALUES = new Set(["FP8", "AWQ", "GPTQ", "NVFP4", "MXFP4"]);
+
 function buildDownloadIncludePatterns(precision) {
   const value = normalizeRemoteQuantFilter(precision);
   if (!value || value === "quantized") return [];
@@ -61,6 +63,20 @@ function buildDownloadIncludePatterns(precision) {
   if (value === "Q4") return ["*Q4*.gguf", "*IQ4*.gguf"];
   if (value === "IQ4") return ["*IQ4*.gguf"];
   if (/^I?Q[2-8](?:_[A-Z0-9]+)*$/.test(value)) return [`*${value}*.gguf`];
+  if (SAFETENSORS_QUANT_VALUES.has(value)) {
+    return [
+      `*${value}*.safetensors`,
+      `*${value.toLowerCase()}*.safetensors`,
+      "*.json",
+      "*.txt",
+      "*.jinja",
+      "tokenizer*",
+      "config*",
+      "generation*",
+      "preprocessor*",
+      "special_tokens*",
+    ];
+  }
   return [];
 }
 
@@ -72,14 +88,20 @@ function matchesDownloadPrecisionFile(filename, precision) {
   if (value === "GGUF") return name.toLowerCase().endsWith(".gguf");
   if (value === "Q4") return name.toLowerCase().endsWith(".gguf") && /(^|_)I?Q4/.test(normalizedName);
   if (value === "IQ4") return name.toLowerCase().endsWith(".gguf") && /(^|_)IQ4/.test(normalizedName);
+  if (SAFETENSORS_QUANT_VALUES.has(value)) {
+    const base = path.basename(name);
+    const isSidecar = /\.(json|txt|jinja|model)$/i.test(name)
+      || /^(tokenizer|config|generation|preprocessor|special_tokens|chat_template)/i.test(base);
+    if (isSidecar) return true;
+    return /\.(safetensors|bin)$/i.test(name) && normalizedName.includes(value);
+  }
   return name.toLowerCase().endsWith(".gguf") && normalizedName.includes(value);
 }
 
 function filterDownloadSiblings(siblings, precision) {
   const includePatterns = buildDownloadIncludePatterns(precision);
   if (!includePatterns.length) return siblings;
-  const matched = siblings.filter((file) => matchesDownloadPrecisionFile(file.rfilename, precision));
-  return matched.length ? matched : siblings;
+  return siblings.filter((file) => matchesDownloadPrecisionFile(file.rfilename, precision));
 }
 
 function selectDownloadSiblings(siblings, precision) {
@@ -137,6 +159,12 @@ function buildDownloadEnv(hfCache, env = process.env, options = {}) {
     downloadEnv.MODELSCOPE_DIRECT_DNS = "1";
     downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS = downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS || "223.5.5.5,119.29.29.29,1.1.1.1";
     downloadEnv.PYTHONPATH = [PYTHON_DIRECT_DNS_PATH, downloadEnv.PYTHONPATH].filter(Boolean).join(path.delimiter);
+  }
+  if (options.hfMirror) {
+    downloadEnv.HF_ENDPOINT = options.hfEndpoint || "https://hf-mirror.com";
+  }
+  if (options.hfTransfer) {
+    downloadEnv.HF_HUB_ENABLE_HF_TRANSFER = "1";
   }
   return downloadEnv;
 }
@@ -204,21 +232,43 @@ function createDownloadCommandBuilder(options = {}) {
 }
 
 function buildDownloadCommand({ source, model, localDir, precision, hfCli, modelScopeCli }) {
+  const includePatterns = buildDownloadIncludePatterns(precision);
+  const includeArgs = includePatterns.flatMap((pattern) => ["--include", pattern]);
   if (source === "modelscope") {
     return {
       command: modelScopeCli,
-      args: ["download", "--model", model, "--local_dir", localDir],
+      args: ["download", "--model", model, "--local_dir", localDir, ...includeArgs],
       label: "ModelScope",
+      includePatterns,
     };
   }
-  const includePatterns = buildDownloadIncludePatterns(precision);
-  const includeArgs = includePatterns.flatMap((pattern) => ["--include", pattern]);
   return {
     command: hfCli,
     args: ["download", model, ...includeArgs, "--local-dir", localDir],
     label: "Hugging Face",
     includePatterns,
   };
+}
+
+function assertDownloadDiskSpace(expectedBytes, freeBytes, formatBytes = (value) => String(value)) {
+  const needed = Number(expectedBytes || 0);
+  const free = Number(freeBytes || 0);
+  if (!(needed > 0) || !(free > 0)) return;
+  const reserve = Math.max(free * 0.05, 10 * 1024 ** 3);
+  if (needed > free - reserve) {
+    const error = new Error(`磁盘空间不足：预计下载 ${formatBytes(needed)}，模型盘剩余 ${formatBytes(free)}。请清理磁盘或更换模型目录后再试。`);
+    error.status = 400;
+    error.code = "download_disk_full";
+    throw error;
+  }
+}
+
+function missingDownloadCliError(command, source) {
+  const name = String(source || "").toLowerCase() === "modelscope" ? "modelscope" : "hf";
+  const error = new Error(`${name} CLI 未安装（期望路径 ${command || name}）。请先安装对应命令行工具后再下载。`);
+  error.status = 400;
+  error.code = "download_cli_missing";
+  return error;
 }
 
 module.exports = {
@@ -232,4 +282,6 @@ module.exports = {
   buildDownloadEnv,
   createDownloadCommandBuilder,
   buildDownloadCommand,
+  assertDownloadDiskSpace,
+  missingDownloadCliError,
 };

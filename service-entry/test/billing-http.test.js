@@ -225,3 +225,18 @@ test("template HTTP routes list, preview, and dispatch confirmed atomic apply", 
   assert.equal(applied.state.status, 200);
   assert.deepEqual(calls, [body]);
 });
+
+test("billing POST with empty JSON body returns 400 instead of 500", async () => {
+  const handler = createHandler({
+    createCustomer() {
+      throw new Error("should not create a customer from an empty body");
+    },
+  });
+  const req = request("POST", "/api/billing/customers", null, { "content-type": "application/json" });
+  req.raw = undefined;
+  const res = responseState();
+  await handler(req, res.res, new URL("http://127.0.0.1/api/billing/customers"));
+  assert.equal(res.state.status, 400);
+  assert.notEqual(res.state.status, 500);
+  assert.equal(res.state.data.code, "invalid_json");
+});

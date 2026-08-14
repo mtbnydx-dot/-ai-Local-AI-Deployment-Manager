@@ -834,7 +834,7 @@
       <div class="workspace-grid">
         <section class="panel">
           <div class="panel-head">
-            <div class="panel-title"><h2>客户账户</h2><p>余额、套餐、执行模式与本月限额</p></div>
+            <div class="panel-title"><h2>客户账户</h2><p>余额、套餐、执行模式与本月限额（按本机时区切月）</p></div>
             <button class="small" type="button" data-open-tab="customers">查看全部</button>
           </div>
           <div class="panel-body">
@@ -1334,7 +1334,7 @@
             ["plans", "/api/billing/plans?limit=100"],
             ["prices", "/api/billing/prices?limit=200"],
             ["credentials", "/api/billing/credentials?limit=200"],
-            ["usage", "/api/billing/usage?window=month&limit=100"],
+            ["usage", `/api/billing/usage?window=month&limit=100&tzOffsetMinutes=${-new Date().getTimezoneOffset()}`],
             ["ledger", "/api/billing/ledger?limit=100"],
             ["auditEvents", "/api/billing/audit-events?limit=100"],
             ["templates", "/api/billing/templates"],
@@ -2767,7 +2767,7 @@
       const text = safeText(value, 80);
       if (!text) return "—";
       const date = new Date(text);
-      return Number.isNaN(date.getTime()) ? text : date.toLocaleString("zh-CN", { hour12: false });
+      return Number.isNaN(date.getTime()) ? text : date.toLocaleString("zh-CN", { hour12: false, timeZoneName: "short" });
     }
 
     function managerLabel(value) {

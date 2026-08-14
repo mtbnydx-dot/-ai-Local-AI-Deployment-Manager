@@ -124,7 +124,20 @@ function collectDockerPortBindings(text, containerPort) {
   return bindings;
 }
 
+function parseDockerPsLabels(info) {
+  const raw = info?.Labels ?? info;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return { ...raw };
+  const labels = {};
+  for (const part of String(raw || "").split(",")) {
+    const idx = part.indexOf("=");
+    if (idx <= 0) continue;
+    labels[part.slice(0, idx)] = part.slice(idx + 1);
+  }
+  return labels;
+}
+
 module.exports = {
+  parseDockerPsLabels,
   isPinnedImageReference,
   createDockerPublishHelpers,
   publishArgsToDockerRunArgs,

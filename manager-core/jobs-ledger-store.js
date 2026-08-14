@@ -73,7 +73,12 @@ function createJobsLedgerStore(options = {}) {
 
   function appendLog(job, data) {
     appendJobLog(job, data, { maxLogLines });
-    scheduleJobsSave();
+    const now = Date.now();
+    const last = Number(job._lastLogSaveAt || 0);
+    if (now - last >= 10_000) {
+      job._lastLogSaveAt = now;
+      scheduleJobsSave();
+    }
   }
 
   function finishJob(job, meta = {}) {
@@ -97,8 +102,12 @@ function createJobsLedgerStore(options = {}) {
   }
 
   function setJobProgress(job, progress = {}) {
+    const prevStage = job.progress?.stage;
+    const prevPct = Number(job.progress?.percent || 0);
     applyJobProgress(job, progress);
-    scheduleJobsSave();
+    const nextStage = job.progress?.stage;
+    const nextPct = Number(job.progress?.percent || 0);
+    if (nextStage !== prevStage || Math.abs(nextPct - prevPct) >= 1) scheduleJobsSave();
   }
 
   function clearJobsSaveTimer() {

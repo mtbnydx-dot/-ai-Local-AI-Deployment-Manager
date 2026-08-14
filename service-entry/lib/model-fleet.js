@@ -390,6 +390,7 @@ function rewriteRequestModelBody(buffer, modelId, parsedBody = null) {
       ? parsedBody
       : JSON.parse(text);
     if (!body || typeof body !== "object" || Array.isArray(body)) return buffer;
+    if (String(body.model || "") === String(modelId)) return buffer;
     const output = JSON.stringify({ ...body, model: String(modelId) });
     return wasBuffer ? Buffer.from(output, "utf8") : output;
   } catch {
@@ -397,29 +398,63 @@ function rewriteRequestModelBody(buffer, modelId, parsedBody = null) {
   }
 }
 
+function gpuPhysicalKey(gpu) {
+  const uuid = String(gpu?.uuid || gpu?.gpuUuid || "").trim();
+  if (uuid) return `uuid:${uuid}`;
+  const pci = String(gpu?.pciBusId || gpu?.pci || gpu?.busId || "").trim();
+  if (pci) return `pci:${pci}`;
+  return "";
+}
+
+function findMatchingGpuKey(byId, gpu, managerId) {
+  const physical = gpuPhysicalKey(gpu);
+  if (physical && byId.has(physical)) return physical;
+  const sourceId = String(gpu.id ?? gpu.index ?? "0");
+  const totalMb = Number(gpu.totalMb || 0);
+  for (const [key, current] of byId) {
+    if (String(current.sourceId || current.id) !== sourceId) continue;
+    const currentTotal = Number(current.totalMb || 0);
+    if (currentTotal > 0 && totalMb > 0 && Math.abs(currentTotal - totalMb) / Math.max(currentTotal, totalMb) <= 0.02) {
+      return key;
+    }
+  }
+  return physical || `${managerId || "manager"}:${sourceId}`;
+}
+
 function normalizeGpuMemory(resources, reserveMb, maxUtilizationPct) {
   const entries = Array.isArray(resources) ? resources : resources ? [resources] : [];
   const candidates = [];
   for (const entry of entries) {
+    const managerId = String(entry?.manager_engine || entry?.managerId || "").trim();
     const aggregate = entry?.gpuMemory || entry?.resources?.gpuMemory || entry?.gpu || entry;
     if (Array.isArray(aggregate?.gpus)) {
-      candidates.push(...aggregate.gpus.map((gpu, index) => ({ ...gpu, id: gpu.id ?? gpu.index ?? String(index) })));
+      candidates.push(...aggregate.gpus.map((gpu, index) => ({
+        ...gpu,
+        id: gpu.id ?? gpu.index ?? String(index),
+        managerId: gpu.managerId || managerId,
+      })));
     } else if (Number(aggregate?.totalMb || 0) > 0) {
       // Both managers report the same single physical GPU. Give aggregate
       // readings a stable ID so they are de-duplicated instead of summed.
-      candidates.push({ ...aggregate, id: aggregate.id ?? aggregate.index ?? "0" });
+      candidates.push({
+        ...aggregate,
+        id: aggregate.id ?? aggregate.index ?? "0",
+        managerId: aggregate.managerId || managerId,
+      });
     }
   }
   const byId = new Map();
   for (const [index, gpu] of candidates.entries()) {
-    const id = String(gpu.id ?? gpu.index ?? index);
+    const sourceId = String(gpu.id ?? gpu.index ?? index);
+    const key = findMatchingGpuKey(byId, { ...gpu, id: sourceId }, gpu.managerId);
     const totalMb = Number(gpu.totalMb || 0);
     const usedMb = Number(gpu.usedMb || 0);
-    const current = byId.get(id);
+    const current = byId.get(key);
     const nextTotal = Math.max(Number(current?.totalMb || 0), totalMb);
     const nextUsed = Math.max(Number(current?.usedMb || 0), usedMb);
-    byId.set(id, {
-      id,
+    byId.set(key, {
+      id: current?.id || sourceId,
+      sourceId,
       name: gpu.name || current?.name || "",
       totalMb: nextTotal,
       usedMb: nextUsed,

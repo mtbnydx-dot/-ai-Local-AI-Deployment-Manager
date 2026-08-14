@@ -56,7 +56,7 @@ function createVllmStartRuntimeRequest(deps) {
     const maxNumSeqs = boundedPositiveInteger(body.maxNumSeqs, 4, "maxNumSeqs", 1024);
     const gpuMemoryUtilization = boundedNumber(
       body.gpuMemoryUtilization,
-      instanceMode === "parallel" ? 0.7 : 0.9,
+      instanceMode === "parallel" ? 0.7 : 0.92,
       "gpuMemoryUtilization",
       0.05,
       1,
@@ -83,8 +83,10 @@ function createVllmStartRuntimeRequest(deps) {
     const dataParallelSize = multiGpuMode === "data" ? positiveInt(body.dataParallelSize, visibleGpuCount) : 1;
     const distributedExecutorBackend = String(body.distributedExecutorBackend || "auto");
     const enableExpertParallel = Boolean(body.enableExpertParallel);
-    const enablePrefixCaching = Boolean(body.enablePrefixCaching);
     const disablePrefixCaching = Boolean(body.disablePrefixCaching);
+    const enablePrefixCaching = Object.hasOwn(body, "enablePrefixCaching")
+      ? Boolean(body.enablePrefixCaching)
+      : !disablePrefixCaching;
     const languageModelOnly = Boolean(body.languageModelOnly);
     const clientPreset = normalizeClientPreset(body.clientPreset);
     const reasoningParser = normalizeReasoningParser(body.reasoningParser);
@@ -101,8 +103,9 @@ function createVllmStartRuntimeRequest(deps) {
     const serviceHost = networkAccess === "lan" ? lanAddress : "127.0.0.1";
     const serviceUrl = `http://${serviceHost}:${port}/v1`;
 
+    let modelCompatibility = null;
     if (typeof checkModelCompatibility === "function") {
-      const compatibility = await checkModelCompatibility({
+      modelCompatibility = await checkModelCompatibility({
         ...body,
         model,
         loadFormat,
@@ -110,8 +113,8 @@ function createVllmStartRuntimeRequest(deps) {
         speculativeMode,
         remote: false,
       });
-      if (!compatibility?.ok) {
-        const blockingFindings = (compatibility?.findings || [])
+      if (!modelCompatibility?.ok) {
+        const blockingFindings = (modelCompatibility?.findings || [])
           .filter((item) => item.severity === "fail");
         const details = blockingFindings
           .map((item) => `${item.title}: ${item.detail}`)
@@ -121,7 +124,7 @@ function createVllmStartRuntimeRequest(deps) {
         if (blockingFindings.some((item) => /Muse Glimmer/i.test(`${item.title || ""} ${item.detail || ""}`))) {
           error.code = "muse_glimmer_vllm_unsupported";
         }
-        error.findings = compatibility?.findings || [];
+        error.findings = modelCompatibility?.findings || [];
         throw error;
       }
     }
@@ -264,6 +267,7 @@ function createVllmStartRuntimeRequest(deps) {
       serviceUrl,
       speculativeMode,
       numSpeculativeTokens,
+      modelCompatibility,
       vramReservationMb: Number(admission?.requestedTotalMb || 0),
       gpuAdmissionLeaseId: String(admission?.id || ""),
       gpuAdmissionFinalized: Boolean(admissionLease),

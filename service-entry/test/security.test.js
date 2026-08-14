@@ -360,3 +360,69 @@ test("gateway rejects an unauthenticated request before proxying when a key is r
   const body = await response.json();
   assert.ok(["unauthorized", "api_key_not_configured", "key_store_unreadable"].includes(body.error.code), body.error.code);
 });
+
+test("gateway mutating requests with a foreign Origin are rejected", (t) => {
+  withCleanEnv(t);
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [], getLanAddress: () => "192.168.0.10" });
+  const url = new URL("http://127.0.0.1:5176/gateway/auto/openai/v1/chat/completions");
+  const crossSite = security.checkRequest(
+    req("127.0.0.1", { host: "127.0.0.1:5176", origin: "https://evil.example.com" }),
+    url,
+  );
+  assert.equal(crossSite.ok, false);
+  assert.equal(crossSite.code, "origin_not_allowed");
+  assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176", origin: "null" }), url).ok, false);
+  assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176" }), url).ok, true);
+});
+
+test("describePublic and remote status redaction hide paths and key-store details", async (t) => {
+  withCleanEnv(t);
+  const root = tempRoot(t, "entry-redact-");
+  const security = createEntrySecurity({ host: "127.0.0.1", aiRoot: root, managers: [] });
+  const full = await security.describe();
+  const pub = security.describePublic(full);
+  assert.equal(Object.hasOwn(pub, "keyStore"), false);
+  assert.equal(Object.hasOwn(pub, "allowedOrigins"), false);
+  assert.equal(Object.hasOwn(pub, "switches"), false);
+  const entry = require("../server");
+  const redacted = entry.redactStatusForRemote({
+    ok: true,
+    security: {
+      ...full,
+      keyStore: { issues: [{ file: "D:\\\\secret\\\\keys.json", message: "bad" }] },
+    },
+    entry: { pid: 12, gatewayAccess: { logPath: "D:\\\\logs\\\\access.log" } },
+    managers: [{ root: "D:\\\\AI\\\\vllm-manager", process: { pid: 9, pidFile: "D:\\\\x.pid" } }],
+  });
+  const text = JSON.stringify(redacted);
+  assert.equal(text.includes("D:\\\\"), false);
+  assert.equal(Object.hasOwn(redacted.security, "keyStore"), false);
+  assert.equal(Object.hasOwn(redacted.security, "allowedOrigins"), false);
+});
+
+test("shutdown still exits while an SSE connection is open", async () => {
+  const http = require("node:http");
+  const entry = require("../server");
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: keep-alive\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const client = http.get({ host: "127.0.0.1", port, path: "/" });
+  await new Promise((resolve) => client.once("response", resolve));
+  const code = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("shutdown did not exit")), 2000);
+    entry.shutdownSoon({
+      server,
+      graceMs: 200,
+      delayMs: 10,
+      exit: (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+    });
+  });
+  assert.equal(code, 0);
+  client.destroy();
+});

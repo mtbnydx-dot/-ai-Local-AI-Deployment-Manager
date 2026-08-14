@@ -505,3 +505,133 @@ test("hard billing rejection stops inference and records a single quota failure 
   assert.equal(usageEvents[0].event.usageSource, "missing");
   assert.equal(settlements.length, 0);
 });
+
+test("streaming response ends before a slow billing settle", async () => {
+  const usageEvents = [];
+  let endedAt = 0;
+  let settledAt = 0;
+  const handlers = createHandlers(async () => ({
+    ok: true,
+    status: 200,
+    headers: responseHeaders("text/event-stream"),
+    body: {
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from("data: {\"choices\":[]}\n\n", "utf8");
+      },
+    },
+  }), usageEvents, {
+    authorizeBilling: async () => ({ ok: true, allowed: true, bound: true }),
+    settleBilling: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      settledAt = Date.now();
+      return { ok: true, settled: true };
+    },
+  });
+  const request = {
+    headers: {},
+    body: { model: "local-current", stream: true, messages: [{ role: "user", content: "hi" }] },
+    serviceGateway: { clientId: "settle-client", timeoutMs: 5000 },
+  };
+  const response = makeResponse();
+  const originalEnd = response.res.end;
+  response.res.end = function end() {
+    endedAt = Date.now();
+    return originalEnd.apply(this, arguments);
+  };
+  await handlers.handleChatCompletions(request, response.res);
+  assert.ok(endedAt > 0);
+  assert.ok(settledAt >= endedAt);
+});
+
+test("token estimate stays fast on a 1MB prompt and close to the previous heuristic", () => {
+  const large = "你好世界".repeat(80_000);
+  const body = { model: "local-current", messages: [{ role: "user", content: large }] };
+  const started = Date.now();
+  const estimated = gateway.estimateOpenAiRequestInputTokens(body);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 5, `estimate took ${elapsed}ms`);
+  assert.ok(estimated > 0);
+  const bytes = Buffer.byteLength(large, "utf8");
+  const coarse = Math.ceil((bytes / 4) * 1.1);
+  assert.ok(Math.abs(estimated - coarse) / coarse <= 0.15);
+});
+
+test("shadow clients are allowed when billing authorize is unavailable", async () => {
+  const usageEvents = [];
+  let upstreamCalls = 0;
+  const handlers = createHandlers(async () => {
+    upstreamCalls += 1;
+    return {
+      ok: true,
+      status: 200,
+      headers: responseHeaders("application/json"),
+      text: async () => JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
+    };
+  }, usageEvents, {
+    billingColdStartGraceMs: 0,
+    authorizeBilling: async () => ({ ok: false, allowed: false, code: "billing_unavailable", enforcementMode: "shadow" }),
+    settleBilling: async () => ({ ok: true }),
+  });
+  const request = {
+    headers: {},
+    body: { model: "local-current", messages: [{ role: "user", content: "hello" }] },
+    serviceGateway: { clientId: "shadow-client", timeoutMs: 5000 },
+  };
+  const response = makeResponse();
+  await handlers.handleChatCompletions(request, response.res);
+  assert.equal(upstreamCalls, 1);
+  assert.equal(response.state.statusCode, 200);
+});
+
+test("deferred billing enqueue happens instead of settle", async () => {
+  const usageEvents = [];
+  const pending = [];
+  const handlers = createHandlers(async () => ({
+    ok: true,
+    status: 200,
+    headers: responseHeaders("application/json"),
+    text: async () => JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
+  }), usageEvents, {
+    billingColdStartGraceMs: 0,
+    authorizeBilling: async () => ({ ok: false, allowed: false, code: "billing_unavailable", enforcementMode: "shadow" }),
+    settleBilling: async () => {
+      throw new Error("settle should not run for deferred authorize");
+    },
+    enqueuePendingBilling: (event) => pending.push(event),
+  });
+  const request = {
+    headers: {},
+    body: { model: "local-current", messages: [{ role: "user", content: "hello" }] },
+    serviceGateway: { clientId: "shadow-client", timeoutMs: 5000 },
+  };
+  const response = makeResponse();
+  await handlers.handleChatCompletions(request, response.res);
+  assert.equal(response.state.statusCode, 200);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].authorizeInput.clientId, "shadow-client");
+  assert.ok(pending[0].settleInput);
+});
+
+test("hard billing stays closed when authorize is unavailable after cold start", async () => {
+  const usageEvents = [];
+  let upstreamCalls = 0;
+  const handlers = createHandlers(async () => {
+    upstreamCalls += 1;
+    throw new Error("must not reach upstream");
+  }, usageEvents, {
+    billingProcessStartedAt: Date.now() - 60_000,
+    billingColdStartGraceMs: 1000,
+    authorizeBilling: async () => ({ ok: false, allowed: false, code: "billing_unavailable", enforcementMode: "hard" }),
+    settleBilling: async () => ({ ok: true }),
+  });
+  const request = {
+    headers: {},
+    body: { model: "local-current", messages: [{ role: "user", content: "hello" }] },
+    serviceGateway: { clientId: "hard-client", timeoutMs: 5000 },
+  };
+  const response = makeResponse();
+  await handlers.handleChatCompletions(request, response.res);
+  assert.equal(upstreamCalls, 0);
+  assert.equal(response.state.statusCode, 503);
+  assert.equal(response.state.json.error.code, "billing_unavailable");
+});

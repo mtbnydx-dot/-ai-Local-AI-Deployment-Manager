@@ -164,6 +164,13 @@ const logBillingIntegrationIssue = ({ phase, requestId, code } = {}) => {
   if (["insufficient_quota", "request_limit_exceeded", "token_limit_exceeded", "spend_limit_exceeded", "customer_suspended"].includes(String(code || ""))) return;
   console.warn(`Billing ${String(phase || "request")} issue (${String(code || "unknown")}) for request ${String(requestId || "unknown")}.`);
 };
+const billingPendingQueue = core.createBillingPendingQueue({
+  file: path.join(__dirname, "logs", "billing-pending.json"),
+  readJsonFile,
+  writeJsonFile,
+  authorize: (...args) => billingClient.authorize(...args),
+  settle: (...args) => billingClient.settle(...args),
+});
 
 const dockerRuntime = createDockerRuntime({
   dockerExe: CONFIG.dockerExe,
@@ -318,13 +325,15 @@ const MAX_RECENT_LAUNCHES = 8;
 // 启动任务串行化：同一管理器内同一时刻只允许一个 serve 启动流程在跑，
 // 避免并发 docker run 竞争同一个容器名（vllm-local）造成 "container name already in use"。
 // 第二个启动请求会排队等待前一个完成（成功或失败）后再执行，保留"启动即替换"语义。
-let serveChain = Promise.resolve();
-let serveBusy = false;
-function serializeServeJob(work) {
-  const queued = serveBusy;
-  serveBusy = true;
-  const result = serveChain.then(() => work());
-  serveChain = result.then(() => { serveBusy = false; }, () => { serveBusy = false; });
+const serveQueues = new Map();
+function serializeServeJob(work, queueKey = "replace") {
+  const key = String(queueKey || "replace");
+  const state = serveQueues.get(key) || { chain: Promise.resolve(), busy: false };
+  const queued = state.busy;
+  state.busy = true;
+  const result = state.chain.then(() => work());
+  state.chain = result.then(() => { state.busy = false; }, () => { state.busy = false; });
+  serveQueues.set(key, state);
   return { result, queued };
 }
 let runtimeActivity = {
@@ -549,18 +558,27 @@ const managerLifecycle = core.createManagerLifecycle({
     const downloadSettings = await readJsonFile(CONFIG.downloadSettings, { queueMode: false, autoRetryCount: 2, autoRetryDelaySeconds: 10 });
     downloadJobController.applyDownloadSettings(downloadSettings || {});
   },
-  beforeListen: () => startAutomationMonitor(),
+  beforeListen: async () => {
+    await billingPendingQueue.load().catch(() => {});
+    billingPendingQueue.start();
+    billingPendingQueue.flush().catch(() => {});
+    await core.sweepStaleRollbackContainers({ docker, managerId: CONFIG.managerId }).catch(() => {});
+    startAutomationMonitor();
+  },
   onShutdown: async () => {
     jobsLedgerStore.clearJobsSaveTimer();
     if (automationMonitorTimer) clearInterval(automationMonitorTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    core.interruptRunningDownloadJobs(jobs);
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
     await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
+    await billingPendingQueue.stop().catch(() => {});
     await Promise.allSettled([
       waitForStatsLedgerWrites(),
       jobsLedgerStore.waitForJobsLedgerWrites(),
       flushFileWriteQueues(),
+      core.flushAllAccessLogs(),
     ]);
     serviceUsageStore.close();
   },
@@ -673,6 +691,7 @@ const openAiGatewayHandlers = core.createOpenAiGatewayHandlers({
   recordUsage: recordServiceClientGatewayUsage,
   authorizeBilling: billingClient.authorize,
   settleBilling: billingClient.settle,
+  enqueuePendingBilling: (event) => billingPendingQueue.enqueue(event),
   onBillingError: logBillingIntegrationIssue,
   upstreamErrorMessage,
   isExpectedStreamDisconnect,
@@ -828,13 +847,25 @@ async function startDownloadRequest(body = {}) {
   const localDir = path.join(CONFIG.modelsRoot, outputName);
   await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, localDir);
 
-  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, { source });
+  const downloadSettings = downloadJobController.getDownloadSettings();
+  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, {
+    source,
+    hfMirror: downloadSettings.hfMirror,
+    hfTransfer: downloadSettings.hfTransfer,
+  });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
   const download = buildDownloadCommand(source, model, localDir, { precision });
-  const expected = source === "huggingface"
-    ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision).catch((error) => ({ error: error.message }))
-    : null;
+  if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
+    throw core.missingDownloadCliError(download.command, source);
+  }
+  const expected = Number(body.expectedBytes || 0) > 0
+    ? { bytes: Number(body.expectedBytes), fileCount: Number(body.expectedFiles || 0) || null }
+    : source === "huggingface"
+      ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision).catch((error) => ({ error: error.message }))
+      : null;
+  const diskFreeBytes = await getModelsDiskFreeBytes();
+  core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
   const job = enqueueOrStartDownload(download.command, download.args, {
     env,
     title: `Download ${model} (${download.label})`,
@@ -1133,6 +1164,9 @@ async function collectHealthReport() {
   checks.push(healthCheck("container", "vLLM 容器", container.running ? "ok" : container.exists ? "warn" : "warn", container.status || (container.exists ? "exists" : "not started")));
   checks.push(healthCheck("api", "OpenAI 兼容 API", runtime?.models?.length ? "ok" : runtimeError ? "fail" : "warn", runtime?.models?.length ? `${runtime.models.length} model(s) served at ${runtime.endpoint.localUrl}` : runtimeError?.message || "No served model reported yet"));
   checks.push(healthCheck("runtime-secret-store", "运行时密钥存储", runtimeSecretStoreError ? "fail" : "ok", runtimeSecretStoreError?.message || "可用（密钥仅保存在受限本地文件中）"));
+  if (!process.env.VLLM_MODELS_ROOT && !process.env.LLAMA_MODELS_ROOT) {
+    checks.push(healthCheck("shared-models-root", "模型根目录隔离", "warn", "两个管理器未分别设置 VLLM_MODELS_ROOT / LLAMA_MODELS_ROOT，下载队列互不可见，可能写到同一目录。"));
+  }
   checks.push(await directoryHealth("models-root", "模型目录", CONFIG.modelsRoot));
   checks.push(await directoryHealth("hf-cache", "HF 缓存目录", CONFIG.hfCache));
   checks.push(healthCheck("hf-token", "HF Token", process.env.HF_TOKEN ? "ok" : "warn", process.env.HF_TOKEN ? "已配置" : "下载 gated 模型前需要配置 HF_TOKEN"));
@@ -1906,6 +1940,7 @@ function normalizeOpenCodeSseLine(line) {
   if (!line.startsWith("data:")) return line;
   const payload = line.slice(5).trimStart();
   if (!payload || payload === "[DONE]") return line;
+  if (!payload.includes('"reasoning"') && !payload.includes('"reasoning_content"')) return line;
   const data = parseJsonSafe(payload, null);
   if (!data) return line;
   return `data: ${JSON.stringify(normalizeOpenCodeChatPayload(data))}`;
@@ -2889,7 +2924,7 @@ async function getContainerStatus(containerName) {
     const line = out.stdout.trim();
     if (!line) return { exists: false, running: false };
     const info = JSON.parse(line);
-    const labels = await getContainerLabels(containerName);
+    const labels = core.parseDockerPsLabels(info);
     return {
       exists: true,
       running: String(info.State || "").toLowerCase() === "running",
@@ -2947,7 +2982,7 @@ async function listManagedContainers() {
     if (!info) continue;
     const name = normalizeDockerContainerName(info.Names);
     if (!name) continue;
-    const labels = await getContainerLabels(name);
+    const labels = core.parseDockerPsLabels(info);
     containers.push({
       name,
       image: info.Image || "",
@@ -2981,6 +3016,8 @@ async function removeManagedContainer(reason = "replace", containerName = CONFIG
     error.status = 409;
     throw error;
   }
+  const leaseId = String(container.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
+  if (leaseId) await gpuAdmissionController.release(leaseId, reason || "container-stop").catch(() => {});
   await docker(["rm", "-f", targetContainerName]);
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
@@ -3041,10 +3078,17 @@ function clearGatewayRuntimeCache() {
 
 async function getGatewayRunningModelSummary() {
   const now = Date.now();
-  if (GATEWAY_RUNTIME_CACHE_MS > 0 && gatewayRuntimeCache.value && gatewayRuntimeCache.expiresAt > now) {
+  if (GATEWAY_RUNTIME_CACHE_MS > 0 && gatewayRuntimeCache.value) {
+    if (gatewayRuntimeCache.expiresAt <= now && !gatewayRuntimeCache.promise) {
+      getGatewayRunningModelSummaryFresh().catch(() => {});
+    }
     return gatewayRuntimeCache.value;
   }
   if (gatewayRuntimeCache.promise) return gatewayRuntimeCache.promise;
+  return getGatewayRunningModelSummaryFresh();
+}
+
+function getGatewayRunningModelSummaryFresh() {
   gatewayRuntimeCache.promise = getRunningModelSummary(null, null, { includeMetrics: false })
     .then((summary) => {
       gatewayRuntimeCache.value = summary;
@@ -3209,6 +3253,8 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
     || container.labels?.["ai.manager.instance"] === requested
   ));
   if (!target) throw Object.assign(new Error("Runtime instance not found."), { status: 404 });
+  const leaseId = String(target.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
+  if (leaseId) await gpuAdmissionController.release(leaseId, "instance-stop").catch(() => {});
   await docker(["rm", "-f", target.name]);
   const runtimeApiKeyRef = String(target.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
@@ -3724,6 +3770,7 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
     lastBytes: 0,
     lastAt: Date.now(),
     scanning: false,
+    stallTicks: 0,
   };
 
   job.progress = {
@@ -3754,6 +3801,14 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
       const percent = rawPercent === null ? null : Math.min(99, rawPercent);
       const remainingBytes = totalBytes ? Math.max(0, totalBytes - downloadedBytes) : null;
       const etaSeconds = remainingBytes && speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : null;
+      if (delta === 0 && job.pid) tracker.stallTicks += 1;
+      else tracker.stallTicks = 0;
+      if (tracker.stallTicks >= 6) {
+        appendLog(job, "下载进度停滞，正在终止进程并按自动重试策略处理。");
+        job.cancel?.("stall");
+        return;
+      }
+      const prevPct = Number(job.progress?.percent || 0);
       job.progress = {
         kind: "download",
         downloadedBytes,
@@ -3769,6 +3824,7 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
       job.updatedAt = job.progress.updatedAt;
       tracker.lastBytes = downloadedBytes;
       tracker.lastAt = now;
+      if (percent == null || Math.abs(percent - prevPct) >= 1) scheduleJobsSave();
     } catch (error) {
       job.progress = {
         ...job.progress,
@@ -3794,7 +3850,8 @@ function stopProgressTracker(job) {
 }
 
 async function runStartJob(job, opts) {
-  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts));
+  const queueKey = opts.instanceMode === "parallel" ? (opts.containerName || "parallel") : "replace";
+  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts), queueKey);
   if (queued) {
     appendLog(job, "已有启动任务进行中，排队等待其完成后再启动，避免容器名冲突。");
     setJobProgress(job, {
@@ -3813,7 +3870,9 @@ async function runStartJobOnce(job, opts) {
     appendLog(job, `任务已不再运行（status=${job.status}），跳过启动。`);
     return;
   }
-  const compatibility = await checkModelCompatibility({ ...opts, model: opts.model, remote: false });
+  const compatibility = opts.modelCompatibility && typeof opts.modelCompatibility === "object"
+    ? opts.modelCompatibility
+    : await checkModelCompatibility({ ...opts, model: opts.model, remote: false });
   if (!compatibility.ok) {
     const issues = compatibility.findings.filter((item) => item.severity === "fail");
     const detail = issues.map((item) => `${item.title}: ${item.detail}`).join("；") || "模型文件或运行时不兼容";

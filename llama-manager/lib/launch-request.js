@@ -8,6 +8,8 @@ const {
   estimateGgufKvBytes,
   gpuLayerFraction,
   selectGgufModel,
+  findGgufFilesSync,
+  findSiblingGgufFilesSync,
 } = require("../../manager-core");
 
 const LLAMA_CONTEXT_ESTIMATE_MAX_MB = 512 * 1024;
@@ -111,6 +113,7 @@ function createLlamaStartRuntimeRequest(deps) {
     const cacheTypeK = normalizeLlamaCacheType(body.cacheTypeK || body.kvCacheDtype);
     const cacheTypeV = normalizeLlamaCacheType(body.cacheTypeV || body.kvCacheDtype);
     const flashAttention = normalizeOnOffAuto(body.flashAttention);
+    const cacheReuse = boundedNonNegativeInteger(body.cacheReuse, 512, "cacheReuse", 4096);
     const noMmap = Boolean(body.noMmap);
     const noRepack = Boolean(body.noRepack);
     const gpuSelection = await normalizeLaunchGpuSelection(normalizeGpuIds(body.gpuDeviceIds));
@@ -231,6 +234,7 @@ function createLlamaStartRuntimeRequest(deps) {
         cacheTypeK,
         cacheTypeV,
         flashAttention,
+        cacheReuse,
         noMmap,
         noRepack,
         gpuDeviceIds,
@@ -287,6 +291,7 @@ function createLlamaStartRuntimeRequest(deps) {
       cacheTypeK,
       cacheTypeV,
       flashAttention,
+      cacheReuse,
       noMmap,
       noRepack,
       gpuDeviceIds,
@@ -514,8 +519,8 @@ async function resolveLocalGgufEstimate(modelPath) {
   }
   const root = stat.isDirectory() ? resolved : path.dirname(resolved);
   const files = stat.isDirectory()
-    ? collectLocalGgufFiles(root, 512)
-    : collectSiblingGgufFiles(resolved, 512);
+    ? findGgufFilesSync(root, 512)
+    : findSiblingGgufFilesSync(resolved, 512);
   const inventory = buildGgufInventory(files);
   const requested = stat.isFile() ? resolved : "";
   const selectedModel = selectGgufModel(inventory, requested);
@@ -533,37 +538,6 @@ async function resolveLocalGgufEstimate(modelPath) {
     draftFiles: inventory.drafts,
     ggufInventory: inventory,
   };
-}
-
-function collectLocalGgufFiles(root, limit = 512) {
-  const files = [];
-  const walk = (dir) => {
-    if (files.length >= limit) return;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (files.length >= limit) break;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== ".cache" && entry.name !== ".git") walk(full);
-      } else if (entry.isFile() && /\.gguf$/i.test(entry.name)) {
-        const fileStat = fs.statSync(full);
-        files.push({ path: full, name: path.relative(root, full), size: fileStat.size });
-      }
-    }
-  };
-  walk(root);
-  return files;
-}
-
-function collectSiblingGgufFiles(file, limit = 512) {
-  const dir = path.dirname(path.resolve(String(file || "")));
-  return fs.readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /\.gguf$/i.test(entry.name))
-    .slice(0, limit)
-    .map((entry) => {
-      const full = path.join(dir, entry.name);
-      return { path: full, name: entry.name, size: fs.statSync(full).size };
-    });
 }
 
 async function localGgufBytes(modelPath, kind) {

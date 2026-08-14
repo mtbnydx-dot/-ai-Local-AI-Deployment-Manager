@@ -87,7 +87,7 @@ test("proxy headers keep auth fields and remove hop-by-hop fields", () => {
   assert.equal(headers["x-service-entry-gateway"], "1");
   assert.equal(headers["x-service-entry-instance-id"], "vision");
   assert.notEqual(headers["x-service-entry-instance-signature"], "forged-signature");
-  assert.equal(headers["x-forwarded-for"], "192.168.1.99, 192.168.1.100");
+  assert.equal(headers["x-forwarded-for"], "192.168.1.100");
   assert.equal(core.resolveServiceEntrySelectedInstance({
     headers,
     socket: { remoteAddress: "127.0.0.1" },
@@ -463,4 +463,68 @@ test("gateway global body budget accounts for transient JSON copies and releases
   });
   assert.equal(accepted.buffer.toString("utf8"), "ok");
   accepted.release();
+});
+
+test("upstream SSE error ends the client response instead of hanging", async () => {
+  const { PassThrough } = require("node:stream");
+  const upstream = new PassThrough();
+  const client = new PassThrough();
+  let cleared = false;
+  let finished = false;
+  client.on("finish", () => { finished = true; });
+  client.on("close", () => { finished = true; });
+  entry.forwardUpstreamBody({ body: upstream }, client, { clear() { cleared = true; } });
+  upstream.write("data: hello\n\n");
+  upstream.destroy(new Error("upstream crashed"));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(cleared, true);
+  assert.equal(finished || client.destroyed, true);
+});
+
+test("gateway mutating requests require application/json", () => {
+  assert.doesNotThrow(() => entry.requireGatewayJsonContentType({
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+  }));
+  assert.throws(
+    () => entry.requireGatewayJsonContentType({
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+    }),
+    (error) => error.status === 415 && error.code === "unsupported_media_type",
+  );
+  assert.doesNotThrow(() => entry.requireGatewayJsonContentType({ method: "GET", headers: {} }));
+});
+
+test("rejects encoded gateway path traversal", () => {
+  assert.throws(
+    () => entry.buildManagerGatewayPath({ protocol: "openai", rest: "v1/%2e%2e/admin" }),
+    (error) => error.status === 400 && error.code === "invalid_gateway_path",
+  );
+  assert.throws(
+    () => entry.buildManagerGatewayPath({ protocol: "openai", rest: "v1/../admin" }),
+    (error) => error.status === 400 && error.code === "invalid_gateway_path",
+  );
+  assert.equal(entry.buildManagerGatewayPath({ protocol: "openai", rest: "v1/chat/completions" }), "/serve/v1/chat/completions");
+});
+
+test("entry rate-limits aggregated model list after auth", async () => {
+  const previous = process.env.SERVICE_ENTRY_RATE_LIMIT_RPM;
+  process.env.SERVICE_ENTRY_RATE_LIMIT_RPM = "1";
+  entry.resetEntryRateLimitBuckets();
+  const server = entry.createServiceEntryServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const first = await fetch(`http://127.0.0.1:${port}/gateway/auto/openai/v1/models`);
+    const second = await fetch(`http://127.0.0.1:${port}/gateway/auto/openai/v1/models`);
+    assert.ok([200, 503].includes(first.status));
+    assert.equal(second.status, 429);
+    const body = await second.json();
+    assert.equal(body.error?.code || body.code, "rate_limit_exceeded");
+  } finally {
+    if (previous == null) delete process.env.SERVICE_ENTRY_RATE_LIMIT_RPM;
+    else process.env.SERVICE_ENTRY_RATE_LIMIT_RPM = previous;
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

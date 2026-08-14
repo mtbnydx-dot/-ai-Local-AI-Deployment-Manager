@@ -18,8 +18,8 @@ async function waitForRuntimeReady(options = {}) {
     containerName,
     startupTimeoutMs,
     stallTimeoutMs = 0,
-    pollIntervalMs = 5000,
-    logPollIntervalMs = 10000,
+    pollIntervalMs,
+    logPollIntervalMs,
     fetchServedModels,
     getContainerStatus,
     docker,
@@ -42,6 +42,10 @@ async function waitForRuntimeReady(options = {}) {
   appendLog(job, `Waiting for ${waitUrl}`);
   if (timeoutBudgetLog) appendLog(job, timeoutBudgetLog);
 
+  const adaptivePolling = pollIntervalMs == null;
+  const adaptiveLogPolling = logPollIntervalMs == null;
+  const basePollIntervalMs = adaptivePolling ? 5000 : Math.max(1, Number(pollIntervalMs));
+  const baseLogPollIntervalMs = adaptiveLogPolling ? 10000 : Math.max(1, Number(logPollIntervalMs));
   const started = nowFn();
   let lastLogCheck = 0;
   let lastLogSnapshot = "";
@@ -116,12 +120,15 @@ async function waitForRuntimeReady(options = {}) {
       throw error;
     }
     const elapsed = nowFn() - started;
+    const currentPollIntervalMs = adaptivePolling && elapsed < 60_000 ? 1500 : basePollIntervalMs;
+    const currentLogPollIntervalMs = adaptiveLogPolling && elapsed < 60_000 ? 2000 : baseLogPollIntervalMs;
+    const inferred = inferStartupProgress(lastLogSnapshot, elapsed, startupTimeoutMs);
     setJobProgress(job, {
-      percent: Math.min(94, 45 + (elapsed / startupTimeoutMs) * 49),
-      stage: "等待模型加载",
+      percent: inferred.percent,
+      stage: inferred.stage,
       detail: pollDetail
         ? pollDetail({ elapsed, formatElapsed: formatElapsedZh, apiLabel })
-        : `正在轮询 ${apiLabel}，并读取容器日志检查错误。`,
+        : inferred.detail || `正在轮询 ${apiLabel}，并读取容器日志检查错误。`,
     });
 
     const served = await fetchServedModels({ port, apiKey });
@@ -142,7 +149,7 @@ async function waitForRuntimeReady(options = {}) {
           state: "warn",
           issues: [container.error],
         });
-        await delayFn(pollIntervalMs);
+        await delayFn(currentPollIntervalMs);
         continue;
       }
       const preservedIssues = job?.meta?.runtimeDiagnostics?.lastIssue
@@ -181,7 +188,7 @@ async function waitForRuntimeReady(options = {}) {
       throw new Error(`${engineName} container exited before becoming ready: ${container.status || "stopped"}`);
     }
 
-    if (nowFn() - lastLogCheck > logPollIntervalMs) {
+    if (nowFn() - lastLogCheck > currentLogPollIntervalMs) {
       lastLogCheck = nowFn();
       const logs = await docker(["logs", "--tail", "30", containerName], { rejectOnError: false });
       const logText = `${logs.stdout}${logs.stderr}`;
@@ -215,7 +222,7 @@ async function waitForRuntimeReady(options = {}) {
       }
     }
 
-    await delayFn(pollIntervalMs);
+    await delayFn(currentPollIntervalMs);
   }
 
   if (finalReadyCheck) {
@@ -267,6 +274,24 @@ function logSnapshotDelta(previous, current) {
   return after;
 }
 
+function inferStartupProgress(logText, elapsed, startupTimeoutMs) {
+  const text = String(logText || "");
+  if (/application startup complete|uvicorn running|startup complete/i.test(text)) {
+    return { percent: 92, stage: "启动收尾", detail: "服务进程已报告启动完成，正在等待 API 就绪。" };
+  }
+  if (/capturing cuda graphs|cuda graph/i.test(text)) {
+    return { percent: 82, stage: "捕获 CUDA graphs", detail: "正在捕获 CUDA graphs。" };
+  }
+  if (/loading weights|loading model weights|loaded weights/i.test(text)) {
+    return { percent: 68, stage: "加载权重", detail: "正在加载模型权重。" };
+  }
+  return {
+    percent: Math.min(94, 45 + (Number(elapsed || 0) / Math.max(1, Number(startupTimeoutMs) || 1)) * 49),
+    stage: "等待模型加载",
+    detail: "",
+  };
+}
+
 function recordRuntimeDiagnostics(job, input = {}) {
   if (!job || typeof job !== "object") return;
   const issues = (input.issues || []).filter(Boolean);
@@ -290,6 +315,7 @@ function recordRuntimeDiagnostics(job, input = {}) {
 module.exports = {
   waitForRuntimeReady,
   formatElapsedZh,
+  inferStartupProgress,
   logSnapshotDelta,
   recordRuntimeDiagnostics,
 };

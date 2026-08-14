@@ -138,7 +138,7 @@ function createVllmRuntimeCommandBuilder(deps) {
       "--health-interval", "30s",
       "--health-timeout", "5s",
       "--health-retries", "3",
-      "--health-start-period", "20m",
+      "--health-start-period", `${Math.min(60, Math.max(5, Math.round(Math.max(5 * 60 * 1000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000)) / 60000)))}m`,
       ...publishArgsToDockerRunArgs(activePublishArgs),
       "-v", `${CONFIG.hfCache}:/root/.cache/huggingface`,
       "-v", `${CONFIG.modelsRoot}:/models`,

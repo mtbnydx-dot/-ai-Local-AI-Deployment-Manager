@@ -1,7 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-const { parseJsonSafe } = require("./common-utils");
+const { parseJsonSafe, waitForWritable } = require("./common-utils");
 
 function anthropicMessagesToOpenAi(body = {}) {
   const messages = [];
@@ -256,8 +256,11 @@ function parseToolArguments(value) {
 }
 
 function writeClaudeSse(res, event, data) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  return res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+async function writeClaudeSseWithBackpressure(res, event, data) {
+  if (!writeClaudeSse(res, event, data)) await waitForWritable(res);
 }
 
 async function streamOpenAiAsClaude(upstream, res, fallbackModel, usageContext = {}) {
@@ -390,7 +393,7 @@ async function streamOpenAiAsClaude(upstream, res, fallbackModel, usageContext =
           const deltaText = delta.content || choice.message?.content || "";
           if (deltaText) {
             const index = ensureTextBlock();
-            writeClaudeSse(res, "content_block_delta", {
+            await writeClaudeSseWithBackpressure(res, "content_block_delta", {
               type: "content_block_delta",
               index,
               delta: { type: "text_delta", text: deltaText },

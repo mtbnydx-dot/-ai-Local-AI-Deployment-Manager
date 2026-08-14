@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { TextDecoder } = require("node:util");
-const { parseJsonSafe } = require("./common-utils");
+const { parseJsonSafe, waitForWritable } = require("./common-utils");
 const {
   GATEWAY_CLIENT_HEADER,
   GATEWAY_TIMESTAMP_HEADER,
@@ -610,6 +610,13 @@ function createOpenAiSseUsageParser(options = {}) {
     }
     const payload = dataLines.join("\n").trim();
     if (!payload || payload === "[DONE]") return;
+    if (
+      !payload.includes('"usage"')
+      && !payload.includes('"delta"')
+      && !payload.includes('"content"')
+      && !payload.includes('"arguments"')
+      && !payload.includes('"reasoning"')
+    ) return;
     const data = parseJsonSafe(payload, null);
     const normalized = normalizeOpenAiUsage(extractOpenAiUsagePayload(data));
     if (normalized.usageSource !== "missing") latestUsage = normalized;
@@ -706,9 +713,9 @@ function includeOpenAiStreamUsage(requestBody) {
 
 function estimateOpenAiRequestInputTokens(requestBody) {
   if (!requestBody || typeof requestBody !== "object") return 0;
-  const textEstimator = createOpenAiStreamOutputEstimator({ maxSampleBytes: OPENAI_BILLING_TEXT_LIMIT });
   const seen = new WeakSet();
   let visitedNodes = 0;
+  let utf8Bytes = 0;
   let mediaTokens = 0;
   let explicitTokenIds = 0;
   const ignoredKeys = new Set([
@@ -719,7 +726,7 @@ function estimateOpenAiRequestInputTokens(requestBody) {
   const mediaKeys = new Set(["image_url", "input_image", "audio", "input_audio", "video_url"]);
 
   const visit = (value, key = "", depth = 0) => {
-    if (value === null || value === undefined || depth > 16 || visitedNodes >= 100_000) return;
+    if (value === null || value === undefined || depth > 8 || visitedNodes >= 4_000) return;
     const normalizedKey = String(key || "").toLowerCase();
     if (ignoredKeys.has(normalizedKey)) return;
     if (typeof value === "string") {
@@ -727,7 +734,7 @@ function estimateOpenAiRequestInputTokens(requestBody) {
         mediaTokens = Math.min(OPENAI_BILLING_MAX_ESTIMATED_TOKENS, mediaTokens + 1024);
         return;
       }
-      textEstimator.observeText(value, `input.${normalizedKey || "text"}`);
+      utf8Bytes += Buffer.byteLength(value, "utf8");
       return;
     }
     if (typeof value !== "object") return;
@@ -755,9 +762,10 @@ function estimateOpenAiRequestInputTokens(requestBody) {
   };
 
   visit(requestBody);
+  const textTokens = Math.ceil((utf8Bytes / 4) * 1.1);
   return Math.min(
     OPENAI_BILLING_MAX_ESTIMATED_TOKENS,
-    explicitTokenIds + mediaTokens + textEstimator.estimateTokens(),
+    explicitTokenIds + mediaTokens + (utf8Bytes ? Math.max(1, textTokens) : 0),
   );
 }
 
@@ -799,6 +807,7 @@ function createOpenAiUsageFinalizer(options = {}) {
     requestId = "",
     settleBilling = null,
     getBillingContext = () => null,
+    enqueuePendingBilling = null,
     onBillingError = () => {},
   } = options;
   let finalized = false;
@@ -831,6 +840,25 @@ function createOpenAiUsageFinalizer(options = {}) {
       // Usage persistence must not change the proxied API response.
     }
     const billingContext = typeof getBillingContext === "function" ? getBillingContext() : null;
+    if (billingContext?.deferred && typeof enqueuePendingBilling === "function") {
+      enqueuePendingBilling({
+        authorizeInput: billingContext.authorizeInput || null,
+        settleInput: {
+          ...billingContext,
+          model: payload.model,
+          status: payload.status,
+          ok: payload.ok,
+          terminalState: payload.terminalState,
+          usageSource: payload.usageSource,
+          stream: payload.stream,
+          ...(payload.promptTokens !== undefined ? { inputTokens: payload.promptTokens } : {}),
+          ...(payload.generationTokens !== undefined ? { outputTokens: payload.generationTokens } : {}),
+          ...(payload.totalTokens !== undefined ? { totalTokens: payload.totalTokens } : {}),
+          ...(payload.cachedTokens !== undefined ? { cachedInputTokens: payload.cachedTokens } : {}),
+        },
+      });
+      return true;
+    }
     if (billingContext && typeof settleBilling === "function") {
       try {
         const settlement = await settleBilling({
@@ -915,8 +943,9 @@ async function streamRawOpenAiGatewayResponse(upstream, res, upstreamControl, op
       let forwarded = false;
       try {
         if (!res.writableEnded) {
-          res.write(bytes);
+          const canContinue = res.write(bytes);
           forwarded = true;
+          if (!canContinue) await waitForWritable(res);
         }
       } finally {
         usageParser.push(bytes, { forwarded });
@@ -935,14 +964,6 @@ async function streamRawOpenAiGatewayResponse(upstream, res, upstreamControl, op
   const terminalState = timedOut
     ? "timed_out"
     : ((clientDisconnected || expectedDisconnect) ? "aborted" : (streamError || !upstream.ok ? "failed" : "completed"));
-  await finishUsage({
-    ok: upstream.ok && !interrupted,
-    status: timedOut ? 504 : ((streamError || clientDisconnected) ? 499 : upstream.status),
-    model,
-    normalizedUsage,
-    stream: true,
-    terminalState,
-  });
   if (req) {
     setAccessUsage(req, {
       resolvedModel: model,
@@ -956,6 +977,14 @@ async function streamRawOpenAiGatewayResponse(upstream, res, upstreamControl, op
     res.write(`\ndata: ${JSON.stringify(openAiGatewayError("gateway_error", `Upstream stream failed: ${streamError.message}`))}\n\n`);
   }
   if (!res.writableEnded) res.end();
+  await finishUsage({
+    ok: upstream.ok && !interrupted,
+    status: timedOut ? 504 : ((streamError || clientDisconnected) ? 499 : upstream.status),
+    model,
+    normalizedUsage,
+    stream: true,
+    terminalState,
+  });
 }
 
 function createOpenAiGatewayHandlers(options = {}) {
@@ -969,6 +998,7 @@ function createOpenAiGatewayHandlers(options = {}) {
     recordUsage = async () => {},
     authorizeBilling = null,
     settleBilling = null,
+    enqueuePendingBilling = null,
     onBillingError = () => {},
     upstreamErrorMessage = (data, text) => data?.error?.message || data?.message || String(text || "Upstream request failed."),
     isExpectedStreamDisconnect = () => false,
@@ -976,7 +1006,13 @@ function createOpenAiGatewayHandlers(options = {}) {
     getRootMappings = () => [],
     prepareRequestBody = (body) => body,
     fetchFn = (...args) => fetch(...args),
+    authorizeCacheTtlMs = 3000,
+    billingProcessStartedAt = Date.now(),
+    billingColdStartGraceMs = Number(process.env.BILLING_COLD_START_GRACE_MS || 30000),
   } = options;
+  const authorizeMemo = new Map();
+  const authorizeTtlMs = Math.max(0, Number(authorizeCacheTtlMs) || 0);
+  const coldStartGraceMs = Math.max(0, Number(billingColdStartGraceMs) || 0);
 
   function runtimeInstanceEntry(runtime, discoveredIndex) {
     const labels = runtime?.container?.labels || {};
@@ -1171,15 +1207,27 @@ function createOpenAiGatewayHandlers(options = {}) {
       clientId: req.serviceGateway?.clientId,
       requestId,
       settleBilling,
-      getBillingContext: () => (billingAuthorization?.ok === true
-        && billingAuthorization?.allowed !== false
-        && billingAuthorization?.bound === true
-        ? {
-          requestId: billingRequestId,
-          externalRequestId: requestId,
-          clientId: req.serviceGateway?.clientId || "",
+      enqueuePendingBilling,
+      getBillingContext: () => {
+        if (billingAuthorization?.ok !== true || billingAuthorization?.allowed === false) return null;
+        if (billingAuthorization.deferred) {
+          return {
+            deferred: true,
+            authorizeInput: billingAuthorization.authorizeInput || null,
+            requestId: billingRequestId,
+            externalRequestId: requestId,
+            clientId: req.serviceGateway?.clientId || "",
+          };
         }
-        : null),
+        if (billingAuthorization.bound === true) {
+          return {
+            requestId: billingRequestId,
+            externalRequestId: requestId,
+            clientId: req.serviceGateway?.clientId || "",
+          };
+        }
+        return null;
+      },
       onBillingError,
     });
     const finishUsage = (event = {}) => finalizeUsage({
@@ -1233,19 +1281,59 @@ function createOpenAiGatewayHandlers(options = {}) {
         ? estimateOpenAiRequestInputTokens(requestBody)
         : 0;
       if (req.serviceGateway?.clientId && typeof authorizeBilling === "function") {
-        try {
-          billingAuthorization = await authorizeBilling({
-            requestId: billingRequestId,
-            externalRequestId: requestId,
-            clientId: req.serviceGateway.clientId,
-            model,
-            endpoint: `/v1/${upstreamPath}`,
-            stream,
-            estimatedInputTokens,
-            maxOutputTokens: resolveOpenAiMaxOutputTokens(requestBody, upstreamPath),
+        const clientId = req.serviceGateway.clientId;
+        const memo = authorizeTtlMs > 0 ? authorizeMemo.get(clientId) : null;
+        if (memo && memo.ok === true && memo.allowed !== false && (Date.now() - memo.at) <= authorizeTtlMs) {
+          billingAuthorization = { ...memo.result, cached: true };
+        } else {
+          try {
+            billingAuthorization = await authorizeBilling({
+              requestId: billingRequestId,
+              externalRequestId: requestId,
+              clientId,
+              model,
+              endpoint: `/v1/${upstreamPath}`,
+              stream,
+              estimatedInputTokens,
+              maxOutputTokens: resolveOpenAiMaxOutputTokens(requestBody, upstreamPath),
+            });
+          } catch (error) {
+            billingAuthorization = { ok: false, allowed: false, code: error?.code || "billing_unavailable" };
+          }
+        }
+        const authorizeCode = String(billingAuthorization?.code || "").toLowerCase();
+        if (authorizeCode === "billing_unavailable") {
+          const knownMode = String(billingAuthorization?.enforcementMode || memo?.enforcementMode || "").toLowerCase();
+          const inColdStart = Date.now() - billingProcessStartedAt < coldStartGraceMs;
+          if (knownMode === "shadow" || inColdStart) {
+            billingAuthorization = {
+              ok: true,
+              allowed: true,
+              bound: false,
+              deferred: true,
+              code: "billing_unavailable_shadow",
+              enforcementMode: knownMode || "shadow",
+              authorizeInput: {
+                requestId: billingRequestId,
+                externalRequestId: requestId,
+                clientId,
+                model,
+                endpoint: `/v1/${upstreamPath}`,
+                stream,
+                estimatedInputTokens,
+                maxOutputTokens: resolveOpenAiMaxOutputTokens(requestBody, upstreamPath),
+              },
+            };
+          }
+        }
+        if (billingAuthorization?.ok === true && billingAuthorization?.allowed !== false && authorizeTtlMs > 0) {
+          authorizeMemo.set(clientId, {
+            at: Date.now(),
+            enforcementMode: String(billingAuthorization.enforcementMode || "").toLowerCase(),
+            ok: true,
+            allowed: true,
+            result: billingAuthorization,
           });
-        } catch (error) {
-          billingAuthorization = { ok: false, allowed: false, code: error?.code || "billing_unavailable" };
         }
         if (billingAuthorization?.ok !== true || billingAuthorization?.allowed === false) {
           const rejection = billingGatewayRejection(billingAuthorization);
@@ -1288,12 +1376,6 @@ function createOpenAiGatewayHandlers(options = {}) {
         upstreamControl.clear();
         const data = parseJsonSafe(text, null);
         const normalizedUsage = normalizeOpenAiUsage(extractOpenAiUsagePayload(data));
-        await finishUsage({
-          ok: upstream.ok,
-          status: upstream.status,
-          normalizedUsage,
-          terminalState: upstream.ok ? "completed" : "failed",
-        });
         setAccessUsage(req, {
           resolvedModel: model,
           ...(resolvedInstance ? { resolvedInstance } : {}),
@@ -1302,7 +1384,14 @@ function createOpenAiGatewayHandlers(options = {}) {
         });
         res.status(upstream.status);
         res.type(upstream.headers.get("content-type") || "application/json");
-        return res.send(text);
+        res.send(text);
+        await finishUsage({
+          ok: upstream.ok,
+          status: upstream.status,
+          normalizedUsage,
+          terminalState: upstream.ok ? "completed" : "failed",
+        });
+        return;
       } catch (error) {
         upstreamAbortReason = upstreamControl.abortReason;
         upstreamControl.clear();

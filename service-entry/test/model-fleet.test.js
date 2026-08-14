@@ -296,6 +296,20 @@ test("fleet snapshot retains stopped instances and computes warning-limited VRAM
   assert.equal(snapshot.gpuMemory.allocatableMb, 9976);
 });
 
+test("fleet snapshot does not merge different GPUs that share id 0", () => {
+  const snapshot = fleet.buildFleetSnapshot({
+    catalogs: [],
+    resources: [
+      { manager_engine: "vllm", gpuMemory: { gpus: [{ id: "0", totalMb: 10000, usedMb: 1000 }] } },
+      { manager_engine: "llama", gpuMemory: { gpus: [{ id: "0", totalMb: 20000, usedMb: 2000 }] } },
+    ],
+    settings: { reserveMb: 1024, maxUtilizationPct: 90 },
+  });
+  assert.equal(snapshot.gpuMemory.gpus.length, 2);
+  assert.equal(snapshot.gpuMemory.totalMb, 30000);
+  assert.equal(snapshot.gpuMemory.usedMb, 3000);
+});
+
 function catalog(manager, instances) {
   return {
     manager,

@@ -100,7 +100,7 @@ function createEntrySecurity(options = {}) {
     const origin = String(req.headers?.origin || "").trim();
     // Cross-site POSTs from a page the user happens to have open are the
     // realistic attack here, so mutating requests must carry a same-site Origin.
-    if (!MANAGEMENT_SAFE_METHODS.has(method) && origin && !isGatewayPath(url)) {
+    if (!MANAGEMENT_SAFE_METHODS.has(method) && origin) {
       const originHost = core.extractHostname(origin);
       if (origin === "null" || !originHost || !allowedHostnames().has(originHost)) {
         return { ok: false, status: 403, code: "origin_not_allowed", message: "Cross-site request rejected (Origin check failed)." };
@@ -307,11 +307,23 @@ function createEntrySecurity(options = {}) {
       configIssues: core.listConfigHealthIssues(),
       warnings: buildWarnings(current, keyStatus, enforced),
       switches: {
-        SERVICE_ENTRY_REQUIRE_API_KEY: "auto | 1 | 0 — auto 表示仅在局域网模式下强制",
+        SERVICE_ENTRY_REQUIRE_API_KEY: "auto | 1 | 0 — auto 表示仅在局域网模式下强制；不受信环境请设为 1",
         SERVICE_ENTRY_ALLOW_LAN_ADMIN: "0 | 1 — 允许局域网设备访问管理端点",
         SERVICE_ENTRY_ALLOWED_ORIGINS: "逗号分隔的浏览器 Origin 白名单，留空表示不允许跨域",
         SERVICE_ENTRY_ALLOWED_HOSTS: "额外的 Host 白名单（反代域名）",
       },
+    };
+  }
+
+  function describePublic(full = null) {
+    const source = full && typeof full === "object" ? full : policy();
+    return {
+      lanMode: Boolean(source.lanMode),
+      requireApiKey: Boolean(source.requireApiKey),
+      requireApiKeyMode: source.requireApiKeyMode || "auto",
+      apiKeyEnforced: Boolean(source.apiKeyEnforced),
+      allowLanAdmin: Boolean(source.allowLanAdmin),
+      corsMode: source.corsMode || "deny",
     };
   }
 
@@ -369,6 +381,7 @@ function createEntrySecurity(options = {}) {
     getTrustToken,
     trustHeaders,
     describe,
+    describePublic,
   };
 }
 

@@ -8,6 +8,7 @@ const MODULES = [
   "./runtime-secret-store",
   "./gateway-trust",
   "./billing-client",
+  "./billing-pending-queue",
   "./gateway-utils",
   "./access-log",
   "./prometheus-utils",

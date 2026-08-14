@@ -9,13 +9,48 @@ const {
 const ESTIMATOR_TRUST_RATIO = 0.6;
 const TOKENIZER_TIMEOUT_MS = 4000;
 
+const ESTIMATE_CACHE_LIMIT = 256;
+const estimateCache = new Map();
+
 function estimateTokenCount(text) {
   const value = String(text || "");
   if (!value) return 0;
-  const cjk = (value.match(/[\u3400-\u9fff]/g) || []).length;
-  const words = (value.replace(/[\u3400-\u9fff]/g, " ").match(/[A-Za-z0-9_./:-]+/g) || []).length;
-  const punctuation = (value.match(/[^\sA-Za-z0-9_\u3400-\u9fff]/g) || []).length;
-  return Math.max(1, Math.ceil(cjk * 0.9 + words * 1.3 + punctuation * 0.35));
+  if (value.length <= 4096) {
+    const cached = estimateCache.get(value);
+    if (cached != null) return cached;
+  }
+  let cjk = 0;
+  let words = 0;
+  let punctuation = 0;
+  let inWord = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0x3400 && code <= 0x9fff) {
+      cjk += 1;
+      inWord = false;
+    } else if (
+      (code >= 48 && code <= 57)
+      || (code >= 65 && code <= 90)
+      || (code >= 97 && code <= 122)
+      || code === 95 || code === 46 || code === 47 || code === 58 || code === 45
+    ) {
+      if (!inWord) {
+        words += 1;
+        inWord = true;
+      }
+    } else if (code > 32) {
+      punctuation += 1;
+      inWord = false;
+    } else {
+      inWord = false;
+    }
+  }
+  const result = Math.max(1, Math.ceil(cjk * 0.9 + words * 1.3 + punctuation * 0.35));
+  if (value.length <= 4096) {
+    if (estimateCache.size >= ESTIMATE_CACHE_LIMIT) estimateCache.clear();
+    estimateCache.set(value, result);
+  }
+  return result;
 }
 
 // Ask the running model service for an exact token count via /tokenize.

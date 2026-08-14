@@ -27,9 +27,31 @@ function registerJobRoutes(app, deps = {}) {
     return jobs.get(id);
   }
 
-  app.get("/api/jobs", async (_req, res) => {
+  function summarizeJob(job) {
+    if (!job || typeof job !== "object") return job;
+    const { logs, ...rest } = job;
+    const list = Array.isArray(logs) ? logs : [];
+    return {
+      ...rest,
+      logs: list.slice(-8),
+      logCount: list.length,
+      logsTruncated: list.length > 8,
+    };
+  }
+
+  app.get("/api/jobs", async (req, res) => {
     await beforeReadJobs();
-    res.json(Array.from(jobs.values()).reverse());
+    const list = Array.from(jobs.values()).reverse();
+    const fields = String(req.query?.fields || "").trim().toLowerCase();
+    res.json(fields === "summary" ? list.map(summarizeJob) : list);
+  });
+
+  app.get("/api/jobs/:id/logs", async (req, res) => {
+    await beforeReadJobs();
+    const job = getJob(req.params.id);
+    if (!job) return sendError(res, 404, notFoundText);
+    const logs = Array.isArray(job.logs) ? job.logs : [];
+    return res.json({ id: job.id, logs, logCount: logs.length });
   });
 
   app.get("/api/jobs/:id", async (req, res) => {

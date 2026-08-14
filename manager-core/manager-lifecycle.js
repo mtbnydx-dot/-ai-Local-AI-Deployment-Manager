@@ -40,6 +40,8 @@ function createManagerLifecycle(options = {}) {
     httpServer = app.listen(port, host, () => {
       logger.log?.(options.listenMessage || `${label} listening on http://${host}:${port}`);
     });
+    httpServer.keepAliveTimeout = 65_000;
+    httpServer.headersTimeout = 66_000;
     return httpServer;
   }
 
