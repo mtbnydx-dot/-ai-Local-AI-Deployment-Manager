@@ -124,10 +124,47 @@ async function beginContainerReplacement(options = {}) {
   };
 }
 
+async function sweepStaleRollbackContainers(options = {}) {
+  const {
+    docker,
+    managerId = "",
+    ownerLabelKey = "ai.manager",
+    maxAgeMs = 24 * 60 * 60 * 1000,
+  } = options;
+  if (typeof docker !== "function") return [];
+  const listed = await docker(["ps", "-a", "--format", "{{json .}}"], {
+    rejectOnError: false,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const lines = String(listed.stdout || "").split(/\r?\n/).filter(Boolean);
+  const removed = [];
+  const now = Date.now();
+  for (const line of lines) {
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const name = String(row.Names || row.Name || "").replace(/^\/+/, "");
+    if (!/-rollback-[a-z0-9]+$/i.test(name)) continue;
+    const inspect = await inspectReplacementContainer(docker, name).catch(() => null);
+    if (!inspect) continue;
+    const owner = String(inspect.Config?.Labels?.[ownerLabelKey] || "");
+    if (managerId && owner && owner !== managerId) continue;
+    const created = Date.parse(inspect.Created || "") || 0;
+    if (!created || now - created < maxAgeMs) continue;
+    await removeContainerIfPresent(docker, name);
+    removed.push(name);
+  }
+  return removed;
+}
+
 module.exports = {
   beginContainerReplacement,
   inspectReplacementContainer,
   isMissingContainerResult,
   removeContainerIfPresent,
   sanitizeContainerName,
+  sweepStaleRollbackContainers,
 };

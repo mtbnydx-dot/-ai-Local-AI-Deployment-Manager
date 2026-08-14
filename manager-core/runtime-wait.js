@@ -122,12 +122,13 @@ async function waitForRuntimeReady(options = {}) {
     const elapsed = nowFn() - started;
     const currentPollIntervalMs = adaptivePolling && elapsed < 60_000 ? 1500 : basePollIntervalMs;
     const currentLogPollIntervalMs = adaptiveLogPolling && elapsed < 60_000 ? 2000 : baseLogPollIntervalMs;
+    const inferred = inferStartupProgress(lastLogSnapshot, elapsed, startupTimeoutMs);
     setJobProgress(job, {
-      percent: Math.min(94, 45 + (elapsed / startupTimeoutMs) * 49),
-      stage: "等待模型加载",
+      percent: inferred.percent,
+      stage: inferred.stage,
       detail: pollDetail
         ? pollDetail({ elapsed, formatElapsed: formatElapsedZh, apiLabel })
-        : `正在轮询 ${apiLabel}，并读取容器日志检查错误。`,
+        : inferred.detail || `正在轮询 ${apiLabel}，并读取容器日志检查错误。`,
     });
 
     const served = await fetchServedModels({ port, apiKey });
@@ -273,6 +274,24 @@ function logSnapshotDelta(previous, current) {
   return after;
 }
 
+function inferStartupProgress(logText, elapsed, startupTimeoutMs) {
+  const text = String(logText || "");
+  if (/application startup complete|uvicorn running|startup complete/i.test(text)) {
+    return { percent: 92, stage: "启动收尾", detail: "服务进程已报告启动完成，正在等待 API 就绪。" };
+  }
+  if (/capturing cuda graphs|cuda graph/i.test(text)) {
+    return { percent: 82, stage: "捕获 CUDA graphs", detail: "正在捕获 CUDA graphs。" };
+  }
+  if (/loading weights|loading model weights|loaded weights/i.test(text)) {
+    return { percent: 68, stage: "加载权重", detail: "正在加载模型权重。" };
+  }
+  return {
+    percent: Math.min(94, 45 + (Number(elapsed || 0) / Math.max(1, Number(startupTimeoutMs) || 1)) * 49),
+    stage: "等待模型加载",
+    detail: "",
+  };
+}
+
 function recordRuntimeDiagnostics(job, input = {}) {
   if (!job || typeof job !== "object") return;
   const issues = (input.issues || []).filter(Boolean);
@@ -296,6 +315,7 @@ function recordRuntimeDiagnostics(job, input = {}) {
 module.exports = {
   waitForRuntimeReady,
   formatElapsedZh,
+  inferStartupProgress,
   logSnapshotDelta,
   recordRuntimeDiagnostics,
 };

@@ -16,6 +16,7 @@ function createModelFilesystemStore(options = {}) {
     throw new Error("createModelFilesystemStore requires modelsRoot and hfCache.");
   }
   const sizeCache = new Map();
+  const verificationCache = new Map();
   const sizeCacheTtlMs = Math.max(1000, Number(options.sizeCacheTtlMs || 5 * 60 * 1000));
 
   async function cachedDirSize(fullPath, stats) {
@@ -70,7 +71,13 @@ function createModelFilesystemStore(options = {}) {
       const stats = await fsp.stat(fullPath);
       const ggufInventory = buildGgufInventory(findGgufFilesSync(fullPath, 512));
       const ggufFiles = ggufInventory.files;
-      const verification = await verifyDownloadedModel({ localDir: fullPath });
+      const cachedVerification = verificationCache.get(fullPath);
+      const verification = cachedVerification && cachedVerification.mtimeMs === stats.mtimeMs
+        ? cachedVerification.value
+        : await verifyDownloadedModel({ localDir: fullPath });
+      if (!cachedVerification || cachedVerification.mtimeMs !== stats.mtimeMs) {
+        verificationCache.set(fullPath, { mtimeMs: stats.mtimeMs, value: verification });
+      }
       models.push({
         kind: "local",
         id: entry.name,
@@ -197,7 +204,18 @@ function looksLikeGgufReference(value) {
   return lower.endsWith(".gguf") || lower.includes("-gguf:") || /:[iq]?q\d(?:_[a-z0-9]+)*$/i.test(value);
 }
 
+const ggufScanCache = new Map();
+
 function findGgufFilesSync(dir, limit = 20) {
+  let mtimeMs = 0;
+  try {
+    mtimeMs = fs.statSync(dir).mtimeMs;
+  } catch {
+    return [];
+  }
+  const key = `${path.resolve(String(dir || ""))}:${limit}`;
+  const cached = ggufScanCache.get(key);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.files;
   const results = [];
   const walk = (current) => {
     if (results.length >= limit) return;
@@ -225,7 +243,9 @@ function findGgufFilesSync(dir, limit = 20) {
     }
   };
   walk(dir);
-  return results.sort((a, b) => b.size - a.size);
+  const files = results.sort((a, b) => b.size - a.size);
+  ggufScanCache.set(key, { mtimeMs, files });
+  return files;
 }
 
 function findSiblingGgufFilesSync(file, limit = 512) {
@@ -551,6 +571,7 @@ module.exports = {
   createModelFilesystemStore,
   dirSize,
   findGgufFilesSync,
+  findSiblingGgufFilesSync,
   hasRecognizedConfig,
   looksLikeGgufReference,
   scanDownloadProgress,
