@@ -231,9 +231,20 @@ function createCacheHitTracker(options = {}) {
     ledger.lastTaskBySlot = Object.fromEntries(entries);
   }
 
-  async function persist() {
+  let lastPersistAt = 0;
+
+  async function persist({ force = false } = {}) {
     if (loadError) return;
-    const snapshot = JSON.parse(JSON.stringify(ledger));
+    const nowMs = Date.now();
+    if (!force && nowMs - lastPersistAt < 5000) return;
+    lastPersistAt = nowMs;
+    const snapshot = {
+      ...ledger,
+      totals: { ...ledger.totals },
+      samples: ledger.samples.slice(),
+      lastTaskBySlot: { ...ledger.lastTaskBySlot },
+      latest: ledger.latest,
+    };
     writeQueue = writeQueue.catch(() => {}).then(() => writeJsonFile(file, snapshot));
     await writeQueue;
   }
@@ -316,7 +327,7 @@ function createCacheHitTracker(options = {}) {
 
   async function flush() {
     await ensureLoaded();
-    await writeQueue.catch(() => {});
+    await persist({ force: true });
   }
 
   return {

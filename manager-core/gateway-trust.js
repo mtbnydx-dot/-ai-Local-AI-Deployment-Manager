@@ -68,11 +68,19 @@ function createGatewayTrustReader(options = {}) {
   const file = options.file || gatewayTrustFile(options.root);
   const envName = options.envName || "SERVICE_GATEWAY_TRUST_TOKEN";
   const cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? DEFAULT_TOKEN_CACHE_MS));
-  let cache = { token: "", expiresAt: 0 };
+  let cache = { token: "", mtimeMs: undefined, expiresAt: 0 };
 
   return function readGatewayTrustToken() {
     const now = Date.now();
-    if (cacheTtlMs > 0 && cache.expiresAt > now) return cache.token;
+    let mtimeMs = null;
+    try {
+      mtimeMs = fs.statSync(file).mtimeMs;
+    } catch {
+      mtimeMs = null;
+    }
+    if (cache.token && cache.mtimeMs === mtimeMs && (cacheTtlMs === 0 || cache.expiresAt > now)) {
+      return cache.token;
+    }
     let token = "";
     try {
       const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -80,7 +88,7 @@ function createGatewayTrustReader(options = {}) {
     } catch {
       token = String(process.env[envName] || "").trim();
     }
-    cache = { token, expiresAt: cacheTtlMs > 0 ? now + cacheTtlMs : 0 };
+    cache = { token, mtimeMs, expiresAt: cacheTtlMs > 0 ? now + cacheTtlMs : 0 };
     return token;
   };
 }

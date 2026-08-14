@@ -2,6 +2,17 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { isExternalAddress, normalizeRemoteAddress } = require("./network");
 const accessLogQueues = new Map();
+const accessLogBuffers = new Map();
+
+function getAccessLogBuffer(file) {
+  const key = path.resolve(file);
+  let buffer = accessLogBuffers.get(key);
+  if (!buffer) {
+    buffer = { file: key, lines: [], timer: null, writes: 0 };
+    accessLogBuffers.set(key, buffer);
+  }
+  return buffer;
+}
 
 function normalizeAccessEvent(entry = {}, lanAddress = "") {
   const remoteAddress = normalizeRemoteAddress(entry.remoteAddress);
@@ -243,12 +254,38 @@ function percentile(sortedValues, p) {
 }
 
 async function appendAccessLog(file, entry, options = {}) {
+  const buffer = getAccessLogBuffer(file);
+  buffer.lines.push(JSON.stringify(entry));
+  if (buffer.lines.length >= 20) {
+    await flushAccessLog(buffer.file, options);
+    return;
+  }
+  if (!buffer.timer) {
+    buffer.timer = setTimeout(() => {
+      buffer.timer = null;
+      flushAccessLog(buffer.file, options).catch(() => {});
+    }, 250);
+    buffer.timer.unref?.();
+  }
+}
+
+async function flushAccessLog(file, options = {}) {
   const key = path.resolve(file);
+  const buffer = accessLogBuffers.get(key);
+  if (!buffer?.lines.length) return;
+  if (buffer.timer) {
+    clearTimeout(buffer.timer);
+    buffer.timer = null;
+  }
+  const chunk = `${buffer.lines.join("\n")}\n`;
+  buffer.lines = [];
+  buffer.writes += 1;
   const previous = accessLogQueues.get(key) || Promise.resolve();
+  const shouldRotate = buffer.writes % 32 === 0;
   const task = previous.catch(() => {}).then(async () => {
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    await rotateAccessLogIfNeeded(file, options);
-    await fsp.appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
+    await fsp.mkdir(path.dirname(key), { recursive: true });
+    if (shouldRotate) await rotateAccessLogIfNeeded(key, options);
+    await fsp.appendFile(key, chunk, "utf8");
   });
   accessLogQueues.set(key, task);
   try {
@@ -258,7 +295,12 @@ async function appendAccessLog(file, entry, options = {}) {
   }
 }
 
+async function flushAllAccessLogs() {
+  await Promise.all([...accessLogBuffers.keys()].map((file) => flushAccessLog(file)));
+}
+
 async function readAccessLogEvents(file, maxLines = 12000, parseJsonSafe = parseJsonLine) {
+  await flushAccessLog(file).catch(() => {});
   try {
     const text = await readFileTail(file, Math.max(1024 * 1024, Math.min(32 * 1024 * 1024, maxLines * 1024)));
     return text
@@ -659,6 +701,8 @@ module.exports = {
   groupAccessEvents,
   percentile,
   appendAccessLog,
+  flushAccessLog,
+  flushAllAccessLogs,
   readFileTail,
   readAccessLogEvents,
   readRotatedAccessLogEvents,
