@@ -87,7 +87,7 @@ test("proxy headers keep auth fields and remove hop-by-hop fields", () => {
   assert.equal(headers["x-service-entry-gateway"], "1");
   assert.equal(headers["x-service-entry-instance-id"], "vision");
   assert.notEqual(headers["x-service-entry-instance-signature"], "forged-signature");
-  assert.equal(headers["x-forwarded-for"], "192.168.1.99, 192.168.1.100");
+  assert.equal(headers["x-forwarded-for"], "192.168.1.100");
   assert.equal(core.resolveServiceEntrySelectedInstance({
     headers,
     socket: { remoteAddress: "127.0.0.1" },
@@ -463,4 +463,35 @@ test("gateway global body budget accounts for transient JSON copies and releases
   });
   assert.equal(accepted.buffer.toString("utf8"), "ok");
   accepted.release();
+});
+
+test("upstream SSE error ends the client response instead of hanging", async () => {
+  const { PassThrough } = require("node:stream");
+  const upstream = new PassThrough();
+  const client = new PassThrough();
+  let cleared = false;
+  let finished = false;
+  client.on("finish", () => { finished = true; });
+  client.on("close", () => { finished = true; });
+  entry.forwardUpstreamBody({ body: upstream }, client, { clear() { cleared = true; } });
+  upstream.write("data: hello\n\n");
+  upstream.destroy(new Error("upstream crashed"));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(cleared, true);
+  assert.equal(finished || client.destroyed, true);
+});
+
+test("gateway mutating requests require application/json", () => {
+  assert.doesNotThrow(() => entry.requireGatewayJsonContentType({
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+  }));
+  assert.throws(
+    () => entry.requireGatewayJsonContentType({
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+    }),
+    (error) => error.status === 415 && error.code === "unsupported_media_type",
+  );
+  assert.doesNotThrow(() => entry.requireGatewayJsonContentType({ method: "GET", headers: {} }));
 });

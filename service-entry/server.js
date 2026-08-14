@@ -3,7 +3,7 @@ const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { Readable } = require("node:stream");
+const { pipeline, Readable } = require("node:stream");
 const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
 const core = require("../manager-core");
@@ -180,7 +180,9 @@ async function handleRequest(req, res) {
       return proxyGatewayRequest(req, res, url);
     }
     if (req.method === "GET" && url.pathname === "/api/security") {
-      return sendJson(res, { ok: true, security: await security.describe() });
+      const allowed = security.checkManagementAccess(req);
+      const securityState = allowed.ok ? await security.describe() : security.describePublic();
+      return sendJson(res, { ok: true, security: securityState });
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       const detailed = security.checkManagementAccess(req).ok;
@@ -281,6 +283,7 @@ async function handleRequest(req, res) {
 function redactStatusForRemote(payload) {
   return {
     ...payload,
+    security: security.describePublic(payload.security),
     entry: {
       ...payload.entry,
       pid: undefined,
@@ -318,6 +321,13 @@ async function startServiceEntry() {
     console.warn(`Unable to publish gateway trust token: ${error.message}`);
   });
   server = createServiceEntryServer();
+  server.on("error", (error) => {
+    const detail = error?.code === "EADDRINUSE"
+      ? `端口 ${PORT} 已被占用，无法启动统一入口。`
+      : (error?.message || String(error));
+    console.error(`Service entry listen failed: ${detail}`);
+    process.exit(1);
+  });
   server.listen(PORT, HOST, () => {
     const state = security.policy();
     console.log(`Service entry listening on http://${HOST}:${PORT}`);
@@ -326,6 +336,9 @@ async function startServiceEntry() {
     console.log(`  cors:         ${state.corsMode}${state.allowedOrigins.length ? ` (${state.allowedOrigins.join(", ")})` : ""}`);
     if (state.lanMode && !state.requireApiKey) {
       console.warn("  WARNING: listening off-loopback with API key enforcement disabled.");
+    }
+    if (!state.requireApiKey) {
+      console.warn("  HINT: 不受信环境请设置 SERVICE_ENTRY_REQUIRE_API_KEY=1，避免网页跨站盲打本地推理。");
     }
   });
   return server;
@@ -505,6 +518,12 @@ async function proxyGatewayRequest(req, res, url) {
   if (isAggregatedModelListRequest(req, route)) {
     return sendAggregatedModelList(req, res, route.engine, auth, authorizedManagers);
   }
+  try {
+    requireGatewayJsonContentType(req);
+  } catch (error) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, error.status || 415, startedAt, null, error.message)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError(error.code || "unsupported_media_type", error.message), error.status || 415, gatewayCorsHeaders(req));
+  }
   let body;
   let releaseBodyBudget = () => {};
   try {
@@ -538,7 +557,14 @@ async function proxyGatewayRequest(req, res, url) {
     parsedBody = parseRequestJsonBody(requestBody, {
       contentEncoding,
       maxBytes: GATEWAY_MAX_BODY_BYTES,
-    }) || {};
+    });
+    if (requestBody && parsedBody == null) {
+      const invalid = new Error("Request body must be a valid JSON object.");
+      invalid.code = "invalid_json";
+      invalid.status = 400;
+      throw invalid;
+    }
+    parsedBody = parsedBody || {};
   } catch (error) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, error.status || 400, startedAt, null, error.message)).catch(() => {});
     return sendJson(res, core.openAiGatewayError(error.code || "invalid_request", error.message), error.status || 400, gatewayCorsHeaders(req));
@@ -598,6 +624,7 @@ async function proxyGatewayRequest(req, res, url) {
       }),
       body: bodyForUpstream,
       signal: upstreamControl.signal,
+      redirect: "manual",
     });
     requestBody = undefined;
     bodyForUpstream = undefined;
@@ -607,15 +634,7 @@ async function proxyGatewayRequest(req, res, url) {
     res.once("finish", () => {
       appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, upstream.status, startedAt, requestMetadata, "", resolvedModel)).catch(() => {});
     });
-    if (upstream.body) {
-      const stream = Readable.fromWeb(upstream.body);
-      stream.once("end", upstreamControl.clear);
-      stream.once("error", upstreamControl.clear);
-      stream.pipe(res);
-    } else {
-      upstreamControl.clear();
-      res.end();
-    }
+    forwardUpstreamBody(upstream, res, upstreamControl);
     console.log(`gateway ${route.engine}/${route.protocol} -> ${manager.id} ${upstream.status} ${Date.now() - startedAt}ms ${targetPath}`);
   } catch (error) {
     upstreamControl.clear();
@@ -624,11 +643,35 @@ async function proxyGatewayRequest(req, res, url) {
     releaseBodyBudget();
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, error.status || 502, startedAt, requestMetadata, error.message, resolvedModel)).catch(() => {});
     if (!res.headersSent) {
-      sendJson(res, core.openAiGatewayError("gateway_proxy_error", error.message), error.status || (error.name === "TimeoutError" ? 504 : 502));
+      sendJson(res, core.openAiGatewayError("gateway_proxy_error", "gateway_proxy_error: upstream unavailable"), error.status || (error.name === "TimeoutError" ? 504 : 502));
     } else if (!res.writableEnded) {
       res.end();
     }
   }
+}
+
+function requireGatewayJsonContentType(req) {
+  const method = String(req?.method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return;
+  const contentType = String(req?.headers?.["content-type"] || "").split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "application/json") {
+    const error = new Error("Gateway mutating requests must use Content-Type: application/json.");
+    error.code = "unsupported_media_type";
+    error.status = 415;
+    throw error;
+  }
+}
+
+function forwardUpstreamBody(upstream, res, upstreamControl) {
+  if (!upstream?.body) {
+    upstreamControl.clear();
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  const stream = typeof upstream.body.getReader === "function"
+    ? Readable.fromWeb(upstream.body)
+    : upstream.body;
+  pipeline(stream, res, () => upstreamControl.clear());
 }
 
 function isAggregatedModelListRequest(req, route) {
@@ -858,7 +901,12 @@ function selectGatewayManager(catalogs = [], requestedModel = "") {
 async function getManagerModelCatalog(manager, options = {}) {
   const now = Date.now();
   const cached = managerModelCache.get(manager.id);
-  if (!options.force && cached?.value && cached.expiresAt > now) return cached.value;
+  if (!options.force && cached?.value) {
+    if (cached.expiresAt <= now && !cached.promise) {
+      getManagerModelCatalog(manager, { force: true }).catch(() => {});
+    }
+    return cached.value;
+  }
   if (!options.force && cached?.promise) return cached.promise;
   const promise = (async () => {
     const listening = await core.isPortListening("127.0.0.1", manager.port);
@@ -1071,6 +1119,7 @@ function buildProxyHeaders(headers, req = null, options = {}) {
   const output = {};
   const stripped = new Set([
     "host", "connection", "content-length", "transfer-encoding", "upgrade",
+    "keep-alive", "te", "trailer", "proxy-connection", "proxy-authenticate", "proxy-authorization",
     ...TRUST_HEADER_NAMES,
   ]);
   if (options.stripContentEncoding) stripped.add("content-encoding");
@@ -1078,7 +1127,7 @@ function buildProxyHeaders(headers, req = null, options = {}) {
     const lower = key.toLowerCase();
     // Trust headers are dropped before being re-issued below, so a client
     // cannot forge the address this process vouches for.
-    if (stripped.has(lower)) continue;
+    if (stripped.has(lower) || lower.startsWith("proxy-")) continue;
     output[key] = value;
   }
   const trustHeaders = security.trustHeaders(req);
@@ -1092,9 +1141,7 @@ function buildProxyHeaders(headers, req = null, options = {}) {
     ));
   }
   if (req?.socket?.remoteAddress) {
-    output["x-forwarded-for"] = headers["x-forwarded-for"]
-      ? `${headers["x-forwarded-for"]}, ${req.socket.remoteAddress}`
-      : req.socket.remoteAddress;
+    output["x-forwarded-for"] = req.socket.remoteAddress;
   }
   return output;
 }
@@ -1103,7 +1150,7 @@ function buildResponseHeaders(headers, req) {
   const output = gatewayCorsHeaders(req);
   for (const [key, value] of headers.entries()) {
     const lower = key.toLowerCase();
-    if (["connection", "content-length", "transfer-encoding", "content-encoding"].includes(lower)) continue;
+    if (["connection", "content-length", "transfer-encoding", "content-encoding", "keep-alive", "te", "trailer"].includes(lower) || lower.startsWith("proxy-")) continue;
     output[key] = value;
   }
   output["cache-control"] = output["cache-control"] || "no-store";
@@ -1251,6 +1298,9 @@ async function startDetachedManager(manager) {
     stdio: ["ignore", out, err],
     env,
   });
+  child.on("error", (error) => {
+    console.error(`无法启动 ${manager.name}: ${error.code === "ENOENT" ? "找不到 Node 可执行文件" : error.message}`);
+  });
   fsSync.closeSync(out);
   fsSync.closeSync(err);
   child.unref();
@@ -1319,7 +1369,11 @@ function sendJson(res, data, status = 200, extraHeaders = {}) {
   res.end(JSON.stringify(data));
 }
 
-function shutdownSoon() {
+function shutdownSoon(options = {}) {
+  const targetServer = options.server !== undefined ? options.server : server;
+  const exitProcess = typeof options.exit === "function" ? options.exit : (code) => process.exit(code);
+  const graceMs = Math.max(100, Number(options.graceMs || process.env.SERVICE_ENTRY_SHUTDOWN_GRACE_MS || 5000));
+  const delayMs = options.delayMs ?? 100;
   setTimeout(async () => {
     // Drop the published token so a stale file cannot authorize a later process.
     await security.revokeTrustToken().catch(() => {});
@@ -1333,18 +1387,30 @@ function shutdownSoon() {
       }
       billingStore = null;
     };
-    if (server) {
-      // Let already accepted settlement requests finish before closing their
-      // ledger. New manager requests fail closed once the listener is closed.
-      server.close(() => {
-        closeBillingStore();
-        process.exit(0);
-      });
-    } else {
+    let exited = false;
+    const finish = (code = 0) => {
+      if (exited) return;
+      exited = true;
       closeBillingStore();
-      process.exit(0);
+      exitProcess(code);
+    };
+    if (targetServer) {
+      // Let already accepted settlement requests finish, then force-close
+      // leftover SSE connections so shutdown cannot hang forever.
+      let forceExit;
+      targetServer.close(() => {
+        clearTimeout(forceExit);
+        finish(0);
+      });
+      forceExit = setTimeout(() => {
+        try { targetServer.closeAllConnections(); } catch { /* Node < 18.2 */ }
+        finish(0);
+      }, graceMs);
+      forceExit.unref?.();
+    } else {
+      finish(0);
     }
-  }, 100);
+  }, delayMs);
 }
 
 module.exports = {
@@ -1364,6 +1430,7 @@ module.exports = {
   emptyManagerCatalog,
   findManager,
   flattenCatalogModels,
+  forwardUpstreamBody,
   getFleetCatalogs,
   getBillingStore,
   getFleetSettings,
@@ -1379,6 +1446,7 @@ module.exports = {
   parseGatewayRoute,
   parseRequestJsonBody,
   readRequestBody,
+  requireGatewayJsonContentType,
   redactAccessForRemote,
   redactStatusForRemote,
   resolveGatewayManager,
@@ -1390,5 +1458,6 @@ module.exports = {
   selectGatewayManager,
   serializeFleetRouteTarget,
   sendAggregatedModelList,
+  shutdownSoon,
   startServiceEntry,
 };

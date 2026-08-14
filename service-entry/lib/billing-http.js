@@ -209,7 +209,8 @@ async function readBillingBody(req, readRequestBody) {
   const raw = await readRequestBody(req, MAX_BILLING_BODY_BYTES);
   let data;
   try {
-    data = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+    if (!raw?.length) throw billingHttpError(400, "invalid_json", "Request body must be valid JSON.");
+    data = JSON.parse(raw.toString("utf8"));
   } catch {
     throw billingHttpError(400, "invalid_json", "Request body must be valid JSON.");
   }
