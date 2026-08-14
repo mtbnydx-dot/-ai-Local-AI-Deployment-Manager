@@ -78,7 +78,11 @@ function createProcessJobRunner(handlers = {}) {
     };
     if (child.on) {
       child.on("error", (error) => {
-        failJob(job, error);
+        if (error?.code === "ENOENT") {
+          failJob(job, new Error(`${command} CLI 未安装或无法执行（${error.message}）。`));
+        } else {
+          failJob(job, error);
+        }
         done();
       });
       child.on("close", (code) => {

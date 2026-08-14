@@ -904,9 +904,15 @@ async function init() {
     setInterval(() => {
       if (!document.hidden) connectionStatus.track(refreshStatus());
     }, 5000);
-    setInterval(() => {
+    const pollJobs = () => {
       if (!document.hidden) connectionStatus.track(refreshJobs());
-    }, 3000);
+    };
+    let jobsTimer = setInterval(pollJobs, 3000);
+    window.__adaptJobsPoll = (jobs = []) => {
+      const active = (Array.isArray(jobs) ? jobs : []).some((job) => ["running", "queued"].includes(job.status));
+      clearInterval(jobsTimer);
+      jobsTimer = setInterval(pollJobs, active ? 1000 : 10000);
+    };
     setInterval(() => {
       if (!document.hidden && (activeViewName === "service" || location.hash === "#service")) runtimeInstancesController.refresh({ silent: true }).catch(() => {});
     }, 10000);
@@ -1604,6 +1610,9 @@ function downloadIncludePatternsForPrecision(precision) {
 }
 
 function updateDownloadPlanPreview(extra = {}) {
+  if (extra && (extra.bytes || extra.expectedBytes || extra.fileCount)) {
+    state.downloadEstimate = extra;
+  }
   const root = $("#downloadPlanPreview");
   if (!root) return;
   const model = $("#downloadModel")?.value.trim() || "";
@@ -1727,11 +1736,12 @@ async function refreshServiceClients() {
 }
 
 const refreshJobs = withFlightGuard(async () => {
-  state.jobs = await api("/api/jobs");
+  state.jobs = await api("/api/jobs?fields=summary");
   renderJobs();
   renderModels();
   renderRecentLaunches();
   maybeHydrateLaunchFormFromRuntime();
+  window.__adaptJobsPoll?.(state.jobs);
 });
 
 async function loadDownloadSettings() {
@@ -4649,9 +4659,20 @@ async function downloadModel(event) {
       notify("没有可下载的模型 ID", "请选择预设、粘贴模型链接，或手动填写模型 ID。", "info");
       return;
     }
+    const estimate = state.downloadEstimate || {};
     await api("/api/download", {
       method: "POST",
-      body: JSON.stringify({ model, outputName, source, precision, ...(hfToken ? { hfToken } : {}) }),
+      body: JSON.stringify({
+        model,
+        outputName,
+        source,
+        precision,
+        ...(hfToken ? { hfToken } : {}),
+        ...(Number(estimate.bytes || estimate.expectedBytes || 0) > 0 ? {
+          expectedBytes: Number(estimate.bytes || estimate.expectedBytes),
+          expectedFiles: Number(estimate.fileCount || estimate.expectedFiles || 0) || undefined,
+        } : {}),
+      }),
     });
     notify("下载任务已创建", model, "success");
     await refreshJobs();

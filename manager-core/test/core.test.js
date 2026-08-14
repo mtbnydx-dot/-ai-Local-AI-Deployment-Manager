@@ -2155,7 +2155,7 @@ test("job route registrar handles download and engine-specific cancel actions", 
     return { res, state };
   }
 
-  const downloadJob = { id: "download-1", type: "download", status: "running" };
+  const downloadJob = { id: "download-1", type: "download", status: "running", logs: ["a", "b", "c"] };
   const serveJob = { id: "serve-1", type: "serve", status: "running" };
   const jobs = new Map([
     [downloadJob.id, downloadJob],
@@ -2181,10 +2181,16 @@ test("job route registrar handles download and engine-specific cancel actions", 
     },
   });
 
-  assert.equal(routes.size, 5);
+  assert.equal(routes.size, 6);
   let response = makeResponse();
-  await routes.get("GET /api/jobs")({}, response.res);
+  await routes.get("GET /api/jobs")({ query: {} }, response.res);
   assert.deepEqual(response.state.json[0].map((job) => job.id), ["serve-1", "download-1"]);
+  response = makeResponse();
+  await routes.get("GET /api/jobs")({ query: { fields: "summary" } }, response.res);
+  assert.equal(response.state.json[0][1].logCount, 3);
+  response = makeResponse();
+  await routes.get("GET /api/jobs/:id/logs")({ params: { id: "download-1" } }, response.res);
+  assert.deepEqual(response.state.json[0].logs, ["a", "b", "c"]);
 
   response = makeResponse();
   await routes.get("GET /api/jobs/:id")({ params: { id: "missing" } }, response.res);
@@ -2207,7 +2213,7 @@ test("job route registrar handles download and engine-specific cancel actions", 
   await routes.get("POST /api/jobs/:id/cancel")({ params: { id: "serve-1" } }, response.res);
   assert.equal(response.state.statusCode, 400);
   assert.match(response.state.json[0].error, /下载任务/);
-  assert.deepEqual(calls, ["read", "read", "cancel:download-1", "pause:download-1", "resume:download-1"]);
+  assert.deepEqual(calls, ["read", "read", "read", "read", "cancel:download-1", "pause:download-1", "resume:download-1"]);
 
   const custom = makeApp();
   core.registerJobRoutes(custom.app, {
@@ -3511,6 +3517,12 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
     { rfilename: "tokenizer.json" },
   ];
   assert.deepEqual(core.filterDownloadSiblings(siblings, "Q8_0"), [{ rfilename: "model-Q8_0.gguf" }]);
+  assert.deepEqual(core.filterDownloadSiblings(siblings, "Q6_K"), []);
+  assert.ok(core.buildDownloadIncludePatterns("FP8").some((pattern) => pattern.includes("safetensors")));
+  assert.throws(
+    () => core.assertDownloadDiskSpace(100 * 1024 ** 3, 20 * 1024 ** 3, (value) => String(value)),
+    (error) => error.status === 400 && error.code === "download_disk_full",
+  );
   assert.deepEqual(core.selectDownloadSiblings(siblings, "Q8_0"), {
     siblings: [{ rfilename: "model-Q8_0.gguf" }],
     includePatterns: ["*Q8_0*.gguf"],
@@ -4370,4 +4382,27 @@ test("GGUF selection skips mmproj and chooses the first split shard", () => {
     { path: "D:/models/model-00001-of-00002.gguf", size: 1900 },
   ];
   assert.equal(core.chooseGgufFile(files).path, "D:/models/model-00001-of-00002.gguf");
+});
+
+test("pending billing queue replays authorize then settle", async () => {
+  const authorized = [];
+  const settled = [];
+  const queue = core.createBillingPendingQueue({
+    authorize: async (input) => {
+      authorized.push(input);
+      return { ok: true, allowed: true };
+    },
+    settle: async (input) => {
+      settled.push(input);
+      return { ok: true };
+    },
+  });
+  queue.enqueue({
+    authorizeInput: { requestId: "req-1", clientId: "c1" },
+    settleInput: { requestId: "req-1", inputTokens: 3 },
+  });
+  const result = await queue.flush();
+  assert.equal(result.flushed, 1);
+  assert.equal(authorized.length, 1);
+  assert.equal(settled[0].inputTokens, 3);
 });
