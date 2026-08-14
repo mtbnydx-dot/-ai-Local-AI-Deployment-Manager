@@ -1,3 +1,4 @@
+const path = require("node:path");
 const fsp = require("node:fs/promises");
 const {
   markDownloadCancelled,
@@ -6,6 +7,28 @@ const {
   markJobFailed,
   prepareDownloadResume,
 } = require("./job-utils");
+
+function normalizeLocalDirKey(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    return path.resolve(text).toLowerCase();
+  } catch {
+    return text.toLowerCase();
+  }
+}
+
+function findActiveDownloadJobByLocalDir(jobs, localDir, options = {}) {
+  const key = normalizeLocalDirKey(localDir);
+  if (!key || !jobs || typeof jobs.values !== "function") return null;
+  const excludeJobId = String(options.excludeJobId || "");
+  return Array.from(jobs.values()).find((job) => (
+    job?.type === "download"
+    && ["running", "queued"].includes(job.status)
+    && job.id !== excludeJobId
+    && normalizeLocalDirKey(job.meta?.localDir) === key
+  )) || null;
+}
 
 function clampInteger(value, min, max, fallback) {
   const number = Number(value);
@@ -54,9 +77,14 @@ function createDownloadJobController(options = {}) {
   }
 
   const scheduleSave = typeof options.scheduleSave === "function" ? options.scheduleSave : () => {};
-  const failJob = typeof options.failJob === "function"
+  const processStartedAt = Number(options.processStartedAt || Date.now());
+  const delegatedFailJob = typeof options.failJob === "function"
     ? options.failJob
     : (job, error) => markJobFailed(job, error);
+  const failJob = (job, error) => {
+    if (job?.meta && job.meta.failedAt == null) job.meta.failedAt = Date.now();
+    return delegatedFailJob(job, error);
+  };
   const getQueueMode = typeof options.getQueueMode === "function" ? options.getQueueMode : () => false;
   const setQueueMode = typeof options.setQueueMode === "function" ? options.setQueueMode : () => {};
   const saveQueueMode = typeof options.saveQueueMode === "function" ? options.saveQueueMode : async () => {};
@@ -71,11 +99,15 @@ function createDownloadJobController(options = {}) {
   const retryTimers = new Map();
   let autoRetryCount = clampInteger(options.autoRetryCount, 0, 10, 2);
   let autoRetryDelaySeconds = clampInteger(options.autoRetryDelaySeconds, 1, 3600, 10);
+  let hfMirror = Boolean(options.hfMirror);
+  let hfTransfer = Boolean(options.hfTransfer);
 
   function applyDownloadSettings(input = {}) {
     if (input.queueMode !== undefined) setQueueMode(Boolean(input.queueMode));
     if (input.autoRetryCount !== undefined) autoRetryCount = clampInteger(input.autoRetryCount, 0, 10, autoRetryCount);
     if (input.autoRetryDelaySeconds !== undefined) autoRetryDelaySeconds = clampInteger(input.autoRetryDelaySeconds, 1, 3600, autoRetryDelaySeconds);
+    if (input.hfMirror !== undefined) hfMirror = Boolean(input.hfMirror);
+    if (input.hfTransfer !== undefined) hfTransfer = Boolean(input.hfTransfer);
     return getDownloadSettings();
   }
 
@@ -89,6 +121,13 @@ function createDownloadJobController(options = {}) {
 
   function enqueueOrStartDownload(command, args, jobOptions = {}) {
     healDownloadQueue();
+    const busyJob = findActiveDownloadJobByLocalDir(jobs, jobOptions.meta?.localDir);
+    if (busyJob) {
+      const error = new Error(`该模型已有下载任务 ${busyJob.id} 正在进行，请勿重复提交。`);
+      error.status = 409;
+      error.existingJobId = busyJob.id;
+      throw error;
+    }
     const shouldQueue = Boolean(getQueueMode()) && hasRunningDownload();
     const meta = {
       ...(jobOptions.meta || {}),
@@ -165,6 +204,11 @@ function createDownloadJobController(options = {}) {
   async function deletePartialDownload(job) {
     const localDir = job.meta?.localDir;
     if (!localDir) return;
+    const other = findActiveDownloadJobByLocalDir(jobs, localDir, { excludeJobId: job.id });
+    if (other) {
+      options.appendLog(job, `部分下载目录仍被任务 ${other.id} 使用，已跳过删除。`);
+      return;
+    }
     const resolved = resolvePartialPath(localDir);
     await removePartialPath(resolved);
     options.appendLog(job, `${messages.partialDeleted}: ${resolved}`);
@@ -205,6 +249,8 @@ function createDownloadJobController(options = {}) {
       queueMode: body.queueMode !== undefined ? Boolean(body.queueMode) : previousQueueMode,
       autoRetryCount: body.autoRetryCount !== undefined ? body.autoRetryCount : autoRetryCount,
       autoRetryDelaySeconds: body.autoRetryDelaySeconds !== undefined ? body.autoRetryDelaySeconds : autoRetryDelaySeconds,
+      hfMirror: body.hfMirror !== undefined ? body.hfMirror : hfMirror,
+      hfTransfer: body.hfTransfer !== undefined ? body.hfTransfer : hfTransfer,
     });
     await saveQueueMode(settings);
     if (previousQueueMode && !settings.queueMode) startQueuedDownloadsNow();
@@ -248,6 +294,8 @@ function createDownloadJobController(options = {}) {
       queueMode: Boolean(getQueueMode()),
       autoRetryCount,
       autoRetryDelaySeconds,
+      hfMirror,
+      hfTransfer,
     };
   }
 
@@ -263,6 +311,14 @@ function createDownloadJobController(options = {}) {
       if (job.type !== "download" || job.status !== "failed" || job.meta?.cancelRequested) continue;
       const retries = clampInteger(job.meta?.retryCount, 0, 10, 0);
       const maxRetries = clampInteger(job.meta?.maxRetries, 0, 10, autoRetryCount);
+      const failedAt = Number(job.meta?.failedAt || 0);
+      if (!failedAt || failedAt < processStartedAt) {
+        if (!job.meta?.staleRetrySkipped) {
+          job.meta = { ...(job.meta || {}), staleRetrySkipped: true };
+          options.appendLog(job, "重启前的失败任务不再自动续传，可手动点击继续。");
+        }
+        continue;
+      }
       if (retries >= maxRetries || retryTimers.has(job.id)) continue;
       const delaySeconds = autoRetryDelaySeconds;
       job.meta = {
@@ -310,11 +366,15 @@ function createDownloadJobController(options = {}) {
     drainDownloadQueue,
     healDownloadQueue,
     startQueuedDownloadsNow,
+    findActiveDownloadJobByLocalDir: (localDir, findOptions) => findActiveDownloadJobByLocalDir(jobs, localDir, findOptions),
+    processStartedAt,
   };
 }
 
 module.exports = {
   createDownloadJobController,
+  findActiveDownloadJobByLocalDir,
+  normalizeLocalDirKey,
   normalizeDownloadPriority,
   downloadPriorityScore,
 };

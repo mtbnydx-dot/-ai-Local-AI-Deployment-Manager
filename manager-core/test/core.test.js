@@ -4183,6 +4183,93 @@ test("process job runner decodes split UTF-8 buffers and verifies successful dow
   assert.deepEqual(events, ["verified", "finished"]);
 });
 
+test("download controller rejects a second active job for the same localDir and skips deleting a busy directory", async () => {
+  const jobs = new Map();
+  const removed = [];
+  const createJob = (type, title, meta = {}) => {
+    const job = core.createJobRecord(type, title, meta, { id: `job-${jobs.size + 1}` });
+    jobs.set(job.id, job);
+    return job;
+  };
+  const controller = core.createDownloadJobController({
+    jobs,
+    downloadSpecs: new Map(),
+    createJob,
+    spawnJobProcess: (job) => { job.status = "running"; },
+    buildDownloadSpecFromJob: (job) => ({ command: "hf", args: ["download"], options: { meta: job.meta } }),
+    appendLog: (job, data) => { job.logs = [...(job.logs || []), String(data)]; },
+    stopProgressTracker: () => {},
+    resolvePartialPath: (value) => value,
+    removePartialPath: async (target) => { removed.push(target); },
+  });
+  const first = controller.enqueueOrStartDownload("hf", ["download", "same"], { title: "A", meta: { model: "same", localDir: "D:/models/same" } });
+  assert.equal(first.status, "running");
+  assert.throws(
+    () => controller.enqueueOrStartDownload("hf", ["download", "same"], { title: "B", meta: { model: "same", localDir: "D:/models/same" } }),
+    (error) => error.status === 409 && error.existingJobId === first.id,
+  );
+  const other = createJob("download", "busy", { localDir: "D:/models/same" });
+  other.status = "running";
+  const cancelled = createJob("download", "cancel-me", { localDir: "D:/models/same" });
+  cancelled.status = "paused";
+  await controller.deletePartialDownload(cancelled);
+  assert.deepEqual(removed, []);
+  assert.ok((cancelled.logs || []).some((line) => /跳过删除/.test(line)));
+});
+
+test("failed downloads from before process start are not auto-retried", async () => {
+  const jobs = new Map();
+  const scheduled = [];
+  const stale = core.createJobRecord("download", "old", { model: "old", failedAt: 1, retryCount: 0, maxRetries: 2 }, { id: "stale" });
+  stale.status = "failed";
+  jobs.set(stale.id, stale);
+  const fresh = core.createJobRecord("download", "new", { model: "new", failedAt: Date.now() + 1000, retryCount: 0, maxRetries: 2 }, { id: "fresh" });
+  fresh.status = "failed";
+  jobs.set(fresh.id, fresh);
+  const controller = core.createDownloadJobController({
+    jobs,
+    downloadSpecs: new Map(),
+    processStartedAt: Date.now(),
+    createJob: () => { throw new Error("unused"); },
+    spawnJobProcess: () => {},
+    buildDownloadSpecFromJob: (job) => ({ command: "hf", args: ["download"], options: { meta: job.meta } }),
+    appendLog: (job, data) => { job.logs = [...(job.logs || []), String(data)]; },
+    stopProgressTracker: () => {},
+    setRetryTimeout: () => {
+      const job = Array.from(jobs.values()).find((item) => item.meta?.retryScheduledAt && !scheduled.includes(item.id));
+      if (job) scheduled.push(job.id);
+      return 1;
+    },
+  });
+  controller.drainDownloadQueue();
+  assert.equal(scheduled.includes("stale"), false);
+  assert.equal(scheduled.includes("fresh"), true);
+  assert.ok((stale.logs || []).some((line) => /不再自动续传/.test(line)));
+});
+
+test("shutdown helper terminates a live download process and marks it interrupted", async () => {
+  const { spawn } = require("node:child_process");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { windowsHide: true, stdio: "ignore" });
+  const jobs = new Map();
+  const job = core.createJobRecord("download", "live", { model: "x" }, { id: "live-dl" });
+  job.status = "running";
+  job.pid = child.pid;
+  jobs.set(job.id, job);
+  core.interruptRunningDownloadJobs(jobs);
+  assert.equal(job.status, "interrupted");
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  let alive = true;
+  try {
+    process.kill(child.pid, 0);
+  } catch {
+    alive = false;
+  }
+  if (alive) {
+    try { process.kill(child.pid); } catch { /* already gone */ }
+  }
+  assert.equal(alive, false);
+});
+
 function createContainerReplacementDocker(initial = {}) {
   const containers = new Map(Object.entries(initial));
   const calls = [];

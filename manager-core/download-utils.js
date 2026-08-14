@@ -138,6 +138,12 @@ function buildDownloadEnv(hfCache, env = process.env, options = {}) {
     downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS = downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS || "223.5.5.5,119.29.29.29,1.1.1.1";
     downloadEnv.PYTHONPATH = [PYTHON_DIRECT_DNS_PATH, downloadEnv.PYTHONPATH].filter(Boolean).join(path.delimiter);
   }
+  if (options.hfMirror) {
+    downloadEnv.HF_ENDPOINT = options.hfEndpoint || "https://hf-mirror.com";
+  }
+  if (options.hfTransfer) {
+    downloadEnv.HF_HUB_ENABLE_HF_TRANSFER = "1";
+  }
   return downloadEnv;
 }
 

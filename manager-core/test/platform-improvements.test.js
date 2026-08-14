@@ -433,6 +433,7 @@ test("download queue honors priority and retries failed jobs without deleting pa
   assert.deepEqual(spawned, [first.id, high.id]);
 
   high.status = "failed";
+  high.meta.failedAt = Date.now();
   controller.drainDownloadQueue();
   assert.equal(retryCallbacks.length, 1);
   assert.ok(high.meta.retryScheduledAt);
@@ -445,4 +446,13 @@ test("download queue honors priority and retries failed jobs without deleting pa
   controller.drainDownloadQueue();
   assert.deepEqual(spawned, [first.id, high.id, low.id, high.id]);
   assert.deepEqual(removed, []);
+});
+
+test("buildDownloadEnv injects HF mirror and transfer flags", () => {
+  const env = core.buildDownloadEnv("D:/cache/hf", { PATH: "x" }, { hfMirror: true, hfTransfer: true });
+  assert.equal(env.HF_ENDPOINT, "https://hf-mirror.com");
+  assert.equal(env.HF_HUB_ENABLE_HF_TRANSFER, "1");
+  const off = core.buildDownloadEnv("D:/cache/hf", { PATH: "x" }, {});
+  assert.equal(off.HF_ENDPOINT, undefined);
+  assert.equal(off.HF_HUB_ENABLE_HF_TRANSFER, undefined);
 });

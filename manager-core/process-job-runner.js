@@ -1,6 +1,6 @@
 const { spawn } = require("child_process");
 const { StringDecoder } = require("node:string_decoder");
-const { markJobCancelRequested, markProcessJobStarted } = require("./job-utils");
+const { markInterruptedJob, markJobCancelRequested, markProcessJobStarted } = require("./job-utils");
 
 function terminateProcessTree(pid, options = {}) {
   if (!pid) return;
@@ -148,8 +148,29 @@ function createUtf8LogForwarder(append) {
   };
 }
 
+function interruptRunningDownloadJobs(jobs, options = {}) {
+  const terminate = options.terminate || terminateProcessTree;
+  const interrupted = [];
+  if (!jobs || typeof jobs.values !== "function") return interrupted;
+  for (const job of jobs.values()) {
+    if (job?.type !== "download" || job.status !== "running") continue;
+    try {
+      if (job.pid) terminate(job.pid);
+    } catch {
+      // The child may have already exited.
+    }
+    markInterruptedJob(job, {
+      error: options.error || "管理器关闭时已终止下载进程。",
+      message: options.message || "管理器关闭，已终止下载子进程。",
+    });
+    interrupted.push(job);
+  }
+  return interrupted;
+}
+
 module.exports = {
   createUtf8LogForwarder,
   createProcessJobRunner,
+  interruptRunningDownloadJobs,
   terminateProcessTree,
 };
