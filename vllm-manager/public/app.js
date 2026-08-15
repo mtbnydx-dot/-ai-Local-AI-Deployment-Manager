@@ -4173,7 +4173,7 @@ function statsSourceLabels(en) {
 function renderStatsCosts(stats) {
   window.statsUiRenderer.renderCosts(stats, {
     root: $("#statsCostTable"),
-    managerName: "vLLM",
+    managerName: stats?.live?.engine === "sglang" ? "SGLang" : "vLLM",
     escapeHtml,
     fmtMoney,
     labels: {

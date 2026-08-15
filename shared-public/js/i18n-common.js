@@ -384,7 +384,7 @@ const UI_TEXT_TRANSLATIONS = {
   "设置筛选条件后检索访问日志。": "Set filters, then search the access log.",
   "运行基准": "Run benchmark",
   "24 小时性能趋势": "24-hour performance trends",
-  "管理器每分钟持久化 TTFT、TPOT、吞吐、排队和 GPU / MTP 指标，离开页面后仍会保留。": "The manager persists TTFT, TPOT, throughput, queue, and GPU/MTP metrics every minute, even after you leave the page.",
+  "管理器每分钟持久化 TTFT、TPOT、吞吐、排队、GPU 和推测解码指标，离开页面后仍会保留。": "The manager persists TTFT, TPOT, throughput, queue, GPU, and speculative-decoding metrics every minute, even after you leave the page.",
   "每张显卡的利用率、显存、温度、功耗和风扇转速。": "Utilization, memory, temperature, power, and fan speed for each GPU.",
 };
 
