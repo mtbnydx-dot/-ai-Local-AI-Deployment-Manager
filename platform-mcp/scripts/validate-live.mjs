@@ -32,8 +32,9 @@ const argumentsByTool = {
   local_ai_get_diagnostics: { engine: "all", warnings_only: true },
   local_ai_get_search_health: {},
   local_ai_search_web: {
-    query: "Model Context Protocol specification 2026-07-28",
+    query: "Model Context Protocol",
     max_results: 2,
+    engines: ["bing"],
     safesearch: 1,
   },
   local_ai_list_jobs: { engine: "all", limit: 5 },

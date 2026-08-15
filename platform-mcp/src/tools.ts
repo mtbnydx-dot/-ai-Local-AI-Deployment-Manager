@@ -286,7 +286,7 @@ export function createPlatformMcpServer(dependencies: PlatformMcpServerDependenc
       title: "Search the Web Through Local SearXNG",
       description: `Search the web through the platform's existing authenticated search gateway and self-hosted SearXNG service.
 
-Use this for current facts, release notes, news, prices, documentation discovery, or source URLs. Results include bounded titles, URLs, snippets, engines, categories, dates, and optional direct answers. It does not fetch arbitrary URLs or modify any external system. Search queries may be sent to the SearXNG engines selected by the operator, so do not include secrets or private prompt content. Calls are rate-limited per MCP client.
+Use this for current facts, release notes, news, prices, documentation discovery, or source URLs. Results include bounded titles, URLs, snippets, engines, categories, dates, and optional direct answers. It does not fetch arbitrary URLs or modify any external system. Search queries may be sent to the SearXNG engines selected by the operator, so do not include secrets or private prompt content. Calls are rate-limited per MCP client and by a server-wide hard ceiling.
 
 Returns the standard envelope plus data={query,searched_at,count,answers,results}. If results are weak, refine query, language, time_range, engines, or categories rather than increasing beyond ten results.`,
       inputSchema: WebSearchInputSchema,

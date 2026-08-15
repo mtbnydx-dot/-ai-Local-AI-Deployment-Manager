@@ -24,3 +24,10 @@ ui:
 outgoing:
   request_timeout: 8.0
   max_request_timeout: 15.0
+
+# The default Brave, DuckDuckGo, and Startpage engines can all be suspended by
+# rate limits/CAPTCHA at the same time. Keep the defaults, and add Bing as a
+# general-search fallback using SearXNG's supported engine override mechanism.
+engines:
+  - name: bing
+    disabled: false

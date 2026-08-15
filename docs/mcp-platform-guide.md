@@ -73,7 +73,7 @@ stop-platform-mcp.cmd
 
 12 个工具都声明 `readOnlyHint=true`、`destructiveHint=false` 和 `idempotentHint=true`，并同时返回文本与 `structuredContent`。只有确实访问外部搜索引擎的 `local_ai_search_web` 声明 `openWorldHint=true`；其余 11 个为 `false`。
 
-联网搜索的 query 可能被 SearXNG 配置的外部引擎接收，不要把密钥、私人提示词或内部路径放进 query。MCP 只返回规范化标题、公共 HTTP(S) URL、摘要、来源和日期；带账号密码的 URL、`file:` URL、localhost/RFC1918/链路本地/常见内网域名、search backend 地址及凭据字段会被丢弃或脱敏。默认限流为每个 MCP client 每分钟 20 次，并设有 4 倍于该值的 MCP 服务级硬上限，防止轮换客户端 ID 绕过；过期客户端桶会回收。客户端限额可用 `PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE` 在 1–120 之间调整。
+联网搜索的 query 可能被 SearXNG 配置的外部引擎接收，不要把密钥、私人提示词或内部路径放进 query。MCP 只返回规范化标题、公共 HTTP(S) URL、摘要、来源和日期；带账号密码的 URL、`file:` URL、localhost/RFC1918/链路本地/常见内网域名、search backend 地址及凭据字段会被丢弃或脱敏。默认 SearXNG 引擎之外额外启用了 Bing 作为通用搜索冗余，避免 Brave、DuckDuckGo、Startpage 同时因限流/CAPTCHA 暂停时返回空结果；客户端仍可用 `engines` 显式选择。该覆盖方式遵循 [SearXNG settings.yml 的 engines 合并机制](https://docs.searxng.org/admin/settings/settings)。默认限流为每个 MCP client 每分钟 20 次，并设有 4 倍于该值的 MCP 服务级硬上限，防止轮换客户端 ID 绕过；过期客户端桶会回收。客户端限额可用 `PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE` 在 1–120 之间调整。
 
 ## 各类客户端接入
 
