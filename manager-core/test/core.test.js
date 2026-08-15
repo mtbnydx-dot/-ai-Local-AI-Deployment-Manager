@@ -3852,6 +3852,7 @@ test("job helpers normalize persistence, logs, issues, and byte labels", () => {
     "KeyError: 'layers.0.mlp.experts.w2_input_scale'",
     "AssertionError: In Mamba cache align mode, block_size (2096) must be <= max_num_batched_tokens (2048).",
   ]);
+  assert.deepEqual(core.extractLogIssues("Traceback (most recent call last):\nOSError: libavutil.so.60: cannot open shared object file: No such file or directory\nOSError: Could not load this library: /opt/torchcodec/libtorchcodec_core8.so\n[end of libtorchcodec loading traceback]."), []);
 });
 
 test("job state helpers centralize lifecycle mutations", () => {

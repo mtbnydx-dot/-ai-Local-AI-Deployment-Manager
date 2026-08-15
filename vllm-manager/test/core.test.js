@@ -483,7 +483,9 @@ test("runtime metrics use vLLM counters and SGLang native speculative gauges wit
     'vllm:spec_decode_num_accepted_tokens_total{model_name="qwen"} 240',
     'vllm:cache_config_info{model_name="qwen",block_size="16",mamba_block_size="32"} 1',
   ].join("\n"));
-  const [vllm] = manager.buildModelStats(vllmMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, { updateSamples: false });
+  const [vllm] = manager.buildModelStats(vllmMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, { updateSamples: false, engine: "vllm", runtimeVersion: "0.1.dev-test" });
+  assert.equal(vllm.engine, "vllm");
+  assert.equal(vllm.runtimeVersion, "0.1.dev-test");
   assert.equal(vllm.cache.prefixHitRate, 0.6);
   assert.equal(vllm.cache.alignmentBlockSize, 32);
   assert.equal(vllm.speculative.acceptanceRate, 0.8);
@@ -505,7 +507,9 @@ test("runtime metrics use vLLM counters and SGLang native speculative gauges wit
     'sglang:spec_num_steps{model_name="qwen"} 1',
     'sglang:spec_num_draft_tokens{model_name="qwen"} 7',
   ].join("\n"));
-  const [sglang] = manager.buildModelStats(sglangMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, { updateSamples: false });
+  const [sglang] = manager.buildModelStats(sglangMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, { updateSamples: false, engine: "sglang", runtimeVersion: "0.5.17" });
+  assert.equal(sglang.engine, "sglang");
+  assert.equal(sglang.runtimeVersion, "0.5.17");
   assert.equal(sglang.requests.total, 4);
   assert.equal(sglang.requests.aborted, 1);
   assert.equal(sglang.requests.success, 3);

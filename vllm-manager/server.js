@@ -359,7 +359,7 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   writeJsonFile,
   maxLogLines: MAX_LOG_LINES,
   maxPersistedJobs: MAX_PERSISTED_JOBS,
-  serveDetail: "vLLM API 与最小生成自检均已通过。",
+  serveDetail: "运行时 API 与最小生成自检均已通过。",
   stopProgressTracker,
   onJobSuccess: (job) => {
     if (job.type === "serve") recordRecentLaunch(job.meta);
@@ -658,6 +658,10 @@ core.registerManagerRoutes(app, {
   getImageStatus: async () => (await getOperationalSnapshot()).image,
   getRunningModelSummary: async () => (await getOperationalSnapshot()).runtime,
   getManagerResourceSummary: async () => (await getOperationalSnapshot()).resources,
+  buildStatusExtras: ({ runtime }) => ({
+    engine: runtime.engine,
+    runtimeVersion: runtime.runtimeVersion,
+  }),
   buildMemoryEstimate: buildVllmMemoryEstimate,
   collectStats,
   collectExternalAccessStats,
@@ -3321,6 +3325,7 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
       containerStatus: activeContainer.status || "",
       image: activeContainer.image || "",
       engine: runtimeEngine,
+      runtimeVersion: runtimeVersion.version || "",
       apiBaseUrl: endpoint.serviceUrl,
       localApiBaseUrl: endpoint.localUrl,
       port: endpoint.port,
@@ -3659,7 +3664,10 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
     return { ...empty, error: error.message };
   }
 
-  const servedModels = await getServedModels(endpoint.port, vllmApiKey).catch(() => []);
+  const [servedModels, runtimeVersion] = await Promise.all([
+    getServedModels(endpoint.port, vllmApiKey).catch(() => []),
+    getRuntimeVersion(endpoint.port, vllmApiKey, runtimeEngine, container.image).catch(() => ({ engine: runtimeEngine, version: "", source: "" })),
+  ]);
   const factModelHints = Array.from(new Set(servedModels
     .flatMap((model) => [model.id, model.root])
     .filter(Boolean)));
@@ -3675,12 +3683,17 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   const processStartSeconds = firstMetricValue(metrics, "process_start_time_seconds") || null;
   const nowSeconds = Date.now() / 1000;
   const uptimeSeconds = processStartSeconds ? Math.max(0, nowSeconds - processStartSeconds) : null;
-  const models = buildModelStats(metrics, servedById, facts, nowSeconds, options);
+  const models = buildModelStats(metrics, servedById, facts, nowSeconds, {
+    ...options,
+    engine: runtimeEngine,
+    runtimeVersion: runtimeVersion.version || "",
+  });
   const totals = aggregateStats(models, uptimeSeconds);
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
 
   return {
     engine: runtimeEngine,
+    runtimeVersion,
     source: `http://127.0.0.1:${endpoint.port}/metrics`,
     processStartSeconds,
     uptimeSeconds,
@@ -3768,6 +3781,8 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
 
     models.push({
       name,
+      engine: options.engine || (hasSglangMetrics ? "sglang" : "vllm"),
+      runtimeVersion: String(options.runtimeVersion || ""),
       root: servedById?.[name]?.root || "",
       maxModelLen: servedById?.[name]?.max_model_len || null,
       tokens: {

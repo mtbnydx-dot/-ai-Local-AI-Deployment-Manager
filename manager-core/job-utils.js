@@ -250,11 +250,14 @@ function serializeJobs(jobs, options = {}) {
 
 function extractLogIssues(text, options = {}) {
   const limit = Number(options.limit || 8);
-  return String(text || "")
+  const logText = String(text || "");
+  const optionalTorchCodecProbe = /(?:ignore import error[^\n]*torchcodec|\[(?:start|end) of libtorchcodec loading traceback\])/i.test(logText);
+  return logText
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((line) => !/\bINFO\b.*not found.*trying vendored/i.test(line))
+    .filter((line) => !(optionalTorchCodecProbe && /(?:libtorchcodec|libavutil\.so|ffmpeg version|\[(?:start|end) of libtorchcodec loading traceback\]|traceback \(most recent call last\)|the above exception was the direct cause|the following exceptions were raised)/i.test(line)))
     .filter((line) => /(^|\s)(error|exception|traceback|failed|fatal)\b|out of memory|no such|cannot|not found|runtimeerror|valueerror|typeerror|keyerror|assertionerror|validationerror|invalid repository|configuration file|config\.json|params\.json|enginedeaderror|device-side assert|scattergatherkernel|uva is not available/i.test(line))
     .slice(-limit);
 }
