@@ -266,7 +266,8 @@ function createVllmRuntimeCommandBuilder(deps) {
       "--max-running-requests", String(options.maxNumSeqs),
       "--context-length", String(options.maxModelLen),
       "--chunked-prefill-size", String(runtimePreset.chunkedPrefillSize || 8192),
-      "--enable-metrics"
+      "--enable-metrics",
+      "--sleep-on-idle"
     );
     if (runtimePreset.mambaSchedulerStrategy) {
       runArgs.push("--mamba-scheduler-strategy", runtimePreset.mambaSchedulerStrategy);
