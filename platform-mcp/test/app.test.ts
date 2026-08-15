@@ -6,6 +6,8 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { NoopAuditLogger } from "../src/audit.js";
 import { createPlatformMcpApp } from "../src/app.js";
 import type { PlatformMcpConfig } from "../src/config.js";
+import { SERVER_VERSION, TOOL_NAMES } from "../src/constants.js";
+import { SearchRateLimiter } from "../src/tools.js";
 import { FixturePlatformDataSource } from "./fixtures.js";
 
 const API_KEY = "test-platform-mcp-key-0123456789abcdef";
@@ -23,6 +25,8 @@ function testConfig(): PlatformMcpConfig {
       id: "llama", name: "llama.cpp Manager", baseUrl: new URL("http://127.0.0.1:5178"),
     }],
     searchGatewayUrl: new URL("http://127.0.0.1:5180"),
+    searchGatewayApiKey: "test-search-gateway-key-0123456789abcdef",
+    searchRateLimitPerMinute: 20,
     timeoutMs: 1000,
     maxResponseChars: 25000,
     maxUpstreamBytes: 1024 * 1024,
@@ -46,7 +50,25 @@ describe("HTTP security guards", () => {
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.ok, true);
+    assert.equal(body.version, SERVER_VERSION);
     assert.equal(body.auth_required, true);
+    assert.equal(JSON.stringify(body).includes(API_KEY), false);
+  });
+
+  it("publishes a redacted 0.2.0 capability manifest after authentication", async () => {
+    const response = await mcp.app.request("http://127.0.0.1:5190/info", {
+      headers: { host: "127.0.0.1:5190", authorization: `Bearer ${API_KEY}` },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      version: string;
+      tools: string[];
+      policy: Record<string, unknown>;
+    };
+    assert.equal(body.version, SERVER_VERSION);
+    assert.deepEqual(body.tools, [...TOOL_NAMES]);
+    assert.equal(body.policy.read_only, true);
+    assert.equal(body.policy.web_search, true);
     assert.equal(JSON.stringify(body).includes(API_KEY), false);
   });
 
@@ -109,15 +131,20 @@ describe("dual-era MCP protocol", () => {
     });
   }
 
-  it("serves legacy 2025 clients with seven read-only tools", async () => {
+  it("serves legacy 2025 clients with twelve read-only tools", async () => {
     const client = new Client({ name: "legacy-test", version: "1.0.0" });
     await client.connect(transport());
     try {
       assert.equal(client.getProtocolEra(), "legacy");
       const listing = await client.listTools();
-      assert.equal(listing.tools.length, 7);
+      assert.equal(listing.tools.length, 12);
+      assert.deepEqual(listing.tools.map((tool) => tool.name), [...TOOL_NAMES]);
       assert.equal(listing.tools.every((tool) => tool.annotations?.readOnlyHint === true), true);
       assert.equal(listing.tools.every((tool) => tool.annotations?.destructiveHint === false), true);
+      assert.deepEqual(
+        listing.tools.filter((tool) => tool.annotations?.openWorldHint === true).map((tool) => tool.name),
+        ["local_ai_search_web"],
+      );
 
       const result = await client.callTool({ name: "local_ai_get_overview", arguments: {} });
       const structured = result.structuredContent as { data: { running_model_count: number } };
@@ -145,6 +172,38 @@ describe("dual-era MCP protocol", () => {
       assert.equal(structured.data.count, 1);
       assert.equal(structured.data.has_more, false);
       assert.equal(structured.data.models[0]?.id, "RadixArk-Qwen3.8-27B-DSpark");
+
+      const search = await client.callTool({
+        name: "local_ai_search_web",
+        arguments: { query: "Model Context Protocol SDK v2", max_results: 1 },
+      });
+      const searchData = search.structuredContent as { data: { count: number; results: Array<{ url: string }> } };
+      assert.equal(searchData.data.count, 1);
+      assert.match(searchData.data.results[0]?.url || "", /^https:\/\//);
+
+      const jobs = await client.callTool({
+        name: "local_ai_list_jobs",
+        arguments: { engine: "vllm", status: "failed", job_type: "serve" },
+      });
+      assert.equal((jobs.structuredContent as { data: { jobs: Array<{ id: string }> } }).data.jobs[0]?.id, "serve-1");
+
+      const route = await client.callTool({
+        name: "local_ai_preview_route",
+        arguments: { model: "qwen-qwen3.8-27b-fp8", capability: "tools" },
+      });
+      assert.equal((route.structuredContent as { data: { manager: { id: string } } }).data.manager.id, "vllm");
+
+      const memory = await client.callTool({
+        name: "local_ai_estimate_memory",
+        arguments: { engine: "vllm", params_b: 27, context_tokens: 32768, precision: "fp8_int8" },
+      });
+      assert.equal((memory.structuredContent as { data: { status: string } }).data.status, "ok");
+
+      const security = await client.callTool({
+        name: "local_ai_get_security_posture",
+        arguments: { warnings_only: true },
+      });
+      assert.equal((security.structuredContent as { data: { overall: string } }).data.overall, "warn");
     } finally {
       await client.close();
     }
@@ -157,8 +216,34 @@ describe("dual-era MCP protocol", () => {
       const result = await client.callTool({ name: "local_ai_list_local_models", arguments: { limit: 5000 } });
       assert.equal(result.isError, true);
       assert.match(JSON.stringify(result.content), /invalid|limit|arguments/i);
+
+      const invalidMemory = await client.callTool({
+        name: "local_ai_estimate_memory",
+        arguments: { engine: "vllm", params_b: 27, precision: "custom" },
+      });
+      assert.equal(invalidMemory.isError, true);
+      assert.match(JSON.stringify(invalidMemory.content), /bytes_per_param|required|invalid/i);
     } finally {
       await client.close();
     }
+  });
+});
+
+describe("web-search rate limiting", () => {
+  it("uses an independent fixed window per MCP client", () => {
+    const limiter = new SearchRateLimiter(1);
+    assert.deepEqual(limiter.consume("client-a", 1_000), { ok: true });
+    assert.deepEqual(limiter.consume("client-b", 1_001), { ok: true });
+    assert.deepEqual(limiter.consume("client-a", 2_000), { ok: false, retryAfterSeconds: 59 });
+    assert.deepEqual(limiter.consume("client-a", 61_000), { ok: true });
+  });
+
+  it("enforces a server-wide ceiling when callers rotate client IDs", () => {
+    const limiter = new SearchRateLimiter(1);
+    for (let index = 0; index < 4; index += 1) {
+      assert.deepEqual(limiter.consume(`rotating-${index}`, 1_000 + index), { ok: true });
+    }
+    assert.deepEqual(limiter.consume("rotating-4", 2_000), { ok: false, retryAfterSeconds: 59 });
+    assert.deepEqual(limiter.consume("rotating-5", 61_000), { ok: true });
   });
 });

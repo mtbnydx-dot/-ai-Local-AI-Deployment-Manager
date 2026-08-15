@@ -95,6 +95,7 @@ async function handleDirectSearch(req, res, url, config, fetchImpl) {
     time_range: url.searchParams.get("time_range"),
     engines: url.searchParams.get("engines"),
     categories: url.searchParams.get("categories"),
+    safesearch: url.searchParams.get("safesearch"),
   }, config);
   const result = await searchWeb(query, options, config, fetchImpl);
   sendJson(res, 200, { ok: true, ...result }, req);
@@ -328,7 +329,7 @@ function searchOptionsFromInput(input = {}, config = envConfig()) {
     time_range: cleanToken(input.time_range ?? input.timeRange, 24),
     engines: cleanCsv(input.engines),
     categories: cleanCsv(input.categories),
-    safesearch: input.safesearch ?? 1,
+    safesearch: numberInRange(input.safesearch, 0, 2, 1),
   };
 }
 

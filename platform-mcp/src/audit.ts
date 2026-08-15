@@ -67,6 +67,23 @@ export async function audited<T>(
   }
 }
 
+export async function auditRejected(
+  logger: AuditLogger,
+  tool: string,
+  clientId: string,
+  errorCode: string,
+): Promise<void> {
+  await safeWrite(logger, {
+    requestId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    tool,
+    clientId,
+    ok: false,
+    durationMs: 0,
+    errorCode,
+  });
+}
+
 async function safeWrite(logger: AuditLogger, event: ToolAuditEvent): Promise<void> {
   try {
     await logger.write(event);

@@ -26,6 +26,8 @@ function evaluationConfig(): PlatformMcpConfig {
       id: "llama", name: "llama.cpp Manager", baseUrl: new URL("http://127.0.0.1:5178"),
     }],
     searchGatewayUrl: new URL("http://127.0.0.1:5180"),
+    searchGatewayApiKey: "evaluation-search-gateway-key-0123456789",
+    searchRateLimitPerMinute: 20,
     timeoutMs: 1000,
     maxResponseChars: 25000,
     maxUpstreamBytes: 1024 * 1024,
@@ -65,6 +67,30 @@ describe("stable MCP evaluation answers", () => {
       const performance = await call<any>(client, "local_ai_get_performance", { engine: "all", include_models: true });
       const diagnostics = await call<any>(client, "local_ai_get_diagnostics", { engine: "all", warnings_only: true });
       const search = await call<any>(client, "local_ai_get_search_health");
+      const webSearch = await call<any>(client, "local_ai_search_web", {
+        query: "Model Context Protocol TypeScript SDK v2",
+        max_results: 1,
+        engines: ["github"],
+      });
+      const jobs = await call<any>(client, "local_ai_list_jobs", {
+        engine: "vllm",
+        status: "failed",
+        job_type: "serve",
+      });
+      const route = await call<any>(client, "local_ai_preview_route", {
+        model: "qwen-qwen3.8-27b-fp8",
+        capability: "tools",
+      });
+      const memory = await call<any>(client, "local_ai_estimate_memory", {
+        engine: "vllm",
+        params_b: 27,
+        context_tokens: 32768,
+        precision: "fp8_int8",
+      });
+      const security = await call<any>(client, "local_ai_get_security_posture", {
+        engine: "all",
+        warnings_only: true,
+      });
 
       const localModels: any[] = [];
       let offset = 0;
@@ -82,27 +108,27 @@ describe("stable MCP evaluation answers", () => {
       const warnedModel = localModels.find((model) => model.verification_status === "warn")?.id;
       const onlyRunningModel = running.data.instances.flatMap((instance: any) => instance.models)[0];
       const vllmPerf = performance.data.managers.find((manager: any) => manager.engine === "vllm");
-      const fastestRunning = performance.data.managers
-        .filter((manager: any) => overview.data.managers.find((item: any) => item.id === manager.engine)?.runtime_running)
-        .sort((a: any, b: any) => Number(b.speed.recentOutputTokensPerSecond || 0) - Number(a.speed.recentOutputTokensPerSecond || 0))[0]?.engine;
-      const successTotal = performance.data.managers.reduce((sum: number, manager: any) => sum + Number(manager.requests.success || 0), 0);
       const warnedIdle = diagnostics.data.managers.find((manager: any) => manager.checks.length > 0 && (runningByEngine.get(manager.engine) || 0) === 0)?.engine;
       const hitRate = Math.round((Number(vllmPerf.cache.prefixHits) / Number(vllmPerf.cache.prefixQueries)) * 100);
 
       assert.equal(vllmPerf.facts.maxModelLen, onlyRunningModel.max_model_len);
       assert.equal(overview.data.gpu.allocatable_mb, gpu.data.gpu.allocatable_mb);
       assert.equal(overview.data.search.mode, search.data.search.mode);
+      assert.equal(search.data.search.healthy, true);
+      assert.equal(search.data.search.auth_required, true);
+      assert.equal(memory.data.free_gpu_gb, gpu.data.gpu.free_mb / 1024);
+      assert.equal(route.data.selected, true);
 
       const derivedAnswers = [
         idleOnlineEngine,
         warnedModel,
         String(onlyRunningModel.max_model_len),
-        String(gpu.data.gpu.allocatable_mb),
-        search.data.search.mode,
-        fastestRunning,
-        String(successTotal),
+        webSearch.data.results[0]?.title,
+        jobs.data.jobs[0]?.id,
+        route.data.manager?.id,
+        memory.data.status,
         warnedIdle,
-        String(localModels.length),
+        security.data.overall,
         `${hitRate}%`,
       ];
 

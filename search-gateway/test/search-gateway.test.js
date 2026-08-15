@@ -19,6 +19,43 @@ test("search policy can be controlled by header or body", () => {
   assert.equal(gateway.resolveSearchPolicy({}, {}, { searchMode: "off" }), "off");
 });
 
+test("direct-search options normalize safe-search levels", () => {
+  const config = { maxResults: 5 };
+  assert.equal(gateway.searchOptionsFromInput({ safesearch: "0" }, config).safesearch, 0);
+  assert.equal(gateway.searchOptionsFromInput({ safesearch: "2" }, config).safesearch, 2);
+  assert.equal(gateway.searchOptionsFromInput({ safesearch: "9" }, config).safesearch, 1);
+});
+
+test("direct-search route forwards the normalized safe-search level", async (t) => {
+  let backendUrl = "";
+  const config = {
+    host: "127.0.0.1",
+    gatewayApiKey: "search-test-key",
+    allowNoKey: false,
+    searchBackendUrl: "http://searxng.test",
+    searchTimeoutMs: 1000,
+    maxResults: 5,
+  };
+  const server = gateway.createSearchGatewayServer(config, {
+    fetch: async (url) => {
+      backendUrl = String(url);
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const response = await fetch(`http://127.0.0.1:${address.port}/search?q=mcp&safesearch=2`, {
+    headers: { authorization: "Bearer search-test-key" },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(new URL(backendUrl).searchParams.get("safesearch"), "2");
+});
+
 test("augmented chat body inserts search context after system messages", () => {
   const body = {
     model: "local-current",

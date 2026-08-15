@@ -16,6 +16,8 @@ export type PlatformMcpConfig = {
   serviceEntryUrl: URL;
   managers: ManagerTarget[];
   searchGatewayUrl: URL;
+  searchGatewayApiKey: string;
+  searchRateLimitPerMinute: number;
   timeoutMs: number;
   maxResponseChars: number;
   maxUpstreamBytes: number;
@@ -83,6 +85,10 @@ export function loadConfig(options: LoadConfigOptions = {}): PlatformMcpConfig {
   if (requireAuth && apiKey.length < 32) {
     throw new Error("PLATFORM_MCP_API_KEY must contain at least 32 characters for HTTP mode.");
   }
+  const searchGatewayApiKey = String(env.PLATFORM_MCP_SEARCH_GATEWAY_API_KEY || "").trim();
+  if (searchGatewayApiKey && searchGatewayApiKey.length < 16) {
+    throw new Error("PLATFORM_MCP_SEARCH_GATEWAY_API_KEY must contain at least 16 characters when configured.");
+  }
 
   const aiRoot = path.resolve(String(env.AI_ROOT || path.resolve(process.cwd(), "..")));
   const auditLogPath = assertChildPath(
@@ -127,6 +133,14 @@ export function loadConfig(options: LoadConfigOptions = {}): PlatformMcpConfig {
       env.PLATFORM_MCP_SEARCH_GATEWAY_URL,
       "http://127.0.0.1:5180",
       "PLATFORM_MCP_SEARCH_GATEWAY_URL",
+    ),
+    searchGatewayApiKey,
+    searchRateLimitPerMinute: boundedInteger(
+      env.PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE,
+      20,
+      1,
+      120,
+      "PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE",
     ),
     timeoutMs: boundedInteger(env.PLATFORM_MCP_TIMEOUT_MS, 7000, 250, 30000, "PLATFORM_MCP_TIMEOUT_MS"),
     maxResponseChars: boundedInteger(

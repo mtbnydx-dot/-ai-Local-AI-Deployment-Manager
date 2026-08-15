@@ -10,6 +10,7 @@ if exist "%ROOT%search-gateway\server.js" (
 )
 call :check "tests\frontend-smoke.spec.cjs" || exit /b 1
 call :check "tests\connection-status.spec.cjs" || exit /b 1
+call :check "platform-mcp\scripts\validate-live.mjs" || exit /b 1
 call :checkps1 "build-github-release.ps1" || exit /b 1
 call :checkps1 "scripts\check-powershell-syntax.ps1" || exit /b 1
 call :checkps1 "scripts\new-worktree.ps1" || exit /b 1

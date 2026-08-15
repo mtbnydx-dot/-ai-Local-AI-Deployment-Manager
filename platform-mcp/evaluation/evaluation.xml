@@ -13,28 +13,28 @@
     <answer>262144</answer>
   </qa_pair>
   <qa_pair>
-    <question>Compare the aggregate overview GPU data with the detailed GPU tool. After the configured reserve is excluded, how many MiB are safely allocatable? Answer only the integer.</question>
-    <answer>24576</answer>
+    <question>Confirm that the authenticated search gateway is healthy, then search for the MCP TypeScript SDK v2 through the web-search tool. What is the first result title? Answer only the title.</question>
+    <answer>MCP TypeScript SDK v2</answer>
   </qa_pair>
   <qa_pair>
-    <question>Confirm through both the platform overview and the dedicated search health check that search is healthy and authentication is required. What search mode is configured? Answer only the mode.</question>
-    <answer>hybrid</answer>
+    <question>Filter vLLM jobs to failed serve workflows. What is the ID of the matching failed job? Answer only the job ID.</question>
+    <answer>serve-1</answer>
   </qa_pair>
   <qa_pair>
-    <question>Compare both engines' recent output throughput, then cross-check which one actually has a running runtime in the overview. Which engine satisfies both conditions: highest recent output tokens per second and runtime running? Answer only the engine ID.</question>
+    <question>Preview an OpenAI tools-capable route for the running Qwen model without sending inference. Which manager is selected? Answer only the manager ID.</question>
     <answer>vllm</answer>
   </qa_pair>
   <qa_pair>
-    <question>Verify that both managers are online, then sum the successful request counters reported by both engines in the performance tool. Answer only the integer total.</question>
-    <answer>48</answer>
+    <question>Estimate a 27B FP8 vLLM configuration at 32768 context tokens, and cross-check the estimator's free-GPU figure against detailed GPU status. What fit status is returned? Answer only the status.</question>
+    <answer>ok</answer>
   </qa_pair>
   <qa_pair>
     <question>Request warning-only diagnostics for both engines and compare the result with the running-model inventory. Which engine has a diagnostic warning and no running model? Answer only the engine ID.</question>
     <answer>llama</answer>
   </qa_pair>
   <qa_pair>
-    <question>Using a page size of one, exhaust the local-only model inventory across both engines; ignore cached entries and verify the running model is represented in that inventory. How many local records are there? Answer only the integer.</question>
-    <answer>3</answer>
+    <question>Request warning-only security posture across both engines. What overall posture is reported? Answer only secure, warn, or fail.</question>
+    <answer>warn</answer>
   </qa_pair>
   <qa_pair>
     <question>Read vLLM aggregate performance and independently divide prefix hits by prefix queries to check the reported cache hit rate. Express the result as an integer percentage followed by the percent sign.</question>

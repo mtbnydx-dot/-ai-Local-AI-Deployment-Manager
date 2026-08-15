@@ -1,9 +1,10 @@
 import { McpServer, type CallToolResult, type ServerContext } from "@modelcontextprotocol/server";
 import type { AuditLogger } from "./audit.js";
-import { audited } from "./audit.js";
+import { audited, auditRejected } from "./audit.js";
 import { formatToolPayload } from "./format.js";
 import type { PlatformDataSource } from "./platform-client.js";
 import { cleanText } from "./redaction.js";
+import { SERVER_NAME, SERVER_VERSION } from "./constants.js";
 import {
   DiagnosticsInputSchema,
   DiagnosticsOutputSchema,
@@ -11,14 +12,24 @@ import {
   GpuStatusOutputSchema,
   LocalModelsInputSchema,
   LocalModelsOutputSchema,
+  JobsInputSchema,
+  JobsOutputSchema,
+  MemoryEstimateInputSchema,
+  MemoryEstimateOutputSchema,
   OverviewInputSchema,
   OverviewOutputSchema,
   PerformanceInputSchema,
   PerformanceOutputSchema,
+  RoutePreviewInputSchema,
+  RoutePreviewOutputSchema,
   RunningModelsInputSchema,
   RunningModelsOutputSchema,
+  SecurityPostureInputSchema,
+  SecurityPostureOutputSchema,
   SearchHealthInputSchema,
   SearchHealthOutputSchema,
+  WebSearchInputSchema,
+  WebSearchOutputSchema,
   type ResponseFormat,
 } from "./schemas.js";
 
@@ -27,6 +38,7 @@ export type PlatformMcpServerDependencies = {
   auditLogger: AuditLogger;
   maxResponseChars: number;
   defaultClientId?: string;
+  searchRateLimiter?: SearchRateLimiter;
 };
 
 const READ_ONLY_ANNOTATIONS = {
@@ -35,6 +47,48 @@ const READ_ONLY_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: false,
 } as const;
+
+const READ_ONLY_OPEN_WORLD_ANNOTATIONS = {
+  ...READ_ONLY_ANNOTATIONS,
+  openWorldHint: true,
+} as const;
+
+export class SearchRateLimiter {
+  private readonly buckets = new Map<string, { startedAt: number; count: number }>();
+  private globalBucket: { startedAt: number; count: number } | null = null;
+
+  constructor(private readonly limitPerMinute: number) {}
+
+  consume(id: string, now = Date.now()): { ok: true } | { ok: false; retryAfterSeconds: number } {
+    if (!this.globalBucket || now - this.globalBucket.startedAt >= 60_000) {
+      this.globalBucket = { startedAt: now, count: 0 };
+      for (const [key, bucket] of this.buckets) {
+        if (now - bucket.startedAt >= 60_000) this.buckets.delete(key);
+      }
+    }
+    const globalLimit = this.limitPerMinute * 4;
+    if (this.globalBucket.count >= globalLimit) {
+      return { ok: false, retryAfterSeconds: this.retryAfter(this.globalBucket.startedAt, now) };
+    }
+
+    const existing = this.buckets.get(id);
+    if (!existing || now - existing.startedAt >= 60_000) {
+      this.buckets.set(id, { startedAt: now, count: 1 });
+      this.globalBucket.count += 1;
+      return { ok: true };
+    }
+    if (existing.count >= this.limitPerMinute) {
+      return { ok: false, retryAfterSeconds: this.retryAfter(existing.startedAt, now) };
+    }
+    existing.count += 1;
+    this.globalBucket.count += 1;
+    return { ok: true };
+  }
+
+  private retryAfter(startedAt: number, now: number): number {
+    return Math.max(1, Math.ceil((60_000 - (now - startedAt)) / 1000));
+  }
+}
 
 function clientId(ctx: ServerContext, fallback: string): string {
   const value = ctx.http?.authInfo?.clientId || ctx.sessionId || fallback;
@@ -80,11 +134,12 @@ async function execute<T extends Record<string, unknown>>(
 }
 
 export function createPlatformMcpServer(dependencies: PlatformMcpServerDependencies): McpServer {
+  const searchRateLimiter = dependencies.searchRateLimiter ?? new SearchRateLimiter(20);
   const server = new McpServer({
-    name: "local-ai-platform",
-    version: "0.1.0",
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
     title: "Local AI Platform (read-only)",
-    description: "Safe operational visibility for the local vLLM, llama.cpp, GPU, model inventory, and search services.",
+    description: "Safe local AI operations, planning, diagnostics, and rate-limited web search without lifecycle mutations.",
   });
 
   server.registerTool(
@@ -222,6 +277,159 @@ export function createPlatformMcpServer(dependencies: PlatformMcpServerDependenc
       response_format,
       ctx,
       () => dependencies.dataSource.getSearchHealth() as Promise<Record<string, unknown>>,
+    ),
+  );
+
+  server.registerTool(
+    "local_ai_search_web",
+    {
+      title: "Search the Web Through Local SearXNG",
+      description: `Search the web through the platform's existing authenticated search gateway and self-hosted SearXNG service.
+
+Use this for current facts, release notes, news, prices, documentation discovery, or source URLs. Results include bounded titles, URLs, snippets, engines, categories, dates, and optional direct answers. It does not fetch arbitrary URLs or modify any external system. Search queries may be sent to the SearXNG engines selected by the operator, so do not include secrets or private prompt content. Calls are rate-limited per MCP client.
+
+Returns the standard envelope plus data={query,searched_at,count,answers,results}. If results are weak, refine query, language, time_range, engines, or categories rather than increasing beyond ten results.`,
+      inputSchema: WebSearchInputSchema,
+      outputSchema: WebSearchOutputSchema,
+      annotations: READ_ONLY_OPEN_WORLD_ANNOTATIONS,
+    },
+    async ({ query, max_results, language, time_range, engines, categories, safesearch, response_format }, ctx) => {
+      const id = clientId(ctx, dependencies.defaultClientId || "local-mcp-client");
+      const rate = searchRateLimiter.consume(id);
+      if (!rate.ok) {
+        await auditRejected(dependencies.auditLogger, "local_ai_search_web", id, "rate_limited");
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: `Web-search rate limit reached for this client. Retry in ${rate.retryAfterSeconds} seconds or narrow an earlier result set.`,
+          }],
+        };
+      }
+      return execute(
+        dependencies,
+        "local_ai_search_web",
+        "Web Search Results",
+        response_format,
+        ctx,
+        () => dependencies.dataSource.searchWeb({
+          query,
+          maxResults: max_results,
+          language,
+          timeRange: time_range,
+          engines,
+          categories,
+          safesearch,
+        }) as Promise<Record<string, unknown>>,
+      );
+    },
+  );
+
+  server.registerTool(
+    "local_ai_list_jobs",
+    {
+      title: "List Local AI Jobs",
+      description: `Page through safe summaries of vLLM and llama.cpp download, serve, benchmark, and test jobs.
+
+Use this to answer whether a model download or launch succeeded, what recently failed, or which manager handled a workflow. Logs, command lines, absolute paths, process IDs, and job metadata are deliberately omitted. Filter by engine, lifecycle status, and job_type; then use offset and limit until has_more is false.
+
+Returns data={engine_filter,status_filter,type_filter,total,count,offset,has_more,next_offset,jobs}. This tool never cancels, pauses, resumes, starts, or retries a job.`,
+      inputSchema: JobsInputSchema,
+      outputSchema: JobsOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    async ({ engine, status, job_type, limit, offset, response_format }, ctx) => execute(
+      dependencies,
+      "local_ai_list_jobs",
+      "Local AI Jobs",
+      response_format,
+      ctx,
+      () => dependencies.dataSource.listJobs({ engine, status, jobType: job_type, limit, offset }) as Promise<Record<string, unknown>>,
+    ),
+  );
+
+  server.registerTool(
+    "local_ai_preview_route",
+    {
+      title: "Preview Local Model Routing",
+      description: `Preview which running manager, instance, and model would receive a request without sending an inference request.
+
+Use this before configuring a client or diagnosing automatic routing. Specify an optional served model ID plus the required capability and client protocol. The result explains whether a route was selected and why, while omitting model filesystem roots and credentials. An unsuccessful preview is a planning result, not a model launch request.
+
+Returns data={selected,status,capability,reason,error,request,manager,instance,model}.`,
+      inputSchema: RoutePreviewInputSchema,
+      outputSchema: RoutePreviewOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    async ({ model, engine, protocol, capability, response_format }, ctx) => execute(
+      dependencies,
+      "local_ai_preview_route",
+      "Local Model Route Preview",
+      response_format,
+      ctx,
+      () => dependencies.dataSource.previewRoute({ model, engine, protocol, capability }) as Promise<Record<string, unknown>>,
+    ),
+  );
+
+  server.registerTool(
+    "local_ai_estimate_memory",
+    {
+      title: "Estimate Model Memory Fit",
+      description: `Estimate whether a proposed vLLM or llama.cpp model configuration fits the GPUs currently reported by the platform.
+
+Use this before downloading or launching a model. Provide parameter count, context length, precision, parallel sequences, utilization, and optional offload/speculative-decoding assumptions. The estimator reuses the manager's planning logic and current free GPU memory; it does not inspect an arbitrary file or launch anything. NVFP4/int4 uses 0.5 bytes per parameter, FP8/int8 uses 1, and FP16/BF16 uses 2. Treat the result as a planning estimate and validate with a bounded launch test later.
+
+Returns normalized memory totals, fit status, overflow, offload recommendations, and explicit assumptions.`,
+      inputSchema: MemoryEstimateInputSchema,
+      outputSchema: MemoryEstimateOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    async ({
+      engine, params_b, context_tokens, precision, bytes_per_param, parallel_sequences,
+      gpu_memory_utilization, cpu_offload_gb, kv_offload_gb, speculative_mode,
+      speculative_tokens, response_format,
+    }, ctx) => execute(
+      dependencies,
+      "local_ai_estimate_memory",
+      "Model Memory Fit Estimate",
+      response_format,
+      ctx,
+      () => dependencies.dataSource.estimateMemory({
+        engine,
+        paramsB: params_b,
+        contextTokens: context_tokens,
+        precision,
+        bytesPerParam: bytes_per_param,
+        parallelSequences: parallel_sequences,
+        gpuMemoryUtilization: gpu_memory_utilization,
+        cpuOffloadGb: cpu_offload_gb,
+        kvOffloadGb: kv_offload_gb,
+        speculativeMode: speculative_mode,
+        speculativeTokens: speculative_tokens,
+      }) as Promise<Record<string, unknown>>,
+    ),
+  );
+
+  server.registerTool(
+    "local_ai_get_security_posture",
+    {
+      title: "Get Local AI Exposure and Security Posture",
+      description: `Combine the unified entry policy, manager exposure checks, MCP transport boundary, and search authentication into one redacted security posture.
+
+Use this before exposing a model to LAN/public clients or when diagnosing authentication and CORS behavior. It reports only policy booleans, bind scope classifications, rate limits, and safe finding titles. It omits API keys, previews, client IDs, filesystem paths, upstream URLs, and raw addresses. warnings_only=true keeps only actionable findings.
+
+Returns overall=secure|warn|fail plus entry, MCP, search, per-manager posture, and findings. It does not change firewall, proxy, CORS, key, or exposure settings.`,
+      inputSchema: SecurityPostureInputSchema,
+      outputSchema: SecurityPostureOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    async ({ engine, warnings_only, response_format }, ctx) => execute(
+      dependencies,
+      "local_ai_get_security_posture",
+      "Local AI Security Posture",
+      response_format,
+      ctx,
+      () => dependencies.dataSource.getSecurityPosture({ engine, warningsOnly: warnings_only }) as Promise<Record<string, unknown>>,
     ),
   );
 

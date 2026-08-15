@@ -5,7 +5,8 @@ import type { PlatformMcpConfig } from "./config.js";
 import type { AuditLogger } from "./audit.js";
 import type { PlatformDataSource } from "./platform-client.js";
 import { cleanText } from "./redaction.js";
-import { createPlatformMcpServer } from "./tools.js";
+import { SERVER_NAME, SERVER_VERSION, TOOL_NAMES } from "./constants.js";
+import { createPlatformMcpServer, SearchRateLimiter } from "./tools.js";
 
 export type PlatformMcpAppDependencies = {
   config: PlatformMcpConfig;
@@ -37,12 +38,14 @@ export function createPlatformMcpApp(dependencies: PlatformMcpAppDependencies) {
     allowedHosts: allowedNames,
     allowedOrigins: allowedNames,
   });
+  const searchRateLimiter = new SearchRateLimiter(config.searchRateLimitPerMinute);
   const mcpHandler = createMcpHandler(
     () => createPlatformMcpServer({
       dataSource: dependencies.dataSource,
       auditLogger: dependencies.auditLogger,
       maxResponseChars: config.maxResponseChars,
       defaultClientId: "http-local-client",
+      searchRateLimiter,
     }),
     {
       legacy: "stateless",
@@ -54,7 +57,7 @@ export function createPlatformMcpApp(dependencies: PlatformMcpAppDependencies) {
   app.get("/health", (context) => context.json({
     ok: true,
     service: "local-ai-platform-mcp",
-    version: "0.1.0",
+    version: SERVER_VERSION,
     transport: "streamable-http",
     auth_required: config.requireAuth,
     read_only: true,
@@ -72,22 +75,21 @@ export function createPlatformMcpApp(dependencies: PlatformMcpAppDependencies) {
 
   app.get("/info", (context) => context.json({
     ok: true,
-    name: "local-ai-platform",
-    version: "0.1.0",
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
     endpoint: "/mcp",
     transports: ["streamable-http", "stdio"],
     protocol_versions: SUPPORTED_PROTOCOL_VERSIONS,
     compatibility: { legacy_stateless: true, modern_per_request: true },
-    policy: { read_only: true, arbitrary_urls: false, shell_access: false, file_access: false },
-    tools: [
-      "local_ai_get_overview",
-      "local_ai_list_running_models",
-      "local_ai_get_gpu_status",
-      "local_ai_list_local_models",
-      "local_ai_get_performance",
-      "local_ai_get_diagnostics",
-      "local_ai_get_search_health",
-    ],
+    policy: {
+      read_only: true,
+      arbitrary_urls: false,
+      web_search: true,
+      search_rate_limit_per_minute: config.searchRateLimitPerMinute,
+      shell_access: false,
+      file_access: false,
+    },
+    tools: TOOL_NAMES,
   }));
 
   app.use("/mcp", async (context, next) => {
@@ -109,7 +111,7 @@ export function createPlatformMcpApp(dependencies: PlatformMcpAppDependencies) {
       authInfo: {
         token: token ? "[validated]" : "[local]",
         clientId,
-        scopes: ["platform:read"],
+        scopes: ["platform:read", "web:search"],
       },
     });
   });

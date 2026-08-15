@@ -4,7 +4,7 @@ import { FileAuditLogger } from "./audit.js";
 import { createPlatformMcpApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { LocalPlatformClient } from "./platform-client.js";
-import { createPlatformMcpServer } from "./tools.js";
+import { createPlatformMcpServer, SearchRateLimiter } from "./tools.js";
 
 async function runStdio(): Promise<void> {
   const config = loadConfig({ requireApiKey: false });
@@ -16,6 +16,7 @@ async function runStdio(): Promise<void> {
       auditLogger,
       maxResponseChars: config.maxResponseChars,
       defaultClientId: "stdio-local-client",
+      searchRateLimiter: new SearchRateLimiter(config.searchRateLimitPerMinute),
     }),
     {
       legacy: "serve",

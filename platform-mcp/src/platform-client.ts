@@ -5,18 +5,28 @@ import {
   DiagnosticsOutputSchema,
   GpuStatusOutputSchema,
   LocalModelsOutputSchema,
+  JobsOutputSchema,
+  MemoryEstimateOutputSchema,
   OverviewOutputSchema,
   PerformanceOutputSchema,
+  RoutePreviewOutputSchema,
   RunningModelsOutputSchema,
+  SecurityPostureOutputSchema,
   SearchHealthOutputSchema,
+  WebSearchOutputSchema,
   type DiagnosticsOutput,
   type EngineSelector,
   type GpuStatusOutput,
+  type JobsOutput,
   type LocalModelsOutput,
+  type MemoryEstimateOutput,
   type OverviewOutput,
   type PerformanceOutput,
+  type RoutePreviewOutput,
   type RunningModelsOutput,
+  type SecurityPostureOutput,
   type SearchHealthOutput,
+  type WebSearchOutput,
 } from "./schemas.js";
 
 type Obj = Record<string, unknown>;
@@ -40,9 +50,46 @@ export interface PlatformDataSource {
     logLines: number;
   }): Promise<DiagnosticsOutput>;
   getSearchHealth(): Promise<SearchHealthOutput>;
+  searchWeb(options: {
+    query: string;
+    maxResults: number;
+    language: string;
+    timeRange: "none" | "day" | "month" | "year";
+    engines: string[];
+    categories: string[];
+    safesearch: 0 | 1 | 2;
+  }): Promise<WebSearchOutput>;
+  listJobs(options: {
+    engine: EngineSelector;
+    status: string;
+    jobType: string;
+    limit: number;
+    offset: number;
+  }): Promise<JobsOutput>;
+  previewRoute(options: {
+    model: string;
+    engine: "auto" | "vllm" | "llama";
+    protocol: "openai" | "claude" | "opencode";
+    capability: "text" | "tools" | "vision" | "audio" | "embedding" | "rerank";
+  }): Promise<RoutePreviewOutput>;
+  estimateMemory(options: {
+    engine: "vllm" | "llama";
+    paramsB: number;
+    contextTokens: number;
+    precision: "fp32" | "fp16_bf16" | "fp8_int8" | "int4_nvfp4" | "custom";
+    bytesPerParam: number | null;
+    parallelSequences: number;
+    gpuMemoryUtilization: number;
+    cpuOffloadGb: number;
+    kvOffloadGb: number;
+    speculativeMode: "off" | "mtp" | "draft";
+    speculativeTokens: number;
+  }): Promise<MemoryEstimateOutput>;
+  getSecurityPosture(options: { engine: EngineSelector; warningsOnly: boolean }): Promise<SecurityPostureOutput>;
 }
 
 type SettledJson = { ok: true; data: JsonObject } | { ok: false; error: string };
+type SettledArray = { ok: true; data: unknown[] } | { ok: false; error: string };
 
 function object(value: unknown): Obj {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Obj : {};
@@ -211,6 +258,91 @@ function mapModelPerformance(value: unknown) {
   };
 }
 
+function safeDisplayText(value: unknown, maxLength = 500): string {
+  return stringValue(value)
+    .replace(/[A-Za-z]:\\[^\r\n\t"']+/g, "[local path]")
+    .replace(/\/(?:models|root|home|workspace)\/[^\s"']+/gi, "[local path]")
+    .slice(0, maxLength)
+    .trim();
+}
+
+function safeExternalUrl(value: unknown): string | null {
+  try {
+    const url = new URL(String(value || ""));
+    if (!new Set(["http:", "https:"]).has(url.protocol) || url.username || url.password || isPrivateHostname(url.hostname)) return null;
+    url.hash = "";
+    return url.href.slice(0, 2048);
+  } catch {
+    return null;
+  }
+}
+
+function isPrivateHostname(value: string): boolean {
+  const host = value.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (!host) return true;
+  if (["localhost", "0.0.0.0", "::", "::1"].includes(host)) return true;
+  if ([".localhost", ".local", ".internal", ".lan", ".home"].some((suffix) => host.endsWith(suffix))) return true;
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (ipv4) {
+    const octets = ipv4.slice(1).map(Number);
+    if (octets.some((octet) => octet > 255)) return true;
+    const first = octets[0] ?? 999;
+    const second = octets[1] ?? 999;
+    return first === 0 || first === 10 || first === 127
+      || (first === 100 && second >= 64 && second <= 127)
+      || (first === 169 && second === 254)
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || first >= 224;
+  }
+  if (host.includes(":")) {
+    return /^(?:f[cd]|fe[89ab])/i.test(host) || /^::ffff:(?:10\.|127\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/i.test(host);
+  }
+  return false;
+}
+
+function progressPercent(value: unknown): number | null {
+  const direct = nullableNumber(value);
+  if (direct !== null) return Math.max(0, Math.min(100, direct));
+  const source = object(value);
+  const candidate = nullableNumber(source.percent ?? source.percentage ?? source.progressPercent);
+  return candidate === null ? null : Math.max(0, Math.min(100, candidate));
+}
+
+function round(value: unknown, digits = 3): number | null {
+  const number = nullableNumber(value);
+  if (number === null) return null;
+  const factor = 10 ** digits;
+  return Math.round(number * factor) / factor;
+}
+
+function bytesForPrecision(
+  precision: "fp32" | "fp16_bf16" | "fp8_int8" | "int4_nvfp4" | "custom",
+  custom: number | null,
+): number {
+  if (precision === "custom") return custom ?? 1;
+  return { fp32: 4, fp16_bf16: 2, fp8_int8: 1, int4_nvfp4: 0.5 }[precision];
+}
+
+function findingStatus(value: unknown): "ok" | "warn" | "fail" {
+  const normalized = stringValue(value).toLowerCase();
+  if (normalized === "ok" || normalized === "pass") return "ok";
+  if (normalized === "fail" || normalized === "error") return "fail";
+  return "warn";
+}
+
+function safeFindingTitle(value: unknown, fallback = "Configuration finding"): string {
+  const source = object(value);
+  return safeDisplayText(source.title ?? source.message ?? source.kind ?? value, 300) || fallback;
+}
+
+function hostScope(value: unknown, publishedHosts: unknown): "loopback" | "lan" | "unknown" {
+  const hosts = [stringValue(value), ...array(publishedHosts).map((item) => stringValue(object(item).host))].filter(Boolean);
+  if (!hosts.length) return "unknown";
+  const loopback = new Set(["127.0.0.1", "::1", "localhost"]);
+  return hosts.every((host) => loopback.has(host.toLowerCase())) ? "loopback" : "lan";
+}
+
 export class LocalPlatformClient implements PlatformDataSource {
   private readonly config: PlatformMcpConfig;
   private readonly http: FixedHttpClient;
@@ -223,9 +355,25 @@ export class LocalPlatformClient implements PlatformDataSource {
     });
   }
 
-  private async safeGet(service: string, baseUrl: URL, pathname: string): Promise<SettledJson> {
+  private async safeGet(service: string, baseUrl: URL, pathname: string, bearerToken = ""): Promise<SettledJson> {
     try {
-      return { ok: true, data: await this.http.getJson(service, baseUrl, pathname) };
+      return { ok: true, data: await this.http.getJson(service, baseUrl, pathname, { bearerToken }) };
+    } catch (error) {
+      return { ok: false, error: safeMessage(error, `${service} is unavailable.`) };
+    }
+  }
+
+  private async safePost(service: string, baseUrl: URL, pathname: string, body: JsonObject): Promise<SettledJson> {
+    try {
+      return { ok: true, data: await this.http.postJson(service, baseUrl, pathname, body) };
+    } catch (error) {
+      return { ok: false, error: safeMessage(error, `${service} is unavailable.`) };
+    }
+  }
+
+  private async safeGetArray(service: string, baseUrl: URL, pathname: string): Promise<SettledArray> {
+    try {
+      return { ok: true, data: await this.http.getJsonArray(service, baseUrl, pathname) };
     } catch (error) {
       return { ok: false, error: safeMessage(error, `${service} is unavailable.`) };
     }
@@ -517,6 +665,387 @@ export class LocalPlatformClient implements PlatformDataSource {
       generated_at: new Date().toISOString(),
       warnings: error ? [error] : [],
       data: { search: mapSearch(result.ok ? result.data : {}, error) },
+    });
+  }
+
+  async searchWeb(options: {
+    query: string;
+    maxResults: number;
+    language: string;
+    timeRange: "none" | "day" | "month" | "year";
+    engines: string[];
+    categories: string[];
+    safesearch: 0 | 1 | 2;
+  }): Promise<WebSearchOutput> {
+    if (!this.config.searchGatewayApiKey) {
+      throw new Error(
+        "Web search is not configured for MCP. Start the service with start-platform-mcp.cmd, "
+        + "or provide PLATFORM_MCP_SEARCH_GATEWAY_API_KEY through the client's secret store.",
+      );
+    }
+    const params = new URLSearchParams({
+      q: options.query,
+      max_results: String(options.maxResults),
+      safesearch: String(options.safesearch),
+    });
+    if (options.language) params.set("language", options.language);
+    if (options.timeRange !== "none") params.set("time_range", options.timeRange);
+    if (options.engines.length) params.set("engines", options.engines.join(","));
+    if (options.categories.length) params.set("categories", options.categories.join(","));
+
+    const payload = await this.http.getJson(
+      "search gateway",
+      this.config.searchGatewayUrl,
+      `/search?${params.toString()}`,
+      { bearerToken: this.config.searchGatewayApiKey },
+    );
+    const results = array(payload.results).map((raw) => {
+      const item = object(raw);
+      const url = safeExternalUrl(item.url);
+      if (!url) return null;
+      return {
+        title: safeDisplayText(item.title ?? item.url, 240),
+        url,
+        content: safeDisplayText(item.content ?? item.snippet, 1200),
+        engine: nullableString(item.engine),
+        score: nullableNumber(item.score),
+        category: nullableString(item.category),
+        published_at: nullableString(item.publishedDate ?? item.published_at ?? item.published_date),
+      };
+    }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, options.maxResults);
+    return WebSearchOutputSchema.parse({
+      ok: booleanValue(payload.ok, true),
+      partial: false,
+      generated_at: generatedAt(payload.searchedAt),
+      warnings: [],
+      data: {
+        query: stringValue(payload.query, options.query),
+        searched_at: generatedAt(payload.searchedAt),
+        count: results.length,
+        answers: array(payload.answers).map((value) => safeDisplayText(value, 700)).filter(Boolean).slice(0, 3),
+        results,
+      },
+    });
+  }
+
+  async listJobs(options: {
+    engine: EngineSelector;
+    status: string;
+    jobType: string;
+    limit: number;
+    offset: number;
+  }): Promise<JobsOutput> {
+    const targets = selectedManagers(this.config, options.engine);
+    const responses = await Promise.all(targets.map(async (target) => ({
+      target,
+      result: await this.safeGetArray(target.name, target.baseUrl, "/api/jobs?fields=summary"),
+    })));
+    const warnings: string[] = [];
+    const jobs: JobsOutput["data"]["jobs"] = [];
+    for (const { target, result } of responses) {
+      if (!result.ok) {
+        warnings.push(result.error);
+        continue;
+      }
+      for (const raw of result.data) {
+        const job = object(raw);
+        const status = stringValue(job.status, "unknown").toLowerCase();
+        const type = stringValue(job.type, "unknown").toLowerCase();
+        if (options.status !== "all" && status !== options.status) continue;
+        if (options.jobType !== "all" && type !== options.jobType) continue;
+        jobs.push({
+          engine: target.id,
+          id: safeDisplayText(job.id, 160) || "unknown-job",
+          type,
+          title: safeDisplayText(job.title, 240) || type,
+          status,
+          created_at: nullableString(job.createdAt),
+          updated_at: nullableString(job.updatedAt),
+          finished_at: nullableString(job.finishedAt),
+          progress_percent: progressPercent(job.progress),
+          error: nullableString(safeDisplayText(job.error, 500)),
+        });
+      }
+    }
+    jobs.sort((left, right) => Date.parse(right.updated_at || right.created_at || "") - Date.parse(left.updated_at || left.created_at || ""));
+    const page = jobs.slice(options.offset, options.offset + options.limit);
+    const nextOffset = options.offset + page.length < jobs.length ? options.offset + page.length : null;
+    const successes = responses.filter(({ result }) => result.ok).length;
+    return JobsOutputSchema.parse({
+      ok: successes > 0,
+      partial: warnings.length > 0 && successes > 0,
+      generated_at: new Date().toISOString(),
+      warnings,
+      data: {
+        engine_filter: options.engine,
+        status_filter: options.status,
+        type_filter: options.jobType,
+        total: jobs.length,
+        count: page.length,
+        offset: options.offset,
+        has_more: nextOffset !== null,
+        next_offset: nextOffset,
+        jobs: page,
+      },
+    });
+  }
+
+  async previewRoute(options: {
+    model: string;
+    engine: "auto" | "vllm" | "llama";
+    protocol: "openai" | "claude" | "opencode";
+    capability: "text" | "tools" | "vision" | "audio" | "embedding" | "rerank";
+  }): Promise<RoutePreviewOutput> {
+    const result = await this.safePost("service entry", this.config.serviceEntryUrl, "/api/fleet/route-preview", {
+      model: options.model,
+      engine: options.engine,
+      protocol: options.protocol,
+      capability: options.capability,
+    });
+    const payload = result.ok ? result.data : {};
+    const manager = object(payload.manager);
+    const instance = object(payload.instance);
+    const model = object(payload.model);
+    return RoutePreviewOutputSchema.parse({
+      ok: result.ok,
+      partial: false,
+      generated_at: new Date().toISOString(),
+      warnings: result.ok ? [] : [result.error],
+      data: {
+        selected: result.ok && booleanValue(payload.ok, false),
+        status: result.ok ? numberValue(payload.status, booleanValue(payload.ok) ? 200 : 503) : 503,
+        capability: stringValue(payload.capability, options.capability),
+        reason: stringValue(payload.reason),
+        error: result.ok ? nullableString(payload.error ?? payload.message) : result.error,
+        request: {
+          engine: stringValue(object(payload.request).engine, options.engine),
+          protocol: stringValue(object(payload.request).protocol, options.protocol),
+          requested_model: nullableString(object(payload.request).requestedModel ?? options.model),
+        },
+        manager: Object.keys(manager).length ? {
+          id: stringValue(manager.id),
+          name: stringValue(manager.name, stringValue(manager.id)),
+        } : null,
+        instance: Object.keys(instance).length ? {
+          id: stringValue(instance.instanceId ?? instance.id, "primary"),
+          status: stringValue(instance.status),
+          port: nullableNumber(instance.port),
+        } : null,
+        model: Object.keys(model).length ? {
+          id: stringValue(model.id),
+          capabilities: array(model.capabilities).map((value) => stringValue(value)).filter(Boolean).slice(0, 20),
+        } : null,
+      },
+    });
+  }
+
+  async estimateMemory(options: {
+    engine: "vllm" | "llama";
+    paramsB: number;
+    contextTokens: number;
+    precision: "fp32" | "fp16_bf16" | "fp8_int8" | "int4_nvfp4" | "custom";
+    bytesPerParam: number | null;
+    parallelSequences: number;
+    gpuMemoryUtilization: number;
+    cpuOffloadGb: number;
+    kvOffloadGb: number;
+    speculativeMode: "off" | "mtp" | "draft";
+    speculativeTokens: number;
+  }): Promise<MemoryEstimateOutput> {
+    const fleetResult = await this.safeGet("service fleet", this.config.serviceEntryUrl, "/api/fleet");
+    if (!fleetResult.ok) throw new Error(fleetResult.error);
+    const gpu = mapGpu(fleetResult.data.gpuMemory);
+    const selectedGpus = gpu.devices.map((device) => ({
+      id: device.id,
+      name: device.name,
+      totalMb: device.total_mb,
+      usedMb: device.used_mb,
+      freeMb: device.free_mb,
+    }));
+    const bytesPerParam = bytesForPrecision(options.precision, options.bytesPerParam);
+    const manager = this.config.managers.find((target) => target.id === options.engine);
+    if (!manager) throw new Error(`No ${options.engine} manager is configured.`);
+    const body: JsonObject = {
+      paramsB: options.paramsB,
+      contextTokens: options.engine === "vllm"
+        ? options.contextTokens * options.parallelSequences
+        : options.contextTokens,
+      bytesPerParam,
+      selectedGpus,
+      gpuMemoryUtilization: options.gpuMemoryUtilization,
+      cpuOffloadGb: options.cpuOffloadGb,
+      kvOffloadGb: options.kvOffloadGb,
+      maxNumSeqs: options.parallelSequences,
+      multiGpuMode: selectedGpus.length > 1 ? "tensor" : "single",
+      tensorParallelSize: Math.max(1, selectedGpus.length),
+      speculativeMode: options.speculativeMode,
+      numSpeculativeTokens: options.speculativeTokens,
+    };
+    const estimate = await this.safePost(manager.name, manager.baseUrl, "/api/memory-estimate", body);
+    if (!estimate.ok) throw new Error(estimate.error);
+    const plan = object(estimate.data.plan);
+    const recommendations = object(estimate.data.recommendations);
+    const rawStatus = stringValue(recommendations.status ?? plan.status, "warn").toLowerCase();
+    const status: "ok" | "warn" | "fail" = rawStatus === "ok" ? "ok" : rawStatus === "fail" ? "fail" : "warn";
+    const suggestionList = array(recommendations.suggestions)
+      .map((value) => safeDisplayText(value, 600)).filter(Boolean).slice(0, 12);
+    return MemoryEstimateOutputSchema.parse({
+      ok: true,
+      partial: false,
+      generated_at: new Date().toISOString(),
+      warnings: [],
+      data: {
+        engine: options.engine,
+        status,
+        summary: safeDisplayText(recommendations.summary, 300) || status,
+        gpu_count: gpu.devices.length,
+        total_gpu_gb: round(gpu.devices.reduce((sum, device) => sum + device.total_mb, 0) / 1024) ?? 0,
+        free_gpu_gb: round(gpu.devices.reduce((sum, device) => sum + device.free_mb, 0) / 1024) ?? 0,
+        params_b: options.paramsB,
+        context_tokens: options.contextTokens,
+        precision: options.precision,
+        bytes_per_param: bytesPerParam,
+        weights_gb: round(plan.weightsGb),
+        kv_cache_gb: round(plan.kvGb),
+        overhead_per_gpu_gb: round(plan.overheadPerGpuGb),
+        peak_per_gpu_gb: round(plan.perGpuGb ?? plan.peakGpuGb),
+        overflow_per_gpu_gb: round(recommendations.overflowPerGpuGb ?? plan.overflowPerGpuGb),
+        recommended_cpu_offload_gb: round(recommendations.cpuOffloadGb ?? plan.recommendedCpuOffloadGb),
+        recommended_kv_offload_gb: round(recommendations.kvOffloadingSize ?? plan.recommendedKvOffloadGb),
+        recommendations: suggestionList,
+        assumptions: [
+          `Weights use ${bytesPerParam} bytes per parameter (${options.precision}).`,
+          `Context is ${options.contextTokens} tokens across ${options.parallelSequences} sequence slot(s).`,
+          "Current manager-reported GPU free memory is used; the result is a planning estimate, not a launch guarantee.",
+        ],
+      },
+    });
+  }
+
+  async getSecurityPosture(options: { engine: EngineSelector; warningsOnly: boolean }): Promise<SecurityPostureOutput> {
+    const targets = selectedManagers(this.config, options.engine);
+    const [entryResult, searchResult, managerResults] = await Promise.all([
+      this.safeGet("service entry security", this.config.serviceEntryUrl, "/api/security"),
+      this.safeGet("search gateway", this.config.searchGatewayUrl, "/health"),
+      Promise.all(targets.map(async (target) => ({
+        target,
+        result: await this.safeGet(target.name, target.baseUrl, "/api/service-exposure"),
+      }))),
+    ]);
+    const warnings: string[] = [];
+    const findings: SecurityPostureOutput["data"]["findings"] = [];
+    const entry = object(entryResult.ok ? entryResult.data.security : {});
+    const keyStore = object(entry.keyStore);
+    if (!entryResult.ok) warnings.push(entryResult.error);
+    if (!searchResult.ok) warnings.push(searchResult.error);
+    if (entryResult.ok) {
+      for (const issue of array(entry.configIssues).slice(0, 20)) {
+        findings.push({ scope: "service-entry", status: "fail", title: safeFindingTitle(issue) });
+      }
+      for (const warning of array(entry.warnings).slice(0, 20)) {
+        findings.push({ scope: "service-entry", status: "warn", title: safeFindingTitle(warning, "Security warning") });
+      }
+      if (booleanValue(entry.lanMode) && !booleanValue(entry.apiKeyEnforced)) {
+        findings.push({ scope: "service-entry", status: "fail", title: "LAN mode is active without enforced API-key authentication." });
+      }
+      if (booleanValue(entry.allowLanAdmin)) {
+        findings.push({ scope: "service-entry", status: "warn", title: "LAN management access is enabled." });
+      }
+      if (!booleanValue(keyStore.readable, false)) {
+        findings.push({ scope: "service-entry", status: "fail", title: "The runtime API-key store is not readable." });
+      }
+    } else {
+      findings.push({ scope: "service-entry", status: "fail", title: "Security status is unavailable." });
+    }
+
+    const managers: SecurityPostureOutput["data"]["managers"] = [];
+    for (const { target, result } of managerResults) {
+      if (!result.ok) {
+        warnings.push(result.error);
+        findings.push({ scope: target.id, status: "fail", title: `${target.name} exposure status is unavailable.` });
+        managers.push({
+          engine: target.id,
+          config_ok: false,
+          enabled: false,
+          exposure_mode: "unknown",
+          require_api_key: false,
+          runtime_running: false,
+          remote_management_allowed: false,
+          service_scope: "unknown",
+          direct_runtime_exposed: false,
+          rate_limit_rpm: null,
+          max_concurrent_requests: null,
+          issues: [{ scope: target.id, status: "fail", title: "Exposure status is unavailable." }],
+        });
+        continue;
+      }
+      const settings = object(result.data.settings);
+      const configHealth = object(result.data.configHealth);
+      const actual = object(result.data.actual);
+      const actualManager = object(actual.manager);
+      const service = object(actual.service);
+      const scope = hostScope(service.boundHost, service.dockerPublishedHosts);
+      const directRuntimeExposed = scope === "lan" && !booleanValue(service.runtimeApiKeyRequired);
+      const securityChecks = array(result.data.checks).map((raw) => {
+        const check = object(raw);
+        return {
+          scope: target.id,
+          status: findingStatus(check.status),
+          title: safeDisplayText(check.title, 300),
+        };
+      }).filter((finding) => /api|key|cors|公网|局域网|远程|直连|网关|管理|https|鉴权|限流|access|exposure|remote|direct|security/i.test(finding.title)).slice(0, 50);
+      const issues = securityChecks.filter((finding) => finding.status !== "ok");
+      findings.push(...(options.warningsOnly ? issues : securityChecks));
+      if (directRuntimeExposed && !issues.some((finding) => /直连|direct/i.test(finding.title))) {
+        const finding = { scope: target.id, status: "warn" as const, title: "A LAN-published runtime port bypasses the authenticated manager gateway." };
+        issues.push(finding);
+        findings.push(finding);
+      }
+      managers.push({
+        engine: target.id,
+        config_ok: booleanValue(configHealth.ok, false),
+        enabled: booleanValue(settings.enabled),
+        exposure_mode: stringValue(settings.exposureMode, "unknown"),
+        require_api_key: booleanValue(settings.requireApiKey),
+        runtime_running: booleanValue(service.running),
+        remote_management_allowed: booleanValue(actualManager.remoteManagementAllowed),
+        service_scope: scope,
+        direct_runtime_exposed: directRuntimeExposed,
+        rate_limit_rpm: nullableNumber(settings.rateLimitRpm),
+        max_concurrent_requests: nullableNumber(settings.maxConcurrentRequests),
+        issues,
+      });
+    }
+
+    const search = mapSearch(searchResult.ok ? searchResult.data : {}, searchResult.ok ? null : searchResult.error);
+    if (!search.online || !search.healthy) findings.push({ scope: "search", status: "fail", title: "Search gateway health check failed." });
+    else if (search.auth_required !== true) findings.push({ scope: "search", status: "warn", title: "Search gateway does not report required authentication." });
+    const filteredFindings = options.warningsOnly ? findings.filter((finding) => finding.status !== "ok") : findings;
+    const overall = filteredFindings.some((finding) => finding.status === "fail")
+      ? "fail"
+      : filteredFindings.some((finding) => finding.status === "warn") ? "warn" : "secure";
+    const visibleFindings = filteredFindings.slice(0, 100);
+    const successfulManagers = managerResults.filter(({ result }) => result.ok).length;
+    return SecurityPostureOutputSchema.parse({
+      ok: entryResult.ok && successfulManagers > 0,
+      partial: warnings.length > 0 && (entryResult.ok || successfulManagers > 0),
+      generated_at: new Date().toISOString(),
+      warnings,
+      data: {
+        overall,
+        entry: {
+          lan_mode: booleanValue(entry.lanMode),
+          api_key_enforced: booleanValue(entry.apiKeyEnforced),
+          allow_lan_admin: booleanValue(entry.allowLanAdmin),
+          cors_mode: stringValue(entry.corsMode, "unknown"),
+          trust_token_active: booleanValue(entry.trustTokenActive),
+          key_store_readable: booleanValue(keyStore.readable),
+        },
+        mcp: { loopback_only: true, auth_required: this.config.requireAuth, read_only: true },
+        search,
+        managers,
+        findings: visibleFindings,
+      },
     });
   }
 }

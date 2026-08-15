@@ -1,3 +1,5 @@
+import { SERVER_VERSION } from "./constants.js";
+
 export type JsonObject = Record<string, unknown>;
 
 export class UpstreamRequestError extends Error {
@@ -18,6 +20,10 @@ export type FixedHttpClientOptions = {
   fetchImpl?: typeof fetch;
 };
 
+export type InternalRequestOptions = {
+  bearerToken?: string;
+};
+
 export class FixedHttpClient {
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
@@ -29,7 +35,54 @@ export class FixedHttpClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async getJson(service: string, baseUrl: URL, relativePath: string): Promise<JsonObject> {
+  async getJson(
+    service: string,
+    baseUrl: URL,
+    relativePath: string,
+    options: InternalRequestOptions = {},
+  ): Promise<JsonObject> {
+    const parsed = await this.requestJsonValue(service, baseUrl, relativePath, "GET", undefined, options);
+    if (Array.isArray(parsed)) {
+      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`);
+    }
+    return parsed;
+  }
+
+  async getJsonArray(
+    service: string,
+    baseUrl: URL,
+    relativePath: string,
+    options: InternalRequestOptions = {},
+  ): Promise<unknown[]> {
+    const parsed = await this.requestJsonValue(service, baseUrl, relativePath, "GET", undefined, options);
+    if (!Array.isArray(parsed)) {
+      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`);
+    }
+    return parsed;
+  }
+
+  async postJson(
+    service: string,
+    baseUrl: URL,
+    relativePath: string,
+    body: JsonObject,
+    options: InternalRequestOptions = {},
+  ): Promise<JsonObject> {
+    const parsed = await this.requestJsonValue(service, baseUrl, relativePath, "POST", body, options);
+    if (Array.isArray(parsed)) {
+      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`);
+    }
+    return parsed;
+  }
+
+  private async requestJsonValue(
+    service: string,
+    baseUrl: URL,
+    relativePath: string,
+    method: "GET" | "POST",
+    body: JsonObject | undefined,
+    options: InternalRequestOptions,
+  ): Promise<JsonObject | unknown[]> {
     if (!relativePath.startsWith("/") || relativePath.startsWith("//")) {
       throw new Error("Internal upstream paths must be absolute path references.");
     }
@@ -38,14 +91,19 @@ export class FixedHttpClient {
       throw new Error("Internal upstream path changed the configured origin.");
     }
 
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "user-agent": `local-ai-platform-mcp-server/${SERVER_VERSION}`,
+    };
+    if (method === "POST") headers["content-type"] = "application/json";
+    if (options.bearerToken) headers.authorization = `Bearer ${options.bearerToken}`;
+
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-          "user-agent": "local-ai-platform-mcp-server/0.1.0",
-        },
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
         redirect: "error",
         signal: AbortSignal.timeout(this.timeoutMs),
       });
@@ -75,9 +133,9 @@ export class FixedHttpClient {
     } catch {
       throw new UpstreamRequestError(service, `${service} returned invalid JSON.`, response.status);
     }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!parsed || typeof parsed !== "object") {
       throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`, response.status);
     }
-    return parsed as JsonObject;
+    return parsed as JsonObject | unknown[];
   }
 }

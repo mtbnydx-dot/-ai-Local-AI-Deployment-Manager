@@ -3,11 +3,16 @@ import type {
   DiagnosticsOutput,
   EngineSelector,
   GpuStatusOutput,
+  JobsOutput,
   LocalModelsOutput,
+  MemoryEstimateOutput,
   OverviewOutput,
   PerformanceOutput,
+  RoutePreviewOutput,
   RunningModelsOutput,
+  SecurityPostureOutput,
   SearchHealthOutput,
+  WebSearchOutput,
 } from "../src/schemas.js";
 
 export const FIXED_AT = "2026-08-15T00:00:00.000Z";
@@ -296,6 +301,144 @@ export class FixturePlatformDataSource implements PlatformDataSource {
       generated_at: FIXED_AT,
       warnings: [],
       data: { search: { online: true, healthy: true, mode: "hybrid", auth_required: true, max_results: 10, error: null } },
+    };
+  }
+
+  async searchWeb(options: {
+    query: string;
+    maxResults: number;
+    language: string;
+    timeRange: "none" | "day" | "month" | "year";
+    engines: string[];
+    categories: string[];
+    safesearch: 0 | 1 | 2;
+  }): Promise<WebSearchOutput> {
+    const results = [{
+      title: "MCP TypeScript SDK v2",
+      url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      content: "The stable v2 SDK implements the 2026-07-28 MCP specification.",
+      engine: "github",
+      score: 1,
+      category: "it",
+      published_at: "2026-07-28",
+    }].slice(0, options.maxResults);
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: [],
+      data: { query: options.query, searched_at: FIXED_AT, count: results.length, answers: [], results },
+    };
+  }
+
+  async listJobs(options: {
+    engine: EngineSelector;
+    status: string;
+    jobType: string;
+    limit: number;
+    offset: number;
+  }): Promise<JobsOutput> {
+    const all: JobsOutput["data"]["jobs"] = [{
+      engine: "vllm", id: "download-1", type: "download", title: "Download Qwen", status: "success",
+      created_at: "2026-08-14T10:00:00.000Z", updated_at: "2026-08-14T11:00:00.000Z",
+      finished_at: "2026-08-14T11:00:00.000Z", progress_percent: 100, error: null,
+    }, {
+      engine: "vllm", id: "serve-1", type: "serve", title: "Serve Qwen", status: "failed",
+      created_at: "2026-08-14T12:00:00.000Z", updated_at: "2026-08-14T12:01:00.000Z",
+      finished_at: "2026-08-14T12:01:00.000Z", progress_percent: null, error: "Port conflict",
+    }, {
+      engine: "llama", id: "serve-2", type: "serve", title: "Serve Muse", status: "success",
+      created_at: "2026-08-13T08:00:00.000Z", updated_at: "2026-08-13T08:02:00.000Z",
+      finished_at: "2026-08-13T08:02:00.000Z", progress_percent: 100, error: null,
+    }];
+    const filtered = all.filter((job) => (
+      (options.engine === "all" || job.engine === options.engine)
+      && (options.status === "all" || job.status === options.status)
+      && (options.jobType === "all" || job.type === options.jobType)
+    ));
+    const page = filtered.slice(options.offset, options.offset + options.limit);
+    const nextOffset = options.offset + page.length < filtered.length ? options.offset + page.length : null;
+    return {
+      ok: true, partial: false, generated_at: FIXED_AT, warnings: [],
+      data: {
+        engine_filter: options.engine, status_filter: options.status, type_filter: options.jobType,
+        total: filtered.length, count: page.length, offset: options.offset,
+        has_more: nextOffset !== null, next_offset: nextOffset, jobs: page,
+      },
+    };
+  }
+
+  async previewRoute(options: {
+    model: string;
+    engine: "auto" | "vllm" | "llama";
+    protocol: "openai" | "claude" | "opencode";
+    capability: "text" | "tools" | "vision" | "audio" | "embedding" | "rerank";
+  }): Promise<RoutePreviewOutput> {
+    return {
+      ok: true, partial: false, generated_at: FIXED_AT, warnings: [],
+      data: {
+        selected: true, status: 200, capability: options.capability, reason: "explicit_model", error: null,
+        request: { engine: options.engine, protocol: options.protocol, requested_model: options.model || null },
+        manager: { id: "vllm", name: "vLLM Manager" },
+        instance: { id: "primary", status: "healthy", port: 8000 },
+        model: { id: options.model || "qwen-qwen3.8-27b-fp8", capabilities: ["text", "tools"] },
+      },
+    };
+  }
+
+  async estimateMemory(options: {
+    engine: "vllm" | "llama";
+    paramsB: number;
+    contextTokens: number;
+    precision: "fp32" | "fp16_bf16" | "fp8_int8" | "int4_nvfp4" | "custom";
+    bytesPerParam: number | null;
+    parallelSequences: number;
+    gpuMemoryUtilization: number;
+    cpuOffloadGb: number;
+    kvOffloadGb: number;
+    speculativeMode: "off" | "mtp" | "draft";
+    speculativeTokens: number;
+  }): Promise<MemoryEstimateOutput> {
+    const bytes = options.precision === "custom" ? options.bytesPerParam || 1 : {
+      fp32: 4, fp16_bf16: 2, fp8_int8: 1, int4_nvfp4: 0.5,
+    }[options.precision];
+    return {
+      ok: true, partial: false, generated_at: FIXED_AT, warnings: [],
+      data: {
+        engine: options.engine, status: "ok", summary: "预计可运行", gpu_count: 1,
+        total_gpu_gb: 96, free_gpu_gb: 32, params_b: options.paramsB,
+        context_tokens: options.contextTokens, precision: options.precision, bytes_per_param: bytes,
+        weights_gb: 25.15, kv_cache_gb: 8, overhead_per_gpu_gb: 3, peak_per_gpu_gb: 36.15,
+        overflow_per_gpu_gb: 0, recommended_cpu_offload_gb: 0, recommended_kv_offload_gb: 0,
+        recommendations: ["当前配置预计可运行，并保留了基本运行时余量。"],
+        assumptions: [`Weights use ${bytes} bytes per parameter (${options.precision}).`],
+      },
+    };
+  }
+
+  async getSecurityPosture(options: { engine: EngineSelector; warningsOnly: boolean }): Promise<SecurityPostureOutput> {
+    const finding = { scope: "vllm", status: "warn" as const, title: "A LAN-published runtime port bypasses the authenticated manager gateway." };
+    const allManagers: SecurityPostureOutput["data"]["managers"] = [{
+      engine: "vllm", config_ok: true, enabled: true, exposure_mode: "reverse-proxy",
+      require_api_key: true, runtime_running: true, remote_management_allowed: false,
+      service_scope: "lan", direct_runtime_exposed: true, rate_limit_rpm: 30,
+      max_concurrent_requests: 2, issues: [finding],
+    }, {
+      engine: "llama", config_ok: true, enabled: true, exposure_mode: "reverse-proxy",
+      require_api_key: true, runtime_running: false, remote_management_allowed: false,
+      service_scope: "loopback", direct_runtime_exposed: false, rate_limit_rpm: 30,
+      max_concurrent_requests: 2, issues: [],
+    }];
+    return {
+      ok: true, partial: false, generated_at: FIXED_AT, warnings: [],
+      data: {
+        overall: "warn",
+        entry: { lan_mode: false, api_key_enforced: false, allow_lan_admin: false, cors_mode: "deny", trust_token_active: true, key_store_readable: true },
+        mcp: { loopback_only: true, auth_required: true, read_only: true },
+        search: { online: true, healthy: true, mode: "hybrid", auth_required: true, max_results: 10, error: null },
+        managers: allManagers.filter((manager) => options.engine === "all" || manager.engine === options.engine),
+        findings: options.engine === "all" || options.engine === "vllm" ? [finding] : [],
+      },
     };
   }
 }

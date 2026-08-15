@@ -93,6 +93,7 @@ $pidPath = Assert-ChildPath -Path (Join-Path $runtimeRoot "server.pid") -Parent 
 $stdoutPath = Assert-ChildPath -Path (Join-Path $auditRoot "platform-mcp.stdout.log") -Parent $root
 $stderrPath = Assert-ChildPath -Path (Join-Path $auditRoot "platform-mcp.stderr.log") -Parent $root
 $auditPath = Assert-ChildPath -Path (Join-Path $auditRoot "platform-mcp.jsonl") -Parent $root
+$searchKeyPath = Assert-ChildPath -Path (Join-Path $root "vllm-manager\logs\.last-public-service-key.txt") -Parent $root
 
 New-Item -ItemType Directory -Force -Path $runtimeRoot, $auditRoot | Out-Null
 Set-PrivateAcl -Path $runtimeRoot
@@ -119,11 +120,19 @@ $apiKey = [string]$serverEnvironment["PLATFORM_MCP_API_KEY"]
 if ([string]::IsNullOrWhiteSpace($apiKey) -or $apiKey.Length -lt 32) {
   throw "The Platform MCP API key file is invalid."
 }
+$searchGatewayApiKey = [string]$env:PLATFORM_MCP_SEARCH_GATEWAY_API_KEY
+if ([string]::IsNullOrWhiteSpace($searchGatewayApiKey) -and (Test-Path -LiteralPath $searchKeyPath -PathType Leaf)) {
+  $searchGatewayApiKey = (Get-Content -LiteralPath $searchKeyPath -Raw -ErrorAction Stop).Trim()
+}
+if (-not [string]::IsNullOrWhiteSpace($searchGatewayApiKey) -and $searchGatewayApiKey.Length -lt 16) {
+  throw "The configured search-gateway API key is too short."
+}
 
 $environmentNames = @(
   "AI_ROOT", "PLATFORM_MCP_HOST", "PLATFORM_MCP_PORT", "PLATFORM_MCP_API_KEY",
   "PLATFORM_MCP_SERVICE_ENTRY_URL", "PLATFORM_MCP_VLLM_MANAGER_URL",
   "PLATFORM_MCP_LLAMA_MANAGER_URL", "PLATFORM_MCP_SEARCH_GATEWAY_URL",
+  "PLATFORM_MCP_SEARCH_GATEWAY_API_KEY", "PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE",
   "PLATFORM_MCP_AUDIT_LOG", "PLATFORM_MCP_ALLOWED_HOSTS"
 )
 $previousEnvironment = @{}
@@ -138,6 +147,10 @@ try {
   $env:PLATFORM_MCP_VLLM_MANAGER_URL = "http://127.0.0.1:5177"
   $env:PLATFORM_MCP_LLAMA_MANAGER_URL = "http://127.0.0.1:5178"
   $env:PLATFORM_MCP_SEARCH_GATEWAY_URL = "http://127.0.0.1:5180"
+  $env:PLATFORM_MCP_SEARCH_GATEWAY_API_KEY = $searchGatewayApiKey
+  if ([string]::IsNullOrWhiteSpace($env:PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE)) {
+    $env:PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE = "20"
+  }
   $env:PLATFORM_MCP_AUDIT_LOG = $auditPath
   $env:PLATFORM_MCP_ALLOWED_HOSTS = "127.0.0.1,localhost,::1,host.docker.internal"
   $process = Start-Process -FilePath $NodeExe -ArgumentList @($entryPoint) -WorkingDirectory $platformRoot `
@@ -166,4 +179,5 @@ if (-not $bound -or ($bound | Where-Object { $_.LocalAddress -notin @("127.0.0.1
 Write-Host "Platform MCP started: http://127.0.0.1:$Port/mcp"
 Write-Host "PID: $($process.Id)"
 Write-Host "Bearer key is stored privately at: $secretPath"
+Write-Host ("Web search tool: " + $(if ([string]::IsNullOrWhiteSpace($searchGatewayApiKey)) { "disabled (search key unavailable)" } else { "enabled" }))
 Write-Host "No model or manager process was restarted."

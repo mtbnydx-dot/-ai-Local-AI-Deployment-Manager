@@ -55,6 +55,91 @@ export const SearchHealthInputSchema = z.object({
   response_format: ResponseFormatSchema,
 }).strict();
 
+const SearchTokenSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/)
+  .describe("A safe SearXNG engine or category token without spaces or punctuation.");
+
+export const WebSearchInputSchema = z.object({
+  query: z.string().trim().min(2).max(500)
+    .describe("Natural-language web search query, from 2 through 500 characters."),
+  max_results: z.number().int().min(1).max(10).default(5)
+    .describe("Maximum normalized search results to return, from 1 through 10."),
+  language: z.string().trim().max(24).regex(/^[A-Za-z0-9_.-]*$/).default("")
+    .describe("Optional SearXNG language token such as en, zh-CN, or all."),
+  time_range: z.enum(["none", "day", "month", "year"]).default("none")
+    .describe("Optional recency filter. Use none for no time filter."),
+  engines: z.array(SearchTokenSchema).max(5).default([])
+    .describe("Optional allowlist of up to five SearXNG engine names."),
+  categories: z.array(SearchTokenSchema).max(5).default([])
+    .describe("Optional allowlist of up to five SearXNG categories."),
+  safesearch: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(1)
+    .describe("SearXNG safe-search level: 0 off, 1 moderate, or 2 strict."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const JobsInputSchema = z.object({
+  engine: EngineSelectorSchema,
+  status: z.enum(["all", "queued", "running", "paused", "success", "failed", "cancelled"])
+    .default("all")
+    .describe("Filter jobs by lifecycle status."),
+  job_type: z.enum(["all", "download", "serve", "benchmark", "test"])
+    .default("all")
+    .describe("Filter jobs by workflow type."),
+  limit: z.number().int().min(1).max(50).default(20)
+    .describe("Maximum job summaries to return, from 1 through 50."),
+  offset: z.number().int().min(0).max(100000).default(0)
+    .describe("Number of matching jobs to skip."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const RoutePreviewInputSchema = z.object({
+  model: z.string().trim().max(200).default("")
+    .describe("Optional explicit served model ID. Leave empty to preview automatic routing."),
+  engine: z.enum(["auto", "vllm", "llama"]).default("auto")
+    .describe("Requested engine or auto for fleet selection."),
+  protocol: z.enum(["openai", "claude", "opencode"]).default("openai")
+    .describe("Client protocol whose route should be previewed."),
+  capability: z.enum(["text", "tools", "vision", "audio", "embedding", "rerank"]).default("text")
+    .describe("Capability required by the request."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const MemoryEstimateInputSchema = z.object({
+  engine: z.enum(["vllm", "llama"])
+    .describe("Runtime whose estimator and memory model should be used."),
+  params_b: z.number().min(0.1).max(1000)
+    .describe("Model parameter count in billions, for example 27 for a 27B model."),
+  context_tokens: z.number().int().min(512).max(2097152).default(32768)
+    .describe("Requested context length in tokens."),
+  precision: z.enum(["fp32", "fp16_bf16", "fp8_int8", "int4_nvfp4", "custom"]).default("fp8_int8")
+    .describe("Weight storage assumption used to derive bytes per parameter."),
+  bytes_per_param: z.number().min(0.125).max(4).nullable().default(null)
+    .describe("Required only for precision=custom; otherwise leave null."),
+  parallel_sequences: z.number().int().min(1).max(64).default(1)
+    .describe("Concurrent sequence slots included in the KV-cache estimate."),
+  gpu_memory_utilization: z.number().min(0.1).max(0.99).default(0.85)
+    .describe("Maximum fraction of each selected GPU that the runtime may use."),
+  cpu_offload_gb: z.number().min(0).max(512).default(0)
+    .describe("Planned CPU weight offload per GPU in GiB."),
+  kv_offload_gb: z.number().min(0).max(512).default(0)
+    .describe("Planned total KV-cache offload in GiB; currently used by vLLM estimates."),
+  speculative_mode: z.enum(["off", "mtp", "draft"]).default("off")
+    .describe("Reserve memory for speculative decoding when it is explicitly planned."),
+  speculative_tokens: z.number().int().min(1).max(16).default(3)
+    .describe("Speculative tokens per step when speculative_mode is enabled."),
+  response_format: ResponseFormatSchema,
+}).strict().superRefine((value, context) => {
+  if (value.precision === "custom" && value.bytes_per_param === null) {
+    context.addIssue({ code: "custom", path: ["bytes_per_param"], message: "bytes_per_param is required when precision is custom." });
+  }
+});
+
+export const SecurityPostureInputSchema = z.object({
+  engine: EngineSelectorSchema,
+  warnings_only: z.boolean().default(false)
+    .describe("Return only warning/failure findings when true."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
 const GpuDeviceSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -256,6 +341,137 @@ export const SearchHealthOutputSchema = z.object({
   }).strict(),
 }).strict();
 
+const WebSearchResultSchema = z.object({
+  title: z.string(),
+  url: z.string(),
+  content: z.string(),
+  engine: z.string().nullable(),
+  score: z.number().nullable(),
+  category: z.string().nullable(),
+  published_at: z.string().nullable(),
+}).strict();
+
+export const WebSearchOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    query: z.string(),
+    searched_at: z.string(),
+    count: z.number().int().nonnegative(),
+    answers: z.array(z.string()),
+    results: z.array(WebSearchResultSchema),
+  }).strict(),
+}).strict();
+
+const JobSummarySchema = z.object({
+  engine: z.enum(["vllm", "llama"]),
+  id: z.string(),
+  type: z.string(),
+  title: z.string(),
+  status: z.string(),
+  created_at: z.string().nullable(),
+  updated_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  progress_percent: z.number().nullable(),
+  error: z.string().nullable(),
+}).strict();
+
+export const JobsOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    engine_filter: z.enum(["all", "vllm", "llama"]),
+    status_filter: z.string(),
+    type_filter: z.string(),
+    total: z.number().int().nonnegative(),
+    count: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative(),
+    has_more: z.boolean(),
+    next_offset: z.number().int().nonnegative().nullable(),
+    jobs: z.array(JobSummarySchema),
+  }).strict(),
+}).strict();
+
+export const RoutePreviewOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    selected: z.boolean(),
+    status: z.number().int(),
+    capability: z.string(),
+    reason: z.string(),
+    error: z.string().nullable(),
+    request: z.object({
+      engine: z.string(),
+      protocol: z.string(),
+      requested_model: z.string().nullable(),
+    }).strict(),
+    manager: z.object({ id: z.string(), name: z.string() }).strict().nullable(),
+    instance: z.object({ id: z.string(), status: z.string(), port: z.number().nullable() }).strict().nullable(),
+    model: z.object({ id: z.string(), capabilities: z.array(z.string()) }).strict().nullable(),
+  }).strict(),
+}).strict();
+
+export const MemoryEstimateOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    engine: z.enum(["vllm", "llama"]),
+    status: z.enum(["ok", "warn", "fail"]),
+    summary: z.string(),
+    gpu_count: z.number().int().nonnegative(),
+    total_gpu_gb: z.number(),
+    free_gpu_gb: z.number(),
+    params_b: z.number(),
+    context_tokens: z.number().int(),
+    precision: z.string(),
+    bytes_per_param: z.number(),
+    weights_gb: z.number().nullable(),
+    kv_cache_gb: z.number().nullable(),
+    overhead_per_gpu_gb: z.number().nullable(),
+    peak_per_gpu_gb: z.number().nullable(),
+    overflow_per_gpu_gb: z.number().nullable(),
+    recommended_cpu_offload_gb: z.number().nullable(),
+    recommended_kv_offload_gb: z.number().nullable(),
+    recommendations: z.array(z.string()),
+    assumptions: z.array(z.string()),
+  }).strict(),
+}).strict();
+
+const SecurityFindingSchema = z.object({
+  scope: z.string(),
+  status: z.enum(["ok", "warn", "fail"]),
+  title: z.string(),
+}).strict();
+
+export const SecurityPostureOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    overall: z.enum(["secure", "warn", "fail"]),
+    entry: z.object({
+      lan_mode: z.boolean(),
+      api_key_enforced: z.boolean(),
+      allow_lan_admin: z.boolean(),
+      cors_mode: z.string(),
+      trust_token_active: z.boolean(),
+      key_store_readable: z.boolean(),
+    }).strict(),
+    mcp: z.object({ loopback_only: z.boolean(), auth_required: z.boolean(), read_only: z.boolean() }).strict(),
+    search: SearchSummarySchema,
+    managers: z.array(z.object({
+      engine: z.enum(["vllm", "llama"]),
+      config_ok: z.boolean(),
+      enabled: z.boolean(),
+      exposure_mode: z.string(),
+      require_api_key: z.boolean(),
+      runtime_running: z.boolean(),
+      remote_management_allowed: z.boolean(),
+      service_scope: z.enum(["loopback", "lan", "unknown"]),
+      direct_runtime_exposed: z.boolean(),
+      rate_limit_rpm: z.number().nullable(),
+      max_concurrent_requests: z.number().nullable(),
+      issues: z.array(SecurityFindingSchema),
+    }).strict()),
+    findings: z.array(SecurityFindingSchema),
+  }).strict(),
+}).strict();
+
 export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
 export type EngineSelector = z.infer<typeof EngineSelectorSchema>;
 export type OverviewOutput = z.infer<typeof OverviewOutputSchema>;
@@ -265,3 +481,8 @@ export type LocalModelsOutput = z.infer<typeof LocalModelsOutputSchema>;
 export type PerformanceOutput = z.infer<typeof PerformanceOutputSchema>;
 export type DiagnosticsOutput = z.infer<typeof DiagnosticsOutputSchema>;
 export type SearchHealthOutput = z.infer<typeof SearchHealthOutputSchema>;
+export type WebSearchOutput = z.infer<typeof WebSearchOutputSchema>;
+export type JobsOutput = z.infer<typeof JobsOutputSchema>;
+export type RoutePreviewOutput = z.infer<typeof RoutePreviewOutputSchema>;
+export type MemoryEstimateOutput = z.infer<typeof MemoryEstimateOutputSchema>;
+export type SecurityPostureOutput = z.infer<typeof SecurityPostureOutputSchema>;

@@ -55,7 +55,7 @@ This is a local model service control panel for high-end personal workstations a
 
 Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口字段见 [Qwen3.8-27B 本地加速与管理平台指南](docs/qwen38-acceleration-guide.md)。
 
-跨 OpenWebUI、Claude、Codex、IDE 和自建 Agent 复用 MCP 的架构、安全边界与配置示例见 [自建平台级 MCP 接入指南](docs/mcp-platform-guide.md)。
+平台 MCP 0.2.0 提供 12 个只读工具，包括受限联网搜索、任务历史、路由预览、显存估算和安全态势。跨 OpenWebUI、Claude、Codex、IDE 和自建 Agent 复用 MCP 的架构、安全边界与配置示例见 [自建平台级 MCP 接入指南](docs/mcp-platform-guide.md)。
 
 ### 系统要求
 
@@ -334,7 +334,7 @@ OpenCode: http://<LAN IP>:5176/gateway/auto/opencode/v1
 
 This local workspace also retains the optional `search-gateway` web-search extension (it is not included in the public release archive by default). Keep the model service running, launch `start-search-gateway.cmd`, and use `http://127.0.0.1:5180/v1`, or `http://<LAN IP>:5180/v1` from the LAN. See `search-gateway/README.md`.
 
-For the reusable MCP architecture, security boundary, and setup examples for OpenWebUI, Claude, Codex, IDEs, and custom agents, see the [self-hosted platform MCP guide](docs/mcp-platform-guide.md).
+Platform MCP 0.2.0 provides 12 read-only tools, including bounded web search, job history, route preview, memory-fit estimation, and security posture. For the reusable MCP architecture, security boundary, and setup examples for OpenWebUI, Claude, Codex, IDEs, and custom agents, see the [self-hosted platform MCP guide](docs/mcp-platform-guide.md).
 
 ### Client Setup Tips
 
