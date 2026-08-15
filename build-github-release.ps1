@@ -193,7 +193,21 @@ foreach ($file in $releaseFiles) {
 Copy-ReleaseFile -RelativeSource "deploy\public\.env.example"
 Copy-ReleaseFile -RelativeSource "docs\client-setup-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\git-worktree-workflow.md"
+Copy-ReleaseFile -RelativeSource "docs\qwen38-acceleration-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\service-runbook.md"
+
+# README documentation links must survive packaging. This catches the common
+# failure mode where a new guide is linked from README but omitted from the
+# explicit, privacy-preserving release allowlist above.
+$stagedReadme = Get-Content -LiteralPath (Join-Path $stagingRoot "README.md") -Raw
+$linkedDocs = [regex]::Matches($stagedReadme, '\]\((docs/[^)#?]+\.md)(?:#[^)]*)?\)') |
+  ForEach-Object { $_.Groups[1].Value.Replace('/', '\') } |
+  Sort-Object -Unique
+foreach ($linkedDoc in $linkedDocs) {
+  if (-not (Test-Path -LiteralPath (Join-Path $stagingRoot $linkedDoc) -PathType Leaf)) {
+    throw "README links a documentation file that is missing from the staged release: $linkedDoc"
+  }
+}
 
 $manifest = @(
   "# Release Manifest",
