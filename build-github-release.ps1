@@ -76,6 +76,7 @@ function Copy-ReleaseDirectory {
     "projects",
     "test-results",
     "playwright-report",
+    "dist",
     "/XF",
     ".env",
     ".env.*",
@@ -141,6 +142,7 @@ $releaseDirectories = @(
   ".github",
   "tests",
   "manager-core",
+  "platform-mcp",
   "shared-public",
   "scripts",
   "service-entry",
@@ -183,6 +185,9 @@ $releaseFiles = @(
   "start-service-entry-lan.cmd",
   "stop-service-entry.cmd",
   "status-service-entry.cmd",
+  "start-platform-mcp.cmd",
+  "stop-platform-mcp.cmd",
+  "status-platform-mcp.cmd",
   "start-claude-vllm-proxy.ps1",
   "claude-vllm-anthropic-proxy.py",
   "build-github-release.ps1"
@@ -191,8 +196,10 @@ foreach ($file in $releaseFiles) {
   Copy-ReleaseFile -RelativeSource $file
 }
 Copy-ReleaseFile -RelativeSource "deploy\public\.env.example"
+Copy-ReleaseFile -RelativeSource "platform-mcp\.env.example"
 Copy-ReleaseFile -RelativeSource "docs\client-setup-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\git-worktree-workflow.md"
+Copy-ReleaseFile -RelativeSource "docs\mcp-platform-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\qwen38-acceleration-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\service-runbook.md"
 
@@ -252,7 +259,7 @@ $credentialPatterns = @(
   '\bxox[baprs]-[A-Za-z0-9-]{10,}\b'
 )
 $privacyHits = [System.Collections.Generic.List[string]]::new()
-$textExtensions = @('.cmd', '.cjs', '.example', '.html', '.js', '.json', '.md', '.ps1', '.py', '.txt', '.yaml', '.yml')
+$textExtensions = @('.cmd', '.cjs', '.example', '.html', '.js', '.json', '.md', '.ps1', '.py', '.ts', '.txt', '.xml', '.yaml', '.yml')
 $stagedTextFiles = Get-ChildItem -LiteralPath $stagingRoot -Recurse -Force -File | Where-Object {
   ($textExtensions -contains $_.Extension.ToLowerInvariant()) -or ($_.Name -eq '.gitignore')
 }

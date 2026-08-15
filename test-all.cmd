@@ -15,8 +15,12 @@ call :checkps1 "scripts\check-powershell-syntax.ps1" || exit /b 1
 call :checkps1 "scripts\new-worktree.ps1" || exit /b 1
 call :checkps1 "scripts\remove-worktree.ps1" || exit /b 1
 call :checkps1 "scripts\deploy-worktree.ps1" || exit /b 1
+call :checkps1 "scripts\start-platform-mcp.ps1" || exit /b 1
+call :checkps1 "scripts\stop-platform-mcp.ps1" || exit /b 1
+call :checkps1 "scripts\status-platform-mcp.ps1" || exit /b 1
 call :test "manager-core" || exit /b 1
 call :test "service-entry" || exit /b 1
+call :test "platform-mcp" || exit /b 1
 if exist "%ROOT%search-gateway\package.json" (
   call :test "search-gateway" || exit /b 1
 )

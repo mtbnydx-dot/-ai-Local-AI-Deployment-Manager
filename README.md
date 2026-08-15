@@ -25,6 +25,7 @@ This is a local model service control panel for high-end personal workstations a
 - **模型下载**：支持 Hugging Face / ModelScope 链接解析、在线模型搜索、量化筛选、下载进度、暂停、继续和取消。
 - **显存估算**：按模型参数量、量化精度、上下文长度、KV cache、GPU 空闲显存和多卡模式估算显存风险。
 - **多客户端服务**：对 OpenWebUI、Claude/Cowork、ccswitch、OpenCode 和 OpenAI-compatible SDK 提供统一接入。
+- **平台级 MCP**：独立的只读 MCP 服务可被 OpenWebUI、Claude、Codex、IDE 或自建 Agent 复用，并同时支持 Streamable HTTP 与 stdio。
 - **局域网服务**：可选择向局域网设备开放服务，并显示本机局域网地址。
 - **访问控制**：支持服务 API Key、客户端策略、限流、并发限制和外来访问统计。
 - **审计导出**：可在本地生成对话审计 Markdown；默认不把运行日志、数据库和密钥放进发布目录。
@@ -37,6 +38,7 @@ This is a local model service control panel for high-end personal workstations a
 ├─ vllm-manager/           # vLLM 管理后台
 ├─ llama-manager/          # llama.cpp / GGUF 管理后台
 ├─ manager-core/           # 共用网络、密钥、统计、显存估算工具
+├─ platform-mcp/           # 平台级只读 MCP 工具服务
 ├─ tests/                  # 跨管理器前端烟测
 ├─ model-capability-tests/ # 长任务能力测试提示词
 ├─ vllm/                   # 轻量 vLLM helper 脚本
@@ -47,10 +49,13 @@ This is a local model service control panel for high-end personal workstations a
 ├─ install-all.cmd         # 安装 Node 依赖
 ├─ test-all.cmd            # 运行核心测试
 ├─ start-service-entry.cmd # 启动本机模式
+├─ start-platform-mcp.cmd  # 启动 loopback MCP 服务
 └─ start-service-entry-lan.cmd # 启动局域网模式
 ```
 
 Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口字段见 [Qwen3.8-27B 本地加速与管理平台指南](docs/qwen38-acceleration-guide.md)。
+
+跨 OpenWebUI、Claude、Codex、IDE 和自建 Agent 复用 MCP 的架构、安全边界与配置示例见 [自建平台级 MCP 接入指南](docs/mcp-platform-guide.md)。
 
 ### 系统要求
 
@@ -69,6 +74,7 @@ Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口
 install-all.cmd
 test-all.cmd
 start-service-entry.cmd
+start-platform-mcp.cmd
 ```
 
 模型、缓存和运行数据默认保存在发布目录内。需要放到其它磁盘时，请在启动前设置 `AI_ROOT`；也可以分别用 `VLLM_MODELS_ROOT`、`LLAMA_MODELS_ROOT` 和 `HF_HOME` 覆盖模型或缓存目录。
@@ -99,6 +105,7 @@ start-service-entry.cmd lan
 OpenAI:  http://127.0.0.1:5176/gateway/auto/openai/v1
 Claude:  http://127.0.0.1:5176/gateway/auto/claude
 OpenCode: http://127.0.0.1:5176/gateway/auto/opencode/v1
+MCP:      http://127.0.0.1:5190/mcp
 ```
 
 局域网：
@@ -236,6 +243,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 - **Model downloads**: Hugging Face / ModelScope link parsing, remote search, quantization filters, progress bars, pause/resume/cancel.
 - **VRAM estimation**: estimates memory risk from model size, quantization, context length, KV cache, free GPU memory, and multi-GPU mode.
 - **Client serving**: unified access for OpenWebUI, Claude/Cowork, ccswitch, OpenCode, and OpenAI-compatible clients.
+- **Platform MCP**: a reusable read-only MCP service for OpenWebUI, Claude, Codex, IDEs, and custom agents over Streamable HTTP or stdio.
 - **LAN serving**: optional local-network service mode with visible LAN addresses.
 - **Access control**: the unified entry is the single policy enforcement point — Host/Origin checks, API key auth, and rate limits run before the request is proxied, and managers only trust a signed loopback hop. Service API keys, per-client policies, concurrency limits, and external access statistics.
 - **Audit export**: local Markdown audit export without publishing runtime logs, databases, or secrets.
@@ -248,6 +256,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ vllm-manager/           # vLLM control panel
 ├─ llama-manager/          # llama.cpp / GGUF control panel
 ├─ manager-core/           # Shared networking, secret, stats, and memory-estimation helpers
+├─ platform-mcp/           # Platform-level read-only MCP tool service
 ├─ tests/                  # Cross-manager frontend smoke tests
 ├─ model-capability-tests/ # Long-running model capability prompts
 ├─ vllm/                   # Lightweight vLLM helper scripts
@@ -258,6 +267,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ install-all.cmd         # Install Node dependencies
 ├─ test-all.cmd            # Run core tests
 ├─ start-service-entry.cmd # Start local-only mode
+├─ start-platform-mcp.cmd  # Start the loopback MCP service
 └─ start-service-entry-lan.cmd # Start LAN mode
 ```
 
@@ -278,6 +288,7 @@ From the release root:
 install-all.cmd
 test-all.cmd
 start-service-entry.cmd
+start-platform-mcp.cmd
 ```
 
 Models, caches, and runtime data are stored inside the release directory by default. Set `AI_ROOT` before startup to use another drive, or override `VLLM_MODELS_ROOT`, `LLAMA_MODELS_ROOT`, and `HF_HOME` individually.
@@ -308,6 +319,7 @@ Local:
 OpenAI:  http://127.0.0.1:5176/gateway/auto/openai/v1
 Claude:  http://127.0.0.1:5176/gateway/auto/claude
 OpenCode: http://127.0.0.1:5176/gateway/auto/opencode/v1
+MCP:      http://127.0.0.1:5190/mcp
 ```
 
 LAN:
@@ -321,6 +333,8 @@ OpenCode: http://<LAN IP>:5176/gateway/auto/opencode/v1
 `auto` routes to the currently available vLLM or llama.cpp backend. Replace it with `vllm` or `llama` to pin a backend.
 
 This local workspace also retains the optional `search-gateway` web-search extension (it is not included in the public release archive by default). Keep the model service running, launch `start-search-gateway.cmd`, and use `http://127.0.0.1:5180/v1`, or `http://<LAN IP>:5180/v1` from the LAN. See `search-gateway/README.md`.
+
+For the reusable MCP architecture, security boundary, and setup examples for OpenWebUI, Claude, Codex, IDEs, and custom agents, see the [self-hosted platform MCP guide](docs/mcp-platform-guide.md).
 
 ### Client Setup Tips
 

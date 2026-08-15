@@ -23,6 +23,7 @@ const {
 
 const HOST = process.env.SERVICE_ENTRY_HOST || "127.0.0.1";
 const PORT = Number(process.env.SERVICE_ENTRY_PORT || 5176);
+const PLATFORM_MCP_PORT = Number(process.env.PLATFORM_MCP_PORT || 5190);
 const ROOT = __dirname;
 const AI_ROOT = path.dirname(ROOT);
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
@@ -191,6 +192,10 @@ async function handleRequest(req, res) {
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       const detailed = security.checkManagementAccess(req).ok;
+      const [managers, mcp] = await Promise.all([
+        Promise.all(MANAGERS.map(buildManagerStatus)),
+        buildPlatformMcpStatus(),
+      ]);
       const payload = {
         ok: true,
         security: await security.describe(),
@@ -203,9 +208,15 @@ async function handleRequest(req, res) {
           gateway: buildEntryGatewayUrls(),
           gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20, maxLines: 2000 }),
         },
-        managers: await Promise.all(MANAGERS.map(buildManagerStatus)),
+        managers,
+        mcp,
       };
       return sendJson(res, detailed ? payload : redactStatusForRemote(payload));
+    }
+    if (req.method === "GET" && url.pathname === "/api/mcp/status") {
+      const allowed = security.checkManagementAccess(req);
+      if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
+      return sendJson(res, await buildPlatformMcpStatus());
     }
     if (req.method === "GET" && url.pathname === "/api/fleet") {
       const allowed = security.checkManagementAccess(req);
@@ -381,6 +392,7 @@ async function serveDoc(res, pathname) {
   const allowed = new Set([
     "client-setup-guide.md",
     "billing-guide.md",
+    "mcp-platform-guide.md",
     "model-service-platform-workplan.md",
     "service-runbook.md",
   ]);
@@ -412,6 +424,39 @@ async function buildManagerStatus(manager, options = {}) {
     managerStatusCache.delete(manager.id);
     throw error;
   }
+}
+
+async function buildPlatformMcpStatus(options = {}) {
+  const port = Number(options.port || PLATFORM_MCP_PORT);
+  const checkPort = options.isPortListening || core.isPortListening;
+  const getJson = options.fetchJson || fetchJson;
+  const listening = await checkPort("127.0.0.1", port);
+  const base = {
+    configured: true,
+    host: "127.0.0.1",
+    port,
+    endpoint: `http://127.0.0.1:${port}/mcp`,
+    infoEndpoint: `http://127.0.0.1:${port}/info`,
+    listening: Boolean(listening),
+    healthy: false,
+    readOnly: true,
+    authRequired: true,
+    version: null,
+    error: "",
+  };
+  if (!listening) return base;
+  const health = await getJson(`http://127.0.0.1:${port}/health`, 2500);
+  const data = health.data && typeof health.data === "object" ? health.data : {};
+  return {
+    ...base,
+    healthy: Boolean(health.ok && data.ok && data.service === "local-ai-platform-mcp"),
+    readOnly: data.read_only !== false,
+    authRequired: data.auth_required !== false,
+    version: typeof data.version === "string" ? data.version.slice(0, 40) : null,
+    error: health.ok && data.service === "local-ai-platform-mcp"
+      ? ""
+      : String(health.error || "MCP health check failed or returned an unexpected service identity.").slice(0, 200),
+  };
 }
 
 async function buildManagerStatusFresh(manager) {
@@ -1500,6 +1545,7 @@ module.exports = {
   buildFleetRouteRequest,
   buildFleetSnapshot,
   buildManagerCatalog,
+  buildPlatformMcpStatus,
   buildManagerGatewayPath,
   buildManagerGatewayUrls,
   buildProxyHeaders,

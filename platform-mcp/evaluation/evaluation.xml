@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<evaluation>
+  <qa_pair>
+    <question>In the fixed 2026-08-15 platform snapshot, compare the manager overview with every running-model instance. Which engine has an online manager but zero running models? Answer only the engine ID.</question>
+    <answer>llama</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Page through all verified local inventory records, then compare them with the current running-model list. Which non-running local checkpoint is marked with a verification warning? Answer only its model ID.</question>
+    <answer>RadixArk-Qwen3.8-27B-DSpark</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Identify the only running model, read its advertised maximum context length, and verify the same value against that engine's performance facts. Answer only the integer token count.</question>
+    <answer>262144</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare the aggregate overview GPU data with the detailed GPU tool. After the configured reserve is excluded, how many MiB are safely allocatable? Answer only the integer.</question>
+    <answer>24576</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Confirm through both the platform overview and the dedicated search health check that search is healthy and authentication is required. What search mode is configured? Answer only the mode.</question>
+    <answer>hybrid</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare both engines' recent output throughput, then cross-check which one actually has a running runtime in the overview. Which engine satisfies both conditions: highest recent output tokens per second and runtime running? Answer only the engine ID.</question>
+    <answer>vllm</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Verify that both managers are online, then sum the successful request counters reported by both engines in the performance tool. Answer only the integer total.</question>
+    <answer>48</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Request warning-only diagnostics for both engines and compare the result with the running-model inventory. Which engine has a diagnostic warning and no running model? Answer only the engine ID.</question>
+    <answer>llama</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Using a page size of one, exhaust the local-only model inventory across both engines; ignore cached entries and verify the running model is represented in that inventory. How many local records are there? Answer only the integer.</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Read vLLM aggregate performance and independently divide prefix hits by prefix queries to check the reported cache hit rate. Express the result as an integer percentage followed by the percent sign.</question>
+    <answer>50%</answer>
+  </qa_pair>
+</evaluation>

@@ -1160,7 +1160,7 @@
         if (statusResult.status === "fulfilled") {
           const data = statusResult.value || {};
           latestManagers = Array.isArray(data.managers) ? data.managers : [];
-          renderSummary(data.entry || {}, latestManagers, fleetSnapshot);
+          renderSummary(data.entry || {}, latestManagers, fleetSnapshot, data.mcp || null);
           renderEntryGateway(data.entry || {});
           renderEntryAccess(data.entry?.gatewayAccess || {});
           renderManagers(latestManagers);
@@ -1168,7 +1168,7 @@
         } else {
           latestManagers = [];
           setHtmlPreservingState(grid, `<div class="empty">统一入口服务异常：${escapeHtml(friendlyRequestError(statusResult.reason, "统一入口未响应。"))}</div>`);
-          renderSummary({}, [], fleetSnapshot);
+          renderSummary({}, [], fleetSnapshot, null);
         }
 
         if (fleetSnapshot) {
@@ -1226,7 +1226,7 @@
       };
     }
 
-    function renderSummary(entry, managers, fleet) {
+    function renderSummary(entry, managers, fleet, mcp) {
       const access = entry.gatewayAccess || {};
       const totals = access.totals || {};
       const requests = totals.requests || {};
@@ -1246,6 +1246,10 @@
       const runningModelState = runningModels === null ? "" : runningModels ? "ok" : "warn";
       const requestTotal = Number(requests.total || 0);
       const requestErrors = Number(requests.error || 0);
+      const mcpText = mcp?.healthy
+        ? `在线 · ${mcp.readOnly === false ? "可写" : "只读"}`
+        : mcp?.listening ? "监听中 / 健康异常" : "未启动";
+      const mcpState = mcp?.healthy ? "ok" : "warn";
       setHtmlPreservingState(entrySummary, [
         metric("统一入口", `${entry.host || "127.0.0.1"}:${entry.port || "-"}`, "ok"),
         metric("管理器在线", managers.length ? `${runningManagers} / ${managers.length}` : "未发现", managerState),
@@ -1253,6 +1257,7 @@
         metric("客户端 Key", String(activeClients), activeClients ? "ok" : "warn"),
         metric("GPU 显存", gpuText === "-" ? "未获取" : gpuText, gpuText === "-" ? "" : "ok"),
         metric("网关错误率", requestTotal ? `${formatPercent(requests.errorRate || 0)}（${requestErrors}/${requestTotal}）` : "暂无请求", requestTotal ? (requestErrors ? "warn" : "ok") : ""),
+        metric("MCP 工具服务", mcpText, mcpState),
       ].join(""));
     }
 

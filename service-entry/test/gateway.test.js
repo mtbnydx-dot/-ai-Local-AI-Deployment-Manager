@@ -45,6 +45,31 @@ test("rejects unknown gateway routes", () => {
   assert.equal(entry.parseGatewayRoute("/api/status"), null);
 });
 
+test("reports Platform MCP health without exposing credentials", async () => {
+  const online = await entry.buildPlatformMcpStatus({
+    port: 5190,
+    isPortListening: async () => true,
+    fetchJson: async () => ({
+      ok: true,
+      data: { ok: true, service: "local-ai-platform-mcp", version: "0.1.0", read_only: true, auth_required: true, apiKey: "must-not-pass-through" },
+      error: "",
+    }),
+  });
+  assert.equal(online.healthy, true);
+  assert.equal(online.endpoint, "http://127.0.0.1:5190/mcp");
+  assert.equal(online.readOnly, true);
+  assert.equal(online.authRequired, true);
+  assert.equal(JSON.stringify(online).includes("must-not-pass-through"), false);
+
+  const offline = await entry.buildPlatformMcpStatus({
+    port: 5190,
+    isPortListening: async () => false,
+    fetchJson: async () => { throw new Error("must not fetch"); },
+  });
+  assert.equal(offline.listening, false);
+  assert.equal(offline.healthy, false);
+});
+
 test("standalone billing page is limited to direct loopback requests", () => {
   assert.equal(entry.isStrictLocalBillingPageRequest({
     headers: { host: "127.0.0.1:5176" },

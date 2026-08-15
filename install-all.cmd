@@ -5,6 +5,8 @@ set "ROOT=%~dp0"
 call :install "." || exit /b 1
 call :install "vllm-manager" || exit /b 1
 call :install "llama-manager" || exit /b 1
+call :install "platform-mcp" || exit /b 1
+call :build "platform-mcp" || exit /b 1
 
 echo.
 echo All install steps completed.
@@ -24,6 +26,16 @@ if exist package-lock.json (
 ) else (
   call npm install
 )
+set "CODE=%ERRORLEVEL%"
+popd >nul
+exit /b %CODE%
+
+:build
+set "DIR=%~1"
+echo.
+echo == Building %DIR% ==
+pushd "%ROOT%%DIR%" >nul || exit /b 1
+call npm run build
 set "CODE=%ERRORLEVEL%"
 popd >nul
 exit /b %CODE%
