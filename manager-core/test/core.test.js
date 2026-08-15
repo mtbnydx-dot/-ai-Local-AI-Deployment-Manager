@@ -4102,6 +4102,29 @@ test("stats ledger store persists deltas, Claude usage, and runtime facts", asyn
   assert.equal(facts.maxConcurrency, 2);
   assert.equal(facts.modelLoadSeconds, 8);
 
+  await store.updateStatsLedger({
+    engine: "sglang",
+    processStartSeconds: 200,
+    facts: { kvCacheTokens: 373883, maxContextTokens: 262144 },
+    models: [{
+      name: "org/model-a",
+      engine: "sglang",
+      runtimeVersion: "0.5.17",
+      root: "D:/AI/models/model-a",
+      tokens: { prompt: 10, generation: 5, cachedPrompt: 2 },
+      requests: { total: 1, success: 1, error: 0, aborted: 0 },
+      context: { activeTokens: 0, capacityTokens: 373883, kvUsagePercent: 0, maxModelLen: 262144, concurrencyAtMaxLen: 1.43 },
+      speculative: { enabled: true, mode: "dspark", acceptanceRate: 0.8 },
+    }],
+  }, "collect");
+  const engineLedger = await store.loadStatsLedger();
+  assert.ok(engineLedger.runtimes["sglang:200:org/model-a"]);
+  assert.equal(engineLedger.runtimeFacts["sglang:org/model-a"].engine, "sglang");
+  const sglangFacts = await store.getPersistedRuntimeFacts(["model-a"], { engine: "sglang" });
+  assert.equal(sglangFacts.kvCacheTokens, 373883);
+  const vllmFacts = await store.getPersistedRuntimeFacts(["model-a"], { engine: "vllm" });
+  assert.equal(vllmFacts.maxConcurrency, 2);
+
   const merged = core.mergeLiveAndStatsLedgerInactive({ models: [], uptimeSeconds: null, totals: { context: { activeTokens: 0, capacityTokens: null, kvUsagePercent: 0 } } }, ledger);
   assert.equal(merged.models[0].context.activeTokens, 0);
   assert.equal(merged.models[0].context.maxModelLen, 8192);
@@ -4296,13 +4319,16 @@ test("shutdown helper terminates a live download process and marks it interrupte
   jobs.set(job.id, job);
   core.interruptRunningDownloadJobs(jobs);
   assert.equal(job.status, "interrupted");
-  await new Promise((resolve) => setTimeout(resolve, 400));
   let alive = true;
-  try {
-    process.kill(child.pid, 0);
-  } catch {
-    alive = false;
-  }
+  const exitDeadline = Date.now() + 2_000;
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    try {
+      process.kill(child.pid, 0);
+    } catch {
+      alive = false;
+    }
+  } while (alive && Date.now() < exitDeadline);
   if (alive) {
     try { process.kill(child.pid); } catch { /* already gone */ }
   }

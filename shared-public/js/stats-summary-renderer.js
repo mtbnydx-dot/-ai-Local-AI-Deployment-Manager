@@ -21,6 +21,8 @@
       successLabel: "成功",
       errorLabel: "错误",
       abortedLabel: "中止",
+      liveTokensLabel: "Current run tokens",
+      liveRequestsLabel: "Current run requests",
       currentInstanceLabel: "当前实例",
       currentSpeedLabel: "当前输出速度",
       latencyLabel: "平均延迟",
@@ -32,6 +34,13 @@
       lifetimeLabel: "生命周期",
       includeRuntimeModels: false,
       includePrefixCache: false,
+      includeLiveUsage: false,
+      preferLiveRuntimeMetrics: false,
+      speculativeLabels: {
+        dspark: "DSpark acceptance",
+        mtp: "MTP acceptance",
+        mixed: "Speculative decoding acceptance",
+      },
       heroFirstMetric: false,
       ...options,
     };
@@ -40,17 +49,28 @@
       const root = $("#statsSummary");
       if (!root || !stats) return;
       const totals = stats.totals || {};
+      const liveTotals = stats.live?.totals || {};
+      const runtimeTotals = settings.preferLiveRuntimeMetrics && stats.live ? liveTotals : totals;
       const tokens = totals.tokens || {};
       const requests = totals.requests || {};
-      const speed = totals.speed || {};
-      const latency = totals.latency || {};
-      const context = totals.context || {};
-      const cache = totals.cache || {};
-      const speculative = totals.speculative || {};
+      const liveTokens = liveTotals.tokens || {};
+      const liveRequests = liveTotals.requests || {};
+      const speed = runtimeTotals.speed || {};
+      const latency = runtimeTotals.latency || {};
+      const context = runtimeTotals.context || {};
+      const cache = runtimeTotals.cache || {};
+      const speculative = runtimeTotals.speculative || {};
       const cards = [
         statsMetric(settings.totalTokensLabel, fmtTokens(tokens.total), `${fmtTokens(tokens.prompt)} ${settings.tokenDetailInput} · ${fmtTokens(tokens.generation)} ${settings.tokenDetailOutput}`, settings.heroFirstMetric ? "stats-metric-hero" : ""),
         statsMetric(settings.requestLabel, fmtTokens(requests.total), requestDetail(requests)),
       ];
+
+      if (settings.includeLiveUsage && stats.live) {
+        cards.push(
+          statsMetric(settings.liveTokensLabel, fmtTokens(liveTokens.total), `${fmtTokens(liveTokens.prompt)} ${settings.tokenDetailInput} · ${fmtTokens(liveTokens.generation)} ${settings.tokenDetailOutput}`),
+          statsMetric(settings.liveRequestsLabel, fmtTokens(liveRequests.total), requestDetail(liveRequests)),
+        );
+      }
 
       if (settings.includeRuntimeModels) {
         const liveModelCount = stats.live?.models?.length || state.status?.runningModels?.length || 0;
@@ -79,17 +99,19 @@
       }
 
       if (speculative.enabled) {
+        const speculativeLabel = settings.speculativeLabels?.[speculative.mode] || settings.speculativeLabel;
         const speculativeDetail = Number(speculative.meanAcceptLength || 0) > 0
           ? `${Number(speculative.meanAcceptLength).toFixed(2)} 平均接受长度（含 bonus） · ${fmtTokens(speculative.draftCycles || 0)} verify 轮`
           : `${Number(speculative.acceptedTokensPerCycle || 0).toFixed(2)} 接受 token/轮 · ${fmtTokens(speculative.draftCycles || 0)} 轮`;
         cards.push(statsMetric(
-          settings.speculativeLabel,
+          speculativeLabel,
           fmtPct(speculative.acceptanceRate || 0),
           speculativeDetail,
         ));
       }
 
-      cards.push(statsMetric(settings.uptimeLabel, stats.uptimeSeconds ? formatDuration(stats.uptimeSeconds) : "-", `${settings.lifetimeLabel} ${fmtRate(speed.lifetimeTokensPerSecond, " tok/s")}`));
+      const uptimeSeconds = settings.preferLiveRuntimeMetrics && stats.live ? stats.live.uptimeSeconds : stats.uptimeSeconds;
+      cards.push(statsMetric(settings.uptimeLabel, uptimeSeconds ? formatDuration(uptimeSeconds) : "-", `${settings.lifetimeLabel} ${fmtRate(speed.lifetimeTokensPerSecond, " tok/s")}`));
       root.innerHTML = cards.join("");
     }
 

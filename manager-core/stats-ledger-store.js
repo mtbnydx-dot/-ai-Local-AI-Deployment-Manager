@@ -135,7 +135,8 @@ function createStatsLedgerStore(options = {}) {
         return ledger;
       }
       for (const model of summary.models) {
-        const runtimeKey = `${summary.processStartSeconds}:${model.name}`;
+        const runtimeEngine = String(model.engine || summary.engine || "runtime").trim().toLowerCase() || "runtime";
+        const runtimeKey = `${runtimeEngine}:${summary.processStartSeconds}:${model.name}`;
         const previous = ledger.runtimes[runtimeKey] || emptyRuntimeCounters();
         const current = runtimeCountersFromStatsModel(model);
         const effectiveCurrent = useMonotonicRuntimeCounters ? maxRuntimeCounters(current, previous) : current;
@@ -168,6 +169,7 @@ function createStatsLedgerStore(options = {}) {
   }
 
   function mergeRuntimeFactsLedger(ledger, model, summary, reason) {
+    const engine = String(model.engine || summary.engine || "").trim().toLowerCase();
     const facts = normalizeRuntimeFacts({
       ...(summary.facts || {}),
       maxModelLen: model.maxModelLen || model.context?.maxModelLen || null,
@@ -176,10 +178,12 @@ function createStatsLedgerStore(options = {}) {
     });
     if (!hasRuntimeFacts(facts)) return;
     ledger.runtimeFacts = ledger.runtimeFacts && typeof ledger.runtimeFacts === "object" ? ledger.runtimeFacts : {};
-    const existing = ledger.runtimeFacts[model.name] || {};
-    ledger.runtimeFacts[model.name] = {
+    const factKey = engine ? `${engine}:${model.name}` : model.name;
+    const existing = ledger.runtimeFacts[factKey] || {};
+    ledger.runtimeFacts[factKey] = {
       ...existing,
       name: model.name,
+      engine,
       root: model.root || existing.root || "",
       updatedAt: new Date().toISOString(),
       reason,
@@ -188,30 +192,39 @@ function createStatsLedgerStore(options = {}) {
     };
   }
 
-  async function getPersistedRuntimeFacts(modelHints = []) {
+  async function getPersistedRuntimeFacts(modelHints = [], options = {}) {
     const ledger = await loadStatsLedger();
     const needles = normalizeRuntimeFactHints(modelHints);
+    const requestedEngine = String(options.engine || "").trim().toLowerCase();
     const candidates = [];
     for (const item of Object.values(ledger.runtimeFacts || {})) {
       if (!item || typeof item !== "object") continue;
+      const itemEngine = String(item.engine || "").trim().toLowerCase();
+      if (requestedEngine && itemEngine && itemEngine !== requestedEngine) continue;
+      if (requestedEngine === "sglang" && !itemEngine) continue;
       if (needles.length && !runtimeFactItemMatches(item, needles)) continue;
       candidates.push({
         name: item.name,
         root: item.root || "",
         updatedAt: item.updatedAt || "",
         processStartSeconds: item.processStartSeconds || null,
+        engine: itemEngine,
         facts: item.facts || {},
       });
     }
     for (const item of Object.values(ledger.models || {})) {
       const facts = item?.last?.facts;
       if (!facts || typeof facts !== "object") continue;
+      const itemEngine = String(item.last?.engine || "").trim().toLowerCase();
+      if (requestedEngine && itemEngine && itemEngine !== requestedEngine) continue;
+      if (requestedEngine === "sglang" && !itemEngine) continue;
       if (needles.length && !runtimeFactItemMatches(item, needles)) continue;
       candidates.push({
         name: item.name,
         root: item.root || "",
         updatedAt: item.last?.updatedAt || "",
         processStartSeconds: item.last?.processStartSeconds || null,
+        engine: itemEngine,
         facts: {
           ...facts,
           maxModelLen: item.last?.maxModelLen || item.last?.context?.maxModelLen || null,
@@ -347,6 +360,8 @@ function mergeLiveAndStatsLedgerInactive(liveSummary, ledger) {
   const liveByName = Object.fromEntries(liveModels.map((model) => [model.name, model]));
   const mergedModels = historical.models.map((model) => ({
     ...model,
+    engine: liveByName[model.name]?.engine || model.engine || "",
+    runtimeVersion: liveByName[model.name]?.runtimeVersion || model.runtimeVersion || "",
     context: liveByName[model.name]?.context || inactiveRuntimeContext(model.context),
     latency: liveByName[model.name]?.latency || model.latency,
     averages: liveByName[model.name]?.averages || model.averages,

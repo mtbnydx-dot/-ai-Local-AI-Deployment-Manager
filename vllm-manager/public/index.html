@@ -961,7 +961,7 @@
             <div class="panel-head">
               <div>
                 <h3>统计总览</h3>
-                <p>来自 vLLM /metrics 与本地累计账本，统计请求、速度、上下文和等价 API 价值。</p>
+                <p>来自当前运行时 /metrics 与本地累计账本；本次运行和历史累计分开显示。</p>
               </div>
               <div class="panel-actions">
                 <span class="stats-freshness" id="statsFreshness"></span>
@@ -1116,7 +1116,7 @@
     <script src="/shared-js/dom-utils.js?v=20260811-design-audit" defer></script>
     <script src="/js/formatters.js?v=20260526-modular-ui" defer></script>
     <script src="/js/api-client.js?v=20260526-modular-ui" defer></script>
-    <script src="/shared-js/i18n-common.js?v=20260811-design-audit" defer></script>
+    <script src="/shared-js/i18n-common.js?v=20260815-dspark-stats" defer></script>
     <script src="/js/catalog.js?v=20260615-modular-data" defer></script>
     <script src="/js/ui-utils.js?v=20260615-modular-ui2" defer></script>
     <script src="/js/model-utils.js?v=20260615-model-utils" defer></script>
@@ -1131,9 +1131,9 @@
   <script src="/shared-js/runtime-status-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/tool-panel-renderer.js?v=20260615-tool-panel" defer></script>
   <script src="/shared-js/profile-renderer.js?v=20260711-guided-flow3" defer></script>
-  <script src="/shared-js/stats-ui.js?v=20260615-stats-ui" defer></script>
-    <script src="/shared-js/stats-summary-renderer.js?v=20260615-stats-summary" defer></script>
-    <script src="/shared-js/stats-list-renderer.js?v=20260615-stats-list" defer></script>
+    <script src="/shared-js/stats-ui.js?v=20260815-dspark-stats" defer></script>
+    <script src="/shared-js/stats-summary-renderer.js?v=20260815-dspark-stats" defer></script>
+    <script src="/shared-js/stats-list-renderer.js?v=20260815-dspark-stats" defer></script>
     <script src="/shared-js/audit-renderer.js?v=20260615-audit-renderer" defer></script>
     <script src="/js/runtime-insights.js?v=20260526-modular-ui" defer></script>
   <script src="/shared-js/external-access.js?v=20260615-external-access" defer></script>
@@ -1142,7 +1142,7 @@
   <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
     <script src="/shared-js/connection-status.js?v=20260804-connection-status" defer></script>
     <script src="/shared-js/ui-architecture.js?v=20260720-cors-policy" defer></script>
-    <script src="/app.js?v=20260811-billing-nav" defer></script>
+    <script src="/app.js?v=20260815-dspark-stats" defer></script>
     <script src="/shared-js/lucide.min.js?v=20260811-46-icons" defer onload="window.renderIcons && window.renderIcons()"></script>
   </body>
 </html>

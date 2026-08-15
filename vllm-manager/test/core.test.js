@@ -506,6 +506,10 @@ test("runtime metrics use vLLM counters and SGLang native speculative gauges wit
     'sglang:spec_block_accept_length{model_name="qwen"} 4.5',
     'sglang:spec_num_steps{model_name="qwen"} 1',
     'sglang:spec_num_draft_tokens{model_name="qwen"} 7',
+    'sglang:gen_throughput{model_name="qwen"} 212.4',
+    'sglang:max_total_num_tokens{model_name="qwen"} 373883',
+    'sglang:inter_token_latency_seconds_sum{model_name="qwen"} 1',
+    'sglang:inter_token_latency_seconds_count{model_name="qwen"} 100',
   ].join("\n"));
   const [sglang] = manager.buildModelStats(sglangMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, { updateSamples: false, engine: "sglang", runtimeVersion: "0.5.17" });
   assert.equal(sglang.engine, "sglang");
@@ -519,7 +523,17 @@ test("runtime metrics use vLLM counters and SGLang native speculative gauges wit
   assert.equal(sglang.speculative.acceptanceRate, 0.75);
   assert.equal(sglang.speculative.meanAcceptLength, 4.2);
   assert.equal(sglang.speculative.configuredDraftTokens, 7);
+  assert.equal(sglang.speculative.mode, "dspark");
   assert.equal(sglang.speculative.source, "sglang_gauges");
+  assert.equal(sglang.speed.recentOutputTokensPerSecond, 212.4);
+  assert.equal(sglang.speed.averageOutputTokensPerSecond, 100);
+  assert.equal(sglang.context.capacityTokens, 373883);
+});
+
+test("Docker creation timestamps provide a stable process fallback for runtimes without process_start_time_seconds", () => {
+  assert.equal(manager.parseDockerCreatedAtSeconds("2026-08-15 19:20:31 +1000 AEST"), 1786785631);
+  assert.equal(manager.parseDockerCreatedAtSeconds(""), null);
+  assert.equal(manager.parseDockerCreatedAtSeconds("not-a-date"), null);
 });
 
 test("local model config request accepts the frontend local source", async () => {

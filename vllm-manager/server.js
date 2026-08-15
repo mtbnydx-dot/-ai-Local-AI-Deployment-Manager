@@ -3100,10 +3100,12 @@ async function getContainerStatus(containerName) {
     return {
       exists: true,
       running: String(info.State || "").toLowerCase() === "running",
+      id: info.ID || "",
       name: info.Names,
       status: info.Status,
       ports: info.Ports,
       image: info.Image,
+      createdAt: info.CreatedAt || "",
       labels,
     };
   } catch (error) {
@@ -3627,7 +3629,10 @@ async function collectStats() {
   await metricsHistoryStore.recordMetricsHistory(response, {
     engine: normalizeRuntimeEngine(container.labels?.[MANAGER_ENGINE_LABEL_KEY]),
   }).catch(() => {});
-  response.trends = await metricsHistoryStore.getMetricsHistory({ hours: 24 }).catch(() => ({ hours: 24, samples: [] }));
+  response.trends = await metricsHistoryStore.getMetricsHistory({
+    hours: 24,
+    engine: response.live?.engine || "",
+  }).catch(() => ({ hours: 24, samples: [] }));
   return response;
 }
 
@@ -3671,7 +3676,9 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   const factModelHints = Array.from(new Set(servedModels
     .flatMap((model) => [model.id, model.root])
     .filter(Boolean)));
-  const persistedFacts = await getPersistedRuntimeFacts(factModelHints).catch(() => ({}));
+  const persistedFacts = runtimeEngine === "sglang"
+    ? {}
+    : await getPersistedRuntimeFacts(factModelHints, { engine: runtimeEngine }).catch(() => ({}));
   let facts = core.mergeRuntimeFacts(persistedFacts, await getLatestRuntimeFacts(factModelHints).catch(() => ({})));
   if (!facts.kvCacheTokens && !facts.maxConcurrency) {
     facts = core.mergeRuntimeFacts(facts, await getLatestRuntimeFacts(factModelHints, {
@@ -3680,7 +3687,17 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   }
   const servedById = Object.fromEntries(servedModels.map((model) => [model.id, model]));
   const metrics = parsePrometheusMetrics(metricsText);
-  const processStartSeconds = firstMetricValue(metrics, "process_start_time_seconds") || null;
+  if (runtimeEngine === "sglang") {
+    facts = core.mergeRuntimeFacts({}, buildSglangRuntimeFacts(metrics, servedModels));
+  }
+  const prometheusProcessStartSeconds = firstMetricValue(metrics, "process_start_time_seconds") || null;
+  const containerProcessStartSeconds = parseDockerCreatedAtSeconds(container?.createdAt);
+  const processStartSeconds = prometheusProcessStartSeconds || containerProcessStartSeconds || null;
+  const processStartSource = prometheusProcessStartSeconds
+    ? "prometheus"
+    : containerProcessStartSeconds
+      ? "container_created_at"
+      : "unavailable";
   const nowSeconds = Date.now() / 1000;
   const uptimeSeconds = processStartSeconds ? Math.max(0, nowSeconds - processStartSeconds) : null;
   const models = buildModelStats(metrics, servedById, facts, nowSeconds, {
@@ -3694,8 +3711,10 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   return {
     engine: runtimeEngine,
     runtimeVersion,
+    runtimeId: [runtimeEngine, container?.id || container?.name || "runtime", processStartSeconds || "unknown"].join(":"),
     source: `http://127.0.0.1:${endpoint.port}/metrics`,
     processStartSeconds,
+    processStartSource,
     uptimeSeconds,
     facts,
     totals,
@@ -3742,7 +3761,10 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const kvUsagePercent = firstMetricValue(scoped, "vllm:kv_cache_usage_perc")
       || firstMetricValue(scoped, "sglang:token_usage")
       || 0;
-    const capacityTokens = facts.kvCacheTokens || deriveKvCapacityTokens(scoped, servedById?.[name], facts);
+    const derivedCapacityTokens = deriveKvCapacityTokens(scoped, servedById?.[name], facts);
+    const capacityTokens = hasSglangMetrics
+      ? derivedCapacityTokens || facts.kvCacheTokens
+      : facts.kvCacheTokens || derivedCapacityTokens;
     const activeTokens = capacityTokens ? Math.round(capacityTokens * kvUsagePercent) : null;
     const promptBySource = sumByLabel(scoped, "vllm:prompt_tokens_by_source_total", "source");
     const nativePrefixQueries = firstNonZeroMetricSum(scoped, ["vllm:prefix_cache_queries_total"]);
@@ -3773,11 +3795,21 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const cacheInfo = scoped.find((metric) => metric.name === "vllm:cache_config_info");
     const mambaBlockSize = positiveInt(cacheInfo?.labels?.mamba_block_size, 0);
     const attentionBlockSize = positiveInt(cacheInfo?.labels?.block_size, 0);
-    const recent = core.calculateRecentRates(statsSamples, name, nowSeconds, {
+    const recent = core.calculateRecentRates(statsSamples, `${options.engine || "runtime"}:${name}`, nowSeconds, {
       promptTokens,
       generationTokens,
       requestCount,
     }, options.updateSamples !== false);
+    const avgE2eSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:e2e_request_latency_seconds", "sglang:e2e_request_latency_seconds"]);
+    const avgTtftSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:time_to_first_token_seconds", "sglang:time_to_first_token_seconds"]);
+    const avgInterTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]);
+    const avgTimePerOutputTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:request_time_per_output_token_seconds", "sglang:request_time_per_output_token_seconds"]);
+    const sglangGenerationThroughput = firstMetricValue(scoped, "sglang:gen_throughput") || 0;
+    const speculativeMode = hasSglangMetrics
+      ? "dspark"
+      : speculativeDraftTokens > 0 || speculativeDraftCycles > 0
+        ? "mtp"
+        : "off";
 
     models.push({
       name,
@@ -3802,10 +3834,10 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
         waiting: firstMetricValue(scoped, "vllm:num_requests_waiting") || firstMetricValue(scoped, "sglang:num_queue_reqs") || 0,
       },
       latency: {
-        avgE2eSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:e2e_request_latency_seconds", "sglang:e2e_request_latency_seconds"]),
-        avgTtftSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:time_to_first_token_seconds", "sglang:time_to_first_token_seconds"]),
-        avgInterTokenSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]),
-        avgTimePerOutputTokenSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:request_time_per_output_token_seconds", "sglang:request_time_per_output_token_seconds"]),
+        avgE2eSeconds,
+        avgTtftSeconds,
+        avgInterTokenSeconds,
+        avgTimePerOutputTokenSeconds,
         avgQueueSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:request_queue_time_seconds", "sglang:queue_time_seconds"]),
       },
       averages: {
@@ -3815,7 +3847,10 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       },
       speed: {
         ...recent,
-        averageOutputTokensPerSecond: tokensPerSecondFromSeconds(histogramAverage(scoped, "vllm:request_time_per_output_token_seconds")),
+        recentOutputTokensPerSecond: hasSglangMetrics ? sglangGenerationThroughput : recent.recentOutputTokensPerSecond,
+        averageOutputTokensPerSecond: tokensPerSecondFromSeconds(
+          avgTimePerOutputTokenSeconds || (hasSglangMetrics ? avgInterTokenSeconds : 0),
+        ),
         lifetimeTokensPerSecond: null,
       },
       cache: {
@@ -3830,6 +3865,7 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       },
       speculative: {
         enabled: speculativeDraftTokens > 0 || speculativeDraftCycles > 0 || sglangSpecNumDraftTokens > 0 || sglangSpecAcceptLength > 0,
+        mode: speculativeMode,
         draftCycles: speculativeDraftCycles,
         draftTokens: speculativeDraftTokens,
         acceptedTokens: speculativeAcceptedTokens,
@@ -3872,6 +3908,8 @@ function firstNonZeroHistogramAverage(metrics, names) {
 }
 
 function deriveKvCapacityTokens(metrics, servedModel, facts) {
+  const sglangCapacity = firstMetricValue(metrics, "sglang:max_total_num_tokens") || 0;
+  if (sglangCapacity) return Math.round(sglangCapacity);
   if (facts.maxContextTokens && facts.maxConcurrency) {
     return Math.round(facts.maxContextTokens * facts.maxConcurrency);
   }
@@ -3881,6 +3919,28 @@ function deriveKvCapacityTokens(metrics, servedModel, facts) {
   const blockSize = Number(cacheInfo?.labels?.block_size || 0);
   if (!hasMambaBlock && blocks && blockSize) return blocks * blockSize;
   return null;
+}
+
+function buildSglangRuntimeFacts(metrics, servedModels = []) {
+  const kvCacheTokens = firstMetricValue(metrics, "sglang:max_total_num_tokens") || null;
+  const maxModelLen = Math.max(0, ...servedModels.map((model) => Number(model.max_model_len || 0))) || null;
+  const startupMetrics = metrics.filter((metric) => metric.name === "sglang:startup_time_seconds");
+  const phaseValue = (phase) => Number(startupMetrics.find((metric) => metric.labels?.phase === phase)?.value || 0) || null;
+  return {
+    kvCacheTokens,
+    maxContextTokens: maxModelLen,
+    maxModelLen,
+    maxConcurrency: kvCacheTokens && maxModelLen ? kvCacheTokens / maxModelLen : null,
+    modelLoadSeconds: phaseValue("load_weight"),
+    engineInitSeconds: phaseValue("scheduler_e2e") || phaseValue("tokenizer_e2e"),
+  };
+}
+
+function parseDockerCreatedAtSeconds(value) {
+  const normalized = String(value || "").trim().replace(/\s+[A-Z]{2,6}$/i, "");
+  if (!normalized) return null;
+  const parsedMs = Date.parse(normalized);
+  return Number.isFinite(parsedMs) && parsedMs > 0 ? parsedMs / 1000 : null;
 }
 
 async function getLatestRuntimeFacts(modelHints = [], options = {}) {
@@ -4511,5 +4571,6 @@ module.exports = {
   isQwen38Model,
   isQwen38Nvfp4Model,
   resolveDsparkDraftModel,
+  parseDockerCreatedAtSeconds,
   diffusionGemmaWindowsBlockReason,
 };

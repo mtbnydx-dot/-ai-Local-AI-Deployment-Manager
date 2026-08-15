@@ -63,6 +63,7 @@ function buildMetricsHistorySample(summary = {}, options = {}) {
     },
     speculative: {
       enabled: Boolean(speculative.enabled),
+      mode: String(speculative.mode || ""),
       draftCycles: finiteNumber(speculative.draftCycles),
       draftTokens: finiteNumber(speculative.draftTokens),
       acceptedTokens: finiteNumber(speculative.acceptedTokens),
@@ -91,9 +92,11 @@ function createMetricsHistoryStore(options = {}) {
     const hours = Math.min(24 * 365, Math.max(0.25, Number(query.hours || 24)));
     const fromMs = Date.now() - hours * 60 * 60 * 1000;
     const model = String(query.model || "").trim().toLowerCase();
+    const engine = String(query.engine || "").trim().toLowerCase();
     const samples = ledger.samples.filter((sample) => {
       if (Date.parse(sample.at) < fromMs) return false;
-      return !model || String(sample.model || "").toLowerCase() === model;
+      if (model && String(sample.model || "").toLowerCase() !== model) return false;
+      return !engine || String(sample.engine || "").toLowerCase() === engine;
     });
     return { ...ledger, hours, samples };
   }

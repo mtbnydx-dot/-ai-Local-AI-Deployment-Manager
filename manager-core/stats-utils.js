@@ -17,6 +17,9 @@ function aggregateStats(models, uptimeSeconds) {
   const draftTokens = models.reduce((sum, model) => sum + Number(model.speculative?.draftTokens || 0), 0);
   const acceptedTokens = models.reduce((sum, model) => sum + Number(model.speculative?.acceptedTokens || 0), 0);
   const speculativeEnabled = models.some((model) => model.speculative?.enabled);
+  const speculativeModes = Array.from(new Set(models
+    .map((model) => String(model.speculative?.mode || "").trim())
+    .filter((mode) => mode && mode !== "off")));
   const directAcceptanceRates = models.map((model) => Number(model.speculative?.acceptanceRate || 0)).filter((value) => value > 0);
   const meanAcceptLengths = models.map((model) => Number(model.speculative?.meanAcceptLength || 0)).filter((value) => value > 0);
 
@@ -42,7 +45,11 @@ function aggregateStats(models, uptimeSeconds) {
     latency: {
       avgE2eSeconds: weightedAverage(models, (model) => model.latency.avgE2eSeconds, (model) => model.requests.total),
       avgTtftSeconds: weightedAverage(models, (model) => model.latency.avgTtftSeconds, (model) => model.requests.total),
-      avgTimePerOutputTokenSeconds: weightedAverage(models, (model) => model.latency.avgTimePerOutputTokenSeconds, (model) => model.requests.total),
+      avgTimePerOutputTokenSeconds: weightedAverage(
+        models,
+        (model) => model.latency.avgTimePerOutputTokenSeconds || model.latency.avgInterTokenSeconds,
+        (model) => model.requests.total,
+      ),
     },
     context: {
       activeTokens: activeContext,
@@ -58,6 +65,7 @@ function aggregateStats(models, uptimeSeconds) {
     },
     speculative: {
       enabled: speculativeEnabled || draftTokens > 0 || draftCycles > 0,
+      mode: speculativeModes.length === 1 ? speculativeModes[0] : speculativeModes.length ? "mixed" : "off",
       draftCycles,
       draftTokens,
       acceptedTokens,
@@ -683,6 +691,8 @@ function mergeStatsLedgerModelDelta(ledger, model = {}, delta = {}, summary = {}
   existing.last = {
     updatedAt: options.now || new Date().toISOString(),
     reason,
+    engine: model.engine || summary.engine || "",
+    runtimeVersion: model.runtimeVersion || summary.runtimeVersion?.version || "",
     processStartSeconds: summary.processStartSeconds,
     maxModelLen: model.maxModelLen || model.context?.maxModelLen || null,
     context: model.context || {},
@@ -717,6 +727,8 @@ function statsLedgerToSummary(ledger = {}) {
 function statsLedgerModelToStatsModel(item = {}) {
   return {
     name: item.name,
+    engine: item.last?.engine || "",
+    runtimeVersion: item.last?.runtimeVersion || "",
     root: item.root || "",
     maxModelLen: item.last?.maxModelLen || item.last?.context?.maxModelLen || null,
     tokens: {
