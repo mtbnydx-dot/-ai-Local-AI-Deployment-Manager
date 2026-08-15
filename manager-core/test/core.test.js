@@ -438,6 +438,8 @@ test("stats helpers aggregate model totals and calculate API value", () => {
       speed: { recentPromptTokensPerSecond: 10, recentOutputTokensPerSecond: 4, recentRequestsPerMinute: 2 },
       latency: { avgE2eSeconds: 2, avgTtftSeconds: 0.5, avgTimePerOutputTokenSeconds: 0.1 },
       context: { activeTokens: 1000, capacityTokens: 4000 },
+      cache: { prefixQueries: 10, prefixHits: 8, alignmentBlockSize: 32, alignmentRequired: true },
+      speculative: { draftCycles: 10, draftTokens: 30, acceptedTokens: 24 },
     },
     {
       tokens: { prompt: 50, generation: 10, cachedPrompt: 0 },
@@ -445,12 +447,18 @@ test("stats helpers aggregate model totals and calculate API value", () => {
       speed: { recentPromptTokensPerSecond: 5, recentOutputTokensPerSecond: 1, recentRequestsPerMinute: 1 },
       latency: { avgE2eSeconds: 6, avgTtftSeconds: 1, avgTimePerOutputTokenSeconds: 0.2 },
       context: { activeTokens: 500, capacityTokens: 1000 },
+      cache: { prefixQueries: 5, prefixHits: 2 },
+      speculative: { draftCycles: 5, draftTokens: 10, acceptedTokens: 8 },
     },
   ], 10);
   assert.deepEqual(totals.tokens, { prompt: 150, generation: 50, cachedPrompt: 20, total: 200 });
   assert.deepEqual(totals.requests, { total: 4, success: 3, error: 1, aborted: 0 });
   assert.equal(totals.speed.lifetimeTokensPerSecond, 20);
   assert.equal(totals.context.kvUsagePercent, 0.3);
+  assert.equal(totals.cache.prefixHitRate, 10 / 15);
+  assert.equal(totals.cache.alignmentBlockSize, 32);
+  assert.equal(totals.speculative.acceptanceRate, 32 / 40);
+  assert.equal(totals.speculative.acceptedTokensPerCycle, 32 / 15);
 
   const cost = core.calculateCost({ prompt: 1_000_000, generation: 500_000, cachedPrompt: 250_000 }, {
     id: "test",
@@ -2493,16 +2501,34 @@ test("benchmark runner normalizes requests and records samples", async () => {
   assert.deepEqual(runner.normalizeBenchmarkRequest({ requests: 20, maxTokens: 1 }), {
     port: 8080,
     model: "",
-    requests: 5,
+    requests: 20,
+    concurrency: 1,
+    warmupRequests: 0,
     maxTokens: 16,
+    stream: false,
     prompt: "default prompt",
   });
-  const result = await runner.runBenchmarkJob(job, { requests: 2, maxTokens: 32 });
+  assert.deepEqual(runner.normalizeBenchmarkRequest({ requests: "invalid", concurrency: 99, warmupRequests: -2, maxTokens: 19.9 }), {
+    port: 8080,
+    model: "",
+    requests: 3,
+    concurrency: 3,
+    warmupRequests: 0,
+    maxTokens: 19,
+    stream: false,
+    prompt: "default prompt",
+  });
+  const result = await runner.runBenchmarkJob(job, { requests: 2, concurrency: 2, maxTokens: 32 });
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "http://127.0.0.1:8080/v1/chat/completions");
   assert.equal(calls[0].request.headers.authorization, "Bearer secret");
   assert.equal(JSON.parse(calls[0].request.body).model, "model-a");
   assert.equal(result.samples.length, 2);
+  assert.equal(result.concurrency, 2);
+  assert.equal(result.successfulRequests, 2);
+  assert.equal(result.failedRequests, 0);
+  assert.equal(result.totalOutputTokens, 10);
+  assert.equal(Number.isFinite(result.wallTokensPerSecond), true);
   assert.equal(job.status, "success");
   assert.equal(job.meta.benchmark.model, "model-a");
   assert.match(job.logs[0], /Run 1:/);

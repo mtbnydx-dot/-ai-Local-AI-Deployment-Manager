@@ -36,6 +36,7 @@ function createVllmRuntimeCommandBuilder(deps) {
     const modelArg = launch.modelArg;
     const quantization = effectiveLaunchQuantization(opts.quantization, launch);
     const runtimePreset = resolveVllmRuntimePreset(opts, launch);
+    const runtimeEngine = normalizeRuntimeEngine(runtimePreset.engine || opts.engine);
     const runtimeImage = runtimePreset.image || CONFIG.image;
     const effectiveDtype = runtimePreset.dtype || opts.dtype;
     const effectiveKvCacheDtype = runtimePreset.kvCacheDtype || opts.kvCacheDtype;
@@ -55,6 +56,7 @@ function createVllmRuntimeCommandBuilder(deps) {
       job.meta = {
         ...job.meta,
         runtimePreset: runtimePreset.id,
+        engine: runtimeEngine,
         runtimeImage,
         runtimeNotes: runtimePreset.notes || [],
         dtype: effectiveDtype,
@@ -73,11 +75,13 @@ function createVllmRuntimeCommandBuilder(deps) {
         moeBackend: runtimePreset.moeBackend || "",
         generationConfig: runtimePreset.generationConfig || "",
         speculativeConfig: runtimePreset.speculativeConfig || null,
+        draftModel: runtimePreset.draftModel || opts.draftModel || "",
+        dsparkBlockSize: runtimePreset.dsparkBlockSize || opts.dsparkBlockSize || null,
         reasoningParserPlugin: runtimePreset.reasoningParserPlugin || "",
         ...(effectiveMaxNumBatchedTokens ? { maxNumBatchedTokens: effectiveMaxNumBatchedTokens } : {}),
       };
       scheduleJobsSave();
-      appendLog(job, `Runtime preset: ${runtimePreset.label || runtimePreset.id}; using image ${runtimeImage}.`);
+      appendLog(job, `Runtime preset: ${runtimePreset.label || runtimePreset.id}; using ${runtimeEngine} image ${runtimeImage}.`);
       for (const note of runtimePreset.notes || []) appendLog(job, `Runtime preset note: ${note}`);
       if (runtimePreset.kvCacheDtype && runtimePreset.kvCacheDtype !== opts.kvCacheDtype) {
         appendLog(job, `KV cache dtype override: ${opts.kvCacheDtype || "auto"} -> ${runtimePreset.kvCacheDtype}.`);
@@ -120,7 +124,7 @@ function createVllmRuntimeCommandBuilder(deps) {
       "--name", opts.containerName || CONFIG.containerName,
       "--restart", "on-failure:3",
       "--label", `${MANAGER_LABEL_KEY}=${CONFIG.managerId}`,
-      "--label", `${MANAGER_ENGINE_LABEL_KEY}=vllm`,
+      "--label", `${MANAGER_ENGINE_LABEL_KEY}=${runtimeEngine}`,
       "--label", `ai.manager.job=${job.id}`,
       "--label", `ai.manager.instance=${opts.instanceId || "primary"}`,
       "--label", `ai.manager.instance-mode=${opts.instanceMode || "replace"}`,
@@ -143,6 +147,11 @@ function createVllmRuntimeCommandBuilder(deps) {
       "-v", `${CONFIG.hfCache}:/root/.cache/huggingface`,
       "-v", `${CONFIG.modelsRoot}:/models`,
     ];
+    if (runtimeEngine === "sglang" && CONFIG.sglangCache) {
+      runArgs.push("-v", `${CONFIG.sglangCache}:/root/.cache`);
+    } else if (CONFIG.vllmCache) {
+      runArgs.push("-v", `${CONFIG.vllmCache}:/root/.cache/vllm`);
+    }
     if (opts.runtimeApiKeyRef && MANAGER_APIKEY_REF_LABEL_KEY) {
       runArgs.push("--label", `${MANAGER_APIKEY_REF_LABEL_KEY}=${opts.runtimeApiKeyRef}`);
     }
@@ -157,9 +166,23 @@ function createVllmRuntimeCommandBuilder(deps) {
       if (value !== undefined && value !== null && value !== "") runArgs.push("-e", `${key}=${value}`);
     }
 
+    if (runtimeEngine === "sglang") {
+      runArgs.push("--entrypoint", "sglang", runtimeImage);
+      appendSglangServeArgs(runArgs, {
+        ...opts,
+        modelArg,
+        runtimePreset,
+        effectiveReasoningParser,
+        effectiveToolCallParser,
+        effectiveAutoToolChoice,
+      });
+      return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine };
+    }
+
+    runArgs.push(runtimeImage);
+    if (runtimePreset.positionalModel) runArgs.push(modelArg);
+    else runArgs.push("--model", modelArg);
     runArgs.push(
-      runtimeImage,
-      "--model", modelArg,
       "--served-model-name", opts.name,
       "--dtype", effectiveDtype,
       "--max-model-len", String(opts.maxModelLen),
@@ -213,6 +236,9 @@ function createVllmRuntimeCommandBuilder(deps) {
     if (runtimePreset.overrideGenerationConfig) runArgs.push("--override-generation-config", runtimePreset.overrideGenerationConfig);
     if (runtimePreset.defaultChatTemplateKwargs) runArgs.push("--default-chat-template-kwargs", runtimePreset.defaultChatTemplateKwargs);
     if (runtimePreset.speculativeConfig) runArgs.push("--speculative-config", JSON.stringify(runtimePreset.speculativeConfig));
+    if (runtimePreset.safetensorsLoadStrategy) {
+      runArgs.push("--safetensors-load-strategy", runtimePreset.safetensorsLoadStrategy);
+    }
     if (runtimePreset.reasoningParserPlugin) {
       runArgs.push("--reasoning-parser-plugin", windowsPathToContainerPath(runtimePreset.reasoningParserPlugin));
     }
@@ -224,7 +250,47 @@ function createVllmRuntimeCommandBuilder(deps) {
     }
     if (opts.vllmApiKey) runArgs.push("--api-key", opts.vllmApiKey);
 
-    return { runArgs, activePublishArgs, runtimeImage, runtimePreset };
+    return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine };
+  }
+
+  function appendSglangServeArgs(runArgs, options = {}) {
+    const { runtimePreset = {} } = options;
+    runArgs.push(
+      "serve",
+      "--model-path", options.modelArg,
+      "--served-model-name", options.name,
+      "--host", "0.0.0.0",
+      "--port", "8000",
+      "--tp-size", String(Math.max(1, Number(options.tensorParallelSize || 1))),
+      "--mem-fraction-static", String(options.gpuMemoryUtilization),
+      "--max-running-requests", String(options.maxNumSeqs),
+      "--context-length", String(options.maxModelLen),
+      "--chunked-prefill-size", String(runtimePreset.chunkedPrefillSize || 8192),
+      "--enable-metrics"
+    );
+    if (runtimePreset.mambaSchedulerStrategy) {
+      runArgs.push("--mamba-scheduler-strategy", runtimePreset.mambaSchedulerStrategy);
+    }
+    if (runtimePreset.attentionBackend) runArgs.push("--attention-backend", runtimePreset.attentionBackend);
+    if (runtimePreset.disablePrefillCudaGraph) runArgs.push("--disable-prefill-cuda-graph");
+    if (runtimePreset.mmFeatureTransport) runArgs.push("--mm-feature-transport", runtimePreset.mmFeatureTransport);
+    if (options.disablePrefixCaching || runtimePreset.disablePrefixCaching) runArgs.push("--disable-radix-cache");
+    if (options.trustRemoteCode || runtimePreset.forceTrustRemoteCode) runArgs.push("--trust-remote-code");
+    if (options.effectiveReasoningParser && options.effectiveReasoningParser !== "auto") {
+      runArgs.push("--reasoning-parser", options.effectiveReasoningParser);
+    }
+    if (options.effectiveAutoToolChoice && options.effectiveToolCallParser) {
+      runArgs.push("--tool-call-parser", options.effectiveToolCallParser);
+    }
+    if (runtimePreset.speculativeAlgorithm === "DSPARK") {
+      runArgs.push(
+        "--speculative-algorithm", "DSPARK",
+        "--speculative-draft-model-path", windowsPathToContainerPath(runtimePreset.draftModel),
+        "--speculative-dspark-block-size", String(runtimePreset.dsparkBlockSize || 7),
+        "--speculative-draft-model-quantization", runtimePreset.draftModelQuantization || "unquant"
+      );
+    }
+    if (options.vllmApiKey) runArgs.push("--api-key", options.vllmApiKey);
   }
 
   return {
@@ -239,4 +305,8 @@ function positiveInteger(value) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
 }
 
-module.exports = { createVllmRuntimeCommandBuilder };
+function normalizeRuntimeEngine(value) {
+  return String(value || "vllm").trim().toLowerCase() === "sglang" ? "sglang" : "vllm";
+}
+
+module.exports = { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine };

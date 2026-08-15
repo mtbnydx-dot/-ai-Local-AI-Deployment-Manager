@@ -50,6 +50,8 @@ This is a local model service control panel for high-end personal workstations a
 └─ start-service-entry-lan.cmd # 启动局域网模式
 ```
 
+Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口字段见 [Qwen3.8-27B 本地加速与管理平台指南](docs/qwen38-acceleration-guide.md)。
+
 ### 系统要求
 
 - Windows 10/11。

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createVllmStartRuntimeRequest } = require("../lib/launch-request");
+const { createVllmStartRuntimeRequest, normalizeRuntimeImage } = require("../lib/launch-request");
 
 test("vLLM launch request builds serve job metadata and run options", async () => {
   const runCalls = [];
@@ -87,6 +87,10 @@ test("vLLM launch request builds serve job metadata and run options", async () =
       apiKey: "sk-local",
       speculativeMode: "auto",
       numSpeculativeTokens: "2",
+      engine: "sglang",
+      runtimeImage: "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      draftModel: "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark",
+      dsparkBlockSize: "9",
     },
   });
 
@@ -104,8 +108,14 @@ test("vLLM launch request builds serve job metadata and run options", async () =
   assert.equal(runCalls[0].serviceUrl, "http://192.168.1.27:8123/v1");
   assert.equal(runCalls[0].speculativeMode, "auto");
   assert.equal(runCalls[0].numSpeculativeTokens, 2);
+  assert.equal(runCalls[0].engine, "sglang");
+  assert.equal(runCalls[0].runtimeImage, "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(runCalls[0].draftModel, "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark");
+  assert.equal(runCalls[0].dsparkBlockSize, 9);
+  assert.equal(result.job.meta.engine, "sglang");
   assert.equal(compatibilityCalls[0].remote, false);
   assert.equal(compatibilityCalls[0].model, "Qwen/Qwen3.6-27B");
+  assert.equal(compatibilityCalls[0].engine, "sglang");
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(admissionEvents[0][0], "acquire");
   assert.deepEqual(admissionEvents[0][1].gpuIds, ["0", "1"]);
@@ -138,6 +148,11 @@ test("vLLM launch request builds serve job metadata and run options", async () =
       && /Muse Glimmer/.test(error.message)
       && /llama-manager/.test(error.message),
   );
+});
+
+test("runtime image overrides accept Docker references and reject injected options", () => {
+  assert.equal(normalizeRuntimeImage("vllm/vllm-openai@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "vllm/vllm-openai@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.throws(() => normalizeRuntimeImage("image:tag --privileged"), (error) => error.status === 400);
 });
 
 test("vLLM parallel launch never invents a port", async () => {

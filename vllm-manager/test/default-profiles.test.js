@@ -9,8 +9,11 @@ test("vLLM default profiles keep builtin IDs and normalize configs", () => {
     return { ...config, normalized: true };
   });
 
-  assert.equal(profiles.length, 5);
+  assert.equal(profiles.length, 8);
   assert.deepEqual(profiles.map((profile) => profile.id), [
+    "qwen38-vllm-mtp3-quality",
+    "qwen38-sglang-dspark-fastest",
+    "qwen38-nvfp4-capacity",
     "blackwell-96gb-256k",
     "claude-long-context-64k",
     "claude-maximum-context",
@@ -28,5 +31,14 @@ test("vLLM default profiles keep builtin IDs and normalize configs", () => {
   assert.equal(pro6000.config.kvCacheDtype, "fp8");
   assert.deepEqual(pro6000.config.gpuDeviceIds, ["0"]);
   assert.equal(pro6000.config.clientPreset, "claude-cowork");
-  assert.equal(profiles.every((profile) => profile.config.speculativeMode === "off"), true);
+  const stable = profiles.find((profile) => profile.id === "qwen38-vllm-mtp3-quality");
+  assert.equal(stable.config.engine, "vllm");
+  assert.equal(stable.config.speculativeMode, "mtp");
+  assert.equal(stable.config.numSpeculativeTokens, 3);
+  assert.equal(stable.config.enablePrefixCaching, true);
+
+  const fastest = profiles.find((profile) => profile.id === "qwen38-sglang-dspark-fastest");
+  assert.equal(fastest.config.engine, "sglang");
+  assert.equal(fastest.config.speculativeMode, "dspark");
+  assert.equal(fastest.config.dsparkBlockSize, 7);
 });

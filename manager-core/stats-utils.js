@@ -10,6 +10,15 @@ function aggregateStats(models, uptimeSeconds) {
   const totalTokens = totalPrompt + totalGeneration;
   const activeContext = models.reduce((sum, model) => sum + (model.context.activeTokens || 0), 0);
   const contextCapacity = models.reduce((sum, model) => sum + (model.context.capacityTokens || 0), 0) || null;
+  const prefixQueries = models.reduce((sum, model) => sum + Number(model.cache?.prefixQueries || 0), 0);
+  const prefixHits = models.reduce((sum, model) => sum + Number(model.cache?.prefixHits || 0), 0);
+  const cacheAlignment = models.find((model) => model.cache?.alignmentBlockSize)?.cache || {};
+  const draftCycles = models.reduce((sum, model) => sum + Number(model.speculative?.draftCycles || 0), 0);
+  const draftTokens = models.reduce((sum, model) => sum + Number(model.speculative?.draftTokens || 0), 0);
+  const acceptedTokens = models.reduce((sum, model) => sum + Number(model.speculative?.acceptedTokens || 0), 0);
+  const speculativeEnabled = models.some((model) => model.speculative?.enabled);
+  const directAcceptanceRates = models.map((model) => Number(model.speculative?.acceptanceRate || 0)).filter((value) => value > 0);
+  const meanAcceptLengths = models.map((model) => Number(model.speculative?.meanAcceptLength || 0)).filter((value) => value > 0);
 
   return {
     tokens: {
@@ -40,7 +49,28 @@ function aggregateStats(models, uptimeSeconds) {
       capacityTokens: contextCapacity,
       kvUsagePercent: contextCapacity ? activeContext / contextCapacity : 0,
     },
+    cache: {
+      prefixQueries,
+      prefixHits,
+      prefixHitRate: prefixQueries ? prefixHits / prefixQueries : Number(models[0]?.cache?.prefixHitRate || 0),
+      alignmentBlockSize: cacheAlignment.alignmentBlockSize || null,
+      alignmentRequired: Boolean(cacheAlignment.alignmentRequired),
+    },
+    speculative: {
+      enabled: speculativeEnabled || draftTokens > 0 || draftCycles > 0,
+      draftCycles,
+      draftTokens,
+      acceptedTokens,
+      acceptanceRate: draftTokens ? acceptedTokens / draftTokens : averageNumbers(directAcceptanceRates),
+      acceptedTokensPerCycle: draftCycles ? acceptedTokens / draftCycles : 0,
+      draftTokensPerCycle: draftCycles ? draftTokens / draftCycles : 0,
+      meanAcceptLength: averageNumbers(meanAcceptLengths),
+    },
   };
+}
+
+function averageNumbers(values) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
 function emptyStatsSummary(container, endpoint, options = {}) {
@@ -60,6 +90,8 @@ function emptyStatsSummary(container, endpoint, options = {}) {
       },
       latency: {},
       context: { activeTokens: 0, capacityTokens: null, kvUsagePercent: 0 },
+      cache: { prefixQueries: 0, prefixHits: 0, prefixHitRate: 0, alignmentBlockSize: null, alignmentRequired: false },
+      speculative: { enabled: false, draftCycles: 0, draftTokens: 0, acceptedTokens: 0, acceptanceRate: 0, acceptedTokensPerCycle: 0, draftTokensPerCycle: 0, meanAcceptLength: 0 },
       shares: {},
     },
     models: [],
@@ -658,6 +690,7 @@ function mergeStatsLedgerModelDelta(ledger, model = {}, delta = {}, summary = {}
     averages: model.averages || {},
     speed: model.speed || {},
     cache: model.cache || {},
+    speculative: model.speculative || {},
     facts: summary.facts || {},
   };
   models[model.name] = existing;
@@ -712,6 +745,7 @@ function statsLedgerModelToStatsModel(item = {}) {
       lifetimeTokensPerSecond: null,
     },
     cache: item.last?.cache || {},
+    speculative: item.last?.speculative || {},
     context: item.last?.context || { activeTokens: 0, capacityTokens: null, kvUsagePercent: 0 },
   };
 }
@@ -727,6 +761,7 @@ function mergeLiveAndStatsLedger(liveSummary, ledger) {
     averages: liveByName[model.name]?.averages || model.averages,
     speed: liveByName[model.name]?.speed || model.speed,
     cache: liveByName[model.name]?.cache || model.cache,
+    speculative: liveByName[model.name]?.speculative || model.speculative,
     requests: {
       ...model.requests,
       running: liveByName[model.name]?.requests?.running || 0,

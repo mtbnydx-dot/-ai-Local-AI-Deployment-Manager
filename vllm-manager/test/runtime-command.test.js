@@ -229,3 +229,100 @@ test("vLLM runtime command emits --no-enable-prefix-caching only when disabling"
   assert.ok(disable.runArgs.includes("--no-enable-prefix-caching"));
   assert.ok(!disable.runArgs.includes("--enable-prefix-caching"));
 });
+
+test("SGLang runtime command emits the validated Qwen3.8 DSpark contract", () => {
+  const { buildVllmRuntimeCommand } = createVllmRuntimeCommandBuilder({
+    CONFIG: {
+      containerName: "vllm-local",
+      managerId: "vllm-manager",
+      hfCache: "D:/AI/cache/huggingface",
+      modelsRoot: "D:/AI/models",
+      vllmCache: "D:/AI/cache/vllm-qwen38",
+      sglangCache: "D:/AI/cache/sglang-qwen38",
+      image: "vllm/default:fixed",
+      imagePlatform: "linux/amd64",
+    },
+    MANAGER_LABEL_KEY: "ai.manager",
+    MANAGER_ENGINE_LABEL_KEY: "ai.manager.engine",
+    MANAGER_APIKEY_REF_LABEL_KEY: "ai.manager.api-key-ref",
+    appendLog: () => {},
+    scheduleJobsSave: () => {},
+    dockerGpuArg: () => "device=0",
+    dockerPublishArgs: (port) => [`127.0.0.1:${port}:8000`],
+    publishArgsToDockerRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
+    windowsPathToContainerPath: (value) => String(value).replace("D:/AI/models", "/models").replaceAll("\\", "/"),
+    normalizeGpuIds: (value) => value,
+    getLanAddress: () => "127.0.0.1",
+    resolveLaunchModel: () => ({ modelArg: "/models/Qwen-Qwen3.8-27B-FP8", effectiveLoadFormat: "auto", localPath: "D:/AI/models/Qwen-Qwen3.8-27B-FP8" }),
+    effectiveLaunchQuantization: () => ({ value: "fp8", modelConfigMethod: "fp8" }),
+    resolveVllmRuntimePreset: () => ({
+      id: "qwen3.8-sglang-dspark",
+      label: "Qwen3.8 / SGLang / DSpark",
+      engine: "sglang",
+      image: "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      attentionBackend: "flashinfer",
+      reasoningParser: "qwen3",
+      toolCallParser: "qwen3_coder",
+      enableAutoToolChoice: true,
+      chunkedPrefillSize: 8192,
+      mambaSchedulerStrategy: "extra_buffer",
+      disablePrefillCudaGraph: true,
+      mmFeatureTransport: "cpu",
+      speculativeAlgorithm: "DSPARK",
+      draftModel: "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark",
+      dsparkBlockSize: 7,
+      draftModelQuantization: "unquant",
+    }),
+  });
+  const job = { id: "serve-dspark", meta: {} };
+  const opts = {
+    engine: "sglang", model: "D:/AI/models/Qwen-Qwen3.8-27B-FP8", name: "qwen3.8-27b",
+    port: 8000, networkAccess: "local", serviceHost: "127.0.0.1", gpuDeviceIds: ["0"],
+    dtype: "auto", quantization: "fp8", loadFormat: "auto", maxModelLen: 262144,
+    maxNumSeqs: 4, gpuMemoryUtilization: 0.8, kvCacheDtype: "auto", cpuOffloadGb: 0,
+    kvOffloadingSize: 0, mmProcessorCacheGb: 0, tensorParallelSize: 1,
+    pipelineParallelSize: 1, dataParallelSize: 1, enablePrefixCaching: true,
+  };
+
+  const result = buildVllmRuntimeCommand(job, opts);
+  const args = result.runArgs;
+  assert.equal(result.runtimeEngine, "sglang");
+  assert.ok(args.includes("ai.manager.engine=sglang"));
+  assert.deepEqual(args.slice(args.indexOf("--entrypoint"), args.indexOf("--entrypoint") + 3), [
+    "--entrypoint", "sglang", "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  ]);
+  assert.deepEqual(args.slice(args.indexOf("--speculative-algorithm"), args.indexOf("--speculative-algorithm") + 2), ["--speculative-algorithm", "DSPARK"]);
+  assert.deepEqual(args.slice(args.indexOf("--speculative-dspark-block-size"), args.indexOf("--speculative-dspark-block-size") + 2), ["--speculative-dspark-block-size", "7"]);
+  assert.deepEqual(args.slice(args.indexOf("--mamba-scheduler-strategy"), args.indexOf("--mamba-scheduler-strategy") + 2), ["--mamba-scheduler-strategy", "extra_buffer"]);
+  assert.deepEqual(args.slice(args.indexOf("--attention-backend"), args.indexOf("--attention-backend") + 2), ["--attention-backend", "flashinfer"]);
+  assert.deepEqual(args.slice(args.indexOf("--mm-feature-transport"), args.indexOf("--mm-feature-transport") + 2), ["--mm-feature-transport", "cpu"]);
+  assert.ok(args.includes("--disable-prefill-cuda-graph"));
+  assert.ok(args.includes("--enable-metrics"));
+  assert.ok(args.includes("D:/AI/cache/sglang-qwen38:/root/.cache"));
+  assert.equal(job.meta.draftModel, "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark");
+});
+
+test("vLLM runtime supports the current positional serve syntax and persistent cache", () => {
+  const { buildVllmRuntimeCommand } = createVllmRuntimeCommandBuilder({
+    CONFIG: { containerName: "vllm-local", managerId: "vllm-manager", hfCache: "D:/AI/cache/huggingface", modelsRoot: "D:/AI/models", vllmCache: "D:/AI/cache/vllm-qwen38", image: "vllm/default:fixed" },
+    MANAGER_LABEL_KEY: "ai.manager", MANAGER_ENGINE_LABEL_KEY: "ai.manager.engine", MANAGER_APIKEY_REF_LABEL_KEY: "ai.manager.api-key-ref",
+    appendLog: () => {}, scheduleJobsSave: () => {}, dockerGpuArg: () => "device=0",
+    dockerPublishArgs: (port) => [`127.0.0.1:${port}:8000`], publishArgsToDockerRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
+    windowsPathToContainerPath: (value) => String(value).replace("D:/AI/models", "/models").replaceAll("\\", "/"),
+    normalizeGpuIds: (value) => value, getLanAddress: () => "127.0.0.1",
+    resolveLaunchModel: () => ({ modelArg: "/models/Qwen-Qwen3.8-27B-FP8", effectiveLoadFormat: "auto", localPath: "D:/AI/models/Qwen-Qwen3.8-27B-FP8" }),
+    effectiveLaunchQuantization: () => ({ value: "fp8", modelConfigMethod: "fp8" }),
+    resolveVllmRuntimePreset: () => ({ id: "qwen3.8-vllm-fp8", image: "vllm/qwen38:fixed", positionalModel: true, speculativeConfig: { method: "mtp", num_speculative_tokens: 3 } }),
+  });
+  const { runArgs } = buildVllmRuntimeCommand({ id: "serve-vllm", meta: {} }, {
+    model: "D:/AI/models/Qwen-Qwen3.8-27B-FP8", name: "qwen3.8-27b", port: 8000,
+    networkAccess: "local", serviceHost: "127.0.0.1", gpuDeviceIds: ["0"], dtype: "auto",
+    quantization: "fp8", loadFormat: "auto", maxModelLen: 262144, maxNumSeqs: 4,
+    gpuMemoryUtilization: 0.8, kvCacheDtype: "auto", cpuOffloadGb: 0, kvOffloadingSize: 0,
+    tensorParallelSize: 1, pipelineParallelSize: 1, dataParallelSize: 1,
+  });
+  const imageIndex = runArgs.indexOf("vllm/qwen38:fixed");
+  assert.equal(runArgs[imageIndex + 1], "/models/Qwen-Qwen3.8-27B-FP8");
+  assert.equal(runArgs.includes("--model"), false);
+  assert.ok(runArgs.includes("D:/AI/cache/vllm-qwen38:/root/.cache/vllm"));
+});

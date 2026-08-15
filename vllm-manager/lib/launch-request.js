@@ -19,6 +19,7 @@ function createVllmStartRuntimeRequest(deps) {
     inferToolCallParser,
     normalizeNetworkAccess,
     normalizeSpeculativeMode = (value) => String(value || "off").trim().toLowerCase(),
+    normalizeRuntimeEngine = (value) => String(value || "vllm").trim().toLowerCase() === "sglang" ? "sglang" : "vllm",
     checkModelCompatibility = null,
     getLanAddress,
     createJob,
@@ -37,6 +38,7 @@ function createVllmStartRuntimeRequest(deps) {
   return async function startRuntimeRequest({ body = {} } = {}) {
     const model = cleanRequired(body.model, "model");
     const name = String(body.name || deriveName(model));
+    const engine = normalizeRuntimeEngine(body.engine);
     const instanceMode = normalizeRuntimeInstanceMode(body.instanceMode);
     const instanceId = normalizeRuntimeInstanceId(body.instanceId, name);
     const containerName = buildRuntimeContainerName(CONFIG.containerName, instanceMode, instanceId);
@@ -99,6 +101,9 @@ function createVllmStartRuntimeRequest(deps) {
     const vllmApiKey = String(body.apiKey || "").trim();
     const speculativeMode = normalizeSpeculativeMode(body.speculativeMode, "off");
     const numSpeculativeTokens = positiveInt(body.numSpeculativeTokens, 1);
+    const runtimeImage = normalizeRuntimeImage(body.runtimeImage);
+    const draftModel = String(body.draftModel || "").trim();
+    const dsparkBlockSize = boundedPositiveInteger(body.dsparkBlockSize, 7, "dsparkBlockSize", 32);
     const lanAddress = getLanAddress();
     const serviceHost = networkAccess === "lan" ? lanAddress : "127.0.0.1";
     const serviceUrl = `http://${serviceHost}:${port}/v1`;
@@ -111,6 +116,8 @@ function createVllmStartRuntimeRequest(deps) {
         loadFormat,
         quantization,
         speculativeMode,
+        engine,
+        draftModel,
         remote: false,
       });
       if (!modelCompatibility?.ok) {
@@ -131,7 +138,7 @@ function createVllmStartRuntimeRequest(deps) {
 
     const gpuAdmissionRequest = {
         managerId: CONFIG.managerId,
-        engine: "vllm",
+        engine,
         instanceMode,
         instanceId,
         containerName,
@@ -173,6 +180,7 @@ function createVllmStartRuntimeRequest(deps) {
     try {
       job = createJob("serve", `Start ${name}`, {
         model,
+        engine,
         name,
         instanceMode,
         instanceId,
@@ -213,6 +221,9 @@ function createVllmStartRuntimeRequest(deps) {
         serviceUrl,
         speculativeMode,
         numSpeculativeTokens,
+        runtimeImage,
+        draftModel,
+        dsparkBlockSize,
         gpuAdmission: admission,
       });
     } catch (error) {
@@ -226,6 +237,7 @@ function createVllmStartRuntimeRequest(deps) {
 
     const runOptions = {
       model,
+      engine,
       name,
       instanceMode,
       instanceId,
@@ -267,6 +279,9 @@ function createVllmStartRuntimeRequest(deps) {
       serviceUrl,
       speculativeMode,
       numSpeculativeTokens,
+      runtimeImage,
+      draftModel,
+      dsparkBlockSize,
       modelCompatibility,
       vramReservationMb: Number(admission?.requestedTotalMb || 0),
       gpuAdmissionLeaseId: String(admission?.id || ""),
@@ -387,7 +402,19 @@ function boundedNumber(value, fallback, name, min, max) {
   return number;
 }
 
+function normalizeRuntimeImage(value) {
+  const image = String(value || "").trim();
+  if (!image) return "";
+  if (!/^[a-z0-9][a-z0-9._/:@-]{0,511}$/i.test(image)) {
+    const error = new Error("runtimeImage 必须是合法的 Docker 镜像引用，且不能包含空格或命令选项。");
+    error.status = 400;
+    throw error;
+  }
+  return image;
+}
+
 module.exports = {
   createVllmStartRuntimeRequest,
+  normalizeRuntimeImage,
   persistAsyncRuntimeFailure,
 };

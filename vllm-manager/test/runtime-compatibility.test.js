@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  DEFAULT_SGLANG_RELEASE,
   DEFAULT_VLLM_RELEASE,
   assessVllmRuntimeCompatibility,
   compareVersions,
@@ -9,16 +10,19 @@ const {
   probeNvidiaRuntimeCompatibility,
 } = require("../lib/runtime-compatibility");
 
-test("default vLLM release is pinned to the official v0.26.0 amd64 digest", () => {
-  assert.equal(DEFAULT_VLLM_RELEASE.version, "v0.26.0");
-  assert.equal(DEFAULT_VLLM_RELEASE.cudaVersion, "13.0.2");
-  assert.equal(DEFAULT_VLLM_RELEASE.torchVersion, "2.11.0");
-  assert.equal(DEFAULT_VLLM_RELEASE.transformersVersion, "5.14.1");
+test("default Qwen3.8 vLLM and SGLang releases are pinned to tested amd64 digests", () => {
+  assert.equal(DEFAULT_VLLM_RELEASE.version, "0.1.dev19754+g3a0914114");
+  assert.equal(DEFAULT_VLLM_RELEASE.cudaVersion, "13.0");
+  assert.equal(DEFAULT_VLLM_RELEASE.torchVersion, "2.13.0");
+  assert.equal(DEFAULT_VLLM_RELEASE.transformersVersion, "5.15.0");
   assert.equal(DEFAULT_VLLM_RELEASE.platform, "linux/amd64");
   assert.equal(
     defaultVllmImageReference(),
-    "vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b",
+    "vllm/vllm-openai@sha256:4a2f33a884222f7049b983263ad9976f89452bb81affecf5b67d89ad35c1bc31",
   );
+  assert.equal(DEFAULT_SGLANG_RELEASE.version, "0.5.17");
+  assert.equal(DEFAULT_SGLANG_RELEASE.transformersVersion, "5.12.1");
+  assert.equal(DEFAULT_SGLANG_RELEASE.platformDigest, "sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df");
 });
 
 test("NVIDIA compatibility probe parses driver and compute capability", async () => {

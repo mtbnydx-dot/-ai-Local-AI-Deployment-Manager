@@ -118,6 +118,13 @@
                 </div>
               </div>
               <label>
+                <span>推理引擎</span>
+                <select id="runtimeEngine" name="engine">
+                  <option value="vllm" selected>vLLM（稳定/质量优先）</option>
+                  <option value="sglang">SGLang（DSpark 极速）</option>
+                </select>
+              </label>
+              <label>
                 <span>服务名</span>
                 <input id="servedName" name="name" value="qwen3-0.6b" autocomplete="off" />
               </label>
@@ -192,11 +199,24 @@
                       <option value="auto">按模型自动（实验）</option>
                       <option value="mtp">MTP</option>
                       <option value="ngram">N-gram</option>
+                      <option value="dspark">DSpark（需 SGLang）</option>
                     </select>
                   </label>
                   <label>
                     <span>推测 token 数</span>
                     <input id="numSpeculativeTokens" name="numSpeculativeTokens" type="number" value="1" min="1" max="8" step="1" />
+                  </label>
+                  <label id="draftModelField" hidden>
+                    <span>DSpark 草稿模型</span>
+                    <input id="draftModel" name="draftModel" placeholder="留空使用本地 RadixArk-Qwen3.8-27B-DSpark" autocomplete="off" />
+                  </label>
+                  <label id="dsparkBlockSizeField" hidden>
+                    <span>DSpark block size</span>
+                    <input id="dsparkBlockSize" name="dsparkBlockSize" type="number" value="7" min="1" max="32" step="1" />
+                  </label>
+                  <label>
+                    <span>运行镜像覆盖（高级）</span>
+                    <input id="runtimeImage" name="runtimeImage" placeholder="留空使用引擎锁定镜像" autocomplete="off" />
                   </label>
                 </div>
                 <div class="context-tip-grid">
@@ -204,7 +224,7 @@
                   <div><strong>KV cache</strong><span>FP8 最省显存，长上下文优先用 FP8；auto 通常会按模型 dtype 使用更大缓存。</span></div>
                   <div><strong>Offload</strong><span>CPU/KV offload 可以换更长上下文，但会牺牲速度，先从 4-8 GB 小步尝试。</span></div>
                   <div><strong>仅语言模式</strong><span>不用图片/视频时可开启，减少多模态 encoder 和缓存开销。</span></div>
-                  <div><strong>MTP</strong><span>稳定默认关闭；“按模型自动”属于实验选项。确认基础生成正常后再显式启用，并观察接受率、显存和输出正确性。</span></div>
+                  <div><strong>MTP / DSpark</strong><span>Qwen3.8 稳定档使用 vLLM MTP-3；极速档使用 SGLang + DSpark block 7。管理器会核验原生 MTP 张量及 DSpark 草稿模型。</span></div>
                 </div>
                 <div class="context-presets" id="contextPresetButtons">
                   <button type="button" data-context-preset="4096">4K</button>
@@ -758,8 +778,11 @@
             </div>
             <form id="benchmarkForm" class="benchmark-form">
               <input id="benchmarkModel" placeholder="模型名，留空使用当前运行模型" autocomplete="off" />
-              <input id="benchmarkRequests" type="number" min="1" max="5" value="3" />
-              <input id="benchmarkMaxTokens" type="number" min="16" max="1024" value="160" />
+              <input id="benchmarkRequests" type="number" min="1" max="64" value="8" title="总请求数" />
+              <input id="benchmarkConcurrency" type="number" min="1" max="16" value="4" title="并发数" />
+              <input id="benchmarkWarmupRequests" type="number" min="0" max="4" value="1" title="预热请求数" />
+              <input id="benchmarkMaxTokens" type="number" min="16" max="8192" value="256" title="每请求最大输出 token" />
+              <label class="check-row context-check-row"><input id="benchmarkStream" type="checkbox" checked /><span>流式测速（含 TTFT）</span></label>
               <textarea id="benchmarkPrompt" rows="4">用中文简要说明本地模型是否可以稳定完成工具调用、长上下文和代码任务。</textarea>
               <button class="primary-button" type="submit"><i data-lucide="play"></i><span>开始测速</span></button>
             </form>

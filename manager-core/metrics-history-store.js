@@ -63,9 +63,13 @@ function buildMetricsHistorySample(summary = {}, options = {}) {
     },
     speculative: {
       enabled: Boolean(speculative.enabled),
+      draftCycles: finiteNumber(speculative.draftCycles),
       draftTokens: finiteNumber(speculative.draftTokens),
       acceptedTokens: finiteNumber(speculative.acceptedTokens),
       acceptanceRate: finiteNumber(speculative.acceptanceRate),
+      acceptedTokensPerCycle: finiteNumber(speculative.acceptedTokensPerCycle),
+      draftTokensPerCycle: finiteNumber(speculative.draftTokensPerCycle),
+      meanAcceptLength: finiteNumber(speculative.meanAcceptLength),
     },
   };
 }

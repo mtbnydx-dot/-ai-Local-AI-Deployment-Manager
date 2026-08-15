@@ -120,6 +120,7 @@ const profileRenderer = window.LocalAiProfileRenderer.create({
   metrics(profile) {
     const cfg = profile.config || {};
     return [
+      String(cfg.engine || "vllm").toUpperCase(),
       `${fmtTokens(cfg.maxModelLen || 0)} 上下文`,
       `${fmtTokens(cfg.maxNumSeqs || 0)} 并发`,
       `${cfg.kvCacheDtype || "auto"} KV`,
@@ -130,6 +131,7 @@ const profileRenderer = window.LocalAiProfileRenderer.create({
     const cfg = profile.config || {};
     return [
       profile.description || "无说明",
+      String(cfg.engine || "vllm").toUpperCase(),
       cfg.maxModelLen ? `${fmtTokens(cfg.maxModelLen)} 上下文` : "",
       cfg.multiGpuMode ? `${cfg.multiGpuMode} GPU` : "",
       cfg.clientPreset || "",
@@ -649,6 +651,7 @@ function renderVllmLaunchReview() {
   const network = $("#networkAccess")?.value === "lan" ? "局域网" : "仅本机";
   const instanceMode = $("#instanceMode")?.value === "parallel" ? "parallel" : "replace";
   const instanceId = $("#instanceId")?.value.trim() || name;
+  const runtimeEngine = $("#runtimeEngine")?.value === "sglang" ? "SGLang" : "vLLM";
   const transition = instanceMode === "parallel"
     ? `新增并行实例 ${instanceId}`
     : running
@@ -660,6 +663,7 @@ function renderVllmLaunchReview() {
     <div class="launch-review-head"><strong>启动前确认</strong><span>${escapeHtml(transition)}</span></div>
     <div class="launch-review-grid">
       <div><span>模型</span><strong>${escapeHtml(model)}</strong></div>
+      <div><span>引擎</span><strong>${runtimeEngine}</strong></div>
       <div><span>上下文 / 并发</span><strong>${fmtTokens(Number($("#maxModelLen")?.value || 0))} / ${fmtNumber(Number($("#maxNumSeqs")?.value || 0))}</strong></div>
       <div><span>GPU</span><strong>${escapeHtml(selectedGpus.map((gpu) => gpu.id).join(", ") || "未检测")}</strong></div>
       <div><span>量化 / KV</span><strong>${escapeHtml($("#launchQuantization")?.value || "自动")} / ${escapeHtml($("#kvCacheDtype")?.value || "auto")}</strong></div>
@@ -667,7 +671,7 @@ function renderVllmLaunchReview() {
       <div><span>实例 / 端口</span><strong>${escapeHtml(instanceMode === "parallel" ? `并行 ${instanceId}` : "替换主实例")} / ${escapeHtml($("#servicePort")?.value || "-")}</strong></div>
       <div><span>访问</span><strong>${network}${$("#vllmApiKey")?.value.trim() ? " / 已设置 Key" : " / 无 Key"}</strong></div>
     </div>
-    <p class="launch-review-note">${instanceMode === "parallel" ? "确认后保留所有现有实例并新建独立容器；请确保端口和 GPU 显存可用。表单值不会被自动改写。" : running ? "确认后只替换主 vLLM 容器；表单中的上下文、并发和模型能力选项不会再被自动改写。" : "确认后创建主实例启动任务；所有参数以本页最终值为准。"}</p>
+    <p class="launch-review-note">${instanceMode === "parallel" ? "确认后保留所有现有实例并新建独立容器；请确保端口和 GPU 显存可用。表单值不会被自动改写。" : running ? `确认后只替换主运行容器并切换到 ${runtimeEngine}；失败会自动恢复原容器。` : "确认后创建主实例启动任务；所有参数以本页最终值为准。"}</p>
   `;
 }
 
@@ -687,6 +691,7 @@ function describeEffectiveSpeculativeMode() {
   const effective = effectiveSpeculativeModeForEstimate();
   if (selected === "auto") return effective === "off" ? "自动 / 当前模型关闭" : `自动 / ${effective.toUpperCase()}`;
   if (selected === "off") return "关闭";
+  if (selected === "dspark") return `DSPARK / block ${Number($("#dsparkBlockSize")?.value || 7)}`;
   return `${selected.toUpperCase()} / ${Number($("#numSpeculativeTokens")?.value || 1)} tokens`;
 }
 
@@ -703,7 +708,8 @@ function updateLaunchActionState() {
   if (!button || button.disabled) return;
   const { running, same } = launchTransitionInfo();
   const parallel = $("#instanceMode")?.value === "parallel";
-  const label = parallel ? "新增并行实例" : running ? (same ? "重启并应用参数" : "切换并启动") : "启动 vLLM";
+  const engine = $("#runtimeEngine")?.value === "sglang" ? "SGLang" : "vLLM";
+  const label = parallel ? "新增并行实例" : running ? (same ? "重启并应用参数" : "切换并启动") : `启动 ${engine}`;
   const span = button.querySelector("span");
   if (span) span.textContent = label;
   else button.textContent = label;
@@ -727,8 +733,13 @@ async function confirmVllmLaunch(payload) {
 
 function updateLaunchOptionStates() {
   const speculativeMode = $("#speculativeMode")?.value || "off";
+  const runtimeEngine = $("#runtimeEngine")?.value || "vllm";
   const speculativeTokens = $("#numSpeculativeTokens");
-  if (speculativeTokens) speculativeTokens.disabled = speculativeMode === "auto" || speculativeMode === "off";
+  if (speculativeMode === "dspark" && runtimeEngine !== "sglang") $("#runtimeEngine").value = "sglang";
+  if (speculativeTokens) speculativeTokens.disabled = ["auto", "off", "dspark"].includes(speculativeMode);
+  const dspark = speculativeMode === "dspark";
+  if ($("#draftModelField")) $("#draftModelField").hidden = !dspark;
+  if ($("#dsparkBlockSizeField")) $("#dsparkBlockSizeField").hidden = !dspark;
   // N-gram prompt-lookup only pays off with several draft tokens. The form
   // default is 1 (the MTP default), so when the user switches to N-gram and has
   // not raised it, bump to a useful value instead of launching a no-op probe.
@@ -744,8 +755,10 @@ function updateLaunchOptionStates() {
   }
   if (speculativeNote) {
     const capability = state.modelConfig?.data?.speculative;
-    if (speculativeMode === "off" && capability?.nativeMtp) {
-      speculativeNote.textContent = `该模型声明原生 MTP（${capability.nativeMtpLayers || 1} 层），但稳定默认关闭：MTP 会增加显存和内核/量化耦合；基线生成通过后可显式开启并观察接受率。`;
+    if (speculativeMode === "dspark") {
+      speculativeNote.textContent = "DSpark 使用外部草稿模型；管理器将切到 SGLang，并校验 DSparkDraftModel、block size、FlashInfer 与 WSL feature transport。";
+    } else if (speculativeMode === "off" && capability?.nativeMtp) {
+      speculativeNote.textContent = `权重中检出 ${capability.nativeMtpTensorCount || "已打包"} 个 MTP 张量，但当前关闭推测解码。`;
     } else if (speculativeMode === "auto" && capability?.nativeMtp && !capability.enabled) {
       speculativeNote.textContent = `该模型声明原生 MTP（${capability.nativeMtpLayers || 1} 层）；自动模式因当前量化格式保持关闭，可手动选 MTP 后观察接受率。`;
     } else if (speculativeMode === "auto" && capability?.nativeMtp && capability.enabled) {
@@ -806,7 +819,7 @@ function groupContextControls() {
   const basic = createControlGroup("上下文大小", "决定最大输入窗口和本地 Claude 单路并发。", ["#maxModelLen", "#maxNumSeqs"]);
   const kv = createControlGroup("显存与 KV cache", "显存占用比例决定 KV cache 池大小；KV 精度选 FP8 更省显存。", ["#gpuMemoryUtilization", "#kvCacheDtype"]);
   const offload = createControlDisclosure("显存 offload 与多模态预留", "CPU offload 是每卡权重回退，KV offload 是总 KV 缓冲；能救容量但会拖慢。", ["#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#disablePrefixCaching", "#languageModelOnly"]);
-  const speculative = createControlGroup("推测解码", "自动档案按 checkpoint 能力启用；不稳定的量化组合保持关闭。", ["#speculativeMode", "#numSpeculativeTokens"]);
+  const speculative = createControlGroup("推测解码", "MTP 使用主模型内置张量；DSpark 使用外部草稿模型并切换到 SGLang。", ["#speculativeMode", "#numSpeculativeTokens", "#draftModelField", "#dsparkBlockSizeField", "#runtimeImage"]);
   grid.replaceChildren(basic, kv, offload, speculative);
 }
 
@@ -1152,7 +1165,7 @@ function bindEvents() {
   $("#downloadHfMirror")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadHfTransfer")?.addEventListener("change", saveDownloadQueueMode);
   $("#remoteSource")?.addEventListener("change", refreshRemoteModels);
-  ["#startModel", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#launchDtype", "#launchQuantization", "#loadFormat", "#kvCacheDtype", "#tensorParallelSize", "#pipelineParallelSize", "#dataParallelSize", "#languageModelOnly", "#speculativeMode", "#numSpeculativeTokens"].forEach((selector) => {
+  ["#startModel", "#runtimeEngine", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#launchDtype", "#launchQuantization", "#loadFormat", "#kvCacheDtype", "#tensorParallelSize", "#pipelineParallelSize", "#dataParallelSize", "#languageModelOnly", "#speculativeMode", "#numSpeculativeTokens", "#dsparkBlockSize"].forEach((selector) => {
     const node = $(selector);
     if (!node) return;
     node.addEventListener("input", updateMemoryEstimate);
@@ -1170,6 +1183,13 @@ function bindEvents() {
   $("#launchQuantization").addEventListener("change", scheduleModelConfigFetch);
   $("#loadFormat").addEventListener("change", updateGgufModeState);
   $("#speculativeMode").addEventListener("change", updateLaunchOptionStates);
+  $("#runtimeEngine")?.addEventListener("change", () => {
+    if ($("#runtimeEngine").value === "vllm" && $("#speculativeMode").value === "dspark") {
+      $("#speculativeMode").value = "mtp";
+      $("#numSpeculativeTokens").value = 3;
+    }
+    updateLaunchOptionStates();
+  });
   $("#enableAutoToolChoice").addEventListener("change", updateLaunchOptionStates);
   $("#clientPreset").addEventListener("change", () => {
     state.reasoningParserTouched = false;
@@ -2298,6 +2318,7 @@ function applyLaunchProfile(config = {}, options = {}) {
     if (element && value !== undefined && value !== null && value !== "") element.value = value;
   };
   set("#startModel", config.model);
+  set("#runtimeEngine", config.engine);
   set("#servedName", config.name);
   set("#servicePort", config.port);
   set("#maxModelLen", config.maxModelLen);
@@ -2324,6 +2345,11 @@ function applyLaunchProfile(config = {}, options = {}) {
   set("#dataParallelSize", config.dataParallelSize);
   set("#speculativeMode", config.speculativeMode === "qwen3_next_mtp" ? "mtp" : config.speculativeMode);
   set("#numSpeculativeTokens", config.numSpeculativeTokens);
+  set("#runtimeImage", config.runtimeImage);
+  set("#draftModel", config.draftModel);
+  set("#dsparkBlockSize", config.dsparkBlockSize);
+  if (Object.hasOwn(config, "runtimeImage") && $("#runtimeImage")) $("#runtimeImage").value = String(config.runtimeImage || "");
+  if (Object.hasOwn(config, "draftModel") && $("#draftModel")) $("#draftModel").value = String(config.draftModel || "");
   const checks = {
     trustRemoteCode: "#startForm [name='trustRemoteCode']",
     enableExpertParallel: "#startForm [name='enableExpertParallel']",
@@ -2335,6 +2361,7 @@ function applyLaunchProfile(config = {}, options = {}) {
     const element = $(selector);
     if (element && config[key] !== undefined) element.checked = Boolean(config[key]);
   });
+  if (config.enablePrefixCaching === true && $("#disablePrefixCaching")) $("#disablePrefixCaching").checked = false;
   if (Array.isArray(config.gpuDeviceIds) && config.gpuDeviceIds.length) {
     state.selectedGpuIds = new Set(config.gpuDeviceIds.map(String));
     state.gpuSelectionTouched = true;
@@ -2441,6 +2468,9 @@ async function startBenchmark(event) {
       body: JSON.stringify({
         model: $("#benchmarkModel").value.trim() || $("#testModel").value.trim(),
         requests: Number($("#benchmarkRequests").value || 3),
+        concurrency: Number($("#benchmarkConcurrency").value || 1),
+        warmupRequests: Number($("#benchmarkWarmupRequests").value || 0),
+        stream: Boolean($("#benchmarkStream")?.checked),
         maxTokens: Number($("#benchmarkMaxTokens").value || 160),
         prompt: $("#benchmarkPrompt").value,
         port: Number($("#servicePort").value || 8000),
@@ -3302,7 +3332,7 @@ function estimateArchitecture(paramsB, model) {
   const lower = String(model || "").toLowerCase();
   const qwenLike = lower.includes("qwen");
   const llamaLike = lower.includes("llama") || lower.includes("aeon");
-  if ((lower.includes("qwen3.6") || lower.includes("qwen3_5") || lower.includes("qwen3-5")) && paramsB >= 20 && paramsB <= 35) {
+  if ((lower.includes("qwen3.6") || lower.includes("qwen3.8") || lower.includes("qwen3_5") || lower.includes("qwen3-5")) && paramsB >= 20 && paramsB <= 35) {
     return {
       layers: 64,
       kvLayers: 16,
@@ -3381,7 +3411,7 @@ function inferReasoningParser(model, preset) {
   const text = String(model || "").toLowerCase();
   if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "nano_v3";
   if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) return "gemma4";
-  if (text.includes("qwen3") || text.includes("qwen-3") || text.includes("qwen3.5") || text.includes("qwen3.6")) return "qwen3";
+  if (text.includes("qwen3") || text.includes("qwen-3") || text.includes("qwen3.5") || text.includes("qwen3.6") || text.includes("qwen3.8")) return "qwen3";
   if (text.includes("deepseek") && text.includes("r1")) return "deepseek_r1";
   if (text.includes("deepseek") && text.includes("v3")) return "deepseek_v3";
   if (text.includes("gpt-oss") || text.includes("gptoss")) return "gptoss";
@@ -3421,7 +3451,7 @@ function inferToolCallParser(model, preset) {
   const text = `${model || ""} ${preset || ""}`.toLowerCase();
   if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "qwen3_coder";
   if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) return "gemma4";
-  if (text.includes("qwen3.6") || text.includes("qwen3-") || text.includes("qwen/qwen3") || text.includes("qwen3_coder") || text.includes("qwen3-coder")) return "qwen3_coder";
+  if (text.includes("qwen3.6") || text.includes("qwen3.8") || text.includes("qwen3-") || text.includes("qwen/qwen3") || text.includes("qwen3_coder") || text.includes("qwen3-coder")) return "qwen3_coder";
   if (text.includes("qwen2.5") || text.includes("qwq") || text.includes("qwen")) return "hermes";
   if (text.includes("deepseek")) return "deepseek_v3";
   if (text.includes("mistral")) return "mistral";
@@ -4386,7 +4416,7 @@ function renderBenchmarkProgress(job) {
   const percent = Number(progress.percent ?? (job.status === "success" ? 100 : job.status === "failed" ? 100 : 0));
   const fillClass = job.status === "failed" ? "fail" : job.status === "success" ? "ok" : "";
   const detail = benchmark.avgTokensPerSecond
-    ? `${benchmark.avgTokensPerSecond.toFixed(2)} tok/s · 平均 ${fmtMs(benchmark.avgMs)}`
+    ? `${Number(benchmark.wallTokensPerSecond || benchmark.avgTokensPerSecond).toFixed(2)} tok/s · C${benchmark.concurrency || 1} · TTFT ${fmtMs(benchmark.avgTtftMs || 0)}`
     : progress.detail || "等待测速结果";
   return `
     <div class="job-progress">
@@ -4602,6 +4632,7 @@ function validateVllmLaunchForm(form) {
   if (!integer("#pipelineParallelSize", "流水并行", 1, 1024)) return false;
   if (!integer("#dataParallelSize", "数据并行", 1, 1024)) return false;
   if (!integer("#numSpeculativeTokens", "推测 token 数", 1, 256)) return false;
+  if (!integer("#dsparkBlockSize", "DSpark block size", 1, 32)) return false;
   const utilization = Number($("#gpuMemoryUtilization")?.value);
   if (!Number.isFinite(utilization) || utilization < 0.1 || utilization > 0.98) return fail($("#gpuMemoryUtilization"), "显存分配比例必须在 0.1–0.98 之间。");
   if (!nonNegative("#cpuOffloadGb", "CPU offload", 4096)) return false;
@@ -4644,6 +4675,10 @@ function buildVllmLaunchPayload(formElement) {
   payload.dataParallelSize = Number(payload.dataParallelSize || 1);
   payload.speculativeMode = String(payload.speculativeMode || "off");
   payload.numSpeculativeTokens = Number(payload.numSpeculativeTokens || 1);
+  payload.engine = payload.engine === "sglang" ? "sglang" : "vllm";
+  payload.runtimeImage = String(payload.runtimeImage || "").trim();
+  payload.draftModel = String(payload.draftModel || "").trim();
+  payload.dsparkBlockSize = Number(payload.dsparkBlockSize || 7);
   return payload;
 }
 

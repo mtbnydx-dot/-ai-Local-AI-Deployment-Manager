@@ -153,8 +153,8 @@ test("model-check reads local Muse Glimmer config and reports a blocking vLLM fi
     assert.equal(report.ok, false);
     const finding = report.findings.find((item) => item.title === "Muse Glimmer 尚不支持 vLLM");
     assert.equal(finding?.severity, "fail");
-    assert.match(finding.detail, /vLLM v0\.26\.0/);
-    assert.match(finding.detail, /Transformers 5\.14\.1/);
+    assert.match(finding.detail, /vLLM 0\.1\.dev19754\+g3a0914114/);
+    assert.match(finding.detail, /Transformers 5\.15\.0/);
     assert.match(finding.detail, /llama-manager/);
     assert.match(finding.detail, /GGUF/);
   } finally {
@@ -163,7 +163,8 @@ test("model-check reads local Muse Glimmer config and reports a blocking vLLM fi
 });
 
 test("runtime image metadata declares the pinned Transformers versions", () => {
-  assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.image)?.transformersVersion, "5.14.1");
+  assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.image)?.transformersVersion, "5.15.0");
+  assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.sglangImage)?.version, "0.5.17");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.qwenMoeImage)?.transformersVersion, "5.12.1");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.gemmaImage)?.transformersVersion, "5.10.2");
 });
@@ -188,7 +189,7 @@ test("model-check reports an explicit warning when the Muse risk override is ena
     const warning = report.findings.find((item) => item.title === "Muse Glimmer 高风险绕过已启用");
     assert.equal(warning?.severity, "warn");
     assert.match(warning.detail, /VLLM_ALLOW_MUSE_GLIMMER=1/);
-    assert.match(warning.detail, /Transformers 5\.14\.1/);
+    assert.match(warning.detail, /Transformers 5\.15\.0/);
     assert.equal(report.findings.some((item) => item.title === "Muse Glimmer 尚不支持 vLLM" && item.severity === "fail"), false);
   } finally {
     if (previous === undefined) delete process.env.VLLM_ALLOW_MUSE_GLIMMER;
@@ -432,10 +433,89 @@ test("model config capability summary keeps automatic MTP off for Qwen ModelOpt 
     quantization_config: { quant_method: "modelopt" },
   }, "nv-community/Qwen3.6-35B-A3B-NVFP4");
 
-  assert.equal(summary.speculative.nativeMtp, true);
+  assert.equal(summary.speculative.nativeMtp, false);
+  assert.equal(summary.speculative.nativeMtpLayers, 1);
+  assert.equal(summary.speculative.nativeMtpTensorCount, 0);
   assert.equal(summary.speculative.enabled, false);
   assert.equal(summary.speculative.mode, "off");
   assert.match(summary.speculative.reason, /MTP/i);
+});
+
+test("model config capability summary enables MTP only when the local checkpoint contains MTP tensors", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vllm-manager-qwen38-mtp-"));
+  try {
+    await fs.writeFile(path.join(dir, "model.safetensors.index.json"), JSON.stringify({
+      weight_map: {
+        "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00002.safetensors",
+        "mtp.layers.0.self_attn.q_proj.weight": "model-00002-of-00002.safetensors",
+      },
+    }));
+    const summary = manager.summarizeModelConfigCapabilities({
+      architectures: ["Qwen3_8ForConditionalGeneration"],
+      model_type: "qwen3_8",
+      mtp_num_hidden_layers: 1,
+      quantization_config: { quant_method: "fp8" },
+    }, "Qwen/Qwen3.8-27B-FP8", dir);
+    assert.equal(summary.speculative.nativeMtp, true);
+    assert.equal(summary.speculative.nativeMtpTensorCount, 1);
+    assert.equal(summary.speculative.enabled, true);
+    assert.equal(summary.speculative.mode, "mtp");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Qwen3.8 detection does not confuse Qwen3-8B and DSpark container paths still require local evidence", () => {
+  assert.equal(manager.isQwen38Model("Qwen/Qwen3.8-27B"), true);
+  assert.equal(manager.isQwen38Model("Qwen/Qwen3-8B"), false);
+  assert.equal(manager.resolveDsparkDraftModel("/models/not-a-real-dspark-checkpoint").ok, false);
+});
+
+test("runtime metrics use vLLM counters and SGLang native speculative gauges without mixing semantics", () => {
+  const vllmMetrics = manager.parsePrometheusMetrics([
+    'vllm:prompt_tokens_total{model_name="qwen"} 1000',
+    'vllm:generation_tokens_total{model_name="qwen"} 500',
+    'vllm:request_success_total{model_name="qwen",finished_reason="stop"} 5',
+    'vllm:prefix_cache_queries_total{model_name="qwen"} 1000',
+    'vllm:prefix_cache_hits_total{model_name="qwen"} 600',
+    'vllm:spec_decode_num_drafts_total{model_name="qwen"} 100',
+    'vllm:spec_decode_num_draft_tokens_total{model_name="qwen"} 300',
+    'vllm:spec_decode_num_accepted_tokens_total{model_name="qwen"} 240',
+    'vllm:cache_config_info{model_name="qwen",block_size="16",mamba_block_size="32"} 1',
+  ].join("\n"));
+  const [vllm] = manager.buildModelStats(vllmMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, { updateSamples: false });
+  assert.equal(vllm.cache.prefixHitRate, 0.6);
+  assert.equal(vllm.cache.alignmentBlockSize, 32);
+  assert.equal(vllm.speculative.acceptanceRate, 0.8);
+  assert.equal(vllm.speculative.acceptedTokensPerCycle, 2.4);
+  assert.equal(vllm.speculative.draftTokensPerCycle, 3);
+  assert.equal(vllm.speculative.source, "vllm_counters");
+
+  const sglangMetrics = manager.parsePrometheusMetrics([
+    'sglang:prompt_tokens_total{model_name="qwen"} 100',
+    'sglang:cached_tokens_total{model_name="qwen"} 25',
+    'sglang:generation_tokens_total{model_name="qwen"} 50',
+    'sglang:num_requests_total{model_name="qwen"} 4',
+    'sglang:num_aborted_requests_total{model_name="qwen"} 1',
+    'sglang:spec_verify_calls_total{model_name="qwen"} 10',
+    'sglang:spec_accept_rate{model_name="qwen"} 0.75',
+    'sglang:spec_accept_length{model_name="qwen"} 4.2',
+    'sglang:spec_cap_length{model_name="qwen"} 5',
+    'sglang:spec_block_accept_length{model_name="qwen"} 4.5',
+    'sglang:spec_num_steps{model_name="qwen"} 1',
+    'sglang:spec_num_draft_tokens{model_name="qwen"} 7',
+  ].join("\n"));
+  const [sglang] = manager.buildModelStats(sglangMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, { updateSamples: false });
+  assert.equal(sglang.requests.total, 4);
+  assert.equal(sglang.requests.aborted, 1);
+  assert.equal(sglang.requests.success, 3);
+  assert.equal(sglang.cache.prefixHitRate, 0.25);
+  assert.equal(sglang.cache.source, "sglang_cached_token_counters");
+  assert.equal(sglang.speculative.enabled, true);
+  assert.equal(sglang.speculative.acceptanceRate, 0.75);
+  assert.equal(sglang.speculative.meanAcceptLength, 4.2);
+  assert.equal(sglang.speculative.configuredDraftTokens, 7);
+  assert.equal(sglang.speculative.source, "sglang_gauges");
 });
 
 test("local model config request accepts the frontend local source", async () => {

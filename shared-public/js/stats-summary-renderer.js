@@ -27,6 +27,7 @@
       kvLabel: "活跃 KV cache",
       kvDetail: "只表示当前正在推理的请求；聊天历史在 Open WebUI 侧保存",
       prefixCacheLabel: "Prefix cache 命中",
+      speculativeLabel: "推测解码接受率",
       uptimeLabel: "运行时长",
       lifetimeLabel: "生命周期",
       includeRuntimeModels: false,
@@ -44,6 +45,8 @@
       const speed = totals.speed || {};
       const latency = totals.latency || {};
       const context = totals.context || {};
+      const cache = totals.cache || {};
+      const speculative = totals.speculative || {};
       const cards = [
         statsMetric(settings.totalTokensLabel, fmtTokens(tokens.total), `${fmtTokens(tokens.prompt)} ${settings.tokenDetailInput} · ${fmtTokens(tokens.generation)} ${settings.tokenDetailOutput}`, settings.heroFirstMetric ? "stats-metric-hero" : ""),
         statsMetric(settings.requestLabel, fmtTokens(requests.total), requestDetail(requests)),
@@ -62,8 +65,28 @@
       );
 
       if (settings.includePrefixCache) {
-        const cacheHit = tokens.prompt ? Number(tokens.cachedPrompt || 0) / tokens.prompt : 0;
-        cards.push(statsMetric(settings.prefixCacheLabel, fmtPct(cacheHit), `${fmtTokens(tokens.cachedPrompt || 0)} / ${fmtTokens(tokens.prompt)} 输入 token 命中`));
+        const hasNativePrefixCounters = Number(cache.prefixQueries || 0) > 0;
+        const cacheHit = hasNativePrefixCounters
+          ? Number(cache.prefixHitRate || 0)
+          : tokens.prompt ? Number(tokens.cachedPrompt || 0) / tokens.prompt : 0;
+        const hits = hasNativePrefixCounters ? cache.prefixHits : tokens.cachedPrompt;
+        const queries = hasNativePrefixCounters ? cache.prefixQueries : tokens.prompt;
+        const alignment = cache.alignmentBlockSize
+          ? ` · ${cache.alignmentRequired ? "Mamba 对齐" : "block"} ${fmtTokens(cache.alignmentBlockSize)}`
+          : "";
+        const cacheSource = cache.source === "sglang_latest_batch_gauge" ? " · 最近 prefill 快照" : "";
+        cards.push(statsMetric(settings.prefixCacheLabel, fmtPct(cacheHit), `${fmtTokens(hits || 0)} / ${fmtTokens(queries || 0)} 输入 token 命中${alignment}${cacheSource}`));
+      }
+
+      if (speculative.enabled) {
+        const speculativeDetail = Number(speculative.meanAcceptLength || 0) > 0
+          ? `${Number(speculative.meanAcceptLength).toFixed(2)} 平均接受长度（含 bonus） · ${fmtTokens(speculative.draftCycles || 0)} verify 轮`
+          : `${Number(speculative.acceptedTokensPerCycle || 0).toFixed(2)} 接受 token/轮 · ${fmtTokens(speculative.draftCycles || 0)} 轮`;
+        cards.push(statsMetric(
+          settings.speculativeLabel,
+          fmtPct(speculative.acceptanceRate || 0),
+          speculativeDetail,
+        ));
       }
 
       cards.push(statsMetric(settings.uptimeLabel, stats.uptimeSeconds ? formatDuration(stats.uptimeSeconds) : "-", `${settings.lifetimeLabel} ${fmtRate(speed.lifetimeTokensPerSecond, " tok/s")}`));

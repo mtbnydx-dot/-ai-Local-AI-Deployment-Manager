@@ -1,18 +1,32 @@
 const DEFAULT_VLLM_RELEASE = Object.freeze({
-  version: "v0.26.0",
+  version: "0.1.dev19754+g3a0914114",
   repository: "vllm/vllm-openai",
-  manifestDigest: "sha256:ffb2d59b1c059a5bd8d781320c9f5189de8293693b7d95da54befddaa54abf52",
-  platformDigest: "sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b",
+  manifestDigest: "",
+  platformDigest: "sha256:4a2f33a884222f7049b983263ad9976f89452bb81affecf5b67d89ad35c1bc31",
   platform: "linux/amd64",
-  cudaVersion: "13.0.2",
-  torchVersion: "2.11.0",
-  transformersVersion: "5.14.1",
+  cudaVersion: "13.0",
+  torchVersion: "2.13.0",
+  transformersVersion: "5.15.0",
   minimumComputeCapability: "7.5",
   minimumBlackwellCudaVersion: "12.8",
   minimumDriverVersions: Object.freeze({
     win32: "580.88",
     linux: "580.65.06",
   }),
+});
+
+const DEFAULT_SGLANG_RELEASE = Object.freeze({
+  version: "0.5.17",
+  repository: "lmsysorg/sglang",
+  manifestDigest: "",
+  platformDigest: "sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df",
+  platform: "linux/amd64",
+  cudaVersion: "13.0",
+  torchVersion: "2.11.0",
+  transformersVersion: "5.12.1",
+  minimumComputeCapability: "7.5",
+  minimumBlackwellCudaVersion: "12.8",
+  minimumDriverVersions: DEFAULT_VLLM_RELEASE.minimumDriverVersions,
 });
 
 function defaultVllmImageReference(release = DEFAULT_VLLM_RELEASE) {
@@ -223,6 +237,7 @@ function finalize(findings, imageReference, gpus, imageMetadata) {
 }
 
 module.exports = {
+  DEFAULT_SGLANG_RELEASE,
   DEFAULT_VLLM_RELEASE,
   assessVllmRuntimeCompatibility,
   compareVersions,

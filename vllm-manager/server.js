@@ -10,10 +10,11 @@ const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
-const { createVllmRuntimeCommandBuilder } = require("./lib/runtime-command");
+const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService } = require("./lib/remote-models");
 const {
+  DEFAULT_SGLANG_RELEASE,
   DEFAULT_VLLM_RELEASE,
   assessVllmRuntimeCompatibility,
   defaultVllmImageReference,
@@ -87,6 +88,7 @@ const DEFAULT_VLLM_IMAGE = process.env.VLLM_IMAGE_VERSION
   : defaultVllmImageReference();
 const DEFAULT_GEMMA_VLLM_IMAGE = "vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b";
 const DEFAULT_QWEN_MOE_VLLM_IMAGE = "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb";
+const DEFAULT_SGLANG_IMAGE = `${DEFAULT_SGLANG_RELEASE.repository}@${DEFAULT_SGLANG_RELEASE.platformDigest}`;
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 const MANAGER_LABEL_KEY = "ai.manager";
@@ -127,10 +129,13 @@ const CONFIG = {
   claude3pConfigDir: process.env.AI_CLAUDE_3P_CONFIG_DIR || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "Claude-3p", "configLibrary"),
   modelsRoot: process.env.VLLM_MODELS_ROOT || defaultAiPath("models"),
   hfCache: process.env.HF_HOME || defaultAiPath("cache", "huggingface"),
+  vllmCache: process.env.VLLM_CACHE_ROOT || defaultAiPath("cache", "vllm-qwen38"),
+  sglangCache: process.env.SGLANG_CACHE_ROOT || defaultAiPath("cache", "sglang-qwen38"),
   image: process.env.VLLM_IMAGE || DEFAULT_VLLM_IMAGE,
   imagePlatform: process.env.VLLM_IMAGE_PLATFORM || DEFAULT_VLLM_RELEASE.platform,
   gemmaImage: process.env.VLLM_GEMMA_IMAGE || DEFAULT_GEMMA_VLLM_IMAGE,
   qwenMoeImage: process.env.VLLM_QWEN_MOE_IMAGE || DEFAULT_QWEN_MOE_VLLM_IMAGE,
+  sglangImage: process.env.SGLANG_IMAGE || DEFAULT_SGLANG_IMAGE,
   containerName: process.env.VLLM_CONTAINER_NAME || "vllm-local",
   managerId: process.env.VLLM_MANAGER_ID || "vllm-manager",
   defaultPort: Number(process.env.VLLM_PORT || 8000),
@@ -550,7 +555,7 @@ const managerLifecycle = core.createManagerLifecycle({
   managerId: CONFIG.managerId,
   listenMessage: `vLLM Manager listening on http://${HOST}:${PORT}`,
   beforeStart: async () => {
-    await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, path.dirname(CONFIG.jobsLedger));
+    await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, CONFIG.vllmCache, CONFIG.sglangCache, path.dirname(CONFIG.jobsLedger));
   },
   afterPreparePid: async () => {
     await loadJobsLedgerIntoMemory();
@@ -638,6 +643,10 @@ core.registerManagerRoutes(app, {
       cudaVersion: DEFAULT_VLLM_RELEASE.cudaVersion,
       torchVersion: DEFAULT_VLLM_RELEASE.torchVersion,
     },
+    runtimeEngines: [
+      { id: "vllm", label: "vLLM Qwen3.8", image: CONFIG.image, stable: true },
+      { id: "sglang", label: "SGLang + DSpark", image: CONFIG.sglangImage, stable: false },
+    ],
   }),
   isLocalRequest,
   shutdownManager,
@@ -1007,6 +1016,7 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   inferToolCallParser,
   normalizeNetworkAccess,
   normalizeSpeculativeMode,
+  normalizeRuntimeEngine,
   checkModelCompatibility,
   getLanAddress,
   createJob,
@@ -1193,6 +1203,12 @@ function knownRuntimeImageMetadata(imageReference) {
     `${DEFAULT_VLLM_RELEASE.repository}:${DEFAULT_VLLM_RELEASE.version}`.toLowerCase(),
   ]);
   if (defaultReferences.has(image)) return DEFAULT_VLLM_RELEASE;
+  const sglangReferences = new Set([
+    DEFAULT_SGLANG_IMAGE.toLowerCase(),
+    `${DEFAULT_SGLANG_RELEASE.repository}:${DEFAULT_SGLANG_RELEASE.version}`.toLowerCase(),
+    "lmsysorg/sglang:latest-runtime",
+  ]);
+  if (sglangReferences.has(image)) return DEFAULT_SGLANG_RELEASE;
   if (image === DEFAULT_QWEN_MOE_VLLM_IMAGE.toLowerCase()) {
     return {
       ...DEFAULT_VLLM_RELEASE,
@@ -1232,6 +1248,7 @@ function normalizeLaunchProfile(value) {
 function normalizeLaunchConfig(config = {}) {
   return {
     model: String(config.model || ""),
+    engine: normalizeRuntimeEngine(config.engine),
     name: String(config.name || ""),
     port: Number(config.port || CONFIG.defaultPort),
     maxModelLen: Number(config.maxModelLen || 8192),
@@ -1264,6 +1281,9 @@ function normalizeLaunchConfig(config = {}) {
     enableExpertParallel: Boolean(config.enableExpertParallel),
     speculativeMode: normalizeSpeculativeMode(config.speculativeMode),
     numSpeculativeTokens: positiveInt(config.numSpeculativeTokens, 1),
+    runtimeImage: String(config.runtimeImage || ""),
+    draftModel: String(config.draftModel || ""),
+    dsparkBlockSize: Math.min(32, Math.max(1, positiveInt(config.dsparkBlockSize, 7))),
   };
 }
 
@@ -1280,9 +1300,11 @@ async function checkModelCompatibility(input = {}) {
   const model = cleanRequired(input.model, "model");
   const loadFormat = normalizeLoadFormat(input.loadFormat || "auto");
   const clientPreset = normalizeClientPreset(input.clientPreset || "generic");
+  const runtimeEngine = normalizeRuntimeEngine(input.engine);
   const findings = [];
   const recommendations = normalizeLaunchConfig({
     model,
+    engine: runtimeEngine,
     name: deriveName(model),
     port: input.port || CONFIG.defaultPort,
     maxModelLen: input.maxModelLen || 32768,
@@ -1305,7 +1327,7 @@ async function checkModelCompatibility(input = {}) {
     quantization: input.quantization,
     speculativeMode: input.speculativeMode || "off",
     numSpeculativeTokens: input.numSpeculativeTokens,
-    runtimeMetadata: knownRuntimeImageMetadata(CONFIG.image),
+    runtimeMetadata: knownRuntimeImageMetadata(String(input.runtimeImage || "").trim() || (runtimeEngine === "sglang" ? CONFIG.sglangImage : CONFIG.image)),
     allowMuseGlimmer: envFlagEnabled(process.env.VLLM_ALLOW_MUSE_GLIMMER),
   });
   recommendations.speculativeMode = capabilities.speculativeConfig
@@ -1317,8 +1339,13 @@ async function checkModelCompatibility(input = {}) {
   if (capabilities.enableAutoToolChoice) recommendations.enableAutoToolChoice = true;
   if (capabilities.nativeMtp.supported) {
     findings.push(finding("ok", "原生 MTP", capabilities.speculativeConfig
-      ? `模型声明 ${capabilities.nativeMtp.layers || 1} 层 MTP；本次显式/自动档案将使用 ${capabilities.speculativeConfig.method} / ${capabilities.speculativeConfig.num_speculative_tokens} tokens。`
-      : `模型声明原生 MTP，但稳定默认关闭，以减少显存占用和量化/内核耦合；基线生成通过后可显式开启。${capabilities.notes[0] ? ` ${capabilities.notes[0]}` : ""}`));
+      ? `权重索引检出 ${capabilities.nativeMtp.tensorCount || "已打包"} 个 MTP 张量；本次将使用 ${capabilities.speculativeConfig.method} / ${capabilities.speculativeConfig.num_speculative_tokens} tokens。`
+      : `权重索引检出 ${capabilities.nativeMtp.tensorCount || "已打包"} 个 MTP 张量，但当前档案关闭推测解码。${capabilities.notes[0] ? ` ${capabilities.notes[0]}` : ""}`));
+  } else if (capabilities.nativeMtp.declared) {
+    findings.push(finding("warn", "MTP 配置与权重不一致", "config.json 声明了 mtp_num_hidden_layers，但权重索引/头部没有检出 mtp.* 张量；自动 MTP 保持关闭。"));
+  }
+  if (["mtp", "qwen3_next_mtp"].includes(normalizeSpeculativeMode(input.speculativeMode)) && !capabilities.nativeMtp.supported) {
+    findings.push(finding("fail", "MTP 权重缺失", "当前 checkpoint 没有可验证的 mtp.* 张量；为避免加载失败，管理器不会仅凭 config 字段启动原生 MTP。"));
   }
   if (capabilities.unsupportedReason) {
     findings.push(finding(
@@ -1384,8 +1411,40 @@ async function checkModelCompatibility(input = {}) {
     recommendations.reasoningParser = "qwen3";
     recommendations.toolCallParser = "qwen3_coder";
   }
-  const qwen36MoeNvfp4 = isQwen36MoeNvfp4Model(model, localConfig);
-  const qwen36DenseNvfp4 = isQwen36DenseNvfp4Model(model, localConfig);
+  const qwen38 = isQwen38Model(model, localConfig);
+  if (qwen38) {
+    findings.push(finding("ok", "Qwen3.8 专用运行时", runtimeEngine === "sglang"
+      ? `将使用 SGLang ${DEFAULT_SGLANG_RELEASE.version} / FlashInfer / CPU feature transport。`
+      : `将使用已验证的 Qwen3.8 vLLM ${DEFAULT_VLLM_RELEASE.version}。`));
+    recommendations.engine = runtimeEngine;
+    recommendations.maxModelLen = Number(input.maxModelLen || 262144);
+    recommendations.maxNumSeqs = Number(input.maxNumSeqs || 4);
+    recommendations.gpuMemoryUtilization = Number(input.gpuMemoryUtilization || 0.8);
+    recommendations.kvCacheDtype = "auto";
+    recommendations.languageModelOnly = runtimeEngine === "vllm";
+    recommendations.enablePrefixCaching = true;
+    recommendations.reasoningParser = "qwen3";
+    recommendations.toolCallParser = "qwen3_coder";
+  }
+  if (normalizeSpeculativeMode(input.speculativeMode) === "dspark") {
+    const draft = resolveDsparkDraftModel(input.draftModel);
+    if (runtimeEngine !== "sglang") {
+      findings.push(finding("fail", "vLLM DSpark 在本机不可用", "已实测 V2 runner 因 WSL UVA 失败，V1 会错误解析该 RadixArk checkpoint；请选择 SGLang。"));
+    } else if (!qwen38) {
+      findings.push(finding("fail", "DSpark 主模型不匹配", "当前 DSpark 档只对 Qwen3.8 主模型开放。"));
+    } else if (!draft.ok) {
+      findings.push(finding("fail", "DSpark 草稿模型不可用", draft.reason));
+    } else {
+      findings.push(finding("ok", "DSpark 草稿模型", `${draft.path} · block ${Math.min(32, Math.max(1, positiveInt(input.dsparkBlockSize, 7)))}`));
+      recommendations.draftModel = draft.path;
+      recommendations.dsparkBlockSize = Math.min(32, Math.max(1, positiveInt(input.dsparkBlockSize, 7)));
+      recommendations.speculativeMode = "dspark";
+    }
+  } else if (runtimeEngine === "sglang" && normalizeSpeculativeMode(input.speculativeMode) !== "off") {
+    findings.push(finding("fail", "SGLang 推测模式未开放", "SGLang 档当前只支持 off 或 dspark；请选择 DSpark 极速方案，或切回 vLLM 使用 MTP。"));
+  }
+  const qwen36MoeNvfp4 = !qwen38 && isQwen36MoeNvfp4Model(model, localConfig);
+  const qwen36DenseNvfp4 = !qwen38 && isQwen36DenseNvfp4Model(model, localConfig);
   if (qwen36MoeNvfp4 || qwen36DenseNvfp4) {
     findings.push(finding("warn", "Qwen3.6 / NVFP4 运行时", `该模型卡建议使用 vLLM nightly，并设置 --max-num-batched-tokens 8192；固定旧版镜像可能在 ModelOpt 权重布局处失败（例如 scale 名称或维度不匹配）。管理器启动时会自动使用 ${CONFIG.qwenMoeImage} 并补齐这些专用参数。`));
     recommendations.quantization = "modelopt";
@@ -1596,7 +1655,7 @@ async function sampleMetricsHistory() {
     live,
     totals: live.totals,
     models: live.models,
-  });
+  }, { engine: normalizeRuntimeEngine(container.labels?.[MANAGER_ENGINE_LABEL_KEY]) });
 }
 
 async function inspectAutomationRules() {
@@ -2421,6 +2480,8 @@ function summarizeModelConfigCapabilities(raw, model, localPath = "", quantizati
       numSpeculativeTokens: capabilities.speculativeConfig?.num_speculative_tokens || 1,
       nativeMtp: Boolean(capabilities.nativeMtp?.supported),
       nativeMtpLayers: Number(capabilities.nativeMtp?.layers || 0),
+      nativeMtpTensorCount: Number(capabilities.nativeMtp?.tensorCount || 0),
+      nativeMtpEvidence: String(capabilities.nativeMtp?.evidence || ""),
       reason: capabilities.notes.find((note) => /MTP|Speculative decoding/i.test(note)) || "",
     },
     recommendedReasoningParser: capabilities.reasoningParser || "",
@@ -2576,7 +2637,7 @@ function inferToolCallParser(model, preset = "generic") {
   if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) {
     return "gemma4";
   }
-  if (text.includes("qwen3.6") || text.includes("qwen3-") || text.includes("qwen/qwen3") || text.includes("qwen3_coder") || text.includes("qwen3-coder")) {
+  if (text.includes("qwen3.6") || text.includes("qwen3.8") || text.includes("qwen3-") || text.includes("qwen/qwen3") || text.includes("qwen3_coder") || text.includes("qwen3-coder")) {
     return "qwen3_coder";
   }
   if (text.includes("qwen2.5") || text.includes("qwq") || text.includes("qwen")) return "hermes";
@@ -2719,6 +2780,42 @@ function isQwen36DenseNvfp4Model(model, config = null) {
   return qwen36Hybrid && !qwen36Moe && modeloptNvfp4;
 }
 
+function isQwen38Model(model, config = null) {
+  const text = String(model || "").toLowerCase();
+  const architectures = Array.isArray(config?.architectures) ? config.architectures.join(" ").toLowerCase() : "";
+  return /qwen3\.8(?:[^0-9]|$)/.test(text) || architectures.includes("qwen3_8");
+}
+
+function isQwen38Nvfp4Model(model, config = null) {
+  if (!isQwen38Model(model, config)) return false;
+  const quantization = JSON.stringify(config?.quantization_config || {}).toLowerCase();
+  return /nvfp4|fp4/.test(String(model || "").toLowerCase())
+    || quantization.includes("nvfp4")
+    || quantization.includes("nvfp4-pack-quantized");
+}
+
+function resolveDsparkDraftModel(value = "") {
+  const requested = String(value || "").trim();
+  const candidate = requested.startsWith("/models/")
+    ? path.join(CONFIG.modelsRoot, requested.slice("/models/".length))
+    : requested || path.join(CONFIG.modelsRoot, "RadixArk-Qwen3.8-27B-DSpark");
+  const resolved = path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(CONFIG.modelsRoot, candidate);
+  const root = path.resolve(CONFIG.modelsRoot);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return { path: resolved, ok: false, reason: `DSpark 草稿模型必须位于 ${CONFIG.modelsRoot} 内。` };
+  }
+  const config = readLocalModelConfig(resolved);
+  const architectures = Array.isArray(config?.architectures) ? config.architectures.map(String) : [];
+  if (!fs.existsSync(resolved) || !config) {
+    return { path: resolved, ok: false, reason: `未找到 DSpark 草稿模型或 config.json：${resolved}` };
+  }
+  if (!architectures.some((name) => /DSparkDraftModel/i.test(name))) {
+    return { path: resolved, ok: false, reason: `草稿模型不是 DSparkDraftModel：${resolved}` };
+  }
+  return { path: resolved, ok: true, reason: "" };
+}
+
 function selectedHostGpus(opts = {}) {
   const gpus = Array.isArray(opts.hostGpus) ? opts.hostGpus : [];
   const selectedIds = new Set(normalizeGpuIds(opts.gpuDeviceIds || []).map(String));
@@ -2753,7 +2850,10 @@ function qwenMoeNvfp4BackendValue(opts = {}) {
 }
 
 function resolveVllmRuntimePreset(opts = {}, launch = {}) {
+  const runtimeEngine = normalizeRuntimeEngine(opts.engine);
   const localConfig = readLocalModelConfig(launch.localPath);
+  const requestedRuntimeImage = String(opts.runtimeImage || "").trim();
+  const baseRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang" ? CONFIG.sglangImage : CONFIG.image);
   const capabilities = resolveVllmModelCapabilities({
     model: opts.model || launch.modelArg,
     localPath: launch.localPath,
@@ -2761,7 +2861,7 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
     quantization: opts.quantization,
     speculativeMode: opts.speculativeMode,
     numSpeculativeTokens: opts.numSpeculativeTokens,
-    runtimeMetadata: knownRuntimeImageMetadata(CONFIG.image),
+    runtimeMetadata: knownRuntimeImageMetadata(baseRuntimeImage),
     allowMuseGlimmer: envFlagEnabled(process.env.VLLM_ALLOW_MUSE_GLIMMER),
   });
   const withCapabilities = (preset = {}) => {
@@ -2789,6 +2889,74 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
       capabilities,
     };
   };
+  if (runtimeEngine === "sglang") {
+    const sglangSpeculativeMode = normalizeSpeculativeMode(opts.speculativeMode);
+    const dspark = sglangSpeculativeMode === "dspark";
+    const draft = dspark ? resolveDsparkDraftModel(opts.draftModel) : { path: "", ok: true, reason: "" };
+    const qwen38 = isQwen38Model(opts.model || launch.modelArg, localConfig);
+    return withCapabilities({
+      id: dspark ? "qwen3.8-sglang-dspark" : "sglang-openai-runtime",
+      label: dspark ? "Qwen3.8 / SGLang / DSpark" : "SGLang OpenAI runtime",
+      engine: "sglang",
+      image: baseRuntimeImage,
+      forceTrustRemoteCode: qwen38,
+      attentionBackend: qwen38 ? "flashinfer" : "",
+      reasoningParser: qwen38 ? "qwen3" : capabilities.reasoningParser,
+      toolCallParser: qwen38 ? "qwen3_coder" : capabilities.toolCallParser,
+      enableAutoToolChoice: Boolean(qwen38 || capabilities.enableAutoToolChoice),
+      chunkedPrefillSize: qwen38 ? 8192 : undefined,
+      mambaSchedulerStrategy: qwen38 ? "extra_buffer" : "",
+      disablePrefillCudaGraph: qwen38,
+      mmFeatureTransport: qwen38 ? "cpu" : "",
+      speculativeConfig: null,
+      speculativeAlgorithm: dspark ? "DSPARK" : "",
+      draftModel: draft.path,
+      dsparkBlockSize: Math.min(32, Math.max(1, positiveInt(opts.dsparkBlockSize, 7))),
+      draftModelQuantization: "unquant",
+      unsupportedReason: !["off", "dspark"].includes(sglangSpeculativeMode)
+        ? `SGLang 档当前只开放 off 或 dspark，不会静默转换 ${sglangSpeculativeMode}。`
+        : !qwen38 && dspark
+        ? "当前 DSpark 档只对已验证的 Qwen3.8 主模型开放。"
+        : draft.reason,
+      notes: [
+        "uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000",
+        ...(qwen38 ? ["uses FlashInfer on SM120; FA3 is not supported on this host", "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures"] : []),
+        ...(dspark ? ["uses the RadixArk Qwen3.8 DSpark draft checkpoint with block size 7 and overlap scheduling"] : []),
+      ],
+    });
+  }
+  if (normalizeSpeculativeMode(opts.speculativeMode) === "dspark") {
+    return withCapabilities({
+      id: "vllm-dspark-wsl-unsupported",
+      label: "vLLM / DSpark",
+      engine: "vllm",
+      image: baseRuntimeImage,
+      unsupportedReason: "本机的 RadixArk Qwen3.8 DSpark checkpoint 在 vLLM V2 runner 会因 WSL UVA 不可用失败，V1 又会按 DeepSeekV4 错误解析；请选择 SGLang + DSpark 档。",
+      notes: [],
+    });
+  }
+  if (isQwen38Model(opts.model || launch.modelArg, localConfig)) {
+    const nvfp4 = isQwen38Nvfp4Model(opts.model || launch.modelArg, localConfig);
+    return withCapabilities({
+      id: nvfp4 ? "qwen3.8-vllm-nvfp4" : "qwen3.8-vllm-fp8",
+      label: nvfp4 ? "Qwen3.8 / vLLM / NVFP4" : "Qwen3.8 / vLLM / FP8",
+      engine: "vllm",
+      image: baseRuntimeImage,
+      positionalModel: true,
+      reasoningParser: "qwen3",
+      toolCallParser: "qwen3_coder",
+      enableAutoToolChoice: true,
+      disableQuantizationArg: nvfp4,
+      disableKvCacheDtypeArg: nvfp4,
+      safetensorsLoadStrategy: nvfp4 ? "prefetch" : "",
+      notes: [
+        `uses the Qwen3.8-compatible vLLM build ${DEFAULT_VLLM_RELEASE.version}`,
+        "uses positional model syntax required by current vLLM serve CLI",
+        "uses qwen3 reasoning and qwen3_coder tool parsing",
+        ...(nvfp4 ? ["lets compressed-tensors auto-detect the NVFP4 layout and prefetches safetensors"] : ["keeps KV cache dtype auto for quality-first operation"]),
+      ],
+    });
+  }
   if (isQwen36MoeNvfp4Model(opts.model || launch.modelArg, localConfig)) {
     const effectiveKvCacheDtype = !opts.kvCacheDtype || opts.kvCacheDtype === "auto" ? "fp8" : opts.kvCacheDtype;
     const moeBackend = qwenMoeNvfp4BackendValue(opts);
@@ -3046,7 +3214,7 @@ function vllmAuthHeaders(apiKey, base = {}) {
 
 function applyVllmRequestDefaults(body = {}, _runtime = null, model = "", context = {}) {
   if (context.upstreamPath && context.upstreamPath !== "chat/completions") return body;
-  if (!/qwen3[_\-.]?(?:5|6)|qwen3\.6/i.test(String(model || body.model || ""))) return body;
+  if (!/qwen3_(?:5|6|8)|qwen3\.(?:5|6|8)/i.test(String(model || body.model || ""))) return body;
   const next = { ...body };
   if (body.temperature === undefined || body.temperature === null || body.temperature === "") next.temperature = 1.0;
   if (body.top_p === undefined || body.top_p === null || body.top_p === "") next.top_p = 0.95;
@@ -3066,6 +3234,24 @@ async function getServedModels(port, apiKey = "") {
   } catch {
     return [];
   }
+}
+
+async function getRuntimeVersion(port, apiKey = "", engine = "vllm", image = "") {
+  const paths = engine === "sglang" ? ["/get_server_info", "/version"] : ["/version"];
+  for (const endpointPath of paths) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}${endpointPath}`, {
+        signal: AbortSignal.timeout(2500),
+        headers: vllmAuthHeaders(apiKey),
+      });
+      if (!response.ok) continue;
+      const data = parseJsonSafe(await response.text(), {});
+      const version = String(data.version || data.sglang_version || data.server_version || "").trim();
+      if (version) return { engine, version, source: endpointPath };
+    } catch {}
+  }
+  const metadata = knownRuntimeImageMetadata(image);
+  return { engine, version: metadata?.version || "", source: metadata ? "image-metadata" : "" };
 }
 
 function clearGatewayRuntimeCache() {
@@ -3103,9 +3289,15 @@ function getGatewayRunningModelSummaryFresh() {
 
 async function getRunningModelSummary(container = null, gpu = null, options = {}) {
   const activeContainer = container || await getContainerStatus(CONFIG.containerName);
+  const runtimeEngine = normalizeRuntimeEngine(activeContainer.labels?.[MANAGER_ENGINE_LABEL_KEY]);
   const endpoint = getContainerEndpoint(activeContainer);
   const vllmApiKey = getVllmApiKey(activeContainer);
-  const servedModels = activeContainer.running ? await getServedModels(endpoint.port, vllmApiKey) : [];
+  const [servedModels, runtimeVersion] = activeContainer.running
+    ? await Promise.all([
+      getServedModels(endpoint.port, vllmApiKey),
+      getRuntimeVersion(endpoint.port, vllmApiKey, runtimeEngine, activeContainer.image),
+    ])
+    : [[], { engine: runtimeEngine, version: "", source: "" }];
   const includeMetrics = options.includeMetrics !== false;
   const runtimeStats = activeContainer.running && includeMetrics
     ? await collectVllmMetricsSummary(activeContainer, gpu, { updateSamples: false }).catch(() => null)
@@ -3128,6 +3320,7 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
       containerName: activeContainer.name || CONFIG.containerName,
       containerStatus: activeContainer.status || "",
       image: activeContainer.image || "",
+      engine: runtimeEngine,
       apiBaseUrl: endpoint.serviceUrl,
       localApiBaseUrl: endpoint.localUrl,
       port: endpoint.port,
@@ -3154,6 +3347,8 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
 
   return {
     container: activeContainer,
+    engine: runtimeEngine,
+    runtimeVersion,
     endpoint,
     servedModels,
     models,
@@ -3161,7 +3356,7 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
     apiKeyRequired: Boolean(vllmApiKey),
     canUnload: activeContainer.exists,
     unloadStopsContainer: true,
-    note: "vLLM keeps one model resident in the server process. Unloading from this manager stops the managed vLLM container, but leaves the manager and other Docker services alone.",
+    note: `${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} keeps the model resident in the server process. Unloading stops only the managed runtime container.`,
   };
 }
 
@@ -3175,7 +3370,7 @@ async function getRunningModelSummaries() {
   if (runtimeInstancesCache.promise) return runtimeInstancesCache.promise;
   runtimeInstancesCache.promise = Promise.resolve().then(async () => {
     const managed = (await listManagedContainers()).filter((container) => (
-      container.manager === CONFIG.managerId && container.engine === "vllm"
+      container.manager === CONFIG.managerId && ["vllm", "sglang"].includes(container.engine)
     ));
     const primary = await getContainerStatus(CONFIG.containerName);
     const primaryOwner = primary.labels?.[MANAGER_LABEL_KEY] || "";
@@ -3219,6 +3414,7 @@ async function listRuntimeInstancesRequest() {
         running: Boolean(container.running),
         status: container.status || "",
         image: container.image || "",
+        engine: normalizeRuntimeEngine(labels[MANAGER_ENGINE_LABEL_KEY]),
         port: runtime.endpoint?.port || Number(labels["ai.manager.port"] || 0),
         gpuIds: normalizeGpuIds(labels["ai.manager.gpu-ids"] || ""),
         vramReservationMb: Number(labels["ai.manager.vram-reservation-mb"] || 0),
@@ -3246,7 +3442,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
     return { ok: true, id: requested, containerName: CONFIG.containerName, stopped: true };
   }
   const managed = (await listManagedContainers()).filter((container) => (
-    container.manager === CONFIG.managerId && container.engine === "vllm"
+    container.manager === CONFIG.managerId && ["vllm", "sglang"].includes(container.engine)
   ));
   const target = managed.find((container) => (
     container.name === requested
@@ -3423,7 +3619,9 @@ async function collectStats() {
     recentAccess,
     costComparison,
   };
-  await metricsHistoryStore.recordMetricsHistory(response).catch(() => {});
+  await metricsHistoryStore.recordMetricsHistory(response, {
+    engine: normalizeRuntimeEngine(container.labels?.[MANAGER_ENGINE_LABEL_KEY]),
+  }).catch(() => {});
   response.trends = await metricsHistoryStore.getMetricsHistory({ hours: 24 }).catch(() => ({ hours: 24, samples: [] }));
   return response;
 }
@@ -3440,6 +3638,7 @@ async function snapshotCurrentStats(reason = "snapshot") {
 }
 
 async function collectVllmMetricsSummary(container, gpu, options = {}) {
+  const runtimeEngine = normalizeRuntimeEngine(container?.labels?.[MANAGER_ENGINE_LABEL_KEY]);
   const endpoint = getContainerEndpoint(container);
   const vllmApiKey = getVllmApiKey(container);
   const empty = core.emptyStatsSummary(container, endpoint, {
@@ -3481,6 +3680,7 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
 
   return {
+    engine: runtimeEngine,
     source: `http://127.0.0.1:${endpoint.port}/metrics`,
     processStartSeconds,
     uptimeSeconds,
@@ -3514,24 +3714,36 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
   for (const name of Object.keys(servedById || {})) names.add(name);
   const models = [];
   for (const name of names) {
-    const scoped = metrics.filter((metric) => metric.labels.model_name === name);
-    const promptTokens = sumMetric(scoped, "vllm:prompt_tokens_total");
-    const generationTokens = sumMetric(scoped, "vllm:generation_tokens_total");
-    const cachedPromptTokens = sumMetric(scoped, "vllm:prompt_tokens_cached_total");
+    const onlyServedModel = Object.keys(servedById || {}).length === 1;
+    const scoped = metrics.filter((metric) => metric.labels.model_name === name || (onlyServedModel && !metric.labels.model_name));
+    const promptTokens = firstNonZeroMetricSum(scoped, ["vllm:prompt_tokens_total", "sglang:prompt_tokens_total"]);
+    const generationTokens = firstNonZeroMetricSum(scoped, ["vllm:generation_tokens_total", "sglang:generation_tokens_total"]);
+    const cachedPromptTokens = firstNonZeroMetricSum(scoped, ["vllm:prompt_tokens_cached_total", "sglang:cached_tokens_total"]);
+    const hasSglangMetrics = scoped.some((metric) => metric.name.startsWith("sglang:"));
     const successByReason = sumByLabel(scoped, "vllm:request_success_total", "finished_reason");
     const requestCount = Object.values(successByReason).reduce((sum, value) => sum + value, 0)
-      || sumMetric(scoped, "vllm:request_prompt_tokens_count");
+      || firstNonZeroMetricSum(scoped, ["vllm:request_prompt_tokens_count", "sglang:num_requests_total"]);
     const errorCount = Number(successByReason.error || 0);
-    const abortedCount = Number(successByReason.abort || 0);
-    const kvUsagePercent = firstMetricValue(scoped, "vllm:kv_cache_usage_perc") || 0;
+    const abortedCount = Number(successByReason.abort || 0)
+      || firstNonZeroMetricSum(scoped, ["sglang:num_aborted_requests_total"]);
+    const kvUsagePercent = firstMetricValue(scoped, "vllm:kv_cache_usage_perc")
+      || firstMetricValue(scoped, "sglang:token_usage")
+      || 0;
     const capacityTokens = facts.kvCacheTokens || deriveKvCapacityTokens(scoped, servedById?.[name], facts);
     const activeTokens = capacityTokens ? Math.round(capacityTokens * kvUsagePercent) : null;
     const promptBySource = sumByLabel(scoped, "vllm:prompt_tokens_by_source_total", "source");
-    const prefixQueries = sumMetric(scoped, "vllm:prefix_cache_queries_total");
-    const prefixHits = sumMetric(scoped, "vllm:prefix_cache_hits_total");
+    const nativePrefixQueries = firstNonZeroMetricSum(scoped, ["vllm:prefix_cache_queries_total"]);
+    const nativePrefixHits = firstNonZeroMetricSum(scoped, ["vllm:prefix_cache_hits_total"]);
+    const prefixQueries = nativePrefixQueries || (hasSglangMetrics ? promptTokens : 0);
+    const prefixHits = nativePrefixQueries ? nativePrefixHits : (hasSglangMetrics ? cachedPromptTokens : 0);
+    const directPrefixHitRate = firstMetricValue(scoped, "sglang:cache_hit_rate") || 0;
+    const speculativeDraftCycles = firstNonZeroMetricSum(scoped, [
+      "vllm:spec_decode_num_drafts_total",
+      "vllm:spec_decode_num_drafts",
+      "sglang:spec_verify_calls_total",
+    ]);
     const speculativeDraftTokens = firstNonZeroMetricSum(scoped, [
       "vllm:spec_decode_num_draft_tokens_total",
-      "vllm:spec_decode_num_drafts",
       "vllm:spec_decode_draft_tokens_total",
     ]);
     const speculativeAcceptedTokens = firstNonZeroMetricSum(scoped, [
@@ -3539,6 +3751,15 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       "vllm:spec_decode_num_accepted_tokens",
       "vllm:spec_decode_accepted_tokens_total",
     ]);
+    const sglangSpecAcceptRate = firstMetricValue(scoped, "sglang:spec_accept_rate") || 0;
+    const sglangSpecAcceptLength = firstMetricValue(scoped, "sglang:spec_accept_length") || 0;
+    const sglangSpecCapLength = firstMetricValue(scoped, "sglang:spec_cap_length") || 0;
+    const sglangSpecBlockAcceptLength = firstMetricValue(scoped, "sglang:spec_block_accept_length") || 0;
+    const sglangSpecNumSteps = firstMetricValue(scoped, "sglang:spec_num_steps") || 0;
+    const sglangSpecNumDraftTokens = firstMetricValue(scoped, "sglang:spec_num_draft_tokens") || 0;
+    const cacheInfo = scoped.find((metric) => metric.name === "vllm:cache_config_info");
+    const mambaBlockSize = positiveInt(cacheInfo?.labels?.mamba_block_size, 0);
+    const attentionBlockSize = positiveInt(cacheInfo?.labels?.block_size, 0);
     const recent = core.calculateRecentRates(statsSamples, name, nowSeconds, {
       promptTokens,
       generationTokens,
@@ -3562,19 +3783,19 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
         error: errorCount,
         aborted: abortedCount,
         byFinishReason: successByReason,
-        running: firstMetricValue(scoped, "vllm:num_requests_running") || 0,
-        waiting: firstMetricValue(scoped, "vllm:num_requests_waiting") || 0,
+        running: firstMetricValue(scoped, "vllm:num_requests_running") || firstMetricValue(scoped, "sglang:num_running_reqs") || 0,
+        waiting: firstMetricValue(scoped, "vllm:num_requests_waiting") || firstMetricValue(scoped, "sglang:num_queue_reqs") || 0,
       },
       latency: {
-        avgE2eSeconds: histogramAverage(scoped, "vllm:e2e_request_latency_seconds"),
-        avgTtftSeconds: histogramAverage(scoped, "vllm:time_to_first_token_seconds"),
-        avgInterTokenSeconds: histogramAverage(scoped, "vllm:inter_token_latency_seconds"),
-        avgTimePerOutputTokenSeconds: histogramAverage(scoped, "vllm:request_time_per_output_token_seconds"),
-        avgQueueSeconds: histogramAverage(scoped, "vllm:request_queue_time_seconds"),
+        avgE2eSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:e2e_request_latency_seconds", "sglang:e2e_request_latency_seconds"]),
+        avgTtftSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:time_to_first_token_seconds", "sglang:time_to_first_token_seconds"]),
+        avgInterTokenSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]),
+        avgTimePerOutputTokenSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:request_time_per_output_token_seconds", "sglang:request_time_per_output_token_seconds"]),
+        avgQueueSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:request_queue_time_seconds", "sglang:queue_time_seconds"]),
       },
       averages: {
-        promptTokensPerRequest: histogramAverage(scoped, "vllm:request_prompt_tokens"),
-        outputTokensPerRequest: histogramAverage(scoped, "vllm:request_generation_tokens"),
+        promptTokensPerRequest: firstNonZeroHistogramAverage(scoped, ["vllm:request_prompt_tokens", "sglang:prompt_tokens_histogram"]),
+        outputTokensPerRequest: firstNonZeroHistogramAverage(scoped, ["vllm:request_generation_tokens", "sglang:generation_tokens_histogram"]),
         requestedMaxTokens: histogramAverage(scoped, "vllm:request_params_max_tokens"),
       },
       speed: {
@@ -3585,13 +3806,27 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       cache: {
         prefixQueries,
         prefixHits,
-        prefixHitRate: prefixQueries ? prefixHits / prefixQueries : 0,
+        prefixHitRate: prefixQueries ? prefixHits / prefixQueries : directPrefixHitRate,
+        attentionBlockSize,
+        mambaBlockSize,
+        alignmentBlockSize: mambaBlockSize || attentionBlockSize || null,
+        alignmentRequired: Boolean(mambaBlockSize),
+        source: nativePrefixQueries ? "token_counters" : hasSglangMetrics && promptTokens ? "sglang_cached_token_counters" : directPrefixHitRate ? "sglang_latest_batch_gauge" : "unavailable",
       },
       speculative: {
-        enabled: speculativeDraftTokens > 0,
+        enabled: speculativeDraftTokens > 0 || speculativeDraftCycles > 0 || sglangSpecNumDraftTokens > 0 || sglangSpecAcceptLength > 0,
+        draftCycles: speculativeDraftCycles,
         draftTokens: speculativeDraftTokens,
         acceptedTokens: speculativeAcceptedTokens,
-        acceptanceRate: speculativeDraftTokens ? speculativeAcceptedTokens / speculativeDraftTokens : 0,
+        acceptanceRate: speculativeDraftTokens ? speculativeAcceptedTokens / speculativeDraftTokens : sglangSpecAcceptRate,
+        acceptedTokensPerCycle: speculativeDraftCycles ? speculativeAcceptedTokens / speculativeDraftCycles : 0,
+        draftTokensPerCycle: speculativeDraftCycles ? speculativeDraftTokens / speculativeDraftCycles : 0,
+        meanAcceptLength: sglangSpecAcceptLength,
+        capLength: sglangSpecCapLength,
+        blockAcceptLength: sglangSpecBlockAcceptLength,
+        configuredSteps: sglangSpecNumSteps,
+        configuredDraftTokens: sglangSpecNumDraftTokens,
+        source: hasSglangMetrics ? "sglang_gauges" : "vllm_counters",
       },
       context: {
         activeTokens,
@@ -3608,6 +3843,14 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
 function firstNonZeroMetricSum(metrics, names) {
   for (const name of names) {
     const value = sumMetric(metrics, name);
+    if (value) return value;
+  }
+  return 0;
+}
+
+function firstNonZeroHistogramAverage(metrics, names) {
+  for (const name of names) {
+    const value = histogramAverage(metrics, name);
     if (value) return value;
   }
   return 0;
@@ -3932,6 +4175,8 @@ async function runStartJobOnce(job, opts) {
   };
 
   const runtimePreset = previewVllmRuntimePreset(runtimeOpts);
+  const requestedEngine = normalizeRuntimeEngine(runtimePreset.engine || runtimeOpts.engine);
+  const requestedEngineLabel = requestedEngine === "sglang" ? "SGLang" : "vLLM";
   if (runtimePreset.unsupportedReason) {
     appendLog(job, `Runtime preset blocked: ${runtimePreset.label || runtimePreset.id}`);
     appendLog(job, runtimePreset.unsupportedReason);
@@ -3973,12 +4218,12 @@ async function runStartJobOnce(job, opts) {
     const issues = runtimeCompatibility.findings.filter((item) => item.severity === "fail").map((item) => item.detail);
     setJobProgress(job, {
       percent: 8,
-      stage: "vLLM 运行时不兼容",
+      stage: `${requestedEngineLabel} 运行时不兼容`,
       detail: issues.join("；") || runtimeCompatibility.summary,
       state: "fail",
       issues,
     });
-    const error = new Error(`vLLM 运行时预检失败：${issues.join("；") || runtimeCompatibility.summary}`);
+    const error = new Error(`${requestedEngineLabel} 运行时预检失败：${issues.join("；") || runtimeCompatibility.summary}`);
     error.code = "vllm_runtime_incompatible";
     error.findings = runtimeCompatibility.findings;
     throw error;
@@ -4003,7 +4248,7 @@ async function runStartJobOnce(job, opts) {
     throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
   }
 
-  let { runArgs, activePublishArgs, runtimeImage } = buildVllmRuntimeCommand(job, runtimeOpts);
+  let { runArgs, activePublishArgs, runtimeImage, runtimeEngine } = buildVllmRuntimeCommand(job, runtimeOpts);
   const imageStatus = await getImageStatus(runtimeImage);
   if (!imageStatus.ok) {
     appendLog(job, `Runtime image preflight: ${imageStatus.text || runtimeImage}. Pulling before current model is stopped.`);
@@ -4083,7 +4328,7 @@ async function runStartJobOnce(job, opts) {
         error.findings = admittedCompatibility.findings;
         throw error;
       }
-      ({ runArgs, activePublishArgs, runtimeImage } = buildVllmRuntimeCommand(job, runtimeOpts));
+      ({ runArgs, activePublishArgs, runtimeImage, runtimeEngine } = buildVllmRuntimeCommand(job, runtimeOpts));
     }
     setJobProgress(job, {
       percent: 32,
@@ -4127,7 +4372,7 @@ async function runStartJobOnce(job, opts) {
     setJobProgress(job, {
       percent: 45,
       stage: "等待模型加载",
-      detail: "容器已创建，正在等待 vLLM API 返回 /v1/models。",
+      detail: `容器已创建，正在等待 ${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} API 返回 /v1/models。`,
     });
     const startTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000));
     const stallTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_STALL_TIMEOUT_MS || 10 * 60 * 1000));
@@ -4136,8 +4381,8 @@ async function runStartJobOnce(job, opts) {
       port: opts.port,
       apiKey: opts.vllmApiKey,
       serviceUrl: opts.serviceUrl,
-      engineName: "vLLM",
-      apiLabel: "vLLM API",
+      engineName: runtimeEngine === "sglang" ? "SGLang" : "vLLM",
+      apiLabel: `${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} API`,
       containerName: targetContainerName,
       startupTimeoutMs: startTimeoutMs,
       stallTimeoutMs,
@@ -4158,8 +4403,8 @@ async function runStartJobOnce(job, opts) {
         maxTokens: 32,
       }),
       readyProbeTimeoutMs: Math.max(60000, Number(process.env.VLLM_READY_PROBE_TIMEOUT_MS || 5 * 60 * 1000)),
-      noLogIssue: "vLLM 启动日志长时间无变化。",
-      pollDetail: ({ elapsed, formatElapsed }) => `已等待 ${formatElapsed(elapsed)}。正在轮询 vLLM API，并读取容器日志检查错误。`,
+      noLogIssue: `${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} 启动日志长时间无变化。`,
+      pollDetail: ({ elapsed, formatElapsed }) => `已等待 ${formatElapsed(elapsed)}。正在轮询 ${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} API，并读取容器日志检查错误。`,
     });
     const replacementCommit = await replacement.commit().catch((error) => {
       appendLog(job, `新模型已就绪，但清理回滚快照失败：${error.message}`);
@@ -4238,6 +4483,7 @@ module.exports = {
   applyVllmRequestDefaults,
   normalizeModelConfig,
   summarizeModelConfigCapabilities,
+  buildModelStats,
   getModelConfigRequest,
   buildVllmMemoryEstimate,
   buildVllmImagePullOptions,
@@ -4247,5 +4493,8 @@ module.exports = {
   isDiffusionGemmaModel,
   isQwen36MoeNvfp4Model,
   isQwen36DenseNvfp4Model,
+  isQwen38Model,
+  isQwen38Nvfp4Model,
+  resolveDsparkDraftModel,
   diffusionGemmaWindowsBlockReason,
 };

@@ -352,6 +352,7 @@ function mergeLiveAndStatsLedgerInactive(liveSummary, ledger) {
     averages: liveByName[model.name]?.averages || model.averages,
     speed: liveByName[model.name]?.speed || model.speed,
     cache: liveByName[model.name]?.cache || model.cache,
+    speculative: liveByName[model.name]?.speculative || model.speculative,
     requests: {
       ...model.requests,
       running: liveByName[model.name]?.requests?.running || 0,
