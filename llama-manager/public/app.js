@@ -4436,11 +4436,12 @@ function renderModels() {
 
 function renderRemoteModels() {
   const root = $("#remoteModelList");
+  const english = effectiveLanguage() === "en-US";
   if (state.remoteError) {
     window.remoteModelRenderer?.render({
       root,
       error: state.remoteError,
-      errorMessage: `联网模型列表加载失败：${state.remoteError}`,
+      errorMessage: english ? `Failed to load online models: ${state.remoteError}` : `联网模型列表加载失败：${state.remoteError}`,
       escapeHtml,
     });
     return;
@@ -4456,10 +4457,11 @@ function renderRemoteModels() {
     const quantFilter = $("#remoteQuantFilter")?.selectedOptions?.[0]?.textContent || "全部 GGUF";
     const unknownCount = (state.remoteModels || []).filter((model) => !Number(model.paramsB || 0)).length;
     const unknownHint = unknownCount ? ` · ${fmtNumber(unknownCount)} 个未知规格可单独筛选` : "";
-    hint.textContent = `${source} · ${sort} · ${task} · 已返回 ${fmtNumber(state.remoteModels.length)} 个，显示 ${fmtNumber(models.length)} 个 · ${sizeFilter} · ${quantFilter} · 上限 ${limit}${unknownHint}。列表按公开元数据和 GGUF 文件名估算，gated 模型下载前需要配置 token。`;
+    hint.textContent = english
+      ? `Online catalog · returned ${fmtNumber(state.remoteModels.length)}, showing ${fmtNumber(models.length)} · limit ${limit}. Sizes and formats are estimated from public metadata and GGUF filenames; gated models require a token.`
+      : `${source} · ${sort} · ${task} · 已返回 ${fmtNumber(state.remoteModels.length)} 个，显示 ${fmtNumber(models.length)} 个 · ${sizeFilter} · ${quantFilter} · 上限 ${limit}${unknownHint}。列表按公开元数据和 GGUF 文件名估算，gated 模型下载前需要配置 token。`;
   }
   $("#remoteLoadMoreBtn")?.toggleAttribute("disabled", getRemoteLimit() >= 120);
-  const english = effectiveLanguage() === "en-US";
   window.remoteModelRenderer?.render({
     root,
     models,

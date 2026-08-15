@@ -4286,11 +4286,12 @@ function renderModels() {
 
 function renderRemoteModels() {
   const root = $("#remoteModelList");
+  const english = effectiveLanguage() === "en-US";
   if (state.remoteError) {
     window.remoteModelRenderer?.render({
       root,
       error: state.remoteError,
-      errorMessage: `联网模型列表加载失败：${state.remoteError}`,
+      errorMessage: english ? `Failed to load online models: ${state.remoteError}` : `联网模型列表加载失败：${state.remoteError}`,
       escapeHtml,
     });
     return;
@@ -4306,10 +4307,11 @@ function renderRemoteModels() {
     const sizeFilter = $("#remoteSizeFilter")?.selectedOptions?.[0]?.textContent || "全部规模";
     const unknownCount = (state.remoteModels || []).filter((model) => !Number(model.paramsB || 0)).length;
     const unknownHint = unknownCount ? ` · ${fmtNumber(unknownCount)} 个未知规格可单独筛选` : "";
-    hint.textContent = `按「${sortFilter}」排序 · ${taskFilter} · ${sizeFilter} ${featureFilter} · 返回 ${fmtNumber(state.remoteModels.length)} 个，显示 ${fmtNumber(models.length)} 个${unknownHint}。参数和文件大小按公开元数据估算，gated 模型下载前需配置 token。`;
+    hint.textContent = english
+      ? `Online catalog · returned ${fmtNumber(state.remoteModels.length)}, showing ${fmtNumber(models.length)}. Parameters and file sizes are estimated from public metadata; gated models require a token.`
+      : `按「${sortFilter}」排序 · ${taskFilter} · ${sizeFilter} ${featureFilter} · 返回 ${fmtNumber(state.remoteModels.length)} 个，显示 ${fmtNumber(models.length)} 个${unknownHint}。参数和文件大小按公开元数据估算，gated 模型下载前需配置 token。`;
   }
   $("#remoteLoadMoreBtn")?.toggleAttribute("disabled", getRemoteLimit() >= 120);
-  const english = effectiveLanguage() === "en-US";
   window.remoteModelRenderer?.render({
     root,
     models,

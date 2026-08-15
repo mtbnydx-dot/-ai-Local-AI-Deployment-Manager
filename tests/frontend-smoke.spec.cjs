@@ -128,6 +128,15 @@ async function smokePage(page, baseUrl, label) {
       body: JSON.stringify({ local, cached: [] }),
     });
   });
+  // Keep the picker fixture deterministic. The app refreshes the remote catalog
+  // in the background, so a fast Hub response could otherwise append live
+  // results before the fixed 12-item assertion below.
+  await page.route("**/api/remote-models?*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ models: [], limit: 48, source: "huggingface", sort: "trending" }),
+    });
+  });
   await page.route("**/api/service-exposure", async (route) => {
     const port = new URL(baseUrl).port || "5177";
     const modelId = `${label.toLowerCase()}-smoke-model-1`;
