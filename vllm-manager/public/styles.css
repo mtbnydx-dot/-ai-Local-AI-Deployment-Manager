@@ -1870,6 +1870,11 @@ textarea:focus {
   background: var(--surface-2);
 }
 
+.hf-auth-card[hidden],
+.hf-gated-access[hidden] {
+  display: none;
+}
+
 .hf-auth-card[data-state="ok"],
 .hf-gated-access[data-state="ok"] {
   border-color: var(--metric-ok-border);
