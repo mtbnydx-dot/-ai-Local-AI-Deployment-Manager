@@ -176,7 +176,8 @@ function buildDownloadEnv(hfCache, env = process.env, options = {}) {
     downloadEnv.HF_ENDPOINT = options.hfEndpoint || "https://hf-mirror.com";
   }
   if (options.hfTransfer) {
-    downloadEnv.HF_HUB_ENABLE_HF_TRANSFER = "1";
+    // huggingface_hub 1.x uses Xet for large files; hf_transfer is deprecated.
+    downloadEnv.HF_XET_HIGH_PERFORMANCE = "1";
   }
   return downloadEnv;
 }
