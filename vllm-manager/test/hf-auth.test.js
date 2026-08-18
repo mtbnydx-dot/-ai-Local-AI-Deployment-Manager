@@ -81,15 +81,13 @@ test("HF auth service distinguishes missing login from missing model approval", 
 
 test("HF auth service launches a visible isolated PowerShell login window", () => {
   const calls = [];
-  let unrefCalled = false;
   const service = createHfAuthService({
     hfCli: "D:\\AI\\venvs\\ai311\\Scripts\\hf.exe",
     hfHome: "D:\\AI\\cache\\huggingface",
     platform: "win32",
     baseEnv: { HF_TOKEN: "must-not-be-embedded" },
-    spawnImpl(file, args, options) {
+    execFileSyncImpl(file, args, options) {
       calls.push({ file, args, options });
-      return { unref() { unrefCalled = true; } };
     },
   });
 
@@ -97,12 +95,11 @@ test("HF auth service launches a visible isolated PowerShell login window", () =
   assert.equal(result.launched, true);
   assert.equal(calls[0].file, "powershell.exe");
   assert.equal(calls[0].options.windowsHide, true);
-  assert.equal(calls[0].options.detached, true);
+  assert.equal(calls[0].options.timeout, 10000);
   assert.match(calls[0].args.at(-1), /Start-Process/);
   assert.match(calls[0].args.at(-1), /-NoExit/);
   assert.match(calls[0].args.at(-1), /-EncodedCommand/);
   assert.doesNotMatch(calls[0].args.at(-1), /must-not-be-embedded/);
-  assert.equal(unrefCalled, true);
 });
 
 test("HF auth helpers tolerate formatted output and classify access denial", () => {
