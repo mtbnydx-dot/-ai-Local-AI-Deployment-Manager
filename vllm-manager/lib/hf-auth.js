@@ -127,10 +127,10 @@ function createHfAuthService({
       "Write-Host '请在 Hugging Face Token 页面创建 read 或 fine-grained read token，然后粘贴到这里。' -ForegroundColor Cyan",
       "Write-Host 'Token 只交给官方 hf CLI，不会经过管理平台网页或日志。' -ForegroundColor DarkGray",
       `& ${quotePowerShell(cli)} auth login --force`,
-      "if ($LASTEXITCODE -eq 0) { Write-Host 'Hugging Face 登录成功，本窗口将自动关闭。' -ForegroundColor Green; Start-Sleep -Seconds 3 } else { Write-Host '登录未完成。' -ForegroundColor Yellow; Read-Host '按 Enter 关闭窗口' }",
+      "if ($LASTEXITCODE -eq 0) { Write-Host 'Hugging Face 登录成功，本窗口将自动关闭。' -ForegroundColor Green; Start-Sleep -Seconds 3; exit 0 } else { Write-Host '登录未完成；可在本窗口重新运行 hf auth login --force。' -ForegroundColor Yellow }",
     ].join("; ");
     const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
-    const launcher = `Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',${quotePowerShell(encodedCommand)}) -WindowStyle Normal`;
+    const launcher = `Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-NoExit','-ExecutionPolicy','Bypass','-EncodedCommand',${quotePowerShell(encodedCommand)}) -WindowStyle Normal`;
     const child = spawnImpl("powershell.exe", [
       "-NoLogo",
       "-NoProfile",
