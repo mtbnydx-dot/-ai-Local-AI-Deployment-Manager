@@ -290,7 +290,7 @@ function createVllmRemoteModelService({
 
   async function getHuggingFaceDownloadEstimate(modelId, precision = "") {
     const data = await fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}?blobs=true`);
-    const selected = core.selectDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision);
+    const selected = core.selectDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision, modelId);
     const siblings = selected.siblings;
     const bytes = siblings.reduce((sum, file) => {
       const size = Number(file.size || file.lfs?.size || 0);

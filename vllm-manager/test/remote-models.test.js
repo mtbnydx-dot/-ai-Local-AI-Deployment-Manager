@@ -83,3 +83,23 @@ test("vLLM remote model service estimates selected HF download files", async () 
   assert.equal(estimate.matchedFiles, 1);
   assert.equal(estimate.totalFiles, 3);
 });
+
+test("vLLM remote model service keeps generic shards in dedicated FP8 repositories", async () => {
+  const service = createVllmRemoteModelService({
+    fetchImpl: async () => jsonResponse({
+      siblings: [
+        { rfilename: "model-00001-of-00002.safetensors", lfs: { size: 10 } },
+        { rfilename: "model-00002-of-00002.safetensors", lfs: { size: 20 } },
+        { rfilename: "config.json", size: 5 },
+      ],
+    }),
+  });
+
+  const estimate = await service.getHuggingFaceDownloadEstimate("owner/model-FP8", "FP8");
+  assert.equal(estimate.bytes, 35);
+  assert.equal(estimate.fileCount, 3);
+  assert.deepEqual(estimate.includePatterns, []);
+  assert.equal(estimate.filtered, false);
+  assert.equal(estimate.matchedFiles, 3);
+  assert.equal(estimate.totalFiles, 3);
+});

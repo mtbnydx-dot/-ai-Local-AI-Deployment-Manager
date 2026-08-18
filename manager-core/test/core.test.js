@@ -3534,6 +3534,9 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
   });
   assert.deepEqual(core.buildDownloadIncludePatterns("Q4"), ["*Q4*.gguf", "*IQ4*.gguf"]);
   assert.deepEqual(core.buildDownloadIncludePatterns("Q8_0"), ["*Q8_0*.gguf"]);
+  assert.deepEqual(core.buildDownloadIncludePatterns("FP8", "orcarouter/Qwen3.8-27B-Uncensored-FP8"), []);
+  assert.equal(core.modelReferenceDeclaresPrecision("owner/model-FP8", "FP8"), true);
+  assert.equal(core.modelReferenceDeclaresPrecision("fp8-owner/model", "FP8"), false);
   assert.equal(core.matchesDownloadPrecisionFile("model-Q4_K_M.gguf", "Q4"), true);
   assert.equal(core.matchesDownloadPrecisionFile("model-IQ4_XS.gguf", "IQ4"), true);
   assert.equal(core.matchesDownloadPrecisionFile("model-Q6_K.gguf", "Q4"), false);
@@ -3563,6 +3566,18 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
     matched: 0,
     total: 3,
   });
+  const dedicatedFp8Siblings = [
+    { rfilename: "model-00001-of-00002.safetensors", size: 10 },
+    { rfilename: "model-00002-of-00002.safetensors", size: 20 },
+    { rfilename: "config.json", size: 5 },
+  ];
+  assert.deepEqual(core.selectDownloadSiblings(dedicatedFp8Siblings, "FP8", "owner/model-FP8"), {
+    siblings: dedicatedFp8Siblings,
+    includePatterns: [],
+    filtered: false,
+    matched: 3,
+    total: 3,
+  });
 
   const builder = core.createDownloadCommandBuilder({
     hfCli: "hf",
@@ -3579,13 +3594,22 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
     meta: { model: "owner/model", precision: "Q4", expectedBytes: 123 },
   });
   assert.equal(spec.command, "hf");
-  assert.deepEqual(spec.args, ["download", "owner/model", "--include", "*Q4*.gguf", "--include", "*IQ4*.gguf", "--local-dir", "D:/models/owner__model"]);
+  assert.deepEqual(spec.args, ["download", "owner/model", "--include=*Q4*.gguf", "--include=*IQ4*.gguf", "--local-dir", "D:/models/owner__model"]);
   assert.equal(spec.options.env.HF_HOME, "cache-root");
   assert.equal(spec.options.env.PYTHONUTF8, "1");
   assert.equal(spec.options.env.PYTHONIOENCODING, "utf-8");
   assert.equal(spec.options.env.HF_HUB_DISABLE_PROGRESS_BARS, "1");
   assert.equal(spec.options.meta.localDir, "D:/models/owner__model");
   assert.equal(spec.options.countExistingProgress, true);
+  const fp8Spec = builder.buildDownloadSpecFromJob({
+    meta: { model: "orcarouter/Qwen3.8-27B-Uncensored-FP8", precision: "FP8" },
+  });
+  assert.deepEqual(fp8Spec.args, [
+    "download",
+    "orcarouter/Qwen3.8-27B-Uncensored-FP8",
+    "--local-dir",
+    "D:/models/orcarouter__Qwen3.8-27B-Uncensored-FP8",
+  ]);
   const modelScopeSpec = builder.buildDownloadSpecFromJob({
     meta: { model: "owner/model", source: "modelscope" },
   });
