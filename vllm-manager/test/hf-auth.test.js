@@ -96,9 +96,10 @@ test("HF auth service launches a visible isolated PowerShell login window", () =
   const result = service.launchLogin();
   assert.equal(result.launched, true);
   assert.equal(calls[0].file, "powershell.exe");
-  assert.equal(calls[0].options.windowsHide, false);
+  assert.equal(calls[0].options.windowsHide, true);
   assert.equal(calls[0].options.detached, true);
-  assert.match(calls[0].args.at(-1), /auth login --force/);
+  assert.match(calls[0].args.at(-1), /Start-Process/);
+  assert.match(calls[0].args.at(-1), /-EncodedCommand/);
   assert.doesNotMatch(calls[0].args.at(-1), /must-not-be-embedded/);
   assert.equal(unrefCalled, true);
 });

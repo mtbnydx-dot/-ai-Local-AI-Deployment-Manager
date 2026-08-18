@@ -129,17 +129,20 @@ function createHfAuthService({
       `& ${quotePowerShell(cli)} auth login --force`,
       "if ($LASTEXITCODE -eq 0) { Write-Host 'Hugging Face 登录成功，本窗口将自动关闭。' -ForegroundColor Green; Start-Sleep -Seconds 3 } else { Write-Host '登录未完成。' -ForegroundColor Yellow; Read-Host '按 Enter 关闭窗口' }",
     ].join("; ");
+    const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
+    const launcher = `Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',${quotePowerShell(encodedCommand)}) -WindowStyle Normal`;
     const child = spawnImpl("powershell.exe", [
       "-NoLogo",
       "-NoProfile",
+      "-NonInteractive",
       "-ExecutionPolicy",
       "Bypass",
       "-Command",
-      command,
+      launcher,
     ], {
       detached: true,
       stdio: "ignore",
-      windowsHide: false,
+      windowsHide: true,
       env: buildEnv(),
     });
     child.unref?.();
