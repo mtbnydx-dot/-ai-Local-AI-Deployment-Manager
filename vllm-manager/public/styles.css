@@ -1858,6 +1858,76 @@ textarea:focus {
   opacity: 0.8;
 }
 
+.hf-auth-card,
+.hf-gated-access {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.hf-auth-card[data-state="ok"],
+.hf-gated-access[data-state="ok"] {
+  border-color: var(--metric-ok-border);
+  background: var(--ok-soft-bg);
+}
+
+.hf-auth-card[data-state="warn"],
+.hf-gated-access[data-state="warn"] {
+  border-color: var(--metric-warn-border);
+  background: var(--warn-soft-bg);
+}
+
+.hf-auth-copy,
+.hf-gated-access > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.hf-auth-copy span,
+.hf-gated-access span,
+.hf-auth-copy small {
+  color: var(--muted);
+}
+
+.hf-auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.hf-auth-actions a {
+  text-decoration: none;
+}
+
+.hf-token-fallback {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.hf-token-fallback summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.hf-token-fallback label {
+  margin-top: 12px;
+}
+
+@media (max-width: 760px) {
+  .hf-auth-card,
+  .hf-gated-access {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .download-plan-preview {
   display: grid;
   gap: 4px;

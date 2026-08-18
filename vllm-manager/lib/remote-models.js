@@ -303,6 +303,10 @@ function createVllmRemoteModelService({
       filtered: selected.filtered,
       matchedFiles: selected.matched,
       totalFiles: selected.total,
+      gated: Boolean(data.gated),
+      gateMode: data.gated || false,
+      authorizationUrl: `https://huggingface.co/${String(modelId).split("/").map(encodeURIComponent).join("/")}`,
+      probeFile: selectHuggingFaceAccessProbe(Array.isArray(data.siblings) ? data.siblings : []),
     };
   }
 
@@ -385,6 +389,24 @@ function createVllmRemoteModelService({
     isRemoteModelCandidate,
     rankAndLimitRemoteModels,
   };
+}
+
+function selectHuggingFaceAccessProbe(siblings = []) {
+  const files = (Array.isArray(siblings) ? siblings : [])
+    .map((item) => ({
+      name: String(item?.rfilename || "").trim(),
+      size: Number(item?.size || item?.lfs?.size || 0),
+    }))
+    .filter((item) => item.name);
+  for (const preferred of ["config.json", "tokenizer_config.json", "generation_config.json"]) {
+    if (files.some((item) => item.name === preferred)) return preferred;
+  }
+  const smallMetadata = files.find((item) => (
+    !/\.(safetensors|bin|gguf|pt|pth)$/i.test(item.name)
+    && (!item.size || item.size <= 1024 * 1024)
+    && !/^readme\.md$/i.test(item.name)
+  ));
+  return smallMetadata?.name || files[0]?.name || "config.json";
 }
 
 function inferRemoteModelSelection(options) {

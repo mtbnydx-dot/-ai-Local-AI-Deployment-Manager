@@ -31,6 +31,8 @@
       const error = new Error(body && body.error ? body.error : text || response.statusText);
       error.status = response.status;
       error.code = body && body.code ? body.code : null;
+      error.authorizationUrl = body && body.authorizationUrl ? body.authorizationUrl : null;
+      error.accessStatus = body && body.accessStatus ? body.accessStatus : null;
       throw error;
     }
     return body;

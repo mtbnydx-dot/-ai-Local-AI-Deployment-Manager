@@ -87,6 +87,7 @@ test("vLLM remote model service estimates selected HF download files", async () 
 test("vLLM remote model service keeps generic shards in dedicated FP8 repositories", async () => {
   const service = createVllmRemoteModelService({
     fetchImpl: async () => jsonResponse({
+      gated: "auto",
       siblings: [
         { rfilename: "model-00001-of-00002.safetensors", lfs: { size: 10 } },
         { rfilename: "model-00002-of-00002.safetensors", lfs: { size: 20 } },
@@ -102,4 +103,8 @@ test("vLLM remote model service keeps generic shards in dedicated FP8 repositori
   assert.equal(estimate.filtered, false);
   assert.equal(estimate.matchedFiles, 3);
   assert.equal(estimate.totalFiles, 3);
+  assert.equal(estimate.gated, true);
+  assert.equal(estimate.gateMode, "auto");
+  assert.equal(estimate.probeFile, "config.json");
+  assert.equal(estimate.authorizationUrl, "https://huggingface.co/owner/model-FP8");
 });

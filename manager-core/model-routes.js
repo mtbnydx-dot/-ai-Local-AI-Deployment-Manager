@@ -1,5 +1,10 @@
 function sendError(res, error, fallbackStatus = 500) {
-  return res.status(error.status || fallbackStatus).json({ error: error.message });
+  return res.status(error.status || fallbackStatus).json({
+    error: error.message,
+    ...(error.code ? { code: error.code } : {}),
+    ...(error.authorizationUrl ? { authorizationUrl: error.authorizationUrl } : {}),
+    ...(error.accessStatus ? { accessStatus: error.accessStatus } : {}),
+  });
 }
 
 function registerModelRoutes(app, deps = {}) {
@@ -9,6 +14,10 @@ function registerModelRoutes(app, deps = {}) {
     searchRemoteModels,
     startDownload,
     estimateDownload,
+    getHfAuthStatus,
+    launchHfLogin,
+    checkHfAccess,
+    isLocalRequest = () => false,
     getModelConfig,
     getModelReadme,
     checkPort,
@@ -52,6 +61,39 @@ function registerModelRoutes(app, deps = {}) {
     app.get("/api/download/estimate", async (req, res) => {
       try {
         res.json(await estimateDownload(req.query || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (getHfAuthStatus) {
+    app.get("/api/huggingface/auth/status", async (req, res) => {
+      if (!isLocalRequest(req)) return res.status(403).json({ error: "Hugging Face 账号状态仅允许从本机查看。" });
+      try {
+        res.json(await getHfAuthStatus());
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (launchHfLogin) {
+    app.post("/api/huggingface/auth/login", async (req, res) => {
+      if (!isLocalRequest(req)) return res.status(403).json({ error: "Hugging Face 登录仅允许从本机发起。" });
+      try {
+        res.json(await launchHfLogin());
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (checkHfAccess) {
+    app.get("/api/huggingface/access", async (req, res) => {
+      if (!isLocalRequest(req)) return res.status(403).json({ error: "Hugging Face 授权复检仅允许从本机发起。" });
+      try {
+        res.json(await checkHfAccess(req.query || {}));
       } catch (error) {
         sendError(res, error);
       }

@@ -2563,6 +2563,10 @@ test("model route registrar wires shared and optional model download endpoints",
     searchRemoteModels: async (query) => ({ source: query.source || "huggingface", models: [] }),
     startDownload: async (body) => startDownloadImpl(body),
     estimateDownload: async (query) => ({ model: query.model, bytes: 123 }),
+    getHfAuthStatus: async () => ({ connected: true, username: "alice" }),
+    launchHfLogin: async () => ({ launched: true }),
+    checkHfAccess: async (query) => ({ model: query.model, granted: true }),
+    isLocalRequest: (req) => Boolean(req.local),
     getModelConfig: async (query) => ({ model: query.model, hiddenSize: 4096 }),
     getModelReadme: async (query) => ({ model: query.model, readme: "# Model" }),
     checkPort: async (query) => ({ port: Number(query.port), available: true }),
@@ -2572,7 +2576,7 @@ test("model route registrar wires shared and optional model download endpoints",
     resolveModelLink: async (body) => ({ model: body.url, outputName: "model" }),
   });
 
-  assert.equal(routes.size, 12);
+  assert.equal(routes.size, 15);
   let response = makeResponse();
   await routes.get("GET /api/models")({}, response.res);
   assert.deepEqual(response.state.json[0], { local: ["local"], cached: ["cached"] });
@@ -2588,16 +2592,38 @@ test("model route registrar wires shared and optional model download endpoints",
   startDownloadImpl = async () => {
     const error = new Error("bad source");
     error.status = 400;
+    error.code = "hf_login_required";
+    error.authorizationUrl = "https://huggingface.co/owner/model";
     throw error;
   };
   response = makeResponse();
   await routes.get("POST /api/download")({ body: { model: "owner/model" } }, response.res);
   assert.equal(response.state.statusCode, 400);
-  assert.deepEqual(response.state.json[0], { error: "bad source" });
+  assert.deepEqual(response.state.json[0], {
+    error: "bad source",
+    code: "hf_login_required",
+    authorizationUrl: "https://huggingface.co/owner/model",
+  });
 
   response = makeResponse();
   await routes.get("GET /api/download/estimate")({ query: { model: "owner/model" } }, response.res);
   assert.deepEqual(response.state.json[0], { model: "owner/model", bytes: 123 });
+
+  response = makeResponse();
+  await routes.get("GET /api/huggingface/auth/status")({ local: true }, response.res);
+  assert.deepEqual(response.state.json[0], { connected: true, username: "alice" });
+
+  response = makeResponse();
+  await routes.get("POST /api/huggingface/auth/login")({ local: true }, response.res);
+  assert.deepEqual(response.state.json[0], { launched: true });
+
+  response = makeResponse();
+  await routes.get("GET /api/huggingface/access")({ local: true, query: { model: "owner/model" } }, response.res);
+  assert.deepEqual(response.state.json[0], { model: "owner/model", granted: true });
+
+  response = makeResponse();
+  await routes.get("POST /api/huggingface/auth/login")({ local: false }, response.res);
+  assert.equal(response.state.statusCode, 403);
 
   response = makeResponse();
   await routes.get("POST /api/download/settings")({ body: { queueMode: false } }, response.res);

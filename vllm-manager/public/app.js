@@ -14,6 +14,8 @@ const state = {
   remoteModels: [],
   remoteError: "",
   downloadPrecisionOptions: [],
+  hfAuth: { connected: false, username: null },
+  pendingHfDownload: null,
   auditToken: localStorage.getItem("auditToken") || "",
   auditStatus: null,
   auditExports: [],
@@ -966,6 +968,7 @@ async function init() {
       renderRemoteModels();
     });
     refreshStats().catch(() => {});
+    refreshHfAuthStatus().catch(() => {});
     refreshAuditStatus().catch(() => {});
     refreshClaudeCompression().catch(() => {});
     refreshToolData().catch(() => {});
@@ -1133,6 +1136,9 @@ function bindEvents() {
   $("#jobList").addEventListener("click", handleDownloadJobAction);
   $("#resolveModelLinkBtn").addEventListener("click", resolveModelLink);
   $("#downloadForm").addEventListener("submit", downloadModel);
+  $("#hfAuthLoginBtn")?.addEventListener("click", startHfLogin);
+  $("#hfAuthRefreshBtn")?.addEventListener("click", () => refreshHfAuthStatus().catch(() => {}));
+  $("#hfAccessRecheckBtn")?.addEventListener("click", recheckHfAccessAndContinue);
   $("#downloadQuantFinder")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-quant-search]");
     if (!button) return;
@@ -1394,6 +1400,114 @@ function getSelectedPreset() {
 
 let downloadEstimateTimer = null;
 let downloadEstimateSeq = 0;
+let hfAuthPollGeneration = 0;
+
+function renderHfAuthStatus(status = state.hfAuth) {
+  state.hfAuth = status || { connected: false, username: null };
+  const card = $("#hfAuthCard");
+  const text = $("#hfAuthStatus");
+  const loginButton = $("#hfAuthLoginBtn");
+  if (!card || !text) return;
+  if (state.hfAuth.connected) {
+    card.dataset.state = "ok";
+    text.textContent = `已连接${state.hfAuth.username ? `：${state.hfAuth.username}` : " Hugging Face"}`;
+    if (loginButton) loginButton.textContent = "重新登录";
+  } else {
+    card.dataset.state = state.hfAuth.checking ? "loading" : "warn";
+    text.textContent = state.hfAuth.checking ? "正在检查本机登录状态..." : "本机尚未连接 Hugging Face 账号";
+    if (loginButton) loginButton.textContent = "登录 Hugging Face";
+  }
+}
+
+async function refreshHfAuthStatus({ silent = false } = {}) {
+  if (!silent) renderHfAuthStatus({ ...state.hfAuth, checking: true });
+  try {
+    const status = await api("/api/huggingface/auth/status");
+    renderHfAuthStatus(status);
+    return status;
+  } catch (error) {
+    renderHfAuthStatus({ connected: false, username: null, reason: error.message });
+    if (!silent) notify("HF 账号状态检查失败", error.message, "error");
+    throw error;
+  }
+}
+
+async function startHfLogin() {
+  const button = $("#hfAuthLoginBtn");
+  const clearBusy = setButtonBusy(button, "等待登录...");
+  try {
+    await api("/api/huggingface/auth/login", { method: "POST", body: "{}" });
+    notify("已打开 HF 登录窗口", "请在新窗口粘贴 read 或 fine-grained read Token；页面会自动检测登录结果。", "info");
+    beginHfAuthPolling();
+  } catch (error) {
+    reportActionError("无法打开 HF 登录窗口", error);
+  } finally {
+    clearBusy();
+  }
+}
+
+async function beginHfAuthPolling() {
+  const generation = ++hfAuthPollGeneration;
+  for (let attempt = 0; attempt < 90 && generation === hfAuthPollGeneration; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const status = await refreshHfAuthStatus({ silent: true }).catch(() => null);
+    if (!status?.connected) continue;
+    notify("Hugging Face 登录成功", status.username || "本机凭据已生效", "success");
+    if (state.pendingHfDownload) await recheckHfAccessAndContinue();
+    return;
+  }
+}
+
+function renderHfGatedAccess(estimate = {}) {
+  const panel = $("#hfGatedAccess");
+  const text = $("#hfGatedAccessText");
+  const link = $("#hfAuthorizationLink");
+  if (!panel || !text || !link) return;
+  if (!estimate.gated) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  panel.dataset.state = "warn";
+  link.href = estimate.authorizationUrl || `https://huggingface.co/${encodeURI(estimate.model || $("#downloadModel")?.value.trim() || "")}`;
+  text.textContent = state.hfAuth.connected
+    ? `账号${state.hfAuth.username ? ` ${state.hfAuth.username}` : ""}已连接；请确认该账号已在官方模型页获得访问权。`
+    : "先登录 Hugging Face，再在官方模型页确认访问条款。";
+}
+
+async function recheckHfAccessAndContinue() {
+  const model = String(state.pendingHfDownload?.model || $("#downloadModel")?.value || "").trim();
+  const precision = String(state.pendingHfDownload?.precision || $("#downloadPrecision")?.value || "").trim();
+  if (!model) return;
+  const button = $("#hfAccessRecheckBtn");
+  const clearBusy = setButtonBusy(button, "正在复检...");
+  try {
+    const params = new URLSearchParams({ model, precision });
+    const access = await api(`/api/huggingface/access?${params}`);
+    const panel = $("#hfGatedAccess");
+    const text = $("#hfGatedAccessText");
+    if (!access.granted) {
+      if (panel) panel.dataset.state = "warn";
+      if (text) text.textContent = access.status === "login_required"
+        ? "本机仍未登录 Hugging Face；请先完成登录窗口。"
+        : "当前账号仍未取得仓库文件访问权；请在官方模型页确认授权后再复检。";
+      notify("HF 授权尚未通过", text?.textContent || access.status, "info");
+      return;
+    }
+    if (panel) panel.dataset.state = "ok";
+    if (text) text.textContent = `账号${access.username ? ` ${access.username}` : ""}和模型授权均已通过。`;
+    notify("HF 授权已通过", state.pendingHfDownload ? "正在继续刚才的下载请求。" : "现在可以开始下载。", "success");
+    if (state.pendingHfDownload) {
+      const payload = state.pendingHfDownload;
+      state.pendingHfDownload = null;
+      await submitDownloadPayload(payload);
+    }
+  } catch (error) {
+    reportActionError("HF 授权复检失败", error);
+  } finally {
+    clearBusy();
+  }
+}
 let remoteSearchSeq = 0;
 
 function downloadIncludePatternsForPrecision(precision) {
@@ -1469,6 +1583,7 @@ async function requestDownloadEstimate() {
   const precision = $("#downloadPrecision").value || "";
   if (!model || !model.includes("/")) {
     box.hidden = true;
+    renderHfGatedAccess({ gated: false });
     updateDownloadPlanPreview();
     return;
   }
@@ -1476,6 +1591,7 @@ async function requestDownloadEstimate() {
     box.hidden = false;
     box.dataset.state = "info";
     textEl.textContent = "ModelScope 暂不支持下载体积预估，下载时会显示实际进度。";
+    renderHfGatedAccess({ gated: false });
     updateDownloadPlanPreview();
     return;
   }
@@ -1488,6 +1604,7 @@ async function requestDownloadEstimate() {
     const result = await api(`/api/download/estimate?${params}`);
     if (seq !== downloadEstimateSeq) return; // 已有更新的请求，丢弃过期结果
     updateDownloadPlanPreview(result);
+    renderHfGatedAccess(result);
     const diskText = result.diskFreeBytes ? `模型盘剩余 ${fmtBytes(result.diskFreeBytes)}` : "";
     if (result.bytes) {
       const free = Number(result.diskFreeBytes || 0);
@@ -4551,28 +4668,59 @@ async function downloadModel(event) {
       return;
     }
     const estimate = state.downloadEstimate || {};
-    await api("/api/download", {
-      method: "POST",
-      body: JSON.stringify({
-        model,
-        outputName,
-        source,
-        precision,
-        ...(hfToken ? { hfToken } : {}),
-        ...(Number(estimate.bytes || estimate.expectedBytes || 0) > 0 ? {
-          expectedBytes: Number(estimate.bytes || estimate.expectedBytes),
-          expectedFiles: Number(estimate.fileCount || estimate.expectedFiles || 0) || undefined,
-        } : {}),
-      }),
-    });
-    notify("下载任务已创建", model, "success");
-    // 保留表单内容，方便继续下载同系列的其它规格/量化版本
-    await refreshJobs();
+    const payload = {
+      model,
+      outputName,
+      source,
+      precision,
+      ...(hfToken ? { hfToken } : {}),
+      ...(Number(estimate.bytes || estimate.expectedBytes || 0) > 0 ? {
+        expectedBytes: Number(estimate.bytes || estimate.expectedBytes),
+        expectedFiles: Number(estimate.fileCount || estimate.expectedFiles || 0) || undefined,
+      } : {}),
+    };
+    try {
+      await submitDownloadPayload(payload);
+    } catch (error) {
+      if (["hf_login_required", "hf_invalid_token"].includes(error.code)) {
+        state.pendingHfDownload = { ...payload };
+        delete state.pendingHfDownload.hfToken;
+        renderHfGatedAccess({
+          gated: true,
+          model,
+          authorizationUrl: error.authorizationUrl || estimate.authorizationUrl,
+        });
+        notify("下载已等待 HF 登录", "完成新打开的登录窗口后，平台会自动复检并继续本次下载。", "info");
+        await startHfLogin();
+        return;
+      }
+      if (error.code === "hf_approval_required") {
+        state.pendingHfDownload = payload;
+        renderHfGatedAccess({
+          gated: true,
+          model,
+          authorizationUrl: error.authorizationUrl || estimate.authorizationUrl,
+        });
+        notify("下载已等待模型授权", "请打开官方授权页确认条款，然后点“已完成，复检并继续”。", "info");
+        return;
+      }
+      throw error;
+    }
   } catch (error) {
     reportActionError("下载任务创建失败", error);
   } finally {
     clearBusy();
   }
+}
+
+async function submitDownloadPayload(payload) {
+  await api("/api/download", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  notify("下载任务已创建", payload.model, "success");
+  // 保留表单内容，方便继续下载同系列的其它规格/量化版本
+  await refreshJobs();
 }
 
 async function startService(event) {
