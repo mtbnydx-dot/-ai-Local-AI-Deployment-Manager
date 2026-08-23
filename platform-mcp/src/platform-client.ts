@@ -14,6 +14,7 @@ import {
   SecurityPostureOutputSchema,
   SearchHealthOutputSchema,
   FindSearchResultOutputSchema,
+  OpenWebPageOutputSchema,
   ReadSearchResultOutputSchema,
   ResearchWebOutputSchema,
   WebSearchOutputSchema,
@@ -30,6 +31,7 @@ import {
   type SecurityPostureOutput,
   type SearchHealthOutput,
   type FindSearchResultOutput,
+  type OpenWebPageOutput,
   type ReadSearchResultOutput,
   type ResearchWebOutput,
   type WebSearchOutput,
@@ -86,6 +88,11 @@ export interface PlatformDataSource {
     preferredSourceTypes: string[];
     sourceStrategy: "balanced" | "relevance" | "primary";
   }): Promise<ResearchWebOutput>;
+  openWebPages(options: {
+    urls: string[];
+    maxCharsPerUrl: number;
+    maxTotalChars: number;
+  }): Promise<OpenWebPageOutput>;
   readSearchResults(options: {
     searchId: string;
     resultIds: string[];
@@ -499,6 +506,59 @@ function isPrivateHostname(value: string): boolean {
     return /^(?:f[cd]|fe[89ab])/i.test(host) || /^::ffff:(?:10\.|127\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/i.test(host);
   }
   return false;
+}
+
+function mapExtractedDocument(raw: unknown, maxChars: number) {
+  const item = object(raw);
+  const url = safeExternalUrl(item.url);
+  if (!url) return null;
+  const finalUrl = item.finalUrl ?? item.final_url;
+  const safeFinalUrl = finalUrl ? safeExternalUrl(finalUrl) : null;
+  const canonicalValue = item.canonicalUrl ?? item.canonical_url;
+  const safeCanonicalUrl = canonicalValue ? safeExternalUrl(canonicalValue) : null;
+  const content = safeDisplayText(item.content, maxChars);
+  const headings = array(item.headings).map((rawHeading) => {
+    const heading = object(rawHeading);
+    const level = Math.max(1, Math.min(6, Math.trunc(numberValue(heading.level, 1))));
+    const text = safeDisplayText(heading.text, 240);
+    return text ? { level, text } : null;
+  }).filter((heading): heading is NonNullable<typeof heading> => heading !== null).slice(0, 40);
+  const confidenceValue = stringValue(item.metadataConfidence ?? item.metadata_confidence).toLowerCase();
+  const metadataConfidence = confidenceValue === "high" || confidenceValue === "medium" || confidenceValue === "low"
+    ? confidenceValue
+    : null;
+  const documentValue = stringValue(item.documentType ?? item.document_type).toLowerCase();
+  const documentTypes = ["html_article", "html_page", "plain_text", "markdown", "csv", "json", "xml_feed", "pdf"] as const;
+  const documentType = documentTypes.includes(documentValue as typeof documentTypes[number])
+    ? documentValue as typeof documentTypes[number]
+    : null;
+  return {
+    title: safeDisplayText(item.title, 300),
+    url,
+    final_url: safeFinalUrl,
+    domain: safeDisplayText(item.domain, 253) || new URL(safeFinalUrl || url).hostname,
+    description: safeDisplayText(item.description, 600),
+    author: nullableString(safeDisplayText(item.author, 300)),
+    site_name: nullableString(safeDisplayText(item.siteName ?? item.site_name, 200)),
+    published_at: nullableString(item.publishedAt ?? item.published_at),
+    modified_at: nullableString(item.modifiedAt ?? item.modified_at),
+    canonical_url: safeCanonicalUrl,
+    language: nullableString(safeDisplayText(item.language, 40)),
+    content_type: nullableString(item.contentType ?? item.content_type),
+    document_type: documentType,
+    extraction_method: nullableString(safeDisplayText(item.extractionMethod ?? item.extraction_method, 80)),
+    metadata_confidence: metadataConfidence,
+    headings,
+    json_ld_types: array(item.jsonLdTypes ?? item.json_ld_types).map((value) => safeDisplayText(value, 100)).filter(Boolean).slice(0, 20),
+    content,
+    char_count: content.length,
+    source_char_count: Math.max(content.length, Math.trunc(numberValue(item.sourceCharCount ?? item.source_char_count, content.length))),
+    word_count: Math.max(0, Math.trunc(numberValue(item.wordCount ?? item.word_count))),
+    page_count: nullableNumber(item.pageCount ?? item.page_count) == null ? null : Math.max(0, Math.trunc(numberValue(item.pageCount ?? item.page_count))),
+    pages_read: nullableNumber(item.pagesRead ?? item.pages_read) == null ? null : Math.max(0, Math.trunc(numberValue(item.pagesRead ?? item.pages_read))),
+    truncated: booleanValue(item.truncated),
+    error: nullableString(item.error),
+  };
 }
 
 function progressPercent(value: unknown): number | null {
@@ -986,6 +1046,45 @@ export class LocalPlatformClient implements PlatformDataSource {
     });
   }
 
+  async openWebPages(options: {
+    urls: string[];
+    maxCharsPerUrl: number;
+    maxTotalChars: number;
+  }): Promise<OpenWebPageOutput> {
+    this.assertSearchConfigured();
+    const payload = await this.http.postJson(
+      "search gateway",
+      this.config.searchGatewayUrl,
+      "/open",
+      {
+        urls: options.urls,
+        max_chars_per_url: options.maxCharsPerUrl,
+        max_total_chars: options.maxTotalChars,
+      },
+      { bearerToken: this.config.searchGatewayApiKey, timeoutMs: Math.max(this.config.timeoutMs, 45000) },
+    );
+    const documents = array(payload.documents).map((raw, index) => {
+      const item = object(raw);
+      const document = mapExtractedDocument(raw, options.maxCharsPerUrl);
+      if (!document) return null;
+      return {
+        request_id: safeDisplayText(item.requestId ?? item.request_id, 30) || `u${index + 1}`,
+        ...document,
+      };
+    }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, 3);
+    return OpenWebPageOutputSchema.parse({
+      ok: booleanValue(payload.ok, documents.some((item) => !item.error)),
+      partial: booleanValue(payload.partial),
+      generated_at: new Date().toISOString(),
+      warnings: array(payload.warnings).map((value) => safeDisplayText(value, 500)).filter(Boolean).slice(0, 10),
+      data: {
+        count: documents.length,
+        readable_count: documents.filter((item) => !item.error).length,
+        documents,
+      },
+    });
+  }
+
   async readSearchResults(options: {
     searchId: string;
     resultIds: string[];
@@ -1007,51 +1106,11 @@ export class LocalPlatformClient implements PlatformDataSource {
     );
     const documents = array(payload.documents).map((raw, index) => {
       const item = object(raw);
-      const url = safeExternalUrl(item.url);
-      if (!url) return null;
-      const finalUrl = item.finalUrl ?? item.final_url;
-      const safeFinalUrl = finalUrl ? safeExternalUrl(finalUrl) : null;
-      const canonicalValue = item.canonicalUrl ?? item.canonical_url;
-      const safeCanonicalUrl = canonicalValue ? safeExternalUrl(canonicalValue) : null;
-      const content = safeDisplayText(item.content, options.maxCharsPerResult);
-      const headings = array(item.headings).map((rawHeading) => {
-        const heading = object(rawHeading);
-        const level = Math.max(1, Math.min(6, Math.trunc(numberValue(heading.level, 1))));
-        const text = safeDisplayText(heading.text, 240);
-        return text ? { level, text } : null;
-      }).filter((heading): heading is NonNullable<typeof heading> => heading !== null).slice(0, 40);
-      const confidenceValue = stringValue(item.metadataConfidence ?? item.metadata_confidence).toLowerCase();
-      const metadataConfidence = confidenceValue === "high" || confidenceValue === "medium" || confidenceValue === "low" ? confidenceValue : null;
-      const documentValue = stringValue(item.documentType ?? item.document_type).toLowerCase();
-      const documentTypes = ["html_article", "html_page", "plain_text", "markdown", "csv", "json", "xml_feed", "pdf"] as const;
-      const documentType = documentTypes.includes(documentValue as typeof documentTypes[number]) ? documentValue as typeof documentTypes[number] : null;
+      const document = mapExtractedDocument(raw, options.maxCharsPerResult);
+      if (!document) return null;
       return {
         result_id: safeDisplayText(item.resultId ?? item.result_id, 30) || options.resultIds[index] || `r${index + 1}`,
-        title: safeDisplayText(item.title, 300),
-        url,
-        final_url: safeFinalUrl,
-        domain: safeDisplayText(item.domain, 253) || new URL(safeFinalUrl || url).hostname,
-        description: safeDisplayText(item.description, 600),
-        author: nullableString(safeDisplayText(item.author, 300)),
-        site_name: nullableString(safeDisplayText(item.siteName ?? item.site_name, 200)),
-        published_at: nullableString(item.publishedAt ?? item.published_at),
-        modified_at: nullableString(item.modifiedAt ?? item.modified_at),
-        canonical_url: safeCanonicalUrl,
-        language: nullableString(safeDisplayText(item.language, 40)),
-        content_type: nullableString(item.contentType ?? item.content_type),
-        document_type: documentType,
-        extraction_method: nullableString(safeDisplayText(item.extractionMethod ?? item.extraction_method, 80)),
-        metadata_confidence: metadataConfidence,
-        headings,
-        json_ld_types: array(item.jsonLdTypes ?? item.json_ld_types).map((value) => safeDisplayText(value, 100)).filter(Boolean).slice(0, 20),
-        content,
-        char_count: content.length,
-        source_char_count: Math.max(content.length, Math.trunc(numberValue(item.sourceCharCount ?? item.source_char_count, content.length))),
-        word_count: Math.max(0, Math.trunc(numberValue(item.wordCount ?? item.word_count))),
-        page_count: nullableNumber(item.pageCount ?? item.page_count) == null ? null : Math.max(0, Math.trunc(numberValue(item.pageCount ?? item.page_count))),
-        pages_read: nullableNumber(item.pagesRead ?? item.pages_read) == null ? null : Math.max(0, Math.trunc(numberValue(item.pagesRead ?? item.pages_read))),
-        truncated: booleanValue(item.truncated),
-        error: nullableString(item.error),
+        ...document,
       };
     }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, 3);
     return ReadSearchResultOutputSchema.parse({

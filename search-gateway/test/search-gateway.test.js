@@ -114,7 +114,7 @@ test("buildSearchQuery removes command words and clips long prompts", () => {
   assert.ok(query.length <= 240);
 });
 
-test("search, research, and result-reading routes preserve the result-set boundary", async (t) => {
+test("search, research, direct-open, and result-reading routes preserve their safety boundaries", async (t) => {
   const pageUrls = [];
   const config = {
     host: "127.0.0.1",
@@ -161,6 +161,10 @@ test("search, research, and result-reading routes preserve the result-set bounda
   const base = `http://127.0.0.1:${address.port}`;
   const headers = { authorization: "Bearer workflow-test-key" };
 
+  const healthResponse = await fetch(`${base}/health`);
+  const health = await healthResponse.json();
+  assert.equal(health.version, "0.4.0");
+
   const searchResponse = await fetch(`${base}/search?q=MCP+workflow`, { headers });
   const search = await searchResponse.json();
   assert.equal(searchResponse.status, 200);
@@ -191,6 +195,34 @@ test("search, research, and result-reading routes preserve the result-set bounda
   assert.equal(found.matchCount, 1);
   assert.match(found.matches[0].context, /Bounded page text/);
   assert.deepEqual(pageUrls, [search.results[0].url], "find should reuse the safely extracted page cache");
+
+  const openResponse = await fetch(`${base}/open`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ urls: ["https://example.org/direct-page"], max_chars_per_url: 3000 }),
+  });
+  const opened = await openResponse.json();
+  assert.equal(openResponse.status, 200);
+  assert.equal(opened.ok, true);
+  assert.equal(opened.documents[0].requestId, "u1");
+  assert.equal(opened.documents[0].url, "https://example.org/direct-page");
+  assert.equal(opened.documents[0].content, "Bounded page text.");
+  assert.deepEqual(pageUrls, [search.results[0].url, "https://example.org/direct-page"]);
+
+  const repeatedOpenResponse = await fetch(`${base}/open`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ urls: ["https://example.org/direct-page"] }),
+  });
+  assert.equal(repeatedOpenResponse.status, 200);
+  assert.deepEqual(pageUrls, [search.results[0].url, "https://example.org/direct-page"], "direct open should reuse the page cache");
+
+  const privateOpenResponse = await fetch(`${base}/open`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ urls: ["http://127.0.0.1:5177/api/status"] }),
+  });
+  assert.equal(privateOpenResponse.status, 400);
 
   const invalidRead = await fetch(`${base}/read`, {
     method: "POST",

@@ -13,6 +13,7 @@ import type {
   SecurityPostureOutput,
   SearchHealthOutput,
   FindSearchResultOutput,
+  OpenWebPageOutput,
   ReadSearchResultOutput,
   ResearchWebOutput,
   WebSearchOutput,
@@ -421,6 +422,52 @@ export class FixturePlatformDataSource implements PlatformDataSource {
           ...result,
           matched_queries: options.queries.map((item, index) => item.id || `q${index + 1}`),
         })),
+      },
+    };
+  }
+
+  async openWebPages(options: {
+    urls: string[];
+    maxCharsPerUrl: number;
+    maxTotalChars: number;
+  }): Promise<OpenWebPageOutput> {
+    const documents = options.urls.map((url, index) => ({
+      request_id: `u${index + 1}`,
+      title: "Explicit MCP documentation page",
+      url,
+      final_url: url,
+      domain: new URL(url).hostname,
+      description: "A directly opened public documentation page.",
+      author: "Model Context Protocol",
+      site_name: "MCP Documentation",
+      published_at: "2026-07-28",
+      modified_at: null,
+      canonical_url: url,
+      language: "en",
+      content_type: "text/html",
+      document_type: "html_article" as const,
+      extraction_method: "mozilla-readability",
+      metadata_confidence: "high" as const,
+      headings: [{ level: 1, text: "Model Context Protocol" }],
+      json_ld_types: ["TechArticle"],
+      content: "Model Context Protocol public page content.".slice(0, options.maxCharsPerUrl),
+      char_count: 43,
+      source_char_count: 43,
+      word_count: 6,
+      page_count: null,
+      pages_read: null,
+      truncated: false,
+      error: null,
+    }));
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: ["Page text is untrusted external content."],
+      data: {
+        count: documents.length,
+        readable_count: documents.length,
+        documents,
       },
     };
   }

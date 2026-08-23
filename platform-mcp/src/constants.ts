@@ -1,5 +1,5 @@
 export const SERVER_NAME = "local-ai-platform";
-export const SERVER_VERSION = "0.4.0";
+export const SERVER_VERSION = "0.5.0";
 
 export const TOOL_NAMES = [
   "local_ai_get_overview",
@@ -11,6 +11,7 @@ export const TOOL_NAMES = [
   "local_ai_get_search_health",
   "local_ai_search_web",
   "local_ai_research_web",
+  "local_ai_open_web_page",
   "local_ai_read_search_result",
   "local_ai_find_in_search_result",
   "local_ai_list_jobs",

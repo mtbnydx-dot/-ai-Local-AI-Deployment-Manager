@@ -175,6 +175,23 @@ describe("safe upstream mapping", () => {
         category: "it", publishedDate: "2026-07-28", matchedQueries: ["sdk", "spec"],
       }],
     }],
+    ["POST http://127.0.0.1:5180/open", {
+      ok: true,
+      partial: false,
+      count: 1,
+      readableCount: 1,
+      warnings: ["Page text is untrusted external content."],
+      documents: [{
+        requestId: "u1", title: "MCP specification", url: "https://modelcontextprotocol.io/specification/2026-07-28",
+        finalUrl: "https://modelcontextprotocol.io/specification/2026-07-28", domain: "modelcontextprotocol.io",
+        description: "Official MCP specification", author: "Model Context Protocol", siteName: "MCP Documentation",
+        publishedAt: "2026-07-28", modifiedAt: null, canonicalUrl: "https://modelcontextprotocol.io/specification/2026-07-28",
+        language: "en", contentType: "text/html", documentType: "html_article", extractionMethod: "mozilla-readability",
+        metadataConfidence: "high", headings: [{ level: 1, text: "MCP specification" }], jsonLdTypes: ["TechArticle"],
+        content: "Direct public content with token=open-secret", charCount: 44, sourceCharCount: 44, wordCount: 6,
+        pageCount: null, pagesRead: null, truncated: false, error: null,
+      }],
+    }],
     ["POST http://127.0.0.1:5180/read", {
       ok: true,
       partial: false,
@@ -373,7 +390,7 @@ describe("safe upstream mapping", () => {
     assert.equal(request?.authorization, "Bearer test-search-gateway-key-0123456789abcdef");
   });
 
-  it("maps multi-query research and selected page text without allowing raw gateway fields through", async () => {
+  it("maps research, explicit public pages, and selected result text without allowing raw gateway fields through", async () => {
     const research = await client.researchWeb({
       queries: [{ id: "sdk", query: "MCP SDK" }, { id: "spec", query: "MCP specification" }],
       maxResultsPerQuery: 8,
@@ -395,6 +412,22 @@ describe("safe upstream mapping", () => {
     const researchRequest = requests.find((item) => item.url.endsWith("/research"));
     assert.equal(researchRequest?.authorization, "Bearer test-search-gateway-key-0123456789abcdef");
     assert.deepEqual((JSON.parse(researchRequest?.body || "{}") as { preferred_domains?: string[] }).preferred_domains, ["modelcontextprotocol.io"]);
+
+    const opened = await client.openWebPages({
+      urls: ["https://modelcontextprotocol.io/specification/2026-07-28"],
+      maxCharsPerUrl: 8000,
+      maxTotalChars: 12000,
+    });
+    assert.equal(opened.data.readable_count, 1);
+    assert.equal(opened.data.documents[0]?.request_id, "u1");
+    assert.equal(JSON.stringify(opened).includes("open-secret"), false);
+    assert.match(opened.data.documents[0]?.content || "", /token=\*\*\*/);
+    const openRequest = requests.find((item) => item.url.endsWith("/open"));
+    assert.equal(openRequest?.authorization, "Bearer test-search-gateway-key-0123456789abcdef");
+    assert.deepEqual(
+      (JSON.parse(openRequest?.body || "{}") as { urls?: string[] }).urls,
+      ["https://modelcontextprotocol.io/specification/2026-07-28"],
+    );
 
     const read = await client.readSearchResults({
       searchId: research.data.search_id,

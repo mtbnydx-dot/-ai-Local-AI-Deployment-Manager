@@ -55,7 +55,7 @@ describe("HTTP security guards", () => {
     assert.equal(JSON.stringify(body).includes(API_KEY), false);
   });
 
-  it("publishes a redacted 0.4.0 capability manifest after authentication", async () => {
+  it("publishes a redacted 0.5.0 capability manifest after authentication", async () => {
     const response = await mcp.app.request("http://127.0.0.1:5190/info", {
       headers: { host: "127.0.0.1:5190", authorization: `Bearer ${API_KEY}` },
     });
@@ -131,19 +131,19 @@ describe("dual-era MCP protocol", () => {
     });
   }
 
-  it("serves legacy 2025 clients with fifteen read-only tools", async () => {
+  it("serves legacy 2025 clients with sixteen read-only tools", async () => {
     const client = new Client({ name: "legacy-test", version: "1.0.0" });
     await client.connect(transport());
     try {
       assert.equal(client.getProtocolEra(), "legacy");
       const listing = await client.listTools();
-      assert.equal(listing.tools.length, 15);
+      assert.equal(listing.tools.length, 16);
       assert.deepEqual(listing.tools.map((tool) => tool.name), [...TOOL_NAMES]);
       assert.equal(listing.tools.every((tool) => tool.annotations?.readOnlyHint === true), true);
       assert.equal(listing.tools.every((tool) => tool.annotations?.destructiveHint === false), true);
       assert.deepEqual(
         listing.tools.filter((tool) => tool.annotations?.openWorldHint === true).map((tool) => tool.name),
-        ["local_ai_search_web", "local_ai_research_web", "local_ai_read_search_result", "local_ai_find_in_search_result"],
+        ["local_ai_search_web", "local_ai_research_web", "local_ai_open_web_page", "local_ai_read_search_result", "local_ai_find_in_search_result"],
       );
 
       const result = await client.callTool({ name: "local_ai_get_overview", arguments: {} });
@@ -193,6 +193,15 @@ describe("dual-era MCP protocol", () => {
       };
       assert.equal(researchData.data.query_coverage.length, 2);
       assert.equal(researchData.data.results[0]?.result_id, "r1");
+
+      const opened = await client.callTool({
+        name: "local_ai_open_web_page",
+        arguments: { urls: ["https://modelcontextprotocol.io/specification/2026-07-28"] },
+      });
+      const openedData = opened.structuredContent as { data: { readable_count: number; documents: Array<{ request_id: string; content: string }> } };
+      assert.equal(openedData.data.readable_count, 1);
+      assert.equal(openedData.data.documents[0]?.request_id, "u1");
+      assert.match(openedData.data.documents[0]?.content || "", /public page content/i);
 
       const read = await client.callTool({
         name: "local_ai_read_search_result",
@@ -252,6 +261,13 @@ describe("dual-era MCP protocol", () => {
       });
       assert.equal(invalidMemory.isError, true);
       assert.match(JSON.stringify(invalidMemory.content), /bytes_per_param|required|invalid/i);
+
+      const privatePage = await client.callTool({
+        name: "local_ai_open_web_page",
+        arguments: { urls: ["http://127.0.0.1:5177/api/status"] },
+      });
+      assert.equal(privatePage.isError, true);
+      assert.match(JSON.stringify(privatePage.content), /public|private|local|invalid/i);
     } finally {
       await client.close();
     }

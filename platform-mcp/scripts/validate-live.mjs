@@ -45,6 +45,11 @@ const argumentsByTool = {
     preferred_domains: ["modelcontextprotocol.io", "github.com"],
     safesearch: 1,
   },
+  local_ai_open_web_page: {
+    urls: ["https://modelcontextprotocol.io/specification/2026-07-28"],
+    max_chars_per_url: 3000,
+    max_total_chars: 3000,
+  },
   local_ai_read_search_result: null,
   local_ai_find_in_search_result: null,
   local_ai_list_jobs: { engine: "all", limit: 5 },
@@ -86,6 +91,7 @@ try {
   let researchQuality = "empty";
   let researchSearchId = "";
   let researchFirstResultId = "";
+  let openedPageCount = 0;
   let readablePageCount = 0;
   let findPattern = "Model Context Protocol";
   let pageMatchCount = 0;
@@ -126,6 +132,7 @@ try {
       researchSearchId = String(output.data?.search_id || "");
       researchFirstResultId = String(output.data?.results?.[0]?.result_id || "");
     }
+    if (tool.name === "local_ai_open_web_page") openedPageCount = Number(output.data?.readable_count || 0);
     if (tool.name === "local_ai_read_search_result") {
       readablePageCount = Number(output.data?.readable_count || 0);
       const content = String(output.data?.documents?.[0]?.content || "");
@@ -141,6 +148,7 @@ try {
   assert.deepEqual(searchRequestedEngines, ["searchtoday"]);
   assert.ok(researchResultCount > 0, "The live multi-query research returned no results.");
   assert.ok(["good", "mixed"].includes(researchQuality), `The live research quality was ${researchQuality}.`);
+  assert.ok(openedPageCount > 0, "The live explicit-public-page reader returned no readable page.");
   assert.ok(readablePageCount > 0, "The live selected-page reader returned no readable page.");
   assert.ok(pageMatchCount > 0, "The live page find returned no matching passage.");
   assert.equal(routeSelected, true, "The live route preview selected no tools-capable route.");
@@ -153,6 +161,7 @@ try {
     web_search_engines: searchRequestedEngines,
     research_results: researchResultCount,
     research_quality: researchQuality,
+    opened_pages: openedPageCount,
     readable_pages: readablePageCount,
     page_matches: pageMatchCount,
     route_selected: routeSelected,

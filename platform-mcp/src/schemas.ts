@@ -132,6 +132,52 @@ export const ReadSearchResultInputSchema = z.object({
   response_format: ResponseFormatSchema,
 }).strict();
 
+function isObviouslyPrivateHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (["localhost", "0.0.0.0", "::", "::1"].includes(normalized)) return true;
+  if ([".localhost", ".local", ".internal", ".lan", ".home"].some((suffix) => normalized.endsWith(suffix))) return true;
+  const octets = normalized.split(".").map((part) => Number(part));
+  if (octets.length === 4 && octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    const first = octets[0] ?? 999;
+    const second = octets[1] ?? 999;
+    return first === 0
+      || first === 10
+      || first === 127
+      || (first === 169 && second === 254)
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || first >= 224;
+  }
+  if (!normalized.includes(":")) return false;
+  return normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9")
+    || normalized.startsWith("fea") || normalized.startsWith("feb");
+}
+
+const PublicHttpUrlSchema = z.string().trim().min(8).max(2048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      const expectedPort = url.protocol === "https:" ? "443" : "80";
+      return ["http:", "https:"].includes(url.protocol)
+        && !url.username
+        && !url.password
+        && !isObviouslyPrivateHostname(url.hostname)
+        && (!url.port || url.port === expectedPort);
+    } catch {
+      return false;
+    }
+  }, "URL must use public HTTP(S), contain no credentials, avoid local/private hosts, and use a standard port.");
+
+export const OpenWebPageInputSchema = z.object({
+  urls: z.array(PublicHttpUrlSchema).min(1).max(3)
+    .describe("One through three explicit public HTTP(S) URLs supplied by the user or already known from a trusted source."),
+  max_chars_per_url: z.number().int().min(1000).max(15000).default(8000)
+    .describe("Maximum extracted text characters per URL."),
+  max_total_chars: z.number().int().min(2000).max(30000).default(24000)
+    .describe("Maximum extracted text characters across all opened URLs."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
 export const FindSearchResultInputSchema = z.object({
   search_id: z.string().trim().min(16).max(100)
     .describe("Opaque search_id returned by local_ai_search_web or local_ai_research_web."),
@@ -547,40 +593,60 @@ export const ResearchWebOutputSchema = z.object({
   }).strict(),
 }).strict();
 
+const ExtractedDocumentFields = {
+  title: z.string(),
+  url: z.string(),
+  final_url: z.string().nullable(),
+  domain: z.string(),
+  description: z.string(),
+  author: z.string().nullable(),
+  site_name: z.string().nullable(),
+  published_at: z.string().nullable(),
+  modified_at: z.string().nullable(),
+  canonical_url: z.string().nullable(),
+  language: z.string().nullable(),
+  content_type: z.string().nullable(),
+  document_type: z.enum(["html_article", "html_page", "plain_text", "markdown", "csv", "json", "xml_feed", "pdf"]).nullable(),
+  extraction_method: z.string().nullable(),
+  metadata_confidence: z.enum(["high", "medium", "low"]).nullable(),
+  headings: z.array(z.object({ level: z.number().int().min(1).max(6), text: z.string() }).strict()),
+  json_ld_types: z.array(z.string()),
+  content: z.string(),
+  char_count: z.number().int().nonnegative(),
+  source_char_count: z.number().int().nonnegative(),
+  word_count: z.number().int().nonnegative(),
+  page_count: z.number().int().nonnegative().nullable(),
+  pages_read: z.number().int().nonnegative().nullable(),
+  truncated: z.boolean(),
+  error: z.string().nullable(),
+};
+
+const SearchResultDocumentSchema = z.object({
+  result_id: z.string(),
+  ...ExtractedDocumentFields,
+}).strict();
+
+const OpenedWebDocumentSchema = z.object({
+  request_id: z.string(),
+  ...ExtractedDocumentFields,
+}).strict();
+
 export const ReadSearchResultOutputSchema = z.object({
   ...EnvelopeFields,
   data: z.object({
     search_id: z.string(),
     count: z.number().int().nonnegative(),
     readable_count: z.number().int().nonnegative(),
-    documents: z.array(z.object({
-      result_id: z.string(),
-      title: z.string(),
-      url: z.string(),
-      final_url: z.string().nullable(),
-      domain: z.string(),
-      description: z.string(),
-      author: z.string().nullable(),
-      site_name: z.string().nullable(),
-      published_at: z.string().nullable(),
-      modified_at: z.string().nullable(),
-      canonical_url: z.string().nullable(),
-      language: z.string().nullable(),
-      content_type: z.string().nullable(),
-      document_type: z.enum(["html_article", "html_page", "plain_text", "markdown", "csv", "json", "xml_feed", "pdf"]).nullable(),
-      extraction_method: z.string().nullable(),
-      metadata_confidence: z.enum(["high", "medium", "low"]).nullable(),
-      headings: z.array(z.object({ level: z.number().int().min(1).max(6), text: z.string() }).strict()),
-      json_ld_types: z.array(z.string()),
-      content: z.string(),
-      char_count: z.number().int().nonnegative(),
-      source_char_count: z.number().int().nonnegative(),
-      word_count: z.number().int().nonnegative(),
-      page_count: z.number().int().nonnegative().nullable(),
-      pages_read: z.number().int().nonnegative().nullable(),
-      truncated: z.boolean(),
-      error: z.string().nullable(),
-    }).strict()),
+    documents: z.array(SearchResultDocumentSchema),
+  }).strict(),
+}).strict();
+
+export const OpenWebPageOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    count: z.number().int().nonnegative(),
+    readable_count: z.number().int().nonnegative(),
+    documents: z.array(OpenedWebDocumentSchema),
   }).strict(),
 }).strict();
 
@@ -734,6 +800,7 @@ export type SearchHealthOutput = z.infer<typeof SearchHealthOutputSchema>;
 export type WebSearchOutput = z.infer<typeof WebSearchOutputSchema>;
 export type ResearchWebOutput = z.infer<typeof ResearchWebOutputSchema>;
 export type ReadSearchResultOutput = z.infer<typeof ReadSearchResultOutputSchema>;
+export type OpenWebPageOutput = z.infer<typeof OpenWebPageOutputSchema>;
 export type FindSearchResultOutput = z.infer<typeof FindSearchResultOutputSchema>;
 export type JobsOutput = z.infer<typeof JobsOutputSchema>;
 export type RoutePreviewOutput = z.infer<typeof RoutePreviewOutputSchema>;

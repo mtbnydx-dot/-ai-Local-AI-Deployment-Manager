@@ -1,6 +1,6 @@
 {
   "name": "local-ai-platform-mcp-server",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Read-only MCP server for the Local AI Platform.",
   "type": "module",

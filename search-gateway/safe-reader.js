@@ -62,7 +62,7 @@ async function readPublicPage(urlValue, options = {}, deps = {}) {
     maxRedirects: numberInRange(options.maxRedirects, 0, 5, 3),
     maxChars: numberInRange(options.maxChars, 500, 120000, 8000),
     maxPdfPages: numberInRange(options.maxPdfPages, 1, 200, 80),
-    userAgent: String(options.userAgent || "local-ai-search-gateway/0.3 (+safe-result-reader)"),
+    userAgent: String(options.userAgent || "local-ai-search-gateway/0.4 (+safe-public-page-reader)"),
   };
   const lookup = deps.lookup || dns.lookup.bind(dns);
   const requestImpl = deps.request || requestPinned;
@@ -118,12 +118,12 @@ function normalizePublicUrl(value) {
   try {
     parsed = value instanceof URL ? new URL(value.href) : new URL(String(value || ""));
   } catch {
-    throw new Error("Search result URL is invalid.");
+    throw new Error("Web page URL is invalid.");
   }
-  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only HTTP and HTTPS search results can be read.");
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only HTTP and HTTPS web pages can be read.");
   if (parsed.username || parsed.password) throw new Error("URLs containing credentials cannot be read.");
   const expectedPort = parsed.protocol === "https:" ? "443" : "80";
-  if (parsed.port && parsed.port !== expectedPort) throw new Error("Search-result reading is limited to standard HTTP and HTTPS ports.");
+  if (parsed.port && parsed.port !== expectedPort) throw new Error("Web-page reading is limited to standard HTTP and HTTPS ports.");
   parsed.hash = "";
   return parsed;
 }
@@ -131,7 +131,7 @@ function normalizePublicUrl(value) {
 async function resolvePublicTarget(urlValue, lookup = dns.lookup.bind(dns)) {
   const url = normalizePublicUrl(urlValue);
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (isBlockedHostname(hostname)) throw new Error("Search result resolves to a local or reserved hostname and cannot be read.");
+  if (isBlockedHostname(hostname)) throw new Error("Web page resolves to a local or reserved hostname and cannot be read.");
 
   let addresses;
   if (net.isIP(hostname)) {
@@ -140,16 +140,16 @@ async function resolvePublicTarget(urlValue, lookup = dns.lookup.bind(dns)) {
     try {
       addresses = await lookup(hostname, { all: true, verbatim: true });
     } catch {
-      throw new Error("Search result hostname could not be resolved.");
+      throw new Error("Web page hostname could not be resolved.");
     }
   }
-  if (!Array.isArray(addresses) || addresses.length === 0) throw new Error("Search result hostname resolved to no addresses.");
+  if (!Array.isArray(addresses) || addresses.length === 0) throw new Error("Web page hostname resolved to no addresses.");
   const normalized = addresses.map((entry) => ({
     address: String(entry.address || ""),
     family: Number(entry.family) || net.isIP(String(entry.address || "")),
   }));
   if (normalized.some((entry) => !isPublicAddress(entry.address))) {
-    throw new Error("Search result hostname resolves to a local or reserved network address and cannot be read.");
+    throw new Error("Web page hostname resolves to a local or reserved network address and cannot be read.");
   }
   const chosen = normalized.find((entry) => entry.family === 4) || normalized[0];
   return { url, hostname, address: chosen.address, family: chosen.family };
