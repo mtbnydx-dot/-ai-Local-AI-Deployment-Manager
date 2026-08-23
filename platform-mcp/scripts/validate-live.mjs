@@ -122,7 +122,7 @@ try {
   }
   assert.ok(searchResultCount > 0, "The live web search returned no results.");
   assert.ok(["good", "mixed"].includes(searchQuality), `The live web search quality was ${searchQuality}.`);
-  assert.deepEqual(searchRequestedEngines, ["searchtoday", "privacywall"]);
+  assert.deepEqual(searchRequestedEngines, ["searchtoday"]);
   assert.ok(researchResultCount > 0, "The live multi-query research returned no results.");
   assert.ok(["good", "mixed"].includes(researchQuality), `The live research quality was ${researchQuality}.`);
   assert.ok(readablePageCount > 0, "The live selected-page reader returned no readable page.");

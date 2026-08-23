@@ -14,9 +14,9 @@ function config(overrides = {}) {
     searchBackendUrl: "http://searxng.test",
     searchTimeoutMs: 1000,
     maxResults: 8,
-    searchDefaultEngines: ["searchtoday", "privacywall"],
+    searchDefaultEngines: ["searchtoday"],
     searchChineseEngines: [],
-    searchFallbackEngines: ["yandex", "brave", "bing"],
+    searchFallbackEngines: ["yandex"],
     searchBlockedDomains: ["ai.so.com"],
     searchMinRelevance: 0.16,
     searchMaxConcurrent: 2,
@@ -223,8 +223,8 @@ test("an empty primary pool performs only one distinct fallback pass", async () 
   });
   const result = await coordinator.search("rare query phrase", { maxResults: 5 });
   assert.equal(urls.length, 2);
-  assert.equal(urls[0].searchParams.get("engines"), "searchtoday,privacywall");
-  assert.equal(urls[1].searchParams.get("engines"), "yandex,brave,bing");
+  assert.equal(urls[0].searchParams.get("engines"), "searchtoday");
+  assert.equal(urls[1].searchParams.get("engines"), "yandex");
   assert.equal(result.fallbackUsed, true);
   assert.equal(result.quality, "empty");
 });

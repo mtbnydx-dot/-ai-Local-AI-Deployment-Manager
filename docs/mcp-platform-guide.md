@@ -75,7 +75,7 @@ stop-platform-mcp.cmd
 
 14 个工具都声明 `readOnlyHint=true`、`destructiveHint=false` 和 `idempotentHint=true`，并同时返回文本与 `structuredContent`。三个联网搜索/研究/正文工具声明 `openWorldHint=true`；其余 11 个为 `false`。
 
-联网搜索的 query 可能被 SearXNG 配置的外部引擎接收，不要把密钥、私人提示词或内部路径放进 query。本机对中英文多轮逐引擎实测后，默认主池采用 SearchToday + PrivacyWall；只有主结果为空、弱或不足 3 条时，才用 Yandex + Brave + Bing 做一次末级回退。DuckDuckGo、Startpage、Baidu 当前持续 CAPTCHA/拒绝访问，Google 在本机 JSON 搜索返回空结果，360 Search 则会间歇性静默返回空结果，均不放入默认池。网关会解析 `unresponsive_engines`、按 CAPTCHA/429/超时设置冷却、最多并发两个后端请求、合并同一在途请求，并对正常/弱结果使用不同的短缓存。结果先规范 URL、去跟踪参数和重复项，过滤极低相关候选与搜索套搜索页面，再按词法相关性、官方/偏好域名和域名多样性排序；同时显式返回 `quality`、`partial`、失败引擎、修正和建议，弱结果不会伪装成完整结果。
+联网搜索的 query 可能被 SearXNG 配置的外部引擎接收，不要把密钥、私人提示词或内部路径放进 query。本机对中英文多轮逐引擎和连续请求实测后，默认主池只用快速且相关性稳定的 SearchToday；只有主结果为空、弱或不足 3 条时，才用 Yandex 做一次末级回退。PrivacyWall 虽然相关性好，但连续请求后会进入限流；Brave 同样频繁限流，Bing 有严重跑题，DuckDuckGo、Startpage、Baidu 持续 CAPTCHA/拒绝访问，Google 在本机 JSON 搜索返回空结果，360 Search 则会间歇性静默返回空结果，因此都不参与自动池，但仍可显式指定。需要更广覆盖时用 `local_ai_research_web` 拆分角度，而不是让每次请求同时消耗一组不稳定引擎。网关会解析 `unresponsive_engines`、按 CAPTCHA/429/超时设置冷却、最多并发两个后端请求、合并同一在途请求，并对正常/弱结果使用不同的短缓存。结果先规范 URL、去跟踪参数和重复项，过滤极低相关候选与搜索套搜索页面，再按词法相关性、官方/偏好域名和域名多样性排序；同时显式返回 `quality`、`partial`、失败引擎、修正和建议，弱结果不会伪装成完整结果。
 
 `local_ai_read_search_result` 只能使用网关签发的近期 `search_id/result_id`。每次 DNS 解析和跳转都会重新校验并固定到公网地址；阻止 localhost、私网/链路本地/保留地址、账号密码 URL、非标准端口、非 HTTP(S)、PDF/二进制和超限响应。正文会剥离脚本、样式、表单和页面导航，但仍属于不可信外部文本，不能把其中指令当作系统指令或授权。默认限流为每个 MCP client 每分钟 20 个工作单元，批量查询和多页读取按数量计费，并设有 4 倍服务级硬上限。客户端限额可用 `PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE` 在 1–120 之间调整。
 

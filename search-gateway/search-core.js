@@ -50,9 +50,9 @@ function createSearchCoordinator(config, deps = {}) {
     maxCacheEntries: config.searchMaxCacheEntries || 300,
     maxSessions: config.searchMaxSessions || 200,
     maxConcurrent: config.searchMaxConcurrent || 2,
-    defaultEngines: normalizeTokenList(config.searchDefaultEngines || ["searchtoday", "privacywall"]),
+    defaultEngines: normalizeTokenList(config.searchDefaultEngines || ["searchtoday"]),
     chineseEngines: normalizeTokenList(config.searchChineseEngines || []),
-    fallbackEngines: normalizeTokenList(config.searchFallbackEngines || ["yandex", "brave", "bing"]),
+    fallbackEngines: normalizeTokenList(config.searchFallbackEngines || ["yandex"]),
   };
 
   function cleanup() {
