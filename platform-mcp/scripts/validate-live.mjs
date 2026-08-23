@@ -33,8 +33,7 @@ const argumentsByTool = {
   local_ai_get_search_health: {},
   local_ai_search_web: {
     query: "Model Context Protocol",
-    max_results: 2,
-    engines: ["bing"],
+    max_results: 4,
     safesearch: 1,
   },
   local_ai_research_web: {
@@ -44,7 +43,6 @@ const argumentsByTool = {
     ],
     max_sources: 6,
     preferred_domains: ["modelcontextprotocol.io", "github.com"],
-    engines: ["bing"],
     safesearch: 1,
   },
   local_ai_read_search_result: null,
@@ -81,7 +79,10 @@ try {
 
   const checks = [];
   let searchResultCount = 0;
+  let searchQuality = "empty";
+  let searchRequestedEngines = [];
   let researchResultCount = 0;
+  let researchQuality = "empty";
   let researchSearchId = "";
   let researchFirstResultId = "";
   let readablePageCount = 0;
@@ -102,9 +103,16 @@ try {
     const output = result.structuredContent;
     assert.equal(output.ok, true, `${tool.name} reported ok=false.`);
     checks.push({ name: tool.name, ok: output.ok, partial: output.partial });
-    if (tool.name === "local_ai_search_web") searchResultCount = Number(output.data?.count || 0);
+    if (tool.name === "local_ai_search_web") {
+      searchResultCount = Number(output.data?.count || 0);
+      searchQuality = String(output.data?.quality || "empty");
+      searchRequestedEngines = Array.isArray(output.data?.engine_status?.requested)
+        ? output.data.engine_status.requested.map(String)
+        : [];
+    }
     if (tool.name === "local_ai_research_web") {
       researchResultCount = Number(output.data?.count || 0);
+      researchQuality = String(output.data?.quality || "empty");
       researchSearchId = String(output.data?.search_id || "");
       researchFirstResultId = String(output.data?.results?.[0]?.result_id || "");
     }
@@ -113,7 +121,10 @@ try {
     if (tool.name === "local_ai_get_security_posture") securityOverall = String(output.data?.overall || "unknown");
   }
   assert.ok(searchResultCount > 0, "The live web search returned no results.");
+  assert.ok(["good", "mixed"].includes(searchQuality), `The live web search quality was ${searchQuality}.`);
+  assert.deepEqual(searchRequestedEngines, ["searchtoday", "privacywall"]);
   assert.ok(researchResultCount > 0, "The live multi-query research returned no results.");
+  assert.ok(["good", "mixed"].includes(researchQuality), `The live research quality was ${researchQuality}.`);
   assert.ok(readablePageCount > 0, "The live selected-page reader returned no readable page.");
   assert.equal(routeSelected, true, "The live route preview selected no tools-capable route.");
   process.stdout.write(`${JSON.stringify({
@@ -121,7 +132,10 @@ try {
     protocol: client.getNegotiatedProtocolVersion(),
     tool_count: checks.length,
     web_search_results: searchResultCount,
+    web_search_quality: searchQuality,
+    web_search_engines: searchRequestedEngines,
     research_results: researchResultCount,
+    research_quality: researchQuality,
     readable_pages: readablePageCount,
     route_selected: routeSelected,
     security_overall: securityOverall,
