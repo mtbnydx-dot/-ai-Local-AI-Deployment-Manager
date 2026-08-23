@@ -22,6 +22,8 @@ export type FixedHttpClientOptions = {
 
 export type InternalRequestOptions = {
   bearerToken?: string;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
 };
 
 export class FixedHttpClient {
@@ -97,6 +99,8 @@ export class FixedHttpClient {
     };
     if (method === "POST") headers["content-type"] = "application/json";
     if (options.bearerToken) headers.authorization = `Bearer ${options.bearerToken}`;
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
+    const maxResponseBytes = options.maxResponseBytes ?? this.maxResponseBytes;
 
     let response: Response;
     try {
@@ -105,22 +109,22 @@ export class FixedHttpClient {
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         redirect: "error",
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       const reason = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
-        ? `timed out after ${this.timeoutMs} ms`
+        ? `timed out after ${timeoutMs} ms`
         : "could not be reached";
       throw new UpstreamRequestError(service, `${service} ${reason}.`);
     }
 
     const declaredLength = Number(response.headers.get("content-length") || 0);
-    if (declaredLength > this.maxResponseBytes) {
+    if (declaredLength > maxResponseBytes) {
       throw new UpstreamRequestError(service, `${service} returned more data than the configured safety limit.`, response.status);
     }
 
     const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > this.maxResponseBytes) {
+    if (Buffer.byteLength(text, "utf8") > maxResponseBytes) {
       throw new UpstreamRequestError(service, `${service} returned more data than the configured safety limit.`, response.status);
     }
     if (!response.ok) {

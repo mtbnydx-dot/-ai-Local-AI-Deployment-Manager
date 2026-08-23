@@ -37,6 +37,17 @@ const argumentsByTool = {
     engines: ["bing"],
     safesearch: 1,
   },
+  local_ai_research_web: {
+    queries: [
+      { id: "official", query: "Model Context Protocol official documentation" },
+      { id: "sdk", query: "Model Context Protocol TypeScript SDK official" },
+    ],
+    max_sources: 6,
+    preferred_domains: ["modelcontextprotocol.io", "github.com"],
+    engines: ["bing"],
+    safesearch: 1,
+  },
+  local_ai_read_search_result: null,
   local_ai_list_jobs: { engine: "all", limit: 5 },
   local_ai_preview_route: { engine: "auto", protocol: "openai", capability: "tools" },
   local_ai_estimate_memory: {
@@ -70,26 +81,48 @@ try {
 
   const checks = [];
   let searchResultCount = 0;
+  let researchResultCount = 0;
+  let researchSearchId = "";
+  let researchFirstResultId = "";
+  let readablePageCount = 0;
   let routeSelected = false;
   let securityOverall = "unknown";
   for (const tool of listing.tools) {
-    const result = await client.callTool({ name: tool.name, arguments: argumentsByTool[tool.name] });
+    const argumentsForTool = tool.name === "local_ai_read_search_result"
+      ? {
+        search_id: researchSearchId,
+        result_ids: [researchFirstResultId],
+        max_chars_per_result: 3000,
+        max_total_chars: 3000,
+      }
+      : argumentsByTool[tool.name];
+    const result = await client.callTool({ name: tool.name, arguments: argumentsForTool });
     assert.notEqual(result.isError, true, `${tool.name} returned a tool error.`);
     assert.equal(typeof result.structuredContent, "object", `${tool.name} omitted structured content.`);
     const output = result.structuredContent;
     assert.equal(output.ok, true, `${tool.name} reported ok=false.`);
     checks.push({ name: tool.name, ok: output.ok, partial: output.partial });
     if (tool.name === "local_ai_search_web") searchResultCount = Number(output.data?.count || 0);
+    if (tool.name === "local_ai_research_web") {
+      researchResultCount = Number(output.data?.count || 0);
+      researchSearchId = String(output.data?.search_id || "");
+      researchFirstResultId = String(output.data?.results?.[0]?.result_id || "");
+    }
+    if (tool.name === "local_ai_read_search_result") readablePageCount = Number(output.data?.readable_count || 0);
     if (tool.name === "local_ai_preview_route") routeSelected = output.data?.selected === true;
     if (tool.name === "local_ai_get_security_posture") securityOverall = String(output.data?.overall || "unknown");
   }
   assert.ok(searchResultCount > 0, "The live web search returned no results.");
+  assert.ok(researchResultCount > 0, "The live multi-query research returned no results.");
+  assert.ok(readablePageCount > 0, "The live selected-page reader returned no readable page.");
   assert.equal(routeSelected, true, "The live route preview selected no tools-capable route.");
   process.stdout.write(`${JSON.stringify({
     ok: true,
     protocol: client.getNegotiatedProtocolVersion(),
     tool_count: checks.length,
     web_search_results: searchResultCount,
+    research_results: researchResultCount,
+    readable_pages: readablePageCount,
     route_selected: routeSelected,
     security_overall: securityOverall,
     checks,

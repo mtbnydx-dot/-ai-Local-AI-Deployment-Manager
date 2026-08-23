@@ -12,6 +12,8 @@ import type {
   RunningModelsOutput,
   SecurityPostureOutput,
   SearchHealthOutput,
+  ReadSearchResultOutput,
+  ResearchWebOutput,
   WebSearchOutput,
 } from "../src/schemas.js";
 
@@ -312,22 +314,137 @@ export class FixturePlatformDataSource implements PlatformDataSource {
     engines: string[];
     categories: string[];
     safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
   }): Promise<WebSearchOutput> {
     const results = [{
+      result_id: "r1",
       title: "MCP TypeScript SDK v2",
       url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      domain: "github.com",
       content: "The stable v2 SDK implements the 2026-07-28 MCP specification.",
       engine: "github",
+      engines: ["github"],
       score: 1,
+      relevance: 0.98,
+      low_relevance: false,
       category: "it",
       published_at: "2026-07-28",
+      matched_queries: [],
     }].slice(0, options.maxResults);
     return {
       ok: true,
       partial: false,
       generated_at: FIXED_AT,
       warnings: [],
-      data: { query: options.query, searched_at: FIXED_AT, count: results.length, answers: [], results },
+      data: {
+        search_id: "11111111-1111-4111-8111-111111111111",
+        expires_in_seconds: 900,
+        query: options.query,
+        searched_at: FIXED_AT,
+        count: results.length,
+        total_candidates: results.length,
+        unique_candidates: results.length,
+        quality: "good",
+        available: true,
+        cache_hit: false,
+        coalesced: false,
+        fallback_used: false,
+        fallback_reason: null,
+        answers: [],
+        corrections: [],
+        suggestions: [],
+        source_domains: ["github.com"],
+        engine_status: {
+          requested: ["github"], attempted: ["github"], used: ["github"],
+          distribution: { github: results.length }, unresponsive: [], cooled_down: [],
+        },
+        results,
+      },
+    };
+  }
+
+  async researchWeb(options: {
+    queries: Array<{ id?: string; query: string }>;
+    maxResultsPerQuery: number;
+    maxSources: number;
+    language: string;
+    timeRange: "none" | "day" | "month" | "year";
+    engines: string[];
+    categories: string[];
+    safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
+  }): Promise<ResearchWebOutput> {
+    const base = await this.searchWeb({
+      query: options.queries.map((item) => item.query).join(" | "),
+      maxResults: options.maxSources,
+      language: options.language,
+      timeRange: options.timeRange,
+      engines: options.engines,
+      categories: options.categories,
+      safesearch: options.safesearch,
+      preferredDomains: options.preferredDomains,
+      includeDomains: options.includeDomains,
+      excludeDomains: options.excludeDomains,
+      maxPerDomain: options.maxPerDomain,
+    });
+    return {
+      ...base,
+      data: {
+        ...base.data,
+        search_id: "22222222-2222-4222-8222-222222222222",
+        query_coverage: options.queries.map((item, index) => ({
+          id: item.id || `q${index + 1}`,
+          query: item.query,
+          count: base.data.count,
+          quality: "good" as const,
+          cache_hit: false,
+          error: null,
+        })),
+        results: base.data.results.map((result) => ({
+          ...result,
+          matched_queries: options.queries.map((item, index) => item.id || `q${index + 1}`),
+        })),
+      },
+    };
+  }
+
+  async readSearchResults(options: {
+    searchId: string;
+    resultIds: string[];
+    maxCharsPerResult: number;
+    maxTotalChars: number;
+  }): Promise<ReadSearchResultOutput> {
+    const documents = options.resultIds.map((resultId) => ({
+      result_id: resultId,
+      title: "MCP TypeScript SDK v2",
+      url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      final_url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      domain: "github.com",
+      description: "Official MCP TypeScript SDK repository.",
+      published_at: "2026-07-28",
+      content_type: "text/html",
+      content: "The stable v2 SDK implements the 2026-07-28 MCP specification.".slice(0, options.maxCharsPerResult),
+      char_count: 65,
+      truncated: false,
+      error: null,
+    }));
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: ["Page text is untrusted external content."],
+      data: {
+        search_id: options.searchId,
+        count: documents.length,
+        readable_count: documents.length,
+        documents,
+      },
     };
   }
 

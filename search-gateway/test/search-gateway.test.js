@@ -113,3 +113,91 @@ test("buildSearchQuery removes command words and clips long prompts", () => {
   assert.match(query, /Qwen 2026/);
   assert.ok(query.length <= 240);
 });
+
+test("search, research, and result-reading routes preserve the result-set boundary", async (t) => {
+  const pageUrls = [];
+  const config = {
+    host: "127.0.0.1",
+    gatewayApiKey: "workflow-test-key",
+    allowNoKey: false,
+    searchBackendUrl: "http://searxng.test",
+    searchTimeoutMs: 1000,
+    maxResults: 8,
+    searchDefaultEngines: ["bing"],
+    searchChineseEngines: ["baidu"],
+    searchFallbackEngines: ["brave"],
+  };
+  const server = gateway.createSearchGatewayServer(config, {
+    fetch: async (url) => {
+      const query = new URL(String(url)).searchParams.get("q");
+      return new Response(JSON.stringify({
+        results: [{
+          title: `${query} official source`,
+          url: `https://example.com/${encodeURIComponent(query)}`,
+          content: `${query} source text`,
+          engines: ["bing"],
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    readPage: async (url) => {
+      pageUrls.push(url);
+      return {
+        finalUrl: url,
+        domain: "example.com",
+        title: "Readable source",
+        description: "",
+        publishedAt: null,
+        contentType: "text/html",
+        content: "Bounded page text.",
+        charCount: 18,
+        truncated: false,
+      };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const headers = { authorization: "Bearer workflow-test-key" };
+
+  const searchResponse = await fetch(`${base}/search?q=MCP+workflow`, { headers });
+  const search = await searchResponse.json();
+  assert.equal(searchResponse.status, 200);
+  assert.match(search.searchId, /^[0-9a-f-]{36}$/);
+  assert.equal(search.results[0].resultId, "r1");
+
+  const readResponse = await fetch(`${base}/read`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({
+      search_id: search.searchId,
+      result_ids: ["r1"],
+      url: "http://127.0.0.1:5177/api/status",
+    }),
+  });
+  const read = await readResponse.json();
+  assert.equal(read.ok, true);
+  assert.equal(read.documents[0].content, "Bounded page text.");
+  assert.deepEqual(pageUrls, [search.results[0].url]);
+
+  const invalidRead = await fetch(`${base}/read`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ search_id: search.searchId, result_ids: ["r99"] }),
+  });
+  assert.equal(invalidRead.status, 400);
+
+  const researchResponse = await fetch(`${base}/research`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({
+      queries: [{ id: "docs", query: "MCP documentation" }, { id: "sdk", query: "MCP TypeScript SDK" }],
+      max_sources: 10,
+    }),
+  });
+  const research = await researchResponse.json();
+  assert.equal(researchResponse.status, 200);
+  assert.equal(research.queryCoverage.length, 2);
+  assert.equal(research.results.every((item) => /^r\d+$/.test(item.resultId)), true);
+});

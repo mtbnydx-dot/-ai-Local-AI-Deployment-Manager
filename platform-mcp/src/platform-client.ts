@@ -13,6 +13,8 @@ import {
   RunningModelsOutputSchema,
   SecurityPostureOutputSchema,
   SearchHealthOutputSchema,
+  ReadSearchResultOutputSchema,
+  ResearchWebOutputSchema,
   WebSearchOutputSchema,
   type DiagnosticsOutput,
   type EngineSelector,
@@ -26,6 +28,8 @@ import {
   type RunningModelsOutput,
   type SecurityPostureOutput,
   type SearchHealthOutput,
+  type ReadSearchResultOutput,
+  type ResearchWebOutput,
   type WebSearchOutput,
 } from "./schemas.js";
 
@@ -58,7 +62,31 @@ export interface PlatformDataSource {
     engines: string[];
     categories: string[];
     safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
   }): Promise<WebSearchOutput>;
+  researchWeb(options: {
+    queries: Array<{ id?: string; query: string }>;
+    maxResultsPerQuery: number;
+    maxSources: number;
+    language: string;
+    timeRange: "none" | "day" | "month" | "year";
+    engines: string[];
+    categories: string[];
+    safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
+  }): Promise<ResearchWebOutput>;
+  readSearchResults(options: {
+    searchId: string;
+    resultIds: string[];
+    maxCharsPerResult: number;
+    maxTotalChars: number;
+  }): Promise<ReadSearchResultOutput>;
   listJobs(options: {
     engine: EngineSelector;
     status: string;
@@ -194,6 +222,9 @@ function mapGpu(value: unknown) {
 
 function mapSearch(value: unknown, error: string | null = null) {
   const health = object(value);
+  const state = object(health.searchState ?? health.search_state);
+  const lastSearch = object(state.lastSearch ?? state.last_search);
+  const metrics = object(state.metrics);
   const online = !error;
   return {
     online,
@@ -201,7 +232,134 @@ function mapSearch(value: unknown, error: string | null = null) {
     mode: nullableString(health.searchMode ?? health.mode),
     auth_required: online && typeof health.authRequired === "boolean" ? health.authRequired : null,
     max_results: online ? nullableNumber(health.maxResults) : null,
+    state: ["healthy", "degraded", "unavailable"].includes(stringValue(state.state))
+      ? stringValue(state.state) as "healthy" | "degraded" | "unavailable"
+      : null,
+    default_engines: array(state.defaultEngines ?? state.default_engines).map((item) => safeDisplayText(item, 64)).filter(Boolean),
+    chinese_engines: array(state.chineseEngines ?? state.chinese_engines).map((item) => safeDisplayText(item, 64)).filter(Boolean),
+    fallback_engines: array(state.fallbackEngines ?? state.fallback_engines).map((item) => safeDisplayText(item, 64)).filter(Boolean),
+    available_default_engines: array(state.availableDefaultEngines ?? state.available_default_engines)
+      .map((item) => safeDisplayText(item, 64)).filter(Boolean),
+    cooldowns: mapEngineStates(state.cooldowns),
+    cache_entries: Math.max(0, numberValue(state.cacheEntries ?? state.cache_entries)),
+    active_backend_requests: Math.max(0, numberValue(state.activeBackendRequests ?? state.active_backend_requests)),
+    queued_backend_requests: Math.max(0, numberValue(state.queuedBackendRequests ?? state.queued_backend_requests)),
+    session_count: Math.max(0, numberValue(state.sessionCount ?? state.session_count)),
+    last_search: Object.keys(lastSearch).length ? {
+      searched_at: generatedAt(lastSearch.searchedAt ?? lastSearch.searched_at),
+      quality: searchQuality(lastSearch.quality),
+      count: Math.max(0, numberValue(lastSearch.count)),
+      partial: booleanValue(lastSearch.partial),
+      available: booleanValue(lastSearch.available),
+    } : null,
+    metrics: {
+      searches: Math.max(0, numberValue(metrics.searches)),
+      research_requests: Math.max(0, numberValue(metrics.researchRequests ?? metrics.research_requests)),
+      cache_hits: Math.max(0, numberValue(metrics.cacheHits ?? metrics.cache_hits)),
+      coalesced_requests: Math.max(0, numberValue(metrics.coalescedRequests ?? metrics.coalesced_requests)),
+      backend_requests: Math.max(0, numberValue(metrics.backendRequests ?? metrics.backend_requests)),
+      backend_failures: Math.max(0, numberValue(metrics.backendFailures ?? metrics.backend_failures)),
+      zero_result_searches: Math.max(0, numberValue(metrics.zeroResultSearches ?? metrics.zero_result_searches)),
+      weak_searches: Math.max(0, numberValue(metrics.weakSearches ?? metrics.weak_searches)),
+      pages_read: Math.max(0, numberValue(metrics.pagesRead ?? metrics.pages_read)),
+      page_read_failures: Math.max(0, numberValue(metrics.pageReadFailures ?? metrics.page_read_failures)),
+    },
     error,
+  };
+}
+
+function searchQuality(value: unknown): "good" | "mixed" | "weak" | "empty" {
+  const quality = stringValue(value).toLowerCase();
+  return quality === "good" || quality === "mixed" || quality === "weak" || quality === "empty" ? quality : "empty";
+}
+
+function mapEngineStates(value: unknown) {
+  return array(value).map((raw) => {
+    const item = object(raw);
+    const engine = safeDisplayText(item.engine, 64);
+    if (!engine) return null;
+    return {
+      engine,
+      reason: safeDisplayText(item.reason, 200) || "unresponsive",
+      retry_after_seconds: Math.max(0, Math.trunc(numberValue(item.retryAfterSeconds ?? item.retry_after_seconds))),
+    };
+  }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, 20);
+}
+
+function mapEngineDistribution(value: unknown): Record<string, number> {
+  const output: Record<string, number> = {};
+  for (const [key, count] of Object.entries(object(value)).slice(0, 20)) {
+    const safeKey = safeDisplayText(key, 64).replace(/[^A-Za-z0-9_.-]/g, "");
+    if (safeKey) output[safeKey] = Math.max(0, Math.trunc(numberValue(count)));
+  }
+  return output;
+}
+
+function mapSearchResults(value: unknown, limit: number) {
+  return array(value).map((raw, index) => {
+    const item = object(raw);
+    const url = safeExternalUrl(item.url);
+    if (!url) return null;
+    const parsed = new URL(url);
+    const engines = array(item.engines).map((engine) => safeDisplayText(engine, 64)).filter(Boolean);
+    const fallbackEngine = nullableString(item.engine);
+    if (!engines.length && fallbackEngine) engines.push(...fallbackEngine.split(",").map((engine) => safeDisplayText(engine, 64)).filter(Boolean));
+    const relevance = Math.max(0, Math.min(1, numberValue(item.relevance)));
+    return {
+      result_id: safeDisplayText(item.resultId ?? item.result_id, 30) || `r${index + 1}`,
+      title: safeDisplayText(item.title ?? item.url, 240),
+      url,
+      domain: safeDisplayText(item.domain, 253) || parsed.hostname.toLowerCase(),
+      content: safeDisplayText(item.content ?? item.snippet, 1200),
+      engine: fallbackEngine,
+      engines: Array.from(new Set(engines)).slice(0, 12),
+      score: nullableNumber(item.score),
+      relevance,
+      low_relevance: typeof item.lowRelevance === "boolean" ? item.lowRelevance : booleanValue(item.low_relevance, relevance < 0.12),
+      category: nullableString(item.category),
+      published_at: nullableString(item.publishedDate ?? item.published_at ?? item.published_date),
+      matched_queries: array(item.matchedQueries ?? item.matched_queries).map((query) => safeDisplayText(query, 40)).filter(Boolean).slice(0, 6),
+    };
+  }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, limit);
+}
+
+function mapSearchEnvelope(payloadValue: unknown, fallbackQuery: string, maxResults: number) {
+  const payload = object(payloadValue);
+  const engineStatus = object(payload.engineStatus ?? payload.engine_status);
+  const results = mapSearchResults(payload.results, maxResults);
+  return {
+    ok: booleanValue(payload.ok, booleanValue(payload.available, true)),
+    partial: booleanValue(payload.partial),
+    generated_at: generatedAt(payload.searchedAt ?? payload.searched_at),
+    warnings: array(payload.warnings).map((value) => safeDisplayText(value, 500)).filter(Boolean).slice(0, 20),
+    data: {
+      search_id: safeDisplayText(payload.searchId ?? payload.search_id, 100),
+      expires_in_seconds: Math.max(1, Math.trunc(numberValue(payload.expiresInSeconds ?? payload.expires_in_seconds, 900))),
+      query: safeDisplayText(payload.query, 500) || fallbackQuery,
+      searched_at: generatedAt(payload.searchedAt ?? payload.searched_at),
+      count: results.length,
+      total_candidates: Math.max(results.length, Math.trunc(numberValue(payload.totalCandidates ?? payload.total_candidates, results.length))),
+      unique_candidates: Math.max(results.length, Math.trunc(numberValue(payload.uniqueCandidates ?? payload.unique_candidates, results.length))),
+      quality: searchQuality(payload.quality ?? (results.length ? "mixed" : "empty")),
+      available: booleanValue(payload.available, true),
+      cache_hit: booleanValue(payload.cacheHit ?? payload.cache_hit),
+      coalesced: booleanValue(payload.coalesced),
+      fallback_used: booleanValue(payload.fallbackUsed ?? payload.fallback_used),
+      fallback_reason: nullableString(payload.fallbackReason ?? payload.fallback_reason),
+      answers: array(payload.answers).map((value) => safeDisplayText(value, 700)).filter(Boolean).slice(0, 6),
+      corrections: array(payload.corrections).map((value) => safeDisplayText(value, 240)).filter(Boolean).slice(0, 8),
+      suggestions: array(payload.suggestions).map((value) => safeDisplayText(value, 240)).filter(Boolean).slice(0, 12),
+      source_domains: array(payload.sourceDomains ?? payload.source_domains).map((value) => safeDisplayText(value, 253)).filter(Boolean).slice(0, 30),
+      engine_status: {
+        requested: array(engineStatus.requested).map((value) => safeDisplayText(value, 64)).filter(Boolean),
+        attempted: array(engineStatus.attempted).map((value) => safeDisplayText(value, 64)).filter(Boolean),
+        used: array(engineStatus.used).map((value) => safeDisplayText(value, 64)).filter(Boolean),
+        distribution: mapEngineDistribution(engineStatus.distribution),
+        unresponsive: mapEngineStates(engineStatus.unresponsive),
+        cooled_down: mapEngineStates(engineStatus.cooledDown ?? engineStatus.cooled_down),
+      },
+      results,
+    },
   };
 }
 
@@ -259,7 +417,7 @@ function mapModelPerformance(value: unknown) {
 }
 
 function safeDisplayText(value: unknown, maxLength = 500): string {
-  return stringValue(value)
+  return cleanText(value, maxLength)
     .replace(/[A-Za-z]:\\[^\r\n\t"']+/g, "[local path]")
     .replace(/\/(?:models|root|home|workspace)\/[^\s"']+/gi, "[local path]")
     .slice(0, maxLength)
@@ -353,6 +511,15 @@ export class LocalPlatformClient implements PlatformDataSource {
       timeoutMs: config.timeoutMs,
       maxResponseBytes: config.maxUpstreamBytes,
     });
+  }
+
+  private assertSearchConfigured(): void {
+    if (!this.config.searchGatewayApiKey) {
+      throw new Error(
+        "Web search is not configured for MCP. Start the service with start-platform-mcp.cmd, "
+        + "or provide PLATFORM_MCP_SEARCH_GATEWAY_API_KEY through the client's secret store.",
+      );
+    }
   }
 
   private async safeGet(service: string, baseUrl: URL, pathname: string, bearerToken = ""): Promise<SettledJson> {
@@ -676,13 +843,12 @@ export class LocalPlatformClient implements PlatformDataSource {
     engines: string[];
     categories: string[];
     safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
   }): Promise<WebSearchOutput> {
-    if (!this.config.searchGatewayApiKey) {
-      throw new Error(
-        "Web search is not configured for MCP. Start the service with start-platform-mcp.cmd, "
-        + "or provide PLATFORM_MCP_SEARCH_GATEWAY_API_KEY through the client's secret store.",
-      );
-    }
+    this.assertSearchConfigured();
     const params = new URLSearchParams({
       q: options.query,
       max_results: String(options.maxResults),
@@ -692,6 +858,10 @@ export class LocalPlatformClient implements PlatformDataSource {
     if (options.timeRange !== "none") params.set("time_range", options.timeRange);
     if (options.engines.length) params.set("engines", options.engines.join(","));
     if (options.categories.length) params.set("categories", options.categories.join(","));
+    if (options.preferredDomains?.length) params.set("preferred_domains", options.preferredDomains.join(","));
+    if (options.includeDomains?.length) params.set("include_domains", options.includeDomains.join(","));
+    if (options.excludeDomains?.length) params.set("exclude_domains", options.excludeDomains.join(","));
+    if (options.maxPerDomain && options.maxPerDomain !== 3) params.set("max_per_domain", String(options.maxPerDomain));
 
     const payload = await this.http.getJson(
       "search gateway",
@@ -699,31 +869,111 @@ export class LocalPlatformClient implements PlatformDataSource {
       `/search?${params.toString()}`,
       { bearerToken: this.config.searchGatewayApiKey },
     );
-    const results = array(payload.results).map((raw) => {
+    return WebSearchOutputSchema.parse(mapSearchEnvelope(payload, options.query, options.maxResults));
+  }
+
+  async researchWeb(options: {
+    queries: Array<{ id?: string; query: string }>;
+    maxResultsPerQuery: number;
+    maxSources: number;
+    language: string;
+    timeRange: "none" | "day" | "month" | "year";
+    engines: string[];
+    categories: string[];
+    safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
+  }): Promise<ResearchWebOutput> {
+    this.assertSearchConfigured();
+    const payload = await this.http.postJson(
+      "search gateway",
+      this.config.searchGatewayUrl,
+      "/research",
+      {
+        queries: options.queries.map((item, index) => ({ id: item.id || `q${index + 1}`, query: item.query })),
+        max_results_per_query: options.maxResultsPerQuery,
+        max_sources: options.maxSources,
+        language: options.language,
+        time_range: options.timeRange === "none" ? "" : options.timeRange,
+        engines: options.engines,
+        categories: options.categories,
+        safesearch: options.safesearch,
+        preferred_domains: options.preferredDomains,
+        include_domains: options.includeDomains,
+        exclude_domains: options.excludeDomains,
+        max_per_domain: options.maxPerDomain,
+      },
+      { bearerToken: this.config.searchGatewayApiKey, timeoutMs: Math.max(this.config.timeoutMs, 90000) },
+    );
+    const mapped = mapSearchEnvelope(payload, options.queries.map((item) => item.query).join(" | "), options.maxSources);
+    const coverage = array(payload.queryCoverage ?? payload.query_coverage).map((raw, index) => {
+      const item = object(raw);
+      const qualityValue = stringValue(item.quality);
+      return {
+        id: safeDisplayText(item.id, 40) || options.queries[index]?.id || `q${index + 1}`,
+        query: safeDisplayText(item.query, 500) || options.queries[index]?.query || "",
+        count: Math.max(0, Math.trunc(numberValue(item.count))),
+        quality: qualityValue === "unavailable" ? "unavailable" as const : searchQuality(qualityValue),
+        cache_hit: booleanValue(item.cacheHit ?? item.cache_hit),
+        error: nullableString(item.error),
+      };
+    }).slice(0, 6);
+    return ResearchWebOutputSchema.parse({ ...mapped, data: { ...mapped.data, query_coverage: coverage } });
+  }
+
+  async readSearchResults(options: {
+    searchId: string;
+    resultIds: string[];
+    maxCharsPerResult: number;
+    maxTotalChars: number;
+  }): Promise<ReadSearchResultOutput> {
+    this.assertSearchConfigured();
+    const payload = await this.http.postJson(
+      "search gateway",
+      this.config.searchGatewayUrl,
+      "/read",
+      {
+        search_id: options.searchId,
+        result_ids: options.resultIds,
+        max_chars_per_result: options.maxCharsPerResult,
+        max_total_chars: options.maxTotalChars,
+      },
+      { bearerToken: this.config.searchGatewayApiKey, timeoutMs: Math.max(this.config.timeoutMs, 45000) },
+    );
+    const documents = array(payload.documents).map((raw, index) => {
       const item = object(raw);
       const url = safeExternalUrl(item.url);
       if (!url) return null;
+      const finalUrl = item.finalUrl ?? item.final_url;
+      const safeFinalUrl = finalUrl ? safeExternalUrl(finalUrl) : null;
+      const content = safeDisplayText(item.content, options.maxCharsPerResult);
       return {
-        title: safeDisplayText(item.title ?? item.url, 240),
+        result_id: safeDisplayText(item.resultId ?? item.result_id, 30) || options.resultIds[index] || `r${index + 1}`,
+        title: safeDisplayText(item.title, 300),
         url,
-        content: safeDisplayText(item.content ?? item.snippet, 1200),
-        engine: nullableString(item.engine),
-        score: nullableNumber(item.score),
-        category: nullableString(item.category),
-        published_at: nullableString(item.publishedDate ?? item.published_at ?? item.published_date),
+        final_url: safeFinalUrl,
+        domain: safeDisplayText(item.domain, 253) || new URL(safeFinalUrl || url).hostname,
+        description: safeDisplayText(item.description, 600),
+        published_at: nullableString(item.publishedAt ?? item.published_at),
+        content_type: nullableString(item.contentType ?? item.content_type),
+        content,
+        char_count: content.length,
+        truncated: booleanValue(item.truncated),
+        error: nullableString(item.error),
       };
-    }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, options.maxResults);
-    return WebSearchOutputSchema.parse({
-      ok: booleanValue(payload.ok, true),
-      partial: false,
-      generated_at: generatedAt(payload.searchedAt),
-      warnings: [],
+    }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, 3);
+    return ReadSearchResultOutputSchema.parse({
+      ok: booleanValue(payload.ok, documents.some((item) => !item.error)),
+      partial: booleanValue(payload.partial),
+      generated_at: new Date().toISOString(),
+      warnings: array(payload.warnings).map((value) => safeDisplayText(value, 500)).filter(Boolean).slice(0, 10),
       data: {
-        query: stringValue(payload.query, options.query),
-        searched_at: generatedAt(payload.searchedAt),
-        count: results.length,
-        answers: array(payload.answers).map((value) => safeDisplayText(value, 700)).filter(Boolean).slice(0, 3),
-        results,
+        search_id: safeDisplayText(payload.searchId ?? payload.search_id, 100) || options.searchId,
+        count: documents.length,
+        readable_count: documents.filter((item) => !item.error).length,
+        documents,
       },
     });
   }

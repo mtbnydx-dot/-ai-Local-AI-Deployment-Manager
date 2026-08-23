@@ -58,11 +58,11 @@ export const SearchHealthInputSchema = z.object({
 const SearchTokenSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/)
   .describe("A safe SearXNG engine or category token without spaces or punctuation.");
 
-export const WebSearchInputSchema = z.object({
-  query: z.string().trim().min(2).max(500)
-    .describe("Natural-language web search query, from 2 through 500 characters."),
-  max_results: z.number().int().min(1).max(10).default(5)
-    .describe("Maximum normalized search results to return, from 1 through 10."),
+const SearchDomainSchema = z.string().trim().min(1).max(253)
+  .regex(/^(?:[A-Za-z0-9-]+\.)*[A-Za-z0-9-]+$/)
+  .describe("A hostname or parent domain without scheme, path, port, or wildcard.");
+
+const SearchTuningInputShape = {
   language: z.string().trim().max(24).regex(/^[A-Za-z0-9_.-]*$/).default("")
     .describe("Optional SearXNG language token such as en, zh-CN, or all."),
   time_range: z.enum(["none", "day", "month", "year"]).default("none")
@@ -73,6 +73,52 @@ export const WebSearchInputSchema = z.object({
     .describe("Optional allowlist of up to five SearXNG categories."),
   safesearch: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(1)
     .describe("SearXNG safe-search level: 0 off, 1 moderate, or 2 strict."),
+  preferred_domains: z.array(SearchDomainSchema).max(10).default([])
+    .describe("Boost results from these domains without excluding other sources."),
+  include_domains: z.array(SearchDomainSchema).max(10).default([])
+    .describe("Return only results from these domains or their subdomains."),
+  exclude_domains: z.array(SearchDomainSchema).max(20).default([])
+    .describe("Discard results from these domains or their subdomains."),
+  max_per_domain: z.number().int().min(1).max(6).default(3)
+    .describe("Maximum selected results from one domain before diversity fallback."),
+};
+
+export const WebSearchInputSchema = z.object({
+  query: z.string().trim().min(2).max(500)
+    .describe("Natural-language web search query, from 2 through 500 characters."),
+  max_results: z.number().int().min(1).max(20).default(8)
+    .describe("Maximum normalized search results to return, from 1 through 20."),
+  ...SearchTuningInputShape,
+  response_format: ResponseFormatSchema,
+}).strict();
+
+const ResearchQuerySchema = z.object({
+  id: z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9_.-]+$/)
+    .optional().describe("Optional stable query label used in coverage; defaults to q1, q2, and so on."),
+  query: z.string().trim().min(2).max(500)
+    .describe("A focused search query representing one angle of the research task."),
+}).strict();
+
+export const ResearchWebInputSchema = z.object({
+  queries: z.array(ResearchQuerySchema).min(1).max(6)
+    .describe("One through six complementary, non-secret web queries."),
+  max_results_per_query: z.number().int().min(2).max(15).default(8)
+    .describe("Candidate results retained per query before cross-query merging."),
+  max_sources: z.number().int().min(3).max(30).default(16)
+    .describe("Maximum deduplicated, domain-diverse sources in the merged result."),
+  ...SearchTuningInputShape,
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const ReadSearchResultInputSchema = z.object({
+  search_id: z.string().trim().min(16).max(100)
+    .describe("Opaque search_id returned by local_ai_search_web or local_ai_research_web."),
+  result_ids: z.array(z.string().regex(/^r[1-9]\d*$/)).min(1).max(3)
+    .describe("One through three result_id values from that exact search result set."),
+  max_chars_per_result: z.number().int().min(1000).max(15000).default(8000)
+    .describe("Maximum extracted text characters per page."),
+  max_total_chars: z.number().int().min(2000).max(30000).default(24000)
+    .describe("Maximum extracted text characters across all selected pages."),
   response_format: ResponseFormatSchema,
 }).strict();
 
@@ -193,12 +239,51 @@ const ManagerSummarySchema = z.object({
   error: z.string().nullable(),
 }).strict();
 
+export const SearchQualitySchema = z.enum(["good", "mixed", "weak", "empty"]);
+
+const SearchEngineStateSchema = z.object({
+  engine: z.string(),
+  reason: z.string(),
+  retry_after_seconds: z.number().int().nonnegative(),
+}).strict();
+
+const SearchMetricsSchema = z.object({
+  searches: z.number().int().nonnegative(),
+  research_requests: z.number().int().nonnegative(),
+  cache_hits: z.number().int().nonnegative(),
+  coalesced_requests: z.number().int().nonnegative(),
+  backend_requests: z.number().int().nonnegative(),
+  backend_failures: z.number().int().nonnegative(),
+  zero_result_searches: z.number().int().nonnegative(),
+  weak_searches: z.number().int().nonnegative(),
+  pages_read: z.number().int().nonnegative(),
+  page_read_failures: z.number().int().nonnegative(),
+}).strict();
+
 export const SearchSummarySchema = z.object({
   online: z.boolean(),
   healthy: z.boolean(),
   mode: z.string().nullable(),
   auth_required: z.boolean().nullable(),
   max_results: z.number().nullable(),
+  state: z.enum(["healthy", "degraded", "unavailable"]).nullable().optional(),
+  default_engines: z.array(z.string()).optional(),
+  chinese_engines: z.array(z.string()).optional(),
+  fallback_engines: z.array(z.string()).optional(),
+  available_default_engines: z.array(z.string()).optional(),
+  cooldowns: z.array(SearchEngineStateSchema).optional(),
+  cache_entries: z.number().int().nonnegative().optional(),
+  active_backend_requests: z.number().int().nonnegative().optional(),
+  queued_backend_requests: z.number().int().nonnegative().optional(),
+  session_count: z.number().int().nonnegative().optional(),
+  last_search: z.object({
+    searched_at: z.string(),
+    quality: SearchQualitySchema,
+    count: z.number().int().nonnegative(),
+    partial: z.boolean(),
+    available: z.boolean(),
+  }).strict().nullable().optional(),
+  metrics: SearchMetricsSchema.optional(),
   error: z.string().nullable(),
 }).strict();
 
@@ -341,24 +426,109 @@ export const SearchHealthOutputSchema = z.object({
   }).strict(),
 }).strict();
 
+const SearchEngineStatusSchema = z.object({
+  requested: z.array(z.string()),
+  attempted: z.array(z.string()),
+  used: z.array(z.string()),
+  distribution: z.record(z.string(), z.number().int().nonnegative()),
+  unresponsive: z.array(SearchEngineStateSchema),
+  cooled_down: z.array(SearchEngineStateSchema),
+}).strict();
+
 const WebSearchResultSchema = z.object({
+  result_id: z.string(),
   title: z.string(),
   url: z.string(),
+  domain: z.string(),
   content: z.string(),
   engine: z.string().nullable(),
+  engines: z.array(z.string()),
   score: z.number().nullable(),
+  relevance: z.number().min(0).max(1),
+  low_relevance: z.boolean(),
   category: z.string().nullable(),
   published_at: z.string().nullable(),
+  matched_queries: z.array(z.string()),
 }).strict();
 
 export const WebSearchOutputSchema = z.object({
   ...EnvelopeFields,
   data: z.object({
+    search_id: z.string(),
+    expires_in_seconds: z.number().int().positive(),
     query: z.string(),
     searched_at: z.string(),
     count: z.number().int().nonnegative(),
+    total_candidates: z.number().int().nonnegative(),
+    unique_candidates: z.number().int().nonnegative(),
+    quality: SearchQualitySchema,
+    available: z.boolean(),
+    cache_hit: z.boolean(),
+    coalesced: z.boolean(),
+    fallback_used: z.boolean(),
+    fallback_reason: z.string().nullable(),
     answers: z.array(z.string()),
+    corrections: z.array(z.string()),
+    suggestions: z.array(z.string()),
+    source_domains: z.array(z.string()),
+    engine_status: SearchEngineStatusSchema,
     results: z.array(WebSearchResultSchema),
+  }).strict(),
+}).strict();
+
+export const ResearchWebOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    search_id: z.string(),
+    expires_in_seconds: z.number().int().positive(),
+    query: z.string(),
+    searched_at: z.string(),
+    count: z.number().int().nonnegative(),
+    total_candidates: z.number().int().nonnegative(),
+    unique_candidates: z.number().int().nonnegative(),
+    quality: SearchQualitySchema,
+    available: z.boolean(),
+    cache_hit: z.boolean(),
+    coalesced: z.boolean(),
+    fallback_used: z.boolean(),
+    fallback_reason: z.string().nullable(),
+    answers: z.array(z.string()),
+    corrections: z.array(z.string()),
+    suggestions: z.array(z.string()),
+    source_domains: z.array(z.string()),
+    engine_status: SearchEngineStatusSchema,
+    query_coverage: z.array(z.object({
+      id: z.string(),
+      query: z.string(),
+      count: z.number().int().nonnegative(),
+      quality: z.union([SearchQualitySchema, z.literal("unavailable")]),
+      cache_hit: z.boolean(),
+      error: z.string().nullable(),
+    }).strict()),
+    results: z.array(WebSearchResultSchema),
+  }).strict(),
+}).strict();
+
+export const ReadSearchResultOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    search_id: z.string(),
+    count: z.number().int().nonnegative(),
+    readable_count: z.number().int().nonnegative(),
+    documents: z.array(z.object({
+      result_id: z.string(),
+      title: z.string(),
+      url: z.string(),
+      final_url: z.string().nullable(),
+      domain: z.string(),
+      description: z.string(),
+      published_at: z.string().nullable(),
+      content_type: z.string().nullable(),
+      content: z.string(),
+      char_count: z.number().int().nonnegative(),
+      truncated: z.boolean(),
+      error: z.string().nullable(),
+    }).strict()),
   }).strict(),
 }).strict();
 
@@ -482,6 +652,8 @@ export type PerformanceOutput = z.infer<typeof PerformanceOutputSchema>;
 export type DiagnosticsOutput = z.infer<typeof DiagnosticsOutputSchema>;
 export type SearchHealthOutput = z.infer<typeof SearchHealthOutputSchema>;
 export type WebSearchOutput = z.infer<typeof WebSearchOutputSchema>;
+export type ResearchWebOutput = z.infer<typeof ResearchWebOutputSchema>;
+export type ReadSearchResultOutput = z.infer<typeof ReadSearchResultOutputSchema>;
 export type JobsOutput = z.infer<typeof JobsOutputSchema>;
 export type RoutePreviewOutput = z.infer<typeof RoutePreviewOutputSchema>;
 export type MemoryEstimateOutput = z.infer<typeof MemoryEstimateOutputSchema>;
