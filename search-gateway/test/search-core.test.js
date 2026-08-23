@@ -3,10 +3,12 @@ const test = require("node:test");
 
 const {
   canonicalizeUrl,
+  classifySource,
   classifyQuality,
   createSearchCoordinator,
   queryTokens,
   rankAndSelectResults,
+  selectSourceDiverse,
 } = require("../search-core");
 
 function config(overrides = {}) {
@@ -206,11 +208,32 @@ test("research merges duplicate sources, reports query coverage, and registers r
     max_sources: 10,
   });
   assert.equal(result.queryCoverage.length, 2);
+  assert.equal(result.sourceStrategy, "balanced");
+  assert.equal(result.sourceTypeCoverage.official, 1);
   assert.equal(result.results.every((item) => /^r\d+$/.test(item.resultId)), true);
   const official = result.results.find((item) => item.domain === "stats.gov.cn");
   assert.deepEqual(official.matchedQueries.sort(), ["jobs", "macro"]);
   assert.equal(coordinator.resolveSessionResults(result.searchId, [official.resultId])[0].url, official.url);
   assert.throws(() => coordinator.resolveSessionResults(result.searchId, ["r999"]), /do not belong/);
+});
+
+test("source classification and balanced selection expose multiple evidence classes without treating them as credibility scores", () => {
+  assert.equal(classifySource("https://www.stats.gov.cn/data/report").sourceType, "official");
+  assert.equal(classifySource("https://arxiv.org/abs/2608.12345").sourceType, "academic");
+  assert.equal(classifySource("https://github.com/example/project/releases").sourceType, "documentation");
+  assert.equal(classifySource("https://www.reuters.com/world/story").sourceType, "news");
+  assert.equal(classifySource("https://www.reddit.com/r/economics/comments/1").sourceType, "community");
+
+  const items = [
+    ["news", 0.9, "reuters.com"],
+    ["official", 0.7, "stats.gov.cn"],
+    ["academic", 0.65, "arxiv.org"],
+    ["documentation", 0.62, "docs.example.com"],
+  ].map(([sourceType, relevance, domain], index) => ({
+    sourceType, relevance, domain, canonicalUrl: `https://${domain}/${index}`, lowRelevance: false, score: relevance,
+  }));
+  const selected = selectSourceDiverse(items, 4, 2, "balanced");
+  assert.deepEqual(new Set(selected.map((item) => item.sourceType)), new Set(["news", "official", "academic", "documentation"]));
 });
 
 test("an empty primary pool performs only one distinct fallback pass", async () => {

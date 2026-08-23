@@ -16,6 +16,42 @@ const STOP_WORDS = new Set([
   "一下", "今天", "当前", "最新", "相关", "新闻", "数据", "情况",
 ]);
 
+const SOURCE_TYPES = [
+  "official",
+  "academic",
+  "documentation",
+  "news",
+  "organization",
+  "community",
+  "commercial",
+  "other",
+];
+
+const ACADEMIC_DOMAINS = [
+  "arxiv.org", "doi.org", "pubmed.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "ssrn.com",
+  "jstor.org", "nature.com", "science.org", "sciencedirect.com", "springer.com",
+  "wiley.com", "tandfonline.com", "cambridge.org", "oup.com", "researchgate.net",
+];
+
+const NEWS_DOMAINS = [
+  "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "bloomberg.com", "ft.com",
+  "wsj.com", "nytimes.com", "economist.com", "theguardian.com", "aljazeera.com",
+  "cnn.com", "cnbc.com", "forbes.com", "time.com", "axios.com", "politico.com",
+  "scmp.com", "caixin.com", "yicai.com", "thepaper.cn", "36kr.com", "xinhua.net",
+  "people.com.cn", "chinadaily.com.cn", "abc.net.au", "smh.com.au", "afr.com",
+];
+
+const COMMUNITY_DOMAINS = [
+  "reddit.com", "quora.com", "zhihu.com", "stackoverflow.com", "stackexchange.com",
+  "news.ycombinator.com", "x.com", "twitter.com", "facebook.com", "youtube.com",
+  "bilibili.com", "medium.com", "substack.com",
+];
+
+const COMMERCIAL_DOMAINS = [
+  "amazon.com", "amazon.com.au", "ebay.com", "jd.com", "taobao.com", "tmall.com",
+  "aliexpress.com", "walmart.com", "bestbuy.com",
+];
+
 function createSearchCoordinator(config, deps = {}) {
   const fetchImpl = deps.fetch || globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("global fetch is required; use Node.js 20+.");
@@ -40,6 +76,9 @@ function createSearchCoordinator(config, deps = {}) {
     weakSearches: 0,
     pagesRead: 0,
     pageReadFailures: 0,
+    pageCacheHits: 0,
+    pageFinds: 0,
+    pageFindFailures: 0,
   };
   let lastSearch = null;
 
@@ -278,6 +317,7 @@ function createSearchCoordinator(config, deps = {}) {
       corrections: normalizeTextList(corrections, 5, 240),
       suggestions: normalizeTextList(suggestions, 8, 240),
       sourceDomains: Array.from(new Set(ranked.results.map((result) => result.domain))).slice(0, 30),
+      sourceTypeCoverage: countValues(ranked.results.map((result) => result.sourceType)),
       engineStatus: {
         requested: requestedEngines,
         attempted: Array.from(new Set(attempted)),
@@ -349,6 +389,8 @@ function createSearchCoordinator(config, deps = {}) {
         title: item.title,
         url: item.url,
         domain: item.domain,
+        sourceType: item.sourceType,
+        primarySourceLikelihood: item.primarySourceLikelihood,
       })),
     });
     trimOldest(sessions, defaults.maxSessions);
@@ -369,8 +411,9 @@ function createSearchCoordinator(config, deps = {}) {
     metrics.researchRequests += 1;
     const queries = normalizeResearchQueries(input.queries, input, config);
     if (!queries.length) throw new Error("Research requires at least one query.");
-    const maxSources = numberInRange(input.maxSources ?? input.max_sources, 3, 30, 16);
+    const maxSources = numberInRange(input.maxSources ?? input.max_sources, 3, 40, 18);
     const maxPerDomain = numberInRange(input.maxPerDomain ?? input.max_per_domain, 1, 6, 3);
+    const sourceStrategy = normalizeSourceStrategy(input.sourceStrategy ?? input.source_strategy);
     const resultsByQuery = await mapWithConcurrency(queries, defaults.maxConcurrent, async (entry) => {
       try {
         const result = await searchBase(entry.query, {
@@ -426,10 +469,11 @@ function createSearchCoordinator(config, deps = {}) {
       }
     }
 
-    const selected = selectDomainDiverse(
+    const selected = selectSourceDiverse(
       Array.from(merged.values()).sort(compareResults),
       maxSources,
       maxPerDomain,
+      sourceStrategy,
     );
     const queryCoverage = resultsByQuery.map((item) => ({
       id: item.entry.id,
@@ -449,6 +493,20 @@ function createSearchCoordinator(config, deps = {}) {
           ? "mixed"
           : "weak";
     if (quality === "weak") partial = true;
+    const sourceTypeCoverage = countValues(selected.map((result) => result.sourceType));
+    const requestedSourceTypes = Array.from(new Set([
+      ...normalizeSourceTypes(input.preferredSourceTypes ?? input.preferred_source_types),
+      ...queries.flatMap((query) => query.preferredSourceTypes || []),
+    ]));
+    const expectedSourceTypes = requestedSourceTypes.length
+      ? requestedSourceTypes
+      : sourceStrategy === "balanced"
+        ? ["official", "academic", "documentation", "news"]
+        : sourceStrategy === "primary"
+          ? ["official", "academic", "documentation", "organization"]
+          : [];
+    const coverageGaps = expectedSourceTypes.filter((type) => !sourceTypeCoverage[type]);
+    if (coverageGaps.length) warnings.push(`Source-type coverage gaps: ${coverageGaps.join(", ")}. Add a focused query for those source types if they matter to the answer.`);
     const output = {
       query: queries.map((item) => item.query).join(" | "),
       searchedAt: new Date(now()).toISOString(),
@@ -465,7 +523,10 @@ function createSearchCoordinator(config, deps = {}) {
       answers: normalizeTextList(answers, 6, 700),
       corrections: normalizeTextList(corrections, 8, 240),
       suggestions: normalizeTextList(suggestions, 12, 240),
-      sourceDomains: Array.from(new Set(selected.map((result) => result.domain))).slice(0, 30),
+      sourceDomains: Array.from(new Set(selected.map((result) => result.domain))).slice(0, 40),
+      sourceStrategy,
+      sourceTypeCoverage,
+      coverageGaps,
       engineStatus: {
         requested: Array.from(new Set(resultsByQuery.flatMap((item) => item.result?.engineStatus.requested || []))),
         attempted: Array.from(new Set(resultsByQuery.flatMap((item) => item.result?.engineStatus.attempted || []))),
@@ -511,6 +572,15 @@ function createSearchCoordinator(config, deps = {}) {
     else metrics.pageReadFailures += 1;
   }
 
+  function notePageCacheHit() {
+    metrics.pageCacheHits += 1;
+  }
+
+  function notePageFind(ok) {
+    metrics.pageFinds += 1;
+    if (!ok) metrics.pageFindFailures += 1;
+  }
+
   function health() {
     cleanup();
     const cooldowns = Array.from(circuits.values()).map((entry) => ({
@@ -542,6 +612,8 @@ function createSearchCoordinator(config, deps = {}) {
 
   return {
     health,
+    notePageCacheHit,
+    notePageFind,
     notePageRead,
     research,
     resolveSessionResults,
@@ -565,12 +637,13 @@ function normalizeSearchOptions(input = {}, config = {}) {
       ...normalizeDomainList(config.searchBlockedDomains || ["ai.so.com"]),
     ])).slice(0, 20),
     maxPerDomain: numberInRange(input.maxPerDomain ?? input.max_per_domain, 1, 6, 3),
+    preferredSourceTypes: normalizeSourceTypes(input.preferredSourceTypes ?? input.preferred_source_types),
     minRelevance: numberInRangeFloat(config.searchMinRelevance, 0.05, 0.5, 0.16),
   };
 }
 
 function normalizeResearchQueries(values, defaults = {}, config = {}) {
-  return array(values).slice(0, 6).map((raw, index) => {
+  return array(values).slice(0, 8).map((raw, index) => {
     const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : { query: raw };
     const query = clipText(String(item.query || "").trim(), 500);
     if (query.length < 2) return null;
@@ -586,6 +659,7 @@ function normalizeResearchQueries(values, defaults = {}, config = {}) {
       preferredDomains: normalizeDomainList(item.preferredDomains ?? item.preferred_domains ?? defaults.preferredDomains ?? defaults.preferred_domains),
       includeDomains: normalizeDomainList(item.includeDomains ?? item.include_domains ?? defaults.includeDomains ?? defaults.include_domains),
       excludeDomains: normalizeDomainList(item.excludeDomains ?? item.exclude_domains ?? defaults.excludeDomains ?? defaults.exclude_domains),
+      preferredSourceTypes: normalizeSourceTypes(item.preferredSourceTypes ?? item.preferred_source_types ?? defaults.preferredSourceTypes ?? defaults.preferred_source_types),
     };
   }).filter(Boolean);
 }
@@ -643,7 +717,10 @@ function normalizeSearchResult(raw, query, options) {
   const engines = normalizeTokenList(Array.isArray(raw.engines) ? raw.engines : raw.engine);
   const score = Number.isFinite(Number(raw.score)) ? Number(raw.score) : null;
   const publishedDate = clipText(String(raw.publishedDate || raw.published_date || raw.published_at || ""), 80) || null;
-  const relevance = relevanceScore(query, { title, content, url: canonicalUrl, domain, score, publishedDate }, options);
+  const source = classifySource(canonicalUrl, raw.category, title);
+  const relevance = relevanceScore(query, {
+    title, content, url: canonicalUrl, domain, score, publishedDate, sourceType: source.sourceType,
+  }, options);
   return {
     title,
     url: canonicalUrl,
@@ -657,6 +734,9 @@ function normalizeSearchResult(raw, query, options) {
     lowRelevance: relevance < options.minRelevance,
     category: clipText(String(raw.category || ""), 80) || null,
     publishedDate,
+    sourceType: source.sourceType,
+    sourceTypeReason: source.reason,
+    primarySourceLikelihood: source.primarySourceLikelihood,
   };
 }
 
@@ -673,6 +753,7 @@ function relevanceScore(query, item, options) {
   const everyPhraseMatched = phrases.length === 0 || phrases.every((phrase) => phraseHaystack.includes(normalizeForPhrase(phrase)));
   const phraseBoost = phrases.length && everyPhraseMatched ? 0.16 : 0;
   const preferredBoost = options.preferredDomains.some((domain) => domainMatches(item.domain, domain)) ? 0.16 : 0;
+  const preferredSourceBoost = (options.preferredSourceTypes || []).includes(item.sourceType) ? 0.1 : 0;
   const authorityBoost = /(^|\.)(gov|edu)(\.[a-z]{2})?$/i.test(item.domain) || /(^|\.)gov\.cn$/i.test(item.domain) ? 0.12 : 0;
   const engineScore = item.score == null ? 0 : Math.min(0.05, (Math.max(0, item.score) / (Math.max(0, item.score) + 1)) * 0.05);
   const dateBoost = recentDateBoost(item.publishedDate);
@@ -682,6 +763,7 @@ function relevanceScore(query, item, options) {
     + urlCoverage * 0.04
     + phraseBoost
     + preferredBoost
+    + preferredSourceBoost
     + authorityBoost
     + engineScore
     + dateBoost
@@ -778,6 +860,101 @@ function selectDomainDiverse(results, limit, maxPerDomain) {
   return selected;
 }
 
+function selectSourceDiverse(results, limit, maxPerDomain, strategy = "balanced") {
+  if (strategy === "relevance") return selectDomainDiverse(results, limit, maxPerDomain);
+  const ranked = strategy === "primary"
+    ? [...results].sort((left, right) => {
+      const boost = (item) => item.primarySourceLikelihood === "high" ? 0.12 : item.primarySourceLikelihood === "medium" ? 0.05 : 0;
+      const difference = (right.relevance + boost(right)) - (left.relevance + boost(left));
+      return difference || compareResults(left, right);
+    })
+    : results;
+  const selected = [];
+  const selectedUrls = new Set();
+  const domainCounts = new Map();
+  const topRelevance = ranked[0]?.relevance || 0;
+  const minimumDiversityRelevance = Math.max(0.12, topRelevance * 0.45);
+  const typeOrder = strategy === "primary"
+    ? ["official", "academic", "documentation", "organization", "news", "community", "commercial", "other"]
+    : ["official", "academic", "documentation", "news", "organization", "community", "commercial", "other"];
+
+  const add = (item) => {
+    if (!item || selectedUrls.has(item.canonicalUrl)) return false;
+    const count = domainCounts.get(item.domain) || 0;
+    if (count >= maxPerDomain) return false;
+    selected.push(item);
+    selectedUrls.add(item.canonicalUrl);
+    domainCounts.set(item.domain, count + 1);
+    return true;
+  };
+
+  for (const sourceType of typeOrder) {
+    const candidate = ranked.find((item) => item.sourceType === sourceType && item.relevance >= minimumDiversityRelevance && !selectedUrls.has(item.canonicalUrl));
+    add(candidate);
+    if (selected.length >= limit) return selected;
+  }
+  for (const item of ranked) {
+    add(item);
+    if (selected.length >= limit) return selected;
+  }
+  for (const item of ranked) {
+    if (selectedUrls.has(item.canonicalUrl)) continue;
+    selected.push(item);
+    selectedUrls.add(item.canonicalUrl);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
+function classifySource(urlValue, categoryValue = "", titleValue = "") {
+  let parsed;
+  try {
+    parsed = urlValue instanceof URL ? urlValue : new URL(String(urlValue || ""));
+  } catch {
+    return { sourceType: "other", primarySourceLikelihood: "unknown", reason: "unclassified_url" };
+  }
+  const domain = parsed.hostname.toLowerCase();
+  const pathValue = parsed.pathname.toLowerCase();
+  const category = String(categoryValue || "").toLowerCase();
+  const title = String(titleValue || "").toLowerCase();
+
+  if (ACADEMIC_DOMAINS.some((value) => domainMatches(domain, value)) || /(?:^|\.)(?:edu|ac)\.[a-z]{2,}$/i.test(domain) || /(?:^|\.)edu$/i.test(domain)) {
+    return { sourceType: "academic", primarySourceLikelihood: "high", reason: "academic_domain" };
+  }
+  if (isOfficialDomain(domain)) {
+    return { sourceType: "official", primarySourceLikelihood: "high", reason: "government_or_multilateral_domain" };
+  }
+  if (
+    /(?:^|\.)(?:docs?|developer|developers|support|help)\./i.test(domain)
+    || /\/(?:docs?|documentation|reference|api|manuals?|release-notes?|releases?)(?:\/|$)/i.test(pathValue)
+    || ["github.com", "gitlab.com", "codeberg.org"].some((value) => domainMatches(domain, value))
+    || /\b(?:documentation|api reference|release notes?|developer guide)\b/i.test(title)
+  ) {
+    return { sourceType: "documentation", primarySourceLikelihood: "high", reason: "documentation_or_repository" };
+  }
+  if (NEWS_DOMAINS.some((value) => domainMatches(domain, value)) || category === "news" || /\b(?:news|newspaper)\b/i.test(category)) {
+    return { sourceType: "news", primarySourceLikelihood: "unknown", reason: "news_domain_or_category" };
+  }
+  if (COMMUNITY_DOMAINS.some((value) => domainMatches(domain, value)) || /\b(?:forum|discussion|social)\b/i.test(category)) {
+    return { sourceType: "community", primarySourceLikelihood: "unknown", reason: "community_domain_or_category" };
+  }
+  if (COMMERCIAL_DOMAINS.some((value) => domainMatches(domain, value)) || /\/(?:product|products|shop|store|buy)(?:\/|$)/i.test(pathValue)) {
+    return { sourceType: "commercial", primarySourceLikelihood: "unknown", reason: "commerce_domain_or_path" };
+  }
+  if (/\/(?:newsroom|press|media|investors?|company|about|blog|research|reports?)(?:\/|$)/i.test(pathValue)) {
+    return { sourceType: "organization", primarySourceLikelihood: "medium", reason: "organization_owned_content" };
+  }
+  return { sourceType: "other", primarySourceLikelihood: "unknown", reason: "unclassified" };
+}
+
+function isOfficialDomain(domain) {
+  if (/(?:^|\.)gov$/i.test(domain) || /(?:^|\.)(?:gov|go|gouv|gob)\.[a-z]{2,}(?:\.[a-z]{2})?$/i.test(domain)) return true;
+  return [
+    "europa.eu", "un.org", "who.int", "worldbank.org", "imf.org", "oecd.org",
+    "stats.gov.cn", "gov.cn", "abs.gov.au", "rba.gov.au",
+  ].some((value) => domainMatches(domain, value));
+}
+
 function compareResults(left, right) {
   const leftPreferred = left.lowRelevance ? 0 : 1;
   const rightPreferred = right.lowRelevance ? 0 : 1;
@@ -853,6 +1030,7 @@ function searchCacheKey(query, options) {
     includeDomains: options.includeDomains,
     excludeDomains: options.excludeDomains,
     maxPerDomain: options.maxPerDomain,
+    preferredSourceTypes: options.preferredSourceTypes,
   });
 }
 
@@ -871,6 +1049,16 @@ function normalizeTextList(values, maxItems, maxChars) {
 function normalizeTokenList(value) {
   const values = Array.isArray(value) ? value : String(value || "").split(",");
   return Array.from(new Set(values.map((item) => cleanToken(item, 64).toLowerCase()).filter(Boolean))).slice(0, 12);
+}
+
+function normalizeSourceTypes(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(",");
+  return Array.from(new Set(values.map((item) => String(item || "").trim().toLowerCase()).filter((item) => SOURCE_TYPES.includes(item)))).slice(0, SOURCE_TYPES.length);
+}
+
+function normalizeSourceStrategy(value) {
+  const strategy = String(value || "balanced").trim().toLowerCase();
+  return ["balanced", "relevance", "primary"].includes(strategy) ? strategy : "balanced";
 }
 
 function normalizeDomainList(value) {
@@ -1002,6 +1190,7 @@ function clipText(text, max) {
 
 module.exports = {
   canonicalizeUrl,
+  classifySource,
   classifyQuality,
   createSearchCoordinator,
   domainMatches,
@@ -1011,4 +1200,5 @@ module.exports = {
   rankAndSelectResults,
   relevanceScore,
   selectDomainDiverse,
+  selectSourceDiverse,
 };

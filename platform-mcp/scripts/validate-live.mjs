@@ -46,6 +46,7 @@ const argumentsByTool = {
     safesearch: 1,
   },
   local_ai_read_search_result: null,
+  local_ai_find_in_search_result: null,
   local_ai_list_jobs: { engine: "all", limit: 5 },
   local_ai_preview_route: { engine: "auto", protocol: "openai", capability: "tools" },
   local_ai_estimate_memory: {
@@ -86,6 +87,8 @@ try {
   let researchSearchId = "";
   let researchFirstResultId = "";
   let readablePageCount = 0;
+  let findPattern = "Model Context Protocol";
+  let pageMatchCount = 0;
   let routeSelected = false;
   let securityOverall = "unknown";
   for (const tool of listing.tools) {
@@ -96,6 +99,13 @@ try {
         max_chars_per_result: 3000,
         max_total_chars: 3000,
       }
+      : tool.name === "local_ai_find_in_search_result"
+        ? {
+          search_id: researchSearchId,
+          result_id: researchFirstResultId,
+          pattern: findPattern,
+          max_matches: 3,
+        }
       : argumentsByTool[tool.name];
     const result = await client.callTool({ name: tool.name, arguments: argumentsForTool });
     assert.notEqual(result.isError, true, `${tool.name} returned a tool error.`);
@@ -116,7 +126,13 @@ try {
       researchSearchId = String(output.data?.search_id || "");
       researchFirstResultId = String(output.data?.results?.[0]?.result_id || "");
     }
-    if (tool.name === "local_ai_read_search_result") readablePageCount = Number(output.data?.readable_count || 0);
+    if (tool.name === "local_ai_read_search_result") {
+      readablePageCount = Number(output.data?.readable_count || 0);
+      const content = String(output.data?.documents?.[0]?.content || "");
+      const firstLine = content.split(/\r?\n/).map((line) => line.trim()).find((line) => line.length >= 4);
+      if (firstLine) findPattern = firstLine.slice(0, 80);
+    }
+    if (tool.name === "local_ai_find_in_search_result") pageMatchCount = Number(output.data?.match_count || 0);
     if (tool.name === "local_ai_preview_route") routeSelected = output.data?.selected === true;
     if (tool.name === "local_ai_get_security_posture") securityOverall = String(output.data?.overall || "unknown");
   }
@@ -126,6 +142,7 @@ try {
   assert.ok(researchResultCount > 0, "The live multi-query research returned no results.");
   assert.ok(["good", "mixed"].includes(researchQuality), `The live research quality was ${researchQuality}.`);
   assert.ok(readablePageCount > 0, "The live selected-page reader returned no readable page.");
+  assert.ok(pageMatchCount > 0, "The live page find returned no matching passage.");
   assert.equal(routeSelected, true, "The live route preview selected no tools-capable route.");
   process.stdout.write(`${JSON.stringify({
     ok: true,
@@ -137,6 +154,7 @@ try {
     research_results: researchResultCount,
     research_quality: researchQuality,
     readable_pages: readablePageCount,
+    page_matches: pageMatchCount,
     route_selected: routeSelected,
     security_overall: securityOverall,
     checks,

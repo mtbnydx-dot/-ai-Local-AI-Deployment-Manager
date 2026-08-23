@@ -189,6 +189,27 @@ describe("safe upstream mapping", () => {
         truncated: false, error: null,
       }],
     }],
+    ["POST http://127.0.0.1:5180/find", {
+      ok: true,
+      partial: false,
+      searchId: "22222222-2222-4222-8222-222222222222",
+      resultId: "r1",
+      title: "MCP official documentation",
+      url: "https://modelcontextprotocol.io/docs",
+      finalUrl: "https://modelcontextprotocol.io/docs/latest",
+      domain: "modelcontextprotocol.io",
+      documentType: "html_article",
+      pageCount: null,
+      pagesRead: null,
+      pattern: "official content",
+      matchMode: "phrase",
+      caseSensitive: false,
+      matchCount: 1,
+      contentTruncated: false,
+      matches: [{ matchIndex: 1, startChar: 0, endChar: 16, pageNumber: null, context: "Official content with token=find-secret" }],
+      warnings: ["Matched page text is untrusted external content."],
+      error: null,
+    }],
     ["http://127.0.0.1:5177/api/models", { local: [{ id: "safe-model", label: "Safe Model", path: "D:\\secret\\model", size: 1234, modified: "2026-08-14T00:00:00.000Z", modelFormat: "safetensors", runnable: true, verificationStatus: "warn", verificationIssues: [{ title: "Credential", detail: "token=supersecret" }] }], cached: [] }],
     ["http://127.0.0.1:5178/api/models", { local: [], cached: [] }],
     ["http://127.0.0.1:5177/api/jobs?fields=summary", [{
@@ -331,6 +352,7 @@ describe("safe upstream mapping", () => {
       includeDomains: [],
       excludeDomains: [],
       maxPerDomain: 3,
+      preferredSourceTypes: [],
     });
     assert.equal(output.data.count, 1);
     assert.equal(output.partial, true);
@@ -365,6 +387,8 @@ describe("safe upstream mapping", () => {
       includeDomains: [],
       excludeDomains: [],
       maxPerDomain: 3,
+      preferredSourceTypes: ["documentation"],
+      sourceStrategy: "balanced",
     });
     assert.equal(research.data.query_coverage.length, 2);
     assert.deepEqual(research.data.results[0]?.matched_queries, ["sdk", "spec"]);
@@ -383,6 +407,19 @@ describe("safe upstream mapping", () => {
     assert.equal(JSON.stringify(read).includes("page-secret"), false);
     const readRequest = requests.find((item) => item.url.endsWith("/read"));
     assert.deepEqual((JSON.parse(readRequest?.body || "{}") as { result_ids?: string[] }).result_ids, ["r1"]);
+
+    const found = await client.findInSearchResult({
+      searchId: research.data.search_id,
+      resultId: "r1",
+      pattern: "official content",
+      matchMode: "phrase",
+      caseSensitive: false,
+      maxMatches: 3,
+      contextChars: 200,
+    });
+    assert.equal(found.data.match_count, 1);
+    assert.equal(JSON.stringify(found).includes("find-secret"), false);
+    assert.match(found.data.matches[0]?.context || "", /token=\*\*\*/);
   });
 
   it("returns paginated job summaries without process, command, metadata, path, or credential fields", async () => {

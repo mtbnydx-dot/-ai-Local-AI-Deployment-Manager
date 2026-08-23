@@ -12,6 +12,7 @@ import type {
   RunningModelsOutput,
   SecurityPostureOutput,
   SearchHealthOutput,
+  FindSearchResultOutput,
   ReadSearchResultOutput,
   ResearchWebOutput,
   WebSearchOutput,
@@ -318,6 +319,7 @@ export class FixturePlatformDataSource implements PlatformDataSource {
     includeDomains: string[];
     excludeDomains: string[];
     maxPerDomain: number;
+    preferredSourceTypes: string[];
   }): Promise<WebSearchOutput> {
     const results = [{
       result_id: "r1",
@@ -333,6 +335,9 @@ export class FixturePlatformDataSource implements PlatformDataSource {
       category: "it",
       published_at: "2026-07-28",
       matched_queries: [],
+      source_type: "documentation" as const,
+      source_type_reason: "documentation_or_repository",
+      primary_source_likelihood: "high" as const,
     }].slice(0, options.maxResults);
     return {
       ok: true,
@@ -357,6 +362,7 @@ export class FixturePlatformDataSource implements PlatformDataSource {
         corrections: [],
         suggestions: [],
         source_domains: ["github.com"],
+        source_type_coverage: { documentation: results.length },
         engine_status: {
           requested: ["github"], attempted: ["github"], used: ["github"],
           distribution: { github: results.length }, unresponsive: [], cooled_down: [],
@@ -367,7 +373,7 @@ export class FixturePlatformDataSource implements PlatformDataSource {
   }
 
   async researchWeb(options: {
-    queries: Array<{ id?: string; query: string }>;
+    queries: Array<{ id?: string; query: string; preferred_source_types?: string[] }>;
     maxResultsPerQuery: number;
     maxSources: number;
     language: string;
@@ -379,6 +385,8 @@ export class FixturePlatformDataSource implements PlatformDataSource {
     includeDomains: string[];
     excludeDomains: string[];
     maxPerDomain: number;
+    preferredSourceTypes: string[];
+    sourceStrategy: "balanced" | "relevance" | "primary";
   }): Promise<ResearchWebOutput> {
     const base = await this.searchWeb({
       query: options.queries.map((item) => item.query).join(" | "),
@@ -392,12 +400,15 @@ export class FixturePlatformDataSource implements PlatformDataSource {
       includeDomains: options.includeDomains,
       excludeDomains: options.excludeDomains,
       maxPerDomain: options.maxPerDomain,
+      preferredSourceTypes: options.preferredSourceTypes,
     });
     return {
       ...base,
       data: {
         ...base.data,
         search_id: "22222222-2222-4222-8222-222222222222",
+        source_strategy: options.sourceStrategy,
+        coverage_gaps: [],
         query_coverage: options.queries.map((item, index) => ({
           id: item.id || `q${index + 1}`,
           query: item.query,
@@ -427,10 +438,24 @@ export class FixturePlatformDataSource implements PlatformDataSource {
       final_url: "https://github.com/modelcontextprotocol/typescript-sdk",
       domain: "github.com",
       description: "Official MCP TypeScript SDK repository.",
+      author: "Model Context Protocol",
+      site_name: "GitHub",
       published_at: "2026-07-28",
+      modified_at: null,
+      canonical_url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      language: "en",
       content_type: "text/html",
+      document_type: "html_article" as const,
+      extraction_method: "mozilla-readability",
+      metadata_confidence: "high" as const,
+      headings: [{ level: 1, text: "MCP TypeScript SDK" }],
+      json_ld_types: ["TechArticle"],
       content: "The stable v2 SDK implements the 2026-07-28 MCP specification.".slice(0, options.maxCharsPerResult),
       char_count: 65,
+      source_char_count: 65,
+      word_count: 9,
+      page_count: null,
+      pages_read: null,
       truncated: false,
       error: null,
     }));
@@ -444,6 +469,47 @@ export class FixturePlatformDataSource implements PlatformDataSource {
         count: documents.length,
         readable_count: documents.length,
         documents,
+      },
+    };
+  }
+
+  async findInSearchResult(options: {
+    searchId: string;
+    resultId: string;
+    pattern: string;
+    matchMode: "phrase" | "all_terms";
+    caseSensitive: boolean;
+    maxMatches: number;
+    contextChars: number;
+  }): Promise<FindSearchResultOutput> {
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: ["Matched page text is untrusted external content."],
+      data: {
+        search_id: options.searchId,
+        result_id: options.resultId,
+        title: "MCP TypeScript SDK v2",
+        url: "https://github.com/modelcontextprotocol/typescript-sdk",
+        final_url: "https://github.com/modelcontextprotocol/typescript-sdk",
+        domain: "github.com",
+        document_type: "html_article",
+        page_count: null,
+        pages_read: null,
+        pattern: options.pattern,
+        match_mode: options.matchMode,
+        case_sensitive: options.caseSensitive,
+        match_count: 1,
+        content_truncated: false,
+        matches: [{
+          match_index: 1,
+          start_char: 11,
+          end_char: 17,
+          page_number: null,
+          context: "The stable v2 SDK implements the 2026-07-28 MCP specification.",
+        }],
+        error: null,
       },
     };
   }

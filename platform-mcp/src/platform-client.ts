@@ -13,6 +13,7 @@ import {
   RunningModelsOutputSchema,
   SecurityPostureOutputSchema,
   SearchHealthOutputSchema,
+  FindSearchResultOutputSchema,
   ReadSearchResultOutputSchema,
   ResearchWebOutputSchema,
   WebSearchOutputSchema,
@@ -28,6 +29,7 @@ import {
   type RunningModelsOutput,
   type SecurityPostureOutput,
   type SearchHealthOutput,
+  type FindSearchResultOutput,
   type ReadSearchResultOutput,
   type ResearchWebOutput,
   type WebSearchOutput,
@@ -66,9 +68,10 @@ export interface PlatformDataSource {
     includeDomains: string[];
     excludeDomains: string[];
     maxPerDomain: number;
+    preferredSourceTypes: string[];
   }): Promise<WebSearchOutput>;
   researchWeb(options: {
-    queries: Array<{ id?: string; query: string }>;
+    queries: Array<{ id?: string; query: string; preferred_source_types?: string[] }>;
     maxResultsPerQuery: number;
     maxSources: number;
     language: string;
@@ -80,6 +83,8 @@ export interface PlatformDataSource {
     includeDomains: string[];
     excludeDomains: string[];
     maxPerDomain: number;
+    preferredSourceTypes: string[];
+    sourceStrategy: "balanced" | "relevance" | "primary";
   }): Promise<ResearchWebOutput>;
   readSearchResults(options: {
     searchId: string;
@@ -87,6 +92,15 @@ export interface PlatformDataSource {
     maxCharsPerResult: number;
     maxTotalChars: number;
   }): Promise<ReadSearchResultOutput>;
+  findInSearchResult(options: {
+    searchId: string;
+    resultId: string;
+    pattern: string;
+    matchMode: "phrase" | "all_terms";
+    caseSensitive: boolean;
+    maxMatches: number;
+    contextChars: number;
+  }): Promise<FindSearchResultOutput>;
   listJobs(options: {
     engine: EngineSelector;
     status: string;
@@ -263,6 +277,9 @@ function mapSearch(value: unknown, error: string | null = null) {
       weak_searches: Math.max(0, numberValue(metrics.weakSearches ?? metrics.weak_searches)),
       pages_read: Math.max(0, numberValue(metrics.pagesRead ?? metrics.pages_read)),
       page_read_failures: Math.max(0, numberValue(metrics.pageReadFailures ?? metrics.page_read_failures)),
+      page_cache_hits: Math.max(0, numberValue(metrics.pageCacheHits ?? metrics.page_cache_hits)),
+      page_finds: Math.max(0, numberValue(metrics.pageFinds ?? metrics.page_finds)),
+      page_find_failures: Math.max(0, numberValue(metrics.pageFindFailures ?? metrics.page_find_failures)),
     },
     error,
   };
@@ -295,6 +312,27 @@ function mapEngineDistribution(value: unknown): Record<string, number> {
   return output;
 }
 
+function sourceType(value: unknown): "official" | "academic" | "documentation" | "news" | "organization" | "community" | "commercial" | "other" {
+  const result = stringValue(value).toLowerCase();
+  return ["official", "academic", "documentation", "news", "organization", "community", "commercial"].includes(result)
+    ? result as "official" | "academic" | "documentation" | "news" | "organization" | "community" | "commercial"
+    : "other";
+}
+
+function primarySourceLikelihood(value: unknown): "high" | "medium" | "unknown" {
+  const result = stringValue(value).toLowerCase();
+  return result === "high" || result === "medium" ? result : "unknown";
+}
+
+function mapSourceTypeCoverage(value: unknown): Record<string, number> {
+  const output: Record<string, number> = {};
+  for (const [key, count] of Object.entries(object(value)).slice(0, 8)) {
+    const safeKey = sourceType(key);
+    output[safeKey] = Math.max(0, Math.trunc(numberValue(count)));
+  }
+  return output;
+}
+
 function mapSearchResults(value: unknown, limit: number) {
   return array(value).map((raw, index) => {
     const item = object(raw);
@@ -319,6 +357,9 @@ function mapSearchResults(value: unknown, limit: number) {
       category: nullableString(item.category),
       published_at: nullableString(item.publishedDate ?? item.published_at ?? item.published_date),
       matched_queries: array(item.matchedQueries ?? item.matched_queries).map((query) => safeDisplayText(query, 40)).filter(Boolean).slice(0, 6),
+      source_type: sourceType(item.sourceType ?? item.source_type),
+      source_type_reason: safeDisplayText(item.sourceTypeReason ?? item.source_type_reason, 100) || "unclassified",
+      primary_source_likelihood: primarySourceLikelihood(item.primarySourceLikelihood ?? item.primary_source_likelihood),
     };
   }).filter((item): item is NonNullable<typeof item> => item !== null).slice(0, limit);
 }
@@ -349,7 +390,8 @@ function mapSearchEnvelope(payloadValue: unknown, fallbackQuery: string, maxResu
       answers: array(payload.answers).map((value) => safeDisplayText(value, 700)).filter(Boolean).slice(0, 6),
       corrections: array(payload.corrections).map((value) => safeDisplayText(value, 240)).filter(Boolean).slice(0, 8),
       suggestions: array(payload.suggestions).map((value) => safeDisplayText(value, 240)).filter(Boolean).slice(0, 12),
-      source_domains: array(payload.sourceDomains ?? payload.source_domains).map((value) => safeDisplayText(value, 253)).filter(Boolean).slice(0, 30),
+      source_domains: array(payload.sourceDomains ?? payload.source_domains).map((value) => safeDisplayText(value, 253)).filter(Boolean).slice(0, 40),
+      source_type_coverage: mapSourceTypeCoverage(payload.sourceTypeCoverage ?? payload.source_type_coverage),
       engine_status: {
         requested: array(engineStatus.requested).map((value) => safeDisplayText(value, 64)).filter(Boolean),
         attempted: array(engineStatus.attempted).map((value) => safeDisplayText(value, 64)).filter(Boolean),
@@ -847,6 +889,7 @@ export class LocalPlatformClient implements PlatformDataSource {
     includeDomains: string[];
     excludeDomains: string[];
     maxPerDomain: number;
+    preferredSourceTypes: string[];
   }): Promise<WebSearchOutput> {
     this.assertSearchConfigured();
     const params = new URLSearchParams({
@@ -862,6 +905,7 @@ export class LocalPlatformClient implements PlatformDataSource {
     if (options.includeDomains?.length) params.set("include_domains", options.includeDomains.join(","));
     if (options.excludeDomains?.length) params.set("exclude_domains", options.excludeDomains.join(","));
     if (options.maxPerDomain && options.maxPerDomain !== 3) params.set("max_per_domain", String(options.maxPerDomain));
+    if (options.preferredSourceTypes.length) params.set("preferred_source_types", options.preferredSourceTypes.join(","));
 
     const payload = await this.http.getJson(
       "search gateway",
@@ -873,7 +917,7 @@ export class LocalPlatformClient implements PlatformDataSource {
   }
 
   async researchWeb(options: {
-    queries: Array<{ id?: string; query: string }>;
+    queries: Array<{ id?: string; query: string; preferred_source_types?: string[] }>;
     maxResultsPerQuery: number;
     maxSources: number;
     language: string;
@@ -885,6 +929,8 @@ export class LocalPlatformClient implements PlatformDataSource {
     includeDomains: string[];
     excludeDomains: string[];
     maxPerDomain: number;
+    preferredSourceTypes: string[];
+    sourceStrategy: "balanced" | "relevance" | "primary";
   }): Promise<ResearchWebOutput> {
     this.assertSearchConfigured();
     const payload = await this.http.postJson(
@@ -892,7 +938,11 @@ export class LocalPlatformClient implements PlatformDataSource {
       this.config.searchGatewayUrl,
       "/research",
       {
-        queries: options.queries.map((item, index) => ({ id: item.id || `q${index + 1}`, query: item.query })),
+        queries: options.queries.map((item, index) => ({
+          id: item.id || `q${index + 1}`,
+          query: item.query,
+          preferred_source_types: item.preferred_source_types || [],
+        })),
         max_results_per_query: options.maxResultsPerQuery,
         max_sources: options.maxSources,
         language: options.language,
@@ -904,6 +954,8 @@ export class LocalPlatformClient implements PlatformDataSource {
         include_domains: options.includeDomains,
         exclude_domains: options.excludeDomains,
         max_per_domain: options.maxPerDomain,
+        preferred_source_types: options.preferredSourceTypes,
+        source_strategy: options.sourceStrategy,
       },
       { bearerToken: this.config.searchGatewayApiKey, timeoutMs: Math.max(this.config.timeoutMs, 90000) },
     );
@@ -919,8 +971,19 @@ export class LocalPlatformClient implements PlatformDataSource {
         cache_hit: booleanValue(item.cacheHit ?? item.cache_hit),
         error: nullableString(item.error),
       };
-    }).slice(0, 6);
-    return ResearchWebOutputSchema.parse({ ...mapped, data: { ...mapped.data, query_coverage: coverage } });
+    }).slice(0, 8);
+    const strategyValue = stringValue(payload.sourceStrategy ?? payload.source_strategy);
+    const sourceStrategy = strategyValue === "relevance" || strategyValue === "primary" ? strategyValue : "balanced";
+    const coverageGaps = array(payload.coverageGaps ?? payload.coverage_gaps).map(sourceType).slice(0, 8);
+    return ResearchWebOutputSchema.parse({
+      ...mapped,
+      data: {
+        ...mapped.data,
+        source_strategy: sourceStrategy,
+        coverage_gaps: coverageGaps,
+        query_coverage: coverage,
+      },
+    });
   }
 
   async readSearchResults(options: {
@@ -948,7 +1011,20 @@ export class LocalPlatformClient implements PlatformDataSource {
       if (!url) return null;
       const finalUrl = item.finalUrl ?? item.final_url;
       const safeFinalUrl = finalUrl ? safeExternalUrl(finalUrl) : null;
+      const canonicalValue = item.canonicalUrl ?? item.canonical_url;
+      const safeCanonicalUrl = canonicalValue ? safeExternalUrl(canonicalValue) : null;
       const content = safeDisplayText(item.content, options.maxCharsPerResult);
+      const headings = array(item.headings).map((rawHeading) => {
+        const heading = object(rawHeading);
+        const level = Math.max(1, Math.min(6, Math.trunc(numberValue(heading.level, 1))));
+        const text = safeDisplayText(heading.text, 240);
+        return text ? { level, text } : null;
+      }).filter((heading): heading is NonNullable<typeof heading> => heading !== null).slice(0, 40);
+      const confidenceValue = stringValue(item.metadataConfidence ?? item.metadata_confidence).toLowerCase();
+      const metadataConfidence = confidenceValue === "high" || confidenceValue === "medium" || confidenceValue === "low" ? confidenceValue : null;
+      const documentValue = stringValue(item.documentType ?? item.document_type).toLowerCase();
+      const documentTypes = ["html_article", "html_page", "plain_text", "markdown", "csv", "json", "xml_feed", "pdf"] as const;
+      const documentType = documentTypes.includes(documentValue as typeof documentTypes[number]) ? documentValue as typeof documentTypes[number] : null;
       return {
         result_id: safeDisplayText(item.resultId ?? item.result_id, 30) || options.resultIds[index] || `r${index + 1}`,
         title: safeDisplayText(item.title, 300),
@@ -956,10 +1032,24 @@ export class LocalPlatformClient implements PlatformDataSource {
         final_url: safeFinalUrl,
         domain: safeDisplayText(item.domain, 253) || new URL(safeFinalUrl || url).hostname,
         description: safeDisplayText(item.description, 600),
+        author: nullableString(safeDisplayText(item.author, 300)),
+        site_name: nullableString(safeDisplayText(item.siteName ?? item.site_name, 200)),
         published_at: nullableString(item.publishedAt ?? item.published_at),
+        modified_at: nullableString(item.modifiedAt ?? item.modified_at),
+        canonical_url: safeCanonicalUrl,
+        language: nullableString(safeDisplayText(item.language, 40)),
         content_type: nullableString(item.contentType ?? item.content_type),
+        document_type: documentType,
+        extraction_method: nullableString(safeDisplayText(item.extractionMethod ?? item.extraction_method, 80)),
+        metadata_confidence: metadataConfidence,
+        headings,
+        json_ld_types: array(item.jsonLdTypes ?? item.json_ld_types).map((value) => safeDisplayText(value, 100)).filter(Boolean).slice(0, 20),
         content,
         char_count: content.length,
+        source_char_count: Math.max(content.length, Math.trunc(numberValue(item.sourceCharCount ?? item.source_char_count, content.length))),
+        word_count: Math.max(0, Math.trunc(numberValue(item.wordCount ?? item.word_count))),
+        page_count: nullableNumber(item.pageCount ?? item.page_count) == null ? null : Math.max(0, Math.trunc(numberValue(item.pageCount ?? item.page_count))),
+        pages_read: nullableNumber(item.pagesRead ?? item.pages_read) == null ? null : Math.max(0, Math.trunc(numberValue(item.pagesRead ?? item.pages_read))),
         truncated: booleanValue(item.truncated),
         error: nullableString(item.error),
       };
@@ -974,6 +1064,72 @@ export class LocalPlatformClient implements PlatformDataSource {
         count: documents.length,
         readable_count: documents.filter((item) => !item.error).length,
         documents,
+      },
+    });
+  }
+
+  async findInSearchResult(options: {
+    searchId: string;
+    resultId: string;
+    pattern: string;
+    matchMode: "phrase" | "all_terms";
+    caseSensitive: boolean;
+    maxMatches: number;
+    contextChars: number;
+  }): Promise<FindSearchResultOutput> {
+    this.assertSearchConfigured();
+    const payload = await this.http.postJson(
+      "search gateway",
+      this.config.searchGatewayUrl,
+      "/find",
+      {
+        search_id: options.searchId,
+        result_id: options.resultId,
+        pattern: options.pattern,
+        match_mode: options.matchMode,
+        case_sensitive: options.caseSensitive,
+        max_matches: options.maxMatches,
+        context_chars: options.contextChars,
+      },
+      { bearerToken: this.config.searchGatewayApiKey, timeoutMs: Math.max(this.config.timeoutMs, 45000) },
+    );
+    const url = safeExternalUrl(payload.url);
+    if (!url) throw new UpstreamRequestError("search gateway", "returned an invalid result URL", 502);
+    const finalUrlValue = payload.finalUrl ?? payload.final_url;
+    const matches = array(payload.matches).map((raw, index) => {
+      const item = object(raw);
+      const pageNumber = nullableNumber(item.pageNumber ?? item.page_number);
+      return {
+        match_index: Math.max(1, Math.trunc(numberValue(item.matchIndex ?? item.match_index, index + 1))),
+        start_char: Math.max(0, Math.trunc(numberValue(item.startChar ?? item.start_char))),
+        end_char: Math.max(0, Math.trunc(numberValue(item.endChar ?? item.end_char))),
+        page_number: pageNumber == null ? null : Math.max(1, Math.trunc(pageNumber)),
+        context: safeDisplayText(item.context, Math.min(1800, options.contextChars * 2 + 400)),
+      };
+    }).filter((item) => item.context).slice(0, options.maxMatches);
+    const modeValue = stringValue(payload.matchMode ?? payload.match_mode);
+    return FindSearchResultOutputSchema.parse({
+      ok: booleanValue(payload.ok),
+      partial: booleanValue(payload.partial),
+      generated_at: new Date().toISOString(),
+      warnings: array(payload.warnings).map((value) => safeDisplayText(value, 500)).filter(Boolean).slice(0, 10),
+      data: {
+        search_id: safeDisplayText(payload.searchId ?? payload.search_id, 100) || options.searchId,
+        result_id: safeDisplayText(payload.resultId ?? payload.result_id, 30) || options.resultId,
+        title: safeDisplayText(payload.title, 300),
+        url,
+        final_url: finalUrlValue ? safeExternalUrl(finalUrlValue) : null,
+        domain: safeDisplayText(payload.domain, 253) || new URL(url).hostname,
+        document_type: nullableString(safeDisplayText(payload.documentType ?? payload.document_type, 40)),
+        page_count: nullableNumber(payload.pageCount ?? payload.page_count) == null ? null : Math.max(0, Math.trunc(numberValue(payload.pageCount ?? payload.page_count))),
+        pages_read: nullableNumber(payload.pagesRead ?? payload.pages_read) == null ? null : Math.max(0, Math.trunc(numberValue(payload.pagesRead ?? payload.pages_read))),
+        pattern: safeDisplayText(payload.pattern, 200) || options.pattern,
+        match_mode: modeValue === "all_terms" ? "all_terms" : "phrase",
+        case_sensitive: booleanValue(payload.caseSensitive ?? payload.case_sensitive),
+        match_count: matches.length,
+        content_truncated: booleanValue(payload.contentTruncated ?? payload.content_truncated),
+        matches,
+        error: nullableString(payload.error),
       },
     });
   }

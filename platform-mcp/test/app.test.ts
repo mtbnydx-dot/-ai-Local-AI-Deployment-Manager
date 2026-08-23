@@ -55,7 +55,7 @@ describe("HTTP security guards", () => {
     assert.equal(JSON.stringify(body).includes(API_KEY), false);
   });
 
-  it("publishes a redacted 0.3.0 capability manifest after authentication", async () => {
+  it("publishes a redacted 0.4.0 capability manifest after authentication", async () => {
     const response = await mcp.app.request("http://127.0.0.1:5190/info", {
       headers: { host: "127.0.0.1:5190", authorization: `Bearer ${API_KEY}` },
     });
@@ -131,19 +131,19 @@ describe("dual-era MCP protocol", () => {
     });
   }
 
-  it("serves legacy 2025 clients with fourteen read-only tools", async () => {
+  it("serves legacy 2025 clients with fifteen read-only tools", async () => {
     const client = new Client({ name: "legacy-test", version: "1.0.0" });
     await client.connect(transport());
     try {
       assert.equal(client.getProtocolEra(), "legacy");
       const listing = await client.listTools();
-      assert.equal(listing.tools.length, 14);
+      assert.equal(listing.tools.length, 15);
       assert.deepEqual(listing.tools.map((tool) => tool.name), [...TOOL_NAMES]);
       assert.equal(listing.tools.every((tool) => tool.annotations?.readOnlyHint === true), true);
       assert.equal(listing.tools.every((tool) => tool.annotations?.destructiveHint === false), true);
       assert.deepEqual(
         listing.tools.filter((tool) => tool.annotations?.openWorldHint === true).map((tool) => tool.name),
-        ["local_ai_search_web", "local_ai_research_web", "local_ai_read_search_result"],
+        ["local_ai_search_web", "local_ai_research_web", "local_ai_read_search_result", "local_ai_find_in_search_result"],
       );
 
       const result = await client.callTool({ name: "local_ai_get_overview", arguments: {} });
@@ -201,6 +201,14 @@ describe("dual-era MCP protocol", () => {
       const readData = read.structuredContent as { data: { readable_count: number; documents: Array<{ content: string }> } };
       assert.equal(readData.data.readable_count, 1);
       assert.match(readData.data.documents[0]?.content || "", /stable v2 SDK/i);
+
+      const find = await client.callTool({
+        name: "local_ai_find_in_search_result",
+        arguments: { search_id: researchData.data.search_id, result_id: "r1", pattern: "stable v2 SDK" },
+      });
+      const findData = find.structuredContent as { data: { match_count: number; matches: Array<{ context: string }> } };
+      assert.equal(findData.data.match_count, 1);
+      assert.match(findData.data.matches[0]?.context || "", /2026-07-28 MCP specification/i);
 
       const jobs = await client.callTool({
         name: "local_ai_list_jobs",

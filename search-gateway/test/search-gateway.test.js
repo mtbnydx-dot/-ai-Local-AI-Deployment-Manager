@@ -181,6 +181,17 @@ test("search, research, and result-reading routes preserve the result-set bounda
   assert.equal(read.documents[0].content, "Bounded page text.");
   assert.deepEqual(pageUrls, [search.results[0].url]);
 
+  const findResponse = await fetch(`${base}/find`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ search_id: search.searchId, result_id: "r1", pattern: "page text" }),
+  });
+  const found = await findResponse.json();
+  assert.equal(findResponse.status, 200);
+  assert.equal(found.matchCount, 1);
+  assert.match(found.matches[0].context, /Bounded page text/);
+  assert.deepEqual(pageUrls, [search.results[0].url], "find should reuse the safely extracted page cache");
+
   const invalidRead = await fetch(`${base}/read`, {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
