@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   canonicalizeUrl,
+  classifyQuality,
   createSearchCoordinator,
   queryTokens,
   rankAndSelectResults,
@@ -46,6 +47,42 @@ test("Chinese relevance tokens use useful grams instead of overweighting one lon
   assert.equal(tokens.includes("中国"), true);
   assert.equal(tokens.includes("经济"), true);
   assert.equal(tokens.includes("失业"), true);
+});
+
+test("quoted phrases suppress candidates that only share generic words", () => {
+  const ranked = rankAndSelectResults('"两个历史" 论争 2025 2026 中国史观 官方定调', [{
+    title: "2024 历史学名单",
+    url: "https://noise.example/history",
+    content: "中国历史研究资料与名单",
+    engines: ["searchtoday"],
+  }, {
+    title: "两个历史论争的官方定调",
+    url: "https://source.example/two-histories",
+    content: "2025 2026 中国史观争论的完整时间线",
+    engines: ["privacywall"],
+  }], {
+    maxResults: 8,
+    maxPerDomain: 2,
+    preferredDomains: [],
+    includeDomains: [],
+    excludeDomains: [],
+    minRelevance: 0.16,
+  });
+  assert.equal(ranked.results.length, 1);
+  assert.equal(ranked.results[0].domain, "source.example");
+});
+
+test("quality stays weak when only one result is convincingly relevant", () => {
+  const weak = [0.381, 0.285, 0.274, 0.267].map((relevance, index) => ({
+    relevance,
+    domain: `source${index}.example`,
+  }));
+  const good = [0.52, 0.45, 0.39, 0.34].map((relevance, index) => ({
+    relevance,
+    domain: `source${index}.example`,
+  }));
+  assert.equal(classifyQuality(weak, 18, 0, 8, 0.16), "weak");
+  assert.equal(classifyQuality(good, 18, 0, 4, 0.16), "good");
 });
 
 test("ranking deduplicates canonical URLs and keeps domains diverse", () => {

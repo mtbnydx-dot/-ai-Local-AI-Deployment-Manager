@@ -168,6 +168,7 @@ Agent 调用链应为：选择模型 → 读取授权后的 MCP 工具 → 把 t
 - `health=offline`：运行 `start-platform-mcp.cmd`。
 - 联网工具提示未配置：确认现有 search-gateway 服务密钥文件可读，或从 secret store 设置 `PLATFORM_MCP_SEARCH_GATEWAY_API_KEY` 后只重启 MCP。
 - `quality=weak|empty`：优先缩短查询、拆成 2–6 个角度交给 `local_ai_research_web`，或设置 `preferred_domains/include_domains`；不要只提高结果上限。
+- 引号内短语按精确检索约束处理；如果上游忽略引号，未命中完整短语的候选会被降为低相关，避免用只沾到几个常见词的页面凑数。
 - `quality` 只描述检索相关性和覆盖度，不等于事实已经核验，也不代表所有来源同等可信；重要结论仍应读取正文并交叉验证。
 - 正文读取报错：该页可能阻止自动访问、跳到私网/非标准端口、类型不支持或超过安全限制；改选同一搜索集合中的其他 `result_id`。
 - 搜索提示 rate limit：等待返回的秒数，或缩小/复用已有结果；不要靠提高结果上限绕过限流。

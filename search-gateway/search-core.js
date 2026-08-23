@@ -215,14 +215,14 @@ function createSearchCoordinator(config, deps = {}) {
       cooledDown.push(...fallback.cooledDown);
       if (fallback.selected.length) {
         fallbackUsed = true;
-        fallbackReason = allUnresponsive.length
-          ? "primary_engines_unresponsive"
-          : cooledDown.length
-            ? "primary_engines_cooling_down"
-            : preliminaryQuality === "weak"
-              ? "primary_results_weak"
-              : preliminaryRanked.results.length
-                ? "primary_results_sparse"
+        fallbackReason = preliminaryQuality === "weak"
+          ? "primary_results_weak"
+          : preliminaryRanked.results.length
+            ? "primary_results_sparse"
+            : allUnresponsive.length
+              ? "primary_engines_unresponsive"
+              : cooledDown.length
+                ? "primary_engines_cooling_down"
                 : "primary_engines_empty";
         warnings.push(`Fallback engines were used because ${fallbackReason.replaceAll("_", " ")}.`);
         attempted.push(...fallback.selected);
@@ -252,6 +252,9 @@ function createSearchCoordinator(config, deps = {}) {
     }
     if (quality === "weak") {
       warnings.push("Search results have weak lexical relevance; use a shorter query, preferred_domains, or local_ai_research_web.");
+    }
+    if (quality === "empty" && quotedPhrases(query).length) {
+      warnings.push("No result matched every quoted phrase; remove or shorten the quotes, or use local_ai_research_web with alternate wording.");
     }
     if (quality === "empty") metrics.zeroResultSearches += 1;
     if (quality === "weak") metrics.weakSearches += 1;
@@ -666,13 +669,15 @@ function relevanceScore(query, item, options) {
   const contentCoverage = tokenCoverage(tokens, content);
   const urlCoverage = tokenCoverage(tokens, url);
   const phrases = quotedPhrases(query);
-  const phraseBoost = phrases.some((phrase) => title.includes(phrase) || content.includes(phrase)) ? 0.16 : 0;
+  const phraseHaystack = normalizeForPhrase(`${item.title} ${item.content} ${item.url}`);
+  const everyPhraseMatched = phrases.length === 0 || phrases.every((phrase) => phraseHaystack.includes(normalizeForPhrase(phrase)));
+  const phraseBoost = phrases.length && everyPhraseMatched ? 0.16 : 0;
   const preferredBoost = options.preferredDomains.some((domain) => domainMatches(item.domain, domain)) ? 0.16 : 0;
   const authorityBoost = /(^|\.)(gov|edu)(\.[a-z]{2})?$/i.test(item.domain) || /(^|\.)gov\.cn$/i.test(item.domain) ? 0.12 : 0;
   const engineScore = item.score == null ? 0 : Math.min(0.05, (Math.max(0, item.score) / (Math.max(0, item.score) + 1)) * 0.05);
   const dateBoost = recentDateBoost(item.publishedDate);
   const weakPenalty = titleCoverage === 0 && contentCoverage < 0.12 ? 0.15 : 0;
-  const value = titleCoverage * 0.52
+  let value = titleCoverage * 0.52
     + contentCoverage * 0.25
     + urlCoverage * 0.04
     + phraseBoost
@@ -681,6 +686,10 @@ function relevanceScore(query, item, options) {
     + engineScore
     + dateBoost
     - weakPenalty;
+  // Quotation marks are an explicit precision request. SearXNG engines do not
+  // enforce them consistently, so candidates missing any quoted phrase must
+  // not look relevant merely because they share a few common words.
+  if (!everyPhraseMatched) value *= 0.15;
   return Math.round(Math.max(0, Math.min(1, value)) * 1000) / 1000;
 }
 
@@ -725,11 +734,25 @@ function quotedPhrases(value) {
 
 function classifyQuality(results, totalCandidates, unresponsiveCount, requestedCount, minRelevance = 0.16) {
   if (!results.length) return "empty";
-  const strong = results.filter((item) => item.relevance >= Math.min(0.6, minRelevance + 0.08)).length;
   const relevant = results.filter((item) => item.relevance >= minRelevance).length;
+  const highConfidence = results.filter((item) => item.relevance >= Math.min(0.6, minRelevance + 0.14)).length;
   const domainCount = new Set(results.map((item) => item.domain)).size;
-  if (strong >= Math.min(4, requestedCount) && domainCount >= Math.min(3, results.length) && unresponsiveCount === 0) return "good";
-  if (relevant >= Math.min(3, results.length) && domainCount >= Math.min(2, results.length)) return "mixed";
+  const topRelevance = results[0]?.relevance || 0;
+  const topSet = results.slice(0, Math.min(4, results.length));
+  const topAverage = topSet.reduce((sum, item) => sum + item.relevance, 0) / topSet.length;
+  if (
+    highConfidence >= Math.min(4, requestedCount)
+    && domainCount >= Math.min(3, results.length)
+    && topRelevance >= 0.36
+    && topAverage >= 0.28
+    && unresponsiveCount === 0
+  ) return "good";
+  if (
+    relevant >= Math.min(3, results.length)
+    && highConfidence >= Math.min(2, results.length)
+    && domainCount >= Math.min(2, results.length)
+    && topRelevance >= 0.34
+  ) return "mixed";
   if (totalCandidates > 0) return "weak";
   return "empty";
 }
@@ -864,6 +887,10 @@ function cleanToken(value, limit) {
 
 function normalizeForMatch(value) {
   return String(value || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizeForPhrase(value) {
+  return normalizeForMatch(value).replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
 function recentDateBoost(value) {
