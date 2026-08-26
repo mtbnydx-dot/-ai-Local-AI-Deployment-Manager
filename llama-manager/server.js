@@ -78,7 +78,6 @@ const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 const DEFAULT_LLAMA_IMAGE = process.env.LLAMA_IMAGE_DIGEST || "ghcr.io/ggml-org/llama.cpp@sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3";
 const DEFAULT_LLAMA_IMAGE_BUILD = 10630;
 const MUSE_GLIMMER_MINIMUM_LLAMA_REVISION = "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0";
-const LAST_KNOWN_PRE_MUSE_LLAMA_BUILD = 10344;
 const DEFAULT_MUSE_LLAMA_IMAGE = "local/llama.cpp:server-cuda-muse-62bf73d";
 const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
@@ -281,7 +280,6 @@ async function getLlamaArchitectureRuntimeCompatibility(architecture) {
   const normalized = String(architecture || "").trim().toLowerCase();
   const runtime = {
     ...await getConfiguredLlamaImageBuildInfo(normalized),
-    forcedSupport: String(process.env.LLAMA_MUSE_GLIMMER_SUPPORTED || "").trim() === "1",
   };
   return evaluateLlamaArchitectureRuntimeCompatibility(normalized, runtime);
 }
@@ -297,28 +295,13 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
       message: normalized ? `未为 ${normalized} 配置额外的最低 llama.cpp 版本限制。` : "没有可检查的 GGUF architecture。",
     };
   }
-  const forced = Boolean(runtime.forcedSupport);
-  const exactMinimumRevision = String(runtime.revision || "").toLowerCase() === MUSE_GLIMMER_MINIMUM_LLAMA_REVISION;
-  const verifiedDescendant = runtime.revisionIncludesMinimum === true;
-  const supported = forced || exactMinimumRevision || verifiedDescendant;
-  const imageMissing = runtime.imagePresent === false;
-  const knownUnsupported = imageMissing
-    || runtime.revisionIncludesMinimum === false
-    || (Number(runtime.buildNumber || 0) > 0 && Number(runtime.buildNumber) <= LAST_KNOWN_PRE_MUSE_LLAMA_BUILD);
-  const runtimeLabel = [runtime.build, runtime.revision ? runtime.revision.slice(0, 12) : ""].filter(Boolean).join(" / ") || runtime.image;
   return {
     architecture: normalized,
-    status: supported ? "supported" : knownUnsupported ? "unsupported" : "unknown",
-    supported: supported ? true : knownUnsupported ? false : null,
+    status: "unsupported",
+    supported: false,
     runtime,
     minimumRevision: MUSE_GLIMMER_MINIMUM_LLAMA_REVISION,
-    message: supported
-      ? `当前 llama.cpp ${runtimeLabel} 已确认包含 Muse Glimmer 支持提交 ${MUSE_GLIMMER_MINIMUM_LLAMA_REVISION.slice(0, 12)}。`
-      : imageMissing
-        ? `Muse Glimmer 专用镜像 ${runtime.image} 尚未安装；请构建包含提交 ${MUSE_GLIMMER_MINIMUM_LLAMA_REVISION.slice(0, 12)} 的镜像，或通过 LLAMA_MUSE_IMAGE 指向已验证镜像。`
-      : knownUnsupported
-        ? `当前 llama.cpp ${runtimeLabel} 早于 Muse Glimmer 支持；必须使用包含提交 ${MUSE_GLIMMER_MINIMUM_LLAMA_REVISION.slice(0, 12)} 的构建。b10344 / 7a20 仍不包含该支持。`
-        : `无法确认镜像 ${runtime.image} 是否包含 Muse Glimmer 支持；需要 revision 为 ${MUSE_GLIMMER_MINIMUM_LLAMA_REVISION.slice(0, 12)} 或经验证的后代构建。`,
+    message: "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。现有模型与镜像只保留作回滚，不会由此检查删除。",
   };
 }
 
@@ -1087,6 +1070,9 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   cleanOptionalLaunchArg,
   normalizeClientPreset,
   normalizeLlamaReasoningFormat,
+  normalizeLlamaReasoningEffort,
+  normalizeLlamaReasoningBudget,
+  normalizeLlamaMmprojDevice,
   normalizeDefaultTrueBoolean,
   normalizeNetworkAccess,
   getLanAddress,
@@ -1282,6 +1268,8 @@ function normalizeLaunchConfig(config = {}) {
     clientPreset: normalizeClientPreset(config.clientPreset),
     reasoning: normalizeOnOffAuto(config.reasoning),
     reasoningFormat: normalizeLlamaReasoningFormat(config.reasoningFormat || config.reasoningParser),
+    reasoningEffort: normalizeLlamaReasoningEffort(config.reasoningEffort),
+    reasoningBudget: normalizeLlamaReasoningBudget(config.reasoningBudget),
     textOnlyMode: normalizeDefaultTrueBoolean(config.textOnlyMode, config.languageModelOnly),
     languageModelOnly: normalizeDefaultTrueBoolean(config.textOnlyMode, config.languageModelOnly),
     multiGpuMode: normalizeLlamaSplitMode(config.multiGpuMode || config.splitMode || "layer"),
@@ -1290,6 +1278,7 @@ function normalizeLaunchConfig(config = {}) {
     mainGpu: Number(config.mainGpu || 0),
     noMmap: Boolean(config.noMmap),
     mmproj: cleanOptionalLaunchArg(config.mmproj),
+    mmprojDevice: normalizeLlamaMmprojDevice(config.mmprojDevice),
     draftModel: cleanOptionalLaunchArg(config.draftModel || config.specDraftModel),
     speculativeMode: String(config.speculativeMode || "auto"),
     numSpeculativeTokens: positiveInt(config.numSpeculativeTokens, 3),
@@ -2034,6 +2023,20 @@ function normalizeLlamaReasoningFormat(value) {
   return new Set(["auto", "none", "deepseek", "deepseek-legacy"]).has(format) ? format : "auto";
 }
 
+function normalizeLlamaReasoningEffort(value) {
+  const effort = String(value || "default").trim().toLowerCase();
+  return new Set(["default", "minimal", "low", "medium", "high", "xhigh", "max"]).has(effort) ? effort : "default";
+}
+
+function normalizeLlamaReasoningBudget(value) {
+  const number = Number(value ?? -1);
+  return Number.isInteger(number) && number >= -1 && number <= 4_194_304 ? number : -1;
+}
+
+function normalizeLlamaMmprojDevice(value) {
+  return cleanOptionalLaunchArg(value) || "auto";
+}
+
 const downloadCommandBuilder = core.createDownloadCommandBuilder({
   hfCli: CONFIG.hfCli,
   modelScopeCli: CONFIG.modelScopeCli,
@@ -2323,6 +2326,9 @@ function runtimeFactsFromContainerLabels(labels = {}) {
     cacheTypeK: String(labels["ai.manager.cache-type-k"] || "") || null,
     cacheTypeV: String(labels["ai.manager.cache-type-v"] || "") || null,
     speculativeMode: String(labels["ai.manager.speculative-mode"] || "") || null,
+    reasoningEffort: String(labels["ai.manager.reasoning-effort"] || "") || null,
+    reasoningBudget: Number.isFinite(Number(labels["ai.manager.reasoning-budget"])) ? Number(labels["ai.manager.reasoning-budget"]) : null,
+    mmprojDevice: String(labels["ai.manager.mmproj-device"] || "") || null,
     textOnlyMode: enabled("ai.manager.text-only"),
     mmproj: enabled("ai.manager.mmproj"),
     dflash: enabled("ai.manager.draft-model"),
@@ -2367,6 +2373,9 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
       cacheTypeK: runtimeLabelFacts.cacheTypeK,
       cacheTypeV: runtimeLabelFacts.cacheTypeV,
       speculativeMode: runtimeLabelFacts.speculativeMode,
+      reasoningEffort: runtimeLabelFacts.reasoningEffort,
+      reasoningBudget: runtimeLabelFacts.reasoningBudget,
+      mmprojDevice: runtimeLabelFacts.mmprojDevice,
       textOnlyMode: runtimeLabelFacts.textOnlyMode,
       mmproj: runtimeLabelFacts.mmproj,
       dflash: runtimeLabelFacts.dflash,

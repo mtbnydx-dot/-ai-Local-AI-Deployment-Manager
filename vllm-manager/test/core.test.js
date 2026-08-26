@@ -141,7 +141,7 @@ test("writeJsonFile leaves valid JSON after concurrent writes", async () => {
   assert.equal(leftovers.some((name) => name.includes(".tmp-") || name.endsWith(".lock")), false);
 });
 
-test("model-check reads local Muse Glimmer config and reports a blocking vLLM finding", async () => {
+test("model-check keeps retired Muse Glimmer blocked without deleting local files", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vllm-manager-muse-glimmer-"));
   try {
     await fs.writeFile(path.join(dir, "config.json"), JSON.stringify({
@@ -150,13 +150,10 @@ test("model-check reads local Muse Glimmer config and reports a blocking vLLM fi
       transformers_version: "5.15.0.dev0",
     }));
     const report = await manager.checkModelCompatibility({ model: dir, remote: false });
-    assert.equal(report.ok, false);
-    const finding = report.findings.find((item) => item.title === "Muse Glimmer 尚不支持 vLLM");
+    const finding = report.findings.find((item) => item.title === "Muse Glimmer 已弃用");
     assert.equal(finding?.severity, "fail");
-    assert.match(finding.detail, /vLLM v0\.28\.0/);
-    assert.match(finding.detail, /Transformers 5\.15\.1/);
-    assert.match(finding.detail, /llama-manager/);
-    assert.match(finding.detail, /GGUF/);
+    assert.match(finding.detail, /retired/);
+    assert.equal(await fs.stat(path.join(dir, "config.json")).then((stat) => stat.isFile()), true);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -181,16 +178,19 @@ test("runtime image pulls are pinned to the configured linux/amd64 platform", ()
   assert.equal(manager.CONFIG.imagePlatform, "linux/amd64");
 });
 
-test("model-check reports an explicit warning when the Muse risk override is enabled", async () => {
+test("model-check ignores the legacy Muse override and keeps the retirement block", async () => {
   const previous = process.env.VLLM_ALLOW_MUSE_GLIMMER;
   try {
     process.env.VLLM_ALLOW_MUSE_GLIMMER = "1";
-    const report = await manager.checkModelCompatibility({ model: "meta-models/Muse-Glimmer-30B", remote: false });
-    const warning = report.findings.find((item) => item.title === "Muse Glimmer 高风险绕过已启用");
-    assert.equal(warning?.severity, "warn");
-    assert.match(warning.detail, /VLLM_ALLOW_MUSE_GLIMMER=1/);
-    assert.match(warning.detail, /Transformers 5\.15\.1/);
-    assert.equal(report.findings.some((item) => item.title === "Muse Glimmer 尚不支持 vLLM" && item.severity === "fail"), false);
+    const report = await manager.checkModelCompatibility({
+      model: "meta-models/Muse-Glimmer-30B",
+      runtimeImage: "custom/vllm:v0.26.0",
+      remote: false,
+    });
+    const finding = report.findings.find((item) => item.title === "Muse Glimmer 已弃用");
+    assert.equal(finding?.severity, "fail");
+    assert.match(finding.detail, /no longer bypasses/);
+    assert.equal(report.findings.some((item) => item.title === "Muse Glimmer 高风险绕过已启用"), false);
   } finally {
     if (previous === undefined) delete process.env.VLLM_ALLOW_MUSE_GLIMMER;
     else process.env.VLLM_ALLOW_MUSE_GLIMMER = previous;

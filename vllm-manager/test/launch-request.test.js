@@ -77,6 +77,7 @@ test("vLLM launch request builds serve job metadata and run options", async () =
       port: "8123",
       maxModelLen: "262144",
       maxNumSeqs: "4",
+      maxNumBatchedTokens: "16384",
       gpuDeviceIds: "0,1",
       multiGpuMode: "tensor",
       tensorParallelSize: "2",
@@ -99,6 +100,7 @@ test("vLLM launch request builds serve job metadata and run options", async () =
   assert.equal(result.job.meta.port, 8123);
   assert.equal(result.job.meta.maxModelLen, 262144);
   assert.equal(result.job.meta.maxNumSeqs, 4);
+  assert.equal(result.job.meta.maxNumBatchedTokens, 16384);
   assert.equal(result.job.meta.toolCallParser, "qwen3_coder");
   assert.equal(result.job.meta.enableAutoToolChoice, true);
   assert.equal(result.job.meta.hasApiKey, true);
@@ -108,6 +110,7 @@ test("vLLM launch request builds serve job metadata and run options", async () =
   assert.equal(runCalls[0].serviceUrl, "http://192.168.1.27:8123/v1");
   assert.equal(runCalls[0].speculativeMode, "auto");
   assert.equal(runCalls[0].numSpeculativeTokens, 2);
+  assert.equal(runCalls[0].maxNumBatchedTokens, 16384);
   assert.equal(runCalls[0].engine, "sglang");
   assert.equal(runCalls[0].runtimeImage, "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   assert.equal(runCalls[0].draftModel, "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark");
@@ -298,6 +301,10 @@ test("vLLM launch request rejects unsafe numeric values before creating a job", 
   await assert.rejects(
     () => request({ body: { model: "model", maxNumSeqs: 2048 } }),
     (error) => error.status === 400 && /maxNumSeqs/.test(error.message),
+  );
+  await assert.rejects(
+    () => request({ body: { model: "model", maxNumBatchedTokens: -1 } }),
+    (error) => error.status === 400 && /maxNumBatchedTokens/.test(error.message),
   );
 });
 

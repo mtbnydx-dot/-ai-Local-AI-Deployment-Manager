@@ -58,6 +58,9 @@ test("llama runtime command builds remote GGUF and hetero GPU args", () => {
     flashAttention: "auto",
     reasoning: "auto",
     reasoningFormat: "none",
+    reasoningEffort: "high",
+    reasoningBudget: 2048,
+    mmprojDevice: "auto",
     noMmap: true,
     noRepack: true,
   });
@@ -80,6 +83,8 @@ test("llama runtime command builds remote GGUF and hetero GPU args", () => {
   assert.ok(runArgs.includes("ai.manager.gpu-admission-lease=lease-llama"));
   assert.ok(runArgs.includes("ai.manager.job=serve-test"));
   assert.ok(runArgs.includes("ai.manager.text-only=true"));
+  assert.deepEqual(runArgs.slice(runArgs.indexOf("--reasoning-effort"), runArgs.indexOf("--reasoning-effort") + 2), ["--reasoning-effort", "high"]);
+  assert.deepEqual(runArgs.slice(runArgs.indexOf("--reasoning-budget"), runArgs.indexOf("--reasoning-budget") + 2), ["--reasoning-budget", "2048"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--ctx-size"), runArgs.indexOf("--ctx-size") + 2), ["--ctx-size", "131072"]);
   assert.ok(logs.some((line) => line.includes("Remote GGUF repo mode")));
   assert.ok(logs.some((line) => line.includes("Heterogeneous GPU split")));
@@ -129,6 +134,9 @@ test("llama runtime command loads mmproj, protects API keys, and enables checkpo
     flashAttention: "auto",
     reasoning: "auto",
     reasoningFormat: "auto",
+    reasoningEffort: "medium",
+    reasoningBudget: 4096,
+    mmprojDevice: "CUDA0",
     speculativeMode: "auto",
     numSpeculativeTokens: 5,
     llamaApiKey: "llama-secret",
@@ -137,6 +145,7 @@ test("llama runtime command loads mmproj, protects API keys, and enables checkpo
   const { runArgs } = buildLlamaRuntimeCommand({}, opts);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--ctx-size"), runArgs.indexOf("--ctx-size") + 2), ["--ctx-size", "131072"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--mmproj"), runArgs.indexOf("--mmproj") + 2), ["--mmproj", "/models/qwen/mmproj-F16.gguf"]);
+  assert.deepEqual(runArgs.slice(runArgs.indexOf("--mmproj-device"), runArgs.indexOf("--mmproj-device") + 2), ["--mmproj-device", "CUDA0"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--spec-type"), runArgs.indexOf("--spec-type") + 2), ["--spec-type", "draft-mtp"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--spec-draft-n-max"), runArgs.indexOf("--spec-draft-n-max") + 2), ["--spec-draft-n-max", "5"]);
   assert.ok(redactDockerArgs(runArgs, opts).join(" ").includes("***"));

@@ -2228,10 +2228,13 @@ function applyLaunchProfile(config = {}, options = {}) {
   set("#clientPreset", config.clientPreset);
   set("#reasoningMode", config.reasoning);
   set("#reasoningParser", config.reasoningFormat);
+  set("#reasoningEffort", config.reasoningEffort);
+  set("#reasoningBudget", config.reasoningBudget);
   set("#multiGpuMode", config.multiGpuMode);
   set("#tensorSplit", config.tensorSplit);
   set("#mainGpu", config.mainGpu);
   set("#mmproj", config.mmproj);
+  set("#mmprojDevice", config.mmprojDevice);
   set("#dflash", config.dflash || config.draftModel);
   set("#speculativeMode", config.speculativeMode);
   set("#numSpeculativeTokens", config.numSpeculativeTokens);
@@ -4734,6 +4737,7 @@ function validateLlamaLaunchForm(form) {
   if (!integer("#maxNumSeqs", "并行槽数", 1, 1024)) return false;
   if (!integer("#batchSize", "batch", 1, 1_048_576)) return false;
   if (!integer("#ubatchSize", "ubatch", 1, 1_048_576)) return false;
+  if (!integer("#reasoningBudget", "思考 token 预算", -1, 4_194_304)) return false;
   if (Number($("#ubatchSize").value) > Number($("#batchSize").value)) return fail($("#ubatchSize"), "ubatch 不能大于 batch。");
   const utilization = Number($("#gpuMemoryUtilization")?.value);
   if (!Number.isFinite(utilization) || utilization < 0.1 || utilization > 0.98) return fail($("#gpuMemoryUtilization"), "显存分配比例必须在 0.1–0.98 之间。");
@@ -4770,6 +4774,8 @@ function buildLlamaLaunchPayload(formElement) {
     ? inferReasoningParser(payload.model, payload.clientPreset)
     : String(payload.reasoningFormat || "auto");
   payload.reasoning = String(payload.reasoning || "auto");
+  payload.reasoningEffort = String(payload.reasoningEffort || "default");
+  payload.reasoningBudget = Number(payload.reasoningBudget ?? -1);
   payload.cacheTypeK = String(payload.cacheTypeK || "f16");
   payload.cacheTypeV = String(payload.cacheTypeV || "f16");
   payload.flashAttention = String(payload.flashAttention || "auto");
@@ -4783,6 +4789,7 @@ function buildLlamaLaunchPayload(formElement) {
   payload.maxNumSeqs = Number(payload.maxNumSeqs || 4);
   payload.gpuMemoryUtilization = Number(payload.gpuMemoryUtilization || 0.92);
   payload.mmproj = String(payload.mmproj || "");
+  payload.mmprojDevice = String(payload.mmprojDevice || "auto").trim() || "auto";
   payload.dflash = String(payload.dflash || "");
   payload.speculativeMode = String(payload.speculativeMode || "auto");
   const useExternalDraft = payload.speculativeMode === "auto" || payload.speculativeMode === "draft-dflash";

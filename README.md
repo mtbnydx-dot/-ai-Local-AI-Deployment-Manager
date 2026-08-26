@@ -142,12 +142,11 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 - 选择 **vLLM**：需要高吞吐、OpenAI-compatible serving、Qwen 工具调用、并发请求和更接近服务端部署的行为。
 - 选择 **llama.cpp**：使用 GGUF、想节省显存、需要异构双卡、需要 GPU layers/RAM fallback，或者想快速加载本地量化模型。
 
-### 固定运行时与 Muse Glimmer
+### 固定运行时与新版能力
 
-- 普通 GGUF 模型继续使用原有的固定 llama.cpp CUDA 镜像，不会因为 Muse 支持而整体切换版本。检测到 `muse-glimmer` 架构时，llama 管理器会自动改用 `local/llama.cpp:server-cuda-muse-62bf73d`；它固定到首次支持该架构的 llama.cpp 提交 `62bf73d25c53b8161f8a22894d4f90c4aebbd7d0`。
-- 首次使用 Muse 前可运行 `powershell -ExecutionPolicy Bypass -File .\llama-manager\build-muse-runtime.ps1`。脚本复用或创建 `artifacts/build-sources/llama.cpp-muse-62bf73d`，只接受提交正确且干净的已有 checkout，不会删除或改写其它源码目录、模型或运行数据；构建后会校验镜像的 revision label。
+- 普通 GGUF 模型使用已验证的 llama.cpp `b10630` CUDA 镜像。管理器已对齐 `--reasoning-effort`、`--reasoning-budget` 与 `--mmproj-device`；实验性的 `--tools-runtime` 涉及外部命令执行，因此不在网页端开放。历史 Muse 镜像和兼容代码仅为回滚保留，本轮不再维护、下载或验证 Muse。
 - 同一目录中的 `dynamic` 与 `17gb` 等主 GGUF 是可分别选择的替代变体，不会相加为模型权重。显存估算和启动命令始终使用当前选中的一个主变体；`mmproj` 是可选视觉投影组件，DFlash GGUF 是可选的推测解码加速组件，只有启用或自动匹配时才计入估算和命令。
-- vLLM 默认运行时固定为 Linux/amd64 的 v0.26.0 镜像 `vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b`。当前该运行时中的 Transformers 5.14.1 尚不能加载 `muse_glimmer` safetensors，因此管理器会在创建容器前阻断；Muse 请优先使用 llama 管理器加载本地 GGUF。
+- vLLM 默认运行时固定为 Linux/amd64 的 v0.28.0 平台镜像 `vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635`，前端提供 `max_num_batched_tokens`。本地策略已弃用 Muse，即使上游 v0.28 已加入相关实现，管理器仍会在创建容器前阻断。v0.28 已把 BitsAndBytes 支持迁移到外部 `vllm-bnb-plugin`，固定镜像未安装该插件，因此 BNB checkpoint 也会明确阻断；非 BNB safetensors 不受影响。
 
 ### 安全和隐私
 
@@ -368,12 +367,11 @@ Generate API keys from the manager's service/external access page. Do not put re
 - Use **vLLM** for high throughput, OpenAI-compatible serving, Qwen tool calling, concurrency, and service-like behavior.
 - Use **llama.cpp** for GGUF, lower VRAM use, heterogeneous GPUs, GPU layers/RAM fallback, and fast local quantized model loading.
 
-### Pinned Runtimes And Muse Glimmer
+### Pinned Runtimes And New Capabilities
 
-- Ordinary GGUF models keep using the existing pinned llama.cpp CUDA image; Muse support does not move every model to a new runtime. When the manager detects the `muse-glimmer` architecture, it automatically selects `local/llama.cpp:server-cuda-muse-62bf73d`, pinned to the first supporting llama.cpp commit, `62bf73d25c53b8161f8a22894d4f90c4aebbd7d0`.
-- Before the first Muse launch, run `powershell -ExecutionPolicy Bypass -File .\llama-manager\build-muse-runtime.ps1`. The script reuses or creates `artifacts/build-sources/llama.cpp-muse-62bf73d`, accepts an existing checkout only when it is clean and at the exact commit, never deletes or rewrites other source directories, models, or runtime data, and verifies the built image revision label.
+- Ordinary GGUF models use the validated llama.cpp `b10630` CUDA image. The manager exposes `--reasoning-effort`, `--reasoning-budget`, and `--mmproj-device`; the experimental `--tools-runtime` can execute external commands and therefore remains unavailable in the web UI. The historical Muse image and compatibility code are retained only for rollback; Muse is no longer maintained, downloaded, or validated in this rollout.
 - Main GGUFs such as `dynamic` and `17gb` in one directory are selectable alternatives, not additive weights. Estimation and launch use exactly one selected main variant. `mmproj` is an optional vision projector and the DFlash GGUF is an optional speculative-decoding accelerator; each is counted and passed to the runtime only when selected or automatically matched.
-- The default vLLM runtime is pinned to the Linux/amd64 v0.26.0 image `vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b`. Transformers 5.14.1 in that runtime cannot currently load `muse_glimmer` safetensors, so the manager blocks the launch before container creation. Prefer the local GGUF through llama manager for Muse.
+- The default vLLM runtime is pinned to the Linux/amd64 v0.28.0 platform image `vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635`, and the UI exposes `max_num_batched_tokens`. Local policy retires Muse, so the manager blocks it before container creation even though upstream v0.28 contains an implementation. vLLM 0.28 moved BitsAndBytes loading to the external `vllm-bnb-plugin`; that plugin is absent from the pinned image, so BNB checkpoints are also blocked while ordinary safetensors remain supported.
 
 ### Security And Privacy
 

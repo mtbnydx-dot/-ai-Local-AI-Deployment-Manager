@@ -328,7 +328,7 @@ test("memory estimate helper keeps llama.cpp hetero split advice visible", () =>
   assert.match(estimate.recommendations.suggestions.join(" "), /tensor split/);
 });
 
-test("runtime compatibility rejects b10344 and accepts the Muse support revision", () => {
+test("runtime compatibility keeps retired Muse blocked without deleting rollback metadata", () => {
   const mutableTagInfo = manager.resolveConfiguredLlamaImageBuildInfo({
     museGlimmer: true,
     image: "local/llama.cpp:server-cuda-muse-62bf73d",
@@ -366,19 +366,19 @@ test("runtime compatibility rejects b10344 and accepts the Muse support revision
   const labeledImage = manager.evaluateLlamaArchitectureRuntimeCompatibility("muse-glimmer", labeledImageInfo);
   assert.equal(oldRuntime.status, "unsupported");
   assert.equal(oldRuntime.supported, false);
-  assert.match(oldRuntime.message, /62bf73d25c53/);
+  assert.match(oldRuntime.message, /已从本地栈弃用/);
   assert.equal(stillUnsupportedRuntime.status, "unsupported");
   assert.equal(stillUnsupportedRuntime.supported, false);
-  assert.equal(supportedRuntime.status, "supported");
-  assert.equal(supportedRuntime.supported, true);
+  assert.equal(supportedRuntime.status, "unsupported");
+  assert.equal(supportedRuntime.supported, false);
   assert.equal(missingRuntime.status, "unsupported");
   assert.equal(missingRuntime.supported, false);
-  assert.match(missingRuntime.message, /LLAMA_MUSE_IMAGE/);
-  assert.equal(mutableTagWithoutRevision.status, "unknown");
-  assert.equal(mutableTagWithoutRevision.supported, null);
+  assert.match(missingRuntime.message, /不会由此检查删除/);
+  assert.equal(mutableTagWithoutRevision.status, "unsupported");
+  assert.equal(mutableTagWithoutRevision.supported, false);
   assert.equal(mutableTagInfo.revision, "");
-  assert.equal(labeledImage.status, "supported");
-  assert.equal(labeledImage.supported, true);
+  assert.equal(labeledImage.status, "unsupported");
+  assert.equal(labeledImage.supported, false);
   assert.equal(manager.evaluateLlamaArchitectureRuntimeCompatibility("llama", {}).status, "not-required");
 });
 
@@ -462,6 +462,9 @@ test("running llama facts are recovered from non-secret container labels", () =>
     "ai.manager.cache-type-k": "q4_0",
     "ai.manager.cache-type-v": "q4_0",
     "ai.manager.speculative-mode": "draft-dflash",
+    "ai.manager.reasoning-effort": "high",
+    "ai.manager.reasoning-budget": "2048",
+    "ai.manager.mmproj-device": "CUDA0",
     "ai.manager.text-only": "false",
     "ai.manager.mmproj": "true",
     "ai.manager.draft-model": "true",
@@ -474,6 +477,9 @@ test("running llama facts are recovered from non-secret container labels", () =>
     cacheTypeK: "q4_0",
     cacheTypeV: "q4_0",
     speculativeMode: "draft-dflash",
+    reasoningEffort: "high",
+    reasoningBudget: 2048,
+    mmprojDevice: "CUDA0",
     textOnlyMode: false,
     mmproj: true,
     dflash: true,

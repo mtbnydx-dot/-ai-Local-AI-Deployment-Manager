@@ -56,6 +56,7 @@ function createVllmStartRuntimeRequest(deps) {
     }
     const maxModelLen = boundedPositiveInteger(body.maxModelLen, 8192, "maxModelLen", 4_194_304);
     const maxNumSeqs = boundedPositiveInteger(body.maxNumSeqs, 4, "maxNumSeqs", 1024);
+    const maxNumBatchedTokens = boundedNonNegativeInteger(body.maxNumBatchedTokens, 0, "maxNumBatchedTokens", 4_194_304);
     const gpuMemoryUtilization = boundedNumber(
       body.gpuMemoryUtilization,
       instanceMode === "parallel" ? 0.7 : 0.92,
@@ -149,6 +150,7 @@ function createVllmStartRuntimeRequest(deps) {
         estimatePolicy: "vllm_gpu_memory_utilization",
         maxModelLen,
         maxNumSeqs,
+        maxNumBatchedTokens,
       };
     let admissionLease = null;
     if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
@@ -188,6 +190,7 @@ function createVllmStartRuntimeRequest(deps) {
         port,
         maxModelLen,
         maxNumSeqs,
+        maxNumBatchedTokens,
         gpuMemoryUtilization,
         cpuOffloadGb,
         kvOffloadingSize,
@@ -245,6 +248,7 @@ function createVllmStartRuntimeRequest(deps) {
       port,
       maxModelLen,
       maxNumSeqs,
+      maxNumBatchedTokens,
       gpuMemoryUtilization,
       cpuOffloadGb,
       kvOffloadingSize,
@@ -385,6 +389,17 @@ function boundedPositiveInteger(value, fallback, name, max) {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 1 || number > max) {
     const error = new Error(`${name} 必须是 1 到 ${max} 之间的整数。`);
+    error.status = 400;
+    throw error;
+  }
+  return number;
+}
+
+function boundedNonNegativeInteger(value, fallback, name, max) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0 || number > max) {
+    const error = new Error(`${name} 必须是 0 到 ${max} 之间的整数。`);
     error.status = 400;
     throw error;
   }

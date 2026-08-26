@@ -112,8 +112,8 @@ test("Muse Glimmer is blocked before vLLM container startup", () => {
   assert.match(fromConfig.unsupportedReason, /vLLM v0\.26\.0/);
   assert.match(fromConfig.unsupportedReason, /Transformers 5\.14\.1/);
   assert.match(fromConfig.unsupportedReason, /Transformers 5\.15\.0\.dev0/);
-  assert.match(fromConfig.unsupportedReason, /llama-manager/);
-  assert.match(fromConfig.unsupportedReason, /GGUF/);
+  assert.match(fromConfig.unsupportedReason, /retired/);
+  assert.match(fromConfig.unsupportedReason, /another model/);
 
   const fromModelName = resolveVllmModelCapabilities({
     model: "meta-models/Muse-Glimmer-30B",
@@ -132,16 +132,32 @@ test("Muse identity prefers config and only falls back to normalized Windows/rep
   assert.equal(isMuseGlimmerModel({}, "meta-models/Muse_Glimmer-30B"), true);
 });
 
-test("Muse advanced-risk override is explicit and uses runtime metadata in its warning", () => {
+test("Muse retirement policy cannot be bypassed by the legacy environment flag", () => {
   const capabilities = resolveVllmModelCapabilities({
     model: "D:\\AI\\models\\Muse-Glimmer-30B",
     config: { model_type: "muse_glimmer" },
     runtimeMetadata: { version: "v0.26.0", transformersVersion: "5.14.1" },
     allowMuseGlimmer: true,
   });
-  assert.equal(capabilities.unsupportedCode, "");
-  assert.equal(capabilities.unsupportedReason, undefined);
-  assert.equal(capabilities.museGlimmerOverride, true);
-  assert.match(capabilities.notes[0], /VLLM_ALLOW_MUSE_GLIMMER=1/);
-  assert.match(capabilities.notes[0], /Transformers 5\.14\.1/);
+  assert.equal(capabilities.unsupportedCode, "muse_glimmer");
+  assert.equal(capabilities.museGlimmerOverride, false);
+  assert.match(capabilities.unsupportedReason, /retired/);
+  assert.match(capabilities.unsupportedReason, /no longer bypasses/);
+});
+
+test("the pinned vLLM 0.28 image blocks BNB checkpoints until vllm-bnb-plugin is added", () => {
+  const capabilities = resolveVllmModelCapabilities({
+    model: "unsloth/Llama-30B-bnb-4bit",
+    config: {
+      model_type: "llama",
+      quantization_config: { quant_method: "bitsandbytes_4bit" },
+    },
+    runtimeMetadata: {
+      version: "v0.28.0",
+      transformersVersion: "5.15.1",
+      bitsAndBytesPlugin: false,
+    },
+  });
+  assert.equal(capabilities.unsupportedCode, "bitsandbytes_plugin_missing");
+  assert.match(capabilities.unsupportedReason, /vllm-bnb-plugin/);
 });

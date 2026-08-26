@@ -34,6 +34,10 @@ function createLlamaRuntimeCommandBuilder(deps) {
     const selectedArchitecture = String(launch.selectedModel?.architecture || "").trim().toLowerCase();
     const museGlimmer = selectedArchitecture === "muse-glimmer" || /muse[-_. ]glimmer/i.test(String(opts.model || ""));
     const runtimeImage = String(opts.runtimeImage || (museGlimmer ? CONFIG.museImage : "") || CONFIG.image);
+    const supportsB10630Controls = runtimeImage === CONFIG.image;
+    const reasoningEffort = String(opts.reasoningEffort || "default");
+    const reasoningBudget = Number.isInteger(Number(opts.reasoningBudget)) ? Number(opts.reasoningBudget) : -1;
+    const mmprojDevice = String(opts.mmprojDevice || "auto").trim() || "auto";
     const remoteRepo = !path.isAbsolute(opts.model)
       && /^[^/\s]+\/[^/\s]+/.test(opts.model)
       && !String(opts.model).toLowerCase().endsWith(".gguf");
@@ -106,6 +110,9 @@ function createLlamaRuntimeCommandBuilder(deps) {
       "--label", `ai.manager.cache-type-v=${opts.cacheTypeV || ""}`,
       "--label", `ai.manager.tensor-split=${opts.tensorSplit || ""}`,
       "--label", `ai.manager.speculative-mode=${speculativeMode}`,
+      "--label", `ai.manager.reasoning-effort=${supportsB10630Controls ? reasoningEffort : "default"}`,
+      "--label", `ai.manager.reasoning-budget=${reasoningBudget}`,
+      "--label", `ai.manager.mmproj-device=${supportsB10630Controls ? mmprojDevice : "auto"}`,
       "--label", `ai.manager.fit-target-mb=${Math.max(0, Number(opts.fitTargetMb || 0))}`,
       "--label", `ai.manager.fit-ctx=${Math.max(0, Number(opts.fitCtx || 0))}`,
       "--label", `ai.manager.mmproj=${Boolean(mmproj)}`,
@@ -158,9 +165,15 @@ function createLlamaRuntimeCommandBuilder(deps) {
       "--flash-attn", opts.flashAttention,
       "--reasoning", opts.reasoning,
       "--reasoning-format", opts.reasoningFormat,
+      "--reasoning-budget", String(reasoningBudget),
       "--metrics",
       "--jinja"
     );
+    if (supportsB10630Controls) {
+      runArgs.push("--reasoning-effort", reasoningEffort);
+    } else if (reasoningEffort !== "default") {
+      appendLog(job, `Runtime ${runtimeImage} predates --reasoning-effort; requested ${reasoningEffort} was left at template default.`);
+    }
     if (Number(opts.fitTargetMb || 0) > 0) {
       runArgs.push("--fit", "on", "--fit-target", String(Math.floor(Number(opts.fitTargetMb))));
     }
@@ -168,6 +181,11 @@ function createLlamaRuntimeCommandBuilder(deps) {
       runArgs.push("--fit-ctx", String(Math.floor(Number(opts.fitCtx))));
     }
     if (!textOnlyMode && mmproj) runArgs.push("--mmproj", windowsPathToContainerPath(mmproj));
+    if (!textOnlyMode && supportsB10630Controls) {
+      runArgs.push("--mmproj-device", mmprojDevice);
+    } else if (!textOnlyMode && mmprojDevice !== "auto") {
+      appendLog(job, `Runtime ${runtimeImage} predates --mmproj-device; requested ${mmprojDevice} was left at auto.`);
+    }
     if (speculativeMode !== "none") {
       runArgs.push("--spec-type", speculativeMode);
       if (speculativeMode.startsWith("draft-")) {

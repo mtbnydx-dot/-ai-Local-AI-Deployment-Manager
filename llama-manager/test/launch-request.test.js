@@ -136,7 +136,10 @@ test("llama launch request keeps hetero GPU plan and tensor split in sync", asyn
       multiGpuMode: "layer",
       networkAccess: "lan",
       reasoning: "on",
+      reasoningEffort: "high",
+      reasoningBudget: "2048",
       mmproj: "D:/AI/models/mmproj.gguf",
+      mmprojDevice: "CUDA0",
       speculativeMode: "draft-mtp",
       numSpeculativeTokens: "4",
       gpuLayers: "auto",
@@ -154,9 +157,12 @@ test("llama launch request keeps hetero GPU plan and tensor split in sync", asyn
   assert.equal(result.job.meta.serviceUrl, "http://192.168.1.27:8180/v1");
   assert.equal(runCalls[0].tensorSplit, "2,1");
   assert.equal(runCalls[0].reasoning, "on");
+  assert.equal(runCalls[0].reasoningEffort, "high");
+  assert.equal(runCalls[0].reasoningBudget, 2048);
   assert.equal(runCalls[0].cacheReuse, 512);
   assert.equal(result.job.meta.cacheReuse, 512);
   assert.equal(runCalls[0].mmproj, "D:/AI/models/mmproj.gguf");
+  assert.equal(runCalls[0].mmprojDevice, "CUDA0");
   assert.equal(runCalls[0].speculativeMode, "draft-mtp");
   assert.equal(runCalls[0].numSpeculativeTokens, 4);
   assert.equal(runCalls[0].llamaApiKey, "llama-key");

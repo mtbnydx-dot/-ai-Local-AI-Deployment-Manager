@@ -1261,6 +1261,7 @@ function normalizeLaunchConfig(config = {}) {
     port: Number(config.port || CONFIG.defaultPort),
     maxModelLen: Number(config.maxModelLen || 8192),
     maxNumSeqs: Number(config.maxNumSeqs || 4),
+    maxNumBatchedTokens: Math.max(0, Math.floor(Number(config.maxNumBatchedTokens || 0) || 0)),
     gpuMemoryUtilization: Number(config.gpuMemoryUtilization || 0.9),
     cpuOffloadGb: Number(config.cpuOffloadGb || 0),
     kvOffloadingSize: Number(config.kvOffloadingSize || 0),
@@ -1358,7 +1359,11 @@ async function checkModelCompatibility(input = {}) {
   if (capabilities.unsupportedReason) {
     findings.push(finding(
       "fail",
-      capabilities.unsupportedCode === "muse_glimmer" ? "Muse Glimmer 尚不支持 vLLM" : "模型专用依赖缺失",
+      capabilities.unsupportedCode === "muse_glimmer"
+        ? "Muse Glimmer 已弃用"
+        : capabilities.unsupportedCode === "bitsandbytes_plugin_missing"
+          ? "BitsAndBytes 插件缺失"
+          : "模型专用依赖缺失",
       capabilities.unsupportedReason,
     ));
   }
@@ -3428,6 +3433,7 @@ async function listRuntimeInstancesRequest() {
         gpuIds: normalizeGpuIds(labels["ai.manager.gpu-ids"] || ""),
         vramReservationMb: Number(labels["ai.manager.vram-reservation-mb"] || 0),
         gpuMemoryUtilization: Number(labels["ai.manager.gpu-memory-utilization"] || 0),
+        maxNumBatchedTokens: Number(labels["ai.manager.max-num-batched-tokens"] || 0),
         localBaseUrl: runtime.endpoint?.localUrl || null,
         lanBaseUrl: runtime.endpoint?.lanUrl || null,
         models: instanceModels.map((model) => ({

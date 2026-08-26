@@ -225,14 +225,9 @@ function resolveVllmModelCapabilities(options = {}) {
     const transformersVersion = String(config.transformers_version || config.text_config?.transformers_version || "").trim();
     const runtimeDescription = describeRuntimeMetadata(options.runtimeMetadata);
     result.isMuseGlimmer = true;
-    result.museGlimmerOverride = Boolean(options.allowMuseGlimmer);
-    if (result.museGlimmerOverride) {
-      result.notes.push(`VLLM_ALLOW_MUSE_GLIMMER=1 bypasses the default Muse Glimmer block for ${runtimeDescription}. This is an advanced-risk override; compatibility cannot be guaranteed.`);
-    } else {
-      result.unsupportedCode = "muse_glimmer";
-      result.unsupportedReason = `Muse Glimmer is not supported by ${runtimeDescription}${transformersVersion ? `; this checkpoint declares Transformers ${transformersVersion}` : ""}. Do not start it with vLLM yet. Use llama-manager to launch the local GGUF variant instead. Set VLLM_ALLOW_MUSE_GLIMMER=1 only as an explicit advanced-risk bypass.`;
-      result.notes.push("Muse Glimmer startup is blocked before container creation so model-check and launch use the same compatibility result.");
-    }
+    result.unsupportedCode = "muse_glimmer";
+    result.unsupportedReason = `Muse Glimmer has been retired from this local stack and is not a supported launch target (${runtimeDescription}${transformersVersion ? `; checkpoint Transformers ${transformersVersion}` : ""}). Choose another model; VLLM_ALLOW_MUSE_GLIMMER no longer bypasses this policy.`;
+    result.notes.push("Muse Glimmer remains blocked before container creation; no model or image data is deleted by this policy.");
   } else if (/nemotron[-_ ]?3[-_ ]?nano/.test(text)) {
     result.reasoningParser = "nano_v3";
     result.toolCallParser = "qwen3_coder";
@@ -259,6 +254,12 @@ function resolveVllmModelCapabilities(options = {}) {
     result.reasoningParser = "gemma4";
     result.toolCallParser = "gemma4";
     result.enableAutoToolChoice = true;
+  }
+
+  if (/^(?:bitsandbytes|bnb)(?:$|[_-])/.test(quantMethod) && options.runtimeMetadata?.bitsAndBytesPlugin === false) {
+    result.unsupportedCode = "bitsandbytes_plugin_missing";
+    result.unsupportedReason = `${describeRuntimeMetadata(options.runtimeMetadata)} no longer bundles BitsAndBytes loading; this verified image does not contain vllm-bnb-plugin. Install that plugin in a separate derived image or use a non-BNB checkpoint.`;
+    result.notes.push("vLLM 0.28 moved BitsAndBytes loading to the out-of-tree vllm-bnb-plugin package.");
   }
 
   if (speculativeConfig) {

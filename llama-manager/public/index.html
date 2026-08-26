@@ -246,8 +246,24 @@
                   <option value="deepseek-legacy">deepseek-legacy / 保留 think</option>
                 </select>
               </label>
+              <label>
+                <span>思考强度（新版 llama.cpp）</span>
+                <select id="reasoningEffort" name="reasoningEffort">
+                  <option value="default">default / 模板默认</option>
+                  <option value="minimal">minimal</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh</option>
+                  <option value="max">max</option>
+                </select>
+              </label>
+              <label>
+                <span>思考 token 预算</span>
+                <input id="reasoningBudget" name="reasoningBudget" type="number" min="-1" max="4194304" step="1" value="-1" />
+              </label>
               <div class="form-note reasoning-note" id="reasoningNote">
-                llama.cpp 可用 reasoning-format deepseek 把思考放进 reasoning_content；Open WebUI 通常能分离显示，普通客户端可用 none 原样保留。
+                llama.cpp 可用 reasoning-format 分离思考；reasoning-effort 会传给聊天模板，reasoning-budget 中 -1 表示不限、0 表示立即结束。实验性的 tools-runtime 涉及执行外部工具，网页端保持关闭。
               </div>
               <div class="form-section compression-section">
                 <div class="section-title">
@@ -280,6 +296,10 @@
                 <label>
                   <span>多模态 projector</span>
                   <input id="mmproj" name="mmproj" placeholder="自动查找 mmproj*.gguf，或填写模型目录内路径" autocomplete="off" />
+                </label>
+                <label>
+                  <span>Projector 设备（新版 llama.cpp）</span>
+                  <input id="mmprojDevice" name="mmprojDevice" value="auto" placeholder="auto、none 或设备名" autocomplete="off" />
                 </label>
                 <label>
                   <span>DFlash / draft 组件</span>

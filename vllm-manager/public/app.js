@@ -2323,6 +2323,7 @@ function applyLaunchProfile(config = {}, options = {}) {
   set("#servicePort", config.port);
   set("#maxModelLen", config.maxModelLen);
   set("#maxNumSeqs", config.maxNumSeqs);
+  set("#maxNumBatchedTokens", config.maxNumBatchedTokens);
   set("#gpuMemoryUtilization", config.gpuMemoryUtilization);
   set("#cpuOffloadGb", config.cpuOffloadGb);
   set("#kvOffloadingSize", config.kvOffloadingSize);
@@ -4630,6 +4631,7 @@ function validateVllmLaunchForm(form) {
   if (!integer("#servicePort", "端口", 1024, 65535)) return false;
   if (!integer("#maxModelLen", "上下文长度", 1, 4_194_304)) return false;
   if (!integer("#maxNumSeqs", "最大并发序列", 1, 1024)) return false;
+  if (!integer("#maxNumBatchedTokens", "调度 token 上限", 0, 4_194_304)) return false;
   if (!integer("#tensorParallelSize", "张量并行", 1, 1024)) return false;
   if (!integer("#pipelineParallelSize", "流水并行", 1, 1024)) return false;
   if (!integer("#dataParallelSize", "数据并行", 1, 1024)) return false;
@@ -4666,6 +4668,7 @@ function buildVllmLaunchPayload(formElement) {
   payload.port = Number(payload.port || 8000);
   payload.maxModelLen = Number(payload.maxModelLen || 8192);
   payload.maxNumSeqs = Number(payload.maxNumSeqs || 4);
+  payload.maxNumBatchedTokens = Number(payload.maxNumBatchedTokens || 0);
   payload.gpuMemoryUtilization = Number(payload.gpuMemoryUtilization || 0.9);
   payload.cpuOffloadGb = Number(payload.cpuOffloadGb || 0);
   payload.kvOffloadingSize = Number(payload.kvOffloadingSize || 0);

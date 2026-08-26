@@ -7,6 +7,7 @@ const DEFAULT_VLLM_RELEASE = Object.freeze({
   cudaVersion: "13.0.2",
   torchVersion: "2.13.0",
   transformersVersion: "5.15.1",
+  bitsAndBytesPlugin: false,
   minimumComputeCapability: "7.5",
   minimumBlackwellCudaVersion: "12.8",
   minimumDriverVersions: Object.freeze({

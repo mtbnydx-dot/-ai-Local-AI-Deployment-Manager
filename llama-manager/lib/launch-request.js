@@ -29,6 +29,15 @@ function createLlamaStartRuntimeRequest(deps) {
     cleanOptionalLaunchArg,
     normalizeClientPreset,
     normalizeLlamaReasoningFormat,
+    normalizeLlamaReasoningEffort = (value) => {
+      const effort = String(value || "default").trim().toLowerCase();
+      return new Set(["default", "minimal", "low", "medium", "high", "xhigh", "max"]).has(effort) ? effort : "default";
+    },
+    normalizeLlamaReasoningBudget = (value) => {
+      const number = Number(value ?? -1);
+      return Number.isInteger(number) && number >= -1 && number <= 4_194_304 ? number : -1;
+    },
+    normalizeLlamaMmprojDevice = (value) => cleanOptionalLaunchArg(value) || "auto",
     normalizeDefaultTrueBoolean,
     normalizeNetworkAccess,
     getLanAddress,
@@ -125,8 +134,11 @@ function createLlamaStartRuntimeRequest(deps) {
     const clientPreset = normalizeClientPreset(body.clientPreset);
     const reasoning = normalizeOnOffAuto(body.reasoning);
     const reasoningFormat = normalizeLlamaReasoningFormat(body.reasoningFormat || body.reasoningParser);
+    const reasoningEffort = normalizeLlamaReasoningEffort(body.reasoningEffort);
+    const reasoningBudget = normalizeLlamaReasoningBudget(body.reasoningBudget);
     const textOnlyMode = normalizeDefaultTrueBoolean(body.textOnlyMode, body.languageModelOnly);
     const mmproj = cleanOptionalLaunchArg(body.mmproj);
+    const mmprojDevice = normalizeLlamaMmprojDevice(body.mmprojDevice);
     const speculativeMode = String(body.speculativeMode || "auto").trim().toLowerCase();
     const draftModel = cleanOptionalLaunchArg(body.draftModel || body.specDraftModel);
     const numSpeculativeTokens = positiveInt(body.numSpeculativeTokens, 3);
@@ -248,12 +260,15 @@ function createLlamaStartRuntimeRequest(deps) {
         clientPreset,
         reasoning,
         reasoningFormat,
+        reasoningEffort,
+        reasoningBudget,
         textOnlyMode,
         languageModelOnly: textOnlyMode,
         networkAccess,
         serviceHost,
         serviceUrl,
         mmproj,
+        mmprojDevice,
         draftModel,
         speculativeMode,
         numSpeculativeTokens,
@@ -305,12 +320,15 @@ function createLlamaStartRuntimeRequest(deps) {
       clientPreset,
       reasoning,
       reasoningFormat,
+      reasoningEffort,
+      reasoningBudget,
       textOnlyMode,
       languageModelOnly: textOnlyMode,
       networkAccess,
       serviceHost,
       serviceUrl,
       mmproj,
+      mmprojDevice,
       draftModel,
       speculativeMode,
       numSpeculativeTokens,

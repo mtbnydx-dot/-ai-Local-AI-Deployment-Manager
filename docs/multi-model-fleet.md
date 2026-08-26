@@ -26,7 +26,7 @@
 
 准入通过后，Docker 的 `--gpus` 会强制绑定到租约实际批准的宿主 GPU。即使表单没有显式填写 GPU，也不会再因为空参数被 Docker 解释为“使用全部 GPU”。并行实例的默认显存利用率为 70%；vLLM 以配置比例做保守预留，llama.cpp 会解析本地 GGUF 元数据，并加入上下文、并发、组件和运行时开销下限。同一目录中的 `dynamic`、`17gb` 等主 GGUF 会作为替代变体分别展示和估算，不会把多个完整模型相加；启动前必须确定一个具体主变体。`mmproj` 视觉投影和 DFlash 推测解码模型属于可选组件，只在启用或匹配时追加到选中主变体的预算。仍无法确定主 GGUF 的远程模型或目录会返回 422，而不是接受用户随意填低的比例。
 
-Muse Glimmer 是运行时特例：普通 GGUF 继续使用原有固定 llama.cpp 镜像，只有识别为 `muse-glimmer` 的变体自动选择 `local/llama.cpp:server-cuda-muse-62bf73d`。该镜像由 `llama-manager/build-muse-runtime.ps1` 固定构建自 llama.cpp 提交 `62bf73d25c53b8161f8a22894d4f90c4aebbd7d0`，构建脚本不会删除已有源码或模型，并在完成后校验镜像 revision label。vLLM 默认固定到 Linux/amd64 v0.26.0 的精确平台 digest `sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b`；其 Transformers 5.14.1 当前无法加载 `muse_glimmer` safetensors，因此管理器默认在容器创建前阻断，Muse 应使用 llama 管理器的本地 GGUF。
+普通 GGUF 使用已验证的 llama.cpp `b10630` CUDA 镜像，前端可配置 reasoning effort、reasoning budget 与 mmproj device；实验性的 tools runtime 不在网页端开放。历史 Muse 镜像和兼容代码仅为回滚保留，本轮不下载、不验证，也不把 Muse 作为受支持目标。vLLM 默认固定到 Linux/amd64 v0.28.0 的精确平台 digest `sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635`，前端可配置 `max_num_batched_tokens`；本地策略会在容器创建前阻断 Muse。固定镜像没有 v0.28 外置的 `vllm-bnb-plugin`，因此 BNB checkpoint 也会被明确阻断，普通 safetensors 不受影响。
 
 在加载新模型前仍应在对应管理器查看启动预估。建议给 KV cache、视觉编码器峰值、并发请求和驱动波动留下余量；如果需要完全确定的路由，请在客户端使用实际模型名。
 

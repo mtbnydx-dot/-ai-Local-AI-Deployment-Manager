@@ -134,6 +134,7 @@ function createVllmRuntimeCommandBuilder(deps) {
       "--label", `ai.manager.vram-reservation-mb=${vramReservationMb}`,
       "--label", `ai.manager.max-model-len=${opts.maxModelLen}`,
       "--label", `ai.manager.max-num-seqs=${opts.maxNumSeqs}`,
+      "--label", `ai.manager.max-num-batched-tokens=${effectiveMaxNumBatchedTokens || 0}`,
       "--label", `ai.manager.gpu-memory-utilization=${opts.gpuMemoryUtilization}`,
       "--label", `ai.manager.gpu-admission-lease=${opts.gpuAdmissionLeaseId || ""}`,
       "--gpus", dockerGpuArg(opts.gpuDeviceIds || []),
