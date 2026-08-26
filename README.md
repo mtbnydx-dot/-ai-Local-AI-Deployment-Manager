@@ -1,8 +1,8 @@
 # Local Model Service Platform / 本地模型服务平台
 
-一个面向高端个人工作站和小团队局域网的本地大模型服务控制台。它把 vLLM、llama.cpp、模型下载、显存估算、多 GPU 配置、OpenAI/Claude 兼容接口、局域网服务、访问统计和基础审计整合在同一套本地管理工具里。
+一个面向高端个人工作站和小团队局域网的本地 AI 服务控制台。它把 vLLM、llama.cpp、TTS 语音克隆、模型下载、显存估算、多 GPU 配置、OpenAI/Claude/Audio 兼容接口、局域网服务、访问统计和基础审计整合在同一套本地管理工具里。
 
-This is a local model service control panel for high-end personal workstations and small LAN teams. It combines vLLM, llama.cpp, model download workflows, VRAM estimation, multi-GPU configuration, OpenAI/Claude-compatible gateways, LAN serving, access statistics, and basic audit exports in one local toolkit.
+This is a local AI service control panel for high-end personal workstations and small LAN teams. It combines vLLM, llama.cpp, a multi-engine TTS/voice-cloning platform, model download workflows, VRAM estimation, multi-GPU configuration, OpenAI/Claude/Audio-compatible gateways, LAN serving, access statistics, and basic audit exports in one local toolkit.
 
 ---
 
@@ -22,6 +22,7 @@ This is a local model service control panel for high-end personal workstations a
 - **多模型舰队**：聚合 vLLM 与 llama.cpp 的主实例和并行实例，提供显存账本、能力标签、规划空槽和文本/视觉/音频/Embedding/Rerank 自动路由；不会擅自停止正在服务的模型。
 - **vLLM 管理器**：下载模型、启动 vLLM 容器、OpenAI/Claude 兼容接口、工具调用桥接、上下文压缩、统计和日志。
 - **llama.cpp 管理器**：管理 GGUF 模型，重点支持异构双卡、GPU layers、tensor split、长上下文和 RAM fallback。
+- **TTS 语音平台**：聚合 Chatterbox、Qwen3-TTS、Fish、Step-Audio 及外部 API，引擎状态和网页入口统一显示在 `service-entry`，同时提供 OpenAI Audio 兼容接口。
 - **模型下载**：支持 Hugging Face / ModelScope 链接解析、在线模型搜索、量化筛选、下载进度、暂停、继续和取消。
 - **显存估算**：按模型参数量、量化精度、上下文长度、KV cache、GPU 空闲显存和多卡模式估算显存风险。
 - **多客户端服务**：对 OpenWebUI、Claude/Cowork、ccswitch、OpenCode 和 OpenAI-compatible SDK 提供统一接入。
@@ -37,6 +38,7 @@ This is a local model service control panel for high-end personal workstations a
 ├─ service-entry/          # 统一入口和网关
 ├─ vllm-manager/           # vLLM 管理后台
 ├─ llama-manager/          # llama.cpp / GGUF 管理后台
+├─ tts-platform/           # TTS 聚合网关、网页、worker 与启动脚本
 ├─ manager-core/           # 共用网络、密钥、统计、显存估算工具
 ├─ platform-mcp/           # 平台级只读 MCP 工具服务
 ├─ tests/                  # 跨管理器前端烟测
@@ -50,6 +52,8 @@ This is a local model service control panel for high-end personal workstations a
 ├─ test-all.cmd            # 运行核心测试
 ├─ start-service-entry.cmd # 启动本机模式
 ├─ start-platform-mcp.cmd  # 启动 loopback MCP 服务
+├─ start-tts-platform.cmd  # 启动 TTS 网关与语音 worker
+├─ status-tts-platform.cmd # 查看 TTS 端口与引擎状态
 └─ start-service-entry-lan.cmd # 启动局域网模式
 ```
 
@@ -75,6 +79,7 @@ install-all.cmd
 test-all.cmd
 start-service-entry.cmd
 start-platform-mcp.cmd
+start-tts-platform.cmd -NoBrowser
 ```
 
 模型、缓存和运行数据默认保存在发布目录内。需要放到其它磁盘时，请在启动前设置 `AI_ROOT`；也可以分别用 `VLLM_MODELS_ROOT`、`LLAMA_MODELS_ROOT` 和 `HF_HOME` 覆盖模型或缓存目录。
@@ -106,6 +111,8 @@ OpenAI:  http://127.0.0.1:5176/gateway/auto/openai/v1
 Claude:  http://127.0.0.1:5176/gateway/auto/claude
 OpenCode: http://127.0.0.1:5176/gateway/auto/opencode/v1
 MCP:      http://127.0.0.1:5190/mcp
+TTS UI:   http://127.0.0.1:5176/gateway/tts/
+TTS API:  http://127.0.0.1:5176/gateway/tts/openai/v1
 ```
 
 局域网：
@@ -114,6 +121,8 @@ MCP:      http://127.0.0.1:5190/mcp
 OpenAI:  http://<本机局域网 IP>:5176/gateway/auto/openai/v1
 Claude:  http://<本机局域网 IP>:5176/gateway/auto/claude
 OpenCode: http://<本机局域网 IP>:5176/gateway/auto/opencode/v1
+TTS UI:   http://<本机局域网 IP>:5176/gateway/tts/
+TTS API:  http://<本机局域网 IP>:5176/gateway/tts/openai/v1
 ```
 
 `auto` 会自动选择当前可用的 vLLM 或 llama.cpp 后端。需要固定后端时，可以把 `auto` 换成 `vllm` 或 `llama`。
@@ -144,6 +153,7 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 
 - 默认本机模式只监听 `127.0.0.1`。
 - **统一入口是唯一的策略执行点**：`service-entry` 在转发前完成 Host/Origin 校验、API Key 鉴权和限流，再用签名请求头把真实客户端地址传给管理器。管理器只信任带有效签名的回环请求。
+- TTS 的 7000 与 worker 端口保持回环监听；局域网客户端只能经 `/gateway/tts/` 访问，并复用统一入口的客户端 Key。参考音色和生成音频属于本机运行数据，不进入 Git 或发布包。
 - 局域网模式（`start-service-entry.cmd lan`）**默认强制 API Key**。密钥在任一管理器的“对外服务”页生成，两个管理器的密钥都可用于统一网关。
 - 浏览器跨域默认拒绝，需要时用 `SERVICE_ENTRY_ALLOWED_ORIGINS` 显式放行。
 - 管理端点默认仅本机可用；局域网设备读取状态时会得到脱敏结果。
@@ -240,6 +250,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 - **Multi-model fleet**: aggregates primary and parallel vLLM/llama.cpp instances with a deduplicated VRAM ledger, capability tags, planning slots, and automatic text/vision/audio/embedding/rerank routing without stopping resident models.
 - **vLLM manager**: model download, Docker launch, OpenAI/Claude-compatible APIs, tool-call bridging, context compression, stats, and logs.
 - **llama.cpp manager**: GGUF model management with heterogeneous GPU support, GPU layers, tensor split, long context, and RAM fallback.
+- **TTS platform**: Chatterbox, Qwen3-TTS, Fish, Step-Audio, and external API engines behind the unified entrypoint, with an OpenAI Audio-compatible API.
 - **Model downloads**: Hugging Face / ModelScope link parsing, remote search, quantization filters, progress bars, pause/resume/cancel.
 - **VRAM estimation**: estimates memory risk from model size, quantization, context length, KV cache, free GPU memory, and multi-GPU mode.
 - **Client serving**: unified access for OpenWebUI, Claude/Cowork, ccswitch, OpenCode, and OpenAI-compatible clients.
@@ -255,6 +266,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ service-entry/          # Unified entrypoint and gateway
 ├─ vllm-manager/           # vLLM control panel
 ├─ llama-manager/          # llama.cpp / GGUF control panel
+├─ tts-platform/           # TTS gateway, web UI, workers, and launch scripts
 ├─ manager-core/           # Shared networking, secret, stats, and memory-estimation helpers
 ├─ platform-mcp/           # Platform-level read-only MCP tool service
 ├─ tests/                  # Cross-manager frontend smoke tests
@@ -268,6 +280,8 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ test-all.cmd            # Run core tests
 ├─ start-service-entry.cmd # Start local-only mode
 ├─ start-platform-mcp.cmd  # Start the loopback MCP service
+├─ start-tts-platform.cmd  # Start the TTS gateway and workers
+├─ status-tts-platform.cmd # Inspect TTS listeners and engines
 └─ start-service-entry-lan.cmd # Start LAN mode
 ```
 
@@ -289,6 +303,7 @@ install-all.cmd
 test-all.cmd
 start-service-entry.cmd
 start-platform-mcp.cmd
+start-tts-platform.cmd -NoBrowser
 ```
 
 Models, caches, and runtime data are stored inside the release directory by default. Set `AI_ROOT` before startup to use another drive, or override `VLLM_MODELS_ROOT`, `LLAMA_MODELS_ROOT`, and `HF_HOME` individually.
@@ -320,6 +335,8 @@ OpenAI:  http://127.0.0.1:5176/gateway/auto/openai/v1
 Claude:  http://127.0.0.1:5176/gateway/auto/claude
 OpenCode: http://127.0.0.1:5176/gateway/auto/opencode/v1
 MCP:      http://127.0.0.1:5190/mcp
+TTS UI:   http://127.0.0.1:5176/gateway/tts/
+TTS API:  http://127.0.0.1:5176/gateway/tts/openai/v1
 ```
 
 LAN:
@@ -328,6 +345,8 @@ LAN:
 OpenAI:  http://<LAN IP>:5176/gateway/auto/openai/v1
 Claude:  http://<LAN IP>:5176/gateway/auto/claude
 OpenCode: http://<LAN IP>:5176/gateway/auto/opencode/v1
+TTS UI:   http://<LAN IP>:5176/gateway/tts/
+TTS API:  http://<LAN IP>:5176/gateway/tts/openai/v1
 ```
 
 `auto` routes to the currently available vLLM or llama.cpp backend. Replace it with `vllm` or `llama` to pin a backend.

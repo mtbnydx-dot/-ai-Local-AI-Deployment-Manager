@@ -19,6 +19,17 @@ call :checkps1 "scripts\deploy-worktree.ps1" || exit /b 1
 call :checkps1 "scripts\start-platform-mcp.ps1" || exit /b 1
 call :checkps1 "scripts\stop-platform-mcp.ps1" || exit /b 1
 call :checkps1 "scripts\status-platform-mcp.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_all.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_gateway.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_chatterbox.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_qwen.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_fish.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_step_docker.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\status.ps1" || exit /b 1
+call :checkpy "tts-platform\gateway\main.py" || exit /b 1
+call :checkpy "tts-platform\workers\chatterbox_worker.py" || exit /b 1
+call :checkpy "tts-platform\workers\qwen_worker.py" || exit /b 1
+call :checkpy "tts-platform\workers\step_server.py" || exit /b 1
 call :test "manager-core" || exit /b 1
 call :test "service-entry" || exit /b 1
 call :test "platform-mcp" || exit /b 1
@@ -45,6 +56,21 @@ set "FILE=%~1"
 echo.
 echo == Syntax check %FILE% ==
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\check-powershell-syntax.ps1" "%ROOT%%FILE%"
+exit /b %ERRORLEVEL%
+
+:checkpy
+set "FILE=%~1"
+set "PYEXE="
+if defined TTS_RUNTIME_ROOT if exist "%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe" set "PYEXE=%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe"
+if not defined PYEXE if exist "E:\tts_runtime\envs\gateway\Scripts\python.exe" set "PYEXE=E:\tts_runtime\envs\gateway\Scripts\python.exe"
+if not defined PYEXE where python >nul 2>nul && set "PYEXE=python"
+if not defined PYEXE (
+  echo Skipping Python syntax check for %FILE%: Python not found.
+  exit /b 0
+)
+echo.
+echo == Syntax check %FILE% ==
+"%PYEXE%" -c "import ast,pathlib; ast.parse(pathlib.Path(r'%ROOT%%FILE%').read_text(encoding='utf-8'))"
 exit /b %ERRORLEVEL%
 
 :test

@@ -439,10 +439,30 @@ async function smokeEntryPage(page, baseUrl) {
         entry: {
           host: "127.0.0.1",
           port: entryPort,
-          gateway: { autoOpenAi: `${baseUrl}gateway/auto/openai` },
+          gateway: {
+            autoOpenAi: `${baseUrl}gateway/auto/openai`,
+            tts: `${baseUrl}gateway/tts/`,
+            ttsOpenAi: `${baseUrl}gateway/tts/openai/v1`,
+          },
           gatewayAccess: { totals: { requests: {} }, recent: [], paths: [], timeline: [] },
         },
         managers: [],
+        tts: {
+          name: "TTS 语音克隆平台",
+          port: 7000,
+          listening: true,
+          healthy: true,
+          availableCount: 1,
+          totalCount: 2,
+          engines: [
+            { id: "fish", name: "Fish S2 Pro", type: "local", available: true, detail: "ready" },
+            { id: "qwen_local", name: "Qwen3-TTS", type: "local", available: false, detail: "offline" },
+          ],
+          gatewayUrls: {
+            local: `${baseUrl}gateway/tts/`,
+            localOpenAi: `${baseUrl}gateway/tts/openai/v1`,
+          },
+        },
       }),
     });
   });
@@ -510,6 +530,9 @@ async function smokeEntryPage(page, baseUrl) {
   await expect(page.locator("#fleetMainPanel")).toContainText("保护线内上限");
   await expect(page.locator("#fleetMainPanel")).toContainText("10.3 GiB");
   await expect(page.locator("#managerGrid")).toBeVisible();
+  await expect(page.locator('[data-render-key="tts-platform"]')).toContainText("TTS 语音克隆平台");
+  await expect(page.locator('[data-render-key="tts-platform"]')).toContainText("1 / 2");
+  await expect(page.locator('[data-render-key="tts-platform"] a[href="/gateway/tts/"]')).toBeVisible();
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
   await expect(page.locator(".app-signature")).toContainText("本地模型服务平台 · 2026");
   await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });

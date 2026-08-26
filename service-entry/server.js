@@ -3,7 +3,7 @@ const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { pipeline, Readable } = require("node:stream");
+const { pipeline, Readable, Transform } = require("node:stream");
 const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
 const core = require("../manager-core");
@@ -24,6 +24,7 @@ const {
 const HOST = process.env.SERVICE_ENTRY_HOST || "127.0.0.1";
 const PORT = Number(process.env.SERVICE_ENTRY_PORT || 5176);
 const PLATFORM_MCP_PORT = Number(process.env.PLATFORM_MCP_PORT || 5190);
+const TTS_GATEWAY_PORT = Number(process.env.TTS_GATEWAY_PORT || 7000);
 const ROOT = __dirname;
 const AI_ROOT = path.dirname(ROOT);
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
@@ -31,6 +32,7 @@ const FLEET_SETTINGS_FILE = path.join(ROOT, "data", "fleet-settings.json");
 const BILLING_DB_FILE = process.env.AI_BILLING_DB || path.join(ROOT, "data", "platform-billing.sqlite");
 const FLEET_API_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_FLEET_MAX_BODY_BYTES, 1024 * 1024, 64 * 1024, 4 * 1024 * 1024);
 const GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_MAX_BODY_BYTES, 32 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
+const TTS_GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_TTS_MAX_BODY_BYTES, 16 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
 // A JSON body exists simultaneously as stream chunks, a concatenated Buffer,
 // a UTF-8 string and parsed objects. Account conservatively for that real peak
 // instead of treating one raw byte as one byte of process memory.
@@ -182,6 +184,9 @@ async function handleRequest(req, res) {
     if (req.method === "GET" && url.pathname.startsWith("/docs/")) {
       return serveDoc(res, url.pathname);
     }
+    if (isTtsGatewayPath(url.pathname)) {
+      return proxyTtsGatewayRequest(req, res, url);
+    }
     if (url.pathname.startsWith("/gateway/")) {
       return proxyGatewayRequest(req, res, url);
     }
@@ -192,9 +197,10 @@ async function handleRequest(req, res) {
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       const detailed = security.checkManagementAccess(req).ok;
-      const [managers, mcp] = await Promise.all([
+      const [managers, mcp, tts] = await Promise.all([
         Promise.all(MANAGERS.map(buildManagerStatus)),
         buildPlatformMcpStatus(),
+        buildTtsStatus(),
       ]);
       const payload = {
         ok: true,
@@ -210,6 +216,7 @@ async function handleRequest(req, res) {
         },
         managers,
         mcp,
+        tts,
       };
       return sendJson(res, detailed ? payload : redactStatusForRemote(payload));
     }
@@ -459,6 +466,56 @@ async function buildPlatformMcpStatus(options = {}) {
   };
 }
 
+async function buildTtsStatus(options = {}) {
+  const port = Number(options.port || TTS_GATEWAY_PORT);
+  const checkPort = options.isPortListening || core.isPortListening;
+  const getJson = options.fetchJson || fetchTtsJson;
+  const listening = await checkPort("127.0.0.1", port);
+  const gateway = buildEntryGatewayUrls();
+  const base = {
+    id: "tts",
+    name: "TTS 语音克隆平台",
+    host: "127.0.0.1",
+    port,
+    listening: Boolean(listening),
+    healthy: false,
+    availableCount: 0,
+    totalCount: 0,
+    engines: [],
+    error: listening ? "" : `TTS gateway is not listening on port ${port}.`,
+    gatewayUrls: {
+      local: gateway.tts,
+      localOpenAi: gateway.ttsOpenAi,
+      lan: gateway.lanTts,
+      lanOpenAi: gateway.lanTtsOpenAi,
+      public: gateway.publicTts,
+      publicOpenAi: gateway.publicTtsOpenAi,
+    },
+  };
+  if (!listening) return base;
+  const health = await getJson(`http://127.0.0.1:${port}/api/engines`, 10_000);
+  const engines = Array.isArray(health.data)
+    ? health.data.map((item) => ({
+      id: String(item?.id || "").slice(0, 80),
+      name: String(item?.name || item?.id || "").slice(0, 160),
+      type: String(item?.type || "").slice(0, 40),
+      available: Boolean(item?.available),
+      detail: typeof item?.detail === "string" ? item.detail.slice(0, 200) : "",
+    }))
+    : [];
+  const availableCount = engines.filter((item) => item.available).length;
+  return {
+    ...base,
+    healthy: Boolean(health.ok && Array.isArray(health.data)),
+    availableCount,
+    totalCount: engines.length,
+    engines,
+    error: health.ok && Array.isArray(health.data)
+      ? ""
+      : String(health.error || "TTS engine health check failed.").slice(0, 240),
+  };
+}
+
 async function buildManagerStatusFresh(manager) {
   const baseUrl = `http://127.0.0.1:${manager.port}`;
   const pidFile = path.join(manager.root, ".manager.pid");
@@ -520,12 +577,18 @@ function buildEntryGatewayUrls() {
     autoOpenAi: `${localBase}/gateway/auto/openai/v1`,
     autoClaude: `${localBase}/gateway/auto/claude`,
     autoOpenCode: `${localBase}/gateway/auto/opencode/v1`,
+    tts: `${localBase}/gateway/tts/`,
+    ttsOpenAi: `${localBase}/gateway/tts/openai/v1`,
     lanAutoOpenAi: lanBase ? `${lanBase}/gateway/auto/openai/v1` : null,
     lanAutoClaude: lanBase ? `${lanBase}/gateway/auto/claude` : null,
     lanAutoOpenCode: lanBase ? `${lanBase}/gateway/auto/opencode/v1` : null,
+    lanTts: lanBase ? `${lanBase}/gateway/tts/` : null,
+    lanTtsOpenAi: lanBase ? `${lanBase}/gateway/tts/openai/v1` : null,
     publicOpenAi: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/openai/v1` : null,
     publicClaude: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/claude` : null,
     publicOpenCode: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/auto/opencode/v1` : null,
+    publicTts: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/tts/` : null,
+    publicTtsOpenAi: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/gateway/tts/openai/v1` : null,
   };
 }
 
@@ -540,6 +603,179 @@ function buildManagerGatewayUrls(manager) {
     lanClaude: lanBase ? `${lanBase}/gateway/${manager.id}/claude` : null,
     lanOpenCode: lanBase ? `${lanBase}/gateway/${manager.id}/opencode/v1` : null,
   };
+}
+
+function isTtsGatewayPath(pathname) {
+  return /^\/gateway\/tts(?:\/|$)/.test(String(pathname || ""));
+}
+
+function parseTtsGatewayRoute(pathname) {
+  const match = String(pathname || "").match(/^\/gateway\/tts(?:\/(.*))?$/);
+  if (!match) return null;
+  return {
+    engine: "tts",
+    protocol: "tts",
+    rest: match[1] || "",
+  };
+}
+
+function buildTtsGatewayPath(route) {
+  const rest = String(route?.rest || "").replace(/^\/+/, "");
+  const openAi = rest.match(/^openai\/v1(?:\/(.*))?$/i);
+  if (openAi) {
+    const suffix = sanitizeGatewayRest(openAi[1] || "");
+    return `/v1${suffix ? `/${suffix}` : ""}`;
+  }
+  const safe = sanitizeGatewayRest(rest);
+  return safe ? `/${safe}` : "/";
+}
+
+function isTtsUiShellRequest(req, route) {
+  return ["GET", "HEAD"].includes(String(req?.method || "GET").toUpperCase())
+    && ["", "index.html"].includes(String(route?.rest || "").replace(/^\/+|\/+$/g, ""));
+}
+
+function createTtsBodyLimiter(maxBytes = TTS_GATEWAY_MAX_BODY_BYTES) {
+  let total = 0;
+  const limiter = new Transform({
+    transform(chunk, _encoding, callback) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        const error = new Error(`TTS request body exceeds ${maxBytes} bytes.`);
+        error.code = "request_body_too_large";
+        error.status = 413;
+        callback(error);
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  return limiter;
+}
+
+function buildTtsProxyHeaders(headers, req) {
+  const output = buildProxyHeaders(headers, req);
+  const sensitive = new Set([
+    "authorization", "x-api-key", "api-key", "anthropic-api-key",
+    ...TRUST_HEADER_NAMES.map((name) => String(name || "").toLowerCase()),
+  ]);
+  for (const key of Object.keys(output)) {
+    if (sensitive.has(key.toLowerCase())) delete output[key];
+  }
+  const upstreamKey = String(process.env.TTS_UPSTREAM_API_KEY || "").trim();
+  if (upstreamKey) output.authorization = `Bearer ${upstreamKey}`;
+  output["x-forwarded-prefix"] = "/gateway/tts";
+  return output;
+}
+
+function ttsRequestTimeoutMs(req, route) {
+  const rest = String(route?.rest || "").replace(/^\/+|\/+$/g, "");
+  const quick = ["GET", "HEAD"].includes(String(req?.method || "GET").toUpperCase())
+    && (rest === "" || rest === "index.html" || rest === "api/engines" || rest === "api/voices" || rest === "openai/v1/models");
+  const configured = quick
+    ? process.env.SERVICE_ENTRY_TTS_HEALTH_TIMEOUT_MS
+    : process.env.SERVICE_ENTRY_TTS_TIMEOUT_MS;
+  return Math.max(1000, Number(configured || (quick ? 10_000 : 10 * 60 * 1000)));
+}
+
+async function proxyTtsGatewayRequest(req, res, url) {
+  const route = parseTtsGatewayRoute(url.pathname);
+  if (!route) return sendJson(res, { detail: "Unknown TTS gateway route." }, 404);
+  if (req.method === "GET" && url.pathname === "/gateway/tts") {
+    res.writeHead(308, { location: `/gateway/tts/${url.search || ""}`, ...gatewayCorsHeaders(req) });
+    return res.end();
+  }
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, gatewayCorsHeaders(req));
+    return res.end();
+  }
+
+  const startedAt = Date.now();
+  let auth = { ok: true, clientId: "", client: null, authRequired: false };
+  if (!isTtsUiShellRequest(req, route)) {
+    auth = await security.authorizeGatewayRequest(req);
+    if (!auth.ok) {
+      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
+      const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
+      return sendJson(res, { detail: auth.message, code: auth.code }, auth.status, headers);
+    }
+    req.serviceEntryAuth = auth;
+  }
+
+  const rate = core.enterServiceRateLimit(
+    { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
+    auth.client?.id || req.socket?.remoteAddress || "anonymous",
+    entryRateBuckets,
+  );
+  if (!rate.ok) {
+    const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
+    return sendJson(res, { detail: message, code: "rate_limit_exceeded" }, 429, {
+      ...gatewayCorsHeaders(req),
+      "retry-after": String(rate.retryAfterSeconds),
+    });
+  }
+
+  const declaredLength = Number(req.headers?.["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > TTS_GATEWAY_MAX_BODY_BYTES) {
+    const message = `TTS request body exceeds ${TTS_GATEWAY_MAX_BODY_BYTES} bytes.`;
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 413, startedAt, null, message)).catch(() => {});
+    return sendJson(res, { detail: message, code: "request_body_too_large" }, 413, gatewayCorsHeaders(req));
+  }
+  if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
+    const message = `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`;
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, message)).catch(() => {});
+    return sendJson(res, { detail: message, code: "tts_gateway_offline" }, 503, gatewayCorsHeaders(req));
+  }
+
+  let targetPath;
+  try {
+    targetPath = buildTtsGatewayPath(route);
+  } catch (error) {
+    return sendJson(res, { detail: error.message, code: error.code || "invalid_gateway_path" }, error.status || 400, gatewayCorsHeaders(req));
+  }
+  const target = new URL(`http://127.0.0.1:${TTS_GATEWAY_PORT}${targetPath}`);
+  target.search = url.search;
+  const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
+  const upstreamControl = createUpstreamControl(req, res, { timeoutMs: ttsRequestTimeoutMs(req, route) });
+  let bodyLimitError = null;
+  try {
+    let body;
+    if (hasBody) {
+      const limiter = createTtsBodyLimiter();
+      limiter.once("error", (error) => { bodyLimitError = error; });
+      body = Readable.toWeb(req.pipe(limiter));
+    }
+    const upstream = await fetch(target, {
+      method: req.method,
+      headers: buildTtsProxyHeaders(req.headers, req),
+      body,
+      ...(hasBody ? { duplex: "half" } : {}),
+      signal: upstreamControl.signal,
+      redirect: "manual",
+    });
+    const responseHeaders = buildResponseHeaders(upstream.headers, req);
+    if (isTtsUiShellRequest(req, route)) {
+      responseHeaders["content-security-policy"] = "default-src 'self'; connect-src 'self'; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'none'";
+      responseHeaders["permissions-policy"] = "microphone=(self)";
+    }
+    res.writeHead(upstream.status, responseHeaders);
+    res.once("finish", () => {
+      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, upstream.status, startedAt, null, "")).catch(() => {});
+    });
+    forwardUpstreamBody(upstream, res, upstreamControl);
+  } catch (error) {
+    upstreamControl.clear();
+    const failure = bodyLimitError || error?.cause || error;
+    const status = Number(failure?.status || (error?.name === "TimeoutError" ? 504 : 502));
+    const message = status === 413 ? failure.message : "TTS gateway upstream is unavailable.";
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, failure?.message || message)).catch(() => {});
+    if (!res.headersSent) {
+      sendJson(res, { detail: message, code: failure?.code || "tts_gateway_proxy_error" }, status, gatewayCorsHeaders(req));
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  }
 }
 
 async function proxyGatewayRequest(req, res, url) {
@@ -1284,9 +1520,9 @@ function gatewayCorsHeaders(req) {
   return security.corsHeaders(req);
 }
 
-function createUpstreamControl(req, res) {
+function createUpstreamControl(req, res, options = {}) {
   const controller = new AbortController();
-  const timeoutMs = Math.max(1000, Number(process.env.SERVICE_ENTRY_GATEWAY_TIMEOUT_MS || 30 * 60 * 1000));
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs || process.env.SERVICE_ENTRY_GATEWAY_TIMEOUT_MS || 30 * 60 * 1000));
   const timer = setTimeout(() => controller.abort(new Error("Gateway request timed out.")), timeoutMs);
   timer.unref?.();
   const abort = () => {
@@ -1456,6 +1692,20 @@ async function fetchJson(url, timeoutMs = 2500) {
   }
 }
 
+async function fetchTtsJson(url, timeoutMs = 2500) {
+  try {
+    const upstreamKey = String(process.env.TTS_UPSTREAM_API_KEY || "").trim();
+    const response = await fetch(url, {
+      headers: upstreamKey ? { authorization: `Bearer ${upstreamKey}` } : {},
+      signal: AbortSignal.timeout(Math.max(250, Number(timeoutMs) || 2500)),
+    });
+    const text = await response.text();
+    return { ok: response.ok, status: response.status, data: parseJsonSafe(text, null), error: response.ok ? "" : text };
+  } catch (error) {
+    return { ok: false, status: 0, data: null, error: error.message };
+  }
+}
+
 async function postJson(url) {
   try {
     const response = await fetch(url, { method: "POST", signal: AbortSignal.timeout(2000) });
@@ -1546,12 +1796,16 @@ module.exports = {
   buildFleetSnapshot,
   buildManagerCatalog,
   buildPlatformMcpStatus,
+  buildTtsStatus,
+  buildTtsGatewayPath,
+  buildTtsProxyHeaders,
   buildManagerGatewayPath,
   buildManagerGatewayUrls,
   buildProxyHeaders,
   buildServiceEntryFleetSnapshot,
   collectEntryGatewayAccessStats,
   createUpstreamControl,
+  createTtsBodyLimiter,
   createServiceEntryServer,
   emptyManagerCatalog,
   findManager,
@@ -1570,6 +1824,7 @@ module.exports = {
   normalizeManagerInstances,
   normalizeRequestContentEncoding,
   parseGatewayRoute,
+  parseTtsGatewayRoute,
   parseRequestJsonBody,
   readRequestBody,
   requireGatewayJsonContentType,

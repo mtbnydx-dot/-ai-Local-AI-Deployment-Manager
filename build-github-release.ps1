@@ -146,6 +146,7 @@ $releaseDirectories = @(
   "shared-public",
   "scripts",
   "service-entry",
+  "tts-platform",
   "vllm-manager",
   "llama-manager",
   "model-capability-tests",
@@ -161,7 +162,10 @@ foreach ($directory in $releaseDirectories) {
 $runtimeDataDirectories = @(
   "service-entry\data",
   "vllm-manager\data",
-  "llama-manager\data"
+  "llama-manager\data",
+  "tts-platform\voices",
+  "tts-platform\outputs",
+  "tts-platform\logs"
 )
 foreach ($relativeDataDirectory in $runtimeDataDirectories) {
   $runtimeDataPath = Join-Path $stagingRoot $relativeDataDirectory
@@ -185,6 +189,8 @@ $releaseFiles = @(
   "start-service-entry-lan.cmd",
   "stop-service-entry.cmd",
   "status-service-entry.cmd",
+  "start-tts-platform.cmd",
+  "status-tts-platform.cmd",
   "start-platform-mcp.cmd",
   "stop-platform-mcp.cmd",
   "status-platform-mcp.cmd",
@@ -224,7 +230,7 @@ $manifest = @(
   "",
   "## Included",
   "",
-  "- Application source for service-entry, vLLM manager, llama.cpp manager, and shared manager core",
+  "- Application source for service-entry, vLLM manager, llama.cpp manager, TTS platform, and shared manager core",
   "- User documentation, tests, GitHub Actions CI, and public deployment examples",
   "- Windows install, start, stop, status, test, and packaging scripts",
   "",

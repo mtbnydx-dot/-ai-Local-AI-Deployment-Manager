@@ -7,9 +7,12 @@
 - `service-entry`：统一入口和一级控制台，默认端口 `5176`。
 - `vllm-manager`：vLLM 管理器，默认端口 `5177`。
 - `llama-manager`：llama.cpp 管理器，默认端口 `5178`。
+- `tts-platform`：多引擎 TTS 聚合网关，默认端口 `7000`；worker 使用 `7011`~`7014`，均保持回环监听。
 - `manager-core`：三者共用的网络、鉴权、健康检查和访问统计工具。
 
 统一入口不直接跑模型。它负责启动/检查两个管理器，并提供统一网关，把 OpenAI、Claude、OpenCode 请求转发给正在运行的后端。
+
+TTS 由独立脚本启动，统一入口负责健康展示、客户端 Key 校验、限流和流式反代，不会缓冲完整的参考音频上传。
 
 ## 2. 启动
 
@@ -17,6 +20,7 @@
 
 ```bat
 .\start-service-entry.cmd
+.\start-tts-platform.cmd -NoBrowser
 ```
 
 局域网模式：
@@ -48,12 +52,16 @@
 - OpenAI 兼容：`http://127.0.0.1:5176/gateway/auto/openai/v1`
 - Claude 兼容：`http://127.0.0.1:5176/gateway/auto/claude`
 - OpenCode：`http://127.0.0.1:5176/gateway/auto/opencode/v1`
+- TTS 网页：`http://127.0.0.1:5176/gateway/tts/`
+- OpenAI Audio：`http://127.0.0.1:5176/gateway/tts/openai/v1`
 
 局域网：
 
 - OpenAI 兼容：`http://<本机局域网IP>:5176/gateway/auto/openai/v1`
 - Claude 兼容：`http://<本机局域网IP>:5176/gateway/auto/claude`
 - OpenCode：`http://<本机局域网IP>:5176/gateway/auto/opencode/v1`
+- TTS 网页：`http://<本机局域网IP>:5176/gateway/tts/`
+- OpenAI Audio：`http://<本机局域网IP>:5176/gateway/tts/openai/v1`
 
 `auto` 会优先选择正在运行且监听中的后端。OpenCode 当前只走 vLLM。
 
@@ -91,6 +99,8 @@ llama.cpp：
 
 推荐每个客户端单独创建 API Key，并在管理器“服务提供”页面设置速率、并发和模型限制。
 
+`/gateway/tts/*` 复用同一组客户端 Key。统一入口验证后会剥离客户端凭证，再转发到回环 TTS 网关；如设置了 TTS 自身的 `TTS_API_KEY`，同时在 service-entry 进程环境中设置相同的 `TTS_UPSTREAM_API_KEY`。
+
 常见请求头：
 
 - OpenAI / OpenWebUI / OpenCode：`Authorization: Bearer <API_KEY>`
@@ -114,6 +124,12 @@ llama.cpp：
 统计只记录元数据，例如来源 IP、路径、状态码、模型名、token 数、耗时、认证字段来源，不记录用户聊天正文和模型响应正文。
 
 ## 8. 常见错误
+
+### TTS 卡片显示离线
+
+- 运行 `status-tts-platform.cmd` 检查 7000 与各 worker。
+- 只恢复聚合网关可运行 `pwsh -File .\tts-platform\scripts\start_all.ps1 -GatewayOnly -NoBrowser`；不会重启已有 Step 容器或加载其它 TTS 模型。
+- 参考音色、输出和 `.env` 位于 `tts-platform` 本机运行目录，不要从发布包覆盖或删除。
 
 `401 Missing or invalid service API key`
 

@@ -876,7 +876,7 @@
     <header>
       <div>
         <h1>本地模型服务统一入口</h1>
-        <p>统一查看 vLLM / llama.cpp 管理器、服务网关、Docker 状态和客户端 Key。对外客户端优先走管理器的 OpenAI 网关。</p>
+        <p>统一查看 vLLM、llama.cpp 与 TTS 语音服务、服务网关、Docker 状态和客户端 Key。客户端优先走统一网关。</p>
       </div>
       <div class="toolbar">
         <button id="refreshBtn" type="button">刷新状态</button>
@@ -1073,6 +1073,7 @@
     let refreshTimer = null;
     let fleetSnapshot = null;
     let latestManagers = [];
+    let latestTts = null;
     let fleetSettingsSaving = false;
     let fleetPolicyDirty = false;
     let fleetMutationRevision = 0;
@@ -1160,15 +1161,17 @@
         if (statusResult.status === "fulfilled") {
           const data = statusResult.value || {};
           latestManagers = Array.isArray(data.managers) ? data.managers : [];
-          renderSummary(data.entry || {}, latestManagers, fleetSnapshot, data.mcp || null);
+          latestTts = data.tts && typeof data.tts === "object" ? data.tts : null;
+          renderSummary(data.entry || {}, latestManagers, fleetSnapshot, data.mcp || null, latestTts);
           renderEntryGateway(data.entry || {});
           renderEntryAccess(data.entry?.gatewayAccess || {});
-          renderManagers(latestManagers);
+          renderManagers(latestManagers, latestTts);
           updateFleetManagerLinks(latestManagers);
         } else {
           latestManagers = [];
+          latestTts = null;
           setHtmlPreservingState(grid, `<div class="empty">统一入口服务异常：${escapeHtml(friendlyRequestError(statusResult.reason, "统一入口未响应。"))}</div>`);
-          renderSummary({}, [], fleetSnapshot, null);
+          renderSummary({}, [], fleetSnapshot, null, null);
         }
 
         if (fleetSnapshot) {
@@ -1226,7 +1229,7 @@
       };
     }
 
-    function renderSummary(entry, managers, fleet, mcp) {
+    function renderSummary(entry, managers, fleet, mcp, tts) {
       const access = entry.gatewayAccess || {};
       const totals = access.totals || {};
       const requests = totals.requests || {};
@@ -1258,6 +1261,7 @@
         metric("GPU 显存", gpuText === "-" ? "未获取" : gpuText, gpuText === "-" ? "" : "ok"),
         metric("网关错误率", requestTotal ? `${formatPercent(requests.errorRate || 0)}（${requestErrors}/${requestTotal}）` : "暂无请求", requestTotal ? (requestErrors ? "warn" : "ok") : ""),
         metric("MCP 工具服务", mcpText, mcpState),
+        metric("TTS 可用引擎", tts ? `${tts.availableCount || 0} / ${tts.totalCount || 0}` : "未获取", tts?.availableCount ? "ok" : "warn"),
       ].join(""));
     }
 
@@ -1875,6 +1879,9 @@
         ["Auto OpenCode", gateway.autoOpenCode],
         ["LAN Auto OpenAI", gateway.lanAutoOpenAi],
         ["LAN Auto Claude", gateway.lanAutoClaude],
+        ["TTS 语音平台", gateway.tts],
+        ["TTS OpenAI", gateway.ttsOpenAi],
+        ["LAN TTS", gateway.lanTts],
       ].filter(([, value]) => value);
       const requestTotal = Number(requests.total || 0);
       const requestErrors = Number(requests.error || 0);
@@ -1983,12 +1990,65 @@
       }
     }
 
-    function renderManagers(managers) {
-      if (!managers.length) {
+    function renderManagers(managers, tts) {
+      if (!managers.length && !tts) {
         setHtmlPreservingState(grid, `<div class="empty">没有发现管理器配置。</div>`);
         return;
       }
-      setHtmlPreservingState(grid, managers.map(renderManager).join(""));
+      const cards = managers.map(renderManager);
+      if (tts) cards.push(renderTts(tts));
+      setHtmlPreservingState(grid, cards.join(""));
+    }
+
+    function renderTts(tts) {
+      const engines = Array.isArray(tts.engines) ? tts.engines : [];
+      const available = engines.filter((engine) => engine.available).length;
+      const healthClass = !tts.listening || !tts.healthy || available === 0
+        ? "fail"
+        : available < engines.length ? "warn" : "ok";
+      const healthText = !tts.listening
+        ? "未监听"
+        : !tts.healthy ? "健康检查失败" : available === 0 ? "引擎全部离线" : available < engines.length ? "部分可用" : "状态良好";
+      const gatewayUrls = tts.gatewayUrls || {};
+      const endpoints = [
+        ["语音平台", gatewayUrls.local],
+        ["OpenAI Audio Base URL", gatewayUrls.localOpenAi],
+        ["LAN 语音平台", gatewayUrls.lan],
+        ["LAN OpenAI Audio", gatewayUrls.lanOpenAi],
+      ].filter(([, value]) => value);
+      return `
+        <article class="card" data-render-key="tts-platform">
+          <div class="card-head">
+            <div>
+              <h2>${escapeHtml(tts.name || "TTS 语音克隆平台")}</h2>
+              <p>多引擎语音克隆 / OpenAI Audio 兼容 / 参考音色管理</p>
+            </div>
+            <span class="badge ${healthClass}">${healthText}</span>
+          </div>
+          <div class="metrics">
+            ${metric("网关端口", tts.listening ? `监听 ${tts.port || 7000}` : `未监听 ${tts.port || 7000}`)}
+            ${metric("可用引擎", `${available} / ${engines.length}`)}
+            ${metric("入口鉴权", "复用客户端 Key")}
+            ${metric("上传上限", "16 MiB（入口）")}
+          </div>
+          <div class="model-list">
+            ${engines.length ? engines.map((engine) => `
+              <div class="model-row">
+                <span class="health-dot"></span>
+                <div class="row-main"><strong>${escapeHtml(engine.name || engine.id)}</strong><span>${escapeHtml(engine.detail || engine.type || "")}</span></div>
+                <span class="row-side">${engine.available ? "available" : "offline"}</span>
+              </div>
+            `).join("") : `<p class="subtle">网关离线或尚未返回引擎状态。</p>`}
+          </div>
+          <div class="links">
+            <a class="button primary" href="/gateway/tts/" target="_blank" rel="noreferrer">打开语音平台</a>
+            <a class="button" href="/gateway/tts/openai/v1/models" target="_blank" rel="noreferrer">模型列表</a>
+          </div>
+          <div class="endpoint-list">
+            ${endpoints.map(([label, value]) => endpoint(label, value)).join("")}
+          </div>
+        </article>
+      `;
     }
 
     function renderManager(manager) {

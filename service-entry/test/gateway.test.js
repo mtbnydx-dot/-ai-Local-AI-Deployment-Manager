@@ -45,6 +45,68 @@ test("rejects unknown gateway routes", () => {
   assert.equal(entry.parseGatewayRoute("/api/status"), null);
 });
 
+test("maps TTS gateway routes without allowing path traversal", () => {
+  const apiRoute = entry.parseTtsGatewayRoute("/gateway/tts/api/engines");
+  assert.deepEqual(apiRoute, { engine: "tts", protocol: "tts", rest: "api/engines" });
+  assert.equal(entry.buildTtsGatewayPath(apiRoute), "/api/engines");
+
+  const openAiRoute = entry.parseTtsGatewayRoute("/gateway/tts/openai/v1/audio/speech");
+  assert.equal(entry.buildTtsGatewayPath(openAiRoute), "/v1/audio/speech");
+  assert.equal(entry.buildTtsGatewayPath(entry.parseTtsGatewayRoute("/gateway/tts/")), "/");
+  assert.throws(
+    () => entry.buildTtsGatewayPath(entry.parseTtsGatewayRoute("/gateway/tts/%2e%2e/secret")),
+    (error) => error.status === 400 && error.code === "invalid_gateway_path",
+  );
+});
+
+test("TTS proxy strips client credentials and adds only the internal prefix", () => {
+  const original = process.env.TTS_UPSTREAM_API_KEY;
+  delete process.env.TTS_UPSTREAM_API_KEY;
+  try {
+    const headers = entry.buildTtsProxyHeaders({
+      authorization: "Bearer client-secret",
+      "x-api-key": "client-secret-2",
+      "content-type": "multipart/form-data; boundary=abc",
+    }, { socket: { remoteAddress: "127.0.0.1" }, headers: {} });
+    assert.equal(headers.authorization, undefined);
+    assert.equal(headers["x-api-key"], undefined);
+    assert.equal(headers["content-type"], "multipart/form-data; boundary=abc");
+    assert.equal(headers["x-forwarded-prefix"], "/gateway/tts");
+  } finally {
+    if (original === undefined) delete process.env.TTS_UPSTREAM_API_KEY;
+    else process.env.TTS_UPSTREAM_API_KEY = original;
+  }
+});
+
+test("TTS streaming body limiter rejects oversized uploads", async () => {
+  const stream = Readable.from([Buffer.alloc(6), Buffer.alloc(6)]).pipe(entry.createTtsBodyLimiter(10));
+  await assert.rejects(async () => {
+    for await (const _chunk of stream) {
+      // Drain the transform to surface its bounded-stream error.
+    }
+  }, (error) => error.status === 413 && error.code === "request_body_too_large");
+});
+
+test("reports TTS engine availability without returning upstream-only fields", async () => {
+  const status = await entry.buildTtsStatus({
+    port: 7000,
+    isPortListening: async () => true,
+    fetchJson: async () => ({
+      ok: true,
+      data: [
+        { id: "fish", name: "Fish", type: "local", available: true, detail: "ready", secret: "drop-me" },
+        { id: "qwen", name: "Qwen", type: "local", available: false, detail: "offline" },
+      ],
+      error: "",
+    }),
+  });
+  assert.equal(status.healthy, true);
+  assert.equal(status.availableCount, 1);
+  assert.equal(status.totalCount, 2);
+  assert.equal(status.gatewayUrls.local, "http://127.0.0.1:5176/gateway/tts/");
+  assert.equal(JSON.stringify(status).includes("drop-me"), false);
+});
+
 test("reports Platform MCP health without exposing credentials", async () => {
   const online = await entry.buildPlatformMcpStatus({
     port: 5190,

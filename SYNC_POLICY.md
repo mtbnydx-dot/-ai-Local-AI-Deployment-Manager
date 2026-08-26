@@ -7,7 +7,7 @@
 - `<AI_ROOT>\worktrees\integration` is the integration worktree. Feature work belongs in additional worktrees under `<AI_ROOT>\worktrees`.
 - `<AI_ROOT>` itself remains the live deployment and runtime root. It is intentionally not a Git worktree.
 - A commit or merge never deploys files to the live root. Use `scripts\deploy-worktree.ps1`, which builds and verifies an allowlisted release, creates a rollback backup, and does not restart services.
-- Runtime data, local configuration, models, logs, caches, databases, secrets, and `node_modules` never belong in Git.
+- Runtime data, local configuration, models, logs, caches, databases, secrets, TTS reference voices/generated audio, and `node_modules` never belong in Git.
 
 `build-github-release.ps1` is the only supported way to create a public release archive.
 

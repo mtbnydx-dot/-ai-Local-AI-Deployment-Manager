@@ -49,6 +49,9 @@ lan-proxy-gateway/data/
 service-entry/data/
 vllm-manager/data/
 llama-manager/data/
+tts-platform/voices/
+tts-platform/outputs/
+tts-platform/logs/
 
 # Local virtual environments and Python cache
 venvs/
