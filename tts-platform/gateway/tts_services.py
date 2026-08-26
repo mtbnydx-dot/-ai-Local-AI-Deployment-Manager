@@ -16,26 +16,19 @@ from typing import Any
 import httpx
 import ormsgpack
 
+from tts_catalog import (
+    ENGINE_CAPABILITIES,
+    ENGINE_CATALOG,
+    LOCAL_WORKERS,
+    chatterbox_language,
+    normalize_language,
+    public_engine_metadata,
+    qwen_language,
+)
 from tts_config import cfg, settings
 from tts_schemas import SynthesisRequest, TranslateRequest
 from tts_storage import audio_info_bytes, voice_store
 
-
-LOCAL_WORKERS = {
-    "chatterbox": {"name": "Chatterbox V3", "url": "http://127.0.0.1:7011"},
-    "qwen_local": {"name": "Qwen3-TTS 1.7B", "url": "http://127.0.0.1:7012"},
-    "fish": {"name": "Fish S2 Pro", "url": "http://127.0.0.1:7013"},
-    "step_audio": {"name": "Step-Audio-EditX", "url": "http://127.0.0.1:7014"},
-}
-
-ENGINE_CAPABILITIES = {
-    "chatterbox": {"voice_clone": True, "emotion": True, "style": False, "requires_ref_text": False},
-    "qwen_local": {"voice_clone": True, "emotion": False, "style": False, "requires_ref_text": False},
-    "fish": {"voice_clone": True, "emotion": True, "style": False, "requires_ref_text": False},
-    "step_audio": {"voice_clone": True, "emotion": False, "style": False, "requires_ref_text": True},
-    "mimo_api": {"voice_clone": True, "emotion": True, "style": True, "requires_ref_text": False},
-    "qwen_api": {"voice_clone": False, "emotion": False, "style": False, "requires_ref_text": False},
-}
 
 FISH_EMOTION = {
     "开心": "(joyful)",
@@ -133,20 +126,18 @@ class EngineRegistry:
                 result.append({
                     "id": engine_id,
                     "name": info["name"],
-                    "type": "local",
+                    "type": ENGINE_CATALOG[engine_id]["type"],
                     "checked_at": checked_at,
                     "capabilities": ENGINE_CAPABILITIES[engine_id],
+                    **public_engine_metadata(engine_id),
                     **state,
                 })
-            api_engines = (
-                ("mimo_api", "小米 MiMo", "MIMO_API_KEY"),
-                ("qwen_api", "Qwen3-TTS API", "DASHSCOPE_API_KEY"),
-            )
-            for engine_id, name, key_name in api_engines:
+            api_engines = (("mimo_api", "MIMO_API_KEY"), ("qwen_api", "DASHSCOPE_API_KEY"))
+            for engine_id, key_name in api_engines:
                 configured = bool(cfg(key_name))
                 result.append({
                     "id": engine_id,
-                    "name": name,
+                    "name": ENGINE_CATALOG[engine_id]["name"],
                     "type": "api",
                     "available": configured,
                     "status": "online" if configured else "unconfigured",
@@ -156,6 +147,7 @@ class EngineRegistry:
                     "busy": False,
                     "checked_at": checked_at,
                     "capabilities": ENGINE_CAPABILITIES[engine_id],
+                    **public_engine_metadata(engine_id),
                 })
             self._cache = result
             self._cached_at = time.monotonic()
@@ -240,6 +232,19 @@ async def change_speed(audio: bytes, speed: float) -> tuple[bytes, str]:
 
 
 class TranslationService:
+    @staticmethod
+    def _result(translated: str, *, target_language: str, provider: str, model: str, started: float) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "translation": translated,
+            "target_language": normalize_language(target_language),
+            "provider": provider,
+            "model": model,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000),
+        }
+        if normalize_language(target_language).casefold().startswith("en"):
+            result["english"] = translated
+        return result
+
     async def _openai_compatible(self, *, base: str, key: str, model: str, text: str, target_language: str) -> str:
         target = "natural, fluent spoken English" if target_language.lower().startswith("en") else target_language
         system = (
@@ -281,7 +286,7 @@ class TranslationService:
                     text=request.text,
                     target_language=request.target_language,
                 )
-                return {"english": translated, "provider": "local", "model": model, "elapsed_ms": round((time.perf_counter() - started) * 1000)}
+                return self._result(translated, target_language=request.target_language, provider="local", model=model, started=started)
             errors.append("本地平台没有已加载模型")
         except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             errors.append(f"本地平台: {str(exc)[:120] or exc.__class__.__name__}")
@@ -295,21 +300,26 @@ class TranslationService:
                 continue
             try:
                 translated = await self._openai_compatible(base=base, key=key, model=model, text=request.text, target_language=request.target_language)
-                return {"english": translated, "provider": provider, "model": model, "elapsed_ms": round((time.perf_counter() - started) * 1000)}
+                return self._result(translated, target_language=request.target_language, provider=provider, model=model, started=started)
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                 errors.append(f"{provider}: {str(exc)[:120] or exc.__class__.__name__}")
 
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=3)) as client:
-                response = await client.post(LOCAL_WORKERS["qwen_local"]["url"] + "/translate", json={"text": request.text})
+                response = await client.post(
+                    LOCAL_WORKERS["qwen_local"]["url"] + "/translate",
+                    json={"text": request.text, "target_language": request.target_language},
+                )
             payload = response.json()
-            if response.status_code == 200 and payload.get("english"):
-                return {
-                    "english": payload["english"],
-                    "provider": "qwen_local",
-                    "model": payload.get("model", "Qwen3 local"),
-                    "elapsed_ms": round((time.perf_counter() - started) * 1000),
-                }
+            translated = payload.get("translation") or payload.get("english")
+            if response.status_code == 200 and translated:
+                return self._result(
+                    str(translated),
+                    target_language=request.target_language,
+                    provider="qwen_local",
+                    model=payload.get("model", "Qwen3 local"),
+                    started=started,
+                )
             errors.append(f"qwen_local: HTTP {response.status_code}")
         except (httpx.HTTPError, ValueError):
             errors.append("qwen_local: 无法连接")
@@ -324,10 +334,11 @@ class SynthesisService:
         await self._client.aclose()
 
     async def _local_worker(self, engine: str, text: str, language: str, wav: bytes, ref_text: str, extra: dict[str, str]) -> bytes:
+        files = {"ref_audio": ("reference.wav", wav, "audio/wav")} if wav else None
         response = await self._client.post(
             LOCAL_WORKERS[engine]["url"] + "/tts",
             data={"text": text, "language": language, "ref_text": ref_text, **extra},
-            files={"ref_audio": ("reference.wav", wav, "audio/wav")},
+            files=files,
         )
         if response.status_code != 200:
             raise TtsError(502, f"{LOCAL_WORKERS[engine]['name']} 返回 HTTP {response.status_code}：{_safe_upstream_message(response) or '生成失败'}", "worker_error")
@@ -371,7 +382,7 @@ class SynthesisService:
         key = cfg("DASHSCOPE_API_KEY")
         if not key:
             raise TtsError(409, "Qwen3-TTS API 尚未配置", "engine_unconfigured")
-        language_name = "Chinese" if language.lower().startswith("zh") else "English"
+        language_name = qwen_language(language)
         body = {
             "model": cfg("QWEN_TTS_API_MODEL", "qwen3-tts-flash"),
             "input": {"text": text, "voice": cfg("QWEN_TTS_API_VOICE", "Cherry"), "language_type": language_name},
@@ -398,34 +409,45 @@ class SynthesisService:
 
     async def generate(self, request: SynthesisRequest) -> tuple[bytes, str, int, str]:
         engine = request.engine
-        if engine not in {*LOCAL_WORKERS, "mimo_api", "qwen_api"}:
+        if engine not in ENGINE_CATALOG:
             raise TtsError(400, f"未知引擎：{engine}", "unknown_engine")
+        language = normalize_language(request.language)
+        if engine == "chatterbox" and language != "auto" and chatterbox_language(language) is None:
+            raise TtsError(
+                422,
+                f"Chatterbox V3 不原生支持“{language}”；请换用 VoxCPM 2、Qwen 自动模式或输入该模型支持的语种代码",
+                "engine_language_unsupported",
+            )
         text = request.text.replace("⏸", " (break) " if engine == "fish" else "... ")
         if engine == "fish" and request.emotion in FISH_EMOTION:
             text = FISH_EMOTION[request.emotion] + " " + text
 
         wav = b""
         ref_text = ""
-        if engine != "qwen_api":
+        capabilities = ENGINE_CAPABILITIES[engine]
+        if capabilities.get("voice_required") or request.voice_id:
             if not request.voice_id:
                 raise TtsError(400, "请选择参考音色", "voice_required")
             voice = voice_store.get(request.voice_id)
             if voice is None:
                 raise TtsError(404, "参考音色不存在", "voice_not_found")
-            if engine == "step_audio" and not str(voice.get("ref_text") or "").strip():
+            if capabilities.get("requires_ref_text") and not str(voice.get("ref_text") or "").strip():
                 raise TtsError(400, "Step-Audio-EditX 需要参考音频文字", "reference_text_required")
             wav = await asyncio.to_thread(voice_store.audio_path(request.voice_id).read_bytes)
             ref_text = str(voice.get("ref_text") or "")
 
         started = time.perf_counter()
         try:
-            if engine in {"chatterbox", "qwen_local", "step_audio"}:
+            if engine in LOCAL_WORKERS and engine != "fish":
                 extra: dict[str, str] = {}
                 if engine == "chatterbox" and request.emotion in CHATTERBOX_EXAG:
                     base = CHATTERBOX_EXAG[request.emotion]
                     exaggeration = max(0.0, min(1.0, 0.5 + (base - 0.5) * (0.5 + request.emotion_intensity)))
                     extra["exaggeration"] = f"{exaggeration:.3f}"
-                audio = await self._local_worker(engine, text, request.language, wav, ref_text, extra)
+                if engine in {"voxcpm2", "qwen_voice_design"}:
+                    extra["style"] = request.style
+                    extra["emotion"] = request.emotion
+                audio = await self._local_worker(engine, text, language, wav, ref_text, extra)
             elif engine == "fish":
                 audio = await self._fish(text, wav, ref_text)
             elif engine == "mimo_api":
@@ -434,7 +456,7 @@ class SynthesisService:
                     instructions.append(f"用{request.emotion}的语气朗读，表达强度约 {round(request.emotion_intensity * 100)}%")
                 audio = await self._mimo(text, wav, "；".join(instructions))
             else:
-                audio = await self._qwen_api(text, request.language)
+                audio = await self._qwen_api(text, language)
         except httpx.TimeoutException as exc:
             raise TtsError(504, f"{engine} 生成超时", "engine_timeout") from exc
         except httpx.HTTPError as exc:

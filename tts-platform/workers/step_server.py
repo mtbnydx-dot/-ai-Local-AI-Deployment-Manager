@@ -56,6 +56,18 @@ def health():
     }
 
 
+@app.post("/admin/load")
+async def admin_load():
+    global _busy
+    async with _compute_lock:
+        _busy = True
+        try:
+            await asyncio.to_thread(get_tts)
+        finally:
+            _busy = False
+    return health()
+
+
 async def read_reference(upload: UploadFile) -> bytes:
     chunks = []
     total = 0
@@ -101,7 +113,7 @@ def synthesize(text: str, ref_text: str, audio: bytes) -> bytes:
 @app.post("/tts")
 async def tts_endpoint(
     text: str = Form(...),
-    language: str = Form("en"),
+    language: str = Form("auto"),
     ref_text: str = Form(""),
     ref_audio: UploadFile = File(...),
 ):

@@ -63,7 +63,7 @@ class Settings:
 def _build_settings() -> Settings:
     data_root = Path(cfg("TTS_DATA_ROOT", str(ROOT))).expanduser().resolve()
     settings = Settings(
-        version="0.2.0",
+        version="0.3.0",
         data_root=data_root,
         voices_dir=data_root / "voices",
         outputs_dir=data_root / "outputs",
@@ -74,7 +74,7 @@ def _build_settings() -> Settings:
         max_text_chars=cfg_int("TTS_MAX_TEXT_CHARS", 10_000, 1, 100_000),
         max_translate_chars=cfg_int("TTS_MAX_TRANSLATE_CHARS", 12_000, 1, 100_000),
         max_style_chars=cfg_int("TTS_MAX_STYLE_CHARS", 500, 1, 4_000),
-        max_batch_engines=cfg_int("TTS_MAX_BATCH_ENGINES", 3, 1, 6),
+        max_batch_engines=cfg_int("TTS_MAX_BATCH_ENGINES", 3, 1, 8),
         max_concurrent_jobs=cfg_int("TTS_MAX_CONCURRENT_JOBS", 2, 1, 6),
         job_retention=cfg_int("TTS_JOB_RETENTION", 200, 20, 2_000),
         ffmpeg_timeout_seconds=cfg_int("TTS_FFMPEG_TIMEOUT_SECONDS", 90, 10, 600),

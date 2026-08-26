@@ -154,6 +154,21 @@ test("standalone billing page is limited to direct loopback requests", () => {
   }), false);
 });
 
+test("TTS lifecycle mutations are recognised and remain localhost-only", () => {
+  const route = entry.parseTtsGatewayRoute("/gateway/tts/api/models/voxcpm2/actions/wake");
+  assert.equal(entry.isTtsModelManagementRequest({ method: "POST" }, route), true);
+  assert.equal(entry.isTtsModelManagementRequest({ method: "GET" }, route), false);
+  assert.equal(entry.isTtsModelManagementRequest({ method: "POST" }, entry.parseTtsGatewayRoute("/gateway/tts/api/models")), false);
+  assert.equal(entry.isStrictLocalBillingPageRequest({
+    headers: { host: "127.0.0.1:5176" },
+    socket: { remoteAddress: "127.0.0.1" },
+  }), true);
+  assert.equal(entry.isStrictLocalBillingPageRequest({
+    headers: { host: "127.0.0.1:5176", "x-forwarded-for": "192.0.2.10" },
+    socket: { remoteAddress: "127.0.0.1" },
+  }), false);
+});
+
 test("proxy headers keep auth fields and remove hop-by-hop fields", () => {
   const headers = entry.buildProxyHeaders(
     {

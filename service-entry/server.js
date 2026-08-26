@@ -636,6 +636,12 @@ function isTtsUiShellRequest(req, route) {
     && ["", "index.html"].includes(String(route?.rest || "").replace(/^\/+|\/+$/g, ""));
 }
 
+function isTtsModelManagementRequest(req, route) {
+  const method = String(req?.method || "GET").toUpperCase();
+  const rest = String(route?.rest || "").replace(/^\/+|\/+$/g, "");
+  return method === "POST" && /^api\/models\/[a-z0-9_-]+\/actions\/(install|start|wake|unload|stop)$/i.test(rest);
+}
+
 function createTtsBodyLimiter(maxBytes = TTS_GATEWAY_MAX_BODY_BYTES) {
   let total = 0;
   const limiter = new Transform({
@@ -689,6 +695,12 @@ async function proxyTtsGatewayRequest(req, res, url) {
   if (req.method === "OPTIONS") {
     res.writeHead(204, gatewayCorsHeaders(req));
     return res.end();
+  }
+  if (isTtsModelManagementRequest(req, route) && !isStrictLocalBillingPageRequest(req)) {
+    return sendJson(res, {
+      detail: "TTS model lifecycle operations are available only through a direct localhost connection.",
+      code: "tts_model_management_local_only",
+    }, 403, gatewayCorsHeaders(req));
   }
 
   const startedAt = Date.now();
@@ -1821,6 +1833,7 @@ module.exports = {
   handleBillingHttpRequest,
   isAggregatedModelListRequest,
   isStrictLocalBillingPageRequest,
+  isTtsModelManagementRequest,
   mergeManagerModelCatalogs,
   normalizeFleetSettings,
   normalizeManagerInstances,

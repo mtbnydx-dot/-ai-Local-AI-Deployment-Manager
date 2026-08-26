@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from tts_catalog import normalize_language
 from tts_config import settings
 
 
@@ -15,14 +16,24 @@ class ApiModel(BaseModel):
 
 class TranslateRequest(ApiModel):
     text: str = Field(min_length=1, max_length=settings.max_translate_chars)
-    target_language: str = Field(default="en", min_length=2, max_length=32)
+    target_language: str = Field(default="en", min_length=2, max_length=64)
+
+    @field_validator("target_language")
+    @classmethod
+    def validate_target_language(cls, value: str) -> str:
+        language = normalize_language(value)
+        if language == "auto":
+            raise ValueError("翻译目标语种不能是 auto")
+        if any(ord(character) < 32 for character in language):
+            raise ValueError("目标语种包含无效控制字符")
+        return language
 
 
 class SynthesisRequest(ApiModel):
     engine: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=settings.max_text_chars)
     voice_id: str | None = Field(default=None, max_length=64)
-    language: str = Field(default="en", min_length=2, max_length=32)
+    language: str = Field(default="auto", min_length=2, max_length=64)
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     emotion: str = Field(default="", max_length=40)
     emotion_intensity: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -33,12 +44,20 @@ class SynthesisRequest(ApiModel):
     def blank_voice_is_none(cls, value: Any) -> Any:
         return None if value is None or not str(value).strip() else value
 
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, value: str) -> str:
+        language = normalize_language(value)
+        if any(ord(character) < 32 for character in language):
+            raise ValueError("语种包含无效控制字符")
+        return language
+
 
 class BatchSynthesisRequest(ApiModel):
     engines: list[str] = Field(min_length=1, max_length=settings.max_batch_engines)
     text: str = Field(min_length=1, max_length=settings.max_text_chars)
     voice_id: str | None = Field(default=None, max_length=64)
-    language: str = Field(default="en", min_length=2, max_length=32)
+    language: str = Field(default="auto", min_length=2, max_length=64)
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     emotion: str = Field(default="", max_length=40)
     emotion_intensity: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -70,7 +89,7 @@ class OpenAISpeechRequest(ApiModel):
     response_format: str = Field(default="wav", max_length=16)
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     instructions: str = Field(default="", max_length=settings.max_style_chars)
-    language: str = Field(default="en", min_length=2, max_length=32)
+    language: str = Field(default="auto", min_length=2, max_length=64)
     emotion: str = Field(default="", max_length=40)
 
 

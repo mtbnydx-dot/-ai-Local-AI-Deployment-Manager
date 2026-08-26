@@ -9,6 +9,8 @@ const ENGINE_LABELS = {
   qwen_local: "Qwen3-TTS 1.7B",
   fish: "Fish S2 Pro",
   step_audio: "Step-Audio-EditX",
+  voxcpm2: "VoxCPM 2",
+  qwen_voice_design: "Qwen3-TTS VoiceDesign",
   mimo_api: "小米 MiMo",
   qwen_api: "Qwen3-TTS API",
   unknown: "未知引擎",
@@ -19,6 +21,9 @@ const state = {
   voices: [],
   jobs: [],
   outputs: [],
+  models: [],
+  modelResources: null,
+  languageOptions: [],
   outputTotal: 0,
   outputOffset: 0,
   system: null,
@@ -32,6 +37,8 @@ const state = {
   audioPlayers: new Map(),
   previousJobStatus: new Map(),
   pollingTimer: null,
+  modelPollingTimer: null,
+  previousModelOperationStatus: new Map(),
   searchTimer: null,
   draftTimer: null,
   sessionApiKey: sessionStorage.getItem("tts.gatewayApiKey") || "",
@@ -91,6 +98,7 @@ function formatBytes(bytes) {
   const value = Number(bytes || 0);
   if (value < 1024) return `${value} B`;
   if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
   return `${(value / 1024 ** 2).toFixed(1)} MB`;
 }
 
@@ -202,6 +210,16 @@ async function loadSystem() {
   }
 }
 
+async function loadLanguages() {
+  try {
+    const payload = await api("api/languages");
+    state.languageOptions = payload.items || [];
+    $("#languageOptions").innerHTML = state.languageOptions.map((item) => `<option value="${escapeHtml(item.code)}">${escapeHtml(item.name)}</option>`).join("");
+  } catch {
+    state.languageOptions = [];
+  }
+}
+
 function engineStateCopy(engine) {
   if (engine.status === "busy") return "忙碌";
   if (engine.available) return engine.model_loaded ? "在线 · 已加载" : "在线";
@@ -236,7 +254,7 @@ function renderEngines() {
   grid.innerHTML = state.engines.map((engine) => {
     const selected = state.selectedEngines.has(engine.id);
     const statusClass = engine.status === "busy" ? "is-busy" : engine.available ? "is-online" : "";
-    return `<button class="engine-card${selected ? " is-selected" : ""}${engine.available ? "" : " is-disabled"}" type="button" data-engine-id="${escapeHtml(engine.id)}" aria-pressed="${selected}" ${engine.available ? "" : "aria-disabled=\"true\""} title="${escapeHtml(engine.detail || "")}">
+    return `<button class="engine-card${selected ? " is-selected" : ""}${engine.available ? "" : " is-disabled"}" type="button" data-engine-id="${escapeHtml(engine.id)}" aria-pressed="${selected}" title="${escapeHtml([engine.detail, engine.language_summary].filter(Boolean).join(" · "))}">
       <span class="engine-card-top"><span class="engine-glyph">${icon("wave")}</span><span class="engine-select-mark">${icon("check")}</span></span>
       <span class="engine-name">${escapeHtml(engine.name || ENGINE_LABELS[engine.id] || engine.id)}</span>
       <span class="engine-state ${statusClass}"><span class="status-dot ${engine.available ? (engine.status === "busy" ? "is-warning" : "is-online") : ""}"></span>${escapeHtml(engineStateCopy(engine))}</span>
@@ -245,7 +263,16 @@ function renderEngines() {
   const unavailable = state.engines.some((engine) => !engine.available);
   $("#engineWarning").hidden = !unavailable;
   updateGenerateLabel();
+  updateLanguageHint();
   renderApiModels();
+}
+
+function updateLanguageHint() {
+  const language = $("#synthesisLanguage")?.value.trim() || "auto";
+  const selected = state.engines.filter((engine) => state.selectedEngines.has(engine.id));
+  const summaries = [...new Set(selected.map((engine) => engine.language_summary).filter(Boolean))];
+  const suffix = summaries.length ? `所选模型：${summaries.join("；")}` : "选择模型后会显示其原生语种范围。";
+  $("#languageHint").textContent = `${language === "auto" ? "当前由模型自动识别" : `当前合成语种：${language}`}。${suffix}`;
 }
 
 async function loadEngines(refresh = false) {
@@ -456,12 +483,130 @@ async function loadHistory(reset = true) {
   }
 }
 
+function modelRuntimeLabel(model) {
+  if (model.operation && ["queued", "running"].includes(model.operation.status)) return model.operation.message || "正在执行操作";
+  if (model.busy) return "正在生成语音";
+  if (model.available && model.model_loaded) return "服务在线 · 模型已加载到显存";
+  if (model.available) return "服务在线 · 权重尚未加载";
+  if (model.type === "api") return model.configured ? "API 已配置" : "API Key 尚未配置";
+  if (!model.installed) return "尚未安装";
+  return "已安装 · 服务未启动";
+}
+
+function modelActionButton(model, action, label, primary = false) {
+  if (!model.actions?.[action]) return "";
+  return `<button class="button ${primary ? "primary" : "subtle"} compact" type="button" data-model-action="${escapeHtml(action)}" data-model-id="${escapeHtml(model.id)}">${escapeHtml(label)}</button>`;
+}
+
+function notifyModelTransitions(models) {
+  for (const model of models) {
+    const operation = model.operation;
+    if (!operation) continue;
+    const key = `${model.id}:${operation.action}:${operation.started_at}`;
+    const previous = state.previousModelOperationStatus.get(key);
+    if (previous && previous !== operation.status) {
+      if (operation.status === "succeeded") {
+        toast(`${model.name}：${operation.message}`, "success");
+        loadEngines(true).catch(() => {});
+        setTimeout(() => loadModels(true).catch(() => {}), 700);
+      } else if (operation.status === "failed") {
+        toast(`${model.name}：${operation.message}`, "error");
+      }
+    }
+    state.previousModelOperationStatus.set(key, operation.status);
+  }
+}
+
+function renderModels() {
+  const grid = $("#modelGrid");
+  if (!state.models.length) {
+    grid.innerHTML = '<div class="empty-state">模型目录尚未加载</div>';
+    return;
+  }
+  grid.innerHTML = state.models.map((model) => {
+    const running = model.operation && ["queued", "running"].includes(model.operation.status);
+    const failed = model.operation?.status === "failed";
+    const badge = model.busy ? "忙碌" : model.available ? (model.model_loaded ? "已加载" : "在线") : model.installed ? "已安装" : model.type === "api" ? "云端" : "可安装";
+    const badgeClass = model.busy ? "is-busy" : model.available ? "is-online" : "";
+    const facts = [model.language_summary, model.model_size_bytes ? `下载约 ${formatBytes(model.model_size_bytes)}` : "", model.license].filter(Boolean);
+    const actionMarkup = running
+      ? '<button class="button subtle compact" type="button" disabled>操作进行中…</button>'
+      : [
+          modelActionButton(model, "install", "安装模型", true),
+          modelActionButton(model, "start", "启动服务"),
+          modelActionButton(model, "wake", model.available ? "加载到显存" : "启动并加载", true),
+          modelActionButton(model, "unload", "释放显存"),
+          modelActionButton(model, "stop", "停止服务"),
+        ].join("");
+    return `<article class="model-card${model.featured ? " is-featured" : ""}">
+      <div class="model-card-heading"><span class="engine-glyph">${icon("model")}</span><div class="model-title"><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.type === "api" ? "云端 API" : model.type === "docker" ? "本地 Docker" : "本地模型")}</span></div>${model.featured ? '<span class="model-badge is-new">新增推荐</span>' : ""}<span class="model-badge ${badgeClass}">${escapeHtml(badge)}</span></div>
+      <p class="model-description">${escapeHtml(model.description)}</p>
+      <div class="model-facts">${facts.map((fact) => `<span>${escapeHtml(fact)}</span>`).join("")}</div>
+      <div class="model-state${failed ? " is-error" : ""}"><strong>${escapeHtml(modelRuntimeLabel(model))}</strong>${model.operation ? `<span>${escapeHtml(model.operation.message || "")}</span>` : `<span>${escapeHtml(model.detail || "")}</span>`}</div>
+      <div class="model-actions">${actionMarkup}<a class="source-link" href="${escapeHtml(model.source_url)}" target="_blank" rel="noopener noreferrer">官方资料 ↗</a></div>
+    </article>`;
+  }).join("");
+}
+
+function scheduleModelPolling(active) {
+  if (!active) {
+    clearTimeout(state.modelPollingTimer);
+    state.modelPollingTimer = null;
+    return;
+  }
+  if (state.modelPollingTimer) return;
+  state.modelPollingTimer = setTimeout(async () => {
+    state.modelPollingTimer = null;
+    if (document.visibilityState === "visible") await loadModels(true);
+    else scheduleModelPolling(true);
+  }, 1600);
+}
+
+async function loadModels(refresh = false) {
+  if (!state.models.length) showSkeleton($("#modelGrid"), 3);
+  try {
+    const payload = await api(`api/models${refresh ? "?refresh=true" : ""}`);
+    state.models = payload.items || [];
+    state.modelResources = payload.resources || null;
+    const diskFree = Number(state.modelResources?.disk_free_bytes || 0);
+    const gpu = state.modelResources?.gpu;
+    $("#modelResourceSummary").textContent = [diskFree ? `模型盘可用 ${formatBytes(diskFree)}` : "", gpu ? `GPU 可用 ${(Number(gpu.free_mib || 0) / 1024).toFixed(1)} GB / ${(Number(gpu.total_mib || 0) / 1024).toFixed(1)} GB` : ""].filter(Boolean).join(" · ");
+    notifyModelTransitions(state.models);
+    renderModels();
+    scheduleModelPolling(state.models.some((model) => ["queued", "running"].includes(model.operation?.status)));
+  } catch (error) {
+    $("#modelGrid").innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    scheduleModelPolling(false);
+  }
+}
+
+async function runModelAction(modelId, action) {
+  const model = state.models.find((item) => item.id === modelId);
+  if (!model) return;
+  const confirmations = {
+    install: ["安装模型", `将下载并安装 ${model.name}${model.model_size_bytes ? `（权重约 ${formatBytes(model.model_size_bytes)}）` : ""}。下载可在后台继续。`, "开始安装"],
+    unload: ["释放模型显存", `将 ${model.name} 的权重移出显存，服务仍保持在线，下次使用时可再次加载。`, "释放显存"],
+    stop: ["停止模型服务", `将停止 ${model.name} 的本地服务并释放资源。正在生成时系统会拒绝此操作。`, "停止服务"],
+  };
+  if (confirmations[action] && !await confirmAction(...confirmations[action])) return;
+  try {
+    const result = await api(`api/models/${encodeURIComponent(modelId)}/actions/${encodeURIComponent(action)}`, { method: "POST" });
+    model.operation = result.operation;
+    renderModels();
+    scheduleModelPolling(true);
+    toast(`${model.name}：操作已开始`, "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 function renderApiModels() {
   const list = $("#apiModels");
   if (!list) return;
   list.innerHTML = state.engines.length ? state.engines.map((engine) => {
-    const capabilities = Object.entries(engine.capabilities || {}).filter(([, enabled]) => enabled).map(([key]) => ({ voice_clone: "音色克隆", emotion: "语气", style: "风格", requires_ref_text: "需文字稿" })[key] || key);
-    return `<div class="api-model"><strong>tts-${escapeHtml(engine.id)}</strong><span>${escapeHtml(engineStateCopy(engine))}${capabilities.length ? ` · ${escapeHtml(capabilities.join(" / "))}` : ""}</span></div>`;
+    const labels = { voice_clone: "音色克隆", voice_optional: "音色可选", emotion: "语气", style: "风格", requires_ref_text: "需文字稿" };
+    const capabilities = Object.entries(engine.capabilities || {}).filter(([key, enabled]) => enabled && labels[key]).map(([key]) => labels[key]);
+    return `<div class="api-model"><strong>tts-${escapeHtml(engine.id)}</strong><span>${escapeHtml(engineStateCopy(engine))}${capabilities.length ? ` · ${escapeHtml(capabilities.join(" / "))}` : ""} · ${escapeHtml(engine.language_summary || "语种由模型处理")}</span></div>`;
   }).join("") : '<div class="empty-state">模型状态尚未加载</div>';
 }
 
@@ -475,8 +620,14 @@ async function translateText() {
   const button = $("#translateButton");
   const source = $("#sourceText").value.trim();
   if (!source) {
-    setInlineStatus($("#translationStatus"), "请先输入中文原文", "error");
+    setInlineStatus($("#translationStatus"), "请先输入需要翻译的原文", "error");
     $("#sourceText").focus();
+    return;
+  }
+  const targetLanguage = $("#translationLanguage").value.trim();
+  if (!targetLanguage || targetLanguage.toLowerCase() === "auto") {
+    setInlineStatus($("#translationStatus"), "请填写明确的翻译目标语种，例如 en、日语或 fr-CA", "error");
+    $("#translationLanguage").focus();
     return;
   }
   button.disabled = true;
@@ -485,9 +636,11 @@ async function translateText() {
     const result = await api("api/translate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: source, target_language: "en" }),
+      body: JSON.stringify({ text: source, target_language: targetLanguage }),
     });
-    $("#targetText").value = result.english || "";
+    $("#targetText").value = result.translation || result.english || "";
+    $("#synthesisLanguage").value = result.target_language || targetLanguage;
+    updateLanguageHint();
     updateTextCounts();
     persistDraftSoon();
     const provider = result.model || result.provider || "翻译服务";
@@ -525,6 +678,8 @@ function persistDraftSoon() {
       speed: Number($("#speedControl").value),
       intensity: Number($("#intensityControl").value),
       emotion: state.emotion,
+      translationLanguage: $("#translationLanguage").value,
+      synthesisLanguage: $("#synthesisLanguage").value,
     }));
   }, 220);
 }
@@ -534,10 +689,13 @@ function restoreDraft() {
   $("#sourceText").value = String(draft.source || "");
   $("#targetText").value = String(draft.target || "");
   $("#styleText").value = String(draft.style || "");
+  $("#translationLanguage").value = String(draft.translationLanguage || "en");
+  $("#synthesisLanguage").value = String(draft.synthesisLanguage || "auto");
   $("#speedControl").value = String(Number(draft.speed || 1));
   $("#intensityControl").value = String(Number.isFinite(Number(draft.intensity)) ? Number(draft.intensity) : 0.5);
   selectEmotion(String(draft.emotion || ""));
   updateControls();
+  updateLanguageHint();
   updateTextCounts();
 }
 
@@ -571,7 +729,7 @@ async function generateSpeech() {
   const target = $("#targetText").value.trim();
   const engines = [...state.selectedEngines];
   if (!target) {
-    setInlineStatus($("#createStatus"), "请先填写英文文本", "error");
+    setInlineStatus($("#createStatus"), "请先填写需要合成的文本", "error");
     $("#targetText").focus();
     return;
   }
@@ -579,7 +737,7 @@ async function generateSpeech() {
     setInlineStatus($("#createStatus"), "请至少选择一个可用引擎", "error");
     return;
   }
-  const needsVoice = engines.some((engine) => engine !== "qwen_api");
+  const needsVoice = engines.some((engineId) => state.engines.find((engine) => engine.id === engineId)?.capabilities?.voice_required);
   if (needsVoice && !state.selectedVoice) {
     setInlineStatus($("#createStatus"), "所选引擎需要参考音色", "error");
     openVoiceDialog();
@@ -596,7 +754,7 @@ async function generateSpeech() {
         engines,
         text: target,
         voice_id: state.selectedVoice || null,
-        language: "en",
+        language: $("#synthesisLanguage").value.trim() || "auto",
         speed: Number($("#speedControl").value),
         emotion: state.emotion,
         emotion_intensity: Number($("#intensityControl").value),
@@ -645,6 +803,7 @@ function setView(view) {
   $(".main-area").scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   if (view === "history") loadHistory(true).catch(() => {});
   if (view === "tasks") loadJobs({ quiet: true }).catch(() => {});
+  if (view === "models") loadModels(true).catch(() => {});
 }
 
 async function ensureAudio(player) {
@@ -890,7 +1049,11 @@ function handleDocumentClick(event) {
   const engineCard = event.target.closest("[data-engine-id]");
   if (engineCard) {
     const engine = state.engines.find((item) => item.id === engineCard.dataset.engineId);
-    if (!engine?.available) return;
+    if (!engine?.available) {
+      setView("models");
+      toast(`${engine?.name || "该引擎"} 尚不可用，可在模型管理中启动或安装`);
+      return;
+    }
     if (state.selectedEngines.has(engine.id)) state.selectedEngines.delete(engine.id);
     else if (state.selectedEngines.size >= state.maxBatchEngines) toast(`一次最多选择 ${state.maxBatchEngines} 个引擎`, "error");
     else state.selectedEngines.add(engine.id);
@@ -908,6 +1071,11 @@ function handleDocumentClick(event) {
   const emotion = event.target.closest("[data-emotion]");
   if (emotion) { selectEmotion(emotion.dataset.emotion); return; }
   const action = event.target.closest("[data-action]");
+  const modelAction = event.target.closest("[data-model-action]");
+  if (modelAction) {
+    runModelAction(modelAction.dataset.modelId, modelAction.dataset.modelAction);
+    return;
+  }
   if (!action) return;
   const { action: name, id, view, downloadUrl } = action.dataset;
   if (name === "add-voice") openVoiceDialog();
@@ -923,6 +1091,7 @@ function handleDocumentClick(event) {
   else if (name === "refresh-engines") loadEngines(true);
   else if (name === "refresh-history") loadHistory(true);
   else if (name === "refresh-tasks") loadJobs();
+  else if (name === "refresh-models") loadModels(true);
 }
 
 function bindEvents() {
@@ -930,7 +1099,7 @@ function bindEvents() {
   $("#translateButton").addEventListener("click", translateText);
   $("#insertPause").addEventListener("click", insertPause);
   $("#generateButton").addEventListener("click", generateSpeech);
-  $("#refreshStatus").addEventListener("click", async () => { await Promise.all([loadEngines(true), loadSystem()]); toast("状态已刷新", "success"); });
+  $("#refreshStatus").addEventListener("click", async () => { await Promise.all([loadEngines(true), loadModels(true), loadSystem()]); toast("状态已刷新", "success"); });
   $("#addVoiceButton").addEventListener("click", () => openVoiceDialog());
   $("#recordButton").addEventListener("click", toggleRecording);
   $("#voiceForm").addEventListener("submit", saveVoice);
@@ -941,6 +1110,8 @@ function bindEvents() {
   $("#styleText").addEventListener("input", updateControls);
   $("#sourceText").addEventListener("input", () => { updateTextCounts(); persistDraftSoon(); });
   $("#targetText").addEventListener("input", () => { updateTextCounts(); persistDraftSoon(); });
+  $("#translationLanguage").addEventListener("input", persistDraftSoon);
+  $("#synthesisLanguage").addEventListener("input", () => { updateLanguageHint(); persistDraftSoon(); });
   $("#resetControls").addEventListener("click", resetControls);
   $("#taskFilters").addEventListener("click", (event) => {
     const button = event.target.closest("[data-job-filter]");
@@ -975,6 +1146,7 @@ function bindEvents() {
   window.addEventListener("beforeunload", () => {
     for (const record of state.audioPlayers.values()) URL.revokeObjectURL(record.objectUrl);
     stopRecordingStream();
+    clearTimeout(state.modelPollingTimer);
   });
 }
 
@@ -989,9 +1161,10 @@ async function initialize() {
   $("#voiceLibrary").innerHTML = '<div class="skeleton"></div>';
   $("#taskList").innerHTML = '<div class="skeleton"></div>';
   $("#historyList").innerHTML = '<div class="skeleton"></div>';
+  $("#modelGrid").innerHTML = '<div class="skeleton"></div>';
   const initialView = location.hash.replace(/^#/, "") || "create";
   setView(initialView);
-  await Promise.allSettled([loadSystem(), loadEngines(), loadVoices(), loadJobs({ quiet: true }), loadHistory(true)]);
+  await Promise.allSettled([loadSystem(), loadLanguages(), loadEngines(), loadModels(), loadVoices(), loadJobs({ quiet: true }), loadHistory(true)]);
   state.pollingTimer = setInterval(() => {
     if (document.visibilityState === "visible") loadJobs({ quiet: true });
   }, 2500);

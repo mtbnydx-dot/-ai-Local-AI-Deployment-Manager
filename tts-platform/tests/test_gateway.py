@@ -26,6 +26,7 @@ schemas = importlib.import_module("tts_schemas")
 storage = importlib.import_module("tts_storage")
 services = importlib.import_module("tts_services")
 jobs_module = importlib.import_module("tts_jobs")
+lifecycle_module = importlib.import_module("tts_lifecycle")
 gateway = importlib.import_module("main")
 
 
@@ -69,6 +70,14 @@ class StorageAndSchemaTest(unittest.TestCase):
             schemas.SynthesisRequest(engine="fish", text="hello", speed=3)
         with self.assertRaises(ValidationError):
             schemas.SynthesisRequest(engine="fish", text="")
+
+    def test_language_fields_are_free_form_and_normalized(self):
+        self.assertEqual(schemas.SynthesisRequest(engine="fish", text="hello", language="fr_CA").language, "fr-ca")
+        self.assertEqual(schemas.SynthesisRequest(engine="fish", text="hello", language="粤语").language, "粤语")
+        self.assertEqual(schemas.SynthesisRequest(engine="fish", text="hello").language, "auto")
+        self.assertEqual(schemas.TranslateRequest(text="hello", target_language="日语").target_language, "ja")
+        with self.assertRaises(ValidationError):
+            schemas.TranslateRequest(text="hello", target_language="auto")
 
     def test_batch_schema_deduplicates_and_limits_engines(self):
         request = schemas.BatchSynthesisRequest(engines=["fish", "fish", "mimo_api"], text="hello")
@@ -136,8 +145,10 @@ class StorageAndSchemaTest(unittest.TestCase):
         self.assertIn("api/jobs", script)
         self.assertIn("api/outputs", script)
         self.assertIn("@media (max-width: 900px)", css)
-        for label in ("创建", "音色库", "任务", "历史", "API", "生成语音"):
+        for label in ("创建", "音色库", "任务", "历史", "模型", "API", "生成语音", "合成语种"):
             self.assertIn(label, html)
+        self.assertIn("api/models", script)
+        self.assertIn("data-model-action", script)
 
 
 class EngineAndJobTest(unittest.IsolatedAsyncioTestCase):
@@ -155,10 +166,10 @@ class EngineAndJobTest(unittest.IsolatedAsyncioTestCase):
             with patch.object(registry, "_probe", probe):
                 first = await registry.list(refresh=True)
                 second = await registry.list()
-            self.assertEqual(probe.await_count, 4)
-            self.assertEqual(len(first), 6)
+            self.assertEqual(probe.await_count, len(services.LOCAL_WORKERS))
+            self.assertEqual(len(first), len(services.ENGINE_CAPABILITIES))
             self.assertEqual(first, second)
-            self.assertEqual([item["id"] for item in first[:4]], list(services.LOCAL_WORKERS))
+            self.assertEqual([item["id"] for item in first[:len(services.LOCAL_WORKERS)]], list(services.LOCAL_WORKERS))
         finally:
             await registry.close()
 
@@ -232,6 +243,36 @@ class EngineAndJobTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.body.startswith(b"RIFF"))
         self.assertEqual(response.headers["x-tts-engine"], "fish")
 
+    async def test_voice_design_does_not_require_reference_voice(self):
+        request = schemas.SynthesisRequest(engine="qwen_voice_design", text="Bonjour", language="fr", style="warm")
+        with patch.object(services.synthesis_service, "_local_worker", AsyncMock(return_value=wav_bytes())) as worker:
+            audio, engine, _, _ = await services.synthesis_service.generate(request)
+        self.assertTrue(audio.startswith(b"RIFF"))
+        self.assertEqual(engine, "qwen_voice_design")
+        self.assertEqual(worker.await_args.args[2], "fr")
+
+    async def test_chatterbox_reports_unsupported_explicit_language(self):
+        request = schemas.SynthesisRequest(engine="chatterbox", text="xin chao", language="vi", voice_id="20260826123456_abcdef")
+        with self.assertRaises(services.TtsError) as context:
+            await services.synthesis_service.generate(request)
+        self.assertEqual(context.exception.code, "engine_language_unsupported")
+
+
+class ModelLifecycleTest(unittest.TestCase):
+    def test_catalog_includes_new_allowlisted_models(self):
+        manager = lifecycle_module.ModelLifecycleManager()
+        items = manager.catalog([])
+        indexed = {item["id"]: item for item in items}
+        self.assertTrue(indexed["voxcpm2"]["featured"])
+        self.assertTrue(indexed["qwen_voice_design"]["actions"]["install"] or indexed["qwen_voice_design"]["installed"])
+        self.assertEqual(indexed["voxcpm2"]["language_summary"], "自动识别 · 30 种语言")
+
+    def test_process_matcher_fails_closed(self):
+        matcher = lifecycle_module.ModelLifecycleManager._matches_engine_process
+        self.assertTrue(matcher("qwen_local", r"python.exe D:\AI\tts-platform\workers\qwen_worker.py"))
+        self.assertFalse(matcher("qwen_local", r"python.exe unrelated_server.py"))
+        self.assertFalse(matcher("qwen_local", ""))
+
 
 class ApiSurfaceTest(unittest.IsolatedAsyncioTestCase):
     async def request(self, method, path, **kwargs):
@@ -298,8 +339,28 @@ class ApiSurfaceTest(unittest.IsolatedAsyncioTestCase):
             response = await self.request("GET", "/v1/models")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(len(payload["data"]), 6)
+        self.assertEqual(len(payload["data"]), len(services.ENGINE_CAPABILITIES))
         self.assertIn("capabilities", payload["data"][0])
+
+    async def test_languages_endpoint_is_free_form(self):
+        response = await self.request("GET", "/api/languages")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["free_form"])
+        self.assertIn("auto", [item["code"] for item in response.json()["items"]])
+
+    async def test_model_catalog_and_action_endpoint(self):
+        engine_states = [{"id": engine_id, "available": False, "status": "offline"} for engine_id in services.ENGINE_CAPABILITIES]
+        with patch.object(gateway.engine_registry, "list", AsyncMock(return_value=engine_states)):
+            response = await self.request("GET", "/api/models")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("voxcpm2", [item["id"] for item in response.json()["items"]])
+
+        operation = {"action": "wake", "status": "queued", "message": "queued"}
+        with patch.object(gateway.model_lifecycle, "begin", return_value=operation) as begin:
+            action = await self.request("POST", "/api/models/qwen_local/actions/wake")
+        self.assertEqual(action.status_code, 202)
+        self.assertTrue(action.json()["accepted"])
+        begin.assert_called_once_with("qwen_local", "wake")
 
     async def test_missing_output_is_404(self):
         response = await self.request("GET", "/api/outputs/not-found/audio")

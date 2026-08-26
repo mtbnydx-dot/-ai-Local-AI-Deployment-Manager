@@ -26,6 +26,9 @@ call :checkps1 "tts-platform\scripts\start_chatterbox.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\start_qwen.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\start_fish.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\start_step_docker.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_voxcpm.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\start_qwen_design.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\install_model.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\status.ps1" || exit /b 1
 call :checkpy "tts-platform\gateway\main.py" || exit /b 1
 call :checkpy "tts-platform\gateway\tts_config.py" || exit /b 1
@@ -33,9 +36,13 @@ call :checkpy "tts-platform\gateway\tts_schemas.py" || exit /b 1
 call :checkpy "tts-platform\gateway\tts_storage.py" || exit /b 1
 call :checkpy "tts-platform\gateway\tts_services.py" || exit /b 1
 call :checkpy "tts-platform\gateway\tts_jobs.py" || exit /b 1
+call :checkpy "tts-platform\gateway\tts_catalog.py" || exit /b 1
+call :checkpy "tts-platform\gateway\tts_lifecycle.py" || exit /b 1
 call :checkpy "tts-platform\workers\chatterbox_worker.py" || exit /b 1
 call :checkpy "tts-platform\workers\qwen_worker.py" || exit /b 1
 call :checkpy "tts-platform\workers\step_server.py" || exit /b 1
+call :checkpy "tts-platform\workers\voxcpm_worker.py" || exit /b 1
+call :checkpy "tts-platform\workers\qwen_design_worker.py" || exit /b 1
 call :testpy || exit /b 1
 call :test "manager-core" || exit /b 1
 call :test "service-entry" || exit /b 1

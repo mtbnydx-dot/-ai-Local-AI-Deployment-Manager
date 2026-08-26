@@ -5,6 +5,7 @@ Protocol: GET /health, POST /tts (multipart: text, language, ref_audio, ref_text
 """
 
 import asyncio
+import gc
 import io
 import os
 import tempfile
@@ -25,7 +26,23 @@ MAX_TEXT_CHARS = int(os.environ.get("TTS_WORKER_MAX_TEXT_CHARS", "10000"))
 MAX_REFERENCE_BYTES = int(os.environ.get("TTS_WORKER_MAX_REFERENCE_BYTES", str(16 * 1024 * 1024)))
 
 MODEL_ID = os.environ.get("QWEN_TTS_MODEL", str(RUNTIME_ROOT / "models" / "Qwen3-TTS-1.7B-Base"))
-LANG_MAP = {"en": "English", "zh": "Chinese", "english": "English", "chinese": "Chinese"}
+LANG_MAP = {
+    "auto": "Auto", "zh": "Chinese", "chinese": "Chinese", "中文": "Chinese",
+    "en": "English", "english": "English", "英语": "English",
+    "ja": "Japanese", "japanese": "Japanese", "日语": "Japanese",
+    "ko": "Korean", "korean": "Korean", "韩语": "Korean",
+    "de": "German", "german": "German", "德语": "German",
+    "fr": "French", "french": "French", "法语": "French",
+    "ru": "Russian", "russian": "Russian", "俄语": "Russian",
+    "pt": "Portuguese", "portuguese": "Portuguese", "葡萄牙语": "Portuguese",
+    "es": "Spanish", "spanish": "Spanish", "西班牙语": "Spanish",
+    "it": "Italian", "italian": "Italian", "意大利语": "Italian",
+}
+
+
+def resolve_language(value: str) -> str:
+    key = str(value or "auto").strip().lower().replace("_", "-")
+    return LANG_MAP.get(key, LANG_MAP.get(key.split("-", 1)[0], "Auto"))
 
 
 def get_model():
@@ -54,17 +71,45 @@ def health():
     }
 
 
+def unload_models() -> None:
+    global _model, _trans
+    model, translator = _model, _trans
+    _model = None
+    _trans = None
+    del model, translator
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+
+@app.post("/admin/load")
+async def admin_load():
+    global _busy
+    async with _compute_lock:
+        _busy = True
+        try:
+            await asyncio.to_thread(get_model)
+        finally:
+            _busy = False
+    return health()
+
+
+@app.post("/admin/unload")
+async def admin_unload():
+    if _busy:
+        raise HTTPException(409, "model is busy")
+    async with _compute_lock:
+        await asyncio.to_thread(unload_models)
+    return health()
+
+
 # ---------------- 本地翻译（Qwen3-4B-Instruct，无 API 时的兜底） ----------------
 _trans = None
 TRANS_MODEL_ID = os.environ.get("LOCAL_TRANSLATE_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
-TRANS_SYS = (
-    "You are a professional translator. Translate the user's Chinese text into "
-    "natural, fluent spoken English suitable for reading aloud in a class presentation. "
-    "Keep the meaning faithful, use simple clear sentences. "
-    "Output ONLY the English translation, nothing else."
-)
-
-
 def get_translator():
     global _trans
     if _trans is None:
@@ -79,9 +124,15 @@ def get_translator():
     return _trans
 
 
-def translate_sync(text: str) -> str:
+def translate_sync(text: str, target_language: str) -> str:
     tok, mdl = get_translator()
-    msgs = [{"role": "system", "content": TRANS_SYS}, {"role": "user", "content": text}]
+    target = str(target_language or "English").strip()
+    system = (
+        f"You are a professional translator. Translate the user's text into {target}. "
+        "Keep the meaning faithful and make it natural for spoken narration. "
+        "Output only the translation, with no notes or explanation."
+    )
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": text}]
     inputs = tok.apply_chat_template(
         msgs, add_generation_prompt=True, return_tensors="pt"
     ).to(mdl.device)
@@ -97,13 +148,17 @@ async def translate(payload: dict):
         raise HTTPException(400, "text is empty")
     if len(text) > MAX_TEXT_CHARS:
         raise HTTPException(413, "text is too long")
+    target_language = str(payload.get("target_language") or "English").strip()
     async with _compute_lock:
         _busy = True
         try:
-            english = await asyncio.to_thread(translate_sync, text)
+            translated = await asyncio.to_thread(translate_sync, text, target_language)
         finally:
             _busy = False
-    return {"english": english, "model": "Qwen3-4B-Instruct (本地)"}
+    result = {"translation": translated, "target_language": target_language, "model": "Qwen3-4B-Instruct (本地)"}
+    if target_language.lower().startswith(("en", "english")):
+        result["english"] = translated
+    return result
 
 
 async def read_reference(upload: UploadFile) -> bytes:
@@ -126,7 +181,7 @@ def synthesize(text: str, language: str, ref_text: str, audio: bytes) -> bytes:
     import soundfile as sf
 
     model = get_model()
-    lang = LANG_MAP.get(language.lower(), "English")
+    lang = resolve_language(language)
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     try:
         tmp.write(audio)
@@ -154,7 +209,7 @@ def synthesize(text: str, language: str, ref_text: str, audio: bytes) -> bytes:
 @app.post("/tts")
 async def tts(
     text: str = Form(...),
-    language: str = Form("en"),
+    language: str = Form("auto"),
     ref_text: str = Form(""),
     ref_audio: UploadFile = File(...),
 ):

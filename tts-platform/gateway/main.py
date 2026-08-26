@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from tts_catalog import COMMON_LANGUAGES
 from tts_config import cfg, settings
 from tts_jobs import job_manager
 from tts_schemas import BatchSynthesisRequest, OpenAISpeechRequest, SynthesisRequest, TranslateRequest, VoiceUpdate
@@ -37,6 +38,7 @@ from tts_services import (
     translation_service,
 )
 from tts_storage import output_store, voice_store
+from tts_lifecycle import LifecycleError, model_lifecycle
 
 
 STARTED_AT = time.time()
@@ -147,6 +149,11 @@ async def handle_tts_error(request: Request, exc: TtsError):
     return JSONResponse(_error_payload(request, exc.detail, exc.code), status_code=exc.status_code)
 
 
+@app.exception_handler(LifecycleError)
+async def handle_lifecycle_error(request: Request, exc: LifecycleError):
+    return JSONResponse(_error_payload(request, exc.detail, exc.code), status_code=exc.status_code)
+
+
 @app.exception_handler(StarletteHTTPException)
 async def handle_http_error(request: Request, exc: StarletteHTTPException):
     detail = str(exc.detail or "Request failed")
@@ -230,6 +237,7 @@ async def system_info():
         },
         "storage": storage,
         "jobs": job_manager.snapshot(),
+        "model_management": {"local_only": True, "actions": ["install", "start", "wake", "unload", "stop"]},
         "endpoints": {
             "openai": "openai/v1",
             "speech": "openai/v1/audio/speech",
@@ -241,6 +249,29 @@ async def system_info():
 @app.get("/api/engines")
 async def engines(refresh: bool = Query(default=False)):
     return await engine_registry.list(refresh=refresh)
+
+
+@app.get("/api/languages")
+async def languages():
+    return {
+        "items": COMMON_LANGUAGES,
+        "free_form": True,
+        "hint": "可输入任意 BCP-47 代码或语种名称；最终原生支持范围由所选模型决定。",
+    }
+
+
+@app.get("/api/models")
+async def model_catalog(refresh: bool = Query(default=False)):
+    engine_states = await engine_registry.list(refresh=refresh)
+    resources = await asyncio.to_thread(model_lifecycle.resources)
+    return {"items": model_lifecycle.catalog(engine_states), "resources": resources, "local_actions_only": True}
+
+
+@app.post("/api/models/{model_id}/actions/{action}", status_code=202)
+async def model_action(model_id: str, action: str):
+    operation = model_lifecycle.begin(model_id, action)
+    engine_registry.invalidate()
+    return {"accepted": True, "model_id": model_id, "operation": operation}
 
 
 @app.post("/api/voices", status_code=201)

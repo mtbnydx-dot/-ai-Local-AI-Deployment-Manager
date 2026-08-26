@@ -23,7 +23,7 @@ $requestHeaders = @{}
 if (-not [string]::IsNullOrWhiteSpace($apiKey)) { $requestHeaders.Authorization = "Bearer $apiKey" }
 
 $rows = @()
-foreach ($port in @($gatewayPort, 7011, 7012, 7013, 7014) | Select-Object -Unique) {
+foreach ($port in @($gatewayPort, 7011, 7012, 7013, 7014, 7015, 7016) | Select-Object -Unique) {
     $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($listener) {
         $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
@@ -54,6 +54,8 @@ try {
 
     $engines = Invoke-RestMethod -Uri "$gatewayBase/api/engines" -Headers $requestHeaders -TimeoutSec 12
     $engines | Select-Object id, name, type, status, available, busy, latency_ms, detail | Format-Table -AutoSize
+    $models = Invoke-RestMethod -Uri "$gatewayBase/api/models" -Headers $requestHeaders -TimeoutSec 12
+    $models.items | Select-Object id, installed, available, model_loaded, busy, status | Format-Table -AutoSize
     exit 0
 } catch {
     Write-Error "TTS gateway health check failed: $($_.Exception.Message)"
