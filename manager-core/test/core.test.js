@@ -2534,6 +2534,46 @@ test("benchmark runner normalizes requests and records samples", async () => {
   assert.match(job.logs[0], /Run 1:/);
 });
 
+test("benchmark runner recognizes vLLM 0.28 reasoning stream tokens", async () => {
+  const encoder = new TextEncoder();
+  const runner = core.createBenchmarkRunner({
+    defaultPort: 8000,
+    defaultPrompt: "think",
+    runtimeLabel: "vLLM",
+    requestDetail: "reasoning stream",
+    getRunningModelSummary: async () => ({
+      container: { running: true },
+      endpoint: { port: 8000 },
+      models: [{ id: "model-a" }],
+    }),
+    getHeaders: () => ({}),
+    fetchImpl: async () => ({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"reasoning":"thinking"}}]}\n\n'));
+          controller.enqueue(encoder.encode('data: {"usage":{"prompt_tokens":3,"completion_tokens":2},"choices":[]}\n\n'));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      }),
+    }),
+    appendLog: () => {},
+    setJobProgress: () => {},
+    finishJob: () => {},
+  });
+
+  const result = await runner.runBenchmarkJob({ logs: [], meta: {} }, {
+    requests: 1,
+    maxTokens: 16,
+    stream: true,
+  });
+
+  assert.equal(result.successfulRequests, 1);
+  assert.equal(result.samples[0].outputTokens, 2);
+  assert.equal(result.samples[0].preview, "thinking");
+});
+
 test("model route registrar wires shared and optional model download endpoints", async () => {
   const routes = new Map();
   const app = {

@@ -40,7 +40,7 @@
 - FP8 主模型：`D:\AI\models\Qwen-Qwen3.8-27B-FP8`。
 - NVFP4 主模型：`D:\AI\models\unsloth-Qwen3.8-27B-NVFP4`。
 - DSpark draft：`D:\AI\models\RadixArk-Qwen3.8-27B-DSpark`，约 2.71 GiB，配置架构必须是 `DSparkDraftModel`。
-- vLLM 镜像固定到本机已验证 digest `sha256:4a2f33a884222f7049b983263ad9976f89452bb81affecf5b67d89ad35c1bc31`；镜像内 vLLM `0.1.dev19754+g3a0914114`、PyTorch 2.13.0、Transformers 5.15.0、CUDA 13.0。
+- vLLM 镜像固定到本机已验证的 Linux amd64 digest `sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635`；镜像内 vLLM `0.28.0`、PyTorch 2.13.0、Transformers 5.15.1、CUDA 13.0.2。
 - SGLang 镜像固定到 digest `sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df`；镜像内 SGLang 0.5.17、PyTorch 2.11.0、Transformers 5.12.1、CUDA 13.0。
 - 原生 MTP 不能只看 `config.json` 的 `mtp_num_hidden_layers`。管理器会读取 safetensors index/header，确认实际存在 `mtp.*` tensor 后才允许自动或显式 MTP。
 

@@ -11,14 +11,14 @@ const {
 } = require("../lib/runtime-compatibility");
 
 test("default Qwen3.8 vLLM and SGLang releases are pinned to tested amd64 digests", () => {
-  assert.equal(DEFAULT_VLLM_RELEASE.version, "0.1.dev19754+g3a0914114");
-  assert.equal(DEFAULT_VLLM_RELEASE.cudaVersion, "13.0");
+  assert.equal(DEFAULT_VLLM_RELEASE.version, "v0.28.0");
+  assert.equal(DEFAULT_VLLM_RELEASE.cudaVersion, "13.0.2");
   assert.equal(DEFAULT_VLLM_RELEASE.torchVersion, "2.13.0");
-  assert.equal(DEFAULT_VLLM_RELEASE.transformersVersion, "5.15.0");
+  assert.equal(DEFAULT_VLLM_RELEASE.transformersVersion, "5.15.1");
   assert.equal(DEFAULT_VLLM_RELEASE.platform, "linux/amd64");
   assert.equal(
     defaultVllmImageReference(),
-    "vllm/vllm-openai@sha256:4a2f33a884222f7049b983263ad9976f89452bb81affecf5b67d89ad35c1bc31",
+    "vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
   );
   assert.equal(DEFAULT_SGLANG_RELEASE.version, "0.5.17");
   assert.equal(DEFAULT_SGLANG_RELEASE.transformersVersion, "5.12.1");

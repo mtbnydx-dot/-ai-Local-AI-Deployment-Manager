@@ -75,8 +75,8 @@ const SHARED_PUBLIC_JS_DIR = path.join(__dirname, "..", "shared-public", "js");
 const ALLOW_REMOTE_MANAGEMENT = process.env.LLAMA_MANAGER_ALLOW_REMOTE === "1";
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
-const DEFAULT_LLAMA_IMAGE = process.env.LLAMA_IMAGE_DIGEST || "ghcr.io/ggml-org/llama.cpp@sha256:2b24f0962a5cfa75f58f3fb1809bf88559ab46b23a8565f66ebaef05977943ac";
-const DEFAULT_LLAMA_IMAGE_BUILD = 10326;
+const DEFAULT_LLAMA_IMAGE = process.env.LLAMA_IMAGE_DIGEST || "ghcr.io/ggml-org/llama.cpp@sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3";
+const DEFAULT_LLAMA_IMAGE_BUILD = 10630;
 const MUSE_GLIMMER_MINIMUM_LLAMA_REVISION = "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0";
 const LAST_KNOWN_PRE_MUSE_LLAMA_BUILD = 10344;
 const DEFAULT_MUSE_LLAMA_IMAGE = "local/llama.cpp:server-cuda-muse-62bf73d";
@@ -99,13 +99,16 @@ const CONFIG = {
   ]),
   hfCli: firstExisting([
     process.env.HF_CLI,
+    defaultAiPath("venvs", "ai312", "Scripts", "hf.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "hf.exe"),
     "hf",
+    defaultAiPath("venvs", "ai312", "Scripts", "huggingface-cli.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "huggingface-cli.exe"),
     "huggingface-cli",
   ]),
   modelScopeCli: firstExisting([
     process.env.MODELSCOPE_CLI,
+    defaultAiPath("venvs", "ai312", "Scripts", "modelscope.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "modelscope.exe"),
     "modelscope",
   ]),

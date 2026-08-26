@@ -1,12 +1,12 @@
 const DEFAULT_VLLM_RELEASE = Object.freeze({
-  version: "0.1.dev19754+g3a0914114",
+  version: "v0.28.0",
   repository: "vllm/vllm-openai",
-  manifestDigest: "",
-  platformDigest: "sha256:4a2f33a884222f7049b983263ad9976f89452bb81affecf5b67d89ad35c1bc31",
+  manifestDigest: "sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14",
+  platformDigest: "sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
   platform: "linux/amd64",
-  cudaVersion: "13.0",
+  cudaVersion: "13.0.2",
   torchVersion: "2.13.0",
-  transformersVersion: "5.15.0",
+  transformersVersion: "5.15.1",
   minimumComputeCapability: "7.5",
   minimumBlackwellCudaVersion: "12.8",
   minimumDriverVersions: Object.freeze({

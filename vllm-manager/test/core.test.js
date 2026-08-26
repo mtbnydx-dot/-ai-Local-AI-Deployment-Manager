@@ -153,8 +153,8 @@ test("model-check reads local Muse Glimmer config and reports a blocking vLLM fi
     assert.equal(report.ok, false);
     const finding = report.findings.find((item) => item.title === "Muse Glimmer 尚不支持 vLLM");
     assert.equal(finding?.severity, "fail");
-    assert.match(finding.detail, /vLLM 0\.1\.dev19754\+g3a0914114/);
-    assert.match(finding.detail, /Transformers 5\.15\.0/);
+    assert.match(finding.detail, /vLLM v0\.28\.0/);
+    assert.match(finding.detail, /Transformers 5\.15\.1/);
     assert.match(finding.detail, /llama-manager/);
     assert.match(finding.detail, /GGUF/);
   } finally {
@@ -163,7 +163,7 @@ test("model-check reads local Muse Glimmer config and reports a blocking vLLM fi
 });
 
 test("runtime image metadata declares the pinned Transformers versions", () => {
-  assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.image)?.transformersVersion, "5.15.0");
+  assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.image)?.transformersVersion, "5.15.1");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.sglangImage)?.version, "0.5.17");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.qwenMoeImage)?.transformersVersion, "5.12.1");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.gemmaImage)?.transformersVersion, "5.10.2");
@@ -189,7 +189,7 @@ test("model-check reports an explicit warning when the Muse risk override is ena
     const warning = report.findings.find((item) => item.title === "Muse Glimmer 高风险绕过已启用");
     assert.equal(warning?.severity, "warn");
     assert.match(warning.detail, /VLLM_ALLOW_MUSE_GLIMMER=1/);
-    assert.match(warning.detail, /Transformers 5\.15\.0/);
+    assert.match(warning.detail, /Transformers 5\.15\.1/);
     assert.equal(report.findings.some((item) => item.title === "Muse Glimmer 尚不支持 vLLM" && item.severity === "fail"), false);
   } finally {
     if (previous === undefined) delete process.env.VLLM_ALLOW_MUSE_GLIMMER;

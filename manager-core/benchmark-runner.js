@@ -156,7 +156,11 @@ function createBenchmarkRunner(options = {}) {
         if (data.usage) usage = data.usage;
         const delta = data.choices?.[0]?.delta || {};
         const fragment = typeof delta.content === "string" ? delta.content : "";
-        if (!firstTokenAt && (fragment || delta.tool_calls || delta.reasoning_content)) firstTokenAt = Date.now();
+        const reasoningFragment = typeof delta.reasoning_content === "string"
+          ? delta.reasoning_content
+          : (typeof delta.reasoning === "string" ? delta.reasoning : "");
+        if (!firstTokenAt && (fragment || reasoningFragment || delta.tool_calls)) firstTokenAt = Date.now();
+        content += reasoningFragment;
         content += fragment;
       }
       if (done) break;

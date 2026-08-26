@@ -110,18 +110,22 @@ const CONFIG = {
   ]),
   hfCli: firstExisting([
     process.env.HF_CLI,
+    defaultAiPath("venvs", "ai312", "Scripts", "hf.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "hf.exe"),
     "hf",
+    defaultAiPath("venvs", "ai312", "Scripts", "huggingface-cli.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "huggingface-cli.exe"),
     "huggingface-cli",
   ]),
   modelScopeCli: firstExisting([
     process.env.MODELSCOPE_CLI,
+    defaultAiPath("venvs", "ai312", "Scripts", "modelscope.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "modelscope.exe"),
     "modelscope",
   ]),
   pythonExe: firstExisting([
     process.env.PYTHON_EXE,
+    defaultAiPath("venvs", "ai312", "Scripts", "python.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "python.exe"),
     "python",
   ]),

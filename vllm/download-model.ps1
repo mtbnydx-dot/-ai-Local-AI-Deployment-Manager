@@ -42,6 +42,8 @@ $env:HUGGINGFACE_HUB_CACHE = Join-Path $HfCache "hub"
 
 $hf = Resolve-CommandOrPath @(
     $env:HF_CLI,
+    (Join-Path $repoRoot "venvs\ai312\Scripts\hf.exe"),
+    (Join-Path $repoRoot "venvs\ai312\Scripts\huggingface-cli.exe"),
     (Join-Path $repoRoot "venvs\ai311\Scripts\hf.exe"),
     (Join-Path $repoRoot "venvs\ai311\Scripts\huggingface-cli.exe"),
     "hf",
