@@ -22,7 +22,7 @@ This is a local AI service control panel for high-end personal workstations and 
 - **多模型舰队**：聚合 vLLM 与 llama.cpp 的主实例和并行实例，提供显存账本、能力标签、规划空槽和文本/视觉/音频/Embedding/Rerank 自动路由；不会擅自停止正在服务的模型。
 - **vLLM 管理器**：下载模型、启动 vLLM 容器、OpenAI/Claude 兼容接口、工具调用桥接、上下文压缩、统计和日志。
 - **llama.cpp 管理器**：管理 GGUF 模型，重点支持异构双卡、GPU layers、tensor split、长上下文和 RAM fallback。
-- **TTS 语音平台**：聚合 Chatterbox、Qwen3-TTS、Fish、Step-Audio 及外部 API，引擎状态和网页入口统一显示在 `service-entry`，同时提供 OpenAI Audio 兼容接口。
+- **TTS 语音平台**：聚合 Chatterbox、Qwen3-TTS、Fish、Step-Audio 及外部 API，提供响应式创作台、音色库、多引擎异步队列、持久化历史和 OpenAI Audio 兼容接口，并统一显示在 `service-entry`。
 - **模型下载**：支持 Hugging Face / ModelScope 链接解析、在线模型搜索、量化筛选、下载进度、暂停、继续和取消。
 - **显存估算**：按模型参数量、量化精度、上下文长度、KV cache、GPU 空闲显存和多卡模式估算显存风险。
 - **多客户端服务**：对 OpenWebUI、Claude/Cowork、ccswitch、OpenCode 和 OpenAI-compatible SDK 提供统一接入。
@@ -250,7 +250,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 - **Multi-model fleet**: aggregates primary and parallel vLLM/llama.cpp instances with a deduplicated VRAM ledger, capability tags, planning slots, and automatic text/vision/audio/embedding/rerank routing without stopping resident models.
 - **vLLM manager**: model download, Docker launch, OpenAI/Claude-compatible APIs, tool-call bridging, context compression, stats, and logs.
 - **llama.cpp manager**: GGUF model management with heterogeneous GPU support, GPU layers, tensor split, long context, and RAM fallback.
-- **TTS platform**: Chatterbox, Qwen3-TTS, Fish, Step-Audio, and external API engines behind the unified entrypoint, with an OpenAI Audio-compatible API.
+- **TTS platform**: Chatterbox, Qwen3-TTS, Fish, Step-Audio, and external API engines behind the unified entrypoint, with a responsive studio, voice library, multi-engine job queue, persistent history, and an OpenAI Audio-compatible API.
 - **Model downloads**: Hugging Face / ModelScope link parsing, remote search, quantization filters, progress bars, pause/resume/cancel.
 - **VRAM estimation**: estimates memory risk from model size, quantization, context length, KV cache, free GPU memory, and multi-GPU mode.
 - **Client serving**: unified access for OpenWebUI, Claude/Cowork, ccswitch, OpenCode, and OpenAI-compatible clients.

@@ -33,6 +33,7 @@ const BILLING_DB_FILE = process.env.AI_BILLING_DB || path.join(ROOT, "data", "pl
 const FLEET_API_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_FLEET_MAX_BODY_BYTES, 1024 * 1024, 64 * 1024, 4 * 1024 * 1024);
 const GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_MAX_BODY_BYTES, 32 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
 const TTS_GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_TTS_MAX_BODY_BYTES, 16 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
+const TTS_UI_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
 // A JSON body exists simultaneously as stream chunks, a concatenated Buffer,
 // a UTF-8 string and parsed objects. Account conservatively for that real peak
 // instead of treating one raw byte as one byte of process memory.
@@ -756,8 +757,8 @@ async function proxyTtsGatewayRequest(req, res, url) {
     });
     const responseHeaders = buildResponseHeaders(upstream.headers, req);
     if (isTtsUiShellRequest(req, route)) {
-      responseHeaders["content-security-policy"] = "default-src 'self'; connect-src 'self'; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'none'";
-      responseHeaders["permissions-policy"] = "microphone=(self)";
+      responseHeaders["content-security-policy"] = TTS_UI_CSP;
+      responseHeaders["permissions-policy"] = "camera=(), microphone=(self), geolocation=()";
     }
     res.writeHead(upstream.status, responseHeaders);
     res.once("finish", () => {
@@ -1790,6 +1791,7 @@ function shutdownSoon(options = {}) {
 
 module.exports = {
   MANAGERS,
+  TTS_UI_CSP,
   buildEntryGatewayAccessEntry,
   buildEntryGatewayUrls,
   buildFleetRouteRequest,

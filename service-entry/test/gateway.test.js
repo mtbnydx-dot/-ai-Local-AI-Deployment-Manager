@@ -59,6 +59,13 @@ test("maps TTS gateway routes without allowing path traversal", () => {
   );
 });
 
+test("TTS UI policy permits only bundled scripts and styles", () => {
+  assert.match(entry.TTS_UI_CSP, /script-src 'self'/);
+  assert.match(entry.TTS_UI_CSP, /style-src 'self'/);
+  assert.match(entry.TTS_UI_CSP, /object-src 'none'/);
+  assert.doesNotMatch(entry.TTS_UI_CSP, /unsafe-inline/);
+});
+
 test("TTS proxy strips client credentials and adds only the internal prefix", () => {
   const original = process.env.TTS_UPSTREAM_API_KEY;
   delete process.env.TTS_UPSTREAM_API_KEY;

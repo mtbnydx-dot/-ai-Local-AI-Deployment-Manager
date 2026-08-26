@@ -10,6 +10,7 @@ if exist "%ROOT%search-gateway\server.js" (
 )
 call :check "tests\frontend-smoke.spec.cjs" || exit /b 1
 call :check "tests\connection-status.spec.cjs" || exit /b 1
+call :check "tts-platform\gateway\static\app.js" || exit /b 1
 call :check "platform-mcp\scripts\validate-live.mjs" || exit /b 1
 call :checkps1 "build-github-release.ps1" || exit /b 1
 call :checkps1 "scripts\check-powershell-syntax.ps1" || exit /b 1
@@ -27,9 +28,15 @@ call :checkps1 "tts-platform\scripts\start_fish.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\start_step_docker.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\status.ps1" || exit /b 1
 call :checkpy "tts-platform\gateway\main.py" || exit /b 1
+call :checkpy "tts-platform\gateway\tts_config.py" || exit /b 1
+call :checkpy "tts-platform\gateway\tts_schemas.py" || exit /b 1
+call :checkpy "tts-platform\gateway\tts_storage.py" || exit /b 1
+call :checkpy "tts-platform\gateway\tts_services.py" || exit /b 1
+call :checkpy "tts-platform\gateway\tts_jobs.py" || exit /b 1
 call :checkpy "tts-platform\workers\chatterbox_worker.py" || exit /b 1
 call :checkpy "tts-platform\workers\qwen_worker.py" || exit /b 1
 call :checkpy "tts-platform\workers\step_server.py" || exit /b 1
+call :testpy || exit /b 1
 call :test "manager-core" || exit /b 1
 call :test "service-entry" || exit /b 1
 call :test "platform-mcp" || exit /b 1
@@ -71,6 +78,20 @@ if not defined PYEXE (
 echo.
 echo == Syntax check %FILE% ==
 "%PYEXE%" -c "import ast,pathlib; ast.parse(pathlib.Path(r'%ROOT%%FILE%').read_text(encoding='utf-8'))"
+exit /b %ERRORLEVEL%
+
+:testpy
+set "PYEXE="
+if defined TTS_RUNTIME_ROOT if exist "%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe" set "PYEXE=%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe"
+if not defined PYEXE if exist "E:\tts_runtime\envs\gateway\Scripts\python.exe" set "PYEXE=E:\tts_runtime\envs\gateway\Scripts\python.exe"
+if not defined PYEXE where python >nul 2>nul && set "PYEXE=python"
+if not defined PYEXE (
+  echo Skipping TTS Python tests: Python not found.
+  exit /b 0
+)
+echo.
+echo == Testing tts-platform Python ==
+"%PYEXE%" -m unittest discover -s "%ROOT%tts-platform\tests" -p "test_*.py" -v
 exit /b %ERRORLEVEL%
 
 :test

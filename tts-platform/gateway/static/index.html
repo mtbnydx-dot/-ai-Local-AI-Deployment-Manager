@@ -1,339 +1,228 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>语音克隆聚合平台</title>
-<style>
-  :root {
-    --bg: #0f1420; --card: #171e2e; --card2: #1e2740; --line: #2a3550;
-    --text: #e8ecf5; --muted: #8b96ad; --accent: #4f8cff; --accent2: #38d39f;
-    --err: #ff6b6b; --warn: #ffb454;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; padding: 24px; }
-  .wrap { max-width: 980px; margin: 0 auto; }
-  h1 { font-size: 22px; margin-bottom: 4px; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
-  .card h2 { font-size: 15px; margin-bottom: 12px; color: var(--accent); }
-  .card h2 .hint { color: var(--muted); font-weight: normal; font-size: 12px; margin-left: 8px; }
-  textarea { width: 100%; background: var(--card2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 14px; min-height: 80px; resize: vertical; font-family: inherit; }
-  input[type=text] { background: var(--card2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
-  button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer; }
-  button:hover { filter: brightness(1.1); }
-  button:disabled { background: #33405e; color: var(--muted); cursor: not-allowed; }
-  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
-  button.rec { background: var(--err); }
-  button.small { padding: 5px 10px; font-size: 12px; }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .engines { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
-  .engine { background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; cursor: pointer; }
-  .engine.off { opacity: 0.45; cursor: not-allowed; }
-  .engine input { accent-color: var(--accent); width: 16px; height: 16px; }
-  .engine .nm { font-size: 13px; }
-  .engine .st { font-size: 11px; color: var(--muted); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .dot.on { background: var(--accent2); } .dot.off { background: var(--err); }
-  .voice { background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 8px; display: flex; align-items: center; gap: 10px; }
-  .voice.sel { border-color: var(--accent); }
-  .voice .nm { font-size: 13px; flex: 1; }
-  .result { background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 10px; }
-  .result .hd { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px; }
-  .result audio { width: 100%; height: 36px; }
-  .tag { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: #24314f; color: var(--accent); }
-  .msg { font-size: 13px; margin-top: 8px; }
-  .msg.err { color: var(--err); } .msg.ok { color: var(--accent2); } .msg.warn { color: var(--warn); }
-  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--muted); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  label.fld { font-size: 12px; color: var(--muted); display: block; margin: 10px 0 4px; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#090d12">
+  <title>语音工作台</title>
+  <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div class="wrap">
-  <h1>🎙️ 语音克隆聚合平台</h1>
-  <div class="sub">中文输入 → 英文翻译 → 用你的声音说英文 ｜ Fish S2 Pro · Chatterbox V3 · Step-Audio-EditX · Qwen3-TTS · 小米 MiMo API</div>
+  <svg class="svg-sprite" aria-hidden="true">
+    <symbol id="i-create" viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4M3 22h18"/></symbol>
+    <symbol id="i-voice" viewBox="0 0 24 24"><path d="M12 3v18M8 7v10M4 10v4M16 7v10M20 10v4"/></symbol>
+    <symbol id="i-task" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-api" viewBox="0 0 24 24"><path d="m8 5-5 7 5 7M16 5l5 7-5 7M14 3l-4 18"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8A7 7 0 0 1 18.4 6.4L20 12M4 12l1.6 5.6A7 7 0 0 0 17.9 16"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4ZM13.5 6.5l4 4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 24 24"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h2l2-6 3 12 3-15 3 13 2-4h3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
+  </svg>
 
-  <div class="card">
-    <h2>① 引擎状态 <span class="hint">本地引擎需先启动对应 worker（见 README）</span>
-      <button class="ghost small" style="float:right" onclick="loadEngines()">刷新</button></h2>
-    <div class="engines" id="engines"></div>
-  </div>
-
-  <div class="card">
-    <h2>② 我的音色 <span class="hint">录一段 10~20 秒的中文朗读，并填写朗读的文字（Step 引擎必填，其他引擎也会更准）</span></h2>
-    <div class="row">
-      <button id="recBtn" onclick="toggleRec()">🎤 开始录音</button>
-      <span>或</span>
-      <input type="file" id="fileInput" accept="audio/*" style="color:var(--muted);font-size:13px">
-      <span id="recState" class="msg"></span>
-    </div>
-    <label class="fld">音色名称</label>
-    <input type="text" id="voiceName" value="我的声音" style="width:240px">
-    <label class="fld">参考音频的文字内容（你朗读的原文）</label>
-    <textarea id="refText" placeholder="例如：大家好，我叫……今天我来介绍一下我的摄影作品。"></textarea>
-    <div class="row" style="margin-top:10px">
-      <button onclick="saveVoice()" id="saveVoiceBtn">保存音色</button>
-      <span id="voiceMsg" class="msg"></span>
-    </div>
-    <div id="voiceList"></div>
-  </div>
-
-  <div class="card">
-    <h2>③ 文本 <span class="hint">输入中文 → 翻译 → 可手动修改英文后再合成</span></h2>
-    <label class="fld">中文原文</label>
-    <textarea id="zhText" placeholder="输入你想说的中文……"></textarea>
-    <div class="row" style="margin-top:10px">
-      <button onclick="doTranslate()" id="transBtn">翻译成英文 →</button>
-      <span id="transMsg" class="msg"></span>
-    </div>
-    <label class="fld">英文文本（最终合成内容，可编辑）</label>
-    <textarea id="enText" placeholder="English text to synthesize..."></textarea>
-    <div class="row" style="margin-top:8px">
-      <button class="ghost small" onclick="insertPause()">⏸ 在光标处插入停顿</button>
-      <span class="st" style="color:var(--muted);font-size:12px">停顿标记 ⏸ 所有引擎都支持（Fish 最精准）</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>④ 生成语音</h2>
-    <div class="row" style="margin-bottom:12px">
-      <div>
-        <label class="fld" style="margin-top:0">语速 <span id="speedVal">1.0×</span>（全部引擎）</label>
-        <input type="range" id="speed" min="0.5" max="1.5" step="0.05" value="1.0" style="width:200px;accent-color:var(--accent)"
-               oninput="document.getElementById('speedVal').textContent = parseFloat(this.value).toFixed(2) + '×'">
+  <div class="app-shell" id="app">
+    <header class="topbar">
+      <button class="mobile-menu icon-button" id="mobileMenu" type="button" aria-label="打开导航" aria-controls="primaryNav" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="brand-block">
+        <h1>语音工作台</h1>
+        <svg class="signal-mark" viewBox="0 0 220 32" aria-hidden="true"><path d="M1 16h42c10 0 12-12 22-12s12 24 22 24S99 8 109 8s12 16 22 16 12-20 22-20 12 24 22 24 12-12 22-12h22"/></svg>
       </div>
-      <div>
-        <label class="fld" style="margin-top:0">语气（Fish / Chatterbox / 小米）</label>
-        <select id="emotion" style="background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px">
-          <option value="">默认</option>
-          <option>开心</option><option>兴奋</option><option>平静</option>
-          <option>悲伤</option><option>生气</option><option>耳语</option>
-        </select>
+      <div class="top-status">
+        <span class="engine-summary" id="engineSummary">正在检查引擎</span>
+        <button class="button subtle" id="refreshStatus" type="button">
+          <svg><use href="#i-refresh"/></svg><span>刷新状态</span>
+        </button>
       </div>
-      <div style="flex:1;min-width:220px">
-        <label class="fld" style="margin-top:0">风格描述（仅小米引擎，可任意描述）</label>
-        <input type="text" id="style" placeholder="如：像新闻播音员一样字正腔圆 / 温柔地慢慢说" style="width:100%">
-      </div>
-    </div>
-    <div class="row">
-      <button onclick="generate()" id="genBtn" style="background:var(--accent2);color:#04120c;font-weight:600">🔊 用选中的引擎生成</button>
-      <span id="genMsg" class="msg"></span>
-    </div>
-    <div id="results"></div>
+    </header>
+
+    <nav class="primary-nav" id="primaryNav" aria-label="主导航">
+      <button class="nav-item is-active" type="button" data-view="create"><svg><use href="#i-create"/></svg><span>创建</span></button>
+      <button class="nav-item" type="button" data-view="voices"><svg><use href="#i-voice"/></svg><span>音色库</span></button>
+      <button class="nav-item" type="button" data-view="tasks"><svg><use href="#i-task"/></svg><span>任务</span><span class="nav-count" id="taskNavCount" hidden>0</span></button>
+      <button class="nav-item" type="button" data-view="history"><svg><use href="#i-history"/></svg><span>历史</span></button>
+      <button class="nav-item" type="button" data-view="api"><svg><use href="#i-api"/></svg><span>API</span></button>
+    </nav>
+
+    <main class="main-area">
+      <section class="view is-active" data-view-panel="create" aria-labelledby="createTitle">
+        <h2 class="sr-only" id="createTitle">创建语音</h2>
+        <div class="create-layout">
+          <div class="creation-canvas">
+            <section class="panel editor-panel" aria-labelledby="textSectionTitle">
+              <h3 class="sr-only" id="textSectionTitle">翻译与合成文本</h3>
+              <div class="editor-grid">
+                <div class="field-block text-editor">
+                  <div class="field-heading"><label for="sourceText">中文原文</label><span id="sourceCount">0 / 12000</span></div>
+                  <textarea id="sourceText" maxlength="12000" placeholder="输入需要翻译的中文内容……" spellcheck="true"></textarea>
+                </div>
+                <div class="editor-actions">
+                  <button class="button primary" id="translateButton" type="button"><span>翻译</span><span aria-hidden="true">⇄</span></button>
+                  <button class="button subtle" id="insertPause" type="button"><span>插入停顿</span><span class="pause-symbol" aria-hidden="true">Ⅱ</span></button>
+                </div>
+                <div class="field-block text-editor">
+                  <div class="field-heading"><label for="targetText">英文文本</label><span id="targetCount">0 / 10000</span></div>
+                  <textarea id="targetText" maxlength="10000" placeholder="English text to synthesize…" spellcheck="true"></textarea>
+                </div>
+              </div>
+              <p class="inline-status" id="translationStatus" aria-live="polite"></p>
+            </section>
+
+            <section class="panel" aria-labelledby="voicePickerTitle">
+              <div class="section-heading">
+                <div><h3 id="voicePickerTitle">参考音色</h3><p>选择已保存音色，或录音、上传新的参考音频。</p></div>
+                <button class="button subtle compact" id="addVoiceButton" type="button"><svg><use href="#i-plus"/></svg><span>添加音色</span></button>
+              </div>
+              <div class="voice-picker horizontal-list" id="voicePicker" aria-live="polite"></div>
+            </section>
+
+            <section class="panel" aria-labelledby="enginePickerTitle">
+              <div class="section-heading">
+                <div><h3 id="enginePickerTitle">合成引擎</h3><p id="engineHelp">最多同时选择 3 个引擎进行对比。</p></div>
+              </div>
+              <div class="engine-grid" id="engineGrid" aria-live="polite"></div>
+              <div class="engine-warning" id="engineWarning" hidden>
+                <span><svg><use href="#i-refresh"/></svg><span>部分引擎不可用，刷新后可重试。</span></span>
+                <button class="text-button" type="button" data-action="refresh-engines">重试</button>
+              </div>
+            </section>
+
+            <section class="panel controls-panel" aria-labelledby="controlsTitle">
+              <h3 class="sr-only" id="controlsTitle">表现力控制</h3>
+              <div class="control-column speed-control">
+                <div class="field-heading"><label for="speedControl">语速</label><output id="speedOutput">1.00×</output></div>
+                <input type="range" id="speedControl" min="0.5" max="2" step="0.05" value="1">
+                <div class="range-scale" aria-hidden="true"><span>0.5</span><span>1.0</span><span>1.5</span><span>2.0</span></div>
+                <button class="text-button reset-control" id="resetControls" type="button">重置参数</button>
+              </div>
+              <div class="control-column emotion-control">
+                <div class="field-heading"><span>语气</span><span id="emotionValue">自然</span></div>
+                <div class="emotion-options" id="emotionOptions" role="radiogroup" aria-label="语气">
+                  <button type="button" class="emotion-button is-active" data-emotion="" role="radio" aria-checked="true">自然</button>
+                  <button type="button" class="emotion-button" data-emotion="开心" role="radio" aria-checked="false">开心</button>
+                  <button type="button" class="emotion-button" data-emotion="兴奋" role="radio" aria-checked="false">兴奋</button>
+                  <button type="button" class="emotion-button" data-emotion="平静" role="radio" aria-checked="false">平静</button>
+                  <button type="button" class="emotion-button" data-emotion="悲伤" role="radio" aria-checked="false">悲伤</button>
+                  <button type="button" class="emotion-button" data-emotion="耳语" role="radio" aria-checked="false">耳语</button>
+                </div>
+                <div class="intensity-row"><label for="intensityControl">表达强度</label><input type="range" id="intensityControl" min="0" max="1" step="0.05" value="0.5"><output id="intensityOutput">50%</output></div>
+              </div>
+              <div class="control-column style-control">
+                <div class="field-heading"><label for="styleText">风格描述</label><span id="styleCount">0 / 500</span></div>
+                <textarea id="styleText" maxlength="500" placeholder="例如：广播风格、亲切温暖、专业正式……"></textarea>
+              </div>
+            </section>
+
+            <div class="generate-bar">
+              <button class="generate-button" id="generateButton" type="button">
+                <svg><use href="#i-wave"/></svg><span id="generateLabel">生成语音</span><span class="shortcut">Ctrl ↵</span>
+              </button>
+              <p id="createStatus" class="inline-status" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <aside class="operation-rail" aria-label="运行状态">
+            <section class="rail-section">
+              <div class="rail-heading"><h3>任务队列</h3><button class="icon-button" type="button" data-action="open-view" data-view="tasks" aria-label="查看全部任务"><svg><use href="#i-chevron"/></svg></button></div>
+              <div id="taskRail" class="rail-list"></div>
+            </section>
+            <section class="rail-section recent-section">
+              <div class="rail-heading"><h3>最近生成</h3><button class="icon-button" type="button" data-action="refresh-history" aria-label="刷新生成历史"><svg><use href="#i-refresh"/></svg></button></div>
+              <div id="recentRail" class="rail-list"></div>
+              <button class="rail-link" type="button" data-action="open-view" data-view="history">查看全部历史<svg><use href="#i-chevron"/></svg></button>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view page-view" data-view-panel="voices" aria-labelledby="voicesTitle" hidden>
+        <div class="page-heading"><div><h2 id="voicesTitle">音色库</h2><p>管理参考音色、文字稿和试听文件。</p></div><button class="button primary" type="button" data-action="add-voice"><svg><use href="#i-plus"/></svg><span>添加音色</span></button></div>
+        <div class="library-grid" id="voiceLibrary"></div>
+      </section>
+
+      <section class="view page-view" data-view-panel="tasks" aria-labelledby="tasksTitle" hidden>
+        <div class="page-heading"><div><h2 id="tasksTitle">任务队列</h2><p>查看排队、运行、失败与已完成任务。</p></div><button class="button subtle" type="button" data-action="refresh-tasks"><svg><use href="#i-refresh"/></svg><span>刷新</span></button></div>
+        <div class="filter-row" id="taskFilters" role="group" aria-label="任务筛选">
+          <button class="filter-button is-active" type="button" data-job-filter="">全部</button>
+          <button class="filter-button" type="button" data-job-filter="running">运行中</button>
+          <button class="filter-button" type="button" data-job-filter="queued">排队</button>
+          <button class="filter-button" type="button" data-job-filter="failed">失败</button>
+          <button class="filter-button" type="button" data-job-filter="succeeded">已完成</button>
+        </div>
+        <div class="task-list" id="taskList"></div>
+      </section>
+
+      <section class="view page-view" data-view-panel="history" aria-labelledby="historyTitle" hidden>
+        <div class="page-heading"><div><h2 id="historyTitle">生成历史</h2><p>搜索、筛选、试听和下载本机生成结果。</p></div><button class="button subtle" type="button" data-action="refresh-history"><svg><use href="#i-refresh"/></svg><span>刷新</span></button></div>
+        <div class="history-toolbar">
+          <label class="search-field"><span class="sr-only">搜索生成历史</span><svg><use href="#i-search"/></svg><input id="historySearch" type="search" placeholder="搜索文本或文件名" autocomplete="off"></label>
+          <label class="select-field"><span class="sr-only">按引擎筛选</span><select id="historyEngine"><option value="">全部引擎</option></select></label>
+          <span class="history-total" id="historyTotal"></span>
+        </div>
+        <div class="history-list" id="historyList"></div>
+        <button class="button subtle load-more" id="historyMore" type="button" hidden>加载更多</button>
+      </section>
+
+      <section class="view page-view" data-view-panel="api" aria-labelledby="apiTitle" hidden>
+        <div class="page-heading"><div><h2 id="apiTitle">API 接入</h2><p>OpenAI Audio 兼容接口和本地平台能力。</p></div></div>
+        <div class="api-layout">
+          <section class="panel api-panel"><h3>OpenAI 兼容地址</h3><div class="copy-field"><code id="openAiBase"></code><button class="icon-button" type="button" data-copy-target="openAiBase" aria-label="复制地址"><svg><use href="#i-copy"/></svg></button></div><p>支持 <code>GET /models</code> 与 <code>POST /audio/speech</code>，当前输出格式为 WAV。</p></section>
+          <section class="panel api-panel"><h3>调用示例</h3><pre id="apiExample"></pre><button class="button subtle compact" type="button" data-copy-target="apiExample"><svg><use href="#i-copy"/></svg><span>复制示例</span></button></section>
+          <section class="panel api-panel"><h3>模型与能力</h3><div id="apiModels" class="api-model-list"></div></section>
+        </div>
+      </section>
+    </main>
+
+    <footer class="connection-bar"><span id="connectionEndpoint">统一入口</span><span class="connection-state"><span class="status-dot is-online"></span><span id="connectionLabel">正在连接</span></span></footer>
   </div>
-</div>
 
-<script>
-let engines = [], selectedEngines = new Set(), voices = [], selectedVoice = null;
-let mediaRecorder = null, chunks = [], recordedBlob = null;
-let sessionApiKey = sessionStorage.getItem('ttsGatewayApiKey') || '';
+  <dialog class="modal" id="voiceDialog" aria-labelledby="voiceDialogTitle">
+    <form method="dialog" class="modal-shell" id="voiceForm">
+      <div class="modal-heading"><div><h2 id="voiceDialogTitle">添加参考音色</h2><p id="voiceDialogHint">录制 10–20 秒，或上传清晰的单人语音。</p></div><button class="icon-button" type="button" data-dialog-close="voiceDialog" aria-label="关闭"><svg><use href="#i-x"/></svg></button></div>
+      <div class="voice-source" id="voiceSourceControls">
+        <button class="record-button" id="recordButton" type="button"><svg><use href="#i-mic"/></svg><span>开始录音</span></button>
+        <span class="source-divider">或</span>
+        <label class="file-button"><input type="file" id="voiceFile" accept="audio/*"><span>选择音频文件</span></label>
+        <span class="record-time" id="recordTime">00:00</span>
+      </div>
+      <audio id="voicePreview" class="voice-preview" controls hidden></audio>
+      <label class="modal-field"><span>音色名称</span><input type="text" id="voiceName" maxlength="120" value="我的声音" required></label>
+      <label class="modal-field"><span>参考音频文字</span><textarea id="voiceTranscript" maxlength="4000" placeholder="准确填写录音中朗读的文字，Step-Audio 必填。"></textarea></label>
+      <p class="inline-status" id="voiceFormStatus" aria-live="polite"></p>
+      <div class="modal-actions"><button class="button subtle" type="button" data-dialog-close="voiceDialog">取消</button><button class="button primary" id="saveVoiceButton" type="submit">保存音色</button></div>
+    </form>
+  </dialog>
 
-const pageBase = new URL(
-  window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/',
-  window.location.origin,
-);
+  <dialog class="modal compact-modal" id="confirmDialog" aria-labelledby="confirmTitle">
+    <form method="dialog" class="modal-shell">
+      <div class="modal-heading"><div><h2 id="confirmTitle">确认操作</h2><p id="confirmMessage"></p></div></div>
+      <div class="modal-actions"><button class="button subtle" value="cancel">取消</button><button class="button danger" value="confirm">确认删除</button></div>
+    </form>
+  </dialog>
 
-function apiUrl(path) {
-  return new URL(String(path || '').replace(/^\/+/, ''), pageBase).toString();
-}
+  <dialog class="modal compact-modal" id="authDialog" aria-labelledby="authTitle">
+    <form method="dialog" class="modal-shell" id="authForm">
+      <div class="modal-heading"><div><h2 id="authTitle">输入客户端 API Key</h2><p>仅保存在当前标签会话，不会写入页面或本地文件。</p></div></div>
+      <label class="modal-field"><span>API Key</span><input type="password" id="authKey" autocomplete="off" required></label>
+      <div class="modal-actions"><button class="button subtle" type="button" data-dialog-close="authDialog">取消</button><button class="button primary" value="confirm">继续</button></div>
+    </form>
+  </dialog>
 
-function resourceUrl(path) {
-  const value = String(path || '');
-  return value.startsWith('/') ? new URL(value, window.location.origin).toString() : apiUrl(value);
-}
-
-async function apiFetch(path, options = {}, allowPrompt = true) {
-  const headers = new Headers(options.headers || {});
-  if (sessionApiKey) headers.set('Authorization', `Bearer ${sessionApiKey}`);
-  const response = await fetch(resourceUrl(path), { ...options, headers });
-  if (response.status === 401 && allowPrompt) {
-    const entered = window.prompt('统一入口需要客户端 API Key。本页只在当前标签会话中保存。', '');
-    if (entered && entered.trim()) {
-      sessionApiKey = entered.trim();
-      sessionStorage.setItem('ttsGatewayApiKey', sessionApiKey);
-      return apiFetch(path, options, false);
-    }
-  }
-  return response;
-}
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, char => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[char]);
-}
-
-async function loadProtectedAudio(audio, path) {
-  const response = await apiFetch(path);
-  if (!response.ok) throw new Error(`音频读取失败: HTTP ${response.status}`);
-  const objectUrl = URL.createObjectURL(await response.blob());
-  audio.src = objectUrl;
-  audio.addEventListener('emptied', () => URL.revokeObjectURL(objectUrl), { once: true });
-  return objectUrl;
-}
-
-async function loadEngines() {
-  const el = document.getElementById('engines');
-  el.innerHTML = '<span class="spinner"></span>';
-  try {
-    const response = await apiFetch('api/engines');
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    engines = await response.json();
-  } catch (e) { el.innerHTML = '<span class="msg err">无法连接网关</span>'; return; }
-  el.innerHTML = '';
-  for (const en of engines) {
-    const div = document.createElement('div');
-    div.className = 'engine' + (en.available ? '' : ' off');
-    const checked = en.available && selectedEngines.has(en.id);
-    div.innerHTML = `<input type="checkbox" ${checked?'checked':''} ${en.available?'':'disabled'}>
-      <span class="dot ${en.available?'on':'off'}"></span>
-      <div><div class="nm">${escapeHtml(en.name)}</div>
-      <div class="st">${en.available ? '可用' : '未启动 / 未配置'}</div></div>`;
-    if (en.available) {
-      div.onclick = (ev) => {
-        const cb = div.querySelector('input');
-        if (ev.target !== cb) cb.checked = !cb.checked;
-        cb.checked ? selectedEngines.add(en.id) : selectedEngines.delete(en.id);
-      };
-    }
-    el.appendChild(div);
-  }
-}
-
-async function loadVoices() {
-  const response = await apiFetch('api/voices');
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  voices = await response.json();
-  if (voices.length && !selectedVoice) selectedVoice = voices[0].id;
-  const el = document.getElementById('voiceList');
-  el.innerHTML = '';
-  for (const v of voices) {
-    const div = document.createElement('div');
-    div.className = 'voice' + (v.id === selectedVoice ? ' sel' : '');
-    div.innerHTML = `<input type="radio" name="vsel" ${v.id===selectedVoice?'checked':''}>
-      <span class="nm">${escapeHtml(v.name)} <span style="color:var(--muted)">${v.ref_text ? '（有文字）' : '（无文字）'}</span></span>
-      <audio controls preload="none" style="height:30px;max-width:220px"></audio>
-      <button class="ghost small" onclick="delVoice('${v.id}', event)">删除</button>`;
-    div.onclick = (ev) => { if (ev.target.tagName !== 'BUTTON' && ev.target.tagName !== 'AUDIO') { selectedVoice = v.id; loadVoices(); } };
-    el.appendChild(div);
-    loadProtectedAudio(div.querySelector('audio'), `api/voices/${encodeURIComponent(v.id)}/audio`)
-      .catch(error => { div.querySelector('audio').title = error.message; });
-  }
-}
-
-async function delVoice(id, ev) {
-  ev.stopPropagation();
-  await apiFetch('api/voices/' + encodeURIComponent(id), { method: 'DELETE' });
-  if (selectedVoice === id) selectedVoice = null;
-  loadVoices();
-}
-
-async function toggleRec() {
-  const btn = document.getElementById('recBtn'), st = document.getElementById('recState');
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop(); return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    chunks = [];
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = e => chunks.push(e.data);
-    mediaRecorder.onstop = () => {
-      recordedBlob = new Blob(chunks, { type: mediaRecorder.mimeType });
-      stream.getTracks().forEach(t => t.stop());
-      btn.textContent = '🎤 重新录音'; btn.classList.remove('rec');
-      st.textContent = `已录制 ${(recordedBlob.size/1024).toFixed(0)} KB，点击"保存音色"`; st.className = 'msg ok';
-    };
-    mediaRecorder.start();
-    btn.textContent = '⏹ 停止录音'; btn.classList.add('rec');
-    st.textContent = '录音中……建议 10~20 秒'; st.className = 'msg warn';
-  } catch (e) { st.textContent = '无法访问麦克风: ' + e.message; st.className = 'msg err'; }
-}
-
-async function saveVoice() {
-  const msg = document.getElementById('voiceMsg');
-  const file = document.getElementById('fileInput').files[0];
-  const blob = file || recordedBlob;
-  if (!blob) { msg.textContent = '请先录音或选择音频文件'; msg.className = 'msg err'; return; }
-  const fd = new FormData();
-  fd.append('file', blob, file ? file.name : 'rec.webm');
-  fd.append('name', document.getElementById('voiceName').value || '我的声音');
-  fd.append('ref_text', document.getElementById('refText').value || '');
-  msg.innerHTML = '<span class="spinner"></span>';
-  const r = await apiFetch('api/voices', { method: 'POST', body: fd });
-  if (r.ok) {
-    const v = await r.json(); selectedVoice = v.id;
-    msg.textContent = '已保存 ✓'; msg.className = 'msg ok';
-    recordedBlob = null; document.getElementById('fileInput').value = '';
-    loadVoices();
-  } else {
-    msg.textContent = '保存失败: ' + (await r.text()).slice(0, 200); msg.className = 'msg err';
-  }
-}
-
-async function doTranslate() {
-  const msg = document.getElementById('transMsg'), btn = document.getElementById('transBtn');
-  const text = document.getElementById('zhText').value.trim();
-  if (!text) { msg.textContent = '请先输入中文'; msg.className = 'msg err'; return; }
-  btn.disabled = true; msg.innerHTML = '<span class="spinner"></span> 翻译中……'; msg.className = 'msg';
-  try {
-    const r = await apiFetch('api/translate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
-    const data = await r.json();
-    if (r.ok) { document.getElementById('enText').value = data.english; msg.textContent = `完成（${data.model}）`; msg.className = 'msg ok'; }
-    else { msg.textContent = data.detail || JSON.stringify(data); msg.className = 'msg err'; }
-  } catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
-  btn.disabled = false;
-}
-
-async function generate() {
-  const msg = document.getElementById('genMsg');
-  const text = document.getElementById('enText').value.trim();
-  if (!text) { msg.textContent = '英文文本为空（先翻译或直接输入英文）'; msg.className = 'msg err'; return; }
-  if (selectedEngines.size === 0) { msg.textContent = '请至少勾选一个可用引擎'; msg.className = 'msg err'; return; }
-  const needVoice = [...selectedEngines].some(e => e !== 'qwen_api');
-  if (needVoice && !selectedVoice) { msg.textContent = '请先保存并选择一个音色'; msg.className = 'msg err'; return; }
-  msg.textContent = '';
-  const results = document.getElementById('results');
-  for (const engine of selectedEngines) {
-    const en = engines.find(x => x.id === engine);
-    const div = document.createElement('div');
-    div.className = 'result';
-    div.innerHTML = `<div class="hd"><span class="tag">${escapeHtml(en ? en.name : engine)}</span>
-      <span class="st"><span class="spinner"></span> 合成中……（首次调用要加载模型，可能等几分钟）</span></div>`;
-    results.prepend(div);
-    apiFetch('api/tts', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ engine, text, voice_id: selectedVoice, language: 'en',
-        speed: parseFloat(document.getElementById('speed').value),
-        emotion: document.getElementById('emotion').value,
-        style: document.getElementById('style').value.trim() }) })
-      .then(async r => {
-        const data = await r.json();
-        if (r.ok) {
-          const audioResponse = await apiFetch(data.url);
-          if (!audioResponse.ok) throw new Error(`音频读取失败: HTTP ${audioResponse.status}`);
-          const audioUrl = URL.createObjectURL(await audioResponse.blob());
-          div.innerHTML = `<div class="hd"><span class="tag">${escapeHtml(en ? en.name : engine)}</span>
-            <span style="color:var(--muted);font-size:12px">${(data.elapsed_ms/1000).toFixed(1)}s ·
-            <a href="${audioUrl}" download style="color:var(--accent)">下载</a></span></div>
-            <audio controls src="${audioUrl}"></audio>`;
-        } else {
-          div.innerHTML = `<div class="hd"><span class="tag">${escapeHtml(en ? en.name : engine)}</span></div>
-            <div class="msg err">${(data.detail || JSON.stringify(data)).slice(0, 400)}</div>`;
-        }
-      })
-      .catch(e => { div.innerHTML += `<div class="msg err">${e.message}</div>`; });
-  }
-}
-
-function insertPause() {
-  const ta = document.getElementById('enText');
-  const pos = ta.selectionStart ?? ta.value.length;
-  ta.value = ta.value.slice(0, pos) + ' ⏸ ' + ta.value.slice(pos);
-  ta.focus(); ta.selectionStart = ta.selectionEnd = pos + 3;
-}
-
-loadEngines(); loadVoices();
-</script>
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
+  <script src="app.js" defer></script>
 </body>
 </html>

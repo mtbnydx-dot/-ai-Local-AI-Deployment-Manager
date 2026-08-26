@@ -1,4 +1,4 @@
-# 一键启动语音克隆聚合平台：检测缺哪个服务就补哪个，全部就绪后按需打开浏览器。
+﻿# 一键启动语音克隆聚合平台：检测缺哪个服务就补哪个，全部就绪后按需打开浏览器。
 [CmdletBinding()]
 param(
     [switch]$NoBrowser,
@@ -9,7 +9,13 @@ $ErrorActionPreference = "Stop"
 $s = $PSScriptRoot
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $s ".."))
 $logRoot = Join-Path $projectRoot "logs"
+$stateRoot = Join-Path $projectRoot ".runtime"
+$gatewayPort = if ($env:TTS_GATEWAY_PORT) { [int]$env:TTS_GATEWAY_PORT } else { 7000 }
+if ($gatewayPort -lt 1 -or $gatewayPort -gt 65535) {
+    throw "TTS_GATEWAY_PORT must be between 1 and 65535."
+}
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
 
 function Test-Port($port) {
     return [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
@@ -23,16 +29,18 @@ function Start-Worker($name, $port, $script) {
         $slug = [System.IO.Path]::GetFileNameWithoutExtension($script)
         $outLog = Join-Path $logRoot "$slug.out.log"
         $errLog = Join-Path $logRoot "$slug.err.log"
-        Start-Process pwsh `
+        $process = Start-Process pwsh `
             -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $s $script) `
             -RedirectStandardOutput $outLog `
             -RedirectStandardError $errLog `
-            -WindowStyle Hidden | Out-Null
+            -WindowStyle Hidden `
+            -PassThru
+        Set-Content -LiteralPath (Join-Path $stateRoot "$slug.pid") -Value $process.Id -Encoding ascii
     }
 }
 
 Write-Host "==== 语音克隆聚合平台 ====" -ForegroundColor Cyan
-Start-Worker "网关"           7000 "start_gateway.ps1"
+Start-Worker "网关"           $gatewayPort "start_gateway.ps1"
 if (-not $GatewayOnly) {
     Start-Worker "Chatterbox V3"  7011 "start_chatterbox.ps1"
     Start-Worker "Qwen3-TTS"      7012 "start_qwen.ps1"
@@ -56,15 +64,30 @@ if (-not $GatewayOnly -and -not (Test-Port 7014)) {
 # 等网关就绪再开浏览器
 Write-Host "等待网关就绪……"
 $deadline = (Get-Date).AddSeconds(60)
+$ready = $false
+$gatewayBase = "http://127.0.0.1:$gatewayPort"
 while ((Get-Date) -lt $deadline) {
     try {
-        Invoke-RestMethod http://127.0.0.1:7000/api/engines -TimeoutSec 2 | Out-Null
+        Invoke-RestMethod "$gatewayBase/health" -TimeoutSec 2 | Out-Null
+        $ready = $true
         break
     } catch { Start-Sleep 1 }
 }
-$uiUrl = if (Test-Port 5176) { "http://127.0.0.1:5176/gateway/tts/" } else { "http://127.0.0.1:7000/" }
+if (-not $ready) {
+    $gatewayErrorLog = Join-Path $logRoot "start_gateway.err.log"
+    if (Test-Path -LiteralPath $gatewayErrorLog) {
+        Get-Content -LiteralPath $gatewayErrorLog -Tail 12 | Write-Host
+    }
+    throw "TTS gateway did not become healthy within 60 seconds: $gatewayBase/health"
+}
+$uiUrl = if ($env:TTS_PUBLIC_URL) {
+    $env:TTS_PUBLIC_URL
+} elseif ($gatewayPort -eq 7000 -and (Test-Port 5176)) {
+    "http://127.0.0.1:5176/gateway/tts/"
+} else {
+    "$gatewayBase/"
+}
 if (-not $NoBrowser) {
     Start-Process $uiUrl
 }
 Write-Host "完成！界面: $uiUrl （引擎第一次生成时才加载模型，首次会慢一点）" -ForegroundColor Cyan
-Start-Sleep 3
