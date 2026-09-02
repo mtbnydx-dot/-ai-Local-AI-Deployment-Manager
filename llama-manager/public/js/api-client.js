@@ -31,6 +31,7 @@
       const error = new Error(body && body.error ? body.error : text || response.statusText);
       error.status = response.status;
       error.code = body && body.code ? body.code : null;
+      if (body && body.existingJobId) error.existingJobId = body.existingJobId;
       throw error;
     }
     return body;

@@ -157,6 +157,11 @@ const billingPendingQueue = core.createBillingPendingQueue({
   settle: (...args) => billingClient.settle(...args),
 });
 
+// 状态热路径（docker CLI、nvidia-smi、容器 /metrics）统一走短 TTL 单飞缓存：
+// 多个页面同时轮询时只保留一份真实探测，Windows 上省掉大量进程 spawn。
+const RUNTIME_SNAPSHOT_CACHE_MS = Math.max(500, Number(process.env.MANAGER_STATUS_CACHE_MS || 2000));
+const runtimeSnapshotCache = core.createSingleFlightCache({ ttlMs: RUNTIME_SNAPSHOT_CACHE_MS });
+
 const dockerRuntime = createDockerRuntime({
   dockerExe: CONFIG.dockerExe,
   dockerDesktopExe: CONFIG.dockerDesktopExe,
@@ -167,15 +172,21 @@ const dockerRuntime = createDockerRuntime({
 const {
   execFileAsync,
   docker,
-  getDockerVersion,
+  getDockerVersion: getDockerVersionFresh,
   checkDockerDaemon,
   ensureDockerDaemonRunning,
-  getImageStatus,
+  getImageStatus: getImageStatusFresh,
   pullImageWithRetry,
   normalizeDockerContainerName,
   normalizeDockerTimestamp,
   timestampToSeconds,
 } = dockerRuntime;
+const getDockerVersion = () => runtimeSnapshotCache.get("docker-version", getDockerVersionFresh, {
+  ttlMs: Math.max(RUNTIME_SNAPSHOT_CACHE_MS, 5000),
+});
+const getImageStatus = (image) => runtimeSnapshotCache.get(`image:${image}`, () => getImageStatusFresh(image), {
+  ttlMs: Math.max(RUNTIME_SNAPSHOT_CACHE_MS, 10000),
+});
 const {
   healthCheck,
   directoryHealth,
@@ -184,9 +195,10 @@ const {
 
 const gpuRuntime = core.createGpuRuntime({ execFileAsync, normalizeGpuIds });
 const {
-  getGpuStatus,
+  getGpuStatus: getGpuStatusFresh,
   normalizeLaunchGpuSelection,
 } = gpuRuntime;
+const getGpuStatus = () => runtimeSnapshotCache.get("gpu", getGpuStatusFresh);
 const gpuAdmissionController = core.createGpuAdmissionController({
   root: process.env.MODEL_GPU_ADMISSION_ROOT,
   managerId: CONFIG.managerId,
@@ -210,6 +222,7 @@ const {
   looksLikeGgufReference,
   resolveGgufSelection,
   resolveModelsRootChild,
+  scanDownloadProgress,
 } = modelFilesystemStore;
 
 const llamaImageBuildInfoCache = new Map();
@@ -461,7 +474,9 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   stopProgressTracker,
   onJobSuccess: (job) => {
     if (job.type === "serve") recordRecentLaunch(job.meta);
+    if (job.type === "download") assessDownloadedModelFit(job).catch(() => {});
   },
+  onJobsChanged: () => broadcastJobsSnapshot(),
   onError: (message) => console.warn(message),
 });
 const statsLedgerStore = core.createStatsLedgerStore({
@@ -672,6 +687,7 @@ const managerLifecycle = core.createManagerLifecycle({
     if (cacheHitMonitorTimer) clearInterval(cacheHitMonitorTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    sseHub.close();
     core.interruptRunningDownloadJobs(jobs);
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
     await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
@@ -680,6 +696,7 @@ const managerLifecycle = core.createManagerLifecycle({
       waitForStatsLedgerWrites(),
       cacheHitTracker.flush(),
       jobsLedgerStore.waitForJobsLedgerWrites(),
+      metricsHistoryStore.flushMetricsHistory(),
       flushFileWriteQueues(),
       core.flushAllAccessLogs(),
     ]);
@@ -837,7 +854,66 @@ core.registerModelRoutes(app, {
   getDownloadSettings: () => downloadJobController.getDownloadSettings(),
   saveDownloadSettings: saveDownloadSettingsRequest,
   resolveModelLink: remoteModelService.resolveModelLinkRequest,
+  probeDownloadMirror: (body = {}) => core.probeHfMirrorSpeed({ model: body.model, token: process.env.HF_TOKEN }),
+  getDiskUsage: () => runtimeSnapshotCache.get("disk-usage", () => modelFilesystemStore.getDiskUsage(), { ttlMs: 30_000 }),
+  cleanupIncomplete: cleanupIncompleteRequest,
+  checkModelUpstream: checkModelUpstreamRequest,
 });
+
+// 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
+async function cleanupIncompleteRequest(body = {}) {
+  const name = cleanRequired(body.name, "name");
+  const localDir = resolveModelsRootChild(path.join(CONFIG.modelsRoot, safeOutputName(name)));
+  const activeJob = Array.from(jobs.values()).find((job) => (
+    job.type === "download"
+    && ["running", "queued", "paused"].includes(job.status)
+    && core.normalizeLocalDirKey(job.meta?.localDir) === core.normalizeLocalDirKey(localDir)
+  ));
+  if (activeJob) {
+    const error = new Error(`任务 ${activeJob.id} 仍可能续传该目录（${activeJob.status}），暂不清理。`);
+    error.status = 409;
+    throw error;
+  }
+  const result = await modelFilesystemStore.cleanupIncompleteFiles(localDir);
+  runtimeSnapshotCache.invalidate("disk-usage");
+  return result;
+}
+
+// 对比本地下载记录与 Hugging Face 上游 lastModified，判断是否有更新。
+async function checkModelUpstreamRequest(query = {}) {
+  const name = cleanRequired(query.name, "name");
+  const localDir = resolveModelsRootChild(path.join(CONFIG.modelsRoot, safeOutputName(name)));
+  const key = core.normalizeLocalDirKey(localDir);
+  const downloadJob = Array.from(jobs.values())
+    .filter((job) => job.type === "download" && core.normalizeLocalDirKey(job.meta?.localDir) === key)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  const repo = String(query.model || downloadJob?.meta?.model || "").trim();
+  if (!repo || !repo.includes("/")) {
+    return { ok: false, name, reason: "unknown_source", message: "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。" };
+  }
+  if (String(downloadJob?.meta?.source || "huggingface") !== "huggingface") {
+    return { ok: false, name, repo, reason: "unsupported_source", message: "上游更新检查目前只支持 Hugging Face 来源。" };
+  }
+  const info = await remoteModelService.getHuggingFaceModelInfo(repo);
+  const downloadedAt = downloadJob?.finishedAt || downloadJob?.updatedAt || null;
+  const updateAvailable = info.lastModified && downloadedAt
+    ? Date.parse(info.lastModified) > Date.parse(downloadedAt)
+    : null;
+  return {
+    ok: true,
+    name,
+    repo,
+    url: info.url,
+    lastModified: info.lastModified || null,
+    downloadedAt,
+    updateAvailable,
+    message: updateAvailable === null
+      ? "缺少可比对的时间信息，仅显示上游最近更新时间。"
+      : updateAvailable
+        ? "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
+        : "本地已是最新：上游在下载之后没有更新。",
+  };
+}
 
 async function checkPortRequest(query = {}) {
   const port = Number(query.port || 0);
@@ -879,6 +955,13 @@ function isPortInUseOnHost(port) {
     tester.listen(port, host);
   });
   return Promise.all([probe("127.0.0.1"), probe("0.0.0.0")]).then((results) => results.some(Boolean));
+}
+
+// 任务快照改推送：下载/启动进行中不再靠 1 秒一次的 /api/jobs 轮询。
+const sseHub = core.createSseHub();
+app.get("/api/events", (req, res) => sseHub.handleRequest(req, res));
+function broadcastJobsSnapshot() {
+  sseHub.broadcastThrottled("jobs", () => Array.from(jobs.values()).reverse().map(core.summarizeJob), 700);
 }
 
 core.registerJobRoutes(app, {
@@ -952,6 +1035,9 @@ async function startDownloadRequest(body = {}) {
       priority: core.normalizeDownloadPriority(body.priority),
       expectedBytes: expected?.bytes || null,
       expectedFiles: expected?.fileCount || null,
+      fileManifest: source === "huggingface" && Array.isArray(expected?.fileManifest) && expected.fileManifest.length
+        ? expected.fileManifest
+        : null,
     },
     progressDir: localDir,
     expectedBytes: expected?.bytes || null,
@@ -1659,8 +1745,26 @@ async function sampleMetricsHistory() {
   });
 }
 
+// GPU 温度告警：达到阈值时生成一条 automation 任务提醒，10 分钟冷却，只警不动。
+let tempGuardLastWarnAt = 0;
+async function inspectGpuTemperatureGuard(settings) {
+  if (!settings.tempGuardEnabled) return;
+  const gpu = await getGpuStatus().catch(() => null);
+  const temps = (gpu?.gpus || []).map((item) => Number(item.temp)).filter(Number.isFinite);
+  if (!temps.length) return;
+  const hottest = Math.max(...temps);
+  if (hottest < settings.tempLimitC) return;
+  const now = Date.now();
+  if (now - tempGuardLastWarnAt < 10 * 60 * 1000) return;
+  tempGuardLastWarnAt = now;
+  const job = createJob("automation", "GPU temperature warning", { tempC: hottest, limitC: settings.tempLimitC });
+  appendLog(job, `GPU 温度 ${hottest}°C 已达到告警阈值 ${settings.tempLimitC}°C。请检查散热、降低功耗上限或减小并发。`);
+  finishJob(job, { result: "warn-only" });
+}
+
 async function inspectAutomationRules() {
   const settings = await automationSettingsStore.getAutomationSettings();
+  await inspectGpuTemperatureGuard(settings).catch(() => {});
   if (!settings.idleUnloadEnabled && !settings.vramGuardEnabled) return;
   if (runtimeActivity.unloading) return;
   const [gpu, container] = await Promise.all([getGpuStatus(), getContainerStatus(CONFIG.containerName)]);
@@ -2172,6 +2276,10 @@ function resolveLaunchModel(model, requestedLoadFormat = "auto") {
 }
 
 async function getContainerStatus(containerName) {
+  return runtimeSnapshotCache.get(`container:${containerName}`, () => getContainerStatusFresh(containerName));
+}
+
+async function getContainerStatusFresh(containerName) {
   try {
     const out = await docker(["ps", "-a", "--filter", `name=^/${containerName}$`, "--format", "{{json .}}"]);
     const line = out.stdout.trim();
@@ -2254,7 +2362,8 @@ async function listManagedContainers() {
 
 async function removeManagedContainer(reason = "replace", containerName = CONFIG.containerName, expectedJobId = "") {
   const targetContainerName = normalizeDockerContainerName(containerName || CONFIG.containerName);
-  const container = await getContainerStatus(targetContainerName);
+  // 生命周期操作要看实时容器状态，绕过快照缓存。
+  const container = await getContainerStatusFresh(targetContainerName);
   if (!container.exists) return { removed: false, containerName: targetContainerName };
   const owner = container.labels?.[MANAGER_LABEL_KEY] || "";
   const runtimeApiKeyRef = String(container.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
@@ -2299,6 +2408,10 @@ function llamaAuthHeaders(apiKey, base = {}) {
 }
 
 async function getServedModels(port, apiKey = "") {
+  return runtimeSnapshotCache.get(`served-models:${port}`, () => getServedModelsFresh(port, apiKey));
+}
+
+async function getServedModelsFresh(port, apiKey = "") {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/v1/models`, {
       signal: AbortSignal.timeout(2500),
@@ -2392,6 +2505,8 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
       requests: Math.max(Number(modelStats?.requests?.total || 0), Number(historicalModelStats?.requests?.total || 0)),
       promptTokens: Math.max(Number(modelStats?.tokens?.prompt || 0), Number(historicalModelStats?.tokens?.prompt || 0)),
       outputTokens: Math.max(Number(modelStats?.tokens?.generation || 0), Number(historicalModelStats?.tokens?.generation || 0)),
+      runningRequests: Number(modelStats?.requests?.running || 0),
+      waitingRequests: Number(modelStats?.requests?.waiting || 0),
       canUnload: activeContainer.exists,
     };
   });
@@ -2437,7 +2552,8 @@ function getRunningModelSummariesFresh() {
     }
     const summaries = await Promise.all(managed.map(async (container) => {
       const status = await getContainerStatus(container.name);
-      return getRunningModelSummary(status, null, { includeMetrics: false });
+      // 携带负载指标（running/waiting），统一网关据此做负载感知路由。
+      return getRunningModelSummary(status, null, { includeMetrics: true });
     }));
     summaries.sort((a, b) => Number(b.container?.name === CONFIG.containerName) - Number(a.container?.name === CONFIG.containerName));
     runtimeInstancesCache.value = summaries;
@@ -2460,9 +2576,10 @@ async function listRuntimeInstancesRequest() {
       const labels = container.labels || {};
       const primary = container.name === CONFIG.containerName;
       const servedModels = Array.isArray(runtime.servedModels) ? runtime.servedModels : [];
+      const enrichedModels = Array.isArray(runtime.models) && runtime.models.length ? runtime.models : servedModels;
       const lastKnownModel = String(labels["ai.manager.model"] || "").trim();
-      const instanceModels = servedModels.length
-        ? servedModels
+      const instanceModels = enrichedModels.length
+        ? enrichedModels
         : lastKnownModel ? [{ id: lastKnownModel, lastKnown: true }] : [];
       return {
         id: primary ? "primary" : labels["ai.manager.instance"] || container.name,
@@ -2482,6 +2599,8 @@ async function listRuntimeInstancesRequest() {
           id: model.id,
           root: model.root || "",
           maxModelLen: model.max_model_len || model.maxModelLen || null,
+          runningRequests: Number.isFinite(Number(model.runningRequests)) ? Number(model.runningRequests) : null,
+          waitingRequests: Number.isFinite(Number(model.waitingRequests)) ? Number(model.waitingRequests) : null,
           lastKnown: Boolean(model.lastKnown),
         })),
       };
@@ -2492,7 +2611,7 @@ async function listRuntimeInstancesRequest() {
 async function stopRuntimeInstanceRequest({ id } = {}) {
   const requested = decodeURIComponent(String(id || ""));
   if (requested === "primary") {
-    const existing = await getContainerStatus(CONFIG.containerName);
+    const existing = await getContainerStatusFresh(CONFIG.containerName);
     if (!existing.exists) throw Object.assign(new Error("Runtime instance not found."), { status: 404 });
     await snapshotCurrentStats("before-stop").catch(() => {});
     await removeManagedContainer("instance-stop");
@@ -2610,6 +2729,13 @@ async function snapshotCurrentStats(reason = "snapshot") {
 }
 
 async function collectVllmMetricsSummary(container, gpu, options = {}) {
+  // updateSamples 会推进速度采样窗口，必须每次真实执行；只缓存只读快照。
+  if (options.updateSamples) return collectVllmMetricsSummaryFresh(container, gpu, options);
+  const cacheKey = `metrics-summary:${container?.name || container?.id || "none"}:${container?.running ? 1 : 0}`;
+  return runtimeSnapshotCache.get(cacheKey, () => collectVllmMetricsSummaryFresh(container, gpu, options));
+}
+
+async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const endpoint = getContainerEndpoint(container);
   const llamaApiKey = getLlamaApiKey(container);
   const empty = core.emptyStatsSummary(container, endpoint, {
@@ -2866,6 +2992,8 @@ function finishJob(job, meta = {}) {
 }
 
 function failJob(job, error) {
+  // 下载失败要带上新鲜的 failedAt，否则自动续传会把它当成重启前的旧任务跳过。
+  if (job?.type === "download" && job.meta) job.meta.failedAt = Date.now();
   return jobsLedgerStore.failJob(job, error);
 }
 
@@ -2887,6 +3015,7 @@ const spawnJobProcess = createProcessJobRunner({
   startProgressTracker,
   handleDownloadCancel: async (job) => {
     if (job.meta?.cancelAction === "pause") pauseDownloadJobAfterStop(job);
+    else if (job.meta?.cancelAction === "stall") downloadJobController.handleDownloadStallAfterStop(job);
     else await finalizeDownloadCancel(job, { deletePartial: true });
   },
   handleProcessSuccess: async (job) => {
@@ -2912,6 +3041,7 @@ const spawnJobProcess = createProcessJobRunner({
       throw new Error(`下载命令已结束，但模型完整性校验失败：${detail || "模型文件不完整"}`);
     }
     appendLog(job, `Download verification passed: ${verification.modelFormat}; ${verification.expectedWeightFiles || verification.gguf || verification.safetensors} weight file(s).`);
+    await runDownloadChecksumVerification(job);
   },
   closeHandlerErrorMode: "fail",
   onDone: (job) => {
@@ -2937,6 +3067,13 @@ const downloadJobController = core.createDownloadJobController({
   },
   saveQueueMode: (settings) => atomicWriteJsonFile(CONFIG.downloadSettings, settings),
   resolvePartialPath: resolveModelsRootChild,
+  // 「模型空闲时才下载」的忙碌判定：有请求在跑或排队即视为忙。
+  isRuntimeBusy: async () => {
+    const container = await getContainerStatus(CONFIG.containerName).catch(() => null);
+    if (!container?.running) return false;
+    const summary = await collectVllmMetricsSummary(container, null, { updateSamples: false }).catch(() => null);
+    return (summary?.models || []).some((model) => Number(model?.requests?.running || 0) + Number(model?.requests?.waiting || 0) > 0);
+  },
 });
 const {
   enqueueOrStartDownload,
@@ -2948,15 +3085,51 @@ const {
   drainDownloadQueue,
   healDownloadQueue,
 } = downloadJobController;
+const runDownloadChecksumVerification = core.createDownloadChecksumRunner({
+  appendLog,
+  getSettings: () => downloadJobController.getDownloadSettings(),
+  formatBytes,
+});
+
+// 下载成功后的显存粗评：权重体积 + 15% 运行余量对比当前全部 GPU 合计空闲，
+// 给「能不能直接启动」一个第一判断；精确估算仍在启动页。
+async function assessDownloadedModelFit(job) {
+  const localDir = job.meta?.localDir;
+  if (!localDir) return;
+  const [gpu, sizeBytes] = await Promise.all([
+    getGpuStatus().catch(() => null),
+    dirSize(localDir).catch(() => 0),
+  ]);
+  if (!gpu?.ok || !sizeBytes) return;
+  const freeGb = Math.max(0, Number(gpu.totalMb || 0) - Number(gpu.usedMb || 0)) / 1024;
+  const neededGb = (sizeBytes / 1024 ** 3) * 1.15 + 2;
+  appendLog(job, neededGb <= freeGb
+    ? `显存粗评：权重约 ${formatBytes(sizeBytes)}，全部 GPU 合计空闲 ${freeGb.toFixed(1)} GB，可直接尝试启动（估算含 15% 运行余量，不含长上下文 KV；GGUF 还可用 GPU layers 部分放显存）。`
+    : `显存粗评：权重约 ${formatBytes(sizeBytes)}，全部 GPU 合计空闲 ${freeGb.toFixed(1)} GB，全量进显存可能不够；GGUF 可降低 GPU layers 让部分层落内存，或换更小量化。`);
+  scheduleJobsSave();
+}
+
+// Xet 高性能下载把分块先写进 HF_HOME/xet 缓存、结束时才物化到 local-dir。
+// 只量这个子目录（体量有界），别去扫整个 hub 缓存。
+async function downloadAuxCacheBytes() {
+  try {
+    return await dirSize(path.join(CONFIG.hfCache, "xet"));
+  } catch {
+    return null;
+  }
+}
 
 function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
   const totalBytes = Number(expectedBytes || 0) || null;
+  const stallTimeoutMs = Math.max(0, Number(process.env.MODEL_DOWNLOAD_STALL_TIMEOUT_MS ?? 5 * 60 * 1000));
   const tracker = {
     baseBytes: null,
     lastBytes: 0,
+    lastRawBytes: 0,
+    lastAuxBytes: null,
+    lastGrowthAt: Date.now(),
     lastAt: Date.now(),
     scanning: false,
-    stallTicks: 0,
   };
 
   job.progress = {
@@ -2974,19 +3147,29 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
     tracker.scanning = true;
     try {
       const now = Date.now();
-      const currentBytes = await dirSize(targetDir);
+      const snapshot = await scanDownloadProgress(targetDir);
+      const currentBytes = snapshot.downloadedBytes;
       if (tracker.baseBytes === null) tracker.baseBytes = options.countExistingProgress ? 0 : currentBytes;
-      const downloadedBytes = Math.max(0, currentBytes - tracker.baseBytes);
+      const rawDownloadedBytes = Math.max(0, currentBytes - tracker.baseBytes);
+      const downloadedBytes = totalBytes ? Math.min(totalBytes, rawDownloadedBytes) : rawDownloadedBytes;
       const elapsed = Math.max(0.001, (now - tracker.lastAt) / 1000);
       const delta = Math.max(0, downloadedBytes - tracker.lastBytes);
       const speedBytesPerSec = delta / elapsed;
       const percent = totalBytes ? Math.min(99, (downloadedBytes / totalBytes) * 100) : null;
       const remainingBytes = totalBytes ? Math.max(0, totalBytes - downloadedBytes) : null;
       const etaSeconds = remainingBytes && speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : null;
-      if (delta === 0 && job.pid) tracker.stallTicks += 1;
-      else tracker.stallTicks = 0;
-      if (tracker.stallTicks >= 6) {
-        appendLog(job, "下载进度停滞，正在终止进程并按自动重试策略处理。");
+      // 停滞判定用未封顶的目录字节；目录不动时再看 Xet 分块缓存是否在增长，
+      // 避免 Xet 先写缓存后物化、以及续传校验阶段的误杀。
+      if (rawDownloadedBytes > tracker.lastRawBytes) {
+        tracker.lastGrowthAt = now;
+      } else if (job.pid) {
+        const auxBytes = await downloadAuxCacheBytes();
+        if (auxBytes !== null && (tracker.lastAuxBytes === null || auxBytes > tracker.lastAuxBytes)) tracker.lastGrowthAt = now;
+        if (auxBytes !== null) tracker.lastAuxBytes = auxBytes;
+      }
+      tracker.lastRawBytes = rawDownloadedBytes;
+      if (stallTimeoutMs > 0 && job.pid && now - tracker.lastGrowthAt >= stallTimeoutMs) {
+        appendLog(job, `下载进度已约 ${Math.max(1, Math.round((now - tracker.lastGrowthAt) / 60000))} 分钟无增长，终止下载进程；已下载文件保留，将按自动重试策略续传。`);
         job.cancel?.("stall");
         return;
       }
@@ -2998,12 +3181,16 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
         percent,
         speedBytesPerSec,
         etaSeconds,
+        finalizedBytes: snapshot.finalizedBytes,
+        partialBytes: snapshot.partialBytes,
+        incompleteFiles: snapshot.incompleteFiles,
         updatedAt: new Date(now).toISOString(),
       };
       job.updatedAt = job.progress.updatedAt;
       tracker.lastBytes = downloadedBytes;
       tracker.lastAt = now;
       if (percent == null || Math.abs(percent - prevPct) >= 1) scheduleJobsSave();
+      else broadcastJobsSnapshot();
     } catch (error) {
       job.progress = {
         ...job.progress,
@@ -3117,7 +3304,8 @@ async function runStartJobOnce(job, opts) {
   }
 
   let { runArgs, activePublishArgs, runtimeImage } = buildLlamaRuntimeCommand(job, opts);
-  const imageStatus = await getImageStatus(runtimeImage);
+  // 启动预检要拿实时镜像状态，绕过快照缓存。
+  const imageStatus = await getImageStatusFresh(runtimeImage);
   if (!imageStatus.ok) {
     const imageName = String(runtimeImage || "");
     if (imageName.startsWith("local/") || imageName === CONFIG.museImage) {
@@ -3137,7 +3325,7 @@ async function runStartJobOnce(job, opts) {
   });
   let previousRuntimeApiKeyRef = "";
   const prepareReplacement = async (admissionRequest = opts.gpuAdmissionRequest) => {
-    const previousContainer = await getContainerStatus(targetContainerName);
+    const previousContainer = await getContainerStatusFresh(targetContainerName);
     previousRuntimeApiKeyRef = String(previousContainer.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
     const previousGpuAdmissionLeaseId = String(previousContainer.labels?.["ai.manager.gpu-admission-lease"] || "");
     if (admissionRequest && previousGpuAdmissionLeaseId) {

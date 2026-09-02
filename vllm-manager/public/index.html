@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>vLLM Manager</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/styles.css?v=20260711-guided-flow4" />
-    <link rel="stylesheet" href="/shared-js/manager-base.css?v=20260811-design-audit" />
+    <link rel="stylesheet" href="/styles.css?v=20260822-ui-round5" />
+    <link rel="stylesheet" href="/shared-js/manager-base.css?v=20260822-ui-round5" />
   </head>
   <body>
     <div class="app-shell">
@@ -154,6 +154,7 @@
                   <label>
                     <span>上下文长度 max_model_len</span>
                 <input id="maxModelLen" name="maxModelLen" type="number" value="8192" min="512" max="4194304" step="512" />
+                    <small class="context-human-hint" id="contextHumanHint"></small>
                   </label>
                   <label>
                     <span>并发序列数 max_num_seqs</span>
@@ -333,6 +334,11 @@
                   <button type="button" data-context-preset="131072">128K</button>
                   <button type="button" data-context-preset="196608">192K</button>
                   <button type="button" data-context-preset="262144">256K</button>
+                  <button type="button" data-context-preset="524288">512K</button>
+                  <button type="button" data-context-preset="1048576">1M</button>
+                </div>
+                <div class="form-note context-preset-note" id="contextPresetNote">
+                  预设按钮只是快捷值；上下文长度可在输入框微调到任意值，支持超过 256K（上限 4,194,304）。按钮颜色标注当前模型下的显存可行性。
                 </div>
                 <div class="estimate-grid" id="memoryEstimate">
                   <div class="empty compact">输入模型后会估算对应上下文长度的显存占用。</div>
@@ -392,7 +398,7 @@
                 </div>
               </div>
               <label>
-                <span>调用工具预设</span>
+                <span>客户端预设</span>
                 <select id="clientPreset" name="clientPreset">
                   <option value="openwebui">Open WebUI</option>
                   <option value="claude-code">Claude Code 桥接</option>
@@ -400,6 +406,9 @@
                   <option value="generic">通用 OpenAI 兼容</option>
                 </select>
               </label>
+              <div class="form-note" id="clientPresetNote">
+                所有客户端走同一组通用接口（OpenAI 兼容 /serve/v1 与 Claude 桥 /claude），此选择不改变接口或启动参数；它只切换下方 reasoning / 工具调用的建议文案。parser 推荐始终按模型自动匹配。
+              </div>
               <label>
                 <span>思考内容解析（不控制是否思考）</span>
                 <select id="reasoningParser" name="reasoningParser">
@@ -486,11 +495,11 @@
                 </select>
               </label>
               <label class="wide-field">
-                <span>API Key（可选）</span>
-                <input id="vllmApiKey" name="apiKey" type="password" autocomplete="off" placeholder="留空则不鉴权；开放局域网时强烈建议设置" />
+                <span>模型直连 API Key（可选）</span>
+                <input id="vllmApiKey" name="apiKey" type="password" autocomplete="off" placeholder="留空则直连不鉴权；开放局域网直连时强烈建议设置" />
               </label>
               <div class="form-note network-note" id="networkNote">
-                仅本机访问会绑定 127.0.0.1；局域网访问会绑定本机 IPv4 地址。设置 API Key 后，客户端需以 Bearer Token 携带。
+                仅本机：模型端口只绑定 127.0.0.1，但局域网设备仍可经管理器网关 /serve/v1 访问（受「服务暴露」页的鉴权与限流约束）。局域网：模型端口发布到本机 IPv4，设备可绕过网关直连，此时强烈建议设置 API Key（客户端以 Bearer Token 携带）。
               </div>
               <div class="form-section gpu-section">
                 <div class="section-title">
@@ -502,7 +511,7 @@
                 </div>
               </div>
               <label class="wide-field">
-                <span>多 GPU 利用方式</span>
+                <span>多 GPU 模式</span>
                 <select id="multiGpuMode" name="multiGpuMode">
                   <option value="single">单卡 / 指定设备</option>
                   <option value="tensor">Tensor Parallel 张量并行</option>
@@ -600,6 +609,14 @@
         </section>
 
         <section class="models-page view-panel" id="models" data-view-panel="models">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>磁盘看板</h3>
+              <button class="icon-button" id="reloadDiskUsageBtn" title="刷新磁盘用量"><i data-lucide="rotate-cw"></i></button>
+            </div>
+            <div id="diskUsagePanel" class="disk-usage-panel"><div class="empty compact">切换到本页时读取磁盘用量。</div></div>
+          </div>
+
           <div class="panel">
             <div class="panel-head">
               <h3>模型库</h3>
@@ -722,7 +739,11 @@
                 <label><span>失败自动重试次数</span><input id="downloadAutoRetryCount" type="number" min="0" max="10" value="2" /></label>
                 <label><span>重试间隔（秒）</span><input id="downloadAutoRetryDelaySeconds" type="number" min="1" max="3600" value="10" /></label>
                 <label class="check-row" title="开启后通过 hf-mirror.com 下载 Hugging Face 模型，适合跨境弱网"><input id="downloadHfMirror" type="checkbox" /><span>使用 HF 镜像（hf-mirror.com）</span></label>
-                <label class="check-row" title="需要先 pip install hf_transfer"><input id="downloadHfTransfer" type="checkbox" /><span>启用 hf_transfer 加速</span></label>
+                <label class="check-row" title="开启 Hugging Face Xet 高性能分块下载（大文件更快）"><input id="downloadHfTransfer" type="checkbox" /><span>启用 Xet 高性能下载</span></label>
+                <label class="check-row" title="下载完成后按 Hugging Face LFS 清单逐文件校验 SHA256；发现损坏文件会自动删除并按重试策略只重下这些文件"><input id="downloadVerifyChecksums" type="checkbox" checked /><span>完成后 SHA256 校验</span></label>
+                <label class="check-row" title="排队中的下载只在模型服务空闲（没有请求在处理）时自动开始，避免和推理抢带宽与磁盘"><input id="downloadIdleOnlyQueue" type="checkbox" /><span>模型空闲时才开始队列</span></label>
+                <button class="ghost-mini-button" id="downloadMirrorProbeBtn" type="button" title="对 huggingface.co 与 hf-mirror.com 各做一次计时下载并自动选择更快的一侧"><i data-lucide="gauge"></i><span>测速选镜像</span></button>
+                <button class="ghost-mini-button" id="downloadNotifyBtn" type="button" title="页面在后台时，下载结束弹系统通知"><i data-lucide="bell"></i><span>开启完成通知</span></button>
               </div>
               <div class="link-resolver">
                 <label>
@@ -888,6 +909,8 @@
               <label class="check-row context-check-row"><input id="vramGuardEnabled" type="checkbox" /><span>显存保护</span></label>
               <label><span>显存阈值 %</span><input id="vramPercent" type="number" min="70" max="99" value="94" /></label>
               <label><span>阈值动作</span><select id="vramAction"><option value="warn">只提醒</option><option value="unload">空闲时卸载</option></select></label>
+              <label class="check-row context-check-row" title="任一 GPU 温度达到阈值时生成告警任务（10 分钟冷却），不会自动降载"><input id="tempGuardEnabled" type="checkbox" /><span>温度告警</span></label>
+              <label><span>温度阈值 °C</span><input id="tempLimitC" type="number" min="60" max="95" value="83" /></label>
             </div>
             <div class="selection-hint" id="automationStatus">自动保护默认关闭，不会影响当前模型。</div>
           </div>
@@ -1088,6 +1111,7 @@
               </div>
               <div class="panel-actions">
                 <span class="stats-freshness" id="statsFreshness"></span>
+                <a class="ghost-link" data-nav="billing" href="http://127.0.0.1:5176/billing?manager=vllm" target="_blank" rel="noopener noreferrer" title="本页是运行统计；余额、套餐与不可变账本在计费中心">计费中心</a>
                 <button class="secondary-button compact-button" id="openBenchmarkBtn" type="button"><i data-lucide="gauge"></i><span>运行基准</span></button>
                 <button class="icon-button" id="reloadStatsBtn" title="刷新统计"><i data-lucide="refresh-cw"></i></button>
               </div>
@@ -1239,20 +1263,20 @@
     <script src="/shared-js/dom-utils.js?v=20260811-design-audit" defer></script>
     <script src="/js/formatters.js?v=20260526-modular-ui" defer></script>
     <script src="/js/api-client.js?v=20260526-modular-ui" defer></script>
-    <script src="/shared-js/i18n-common.js?v=20260815-dspark-stats" defer></script>
+    <script src="/shared-js/i18n-common.js?v=20260822-ui-round5" defer></script>
     <script src="/js/catalog.js?v=20260615-modular-data" defer></script>
     <script src="/js/ui-utils.js?v=20260615-modular-ui2" defer></script>
     <script src="/js/model-utils.js?v=20260615-model-utils" defer></script>
     <script src="/shared-js/gpu-planning-utils.js?v=20260615-gpu-planning" defer></script>
     <script src="/js/job-utils.js?v=20260615-job-utils" defer></script>
-    <script src="/shared-js/job-renderer.js?v=20260711-guided-flow3" defer></script>
+    <script src="/shared-js/job-renderer.js?v=20260822-ui-round5" defer></script>
     <script src="/shared-js/local-model-renderer.js?v=20260615-local-models" defer></script>
     <script src="/shared-js/model-picker-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/remote-model-renderer.js?v=20260615-remote-models" defer></script>
   <script src="/shared-js/service-exposure-renderer.js?v=20260811-design-audit" defer></script>
   <script src="/shared-js/service-client-renderer.js?v=20260615-service-clients" defer></script>
   <script src="/shared-js/runtime-status-renderer.js?v=20260711-guided-flow3" defer></script>
-  <script src="/shared-js/tool-panel-renderer.js?v=20260615-tool-panel" defer></script>
+  <script src="/shared-js/tool-panel-renderer.js?v=20260822-ui-round5" defer></script>
   <script src="/shared-js/profile-renderer.js?v=20260711-guided-flow3" defer></script>
     <script src="/shared-js/stats-ui.js?v=20260815-dspark-stats" defer></script>
     <script src="/shared-js/stats-summary-renderer.js?v=20260831-qwen38-bf16-220k" defer></script>
@@ -1264,12 +1288,8 @@
   <script src="/shared-js/access-log-browser.js?v=20260716-log-search" defer></script>
   <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
     <script src="/shared-js/connection-status.js?v=20260804-connection-status" defer></script>
-    <script src="/shared-js/ui-architecture.js?v=20260720-cors-policy" defer></script>
-<<<<<<< HEAD
-    <script src="/app.js?v=20260831-qwen38-bf16-220k" defer></script>
-=======
-    <script src="/app.js?v=20260827-sglang-flash-next" defer></script>
->>>>>>> upgrade/stack-20260826
+    <script src="/shared-js/ui-architecture.js?v=20260902-improvement" defer></script>
+    <script src="/app.js?v=20260902-improvement" defer></script>
     <script src="/shared-js/lucide.min.js?v=20260811-46-icons" defer onload="window.renderIcons && window.renderIcons()"></script>
   </body>
 </html>

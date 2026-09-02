@@ -1,5 +1,7 @@
 const MODULES = [
   "./common-utils",
+  "./single-flight-cache",
+  "./sse-hub",
   "./network",
   "./connection-guide",
   "./compatibility-utils",
@@ -22,6 +24,8 @@ const MODULES = [
   "./gpu-runtime",
   "./gpu-admission",
   "./download-utils",
+  "./download-checksums",
+  "./mirror-probe",
   "./proxy-fetch",
   "./download-job-controller",
   "./job-utils",

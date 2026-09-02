@@ -60,12 +60,17 @@ function createEntrySecurity(options = {}) {
       .split(/[;,]/)
       .map((item) => item.trim())
       .filter(Boolean);
+    // 配置了公网 Base URL 即声明了公网暴露：即使入口只绑回环（流量经 Caddy
+    // 转发进来），auto 模式也必须要求 API Key，否则公网 /gateway 就是无鉴权算力。
+    const publicMode = Boolean(core.extractHostname(envText("SERVICE_ENTRY_PUBLIC_BASE_URL")));
     return {
       lanMode,
+      publicMode,
       host,
-      // "auto" only demands a key when the entry is actually reachable off-box,
-      // so a loopback-only install stays zero-config.
-      requireApiKey: requireApiKeyMode === "on" || (requireApiKeyMode === "auto" && lanMode),
+      // "auto" only demands a key when the entry is actually reachable off-box
+      // (LAN bind or declared public deployment), so a loopback-only install
+      // stays zero-config.
+      requireApiKey: requireApiKeyMode === "on" || (requireApiKeyMode === "auto" && (lanMode || publicMode)),
       requireApiKeyMode,
       allowLanAdmin,
       allowedOrigins,
@@ -81,6 +86,10 @@ function createEntrySecurity(options = {}) {
     } catch {
       // Interface enumeration failed; loopback names still apply.
     }
+    // 配置了公网 Base URL 就意味着 Caddy 会带着该域名的 Host 转发过来；
+    // 不自动放行的话，照 deploy/public 部署会全站 403。
+    const publicHost = core.extractHostname(envText("SERVICE_ENTRY_PUBLIC_BASE_URL"));
+    if (publicHost) names.add(publicHost);
     const extra = envText("SERVICE_ENTRY_ALLOWED_HOSTS")
       .split(/[;,]/)
       .map((item) => core.extractHostname(item.trim()))
@@ -115,8 +124,45 @@ function createEntrySecurity(options = {}) {
 
   // --- Management endpoint guard (S1) --------------------------------------
 
-  // Management is localhost-only unless the LAN-admin switch is on.
+  // Requests that came through a reverse proxy (Caddy in deploy/public) reach
+  // this process from 127.0.0.1, so the socket address alone would wrongly
+  // promote every public client to "local". Any forwarded-* header marks the
+  // request as proxied; headers can only be added by the proxy, so this can
+  // demote but never promote.
+  const PROXY_FORWARD_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"];
+  function isProxiedRequest(req) {
+    const headers = req?.headers || {};
+    return PROXY_FORWARD_HEADERS.some((name) => String(headers[name] || "").trim());
+  }
+
+  // 请求的真实客户端地址：代理转发的请求取 X-Forwarded-For 的最后一跳（Caddy 默认
+  // 会丢弃不可信的来路 XFF、只写入真实对端，所以最后一项永远是最近一级可信代理
+  // 写入的地址）；直连请求用 socket 对端。本机伪造转发头只会把自己降级成远端，
+  // 方向安全。
+  function resolveClientAddress(req) {
+    if (isProxiedRequest(req)) {
+      const chain = String(req?.headers?.["x-forwarded-for"] || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (chain.length) return chain[chain.length - 1];
+      const realIp = String(req?.headers?.["x-real-ip"] || "").trim();
+      if (realIp) return realIp;
+    }
+    return req?.socket?.remoteAddress || "";
+  }
+
+  // Management is localhost-only unless the LAN-admin switch is on; proxied
+  // requests are never management-eligible regardless of that switch.
   function checkManagementAccess(req) {
+    if (isProxiedRequest(req)) {
+      return {
+        ok: false,
+        status: 403,
+        code: "management_local_only",
+        message: "Management endpoints are not available through a reverse proxy. Open the console directly on this machine.",
+      };
+    }
     if (core.isLocalRequest(req)) return { ok: true };
     if (policy().allowLanAdmin) return { ok: true };
     return {
@@ -270,7 +316,10 @@ function createEntrySecurity(options = {}) {
   }
 
   function trustHeaders(req) {
-    return core.buildGatewayTrustHeaders(trustToken, req?.socket?.remoteAddress || "", Date.now());
+    // 向管理器担保真实客户端地址。原来担保的是 socket 对端——经 Caddy 转发的
+    // 公网请求会被担保成 127.0.0.1，管理器把公网客户端当成本机：local-only
+    // 暴露模式失效、限流指纹和外部访问统计全部塌缩成一个"本机"。
+    return core.buildGatewayTrustHeaders(trustToken, resolveClientAddress(req), Date.now());
   }
 
   // --- Reporting ------------------------------------------------------------
@@ -336,6 +385,13 @@ function createEntrySecurity(options = {}) {
         detail: "统一入口正在监听非回环地址，但 SERVICE_ENTRY_REQUIRE_API_KEY=0 关闭了鉴权，局域网任意设备可直接调用模型。",
       });
     }
+    if (current.publicMode && !current.requireApiKey) {
+      warnings.push({
+        level: "fail",
+        title: "公网模式未强制 API Key",
+        detail: "已配置 SERVICE_ENTRY_PUBLIC_BASE_URL，但 SERVICE_ENTRY_REQUIRE_API_KEY=0 显式关闭了鉴权——公网任何人都能免费调用模型。",
+      });
+    }
     if (current.requireApiKey && !enforced && keyStatus.readable) {
       warnings.push({
         level: "fail",
@@ -372,6 +428,8 @@ function createEntrySecurity(options = {}) {
     allowedHostnames,
     checkRequest,
     checkManagementAccess,
+    isProxiedRequest,
+    resolveClientAddress,
     corsHeaders,
     authorizeGatewayRequest,
     loadKeyStores,

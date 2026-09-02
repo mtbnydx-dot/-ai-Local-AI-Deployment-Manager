@@ -57,16 +57,16 @@
       white-space: nowrap;
       transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
     }
-    button:hover, .button:hover { border-color: #9fb6d2; background: #f8fbff; }
+    button:hover, .button:hover { border-color: var(--line-strong); background: var(--surface-hover); }
     button:active, .button:active { transform: translateY(1px); }
     button:focus-visible, .button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
-      outline: 3px solid rgba(11, 103, 245, 0.18);
+      outline: 3px solid color-mix(in srgb, var(--blue) 22%, transparent);
       outline-offset: 1px;
     }
     button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     button.primary, .button.primary { color: #fff; background: var(--blue); border-color: var(--blue); }
     button.primary:hover, .button.primary:hover { background: var(--blue-dark); border-color: var(--blue-dark); }
-    button.danger { color: var(--red); border-color: #efc3c8; }
+    button.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, var(--line)); }
     button.quiet { border-color: transparent; background: transparent; color: var(--blue); padding-inline: 8px; }
     button.small { min-height: 32px; padding: 0 10px; font-size: 12px; }
     .app-header {
@@ -109,7 +109,7 @@
       align-items: center;
       gap: 8px;
       padding: 0 12px;
-      border: 1px solid #bfe4c9;
+      border: 1px solid color-mix(in srgb, var(--green) 32%, var(--line));
       border-radius: 7px;
       background: var(--green-soft);
       color: var(--green);
@@ -123,8 +123,8 @@
       border-radius: 50%;
       background: currentColor;
     }
-    .api-status.warn { border-color: #f1d4a7; background: var(--amber-soft); color: var(--amber); }
-    .api-status.fail { border-color: #efc3c8; background: var(--red-soft); color: var(--red); }
+    .api-status.warn { border-color: color-mix(in srgb, var(--amber) 32%, var(--line)); background: var(--amber-soft); color: var(--amber); }
+    .api-status.fail { border-color: color-mix(in srgb, var(--red) 32%, var(--line)); background: var(--red-soft); color: var(--red); }
     .tab-bar {
       width: min(1496px, calc(100vw - 40px));
       margin: 0 auto;
@@ -145,7 +145,7 @@
       font-weight: 650;
       transition: background-color 140ms ease, transform 140ms ease;
     }
-    .tab-button:hover { border-color: transparent; border-bottom-color: #b7cdf0; background: #fbfdff; }
+    .tab-button:hover { border-color: transparent; border-bottom-color: color-mix(in srgb, var(--blue) 40%, var(--line)); background: var(--surface-hover); }
     .tab-button[aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); }
     main {
       width: min(1496px, calc(100vw - 40px));
@@ -161,7 +161,7 @@
       border: 1px solid #b7d2f8;
       border-radius: 7px;
       background: var(--surface-blue);
-      color: #174d99;
+      color: var(--blue-dark);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -169,9 +169,9 @@
       line-height: 1.5;
     }
     .notice[hidden] { display: none; }
-    .notice.ok { border-color: #bfe4c9; background: var(--green-soft); color: var(--green); }
-    .notice.warn { border-color: #f1d4a7; background: var(--amber-soft); color: var(--amber); }
-    .notice.fail { border-color: #efc3c8; background: var(--red-soft); color: var(--red); }
+    .notice.ok { border-color: color-mix(in srgb, var(--green) 32%, var(--line)); background: var(--green-soft); color: var(--green); }
+    .notice.warn { border-color: color-mix(in srgb, var(--amber) 32%, var(--line)); background: var(--amber-soft); color: var(--amber); }
+    .notice.fail { border-color: color-mix(in srgb, var(--red) 32%, var(--line)); background: var(--red-soft); color: var(--red); }
     .notice-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; font-size: 12px; }
     .tab-panel { display: grid; gap: 16px; min-width: 0; }
     .tab-panel[hidden] { display: none; }
@@ -311,8 +311,8 @@
     }
     td { color: #253650; font-size: 13px; }
     tbody tr:last-child td { border-bottom: 0; }
-    tbody tr:hover td { background: #fbfdff; }
-    td code { color: #174d99; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+    tbody tr:hover td { background: var(--surface-hover); }
+    td code { color: var(--blue-dark); font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
     .empty-cell {
       height: 150px;
       color: var(--muted);
@@ -332,10 +332,10 @@
       font-weight: 750;
       white-space: nowrap;
     }
-    .status.ok { border-color: #bfe4c9; background: var(--green-soft); color: var(--green); }
-    .status.warn { border-color: #f1d4a7; background: var(--amber-soft); color: var(--amber); }
-    .status.fail { border-color: #efc3c8; background: var(--red-soft); color: var(--red); }
-    .status.info { border-color: #bdd5f8; background: var(--surface-blue); color: var(--blue); }
+    .status.ok { border-color: color-mix(in srgb, var(--green) 32%, var(--line)); background: var(--green-soft); color: var(--green); }
+    .status.warn { border-color: color-mix(in srgb, var(--amber) 32%, var(--line)); background: var(--amber-soft); color: var(--amber); }
+    .status.fail { border-color: color-mix(in srgb, var(--red) 32%, var(--line)); background: var(--red-soft); color: var(--red); }
+    .status.info { border-color: color-mix(in srgb, var(--blue) 32%, var(--line)); background: var(--surface-blue); color: var(--blue); }
     .quick-list { display: grid; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
     .quick-action {
       min-height: 50px;
@@ -377,10 +377,10 @@
     .selection-summary {
       margin-bottom: 12px;
       padding: 11px 12px;
-      border: 1px solid #bdd5f8;
+      border: 1px solid color-mix(in srgb, var(--blue) 32%, var(--line));
       border-radius: 7px;
       background: var(--surface-blue);
-      color: #174d99;
+      color: var(--blue-dark);
       line-height: 1.5;
     }
     .selection-summary.empty { border-color: var(--line); background: var(--surface-soft); color: var(--muted); }
@@ -407,7 +407,7 @@
     .preview-item strong { overflow-wrap: anywhere; font-size: 13px; }
     .preview-warning {
       padding: 10px 11px;
-      border: 1px solid #f1d4a7;
+      border: 1px solid color-mix(in srgb, var(--amber) 32%, var(--line));
       border-radius: 6px;
       background: var(--amber-soft);
       color: var(--amber);
@@ -842,7 +842,7 @@
               <input class="grow" id="overviewCustomerSearch" type="search" maxlength="80" placeholder="按客户名称或外部编号搜索" aria-label="搜索客户" />
               <select id="overviewCustomerPlanFilter" aria-label="按套餐筛选"><option value="">全部套餐</option></select>
               <select id="overviewCustomerModeFilter" aria-label="按模式筛选">
-                <option value="">所有模式</option><option value="shadow">Shadow</option><option value="hard">Hard</option>
+                <option value="">所有模式</option><option value="shadow">Shadow 观测</option><option value="hard">Hard 强制</option>
               </select>
               <select id="overviewCustomerStatusFilter" aria-label="按状态筛选">
                 <option value="">全部状态</option><option value="active">启用</option><option value="suspended">停用</option><option value="closed">关闭</option>
@@ -866,7 +866,7 @@
                 <label class="field wide"><span>客户名称</span><input name="name" required minlength="2" maxlength="80" placeholder="例如：Example Studio" /></label>
                 <label class="field wide"><span>外部编号（可选）</span><input name="externalRef" maxlength="80" placeholder="CRM-1001" /></label>
                 <label class="field"><span>套餐</span><select name="planId" data-plan-select><option value="">暂不绑定</option></select></label>
-                <label class="field"><span>执行模式</span><select name="enforcementMode" required><option value="shadow">Shadow 观测</option><option value="hard">Hard 强制</option></select></label>
+                <label class="field"><span>执行模式</span><select name="enforcementMode" required><option value="shadow">Shadow 观测（只记账不拦截）</option><option value="hard">Hard 强制（超限拦截请求）</option></select></label>
                 <label class="field wide"><span>信用额度（积分）</span><input name="creditLimit" inputmode="decimal" value="0" maxlength="26" /></label>
                 <label class="field"><span>月 Token 上限</span><input name="monthlyTokenLimit" inputmode="numeric" value="0" maxlength="24" /></label>
                 <label class="field"><span>月请求上限</span><input name="monthlyRequestLimit" inputmode="numeric" value="0" maxlength="24" /></label>
@@ -891,7 +891,7 @@
 
       <section class="panel">
         <div class="panel-head">
-          <div class="panel-title"><h2>近期用量</h2><p>当前接口返回的最近计费聚合记录</p></div>
+          <div class="panel-title"><h2>近期用量</h2><p>按「客户 × 管理器/模型 × 月」聚合；预计消费按价格规则从 tokens 推算，已扣是写入不可变账本的实际扣款</p></div>
           <button class="small" type="button" data-open-tab="usage">查看账本</button>
         </div>
         <div class="panel-body">
@@ -907,7 +907,7 @@
 
     <section class="tab-panel" id="customersPanel" role="tabpanel" aria-labelledby="customersTab" data-tab-panel="customers" hidden>
       <section class="panel">
-        <div class="panel-head"><div class="panel-title"><h2>客户账户</h2><p>停用、恢复或进入策略编辑</p></div></div>
+        <div class="panel-head"><div class="panel-title"><h2>客户管理</h2><p>停用、恢复或进入策略编辑；余额 = 不可变账本净额，可用 = 余额 − 进行中请求的预留额</p></div></div>
         <div class="panel-body">
           <div class="table-wrap">
             <table>
@@ -1024,7 +1024,7 @@
       </div>
 
       <section class="panel">
-        <div class="panel-head"><div class="panel-title"><h2>当前生效价格规则</h2><p>套餐覆盖优先于全局价格；价格单位为整数微积分 / 1M Tokens</p></div></div>
+        <div class="panel-head"><div class="panel-title"><h2>当前生效价格规则</h2><p>套餐覆盖优先于全局价格；价格单位为整数微积分 / 1M Tokens（1 积分 = 1,000,000 微积分，整数记账避免小数误差）</p></div></div>
         <div class="panel-body">
           <div class="filter-row">
             <select id="priceProviderFilter" aria-label="按模板 Provider 筛选"><option value="">全部来源</option></select>
@@ -1060,7 +1060,7 @@
               <label class="field"><span>套餐代码</span><input name="code" required minlength="2" maxlength="32" placeholder="PRO" /></label>
               <label class="field"><span>套餐名称</span><input name="name" required minlength="2" maxlength="80" placeholder="专业版" /></label>
               <label class="field"><span>币种</span><input name="currency" required minlength="3" maxlength="3" value="USD" /></label>
-              <label class="field"><span>默认模式</span><select name="enforcementMode"><option value="shadow">Shadow</option><option value="hard">Hard</option></select></label>
+              <label class="field"><span>默认模式</span><select name="enforcementMode"><option value="shadow">Shadow 观测（只记账不拦截）</option><option value="hard">Hard 强制（超限拦截请求）</option></select></label>
               <label class="field"><span>月费（积分）</span><input name="monthlyPrice" inputmode="decimal" value="0" maxlength="26" /></label>
               <label class="field"><span>包含积分</span><input name="includedCredits" inputmode="decimal" value="0" maxlength="26" /></label>
               <label class="field"><span>月 Token 上限</span><input name="monthlyTokenLimit" inputmode="numeric" value="0" maxlength="24" /></label>
@@ -1088,7 +1088,7 @@
 
     <section class="tab-panel" id="usagePanel" role="tabpanel" aria-labelledby="usageTab" data-tab-panel="usage" hidden>
       <section class="panel">
-        <div class="panel-head"><div class="panel-title"><h2>本期用量</h2><p>请求、Tokens、预计费用与实际扣款</p></div></div>
+        <div class="panel-head"><div class="panel-title"><h2>本期用量</h2><p>预计消费按价格规则从 tokens 推算；已扣是实际写入不可变账本的扣款，两者出现差值属正常（如价格生效前的用量）</p></div></div>
         <div class="panel-body">
           <div class="table-wrap">
             <table>
@@ -1261,8 +1261,14 @@
       returnLink.title = "返回 " + manager.name;
       returnLink.setAttribute("aria-label", "返回 " + manager.name);
 
+      // 从管理器带过来的 ?theme= 优先于本页记忆，跳转时视觉不突变；之后本页自己记住。
+      const urlTheme = new URLSearchParams(window.location.search).get("theme");
       let storedTheme = "auto";
       try { storedTheme = localStorage.getItem(BILLING_THEME_STORAGE_KEY) || "auto"; } catch { /* use auto */ }
+      if (urlTheme && ["auto", "light", "dark"].includes(urlTheme)) {
+        storedTheme = urlTheme;
+        try { localStorage.setItem(BILLING_THEME_STORAGE_KEY, urlTheme); } catch { /* optional */ }
+      }
       storedTheme = normalizeBillingTheme(storedTheme);
       themeMode.value = storedTheme;
       applyBillingTheme(storedTheme);
@@ -1722,7 +1728,7 @@
         const row = node("tr");
         addCell(row, customer.name, { detail: customer.externalRef || customer.id });
         addCell(row, planLabel(customer.planId));
-        addCell(row, customer.enforcementMode === "hard" ? "Hard" : "Shadow");
+        addCell(row, customer.enforcementMode === "hard" ? "Hard 强制" : "Shadow 观测");
         addCell(row, formatCredits(customer.available || customer.balance));
         addCell(row, formatInteger(customer.monthTokens) + " Tokens");
         addCell(row, customerStatusNode(customer.status), { node: true });
@@ -1791,7 +1797,7 @@
         addCell(row, formatCredits(plan.monthlyPrice) + " " + plan.currency);
         addCell(row, formatCredits(plan.includedCredits));
         addCell(row, quotaLabel(plan.monthlyTokenLimit, "Tokens") + " · " + quotaLabel(plan.monthlyRequestLimit, "请求"));
-        addCell(row, plan.enforcementMode === "hard" ? "Hard" : "Shadow");
+        addCell(row, plan.enforcementMode === "hard" ? "Hard 强制" : "Shadow 观测");
         addCell(row, statusNode(plan.active ? "启用" : "停用", plan.active ? "ok" : "warn"), { node: true });
         return row;
       }));

@@ -41,6 +41,49 @@
       }
     }
     * { box-sizing: border-box; }
+    .entry-nav {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px 10px;
+      margin: 0 -10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 86%, transparent);
+      backdrop-filter: blur(8px);
+    }
+    .entry-nav a {
+      padding: 5px 12px;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .entry-nav a:hover { background: var(--surface-2); color: var(--ink); }
+    html { scroll-behavior: smooth; }
+    section[id] { scroll-margin-top: 64px; }
+    .fleet-collapse {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+    }
+    .fleet-collapse > summary {
+      padding: 10px 14px;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      user-select: none;
+      list-style: none;
+    }
+    .fleet-collapse > summary::before { content: "▸ "; }
+    .fleet-collapse[open] > summary::before { content: "▾ "; }
+    .fleet-collapse[open] > summary { color: var(--ink); border-bottom: 1px solid var(--line); }
+    .fleet-collapse > form { margin: 10px !important; }
+
     body {
       margin: 0;
       min-height: 100vh;
@@ -884,7 +927,17 @@
       </div>
     </header>
 
-    <section class="card">
+    <nav class="entry-nav" aria-label="页面导航">
+      <a href="#entrySummaryCard">总览</a>
+      <a href="#managerGrid">管理器</a>
+      <a href="#gateway">接入地址</a>
+      <a href="#fleet">舰队</a>
+      <a href="#access">访问统计</a>
+      <a href="#billingEntryCard">计费</a>
+      <a href="#entryDocs">文档</a>
+    </nav>
+
+    <section class="card" id="entrySummaryCard">
       <div class="card-head">
         <div>
           <h2>服务总览</h2>
@@ -897,7 +950,19 @@
       </div>
     </section>
 
-    <section class="fleet-workbench" aria-labelledby="fleetTitle">
+    <section id="managerGrid" class="grid">
+      <div class="empty">正在读取本地服务状态...</div>
+    </section>
+
+    <section class="note" id="gateway">
+      <h3>统一自动路由</h3>
+      <p>给新设备优先使用这里的 auto 地址；后台会自动转到当前可用的 vLLM 或 llama.cpp 管理器。</p>
+      <div class="gateway-strip" id="entryGatewayStrip">
+        <div class="empty">正在读取统一网关地址...</div>
+      </div>
+    </section>
+
+    <section class="fleet-workbench" id="fleet" aria-labelledby="fleetTitle">
       <div class="fleet-layout">
         <article class="card fleet-main">
           <div class="card-head fleet-head">
@@ -911,6 +976,8 @@
               <button class="fleet-mode-button" type="button" data-fleet-mode="multimodal" aria-pressed="false">多模态优先</button>
             </div>
           </div>
+          <details class="fleet-collapse">
+            <summary>显存准入策略</summary>
           <form class="fleet-policy-form" id="fleetPolicyForm">
             <div class="fleet-policy-copy">
               <strong>显存准入策略</strong>
@@ -926,6 +993,7 @@
             </label>
             <button class="primary" id="fleetPolicySave" type="submit">保存显存策略</button>
           </form>
+          </details>
           <div id="fleetMainPanel" aria-busy="true">
             <div class="empty fleet-loading">正在读取多模型舰队...</div>
           </div>
@@ -942,6 +1010,8 @@
           <div id="fleetRoutingPanel">
             <div class="empty">正在生成路由规则...</div>
           </div>
+          <details class="fleet-collapse">
+            <summary>路由预演</summary>
           <form class="fleet-preview" id="fleetRoutePreviewForm">
             <div class="fleet-preview-copy">
               <h3>路由预演</h3>
@@ -968,6 +1038,7 @@
             <button type="submit" id="fleetPreviewSubmit">预演路由</button>
             <div class="fleet-preview-result" id="fleetPreviewResult" role="status" aria-live="polite">选择能力后预演；结果只表示当前路由决策，不会发起模型推理。</div>
           </form>
+          </details>
         </aside>
       </div>
 
@@ -975,6 +1046,19 @@
         <button type="button" id="fleetRefreshBtn">刷新舰队</button>
         <a class="button" id="openVllmLaunch" href="http://127.0.0.1:5177/#service" target="_blank" rel="noreferrer">打开 vLLM 启动页</a>
         <a class="button" id="openLlamaLaunch" href="http://127.0.0.1:5178/#service" target="_blank" rel="noreferrer">打开 llama.cpp 启动页</a>
+      </div>
+    </section>
+
+    <section class="card" id="access">
+      <div class="card-head">
+        <div>
+          <h2>统一网关访问</h2>
+          <p>只统计 service-entry 入口转发的请求元数据，不记录提示词或响应正文。</p>
+        </div>
+        <a class="button" href="/api/gateway-access" target="_blank" rel="noreferrer">原始统计 JSON</a>
+      </div>
+      <div class="access-grid" id="entryAccessPanel">
+        <div class="empty">正在读取统一网关访问统计...</div>
       </div>
     </section>
 
@@ -992,37 +1076,17 @@
       </div>
     </section>
 
-    <section id="managerGrid" class="grid">
-      <div class="empty">正在读取本地服务状态...</div>
-    </section>
 
-    <section class="note">
-      <h3>统一自动路由</h3>
-      <p>给新设备优先使用这里的 auto 地址；后台会自动转到当前可用的 vLLM 或 llama.cpp 管理器。</p>
-      <div class="gateway-strip" id="entryGatewayStrip">
-        <div class="empty">正在读取统一网关地址...</div>
-      </div>
-    </section>
 
-    <section class="card">
-      <div class="card-head">
-        <div>
-          <h2>统一网关访问</h2>
-          <p>只统计 service-entry 入口转发的请求元数据，不记录提示词或响应正文。</p>
-        </div>
-        <a class="button" href="/api/gateway-access" target="_blank" rel="noreferrer">原始统计 JSON</a>
-      </div>
-      <div class="access-grid" id="entryAccessPanel">
-        <div class="empty">正在读取统一网关访问统计...</div>
-      </div>
-    </section>
+
+
 
     <section class="note">
       <h3>推荐接入方式</h3>
       <p>OpenWebUI、Claude Desktop 转发器、OpenCode 等客户端优先填写 <strong>OpenAI Gateway Base URL</strong>，模型名用 <strong>local-current</strong>。需要给局域网设备使用时，先进入对应“服务后台”打开局域网提供服务；如需隔离不同客户端，再创建独立客户端 API Key。</p>
     </section>
 
-    <section class="note">
+    <section class="note" id="entryDocs">
       <h3>文档与排错</h3>
       <p>局域网访问请用发布目录根部的 <code>start-service-entry-lan.cmd</code> 启动统一入口；默认双击 <code>start-service-entry.cmd</code> 仍只开放本机。</p>
       <div class="doc-grid">

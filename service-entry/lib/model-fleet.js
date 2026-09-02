@@ -295,6 +295,29 @@ function targetError(error, capability, status, reason) {
   return { manager: null, instance: null, model: null, capability, reason, message: reason, error, status };
 }
 
+function candidateLoad(candidate) {
+  const model = candidate?.model || {};
+  const running = Number(model.runningRequests);
+  const waiting = Number(model.waitingRequests);
+  const total = (Number.isFinite(running) ? running : 0) + (Number.isFinite(waiting) ? waiting : 0);
+  return { total, known: Number.isFinite(running) || Number.isFinite(waiting) };
+}
+
+// 完全同分的候选轮转分流：并行实例不再永远把流量压给第一个实例。
+// 进程内计数即可 —— 网关是单进程，重启后从头轮转没有副作用。
+const fleetRotationCounters = new Map();
+
+function nextRotationIndex(key, groupSize) {
+  if (groupSize <= 1) return 0;
+  const current = fleetRotationCounters.get(key) || 0;
+  fleetRotationCounters.set(key, (current + 1) % Number.MAX_SAFE_INTEGER);
+  if (fleetRotationCounters.size > 512) {
+    const firstKey = fleetRotationCounters.keys().next().value;
+    fleetRotationCounters.delete(firstKey);
+  }
+  return current % groupSize;
+}
+
 function selectFleetTarget(catalogs, request = {}) {
   const route = request.route || { protocol: request.protocol, path: request.path };
   const protocol = String(request.protocol || route.protocol || "openai").toLowerCase();
@@ -338,7 +361,7 @@ function selectFleetTarget(catalogs, request = {}) {
   }
 
   const preferredEngine = String(request.preferEngine || "").toLowerCase();
-  capable.sort((a, b) => {
+  const compareCandidates = (a, b) => {
     const exactA = !generic && String(a.model.id).toLowerCase() === requestedModel.toLowerCase() ? 1 : 0;
     const exactB = !generic && String(b.model.id).toLowerCase() === requestedModel.toLowerCase() ? 1 : 0;
     if (exactA !== exactB) return exactB - exactA;
@@ -358,16 +381,27 @@ function selectFleetTarget(catalogs, request = {}) {
       if (primaryA !== primaryB) return primaryB - primaryA;
     }
     if (mode === "multimodal" && capability === "text") {
-      const specialistA = a.capabilities.length === 1 ? 1 : 0;
-      const specialistB = b.capabilities.length === 1 ? 1 : 0;
+      // 纯文本请求优先让给不占多模态能力的实例，把 vision/audio 模型留给
+      // 真正需要的请求。text+tools 也算「文本专一」。
+      const specialistA = a.capabilities.includes("vision") || a.capabilities.includes("audio") ? 0 : 1;
+      const specialistB = b.capabilities.includes("vision") || b.capabilities.includes("audio") ? 0 : 1;
       if (specialistA !== specialistB) return specialistB - specialistA;
     }
     const priorityA = Number(a.instance.priority || a.model.priority || 0);
     const priorityB = Number(b.instance.priority || b.model.priority || 0);
     if (priorityA !== priorityB) return priorityB - priorityA;
+    // 负载感知：同分候选优先给正在处理请求最少的实例（数据来自 /api/instances）。
+    const loadA = candidateLoad(a);
+    const loadB = candidateLoad(b);
+    if (loadA.total !== loadB.total) return loadA.total - loadB.total;
     return Number(Boolean(b.instance.primary)) - Number(Boolean(a.instance.primary));
-  });
-  const selected = capable[0];
+  };
+  capable.sort(compareCandidates);
+  // 排序后仍完全同分的头部候选按轮转取，让并行实例分摊流量。
+  const tiedGroup = capable.filter((candidate) => compareCandidates(capable[0], candidate) === 0 && compareCandidates(candidate, capable[0]) === 0);
+  const rotationKey = `${capability}\0${generic ? "auto" : requestedModel.toLowerCase()}`;
+  // 路由预演（dryRun）只观察决策，不推进轮转计数。
+  const selected = tiedGroup[request.dryRun ? 0 : nextRotationIndex(rotationKey, tiedGroup.length)] || capable[0];
   return {
     manager: selected.manager,
     instance: selected.instance,

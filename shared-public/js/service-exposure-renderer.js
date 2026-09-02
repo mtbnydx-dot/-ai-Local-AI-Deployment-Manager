@@ -10,6 +10,9 @@
       fmtTokens,
       defaultServicePort,
       includeOpenCode = false,
+      // deploy/public 的 Caddy 把公网域名整体转发给统一入口（5176），
+      // 公网客户端实际走的是入口网关的 /gateway/<engine>/... 路径。
+      gatewayEngine = "auto",
     } = deps;
 
     function renderServiceExposure() {
@@ -75,9 +78,9 @@
         ? `http://${lanAddress}:${servicePort}/v1`
         : "";
       const publicBase = effectivePublicBaseUrl(settings);
-      const publicOpenAi = publicBase ? `${publicBase}/serve/v1` : "";
-      const publicClaude = publicBase ? `${publicBase}/claude` : "";
-      const publicClaudeMessages = publicBase ? `${publicBase}/claude/v1/messages` : "";
+      const publicOpenAi = publicBase ? `${publicBase}/gateway/${gatewayEngine}/openai/v1` : "";
+      const publicClaude = publicBase ? `${publicBase}/gateway/${gatewayEngine}/claude` : "";
+      const publicClaudeMessages = publicBase ? `${publicBase}/gateway/${gatewayEngine}/claude/v1/messages` : "";
       const openAiClientBase = service.openAiGatewayLanBaseUrl || service.openAiGatewayLocalBaseUrl || "-";
       const openAiLocalGateway = service.openAiGatewayLocalBaseUrl || "-";
       const claudeClientBase = selectedMode === "reverse-proxy"
@@ -91,7 +94,7 @@
       root.innerHTML = `
         ${exposureLiveControls(settings, includeOpenCode)}
         ${selectedMode === "reverse-proxy" ? renderPublicGuide(settings, service, publicBase) : ""}
-        ${publicOpenAi && selectedMode === "reverse-proxy" ? exposureEndpointCard("OpenAI 公网网关（推荐）", publicOpenAi, `${openAiEnabled ? "当前已开放。" : "当前已关闭。"}公网客户端统一用这个地址：Caddy 终止 TLS 后代理到管理器 /serve/v1，鉴权、限流、排队、审计都在这里生效。`, openAiEnabled ? "recommended" : "disabled", endpointToggleAction(gatewayEnabled ? "exposeOpenAI" : "enabled", true, openAiEnabled ? "关闭 OpenAI" : gatewayEnabled ? "开启 OpenAI" : "开启总开关", openAiEnabled)) : ""}
+        ${publicOpenAi && selectedMode === "reverse-proxy" ? exposureEndpointCard("OpenAI 公网网关（推荐）", publicOpenAi, `${openAiEnabled ? "当前已开放。" : "当前已关闭。"}公网客户端统一用这个地址：Caddy 终止 TLS 后转发统一入口，入口按 /gateway/${gatewayEngine} 校验服务 Key 并转发到本管理器网关，鉴权、限流、排队、审计逐层生效。`, openAiEnabled ? "recommended" : "disabled", endpointToggleAction(gatewayEnabled ? "exposeOpenAI" : "enabled", true, openAiEnabled ? "关闭 OpenAI" : gatewayEnabled ? "开启 OpenAI" : "开启总开关", openAiEnabled)) : ""}
         ${publicClaude && selectedMode === "reverse-proxy" ? exposureEndpointCard("Claude 公网网关（推荐）", publicClaude, `${claudeEnabled ? "当前已开放。" : "当前已关闭。"}Claude Desktop / Cowork / ccswitch 的 Base URL；认证字段用 ANTHROPIC_API_KEY 或 Bearer Token。完整 messages 地址：${publicClaudeMessages}`, claudeEnabled ? "recommended" : "disabled", endpointToggleAction(gatewayEnabled ? "exposeClaude" : "enabled", true, claudeEnabled ? "关闭 Claude" : gatewayEnabled ? "开启 Claude" : "开启总开关", claudeEnabled)) : ""}
         ${exposureEndpointCard(selectedMode === "reverse-proxy" ? "OpenAI 内网网关" : "Chatbox / OpenWebUI / OpenAI SDK", openAiClientBase, selectedMode === "reverse-proxy" ? "只给本机/内网客户端；公网客户端请用上面的公网网关地址。" : `${openAiEnabled ? "当前已开放。" : "当前已关闭。"}Provider 选 OpenAI Compatible；Base URL 必须以 /serve/v1 结尾。只有该网关入口会执行队列、限流与审计；直连容器端口不会排队。`, selectedMode === "reverse-proxy" ? "" : openAiEnabled ? "recommended" : "disabled", selectedMode === "reverse-proxy" ? "" : endpointToggleAction(gatewayEnabled ? "exposeOpenAI" : "enabled", true, openAiEnabled ? "关闭 OpenAI" : gatewayEnabled ? "开启 OpenAI" : "开启总开关", openAiEnabled))}
         ${openAiLocalGateway !== openAiClientBase ? exposureEndpointCard("OpenAI 本机网关", openAiLocalGateway, "本机客户端使用；同样走鉴权、限流、并发、审计。") : ""}

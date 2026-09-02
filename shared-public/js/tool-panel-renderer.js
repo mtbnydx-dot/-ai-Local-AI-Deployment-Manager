@@ -114,11 +114,15 @@
       setChecked("#vramGuardEnabled", Boolean(settings.vramGuardEnabled));
       setValue("#vramPercent", settings.vramPercent || 94);
       setValue("#vramAction", settings.vramAction || "warn");
+      setChecked("#tempGuardEnabled", Boolean(settings.tempGuardEnabled));
+      setValue("#tempLimitC", settings.tempLimitC || 83);
       const status = $("#automationStatus");
       if (status) {
+        const enabled = settings.idleUnloadEnabled || settings.vramGuardEnabled || settings.tempGuardEnabled;
+        const tempText = settings.tempGuardEnabled ? ` · 温度告警 ${fmtTokens(settings.tempLimitC || 83)}°C` : "";
         status.innerHTML = `
-          <strong>${settings.idleUnloadEnabled || settings.vramGuardEnabled ? copy.automationOn : copy.automationOff}</strong>
-          <span>空闲 ${fmtTokens(settings.idleMinutes || 30)} 分钟 · 显存阈值 ${fmtTokens(settings.vramPercent || 94)}% · ${settings.vramAction === "unload" ? copy.idleUnload : copy.warnOnly}</span>
+          <strong>${enabled ? copy.automationOn : copy.automationOff}</strong>
+          <span>空闲 ${fmtTokens(settings.idleMinutes || 30)} 分钟 · 显存阈值 ${fmtTokens(settings.vramPercent || 94)}% · ${settings.vramAction === "unload" ? copy.idleUnload : copy.warnOnly}${tempText}</span>
         `;
       }
     }

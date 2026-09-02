@@ -185,6 +185,22 @@ set SERVICE_ENTRY_ALLOW_LAN_ADMIN=1
 start-service-entry.cmd lan
 ```
 
+### 性能与下载行为开关
+
+2026-08-22 起的行为变化：下载停滞（默认 5 分钟无字节增长，包括 Xet 缓存）会终止下载进程但**保留全部已下载文件**，并按自动重试策略从本地续传；此前版本会删除部分文件且不重试。管理器状态热路径（docker/nvidia-smi/容器 /metrics）带 2 秒单飞缓存；任务进度通过 `GET /api/events`（SSE）推送，浏览器轮询自动降为安全网频率。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `MODEL_DOWNLOAD_STALL_TIMEOUT_MS` | `300000` | 下载停滞判定时长；`0` = 关闭停滞检测 |
+| `MODEL_DOWNLOAD_PROGRESS_INTERVAL_MS` | `10000` | 下载进度目录扫描间隔 |
+| `MANAGER_STATUS_CACHE_MS` | `2000` | 管理器状态快照缓存 TTL |
+| `MODEL_ACCESS_STATS_CACHE_MS` | `10000` | 访问统计聚合结果缓存 TTL；`0` = 每次重算 |
+| `MODEL_REMOTE_SEARCH_CACHE_MS` | `90000` | HF/ModelScope 在线搜索结果缓存 TTL |
+| `MODEL_REMOTE_INFO_CACHE_MS` | `300000` | 模型详情与下载体积预估缓存 TTL |
+| `METRICS_HISTORY_FLUSH_MS` | `300000` | 指标历史落盘间隔（内存实时可读；`0` = 每次采样即写） |
+
+### 可更新的参考数据
+
 ### 可更新的参考数据
 
 模型价格和 GPU 性能系数存放在 `manager-core/data/*.json`，都带 `asOf` 日期；数据超期时统计页会提示成本对比仅供粗略参考。把同名文件放到 `<AI_ROOT>/config/` 即可覆盖内置版本，无需改代码。
@@ -407,6 +423,20 @@ Generate API keys from the manager's service/external access page. Do not put re
 | `SERVICE_ENTRY_ALLOWED_HOSTS` | empty | Extra Host allowlist for reverse-proxy domains |
 | `SEARCH_GATEWAY_ALLOW_NO_KEY` | `false` | `true` = let search-gateway serve without a key |
 | `AI_AUDIT_MAX_EXPORTS` / `AI_AUDIT_MAX_AGE_DAYS` | `30` / `90` | Audit export retention by count and age; `0` disables the limit |
+
+### Performance And Download Behavior
+
+Behavior changes as of 2026-08-22: a stalled download (no byte growth for 5 minutes by default, Xet cache included) terminates the download process but **keeps every downloaded file** and resumes through the auto-retry policy; earlier versions deleted the partial files without retrying. Manager status hot paths (docker/nvidia-smi/container /metrics) sit behind a 2-second single-flight cache, and job progress is pushed over `GET /api/events` (SSE) with browser polling reduced to a safety net.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MODEL_DOWNLOAD_STALL_TIMEOUT_MS` | `300000` | Download stall threshold; `0` disables stall detection |
+| `MODEL_DOWNLOAD_PROGRESS_INTERVAL_MS` | `10000` | Download progress scan interval |
+| `MANAGER_STATUS_CACHE_MS` | `2000` | Manager runtime snapshot cache TTL |
+| `MODEL_ACCESS_STATS_CACHE_MS` | `10000` | Access statistics aggregation cache TTL; `0` recomputes every request |
+| `MODEL_REMOTE_SEARCH_CACHE_MS` | `90000` | HF/ModelScope online search cache TTL |
+| `MODEL_REMOTE_INFO_CACHE_MS` | `300000` | Model info and download size estimate cache TTL |
+| `METRICS_HISTORY_FLUSH_MS` | `300000` | Metrics history flush interval (reads stay in-memory; `0` writes every sample) |
 
 ### Updatable Reference Data
 

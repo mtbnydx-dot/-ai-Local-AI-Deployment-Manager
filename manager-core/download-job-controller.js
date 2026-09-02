@@ -58,6 +58,8 @@ function createDownloadJobController(options = {}) {
     partialDeleted: "已删除部分下载目录",
     resumeQueued: "继续下载已加入队列。",
     resumeStarting: "继续下载，尝试复用本地已有文件。",
+    stallFailed: "下载进度长时间无增长，已终止下载进程。",
+    stallPreserved: "已下载的文件全部保留；将按自动重试策略从本地续传。",
     queueDisabledStart: "下载队列已关闭，立即开始本任务。",
     queueNextStart: "前一个下载已结束，开始本任务。",
     queueExpiredError: "下载队列状态已过期，请重新提交下载任务。",
@@ -101,6 +103,8 @@ function createDownloadJobController(options = {}) {
   let autoRetryDelaySeconds = clampInteger(options.autoRetryDelaySeconds, 1, 3600, 10);
   let hfMirror = Boolean(options.hfMirror);
   let hfTransfer = Boolean(options.hfTransfer);
+  let verifyChecksums = options.verifyChecksums !== false;
+  let idleOnlyQueue = Boolean(options.idleOnlyQueue);
 
   function applyDownloadSettings(input = {}) {
     if (input.queueMode !== undefined) setQueueMode(Boolean(input.queueMode));
@@ -108,6 +112,8 @@ function createDownloadJobController(options = {}) {
     if (input.autoRetryDelaySeconds !== undefined) autoRetryDelaySeconds = clampInteger(input.autoRetryDelaySeconds, 1, 3600, autoRetryDelaySeconds);
     if (input.hfMirror !== undefined) hfMirror = Boolean(input.hfMirror);
     if (input.hfTransfer !== undefined) hfTransfer = Boolean(input.hfTransfer);
+    if (input.verifyChecksums !== undefined) verifyChecksums = Boolean(input.verifyChecksums);
+    if (input.idleOnlyQueue !== undefined) idleOnlyQueue = Boolean(input.idleOnlyQueue);
     return getDownloadSettings();
   }
 
@@ -214,6 +220,26 @@ function createDownloadJobController(options = {}) {
     options.appendLog(job, `${messages.partialDeleted}: ${resolved}`);
   }
 
+  // Stalls are transient by definition (network hiccups, HF throttling, Xet
+  // staging, resume-time revalidation). Never delete the partial download for
+  // one; convert it into an ordinary failure so the auto-retry scheduler can
+  // resume from the bytes already on disk.
+  function handleDownloadStallAfterStop(job) {
+    if (!job || job.type !== "download") return job;
+    options.stopProgressTracker(job);
+    job.meta = {
+      ...(job.meta || {}),
+      cancelRequested: false,
+      cancelAction: null,
+      failedAt: Date.now(),
+    };
+    failJob(job, new Error(messages.stallFailed));
+    options.appendLog(job, messages.stallPreserved);
+    scheduleSave(0);
+    setImmediate(drainDownloadQueue);
+    return job;
+  }
+
   function resumeDownloadJob(job) {
     if (job.status === "running" || job.status === "queued") return job;
     if (job.status === "success") throw new Error("该下载任务已完成，不需要继续。");
@@ -251,6 +277,8 @@ function createDownloadJobController(options = {}) {
       autoRetryDelaySeconds: body.autoRetryDelaySeconds !== undefined ? body.autoRetryDelaySeconds : autoRetryDelaySeconds,
       hfMirror: body.hfMirror !== undefined ? body.hfMirror : hfMirror,
       hfTransfer: body.hfTransfer !== undefined ? body.hfTransfer : hfTransfer,
+      verifyChecksums: body.verifyChecksums !== undefined ? body.verifyChecksums : verifyChecksums,
+      idleOnlyQueue: body.idleOnlyQueue !== undefined ? body.idleOnlyQueue : idleOnlyQueue,
     });
     await saveQueueMode(settings);
     if (previousQueueMode && !settings.queueMode) startQueuedDownloadsNow();
@@ -266,10 +294,33 @@ function createDownloadJobController(options = {}) {
       .sort((a, b) => downloadPriorityScore(b.meta?.priority) - downloadPriorityScore(a.meta?.priority)
         || String(a.createdAt).localeCompare(String(b.createdAt)))[0];
     if (!next) return;
-    const spec = downloadSpecs.get(next.id);
-    downloadSpecs.delete(next.id);
-    options.appendLog(next, messages.queueNextStart);
-    options.spawnJobProcess(next, spec.command, spec.args, spec.options);
+    // 「模型空闲时才下载」：推理正忙时不抢带宽/磁盘，稍后重查。
+    if (idleOnlyQueue && typeof options.isRuntimeBusy === "function") {
+      Promise.resolve(options.isRuntimeBusy()).then((busy) => {
+        if (!busy) {
+          startQueuedJob(next);
+          return;
+        }
+        if (next.meta && !next.meta.idleWaitLogged) {
+          next.meta.idleWaitLogged = true;
+          options.appendLog(next, "模型服务正忙，队列等待空闲后自动开始（每 60 秒重查一次）。");
+          scheduleSave(0);
+        }
+        const timer = setRetryTimeout(() => drainDownloadQueue(), 60_000);
+        timer.unref?.();
+      }).catch(() => startQueuedJob(next));
+      return;
+    }
+    startQueuedJob(next);
+  }
+
+  function startQueuedJob(job) {
+    if (!job || job.status !== "queued" || !downloadSpecs.has(job.id) || hasRunningDownload()) return;
+    const spec = downloadSpecs.get(job.id);
+    downloadSpecs.delete(job.id);
+    if (job.meta) delete job.meta.idleWaitLogged;
+    options.appendLog(job, messages.queueNextStart);
+    options.spawnJobProcess(job, spec.command, spec.args, spec.options);
   }
 
   function healDownloadQueue(healOptions = {}) {
@@ -296,6 +347,8 @@ function createDownloadJobController(options = {}) {
       autoRetryDelaySeconds,
       hfMirror,
       hfTransfer,
+      verifyChecksums,
+      idleOnlyQueue,
     };
   }
 
@@ -359,6 +412,7 @@ function createDownloadJobController(options = {}) {
     cancelDownloadJob,
     finalizeDownloadCancel,
     deletePartialDownload,
+    handleDownloadStallAfterStop,
     resumeDownloadJob,
     saveDownloadSettings,
     getDownloadSettings,

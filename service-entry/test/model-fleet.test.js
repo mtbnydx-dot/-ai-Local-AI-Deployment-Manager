@@ -320,3 +320,68 @@ function catalog(manager, instances) {
     aliases: new Set(["local-current", "auto"]),
   };
 }
+
+test("tied parallel instances rotate while a busier instance yields to an idle one", () => {
+  const makeCatalog = (loadA, loadB) => {
+    const instances = fleet.normalizeManagerInstances(vllm, {
+      instances: [
+        { id: "a", primary: false, running: true, status: "Up 5 minutes", port: 8001, models: [{ id: "qwen-27b", runningRequests: loadA, waitingRequests: 0 }] },
+        { id: "b", primary: false, running: true, status: "Up 5 minutes", port: 8002, models: [{ id: "qwen-27b", runningRequests: loadB, waitingRequests: 0 }] },
+      ],
+    });
+    return {
+      manager: vllm,
+      listening: true,
+      running: true,
+      instances,
+      models: fleet.flattenCatalogModels(instances),
+      aliases: new Set(),
+    };
+  };
+  const request = { engine: "auto", protocol: "openai", path: "v1/chat/completions", body: { model: "qwen-27b" } };
+
+  // 负载不同：永远选空闲的那个。
+  for (let i = 0; i < 3; i += 1) {
+    const busyAware = fleet.selectFleetTarget([makeCatalog(4, 0)], request);
+    assert.equal(busyAware.instance.instanceId, "b", "idle instance must win over the busy one");
+  }
+
+  // 完全同分：轮转分流，两个实例都要被选中过。
+  const seen = new Set();
+  for (let i = 0; i < 4; i += 1) {
+    const tied = fleet.selectFleetTarget([makeCatalog(0, 0)], request);
+    seen.add(tied.instance.instanceId);
+  }
+  assert.deepEqual([...seen].sort(), ["a", "b"], "tied instances must rotate");
+
+  // dryRun 预演不推进轮转，也不受轮转影响（稳定返回同一个）。
+  const first = fleet.selectFleetTarget([makeCatalog(0, 0)], { ...request, dryRun: true });
+  const second = fleet.selectFleetTarget([makeCatalog(0, 0)], { ...request, dryRun: true });
+  assert.equal(first.instance.instanceId, second.instance.instanceId, "dryRun must be stable");
+});
+
+test("multimodal mode keeps text traffic on text-only instances even when they also do tools", () => {
+  const instances = fleet.normalizeManagerInstances(vllm, {
+    instances: [
+      { id: "vision", primary: true, running: true, status: "Up 1 hour", port: 8000, models: [{ id: "qwen-vl", capabilities: ["text", "vision", "tools"] }] },
+      { id: "textonly", primary: false, running: true, status: "Up 1 hour", port: 8001, models: [{ id: "qwen-text", capabilities: ["text", "tools"] }] },
+    ],
+  });
+  const catalog = {
+    manager: vllm,
+    listening: true,
+    running: true,
+    instances,
+    models: fleet.flattenCatalogModels(instances),
+    aliases: new Set(),
+  };
+  const target = fleet.selectFleetTarget([catalog], {
+    engine: "auto",
+    protocol: "openai",
+    path: "v1/chat/completions",
+    mode: "multimodal",
+    dryRun: true,
+    body: { model: "auto" },
+  });
+  assert.equal(target.model.id, "qwen-text", "text requests should spare the vision instance");
+});

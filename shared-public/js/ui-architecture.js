@@ -160,6 +160,9 @@
 
       form.prepend(stageRoot);
       form.prepend(nav);
+      // 必填字段分散在被隐藏的步骤里；原生校验会试图聚焦不可见控件而静默拦截提交。
+      // 分步校验（validateStage）和提交前的 JS 校验负责全部约束检查。
+      form.noValidate = true;
       (options.requiredSelectors || []).forEach((selector) => {
         const element = $(selector);
         if (element) element.required = true;

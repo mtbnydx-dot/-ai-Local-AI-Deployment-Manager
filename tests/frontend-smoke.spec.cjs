@@ -592,6 +592,10 @@ async function smokeEntryPage(page, baseUrl) {
   await expect(page.locator("[data-fleet-mode='multimodal']")).toHaveAttribute("aria-pressed", "true");
   expect(settingsRequests).toEqual([{ mode: "multimodal" }]);
 
+  // 显存策略与路由预演默认折叠在 details 里，先展开再操作。
+  for (const summary of await page.locator(".fleet-collapse > summary").all()) {
+    await summary.click();
+  }
   await expect(page.locator("#fleetMaxUtilizationPct")).toHaveValue("85");
   await expect(page.locator("#fleetReserveGiB")).toHaveValue("8");
   await page.locator("#fleetMaxUtilizationPct").fill("90.5");

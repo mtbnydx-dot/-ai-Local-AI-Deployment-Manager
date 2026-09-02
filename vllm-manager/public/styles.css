@@ -2792,6 +2792,7 @@ textarea:focus {
 }
 
 .download-progress-track {
+  position: relative;
   height: 10px;
   overflow: hidden;
   border-radius: 999px;
@@ -2799,11 +2800,20 @@ textarea:focus {
 }
 
 .download-progress-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
   width: 0;
-  height: 100%;
   border-radius: inherit;
   background: var(--blue);
   transition: width 240ms ease;
+}
+
+/* 传输中的分片：实心段之后的浅色延伸，表示尚未定稿的 .incomplete 字节。 */
+.download-progress-fill.partial-layer {
+  background: var(--blue);
+  opacity: 0.32;
 }
 
 .download-progress-fill.ok {
@@ -5081,3 +5091,39 @@ pre::-webkit-scrollbar-track {
     grid-column: 2;
   }
 }
+
+/* 磁盘看板 */
+.disk-usage-panel { display: grid; gap: 10px; min-width: 0; }
+.disk-usage-bar {
+  display: flex;
+  height: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--progress-track);
+}
+.disk-usage-segment.models { background: var(--blue); }
+.disk-usage-segment.other { background: var(--muted); opacity: 0.55; }
+.disk-usage-segment.free { background: transparent; }
+.disk-usage-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }
+.disk-usage-legend .dot { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 50%; vertical-align: baseline; }
+.disk-usage-legend .dot.models { background: var(--blue); }
+.disk-usage-legend .dot.other { background: var(--muted); opacity: 0.55; }
+.disk-usage-legend .dot.free { background: var(--progress-track); border: 1px solid var(--line); }
+.disk-usage-meta { color: var(--muted); font-size: 12px; }
+.disk-usage-list { display: grid; min-width: 0; }
+.disk-usage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.disk-usage-row:last-child { border-bottom: 0; }
+.disk-usage-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disk-usage-size { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.disk-usage-actions { display: flex; gap: 6px; }
+
+.serve-stage-timeline { color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }

@@ -47,6 +47,16 @@ function createVllmRemoteModelService({
   getHfToken = () => process.env.HF_TOKEN,
 } = {}) {
   const useSystemProxyFallback = fetchImpl === globalThis.fetch;
+  // 搜索/详情/体积预估都是纯远端读取：短 TTL 缓存让翻页、切排序不再重打一轮
+  // HF API；密钥状态进 key，登录 gated 账号后不会拿到旧的匿名结果。
+  const remoteSearchCache = core.createSingleFlightCache({
+    ttlMs: Math.max(0, Number(process.env.MODEL_REMOTE_SEARCH_CACHE_MS ?? 90_000)),
+    maxEntries: 48,
+  });
+  const remoteInfoCache = core.createSingleFlightCache({
+    ttlMs: Math.max(0, Number(process.env.MODEL_REMOTE_INFO_CACHE_MS ?? 300_000)),
+    maxEntries: 120,
+  });
 
   function remoteFetch(url, options) {
     return core.fetchWithSystemProxyFallback(fetchImpl, url, options, {
@@ -106,9 +116,10 @@ function createVllmRemoteModelService({
     const size = String(query.size || "").trim();
     const freshness = String(query.freshness || "auto").trim();
     const quant = core.normalizeRemoteQuantFilter(query.quant || legacy.quant);
-    const models = source === "modelscope"
-      ? await searchModelScopeModels({ sort, task, feature, search, limit, size, quant })
-      : await searchHuggingFaceModels({ sort, task, feature, search, limit, size, freshness, quant });
+    const cacheKey = JSON.stringify([source, sort, task, feature, search, limit, size, freshness, quant, Boolean(getHfToken())]);
+    const models = await remoteSearchCache.get(cacheKey, () => (source === "modelscope"
+      ? searchModelScopeModels({ sort, task, feature, search, limit, size, quant })
+      : searchHuggingFaceModels({ sort, task, feature, search, limit, size, freshness, quant })));
     return { source, sort, task, feature, search, limit, size, freshness, quant, models };
   }
 
@@ -162,6 +173,9 @@ function createVllmRemoteModelService({
     const candidates = [];
     const requestLimit = Math.min(100, Math.max(48, limit));
 
+    // 并行抓取全部搜索组合；合并仍按原顺序去重，保持结果优先级不变。
+    // 只要有一路成功就出结果，全部失败才抛错。
+    const requests = [];
     for (const pipelineTag of pipelineTags) {
       for (const term of searches) {
         const params = new URLSearchParams({
@@ -172,15 +186,22 @@ function createVllmRemoteModelService({
         });
         if (term) params.set("search", term);
         if (pipelineTag) params.set("pipeline_tag", pipelineTag);
-        const data = await fetchJson(`https://huggingface.co/api/models?${params}`);
-        for (const model of Array.isArray(data) ? data : []) {
-          const id = model.modelId || model.id;
-          if (!id || seen.has(id)) continue;
-          seen.add(id);
-          const summary = simplifyHuggingFaceModel(model);
-          if (!isRemoteModelCandidate(summary, profile, size, quantFilter)) continue;
-          candidates.push(summary);
-        }
+        requests.push(fetchJson(`https://huggingface.co/api/models?${params}`));
+      }
+    }
+    const settled = await Promise.allSettled(requests);
+    if (settled.length && settled.every((item) => item.status === "rejected")) {
+      throw settled[0].reason instanceof Error ? settled[0].reason : new Error(String(settled[0].reason));
+    }
+    for (const item of settled) {
+      if (item.status !== "fulfilled") continue;
+      for (const model of Array.isArray(item.value) ? item.value : []) {
+        const id = model.modelId || model.id;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const summary = simplifyHuggingFaceModel(model);
+        if (!isRemoteModelCandidate(summary, profile, size, quantFilter)) continue;
+        candidates.push(summary);
       }
     }
 
@@ -200,23 +221,22 @@ function createVllmRemoteModelService({
     const candidates = [];
     const requestLimit = Math.min(100, Math.max(40, limit));
 
-    for (const term of baseSearches) {
-      const body = {
-        PageSize: requestLimit,
-        PageNumber: 1,
-        SortBy: sortBy,
-        Name: term || "",
-        Criterion: [],
-        SingleCriterion: [],
-        Target: "",
-      };
-      let data;
-      try {
-        data = await fetchJsonPost("https://www.modelscope.cn/api/v1/dolphin/models", body, "PUT");
-      } catch (error) {
-        if (candidates.length) break;
-        throw new Error(`ModelScope 查询失败：${error.message}`);
-      }
+    // 并行抓取全部搜索词；合并按原顺序去重，全部失败才抛错。
+    const settled = await Promise.allSettled(baseSearches.map((term) => fetchJsonPost("https://www.modelscope.cn/api/v1/dolphin/models", {
+      PageSize: requestLimit,
+      PageNumber: 1,
+      SortBy: sortBy,
+      Name: term || "",
+      Criterion: [],
+      SingleCriterion: [],
+      Target: "",
+    }, "PUT")));
+    if (settled.length && settled.every((item) => item.status === "rejected")) {
+      throw new Error(`ModelScope 查询失败：${settled[0].reason?.message || settled[0].reason}`);
+    }
+    for (const item of settled) {
+      if (item.status !== "fulfilled") continue;
+      const data = item.value;
       const list = data?.Data?.Model?.Models || data?.Data?.Models || data?.Data?.model?.Models || [];
       for (const raw of Array.isArray(list) ? list : []) {
         const summary = simplifyModelScopeModel(raw);
@@ -284,21 +304,37 @@ function createVllmRemoteModelService({
   }
 
   async function getHuggingFaceModelInfo(modelId) {
-    const data = await fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}`);
+    const data = await remoteInfoCache.get(
+      `info:${modelId}:${Boolean(getHfToken())}`,
+      () => fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}`),
+    );
     return simplifyHuggingFaceModel(data);
   }
 
   async function getHuggingFaceDownloadEstimate(modelId, precision = "") {
-    const data = await fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}?blobs=true`);
+    const data = await remoteInfoCache.get(
+      `blobs:${modelId}:${Boolean(getHfToken())}`,
+      () => fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}?blobs=true`),
+    );
     const selected = core.selectDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision, modelId);
     const siblings = selected.siblings;
     const bytes = siblings.reduce((sum, file) => {
       const size = Number(file.size || file.lfs?.size || 0);
       return Number.isFinite(size) && size > 0 ? sum + size : sum;
     }, 0);
+    const fileManifest = siblings
+      .map((file) => {
+        const name = String(file.rfilename || "").trim();
+        const oid = String(file.lfs?.oid || "").replace(/^sha256:/i, "").toLowerCase();
+        const size = Number(file.size || file.lfs?.size || 0);
+        return { name, size: Number.isFinite(size) && size > 0 ? size : 0, sha256: /^[0-9a-f]{64}$/.test(oid) ? oid : "" };
+      })
+      .filter((item) => item.name && /\.(safetensors|gguf|bin|pt|pth)$/i.test(item.name))
+      .slice(0, 256);
     return {
       bytes: bytes || null,
       fileCount: siblings.length,
+      fileManifest,
       includePatterns: selected.includePatterns,
       filtered: selected.filtered,
       matchedFiles: selected.matched,

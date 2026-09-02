@@ -747,28 +747,34 @@ function createBillingStore(options = {}) {
   function limitState(binding, period, requestedMicrocredits, requestedTokens, at) {
     const customerId = binding.customer_id;
     const wallet = walletState(customerId);
+    // 账期越长行数越多；配额判断只要合计值，聚合交给 SQLite（readBigInts 下
+    // 整数 SUM 返回精确 BigInt），不再把整个账期的行搬进 JS。
     const authorized = prepare(`
-      SELECT reservation_microcredits, estimated_input_tokens, max_output_tokens
+      SELECT COUNT(*) AS row_count,
+             COALESCE(SUM(reservation_microcredits), 0) AS reserved_credits,
+             COALESCE(SUM(estimated_input_tokens + max_output_tokens), 0) AS reserved_tokens
       FROM billing_request_reservations
       WHERE customer_id=? AND enforcement_mode='hard' AND status='authorized' AND period_key=? AND expires_at>?
-    `).all(customerId, period.key, at);
+    `).get(customerId, period.key, at);
     const usage = prepare(`
-      SELECT projected_microcredits, total_tokens
+      SELECT COUNT(*) AS row_count,
+             COALESCE(SUM(projected_microcredits), 0) AS spent_credits,
+             COALESCE(SUM(total_tokens), 0) AS spent_tokens
       FROM billing_usage_events
       WHERE customer_id=? AND at>=? AND at<?
         AND usage_source!='missing'
         AND terminal_state!='ambiguous'
         AND ((ok=1 AND terminal_state='completed') OR total_tokens>0)
-    `).all(customerId, period.start, period.end);
-    const reservedCredits = sumBigInts(authorized.map((row) => row.reservation_microcredits));
-    const reservedTokens = sumBigInts(authorized.map((row) => row.estimated_input_tokens + row.max_output_tokens));
-    const spentCredits = sumBigInts(usage.map((row) => row.projected_microcredits));
-    const spentTokens = sumBigInts(usage.map((row) => row.total_tokens));
+    `).get(customerId, period.start, period.end);
+    const reservedCredits = BigInt(authorized?.reserved_credits || 0);
+    const reservedTokens = BigInt(authorized?.reserved_tokens || 0);
+    const spentCredits = BigInt(usage?.spent_credits || 0);
+    const spentTokens = BigInt(usage?.spent_tokens || 0);
     // Request quota counts each effective settled usage once, including failed,
     // cancelled, disconnected, or timed-out requests with measured token
     // consumption. Missing/ambiguous and unmeasured failures do not consume the
     // quota. Each live Hard reservation counts once, as does this candidate.
-    const requestCount = BigInt(usage.length + authorized.length + 1);
+    const requestCount = BigInt(usage?.row_count || 0) + BigInt(authorized?.row_count || 0) + 1n;
     // included_microcredits is a plan allowance/marketing field, not a hard cap.
     // Only an explicit customer credit limit constrains paid usage.
     const effectiveCreditLimit = binding.credit_limit_microcredits;
@@ -783,13 +789,15 @@ function createBillingStore(options = {}) {
   }
 
   function walletState(customerId) {
-    const entries = prepare("SELECT delta_microcredits FROM billing_wallet_ledger WHERE customer_id=?").all(customerId);
-    const reservations = prepare(`
-      SELECT reservation_microcredits FROM billing_request_reservations
+    // 钱包账本是 append-only 的，余额用 SQL 聚合拿合计，避免随账本增长
+    // 在每个请求路径上线性扫描（readBigInts 下 SUM 返回精确 BigInt）。
+    const balanceRow = prepare("SELECT COALESCE(SUM(delta_microcredits), 0) AS total FROM billing_wallet_ledger WHERE customer_id=?").get(customerId);
+    const reservedRow = prepare(`
+      SELECT COALESCE(SUM(reservation_microcredits), 0) AS total FROM billing_request_reservations
       WHERE customer_id=? AND enforcement_mode='hard' AND status='authorized' AND expires_at>?
-    `).all(customerId, nowIso());
-    const balance = sumBigInts(entries.map((row) => row.delta_microcredits));
-    const reserved = sumBigInts(reservations.map((row) => row.reservation_microcredits));
+    `).get(customerId, nowIso());
+    const balance = BigInt(balanceRow?.total || 0);
+    const reserved = BigInt(reservedRow?.total || 0);
     return { balance, reserved, available: balance - reserved };
   }
 
@@ -847,26 +855,35 @@ function createBillingStore(options = {}) {
     const overviewDate = nowDate();
     const overviewAt = overviewDate.toISOString();
     const period = monthPeriod(overviewDate, defaultTzOffsetMinutes);
-    const customers = prepare("SELECT customer_id, status FROM billing_customers").all();
-    const credentials = prepare("SELECT active FROM billing_credential_bindings").all();
-    const usage = prepare("SELECT projected_microcredits, charged_microcredits, total_tokens FROM billing_usage_events").all();
+    const customers = prepare("SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END), 0) AS active FROM billing_customers").get();
+    const credentials = prepare("SELECT COALESCE(SUM(CASE WHEN active=1 THEN 1 ELSE 0 END), 0) AS active FROM billing_credential_bindings").get();
+    const lifetimeUsage = prepare(`
+      SELECT COUNT(*) AS requests,
+             COALESCE(SUM(total_tokens), 0) AS tokens,
+             COALESCE(SUM(projected_microcredits), 0) AS projected,
+             COALESCE(SUM(charged_microcredits), 0) AS charged
+      FROM billing_usage_events
+    `).get();
     const periodUsage = prepare(`
-      SELECT projected_microcredits, charged_microcredits, total_tokens
+      SELECT COUNT(*) AS requests,
+             COALESCE(SUM(total_tokens), 0) AS tokens,
+             COALESCE(SUM(projected_microcredits), 0) AS cost,
+             COALESCE(SUM(charged_microcredits), 0) AS charged
       FROM billing_usage_events WHERE at>=? AND at<?
-    `).all(period.start, period.end);
-    const ledger = prepare("SELECT delta_microcredits FROM billing_wallet_ledger").all();
-    const reservations = prepare("SELECT reservation_microcredits FROM billing_request_reservations WHERE enforcement_mode='hard' AND status='authorized' AND expires_at>?").all(overviewAt);
-    const balanceMicrocredits = decimal(sumBigInts(ledger.map((row) => row.delta_microcredits)));
-    const reservedMicrocredits = decimal(sumBigInts(reservations.map((row) => row.reservation_microcredits)));
+    `).get(period.start, period.end);
+    const ledgerTotal = prepare("SELECT COALESCE(SUM(delta_microcredits), 0) AS total FROM billing_wallet_ledger").get();
+    const reservationsTotal = prepare("SELECT COALESCE(SUM(reservation_microcredits), 0) AS total FROM billing_request_reservations WHERE enforcement_mode='hard' AND status='authorized' AND expires_at>?").get(overviewAt);
+    const balanceMicrocredits = decimal(BigInt(ledgerTotal?.total || 0));
+    const reservedMicrocredits = decimal(BigInt(reservationsTotal?.total || 0));
     const availableMicrocredits = (BigInt(balanceMicrocredits) - BigInt(reservedMicrocredits)).toString();
-    const activeCustomers = customers.filter((row) => row.status === "active").length;
-    const activeCredentials = credentials.filter((row) => Number(row.active) === 1).length;
-    const periodTokens = decimal(sumBigInts(periodUsage.map((row) => row.total_tokens)));
-    const periodCostMicrocredits = decimal(sumBigInts(periodUsage.map((row) => row.projected_microcredits)));
+    const activeCustomers = Number(customers?.active || 0);
+    const activeCredentials = Number(credentials?.active || 0);
+    const periodTokens = decimal(BigInt(periodUsage?.tokens || 0));
+    const periodCostMicrocredits = decimal(BigInt(periodUsage?.cost || 0));
     return {
       ok: true,
       updatedAt: overviewAt,
-      customerCount: customers.length,
+      customerCount: Number(customers?.total || 0),
       activeCustomerCount: activeCustomers,
       activeCustomers,
       credentialCount: activeCredentials,
@@ -877,7 +894,7 @@ function createBillingStore(options = {}) {
       periodTokens,
       periodCostMicrocredits,
       summary: {
-        customers: customers.length,
+        customers: Number(customers?.total || 0),
         activeCustomers,
         activeCredentials,
         balanceMicrocredits,
@@ -885,21 +902,21 @@ function createBillingStore(options = {}) {
         periodTokens,
         periodCostMicrocredits,
       },
-      customers: { total: customers.length, active: activeCustomers },
+      customers: { total: Number(customers?.total || 0), active: activeCustomers },
       usage: {
-        requests: usage.length,
-        tokens: decimal(sumBigInts(usage.map((row) => row.total_tokens))),
-        projectedMicrocredits: decimal(sumBigInts(usage.map((row) => row.projected_microcredits))),
-        chargedMicrocredits: decimal(sumBigInts(usage.map((row) => row.charged_microcredits))),
+        requests: Number(lifetimeUsage?.requests || 0),
+        tokens: decimal(BigInt(lifetimeUsage?.tokens || 0)),
+        projectedMicrocredits: decimal(BigInt(lifetimeUsage?.projected || 0)),
+        chargedMicrocredits: decimal(BigInt(lifetimeUsage?.charged || 0)),
       },
       period: {
         key: period.key,
         start: period.start,
         end: period.end,
-        requests: periodUsage.length,
+        requests: Number(periodUsage?.requests || 0),
         tokens: periodTokens,
         projectedMicrocredits: periodCostMicrocredits,
-        chargedMicrocredits: decimal(sumBigInts(periodUsage.map((row) => row.charged_microcredits))),
+        chargedMicrocredits: decimal(BigInt(periodUsage?.charged || 0)),
       },
       wallet: {
         balanceMicrocredits,

@@ -65,11 +65,12 @@ function createModelFilesystemStore(options = {}) {
     await ensureDirs(modelsRoot);
     const entries = await fsp.readdir(modelsRoot, { withFileTypes: true });
     const dirs = entries.filter((entry) => entry.isDirectory());
-    const models = [];
-    for (const entry of dirs) {
+    // 每个模型目录都要 stat + GGUF 清单 + 校验 + 目录大小；目录之间互不依赖，
+    // 有限并发跑，冷缓存时首屏不再按目录数线性放大。
+    const models = await mapWithConcurrency(dirs, 6, async (entry) => {
       const fullPath = path.join(modelsRoot, entry.name);
       const stats = await fsp.stat(fullPath);
-      const ggufInventory = buildGgufInventory(findGgufFilesSync(fullPath, 512));
+      const ggufInventory = buildGgufInventory(await findGgufFiles(fullPath, 512));
       const ggufFiles = ggufInventory.files;
       const cachedVerification = verificationCache.get(fullPath);
       const verification = cachedVerification && cachedVerification.mtimeMs === stats.mtimeMs
@@ -78,7 +79,7 @@ function createModelFilesystemStore(options = {}) {
       if (!cachedVerification || cachedVerification.mtimeMs !== stats.mtimeMs) {
         verificationCache.set(fullPath, { mtimeMs: stats.mtimeMs, value: verification });
       }
-      models.push({
+      return {
         kind: "local",
         id: entry.name,
         label: entry.name,
@@ -95,8 +96,8 @@ function createModelFilesystemStore(options = {}) {
         verificationStatus: verification.status,
         verificationIssues: verification.issues,
         modelFormat: verification.modelFormat,
-      });
-    }
+      };
+    });
     return models.sort((a, b) => b.modified.localeCompare(a.modified));
   }
 
@@ -105,12 +106,11 @@ function createModelFilesystemStore(options = {}) {
     if (!fs.existsSync(hubRoot)) return [];
     const entries = await fsp.readdir(hubRoot, { withFileTypes: true });
     const dirs = entries.filter((entry) => entry.isDirectory() && entry.name.startsWith("models--"));
-    const models = [];
-    for (const entry of dirs) {
+    const models = await mapWithConcurrency(dirs, 6, async (entry) => {
       const repoId = entry.name.replace(/^models--/, "").replace(/--/g, "/");
       const fullPath = path.join(hubRoot, entry.name);
       const stats = await fsp.stat(fullPath);
-      models.push({
+      return {
         kind: "cached",
         id: repoId,
         label: repoId,
@@ -118,8 +118,8 @@ function createModelFilesystemStore(options = {}) {
         launchModel: repoId,
         size: await cachedDirSize(fullPath, stats),
         modified: stats.mtime.toISOString(),
-      });
-    }
+      };
+    });
     return models.sort((a, b) => b.modified.localeCompare(a.modified));
   }
 
@@ -129,6 +129,71 @@ function createModelFilesystemStore(options = {}) {
       listCachedModels(),
     ]);
     return { local, cached };
+  }
+
+  // 磁盘看板数据：模型盘剩余空间、各模型目录大小排行、HF 缓存体积和
+  // 可清理的 .incomplete 残留。目录大小复用 mtime 缓存。
+  async function getDiskUsage() {
+    await ensureDirs(modelsRoot);
+    const statfs = await fsp.statfs(modelsRoot).catch(() => null);
+    const entries = await fsp.readdir(modelsRoot, { withFileTypes: true });
+    const models = await mapWithConcurrency(entries.filter((entry) => entry.isDirectory()), 6, async (entry) => {
+      const fullPath = path.join(modelsRoot, entry.name);
+      const stats = await fsp.stat(fullPath);
+      const scan = await scanDownloadProgress(fullPath);
+      return {
+        name: entry.name,
+        path: fullPath,
+        bytes: await cachedDirSize(fullPath, stats),
+        incompleteFiles: scan.incompleteFiles,
+        incompleteBytes: scan.partialBytes,
+        modified: stats.mtime.toISOString(),
+      };
+    });
+    models.sort((a, b) => b.bytes - a.bytes);
+    const [hubBytes, xetBytes, modelscopeBytes] = await Promise.all([
+      dirSize(path.join(hfCache, "hub")),
+      dirSize(path.join(hfCache, "xet")),
+      dirSize(path.join(hfCache, "modelscope")),
+    ]);
+    return {
+      ok: true,
+      root: modelsRoot,
+      disk: statfs ? {
+        freeBytes: Number(statfs.bavail) * Number(statfs.bsize),
+        totalBytes: Number(statfs.blocks) * Number(statfs.bsize),
+      } : null,
+      modelsBytes: models.reduce((sum, item) => sum + item.bytes, 0),
+      models,
+      hfCache: { path: hfCache, hubBytes, xetBytes, modelscopeBytes },
+      incompleteBytes: models.reduce((sum, item) => sum + item.incompleteBytes, 0),
+      incompleteFiles: models.reduce((sum, item) => sum + item.incompleteFiles, 0),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  // 只删除指定模型目录里的 .incomplete 残留；正式权重与配置一律不动。
+  async function cleanupIncompleteFiles(target) {
+    const root = resolveModelsRootChild(target);
+    const removed = [];
+    let removedBytes = 0;
+    async function walk(dir) {
+      const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === ".git") continue;
+          await walk(full);
+        } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".incomplete")) {
+          const stat = await fsp.stat(full).catch(() => null);
+          await fsp.rm(full, { force: true });
+          removed.push(normalizeRelativePath(path.relative(root, full)));
+          removedBytes += stat?.size || 0;
+        }
+      }
+    }
+    await walk(root);
+    return { ok: true, path: root, removed, removedBytes };
   }
 
   async function verifyDownloadedModel(input = {}, options = {}) {
@@ -164,9 +229,12 @@ function createModelFilesystemStore(options = {}) {
 
   return {
     chooseGgufFile,
+    cleanupIncompleteFiles,
     describeLocalModelPath,
     dirSize,
+    findGgufFiles,
     findGgufFilesSync,
+    getDiskUsage,
     hasRecognizedConfig,
     listCachedModels,
     listLocalModels,
@@ -205,6 +273,64 @@ function looksLikeGgufReference(value) {
 }
 
 const ggufScanCache = new Map();
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const list = Array.from(items);
+  const results = new Array(list.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, list.length)) }, async () => {
+    while (nextIndex < list.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(list[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+// findGgufFilesSync 的异步版本：同一份 mtime 缓存，冷扫描不再阻塞事件循环。
+async function findGgufFiles(dir, limit = 20) {
+  let mtimeMs = 0;
+  try {
+    mtimeMs = (await fsp.stat(dir)).mtimeMs;
+  } catch {
+    return [];
+  }
+  const key = `${path.resolve(String(dir || ""))}:${limit}`;
+  const cached = ggufScanCache.get(key);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.files;
+  const results = [];
+  async function walk(current) {
+    if (results.length >= limit) return;
+    let entries = [];
+    try {
+      entries = await fsp.readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= limit) return;
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === ".cache" || entry.name === ".git") continue;
+        await walk(fullPath);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".gguf")) {
+        let size = 0;
+        try {
+          size = (await fsp.stat(fullPath)).size;
+        } catch {
+          size = 0;
+        }
+        results.push({ path: fullPath, name: path.relative(dir, fullPath), size });
+      }
+    }
+  }
+  await walk(dir);
+  const files = results.sort((a, b) => b.size - a.size);
+  ggufScanCache.set(key, { mtimeMs, files });
+  return files;
+}
 
 function findGgufFilesSync(dir, limit = 20) {
   let mtimeMs = 0;
@@ -570,6 +696,7 @@ module.exports = {
   collectModelFiles,
   createModelFilesystemStore,
   dirSize,
+  findGgufFiles,
   findGgufFilesSync,
   findSiblingGgufFilesSync,
   hasRecognizedConfig,

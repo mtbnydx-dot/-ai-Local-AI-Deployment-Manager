@@ -23,6 +23,8 @@ function normalizeAutomationSettings(value = {}) {
     vramGuardEnabled: Boolean(item.vramGuardEnabled),
     vramPercent: Math.min(99, Math.max(70, Number(item.vramPercent || 94))),
     vramAction: new Set(["warn", "unload"]).has(String(item.vramAction || "")) ? String(item.vramAction) : "warn",
+    tempGuardEnabled: Boolean(item.tempGuardEnabled),
+    tempLimitC: Math.min(95, Math.max(60, Number(item.tempLimitC || 83))),
     updatedAt: new Date().toISOString(),
   };
 }

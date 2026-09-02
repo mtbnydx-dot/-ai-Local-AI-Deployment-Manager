@@ -266,10 +266,22 @@ test("entry server serves only whitelisted docs", async () => {
     assert.match(await billingResponse.text(), /<title>模型计费中心<\/title>/);
     assert.match(String(billingResponse.headers.get("content-security-policy")), /default-src 'none'/);
 
+    // 带转发头 = 经反向代理进入：除 /gateway/* 外一律 404，不暴露管理面存在。
     const forwardedBillingResponse = await fetch(`http://127.0.0.1:${port}/billing`, {
       headers: { "x-forwarded-for": "203.0.113.7" },
     });
-    assert.equal(forwardedBillingResponse.status, 403);
+    assert.equal(forwardedBillingResponse.status, 404);
+    const forwardedConsoleResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      headers: { "x-forwarded-for": "203.0.113.7" },
+    });
+    assert.equal(forwardedConsoleResponse.status, 404);
+
+    // 探活端点对公网免鉴权可用。
+    const healthResponse = await fetch(`http://127.0.0.1:${port}/gateway/health`, {
+      headers: { "x-forwarded-for": "203.0.113.7" },
+    });
+    assert.equal(healthResponse.status, 200);
+    assert.equal((await healthResponse.json()).ok, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

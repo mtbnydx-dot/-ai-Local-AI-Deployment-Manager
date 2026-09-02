@@ -122,6 +122,12 @@ function createLlamaStartRuntimeRequest(deps) {
     const cacheTypeK = normalizeLlamaCacheType(body.cacheTypeK || body.kvCacheDtype);
     const cacheTypeV = normalizeLlamaCacheType(body.cacheTypeV || body.kvCacheDtype);
     const flashAttention = normalizeOnOffAuto(body.flashAttention);
+    // llama.cpp 硬性约束：量化 V cache 依赖 flash attention，-fa off 时 llama-server 会直接启动失败。
+    if (flashAttention === "off" && cacheTypeV && !["f16", "bf16", "f32"].includes(cacheTypeV)) {
+      const error = new Error("量化 V cache（q8_0/q5_1/q4_0）需要 Flash Attention：请把 Flash Attention 改为 on/auto，或把 V cache 改回 f16/bf16/f32。");
+      error.status = 400;
+      throw error;
+    }
     const cacheReuse = boundedNonNegativeInteger(body.cacheReuse, 512, "cacheReuse", 4096);
     const noMmap = Boolean(body.noMmap);
     const noRepack = Boolean(body.noRepack);

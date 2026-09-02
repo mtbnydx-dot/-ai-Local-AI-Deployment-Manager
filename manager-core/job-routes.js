@@ -7,6 +7,18 @@ function sendError(res, status, error) {
   return res.status(status).json({ error });
 }
 
+function summarizeJob(job) {
+  if (!job || typeof job !== "object") return job;
+  const { logs, ...rest } = job;
+  const list = Array.isArray(logs) ? logs : [];
+  return {
+    ...rest,
+    logs: list.slice(-8),
+    logCount: list.length,
+    logsTruncated: list.length > 8,
+  };
+}
+
 function registerJobRoutes(app, deps = {}) {
   const {
     jobs,
@@ -25,18 +37,6 @@ function registerJobRoutes(app, deps = {}) {
 
   function getJob(id) {
     return jobs.get(id);
-  }
-
-  function summarizeJob(job) {
-    if (!job || typeof job !== "object") return job;
-    const { logs, ...rest } = job;
-    const list = Array.isArray(logs) ? logs : [];
-    return {
-      ...rest,
-      logs: list.slice(-8),
-      logCount: list.length,
-      logsTruncated: list.length > 8,
-    };
   }
 
   app.get("/api/jobs", async (req, res) => {
@@ -103,4 +103,5 @@ function registerJobRoutes(app, deps = {}) {
 
 module.exports = {
   registerJobRoutes,
+  summarizeJob,
 };

@@ -1,6 +1,7 @@
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { isExternalAddress, normalizeRemoteAddress } = require("./network");
+const { createSingleFlightCache } = require("./single-flight-cache");
 const accessLogQueues = new Map();
 const accessLogBuffers = new Map();
 
@@ -591,6 +592,10 @@ function buildRecentAccessStats(input = {}) {
 function createServiceGatewayAccessLogStore(options = {}) {
   const file = options.file;
   const parseJsonSafe = options.parseJsonSafe || parseJsonLine;
+  // 仪表盘每 5 秒轮询一次统计；重读上万行 JSONL 并全量重算聚合没有意义。
+  // 结果缓存短 TTL + 单飞；搜索和导出仍然每次全量计算。
+  const statsCacheTtlMs = Math.max(0, Number(options.statsCacheTtlMs ?? process.env.MODEL_ACCESS_STATS_CACHE_MS ?? 10_000));
+  const statsCache = createSingleFlightCache({ ttlMs: statsCacheTtlMs, maxEntries: 32 });
 
   async function appendServiceGatewayAccessLog(entry) {
     return appendAccessLog(file, entry);
@@ -608,6 +613,13 @@ function createServiceGatewayAccessLogStore(options = {}) {
   async function collectExternalAccessStats(query = {}) {
     const limit = Math.min(500, Math.max(20, Number(query.limit || 160)));
     const maxLines = Math.min(50000, Math.max(limit, Number(query.maxLines || 12000)));
+    if (statsCacheTtlMs > 0) {
+      return statsCache.get(`external:${limit}:${maxLines}`, () => collectExternalAccessStatsFresh(limit, maxLines));
+    }
+    return collectExternalAccessStatsFresh(limit, maxLines);
+  }
+
+  async function collectExternalAccessStatsFresh(limit, maxLines) {
     const lanAddress = options.getLanAddress ? options.getLanAddress() : "";
     const [settings, container, events] = await Promise.all([
       Promise.resolve()
@@ -640,16 +652,22 @@ function createServiceGatewayAccessLogStore(options = {}) {
     const limit = Math.min(100, Math.max(5, Number(query.limit || 30)));
     const maxLines = Math.min(50000, Math.max(limit, Number(query.maxLines || 5000)));
     const windowMs = Math.min(24 * 60 * 60 * 1000, Math.max(60 * 1000, Number(query.windowMs || 60 * 60 * 1000)));
-    const lanAddress = options.getLanAddress ? options.getLanAddress() : "";
-    const events = await readServiceGatewayAccessEvents(maxLines);
-    return buildRecentAccessStats({
-      limit,
-      maxLines,
-      windowMs,
-      now: Number(query.now || Date.now()),
-      lanAddress,
-      events,
-    });
+    const build = async () => {
+      const lanAddress = options.getLanAddress ? options.getLanAddress() : "";
+      const events = await readServiceGatewayAccessEvents(maxLines);
+      return buildRecentAccessStats({
+        limit,
+        maxLines,
+        windowMs,
+        now: Number(query.now || Date.now()),
+        lanAddress,
+        events,
+      });
+    };
+    if (statsCacheTtlMs > 0 && !query.now) {
+      return statsCache.get(`recent:${limit}:${maxLines}:${windowMs}`, build);
+    }
+    return build();
   }
 
   async function searchServiceGatewayAccessLogs(query = {}) {

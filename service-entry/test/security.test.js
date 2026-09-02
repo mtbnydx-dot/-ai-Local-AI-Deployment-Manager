@@ -14,6 +14,7 @@ const SWITCH_ENV = [
   "SERVICE_ENTRY_ALLOW_LAN_ADMIN",
   "SERVICE_ENTRY_ALLOWED_ORIGINS",
   "SERVICE_ENTRY_ALLOWED_HOSTS",
+  "SERVICE_ENTRY_PUBLIC_BASE_URL",
 ];
 
 function withCleanEnv(t) {
@@ -83,6 +84,67 @@ test("management endpoints are local-only until the LAN admin switch is set", (t
 
   process.env.SERVICE_ENTRY_ALLOW_LAN_ADMIN = "1";
   assert.equal(security.checkManagementAccess(req("192.168.0.44")).ok, true);
+});
+
+test("proxied requests are never management-eligible, even from loopback or with LAN admin on", (t) => {
+  withCleanEnv(t);
+  const security = createEntrySecurity({ host: "0.0.0.0", managers: [] });
+
+  // deploy/public 拓扑：Caddy 从 127.0.0.1 转发公网请求，并带上 X-Forwarded-For。
+  for (const header of ["x-forwarded-for", "forwarded", "x-forwarded-host", "x-real-ip"]) {
+    const denied = security.checkManagementAccess(req("127.0.0.1", { [header]: "203.0.113.9" }));
+    assert.equal(denied.ok, false, `header ${header} must demote the request`);
+    assert.equal(denied.status, 403);
+    assert.equal(denied.code, "management_local_only");
+  }
+
+  process.env.SERVICE_ENTRY_ALLOW_LAN_ADMIN = "1";
+  const stillDenied = security.checkManagementAccess(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" }));
+  assert.equal(stillDenied.ok, false);
+
+  // 没有转发头的本机请求不受影响。
+  assert.equal(security.checkManagementAccess(req("127.0.0.1")).ok, true);
+  assert.equal(security.isProxiedRequest(req("127.0.0.1")), false);
+  assert.equal(security.isProxiedRequest(req("127.0.0.1", { "x-forwarded-for": "1.2.3.4" })), true);
+});
+
+test("the public base URL hostname is admitted by the host whitelist", (t) => {
+  withCleanEnv(t);
+  process.env.SERVICE_ENTRY_PUBLIC_BASE_URL = "https://models.example.com";
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [] });
+  assert.equal(security.allowedHostnames().has("models.example.com"), true);
+});
+
+test("declaring a public base URL makes auto require an API key even on a loopback bind", (t) => {
+  withCleanEnv(t);
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [] });
+  assert.equal(security.policy().requireApiKey, false);
+
+  process.env.SERVICE_ENTRY_PUBLIC_BASE_URL = "https://models.example.com";
+  assert.equal(security.policy().publicMode, true);
+  assert.equal(security.policy().requireApiKey, true);
+
+  // 显式关闭仍然是允许的逃生门。
+  process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "0";
+  assert.equal(security.policy().requireApiKey, false);
+});
+
+test("resolveClientAddress and trustHeaders vouch the forwarded client, not the proxy socket", (t) => {
+  withCleanEnv(t);
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [] });
+
+  // 直连：用 socket 地址。
+  assert.equal(security.resolveClientAddress(req("192.168.0.44")), "192.168.0.44");
+  // 经 Caddy：取 X-Forwarded-For 最后一跳（最近一级可信代理写入的真实客户端）。
+  assert.equal(security.resolveClientAddress(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" })), "203.0.113.9");
+  assert.equal(security.resolveClientAddress(req("127.0.0.1", { "x-forwarded-for": "10.0.0.5, 203.0.113.9" })), "203.0.113.9");
+  assert.equal(security.resolveClientAddress(req("127.0.0.1", { "x-real-ip": "203.0.113.10" })), "203.0.113.10");
+
+  // trustHeaders 担保的地址必须是真实客户端，否则管理器会把公网请求当成本机、
+  // local-only 暴露模式随之失效。
+  const headers = security.trustHeaders(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" }));
+  assert.equal(Object.values(headers).includes("203.0.113.9"), true);
+  assert.equal(Object.values(headers).includes("127.0.0.1"), false);
 });
 
 test("host whitelist and Origin check reject cross-site mutations", (t) => {

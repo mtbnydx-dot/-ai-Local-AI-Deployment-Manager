@@ -81,14 +81,53 @@ function createMetricsHistoryStore(options = {}) {
   const writeJsonFile = options.writeJsonFile;
   const maxSamples = Math.min(20000, Math.max(120, Number(options.maxSamples || 4320)));
   const minIntervalMs = Math.min(60 * 60 * 1000, Math.max(1000, Number(options.minIntervalMs || 60 * 1000)));
+  // 账本常驻内存：读写都走内存，磁盘只按 flush 间隔整写一次，
+  // 把每分钟一次的「全文件读-改-写」降为每几分钟一次「整写」。0 = 每次采样即写。
+  const flushIntervalMs = Math.min(60 * 60 * 1000, Math.max(0, Number(options.flushIntervalMs ?? process.env.METRICS_HISTORY_FLUSH_MS ?? 5 * 60 * 1000)));
   let writeQueue = Promise.resolve();
+  let memoryLedger = null;
+  let loadPromise = null;
+  let dirty = false;
+  let flushTimer = null;
 
   if (!file || typeof readJsonFile !== "function" || typeof writeJsonFile !== "function") {
     throw new Error("createMetricsHistoryStore requires file, readJsonFile, and writeJsonFile.");
   }
 
+  async function loadLedger() {
+    if (memoryLedger) return memoryLedger;
+    if (!loadPromise) {
+      loadPromise = readJsonFile(file, {}).then((stored) => {
+        memoryLedger = memoryLedger || normalizeMetricsHistory(stored, { maxSamples });
+        return memoryLedger;
+      });
+    }
+    return loadPromise;
+  }
+
+  async function flushMetricsHistory() {
+    if (!dirty || !memoryLedger) return;
+    dirty = false;
+    const snapshot = normalizeMetricsHistory(memoryLedger, { maxSamples });
+    writeQueue = writeQueue.catch(() => {}).then(() => writeJsonFile(file, snapshot));
+    await writeQueue;
+  }
+
+  function scheduleFlush() {
+    if (flushIntervalMs === 0) {
+      flushMetricsHistory().catch(() => {});
+      return;
+    }
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      flushMetricsHistory().catch(() => {});
+    }, flushIntervalMs);
+    flushTimer.unref?.();
+  }
+
   async function getMetricsHistory(query = {}) {
-    const ledger = normalizeMetricsHistory(await readJsonFile(file, {}), { maxSamples });
+    const ledger = await loadLedger();
     const hours = Math.min(24 * 365, Math.max(0.25, Number(query.hours || 24)));
     const fromMs = Date.now() - hours * 60 * 60 * 1000;
     const model = String(query.model || "").trim().toLowerCase();
@@ -98,7 +137,7 @@ function createMetricsHistoryStore(options = {}) {
       if (model && String(sample.model || "").toLowerCase() !== model) return false;
       return !engine || String(sample.engine || "").toLowerCase() === engine;
     });
-    return { ...ledger, hours, samples };
+    return { version: ledger.version, updatedAt: ledger.updatedAt, hours, samples: [...samples] };
   }
 
   async function recordMetricsHistory(summary, recordOptions = {}) {
@@ -106,27 +145,26 @@ function createMetricsHistoryStore(options = {}) {
       engine: options.engine,
       ...recordOptions,
     });
-    writeQueue = writeQueue.catch(() => {}).then(async () => {
-      const ledger = normalizeMetricsHistory(await readJsonFile(file, {}), { maxSamples });
-      const previous = ledger.samples.at(-1);
-      const sameRuntime = previous
-        && previous.engine === sample.engine
-        && previous.container === sample.container
-        && previous.model === sample.model;
-      const elapsed = previous ? Date.parse(sample.at) - Date.parse(previous.at) : Infinity;
-      if (sameRuntime && elapsed >= 0 && elapsed < minIntervalMs) ledger.samples[ledger.samples.length - 1] = sample;
-      else ledger.samples.push(sample);
-      ledger.samples = ledger.samples.slice(-maxSamples);
-      ledger.updatedAt = new Date().toISOString();
-      await writeJsonFile(file, ledger);
-      return sample;
-    });
-    return writeQueue;
+    const ledger = await loadLedger();
+    const previous = ledger.samples.at(-1);
+    const sameRuntime = previous
+      && previous.engine === sample.engine
+      && previous.container === sample.container
+      && previous.model === sample.model;
+    const elapsed = previous ? Date.parse(sample.at) - Date.parse(previous.at) : Infinity;
+    if (sameRuntime && elapsed >= 0 && elapsed < minIntervalMs) ledger.samples[ledger.samples.length - 1] = sample;
+    else ledger.samples.push(sample);
+    if (ledger.samples.length > maxSamples) ledger.samples = ledger.samples.slice(-maxSamples);
+    ledger.updatedAt = new Date().toISOString();
+    dirty = true;
+    scheduleFlush();
+    return sample;
   }
 
   return {
     getMetricsHistory,
     recordMetricsHistory,
+    flushMetricsHistory,
   };
 }
 

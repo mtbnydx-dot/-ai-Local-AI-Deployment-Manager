@@ -1,10 +1,11 @@
 function sendError(res, error, fallbackStatus = 500) {
-  return res.status(error.status || fallbackStatus).json({
-    error: error.message,
-    ...(error.code ? { code: error.code } : {}),
-    ...(error.authorizationUrl ? { authorizationUrl: error.authorizationUrl } : {}),
-    ...(error.accessStatus ? { accessStatus: error.accessStatus } : {}),
-  });
+  const payload = { error: error.message };
+  // 让前端能定位冲突任务，例如重复下载返回的 existingJobId。
+  if (error && error.existingJobId) payload.existingJobId = error.existingJobId;
+  if (error && error.code) payload.code = error.code;
+  if (error && error.authorizationUrl) payload.authorizationUrl = error.authorizationUrl;
+  if (error && error.accessStatus) payload.accessStatus = error.accessStatus;
+  return res.status(error.status || fallbackStatus).json(payload);
 }
 
 function registerModelRoutes(app, deps = {}) {
@@ -25,6 +26,10 @@ function registerModelRoutes(app, deps = {}) {
     getDownloadSettings,
     saveDownloadSettings,
     resolveModelLink,
+    probeDownloadMirror,
+    getDiskUsage,
+    cleanupIncomplete,
+    checkModelUpstream,
   } = deps;
 
   app.get("/api/models", async (_req, res) => {
@@ -159,6 +164,46 @@ function registerModelRoutes(app, deps = {}) {
       sendError(res, error);
     }
   });
+
+  if (probeDownloadMirror) {
+    app.post("/api/download/mirror-probe", async (req, res) => {
+      try {
+        res.json(await probeDownloadMirror(req.body || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (getDiskUsage) {
+    app.get("/api/models/disk-usage", async (_req, res) => {
+      try {
+        res.json(await getDiskUsage());
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (cleanupIncomplete) {
+    app.post("/api/models/cleanup-incomplete", async (req, res) => {
+      try {
+        res.json(await cleanupIncomplete(req.body || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (checkModelUpstream) {
+    app.get("/api/models/upstream-status", async (req, res) => {
+      try {
+        res.json(await checkModelUpstream(req.query || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
 }
 
 module.exports = {

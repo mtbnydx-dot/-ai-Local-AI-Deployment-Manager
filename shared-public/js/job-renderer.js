@@ -94,6 +94,21 @@
       return `...${normalized.slice(normalized.length - maxChars + 3)}`;
     }
 
+    // 服务器每 10 秒扫一次目录，瞬时速度会跳；显示层做指数平滑，ETA 也随之稳定。
+    const downloadSpeedEma = new Map();
+
+    function smoothedDownloadSpeed(job, progress) {
+      const raw = Number(progress.speedBytesPerSec || 0);
+      if (job.status !== "running") {
+        downloadSpeedEma.delete(job.id);
+        return raw;
+      }
+      const prev = downloadSpeedEma.get(job.id);
+      const ema = prev === undefined ? raw : prev * 0.6 + raw * 0.4;
+      downloadSpeedEma.set(job.id, ema);
+      return ema;
+    }
+
     function renderJobProgress(job) {
       if (job.type === "serve") return renderServeProgress(job);
       if (job.type === "benchmark") return renderBenchmarkProgress(job);
@@ -106,20 +121,39 @@
       const percent = totalBytes
         ? Math.min(100, Math.max(0, Number(progress.percent ?? (downloadedBytes / totalBytes) * 100)))
         : (isDone ? 100 : null);
-      const fillStyle = percent === null ? "" : `style="width:${percent}%"`;
+      // 已定稿（正式文件）与传输中（.incomplete）分两段显示：
+      // 实心段是校验后会保留的部分，浅色延伸段是仍在写入的分片。
+      const finalizedBytes = Number(progress.finalizedBytes);
+      const partialBytes = Number(progress.partialBytes || 0);
+      const hasSplit = !isDone && percent !== null && Number.isFinite(finalizedBytes) && partialBytes > 0 && totalBytes > 0;
+      const finalizedPercent = hasSplit
+        ? Math.min(percent, Math.max(0, (finalizedBytes / totalBytes) * 100))
+        : null;
+      const fillStyle = percent === null ? "" : `style="width:${hasSplit ? finalizedPercent : percent}%"`;
       const fillClass = percent === null && job.status === "running" ? "indeterminate" : "";
+      const partialLayer = hasSplit
+        ? `<div class="download-progress-fill partial-layer" style="width:${percent}%"></div>`
+        : "";
       const mainText = totalBytes
         ? `${fmtBytes(downloadedBytes)} / ${fmtBytes(totalBytes)} · ${percent.toFixed(1)}%`
         : downloadedBytes
           ? `${fmtBytes(downloadedBytes)} 已下载`
           : "等待下载开始";
-      const speed = progress.speedBytesPerSec > 0 ? `${fmtBytes(progress.speedBytesPerSec)}/s` : "";
-      const eta = progress.etaSeconds > 0 && job.status === "running" ? `剩余约 ${formatDuration(progress.etaSeconds)}` : "";
-      const detail = [speed, eta, progress.error].filter(Boolean).join(" · ");
+      const speedValue = smoothedDownloadSpeed(job, progress);
+      const speed = speedValue > 0 && job.status === "running" ? `${fmtBytes(speedValue)}/s` : "";
+      const etaSeconds = totalBytes && speedValue > 0
+        ? Math.max(0, totalBytes - downloadedBytes) / speedValue
+        : Number(progress.etaSeconds || 0);
+      const eta = etaSeconds > 0 && job.status === "running" ? `剩余约 ${formatDuration(etaSeconds)}` : "";
+      const splitText = hasSplit
+        ? `已定稿 ${fmtBytes(finalizedBytes)} · 传输中 ${fmtBytes(partialBytes)}`
+        : "";
+      const detail = [speed, eta, splitText, progress.error].filter(Boolean).join(" · ");
 
       return `
         <div class="job-progress">
           <div class="download-progress-track">
+            ${partialLayer}
             <div class="download-progress-fill ${fillClass}" ${fillStyle}></div>
           </div>
           <div class="download-progress-meta">

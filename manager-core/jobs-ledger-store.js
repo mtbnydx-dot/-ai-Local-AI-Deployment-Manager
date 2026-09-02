@@ -18,8 +18,18 @@ function createJobsLedgerStore(options = {}) {
   const maxPersistedJobs = Number(options.maxPersistedJobs || 100);
   const saveDelayMs = Number(options.saveDelayMs || 1500);
   const onError = typeof options.onError === "function" ? options.onError : () => {};
+  // 任意任务状态变化的通知钩子（例如 SSE 推送）；与磁盘保存的节流互相独立。
+  const onJobsChanged = typeof options.onJobsChanged === "function" ? options.onJobsChanged : () => {};
   let writeQueue = Promise.resolve();
   let saveTimer = null;
+
+  function notifyJobsChanged() {
+    try {
+      onJobsChanged();
+    } catch {
+      // 推送失败不能影响任务处理路径。
+    }
+  }
 
   async function loadJobsLedgerIntoMemory() {
     try {
@@ -38,6 +48,7 @@ function createJobsLedgerStore(options = {}) {
   }
 
   function scheduleJobsSave(delayMs = saveDelayMs) {
+    notifyJobsChanged();
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
@@ -73,6 +84,7 @@ function createJobsLedgerStore(options = {}) {
 
   function appendLog(job, data) {
     appendJobLog(job, data, { maxLogLines });
+    notifyJobsChanged();
     const now = Date.now();
     const last = Number(job._lastLogSaveAt || 0);
     if (now - last >= 10_000) {
@@ -107,7 +119,14 @@ function createJobsLedgerStore(options = {}) {
     applyJobProgress(job, progress);
     const nextStage = job.progress?.stage;
     const nextPct = Number(job.progress?.percent || 0);
+    // 阶段切换时间线：启动结束后可以看出每个阶段各花了多久（拉镜像/加载权重/就绪检查…）。
+    if (nextStage && nextStage !== prevStage) {
+      const history = Array.isArray(job.meta?.stageHistory) ? job.meta.stageHistory : [];
+      history.push({ stage: String(nextStage), at: new Date().toISOString() });
+      job.meta = { ...(job.meta || {}), stageHistory: history.slice(-24) };
+    }
     if (nextStage !== prevStage || Math.abs(nextPct - prevPct) >= 1) scheduleJobsSave();
+    else notifyJobsChanged();
   }
 
   function clearJobsSaveTimer() {

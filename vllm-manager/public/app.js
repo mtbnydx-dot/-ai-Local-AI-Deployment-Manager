@@ -187,6 +187,7 @@ const serviceExposureRenderer = window.LocalAiServiceExposureRenderer.create({
   fmtTokens,
   defaultServicePort: 8000,
   includeOpenCode: true,
+  gatewayEngine: "vllm",
 });
 const uiArchitecture = window.LocalAiUiArchitecture.create({ $, escapeHtml });
 const runtimeInstancesController = window.LocalAiRuntimeInstances.create({
@@ -347,6 +348,21 @@ function initUiPreferences() {
 function applyThemeMode() {
   const mode = ["auto", "light", "dark"].includes(state.uiPrefs.theme) ? state.uiPrefs.theme : "auto";
   document.documentElement.dataset.theme = mode;
+  syncBillingNavTheme(mode);
+}
+
+// 计费中心在 5176 端口（localStorage 不互通），跳转链接带上当前主题避免视觉突变。
+function syncBillingNavTheme(mode) {
+  for (const link of document.querySelectorAll('[data-nav="billing"]')) {
+    try {
+      const url = new URL(link.getAttribute("href"), window.location.href);
+      url.searchParams.set("theme", mode);
+      link.setAttribute("href", url.toString());
+      link.setAttribute("target", "_blank");
+    } catch {
+      // 链接格式异常时保持原样。
+    }
+  }
 }
 
 function applyLanguageMode() {
@@ -630,29 +646,29 @@ function ensureLaunchWorkflow() {
       {
         id: "model",
         label: "选择模型",
-        description: "模型、服务名和方案",
-        help: "先确认要启动的 checkpoint。套用方案是显式动作，不会因选择模型自动覆盖上下文和并发。",
-        selectors: ["#serviceProfileStrip", "#startModel", "#servedName", "#servicePort", "#instanceMode", "#instanceId", "#instanceModeHint"],
+        description: "模型、服务名、实例与端口",
+        help: "先确认要启动的模型。套用方案是显式动作，不会因选择模型自动覆盖上下文和并发。",
+        selectors: ["#serviceProfileStrip", "#startModel", "#runtimeEngine", "#servedName", "#servicePort", "#instanceMode", "#instanceId", "#instanceModeHint"],
       },
       {
         id: "resources",
         label: "资源配置",
         description: "上下文、显存和 GPU",
-        help: "上下文与并发保持你的输入；只有点击自动调优或套用方案才会改写。显存按替换当前容器后的容量评估。",
-        selectors: [".context-section", "#launchDtype", "#launchQuantization", "#loadFormat", "#ggufSection", ".gpu-section", "#multiGpuMode", "[name='distributedExecutorBackend']", ".parallel-size-grid", "#parallelHintNote", "[name='enableExpertParallel']"],
+        help: "上下文与并发保持你的输入；只有点击自动调优或套用方案才会改写。替换模式按回收主容器后的容量估算显存；并行模式按当前真实空闲估算。",
+        selectors: [".context-section", "#launchDtype", "#launchQuantization", "#loadFormat", "[name='trustRemoteCode']", "#ggufSection", ".gpu-section", "#multiGpuMode", "[name='distributedExecutorBackend']", ".parallel-size-grid", "#parallelHintNote", "[name='enableExpertParallel']"],
       },
       {
         id: "capabilities",
         label: "模型能力",
         description: "思考、工具和压缩",
         help: "Reasoning parser 只负责拆分思考内容，不决定模型是否思考；是否思考由客户端请求参数控制。",
-        selectors: ["#clientPreset", "#reasoningParser", "#reasoningNote", ".tool-section", ".compression-section", "[name='trustRemoteCode']"],
+        selectors: ["#clientPreset", "#clientPresetNote", "#reasoningParser", "#reasoningNote", ".tool-section", ".compression-section"],
       },
       {
         id: "access",
         label: "访问与确认",
-        description: "网络、鉴权和最终参数",
-        help: "检查最终配置。替换模式只替换主实例；并行模式保留现有实例。所有资源参数都以表单值为准。",
+        description: "网络、鉴权和最终确认",
+        help: "选择访问范围和鉴权方式，然后核对下方汇总。替换模式只替换主实例；并行模式保留现有实例。",
         selectors: ["#networkAccess", "#vllmApiKey", "#networkNote", "#startForm button[type='submit']"],
       },
     ],
@@ -694,7 +710,7 @@ function renderVllmLaunchReview() {
       <div><span>实例 / 端口</span><strong>${escapeHtml(instanceMode === "parallel" ? `并行 ${instanceId}` : "替换主实例")} / ${escapeHtml($("#servicePort")?.value || "-")}</strong></div>
       <div><span>访问</span><strong>${network}${$("#vllmApiKey")?.value.trim() ? " / 已设置 Key" : " / 无 Key"}</strong></div>
     </div>
-    <p class="launch-review-note">${instanceMode === "parallel" ? "确认后保留所有现有实例并新建独立容器；请确保端口和 GPU 显存可用。表单值不会被自动改写。" : running ? `确认后只替换主运行容器并切换到 ${runtimeEngine}；失败会自动恢复原容器。` : "确认后创建主实例启动任务；所有参数以本页最终值为准。"}</p>
+    <p class="launch-review-note">${instanceMode === "parallel" ? "确认后保留所有现有实例并新建独立容器；请确保端口和 GPU 显存可用。表单值不会被自动改写。" : running ? `确认后只替换主运行容器${String(running.engine || "").toLowerCase() === ($("#runtimeEngine")?.value === "sglang" ? "sglang" : "vllm") ? "并按当前参数重启" : `并切换到 ${runtimeEngine} 引擎`}；失败会自动恢复原容器。` : "确认后创建主实例启动任务；所有参数以本页最终值为准。"}</p>
   `;
 }
 
@@ -1024,11 +1040,17 @@ async function init() {
       if (!document.hidden) connectionStatus.track(refreshJobs());
     };
     let jobsTimer = setInterval(pollJobs, 3000);
+    let jobsPollMs = 3000;
     window.__adaptJobsPoll = (jobs = []) => {
       const active = (Array.isArray(jobs) ? jobs : []).some((job) => ["running", "queued"].includes(job.status));
+      // SSE 正常时轮询只作为安全网；断开后回到 1s/10s 自适应轮询。
+      const next = jobsEventsHealthy ? 30000 : active ? 1000 : 10000;
+      if (next === jobsPollMs) return;
+      jobsPollMs = next;
       clearInterval(jobsTimer);
-      jobsTimer = setInterval(pollJobs, active ? 1000 : 10000);
+      jobsTimer = setInterval(pollJobs, next);
     };
+    connectJobsEvents();
     setInterval(() => {
       if (!document.hidden && location.hash === "#stats") refreshStats().catch(() => {});
     }, 5000);
@@ -1110,6 +1132,8 @@ function bindEvents() {
   $("#applyExposureToLaunchBtn")?.addEventListener("click", applyExposureToLaunchForm);
   $("#generateExposureApiKey")?.addEventListener("click", generateExposureApiKey);
   $("#reloadModelsBtn").addEventListener("click", refreshModels);
+  $("#reloadDiskUsageBtn")?.addEventListener("click", refreshDiskUsage);
+  $("#diskUsagePanel")?.addEventListener("click", handleDiskUsageAction);
   $("#reloadRemoteModelsBtn").addEventListener("click", refreshRemoteModels);
   $("#remoteSearchBtn").addEventListener("click", refreshRemoteModels);
   $("#remoteSort")?.addEventListener("change", refreshRemoteModels);
@@ -1213,6 +1237,11 @@ function bindEvents() {
   $("#downloadAutoRetryDelaySeconds")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadHfMirror")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadHfTransfer")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadVerifyChecksums")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadIdleOnlyQueue")?.addEventListener("change", saveDownloadQueueMode);
+  $("#downloadMirrorProbeBtn")?.addEventListener("click", probeDownloadMirror);
+  $("#downloadNotifyBtn")?.addEventListener("click", enableDownloadNotifications);
+  if ("Notification" in window && Notification.permission === "granted" && $("#downloadNotifyBtn")) $("#downloadNotifyBtn").hidden = true;
   $("#remoteSource")?.addEventListener("change", refreshRemoteModels);
   ["#startModel", "#runtimeEngine", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#launchDtype", "#launchQuantization", "#loadFormat", "#kvCacheDtype", "#tensorParallelSize", "#pipelineParallelSize", "#dataParallelSize", "#languageModelOnly", "#speculativeMode", "#numSpeculativeTokens", "#dsparkBlockSize", "#sglangMaxTotalTokens", "#sglangPageSize", "#sglangChunkedPrefillSize", "#sglangMambaTrackInterval", "#sglangMaxMambaCacheSize"].forEach((selector) => {
     const node = $(selector);
@@ -1255,6 +1284,8 @@ function bindEvents() {
     updateToolCallNote();
   });
   $("#enableAutoToolChoice").addEventListener("change", updateToolCallNote);
+  // 实例模式影响显存容量口径（替换=可回收主容器占用；并行=按当前空闲），切换时立即重估。
+  $("#instanceMode")?.addEventListener("change", updateMemoryEstimate);
   $("#contextPresetButtons").addEventListener("click", (event) => {
     const button = event.target.closest("[data-context-preset]");
     if (!button) return;
@@ -1326,6 +1357,7 @@ function showView(view, updateHash = true) {
     });
   }
   if (next === "service") refreshRecentLaunches().catch(() => {});
+  if (next === "models") refreshDiskUsage().catch(() => {});
   if (next === "exposure") {
     refreshServiceExposure().catch(() => {});
     refreshServiceClients().catch(() => {});
@@ -1780,13 +1812,98 @@ async function refreshServiceClients() {
   renderServiceClients();
 }
 
-const refreshJobs = withFlightGuard(async () => {
-  state.jobs = await api("/api/jobs?fields=summary");
+function applyJobsSnapshot(jobs) {
+  state.jobs = jobs;
+  notifyDownloadTransitions(jobs);
   renderJobs();
   renderModels();
   maybeHydrateLaunchFormFromRuntime();
   window.__adaptJobsPoll?.(state.jobs);
+}
+
+// 下载结束（成功/失败）时的浏览器通知：仅页面不在前台且用户已授权时弹出。
+const downloadNotifyState = new Map();
+function notifyDownloadTransitions(jobs) {
+  if (!("Notification" in window)) return;
+  for (const job of Array.isArray(jobs) ? jobs : []) {
+    if (job.type !== "download") continue;
+    const prev = downloadNotifyState.get(job.id);
+    downloadNotifyState.set(job.id, job.status);
+    if (!prev || prev === job.status || !["success", "failed"].includes(job.status)) continue;
+    if (Notification.permission !== "granted" || !document.hidden) continue;
+    try {
+      new Notification(job.status === "success" ? "模型下载完成" : "模型下载失败", {
+        body: job.title || "",
+        tag: `download-${job.id}`,
+      });
+    } catch {
+      // 通知失败不影响页面。
+    }
+  }
+}
+
+async function enableDownloadNotifications(event) {
+  if (!("Notification" in window)) {
+    notify("此浏览器不支持通知", "", "error");
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  notify(
+    permission === "granted" ? "已开启下载完成通知" : "未授权通知",
+    permission === "granted" ? "页面在后台时，下载结束会弹系统通知。" : "可在浏览器地址栏的站点设置里手动允许通知。",
+    permission === "granted" ? "success" : "error",
+  );
+  if (event?.currentTarget) event.currentTarget.hidden = permission === "granted";
+}
+
+const refreshJobs = withFlightGuard(async () => {
+  applyJobsSnapshot(await api("/api/jobs?fields=summary"));
 });
+
+// 任务快照优先走 SSE 推送；EventSource 自带重连，断开期间由自适应轮询兜底。
+let jobsEventSource = null;
+let jobsEventsHealthy = false;
+let jobsSnapshotWhileHidden = null;
+
+function connectJobsEvents() {
+  if (!("EventSource" in window) || jobsEventSource) return;
+  try {
+    jobsEventSource = new EventSource("/api/events");
+  } catch {
+    jobsEventSource = null;
+    return;
+  }
+  jobsEventSource.addEventListener("jobs", (event) => {
+    let jobs;
+    try {
+      jobs = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (!Array.isArray(jobs)) return;
+    jobsEventsHealthy = true;
+    if (document.hidden) {
+      jobsSnapshotWhileHidden = jobs;
+      return;
+    }
+    applyJobsSnapshot(jobs);
+  });
+  jobsEventSource.onopen = () => {
+    jobsEventsHealthy = true;
+    window.__adaptJobsPoll?.(state.jobs || []);
+  };
+  jobsEventSource.onerror = () => {
+    jobsEventsHealthy = false;
+    window.__adaptJobsPoll?.(state.jobs || []);
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && jobsSnapshotWhileHidden) {
+      const jobs = jobsSnapshotWhileHidden;
+      jobsSnapshotWhileHidden = null;
+      applyJobsSnapshot(jobs);
+    }
+  });
+}
 
 async function refreshModels() {
   state.models = await api("/api/models");
@@ -2626,6 +2743,8 @@ async function saveAutomationSettings(event) {
         vramGuardEnabled: $("#vramGuardEnabled").checked,
         vramPercent: Number($("#vramPercent").value || 94),
         vramAction: $("#vramAction").value,
+        tempGuardEnabled: Boolean($("#tempGuardEnabled")?.checked),
+        tempLimitC: Number($("#tempLimitC")?.value || 83),
       }),
     });
     renderAutomationSettings();
@@ -2869,10 +2988,17 @@ function buildVllmGpuPlan() {
   };
 }
 
+// 只有「替换主实例」才能把主容器占用的显存计为可回收；
+// 「新增并行实例」时主容器继续运行，必须按当前真实空闲评估。
+function isReplacingPrimaryForPlan() {
+  if ($("#instanceMode")?.value === "parallel") return false;
+  return Boolean(state.status?.container?.running && !state.status?.resources?.hasPeerRunning);
+}
+
 function normalizeVllmPlanGpu(gpu) {
   const utilization = $("#gpuMemoryUtilization")?.value || 0.9;
   const currentFreeGb = Math.max(0, Number(gpu.totalMb || 0) - Number(gpu.usedMb || 0)) / 1024;
-  const replacingManagedContainer = Boolean(state.status?.container?.running && !state.status?.resources?.hasPeerRunning);
+  const replacingManagedContainer = isReplacingPrimaryForPlan();
   const normalized = window.GpuPlanningUtils.normalizeGpuForPlan(replacingManagedContainer ? { ...gpu, usedMb: 0 } : gpu, {
     utilization,
     defaultUtilization: 0.9,
@@ -2899,12 +3025,30 @@ function handleVllmGpuPresetClick(event) {
   renderVllmGpuPlan();
 }
 
+function humanContextTokens(value) {
+  const tokens = Number(value || 0);
+  if (tokens >= 1048576) return `${(tokens / 1048576).toFixed(tokens % 1048576 ? 1 : 0)}M`;
+  if (tokens >= 1024) return `${Math.round(tokens / 1024)}K`;
+  return fmtNumber(tokens);
+}
+
+function updateContextHumanHint() {
+  const hint = $("#contextHumanHint");
+  if (!hint) return;
+  const contextTokens = Number($("#maxModelLen")?.value || 0);
+  const seqs = Math.max(1, Number($("#maxNumSeqs")?.value || 1));
+  hint.textContent = contextTokens > 0
+    ? `≈ ${humanContextTokens(contextTokens)} 上下文 · ${fmtNumber(seqs)} 并发共享 KV 池`
+    : "";
+}
+
 function updateMemoryEstimate() {
   const root = $("#memoryEstimate");
   if (!root) return;
 
   const estimate = estimateMemoryUsage();
   updateContextPresetState(estimate.contextTokens, estimate);
+  updateContextHumanHint();
 
   if (!estimate.paramsB) {
     root.innerHTML = `<div class="empty compact">没有从模型名里识别到 7B、14B、27B 这类规格。填入模型 ID 或本地路径后会自动估算。</div>`;
@@ -3626,7 +3770,9 @@ function updateToolCallNote() {
 }
 
 function inferToolCallParser(model, preset) {
-  const text = `${model || ""} ${preset || ""}`.toLowerCase();
+  // 工具调用格式由模型的 chat template 决定，与接入客户端无关；preset 只保留
+  // 在签名里以兼容既有调用点。
+  const text = String(model || "").toLowerCase();
   if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "qwen3_coder";
   if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) return "gemma4";
   if (text.includes("qwen3.6") || text.includes("qwen3.8") || text.includes("qwen3-") || text.includes("qwen/qwen3") || text.includes("qwen3_coder") || text.includes("qwen3-coder")) return "qwen3_coder";
@@ -3764,6 +3910,148 @@ function handleRecentLaunchAction(event) {
   notify("已填入最近启动配置", item.name || item.model, "success");
 }
 
+// 续传体检：结合完整性校验结果与下载清单，给出「已有 / 还缺」的预览。
+async function buildResumePreflightSummary(job) {
+  const meta = job.meta || {};
+  if (!meta.localDir && !meta.outputName) return null;
+  const verify = await api("/api/download/verify", {
+    method: "POST",
+    body: JSON.stringify({ outputName: meta.outputName, localDir: meta.localDir }),
+  });
+  const manifest = Array.isArray(meta.fileManifest) ? meta.fileManifest : [];
+  const manifestByName = new Map(manifest.map((item) => [String(item.name || "").toLowerCase(), item]));
+  const missingNames = Array.isArray(verify.missingWeightFiles) ? verify.missingWeightFiles : [];
+  const missingBytes = missingNames.reduce((sum, name) => sum + Number(manifestByName.get(String(name).toLowerCase())?.size || 0), 0);
+  const expectedTotal = Number(verify.expectedWeightFiles || 0);
+  const haveCount = expectedTotal ? Math.max(0, expectedTotal - missingNames.length) : null;
+  const rows = [];
+  rows.push(`<p>本地已下载 <strong>${escapeHtml(fmtBytes(Number(verify.size || 0)))}</strong>（${escapeHtml(String(verify.fileCount ?? "?"))} 个文件）。</p>`);
+  if (expectedTotal) {
+    rows.push(missingNames.length
+      ? `<p>权重分片 <strong>${haveCount}/${expectedTotal}</strong>，还缺 <strong>${missingNames.length}</strong> 个${missingBytes ? `，约 <strong>${escapeHtml(fmtBytes(missingBytes))}</strong>` : ""}。</p>`
+      : `<p>权重分片 <strong>${expectedTotal}/${expectedTotal}</strong> 已齐全，续传主要用于补齐配置或缓存残留。</p>`);
+  }
+  if (Number(verify.incomplete || 0) > 0) {
+    rows.push(`<p>存在 ${escapeHtml(String(verify.incomplete))} 个传输中的 .incomplete 文件（${escapeHtml(fmtBytes(Number(verify.incompleteBytes || 0)))}），续传会复用。</p>`);
+  }
+  if (missingNames.length) {
+    const preview = missingNames.slice(0, 5).map((name) => escapeHtml(String(name))).join("<br>");
+    rows.push(`<p class="subtle" style="font-size:12px">${preview}${missingNames.length > 5 ? `<br>… 共 ${missingNames.length} 个` : ""}</p>`);
+  }
+  return rows.join("");
+}
+
+// 磁盘看板：模型盘水位、目录排行、HF 缓存体积与 .incomplete 残留清理。
+async function refreshDiskUsage() {
+  const root = $("#diskUsagePanel");
+  if (!root) return;
+  try {
+    const data = await api("/api/models/disk-usage");
+    renderDiskUsage(data);
+  } catch (error) {
+    root.innerHTML = `<div class="empty compact">磁盘用量读取失败：${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderDiskUsage(data) {
+  const root = $("#diskUsagePanel");
+  if (!root || !data?.ok) return;
+  const disk = data.disk || null;
+  const total = Number(disk?.totalBytes || 0);
+  const free = Number(disk?.freeBytes || 0);
+  const modelsBytes = Number(data.modelsBytes || 0);
+  const otherBytes = total ? Math.max(0, total - free - modelsBytes) : 0;
+  const pct = (value) => total ? Math.max(0, Math.min(100, (value / total) * 100)) : 0;
+  const cache = data.hfCache || {};
+  const cacheTotal = Number(cache.hubBytes || 0) + Number(cache.xetBytes || 0) + Number(cache.modelscopeBytes || 0);
+  const rows = (data.models || []).slice(0, 8).map((model) => `
+    <div class="disk-usage-row">
+      <span class="disk-usage-name" title="${escapeAttr(model.path)}">${escapeHtml(model.name)}</span>
+      <span class="disk-usage-size">${escapeHtml(fmtBytes(model.bytes))}</span>
+      <span class="disk-usage-actions">
+        ${model.incompleteFiles > 0 ? `<button type="button" class="job-action-button" data-disk-action="cleanup" data-model="${escapeAttr(model.name)}" title="删除 ${model.incompleteFiles} 个 .incomplete 残留（${escapeAttr(fmtBytes(model.incompleteBytes))}）">清理残留</button>` : ""}
+        <button type="button" class="job-action-button" data-disk-action="upstream" data-model="${escapeAttr(model.name)}" title="对比 Hugging Face 上游是否有更新">检查更新</button>
+      </span>
+    </div>`).join("");
+  const hidden = Math.max(0, (data.models || []).length - 8);
+  root.innerHTML = `
+    ${total ? `
+      <div class="disk-usage-bar" role="img" aria-label="模型盘空间占用">
+        <div class="disk-usage-segment models" style="width:${pct(modelsBytes)}%" title="模型目录 ${escapeAttr(fmtBytes(modelsBytes))}"></div>
+        <div class="disk-usage-segment other" style="width:${pct(otherBytes)}%" title="其他占用 ${escapeAttr(fmtBytes(otherBytes))}"></div>
+        <div class="disk-usage-segment free" style="width:${pct(free)}%" title="剩余 ${escapeAttr(fmtBytes(free))}"></div>
+      </div>
+      <div class="disk-usage-legend">
+        <span><i class="dot models"></i>模型 ${escapeHtml(fmtBytes(modelsBytes))}</span>
+        <span><i class="dot other"></i>其他 ${escapeHtml(fmtBytes(otherBytes))}</span>
+        <span><i class="dot free"></i>剩余 ${escapeHtml(fmtBytes(free))} / ${escapeHtml(fmtBytes(total))}</span>
+      </div>` : ""}
+    <div class="disk-usage-meta">HF 缓存 ${escapeHtml(fmtBytes(cacheTotal))}（hub ${escapeHtml(fmtBytes(Number(cache.hubBytes || 0)))} · Xet ${escapeHtml(fmtBytes(Number(cache.xetBytes || 0)))}）${data.incompleteFiles ? ` · 残留 ${data.incompleteFiles} 个 .incomplete / ${escapeHtml(fmtBytes(data.incompleteBytes))}` : " · 无 .incomplete 残留"}</div>
+    <div class="disk-usage-list">${rows || `<div class="empty compact">模型目录为空。</div>`}</div>
+    ${hidden ? `<div class="disk-usage-meta">还有 ${hidden} 个较小目录未列出。</div>` : ""}
+  `;
+}
+
+async function handleDiskUsageAction(event) {
+  const button = event.target.closest("[data-disk-action]");
+  if (!button) return;
+  const name = button.dataset.model || "";
+  if (button.dataset.diskAction === "cleanup") {
+    const clearBusy = setButtonBusy(button, "清理中...");
+    try {
+      const result = await api("/api/models/cleanup-incomplete", { method: "POST", body: JSON.stringify({ name }) });
+      notify("残留清理完成", `${name} · 删除 ${result.removed?.length || 0} 个文件 / ${fmtBytes(result.removedBytes || 0)}`, "success");
+      await refreshDiskUsage();
+    } catch (error) {
+      reportActionError("清理残留失败", error);
+    } finally {
+      clearBusy();
+    }
+    return;
+  }
+  if (button.dataset.diskAction === "upstream") {
+    const clearBusy = setButtonBusy(button, "检查中...");
+    try {
+      const result = await api(`/api/models/upstream-status?name=${encodeURIComponent(name)}`);
+      notify(
+        result.ok ? (result.updateAvailable ? "上游有更新" : result.updateAvailable === false ? "本地已是最新" : "无法比对时间") : "无法检查更新",
+        result.message || "",
+        result.ok && result.updateAvailable ? "success" : result.ok ? "success" : "error",
+      );
+    } catch (error) {
+      reportActionError("上游检查失败", error);
+    } finally {
+      clearBusy();
+    }
+  }
+}
+
+async function probeDownloadMirror(event) {
+  const clearBusy = setButtonBusy(event.currentTarget, "测速中...");
+  try {
+    const model = $("#downloadModel")?.value.trim() || "";
+    const result = await api("/api/download/mirror-probe", {
+      method: "POST",
+      body: JSON.stringify(model.includes("/") ? { model } : {}),
+    });
+    const fmtProbe = (item) => item?.ok
+      ? `${Math.round(item.ms)}ms / ${fmtBytes(item.bytesPerSec)}\/s`
+      : `失败（${item?.error || "无响应"}）`;
+    const useMirror = result.recommended === "mirror";
+    if ($("#downloadHfMirror")) $("#downloadHfMirror").checked = useMirror;
+    await saveDownloadQueueMode();
+    notify(
+      `已选择 ${result.recommendedLabel}`,
+      `官方 ${fmtProbe(result.official)} · 镜像 ${fmtProbe(result.mirror)}`,
+      "success",
+    );
+  } catch (error) {
+    reportActionError("镜像测速失败", error);
+  } finally {
+    clearBusy();
+  }
+}
+
 async function loadDownloadSettings() {
   try {
     const data = await api("/api/download/settings");
@@ -3773,6 +4061,8 @@ async function loadDownloadSettings() {
     if ($("#downloadAutoRetryDelaySeconds")) $("#downloadAutoRetryDelaySeconds").value = String(data?.autoRetryDelaySeconds ?? 10);
     if ($("#downloadHfMirror")) $("#downloadHfMirror").checked = Boolean(data?.hfMirror);
     if ($("#downloadHfTransfer")) $("#downloadHfTransfer").checked = Boolean(data?.hfTransfer);
+    if ($("#downloadVerifyChecksums")) $("#downloadVerifyChecksums").checked = data?.verifyChecksums !== false;
+    if ($("#downloadIdleOnlyQueue")) $("#downloadIdleOnlyQueue").checked = Boolean(data?.idleOnlyQueue);
   } catch {
     // 设置读取失败不阻塞
   }
@@ -3788,6 +4078,8 @@ async function saveDownloadQueueMode() {
       autoRetryDelaySeconds: Number($("#downloadAutoRetryDelaySeconds")?.value ?? 10),
       hfMirror: Boolean($("#downloadHfMirror")?.checked),
       hfTransfer: Boolean($("#downloadHfTransfer")?.checked),
+      verifyChecksums: $("#downloadVerifyChecksums") ? Boolean($("#downloadVerifyChecksums").checked) : undefined,
+      idleOnlyQueue: $("#downloadIdleOnlyQueue") ? Boolean($("#downloadIdleOnlyQueue").checked) : undefined,
     };
     await api("/api/download/settings", {
       method: "POST",
@@ -4646,6 +4938,7 @@ function renderServeProgress(job) {
   const issue = Array.isArray(progress.issues) && progress.issues.length ? progress.issues[progress.issues.length - 1] : "";
   const detail = issue || progress.detail || (job.logs || []).slice(-1)[0] || "等待启动日志";
   const actions = renderServeActions(job);
+  const stageTimeline = renderServeStageTimeline(job);
   return `
     <div class="job-progress">
       <div class="download-progress-track">
@@ -4655,9 +4948,29 @@ function renderServeProgress(job) {
         <span>${escapeHtml(stage)} · ${percent.toFixed(0)}%</span>
         <small>${escapeHtml(detail)}</small>
       </div>
+      ${stageTimeline}
       ${actions}
     </div>
   `;
+}
+
+// 启动结束后的阶段耗时分解：从 meta.stageHistory 计算每个阶段实际花了多久。
+function renderServeStageTimeline(job) {
+  if (!["success", "failed"].includes(job.status)) return "";
+  const history = Array.isArray(job.meta?.stageHistory) ? job.meta.stageHistory : [];
+  if (history.length < 2) return "";
+  const endAt = Date.parse(job.finishedAt || job.updatedAt || "") || Date.parse(history[history.length - 1].at);
+  const parts = [];
+  for (let index = 0; index < history.length; index += 1) {
+    const startMs = Date.parse(history[index].at);
+    const stopMs = index + 1 < history.length ? Date.parse(history[index + 1].at) : endAt;
+    if (!Number.isFinite(startMs) || !Number.isFinite(stopMs)) continue;
+    const seconds = Math.max(0, Math.round((stopMs - startMs) / 1000));
+    if (seconds < 1) continue;
+    parts.push(`${history[index].stage} ${formatDuration(seconds)}`);
+  }
+  if (!parts.length) return "";
+  return `<div class="serve-stage-timeline" data-no-i18n>阶段耗时：${escapeHtml(parts.join(" → "))}</div>`;
 }
 
 function renderServeActions(job) {
@@ -4980,15 +5293,27 @@ async function handleDownloadJobAction(event) {
     return;
   }
   if (button.dataset.downloadAction === "resume") {
-    const clearResumeBusy = setButtonBusy(button, "继续中...");
+    const clearResumeBusy = setButtonBusy(button, "体检中...");
     try {
-      await api(`/api/jobs/${encodeURIComponent(job.id)}/resume`, { method: "POST", body: "{}" });
-      notify("下载已继续", meta.model || job.title, "success");
-      await refreshJobs();
-    } catch (error) {
-      reportActionError("继续下载失败", error);
-    } finally {
+      // 续传前体检：先看本地已有多少、还缺什么，再决定是否继续。
+      const summary = await buildResumePreflightSummary(job).catch(() => null);
       clearResumeBusy();
+      if (summary && !await uiArchitecture.confirmAction({
+        title: "继续下载前的体检",
+        body: summary,
+        confirmLabel: "继续下载",
+      })) return;
+      const clearGoBusy = setButtonBusy(button, "继续中...");
+      try {
+        await api(`/api/jobs/${encodeURIComponent(job.id)}/resume`, { method: "POST", body: "{}" });
+        notify("下载已继续", meta.model || job.title, "success");
+        await refreshJobs();
+      } finally {
+        clearGoBusy();
+      }
+    } catch (error) {
+      clearResumeBusy();
+      reportActionError("继续下载失败", error);
     }
     return;
   }

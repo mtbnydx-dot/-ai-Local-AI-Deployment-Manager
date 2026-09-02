@@ -166,6 +166,11 @@ async function handleRequest(req, res) {
     // the user has open can drive the entry over loopback.
     const guard = security.checkRequest(req, url);
     if (!guard.ok) return sendJson(res, { error: guard.message, code: guard.code }, guard.status);
+    // 反向代理（deploy/public 的 Caddy）转发进来的请求只允许走 /gateway/*：
+    // 控制台页面、管理 API、计费和文档都不该出现在公网上。
+    if (!url.pathname.startsWith("/gateway/") && security.isProxiedRequest(req)) {
+      return sendJson(res, { error: "Only /gateway/* endpoints are served through the public proxy.", code: "public_proxy_gateway_only" }, 404);
+    }
     if (await handleBillingHttpRequest(req, res, url)) return;
     if (req.method === "GET" && (url.pathname === "/billing" || url.pathname === "/billing/")) {
       if (!isStrictLocalBillingPageRequest(req)) {
@@ -189,6 +194,10 @@ async function handleRequest(req, res) {
       return proxyTtsGatewayRequest(req, res, url);
     }
     if (url.pathname.startsWith("/gateway/")) {
+      // 免鉴权健康检查：公网监控探活用，不暴露模型或配置信息。
+      if (req.method === "GET" && (url.pathname === "/gateway/health" || url.pathname === "/gateway/health/")) {
+        return sendJson(res, { ok: true, service: "local-ai-gateway", time: new Date().toISOString() }, 200, gatewayCorsHeaders(req));
+      }
       return proxyGatewayRequest(req, res, url);
     }
     if (req.method === "GET" && url.pathname === "/api/security") {
@@ -816,7 +825,9 @@ async function proxyGatewayRequest(req, res, url) {
   }
   const rate = core.enterServiceRateLimit(
     { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
-    auth.client?.id || req.socket?.remoteAddress || "anonymous",
+    // 无 Key 的代理请求按真实客户端地址分桶；用 socket 地址会让所有公网设备
+    // 共享 Caddy 的 127.0.0.1 一个桶，一个滥用者就能耗尽全部配额。
+    auth.client?.id || security.resolveClientAddress(req) || "anonymous",
     entryRateBuckets,
   );
   if (!rate.ok) {
@@ -1059,7 +1070,7 @@ function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, bo
   const headers = req.headers || {};
   return {
     at: new Date().toISOString(),
-    remoteAddress: req.socket?.remoteAddress || "",
+    remoteAddress: security.resolveClientAddress(req),
     method: req.method,
     path: String(req.url || "").split("?")[0],
     kind: route?.protocol || "",
@@ -1156,9 +1167,20 @@ async function appendEntryGatewayAccessLog(entry) {
   return core.appendAccessLog(GATEWAY_ACCESS_LOG, entry);
 }
 
+// 状态页每 5 秒都会带上网关访问统计；重读日志尾部并全量聚合交给短 TTL 单飞缓存。
+const ENTRY_ACCESS_STATS_CACHE_MS = Math.max(0, Number(process.env.MODEL_ACCESS_STATS_CACHE_MS ?? 10_000));
+const entryAccessStatsCache = core.createSingleFlightCache({ ttlMs: ENTRY_ACCESS_STATS_CACHE_MS, maxEntries: 16 });
+
 async function collectEntryGatewayAccessStats(options = {}) {
   const limit = Math.min(500, Math.max(20, Number(options.limit || 120)));
   const maxLines = Math.min(50000, Math.max(limit, Number(options.maxLines || 12000)));
+  if (ENTRY_ACCESS_STATS_CACHE_MS > 0) {
+    return entryAccessStatsCache.get(`gateway:${limit}:${maxLines}`, () => collectEntryGatewayAccessStatsFresh(limit, maxLines));
+  }
+  return collectEntryGatewayAccessStatsFresh(limit, maxLines);
+}
+
+async function collectEntryGatewayAccessStatsFresh(limit, maxLines) {
   const lanAddress = core.getLanAddress();
   const events = (await readEntryGatewayAccessEvents(maxLines))
     .map((entry) => core.normalizeAccessEvent(entry, lanAddress))
@@ -1346,7 +1368,7 @@ async function buildServiceEntryFleetSnapshot(settingsOverride = null) {
 async function buildFleetRoutePreview(input = {}) {
   const settings = await getFleetSettings();
   const catalogs = await getFleetCatalogs();
-  const request = buildFleetRouteRequest(input, settings);
+  const request = { ...buildFleetRouteRequest(input, settings), dryRun: true };
   const target = selectFleetTarget(catalogs, request);
   return serializeFleetRouteTarget(target, request);
 }
@@ -1509,8 +1531,9 @@ function buildProxyHeaders(headers, req = null, options = {}) {
       trustHeaders,
     ));
   }
-  if (req?.socket?.remoteAddress) {
-    output["x-forwarded-for"] = req.socket.remoteAddress;
+  const clientAddress = security.resolveClientAddress(req);
+  if (clientAddress) {
+    output["x-forwarded-for"] = clientAddress;
   }
   return output;
 }
