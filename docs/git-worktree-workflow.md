@@ -74,6 +74,20 @@ Deployment backups and manifests are written below:
 
 The deploy helper intentionally requires confirmation. It blocks dirty worktrees unless `-AllowDirty` is explicitly supplied, and it runs `test-all.cmd` unless `-SkipTests` is explicitly supplied.
 
+### Live drift check
+
+Before touching anything, the helper compares every path that any previous deployment manifest recorded with the hash it was deployed with. A mismatch means somebody edited the live copy by hand after the deploy, and a plain deploy would overwrite that edit. The helper lists the files and stops; `-DriftOnly` prints only the report.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-worktree.ps1 -DriftOnly
+```
+
+To keep a hand edit, port it into the worktree first (three-way merge: base = the copy under `artifacts\worktree-deploy-backups\<stamp>\`, mine = the live file, theirs = the worktree file, e.g. `git merge-file -p --diff3 theirs base mine`), commit, then deploy. Pass `-AllowLiveDrift` only when the live edit is intentionally being discarded; the pre-deploy copy still lands in the backup root and the drift list is recorded in `deployment-manifest.json` as `liveDrift`.
+
+### After a deploy
+
+The helper never restarts services. Check `GET /api/jobs` on both managers for running downloads before restarting, then restart `service-entry`, `vllm-manager`, `llama-manager` (and the TTS gateway / MCP service if their files changed) with the usual `start-*.cmd` scripts.
+
 ## Remove a completed feature worktree
 
 The removal helper refuses paths outside `<AI_ROOT>\worktrees`, refuses the current worktree, and blocks uncommitted changes:

@@ -8,7 +8,11 @@ param(
 
   [switch]$AllowDirty,
 
-  [switch]$IncludeLocalExtensions
+  [switch]$IncludeLocalExtensions,
+
+  [switch]$AllowLiveDrift,
+
+  [switch]$DriftOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,8 +70,59 @@ if ($liveFull.Equals($sourceRoot, [System.StringComparison]::OrdinalIgnoreCase))
 }
 
 $changes = @(Invoke-Git -GitArgs @('-C', $sourceRoot, 'status', '--porcelain', '--untracked-files=normal'))
-if ($changes.Count -gt 0 -and -not $AllowDirty) {
+if ($changes.Count -gt 0 -and -not $AllowDirty -and -not $DriftOnly) {
   throw 'The worktree has uncommitted changes. Commit them first or pass -AllowDirty explicitly.'
+}
+
+# Live drift: a file that was hand-edited in the live root after its last deploy
+# would be silently overwritten. Compare every previously deployed path with the
+# hash recorded by the newest manifest that touched it.
+function Get-LiveDrift {
+  param([Parameter(Mandatory = $true)][string]$LiveRootPath)
+
+  $backupsRoot = Join-Path $LiveRootPath 'artifacts\worktree-deploy-backups'
+  $expected = @{}
+  if (Test-Path -LiteralPath $backupsRoot -PathType Container) {
+    $manifests = Get-ChildItem -LiteralPath $backupsRoot -Directory |
+      ForEach-Object { Join-Path $_.FullName 'deployment-manifest.json' } |
+      Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+      ForEach-Object {
+        try { $data = Get-Content -LiteralPath $_ -Raw | ConvertFrom-Json } catch { $data = $null }
+        if ($data -and $data.files) { [pscustomobject]@{ Path = $_; DeployedAt = [string]$data.deployedAt; Data = $data } }
+      } |
+      Sort-Object DeployedAt
+    foreach ($manifest in $manifests) {
+      foreach ($file in $manifest.Data.files) {
+        if ($file.afterSha256) { $expected[([string]$file.path).Replace('/', '\')] = [string]$file.afterSha256 }
+      }
+    }
+  }
+
+  $drift = [System.Collections.Generic.List[object]]::new()
+  foreach ($entry in $expected.GetEnumerator()) {
+    $target = Join-Path $LiveRootPath $entry.Key
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { continue }
+    $currentHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($currentHash -ne $entry.Value) {
+      $drift.Add([pscustomobject]@{ path = $entry.Key; deployedSha256 = $entry.Value; liveSha256 = $currentHash })
+    }
+  }
+  return @($drift | Sort-Object path)
+}
+
+$liveDrift = @(Get-LiveDrift -LiveRootPath $liveFull)
+if ($liveDrift.Count -gt 0) {
+  Write-Host "Live drift detected: $($liveDrift.Count) file(s) changed in $liveFull since their last deploy:"
+  foreach ($item in $liveDrift) { Write-Host "  $($item.path)" }
+  Write-Host 'Port these edits into a worktree (three-way merge against the deploy backup) before deploying, or pass -AllowLiveDrift to overwrite them (they are still copied to the backup root).'
+} else {
+  Write-Host 'Live drift check: no hand edits detected since the last deploy.'
+}
+if ($DriftOnly) {
+  return
+}
+if ($liveDrift.Count -gt 0 -and -not $AllowLiveDrift) {
+  throw "Refusing to overwrite $($liveDrift.Count) hand-edited live file(s). Pass -AllowLiveDrift only after porting them."
 }
 
 $commit = ((Invoke-Git -GitArgs @('-C', $sourceRoot, 'rev-parse', 'HEAD')) | Select-Object -First 1).Trim()
@@ -196,6 +251,7 @@ $manifest = [ordered]@{
   archive = $zipPath
   archiveSha256 = $actualHash
   includeLocalExtensions = [bool]$IncludeLocalExtensions
+  liveDrift = @($liveDrift)
   files = @($records)
 }
 $manifestPath = Join-Path $backupRoot 'deployment-manifest.json'

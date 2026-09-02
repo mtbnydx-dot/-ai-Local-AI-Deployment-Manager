@@ -8,6 +8,8 @@
 - `<AI_ROOT>` itself remains the live deployment and runtime root. It is intentionally not a Git worktree.
 - A commit or merge never deploys files to the live root. Use `scripts\deploy-worktree.ps1`, which builds and verifies an allowlisted release, creates a rollback backup, and does not restart services.
 - Runtime data, local configuration, models, logs, caches, databases, secrets, TTS environments/reference voices/generated audio, and `node_modules` never belong in Git.
+- Never edit source files in the live root directly. The next `deploy-worktree.ps1` run overwrites them (six rounds of fixes were lost this way on 2026-08-22..09-02). The deploy helper now refuses when it detects live drift (a deployed file whose hash no longer matches the last deployment manifest) unless `-AllowLiveDrift` is passed; `-DriftOnly` prints the report without deploying.
+- `test-all.cmd` runs every package and prints a summary; a red package no longer hides the packages behind it. The TTS Python tests use the gateway environment at `<AI_ROOT>\tts-runtime\envs\gateway` (worktrees look two levels up for it) and are skipped with a notice when it is not installed.
 
 `build-github-release.ps1` is the only supported way to create a public release archive.
 
