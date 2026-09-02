@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#090d12">
+  <title>语音工作台</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <svg class="svg-sprite" aria-hidden="true">
+    <symbol id="i-create" viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4M3 22h18"/></symbol>
+    <symbol id="i-voice" viewBox="0 0 24 24"><path d="M12 3v18M8 7v10M4 10v4M16 7v10M20 10v4"/></symbol>
+    <symbol id="i-task" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-api" viewBox="0 0 24 24"><path d="m8 5-5 7 5 7M16 5l5 7-5 7M14 3l-4 18"/></symbol>
+    <symbol id="i-model" viewBox="0 0 24 24"><path d="M5 6.5 12 3l7 3.5-7 3.5-7-3.5Z"/><path d="M5 11.5 12 15l7-3.5M5 16.5 12 20l7-3.5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8A7 7 0 0 1 18.4 6.4L20 12M4 12l1.6 5.6A7 7 0 0 0 17.9 16"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4ZM13.5 6.5l4 4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 24 24"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h2l2-6 3 12 3-15 3 13 2-4h3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
+  </svg>
+
+  <div class="app-shell" id="app">
+    <header class="topbar">
+      <button class="mobile-menu icon-button" id="mobileMenu" type="button" aria-label="打开导航" aria-controls="primaryNav" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="brand-block">
+        <h1>语音工作台</h1>
+        <svg class="signal-mark" viewBox="0 0 220 32" aria-hidden="true"><path d="M1 16h42c10 0 12-12 22-12s12 24 22 24S99 8 109 8s12 16 22 16 12-20 22-20 12 24 22 24 12-12 22-12h22"/></svg>
+      </div>
+      <div class="top-status">
+        <span class="engine-summary" id="engineSummary">正在检查引擎</span>
+        <button class="button subtle" id="refreshStatus" type="button">
+          <svg><use href="#i-refresh"/></svg><span>刷新状态</span>
+        </button>
+      </div>
+    </header>
+
+    <nav class="primary-nav" id="primaryNav" aria-label="主导航">
+      <button class="nav-item is-active" type="button" data-view="create"><svg><use href="#i-create"/></svg><span>创建</span></button>
+      <button class="nav-item" type="button" data-view="voices"><svg><use href="#i-voice"/></svg><span>音色库</span></button>
+      <button class="nav-item" type="button" data-view="tasks"><svg><use href="#i-task"/></svg><span>任务</span><span class="nav-count" id="taskNavCount" hidden>0</span></button>
+      <button class="nav-item" type="button" data-view="history"><svg><use href="#i-history"/></svg><span>历史</span></button>
+      <button class="nav-item" type="button" data-view="models"><svg><use href="#i-model"/></svg><span>模型</span></button>
+      <button class="nav-item" type="button" data-view="api"><svg><use href="#i-api"/></svg><span>API</span></button>
+    </nav>
+
+    <main class="main-area">
+      <section class="view is-active" data-view-panel="create" aria-labelledby="createTitle">
+        <h2 class="sr-only" id="createTitle">创建语音</h2>
+        <div class="create-layout">
+          <div class="creation-canvas">
+            <section class="panel editor-panel" aria-labelledby="textSectionTitle">
+              <h3 class="sr-only" id="textSectionTitle">翻译与合成文本</h3>
+              <div class="editor-grid">
+                <div class="field-block text-editor">
+                  <div class="field-heading"><label for="sourceText">原文（自动识别）</label><span id="sourceCount">0 / 12000</span></div>
+                  <textarea id="sourceText" maxlength="12000" placeholder="输入任意语种的原文……" spellcheck="true"></textarea>
+                </div>
+                <div class="editor-actions">
+                  <button class="button primary" id="translateButton" type="button"><span>翻译</span><span aria-hidden="true">⇄</span></button>
+                  <button class="button subtle" id="insertPause" type="button"><span>插入停顿</span><span class="pause-symbol" aria-hidden="true">Ⅱ</span></button>
+                </div>
+                <div class="field-block text-editor">
+                  <div class="field-heading"><label for="targetText">合成文本</label><span id="targetCount">0 / 10000</span></div>
+                  <textarea id="targetText" maxlength="10000" placeholder="输入或翻译成需要合成的任意语种……" spellcheck="true"></textarea>
+                </div>
+              </div>
+              <div class="language-strip">
+                <label><span>翻译到</span><input id="translationLanguage" type="text" list="languageOptions" value="en" maxlength="64" autocomplete="off" placeholder="例如 en、日语、fr-CA"></label>
+                <label><span>合成语种</span><input id="synthesisLanguage" type="text" list="languageOptions" value="auto" maxlength="64" autocomplete="off" placeholder="auto 或任意语种代码"></label>
+                <span class="language-hint" id="languageHint">不设平台级语种白名单；实际发音能力以所选模型为准。</span>
+                <datalist id="languageOptions"></datalist>
+              </div>
+              <p class="inline-status" id="translationStatus" aria-live="polite"></p>
+            </section>
+
+            <section class="panel" aria-labelledby="voicePickerTitle">
+              <div class="section-heading">
+                <div><h3 id="voicePickerTitle">参考音色</h3><p>选择已保存音色，或录音、上传新的参考音频。</p></div>
+                <button class="button subtle compact" id="addVoiceButton" type="button"><svg><use href="#i-plus"/></svg><span>添加音色</span></button>
+              </div>
+              <div class="voice-picker horizontal-list" id="voicePicker" aria-live="polite"></div>
+            </section>
+
+            <section class="panel" aria-labelledby="enginePickerTitle">
+              <div class="section-heading">
+                <div><h3 id="enginePickerTitle">合成引擎</h3><p id="engineHelp">最多同时选择 3 个引擎进行对比。</p></div>
+              </div>
+              <div class="engine-grid" id="engineGrid" aria-live="polite"></div>
+              <div class="engine-warning" id="engineWarning" hidden>
+                 <span><svg><use href="#i-refresh"/></svg><span>部分引擎未启动或未安装，可在模型页直接处理。</span></span>
+                 <button class="text-button" type="button" data-action="open-view" data-view="models">模型管理</button>
+              </div>
+            </section>
+
+            <section class="panel controls-panel" aria-labelledby="controlsTitle">
+              <h3 class="sr-only" id="controlsTitle">表现力控制</h3>
+              <div class="control-column speed-control">
+                <div class="field-heading"><label for="speedControl">语速</label><output id="speedOutput">1.00×</output></div>
+                <input type="range" id="speedControl" min="0.5" max="2" step="0.05" value="1">
+                <div class="range-scale" aria-hidden="true"><span>0.5</span><span>1.0</span><span>1.5</span><span>2.0</span></div>
+                <button class="text-button reset-control" id="resetControls" type="button">重置参数</button>
+              </div>
+              <div class="control-column emotion-control">
+                <div class="field-heading"><span>语气</span><span id="emotionValue">自然</span></div>
+                <div class="emotion-options" id="emotionOptions" role="radiogroup" aria-label="语气">
+                  <button type="button" class="emotion-button is-active" data-emotion="" role="radio" aria-checked="true">自然</button>
+                  <button type="button" class="emotion-button" data-emotion="开心" role="radio" aria-checked="false">开心</button>
+                  <button type="button" class="emotion-button" data-emotion="兴奋" role="radio" aria-checked="false">兴奋</button>
+                  <button type="button" class="emotion-button" data-emotion="平静" role="radio" aria-checked="false">平静</button>
+                  <button type="button" class="emotion-button" data-emotion="悲伤" role="radio" aria-checked="false">悲伤</button>
+                  <button type="button" class="emotion-button" data-emotion="耳语" role="radio" aria-checked="false">耳语</button>
+                </div>
+                <div class="intensity-row"><label for="intensityControl">表达强度</label><input type="range" id="intensityControl" min="0" max="1" step="0.05" value="0.5"><output id="intensityOutput">50%</output></div>
+              </div>
+              <div class="control-column style-control">
+                <div class="field-heading"><label for="styleText">风格描述</label><span id="styleCount">0 / 500</span></div>
+                <textarea id="styleText" maxlength="500" placeholder="例如：广播风格、亲切温暖、专业正式……"></textarea>
+              </div>
+            </section>
+
+            <div class="generate-bar">
+              <button class="generate-button" id="generateButton" type="button">
+                <svg><use href="#i-wave"/></svg><span id="generateLabel">生成语音</span><span class="shortcut">Ctrl ↵</span>
+              </button>
+              <p id="createStatus" class="inline-status" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <aside class="operation-rail" aria-label="运行状态">
+            <section class="rail-section">
+              <div class="rail-heading"><h3>任务队列</h3><button class="icon-button" type="button" data-action="open-view" data-view="tasks" aria-label="查看全部任务"><svg><use href="#i-chevron"/></svg></button></div>
+              <div id="taskRail" class="rail-list"></div>
+            </section>
+            <section class="rail-section recent-section">
+              <div class="rail-heading"><h3>最近生成</h3><button class="icon-button" type="button" data-action="refresh-history" aria-label="刷新生成历史"><svg><use href="#i-refresh"/></svg></button></div>
+              <div id="recentRail" class="rail-list"></div>
+              <button class="rail-link" type="button" data-action="open-view" data-view="history">查看全部历史<svg><use href="#i-chevron"/></svg></button>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view page-view" data-view-panel="voices" aria-labelledby="voicesTitle" hidden>
+        <div class="page-heading"><div><h2 id="voicesTitle">音色库</h2><p>管理参考音色、文字稿和试听文件。</p></div><button class="button primary" type="button" data-action="add-voice"><svg><use href="#i-plus"/></svg><span>添加音色</span></button></div>
+        <div class="library-grid" id="voiceLibrary"></div>
+      </section>
+
+      <section class="view page-view" data-view-panel="tasks" aria-labelledby="tasksTitle" hidden>
+        <div class="page-heading"><div><h2 id="tasksTitle">任务队列</h2><p>查看排队、运行、失败与已完成任务。</p></div><button class="button subtle" type="button" data-action="refresh-tasks"><svg><use href="#i-refresh"/></svg><span>刷新</span></button></div>
+        <div class="filter-row" id="taskFilters" role="group" aria-label="任务筛选">
+          <button class="filter-button is-active" type="button" data-job-filter="">全部</button>
+          <button class="filter-button" type="button" data-job-filter="running">运行中</button>
+          <button class="filter-button" type="button" data-job-filter="queued">排队</button>
+          <button class="filter-button" type="button" data-job-filter="failed">失败</button>
+          <button class="filter-button" type="button" data-job-filter="succeeded">已完成</button>
+        </div>
+        <div class="task-list" id="taskList"></div>
+      </section>
+
+      <section class="view page-view" data-view-panel="history" aria-labelledby="historyTitle" hidden>
+        <div class="page-heading"><div><h2 id="historyTitle">生成历史</h2><p>搜索、筛选、试听和下载本机生成结果。</p></div><button class="button subtle" type="button" data-action="refresh-history"><svg><use href="#i-refresh"/></svg><span>刷新</span></button></div>
+        <div class="history-toolbar">
+          <label class="search-field"><span class="sr-only">搜索生成历史</span><svg><use href="#i-search"/></svg><input id="historySearch" type="search" placeholder="搜索文本或文件名" autocomplete="off"></label>
+          <label class="select-field"><span class="sr-only">按引擎筛选</span><select id="historyEngine"><option value="">全部引擎</option></select></label>
+          <span class="history-total" id="historyTotal"></span>
+        </div>
+        <div class="history-list" id="historyList"></div>
+        <button class="button subtle load-more" id="historyMore" type="button" hidden>加载更多</button>
+      </section>
+
+      <section class="view page-view" data-view-panel="models" aria-labelledby="modelsTitle" hidden>
+        <div class="page-heading"><div><h2 id="modelsTitle">模型管理</h2><p>安装、启动、预加载和释放本地模型；运行中的生成任务不会被强制中断。</p></div><button class="button subtle" type="button" data-action="refresh-models"><svg><use href="#i-refresh"/></svg><span>刷新</span></button></div>
+        <div class="model-notice"><strong>本机安全边界</strong><span>状态可远程查看，模型安装与生命周期操作仅允许直接通过 127.0.0.1 的统一入口执行。</span><span class="model-resource-summary" id="modelResourceSummary"></span></div>
+        <div class="model-grid" id="modelGrid" aria-live="polite"></div>
+      </section>
+
+      <section class="view page-view" data-view-panel="api" aria-labelledby="apiTitle" hidden>
+        <div class="page-heading"><div><h2 id="apiTitle">API 接入</h2><p>OpenAI Audio 兼容接口和本地平台能力。</p></div></div>
+        <div class="api-layout">
+          <section class="panel api-panel"><h3>OpenAI 兼容地址</h3><div class="copy-field"><code id="openAiBase"></code><button class="icon-button" type="button" data-copy-target="openAiBase" aria-label="复制地址"><svg><use href="#i-copy"/></svg></button></div><p>支持 <code>GET /models</code> 与 <code>POST /audio/speech</code>，当前输出格式为 WAV。</p></section>
+          <section class="panel api-panel"><h3>调用示例</h3><pre id="apiExample"></pre><button class="button subtle compact" type="button" data-copy-target="apiExample"><svg><use href="#i-copy"/></svg><span>复制示例</span></button></section>
+          <section class="panel api-panel"><h3>模型与能力</h3><div id="apiModels" class="api-model-list"></div></section>
+        </div>
+      </section>
+    </main>
+
+    <footer class="connection-bar"><span id="connectionEndpoint">统一入口</span><span class="connection-state"><span class="status-dot is-online"></span><span id="connectionLabel">正在连接</span></span></footer>
+  </div>
+
+  <dialog class="modal" id="voiceDialog" aria-labelledby="voiceDialogTitle">
+    <form method="dialog" class="modal-shell" id="voiceForm">
+      <div class="modal-heading"><div><h2 id="voiceDialogTitle">添加参考音色</h2><p id="voiceDialogHint">录制 10–20 秒，或上传清晰的单人语音。</p></div><button class="icon-button" type="button" data-dialog-close="voiceDialog" aria-label="关闭"><svg><use href="#i-x"/></svg></button></div>
+      <div class="voice-source" id="voiceSourceControls">
+        <button class="record-button" id="recordButton" type="button"><svg><use href="#i-mic"/></svg><span>开始录音</span></button>
+        <span class="source-divider">或</span>
+        <label class="file-button"><input type="file" id="voiceFile" accept="audio/*"><span>选择音频文件</span></label>
+        <span class="record-time" id="recordTime">00:00</span>
+      </div>
+      <audio id="voicePreview" class="voice-preview" controls hidden></audio>
+      <label class="modal-field"><span>音色名称</span><input type="text" id="voiceName" maxlength="120" value="我的声音" required></label>
+      <label class="modal-field"><span>参考音频文字</span><textarea id="voiceTranscript" maxlength="4000" placeholder="准确填写录音中朗读的文字，Step-Audio 必填。"></textarea></label>
+      <p class="inline-status" id="voiceFormStatus" aria-live="polite"></p>
+      <div class="modal-actions"><button class="button subtle" type="button" data-dialog-close="voiceDialog">取消</button><button class="button primary" id="saveVoiceButton" type="submit">保存音色</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal compact-modal" id="confirmDialog" aria-labelledby="confirmTitle">
+    <form method="dialog" class="modal-shell">
+      <div class="modal-heading"><div><h2 id="confirmTitle">确认操作</h2><p id="confirmMessage"></p></div></div>
+      <div class="modal-actions"><button class="button subtle" value="cancel">取消</button><button class="button danger" value="confirm">确认操作</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal compact-modal" id="authDialog" aria-labelledby="authTitle">
+    <form method="dialog" class="modal-shell" id="authForm">
+      <div class="modal-heading"><div><h2 id="authTitle">输入客户端 API Key</h2><p>仅保存在当前标签会话，不会写入页面或本地文件。</p></div></div>
+      <label class="modal-field"><span>API Key</span><input type="password" id="authKey" autocomplete="off" required></label>
+      <div class="modal-actions"><button class="button subtle" type="button" data-dialog-close="authDialog">取消</button><button class="button primary" value="confirm">继续</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>

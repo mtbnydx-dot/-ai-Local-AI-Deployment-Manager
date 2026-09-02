@@ -1,0 +1,33 @@
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Local AI Search"
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "change-me-local-ai-search-secret"
+  limiter: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 15.0
+
+# The default Brave, DuckDuckGo, and Startpage engines can all be suspended by
+# rate limits/CAPTCHA at the same time. Keep the defaults, and add Bing as a
+# general-search fallback using SearXNG's supported engine override mechanism.
+engines:
+  - name: bing
+    disabled: false

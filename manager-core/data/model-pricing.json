@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "asOf": "2026-05-25",
+  "unit": "USD per 1M tokens",
+  "staleAfterDays": 120,
+  "sources": [
+    { "label": "OpenAI API pricing", "url": "https://developers.openai.com/api/docs/pricing" },
+    { "label": "Anthropic Claude pricing", "url": "https://platform.claude.com/docs/en/about-claude/pricing" }
+  ],
+  "profiles": [
+    { "id": "openai:gpt-5.5", "provider": "OpenAI", "label": "GPT-5.5", "inputPerM": 5, "cachedInputPerM": 0.5, "outputPerM": 30, "source": "OpenAI API pricing" },
+    { "id": "openai:gpt-5.4", "provider": "OpenAI", "label": "GPT-5.4", "inputPerM": 2.5, "cachedInputPerM": 0.25, "outputPerM": 15, "source": "OpenAI API pricing" },
+    { "id": "openai:gpt-5.4-mini", "provider": "OpenAI", "label": "GPT-5.4 Mini", "inputPerM": 0.75, "cachedInputPerM": 0.075, "outputPerM": 4.5, "source": "OpenAI API pricing" },
+    { "id": "openai:gpt-5.3-codex", "provider": "OpenAI", "label": "GPT-5.3 Codex", "inputPerM": 1.75, "cachedInputPerM": 0.175, "outputPerM": 14, "source": "OpenAI API pricing" },
+    { "id": "openai:chatgpt-chat-latest", "provider": "OpenAI", "label": "ChatGPT chat-latest", "inputPerM": 5, "cachedInputPerM": 0.5, "outputPerM": 30, "source": "OpenAI API pricing" },
+    { "id": "anthropic:claude-opus-4.7", "provider": "Anthropic", "label": "Claude Opus 4.7", "inputPerM": 5, "cachedInputPerM": 0.5, "outputPerM": 25, "source": "Anthropic Claude pricing" },
+    { "id": "anthropic:claude-sonnet-4.6", "provider": "Anthropic", "label": "Claude Sonnet 4.6", "inputPerM": 3, "cachedInputPerM": 0.3, "outputPerM": 15, "source": "Anthropic Claude pricing" },
+    { "id": "anthropic:claude-haiku-4.5", "provider": "Anthropic", "label": "Claude Haiku 4.5", "inputPerM": 1, "cachedInputPerM": 0.1, "outputPerM": 5, "source": "Anthropic Claude pricing" }
+  ]
+}

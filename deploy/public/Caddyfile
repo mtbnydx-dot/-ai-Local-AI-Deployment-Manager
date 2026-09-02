@@ -1,0 +1,35 @@
+{
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+{$WEBUI_DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 256MB
+	}
+	reverse_proxy 127.0.0.1:3000 {
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+			response_header_timeout 30m
+		}
+	}
+}
+
+{$MODEL_API_DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 32MB
+	}
+	reverse_proxy 127.0.0.1:5176 {
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+			response_header_timeout 30m
+		}
+	}
+}

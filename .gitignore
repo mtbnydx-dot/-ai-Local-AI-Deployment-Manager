@@ -1,0 +1,82 @@
+# Dependencies
+node_modules/
+dist/
+playwright-report/
+test-results/
+output/playwright/
+artifacts/
+.claude/
+.agents/
+.codex/
+.playwright-cli/
+.runtime/
+.tmp/
+backups/
+github-release/
+llm manager/
+output/
+platform-repo.git/
+worktrees/
+
+# Runtime logs and ledgers
+logs/
+*.log
+*.pid
+*.tmp
+.manager.pid
+stats-ledger.json
+jobs-ledger.json
+
+# Downloaded models and local caches
+models/
+cache/
+.cache/
+
+# Local audit/export/runtime data
+audit-logs/
+openwebui-exports/
+projects/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.jsonl
+*.wal
+*.shm
+lan-proxy-gateway/data/
+service-entry/data/
+vllm-manager/data/
+llama-manager/data/
+tts-platform/voices/
+tts-platform/outputs/
+tts-platform/logs/
+tts-runtime/
+
+# Local virtual environments and Python cache
+venvs/
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets and local-only config
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.local.json
+*.secret.json
+service-api-key.json
+service-exposure.json
+cache-hit-ledger.json
+gateway-trust.json
+# Shared secret published by service-entry so managers can verify proxied requests
+.gateway-trust.json
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

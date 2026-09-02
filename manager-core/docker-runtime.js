@@ -1,0 +1,298 @@
+const fs = require("fs");
+const { spawn, execFile } = require("child_process");
+const { parseJsonSafe } = require("./common-utils");
+const { formatBytes } = require("./job-utils");
+
+function createDockerRuntime(options = {}) {
+  const dockerExe = options.dockerExe || "docker";
+  const dockerArgsPrefix = Array.isArray(options.dockerArgsPrefix)
+    ? options.dockerArgsPrefix.map((value) => String(value)).filter(Boolean)
+    : [];
+  const dockerDesktopExe = options.dockerDesktopExe || "";
+  const daemonStartFile = options.daemonStartFile || "";
+  const daemonStartArgs = Array.isArray(options.daemonStartArgs)
+    ? options.daemonStartArgs.map((value) => String(value)).filter(Boolean)
+    : [];
+  const runtimeName = String(options.runtimeName || "Docker Desktop").trim() || "Docker Desktop";
+  const execFileCommand = options.execFileCommand || execFile;
+  const spawnCommand = options.spawnCommand || spawn;
+  const fsExists = options.fsExists || fs.existsSync;
+  const wait = options.delay || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const parseJson = options.parseJsonSafe || parseJsonSafe;
+  const formatSize = options.formatBytes || formatBytes;
+  const readTimeoutMs = Math.max(1000, Number(options.readTimeoutMs || 10000));
+
+  function execFileAsync(file, args, execOptions = {}) {
+    return new Promise((resolve, reject) => {
+      execFileCommand(file, args, { windowsHide: true, ...execOptions }, (error, stdout, stderr) => {
+        if (error && execOptions.rejectOnError !== false) {
+          error.stdout = stdout;
+          error.stderr = stderr;
+          reject(error);
+          return;
+        }
+        resolve({ stdout: stdout || "", stderr: stderr || "", error });
+      });
+    });
+  }
+
+  function docker(args, dockerOptions = {}) {
+    const effectiveOptions = { ...dockerOptions };
+    if (!Object.hasOwn(effectiveOptions, "timeout") && isDockerReadOnlyCommand(args)) {
+      effectiveOptions.timeout = readTimeoutMs;
+    }
+    return execFileAsync(dockerExe, [...dockerArgsPrefix, ...args], effectiveOptions);
+  }
+
+  async function getDockerVersion() {
+    try {
+      const out = await docker(["--version"]);
+      const cli = out.stdout.trim();
+      const daemon = await checkDockerDaemon();
+      return {
+        ok: daemon.ok,
+        cliOk: true,
+        daemonOk: daemon.ok,
+        text: daemon.ok ? `${cli} · daemon ${daemon.version}` : `${cli} · ${daemon.error}`,
+        daemonError: daemon.ok ? null : daemon.raw || daemon.error,
+      };
+    } catch (error) {
+      return { ok: false, cliOk: false, daemonOk: false, text: error.message };
+    }
+  }
+
+  async function waitForDockerDaemon(timeoutMs = 90000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = "";
+    while (Date.now() < deadline) {
+      const out = await docker(["info", "--format", "{{.ServerVersion}}"], { rejectOnError: false, timeout: 8000 });
+      const version = out.stdout.trim();
+      if (!out.error && version) return { ok: true, version };
+      lastError = out.stderr.trim() || out.error?.message || "Docker daemon is not ready.";
+      await wait(2000);
+    }
+    return { ok: false, error: lastError };
+  }
+
+  async function checkDockerDaemon() {
+    const out = await docker(["info", "--format", "{{.ServerVersion}}"], { rejectOnError: false, timeout: 8000 });
+    const version = out.stdout.trim();
+    if (!out.error && version) return { ok: true, version };
+    const raw = out.stderr.trim() || out.error?.message || "Docker daemon is not ready.";
+    return {
+      ok: false,
+      error: formatDockerDaemonError(raw),
+      raw,
+    };
+  }
+
+  async function ensureDockerDaemonRunning(timeoutMs = 120000) {
+    const current = await checkDockerDaemon();
+    if (current.ok) return { ...current, alreadyRunning: true };
+    if (daemonStartFile) {
+      try {
+        const child = spawnCommand(daemonStartFile, daemonStartArgs, {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        if (child?.unref) child.unref();
+      } catch (error) {
+        return {
+          ok: false,
+          alreadyRunning: false,
+          error: `${runtimeName} 启动失败：${error.message}`,
+          raw: error.message,
+        };
+      }
+      const readiness = await waitForDockerDaemon(timeoutMs);
+      return readiness.ok
+        ? { ok: true, alreadyRunning: false, exe: daemonStartFile, version: readiness.version, runtimeName }
+        : {
+          ok: false,
+          alreadyRunning: false,
+          exe: daemonStartFile,
+          error: `${runtimeName} 未就绪：${readiness.error || current.raw || current.error}`,
+          raw: readiness.error || current.raw || current.error,
+        };
+    }
+    if (!dockerDesktopExe || !fsExists(dockerDesktopExe)) {
+      return {
+        ok: false,
+        alreadyRunning: false,
+        error: "Docker Desktop 未启动，且没有找到 Docker Desktop.exe，请检查 Docker Desktop 安装路径。",
+        raw: current.raw || current.error,
+      };
+    }
+    const child = spawnCommand(dockerDesktopExe, [], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (child?.unref) child.unref();
+    const readiness = await waitForDockerDaemon(timeoutMs);
+    if (readiness.ok) {
+      return {
+        ok: true,
+        alreadyRunning: false,
+        exe: dockerDesktopExe,
+        version: readiness.version,
+      };
+    }
+    const raw = readiness.error || current.raw || current.error;
+    return {
+      ok: false,
+      alreadyRunning: false,
+      exe: dockerDesktopExe,
+      error: formatDockerDaemonError(raw),
+      raw,
+    };
+  }
+
+  async function startDockerDesktop(query = {}, timeoutMs = 120000) {
+    const current = await checkDockerDaemon();
+    if (current.ok) {
+      return { ok: true, alreadyRunning: true, ready: true, serverVersion: current.version, message: "Docker daemon 已经可用。" };
+    }
+    if (!daemonStartFile && (!dockerDesktopExe || !fsExists(dockerDesktopExe))) {
+      const error = new Error(`没有找到可启动的 ${runtimeName}，请检查运行时配置。`);
+      error.status = 404;
+      throw error;
+    }
+    if (String(query.dryRun || "") === "1") {
+      return {
+        ok: true,
+        dryRun: true,
+        exe: daemonStartFile || dockerDesktopExe,
+        runtimeName,
+        message: `${runtimeName} 可由管理器启动。`,
+      };
+    }
+    const readiness = await ensureDockerDaemonRunning(timeoutMs);
+    return {
+      ok: readiness.ok,
+      alreadyRunning: Boolean(readiness.alreadyRunning),
+      exe: daemonStartFile || dockerDesktopExe,
+      runtimeName,
+      ready: readiness.ok,
+      serverVersion: readiness.version || null,
+      error: readiness.ok ? null : readiness.error,
+      message: readiness.ok
+        ? readiness.alreadyRunning ? "Docker daemon 已经可用。" : `已启动 ${runtimeName}，Docker 引擎已经可用。`
+        : readiness.error,
+    };
+  }
+
+  async function getImageStatus(image) {
+    try {
+      const out = await docker(["image", "inspect", image, "--format", "{{.Id}}\t{{.Size}}\t{{json .RepoTags}}\t{{json .RepoDigests}}"], { rejectOnError: false });
+      const line = out.stdout.trim();
+      if (out.error) {
+        const raw = out.stderr.trim() || out.error.message;
+        if (isDockerImageMissingError(raw)) {
+          return { ok: false, text: `镜像未下载：${image}`, reason: "missing-image", raw };
+        }
+        return { ok: false, text: formatDockerDaemonError(raw), reason: "docker-daemon", raw };
+      }
+      if (!line) return { ok: false, text: "missing" };
+      const [id, size, tagsJson, digestsJson] = line.split("\t");
+      const refs = [
+        ...parseJson(tagsJson, []),
+        ...parseJson(digestsJson, []),
+      ].filter(Boolean);
+      const display = refs.includes(image) ? image : refs[0] || image;
+      return { ok: true, text: `${display}\t${formatSize(Number(size) || 0)}`, id, refs };
+    } catch (error) {
+      return { ok: false, text: error.message };
+    }
+  }
+
+  async function pullImageWithRetry(image, pullOptions = {}) {
+    const attempts = Math.min(6, Math.max(1, Number(pullOptions.attempts || 3)));
+    const initialDelayMs = Math.max(0, Number(pullOptions.initialDelayMs ?? 3000));
+    const platform = String(pullOptions.platform || "").trim();
+    const pullArgs = ["pull", ...(platform ? ["--platform", platform] : []), image];
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        pullOptions.onAttempt?.({ attempt, attempts, image });
+        const result = await docker(pullArgs, pullOptions.dockerOptions || {});
+        return { ...result, attempt, attempts };
+      } catch (error) {
+        lastError = error;
+        const detail = String(error?.stderr || error?.stdout || error?.message || error).trim();
+        pullOptions.onFailure?.({ attempt, attempts, image, error, detail });
+        if (attempt >= attempts) break;
+        const delayMs = Math.min(30000, initialDelayMs * (2 ** (attempt - 1)));
+        if (delayMs > 0) await wait(delayMs);
+      }
+    }
+    throw lastError || new Error(`docker pull failed: ${image}`);
+  }
+
+  return {
+    execFileAsync,
+    docker,
+    getDockerVersion,
+    waitForDockerDaemon,
+    checkDockerDaemon,
+    ensureDockerDaemonRunning,
+    startDockerDesktop,
+    getImageStatus,
+    pullImageWithRetry,
+    runtimeName,
+    formatDockerDaemonError,
+    normalizeDockerContainerName,
+    normalizeDockerTimestamp,
+    timestampToSeconds,
+  };
+}
+
+function isDockerReadOnlyCommand(args = []) {
+  const command = String(args[0] || "").toLowerCase();
+  if (["--version", "version", "info", "inspect", "ps", "logs", "stats", "port", "images"].includes(command)) return true;
+  return command === "image" && String(args[1] || "").toLowerCase() === "inspect";
+}
+
+function formatDockerDaemonError(raw) {
+  const text = String(raw || "").trim();
+  if (/dockerDesktopLinuxEngine|pipe/i.test(text)) {
+    return "Docker Desktop 引擎未就绪。请先用页面的一键 Docker 按钮启动 Docker Desktop，等状态变为可用后再启动模型。";
+  }
+  if (/cannot connect|daemon|not ready/i.test(text)) {
+    return `Docker daemon 未就绪：${text}`;
+  }
+  return text || "Docker daemon 未就绪。";
+}
+
+function isDockerImageMissingError(raw) {
+  return /no such image/i.test(String(raw || ""));
+}
+
+function normalizeDockerContainerName(value) {
+  return String(value || "")
+    .split(",")[0]
+    .replace(/^\//, "")
+    .trim();
+}
+
+function normalizeDockerTimestamp(value) {
+  const text = String(value || "").trim();
+  if (!text || text.startsWith("0001-")) return null;
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function timestampToSeconds(value) {
+  const date = new Date(value || "");
+  return Number.isNaN(date.getTime()) ? null : date.getTime() / 1000;
+}
+
+module.exports = {
+  createDockerRuntime,
+  isDockerReadOnlyCommand,
+  formatDockerDaemonError,
+  normalizeDockerContainerName,
+  normalizeDockerTimestamp,
+  timestampToSeconds,
+};

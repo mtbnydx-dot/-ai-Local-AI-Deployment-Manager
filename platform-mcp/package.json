@@ -1,0 +1,29 @@
+{
+  "name": "local-ai-platform-mcp-server",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Read-only MCP server for the Local AI Platform.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "validate:live": "node scripts/validate-live.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "@modelcontextprotocol/hono": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "hono": "4.13.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/node": "20.19.43",
+    "typescript": "5.9.3"
+  }
+}

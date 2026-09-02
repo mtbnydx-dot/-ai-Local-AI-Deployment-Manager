@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "asOf": "2026-05-25",
+  "staleAfterDays": 365,
+  "notes": "Relative throughput factors used only for vLLM parallelism suggestions. 1.0 is an RTX 4070-class baseline. Matching is by lowercase substring, first match wins, so order matters.",
+  "defaultFactor": 1,
+  "factors": [
+    { "match": ["blackwell", "rtx pro 6000", "pro 6000"], "factor": 1.55, "generation": "Blackwell 96GB" },
+    { "match": ["5090"], "factor": 1.45, "generation": "RTX 50" },
+    { "match": ["5080"], "factor": 1.18, "generation": "RTX 50" },
+    { "match": ["5070 ti"], "factor": 0.86, "generation": "RTX 50" },
+    { "match": ["5070"], "factor": 0.76, "generation": "RTX 50" },
+    { "match": ["4090"], "factor": 1.1, "generation": "RTX 40" },
+    { "match": ["4080"], "factor": 0.9, "generation": "RTX 40" }
+  ]
+}

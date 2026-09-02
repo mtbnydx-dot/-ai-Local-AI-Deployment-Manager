@@ -1,0 +1,61 @@
+name: local-ai-search
+
+services:
+  search-gateway:
+    build:
+      context: .
+    image: local-ai-search-gateway:latest
+    container_name: local-ai-search-gateway
+    restart: unless-stopped
+    depends_on:
+      - searxng
+    ports:
+      # Loopback by default. Set SEARCH_GATEWAY_BIND=0.0.0.0 to serve the LAN,
+      # and pair it with SEARCH_GATEWAY_API_KEY.
+      - "${SEARCH_GATEWAY_BIND:-127.0.0.1}:${SEARCH_GATEWAY_PUBLIC_PORT:-5180}:5180"
+    environment:
+      SEARCH_GATEWAY_HOST: "0.0.0.0"
+      SEARCH_GATEWAY_PORT: "5180"
+      UPSTREAM_BASE_URL: "${UPSTREAM_BASE_URL:-http://host.docker.internal:18080/v1}"
+      UPSTREAM_API_KEY: "${UPSTREAM_API_KEY:-}"
+      SEARCH_GATEWAY_API_KEY: "${SEARCH_GATEWAY_API_KEY:-}"
+      SEARCH_GATEWAY_ALLOW_NO_KEY: "${SEARCH_GATEWAY_ALLOW_NO_KEY:-false}"
+      SEARCH_BACKEND_URL: "http://searxng:8080"
+      SEARCH_MODE: "${SEARCH_MODE:-auto}"
+      SEARCH_MAX_RESULTS: "${SEARCH_MAX_RESULTS:-8}"
+      SEARCH_DEFAULT_ENGINES: "${SEARCH_DEFAULT_ENGINES:-searchtoday}"
+      SEARCH_CHINESE_ENGINES: "${SEARCH_CHINESE_ENGINES:-}"
+      SEARCH_FALLBACK_ENGINES: "${SEARCH_FALLBACK_ENGINES:-yandex}"
+      SEARCH_BLOCKED_DOMAINS: "${SEARCH_BLOCKED_DOMAINS:-ai.so.com}"
+      SEARCH_MIN_RELEVANCE: "${SEARCH_MIN_RELEVANCE:-0.16}"
+      SEARCH_MAX_CONCURRENT: "${SEARCH_MAX_CONCURRENT:-2}"
+      SEARCH_CACHE_TTL_MS: "${SEARCH_CACHE_TTL_MS:-600000}"
+      SEARCH_NEGATIVE_CACHE_TTL_MS: "${SEARCH_NEGATIVE_CACHE_TTL_MS:-60000}"
+      SEARCH_SESSION_TTL_MS: "${SEARCH_SESSION_TTL_MS:-900000}"
+      SEARCH_BACKEND_TIMEOUT_MS: "${SEARCH_BACKEND_TIMEOUT_MS:-15000}"
+      SEARCH_READ_TIMEOUT_MS: "${SEARCH_READ_TIMEOUT_MS:-12000}"
+      SEARCH_READ_MAX_BYTES: "${SEARCH_READ_MAX_BYTES:-6291456}"
+      SEARCH_READ_MAX_REDIRECTS: "${SEARCH_READ_MAX_REDIRECTS:-3}"
+      SEARCH_READ_MAX_EXTRACT_CHARS: "${SEARCH_READ_MAX_EXTRACT_CHARS:-60000}"
+      SEARCH_READ_MAX_PDF_PAGES: "${SEARCH_READ_MAX_PDF_PAGES:-80}"
+      SEARCH_READ_CACHE_TTL_MS: "${SEARCH_READ_CACHE_TTL_MS:-300000}"
+      SEARCH_FAIL_OPEN: "${SEARCH_FAIL_OPEN:-true}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  searxng:
+    image: "${SEARXNG_IMAGE:-docker.io/searxng/searxng:latest}"
+    container_name: local-ai-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SEARXNG_LOCAL_PORT:-8180}:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+    environment:
+      SEARXNG_SETTINGS_PATH: "/etc/searxng/settings.yml"
+      BASE_URL: "http://127.0.0.1:${SEARXNG_LOCAL_PORT:-8180}/"
+      INSTANCE_NAME: "Local AI Search"
+
+volumes:
+  searxng-cache:

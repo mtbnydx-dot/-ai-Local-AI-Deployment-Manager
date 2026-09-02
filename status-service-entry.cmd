@@ -1,0 +1,11 @@
+@echo off
+setlocal
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ports=@(5176,5177,5178);" ^
+  "$names=@{5176='Service Entry';5177='vLLM Manager';5178='llama.cpp Manager'};" ^
+  "$rows=foreach ($port in $ports) { $listener=Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; $url='http://127.0.0.1:' + $port; $healthPath='/api/manager/health'; if ($port -eq 5176) { $healthPath='/api/status' }; $health='offline'; if ($listener) { try { $r=Invoke-WebRequest -UseBasicParsing -Uri ($url + $healthPath) -TimeoutSec 2; $health='HTTP ' + $r.StatusCode } catch { $health='listening, health failed' } }; $ownerPid=''; if ($listener) { $ownerPid=$listener.OwningProcess }; [pscustomobject]@{Name=$names[$port];Port=$port;Listening=[bool]$listener;PID=$ownerPid;Health=$health;Url=$url} };" ^
+  "$rows | Format-Table -AutoSize;" ^
+  "function Resolve-LanAddress { $ips=Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254*' -and $_.InterfaceAlias -notmatch 'vEthernet|Docker|WSL|Loopback|Hyper-V|VirtualBox|VMware|OpenVPN|Surfshark|Tailscale|ZeroTier' }; $preferred=$ips | Where-Object { $_.IPAddress -like '192.168.*' } | Select-Object -First 1; if ($preferred) { return $preferred.IPAddress }; $route=Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' } | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; if ($route) { $ip=Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254*' } | Select-Object -First 1; if ($ip) { return $ip.IPAddress } }; $preferred=$ips | Where-Object { $_.IPAddress -like '10.*' } | Select-Object -First 1; if ($preferred) { return $preferred.IPAddress }; $preferred=$ips | Select-Object -First 1; if ($preferred) { return $preferred.IPAddress }; return $null }" ^
+  "$lan=Resolve-LanAddress;" ^
+  "if ($lan) { Write-Host ''; Write-Host ('LAN Service Entry: http://' + $lan + ':5176/') }"
+endlocal

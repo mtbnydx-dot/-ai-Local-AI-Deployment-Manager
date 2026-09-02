@@ -1,0 +1,2837 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>模型计费中心</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --surface: #ffffff;
+      --surface-soft: #f8faff;
+      --surface-blue: #f2f7ff;
+      --line: #dbe4f0;
+      --line-strong: #c9d6e6;
+      --ink: #10203a;
+      --muted: #65758d;
+      --blue: #0b67f5;
+      --blue-dark: #0756ce;
+      --green: #169b43;
+      --green-soft: #edf9f0;
+      --amber: #b96600;
+      --amber-soft: #fff7e8;
+      --red: #cc2f3b;
+      --red-soft: #fff1f2;
+      --shadow: 0 8px 22px rgba(28, 55, 90, 0.06);
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 0; background: var(--bg); }
+    body {
+      margin: 0;
+      min-width: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 14px;
+    }
+    button, input, select, textarea { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    a { color: inherit; text-decoration: none; }
+    h1, h2, h3, p { margin: 0; }
+    button, .button {
+      min-height: 40px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      padding: 0 15px;
+      background: var(--surface);
+      color: var(--ink);
+      font-weight: 650;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      white-space: nowrap;
+      transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
+    }
+    button:hover, .button:hover { border-color: #9fb6d2; background: #f8fbff; }
+    button:active, .button:active { transform: translateY(1px); }
+    button:focus-visible, .button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid rgba(11, 103, 245, 0.18);
+      outline-offset: 1px;
+    }
+    button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
+    button.primary, .button.primary { color: #fff; background: var(--blue); border-color: var(--blue); }
+    button.primary:hover, .button.primary:hover { background: var(--blue-dark); border-color: var(--blue-dark); }
+    button.danger { color: var(--red); border-color: #efc3c8; }
+    button.quiet { border-color: transparent; background: transparent; color: var(--blue); padding-inline: 8px; }
+    button.small { min-height: 32px; padding: 0 10px; font-size: 12px; }
+    .app-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .app-header-inner {
+      width: min(1496px, calc(100vw - 40px));
+      margin: 0 auto;
+      min-height: 86px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .brand-mark {
+      width: 46px;
+      height: 46px;
+      color: var(--blue);
+      flex: 0 0 auto;
+    }
+    .brand-copy { min-width: 0; display: grid; gap: 5px; }
+    .brand-copy h1 { font-size: clamp(24px, 2.4vw, 31px); line-height: 1.1; letter-spacing: -0.02em; }
+    .brand-copy p { color: var(--muted); font-size: 14px; }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+    .api-status {
+      min-height: 36px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border: 1px solid #bfe4c9;
+      border-radius: 7px;
+      background: var(--green-soft);
+      color: var(--green);
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .api-status::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .api-status.warn { border-color: #f1d4a7; background: var(--amber-soft); color: var(--amber); }
+    .api-status.fail { border-color: #efc3c8; background: var(--red-soft); color: var(--red); }
+    .tab-bar {
+      width: min(1496px, calc(100vw - 40px));
+      margin: 0 auto;
+      display: flex;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      border-top: 1px solid #f1f4f8;
+    }
+    .tab-button {
+      min-width: 128px;
+      min-height: 55px;
+      border: 0;
+      border-bottom: 3px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      color: #2a3b56;
+      font-size: 15px;
+      font-weight: 650;
+      transition: background-color 140ms ease, transform 140ms ease;
+    }
+    .tab-button:hover { border-color: transparent; border-bottom-color: #b7cdf0; background: #fbfdff; }
+    .tab-button[aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); }
+    main {
+      width: min(1496px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 16px 0 34px;
+      display: grid;
+      gap: 16px;
+      min-width: 0;
+    }
+    .notice {
+      min-height: 46px;
+      padding: 10px 14px;
+      border: 1px solid #b7d2f8;
+      border-radius: 7px;
+      background: var(--surface-blue);
+      color: #174d99;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      line-height: 1.5;
+    }
+    .notice[hidden] { display: none; }
+    .notice.ok { border-color: #bfe4c9; background: var(--green-soft); color: var(--green); }
+    .notice.warn { border-color: #f1d4a7; background: var(--amber-soft); color: var(--amber); }
+    .notice.fail { border-color: #efc3c8; background: var(--red-soft); color: var(--red); }
+    .notice-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; font-size: 12px; }
+    .tab-panel { display: grid; gap: 16px; min-width: 0; }
+    .tab-panel[hidden] { display: none; }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .metric {
+      min-height: 98px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      display: grid;
+      align-content: space-between;
+      gap: 10px;
+      box-shadow: var(--shadow);
+    }
+    .metric span { color: #53647c; font-weight: 650; }
+    .metric strong { font-size: 27px; line-height: 1; letter-spacing: -0.02em; }
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr);
+      gap: 16px;
+      align-items: start;
+      min-width: 0;
+    }
+    .workspace-grid.template-grid { grid-template-columns: minmax(0, 2.2fr) minmax(330px, 1fr); }
+    .stack { display: grid; gap: 16px; min-width: 0; }
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel-head {
+      min-height: 58px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-title { min-width: 0; display: grid; gap: 4px; }
+    .panel-title h2 { font-size: 17px; line-height: 1.25; }
+    .panel-title p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .panel-body { padding: 16px; min-width: 0; }
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .filter-row .grow { width: auto; flex: 1 1 230px; }
+    .filter-row input, .filter-row select { width: auto; min-width: 150px; flex: 0 1 170px; }
+    input, select, textarea {
+      width: 100%;
+      min-height: 40px;
+      padding: 8px 11px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 14px;
+    }
+    textarea { min-height: 84px; resize: vertical; line-height: 1.5; }
+    input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] {
+      border-color: var(--red);
+      background: var(--red-soft);
+    }
+    .field { min-width: 0; display: grid; gap: 6px; align-content: start; }
+    .field > span { color: #516078; font-size: 12px; font-weight: 650; }
+    .field small, .form-help { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .field .field-error { color: var(--red); font-weight: 700; }
+    [aria-invalid="true"] { border-color: var(--red) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 16%, transparent); }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .form-grid .wide, .form-actions, .form-help { grid-column: 1 / -1; }
+    .form-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .form-section {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+    }
+    .form-section h3 { margin-bottom: 12px; font-size: 15px; }
+    details.editor {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    details.editor > summary {
+      min-height: 46px;
+      padding: 12px 14px;
+      cursor: pointer;
+      font-weight: 700;
+      list-style-position: inside;
+    }
+    details.editor[open] > summary { border-bottom: 1px solid var(--line); }
+    details.editor .form-grid { padding: 14px; }
+    .table-wrap {
+      width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      table-layout: auto;
+    }
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+      line-height: 1.45;
+    }
+    th {
+      background: #f7f9fc;
+      color: #263650;
+      font-size: 12px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    td { color: #253650; font-size: 13px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: #fbfdff; }
+    td code { color: #174d99; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+    .empty-cell {
+      height: 150px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .row-actions { display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+    .status {
+      display: inline-flex;
+      min-height: 25px;
+      align-items: center;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f6f8fb;
+      color: #516078;
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .status.ok { border-color: #bfe4c9; background: var(--green-soft); color: var(--green); }
+    .status.warn { border-color: #f1d4a7; background: var(--amber-soft); color: var(--amber); }
+    .status.fail { border-color: #efc3c8; background: var(--red-soft); color: var(--red); }
+    .status.info { border-color: #bdd5f8; background: var(--surface-blue); color: var(--blue); }
+    .quick-list { display: grid; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+    .quick-action {
+      min-height: 50px;
+      width: 100%;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      justify-content: space-between;
+      background: #fff;
+      font-weight: 600;
+    }
+    .quick-action:last-child { border-bottom: 0; }
+    .quick-action span:last-child { color: var(--blue); }
+    .template-banner { margin: 0; }
+    .provider-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+    .provider-filter {
+      min-height: 34px;
+      padding: 0 13px;
+      font-size: 12px;
+    }
+    .provider-filter[aria-pressed="true"] { color: #fff; background: var(--blue); border-color: var(--blue); }
+    .template-table table { min-width: 980px; }
+    .template-select {
+      min-height: 30px;
+      width: 30px;
+      padding: 0;
+      border-radius: 50%;
+      color: transparent;
+      position: relative;
+    }
+    .template-select[aria-pressed="true"] {
+      color: #fff;
+      background: var(--blue);
+      border-color: var(--blue);
+    }
+    .template-select[aria-pressed="true"]::after { content: "✓"; color: #fff; font-weight: 800; }
+    .source-link { color: var(--blue); font-weight: 650; }
+    .source-link:hover { text-decoration: underline; }
+    .selection-summary {
+      margin-bottom: 12px;
+      padding: 11px 12px;
+      border: 1px solid #bdd5f8;
+      border-radius: 7px;
+      background: var(--surface-blue);
+      color: #174d99;
+      line-height: 1.5;
+    }
+    .selection-summary.empty { border-color: var(--line); background: var(--surface-soft); color: var(--muted); }
+    .preview-box {
+      display: grid;
+      gap: 10px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+    .preview-box[hidden] { display: none; }
+    .preview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .preview-item {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-soft);
+      display: grid;
+      gap: 4px;
+    }
+    .preview-item span { color: var(--muted); font-size: 11px; }
+    .preview-item strong { overflow-wrap: anywhere; font-size: 13px; }
+    .preview-warning {
+      padding: 10px 11px;
+      border: 1px solid #f1d4a7;
+      border-radius: 6px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .preview-warning[hidden] { display: none; }
+    .busy { opacity: 0.56; pointer-events: none; }
+    .toast {
+      position: fixed;
+      z-index: 50;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(390px, calc(100vw - 36px));
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 18px 42px rgba(28, 55, 90, 0.18);
+      color: var(--ink);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: 160ms ease;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.fail { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+    .app-signature { color: var(--muted); text-align: center; font-size: 12px; padding-top: 6px; }
+    @media (max-width: 1100px) {
+      .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .workspace-grid, .workspace-grid.template-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .app-header-inner { width: min(100vw - 24px, 1496px); min-height: auto; padding: 16px 0; align-items: flex-start; }
+      .header-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .api-status { grid-column: 1 / -1; justify-content: center; }
+      .tab-bar, main { width: min(100vw - 24px, 1496px); }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .form-grid { grid-template-columns: 1fr; }
+      .form-grid .wide, .form-actions, .form-help { grid-column: auto; }
+      .preview-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 520px) {
+      body { font-size: 13px; }
+      .app-header-inner { display: grid; }
+      .brand-mark { width: 38px; height: 38px; }
+      .brand-copy h1 { font-size: 24px; }
+      .brand-copy p { font-size: 12px; }
+      .header-actions { grid-template-columns: 1fr; width: 100%; }
+      .api-status { grid-column: auto; }
+      .header-actions > * { width: 100%; }
+      .tab-button { min-width: 112px; min-height: 50px; font-size: 14px; }
+      main { padding-top: 12px; }
+      .notice { align-items: flex-start; flex-direction: column; }
+      .notice-meta { justify-content: flex-start; }
+      .summary-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+      .metric { min-height: 88px; padding: 14px; }
+      .metric strong { font-size: 22px; }
+      .panel-head { align-items: flex-start; flex-direction: column; }
+      .panel-body { padding: 12px; }
+      .filter-row { display: grid; grid-template-columns: 1fr; }
+      .filter-row > * { width: 100%; }
+      .form-actions { display: grid; grid-template-columns: 1fr; }
+      .form-actions > * { width: 100%; }
+      .row-actions { white-space: normal; flex-wrap: wrap; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      button, .button, .toast { transition: none; }
+    }
+
+    /* Manager-aligned application shell. The billing workflows above keep
+       their existing DOM contract; this layer shares the manager's visual
+       tokens, sidebar rhythm, control density and responsive navigation. */
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-soft: #eef3f7;
+      --surface-blue: #edf4ff;
+      --surface-hover: #f1f6fb;
+      --input-bg: #fbfdff;
+      --sidebar-bg: #101820;
+      --sidebar-ink: #ecf4f3;
+      --sidebar-muted: #9fb2bd;
+      --line: #dce3ea;
+      --line-strong: #c7d1dc;
+      --ink: #17202a;
+      --muted: #657282;
+      --blue: #2563eb;
+      --blue-dark: #1d4ed8;
+      --teal: #087468;
+      --teal-ink: #ffffff;
+      --green: #15803d;
+      --green-soft: #edf9f0;
+      --amber: #b45309;
+      --amber-soft: #fff7e8;
+      --red: #b42318;
+      --red-soft: #fff1f2;
+      --shadow: 0 12px 28px rgba(25, 36, 52, 0.08);
+      --radius: 8px;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0b1118;
+      --surface: #121a24;
+      --surface-soft: #1a2532;
+      --surface-blue: #14243a;
+      --surface-hover: #1f2d3d;
+      --input-bg: #0f1722;
+      --sidebar-bg: #080f16;
+      --sidebar-ink: #e6f0f3;
+      --sidebar-muted: #8ea3b1;
+      --line: #2a3848;
+      --line-strong: #3a4a5d;
+      --ink: #e7eef7;
+      --muted: #9caebe;
+      --blue: #6aa4ff;
+      --blue-dark: #8ab7ff;
+      --teal: #2dd4bf;
+      --teal-ink: #071419;
+      --green: #47c778;
+      --green-soft: #13261d;
+      --amber: #f2b84b;
+      --amber-soft: #2a2212;
+      --red: #ff7b73;
+      --red-soft: #2b1718;
+      --shadow: 0 18px 36px rgba(0, 0, 0, 0.32);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --bg: #0b1118;
+        --surface: #121a24;
+        --surface-soft: #1a2532;
+        --surface-blue: #14243a;
+        --surface-hover: #1f2d3d;
+        --input-bg: #0f1722;
+        --sidebar-bg: #080f16;
+        --sidebar-ink: #e6f0f3;
+        --sidebar-muted: #8ea3b1;
+        --line: #2a3848;
+        --line-strong: #3a4a5d;
+        --ink: #e7eef7;
+        --muted: #9caebe;
+        --blue: #6aa4ff;
+        --blue-dark: #8ab7ff;
+        --teal: #2dd4bf;
+        --teal-ink: #071419;
+        --green: #47c778;
+        --green-soft: #13261d;
+        --amber: #f2b84b;
+        --amber-soft: #2a2212;
+        --red: #ff7b73;
+        --red-soft: #2b1718;
+        --shadow: 0 18px 36px rgba(0, 0, 0, 0.32);
+      }
+    }
+    .icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 272px minmax(0, 1fr);
+    }
+    .manager-sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      min-width: 0;
+      padding: 28px 22px;
+      background: var(--sidebar-bg);
+      color: var(--sidebar-ink);
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+    .manager-brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .manager-mark {
+      width: 44px;
+      height: 44px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: #2dd4bf;
+      color: #071419;
+      font-weight: 800;
+      font-size: 15px;
+    }
+    .manager-brand-copy { min-width: 0; }
+    .manager-brand-copy strong { display: block; color: var(--sidebar-ink); font-size: 19px; line-height: 1.2; }
+    .manager-brand-copy span { display: block; margin-top: 4px; color: var(--sidebar-muted); font-size: 13px; }
+    .manager-nav { display: grid; gap: 8px; min-width: 0; }
+    .manager-nav a {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border-radius: 8px;
+      color: #b9c8d1;
+      font-weight: 600;
+      transition: background-color 140ms ease, color 140ms ease;
+    }
+    .manager-nav a:hover,
+    .manager-nav a.active {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.09);
+    }
+    .manager-nav a.active { box-shadow: inset 3px 0 0 #2dd4bf; }
+    .manager-nav svg { width: 18px; height: 18px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .manager-side-meta { margin-top: auto; display: grid; gap: 12px; font-size: 12px; }
+    .manager-side-meta div { display: grid; gap: 4px; }
+    .manager-side-meta span { color: var(--sidebar-muted); }
+    .manager-side-meta strong { color: #ffffff; overflow-wrap: anywhere; }
+    .billing-shell-main { min-width: 0; }
+    .app-header { background: transparent; border-bottom: 0; }
+    .app-header-inner {
+      width: auto;
+      min-height: 84px;
+      margin: 0 28px;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand-mark { display: none; }
+    .brand-copy h1 { font-size: 26px; letter-spacing: -0.025em; }
+    .brand-copy p { color: var(--muted); font-size: 13px; }
+    .header-actions { flex-wrap: wrap; gap: 10px; }
+    #billingThemeMode { width: auto; min-width: 126px; }
+    .api-status { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 35%, transparent); color: var(--green); }
+    button, .button { background: var(--surface); border-color: var(--line-strong); color: var(--ink); }
+    button:hover, .button:hover { background: var(--surface-hover); border-color: var(--line-strong); }
+    button.primary, .button.primary { color: var(--teal-ink); background: var(--teal); border-color: var(--teal); }
+    button.primary:hover, .button.primary:hover { color: var(--teal-ink); background: color-mix(in srgb, var(--teal) 84%, var(--ink)); border-color: transparent; }
+    button.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+    .tab-bar {
+      width: auto;
+      margin: 14px 28px 0;
+      padding: 4px;
+      gap: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .tab-button {
+      min-width: 124px;
+      min-height: 42px;
+      border: 0;
+      border-radius: 6px;
+      color: var(--muted);
+    }
+    .tab-button:hover { border: 0; color: var(--ink); background: var(--surface-hover); }
+    .tab-button[aria-selected="true"] {
+      color: var(--ink);
+      background: var(--surface-soft);
+      border: 0;
+      box-shadow: inset 0 -2px 0 var(--teal);
+    }
+    main { width: auto; margin: 0; padding: 20px 28px 34px; }
+    .metric {
+      min-height: 92px;
+      border-radius: 8px;
+      border-color: var(--line);
+      border-left: 3px solid var(--teal);
+      box-shadow: none;
+    }
+    .metric span, .field > span { color: var(--muted); }
+    .metric strong { font-size: 23px; }
+    .panel { border-radius: 8px; border-color: var(--line); box-shadow: none; }
+    input, select, textarea { background: var(--input-bg); border-color: var(--line-strong); color: var(--ink); }
+    input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--muted) 76%, transparent); }
+    .form-section, details.editor, .preview-item { background: var(--surface-soft); }
+    .table-wrap, .preview-box, .quick-action, .toast { background: var(--surface); }
+    th { background: var(--surface-soft); color: var(--ink); }
+    td { color: var(--ink); }
+    tbody tr:hover td { background: var(--surface-hover); }
+    td code, .selection-summary { color: var(--blue); }
+    .status { background: var(--surface-soft); color: var(--muted); }
+    .status.ok { border-color: color-mix(in srgb, var(--green) 35%, transparent); }
+    .status.warn { border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
+    .status.fail { border-color: color-mix(in srgb, var(--red) 35%, transparent); }
+    .status.info { border-color: color-mix(in srgb, var(--blue) 35%, transparent); }
+    .provider-filter[aria-pressed="true"],
+    .template-select[aria-pressed="true"] { color: var(--teal-ink); background: var(--teal); border-color: var(--teal); }
+    .template-select[aria-pressed="true"]::after { color: var(--teal-ink); }
+    .selection-summary { border-color: color-mix(in srgb, var(--blue) 35%, transparent); }
+    .notice { border-color: color-mix(in srgb, var(--blue) 35%, transparent); color: var(--blue); }
+    .notice.ok { border-color: color-mix(in srgb, var(--green) 35%, transparent); }
+    .notice.warn, .preview-warning { border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
+    .notice.fail { border-color: color-mix(in srgb, var(--red) 35%, transparent); }
+
+    @media (max-width: 820px) {
+      .app-shell { display: block; min-height: 100vh; }
+      .manager-sidebar {
+        position: sticky;
+        z-index: 120;
+        top: 0;
+        width: 100%;
+        height: auto;
+        min-height: 0;
+        padding: 9px 10px;
+        gap: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+      }
+      .manager-mark { width: 32px; height: 32px; font-size: 13px; }
+      .manager-brand-copy, .manager-side-meta { display: none; }
+      .manager-nav {
+        min-width: 0;
+        display: flex;
+        gap: 3px;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: none;
+      }
+      .manager-nav::-webkit-scrollbar { display: none; }
+      .manager-nav a { flex: 0 0 auto; min-height: 34px; padding: 7px 9px; gap: 5px; justify-content: center; white-space: nowrap; }
+      .manager-nav a span { font-size: 11px; }
+      .manager-nav svg { width: 15px; height: 15px; }
+      .app-header-inner { width: auto; margin: 0 12px; padding: 16px 0; align-items: flex-start; flex-direction: column; }
+      .header-actions { width: 100%; justify-content: flex-start; }
+      .tab-bar { width: auto; margin: 0 12px; }
+      .tab-bar { scrollbar-width: none; }
+      .tab-bar::-webkit-scrollbar { display: none; }
+      main { width: auto; padding: 12px; }
+    }
+    @media (max-width: 520px) {
+      .app-header-inner { display: flex; }
+      .brand-copy h1 { font-size: 21px; }
+      .header-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .api-status { grid-column: 1 / -1; }
+      #billingRefreshBtn { grid-column: 1 / -1; }
+      .header-actions > *, #billingThemeMode { width: 100%; }
+      .tab-button { min-width: 108px; min-height: 42px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="billing-icon-service" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+    <symbol id="billing-icon-models" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></symbol>
+    <symbol id="billing-icon-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="billing-icon-exposure" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 0 20"/><path d="M12 2a15.3 15.3 0 0 0 0 20"/></symbol>
+    <symbol id="billing-icon-external" viewBox="0 0 24 24"><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="m16.2 7.8.1.1a6 6 0 0 1-.1 8.3"/><path d="m19.1 4.9.1.1a10 10 0 0 1-.1 14.1"/><path d="M12 14v8"/></symbol>
+    <symbol id="billing-icon-billing" viewBox="0 0 24 24"><path d="M4 2v20l2-2 2 2 2-2 2 2 2-2 2 2 2-2 2 2V2l-2 2-2-2-2 2-2-2-2 2-2-2-2 2-2-2Z"/><path d="M16 8h-6"/><path d="M16 12h-6"/><path d="M13 16h-3"/></symbol>
+    <symbol id="billing-icon-tools" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-8 8l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 8-8l-3.8 3.8Z"/></symbol>
+    <symbol id="billing-icon-stats" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 17v-3"/><path d="M13 17V9"/><path d="M18 17V5"/></symbol>
+    <symbol id="billing-icon-audit" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="billing-icon-logs" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+  </svg>
+  <div class="app-shell">
+    <aside class="manager-sidebar">
+      <div class="manager-brand">
+        <div class="manager-mark" id="billingManagerMark" aria-label="llama.cpp">L</div>
+        <div class="manager-brand-copy">
+          <strong id="billingManagerName">llama.cpp Manager</strong>
+          <span>Local inference console</span>
+        </div>
+      </div>
+      <nav class="manager-nav" aria-label="主要导航">
+        <a href="#service" data-manager-view="service"><svg aria-hidden="true"><use href="#billing-icon-service"/></svg><span>服务</span></a>
+        <a href="#models" data-manager-view="models"><svg aria-hidden="true"><use href="#billing-icon-models"/></svg><span>模型</span></a>
+        <a href="#download" data-manager-view="download"><svg aria-hidden="true"><use href="#billing-icon-download"/></svg><span>下载</span></a>
+        <a href="#exposure" data-manager-view="exposure"><svg aria-hidden="true"><use href="#billing-icon-exposure"/></svg><span>对外服务</span></a>
+        <a href="#external-access" data-manager-view="external-access"><svg aria-hidden="true"><use href="#billing-icon-external"/></svg><span>外来访问</span></a>
+        <a class="active" href="/billing?manager=llama" data-manager-billing aria-current="page"><svg aria-hidden="true"><use href="#billing-icon-billing"/></svg><span>计费</span></a>
+        <a href="#tools" data-manager-view="tools"><svg aria-hidden="true"><use href="#billing-icon-tools"/></svg><span>工具</span></a>
+        <a href="#stats" data-manager-view="stats"><svg aria-hidden="true"><use href="#billing-icon-stats"/></svg><span>统计</span></a>
+        <a href="#audit" data-manager-view="audit"><svg aria-hidden="true"><use href="#billing-icon-audit"/></svg><span>审计</span></a>
+        <a href="#logs" data-manager-view="logs"><svg aria-hidden="true"><use href="#billing-icon-logs"/></svg><span>日志</span></a>
+      </nav>
+      <div class="manager-side-meta">
+        <div><span>Billing</span><strong id="billingEntryContext">本机 · 5176</strong></div>
+        <div><span>Manager</span><strong id="billingManagerContext">llama.cpp · 5178</strong></div>
+      </div>
+    </aside>
+    <div class="billing-shell-main">
+  <header class="app-header">
+    <div class="app-header-inner">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="currentColor" d="M24 2 43 13v22L24 46 5 35V13L24 2Zm0 6.2-11.8 6.9L24 22l11.8-6.9L24 8.2Zm-13 11.3v12.1l10 5.8V25.3l-10-5.8Zm16 17.9 10-5.8V19.5l-10 5.8v12.1Z"/>
+        </svg>
+        <div class="brand-copy">
+          <h1>模型计费中心</h1>
+          <p>客户、套餐、模型价格、用量与不可变账本</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span class="api-status warn" id="billingApiState">正在连接计费接口</span>
+        <select id="billingThemeMode" aria-label="主题模式">
+          <option value="auto">自动主题</option>
+          <option value="light">浅色</option>
+          <option value="dark">深色</option>
+        </select>
+        <a class="button" id="billingManagerReturn" href="#service">返回管理器</a>
+        <button class="primary" type="button" id="billingRefreshBtn">刷新数据</button>
+      </div>
+    </div>
+    <nav class="tab-bar" id="billingTabs" aria-label="计费中心视图" role="tablist">
+      <button class="tab-button" id="overviewTab" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" data-tab="overview">总览</button>
+      <button class="tab-button" id="customersTab" type="button" role="tab" aria-selected="false" aria-controls="customersPanel" data-tab="customers" tabindex="-1">客户与凭证</button>
+      <button class="tab-button" id="pricesTab" type="button" role="tab" aria-selected="false" aria-controls="pricesPanel" data-tab="prices" tabindex="-1">套餐与价格</button>
+      <button class="tab-button" id="usageTab" type="button" role="tab" aria-selected="false" aria-controls="usagePanel" data-tab="usage" tabindex="-1">用量与账本</button>
+      <button class="tab-button" id="auditTab" type="button" role="tab" aria-selected="false" aria-controls="auditPanel" data-tab="audit" tabindex="-1">操作审计</button>
+    </nav>
+  </header>
+
+  <main id="billingWorkbench">
+    <div class="notice" id="billingNotice" role="status" aria-live="polite" hidden></div>
+    <div class="notice warn" id="billingRefreshErrors" hidden></div>
+    <div class="notice warn" id="billingLimitNotice" role="status" hidden></div>
+
+    <section class="tab-panel" id="overviewPanel" role="tabpanel" aria-labelledby="overviewTab" data-tab-panel="overview">
+      <div class="summary-grid" id="billingSummary" aria-label="计费汇总">
+        <article class="metric"><span>活跃客户</span><strong id="summaryCustomers">—</strong></article>
+        <article class="metric"><span>启用凭证</span><strong id="summaryCredentials">—</strong></article>
+        <article class="metric"><span>可用余额</span><strong id="summaryBalance">—</strong></article>
+        <article class="metric"><span>本期 Tokens</span><strong id="summaryTokens">—</strong></article>
+        <article class="metric"><span>本期消费</span><strong id="summarySpend">—</strong></article>
+      </div>
+
+      <div class="workspace-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><h2>客户账户</h2><p>余额、套餐、执行模式与本月限额（按本机时区切月）</p></div>
+            <button class="small" type="button" data-open-tab="customers">查看全部</button>
+          </div>
+          <div class="panel-body">
+            <div class="filter-row">
+              <input class="grow" id="overviewCustomerSearch" type="search" maxlength="80" placeholder="按客户名称或外部编号搜索" aria-label="搜索客户" />
+              <select id="overviewCustomerPlanFilter" aria-label="按套餐筛选"><option value="">全部套餐</option></select>
+              <select id="overviewCustomerModeFilter" aria-label="按模式筛选">
+                <option value="">所有模式</option><option value="shadow">Shadow</option><option value="hard">Hard</option>
+              </select>
+              <select id="overviewCustomerStatusFilter" aria-label="按状态筛选">
+                <option value="">全部状态</option><option value="active">启用</option><option value="suspended">停用</option><option value="closed">关闭</option>
+              </select>
+              <button type="button" id="overviewCustomerReset">重置</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>客户名称</th><th>套餐</th><th>模式</th><th>余额（积分）</th><th>本月用量</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody id="overviewCustomerRows"><tr><td class="empty-cell" colspan="7">正在读取客户...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <div class="stack">
+          <section class="panel">
+            <div class="panel-head"><div class="panel-title"><h2>新建客户</h2><p>创建后可绑定现有脱敏服务凭证</p></div></div>
+            <div class="panel-body">
+              <form class="form-grid" id="billingCustomerForm" novalidate>
+                <label class="field wide"><span>客户名称</span><input name="name" required minlength="2" maxlength="80" placeholder="例如：Example Studio" /></label>
+                <label class="field wide"><span>外部编号（可选）</span><input name="externalRef" maxlength="80" placeholder="CRM-1001" /></label>
+                <label class="field"><span>套餐</span><select name="planId" data-plan-select><option value="">暂不绑定</option></select></label>
+                <label class="field"><span>执行模式</span><select name="enforcementMode" required><option value="shadow">Shadow 观测</option><option value="hard">Hard 强制</option></select></label>
+                <label class="field wide"><span>信用额度（积分）</span><input name="creditLimit" inputmode="decimal" value="0" maxlength="26" /></label>
+                <label class="field"><span>月 Token 上限</span><input name="monthlyTokenLimit" inputmode="numeric" value="0" maxlength="24" /></label>
+                <label class="field"><span>月请求上限</span><input name="monthlyRequestLimit" inputmode="numeric" value="0" maxlength="24" /></label>
+                <div class="form-help">积分字段最多 6 位小数；0 表示不设置该项额度。</div>
+                <div class="form-actions"><button class="primary" type="submit">创建客户</button></div>
+              </form>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div class="panel-title"><h2>快捷操作</h2><p>跳转到对应管理表单</p></div></div>
+            <div class="panel-body">
+              <div class="quick-list">
+                <button class="quick-action" type="button" data-open-tab="customers" data-focus-form="billingCredentialForm"><span>绑定现有凭证</span><span>›</span></button>
+                <button class="quick-action" type="button" data-open-tab="customers" data-focus-form="billingAdjustmentForm"><span>手工积分调整</span><span>›</span></button>
+                <button class="quick-action" type="button" data-open-tab="prices"><span>管理套餐与价格</span><span>›</span></button>
+                <button class="quick-action" type="button" data-open-tab="audit"><span>查看操作审计</span><span>›</span></button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><h2>近期用量</h2><p>当前接口返回的最近计费聚合记录</p></div>
+          <button class="small" type="button" data-open-tab="usage">查看账本</button>
+        </div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>周期</th><th>客户</th><th>管理器 / 模型</th><th>请求</th><th>Tokens</th><th>预计消费</th><th>已扣</th></tr></thead>
+              <tbody id="overviewUsageRows"><tr><td class="empty-cell" colspan="7">正在读取用量...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="customersPanel" role="tabpanel" aria-labelledby="customersTab" data-tab-panel="customers" hidden>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title"><h2>客户账户</h2><p>停用、恢复或进入策略编辑</p></div></div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>客户</th><th>外部编号</th><th>套餐</th><th>执行模式</th><th>余额 / 可用</th><th>信用额度</th><th>月限额</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody id="billingCustomerRows"><tr><td class="empty-cell" colspan="9">正在读取客户账户...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title"><h2>凭证绑定</h2><p>仅显示客户端名称、ID 与 Key 预览，不读取明文 Key 或 keyHash</p></div></div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>客户</th><th>管理器</th><th>服务客户端</th><th>状态</th><th>更新时间</th></tr></thead>
+              <tbody id="billingCredentialRows"><tr><td class="empty-cell" colspan="5">正在读取凭证绑定...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <div class="stack">
+          <details class="editor" id="billingPolicyEditor" open>
+            <summary>账户策略</summary>
+            <form class="form-grid" id="billingPolicyForm" novalidate>
+              <label class="field"><span>客户</span><select name="customerId" required data-customer-select><option value="">选择客户</option></select></label>
+              <label class="field"><span>套餐</span><select name="planId" data-plan-select><option value="">不绑定套餐</option></select></label>
+              <label class="field"><span>执行模式</span><select name="enforcementMode" required><option value="shadow">Shadow 观测</option><option value="hard">Hard 强制</option></select></label>
+              <label class="field"><span>信用额度（积分）</span><input name="creditLimit" inputmode="decimal" value="0" maxlength="26" /></label>
+              <label class="field"><span>月 Token 上限</span><input name="monthlyTokenLimit" inputmode="numeric" value="0" maxlength="24" /></label>
+              <label class="field"><span>月请求上限</span><input name="monthlyRequestLimit" inputmode="numeric" value="0" maxlength="24" /></label>
+              <div class="form-actions"><button class="primary" type="submit">保存策略</button></div>
+            </form>
+          </details>
+          <details class="editor" id="billingCredentialEditor">
+            <summary>绑定现有凭证</summary>
+            <form class="form-grid" id="billingCredentialForm" novalidate>
+              <label class="field"><span>客户</span><select name="customerId" required data-customer-select><option value="">选择客户</option></select></label>
+              <label class="field"><span>管理器</span><select name="managerId" required><option value="vllm-manager">vLLM Manager</option><option value="llama-manager">llama.cpp Manager</option></select></label>
+              <label class="field wide"><span>服务客户端</span><select name="serviceClientId" required data-client-select><option value="">读取现有客户端...</option></select></label>
+              <div class="form-help" id="billingClientHelp">只从 /api/status 使用名称、ID、启用状态和 Key 预览。</div>
+              <div class="form-actions"><button class="primary" type="submit">保存绑定</button></div>
+            </form>
+          </details>
+        </div>
+        <div class="stack">
+          <details class="editor" id="billingAdjustmentEditor" open>
+            <summary>手工积分调整</summary>
+            <form class="form-grid" id="billingAdjustmentForm" novalidate>
+              <label class="field wide"><span>客户</span><select name="customerId" required data-customer-select><option value="">选择客户</option></select></label>
+              <label class="field wide"><span>调整积分（可为负）</span><input name="amountCredits" inputmode="decimal" placeholder="100.000000 或 -10.5" maxlength="27" /></label>
+              <label class="field wide"><span>调整原因</span><textarea name="reason" required minlength="3" maxlength="500" placeholder="说明调整原因；该记录将进入不可变账本"></textarea></label>
+              <div class="form-help">每次提交自动生成幂等键；账本记录不可覆盖。</div>
+              <div class="form-actions"><button class="primary" type="submit">提交调整</button></div>
+            </form>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="pricesPanel" role="tabpanel" aria-labelledby="pricesTab" data-tab-panel="prices" hidden>
+      <div class="notice template-banner">
+        <span>官方价格模板仅作为可追溯快照；前端不内置或纠正价格数字，所有费率只取自计费后端返回的模板。</span>
+        <span class="notice-meta"><span id="templateSourceMeta">来源：等待后端</span><span id="templateSnapshotMeta">快照：—</span></span>
+      </div>
+      <div class="notice warn template-banner">
+        <span>边界提示：OpenAI &gt;272K 分档目前不能按单次请求上下文自动切价，只能映射到单独本地模型别名或由管理员人工选择。cache-write / cache-storage 仅作为模板参考元数据；当前 telemetry 只结算 input、cached-read、output，绝不能把写入或存储费率写入 cached-read。</span>
+      </div>
+
+      <div class="workspace-grid template-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><h2>官方价格模板</h2><p>按 Provider 筛选并选择一条模板映射到本地模型</p></div>
+            <button class="small" type="button" id="templateReloadBtn">刷新模板</button>
+          </div>
+          <div class="panel-body">
+            <div class="filter-row">
+              <div class="provider-filters" id="templateProviderFilters" aria-label="Provider 筛选"></div>
+              <input class="grow" id="templateSearch" type="search" maxlength="100" placeholder="搜索 Provider、模型或模板 ID" aria-label="搜索官方价格模板" />
+            </div>
+            <div class="table-wrap template-table">
+              <table>
+                <thead><tr><th>Provider / 模型</th><th>等级 / 生效期</th><th>输入（USD / 1M）</th><th>缓存输入</th><th>输出（USD / 1M）</th><th>来源 / 快照</th><th>选择</th></tr></thead>
+                <tbody id="billingTemplateRows"><tr><td class="empty-cell" colspan="7">正在读取官方模板...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title"><h2>套用模板</h2><p>映射、预览并二次确认后写入价格规则</p></div></div>
+          <div class="panel-body">
+            <div class="selection-summary empty" id="templateSelectionSummary">尚未选择官方价格模板。</div>
+            <form class="form-grid" id="billingTemplateApplyForm" novalidate>
+              <label class="field wide"><span>目标管理器</span><select name="managerId" required><option value="vllm-manager">vLLM Manager</option><option value="llama-manager">llama.cpp Manager</option></select></label>
+              <label class="field wide"><span>目标套餐</span><select name="planId" data-plan-select><option value="">全局价格</option></select></label>
+              <label class="field wide"><span>本地模型匹配规则</span><input name="modelPattern" required maxlength="160" placeholder="例如：openai/*" /></label>
+              <label class="field"><span>USD → 积分倍率</span><input name="creditsPerUsd" inputmode="decimal" value="1" maxlength="26" /></label>
+              <label class="field"><span>加价倍率（基点）</span><input name="markupBps" inputmode="numeric" value="10000" maxlength="12" /></label>
+              <div class="form-help">creditsPerUsd 使用规范十进制字符串；markupBps=10000 表示 100%。实际整数微积分价格只由后端预览与套用接口计算。</div>
+              <div class="form-actions">
+                <button type="submit" name="action" value="preview">预览变更</button>
+                <button class="primary" type="submit" name="action" value="apply" id="templateApplyConfirmBtn" disabled>确认套用</button>
+              </div>
+            </form>
+            <div class="preview-box" id="templatePreviewBox" hidden>
+              <div class="preview-grid" id="templatePreviewGrid"></div>
+              <div class="preview-warning" id="templatePreviewWarning" hidden></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title"><h2>当前生效价格规则</h2><p>套餐覆盖优先于全局价格；价格单位为整数微积分 / 1M Tokens</p></div></div>
+        <div class="panel-body">
+          <div class="filter-row">
+            <select id="priceProviderFilter" aria-label="按模板 Provider 筛选"><option value="">全部来源</option></select>
+            <select id="priceManagerFilter" aria-label="按管理器筛选"><option value="">全部管理器</option><option value="vllm-manager">vLLM Manager</option><option value="llama-manager">llama.cpp Manager</option></select>
+            <select id="pricePlanFilter" aria-label="按套餐筛选"><option value="">全部套餐</option></select>
+            <input class="grow" id="priceSearch" type="search" maxlength="160" placeholder="搜索本地模型匹配规则" aria-label="搜索价格规则" />
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>管理器</th><th>本地模型模式</th><th>套餐</th><th>输入（微积分 / 1M）</th><th>缓存输入（微积分 / 1M）</th><th>输出（微积分 / 1M）</th><th>来源模板</th><th>生效时间</th><th>状态</th></tr></thead>
+              <tbody id="billingPriceRows"><tr><td class="empty-cell" colspan="9">正在读取价格规则...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title"><h2>套餐</h2><p>月费、包含积分与默认限额</p></div></div>
+          <div class="panel-body">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>套餐</th><th>月费</th><th>包含积分</th><th>Token / 请求限额</th><th>默认模式</th><th>状态</th></tr></thead>
+                <tbody id="billingPlanRows"><tr><td class="empty-cell" colspan="6">正在读取套餐...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+        <div class="stack">
+          <details class="editor" open>
+            <summary>创建套餐</summary>
+            <form class="form-grid" id="billingPlanForm" novalidate>
+              <label class="field"><span>套餐代码</span><input name="code" required minlength="2" maxlength="32" placeholder="PRO" /></label>
+              <label class="field"><span>套餐名称</span><input name="name" required minlength="2" maxlength="80" placeholder="专业版" /></label>
+              <label class="field"><span>币种</span><input name="currency" required minlength="3" maxlength="3" value="USD" /></label>
+              <label class="field"><span>默认模式</span><select name="enforcementMode"><option value="shadow">Shadow</option><option value="hard">Hard</option></select></label>
+              <label class="field"><span>月费（积分）</span><input name="monthlyPrice" inputmode="decimal" value="0" maxlength="26" /></label>
+              <label class="field"><span>包含积分</span><input name="includedCredits" inputmode="decimal" value="0" maxlength="26" /></label>
+              <label class="field"><span>月 Token 上限</span><input name="monthlyTokenLimit" inputmode="numeric" value="0" maxlength="24" /></label>
+              <label class="field"><span>月请求上限</span><input name="monthlyRequestLimit" inputmode="numeric" value="0" maxlength="24" /></label>
+              <div class="form-actions"><button class="primary" type="submit">创建套餐</button></div>
+            </form>
+          </details>
+          <details class="editor">
+            <summary>手工维护模型价格</summary>
+            <form class="form-grid" id="billingPriceForm" novalidate>
+              <label class="field"><span>适用套餐</span><select name="planId" data-plan-select><option value="">全局价格</option></select></label>
+              <label class="field"><span>管理器</span><select name="managerId"><option value="vllm-manager">vLLM Manager</option><option value="llama-manager">llama.cpp Manager</option></select></label>
+              <label class="field wide"><span>模型匹配规则</span><input name="modelPattern" required maxlength="160" placeholder="例如：local/model-*" /></label>
+              <label class="field"><span>输入价（微积分 / 1M）</span><input name="inputMicrocreditsPerMillion" inputmode="numeric" value="0" maxlength="19" /></label>
+              <label class="field"><span>缓存输入价（微积分 / 1M）</span><input name="cachedInputMicrocreditsPerMillion" inputmode="numeric" value="0" maxlength="19" /></label>
+              <label class="field"><span>输出价（微积分 / 1M）</span><input name="outputMicrocreditsPerMillion" inputmode="numeric" value="0" maxlength="19" /></label>
+              <label class="field wide"><span>状态</span><select name="active"><option value="true">启用</option><option value="false">停用</option></select></label>
+              <div class="form-help">必须是 0 至 9223372036854775807 的非负整数字符串；不接受小数或科学计数法。</div>
+              <div class="form-actions"><button class="primary" type="submit">保存价格</button></div>
+            </form>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="usagePanel" role="tabpanel" aria-labelledby="usageTab" data-tab-panel="usage" hidden>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title"><h2>本期用量</h2><p>请求、Tokens、预计费用与实际扣款</p></div></div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>周期</th><th>客户</th><th>管理器 / 模型</th><th>请求</th><th>输入 Tokens</th><th>输出 Tokens</th><th>预计消费</th><th>已扣</th><th>更新时间</th></tr></thead>
+              <tbody id="billingUsageRows"><tr><td class="empty-cell" colspan="9">正在读取本期用量...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title"><h2>积分账本</h2><p>手工调整与计费扣款的不可变流水</p></div></div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>客户</th><th>类型</th><th>变动</th><th>变动后余额</th><th>原因</th><th>幂等键 / 请求</th></tr></thead>
+              <tbody id="billingLedgerRows"><tr><td class="empty-cell" colspan="7">正在读取积分账本...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="auditPanel" role="tabpanel" aria-labelledby="auditTab" data-tab-panel="audit" hidden>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title"><h2>管理员操作审计</h2><p>仅展示后端公开的脱敏摘要，不渲染密钥或敏感字段</p></div></div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>动作</th><th>操作者</th><th>目标</th><th>客户</th><th>摘要</th></tr></thead>
+              <tbody id="billingAuditRows"><tr><td class="empty-cell" colspan="6">正在读取操作审计...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <footer class="app-signature">本地模型服务平台 · 2026</footer>
+  </main>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    "use strict";
+
+    const BILLING_MAX_ITEMS = 500;
+    const BILLING_MANAGER_IDS = new Set(["vllm-manager", "llama-manager"]);
+    const BILLING_MODES = new Set(["shadow", "hard"]);
+    const BILLING_CUSTOMER_STATUSES = new Set(["active", "suspended", "closed"]);
+    const BILLING_MAX_INT64 = 9223372036854775807n;
+    const BILLING_THEME_STORAGE_KEY = "billingThemeMode";
+    const BILLING_MANAGER_CONTEXTS = Object.freeze({
+      llama: Object.freeze({ name: "llama.cpp Manager", mark: "L", label: "llama.cpp · 5178", port: 5178 }),
+      vllm: Object.freeze({ name: "vLLM Manager", mark: "vL", label: "vLLM · 5177", port: 5177 }),
+    });
+    const BILLING_SECRET_PATTERN = /(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|\b(?:sk|pk|rk)-[A-Za-z0-9._-]{8,}|\b(?:api[_ -]?key|keyhash|token|secret)\s*[:=]\s*\S+)/gi;
+
+    const workbench = document.querySelector("#billingWorkbench");
+    const apiState = document.querySelector("#billingApiState");
+    const refreshButton = document.querySelector("#billingRefreshBtn");
+    const tabs = document.querySelector("#billingTabs");
+    const notice = document.querySelector("#billingNotice");
+    const refreshErrors = document.querySelector("#billingRefreshErrors");
+    const limitNotice = document.querySelector("#billingLimitNotice");
+    const toast = document.querySelector("#toast");
+    const customerForm = document.querySelector("#billingCustomerForm");
+    const policyForm = document.querySelector("#billingPolicyForm");
+    const credentialForm = document.querySelector("#billingCredentialForm");
+    const adjustmentForm = document.querySelector("#billingAdjustmentForm");
+    const planForm = document.querySelector("#billingPlanForm");
+    const priceForm = document.querySelector("#billingPriceForm");
+    const templateApplyForm = document.querySelector("#billingTemplateApplyForm");
+    const templateConfirmButton = document.querySelector("#templateApplyConfirmBtn");
+    const themeMode = document.querySelector("#billingThemeMode");
+
+    let latestManagers = [];
+    let refreshInFlight = null;
+    let billingState = createEmptyBillingState();
+
+    initializeBillingShell();
+    refreshButton.addEventListener("click", function () { void refreshBillingCenter(); });
+    themeMode.addEventListener("change", function () {
+      const nextTheme = normalizeBillingTheme(themeMode.value);
+      applyBillingTheme(nextTheme);
+      try { localStorage.setItem(BILLING_THEME_STORAGE_KEY, nextTheme); } catch { /* local-only preference is optional */ }
+    });
+    document.querySelector("#templateReloadBtn").addEventListener("click", function () { void refreshBillingCenter({ templatesOnly: true }); });
+    tabs.addEventListener("click", handleTabClick);
+    tabs.addEventListener("keydown", handleTabKeydown);
+    document.addEventListener("click", handleDocumentClick);
+    document.querySelector("#billingCustomerRows").addEventListener("click", handleCustomerAction);
+    document.querySelector("#overviewCustomerRows").addEventListener("click", handleCustomerAction);
+    customerForm.addEventListener("submit", createBillingCustomer);
+    policyForm.addEventListener("submit", saveBillingPolicy);
+    credentialForm.addEventListener("submit", bindBillingCredential);
+    credentialForm.addEventListener("change", function (event) {
+      if (event.target instanceof HTMLSelectElement && event.target.name === "managerId") syncBillingClientOptions();
+    });
+    adjustmentForm.addEventListener("submit", createBillingAdjustment);
+    planForm.addEventListener("submit", createBillingPlan);
+    priceForm.addEventListener("submit", createBillingPrice);
+    templateApplyForm.addEventListener("submit", handleTemplateApply);
+    templateApplyForm.addEventListener("input", clearTemplatePreview);
+    templateApplyForm.addEventListener("change", clearTemplatePreview);
+    document.addEventListener("input", function (event) {
+      if (event.target instanceof HTMLElement && event.target.getAttribute("aria-invalid") === "true") clearControlInvalid(event.target);
+    });
+
+    bindFilter("#overviewCustomerSearch", "input", renderOverviewCustomers);
+    bindFilter("#overviewCustomerPlanFilter", "change", renderOverviewCustomers);
+    bindFilter("#overviewCustomerModeFilter", "change", renderOverviewCustomers);
+    bindFilter("#overviewCustomerStatusFilter", "change", renderOverviewCustomers);
+    bindFilter("#priceProviderFilter", "change", renderBillingPrices);
+    bindFilter("#priceManagerFilter", "change", renderBillingPrices);
+    bindFilter("#pricePlanFilter", "change", renderBillingPrices);
+    bindFilter("#priceSearch", "input", renderBillingPrices);
+    bindFilter("#templateSearch", "input", renderBillingTemplates);
+    document.querySelector("#overviewCustomerReset").addEventListener("click", resetOverviewFilters);
+
+    void refreshBillingCenter();
+
+    function createEmptyBillingState() {
+      return {
+        summary: {},
+        customers: [],
+        plans: [],
+        prices: [],
+        credentials: [],
+        usage: [],
+        ledger: [],
+        auditEvents: [],
+        templates: [],
+        templateMeta: {},
+        selectedTemplateId: "",
+        templateProvider: "",
+        templatePreview: null,
+        truncated: {},
+        loaded: false,
+      };
+    }
+
+    function initializeBillingShell() {
+      const requestedManager = new URLSearchParams(window.location.search).get("manager");
+      const managerId = requestedManager === "vllm" ? "vllm" : "llama";
+      const context = BILLING_MANAGER_CONTEXTS[managerId];
+      const manager = { ...context, baseUrl: managerBaseUrl(context.port) };
+      setText("#billingManagerName", manager.name);
+      setText("#billingManagerMark", manager.mark);
+      document.querySelector("#billingManagerMark").setAttribute("aria-label", manager.name);
+      setText("#billingManagerContext", manager.label);
+      setText("#billingEntryContext", displayHost(window.location.hostname) + ":" + (window.location.port || "5176"));
+      document.querySelectorAll("[data-manager-view]").forEach(function (link) {
+        const view = safeText(link.dataset.managerView, 40);
+        link.href = manager.baseUrl + "/#" + view;
+        const label = link.querySelector("span")?.textContent?.trim();
+        if (label) {
+          link.title = label;
+          link.setAttribute("aria-label", label);
+        }
+      });
+      const billingLink = document.querySelector("[data-manager-billing]");
+      billingLink.href = "/billing?manager=" + managerId;
+      billingLink.title = "计费";
+      billingLink.setAttribute("aria-label", "计费");
+      if (window.matchMedia("(max-width: 820px)").matches) {
+        requestAnimationFrame(function () { billingLink.scrollIntoView({ block: "nearest", inline: "center" }); });
+      }
+      const returnLink = document.querySelector("#billingManagerReturn");
+      returnLink.href = manager.baseUrl + "/#service";
+      returnLink.title = "返回 " + manager.name;
+      returnLink.setAttribute("aria-label", "返回 " + manager.name);
+
+      let storedTheme = "auto";
+      try { storedTheme = localStorage.getItem(BILLING_THEME_STORAGE_KEY) || "auto"; } catch { /* use auto */ }
+      storedTheme = normalizeBillingTheme(storedTheme);
+      themeMode.value = storedTheme;
+      applyBillingTheme(storedTheme);
+    }
+
+    function managerBaseUrl(port) {
+      const hostname = String(window.location.hostname || "127.0.0.1");
+      const host = hostname.includes(":") ? "[" + hostname.replace(/^\[|\]$/g, "") + "]" : hostname;
+      return "http://" + host + ":" + String(port);
+    }
+
+    function displayHost(hostname) {
+      const value = String(hostname || "127.0.0.1");
+      return value.includes(":") ? "[" + value.replace(/^\[|\]$/g, "") + "]" : value;
+    }
+
+    function normalizeBillingTheme(value) {
+      return value === "light" || value === "dark" ? value : "auto";
+    }
+
+    function applyBillingTheme(mode) {
+      if (mode === "light" || mode === "dark") document.documentElement.dataset.theme = mode;
+      else delete document.documentElement.dataset.theme;
+    }
+
+    function bindFilter(selector, eventName, listener) {
+      const element = document.querySelector(selector);
+      if (element) element.addEventListener(eventName, listener);
+    }
+
+    async function requestJson(path, options) {
+      const requestOptions = options || {};
+      const response = await fetch(path, {
+        cache: "no-store",
+        ...requestOptions,
+        headers: {
+          ...(requestOptions.body !== undefined ? { "content-type": "application/json" } : {}),
+          ...(requestOptions.headers || {}),
+        },
+        signal: requestOptions.signal || AbortSignal.timeout(10000),
+      });
+      const data = await response.json().catch(function () { return {}; });
+      if (!response.ok) {
+        const message = safeNarrative(data.message || data.error || ("HTTP " + response.status), 280);
+        const error = new Error(message);
+        error.status = response.status;
+        error.payload = data;
+        throw error;
+      }
+      return data;
+    }
+
+    function friendlyRequestError(error, fallback) {
+      if (error && (error.name === "AbortError" || error.name === "TimeoutError")) return "请求超时，" + fallback;
+      return safeNarrative(error && error.message ? error.message : fallback, 280);
+    }
+
+    async function refreshBillingCenter(options) {
+      const settings = options || {};
+      if (refreshInFlight) return refreshInFlight;
+      setBillingBusy(true);
+      setApiState("正在读取", "warn");
+      const requests = settings.templatesOnly
+        ? [["templates", "/api/billing/templates"]]
+        : [
+            ["status", "/api/status"],
+            ["overview", "/api/billing/overview"],
+            ["customers", "/api/billing/customers?limit=200"],
+            ["plans", "/api/billing/plans?limit=100"],
+            ["prices", "/api/billing/prices?limit=200"],
+            ["credentials", "/api/billing/credentials?limit=200"],
+            ["usage", `/api/billing/usage?window=month&limit=100&tzOffsetMinutes=${-new Date().getTimezoneOffset()}`],
+            ["ledger", "/api/billing/ledger?limit=100"],
+            ["auditEvents", "/api/billing/audit-events?limit=100"],
+            ["templates", "/api/billing/templates"],
+          ];
+      refreshInFlight = Promise.allSettled(requests.map(function (entry) { return requestJson(entry[1]); }))
+        .then(function (results) {
+          const errors = [];
+          let billingSuccesses = 0;
+          results.forEach(function (result, index) {
+            const kind = requests[index][0];
+            if (result.status === "fulfilled") {
+              if (kind === "status") {
+                latestManagers = Array.isArray(result.value && result.value.managers) ? result.value.managers : [];
+              } else {
+                applyBillingResponse(kind, result.value);
+                billingSuccesses += 1;
+              }
+            } else {
+              errors.push(endpointLabel(kind) + "：" + friendlyRequestError(result.reason, "接口不可用"));
+              if (kind === "status") latestManagers = [];
+            }
+          });
+          billingState.loaded = billingState.loaded || billingSuccesses > 0;
+          syncAllSelectOptions();
+          renderBillingCenter();
+          if (!errors.length) {
+            setApiState("仅本机管理 · API 正常", "ok");
+            setNotice("", "", true);
+            renderRefreshErrors([]);
+          } else if (billingSuccesses > 0) {
+            setApiState("部分接口可用", "warn");
+            setNotice("部分数据未刷新；展开下方详情可查看失败接口。", "warn");
+            renderRefreshErrors(errors);
+          } else {
+            setApiState("计费接口不可用", "fail");
+            setNotice("独立计费前端已就绪，但后端接口尚未响应。", "fail");
+            renderRefreshErrors(errors);
+          }
+          return billingState;
+        })
+        .catch(function (error) {
+          setApiState("计费接口不可用", "fail");
+          setNotice(friendlyRequestError(error, "计费数据刷新失败。"), "fail");
+          return billingState;
+        })
+        .finally(function () {
+          refreshInFlight = null;
+          setBillingBusy(false);
+        });
+      return refreshInFlight;
+    }
+
+    function applyBillingResponse(kind, payload) {
+      if (kind === "overview") {
+        billingState.summary = normalizeSummary(payload && (payload.overview || payload.summary || payload.data || payload));
+        return;
+      }
+      if (kind === "templates") {
+        billingState.templates = normalizeList(payload, "items", normalizeTemplate, "templates");
+        billingState.templateMeta = {
+          catalogVersion: safeText(payload && payload.catalogVersion, 100),
+          source: safeText(payload && (payload.source || payload.sourceLabel), 120),
+          snapshot: safeText(payload && (payload.snapshotDate || payload.snapshot || payload.updatedAt), 80),
+        };
+        return;
+      }
+      const key = kind === "auditEvents" ? "auditEvents" : kind;
+      const normalizers = {
+        customers: normalizeCustomer,
+        plans: normalizePlan,
+        prices: normalizePrice,
+        credentials: normalizeCredential,
+        usage: normalizeUsage,
+        ledger: normalizeLedger,
+        auditEvents: normalizeAudit,
+      };
+      billingState[key] = normalizeList(payload, key, normalizers[key], key);
+    }
+
+    function normalizeList(payload, key, normalizer, stateKey) {
+      let source = payload;
+      if (!Array.isArray(source) && source && Array.isArray(source[key])) source = source[key];
+      if (!Array.isArray(source) && source && source.data && Array.isArray(source.data[key])) source = source.data[key];
+      if (!Array.isArray(source) && source && Array.isArray(source.items)) source = source.items;
+      if (!Array.isArray(source) || typeof normalizer !== "function") return [];
+      const normalized = source.slice(0, BILLING_MAX_ITEMS).map(normalizer).filter(Boolean);
+      const reportedTotal = Number(payload?.total ?? payload?.pagination?.total ?? payload?.meta?.total ?? source.length);
+      const total = Number.isFinite(reportedTotal) ? Math.max(source.length, reportedTotal) : source.length;
+      const truncationKey = stateKey || key;
+      if (total > normalized.length) billingState.truncated[truncationKey] = { shown: normalized.length, total };
+      else delete billingState.truncated[truncationKey];
+      return normalized;
+    }
+
+    function normalizeSummary(value) {
+      const source = value && typeof value === "object" ? value : {};
+      return {
+        activeCustomers: integerFromApi(source.activeCustomers ?? source.activeCustomerCount ?? source.customers, ""),
+        activeCredentials: integerFromApi(source.activeCredentials ?? source.credentialCount, ""),
+        availableCredits: creditsFromApi(
+          source.availableCredits ?? source.balanceCredits,
+          source.availableMicrocredits ?? source.balanceMicrocredits,
+          ""
+        ),
+        periodTokens: integerFromApi(source.periodTokens ?? source.totalTokens ?? (source.usage && source.usage.tokens), ""),
+        periodSpend: creditsFromApi(
+          source.periodCostCredits ?? source.periodSpendCredits,
+          source.periodCostMicrocredits ?? source.periodSpendMicrocredits ?? source.debitedMicrocredits,
+          ""
+        ),
+      };
+    }
+
+    function normalizeCustomer(value) {
+      const source = value && typeof value === "object" ? value : {};
+      const id = safeId(source.customerId ?? source.id);
+      if (!id) return null;
+      const status = BILLING_CUSTOMER_STATUSES.has(String(source.status || "").toLowerCase())
+        ? String(source.status).toLowerCase()
+        : "active";
+      const mode = BILLING_MODES.has(String(source.enforcementMode || "").toLowerCase())
+        ? String(source.enforcementMode).toLowerCase()
+        : "shadow";
+      return {
+        id: id,
+        name: safeText(source.name || id, 80),
+        externalRef: safeText(source.externalRef, 80),
+        status: status,
+        planId: safeId(source.planId),
+        enforcementMode: mode,
+        balance: creditsFromApi(source.balanceCredits, source.balanceMicrocredits, "0", true),
+        available: creditsFromApi(source.availableCredits, source.availableMicrocredits, "0", true),
+        creditLimit: creditsFromApi(source.creditLimit, source.creditLimitMicrocredits, "0"),
+        monthlySpendLimit: creditsFromApi(source.monthlySpendLimit, source.monthlySpendLimitMicrocredits, ""),
+        monthlyTokenLimit: integerFromApi(source.monthlyTokenLimit, "0"),
+        monthlyRequestLimit: integerFromApi(source.monthlyRequestLimit, "0"),
+        monthTokens: integerFromApi(source.periodTokens ?? source.monthTokens ?? source.usageTokens, "0"),
+        updatedAt: safeText(source.updatedAt || source.createdAt, 80),
+      };
+    }
+
+    function normalizePlan(value) {
+      const source = value && typeof value === "object" ? value : {};
+      const id = safeId(source.planId ?? source.id);
+      if (!id) return null;
+      return {
+        id: id,
+        code: safeText(source.code || id, 32),
+        name: safeText(source.name || source.code || id, 80),
+        currency: normalizeCurrency(source.currency || "USD"),
+        monthlyPrice: creditsFromApi(source.monthlyPrice, source.monthlyPriceMicrocredits, "0"),
+        includedCredits: creditsFromApi(source.includedCredits, source.includedMicrocredits, "0"),
+        monthlyTokenLimit: integerFromApi(source.monthlyTokenLimit, "0"),
+        monthlyRequestLimit: integerFromApi(source.monthlyRequestLimit, "0"),
+        enforcementMode: BILLING_MODES.has(String(source.enforcementMode || "").toLowerCase()) ? String(source.enforcementMode).toLowerCase() : "shadow",
+        active: source.active !== false,
+        updatedAt: safeText(source.updatedAt || source.createdAt, 80),
+      };
+    }
+
+    function normalizePrice(value) {
+      const source = value && typeof value === "object" ? value : {};
+      const id = safeId(source.priceId ?? source.id);
+      const modelPattern = safeText(source.modelPattern ?? source.model, 160);
+      if (!id && !modelPattern) return null;
+      return {
+        id: id || (safeId(source.managerId) + ":" + modelPattern),
+        planId: safeId(source.planId),
+        managerId: safeText(source.managerId || "*", 40),
+        modelPattern: modelPattern || "*",
+        inputMicrocreditsPerMillion: integerFromApi(source.inputMicrocreditsPerMillion ?? source.inputPerMillionMicrocredits, "0"),
+        cachedInputMicrocreditsPerMillion: integerFromApi(source.cachedInputMicrocreditsPerMillion ?? source.cachedInputPerMillionMicrocredits, ""),
+        outputMicrocreditsPerMillion: integerFromApi(source.outputMicrocreditsPerMillion ?? source.outputPerMillionMicrocredits, "0"),
+        active: source.active !== false,
+        templateId: safeId(source.templateId ?? source.sourceTemplateId),
+        templateProvider: safeText(source.templateProvider ?? source.provider, 60),
+        sourceLabel: safeText(source.sourceLabel ?? source.source, 100),
+        snapshotDate: safeText(source.snapshotDate ?? source.sourceSnapshot, 80),
+        effectiveAt: safeText(source.effectiveAt ?? source.effectiveFrom ?? source.createdAt, 80),
+        updatedAt: safeText(source.updatedAt || source.createdAt, 80),
+      };
+    }
+
+    function normalizeCredential(value) {
+      const source = value && typeof value === "object" ? value : {};
+      const customerId = safeId(source.customerId);
+      const serviceClientId = safeId(source.serviceClientId ?? source.clientId);
+      if (!customerId || !serviceClientId) return null;
+      return {
+        id: safeId(source.bindingId ?? source.id) || (customerId + ":" + serviceClientId),
+        customerId: customerId,
+        managerId: safeText(source.managerId, 40),
+        serviceClientId: serviceClientId,
+        label: safeText(source.label || source.clientName, 100),
+        keyPreview: safeKeyPreview(source.keyPreview),
+        active: source.active !== false && source.enabled !== false,
+        updatedAt: safeText(source.updatedAt || source.createdAt, 80),
+      };
+    }
+
+    function normalizeUsage(value) {
+      const source = value && typeof value === "object" ? value : {};
+      return {
+        id: safeId(source.usageId ?? source.id) || safeText(source.period, 40) + ":" + safeId(source.customerId),
+        customerId: safeId(source.customerId),
+        managerId: safeText(source.managerId, 40),
+        model: safeText(source.model ?? source.modelId, 160),
+        period: safeText(source.period ?? source.billingPeriod ?? source.date ?? source.at, 60),
+        requests: integerFromApi(source.requests ?? source.requestCount, "1"),
+        inputTokens: integerFromApi(source.inputTokens, "0"),
+        outputTokens: integerFromApi(source.outputTokens, "0"),
+        totalTokens: integerFromApi(source.totalTokens ?? source.tokens, "0"),
+        projectedCost: creditsFromApi(source.projectedCostCredits, source.projectedChargeMicrocredits ?? source.projectedMicrocredits, ""),
+        debited: creditsFromApi(source.debitedCredits, source.debitedMicrocredits ?? source.chargedMicrocredits, ""),
+        cost: creditsFromApi(source.costCredits, source.costMicrocredits, "0"),
+        updatedAt: safeText(source.updatedAt || source.createdAt || source.at, 80),
+      };
+    }
+
+    function normalizeLedger(value) {
+      const source = value && typeof value === "object" ? value : {};
+      return {
+        id: safeId(source.entryId ?? source.id),
+        customerId: safeId(source.customerId),
+        type: safeText(source.type ?? source.entryType, 60),
+        delta: creditsFromApi(source.amountCredits ?? source.deltaCredits, source.deltaMicrocredits, "0", true),
+        balanceAfter: creditsFromApi(source.balanceAfterCredits, source.balanceAfterMicrocredits, "", true),
+        reason: safeNarrative(source.reason, 500),
+        idempotencyKey: safeId(source.idempotencyKey),
+        requestId: safeId(source.requestId),
+        createdAt: safeText(source.createdAt || source.at, 80),
+      };
+    }
+
+    function normalizeAudit(value) {
+      const source = value && typeof value === "object" ? value : {};
+      return {
+        id: safeId(source.eventId ?? source.auditId ?? source.id),
+        action: safeText(source.action, 100),
+        actor: safeText(source.actorId ?? source.actor ?? "system", 100),
+        target: safeText(
+          [safeText(source.targetType, 60), safeId(source.targetId)].filter(Boolean).join(" · "),
+          180
+        ),
+        customerId: safeId(source.customerId),
+        summary: auditSummary(source),
+        createdAt: safeText(source.createdAt || source.at, 80),
+      };
+    }
+
+    function normalizeTemplate(value) {
+      const source = value && typeof value === "object" ? value : {};
+      const id = safeId(source.templateId ?? source.id);
+      if (!id) return null;
+      const rates = source.rates && typeof source.rates === "object" && !Array.isArray(source.rates) ? source.rates : {};
+      const context = source.context && typeof source.context === "object" && !Array.isArray(source.context) ? source.context : {};
+      return {
+        id: id,
+        provider: safeText(source.providerLabel ?? source.provider ?? source.vendor, 60) || "Other",
+        providerId: safeText(source.provider ?? source.vendor, 60),
+        model: safeText(source.modelId ?? source.model ?? source.name, 160) || id,
+        displayName: safeText(source.modelLabel ?? source.displayName ?? source.label ?? source.name, 180),
+        tier: safeText(source.tier ?? source.serviceTier ?? source.status, 80),
+        contextLabel: safeText(context.label ?? source.contextLabel, 120),
+        currency: normalizeCurrency(source.currency || "USD"),
+        inputUsdPerMillion: decimalFromApi(rates.inputUsdPerMillion ?? source.inputUsdPerMillion ?? source.inputPerMillionUsd ?? source.inputUsd, ""),
+        cachedInputUsdPerMillion: decimalFromApi(rates.cachedInputUsdPerMillion ?? source.cachedInputUsdPerMillion ?? source.cachedInputPerMillionUsd ?? source.cachedInputUsd, ""),
+        outputUsdPerMillion: decimalFromApi(rates.outputUsdPerMillion ?? source.outputUsdPerMillion ?? source.outputPerMillionUsd ?? source.outputUsd, ""),
+        sourceLabel: safeText(source.sourceLabel ?? source.source ?? "官方公开定价", 120),
+        sourceUrl: safeHttpUrl(source.sourceUrl ?? source.url),
+        snapshotDate: safeText(source.snapshotDate ?? source.snapshot ?? source.publishedAt, 80),
+        effectiveFrom: safeText(source.effectiveFrom ?? source.effectiveAt, 80),
+        effectiveTo: safeText(source.effectiveTo, 80),
+        suggestedModelPattern: safeText(source.suggestedModelPattern ?? source.localModelPattern, 160),
+        notes: safeNarrative(source.notes, 400),
+        cacheNotes: safeNarrative(source.cacheNotes, 400),
+        storageNotes: safeNarrative(source.storageNotes, 400),
+        cacheWriteUsdPerMillion: decimalFromApi(rates.cacheWriteUsdPerMillion ?? rates.cacheWriteUsd, ""),
+        cacheWrite5mUsdPerMillion: decimalFromApi(rates.cacheWrite5mUsdPerMillion, ""),
+        cacheWrite1hUsdPerMillion: decimalFromApi(rates.cacheWrite1hUsdPerMillion, ""),
+        cacheStorageUsdPerMillionTokenHour: decimalFromApi(
+          rates.cacheStorageUsdPerMillionTokenHour ?? rates.cacheStorageUsdPerMillionHour ?? rates.storageUsdPerMillionHour,
+          ""
+        ),
+        active: source.active !== false,
+      };
+    }
+
+    function auditSummary(source) {
+      if (typeof source.summary === "string" || typeof source.message === "string") {
+        return safeNarrative(source.summary || source.message, 500);
+      }
+      const details = source.details && typeof source.details === "object" && !Array.isArray(source.details) ? source.details : {};
+      const allowedKeys = [
+        "code", "name", "status", "planId", "managerId", "model", "modelPattern",
+        "enforcementMode", "amountCredits", "reason", "replacesPriceId",
+      ];
+      const parts = [];
+      allowedKeys.forEach(function (key) {
+        if (details[key] === undefined || details[key] === null || details[key] === "") return;
+        parts.push(key + "=" + safeNarrative(details[key], 140));
+      });
+      return safeNarrative(parts.join(" · "), 500);
+    }
+
+    function renderBillingCenter() {
+      renderSummary();
+      renderOverviewCustomers();
+      renderOverviewUsage();
+      renderCustomers();
+      renderCredentials();
+      renderPlans();
+      renderBillingPrices();
+      renderUsage();
+      renderLedger();
+      renderAudit();
+      renderTemplateFilters();
+      renderBillingTemplates();
+      renderTemplateSelection();
+      renderTemplateMeta();
+      renderLimitNotice();
+    }
+
+    function renderRefreshErrors(errors) {
+      const items = Array.isArray(errors) ? errors : [];
+      refreshErrors.replaceChildren();
+      refreshErrors.hidden = !items.length;
+      if (!items.length) return;
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "查看 " + items.length + " 个刷新失败接口";
+      const list = document.createElement("ul");
+      items.forEach(function (message) {
+        const item = document.createElement("li");
+        item.textContent = safeNarrative(message, 320);
+        list.appendChild(item);
+      });
+      details.append(summary, list);
+      refreshErrors.appendChild(details);
+    }
+
+    function renderLimitNotice() {
+      const labels = {
+        customers: "客户",
+        plans: "套餐",
+        prices: "价格",
+        credentials: "凭证",
+        usage: "用量",
+        ledger: "账本",
+        auditEvents: "审计",
+        templates: "模板",
+      };
+      const messages = Object.entries(billingState.truncated || {}).map(function (entry) {
+        const key = entry[0];
+        const value = entry[1] || {};
+        return (labels[key] || key) + "仅显示前 " + formatInteger(String(value.shown || 0)) + " / " + formatInteger(String(value.total || 0)) + " 条";
+      });
+      limitNotice.hidden = !messages.length;
+      limitNotice.textContent = messages.join("；");
+    }
+
+    function renderSummary() {
+      setText("#summaryCustomers", formatInteger(billingState.summary.activeCustomers || String(billingState.customers.filter(function (item) { return item.status === "active"; }).length)));
+      setText("#summaryCredentials", formatInteger(billingState.summary.activeCredentials || String(billingState.credentials.filter(function (item) { return item.active; }).length)));
+      setText("#summaryBalance", formatCredits(billingState.summary.availableCredits || "0"));
+      setText("#summaryTokens", formatInteger(billingState.summary.periodTokens || sumIntegers(billingState.usage.map(function (item) { return item.totalTokens; }))));
+      setText("#summarySpend", formatCredits(billingState.summary.periodSpend || sumDecimals(billingState.usage.map(function (item) { return item.debited || item.cost; }), 6)));
+    }
+
+    function renderOverviewCustomers() {
+      const body = document.querySelector("#overviewCustomerRows");
+      const query = safeText(document.querySelector("#overviewCustomerSearch").value, 80).toLowerCase();
+      const planId = safeId(document.querySelector("#overviewCustomerPlanFilter").value);
+      const mode = safeText(document.querySelector("#overviewCustomerModeFilter").value, 20);
+      const status = safeText(document.querySelector("#overviewCustomerStatusFilter").value, 20);
+      const items = billingState.customers.filter(function (customer) {
+        const haystack = (customer.name + " " + customer.externalRef + " " + customer.id).toLowerCase();
+        return (!query || haystack.includes(query))
+          && (!planId || customer.planId === planId)
+          && (!mode || customer.enforcementMode === mode)
+          && (!status || customer.status === status);
+      }).slice(0, 100);
+      if (!items.length) return setEmptyTable(body, 7, billingState.loaded ? "暂无匹配客户。" : "客户接口尚未提供数据。");
+      const rows = items.map(function (customer) {
+        const row = node("tr");
+        addCell(row, customer.name, { detail: customer.externalRef || customer.id });
+        addCell(row, planLabel(customer.planId));
+        addCell(row, customer.enforcementMode === "hard" ? "Hard" : "Shadow");
+        addCell(row, formatCredits(customer.available || customer.balance));
+        addCell(row, formatInteger(customer.monthTokens) + " Tokens");
+        addCell(row, customerStatusNode(customer.status), { node: true });
+        addCell(row, customerActionsNode(customer), { node: true });
+        return row;
+      });
+      body.replaceChildren(...rows);
+    }
+
+    function renderOverviewUsage() {
+      const body = document.querySelector("#overviewUsageRows");
+      const items = billingState.usage.slice(0, 20);
+      if (!items.length) return setEmptyTable(body, 7, billingState.loaded ? "暂无近期用量。" : "用量接口尚未提供数据。");
+      body.replaceChildren(...items.map(function (usage) {
+        const row = node("tr");
+        addCell(row, usage.period || "—");
+        addCell(row, customerLabel(usage.customerId));
+        addCell(row, managerLabel(usage.managerId) + (usage.model ? " · " + usage.model : ""));
+        addCell(row, formatInteger(usage.requests));
+        addCell(row, formatInteger(usage.totalTokens));
+        addCell(row, formatCredits(usage.projectedCost || usage.cost));
+        addCell(row, formatCredits(usage.debited || "0"));
+        return row;
+      }));
+    }
+
+    function renderCustomers() {
+      const body = document.querySelector("#billingCustomerRows");
+      if (!billingState.customers.length) return setEmptyTable(body, 9, billingState.loaded ? "暂无客户账户。" : "客户接口尚未提供数据。");
+      body.replaceChildren(...billingState.customers.map(function (customer) {
+        const row = node("tr");
+        addCell(row, customer.name, { detail: customer.id });
+        addCell(row, customer.externalRef || "—");
+        addCell(row, planLabel(customer.planId));
+        addCell(row, customer.enforcementMode === "hard" ? "Hard 强制" : "Shadow 观测");
+        addCell(row, formatCredits(customer.balance) + " / " + formatCredits(customer.available));
+        addCell(row, formatCredits(customer.creditLimit));
+        addCell(row, quotaLabel(customer.monthlyTokenLimit, "Tokens") + " · " + quotaLabel(customer.monthlyRequestLimit, "请求"));
+        addCell(row, customerStatusNode(customer.status), { node: true });
+        addCell(row, customerActionsNode(customer), { node: true });
+        return row;
+      }));
+    }
+
+    function renderCredentials() {
+      const body = document.querySelector("#billingCredentialRows");
+      if (!billingState.credentials.length) return setEmptyTable(body, 5, billingState.loaded ? "暂无凭证绑定。" : "凭证接口尚未提供数据。");
+      body.replaceChildren(...billingState.credentials.map(function (credential) {
+        const row = node("tr");
+        addCell(row, customerLabel(credential.customerId));
+        addCell(row, managerLabel(credential.managerId));
+        const label = credential.label || credential.serviceClientId;
+        addCell(row, label, { detail: credential.serviceClientId + (credential.keyPreview ? " · " + credential.keyPreview : "") });
+        addCell(row, statusNode(credential.active ? "已启用" : "已停用", credential.active ? "ok" : "warn"), { node: true });
+        addCell(row, formatDateTime(credential.updatedAt));
+        return row;
+      }));
+    }
+
+    function renderPlans() {
+      const body = document.querySelector("#billingPlanRows");
+      if (!billingState.plans.length) return setEmptyTable(body, 6, billingState.loaded ? "暂无套餐。" : "套餐接口尚未提供数据。");
+      body.replaceChildren(...billingState.plans.map(function (plan) {
+        const row = node("tr");
+        addCell(row, plan.name, { detail: plan.code });
+        addCell(row, formatCredits(plan.monthlyPrice) + " " + plan.currency);
+        addCell(row, formatCredits(plan.includedCredits));
+        addCell(row, quotaLabel(plan.monthlyTokenLimit, "Tokens") + " · " + quotaLabel(plan.monthlyRequestLimit, "请求"));
+        addCell(row, plan.enforcementMode === "hard" ? "Hard" : "Shadow");
+        addCell(row, statusNode(plan.active ? "启用" : "停用", plan.active ? "ok" : "warn"), { node: true });
+        return row;
+      }));
+    }
+
+    function renderBillingPrices() {
+      const body = document.querySelector("#billingPriceRows");
+      const manager = safeText(document.querySelector("#priceManagerFilter").value, 40);
+      const planId = safeId(document.querySelector("#pricePlanFilter").value);
+      const provider = safeText(document.querySelector("#priceProviderFilter").value, 60);
+      const query = safeText(document.querySelector("#priceSearch").value, 160).toLowerCase();
+      const items = billingState.prices.filter(function (price) {
+        return (!manager || price.managerId === manager)
+          && (!planId || price.planId === planId)
+          && (!provider || price.templateProvider === provider)
+          && (!query || price.modelPattern.toLowerCase().includes(query));
+      });
+      if (!items.length) return setEmptyTable(body, 9, billingState.loaded ? "暂无匹配的模型价格。未命中价格的用量不应进入正式扣费。" : "价格接口尚未提供数据。");
+      body.replaceChildren(...items.map(function (price) {
+        const row = node("tr");
+        addCell(row, managerLabel(price.managerId));
+        addCell(row, price.modelPattern, { code: true });
+        addCell(row, planLabel(price.planId));
+        addCell(row, formatInteger(price.inputMicrocreditsPerMillion));
+        addCell(row, price.cachedInputMicrocreditsPerMillion === "" ? "—" : formatInteger(price.cachedInputMicrocreditsPerMillion));
+        addCell(row, formatInteger(price.outputMicrocreditsPerMillion));
+        const source = price.templateProvider || price.sourceLabel || (price.templateId ? "官方模板" : "手工");
+        addCell(row, source, { detail: price.templateId || price.snapshotDate });
+        addCell(row, formatDateTime(price.effectiveAt || price.updatedAt));
+        addCell(row, statusNode(price.active ? "生效中" : "停用", price.active ? "ok" : "warn"), { node: true });
+        return row;
+      }));
+      syncPriceProviderOptions();
+    }
+
+    function renderUsage() {
+      const body = document.querySelector("#billingUsageRows");
+      if (!billingState.usage.length) return setEmptyTable(body, 9, billingState.loaded ? "本期暂无可计费用量。" : "用量接口尚未提供数据。");
+      body.replaceChildren(...billingState.usage.map(function (usage) {
+        const row = node("tr");
+        addCell(row, usage.period || "—");
+        addCell(row, customerLabel(usage.customerId));
+        addCell(row, managerLabel(usage.managerId) + (usage.model ? " · " + usage.model : ""));
+        addCell(row, formatInteger(usage.requests));
+        addCell(row, formatInteger(usage.inputTokens));
+        addCell(row, formatInteger(usage.outputTokens));
+        addCell(row, formatCredits(usage.projectedCost || usage.cost));
+        addCell(row, formatCredits(usage.debited || "0"));
+        addCell(row, formatDateTime(usage.updatedAt));
+        return row;
+      }));
+    }
+
+    function renderLedger() {
+      const body = document.querySelector("#billingLedgerRows");
+      if (!billingState.ledger.length) return setEmptyTable(body, 7, billingState.loaded ? "暂无积分账本流水。" : "账本接口尚未提供数据。");
+      body.replaceChildren(...billingState.ledger.map(function (entry) {
+        const row = node("tr");
+        addCell(row, formatDateTime(entry.createdAt));
+        addCell(row, customerLabel(entry.customerId));
+        addCell(row, entry.type || "—");
+        addCell(row, formatSignedCredits(entry.delta));
+        addCell(row, entry.balanceAfter === "" ? "—" : formatCredits(entry.balanceAfter));
+        addCell(row, entry.reason || "—");
+        addCell(row, entry.idempotencyKey || entry.requestId || "—", { code: true });
+        return row;
+      }));
+    }
+
+    function renderAudit() {
+      const body = document.querySelector("#billingAuditRows");
+      if (!billingState.auditEvents.length) return setEmptyTable(body, 6, billingState.loaded ? "暂无管理员计费操作审计。" : "审计接口尚未提供数据。");
+      body.replaceChildren(...billingState.auditEvents.map(function (event) {
+        const row = node("tr");
+        addCell(row, formatDateTime(event.createdAt));
+        addCell(row, event.action || "—");
+        addCell(row, event.actor || "system");
+        addCell(row, event.target || "—");
+        addCell(row, customerLabel(event.customerId));
+        addCell(row, event.summary || "—");
+        return row;
+      }));
+    }
+
+    function renderTemplateFilters() {
+      const container = document.querySelector("#templateProviderFilters");
+      const providers = Array.from(new Set(billingState.templates.map(function (item) { return item.provider; }).filter(Boolean))).sort();
+      const values = ["", ...providers];
+      container.replaceChildren(...values.map(function (provider) {
+        const button = node("button", "provider-filter", provider || "全部");
+        button.type = "button";
+        button.dataset.templateProvider = provider;
+        button.setAttribute("aria-pressed", String(billingState.templateProvider === provider));
+        return button;
+      }));
+    }
+
+    function renderBillingTemplates() {
+      const body = document.querySelector("#billingTemplateRows");
+      const query = safeText(document.querySelector("#templateSearch").value, 100).toLowerCase();
+      const items = billingState.templates.filter(function (template) {
+        const haystack = (template.provider + " " + template.model + " " + template.displayName + " " + template.id).toLowerCase();
+        return (!billingState.templateProvider || template.provider === billingState.templateProvider)
+          && (!query || haystack.includes(query));
+      });
+      if (!items.length) return setEmptyTable(body, 7, billingState.loaded ? "暂无匹配的官方价格模板。" : "模板接口尚未提供数据。");
+      body.replaceChildren(...items.map(function (template) {
+        const row = node("tr");
+        addCell(row, template.displayName || template.model, { detail: template.provider + " · " + template.id });
+        const availability = templateAvailability(template);
+        addCell(row, template.tier || "—", { detail: [template.contextLabel, effectiveLabel(template), availability.label].filter(Boolean).join(" · ") });
+        addCell(row, template.inputUsdPerMillion === "" ? "—" : template.inputUsdPerMillion + " " + template.currency);
+        addCell(row, template.cachedInputUsdPerMillion === "" ? "—" : template.cachedInputUsdPerMillion + " " + template.currency);
+        addCell(row, template.outputUsdPerMillion === "" ? "—" : template.outputUsdPerMillion + " " + template.currency);
+        const sourceCell = node("div");
+        if (template.sourceUrl) {
+          const link = node("a", "source-link", template.sourceLabel || "官方来源");
+          link.href = template.sourceUrl;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          sourceCell.append(link);
+        } else {
+          sourceCell.append(node("span", "", template.sourceLabel || "后端模板"));
+        }
+        if (template.snapshotDate) sourceCell.append(node("div", "", "快照 " + template.snapshotDate));
+        addCell(row, sourceCell, { node: true });
+        const selectButton = node("button", "template-select", "选择");
+        selectButton.type = "button";
+        selectButton.dataset.templateId = template.id;
+        selectButton.setAttribute("aria-label", "选择模板 " + (template.displayName || template.model));
+        selectButton.setAttribute("aria-pressed", String(billingState.selectedTemplateId === template.id));
+        selectButton.disabled = !availability.selectable;
+        selectButton.title = availability.selectable ? "选择此模板" : availability.label;
+        addCell(row, selectButton, { node: true });
+        return row;
+      }));
+    }
+
+    function renderTemplateSelection() {
+      const summary = document.querySelector("#templateSelectionSummary");
+      const template = selectedTemplate();
+      if (!template) {
+        summary.className = "selection-summary empty";
+        summary.textContent = "尚未选择官方价格模板。";
+        templateConfirmButton.disabled = true;
+        return;
+      }
+      summary.className = "selection-summary";
+      const notes = [template.notes, template.cacheNotes, template.storageNotes].filter(Boolean).join("；");
+      const references = [
+        template.cacheWriteUsdPerMillion ? "cache-write " + template.cacheWriteUsdPerMillion + " USD/1M" : "",
+        template.cacheWrite5mUsdPerMillion ? "cache-write 5m " + template.cacheWrite5mUsdPerMillion + " USD/1M" : "",
+        template.cacheWrite1hUsdPerMillion ? "cache-write 1h " + template.cacheWrite1hUsdPerMillion + " USD/1M" : "",
+        template.cacheStorageUsdPerMillionTokenHour ? "cache-storage " + template.cacheStorageUsdPerMillionTokenHour + " USD/1M-token-hour" : "",
+      ].filter(Boolean).join("；");
+      summary.textContent = (template.displayName || template.model) + " · " + template.provider + " · " + (template.snapshotDate || "未标快照日期")
+        + (notes ? "。备注：" + notes : "")
+        + (references ? "。仅供参考、不参与当前结算：" + references : "");
+    }
+
+    function renderTemplateMeta() {
+      const sources = Array.from(new Set(billingState.templates.map(function (item) { return item.sourceLabel; }).filter(Boolean)));
+      const snapshots = billingState.templates.map(function (item) { return item.snapshotDate; }).filter(Boolean).sort();
+      setText("#templateSourceMeta", "来源：" + (billingState.templateMeta.source || sources.join("、") || "后端模板目录"));
+      setText("#templateSnapshotMeta", "快照：" + (billingState.templateMeta.snapshot || snapshots[snapshots.length - 1] || "—") + (billingState.templateMeta.catalogVersion ? " · " + billingState.templateMeta.catalogVersion : ""));
+    }
+
+    function handleTabClick(event) {
+      const button = event.target.closest("[data-tab]");
+      if (button instanceof HTMLButtonElement) selectTab(button.dataset.tab, false);
+    }
+
+    function handleTabKeydown(event) {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      const buttons = Array.from(tabs.querySelectorAll("[data-tab]"));
+      const current = buttons.indexOf(document.activeElement);
+      if (current < 0) return;
+      event.preventDefault();
+      let next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : current + (event.key === "ArrowRight" ? 1 : -1);
+      if (next < 0) next = buttons.length - 1;
+      if (next >= buttons.length) next = 0;
+      selectTab(buttons[next].dataset.tab, true);
+    }
+
+    function selectTab(name, focus) {
+      const valid = new Set(["overview", "customers", "prices", "usage", "audit"]);
+      if (!valid.has(name)) return;
+      tabs.querySelectorAll("[data-tab]").forEach(function (button) {
+        const selected = button.dataset.tab === name;
+        button.setAttribute("aria-selected", String(selected));
+        button.tabIndex = selected ? 0 : -1;
+        if (selected && focus) button.focus();
+      });
+      document.querySelectorAll("[data-tab-panel]").forEach(function (panel) {
+        panel.hidden = panel.dataset.tabPanel !== name;
+      });
+    }
+
+    function handleDocumentClick(event) {
+      const providerButton = event.target.closest("[data-template-provider]");
+      if (providerButton instanceof HTMLButtonElement) {
+        billingState.templateProvider = safeText(providerButton.dataset.templateProvider, 60);
+        renderTemplateFilters();
+        renderBillingTemplates();
+        return;
+      }
+      const templateButton = event.target.closest("[data-template-id]");
+      if (templateButton instanceof HTMLButtonElement) {
+        selectTemplate(templateButton.dataset.templateId);
+        return;
+      }
+      const openButton = event.target.closest("[data-open-tab]");
+      if (openButton instanceof HTMLButtonElement) {
+        const tab = safeText(openButton.dataset.openTab, 20);
+        selectTab(tab, false);
+        const formId = safeId(openButton.dataset.focusForm);
+        if (formId) {
+          const form = document.getElementById(formId);
+          const editor = form && form.closest("details");
+          if (editor) editor.open = true;
+          if (form) {
+            form.scrollIntoView({ behavior: "smooth", block: "center" });
+            const first = form.querySelector("select, input, textarea");
+            if (first) first.focus();
+          }
+        }
+      }
+    }
+
+    function selectTemplate(templateId) {
+      const id = safeId(templateId);
+      const template = billingState.templates.find(function (item) { return item.id === id; });
+      if (!template) return;
+      const availability = templateAvailability(template);
+      if (!availability.selectable) {
+        setNotice("该模板" + availability.label + "，目前只能查看，不能套用。", "warn");
+        return;
+      }
+      billingState.selectedTemplateId = id;
+      clearTemplatePreview();
+      const modelControl = formField(templateApplyForm, "modelPattern");
+      if (template.suggestedModelPattern && modelControl && !String(modelControl.value || "").trim()) {
+        modelControl.value = template.suggestedModelPattern;
+      }
+      renderBillingTemplates();
+      renderTemplateSelection();
+    }
+
+    function handleCustomerAction(event) {
+      const button = event.target.closest("[data-customer-action]");
+      if (!(button instanceof HTMLButtonElement)) return;
+      const id = safeId(button.dataset.customerId);
+      const customer = billingState.customers.find(function (item) { return item.id === id; });
+      if (!customer) return;
+      if (button.dataset.customerAction === "edit") fillPolicyForm(customer);
+      if (button.dataset.customerAction === "toggle") void toggleCustomerStatus(customer, button);
+    }
+
+    function fillPolicyForm(customer) {
+      selectTab("customers", false);
+      setFormValue(policyForm, "customerId", customer.id);
+      setFormValue(policyForm, "planId", customer.planId);
+      setFormValue(policyForm, "enforcementMode", customer.enforcementMode);
+      setFormValue(policyForm, "creditLimit", customer.creditLimit);
+      setFormValue(policyForm, "monthlyTokenLimit", customer.monthlyTokenLimit);
+      setFormValue(policyForm, "monthlyRequestLimit", customer.monthlyRequestLimit);
+      const editor = policyForm.closest("details");
+      if (editor) editor.open = true;
+      policyForm.scrollIntoView({ behavior: "smooth", block: "center" });
+      formField(policyForm, "customerId").focus();
+    }
+
+    async function toggleCustomerStatus(customer, button) {
+      const nextStatus = customer.status === "active" ? "suspended" : "active";
+      const verb = nextStatus === "active" ? "恢复" : "停用";
+      if (!window.confirm(verb + "客户“" + safeNarrative(customer.name, 80) + "”？")) return;
+      await runButtonMutation(button, async function () {
+        await requestJson("/api/billing/customers/" + encodeURIComponent(customer.id), {
+          method: "PATCH",
+          body: JSON.stringify({ status: nextStatus }),
+        });
+        await refreshBillingCenter();
+      }, "客户状态已更新", "客户状态更新失败");
+    }
+
+    async function createBillingCustomer(event) {
+      event.preventDefault();
+      await runFormMutation(event, function (form) {
+        return {
+          name: textField(formField(form, "name"), "客户名称", { min: 2, max: 80 }),
+          externalRef: textField(formField(form, "externalRef"), "外部编号", { required: false, max: 80, pattern: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/ }),
+          planId: planReference(formField(form, "planId"), false) || null,
+          enforcementMode: enumField(formField(form, "enforcementMode"), "执行模式", BILLING_MODES),
+          creditLimit: decimalField(formField(form, "creditLimit"), "信用额度"),
+          monthlyTokenLimit: integerField(formField(form, "monthlyTokenLimit"), "月 Token 上限", 24),
+          monthlyRequestLimit: integerField(formField(form, "monthlyRequestLimit"), "月请求上限", 24),
+        };
+      }, "/api/billing/customers", "POST", "客户已创建", true);
+    }
+
+    async function saveBillingPolicy(event) {
+      event.preventDefault();
+      await runFormMutation(event, function (form) {
+        const customerId = customerReference(formField(form, "customerId"));
+        return {
+          path: "/api/billing/customers/" + encodeURIComponent(customerId) + "/policy",
+          body: {
+            planId: planReference(formField(form, "planId"), false) || null,
+            enforcementMode: enumField(formField(form, "enforcementMode"), "执行模式", BILLING_MODES),
+            creditLimit: decimalField(formField(form, "creditLimit"), "信用额度"),
+            monthlyTokenLimit: integerField(formField(form, "monthlyTokenLimit"), "月 Token 上限", 24),
+            monthlyRequestLimit: integerField(formField(form, "monthlyRequestLimit"), "月请求上限", 24),
+          },
+        };
+      }, "", "PATCH", "账户策略已保存", false);
+    }
+
+    async function bindBillingCredential(event) {
+      event.preventDefault();
+      await runFormMutation(event, function (form) {
+        const managerId = enumField(formField(form, "managerId"), "管理器", BILLING_MANAGER_IDS);
+        return {
+          customerId: customerReference(formField(form, "customerId")),
+          managerId: managerId,
+          serviceClientId: serviceClientReference(formField(form, "serviceClientId"), managerId),
+        };
+      }, "/api/billing/credentials", "POST", "凭证绑定已保存", true);
+    }
+
+    async function createBillingAdjustment(event) {
+      event.preventDefault();
+      await runFormMutation(event, function (form) {
+        const customerId = customerReference(formField(form, "customerId"));
+        const amountCredits = decimalField(formField(form, "amountCredits"), "调整积分", { allowNegative: true, allowZero: false });
+        const reason = textField(formField(form, "reason"), "调整原因", { min: 3, max: 500 });
+        const customer = billingState.customers.find(function (item) { return item.id === customerId; });
+        return {
+          body: {
+            customerId: customerId,
+            amountCredits: amountCredits,
+            reason: reason,
+            idempotencyKey: createIdempotencyKey(),
+          },
+          confirmMessage: (amountCredits.startsWith("-")
+            ? "这是不可逆的扣款记录。\n\n"
+            : "这会写入不可变积分账本。\n\n")
+            + "客户：" + (customer ? customer.name + "（" + customer.id + "）" : customerId)
+            + "\n调整：" + amountCredits + " 积分"
+            + "\n原因：" + reason
+            + "\n\n确认继续吗？",
+        };
+      }, "/api/billing/ledger/adjustments", "POST", "积分调整已写入账本", true);
+    }
+
+    async function createBillingPlan(event) {
+      event.preventDefault();
+      await runFormMutation(event, function (form) {
+        return {
+          code: textField(formField(form, "code"), "套餐代码", { min: 2, max: 32, pattern: /^[A-Z0-9][A-Z0-9._-]{1,31}$/ }),
+          name: textField(formField(form, "name"), "套餐名称", { min: 2, max: 80 }),
+          currency: textField(formField(form, "currency"), "币种", { min: 3, max: 3, pattern: /^[A-Z]{3}$/ }),
+          monthlyPrice: decimalField(formField(form, "monthlyPrice"), "月费"),
+          includedCredits: decimalField(formField(form, "includedCredits"), "包含积分"),
+          enforcementMode: enumField(formField(form, "enforcementMode"), "默认执行模式", BILLING_MODES),
+          monthlyTokenLimit: integerField(formField(form, "monthlyTokenLimit"), "月 Token 上限", 24),
+          monthlyRequestLimit: integerField(formField(form, "monthlyRequestLimit"), "月请求上限", 24),
+          active: true,
+        };
+      }, "/api/billing/plans", "POST", "套餐已创建", true);
+    }
+
+    async function createBillingPrice(event) {
+      event.preventDefault();
+      await runFormMutation(event, function (form) {
+        return {
+          planId: planReference(formField(form, "planId"), false) || null,
+          managerId: enumField(formField(form, "managerId"), "管理器", BILLING_MANAGER_IDS),
+          modelPattern: modelPatternField(formField(form, "modelPattern")),
+          inputMicrocreditsPerMillion: integerField(formField(form, "inputMicrocreditsPerMillion"), "输入价格", 19, BILLING_MAX_INT64),
+          cachedInputMicrocreditsPerMillion: integerField(formField(form, "cachedInputMicrocreditsPerMillion"), "缓存输入价格", 19, BILLING_MAX_INT64),
+          outputMicrocreditsPerMillion: integerField(formField(form, "outputMicrocreditsPerMillion"), "输出价格", 19, BILLING_MAX_INT64),
+          active: enumField(formField(form, "active"), "状态", new Set(["true", "false"])) === "true",
+        };
+      }, "/api/billing/prices", "POST", "模型价格已保存", true);
+    }
+
+    async function handleTemplateApply(event) {
+      event.preventDefault();
+      const action = event.submitter && event.submitter.value === "apply" ? "apply" : "preview";
+      clearFormInvalid(templateApplyForm);
+      let payload;
+      try {
+        payload = templateApplyPayload(templateApplyForm);
+      } catch (error) {
+        setNotice(friendlyRequestError(error, "请检查模板套用参数。"), "fail");
+        return;
+      }
+      const signature = stablePayloadSignature(payload);
+      if (action === "apply") {
+        if (!billingState.templatePreview || billingState.templatePreview.signature !== signature) {
+          clearTemplatePreview();
+          setNotice("套用参数已变化，请重新预览后再确认。", "warn");
+          return;
+        }
+        const template = selectedTemplate();
+        if (!window.confirm("确认将“" + (template.displayName || template.model) + "”套用到 " + payload.items[0].modelPattern + "？")) return;
+        await runButtonMutation(event.submitter, async function () {
+          const result = await requestJson("/api/billing/templates/apply", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          clearTemplatePreview();
+          await refreshBillingCenter();
+          setNotice("官方价格模板已原子套用，价格规则已刷新。", "ok");
+          return result;
+        }, "模板已套用", "模板套用失败");
+        return;
+      }
+      await runButtonMutation(event.submitter, async function () {
+        const preview = await requestJson("/api/billing/templates/preview", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        billingState.templatePreview = { signature: signature, response: preview };
+        renderTemplatePreview(preview);
+        templateConfirmButton.disabled = false;
+        setNotice("预览已生成。请核对精确微积分价格后再确认套用。", "ok");
+      }, "模板预览已生成", "模板预览失败");
+    }
+
+    function templateApplyPayload(form) {
+      const template = selectedTemplate();
+      if (!template) throw new Error("请先选择一条官方价格模板");
+      const availability = templateAvailability(template);
+      if (!availability.selectable) throw new Error("所选模板" + availability.label + "，请改选当前生效模板");
+      const managerId = enumField(formField(form, "managerId"), "目标管理器", BILLING_MANAGER_IDS);
+      const planId = planReference(formField(form, "planId"), false);
+      const modelPattern = modelPatternField(formField(form, "modelPattern"));
+      const creditsPerUsd = decimalField(formField(form, "creditsPerUsd"), "USD → 积分倍率", { allowZero: false });
+      const markupBps = integerField(formField(form, "markupBps"), "加价倍率（基点）", 12);
+      if (BigInt(markupBps) === 0n) invalid(formField(form, "markupBps"), "加价倍率必须大于 0");
+      return {
+        items: [{
+          templateId: template.id,
+          managerId: managerId,
+          modelPattern: modelPattern,
+          planId: planId || null,
+        }],
+        creditsPerUsd: creditsPerUsd,
+        markupBps: markupBps,
+      };
+    }
+
+    function renderTemplatePreview(payload) {
+      const box = document.querySelector("#templatePreviewBox");
+      const grid = document.querySelector("#templatePreviewGrid");
+      const warning = document.querySelector("#templatePreviewWarning");
+      const sourceItems = Array.isArray(payload && payload.items) ? payload.items : [];
+      const item = sourceItems[0] || (payload && payload.preview) || payload || {};
+      const price = item.price && typeof item.price === "object" ? item.price : item;
+      const input = integerFromApi(price.inputPerMillionMicrocredits ?? price.inputMicrocreditsPerMillion, "");
+      const cached = integerFromApi(price.cachedInputPerMillionMicrocredits ?? price.cachedInputMicrocreditsPerMillion, "");
+      const output = integerFromApi(price.outputPerMillionMicrocredits ?? price.outputMicrocreditsPerMillion, "");
+      const template = selectedTemplate();
+      const values = [
+        ["模板", template ? (template.displayName || template.model) : "—"],
+        ["目标", safeText(item.modelPattern ?? price.modelPattern ?? formField(templateApplyForm, "modelPattern").value, 160)],
+        ["输入", input === "" ? "后端未返回" : formatMicrocreditRate(input)],
+        ["缓存输入", cached === "" ? "模板未提供" : formatMicrocreditRate(cached)],
+        ["输出", output === "" ? "后端未返回" : formatMicrocreditRate(output)],
+        ["生效时间", formatDateTime(item.effectiveAt ?? price.effectiveAt ?? payload.effectiveAt)],
+      ];
+      grid.replaceChildren(...values.map(function (entry) {
+        const card = node("div", "preview-item");
+        card.append(node("span", "", entry[0]), node("strong", "", entry[1] || "—"));
+        return card;
+      }));
+      const message = safeNarrative(payload && (payload.warning || payload.message), 400);
+      warning.hidden = !message;
+      warning.textContent = message;
+      box.hidden = false;
+    }
+
+    function clearTemplatePreview() {
+      billingState.templatePreview = null;
+      templateConfirmButton.disabled = true;
+      document.querySelector("#templatePreviewBox").hidden = true;
+      document.querySelector("#templatePreviewGrid").replaceChildren();
+      document.querySelector("#templatePreviewWarning").hidden = true;
+    }
+
+    async function runFormMutation(event, buildPayload, defaultPath, method, successMessage, reset) {
+      const form = event.currentTarget;
+      const button = event.submitter || form.querySelector("button[type='submit']");
+      clearFormInvalid(form);
+      let built;
+      try {
+        built = buildPayload(form);
+      } catch (error) {
+        setNotice(friendlyRequestError(error, "请检查输入。"), "fail");
+        return;
+      }
+      const path = built && built.path ? built.path : defaultPath;
+      const body = built && built.body ? built.body : built;
+      if (built && built.confirmMessage && !window.confirm(built.confirmMessage)) {
+        showToast("已取消积分调整");
+        return;
+      }
+      await runButtonMutation(button, async function () {
+        await requestJson(path, { method: method, body: JSON.stringify(body) });
+        if (reset) form.reset();
+        await refreshBillingCenter();
+      }, successMessage, "操作未完成");
+    }
+
+    async function runButtonMutation(button, operation, successMessage, failureMessage) {
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return;
+      button.disabled = true;
+      try {
+        await operation();
+        showToast(successMessage);
+      } catch (error) {
+        const message = friendlyRequestError(error, failureMessage);
+        setNotice(message, "fail");
+        showToast(failureMessage);
+      } finally {
+        button.disabled = button === templateConfirmButton && !billingState.templatePreview;
+      }
+    }
+
+    function syncAllSelectOptions() {
+      document.querySelectorAll("[data-customer-select]").forEach(function (select) {
+        syncSelect(select, billingState.customers, function (item) { return item.id; }, function (item) { return item.name + " · " + item.id; });
+      });
+      document.querySelectorAll("[data-plan-select]").forEach(function (select) {
+        syncSelect(select, billingState.plans.filter(function (item) { return item.active; }), function (item) { return item.id; }, function (item) { return item.name + " · " + item.code; });
+      });
+      syncSelect(document.querySelector("#overviewCustomerPlanFilter"), billingState.plans, function (item) { return item.id; }, function (item) { return item.name; });
+      syncSelect(document.querySelector("#pricePlanFilter"), billingState.plans, function (item) { return item.id; }, function (item) { return item.name; });
+      syncBillingClientOptions();
+      syncPriceProviderOptions();
+    }
+
+    function syncSelect(select, items, valueOf, labelOf) {
+      if (!(select instanceof HTMLSelectElement)) return;
+      const previous = select.value;
+      const placeholder = select.options[0] ? select.options[0].textContent : "请选择";
+      const options = [new Option(placeholder, "")];
+      items.slice(0, BILLING_MAX_ITEMS).forEach(function (item) {
+        const value = safeId(valueOf(item));
+        if (value) options.push(new Option(safeText(labelOf(item), 180), value));
+      });
+      select.replaceChildren(...options);
+      if (options.some(function (option) { return option.value === previous; })) select.value = previous;
+    }
+
+    function syncPriceProviderOptions() {
+      const select = document.querySelector("#priceProviderFilter");
+      const previous = select.value;
+      const providers = Array.from(new Set(billingState.prices.map(function (item) { return item.templateProvider; }).filter(Boolean))).sort();
+      select.replaceChildren(new Option("全部来源", ""), ...providers.map(function (provider) { return new Option(provider, provider); }));
+      if (providers.includes(previous)) select.value = previous;
+    }
+
+    function syncBillingClientOptions() {
+      const select = formField(credentialForm, "serviceClientId");
+      const managerSelect = formField(credentialForm, "managerId");
+      if (!(select instanceof HTMLSelectElement) || !(managerSelect instanceof HTMLSelectElement)) return;
+      const previous = select.value;
+      const clients = availableClients(managerSelect.value);
+      const options = [new Option(clients.length ? "选择现有服务客户端" : "该管理器暂无可绑定客户端", "")];
+      clients.forEach(function (client) {
+        const preview = client.keyPreview ? " · " + client.keyPreview : "";
+        const status = client.enabled ? "" : " · 已停用";
+        options.push(new Option(client.name + " · " + client.id + preview + status, client.id));
+      });
+      select.replaceChildren(...options);
+      if (options.some(function (option) { return option.value === previous; })) select.value = previous;
+      select.disabled = clients.length === 0;
+      const help = document.querySelector("#billingClientHelp");
+      help.textContent = clients.length
+        ? "已从 /api/status 读取 " + clients.length + " 个脱敏客户端；只显示名称、ID 和 Key 预览。"
+        : "未找到可绑定客户端。请先在对应管理器创建服务客户端；此处不接受手工 Key。";
+    }
+
+    function availableClients(managerId) {
+      if (!BILLING_MANAGER_IDS.has(managerId)) return [];
+      const statusManagerId = managerId.replace(/-manager$/, "");
+      const manager = latestManagers.find(function (item) { return safeText(item && item.id, 40) === statusManagerId; });
+      const source = manager && manager.clients && Array.isArray(manager.clients.clients) ? manager.clients.clients : [];
+      const clients = source.slice(0, BILLING_MAX_ITEMS).map(function (item) {
+        const id = safeId(item && item.id);
+        if (!id) return null;
+        return {
+          id: id,
+          name: safeText(item.name || id, 80),
+          enabled: item.enabled !== false,
+          keyPreview: safeKeyPreview(item.keyPreview),
+        };
+      }).filter(Boolean);
+      const exposure = manager && manager.exposure && manager.exposure.settings && typeof manager.exposure.settings === "object"
+        ? manager.exposure.settings
+        : {};
+      const globalId = safeId(exposure.billingClientId);
+      if (globalId && exposure.hasApiKey === true && !clients.some(function (item) { return item.id === globalId; })) {
+        clients.unshift({
+          id: globalId,
+          name: "全局服务 Key（兼容凭证）",
+          enabled: exposure.enabled !== false,
+          keyPreview: safeKeyPreview(exposure.apiKeyPreview),
+        });
+      }
+      return clients.slice(0, BILLING_MAX_ITEMS);
+    }
+
+    function textField(control, label, options) {
+      const settings = options || {};
+      const raw = String(control && control.value !== undefined ? control.value : "");
+      const value = raw.trim();
+      if (!value && settings.required === false) return "";
+      if (!value) return invalid(control, label + "不能为空");
+      if (/[\u0000-\u001f\u007f]/.test(raw)) return invalid(control, label + "不能包含控制字符");
+      if (settings.min && value.length < settings.min) return invalid(control, label + "至少 " + settings.min + " 个字符");
+      if (settings.max && value.length > settings.max) return invalid(control, label + "最多 " + settings.max + " 个字符");
+      if (settings.pattern && !settings.pattern.test(value)) return invalid(control, label + "格式不正确");
+      return value;
+    }
+
+    function decimalField(control, label, options) {
+      const settings = options || {};
+      const raw = String(control && control.value !== undefined ? control.value : "").trim();
+      const expression = settings.allowNegative ? /^-?(?:0|[1-9]\d{0,17})(?:\.\d{1,6})?$/ : /^(?:0|[1-9]\d{0,17})(?:\.\d{1,6})?$/;
+      if (!expression.test(raw)) return invalid(control, label + "必须是最多 18 位整数、6 位小数的规范十进制字符串");
+      if (settings.allowZero === false && decimalIsZero(raw)) return invalid(control, label + "不能为 0");
+      return raw;
+    }
+
+    function integerField(control, label, maxDigits, maxValue) {
+      const raw = String(control && control.value !== undefined ? control.value : "").trim();
+      if (!/^(?:0|[1-9]\d*)$/.test(raw) || raw.length > maxDigits) {
+        return invalid(control, label + "必须是最多 " + maxDigits + " 位的非负整数");
+      }
+      if (maxValue !== undefined && BigInt(raw) > maxValue) return invalid(control, label + "不能超过 " + maxValue.toString());
+      return raw;
+    }
+
+    function enumField(control, label, allowed) {
+      const value = String(control && control.value !== undefined ? control.value : "").trim();
+      return allowed.has(value) ? value : invalid(control, "请选择有效的" + label);
+    }
+
+    function modelPatternField(control) {
+      return textField(control, "模型匹配规则", { min: 1, max: 160, pattern: /^[A-Za-z0-9][A-Za-z0-9._*?\/:@+\-]{0,159}$/ });
+    }
+
+    function customerReference(control) {
+      const value = safeId(control && control.value);
+      return value && billingState.customers.some(function (item) { return item.id === value; })
+        ? value
+        : invalid(control, "请选择当前客户");
+    }
+
+    function planReference(control, required) {
+      const raw = String(control && control.value !== undefined ? control.value : "").trim();
+      if (!raw && !required) return "";
+      const value = safeId(raw);
+      return value && billingState.plans.some(function (item) { return item.id === value && item.active; })
+        ? value
+        : invalid(control, required ? "请选择有效套餐" : "套餐记录已经变化，请重新选择");
+    }
+
+    function serviceClientReference(control, managerId) {
+      const value = safeId(control && control.value);
+      const client = availableClients(managerId).find(function (item) { return item.id === value; });
+      if (!client) return invalid(control, "请选择对应管理器的现有服务客户端");
+      if (!client.enabled) return invalid(control, "该服务客户端已停用，请选择启用的客户端");
+      return value;
+    }
+
+    function invalid(control, message) {
+      if (control && typeof control.setAttribute === "function") {
+        control.setAttribute("aria-invalid", "true");
+        if (typeof control.setCustomValidity === "function") control.setCustomValidity(message);
+        const field = control.closest(".field, label");
+        if (field) {
+          let error = field.querySelector(".field-error");
+          if (!error) {
+            error = document.createElement("small");
+            error.className = "field-error";
+            error.id = "billing-field-error-" + Math.random().toString(36).slice(2, 9);
+            field.appendChild(error);
+          }
+          error.textContent = message;
+          control.setAttribute("aria-describedby", error.id);
+        }
+        control.focus();
+        if (typeof control.reportValidity === "function") control.reportValidity();
+      }
+      throw new Error(message);
+    }
+
+    function clearFormInvalid(form) {
+      form.querySelectorAll("[aria-invalid='true']").forEach(clearControlInvalid);
+      form.querySelectorAll(".field-error").forEach(function (error) { error.remove(); });
+    }
+
+    function clearControlInvalid(control) {
+      const describedBy = control.getAttribute("aria-describedby");
+      control.removeAttribute("aria-invalid");
+      control.removeAttribute("aria-describedby");
+      if (typeof control.setCustomValidity === "function") control.setCustomValidity("");
+      if (describedBy) document.getElementById(describedBy)?.remove();
+    }
+
+    function setFormValue(form, name, value) {
+      const control = formField(form, name);
+      if (control) control.value = value === undefined || value === null ? "" : String(value);
+    }
+
+    function formField(form, name) {
+      return form && form.elements ? form.elements.namedItem(name) : null;
+    }
+
+    function resetOverviewFilters() {
+      document.querySelector("#overviewCustomerSearch").value = "";
+      document.querySelector("#overviewCustomerPlanFilter").value = "";
+      document.querySelector("#overviewCustomerModeFilter").value = "";
+      document.querySelector("#overviewCustomerStatusFilter").value = "";
+      renderOverviewCustomers();
+    }
+
+    function selectedTemplate() {
+      return billingState.templates.find(function (item) { return item.id === billingState.selectedTemplateId; }) || null;
+    }
+
+    function stablePayloadSignature(payload) {
+      const item = payload.items[0];
+      return [
+        item.templateId, item.managerId, item.modelPattern, item.planId || "",
+        payload.creditsPerUsd, payload.markupBps,
+      ].join("\u001f");
+    }
+
+    function customerActionsNode(customer) {
+      const wrap = node("div", "row-actions");
+      const edit = node("button", "quiet small", "策略");
+      edit.type = "button";
+      edit.dataset.customerAction = "edit";
+      edit.dataset.customerId = customer.id;
+      const toggle = node("button", "quiet small", customer.status === "active" ? "停用" : "恢复");
+      toggle.type = "button";
+      toggle.dataset.customerAction = "toggle";
+      toggle.dataset.customerId = customer.id;
+      wrap.append(edit, toggle);
+      return wrap;
+    }
+
+    function customerStatusNode(status) {
+      if (status === "active") return statusNode("启用", "ok");
+      if (status === "suspended") return statusNode("停用", "warn");
+      return statusNode("关闭", "fail");
+    }
+
+    function statusNode(text, tone) {
+      return node("span", "status " + (tone || ""), safeText(text, 60));
+    }
+
+    function addCell(row, value, options) {
+      const settings = options || {};
+      const cell = node("td");
+      if (settings.node && value instanceof Node) {
+        cell.append(value);
+      } else {
+        const primary = node(settings.code ? "code" : "span", "", safeNarrative(value, 500));
+        cell.append(primary);
+      }
+      if (settings.detail) {
+        const detail = node("div", "", safeNarrative(settings.detail, 240));
+        detail.style.color = "var(--muted)";
+        detail.style.fontSize = "11px";
+        detail.style.marginTop = "3px";
+        cell.append(detail);
+      }
+      row.append(cell);
+      return cell;
+    }
+
+    function setEmptyTable(body, columns, message) {
+      const row = node("tr");
+      const cell = node("td", "empty-cell", safeNarrative(message, 240));
+      cell.colSpan = columns;
+      row.append(cell);
+      body.replaceChildren(row);
+    }
+
+    function node(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      if (text !== undefined) element.textContent = safeText(text, 1000);
+      return element;
+    }
+
+    function setText(selector, value) {
+      const element = document.querySelector(selector);
+      if (element) element.textContent = safeText(value, 1000);
+    }
+
+    function setBillingBusy(busy) {
+      workbench.classList.toggle("busy", busy);
+      refreshButton.disabled = busy;
+      workbench.setAttribute("aria-busy", String(busy));
+    }
+
+    function setApiState(message, tone) {
+      apiState.textContent = safeText(message, 120);
+      apiState.className = "api-status " + (tone || "");
+    }
+
+    function setNotice(message, tone, hide) {
+      if (hide || !message) {
+        notice.hidden = true;
+        notice.textContent = "";
+        notice.className = "notice";
+        return;
+      }
+      notice.hidden = false;
+      notice.className = "notice " + (tone || "");
+      notice.textContent = safeNarrative(message, 900);
+    }
+
+    function showToast(message, tone) {
+      const failed = tone === "fail" || /失败|未完成|错误|不可用|超时/.test(String(message || ""));
+      toast.textContent = safeNarrative(message, 200);
+      toast.classList.toggle("fail", failed);
+      toast.setAttribute("role", failed ? "alert" : "status");
+      toast.setAttribute("aria-live", failed ? "assertive" : "polite");
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(function () { toast.classList.remove("show"); }, failed ? 9000 : 3200);
+    }
+
+    function safeText(value, maxLength) {
+      const limit = Number.isInteger(maxLength) ? maxLength : 500;
+      return String(value ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").slice(0, limit);
+    }
+
+    function safeNarrative(value, maxLength) {
+      return safeText(value, maxLength).replace(BILLING_SECRET_PATTERN, "[已脱敏]");
+    }
+
+    function safeId(value) {
+      const text = safeText(value, 160).trim();
+      return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(text) ? text : "";
+    }
+
+    function safeKeyPreview(value) {
+      const text = safeText(value, 80).trim();
+      if (!text || /[\s<>]/.test(text) || text.length > 80) return "";
+      return text;
+    }
+
+    function safeHttpUrl(value) {
+      const text = safeText(value, 500).trim();
+      if (!text) return "";
+      try {
+        const url = new URL(text);
+        return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+      } catch {
+        return "";
+      }
+    }
+
+    function normalizeCurrency(value) {
+      const text = safeText(value, 3).toUpperCase();
+      return /^[A-Z]{3}$/.test(text) ? text : "USD";
+    }
+
+    function decimalFromApi(value, fallback, allowNegative) {
+      const text = String(value ?? "").trim();
+      const expression = allowNegative ? /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/ : /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+      return expression.test(text) ? normalizeDecimal(text) : fallback;
+    }
+
+    function integerFromApi(value, fallback, allowNegative) {
+      const text = String(value ?? "").trim();
+      const expression = allowNegative ? /^-?(?:0|[1-9]\d*)$/ : /^(?:0|[1-9]\d*)$/;
+      return expression.test(text) ? text : fallback;
+    }
+
+    function creditsFromApi(creditValue, microcreditValue, fallback, allowNegative) {
+      const direct = decimalFromApi(creditValue, "", allowNegative);
+      if (direct !== "") return direct;
+      return microcreditsToCredits(microcreditValue, fallback, allowNegative);
+    }
+
+    function microcreditsToCredits(value, fallback, allowNegative) {
+      const raw = integerFromApi(value, "", allowNegative);
+      if (raw === "") return fallback;
+      const negative = raw.startsWith("-");
+      const digits = negative ? raw.slice(1) : raw;
+      const padded = digits.padStart(7, "0");
+      const integerPart = padded.slice(0, -6).replace(/^0+(?=\d)/, "") || "0";
+      const fraction = padded.slice(-6).replace(/0+$/, "");
+      const output = integerPart + (fraction ? "." + fraction : "");
+      return negative && output !== "0" ? "-" + output : output;
+    }
+
+    function normalizeDecimal(value) {
+      const text = String(value);
+      const negative = text.startsWith("-");
+      const unsigned = negative ? text.slice(1) : text;
+      const parts = unsigned.split(".");
+      const integer = parts[0].replace(/^0+(?=\d)/, "") || "0";
+      const fraction = (parts[1] || "").replace(/0+$/, "");
+      const result = integer + (fraction ? "." + fraction : "");
+      return negative && result !== "0" ? "-" + result : result;
+    }
+
+    function decimalIsZero(value) {
+      return /^-?0(?:\.0+)?$/.test(String(value));
+    }
+
+    function formatInteger(value) {
+      const raw = integerFromApi(value, "0", true);
+      try { return BigInt(raw).toLocaleString("zh-CN"); } catch { return "0"; }
+    }
+
+    function formatDecimal(value) {
+      const raw = decimalFromApi(value, "0", true);
+      const negative = raw.startsWith("-");
+      const unsigned = negative ? raw.slice(1) : raw;
+      const parts = unsigned.split(".");
+      let integer = parts[0];
+      try { integer = BigInt(integer).toLocaleString("zh-CN"); } catch { integer = "0"; }
+      return (negative ? "-" : "") + integer + (parts[1] ? "." + parts[1] : "");
+    }
+
+    function formatCredits(value) {
+      return formatDecimal(value || "0") + " 积分";
+    }
+
+    function formatSignedCredits(value) {
+      const raw = decimalFromApi(value, "0", true);
+      return (raw.startsWith("-") || decimalIsZero(raw) ? "" : "+") + formatDecimal(raw) + " 积分";
+    }
+
+    function formatMicrocreditRate(value) {
+      const raw = integerFromApi(value, "0");
+      return formatInteger(raw) + " 微积分 / 1M（" + formatCredits(microcreditsToCredits(raw, "0")) + "）";
+    }
+
+    function sumIntegers(values) {
+      return values.reduce(function (total, value) {
+        const raw = integerFromApi(value, "0");
+        return total + BigInt(raw);
+      }, 0n).toString();
+    }
+
+    function sumDecimals(values, scale) {
+      const factor = 10n ** BigInt(scale);
+      const total = values.reduce(function (sum, value) {
+        const raw = decimalFromApi(value, "0", true);
+        const negative = raw.startsWith("-");
+        const unsigned = negative ? raw.slice(1) : raw;
+        const parts = unsigned.split(".");
+        const units = BigInt(parts[0]) * factor + BigInt((parts[1] || "").padEnd(scale, "0").slice(0, scale) || "0");
+        return sum + (negative ? -units : units);
+      }, 0n);
+      return microcreditsToCredits(total.toString(), "0", true);
+    }
+
+    function formatDateTime(value) {
+      const text = safeText(value, 80);
+      if (!text) return "—";
+      const date = new Date(text);
+      return Number.isNaN(date.getTime()) ? text : date.toLocaleString("zh-CN", { hour12: false, timeZoneName: "short" });
+    }
+
+    function managerLabel(value) {
+      if (value === "vllm-manager" || value === "vllm") return "vLLM Manager";
+      if (value === "llama-manager" || value === "llama") return "llama.cpp Manager";
+      return safeText(value || "—", 60);
+    }
+
+    function planLabel(planId) {
+      if (!planId) return "全局 / 未绑定";
+      const plan = billingState.plans.find(function (item) { return item.id === planId; });
+      return plan ? plan.name : planId;
+    }
+
+    function customerLabel(customerId) {
+      if (!customerId) return "—";
+      const customer = billingState.customers.find(function (item) { return item.id === customerId; });
+      return customer ? customer.name : customerId;
+    }
+
+    function quotaLabel(value, unit) {
+      const raw = integerFromApi(value, "0");
+      return BigInt(raw) === 0n ? "不限" + unit : formatInteger(raw) + " " + unit;
+    }
+
+    function effectiveLabel(template) {
+      if (template.effectiveFrom && template.effectiveTo) return template.effectiveFrom + " 至 " + template.effectiveTo;
+      if (template.effectiveFrom) return "自 " + template.effectiveFrom;
+      if (template.effectiveTo) return "至 " + template.effectiveTo;
+      return "未标生效期";
+    }
+
+    function templateAvailability(template) {
+      if (!template.active) return { selectable: false, label: "已停用" };
+      const now = Date.now();
+      const from = template.effectiveFrom ? new Date(template.effectiveFrom).getTime() : NaN;
+      const to = template.effectiveTo ? new Date(template.effectiveTo).getTime() : NaN;
+      if (Number.isFinite(from) && now < from) return { selectable: false, label: "未生效" };
+      if (Number.isFinite(to) && now >= to) return { selectable: false, label: "已过期" };
+      return { selectable: true, label: "当前生效" };
+    }
+
+    function endpointLabel(kind) {
+      const labels = {
+        status: "服务客户端",
+        overview: "总览",
+        customers: "客户",
+        plans: "套餐",
+        prices: "价格",
+        credentials: "凭证",
+        usage: "用量",
+        ledger: "账本",
+        auditEvents: "审计",
+        templates: "官方模板",
+      };
+      return labels[kind] || kind;
+    }
+
+    function createIdempotencyKey() {
+      if (typeof crypto.randomUUID === "function") return "manual-" + crypto.randomUUID();
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return "manual-" + Array.from(bytes, function (value) { return value.toString(16).padStart(2, "0"); }).join("");
+    }
+  </script>
+</body>
+</html>

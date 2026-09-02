@@ -1,0 +1,48 @@
+name: openwebui-production
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui@sha256:7f1b0a1a50cfbac23da3b16f96bc968fd757b26dc9e54e93813d61768ea9184e
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      WEBUI_URL: "https://${WEBUI_DOMAIN}"
+      CORS_ALLOW_ORIGIN: "https://${WEBUI_DOMAIN}"
+      WEBUI_SESSION_COOKIE_SECURE: "true"
+      WEBUI_AUTH_COOKIE_SECURE: "true"
+      WEBUI_SESSION_COOKIE_SAME_SITE: "lax"
+      WEBUI_AUTH_COOKIE_SAME_SITE: "lax"
+      ENABLE_WEBSOCKET_SUPPORT: "true"
+      AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST: "3"
+      OPENAI_API_BASE_URL: "http://host.docker.internal:5176/gateway/auto/openai/v1"
+      OPENAI_API_KEY: "${MODEL_GATEWAY_API_KEY:-local-gateway}"
+      ENABLE_WEB_SEARCH: "true"
+      RAG_WEB_SEARCH_ENGINE: "searxng"
+      SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>&format=json"
+      WEB_SEARCH_RESULT_COUNT: "5"
+      WEB_SEARCH_CONCURRENT_REQUESTS: "2"
+      ANONYMIZED_TELEMETRY: "false"
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+    volumes:
+      - open-webui:/app/backend/data
+    networks:
+      - searxng
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  open-webui:
+    external: true
+
+networks:
+  searxng:
+    external: true
+    name: searxng_searxng-net
