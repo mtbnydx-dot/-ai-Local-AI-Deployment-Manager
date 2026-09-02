@@ -119,13 +119,15 @@ const profileRenderer = window.LocalAiProfileRenderer.create({
   },
   metrics(profile) {
     const cfg = profile.config || {};
-    return [
+    const metrics = [
       String(cfg.engine || "vllm").toUpperCase(),
       `${fmtTokens(cfg.maxModelLen || 0)} 上下文`,
       `${fmtTokens(cfg.maxNumSeqs || 0)} 并发`,
       `${cfg.kvCacheDtype || "auto"} KV`,
       cfg.clientPreset || "generic",
     ];
+    if (cfg.engine === "sglang" && cfg.sglangPleOffloadEmbedding) metrics.splice(4, 0, "PLE→RAM");
+    return metrics;
   },
   summaryParts(profile) {
     const cfg = profile.config || {};
@@ -652,6 +654,9 @@ function renderVllmLaunchReview() {
   const instanceMode = $("#instanceMode")?.value === "parallel" ? "parallel" : "replace";
   const instanceId = $("#instanceId")?.value.trim() || name;
   const runtimeEngine = $("#runtimeEngine")?.value === "sglang" ? "SGLang" : "vLLM";
+  const sglangPath = runtimeEngine === "SGLang"
+    ? `<div><span>SGLang 路径</span><strong>${escapeHtml($("#sglangPleOffloadEmbedding")?.checked ? "PLE→RAM" : "PLE GPU")} · ${escapeHtml($("#sglangLinearAttnPrefillBackend")?.value || "auto")} / ${escapeHtml($("#sglangLinearAttnDecodeBackend")?.value || "auto")} · Mamba ${escapeHtml($("#sglangMaxMambaCacheSize")?.value || "auto")}</strong></div>`
+    : "";
   const transition = instanceMode === "parallel"
     ? `新增并行实例 ${instanceId}`
     : running
@@ -668,6 +673,7 @@ function renderVllmLaunchReview() {
       <div><span>GPU</span><strong>${escapeHtml(selectedGpus.map((gpu) => gpu.id).join(", ") || "未检测")}</strong></div>
       <div><span>量化 / KV</span><strong>${escapeHtml($("#launchQuantization")?.value || "自动")} / ${escapeHtml($("#kvCacheDtype")?.value || "auto")}</strong></div>
       <div><span>推测解码</span><strong>${escapeHtml(speculative)}</strong></div>
+      ${sglangPath}
       <div><span>实例 / 端口</span><strong>${escapeHtml(instanceMode === "parallel" ? `并行 ${instanceId}` : "替换主实例")} / ${escapeHtml($("#servicePort")?.value || "-")}</strong></div>
       <div><span>访问</span><strong>${network}${$("#vllmApiKey")?.value.trim() ? " / 已设置 Key" : " / 无 Key"}</strong></div>
     </div>
@@ -734,6 +740,22 @@ async function confirmVllmLaunch(payload) {
 function updateLaunchOptionStates() {
   const speculativeMode = $("#speculativeMode")?.value || "off";
   const runtimeEngine = $("#runtimeEngine")?.value || "vllm";
+  const sglangEnabled = runtimeEngine === "sglang";
+  const flashNextModel = /qwen3\.?8.*flash[-_. ]?next|flash[-_. ]?next.*qwen3\.?8/i.test($("#startModel")?.value || "");
+  const sglangControls = $("#sglangAdvancedControls");
+  if (sglangControls) sglangControls.hidden = !sglangEnabled;
+  const sglangNote = $("#sglangProfileNote");
+  if (sglangNote) {
+    sglangNote.hidden = !sglangEnabled;
+    if (sglangEnabled && flashNextModel) {
+      const cacheSize = Math.max(1, Number($("#sglangMaxMambaCacheSize")?.value || 8));
+      const requested = Math.max(1, Number($("#maxNumSeqs")?.value || 1));
+      const effective = Math.min(requested, Math.max(1, Math.floor(cacheSize / 5)));
+      sglangNote.textContent = `Flash-Next 稳定路径：完整 SM120 QSA 修复、BF16 KV、PLE→RAM、GDN prefill Triton / decode FlashInfer。Mamba cache ${cacheSize} 下当前有效并发为 ${effective}。`;
+    } else if (sglangEnabled) {
+      sglangNote.textContent = "这些是 SGLang 专用参数；普通模型留空或填 0 即使用运行时默认值。Flash-Next 请优先套用内置 262K 稳定档。";
+    }
+  }
   const speculativeTokens = $("#numSpeculativeTokens");
   if (speculativeMode === "dspark" && runtimeEngine !== "sglang") $("#runtimeEngine").value = "sglang";
   if (speculativeTokens) speculativeTokens.disabled = ["auto", "off", "dspark"].includes(speculativeMode);
@@ -820,7 +842,13 @@ function groupContextControls() {
   const kv = createControlGroup("显存与 KV cache", "显存占用比例决定 KV cache 池大小；KV 精度选 FP8 更省显存。", ["#gpuMemoryUtilization", "#kvCacheDtype"]);
   const offload = createControlDisclosure("显存 offload 与多模态预留", "CPU offload 是每卡权重回退，KV offload 是总 KV 缓冲；能救容量但会拖慢。", ["#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#disablePrefixCaching", "#languageModelOnly"]);
   const speculative = createControlGroup("推测解码", "MTP 使用主模型内置张量；DSpark 使用外部草稿模型并切换到 SGLang。", ["#speculativeMode", "#numSpeculativeTokens", "#draftModelField", "#dsparkBlockSizeField", "#runtimeImage"]);
-  grid.replaceChildren(basic, kv, offload, speculative);
+  const sglang = createControlDisclosure("SGLang Flash-Next 高级参数", "PLE、QSA、GDN 与 Mamba 参数；262K 稳定档已填入验证值。", [
+    "#sglangMaxTotalTokens", "#sglangPageSize", "#sglangChunkedPrefillSize", "#sglangAttentionBackend", "#sglangFp4GemmBackend",
+    "#sglangPleOffloadEmbedding", "#sglangLinearAttnPrefillBackend", "#sglangLinearAttnDecodeBackend", "#sglangMambaSsmDtype",
+    "#sglangMambaRadixCacheStrategy", "#sglangMambaTrackInterval", "#sglangMaxMambaCacheSize", "#sglangDisableThinkingByDefault", "#sglangProfileNote",
+  ]);
+  sglang.id = "sglangAdvancedControls";
+  grid.replaceChildren(basic, kv, offload, speculative, sglang);
 }
 
 function createControlGroup(title, description, selectors) {
@@ -1165,7 +1193,7 @@ function bindEvents() {
   $("#downloadHfMirror")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadHfTransfer")?.addEventListener("change", saveDownloadQueueMode);
   $("#remoteSource")?.addEventListener("change", refreshRemoteModels);
-  ["#startModel", "#runtimeEngine", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#launchDtype", "#launchQuantization", "#loadFormat", "#kvCacheDtype", "#tensorParallelSize", "#pipelineParallelSize", "#dataParallelSize", "#languageModelOnly", "#speculativeMode", "#numSpeculativeTokens", "#dsparkBlockSize"].forEach((selector) => {
+  ["#startModel", "#runtimeEngine", "#maxModelLen", "#maxNumSeqs", "#gpuMemoryUtilization", "#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#launchDtype", "#launchQuantization", "#loadFormat", "#kvCacheDtype", "#tensorParallelSize", "#pipelineParallelSize", "#dataParallelSize", "#languageModelOnly", "#speculativeMode", "#numSpeculativeTokens", "#dsparkBlockSize", "#sglangMaxTotalTokens", "#sglangPageSize", "#sglangChunkedPrefillSize", "#sglangMambaTrackInterval", "#sglangMaxMambaCacheSize"].forEach((selector) => {
     const node = $(selector);
     if (!node) return;
     node.addEventListener("input", updateMemoryEstimate);
@@ -2305,7 +2333,7 @@ function getLaunchFormConfig() {
   const form = new FormData($("#startForm"));
   const payload = Object.fromEntries(form.entries());
   payload.gpuDeviceIds = form.getAll("gpuDeviceIds");
-  ["trustRemoteCode", "enableExpertParallel", "disablePrefixCaching", "languageModelOnly", "enableAutoToolChoice"].forEach((key) => {
+  ["trustRemoteCode", "enableExpertParallel", "disablePrefixCaching", "languageModelOnly", "enableAutoToolChoice", "sglangPleOffloadEmbedding", "sglangDisableThinkingByDefault"].forEach((key) => {
     payload[key] = form.get(key) === "on";
   });
   return payload;
@@ -2349,6 +2377,17 @@ function applyLaunchProfile(config = {}, options = {}) {
   set("#runtimeImage", config.runtimeImage);
   set("#draftModel", config.draftModel);
   set("#dsparkBlockSize", config.dsparkBlockSize);
+  set("#sglangMaxTotalTokens", config.sglangMaxTotalTokens);
+  set("#sglangPageSize", config.sglangPageSize);
+  set("#sglangChunkedPrefillSize", config.sglangChunkedPrefillSize);
+  set("#sglangFp4GemmBackend", config.sglangFp4GemmBackend);
+  set("#sglangAttentionBackend", config.sglangAttentionBackend);
+  set("#sglangLinearAttnPrefillBackend", config.sglangLinearAttnPrefillBackend);
+  set("#sglangLinearAttnDecodeBackend", config.sglangLinearAttnDecodeBackend);
+  set("#sglangMambaSsmDtype", config.sglangMambaSsmDtype);
+  set("#sglangMambaRadixCacheStrategy", config.sglangMambaRadixCacheStrategy);
+  set("#sglangMambaTrackInterval", config.sglangMambaTrackInterval);
+  set("#sglangMaxMambaCacheSize", config.sglangMaxMambaCacheSize);
   if (Object.hasOwn(config, "runtimeImage") && $("#runtimeImage")) $("#runtimeImage").value = String(config.runtimeImage || "");
   if (Object.hasOwn(config, "draftModel") && $("#draftModel")) $("#draftModel").value = String(config.draftModel || "");
   const checks = {
@@ -2357,6 +2396,8 @@ function applyLaunchProfile(config = {}, options = {}) {
     disablePrefixCaching: "#disablePrefixCaching",
     languageModelOnly: "#languageModelOnly",
     enableAutoToolChoice: "#enableAutoToolChoice",
+    sglangPleOffloadEmbedding: "#sglangPleOffloadEmbedding",
+    sglangDisableThinkingByDefault: "#sglangDisableThinkingByDefault",
   };
   Object.entries(checks).forEach(([key, selector]) => {
     const element = $(selector);
@@ -2407,7 +2448,12 @@ function renderRuntimeConfigBanner(config, modelId) {
     banner.id = "runtimeConfigBanner";
     stage.prepend(banner);
   }
-  banner.innerHTML = `<strong>已载入当前运行参数</strong><span>${escapeHtml(modelId)} · ${fmtTokens(Number(config.maxModelLen || 0))} 上下文 · ${fmtNumber(Number(config.maxNumSeqs || 0))} 并发。只有套用方案或自动调优会改写这些值。</span>`;
+  const requestedConcurrency = Number(config.maxNumSeqs || 0);
+  const effectiveConcurrency = Number(config.effectiveMaxRunningRequests || requestedConcurrency);
+  const concurrencyText = effectiveConcurrency && effectiveConcurrency !== requestedConcurrency
+    ? `${fmtNumber(requestedConcurrency)} 请求 / ${fmtNumber(effectiveConcurrency)} 有效并发`
+    : `${fmtNumber(requestedConcurrency)} 并发`;
+  banner.innerHTML = `<strong>已载入当前运行参数</strong><span>${escapeHtml(modelId)} · ${fmtTokens(Number(config.maxModelLen || 0))} 上下文 · ${concurrencyText}。只有套用方案或自动调优会改写这些值。</span>`;
 }
 
 async function runModelCheck(event) {
@@ -3015,7 +3061,7 @@ function estimateMemoryUsage(contextOverride) {
   const overheadGb = paramsB ? Math.max(1.2, (weightPerGpuGb + kvPerGpuGb) * 0.08) + multimodalReserveGb : 0;
   const perGpuGb = weightPerGpuGb + kvPerGpuGb + overheadGb;
   const totalGb = perGpuGb * memorySplitFactor;
-  const utilization = Math.min(0.98, Math.max(0.1, Number($("#gpuMemoryUtilization")?.value || 0.9)));
+  const utilization = Math.min(0.999, Math.max(0.1, Number($("#gpuMemoryUtilization")?.value || 0.9)));
   const selectedGpus = getSelectedGpuObjects().map(normalizeVllmPlanGpu);
   const minUsableGb = selectedGpus.length
     ? Math.min(...selectedGpus.map((gpu) => Number(gpu.usableGb || 0)))
@@ -4637,8 +4683,13 @@ function validateVllmLaunchForm(form) {
   if (!integer("#dataParallelSize", "数据并行", 1, 1024)) return false;
   if (!integer("#numSpeculativeTokens", "推测 token 数", 1, 256)) return false;
   if (!integer("#dsparkBlockSize", "DSpark block size", 1, 32)) return false;
+  if (!integer("#sglangMaxTotalTokens", "SGLang memory pool tokens", 0, 4_194_304)) return false;
+  if (!integer("#sglangPageSize", "SGLang page size", 0, 4096)) return false;
+  if (!integer("#sglangChunkedPrefillSize", "SGLang chunked prefill", 0, 4_194_304)) return false;
+  if (!integer("#sglangMambaTrackInterval", "Mamba track interval", 0, 4_194_304)) return false;
+  if (!integer("#sglangMaxMambaCacheSize", "Max Mamba cache size", 0, 4096)) return false;
   const utilization = Number($("#gpuMemoryUtilization")?.value);
-  if (!Number.isFinite(utilization) || utilization < 0.1 || utilization > 0.98) return fail($("#gpuMemoryUtilization"), "显存分配比例必须在 0.1–0.98 之间。");
+  if (!Number.isFinite(utilization) || utilization < 0.1 || utilization > 0.999) return fail($("#gpuMemoryUtilization"), "显存分配比例必须在 0.1–0.999 之间。");
   if (!nonNegative("#cpuOffloadGb", "CPU offload", 4096)) return false;
   if (!nonNegative("#kvOffloadingSize", "KV offload", 4_194_304)) return false;
   if (!nonNegative("#mmProcessorCacheGb", "多模态缓存", 4096)) return false;
@@ -4653,6 +4704,8 @@ function buildVllmLaunchPayload(formElement) {
   payload.enableExpertParallel = form.get("enableExpertParallel") === "on";
   payload.disablePrefixCaching = form.get("disablePrefixCaching") === "on";
   payload.languageModelOnly = form.get("languageModelOnly") === "on";
+  payload.sglangPleOffloadEmbedding = form.get("sglangPleOffloadEmbedding") === "on";
+  payload.sglangDisableThinkingByDefault = form.get("sglangDisableThinkingByDefault") === "on";
   payload.instanceMode = payload.instanceMode === "parallel" ? "parallel" : "replace";
   payload.instanceId = payload.instanceMode === "parallel" ? String(payload.instanceId || payload.name || "").trim() : "";
   payload.networkAccess = String(payload.networkAccess || "local");
@@ -4684,6 +4737,17 @@ function buildVllmLaunchPayload(formElement) {
   payload.runtimeImage = String(payload.runtimeImage || "").trim();
   payload.draftModel = String(payload.draftModel || "").trim();
   payload.dsparkBlockSize = Number(payload.dsparkBlockSize || 7);
+  payload.sglangMaxTotalTokens = Number(payload.sglangMaxTotalTokens || 0);
+  payload.sglangPageSize = Number(payload.sglangPageSize || 0);
+  payload.sglangChunkedPrefillSize = Number(payload.sglangChunkedPrefillSize || 0);
+  payload.sglangFp4GemmBackend = String(payload.sglangFp4GemmBackend || "");
+  payload.sglangAttentionBackend = String(payload.sglangAttentionBackend || "");
+  payload.sglangLinearAttnPrefillBackend = String(payload.sglangLinearAttnPrefillBackend || "");
+  payload.sglangLinearAttnDecodeBackend = String(payload.sglangLinearAttnDecodeBackend || "");
+  payload.sglangMambaSsmDtype = String(payload.sglangMambaSsmDtype || "");
+  payload.sglangMambaRadixCacheStrategy = String(payload.sglangMambaRadixCacheStrategy || "");
+  payload.sglangMambaTrackInterval = Number(payload.sglangMambaTrackInterval || 0);
+  payload.sglangMaxMambaCacheSize = Number(payload.sglangMaxMambaCacheSize || 0);
   return payload;
 }
 

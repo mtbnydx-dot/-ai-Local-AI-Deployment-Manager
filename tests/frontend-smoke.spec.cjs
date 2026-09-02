@@ -267,8 +267,30 @@ async function smokePage(page, baseUrl, label) {
   expect(pickerScroll.overflowY).toMatch(/auto|scroll/);
   await page.keyboard.press("Escape");
   await expect(page.locator(".model-picker-backdrop")).toBeHidden();
+  if (label === "vLLM") {
+    const stableProfile = "qwen38-flash-next-sglang-262k";
+    await expect(page.locator(`#serviceProfileSelect option[value='${stableProfile}']`)).toHaveCount(1);
+    await page.locator("#serviceProfileSelect").selectOption(stableProfile);
+    await page.locator("#serviceProfileApply").click();
+    await expect(page.locator("#runtimeEngine")).toHaveValue("sglang");
+    await expect(page.locator("#runtimeImage")).toHaveValue("local/sglang:qwen38flashnext-sm120-dac5523d");
+    await expect(page.locator("#maxModelLen")).toHaveValue("262144");
+    await expect(page.locator("#maxNumSeqs")).toHaveValue("1");
+    await expect(page.locator("#sglangPageSize")).toHaveValue("64");
+    await expect(page.locator("#sglangChunkedPrefillSize")).toHaveValue("4096");
+    await expect(page.locator("#sglangPleOffloadEmbedding")).toBeChecked();
+    await expect(page.locator("#sglangLinearAttnPrefillBackend")).toHaveValue("triton");
+    await expect(page.locator("#sglangLinearAttnDecodeBackend")).toHaveValue("flashinfer");
+    await expect(page.locator("#sglangMaxMambaCacheSize")).toHaveValue("8");
+    await expect(page.locator("#sglangDisableThinkingByDefault")).toBeChecked();
+  }
   await page.locator("[data-launch-stage='model'] [data-launch-stage-next]").click();
   await expect(page.locator("[data-launch-stage='resources']")).toBeVisible();
+  if (label === "vLLM") {
+    await expect(page.locator("#sglangAdvancedControls")).toBeVisible();
+    await page.locator("#sglangAdvancedControls summary").click();
+    await expect(page.locator("#sglangProfileNote")).toContainText("有效并发为 1");
+  }
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   for (const view of ["download", "exposure", "external-access", "stats"]) {
     await page.locator(`[data-view='${view}']`).click();

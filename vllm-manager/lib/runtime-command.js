@@ -74,10 +74,25 @@ function createVllmRuntimeCommandBuilder(deps) {
         enableAutoToolChoice: effectiveAutoToolChoice,
         moeBackend: runtimePreset.moeBackend || "",
         generationConfig: runtimePreset.generationConfig || "",
+        quantization: runtimePreset.quantization || quantization.value || "",
         speculativeConfig: runtimePreset.speculativeConfig || null,
         draftModel: runtimePreset.draftModel || opts.draftModel || "",
         dsparkBlockSize: runtimePreset.dsparkBlockSize || opts.dsparkBlockSize || null,
         reasoningParserPlugin: runtimePreset.reasoningParserPlugin || "",
+        sglangMaxTotalTokens: runtimePreset.maxTotalTokens || 0,
+        sglangPageSize: runtimePreset.pageSize || 0,
+        sglangChunkedPrefillSize: runtimePreset.chunkedPrefillSize || 0,
+        sglangFp4GemmBackend: runtimePreset.fp4GemmBackend || "",
+        sglangAttentionBackend: runtimePreset.attentionBackend || "",
+        sglangPleOffloadEmbedding: Boolean(runtimePreset.pleOffloadEmbedding),
+        sglangLinearAttnPrefillBackend: runtimePreset.linearAttnPrefillBackend || "",
+        sglangLinearAttnDecodeBackend: runtimePreset.linearAttnDecodeBackend || "",
+        sglangMambaSsmDtype: runtimePreset.mambaSsmDtype || "",
+        sglangMambaRadixCacheStrategy: runtimePreset.mambaRadixCacheStrategy || "",
+        sglangMambaTrackInterval: runtimePreset.mambaTrackInterval || 0,
+        sglangMaxMambaCacheSize: runtimePreset.maxMambaCacheSize || 0,
+        sglangDisableThinkingByDefault: Boolean(runtimePreset.disableThinkingByDefault),
+        effectiveMaxRunningRequests: runtimePreset.effectiveMaxRunningRequests || opts.maxNumSeqs,
         ...(effectiveMaxNumBatchedTokens ? { maxNumBatchedTokens: effectiveMaxNumBatchedTokens } : {}),
       };
       scheduleJobsSave();
@@ -91,6 +106,9 @@ function createVllmRuntimeCommandBuilder(deps) {
       }
       if (runtimePreset.generationConfig) {
         appendLog(job, `Generation config override: using ${runtimePreset.generationConfig}.`);
+      }
+      if (runtimePreset.quantization && runtimePreset.quantization !== quantization.value) {
+        appendLog(job, `Quantization runtime override: ${quantization.value || "auto"} -> ${runtimePreset.quantization}.`);
       }
       if (runtimePreset.disableKvCacheDtypeArg && opts.kvCacheDtype && opts.kvCacheDtype !== "auto") {
         appendLog(job, `KV cache dtype override: ignoring requested "${opts.kvCacheDtype}" so vLLM can auto-detect this checkpoint.`);
@@ -148,6 +166,15 @@ function createVllmRuntimeCommandBuilder(deps) {
       "-v", `${CONFIG.hfCache}:/root/.cache/huggingface`,
       "-v", `${CONFIG.modelsRoot}:/models`,
     ];
+    if (runtimeEngine === "sglang") {
+      runArgs.push(
+        "--label", `ai.sglang.max-total-tokens=${runtimePreset.maxTotalTokens || 0}`,
+        "--label", `ai.sglang.page-size=${runtimePreset.pageSize || 0}`,
+        "--label", `ai.sglang.max-mamba-cache-size=${runtimePreset.maxMambaCacheSize || 0}`,
+        "--label", `ai.sglang.effective-max-running-requests=${runtimePreset.effectiveMaxRunningRequests || opts.maxNumSeqs}`,
+        "--label", `ai.sglang.ple-offload-embedding=${Boolean(runtimePreset.pleOffloadEmbedding)}`
+      );
+    }
     if (runtimeEngine === "sglang" && CONFIG.sglangCache) {
       runArgs.push("-v", `${CONFIG.sglangCache}:/root/.cache`);
     } else if (CONFIG.vllmCache) {
@@ -176,6 +203,9 @@ function createVllmRuntimeCommandBuilder(deps) {
         effectiveReasoningParser,
         effectiveToolCallParser,
         effectiveAutoToolChoice,
+        effectiveDtype,
+        effectiveKvCacheDtypeArg,
+        effectiveQuantization: runtimePreset.disableQuantizationArg ? "" : runtimePreset.quantization || quantization.value,
       });
       return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine };
     }
@@ -264,11 +294,39 @@ function createVllmRuntimeCommandBuilder(deps) {
       "--port", "8000",
       "--tp-size", String(Math.max(1, Number(options.tensorParallelSize || 1))),
       "--mem-fraction-static", String(options.gpuMemoryUtilization),
-      "--max-running-requests", String(options.maxNumSeqs),
+      "--max-running-requests", String(runtimePreset.maxRunningRequests || options.maxNumSeqs),
       "--context-length", String(options.maxModelLen),
       "--chunked-prefill-size", String(runtimePreset.chunkedPrefillSize || 8192),
       "--enable-metrics"
     );
+    if (runtimePreset.maxTotalTokens) runArgs.push("--max-total-tokens", String(runtimePreset.maxTotalTokens));
+    if (runtimePreset.pageSize) runArgs.push("--page-size", String(runtimePreset.pageSize));
+    if (options.effectiveDtype && options.effectiveDtype !== "auto") runArgs.push("--dtype", options.effectiveDtype);
+    if (options.effectiveQuantization) runArgs.push("--quantization", options.effectiveQuantization);
+    if (options.effectiveKvCacheDtypeArg && options.effectiveKvCacheDtypeArg !== "auto") {
+      runArgs.push("--kv-cache-dtype", options.effectiveKvCacheDtypeArg);
+    }
+    if (runtimePreset.fp4GemmBackend) runArgs.push("--fp4-gemm-backend", runtimePreset.fp4GemmBackend);
+    if (runtimePreset.pleOffloadEmbedding) runArgs.push("--ple-offload-embedding");
+    if (runtimePreset.linearAttnPrefillBackend) {
+      runArgs.push("--linear-attn-prefill-backend", runtimePreset.linearAttnPrefillBackend);
+    }
+    if (runtimePreset.linearAttnDecodeBackend) {
+      runArgs.push("--linear-attn-decode-backend", runtimePreset.linearAttnDecodeBackend);
+    }
+    if (runtimePreset.mambaSsmDtype) runArgs.push("--mamba-ssm-dtype", runtimePreset.mambaSsmDtype);
+    if (runtimePreset.mambaRadixCacheStrategy) {
+      runArgs.push("--mamba-radix-cache-strategy", runtimePreset.mambaRadixCacheStrategy);
+    }
+    if (runtimePreset.mambaTrackInterval) {
+      runArgs.push("--mamba-track-interval", String(runtimePreset.mambaTrackInterval));
+    }
+    if (runtimePreset.maxMambaCacheSize) {
+      runArgs.push("--max-mamba-cache-size", String(runtimePreset.maxMambaCacheSize));
+    }
+    if (runtimePreset.defaultChatTemplateKwargs) {
+      runArgs.push("--default-chat-template-kwargs", runtimePreset.defaultChatTemplateKwargs);
+    }
     if (runtimePreset.mambaSchedulerStrategy) {
       runArgs.push("--mamba-scheduler-strategy", runtimePreset.mambaSchedulerStrategy);
     }

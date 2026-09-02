@@ -162,6 +162,7 @@ test("model-check keeps retired Muse Glimmer blocked without deleting local file
 test("runtime image metadata declares the pinned Transformers versions", () => {
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.image)?.transformersVersion, "5.15.1");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.sglangImage)?.version, "0.5.17");
+  assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.sglangFlashNextImage)?.version, "qwen38flashnext-sm120-dac5523d");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.qwenMoeImage)?.transformersVersion, "5.12.1");
   assert.equal(manager.knownRuntimeImageMetadata(manager.CONFIG.gemmaImage)?.transformersVersion, "5.10.2");
 });
@@ -658,6 +659,71 @@ test("Qwen3.6 MoE NVFP4 uses the nightly runtime preset", () => {
   assert.equal(densePreset.defaultChatTemplateKwargs, undefined);
   assert.equal(densePreset.toolCallParser, "qwen3_xml");
   assert.equal(densePreset.maxNumBatchedTokens, 8192);
+});
+
+test("Qwen3.8 Flash-Next NVFP4 resolves to the patched SM120 SGLang profile", () => {
+  const model = "RadixArk/Qwen3.8-Flash-Next-NVFP4";
+  assert.equal(manager.isQwen38FlashNextNvfp4Model(model, {
+    model_type: "qwen4_exp",
+    architectures: ["Qwen4ExpForConditionalGeneration"],
+    quantization_config: { quant_algo: "NVFP4" },
+  }), true);
+
+  const preset = manager.resolveVllmRuntimePreset({
+    engine: "sglang",
+    model,
+    maxModelLen: 262144,
+    maxNumSeqs: 4,
+    speculativeMode: "off",
+    sglangDisableThinkingByDefault: true,
+  }, {});
+
+  assert.equal(preset.id, "qwen3.8-flash-next-sglang-sm120");
+  assert.equal(preset.image, manager.CONFIG.sglangFlashNextImage);
+  assert.equal(preset.quantization, "modelopt_fp4");
+  assert.equal(preset.attentionBackend, "triton");
+  assert.equal(preset.maxTotalTokens, 262144);
+  assert.equal(preset.pageSize, 64);
+  assert.equal(preset.chunkedPrefillSize, 4096);
+  assert.equal(preset.fp4GemmBackend, "flashinfer_cutlass");
+  assert.equal(preset.pleOffloadEmbedding, true);
+  assert.equal(preset.linearAttnPrefillBackend, "triton");
+  assert.equal(preset.linearAttnDecodeBackend, "flashinfer");
+  assert.equal(preset.mambaSsmDtype, "bfloat16");
+  assert.equal(preset.mambaRadixCacheStrategy, "extra_buffer");
+  assert.equal(preset.mambaTrackInterval, 64);
+  assert.equal(preset.maxMambaCacheSize, 8);
+  assert.equal(preset.maxRunningRequests, 1);
+  assert.equal(preset.defaultChatTemplateKwargs, JSON.stringify({ enable_thinking: false }));
+  assert.equal(preset.mambaSchedulerStrategy, "");
+});
+
+test("Qwen3.8 Flash-Next model-check blocks FP8 KV and speculative decoding in the stable SGLang profile", async () => {
+  const base = {
+    model: "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+    engine: "sglang",
+    remote: false,
+    speculativeMode: "off",
+    kvCacheDtype: "auto",
+    toolCallParser: "qwen3_coder",
+    sglangDisableThinkingByDefault: true,
+  };
+  const fp8 = await manager.checkModelCompatibility({ ...base, kvCacheDtype: "fp8_e4m3" });
+  assert.equal(fp8.ok, false);
+  assert.equal(fp8.findings.some((item) => item.title === "Flash-Next FP8 KV 未开放" && item.severity === "fail"), true);
+
+  const speculative = await manager.checkModelCompatibility({ ...base, speculativeMode: "mtp" });
+  assert.equal(speculative.ok, false);
+  assert.equal(speculative.findings.some((item) => item.title === "Flash-Next 稳定档关闭推测解码" && item.severity === "fail"), true);
+
+  const oldWorkaround = await manager.checkModelCompatibility({
+    ...base,
+    sglangAttentionBackend: "fa4",
+    sglangPleOffloadEmbedding: false,
+  });
+  assert.equal(oldWorkaround.ok, false);
+  assert.equal(oldWorkaround.findings.some((item) => item.title === "QSA / attention backend 不匹配" && item.severity === "fail"), true);
+  assert.equal(oldWorkaround.findings.some((item) => item.title === "PLE CPU offload 未启用" && item.severity === "fail"), true);
 });
 
 test("DiffusionGemma is blocked by default on Windows Docker WSL", () => {

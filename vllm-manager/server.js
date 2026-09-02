@@ -89,6 +89,7 @@ const DEFAULT_VLLM_IMAGE = process.env.VLLM_IMAGE_VERSION
 const DEFAULT_GEMMA_VLLM_IMAGE = "vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b";
 const DEFAULT_QWEN_MOE_VLLM_IMAGE = "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb";
 const DEFAULT_SGLANG_IMAGE = `${DEFAULT_SGLANG_RELEASE.repository}@${DEFAULT_SGLANG_RELEASE.platformDigest}`;
+const DEFAULT_SGLANG_FLASH_NEXT_IMAGE = "local/sglang:qwen38flashnext-sm120-dac5523d";
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 const MANAGER_LABEL_KEY = "ai.manager";
@@ -140,6 +141,7 @@ const CONFIG = {
   gemmaImage: process.env.VLLM_GEMMA_IMAGE || DEFAULT_GEMMA_VLLM_IMAGE,
   qwenMoeImage: process.env.VLLM_QWEN_MOE_IMAGE || DEFAULT_QWEN_MOE_VLLM_IMAGE,
   sglangImage: process.env.SGLANG_IMAGE || DEFAULT_SGLANG_IMAGE,
+  sglangFlashNextImage: process.env.SGLANG_FLASH_NEXT_IMAGE || DEFAULT_SGLANG_FLASH_NEXT_IMAGE,
   containerName: process.env.VLLM_CONTAINER_NAME || "vllm-local",
   managerId: process.env.VLLM_MANAGER_ID || "vllm-manager",
   defaultPort: Number(process.env.VLLM_PORT || 8000),
@@ -1217,6 +1219,15 @@ function knownRuntimeImageMetadata(imageReference) {
     "lmsysorg/sglang:latest-runtime",
   ]);
   if (sglangReferences.has(image)) return DEFAULT_SGLANG_RELEASE;
+  if (image === DEFAULT_SGLANG_FLASH_NEXT_IMAGE.toLowerCase()) {
+    return {
+      ...DEFAULT_SGLANG_RELEASE,
+      version: "qwen38flashnext-sm120-dac5523d",
+      manifestDigest: "",
+      platformDigest: "",
+      transformersVersion: "5.12.1",
+    };
+  }
   if (image === DEFAULT_QWEN_MOE_VLLM_IMAGE.toLowerCase()) {
     return {
       ...DEFAULT_VLLM_RELEASE,
@@ -1293,6 +1304,19 @@ function normalizeLaunchConfig(config = {}) {
     runtimeImage: String(config.runtimeImage || ""),
     draftModel: String(config.draftModel || ""),
     dsparkBlockSize: Math.min(32, Math.max(1, positiveInt(config.dsparkBlockSize, 7))),
+    sglangMaxTotalTokens: Math.max(0, Math.floor(Number(config.sglangMaxTotalTokens || 0) || 0)),
+    sglangPageSize: Math.max(0, Math.floor(Number(config.sglangPageSize || 0) || 0)),
+    sglangChunkedPrefillSize: Math.max(0, Math.floor(Number(config.sglangChunkedPrefillSize || 0) || 0)),
+    sglangFp4GemmBackend: String(config.sglangFp4GemmBackend || ""),
+    sglangAttentionBackend: String(config.sglangAttentionBackend || ""),
+    sglangPleOffloadEmbedding: Boolean(config.sglangPleOffloadEmbedding),
+    sglangLinearAttnPrefillBackend: String(config.sglangLinearAttnPrefillBackend || ""),
+    sglangLinearAttnDecodeBackend: String(config.sglangLinearAttnDecodeBackend || ""),
+    sglangMambaSsmDtype: String(config.sglangMambaSsmDtype || ""),
+    sglangMambaRadixCacheStrategy: String(config.sglangMambaRadixCacheStrategy || ""),
+    sglangMambaTrackInterval: Math.max(0, Math.floor(Number(config.sglangMambaTrackInterval || 0) || 0)),
+    sglangMaxMambaCacheSize: Math.max(0, Math.floor(Number(config.sglangMaxMambaCacheSize || 0) || 0)),
+    sglangDisableThinkingByDefault: Boolean(config.sglangDisableThinkingByDefault),
   };
 }
 
@@ -1329,6 +1353,11 @@ async function checkModelCompatibility(input = {}) {
   const lower = model.toLowerCase();
   const looksGguf = looksLikeGgufReference(model) || local?.ggufFiles?.length || lower.endsWith(".gguf");
   const localConfig = local ? readLocalModelConfig(local.path) : null;
+  const qwen38FlashNextNvfp4 = isQwen38FlashNextNvfp4Model(model, localConfig);
+  const requestedRuntimeImage = String(input.runtimeImage || "").trim();
+  const compatibilityRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang"
+    ? qwen38FlashNextNvfp4 ? CONFIG.sglangFlashNextImage : CONFIG.sglangImage
+    : CONFIG.image);
   const capabilities = resolveVllmModelCapabilities({
     model,
     localPath: local?.path,
@@ -1336,7 +1365,7 @@ async function checkModelCompatibility(input = {}) {
     quantization: input.quantization,
     speculativeMode: input.speculativeMode || "off",
     numSpeculativeTokens: input.numSpeculativeTokens,
-    runtimeMetadata: knownRuntimeImageMetadata(String(input.runtimeImage || "").trim() || (runtimeEngine === "sglang" ? CONFIG.sglangImage : CONFIG.image)),
+    runtimeMetadata: knownRuntimeImageMetadata(compatibilityRuntimeImage),
     allowMuseGlimmer: envFlagEnabled(process.env.VLLM_ALLOW_MUSE_GLIMMER),
   });
   recommendations.speculativeMode = capabilities.speculativeConfig
@@ -1409,9 +1438,11 @@ async function checkModelCompatibility(input = {}) {
     findings.push(finding("warn", "可能需要授权", "这类模型经常需要 Hugging Face token 或提前接受 license。"));
   }
   if (/nvfp4|fp4/i.test(model)) {
-    findings.push(finding("ok", "NVFP4/FP4 权重", "KV cache 可单独用 FP8；权重量化方法优先按模型 config.json 声明。"));
+    findings.push(finding("ok", "NVFP4/FP4 权重", qwen38FlashNextNvfp4 && runtimeEngine === "sglang"
+      ? "权重使用 NVFP4；Flash-Next QSA 当前必须保留 BF16 KV（界面选择 auto），不要启用 FP8 KV。"
+      : "KV cache 可单独用 FP8；权重量化方法优先按模型 config.json 声明。"));
     if (!recommendations.quantization) recommendations.quantization = "modelopt_fp4";
-    recommendations.kvCacheDtype = "fp8";
+    recommendations.kvCacheDtype = qwen38FlashNextNvfp4 && runtimeEngine === "sglang" ? "auto" : "fp8";
   } else if (/awq/i.test(model)) {
     recommendations.quantization = "awq";
   } else if (/gptq/i.test(model)) {
@@ -1427,7 +1458,9 @@ async function checkModelCompatibility(input = {}) {
   const qwen38 = isQwen38Model(model, localConfig);
   if (qwen38) {
     findings.push(finding("ok", "Qwen3.8 专用运行时", runtimeEngine === "sglang"
-      ? `将使用 SGLang ${DEFAULT_SGLANG_RELEASE.version} / FlashInfer / CPU feature transport。`
+      ? qwen38FlashNextNvfp4
+        ? `将使用 ${CONFIG.sglangFlashNextImage}，包含 SM120 QSA 完整修复。`
+        : `将使用 SGLang ${DEFAULT_SGLANG_RELEASE.version} / FlashInfer / CPU feature transport。`
       : `将使用已验证的 Qwen3.8 vLLM ${DEFAULT_VLLM_RELEASE.version}。`));
     recommendations.engine = runtimeEngine;
     recommendations.maxModelLen = Number(input.maxModelLen || 262144);
@@ -1438,6 +1471,61 @@ async function checkModelCompatibility(input = {}) {
     recommendations.enablePrefixCaching = true;
     recommendations.reasoningParser = "qwen3";
     recommendations.toolCallParser = "qwen3_coder";
+  }
+  if (qwen38FlashNextNvfp4 && runtimeEngine === "sglang") {
+    findings.push(finding("ok", "Flash-Next 稳定路径", "PLE embedding 放入 CPU RAM；GDN prefill 使用 Triton、decode 使用 FlashInfer；Mamba state 使用 BF16。"));
+    findings.push(finding("ok", "262K 单路档", "max Mamba cache 8 为 262K 稳定档保留显存，运行时有效并发为 1；需要并发时应单独做较短上下文 A/B。"));
+    recommendations.runtimeImage = CONFIG.sglangFlashNextImage;
+    recommendations.maxModelLen = Number(input.maxModelLen || 262144);
+    recommendations.maxNumSeqs = 1;
+    recommendations.gpuMemoryUtilization = Number(input.gpuMemoryUtilization || 0.995);
+    recommendations.quantization = "modelopt_fp4";
+    recommendations.kvCacheDtype = "auto";
+    recommendations.trustRemoteCode = true;
+    recommendations.speculativeMode = "off";
+    recommendations.sglangMaxTotalTokens = Number(input.sglangMaxTotalTokens || 262144);
+    recommendations.sglangPageSize = Number(input.sglangPageSize || 64);
+    recommendations.sglangChunkedPrefillSize = Number(input.sglangChunkedPrefillSize || 4096);
+    recommendations.sglangFp4GemmBackend = String(input.sglangFp4GemmBackend || "flashinfer_cutlass");
+    recommendations.sglangAttentionBackend = String(input.sglangAttentionBackend || "triton");
+    recommendations.sglangPleOffloadEmbedding = true;
+    recommendations.sglangLinearAttnPrefillBackend = String(input.sglangLinearAttnPrefillBackend || "triton");
+    recommendations.sglangLinearAttnDecodeBackend = String(input.sglangLinearAttnDecodeBackend || "flashinfer");
+    recommendations.sglangMambaSsmDtype = String(input.sglangMambaSsmDtype || "bfloat16");
+    recommendations.sglangMambaRadixCacheStrategy = String(input.sglangMambaRadixCacheStrategy || "extra_buffer");
+    recommendations.sglangMambaTrackInterval = Number(input.sglangMambaTrackInterval || 64);
+    recommendations.sglangMaxMambaCacheSize = Number(input.sglangMaxMambaCacheSize || 8);
+    recommendations.sglangDisableThinkingByDefault = true;
+    if (String(input.kvCacheDtype || "auto").toLowerCase() !== "auto") {
+      findings.push(finding("fail", "Flash-Next FP8 KV 未开放", "QSA 路径仍有 query BF16 与 K/V FP8 dtype mismatch；请把 KV cache 精度设为 auto（当前会得到 BF16）。"));
+    }
+    const stableBackendRequirements = [
+      ["sglangAttentionBackend", "triton", "QSA / attention backend"],
+      ["sglangLinearAttnPrefillBackend", "triton", "Linear attention prefill"],
+      ["sglangLinearAttnDecodeBackend", "flashinfer", "Linear attention decode"],
+      ["sglangMambaSsmDtype", "bfloat16", "Mamba state dtype"],
+    ];
+    for (const [key, expected, label] of stableBackendRequirements) {
+      const value = String(input[key] || "").toLowerCase();
+      if (value && value !== expected) {
+        findings.push(finding("fail", `${label} 不匹配`, `262K 稳定档要求 ${expected}，当前选择 ${value}。`));
+      }
+    }
+    if (Object.hasOwn(input, "sglangPleOffloadEmbedding") && !input.sglangPleOffloadEmbedding) {
+      findings.push(finding("fail", "PLE CPU offload 未启用", "该 checkpoint 的约 51GB PLE embedding 必须放入 128GB 系统内存；请启用 PLE embedding → CPU RAM。"));
+    }
+    if (normalizeSpeculativeMode(input.speculativeMode) !== "off") {
+      findings.push(finding("fail", "Flash-Next 稳定档关闭推测解码", "当前已验证的 262K SGLang 档未启用 MTP/DSpark；请先使用 off，避免把未验证变量带入长上下文服务。"));
+    }
+    if (!input.sglangDisableThinkingByDefault && String(input.toolCallParser || "qwen3_coder") === "qwen3_coder") {
+      findings.push(finding("warn", "Thinking + qwen3_coder 风险", "当前上游仍有 token-0 循环问题；建议勾选“默认关闭 thinking”，客户端确有需要时再逐请求开启。"));
+    }
+    if (requestedRuntimeImage && requestedRuntimeImage.toLowerCase() !== CONFIG.sglangFlashNextImage.toLowerCase()) {
+      findings.push(finding("warn", "自定义 Flash-Next 镜像", `当前只验证了 ${CONFIG.sglangFlashNextImage}；自定义镜像必须确认含完整 SM120 QSA 修复。`));
+    }
+    if (Number(input.maxModelLen || 0) >= 229492 && Number(input.sglangMaxMambaCacheSize || 8) > 8) {
+      findings.push(finding("warn", "极限上下文 Mamba cache 风险", "本机 max Mamba cache 24 在 229K 输入最后一个 prefill chunk OOM；262K 档请保持 8，较大值只用于单独的短上下文并发 A/B。"));
+    }
   }
   if (normalizeSpeculativeMode(input.speculativeMode) === "dspark") {
     const draft = resolveDsparkDraftModel(input.draftModel);
@@ -2807,6 +2895,16 @@ function isQwen38Nvfp4Model(model, config = null) {
     || quantization.includes("nvfp4-pack-quantized");
 }
 
+function isQwen38FlashNextNvfp4Model(model, config = null) {
+  if (!isQwen38Nvfp4Model(model, config)) return false;
+  const text = String(model || "").toLowerCase();
+  const modelType = String(config?.model_type || "").toLowerCase();
+  const architectures = Array.isArray(config?.architectures) ? config.architectures.join(" ").toLowerCase() : "";
+  return /flash[-_. ]?next/.test(text)
+    || modelType === "qwen4_exp"
+    || architectures.includes("qwen4exp");
+}
+
 function resolveDsparkDraftModel(value = "") {
   const requested = String(value || "").trim();
   const candidate = requested.startsWith("/models/")
@@ -2907,33 +3005,64 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
     const dspark = sglangSpeculativeMode === "dspark";
     const draft = dspark ? resolveDsparkDraftModel(opts.draftModel) : { path: "", ok: true, reason: "" };
     const qwen38 = isQwen38Model(opts.model || launch.modelArg, localConfig);
+    const flashNextNvfp4 = isQwen38FlashNextNvfp4Model(opts.model || launch.modelArg, localConfig);
+    const image = requestedRuntimeImage || (flashNextNvfp4 ? CONFIG.sglangFlashNextImage : baseRuntimeImage);
+    const maxMambaCacheSize = positiveInt(opts.sglangMaxMambaCacheSize, flashNextNvfp4 ? 8 : 0);
+    const requestedMaxRunningRequests = positiveInt(opts.maxNumSeqs, 1);
+    const effectiveMaxRunningRequests = flashNextNvfp4
+      ? Math.min(requestedMaxRunningRequests, Math.max(1, Math.floor(maxMambaCacheSize / 5)))
+      : requestedMaxRunningRequests;
     return withCapabilities({
-      id: dspark ? "qwen3.8-sglang-dspark" : "sglang-openai-runtime",
-      label: dspark ? "Qwen3.8 / SGLang / DSpark" : "SGLang OpenAI runtime",
+      id: flashNextNvfp4 ? "qwen3.8-flash-next-sglang-sm120" : dspark ? "qwen3.8-sglang-dspark" : "sglang-openai-runtime",
+      label: flashNextNvfp4 ? "Qwen3.8 Flash-Next / SGLang / SM120" : dspark ? "Qwen3.8 / SGLang / DSpark" : "SGLang OpenAI runtime",
       engine: "sglang",
-      image: baseRuntimeImage,
+      image,
+      quantization: flashNextNvfp4 ? "modelopt_fp4" : "",
       forceTrustRemoteCode: qwen38,
-      attentionBackend: qwen38 ? "flashinfer" : "",
+      attentionBackend: String(opts.sglangAttentionBackend || (flashNextNvfp4 ? "triton" : qwen38 ? "flashinfer" : "")),
       reasoningParser: qwen38 ? "qwen3" : capabilities.reasoningParser,
       toolCallParser: qwen38 ? "qwen3_coder" : capabilities.toolCallParser,
       enableAutoToolChoice: Boolean(qwen38 || capabilities.enableAutoToolChoice),
-      chunkedPrefillSize: qwen38 ? 8192 : undefined,
-      mambaSchedulerStrategy: qwen38 ? "extra_buffer" : "",
-      disablePrefillCudaGraph: qwen38,
-      mmFeatureTransport: qwen38 ? "cpu" : "",
+      maxRunningRequests: effectiveMaxRunningRequests,
+      effectiveMaxRunningRequests,
+      maxTotalTokens: positiveInt(opts.sglangMaxTotalTokens, flashNextNvfp4 ? positiveInt(opts.maxModelLen, 262144) : 0),
+      pageSize: positiveInt(opts.sglangPageSize, flashNextNvfp4 ? 64 : 0),
+      chunkedPrefillSize: positiveInt(opts.sglangChunkedPrefillSize, flashNextNvfp4 ? 4096 : qwen38 ? 8192 : 8192),
+      fp4GemmBackend: String(opts.sglangFp4GemmBackend || (flashNextNvfp4 ? "flashinfer_cutlass" : "")),
+      pleOffloadEmbedding: Boolean(opts.sglangPleOffloadEmbedding || flashNextNvfp4),
+      linearAttnPrefillBackend: String(opts.sglangLinearAttnPrefillBackend || (flashNextNvfp4 ? "triton" : "")),
+      linearAttnDecodeBackend: String(opts.sglangLinearAttnDecodeBackend || (flashNextNvfp4 ? "flashinfer" : "")),
+      mambaSsmDtype: String(opts.sglangMambaSsmDtype || (flashNextNvfp4 ? "bfloat16" : "")),
+      mambaRadixCacheStrategy: String(opts.sglangMambaRadixCacheStrategy || (flashNextNvfp4 ? "extra_buffer" : "")),
+      mambaTrackInterval: positiveInt(opts.sglangMambaTrackInterval, flashNextNvfp4 ? 64 : 0),
+      maxMambaCacheSize,
+      disableThinkingByDefault: Boolean(opts.sglangDisableThinkingByDefault),
+      defaultChatTemplateKwargs: opts.sglangDisableThinkingByDefault
+        ? JSON.stringify({ enable_thinking: false })
+        : "",
+      mambaSchedulerStrategy: qwen38 && !flashNextNvfp4 ? "extra_buffer" : "",
+      disablePrefillCudaGraph: qwen38 && !flashNextNvfp4,
+      mmFeatureTransport: qwen38 && !flashNextNvfp4 ? "cpu" : "",
       speculativeConfig: null,
       speculativeAlgorithm: dspark ? "DSPARK" : "",
       draftModel: draft.path,
       dsparkBlockSize: Math.min(32, Math.max(1, positiveInt(opts.dsparkBlockSize, 7))),
       draftModelQuantization: "unquant",
-      unsupportedReason: !["off", "dspark"].includes(sglangSpeculativeMode)
+      unsupportedReason: flashNextNvfp4 && sglangSpeculativeMode !== "off"
+        ? "Qwen3.8 Flash-Next 的已验证 262K SGLang 档当前要求关闭 MTP/DSpark。"
+        : !["off", "dspark"].includes(sglangSpeculativeMode)
         ? `SGLang 档当前只开放 off 或 dspark，不会静默转换 ${sglangSpeculativeMode}。`
         : !qwen38 && dspark
         ? "当前 DSpark 档只对已验证的 Qwen3.8 主模型开放。"
         : draft.reason,
       notes: [
-        "uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000",
-        ...(qwen38 ? ["uses FlashInfer on SM120; FA3 is not supported on this host", "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures"] : []),
+        ...(flashNextNvfp4 ? [
+          "uses the Qwen3.8 Flash-Next day-0 image plus full SM120 QSA fix dac5523d",
+          "keeps KV cache in BF16/auto; FP8 KV is intentionally blocked for the current QSA path",
+          "offloads PLE embeddings to CPU RAM and uses Triton prefill plus FlashInfer decode for GDN",
+          `uses Mamba cache ${maxMambaCacheSize}; effective max running requests is ${effectiveMaxRunningRequests}`,
+        ] : ["uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000"]),
+        ...(qwen38 && !flashNextNvfp4 ? ["uses FlashInfer on SM120; FA3 is not supported on this host", "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures"] : []),
         ...(dspark ? ["uses the RadixArk Qwen3.8 DSpark draft checkpoint with block size 7 and overlap scheduling"] : []),
       ],
     });
@@ -4520,6 +4649,7 @@ module.exports = {
   isQwen36DenseNvfp4Model,
   isQwen38Model,
   isQwen38Nvfp4Model,
+  isQwen38FlashNextNvfp4Model,
   resolveDsparkDraftModel,
   diffusionGemmaWindowsBlockReason,
 };
