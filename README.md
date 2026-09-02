@@ -199,7 +199,14 @@ start-service-entry.cmd lan
 | `MODEL_REMOTE_INFO_CACHE_MS` | `300000` | 模型详情与下载体积预估缓存 TTL |
 | `METRICS_HISTORY_FLUSH_MS` | `300000` | 指标历史落盘间隔（内存实时可读；`0` = 每次采样即写） |
 
-### 可更新的参考数据
+### 统一启动、公网模式与运维（2026-09-03）
+
+- `start-platform.cmd [core|all] [lan]` 一次拉起入口 + 两个管理器（`all` 再加 TTS、MCP、搜索网关，搜索网关需要 Docker Desktop）；`stop-platform.cmd [all]`、`status-platform.cmd` 对应停止与查看。各组件原有脚本保留。入口首页出现离线组件横幅（可一键拉起管理器，可选桌面通知）。
+- 进程退出留痕：入口与两个管理器把 Ctrl+C / 控制台关闭 / 未捕获异常写入各自 `logs/process-exit.log`，并走正常关机流程；`start-service-entry.cmd` 现在把 stdout/stderr 落到 `logs/manager.out.log`（保留 3 份轮转）。
+- 公网模式：入口首页顶部显示“本机 / 局域网 / 公网”模式与上线检查清单（API Key 强制、管理端点仅本机、CORS、HTTPS、Caddy 路径、防火墙）。`deploy/public/Caddyfile` 只转发 `/gateway/*`，`scripts/setup-public.ps1` 生成 `.env` 并校验。鉴权失败风暴防护：`SERVICE_ENTRY_AUTH_FAIL_LIMIT`（默认 20 次/`SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS`=60 秒）后封禁 `SERVICE_ENTRY_AUTH_BAN_SECONDS`（600）秒，本机直连永不封禁。
+- 统一入口新增：`GET /gateway/status`（需 Key：可用模型、在线组件、本 Key 限流余量与 TTS 配额）、`/gateway/search/*`（搜索网关）、`/gateway/mcp`（MCP，只读）、`GET /api/keys` 与首页“密钥总览”（两管理器客户端 Key 的状态 / 最近使用 / 到期）。搜索网关启动时若入口监听局域网则自动以入口 auto 路由为上游。
+- 守护与备份：GPU 温度守护新增功耗墙提示（`powerGuardEnabled` 默认跟随温度守护，`powerLimitPct` 默认 97）；`scripts/backup-platform.ps1` 每日快照计费库 / TTS 历史库 / JSON 账本到 `backups/`（`-Register` 注册计划任务，`-KeepDays` 默认 14）；`scripts/nightly-e2e.ps1` 跑 test-all + 在线探活并写 `artifacts/nightly/`（`-Register` 每日 03:00）。
+- TTS 用量进入计费：客户端 Key 的合成请求按秒数 / 字符数记账并支持每日秒数配额，见 `docs/billing-guide.md`。
 
 ### 可更新的参考数据
 
@@ -437,6 +444,15 @@ Behavior changes as of 2026-08-22: a stalled download (no byte growth for 5 minu
 | `MODEL_REMOTE_SEARCH_CACHE_MS` | `90000` | HF/ModelScope online search cache TTL |
 | `MODEL_REMOTE_INFO_CACHE_MS` | `300000` | Model info and download size estimate cache TTL |
 | `METRICS_HISTORY_FLUSH_MS` | `300000` | Metrics history flush interval (reads stay in-memory; `0` writes every sample) |
+
+### Unified Startup, Public Mode And Operations (2026-09-03)
+
+- `start-platform.cmd [core|all] [lan]` starts the entry and both managers (`all` adds TTS, MCP and the Docker-based search gateway); `stop-platform.cmd [all]` and `status-platform.cmd` stop and inspect. The entry page shows an offline-component banner with one-click manager start and optional desktop notifications.
+- Exit traces: the entry and both managers write Ctrl+C / console close / uncaught errors to their own `logs/process-exit.log` and run the normal shutdown; `start-service-entry.cmd` now redirects stdout/stderr to `logs/manager.out.log` with three rotated copies.
+- Public mode: the entry page shows the local / LAN / public exposure and a go-live checklist (API key enforced, management local-only, CORS, HTTPS, Caddy paths, firewall). `deploy/public/Caddyfile` proxies only `/gateway/*`; `scripts/setup-public.ps1` writes `.env` and validates it. Auth-failure guard: `SERVICE_ENTRY_AUTH_FAIL_LIMIT` (20) failures within `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` (60) ban the source for `SERVICE_ENTRY_AUTH_BAN_SECONDS` (600); local direct callers are never banned.
+- New entry surfaces: `GET /gateway/status` (key required: models, online components, this key's rate-limit remaining and TTS quota), `/gateway/search/*` (search gateway), `/gateway/mcp` (read-only MCP), `GET /api/keys` and the "密钥总览" section (client keys across both managers with state, last use and expiry). The search gateway picks the entry auto route as upstream when the entry listens on the LAN.
+- Guards and backups: the GPU temperature guard gained a power-wall hint (`powerGuardEnabled` follows the temperature guard, `powerLimitPct` default 97); `scripts/backup-platform.ps1` snapshots the billing database, TTS history and JSON ledgers into `backups/` daily (`-Register`, `-KeepDays` 14); `scripts/nightly-e2e.ps1` runs test-all plus live probes into `artifacts/nightly/` (`-Register` at 03:00).
+- TTS usage is billed: synthesis through a client key is metered by audio seconds and characters with a daily seconds quota; see `docs/billing-guide.md`.
 
 ### Updatable Reference Data
 

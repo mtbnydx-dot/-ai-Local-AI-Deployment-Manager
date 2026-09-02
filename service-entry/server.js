@@ -1,4 +1,5 @@
 const http = require("node:http");
+const crypto = require("node:crypto");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -10,6 +11,9 @@ const core = require("../manager-core");
 const { createEntrySecurity } = require("./lib/security");
 const { createBillingStore } = require("./lib/billing-store");
 const { createBillingHttpHandler, strictLocalBillingAdmin } = require("./lib/billing-http");
+const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview");
+const { parseAuxGatewayRoute, buildAuxUpstreamPath, parseEnvFileValue } = require("./lib/aux-gateway");
+const { ttsSynthesisRoute, countTtsCharacters, ttsEngineFromBody, createWavDurationProbe, createJsonCollector, parseTtsJsonDuration } = require("./lib/tts-usage");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -25,8 +29,18 @@ const HOST = process.env.SERVICE_ENTRY_HOST || "127.0.0.1";
 const PORT = Number(process.env.SERVICE_ENTRY_PORT || 5176);
 const PLATFORM_MCP_PORT = Number(process.env.PLATFORM_MCP_PORT || 5190);
 const TTS_GATEWAY_PORT = Number(process.env.TTS_GATEWAY_PORT || 7000);
+const SEARCH_GATEWAY_PORT = Number(process.env.SEARCH_GATEWAY_PORT || 5180);
 const ROOT = __dirname;
 const AI_ROOT = path.dirname(ROOT);
+const PLATFORM_MCP_ENV_FILE = process.env.PLATFORM_MCP_ENV_FILE || path.join(AI_ROOT, ".runtime", "platform-mcp", "server.env");
+const PROCESS_EXIT_LOG = path.join(ROOT, "logs", "process-exit.log");
+// 401 风暴防护：同一客户端地址在窗口内连续鉴权失败即临时封禁，公网扫描者
+// 拿到的是廉价的 429 而不是每次一遍密钥库读取 + 访问日志。
+const authGuard = core.createAuthFailureGuard({
+  maxFailures: Number(process.env.SERVICE_ENTRY_AUTH_FAIL_LIMIT || 20),
+  windowMs: Number(process.env.SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS || 60) * 1000,
+  banMs: Number(process.env.SERVICE_ENTRY_AUTH_BAN_SECONDS || 600) * 1000,
+});
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
 const FLEET_SETTINGS_FILE = path.join(ROOT, "data", "fleet-settings.json");
 const BILLING_DB_FILE = process.env.AI_BILLING_DB || path.join(ROOT, "data", "platform-billing.sqlite");
@@ -199,12 +213,25 @@ async function handleRequest(req, res) {
     if (isTtsGatewayPath(url.pathname)) {
       return proxyTtsGatewayRequest(req, res, url);
     }
+    if (parseAuxGatewayRoute(url.pathname)) {
+      return proxyAuxGatewayRequest(req, res, url);
+    }
     if (url.pathname.startsWith("/gateway/")) {
       // 免鉴权健康检查：公网监控探活用，不暴露模型或配置信息。
       if (req.method === "GET" && (url.pathname === "/gateway/health" || url.pathname === "/gateway/health/")) {
         return sendJson(res, { ok: true, service: "local-ai-gateway", time: new Date().toISOString() }, 200, gatewayCorsHeaders(req));
       }
+      // 需 Key 的状态页：可用模型、在线组件、本 Key 的限流余量和配额。
+      if (req.method === "GET" && (url.pathname === "/gateway/status" || url.pathname === "/gateway/status/")) {
+        return handleGatewayStatus(req, res, url);
+      }
       return proxyGatewayRequest(req, res, url);
+    }
+    if (req.method === "GET" && url.pathname === "/api/keys") {
+      const allowed = security.checkManagementAccess(req);
+      if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
+      const managers = await Promise.all(MANAGERS.map((manager) => buildManagerStatus(manager, { force: url.searchParams.get("fresh") === "1" })));
+      return sendJson(res, { ok: true, keys: summarizeServiceKeys(managers) });
     }
     if (req.method === "GET" && url.pathname === "/api/security") {
       const allowed = security.checkManagementAccess(req);
@@ -213,14 +240,15 @@ async function handleRequest(req, res) {
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       const detailed = security.checkManagementAccess(req).ok;
-      const [managers, mcp, tts] = await Promise.all([
+      const [managers, mcp, tts, search] = await Promise.all([
         Promise.all(MANAGERS.map(buildManagerStatus)),
         buildPlatformMcpStatus(),
         buildTtsStatus(),
+        buildSearchGatewayStatus(),
       ]);
       const payload = {
         ok: true,
-        security: await security.describe(),
+        security: { ...(await security.describe()), authGuard: authGuard.describe() },
         entry: {
           host: HOST,
           port: PORT,
@@ -229,10 +257,14 @@ async function handleRequest(req, res) {
           uptimeSeconds: process.uptime(),
           gateway: buildEntryGatewayUrls(),
           gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20, maxLines: 2000 }),
+          exitLog: PROCESS_EXIT_LOG,
         },
         managers,
         mcp,
         tts,
+        search,
+        keys: summarizeServiceKeys(managers),
+        components: summarizeComponents(managers, mcp, tts, search),
       };
       return sendJson(res, detailed ? payload : redactStatusForRemote(payload));
     }
@@ -322,12 +354,18 @@ async function handleRequest(req, res) {
 function redactStatusForRemote(payload) {
   return {
     ...payload,
-    security: security.describePublic(payload.security),
+    security: {
+      ...security.describePublic(payload.security),
+      authGuard: payload.security?.authGuard ? { enabled: true, bannedCount: payload.security.authGuard.bannedCount } : undefined,
+    },
     entry: {
       ...payload.entry,
       pid: undefined,
+      exitLog: undefined,
       gatewayAccess: redactAccessForRemote(payload.entry.gatewayAccess),
     },
+    keys: redactKeySummary(payload.keys),
+    mcp: payload.mcp ? { ...payload.mcp, tools: undefined, policy: undefined } : payload.mcp,
     managers: (payload.managers || []).map((manager) => ({
       ...manager,
       root: undefined,
@@ -384,6 +422,14 @@ async function startServiceEntry() {
 }
 
 if (require.main === module) {
+  core.installProcessExitLogging({
+    label: "service-entry",
+    file: PROCESS_EXIT_LOG,
+    onSignal: async () => {
+      await security.revokeTrustToken().catch(() => {});
+      if (server) await new Promise((resolve) => server.close(resolve));
+    },
+  });
   startServiceEntry().catch((error) => {
     console.error(`Service entry failed to start: ${error.message}`);
     process.exit(1);
@@ -470,15 +516,113 @@ async function buildPlatformMcpStatus(options = {}) {
   if (!listening) return base;
   const health = await getJson(`http://127.0.0.1:${port}/health`, 2500);
   const data = health.data && typeof health.data === "object" ? health.data : {};
+  const healthy = Boolean(health.ok && data.ok && data.service === "local-ai-platform-mcp");
+  // 工具清单来自 /info（需 Bearer）。密钥只从平台根下的 server.env 读取，不外传。
+  let tools = [];
+  let policy = null;
+  if (healthy) {
+    const key = await readPlatformMcpKey(options.envFile);
+    if (key) {
+      const info = await getJson(`http://127.0.0.1:${port}/info`, 2500, { authorization: `Bearer ${key}` });
+      const infoData = info.data && typeof info.data === "object" ? info.data : {};
+      tools = Array.isArray(infoData.tools) ? infoData.tools.map((item) => String(item).slice(0, 80)).slice(0, 64) : [];
+      policy = infoData.policy && typeof infoData.policy === "object" ? infoData.policy : null;
+    }
+  }
   return {
     ...base,
-    healthy: Boolean(health.ok && data.ok && data.service === "local-ai-platform-mcp"),
+    healthy,
     readOnly: data.read_only !== false,
     authRequired: data.auth_required !== false,
     version: typeof data.version === "string" ? data.version.slice(0, 40) : null,
-    error: health.ok && data.service === "local-ai-platform-mcp"
+    tools,
+    toolCount: tools.length,
+    policy,
+    gatewayUrl: `http://127.0.0.1:${PORT}/gateway/mcp`,
+    error: healthy
       ? ""
       : String(health.error || "MCP health check failed or returned an unexpected service identity.").slice(0, 200),
+  };
+}
+
+async function readPlatformMcpKey(envFile = PLATFORM_MCP_ENV_FILE) {
+  const fromEnv = String(process.env.PLATFORM_MCP_API_KEY || "").trim();
+  if (fromEnv.length >= 16) return fromEnv;
+  try {
+    const text = await fs.readFile(envFile, "utf8");
+    const key = parseEnvFileValue(text, "PLATFORM_MCP_API_KEY");
+    return key.length >= 16 ? key : "";
+  } catch {
+    return "";
+  }
+}
+
+async function buildSearchGatewayStatus(options = {}) {
+  const port = Number(options.port || SEARCH_GATEWAY_PORT);
+  const checkPort = options.isPortListening || core.isPortListening;
+  const getJson = options.fetchJson || fetchJson;
+  const listening = await checkPort("127.0.0.1", port);
+  const base = {
+    id: "search",
+    name: "搜索网关",
+    host: "127.0.0.1",
+    port,
+    listening: Boolean(listening),
+    healthy: false,
+    authRequired: true,
+    upstreamBaseUrl: "",
+    upstreamViaEntry: false,
+    searchMode: "",
+    version: null,
+    gatewayUrl: `http://127.0.0.1:${PORT}/gateway/search/v1`,
+    startCommand: "start-search-gateway.cmd（需要 Docker Desktop）",
+    error: listening ? "" : `Search gateway is not listening on port ${port}.`,
+  };
+  if (!listening) return base;
+  const health = await getJson(`http://127.0.0.1:${port}/health`, 4000);
+  const data = health.data && typeof health.data === "object" ? health.data : {};
+  const healthy = Boolean(health.ok && data.ok && data.service === "local-ai-search-gateway");
+  const upstream = String(data.upstreamBaseUrl || "").slice(0, 200);
+  return {
+    ...base,
+    healthy,
+    authRequired: data.authRequired !== false,
+    upstreamBaseUrl: upstream,
+    upstreamViaEntry: /:5176\/gateway\//.test(upstream) || upstream.includes(`:${PORT}/gateway/`),
+    searchMode: String(data.searchMode || "").slice(0, 20),
+    version: typeof data.version === "string" ? data.version.slice(0, 40) : null,
+    searchState: data.searchState && typeof data.searchState === "object" ? data.searchState : null,
+    error: healthy ? "" : String(health.error || "Search gateway health check failed.").slice(0, 200),
+  };
+}
+
+// 一张离线清单：入口首页横幅和桌面通知都从这里取，谁离线、怎么拉起。
+function summarizeComponents(managers = [], mcp = null, tts = null, search = null) {
+  const items = [];
+  for (const manager of managers) {
+    items.push({
+      id: manager.id,
+      name: manager.name,
+      kind: "manager",
+      online: Boolean(manager.process?.portListening),
+      healthy: Boolean(manager.ok),
+      startable: true,
+      startCommand: `${manager.id === "vllm" ? "vllm-manager" : "llama-manager"}\\start-manager.cmd 或 start-service-entry.cmd`,
+      error: manager.error || "",
+    });
+  }
+  if (tts) items.push({ id: "tts", name: "TTS 语音平台", kind: "tts", online: Boolean(tts.listening), healthy: Boolean(tts.healthy), startable: false, startCommand: "start-tts-platform.cmd", error: tts.error || "" });
+  if (mcp) items.push({ id: "mcp", name: "MCP 工具服务", kind: "mcp", online: Boolean(mcp.listening), healthy: Boolean(mcp.healthy), startable: false, startCommand: "start-platform-mcp.cmd", error: mcp.error || "" });
+  if (search) items.push({ id: "search", name: "搜索网关", kind: "search", online: Boolean(search.listening), healthy: Boolean(search.healthy), startable: false, startCommand: "start-search-gateway.cmd（需要 Docker Desktop）", error: search.error || "" });
+  const offline = items.filter((item) => !item.online);
+  const unhealthy = items.filter((item) => item.online && !item.healthy);
+  return {
+    total: items.length,
+    online: items.length - offline.length,
+    offline: offline.map((item) => item.id),
+    unhealthy: unhealthy.map((item) => item.id),
+    items,
+    allCommand: "start-platform.cmd all",
   };
 }
 
@@ -595,6 +739,9 @@ function buildEntryGatewayUrls() {
     autoOpenCode: `${localBase}/gateway/auto/opencode/v1`,
     tts: `${localBase}/gateway/tts/`,
     ttsOpenAi: `${localBase}/gateway/tts/openai/v1`,
+    search: `${localBase}/gateway/search/v1`,
+    mcp: `${localBase}/gateway/mcp`,
+    status: `${localBase}/gateway/status`,
     lanAutoOpenAi: lanBase ? `${lanBase}/gateway/auto/openai/v1` : null,
     lanAutoClaude: lanBase ? `${lanBase}/gateway/auto/claude` : null,
     lanAutoOpenCode: lanBase ? `${lanBase}/gateway/auto/opencode/v1` : null,
@@ -721,18 +868,25 @@ async function proxyTtsGatewayRequest(req, res, url) {
   const startedAt = Date.now();
   let auth = { ok: true, clientId: "", client: null, authRequired: false };
   if (!isTtsUiShellRequest(req, route)) {
+    const ban = checkAuthBan(req);
+    if (ban) {
+      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, ban.message)).catch(() => {});
+      return sendJson(res, { detail: ban.message, code: "auth_banned" }, 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+    }
     auth = await security.authorizeGatewayRequest(req);
     if (!auth.ok) {
+      noteAuthResult(req, auth);
       appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
       const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
       return sendJson(res, { detail: auth.message, code: auth.code }, auth.status, headers);
     }
+    noteAuthResult(req, auth);
     req.serviceEntryAuth = auth;
   }
 
   const rate = core.enterServiceRateLimit(
     { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
-    auth.client?.id || req.socket?.remoteAddress || "anonymous",
+    auth.client?.id || security.resolveClientAddress(req) || "anonymous",
     entryRateBuckets,
   );
   if (!rate.ok) {
@@ -749,6 +903,25 @@ async function proxyTtsGatewayRequest(req, res, url) {
     const message = `TTS request body exceeds ${TTS_GATEWAY_MAX_BODY_BYTES} bytes.`;
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 413, startedAt, null, message)).catch(() => {});
     return sendJson(res, { detail: message, code: "request_body_too_large" }, 413, gatewayCorsHeaders(req));
+  }
+  // TTS 用量计费（F3）：持客户端 Key 的合成请求按秒数 / 字符数进账本，并检查每日秒数配额。
+  const synthesis = ttsSynthesisRoute(route, req.method);
+  const meter = synthesis && auth.client?.id
+    ? { clientId: auth.client.id, managerId: auth.matchedManager || "tts", endpoint: synthesis.endpoint, kind: synthesis.kind, characters: 0, engine: "unknown" }
+    : null;
+  if (meter) {
+    try {
+      const quota = getBillingStore().getTtsQuotaState({ managerId: meter.managerId, clientId: meter.clientId });
+      if (!quota.allowed) {
+        const message = quota.code === "billing_customer_inactive"
+          ? "Billing customer is not active."
+          : `Daily TTS quota exhausted (${Math.round(quota.usedSeconds)}s of ${quota.limitSeconds}s used). Resets at the start of the next day.`;
+        appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
+        return sendJson(res, { detail: message, code: quota.code === "billing_customer_inactive" ? "billing_customer_inactive" : "tts_quota_exceeded", quota: { limitSeconds: quota.limitSeconds, usedSeconds: quota.usedSeconds, remainingSeconds: quota.remainingSeconds } }, 429, gatewayCorsHeaders(req));
+      }
+    } catch (error) {
+      console.warn(`TTS quota check skipped: ${error.message}`);
+    }
   }
   if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
     const message = `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`;
@@ -769,7 +942,15 @@ async function proxyTtsGatewayRequest(req, res, url) {
   let bodyLimitError = null;
   try {
     let body;
-    if (hasBody) {
+    if (hasBody && meter) {
+      // Metered synthesis bodies are small JSON documents: buffer them so the
+      // text length is known before the upstream call.
+      const buffered = await readRequestBody(req, TTS_GATEWAY_MAX_BODY_BYTES);
+      const parsed = parseJsonSafe(buffered ? buffered.toString("utf8") : "", null);
+      meter.characters = countTtsCharacters(parsed, meter.kind);
+      meter.engine = ttsEngineFromBody(parsed);
+      body = buffered;
+    } else if (hasBody) {
       const limiter = createTtsBodyLimiter();
       limiter.once("error", (error) => { bodyLimitError = error; });
       body = Readable.toWeb(req.pipe(limiter));
@@ -778,7 +959,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
       method: req.method,
       headers: buildTtsProxyHeaders(req.headers, req),
       body,
-      ...(hasBody ? { duplex: "half" } : {}),
+      ...(hasBody && !meter ? { duplex: "half" } : {}),
       signal: upstreamControl.signal,
       redirect: "manual",
     });
@@ -791,12 +972,31 @@ async function proxyTtsGatewayRequest(req, res, url) {
     res.once("finish", () => {
       appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, upstream.status, startedAt, null, "")).catch(() => {});
     });
-    forwardUpstreamBody(upstream, res, upstreamControl);
+    let usageTransform = null;
+    if (meter) {
+      const engine = String(upstream.headers.get("x-tts-engine") || meter.engine || "unknown");
+      const externalRequestId = String(upstream.headers.get("x-request-id") || "");
+      const record = (duration) => recordTtsUsageSafely({
+        ...meter,
+        engine,
+        externalRequestId,
+        status: upstream.status,
+        ok: upstream.ok,
+        audioMs: duration?.audioMs || 0,
+        durationSource: duration?.durationSource || "missing",
+      });
+      if (!upstream.ok) record({ audioMs: 0, durationSource: "missing" });
+      else if (meter.kind === "audio") usageTransform = createWavDurationProbe(record);
+      else if (meter.kind === "json") usageTransform = createJsonCollector(1024 * 1024, (payload) => record(parseTtsJsonDuration(payload)));
+      else record({ audioMs: 0, durationSource: "missing" });
+    }
+    forwardUpstreamBody(upstream, res, upstreamControl, usageTransform);
   } catch (error) {
     upstreamControl.clear();
     const failure = bodyLimitError || error?.cause || error;
     const status = Number(failure?.status || (error?.name === "TimeoutError" ? 504 : 502));
     const message = status === 413 ? failure.message : "TTS gateway upstream is unavailable.";
+    if (meter) recordTtsUsageSafely({ ...meter, status, ok: false, audioMs: 0, durationSource: "missing" });
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, failure?.message || message)).catch(() => {});
     if (!res.headersSent) {
       sendJson(res, { detail: message, code: failure?.code || "tts_gateway_proxy_error" }, status, gatewayCorsHeaders(req));
@@ -816,7 +1016,13 @@ async function proxyGatewayRequest(req, res, url) {
   const startedAt = Date.now();
   // Authentication happens here, before the loopback hop, so the managers no
   // longer have to infer trust from a proxied socket address.
+  const ban = checkAuthBan(req);
+  if (ban) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, ban.message)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+  }
   const auth = await security.authorizeGatewayRequest(req);
+  noteAuthResult(req, auth);
   if (!auth.ok) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
     const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
@@ -986,6 +1192,234 @@ async function proxyGatewayRequest(req, res, url) {
   }
 }
 
+// --- 401 storm guard ---------------------------------------------------------
+
+// Local, non-proxied callers are never banned: a misconfigured local client
+// should get a clear 401 every time rather than a ten-minute lockout.
+function authGuardKey(req) {
+  if (core.isLocalRequest(req) && !security.isProxiedRequest(req)) return "";
+  return security.resolveClientAddress(req) || "";
+}
+
+function checkAuthBan(req) {
+  const key = authGuardKey(req);
+  if (!key) return null;
+  const ban = authGuard.check(key);
+  if (!ban.banned) return null;
+  return {
+    retryAfterSeconds: ban.retryAfterSeconds,
+    message: `Too many failed authentication attempts. Retry after ${ban.retryAfterSeconds}s.`,
+  };
+}
+
+function noteAuthResult(req, auth) {
+  const key = authGuardKey(req);
+  if (!key) return;
+  if (auth?.ok) {
+    authGuard.clear(key);
+    return;
+  }
+  if (auth?.status === 401) authGuard.record(key);
+}
+
+// --- /gateway/status ---------------------------------------------------------
+
+async function handleGatewayStatus(req, res, url) {
+  const route = { engine: "auto", protocol: "status", rest: "status" };
+  const startedAt = Date.now();
+  const ban = checkAuthBan(req);
+  if (ban) {
+    return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+  }
+  const auth = await security.authorizeGatewayRequest(req);
+  noteAuthResult(req, auth);
+  if (!auth.ok) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
+    const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
+    return sendJson(res, core.openAiGatewayError(auth.code, auth.message), auth.status, headers);
+  }
+  const limitRpm = Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600);
+  const rateKey = auth.client?.id || security.resolveClientAddress(req) || "anonymous";
+  const rate = core.enterServiceRateLimit({ rateLimitRpm: limitRpm }, rateKey, entryRateBuckets);
+  if (!rate.ok) {
+    return sendJson(res, core.openAiGatewayError("rate_limit_exceeded", `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`), 429, { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) });
+  }
+  const authorizedManagers = selectGatewayManagersForAuth("auto", auth);
+  const [catalogs, tts, search, mcp] = await Promise.all([
+    Promise.all(authorizedManagers.map((manager) => getManagerModelCatalog(manager))),
+    buildTtsStatus(),
+    buildSearchGatewayStatus(),
+    buildPlatformMcpStatus(),
+  ]);
+  const managers = catalogs.map((catalog) => ({
+    id: catalog.manager?.id || catalog.id || "",
+    name: catalog.manager?.name || catalog.name || "",
+    online: Boolean(catalog.listening),
+    running: Boolean(catalog.running),
+    models: (catalog.models || []).map((model) => String(model?.id || "").trim()).filter(Boolean).slice(0, 100),
+  }));
+  const models = Array.from(new Set(managers.flatMap((manager) => manager.models)))
+    .filter((id) => !auth.client || core.serviceClientAllowsModel(auth.client, id));
+  let quotas = null;
+  if (auth.client?.id && typeof getBillingStore().getTtsQuotaState === "function") {
+    try {
+      quotas = { tts: getBillingStore().getTtsQuotaState({ managerId: auth.matchedManager || "", clientId: auth.client.id }) };
+    } catch {
+      quotas = null;
+    }
+  }
+  const payload = {
+    ok: true,
+    service: "local-ai-gateway",
+    time: new Date().toISOString(),
+    auth: {
+      required: Boolean(auth.authRequired),
+      clientId: auth.client?.id || "",
+      matchedManager: auth.matchedManager || "",
+      allowedModels: auth.client?.allowedModels || [],
+    },
+    rateLimit: { limitPerMinute: limitRpm, remaining: rate.remaining, windowSeconds: 60 },
+    quotas,
+    models,
+    managers,
+    tts: { online: Boolean(tts.listening && tts.healthy), availableEngines: (tts.engines || []).filter((item) => item.available).map((item) => item.id) },
+    search: { online: Boolean(search.listening && search.healthy), mode: search.searchMode || "" },
+    mcp: { online: Boolean(mcp.listening && mcp.healthy), readOnly: mcp.readOnly !== false, toolCount: mcp.toolCount || 0 },
+    endpoints: {
+      openai: "/gateway/auto/openai/v1",
+      claude: "/gateway/auto/claude",
+      tts: "/gateway/tts/openai/v1",
+      search: "/gateway/search/v1",
+      mcp: "/gateway/mcp",
+    },
+  };
+  appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 200, startedAt, null, "")).catch(() => {});
+  return sendJson(res, payload, 200, gatewayCorsHeaders(req));
+}
+
+// --- search gateway / MCP proxies -------------------------------------------
+
+const AUX_UPSTREAMS = {
+  search: { port: () => SEARCH_GATEWAY_PORT, name: "Search gateway", offlineCode: "search_gateway_offline", timeoutMs: 10 * 60 * 1000 },
+  mcp: { port: () => PLATFORM_MCP_PORT, name: "MCP server", offlineCode: "mcp_offline", timeoutMs: 10 * 60 * 1000 },
+};
+
+async function auxUpstreamCredential(service) {
+  if (service === "mcp") return readPlatformMcpKey();
+  const configured = String(process.env.SERVICE_ENTRY_SEARCH_GATEWAY_KEY || process.env.SEARCH_GATEWAY_API_KEY || "").trim();
+  if (configured) return configured;
+  // start-search-gateway.cmd seeds the search key from the last public service
+  // key file; read the same file so the entry can present it.
+  try {
+    const text = await fs.readFile(path.join(AI_ROOT, "vllm-manager", "logs", ".last-public-service-key.txt"), "utf8");
+    return text.trim();
+  } catch {
+    return "";
+  }
+}
+
+function buildAuxProxyHeaders(headers, req, credential) {
+  const out = {};
+  const drop = new Set(["host", "connection", "content-length", "authorization", "x-api-key", "api-key", "cookie", ...TRUST_HEADER_NAMES]);
+  for (const [name, value] of Object.entries(headers || {})) {
+    const key = String(name).toLowerCase();
+    if (drop.has(key) || key.startsWith("proxy-")) continue;
+    if (Array.isArray(value)) out[key] = value.join(", ");
+    else if (value !== undefined) out[key] = String(value);
+  }
+  if (credential) out.authorization = `Bearer ${credential}`;
+  out["x-forwarded-for"] = security.resolveClientAddress(req) || "";
+  return out;
+}
+
+async function proxyAuxGatewayRequest(req, res, url) {
+  const route = parseAuxGatewayRoute(url.pathname);
+  if (!route) return sendJson(res, core.openAiGatewayError("not_found", "Unknown gateway route."), 404);
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, gatewayCorsHeaders(req));
+    return res.end();
+  }
+  const upstreamSpec = AUX_UPSTREAMS[route.service];
+  const startedAt = Date.now();
+  const ban = checkAuthBan(req);
+  if (ban) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, ban.message)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+  }
+  const auth = await security.authorizeGatewayRequest(req);
+  noteAuthResult(req, auth);
+  if (!auth.ok) {
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
+    const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
+    return sendJson(res, core.openAiGatewayError(auth.code, auth.message), auth.status, headers);
+  }
+  req.serviceEntryAuth = auth;
+  const rate = core.enterServiceRateLimit(
+    { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
+    auth.client?.id || security.resolveClientAddress(req) || "anonymous",
+    entryRateBuckets,
+  );
+  if (!rate.ok) {
+    const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("rate_limit_exceeded", message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) });
+  }
+  let targetPath;
+  try {
+    targetPath = buildAuxUpstreamPath(route);
+  } catch (error) {
+    return sendJson(res, core.openAiGatewayError(error.code || "invalid_gateway_path", error.message), error.status || 400, gatewayCorsHeaders(req));
+  }
+  const port = upstreamSpec.port();
+  if (!(await isManagerPortListening(port))) {
+    const message = `${upstreamSpec.name} is not listening on port ${port}.`;
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, message)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError(upstreamSpec.offlineCode, message), 503, gatewayCorsHeaders(req));
+  }
+  const declaredLength = Number(req.headers?.["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > GATEWAY_MAX_BODY_BYTES) {
+    const message = `Request body exceeds ${GATEWAY_MAX_BODY_BYTES} bytes.`;
+    return sendJson(res, core.openAiGatewayError("request_body_too_large", message), 413, gatewayCorsHeaders(req));
+  }
+  const credential = await auxUpstreamCredential(route.service);
+  const target = new URL(`http://127.0.0.1:${port}${targetPath}`);
+  target.search = url.search;
+  const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
+  const upstreamControl = createUpstreamControl(req, res, { timeoutMs: upstreamSpec.timeoutMs });
+  let bodyLimitError = null;
+  try {
+    let body;
+    if (hasBody) {
+      const limiter = createTtsBodyLimiter(GATEWAY_MAX_BODY_BYTES);
+      limiter.once("error", (error) => { bodyLimitError = error; });
+      body = Readable.toWeb(req.pipe(limiter));
+    }
+    const upstream = await fetch(target, {
+      method: req.method,
+      headers: buildAuxProxyHeaders(req.headers, req, credential),
+      body,
+      ...(hasBody ? { duplex: "half" } : {}),
+      signal: upstreamControl.signal,
+      redirect: "manual",
+    });
+    res.writeHead(upstream.status, buildResponseHeaders(upstream.headers, req));
+    res.once("finish", () => {
+      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, upstream.status, startedAt, null, "")).catch(() => {});
+    });
+    forwardUpstreamBody(upstream, res, upstreamControl);
+  } catch (error) {
+    upstreamControl.clear();
+    const failure = bodyLimitError || error?.cause || error;
+    const status = Number(failure?.status || (error?.name === "TimeoutError" ? 504 : 502));
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, failure?.message || "upstream unavailable")).catch(() => {});
+    if (!res.headersSent) {
+      sendJson(res, core.openAiGatewayError(failure?.code || "gateway_proxy_error", status === 413 ? failure.message : `${upstreamSpec.name} upstream is unavailable.`), status, gatewayCorsHeaders(req));
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  }
+}
+
 function requireGatewayJsonContentType(req) {
   const method = String(req?.method || "GET").toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return;
@@ -998,16 +1432,40 @@ function requireGatewayJsonContentType(req) {
   }
 }
 
-function forwardUpstreamBody(upstream, res, upstreamControl) {
+function forwardUpstreamBody(upstream, res, upstreamControl, transform = null) {
   if (!upstream?.body) {
     upstreamControl.clear();
     if (!res.writableEnded) res.end();
+    if (transform && typeof transform.end === "function") transform.end();
     return;
   }
   const stream = typeof upstream.body.getReader === "function"
     ? Readable.fromWeb(upstream.body)
     : upstream.body;
-  pipeline(stream, res, () => upstreamControl.clear());
+  if (transform) pipeline(stream, transform, res, () => upstreamControl.clear());
+  else pipeline(stream, res, () => upstreamControl.clear());
+}
+
+// Billing writes never break a synthesis response: failures are logged and
+// the request is still served.
+function recordTtsUsageSafely(input) {
+  try {
+    getBillingStore().recordTtsUsage({
+      requestId: crypto.randomUUID(),
+      managerId: input.managerId,
+      clientId: input.clientId,
+      engine: input.engine,
+      endpoint: input.endpoint,
+      characters: input.characters,
+      audioMs: input.audioMs,
+      durationSource: input.durationSource,
+      status: input.status,
+      ok: input.ok,
+      externalRequestId: input.externalRequestId || undefined,
+    });
+  } catch (error) {
+    console.warn(`TTS usage not recorded: ${error.message}`);
+  }
 }
 
 function isAggregatedModelListRequest(req, route) {
@@ -1724,9 +2182,12 @@ async function waitForManagerReady(manager, timeoutMs) {
   return false;
 }
 
-async function fetchJson(url, timeoutMs = 2500) {
+async function fetchJson(url, timeoutMs = 2500, headers = undefined) {
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(Math.max(250, Number(timeoutMs) || 2500)) });
+    const response = await fetch(url, {
+      ...(headers ? { headers } : {}),
+      signal: AbortSignal.timeout(Math.max(250, Number(timeoutMs) || 2500)),
+    });
     const text = await response.text();
     return { ok: response.ok, status: response.status, data: parseJsonSafe(text, null), error: response.ok ? "" : text };
   } catch (error) {
@@ -1839,7 +2300,17 @@ module.exports = {
   buildFleetSnapshot,
   buildManagerCatalog,
   buildPlatformMcpStatus,
+  buildSearchGatewayStatus,
+  buildAuxProxyHeaders,
   buildTtsStatus,
+  authGuard,
+  checkAuthBan,
+  handleGatewayStatus,
+  noteAuthResult,
+  proxyAuxGatewayRequest,
+  recordTtsUsageSafely,
+  summarizeComponents,
+  summarizeServiceKeys,
   buildTtsGatewayPath,
   buildTtsProxyHeaders,
   buildManagerGatewayPath,

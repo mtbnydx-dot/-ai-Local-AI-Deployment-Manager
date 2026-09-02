@@ -25,6 +25,9 @@ function normalizeAutomationSettings(value = {}) {
     vramAction: new Set(["warn", "unload"]).has(String(item.vramAction || "")) ? String(item.vramAction) : "warn",
     tempGuardEnabled: Boolean(item.tempGuardEnabled),
     tempLimitC: Math.min(95, Math.max(60, Number(item.tempLimitC || 83))),
+    // 功耗墙提示默认跟随温度守护开关；贴着 power.limit 运行会降频。
+    powerGuardEnabled: item.powerGuardEnabled === undefined ? Boolean(item.tempGuardEnabled) : Boolean(item.powerGuardEnabled),
+    powerLimitPct: Math.min(100, Math.max(80, Number(item.powerLimitPct || 97))),
     updatedAt: new Date().toISOString(),
   };
 }

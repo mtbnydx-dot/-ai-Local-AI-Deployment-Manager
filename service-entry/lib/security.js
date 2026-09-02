@@ -343,8 +343,13 @@ function createEntrySecurity(options = {}) {
       keyStatus = { readable: false, managersWithKeys: [], issues: [{ file: "", message: error.message }] };
     }
     const enforced = current.requireApiKey && keyStatus.readable && keyStatus.managersWithKeys.length > 0;
+    const publicBaseUrl = envText("SERVICE_ENTRY_PUBLIC_BASE_URL");
     return {
       lanMode: current.lanMode,
+      publicMode: current.publicMode,
+      publicBaseUrl: current.publicMode ? publicBaseUrl : "",
+      exposure: current.publicMode ? "public" : current.lanMode ? "lan" : "local",
+      host,
       requireApiKey: current.requireApiKey,
       requireApiKeyMode: current.requireApiKeyMode,
       apiKeyEnforced: enforced,
@@ -355,6 +360,7 @@ function createEntrySecurity(options = {}) {
       keyStore: keyStatus,
       configIssues: core.listConfigHealthIssues(),
       warnings: buildWarnings(current, keyStatus, enforced),
+      publicChecklist: buildPublicChecklist(current, keyStatus, enforced, publicBaseUrl),
       switches: {
         SERVICE_ENTRY_REQUIRE_API_KEY: "auto | 1 | 0 — auto 表示仅在局域网模式下强制；不受信环境请设为 1",
         SERVICE_ENTRY_ALLOW_LAN_ADMIN: "0 | 1 — 允许局域网设备访问管理端点",
@@ -364,10 +370,50 @@ function createEntrySecurity(options = {}) {
     };
   }
 
+  // The go-live checklist for a LAN or public deployment. Each item is a fact
+  // the entry can verify itself; items it cannot verify (firewall, Caddy path
+  // restriction) are listed as "manual" so the operator still sees them.
+  function buildPublicChecklist(current, keyStatus, enforced, publicBaseUrl = "") {
+    const items = [];
+    const push = (id, state, title, detail) => items.push({ id, state, title, detail });
+    const exposed = current.lanMode || current.publicMode;
+    push("api-key", enforced ? "ok" : exposed ? "fail" : "info",
+      "API Key 强制且有可用密钥",
+      enforced
+        ? `已强制；持有密钥的管理器：${keyStatus.managersWithKeys.join(", ")}`
+        : current.requireApiKey
+          ? "已要求 API Key，但没有可用密钥或密钥库不可读，网关会拒绝全部请求。"
+          : "未强制 API Key。设置 SERVICE_ENTRY_REQUIRE_API_KEY=1，并在管理器“对外服务”页生成密钥。");
+    push("lan-admin", current.allowLanAdmin ? (exposed ? "fail" : "warn") : "ok",
+      "管理端点仅限本机",
+      current.allowLanAdmin ? "SERVICE_ENTRY_ALLOW_LAN_ADMIN=1，局域网设备可以启停管理器。公网部署必须关闭。" : "管理 API 只接受本机直连；经代理转发的请求一律拒绝。");
+    push("cors", current.allowedOrigins.includes("*") ? "fail" : "ok",
+      "CORS 未放开为任意来源",
+      current.allowedOrigins.length ? `允许的 Origin：${current.allowedOrigins.join(", ")}` : "未配置跨域来源（默认拒绝）。");
+    if (current.publicMode) {
+      const https = /^https:\/\//i.test(publicBaseUrl);
+      push("https", https ? "ok" : "fail", "公网地址使用 HTTPS", https ? publicBaseUrl : `SERVICE_ENTRY_PUBLIC_BASE_URL=${publicBaseUrl || "(空)"} 不是 https://，密钥会明文传输。`);
+      push("loopback-bind", current.lanMode ? "warn" : "ok",
+        "公网流量只经反向代理进入",
+        current.lanMode
+          ? `入口同时监听 ${current.host}，局域网设备可绕过 Caddy 直连。公网部署建议入口只绑 127.0.0.1。`
+          : "入口只绑回环，公网请求必须经 Caddy 转发，且只放行 /gateway/*。");
+    }
+    push("rate-limit", "ok", "限流与 401 风暴防护",
+      `每客户端 ${envText("SERVICE_ENTRY_RATE_LIMIT_RPM", "600")} 请求/分钟；连续鉴权失败会被临时封禁（SERVICE_ENTRY_AUTH_FAIL_LIMIT / SERVICE_ENTRY_AUTH_BAN_SECONDS）。`);
+    push("caddy-paths", "manual", "Caddy 只转发 /gateway/*",
+      "deploy/public/Caddyfile 已按路径收紧；用 scripts/setup-public.ps1 生成 .env 并校验配置。");
+    push("firewall", "manual", "路由器 / 防火墙只开放 80/443",
+      "5176/5177/5178/7000/5180/5190 不得对公网开放；模型容器使用本地网络模式。");
+    return items;
+  }
+
   function describePublic(full = null) {
     const source = full && typeof full === "object" ? full : policy();
     return {
       lanMode: Boolean(source.lanMode),
+      publicMode: Boolean(source.publicMode),
+      exposure: source.exposure || (source.publicMode ? "public" : source.lanMode ? "lan" : "local"),
       requireApiKey: Boolean(source.requireApiKey),
       requireApiKeyMode: source.requireApiKeyMode || "auto",
       apiKeyEnforced: Boolean(source.apiKeyEnforced),

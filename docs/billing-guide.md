@@ -70,6 +70,15 @@
 - 余额调整、usage 和管理审计是不可覆盖记录；重复授权、结算和余额调整使用幂等键防止重复扣款。
 - 金额在接口和 JavaScript 中使用十进制字符串，不经过浮点金额运算。
 
+## TTS 用量计费
+
+TTS 请求经统一入口 `/gateway/tts/*` 转发时，只要请求带的是**客户端 Key**（不是全局 Key），入口就会把每次合成记入 `billing_tts_usage_events`：引擎、字符数、音频秒数（从 WAV 头或 JSON 的 `duration_ms` 读出）、状态码。文本本身不落库。
+
+- 价格挂在套餐上：`ttsPerMinuteMicrocredits`（每分钟音频）和 `ttsPerThousandCharsMicrocredits`（每千字符），通过 `POST /api/billing/plans` 或 `PATCH` 设置，均为微积分整数。
+- 每客户可设 `ttsDailySecondsLimit`（每日音频秒数配额，按 `BILLING_TZ_OFFSET_MINUTES` 的自然日计）。Hard 客户超额后入口返回 `429 tts_quota_exceeded`；Shadow 客户只记录 `billing_tts_daily_limit_shadow`，不拦截。
+- Hard 客户的成功合成按 `ceil(秒数/60 × 每分钟价) + ceil(字符/1000 × 每千字价)` 扣到钱包账本（`idempotency_key = tts:<requestId>`）；失败请求不计费。未绑定客户的 Key 以 Shadow 方式记录，不扣费。
+- `/api/billing/overview` 返回 `tts.lifetime / tts.period`（请求数、秒数、字符数、预计与已扣），计费页“本期 TTS 音频”即来自这里；`/gateway/status`（需 Key）里的 `quotas.tts` 给客户端看自己的当日剩余秒数。
+
 ## 当前版本范围
 
 - 中央计费覆盖两个管理器的 OpenAI 兼容公网路由。

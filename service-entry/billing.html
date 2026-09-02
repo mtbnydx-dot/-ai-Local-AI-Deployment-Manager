@@ -829,6 +829,7 @@
         <article class="metric"><span>可用余额</span><strong id="summaryBalance">—</strong></article>
         <article class="metric"><span>本期 Tokens</span><strong id="summaryTokens">—</strong></article>
         <article class="metric"><span>本期消费</span><strong id="summarySpend">—</strong></article>
+        <article class="metric"><span>本期 TTS 音频</span><strong id="summaryTts">—</strong></article>
       </div>
 
       <div class="workspace-grid">
@@ -1451,6 +1452,14 @@
           source.periodCostMicrocredits ?? source.periodSpendMicrocredits ?? source.debitedMicrocredits,
           ""
         ),
+        tts: source.tts && typeof source.tts === "object" && source.tts.period
+          ? {
+            requests: Number(source.tts.period.requests) || 0,
+            audioSeconds: Number(source.tts.period.audioSeconds) || 0,
+            characters: Number(source.tts.period.characters) || 0,
+            chargedMicrocredits: String(source.tts.period.chargedMicrocredits || "0"),
+          }
+          : null,
       };
     }
 
@@ -1708,6 +1717,10 @@
       setText("#summaryBalance", formatCredits(billingState.summary.availableCredits || "0"));
       setText("#summaryTokens", formatInteger(billingState.summary.periodTokens || sumIntegers(billingState.usage.map(function (item) { return item.totalTokens; }))));
       setText("#summarySpend", formatCredits(billingState.summary.periodSpend || sumDecimals(billingState.usage.map(function (item) { return item.debited || item.cost; }), 6)));
+      const tts = billingState.summary.tts;
+      setText("#summaryTts", tts
+        ? (Math.round(tts.audioSeconds) + " 秒 · " + tts.requests + " 次 · 扣 " + formatCredits(creditsFromApi(undefined, tts.chargedMicrocredits, "0")))
+        : "—");
     }
 
     function renderOverviewCustomers() {

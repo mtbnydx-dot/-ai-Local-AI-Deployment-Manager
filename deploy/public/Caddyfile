@@ -19,17 +19,32 @@
 	}
 }
 
+# Model API domain: only the gateway surface is reachable from the internet.
+# The entry also refuses non-/gateway paths on proxied requests, but the proxy
+# is the first line, so a console page or management API never even reaches it.
 {$MODEL_API_DOMAIN} {
 	encode zstd gzip
 	request_body {
 		max_size 32MB
 	}
-	reverse_proxy 127.0.0.1:5176 {
-		flush_interval -1
-		transport http {
-			read_timeout 30m
-			write_timeout 30m
-			response_header_timeout 30m
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	@gateway path /gateway/*
+	handle @gateway {
+		reverse_proxy 127.0.0.1:5176 {
+			flush_interval -1
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+				response_header_timeout 30m
+			}
 		}
+	}
+	handle {
+		respond "Not found" 404
 	}
 }

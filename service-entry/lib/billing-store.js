@@ -113,7 +113,10 @@ function createBillingStore(options = {}) {
       "planId", "code", "name", "currency", "monthlyPriceMicrocredits", "includedMicrocredits",
       "periodCreditLimitMicrocredits", "monthlyTokenLimit", "periodTokenLimit", "monthlyRequestLimit",
       "periodRequestLimit", "enforcementMode", "active", "actorId",
+      "ttsPerMinuteMicrocredits", "ttsPerThousandCharsMicrocredits",
     ], "plan");
+    const ttsPerMinute = optionalNonNegativeInt64(input.ttsPerMinuteMicrocredits, "ttsPerMinuteMicrocredits") ?? 0n;
+    const ttsPerThousandChars = optionalNonNegativeInt64(input.ttsPerThousandCharsMicrocredits, "ttsPerThousandCharsMicrocredits") ?? 0n;
     const planId = uuid(input.planId, "planId", { generate: true });
     const code = planCode(input.code || `plan-${planId.slice(0, 8)}`);
     const name = text(input.name, "name", 1, 120);
@@ -140,7 +143,9 @@ function createBillingStore(options = {}) {
       } catch (error) {
         throw sqliteConstraint(error, "billing_plan_conflict", "Plan code or id already exists.");
       }
-      insertAudit({ actorId, action: "plan.create", targetType: "plan", targetId: planId, details: { code, name } });
+      prepare("UPDATE billing_plans SET tts_per_minute_microcredits=?, tts_per_thousand_chars_microcredits=? WHERE plan_id=?")
+        .run(ttsPerMinute, ttsPerThousandChars, planId);
+      insertAudit({ actorId, action: "plan.create", targetType: "plan", targetId: planId, details: { code, name, ttsPerMinuteMicrocredits: decimal(ttsPerMinute), ttsPerThousandCharsMicrocredits: decimal(ttsPerThousandChars) } });
       return getPlan(planId);
     });
   }
@@ -167,21 +172,30 @@ function createBillingStore(options = {}) {
         : optionalQuotaInt64(patch.monthlyRequestLimit ?? patch.periodRequestLimit, "monthlyRequestLimit"),
       enforcementMode: patch.enforcementMode === undefined ? current.enforcement_mode : normalizeEnforcementMode(patch.enforcementMode),
       active: patch.active === undefined ? current.active : booleanInteger(patch.active, true, "active"),
+      ttsPerMinute: patch.ttsPerMinuteMicrocredits === undefined
+        ? BigInt(current.tts_per_minute_microcredits || 0)
+        : (optionalNonNegativeInt64(patch.ttsPerMinuteMicrocredits, "ttsPerMinuteMicrocredits") ?? 0n),
+      ttsPerThousandChars: patch.ttsPerThousandCharsMicrocredits === undefined
+        ? BigInt(current.tts_per_thousand_chars_microcredits || 0)
+        : (optionalNonNegativeInt64(patch.ttsPerThousandCharsMicrocredits, "ttsPerThousandCharsMicrocredits") ?? 0n),
     };
     rejectUnknownKeys(patch, [
       "code", "name", "currency", "monthlyPriceMicrocredits", "includedMicrocredits", "periodCreditLimitMicrocredits",
       "monthlyTokenLimit", "periodTokenLimit", "monthlyRequestLimit", "periodRequestLimit", "enforcementMode", "active", "actorId",
+      "ttsPerMinuteMicrocredits", "ttsPerThousandCharsMicrocredits",
     ], "plan patch");
     return transaction(() => {
       try {
         prepare(`
           UPDATE billing_plans SET
             code=?, name=?, currency=?, monthly_price_microcredits=?, included_microcredits=?,
-            monthly_token_limit=?, monthly_request_limit=?, enforcement_mode=?, active=?, updated_at=?
+            monthly_token_limit=?, monthly_request_limit=?, enforcement_mode=?, active=?, updated_at=?,
+            tts_per_minute_microcredits=?, tts_per_thousand_chars_microcredits=?
           WHERE plan_id=?
         `).run(
           next.code, next.name, next.currency, next.monthlyPrice, next.included, next.tokenLimit,
-          next.requestLimit, next.enforcementMode, next.active, nowIso(), planId,
+          next.requestLimit, next.enforcementMode, next.active, nowIso(),
+          next.ttsPerMinute, next.ttsPerThousandChars, planId,
         );
       } catch (error) {
         throw sqliteConstraint(error, "billing_plan_conflict", "Plan code already exists.");
@@ -217,8 +231,9 @@ function createBillingStore(options = {}) {
   function createCustomer(input = {}) {
     rejectUnknownKeys(input, [
       "customerId", "externalRef", "name", "status", "planId", "enforcementMode", "creditLimitMicrocredits",
-      "monthlyTokenLimit", "monthlyRequestLimit", "notes", "actorId",
+      "monthlyTokenLimit", "monthlyRequestLimit", "notes", "actorId", "ttsDailySecondsLimit",
     ], "customer");
+    const ttsDailySecondsLimit = optionalQuotaInt64(input.ttsDailySecondsLimit, "ttsDailySecondsLimit");
     const customerId = uuid(input.customerId, "customerId", { generate: true });
     const externalRef = nullableText(input.externalRef, "externalRef", 128);
     const name = text(input.name, "name", 1, 120);
@@ -244,6 +259,7 @@ function createBillingStore(options = {}) {
       } catch (error) {
         throw sqliteConstraint(error, "billing_customer_conflict", "Customer id or external reference already exists.");
       }
+      prepare("UPDATE billing_customers SET tts_daily_seconds_limit=? WHERE customer_id=?").run(ttsDailySecondsLimit, customerId);
       insertAudit({ actorId: input.actorId || "system", action: "customer.create", targetType: "customer", targetId: customerId, customerId, details: { externalRef, name, status, planId, enforcementMode, creditLimitMicrocredits: decimal(creditLimit), monthlyTokenLimit: decimal(tokenLimit), monthlyRequestLimit: decimal(requestLimit) } });
       return getCustomer(customerId);
     });
@@ -253,7 +269,7 @@ function createBillingStore(options = {}) {
     const customerId = uuid(customerIdInput, "customerId");
     const current = getCustomerRow(customerId);
     if (!current) throw new BillingStoreError("billing_customer_not_found", "Customer not found.", 404);
-    rejectUnknownKeys(patch, ["externalRef", "name", "status", "planId", "enforcementMode", "creditLimitMicrocredits", "monthlyTokenLimit", "monthlyRequestLimit", "notes", "actorId"], "customer patch");
+    rejectUnknownKeys(patch, ["externalRef", "name", "status", "planId", "enforcementMode", "creditLimitMicrocredits", "monthlyTokenLimit", "monthlyRequestLimit", "notes", "actorId", "ttsDailySecondsLimit"], "customer patch");
     const planId = patch.planId === undefined
       ? current.plan_id
       : patch.planId === null || patch.planId === "" ? null : uuid(patch.planId, "planId");
@@ -278,6 +294,9 @@ function createBillingStore(options = {}) {
         ? current.monthly_request_limit
         : optionalQuotaInt64(patch.monthlyRequestLimit, "monthlyRequestLimit"),
       notes: patch.notes === undefined ? current.notes : optionalText(patch.notes, "notes", 1000),
+      ttsDailySecondsLimit: patch.ttsDailySecondsLimit === undefined
+        ? (current.tts_daily_seconds_limit === null || current.tts_daily_seconds_limit === undefined ? null : BigInt(current.tts_daily_seconds_limit))
+        : optionalQuotaInt64(patch.ttsDailySecondsLimit, "ttsDailySecondsLimit"),
     };
     return transaction(() => {
       if (planId && !getPlanRow(planId)) throw new BillingStoreError("billing_plan_not_found", "Plan not found.", 404);
@@ -285,9 +304,9 @@ function createBillingStore(options = {}) {
         prepare(`
           UPDATE billing_customers SET
             external_ref=?, name=?, status=?, plan_id=?, enforcement_mode=?, credit_limit_microcredits=?,
-            monthly_token_limit=?, monthly_request_limit=?, notes=?, updated_at=?
+            monthly_token_limit=?, monthly_request_limit=?, notes=?, updated_at=?, tts_daily_seconds_limit=?
           WHERE customer_id=?
-        `).run(next.externalRef, next.name, next.status, planId, enforcementMode, next.creditLimit, next.tokenLimit, next.requestLimit, next.notes, nowIso(), customerId);
+        `).run(next.externalRef, next.name, next.status, planId, enforcementMode, next.creditLimit, next.tokenLimit, next.requestLimit, next.notes, nowIso(), next.ttsDailySecondsLimit, customerId);
       } catch (error) {
         throw sqliteConstraint(error, "billing_customer_conflict", "Customer external reference already exists.");
       }
@@ -297,7 +316,7 @@ function createBillingStore(options = {}) {
   }
 
   function updateCustomerPolicy(customerId, patch = {}) {
-    rejectUnknownKeys(patch, ["planId", "enforcementMode", "creditLimitMicrocredits", "monthlyTokenLimit", "monthlyRequestLimit", "status", "actorId"], "customer policy patch");
+    rejectUnknownKeys(patch, ["planId", "enforcementMode", "creditLimitMicrocredits", "monthlyTokenLimit", "monthlyRequestLimit", "status", "actorId", "ttsDailySecondsLimit"], "customer policy patch");
     return updateCustomer(customerId, patch);
   }
 
@@ -354,6 +373,7 @@ function createBillingStore(options = {}) {
       SELECT b.*, c.status AS customer_status, c.plan_id, c.enforcement_mode AS customer_enforcement_mode,
              c.credit_limit_microcredits, c.monthly_token_limit AS customer_monthly_token_limit,
              c.monthly_request_limit AS customer_monthly_request_limit,
+             c.tts_daily_seconds_limit,
              p.enforcement_mode AS plan_enforcement_mode, p.active AS plan_active,
              p.included_microcredits, p.monthly_token_limit AS plan_monthly_token_limit,
              p.monthly_request_limit AS plan_monthly_request_limit
@@ -924,7 +944,145 @@ function createBillingStore(options = {}) {
         availableMicrocredits,
       },
       recentUsage: listUsage({ limit: 20 }),
+      tts: getTtsOverview(),
     };
+  }
+
+  // --- TTS usage (F3) -------------------------------------------------------
+
+  // Resolves the billing customer behind a service key the same way token
+  // billing does: through the (manager, service client) credential binding.
+  function resolveTtsBinding(managerId, clientId) {
+    const binding = getBindingRow(managerId, clientId);
+    if (!binding || Number(binding.active) !== 1) return null;
+    return binding;
+  }
+
+  function ttsQuotaForBinding(binding, atDate) {
+    const period = dayPeriod(atDate, defaultTzOffsetMinutes);
+    const usage = prepare(`
+      SELECT COUNT(*) AS row_count, COALESCE(SUM(audio_ms), 0) AS audio_ms, COALESCE(SUM(characters), 0) AS characters
+      FROM billing_tts_usage_events
+      WHERE customer_id=? AND at>=? AND at<? AND ok=1
+    `).get(binding.customer_id, period.start, period.end);
+    const usedMs = BigInt(usage?.audio_ms || 0);
+    const limitSeconds = binding.tts_daily_seconds_limit === null || binding.tts_daily_seconds_limit === undefined
+      ? null
+      : BigInt(binding.tts_daily_seconds_limit);
+    const usedSeconds = Number(usedMs) / 1000;
+    const remainingSeconds = limitSeconds === null ? null : Math.max(0, Number(limitSeconds) - usedSeconds);
+    return { period, requests: Number(usage?.row_count || 0), characters: Number(usage?.characters || 0), usedSeconds, limitSeconds: limitSeconds === null ? null : Number(limitSeconds), remainingSeconds };
+  }
+
+  function getTtsQuotaState(input = {}) {
+    const managerId = managerIdentifier(input.managerId || "tts");
+    const clientId = clientIdentifier(input.clientId);
+    const atDate = nowDate();
+    const binding = resolveTtsBinding(managerId, clientId);
+    if (!binding) {
+      return { bound: false, allowed: true, enforcementMode: defaultEnforcementMode, code: "billing_unbound", customerId: null, limitSeconds: null, usedSeconds: 0, remainingSeconds: null, period: dayPeriod(atDate, defaultTzOffsetMinutes).key };
+    }
+    const enforcementMode = binding.customer_enforcement_mode || binding.plan_enforcement_mode || defaultEnforcementMode;
+    const quota = ttsQuotaForBinding(binding, atDate);
+    const exceeded = quota.limitSeconds !== null && quota.usedSeconds >= quota.limitSeconds;
+    const inactive = binding.customer_status !== "active";
+    const allowed = enforcementMode === "shadow" || (!exceeded && !inactive);
+    return {
+      bound: true,
+      allowed,
+      enforcementMode,
+      code: inactive ? "billing_customer_inactive" : exceeded ? (enforcementMode === "shadow" ? "billing_tts_daily_limit_shadow" : "billing_tts_daily_limit") : "billing_authorized",
+      customerId: binding.customer_id,
+      period: quota.period.key,
+      requestsToday: quota.requests,
+      charactersToday: quota.characters,
+      limitSeconds: quota.limitSeconds,
+      usedSeconds: quota.usedSeconds,
+      remainingSeconds: quota.remainingSeconds,
+    };
+  }
+
+  function recordTtsUsage(input = {}) {
+    const requestId = uuid(input.requestId, "requestId");
+    const managerId = managerIdentifier(input.managerId || "tts");
+    const clientId = clientIdentifier(input.clientId);
+    const engine = identifier(input.engine || "unknown", "engine", 1, 80);
+    const endpoint = text(input.endpoint || "/v1/audio/speech", "endpoint", 1, 200);
+    const characters = nonNegativeInt64(input.characters ?? 0, "characters");
+    const audioMs = nonNegativeInt64(input.audioMs ?? 0, "audioMs");
+    const durationSource = ["reported", "measured", "missing"].includes(input.durationSource) ? input.durationSource : (audioMs > 0n ? "measured" : "missing");
+    const status = boundedInteger(input.status ?? 200, "status", 0, 599);
+    const ok = Boolean(input.ok ?? (status >= 200 && status < 300));
+    const externalRequestId = optionalText(input.externalRequestId, "externalRequestId", 128);
+    return transaction(() => {
+      const existing = prepare("SELECT * FROM billing_tts_usage_events WHERE request_id=?").get(requestId);
+      if (existing) return ttsUsageFromRow(existing, true);
+      const atDate = nowDate();
+      const at = atDate.toISOString();
+      const binding = resolveTtsBinding(managerId, clientId);
+      let enforcementMode = defaultEnforcementMode;
+      let code = "billing_unbound_shadow";
+      let projected = 0n;
+      let charged = 0n;
+      let customerId = null;
+      if (binding) {
+        customerId = binding.customer_id;
+        enforcementMode = binding.customer_enforcement_mode || binding.plan_enforcement_mode || defaultEnforcementMode;
+        const plan = binding.plan_id ? getPlanRow(binding.plan_id) : null;
+        const perMinute = BigInt(plan?.tts_per_minute_microcredits || 0);
+        const perThousandChars = BigInt(plan?.tts_per_thousand_chars_microcredits || 0);
+        if (ok) {
+          projected = ceilDiv(audioMs * perMinute, 60_000n) + ceilDiv(characters * perThousandChars, 1000n);
+        }
+        const hasPrice = perMinute > 0n || perThousandChars > 0n;
+        code = !plan ? "billing_plan_missing" : !hasPrice ? "billing_tts_price_not_configured" : "billing_tts_settled";
+        charged = enforcementMode === "hard" && ok ? projected : 0n;
+      }
+      const usageId = uuid(null, "usageId", { generate: true });
+      prepare(`
+        INSERT INTO billing_tts_usage_events
+          (usage_id, at, request_id, external_request_id, customer_id, manager_id, service_client_id, engine, endpoint,
+           response_status, ok, characters, audio_ms, duration_source, projected_microcredits, charged_microcredits,
+           enforcement_mode, decision_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        usageId, at, requestId, externalRequestId || null, customerId, managerId, clientId, engine, endpoint,
+        status, ok ? 1 : 0, characters, audioMs, durationSource, projected, charged, enforcementMode, code,
+      );
+      if (charged > 0n) {
+        prepare(`
+          INSERT INTO billing_wallet_ledger
+            (entry_id, at, customer_id, entry_type, delta_microcredits, request_id, idempotency_key, reason, actor_id)
+          VALUES (?, ?, ?, 'usage_debit', ?, NULL, ?, ?, 'billing')
+        `).run(uuid(null, "entryId", { generate: true }), at, customerId, -charged, `tts:${requestId}`, "Settled TTS usage.");
+      }
+      return ttsUsageFromRow(prepare("SELECT * FROM billing_tts_usage_events WHERE request_id=?").get(requestId), false);
+    });
+  }
+
+  function listTtsUsage(query = {}) {
+    const { limit, offset } = pagination(query, 100);
+    const where = [];
+    const params = [];
+    if (query.customerId) { where.push("customer_id=?"); params.push(uuid(query.customerId, "customerId")); }
+    if (query.clientId) { where.push("service_client_id=?"); params.push(clientIdentifier(query.clientId)); }
+    const sql = `SELECT * FROM billing_tts_usage_events${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY at DESC LIMIT ? OFFSET ?`;
+    params.push(BigInt(limit), BigInt(offset));
+    return prepare(sql).all(...params).map((row) => ttsUsageFromRow(row, true));
+  }
+
+  function getTtsOverview() {
+    const period = monthPeriod(nowDate(), defaultTzOffsetMinutes);
+    const lifetime = prepare("SELECT COUNT(*) AS requests, COALESCE(SUM(audio_ms), 0) AS audio_ms, COALESCE(SUM(characters), 0) AS characters, COALESCE(SUM(projected_microcredits), 0) AS projected, COALESCE(SUM(charged_microcredits), 0) AS charged FROM billing_tts_usage_events").get();
+    const current = prepare("SELECT COUNT(*) AS requests, COALESCE(SUM(audio_ms), 0) AS audio_ms, COALESCE(SUM(characters), 0) AS characters, COALESCE(SUM(projected_microcredits), 0) AS projected, COALESCE(SUM(charged_microcredits), 0) AS charged FROM billing_tts_usage_events WHERE at>=? AND at<?").get(period.start, period.end);
+    const shape = (row) => ({
+      requests: Number(row?.requests || 0),
+      audioSeconds: Number(BigInt(row?.audio_ms || 0)) / 1000,
+      characters: Number(BigInt(row?.characters || 0)),
+      projectedMicrocredits: decimal(BigInt(row?.projected || 0)),
+      chargedMicrocredits: decimal(BigInt(row?.charged || 0)),
+    });
+    return { lifetime: shape(lifetime), period: { key: period.key, ...shape(current) } };
   }
 
   function writeAdminAudit(input = {}) {
@@ -974,6 +1132,10 @@ function createBillingStore(options = {}) {
     listAuditEvents,
     writeAdminAudit,
     getOverview,
+    getTtsQuotaState,
+    recordTtsUsage,
+    listTtsUsage,
+    getTtsOverview,
     getDashboard: getOverview,
     getPragmas,
     close,
@@ -1155,10 +1317,79 @@ function ensureSchema(db) {
   ensureColumn(db, "billing_model_prices", "source_catalog_version", "TEXT");
   ensureColumn(db, "billing_model_prices", "source_snapshot_date", "TEXT");
   ensureColumn(db, "billing_model_prices", "source_url", "TEXT");
+  // TTS billing (F3): per-plan audio pricing, per-customer daily quota, and an
+  // immutable usage table separate from token usage.
+  ensureColumn(db, "billing_plans", "tts_per_minute_microcredits", "INTEGER NOT NULL DEFAULT 0 CHECK(tts_per_minute_microcredits >= 0)");
+  ensureColumn(db, "billing_plans", "tts_per_thousand_chars_microcredits", "INTEGER NOT NULL DEFAULT 0 CHECK(tts_per_thousand_chars_microcredits >= 0)");
+  ensureColumn(db, "billing_customers", "tts_daily_seconds_limit", "INTEGER CHECK(tts_daily_seconds_limit IS NULL OR tts_daily_seconds_limit >= 0)");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_customer_external_ref
       ON billing_customers(external_ref) WHERE external_ref IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS billing_tts_usage_events (
+      usage_id TEXT PRIMARY KEY,
+      at TEXT NOT NULL,
+      request_id TEXT NOT NULL UNIQUE,
+      external_request_id TEXT,
+      customer_id TEXT REFERENCES billing_customers(customer_id) ON DELETE RESTRICT,
+      manager_id TEXT NOT NULL,
+      service_client_id TEXT NOT NULL,
+      engine TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      response_status INTEGER NOT NULL CHECK(response_status >= 0 AND response_status <= 599),
+      ok INTEGER NOT NULL CHECK(ok IN (0,1)),
+      characters INTEGER NOT NULL CHECK(characters >= 0),
+      audio_ms INTEGER NOT NULL CHECK(audio_ms >= 0),
+      duration_source TEXT NOT NULL CHECK(duration_source IN ('reported','measured','missing')),
+      projected_microcredits INTEGER NOT NULL CHECK(projected_microcredits >= 0),
+      charged_microcredits INTEGER NOT NULL CHECK(charged_microcredits >= 0),
+      enforcement_mode TEXT NOT NULL CHECK(enforcement_mode IN ('shadow','hard')),
+      decision_code TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_billing_tts_usage_customer_at ON billing_tts_usage_events(customer_id, at);
+    CREATE INDEX IF NOT EXISTS idx_billing_tts_usage_client_at ON billing_tts_usage_events(manager_id, service_client_id, at);
+    CREATE TRIGGER IF NOT EXISTS billing_tts_usage_events_no_update
+      BEFORE UPDATE ON billing_tts_usage_events BEGIN SELECT RAISE(ABORT, 'billing tts usage events are immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS billing_tts_usage_events_no_delete
+      BEFORE DELETE ON billing_tts_usage_events BEGIN SELECT RAISE(ABORT, 'billing tts usage events are immutable'); END;
   `);
+}
+
+function dayPeriod(date, tzOffsetMinutes = 0) {
+  const offsetMs = clampTzOffsetMinutes(tzOffsetMinutes) * 60 * 1000;
+  const shifted = new Date(date.getTime() + offsetMs);
+  const start = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - offsetMs);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return {
+    key: `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`,
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+}
+
+function ttsUsageFromRow(row, replayed = false) {
+  return {
+    ok: true,
+    replayed,
+    usageId: row.usage_id,
+    at: row.at,
+    requestId: row.request_id,
+    externalRequestId: row.external_request_id || null,
+    customerId: row.customer_id || null,
+    managerId: row.manager_id,
+    clientId: row.service_client_id,
+    engine: row.engine,
+    endpoint: row.endpoint,
+    status: Number(row.response_status),
+    success: Number(row.ok) === 1,
+    characters: Number(row.characters),
+    audioMs: Number(row.audio_ms),
+    audioSeconds: Number(row.audio_ms) / 1000,
+    durationSource: row.duration_source,
+    projectedMicrocredits: decimal(row.projected_microcredits),
+    chargedMicrocredits: decimal(row.charged_microcredits),
+    enforcementMode: row.enforcement_mode,
+    code: row.decision_code,
+  };
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -1317,6 +1548,8 @@ function planFromRow(row) {
     periodRequestLimit: decimal(row.monthly_request_limit),
     enforcementMode: row.enforcement_mode,
     active: Number(row.active) === 1,
+    ttsPerMinuteMicrocredits: decimal(row.tts_per_minute_microcredits ?? 0),
+    ttsPerThousandCharsMicrocredits: decimal(row.tts_per_thousand_chars_microcredits ?? 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1347,6 +1580,7 @@ function customerFromRow(row, wallet) {
     creditLimitMicrocredits: decimal(row.credit_limit_microcredits),
     monthlyTokenLimit: decimal(row.monthly_token_limit),
     monthlyRequestLimit: decimal(row.monthly_request_limit),
+    ttsDailySecondsLimit: decimal(row.tts_daily_seconds_limit),
     notes: row.notes,
     balanceMicrocredits: decimal(wallet.balance),
     reservedMicrocredits: decimal(wallet.reserved),

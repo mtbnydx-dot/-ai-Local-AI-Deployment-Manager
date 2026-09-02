@@ -327,6 +327,42 @@
       border-radius: 12px;
       background: var(--surface);
     }
+    /* Public-mode checklist and offline-component banners (Phase 4 D2 / H1). */
+    #entryBanners { display: grid; gap: 10px; margin-bottom: 12px; }
+    #entryBanners:empty { display: none; }
+    .status-banner {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--amber);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: var(--surface);
+      display: grid;
+      gap: 8px;
+    }
+    .status-banner.fail { border-left-color: var(--red); }
+    .status-banner.ok { border-left-color: var(--green); }
+    .status-banner.info { border-left-color: var(--accent, #4CB8D4); }
+    .status-banner .banner-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+    .status-banner .banner-head strong { font-size: 15px; }
+    .status-banner .banner-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .status-banner .banner-actions button, .status-banner .banner-actions a { font-size: 12px; padding: 4px 10px; }
+    .checklist { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+    .checklist li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start; font-size: 13px; }
+    .checklist li .mark { font-weight: 700; }
+    .checklist li.ok .mark { color: var(--green); }
+    .checklist li.fail .mark { color: var(--red); }
+    .checklist li.warn .mark { color: var(--amber); }
+    .checklist li.manual .mark, .checklist li.info .mark { color: var(--muted); }
+    .checklist li span.detail { color: var(--muted); display: block; }
+    .keys-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .keys-table th, .keys-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+    .keys-table th { color: var(--muted); font-weight: 500; font-size: 12px; }
+    .keys-table .state-active { color: var(--green); }
+    .keys-table .state-expired { color: var(--red); }
+    .keys-table .state-disabled { color: var(--muted); }
+    .keys-wrap { overflow-x: auto; }
+    .tool-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tool-chips code { font-size: 11px; }
     .gateway-strip {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -935,6 +971,7 @@
       <a href="#gateway">接入地址</a>
       <a href="#fleet">舰队</a>
       <a href="#access">访问统计</a>
+      <a href="#keysCard">密钥</a>
       <a href="#billingEntryCard">计费</a>
       <a href="#entryDocs">文档</a>
     </nav>
@@ -947,6 +984,7 @@
         </div>
         <span class="badge" id="lastUpdatedBadge">等待刷新</span>
       </div>
+      <div id="entryBanners" aria-live="polite"></div>
       <div class="summary-grid" id="entrySummary">
         <div class="empty">正在生成总览...</div>
       </div>
@@ -1064,6 +1102,16 @@
       </div>
     </section>
 
+    <section class="card" id="keysCard" aria-labelledby="keysTitle">
+      <div class="card-head">
+        <div>
+          <h2 id="keysTitle">密钥总览</h2>
+          <p>两个管理器的客户端 Key 生命周期：状态、最近使用、到期。密钥本身只存在于各管理器，这里只做汇总；创建、轮换和吊销请到对应管理器的“对外服务”页。</p>
+        </div>
+      </div>
+      <div id="keysPanel"><div class="empty">正在读取密钥状态...</div></div>
+    </section>
+
     <section class="billing-entry card" id="billingEntryCard" aria-labelledby="billingEntryTitle">
       <div class="card-head">
         <div>
@@ -1136,6 +1184,10 @@
     const openVllmLaunch = document.querySelector("#openVllmLaunch");
     const openLlamaLaunch = document.querySelector("#openLlamaLaunch");
     const stopBtn = document.querySelector("#stopBtn");
+    const entryBanners = document.querySelector("#entryBanners");
+    const keysPanel = document.querySelector("#keysPanel");
+    const OFFLINE_NOTIFY_KEY = "entryOfflineNotify";
+    let previousOffline = null;
     let refreshTimer = null;
     let fleetSnapshot = null;
     let latestManagers = [];
@@ -1175,6 +1227,11 @@
       const actionButton = event.target.closest("[data-action][data-manager]");
       if (actionButton) {
         await runManagerAction(actionButton);
+        return;
+      }
+      const notifyButton = event.target.closest("[data-notify-toggle]");
+      if (notifyButton) {
+        await toggleOfflineNotifications();
       }
     });
 
@@ -1228,7 +1285,9 @@
           const data = statusResult.value || {};
           latestManagers = Array.isArray(data.managers) ? data.managers : [];
           latestTts = data.tts && typeof data.tts === "object" ? data.tts : null;
-          renderSummary(data.entry || {}, latestManagers, fleetSnapshot, data.mcp || null, latestTts);
+          renderSummary(data.entry || {}, latestManagers, fleetSnapshot, data.mcp || null, latestTts, data.search || null, data.keys || null);
+          renderBanners(data.security || {}, data.components || null, data.mcp || null, data.search || null);
+          renderKeys(data.keys || null);
           renderEntryGateway(data.entry || {});
           renderEntryAccess(data.entry?.gatewayAccess || {});
           renderManagers(latestManagers, latestTts);
@@ -1295,7 +1354,137 @@
       };
     }
 
-    function renderSummary(entry, managers, fleet, mcp, tts) {
+    // --- Public-mode checklist, offline banner, key overview (Phase 4) ------
+
+    function notificationsEnabled() {
+      try { return localStorage.getItem(OFFLINE_NOTIFY_KEY) === "1" && typeof Notification !== "undefined" && Notification.permission === "granted"; } catch { return false; }
+    }
+
+    async function toggleOfflineNotifications() {
+      if (typeof Notification === "undefined") { showToast("当前浏览器不支持桌面通知"); return; }
+      if (notificationsEnabled()) {
+        try { localStorage.setItem(OFFLINE_NOTIFY_KEY, "0"); } catch {}
+        showToast("已关闭离线通知");
+      } else {
+        const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+        if (permission !== "granted") { showToast("未获得通知权限"); return; }
+        try { localStorage.setItem(OFFLINE_NOTIFY_KEY, "1"); } catch {}
+        showToast("组件离线时会弹出桌面通知");
+      }
+      await refresh();
+    }
+
+    function notifyOffline(components) {
+      const offline = Array.isArray(components?.offline) ? components.offline : [];
+      const current = new Set(offline);
+      if (previousOffline && notificationsEnabled()) {
+        const newlyOffline = offline.filter((id) => !previousOffline.has(id));
+        if (newlyOffline.length) {
+          const names = (components.items || []).filter((item) => newlyOffline.includes(item.id)).map((item) => item.name);
+          try { new Notification("本地模型平台：组件离线", { body: `${names.join("、")} 已离线。打开入口页可一键拉起。`, tag: "entry-offline" }); } catch {}
+        }
+      }
+      previousOffline = current;
+    }
+
+    function renderBanners(securityState, components, mcp, search) {
+      const banners = [];
+      const exposure = securityState.exposure || (securityState.publicMode ? "public" : securityState.lanMode ? "lan" : "local");
+      const checklist = Array.isArray(securityState.publicChecklist) ? securityState.publicChecklist : [];
+      const warnings = Array.isArray(securityState.warnings) ? securityState.warnings : [];
+      if (exposure !== "local" || warnings.length) {
+        const failing = checklist.filter((item) => item.state === "fail").length;
+        const tone = failing || warnings.some((item) => item.level === "fail") ? "fail" : exposure === "local" ? "info" : "ok";
+        const label = exposure === "public" ? "公网模式" : exposure === "lan" ? "局域网模式" : "本机模式";
+        const guard = securityState.authGuard || {};
+        banners.push(`
+          <div class="status-banner ${tone}" id="publicModeBanner">
+            <div class="banner-head">
+              <strong>${escapeHtml(label)}${securityState.publicBaseUrl ? ` · ${escapeHtml(securityState.publicBaseUrl)}` : ""}</strong>
+              <span class="subtle">${failing ? `${failing} 项未通过` : "上线检查通过"}${guard.bannedCount ? ` · 已封禁 ${guard.bannedCount} 个来源` : ""}</span>
+            </div>
+            ${warnings.length ? `<ul class="checklist">${warnings.map((item) => `<li class="${escapeHtml(item.level === "fail" ? "fail" : "warn")}"><span class="mark">!</span><span><strong>${escapeHtml(item.title)}</strong><span class="detail">${escapeHtml(item.detail)}</span></span></li>`).join("")}</ul>` : ""}
+            ${checklist.length ? `<ul class="checklist">${checklist.map((item) => `<li class="${escapeHtml(item.state)}"><span class="mark">${item.state === "ok" ? "✓" : item.state === "fail" ? "✗" : item.state === "manual" ? "☐" : "·"}</span><span><strong>${escapeHtml(item.title)}</strong><span class="detail">${escapeHtml(item.detail)}</span></span></li>`).join("")}</ul>` : ""}
+          </div>
+        `);
+      }
+      if (components) {
+        notifyOffline(components);
+        const offlineItems = (components.items || []).filter((item) => !item.online);
+        const unhealthyItems = (components.items || []).filter((item) => item.online && !item.healthy);
+        const notifyOn = notificationsEnabled();
+        if (offlineItems.length || unhealthyItems.length) {
+          banners.push(`
+            <div class="status-banner ${offlineItems.length ? "warn" : "info"}" id="offlineBanner">
+              <div class="banner-head">
+                <strong>${offlineItems.length ? `${offlineItems.length} 个组件离线` : `${unhealthyItems.length} 个组件健康检查未通过`}</strong>
+                <div class="banner-actions">
+                  <button type="button" data-notify-toggle>${notifyOn ? "关闭离线通知" : "开启桌面通知"}</button>
+                </div>
+              </div>
+              <ul class="checklist">
+                ${offlineItems.map((item) => `<li class="fail"><span class="mark">✗</span><span><strong>${escapeHtml(item.name)}</strong> ${item.startable ? `<button type="button" data-action="start" data-manager="${escapeHtml(item.id)}">启动</button>` : ""}<span class="detail">拉起命令：<code>${escapeHtml(item.startCommand)}</code>${item.error ? ` · ${escapeHtml(item.error)}` : ""}</span></span></li>`).join("")}
+                ${unhealthyItems.map((item) => `<li class="warn"><span class="mark">!</span><span><strong>${escapeHtml(item.name)}</strong><span class="detail">${escapeHtml(item.error || "监听中但健康检查失败")}</span></span></li>`).join("")}
+              </ul>
+              <p class="subtle">一次拉起全部组件：<code>${escapeHtml(components.allCommand || "start-platform.cmd all")}</code></p>
+            </div>
+          `);
+        } else if (!notifyOn && typeof Notification !== "undefined") {
+          banners.push(`<div class="status-banner ok"><div class="banner-head"><strong>${components.online} / ${components.total} 个组件在线</strong><div class="banner-actions"><button type="button" data-notify-toggle>开启离线桌面通知</button></div></div></div>`);
+        }
+      }
+      setHtmlPreservingState(entryBanners, banners.join(""));
+    }
+
+    function formatDayAgo(value) {
+      if (!value) return "从未";
+      const time = new Date(value).getTime();
+      if (!Number.isFinite(time)) return "-";
+      const days = Math.floor((Date.now() - time) / 86400000);
+      return days <= 0 ? "今天" : `${days} 天前`;
+    }
+
+    function renderKeys(keys) {
+      if (!keys) {
+        setHtmlPreservingState(keysPanel, `<div class="empty">密钥总览不可用。</div>`);
+        return;
+      }
+      const clients = Array.isArray(keys.clients) ? keys.clients : null;
+      const summary = [
+        metric("客户端 Key", String(keys.total || 0), keys.total ? "ok" : "warn"),
+        metric("有效", String(keys.active || 0), keys.active ? "ok" : ""),
+        metric("已过期", String(keys.expired || 0), keys.expired ? "warn" : ""),
+        metric("已停用", String(keys.disabled || 0)),
+        metric(`${keys.thresholds?.unusedDays || 30} 天未用`, String(keys.unused || 0), keys.unused ? "warn" : ""),
+        metric(`${keys.thresholds?.expiringDays || 7} 天内到期`, String(keys.expiringSoon || 0), keys.expiringSoon ? "warn" : ""),
+        metric("全局 Key", (keys.globalKeys || []).length ? keys.globalKeys.join(", ") : "未配置"),
+      ].join("");
+      const perManager = (keys.perManager || []).map((item) => accessRow(
+        item.managerName || item.manager,
+        `${item.online ? "在线" : "离线"} · ${item.total} 个 Key · 有效 ${item.active} · 过期 ${item.expired} · 停用 ${item.disabled}${item.globalKey ? " · 有全局 Key" : ""}`,
+        item.online ? (item.expired ? "warn" : "ok") : "fail",
+      )).join("");
+      const attention = Array.isArray(keys.attention) && keys.attention.length
+        ? `<div class="access-list">${keys.attention.map((item) => accessRow(`${item.client.name || item.client.id} @ ${item.client.managerName}`, item.reason, item.level === "warn" ? "warn" : "ok")).join("")}</div>`
+        : "";
+      const table = clients
+        ? clients.length
+          ? `<div class="keys-wrap"><table class="keys-table"><thead><tr><th>名称</th><th>管理器</th><th>状态</th><th>最近使用</th><th>到期</th><th>允许模型</th><th>操作</th></tr></thead><tbody>${clients.map((client) => `
+              <tr>
+                <td>${escapeHtml(client.name || client.id)}</td>
+                <td>${escapeHtml(client.managerName)}</td>
+                <td class="state-${escapeHtml(client.state)}">${client.state === "active" ? "有效" : client.state === "expired" ? "已过期" : "已停用"}${client.expiringSoon ? " · 即将到期" : ""}${client.unused ? " · 长期未用" : ""}</td>
+                <td>${escapeHtml(formatDayAgo(client.lastUsedAt))}</td>
+                <td>${client.expiresAt ? escapeHtml(new Date(client.expiresAt).toLocaleDateString()) : "不限"}</td>
+                <td>${client.allowedModels?.length ? escapeHtml(client.allowedModels.join(", ")) : "全部"}</td>
+                <td>${client.managePageUrl ? `<a href="${escapeHtml(safeHttpUrl(client.managePageUrl))}" target="_blank" rel="noopener">管理</a>` : "-"}</td>
+              </tr>`).join("")}</tbody></table></div>`
+          : `<p class="subtle">还没有客户端 Key。局域网或公网访问前，请在管理器“对外服务”页创建。</p>`
+        : `<p class="subtle">远程查看只显示汇总；名称与允许模型仅本机可见。</p>`;
+      setHtmlPreservingState(keysPanel, `<div class="summary-grid">${summary}</div><div class="access-list">${perManager}</div>${attention}${table}`);
+    }
+
+    function renderSummary(entry, managers, fleet, mcp, tts, search = null, keys = null) {
       const access = entry.gatewayAccess || {};
       const totals = access.totals || {};
       const requests = totals.requests || {};
@@ -1316,18 +1505,23 @@
       const requestTotal = Number(requests.total || 0);
       const requestErrors = Number(requests.error || 0);
       const mcpText = mcp?.healthy
-        ? `在线 · ${mcp.readOnly === false ? "可写" : "只读"}`
+        ? `在线 · ${mcp.readOnly === false ? "可写" : "只读"}${mcp.toolCount ? ` · ${mcp.toolCount} 个工具` : ""}`
         : mcp?.listening ? "监听中 / 健康异常" : "未启动";
       const mcpState = mcp?.healthy ? "ok" : "warn";
+      const searchText = search?.healthy
+        ? `在线${search.upstreamViaEntry ? " · 经入口路由" : search.upstreamBaseUrl ? " · 直连管理器" : ""}`
+        : search?.listening ? "监听中 / 健康异常" : "未启动";
+      const keyText = keys ? `${keys.active || 0} 有效${keys.expired ? ` · ${keys.expired} 过期` : ""}` : String(activeClients);
       setHtmlPreservingState(entrySummary, [
         metric("统一入口", `${entry.host || "127.0.0.1"}:${entry.port || "-"}`, "ok"),
         metric("管理器在线", managers.length ? `${runningManagers} / ${managers.length}` : "未发现", managerState),
         metric("运行中模型", runningModels === null ? "未获取" : String(runningModels), runningModelState),
-        metric("客户端 Key", String(activeClients), activeClients ? "ok" : "warn"),
+        metric("客户端 Key", keyText, (keys ? keys.active : activeClients) ? "ok" : "warn"),
         metric("GPU 显存", gpuText === "-" ? "未获取" : gpuText, gpuText === "-" ? "" : "ok"),
         metric("网关错误率", requestTotal ? `${formatPercent(requests.errorRate || 0)}（${requestErrors}/${requestTotal}）` : "暂无请求", requestTotal ? (requestErrors ? "warn" : "ok") : ""),
         metric("MCP 工具服务", mcpText, mcpState),
         metric("TTS 可用引擎", tts ? `${tts.availableCount || 0} / ${tts.totalCount || 0}` : "未获取", tts?.availableCount ? "ok" : "warn"),
+        metric("搜索网关", searchText, search?.healthy ? "ok" : "warn"),
       ].join(""));
     }
 
@@ -1948,6 +2142,9 @@
         ["TTS 语音平台", gateway.tts],
         ["TTS OpenAI", gateway.ttsOpenAi],
         ["LAN TTS", gateway.lanTts],
+        ["搜索增强 OpenAI", gateway.search],
+        ["MCP（经入口）", gateway.mcp],
+        ["状态（需 Key）", gateway.status],
       ].filter(([, value]) => value);
       const requestTotal = Number(requests.total || 0);
       const requestErrors = Number(requests.error || 0);

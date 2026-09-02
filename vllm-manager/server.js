@@ -636,6 +636,16 @@ const {
   buildManagerHealth,
 } = managerLifecycle;
 
+// 进程退出留痕：Ctrl+C / 控制台关闭 / 未捕获异常都会写入 logs/process-exit.log，
+// 并走正常的 shutdown 流程（保存任务账本、关闭 SSE）。
+if (require.main === module) {
+  core.installProcessExitLogging({
+    label: "vLLM Manager",
+    file: path.join(path.dirname(CONFIG.jobsLedger), "process-exit.log"),
+    onSignal: (signal) => shutdownManager(signal),
+  });
+}
+
 core.registerOpenAiBaseUrlHintRoutes(app, { openAiGatewayPath: "/serve/v1" });
 core.registerReferenceDataRoutes(app);
 app.use(managerSecurityGuard);
@@ -2036,21 +2046,16 @@ async function sampleMetricsHistory() {
   }, { engine: normalizeRuntimeEngine(container.labels?.[MANAGER_ENGINE_LABEL_KEY]) });
 }
 
-// GPU 温度告警：达到阈值时生成一条 automation 任务提醒，10 分钟冷却，只警不动。
-let tempGuardLastWarnAt = 0;
+// GPU 温度 / 功耗墙告警：达到阈值时生成一条 automation 任务提醒，各自 10 分钟冷却，只警不动。
+const gpuGuardState = {};
 async function inspectGpuTemperatureGuard(settings) {
-  if (!settings.tempGuardEnabled) return;
+  if (!settings.tempGuardEnabled && !settings.powerGuardEnabled) return;
   const gpu = await getGpuStatus().catch(() => null);
-  const temps = (gpu?.gpus || []).map((item) => Number(item.temp)).filter(Number.isFinite);
-  if (!temps.length) return;
-  const hottest = Math.max(...temps);
-  if (hottest < settings.tempLimitC) return;
-  const now = Date.now();
-  if (now - tempGuardLastWarnAt < 10 * 60 * 1000) return;
-  tempGuardLastWarnAt = now;
-  const job = createJob("automation", "GPU temperature warning", { tempC: hottest, limitC: settings.tempLimitC });
-  appendLog(job, `GPU 温度 ${hottest}°C 已达到告警阈值 ${settings.tempLimitC}°C。请检查散热、降低功耗上限或减小并发。`);
-  finishJob(job, { result: "warn-only" });
+  for (const finding of core.evaluateGpuGuards(gpu, settings, gpuGuardState)) {
+    const job = createJob("automation", finding.title, finding.data);
+    appendLog(job, finding.message);
+    finishJob(job, { result: "warn-only" });
+  }
 }
 
 async function inspectAutomationRules() {
