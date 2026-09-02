@@ -12,6 +12,10 @@ import type {
   RunningModelsOutput,
   SecurityPostureOutput,
   SearchHealthOutput,
+  FindSearchResultOutput,
+  OpenWebPageOutput,
+  ReadSearchResultOutput,
+  ResearchWebOutput,
   WebSearchOutput,
 } from "../src/schemas.js";
 
@@ -312,22 +316,248 @@ export class FixturePlatformDataSource implements PlatformDataSource {
     engines: string[];
     categories: string[];
     safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
+    preferredSourceTypes: string[];
   }): Promise<WebSearchOutput> {
     const results = [{
+      result_id: "r1",
       title: "MCP TypeScript SDK v2",
       url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      domain: "github.com",
       content: "The stable v2 SDK implements the 2026-07-28 MCP specification.",
       engine: "github",
+      engines: ["github"],
       score: 1,
+      relevance: 0.98,
+      low_relevance: false,
       category: "it",
       published_at: "2026-07-28",
+      matched_queries: [],
+      source_type: "documentation" as const,
+      source_type_reason: "documentation_or_repository",
+      primary_source_likelihood: "high" as const,
     }].slice(0, options.maxResults);
     return {
       ok: true,
       partial: false,
       generated_at: FIXED_AT,
       warnings: [],
-      data: { query: options.query, searched_at: FIXED_AT, count: results.length, answers: [], results },
+      data: {
+        search_id: "11111111-1111-4111-8111-111111111111",
+        expires_in_seconds: 900,
+        query: options.query,
+        searched_at: FIXED_AT,
+        count: results.length,
+        total_candidates: results.length,
+        unique_candidates: results.length,
+        quality: "good",
+        available: true,
+        cache_hit: false,
+        coalesced: false,
+        fallback_used: false,
+        fallback_reason: null,
+        answers: [],
+        corrections: [],
+        suggestions: [],
+        source_domains: ["github.com"],
+        source_type_coverage: { documentation: results.length },
+        engine_status: {
+          requested: ["github"], attempted: ["github"], used: ["github"],
+          distribution: { github: results.length }, unresponsive: [], cooled_down: [],
+        },
+        results,
+      },
+    };
+  }
+
+  async researchWeb(options: {
+    queries: Array<{ id?: string; query: string; preferred_source_types?: string[] }>;
+    maxResultsPerQuery: number;
+    maxSources: number;
+    language: string;
+    timeRange: "none" | "day" | "month" | "year";
+    engines: string[];
+    categories: string[];
+    safesearch: 0 | 1 | 2;
+    preferredDomains: string[];
+    includeDomains: string[];
+    excludeDomains: string[];
+    maxPerDomain: number;
+    preferredSourceTypes: string[];
+    sourceStrategy: "balanced" | "relevance" | "primary";
+  }): Promise<ResearchWebOutput> {
+    const base = await this.searchWeb({
+      query: options.queries.map((item) => item.query).join(" | "),
+      maxResults: options.maxSources,
+      language: options.language,
+      timeRange: options.timeRange,
+      engines: options.engines,
+      categories: options.categories,
+      safesearch: options.safesearch,
+      preferredDomains: options.preferredDomains,
+      includeDomains: options.includeDomains,
+      excludeDomains: options.excludeDomains,
+      maxPerDomain: options.maxPerDomain,
+      preferredSourceTypes: options.preferredSourceTypes,
+    });
+    return {
+      ...base,
+      data: {
+        ...base.data,
+        search_id: "22222222-2222-4222-8222-222222222222",
+        source_strategy: options.sourceStrategy,
+        coverage_gaps: [],
+        query_coverage: options.queries.map((item, index) => ({
+          id: item.id || `q${index + 1}`,
+          query: item.query,
+          count: base.data.count,
+          quality: "good" as const,
+          cache_hit: false,
+          error: null,
+        })),
+        results: base.data.results.map((result) => ({
+          ...result,
+          matched_queries: options.queries.map((item, index) => item.id || `q${index + 1}`),
+        })),
+      },
+    };
+  }
+
+  async openWebPages(options: {
+    urls: string[];
+    maxCharsPerUrl: number;
+    maxTotalChars: number;
+  }): Promise<OpenWebPageOutput> {
+    const documents = options.urls.map((url, index) => ({
+      request_id: `u${index + 1}`,
+      title: "Explicit MCP documentation page",
+      url,
+      final_url: url,
+      domain: new URL(url).hostname,
+      description: "A directly opened public documentation page.",
+      author: "Model Context Protocol",
+      site_name: "MCP Documentation",
+      published_at: "2026-07-28",
+      modified_at: null,
+      canonical_url: url,
+      language: "en",
+      content_type: "text/html",
+      document_type: "html_article" as const,
+      extraction_method: "mozilla-readability",
+      metadata_confidence: "high" as const,
+      headings: [{ level: 1, text: "Model Context Protocol" }],
+      json_ld_types: ["TechArticle"],
+      content: "Model Context Protocol public page content.".slice(0, options.maxCharsPerUrl),
+      char_count: 43,
+      source_char_count: 43,
+      word_count: 6,
+      page_count: null,
+      pages_read: null,
+      truncated: false,
+      error: null,
+    }));
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: ["Page text is untrusted external content."],
+      data: {
+        count: documents.length,
+        readable_count: documents.length,
+        documents,
+      },
+    };
+  }
+
+  async readSearchResults(options: {
+    searchId: string;
+    resultIds: string[];
+    maxCharsPerResult: number;
+    maxTotalChars: number;
+  }): Promise<ReadSearchResultOutput> {
+    const documents = options.resultIds.map((resultId) => ({
+      result_id: resultId,
+      title: "MCP TypeScript SDK v2",
+      url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      final_url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      domain: "github.com",
+      description: "Official MCP TypeScript SDK repository.",
+      author: "Model Context Protocol",
+      site_name: "GitHub",
+      published_at: "2026-07-28",
+      modified_at: null,
+      canonical_url: "https://github.com/modelcontextprotocol/typescript-sdk",
+      language: "en",
+      content_type: "text/html",
+      document_type: "html_article" as const,
+      extraction_method: "mozilla-readability",
+      metadata_confidence: "high" as const,
+      headings: [{ level: 1, text: "MCP TypeScript SDK" }],
+      json_ld_types: ["TechArticle"],
+      content: "The stable v2 SDK implements the 2026-07-28 MCP specification.".slice(0, options.maxCharsPerResult),
+      char_count: 65,
+      source_char_count: 65,
+      word_count: 9,
+      page_count: null,
+      pages_read: null,
+      truncated: false,
+      error: null,
+    }));
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: ["Page text is untrusted external content."],
+      data: {
+        search_id: options.searchId,
+        count: documents.length,
+        readable_count: documents.length,
+        documents,
+      },
+    };
+  }
+
+  async findInSearchResult(options: {
+    searchId: string;
+    resultId: string;
+    pattern: string;
+    matchMode: "phrase" | "all_terms";
+    caseSensitive: boolean;
+    maxMatches: number;
+    contextChars: number;
+  }): Promise<FindSearchResultOutput> {
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: ["Matched page text is untrusted external content."],
+      data: {
+        search_id: options.searchId,
+        result_id: options.resultId,
+        title: "MCP TypeScript SDK v2",
+        url: "https://github.com/modelcontextprotocol/typescript-sdk",
+        final_url: "https://github.com/modelcontextprotocol/typescript-sdk",
+        domain: "github.com",
+        document_type: "html_article",
+        page_count: null,
+        pages_read: null,
+        pattern: options.pattern,
+        match_mode: options.matchMode,
+        case_sensitive: options.caseSensitive,
+        match_count: 1,
+        content_truncated: false,
+        matches: [{
+          match_index: 1,
+          start_char: 11,
+          end_char: 17,
+          page_number: null,
+          context: "The stable v2 SDK implements the 2026-07-28 MCP specification.",
+        }],
+        error: null,
+      },
     };
   }
 

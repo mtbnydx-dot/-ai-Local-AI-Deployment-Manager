@@ -58,11 +58,15 @@ export const SearchHealthInputSchema = z.object({
 const SearchTokenSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/)
   .describe("A safe SearXNG engine or category token without spaces or punctuation.");
 
-export const WebSearchInputSchema = z.object({
-  query: z.string().trim().min(2).max(500)
-    .describe("Natural-language web search query, from 2 through 500 characters."),
-  max_results: z.number().int().min(1).max(10).default(5)
-    .describe("Maximum normalized search results to return, from 1 through 10."),
+const SearchDomainSchema = z.string().trim().min(1).max(253)
+  .regex(/^(?:[A-Za-z0-9-]+\.)*[A-Za-z0-9-]+$/)
+  .describe("A hostname or parent domain without scheme, path, port, or wildcard.");
+
+export const SearchSourceTypeSchema = z.enum([
+  "official", "academic", "documentation", "news", "organization", "community", "commercial", "other",
+]);
+
+const SearchTuningInputShape = {
   language: z.string().trim().max(24).regex(/^[A-Za-z0-9_.-]*$/).default("")
     .describe("Optional SearXNG language token such as en, zh-CN, or all."),
   time_range: z.enum(["none", "day", "month", "year"]).default("none")
@@ -73,6 +77,122 @@ export const WebSearchInputSchema = z.object({
     .describe("Optional allowlist of up to five SearXNG categories."),
   safesearch: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(1)
     .describe("SearXNG safe-search level: 0 off, 1 moderate, or 2 strict."),
+  preferred_domains: z.array(SearchDomainSchema).max(10).default([])
+    .describe("Boost results from these domains without excluding other sources."),
+  include_domains: z.array(SearchDomainSchema).max(10).default([])
+    .describe("Return only results from these domains or their subdomains."),
+  exclude_domains: z.array(SearchDomainSchema).max(20).default([])
+    .describe("Discard results from these domains or their subdomains."),
+  max_per_domain: z.number().int().min(1).max(6).default(3)
+    .describe("Maximum selected results from one domain before diversity fallback."),
+  preferred_source_types: z.array(SearchSourceTypeSchema).max(8).default([])
+    .describe("Boost these broad source classes without treating the classification as a credibility guarantee."),
+};
+
+export const WebSearchInputSchema = z.object({
+  query: z.string().trim().min(2).max(500)
+    .describe("Natural-language web search query, from 2 through 500 characters."),
+  max_results: z.number().int().min(1).max(20).default(8)
+    .describe("Maximum normalized search results to return, from 1 through 20."),
+  ...SearchTuningInputShape,
+  response_format: ResponseFormatSchema,
+}).strict();
+
+const ResearchQuerySchema = z.object({
+  id: z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9_.-]+$/)
+    .optional().describe("Optional stable query label used in coverage; defaults to q1, q2, and so on."),
+  query: z.string().trim().min(2).max(500)
+    .describe("A focused search query representing one angle of the research task."),
+  preferred_source_types: z.array(SearchSourceTypeSchema).max(4).default([])
+    .describe("Optional source classes preferred for this query angle."),
+}).strict();
+
+export const ResearchWebInputSchema = z.object({
+  queries: z.array(ResearchQuerySchema).min(1).max(8)
+    .describe("One through eight complementary, non-secret web queries."),
+  max_results_per_query: z.number().int().min(2).max(15).default(8)
+    .describe("Candidate results retained per query before cross-query merging."),
+  max_sources: z.number().int().min(3).max(40).default(18)
+    .describe("Maximum deduplicated, domain-diverse sources in the merged result."),
+  source_strategy: z.enum(["balanced", "relevance", "primary"]).default("balanced")
+    .describe("balanced covers multiple source classes, relevance preserves score order, and primary favors likely first-party evidence."),
+  ...SearchTuningInputShape,
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const ReadSearchResultInputSchema = z.object({
+  search_id: z.string().trim().min(16).max(100)
+    .describe("Opaque search_id returned by local_ai_search_web or local_ai_research_web."),
+  result_ids: z.array(z.string().regex(/^r[1-9]\d*$/)).min(1).max(3)
+    .describe("One through three result_id values from that exact search result set."),
+  max_chars_per_result: z.number().int().min(1000).max(15000).default(8000)
+    .describe("Maximum extracted text characters per page."),
+  max_total_chars: z.number().int().min(2000).max(30000).default(24000)
+    .describe("Maximum extracted text characters across all selected pages."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
+function isObviouslyPrivateHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (["localhost", "0.0.0.0", "::", "::1"].includes(normalized)) return true;
+  if ([".localhost", ".local", ".internal", ".lan", ".home"].some((suffix) => normalized.endsWith(suffix))) return true;
+  const octets = normalized.split(".").map((part) => Number(part));
+  if (octets.length === 4 && octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    const first = octets[0] ?? 999;
+    const second = octets[1] ?? 999;
+    return first === 0
+      || first === 10
+      || first === 127
+      || (first === 169 && second === 254)
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || first >= 224;
+  }
+  if (!normalized.includes(":")) return false;
+  return normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9")
+    || normalized.startsWith("fea") || normalized.startsWith("feb");
+}
+
+const PublicHttpUrlSchema = z.string().trim().min(8).max(2048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      const expectedPort = url.protocol === "https:" ? "443" : "80";
+      return ["http:", "https:"].includes(url.protocol)
+        && !url.username
+        && !url.password
+        && !isObviouslyPrivateHostname(url.hostname)
+        && (!url.port || url.port === expectedPort);
+    } catch {
+      return false;
+    }
+  }, "URL must use public HTTP(S), contain no credentials, avoid local/private hosts, and use a standard port.");
+
+export const OpenWebPageInputSchema = z.object({
+  urls: z.array(PublicHttpUrlSchema).min(1).max(3)
+    .describe("One through three explicit public HTTP(S) URLs supplied by the user or already known from a trusted source."),
+  max_chars_per_url: z.number().int().min(1000).max(15000).default(8000)
+    .describe("Maximum extracted text characters per URL."),
+  max_total_chars: z.number().int().min(2000).max(30000).default(24000)
+    .describe("Maximum extracted text characters across all opened URLs."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const FindSearchResultInputSchema = z.object({
+  search_id: z.string().trim().min(16).max(100)
+    .describe("Opaque search_id returned by local_ai_search_web or local_ai_research_web."),
+  result_id: z.string().regex(/^r[1-9]\d*$/)
+    .describe("One result_id from that exact search result set."),
+  pattern: z.string().trim().min(2).max(200)
+    .describe("Literal phrase or a short set of terms to locate within the extracted page text."),
+  match_mode: z.enum(["phrase", "all_terms"]).default("phrase")
+    .describe("phrase finds the exact phrase; all_terms finds paragraphs containing every supplied term."),
+  case_sensitive: z.boolean().default(false)
+    .describe("Match letter case exactly when true."),
+  max_matches: z.number().int().min(1).max(10).default(5)
+    .describe("Maximum matching passages returned."),
+  context_chars: z.number().int().min(80).max(800).default(320)
+    .describe("Context characters included on each side of a match."),
   response_format: ResponseFormatSchema,
 }).strict();
 
@@ -193,12 +313,54 @@ const ManagerSummarySchema = z.object({
   error: z.string().nullable(),
 }).strict();
 
+export const SearchQualitySchema = z.enum(["good", "mixed", "weak", "empty"]);
+
+const SearchEngineStateSchema = z.object({
+  engine: z.string(),
+  reason: z.string(),
+  retry_after_seconds: z.number().int().nonnegative(),
+}).strict();
+
+const SearchMetricsSchema = z.object({
+  searches: z.number().int().nonnegative(),
+  research_requests: z.number().int().nonnegative(),
+  cache_hits: z.number().int().nonnegative(),
+  coalesced_requests: z.number().int().nonnegative(),
+  backend_requests: z.number().int().nonnegative(),
+  backend_failures: z.number().int().nonnegative(),
+  zero_result_searches: z.number().int().nonnegative(),
+  weak_searches: z.number().int().nonnegative(),
+  pages_read: z.number().int().nonnegative(),
+  page_read_failures: z.number().int().nonnegative(),
+  page_cache_hits: z.number().int().nonnegative(),
+  page_finds: z.number().int().nonnegative(),
+  page_find_failures: z.number().int().nonnegative(),
+}).strict();
+
 export const SearchSummarySchema = z.object({
   online: z.boolean(),
   healthy: z.boolean(),
   mode: z.string().nullable(),
   auth_required: z.boolean().nullable(),
   max_results: z.number().nullable(),
+  state: z.enum(["healthy", "degraded", "unavailable"]).nullable().optional(),
+  default_engines: z.array(z.string()).optional(),
+  chinese_engines: z.array(z.string()).optional(),
+  fallback_engines: z.array(z.string()).optional(),
+  available_default_engines: z.array(z.string()).optional(),
+  cooldowns: z.array(SearchEngineStateSchema).optional(),
+  cache_entries: z.number().int().nonnegative().optional(),
+  active_backend_requests: z.number().int().nonnegative().optional(),
+  queued_backend_requests: z.number().int().nonnegative().optional(),
+  session_count: z.number().int().nonnegative().optional(),
+  last_search: z.object({
+    searched_at: z.string(),
+    quality: SearchQualitySchema,
+    count: z.number().int().nonnegative(),
+    partial: z.boolean(),
+    available: z.boolean(),
+  }).strict().nullable().optional(),
+  metrics: SearchMetricsSchema.optional(),
   error: z.string().nullable(),
 }).strict();
 
@@ -341,24 +503,178 @@ export const SearchHealthOutputSchema = z.object({
   }).strict(),
 }).strict();
 
+const SearchEngineStatusSchema = z.object({
+  requested: z.array(z.string()),
+  attempted: z.array(z.string()),
+  used: z.array(z.string()),
+  distribution: z.record(z.string(), z.number().int().nonnegative()),
+  unresponsive: z.array(SearchEngineStateSchema),
+  cooled_down: z.array(SearchEngineStateSchema),
+}).strict();
+
 const WebSearchResultSchema = z.object({
+  result_id: z.string(),
   title: z.string(),
   url: z.string(),
+  domain: z.string(),
   content: z.string(),
   engine: z.string().nullable(),
+  engines: z.array(z.string()),
   score: z.number().nullable(),
+  relevance: z.number().min(0).max(1),
+  low_relevance: z.boolean(),
   category: z.string().nullable(),
   published_at: z.string().nullable(),
+  matched_queries: z.array(z.string()),
+  source_type: SearchSourceTypeSchema,
+  source_type_reason: z.string(),
+  primary_source_likelihood: z.enum(["high", "medium", "unknown"]),
 }).strict();
 
 export const WebSearchOutputSchema = z.object({
   ...EnvelopeFields,
   data: z.object({
+    search_id: z.string(),
+    expires_in_seconds: z.number().int().positive(),
     query: z.string(),
     searched_at: z.string(),
     count: z.number().int().nonnegative(),
+    total_candidates: z.number().int().nonnegative(),
+    unique_candidates: z.number().int().nonnegative(),
+    quality: SearchQualitySchema,
+    available: z.boolean(),
+    cache_hit: z.boolean(),
+    coalesced: z.boolean(),
+    fallback_used: z.boolean(),
+    fallback_reason: z.string().nullable(),
     answers: z.array(z.string()),
+    corrections: z.array(z.string()),
+    suggestions: z.array(z.string()),
+    source_domains: z.array(z.string()),
+    source_type_coverage: z.record(z.string(), z.number().int().nonnegative()),
+    engine_status: SearchEngineStatusSchema,
     results: z.array(WebSearchResultSchema),
+  }).strict(),
+}).strict();
+
+export const ResearchWebOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    search_id: z.string(),
+    expires_in_seconds: z.number().int().positive(),
+    query: z.string(),
+    searched_at: z.string(),
+    count: z.number().int().nonnegative(),
+    total_candidates: z.number().int().nonnegative(),
+    unique_candidates: z.number().int().nonnegative(),
+    quality: SearchQualitySchema,
+    available: z.boolean(),
+    cache_hit: z.boolean(),
+    coalesced: z.boolean(),
+    fallback_used: z.boolean(),
+    fallback_reason: z.string().nullable(),
+    answers: z.array(z.string()),
+    corrections: z.array(z.string()),
+    suggestions: z.array(z.string()),
+    source_domains: z.array(z.string()),
+    source_strategy: z.enum(["balanced", "relevance", "primary"]),
+    source_type_coverage: z.record(z.string(), z.number().int().nonnegative()),
+    coverage_gaps: z.array(SearchSourceTypeSchema),
+    engine_status: SearchEngineStatusSchema,
+    query_coverage: z.array(z.object({
+      id: z.string(),
+      query: z.string(),
+      count: z.number().int().nonnegative(),
+      quality: z.union([SearchQualitySchema, z.literal("unavailable")]),
+      cache_hit: z.boolean(),
+      error: z.string().nullable(),
+    }).strict()),
+    results: z.array(WebSearchResultSchema),
+  }).strict(),
+}).strict();
+
+const ExtractedDocumentFields = {
+  title: z.string(),
+  url: z.string(),
+  final_url: z.string().nullable(),
+  domain: z.string(),
+  description: z.string(),
+  author: z.string().nullable(),
+  site_name: z.string().nullable(),
+  published_at: z.string().nullable(),
+  modified_at: z.string().nullable(),
+  canonical_url: z.string().nullable(),
+  language: z.string().nullable(),
+  content_type: z.string().nullable(),
+  document_type: z.enum(["html_article", "html_page", "plain_text", "markdown", "csv", "json", "xml_feed", "pdf"]).nullable(),
+  extraction_method: z.string().nullable(),
+  metadata_confidence: z.enum(["high", "medium", "low"]).nullable(),
+  headings: z.array(z.object({ level: z.number().int().min(1).max(6), text: z.string() }).strict()),
+  json_ld_types: z.array(z.string()),
+  content: z.string(),
+  char_count: z.number().int().nonnegative(),
+  source_char_count: z.number().int().nonnegative(),
+  word_count: z.number().int().nonnegative(),
+  page_count: z.number().int().nonnegative().nullable(),
+  pages_read: z.number().int().nonnegative().nullable(),
+  truncated: z.boolean(),
+  error: z.string().nullable(),
+};
+
+const SearchResultDocumentSchema = z.object({
+  result_id: z.string(),
+  ...ExtractedDocumentFields,
+}).strict();
+
+const OpenedWebDocumentSchema = z.object({
+  request_id: z.string(),
+  ...ExtractedDocumentFields,
+}).strict();
+
+export const ReadSearchResultOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    search_id: z.string(),
+    count: z.number().int().nonnegative(),
+    readable_count: z.number().int().nonnegative(),
+    documents: z.array(SearchResultDocumentSchema),
+  }).strict(),
+}).strict();
+
+export const OpenWebPageOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    count: z.number().int().nonnegative(),
+    readable_count: z.number().int().nonnegative(),
+    documents: z.array(OpenedWebDocumentSchema),
+  }).strict(),
+}).strict();
+
+export const FindSearchResultOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    search_id: z.string(),
+    result_id: z.string(),
+    title: z.string(),
+    url: z.string(),
+    final_url: z.string().nullable(),
+    domain: z.string(),
+    document_type: z.string().nullable(),
+    page_count: z.number().int().nonnegative().nullable(),
+    pages_read: z.number().int().nonnegative().nullable(),
+    pattern: z.string(),
+    match_mode: z.enum(["phrase", "all_terms"]),
+    case_sensitive: z.boolean(),
+    match_count: z.number().int().nonnegative(),
+    content_truncated: z.boolean(),
+    matches: z.array(z.object({
+      match_index: z.number().int().positive(),
+      start_char: z.number().int().nonnegative(),
+      end_char: z.number().int().nonnegative(),
+      page_number: z.number().int().positive().nullable(),
+      context: z.string(),
+    }).strict()),
+    error: z.string().nullable(),
   }).strict(),
 }).strict();
 
@@ -482,6 +798,10 @@ export type PerformanceOutput = z.infer<typeof PerformanceOutputSchema>;
 export type DiagnosticsOutput = z.infer<typeof DiagnosticsOutputSchema>;
 export type SearchHealthOutput = z.infer<typeof SearchHealthOutputSchema>;
 export type WebSearchOutput = z.infer<typeof WebSearchOutputSchema>;
+export type ResearchWebOutput = z.infer<typeof ResearchWebOutputSchema>;
+export type ReadSearchResultOutput = z.infer<typeof ReadSearchResultOutputSchema>;
+export type OpenWebPageOutput = z.infer<typeof OpenWebPageOutputSchema>;
+export type FindSearchResultOutput = z.infer<typeof FindSearchResultOutputSchema>;
 export type JobsOutput = z.infer<typeof JobsOutputSchema>;
 export type RoutePreviewOutput = z.infer<typeof RoutePreviewOutputSchema>;
 export type MemoryEstimateOutput = z.infer<typeof MemoryEstimateOutputSchema>;

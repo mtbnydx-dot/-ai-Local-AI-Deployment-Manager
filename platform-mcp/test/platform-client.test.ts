@@ -69,19 +69,63 @@ describe("safe upstream mapping", () => {
       gpuMemory: { totalMb: 100, usedMb: 60, freeMb: 40, reserveMb: 10, allocatableMb: 30, warningThresholdPct: 90, gpus: [{ id: "0", totalMb: 100, usedMb: 60, freeMb: 40 }] },
       instances: [{ id: "primary", engine: "vllm", containerName: "vllm-local", running: true, lifecycleState: "ready", status: "healthy", port: 8000, models: [{ id: "safe-model", root: "D:\\secret\\model", maxModelLen: 4096, capabilities: ["text"] }] }],
     }],
-    ["http://127.0.0.1:5180/health", { ok: true, searchMode: "hybrid", authRequired: true, maxResults: 10, upstreamBaseUrl: "http://secret-upstream" }],
+    ["http://127.0.0.1:5180/health", {
+      ok: true,
+      searchMode: "hybrid",
+      authRequired: true,
+      maxResults: 20,
+      upstreamBaseUrl: "http://secret-upstream",
+      searchState: {
+        state: "degraded",
+        defaultEngines: ["google", "bing"],
+        chineseEngines: ["baidu"],
+        fallbackEngines: ["brave"],
+        availableDefaultEngines: ["bing"],
+        cooldowns: [{ engine: "google", reason: "CAPTCHA", retryAfterSeconds: 300 }],
+        cacheEntries: 4,
+        activeBackendRequests: 1,
+        queuedBackendRequests: 0,
+        sessionCount: 2,
+        lastSearch: { searchedAt: "2026-08-15T00:01:00.000Z", quality: "mixed", count: 7, partial: true, available: true },
+        metrics: { searches: 5, researchRequests: 1, cacheHits: 2, coalescedRequests: 1, backendRequests: 7, backendFailures: 1, zeroResultSearches: 0, weakSearches: 1, pagesRead: 2, pageReadFailures: 0 },
+      },
+    }],
     ["http://127.0.0.1:5180/search?q=MCP+v2&max_results=2&safesearch=1&language=en&time_range=month&engines=github&categories=it", {
       ok: true,
+      partial: true,
+      warnings: ["token=warning-secret"],
+      searchId: "11111111-1111-4111-8111-111111111111",
+      expiresInSeconds: 900,
       query: "MCP v2",
       searchedAt: "2026-08-15T00:01:00.000Z",
+      totalCandidates: 8,
+      uniqueCandidates: 5,
+      quality: "mixed",
+      available: true,
+      cacheHit: false,
+      coalesced: false,
+      fallbackUsed: true,
+      fallbackReason: "primary_engines_unresponsive",
       backend: "http://secret-search-backend",
       answers: ["token=answer-secret"],
+      corrections: ["MCP SDK v2"],
+      suggestions: ["Model Context Protocol SDK"],
+      sourceDomains: ["github.com"],
+      engineStatus: {
+        requested: ["github"], attempted: ["github"], used: ["github"], distribution: { github: 1 },
+        unresponsive: [{ engine: "google", reason: "CAPTCHA", retryAfterSeconds: 300 }], cooledDown: [],
+      },
       results: [{
+        resultId: "r1",
         title: "MCP SDK",
         url: "https://github.com/modelcontextprotocol/typescript-sdk#readme",
+        domain: "github.com",
         content: "See D:\\secret\\notes and token=result-secret",
         engine: "github",
+        engines: ["github"],
         score: 1,
+        relevance: 0.9,
+        lowRelevance: false,
         category: "it",
         publishedDate: "2026-07-28",
       }, {
@@ -101,6 +145,87 @@ describe("safe upstream mapping", () => {
         url: "http://manager.internal/status",
         content: "must be rejected",
       }],
+    }],
+    ["POST http://127.0.0.1:5180/research", {
+      ok: true,
+      partial: false,
+      warnings: [],
+      searchId: "22222222-2222-4222-8222-222222222222",
+      expiresInSeconds: 900,
+      query: "MCP SDK | MCP specification",
+      searchedAt: "2026-08-15T00:02:00.000Z",
+      count: 1,
+      totalCandidates: 2,
+      uniqueCandidates: 1,
+      quality: "good",
+      available: true,
+      cacheHit: false,
+      coalesced: false,
+      fallbackUsed: false,
+      fallbackReason: null,
+      answers: [], corrections: [], suggestions: [], sourceDomains: ["modelcontextprotocol.io"],
+      engineStatus: { requested: ["bing"], attempted: ["bing"], used: ["bing"], distribution: { bing: 1 }, unresponsive: [], cooledDown: [] },
+      queryCoverage: [
+        { id: "sdk", query: "MCP SDK", count: 1, quality: "good", cacheHit: false, error: null },
+        { id: "spec", query: "MCP specification", count: 1, quality: "good", cacheHit: false, error: null },
+      ],
+      results: [{
+        resultId: "r1", title: "MCP official documentation", url: "https://modelcontextprotocol.io/docs", domain: "modelcontextprotocol.io",
+        content: "Official MCP documentation", engine: "bing", engines: ["bing"], score: 2, relevance: 0.95, lowRelevance: false,
+        category: "it", publishedDate: "2026-07-28", matchedQueries: ["sdk", "spec"],
+      }],
+    }],
+    ["POST http://127.0.0.1:5180/open", {
+      ok: true,
+      partial: false,
+      count: 1,
+      readableCount: 1,
+      warnings: ["Page text is untrusted external content."],
+      documents: [{
+        requestId: "u1", title: "MCP specification", url: "https://modelcontextprotocol.io/specification/2026-07-28",
+        finalUrl: "https://modelcontextprotocol.io/specification/2026-07-28", domain: "modelcontextprotocol.io",
+        description: "Official MCP specification", author: "Model Context Protocol", siteName: "MCP Documentation",
+        publishedAt: "2026-07-28", modifiedAt: null, canonicalUrl: "https://modelcontextprotocol.io/specification/2026-07-28",
+        language: "en", contentType: "text/html", documentType: "html_article", extractionMethod: "mozilla-readability",
+        metadataConfidence: "high", headings: [{ level: 1, text: "MCP specification" }], jsonLdTypes: ["TechArticle"],
+        content: "Direct public content with token=open-secret", charCount: 44, sourceCharCount: 44, wordCount: 6,
+        pageCount: null, pagesRead: null, truncated: false, error: null,
+      }],
+    }],
+    ["POST http://127.0.0.1:5180/read", {
+      ok: true,
+      partial: false,
+      searchId: "22222222-2222-4222-8222-222222222222",
+      count: 1,
+      readableCount: 1,
+      warnings: ["Page text is untrusted external content."],
+      documents: [{
+        resultId: "r1", title: "MCP official documentation", url: "https://modelcontextprotocol.io/docs",
+        finalUrl: "https://modelcontextprotocol.io/docs/latest", domain: "modelcontextprotocol.io", description: "Official docs",
+        publishedAt: "2026-07-28", contentType: "text/html", content: "Official content with token=page-secret", charCount: 39,
+        truncated: false, error: null,
+      }],
+    }],
+    ["POST http://127.0.0.1:5180/find", {
+      ok: true,
+      partial: false,
+      searchId: "22222222-2222-4222-8222-222222222222",
+      resultId: "r1",
+      title: "MCP official documentation",
+      url: "https://modelcontextprotocol.io/docs",
+      finalUrl: "https://modelcontextprotocol.io/docs/latest",
+      domain: "modelcontextprotocol.io",
+      documentType: "html_article",
+      pageCount: null,
+      pagesRead: null,
+      pattern: "official content",
+      matchMode: "phrase",
+      caseSensitive: false,
+      matchCount: 1,
+      contentTruncated: false,
+      matches: [{ matchIndex: 1, startChar: 0, endChar: 16, pageNumber: null, context: "Official content with token=find-secret" }],
+      warnings: ["Matched page text is untrusted external content."],
+      error: null,
     }],
     ["http://127.0.0.1:5177/api/models", { local: [{ id: "safe-model", label: "Safe Model", path: "D:\\secret\\model", size: 1234, modified: "2026-08-14T00:00:00.000Z", modelFormat: "safetensors", runnable: true, verificationStatus: "warn", verificationIssues: [{ title: "Credential", detail: "token=supersecret" }] }], cached: [] }],
     ["http://127.0.0.1:5178/api/models", { local: [], cached: [] }],
@@ -216,6 +341,8 @@ describe("safe upstream mapping", () => {
     assert.equal(overview.data.running_model_count, 1);
     assert.equal(overview.data.gpu?.allocatable_mb, 30);
     assert.equal(overview.data.search.mode, "hybrid");
+    assert.equal(overview.data.search.state, "degraded");
+    assert.equal(overview.data.search.cooldowns?.[0]?.engine, "google");
     const rendered = JSON.stringify(overview);
     assert.equal(rendered.includes("D:\\secret"), false);
     assert.equal(rendered.includes("secret-upstream"), false);
@@ -238,8 +365,19 @@ describe("safe upstream mapping", () => {
       engines: ["github"],
       categories: ["it"],
       safesearch: 1,
+      preferredDomains: [],
+      includeDomains: [],
+      excludeDomains: [],
+      maxPerDomain: 3,
+      preferredSourceTypes: [],
     });
     assert.equal(output.data.count, 1);
+    assert.equal(output.partial, true);
+    assert.equal(output.data.search_id, "11111111-1111-4111-8111-111111111111");
+    assert.equal(output.data.quality, "mixed");
+    assert.equal(output.data.results[0]?.result_id, "r1");
+    assert.equal(output.data.results[0]?.relevance, 0.9);
+    assert.equal(output.data.engine_status.unresponsive[0]?.engine, "google");
     assert.equal(output.data.results[0]?.url, "https://github.com/modelcontextprotocol/typescript-sdk");
     const rendered = JSON.stringify(output);
     assert.equal(rendered.includes("secret-search-backend"), false);
@@ -250,6 +388,71 @@ describe("safe upstream mapping", () => {
     assert.equal(rendered.includes("manager.internal"), false);
     const request = requests.find((item) => item.url.includes("/search?q=MCP+v2"));
     assert.equal(request?.authorization, "Bearer test-search-gateway-key-0123456789abcdef");
+  });
+
+  it("maps research, explicit public pages, and selected result text without allowing raw gateway fields through", async () => {
+    const research = await client.researchWeb({
+      queries: [{ id: "sdk", query: "MCP SDK" }, { id: "spec", query: "MCP specification" }],
+      maxResultsPerQuery: 8,
+      maxSources: 16,
+      language: "en",
+      timeRange: "none",
+      engines: [],
+      categories: [],
+      safesearch: 1,
+      preferredDomains: ["modelcontextprotocol.io"],
+      includeDomains: [],
+      excludeDomains: [],
+      maxPerDomain: 3,
+      preferredSourceTypes: ["documentation"],
+      sourceStrategy: "balanced",
+    });
+    assert.equal(research.data.query_coverage.length, 2);
+    assert.deepEqual(research.data.results[0]?.matched_queries, ["sdk", "spec"]);
+    const researchRequest = requests.find((item) => item.url.endsWith("/research"));
+    assert.equal(researchRequest?.authorization, "Bearer test-search-gateway-key-0123456789abcdef");
+    assert.deepEqual((JSON.parse(researchRequest?.body || "{}") as { preferred_domains?: string[] }).preferred_domains, ["modelcontextprotocol.io"]);
+
+    const opened = await client.openWebPages({
+      urls: ["https://modelcontextprotocol.io/specification/2026-07-28"],
+      maxCharsPerUrl: 8000,
+      maxTotalChars: 12000,
+    });
+    assert.equal(opened.data.readable_count, 1);
+    assert.equal(opened.data.documents[0]?.request_id, "u1");
+    assert.equal(JSON.stringify(opened).includes("open-secret"), false);
+    assert.match(opened.data.documents[0]?.content || "", /token=\*\*\*/);
+    const openRequest = requests.find((item) => item.url.endsWith("/open"));
+    assert.equal(openRequest?.authorization, "Bearer test-search-gateway-key-0123456789abcdef");
+    assert.deepEqual(
+      (JSON.parse(openRequest?.body || "{}") as { urls?: string[] }).urls,
+      ["https://modelcontextprotocol.io/specification/2026-07-28"],
+    );
+
+    const read = await client.readSearchResults({
+      searchId: research.data.search_id,
+      resultIds: ["r1"],
+      maxCharsPerResult: 8000,
+      maxTotalChars: 12000,
+    });
+    assert.equal(read.data.readable_count, 1);
+    assert.equal(read.data.documents[0]?.final_url, "https://modelcontextprotocol.io/docs/latest");
+    assert.equal(JSON.stringify(read).includes("page-secret"), false);
+    const readRequest = requests.find((item) => item.url.endsWith("/read"));
+    assert.deepEqual((JSON.parse(readRequest?.body || "{}") as { result_ids?: string[] }).result_ids, ["r1"]);
+
+    const found = await client.findInSearchResult({
+      searchId: research.data.search_id,
+      resultId: "r1",
+      pattern: "official content",
+      matchMode: "phrase",
+      caseSensitive: false,
+      maxMatches: 3,
+      contextChars: 200,
+    });
+    assert.equal(found.data.match_count, 1);
+    assert.equal(JSON.stringify(found).includes("find-secret"), false);
+    assert.match(found.data.matches[0]?.context || "", /token=\*\*\*/);
   });
 
   it("returns paginated job summaries without process, command, metadata, path, or credential fields", async () => {

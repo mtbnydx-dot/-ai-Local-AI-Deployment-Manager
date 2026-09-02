@@ -25,12 +25,12 @@ OpenWebUI / Claude / Codex / IDE / 自建 Agent
 - Docker 宿主访问：`http://host.docker.internal:5190/mcp`。
 - 本机进程也可用 `node D:\AI\platform-mcp\dist\src\index.js --stdio`。
 - HTTP 仅监听 loopback，强制独立 Bearer key，并校验 Host 与 Origin。
-- 上游地址固定为本机 `5176/5177/5178/5180`，调用方不能传任意 URL。
+- 管理和搜索上游地址固定为本机 `5176/5177/5178/5180`；只有显式网页读取工具接受公网 HTTP(S) URL，并由网关执行 DNS、跳转、端口和响应体安全校验。
 - 没有 shell、任意文件读取、下载、启动、停止、删除或配置写入工具。
 - 工具响应不返回模型绝对路径、Docker labels、服务密钥或搜索上游 URL。
 - 审计日志只记录请求 ID、工具名、客户端 ID、耗时和成功/失败，不记录参数、结果或密钥。
 
-当前 0.2.0 版本故意不暴露远程写操作。需要启停 MCP 时使用本机脚本；模型和管理器不会随 MCP 启停而重启。
+当前 0.5.0 版本故意不暴露远程写操作。需要启停 MCP 时使用本机脚本；模型和管理器不会随 MCP 启停而重启。
 
 ## 启动与检查
 
@@ -42,7 +42,7 @@ start-platform-mcp.cmd
 status-platform-mcp.cmd
 ```
 
-升级或部署后，可在 `D:\AI\platform-mcp` 运行 `npm run validate:live`。验证器使用官方 MCP client 协商 2026-07-28 协议，逐一调用 12 个真实工具，并要求联网搜索有结果、工具路由可选；它只允许 loopback `/mcp`，从受保护的 `server.env` 内部读取 Bearer key，输出中不包含 key、模型路径、搜索内容或上游原始响应。
+升级或部署后，可在 `D:\AI\platform-mcp` 运行 `npm run validate:live`。验证器使用官方 MCP client 协商 2026-07-28 协议，逐一调用 16 个真实工具，并要求单次搜索、批量研究、显式公网链接读取、搜索结果正文读取、页内查找和工具路由均实际可用；它只允许 loopback `/mcp`，从受保护的 `server.env` 内部读取 Bearer key，输出中不包含 key、模型路径、搜索内容或上游原始响应。
 
 首次启动会在 `D:\AI\.runtime\platform-mcp\server.env` 生成随机 MCP 客户端密钥，并把目录 ACL 限制为当前 Windows 用户。启动脚本只显示密钥文件位置，不打印密钥内容。联网搜索所需的 search-gateway 密钥优先从进程 secret 注入，否则读取平台现有的受保护服务密钥文件；它不会被复制进 `server.env`，日志也只显示搜索已启用或未启用。
 
@@ -65,15 +65,21 @@ stop-platform-mcp.cmd
 | `local_ai_get_performance` | 请求、token、速度、延迟、缓存、推测解码和上下文指标 |
 | `local_ai_get_diagnostics` | 只读健康检查；日志默认不返回，显式请求时最多返回 20 行且会脱敏 |
 | `local_ai_get_search_health` | 检查现有 search-gateway 的健康、模式与鉴权状态 |
-| `local_ai_search_web` | 经现有鉴权 search-gateway/SearXNG 联网搜索；每客户端限流，最多返回 10 条 |
+| `local_ai_search_web` | 单次联网搜索；返回质量、部分失败、引擎状态、`search_id/result_id`，最多 20 条 |
+| `local_ai_research_web` | 用 1–8 个互补查询做一次受限研究，按域名和来源类型覆盖合并去重，最多 40 个来源 |
+| `local_ai_open_web_page` | 直接识别 1–3 个已知公网链接中的 HTML、PDF、JSON、XML/RSS 和文本正文/元数据 |
+| `local_ai_read_search_result` | 识别近期结果中的 HTML、PDF、JSON、XML/RSS 和文本正文/元数据；不接受任意 URL |
+| `local_ai_find_in_search_result` | 在一个近期结果页内定位短语或同时包含全部词项的段落，PDF 尽量返回页码 |
 | `local_ai_list_jobs` | 分页查询下载、serve、benchmark、test 任务摘要，不返回日志、命令、路径或 PID |
 | `local_ai_preview_route` | 只预演请求会路由到哪个管理器、实例和模型，不发送推理 |
 | `local_ai_estimate_memory` | 用当前 GPU 状态和管理器估算器评估模型、上下文、精度与并发的显存适配 |
 | `local_ai_get_security_posture` | 汇总入口、MCP、搜索和两类管理器的脱敏暴露/鉴权态势 |
 
-12 个工具都声明 `readOnlyHint=true`、`destructiveHint=false` 和 `idempotentHint=true`，并同时返回文本与 `structuredContent`。只有确实访问外部搜索引擎的 `local_ai_search_web` 声明 `openWorldHint=true`；其余 11 个为 `false`。
+16 个工具都声明 `readOnlyHint=true`、`destructiveHint=false` 和 `idempotentHint=true`，并同时返回文本与 `structuredContent`。五个联网搜索/研究/显式链接/结果正文/页内查找工具声明 `openWorldHint=true`；其余 11 个为 `false`。
 
-联网搜索的 query 可能被 SearXNG 配置的外部引擎接收，不要把密钥、私人提示词或内部路径放进 query。MCP 只返回规范化标题、公共 HTTP(S) URL、摘要、来源和日期；带账号密码的 URL、`file:` URL、localhost/RFC1918/链路本地/常见内网域名、search backend 地址及凭据字段会被丢弃或脱敏。默认 SearXNG 引擎之外额外启用了 Bing 作为通用搜索冗余，避免 Brave、DuckDuckGo、Startpage 同时因限流/CAPTCHA 暂停时返回空结果；客户端仍可用 `engines` 显式选择。该覆盖方式遵循 [SearXNG settings.yml 的 engines 合并机制](https://docs.searxng.org/admin/settings/settings)。默认限流为每个 MCP client 每分钟 20 次，并设有 4 倍于该值的 MCP 服务级硬上限，防止轮换客户端 ID 绕过；过期客户端桶会回收。客户端限额可用 `PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE` 在 1–120 之间调整。
+联网搜索的 query 可能被 SearXNG 配置的外部引擎接收，不要把密钥、私人提示词或内部路径放进 query。本机对中英文多轮逐引擎和连续请求实测后，默认主池只用快速且相关性稳定的 SearchToday；只有主结果为空、弱或不足 3 条时，才用 Yandex 做一次末级回退。PrivacyWall 虽然相关性好，但连续请求后会进入限流；Brave 同样频繁限流，Bing 有严重跑题，DuckDuckGo、Startpage、Baidu 持续 CAPTCHA/拒绝访问，Google 在本机 JSON 搜索返回空结果，360 Search 则会间歇性静默返回空结果，因此都不参与自动池，但仍可显式指定。需要更广覆盖时用 `local_ai_research_web` 拆分角度，而不是让每次请求同时消耗一组不稳定引擎。网关会解析 `unresponsive_engines`、按 CAPTCHA/429/超时设置冷却、最多并发两个后端请求、合并同一在途请求，并对正常/弱结果使用不同的短缓存。结果先规范 URL、去跟踪参数和重复项，过滤极低相关候选与搜索套搜索页面，再按词法相关性、官方/偏好域名和域名多样性排序；同时显式返回 `quality`、`partial`、失败引擎、修正和建议，弱结果不会伪装成完整结果。
+
+`local_ai_read_search_result` 和 `local_ai_find_in_search_result` 只能使用网关签发的近期 `search_id/result_id`；`local_ai_open_web_page` 则用于用户粘贴或上下文中已经明确给出的 1–3 个公网链接，不负责发现页面。三者共用同一安全读取器：每次 DNS 解析和跳转都会重新校验并固定到公网地址；阻止 localhost、私网/链路本地/保留地址、账号密码 URL、非标准端口、非 HTTP(S)、未知二进制和超限响应。HTML 使用 Mozilla Readability 与 DOM 回退识别正文并解析 JSON-LD、作者、日期、规范链接、语言和标题层级；PDF.js 提取有文本层的 PDF 并保留页码标记；JSON、XML/RSS、Markdown、CSV 和纯文本也使用独立的受限解析。所有内容仍属于不可信外部文本，不能把其中指令当作系统指令或授权。JS-only 页面、登录墙、验证码、付费墙和纯扫描 PDF 可能无法识别；当前不会执行页面脚本、携带浏览器 cookie 或做 OCR。默认限流为每个 MCP client 每分钟 20 个工作单元，批量查询和多页读取按数量计费，并设有 4 倍服务级硬上限。客户端限额可用 `PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE` 在 1–120 之间调整。
 
 ## 各类客户端接入
 
@@ -109,8 +115,7 @@ OpenWebUI 只是 MCP client 之一。在管理员的 MCP/外部工具连接配�
     "local-ai-platform": {
       "command": "node",
       "args": [
-        "D:\\AI\\platform-mcp\\dist\\src\\index.js",
-        "--stdio"
+        "D:\\AI\\platform-mcp\\scripts\\run-stdio.mjs"
       ],
       "env": {
         "AI_ROOT": "D:\\AI"
@@ -120,7 +125,7 @@ OpenWebUI 只是 MCP client 之一。在管理员的 MCP/外部工具连接配�
 }
 ```
 
-stdio 由宿主直接创建本机子进程，因此不使用 HTTP Bearer key。不同软件的配置文件位置和字段外壳可能不同，但 `command`、`args` 和 `env` 这三个核心值相同。上述最小配置可使用 11 个纯平台查询工具；若还要使用 `local_ai_search_web`，宿主必须从自己的 secret store 向子进程注入 `PLATFORM_MCP_SEARCH_GATEWAY_API_KEY`。不要把真实值提交到 JSON、Git 或提示词。泛化服务平台优先复用常驻 HTTP MCP，可避免每个 stdio 宿主各自保存一份搜索密钥。
+stdio 由宿主直接创建本机子进程，因此不使用 HTTP Bearer key。`run-stdio.mjs` 会先验证已构建入口，再从环境 secret 或本机受保护的现有服务密钥文件读取 search-gateway 凭据，不打印也不复制凭据。不同软件的配置文件位置和字段外壳可能不同，但 `command`、`args` 和 `env` 三个核心值相同。Chatbox 采用上面的脚本即可发现全部 16 个工具；若宿主有自己的 secret store，也可显式注入 `PLATFORM_MCP_SEARCH_GATEWAY_API_KEY`。不要把真实值提交到 JSON、Git 或提示词。
 
 ### 自建泛化服务平台
 
@@ -144,7 +149,7 @@ Agent 调用链应为：选择模型 → 读取授权后的 MCP 工具 → 把 t
 - `GET /api/mcp/status`：返回监听、健康、版本、只读和鉴权状态；
 - 管理首页摘要卡：显示 MCP 在线/异常/未启动。
 
-现有管理 API 已足够支撑当前 12 个只读工具，无需为 MCP 复制一套模型或 GPU 接口。本次直接复用了 `/api/jobs?fields=summary`、`/api/fleet/route-preview`、`/api/memory-estimate`、`/api/security` 和 `/api/service-exposure`；唯一发现的参数缺口是 search-gateway 直搜未转发 `safesearch`，现已补齐并限制为 0/1/2。现有动态 MCP 状态接口也能直接显示 0.2.0 与 12 工具，因此管理平台当前没有其他必须补齐的读接口。
+现有管理 API 已足够支撑当前 16 个只读工具，无需为 MCP 复制一套模型或 GPU 接口。平台管理类工具继续复用既有安全摘要接口；搜索侧由 search-gateway 提供 `/research`、`/open`、`/read`、`/find` 和语义健康字段。现有动态 MCP 状态接口会显示 0.5.0 与 16 工具。
 
 仍然缺少、且本阶段有意不补的是远程启停、模型切换、下载、任务取消和配置写入。以后若开放，需另建控制面并补充细粒度 scope、逐租户授权、确认/审批、幂等键、并发控制、完整参数审计和回滚，而不是把现有只读工具改成可写。
 
@@ -156,14 +161,18 @@ Agent 调用链应为：选择模型 → 读取授权后的 MCP 工具 → 把 t
 - 2026-07-28 的 `server/discover` + per-request envelope 客户端；
 - stdio 客户端。
 
-`npm test` 会验证两代 HTTP 握手、12 个工具的 schema 与结构化输出、认证、Host/Origin 防护、联网搜索限流和 URL 过滤、分页、路径/凭据脱敏、固定上游边界、上游响应大小限制，以及覆盖全部工具的十组固定快照评测。
+`npm test` 会验证两代 HTTP 握手、16 个工具的 schema 与结构化输出、认证、Host/Origin 防护、按工作量限流、研究/显式公网链接/结果正文/页内查找工作流、URL 与公网 DNS 边界、分页、路径/凭据脱敏、固定管理上游边界、上游响应大小限制，以及十组固定快照评测。search-gateway 自身另测缓存、在途合并、引擎冷却、单次回退、去重/排序、中文切词、来源分类、重定向复验、解压限制，以及 HTML/JSON/XML/PDF 正文提取。
 
 ## 故障排查
 
 - `401`：Bearer Header 缺失或 key 不匹配。
 - `403`：Host/Origin 不在本机白名单；Docker 客户端应使用 `host.docker.internal`。
 - `health=offline`：运行 `start-platform-mcp.cmd`。
-- `local_ai_search_web` 提示未配置：确认现有 search-gateway 服务密钥文件可读，或从 secret store 设置 `PLATFORM_MCP_SEARCH_GATEWAY_API_KEY` 后只重启 MCP。
+- 联网工具提示未配置：确认现有 search-gateway 服务密钥文件可读，或从 secret store 设置 `PLATFORM_MCP_SEARCH_GATEWAY_API_KEY` 后只重启 MCP。
+- `quality=weak|empty`：优先缩短查询、拆成 2–8 个角度交给 `local_ai_research_web`，或设置 `preferred_domains/include_domains/preferred_source_types`；不要只提高结果上限。
+- 引号内短语按精确检索约束处理；如果上游忽略引号，未命中完整短语的候选会被降为低相关，避免用只沾到几个常见词的页面凑数。
+- `quality` 只描述检索相关性和覆盖度，不等于事实已经核验，也不代表所有来源同等可信；重要结论仍应读取正文并交叉验证。
+- 正文读取报错：该页可能依赖 JavaScript、登录/cookie、验证码或付费墙，也可能跳到私网/非标准端口、类型不支持或超过安全限制；对搜索结果可改选同一集合中的其他 `result_id`，对粘贴链接可换同站的公开 HTML/PDF/RSS 页面。
 - 搜索提示 rate limit：等待返回的秒数，或缩小/复用已有结果；不要靠提高结果上限绕过限流。
 - 工具返回 `partial=true`：某个固定上游未响应；用 `status-service-entry.cmd` 和 `local_ai_get_diagnostics` 确认具体管理器。
 - 需要轮换 key：先停止 MCP，备份后移走 `server.env`，再启动生成新 key，并同步更新客户端 secret store。旧 key 会立即失效。
