@@ -5,7 +5,15 @@ const { formatBytes } = require("./job-utils");
 
 function createDockerRuntime(options = {}) {
   const dockerExe = options.dockerExe || "docker";
+  const dockerArgsPrefix = Array.isArray(options.dockerArgsPrefix)
+    ? options.dockerArgsPrefix.map((value) => String(value)).filter(Boolean)
+    : [];
   const dockerDesktopExe = options.dockerDesktopExe || "";
+  const daemonStartFile = options.daemonStartFile || "";
+  const daemonStartArgs = Array.isArray(options.daemonStartArgs)
+    ? options.daemonStartArgs.map((value) => String(value)).filter(Boolean)
+    : [];
+  const runtimeName = String(options.runtimeName || "Docker Desktop").trim() || "Docker Desktop";
   const execFileCommand = options.execFileCommand || execFile;
   const spawnCommand = options.spawnCommand || spawn;
   const fsExists = options.fsExists || fs.existsSync;
@@ -33,7 +41,7 @@ function createDockerRuntime(options = {}) {
     if (!Object.hasOwn(effectiveOptions, "timeout") && isDockerReadOnlyCommand(args)) {
       effectiveOptions.timeout = readTimeoutMs;
     }
-    return execFileAsync(dockerExe, args, effectiveOptions);
+    return execFileAsync(dockerExe, [...dockerArgsPrefix, ...args], effectiveOptions);
   }
 
   async function getDockerVersion() {
@@ -81,6 +89,33 @@ function createDockerRuntime(options = {}) {
   async function ensureDockerDaemonRunning(timeoutMs = 120000) {
     const current = await checkDockerDaemon();
     if (current.ok) return { ...current, alreadyRunning: true };
+    if (daemonStartFile) {
+      try {
+        const child = spawnCommand(daemonStartFile, daemonStartArgs, {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        if (child?.unref) child.unref();
+      } catch (error) {
+        return {
+          ok: false,
+          alreadyRunning: false,
+          error: `${runtimeName} 启动失败：${error.message}`,
+          raw: error.message,
+        };
+      }
+      const readiness = await waitForDockerDaemon(timeoutMs);
+      return readiness.ok
+        ? { ok: true, alreadyRunning: false, exe: daemonStartFile, version: readiness.version, runtimeName }
+        : {
+          ok: false,
+          alreadyRunning: false,
+          exe: daemonStartFile,
+          error: `${runtimeName} 未就绪：${readiness.error || current.raw || current.error}`,
+          raw: readiness.error || current.raw || current.error,
+        };
+    }
     if (!dockerDesktopExe || !fsExists(dockerDesktopExe)) {
       return {
         ok: false,
@@ -119,8 +154,8 @@ function createDockerRuntime(options = {}) {
     if (current.ok) {
       return { ok: true, alreadyRunning: true, ready: true, serverVersion: current.version, message: "Docker daemon 已经可用。" };
     }
-    if (!dockerDesktopExe || !fsExists(dockerDesktopExe)) {
-      const error = new Error("没有找到 Docker Desktop.exe，请检查 Docker Desktop 安装路径。");
+    if (!daemonStartFile && (!dockerDesktopExe || !fsExists(dockerDesktopExe))) {
+      const error = new Error(`没有找到可启动的 ${runtimeName}，请检查运行时配置。`);
       error.status = 404;
       throw error;
     }
@@ -128,20 +163,22 @@ function createDockerRuntime(options = {}) {
       return {
         ok: true,
         dryRun: true,
-        exe: dockerDesktopExe,
-        message: "Docker Desktop 可由管理器启动。",
+        exe: daemonStartFile || dockerDesktopExe,
+        runtimeName,
+        message: `${runtimeName} 可由管理器启动。`,
       };
     }
     const readiness = await ensureDockerDaemonRunning(timeoutMs);
     return {
       ok: readiness.ok,
       alreadyRunning: Boolean(readiness.alreadyRunning),
-      exe: dockerDesktopExe,
+      exe: daemonStartFile || dockerDesktopExe,
+      runtimeName,
       ready: readiness.ok,
       serverVersion: readiness.version || null,
       error: readiness.ok ? null : readiness.error,
       message: readiness.ok
-        ? readiness.alreadyRunning ? "Docker daemon 已经可用。" : "已启动 Docker Desktop，Docker 引擎已经可用。"
+        ? readiness.alreadyRunning ? "Docker daemon 已经可用。" : `已启动 ${runtimeName}，Docker 引擎已经可用。`
         : readiness.error,
     };
   }
@@ -203,6 +240,7 @@ function createDockerRuntime(options = {}) {
     startDockerDesktop,
     getImageStatus,
     pullImageWithRetry,
+    runtimeName,
     formatDockerDaemonError,
     normalizeDockerContainerName,
     normalizeDockerTimestamp,

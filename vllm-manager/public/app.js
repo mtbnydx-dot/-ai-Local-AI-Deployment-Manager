@@ -300,9 +300,14 @@ const statsSummaryRenderer = window.LocalAiStatsSummaryRenderer.create({
     preferLiveRuntimeMetrics: true,
     speculativeLabels: {
       dspark: "DSpark 接受率",
+      nextn: "NEXTN/MTP 接受率",
       mtp: "MTP 接受率",
       mixed: "推测解码接受率",
     },
+    includeRuntimeConfig: true,
+    runtimeConfigLabel: "运行配置",
+    runtimeThinkingToggleLabel: "思考严格可切换",
+    runtimeUnitScaleLabel: "scale=1 灰度",
   },
 });
 
@@ -3874,7 +3879,11 @@ function renderStats() {
       gpuTemp: "GPU 温度",
       gpuPower: "GPU 功耗",
       gpuFan: "GPU 风扇",
-      mtpAcceptance: stats.live?.totals?.speculative?.mode === "dspark" ? "DSpark 接受率" : "MTP 接受率",
+      mtpAcceptance: stats.live?.totals?.speculative?.mode === "dspark"
+        ? "DSpark 接受率"
+        : stats.live?.totals?.speculative?.mode === "nextn"
+          ? "NEXTN/MTP 接受率"
+          : "MTP 接受率",
     },
   });
   renderStatsComposition(stats);
@@ -4840,7 +4849,7 @@ async function handleServiceJobAction(event) {
   try {
     if (action === "start-docker") {
       await api("/api/docker/start", { method: "POST", body: "{}" });
-      notify("已请求启动 Docker", "Docker Desktop 初始化可能需要几十秒。", "success");
+      notify("已请求启动 Docker", "Docker 引擎初始化可能需要几十秒。", "success");
       await Promise.all([refreshStatus(), refreshJobs()]);
       return;
     }

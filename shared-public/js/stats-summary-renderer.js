@@ -38,10 +38,15 @@
       preferLiveRuntimeMetrics: false,
       speculativeLabels: {
         dspark: "DSpark acceptance",
+        nextn: "NEXTN/MTP acceptance",
         mtp: "MTP acceptance",
         mixed: "Speculative decoding acceptance",
       },
       heroFirstMetric: false,
+      includeRuntimeConfig: false,
+      runtimeConfigLabel: "Runtime configuration",
+      runtimeThinkingToggleLabel: "thinking toggle",
+      runtimeUnitScaleLabel: "scale=1 canary",
       ...options,
     };
 
@@ -60,6 +65,7 @@
       const context = runtimeTotals.context || {};
       const cache = runtimeTotals.cache || {};
       const speculative = runtimeTotals.speculative || {};
+      const runtimeConfig = stats.live?.facts?.runtimeConfig || stats.facts?.runtimeConfig || {};
       const cards = [
         statsMetric(settings.totalTokensLabel, fmtTokens(tokens.total), `${fmtTokens(tokens.prompt)} ${settings.tokenDetailInput} · ${fmtTokens(tokens.generation)} ${settings.tokenDetailOutput}`, settings.heroFirstMetric ? "stats-metric-hero" : ""),
         statsMetric(settings.requestLabel, fmtTokens(requests.total), requestDetail(requests)),
@@ -79,10 +85,46 @@
       }
 
       cards.push(
-        statsMetric(settings.currentSpeedLabel, fmtRate(speed.recentOutputTokensPerSecond, " tok/s"), `${fmtRate(speed.recentPromptTokensPerSecond, " in/s")} · ${fmtRate(speed.recentRequestsPerMinute, " req/min")}`),
+        statsMetric(settings.currentSpeedLabel, fmtRate(speed.recentOutputTokensPerSecond, " tok/s"), `${fmtRate(speed.recentPromptTokensPerSecond, " in/s")} · ${fmtRate(speed.recentRequestsPerMinute, " req/min")}${speed.outputSource === "sglang_recent_gauge" ? " · 最近一次活跃采样" : speed.outputSource === "sglang_active_average" ? " · 启动以来活跃平均" : ""}`),
         statsMetric(settings.latencyLabel, fmtSeconds(latency.avgE2eSeconds), `TTFT ${fmtSeconds(latency.avgTtftSeconds)}`),
         statsMetric(settings.kvLabel, formatContextUsage(context.activeTokens, context.capacityTokens, context.kvUsagePercent), settings.kvDetail),
       );
+
+      if (settings.includeRuntimeConfig && Object.values(runtimeConfig).some(Boolean)) {
+        const kvDtype = String(runtimeConfig.kvCacheDtype || "").toLowerCase();
+        const kvLabel = /^fp8/.test(kvDtype)
+          ? "FP8 KV"
+          : /^(bf16|bfloat16)$/.test(kvDtype) || kvDtype === "auto" || !kvDtype
+            ? "BF16 KV"
+            : `${kvDtype.toUpperCase()} KV`;
+        const pleDtype = /^fp8/.test(String(runtimeConfig.pleDtype || "").toLowerCase()) ? "FP8 " : "";
+        const contextDetail = Number(runtimeConfig.maxTotalTokens || 0) > 0
+          ? `${fmtTokens(runtimeConfig.maxTotalTokens)} KV 池${Number(runtimeConfig.contextLength || 0) > 0 ? ` / ${fmtTokens(runtimeConfig.contextLength)} 模型上限` : ""}`
+          : "";
+        const storageDetail = runtimeConfig.storageMode === "nvme-ple"
+          ? `NVMe ${pleDtype}PLE`
+          : runtimeConfig.storageMode === "cpu-ple"
+            ? `CPU RAM ${pleDtype}PLE`
+            : runtimeConfig.storageMode;
+        const speculativeDetail = runtimeConfig.speculativeMode === "nextn"
+          ? "NEXTN/MTP"
+          : runtimeConfig.speculativeMode === "off"
+            ? "MTP 关闭"
+            : runtimeConfig.speculativeMode;
+        const backendDetail = runtimeConfig.fp4Backend === "flashinfer_cutlass" && runtimeConfig.moeBackend === "flashinfer_cutlass"
+          ? "Cutlass FP4/MoE"
+          : [runtimeConfig.fp4Backend, runtimeConfig.moeBackend].filter(Boolean).join(" + ");
+        const details = [
+          contextDetail,
+          speculativeDetail,
+          storageDetail,
+          runtimeConfig.cacheMode === "persistent-ext4" ? "ext4 编译缓存" : runtimeConfig.cacheMode,
+          backendDetail,
+          runtimeConfig.thinkingMode === "strict-toggle" ? settings.runtimeThinkingToggleLabel : runtimeConfig.thinkingMode,
+          runtimeConfig.kvScaleMode === "unit" ? settings.runtimeUnitScaleLabel : "",
+        ].filter(Boolean);
+        cards.push(statsMetric(settings.runtimeConfigLabel, kvLabel, details.join(" · ")));
+      }
 
       if (settings.includePrefixCache) {
         const hasNativePrefixCounters = Number(cache.prefixQueries || 0) > 0;

@@ -523,17 +523,97 @@ test("runtime metrics use vLLM counters and SGLang native speculative gauges wit
   assert.equal(sglang.speculative.acceptanceRate, 0.75);
   assert.equal(sglang.speculative.meanAcceptLength, 4.2);
   assert.equal(sglang.speculative.configuredDraftTokens, 7);
-  assert.equal(sglang.speculative.mode, "dspark");
+  assert.equal(sglang.speculative.mode, "nextn");
   assert.equal(sglang.speculative.source, "sglang_gauges");
   assert.equal(sglang.speed.recentOutputTokensPerSecond, 212.4);
   assert.equal(sglang.speed.averageOutputTokensPerSecond, 100);
   assert.equal(sglang.context.capacityTokens, 373883);
+
+  const [dspark] = manager.buildModelStats(sglangMetrics, { qwen: { id: "qwen", max_model_len: 262144 } }, {}, Date.now() / 1000, {
+    updateSamples: false,
+    engine: "sglang",
+    speculativeMode: "dspark",
+  });
+  assert.equal(dspark.speculative.mode, "dspark");
+
+  const facts = manager.buildSglangRuntimeFacts(sglangMetrics, [{ max_model_len: 262144 }], {
+    "ai.runtime.kv-dtype": "fp8_e4m3",
+    "ai.runtime.kv-scale": "unit",
+    "ai.runtime.storage": "nvme-ple",
+    "ai.runtime.ple-dtype": "fp8_e4m3",
+    "ai.runtime.speculative": "nextn",
+    "ai.runtime.thinking": "strict-toggle",
+    "ai.runtime.cache": "persistent-ext4",
+    "ai.runtime.context-length": "262144",
+    "ai.runtime.max-total-tokens": "220000",
+    "ai.runtime.chunked-prefill": "4096",
+    "ai.runtime.fp4-backend": "flashinfer_cutlass",
+    "ai.runtime.moe-backend": "flashinfer_cutlass",
+  });
+  assert.equal(facts.kvCacheTokens, 373883);
+  assert.equal(facts.runtimeConfig.kvCacheQuantized, true);
+  assert.equal(facts.runtimeConfig.kvScaleMode, "unit");
+  assert.equal(facts.runtimeConfig.storageMode, "nvme-ple");
+  assert.equal(facts.runtimeConfig.pleDtype, "fp8_e4m3");
+  assert.equal(facts.runtimeConfig.speculativeMode, "nextn");
+  assert.equal(facts.runtimeConfig.thinkingMode, "strict-toggle");
+  assert.equal(facts.runtimeConfig.cacheMode, "persistent-ext4");
+  assert.equal(facts.runtimeConfig.contextLength, 262144);
+  assert.equal(facts.runtimeConfig.maxTotalTokens, 220000);
+  assert.equal(facts.runtimeConfig.chunkedPrefillSize, 4096);
+  assert.equal(facts.runtimeConfig.fp4Backend, "flashinfer_cutlass");
+  assert.equal(facts.runtimeConfig.moeBackend, "flashinfer_cutlass");
 });
 
 test("Docker creation timestamps provide a stable process fallback for runtimes without process_start_time_seconds", () => {
   assert.equal(manager.parseDockerCreatedAtSeconds("2026-08-15 19:20:31 +1000 AEST"), 1786785631);
   assert.equal(manager.parseDockerCreatedAtSeconds(""), null);
   assert.equal(manager.parseDockerCreatedAtSeconds("not-a-date"), null);
+});
+
+test("SGLang speed keeps the last real gauge and falls back to the active average", () => {
+  const liveMetrics = manager.parsePrometheusMetrics([
+    'sglang:generation_tokens_total{model_name="qwen-speed-cache"} 200',
+    'sglang:gen_throughput{model_name="qwen-speed-cache"} 145.5',
+  ].join("\n"));
+  const [live] = manager.buildModelStats(liveMetrics, { "qwen-speed-cache": { id: "qwen-speed-cache" } }, {}, 1000, {
+    updateSamples: true,
+    engine: "sglang",
+  });
+  assert.equal(live.speed.recentOutputTokensPerSecond, 145.5);
+  assert.equal(live.speed.outputSource, "sglang_live_gauge");
+
+  const idleMetrics = manager.parsePrometheusMetrics([
+    'sglang:generation_tokens_total{model_name="qwen-speed-cache"} 2200',
+    'sglang:gen_throughput{model_name="qwen-speed-cache"} 0',
+  ].join("\n"));
+  const [recent] = manager.buildModelStats(idleMetrics, { "qwen-speed-cache": { id: "qwen-speed-cache" } }, {}, 1005, {
+    updateSamples: true,
+    engine: "sglang",
+  });
+  assert.equal(recent.speed.recentOutputTokensPerSecond, 145.5);
+  assert.equal(recent.speed.outputSource, "sglang_recent_gauge");
+
+  const [stillRecent] = manager.buildModelStats(idleMetrics, { "qwen-speed-cache": { id: "qwen-speed-cache" } }, {}, 1061, {
+    updateSamples: true,
+    engine: "sglang",
+  });
+  assert.equal(stillRecent.speed.recentOutputTokensPerSecond, 145.5);
+  assert.equal(stillRecent.speed.outputSource, "sglang_recent_gauge");
+
+  const averageOnlyMetrics = manager.parsePrometheusMetrics([
+    'sglang:generation_tokens_total{model_name="qwen-average-only"} 1000',
+    'sglang:gen_throughput{model_name="qwen-average-only"} 0',
+    'sglang:inter_token_latency_seconds_sum{model_name="qwen-average-only"} 10',
+    'sglang:inter_token_latency_seconds_count{model_name="qwen-average-only"} 1000',
+  ].join("\n"));
+  const [averageOnly] = manager.buildModelStats(averageOnlyMetrics, { "qwen-average-only": { id: "qwen-average-only" } }, {}, 2000, {
+    updateSamples: true,
+    engine: "sglang",
+    runtimeSampleKey: "fresh-runtime",
+  });
+  assert.equal(averageOnly.speed.recentOutputTokensPerSecond, 100);
+  assert.equal(averageOnly.speed.outputSource, "sglang_active_average");
 });
 
 test("local model config request accepts the frontend local source", async () => {

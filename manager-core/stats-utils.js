@@ -22,6 +22,13 @@ function aggregateStats(models, uptimeSeconds) {
     .filter((mode) => mode && mode !== "off")));
   const directAcceptanceRates = models.map((model) => Number(model.speculative?.acceptanceRate || 0)).filter((value) => value > 0);
   const meanAcceptLengths = models.map((model) => Number(model.speculative?.meanAcceptLength || 0)).filter((value) => value > 0);
+  const outputSources = Array.from(new Set(models
+    .map((model) => String(model.speed?.outputSource || "").trim())
+    .filter(Boolean)));
+  const outputObservedAt = models.reduce((latest, model) => {
+    const observedAt = Number(model.speed?.outputObservedAt);
+    return Number.isFinite(observedAt) && observedAt > latest ? observedAt : latest;
+  }, 0) || null;
 
   return {
     tokens: {
@@ -40,6 +47,8 @@ function aggregateStats(models, uptimeSeconds) {
       recentPromptTokensPerSecond: models.reduce((sum, model) => sum + model.speed.recentPromptTokensPerSecond, 0),
       recentOutputTokensPerSecond: models.reduce((sum, model) => sum + model.speed.recentOutputTokensPerSecond, 0),
       recentRequestsPerMinute: models.reduce((sum, model) => sum + model.speed.recentRequestsPerMinute, 0),
+      outputSource: outputSources.length === 1 ? outputSources[0] : outputSources.length ? "mixed" : "unavailable",
+      outputObservedAt,
       lifetimeTokensPerSecond: uptimeSeconds ? totalTokens / uptimeSeconds : 0,
     },
     latency: {
@@ -94,6 +103,8 @@ function emptyStatsSummary(container, endpoint, options = {}) {
         recentPromptTokensPerSecond: 0,
         recentOutputTokensPerSecond: 0,
         recentRequestsPerMinute: 0,
+        outputSource: "unavailable",
+        outputObservedAt: null,
         lifetimeTokensPerSecond: 0,
       },
       latency: {},
