@@ -96,13 +96,22 @@ const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
 const MANAGER_APIKEY_LABEL_KEY = "ai.manager.api-key";
 const MANAGER_APIKEY_REF_LABEL_KEY = "ai.manager.api-key-ref";
+const DOCKER_WSL_DISTRO = String(process.env.DOCKER_WSL_DISTRO || "").trim();
+if (DOCKER_WSL_DISTRO && !/^[A-Za-z0-9._-]+$/.test(DOCKER_WSL_DISTRO)) {
+  throw new Error("DOCKER_WSL_DISTRO contains unsupported characters.");
+}
 
 const CONFIG = {
-  dockerExe: firstExisting([
+  dockerWslDistro: DOCKER_WSL_DISTRO,
+  dockerExe: DOCKER_WSL_DISTRO ? (process.env.WSL_EXE || "wsl.exe") : firstExisting([
     process.env.DOCKER_EXE,
     defaultDevToolsPath("Docker", "resources", "bin", "docker.exe"),
     "docker",
   ]),
+  dockerArgsPrefix: DOCKER_WSL_DISTRO ? ["-d", DOCKER_WSL_DISTRO, "--exec", "docker"] : [],
+  dockerRuntimeName: DOCKER_WSL_DISTRO ? `WSL ${DOCKER_WSL_DISTRO}` : "Docker Desktop",
+  dockerDaemonStartFile: DOCKER_WSL_DISTRO ? (process.env.WSL_EXE || "wsl.exe") : "",
+  dockerDaemonStartArgs: DOCKER_WSL_DISTRO ? ["-d", DOCKER_WSL_DISTRO, "--exec", "sleep", "infinity"] : [],
   dockerDesktopExe: firstExisting([
     process.env.DOCKER_DESKTOP_EXE,
     defaultDevToolsPath("Docker", "Docker Desktop.exe"),
@@ -184,7 +193,11 @@ const billingPendingQueue = core.createBillingPendingQueue({
 
 const dockerRuntime = createDockerRuntime({
   dockerExe: CONFIG.dockerExe,
+  dockerArgsPrefix: CONFIG.dockerArgsPrefix,
   dockerDesktopExe: CONFIG.dockerDesktopExe,
+  daemonStartFile: CONFIG.dockerDaemonStartFile,
+  daemonStartArgs: CONFIG.dockerDaemonStartArgs,
+  runtimeName: CONFIG.dockerRuntimeName,
   formatBytes,
   parseJsonSafe,
   delay,
@@ -324,6 +337,7 @@ const {
 const jobs = new Map();
 const progressTimers = new Map();
 const statsSamples = new Map();
+const sglangThroughputSamples = new Map();
 const serviceRateBuckets = new Map();
 const serviceConcurrencyBuckets = new Map();
 const GATEWAY_RUNTIME_CACHE_MS = Math.max(0, Number(process.env.VLLM_GATEWAY_RUNTIME_CACHE_MS || 5000));
@@ -1245,12 +1259,12 @@ async function collectHealthReport() {
     runtimeSecretStoreError = error;
   }
   const checks = [];
-  checks.push(healthCheck("docker", "Docker", dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"]));
+  checks.push(healthCheck("docker", CONFIG.dockerRuntimeName, dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"]));
   checks.push(healthCheck("gpu", "GPU", gpu.ok ? "ok" : "warn", gpu.ok ? `${gpu.name} · ${gpu.usedMb}/${gpu.totalMb} MB · ${gpu.util}%` : gpu.text || "No NVIDIA GPU detected"));
   checks.push(healthCheck("runtime-compatibility", "vLLM 运行时兼容性", runtimeCompatibility.status, runtimeCompatibility.summary));
   checks.push(healthCheck("image", "vLLM 镜像", image.ok ? "ok" : "warn", image.ok ? image.text : `${CONFIG.image} not found locally`, image.ok ? [] : ["pull-image"]));
   checks.push(healthCheck("image-pin", "镜像版本", isPinnedImageReference(CONFIG.image) ? "ok" : "warn", CONFIG.image));
-  checks.push(healthCheck("container", "vLLM 容器", container.running ? "ok" : container.exists ? "warn" : "warn", container.status || (container.exists ? "exists" : "not started")));
+  checks.push(healthCheck("container", "推理容器", container.running ? "ok" : container.exists ? "warn" : "warn", container.status || (container.exists ? "exists" : "not started")));
   checks.push(healthCheck("api", "OpenAI 兼容 API", runtime?.models?.length ? "ok" : runtimeError ? "fail" : "warn", runtime?.models?.length ? `${runtime.models.length} model(s) served at ${runtime.endpoint.localUrl}` : runtimeError?.message || "No served model reported yet"));
   checks.push(healthCheck("runtime-secret-store", "运行时密钥存储", runtimeSecretStoreError ? "fail" : "ok", runtimeSecretStoreError?.message || "可用（密钥仅保存在受限本地文件中）"));
   if (!process.env.VLLM_MODELS_ROOT && !process.env.LLAMA_MODELS_ROOT) {
@@ -3181,10 +3195,12 @@ async function getContainerStatus(containerName) {
     return {
       exists: true,
       running: String(info.State || "").toLowerCase() === "running",
+      id: info.ID || "",
       name: info.Names,
       status: info.Status,
       ports: info.Ports,
       image: info.Image,
+      createdAt: info.CreatedAt || "",
       labels,
     };
   } catch (error) {
@@ -3709,7 +3725,10 @@ async function collectStats() {
   await metricsHistoryStore.recordMetricsHistory(response, {
     engine: normalizeRuntimeEngine(container.labels?.[MANAGER_ENGINE_LABEL_KEY]),
   }).catch(() => {});
-  response.trends = await metricsHistoryStore.getMetricsHistory({ hours: 24 }).catch(() => ({ hours: 24, samples: [] }));
+  response.trends = await metricsHistoryStore.getMetricsHistory({
+    hours: 24,
+    engine: response.live?.engine || "",
+  }).catch(() => ({ hours: 24, samples: [] }));
   return response;
 }
 
@@ -3753,7 +3772,9 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   const factModelHints = Array.from(new Set(servedModels
     .flatMap((model) => [model.id, model.root])
     .filter(Boolean)));
-  const persistedFacts = await getPersistedRuntimeFacts(factModelHints).catch(() => ({}));
+  const persistedFacts = runtimeEngine === "sglang"
+    ? {}
+    : await getPersistedRuntimeFacts(factModelHints, { engine: runtimeEngine }).catch(() => ({}));
   let facts = core.mergeRuntimeFacts(persistedFacts, await getLatestRuntimeFacts(factModelHints).catch(() => ({})));
   if (!facts.kvCacheTokens && !facts.maxConcurrency) {
     facts = core.mergeRuntimeFacts(facts, await getLatestRuntimeFacts(factModelHints, {
@@ -3762,13 +3783,29 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   }
   const servedById = Object.fromEntries(servedModels.map((model) => [model.id, model]));
   const metrics = parsePrometheusMetrics(metricsText);
-  const processStartSeconds = firstMetricValue(metrics, "process_start_time_seconds") || null;
+  if (runtimeEngine === "sglang") {
+    const sglangFacts = buildSglangRuntimeFacts(metrics, servedModels, container?.labels || {});
+    facts = {
+      ...core.mergeRuntimeFacts({}, sglangFacts),
+      runtimeConfig: sglangFacts.runtimeConfig,
+    };
+  }
+  const prometheusProcessStartSeconds = firstMetricValue(metrics, "process_start_time_seconds") || null;
+  const containerProcessStartSeconds = parseDockerCreatedAtSeconds(container?.createdAt);
+  const processStartSeconds = prometheusProcessStartSeconds || containerProcessStartSeconds || null;
+  const processStartSource = prometheusProcessStartSeconds
+    ? "prometheus"
+    : containerProcessStartSeconds
+      ? "container_created_at"
+      : "unavailable";
   const nowSeconds = Date.now() / 1000;
   const uptimeSeconds = processStartSeconds ? Math.max(0, nowSeconds - processStartSeconds) : null;
   const models = buildModelStats(metrics, servedById, facts, nowSeconds, {
     ...options,
     engine: runtimeEngine,
     runtimeVersion: runtimeVersion.version || "",
+    speculativeMode: facts.runtimeConfig?.speculativeMode,
+    runtimeSampleKey: [runtimeEngine, container?.id || container?.name || "runtime", processStartSeconds || "unknown"].join(":"),
   });
   const totals = aggregateStats(models, uptimeSeconds);
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
@@ -3776,8 +3813,10 @@ async function collectVllmMetricsSummary(container, gpu, options = {}) {
   return {
     engine: runtimeEngine,
     runtimeVersion,
+    runtimeId: [runtimeEngine, container?.id || container?.name || "runtime", processStartSeconds || "unknown"].join(":"),
     source: `http://127.0.0.1:${endpoint.port}/metrics`,
     processStartSeconds,
+    processStartSource,
     uptimeSeconds,
     facts,
     totals,
@@ -3824,7 +3863,10 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const kvUsagePercent = firstMetricValue(scoped, "vllm:kv_cache_usage_perc")
       || firstMetricValue(scoped, "sglang:token_usage")
       || 0;
-    const capacityTokens = facts.kvCacheTokens || deriveKvCapacityTokens(scoped, servedById?.[name], facts);
+    const derivedCapacityTokens = deriveKvCapacityTokens(scoped, servedById?.[name], facts);
+    const capacityTokens = hasSglangMetrics
+      ? derivedCapacityTokens || facts.kvCacheTokens
+      : facts.kvCacheTokens || derivedCapacityTokens;
     const activeTokens = capacityTokens ? Math.round(capacityTokens * kvUsagePercent) : null;
     const promptBySource = sumByLabel(scoped, "vllm:prompt_tokens_by_source_total", "source");
     const nativePrefixQueries = firstNonZeroMetricSum(scoped, ["vllm:prefix_cache_queries_total"]);
@@ -3855,11 +3897,33 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const cacheInfo = scoped.find((metric) => metric.name === "vllm:cache_config_info");
     const mambaBlockSize = positiveInt(cacheInfo?.labels?.mamba_block_size, 0);
     const attentionBlockSize = positiveInt(cacheInfo?.labels?.block_size, 0);
-    const recent = core.calculateRecentRates(statsSamples, name, nowSeconds, {
+    const recent = core.calculateRecentRates(statsSamples, `${options.engine || "runtime"}:${name}`, nowSeconds, {
       promptTokens,
       generationTokens,
       requestCount,
     }, options.updateSamples !== false);
+    const avgE2eSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:e2e_request_latency_seconds", "sglang:e2e_request_latency_seconds"]);
+    const avgTtftSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:time_to_first_token_seconds", "sglang:time_to_first_token_seconds"]);
+    const avgInterTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]);
+    const avgTimePerOutputTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:request_time_per_output_token_seconds", "sglang:request_time_per_output_token_seconds"]);
+    const sglangActiveAverage = tokensPerSecondFromSeconds(avgTimePerOutputTokenSeconds || avgInterTokenSeconds);
+    const sglangGenerationThroughput = firstMetricValue(scoped, "sglang:gen_throughput") || 0;
+    const resolvedSglangThroughput = hasSglangMetrics
+      ? resolveSglangGenerationThroughput(
+        `${options.runtimeSampleKey || options.engine || "sglang"}:${name}`,
+        sglangGenerationThroughput,
+        sglangActiveAverage,
+        nowSeconds,
+        options.updateSamples !== false,
+      )
+      : null;
+    const speculativeMode = hasSglangMetrics
+      ? (sglangSpecAcceptLength > 0 || sglangSpecNumDraftTokens > 0
+        ? String(options.speculativeMode || "nextn").trim().toLowerCase()
+        : "off")
+      : speculativeDraftTokens > 0 || speculativeDraftCycles > 0
+        ? "mtp"
+        : "off";
 
     models.push({
       name,
@@ -3884,10 +3948,10 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
         waiting: firstMetricValue(scoped, "vllm:num_requests_waiting") || firstMetricValue(scoped, "sglang:num_queue_reqs") || 0,
       },
       latency: {
-        avgE2eSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:e2e_request_latency_seconds", "sglang:e2e_request_latency_seconds"]),
-        avgTtftSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:time_to_first_token_seconds", "sglang:time_to_first_token_seconds"]),
-        avgInterTokenSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]),
-        avgTimePerOutputTokenSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:request_time_per_output_token_seconds", "sglang:request_time_per_output_token_seconds"]),
+        avgE2eSeconds,
+        avgTtftSeconds,
+        avgInterTokenSeconds,
+        avgTimePerOutputTokenSeconds,
         avgQueueSeconds: firstNonZeroHistogramAverage(scoped, ["vllm:request_queue_time_seconds", "sglang:queue_time_seconds"]),
       },
       averages: {
@@ -3897,7 +3961,14 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       },
       speed: {
         ...recent,
-        averageOutputTokensPerSecond: tokensPerSecondFromSeconds(histogramAverage(scoped, "vllm:request_time_per_output_token_seconds")),
+        recentOutputTokensPerSecond: hasSglangMetrics
+          ? resolvedSglangThroughput.value
+          : recent.recentOutputTokensPerSecond,
+        outputSource: hasSglangMetrics ? resolvedSglangThroughput.source : "counter_delta",
+        outputObservedAt: hasSglangMetrics ? resolvedSglangThroughput.observedAt : null,
+        averageOutputTokensPerSecond: hasSglangMetrics
+          ? sglangActiveAverage
+          : tokensPerSecondFromSeconds(avgTimePerOutputTokenSeconds),
         lifetimeTokensPerSecond: null,
       },
       cache: {
@@ -3912,6 +3983,7 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       },
       speculative: {
         enabled: speculativeDraftTokens > 0 || speculativeDraftCycles > 0 || sglangSpecNumDraftTokens > 0 || sglangSpecAcceptLength > 0,
+        mode: speculativeMode,
         draftCycles: speculativeDraftCycles,
         draftTokens: speculativeDraftTokens,
         acceptedTokens: speculativeAcceptedTokens,
@@ -3937,6 +4009,24 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
   return models.sort((a, b) => b.tokens.total - a.tokens.total);
 }
 
+function resolveSglangGenerationThroughput(key, currentValue, activeAverage, nowSeconds, updateSample = true) {
+  const value = Math.max(0, Number(currentValue || 0));
+  const previous = sglangThroughputSamples.get(key);
+  if (value > 0) {
+    const sample = { value, observedAt: nowSeconds };
+    if (updateSample) sglangThroughputSamples.set(key, sample);
+    return { ...sample, source: "sglang_live_gauge" };
+  }
+  if (previous) {
+    return { ...previous, source: "sglang_recent_gauge" };
+  }
+  const fallback = Math.max(0, Number(activeAverage || 0));
+  if (fallback > 0) {
+    return { value: fallback, observedAt: null, source: "sglang_active_average" };
+  }
+  return { value: 0, observedAt: null, source: "unavailable" };
+}
+
 function firstNonZeroMetricSum(metrics, names) {
   for (const name of names) {
     const value = sumMetric(metrics, name);
@@ -3954,6 +4044,8 @@ function firstNonZeroHistogramAverage(metrics, names) {
 }
 
 function deriveKvCapacityTokens(metrics, servedModel, facts) {
+  const sglangCapacity = firstMetricValue(metrics, "sglang:max_total_num_tokens") || 0;
+  if (sglangCapacity) return Math.round(sglangCapacity);
   if (facts.maxContextTokens && facts.maxConcurrency) {
     return Math.round(facts.maxContextTokens * facts.maxConcurrency);
   }
@@ -3963,6 +4055,54 @@ function deriveKvCapacityTokens(metrics, servedModel, facts) {
   const blockSize = Number(cacheInfo?.labels?.block_size || 0);
   if (!hasMambaBlock && blocks && blockSize) return blocks * blockSize;
   return null;
+}
+
+function buildSglangRuntimeFacts(metrics, servedModels = [], labels = {}) {
+  const kvCacheTokens = firstMetricValue(metrics, "sglang:max_total_num_tokens") || null;
+  const maxModelLen = Math.max(0, ...servedModels.map((model) => Number(model.max_model_len || 0))) || null;
+  const startupMetrics = metrics.filter((metric) => metric.name === "sglang:startup_time_seconds");
+  const phaseValue = (phase) => Number(startupMetrics.find((metric) => metric.labels?.phase === phase)?.value || 0) || null;
+  const labelTokenCount = (name) => {
+    const value = Number(labels[name]);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+  };
+  const speculativeEnabled = firstMetricValue(metrics, "sglang:spec_num_draft_tokens") > 0
+    || firstMetricValue(metrics, "sglang:spec_accept_length") > 0;
+  const kvCacheDtype = String(labels["ai.runtime.kv-dtype"] || "").trim().toLowerCase();
+  return {
+    kvCacheTokens,
+    maxContextTokens: maxModelLen,
+    maxModelLen,
+    maxConcurrency: kvCacheTokens && maxModelLen ? kvCacheTokens / maxModelLen : null,
+    modelLoadSeconds: phaseValue("load_weight"),
+    engineInitSeconds: phaseValue("scheduler_e2e") || phaseValue("tokenizer_e2e"),
+    runtimeConfig: {
+      kvCacheDtype,
+      kvCacheQuantized: /^fp8/.test(kvCacheDtype),
+      kvScaleMode: String(labels["ai.runtime.kv-scale"] || "").trim(),
+      storageMode: String(labels["ai.runtime.storage"] || "").trim(),
+      pleDtype: String(labels["ai.runtime.ple-dtype"] || "").trim().toLowerCase(),
+      speculativeMode: String(labels["ai.runtime.speculative"] || (speculativeEnabled ? "nextn" : "off")).trim().toLowerCase(),
+      thinkingMode: String(labels["ai.runtime.thinking"] || "").trim(),
+      mambaDtype: String(labels["ai.runtime.mamba-dtype"] || "").trim(),
+      linearAttention: String(labels["ai.runtime.linear-attn"] || "").trim(),
+      cacheMode: String(labels["ai.runtime.cache"] || "").trim(),
+      contextLength: labelTokenCount("ai.runtime.context-length") || maxModelLen,
+      maxTotalTokens: labelTokenCount("ai.runtime.max-total-tokens") || kvCacheTokens,
+      chunkedPrefillSize: labelTokenCount("ai.runtime.chunked-prefill"),
+      fp4Backend: String(labels["ai.runtime.fp4-backend"] || "").trim(),
+      moeBackend: String(labels["ai.runtime.moe-backend"] || "").trim(),
+      validationState: String(labels["ai.runtime.validation"] || "").trim(),
+      modelRevision: String(labels["ai.model-revision"] || "").trim(),
+    },
+  };
+}
+
+function parseDockerCreatedAtSeconds(value) {
+  const normalized = String(value || "").trim().replace(/\s+[A-Z]{2,6}$/i, "");
+  if (!normalized) return null;
+  const parsedMs = Date.parse(normalized);
+  return Number.isFinite(parsedMs) && parsedMs > 0 ? parsedMs / 1000 : null;
 }
 
 async function getLatestRuntimeFacts(modelHints = [], options = {}) {
@@ -4241,10 +4381,10 @@ async function runStartJobOnce(job, opts) {
     appendLog(job, dockerReady.raw || dockerReady.error);
     setJobProgress(job, {
       percent: 4,
-      stage: "启动 Docker Desktop",
-      detail: "Docker daemon 未就绪，正在自动启动 Docker Desktop 并等待引擎可用。",
+      stage: `启动 ${CONFIG.dockerRuntimeName}`,
+      detail: `Docker daemon 未就绪，正在自动启动 ${CONFIG.dockerRuntimeName} 并等待引擎可用。`,
     });
-    appendLog(job, "Docker daemon is not ready; requesting Docker Desktop startup.");
+    appendLog(job, `Docker daemon is not ready; requesting ${CONFIG.dockerRuntimeName} startup.`);
     dockerReady = await ensureDockerDaemonRunning(120000);
   }
   if (!dockerReady.ok) {
@@ -4260,7 +4400,7 @@ async function runStartJobOnce(job, opts) {
   }
   appendLog(job, dockerReady.alreadyRunning
     ? `Docker daemon ready: ${dockerReady.version}`
-    : `Docker Desktop started; daemon ready: ${dockerReady.version}`);
+    : `${CONFIG.dockerRuntimeName} started; daemon ready: ${dockerReady.version}`);
   for (const warning of opts.gpuWarnings || []) appendLog(job, `GPU selection warning: ${warning}`);
   const gpuProbe = await getGpuStatus();
   if (!gpuProbe.ok) {
@@ -4581,6 +4721,7 @@ module.exports = {
   normalizeModelConfig,
   summarizeModelConfigCapabilities,
   buildModelStats,
+  buildSglangRuntimeFacts,
   getModelConfigRequest,
   buildVllmMemoryEstimate,
   buildVllmImagePullOptions,
@@ -4593,5 +4734,6 @@ module.exports = {
   isQwen38Model,
   isQwen38Nvfp4Model,
   resolveDsparkDraftModel,
+  parseDockerCreatedAtSeconds,
   diffusionGemmaWindowsBlockReason,
 };

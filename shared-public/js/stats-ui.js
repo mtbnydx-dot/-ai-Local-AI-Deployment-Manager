@@ -124,8 +124,9 @@
       temperatureUnit: "C",
       ...(options.labels || {}),
     };
-    const facts = stats.facts || {};
-    const totals = stats.totals || {};
+    const runtime = options.preferLiveRuntimeMetrics && stats.live ? stats.live : stats;
+    const facts = runtime.facts || stats.facts || {};
+    const totals = runtime.totals || stats.totals || {};
     const latency = totals.latency || {};
     const gpuParts = stats.gpu?.ok
       ? [
@@ -142,12 +143,12 @@
       renderMiniStat(labels.ttft, fmtSeconds(latency.avgTtftSeconds), "time to first token"),
       renderMiniStat(labels.perOutputToken, fmtSeconds(latency.avgTimePerOutputTokenSeconds), labels.lowerIsBetter),
       renderMiniStat(labels.gpu, gpu, stats.gpu?.name || ""),
-      renderMiniStat(labels.kvCapacity, facts.kvCacheTokens ? `${fmtTokens(facts.kvCacheTokens)} tokens` : "-", facts.maxConcurrency ? `${labels.maxConcurrency} ${facts.maxConcurrency}x` : ""),
-      renderMiniStat(labels.loadWeights, facts.modelLoadSeconds ? `${fmtSeconds(facts.modelLoadSeconds)}${labels.separator}${facts.modelLoadMemoryGiB} GiB` : "-", labels.loadStage),
+      renderMiniStat(labels.kvCapacity, facts.kvCacheTokens ? `${fmtTokens(facts.kvCacheTokens)} tokens` : "-", facts.maxConcurrency ? `${labels.maxConcurrency} ${Number(facts.maxConcurrency).toFixed(2)}x` : ""),
+      renderMiniStat(labels.loadWeights, facts.modelLoadSeconds ? [fmtSeconds(facts.modelLoadSeconds), facts.modelLoadMemoryGiB ? `${facts.modelLoadMemoryGiB} GiB` : ""].filter(Boolean).join(labels.separator) : "-", labels.loadStage),
       renderMiniStat(labels.torchCompile, fmtSeconds(facts.torchCompileSeconds), labels.firstStartCost),
       renderMiniStat(labels.warmup, fmtSeconds(facts.warmupSeconds), labels.warmupDetail),
       renderMiniStat(labels.cudaGraph, facts.graphCaptureGiB ? `${facts.graphCaptureGiB} GiB` : "-", labels.graphPool),
-      renderMiniStat(labels.source, stats.source || "-", `${fmtTokens(stats.rawMetricCount)} metrics`),
+      renderMiniStat(labels.source, runtime.source || stats.source || "-", `${fmtTokens(runtime.rawMetricCount || stats.rawMetricCount)} metrics`),
     ].join("");
   }
 

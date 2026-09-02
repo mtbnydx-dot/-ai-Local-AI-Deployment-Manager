@@ -17,6 +17,9 @@
       avgInput: "average input",
       running: "running",
       historical: "historical",
+      currentRunTokens: "current run tokens",
+      currentRunRequests: "current run requests",
+      cumulative: "cumulative",
       tokens: "tokens",
       requests: "requests",
       clientsEmpty: "No client usage yet.",
@@ -73,7 +76,11 @@
     const fmtTokens = helper(options, "fmtTokens", (value) => String(value ?? 0));
     const fmtRate = helper(options, "fmtRate", (value, unit = "") => `${Number(value || 0).toFixed(2)}${unit}`);
     const formatContextUsage = helper(options, "formatContextUsage", () => "-");
-    const models = stats.models || [];
+    const liveModelsByName = stats.live?.modelsByName || Object.fromEntries((stats.live?.models || []).map((model) => [model.name, model]));
+    const models = [...(stats.models || [])].sort((left, right) => {
+      const liveDelta = Number(Boolean(liveModelsByName[right.name])) - Number(Boolean(liveModelsByName[left.name]));
+      return liveDelta || Number(right.tokens?.total || 0) - Number(left.tokens?.total || 0);
+    });
     if (!models.length) {
       root.innerHTML = `<div class="empty compact">${escapeHtml(labels.modelEmpty)}</div>`;
       return;
@@ -81,9 +88,13 @@
     const totalTokens = Math.max(1, Number(stats.totals?.tokens?.total || 0));
     const totalRequests = Math.max(1, Number(stats.totals?.requests?.total || 0));
     root.innerHTML = models.map((model) => {
-      const tokenShare = Number(model.tokens?.total || 0) / totalTokens;
-      const requestShare = Number(model.requests?.total || 0) / totalRequests;
-      const liveContext = Boolean(model.context?.capacityTokens);
+      const liveModel = liveModelsByName[model.name] || null;
+      const runtimeModel = liveModel || model;
+      const liveTokenTotal = Math.max(1, Number(stats.live?.totals?.tokens?.total || liveModel?.tokens?.total || 0));
+      const liveRequestTotal = Math.max(1, Number(stats.live?.totals?.requests?.total || liveModel?.requests?.total || 0));
+      const tokenShare = Number((liveModel || model).tokens?.total || 0) / (liveModel ? liveTokenTotal : totalTokens);
+      const requestShare = Number((liveModel || model).requests?.total || 0) / (liveModel ? liveRequestTotal : totalRequests);
+      const liveContext = Boolean(liveModel);
       const rowClass = options.showRuntimeState ? (liveContext ? "is-live" : "is-inactive") : "";
       const stateLabel = liveContext ? labels.running : labels.historical;
       const title = options.showRuntimeState
@@ -95,10 +106,14 @@
             ${title}
             <p>${escapeHtml(model.root || labels.modelFallbackRoot)}</p>
             <div class="stats-row-grid">
-              ${miniStat(labels.tokenShare, fmtPct(tokenShare), `${fmtTokens(model.tokens?.total || 0)} ${labels.tokens}`)}
-              ${miniStat(labels.requestShare, fmtPct(requestShare), `${fmtTokens(model.requests?.total || 0)} ${labels.requests}`)}
-              ${miniStat(labels.outputSpeed, fmtRate(model.speed?.recentOutputTokensPerSecond, " tok/s"), `${labels.average} ${fmtRate(model.speed?.averageOutputTokensPerSecond, " tok/s")}`)}
-              ${miniStat(labels.activeKv, formatContextUsage(model.context?.activeTokens, model.context?.capacityTokens, model.context?.kvUsagePercent), `${labels.avgInput} ${fmtTokens(model.averages?.promptTokensPerRequest || 0)} ${labels.tokens}`)}
+              ${liveModel
+                ? miniStat(labels.currentRunTokens, fmtTokens(liveModel.tokens?.total || 0), `${labels.cumulative} ${fmtTokens(model.tokens?.total || 0)} ${labels.tokens}`)
+                : miniStat(labels.tokenShare, fmtPct(tokenShare), `${fmtTokens(model.tokens?.total || 0)} ${labels.tokens}`)}
+              ${liveModel
+                ? miniStat(labels.currentRunRequests, fmtTokens(liveModel.requests?.total || 0), `${labels.cumulative} ${fmtTokens(model.requests?.total || 0)} ${labels.requests}`)
+                : miniStat(labels.requestShare, fmtPct(requestShare), `${fmtTokens(model.requests?.total || 0)} ${labels.requests}`)}
+              ${miniStat(labels.outputSpeed, fmtRate(runtimeModel.speed?.recentOutputTokensPerSecond, " tok/s"), `${labels.average} ${fmtRate(runtimeModel.speed?.averageOutputTokensPerSecond, " tok/s")}`)}
+              ${miniStat(labels.activeKv, formatContextUsage(runtimeModel.context?.activeTokens, runtimeModel.context?.capacityTokens, runtimeModel.context?.kvUsagePercent), `${labels.avgInput} ${fmtTokens(runtimeModel.averages?.promptTokensPerRequest || 0)} ${labels.tokens}`)}
             </div>
             ${shareBar("tokens", tokenShare)}
             ${shareBar("requests", requestShare)}

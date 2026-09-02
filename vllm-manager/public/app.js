@@ -246,10 +246,10 @@ const runtimeStatusRenderer = window.LocalAiRuntimeStatusRenderer.create({
   renderGpuPlan: () => renderVllmGpuPlan(),
   renderRuntimeFacts: (status) => renderRuntimeFacts(status),
   options: {
-    subtitlePrefix: "vLLM",
+    subtitlePrefix: "本地模型",
     defaultContainerName: "vllm-local",
-    noRunningText: "当前没有运行中的 vLLM 模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。",
-    loadingTitle: "vLLM 容器正在运行",
+    noRunningText: "当前没有运行中的本地模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。",
+    loadingTitle: "模型运行时容器正在运行",
     includeApiKeyBadge: true,
     includeClaudeModelAlias: true,
     showSpeed: true,
@@ -291,10 +291,25 @@ const statsSummaryRenderer = window.LocalAiStatsSummaryRenderer.create({
   formatDuration,
   formatContextUsage,
   options: {
-    totalTokensLabel: "累计 tokens",
+    totalTokensLabel: "历史累计 tokens",
+    requestLabel: "历史累计请求",
+    liveTokensLabel: "本次运行 tokens",
+    liveRequestsLabel: "本次运行请求",
     heroFirstMetric: true,
     includeRuntimeModels: true,
     includePrefixCache: true,
+    includeLiveUsage: true,
+    preferLiveRuntimeMetrics: true,
+    speculativeLabels: {
+      dspark: "DSpark 接受率",
+      nextn: "NEXTN/MTP 接受率",
+      mtp: "MTP 接受率",
+      mixed: "推测解码接受率",
+    },
+    includeRuntimeConfig: true,
+    runtimeConfigLabel: "运行配置",
+    runtimeThinkingToggleLabel: "思考严格可切换",
+    runtimeUnitScaleLabel: "scale=1 灰度",
   },
 });
 
@@ -2304,13 +2319,12 @@ function renderStatusInsights() {
 }
 
 function getLiveTokensPerSecond() {
-  const totals = state.stats?.totals || {};
+  const totals = state.stats?.live?.totals || state.stats?.totals || {};
   const candidates = [
+    totals.speed?.recentOutputTokensPerSecond,
     totals.speed?.tokensPerSecond,
     totals.speed?.generationTokensPerSecond,
     totals.speed?.outputTokensPerSecond,
-    state.stats?.live?.speed?.tokensPerSecond,
-    state.stats?.live?.speed?.generationTokensPerSecond,
   ];
   for (const value of candidates) {
     const number = Number(value);
@@ -3983,7 +3997,11 @@ function renderStats() {
       gpuTemp: "GPU 温度",
       gpuPower: "GPU 功耗",
       gpuFan: "GPU 风扇",
-      mtpAcceptance: "MTP 接受率",
+      mtpAcceptance: stats.live?.totals?.speculative?.mode === "dspark"
+        ? "DSpark 接受率"
+        : stats.live?.totals?.speculative?.mode === "nextn"
+          ? "NEXTN/MTP 接受率"
+          : "MTP 接受率",
     },
   });
   renderStatsComposition(stats);
@@ -4134,6 +4152,9 @@ function renderStatsModels(stats) {
       avgInput: "平均输入",
       running: "运行中",
       historical: "历史累计",
+      currentRunTokens: "本次 Token",
+      currentRunRequests: "本次请求",
+      cumulative: "累计",
     },
   });
 }
@@ -4279,7 +4300,7 @@ function statsSourceLabels(en) {
 function renderStatsCosts(stats) {
   window.statsUiRenderer.renderCosts(stats, {
     root: $("#statsCostTable"),
-    managerName: "vLLM",
+    managerName: stats?.live?.engine === "sglang" ? "SGLang" : "vLLM",
     escapeHtml,
     fmtMoney,
     labels: {
@@ -4303,6 +4324,7 @@ function renderStatsDetails(stats) {
     miniStat,
     fmtSeconds,
     fmtTokens,
+    preferLiveRuntimeMetrics: true,
     labels: {
       endToEnd: "平均端到端",
       endToEndDetail: "请求完成平均耗时",
@@ -4978,7 +5000,7 @@ async function handleServiceJobAction(event) {
   try {
     if (action === "start-docker") {
       await api("/api/docker/start", { method: "POST", body: "{}" });
-      notify("已请求启动 Docker", "Docker Desktop 初始化可能需要几十秒。", "success");
+      notify("已请求启动 Docker", "Docker 引擎初始化可能需要几十秒。", "success");
       await Promise.all([refreshStatus(), refreshJobs()]);
       return;
     }

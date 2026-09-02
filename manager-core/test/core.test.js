@@ -435,7 +435,7 @@ test("stats helpers aggregate model totals and calculate API value", () => {
     {
       tokens: { prompt: 100, generation: 40, cachedPrompt: 20 },
       requests: { total: 3, error: 1, aborted: 0 },
-      speed: { recentPromptTokensPerSecond: 10, recentOutputTokensPerSecond: 4, recentRequestsPerMinute: 2 },
+      speed: { recentPromptTokensPerSecond: 10, recentOutputTokensPerSecond: 4, recentRequestsPerMinute: 2, outputSource: "sglang_recent_gauge", outputObservedAt: 1000 },
       latency: { avgE2eSeconds: 2, avgTtftSeconds: 0.5, avgTimePerOutputTokenSeconds: 0.1 },
       context: { activeTokens: 1000, capacityTokens: 4000 },
       cache: { prefixQueries: 10, prefixHits: 8, alignmentBlockSize: 32, alignmentRequired: true },
@@ -444,7 +444,7 @@ test("stats helpers aggregate model totals and calculate API value", () => {
     {
       tokens: { prompt: 50, generation: 10, cachedPrompt: 0 },
       requests: { total: 1, error: 0, aborted: 0 },
-      speed: { recentPromptTokensPerSecond: 5, recentOutputTokensPerSecond: 1, recentRequestsPerMinute: 1 },
+      speed: { recentPromptTokensPerSecond: 5, recentOutputTokensPerSecond: 1, recentRequestsPerMinute: 1, outputSource: "sglang_recent_gauge", outputObservedAt: 900 },
       latency: { avgE2eSeconds: 6, avgTtftSeconds: 1, avgTimePerOutputTokenSeconds: 0.2 },
       context: { activeTokens: 500, capacityTokens: 1000 },
       cache: { prefixQueries: 5, prefixHits: 2 },
@@ -454,6 +454,8 @@ test("stats helpers aggregate model totals and calculate API value", () => {
   assert.deepEqual(totals.tokens, { prompt: 150, generation: 50, cachedPrompt: 20, total: 200 });
   assert.deepEqual(totals.requests, { total: 4, success: 3, error: 1, aborted: 0 });
   assert.equal(totals.speed.lifetimeTokensPerSecond, 20);
+  assert.equal(totals.speed.outputSource, "sglang_recent_gauge");
+  assert.equal(totals.speed.outputObservedAt, 1000);
   assert.equal(totals.context.kvUsagePercent, 0.3);
   assert.equal(totals.cache.prefixHitRate, 10 / 15);
   assert.equal(totals.cache.alignmentBlockSize, 32);
@@ -1742,6 +1744,42 @@ test("docker image pull retries transient registry failures with backoff", async
     ["pull", "--platform", "linux/amd64", "repo/image:v1"],
     ["pull", "--platform", "linux/amd64", "repo/image:v1"],
   ]);
+});
+
+test("docker runtime supports a WSL command prefix and detached daemon keepalive", async () => {
+  const calls = [];
+  const spawned = [];
+  const responses = [
+    { stdout: "Docker version 29.7.2\n" },
+    { error: new Error("not running"), stderr: "daemon unavailable" },
+    { error: new Error("not running"), stderr: "daemon unavailable" },
+    { stdout: "29.7.2\n" },
+  ];
+  const runtime = core.createDockerRuntime({
+    dockerExe: "wsl.exe",
+    dockerArgsPrefix: ["-d", "Qwen38-SGLang", "--exec", "docker"],
+    daemonStartFile: "wsl.exe",
+    daemonStartArgs: ["-d", "Qwen38-SGLang", "--exec", "sleep", "infinity"],
+    runtimeName: "WSL Qwen38-SGLang",
+    delay: async () => {},
+    spawnCommand: (file, args, options) => {
+      spawned.push([file, args, options.detached, options.windowsHide]);
+      return { unref: () => spawned.push(["unref"]) };
+    },
+    execFileCommand: (file, args, _options, callback) => {
+      calls.push([file, args]);
+      const response = responses.shift();
+      callback(response?.error || null, response?.stdout || "", response?.stderr || "");
+    },
+  });
+  const version = await runtime.getDockerVersion();
+  assert.equal(version.ok, false);
+  const started = await runtime.ensureDockerDaemonRunning(5000);
+  assert.equal(started.ok, true);
+  assert.equal(started.runtimeName, "WSL Qwen38-SGLang");
+  assert.deepEqual(calls[0], ["wsl.exe", ["-d", "Qwen38-SGLang", "--exec", "docker", "--version"]]);
+  assert.deepEqual(calls[1], ["wsl.exe", ["-d", "Qwen38-SGLang", "--exec", "docker", "info", "--format", "{{.ServerVersion}}"]]);
+  assert.deepEqual(spawned[0], ["wsl.exe", ["-d", "Qwen38-SGLang", "--exec", "sleep", "infinity"], true, true]);
 });
 
 test("operational snapshots coalesce concurrent Docker and runtime probes", async () => {
@@ -4192,6 +4230,29 @@ test("stats ledger store persists deltas, Claude usage, and runtime facts", asyn
   assert.equal(facts.maxConcurrency, 2);
   assert.equal(facts.modelLoadSeconds, 8);
 
+  await store.updateStatsLedger({
+    engine: "sglang",
+    processStartSeconds: 200,
+    facts: { kvCacheTokens: 373883, maxContextTokens: 262144 },
+    models: [{
+      name: "org/model-a",
+      engine: "sglang",
+      runtimeVersion: "0.5.17",
+      root: "D:/AI/models/model-a",
+      tokens: { prompt: 10, generation: 5, cachedPrompt: 2 },
+      requests: { total: 1, success: 1, error: 0, aborted: 0 },
+      context: { activeTokens: 0, capacityTokens: 373883, kvUsagePercent: 0, maxModelLen: 262144, concurrencyAtMaxLen: 1.43 },
+      speculative: { enabled: true, mode: "dspark", acceptanceRate: 0.8 },
+    }],
+  }, "collect");
+  const engineLedger = await store.loadStatsLedger();
+  assert.ok(engineLedger.runtimes["sglang:200:org/model-a"]);
+  assert.equal(engineLedger.runtimeFacts["sglang:org/model-a"].engine, "sglang");
+  const sglangFacts = await store.getPersistedRuntimeFacts(["model-a"], { engine: "sglang" });
+  assert.equal(sglangFacts.kvCacheTokens, 373883);
+  const vllmFacts = await store.getPersistedRuntimeFacts(["model-a"], { engine: "vllm" });
+  assert.equal(vllmFacts.maxConcurrency, 2);
+
   const merged = core.mergeLiveAndStatsLedgerInactive({ models: [], uptimeSeconds: null, totals: { context: { activeTokens: 0, capacityTokens: null, kvUsagePercent: 0 } } }, ledger);
   assert.equal(merged.models[0].context.activeTokens, 0);
   assert.equal(merged.models[0].context.maxModelLen, 8192);
@@ -4386,13 +4447,16 @@ test("shutdown helper terminates a live download process and marks it interrupte
   jobs.set(job.id, job);
   core.interruptRunningDownloadJobs(jobs);
   assert.equal(job.status, "interrupted");
-  await new Promise((resolve) => setTimeout(resolve, 400));
   let alive = true;
-  try {
-    process.kill(child.pid, 0);
-  } catch {
-    alive = false;
-  }
+  const exitDeadline = Date.now() + 2_000;
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    try {
+      process.kill(child.pid, 0);
+    } catch {
+      alive = false;
+    }
+  } while (alive && Date.now() < exitDeadline);
   if (alive) {
     try { process.kill(child.pid); } catch { /* already gone */ }
   }

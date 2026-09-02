@@ -287,6 +287,14 @@ const UI_TEXT_TRANSLATIONS = {
   "统计总览": "Statistics Overview",
   "来自 vLLM /metrics 与本地累计账本，统计请求、速度、上下文和等价 API 价值。": "Request, speed, context, and API-equivalent value from vLLM /metrics and the local cumulative ledger.",
   "累计 tokens": "Total tokens",
+  "历史累计 tokens": "Historical total tokens",
+  "历史累计请求": "Historical total requests",
+  "本次运行 tokens": "Current run tokens",
+  "本次运行请求": "Current run requests",
+  "本次 Token": "Current-run tokens",
+  "本次请求": "Current-run requests",
+  "累计": "Cumulative",
+  "DSpark 接受率": "DSpark acceptance",
   "请求数": "Requests",
   "当前实例": "Current instance",
   "当前输出速度": "Current output speed",
@@ -376,7 +384,7 @@ const UI_TEXT_TRANSLATIONS = {
   "设置筛选条件后检索访问日志。": "Set filters, then search the access log.",
   "运行基准": "Run benchmark",
   "24 小时性能趋势": "24-hour performance trends",
-  "管理器每分钟持久化 TTFT、TPOT、吞吐、排队和 GPU / MTP 指标，离开页面后仍会保留。": "The manager persists TTFT, TPOT, throughput, queue, and GPU/MTP metrics every minute, even after you leave the page.",
+  "管理器每分钟持久化 TTFT、TPOT、吞吐、排队、GPU 和推测解码指标，离开页面后仍会保留。": "The manager persists TTFT, TPOT, throughput, queue, GPU, and speculative-decoding metrics every minute, even after you leave the page.",
   "每张显卡的利用率、显存、温度、功耗和风扇转速。": "Utilization, memory, temperature, power, and fan speed for each GPU.",
 };
 
@@ -582,6 +590,9 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
   "需要先 pip install hf_transfer": "Requires pip install hf_transfer first",
   "当前没有运行中的 llama.cpp 模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。": "No llama.cpp model is running. After you start a model, this area shows the service name, API URL, and unload button.",
   "当前没有运行中的 vLLM 模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。": "No vLLM model is running. After you start a model, this area shows the service name, API URL, and unload button.",
+  "当前没有运行中的本地模型。启动模型后，这里会显示服务名、API 地址和卸载按钮。": "No local model is running. After you start a model, this area shows the service name, API URL, and unload button.",
+  "模型运行时容器正在运行": "Model runtime container is running",
+  "本地模型": "Local model",
   "检测到 hf-mirror 链接，建议开启“使用 HF 镜像”。": "Detected an hf-mirror link; consider enabling “Use HF mirror”.",
 });
 

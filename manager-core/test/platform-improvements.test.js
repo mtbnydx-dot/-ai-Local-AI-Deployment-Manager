@@ -133,7 +133,7 @@ test("metrics history preserves missing telemetry and coalesces samples inside t
       name: "model-a",
       latency: { avgQueueSeconds: 0.25 },
       requests: { running: 1, waiting: 2 },
-      speculative: { enabled: true, draftTokens: 2, acceptanceRate: 0.75 },
+      speculative: { enabled: true, mode: "mtp", draftTokens: 2, acceptanceRate: 0.75 },
     }],
     totals: {
       latency: { avgE2eSeconds: 1.5, avgTtftSeconds: 0.2, avgTimePerOutputTokenSeconds: 0.03 },
@@ -155,6 +155,17 @@ test("metrics history preserves missing telemetry and coalesces samples inside t
   assert.equal(history.samples[0].gpu.temperatureC, null);
   assert.equal(history.samples[0].gpu.powerWatts, null);
   assert.equal(history.samples[0].gpu.fanPercent, null);
+  assert.equal(history.samples[0].speculative.mode, "mtp");
+
+  await store.recordMetricsHistory({
+    ...summary,
+    models: [{ ...summary.models[0], speculative: { enabled: true, mode: "dspark", acceptanceRate: 0.8 } }],
+  }, { engine: "sglang", at: new Date(firstAt + 100_000).toISOString() });
+  const vllmHistory = await store.getMetricsHistory({ hours: 1, engine: "vllm" });
+  const sglangHistory = await store.getMetricsHistory({ hours: 1, engine: "sglang" });
+  assert.equal(vllmHistory.samples.length, 2);
+  assert.equal(sglangHistory.samples.length, 1);
+  assert.equal(sglangHistory.samples[0].speculative.mode, "dspark");
 });
 
 test("manager backups verify checksum and restore only configured manager files", async () => {
