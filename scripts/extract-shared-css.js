@@ -1,0 +1,159 @@
+"use strict";
+// Split the two manager stylesheets into top-level blocks, move the blocks that
+// are byte-identical in both (and whose selectors occur only once per file, so
+// cascade order cannot change) into shared-public/js/components.css, and move
+// the :root token blocks into shared-public/js/tokens.css.
+const fs = require("node:fs");
+const path = require("node:path");
+
+const ROOT = process.argv[2] || "D:/AI/worktrees/feature-platform-improvement-2026-09";
+const APPLY = process.argv.includes("--apply");
+const FILES = {
+  vllm: path.join(ROOT, "vllm-manager/public/styles.css"),
+  llama: path.join(ROOT, "llama-manager/public/styles.css"),
+};
+
+// Top-level block splitter: handles nested braces (@media) and comments.
+function splitBlocks(css) {
+  const blocks = [];
+  let depth = 0;
+  let start = 0;
+  let inComment = false;
+  let inString = null;
+  for (let i = 0; i < css.length; i += 1) {
+    const ch = css[i];
+    const next = css[i + 1];
+    if (inComment) {
+      if (ch === "*" && next === "/") { inComment = false; i += 1; }
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") { i += 1; continue; }
+      if (ch === inString) inString = null;
+      continue;
+    }
+    if (ch === "/" && next === "*") { inComment = true; i += 1; continue; }
+    if (ch === "\"" || ch === "'") { inString = ch; continue; }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        blocks.push(css.slice(start, i + 1));
+        start = i + 1;
+      }
+    }
+  }
+  const tail = css.slice(start);
+  if (tail.trim()) blocks.push(tail);
+  return blocks.map((block) => {
+    const text = block.replace(/^\s+/, "");
+    const leading = block.slice(0, block.length - text.length);
+    const selector = text.slice(0, text.indexOf("{")).trim().replace(/\s+/g, " ");
+    return { raw: block, text: text.trim(), selector, leading };
+  });
+}
+
+function normalize(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function selectorKeys(block) {
+  if (block.selector.startsWith("@")) return [];
+  return block.selector.split(",").map((item) => item.trim());
+}
+
+const parsed = {};
+for (const [name, file] of Object.entries(FILES)) {
+  const css = fs.readFileSync(file, "utf8");
+  const blocks = splitBlocks(css);
+  const counts = new Map();
+  for (const block of blocks) for (const key of selectorKeys(block)) counts.set(key, (counts.get(key) || 0) + 1);
+  parsed[name] = { css, blocks, counts };
+}
+
+const llamaByNorm = new Map();
+parsed.llama.blocks.forEach((block, index) => {
+  const key = normalize(block.text);
+  if (!llamaByNorm.has(key)) llamaByNorm.set(key, []);
+  llamaByNorm.get(key).push(index);
+});
+
+const shared = [];
+const tokens = [];
+const removeVllm = new Set();
+const removeLlama = new Set();
+
+// Token blocks: the vLLM palette is the superset (no llama-only variables), so
+// it becomes the canonical tokens.css and the llama copies are dropped.
+function isTokenBlock(block) {
+  return block.selector === ":root"
+    || block.selector === ":root[data-theme=\"dark\"]"
+    || /^@media \(prefers-color-scheme: dark\)\s*\{\s*:root/.test(block.text);
+}
+parsed.vllm.blocks.forEach((block, index) => {
+  if (!isTokenBlock(block)) return;
+  tokens.push(block.text);
+  removeVllm.add(index);
+});
+parsed.llama.blocks.forEach((block, index) => {
+  if (isTokenBlock(block)) removeLlama.add(index);
+});
+
+// Visibility / state rules (display:none, [hidden], .is-*, .active, :not(...))
+// depend on their position relative to the engine rules that set the same
+// property on the same element, so they stay in each manager's stylesheet at
+// the original position. Splitting them once hid nothing and showed every
+// collapsed tools panel.
+function isStateBlock(block) {
+  return /display\s*:\s*none|visibility\s*:|opacity\s*:\s*0\b|pointer-events\s*:\s*none|max-height\s*:\s*0\b/.test(block.text)
+    || /\[hidden\]|-hidden\b|\.is-|\.active\b|:not\(|\.open\b|\.collapsed\b|\.expanded\b|\.busy\b|\.disabled\b|:empty|:checked|:disabled/.test(block.selector);
+}
+
+parsed.vllm.blocks.forEach((block, index) => {
+  if (removeVllm.has(index)) return;
+  const key = normalize(block.text);
+  const matches = llamaByNorm.get(key);
+  if (!matches || !matches.length) return;
+  if (isStateBlock(block)) return;
+  const keys = selectorKeys(block);
+  const uniqueInBoth = keys.every((selector) => parsed.vllm.counts.get(selector) === 1 && parsed.llama.counts.get(selector) === 1);
+  const isMedia = block.selector.startsWith("@media") || block.selector.startsWith("@keyframes") || block.selector.startsWith("@supports");
+  if (!uniqueInBoth && !isMedia) return;
+  const llamaIndex = matches.shift();
+  if (removeLlama.has(llamaIndex)) return;
+  shared.push(block.text);
+  removeVllm.add(index);
+  removeLlama.add(llamaIndex);
+});
+
+function rebuild(blocks, removed) {
+  const kept = blocks.filter((_, index) => !removed.has(index)).map((block) => block.text);
+  return `${kept.join("\n\n")}\n`;
+}
+
+const header = (title) => `/* ${title}\n   Generated by scripts/extract-shared-css.js from the two manager stylesheets on 2026-09-03.\n   Loaded before each manager's styles.css; engine-specific overrides stay in styles.css. */\n\n`;
+const tokensCss = header("Shared design tokens: palette, spacing, radii, light/dark mapping") + tokens.join("\n\n") + "\n";
+const componentsCss = header("Shared components: layout, cards, forms, tables, pills, buttons, notes, stats") + shared.join("\n\n") + "\n";
+
+console.log(JSON.stringify({
+  vllmBlocks: parsed.vllm.blocks.length,
+  llamaBlocks: parsed.llama.blocks.length,
+  tokenBlocks: tokens.length,
+  sharedBlocks: shared.length,
+  vllmLinesBefore: parsed.vllm.css.split("\n").length,
+  llamaLinesBefore: parsed.llama.css.split("\n").length,
+  vllmLinesAfter: rebuild(parsed.vllm.blocks, removeVllm).split("\n").length,
+  llamaLinesAfter: rebuild(parsed.llama.blocks, removeLlama).split("\n").length,
+  tokensLines: tokensCss.split("\n").length,
+  componentsLines: componentsCss.split("\n").length,
+}, null, 2));
+
+if (APPLY) {
+  fs.writeFileSync(path.join(ROOT, "shared-public/js/tokens.css"), tokensCss);
+  // The TTS workbench is served by its own Python gateway, so it carries a copy.
+  fs.writeFileSync(path.join(ROOT, "tts-platform/gateway/static/tokens.css"), tokensCss);
+  fs.writeFileSync(path.join(ROOT, "shared-public/js/components.css"), componentsCss);
+  fs.writeFileSync(FILES.vllm, rebuild(parsed.vllm.blocks, removeVllm));
+  fs.writeFileSync(FILES.llama, rebuild(parsed.llama.blocks, removeLlama));
+  console.log("applied");
+}

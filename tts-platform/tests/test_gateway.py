@@ -140,7 +140,12 @@ class StorageAndSchemaTest(unittest.TestCase):
         script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
         self.assertIn('src="app.js"', html)
-        self.assertIn('href="app.css"', html)
+        # Stylesheets may carry a cache-busting query; the shared platform
+        # tokens must load before the workbench stylesheet.
+        self.assertRegex(html, r'href="app\.css(\?[^"]*)?"')
+        self.assertRegex(html, r'href="tokens\.css(\?[^"]*)?"')
+        self.assertLess(html.index('href="tokens.css'), html.index('href="app.css'))
+        self.assertTrue((STATIC_DIR / "tokens.css").exists())
         self.assertNotIn("onclick=", html.lower())
         self.assertIn("api/jobs", script)
         self.assertIn("api/outputs", script)

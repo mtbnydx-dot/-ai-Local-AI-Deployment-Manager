@@ -57,6 +57,7 @@ call :checkpy "tts-platform\workers\step_server.py"
 call :checkpy "tts-platform\workers\voxcpm_worker.py"
 call :checkpy "tts-platform\workers\qwen_design_worker.py"
 call :testpy
+call :i18nReport
 call :test "manager-core"
 call :test "service-entry"
 call :test "platform-mcp"
@@ -154,6 +155,13 @@ echo.
 echo == Testing tts-platform Python ==
 "%PYEXE%" -m unittest discover -s "%ROOT%tts-platform\tests" -p "test_*.py" -v
 call :record "tts-platform Python tests" %ERRORLEVEL%
+exit /b 0
+
+:i18nReport
+echo.
+echo == i18n coverage report (static manager strings without an English entry) ==
+node "%ROOT%scripts\check-i18n.js"
+call :record "i18n coverage report" %ERRORLEVEL%
 exit /b 0
 
 :test

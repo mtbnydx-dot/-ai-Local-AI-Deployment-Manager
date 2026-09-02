@@ -1,26 +1,29 @@
+/* The workbench takes its palette from the platform design tokens (tokens.css,
+   dark mapping via data-theme="dark" on <html>). Every variable below keeps a
+   fallback so the page still renders when opened directly without tokens.css. */
 :root {
   color-scheme: dark;
-  --bg: #090d12;
-  --surface: #10161d;
-  --surface-2: #151c24;
-  --surface-3: #1a232d;
-  --line: #29333d;
+  --bg: var(--bg, #0b1118);
+  --surface: var(--surface, #121a24);
+  --surface-2: var(--surface-2, #1a2532);
+  --surface-3: var(--surface-hover, #1f2d3d);
+  --line: var(--line, #29333d);
   --line-strong: #3a4652;
-  --text: #f2f6f8;
-  --muted: #94a0aa;
+  --text: var(--ink, #e7eef7);
+  --muted: var(--muted, #9caebe);
   --faint: #64717c;
-  --accent: #00aef3;
-  --accent-strong: #008fd0;
-  --accent-soft: rgba(0, 174, 243, .12);
-  --success: #2bd879;
-  --success-soft: rgba(43, 216, 121, .12);
-  --warning: #f3a83b;
-  --warning-soft: rgba(243, 168, 59, .11);
-  --danger: #ef6262;
-  --danger-soft: rgba(239, 98, 98, .12);
-  --radius: 11px;
-  --radius-sm: 8px;
-  --shadow: 0 12px 36px rgba(0, 0, 0, .18);
+  --accent: var(--blue, #6aa4ff);
+  --accent-strong: #2563eb;
+  --accent-soft: var(--blue-soft, rgba(37, 99, 235, .16));
+  --success: var(--green, #4ade80);
+  --success-soft: var(--ok-soft-bg, rgba(43, 216, 121, .12));
+  --warning: var(--amber, #fbbf24);
+  --warning-soft: var(--warn-soft-bg, rgba(243, 168, 59, .11));
+  --danger: var(--red, #ff7b73);
+  --danger-soft: var(--fail-soft-bg, rgba(239, 98, 98, .12));
+  --radius: var(--radius, 11px);
+  --radius-sm: var(--radius-sm, 8px);
+  --shadow: var(--shadow, 0 12px 36px rgba(0, 0, 0, .18));
   --font: Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
 }
 

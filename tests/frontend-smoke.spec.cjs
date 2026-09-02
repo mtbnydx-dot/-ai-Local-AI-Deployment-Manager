@@ -289,7 +289,8 @@ async function smokePage(page, baseUrl, label) {
   if (label === "vLLM") {
     await expect(page.locator("#sglangAdvancedControls")).toBeVisible();
     await page.locator("#sglangAdvancedControls summary").click();
-    await expect(page.locator("#sglangProfileNote")).toContainText("有效并发为 1");
+    // The note is rendered from a template and localised in English mode.
+    await expect(page.locator("#sglangProfileNote")).toContainText(/有效并发为 1|Mamba cache 8 is currently 1/);
   }
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   for (const view of ["download", "exposure", "external-access", "stats"]) {
@@ -309,7 +310,8 @@ async function smokePage(page, baseUrl, label) {
       await expect(page.locator("#cacheHitNote")).toContainText(/已持久化 1 个完成请求|1 completed request persisted/);
     }
   }
-  if (label === "llama") {
+  {
+    // Both managers must render English without leftover Chinese in the primary views.
     await page.locator("#languageMode").selectOption("en-US");
     await page.waitForTimeout(150);
     const untranslated = [];
@@ -334,7 +336,7 @@ async function smokePage(page, baseUrl, label) {
       });
       untranslated.push(...visibleHan.map((value) => `${view}: ${value}`));
     }
-    expect(Array.from(new Set(untranslated)), "llama English mode should not leave visible Chinese in primary views").toEqual([]);
+    expect(Array.from(new Set(untranslated)), `${label} English mode should not leave visible Chinese in primary views`).toEqual([]);
     await page.locator("#languageMode").selectOption("zh-CN");
     await expect(page.locator("[data-view='service'] span")).toHaveText("服务");
   }

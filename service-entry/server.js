@@ -183,6 +183,12 @@ async function handleRequest(req, res) {
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       return serveFile(res, path.join(ROOT, "index.html"), "text/html; charset=utf-8");
     }
+    // 平台设计令牌（与两个管理器、TTS 工作台同一份色板）。
+    if (req.method === "GET" && url.pathname === "/shared-js/tokens.css") {
+      return serveFile(res, path.join(ROOT, "..", "shared-public", "js", "tokens.css"), "text/css; charset=utf-8", {
+        "cache-control": "public, max-age=3600",
+      });
+    }
     if (req.method === "GET" && url.pathname === "/favicon.ico") {
       res.writeHead(204);
       return res.end();
