@@ -6,10 +6,12 @@ call :install "." || exit /b 1
 call :install "vllm-manager" || exit /b 1
 call :install "llama-manager" || exit /b 1
 call :install "platform-mcp" || exit /b 1
+call :install "search-gateway" || exit /b 1
 call :build "platform-mcp" || exit /b 1
 
 echo.
 echo All install steps completed.
+echo Optional TTS gateway environment: run install-tts-gateway.cmd
 exit /b 0
 
 :install

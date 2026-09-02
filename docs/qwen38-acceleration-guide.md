@@ -27,7 +27,7 @@
 
 前缀缓存使用 16,292-token 相同长前缀连续请求单独验证：关闭缓存时 TTFT P50 为 1,925 ms；开启后为 323 ms；最终 FP8 + MTP-3 + auto KV 配置为 218 ms。该次最终配置的 token-level prefix hit rate 为 62.20%。
 
-原始结果位于 `D:\AI\artifacts\qwen38-accel-20260815`，关键文件：
+原始结果位于本机运行目录的 `<AI_ROOT>\artifacts\qwen38-accel-20260815`，关键文件：
 
 - `vllm-qwen38-fp8-mtp3-textonly-prefix-auto-kv.json`
 - `vllm-qwen38-fp8-mtp3-textonly-prefix-auto-kv-longprefix.json`
@@ -37,9 +37,9 @@
 
 ## 权重与运行时约束
 
-- FP8 主模型：`D:\AI\models\Qwen-Qwen3.8-27B-FP8`。
-- NVFP4 主模型：`D:\AI\models\unsloth-Qwen3.8-27B-NVFP4`。
-- DSpark draft：`D:\AI\models\RadixArk-Qwen3.8-27B-DSpark`，约 2.71 GiB，配置架构必须是 `DSparkDraftModel`。
+- FP8 主模型：`<AI_ROOT>\models\Qwen-Qwen3.8-27B-FP8`。
+- NVFP4 主模型：`<AI_ROOT>\models\unsloth-Qwen3.8-27B-NVFP4`。
+- DSpark draft：`<AI_ROOT>\models\RadixArk-Qwen3.8-27B-DSpark`，约 2.71 GiB，配置架构必须是 `DSparkDraftModel`。
 - vLLM 镜像固定到本机已验证的 Linux amd64 digest `sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635`；镜像内 vLLM `0.28.0`、PyTorch 2.13.0、Transformers 5.15.1、CUDA 13.0.2。
 - SGLang 镜像固定到 digest `sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df`；镜像内 SGLang 0.5.17、PyTorch 2.11.0、Transformers 5.12.1、CUDA 13.0。
 - 原生 MTP 不能只看 `config.json` 的 `mtp_num_hidden_layers`。管理器会读取 safetensors index/header，确认实际存在 `mtp.*` tensor 后才允许自动或显式 MTP。

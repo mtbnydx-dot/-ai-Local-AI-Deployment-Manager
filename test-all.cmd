@@ -20,6 +20,9 @@ call :checkps1 "scripts\deploy-worktree.ps1" || exit /b 1
 call :checkps1 "scripts\start-platform-mcp.ps1" || exit /b 1
 call :checkps1 "scripts\stop-platform-mcp.ps1" || exit /b 1
 call :checkps1 "scripts\status-platform-mcp.ps1" || exit /b 1
+call :checkps1 "scripts\update-platform.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\runtime-root.ps1" || exit /b 1
+call :checkps1 "tts-platform\scripts\install_gateway.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\start_all.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\start_gateway.ps1" || exit /b 1
 call :checkps1 "tts-platform\scripts\start_chatterbox.ps1" || exit /b 1
@@ -76,7 +79,7 @@ exit /b %ERRORLEVEL%
 set "FILE=%~1"
 set "PYEXE="
 if defined TTS_RUNTIME_ROOT if exist "%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe" set "PYEXE=%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe"
-if not defined PYEXE if exist "E:\tts_runtime\envs\gateway\Scripts\python.exe" set "PYEXE=E:\tts_runtime\envs\gateway\Scripts\python.exe"
+if not defined PYEXE if exist "%ROOT%tts-runtime\envs\gateway\Scripts\python.exe" set "PYEXE=%ROOT%tts-runtime\envs\gateway\Scripts\python.exe"
 if not defined PYEXE where python >nul 2>nul && set "PYEXE=python"
 if not defined PYEXE (
   echo Skipping Python syntax check for %FILE%: Python not found.
@@ -90,7 +93,7 @@ exit /b %ERRORLEVEL%
 :testpy
 set "PYEXE="
 if defined TTS_RUNTIME_ROOT if exist "%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe" set "PYEXE=%TTS_RUNTIME_ROOT%\envs\gateway\Scripts\python.exe"
-if not defined PYEXE if exist "E:\tts_runtime\envs\gateway\Scripts\python.exe" set "PYEXE=E:\tts_runtime\envs\gateway\Scripts\python.exe"
+if not defined PYEXE if exist "%ROOT%tts-runtime\envs\gateway\Scripts\python.exe" set "PYEXE=%ROOT%tts-runtime\envs\gateway\Scripts\python.exe"
 if not defined PYEXE where python >nul 2>nul && set "PYEXE=python"
 if not defined PYEXE (
   echo Skipping TTS Python tests: Python not found.

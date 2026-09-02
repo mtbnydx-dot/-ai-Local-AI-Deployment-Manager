@@ -52,6 +52,7 @@ llama-manager/data/
 tts-platform/voices/
 tts-platform/outputs/
 tts-platform/logs/
+tts-runtime/
 
 # Local virtual environments and Python cache
 venvs/

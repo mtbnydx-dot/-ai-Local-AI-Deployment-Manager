@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 
 from tts_catalog import ENGINE_CATALOG, LOCAL_WORKERS
-from tts_config import cfg, settings
+from tts_config import cfg, default_runtime_root, settings
 
 
 class LifecycleError(Exception):
@@ -30,7 +30,7 @@ class ModelLifecycleManager:
     ACTIONS = {"install", "start", "wake", "unload", "stop"}
 
     def __init__(self) -> None:
-        self.runtime_root = Path(cfg("TTS_RUNTIME_ROOT", r"E:\tts_runtime")).expanduser().resolve()
+        self.runtime_root = Path(cfg("TTS_RUNTIME_ROOT", str(default_runtime_root()))).expanduser().resolve()
         self.project_root = Path(__file__).resolve().parent.parent
         self.workers_root = self.project_root / "workers"
         self.scripts_root = self.project_root / "scripts"

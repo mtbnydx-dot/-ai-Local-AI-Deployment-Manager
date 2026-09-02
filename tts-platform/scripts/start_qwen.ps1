@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
-$runtimeRoot = if ($env:TTS_RUNTIME_ROOT) { $env:TTS_RUNTIME_ROOT } else { "E:\tts_runtime" }
+. (Join-Path $PSScriptRoot 'runtime-root.ps1')
+$runtimeRoot = Get-TtsRuntimeRoot
+$env:TTS_RUNTIME_ROOT = $runtimeRoot
 $env:HF_HOME = Join-Path $runtimeRoot "hf"
 $env:QWEN_TTS_MODEL = if ($env:QWEN_TTS_MODEL) { $env:QWEN_TTS_MODEL } else { Join-Path $runtimeRoot "models\Qwen3-TTS-1.7B-Base" }
 $python = Join-Path $runtimeRoot "envs\qwen\Scripts\python.exe"

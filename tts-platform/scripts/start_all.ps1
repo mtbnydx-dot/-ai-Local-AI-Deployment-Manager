@@ -7,6 +7,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $s = $PSScriptRoot
+. (Join-Path $s 'runtime-root.ps1')
+$env:TTS_RUNTIME_ROOT = Get-TtsRuntimeRoot
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $s ".."))
 $logRoot = Join-Path $projectRoot "logs"
 $stateRoot = Join-Path $projectRoot ".runtime"

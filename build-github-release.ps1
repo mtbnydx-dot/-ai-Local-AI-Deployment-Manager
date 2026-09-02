@@ -143,6 +143,7 @@ $releaseDirectories = @(
   "tests",
   "manager-core",
   "platform-mcp",
+  "search-gateway",
   "shared-public",
   "scripts",
   "service-entry",
@@ -191,6 +192,10 @@ $releaseFiles = @(
   "status-service-entry.cmd",
   "start-tts-platform.cmd",
   "status-tts-platform.cmd",
+  "start-search-gateway.cmd",
+  "stop-search-gateway.cmd",
+  "install-tts-gateway.cmd",
+  "update-platform.cmd",
   "start-platform-mcp.cmd",
   "stop-platform-mcp.cmd",
   "status-platform-mcp.cmd",
@@ -203,11 +208,14 @@ foreach ($file in $releaseFiles) {
 }
 Copy-ReleaseFile -RelativeSource "deploy\public\.env.example"
 Copy-ReleaseFile -RelativeSource "platform-mcp\.env.example"
+Copy-ReleaseFile -RelativeSource "search-gateway\.env.example"
+Copy-ReleaseFile -RelativeSource "tts-platform\.env.example"
 Copy-ReleaseFile -RelativeSource "docs\client-setup-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\git-worktree-workflow.md"
 Copy-ReleaseFile -RelativeSource "docs\mcp-platform-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\qwen38-acceleration-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\service-runbook.md"
+Copy-ReleaseFile -RelativeSource "docs\update-guide.md"
 
 # README documentation links must survive packaging. This catches the common
 # failure mode where a new guide is linked from README but omitted from the
@@ -230,9 +238,9 @@ $manifest = @(
   "",
   "## Included",
   "",
-  "- Application source for service-entry, vLLM manager, llama.cpp manager, TTS platform, and shared manager core",
+  "- Application source for service-entry, vLLM manager, llama.cpp manager, TTS, search gateway, platform MCP, and shared manager core",
   "- User documentation, tests, GitHub Actions CI, and public deployment examples",
-  "- Windows install, start, stop, status, test, and packaging scripts",
+  "- Windows install, safe Git update, start, stop, status, test, and packaging scripts",
   "",
   "## Intentionally excluded",
   "",

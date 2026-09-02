@@ -366,6 +366,7 @@ const UI_TEXT_TRANSLATIONS = {
   "管理器配置备份": "Manager configuration backups",
   "备份启动方案、服务设置、客户端策略和自动化配置；不包含模型权重、日志或明文密钥。": "Back up launch profiles, service settings, client policies, and automation configuration; model weights, logs, and plaintext secrets are excluded.",
   "创建备份": "Create backup",
+  "正在读取管理器备份...": "Loading manager backups...",
   "访问日志检索": "Access log search",
   "按关键词、时间、状态和来源过滤元数据，并导出当前筛选结果。": "Filter metadata by keyword, time, status, and source, then export the current result.",
   "关键词": "Keyword",

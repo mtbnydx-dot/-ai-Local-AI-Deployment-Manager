@@ -41,6 +41,7 @@ This is a local AI service control panel for high-end personal workstations and 
 ├─ tts-platform/           # TTS 聚合网关、网页、worker 与启动脚本
 ├─ manager-core/           # 共用网络、密钥、统计、显存估算工具
 ├─ platform-mcp/           # 平台级只读 MCP 工具服务
+├─ search-gateway/         # 联网搜索、网页/PDF 安全读取与 OpenAI 兼容网关
 ├─ tests/                  # 跨管理器前端烟测
 ├─ model-capability-tests/ # 长任务能力测试提示词
 ├─ vllm/                   # 轻量 vLLM helper 脚本
@@ -49,6 +50,8 @@ This is a local AI service control panel for high-end personal workstations and 
 ├─ package.json            # 根目录测试依赖，主要用于 Playwright smoke test
 ├─ playwright.config.cjs   # 浏览器烟测配置
 ├─ install-all.cmd         # 安装 Node 依赖
+├─ install-tts-gateway.cmd # 用 uv 创建 TTS 网关 Python 3.12 环境
+├─ update-platform.cmd     # 从 GitHub 安全 fast-forward 更新并复测
 ├─ test-all.cmd            # 运行核心测试
 ├─ start-service-entry.cmd # 启动本机模式
 ├─ start-platform-mcp.cmd  # 启动 loopback MCP 服务
@@ -64,11 +67,12 @@ Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口
 ### 系统要求
 
 - Windows 10/11。
-- Node.js 20 或更高版本。
+- Node.js 22.22.2 或更高版本（完整 search-gateway 所需）。
 - Docker Desktop。
 - NVIDIA 驱动；运行 vLLM/llama.cpp CUDA 容器时需要可用 GPU。
 - Chrome 或 Edge；前端 smoke test 默认使用本机 Chrome，也可以设置 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` 使用 Edge。
-- 可选：Hugging Face CLI、ModelScope CLI、CUDA Toolkit、PowerShell 7。
+- TTS 功能需要 Python 3.12、`uv` 和 PowerShell 7；不用 TTS 时可不安装。
+- 可选：Hugging Face CLI、ModelScope CLI、CUDA Toolkit。
 
 ### 快速开始
 
@@ -76,13 +80,14 @@ Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口
 
 ```cmd
 install-all.cmd
+install-tts-gateway.cmd
 test-all.cmd
 start-service-entry.cmd
 start-platform-mcp.cmd
-start-tts-platform.cmd -NoBrowser
+start-tts-platform.cmd -GatewayOnly -NoBrowser
 ```
 
-模型、缓存和运行数据默认保存在发布目录内。需要放到其它磁盘时，请在启动前设置 `AI_ROOT`；也可以分别用 `VLLM_MODELS_ROOT`、`LLAMA_MODELS_ROOT` 和 `HF_HOME` 覆盖模型或缓存目录。
+模型、缓存和运行数据默认保存在发布目录内。需要放到其它磁盘时，请在启动前设置 `AI_ROOT`；也可以分别用 `VLLM_MODELS_ROOT`、`LLAMA_MODELS_ROOT`、`HF_HOME` 和 `TTS_RUNTIME_ROOT` 覆盖模型、缓存或 TTS 运行目录。
 
 浏览器打开：
 
@@ -127,7 +132,7 @@ TTS API:  http://<本机局域网 IP>:5176/gateway/tts/openai/v1
 
 `auto` 会自动选择当前可用的 vLLM 或 llama.cpp 后端。需要固定后端时，可以把 `auto` 换成 `vllm` 或 `llama`。
 
-当前本机工作区还保留了可选的 `search-gateway` 联网搜索扩展（公开发布包默认不包含）。需要时先保持模型服务运行，再执行 `start-search-gateway.cmd`，客户端使用 `http://127.0.0.1:5180/v1`；局域网使用 `http://<本机局域网 IP>:5180/v1`。详见 `search-gateway/README.md`。
+完整发布包包含可选的 `search-gateway` 联网搜索扩展，但不会自动启动。需要时先保持模型服务运行，再执行 `start-search-gateway.cmd`，客户端使用 `http://127.0.0.1:5180/v1`；局域网使用 `http://<本机局域网 IP>:5180/v1`。详见 `search-gateway/README.md`。
 
 ### 客户端配置建议
 
@@ -221,6 +226,10 @@ npm run test:frontend-smoke
 
 源码仓库、功能工作树和 `<AI_ROOT>` 运行目录相互隔离。新功能从 `integration` 创建独立 worktree，测试并提交后再合并；部署脚本按发布白名单备份和同步源码，不会删除模型、缓存、密钥、数据库或日志，也不会自动重启模型。完整流程见 [`docs/git-worktree-workflow.md`](docs/git-worktree-workflow.md)。
 
+### GitHub 多电脑更新
+
+其它电脑首次使用时从 GitHub 克隆并运行 `install-all.cmd`；之后运行 `update-platform.cmd` 即可进行只允许 fast-forward 的安全更新。更新器发现受控文件有本地修改、存在未推送提交或分叉历史时会拒绝覆盖，也不会重启服务或加载模型。完整流程见 [`docs/update-guide.md`](docs/update-guide.md)。
+
 ### 构建 GitHub 发布包
 
 在项目根目录运行：
@@ -229,7 +238,7 @@ npm run test:frontend-smoke
 powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ```
 
-脚本会在 `artifacts/github-release/` 生成带版本号的 ZIP，并只收录发布所需源码、用户文档和示例配置。`node_modules`、日志、模型、缓存、数据库、PID、`.env`、本机代理配置、内部审计文档和测试产物均会排除；打包结束前还会检查本机用户名、用户目录、计算机名和常见密钥格式。
+脚本会在 `artifacts/github-release/` 同时保留可直接初始化 Git 的版本目录并生成同名 ZIP，只收录发布所需源码、用户文档和示例配置。`node_modules`、日志、模型、缓存、数据库、PID、`.env`、本机代理配置、内部审计文档和测试产物均会排除；打包结束前还会检查本机用户名、用户目录、计算机名和常见密钥格式。
 
 ---
 
@@ -268,6 +277,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ tts-platform/           # TTS gateway, web UI, workers, and launch scripts
 ├─ manager-core/           # Shared networking, secret, stats, and memory-estimation helpers
 ├─ platform-mcp/           # Platform-level read-only MCP tool service
+├─ search-gateway/         # Web search, bounded page/PDF reader, and OpenAI-compatible gateway
 ├─ tests/                  # Cross-manager frontend smoke tests
 ├─ model-capability-tests/ # Long-running model capability prompts
 ├─ vllm/                   # Lightweight vLLM helper scripts
@@ -276,6 +286,8 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ package.json            # Root test dependencies, mainly Playwright smoke tests
 ├─ playwright.config.cjs   # Browser smoke-test configuration
 ├─ install-all.cmd         # Install Node dependencies
+├─ install-tts-gateway.cmd # Create the Python 3.12 TTS gateway environment with uv
+├─ update-platform.cmd     # Safe fast-forward GitHub update and validation
 ├─ test-all.cmd            # Run core tests
 ├─ start-service-entry.cmd # Start local-only mode
 ├─ start-platform-mcp.cmd  # Start the loopback MCP service
@@ -287,11 +299,12 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ### Requirements
 
 - Windows 10/11.
-- Node.js 20 or newer.
+- Node.js 22.22.2 or newer (required by the complete search gateway).
 - Docker Desktop.
 - NVIDIA driver and GPU access for vLLM/llama.cpp CUDA containers.
 - Chrome or Edge. The frontend smoke test uses local Chrome by default; set `PLAYWRIGHT_BROWSER_CHANNEL=msedge` to use Edge.
-- Optional: Hugging Face CLI, ModelScope CLI, CUDA Toolkit, PowerShell 7.
+- TTS requires Python 3.12, `uv`, and PowerShell 7; they are optional if TTS is not used.
+- Optional: Hugging Face CLI, ModelScope CLI, and CUDA Toolkit.
 
 ### Quick Start
 
@@ -299,13 +312,14 @@ From the release root:
 
 ```cmd
 install-all.cmd
+install-tts-gateway.cmd
 test-all.cmd
 start-service-entry.cmd
 start-platform-mcp.cmd
-start-tts-platform.cmd -NoBrowser
+start-tts-platform.cmd -GatewayOnly -NoBrowser
 ```
 
-Models, caches, and runtime data are stored inside the release directory by default. Set `AI_ROOT` before startup to use another drive, or override `VLLM_MODELS_ROOT`, `LLAMA_MODELS_ROOT`, and `HF_HOME` individually.
+Models, caches, and runtime data are stored inside the release directory by default. Set `AI_ROOT` before startup to use another drive, or override `VLLM_MODELS_ROOT`, `LLAMA_MODELS_ROOT`, `HF_HOME`, and `TTS_RUNTIME_ROOT` individually.
 
 Open:
 
@@ -350,7 +364,7 @@ TTS API:  http://<LAN IP>:5176/gateway/tts/openai/v1
 
 `auto` routes to the currently available vLLM or llama.cpp backend. Replace it with `vllm` or `llama` to pin a backend.
 
-This local workspace also retains the optional `search-gateway` web-search extension (it is not included in the public release archive by default). Keep the model service running, launch `start-search-gateway.cmd`, and use `http://127.0.0.1:5180/v1`, or `http://<LAN IP>:5180/v1` from the LAN. See `search-gateway/README.md`.
+The complete release includes the optional `search-gateway` web-search extension but does not start it automatically. Keep the model service running, launch `start-search-gateway.cmd`, and use `http://127.0.0.1:5180/v1`, or `http://<LAN IP>:5180/v1` from the LAN. See `search-gateway/README.md`.
 
 Platform MCP 0.5.0 provides 16 read-only tools, including single-query search, multi-query research, bounded explicit-URL and result-page reading, in-page passage finding, job history, route preview, memory-fit estimation, and security posture. For the reusable MCP architecture, security boundary, and setup examples for Chatbox, OpenWebUI, Claude, Codex, IDEs, and custom agents, see the [self-hosted platform MCP guide](docs/mcp-platform-guide.md).
 
@@ -423,6 +437,10 @@ npm run test:frontend-smoke
 
 The source repository, feature worktrees, and the live `<AI_ROOT>` runtime are isolated. Create each change from `integration`, test and commit it independently, then merge it. The deployment helper backs up and syncs only the release allowlist; it never deletes models, caches, keys, databases, or logs, and never restarts a model automatically. See [`docs/git-worktree-workflow.md`](docs/git-worktree-workflow.md).
 
+### GitHub Updates On Multiple Computers
+
+Clone the GitHub repository and run `install-all.cmd` on another computer. Later, use `update-platform.cmd` for a fast-forward-only update. It refuses tracked local edits, unpushed commits, and diverged history, and never restarts a service or loads a model. See [`docs/update-guide.md`](docs/update-guide.md).
+
 ### Build A GitHub Release Archive
 
 Run from the project root:
@@ -431,4 +449,4 @@ Run from the project root:
 powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ```
 
-The script creates a versioned ZIP under `artifacts/github-release/` containing only release source, user documentation, and example configuration. It excludes dependencies, logs, models, caches, databases, PIDs, `.env`, machine-local proxy data, internal audit notes, and test artifacts. Before completing, it also checks for the current username, user profile, computer name, and common credential formats.
+The script keeps a Git-ready versioned directory and creates a matching ZIP under `artifacts/github-release/`. Both contain only release source, user documentation, and example configuration. It excludes dependencies, logs, models, caches, databases, PIDs, `.env`, machine-local proxy data, internal audit notes, and test artifacts. Before completing, it also checks for the current username, user profile, computer name, and common credential formats.

@@ -23,6 +23,12 @@ def cfg(key: str, default: str = "") -> str:
     return str(value or default).strip()
 
 
+def default_runtime_root() -> Path:
+    ai_root = cfg("AI_ROOT")
+    base = Path(ai_root).expanduser() if ai_root else ROOT.parent
+    return (base / "tts-runtime").resolve()
+
+
 def cfg_int(key: str, default: int, minimum: int, maximum: int) -> int:
     try:
         value = int(cfg(key, str(default)))

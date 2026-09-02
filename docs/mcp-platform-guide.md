@@ -23,7 +23,7 @@ OpenWebUI / Claude / Codex / IDE / 自建 Agent
 
 - Streamable HTTP：`http://127.0.0.1:5190/mcp`。
 - Docker 宿主访问：`http://host.docker.internal:5190/mcp`。
-- 本机进程也可用 `node D:\AI\platform-mcp\dist\src\index.js --stdio`。
+- 本机进程也可在平台根目录运行 `node .\platform-mcp\dist\src\index.js --stdio`。
 - HTTP 仅监听 loopback，强制独立 Bearer key，并校验 Host 与 Origin。
 - 管理和搜索上游地址固定为本机 `5176/5177/5178/5180`；只有显式网页读取工具接受公网 HTTP(S) URL，并由网关执行 DNS、跳转、端口和响应体安全校验。
 - 没有 shell、任意文件读取、下载、启动、停止、删除或配置写入工具。
@@ -34,7 +34,7 @@ OpenWebUI / Claude / Codex / IDE / 自建 Agent
 
 ## 启动与检查
 
-在 `D:\AI` 运行：
+在 `<AI_ROOT>` 运行：
 
 ```cmd
 install-all.cmd
@@ -42,9 +42,9 @@ start-platform-mcp.cmd
 status-platform-mcp.cmd
 ```
 
-升级或部署后，可在 `D:\AI\platform-mcp` 运行 `npm run validate:live`。验证器使用官方 MCP client 协商 2026-07-28 协议，逐一调用 16 个真实工具，并要求单次搜索、批量研究、显式公网链接读取、搜索结果正文读取、页内查找和工具路由均实际可用；它只允许 loopback `/mcp`，从受保护的 `server.env` 内部读取 Bearer key，输出中不包含 key、模型路径、搜索内容或上游原始响应。
+升级或部署后，可在 `<AI_ROOT>\platform-mcp` 运行 `npm run validate:live`。验证器使用官方 MCP client 协商 2026-07-28 协议，逐一调用 16 个真实工具，并要求单次搜索、批量研究、显式公网链接读取、搜索结果正文读取、页内查找和工具路由均实际可用；它只允许 loopback `/mcp`，从受保护的 `server.env` 内部读取 Bearer key，输出中不包含 key、模型路径、搜索内容或上游原始响应。
 
-首次启动会在 `D:\AI\.runtime\platform-mcp\server.env` 生成随机 MCP 客户端密钥，并把目录 ACL 限制为当前 Windows 用户。启动脚本只显示密钥文件位置，不打印密钥内容。联网搜索所需的 search-gateway 密钥优先从进程 secret 注入，否则读取平台现有的受保护服务密钥文件；它不会被复制进 `server.env`，日志也只显示搜索已启用或未启用。
+首次启动会在 `<AI_ROOT>\.runtime\platform-mcp\server.env` 生成随机 MCP 客户端密钥，并把目录 ACL 限制为当前 Windows 用户。启动脚本只显示密钥文件位置，不打印密钥内容。联网搜索所需的 search-gateway 密钥优先从进程 secret 注入，否则读取平台现有的受保护服务密钥文件；它不会被复制进 `server.env`，日志也只显示搜索已启用或未启用。
 
 停止：
 
@@ -177,4 +177,4 @@ Agent 调用链应为：选择模型 → 读取授权后的 MCP 工具 → 把 t
 - 工具返回 `partial=true`：某个固定上游未响应；用 `status-service-entry.cmd` 和 `local_ai_get_diagnostics` 确认具体管理器。
 - 需要轮换 key：先停止 MCP，备份后移走 `server.env`，再启动生成新 key，并同步更新客户端 secret store。旧 key 会立即失效。
 
-审计文件位于 `D:\AI\audit-logs\platform-mcp.jsonl`；stdout/stderr 也在同一目录。它们都是本机运行数据，不进入 Git 或发布包。
+审计文件位于 `<AI_ROOT>\audit-logs\platform-mcp.jsonl`；stdout/stderr 也在同一目录。它们都是本机运行数据，不进入 Git 或发布包。

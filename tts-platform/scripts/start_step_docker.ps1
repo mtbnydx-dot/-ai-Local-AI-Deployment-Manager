@@ -2,7 +2,9 @@
 param([switch]$Recreate)
 
 $ErrorActionPreference = "Stop"
-$runtimeRoot = if ($env:TTS_RUNTIME_ROOT) { $env:TTS_RUNTIME_ROOT } else { "E:\tts_runtime" }
+. (Join-Path $PSScriptRoot 'runtime-root.ps1')
+$runtimeRoot = Get-TtsRuntimeRoot
+$env:TTS_RUNTIME_ROOT = $runtimeRoot
 $repo = Join-Path $runtimeRoot "repos\Step-Audio-EditX"
 $hfRoot = Join-Path $runtimeRoot "hf\hub"
 $image = if ($env:TTS_STEP_IMAGE) { $env:TTS_STEP_IMAGE } else { "step-audio-editx:ffmpeg" }

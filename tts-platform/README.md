@@ -1,6 +1,6 @@
 # 语音克隆聚合平台
 
-统一接入本地与云端 TTS 的创作工作台：可完成**任意目标语种翻译、音色管理、多引擎对比、模型生命周期管理、异步生成、试听下载和历史检索**。网页与 API 默认通过 D:\AI 的 `service-entry` 暴露，7000 与 worker 端口只监听本机回环地址。
+统一接入本地与云端 TTS 的创作工作台：可完成**任意目标语种翻译、音色管理、多引擎对比、模型生命周期管理、异步生成、试听下载和历史检索**。网页与 API 默认通过平台根目录中的 `service-entry` 暴露，7000 与 worker 端口只监听本机回环地址。
 
 ## 本版能力
 
@@ -31,13 +31,13 @@
 
 ## 目录结构
 
-- 本目录（`<AI_ROOT>\tts-platform`；本机为 `D:\AI\tts-platform`）：平台代码
+- 本目录（`<AI_ROOT>\tts-platform`）：平台代码
   - `gateway/` 聚合网关 + 网页界面（端口 7000）
   - `workers/` 各引擎的 worker 服务（chatterbox 7011 / qwen 7012 / fish 7013 / step 7014 / VoxCPM 7015 / Qwen VoiceDesign 7016）
   - `scripts/` 启动脚本
   - `voices/` 保存的参考音色；`outputs/` 生成的语音；`tts-history.sqlite3` 为历史索引
   - `.env` API Key 配置（参考 `.env.example`）
-- `E:\tts_runtime\`：运行时（纯英文路径，避免中文路径兼容问题）
+- `<TTS_RUNTIME_ROOT>\`：运行时；默认是 `<AI_ROOT>\tts-runtime`，也可放到其它英文路径磁盘
   - `hf/` 模型权重（约 36GB）；`envs/` 各引擎隔离的 Python 环境；`repos/` fish-speech 与 Step-Audio-EditX 源码；`models/` 指向权重快照的链接
 
 ## 使用方法
@@ -45,13 +45,13 @@
 1. **一键启动**（已运行的服务保持不动，缺少的 worker 与网关会在后台补齐）：
 
 ```bash
-pwsh -File "D:\AI\tts-platform\scripts\start_all.ps1"
+pwsh -File ".\tts-platform\scripts\start_all.ps1"
 ```
 
 仅使用已运行的 Step/API 引擎或只想打开网页时，可运行：
 
 ```powershell
-pwsh -File "D:\AI\tts-platform\scripts\start_all.ps1" -GatewayOnly -NoBrowser
+pwsh -File ".\tts-platform\scripts\start_all.ps1" -GatewayOnly -NoBrowser
 ```
 
 2. 浏览器打开统一入口 **http://127.0.0.1:5176/gateway/tts/**（7000 仍只作为本机上游）：
@@ -63,7 +63,7 @@ pwsh -File "D:\AI\tts-platform\scripts\start_all.ps1" -GatewayOnly -NoBrowser
 3. 查看运行状态：
 
 ```powershell
-pwsh -File "D:\AI\tts-platform\scripts\status.ps1"
+pwsh -File ".\tts-platform\scripts\status.ps1"
 ```
 
 状态脚本会输出监听进程、版本、运行时长、任务计数、历史存储和各引擎的在线/忙碌/延迟状态。
@@ -93,19 +93,19 @@ pwsh -File "D:\AI\tts-platform\scripts\status.ps1"
 
 级联尝试（哪个可用走哪个）：
 
-1. **D:\AI 本地大模型平台**（service-entry 统一网关 `127.0.0.1:5176`，用当前 fleet 里已加载的模型，免费且质量最好）
+1. **本地大模型平台**（service-entry 统一网关 `127.0.0.1:5176`，用当前 fleet 里已加载的模型，免费且质量最好）
 2. DashScope（qwen-plus，需 Key）
 3. 小米 MiMo（mimo-v2.5，**聊天模型要账户有余额**）
 4. 本地 Qwen3-4B-Instruct 兜底（qwen worker 内，支持任意目标语种，首次用时加载 ~9GB 显存）
 
-### 与 D:\AI 平台的显存共存
+### 与本地模型平台的显存共存
 
 Step-Audio 容器的 vLLM 只预留 15% 显存（~15GB，STEP_GPU_MEM_UTIL 可调）；三个本地 TTS 引擎合计约 16GB。与 27B FP8 的 LLM fleet 可同时驻留。
 
 4. **Step-Audio-EditX**（可选，需要 Docker Desktop 在运行）：
 
 ```bash
-pwsh -File "D:\AI\tts-platform\scripts\start_step_docker.ps1"
+pwsh -File ".\tts-platform\scripts\start_step_docker.ps1"
 ```
 
 ## API
@@ -144,4 +144,4 @@ pwsh -File "D:\AI\tts-platform\scripts\start_step_docker.ps1"
 
 - 单独控制某个引擎：优先使用网页“模型”页；也可运行对应 `scripts\start_<引擎>.ps1`
 - 看 Step 容器日志：`docker logs -f step-audio`
-- 更新 fish-speech / Step-Audio 源码：去 `E:\tts_runtime\repos\` 里 `git pull` 后重装对应 env
+- 更新 fish-speech / Step-Audio 源码：去 `<TTS_RUNTIME_ROOT>\repos\` 里 `git pull` 后重装对应 env

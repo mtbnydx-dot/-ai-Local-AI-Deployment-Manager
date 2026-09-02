@@ -1,6 +1,6 @@
 """Chatterbox Multilingual v3 worker.
 
-Runs in the dedicated venv E:\\tts_runtime\\envs\\chatterbox.
+Runs in the dedicated venv <TTS_RUNTIME_ROOT>\\envs\\chatterbox.
 Protocol: GET /health, POST /tts (multipart: text, language, ref_audio, ref_text).
 Returns audio/wav bytes.
 """
@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-RUNTIME_ROOT = Path(os.environ.get("TTS_RUNTIME_ROOT", r"E:\tts_runtime"))
+RUNTIME_ROOT = Path(os.environ.get("TTS_RUNTIME_ROOT") or Path(__file__).resolve().parents[2] / "tts-runtime")
 os.environ.setdefault("HF_HOME", str(RUNTIME_ROOT / "hf"))
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile

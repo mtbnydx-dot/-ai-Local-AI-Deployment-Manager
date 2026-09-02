@@ -8,7 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
-RUNTIME_ROOT = Path(os.environ.get("TTS_RUNTIME_ROOT", r"E:\tts_runtime"))
+RUNTIME_ROOT = Path(os.environ.get("TTS_RUNTIME_ROOT") or Path(__file__).resolve().parents[2] / "tts-runtime")
 os.environ.setdefault("HF_HOME", str(RUNTIME_ROOT / "hf"))
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile

@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
-$runtimeRoot = if ($env:TTS_RUNTIME_ROOT) { $env:TTS_RUNTIME_ROOT } else { "E:\tts_runtime" }
+. (Join-Path $PSScriptRoot 'runtime-root.ps1')
+$runtimeRoot = Get-TtsRuntimeRoot
+$env:TTS_RUNTIME_ROOT = $runtimeRoot
 $env:HF_HOME = Join-Path $runtimeRoot "hf"
 $repo = Join-Path $runtimeRoot "repos\fish-speech"
 $python = Join-Path $runtimeRoot "envs\fish\Scripts\python.exe"

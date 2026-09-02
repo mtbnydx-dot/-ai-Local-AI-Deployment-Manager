@@ -6,7 +6,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$runtimeRoot = if ($env:TTS_RUNTIME_ROOT) { $env:TTS_RUNTIME_ROOT } else { "E:\tts_runtime" }
+. (Join-Path $PSScriptRoot 'runtime-root.ps1')
+$runtimeRoot = Get-TtsRuntimeRoot
+$env:TTS_RUNTIME_ROOT = $runtimeRoot
 $env:HF_HOME = Join-Path $runtimeRoot "hf"
 $uvCommand = Get-Command uv -ErrorAction SilentlyContinue
 $uvFallback = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "hermes\bin\uv.exe" } else { "" }

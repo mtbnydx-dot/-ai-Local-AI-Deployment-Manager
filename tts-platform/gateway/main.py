@@ -2,7 +2,7 @@ r"""TTS aggregation gateway and local voice workstation API.
 
 Run from this directory with::
 
-    E:\tts_runtime\envs\gateway\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 7000
+    <TTS_RUNTIME_ROOT>\envs\gateway\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 7000
 """
 
 from __future__ import annotations
