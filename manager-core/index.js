@@ -25,6 +25,13 @@ const MODULES = [
   "./gpu-admission",
   "./download-utils",
   "./download-checksums",
+  "./download-precheck",
+  "./download-resume-check",
+  "./download-throughput",
+  "./gguf-variants",
+  "./precision-variants",
+  "./remote-model-config",
+  "./repo-mirrors",
   "./mirror-probe",
   "./proxy-fetch",
   "./download-job-controller",
@@ -63,6 +70,8 @@ const MODULES = [
   "./runtime-log-summary",
   "./integration-routes",
   "./reference-data",
+  "./runtime-manifest",
+  "./model-capability-matrix",
   "./openwebui-audit-exporter",
 ];
 

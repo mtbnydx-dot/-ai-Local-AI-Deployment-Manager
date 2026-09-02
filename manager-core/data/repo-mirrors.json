@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-09-03",
+  "staleAfterDays": 180,
+  "notes": "Hugging Face organisation -> ModelScope namespace candidates, tried in order when a slow or blocked Hugging Face download could fall back to ModelScope. The probe still checks that the candidate repository exists before recommending it; entries here only save guesses. A user copy under <AI_ROOT>/config/repo-mirrors.json overrides this file.",
+  "organizations": {
+    "Qwen": ["Qwen"],
+    "deepseek-ai": ["deepseek-ai"],
+    "zai-org": ["ZhipuAI"],
+    "THUDM": ["ZhipuAI"],
+    "moonshotai": ["moonshotai"],
+    "MiniMaxAI": ["MiniMax"],
+    "internlm": ["Shanghai_AI_Laboratory"],
+    "OpenGVLab": ["OpenGVLab"],
+    "baichuan-inc": ["baichuan-inc"],
+    "01-ai": ["01ai"],
+    "meta-llama": ["LLM-Research"],
+    "google": ["LLM-Research", "google"],
+    "mistralai": ["mistralai", "AI-ModelScope"],
+    "microsoft": ["LLM-Research", "microsoft"],
+    "nvidia": ["nvidia"],
+    "openai": ["openai-mirror"],
+    "unsloth": ["unsloth"],
+    "bartowski": ["bartowski"],
+    "lmstudio-community": ["lmstudio-community"],
+    "Qwen-Coder": ["Qwen"]
+  },
+  "repositories": {}
+}

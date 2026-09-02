@@ -90,7 +90,7 @@ const DEFAULT_VLLM_IMAGE = process.env.VLLM_IMAGE_VERSION
 const DEFAULT_GEMMA_VLLM_IMAGE = "vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b";
 const DEFAULT_QWEN_MOE_VLLM_IMAGE = "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb";
 const DEFAULT_SGLANG_IMAGE = `${DEFAULT_SGLANG_RELEASE.repository}@${DEFAULT_SGLANG_RELEASE.platformDigest}`;
-const DEFAULT_SGLANG_FLASH_NEXT_IMAGE = "local/sglang:qwen38flashnext-sm120-dac5523d";
+const DEFAULT_SGLANG_FLASH_NEXT_IMAGE = core.runtimeImageReference("sglangFlashNext");
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 const MANAGER_LABEL_KEY = "ai.manager";
@@ -811,7 +811,102 @@ core.registerModelRoutes(app, {
   getDiskUsage: () => runtimeSnapshotCache.get("disk-usage", () => modelFilesystemStore.getDiskUsage(), { ttlMs: 30_000 }),
   cleanupIncomplete: cleanupIncompleteRequest,
   checkModelUpstream: checkModelUpstreamRequest,
+  precheckDownload: precheckDownloadRequest,
+  listGgufVariants: listGgufVariantsRequest,
+  listPrecisionVariants: listPrecisionVariantsRequest,
+  describeCapabilityData: describeCapabilityDataRequest,
 });
+
+// 下载前预检：远端 config.json + 文件清单过一遍能力矩阵 / 运行时清单 / GPU。
+async function precheckDownloadRequest(query = {}) {
+  const source = cleanDownloadSource(query.source || "huggingface");
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  const [estimate, remoteConfig, gpu] = await Promise.all([
+    source === "huggingface"
+      ? remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision).catch((error) => ({ error: error.message }))
+      : Promise.resolve(null),
+    remoteModelService.fetchRemoteModelConfig(reference.model, source).catch((error) => ({ ok: false, reason: error.message })),
+    getGpuStatus().catch(() => null),
+  ]);
+  const primaryGpu = gpu?.gpus?.[0] || null;
+  const assessment = core.assessDownloadCompatibility({
+    engine: "vllm",
+    model: reference.model,
+    source,
+    precision: reference.precision,
+    config: remoteConfig?.ok ? remoteConfig.config : null,
+    siblings: estimate?.siblings || [],
+    bytes: estimate?.bytes || null,
+    gated: Boolean(estimate?.gated),
+    runtime: knownRuntimeImageMetadata(CONFIG.image) || DEFAULT_VLLM_RELEASE,
+    gpu: primaryGpu ? { computeCap: primaryGpu.computeCap, totalMb: primaryGpu.totalMb } : null,
+  });
+  return {
+    ...assessment,
+    source,
+    remoteConfig: { ok: Boolean(remoteConfig?.ok), status: Number(remoteConfig?.status || 0), reason: remoteConfig?.reason || "" },
+    estimateError: estimate?.error || "",
+  };
+}
+
+async function listGgufVariantsRequest(query = {}) {
+  const source = cleanDownloadSource(query.source || "huggingface");
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  if (source !== "huggingface") return { model: reference.model, source, supported: false, variants: [], mmproj: [], drafts: [] };
+  const [estimate, gpu] = await Promise.all([
+    remoteModelService.getHuggingFaceDownloadEstimate(reference.model, ""),
+    getGpuStatus().catch(() => null),
+  ]);
+  const listing = core.listGgufVariants(estimate.siblings || [], { gpuTotalMb: gpu?.gpus?.[0]?.totalMb || gpu?.totalMb || 0 });
+  return {
+    model: reference.model,
+    source,
+    supported: true,
+    gated: Boolean(estimate.gated),
+    selected: reference.precision || "",
+    ...listing,
+    variants: listing.variants.map((variant) => ({ ...variant, files: variant.files.slice(0, 12) })),
+  };
+}
+
+async function listPrecisionVariantsRequest(query = {}) {
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  const candidates = await remoteModelService.listHuggingFaceRepositories(core.baseNameOf(reference.model), 80).catch(() => []);
+  return core.groupPrecisionVariants(reference.model, [{ id: reference.model }, ...candidates], { vllmRuntime: DEFAULT_VLLM_RELEASE });
+}
+
+function describeCapabilityDataRequest() {
+  const mirrors = core.loadRepoMirrors();
+  return {
+    runtimeManifest: core.describeRuntimeManifest(),
+    capabilityMatrix: core.describeModelCapabilityMatrix(),
+    repoMirrors: { asOf: mirrors.value?.asOf || "", source: mirrors.source, userPath: mirrors.userPath, freshness: mirrors.freshness },
+  };
+}
+
+async function inspectDownloadResumeRequest(job) {
+  return core.inspectDownloadResume({
+    localDir: job.meta?.localDir,
+    fileManifest: job.meta?.fileManifest || [],
+    expectedBytes: job.meta?.expectedBytes || 0,
+    diskFreeBytes: await getModelsDiskFreeBytes(),
+  });
+}
 
 // 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
 async function cleanupIncompleteRequest(body = {}) {
@@ -905,6 +1000,7 @@ core.registerJobRoutes(app, {
   cancelDownloadJob: (job) => cancelDownloadJob(job),
   pauseDownloadJob: (job) => pauseDownloadJob(job),
   resumeDownloadJob: (job) => resumeDownloadJob(job),
+  inspectDownloadResume: (job) => inspectDownloadResumeRequest(job),
   cancelNonDownloadJob: async (_req, res, job) => {
     if (job.status !== "running" && job.status !== "queued") return res.status(400).json({ error: "任务已结束，无法取消。" });
     try {
@@ -993,7 +1089,8 @@ async function startDownloadRequest(body = {}) {
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
   await ensureDirs(localDir);
-  const download = buildDownloadCommand(source, model, localDir, { precision });
+  const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
+  const download = buildDownloadCommand(source, model, localDir, { precision, extraIncludePatterns: includeExtras });
   if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
     throw core.missingDownloadCliError(download.command, source);
   }
@@ -1013,6 +1110,7 @@ async function startDownloadRequest(body = {}) {
       localDir,
       source,
       precision,
+      includeExtras: includeExtras.length ? includeExtras : undefined,
       priority: core.normalizeDownloadPriority(body.priority),
       expectedBytes: expected?.bytes || null,
       expectedFiles: expected?.fileCount || null,
@@ -1391,12 +1489,12 @@ function knownRuntimeImageMetadata(imageReference) {
   ]);
   if (sglangReferences.has(image)) return DEFAULT_SGLANG_RELEASE;
   if (image === DEFAULT_SGLANG_FLASH_NEXT_IMAGE.toLowerCase()) {
+    const flashNext = core.getRuntimeRelease("sglangFlashNext") || {};
     return {
       ...DEFAULT_SGLANG_RELEASE,
-      version: "qwen38flashnext-sm120-dac5523d",
+      ...flashNext,
       manifestDigest: "",
       platformDigest: "",
-      transformersVersion: "5.12.1",
     };
   }
   if (image === DEFAULT_QWEN_MOE_VLLM_IMAGE.toLowerCase()) {
@@ -3087,12 +3185,7 @@ function isQwen38Nvfp4Model(model, config = null) {
 
 function isQwen38FlashNextNvfp4Model(model, config = null) {
   if (!isQwen38Nvfp4Model(model, config)) return false;
-  const text = String(model || "").toLowerCase();
-  const modelType = String(config?.model_type || "").toLowerCase();
-  const architectures = Array.isArray(config?.architectures) ? config.architectures.join(" ").toLowerCase() : "";
-  return /flash[-_. ]?next/.test(text)
-    || modelType === "qwen4_exp"
-    || architectures.includes("qwen4exp");
+  return core.matchesCapabilityEntry("qwen3.8-flash-next", { model, config: config || {} });
 }
 
 function resolveDsparkDraftModel(value = "") {
@@ -4468,6 +4561,7 @@ const spawnJobProcess = createProcessJobRunner({
     }
     appendLog(job, `Download verification passed: ${verification.modelFormat}; ${verification.expectedWeightFiles || verification.safetensors || verification.gguf} weight file(s).`);
     await runDownloadChecksumVerification(job);
+    await appendDownloadFitSummary(job);
   },
   closeHandlerErrorMode: "fail",
   onDone: (job) => {
@@ -4511,6 +4605,22 @@ const {
   drainDownloadQueue,
   healDownloadQueue,
 } = downloadJobController;
+// 下载完成后的显存粗评：权重体积 vs 本机显存，给「能不能直接加载」一个直观结论。
+async function appendDownloadFitSummary(job) {
+  try {
+    const bytes = Number(job.progress?.downloadedBytes || job.meta?.expectedBytes || 0);
+    if (!(bytes > 0)) return;
+    const gpu = await getGpuStatus().catch(() => null);
+    const totalMb = Number(gpu?.gpus?.[0]?.totalMb || gpu?.totalMb || 0);
+    const fit = core.fitFor(bytes, { gpuTotalMb: totalMb });
+    if (fit.status === "unknown") return;
+    appendLog(job, `显存粗评：权重约 ${formatBytes(bytes)}，GPU 显存 ${formatBytes(totalMb * 1024 * 1024)}；${fit.note}`);
+    job.meta = { ...(job.meta || {}), vramFit: { status: fit.status, ratio: fit.ratio, gpuTotalMb: totalMb, bytes } };
+  } catch {
+    // 粗评只是提示，失败不影响下载结果。
+  }
+}
+
 const runDownloadChecksumVerification = core.createDownloadChecksumRunner({
   appendLog,
   getSettings: () => downloadJobController.getDownloadSettings(),
@@ -4548,6 +4658,11 @@ async function downloadAuxCacheBytes() {
 function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
   const totalBytes = Number(expectedBytes || 0) || null;
   const stallTimeoutMs = Math.max(0, Number(process.env.MODEL_DOWNLOAD_STALL_TIMEOUT_MS ?? 5 * 60 * 1000));
+  // 持续低速时提示换源（hf-mirror / ModelScope 同源仓），只提示一次，不动进程。
+  const throughputAdvisor = core.createThroughputAdvisor({
+    minSampleMs: Number(process.env.MODEL_DOWNLOAD_SLOW_SAMPLE_MS || 180_000),
+    slowBytesPerSec: Number(process.env.MODEL_DOWNLOAD_SLOW_BYTES_PER_SEC || 1_000_000),
+  });
   const tracker = {
     baseBytes: null,
     lastBytes: 0,
@@ -4596,6 +4711,15 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
         if (auxBytes !== null) tracker.lastAuxBytes = auxBytes;
       }
       tracker.lastRawBytes = rawDownloadedBytes;
+      const slowAdvice = job.pid ? throughputAdvisor.observe(rawDownloadedBytes, now) : null;
+      if (slowAdvice) {
+        appendLog(job, core.formatSlowDownloadHint(slowAdvice, {
+          source: job.meta?.source,
+          hfMirror: downloadJobController.getDownloadSettings().hfMirror,
+          modelScopeRepo: job.meta?.source === "huggingface" ? (core.suggestModelScopeRepo(job.meta?.model).candidates[0] || "") : "",
+          formatBytes,
+        }));
+      }
       if (stallTimeoutMs > 0 && job.pid && now - tracker.lastGrowthAt >= stallTimeoutMs) {
         appendLog(job, `下载进度已约 ${Math.max(1, Math.round((now - tracker.lastGrowthAt) / 60000))} 分钟无增长，终止下载进程；已下载文件保留，将按自动重试策略续传。`);
         job.cancel?.("stall");

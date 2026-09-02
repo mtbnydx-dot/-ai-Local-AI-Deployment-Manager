@@ -204,6 +204,7 @@ function createDownloadCommandBuilder(options = {}) {
       model,
       localDir,
       precision: commandOptions.precision,
+      extraIncludePatterns: commandOptions.extraIncludePatterns,
       hfCli,
       modelScopeCli,
     });
@@ -216,7 +217,7 @@ function createDownloadCommandBuilder(options = {}) {
     const precision = String(meta.precision || "");
     const outputName = safeOutputName(meta.outputName || model.replace(/[\\/]/g, "__"));
     const localDir = resolveModelPath(meta.localDir || path.join(modelsRoot, outputName));
-    const download = buildConfiguredDownloadCommand(source, model, localDir, { precision });
+    const download = buildConfiguredDownloadCommand(source, model, localDir, { precision, extraIncludePatterns: meta.includeExtras });
     return {
       command: download.command,
       args: download.args,
@@ -244,8 +245,19 @@ function createDownloadCommandBuilder(options = {}) {
   };
 }
 
-function buildDownloadCommand({ source, model, localDir, precision, hfCli, modelScopeCli }) {
-  const includePatterns = buildDownloadIncludePatterns(precision, model);
+// Companion files (mmproj projectors, DFlash drafts) sit outside the quant
+// filter, so the variant picker passes them as extra include globs. They only
+// matter when a filter is active; a whole-repository download has them anyway.
+function normalizeExtraIncludePatterns(value) {
+  return Array.from(new Set((Array.isArray(value) ? value : String(value || "").split(","))
+    .map((item) => String(item || "").trim())
+    .filter((item) => item && item.length <= 128 && !/[\s"'`;&|<>]/.test(item) && !item.includes(".."))));
+}
+
+function buildDownloadCommand({ source, model, localDir, precision, extraIncludePatterns, hfCli, modelScopeCli }) {
+  const precisionPatterns = buildDownloadIncludePatterns(precision, model);
+  const extras = precisionPatterns.length ? normalizeExtraIncludePatterns(extraIncludePatterns) : [];
+  const includePatterns = Array.from(new Set([...precisionPatterns, ...extras]));
   if (source === "modelscope") {
     const includeArgs = includePatterns.flatMap((pattern) => ["--include", pattern]);
     return {
@@ -299,6 +311,7 @@ module.exports = {
   buildDownloadEnv,
   createDownloadCommandBuilder,
   buildDownloadCommand,
+  normalizeExtraIncludePatterns,
   assertDownloadDiskSpace,
   missingDownloadCliError,
 };

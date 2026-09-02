@@ -30,6 +30,10 @@ function registerModelRoutes(app, deps = {}) {
     getDiskUsage,
     cleanupIncomplete,
     checkModelUpstream,
+    precheckDownload,
+    listGgufVariants,
+    listPrecisionVariants,
+    describeCapabilityData,
   } = deps;
 
   app.get("/api/models", async (_req, res) => {
@@ -66,6 +70,48 @@ function registerModelRoutes(app, deps = {}) {
     app.get("/api/download/estimate", async (req, res) => {
       try {
         res.json(await estimateDownload(req.query || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  // Pre-download compatibility card: capability matrix + runtime manifest +
+  // GPU probe applied to the remote repository before a job exists.
+  if (precheckDownload) {
+    app.get("/api/download/precheck", async (req, res) => {
+      try {
+        res.json(await precheckDownload(req.query || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (listGgufVariants) {
+    app.get("/api/remote-models/gguf-variants", async (req, res) => {
+      try {
+        res.json(await listGgufVariants(req.query || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (listPrecisionVariants) {
+    app.get("/api/remote-models/precision-variants", async (req, res) => {
+      try {
+        res.json(await listPrecisionVariants(req.query || {}));
+      } catch (error) {
+        sendError(res, error);
+      }
+    });
+  }
+
+  if (describeCapabilityData) {
+    app.get("/api/capability-data", async (_req, res) => {
+      try {
+        res.json(await describeCapabilityData());
       } catch (error) {
         sendError(res, error);
       }

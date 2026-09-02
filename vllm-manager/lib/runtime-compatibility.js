@@ -1,34 +1,11 @@
-const DEFAULT_VLLM_RELEASE = Object.freeze({
-  version: "v0.28.0",
-  repository: "vllm/vllm-openai",
-  manifestDigest: "sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14",
-  platformDigest: "sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
-  platform: "linux/amd64",
-  cudaVersion: "13.0.2",
-  torchVersion: "2.13.0",
-  transformersVersion: "5.15.1",
-  bitsAndBytesPlugin: false,
-  minimumComputeCapability: "7.5",
-  minimumBlackwellCudaVersion: "12.8",
-  minimumDriverVersions: Object.freeze({
-    win32: "580.88",
-    linux: "580.65.06",
-  }),
-});
+const { getRuntimeRelease } = require("../../manager-core/runtime-manifest");
 
-const DEFAULT_SGLANG_RELEASE = Object.freeze({
-  version: "0.5.17",
-  repository: "lmsysorg/sglang",
-  manifestDigest: "",
-  platformDigest: "sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df",
-  platform: "linux/amd64",
-  cudaVersion: "13.0",
-  torchVersion: "2.11.0",
-  transformersVersion: "5.12.1",
-  minimumComputeCapability: "7.5",
-  minimumBlackwellCudaVersion: "12.8",
-  minimumDriverVersions: DEFAULT_VLLM_RELEASE.minimumDriverVersions,
-});
+// Pinned releases come from manager-core/data/runtime-manifest.json (with the
+// config/ override); the manifest module keeps the last known-good values as a
+// fallback, so these stay frozen objects with the same shape as before.
+const DEFAULT_VLLM_RELEASE = getRuntimeRelease("vllm");
+const DEFAULT_SGLANG_RELEASE = getRuntimeRelease("sglang");
+const DEFAULT_SGLANG_FLASH_NEXT_RELEASE = getRuntimeRelease("sglangFlashNext");
 
 function defaultVllmImageReference(release = DEFAULT_VLLM_RELEASE) {
   return `${release.repository}@${release.platformDigest}`;
@@ -238,6 +215,7 @@ function finalize(findings, imageReference, gpus, imageMetadata) {
 }
 
 module.exports = {
+  DEFAULT_SGLANG_FLASH_NEXT_RELEASE,
   DEFAULT_SGLANG_RELEASE,
   DEFAULT_VLLM_RELEASE,
   assessVllmRuntimeCompatibility,

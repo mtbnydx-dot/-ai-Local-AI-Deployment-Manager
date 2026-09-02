@@ -75,10 +75,14 @@ const SHARED_PUBLIC_JS_DIR = path.join(__dirname, "..", "shared-public", "js");
 const ALLOW_REMOTE_MANAGEMENT = process.env.LLAMA_MANAGER_ALLOW_REMOTE === "1";
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
-const DEFAULT_LLAMA_IMAGE = process.env.LLAMA_IMAGE_DIGEST || "ghcr.io/ggml-org/llama.cpp@sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3";
-const DEFAULT_LLAMA_IMAGE_BUILD = 10630;
-const MUSE_GLIMMER_MINIMUM_LLAMA_REVISION = "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0";
-const DEFAULT_MUSE_LLAMA_IMAGE = "local/llama.cpp:server-cuda-muse-62bf73d";
+// Pinned llama.cpp images come from manager-core/data/runtime-manifest.json
+// (config/ override supported); environment variables still win.
+const LLAMA_RUNTIME_RELEASE = core.getRuntimeRelease("llama") || {};
+const LLAMA_MUSE_RUNTIME_RELEASE = core.getRuntimeRelease("llamaMuse") || {};
+const DEFAULT_LLAMA_IMAGE = process.env.LLAMA_IMAGE_DIGEST || core.runtimeImageReference("llama") || "ghcr.io/ggml-org/llama.cpp@sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3";
+const DEFAULT_LLAMA_IMAGE_BUILD = Number(LLAMA_RUNTIME_RELEASE.build || 10630);
+const MUSE_GLIMMER_MINIMUM_LLAMA_REVISION = LLAMA_MUSE_RUNTIME_RELEASE.revision || "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0";
+const DEFAULT_MUSE_LLAMA_IMAGE = LLAMA_MUSE_RUNTIME_RELEASE.image || "local/llama.cpp:server-cuda-muse-62bf73d";
 const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
 const MANAGER_APIKEY_LABEL_KEY = "ai.manager.api-key";
@@ -299,22 +303,73 @@ async function getLlamaArchitectureRuntimeCompatibility(architecture) {
 
 function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {}) {
   const normalized = String(architecture || "").trim().toLowerCase();
-  if (!normalized || normalized !== "muse-glimmer") {
+  if (normalized === "muse-glimmer") {
     return {
       architecture: normalized,
-      status: "not-required",
+      status: "unsupported",
+      supported: false,
+      runtime,
+      capability: { id: "muse-glimmer", matchedBy: "gguf" },
+      minimumRevision: MUSE_GLIMMER_MINIMUM_LLAMA_REVISION,
+      message: "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。现有模型与镜像只保留作回滚，不会由此检查删除。",
+    };
+  }
+  // The capability matrix (manager-core/data/model-capabilities.json) owns
+  // per-architecture llama.cpp requirements; the GGUF general.architecture is
+  // the declared identity here, so no name heuristics are involved.
+  const capability = normalized
+    ? core.resolveModelCapabilityEntry({ ggufArchitecture: normalized, allowNameFallback: false })
+    : { entry: null, id: "", matchedBy: "" };
+  const llamaCapabilities = capability.entry ? core.resolveEngineCapabilities(capability.entry, "llama", {}) : null;
+  const summary = { id: capability.id, label: capability.label, matchedBy: capability.matchedBy };
+  if (llamaCapabilities?.supported === false) {
+    return {
+      architecture: normalized,
+      status: "unsupported",
+      supported: false,
+      runtime,
+      capability: summary,
+      message: llamaCapabilities.unsupportedReason || `${capability.label} 不支持在 llama.cpp 上启动。`,
+    };
+  }
+  const minimumBuild = Number(llamaCapabilities?.minimumBuild || 0);
+  if (minimumBuild > 0) {
+    const buildNumber = Number(runtime.buildNumber || 0);
+    if (buildNumber && buildNumber < minimumBuild) {
+      return {
+        architecture: normalized,
+        status: "outdated",
+        supported: false,
+        runtime,
+        capability: summary,
+        minimumBuild,
+        message: `${capability.label} 需要 llama.cpp b${minimumBuild} 或更新；当前镜像为 b${buildNumber}。`,
+      };
+    }
+    return {
+      architecture: normalized,
+      status: buildNumber ? "ok" : "unverified",
       supported: true,
       runtime,
-      message: normalized ? `未为 ${normalized} 配置额外的最低 llama.cpp 版本限制。` : "没有可检查的 GGUF architecture。",
+      capability: summary,
+      minimumBuild,
+      message: buildNumber
+        ? `${capability.label} 需要 b${minimumBuild}，当前镜像 b${buildNumber} 满足。`
+        : `${capability.label} 需要 llama.cpp b${minimumBuild}，但无法读取当前镜像版本。`,
     };
   }
   return {
     architecture: normalized,
-    status: "unsupported",
-    supported: false,
+    status: "not-required",
+    supported: true,
     runtime,
-    minimumRevision: MUSE_GLIMMER_MINIMUM_LLAMA_REVISION,
-    message: "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。现有模型与镜像只保留作回滚，不会由此检查删除。",
+    capability: summary,
+    speculative: llamaCapabilities?.speculative || null,
+    message: normalized
+      ? capability.entry
+        ? `${capability.label}：未配置额外的最低 llama.cpp 版本限制。`
+        : `未为 ${normalized} 配置额外的最低 llama.cpp 版本限制。`
+      : "没有可检查的 GGUF architecture。",
   };
 }
 
@@ -858,7 +913,102 @@ core.registerModelRoutes(app, {
   getDiskUsage: () => runtimeSnapshotCache.get("disk-usage", () => modelFilesystemStore.getDiskUsage(), { ttlMs: 30_000 }),
   cleanupIncomplete: cleanupIncompleteRequest,
   checkModelUpstream: checkModelUpstreamRequest,
+  precheckDownload: precheckDownloadRequest,
+  listGgufVariants: listGgufVariantsRequest,
+  listPrecisionVariants: listPrecisionVariantsRequest,
+  describeCapabilityData: describeCapabilityDataRequest,
 });
+
+// 下载前预检：远端 config.json + 文件清单过一遍能力矩阵 / 运行时清单 / GPU。
+async function precheckDownloadRequest(query = {}) {
+  const source = cleanDownloadSource(query.source || "huggingface");
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  const [estimate, remoteConfig, gpu] = await Promise.all([
+    source === "huggingface"
+      ? remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision).catch((error) => ({ error: error.message }))
+      : Promise.resolve(null),
+    remoteModelService.fetchRemoteModelConfig(reference.model, source).catch((error) => ({ ok: false, reason: error.message })),
+    getGpuStatus().catch(() => null),
+  ]);
+  const primaryGpu = gpu?.gpus?.[0] || null;
+  const assessment = core.assessDownloadCompatibility({
+    engine: "llama",
+    model: reference.model,
+    source,
+    precision: reference.precision,
+    config: remoteConfig?.ok ? remoteConfig.config : null,
+    siblings: estimate?.siblings || [],
+    bytes: estimate?.bytes || null,
+    gated: Boolean(estimate?.gated),
+    runtime: { ...LLAMA_RUNTIME_RELEASE, version: `b${DEFAULT_LLAMA_IMAGE_BUILD}`, build: DEFAULT_LLAMA_IMAGE_BUILD },
+    gpu: primaryGpu ? { computeCap: primaryGpu.computeCap, totalMb: primaryGpu.totalMb } : null,
+  });
+  return {
+    ...assessment,
+    source,
+    remoteConfig: { ok: Boolean(remoteConfig?.ok), status: Number(remoteConfig?.status || 0), reason: remoteConfig?.reason || "" },
+    estimateError: estimate?.error || "",
+  };
+}
+
+async function listGgufVariantsRequest(query = {}) {
+  const source = cleanDownloadSource(query.source || "huggingface");
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  if (source !== "huggingface") return { model: reference.model, source, supported: false, variants: [], mmproj: [], drafts: [] };
+  const [estimate, gpu] = await Promise.all([
+    remoteModelService.getHuggingFaceDownloadEstimate(reference.model, ""),
+    getGpuStatus().catch(() => null),
+  ]);
+  const listing = core.listGgufVariants(estimate.siblings || [], { gpuTotalMb: gpu?.gpus?.[0]?.totalMb || gpu?.totalMb || 0 });
+  return {
+    model: reference.model,
+    source,
+    supported: true,
+    gated: Boolean(estimate.gated),
+    selected: reference.precision || "",
+    ...listing,
+    variants: listing.variants.map((variant) => ({ ...variant, files: variant.files.slice(0, 12) })),
+  };
+}
+
+async function listPrecisionVariantsRequest(query = {}) {
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  const candidates = await remoteModelService.listHuggingFaceRepositories(core.baseNameOf(reference.model), 80).catch(() => []);
+  return core.groupPrecisionVariants(reference.model, [{ id: reference.model }, ...candidates], {});
+}
+
+function describeCapabilityDataRequest() {
+  const mirrors = core.loadRepoMirrors();
+  return {
+    runtimeManifest: core.describeRuntimeManifest(),
+    capabilityMatrix: core.describeModelCapabilityMatrix(),
+    repoMirrors: { asOf: mirrors.value?.asOf || "", source: mirrors.source, userPath: mirrors.userPath, freshness: mirrors.freshness },
+  };
+}
+
+async function inspectDownloadResumeRequest(job) {
+  return core.inspectDownloadResume({
+    localDir: job.meta?.localDir,
+    fileManifest: job.meta?.fileManifest || [],
+    expectedBytes: job.meta?.expectedBytes || 0,
+    diskFreeBytes: await getModelsDiskFreeBytes(),
+  });
+}
 
 // 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
 async function cleanupIncompleteRequest(body = {}) {
@@ -970,6 +1120,7 @@ core.registerJobRoutes(app, {
   cancelDownloadJob: (job) => cancelDownloadJob(job),
   pauseDownloadJob: (job) => pauseDownloadJob(job),
   resumeDownloadJob: (job) => resumeDownloadJob(job),
+  inspectDownloadResume: (job) => inspectDownloadResumeRequest(job),
   cancelNonDownloadJob: async (_req, res, job) => {
     if (job.status !== "running" && job.status !== "queued") return res.status(400).json({ error: "任务已结束，无法取消。" });
     try {
@@ -1012,7 +1163,8 @@ async function startDownloadRequest(body = {}) {
   });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
-  const download = buildDownloadCommand(source, model, localDir, { precision });
+  const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
+  const download = buildDownloadCommand(source, model, localDir, { precision, extraIncludePatterns: includeExtras });
   if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
     throw core.missingDownloadCliError(download.command, source);
   }
@@ -1032,6 +1184,7 @@ async function startDownloadRequest(body = {}) {
       localDir,
       source,
       precision,
+      includeExtras: includeExtras.length ? includeExtras : undefined,
       priority: core.normalizeDownloadPriority(body.priority),
       expectedBytes: expected?.bytes || null,
       expectedFiles: expected?.fileCount || null,
@@ -3042,6 +3195,7 @@ const spawnJobProcess = createProcessJobRunner({
     }
     appendLog(job, `Download verification passed: ${verification.modelFormat}; ${verification.expectedWeightFiles || verification.gguf || verification.safetensors} weight file(s).`);
     await runDownloadChecksumVerification(job);
+    await appendDownloadFitSummary(job);
   },
   closeHandlerErrorMode: "fail",
   onDone: (job) => {
@@ -3085,6 +3239,22 @@ const {
   drainDownloadQueue,
   healDownloadQueue,
 } = downloadJobController;
+// 下载完成后的显存粗评：权重体积 vs 本机显存，给「能不能直接加载」一个直观结论。
+async function appendDownloadFitSummary(job) {
+  try {
+    const bytes = Number(job.progress?.downloadedBytes || job.meta?.expectedBytes || 0);
+    if (!(bytes > 0)) return;
+    const gpu = await getGpuStatus().catch(() => null);
+    const totalMb = Number(gpu?.gpus?.[0]?.totalMb || gpu?.totalMb || 0);
+    const fit = core.fitFor(bytes, { gpuTotalMb: totalMb });
+    if (fit.status === "unknown") return;
+    appendLog(job, `显存粗评：权重约 ${formatBytes(bytes)}，GPU 显存 ${formatBytes(totalMb * 1024 * 1024)}；${fit.note}`);
+    job.meta = { ...(job.meta || {}), vramFit: { status: fit.status, ratio: fit.ratio, gpuTotalMb: totalMb, bytes } };
+  } catch {
+    // 粗评只是提示，失败不影响下载结果。
+  }
+}
+
 const runDownloadChecksumVerification = core.createDownloadChecksumRunner({
   appendLog,
   getSettings: () => downloadJobController.getDownloadSettings(),
@@ -3122,6 +3292,11 @@ async function downloadAuxCacheBytes() {
 function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
   const totalBytes = Number(expectedBytes || 0) || null;
   const stallTimeoutMs = Math.max(0, Number(process.env.MODEL_DOWNLOAD_STALL_TIMEOUT_MS ?? 5 * 60 * 1000));
+  // 持续低速时提示换源（hf-mirror / ModelScope 同源仓），只提示一次，不动进程。
+  const throughputAdvisor = core.createThroughputAdvisor({
+    minSampleMs: Number(process.env.MODEL_DOWNLOAD_SLOW_SAMPLE_MS || 180_000),
+    slowBytesPerSec: Number(process.env.MODEL_DOWNLOAD_SLOW_BYTES_PER_SEC || 1_000_000),
+  });
   const tracker = {
     baseBytes: null,
     lastBytes: 0,
@@ -3168,6 +3343,15 @@ function startProgressTracker(job, targetDir, expectedBytes, options = {}) {
         if (auxBytes !== null) tracker.lastAuxBytes = auxBytes;
       }
       tracker.lastRawBytes = rawDownloadedBytes;
+      const slowAdvice = job.pid ? throughputAdvisor.observe(rawDownloadedBytes, now) : null;
+      if (slowAdvice) {
+        appendLog(job, core.formatSlowDownloadHint(slowAdvice, {
+          source: job.meta?.source,
+          hfMirror: downloadJobController.getDownloadSettings().hfMirror,
+          modelScopeRepo: job.meta?.source === "huggingface" ? (core.suggestModelScopeRepo(job.meta?.model).candidates[0] || "") : "",
+          formatBytes,
+        }));
+      }
       if (stallTimeoutMs > 0 && job.pid && now - tracker.lastGrowthAt >= stallTimeoutMs) {
         appendLog(job, `下载进度已约 ${Math.max(1, Math.round((now - tracker.lastGrowthAt) / 60000))} 分钟无增长，终止下载进程；已下载文件保留，将按自动重试策略续传。`);
         job.cancel?.("stall");

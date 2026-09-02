@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-09-03",
+  "staleAfterDays": 120,
+  "notes": "Model capability matrix keyed by declared identity (config.json model_type / architectures, GGUF general.architecture). Name patterns are the last resort and are counted as heuristics. Entries are evaluated in order; the first match wins. confidence=verified means the combination was launched on this platform; documented means it follows the engine documentation but has not been exercised here.",
+  "entries": [
+    {
+      "id": "muse-glimmer",
+      "label": "Muse Glimmer",
+      "confidence": "verified",
+      "match": {
+        "modelTypes": ["muse_glimmer"],
+        "architecturePatterns": ["^museglimmer"],
+        "ggufArchitectures": ["muse-glimmer"],
+        "namePatterns": ["museglimmer"]
+      },
+      "vllm": {
+        "supported": false,
+        "unsupportedCode": "muse_glimmer",
+        "unsupportedReason": "Muse Glimmer has been retired from this local stack and is not a supported launch target."
+      },
+      "llama": {
+        "supported": false,
+        "unsupportedReason": "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。"
+      },
+      "download": { "level": "block", "reason": "Muse Glimmer 已从本地栈弃用，两个引擎都不会启动它。" },
+      "notes": ["Existing weights and the retired local image stay on disk for rollback only."]
+    },
+    {
+      "id": "nemotron-3-nano",
+      "label": "NVIDIA Nemotron 3 Nano",
+      "confidence": "verified",
+      "match": {
+        "namePatterns": ["nemotron[-_ ]?3[-_ ]?nano"],
+        "architecturePatterns": ["^nemotron.*nano", "^nemotronh"]
+      },
+      "vllm": {
+        "reasoningParser": "nano_v3",
+        "requiredPluginFile": "nano_v3_reasoning_parser.py",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": true,
+        "env": { "VLLM_USE_FLASHINFER_MOE_FP4": "1", "VLLM_FLASHINFER_MOE_BACKEND": "throughput" },
+        "speculative": { "auto": "mtp", "reason": "Nemotron 3 Nano ships MTP heads; auto mode uses them when the packaged tensors are present." }
+      },
+      "download": { "level": "warn", "reason": "需要把 nano_v3_reasoning_parser.py 放进模型目录（仓库通常自带），并开启 trust_remote_code。" },
+      "notes": ["Nemotron 3 Nano uses its checkpoint-specific reasoning parser plugin and qwen3_coder tool parser."]
+    },
+    {
+      "id": "qwen3.8-flash-next",
+      "label": "Qwen3.8 Flash-Next (Qwen4 preview)",
+      "confidence": "verified",
+      "match": {
+        "modelTypes": ["qwen4_exp"],
+        "architecturePatterns": ["^qwen4exp"],
+        "namePatterns": ["flash[-_. ]?next"]
+      },
+      "contextMax": 262144,
+      "vllm": {
+        "reasoningParser": "qwen3",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": true,
+        "speculative": { "auto": "off", "reason": "Flash-Next on SM120 is validated with NEXTN inside SGLang only; vLLM MTP stays off." }
+      },
+      "sglang": {
+        "image": "sglangFlashNext",
+        "imageRequiresQuant": "nvfp4|modelopt_fp4|fp4",
+        "kvCacheDtype": "auto",
+        "maxNumSeqs": 1,
+        "speculative": { "auto": "nextn", "reason": "NEXTN speculation with breakable CUDA graphs is the validated single-card path." }
+      },
+      "llama": { "supported": false, "unsupportedReason": "Flash-Next 尚无 GGUF 转换路径。" },
+      "download": { "level": "info", "reason": "只有 NVFP4 权重 + 本地 SGLang Flash-Next SM120 镜像被验证过；需要 96 GB 显存的 SM 12.0 GPU。" },
+      "requires": { "minimumComputeCapability": "12.0", "runtime": "sglangFlashNext" }
+    },
+    {
+      "id": "qwen3.8",
+      "label": "Qwen3.8",
+      "confidence": "verified",
+      "match": {
+        "modelTypes": ["qwen3_8", "qwen3_8_moe"],
+        "architecturePatterns": ["^qwen3_?8"],
+        "namePatterns": ["qwen3[._]?8(?![0-9])"]
+      },
+      "contextMax": 262144,
+      "vllm": {
+        "reasoningParser": "qwen3",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "speculative": { "auto": "mtp", "autoOffForQuant": "nvfp4|modelopt", "reason": "Qwen3.8 packages MTP tensors; auto MTP stays off on ModelOpt/NVFP4 checkpoints until acceptance is validated." }
+      },
+      "sglang": { "speculative": { "auto": "dspark", "reason": "DSpark draft on SGLang is the measured fast path for Qwen3.8-27B." } },
+      "llama": { "ggufArchitectures": ["qwen3_8", "qwen38"], "speculative": { "auto": "dflash", "reason": "Use the DFlash draft GGUF when it sits next to the main model." } }
+    },
+    {
+      "id": "qwen3.5-3.6",
+      "label": "Qwen3.5 / Qwen3.6",
+      "confidence": "verified",
+      "match": {
+        "modelTypes": ["qwen3_5", "qwen3_6", "qwen3_5_moe", "qwen3_6_moe"],
+        "architecturePatterns": ["^qwen3_?[56]"],
+        "namePatterns": ["qwen3[._]?[56](?![0-9])"]
+      },
+      "contextMax": 262144,
+      "vllm": {
+        "reasoningParser": "qwen3",
+        "toolCallParser": "qwen3_coder",
+        "toolCallParserByQuant": { "nvfp4|modelopt": "qwen3_xml" },
+        "enableAutoToolChoice": true,
+        "speculative": { "auto": "mtp", "autoOffForQuant": "nvfp4|modelopt", "reason": "Native MTP is used in auto mode when packaged tensors are found; ModelOpt/NVFP4 cards keep it off." }
+      },
+      "llama": { "speculative": { "auto": "dflash" } }
+    },
+    {
+      "id": "qwen3",
+      "label": "Qwen3 (classic)",
+      "confidence": "documented",
+      "match": {
+        "modelTypes": ["qwen3", "qwen3_moe", "qwen3_next"],
+        "architectures": ["Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "Qwen3NextForCausalLM"],
+        "ggufArchitectures": ["qwen3", "qwen3moe", "qwen3next"],
+        "namePatterns": ["qwen3(?![._]?[5-9])"]
+      },
+      "vllm": {
+        "reasoningParser": "qwen3",
+        "toolCallParser": "hermes",
+        "enableAutoToolChoice": true,
+        "speculative": { "auto": "off", "reason": "Qwen3 classic ships no MTP head; use ngram explicitly if needed." }
+      },
+      "llama": { "speculative": { "auto": "dflash" } }
+    },
+    {
+      "id": "qwen2.5",
+      "label": "Qwen2 / Qwen2.5",
+      "confidence": "documented",
+      "match": {
+        "modelTypes": ["qwen2", "qwen2_moe", "qwen2_vl", "qwen2_5_vl"],
+        "architectures": ["Qwen2ForCausalLM", "Qwen2MoeForCausalLM"],
+        "ggufArchitectures": ["qwen2", "qwen2moe", "qwen2vl"],
+        "namePatterns": ["qwen2(?:\\.5)?(?![0-9])"]
+      },
+      "vllm": { "toolCallParser": "hermes", "enableAutoToolChoice": true }
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek V2 / V3 / R1",
+      "confidence": "verified",
+      "match": {
+        "modelTypes": ["deepseek_v3", "deepseek_v2", "deepseek"],
+        "architecturePatterns": ["^deepseek"],
+        "ggufArchitectures": ["deepseek2", "deepseek"],
+        "namePatterns": ["deepseek"]
+      },
+      "vllm": {
+        "reasoningParser": "deepseek_r1",
+        "toolCallParser": "deepseek_v3",
+        "enableAutoToolChoice": true,
+        "speculative": { "auto": "mtp", "reason": "DeepSeek V3/R1 checkpoints package an MTP head." }
+      }
+    },
+    {
+      "id": "kimi-k2",
+      "label": "Moonshot Kimi K2",
+      "confidence": "documented",
+      "match": { "modelTypes": ["kimi_k2"], "namePatterns": ["kimi[-_ ]?k2"] },
+      "vllm": { "toolCallParser": "kimi_k2", "enableAutoToolChoice": true }
+    },
+    {
+      "id": "gemma4",
+      "label": "Gemma 4 / DiffusionGemma",
+      "confidence": "verified",
+      "match": {
+        "modelTypes": ["gemma4", "diffusiongemma"],
+        "architecturePatterns": ["^gemma4", "^diffusiongemma"],
+        "ggufArchitectures": ["gemma4"],
+        "namePatterns": ["gemma[_\\-.]?4", "diffusiongemma"]
+      },
+      "vllm": { "reasoningParser": "gemma4", "toolCallParser": "gemma4", "enableAutoToolChoice": true }
+    },
+    {
+      "id": "glm4.5",
+      "label": "GLM-4.5 / GLM-4.6 / GLM-4.7",
+      "confidence": "documented",
+      "match": {
+        "modelTypes": ["glm4_moe", "glm4v_moe", "glm4_moe_lite"],
+        "architectures": ["Glm4MoeForCausalLM", "Glm4vMoeForConditionalGeneration"],
+        "ggufArchitectures": ["glm4moe"],
+        "namePatterns": ["glm[-_]?4[.\\-]?[5-9]"]
+      },
+      "vllm": {
+        "reasoningParser": "glm45",
+        "toolCallParser": "glm45",
+        "enableAutoToolChoice": true,
+        "speculative": { "auto": "mtp", "reason": "GLM-4.5 family packages an MTP layer." }
+      }
+    },
+    {
+      "id": "gpt-oss",
+      "label": "OpenAI gpt-oss",
+      "confidence": "documented",
+      "match": {
+        "modelTypes": ["gpt_oss"],
+        "architectures": ["GptOssForCausalLM"],
+        "ggufArchitectures": ["gpt-oss", "gptoss"],
+        "namePatterns": ["gpt[-_]?oss"]
+      },
+      "vllm": { "reasoningParser": "openai_gptoss", "toolCallParser": "openai", "enableAutoToolChoice": true }
+    },
+    {
+      "id": "llama3",
+      "label": "Llama 3.x",
+      "confidence": "documented",
+      "match": {
+        "modelTypes": ["llama", "mllama"],
+        "architectures": ["LlamaForCausalLM", "MllamaForConditionalGeneration"],
+        "ggufArchitectures": ["llama"],
+        "namePatterns": ["llama[-_ ]?3"]
+      },
+      "vllm": { "toolCallParser": "llama3_json", "enableAutoToolChoice": true }
+    },
+    {
+      "id": "mistral",
+      "label": "Mistral / Mixtral",
+      "confidence": "documented",
+      "match": {
+        "modelTypes": ["mistral", "mixtral", "mistral3"],
+        "architectures": ["MistralForCausalLM", "MixtralForCausalLM", "Mistral3ForConditionalGeneration"],
+        "namePatterns": ["mistral", "mixtral"]
+      },
+      "vllm": { "toolCallParser": "mistral", "enableAutoToolChoice": true }
+    }
+  ]
+}

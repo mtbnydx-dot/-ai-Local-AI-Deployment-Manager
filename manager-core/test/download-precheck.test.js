@@ -1,0 +1,116 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+
+const { assessDownloadCompatibility } = require("../download-precheck");
+const { listGgufVariants, buildVariantDownloadPlan, quantTagOf } = require("../gguf-variants");
+
+const VLLM_RUNTIME = { version: "v0.28.0", bitsAndBytesPlugin: false, cudaVersion: "13.0.2", minimumBlackwellCudaVersion: "12.8" };
+const GPU = { computeCap: "12.0", totalMb: 97887 };
+
+test("BNB checkpoints are blocked for vLLM before any download job exists", () => {
+  const result = assessDownloadCompatibility({
+    engine: "vllm",
+    model: "unsloth/Qwen3-32B-bnb-4bit",
+    config: { model_type: "qwen3", architectures: ["Qwen3ForCausalLM"], quantization_config: { quant_method: "bitsandbytes" } },
+    siblings: [{ name: "config.json", size: 900 }, { name: "model-00001-of-00002.safetensors", size: 5e9 }],
+    runtime: VLLM_RUNTIME,
+    gpu: GPU,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.level, "block");
+  assert.ok(result.findings.some((item) => item.code === "bitsandbytes_plugin_missing"));
+  assert.equal(result.capability.id, "qwen3");
+  assert.equal(result.capability.matchedBy, "modelType");
+});
+
+test("a BNB repository is still blocked from the name when config.json is unavailable", () => {
+  const result = assessDownloadCompatibility({ engine: "vllm", model: "someone/Llama-3-8B-bnb-4bit", config: null, siblings: [], runtime: VLLM_RUNTIME });
+  assert.equal(result.level, "block");
+  assert.ok(result.findings.some((item) => item.code === "identity_unknown"));
+});
+
+test("llama.cpp refuses safetensors-only repositories and vLLM refuses sharded GGUF", () => {
+  const llama = assessDownloadCompatibility({
+    engine: "llama",
+    model: "Qwen/Qwen3-8B",
+    config: { model_type: "qwen3" },
+    siblings: [{ name: "model.safetensors", size: 1e9 }, { name: "config.json", size: 1 }],
+  });
+  assert.ok(llama.findings.some((item) => item.code === "llama_requires_gguf" && item.severity === "block"));
+
+  const sharded = assessDownloadCompatibility({
+    engine: "vllm",
+    model: "unsloth/Qwen3-235B-GGUF",
+    precision: "Q4_K_M",
+    config: null,
+    siblings: [
+      { name: "Q4_K_M/Qwen3-235B-Q4_K_M-00001-of-00003.gguf", size: 4e10 },
+      { name: "Q4_K_M/Qwen3-235B-Q4_K_M-00002-of-00003.gguf", size: 4e10 },
+      { name: "Q4_K_M/Qwen3-235B-Q4_K_M-00003-of-00003.gguf", size: 4e10 },
+    ],
+    runtime: VLLM_RUNTIME,
+  });
+  assert.ok(sharded.findings.some((item) => item.code === "vllm_gguf_sharded" && item.severity === "block"));
+
+  const single = assessDownloadCompatibility({
+    engine: "vllm",
+    model: "unsloth/Qwen3-8B-GGUF",
+    precision: "Q8_0",
+    config: null,
+    siblings: [{ name: "Qwen3-8B-Q8_0.gguf", size: 8e9 }, { name: "Qwen3-8B-Q4_K_M.gguf", size: 5e9 }],
+    runtime: VLLM_RUNTIME,
+  });
+  assert.equal(single.level, "warn");
+  assert.ok(single.findings.some((item) => item.code === "vllm_gguf_experimental"));
+});
+
+test("Flash-Next reports its special runtime and hardware floor; Muse is blocked by the matrix rule", () => {
+  const flashNext = assessDownloadCompatibility({
+    engine: "vllm",
+    model: "Qwen/Qwen3.8-Flash-Next-NVFP4",
+    config: { model_type: "qwen4_exp", quantization_config: { quant_method: "modelopt_fp4" } },
+    siblings: [{ name: "config.json", size: 1 }, { name: "model.safetensors", size: 8.5e10 }],
+    runtime: VLLM_RUNTIME,
+    gpu: GPU,
+    bytes: 8.5e10,
+  });
+  assert.equal(flashNext.ok, true);
+  assert.ok(flashNext.findings.some((item) => item.code === "trust_remote_code"));
+  assert.ok(flashNext.findings.some((item) => item.code === "vram_tight"));
+  const olderGpu = assessDownloadCompatibility({
+    engine: "vllm",
+    model: "Qwen/Qwen3.8-Flash-Next-NVFP4",
+    config: { model_type: "qwen4_exp" },
+    runtime: VLLM_RUNTIME,
+    gpu: { computeCap: "8.9", totalMb: 24000 },
+  });
+  assert.ok(olderGpu.findings.some((item) => item.code === "compute_capability" && item.severity === "block"));
+  const muse = assessDownloadCompatibility({ engine: "vllm", model: "x/muse", config: { model_type: "muse_glimmer" }, runtime: VLLM_RUNTIME });
+  assert.equal(muse.level, "block");
+});
+
+test("GGUF variants are grouped by quant with shard totals, companions and VRAM fit", () => {
+  const listing = listGgufVariants([
+    { rfilename: "Qwen3-30B-A3B-Q4_K_M.gguf", size: 18e9 },
+    { rfilename: "Qwen3-30B-A3B-Q8_0.gguf", size: 32e9 },
+    { rfilename: "BF16/Qwen3-30B-A3B-BF16-00001-of-00002.gguf", size: 30e9 },
+    { rfilename: "BF16/Qwen3-30B-A3B-BF16-00002-of-00002.gguf", size: 31e9 },
+    { rfilename: "mmproj-BF16.gguf", size: 1e9 },
+    { rfilename: "Qwen3-30B-A3B-dflash-Q8_0.gguf", size: 2e9 },
+    { rfilename: "README.md", size: 10 },
+  ], { gpuTotalMb: 24576 });
+  assert.deepEqual(listing.variants.map((item) => item.quant), ["Q4_K_M", "Q8_0", "BF16"]);
+  const bf16 = listing.variants.find((item) => item.quant === "BF16");
+  assert.equal(bf16.multiPart, true);
+  assert.equal(bf16.complete, true);
+  assert.equal(bf16.bytes, 61e9);
+  assert.equal(bf16.vllmLoadable, false);
+  assert.equal(listing.variants[0].fit.status, "tight");
+  assert.equal(bf16.fit.status, "exceeds");
+  assert.equal(listing.mmproj.length, 1);
+  assert.equal(listing.drafts.length, 1);
+  assert.equal(quantTagOf("model-IQ4_XS.gguf"), "IQ4_XS");
+  const plan = buildVariantDownloadPlan("unsloth/Qwen3-30B-A3B-GGUF", listing.variants[0], { includeMmproj: true, includeDraft: true });
+  assert.equal(plan.model, "unsloth/Qwen3-30B-A3B-GGUF:Q4_K_M");
+  assert.ok(plan.includeExtras.includes("*mmproj*.gguf"));
+});

@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const capabilityMatrix = require("../../manager-core/model-capability-matrix");
 
 const SPECULATIVE_MODES = new Set(["off", "auto", "mtp", "qwen3_next_mtp", "ngram", "dspark"]);
 
@@ -202,12 +203,29 @@ function resolveVllmModelCapabilities(options = {}) {
     quantization: options.quantization,
     localPath: options.localPath,
   });
+  const capability = capabilityMatrix.resolveModelCapabilityEntry({
+    model,
+    config,
+    ggufArchitecture: options.ggufArchitecture,
+    onNameHeuristic: options.onNameHeuristic,
+  });
+  const engineCapabilities = capability.entry
+    ? capabilityMatrix.resolveEngineCapabilities(capability.entry, "vllm", { quantMethod, model })
+    : null;
   const result = {
     architecture,
     modelType,
     quantMethod,
     nativeMtp,
     speculativeConfig,
+    speculativeDecision: null,
+    capabilityEntry: {
+      id: capability.id,
+      label: capability.label,
+      matchedBy: capability.matchedBy,
+      heuristic: capability.heuristic,
+      confidence: capability.confidence,
+    },
     reasoningParser: "",
     reasoningParserPlugin: "",
     toolCallParser: "",
@@ -228,6 +246,27 @@ function resolveVllmModelCapabilities(options = {}) {
     result.unsupportedCode = "muse_glimmer";
     result.unsupportedReason = `Muse Glimmer has been retired from this local stack and is not a supported launch target (${runtimeDescription}${transformersVersion ? `; checkpoint Transformers ${transformersVersion}` : ""}). Choose another model; VLLM_ALLOW_MUSE_GLIMMER no longer bypasses this policy.`;
     result.notes.push("Muse Glimmer remains blocked before container creation; no model or image data is deleted by this policy.");
+  } else if (engineCapabilities) {
+    // Matrix entry: parsers, plugins and environment come from data. The legacy
+    // name branches below only run for checkpoints the matrix does not know.
+    if (engineCapabilities.reasoningParser) result.reasoningParser = engineCapabilities.reasoningParser;
+    if (engineCapabilities.toolCallParser) result.toolCallParser = engineCapabilities.toolCallParser;
+    if (engineCapabilities.enableAutoToolChoice) result.enableAutoToolChoice = true;
+    if (engineCapabilities.forceTrustRemoteCode) result.forceTrustRemoteCode = true;
+    if (engineCapabilities.env && typeof engineCapabilities.env === "object") result.env = { ...engineCapabilities.env };
+    if (engineCapabilities.requiredPluginFile) {
+      const plugin = findLocalCapabilityFile(options.localPath, engineCapabilities.requiredPluginFile);
+      if (plugin) result.reasoningParserPlugin = plugin;
+      else result.unsupportedReason = `${capability.label} requires ${engineCapabilities.requiredPluginFile} in the local model directory.`;
+    }
+    if (engineCapabilities.supported === false) {
+      result.unsupportedCode = engineCapabilities.unsupportedCode || "unsupported_model";
+      result.unsupportedReason = engineCapabilities.unsupportedReason || `${capability.label} is not supported by the vLLM runtime.`;
+    }
+    for (const note of Array.isArray(capability.entry.notes) ? capability.entry.notes : []) result.notes.push(note);
+    if (capability.heuristic) {
+      result.notes.push(`Capability entry "${capability.label}" was matched by model name only; add config.json to the model directory for a declared identity.`);
+    }
   } else if (/nemotron[-_ ]?3[-_ ]?nano/.test(text)) {
     result.reasoningParser = "nano_v3";
     result.toolCallParser = "qwen3_coder";
@@ -262,15 +301,40 @@ function resolveVllmModelCapabilities(options = {}) {
     result.notes.push("vLLM 0.28 moved BitsAndBytes loading to the out-of-tree vllm-bnb-plugin package.");
   }
 
+  const requestedSpeculativeMode = normalizeSpeculativeMode(options.speculativeMode);
   if (speculativeConfig) {
     result.notes.push(`Speculative decoding enabled with ${speculativeConfig.method} and ${speculativeConfig.num_speculative_tokens} draft tokens.`);
-  } else if (normalizeSpeculativeMode(options.speculativeMode) === "auto") {
+    result.speculativeDecision = {
+      requested: requestedSpeculativeMode,
+      method: speculativeConfig.method,
+      tokens: speculativeConfig.num_speculative_tokens,
+      reason: requestedSpeculativeMode === "auto"
+        ? `Auto mode: ${nativeMtp.tensorCount ? `${nativeMtp.tensorCount} packaged MTP tensors were found` : "the checkpoint declares native MTP"}${engineCapabilities?.speculative?.reason ? `; ${engineCapabilities.speculative.reason}` : ""}`
+        : `Explicitly requested ${requestedSpeculativeMode}; validate acceptance rate and throughput on this checkpoint.`,
+    };
+  } else if (requestedSpeculativeMode === "auto") {
     const isModelOptNvfp4 = /modelopt|nvfp4/.test(`${quantMethod} ${model}`.toLowerCase());
+    let reason;
     if (nativeMtp.supported && /qwen3_(?:5|6|8)|qwen3\.(?:5|6|8)/.test(text) && isModelOptNvfp4) {
-      result.notes.push("Automatic MTP stays off for Qwen ModelOpt/NVFP4 checkpoints; use explicit MTP only after validating startup and acceptance rate on this exact checkpoint/runtime.");
+      reason = "Automatic MTP stays off for Qwen ModelOpt/NVFP4 checkpoints; use explicit MTP only after validating startup and acceptance rate on this exact checkpoint/runtime.";
+    } else if (engineCapabilities?.speculative?.auto === "off" && engineCapabilities.speculative.reason) {
+      reason = engineCapabilities.speculative.reason;
     } else {
-      result.notes.push("Speculative decoding stays off because this checkpoint does not declare native MTP support.");
+      reason = "Speculative decoding stays off because this checkpoint does not declare native MTP support.";
     }
+    result.notes.push(reason);
+    result.speculativeDecision = { requested: "auto", method: "off", tokens: 0, reason };
+  } else if (requestedSpeculativeMode === "dspark") {
+    result.speculativeDecision = { requested: "dspark", method: "dspark", tokens: 0, reason: "DSpark draft model runs inside SGLang; vLLM does not receive a speculative config." };
+  } else {
+    result.speculativeDecision = {
+      requested: requestedSpeculativeMode,
+      method: "off",
+      tokens: 0,
+      reason: requestedSpeculativeMode === "off"
+        ? "Speculative decoding is off in this profile."
+        : `${requestedSpeculativeMode} was requested but this checkpoint has no usable draft head, so it stays off.`,
+    };
   }
   return result;
 }

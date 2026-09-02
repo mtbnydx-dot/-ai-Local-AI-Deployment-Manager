@@ -26,6 +26,7 @@ function registerJobRoutes(app, deps = {}) {
     cancelDownloadJob,
     pauseDownloadJob,
     resumeDownloadJob,
+    inspectDownloadResume,
     cancelNonDownloadJob,
     notFoundText = DEFAULT_NOT_FOUND,
     messages = {},
@@ -87,6 +88,22 @@ function registerJobRoutes(app, deps = {}) {
       return sendError(res, 500, error.message);
     }
   });
+
+  // Read-only "health check" the UI shows before resuming: complete / partial /
+  // missing manifest files, bytes left, disk headroom.
+  if (inspectDownloadResume) {
+    app.get("/api/jobs/:id/resume-check", async (req, res) => {
+      await beforeReadJobs();
+      const job = getJob(req.params.id);
+      if (!job) return sendError(res, 404, notFoundText);
+      if (job.type !== "download") return sendError(res, 400, resumeDownloadOnly);
+      try {
+        return res.json({ ok: true, id: job.id, status: job.status, ...(await inspectDownloadResume(job)) });
+      } catch (error) {
+        return sendError(res, 500, error.message);
+      }
+    });
+  }
 
   app.post("/api/jobs/:id/resume", async (req, res) => {
     const job = getJob(req.params.id);

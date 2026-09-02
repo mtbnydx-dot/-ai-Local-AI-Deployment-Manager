@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-09-03",
+  "staleAfterDays": 90,
+  "notes": "Pinned inference runtimes for this platform. vllm-manager and llama-manager read this file instead of hard-coded constants; a copy under <AI_ROOT>/config/runtime-manifest.json overrides individual runtimes. Local builds record their build context so the image can be rebuilt with scripts/rebuild-sglang-flashnext.ps1.",
+  "runtimes": {
+    "vllm": {
+      "label": "vLLM OpenAI server",
+      "version": "v0.28.0",
+      "repository": "vllm/vllm-openai",
+      "manifestDigest": "sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14",
+      "platformDigest": "sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
+      "platform": "linux/amd64",
+      "cudaVersion": "13.0.2",
+      "torchVersion": "2.13.0",
+      "transformersVersion": "5.15.1",
+      "bitsAndBytesPlugin": false,
+      "minimumComputeCapability": "7.5",
+      "minimumBlackwellCudaVersion": "12.8",
+      "minimumDriverVersions": { "win32": "580.88", "linux": "580.65.06" },
+      "notes": [
+        "BitsAndBytes loading moved to the out-of-tree vllm-bnb-plugin; this image does not bundle it, so BNB checkpoints are blocked before download and launch.",
+        "Muse Glimmer has been retired from the local stack."
+      ]
+    },
+    "sglang": {
+      "label": "SGLang runtime",
+      "version": "0.5.17",
+      "repository": "lmsysorg/sglang",
+      "manifestDigest": "",
+      "platformDigest": "sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df",
+      "platform": "linux/amd64",
+      "cudaVersion": "13.0",
+      "torchVersion": "2.11.0",
+      "transformersVersion": "5.12.1",
+      "minimumComputeCapability": "7.5",
+      "minimumBlackwellCudaVersion": "12.8",
+      "minimumDriverVersions": { "win32": "580.88", "linux": "580.65.06" }
+    },
+    "sglangFlashNext": {
+      "label": "SGLang Qwen3.8 Flash-Next SM120 (local build)",
+      "localBuild": true,
+      "image": "local/sglang:qwen38flashnext-sm120-dac5523d",
+      "version": "qwen38flashnext-sm120-dac5523d",
+      "baseRuntime": "sglang",
+      "baseImage": "docker.io/lmsysorg/sglang@sha256:59f06adce6f91401adf443bd168d45fdb2044d77671fd591c7c57a29d851cbae",
+      "platform": "linux/amd64",
+      "cudaVersion": "13.0",
+      "torchVersion": "2.11.0",
+      "transformersVersion": "5.12.1",
+      "minimumComputeCapability": "12.0",
+      "patch": {
+        "pr": "sgl-project/sglang#36556",
+        "commit": "dac5523d1e5d2f4297fec40ef02fc76fb0f662d1",
+        "scope": "SM120/SM121 QSA TRTLLM sparse decode plus architecture-owned FA4 fallback",
+        "files": ["python/sglang/srt/layers/attention/qwen_sparse_attn_backend.py"],
+        "fileSha256": "95a3f14e39961410337527c5803a2ce5aae8f1ff6099f25fce1f91e6cf6b99f4"
+      },
+      "build": {
+        "context": "artifacts/build-sources/sglang-qwen38-sm120-dac5523d",
+        "dockerfile": "Dockerfile",
+        "script": "scripts/rebuild-sglang-flashnext.ps1",
+        "network": "none"
+      },
+      "notes": [
+        "Only image validated for Qwen3.8 Flash-Next NVFP4 on RTX PRO 6000 Blackwell; keep BF16 KV cache (kv-cache-dtype auto).",
+        "Rebuild before upgrading SGLang: the base image digest and the patched attention backend are both pinned in this entry."
+      ]
+    },
+    "sglangFlashNextNvme": {
+      "label": "SGLang Flash-Next NVMe PLE (experimental local build)",
+      "localBuild": true,
+      "experimental": true,
+      "image": "sglang-flashnext-sm120:local",
+      "version": "flashnext-nvme-ple-20260831",
+      "baseRuntime": "sglang",
+      "baseImage": "lmsysorg/sglang:qwen38flashnext",
+      "platform": "linux/amd64",
+      "minimumComputeCapability": "12.0",
+      "build": {
+        "context": "artifacts/build-sources/qwen38-flashnext-rtx6000-20260831",
+        "dockerfile": "Dockerfile",
+        "script": "artifacts/build-sources/qwen38-flashnext-rtx6000-20260831/build.sh",
+        "network": "host-fetch-then-offline"
+      },
+      "notes": [
+        "Streams the 51B PLE table from NVMe via io_uring; needs the seccomp profile shipped next to the Dockerfile. Not wired into the manager yet."
+      ]
+    },
+    "llama": {
+      "label": "llama.cpp server (CUDA)",
+      "version": "b10630",
+      "build": 10630,
+      "image": "ghcr.io/ggml-org/llama.cpp@sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3",
+      "repository": "ghcr.io/ggml-org/llama.cpp",
+      "platformDigest": "sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3",
+      "platform": "linux/amd64",
+      "minimumComputeCapability": "6.1",
+      "minimumDriverVersions": { "win32": "580.88", "linux": "580.65.06" },
+      "notes": [
+        "b10630 exposes reasoning-effort and mmproj-device controls; older images ignore them."
+      ]
+    },
+    "llamaMuse": {
+      "label": "llama.cpp Muse Glimmer (retired local build)",
+      "localBuild": true,
+      "retired": true,
+      "image": "local/llama.cpp:server-cuda-muse-62bf73d",
+      "version": "muse-62bf73d",
+      "revision": "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0",
+      "build": {
+        "context": "artifacts/build-sources/llama.cpp-muse-62bf73d",
+        "dockerfile": "",
+        "script": ""
+      },
+      "notes": ["Kept only for rollback; Muse Glimmer launches are blocked."]
+    }
+  }
+}

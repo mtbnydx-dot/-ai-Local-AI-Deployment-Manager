@@ -330,11 +330,33 @@ function createLlamaRemoteModelService({
       bytes: bytes || null,
       fileCount: siblings.length,
       fileManifest,
+      // Full file list (name + size) for the pre-download check and the GGUF
+      // variant picker; capped so a huge repository cannot bloat the response.
+      siblings: (Array.isArray(data.siblings) ? data.siblings : [])
+        .map((file) => ({ name: String(file.rfilename || "").trim(), size: Number(file.size || file.lfs?.size || 0) || 0 }))
+        .filter((file) => file.name)
+        .slice(0, 2000),
       includePatterns: selected.includePatterns,
       filtered: selected.filtered,
       matchedFiles: selected.matched,
       totalFiles: selected.total,
+      gated: Boolean(data.gated),
     };
+  }
+
+  async function listHuggingFaceRepositories(search, limit = 60) {
+    const term = String(search || "").trim();
+    if (!term) return [];
+    const params = new URLSearchParams({ search: term, limit: String(Math.min(100, Math.max(10, Number(limit) || 60))), full: "true" });
+    const data = await remoteSearchCache.get(`repos:${term}:${limit}:${Boolean(getHfToken())}`, () => fetchJson(`https://huggingface.co/api/models?${params}`));
+    return (Array.isArray(data) ? data : []).map((model) => simplifyHuggingFaceModel(model));
+  }
+
+  async function fetchRemoteModelConfig(modelId, source = "huggingface") {
+    return remoteInfoCache.get(
+      `config:${source}:${modelId}:${Boolean(getHfToken())}`,
+      () => core.fetchRemoteModelConfig({ fetchImpl: remoteFetch, source, model: modelId, token: getHfToken() }),
+    );
   }
 
   function simplifyHuggingFaceModel(model) {
@@ -414,6 +436,8 @@ function createLlamaRemoteModelService({
     simplifyModelScopeModel,
     getHuggingFaceModelInfo,
     getHuggingFaceDownloadEstimate,
+    listHuggingFaceRepositories,
+    fetchRemoteModelConfig,
     isRemoteModelCandidate,
     rankAndLimitRemoteModels,
   };
