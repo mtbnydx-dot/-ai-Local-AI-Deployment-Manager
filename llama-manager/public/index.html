@@ -6,7 +6,7 @@
     <title>llama.cpp Manager</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css?v=20260822-ui-round5" />
-    <link rel="stylesheet" href="/shared-js/manager-base.css?v=20260822-ui-round5" />
+    <link rel="stylesheet" href="/shared-js/manager-base.css?v=20260903-phase2" />
   </head>
   <body>
     <div class="app-shell">
@@ -696,6 +696,9 @@
                 <i data-lucide="hard-drive"></i>
                 <span id="downloadEstimateText">填入模型 ID 后会预估下载体积。</span>
               </div>
+              <div class="download-precheck" id="downloadPrecheck" data-state="loading" hidden></div>
+              <div class="gguf-variant-picker" id="ggufVariantPicker" hidden></div>
+              <div class="precision-variants" id="precisionVariants" hidden></div>
               <div class="download-plan-preview" id="downloadPlanPreview"></div>
               <button class="primary-button" type="submit"><i data-lucide="download"></i><span>开始下载</span></button>
             </form>
@@ -1141,8 +1144,9 @@
     <script src="/shared-js/access-log-browser.js?v=20260716-log-search" defer></script>
     <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
     <script src="/shared-js/connection-status.js?v=20260804-connection-status" defer></script>
-    <script src="/shared-js/ui-architecture.js?v=20260822-ui-round5" defer></script>
-    <script src="/app.js?v=20260822-ui-round5" defer></script>
+    <script src="/shared-js/ui-architecture.js?v=20260902-improvement" defer></script>
+    <script src="/shared-js/download-compat-renderer.js?v=20260903-phase2" defer></script>
+    <script src="/app.js?v=20260903-phase2" defer></script>
     <script src="/shared-js/lucide.min.js?v=20260811-46-icons" defer onload="window.renderIcons && window.renderIcons()"></script>
   </body>
 </html>

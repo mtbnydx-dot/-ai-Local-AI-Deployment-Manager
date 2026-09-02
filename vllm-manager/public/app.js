@@ -5,7 +5,10 @@ function getStoredThemePreference() {
   return localStorage.getItem(THEME_STORAGE_KEY) || localStorage.getItem(LEGACY_THEME_STORAGE_KEY) || "auto";
 }
 
+const DOWNLOAD_COMPAT_ENGINE = "vllm";
 const state = {
+  downloadPrecheck: null,
+  downloadIncludeExtras: [],
   config: null,
   models: { local: [], cached: [] },
   status: null,
@@ -770,6 +773,125 @@ async function confirmVllmLaunch(payload) {
   });
 }
 
+// ---- 按硬件门控：单卡机器隐藏多卡选项，插入第二张卡后自动恢复 ----
+function applySingleGpuGating(gpuCount) {
+  const single = gpuCount === 1;
+  const targets = [
+    $("#multiGpuMode")?.closest("label"),
+    $("[name='distributedExecutorBackend']")?.closest("label"),
+    document.querySelector(".parallel-size-grid"),
+    $("[name='enableExpertParallel']")?.closest("label"),
+    $("#multiGpuModeGuide"),
+  ];
+  for (const node of targets) if (node) node.hidden = single;
+  const note = $("#parallelHintNote");
+  if (!note) return;
+  if (single) {
+    if (!note.dataset.fullText) note.dataset.fullText = note.textContent;
+    note.textContent = "检测到 1 张 GPU：Tensor / Pipeline / Data Parallel 选项已隐藏，插入第二张卡后会自动恢复。";
+  } else if (note.dataset.fullText) {
+    note.textContent = note.dataset.fullText;
+  }
+}
+
+// ---- 下载前兼容预检 / GGUF 变体 / 同模型精度仓 ----
+let downloadCompatSeq = 0;
+
+function clearDownloadCompatibility() {
+  downloadCompatSeq += 1;
+  state.downloadPrecheck = null;
+  state.downloadIncludeExtras = [];
+  for (const selector of ["#downloadPrecheck", "#ggufVariantPicker", "#precisionVariants"]) {
+    const node = $(selector);
+    if (!node) continue;
+    node.hidden = true;
+    node.innerHTML = "";
+  }
+}
+
+async function refreshDownloadCompatibility({ model, source, precision }) {
+  const renderer = window.downloadCompatRenderer;
+  if (!renderer || !model || !model.includes("/")) return;
+  const seq = ++downloadCompatSeq;
+  state.downloadIncludeExtras = [];
+  const params = new URLSearchParams({ model, source, precision: precision || "" });
+  const precheckRoot = $("#downloadPrecheck");
+  if (precheckRoot) {
+    precheckRoot.hidden = false;
+    precheckRoot.dataset.state = "loading";
+    precheckRoot.innerHTML = "<div class=\"precheck-head\"><span>正在做下载前兼容预检...</span></div>";
+  }
+  const isHf = source === "huggingface";
+  const [precheck, variants, precisionVariants] = await Promise.all([
+    api(`/api/download/precheck?${params}`).catch((error) => ({ error: error.message })),
+    isHf ? api(`/api/remote-models/gguf-variants?${params}`).catch(() => null) : Promise.resolve(null),
+    isHf ? api(`/api/remote-models/precision-variants?${params}`).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (seq !== downloadCompatSeq) return;
+  state.downloadPrecheck = precheck && !precheck.error ? { ...precheck, model } : null;
+  renderer.renderPrecheck(precheckRoot, precheck, { escapeHtml });
+  renderer.renderGgufVariants($("#ggufVariantPicker"), variants, {
+    engine: DOWNLOAD_COMPAT_ENGINE,
+    selectedQuant: String(precision || "").toUpperCase(),
+    fmtBytes,
+    escapeHtml,
+    escapeAttr,
+  });
+  renderer.renderPrecisionVariants($("#precisionVariants"), precisionVariants, { engine: DOWNLOAD_COMPAT_ENGINE, escapeHtml, escapeAttr });
+  updateDownloadSubmitState();
+  renderIcons();
+}
+
+function updateDownloadSubmitState() {
+  const button = $("#downloadForm")?.querySelector("button[type='submit']");
+  if (!button) return;
+  const blocked = state.downloadPrecheck?.level === "block"
+    && state.downloadPrecheck.model === ($("#downloadModel")?.value.trim() || "");
+  button.disabled = blocked;
+  button.title = blocked ? "下载前预检已阻断：当前运行时无法启动这个仓库" : "";
+}
+
+function isDownloadBlockedByPrecheck(model) {
+  const precheck = state.downloadPrecheck;
+  if (!precheck || precheck.model !== model || precheck.level !== "block") return false;
+  const reason = (precheck.findings || []).find((item) => item.severity === "block");
+  notify("下载已被预检阻断", reason ? `${reason.title}：${reason.detail}` : "当前运行时无法启动这个仓库。", "warn");
+  return true;
+}
+
+function bindDownloadCompatibilityControls() {
+  $("#ggufVariantPicker")?.addEventListener("change", (event) => {
+    const picker = $("#ggufVariantPicker");
+    const radio = event.target.closest("input[name='ggufVariant']");
+    if (radio) {
+      const select = $("#downloadPrecision");
+      if (select) {
+        if (!Array.from(select.options).some((option) => option.value === radio.value)) {
+          const option = document.createElement("option");
+          option.value = radio.value;
+          option.textContent = radio.value;
+          select.appendChild(option);
+        }
+        select.value = radio.value;
+      }
+      picker.querySelectorAll(".variant-row").forEach((row) => row.classList.toggle("is-selected", row.contains(radio)));
+    }
+    state.downloadIncludeExtras = Array.from(picker.querySelectorAll("input[name='ggufExtra']:checked"))
+      .flatMap((node) => node.value.split(","));
+    if (radio) scheduleDownloadEstimate();
+  });
+  $("#precisionVariants")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-variant-repo]");
+    if (!button) return;
+    if ($("#downloadSource")) $("#downloadSource").value = "huggingface";
+    const input = $("#downloadModel");
+    input.value = button.dataset.variantRepo;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    scheduleDownloadEstimate();
+  });
+  $("#downloadModel")?.addEventListener("input", updateDownloadSubmitState);
+}
+
 function updateLaunchOptionStates() {
   const speculativeMode = $("#speculativeMode")?.value || "off";
   const runtimeEngine = $("#runtimeEngine")?.value || "vllm";
@@ -832,6 +954,7 @@ function updateLaunchOptionStates() {
   if (toolParser) toolParser.disabled = !autoTools;
 
   const gpuCount = getVisibleGpus().length;
+  applySingleGpuGating(gpuCount);
   const multiGpuMode = $("#multiGpuMode");
   if (multiGpuMode) {
     Array.from(multiGpuMode.options).forEach((option) => {
@@ -1206,6 +1329,7 @@ function bindEvents() {
   $("#hfAuthLoginBtn")?.addEventListener("click", startHfLogin);
   $("#hfAuthRefreshBtn")?.addEventListener("click", () => refreshHfAuthStatus().catch(() => {}));
   $("#hfAccessRecheckBtn")?.addEventListener("click", recheckHfAccessAndContinue);
+  bindDownloadCompatibilityControls();
   $("#downloadQuantFinder")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-quant-search]");
     if (!button) return;
@@ -1660,6 +1784,7 @@ async function requestDownloadEstimate() {
     box.hidden = true;
     renderHfGatedAccess({ gated: false });
     updateDownloadPlanPreview();
+    clearDownloadCompatibility();
     return;
   }
   if (source !== "huggingface") {
@@ -1668,6 +1793,7 @@ async function requestDownloadEstimate() {
     textEl.textContent = "ModelScope 暂不支持下载体积预估，下载时会显示实际进度。";
     renderHfGatedAccess({ gated: false });
     updateDownloadPlanPreview();
+    refreshDownloadCompatibility({ model, source, precision });
     return;
   }
   const seq = ++downloadEstimateSeq;
@@ -1680,6 +1806,7 @@ async function requestDownloadEstimate() {
     if (seq !== downloadEstimateSeq) return; // 已有更新的请求，丢弃过期结果
     updateDownloadPlanPreview(result);
     renderHfGatedAccess(result);
+    refreshDownloadCompatibility({ model, source, precision });
     const diskText = result.diskFreeBytes ? `模型盘剩余 ${fmtBytes(result.diskFreeBytes)}` : "";
     if (result.bytes) {
       const free = Number(result.diskFreeBytes || 0);
@@ -3914,6 +4041,13 @@ function handleRecentLaunchAction(event) {
 async function buildResumePreflightSummary(job) {
   const meta = job.meta || {};
   if (!meta.localDir && !meta.outputName) return null;
+  // 新接口按清单逐文件分类（完整 / 部分 / 缺失、剩余体积、磁盘余量）；老服务没有该接口时退回 verify 流程。
+  try {
+    const check = await api(`/api/jobs/${encodeURIComponent(job.id)}/resume-check`);
+    if (check?.ok && window.downloadCompatRenderer) return window.downloadCompatRenderer.renderResumeCheck(check, { fmtBytes, escapeHtml });
+  } catch (error) {
+    if (error?.status && error.status !== 404) throw error;
+  }
   const verify = await api("/api/download/verify", {
     method: "POST",
     body: JSON.stringify({ outputName: meta.outputName, localDir: meta.localDir }),
@@ -4040,11 +4174,16 @@ async function probeDownloadMirror(event) {
     const useMirror = result.recommended === "mirror";
     if ($("#downloadHfMirror")) $("#downloadHfMirror").checked = useMirror;
     await saveDownloadQueueMode();
-    notify(
-      `已选择 ${result.recommendedLabel}`,
-      `官方 ${fmtProbe(result.official)} · 镜像 ${fmtProbe(result.mirror)}`,
-      "success",
-    );
+    const summary = `官方 ${fmtProbe(result.official)} · 镜像 ${fmtProbe(result.mirror)} · ModelScope ${fmtProbe(result.modelscope)}`;
+    // ModelScope 明显更快且找到了同源仓：直接把来源和仓库切过去，估算会随之刷新。
+    if (result.recommended === "modelscope" && result.modelScopeRepo && model.includes("/") && $("#downloadSource") && $("#downloadModel")) {
+      $("#downloadSource").value = "modelscope";
+      $("#downloadModel").value = result.modelScopeRepo;
+      scheduleDownloadEstimate();
+      notify("ModelScope 更快，已切换下载来源", `${summary}；仓库 ${result.modelScopeRepo}`, "success");
+    } else {
+      notify(`已选择 ${result.recommendedLabel}`, summary, "success");
+    }
   } catch (error) {
     reportActionError("镜像测速失败", error);
   } finally {
@@ -5049,12 +5188,14 @@ async function downloadModel(event) {
       notify("没有可下载的模型 ID", "请选择预设、粘贴模型链接，或手动填写模型 ID。", "info");
       return;
     }
+    if (isDownloadBlockedByPrecheck(model)) return;
     const estimate = state.downloadEstimate || {};
     const payload = {
       model,
       outputName,
       source,
       precision,
+      ...(state.downloadIncludeExtras?.length ? { includeExtras: state.downloadIncludeExtras } : {}),
       ...(hfToken ? { hfToken } : {}),
       ...(Number(estimate.bytes || estimate.expectedBytes || 0) > 0 ? {
         expectedBytes: Number(estimate.bytes || estimate.expectedBytes),

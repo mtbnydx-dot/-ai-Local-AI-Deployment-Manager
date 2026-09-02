@@ -1641,6 +1641,14 @@ async function checkModelCompatibility(input = {}) {
     ? normalizeSpeculativeMode(input.speculativeMode, "off")
     : "off";
   recommendations.numSpeculativeTokens = capabilities.speculativeConfig?.num_speculative_tokens || 1;
+  if (capabilities.capabilityEntry?.id) {
+    findings.push(finding(capabilities.capabilityEntry.heuristic ? "warn" : "ok", "能力矩阵", capabilities.capabilityEntry.heuristic
+      ? `${capabilities.capabilityEntry.label} 只按名称推断（模型目录缺 config.json 或架构未声明）；parser / 推测解码取自矩阵默认值。`
+      : `${capabilities.capabilityEntry.label}（按 ${capabilities.capabilityEntry.matchedBy === "gguf" ? "GGUF 架构" : "config.json 声明"} 识别，置信度 ${capabilities.capabilityEntry.confidence}）。`));
+  }
+  if (capabilities.speculativeDecision) {
+    findings.push(finding("ok", "推测解码决策", `${capabilities.speculativeDecision.method === "off" ? "关闭" : `${capabilities.speculativeDecision.method} × ${capabilities.speculativeDecision.tokens}`}：${capabilities.speculativeDecision.reason}`));
+  }
   if (capabilities.reasoningParser) recommendations.reasoningParser = capabilities.reasoningParser;
   if (capabilities.toolCallParser) recommendations.toolCallParser = capabilities.toolCallParser;
   if (capabilities.enableAutoToolChoice) recommendations.enableAutoToolChoice = true;
@@ -2870,8 +2878,11 @@ function summarizeModelConfigCapabilities(raw, model, localPath = "", quantizati
       nativeMtpLayers: Number(capabilities.nativeMtp?.layers || 0),
       nativeMtpTensorCount: Number(capabilities.nativeMtp?.tensorCount || 0),
       nativeMtpEvidence: String(capabilities.nativeMtp?.evidence || ""),
-      reason: capabilities.notes.find((note) => /MTP|Speculative decoding/i.test(note)) || "",
+      reason: capabilities.speculativeDecision?.reason
+        || capabilities.notes.find((note) => /MTP|Speculative decoding/i.test(note))
+        || "",
     },
+    capabilityEntry: capabilities.capabilityEntry || null,
     recommendedReasoningParser: capabilities.reasoningParser || "",
     recommendedToolCallParser: capabilities.toolCallParser || "",
   };
