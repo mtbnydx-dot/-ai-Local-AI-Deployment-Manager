@@ -13,6 +13,7 @@ const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
 const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService } = require("./lib/remote-models");
+const { createHfAuthService } = require("./lib/hf-auth");
 const {
   DEFAULT_SGLANG_RELEASE,
   DEFAULT_VLLM_RELEASE,
@@ -216,6 +217,10 @@ const gpuAdmissionController = core.createGpuAdmissionController({
 });
 
 const remoteModelService = createVllmRemoteModelService();
+const hfAuthService = createHfAuthService({
+  hfCli: CONFIG.hfCli,
+  hfHome: CONFIG.hfCache,
+});
 const modelFilesystemStore = core.createModelFilesystemStore({
   modelsRoot: CONFIG.modelsRoot,
   hfCache: CONFIG.hfCache,
@@ -635,6 +640,7 @@ core.registerManagerRoutes(app, {
   engine: "vllm",
   jobs,
   getLanAddress,
+  hasHfToken: () => Boolean(process.env.HF_TOKEN || hfAuthService.hasCachedToken()),
   getConfigExtras: () => ({
     defaultVllmImage: CONFIG.image,
     defaultVllmImagePinned: isPinnedImageReference(CONFIG.image),
@@ -758,6 +764,10 @@ core.registerModelRoutes(app, {
   searchRemoteModels: remoteModelService.searchRemoteModelCatalog,
   startDownload: startDownloadRequest,
   estimateDownload: estimateDownloadRequest,
+  getHfAuthStatus: () => hfAuthService.getStatus(),
+  launchHfLogin: () => hfAuthService.launchLogin(),
+  checkHfAccess: checkHfAccessRequest,
+  isLocalRequest,
   getModelConfig: getModelConfigRequest,
   getModelReadme: getModelReadmeRequest,
   checkPort: checkPortRequest,
@@ -862,24 +872,37 @@ async function startDownloadRequest(body = {}) {
   const precision = reference.precision;
   const outputName = safeOutputName(body.outputName || model.replace(/[\\/]/g, "__"));
   const localDir = path.join(CONFIG.modelsRoot, outputName);
-  await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache, localDir);
+  await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache);
+
+  const repository = source === "huggingface"
+    ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision)
+    : null;
+  if (repository?.gated) {
+    const access = await hfAuthService.checkRepoAccess(model, {
+      token: body.hfToken,
+      probeFile: repository.probeFile,
+    });
+    if (!access.granted) throw createHfAccessError(model, access.status, repository.authorizationUrl);
+  }
 
   const downloadSettings = downloadJobController.getDownloadSettings();
+  const forceOfficialHf = source === "huggingface" && (repository?.gated || Boolean(body.hfToken));
   const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, {
     source,
-    hfMirror: downloadSettings.hfMirror,
+    hfMirror: forceOfficialHf ? false : downloadSettings.hfMirror,
     hfTransfer: downloadSettings.hfTransfer,
   });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
+  await ensureDirs(localDir);
   const download = buildDownloadCommand(source, model, localDir, { precision });
   if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
     throw core.missingDownloadCliError(download.command, source);
   }
   const expected = Number(body.expectedBytes || 0) > 0
     ? { bytes: Number(body.expectedBytes), fileCount: Number(body.expectedFiles || 0) || null }
-    : source === "huggingface"
-      ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision).catch((error) => ({ error: error.message }))
+    : repository
+      ? repository
       : null;
   const diskFreeBytes = await getModelsDiskFreeBytes();
   core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
@@ -905,6 +928,7 @@ async function startDownloadRequest(body = {}) {
     appendLog(job, `Download size estimate unavailable: ${expected.error}`);
   }
   if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI with proxy env disabled.");
+  if (forceOfficialHf) appendLog(job, "Gated/authenticated Hugging Face download uses the official endpoint instead of the configured mirror.");
   if (download.includePatterns?.length) appendLog(job, `Download include filter: ${download.includePatterns.join(", ")}`);
   return { job };
 }
@@ -932,9 +956,56 @@ async function estimateDownloadRequest(query = {}) {
     filtered: Boolean(estimate.filtered),
     matchedFiles: estimate.matchedFiles ?? estimate.fileCount ?? null,
     totalFiles: estimate.totalFiles ?? null,
+    gated: Boolean(estimate.gated),
+    gateMode: estimate.gateMode || false,
+    authorizationUrl: estimate.authorizationUrl || null,
     supported: true,
     diskFreeBytes,
   };
+}
+
+async function checkHfAccessRequest(query = {}) {
+  const reference = normalizeDownloadModelReference(query.model, query.precision);
+  if (!reference.model) {
+    const error = new Error("model is required");
+    error.status = 400;
+    throw error;
+  }
+  const estimate = await remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision);
+  if (!estimate.gated) {
+    return {
+      model: reference.model,
+      gated: false,
+      granted: true,
+      status: "public",
+      authorizationUrl: estimate.authorizationUrl,
+    };
+  }
+  const access = await hfAuthService.checkRepoAccess(reference.model, { probeFile: estimate.probeFile });
+  return {
+    model: reference.model,
+    gated: true,
+    granted: access.granted,
+    status: access.status,
+    username: access.username,
+    authorizationUrl: estimate.authorizationUrl,
+  };
+}
+
+function createHfAccessError(model, status, authorizationUrl) {
+  const messages = {
+    login_required: "本机尚未连接 Hugging Face 账号。请先登录，再继续这个下载。",
+    invalid_token: "Hugging Face 登录凭据无效或已过期，请重新登录。",
+    approval_required: "当前 Hugging Face 账号尚未获得这个 gated 模型的文件访问权。请在官方模型页确认授权后重试。",
+    not_found: "Hugging Face 仓库或授权探测文件不存在。",
+    check_failed: "暂时无法验证 Hugging Face 仓库访问权，请稍后重试。",
+  };
+  const error = new Error(messages[status] || messages.check_failed);
+  error.status = status === "not_found" ? 404 : 409;
+  error.code = `hf_${status || "check_failed"}`;
+  error.accessStatus = status || "check_failed";
+  error.authorizationUrl = authorizationUrl || `https://huggingface.co/${String(model).split("/").map(encodeURIComponent).join("/")}`;
+  return error;
 }
 
 async function getModelConfigRequest(query = {}) {
@@ -1187,7 +1258,8 @@ async function collectHealthReport() {
   }
   checks.push(await directoryHealth("models-root", "模型目录", CONFIG.modelsRoot));
   checks.push(await directoryHealth("hf-cache", "HF 缓存目录", CONFIG.hfCache));
-  checks.push(healthCheck("hf-token", "HF Token", process.env.HF_TOKEN ? "ok" : "warn", process.env.HF_TOKEN ? "已配置" : "下载 gated 模型前需要配置 HF_TOKEN"));
+  const hasHfLogin = Boolean(process.env.HF_TOKEN || hfAuthService.hasCachedToken());
+  checks.push(healthCheck("hf-token", "Hugging Face 账号", hasHfLogin ? "ok" : "warn", hasHfLogin ? "本机已连接" : "下载 gated 模型前需要连接 Hugging Face 账号"));
   checks.push(await commandHealth("hf-cli", "Hugging Face CLI", CONFIG.hfCli, ["--help"]));
   checks.push(await commandHealth("modelscope-cli", "ModelScope CLI", CONFIG.modelScopeCli, ["--help"], "warn"));
   checks.push(healthCheck("logs", "最近日志", logs.issues?.some((item) => item.severity === "error") ? "fail" : logs.issues?.length ? "warn" : "ok", logs.stage || "No recent vLLM log issues"));

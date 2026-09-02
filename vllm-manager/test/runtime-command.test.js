@@ -102,6 +102,7 @@ test("vLLM runtime command builds Docker args and redacts API keys", () => {
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--default-chat-template-kwargs"), runArgs.indexOf("--default-chat-template-kwargs") + 2), ["--default-chat-template-kwargs", JSON.stringify({ enable_thinking: false })]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--speculative-config"), runArgs.indexOf("--speculative-config") + 2), ["--speculative-config", JSON.stringify({ method: "mtp", num_speculative_tokens: 3 })]);
   assert.ok(runArgs.includes("--async-scheduling"));
+  assert.ok(!runArgs.includes("--sleep-on-idle"));
   assert.ok(runArgs.includes("--load-format"));
   assert.ok(!runArgs.includes("--quantization"));
   assert.ok(runArgs.includes("--tensor-parallel-size"));
@@ -298,6 +299,7 @@ test("SGLang runtime command emits the validated Qwen3.8 DSpark contract", () =>
   assert.deepEqual(args.slice(args.indexOf("--mm-feature-transport"), args.indexOf("--mm-feature-transport") + 2), ["--mm-feature-transport", "cpu"]);
   assert.ok(args.includes("--disable-prefill-cuda-graph"));
   assert.ok(args.includes("--enable-metrics"));
+  assert.ok(args.includes("--sleep-on-idle"));
   assert.ok(args.includes("D:/AI/cache/sglang-qwen38:/root/.cache"));
   assert.equal(job.meta.draftModel, "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark");
 });

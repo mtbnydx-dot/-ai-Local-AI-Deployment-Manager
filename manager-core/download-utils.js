@@ -56,7 +56,15 @@ function normalizeDownloadModelReference(model, precision) {
 
 const SAFETENSORS_QUANT_VALUES = new Set(["FP8", "AWQ", "GPTQ", "NVFP4", "MXFP4"]);
 
-function buildDownloadIncludePatterns(precision) {
+function modelReferenceDeclaresPrecision(model, precision) {
+  const value = normalizeRemoteQuantFilter(precision);
+  if (!SAFETENSORS_QUANT_VALUES.has(value)) return false;
+  const repoName = String(model || "").trim().split("/").pop() || "";
+  const tokens = repoName.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  return tokens.includes(value);
+}
+
+function buildDownloadIncludePatterns(precision, model = "") {
   const value = normalizeRemoteQuantFilter(precision);
   if (!value || value === "quantized") return [];
   if (value === "GGUF") return ["*.gguf"];
@@ -64,6 +72,10 @@ function buildDownloadIncludePatterns(precision) {
   if (value === "IQ4") return ["*IQ4*.gguf"];
   if (/^I?Q[2-8](?:_[A-Z0-9]+)*$/.test(value)) return [`*${value}*.gguf`];
   if (SAFETENSORS_QUANT_VALUES.has(value)) {
+    // Dedicated quantized repositories usually keep generic shard names such as
+    // model-00001-of-00007.safetensors. Filtering those shards by "FP8"/"AWQ"
+    // would silently exclude every weight file, so download the full repository.
+    if (modelReferenceDeclaresPrecision(model, value)) return [];
     return [
       `*${value}*.safetensors`,
       `*${value.toLowerCase()}*.safetensors`,
@@ -98,14 +110,14 @@ function matchesDownloadPrecisionFile(filename, precision) {
   return name.toLowerCase().endsWith(".gguf") && normalizedName.includes(value);
 }
 
-function filterDownloadSiblings(siblings, precision) {
-  const includePatterns = buildDownloadIncludePatterns(precision);
+function filterDownloadSiblings(siblings, precision, model = "") {
+  const includePatterns = buildDownloadIncludePatterns(precision, model);
   if (!includePatterns.length) return siblings;
   return siblings.filter((file) => matchesDownloadPrecisionFile(file.rfilename, precision));
 }
 
-function selectDownloadSiblings(siblings, precision) {
-  const includePatterns = buildDownloadIncludePatterns(precision);
+function selectDownloadSiblings(siblings, precision, model = "") {
+  const includePatterns = buildDownloadIncludePatterns(precision, model);
   const files = Array.isArray(siblings) ? siblings : [];
   if (!includePatterns.length) {
     return {
@@ -164,7 +176,8 @@ function buildDownloadEnv(hfCache, env = process.env, options = {}) {
     downloadEnv.HF_ENDPOINT = options.hfEndpoint || "https://hf-mirror.com";
   }
   if (options.hfTransfer) {
-    downloadEnv.HF_HUB_ENABLE_HF_TRANSFER = "1";
+    // huggingface_hub 1.x uses Xet for large files; hf_transfer is deprecated.
+    downloadEnv.HF_XET_HIGH_PERFORMANCE = "1";
   }
   return downloadEnv;
 }
@@ -232,9 +245,9 @@ function createDownloadCommandBuilder(options = {}) {
 }
 
 function buildDownloadCommand({ source, model, localDir, precision, hfCli, modelScopeCli }) {
-  const includePatterns = buildDownloadIncludePatterns(precision);
-  const includeArgs = includePatterns.flatMap((pattern) => ["--include", pattern]);
+  const includePatterns = buildDownloadIncludePatterns(precision, model);
   if (source === "modelscope") {
+    const includeArgs = includePatterns.flatMap((pattern) => ["--include", pattern]);
     return {
       command: modelScopeCli,
       args: ["download", "--model", model, "--local_dir", localDir, ...includeArgs],
@@ -242,6 +255,9 @@ function buildDownloadCommand({ source, model, localDir, precision, hfCli, model
       includePatterns,
     };
   }
+  // Use --include=PATTERN on Windows. Passing PATTERN as the next argv item lets
+  // Click expand globs against the manager working directory before hf sees it.
+  const includeArgs = includePatterns.map((pattern) => `--include=${pattern}`);
   return {
     command: hfCli,
     args: ["download", model, ...includeArgs, "--local-dir", localDir],
@@ -275,6 +291,7 @@ module.exports = {
   cleanDownloadSource,
   normalizeRemoteQuantFilter,
   normalizeDownloadModelReference,
+  modelReferenceDeclaresPrecision,
   buildDownloadIncludePatterns,
   matchesDownloadPrecisionFile,
   filterDownloadSiblings,

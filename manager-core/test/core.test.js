@@ -2603,6 +2603,10 @@ test("model route registrar wires shared and optional model download endpoints",
     searchRemoteModels: async (query) => ({ source: query.source || "huggingface", models: [] }),
     startDownload: async (body) => startDownloadImpl(body),
     estimateDownload: async (query) => ({ model: query.model, bytes: 123 }),
+    getHfAuthStatus: async () => ({ connected: true, username: "alice" }),
+    launchHfLogin: async () => ({ launched: true }),
+    checkHfAccess: async (query) => ({ model: query.model, granted: true }),
+    isLocalRequest: (req) => Boolean(req.local),
     getModelConfig: async (query) => ({ model: query.model, hiddenSize: 4096 }),
     getModelReadme: async (query) => ({ model: query.model, readme: "# Model" }),
     checkPort: async (query) => ({ port: Number(query.port), available: true }),
@@ -2612,7 +2616,7 @@ test("model route registrar wires shared and optional model download endpoints",
     resolveModelLink: async (body) => ({ model: body.url, outputName: "model" }),
   });
 
-  assert.equal(routes.size, 12);
+  assert.equal(routes.size, 15);
   let response = makeResponse();
   await routes.get("GET /api/models")({}, response.res);
   assert.deepEqual(response.state.json[0], { local: ["local"], cached: ["cached"] });
@@ -2628,16 +2632,38 @@ test("model route registrar wires shared and optional model download endpoints",
   startDownloadImpl = async () => {
     const error = new Error("bad source");
     error.status = 400;
+    error.code = "hf_login_required";
+    error.authorizationUrl = "https://huggingface.co/owner/model";
     throw error;
   };
   response = makeResponse();
   await routes.get("POST /api/download")({ body: { model: "owner/model" } }, response.res);
   assert.equal(response.state.statusCode, 400);
-  assert.deepEqual(response.state.json[0], { error: "bad source" });
+  assert.deepEqual(response.state.json[0], {
+    error: "bad source",
+    code: "hf_login_required",
+    authorizationUrl: "https://huggingface.co/owner/model",
+  });
 
   response = makeResponse();
   await routes.get("GET /api/download/estimate")({ query: { model: "owner/model" } }, response.res);
   assert.deepEqual(response.state.json[0], { model: "owner/model", bytes: 123 });
+
+  response = makeResponse();
+  await routes.get("GET /api/huggingface/auth/status")({ local: true }, response.res);
+  assert.deepEqual(response.state.json[0], { connected: true, username: "alice" });
+
+  response = makeResponse();
+  await routes.get("POST /api/huggingface/auth/login")({ local: true }, response.res);
+  assert.deepEqual(response.state.json[0], { launched: true });
+
+  response = makeResponse();
+  await routes.get("GET /api/huggingface/access")({ local: true, query: { model: "owner/model" } }, response.res);
+  assert.deepEqual(response.state.json[0], { model: "owner/model", granted: true });
+
+  response = makeResponse();
+  await routes.get("POST /api/huggingface/auth/login")({ local: false }, response.res);
+  assert.equal(response.state.statusCode, 403);
 
   response = makeResponse();
   await routes.get("POST /api/download/settings")({ body: { queueMode: false } }, response.res);
@@ -3574,6 +3600,9 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
   });
   assert.deepEqual(core.buildDownloadIncludePatterns("Q4"), ["*Q4*.gguf", "*IQ4*.gguf"]);
   assert.deepEqual(core.buildDownloadIncludePatterns("Q8_0"), ["*Q8_0*.gguf"]);
+  assert.deepEqual(core.buildDownloadIncludePatterns("FP8", "orcarouter/Qwen3.8-27B-Uncensored-FP8"), []);
+  assert.equal(core.modelReferenceDeclaresPrecision("owner/model-FP8", "FP8"), true);
+  assert.equal(core.modelReferenceDeclaresPrecision("fp8-owner/model", "FP8"), false);
   assert.equal(core.matchesDownloadPrecisionFile("model-Q4_K_M.gguf", "Q4"), true);
   assert.equal(core.matchesDownloadPrecisionFile("model-IQ4_XS.gguf", "IQ4"), true);
   assert.equal(core.matchesDownloadPrecisionFile("model-Q6_K.gguf", "Q4"), false);
@@ -3603,6 +3632,18 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
     matched: 0,
     total: 3,
   });
+  const dedicatedFp8Siblings = [
+    { rfilename: "model-00001-of-00002.safetensors", size: 10 },
+    { rfilename: "model-00002-of-00002.safetensors", size: 20 },
+    { rfilename: "config.json", size: 5 },
+  ];
+  assert.deepEqual(core.selectDownloadSiblings(dedicatedFp8Siblings, "FP8", "owner/model-FP8"), {
+    siblings: dedicatedFp8Siblings,
+    includePatterns: [],
+    filtered: false,
+    matched: 3,
+    total: 3,
+  });
 
   const builder = core.createDownloadCommandBuilder({
     hfCli: "hf",
@@ -3619,13 +3660,22 @@ test("download helpers normalize precision aliases and GGUF include patterns", (
     meta: { model: "owner/model", precision: "Q4", expectedBytes: 123 },
   });
   assert.equal(spec.command, "hf");
-  assert.deepEqual(spec.args, ["download", "owner/model", "--include", "*Q4*.gguf", "--include", "*IQ4*.gguf", "--local-dir", "D:/models/owner__model"]);
+  assert.deepEqual(spec.args, ["download", "owner/model", "--include=*Q4*.gguf", "--include=*IQ4*.gguf", "--local-dir", "D:/models/owner__model"]);
   assert.equal(spec.options.env.HF_HOME, "cache-root");
   assert.equal(spec.options.env.PYTHONUTF8, "1");
   assert.equal(spec.options.env.PYTHONIOENCODING, "utf-8");
   assert.equal(spec.options.env.HF_HUB_DISABLE_PROGRESS_BARS, "1");
   assert.equal(spec.options.meta.localDir, "D:/models/owner__model");
   assert.equal(spec.options.countExistingProgress, true);
+  const fp8Spec = builder.buildDownloadSpecFromJob({
+    meta: { model: "orcarouter/Qwen3.8-27B-Uncensored-FP8", precision: "FP8" },
+  });
+  assert.deepEqual(fp8Spec.args, [
+    "download",
+    "orcarouter/Qwen3.8-27B-Uncensored-FP8",
+    "--local-dir",
+    "D:/models/orcarouter__Qwen3.8-27B-Uncensored-FP8",
+  ]);
   const modelScopeSpec = builder.buildDownloadSpecFromJob({
     meta: { model: "owner/model", source: "modelscope" },
   });

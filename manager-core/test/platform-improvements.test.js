@@ -451,8 +451,9 @@ test("download queue honors priority and retries failed jobs without deleting pa
 test("buildDownloadEnv injects HF mirror and transfer flags", () => {
   const env = core.buildDownloadEnv("D:/cache/hf", { PATH: "x" }, { hfMirror: true, hfTransfer: true });
   assert.equal(env.HF_ENDPOINT, "https://hf-mirror.com");
-  assert.equal(env.HF_HUB_ENABLE_HF_TRANSFER, "1");
+  assert.equal(env.HF_XET_HIGH_PERFORMANCE, "1");
+  assert.equal(env.HF_HUB_ENABLE_HF_TRANSFER, undefined);
   const off = core.buildDownloadEnv("D:/cache/hf", { PATH: "x" }, {});
   assert.equal(off.HF_ENDPOINT, undefined);
-  assert.equal(off.HF_HUB_ENABLE_HF_TRANSFER, undefined);
+  assert.equal(off.HF_XET_HIGH_PERFORMANCE, undefined);
 });
