@@ -105,6 +105,31 @@ function createVllmStartRuntimeRequest(deps) {
     const runtimeImage = normalizeRuntimeImage(body.runtimeImage);
     const draftModel = String(body.draftModel || "").trim();
     const dsparkBlockSize = boundedPositiveInteger(body.dsparkBlockSize, 7, "dsparkBlockSize", 32);
+    const sglangMaxTotalTokens = boundedNonNegativeInteger(body.sglangMaxTotalTokens, 0, "sglangMaxTotalTokens", 4_194_304);
+    const sglangPageSize = boundedNonNegativeInteger(body.sglangPageSize, 0, "sglangPageSize", 4096);
+    const sglangChunkedPrefillSize = boundedNonNegativeInteger(body.sglangChunkedPrefillSize, 0, "sglangChunkedPrefillSize", 4_194_304);
+    const sglangFp4GemmBackend = normalizeOptionalChoice(body.sglangFp4GemmBackend, "sglangFp4GemmBackend", [
+      "auto", "flashinfer_cudnn", "flashinfer_cutedsl", "flashinfer_cutlass", "flashinfer_trtllm", "marlin",
+    ]);
+    const sglangAttentionBackend = normalizeOptionalChoice(body.sglangAttentionBackend, "sglangAttentionBackend", [
+      "triton", "qsa", "fa4", "flashinfer",
+    ]);
+    const sglangPleOffloadEmbedding = normalizeBooleanInput(body.sglangPleOffloadEmbedding);
+    const sglangLinearAttnPrefillBackend = normalizeOptionalChoice(body.sglangLinearAttnPrefillBackend, "sglangLinearAttnPrefillBackend", [
+      "triton", "cutedsl", "flashinfer",
+    ]);
+    const sglangLinearAttnDecodeBackend = normalizeOptionalChoice(body.sglangLinearAttnDecodeBackend, "sglangLinearAttnDecodeBackend", [
+      "triton", "cutedsl", "flashinfer",
+    ]);
+    const sglangMambaSsmDtype = normalizeOptionalChoice(body.sglangMambaSsmDtype, "sglangMambaSsmDtype", [
+      "float32", "bfloat16", "float16",
+    ]);
+    const sglangMambaRadixCacheStrategy = normalizeOptionalChoice(body.sglangMambaRadixCacheStrategy, "sglangMambaRadixCacheStrategy", [
+      "auto", "no_buffer", "extra_buffer", "extra_buffer_lazy",
+    ]);
+    const sglangMambaTrackInterval = boundedNonNegativeInteger(body.sglangMambaTrackInterval, 0, "sglangMambaTrackInterval", 4_194_304);
+    const sglangMaxMambaCacheSize = boundedNonNegativeInteger(body.sglangMaxMambaCacheSize, 0, "sglangMaxMambaCacheSize", 4096);
+    const sglangDisableThinkingByDefault = normalizeBooleanInput(body.sglangDisableThinkingByDefault);
     const lanAddress = getLanAddress();
     const serviceHost = networkAccess === "lan" ? lanAddress : "127.0.0.1";
     const serviceUrl = `http://${serviceHost}:${port}/v1`;
@@ -227,6 +252,19 @@ function createVllmStartRuntimeRequest(deps) {
         runtimeImage,
         draftModel,
         dsparkBlockSize,
+        sglangMaxTotalTokens,
+        sglangPageSize,
+        sglangChunkedPrefillSize,
+        sglangFp4GemmBackend,
+        sglangAttentionBackend,
+        sglangPleOffloadEmbedding,
+        sglangLinearAttnPrefillBackend,
+        sglangLinearAttnDecodeBackend,
+        sglangMambaSsmDtype,
+        sglangMambaRadixCacheStrategy,
+        sglangMambaTrackInterval,
+        sglangMaxMambaCacheSize,
+        sglangDisableThinkingByDefault,
         gpuAdmission: admission,
       });
     } catch (error) {
@@ -286,6 +324,19 @@ function createVllmStartRuntimeRequest(deps) {
       runtimeImage,
       draftModel,
       dsparkBlockSize,
+      sglangMaxTotalTokens,
+      sglangPageSize,
+      sglangChunkedPrefillSize,
+      sglangFp4GemmBackend,
+      sglangAttentionBackend,
+      sglangPleOffloadEmbedding,
+      sglangLinearAttnPrefillBackend,
+      sglangLinearAttnDecodeBackend,
+      sglangMambaSsmDtype,
+      sglangMambaRadixCacheStrategy,
+      sglangMambaTrackInterval,
+      sglangMaxMambaCacheSize,
+      sglangDisableThinkingByDefault,
       modelCompatibility,
       vramReservationMb: Number(admission?.requestedTotalMb || 0),
       gpuAdmissionLeaseId: String(admission?.id || ""),
@@ -415,6 +466,21 @@ function boundedNumber(value, fallback, name, min, max) {
     throw error;
   }
   return number;
+}
+
+function normalizeOptionalChoice(value, name, allowedValues) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (!new Set(allowedValues).has(normalized)) {
+    const error = new Error(`${name} 必须是以下值之一：${allowedValues.join(", ")}。`);
+    error.status = 400;
+    throw error;
+  }
+  return normalized;
+}
+
+function normalizeBooleanInput(value) {
+  return value === true || value === 1 || value === "1" || value === "true" || value === "on";
 }
 
 function normalizeRuntimeImage(value) {

@@ -9,8 +9,9 @@ test("vLLM default profiles keep builtin IDs and normalize configs", () => {
     return { ...config, normalized: true };
   });
 
-  assert.equal(profiles.length, 8);
+  assert.equal(profiles.length, 9);
   assert.deepEqual(profiles.map((profile) => profile.id), [
+    "qwen38-flash-next-sglang-262k",
     "qwen38-vllm-mtp3-quality",
     "qwen38-sglang-dspark-fastest",
     "qwen38-nvfp4-capacity",
@@ -41,4 +42,16 @@ test("vLLM default profiles keep builtin IDs and normalize configs", () => {
   assert.equal(fastest.config.engine, "sglang");
   assert.equal(fastest.config.speculativeMode, "dspark");
   assert.equal(fastest.config.dsparkBlockSize, 7);
+
+  const flashNext = profiles.find((profile) => profile.id === "qwen38-flash-next-sglang-262k");
+  assert.equal(flashNext.config.engine, "sglang");
+  assert.equal(flashNext.config.runtimeImage, "local/sglang:qwen38flashnext-sm120-dac5523d");
+  assert.equal(flashNext.config.maxModelLen, 262144);
+  assert.equal(flashNext.config.maxNumSeqs, 1);
+  assert.equal(flashNext.config.kvCacheDtype, "auto");
+  assert.equal(flashNext.config.sglangPleOffloadEmbedding, true);
+  assert.equal(flashNext.config.sglangLinearAttnPrefillBackend, "triton");
+  assert.equal(flashNext.config.sglangLinearAttnDecodeBackend, "flashinfer");
+  assert.equal(flashNext.config.sglangMaxMambaCacheSize, 8);
+  assert.equal(flashNext.config.sglangDisableThinkingByDefault, true);
 });

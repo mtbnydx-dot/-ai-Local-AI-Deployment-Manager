@@ -304,6 +304,94 @@ test("SGLang runtime command emits the validated Qwen3.8 DSpark contract", () =>
   assert.equal(job.meta.draftModel, "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark");
 });
 
+test("SGLang runtime command emits the validated Flash-Next SM120 long-context contract", () => {
+  const { buildVllmRuntimeCommand } = createVllmRuntimeCommandBuilder({
+    CONFIG: {
+      containerName: "vllm-local",
+      managerId: "vllm-manager",
+      hfCache: "D:/AI/cache/huggingface",
+      modelsRoot: "D:/AI/models",
+      sglangCache: "D:/AI/cache/sglang-qwen38",
+      image: "vllm/default:fixed",
+      imagePlatform: "linux/amd64",
+    },
+    MANAGER_LABEL_KEY: "ai.manager",
+    MANAGER_ENGINE_LABEL_KEY: "ai.manager.engine",
+    MANAGER_APIKEY_REF_LABEL_KEY: "ai.manager.api-key-ref",
+    appendLog: () => {},
+    scheduleJobsSave: () => {},
+    dockerGpuArg: () => "device=0",
+    dockerPublishArgs: (port) => [`127.0.0.1:${port}:8000`],
+    publishArgsToDockerRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
+    windowsPathToContainerPath: (value) => String(value).replace("D:/AI/models", "/models").replaceAll("\\", "/"),
+    normalizeGpuIds: (value) => value,
+    getLanAddress: () => "127.0.0.1",
+    resolveLaunchModel: () => ({
+      modelArg: "/models/RadixArk-Qwen3.8-Flash-Next-NVFP4",
+      effectiveLoadFormat: "auto",
+      localPath: "D:/AI/models/RadixArk-Qwen3.8-Flash-Next-NVFP4",
+    }),
+    effectiveLaunchQuantization: () => ({ value: "modelopt_fp4", modelConfigMethod: "modelopt_fp4" }),
+    resolveVllmRuntimePreset: () => ({
+      id: "qwen3.8-flash-next-sglang-sm120",
+      label: "Qwen3.8 Flash-Next / SGLang / SM120",
+      engine: "sglang",
+      image: "local/sglang:qwen38flashnext-sm120-dac5523d",
+      quantization: "modelopt_fp4",
+      maxRunningRequests: 1,
+      effectiveMaxRunningRequests: 1,
+      maxTotalTokens: 262144,
+      pageSize: 64,
+      chunkedPrefillSize: 4096,
+      fp4GemmBackend: "flashinfer_cutlass",
+      attentionBackend: "triton",
+      pleOffloadEmbedding: true,
+      linearAttnPrefillBackend: "triton",
+      linearAttnDecodeBackend: "flashinfer",
+      mambaSsmDtype: "bfloat16",
+      mambaRadixCacheStrategy: "extra_buffer",
+      mambaTrackInterval: 64,
+      maxMambaCacheSize: 8,
+      disableThinkingByDefault: true,
+      defaultChatTemplateKwargs: JSON.stringify({ enable_thinking: false }),
+      forceTrustRemoteCode: true,
+      reasoningParser: "qwen3",
+      toolCallParser: "qwen3_coder",
+      enableAutoToolChoice: true,
+    }),
+  });
+  const job = { id: "serve-flash-next", meta: {} };
+  const { runArgs } = buildVllmRuntimeCommand(job, {
+    engine: "sglang", model: "D:/AI/models/RadixArk-Qwen3.8-Flash-Next-NVFP4", name: "qwen3.8-flash-next",
+    port: 8000, networkAccess: "local", serviceHost: "127.0.0.1", gpuDeviceIds: ["0"],
+    dtype: "auto", quantization: "modelopt_fp4", loadFormat: "auto", maxModelLen: 262144,
+    maxNumSeqs: 4, gpuMemoryUtilization: 0.995, kvCacheDtype: "auto", cpuOffloadGb: 0,
+    kvOffloadingSize: 0, tensorParallelSize: 1, pipelineParallelSize: 1, dataParallelSize: 1,
+    trustRemoteCode: true, enablePrefixCaching: true,
+  });
+
+  const pair = (flag) => runArgs.slice(runArgs.indexOf(flag), runArgs.indexOf(flag) + 2);
+  assert.deepEqual(pair("--max-running-requests"), ["--max-running-requests", "1"]);
+  assert.deepEqual(pair("--max-total-tokens"), ["--max-total-tokens", "262144"]);
+  assert.deepEqual(pair("--page-size"), ["--page-size", "64"]);
+  assert.deepEqual(pair("--chunked-prefill-size"), ["--chunked-prefill-size", "4096"]);
+  assert.deepEqual(pair("--quantization"), ["--quantization", "modelopt_fp4"]);
+  assert.deepEqual(pair("--fp4-gemm-backend"), ["--fp4-gemm-backend", "flashinfer_cutlass"]);
+  assert.deepEqual(pair("--attention-backend"), ["--attention-backend", "triton"]);
+  assert.deepEqual(pair("--linear-attn-prefill-backend"), ["--linear-attn-prefill-backend", "triton"]);
+  assert.deepEqual(pair("--linear-attn-decode-backend"), ["--linear-attn-decode-backend", "flashinfer"]);
+  assert.deepEqual(pair("--mamba-ssm-dtype"), ["--mamba-ssm-dtype", "bfloat16"]);
+  assert.deepEqual(pair("--mamba-radix-cache-strategy"), ["--mamba-radix-cache-strategy", "extra_buffer"]);
+  assert.deepEqual(pair("--mamba-track-interval"), ["--mamba-track-interval", "64"]);
+  assert.deepEqual(pair("--max-mamba-cache-size"), ["--max-mamba-cache-size", "8"]);
+  assert.deepEqual(pair("--default-chat-template-kwargs"), ["--default-chat-template-kwargs", JSON.stringify({ enable_thinking: false })]);
+  assert.ok(runArgs.includes("--ple-offload-embedding"));
+  assert.ok(!runArgs.includes("--kv-cache-dtype"));
+  assert.ok(!runArgs.includes("--mamba-scheduler-strategy"));
+  assert.ok(runArgs.includes("ai.sglang.effective-max-running-requests=1"));
+  assert.equal(job.meta.effectiveMaxRunningRequests, 1);
+});
+
 test("vLLM runtime supports the current positional serve syntax and persistent cache", () => {
   const { buildVllmRuntimeCommand } = createVllmRuntimeCommandBuilder({
     CONFIG: { containerName: "vllm-local", managerId: "vllm-manager", hfCache: "D:/AI/cache/huggingface", modelsRoot: "D:/AI/models", vllmCache: "D:/AI/cache/vllm-qwen38", image: "vllm/default:fixed" },

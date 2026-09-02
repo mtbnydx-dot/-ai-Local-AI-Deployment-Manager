@@ -92,6 +92,19 @@ test("vLLM launch request builds serve job metadata and run options", async () =
       runtimeImage: "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       draftModel: "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark",
       dsparkBlockSize: "9",
+      sglangMaxTotalTokens: "262144",
+      sglangPageSize: "64",
+      sglangChunkedPrefillSize: "4096",
+      sglangFp4GemmBackend: "flashinfer_cutlass",
+      sglangAttentionBackend: "triton",
+      sglangPleOffloadEmbedding: true,
+      sglangLinearAttnPrefillBackend: "triton",
+      sglangLinearAttnDecodeBackend: "flashinfer",
+      sglangMambaSsmDtype: "bfloat16",
+      sglangMambaRadixCacheStrategy: "extra_buffer",
+      sglangMambaTrackInterval: "64",
+      sglangMaxMambaCacheSize: "8",
+      sglangDisableThinkingByDefault: true,
     },
   });
 
@@ -115,6 +128,19 @@ test("vLLM launch request builds serve job metadata and run options", async () =
   assert.equal(runCalls[0].runtimeImage, "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   assert.equal(runCalls[0].draftModel, "D:/AI/models/RadixArk-Qwen3.8-27B-DSpark");
   assert.equal(runCalls[0].dsparkBlockSize, 9);
+  assert.equal(runCalls[0].sglangMaxTotalTokens, 262144);
+  assert.equal(runCalls[0].sglangPageSize, 64);
+  assert.equal(runCalls[0].sglangChunkedPrefillSize, 4096);
+  assert.equal(runCalls[0].sglangFp4GemmBackend, "flashinfer_cutlass");
+  assert.equal(runCalls[0].sglangAttentionBackend, "triton");
+  assert.equal(runCalls[0].sglangPleOffloadEmbedding, true);
+  assert.equal(runCalls[0].sglangLinearAttnPrefillBackend, "triton");
+  assert.equal(runCalls[0].sglangLinearAttnDecodeBackend, "flashinfer");
+  assert.equal(runCalls[0].sglangMambaSsmDtype, "bfloat16");
+  assert.equal(runCalls[0].sglangMambaRadixCacheStrategy, "extra_buffer");
+  assert.equal(runCalls[0].sglangMambaTrackInterval, 64);
+  assert.equal(runCalls[0].sglangMaxMambaCacheSize, 8);
+  assert.equal(runCalls[0].sglangDisableThinkingByDefault, true);
   assert.equal(result.job.meta.engine, "sglang");
   assert.equal(compatibilityCalls[0].remote, false);
   assert.equal(compatibilityCalls[0].model, "Qwen/Qwen3.6-27B");

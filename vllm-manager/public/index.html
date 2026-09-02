@@ -121,7 +121,7 @@
                 <span>推理引擎</span>
                 <select id="runtimeEngine" name="engine">
                   <option value="vllm" selected>vLLM（稳定/质量优先）</option>
-                  <option value="sglang">SGLang（DSpark 极速）</option>
+                  <option value="sglang">SGLang（Flash-Next / 长上下文）</option>
                 </select>
               </label>
               <label>
@@ -166,7 +166,7 @@
                   </label>
                   <label>
                     <span>显存占用比例</span>
-                    <input id="gpuMemoryUtilization" name="gpuMemoryUtilization" type="number" value="0.9" min="0.1" max="0.98" step="0.01" />
+                    <input id="gpuMemoryUtilization" name="gpuMemoryUtilization" type="number" value="0.9" min="0.1" max="0.999" step="0.001" />
                   </label>
                   <label>
                     <span>KV cache 精度</span>
@@ -223,13 +223,106 @@
                     <span>运行镜像覆盖（高级）</span>
                     <input id="runtimeImage" name="runtimeImage" placeholder="留空使用引擎锁定镜像" autocomplete="off" />
                   </label>
+                  <label>
+                    <span>SGLang memory pool tokens</span>
+                    <input id="sglangMaxTotalTokens" name="sglangMaxTotalTokens" type="number" value="0" min="0" max="4194304" step="1" />
+                    <small>0 = 跟随模型档；Flash-Next 262K 档为 262144。</small>
+                  </label>
+                  <label>
+                    <span>SGLang page size</span>
+                    <input id="sglangPageSize" name="sglangPageSize" type="number" value="0" min="0" max="4096" step="1" />
+                    <small>0 = 自动；已验证 Flash-Next 档为 64。</small>
+                  </label>
+                  <label>
+                    <span>SGLang chunked prefill</span>
+                    <input id="sglangChunkedPrefillSize" name="sglangChunkedPrefillSize" type="number" value="0" min="0" max="4194304" step="1" />
+                    <small>0 = 跟随模型档；262K 稳定档为 4096。</small>
+                  </label>
+                  <label>
+                    <span>QSA / attention backend</span>
+                    <select id="sglangAttentionBackend" name="sglangAttentionBackend">
+                      <option value="">按模型档</option>
+                      <option value="triton">Triton（Flash-Next 已验证）</option>
+                      <option value="qsa">QSA</option>
+                      <option value="flashinfer">FlashInfer</option>
+                      <option value="fa4">FA4（不建议旧 workaround）</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>NVFP4 GEMM backend</span>
+                    <select id="sglangFp4GemmBackend" name="sglangFp4GemmBackend">
+                      <option value="">按模型档</option>
+                      <option value="auto">auto</option>
+                      <option value="flashinfer_cutlass">FlashInfer CUTLASS（已验证）</option>
+                      <option value="flashinfer_trtllm">FlashInfer TRTLLM</option>
+                      <option value="marlin">Marlin</option>
+                    </select>
+                  </label>
+                  <label class="check-row context-check-row">
+                    <input id="sglangPleOffloadEmbedding" name="sglangPleOffloadEmbedding" type="checkbox" checked />
+                    <span>PLE embedding → CPU RAM</span>
+                  </label>
+                  <label>
+                    <span>Linear attention prefill</span>
+                    <select id="sglangLinearAttnPrefillBackend" name="sglangLinearAttnPrefillBackend">
+                      <option value="">按模型档</option>
+                      <option value="triton">Triton（已验证）</option>
+                      <option value="flashinfer">FlashInfer</option>
+                      <option value="cutedsl">CuteDSL</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Linear attention decode</span>
+                    <select id="sglangLinearAttnDecodeBackend" name="sglangLinearAttnDecodeBackend">
+                      <option value="">按模型档</option>
+                      <option value="flashinfer">FlashInfer（已验证）</option>
+                      <option value="triton">Triton</option>
+                      <option value="cutedsl">CuteDSL</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Mamba state dtype</span>
+                    <select id="sglangMambaSsmDtype" name="sglangMambaSsmDtype">
+                      <option value="">按模型档</option>
+                      <option value="bfloat16">BF16（已验证）</option>
+                      <option value="float16">FP16</option>
+                      <option value="float32">FP32</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Mamba radix cache</span>
+                    <select id="sglangMambaRadixCacheStrategy" name="sglangMambaRadixCacheStrategy">
+                      <option value="">按模型档</option>
+                      <option value="extra_buffer">extra_buffer（已验证）</option>
+                      <option value="extra_buffer_lazy">extra_buffer_lazy</option>
+                      <option value="no_buffer">no_buffer</option>
+                      <option value="auto">auto</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Mamba track interval</span>
+                    <input id="sglangMambaTrackInterval" name="sglangMambaTrackInterval" type="number" value="0" min="0" max="4194304" step="1" />
+                    <small>0 = 跟随模型档；已验证值为 64。</small>
+                  </label>
+                  <label>
+                    <span>Max Mamba cache size</span>
+                    <input id="sglangMaxMambaCacheSize" name="sglangMaxMambaCacheSize" type="number" value="0" min="0" max="4096" step="1" />
+                    <small>262K 稳定档为 8，对应有效并发 1；24 在极限长输入末段曾 OOM。</small>
+                  </label>
+                  <label class="check-row context-check-row">
+                    <input id="sglangDisableThinkingByDefault" name="sglangDisableThinkingByDefault" type="checkbox" checked />
+                    <span>默认关闭 thinking（规避 qwen3_coder token-0）</span>
+                  </label>
+                </div>
+                <div class="form-note sglang-profile-note" id="sglangProfileNote" hidden>
+                  Flash-Next 稳定路径：完整 SM120 QSA 修复、BF16 KV、PLE→RAM、GDN prefill Triton / decode FlashInfer。此档追求 262K 正确性，有效并发为 1。
                 </div>
                 <div class="context-tip-grid">
                   <div><strong>本地 Claude 推荐</strong><span>单人聊天用 4；冲 128K/192K 长上下文时用 1-2。</span></div>
-                  <div><strong>KV cache</strong><span>FP8 最省显存，长上下文优先用 FP8；auto 通常会按模型 dtype 使用更大缓存。</span></div>
+                  <div><strong>KV cache</strong><span>一般模型可用 FP8 省显存；Qwen3.8 Flash-Next QSA 当前必须选 auto，保留 BF16 KV。</span></div>
                   <div><strong>Offload</strong><span>CPU/KV offload 可以换更长上下文，但会牺牲速度，先从 4-8 GB 小步尝试。</span></div>
                   <div><strong>仅语言模式</strong><span>不用图片/视频时可开启，减少多模态 encoder 和缓存开销。</span></div>
-                  <div><strong>MTP / DSpark</strong><span>Qwen3.8 稳定档使用 vLLM MTP-3；极速档使用 SGLang + DSpark block 7。管理器会核验原生 MTP 张量及 DSpark 草稿模型。</span></div>
+                  <div><strong>Flash-Next</strong><span>SGLang 262K 稳定档关闭 MTP/DSpark；旧 Qwen3.8 27B 档仍可单独使用 MTP 或 DSpark。</span></div>
                 </div>
                 <div class="context-presets" id="contextPresetButtons">
                   <button type="button" data-context-preset="4096">4K</button>
@@ -1172,7 +1265,11 @@
   <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
     <script src="/shared-js/connection-status.js?v=20260804-connection-status" defer></script>
     <script src="/shared-js/ui-architecture.js?v=20260720-cors-policy" defer></script>
+<<<<<<< HEAD
     <script src="/app.js?v=20260831-qwen38-bf16-220k" defer></script>
+=======
+    <script src="/app.js?v=20260827-sglang-flash-next" defer></script>
+>>>>>>> upgrade/stack-20260826
     <script src="/shared-js/lucide.min.js?v=20260811-46-icons" defer onload="window.renderIcons && window.renderIcons()"></script>
   </body>
 </html>
