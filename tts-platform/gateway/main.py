@@ -38,6 +38,8 @@ from tts_services import (
     translation_service,
 )
 from tts_storage import output_store, voice_store
+from tts_identity import identity, verify_identity
+from tts_receipts import receipt_store
 from tts_lifecycle import LifecycleError, model_lifecycle
 
 
@@ -104,20 +106,20 @@ async def security_and_observability(request: Request, call_next):
     incoming_id = request.headers.get("x-request-id", "").strip()
     request.state.request_id = incoming_id if REQUEST_ID_RE.fullmatch(incoming_id) else uuid.uuid4().hex
 
-    expected = cfg("TTS_API_KEY")
-    protected = request.url.path.startswith(("/api/", "/v1/", "/outputs/"))
-    if expected and protected:
-        presented = _presented_api_key(request)
-        if not presented or not secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8")):
-            response: Response = JSONResponse(
-                _error_payload(request, "Missing or invalid TTS API key.", "unauthorized"),
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        else:
-            response = await call_next(request)
-    else:
-        response = await call_next(request)
+    try:
+        context = verify_identity(request)
+    except ValueError:
+        return JSONResponse({"detail": "Invalid gateway identity", "code": "invalid_gateway_identity"}, status_code=403)
+    scope = identity.set(context)
+    try:
+        response = await authenticated_response(request, call_next)
+        if response.status_code >= 400:
+            await asyncio.to_thread(receipt_store.fail_pending)
+    except Exception:
+        await asyncio.to_thread(receipt_store.fail_pending)
+        raise
+    finally:
+        identity.reset(scope)
 
     response.headers["X-Request-ID"] = request.state.request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -133,14 +135,27 @@ async def security_and_observability(request: Request, call_next):
     if request.url.path.startswith(("/api/", "/v1/")):
         response.headers["Cache-Control"] = "no-store"
     duration_ms = round((time.perf_counter() - started) * 1000)
-    logger.info(
-        "request id=%s method=%s path=%s status=%s duration_ms=%s",
-        request.state.request_id,
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration_ms,
-    )
+    logger.info("request id=%s method=%s path=%s status=%s duration_ms=%s",
+                request.state.request_id, request.method, request.url.path, response.status_code, duration_ms)
+    return response
+
+
+async def authenticated_response(request: Request, call_next):
+    expected = cfg("TTS_API_KEY")
+    protected = request.url.path.startswith(("/api/", "/v1/", "/outputs/"))
+    if expected and protected:
+        presented = _presented_api_key(request)
+        if not presented or not secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8")):
+            response: Response = JSONResponse(
+                _error_payload(request, "Missing or invalid TTS API key.", "unauthorized"),
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        else:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
+
     return response
 
 
@@ -318,7 +333,7 @@ async def voice_audio(voice_id: str):
         path = voice_store.audio_path(voice_id)
     except ValueError as exc:
         raise TtsError(400, str(exc), "invalid_voice_id") from exc
-    if not path.exists():
+    if not path.exists() or voice_store.get(voice_id) is None:
         raise TtsError(404, "音色不存在", "voice_not_found")
     return FileResponse(path, media_type="audio/wav", filename=f"voice-{voice_id}.wav", content_disposition_type="inline")
 
@@ -336,7 +351,10 @@ async def generate_tts(payload: dict[str, Any]) -> tuple[bytes, str, int]:
 
 @app.post("/api/tts")
 async def legacy_tts(request: Request, payload: SynthesisRequest):
-    audio, engine, elapsed_ms, warning = await synthesis_service.generate(payload)
+    receipt_store.begin([("sync", payload.engine)])
+    async with job_manager.synthesis_slot(payload):
+        audio, engine, elapsed_ms, warning = await job_manager.generate(payload)
+    receipt_store.finish(audio=audio, text=payload.text, engine=engine)
     output = await asyncio.to_thread(
         output_store.create,
         audio,
@@ -466,7 +484,10 @@ async def openai_audio_speech(request: Request, payload: OpenAISpeechRequest):
         emotion=payload.emotion,
         style=payload.instructions,
     )
-    audio, engine, elapsed_ms, warning = await synthesis_service.generate(synthesis)
+    receipt_store.begin([("sync", synthesis.engine)])
+    async with job_manager.synthesis_slot(synthesis):
+        audio, engine, elapsed_ms, warning = await job_manager.generate(synthesis)
+    receipt_store.finish(audio=audio, text=synthesis.text, engine=engine)
     headers = {
         "Content-Disposition": "inline; filename=speech.wav",
         "X-TTS-Engine": engine,
@@ -477,6 +498,23 @@ async def openai_audio_speech(request: Request, payload: OpenAISpeechRequest):
     return Response(content=audio, media_type="audio/wav", headers=headers)
 
 
-# Compatibility path for previously generated URLs. New clients use /api/outputs/{id}/audio.
-app.mount("/outputs", StaticFiles(directory=str(settings.outputs_dir)), name="outputs")
+# Compatibility URLs retain the same ownership check as the history API.
+@app.get("/outputs/{filename}")
+async def legacy_output_audio(filename: str):
+    output = await asyncio.to_thread(output_store.get_by_filename, filename)
+    if output is None:
+        raise TtsError(404, "音频文件不存在", "output_not_found")
+    return await output_audio(output["id"])
+
+
+@app.get("/internal/receipts/{request_id}")
+async def receipt(request_id: str):
+    if identity.get().get("requestId") != request_id:
+        raise TtsError(403, "Gateway signature required", "gateway_required")
+    result = await asyncio.to_thread(receipt_store.get, request_id)
+    if result is None:
+        raise TtsError(404, "Receipt not found", "receipt_not_found")
+    return result
+
+
 app.mount("/", StaticFiles(directory=str(Path(__file__).parent / "static"), html=True), name="static")

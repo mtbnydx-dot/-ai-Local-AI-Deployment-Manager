@@ -1818,6 +1818,8 @@ function createServiceGatewayMiddleware(options = {}) {
 }
 
 module.exports = {
+  waitForServiceGatewayConcurrency,
+  resolveNextServiceGatewayWaiter,
   SERVICE_ENTRY_INSTANCE_HEADER,
   SERVICE_ENTRY_INSTANCE_SIGNATURE_HEADER,
   normalizeServiceEntryInstanceId,

@@ -181,7 +181,7 @@ function createEntrySecurity(options = {}) {
     const origin = String(req.headers?.origin || "").trim();
     const { allowedOrigins } = policy();
     const base = {
-      "access-control-allow-methods": "GET,POST,OPTIONS",
+      "access-control-allow-methods": "GET,HEAD,POST,PATCH,DELETE,OPTIONS",
       "access-control-allow-headers": "authorization,content-type,x-api-key,anthropic-api-key,anthropic-version,api-key",
       "access-control-max-age": "600",
     };
@@ -191,7 +191,7 @@ function createEntrySecurity(options = {}) {
     return {
       ...base,
       "access-control-allow-origin": allowedOrigins.includes("*") ? "*" : origin,
-      "access-control-allow-credentials": "true",
+      ...(allowedOrigins.includes("*") ? {} : { "access-control-allow-credentials": "true" }),
       vary: "Origin",
     };
   }
@@ -257,7 +257,7 @@ function createEntrySecurity(options = {}) {
       };
     }
 
-    if (!current.requireApiKey) {
+    if (!current.requireApiKey && !presentedKey) {
       return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
     }
 
@@ -267,6 +267,7 @@ function createEntrySecurity(options = {}) {
       return hasGlobal || hasClients;
     });
     if (!configured.length) {
+      if (!current.requireApiKey) return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
       return {
         ok: false,
         status: 503,
@@ -290,12 +291,18 @@ function createEntrySecurity(options = {}) {
             id: client.id,
             enabled: client.enabled !== false,
             allowedModels: Array.isArray(client.allowedModels) ? [...client.allowedModels] : [],
+            rateLimitRpm: client.rateLimitRpm,
+            maxConcurrentRequests: client.maxConcurrentRequests,
+            maxQueuedRequests: client.maxQueuedRequests,
+            queueTimeoutSeconds: client.queueTimeoutSeconds,
+            requestTimeoutSeconds: client.requestTimeoutSeconds,
           },
           authRequired: true,
           matchedManager: store.manager.id,
         };
       }
     }
+    if (!current.requireApiKey) return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
     return { ok: false, status: 401, code: "unauthorized", message: "Invalid service API key." };
   }
 

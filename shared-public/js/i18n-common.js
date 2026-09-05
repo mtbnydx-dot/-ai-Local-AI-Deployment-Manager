@@ -936,6 +936,8 @@ const UI_TRANSLATION_PATTERNS = [
 ];
 
 const UI_PARTIAL_TRANSLATIONS = [
+  [/发现需要处理的问题/g, "Issues need attention"],
+  [/Docker Desktop 引擎未就绪。请先用页面的一键 Docker 按钮启动 Docker Desktop，等状态变为可用后再启动模型。/g, "Docker Desktop is not ready. Start Docker Desktop with the Docker button, wait until it is available, then start the model."],
   [/已定稿 /g, "Finalized "],
   [/传输中 /g, "In transfer "],
   [/GGUF 全部/g, "All GGUF files"],

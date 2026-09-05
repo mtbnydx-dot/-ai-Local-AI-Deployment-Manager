@@ -22,9 +22,7 @@ if exist "%ROOT%stop-search-gateway.cmd" call "%ROOT%stop-search-gateway.cmd"
 
 echo.
 echo == TTS gateway ==
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$l=Get-NetTCPConnection -LocalPort 7000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1;" ^
-  "if ($l) { Stop-Process -Id $l.OwningProcess -Force -ErrorAction SilentlyContinue; Write-Host ('Stopped TTS gateway PID ' + $l.OwningProcess) } else { Write-Host 'TTS gateway is not running.' }"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%tts-platform\scripts\stop_gateway.ps1"
 
 :done
 echo.

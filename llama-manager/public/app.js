@@ -1018,6 +1018,7 @@ async function init() {
     $("#modelsRoot").textContent = state.config.modelsRoot;
     $("#hfCache").textContent = state.config.hfCache;
     updateSidebarFoot();
+    refreshProfiles().catch(() => renderServiceProfileOptions([]));
     await Promise.all([refreshStatus(), refreshJobs(), refreshModels(), refreshModelNotes(), refreshLogs(), refreshServiceExposure(), refreshServiceClients()]);
     // Seeds lastSuccessAt so the freshness clock starts from a real load.
     connectionStatus.markSuccess();
@@ -1031,7 +1032,6 @@ async function init() {
     refreshClaudeCompression().catch(() => {});
     refreshExternalAccess().catch(() => {});
     refreshAuditStatus().catch(() => {});
-    refreshProfiles().catch(() => renderServiceProfileOptions([]));
     loadDownloadSettings().catch(() => {});
     refreshRecentLaunches().catch(() => {});
     // status/jobs 走 connectionStatus.track，失败会累计并触发断连横幅

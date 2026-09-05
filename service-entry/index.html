@@ -62,6 +62,13 @@
       font-size: 13px;
       font-weight: 700;
     }
+    [data-entry-pane][hidden] { display: none !important; }
+    .entry-shortcuts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .entry-shortcuts .doc-card { min-height: 94px; }
+    .entry-nav a[aria-current="page"] { background: var(--primary-bg); color: #fff; }
+    .entry-nav a { min-height: 40px; display: inline-flex; align-items: center; }
+    .status-banner details > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+    @media (max-width: 620px) { .entry-shortcuts { grid-template-columns: 1fr; gap: 8px; } .entry-shortcuts .doc-card { min-height: 64px; padding: 12px; } .entry-nav { gap: 2px; } .entry-nav a { padding: 5px 9px; } }
     .entry-nav a:hover { background: var(--surface-2); color: var(--ink); }
     html { scroll-behavior: smooth; }
     section[id] { scroll-margin-top: 64px; }
@@ -966,17 +973,20 @@
     </header>
 
     <nav class="entry-nav" aria-label="页面导航">
-      <a href="#entrySummaryCard">总览</a>
-      <a href="#managerGrid">管理器</a>
-      <a href="#gateway">接入地址</a>
-      <a href="#fleet">舰队</a>
-      <a href="#access">访问统计</a>
-      <a href="#keysCard">密钥</a>
-      <a href="#billingEntryCard">计费</a>
-      <a href="#entryDocs">文档</a>
+      <a href="#overview" data-entry-nav="overview">总览</a>
+      <a href="#models" data-entry-nav="models">模型</a>
+      <a href="#tasks" data-entry-nav="tasks">下载与任务</a>
+      <a href="#voice" data-entry-nav="voice">语音</a>
+      <a href="#clients" data-entry-nav="clients">客户与 API</a>
+      <a href="#operations" data-entry-nav="operations">运维</a>
     </nav>
+    <section class="entry-shortcuts" data-entry-pane="overview" aria-label="常用操作">
+      <a class="doc-card" href="#models"><strong>管理模型</strong><span>运行实例、显存与路由</span></a>
+      <a class="doc-card" href="/gateway/tts/"><strong>生成语音</strong><span>音色、合成任务与历史</span></a>
+      <a class="doc-card" href="#clients"><strong>接入 API</strong><span>地址、客户、密钥与用量</span></a>
+    </section>
 
-    <section class="card" id="entrySummaryCard">
+    <section class="card" id="entrySummaryCard" data-entry-pane="overview">
       <div class="card-head">
         <div>
           <h2>服务总览</h2>
@@ -990,11 +1000,30 @@
       </div>
     </section>
 
-    <section id="managerGrid" class="grid">
+    <section id="managerGrid" data-entry-pane="models" class="grid">
       <div class="empty">正在读取本地服务状态...</div>
     </section>
 
-    <section class="note" id="gateway">
+    <section id="voiceGrid" class="grid" data-entry-pane="voice" aria-label="语音服务"></section>
+    <section class="card" data-entry-pane="tasks">
+      <div class="card-head"><div><h2>下载与任务</h2><p>按引擎查看下载进度、失败原因与重试；语音任务在语音工作台中管理。</p></div></div>
+      <div class="doc-grid">
+        <a class="doc-card" data-manager-link="vllm" data-manager-view="download"><strong>vLLM 下载</strong><span>模型仓库、下载队列与任务日志</span></a>
+        <a class="doc-card" data-manager-link="llama" data-manager-view="download"><strong>llama.cpp 下载</strong><span>GGUF 文件与下载进度</span></a>
+        <a class="doc-card" href="/gateway/tts/"><strong>语音任务</strong><span>生成进度、重试与历史音频</span></a>
+      </div>
+    </section>
+    <section class="card" data-entry-pane="operations">
+      <div class="card-head"><div><h2>运行与恢复</h2><p>诊断、备份验证与组件状态集中查看。</p></div></div>
+      <div id="operationsBanners"></div>
+      <div class="doc-grid">
+        <a class="doc-card" data-manager-link="vllm" data-manager-view="tools"><strong>vLLM 诊断</strong><span>Docker、GPU 与启动环境</span></a>
+        <a class="doc-card" data-manager-link="llama" data-manager-view="tools"><strong>llama.cpp 诊断</strong><span>运行库、模型与服务日志</span></a>
+        <a class="doc-card" href="/docs/service-runbook.md"><strong>恢复与备份说明</strong><span>备份清单、完整性校验与恢复流程</span></a>
+      </div>
+    </section>
+
+    <section class="note" id="gateway" data-entry-pane="clients">
       <h3>统一自动路由</h3>
       <p>给新设备优先使用这里的 auto 地址；后台会自动转到当前可用的 vLLM 或 llama.cpp 管理器。</p>
       <div class="gateway-strip" id="entryGatewayStrip">
@@ -1002,7 +1031,7 @@
       </div>
     </section>
 
-    <section class="fleet-workbench" id="fleet" aria-labelledby="fleetTitle">
+    <section class="fleet-workbench" id="fleet" data-entry-pane="models" aria-labelledby="fleetTitle">
       <div class="fleet-layout">
         <article class="card fleet-main">
           <div class="card-head fleet-head">
@@ -1089,7 +1118,7 @@
       </div>
     </section>
 
-    <section class="card" id="access">
+    <section class="card" id="access" data-entry-pane="clients">
       <div class="card-head">
         <div>
           <h2>统一网关访问</h2>
@@ -1102,7 +1131,7 @@
       </div>
     </section>
 
-    <section class="card" id="keysCard" aria-labelledby="keysTitle">
+    <section class="card" id="keysCard" data-entry-pane="clients" aria-labelledby="keysTitle">
       <div class="card-head">
         <div>
           <h2 id="keysTitle">密钥总览</h2>
@@ -1112,7 +1141,7 @@
       <div id="keysPanel"><div class="empty">正在读取密钥状态...</div></div>
     </section>
 
-    <section class="billing-entry card" id="billingEntryCard" aria-labelledby="billingEntryTitle">
+    <section class="billing-entry card" id="billingEntryCard" data-entry-pane="clients" aria-labelledby="billingEntryTitle">
       <div class="card-head">
         <div>
           <h2 id="billingEntryTitle">模型计费中心</h2>
@@ -1131,12 +1160,12 @@
 
 
 
-    <section class="note">
+    <section class="note" data-entry-pane="clients">
       <h3>推荐接入方式</h3>
       <p>OpenWebUI、Claude Desktop 转发器、OpenCode 等客户端优先填写 <strong>OpenAI Gateway Base URL</strong>，模型名用 <strong>local-current</strong>。需要给局域网设备使用时，先进入对应“服务后台”打开局域网提供服务；如需隔离不同客户端，再创建独立客户端 API Key。</p>
     </section>
 
-    <section class="note" id="entryDocs">
+    <section class="note" id="entryDocs" data-entry-pane="operations">
       <h3>文档与排错</h3>
       <p>局域网访问请用发布目录根部的 <code>start-service-entry-lan.cmd</code> 启动统一入口；默认双击 <code>start-service-entry.cmd</code> 仍只开放本机。</p>
       <div class="doc-grid">
@@ -1235,6 +1264,21 @@
       }
     });
 
+    const paneAliases = { entrySummaryCard: "overview", managerGrid: "models", fleet: "models", gateway: "clients", access: "clients", keysCard: "clients", billingEntryCard: "clients", entryDocs: "operations" };
+    function selectEntryPane() {
+      const hash = location.hash.slice(1);
+      const pane = paneAliases[hash] || (["models", "tasks", "voice", "clients", "operations"].includes(hash) ? hash : "overview");
+      for (const node of document.querySelectorAll("[data-entry-pane]")) node.hidden = node.dataset.entryPane !== pane;
+      for (const link of document.querySelectorAll("[data-entry-nav]")) {
+        if (link.dataset.entryNav === pane) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      }
+      document.title = `${document.querySelector('[data-entry-nav="' + pane + '"]').textContent} · 本地模型服务统一入口`;
+    }
+    window.addEventListener("hashchange", selectEntryPane);
+    selectEntryPane();
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) void refresh(); });
+
     let refreshInFlight = null;
     let refreshQueued = false;
     let shutdown = false;
@@ -1243,7 +1287,7 @@
     refreshTimer = setInterval(() => void refresh(), 15000);
 
     function refresh() {
-      if (shutdown) return Promise.resolve();
+      if (shutdown || document.hidden) return Promise.resolve();
       refreshQueued = true;
       if (!refreshInFlight) refreshInFlight = drainRefreshQueue();
       return refreshInFlight;
@@ -1433,7 +1477,11 @@
           banners.push(`<div class="status-banner ok"><div class="banner-head"><strong>${components.online} / ${components.total} 个组件在线</strong><div class="banner-actions"><button type="button" data-notify-toggle>开启离线桌面通知</button></div></div></div>`);
         }
       }
-      setHtmlPreservingState(entryBanners, banners.join(""));
+      const full = banners.join("");
+      setHtmlPreservingState(document.querySelector("#operationsBanners"), full);
+      const offline = components?.offline?.length || 0;
+      const unhealthy = (components?.items || []).filter(item => item.online && !item.healthy).length;
+      setHtmlPreservingState(entryBanners, `<div class="status-banner ${offline || unhealthy ? "warn" : "ok"}"><div class="banner-head"><strong>${offline ? `${offline} 个组件离线` : unhealthy ? `${unhealthy} 个组件需要检查` : "服务状态正常"}</strong><a class="button" href="#operations">查看详情与启动操作</a></div></div>`);
     }
 
     function formatDayAgo(value) {
@@ -2259,8 +2307,13 @@
         return;
       }
       const cards = managers.map(renderManager);
-      if (tts) cards.push(renderTts(tts));
-      setHtmlPreservingState(grid, cards.join(""));
+      setHtmlPreservingState(document.querySelector("#voiceGrid"), tts ? renderTts(tts) : `<div class="empty">暂无语音服务状态</div>`);
+      for (const link of document.querySelectorAll("[data-manager-link]")) {
+        const manager = managers.find(item => item.id === link.dataset.managerLink);
+        const url = new URL(manager?.localUrl || `http://${location.hostname}:${link.dataset.managerLink === "vllm" ? 5177 : 5178}`);
+        url.hash = link.dataset.managerView; link.href = url.href;
+      }
+      setHtmlPreservingState(grid, cards.join("") || `<div class="empty">暂未发现模型管理器；可在运维页查看组件状态。</div>`);
     }
 
     function renderTts(tts) {

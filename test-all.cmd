@@ -22,6 +22,8 @@ call :check "tests\connection-status.spec.cjs"
 call :check "tts-platform\gateway\static\app.js"
 call :check "platform-mcp\scripts\validate-live.mjs"
 call :check "scripts\sqlite-snapshot.js"
+call :check "scripts\verify-backup.js"
+call :check "tests\billing-page.spec.cjs"
 call :check "scripts\check-i18n.js"
 call :checkps1 "build-github-release.ps1"
 call :checkps1 "scripts\check-powershell-syntax.ps1"
@@ -39,6 +41,7 @@ call :checkps1 "tts-platform\scripts\runtime-root.ps1"
 call :checkps1 "tts-platform\scripts\install_gateway.ps1"
 call :checkps1 "tts-platform\scripts\start_all.ps1"
 call :checkps1 "tts-platform\scripts\start_gateway.ps1"
+call :checkps1 "tts-platform\scripts\stop_gateway.ps1"
 call :checkps1 "tts-platform\scripts\start_chatterbox.ps1"
 call :checkps1 "tts-platform\scripts\start_qwen.ps1"
 call :checkps1 "tts-platform\scripts\start_fish.ps1"
@@ -54,6 +57,8 @@ call :checkpy "tts-platform\gateway\tts_schemas.py"
 call :checkpy "tts-platform\gateway\tts_storage.py"
 call :checkpy "tts-platform\gateway\tts_services.py"
 call :checkpy "tts-platform\gateway\tts_jobs.py"
+call :checkpy "tts-platform\gateway\tts_identity.py"
+call :checkpy "tts-platform\gateway\tts_receipts.py"
 call :checkpy "tts-platform\gateway\tts_catalog.py"
 call :checkpy "tts-platform\gateway\tts_lifecycle.py"
 call :checkpy "tts-platform\workers\chatterbox_worker.py"
@@ -146,12 +151,14 @@ exit /b 0
 
 :testpy
 if not defined PYEXE (
+  if "%REQUIRE_TTS_TESTS%"=="1" (call :record "required TTS tests missing Python" 1 & exit /b 0)
   call :skip "tts-platform Python tests" "Python not found"
   exit /b 0
 )
 if not defined GATEWAY_PY (
   "%PYEXE%" -c "import httpx, fastapi" >nul 2>nul
   if errorlevel 1 (
+    if "%REQUIRE_TTS_TESTS%"=="1" (call :record "required TTS test dependencies missing" 1 & exit /b 0)
     call :skip "tts-platform Python tests" "gateway environment not installed; run tts-platform\scripts\install_gateway.ps1 from the live root"
     exit /b 0
   )

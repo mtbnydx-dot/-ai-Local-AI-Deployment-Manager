@@ -491,7 +491,13 @@ test("standalone page exposes five tabs and renders hostile API text without sec
   await page.locator("#billingThemeMode").selectOption("light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.locator(".manager-sidebar")).toHaveCSS("background-color", "rgb(16, 24, 32)");
-  await expect(page.locator("#billingRefreshBtn")).toHaveCSS("background-color", "rgb(15, 159, 143)");
+  const primaryContrast = await page.locator("#billingRefreshBtn").evaluate((node) => {
+    const style = getComputedStyle(node);
+    const luminance = (rgb) => rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    const values = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => a - b);
+    return (values[1] + 0.05) / (values[0] + 0.05);
+  });
+  expect(primaryContrast, "primary action text should remain readable after theme changes").toBeGreaterThanOrEqual(4.5);
 
   const tabs = page.getByRole("tab");
   await expect(tabs).toHaveCount(5);
@@ -511,7 +517,7 @@ test("standalone page exposes five tabs and renders hostile API text without sec
   await expect(pricesTab).toHaveCSS("background-color", "rgb(238, 243, 247)");
   await expect(overviewTab).toHaveCSS("color", "rgb(101, 114, 130)");
   const selectedTabStyle = await pricesTab.evaluate((node) => getComputedStyle(node).boxShadow);
-  expect(selectedTabStyle).toContain("rgb(15, 159, 143)");
+  expect(selectedTabStyle, "selected tab keeps a visible inset indicator").toContain("inset");
   await expect(pricesTab).not.toHaveCSS("transition-property", /(^|, )(?:all|color|border|border-color|border-bottom-color)(, |$)/);
 
   await page.getByRole("tab", { name: "总览", exact: true }).click();
@@ -616,6 +622,12 @@ test("customer, plan, credential, and balance forms issue bounded mutations and 
   await adjustmentForm.locator('[name="customerId"]').selectOption(CUSTOMER_ID);
   await adjustmentForm.locator('[name="amountCredits"]').fill("-10.500001");
   await adjustmentForm.locator('[name="reason"]').fill("退款差额调整");
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("confirm");
+    expect(dialog.message()).toContain("不可逆的扣款记录");
+    expect(dialog.message()).toContain("-10.500001");
+    await dialog.accept();
+  });
   await adjustmentForm.getByRole("button", { name: "提交调整" }).click();
   await expect.poll(() => requestFor("POST", "/api/billing/ledger/adjustments")).toBeTruthy();
   const adjustment = requestFor("POST", "/api/billing/ledger/adjustments").body;

@@ -543,6 +543,8 @@ async function smokeEntryPage(page, baseUrl) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator("h1")).toContainText("本地模型服务统一入口");
   await expect(page.locator("#entrySummary")).toBeVisible();
+  await expect(page.locator("#fleet")).toBeHidden();
+  await page.locator('[data-entry-nav="models"]').click();
   await expect(page.locator("#fleetMainPanel")).toBeVisible();
   await expect(page.locator("#fleetRoutingPanel")).toBeVisible();
   await expect(page.locator("#fleetTitle")).toContainText("多模型舰队");
@@ -554,10 +556,13 @@ async function smokeEntryPage(page, baseUrl) {
   await expect(page.locator("#fleetMainPanel")).toContainText("保护线内上限");
   await expect(page.locator("#fleetMainPanel")).toContainText("10.3 GiB");
   await expect(page.locator("#managerGrid")).toBeVisible();
+  await page.locator('[data-entry-nav="voice"]').click();
   await expect(page.locator('[data-render-key="tts-platform"]')).toContainText("TTS 语音克隆平台");
   await expect(page.locator('[data-render-key="tts-platform"]')).toContainText("1 / 2");
   await expect(page.locator('[data-render-key="tts-platform"] a[href="/gateway/tts/"]')).toBeVisible();
+  await page.locator('[data-entry-nav="clients"]').click();
   await expect(page.locator("#entryAccessPanel")).toBeVisible();
+  await page.locator('[data-entry-nav="models"]').click();
   await expect(page.locator(".app-signature")).toContainText("本地模型服务平台 · 2026");
   await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });
   await expect(page.locator("#fleetMainPanel")).not.toHaveAttribute("aria-live", /.+/);

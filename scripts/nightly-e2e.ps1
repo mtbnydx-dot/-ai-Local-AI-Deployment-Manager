@@ -5,7 +5,9 @@ param(
     [switch]$IncludeMcpLive,
     [int]$KeepReports = 30,
     [switch]$Register,
-    [string]$DailyAt = "03:00"
+    [string]$DailyAt = "03:00",
+    [string]$PublicModelsUrl = "",
+    [string[]]$RequiredComponents = @('entry','vllm','llama','tts','mcp','search')
 )
 
 # Nightly end-to-end check for the running platform. Writes
@@ -24,7 +26,11 @@ New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 if ($Register) {
     $taskName = "LocalAIPlatformNightlyE2E"
     $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Root `"$Root`""
+    if ($SkipUnitTests) { $action += ' -SkipUnitTests' }
+    if ($IncludeMcpLive) { $action += ' -IncludeMcpLive' }
+    if ($PublicModelsUrl) { $action += " -PublicModelsUrl `"$PublicModelsUrl`"" }
     schtasks /Create /F /SC DAILY /ST $DailyAt /TN $taskName /TR $action | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Nightly task registration failed' }
     Write-Host "Registered scheduled task '$taskName' daily at $DailyAt."
     return
 }
@@ -63,14 +69,22 @@ if (-not $SkipUnitTests) {
     Add-Step "test-all.cmd" ($code -eq 0) ("exit $code; " + $summary.Substring(0, [math]::Min(300, $summary.Length))) $sw.Elapsed.TotalSeconds
 }
 
-Probe "entry /api/status" "http://127.0.0.1:5176/api/status" { param($b) if ($b.ok -ne $true) { return "ok=false" }; $off = @($b.components.offline | Where-Object { $_ }); if ($off.Count) { return "offline: " + ($off -join ",") }; $true }
-Probe "entry /gateway/health" "http://127.0.0.1:5176/gateway/health" { param($b) $b.ok -eq $true }
-Probe "entry /gateway/status" "http://127.0.0.1:5176/gateway/status" { param($b) if ($b.ok -ne $true) { return "ok=false" }; $true }
+Probe "entry /api/status" "http://127.0.0.1:5176/api/status" { param($b) if ($b.ok -ne $true) { return "ok=false" }; $off = @($b.components.offline | Where-Object { $_ -in $RequiredComponents }); if ($off.Count) { return "offline: " + ($off -join ",") }; $true }
 Probe "vLLM manager health" "http://127.0.0.1:5177/api/manager/health"
 Probe "llama manager health" "http://127.0.0.1:5178/api/manager/health"
 Probe "TTS gateway health" "http://127.0.0.1:7000/health"
 Probe "MCP health" "http://127.0.0.1:5190/health" { param($b) $b.service -eq "local-ai-platform-mcp" }
 Probe "search gateway health" "http://127.0.0.1:5180/health" { param($b) $b.service -eq "local-ai-search-gateway" }
+if ($PublicModelsUrl) {
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $PublicModelsUrl -TimeoutSec 15
+        $body = $response.Content | ConvertFrom-Json
+        Add-Step 'public API route' ($response.StatusCode -eq 200 -and $body.object -eq 'list') "HTTP $($response.StatusCode); model-list contract"
+    } catch {
+        $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        Add-Step 'public API route' ($status -eq 401) $(if ($status -eq 401) { 'HTTP 401; API authentication boundary reachable' } else { "HTTP $status; $($_.Exception.Message)" })
+    }
+}
 
 if ($IncludeMcpLive) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()

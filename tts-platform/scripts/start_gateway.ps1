@@ -10,5 +10,19 @@ if ($gatewayPort -lt 1 -or $gatewayPort -gt 65535) {
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "TTS gateway Python not found: $python. Run install-tts-gateway.cmd from the platform root first."
 }
-Set-Location (Join-Path $PSScriptRoot "..\gateway")
-& $python -m uvicorn main:app --host 127.0.0.1 --port $gatewayPort
+$gatewayDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\gateway'))
+$stateDirectory = Join-Path $runtimeRoot 'state'
+New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
+$recordFile = Join-Path $stateDirectory 'gateway-process.json'
+$process = Start-Process -FilePath $python -ArgumentList @('-m','uvicorn','main:app','--host','127.0.0.1','--port',"$gatewayPort") -WorkingDirectory $gatewayDirectory -WindowStyle Hidden -RedirectStandardOutput (Join-Path $stateDirectory 'gateway-stdout.log') -RedirectStandardError (Join-Path $stateDirectory 'gateway-stderr.log') -PassThru
+try {
+    [ordered]@{ pid = $process.Id; executable = $python; startedAt = $process.StartTime.ToUniversalTime().ToString('o'); directory = $gatewayDirectory; port = $gatewayPort } |
+        ConvertTo-Json | Set-Content -LiteralPath $recordFile -Encoding UTF8
+    $process.WaitForExit()
+    exit $process.ExitCode
+} finally {
+    if (Test-Path -LiteralPath $recordFile) {
+        $record = Get-Content -LiteralPath $recordFile -Raw | ConvertFrom-Json
+        if ($record.pid -eq $process.Id) { Remove-Item -LiteralPath $recordFile -Force }
+    }
+}

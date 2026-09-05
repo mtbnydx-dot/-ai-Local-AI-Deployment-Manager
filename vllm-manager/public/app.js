@@ -1140,6 +1140,8 @@ async function init() {
     $("#modelsRoot").textContent = state.config.modelsRoot;
     $("#hfCache").textContent = state.config.hfCache;
     updateSidebarFoot();
+    // Launch presets do not depend on Docker health, logs or exposure probes.
+    refreshProfiles().catch((error) => renderToolError("#serviceProfileSummary", error));
     await Promise.all([refreshStatus(), refreshJobs(), refreshModels(), refreshModelNotes(), refreshLogs(), refreshServiceExposure(), refreshServiceClients()]);
     // Seeds lastSuccessAt so the freshness clock starts from a real load.
     connectionStatus.markSuccess();
@@ -1153,7 +1155,7 @@ async function init() {
     refreshHfAuthStatus().catch(() => {});
     refreshAuditStatus().catch(() => {});
     refreshClaudeCompression().catch(() => {});
-    refreshToolData().catch(() => {});
+    // Detailed diagnostics are fetched when the tools view opens.
     // 页面在后台时跳过轮询，避免无谓请求
     // status/jobs 走 connectionStatus.track，失败会累计并触发断连横幅
     setInterval(() => {

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from tts_config import settings
+from tts_identity import owner, can_access
 
 
 VOICE_ID_RE = re.compile(r"^\d{14}_[0-9a-f]{6}$")
@@ -96,7 +97,8 @@ class VoiceStore:
         for path in sorted(settings.voices_dir.glob("*.json"), reverse=True):
             try:
                 meta = json.loads(path.read_text(encoding="utf-8"))
-                voices.append(self._decorate(meta))
+                if can_access(meta.get("owner"), shared=True):
+                    voices.append(self._decorate(meta))
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
         return voices
@@ -107,7 +109,8 @@ class VoiceStore:
         if not path.exists() or not audio.exists():
             return None
         try:
-            return self._decorate(json.loads(path.read_text(encoding="utf-8")))
+            meta = json.loads(path.read_text(encoding="utf-8"))
+            return self._decorate(meta) if can_access(meta.get("owner"), shared=True) else None
         except (OSError, ValueError, json.JSONDecodeError):
             return None
 
@@ -116,6 +119,7 @@ class VoiceStore:
         now = time.time()
         meta = {
             "id": voice_id,
+            "owner": owner() or "",
             "name": str(name or "我的音色").strip()[:120] or "我的音色",
             "ref_text": str(ref_text or "").strip()[:4_000],
             "created": now,
@@ -133,8 +137,12 @@ class VoiceStore:
         current = self.get(voice_id)
         if current is None:
             return None
+        saved = json.loads(self.metadata_path(voice_id).read_text(encoding="utf-8"))
+        if not can_access(saved.get("owner"), write=True):
+            return None
         meta = {
             "id": current["id"],
+            "owner": saved.get("owner", ""),
             "name": (str(name).strip()[:120] or "我的音色") if name is not None else current["name"],
             "ref_text": str(ref_text).strip()[:4_000] if ref_text is not None else current["ref_text"],
             "created": current["created"],
@@ -146,6 +154,9 @@ class VoiceStore:
     def delete(self, voice_id: str) -> bool:
         meta = self.metadata_path(voice_id)
         audio = self.audio_path(voice_id)
+        if owner() is not None:
+            if not meta.exists() or not can_access(json.loads(meta.read_text(encoding="utf-8")).get("owner"), write=True):
+                return False
         existed = meta.exists() or audio.exists()
         meta.unlink(missing_ok=True)
         audio.unlink(missing_ok=True)
@@ -197,6 +208,10 @@ class OutputStore:
             )
             connection.execute("CREATE INDEX IF NOT EXISTS outputs_created_idx ON outputs(created_at DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS outputs_engine_idx ON outputs(engine, created_at DESC)")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(outputs)")}
+            if "owner" not in columns:
+                connection.execute("ALTER TABLE outputs ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            connection.execute("CREATE INDEX IF NOT EXISTS outputs_owner_idx ON outputs(owner, created_at DESC)")
 
     @staticmethod
     def _engine_from_filename(path: Path) -> str:
@@ -239,6 +254,7 @@ class OutputStore:
     @staticmethod
     def _public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         record = dict(row)
+        record.pop("owner", None)
         output_id = record["id"]
         record["audio_url"] = f"api/outputs/{output_id}/audio"
         record["download_url"] = f"api/outputs/{output_id}/audio?download=1"
@@ -269,6 +285,7 @@ class OutputStore:
             info["sample_rate"],
             info["channels"],
             str(warning or "")[:500],
+            owner() or "",
         )
         try:
             with self._connect() as connection:
@@ -277,8 +294,8 @@ class OutputStore:
                     INSERT INTO outputs
                     (id, filename, engine, voice_id, text, language, speed, emotion,
                      emotion_intensity, style, created_at, elapsed_ms, bytes, duration_ms,
-                     sample_rate, channels, warning)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     sample_rate, channels, warning, owner)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     values,
                 )
@@ -290,11 +307,19 @@ class OutputStore:
     def get(self, output_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute("SELECT * FROM outputs WHERE id = ?", (str(output_id),)).fetchone()
-        return self._public(row) if row else None
+        return self._public(row) if row and can_access(row["owner"]) else None
+
+    def get_by_filename(self, filename: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM outputs WHERE filename=?", (filename,)).fetchone()
+        return self._public(row) if row and can_access(row["owner"]) else None
 
     def list(self, *, limit: int = 30, offset: int = 0, engine: str = "", query: str = "") -> dict[str, Any]:
         clauses: list[str] = []
         values: list[Any] = []
+        if owner() is not None:
+            clauses.append("owner = ?")
+            values.append(owner())
         if engine:
             clauses.append("engine = ?")
             values.append(engine)
@@ -337,7 +362,8 @@ class OutputStore:
 
     def stats(self) -> dict[str, int]:
         with self._connect() as connection:
-            row = connection.execute("SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM outputs").fetchone()
+            clause, values = (" WHERE owner=?", (owner(),)) if owner() is not None else ("", ())
+            row = connection.execute("SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM outputs" + clause, values).fetchone()
         return {"outputs": int(row[0]), "bytes": int(row[1])}
 
 

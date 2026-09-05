@@ -9,6 +9,7 @@
 const { Transform } = require("node:stream");
 
 const SYNTHESIS_ROUTES = new Map([
+  ["v1/audio/speech", { endpoint: "/v1/audio/speech", kind: "audio" }],
   ["openai/v1/audio/speech", { endpoint: "/v1/audio/speech", kind: "audio" }],
   ["api/tts", { endpoint: "/api/tts", kind: "json" }],
   ["api/jobs", { endpoint: "/api/jobs", kind: "batch" }],
@@ -17,7 +18,7 @@ const SYNTHESIS_ROUTES = new Map([
 function ttsSynthesisRoute(route, method = "POST") {
   if (String(method || "").toUpperCase() !== "POST") return null;
   const rest = String(route?.rest || "").replace(/\/+$/, "");
-  return SYNTHESIS_ROUTES.get(rest) || null;
+  return SYNTHESIS_ROUTES.get(rest) || (/^api\/jobs\/[a-zA-Z0-9_-]+\/retry$/.test(rest) ? { endpoint: "/api/jobs/retry", kind: "retry" } : null);
 }
 
 function textLength(value) {
@@ -28,6 +29,7 @@ function textLength(value) {
 function countTtsCharacters(body, kind = "audio") {
   if (!body || typeof body !== "object") return 0;
   if (kind === "batch") {
+    if (Array.isArray(body.engines)) return textLength(body.text) * new Set(body.engines).size;
     const items = Array.isArray(body.items) ? body.items : Array.isArray(body.requests) ? body.requests : [];
     return items.reduce((sum, item) => sum + textLength(item?.text) + textLength(item?.input), 0) + textLength(body.text);
   }

@@ -14,6 +14,7 @@ const { createBillingHttpHandler, strictLocalBillingAdmin } = require("./lib/bil
 const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview");
 const { parseAuxGatewayRoute, buildAuxUpstreamPath, parseEnvFileValue } = require("./lib/aux-gateway");
 const { ttsSynthesisRoute, countTtsCharacters, ttsEngineFromBody, createWavDurationProbe, createJsonCollector, parseTtsJsonDuration } = require("./lib/tts-usage");
+const { signedTtsHeaders, createTtsReconciler } = require("./lib/tts-bridge");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -63,6 +64,9 @@ const GATEWAY_TOTAL_BUFFER_BYTES = boundedByteLimit(
 );
 let gatewayBufferedBodyBytes = 0;
 const entryRateBuckets = new Map();
+const entryConcurrencyBuckets = new Map();
+const entryConcurrencyQueues = new Map();
+const ttsReconciler = createTtsReconciler({ getStore: () => getBillingStore(), getToken: () => security.getTrustToken(), getPort: () => TTS_GATEWAY_PORT, getKey: () => String(process.env.TTS_UPSTREAM_API_KEY || "").trim() });
 let fleetSettingsCache = { mtimeMs: Number.NaN, value: null };
 const MODEL_DISCOVERY_CACHE_MS = Math.max(250, Number(process.env.SERVICE_ENTRY_MODEL_CACHE_MS || 3000));
 const MANAGER_STATUS_CACHE_MS = Math.max(500, Number(process.env.SERVICE_ENTRY_STATUS_CACHE_MS || 5000));
@@ -170,6 +174,12 @@ function createServiceEntryServer() {
   const httpServer = http.createServer(handleRequest);
   httpServer.keepAliveTimeout = 65_000;
   httpServer.headersTimeout = 66_000;
+  let reconciliationTimer;
+  httpServer.once("listening", () => {
+    reconciliationTimer = setInterval(() => ttsReconciler.flush().catch((error) => console.warn(`TTS reconciliation: ${error.message}`)), 5000);
+    reconciliationTimer.unref();
+  });
+  httpServer.once("close", () => clearInterval(reconciliationTimer));
   return httpServer;
 }
 
@@ -778,7 +788,7 @@ function parseTtsGatewayRoute(pathname) {
   return {
     engine: "tts",
     protocol: "tts",
-    rest: match[1] || "",
+    rest: decodeURIComponent(sanitizeGatewayRest(match[1] || "")),
   };
 }
 
@@ -795,7 +805,7 @@ function buildTtsGatewayPath(route) {
 
 function isTtsUiShellRequest(req, route) {
   return ["GET", "HEAD"].includes(String(req?.method || "GET").toUpperCase())
-    && ["", "index.html"].includes(String(route?.rest || "").replace(/^\/+|\/+$/g, ""));
+    && ["", "index.html", "app.js", "app.css", "tokens.css"].includes(String(route?.rest || "").replace(/^\/+|\/+$/g, ""));
 }
 
 function isTtsModelManagementRequest(req, route) {
@@ -829,12 +839,40 @@ function buildTtsProxyHeaders(headers, req) {
     ...TRUST_HEADER_NAMES.map((name) => String(name || "").toLowerCase()),
   ]);
   for (const key of Object.keys(output)) {
-    if (sensitive.has(key.toLowerCase())) delete output[key];
+    if (sensitive.has(key.toLowerCase()) || key.toLowerCase().startsWith("x-tts-context")) delete output[key];
   }
   const upstreamKey = String(process.env.TTS_UPSTREAM_API_KEY || "").trim();
   if (upstreamKey) output.authorization = `Bearer ${upstreamKey}`;
   output["x-forwarded-prefix"] = "/gateway/tts";
+  const auth = req?.serviceEntryAuth;
+  const route = parseTtsGatewayRoute(new URL(req?.url || "/gateway/tts/", "http://localhost").pathname);
+  Object.assign(output, signedTtsHeaders(security.getTrustToken(), {
+    owner: auth?.client?.id ? `${auth.matchedManager}:${auth.client.id}` : "",
+    requestId: req?.ttsRequestId || "",
+    method: req?.method || "GET", path: route ? buildTtsGatewayPath(route) : "/",
+    policy: auth?.client || {},
+  }));
   return output;
+}
+
+async function acquireEntryConcurrency(req, res, auth) {
+  const policy = auth.client || { maxConcurrentRequests: 16, maxQueuedRequests: 128, queueTimeoutSeconds: 60 };
+  const key = auth.client?.id ? `${auth.matchedManager}:${auth.client.id}` : security.resolveClientAddress(req) || "anonymous";
+  const slot = await core.waitForServiceGatewayConcurrency(policy, key, entryConcurrencyBuckets, entryConcurrencyQueues, res, Math.min(7200, Number(policy.requestTimeoutSeconds || 600)) * 1000);
+  if (!slot.ok) {
+    if (!slot.aborted && !res.writableEnded) sendJson(res, { detail: slot.message, code: slot.code }, slot.statusCode || 429, gatewayCorsHeaders(req));
+    return false;
+  }
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    slot.concurrency.release();
+    core.resolveNextServiceGatewayWaiter(policy, key, entryConcurrencyBuckets, entryConcurrencyQueues);
+  };
+  res.once("finish", release);
+  res.once("close", release);
+  return true;
 }
 
 function ttsRequestTimeoutMs(req, route) {
@@ -850,6 +888,7 @@ function ttsRequestTimeoutMs(req, route) {
 async function proxyTtsGatewayRequest(req, res, url) {
   const route = parseTtsGatewayRoute(url.pathname);
   if (!route) return sendJson(res, { detail: "Unknown TTS gateway route." }, 404);
+  if (buildTtsGatewayPath(route).startsWith("/internal/")) return sendJson(res, { detail: "Not found" }, 404);
   if (req.method === "GET" && url.pathname === "/gateway/tts") {
     res.writeHead(308, { location: `/gateway/tts/${url.search || ""}`, ...gatewayCorsHeaders(req) });
     return res.end();
@@ -886,7 +925,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
 
   const rate = core.enterServiceRateLimit(
     { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
-    auth.client?.id || security.resolveClientAddress(req) || "anonymous",
+    auth.client?.id ? `${auth.matchedManager}:${auth.client.id}` : security.resolveClientAddress(req) || "anonymous",
     entryRateBuckets,
   );
   if (!rate.ok) {
@@ -905,30 +944,17 @@ async function proxyTtsGatewayRequest(req, res, url) {
     return sendJson(res, { detail: message, code: "request_body_too_large" }, 413, gatewayCorsHeaders(req));
   }
   // TTS 用量计费（F3）：持客户端 Key 的合成请求按秒数 / 字符数进账本，并检查每日秒数配额。
-  const synthesis = ttsSynthesisRoute(route, req.method);
+  const synthesis = ttsSynthesisRoute({ rest: buildTtsGatewayPath(route).slice(1) }, req.method);
   const meter = synthesis && auth.client?.id
     ? { clientId: auth.client.id, managerId: auth.matchedManager || "tts", endpoint: synthesis.endpoint, kind: synthesis.kind, characters: 0, engine: "unknown" }
     : null;
-  if (meter) {
-    try {
-      const quota = getBillingStore().getTtsQuotaState({ managerId: meter.managerId, clientId: meter.clientId });
-      if (!quota.allowed) {
-        const message = quota.code === "billing_customer_inactive"
-          ? "Billing customer is not active."
-          : `Daily TTS quota exhausted (${Math.round(quota.usedSeconds)}s of ${quota.limitSeconds}s used). Resets at the start of the next day.`;
-        appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
-        return sendJson(res, { detail: message, code: quota.code === "billing_customer_inactive" ? "billing_customer_inactive" : "tts_quota_exceeded", quota: { limitSeconds: quota.limitSeconds, usedSeconds: quota.usedSeconds, remainingSeconds: quota.remainingSeconds } }, 429, gatewayCorsHeaders(req));
-      }
-    } catch (error) {
-      console.warn(`TTS quota check skipped: ${error.message}`);
-    }
-  }
   if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
     const message = `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`;
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, message)).catch(() => {});
     return sendJson(res, { detail: message, code: "tts_gateway_offline" }, 503, gatewayCorsHeaders(req));
   }
 
+  if (!(await acquireEntryConcurrency(req, res, auth))) return;
   let targetPath;
   try {
     targetPath = buildTtsGatewayPath(route);
@@ -938,17 +964,39 @@ async function proxyTtsGatewayRequest(req, res, url) {
   const target = new URL(`http://127.0.0.1:${TTS_GATEWAY_PORT}${targetPath}`);
   target.search = url.search;
   const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
-  const upstreamControl = createUpstreamControl(req, res, { timeoutMs: ttsRequestTimeoutMs(req, route) });
+  const upstreamControl = createUpstreamControl(req, res, { timeoutMs: Math.min(ttsRequestTimeoutMs(req, route), Number(auth.client?.requestTimeoutSeconds || 7200) * 1000) });
   let bodyLimitError = null;
+  let releaseTtsBody = () => {};
   try {
     let body;
     if (hasBody && meter) {
       // Metered synthesis bodies are small JSON documents: buffer them so the
       // text length is known before the upstream call.
-      const buffered = await readRequestBody(req, TTS_GATEWAY_MAX_BODY_BYTES);
-      const parsed = parseJsonSafe(buffered ? buffered.toString("utf8") : "", null);
+      requireGatewayJsonContentType(req);
+      const held = await readRequestBody(req, TTS_GATEWAY_MAX_BODY_BYTES, { trackGlobal: true, holdReservation: true, memoryMultiplier: GATEWAY_BODY_MEMORY_MULTIPLIER });
+      releaseTtsBody = held.release;
+      const buffered = held.buffer;
+      let parsed = parseJsonSafe(buffered ? buffered.toString("utf8") : "", null);
+      if (!parsed || typeof parsed !== "object") throw Object.assign(new Error("Invalid synthesis JSON"), { status: 400 });
+      if (meter.kind === "retry") {
+        const infoTarget = new URL(target);
+        infoTarget.pathname = infoTarget.pathname.replace(/\/retry$/, "");
+        const infoReq = { ...req, method: "GET", url: `/gateway/tts${infoTarget.pathname}`, headers: req.headers, serviceEntryAuth: auth };
+        const info = await fetch(infoTarget, { headers: buildTtsProxyHeaders(req.headers, infoReq), signal: upstreamControl.signal });
+        if (!info.ok) throw Object.assign(new Error("Retry job unavailable"), { status: info.status });
+        parsed = (await info.json()).request;
+      }
       meter.characters = countTtsCharacters(parsed, meter.kind);
       meter.engine = ttsEngineFromBody(parsed);
+      meter.requestId = crypto.randomUUID();
+      const copies = meter.kind === "batch" ? Math.max(1, new Set(parsed.engines || []).size) : 1;
+      const estimatedMs = Math.ceil(Math.max(1000 * copies, meter.characters * 250 / Math.max(0.5, Number(parsed.speed) || 1)));
+      const authorization = getBillingStore().authorizeTtsRequest({ ...meter, estimatedMs });
+      if (!authorization.allowed) {
+        upstreamControl.clear();
+        return sendJson(res, { detail: "TTS billing allowance is insufficient for this request.", code: authorization.code }, authorization.code === "billing_insufficient_balance" ? 402 : 429, gatewayCorsHeaders(req));
+      }
+      req.ttsRequestId = meter.requestId;
       body = buffered;
     } else if (hasBody) {
       const limiter = createTtsBodyLimiter();
@@ -972,37 +1020,25 @@ async function proxyTtsGatewayRequest(req, res, url) {
     res.once("finish", () => {
       appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, upstream.status, startedAt, null, "")).catch(() => {});
     });
-    let usageTransform = null;
-    if (meter) {
-      const engine = String(upstream.headers.get("x-tts-engine") || meter.engine || "unknown");
-      const externalRequestId = String(upstream.headers.get("x-request-id") || "");
-      const record = (duration) => recordTtsUsageSafely({
-        ...meter,
-        engine,
-        externalRequestId,
-        status: upstream.status,
-        ok: upstream.ok,
-        audioMs: duration?.audioMs || 0,
-        durationSource: duration?.durationSource || "missing",
-      });
-      if (!upstream.ok) record({ audioMs: 0, durationSource: "missing" });
-      else if (meter.kind === "audio") usageTransform = createWavDurationProbe(record);
-      else if (meter.kind === "json") usageTransform = createJsonCollector(1024 * 1024, (payload) => record(parseTtsJsonDuration(payload)));
-      else record({ audioMs: 0, durationSource: "missing" });
+    if (meter?.requestId) {
+      if (!upstream.ok) recordTtsUsageSafely({ ...meter, status: upstream.status, ok: false, audioMs: 0, durationSource: "missing" });
+      res.once("finish", () => ttsReconciler.flush().catch(() => {}));
     }
-    forwardUpstreamBody(upstream, res, upstreamControl, usageTransform);
+    forwardUpstreamBody(upstream, res, upstreamControl);
   } catch (error) {
     upstreamControl.clear();
     const failure = bodyLimitError || error?.cause || error;
     const status = Number(failure?.status || (error?.name === "TimeoutError" ? 504 : 502));
     const message = status === 413 ? failure.message : "TTS gateway upstream is unavailable.";
-    if (meter) recordTtsUsageSafely({ ...meter, status, ok: false, audioMs: 0, durationSource: "missing" });
+    // Ambiguous transport failures retain their reservation until a durable completion receipt arrives.
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, failure?.message || message)).catch(() => {});
     if (!res.headersSent) {
       sendJson(res, { detail: message, code: failure?.code || "tts_gateway_proxy_error" }, status, gatewayCorsHeaders(req));
     } else if (!res.writableEnded) {
       res.end();
     }
+  } finally {
+    releaseTtsBody();
   }
 }
 
@@ -1039,7 +1075,7 @@ async function proxyGatewayRequest(req, res, url) {
     { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
     // 无 Key 的代理请求按真实客户端地址分桶；用 socket 地址会让所有公网设备
     // 共享 Caddy 的 127.0.0.1 一个桶，一个滥用者就能耗尽全部配额。
-    auth.client?.id || security.resolveClientAddress(req) || "anonymous",
+    auth.client?.id ? `${auth.matchedManager}:${auth.client.id}` : security.resolveClientAddress(req) || "anonymous",
     entryRateBuckets,
   );
   if (!rate.ok) {
@@ -1356,7 +1392,7 @@ async function proxyAuxGatewayRequest(req, res, url) {
   req.serviceEntryAuth = auth;
   const rate = core.enterServiceRateLimit(
     { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
-    auth.client?.id || security.resolveClientAddress(req) || "anonymous",
+    auth.client?.id ? `${auth.matchedManager}:${auth.client.id}` : security.resolveClientAddress(req) || "anonymous",
     entryRateBuckets,
   );
   if (!rate.ok) {
@@ -1381,6 +1417,7 @@ async function proxyAuxGatewayRequest(req, res, url) {
     const message = `Request body exceeds ${GATEWAY_MAX_BODY_BYTES} bytes.`;
     return sendJson(res, core.openAiGatewayError("request_body_too_large", message), 413, gatewayCorsHeaders(req));
   }
+  if (!(await acquireEntryConcurrency(req, res, auth))) return;
   const credential = await auxUpstreamCredential(route.service);
   const target = new URL(`http://127.0.0.1:${port}${targetPath}`);
   target.search = url.search;
@@ -1451,7 +1488,7 @@ function forwardUpstreamBody(upstream, res, upstreamControl, transform = null) {
 function recordTtsUsageSafely(input) {
   try {
     getBillingStore().recordTtsUsage({
-      requestId: crypto.randomUUID(),
+      requestId: input.requestId || crypto.randomUUID(),
       managerId: input.managerId,
       clientId: input.clientId,
       engine: input.engine,
@@ -2354,6 +2391,7 @@ module.exports = {
   selectGatewayManager,
   serializeFleetRouteTarget,
   sendAggregatedModelList,
+  flushTtsSettlements: () => ttsReconciler.flush(),
   resetEntryRateLimitBuckets() {
     entryRateBuckets.clear();
   },

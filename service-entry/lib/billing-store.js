@@ -786,9 +786,11 @@ function createBillingStore(options = {}) {
         AND terminal_state!='ambiguous'
         AND ((ok=1 AND terminal_state='completed') OR total_tokens>0)
     `).get(customerId, period.start, period.end);
-    const reservedCredits = BigInt(authorized?.reserved_credits || 0);
+    const ttsPending = prepare("SELECT COALESCE(SUM(reserved),0) AS total FROM billing_tts_reservations WHERE customer_id=? AND mode='hard' AND status='pending'").get(customerId);
+    const ttsSpent = prepare("SELECT COALESCE(SUM(charged_microcredits),0) AS total FROM billing_tts_usage_events WHERE customer_id=? AND at>=? AND at<?").get(customerId, period.start, period.end);
+    const reservedCredits = BigInt(authorized?.reserved_credits || 0) + BigInt(ttsPending.total);
     const reservedTokens = BigInt(authorized?.reserved_tokens || 0);
-    const spentCredits = BigInt(usage?.spent_credits || 0);
+    const spentCredits = BigInt(usage?.spent_credits || 0) + BigInt(ttsSpent.total);
     const spentTokens = BigInt(usage?.spent_tokens || 0);
     // Request quota counts each effective settled usage once, including failed,
     // cancelled, disconnected, or timed-out requests with measured token
@@ -817,7 +819,8 @@ function createBillingStore(options = {}) {
       WHERE customer_id=? AND enforcement_mode='hard' AND status='authorized' AND expires_at>?
     `).get(customerId, nowIso());
     const balance = BigInt(balanceRow?.total || 0);
-    const reserved = BigInt(reservedRow?.total || 0);
+    const ttsReserved = prepare("SELECT COALESCE(SUM(reserved),0) AS total FROM billing_tts_reservations WHERE customer_id=? AND mode='hard' AND status='pending'").get(customerId);
+    const reserved = BigInt(reservedRow?.total || 0) + BigInt(ttsReserved?.total || 0);
     return { balance, reserved, available: balance - reserved };
   }
 
@@ -894,7 +897,8 @@ function createBillingStore(options = {}) {
     const ledgerTotal = prepare("SELECT COALESCE(SUM(delta_microcredits), 0) AS total FROM billing_wallet_ledger").get();
     const reservationsTotal = prepare("SELECT COALESCE(SUM(reservation_microcredits), 0) AS total FROM billing_request_reservations WHERE enforcement_mode='hard' AND status='authorized' AND expires_at>?").get(overviewAt);
     const balanceMicrocredits = decimal(BigInt(ledgerTotal?.total || 0));
-    const reservedMicrocredits = decimal(BigInt(reservationsTotal?.total || 0));
+    const ttsReserved = prepare("SELECT COALESCE(SUM(reserved),0) AS total FROM billing_tts_reservations WHERE mode='hard' AND status='pending'").get();
+    const reservedMicrocredits = decimal(BigInt(reservationsTotal?.total || 0) + BigInt(ttsReserved?.total || 0));
     const availableMicrocredits = (BigInt(balanceMicrocredits) - BigInt(reservedMicrocredits)).toString();
     const activeCustomers = Number(customers?.active || 0);
     const activeCredentials = Number(credentials?.active || 0);
@@ -949,6 +953,56 @@ function createBillingStore(options = {}) {
   }
 
   // --- TTS usage (F3) -------------------------------------------------------
+
+  function authorizeTtsRequest(input = {}) {
+    const requestId = uuid(input.requestId, "requestId");
+    const managerId = managerIdentifier(input.managerId || "tts");
+    const clientId = clientIdentifier(input.clientId);
+    const characters = nonNegativeInt64(input.characters ?? 0, "characters");
+    const estimatedMs = nonNegativeInt64(input.estimatedMs ?? 1000, "estimatedMs");
+    return transaction(() => {
+      const existing = prepare("SELECT * FROM billing_tts_reservations WHERE request_id=?").get(requestId);
+      if (existing) {
+        if (existing.manager_id !== managerId || existing.client_id !== clientId) throw new BillingStoreError("billing_identity_mismatch", "Reservation identity mismatch", 409);
+        return { allowed: existing.status !== "denied", requestId, code: existing.code };
+      }
+      const binding = resolveTtsBinding(managerId, clientId);
+      const plan = binding?.plan_id ? getPlanRow(binding.plan_id) : null;
+      const mode = binding?.customer_enforcement_mode || binding?.plan_enforcement_mode || defaultEnforcementMode;
+      const minuteRate = BigInt(plan?.tts_per_minute_microcredits || 0);
+      const charRate = BigInt(plan?.tts_per_thousand_chars_microcredits || 0);
+      const reserved = ceilDiv(estimatedMs * minuteRate, 60000n) + ceilDiv(characters * charRate, 1000n);
+      const reasons = [];
+      if (binding) {
+        if (binding.customer_status !== "active") reasons.push("billing_customer_inactive");
+        if (plan && Number(plan.active) !== 1) reasons.push("billing_plan_inactive");
+        if (!plan && mode === "hard") reasons.push("billing_plan_missing");
+        const quota = ttsQuotaForBinding(binding, nowDate());
+        const pending = prepare("SELECT COALESCE(SUM(estimated_ms),0) AS total FROM billing_tts_reservations WHERE customer_id=? AND status='pending' AND mode='hard'").get(binding.customer_id);
+        if (quota.limitSeconds !== null && quota.usedSeconds * 1000 + Number(pending.total) + Number(estimatedMs) > quota.limitSeconds * 1000) reasons.push("billing_tts_daily_limit");
+        if (walletState(binding.customer_id).available < reserved) reasons.push("billing_insufficient_balance");
+        if (binding.credit_limit_microcredits !== null) {
+          const period = monthPeriod(nowDate(), defaultTzOffsetMinutes);
+          const spent = prepare("SELECT COALESCE(SUM(charged_microcredits),0) AS total FROM billing_tts_usage_events WHERE customer_id=? AND at>=? AND at<?").get(binding.customer_id, period.start, period.end);
+          const llm = prepare("SELECT COALESCE(SUM(charged_microcredits),0) AS total FROM billing_usage_events WHERE customer_id=? AND at>=? AND at<?").get(binding.customer_id, period.start, period.end);
+          if (BigInt(spent.total) + BigInt(llm.total) + walletState(binding.customer_id).reserved + reserved > binding.credit_limit_microcredits) reasons.push("billing_period_credit_limit");
+        }
+      }
+      const allowed = mode !== "hard" || reasons.length === 0;
+      const code = reasons[0] || (binding ? "billing_authorized" : "billing_unbound");
+      prepare(`INSERT INTO billing_tts_reservations
+        (request_id,manager_id,client_id,customer_id,mode,status,code,reserved,estimated_ms,minute_rate,char_rate,created_at,meter)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(requestId, managerId, clientId, binding?.customer_id || null, mode,
+          allowed ? "pending" : "denied", code, reserved, estimatedMs, minuteRate, charRate, nowIso(),
+          JSON.stringify({ requestId, managerId, clientId, characters: Number(characters), engine: input.engine || "unknown", endpoint: input.endpoint || "/v1/audio/speech" }));
+      return { allowed, requestId, code, reservedMicrocredits: reserved.toString(), estimatedMs: Number(estimatedMs) };
+    });
+  }
+
+  function listPendingTtsRequests() {
+    return prepare("SELECT meter,created_at FROM billing_tts_reservations WHERE status='pending' ORDER BY created_at LIMIT 100").all()
+      .map((row) => ({ ...JSON.parse(row.meter), createdAt: row.created_at }));
+  }
 
   // Resolves the billing customer behind a service key the same way token
   // billing does: through the (manager, service client) credential binding.
@@ -1017,6 +1071,10 @@ function createBillingStore(options = {}) {
     return transaction(() => {
       const existing = prepare("SELECT * FROM billing_tts_usage_events WHERE request_id=?").get(requestId);
       if (existing) return ttsUsageFromRow(existing, true);
+      const reservation = prepare("SELECT * FROM billing_tts_reservations WHERE request_id=?").get(requestId);
+      if (reservation && (reservation.manager_id !== managerId || reservation.client_id !== clientId || reservation.status === "denied")) {
+        throw new BillingStoreError("billing_identity_mismatch", "Invalid TTS reservation", 409);
+      }
       const atDate = nowDate();
       const at = atDate.toISOString();
       const binding = resolveTtsBinding(managerId, clientId);
@@ -1037,6 +1095,21 @@ function createBillingStore(options = {}) {
         const hasPrice = perMinute > 0n || perThousandChars > 0n;
         code = !plan ? "billing_plan_missing" : !hasPrice ? "billing_tts_price_not_configured" : "billing_tts_settled";
         charged = enforcementMode === "hard" && ok ? projected : 0n;
+      }
+      if (reservation) {
+        customerId = reservation.customer_id;
+        enforcementMode = reservation.mode;
+        projected = ok ? ceilDiv(audioMs * reservation.minute_rate, 60000n) + ceilDiv(characters * reservation.char_rate, 1000n) : 0n;
+        charged = enforcementMode === "hard" && customerId ? projected : 0n;
+        if (charged > 0n) {
+          const wallet = walletState(customerId);
+          const available = wallet.available + reservation.reserved;
+          if (charged > available) {
+            charged = available > 0n ? available : 0n;
+            code = "billing_tts_balance_capped";
+          }
+        }
+        prepare("UPDATE billing_tts_reservations SET status='settled' WHERE request_id=?").run(requestId);
       }
       const usageId = uuid(null, "usageId", { generate: true });
       prepare(`
@@ -1133,6 +1206,8 @@ function createBillingStore(options = {}) {
     writeAdminAudit,
     getOverview,
     getTtsQuotaState,
+    authorizeTtsRequest,
+    listPendingTtsRequests,
     recordTtsUsage,
     listTtsUsage,
     getTtsOverview,
@@ -1153,6 +1228,14 @@ function configureDatabase(db, busyTimeoutMs) {
 
 function ensureSchema(db) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS billing_tts_reservations (
+      request_id TEXT PRIMARY KEY, manager_id TEXT NOT NULL, client_id TEXT NOT NULL,
+      customer_id TEXT, mode TEXT NOT NULL, status TEXT NOT NULL, code TEXT NOT NULL,
+      reserved INTEGER NOT NULL, estimated_ms INTEGER NOT NULL, minute_rate INTEGER NOT NULL,
+      char_rate INTEGER NOT NULL, created_at TEXT NOT NULL, meter TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS billing_tts_pending_idx ON billing_tts_reservations(status,created_at);
+    CREATE INDEX IF NOT EXISTS billing_tts_customer_idx ON billing_tts_reservations(customer_id,status);
     CREATE TABLE IF NOT EXISTS billing_plans (
       plan_id TEXT PRIMARY KEY,
       code TEXT NOT NULL UNIQUE,

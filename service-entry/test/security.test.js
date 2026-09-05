@@ -72,6 +72,22 @@ test("requireApiKey switch: auto follows the bind address, 1 and 0 are explicit"
   assert.equal(normalizeRequireApiKeyMode("anything-else"), "auto");
 });
 
+test("client policy survives entry auth while open local compatibility is preserved", async (t) => {
+  withCleanEnv(t);
+  const root = tempRoot(t, "entry-client-policy-");
+  const record = core.createServiceClientRecord({}, { name: "TTS client", rateLimitRpm: 1, maxConcurrentRequests: 1, maxQueuedRequests: 0, queueTimeoutSeconds: 15, requestTimeoutSeconds: 30 });
+  const manager = await makeManager(root, "vllm", { exposure: {}, clients: record.ledger });
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [manager] });
+  const auth = await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: `Bearer ${record.apiKey}` }));
+  assert.equal(auth.client.rateLimitRpm, 1);
+  assert.equal(auth.client.maxConcurrentRequests, 1);
+  assert.equal(auth.client.maxQueuedRequests, 0);
+  assert.equal(auth.client.requestTimeoutSeconds, 30);
+  assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: "Bearer local-placeholder" }))).ok, true);
+  process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "1";
+  assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: "Bearer local-placeholder" }))).status, 401);
+});
+
 test("management endpoints are local-only until the LAN admin switch is set", (t) => {
   withCleanEnv(t);
   const security = createEntrySecurity({ host: "0.0.0.0", managers: [] });

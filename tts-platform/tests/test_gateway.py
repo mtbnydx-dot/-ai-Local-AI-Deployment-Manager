@@ -223,6 +223,90 @@ class EngineAndJobTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.status, "cancelled")
         self.assertEqual(job.error_code, "job_cancelled")
 
+    async def test_signed_customer_identity_isolates_voices_outputs_and_batch_jobs(self):
+        import base64
+        import hashlib
+        import hmac
+        import time
+        import uuid
+        import tts_identity
+        import tts_receipts
+        secret = "synthetic-gateway-trust-only"
+        trust = Path(TEST_DATA.name) / "test-trust.json"
+        trust.write_text(json.dumps({"token": secret}), encoding="utf-8")
+
+        def headers(owner, method, path, request_id=""):
+            context = {"owner": owner, "requestId": request_id, "timestamp": time.time() * 1000, "method": method, "path": path}
+            encoded = base64.urlsafe_b64encode(json.dumps(context).encode()).decode().rstrip("=")
+            signature = base64.urlsafe_b64encode(hmac.new(secret.encode(), encoded.encode(), hashlib.sha256).digest()).decode().rstrip("=")
+            return {"x-tts-context": encoded, "x-tts-context-signature": signature}
+
+        with patch.dict(os.environ, {"TTS_GATEWAY_TRUST_FILE": str(trust), "TTS_API_KEY": ""}), patch.object(gateway, "normalize_reference_audio", AsyncMock(return_value=wav_bytes())), patch.object(gateway.synthesis_service, "generate", AsyncMock(return_value=(wav_bytes(500), "fish", 1, ""))):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway.app), base_url="http://127.0.0.1") as client:
+                created = await client.post("/api/voices", headers=headers("vllm:a", "POST", "/api/voices"), files={"file": ("ref.wav", wav_bytes(), "audio/wav")}, data={"name": "Customer A"})
+                self.assertEqual(created.status_code, 201)
+                voice_id = created.json()["id"]
+                voices = await client.get("/api/voices", headers=headers("vllm:b", "GET", "/api/voices"))
+                self.assertNotIn(voice_id, [voice["id"] for voice in voices.json()])
+                for method, path in [("GET", f"/api/voices/{voice_id}/audio"), ("PATCH", f"/api/voices/{voice_id}"), ("DELETE", f"/api/voices/{voice_id}")]:
+                    response = await client.request(method, path, headers=headers("vllm:b", method, path), **({"json": {"name": "tampered"}} if method == "PATCH" else {}))
+                    self.assertEqual(response.status_code, 404)
+                local = await client.get("/api/voices")
+                self.assertIn(voice_id, [voice["id"] for voice in local.json()])
+                generated = await client.post("/api/tts", headers=headers("vllm:a", "POST", "/api/tts", str(uuid.uuid4())), json={"engine": "fish", "text": "test"})
+                self.assertEqual(generated.status_code, 200)
+                output = generated.json()["output"]
+                for path in [f"/api/outputs/{output['id']}", f"/api/outputs/{output['id']}/audio", f"/outputs/{output['filename']}"]:
+                    self.assertEqual((await client.get(path, headers=headers("vllm:b", "GET", path))).status_code, 404)
+                batch_id = str(uuid.uuid4())
+                created_jobs = await client.post("/api/jobs", headers=headers("vllm:a", "POST", "/api/jobs", batch_id), json={"engines": ["fish", "qwen_local"], "text": "test"})
+                self.assertEqual(created_jobs.status_code, 202)
+                for job in created_jobs.json()["items"]:
+                    scope = tts_identity.identity.set({})
+                    try:
+                        await gateway.job_manager.get(job["id"]).task
+                    finally:
+                        tts_identity.identity.reset(scope)
+                    path = f"/api/jobs/{job['id']}"
+                    self.assertEqual((await client.get(path, headers=headers("vllm:b", "GET", path))).status_code, 404)
+                receipt_path = f"/internal/receipts/{batch_id}"
+                receipt = await client.get(receipt_path, headers=headers("vllm:a", "GET", receipt_path, batch_id))
+                self.assertTrue(receipt.json()["complete"])
+                self.assertEqual(receipt.json()["audioMs"], 1000)
+                self.assertEqual(receipt.json()["characters"], 8)
+                self.assertEqual((await client.get(receipt_path)).status_code, 403)
+                forged = headers("vllm:a", "GET", "/api/voices")
+                forged["x-tts-context-signature"] = "forged"
+                self.assertEqual((await client.get("/api/voices", headers=forged)).status_code, 403)
+
+    async def test_sync_generation_shares_the_customer_job_concurrency_limit(self):
+        import tts_identity
+        manager = jobs_module.JobManager()
+        request = schemas.SynthesisRequest(engine="fish", text="test")
+        gate = asyncio.Event()
+        entered = asyncio.Event()
+        async def generate(_):
+            entered.set()
+            await gate.wait()
+            return wav_bytes(), "fish", 1, ""
+        scope = tts_identity.identity.set({"owner": "vllm:limited", "policy": {"maxConcurrentRequests": 1, "maxQueuedRequests": 0}})
+        try:
+            with patch.object(jobs_module.synthesis_service, "generate", side_effect=generate):
+                job = manager.create(request)
+                await entered.wait()
+                with self.assertRaises(services.TtsError) as denied:
+                    async with manager.synthesis_slot(request):
+                        self.fail("concurrency limit was bypassed")
+                self.assertEqual(denied.exception.code, "concurrency_queue_full")
+                gate.set()
+                await job.task
+                self.assertEqual(job.status, "succeeded")
+                self.assertEqual(manager._client_limits, {})
+        finally:
+            gate.set()
+            await manager.shutdown()
+            tts_identity.identity.reset(scope)
+
     async def test_failed_job_can_retry(self):
         manager = jobs_module.JobManager()
         request = schemas.SynthesisRequest(engine="fish", text="hello", voice_id="20260826123456_abcdef")
