@@ -995,7 +995,7 @@ function groupContextControls() {
   if (!section || !grid || grid.dataset.grouped === "true") return;
   grid.dataset.grouped = "true";
   grid.classList.add("context-control-grid-enhanced");
-  const basic = createControlGroup("上下文大小", "决定最大输入窗口和本地 Claude 单路并发。", ["#maxModelLen", "#maxNumSeqs"]);
+  const basic = createControlGroup("上下文大小", "决定最大输入窗口和本地 Claude 单路并发。", ["#maxModelLen", "#maxNumSeqs", "#maxNumBatchedTokens"]);
   const kv = createControlGroup("显存与 KV cache", "显存占用比例决定 KV cache 池大小；KV 精度选 FP8 更省显存。", ["#gpuMemoryUtilization", "#kvCacheDtype"]);
   const offload = createControlDisclosure("显存 offload 与多模态预留", "CPU offload 是每卡权重回退，KV offload 是总 KV 缓冲；能救容量但会拖慢。", ["#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#disablePrefixCaching", "#languageModelOnly"]);
   const speculative = createControlGroup("推测解码", "MTP 使用主模型内置张量；DSpark 使用外部草稿模型并切换到 SGLang。", ["#speculativeMode", "#numSpeculativeTokens", "#draftModelField", "#dsparkBlockSizeField", "#runtimeImage"]);
@@ -1005,7 +1005,9 @@ function groupContextControls() {
     "#sglangMambaRadixCacheStrategy", "#sglangMambaTrackInterval", "#sglangMaxMambaCacheSize", "#sglangDisableThinkingByDefault", "#sglangProfileNote",
   ]);
   sglang.id = "sglangAdvancedControls";
-  grid.replaceChildren(basic, kv, offload, speculative, sglang);
+  // Keep controls added to the HTML even if their grouping has not been updated yet.
+  const ungrouped = Array.from(grid.children);
+  grid.replaceChildren(basic, kv, offload, speculative, sglang, ...ungrouped);
 }
 
 function createControlGroup(title, description, selectors) {
@@ -5287,6 +5289,8 @@ function validateVllmLaunchForm(form) {
   };
   const integer = (selector, label, min, max) => {
     const control = $(selector);
+    if (!control) return fail(null, `启动表单缺少“${label}”输入框，请刷新页面。`);
+    if (control.disabled) return true;
     const value = Number(control?.value);
     return Number.isInteger(value) && value >= min && value <= max
       ? true

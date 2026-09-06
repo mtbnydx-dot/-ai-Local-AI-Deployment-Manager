@@ -94,6 +94,61 @@ async function startManager({ cwd, env, port }) {
   };
 }
 
+async function verifyVllmSchedulerLaunch(page) {
+  const launches = [];
+  // Capture submissions at the browser boundary; never create a real GPU job.
+  await page.route("**/api/start", async (route) => {
+    launches.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: true } });
+  });
+  const scheduler = page.locator("#maxNumBatchedTokens");
+  const stage = (name) => page.locator(`[data-launch-stage-target='${name}']`);
+  const submit = page.locator("#startForm button[type='submit']");
+  await expect(scheduler).toBeVisible();
+  await expect(scheduler).toHaveValue("0");
+  await expect(scheduler).toHaveAttribute("name", "maxNumBatchedTokens");
+  await stage("access").click();
+  // This always exercises the confirmation dialog, independent of runtime status.
+  await page.locator("#networkAccess").selectOption("lan");
+  await page.locator("#vllmApiKey").fill("");
+
+  for (const engine of ["vllm", "sglang"]) {
+    await stage("model").click();
+    await page.locator("#runtimeEngine").selectOption(engine);
+    for (const tokens of [0, 8192, 4194304]) {
+      await stage("resources").click();
+      await scheduler.fill(String(tokens));
+      await stage("access").click();
+      const before = launches.length;
+      await submit.click();
+      await expect(page.locator("#launchConfirmDialog")).toBeVisible();
+      await page.locator("#launchConfirmSubmit").click();
+      await expect.poll(() => launches.length).toBe(before + 1);
+      expect(launches.at(-1)).toMatchObject({ engine, maxNumBatchedTokens: tokens });
+      await expect(submit).toBeEnabled();
+    }
+  }
+
+  for (const invalid of ["-1", "1.5", "4194305"]) {
+    await stage("resources").click();
+    await scheduler.fill(invalid);
+    await stage("access").click();
+    await submit.click();
+    await expect(scheduler).toBeVisible();
+    expect(await scheduler.evaluate((node) => node.validity.valid)).toBe(false);
+    await expect(page.locator("#launchConfirmDialog")).not.toBeVisible();
+    expect(launches).toHaveLength(6);
+  }
+  // Correcting an invalid value must recover without reloading the page.
+  await scheduler.fill("0");
+  await stage("access").click();
+  await submit.click();
+  await expect(page.locator("#launchConfirmDialog")).toBeVisible();
+  await page.locator("#launchConfirmDialog button[value='cancel']").last().click();
+  expect(launches).toHaveLength(6);
+  await stage("resources").click();
+}
+
 async function smokePage(page, baseUrl, label) {
   const failures = [];
   page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
@@ -291,6 +346,7 @@ async function smokePage(page, baseUrl, label) {
     await page.locator("#sglangAdvancedControls summary").click();
     // The note is rendered from a template and localised in English mode.
     await expect(page.locator("#sglangProfileNote")).toContainText(/有效并发为 1|Mamba cache 8 is currently 1/);
+    await verifyVllmSchedulerLaunch(page);
   }
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   // The catalog must be reachable at the top even with a long local model library.

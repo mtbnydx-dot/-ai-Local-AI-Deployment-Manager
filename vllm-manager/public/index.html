@@ -166,7 +166,7 @@
                   <label>
                     <span>调度 token 上限 max_num_batched_tokens</span>
                     <input id="maxNumBatchedTokens" name="maxNumBatchedTokens" type="number" value="0" min="0" max="4194304" step="1" />
-                    <small>0 = 使用 vLLM 运行时默认值（v0.28 为 16384）</small>
+                    <small>每轮调度最多处理的 token 数；0 = 自动使用启动方案或运行时默认值。</small>
                   </label>
                   <label>
                     <span>显存占用比例</span>

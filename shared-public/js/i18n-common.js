@@ -723,6 +723,8 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
   "上一步": "Back",
   "下一步": "Next",
   "上下文大小": "Context size",
+  "调度 token 上限 max_num_batched_tokens": "Scheduler token limit max_num_batched_tokens",
+  "每轮调度最多处理的 token 数；0 = 自动使用启动方案或运行时默认值。": "Maximum tokens per scheduling step; 0 uses the launch profile or runtime default.",
   "决定最大输入窗口和本地 Claude 单路并发。": "Sets the maximum input window and single-stream local Claude concurrency.",
   "显存与 KV cache": "VRAM and KV cache",
   "显存占用比例决定 KV cache 池大小；KV 精度选 FP8 更省显存。": "The VRAM utilization ratio sets the KV cache pool size; FP8 KV precision saves memory.",
