@@ -1477,7 +1477,7 @@ async function collectHealthReport() {
   checks.push(healthCheck("api", "OpenAI 兼容 API", runtime?.models?.length ? "ok" : runtimeError ? "fail" : "warn", runtime?.models?.length ? `${runtime.models.length} model(s) served at ${runtime.endpoint.localUrl}` : runtimeError?.message || "No served model reported yet"));
   checks.push(healthCheck("runtime-secret-store", "运行时密钥存储", runtimeSecretStoreError ? "fail" : "ok", runtimeSecretStoreError?.message || "可用（密钥仅保存在受限本地文件中）"));
   if (!process.env.VLLM_MODELS_ROOT && !process.env.LLAMA_MODELS_ROOT) {
-    checks.push(healthCheck("shared-models-root", "模型根目录隔离", "warn", "两个管理器未分别设置 VLLM_MODELS_ROOT / LLAMA_MODELS_ROOT，下载队列互不可见，可能写到同一目录。"));
+    checks.push(healthCheck("shared-models-root", "共享模型库", "ok", "已启用共享目录登记与跨管理器文件操作锁；可在模型存储与迁移页面配置保存位置。"));
   }
   checks.push(await directoryHealth("models-root", "模型目录", CONFIG.modelsRoot));
   checks.push(await directoryHealth("hf-cache", "HF 缓存目录", CONFIG.hfCache));
