@@ -44,9 +44,9 @@ function createModelMigration(options = {}) {
     return job;
   }
   function publicJob(job) {
-    const { id, source, target, state, phase, error, fileCount, totalBytes, bytesDone, completedFiles, currentFile, createdAt, updatedAt, sourceRemoved } = job;
+    const { id, source, target, targetDirectory, needsRegistration, needsCreation, state, phase, error, fileCount, totalBytes, bytesDone, completedFiles, currentFile, createdAt, updatedAt, sourceRemoved } = job;
     const active = storage.activeOperations().some(o => o.id === id);
-    return { id, source, target, state: !active && state === "cleaning" ? "cleanup_failed" : ["copying", "verifying", "publishing"].includes(state) && !active ? "interrupted" : state, phase, error, fileCount, totalBytes, bytesDone, completedFiles, currentFile, createdAt, updatedAt, sourceRemoved: Boolean(sourceRemoved) };
+    return { id, source, target, targetDirectory, needsRegistration, needsCreation, state: !active && state === "cleaning" ? "cleanup_failed" : ["copying", "verifying", "publishing"].includes(state) && !active ? "interrupted" : state, phase, error, fileCount, totalBytes, bytesDone, completedFiles, currentFile, createdAt, updatedAt, sourceRemoved: Boolean(sourceRemoved) };
   }
   function list() {
     if (!fs.existsSync(jobDir)) return [];
@@ -57,12 +57,14 @@ function createModelMigration(options = {}) {
     const conflict = busy.find(item => targets.some(target => overlapsPath(item.path, target)));
     if (conflict) throw storageError(`请先结束相关下载或卸载挂载此目录的模型容器：${conflict.label || conflict.path}`);
   }
-  function validateJobPaths(job) {
+  function validateJobPaths(job, allowUnregistered = false) {
     const source = storage.resolvePath(job.source, { follow: false, allowRoot: false });
-    const target = storage.resolvePath(job.target, { follow: false, allowRoot: false });
+    const destination = allowUnregistered && job.targetDirectory ? storage.migrationDestination(job.targetDirectory, path.basename(job.target)) : null;
+    if (destination && pathKey(destination.target) !== pathKey(job.target)) throw storageError("目标路径发生变化，请重新预览迁移。");
+    const target = allowUnregistered && destination ? destination.target : storage.resolvePath(job.target, { follow: false, allowRoot: false });
     const expectedStage = path.join(path.dirname(target), `.model-migration-${job.id}`);
     if (pathKey(job.stage) !== pathKey(expectedStage) || overlapsPath(source, target) || overlapsPath(source, expectedStage)) throw storageError("迁移记录中的目录关系不安全，已停止操作。");
-    return { source, target, stage: expectedStage };
+    return { source, target, stage: expectedStage, destination };
   }
   async function plan(input = {}) {
     const source = storage.resolvePath(String(input.source || ""), { follow: false, allowRoot: false });
@@ -70,25 +72,26 @@ function createModelMigration(options = {}) {
     const sourceRoot = storage.rootFor(source);
     if (sourceRoot.mode === "library" && pathKey(path.dirname(source)) !== pathKey(sourceRoot.path)) throw storageError("请迁移整个模型目录，不能单独迁移权重分片。", 400);
     const name = String(input.outputName || path.basename(source)).trim();
-    const target = storage.downloadTarget(input.storageId, name);
+    const destination = input.targetDirectory ? storage.migrationDestination(input.targetDirectory, name) : null;
+    const target = destination ? destination.target : storage.downloadTarget(input.storageId, name);
     if (overlapsPath(source, target)) throw storageError("源和目标必须是两个互不包含的目录。", 400);
     if (fs.existsSync(target)) throw storageError("目标目录已经存在；迁移不会覆盖或合并现有目录。");
     storage.assertUnlocked([source, target]);
     await assertIdle([source, target]);
     const contents = await inventory(source);
     if (!contents.files.some(f => /\.(gguf|safetensors|bin|pt|pth)$/i.test(f.path))) throw storageError("源目录未发现模型权重，不能作为模型迁移。", 400);
-    const disk = await fsp.statfs(path.dirname(target));
+    const disk = await fsp.statfs(destination?.existingAncestor || path.dirname(target));
     const freeBytes = Number(disk.bavail) * Number(disk.bsize), reserve = options.reserveBytes ?? 10 * 1024 ** 3;
     if (freeBytes < contents.bytes + reserve) throw storageError("目标磁盘空间不足，迁移需要完整副本和预留空间。", 400);
     const id = crypto.randomUUID();
-    const job = { id, source, target, stage: path.join(path.dirname(target), `.model-migration-${id}`), state: "planned", phase: "等待执行", ...contents, fingerprint: fingerprint(contents), fileCount: contents.files.length, totalBytes: contents.bytes, bytesDone: 0, completedFiles: 0, createdAt: new Date().toISOString(), freeBytes };
+    const job = { id, source, target, ...(destination ? { targetDirectory: destination.directory, needsRegistration: destination.needsRegistration, needsCreation: destination.needsCreation } : {}), stage: path.join(path.dirname(target), `.model-migration-${id}`), state: "planned", phase: "等待执行", ...contents, fingerprint: fingerprint(contents), fileCount: contents.files.length, totalBytes: contents.bytes, bytesDone: 0, completedFiles: 0, createdAt: new Date().toISOString(), freeBytes };
     save(job);
     return { ...publicJob(job), freeBytes, files: contents.files.slice(0, 100), truncated: contents.files.length > 100, sourceWillBePreserved: true };
   }
   async function start(id) {
     const job = load(id);
     if (!["planned", "failed", "cancelled", "interrupted"].includes(publicJob(job).state)) throw storageError("此迁移当前不能开始或继续。");
-    validateJobPaths(job);
+    validateJobPaths(job, true);
     await assertIdle([job.source, job.target]);
     if (storage.activeOperations().some(o => o.kind === "migration")) throw storageError("已有迁移正在运行，请等待完成。");
     storage.acquireOperation([job.source, job.target], "migration", id);
@@ -103,11 +106,14 @@ function createModelMigration(options = {}) {
     const update = (force = false) => { if (force || Date.now() - lastSaved > 1000) { job.updatedAt = new Date().toISOString(); save(job); lastSaved = Date.now(); } };
     const checkCancel = () => { if (control.cancelled) throw Object.assign(new Error("迁移已暂停，源文件完整保留，可继续迁移。"), { cancelled: true }); };
     try {
-      const { source, target, stage } = validateJobPaths(job);
+      const { source, target, stage, destination: plannedDestination } = validateJobPaths(job, true);
       if (fingerprint(await inventory(source)) !== job.fingerprint) throw storageError("源目录内容发生变化，请重新预览迁移。原文件未改动。");
       const recovering = fs.existsSync(target);
       const markerName = `.platform-migration-${job.id}.json`;
       if (recovering && storageReadJson(path.join(target, markerName), null)?.id !== job.id) throw storageError("目标目录被其他文件占用，已停止迁移。");
+      checkCancel();
+      if (plannedDestination?.needsRegistration) storage.registerRoot({ path: plannedDestination.directory, create: true });
+      validateJobPaths(job);
       const destination = recovering ? target : stage;
       if (fs.existsSync(destination) && (await fsp.lstat(destination)).isSymbolicLink()) throw storageError("迁移暂存目录变成了链接，已停止。");
       await fsp.mkdir(destination, { recursive: true });

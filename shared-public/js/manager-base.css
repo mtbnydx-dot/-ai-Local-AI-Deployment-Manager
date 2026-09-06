@@ -169,6 +169,25 @@ button.is-busy { cursor: wait; opacity: 0.72; }
 .precheck-more summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .precheck-more ul { margin-top: 8px; }
 .precheck-blocked { margin: 0; font-weight: 600; color: var(--red, #b42318); }
+.online-models-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; min-width: 0; }
+.online-models-page .remote-panel { min-width: 0; }
+.online-models-page .remote-model-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); }
+.remote-filter-bar { display: flex; align-items: flex-start; gap: 12px; margin-top: 14px; }
+.remote-filters { flex: 1; min-width: 0; }
+.remote-filters summary { cursor: pointer; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; color: var(--ink); }
+.remote-filters .remote-facets { margin-top: 12px; }
+.remote-filter-bar > button { flex-shrink: 0; }
+@media (max-width: 760px) {
+  .online-models-page .remote-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .online-models-page .remote-search-field { grid-column: 1 / -1; grid-row: 1; }
+  .online-models-page .remote-source-field { grid-column: 1; grid-row: 2; }
+  .online-models-page .remote-search-btn { grid-column: 2; grid-row: 2; }
+  .remote-filters[open] .remote-facets { grid-template-columns: minmax(0, 1fr); }
+  .online-models-page .remote-model-card { grid-template-columns: minmax(0, 1fr); }
+  .online-models-page .remote-model-card > div { min-width: 0; }
+  .online-models-page .remote-model-card h4 { word-break: normal; overflow-wrap: anywhere; }
+  .online-models-page .remote-actions { justify-content: flex-start; flex-wrap: wrap; }
+}
 .variant-head { display: grid; gap: 2px; }
 .variant-head span { color: var(--muted); font-size: 12px; }
 .variant-list { display: grid; gap: 4px; }

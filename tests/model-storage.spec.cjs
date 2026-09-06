@@ -19,12 +19,15 @@ test("storage UI registers paths, previews, migrates, rolls back, and fits a pho
   const app = express(); app.use(express.json()); app.use("/shared-js", express.static(path.join(ROOT, "shared-public/js")));
   app.get("/api/models", async (_req, res) => res.json(await models.listModelCollections()));
   app.get("/favicon.ico", (_req, res) => res.sendStatus(204));
-  core.registerModelStorageRoutes(app, { storage, migration, isLocalRequest: () => true, publicDir: path.join(ROOT, "shared-public") });
+  core.registerModelStorageRoutes(app, { storage, migration, isLocalRequest: req => !req.headers["x-test-remote"], publicDir: path.join(ROOT, "shared-public") });
   const server = app.listen(0, "127.0.0.1"); await new Promise(resolve => server.once("listening", resolve));
   const errors = []; page.on("pageerror", e => errors.push(e.message));
+  page.on("console", msg => { if (msg.type() === "error") errors.push(msg.text()); });
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/model-storage`);
     await expect(page).toHaveTitle("模型存储与迁移");
+    const blockedBrowse = await page.request.get(`http://127.0.0.1:${server.address().port}/api/model-storage/directories`, { headers: { "x-test-remote": "1" } });
+    expect(blockedBrowse.status()).toBe(403);
     await expect(page.locator("#roots .root")).toHaveCount(1);
     await page.locator("#registerDetails summary").click();
     await page.locator('#registerForm input[name="path"]').fill(second);
@@ -33,16 +36,38 @@ test("storage UI registers paths, previews, migrates, rolls back, and fits a pho
     await page.getByRole("button", { name: "保存目录", exact: true }).click();
     await expect(page.locator("#roots .root")).toHaveCount(2);
     await expect(page.locator("#roots .root").filter({ hasText: "第二模型库" })).toContainText("默认下载");
-    const targetId = storage.roots().find(r => r.path === second).id;
-    await page.locator("#migrationTarget").selectOption(targetId);
+    await expect(page.locator("#migrationTarget")).toHaveValue(second);
+    await page.reload();
+    await expect(page.locator("#migrationTarget")).toHaveValue(second);
+    await page.getByRole("button", { name: "浏览文件夹", exact: true }).click();
+    await expect(page.locator("#folderSelected")).toHaveText(second);
+    await page.locator("#folderUp").click();
+    await expect(page.locator("#folderSelected")).toHaveText(dir);
+    await page.locator("#folderFilter").fill("另一块盘");
+    await expect(page.locator("#folderList button")).toHaveCount(1);
+    await page.getByRole("button", { name: "另一块盘 models", exact: true }).click();
+    await expect(page.locator("#folderSelected")).toHaveText(second);
+    await page.getByRole("button", { name: "使用此文件夹", exact: true }).click();
+    await expect(page.locator("#migrationTarget")).toHaveValue(second);
+    const destination = path.join(dir, "直接输入 新目录", "models");
+    await page.locator("#migrationTarget").fill(destination);
+    await page.locator("#migrationOutputName").fill("renamed-model");
+    await expect(page.locator("#targetPreview")).toHaveText(path.join(destination, "renamed-model"));
+    await page.getByRole("button", { name: "刷新状态", exact: true }).click();
+    await expect(page.locator("#migrationTarget")).toHaveValue(destination);
     await page.getByRole("button", { name: "预览迁移", exact: true }).click();
     await expect(page.locator("#preview")).toBeVisible();
     await expect(page.locator("#preview")).toContainText("2 个文件");
+    await expect(page.locator("#preview")).toContainText("创建并登记目标模型库");
+    await assertMissing(destination);
+    expect(storage.roots()).toHaveLength(2);
     await page.getByRole("button", { name: "按此清单开始迁移" }).click();
     await expect(page.locator("#confirmDialog")).toBeVisible();
     await page.locator("#confirmAccept").click();
     await expect(page.locator("#migrations")).toContainText("迁移完成，源文件保留", { timeout: 15000 });
     await fs.access(path.join(source, "model.bin"));
+    await fs.access(path.join(destination, "renamed-model/model.bin"));
+    expect((await storage.snapshot()).defaultRootId).toBe(storage.roots().find(r => r.path === second).id);
     await page.getByRole("button", { name: "清理源文件并释放空间" }).click();
     await expect(page.locator("#confirmAccept")).toBeDisabled();
     await page.locator("#confirmPath").fill("wrong path");
@@ -55,6 +80,15 @@ test("storage UI registers paths, previews, migrates, rolls back, and fits a pho
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await expect(page.locator("h1")).toBeVisible();
+    await page.locator("#browseTarget").click();
+    await expect(page.locator("#folderSelected")).toHaveText(destination);
+    expect(await page.locator("#folderDialog").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await page.locator("#folderCancel").click();
     expect(errors).toEqual([]);
   } finally { await new Promise(resolve => server.close(resolve)); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+async function assertMissing(target) {
+  let exists = true; try { await fs.access(target); } catch (e) { if (e.code !== "ENOENT") throw e; exists = false; }
+  expect(exists).toBe(false);
+}

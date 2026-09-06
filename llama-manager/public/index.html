@@ -25,6 +25,7 @@
         <nav class="nav" aria-label="主要导航">
           <a href="#service" class="active" data-view="service" title="服务" aria-label="服务"><i data-lucide="activity" aria-hidden="true"></i><span>服务</span></a>
           <a href="#models" data-view="models" title="模型" aria-label="模型"><i data-lucide="database" aria-hidden="true"></i><span>模型</span></a>
+          <a href="#online-models" data-view="online-models" title="在线模型" aria-label="在线模型"><i data-lucide="search" aria-hidden="true"></i><span>在线模型</span></a>
           <a href="#download" data-view="download" title="下载" aria-label="下载"><i data-lucide="download" aria-hidden="true"></i><span>下载</span></a>
           <a href="#external-access" data-view="external-access" title="外来访问" aria-label="外来访问"><i data-lucide="radio-tower" aria-hidden="true"></i><span>外来访问</span></a>
           <a href="http://127.0.0.1:5176/billing?manager=llama" data-nav="billing" rel="noopener noreferrer" title="计费" aria-label="计费"><i data-lucide="receipt-text" aria-hidden="true"></i><span>计费</span></a>
@@ -521,6 +522,9 @@
             <div class="model-list" id="modelList"></div>
           </div>
 
+        </section>
+
+        <section class="online-models-page view-panel" id="online-models" data-view-panel="online-models">
           <div class="panel remote-panel">
             <div class="panel-head">
               <div>
@@ -543,7 +547,8 @@
               </label>
               <button class="secondary-button remote-search-btn" id="remoteSearchBtn" type="button"><i data-lucide="search"></i><span>联网查询</span></button>
             </div>
-            <div class="remote-facets">
+            <div class="remote-filter-bar">
+            <details class="remote-filters"><summary>筛选条件</summary><div class="remote-facets">
               <label>
                 <span>排序</span>
                 <select id="remoteSort">
@@ -612,6 +617,7 @@
                 <span>数量上限</span>
                 <input id="remoteLimit" type="number" min="12" max="120" step="12" value="48" />
               </label>
+            </div></details>
               <button class="ghost-mini-button runnable-toggle" id="remoteRunnableOnly" type="button" title="仅显示 llama.cpp 可直接运行的 GGUF 模型"><i data-lucide="badge-check"></i><span>仅可运行</span></button>
             </div>
             <div class="selection-hint" id="remoteHint">在线列表按公开模型元数据返回；gated 模型下载前需要配置对应 token。</div>

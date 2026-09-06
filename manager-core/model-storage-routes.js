@@ -49,6 +49,7 @@ function registerModelStorageRoutes(app, { storage, migration, isLocalRequest, p
   const action = fn => async (req, res) => { try { res.json(await fn(req)); } catch (e) { res.status(e.status || 500).json({ error: e.message }); } };
   app.get("/model-storage", guard, (_req, res) => res.sendFile(path.join(publicDir, "model-storage.html")));
   app.get("/api/model-storage", guard, action(() => storage.snapshot()));
+  app.get("/api/model-storage/directories", guard, action(req => storage.browseDirectories(req.query.path, req.query.query, req.query.offset)));
   app.post("/api/model-storage/roots", guard, action(req => storage.registerRoot(req.body)));
   app.post("/api/model-storage/default", guard, action(req => storage.setDefault(req.body.id)));
   app.post("/api/model-storage/unregister", guard, action(req => storage.unregisterRoot(req.body.id)));

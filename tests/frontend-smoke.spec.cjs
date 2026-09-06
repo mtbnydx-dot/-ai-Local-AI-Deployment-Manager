@@ -293,6 +293,24 @@ async function smokePage(page, baseUrl, label) {
     await expect(page.locator("#sglangProfileNote")).toContainText(/有效并发为 1|Mamba cache 8 is currently 1/);
   }
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  // The catalog must be reachable at the top even with a long local model library.
+  const onlineModel = { id: "example/online-smoke-model", label: "example/online-smoke-model", author: "example", outputName: "online-smoke-model", source: "huggingface", url: "https://huggingface.co/example/online-smoke-model", hasGguf: label === "llama", hasSafetensors: label === "vLLM", quantFormats: label === "llama" ? ["Q4_K_M"] : ["FP8"], paramsB: 8, lastModified: "2026-09-01" };
+  await page.route("**/api/remote-models?*", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ models: [onlineModel], limit: 48, source: "huggingface", sort: "trending" }) }));
+  await page.locator("[data-view='download']").click();
+  await page.locator("#downloadRunnableModelsBtn").click();
+  await expect(page).toHaveURL(/#online-models$/);
+  await expect(page.locator("#remoteSearch")).toBeInViewport();
+  await expect(page.locator("#remoteModelList .remote-model-card")).toHaveCount(1);
+  await page.locator("#remoteSearch").fill("online-smoke-model");
+  const catalogQuery = page.waitForRequest(r => r.url().includes("/api/remote-models?") && new URL(r.url()).searchParams.get("search") === "online-smoke-model");
+  await page.locator("#remoteSearchBtn").click(); await catalogQuery;
+  await page.locator(".remote-filters summary").click();
+  await expect(page.locator("#remoteQuantFilter")).toBeVisible();
+  await page.locator(".remote-filters summary").click();
+  await expect(page.locator("#modelList")).not.toBeVisible();
+  await page.locator("[data-view='models']").click();
+  await expect(page.locator("#modelList")).toBeVisible();
+  await expect(page.locator("#remoteSearch")).not.toBeVisible();
   for (const view of ["download", "exposure", "external-access", "stats"]) {
     await page.locator(`[data-view='${view}']`).click();
     await expect(page.locator(`[data-view-panel='${view}']`).first()).toBeVisible();
@@ -315,7 +333,7 @@ async function smokePage(page, baseUrl, label) {
     await page.locator("#languageMode").selectOption("en-US");
     await page.waitForTimeout(150);
     const untranslated = [];
-    for (const view of ["service", "models", "download", "exposure", "external-access", "tools", "stats", "audit", "logs"]) {
+    for (const view of ["service", "models", "online-models", "download", "exposure", "external-access", "tools", "stats", "audit", "logs"]) {
       await page.locator(`[data-view='${view}']`).click();
       const visiblePanels = page.locator(`[data-view-panel='${view}']:visible`);
       await expect(visiblePanels.first()).toBeVisible();
@@ -350,6 +368,19 @@ async function smokePage(page, baseUrl, label) {
   }));
   expect(mobileShell.sidebarHeight, `${label} mobile navigation should stay compact`).toBeLessThan(120);
   expect(mobileShell.scrollWidth, `${label} mobile page should not overflow horizontally`).toBeLessThanOrEqual(mobileShell.clientWidth + 1);
+  await page.locator("[data-view='online-models']").click();
+  await expect(page.locator("[data-view='online-models'] span")).toHaveText("在线模型");
+  await expect(page.locator("#remoteSearch")).toBeInViewport();
+  expect(await page.locator("#remoteSearch").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(250);
+  expect(await page.locator(".remote-model-card h4").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(250);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${label} online model browser fits a phone`).toBe(true);
+  // Test catalog-to-download navigation separately from the baseline language audit.
+  await page.route("**/api/download/estimate?*", route => route.fulfill({ json: { bytes: 1024, fileCount: 1, diskFreeBytes: 100 * 1024 ** 3 } }));
+  await page.route("**/api/download/precheck?*", route => route.fulfill({ json: { ok: true, findings: [] } }));
+  await page.route("**/api/remote-models/*-variants?*", route => route.fulfill({ json: { variants: [] } }));
+  await page.locator('[data-action="remote-download"]').click();
+  await expect(page).toHaveURL(/#download$/);
+  await expect(page.locator("#downloadModel")).toHaveValue(onlineModel.id);
   if (label === "llama") {
     await page.locator("[data-view='stats']").click();
     await expect(page.locator("#cacheHitSummary")).toBeVisible();

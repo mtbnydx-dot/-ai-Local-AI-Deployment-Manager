@@ -24,6 +24,73 @@ async function settle(migration, id) {
   throw new Error("migration timeout");
 }
 
+test("a typed new destination previews without creating or registering it, then migrates with the shared default preserved", async t => {
+  const x = await fixture(t), destination = path.join(x.dir, "new disk 目标", "models");
+  const p = await x.migration.plan({ source: x.source, targetDirectory: destination, outputName: "renamed-model" });
+  assert.equal(p.target, path.join(destination, "renamed-model"));
+  assert.equal(p.needsCreation, true); assert.equal(p.needsRegistration, true);
+  assert.equal(x.storage.roots().length, 2);
+  await assert.rejects(fs.access(destination), { code: "ENOENT" });
+  await x.migration.start(p.id); assert.equal((await settle(x.migration, p.id)).state, "completed");
+  assert.equal(x.storage.roots().length, 3);
+  assert.equal((await x.storage.snapshot()).defaultRootId, x.root.id);
+  assert.equal(x.storage.resolvePath(x.source), p.target);
+  assert.deepEqual(await fs.readFile(path.join(p.target, "model.bin")), await fs.readFile(path.join(x.source, "model.bin")));
+  const next = await x.migration.plan({ source: p.target, targetDirectory: x.secondary });
+  await x.migration.start(next.id); assert.equal((await settle(x.migration, next.id)).state, "completed");
+  await x.migration.cleanupSource(p.id, x.source);
+  assert.equal((await settle(x.migration, p.id)).sourceRemoved, true);
+  assert.equal(x.storage.resolvePath(x.source), next.target);
+});
+
+test("typed paths reject ambiguous, overlapping, occupied and invalid destinations before changing directories", async t => {
+  const x = await fixture(t);
+  const p = await x.migration.plan({ source: x.source, targetDirectory: x.secondary });
+  assert.equal(p.needsRegistration, false);
+  for (const targetDirectory of ["relative/path", path.parse(x.dir).root, x.dir, path.join(x.primary, "nested")]) {
+    await assert.rejects(x.migration.plan({ source: x.source, targetDirectory }));
+  }
+  await assert.rejects(fs.access(path.join(x.primary, "nested")), { code: "ENOENT" });
+  await fs.writeFile(path.join(x.dir, "a-file"), "keep");
+  await assert.rejects(x.migration.plan({ source: x.source, targetDirectory: path.join(x.dir, "a-file/models") }), /文件/);
+  await fs.mkdir(path.join(x.secondary, "small-model"));
+  await assert.rejects(x.migration.plan({ source: x.source, targetDirectory: x.secondary }), /已经存在/);
+  for (const outputName of ["../escape", "..", ...(process.platform === "win32" ? ["NUL", "bad?name", "trailing."] : [])]) {
+    await assert.rejects(x.migration.plan({ source: x.source, targetDirectory: x.secondary, outputName }), /无效/);
+  }
+  assert.equal(x.storage.roots().length, 2);
+});
+
+test("source or destination changes after preview cannot create a new library or redirect migration through a junction", async t => {
+  const x = await fixture(t), parent = path.join(x.dir, "destination-parent"), outside = path.join(x.dir, "outside");
+  await fs.mkdir(parent); await fs.mkdir(outside);
+  const destination = path.join(parent, "new-library");
+  const p = await x.migration.plan({ source: x.source, targetDirectory: destination });
+  await fs.rename(parent, `${parent}-original`);
+  await fs.symlink(outside, parent, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(x.migration.start(p.id), /目标路径发生变化/);
+  await assert.rejects(fs.access(path.join(outside, "new-library")), { code: "ENOENT" });
+  const another = path.join(x.dir, "another-new-library"), p2 = await x.migration.plan({ source: x.source, targetDirectory: another });
+  await fs.writeFile(path.join(x.source, "config.json"), "changed");
+  await x.migration.start(p2.id); assert.equal((await settle(x.migration, p2.id)).state, "failed");
+  await assert.rejects(fs.access(another), { code: "ENOENT" });
+  assert.equal(x.storage.roots().length, 2);
+});
+
+test("the folder browser lists directories only, supports drives, filtering and pagination, and does not create paths", async t => {
+  const x = await fixture(t), browse = path.join(x.dir, "browse"); await fs.mkdir(browse);
+  await Promise.all(Array.from({ length: 205 }, (_, i) => fs.mkdir(path.join(browse, `folder-${i}`))));
+  await fs.writeFile(path.join(browse, "not-a-folder.txt"), "private content");
+  const first = await x.storage.browseDirectories(browse);
+  assert.equal(first.total, 205); assert.equal(first.directories.length, 200); assert.equal(first.nextOffset, 200);
+  assert.equal((await x.storage.browseDirectories(browse, "", first.nextOffset)).directories.length, 5);
+  assert.equal((await x.storage.browseDirectories(browse, "folder-204")).directories[0].name, "folder-204");
+  assert.equal(first.parent, x.dir);
+  assert.ok((await x.storage.browseDirectories()).directories.some(d => d.path === path.parse(x.dir).root));
+  await assert.rejects(x.storage.browseDirectories(path.join(browse, "missing")), /不存在/);
+  await assert.rejects(fs.access(path.join(browse, "missing")), { code: "ENOENT" });
+});
+
 test("two managers share libraries and defaults; root escapes and nested junctions are refused", async t => {
   const x = await fixture(t), other = createModelStorage(x.opts);
   assert.equal(other.downloadTarget("", "new-model"), path.join(x.secondary, "new-model"));

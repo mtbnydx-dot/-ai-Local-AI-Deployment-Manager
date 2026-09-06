@@ -379,6 +379,7 @@ function applyLanguageMode() {
   // track the same copy rather than the phrase-map translator.
   applyNavLabel("service", t("nav.service"));
   applyNavLabel("models", t("nav.models"));
+  applyNavLabel("online-models", t("nav.onlineModels"));
   applyNavLabel("download", t("nav.download"));
   applyNavLabel("exposure", t("nav.exposure"));
   applyNavLabel("external-access", t("nav.externalAccess"));
@@ -1455,7 +1456,7 @@ const viewScrollPositions = new Map();
 let activeViewName = "";
 
 function showView(view, updateHash = true) {
-  const known = new Set(["service", "models", "download", "exposure", "external-access", "tools", "stats", "audit", "logs"]);
+  const known = new Set(["service", "models", "online-models", "download", "exposure", "external-access", "tools", "stats", "audit", "logs"]);
   const next = known.has(view) ? view : "service";
   if (activeViewName && activeViewName !== next) viewScrollPositions.set(activeViewName, window.scrollY);
   document.querySelectorAll("[data-view-panel]").forEach((panel) => {
@@ -1476,7 +1477,7 @@ function showView(view, updateHash = true) {
   const changed = activeViewName !== next;
   activeViewName = next;
   if (changed) window.requestAnimationFrame(() => window.scrollTo({ top: viewScrollPositions.get(next) || 0, behavior: "auto" }));
-  if (next === "models" && !state.remoteModels.length && !state.remoteError) {
+  if (next === "online-models" && !state.remoteModels.length && !state.remoteError) {
     refreshRemoteModels().catch((error) => {
       state.remoteError = error.message;
       renderRemoteModels();
@@ -1585,7 +1586,8 @@ function openQuantSearch(searchTerm, quantFilter) {
   if ($("#remoteSearch")) $("#remoteSearch").value = searchTerm;
   if ($("#remoteQuantFilter")) $("#remoteQuantFilter").value = quantFilter || "";
   if ($("#remoteSort")) $("#remoteSort").value = "downloads";
-  showView("models");
+  showView("online-models");
+  window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
   refreshRemoteModels().catch((error) => {
     state.remoteError = error.message;
     renderRemoteModels();
@@ -2122,7 +2124,8 @@ function renderRunnableFilterToggles() {
 
 function openRunnableRemoteModels() {
   setRunnableOnly(true);
-  showView("models");
+  showView("online-models");
+  window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
   if (!state.remoteModels.length && !state.remoteError) {
     refreshRemoteModels().catch((error) => {
       state.remoteError = error.message;

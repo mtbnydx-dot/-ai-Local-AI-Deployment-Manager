@@ -42,12 +42,50 @@ function createModelStorage(options = {}) {
     try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid })); const data = read(); const result = fn(data); writeJson(file, data); return result; }
     finally { fs.closeSync(fd); fs.unlinkSync(lock); }
   }
-  function assertOrdinaryPath(value) {
+  function assertOrdinaryPath(value, { allowDiskRoot = false } = {}) {
     const text = String(value || "").trim();
     if (!path.isAbsolute(text) || /[\0\r\n]/.test(text) || (process.platform === "win32" && (/^\\\\[?.]/.test(text) || /[:*?"<>|]/.test(text.slice(2))))) throw storageError("请输入有效的绝对文件夹路径，例如 F:\\AI\\models。", 400);
     const resolved = path.resolve(text);
-    if (resolved === path.parse(resolved).root) throw storageError("请选择盘符下的专用模型文件夹，不能将整个磁盘作为模型库。", 400);
+    if (process.platform === "win32" && resolved.slice(path.parse(resolved).root.length).split(/[\\/]/).some(part => /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) throw storageError("文件夹名不能使用 Windows 保留名称，也不能以空格或句点结尾。", 400);
+    if (!allowDiskRoot && resolved === path.parse(resolved).root) throw storageError("请选择盘符下的专用模型文件夹，不能将整个磁盘作为模型库。", 400);
     return resolved;
+  }
+  function existingDirectory(value) {
+    let ancestor = value;
+    while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
+    if (!fs.existsSync(ancestor)) throw storageError("目标磁盘当前不可用，请检查盘符或连接。", 400);
+    if (!fs.statSync(ancestor).isDirectory()) throw storageError("路径中的一项是文件，请选择文件夹。", 400);
+    return ancestor;
+  }
+  // A typed destination can be previewed before any directory or registration is created.
+  function migrationDestination(directory, outputName) {
+    const requested = assertOrdinaryPath(directory);
+    if (!outputName || outputName === "." || outputName === ".." || /[\\/:\0\r\n]/.test(outputName) || (process.platform === "win32" && (/[<>\"|?*]|[. ]$/.test(outputName) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(outputName)))) throw storageError("无效的模型文件夹名。", 400);
+    const ancestor = existingDirectory(requested), realAncestor = fs.realpathSync(ancestor);
+    const directoryPath = path.resolve(realAncestor, path.relative(ancestor, requested));
+    const containing = rootFor(requested);
+    if (containing) resolvePath(requested, { follow: false });
+    const existingRoot = roots().find(r => pathKey(r.path) === pathKey(directoryPath));
+    if (existingRoot?.mode === "model") throw storageError("这里已登记为单个模型，请选择模型库或新的专用文件夹。", 400);
+    if (!existingRoot && roots().some(r => overlapsPath(r.path, directoryPath))) throw storageError("目标模型库与已登记目录重叠。请选择已登记的模型库本身，或库外的新文件夹。", 400);
+    assertOrdinaryPath(directoryPath);
+    const target = existingRoot ? downloadTarget(existingRoot.id, outputName) : path.join(directoryPath, outputName);
+    return { target, directory: directoryPath, existingAncestor: realAncestor, rootId: existingRoot?.id || null, needsRegistration: !existingRoot, needsCreation: !fs.existsSync(directoryPath) };
+  }
+  async function browseDirectories(value = "", query = "", offset = 0) {
+    if (!String(value).trim()) {
+      const candidates = process.platform === "win32" ? Array.from({ length: 26 }, (_, i) => `${String.fromCharCode(65 + i)}:\\`) : [path.parse(legacyRoot).root];
+      const results = await Promise.all(candidates.map(async p => { try { return (await fsp.stat(p)).isDirectory() ? { name: p, path: p } : null; } catch { return null; } }));
+      return { path: "", parent: null, directories: results.filter(Boolean), total: results.filter(Boolean).length, nextOffset: null };
+    }
+    const target = assertOrdinaryPath(value, { allowDiskRoot: true });
+    let entries;
+    try { entries = await fsp.readdir(target, { withFileTypes: true }); }
+    catch (e) { throw storageError(e.code === "ENOENT" ? "此文件夹不存在，可以返回上一级选择；新路径也可以直接填入迁移目标。" : e.code === "ENOTDIR" ? "请选择文件夹。" : "无法读取此文件夹，请检查磁盘连接和文件夹权限。", 400); }
+    const filter = String(query).toLocaleLowerCase();
+    const dirs = entries.filter(e => e.isDirectory() && !e.isSymbolicLink() && e.name.toLocaleLowerCase().includes(filter)).sort((a, b) => a.name.localeCompare(b.name, "zh-CN", { numeric: true }));
+    const start = Math.max(0, Number.parseInt(offset, 10) || 0), end = start + 200;
+    return { path: target, parent: path.dirname(target) === target ? "" : path.dirname(target), directories: dirs.slice(start, end).map(e => ({ name: e.name, path: path.join(target, e.name) })), total: dirs.length, nextOffset: end < dirs.length ? end : null };
   }
   function rootFor(value) { return roots().filter(r => containsPath(r.path, value)).sort((a, b) => b.path.length - a.path.length)[0] || null; }
   function followAliases(value) {
@@ -175,7 +213,7 @@ function createModelStorage(options = {}) {
   function isRetired(target) { return (read().aliases || []).some(a => containsPath(a.from, target)); }
   function addAlias(from, to, migrationId) { return mutate(data => { if ((data.aliases || []).some(a => a.migrationId === migrationId)) return; if ((data.aliases || []).some(a => overlapsPath(a.from, from) || overlapsPath(a.from, to))) throw storageError("迁移路径与已有映射冲突，请选择新的目标目录。"); data.aliases.push({ from, to, migrationId }); }); }
   function removeAlias(migrationId) { return mutate(data => { data.aliases = data.aliases.filter(a => a.migrationId !== migrationId); }); }
-  return { file, operationDir, roots, snapshot, registerRoot, setDefault, unregisterRoot, resolvePath, rootFor, followAliases, fromContainerPath, toContainerPath, dockerMountArgs, downloadTarget, prepareDownload, activeOperations, acquireOperation, releaseOperation, trackChild, assertUnlocked, isRetired, addAlias, removeAlias };
+  return { file, operationDir, roots, snapshot, registerRoot, setDefault, unregisterRoot, resolvePath, rootFor, followAliases, fromContainerPath, toContainerPath, dockerMountArgs, downloadTarget, prepareDownload, migrationDestination, browseDirectories, activeOperations, acquireOperation, releaseOperation, trackChild, assertUnlocked, isRetired, addAlias, removeAlias };
 }
 
 module.exports = { createModelStorage, storageError, containsPath, overlapsPath, pathKey, storageReadJson: readJson, storageWriteJson: writeJson };

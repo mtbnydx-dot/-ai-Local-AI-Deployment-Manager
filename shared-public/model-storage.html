@@ -4,6 +4,21 @@
 <body><main>
   <header><div><a href="/">← 返回模型管理器</a><h1>模型存储与迁移</h1><p>统一管理不同磁盘上的模型，下载时选择位置，已有模型直接接入。</p></div><button id="refresh" type="button">刷新状态</button></header>
   <div id="notice" role="status" aria-live="polite"></div>
+  <section id="migrationSection"><h2>迁移现有模型</h2><p>选择模型和目标位置，预览后开始迁移。复制并校验成功后切换路径，源文件保留。</p>
+    <form id="migrationForm">
+      <label class="wide">源模型<select id="migrationSource" name="source" required><option value="">正在读取模型…</option></select><span id="sourcePath" class="path field-note"></span></label>
+      <div class="wide">
+        <label for="migrationTarget">目标模型库路径</label>
+        <div class="path-input"><input id="migrationTarget" name="targetDirectory" required placeholder="直接输入，例如 F:\AI\models" autocomplete="off" spellcheck="false" aria-describedby="targetHelp"><button id="browseTarget" type="button">浏览文件夹</button></div>
+        <p id="targetHelp" class="field-note">可直接填写其他磁盘上的文件夹。新目录会在确认开始时创建并登记，无需提前添加模型库。</p>
+        <div id="targetShortcuts" class="target-shortcuts" aria-label="已登记的模型库"></div>
+      </div>
+      <label class="wide">模型文件夹名称<input id="migrationOutputName" name="outputName" placeholder="留空沿用源模型文件夹名称" autocomplete="off" spellcheck="false"></label>
+      <div class="wide destination-summary"><span>最终保存位置</span><output id="targetPreview" class="path" aria-live="polite">选择源模型和目标模型库后显示</output></div>
+      <div class="wide"><button class="primary" type="submit">预览迁移</button><span class="hint">预览会检查目标位置和磁盘空间。</span></div>
+    </form>
+    <div id="preview" hidden></div>
+  </section>
   <section><div class="section-heading"><div><h2>模型库目录</h2><p>vLLM 与 llama.cpp 共用目录设置；保存后即可使用。</p></div></div><div id="roots" class="roots"><p>正在读取模型库…</p></div>
     <details id="registerDetails"><summary>添加模型库 / 导入已有模型</summary><form id="registerForm">
       <label class="wide">绝对文件夹路径<input name="path" required placeholder="例如 F:\AI\models 或 E:\已有模型\Qwen" autocomplete="off"></label>
@@ -13,11 +28,17 @@
       <div class="wide"><button class="primary" type="submit">保存目录</button><span class="hint">导入只登记路径，不复制或移动文件。</span></div>
     </form></details>
   </section>
-  <section><h2>迁移现有模型</h2><p>先预览空间和文件清单，再复制并逐文件校验 SHA256。切换成功后保留源文件，确认新位置可用后可单独清理原盘。</p>
-    <form id="migrationForm"><label class="wide">源模型<select id="migrationSource" name="source" required><option value="">正在读取模型…</option></select></label><label>目标模型库<select id="migrationTarget" name="storageId" required></select></label><label>目标文件夹名称<input name="outputName" placeholder="留空沿用原文件夹名"></label><div class="wide"><button type="submit">预览迁移</button></div></form>
-    <div id="preview" hidden></div>
-  </section>
   <section><div class="section-heading"><div><h2>迁移任务</h2><p>可暂停并继续；源文件清理前支持切回原路径。</p></div><span id="taskCount" class="badge">0 个任务</span></div><div id="migrations"><p>暂无迁移任务。</p></div></section>
 </main>
 <dialog id="confirmDialog"><form method="dialog"><h2 id="confirmTitle"></h2><p id="confirmText"></p><label id="confirmPathLabel" hidden>输入要清理的源目录完整路径<input id="confirmPath" autocomplete="off"></label><div class="dialog-actions"><button value="cancel">返回</button><button id="confirmAccept" value="accept" class="primary">确认</button></div></form></dialog>
+<dialog id="folderDialog" aria-labelledby="folderTitle">
+  <div class="section-heading"><h2 id="folderTitle">选择目标模型库</h2><button id="folderClose" type="button" aria-label="关闭文件夹浏览">关闭</button></div>
+  <p>浏览本机磁盘，进入文件夹后选择当前目录。</p>
+  <form id="folderAddressForm"><label for="folderAddress">当前位置</label><div class="path-input"><input id="folderAddress" placeholder="输入文件夹路径，或留空查看磁盘" autocomplete="off" spellcheck="false"><button type="submit">打开</button></div></form>
+  <div class="folder-toolbar"><button id="folderDrives" type="button">所有磁盘</button><button id="folderUp" type="button">上一级</button><input id="folderFilter" placeholder="筛选当前目录下的文件夹" aria-label="筛选文件夹" autocomplete="off"></div>
+  <div id="folderStatus" role="status" aria-live="polite"></div><div id="folderList" class="folder-list" aria-label="文件夹列表"></div>
+  <button id="folderMore" type="button" hidden>加载更多文件夹</button>
+  <div class="folder-selection"><span>选择的文件夹</span><div id="folderSelected" class="path">尚未选择</div></div>
+  <div class="dialog-actions"><button id="folderCancel" type="button">取消</button><button id="folderChoose" class="primary" type="button" disabled>使用此文件夹</button></div>
+</dialog>
 </body></html>
