@@ -149,6 +149,30 @@ async function verifyVllmSchedulerLaunch(page) {
   await stage("resources").click();
 }
 
+async function verifyResourceLayout(page, label) {
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    const layout = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      fields: Array.from(document.querySelectorAll(".context-section .control-group-grid input[type='number']"))
+        .filter((node) => node.getClientRects().length)
+        .map((node) => {
+          const field = node.getBoundingClientRect();
+          const label = node.closest("label").getBoundingClientRect();
+          return { id: node.id, width: field.width, contained: field.left >= label.left - 1 && field.right <= label.right + 1 };
+        }),
+    }));
+    expect(layout.scrollWidth, `${label} resource page fits ${viewport.width}px`).toBeLessThanOrEqual(layout.clientWidth + 1);
+    expect(layout.fields.length).toBeGreaterThan(0);
+    for (const field of layout.fields) {
+      expect(field.width, `${label} ${field.id} is readable at ${viewport.width}px`).toBeGreaterThanOrEqual(180);
+      expect(field.contained, `${label} ${field.id} stays inside its label`).toBe(true);
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 960 });
+}
+
 async function smokePage(page, baseUrl, label) {
   const failures = [];
   page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
@@ -348,6 +372,7 @@ async function smokePage(page, baseUrl, label) {
     await expect(page.locator("#sglangProfileNote")).toContainText(/有效并发为 1|Mamba cache 8 is currently 1/);
     await verifyVllmSchedulerLaunch(page);
   }
+  await verifyResourceLayout(page, label);
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   // The catalog must be reachable at the top even with a long local model library.
   const onlineModel = { id: "example/online-smoke-model", label: "example/online-smoke-model", author: "example", outputName: "online-smoke-model", source: "huggingface", url: "https://huggingface.co/example/online-smoke-model", hasGguf: label === "llama", hasSafetensors: label === "vLLM", quantFormats: label === "llama" ? ["Q4_K_M"] : ["FP8"], paramsB: 8, lastModified: "2026-09-01" };

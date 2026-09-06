@@ -2096,7 +2096,7 @@ body.model-picker-open {
 
 @media (min-width: 1280px) {
   .workspace {
-    grid-template-columns: minmax(620px, 1.45fr) minmax(340px, 0.7fr);
+    grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.7fr);
   }
 }
 
