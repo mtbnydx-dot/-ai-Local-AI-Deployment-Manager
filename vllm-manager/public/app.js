@@ -1428,7 +1428,7 @@ function bindEvents() {
   ["#downloadDeveloper", "#downloadVersion", "#downloadSpec", "#downloadPrecision", "#downloadSource"].forEach((selector) => {
     $(selector).addEventListener("change", updateDownloadPreset);
   });
-  ["#downloadModel", "#downloadPrecision", "#downloadSource"].forEach((selector) => {
+  ["#downloadModel", "#downloadPrecision", "#downloadSource", "#downloadStorage"].forEach((selector) => {
     $(selector)?.addEventListener("change", scheduleDownloadEstimate);
   });
   $("#downloadModel")?.addEventListener("input", scheduleDownloadEstimate);
@@ -1804,7 +1804,7 @@ async function requestDownloadEstimate() {
   textEl.textContent = "正在估算下载体积...";
   try {
     const params = new URLSearchParams({ model, source, precision });
-    const result = await api(`/api/download/estimate?${params}`);
+    const result = await api(`/api/download/estimate?${params}&storageId=${encodeURIComponent($("#downloadStorage")?.value || "")}&includeExtras=${encodeURIComponent((state.downloadIncludeExtras || []).join(","))}`);
     if (seq !== downloadEstimateSeq) return; // 已有更新的请求，丢弃过期结果
     updateDownloadPlanPreview(result);
     renderHfGatedAccess(result);
@@ -5195,6 +5195,7 @@ async function downloadModel(event) {
     const payload = {
       model,
       outputName,
+      storageId: String(form.get("storageId") || ""),
       source,
       precision,
       ...(state.downloadIncludeExtras?.length ? { includeExtras: state.downloadIncludeExtras } : {}),
@@ -5463,15 +5464,15 @@ async function handleDownloadJobAction(event) {
   if (button.dataset.downloadAction === "cancel") {
     const ok = await uiArchitecture.confirmAction({
       title: "取消下载？",
-      body: `<p>将停止任务并删除该模型已下载的部分文件（${escapeHtml(meta.outputName || meta.model || job.title)}）。</p>`,
-      confirmLabel: "取消下载并清理",
+      body: `<p>将停止任务并保留该模型已下载的文件和续传数据（${escapeHtml(meta.outputName || meta.model || job.title)}）。</p>`,
+      confirmLabel: "取消下载并保留文件",
       danger: true,
     });
     if (!ok) return;
     const clearCancelBusy = setButtonBusy(button, "取消中...");
     try {
       await api(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST", body: "{}" });
-      notify("下载已取消并清理", meta.model || job.title, "success");
+      notify("下载已取消，文件已保留", meta.model || job.title, "success");
       await refreshJobs();
     } catch (error) {
       reportActionError("取消下载失败", error);

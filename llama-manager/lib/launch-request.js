@@ -18,6 +18,7 @@ function createLlamaStartRuntimeRequest(deps) {
   const {
     CONFIG,
     cleanRequired,
+    resolveRequestedModel = value => value,
     deriveName,
     positiveInt,
     normalizeGpuLayers,
@@ -61,7 +62,7 @@ function createLlamaStartRuntimeRequest(deps) {
   } = deps;
 
   return async function startRuntimeRequest({ body = {} } = {}) {
-    const model = cleanRequired(body.model, "model");
+    const model = resolveRequestedModel(cleanRequired(body.model, "model"));
     const launchResolution = typeof resolveLaunchModel === "function" ? resolveLaunchModel(model, "gguf") : null;
     if (launchResolution?.selectedModel && typeof validateRuntimeCompatibility === "function") {
       const compatibility = await validateRuntimeCompatibility(launchResolution.selectedModel.architecture);

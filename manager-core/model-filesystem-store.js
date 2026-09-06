@@ -11,6 +11,7 @@ const {
 
 function createModelFilesystemStore(options = {}) {
   const modelsRoot = options.modelsRoot;
+  const storage = options.storage;
   const hfCache = options.hfCache;
   if (!modelsRoot || !hfCache) {
     throw new Error("createModelFilesystemStore requires modelsRoot and hfCache.");
@@ -29,6 +30,7 @@ function createModelFilesystemStore(options = {}) {
   }
 
   function resolveModelsRootChild(target) {
+    if (storage) return storage.resolvePath(target);
     const root = path.resolve(modelsRoot);
     const resolved = path.resolve(String(target || ""));
     if (resolved !== root && !resolved.startsWith(root + path.sep)) {
@@ -41,10 +43,11 @@ function createModelFilesystemStore(options = {}) {
 
   function describeLocalModelPath(value) {
     if (!path.isAbsolute(value)) return null;
-    const resolved = path.resolve(value);
+    let resolved;
+    try { resolved = storage ? storage.resolvePath(value) : path.resolve(value); } catch { return null; }
     const root = path.resolve(modelsRoot);
     const relative = path.relative(root, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative) || !fs.existsSync(resolved)) return null;
+    if ((!storage && (relative.startsWith("..") || path.isAbsolute(relative))) || !fs.existsSync(resolved)) return null;
     const stat = fs.statSync(resolved);
     const ggufFiles = stat.isDirectory()
       ? findGgufFilesSync(resolved, 512)
@@ -63,12 +66,24 @@ function createModelFilesystemStore(options = {}) {
 
   async function listLocalModels() {
     await ensureDirs(modelsRoot);
-    const entries = await fsp.readdir(modelsRoot, { withFileTypes: true });
-    const dirs = entries.filter((entry) => entry.isDirectory());
+    const roots = storage ? storage.roots() : [{ id: "legacy", path: modelsRoot, mode: "library" }];
+    const dirs = [];
+    for (const root of roots) {
+      if (!fs.existsSync(root.path)) continue;
+      if (root.mode === "model") {
+        if (!storage?.isRetired(root.path)) dirs.push({ name: path.basename(root.path), fullPath: root.path, root });
+      } else {
+        const entries = await fsp.readdir(root.path, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+          const fullPath = path.join(root.path, entry.name);
+          if (entry.isDirectory() && !entry.name.startsWith(".") && !storage?.isRetired(fullPath)) dirs.push({ name: entry.name, fullPath, root });
+        }
+      }
+    }
     // 每个模型目录都要 stat + GGUF 清单 + 校验 + 目录大小；目录之间互不依赖，
     // 有限并发跑，冷缓存时首屏不再按目录数线性放大。
     const models = await mapWithConcurrency(dirs, 6, async (entry) => {
-      const fullPath = path.join(modelsRoot, entry.name);
+      const fullPath = entry.fullPath;
       const stats = await fsp.stat(fullPath);
       const ggufInventory = buildGgufInventory(await findGgufFiles(fullPath, 512));
       const ggufFiles = ggufInventory.files;
@@ -81,7 +96,9 @@ function createModelFilesystemStore(options = {}) {
       }
       return {
         kind: "local",
-        id: entry.name,
+        id: entry.root.id === "legacy" ? entry.name : fullPath,
+        storageId: entry.root.id,
+        storageLabel: entry.root.label || entry.root.path,
         label: entry.name,
         path: fullPath,
         launchModel: ggufInventory.selectedModel?.launchModel || fullPath,
@@ -174,7 +191,8 @@ function createModelFilesystemStore(options = {}) {
 
   // 只删除指定模型目录里的 .incomplete 残留；正式权重与配置一律不动。
   async function cleanupIncompleteFiles(target) {
-    const root = resolveModelsRootChild(target);
+    const root = storage ? storage.resolvePath(target, { allowRoot: false }) : resolveModelsRootChild(target);
+    storage?.assertUnlocked([root]);
     const removed = [];
     let removedBytes = 0;
     async function walk(dir) {

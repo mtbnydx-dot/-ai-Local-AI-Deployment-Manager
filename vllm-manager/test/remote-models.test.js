@@ -108,3 +108,25 @@ test("vLLM remote model service keeps generic shards in dedicated FP8 repositori
   assert.equal(estimate.probeFile, "config.json");
   assert.equal(estimate.authorizationUrl, "https://huggingface.co/owner/model-FP8");
 });
+
+
+test("download estimates include selected projector files in sizes and checksums", async () => {
+  const service = createVllmRemoteModelService({ fetchImpl: async () => jsonResponse({ siblings: [
+    { rfilename: "model-Q4_K_M.gguf", size: 100, lfs: { oid: "a".repeat(64), size: 100 } },
+    { rfilename: "model-Q8_0.gguf", size: 200 },
+    { rfilename: "mmproj-f16.gguf", size: 25, lfs: { oid: "b".repeat(64), size: 25 } },
+  ] }) });
+  const estimate = await service.getHuggingFaceDownloadEstimate("owner/model-GGUF", "Q4_K_M", ["mmproj-f16.gguf"]);
+  assert.equal(estimate.bytes, 125);
+  assert.deepEqual(estimate.fileManifest.map(f => f.name), ["model-Q4_K_M.gguf", "mmproj-f16.gguf"]);
+});
+
+test("live HF sha256 fields and legacy oid fields both produce verifiable manifests", async () => {
+  const service = createVllmRemoteModelService({ fetchImpl: async () => jsonResponse({ siblings: [
+    { rfilename: "model.safetensors", size: 100, lfs: { sha256: "a".repeat(64) } },
+    { rfilename: "tokenizer.model", size: 25, lfs: { sha256: "b".repeat(64) } },
+    { rfilename: "legacy.gguf", size: 50, lfs: { oid: "sha256:" + "c".repeat(64) } },
+  ] }) });
+  const estimate = await service.getHuggingFaceDownloadEstimate("owner/model", "");
+  assert.deepEqual(estimate.fileManifest.map(f => f.sha256), ["a".repeat(64), "b".repeat(64), "c".repeat(64)]);
+});

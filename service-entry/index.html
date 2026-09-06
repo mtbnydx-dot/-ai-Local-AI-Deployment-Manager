@@ -1004,6 +1004,7 @@
       <div class="empty">正在读取本地服务状态...</div>
     </section>
 
+    <section class="card" data-entry-pane="models"><div class="card-head"><div><h2>模型文件与磁盘</h2><p>登记跨盘模型库、导入现有模型，或复制校验后迁移到其他磁盘。</p></div><a class="button primary" data-manager-link="vllm" data-manager-path="/model-storage">管理存储与迁移</a></div></section>
     <section id="voiceGrid" class="grid" data-entry-pane="voice" aria-label="语音服务"></section>
     <section class="card" data-entry-pane="tasks">
       <div class="card-head"><div><h2>下载与任务</h2><p>按引擎查看下载进度、失败原因与重试；语音任务在语音工作台中管理。</p></div></div>
@@ -2311,7 +2312,8 @@
       for (const link of document.querySelectorAll("[data-manager-link]")) {
         const manager = managers.find(item => item.id === link.dataset.managerLink);
         const url = new URL(manager?.localUrl || `http://${location.hostname}:${link.dataset.managerLink === "vllm" ? 5177 : 5178}`);
-        url.hash = link.dataset.managerView; link.href = url.href;
+        if (link.dataset.managerPath) url.pathname = link.dataset.managerPath;
+        url.hash = link.dataset.managerView || ""; link.href = url.href;
       }
       setHtmlPreservingState(grid, cards.join("") || `<div class="empty">暂未发现模型管理器；可在运维页查看组件状态。</div>`);
     }

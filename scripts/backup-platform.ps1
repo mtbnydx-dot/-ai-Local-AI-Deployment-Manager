@@ -57,6 +57,9 @@ Add-File (Join-Path $Root "service-entry\data\platform-billing.sqlite") "service
 Get-ChildItem -LiteralPath (Join-Path $Root "service-entry\data") -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
     Add-File $_.FullName ("service-entry\data\" + $_.Name) "json"
 }
+Get-ChildItem -LiteralPath (Join-Path $Root 'service-entry\data\model-migrations') -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+    Add-File $_.FullName ('service-entry\data\model-migrations\' + $_.Name) 'json'
+}
 foreach ($manager in @("vllm-manager", "llama-manager")) {
     $logs = Join-Path $Root "$manager\logs"
     Get-ChildItem -LiteralPath $logs -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {

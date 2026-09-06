@@ -100,6 +100,16 @@ const UI_COPY = {
 };
 
 const UI_TEXT_TRANSLATIONS = {
+  "模型保存位置": "Model download location",
+  "管理目录、导入与跨盘迁移": "Manage folders, imports and migrations",
+  "默认模型库": "Default model library",
+  "模型存储与迁移": "Model storage and migration",
+  "模型下载": "Model download",
+  "中断": "Interrupted",
+  "失败": "Failed",
+  "取消并保留文件": "Cancel and keep files",
+  "取消下载并保留文件": "Cancel download and keep files",
+  "下载已取消，文件已保留": "Download cancelled; files preserved",
   // 下载前预检 / GGUF 变体 / 精度仓（download-compat-renderer.js + download-precheck.js）
   "下载前预检：可以下载": "Pre-download check: ready to download",
   "下载前预检：可以下载，有提示": "Pre-download check: ready, with notes",
@@ -892,6 +902,7 @@ const UI_TRANSLATION_PATTERNS = [
   [/^在线查找 (.+) 的 (.+) GGUF$/u, "Find $1 $2 GGUF online"],
   [/^没有匹配 (.+) 的文件，请换真实 GGUF 仓库或改成下载整个仓库。 模型盘剩余 (.+)。$/u, "No files match $1. Choose an actual GGUF repository or download the whole repository. Model drive free: $2."],
   [/^只下载匹配 (.+) 的文件。当前元数据没有匹配文件，请先确认仓库内真的存在 (.+)。$/u, "Download only files matching $1. No current metadata matches; confirm that $2 actually exists in the repository."],
+  [/^自动重试 (\d+)\/(\d+) · 计划 (.+)$/u, "Automatic retry $1/$2 · Scheduled $3"],
   [/^自动重试 (.+)\/(.+)$/u, "Automatic retry $1/$2"],
   [/^温度 (.+)$/u, "Temperature $1"],
   [/^功耗 (.+)$/u, "Power $1"],

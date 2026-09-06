@@ -116,8 +116,10 @@ function filterDownloadSiblings(siblings, precision, model = "") {
   return siblings.filter((file) => matchesDownloadPrecisionFile(file.rfilename, precision));
 }
 
-function selectDownloadSiblings(siblings, precision, model = "") {
-  const includePatterns = buildDownloadIncludePatterns(precision, model);
+function selectDownloadSiblings(siblings, precision, model = "", extraIncludePatterns = []) {
+  const basePatterns = buildDownloadIncludePatterns(precision, model);
+  const extras = basePatterns.length ? normalizeExtraIncludePatterns(extraIncludePatterns) : [];
+  const includePatterns = [...new Set([...basePatterns, ...extras])];
   const files = Array.isArray(siblings) ? siblings : [];
   if (!includePatterns.length) {
     return {
@@ -128,7 +130,8 @@ function selectDownloadSiblings(siblings, precision, model = "") {
       total: files.length,
     };
   }
-  const matched = files.filter((file) => matchesDownloadPrecisionFile(file.rfilename, precision));
+  const extraMatchers = extras.map(pattern => new RegExp("^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"));
+  const matched = files.filter((file) => matchesDownloadPrecisionFile(file.rfilename, precision) || extraMatchers.some(re => re.test(file.rfilename)));
   return {
     siblings: matched,
     includePatterns,
@@ -280,8 +283,8 @@ function buildDownloadCommand({ source, model, localDir, precision, extraInclude
 
 function assertDownloadDiskSpace(expectedBytes, freeBytes, formatBytes = (value) => String(value)) {
   const needed = Number(expectedBytes || 0);
-  const free = Number(freeBytes || 0);
-  if (!(needed > 0) || !(free > 0)) return;
+  const free = Number(freeBytes);
+  if (!(needed > 0) || freeBytes == null || !Number.isFinite(free)) return;
   const reserve = Math.max(free * 0.05, 10 * 1024 ** 3);
   if (needed > free - reserve) {
     const error = new Error(`磁盘空间不足：预计下载 ${formatBytes(needed)}，模型盘剩余 ${formatBytes(free)}。请清理磁盘或更换模型目录后再试。`);

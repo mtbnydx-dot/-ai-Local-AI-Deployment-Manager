@@ -116,7 +116,7 @@ function createDownloadChecksumRunner(options = {}) {
       throw new Error(`SHA256 校验失败：${result.mismatched.length} 个文件与 Hugging Face 清单不一致，已删除损坏文件；继续下载会只重新获取这些文件。`);
     }
     if (result.missing.length) {
-      appendLog(job, `清单中 ${result.missing.length} 个文件本地不存在（通常是量化过滤未下载），已跳过。`);
+      throw new Error(`下载清单中 ${result.missing.length} 个权重文件缺失：${result.missing.join("、")}。任务不能标记为成功，请继续下载补齐。`);
     }
     appendLog(job, `SHA256 校验通过：${result.matched}/${result.checked} 个文件、${formatBytes(result.totalBytes)}，耗时 ${Math.max(1, Math.round((Date.now() - startedAt) / 1000))} 秒。`);
     return result;

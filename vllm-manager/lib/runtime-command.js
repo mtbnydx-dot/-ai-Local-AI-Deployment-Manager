@@ -3,6 +3,7 @@ const path = require("path");
 function createVllmRuntimeCommandBuilder(deps) {
   const {
     CONFIG,
+    getModelMountArgs = () => ["-v", `${CONFIG.modelsRoot}:/models`],
     MANAGER_LABEL_KEY,
     MANAGER_ENGINE_LABEL_KEY,
     MANAGER_APIKEY_REF_LABEL_KEY,
@@ -164,7 +165,7 @@ function createVllmRuntimeCommandBuilder(deps) {
       "--health-start-period", `${Math.min(60, Math.max(5, Math.round(Math.max(5 * 60 * 1000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000)) / 60000)))}m`,
       ...publishArgsToDockerRunArgs(activePublishArgs),
       "-v", `${CONFIG.hfCache}:/root/.cache/huggingface`,
-      "-v", `${CONFIG.modelsRoot}:/models`,
+      ...getModelMountArgs(),
     ];
     if (runtimeEngine === "sglang") {
       runArgs.push(

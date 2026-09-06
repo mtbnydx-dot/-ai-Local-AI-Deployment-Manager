@@ -3,6 +3,7 @@ const path = require("path");
 function createLlamaRuntimeCommandBuilder(deps) {
   const {
     CONFIG,
+    getModelMountArgs = () => ["-v", `${CONFIG.modelsRoot}:/models`],
     MANAGER_LABEL_KEY,
     MANAGER_ENGINE_LABEL_KEY,
     MANAGER_APIKEY_REF_LABEL_KEY,
@@ -123,7 +124,7 @@ function createLlamaRuntimeCommandBuilder(deps) {
       "--ipc=host",
       ...publishArgsToDockerRunArgs(activePublishArgs),
       "-v", `${CONFIG.hfCache}:/root/.cache/huggingface`,
-      "-v", `${CONFIG.modelsRoot}:/models`,
+      ...getModelMountArgs(),
     ];
     if (opts.runtimeApiKeyRef && MANAGER_APIKEY_REF_LABEL_KEY) {
       runArgs.push("--label", `${MANAGER_APIKEY_REF_LABEL_KEY}=${opts.runtimeApiKeyRef}`);

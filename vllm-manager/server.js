@@ -121,6 +121,7 @@ const CONFIG = {
   ]),
   hfCli: firstExisting([
     process.env.HF_CLI,
+    defaultAiPath("venvs", "download-cli", "Scripts", "hf.exe"),
     defaultAiPath("venvs", "ai312", "Scripts", "hf.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "hf.exe"),
     "hf",
@@ -130,6 +131,7 @@ const CONFIG = {
   ]),
   modelScopeCli: firstExisting([
     process.env.MODELSCOPE_CLI,
+    defaultAiPath("venvs", "download-cli", "Scripts", "modelscope.exe"),
     defaultAiPath("venvs", "ai312", "Scripts", "modelscope.exe"),
     defaultAiPath("venvs", "ai311", "Scripts", "modelscope.exe"),
     "modelscope",
@@ -248,7 +250,14 @@ const hfAuthService = createHfAuthService({
   hfCli: CONFIG.hfCli,
   hfHome: CONFIG.hfCache,
 });
+const modelStorage = core.createModelStorage({
+  modelsRoot: CONFIG.modelsRoot,
+  file: process.env.MODEL_STORAGE_FILE || defaultAiPath("service-entry", "data", "model-storage.json"),
+});
+const storageBusyPaths = core.createStorageBusyPathProbe({ aiRoot: DEFAULT_AI_ROOT, getJobs: () => jobs.values() });
+const modelMigration = core.createModelMigration({ storage: modelStorage, getBusyPaths: storageBusyPaths });
 const modelFilesystemStore = core.createModelFilesystemStore({
+  storage: modelStorage,
   modelsRoot: CONFIG.modelsRoot,
   hfCache: CONFIG.hfCache,
 });
@@ -331,6 +340,7 @@ const {
   formatDockerPublishArgs,
   redactDockerArgs,
 } = createVllmRuntimeCommandBuilder({
+  getModelMountArgs: () => modelStorage.dockerMountArgs(),
   CONFIG,
   MANAGER_LABEL_KEY,
   MANAGER_ENGINE_LABEL_KEY,
@@ -800,6 +810,8 @@ app.post("/serve/v1/classify", openAiGatewayHandlers.handleClassify);
 app.get("/opencode/v1/models", handleOpenCodeModels);
 app.post("/opencode/v1/chat/completions", handleOpenCodeChatCompletions);
 
+core.registerModelStorageRoutes(app, { storage: modelStorage, migration: modelMigration, isLocalRequest, publicDir: path.join(__dirname, "..", "shared-public") });
+
 core.registerModelRoutes(app, {
   listModels: listVllmModelCollections,
   deleteLocalModel: deleteLocalModelRequest,
@@ -921,7 +933,7 @@ async function inspectDownloadResumeRequest(job) {
 // 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
 async function cleanupIncompleteRequest(body = {}) {
   const name = cleanRequired(body.name, "name");
-  const localDir = resolveModelsRootChild(path.join(CONFIG.modelsRoot, safeOutputName(name)));
+  const localDir = resolveModelsRootChild(path.isAbsolute(name) ? name : path.join(CONFIG.modelsRoot, safeOutputName(name)));
   const activeJob = Array.from(jobs.values()).find((job) => (
     job.type === "download"
     && ["running", "queued", "paused"].includes(job.status)
@@ -940,7 +952,7 @@ async function cleanupIncompleteRequest(body = {}) {
 // 对比本地下载记录与 Hugging Face 上游 lastModified，判断是否有更新。
 async function checkModelUpstreamRequest(query = {}) {
   const name = cleanRequired(query.name, "name");
-  const localDir = resolveModelsRootChild(path.join(CONFIG.modelsRoot, safeOutputName(name)));
+  const localDir = resolveModelsRootChild(path.isAbsolute(name) ? name : path.join(CONFIG.modelsRoot, safeOutputName(name)));
   const key = core.normalizeLocalDirKey(localDir);
   const downloadJob = Array.from(jobs.values())
     .filter((job) => job.type === "download" && core.normalizeLocalDirKey(job.meta?.localDir) === key)
@@ -1037,7 +1049,7 @@ core.registerJobRoutes(app, {
 
 async function deleteLocalModelRequest(body = {}) {
   const name = cleanRequired(body.name, "name");
-  const target = resolveModelsRootChild(path.join(CONFIG.modelsRoot, safeOutputName(name)));
+  const target = resolveModelsRootChild(path.isAbsolute(name) ? name : path.join(CONFIG.modelsRoot, safeOutputName(name)));
   if (target === path.resolve(CONFIG.modelsRoot)) {
     const error = new Error("无法删除模型根目录。");
     error.status = 400;
@@ -1064,6 +1076,10 @@ async function deleteLocalModelRequest(body = {}) {
     error.status = 409;
     throw error;
   }
+  modelStorage.resolvePath(target, { allowRoot: false });
+  modelStorage.assertUnlocked([target]);
+  const mounted = (await storageBusyPaths()).find(item => core.overlapsPath(item.path, target));
+  if (mounted) throw core.storageError(`目录仍被 ${mounted.label} 使用，已阻止删除。`);
   await fsp.rm(target, { recursive: true, force: true });
   return { ok: true, name, path: target };
 }
@@ -1075,11 +1091,12 @@ async function startDownloadRequest(body = {}) {
   const model = reference.model;
   const precision = reference.precision;
   const outputName = safeOutputName(body.outputName || model.replace(/[\\/]/g, "__"));
-  const localDir = path.join(CONFIG.modelsRoot, outputName);
+  const localDir = modelStorage.downloadTarget(body.storageId, outputName);
   await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache);
 
+  const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
   const repository = source === "huggingface"
-    ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision)
+    ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision, includeExtras)
     : null;
   if (repository?.gated) {
     const access = await hfAuthService.checkRepoAccess(model, {
@@ -1098,19 +1115,15 @@ async function startDownloadRequest(body = {}) {
   });
   if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
 
-  await ensureDirs(localDir);
-  const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
   const download = buildDownloadCommand(source, model, localDir, { precision, extraIncludePatterns: includeExtras });
   if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
     throw core.missingDownloadCliError(download.command, source);
   }
-  const expected = Number(body.expectedBytes || 0) > 0
-    ? { bytes: Number(body.expectedBytes), fileCount: Number(body.expectedFiles || 0) || null }
-    : repository
-      ? repository
-      : null;
-  const diskFreeBytes = await getModelsDiskFreeBytes();
+  const expected = repository;
+  const diskFreeBytes = await getModelsDiskFreeBytes(path.dirname(localDir));
   core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
+  modelStorage.assertUnlocked([localDir]);
+  modelStorage.prepareDownload(localDir, { model, source, precision });
   const job = enqueueOrStartDownload(download.command, download.args, {
     env,
     title: `Download ${model} (${download.label})`,
@@ -1150,11 +1163,11 @@ async function estimateDownloadRequest(query = {}) {
     error.status = 400;
     throw error;
   }
-  const diskFreeBytes = await getModelsDiskFreeBytes();
+  const diskFreeBytes = await getModelsDiskFreeBytes(path.dirname(modelStorage.downloadTarget(query.storageId, "estimate-target")));
   if (source !== "huggingface") {
     return { source, model: reference.model, bytes: null, fileCount: null, supported: false, diskFreeBytes };
   }
-  const estimate = await remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision);
+  const estimate = await remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision, query.includeExtras);
   return {
     source,
     model: reference.model,
@@ -1285,6 +1298,7 @@ const {
 } = runtimeRequestHandlers;
 
 const startRuntimeRequest = createVllmStartRuntimeRequest({
+  resolveRequestedModel: value => { const input = modelStorage.fromContainerPath(value); if (!path.isAbsolute(input)) return input; const resolved = modelStorage.resolvePath(input); modelStorage.assertUnlocked([resolved]); return resolved; },
   CONFIG,
   cleanRequired,
   deriveName,
@@ -2767,11 +2781,11 @@ function unique(values) {
   return Array.from(new Set(values));
 }
 
-async function getModelsDiskFreeBytes() {
+async function getModelsDiskFreeBytes(target = CONFIG.modelsRoot) {
   try {
-    const stat = await fsp.statfs(CONFIG.modelsRoot);
+    const stat = await fsp.statfs(target);
     const free = Number(stat.bavail) * Number(stat.bsize);
-    return Number.isFinite(free) && free > 0 ? free : null;
+    return Number.isFinite(free) && free >= 0 ? free : null;
   } catch {
     return null;
   }
@@ -3068,14 +3082,7 @@ function dockerGpuArg(gpuDeviceIds) {
 }
 
 function windowsPathToContainerPath(value) {
-  if (!path.isAbsolute(value)) return value;
-  const resolved = path.resolve(value);
-  const root = path.resolve(CONFIG.modelsRoot);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Local model path must be inside ${CONFIG.modelsRoot}`);
-  }
-  return `/models/${relative.split(path.sep).join("/")}`;
+  return modelStorage.toContainerPath(value);
 }
 
 function windowsPathToContainerModel(model) {
@@ -3206,15 +3213,10 @@ function isQwen38FlashNextNvfp4Model(model, config = null) {
 
 function resolveDsparkDraftModel(value = "") {
   const requested = String(value || "").trim();
-  const candidate = requested.startsWith("/models/")
-    ? path.join(CONFIG.modelsRoot, requested.slice("/models/".length))
-    : requested || path.join(CONFIG.modelsRoot, "RadixArk-Qwen3.8-27B-DSpark");
-  const resolved = path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(CONFIG.modelsRoot, candidate);
-  const root = path.resolve(CONFIG.modelsRoot);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return { path: resolved, ok: false, reason: `DSpark 草稿模型必须位于 ${CONFIG.modelsRoot} 内。` };
-  }
+  const candidate = requested ? modelStorage.fromContainerPath(requested) : path.join(CONFIG.modelsRoot, "RadixArk-Qwen3.8-27B-DSpark");
+  let resolved;
+  try { resolved = modelStorage.resolvePath(path.isAbsolute(candidate) ? candidate : path.resolve(CONFIG.modelsRoot, candidate)); }
+  catch (error) { return { path: candidate, ok: false, reason: error.message }; }
   const config = readLocalModelConfig(resolved);
   const architectures = Array.isArray(config?.architectures) ? config.architectures.map(String) : [];
   if (!fs.existsSync(resolved) || !config) {
@@ -4542,6 +4544,12 @@ function createProcessJob(type, command, args, options = {}) {
 }
 
 const spawnJobProcess = createProcessJobRunner({
+  beforeStart: (job) => {
+    if (job.type !== "download") return;
+    const target = modelStorage.resolvePath(job.meta.localDir, { allowRoot: false });
+    job.meta.storageLock = modelStorage.acquireOperation([target], "download");
+  },
+  afterStart: (job, child) => { if (job.type === "download") modelStorage.trackChild(job.meta.storageLock, child.pid); },
   appendLog,
   finishJob,
   failJob,
@@ -4550,7 +4558,7 @@ const spawnJobProcess = createProcessJobRunner({
   handleDownloadCancel: async (job) => {
     if (job.meta?.cancelAction === "pause") pauseDownloadJobAfterStop(job);
     else if (job.meta?.cancelAction === "stall") downloadJobController.handleDownloadStallAfterStop(job);
-    else await finalizeDownloadCancel(job, { deletePartial: true });
+    else await finalizeDownloadCancel(job, { deletePartial: false });
   },
   cancelNonDownloadMessage: "任务已被用户取消",
   handleProcessSuccess: async (job) => {
@@ -4581,7 +4589,7 @@ const spawnJobProcess = createProcessJobRunner({
   },
   closeHandlerErrorMode: "fail",
   onDone: (job) => {
-    if (job.type === "download") drainDownloadQueue();
+    if (job.type === "download") { modelStorage.releaseOperation(job.meta?.storageLock); drainDownloadQueue(); }
   },
 });
 

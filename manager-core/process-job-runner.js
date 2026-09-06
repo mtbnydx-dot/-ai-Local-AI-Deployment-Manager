@@ -45,13 +45,17 @@ function createProcessJobRunner(handlers = {}) {
   };
 
   return function spawnJobProcess(job, command, args, options = {}) {
+    handlers.beforeStart?.(job, options);
     markProcessJobStarted(job);
     appendLog(job, `> ${command} ${args.join(" ")}`);
-    const child = spawnCommand(command, args, {
-      windowsHide: true,
-      env: options.env || process.env,
-    });
+    let child;
+    try { child = spawnCommand(command, args, {
+        windowsHide: true,
+        env: options.env || process.env,
+      });
+    } catch (error) { onDone(job); throw error; }
     job.pid = child.pid;
+    handlers.afterStart?.(job, child);
     markProcessJobStarted(job, { pid: child.pid });
     scheduleSave();
     if (options.progressDir && startProgressTracker) {

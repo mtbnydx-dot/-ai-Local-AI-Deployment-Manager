@@ -4118,7 +4118,7 @@ test("download job controller queues, pauses, resumes, and drains downloads", as
   third.status = "paused";
   await controller.cancelDownloadJob(third);
   assert.equal(third.status, "cancelled");
-  assert.equal(stopped.includes("rm:partial-c"), true);
+  assert.equal(stopped.includes("rm:partial-c"), false, "cancellation preserves existing files");
   assert.ok(saveCount >= 1);
 });
 

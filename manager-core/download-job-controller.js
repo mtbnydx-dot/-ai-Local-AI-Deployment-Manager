@@ -53,8 +53,8 @@ function createDownloadJobController(options = {}) {
     queuedCancel: "任务已被用户取消",
     pauseStarting: "正在暂停下载，已下载的部分会保留用于继续。",
     paused: "下载已暂停；点击继续会从本地已有文件续传。",
-    cancelStarting: "正在取消下载，完成后会删除本地部分文件。",
-    cancelled: "下载已取消。",
+    cancelStarting: "正在取消下载，已下载的文件和续传数据会保留。",
+    cancelled: "下载已取消，已有文件完整保留。",
     partialDeleted: "已删除部分下载目录",
     resumeQueued: "继续下载已加入队列。",
     resumeStarting: "继续下载，尝试复用本地已有文件。",
@@ -125,6 +125,11 @@ function createDownloadJobController(options = {}) {
     return ["success", "cancelled"].includes(String(status || ""));
   }
 
+  function spawnDownload(job, command, args, opts) {
+    try { return options.spawnJobProcess(job, command, args, opts); }
+    catch (error) { failJob(job, error); options.appendLog(job, error.message); scheduleSave(0); return job; }
+  }
+
   function enqueueOrStartDownload(command, args, jobOptions = {}) {
     healDownloadQueue();
     const busyJob = findActiveDownloadJobByLocalDir(jobs, jobOptions.meta?.localDir);
@@ -153,7 +158,7 @@ function createDownloadJobController(options = {}) {
       };
       scheduleSave(0);
     } else {
-      options.spawnJobProcess(job, command, args, jobOptions);
+      spawnDownload(job, command, args, jobOptions);
     }
     healDownloadQueue();
     return job;
@@ -185,7 +190,7 @@ function createDownloadJobController(options = {}) {
     clearAutoRetry(job);
     if (job.status === "queued") {
       downloadSpecs.delete(job.id);
-      await finalizeDownloadCancel(job, { deletePartial: true });
+      await finalizeDownloadCancel(job, { deletePartial: false });
       return job;
     }
     if (job.status === "running") {
@@ -195,7 +200,7 @@ function createDownloadJobController(options = {}) {
       return job;
     }
     if (job.type !== "download" || isDownloadFinished(job.status)) throw new Error("该下载任务已结束。");
-    await finalizeDownloadCancel(job, { deletePartial: true });
+    await finalizeDownloadCancel(job, { deletePartial: false });
     return job;
   }
 
@@ -203,7 +208,7 @@ function createDownloadJobController(options = {}) {
     options.stopProgressTracker(job);
     markDownloadCancelled(job);
     options.appendLog(job, messages.cancelled);
-    if (finalizeOptions.deletePartial !== false) await deletePartialDownload(job);
+    if (finalizeOptions.deletePartial === true) await deletePartialDownload(job);
     scheduleSave(0);
   }
 
@@ -254,7 +259,7 @@ function createDownloadJobController(options = {}) {
       scheduleSave(0);
     } else {
       options.appendLog(job, messages.resumeStarting);
-      options.spawnJobProcess(job, spec.command, spec.args, spec.options);
+      spawnDownload(job, spec.command, spec.args, spec.options);
     }
     return job;
   }
@@ -265,7 +270,7 @@ function createDownloadJobController(options = {}) {
       const spec = downloadSpecs.get(job.id);
       downloadSpecs.delete(job.id);
       options.appendLog(job, messages.queueDisabledStart);
-      options.spawnJobProcess(job, spec.command, spec.args, spec.options);
+      spawnDownload(job, spec.command, spec.args, spec.options);
     }
   }
 
@@ -320,7 +325,7 @@ function createDownloadJobController(options = {}) {
     downloadSpecs.delete(job.id);
     if (job.meta) delete job.meta.idleWaitLogged;
     options.appendLog(job, messages.queueNextStart);
-    options.spawnJobProcess(job, spec.command, spec.args, spec.options);
+    spawnDownload(job, spec.command, spec.args, spec.options);
   }
 
   function healDownloadQueue(healOptions = {}) {

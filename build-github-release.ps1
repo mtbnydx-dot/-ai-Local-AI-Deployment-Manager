@@ -185,6 +185,7 @@ $releaseFiles = @(
   "playwright.config.cjs",
   "SYNC_POLICY.md",
   "install-all.cmd",
+  "install-download-cli.cmd",
   "test-all.cmd",
   "start-platform.cmd",
   "stop-platform.cmd",
@@ -218,6 +219,7 @@ Copy-ReleaseFile -RelativeSource "docs\git-worktree-workflow.md"
 Copy-ReleaseFile -RelativeSource "docs\mcp-platform-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\qwen38-acceleration-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\service-runbook.md"
+Copy-ReleaseFile -RelativeSource "docs\model-storage-guide.md"
 Copy-ReleaseFile -RelativeSource "docs\update-guide.md"
 
 # README documentation links must survive packaging. This catches the common

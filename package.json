@@ -4,7 +4,7 @@
   "private": true,
   "description": "Release-level checks for the Local AI Deployment Manager.",
   "scripts": {
-    "test:frontend-smoke": "playwright test tests/frontend-smoke.spec.cjs tests/connection-status.spec.cjs tests/billing-page.spec.cjs --config=playwright.config.cjs"
+    "test:frontend-smoke": "playwright test tests/frontend-smoke.spec.cjs tests/connection-status.spec.cjs tests/billing-page.spec.cjs tests/model-storage.spec.cjs --config=playwright.config.cjs"
   },
   "devDependencies": {
     "@playwright/test": "1.61.0"

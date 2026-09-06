@@ -622,6 +622,7 @@
           <div class="panel">
             <div class="panel-head">
               <h3>模型库</h3>
+              <a class="secondary-button" href="/model-storage">模型存储与迁移</a>
               <button class="icon-button" id="reloadModelsBtn" title="刷新模型"><i data-lucide="rotate-cw"></i></button>
             </div>
             <div class="model-list" id="modelList"></div>
@@ -793,6 +794,10 @@
               <label>
                 <span>保存名称</span>
                 <input id="downloadOutputName" name="outputName" placeholder="qwen3-8b" autocomplete="off" />
+              </label>
+              <label>模型保存位置
+                <select id="downloadStorage" name="storageId"><option value="">默认模型库</option></select>
+                <a href="/model-storage">管理目录、导入与跨盘迁移</a>
               </label>
               <div class="hf-auth-card" id="hfAuthCard" data-state="loading">
                 <div class="hf-auth-copy">
@@ -1297,5 +1302,6 @@
     <script src="/shared-js/download-compat-renderer.js?v=20260903-phase2" defer></script>
     <script src="/app.js?v=20260903-phase2" defer></script>
     <script src="/shared-js/lucide.min.js?v=20260811-46-icons" defer onload="window.renderIcons && window.renderIcons()"></script>
-  </body>
+    <script src="/shared-js/storage-selector.js" defer></script>
+</body>
 </html>

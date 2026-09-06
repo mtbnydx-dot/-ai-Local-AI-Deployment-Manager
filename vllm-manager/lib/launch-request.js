@@ -2,6 +2,7 @@ function createVllmStartRuntimeRequest(deps) {
   const {
     CONFIG,
     cleanRequired,
+    resolveRequestedModel = value => value,
     deriveName,
     positiveInt,
     nonNegativeNumber,
@@ -36,7 +37,7 @@ function createVllmStartRuntimeRequest(deps) {
   } = deps;
 
   return async function startRuntimeRequest({ body = {} } = {}) {
-    const model = cleanRequired(body.model, "model");
+    const model = resolveRequestedModel(cleanRequired(body.model, "model"));
     const name = String(body.name || deriveName(model));
     const engine = normalizeRuntimeEngine(body.engine);
     const instanceMode = normalizeRuntimeInstanceMode(body.instanceMode);

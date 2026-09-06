@@ -12,6 +12,7 @@ call :build "platform-mcp" || exit /b 1
 echo.
 echo All install steps completed.
 echo Optional TTS gateway environment: run install-tts-gateway.cmd
+echo Dedicated model download environment: run install-download-cli.cmd
 exit /b 0
 
 :install

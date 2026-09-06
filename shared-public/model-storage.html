@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>模型存储与迁移</title><link rel="stylesheet" href="/shared-js/tokens.css"><link rel="stylesheet" href="/shared-js/model-storage.css"><script src="/shared-js/model-storage-page.js" defer></script></head>
+<body><main>
+  <header><div><a href="/">← 返回模型管理器</a><h1>模型存储与迁移</h1><p>统一管理不同磁盘上的模型，下载时选择位置，已有模型直接接入。</p></div><button id="refresh" type="button">刷新状态</button></header>
+  <div id="notice" role="status" aria-live="polite"></div>
+  <section><div class="section-heading"><div><h2>模型库目录</h2><p>vLLM 与 llama.cpp 共用目录设置；保存后即可使用。</p></div></div><div id="roots" class="roots"><p>正在读取模型库…</p></div>
+    <details id="registerDetails"><summary>添加模型库 / 导入已有模型</summary><form id="registerForm">
+      <label class="wide">绝对文件夹路径<input name="path" required placeholder="例如 F:\AI\models 或 E:\已有模型\Qwen" autocomplete="off"></label>
+      <label>名称<input name="label" placeholder="例如 F 盘模型库" maxlength="80"></label>
+      <label>目录内容<select name="mode"><option value="library">模型库：扫描其中的模型文件夹</option><option value="model">单个已有模型：直接使用这个文件夹</option></select></label>
+      <label class="check"><input type="checkbox" name="create">目录不存在时创建</label><label class="check"><input type="checkbox" name="makeDefault">设为默认下载位置</label>
+      <div class="wide"><button class="primary" type="submit">保存目录</button><span class="hint">导入只登记路径，不复制或移动文件。</span></div>
+    </form></details>
+  </section>
+  <section><h2>迁移现有模型</h2><p>先预览空间和文件清单，再复制并逐文件校验 SHA256。切换成功后保留源文件，确认新位置可用后可单独清理原盘。</p>
+    <form id="migrationForm"><label class="wide">源模型<select id="migrationSource" name="source" required><option value="">正在读取模型…</option></select></label><label>目标模型库<select id="migrationTarget" name="storageId" required></select></label><label>目标文件夹名称<input name="outputName" placeholder="留空沿用原文件夹名"></label><div class="wide"><button type="submit">预览迁移</button></div></form>
+    <div id="preview" hidden></div>
+  </section>
+  <section><div class="section-heading"><div><h2>迁移任务</h2><p>可暂停并继续；源文件清理前支持切回原路径。</p></div><span id="taskCount" class="badge">0 个任务</span></div><div id="migrations"><p>暂无迁移任务。</p></div></section>
+</main>
+<dialog id="confirmDialog"><form method="dialog"><h2 id="confirmTitle"></h2><p id="confirmText"></p><label id="confirmPathLabel" hidden>输入要清理的源目录完整路径<input id="confirmPath" autocomplete="off"></label><div class="dialog-actions"><button value="cancel">返回</button><button id="confirmAccept" value="accept" class="primary">确认</button></div></form></dialog>
+</body></html>

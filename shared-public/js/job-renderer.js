@@ -174,7 +174,7 @@
         return `
           <div class="job-actions">
             <button type="button" class="job-action-button" data-download-action="pause" data-job="${escapeAttr(job.id)}">暂停</button>
-            <button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并删除</button>
+            <button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并保留文件</button>
             ${logsButton}
           </div>
         `;
@@ -183,7 +183,7 @@
         return `
           <div class="job-actions">
             <button type="button" class="job-action-button" data-download-action="pause" data-job="${escapeAttr(job.id)}">暂停排队</button>
-            <button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并删除</button>
+            <button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并保留文件</button>
             ${logsButton}
           </div>
         `;
@@ -193,7 +193,7 @@
         ? `<button type="button" class="job-action-button primary" data-download-action="resume" data-job="${escapeAttr(job.id)}">继续下载</button>`
         : "";
       const cleanupButton = meta.localDir && ["paused", "interrupted", "failed"].includes(job.status)
-        ? `<button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并删除</button>`
+        ? `<button type="button" class="job-action-button danger" data-download-action="cancel" data-job="${escapeAttr(job.id)}">取消并保留文件</button>`
         : "";
       const verifyButton = showVerifyActions && (meta.localDir || meta.outputName)
         ? `<button type="button" class="job-action-button" data-download-action="verify" data-job="${escapeAttr(job.id)}">校验文件</button>`

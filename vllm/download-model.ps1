@@ -42,6 +42,7 @@ $env:HUGGINGFACE_HUB_CACHE = Join-Path $HfCache "hub"
 
 $hf = Resolve-CommandOrPath @(
     $env:HF_CLI,
+    (Join-Path $repoRoot "venvs\download-cli\Scripts\hf.exe"),
     (Join-Path $repoRoot "venvs\ai312\Scripts\hf.exe"),
     (Join-Path $repoRoot "venvs\ai312\Scripts\huggingface-cli.exe"),
     (Join-Path $repoRoot "venvs\ai311\Scripts\hf.exe"),
@@ -54,6 +55,7 @@ Write-Host "Downloading $Model"
 Write-Host "Target: $localDir"
 
 & $hf download $Model --local-dir $localDir
+if ($LASTEXITCODE -ne 0) { throw "Hugging Face download failed (exit $LASTEXITCODE); existing files were preserved." }
 
 Write-Host ""
 Write-Host "Done. Local model path:"

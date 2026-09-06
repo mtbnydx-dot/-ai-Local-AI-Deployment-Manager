@@ -306,12 +306,12 @@ function createLlamaRemoteModelService({
     return simplifyHuggingFaceModel(data);
   }
 
-  async function getHuggingFaceDownloadEstimate(modelId, precision = "") {
+  async function getHuggingFaceDownloadEstimate(modelId, precision = "", includeExtras = []) {
     const data = await remoteInfoCache.get(
       `blobs:${modelId}:${Boolean(getHfToken())}`,
       () => fetchJson(`https://huggingface.co/api/models/${core.encodeRepoId(modelId)}?blobs=true`),
     );
-    const selected = core.selectDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision);
+    const selected = core.selectDownloadSiblings(Array.isArray(data.siblings) ? data.siblings : [], precision, modelId, includeExtras);
     const siblings = selected.siblings;
     const bytes = siblings.reduce((sum, file) => {
       const size = Number(file.size || file.lfs?.size || 0);
@@ -320,12 +320,11 @@ function createLlamaRemoteModelService({
     const fileManifest = siblings
       .map((file) => {
         const name = String(file.rfilename || "").trim();
-        const oid = String(file.lfs?.oid || "").replace(/^sha256:/i, "").toLowerCase();
+        const oid = String(file.lfs?.sha256 || file.lfs?.oid || "").replace(/^sha256:/i, "").toLowerCase();
         const size = Number(file.size || file.lfs?.size || 0);
         return { name, size: Number.isFinite(size) && size > 0 ? size : 0, sha256: /^[0-9a-f]{64}$/.test(oid) ? oid : "" };
       })
-      .filter((item) => item.name && /\.(safetensors|gguf|bin|pt|pth)$/i.test(item.name))
-      .slice(0, 256);
+      .filter((item) => item.name && (item.sha256 || /\.(safetensors|gguf|bin|pt|pth)$/i.test(item.name)));
     return {
       bytes: bytes || null,
       fileCount: siblings.length,
@@ -341,6 +340,7 @@ function createLlamaRemoteModelService({
       matchedFiles: selected.matched,
       totalFiles: selected.total,
       gated: Boolean(data.gated),
+      probeFile: (data.siblings || []).find(f => /\.(safetensors|gguf|bin)$/i.test(f.rfilename))?.rfilename || "config.json",
     };
   }
 

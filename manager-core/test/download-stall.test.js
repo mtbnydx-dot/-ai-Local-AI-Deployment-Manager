@@ -92,11 +92,11 @@ test("download stall preserves partial files and schedules auto retry", async ()
   assert.deepEqual(removed, [], "resume after stall must not delete local files either");
 });
 
-test("user cancel still deletes partial files while stall does not", async () => {
+test("user cancellation and network stalls both preserve downloaded files", async () => {
   const { removed, controller, createJob } = buildStallFixture();
   const job = createJob("download", "Download org/other", { model: "org/other", localDir: "partial-other" });
   job.status = "failed";
   await controller.cancelDownloadJob(job);
   assert.equal(job.status, "cancelled");
-  assert.deepEqual(removed, ["partial-other"], "explicit cancel keeps its delete-partial behavior");
+  assert.deepEqual(removed, [], "cancellation never recursively deletes the download directory");
 });

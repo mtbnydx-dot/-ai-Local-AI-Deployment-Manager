@@ -58,3 +58,11 @@ test("checksum runner deletes only mismatched files and fails the job", async ()
   });
   assert.equal(await skipRun(job), null);
 });
+
+
+test("a missing selected weight cannot be reported as checksum success", async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "download-missing-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const run = core.createDownloadChecksumRunner({ appendLog() {}, getSettings: () => ({ verifyChecksums: true }) });
+  await assert.rejects(run({ meta: { localDir: dir, fileManifest: [{ name: "missing.gguf", size: 4, sha256: sha256("data") }] } }), /权重文件缺失/);
+});
