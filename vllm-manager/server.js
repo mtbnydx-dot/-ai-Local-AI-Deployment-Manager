@@ -119,6 +119,11 @@ const CONFIG = {
     process.env.DOCKER_DESKTOP_EXE,
     defaultDevToolsPath("Docker", "Docker Desktop.exe"),
     defaultDevToolsPath("Docker", "frontend", "Docker Desktop.exe"),
+    // Docker's CLI is normally <install>/resources/bin/docker.exe. Discover
+    // relocated Desktop installations from PATH without a machine-specific root.
+    ...(process.platform === "win32" ? String(process.env.PATH || "").split(path.delimiter)
+      .filter(directory => directory && fs.existsSync(path.join(directory, "docker.exe")))
+      .map(directory => path.resolve(directory, "..", "..", "Docker Desktop.exe")) : []),
     "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
   ]),
   hfCli: firstExisting([
