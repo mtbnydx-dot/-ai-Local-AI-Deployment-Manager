@@ -750,6 +750,8 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
   "这些是 SGLang 专用参数；普通模型留空或填 0 即使用运行时默认值。OrcaRouter 请选 Pennyroyal 524K；旧版镜像保留 262K 预设。": "SGLang-specific parameters; blank or 0 uses runtime defaults. Use Pennyroyal 524K for OrcaRouter; legacy images retain the 262K profile.",
   "Pennyroyal 使用内置 FR-Spec token map 与 NEXTN/MTP 3 步、4 个 draft tokens，无需另下载 DSpark 草稿模型。": "Pennyroyal uses its bundled FR-Spec token map and NEXTN/MTP with 3 steps and 4 draft tokens; no separate DSpark draft model is needed.",
   "GPU 预留": "GPU reservation",
+  "等待指标": "Waiting for metrics",
+  "API 还没有返回模型列表，可能仍在加载权重、编译或 warmup。": "The API has not returned a model list yet; weight loading, compilation or warmup may still be running.",
   "约 85.9 GiB": "About 85.9 GiB",
   "88000 MiB，含权重 / KV / MTP / 运行时": "88000 MiB including weights / KV / MTP / runtime",
   "FP8 · 共享池": "FP8 · shared pool",
@@ -847,6 +849,7 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
 });
 
 const UI_TRANSLATION_PATTERNS = [
+  [/^Base URL 用 (.+)；模型名用 (.+)$/u, "Use $1 as the base URL and $2 as the model name"],
   [/^权重中检出 (.+) 个 MTP 张量，但当前关闭推测解码。$/u, "$1 MTP tensors found in the checkpoint, but speculative decoding is disabled."],
   [/^已连接：(.+)$/u, "Connected: $1"],
   [/^(.+) tokens 总容量$/u, "$1 tokens total capacity"],
