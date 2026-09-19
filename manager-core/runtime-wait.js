@@ -275,14 +275,17 @@ function logSnapshotDelta(previous, current) {
 }
 
 function inferStartupProgress(logText, elapsed, startupTimeoutMs) {
-  const text = String(logText || "");
+  // Configuration dumps and "CUDA graph disabled/incompatible" warnings are
+  // not evidence that graph capture has begun (especially on SGLang MM).
+  const text = String(logText || "").split(/\r?\n/)
+    .filter(line => !/server_args=|\b(?:warning|incompatible|disabled|disabling)\b/i.test(line)).join("\n");
   if (/application startup complete|uvicorn running|startup complete/i.test(text)) {
     return { percent: 92, stage: "启动收尾", detail: "服务进程已报告启动完成，正在等待 API 就绪。" };
   }
-  if (/capturing cuda graphs|cuda graph/i.test(text)) {
+  if (/\b(?:capturing|capture)\b[^\r\n]*cuda graphs?/i.test(text)) {
     return { percent: 82, stage: "捕获 CUDA graphs", detail: "正在捕获 CUDA graphs。" };
   }
-  if (/loading weights|loading model weights|loaded weights/i.test(text)) {
+  if (/loading weights|loading model weights|loaded weights|load weight (?:begin|end)|loading base model/i.test(text)) {
     return { percent: 68, stage: "加载权重", detail: "正在加载模型权重。" };
   }
   return {
