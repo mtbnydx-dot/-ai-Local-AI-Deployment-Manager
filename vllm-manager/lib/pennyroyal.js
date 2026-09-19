@@ -6,6 +6,12 @@ const PENNYROYAL_CACHE_VOLUME = "pennyroyal-orcarouter-v251-compiler";
 // Admission adds its existing OS reserve and startup margin on top of this.
 // SGLang's mem-fraction-static is not a vLLM whole-device reservation fraction.
 const PENNYROYAL_VRAM_RESERVATION_MIB = 88000;
+function pennyroyalVramReservationMb(options = {}) {
+  // The qualified runtime logs allocate 6 GiB target + 0.5 GiB draft KV
+  // at 524288 tokens. Scale only that allocation; keep all other peak margin.
+  const capacity = Math.min(524288, Math.max(262144, Number(options.sglangMaxTotalTokens || options.maxModelLen || options.contextTokens || 524288)));
+  return PENNYROYAL_VRAM_RESERVATION_MIB - Math.floor((524288 - capacity) / 524288 * 6656);
+}
 const PENNYROYAL_TOKENIZER_SHA256 = "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3";
 const PENNYROYAL_DEFAULTS = Object.freeze({
   engine: "sglang", name: "pennyroyal", port: 8000,
@@ -103,6 +109,6 @@ const PENNYROYAL_ROPE_OVERRIDE = JSON.stringify({ text_config: { rope_parameters
 } } });
 
 module.exports = { PENNYROYAL_IMAGE, PENNYROYAL_CACHE_VOLUME, PENNYROYAL_DEFAULTS,
-  PENNYROYAL_VRAM_RESERVATION_MIB,
+  PENNYROYAL_VRAM_RESERVATION_MIB, pennyroyalVramReservationMb,
   PENNYROYAL_TOKENIZER_SHA256, PENNYROYAL_ROPE_OVERRIDE,
   isPennyroyalImage, pennyroyalOptionErrors, createPennyroyalPreset };

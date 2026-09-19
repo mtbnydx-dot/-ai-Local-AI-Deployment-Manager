@@ -9,6 +9,9 @@ test("Pennyroyal memory plan does not count RAM PLE as GPU weights or invent den
   assert.equal(result.engine, "sglang");
   assert.equal(result.plan.perGpuGb * 1024, 88000);
   assert.match(result.plan.estimatePolicy, /measured/);
+  assert.equal(buildVllmMemoryEstimate({ ...defaults, sglangMaxTotalTokens: 327680 }).plan.perGpuGb * 1024, 85504);
+  // Lowering request length alone must not reduce the shared KV reservation.
+  assert.equal(buildVllmMemoryEstimate({ ...defaults, maxModelLen: 262144 }).plan.perGpuGb * 1024, 88000);
   assert.equal(buildVllmMemoryEstimate({ ...defaults, selectedGpus: [{ totalMb: 97887, freeMb: 40000 }] }).plan.status, "fail");
   assert.equal(buildVllmMemoryEstimate({ paramsB: 7 }).engine, "vllm");
 });

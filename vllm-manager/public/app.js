@@ -3215,8 +3215,10 @@ function updateMemoryEstimate() {
 }
 
 function renderPennyroyalMemoryEstimate(estimate) {
+  const capacity = Math.min(524288, Math.max(262144, Number($("#sglangMaxTotalTokens")?.value || $("#maxModelLen")?.value || 524288)));
+  const reservedMiB = 88000 - Math.floor((524288 - capacity) / 524288 * 6656);
   $("#memoryEstimate").innerHTML = [
-    ["GPU 预留", "约 85.9 GiB", "88000 MiB，含权重 / KV / MTP / 运行时"],
+    ["GPU 预留", `≈ ${(reservedMiB / 1024).toFixed(1)} GiB`, `${reservedMiB} MiB · NVFP4 / KV / MTP / runtime`],
     ["GPU KV", "FP8 · 共享池", `${fmtNumber(Number($("#sglangMaxTotalTokens")?.value || 524288))} tokens 总容量`],
     ["RAM PLE", "约 51 GB", "FP8 embedding，不计入 GPU 权重"],
     ["CPU 前缀缓存", "关闭", "WSL 配置禁用 HiCache / NIXL"],
@@ -3273,6 +3275,7 @@ function buildVllmMemoryEstimatePayload(estimate) {
   return {
     engine: $("#runtimeEngine")?.value || "vllm",
     runtimeImage: $("#runtimeImage")?.value || "",
+    sglangMaxTotalTokens: Number($("#sglangMaxTotalTokens")?.value || 0),
     paramsB: estimate.paramsB,
     contextTokens: estimate.contextTokens,
     bytesPerParam: estimate.bytesPerParam,

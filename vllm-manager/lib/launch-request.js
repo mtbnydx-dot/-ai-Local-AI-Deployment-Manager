@@ -1,4 +1,4 @@
-const { isPennyroyalImage, PENNYROYAL_VRAM_RESERVATION_MIB } = require("./pennyroyal");
+const { isPennyroyalImage, pennyroyalVramReservationMb } = require("./pennyroyal");
 
 function createVllmStartRuntimeRequest(deps) {
   const {
@@ -182,7 +182,7 @@ function createVllmStartRuntimeRequest(deps) {
       };
     if (engine === "sglang" && isPennyroyalImage(runtimeImage)) {
       gpuAdmissionRequest.requestedFraction = undefined;
-      gpuAdmissionRequest.requestedMb = PENNYROYAL_VRAM_RESERVATION_MIB;
+      gpuAdmissionRequest.requestedMb = pennyroyalVramReservationMb({ sglangMaxTotalTokens, maxModelLen });
       gpuAdmissionRequest.estimatePolicy = "pennyroyal_v251_sm120_tp1_524k_measured";
     }
     let admissionLease = null;
