@@ -893,23 +893,30 @@ function bindDownloadCompatibilityControls() {
   $("#downloadModel")?.addEventListener("input", updateDownloadSubmitState);
 }
 
+function isPennyroyalLaunch() {
+  return $("#runtimeEngine")?.value === "sglang" && $("#runtimeImage")?.value.trim() === "ghcr.io/jpezzulli/sglang-rtxpro6000:v2.5.1@sha256:76258532b1c01f7583fbe951f90b80903db931030291db9db4e5a68b28567866";
+}
+
 function updateLaunchOptionStates() {
   const speculativeMode = $("#speculativeMode")?.value || "off";
   const runtimeEngine = $("#runtimeEngine")?.value || "vllm";
   const sglangEnabled = runtimeEngine === "sglang";
+  const pennyroyal = isPennyroyalLaunch();
   const flashNextModel = /qwen3\.?8.*flash[-_. ]?next|flash[-_. ]?next.*qwen3\.?8/i.test($("#startModel")?.value || "");
   const sglangControls = $("#sglangAdvancedControls");
   if (sglangControls) sglangControls.hidden = !sglangEnabled;
   const sglangNote = $("#sglangProfileNote");
   if (sglangNote) {
     sglangNote.hidden = !sglangEnabled;
-    if (sglangEnabled && flashNextModel) {
+    if (pennyroyal) {
+      sglangNote.textContent = "Pennyroyal v2.5.1：FR-Spec / NEXTN-3、Online FP8、FP8 KV、RAM PLE；GPU radix 缓存开启，CPU HiCache/NIXL 关闭。思考与工具可同时使用。524K 为共享容量，冷加载约 16 分钟。";
+    } else if (sglangEnabled && flashNextModel) {
       const cacheSize = Math.max(1, Number($("#sglangMaxMambaCacheSize")?.value || 8));
       const requested = Math.max(1, Number($("#maxNumSeqs")?.value || 1));
       const effective = Math.min(requested, Math.max(1, Math.floor(cacheSize / 5)));
       sglangNote.textContent = `Flash-Next 稳定路径：完整 SM120 QSA 修复、BF16 KV、PLE→RAM、GDN prefill Triton / decode FlashInfer。Mamba cache ${cacheSize} 下当前有效并发为 ${effective}。`;
     } else if (sglangEnabled) {
-      sglangNote.textContent = "这些是 SGLang 专用参数；普通模型留空或填 0 即使用运行时默认值。Flash-Next 请优先套用内置 262K 稳定档。";
+      sglangNote.textContent = "这些是 SGLang 专用参数；普通模型留空或填 0 即使用运行时默认值。OrcaRouter 请选 Pennyroyal 524K；旧版镜像保留 262K 预设。";
     }
   }
   const speculativeTokens = $("#numSpeculativeTokens");
@@ -933,7 +940,9 @@ function updateLaunchOptionStates() {
   }
   if (speculativeNote) {
     const capability = state.modelConfig?.data?.speculative;
-    if (speculativeMode === "dspark") {
+    if (pennyroyal) {
+      speculativeNote.textContent = "Pennyroyal 使用内置 FR-Spec token map 与 NEXTN/MTP 3 步、4 个 draft tokens，无需另下载 DSpark 草稿模型。";
+    } else if (speculativeMode === "dspark") {
       speculativeNote.textContent = "DSpark 使用外部草稿模型；管理器将切到 SGLang，并校验 DSparkDraftModel、block size、FlashInfer 与 WSL feature transport。";
     } else if (speculativeMode === "off" && capability?.nativeMtp) {
       speculativeNote.textContent = `权重中检出 ${capability.nativeMtpTensorCount || "已打包"} 个 MTP 张量，但当前关闭推测解码。`;
@@ -999,7 +1008,7 @@ function groupContextControls() {
   const kv = createControlGroup("显存与 KV cache", "显存占用比例决定 KV cache 池大小；KV 精度选 FP8 更省显存。", ["#gpuMemoryUtilization", "#kvCacheDtype"]);
   const offload = createControlDisclosure("显存 offload 与多模态预留", "CPU offload 是每卡权重回退，KV offload 是总 KV 缓冲；能救容量但会拖慢。", ["#cpuOffloadGb", "#kvOffloadingSize", "#mmProcessorCacheGb", "#disablePrefixCaching", "#languageModelOnly"]);
   const speculative = createControlGroup("推测解码", "MTP 使用主模型内置张量；DSpark 使用外部草稿模型并切换到 SGLang。", ["#speculativeMode", "#numSpeculativeTokens", "#draftModelField", "#dsparkBlockSizeField", "#runtimeImage"]);
-  const sglang = createControlDisclosure("SGLang Flash-Next 高级参数", "PLE、QSA、GDN 与 Mamba 参数；262K 稳定档已填入验证值。", [
+  const sglang = createControlDisclosure("SGLang Flash-Next 高级参数", "PLE、QSA、GDN 与 Mamba 参数；请使用与所选镜像匹配的 524K Pennyroyal 或旧版 262K 预设。", [
     "#sglangMaxTotalTokens", "#sglangPageSize", "#sglangChunkedPrefillSize", "#sglangAttentionBackend", "#sglangFp4GemmBackend",
     "#sglangPleOffloadEmbedding", "#sglangLinearAttnPrefillBackend", "#sglangLinearAttnDecodeBackend", "#sglangMambaSsmDtype",
     "#sglangMambaRadixCacheStrategy", "#sglangMambaTrackInterval", "#sglangMaxMambaCacheSize", "#sglangDisableThinkingByDefault", "#sglangProfileNote",
@@ -1390,6 +1399,7 @@ function bindEvents() {
   $("#launchQuantization").addEventListener("change", scheduleModelConfigFetch);
   $("#loadFormat").addEventListener("change", updateGgufModeState);
   $("#speculativeMode").addEventListener("change", updateLaunchOptionStates);
+  $("#runtimeImage")?.addEventListener("input", () => { updateLaunchOptionStates(); updateMemoryEstimate(); });
   $("#runtimeEngine")?.addEventListener("change", () => {
     if ($("#runtimeEngine").value === "vllm" && $("#speculativeMode").value === "dspark") {
       $("#speculativeMode").value = "mtp";
@@ -3184,6 +3194,12 @@ function updateMemoryEstimate() {
   updateContextPresetState(estimate.contextTokens, estimate);
   updateContextHumanHint();
 
+  if (isPennyroyalLaunch()) {
+    renderPennyroyalMemoryEstimate(estimate);
+    scheduleServerMemoryEstimate(estimate);
+    return;
+  }
+
   if (!estimate.paramsB) {
     root.innerHTML = `<div class="empty compact">没有从模型名里识别到 7B、14B、27B 这类规格。填入模型 ID 或本地路径后会自动估算。</div>`;
     $("#memoryGpuBars").innerHTML = "";
@@ -3198,7 +3214,19 @@ function updateMemoryEstimate() {
   scheduleServerMemoryEstimate(estimate);
 }
 
+function renderPennyroyalMemoryEstimate(estimate) {
+  $("#memoryEstimate").innerHTML = [
+    ["GPU 预留", "约 85.9 GiB", "88000 MiB，含权重 / KV / MTP / 运行时"],
+    ["GPU KV", "FP8 · 共享池", `${fmtNumber(Number($("#sglangMaxTotalTokens")?.value || 524288))} tokens 总容量`],
+    ["RAM PLE", "约 51 GB", "FP8 embedding，不计入 GPU 权重"],
+    ["CPU 前缀缓存", "关闭", "WSL 配置禁用 HiCache / NIXL"],
+  ].map(([label, value, detail]) => `<div class="estimate-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></div>`).join("");
+  if (estimate.serverBacked) $("#memoryGpuBars").innerHTML = renderGpuMemoryBars(estimate);
+  $("#memoryEstimateNote").innerHTML = `<strong class="warn">Pennyroyal 单卡实测预留</strong><span>不使用普通 vLLM KV 公式；启动仍需通过实时显存门禁及系统安全余量检查。524K 为共享 KV 池，不能同时容纳 4 个满长请求。冷加载约 16 分钟。</span>`;
+}
+
 function renderVllmMemoryEstimate(estimate) {
+  if (isPennyroyalLaunch()) { renderPennyroyalMemoryEstimate(estimate); return; }
   const root = $("#memoryEstimate");
   if (!root) return;
   root.innerHTML = [
@@ -3243,6 +3271,8 @@ function scheduleServerMemoryEstimate(estimate) {
 
 function buildVllmMemoryEstimatePayload(estimate) {
   return {
+    engine: $("#runtimeEngine")?.value || "vllm",
+    runtimeImage: $("#runtimeImage")?.value || "",
     paramsB: estimate.paramsB,
     contextTokens: estimate.contextTokens,
     bytesPerParam: estimate.bytesPerParam,

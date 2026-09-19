@@ -1,4 +1,5 @@
 const path = require("path");
+const { PENNYROYAL_CACHE_VOLUME, PENNYROYAL_ROPE_OVERRIDE } = require("./pennyroyal");
 
 function createVllmRuntimeCommandBuilder(deps) {
   const {
@@ -141,7 +142,7 @@ function createVllmRuntimeCommandBuilder(deps) {
       ...(CONFIG.imagePlatform ? ["--platform", CONFIG.imagePlatform] : []),
       "--pull", "never",
       "--name", opts.containerName || CONFIG.containerName,
-      "--restart", "on-failure:3",
+      "--restart", runtimePreset.pennyroyal ? "no" : "on-failure:3",
       "--label", `${MANAGER_LABEL_KEY}=${CONFIG.managerId}`,
       "--label", `${MANAGER_ENGINE_LABEL_KEY}=${runtimeEngine}`,
       "--label", `ai.manager.job=${job.id}`,
@@ -164,8 +165,8 @@ function createVllmRuntimeCommandBuilder(deps) {
       "--health-retries", "3",
       "--health-start-period", `${Math.min(60, Math.max(5, Math.round(Math.max(5 * 60 * 1000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000)) / 60000)))}m`,
       ...publishArgsToDockerRunArgs(activePublishArgs),
-      "-v", `${CONFIG.hfCache}:/root/.cache/huggingface`,
-      ...getModelMountArgs(),
+      ...(!runtimePreset.pennyroyal ? ["-v", `${CONFIG.hfCache}:/root/.cache/huggingface`] : []),
+      ...getModelMountArgs().map((arg, index) => runtimePreset.pennyroyal && index % 2 === 1 ? `${arg}:ro` : arg),
     ];
     if (runtimeEngine === "sglang") {
       runArgs.push(
@@ -176,7 +177,27 @@ function createVllmRuntimeCommandBuilder(deps) {
         "--label", `ai.sglang.ple-offload-embedding=${Boolean(runtimePreset.pleOffloadEmbedding)}`
       );
     }
-    if (runtimeEngine === "sglang" && CONFIG.sglangCache) {
+    if (runtimePreset.pennyroyal) {
+      runArgs.push("--init", "--ulimit", "memlock=-1:-1",
+        "--label", "ai.runtime.profile=pennyroyal-v2.5.1-gpu-cache-only",
+        "--label", "ai.runtime.kv-dtype=fp8_e4m3",
+        "--label", "ai.runtime.speculative-mode=mtp",
+        "--label", "ai.runtime.cpu-cache=disabled",
+        "--label", "ai.runtime.online-fp8=true",
+        "--label", "ai.runtime.fr-spec=true",
+        "--label", "ai.runtime.speculative=nextn-frspec",
+        "--label", "ai.runtime.storage=ram-ple",
+        "--label", "ai.runtime.ple-dtype=fp8",
+        "--label", "ai.runtime.mamba-dtype=bfloat16",
+        "--label", "ai.runtime.linear-attn=flashinfer/flashinfer",
+        "--label", "ai.runtime.cache=gpu-radix; cpu-hicache/nixl disabled",
+        "--label", `ai.runtime.thinking=${opts.sglangDisableThinkingByDefault ? "disabled-by-default" : "enabled-by-default"}`,
+        "--label", `ai.runtime.context-length=${opts.maxModelLen}`,
+        "--label", `ai.runtime.max-total-tokens=${runtimePreset.maxTotalTokens}`,
+        "--label", "ai.runtime.chunked-prefill=4096",
+        "--label", "ai.runtime.fp4-backend=flashinfer_cutlass",
+        "--mount", `type=volume,source=${PENNYROYAL_CACHE_VOLUME},target=/cache`);
+    } else if (runtimeEngine === "sglang" && CONFIG.sglangCache) {
       runArgs.push("-v", `${CONFIG.sglangCache}:/root/.cache`);
     } else if (CONFIG.vllmCache) {
       runArgs.push("-v", `${CONFIG.vllmCache}:/root/.cache/vllm`);
@@ -350,6 +371,18 @@ function createVllmRuntimeCommandBuilder(deps) {
         "--speculative-dspark-block-size", String(runtimePreset.dsparkBlockSize || 7),
         "--speculative-draft-model-quantization", runtimePreset.draftModelQuantization || "unquant"
       );
+    }
+    if (runtimePreset.pennyroyal) {
+      runArgs.push("--load-format", "safetensors", "--warmups=structured_output",
+        "--json-model-override-args", PENNYROYAL_ROPE_OVERRIDE,
+        "--gdn-mtp-cache-mode", "none",
+        "--chat-template", "/opt/pennyroyal/configs/pennyroyal/templates/froggeric-v22.5.jinja",
+        "--image-processor-backend", "pil", "--enable-request-time-stats-logging",
+        "--speculative-algorithm", "NEXTN", "--speculative-num-steps", "3",
+        "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", "4",
+        "--speculative-draft-model-quantization", "unquant",
+        "--speculative-token-map", "/opt/pennyroyal/configs/pennyroyal/frspec/flash-next-64k.pt",
+        "--watchdog-timeout", "1800");
     }
     if (options.vllmApiKey) runArgs.push("--api-key", options.vllmApiKey);
   }

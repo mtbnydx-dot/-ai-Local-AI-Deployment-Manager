@@ -1,5 +1,15 @@
+const { PENNYROYAL_DEFAULTS } = require("./pennyroyal");
+
 function createVllmDefaultLaunchProfiles(normalizeLaunchConfig) {
   return [
+    {
+      id: "orcarouter-pennyroyal-v251-524k",
+      name: "OrcaRouter · Pennyroyal v2.5.1 · 524K",
+      description: "RTX PRO 6000 96GB + 128GB RAM：FR-Spec / Online FP8 / FP8 KV / RAM PLE；GPU 缓存，CPU HiCache/NIXL 关闭。已做 500K 合成检索验证，冷加载约 16 分钟。先选择本机 OrcaRouter 模型目录。",
+      source: "builtin",
+      requirements: { minGpuCount: 1, minSingleGpuMemoryGb: 90 },
+      config: normalizeLaunchConfig({ ...PENNYROYAL_DEFAULTS }),
+    },
     {
       id: "qwen38-flash-next-sglang-262k",
       name: "Qwen3.8 Flash-Next SGLang 262K 稳定档",

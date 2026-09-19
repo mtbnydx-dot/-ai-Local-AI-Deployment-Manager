@@ -9,8 +9,9 @@ test("vLLM default profiles keep builtin IDs and normalize configs", () => {
     return { ...config, normalized: true };
   });
 
-  assert.equal(profiles.length, 9);
+  assert.equal(profiles.length, 10);
   assert.deepEqual(profiles.map((profile) => profile.id), [
+    "orcarouter-pennyroyal-v251-524k",
     "qwen38-flash-next-sglang-262k",
     "qwen38-vllm-mtp3-quality",
     "qwen38-sglang-dspark-fastest",

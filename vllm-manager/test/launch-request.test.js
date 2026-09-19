@@ -164,6 +164,13 @@ test("vLLM launch request builds serve job metadata and run options", async () =
   assert.deepEqual(failedResult.job.meta.findings, [{ severity: "fail", title: "GPU 0", detail: "SM is unsupported" }]);
   assert.ok(secretEvents.some(([event, reference]) => event === "delete" && reference === "ref-failed-key"));
   runtimeError = null;
+  const { PENNYROYAL_DEFAULTS } = require("../lib/pennyroyal");
+  await request({ body: { ...PENNYROYAL_DEFAULTS, model: "fixture-OrcaRouter-Qwen3.8-Flash-Next-NVFP4", instanceMode: "parallel", instanceId: "penny", port: 8126 } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const pennyAdmission = admissionEvents.filter(([event]) => event === "acquire").at(-1)[1];
+  assert.equal(pennyAdmission.requestedMb, 88000);
+  assert.equal(pennyAdmission.requestedFraction, undefined);
+  assert.equal(pennyAdmission.estimatePolicy, "pennyroyal_v251_sm120_tp1_524k_measured");
   cancelNext = true;
   await request({ body: { model: "Qwen/Qwen3.6-27B", instanceMode: "parallel", instanceId: "cancelled", port: 8125, gpuDeviceIds: "0" } });
   await new Promise((resolve) => setImmediate(resolve));

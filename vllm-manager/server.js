@@ -9,6 +9,8 @@ const core = require("../manager-core");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
+const { PENNYROYAL_DEFAULTS, PENNYROYAL_TOKENIZER_SHA256, isPennyroyalImage,
+  pennyroyalOptionErrors, createPennyroyalPreset } = require("./lib/pennyroyal");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
 const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
@@ -707,7 +709,7 @@ core.registerManagerRoutes(app, {
     },
     runtimeEngines: [
       { id: "vllm", label: "vLLM Qwen3.8", image: CONFIG.image, stable: true },
-      { id: "sglang", label: "SGLang + DSpark", image: CONFIG.sglangImage, stable: false },
+      { id: "sglang", label: "SGLang / Pennyroyal / DSpark", image: CONFIG.sglangImage, stable: false },
     ],
   }),
   isLocalRequest,
@@ -1651,6 +1653,7 @@ async function checkModelCompatibility(input = {}) {
   const compatibilityRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang"
     ? qwen38FlashNextNvfp4 ? CONFIG.sglangFlashNextImage : CONFIG.sglangImage
     : CONFIG.image);
+  const pennyroyal = runtimeEngine === "sglang" && isPennyroyalImage(compatibilityRuntimeImage);
   const capabilities = resolveVllmModelCapabilities({
     model,
     localPath: local?.path,
@@ -1760,7 +1763,7 @@ async function checkModelCompatibility(input = {}) {
   if (qwen38) {
     findings.push(finding("ok", "Qwen3.8 专用运行时", runtimeEngine === "sglang"
       ? qwen38FlashNextNvfp4
-        ? `将使用 ${CONFIG.sglangFlashNextImage}，包含 SM120 QSA 完整修复。`
+        ? pennyroyal ? "将使用固定 digest 的 Pennyroyal v2.5.1。" : `将使用 ${CONFIG.sglangFlashNextImage}，包含 SM120 QSA 完整修复。`
         : `将使用 SGLang ${DEFAULT_SGLANG_RELEASE.version} / FlashInfer / CPU feature transport。`
       : `将使用已验证的 Qwen3.8 vLLM ${DEFAULT_VLLM_RELEASE.version}。`));
     recommendations.engine = runtimeEngine;
@@ -1773,7 +1776,28 @@ async function checkModelCompatibility(input = {}) {
     recommendations.reasoningParser = "qwen3";
     recommendations.toolCallParser = "qwen3_coder";
   }
-  if (qwen38FlashNextNvfp4 && runtimeEngine === "sglang") {
+  if (pennyroyal) {
+    Object.assign(recommendations, normalizeLaunchConfig({ ...PENNYROYAL_DEFAULTS, model,
+      name: input.name || "pennyroyal", port: input.port || CONFIG.defaultPort,
+      maxModelLen: input.maxModelLen || 524288,
+      maxNumSeqs: input.maxNumSeqs || 4,
+      sglangDisableThinkingByDefault: Boolean(input.sglangDisableThinkingByDefault),
+    }));
+    if (!qwen38FlashNextNvfp4) findings.push(finding("fail", "Pennyroyal 模型不匹配", "此预设仅用于 Qwen3.8 Flash-Next NVFP4 checkpoint。"));
+    for (const detail of pennyroyalOptionErrors(input)) findings.push(finding("fail", "Pennyroyal 参数校验", detail));
+    if (local?.path) {
+      try {
+        const tokenizer = await fsp.readFile(path.join(local.path, "tokenizer.json"));
+        if (crypto.createHash("sha256").update(tokenizer).digest("hex") !== PENNYROYAL_TOKENIZER_SHA256) {
+          findings.push(finding("fail", "FR-Spec tokenizer 不匹配", "本地 tokenizer 与固定 token map 不一致，禁止使用该 FR-Spec 预设。"));
+        }
+      } catch (error) {
+        findings.push(finding("fail", "FR-Spec tokenizer 未验证", error.message));
+      }
+    }
+    findings.push(finding("ok", "Pennyroyal WSL 路径", "NVFP4、Online FP8、FP8 KV、FR-Spec/NEXTN-3、RAM PLE；GPU radix 缓存开启，CPU HiCache/NIXL 关闭。"));
+    findings.push(finding("warn", "容量与冷启动", "524288 tokens 为共享 KV 容量，不是 4 路各 524K；本机曾通过 500016-token 合成检索。F 盘冷加载约 16 分钟。"));
+  } else if (qwen38FlashNextNvfp4 && runtimeEngine === "sglang") {
     findings.push(finding("ok", "Flash-Next 稳定路径", "PLE embedding 放入 CPU RAM；GDN prefill 使用 Triton、decode 使用 FlashInfer；Mamba state 使用 BF16。"));
     findings.push(finding("ok", "262K 单路档", "max Mamba cache 8 为 262K 稳定档保留显存，运行时有效并发为 1；需要并发时应单独做较短上下文 A/B。"));
     recommendations.runtimeImage = CONFIG.sglangFlashNextImage;
@@ -1842,7 +1866,7 @@ async function checkModelCompatibility(input = {}) {
       recommendations.dsparkBlockSize = Math.min(32, Math.max(1, positiveInt(input.dsparkBlockSize, 7)));
       recommendations.speculativeMode = "dspark";
     }
-  } else if (runtimeEngine === "sglang" && normalizeSpeculativeMode(input.speculativeMode) !== "off") {
+  } else if (runtimeEngine === "sglang" && !pennyroyal && normalizeSpeculativeMode(input.speculativeMode) !== "off") {
     findings.push(finding("fail", "SGLang 推测模式未开放", "SGLang 档当前只支持 off 或 dspark；请选择 DSpark 极速方案，或切回 vLLM 使用 MTP。"));
   }
   const qwen36MoeNvfp4 = !qwen38 && isQwen36MoeNvfp4Model(model, localConfig);
@@ -3266,6 +3290,13 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
   const localConfig = readLocalModelConfig(launch.localPath);
   const requestedRuntimeImage = String(opts.runtimeImage || "").trim();
   const baseRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang" ? CONFIG.sglangImage : CONFIG.image);
+  if (runtimeEngine === "sglang" && isPennyroyalImage(requestedRuntimeImage)) {
+    const preset = createPennyroyalPreset(opts);
+    if (!isQwen38FlashNextNvfp4Model(opts.model || launch.modelArg, localConfig)) {
+      preset.unsupportedReason = "Pennyroyal FR-Spec 预设仅支持 Qwen3.8 Flash-Next NVFP4。";
+    }
+    return preset;
+  }
   const capabilities = resolveVllmModelCapabilities({
     model: opts.model || launch.modelArg,
     localPath: launch.localPath,
@@ -4229,9 +4260,12 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const errorCount = Number(successByReason.error || 0);
     const abortedCount = Number(successByReason.abort || 0)
       || firstNonZeroMetricSum(scoped, ["sglang:num_aborted_requests_total"]);
-    const kvUsagePercent = firstMetricValue(scoped, "vllm:kv_cache_usage_perc")
-      || firstMetricValue(scoped, "sglang:token_usage")
-      || 0;
+    // New SGLang token_usage is max(KV, SWA, Mamba), not KV occupancy.
+    // A genuine zero full-token usage must not fall back to nonzero Mamba use.
+    const fullKvUsage = scoped.find(metric => metric.name === "sglang:full_token_usage");
+    const kvUsagePercent = hasSglangMetrics && fullKvUsage
+      ? Number(fullKvUsage.value || 0)
+      : firstMetricValue(scoped, "vllm:kv_cache_usage_perc") || firstMetricValue(scoped, "sglang:token_usage") || 0;
     const derivedCapacityTokens = deriveKvCapacityTokens(scoped, servedById?.[name], facts);
     const capacityTokens = hasSglangMetrics
       ? derivedCapacityTokens || facts.kvCacheTokens

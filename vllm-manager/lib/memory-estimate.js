@@ -1,4 +1,5 @@
 const core = require("../../manager-core");
+const { isPennyroyalImage, PENNYROYAL_VRAM_RESERVATION_MIB } = require("./pennyroyal");
 
 function memoryEstimateNumber(value, fallback = 0) {
   const number = Number(value);
@@ -46,6 +47,19 @@ function normalizeMemoryEstimateGpus(value = []) {
 
 function buildVllmMemoryEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
+  if (input.engine === "sglang" && isPennyroyalImage(input.runtimeImage)) {
+    const perGpuGb = PENNYROYAL_VRAM_RESERVATION_MIB / 1024;
+    const minUsableGb = selectedGpus.length ? Math.min(...selectedGpus.map(gpu => gpu.freeGb)) : 0;
+    const status = selectedGpus.length && perGpuGb > minUsableGb ? "fail" : "warn";
+    return {
+      ok: true, engine: "sglang",
+      plan: { estimatePolicy: "pennyroyal_v251_sm120_tp1_524k_measured", selectedGpus,
+        perGpuGb, minUsableGb, status, memorySplitFactor: 1,
+        overflowPerGpuGb: Math.max(0, perGpuGb - minUsableGb) },
+      recommendations: { status, summary: "Pennyroyal 实测预留；启动仍需通过实时显存门禁",
+        suggestions: ["88000 MiB 包含 GPU 权重、KV、MTP 和运行时，不再叠加普通 vLLM KV 公式。", "约 51 GB FP8 PLE 位于 RAM；CPU HiCache/NIXL 关闭。", "全局显存安全余量与启动门禁保持生效。"] },
+    };
+  }
   const mode = String(input.multiGpuMode || input.mode || "single").toLowerCase();
   const normalizedMode = mode === "none" ? "single" : mode;
   const arch = normalizeMemoryEstimateArch(input.arch || input.modelConfig || input.config);

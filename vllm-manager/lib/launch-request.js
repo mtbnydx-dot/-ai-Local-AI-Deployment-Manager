@@ -1,3 +1,5 @@
+const { isPennyroyalImage, PENNYROYAL_VRAM_RESERVATION_MIB } = require("./pennyroyal");
+
 function createVllmStartRuntimeRequest(deps) {
   const {
     CONFIG,
@@ -178,6 +180,11 @@ function createVllmStartRuntimeRequest(deps) {
         maxNumSeqs,
         maxNumBatchedTokens,
       };
+    if (engine === "sglang" && isPennyroyalImage(runtimeImage)) {
+      gpuAdmissionRequest.requestedFraction = undefined;
+      gpuAdmissionRequest.requestedMb = PENNYROYAL_VRAM_RESERVATION_MIB;
+      gpuAdmissionRequest.estimatePolicy = "pennyroyal_v251_sm120_tp1_524k_measured";
+    }
     let admissionLease = null;
     if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
       admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
