@@ -5114,7 +5114,11 @@ async function runStartJobOnce(job, opts) {
       detail: `容器已创建，正在等待 ${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} API 返回 /v1/models。`,
     });
     const startTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000));
-    const stallTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_STALL_TIMEOUT_MS || 10 * 60 * 1000));
+    // Large RAM-PLE checkpoints on Windows bind mounts can spend more than
+    // ten minutes inside a quiet read. Keep the overall startup timeout and
+    // dead-container checks, but do not apply the small-model quiet limit.
+    const stallTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_STALL_TIMEOUT_MS
+      || (runtimePreset.pennyroyal ? 30 : 10) * 60 * 1000));
     const result = await core.waitForRuntimeReady({
       job,
       port: opts.port,
