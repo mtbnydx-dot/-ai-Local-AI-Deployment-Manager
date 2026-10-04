@@ -231,6 +231,18 @@ const managerBackupsController = window.LocalAiManagerBackups.create({
   reportError: reportActionError,
   getLanguage: effectiveLanguage,
 });
+const idleUnloadRenderer = window.LocalAiIdleUnload.create({
+  $,
+  api,
+  escapeHtml,
+  escapeAttr,
+  notify,
+  formatDateTime,
+  confirmAction: (options) => uiArchitecture.confirmAction(options),
+  renderIcons: () => renderIcons(),
+  // A wake creates a serve job, so the job list should pick it up immediately.
+  onWake: () => refreshJobs().catch(() => {}),
+});
 const benchmarkHistoryRenderer = window.LocalAiBenchmarkHistory.create({
   $,
   api,
@@ -1232,6 +1244,7 @@ function bindEvents() {
   accessLogBrowser.bind();
   managerBackupsController.bind();
   benchmarkHistoryRenderer.mount();
+  idleUnloadRenderer.mount();
   document.querySelectorAll("[data-view]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();

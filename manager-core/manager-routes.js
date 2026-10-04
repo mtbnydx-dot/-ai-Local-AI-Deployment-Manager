@@ -35,6 +35,7 @@ function registerManagerRoutes(app, deps = {}) {
     listBenchmarkRuns,
     compareBenchmarkRuns,
     deleteBenchmarkRun,
+    idleUnload,
   } = deps;
 
   app.get("/api/config", (_req, res) => {
@@ -239,6 +240,43 @@ function registerManagerRoutes(app, deps = {}) {
     app.delete("/api/benchmarks/:id", async (req, res) => {
       try {
         const result = await deleteBenchmarkRun(req.params.id);
+        res.status(result.ok ? 200 : 404).json(result);
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+  }
+
+  if (idleUnload) {
+    app.get("/api/idle-unload", async (_req, res) => {
+      try {
+        res.json(await idleUnload.listSleeping());
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    app.post("/api/idle-unload", async (req, res) => {
+      try {
+        res.json({ ok: true, settings: await idleUnload.saveSettings(req.body || {}) });
+      } catch (error) {
+        res.status(400).json({ ok: false, error: error.message });
+      }
+    });
+
+    // Waking restarts a container, so it returns the serve job the caller can
+    // follow rather than blocking until the model is loaded.
+    app.post("/api/idle-unload/:id/wake", async (req, res) => {
+      try {
+        res.json(await idleUnload.wake(req.params.id));
+      } catch (error) {
+        res.status(error.status || 500).json({ ok: false, error: error.message });
+      }
+    });
+
+    app.delete("/api/idle-unload/:id", async (req, res) => {
+      try {
+        const result = await idleUnload.forget(req.params.id);
         res.status(result.ok ? 200 : 404).json(result);
       } catch (error) {
         res.status(500).json({ ok: false, error: error.message });

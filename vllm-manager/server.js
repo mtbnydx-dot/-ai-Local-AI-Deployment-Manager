@@ -168,6 +168,8 @@ const CONFIG = {
   statsLedger: path.join(__dirname, "logs", "stats-ledger.json"),
   metricsHistory: path.join(__dirname, "logs", "metrics-history.json"),
   benchmarkHistory: path.join(__dirname, "logs", "benchmark-history.json"),
+  idleUnloadSettings: path.join(__dirname, "logs", "idle-unload-settings.json"),
+  idleUnloadSleeping: path.join(__dirname, "logs", "idle-unload-sleeping.json"),
   managerBackups: path.join(__dirname, "logs", "backups"),
   jobsLedger: path.join(__dirname, "logs", "jobs-ledger.json"),
   claudeCompressionSettings: path.join(__dirname, "logs", "claude-context-compression.json"),
@@ -639,6 +641,7 @@ const managerLifecycle = core.createManagerLifecycle({
   onShutdown: async () => {
     jobsLedgerStore.clearJobsSaveTimer();
     if (automationMonitorTimer) clearInterval(automationMonitorTimer);
+    clearInterval(idleUnloadTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
     sseHub.close();
@@ -703,6 +706,12 @@ const operationalSnapshotStore = core.createManagerOperationalSnapshotStore({
 const getOperationalSnapshot = (request) => operationalSnapshotStore.getSnapshot(request);
 
 core.registerManagerRoutes(app, {
+  idleUnload: {
+    listSleeping: () => idleUnloadController.listSleeping(),
+    saveSettings: (body) => idleUnloadController.saveSettings(body),
+    wake: (id) => idleUnloadController.wake(id),
+    forget: (id) => idleUnloadController.forget(id),
+  },
   listBenchmarkRuns: (query) => benchmarkHistoryStore.listBenchmarkRuns(query),
   compareBenchmarkRuns: (ids, options) => benchmarkHistoryStore.compareRuns(ids, options),
   deleteBenchmarkRun: (id) => benchmarkHistoryStore.deleteBenchmarkRun(id),
@@ -1381,6 +1390,49 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   normalizeRuntimeInstanceId: core.normalizeRuntimeInstanceId,
   buildRuntimeContainerName: core.buildRuntimeContainerName,
 });
+
+// Idle runtimes hold their weights and KV pool for nothing. The controller
+// releases them and keeps the launch configuration so the same runtime can be
+// brought back; the recent-launch record is the fallback source for a
+// configuration when an instance was started before this feature existed.
+const idleUnloadController = core.createIdleUnloadController({
+  settingsFile: CONFIG.idleUnloadSettings,
+  sleepFile: CONFIG.idleUnloadSleeping,
+  engine: "vllm",
+  readJsonFile,
+  writeJsonFile,
+  listInstances: async () => {
+    const result = await listRuntimeInstancesRequest();
+    return (result.instances || []).map((instance) => ({
+      id: instance.id,
+      containerName: instance.containerName,
+      model: instance.models?.[0]?.id || "",
+      name: instance.models?.[0]?.root || instance.id,
+      engine: instance.engine,
+      running: Boolean(instance.running),
+      requestsTotal: Number(instance.requestsTotal || 0),
+      activeRequests: Number(instance.activeRequests || 0),
+      queuedRequests: Number(instance.queuedRequests || 0),
+      vramReservationMb: Number(instance.vramReservationMb || 0),
+      launchConfig: null,
+    }));
+  },
+  findLaunchConfig: (instance) => {
+    const model = String(instance.model || "").toLowerCase();
+    const match = recentLaunches.find((item) => String(item.model || "").toLowerCase() === model);
+    return match ? match.config : null;
+  },
+  stopInstance: (instance) => stopRuntimeInstanceRequest({ id: instance.id }),
+  startRuntime: (config) => startRuntimeRequest(config),
+  log: (message) => console.log(`[idle-unload] ${message}`),
+});
+
+// One check a minute is enough resolution for a timeout measured in tens of
+// minutes, and it keeps the Docker/metrics cost negligible.
+const idleUnloadTimer = setInterval(() => {
+  idleUnloadController.tick().catch((error) => console.warn(`[idle-unload] ${error.message}`));
+}, 60_000);
+idleUnloadTimer.unref?.();
 
 core.registerRuntimeRoutes(app, {
   startRuntime: startRuntimeRequest,
@@ -3961,10 +4013,14 @@ async function listRuntimeInstancesRequest() {
         maxNumBatchedTokens: Number(labels["ai.manager.max-num-batched-tokens"] || 0),
         localBaseUrl: runtime.endpoint?.localUrl || null,
         lanBaseUrl: runtime.endpoint?.lanUrl || null,
+        requestsTotal: instanceModels.reduce((sum, model) => sum + Number(model.requests || 0), 0),
+        activeRequests: instanceModels.reduce((sum, model) => sum + Number(model.runningRequests || 0), 0),
+        queuedRequests: instanceModels.reduce((sum, model) => sum + Number(model.waitingRequests || 0), 0),
         models: instanceModels.map((model) => ({
           id: model.id,
           root: model.root || "",
           maxModelLen: model.max_model_len || model.maxModelLen || null,
+          requestsTotal: Number.isFinite(Number(model.requests)) ? Number(model.requests) : 0,
           runningRequests: Number.isFinite(Number(model.runningRequests)) ? Number(model.runningRequests) : null,
           waitingRequests: Number.isFinite(Number(model.waitingRequests)) ? Number(model.waitingRequests) : null,
           lastKnown: Boolean(model.lastKnown),

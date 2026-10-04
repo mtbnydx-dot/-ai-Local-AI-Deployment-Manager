@@ -917,6 +917,24 @@
             <div class="service-job-list" id="benchmarkJobList"><div class="empty compact">暂无测速任务。</div></div>
           </div>
 
+
+          <div class="panel" id="idleUnloadPanel">
+            <div class="panel-head">
+              <div>
+                <h3>闲置自动释放显存</h3>
+                <p id="idleUnloadSummary">未开启。开启后，长时间没有请求的模型会自动释放显存，随时可以一键唤醒回到同样的配置。</p>
+              </div>
+            </div>
+            <form id="idleUnloadForm" class="idle-unload-form">
+              <label class="check-row"><input id="idleUnloadEnabled" type="checkbox" /><span>开启闲置自动释放</span></label>
+              <label class="field-row"><span>空闲多久后释放（分钟）</span><input id="idleUnloadMinutes" type="number" min="5" max="1440" value="30" /></label>
+              <label class="field-row"><span>只释放预留显存超过（MB，0 = 不限）</span><input id="idleUnloadMinVram" type="number" min="0" step="1024" value="0" /></label>
+              <label class="field-row"><span>永不释放这些模型（逗号分隔）</span><input id="idleUnloadExclude" type="text" placeholder="例如 qwen3-27b, embedding" /></label>
+              <button class="primary-button" type="submit"><i data-lucide="save"></i><span>保存释放策略</span></button>
+            </form>
+            <div class="service-job-list" id="idleUnloadSleeping"><div class="empty compact">当前没有被释放的实例。</div></div>
+          </div>
+
           <div class="panel" id="benchmarkHistoryPanel">
             <div class="panel-head">
               <div>
@@ -1169,6 +1187,7 @@
     <script src="/shared-js/runtime-instances.js?v=20260716-instances" defer></script>
     <script src="/shared-js/access-log-browser.js?v=20260716-log-search" defer></script>
     <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
+    <script src="/shared-js/idle-unload-renderer.js?v=20261005-idle-unload" defer></script>
     <script src="/shared-js/benchmark-history-renderer.js?v=20261005-benchmark-history" defer></script>
     <script src="/shared-js/connection-status.js?v=20260804-connection-status" defer></script>
     <script src="/shared-js/ui-architecture.js?v=20260902-improvement" defer></script>
