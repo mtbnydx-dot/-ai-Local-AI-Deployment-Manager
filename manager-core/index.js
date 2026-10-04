@@ -17,6 +17,7 @@ const MODULES = [
   "./stats-utils",
   "./stats-ledger-store",
   "./metrics-history-store",
+  "./benchmark-history-store",
   "./file-utils",
   "./docker-utils",
   "./docker-runtime",

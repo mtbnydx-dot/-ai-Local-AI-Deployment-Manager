@@ -240,6 +240,15 @@ const managerBackupsController = window.LocalAiManagerBackups.create({
   reportError: reportActionError,
   getLanguage: effectiveLanguage,
 });
+const benchmarkHistoryRenderer = window.LocalAiBenchmarkHistory.create({
+  $,
+  api,
+  escapeHtml,
+  escapeAttr,
+  notify,
+  confirmAction: (options) => uiArchitecture.confirmAction(options),
+  renderIcons: () => renderIcons(),
+});
 const runtimeStatusRenderer = window.LocalAiRuntimeStatusRenderer.create({
   $,
   state,
@@ -1086,6 +1095,7 @@ function bindEvents() {
   runtimeInstancesController.bind();
   accessLogBrowser.bind();
   managerBackupsController.bind();
+  benchmarkHistoryRenderer.mount();
   $("#themeMode")?.addEventListener("change", (event) => {
     state.uiPrefs.theme = event.currentTarget.value || "auto";
     localStorage.setItem(THEME_STORAGE_KEY, state.uiPrefs.theme);
@@ -1905,8 +1915,20 @@ async function refreshServiceClients() {
   renderServiceClients();
 }
 
+// 测速任务刚结束时刷新历史，这样新记录不必等用户手动刷新就会出现。
+let lastFinishedBenchmarkCount = null;
+function refreshBenchmarkHistoryOnCompletion(jobs) {
+  const finished = (Array.isArray(jobs) ? jobs : [])
+    .filter((job) => job.type === "benchmark" && ["success", "failed"].includes(job.status)).length;
+  if (lastFinishedBenchmarkCount !== null && finished > lastFinishedBenchmarkCount) {
+    benchmarkHistoryRenderer.refresh().catch(() => {});
+  }
+  lastFinishedBenchmarkCount = finished;
+}
+
 function applyJobsSnapshot(jobs) {
   state.jobs = jobs;
+  refreshBenchmarkHistoryOnCompletion(jobs);
   notifyDownloadTransitions(jobs);
   // 展开中的任务用已拉取的全量日志替换摘要尾部，避免轮询后内容缩水。
   for (const job of state.jobs) {
@@ -2783,6 +2805,7 @@ async function startBenchmark(event) {
         model: $("#benchmarkModel").value.trim() || $("#testModel").value.trim(),
         requests: Number($("#benchmarkRequests").value || 3),
         maxTokens: Number($("#benchmarkMaxTokens").value || 160),
+        label: $("#benchmarkLabel")?.value?.trim() || "",
         prompt: $("#benchmarkPrompt").value,
         port: Number($("#servicePort").value || 8080),
       }),

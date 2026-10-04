@@ -2643,3 +2643,51 @@ pre {
 .disk-usage-segment.other { background: var(--muted); opacity: 0.55; }
 
 .disk-usage-legend .dot.other { background: var(--muted); opacity: 0.55; }
+
+/* 测速历史与配置对比 */
+.benchmark-history-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 2fr) minmax(6rem, 1fr) auto auto auto auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+.benchmark-history-row.baseline { background: var(--surface-2, rgba(127, 127, 127, 0.08)); }
+.benchmark-history-model,
+.benchmark-history-metric {
+  font-size: 0.85rem;
+  color: var(--muted, #6b7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.benchmark-compare { margin-top: 0.75rem; display: grid; gap: 0.75rem; }
+.benchmark-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.benchmark-compare-table caption {
+  text-align: left;
+  font-weight: 600;
+  padding-bottom: 0.3rem;
+}
+.benchmark-compare-table th,
+.benchmark-compare-table td {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+.benchmark-compare-table thead th { background: var(--surface-2, rgba(127, 127, 127, 0.08)); }
+.benchmark-value { font-variant-numeric: tabular-nums; }
+.benchmark-delta { display: inline-block; margin-left: 0.4rem; font-variant-numeric: tabular-nums; }
+/* 方向由指标本身决定：吞吐越高越好、延迟越低越好，所以用语义色而不是正负号。 */
+.benchmark-delta.better { color: var(--ok-strong, #15803d); }
+.benchmark-delta.worse { color: var(--fail-strong, #b91c1c); }
+.benchmark-delta.baseline { color: var(--muted, #6b7280); }
+@media (max-width: 760px) {
+  .benchmark-history-row { grid-template-columns: 1fr 1fr; }
+  .benchmark-compare { overflow-x: auto; }
+}

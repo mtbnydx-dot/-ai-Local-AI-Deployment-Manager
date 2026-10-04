@@ -2544,6 +2544,7 @@ test("benchmark runner normalizes requests and records samples", async () => {
     warmupRequests: 0,
     maxTokens: 16,
     stream: false,
+    label: "",
     prompt: "default prompt",
   });
   assert.deepEqual(runner.normalizeBenchmarkRequest({ requests: "invalid", concurrency: 99, warmupRequests: -2, maxTokens: 19.9 }), {
@@ -2554,6 +2555,7 @@ test("benchmark runner normalizes requests and records samples", async () => {
     warmupRequests: 0,
     maxTokens: 19,
     stream: false,
+    label: "",
     prompt: "default prompt",
   });
   const result = await runner.runBenchmarkJob(job, { requests: 2, concurrency: 2, maxTokens: 32 });

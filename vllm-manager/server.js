@@ -167,6 +167,7 @@ const CONFIG = {
   pidFile: process.env.VLLM_MANAGER_PID_FILE || path.join(__dirname, ".manager.pid"),
   statsLedger: path.join(__dirname, "logs", "stats-ledger.json"),
   metricsHistory: path.join(__dirname, "logs", "metrics-history.json"),
+  benchmarkHistory: path.join(__dirname, "logs", "benchmark-history.json"),
   managerBackups: path.join(__dirname, "logs", "backups"),
   jobsLedger: path.join(__dirname, "logs", "jobs-ledger.json"),
   claudeCompressionSettings: path.join(__dirname, "logs", "claude-context-compression.json"),
@@ -562,6 +563,15 @@ const metricsHistoryStore = core.createMetricsHistoryStore({
   writeJsonFile,
 });
 
+// Benchmark results outlive the job ledger here so that a configuration change
+// can be compared against the run that preceded it.
+const benchmarkHistoryStore = core.createBenchmarkHistoryStore({
+  file: CONFIG.benchmarkHistory,
+  engine: "vllm",
+  readJsonFile,
+  writeJsonFile,
+});
+
 const managerBackupStore = core.createManagerBackupStore({
   managerId: CONFIG.managerId,
   backupDir: CONFIG.managerBackups,
@@ -693,6 +703,9 @@ const operationalSnapshotStore = core.createManagerOperationalSnapshotStore({
 const getOperationalSnapshot = (request) => operationalSnapshotStore.getSnapshot(request);
 
 core.registerManagerRoutes(app, {
+  listBenchmarkRuns: (query) => benchmarkHistoryStore.listBenchmarkRuns(query),
+  compareBenchmarkRuns: (ids, options) => benchmarkHistoryStore.compareRuns(ids, options),
+  deleteBenchmarkRun: (id) => benchmarkHistoryStore.deleteBenchmarkRun(id),
   config: CONFIG,
   host: HOST,
   port: PORT,
@@ -782,6 +795,30 @@ const openAiGatewayHandlers = core.createOpenAiGatewayHandlers({
     if (req) req.serviceGatewayAccessUsage = usage;
   },
 });
+// What the running container was actually launched with. Labels are the only
+// source that still reflects reality after a manager restart.
+function benchmarkConfigFromRuntime(runtime = {}) {
+  const labels = runtime.container?.labels || {};
+  const positive = (key) => {
+    const value = Number(labels[key]);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+  return {
+    engine: runtime.engine || "vllm",
+    runtimeImage: runtime.container?.image || runtime.runtimeVersion || "",
+    maxModelLen: positive("ai.manager.max-model-len"),
+    maxNumSeqs: positive("ai.manager.max-num-seqs"),
+    maxNumBatchedTokens: positive("ai.manager.max-num-batched-tokens"),
+    gpuMemoryUtilization: positive("ai.manager.gpu-memory-utilization"),
+    gpuIds: String(labels["ai.manager.gpu-ids"] || "") || null,
+    kvCacheDtype: String(labels["ai.sglang.kv-cache-dtype"] || "") || null,
+    enablePrefixCaching: labels["ai.runtime.prefix-caching"] === undefined
+      ? null
+      : String(labels["ai.runtime.prefix-caching"]).toLowerCase() === "true",
+    speculativeMode: String(labels["ai.runtime.speculative-mode"] || "") || null,
+  };
+}
+
 const benchmarkRunner = core.createBenchmarkRunner({
   defaultPort: CONFIG.defaultPort,
   defaultPrompt: "用中文简要说明本地模型是否可以稳定完成工具调用、长上下文和代码任务。",
@@ -793,6 +830,10 @@ const benchmarkRunner = core.createBenchmarkRunner({
   appendLog,
   setJobProgress,
   finishJob,
+  recordBenchmark: (benchmark, context) => benchmarkHistoryStore.recordBenchmarkRun(benchmark, {
+    label: context.label,
+    config: benchmarkConfigFromRuntime(context.runtime),
+  }),
 });
 const {
   normalizeBenchmarkRequest,

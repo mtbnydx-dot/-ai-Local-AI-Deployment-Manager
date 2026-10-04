@@ -130,6 +130,7 @@ const CONFIG = {
   statsLedger: path.join(__dirname, "logs", "stats-ledger.json"),
   cacheHitLedger: path.join(__dirname, "logs", "cache-hit-ledger.json"),
   metricsHistory: path.join(__dirname, "logs", "metrics-history.json"),
+  benchmarkHistory: path.join(__dirname, "logs", "benchmark-history.json"),
   managerBackups: path.join(__dirname, "logs", "backups"),
   jobsLedger: path.join(__dirname, "logs", "jobs-ledger.json"),
   downloadSettings: path.join(__dirname, "logs", "download-settings.json"),
@@ -684,6 +685,15 @@ const metricsHistoryStore = core.createMetricsHistoryStore({
   writeJsonFile,
 });
 
+// Benchmark results outlive the job ledger here so that a configuration change
+// can be compared against the run that preceded it.
+const benchmarkHistoryStore = core.createBenchmarkHistoryStore({
+  file: CONFIG.benchmarkHistory,
+  engine: "llama",
+  readJsonFile,
+  writeJsonFile,
+});
+
 const managerBackupStore = core.createManagerBackupStore({
   managerId: CONFIG.managerId,
   backupDir: CONFIG.managerBackups,
@@ -817,6 +827,9 @@ const operationalSnapshotStore = core.createManagerOperationalSnapshotStore({
 const getOperationalSnapshot = (request) => operationalSnapshotStore.getSnapshot(request);
 
 core.registerManagerRoutes(app, {
+  listBenchmarkRuns: (query) => benchmarkHistoryStore.listBenchmarkRuns(query),
+  compareBenchmarkRuns: (ids, options) => benchmarkHistoryStore.compareRuns(ids, options),
+  deleteBenchmarkRun: (id) => benchmarkHistoryStore.deleteBenchmarkRun(id),
   config: CONFIG,
   host: HOST,
   port: PORT,
@@ -892,6 +905,26 @@ const openAiGatewayHandlers = core.createOpenAiGatewayHandlers({
     if (req) req.serviceGatewayAccessUsage = usage;
   },
 });
+// llama.cpp already parses its launch labels for the stats view; reuse that so
+// a benchmark records the context, slots and KV precision it actually ran with.
+function benchmarkConfigFromRuntime(runtime = {}) {
+  const labels = runtime.container?.labels || {};
+  const facts = runtimeFactsFromContainerLabels(labels);
+  return {
+    engine: "llama.cpp",
+    runtimeImage: runtime.container?.image || "",
+    maxModelLen: facts.maxModelLen,
+    maxNumSeqs: facts.maxNumSeqs,
+    gpuLayers: facts.gpuLayers,
+    tensorSplit: facts.tensorSplit,
+    cacheTypeK: facts.cacheTypeK,
+    cacheTypeV: facts.cacheTypeV,
+    speculativeMode: facts.speculativeMode,
+    gpuIds: String(labels["ai.manager.gpu-ids"] || "") || null,
+    gpuMemoryUtilization: Number(labels["ai.manager.gpu-memory-utilization"]) || null,
+  };
+}
+
 const benchmarkRunner = core.createBenchmarkRunner({
   defaultPort: CONFIG.defaultPort,
   defaultPrompt: "用中文简要说明本地 llama.cpp 模型是否可以稳定完成工具调用、长上下文和代码任务。",
@@ -903,6 +936,10 @@ const benchmarkRunner = core.createBenchmarkRunner({
   appendLog,
   setJobProgress,
   finishJob,
+  recordBenchmark: (benchmark, context) => benchmarkHistoryStore.recordBenchmarkRun(benchmark, {
+    label: context.label,
+    config: benchmarkConfigFromRuntime(context.runtime),
+  }),
 });
 const {
   normalizeBenchmarkRequest,

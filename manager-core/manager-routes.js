@@ -32,6 +32,9 @@ function registerManagerRoutes(app, deps = {}) {
     listManagerBackups,
     getManagerBackup,
     restoreManagerBackup,
+    listBenchmarkRuns,
+    compareBenchmarkRuns,
+    deleteBenchmarkRun,
   } = deps;
 
   app.get("/api/config", (_req, res) => {
@@ -209,6 +212,36 @@ function registerManagerRoutes(app, deps = {}) {
         res.json(await restoreManagerBackup(req.params.id));
       } catch (error) {
         res.status(error.status || 500).json({ ok: false, error: error.message });
+      }
+    });
+  }
+
+  if (listBenchmarkRuns && compareBenchmarkRuns && deleteBenchmarkRun) {
+    app.get("/api/benchmarks", async (req, res) => {
+      try {
+        res.json(await listBenchmarkRuns(req.query || {}));
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    // Comparison is a read of selected runs, so the ids travel in the query and
+    // the first one is the baseline unless the caller names another.
+    app.get("/api/benchmarks/compare", async (req, res) => {
+      try {
+        const query = req.query || {};
+        res.json(await compareBenchmarkRuns(query.ids || "", { baselineId: String(query.baselineId || "") }));
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    app.delete("/api/benchmarks/:id", async (req, res) => {
+      try {
+        const result = await deleteBenchmarkRun(req.params.id);
+        res.status(result.ok ? 200 : 404).json(result);
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error.message });
       }
     });
   }

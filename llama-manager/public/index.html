@@ -908,12 +908,25 @@
             </div>
             <form id="benchmarkForm" class="benchmark-form">
               <input id="benchmarkModel" placeholder="模型名，留空使用当前运行模型" autocomplete="off" />
+              <input id="benchmarkLabel" placeholder="本次测速备注，例如 并发8-fp8KV" maxlength="120" autocomplete="off" />
               <input id="benchmarkRequests" type="number" min="1" max="5" value="3" />
               <input id="benchmarkMaxTokens" type="number" min="16" max="1024" value="160" />
               <textarea id="benchmarkPrompt" rows="4">用中文简要说明本地 llama.cpp 模型是否可以稳定完成工具调用、长上下文和代码任务。</textarea>
               <button class="primary-button" type="submit"><i data-lucide="play"></i><span>开始测速</span></button>
             </form>
             <div class="service-job-list" id="benchmarkJobList"><div class="empty compact">暂无测速任务。</div></div>
+          </div>
+
+          <div class="panel" id="benchmarkHistoryPanel">
+            <div class="panel-head">
+              <div>
+                <h3>测速历史与配置对比</h3>
+                <p>每次测速都会连同当时的启动参数一起保存。勾选两条以上即可看出"改了哪个参数、快了多少"。</p>
+              </div>
+              <select id="benchmarkHistoryModel" title="按模型筛选"><option value="">全部模型</option></select>
+            </div>
+            <div class="service-job-list" id="benchmarkHistoryList"><div class="empty compact">暂无测速记录。</div></div>
+            <div id="benchmarkCompareResult" class="benchmark-compare"><div class="empty compact">勾选两条及以上记录即可对比。</div></div>
           </div>
 
           <div class="panel">
@@ -1156,6 +1169,7 @@
     <script src="/shared-js/runtime-instances.js?v=20260716-instances" defer></script>
     <script src="/shared-js/access-log-browser.js?v=20260716-log-search" defer></script>
     <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
+    <script src="/shared-js/benchmark-history-renderer.js?v=20261005-benchmark-history" defer></script>
     <script src="/shared-js/connection-status.js?v=20260804-connection-status" defer></script>
     <script src="/shared-js/ui-architecture.js?v=20260902-improvement" defer></script>
     <script src="/shared-js/download-compat-renderer.js?v=20260903-phase2" defer></script>

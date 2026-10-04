@@ -231,6 +231,15 @@ const managerBackupsController = window.LocalAiManagerBackups.create({
   reportError: reportActionError,
   getLanguage: effectiveLanguage,
 });
+const benchmarkHistoryRenderer = window.LocalAiBenchmarkHistory.create({
+  $,
+  api,
+  escapeHtml,
+  escapeAttr,
+  notify,
+  confirmAction: (options) => uiArchitecture.confirmAction(options),
+  renderIcons: () => renderIcons(),
+});
 const runtimeStatusRenderer = window.LocalAiRuntimeStatusRenderer.create({
   $,
   state,
@@ -1222,6 +1231,7 @@ function bindEvents() {
   runtimeInstancesController.bind();
   accessLogBrowser.bind();
   managerBackupsController.bind();
+  benchmarkHistoryRenderer.mount();
   document.querySelectorAll("[data-view]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
@@ -1955,8 +1965,20 @@ async function refreshServiceClients() {
   renderServiceClients();
 }
 
+// 测速任务刚结束时刷新历史，这样新记录不必等用户手动刷新就会出现。
+let lastFinishedBenchmarkCount = null;
+function refreshBenchmarkHistoryOnCompletion(jobs) {
+  const finished = (Array.isArray(jobs) ? jobs : [])
+    .filter((job) => job.type === "benchmark" && ["success", "failed"].includes(job.status)).length;
+  if (lastFinishedBenchmarkCount !== null && finished > lastFinishedBenchmarkCount) {
+    benchmarkHistoryRenderer.refresh().catch(() => {});
+  }
+  lastFinishedBenchmarkCount = finished;
+}
+
 function applyJobsSnapshot(jobs) {
   state.jobs = jobs;
+  refreshBenchmarkHistoryOnCompletion(jobs);
   notifyDownloadTransitions(jobs);
   renderJobs();
   renderModels();
@@ -2913,6 +2935,7 @@ async function startBenchmark(event) {
         warmupRequests: Number($("#benchmarkWarmupRequests").value || 0),
         stream: Boolean($("#benchmarkStream")?.checked),
         maxTokens: Number($("#benchmarkMaxTokens").value || 160),
+        label: $("#benchmarkLabel")?.value?.trim() || "",
         prompt: $("#benchmarkPrompt").value,
         port: Number($("#servicePort").value || 8000),
       }),

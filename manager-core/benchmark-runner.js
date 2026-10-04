@@ -19,6 +19,7 @@ function createBenchmarkRunner(options = {}) {
       warmupRequests: boundedInteger(input.warmupRequests, 0, 0, 4),
       maxTokens: boundedInteger(input.maxTokens, 160, 16, 8192),
       stream: input.stream === true,
+      label: String(input.label || "").trim().slice(0, 120),
       prompt: String(input.prompt || defaultPrompt),
     };
   }
@@ -101,6 +102,20 @@ function createBenchmarkRunner(options = {}) {
       samples,
     };
     options.setJobProgress?.(job, { percent: 100, stage: "Benchmark complete", detail: `${wallTokensPerSecond.toFixed(2)} tok/s wall throughput · ${avgTtftMs.toFixed(0)} ms TTFT`, state: failedRequests ? "warn" : "ok" });
+    // Persist the run with the configuration it was measured against. A failure
+    // to record must not fail the benchmark the user already paid GPU time for.
+    let recorded = null;
+    if (typeof options.recordBenchmark === "function") {
+      try {
+        recorded = await options.recordBenchmark(benchmark, {
+          runtime,
+          label: String(input.label || "").trim(),
+        });
+      } catch (error) {
+        options.appendLog?.(job, `Benchmark history not saved: ${error.message}`);
+      }
+    }
+    if (recorded?.id) benchmark.historyId = recorded.id;
     options.finishJob?.(job, {
       benchmark,
     });
