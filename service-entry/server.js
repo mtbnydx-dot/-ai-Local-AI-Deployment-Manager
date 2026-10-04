@@ -1209,7 +1209,18 @@ async function proxyGatewayRequest(req, res, url) {
     bodyForUpstream = undefined;
     releaseBodyBudget();
     releaseCompressedBodyBudget();
-    res.writeHead(upstream.status, buildResponseHeaders(upstream.headers, req));
+    // Tell the caller which engine and instance actually served the request.
+    // `auto` routing is otherwise opaque: the same model name can land on vLLM
+    // or llama.cpp depending on the fleet mode and current load.
+    res.writeHead(upstream.status, {
+      ...buildResponseHeaders(upstream.headers, req),
+      "x-local-ai-route": [
+        manager?.id || "",
+        selection.instance?.instanceId || selection.instance?.id || "",
+        resolvedModel || "",
+        selection.reason || "",
+      ].map((part) => String(part).replace(/[^\w.:@/-]+/g, "_")).join(" "),
+    });
     res.once("finish", () => {
       appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, upstream.status, startedAt, requestMetadata, "", resolvedModel)).catch(() => {});
     });

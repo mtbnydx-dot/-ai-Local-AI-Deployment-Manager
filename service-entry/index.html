@@ -955,6 +955,39 @@
     @media (prefers-reduced-motion: reduce) {
       button, .button, .metric, .doc-card, .bar, .fleet-memory-segment { transition: none; }
     }
+
+    /* 试一试：多轮对话测试台 */
+    .playground-controls { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem; }
+    .playground-controls label { display: grid; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
+    .playground-controls input, .playground-controls select { min-width: 8rem; }
+    .playground-controls .playground-key { flex: 1 1 16rem; }
+    .playground-transcript {
+      min-height: 12rem;
+      max-height: 26rem;
+      overflow-y: auto;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-2);
+      display: grid;
+      gap: 0.75rem;
+      align-content: start;
+    }
+    .playground-turn { display: grid; gap: 0.3rem; }
+    .playground-turn-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; font-size: 0.82rem; color: var(--muted); }
+    .playground-turn-body { white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+    .playground-turn.user .playground-turn-body { color: var(--ink); }
+    .playground-turn.assistant .playground-turn-body { padding: 0.5rem 0.65rem; border-radius: 8px; background: var(--surface); }
+    .playground-route, .playground-timing { font-variant-numeric: tabular-nums; }
+    .playground-pending { color: var(--muted); }
+    .playground-form { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+    .playground-form textarea { width: 100%; resize: vertical; font: inherit; }
+    .playground-actions { display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end; }
+    .playground-stats { margin-right: auto; font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+    @media (max-width: 620px) {
+      .playground-controls label { flex: 1 1 100%; }
+      .playground-transcript { max-height: 18rem; }
+    }
   </style>
   <!-- 平台设计令牌：与两个管理器、TTS 工作台同一份色板；加载在内联样式之后，同名变量以令牌为准。 -->
   <link rel="stylesheet" href="/shared-js/tokens.css?v=20260903-phase3" />
@@ -976,6 +1009,7 @@
       <a href="#overview" data-entry-nav="overview">总览</a>
       <a href="#models" data-entry-nav="models">模型</a>
       <a href="#tasks" data-entry-nav="tasks">下载与任务</a>
+      <a href="#playground" data-entry-nav="playground">试一试</a>
       <a href="#voice" data-entry-nav="voice">语音</a>
       <a href="#clients" data-entry-nav="clients">客户与 API</a>
       <a href="#operations" data-entry-nav="operations">运维</a>
@@ -1006,6 +1040,33 @@
 
     <section class="card" data-entry-pane="models"><div class="card-head"><div><h2>模型文件与磁盘</h2><p>登记跨盘模型库、导入现有模型，或复制校验后迁移到其他磁盘。</p></div><a class="button primary" data-manager-link="vllm" data-manager-path="/model-storage">管理存储与迁移</a></div></section>
     <section id="voiceGrid" class="grid" data-entry-pane="voice" aria-label="语音服务"></section>
+    <section class="card" id="playgroundCard" data-entry-pane="playground" aria-labelledby="playgroundTitle">
+      <div class="card-head">
+        <div>
+          <h2 id="playgroundTitle">试一试</h2>
+          <p>直接通过统一网关和当前模型对话，确认启动后的模型真的能正常回答。对话只留在这个浏览器标签页里，不会发到服务器以外的任何地方，也不写入日志或数据库。</p>
+        </div>
+        <button id="playgroundClear" type="button">清空对话</button>
+      </div>
+      <div class="playground-controls">
+        <label><span>模型</span><select id="playgroundModel"><option value="">正在读取可用模型...</option></select></label>
+        <label><span>温度</span><input id="playgroundTemperature" type="number" min="0" max="2" step="0.1" value="0.7" /></label>
+        <label><span>最大输出 token</span><input id="playgroundMaxTokens" type="number" min="16" max="32768" step="16" value="1024" /></label>
+        <label class="playground-key"><span>API Key（强制鉴权时填写）</span><input id="playgroundApiKey" type="password" autocomplete="off" placeholder="留空表示本机免密" /></label>
+      </div>
+      <div class="playground-transcript" id="playgroundTranscript" aria-live="polite" aria-label="对话记录">
+        <div class="empty">还没有对话。下面输入一句话试试，比如「用三句话解释一下你能做什么」。</div>
+      </div>
+      <form id="playgroundForm" class="playground-form">
+        <textarea id="playgroundInput" rows="3" placeholder="输入消息，Ctrl+Enter 发送"></textarea>
+        <div class="playground-actions">
+          <span class="playground-stats" id="playgroundStats"></span>
+          <button id="playgroundStop" type="button" class="danger" hidden>停止生成</button>
+          <button class="primary" type="submit" id="playgroundSend">发送</button>
+        </div>
+      </form>
+    </section>
+
     <section class="card" data-entry-pane="tasks">
       <div class="card-head"><div><h2>下载与任务</h2><p>按引擎查看下载进度、失败原因与重试；语音任务在语音工作台中管理。</p></div></div>
       <div class="doc-grid">
@@ -1268,7 +1329,7 @@
     const paneAliases = { entrySummaryCard: "overview", managerGrid: "models", fleet: "models", gateway: "clients", access: "clients", keysCard: "clients", billingEntryCard: "clients", entryDocs: "operations" };
     function selectEntryPane() {
       const hash = location.hash.slice(1);
-      const pane = paneAliases[hash] || (["models", "tasks", "voice", "clients", "operations"].includes(hash) ? hash : "overview");
+      const pane = paneAliases[hash] || (["models", "playground", "tasks", "voice", "clients", "operations"].includes(hash) ? hash : "overview");
       for (const node of document.querySelectorAll("[data-entry-pane]")) node.hidden = node.dataset.entryPane !== pane;
       for (const link of document.querySelectorAll("[data-entry-nav]")) {
         if (link.dataset.entryNav === pane) link.setAttribute("aria-current", "page");
@@ -2614,6 +2675,205 @@
         || node.getAttribute("data-state-key")
         || (node.id ? `id:${node.id}` : "");
     }
+
+
+    // --- 试一试：多轮对话测试台 --------------------------------------------
+    // 对话只存在这个标签页的内存里。平台承诺访问日志只记元数据、不记提示词，
+    // 所以这里既不落盘也不经过任何额外存储，刷新页面即清空。
+    const playground = {
+      messages: [],
+      controller: null,
+      streaming: false,
+    };
+
+    function playgroundGatewayBase() {
+      return `${location.origin}/gateway/auto/openai/v1`;
+    }
+
+    function playgroundHeaders() {
+      const key = document.querySelector("#playgroundApiKey")?.value.trim();
+      return {
+        "content-type": "application/json",
+        ...(key ? { authorization: `Bearer ${key}` } : {}),
+      };
+    }
+
+    async function loadPlaygroundModels() {
+      const select = document.querySelector("#playgroundModel");
+      if (!select) return;
+      try {
+        const response = await fetch(`${playgroundGatewayBase()}/models`, { headers: playgroundHeaders() });
+        if (!response.ok) throw new Error(`网关返回 ${response.status}`);
+        const payload = await response.json();
+        const models = Array.isArray(payload.data) ? payload.data : [];
+        const previous = select.value;
+        select.innerHTML = models.length
+          ? models.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.id)}</option>`).join("")
+          : `<option value="">没有正在运行的模型</option>`;
+        if (previous && models.some((model) => model.id === previous)) select.value = previous;
+      } catch (error) {
+        select.innerHTML = `<option value="">读取模型失败：${escapeHtml(error.message)}</option>`;
+      }
+    }
+
+    function renderPlaygroundTranscript() {
+      const root = document.querySelector("#playgroundTranscript");
+      if (!root) return;
+      if (!playground.messages.length) {
+        root.innerHTML = `<div class="empty">还没有对话。下面输入一句话试试，比如「用三句话解释一下你能做什么」。</div>`;
+        return;
+      }
+      root.innerHTML = playground.messages.map((message) => {
+        const role = message.role === "user" ? "你" : "模型";
+        const route = message.route
+          ? `<span class="playground-route" title="实际路由">${escapeHtml(message.route)}</span>`
+          : "";
+        const timing = message.timing
+          ? `<span class="playground-timing">${escapeHtml(message.timing)}</span>`
+          : "";
+        const body = message.content
+          ? escapeHtml(message.content)
+          : `<span class="playground-pending">生成中…</span>`;
+        return `
+          <div class="playground-turn ${message.role === "user" ? "user" : "assistant"}">
+            <div class="playground-turn-head"><strong>${role}</strong>${route}${timing}</div>
+            <div class="playground-turn-body">${body}</div>
+          </div>`;
+      }).join("");
+      root.scrollTop = root.scrollHeight;
+    }
+
+    function setPlaygroundStreaming(active) {
+      playground.streaming = active;
+      const send = document.querySelector("#playgroundSend");
+      const stop = document.querySelector("#playgroundStop");
+      if (send) send.disabled = active;
+      if (stop) stop.hidden = !active;
+    }
+
+    // 路由头由统一入口写入：`auto` 路由本身是不透明的，同一个模型名可能落到
+    // vLLM 也可能落到 llama.cpp，测试台把这个决定显示出来。
+    function describePlaygroundRoute(response) {
+      const raw = response.headers.get("x-local-ai-route");
+      if (!raw) return "";
+      const [manager, instance, model, reason] = raw.split(" ");
+      return [manager, instance && instance !== manager ? instance : "", model, reason]
+        .filter(Boolean)
+        .join(" · ");
+    }
+
+    async function sendPlaygroundMessage(event) {
+      event.preventDefault();
+      if (playground.streaming) return;
+      const input = document.querySelector("#playgroundInput");
+      const text = input?.value.trim();
+      if (!text) return;
+      const model = document.querySelector("#playgroundModel")?.value;
+      if (!model) {
+        showToast("请先选择一个正在运行的模型");
+        return;
+      }
+      input.value = "";
+      playground.messages.push({ role: "user", content: text });
+      const reply = { role: "assistant", content: "", route: "", timing: "" };
+      playground.messages.push(reply);
+      renderPlaygroundTranscript();
+
+      const stats = document.querySelector("#playgroundStats");
+      playground.controller = new AbortController();
+      setPlaygroundStreaming(true);
+      const startedAt = performance.now();
+      let firstTokenAt = 0;
+      let characters = 0;
+      try {
+        const response = await fetch(`${playgroundGatewayBase()}/chat/completions`, {
+          method: "POST",
+          headers: playgroundHeaders(),
+          signal: playground.controller.signal,
+          body: JSON.stringify({
+            model,
+            stream: true,
+            temperature: Number(document.querySelector("#playgroundTemperature")?.value || 0.7),
+            max_tokens: Number(document.querySelector("#playgroundMaxTokens")?.value || 1024),
+            // 只发送对话本身，不附带任何系统提示，这样看到的就是模型的真实行为。
+            messages: playground.messages
+              .filter((message) => message !== reply && message.content)
+              .map((message) => ({ role: message.role, content: message.content })),
+          }),
+        });
+        reply.route = describePlaygroundRoute(response);
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(`${response.status}: ${detail.slice(0, 400)}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // SSE 以空行分帧；最后一段可能不完整，留到下一轮再解析。
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() || "";
+          for (const frame of frames) {
+            for (const line of frame.split("\n")) {
+              if (!line.startsWith("data:")) continue;
+              const payload = line.slice(5).trim();
+              if (!payload || payload === "[DONE]") continue;
+              let parsed;
+              try { parsed = JSON.parse(payload); } catch { continue; }
+              const delta = parsed.choices?.[0]?.delta;
+              const piece = delta?.content || delta?.reasoning_content || "";
+              if (!piece) continue;
+              if (!firstTokenAt) firstTokenAt = performance.now();
+              reply.content += piece;
+              characters += piece.length;
+              renderPlaygroundTranscript();
+            }
+          }
+        }
+        const elapsed = performance.now() - startedAt;
+        const ttft = firstTokenAt ? Math.round(firstTokenAt - startedAt) : null;
+        reply.timing = [
+          ttft !== null ? `首字 ${ttft} ms` : "",
+          `总计 ${(elapsed / 1000).toFixed(1)} s`,
+          characters ? `${(characters / (elapsed / 1000)).toFixed(0)} 字符/秒` : "",
+        ].filter(Boolean).join(" · ");
+        if (stats) stats.textContent = reply.timing;
+        if (!reply.content) reply.content = "（模型没有返回任何内容）";
+      } catch (error) {
+        if (error.name === "AbortError") {
+          reply.content += reply.content ? "\n\n（已停止生成）" : "（已停止生成）";
+        } else {
+          reply.content = `请求失败：${error.message}`;
+        }
+      } finally {
+        playground.controller = null;
+        setPlaygroundStreaming(false);
+        renderPlaygroundTranscript();
+      }
+    }
+
+    document.querySelector("#playgroundForm")?.addEventListener("submit", sendPlaygroundMessage);
+    document.querySelector("#playgroundStop")?.addEventListener("click", () => playground.controller?.abort());
+    document.querySelector("#playgroundClear")?.addEventListener("click", () => {
+      playground.messages = [];
+      const stats = document.querySelector("#playgroundStats");
+      if (stats) stats.textContent = "";
+      renderPlaygroundTranscript();
+    });
+    document.querySelector("#playgroundInput")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        document.querySelector("#playgroundForm")?.requestSubmit();
+      }
+    });
+    // 只有打开「试一试」时才去问网关要模型列表，避免给其它页面加请求。
+    window.addEventListener("hashchange", () => {
+      if (location.hash === "#playground") void loadPlaygroundModels();
+    });
+    if (location.hash === "#playground") void loadPlaygroundModels();
 
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, (char) => ({
