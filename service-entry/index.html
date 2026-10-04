@@ -133,6 +133,8 @@
       font-weight: 700;
       cursor: pointer;
     }
+    /* `button` sets display, which would otherwise beat the hidden attribute. */
+    button[hidden], .button[hidden] { display: none; }
     button:hover, .button:hover { background: var(--surface-3); }
     button:disabled, .button.disabled {
       opacity: 0.45;

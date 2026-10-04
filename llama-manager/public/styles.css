@@ -2428,6 +2428,7 @@ pre {
 
 /* 闲置自动释放显存 */
 .idle-unload-form { display: grid; gap: 0.6rem; margin-bottom: 0.75rem; }
+.idle-unload-form button[type="submit"] { justify-self: start; }
 .idle-unload-form .field-row {
   display: grid;
   grid-template-columns: minmax(12rem, 1fr) minmax(8rem, 14rem);

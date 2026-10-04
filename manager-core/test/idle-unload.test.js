@@ -182,3 +182,27 @@ test("a sleeping runtime can be looked up by model or served name", async () => 
   await kit.controller.clearFor("qwen3-27b");
   assert.equal(await kit.controller.findSleepingForModel("qwen3-27b"), null);
 });
+
+test("the old automation idle setting is carried over once", async () => {
+  const kit = harness({
+    controller: { readLegacySettings: async () => ({ idleUnloadEnabled: true, idleMinutes: 90 }) },
+  });
+  const settings = await kit.controller.getSettings();
+  assert.equal(settings.enabled, true);
+  assert.equal(settings.idleMinutes, 90);
+});
+
+test("a saved policy wins over the legacy automation setting", async () => {
+  const kit = harness({
+    controller: { readLegacySettings: async () => ({ idleUnloadEnabled: true, idleMinutes: 90 }) },
+  });
+  await kit.controller.saveSettings({ enabled: false, idleMinutes: 20 });
+  const fresh = harness({
+    controller: { readLegacySettings: async () => ({ idleUnloadEnabled: true, idleMinutes: 90 }) },
+  });
+  // A stored policy is present, so the legacy values are not consulted again.
+  fresh.files.settings = kit.files.settings;
+  const settings = await fresh.controller.getSettings();
+  assert.equal(settings.enabled, false);
+  assert.equal(settings.idleMinutes, 20);
+});

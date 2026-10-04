@@ -20,16 +20,16 @@
     function renderSettings() {
       const settings = state.settings;
       if (!settings) return;
-      const enabled = $("#idleUnloadEnabled");
-      const minutes = $("#idleUnloadMinutes");
-      const minVram = $("#idleUnloadMinVram");
-      const exclude = $("#idleUnloadExclude");
+      const enabled = $("#idleReleaseEnabled");
+      const minutes = $("#idleReleaseMinutes");
+      const minVram = $("#idleReleaseMinVram");
+      const exclude = $("#idleReleaseExclude");
       // Never overwrite a field the user is editing.
       if (enabled && document.activeElement !== enabled) enabled.checked = Boolean(settings.enabled);
       if (minutes && document.activeElement !== minutes) minutes.value = settings.idleMinutes;
       if (minVram && document.activeElement !== minVram) minVram.value = settings.minVramMb;
       if (exclude && document.activeElement !== exclude) exclude.value = (settings.excludeModels || []).join(", ");
-      const summary = $("#idleUnloadSummary");
+      const summary = $("#idleReleaseSummary");
       if (summary) {
         summary.textContent = settings.enabled
           ? `已开启：空闲超过 ${settings.idleMinutes} 分钟且没有排队请求的实例会被释放，启动参数会保留以便唤醒。`
@@ -38,7 +38,7 @@
     }
 
     function renderSleeping() {
-      const root = $("#idleUnloadSleeping");
+      const root = $("#idleReleaseSleeping");
       if (!root) return;
       if (!state.sleeping.length) {
         root.innerHTML = `<div class="empty compact">当前没有被释放的实例。</div>`;
@@ -81,10 +81,10 @@
         const result = await api("/api/idle-unload", {
           method: "POST",
           body: JSON.stringify({
-            enabled: Boolean($("#idleUnloadEnabled")?.checked),
-            idleMinutes: Number($("#idleUnloadMinutes")?.value || 30),
-            minVramMb: Number($("#idleUnloadMinVram")?.value || 0),
-            excludeModels: String($("#idleUnloadExclude")?.value || ""),
+            enabled: Boolean($("#idleReleaseEnabled")?.checked),
+            idleMinutes: Number($("#idleReleaseMinutes")?.value || 30),
+            minVramMb: Number($("#idleReleaseMinVram")?.value || 0),
+            excludeModels: String($("#idleReleaseExclude")?.value || ""),
           }),
         });
         state.settings = result.settings;
@@ -98,9 +98,9 @@
     }
 
     function mount() {
-      const root = $("#idleUnloadPanel");
+      const root = $("#idleReleasePanel");
       if (!root) return;
-      $("#idleUnloadForm")?.addEventListener("submit", (event) => {
+      $("#idleReleaseForm")?.addEventListener("submit", (event) => {
         event.preventDefault();
         save();
       });

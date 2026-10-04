@@ -2917,8 +2917,6 @@ async function saveAutomationSettings(event) {
     state.automationSettings = await api("/api/tools/automation-settings", {
       method: "POST",
       body: JSON.stringify({
-        idleUnloadEnabled: $("#idleUnloadEnabled").checked,
-        idleMinutes: Number($("#idleMinutes").value || 30),
         vramGuardEnabled: $("#vramGuardEnabled").checked,
         vramPercent: Number($("#vramPercent").value || 94),
         vramAction: $("#vramAction").value,

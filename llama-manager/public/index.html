@@ -882,14 +882,12 @@
           <div class="panel">
             <div class="panel-head">
               <div>
-                <h3>空闲卸载与显存保护</h3>
-                <p>默认关闭。开启后管理器会按空闲时间或显存阈值提醒/卸载 llama.cpp 容器。</p>
+                <h3>显存与温度保护</h3>
+                <p>默认关闭。显存超过阈值时提醒或卸载，温度/功耗异常时告警。闲置释放已移到下方「闲置自动释放显存」，释放后可一键唤醒。</p>
               </div>
               <button class="secondary-button compact-button" id="saveAutomationBtn" type="button"><i data-lucide="badge-check"></i><span>保存保护设置</span></button>
             </div>
             <div class="automation-grid">
-              <label class="check-row context-check-row"><input id="idleUnloadEnabled" type="checkbox" /><span>空闲自动卸载</span></label>
-              <label><span>空闲分钟</span><input id="idleMinutes" type="number" min="5" max="1440" value="30" /></label>
               <label class="check-row context-check-row"><input id="vramGuardEnabled" type="checkbox" /><span>显存保护</span></label>
               <label><span>显存阈值 %</span><input id="vramPercent" type="number" min="70" max="99" value="94" /></label>
               <label><span>阈值动作</span><select id="vramAction"><option value="warn">只提醒</option><option value="unload">空闲时卸载</option></select></label>
@@ -918,21 +916,21 @@
           </div>
 
 
-          <div class="panel" id="idleUnloadPanel">
+          <div class="panel" id="idleReleasePanel">
             <div class="panel-head">
               <div>
                 <h3>闲置自动释放显存</h3>
-                <p id="idleUnloadSummary">未开启。开启后，长时间没有请求的模型会自动释放显存，随时可以一键唤醒回到同样的配置。</p>
+                <p id="idleReleaseSummary">未开启。开启后，长时间没有请求的模型会自动释放显存，随时可以一键唤醒回到同样的配置。</p>
               </div>
             </div>
-            <form id="idleUnloadForm" class="idle-unload-form">
-              <label class="check-row"><input id="idleUnloadEnabled" type="checkbox" /><span>开启闲置自动释放</span></label>
-              <label class="field-row"><span>空闲多久后释放（分钟）</span><input id="idleUnloadMinutes" type="number" min="5" max="1440" value="30" /></label>
-              <label class="field-row"><span>只释放预留显存超过（MB，0 = 不限）</span><input id="idleUnloadMinVram" type="number" min="0" step="1024" value="0" /></label>
-              <label class="field-row"><span>永不释放这些模型（逗号分隔）</span><input id="idleUnloadExclude" type="text" placeholder="例如 qwen3-27b, embedding" /></label>
+            <form id="idleReleaseForm" class="idle-unload-form">
+              <label class="check-row"><input id="idleReleaseEnabled" type="checkbox" /><span>开启闲置自动释放</span></label>
+              <label class="field-row"><span>空闲多久后释放（分钟）</span><input id="idleReleaseMinutes" type="number" min="5" max="1440" value="30" /></label>
+              <label class="field-row"><span>只释放预留显存超过（MB，0 = 不限）</span><input id="idleReleaseMinVram" type="number" min="0" step="1024" value="0" /></label>
+              <label class="field-row"><span>永不释放这些模型（逗号分隔）</span><input id="idleReleaseExclude" type="text" placeholder="例如 qwen3-27b, embedding" /></label>
               <button class="primary-button" type="submit"><i data-lucide="save"></i><span>保存释放策略</span></button>
             </form>
-            <div class="service-job-list" id="idleUnloadSleeping"><div class="empty compact">当前没有被释放的实例。</div></div>
+            <div class="service-job-list" id="idleReleaseSleeping"><div class="empty compact">当前没有被释放的实例。</div></div>
           </div>
 
           <div class="panel" id="benchmarkHistoryPanel">

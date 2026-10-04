@@ -105,9 +105,27 @@ function createIdleUnloadController(options = {}) {
   async function getSettings() {
     if (!settingsCache) {
       const stored = await readJsonFile(settingsFile, {});
-      settingsCache = normalizeIdleUnloadSettings(stored, DEFAULT_SETTINGS);
+      // The automation panel used to own idle unloading, with no way back once
+      // a container was stopped. Carry that preference over the first time so
+      // nobody silently loses it when the feature moved here.
+      const legacy = Object.keys(stored || {}).length ? null : await readLegacySettings();
+      settingsCache = normalizeIdleUnloadSettings(stored, legacy ? {
+        ...DEFAULT_SETTINGS,
+        enabled: Boolean(legacy.idleUnloadEnabled),
+        idleMinutes: legacy.idleMinutes || DEFAULT_SETTINGS.idleMinutes,
+      } : DEFAULT_SETTINGS);
     }
     return settingsCache;
+  }
+
+  async function readLegacySettings() {
+    if (typeof options.readLegacySettings !== "function") return null;
+    try {
+      const legacy = await options.readLegacySettings();
+      return legacy && typeof legacy === "object" ? legacy : null;
+    } catch {
+      return null;
+    }
   }
 
   async function saveSettings(input = {}) {

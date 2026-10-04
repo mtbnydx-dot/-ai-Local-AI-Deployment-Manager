@@ -1424,6 +1424,7 @@ const idleUnloadController = core.createIdleUnloadController({
   },
   stopInstance: (instance) => stopRuntimeInstanceRequest({ id: instance.id }),
   startRuntime: (config) => startRuntimeRequest(config),
+  readLegacySettings: () => automationSettingsStore.getAutomationSettings(),
   log: (message) => console.log(`[idle-unload] ${message}`),
 });
 
@@ -2197,7 +2198,7 @@ async function inspectGpuTemperatureGuard(settings) {
 async function inspectAutomationRules() {
   const settings = await automationSettingsStore.getAutomationSettings();
   await inspectGpuTemperatureGuard(settings).catch(() => {});
-  if (!settings.idleUnloadEnabled && !settings.vramGuardEnabled) return;
+  if (!settings.vramGuardEnabled) return;
   if (runtimeActivity.unloading) return;
   const [gpu, container] = await Promise.all([
     getGpuStatus(),
@@ -2219,10 +2220,8 @@ async function inspectAutomationRules() {
   }
   runtimeActivity.lastSeenAt = new Date(now).toISOString();
   const idleMs = now - Date.parse(runtimeActivity.lastActivityAt || new Date(now).toISOString());
-  const idleEnough = idleMs >= settings.idleMinutes * 60 * 1000;
   const gpuPercent = gpu.ok && gpu.totalMb ? (gpu.usedMb / gpu.totalMb) * 100 : 0;
   const noActiveKv = Number(summary?.totals?.context?.activeTokens || 0) === 0;
-  const shouldIdleUnload = settings.idleUnloadEnabled && idleEnough;
   const shouldVramUnload = settings.vramGuardEnabled && settings.vramAction === "unload" && gpuPercent >= settings.vramPercent && idleMs >= 2 * 60 * 1000 && noActiveKv;
   const shouldWarn = settings.vramGuardEnabled && settings.vramAction === "warn" && gpuPercent >= settings.vramPercent;
   if (shouldWarn && now - Date.parse(runtimeActivity.lastWarnAt || 0) > 10 * 60 * 1000) {
@@ -2231,9 +2230,9 @@ async function inspectAutomationRules() {
     appendLog(job, `GPU memory usage ${gpuPercent.toFixed(1)}% exceeded ${settings.vramPercent}%.`);
     finishJob(job, { result: "warn-only" });
   }
-  if (shouldIdleUnload || shouldVramUnload) {
+  if (shouldVramUnload) {
     runtimeActivity.unloading = true;
-    const reason = shouldIdleUnload ? `Idle for ${Math.round(idleMs / 60000)} minutes` : `VRAM ${gpuPercent.toFixed(1)}% exceeded ${settings.vramPercent}%`;
+    const reason = `VRAM ${gpuPercent.toFixed(1)}% exceeded ${settings.vramPercent}%`;
     const job = createJob("automation", "Auto unload vLLM", { reason, settings });
     try {
       appendLog(job, reason);
