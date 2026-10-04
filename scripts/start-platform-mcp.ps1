@@ -133,6 +133,8 @@ $environmentNames = @(
   "PLATFORM_MCP_SERVICE_ENTRY_URL", "PLATFORM_MCP_VLLM_MANAGER_URL",
   "PLATFORM_MCP_LLAMA_MANAGER_URL", "PLATFORM_MCP_SEARCH_GATEWAY_URL",
   "PLATFORM_MCP_SEARCH_GATEWAY_API_KEY", "PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE",
+  "PLATFORM_MCP_LOCAL_RATE_LIMIT_PER_MINUTE", "PLATFORM_MCP_CACHE_TTL_MS",
+  "PLATFORM_MCP_OUTPUT_SCHEMA", "PLATFORM_MCP_TOOL_PROFILE",
   "PLATFORM_MCP_AUDIT_LOG", "PLATFORM_MCP_ALLOWED_HOSTS"
 )
 $previousEnvironment = @{}
@@ -150,6 +152,26 @@ try {
   $env:PLATFORM_MCP_SEARCH_GATEWAY_API_KEY = $searchGatewayApiKey
   if ([string]::IsNullOrWhiteSpace($env:PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE)) {
     $env:PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE = "20"
+  }
+  # Local reads get their own, more generous ceiling: one overview call fans out
+  # to three manager endpoints, so an unbounded caller can saturate a manager
+  # that is busy loading a model.
+  if ([string]::IsNullOrWhiteSpace($env:PLATFORM_MCP_LOCAL_RATE_LIMIT_PER_MINUTE)) {
+    $env:PLATFORM_MCP_LOCAL_RATE_LIMIT_PER_MINUTE = "120"
+  }
+  # Several tools read the same manager endpoint, so identical GETs within this
+  # window are served once. Set to 0 to always go to the manager.
+  if ([string]::IsNullOrWhiteSpace($env:PLATFORM_MCP_CACHE_TTL_MS)) {
+    $env:PLATFORM_MCP_CACHE_TTL_MS = "2000"
+  }
+  # compact keeps the envelope and the data field names and drops the nested
+  # levels; full advertises the complete JSON Schema for clients that validate.
+  if ([string]::IsNullOrWhiteSpace($env:PLATFORM_MCP_OUTPUT_SCHEMA)) {
+    $env:PLATFORM_MCP_OUTPUT_SCHEMA = "compact"
+  }
+  # all, ops (local platform tools only), or web (search and page tools only).
+  if ([string]::IsNullOrWhiteSpace($env:PLATFORM_MCP_TOOL_PROFILE)) {
+    $env:PLATFORM_MCP_TOOL_PROFILE = "all"
   }
   $env:PLATFORM_MCP_AUDIT_LOG = $auditPath
   $env:PLATFORM_MCP_ALLOWED_HOSTS = "127.0.0.1,localhost,::1,host.docker.internal"

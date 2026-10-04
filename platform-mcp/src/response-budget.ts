@@ -48,7 +48,7 @@ export function applyResponseBudget<T extends Record<string, unknown>>(payload: 
   // The notes are part of the payload, so the trimming target leaves room for
   // them. Without this the annotated payload ends up larger than the limit
   // that the trimming was supposed to enforce.
-  const target = Math.max(Math.floor(limit / 2), limit - NOTE_ALLOWANCE_CHARS);
+  const trimTarget = Math.max(Math.floor(limit / 2), limit - NOTE_ALLOWANCE_CHARS);
 
   // Only the copy is trimmed; the caller's payload (and any cached upstream
   // object behind it) is left intact.
@@ -57,29 +57,29 @@ export function applyResponseBudget<T extends Record<string, unknown>>(payload: 
   const trimmedArrays = new Map<string, { kept: number; original: number }>();
   const trimmedStrings = new Map<string, { kept: number; original: number }>();
 
-  for (let round = 0; round < MAX_ROUNDS && serialized > target; round += 1) {
-    const target = largestTarget(targets, serialized);
-    if (!target) break;
-    if (target.kind === "array") {
-      const current = target.parent[target.key] as unknown[];
+  for (let round = 0; round < MAX_ROUNDS && serialized > trimTarget; round += 1) {
+    const victim = largestTarget(targets, serialized);
+    if (!victim) break;
+    if (victim.kind === "array") {
+      const current = victim.parent[victim.key] as unknown[];
       const kept = Math.max(MIN_ARRAY_ITEMS, Math.floor(current.length / 2));
       if (kept >= current.length) {
-        drop(targets, target);
+        drop(targets, victim);
         continue;
       }
-      target.parent[target.key] = current.slice(0, kept);
-      repairPagination(target.parent, target.key, kept);
-      trimmedArrays.set(target.path, { kept, original: target.original });
+      victim.parent[victim.key] = current.slice(0, kept);
+      repairPagination(victim.parent, kept);
+      trimmedArrays.set(victim.path, { kept, original: victim.original });
     } else {
-      const container = target.parent as Record<string | number, unknown>;
-      const current = String(container[target.key]);
+      const container = victim.parent as Record<string | number, unknown>;
+      const current = String(container[victim.key]);
       const kept = Math.max(STRING_FLOOR, Math.floor(current.length / 2));
       if (kept >= current.length) {
-        drop(targets, target);
+        drop(targets, victim);
         continue;
       }
-      container[target.key] = `${current.slice(0, kept)}…`;
-      trimmedStrings.set(target.path, { kept, original: target.original });
+      container[victim.key] = `${current.slice(0, kept)}…`;
+      trimmedStrings.set(victim.path, { kept, original: victim.original });
     }
     serialized = measure(working);
   }
@@ -132,11 +132,10 @@ function annotate<T extends Record<string, unknown>>(payload: T, notes: string[]
  * returned, so a caller that resumes from `next_offset` gets the records the
  * budget dropped rather than skipping them.
  */
-function repairPagination(parent: Record<string, unknown>, key: string, kept: number): void {
+function repairPagination(parent: Record<string, unknown>, kept: number): void {
   if (typeof parent.count === "number") parent.count = kept;
   if (typeof parent.has_more === "boolean") parent.has_more = true;
   if (typeof parent.offset === "number" && "next_offset" in parent) parent.next_offset = parent.offset + kept;
-  void key;
 }
 
 function collectTargets(root: Record<string, unknown>): Target[] {

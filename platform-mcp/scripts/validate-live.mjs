@@ -60,6 +60,11 @@ const argumentsByTool = {
     context_tokens: 32768,
     precision: "fp8_int8",
   },
+  local_ai_list_benchmarks: { engine: "all", limit: 5 },
+  // Filled in from the live benchmark ledger during the pass, since real run
+  // IDs are not known ahead of time.
+  local_ai_compare_benchmarks: null,
+  local_ai_get_idle_state: { engine: "all" },
   local_ai_get_security_posture: { engine: "all", warnings_only: true },
 };
 
@@ -97,6 +102,10 @@ try {
   let pageMatchCount = 0;
   let routeSelected = false;
   let securityOverall = "unknown";
+  let benchmarkRunCount = 0;
+  let benchmarkRunIds = [];
+  let benchmarkComparison = "skipped";
+  let releasedRuntimeCount = 0;
   for (const tool of listing.tools) {
     const argumentsForTool = tool.name === "local_ai_read_search_result"
       ? {
@@ -112,7 +121,15 @@ try {
           pattern: findPattern,
           max_matches: 3,
         }
+      : tool.name === "local_ai_compare_benchmarks"
+        ? { run_ids: benchmarkRunIds, baseline_id: benchmarkRunIds[0] || "" }
       : argumentsByTool[tool.name];
+    // A machine that has never run a benchmark has nothing to compare, which
+    // is a normal state rather than a validation failure.
+    if (tool.name === "local_ai_compare_benchmarks" && benchmarkRunIds.length < 2) {
+      checks.push({ name: tool.name, ok: true, partial: false, skipped: "fewer than two recorded runs" });
+      continue;
+    }
     const result = await client.callTool({ name: tool.name, arguments: argumentsForTool });
     assert.notEqual(result.isError, true, `${tool.name} returned a tool error.`);
     assert.equal(typeof result.structuredContent, "object", `${tool.name} omitted structured content.`);
@@ -140,6 +157,17 @@ try {
       if (firstLine) findPattern = firstLine.slice(0, 80);
     }
     if (tool.name === "local_ai_find_in_search_result") pageMatchCount = Number(output.data?.match_count || 0);
+    if (tool.name === "local_ai_list_benchmarks") {
+      benchmarkRunCount = Number(output.data?.total || 0);
+      benchmarkRunIds = (Array.isArray(output.data?.runs) ? output.data.runs : [])
+        .map((run) => String(run?.id || ""))
+        .filter(Boolean)
+        .slice(0, 2);
+    }
+    if (tool.name === "local_ai_compare_benchmarks") {
+      benchmarkComparison = `${Number(output.data?.metrics?.length || 0)} metrics`;
+    }
+    if (tool.name === "local_ai_get_idle_state") releasedRuntimeCount = Number(output.data?.released_count || 0);
     if (tool.name === "local_ai_preview_route") routeSelected = output.data?.selected === true;
     if (tool.name === "local_ai_get_security_posture") securityOverall = String(output.data?.overall || "unknown");
   }
@@ -165,6 +193,9 @@ try {
     readable_pages: readablePageCount,
     page_matches: pageMatchCount,
     route_selected: routeSelected,
+    benchmark_runs: benchmarkRunCount,
+    benchmark_comparison: benchmarkComparison,
+    released_runtimes: releasedRuntimeCount,
     security_overall: securityOverall,
     checks,
   }, null, 2)}\n`);

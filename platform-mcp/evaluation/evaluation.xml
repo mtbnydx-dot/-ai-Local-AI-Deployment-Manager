@@ -40,4 +40,32 @@
     <question>Read vLLM aggregate performance and independently divide prefix hits by prefix queries to check the reported cache hit rate. Express the result as an integer percentage followed by the percent sign.</question>
     <answer>50%</answer>
   </qa_pair>
+  <qa_pair>
+    <question>Run a three-angle research workflow on the MCP TypeScript SDK through the multi-query research tool. How many query-coverage entries does it report? Answer only the integer.</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Open the explicit public MCP documentation URL with the direct page-opening tool, without searching first. Which extraction method does the gateway report for it? Answer only the method name.</question>
+    <answer>mozilla-readability</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Search for the MCP TypeScript SDK v2, then read the first result's page through the result-reading tool. What is the text of its top-level heading? Answer only the heading text.</question>
+    <answer>MCP TypeScript SDK</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In that same result page, locate the phrase "stable" with the in-page find tool. How many matches does it report? Answer only the integer.</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>List the recorded benchmark runs for Qwen-Qwen3.8-27B-FP8. How many runs are stored for it? Answer only the integer.</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare both recorded runs for that model with the older one as the baseline. Which single launch setting differs between them? Answer only the configuration key.</question>
+    <answer>maxNumSeqs</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Read the idle GPU-memory release state across both engines. How many megabytes of GPU memory are currently released? Answer only the integer.</question>
+    <answer>18432</answer>
+  </qa_pair>
 </evaluation>

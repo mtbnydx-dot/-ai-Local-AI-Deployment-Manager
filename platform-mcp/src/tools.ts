@@ -2,7 +2,7 @@ import { McpServer, type CallToolResult, type ServerContext } from "@modelcontex
 import type { AuditLogger } from "./audit.js";
 import { audited, auditRejected } from "./audit.js";
 import { advertise, describeDataShape, type OutputSchemaDetail } from "./advertise-schema.js";
-import { classifyToolError } from "./errors.js";
+import { classifyToolError, ToolRateLimitError } from "./errors.js";
 import { formatToolPayload, MARKDOWN_OVERHEAD_CHARS } from "./format.js";
 import type { PlatformDataSource } from "./platform-client.js";
 import { cleanText } from "./redaction.js";
@@ -191,7 +191,7 @@ async function execute<T extends Record<string, unknown>>(
   if (!rate.ok) {
     await auditRejected(dependencies.auditLogger, spec.toolName, id, "rate_limited");
     const hint = spec.rateLimitHint || "Reuse the data already returned instead of requesting it again.";
-    return toolError(new RateLimitExceeded(
+    return toolError(new ToolRateLimitError(
       `The ${spec.bucket === "web" ? "web" : "local read"} rate limit for this client is exhausted. ${hint}`,
       rate.retryAfterSeconds,
     ), spec.toolName);
@@ -214,16 +214,6 @@ async function execute<T extends Record<string, unknown>>(
     };
   } catch (error) {
     return toolError(error, spec.toolName);
-  }
-}
-
-class RateLimitExceeded extends Error {
-  readonly retryAfterSeconds: number;
-
-  constructor(message: string, retryAfterSeconds: number) {
-    super(message);
-    this.name = "ToolRateLimitError";
-    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 

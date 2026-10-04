@@ -46,7 +46,7 @@ async function call<T>(client: Client, name: string, args: Record<string, unknow
 }
 
 describe("stable MCP evaluation answers", () => {
-  it("solves and verifies all ten read-only questions through MCP tools", async () => {
+  it("solves and verifies every read-only question through MCP tools", async () => {
     const mcp = createPlatformMcpApp({
       config: evaluationConfig(),
       dataSource: new FixturePlatformDataSource(),
@@ -95,6 +95,37 @@ describe("stable MCP evaluation answers", () => {
         engine: "all",
         warnings_only: true,
       });
+      // The four tools that reach the public internet, and the three that read
+      // recorded history, were advertised but never exercised here.
+      const research = await call<any>(client, "local_ai_research_web", {
+        queries: [
+          { id: "q1", query: "MCP TypeScript SDK v2 release notes" },
+          { id: "q2", query: "MCP TypeScript SDK v2 independent review" },
+          { id: "q3", query: "Model Context Protocol 2026-07-28 specification" },
+        ],
+        max_sources: 3,
+        engines: ["github"],
+      });
+      const opened = await call<any>(client, "local_ai_open_web_page", {
+        urls: ["https://modelcontextprotocol.io/specification"],
+      });
+      const readResult = await call<any>(client, "local_ai_read_search_result", {
+        search_id: webSearch.data.search_id,
+        result_ids: [webSearch.data.results[0].result_id],
+      });
+      const found = await call<any>(client, "local_ai_find_in_search_result", {
+        search_id: webSearch.data.search_id,
+        result_id: webSearch.data.results[0].result_id,
+        pattern: "stable",
+      });
+      const benchmarks = await call<any>(client, "local_ai_list_benchmarks", {
+        model: "Qwen-Qwen3.8-27B-FP8",
+      });
+      const comparison = await call<any>(client, "local_ai_compare_benchmarks", {
+        run_ids: ["bench-1", "bench-2"],
+        baseline_id: "bench-1",
+      });
+      const idle = await call<any>(client, "local_ai_get_idle_state", { engine: "all" });
 
       const localModels: any[] = [];
       let offset = 0;
@@ -122,6 +153,16 @@ describe("stable MCP evaluation answers", () => {
       assert.equal(search.data.search.auth_required, true);
       assert.equal(memory.data.free_gpu_gb, gpu.data.gpu.free_mb / 1024);
       assert.equal(route.data.selected, true);
+      // Every payload carrying external page text says so, in the place a
+      // caller looks for caveats.
+      for (const payload of [opened, readResult, found]) {
+        assert.ok(
+          payload.warnings.some((warning: string) => /untrusted external content/i.test(warning)),
+          "external page text must be labelled untrusted",
+        );
+      }
+      assert.equal(comparison.data.baseline_id, "bench-1");
+      assert.deepEqual(benchmarks.data.models, ["Qwen-Qwen3.8-27B-FP8"]);
 
       const derivedAnswers = [
         idleOnlineEngine,
@@ -134,13 +175,20 @@ describe("stable MCP evaluation answers", () => {
         warnedIdle,
         security.data.overall,
         `${hitRate}%`,
+        String(research.data.query_coverage.length),
+        opened.data.documents[0]?.extraction_method,
+        readResult.data.documents[0]?.headings[0]?.text,
+        String(found.data.match_count),
+        String(benchmarks.data.total),
+        comparison.data.differing_config.map((entry: any) => entry.key).join(","),
+        String(idle.data.released_vram_mb),
       ];
 
       const currentDir = dirname(fileURLToPath(import.meta.url));
       const xmlPath = resolve(currentDir, "..", "..", "evaluation", "evaluation.xml");
       const xml = await readFile(xmlPath, "utf8");
       const expectedAnswers = [...xml.matchAll(/<answer>([^<]+)<\/answer>/g)].map((match) => match[1]);
-      assert.equal(expectedAnswers.length, 10);
+      assert.equal(expectedAnswers.length, 17);
       assert.deepEqual(derivedAnswers, expectedAnswers);
     } finally {
       await client.close();
