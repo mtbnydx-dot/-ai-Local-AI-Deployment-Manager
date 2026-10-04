@@ -4,20 +4,35 @@ import { FileAuditLogger } from "./audit.js";
 import { createPlatformMcpApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { LocalPlatformClient } from "./platform-client.js";
-import { createPlatformMcpServer, SearchRateLimiter } from "./tools.js";
+import { registerPlatformResources } from "./resources.js";
+import { createPlatformMcpServer, RateLimiter } from "./tools.js";
 
 async function runStdio(): Promise<void> {
   const config = loadConfig({ requireApiKey: false });
   const dataSource = new LocalPlatformClient(config);
   const auditLogger = new FileAuditLogger(config.auditLogPath);
+  const searchRateLimiter = new RateLimiter(config.searchRateLimitPerMinute);
+  const localRateLimiter = new RateLimiter(config.localRateLimitPerMinute);
   const handle = serveStdio(
-    () => createPlatformMcpServer({
-      dataSource,
-      auditLogger,
-      maxResponseChars: config.maxResponseChars,
-      defaultClientId: "stdio-local-client",
-      searchRateLimiter: new SearchRateLimiter(config.searchRateLimitPerMinute),
-    }),
+    () => {
+      const server = createPlatformMcpServer({
+        dataSource,
+        auditLogger,
+        maxResponseChars: config.maxResponseChars,
+        defaultClientId: "stdio-local-client",
+        searchRateLimiter,
+        localRateLimiter,
+        outputSchemaDetail: config.outputSchemaDetail,
+        toolProfile: config.toolProfile,
+      });
+      registerPlatformResources(server, {
+        config,
+        dataSource,
+        auditLogger,
+        defaultClientId: "stdio-local-client",
+      });
+      return server;
+    },
     {
       legacy: "serve",
       onerror: (error) => console.error(`[platform-mcp] stdio protocol error: ${error.message}`),
@@ -38,7 +53,10 @@ async function runHttp(): Promise<void> {
     hostname: config.host,
     port: config.port,
   });
-  console.log(`[platform-mcp] listening on http://${config.host}:${config.port}/mcp (read-only)`);
+  console.log(
+    `[platform-mcp] listening on http://${config.host}:${config.port}/mcp `
+    + `(read-only, profile=${config.toolProfile}, output-schema=${config.outputSchemaDetail})`,
+  );
 
   let closing = false;
   const close = async () => {

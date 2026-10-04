@@ -28,7 +28,11 @@ function testConfig(): PlatformMcpConfig {
     searchGatewayApiKey: "test-search-gateway-key-0123456789abcdef",
     searchRateLimitPerMinute: 20,
     timeoutMs: 1000,
+    localRateLimitPerMinute: 120,
     maxResponseChars: 25000,
+    cacheTtlMs: 0,
+    outputSchemaDetail: "compact",
+    toolProfile: "all",
     maxUpstreamBytes: 1024 * 1024,
     auditLogPath: "D:\\AI\\audit-logs\\platform-mcp-test.jsonl",
   };
@@ -131,13 +135,13 @@ describe("dual-era MCP protocol", () => {
     });
   }
 
-  it("serves legacy 2025 clients with sixteen read-only tools", async () => {
+  it("serves legacy 2025 clients with every read-only tool", async () => {
     const client = new Client({ name: "legacy-test", version: "1.0.0" });
     await client.connect(transport());
     try {
       assert.equal(client.getProtocolEra(), "legacy");
       const listing = await client.listTools();
-      assert.equal(listing.tools.length, 16);
+      assert.equal(listing.tools.length, TOOL_NAMES.length);
       assert.deepEqual(listing.tools.map((tool) => tool.name), [...TOOL_NAMES]);
       assert.equal(listing.tools.every((tool) => tool.annotations?.readOnlyHint === true), true);
       assert.equal(listing.tools.every((tool) => tool.annotations?.destructiveHint === false), true);

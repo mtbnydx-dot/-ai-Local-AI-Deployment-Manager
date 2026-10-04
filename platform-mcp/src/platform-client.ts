@@ -1,10 +1,14 @@
 import type { PlatformMcpConfig, ManagerTarget } from "./config.js";
 import { FixedHttpClient, UpstreamRequestError, type JsonObject } from "./http-client.js";
 import { cleanText } from "./redaction.js";
+import { UpstreamCache } from "./upstream-cache.js";
 import {
   DiagnosticsOutputSchema,
   GpuStatusOutputSchema,
   LocalModelsOutputSchema,
+  BenchmarkCompareOutputSchema,
+  BenchmarkRunsOutputSchema,
+  IdleStateOutputSchema,
   JobsOutputSchema,
   MemoryEstimateOutputSchema,
   OverviewOutputSchema,
@@ -18,8 +22,11 @@ import {
   ReadSearchResultOutputSchema,
   ResearchWebOutputSchema,
   WebSearchOutputSchema,
+  type BenchmarkCompareOutput,
+  type BenchmarkRunsOutput,
   type DiagnosticsOutput,
   type EngineSelector,
+  type IdleStateOutput,
   type GpuStatusOutput,
   type JobsOutput,
   type LocalModelsOutput,
@@ -58,6 +65,14 @@ export interface PlatformDataSource {
     logLines: number;
   }): Promise<DiagnosticsOutput>;
   getSearchHealth(): Promise<SearchHealthOutput>;
+  listBenchmarks(options: {
+    engine: EngineSelector;
+    model: string;
+    limit: number;
+    offset: number;
+  }): Promise<BenchmarkRunsOutput>;
+  compareBenchmarks(options: { runIds: string[]; baselineId: string }): Promise<BenchmarkCompareOutput>;
+  getIdleState(options: { engine: EngineSelector }): Promise<IdleStateOutput>;
   searchWeb(options: {
     query: string;
     maxResults: number;
@@ -187,6 +202,15 @@ function safeMessage(error: unknown, fallback: string): string {
 
 function normalizeEngine(value: unknown, fallback: "vllm" | "llama"): "vllm" | "llama" {
   return value === "llama" ? "llama" : value === "vllm" ? "vllm" : fallback;
+}
+
+/**
+ * The bearer token is reduced to whether one was sent: two callers with
+ * different tokens must not share a cached reply, but the token itself never
+ * belongs in a map key.
+ */
+function cacheKey(shape: string, baseUrl: URL, pathname: string, bearerToken: string): string {
+  return `${shape} ${baseUrl.origin} ${pathname} ${bearerToken ? "auth" : "anon"}`;
 }
 
 function selectedManagers(config: PlatformMcpConfig, engine: EngineSelector): ManagerTarget[] {
@@ -412,6 +436,47 @@ function mapSearchEnvelope(payloadValue: unknown, fallbackQuery: string, maxResu
   };
 }
 
+/**
+ * The manager stores runs with camelCase keys; the MCP surface publishes
+ * snake_case. A run without a parseable timestamp is dropped rather than
+ * published with a made-up one.
+ */
+function mapBenchmarkRun(raw: unknown, engine: "vllm" | "llama") {
+  const run = object(raw);
+  const at = nullableString(run.at);
+  if (!at || Number.isNaN(Date.parse(at))) return null;
+  const load = object(run.load);
+  const config: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(object(run.config))) {
+    if (typeof value === "number" && Number.isFinite(value)) config[key] = value;
+    else if (typeof value === "boolean") config[key] = value;
+    else if (typeof value === "string" && value) config[key] = safeDisplayText(value, 200);
+  }
+  const metrics: Record<string, number> = {};
+  for (const [key, value] of Object.entries(object(run.metrics))) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) metrics[key] = parsed;
+  }
+  return {
+    engine,
+    id: safeDisplayText(run.id, 64) || "unknown",
+    at,
+    model: safeDisplayText(run.model, 300),
+    label: safeDisplayText(run.label, 120),
+    config,
+    load: {
+      requests: numberValue(load.requests),
+      concurrency: numberValue(load.concurrency),
+      max_tokens: numberValue(load.maxTokens),
+      stream: booleanValue(load.stream),
+      warmup_requests: numberValue(load.warmupRequests),
+      failed_requests: numberValue(load.failedRequests),
+      total_output_tokens: numberValue(load.totalOutputTokens),
+    },
+    metrics,
+  };
+}
+
 function mapRunningInstances(fleetValue: unknown, filter: EngineSelector) {
   const fleet = object(fleetValue);
   return array(fleet.instances)
@@ -606,13 +671,19 @@ function hostScope(value: unknown, publishedHosts: unknown): "loopback" | "lan" 
 export class LocalPlatformClient implements PlatformDataSource {
   private readonly config: PlatformMcpConfig;
   private readonly http: FixedHttpClient;
+  private readonly cache: UpstreamCache;
 
-  constructor(config: PlatformMcpConfig, http?: FixedHttpClient) {
+  constructor(config: PlatformMcpConfig, http?: FixedHttpClient, cache?: UpstreamCache) {
     this.config = config;
     this.http = http ?? new FixedHttpClient({
       timeoutMs: config.timeoutMs,
       maxResponseBytes: config.maxUpstreamBytes,
     });
+    this.cache = cache ?? new UpstreamCache({ ttlMs: config.cacheTtlMs });
+  }
+
+  cacheStats(): ReturnType<UpstreamCache["stats"]> {
+    return this.cache.stats();
   }
 
   private assertSearchConfigured(): void {
@@ -624,9 +695,19 @@ export class LocalPlatformClient implements PlatformDataSource {
     }
   }
 
+  /**
+   * Reads an upstream endpoint through the short-lived cache. Several tools
+   * read the same endpoint, and an agent commonly calls several of them to
+   * answer one question, so without this a single turn costs the managers
+   * three or four identical requests.
+   */
   private async safeGet(service: string, baseUrl: URL, pathname: string, bearerToken = ""): Promise<SettledJson> {
     try {
-      return { ok: true, data: await this.http.getJson(service, baseUrl, pathname, { bearerToken }) };
+      const data = await this.cache.run(
+        cacheKey("json", baseUrl, pathname, bearerToken),
+        () => this.http.getJson(service, baseUrl, pathname, { bearerToken }),
+      );
+      return { ok: true, data };
     } catch (error) {
       return { ok: false, error: safeMessage(error, `${service} is unavailable.`) };
     }
@@ -642,7 +723,11 @@ export class LocalPlatformClient implements PlatformDataSource {
 
   private async safeGetArray(service: string, baseUrl: URL, pathname: string): Promise<SettledArray> {
     try {
-      return { ok: true, data: await this.http.getJsonArray(service, baseUrl, pathname) };
+      const data = await this.cache.run(
+        cacheKey("array", baseUrl, pathname, ""),
+        () => this.http.getJsonArray(service, baseUrl, pathname),
+      );
+      return { ok: true, data };
     } catch (error) {
       return { ok: false, error: safeMessage(error, `${service} is unavailable.`) };
     }
@@ -934,6 +1019,223 @@ export class LocalPlatformClient implements PlatformDataSource {
       generated_at: new Date().toISOString(),
       warnings: error ? [error] : [],
       data: { search: mapSearch(result.ok ? result.data : {}, error) },
+    });
+  }
+
+  /**
+   * Benchmark history lives in each manager's own ledger, so this fans out and
+   * merges. A manager that predates the ledger answers 404; that lands in
+   * `warnings` with `partial` set rather than failing the call, because the
+   * other engine's history is still worth returning.
+   */
+  async listBenchmarks(options: {
+    engine: EngineSelector;
+    model: string;
+    limit: number;
+    offset: number;
+  }): Promise<BenchmarkRunsOutput> {
+    const targets = selectedManagers(this.config, options.engine);
+    const query = options.model ? `?model=${encodeURIComponent(options.model)}&limit=50` : "?limit=50";
+    const responses = await Promise.all(targets.map(async (target) => ({
+      target,
+      result: await this.safeGet(target.name, target.baseUrl, `/api/benchmarks${query}`),
+    })));
+    const warnings: string[] = [];
+    const runs: BenchmarkRunsOutput["data"]["runs"] = [];
+    const models = new Set<string>();
+    for (const { target, result } of responses) {
+      if (!result.ok) {
+        warnings.push(result.error);
+        continue;
+      }
+      for (const name of array(result.data.models)) {
+        const label = safeDisplayText(name, 300);
+        if (label) models.add(label);
+      }
+      for (const raw of array(result.data.runs)) {
+        const run = mapBenchmarkRun(raw, target.id);
+        if (run) runs.push(run);
+      }
+    }
+    runs.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
+    const page = runs.slice(options.offset, options.offset + options.limit);
+    const nextOffset = options.offset + page.length < runs.length ? options.offset + page.length : null;
+    const successes = responses.filter(({ result }) => result.ok).length;
+    return BenchmarkRunsOutputSchema.parse({
+      ok: successes > 0,
+      partial: warnings.length > 0 && successes > 0,
+      generated_at: new Date().toISOString(),
+      warnings,
+      data: {
+        engine_filter: options.engine,
+        model_filter: options.model,
+        total: runs.length,
+        count: page.length,
+        offset: options.offset,
+        has_more: nextOffset !== null,
+        next_offset: nextOffset,
+        models: Array.from(models).sort(),
+        runs: page,
+      },
+    });
+  }
+
+  /**
+   * Run IDs do not say which manager recorded them, so both are asked and the
+   * first manager that knows all of the requested runs answers. Comparing
+   * across engines is deliberately not merged here: the two engines' metrics
+   * come from different load generators and are not comparable number for
+   * number.
+   */
+  async compareBenchmarks(options: { runIds: string[]; baselineId: string }): Promise<BenchmarkCompareOutput> {
+    const targets = selectedManagers(this.config, "all");
+    const ids = options.runIds.join(",");
+    const baseline = options.baselineId ? `&baselineId=${encodeURIComponent(options.baselineId)}` : "";
+    const responses = await Promise.all(targets.map(async (target) => ({
+      target,
+      result: await this.safeGet(
+        target.name,
+        target.baseUrl,
+        `/api/benchmarks/compare?ids=${encodeURIComponent(ids)}${baseline}`,
+      ),
+    })));
+    const warnings: string[] = [];
+    let best: { target: ManagerTarget; data: Obj; found: number } | null = null;
+    for (const { target, result } of responses) {
+      if (!result.ok) {
+        warnings.push(result.error);
+        continue;
+      }
+      const found = array(result.data.runs).length;
+      if (!best || found > best.found) best = { target, data: result.data, found };
+    }
+    if (!best || !best.found) {
+      return BenchmarkCompareOutputSchema.parse({
+        ok: false,
+        partial: warnings.length > 0,
+        generated_at: new Date().toISOString(),
+        warnings: warnings.length
+          ? warnings
+          : ["None of the requested run IDs exist. List runs again to get current IDs."],
+        data: {
+          baseline_id: "",
+          missing_run_ids: options.runIds,
+          runs: [],
+          differing_config: [],
+          metrics: [],
+        },
+      });
+    }
+    const runs = array(best.data.runs)
+      .map((raw) => mapBenchmarkRun(raw, best!.target.id))
+      .filter((run): run is NonNullable<typeof run> => run !== null);
+    const present = new Set(runs.map((run) => run.id));
+    const missing = options.runIds.filter((id) => !present.has(id));
+    const configKeys = array(best.data.configKeys).map((key) => stringValue(key)).filter(Boolean);
+    return BenchmarkCompareOutputSchema.parse({
+      ok: true,
+      partial: warnings.length > 0 || missing.length > 0,
+      generated_at: new Date().toISOString(),
+      warnings: missing.length
+        ? [...warnings, `${missing.length} requested run ID(s) were not found and are listed in missing_run_ids.`]
+        : warnings,
+      data: {
+        baseline_id: stringValue(best.data.baselineId),
+        missing_run_ids: missing,
+        runs,
+        differing_config: configKeys.map((key) => ({
+          key,
+          values: runs.map((run) => ({
+            run_id: run.id,
+            value: run.config[key] ?? null,
+          })),
+        })),
+        metrics: array(best.data.metrics).map((raw) => {
+          const metric = object(raw);
+          return {
+            key: stringValue(metric.key),
+            better: stringValue(metric.better) === "lower" ? "lower" as const : "higher" as const,
+            baseline: numberValue(metric.baseline),
+            values: array(metric.values).map((valueRaw) => {
+              const entry = object(valueRaw);
+              return {
+                run_id: stringValue(entry.id),
+                value: numberValue(entry.value),
+                delta_percent: round(entry.deltaPercent, 2),
+                improved: typeof entry.improved === "boolean" ? entry.improved : null,
+              };
+            }),
+          };
+        }),
+      },
+    });
+  }
+
+  /**
+   * Reports the idle-release policy and which runtimes it has already put to
+   * sleep. Read-only by design: restoring a sleeping runtime starts a
+   * container and competes for GPU memory, so it stays a console action.
+   */
+  async getIdleState(options: { engine: EngineSelector }): Promise<IdleStateOutput> {
+    const targets = selectedManagers(this.config, options.engine);
+    const responses = await Promise.all(targets.map(async (target) => ({
+      target,
+      result: await this.safeGet(target.name, target.baseUrl, "/api/idle-unload"),
+    })));
+    const warnings: string[] = [];
+    const engines: IdleStateOutput["data"]["engines"] = [];
+    const released: IdleStateOutput["data"]["released"] = [];
+    for (const { target, result } of responses) {
+      if (!result.ok) {
+        warnings.push(result.error);
+        engines.push({
+          engine: target.id,
+          enabled: false,
+          idle_minutes: null,
+          min_vram_mb: null,
+          excluded_models: [],
+          error: result.error,
+        });
+        continue;
+      }
+      const settings = object(result.data.settings);
+      engines.push({
+        engine: target.id,
+        enabled: booleanValue(settings.enabled),
+        idle_minutes: nullableNumber(settings.idleMinutes),
+        min_vram_mb: nullableNumber(settings.minVramMb),
+        excluded_models: array(settings.excludeModels)
+          .map((model) => safeDisplayText(model, 300))
+          .filter(Boolean),
+        error: null,
+      });
+      for (const raw of array(result.data.sleeping)) {
+        const item = object(raw);
+        released.push({
+          engine: target.id,
+          id: safeDisplayText(item.id, 160) || "unknown",
+          model: safeDisplayText(item.model, 300),
+          released_at: nullableString(item.sleptAt),
+          released_vram_mb: nullableNumber(item.vramMb),
+          idle_minutes: round(item.idleMinutes, 1),
+          restorable: booleanValue(item.hasConfig),
+          wake_error: nullableString(safeDisplayText(item.wakeError, 300)),
+        });
+      }
+    }
+    const successes = responses.filter(({ result }) => result.ok).length;
+    return IdleStateOutputSchema.parse({
+      ok: successes > 0,
+      partial: warnings.length > 0 && successes > 0,
+      generated_at: new Date().toISOString(),
+      warnings,
+      data: {
+        engine_filter: options.engine,
+        engines,
+        released_count: released.length,
+        released_vram_mb: released.reduce((total, item) => total + (item.released_vram_mb || 0), 0),
+        released,
+      },
     });
   }
 

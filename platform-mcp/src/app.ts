@@ -5,8 +5,9 @@ import type { PlatformMcpConfig } from "./config.js";
 import type { AuditLogger } from "./audit.js";
 import type { PlatformDataSource } from "./platform-client.js";
 import { cleanText } from "./redaction.js";
-import { SERVER_NAME, SERVER_VERSION, TOOL_NAMES } from "./constants.js";
-import { createPlatformMcpServer, SearchRateLimiter } from "./tools.js";
+import { SERVER_NAME, SERVER_VERSION, toolsForProfile } from "./constants.js";
+import { registerPlatformResources } from "./resources.js";
+import { createPlatformMcpServer, RateLimiter } from "./tools.js";
 
 export type PlatformMcpAppDependencies = {
   config: PlatformMcpConfig;
@@ -38,15 +39,30 @@ export function createPlatformMcpApp(dependencies: PlatformMcpAppDependencies) {
     allowedHosts: allowedNames,
     allowedOrigins: allowedNames,
   });
-  const searchRateLimiter = new SearchRateLimiter(config.searchRateLimitPerMinute);
+  // The limiters are created once and shared by every per-request server, so
+  // a client cannot reset its own budget by reconnecting.
+  const searchRateLimiter = new RateLimiter(config.searchRateLimitPerMinute);
+  const localRateLimiter = new RateLimiter(config.localRateLimitPerMinute);
   const mcpHandler = createMcpHandler(
-    () => createPlatformMcpServer({
-      dataSource: dependencies.dataSource,
-      auditLogger: dependencies.auditLogger,
-      maxResponseChars: config.maxResponseChars,
-      defaultClientId: "http-local-client",
-      searchRateLimiter,
-    }),
+    () => {
+      const server = createPlatformMcpServer({
+        dataSource: dependencies.dataSource,
+        auditLogger: dependencies.auditLogger,
+        maxResponseChars: config.maxResponseChars,
+        defaultClientId: "http-local-client",
+        searchRateLimiter,
+        localRateLimiter,
+        outputSchemaDetail: config.outputSchemaDetail,
+        toolProfile: config.toolProfile,
+      });
+      registerPlatformResources(server, {
+        config,
+        dataSource: dependencies.dataSource,
+        auditLogger: dependencies.auditLogger,
+        defaultClientId: "http-local-client",
+      });
+      return server;
+    },
     {
       legacy: "stateless",
       responseMode: "auto",
@@ -84,12 +100,19 @@ export function createPlatformMcpApp(dependencies: PlatformMcpAppDependencies) {
     policy: {
       read_only: true,
       arbitrary_urls: false,
-      web_search: true,
+      web_search: toolsForProfile(config.toolProfile).includes("local_ai_search_web"),
       search_rate_limit_per_minute: config.searchRateLimitPerMinute,
+      local_rate_limit_per_minute: config.localRateLimitPerMinute,
+      max_response_chars: config.maxResponseChars,
+      upstream_cache_ttl_ms: config.cacheTtlMs,
+      output_schema_detail: config.outputSchemaDetail,
+      tool_profile: config.toolProfile,
       shell_access: false,
       file_access: false,
     },
-    tools: TOOL_NAMES,
+    resources: ["localai://platform/policy", "localai://platform/overview", "localai://platform/running-models"],
+    prompts: ["local_ai_capacity_check", "local_ai_health_review", "local_ai_config_regression"],
+    tools: toolsForProfile(config.toolProfile),
   }));
 
   app.use("/mcp", async (context, next) => {

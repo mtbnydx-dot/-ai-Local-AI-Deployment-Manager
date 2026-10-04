@@ -1,8 +1,12 @@
 import * as z from "zod/v4";
 
-export const ResponseFormatSchema = z.enum(["markdown", "json"])
+export const ResponseFormatSchema = z.enum(["markdown", "json", "structured"])
   .default("markdown")
-  .describe("Response text format. Structured content is returned in both modes.");
+  .describe(
+    "Text-channel format. 'markdown' is a titled JSON block, 'json' is bare JSON, "
+    + "and 'structured' sends a one-line pointer so the payload is delivered only once, "
+    + "through structuredContent. Use 'structured' when the client reads structuredContent.",
+  );
 
 export const EngineSelectorSchema = z.enum(["all", "vllm", "llama"])
   .default("all")
@@ -253,6 +257,31 @@ export const MemoryEstimateInputSchema = z.object({
   }
 });
 
+export const BenchmarkRunsInputSchema = z.object({
+  engine: EngineSelectorSchema,
+  model: z.string().trim().max(300).default("")
+    .describe("Optional exact served model ID. Leave empty for every recorded model."),
+  limit: z.number().int().min(1).max(50).default(20)
+    .describe("Maximum recorded runs to return, newest first, from 1 through 50."),
+  offset: z.number().int().min(0).max(100000).default(0)
+    .describe("Number of matching runs to skip."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const BenchmarkCompareInputSchema = z.object({
+  run_ids: z.array(z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_.:-]+$/))
+    .min(2).max(8)
+    .describe("Two through eight run IDs from local_ai_list_benchmarks, in the order to compare them."),
+  baseline_id: z.string().trim().max(64).regex(/^[A-Za-z0-9_.:-]*$/).default("")
+    .describe("Run to measure the others against. Defaults to the first ID supplied."),
+  response_format: ResponseFormatSchema,
+}).strict();
+
+export const IdleStateInputSchema = z.object({
+  engine: EngineSelectorSchema,
+  response_format: ResponseFormatSchema,
+}).strict();
+
 export const SecurityPostureInputSchema = z.object({
   engine: EngineSelectorSchema,
   warnings_only: z.boolean().default(false)
@@ -369,6 +398,11 @@ const EnvelopeFields = {
   partial: z.boolean(),
   generated_at: z.string(),
   warnings: z.array(z.string()),
+  // Set when the response budget shortened an array or a long string. The
+  // matching `warnings` entry names the field and what was left out, and any
+  // pagination counters next to a shortened array still describe what was
+  // actually returned.
+  truncated: z.boolean().optional(),
 };
 
 export const OverviewOutputSchema = z.object({
@@ -756,6 +790,102 @@ const SecurityFindingSchema = z.object({
   title: z.string(),
 }).strict();
 
+const BenchmarkRunSchema = z.object({
+  engine: z.enum(["vllm", "llama"]),
+  id: z.string(),
+  at: z.string(),
+  model: z.string(),
+  label: z.string(),
+  // Only the launch settings that move throughput or memory are recorded, and
+  // only the ones this run actually set.
+  config: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  load: z.object({
+    requests: z.number(),
+    concurrency: z.number(),
+    max_tokens: z.number(),
+    stream: z.boolean(),
+    warmup_requests: z.number(),
+    failed_requests: z.number(),
+    total_output_tokens: z.number(),
+  }).strict(),
+  metrics: z.record(z.string(), z.number()),
+}).strict();
+
+export const BenchmarkRunsOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    engine_filter: z.enum(["all", "vllm", "llama"]),
+    model_filter: z.string(),
+    total: z.number().int().nonnegative(),
+    count: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative(),
+    has_more: z.boolean(),
+    next_offset: z.number().int().nonnegative().nullable(),
+    models: z.array(z.string()),
+    runs: z.array(BenchmarkRunSchema),
+  }).strict(),
+}).strict();
+
+export const BenchmarkCompareOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    baseline_id: z.string(),
+    missing_run_ids: z.array(z.string()),
+    runs: z.array(BenchmarkRunSchema),
+    // Only the settings the compared runs disagree on, so the caller sees the
+    // variable rather than the whole launch configuration.
+    differing_config: z.array(z.object({
+      key: z.string(),
+      values: z.array(z.object({
+        run_id: z.string(),
+        value: z.union([z.string(), z.number(), z.boolean()]).nullable(),
+      }).strict()),
+    }).strict()),
+    metrics: z.array(z.object({
+      key: z.string(),
+      better: z.enum(["higher", "lower"]),
+      baseline: z.number(),
+      values: z.array(z.object({
+        run_id: z.string(),
+        value: z.number(),
+        delta_percent: z.number().nullable(),
+        improved: z.boolean().nullable(),
+      }).strict()),
+    }).strict()),
+  }).strict(),
+}).strict();
+
+const IdleReleasedRuntimeSchema = z.object({
+  engine: z.enum(["vllm", "llama"]),
+  id: z.string(),
+  model: z.string(),
+  released_at: z.string().nullable(),
+  released_vram_mb: z.number().nullable(),
+  idle_minutes: z.number().nullable(),
+  // False when the launch configuration could not be reconstructed, which is
+  // the one case where the console cannot restore the runtime in one step.
+  restorable: z.boolean(),
+  wake_error: z.string().nullable(),
+}).strict();
+
+export const IdleStateOutputSchema = z.object({
+  ...EnvelopeFields,
+  data: z.object({
+    engine_filter: z.enum(["all", "vllm", "llama"]),
+    engines: z.array(z.object({
+      engine: z.enum(["vllm", "llama"]),
+      enabled: z.boolean(),
+      idle_minutes: z.number().nullable(),
+      min_vram_mb: z.number().nullable(),
+      excluded_models: z.array(z.string()),
+      error: z.string().nullable(),
+    }).strict()),
+    released_count: z.number().int().nonnegative(),
+    released_vram_mb: z.number(),
+    released: z.array(IdleReleasedRuntimeSchema),
+  }).strict(),
+}).strict();
+
 export const SecurityPostureOutputSchema = z.object({
   ...EnvelopeFields,
   data: z.object({
@@ -806,3 +936,6 @@ export type JobsOutput = z.infer<typeof JobsOutputSchema>;
 export type RoutePreviewOutput = z.infer<typeof RoutePreviewOutputSchema>;
 export type MemoryEstimateOutput = z.infer<typeof MemoryEstimateOutputSchema>;
 export type SecurityPostureOutput = z.infer<typeof SecurityPostureOutputSchema>;
+export type BenchmarkRunsOutput = z.infer<typeof BenchmarkRunsOutputSchema>;
+export type BenchmarkCompareOutput = z.infer<typeof BenchmarkCompareOutputSchema>;
+export type IdleStateOutput = z.infer<typeof IdleStateOutputSchema>;

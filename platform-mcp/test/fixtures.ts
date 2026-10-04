@@ -1,8 +1,11 @@
 import type { PlatformDataSource } from "../src/platform-client.js";
 import type {
+  BenchmarkCompareOutput,
+  BenchmarkRunsOutput,
   DiagnosticsOutput,
   EngineSelector,
   GpuStatusOutput,
+  IdleStateOutput,
   JobsOutput,
   LocalModelsOutput,
   MemoryEstimateOutput,
@@ -126,6 +129,38 @@ const inventory: LocalModelsOutput["data"]["models"] = [{
   issues: [],
 }];
 
+export const benchmarkRuns: BenchmarkRunsOutput["data"]["runs"] = [{
+  engine: "vllm",
+  id: "bench-2",
+  at: "2026-08-14T18:20:00.000Z",
+  model: "Qwen-Qwen3.8-27B-FP8",
+  label: "max-num-seqs 64",
+  config: { engine: "vllm", maxModelLen: 262144, maxNumSeqs: 64, kvCacheDtype: "fp8", gpuMemoryUtilization: 0.9 },
+  load: {
+    requests: 32, concurrency: 8, max_tokens: 256, stream: true,
+    warmup_requests: 2, failed_requests: 0, total_output_tokens: 8192,
+  },
+  metrics: {
+    wallTokensPerSecond: 1540.5, avgTokensPerSecond: 196.4, avgTtftMs: 182,
+    p95TtftMs: 240, avgMs: 1304, p50Ms: 1260, p95Ms: 1580,
+  },
+}, {
+  engine: "vllm",
+  id: "bench-1",
+  at: "2026-08-14T16:40:00.000Z",
+  model: "Qwen-Qwen3.8-27B-FP8",
+  label: "max-num-seqs 16",
+  config: { engine: "vllm", maxModelLen: 262144, maxNumSeqs: 16, kvCacheDtype: "fp8", gpuMemoryUtilization: 0.9 },
+  load: {
+    requests: 32, concurrency: 8, max_tokens: 256, stream: true,
+    warmup_requests: 2, failed_requests: 0, total_output_tokens: 8192,
+  },
+  metrics: {
+    wallTokensPerSecond: 1232.4, avgTokensPerSecond: 205.6, avgTtftMs: 164,
+    p95TtftMs: 212, avgMs: 1245, p50Ms: 1210, p95Ms: 1490,
+  },
+}];
+
 export class FixturePlatformDataSource implements PlatformDataSource {
   async getOverview(): Promise<OverviewOutput> {
     return {
@@ -156,6 +191,122 @@ export class FixturePlatformDataSource implements PlatformDataSource {
         gpu: fixtureGpu,
         gateway_base: "http://127.0.0.1:5176/gateway/auto/openai/v1",
         search: { online: true, healthy: true, mode: "hybrid", auth_required: true, max_results: 10, error: null },
+      },
+    };
+  }
+
+  async listBenchmarks(options: {
+    engine: EngineSelector;
+    model: string;
+    limit: number;
+    offset: number;
+  }): Promise<BenchmarkRunsOutput> {
+    const matching = benchmarkRuns.filter((run) =>
+      (options.engine === "all" || run.engine === options.engine)
+      && (!options.model || run.model === options.model));
+    const page = matching.slice(options.offset, options.offset + options.limit);
+    const nextOffset = options.offset + page.length < matching.length ? options.offset + page.length : null;
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: [],
+      data: {
+        engine_filter: options.engine,
+        model_filter: options.model,
+        total: matching.length,
+        count: page.length,
+        offset: options.offset,
+        has_more: nextOffset !== null,
+        next_offset: nextOffset,
+        models: Array.from(new Set(benchmarkRuns.map((run) => run.model))).sort(),
+        runs: page,
+      },
+    };
+  }
+
+  async compareBenchmarks(options: { runIds: string[]; baselineId: string }): Promise<BenchmarkCompareOutput> {
+    const runs = options.runIds
+      .map((id) => benchmarkRuns.find((run) => run.id === id))
+      .filter((run): run is BenchmarkRunsOutput["data"]["runs"][number] => run !== undefined);
+    const missing = options.runIds.filter((id) => !runs.some((run) => run.id === id));
+    const baseline = runs.find((run) => run.id === options.baselineId) || runs[0];
+    if (!baseline) {
+      return {
+        ok: false,
+        partial: false,
+        generated_at: FIXED_AT,
+        warnings: ["None of the requested run IDs exist. List runs again to get current IDs."],
+        data: { baseline_id: "", missing_run_ids: options.runIds, runs: [], differing_config: [], metrics: [] },
+      };
+    }
+    const keys = Array.from(new Set(runs.flatMap((run) => Object.keys(run.config))))
+      .filter((key) => new Set(runs.map((run) => String(run.config[key]))).size > 1);
+    const directions: Record<string, "higher" | "lower"> = {
+      wallTokensPerSecond: "higher", avgTokensPerSecond: "higher", avgTtftMs: "lower",
+      p95TtftMs: "lower", avgMs: "lower", p50Ms: "lower", p95Ms: "lower",
+    };
+    return {
+      ok: true,
+      partial: missing.length > 0,
+      generated_at: FIXED_AT,
+      warnings: missing.length
+        ? [`${missing.length} requested run ID(s) were not found and are listed in missing_run_ids.`]
+        : [],
+      data: {
+        baseline_id: baseline.id,
+        missing_run_ids: missing,
+        runs,
+        differing_config: keys.map((key) => ({
+          key,
+          values: runs.map((run) => ({ run_id: run.id, value: run.config[key] ?? null })),
+        })),
+        metrics: Object.entries(directions).map(([key, better]) => {
+          const baseValue = baseline.metrics[key] ?? 0;
+          return {
+            key,
+            better,
+            baseline: baseValue,
+            values: runs.map((run) => {
+              const value = run.metrics[key] ?? 0;
+              const deltaPercent = baseValue > 0 ? Number((((value - baseValue) / baseValue) * 100).toFixed(2)) : null;
+              const improved = deltaPercent === null || run.id === baseline.id
+                ? null
+                : better === "higher" ? deltaPercent > 0 : deltaPercent < 0;
+              return { run_id: run.id, value, delta_percent: deltaPercent, improved };
+            }),
+          };
+        }),
+      },
+    };
+  }
+
+  async getIdleState(options: { engine: EngineSelector }): Promise<IdleStateOutput> {
+    const engines: IdleStateOutput["data"]["engines"] = [
+      { engine: "vllm" as const, enabled: true, idle_minutes: 30, min_vram_mb: 4096, excluded_models: [], error: null },
+      { engine: "llama" as const, enabled: false, idle_minutes: 30, min_vram_mb: 0, excluded_models: [], error: null },
+    ].filter((entry) => options.engine === "all" || entry.engine === options.engine);
+    const released: IdleStateOutput["data"]["released"] = [{
+      engine: "llama" as const,
+      id: "primary",
+      model: "Qwen-Qwen3.8-27B",
+      released_at: "2026-08-14T22:10:00.000Z",
+      released_vram_mb: 18432,
+      idle_minutes: 46.5,
+      restorable: true,
+      wake_error: null,
+    }].filter((entry) => options.engine === "all" || entry.engine === options.engine);
+    return {
+      ok: true,
+      partial: false,
+      generated_at: FIXED_AT,
+      warnings: [],
+      data: {
+        engine_filter: options.engine,
+        engines,
+        released_count: released.length,
+        released_vram_mb: released.reduce((total, entry) => total + (entry.released_vram_mb || 0), 0),
+        released,
       },
     };
   }

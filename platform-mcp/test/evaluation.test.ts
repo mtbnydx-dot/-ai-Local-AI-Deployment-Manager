@@ -29,7 +29,11 @@ function evaluationConfig(): PlatformMcpConfig {
     searchGatewayApiKey: "evaluation-search-gateway-key-0123456789",
     searchRateLimitPerMinute: 20,
     timeoutMs: 1000,
+    localRateLimitPerMinute: 120,
     maxResponseChars: 25000,
+    cacheTtlMs: 0,
+    outputSchemaDetail: "compact",
+    toolProfile: "all",
     maxUpstreamBytes: 1024 * 1024,
     auditLogPath: "D:\\AI\\audit-logs\\platform-mcp-evaluation.jsonl",
   };

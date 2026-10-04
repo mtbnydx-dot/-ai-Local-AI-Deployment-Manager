@@ -2,15 +2,28 @@ import { SERVER_VERSION } from "./constants.js";
 
 export type JsonObject = Record<string, unknown>;
 
+/**
+ * Why an upstream call failed, recorded at the throw site so callers classify
+ * on a discriminator instead of matching on the message text.
+ */
+export type UpstreamFailureReason =
+  | "bad_shape"
+  | "http_status"
+  | "timeout"
+  | "too_large"
+  | "unreachable";
+
 export class UpstreamRequestError extends Error {
   readonly service: string;
   readonly status: number;
+  readonly reason: UpstreamFailureReason;
 
-  constructor(service: string, message: string, status = 0) {
+  constructor(service: string, message: string, status = 0, reason: UpstreamFailureReason = "http_status") {
     super(message);
     this.name = "UpstreamRequestError";
     this.service = service;
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -45,7 +58,7 @@ export class FixedHttpClient {
   ): Promise<JsonObject> {
     const parsed = await this.requestJsonValue(service, baseUrl, relativePath, "GET", undefined, options);
     if (Array.isArray(parsed)) {
-      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`);
+      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`, 0, "bad_shape");
     }
     return parsed;
   }
@@ -58,7 +71,7 @@ export class FixedHttpClient {
   ): Promise<unknown[]> {
     const parsed = await this.requestJsonValue(service, baseUrl, relativePath, "GET", undefined, options);
     if (!Array.isArray(parsed)) {
-      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`);
+      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`, 0, "bad_shape");
     }
     return parsed;
   }
@@ -72,7 +85,7 @@ export class FixedHttpClient {
   ): Promise<JsonObject> {
     const parsed = await this.requestJsonValue(service, baseUrl, relativePath, "POST", body, options);
     if (Array.isArray(parsed)) {
-      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`);
+      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`, 0, "bad_shape");
     }
     return parsed;
   }
@@ -112,20 +125,34 @@ export class FixedHttpClient {
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
-      const reason = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
-        ? `timed out after ${timeoutMs} ms`
-        : "could not be reached";
-      throw new UpstreamRequestError(service, `${service} ${reason}.`);
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      const reason = timedOut ? `timed out after ${timeoutMs} ms` : "could not be reached";
+      throw new UpstreamRequestError(
+        service,
+        `${service} ${reason}.`,
+        0,
+        timedOut ? "timeout" : "unreachable",
+      );
     }
 
     const declaredLength = Number(response.headers.get("content-length") || 0);
     if (declaredLength > maxResponseBytes) {
-      throw new UpstreamRequestError(service, `${service} returned more data than the configured safety limit.`, response.status);
+      throw new UpstreamRequestError(
+        service,
+        `${service} returned more data than the configured safety limit.`,
+        response.status,
+        "too_large",
+      );
     }
 
     const text = await response.text();
     if (Buffer.byteLength(text, "utf8") > maxResponseBytes) {
-      throw new UpstreamRequestError(service, `${service} returned more data than the configured safety limit.`, response.status);
+      throw new UpstreamRequestError(
+        service,
+        `${service} returned more data than the configured safety limit.`,
+        response.status,
+        "too_large",
+      );
     }
     if (!response.ok) {
       throw new UpstreamRequestError(service, `${service} returned HTTP ${response.status}.`, response.status);
@@ -135,10 +162,10 @@ export class FixedHttpClient {
     try {
       parsed = JSON.parse(text);
     } catch {
-      throw new UpstreamRequestError(service, `${service} returned invalid JSON.`, response.status);
+      throw new UpstreamRequestError(service, `${service} returned invalid JSON.`, response.status, "bad_shape");
     }
     if (!parsed || typeof parsed !== "object") {
-      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`, response.status);
+      throw new UpstreamRequestError(service, `${service} returned an unexpected response shape.`, response.status, "bad_shape");
     }
     return parsed as JsonObject | unknown[];
   }

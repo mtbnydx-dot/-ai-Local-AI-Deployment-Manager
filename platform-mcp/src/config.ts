@@ -1,4 +1,6 @@
 import path from "node:path";
+import type { OutputSchemaDetail } from "./advertise-schema.js";
+import { TOOL_PROFILE_NAMES, type ToolProfile } from "./constants.js";
 
 export type ManagerTarget = {
   id: "vllm" | "llama";
@@ -18,9 +20,17 @@ export type PlatformMcpConfig = {
   searchGatewayUrl: URL;
   searchGatewayApiKey: string;
   searchRateLimitPerMinute: number;
+  /** Ceiling for the local read-only tools, which share a bucket of their own. */
+  localRateLimitPerMinute: number;
   timeoutMs: number;
   maxResponseChars: number;
   maxUpstreamBytes: number;
+  /** Lifetime of a cached upstream GET. 0 disables caching and keeps only coalescing. */
+  cacheTtlMs: number;
+  /** How much of each output schema `tools/list` advertises. */
+  outputSchemaDetail: OutputSchemaDetail;
+  /** Which group of tools to register. */
+  toolProfile: ToolProfile;
   auditLogPath: string;
 };
 
@@ -142,6 +152,17 @@ export function loadConfig(options: LoadConfigOptions = {}): PlatformMcpConfig {
       120,
       "PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE",
     ),
+    // Local reads are cheap but not free: `local_ai_get_overview` alone fans
+    // out to three manager endpoints, so an unbounded caller can saturate a
+    // manager that is busy loading a model. The ceiling is generous enough
+    // that ordinary multi-tool reasoning never reaches it.
+    localRateLimitPerMinute: boundedInteger(
+      env.PLATFORM_MCP_LOCAL_RATE_LIMIT_PER_MINUTE,
+      120,
+      10,
+      1200,
+      "PLATFORM_MCP_LOCAL_RATE_LIMIT_PER_MINUTE",
+    ),
     timeoutMs: boundedInteger(env.PLATFORM_MCP_TIMEOUT_MS, 7000, 250, 30000, "PLATFORM_MCP_TIMEOUT_MS"),
     maxResponseChars: boundedInteger(
       env.PLATFORM_MCP_MAX_RESPONSE_CHARS,
@@ -157,6 +178,21 @@ export function loadConfig(options: LoadConfigOptions = {}): PlatformMcpConfig {
       8 * 1024 * 1024,
       "PLATFORM_MCP_MAX_UPSTREAM_BYTES",
     ),
+    cacheTtlMs: boundedInteger(env.PLATFORM_MCP_CACHE_TTL_MS, 2000, 0, 30000, "PLATFORM_MCP_CACHE_TTL_MS"),
+    outputSchemaDetail: outputSchemaDetail(env.PLATFORM_MCP_OUTPUT_SCHEMA),
+    toolProfile: toolProfile(env.PLATFORM_MCP_TOOL_PROFILE),
     auditLogPath,
   };
+}
+
+function outputSchemaDetail(value: string | undefined): OutputSchemaDetail {
+  const parsed = String(value || "compact").trim().toLowerCase();
+  if (parsed === "compact" || parsed === "full") return parsed;
+  throw new Error("PLATFORM_MCP_OUTPUT_SCHEMA must be compact or full.");
+}
+
+function toolProfile(value: string | undefined): ToolProfile {
+  const parsed = String(value || "all").trim().toLowerCase();
+  if ((TOOL_PROFILE_NAMES as readonly string[]).includes(parsed)) return parsed as ToolProfile;
+  throw new Error(`PLATFORM_MCP_TOOL_PROFILE must be one of ${TOOL_PROFILE_NAMES.join(", ")}.`);
 }
