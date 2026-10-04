@@ -48,19 +48,40 @@ type JsonSchema = Record<string, unknown>;
  */
 export function advertise<T extends StandardSchemaV1>(schema: T, detail: OutputSchemaDetail): T {
   if (detail === "full") return schema;
+  const memoized = wrapped.get(schema);
+  if (memoized) return memoized as T;
   const standard = (schema as unknown as { "~standard": StandardJsonProps })["~standard"];
-  const wrapped = {
+  const props = {
     ...standard,
+    // The pruned document is the same every time, and the server is rebuilt
+    // per request in stateless mode, so neither conversion is repeated.
     jsonSchema: {
-      input: (options: { target: string }) => compactJsonSchema(standard.jsonSchema.input(options)),
-      output: (options: { target: string }) => compactJsonSchema(standard.jsonSchema.output(options)),
+      input: memoize((options: { target: string }) => compactJsonSchema(standard.jsonSchema.input(options))),
+      output: memoize((options: { target: string }) => compactJsonSchema(standard.jsonSchema.output(options))),
     },
   } as StandardJsonProps;
   // Only the advertised document changes; `validate` is the original.
-  return new Proxy(schema as object, {
+  const proxy = new Proxy(schema as object, {
     get: (target, property, receiver) =>
-      property === "~standard" ? wrapped : Reflect.get(target, property, receiver),
+      property === "~standard" ? props : Reflect.get(target, property, receiver),
   }) as T;
+  wrapped.set(schema, proxy);
+  return proxy;
+}
+
+/** One wrapper per schema, so repeated registrations reuse it. */
+const wrapped = new WeakMap<StandardSchemaV1, StandardSchemaV1>();
+const shapes = new WeakMap<StandardSchemaV1, string>();
+
+function memoize<R>(convert: (options: { target: string }) => R): (options: { target: string }) => R {
+  const byTarget = new Map<string, R>();
+  return (options) => {
+    const hit = byTarget.get(options.target);
+    if (hit !== undefined) return hit;
+    const value = convert(options);
+    byTarget.set(options.target, value);
+    return value;
+  };
 }
 
 /**
@@ -70,12 +91,15 @@ export function advertise<T extends StandardSchemaV1>(schema: T, detail: OutputS
  * thousand.
  */
 export function describeDataShape(schema: StandardSchemaV1): string {
+  const memoized = shapes.get(schema);
+  if (memoized !== undefined) return memoized;
   const standard = (schema as unknown as { "~standard": StandardJsonProps })["~standard"];
   const json = standard.jsonSchema.output({ target: "draft-2020-12" });
   const data = asRecord(asRecord(json.properties)?.data);
   const keys = Object.keys(asRecord(data?.properties) ?? {});
-  if (!keys.length) return "";
-  return `Returns data={${keys.join(",")}}.`;
+  const shape = keys.length ? `Returns data={${keys.join(",")}}.` : "";
+  shapes.set(schema, shape);
+  return shape;
 }
 
 function compactJsonSchema(schema: JsonSchema): JsonSchema {

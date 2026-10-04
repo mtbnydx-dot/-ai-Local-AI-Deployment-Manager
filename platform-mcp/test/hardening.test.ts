@@ -320,6 +320,17 @@ describe("advertised output schemas", () => {
     assert.equal(advertise(OverviewOutputSchema, "full"), OverviewOutputSchema);
   });
 
+  it("reuses one wrapper per schema, since the server is rebuilt per request", () => {
+    assert.equal(advertise(JobsOutputSchema, "compact"), advertise(JobsOutputSchema, "compact"));
+    const first = (advertise(JobsOutputSchema, "compact") as never as {
+      "~standard": { jsonSchema: { output: (o: unknown) => unknown } };
+    })["~standard"].jsonSchema.output(options);
+    const second = (advertise(JobsOutputSchema, "compact") as never as {
+      "~standard": { jsonSchema: { output: (o: unknown) => unknown } };
+    })["~standard"].jsonSchema.output(options);
+    assert.equal(first, second, "the pruned document is converted once, not per request");
+  });
+
   it("summarizes the payload shape in one line for the description", () => {
     assert.equal(
       describeDataShape(OverviewOutputSchema),
