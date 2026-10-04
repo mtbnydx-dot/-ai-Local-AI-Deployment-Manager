@@ -2,13 +2,18 @@
 
 const GIB = 1024 ** 3;
 
+// `kvHeads` is the modal modern layout (GQA with 8 KV heads). `heads` is the
+// multi-head-attention upper bound used when nothing better is known: a config
+// that omits `num_key_value_heads` is MHA by Hugging Face convention, so an
+// unknown model can legitimately need `heads / kvHeads` times more KV cache.
+// Estimates built from this table therefore report a range, not a point value.
 const DEFAULT_ARCH_BUCKETS = [
-  { maxParamsB: 2, layers: 24, kvHeads: 8, headDim: 128, label: "small model heuristic" },
-  { maxParamsB: 8, layers: 32, kvHeads: 8, headDim: 128, label: "7B/8B heuristic" },
-  { maxParamsB: 16, layers: 40, kvHeads: 8, headDim: 128, label: "14B heuristic" },
-  { maxParamsB: 34, layers: 48, kvHeads: 8, headDim: 128, label: "27B/32B heuristic" },
-  { maxParamsB: 80, layers: 80, kvHeads: 8, headDim: 128, label: "70B heuristic" },
-  { maxParamsB: Infinity, layers: 96, kvHeads: 8, headDim: 128, label: "large model heuristic" },
+  { maxParamsB: 2, layers: 24, kvHeads: 8, heads: 16, headDim: 128, label: "small model heuristic" },
+  { maxParamsB: 8, layers: 32, kvHeads: 8, heads: 32, headDim: 128, label: "7B/8B heuristic" },
+  { maxParamsB: 16, layers: 40, kvHeads: 8, heads: 40, headDim: 128, label: "14B heuristic" },
+  { maxParamsB: 34, layers: 48, kvHeads: 8, heads: 40, headDim: 128, label: "27B/32B heuristic" },
+  { maxParamsB: 80, layers: 80, kvHeads: 8, heads: 64, headDim: 128, label: "70B heuristic" },
+  { maxParamsB: Infinity, layers: 96, kvHeads: 8, heads: 96, headDim: 128, label: "large model heuristic" },
 ];
 
 function finiteNumber(value, fallback = 0) {
@@ -26,18 +31,28 @@ function bytesToGiB(bytes) {
 
 function estimateArchitecture(paramsB, override = null) {
   if (override && override.layers && override.kvHeads && override.headDim) {
+    const kvHeads = Math.max(1, Math.floor(finiteNumber(override.kvHeads, 1)));
     return {
       layers: Math.max(1, Math.floor(finiteNumber(override.layers, 1))),
       kvLayers: Math.max(1, Math.floor(finiteNumber(override.kvLayers || override.layers, override.layers))),
-      kvHeads: Math.max(1, Math.floor(finiteNumber(override.kvHeads, 1))),
+      kvHeads,
+      // A real config states the KV head count outright, so there is no range.
+      kvHeadsHigh: kvHeads,
       headDim: Math.max(1, Math.floor(finiteNumber(override.headDim, 128))),
       label: override.label || "model config",
       source: override.source || "config",
+      confidence: "high",
     };
   }
   const params = finiteNumber(paramsB, 0);
   const bucket = DEFAULT_ARCH_BUCKETS.find((item) => params <= item.maxParamsB) || DEFAULT_ARCH_BUCKETS.at(-1);
-  return { ...bucket, kvLayers: bucket.layers, source: "heuristic" };
+  return {
+    ...bucket,
+    kvLayers: bucket.layers,
+    kvHeadsHigh: Math.max(bucket.kvHeads, bucket.heads || bucket.kvHeads),
+    source: "heuristic",
+    confidence: "low",
+  };
 }
 
 function estimateWeightGiB({ paramsB, bytesPerParam = 2, multiplier = 1 } = {}) {
@@ -107,6 +122,15 @@ function estimateVllmMemoryPlan({
   const memorySplitFactor = mode === "data" ? 1 : splitFactor;
   const weightsGb = estimateWeightGiB({ paramsB, bytesPerParam });
   const kvGb = estimateKvCacheGiB({ contextTokens, ...modelArch, kvBytes });
+  // Without a real config we cannot tell GQA from MHA, so carry the
+  // multi-head upper bound alongside the likely value and judge on it.
+  const kvGbHigh = estimateKvCacheGiB({
+    contextTokens,
+    ...modelArch,
+    kvHeads: modelArch.kvHeadsHigh || modelArch.kvHeads,
+    kvBytes,
+  });
+  const archUncertain = modelArch.confidence === "low" && kvGbHigh > kvGb;
   const cpuOffloadPerGpuGb = Math.max(0, finiteNumber(cpuOffloadGb, 0));
   const kvOffloadTotalGb = Math.max(0, finiteNumber(kvOffloadGb, 0));
   const weightPerGpuBeforeOffloadGb = weightsGb / memorySplitFactor;
@@ -116,10 +140,15 @@ function estimateVllmMemoryPlan({
   const kvPerGpuGb = Math.max(0, kvPerGpuBeforeOffloadGb - kvOffloadPerGpuGb);
   const overheadPerGpuGb = Math.max(1.2, (weightPerGpuGb + kvPerGpuGb) * Math.max(0, finiteNumber(overheadRatio, 0.08))) + Math.max(0, finiteNumber(multimodalReserveGb, 0));
   const perGpuGb = weightPerGpuGb + kvPerGpuGb + overheadPerGpuGb;
+  const kvPerGpuHighGb = Math.max(0, kvGbHigh / memorySplitFactor - kvOffloadPerGpuGb);
+  const overheadPerGpuHighGb = Math.max(1.2, (weightPerGpuGb + kvPerGpuHighGb) * Math.max(0, finiteNumber(overheadRatio, 0.08))) + Math.max(0, finiteNumber(multimodalReserveGb, 0));
+  const perGpuHighGb = weightPerGpuGb + kvPerGpuHighGb + overheadPerGpuHighGb;
   const gpus = selectedGpus.map((gpu) => normalizeGpuForEstimate(gpu, { utilization }));
   const minUsableGb = gpus.length ? Math.min(...gpus.map((gpu) => gpu.usableGb)) : 0;
-  const overflowPerGpuGb = gpus.length ? Math.max(0, perGpuGb - minUsableGb) : 0;
-  const status = !gpus.length ? "warn" : perGpuGb <= minUsableGb * 0.9 ? "ok" : perGpuGb <= minUsableGb ? "warn" : "fail";
+  // An unknown architecture must not read as "ok": grade the conservative end.
+  const judgedPerGpuGb = archUncertain ? perGpuHighGb : perGpuGb;
+  const overflowPerGpuGb = gpus.length ? Math.max(0, judgedPerGpuGb - minUsableGb) : 0;
+  const status = !gpus.length ? "warn" : judgedPerGpuGb <= minUsableGb * 0.9 ? "ok" : judgedPerGpuGb <= minUsableGb ? "warn" : "fail";
   const recommendedCpuOffloadGb = overflowPerGpuGb > 0
     ? Math.min(weightPerGpuBeforeOffloadGb, cpuOffloadPerGpuGb + overflowPerGpuGb + 2)
     : cpuOffloadPerGpuGb;
@@ -132,6 +161,12 @@ function estimateVllmMemoryPlan({
     arch: modelArch,
     weightsGb,
     kvGb,
+    kvGbHigh,
+    kvPerGpuHighGb,
+    perGpuHighGb,
+    judgedPerGpuGb,
+    archUncertain,
+    archConfidence: modelArch.confidence || "high",
     weightPerGpuBeforeOffloadGb,
     kvPerGpuBeforeOffloadGb,
     weightPerGpuGb,
@@ -180,17 +215,32 @@ function estimateLlamaMemoryPlan({
   const totalKvGb = hasExplicitKvCacheGb && Number.isFinite(explicitKvCacheGb) && explicitKvCacheGb >= 0
     ? explicitKvCacheGb
     : estimateKvCacheGiB({ contextTokens, ...modelArch, kvBytes });
+  // GGUF metadata gives an exact KV figure; only the name-based heuristic is
+  // ambiguous between GQA and MHA, so only that case carries a range.
+  const totalKvHighGb = hasExplicitKvCacheGb && Number.isFinite(explicitKvCacheGb) && explicitKvCacheGb >= 0
+    ? explicitKvCacheGb
+    : estimateKvCacheGiB({
+      contextTokens,
+      ...modelArch,
+      kvHeads: modelArch.kvHeadsHigh || modelArch.kvHeads,
+      kvBytes,
+    });
+  const archUncertain = modelArch.confidence === "low" && totalKvHighGb > totalKvGb;
   const gpuKvGb = totalKvGb * layerRatio;
   const cpuKvGb = Math.max(0, totalKvGb - gpuKvGb);
   const overheadGb = Math.max(1.2, (gpuWeightsGb + gpuKvGb) * Math.max(0, finiteNumber(overheadRatio, 0.08))) + Math.max(0, finiteNumber(multimodalReserveGb, 0));
   const totalGpuGb = gpuWeightsGb + gpuKvGb + overheadGb;
+  const gpuKvHighGb = totalKvHighGb * layerRatio;
+  const overheadHighGb = Math.max(1.2, (gpuWeightsGb + gpuKvHighGb) * Math.max(0, finiteNumber(overheadRatio, 0.08))) + Math.max(0, finiteNumber(multimodalReserveGb, 0));
+  const totalGpuHighGb = gpuWeightsGb + gpuKvHighGb + overheadHighGb;
+  const judgedTotalGpuGb = archUncertain ? totalGpuHighGb : totalGpuGb;
   const gpus = selectedGpus.map((gpu) => normalizeGpuForEstimate(gpu, { utilization }));
   const weights = tensorSplitWeights.length === gpus.length && tensorSplitWeights.some((item) => finiteNumber(item, 0) > 0)
     ? tensorSplitWeights.map((item) => Math.max(0, finiteNumber(item, 0)))
     : gpus.map((gpu) => Math.max(1, gpu.usableGb || gpu.totalGb || 1));
   const sum = weights.reduce((acc, item) => acc + item, 0) || 1;
   const allocations = gpus.map((gpu, index) => {
-    const allocatedGb = totalGpuGb * (weights[index] || 0) / sum;
+    const allocatedGb = judgedTotalGpuGb * (weights[index] || 0) / sum;
     const overflowGb = Math.max(0, allocatedGb - gpu.usableGb);
     return { gpu, weight: weights[index] || 0, allocatedGb, overflowGb, usableGb: gpu.usableGb };
   });
@@ -198,9 +248,12 @@ function estimateLlamaMemoryPlan({
   const anyOverflow = allocations.some((item) => item.overflowGb > 0);
   const status = !allocations.length ? "warn" : anyOverflow ? "fail" : allocations.some((item) => item.allocatedGb > item.usableGb * 0.9) ? "warn" : "ok";
   const totalUsableGb = allocations.reduce((sumGb, item) => sumGb + item.usableGb, 0);
-  const perLayerGpuGb = totalLayers > 0 ? (totalWeightsGb + totalKvGb) / totalLayers : 0;
+  // Recommend layers against the same KV figure the status was graded on, so a
+  // model with an unknown architecture is not advised to offload too few layers.
+  const judgedTotalKvGb = archUncertain ? totalKvHighGb : totalKvGb;
+  const perLayerGpuGb = totalLayers > 0 ? (totalWeightsGb + judgedTotalKvGb) / totalLayers : 0;
   const recommendedLayerRatio = totalWeightsGb > 0
-    ? clamp((Math.max(0, totalUsableGb * 0.88 - Math.max(1.2, totalKvGb * 0.02) - multimodalReserveGb)) / Math.max(totalWeightsGb + totalKvGb, perLayerGpuGb || 1), 0, 1)
+    ? clamp((Math.max(0, totalUsableGb * 0.88 - Math.max(1.2, judgedTotalKvGb * 0.02) - multimodalReserveGb)) / Math.max(totalWeightsGb + judgedTotalKvGb, perLayerGpuGb || 1), 0, 1)
     : 0;
   const recommendedGpuLayers = Math.max(0, Math.floor(totalLayers * recommendedLayerRatio));
 
@@ -211,11 +264,17 @@ function estimateLlamaMemoryPlan({
     gpuWeightsGb,
     cpuWeightsGb,
     totalKvGb,
+    totalKvHighGb,
     kvGb: gpuKvGb,
     gpuKvGb,
+    gpuKvHighGb,
     cpuKvGb,
     overheadGb,
     totalGpuGb,
+    totalGpuHighGb,
+    judgedTotalGpuGb,
+    archUncertain,
+    archConfidence: modelArch.confidence || "high",
     requestedGpuLayers: requestedLayers,
     totalLayers,
     allocations,

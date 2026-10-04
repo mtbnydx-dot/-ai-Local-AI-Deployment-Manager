@@ -4587,3 +4587,65 @@ test("pending billing queue replays authorize then settle", async () => {
   assert.equal(authorized.length, 1);
   assert.equal(settled[0].inputTokens, 3);
 });
+
+test("unknown architecture reports a KV range instead of a confident point value", () => {
+  // No config: 7B could be GQA (8 KV heads) or MHA (32), a 4x spread.
+  const guessed = core.estimateArchitecture(7, null);
+  assert.equal(guessed.source, "heuristic");
+  assert.equal(guessed.confidence, "low");
+  assert.equal(guessed.kvHeads, 8);
+  assert.equal(guessed.kvHeadsHigh, 32);
+
+  // A real config states the KV head count, so the range collapses.
+  const known = core.estimateArchitecture(7, { layers: 32, kvHeads: 8, headDim: 128 });
+  assert.equal(known.confidence, "high");
+  assert.equal(known.kvHeadsHigh, known.kvHeads);
+});
+
+test("vLLM grades an unknown architecture on the multi-head upper bound", () => {
+  const base = {
+    paramsB: 7,
+    contextTokens: 32768,
+    bytesPerParam: 2,
+    kvBytes: 2,
+    selectedGpus: [{ id: "0", totalGb: 24, usedGb: 1 }],
+    utilization: 0.9,
+  };
+  const guessed = core.estimateVllmMemoryPlan(base);
+  assert.equal(guessed.archConfidence, "low");
+  assert.equal(guessed.archUncertain, true);
+  // The MHA bound is 4x the GQA estimate and is what the verdict uses.
+  assert.ok(guessed.kvGbHigh > guessed.kvGb * 3.9);
+  assert.equal(guessed.judgedPerGpuGb, guessed.perGpuHighGb);
+
+  // Supplying the real architecture removes the range and the penalty.
+  const known = core.estimateVllmMemoryPlan({
+    ...base,
+    arch: { layers: 32, kvLayers: 32, kvHeads: 8, headDim: 128 },
+  });
+  assert.equal(known.archUncertain, false);
+  assert.equal(known.kvGbHigh, known.kvGb);
+  assert.equal(known.judgedPerGpuGb, known.perGpuGb);
+  assert.ok(known.judgedPerGpuGb < guessed.judgedPerGpuGb);
+});
+
+test("llama grades an unknown architecture conservatively but trusts GGUF KV", () => {
+  const base = {
+    paramsB: 7,
+    contextTokens: 32768,
+    bytesPerParam: 0.6,
+    kvBytes: 2,
+    selectedGpus: [{ id: "0", totalGb: 24, usedGb: 1 }],
+    gpuLayers: "all",
+  };
+  const guessed = core.estimateLlamaMemoryPlan(base);
+  assert.equal(guessed.archUncertain, true);
+  assert.ok(guessed.totalKvHighGb > guessed.totalKvGb);
+  assert.equal(guessed.judgedTotalGpuGb, guessed.totalGpuHighGb);
+
+  // An exact KV figure from GGUF metadata is never widened into a range.
+  const measured = core.estimateLlamaMemoryPlan({ ...base, kvCacheGb: 2 });
+  assert.equal(measured.archUncertain, false);
+  assert.equal(measured.totalKvHighGb, measured.totalKvGb);
+  assert.equal(measured.judgedTotalGpuGb, measured.totalGpuGb);
+});

@@ -3329,6 +3329,11 @@ function mergeVllmServerMemoryEstimate(estimate, result) {
     recommendedKvOffloadingSize: plan.recommendedKvOffloadGb ?? estimate.recommendedKvOffloadingSize,
     systemMemoryAssistGb: (plan.cpuOffloadPerGpuGb || 0) * memorySplitFactor + (plan.kvOffloadTotalGb || 0),
     estimateConfidence: plan.arch?.source === "config" ? "high" : estimate.estimateConfidence,
+    // 读不到模型结构时后端给的是区间（GQA 下限 ↔ MHA 上限），判定走上限。
+    archUncertain: Boolean(plan.archUncertain),
+    kvGbHigh: plan.kvGbHigh ?? estimate.kvGb,
+    perGpuHighGb: plan.perGpuHighGb ?? estimate.perGpuGb,
+    judgedPerGpuGb: plan.judgedPerGpuGb ?? plan.perGpuGb ?? estimate.perGpuGb,
     splitLabel: `${estimate.splitLabel} · 后端校准`,
   };
 }
@@ -3638,6 +3643,11 @@ function renderMemoryEstimateNote(estimate) {
     "medium-low": "中低：按模型名参数量和常见架构估算",
     low: "低：缺少参数量或 config",
   }[estimate.estimateConfidence] || "中低";
+  // 未读到 config 时 GQA/MHA 无法区分，KV 可能差 4 倍。给区间并按上限判定，
+  // 避免"估算说没问题、启动就 OOM"。
+  const kvRangeLine = estimate.archUncertain
+    ? `<span class="memory-recommend warn">未读取到模型结构（config.json），KV cache 可能在 ${formatGbNumber(estimate.kvGb)}–${formatGbNumber(estimate.kvGbHigh)} GB 之间：常见的 GQA 布局取下限，旧式 MHA 模型（Llama-2、Mistral v0.1 等）取上限。下方结论按上限判定，每卡按最坏情况约 ${formatGbNumber(estimate.perGpuHighGb)} GB。下载模型或填入 config 后估算会收敛。</span>`
+    : "";
   const replacementBudget = estimate.selectedGpus.some((gpu) => gpu.capacityMode === "replacement");
   const headroomLine = estimate.selectedGpus.length
     ? `<span class="memory-headroom">每卡约用 ${formatGbNumber(estimate.perGpuGb)} GB / ${replacementBudget ? "替换当前容器后可用" : "当前可用"} ${formatGbNumber(estimate.minUsableGb)} GB，余量 ${formatGbNumber(Math.max(0, estimate.minUsableGb - estimate.perGpuGb))} GB。${replacementBudget ? "当前模型占用会在新模型启动前释放。" : ""} 估算可信度：${escapeHtml(confidenceText)}。</span>`
@@ -3694,6 +3704,7 @@ function renderMemoryEstimateNote(estimate) {
     <strong class="${estimate.status}">${statusText}</strong>
     <span>${escapeHtml(note)} 权重量化：${escapeHtml(estimate.quantNote)}。${escapeHtml(modeNote)}</span>
     ${headroomLine}
+    ${kvRangeLine}
     ${serverLine}
     ${offloadLine}
     ${offloadRecommendLine}

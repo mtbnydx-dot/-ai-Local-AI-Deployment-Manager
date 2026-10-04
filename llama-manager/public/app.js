@@ -3085,6 +3085,10 @@ function mergeLlamaServerMemoryEstimate(estimate, result) {
     serverBacked: true,
     estimateConfidence: result?.metadata ? "high" : estimate.estimateConfidence,
     metadataSource: result?.metadata ? "GGUF metadata + 后端校准" : estimate.metadataSource,
+    // 没有 GGUF 元数据时 KV 结构只能靠猜，后端给的是 GQA↔MHA 区间，判定走上限。
+    archUncertain: Boolean(plan.archUncertain),
+    totalKvHighGb: plan.totalKvHighGb ?? plan.totalKvGb ?? estimate.totalKvGb,
+    totalGpuHighGb: plan.totalGpuHighGb ?? plan.totalGpuGb ?? estimate.totalGpuGb,
     serverRecommendations: result.recommendations || null,
     status: plan.status || estimate.status,
     totalWeightsGb: plan.totalWeightsGb ?? estimate.totalWeightsGb,
@@ -3398,6 +3402,9 @@ function renderMemoryEstimateNote(estimate) {
     : estimate.estimateConfidence === "medium"
       ? "中：按参数量、GGUF 量化和常见层数/KV 结构估算"
       : "低：缺少参数量或架构信息";
+  const kvRangeLine = estimate.archUncertain
+    ? `<span class="memory-recommend warn">未读取到 GGUF 元数据，KV 结构只能按模型名推断：KV cache 可能在 ${formatGbNumber(estimate.totalKvGb)}–${formatGbNumber(estimate.totalKvHighGb)} GB 之间（常见 GQA 取下限，旧式 MHA 取上限）。下方结论与 GPU layers 建议都按上限计算，最坏情况约 ${formatGbNumber(estimate.totalGpuHighGb)} GB。选定具体 GGUF 文件后估算会收敛。</span>`
+    : "";
   const confidenceLine = `<span class="memory-headroom">估算可信度：${confidenceText}。${replacementBudget ? "当前 llama.cpp 容器会在换模前释放，容量按替换后预算计算。" : "显存可用值按当前空闲显存减保护余量与利用率取较小值。"}</span>`;
   const ramLine = estimate.systemMemoryResidentGb > 0
     ? `<span class="memory-headroom">系统内存驻留约 ${formatGbNumber(estimate.systemMemoryResidentGb)} GB：这些权重/KV 未放入显存，会减少 OOM 风险但降低速度。</span>`
@@ -3423,6 +3430,7 @@ function renderMemoryEstimateNote(estimate) {
   return `
     <strong class="${estimate.status}">${statusText}</strong>
     <span>${escapeHtml(note + longContextNote + textOnlyNote + draftNote)} 权重量化：${escapeHtml(estimate.quantNote)}。</span>
+    ${kvRangeLine}
     ${confidenceLine}
     ${serverLine}
     ${nativeLine}
