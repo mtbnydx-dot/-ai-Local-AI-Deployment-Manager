@@ -50,6 +50,7 @@ This is a local AI service control panel for high-end personal workstations and 
 ├─ package.json            # 根目录测试依赖，主要用于 Playwright smoke test
 ├─ playwright.config.cjs   # 浏览器烟测配置
 ├─ install-all.cmd         # 安装 Node 依赖
+├─ install-download-cli.cmd # 创建模型下载专用的 Python 环境（hf / modelscope）
 ├─ install-tts-gateway.cmd # 用 uv 创建 TTS 网关 Python 3.12 环境
 ├─ update-platform.cmd     # 从 GitHub 安全 fast-forward 更新并复测
 ├─ test-all.cmd            # 运行核心测试
@@ -62,12 +63,12 @@ This is a local AI service control panel for high-end personal workstations and 
 
 Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口字段见 [Qwen3.8-27B 本地加速与管理平台指南](docs/qwen38-acceleration-guide.md)。
 
-平台 MCP 0.5.0 提供 16 个只读工具，包括单次搜索、多查询研究、显式公网链接与搜索结果正文识别、页内定位、任务历史、路由预览、显存估算和安全态势。跨 Chatbox、OpenWebUI、Claude、Codex、IDE 和自建 Agent 复用 MCP 的架构、安全边界与配置示例见 [自建平台级 MCP 接入指南](docs/mcp-platform-guide.md)。
+平台 MCP（当前版本见 `platform-mcp/package.json`）提供只读工具，包括单次搜索、多查询研究、显式公网链接与搜索结果正文识别、页内定位、任务历史、路由预览、显存估算和安全态势。跨 Chatbox、OpenWebUI、Claude、Codex、IDE 和自建 Agent 复用 MCP 的架构、安全边界与配置示例见 [自建平台级 MCP 接入指南](docs/mcp-platform-guide.md)。
 
 ### 系统要求
 
 - Windows 10/11。
-- Node.js 22.22.2 或更高版本（完整 search-gateway 所需）。
+- Node.js `^22.22.2 || ^24.15.0 || >=26`：22.x 需 22.22.2 及以上，24.x 需 24.15.0 及以上，或 26 及更新版本（23、25 不在支持范围内）。search-gateway 依赖的 jsdom 要求这个范围；`start-service-entry.cmd` 启动前会检查版本，不符合时直接退出。
 - Docker Desktop。
 - NVIDIA 驱动；运行 vLLM/llama.cpp CUDA 容器时需要可用 GPU。
 - Chrome 或 Edge；前端 smoke test 默认使用本机 Chrome，也可以设置 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` 使用 Edge。
@@ -80,12 +81,14 @@ Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口
 
 ```cmd
 install-all.cmd
+install-download-cli.cmd
 install-tts-gateway.cmd
-test-all.cmd
 start-service-entry.cmd
 start-platform-mcp.cmd
 start-tts-platform.cmd -GatewayOnly -NoBrowser
 ```
+
+`install-download-cli.cmd` 创建独立的 `venvs\download-cli` 环境（需要 Python 3.10+），管理器用其中的 `hf` 和 `modelscope` 命令下载模型；不使用 TTS 时可跳过 `install-tts-gateway.cmd` 和最后一行。也可以用 `start-platform.cmd` 一次启动入口和两个管理器，见下文“统一启动”。运行测试属于开发步骤，见“测试”一节。
 
 模型、缓存和运行数据默认保存在发布目录内。需要放到其它磁盘时，请在启动前设置 `AI_ROOT`；也可以分别用 `VLLM_MODELS_ROOT`、`LLAMA_MODELS_ROOT`、`HF_HOME` 和 `TTS_RUNTIME_ROOT` 覆盖模型、缓存或 TTS 运行目录。
 
@@ -155,7 +158,7 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 
 ### 安全和隐私
 
-- 默认本机模式只监听 `127.0.0.1`。
+- 默认本机模式下，统一入口（5176）只监听 `127.0.0.1`。两个管理器（5177/5178）为了让 Docker 容器经 `host.docker.internal` 回连而监听 `0.0.0.0`：其它设备只能访问带 API Key 的模型网关接口，管理界面和管理 API 一律返回 403，除非显式设置 `VLLM_MANAGER_ALLOW_REMOTE=1` / `LLAMA_MANAGER_ALLOW_REMOTE=1`（默认 `0`）。不需要其它设备直连管理器时，建议在 Windows 防火墙中阻止 5177/5178 的入站连接。
 - **统一入口是唯一的策略执行点**：`service-entry` 在转发前完成 Host/Origin 校验、API Key 鉴权和限流，再用签名请求头把真实客户端地址传给管理器。管理器只信任带有效签名的回环请求。
 - TTS 的 7000 与 worker 端口保持回环监听；局域网客户端只能经 `/gateway/tts/` 访问，并复用统一入口的客户端 Key。参考音色和生成音频属于本机运行数据，不进入 Git 或发布包。
 - 局域网模式（`start-service-entry.cmd lan`）**默认强制 API Key**。密钥在任一管理器的“对外服务”页生成，两个管理器的密钥都可用于统一网关。
@@ -163,6 +166,7 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 - 管理端点默认仅本机可用；局域网设备读取状态时会得到脱敏结果。
 - 发布目录不会包含模型文件、缓存、日志、数据库、运行时账本、PID 文件、`.env` 或 `node_modules`。
 - 访问统计只记录元数据，例如来源 IP、路径、状态码、模型名、token 数和耗时；不记录提示词或响应正文。
+- 旧版本可能把模型的运行时 API Key 明文写进管理器任务账本。新版本在读取和写入账本时都会把密钥替换为 `<redacted>`。也可以在停止两个管理器后运行 `node scripts/scrub-job-ledgers.js` 预览清理结果（默认只读），确认后加 `--apply` 写回；该工具不会修改密钥存储。曾经出现在账本、日志或备份里的 Key 应视为已泄露：用新 Key 重启相关模型，再更新客户端配置。
 
 #### 安全开关
 
@@ -202,6 +206,10 @@ start-service-entry.cmd lan
 ### 统一启动、公网模式与运维（2026-09-03）
 
 - `start-platform.cmd [core|all] [lan]` 一次拉起入口 + 两个管理器（`all` 再加 TTS、MCP、搜索网关，搜索网关需要 Docker Desktop）；`stop-platform.cmd [all]`、`status-platform.cmd` 对应停止与查看。各组件原有脚本保留。入口首页出现离线组件横幅（可一键拉起管理器，可选桌面通知）。
+  - 结束时按所选档位逐个组件显示 `OK` / `FAILED` / `SKIPPED`（`core` 只列 5176-5178），有失败时退出码为 1；双击运行时会在结尾暂停，设置 `PLATFORM_NO_PAUSE=1` 可关闭。
+  - `all` 默认只启动 TTS 网关、不打开浏览器；四个语音 worker 会加载大模型，需要时先设置 `TTS_START_WORKERS=1`。`stop-platform.cmd all` 会同时停止由启动脚本拉起的 worker（`tts-platform\scripts\stop_workers.ps1`，只结束能核对身份的进程）。
+  - Docker Desktop 尚在启动时，搜索网关一步最多等待 `PLATFORM_DOCKER_WAIT_SECONDS` 秒（默认 90，每 3 秒检查一次）；Docker Desktop 未运行时立即给出提示。
+  - `start-service-entry.cmd` 用 `GET /gateway/health` 判断入口就绪，任一组件未通过健康检查时退出码为 1 且不打开浏览器；`SERVICE_ENTRY_PORT`、`VLLM_MANAGER_PORT`、`LLAMA_MANAGER_PORT` 可改端口。管理器单独启动脚本同样沿用已设置的端口变量，旧日志轮转为 `.1`–`.3` 而不是删除。`stop-service-entry.cmd` 先请求正常关闭，10 秒后仍未退出时只强制结束 PID 文件中核对为 `node … server.js` 的进程。
 - 进程退出留痕：入口与两个管理器把 Ctrl+C / 控制台关闭 / 未捕获异常写入各自 `logs/process-exit.log`，并走正常关机流程；`start-service-entry.cmd` 现在把 stdout/stderr 落到 `logs/manager.out.log`（保留 3 份轮转）。
 - 公网模式：入口首页顶部显示“本机 / 局域网 / 公网”模式与上线检查清单（API Key 强制、管理端点仅本机、CORS、HTTPS、Caddy 路径、防火墙）。`deploy/public/Caddyfile` 只转发 `/gateway/*`，`scripts/setup-public.ps1` 生成 `.env` 并校验。鉴权失败风暴防护：`SERVICE_ENTRY_AUTH_FAIL_LIMIT`（默认 20 次/`SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS`=60 秒）后封禁 `SERVICE_ENTRY_AUTH_BAN_SECONDS`（600）秒，本机直连永不封禁。
 - 统一入口新增：`GET /gateway/status`（需 Key：可用模型、在线组件、本 Key 限流余量与 TTS 配额）、`/gateway/search/*`（搜索网关）、`/gateway/mcp`（MCP，只读）、`GET /api/keys` 与首页“密钥总览”（两管理器客户端 Key 的状态 / 最近使用 / 到期）。搜索网关启动时若入口监听局域网则自动以入口 auto 路由为上游。
@@ -214,9 +222,13 @@ start-service-entry.cmd lan
 
 ### 测试
 
+开发、升级或改动脚本后，在已运行过 `install-all.cmd` 的目录中执行（完整运行需要几分钟，会在结尾汇总通过 / 跳过 / 失败的步骤）：
+
 ```cmd
 test-all.cmd
 ```
+
+其中的脚本编码检查要求受 Git 管理的 `*.cmd` / `*.ps1` 使用 CRLF 且没有 BOM（`node scripts/check-script-encoding.js`）；在没有 `.git` 的部署目录或发布包中该步骤会被跳过。
 
 公网 TLS / OpenWebUI 部署模板位于 `deploy/public/`。审计与整改记录见 `docs/comprehensive-audit-2026-07-16.md` 和 `docs/security-hardening-2026-08-04.md`（后者含本轮安全加固、开关说明和未实施项归档）。
 
@@ -309,6 +321,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ package.json            # Root test dependencies, mainly Playwright smoke tests
 ├─ playwright.config.cjs   # Browser smoke-test configuration
 ├─ install-all.cmd         # Install Node dependencies
+├─ install-download-cli.cmd # Create the dedicated model-download Python environment (hf / modelscope)
 ├─ install-tts-gateway.cmd # Create the Python 3.12 TTS gateway environment with uv
 ├─ update-platform.cmd     # Safe fast-forward GitHub update and validation
 ├─ test-all.cmd            # Run core tests
@@ -322,7 +335,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ### Requirements
 
 - Windows 10/11.
-- Node.js 22.22.2 or newer (required by the complete search gateway).
+- Node.js `^22.22.2 || ^24.15.0 || >=26`: 22.x from 22.22.2, 24.x from 24.15.0, or 26 and later (23 and 25 are not supported). The search gateway's jsdom dependency requires this range; `start-service-entry.cmd` checks the version and exits before starting anything when it does not match.
 - Docker Desktop.
 - NVIDIA driver and GPU access for vLLM/llama.cpp CUDA containers.
 - Chrome or Edge. The frontend smoke test uses local Chrome by default; set `PLAYWRIGHT_BROWSER_CHANNEL=msedge` to use Edge.
@@ -335,12 +348,14 @@ From the release root:
 
 ```cmd
 install-all.cmd
+install-download-cli.cmd
 install-tts-gateway.cmd
-test-all.cmd
 start-service-entry.cmd
 start-platform-mcp.cmd
 start-tts-platform.cmd -GatewayOnly -NoBrowser
 ```
+
+`install-download-cli.cmd` creates the separate `venvs\download-cli` environment (Python 3.10+ required) whose `hf` and `modelscope` commands the managers use for model downloads. Skip `install-tts-gateway.cmd` and the last line if you do not use TTS. `start-platform.cmd` starts the entry and both managers in one step; see "Unified Startup" below. Running the tests is a developer step; see "Testing".
 
 Models, caches, and runtime data are stored inside the release directory by default. Set `AI_ROOT` before startup to use another drive, or override `VLLM_MODELS_ROOT`, `LLAMA_MODELS_ROOT`, `HF_HOME`, and `TTS_RUNTIME_ROOT` individually.
 
@@ -389,7 +404,7 @@ TTS API:  http://<LAN IP>:5176/gateway/tts/openai/v1
 
 The complete release includes the optional `search-gateway` web-search extension but does not start it automatically. Keep the model service running, launch `start-search-gateway.cmd`, and use `http://127.0.0.1:5180/v1`, or `http://<LAN IP>:5180/v1` from the LAN. See `search-gateway/README.md`.
 
-Platform MCP 0.5.0 provides 16 read-only tools, including single-query search, multi-query research, bounded explicit-URL and result-page reading, in-page passage finding, job history, route preview, memory-fit estimation, and security posture. For the reusable MCP architecture, security boundary, and setup examples for Chatbox, OpenWebUI, Claude, Codex, IDEs, and custom agents, see the [self-hosted platform MCP guide](docs/mcp-platform-guide.md).
+Platform MCP (see `platform-mcp/package.json` for the current version) provides read-only tools, including single-query search, multi-query research, bounded explicit-URL and result-page reading, in-page passage finding, job history, route preview, memory-fit estimation, and security posture. For the reusable MCP architecture, security boundary, and setup examples for Chatbox, OpenWebUI, Claude, Codex, IDEs, and custom agents, see the [self-hosted platform MCP guide](docs/mcp-platform-guide.md).
 
 ### Client Setup Tips
 
@@ -412,13 +427,14 @@ Generate API keys from the manager's service/external access page. Do not put re
 
 ### Security And Privacy
 
-- Local mode listens on `127.0.0.1` by default.
+- In local mode the unified entry (5176) listens on `127.0.0.1` only. The two managers (5177/5178) listen on `0.0.0.0` so Docker containers can reach them through `host.docker.internal`. Other devices can use only their API-key model gateway routes; the management UI and API answer 403 unless `VLLM_MANAGER_ALLOW_REMOTE=1` / `LLAMA_MANAGER_ALLOW_REMOTE=1` is set (default `0`). If no other device needs direct manager access, block inbound 5177/5178 in Windows Firewall.
 - `service-entry` is the single policy enforcement point. It validates Host/Origin, authenticates the API key, and applies rate limits before proxying, then signs the loopback hop with the real client address. Managers treat an unsigned hop that claims to come from the gateway as remote.
 - LAN mode requires an API key by default. Generate one on either manager's service page; both managers' keys work at the unified gateway.
 - Browser CORS is deny-by-default; allow origins explicitly with `SERVICE_ENTRY_ALLOWED_ORIGINS`.
 - Management endpoints are local-only by default, and LAN status reads are redacted.
 - The release mirror excludes model files, caches, logs, databases, runtime ledgers, PID files, `.env`, and `node_modules`.
 - Access statistics contain metadata only: source IP, path, status code, model name, token counts, and latency.
+- Older versions could write a model's runtime API key in plain text into the manager job ledgers. Current versions replace secrets with `<redacted>` whenever a ledger is read or written. To clean the files offline, stop both managers, run `node scripts/scrub-job-ledgers.js` to preview the changes (it is read-only by default), then add `--apply` to write them; the tool never touches the key store. Treat any key that ever appeared in a ledger, log, or backup as exposed: restart the affected models with new keys, then update the clients.
 
 #### Security switches
 
@@ -448,6 +464,10 @@ Behavior changes as of 2026-08-22: a stalled download (no byte growth for 5 minu
 ### Unified Startup, Public Mode And Operations (2026-09-03)
 
 - `start-platform.cmd [core|all] [lan]` starts the entry and both managers (`all` adds TTS, MCP and the Docker-based search gateway); `stop-platform.cmd [all]` and `status-platform.cmd` stop and inspect. The entry page shows an offline-component banner with one-click manager start and optional desktop notifications.
+  - At the end it prints `OK` / `FAILED` / `SKIPPED` for each component of the chosen profile (`core` lists only 5176-5178) and exits 1 when something failed. A double-clicked run pauses at the end; `PLATFORM_NO_PAUSE=1` turns that off.
+  - `all` starts only the TTS gateway and opens no browser. The four voice workers load large models, so set `TTS_START_WORKERS=1` first when you want them. `stop-platform.cmd all` also stops the workers that the launcher started (`tts-platform\scripts\stop_workers.ps1`, which ends only processes whose identity it can verify).
+  - While Docker Desktop is still starting, the search-gateway step waits up to `PLATFORM_DOCKER_WAIT_SECONDS` (default 90, checked every 3 s). When Docker Desktop is not running at all, it prints the hint at once.
+  - `start-service-entry.cmd` treats the entry as ready when `GET /gateway/health` answers, and exits 1 without opening a browser when any component fails its health check. `SERVICE_ENTRY_PORT`, `VLLM_MANAGER_PORT` and `LLAMA_MANAGER_PORT` change the ports. The per-manager start scripts also keep an already-set port variable, and they rotate old logs to `.1`–`.3` instead of deleting them. `stop-service-entry.cmd` asks each process to shut down, and after 10 s force-stops only a PID from the pid file that it verifies as `node … server.js`.
 - Exit traces: the entry and both managers write Ctrl+C / console close / uncaught errors to their own `logs/process-exit.log` and run the normal shutdown; `start-service-entry.cmd` now redirects stdout/stderr to `logs/manager.out.log` with three rotated copies.
 - Public mode: the entry page shows the local / LAN / public exposure and a go-live checklist (API key enforced, management local-only, CORS, HTTPS, Caddy paths, firewall). `deploy/public/Caddyfile` proxies only `/gateway/*`; `scripts/setup-public.ps1` writes `.env` and validates it. Auth-failure guard: `SERVICE_ENTRY_AUTH_FAIL_LIMIT` (20) failures within `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` (60) ban the source for `SERVICE_ENTRY_AUTH_BAN_SECONDS` (600); local direct callers are never banned.
 - New entry surfaces: `GET /gateway/status` (key required: models, online components, this key's rate-limit remaining and TTS quota), `/gateway/search/*` (search gateway), `/gateway/mcp` (read-only MCP), `GET /api/keys` and the "密钥总览" section (client keys across both managers with state, last use and expiry). The search gateway picks the entry auto route as upstream when the entry listens on the LAN.
@@ -460,9 +480,13 @@ Model pricing and GPU performance factors live in `manager-core/data/*.json` wit
 
 ### Testing
 
+After development, an upgrade, or a script change, run this in a directory where `install-all.cmd` has already run. A full run takes a few minutes and ends with a summary of passed, skipped and failed steps:
+
 ```cmd
 test-all.cmd
 ```
+
+Its script encoding step requires git-tracked `*.cmd` / `*.ps1` files to use CRLF without a BOM (`node scripts/check-script-encoding.js`); it is skipped in a deployed directory or release package that has no `.git`.
 
 The tests cover gateway routing, OpenAI/Claude message conversion, service API keys, access policies, vLLM/llama.cpp memory estimation, llama job ledger normalization, JSON write safety, and real browser frontend smoke tests for both managers.
 
