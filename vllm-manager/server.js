@@ -6,6 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const net = require("net");
 const core = require("../manager-core");
+const { describeDownloadError } = require("../manager-core/model-hub/errors");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
@@ -188,12 +189,14 @@ const CONFIG = {
   claudeDefaultMaxTokens: Math.min(65536, Math.max(1024, positiveInt(process.env.VLLM_CLAUDE_DEFAULT_MAX_TOKENS || 8192, 8192))),
 };
 
-// Job logs, the ledger and /api/logs redact the exact runtime keys plus the
-// secret patterns (08 P0-5). The key list is cached; set/remove through
-// runtimeApiKeyStore invalidate it.
+// Job logs, the ledger, /api/logs and API responses redact the exact runtime
+// keys, the HF tokens of running downloads and the secret patterns (08 P0-5).
+// The list is cached; set/remove through runtimeApiKeyStore and every change
+// of the download-token map invalidate it.
+const downloadTokens = createDownloadTokenStore({ onChange: () => runtimeSecretList.invalidate() });
 const runtimeSecretList = core.createCachedSecretList({
   store: core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys }),
-  sources: [() => process.env.HF_TOKEN, () => process.env.AI_CLAUDE_GATEWAY_API_KEY],
+  sources: [() => process.env.HF_TOKEN, () => process.env.AI_CLAUDE_GATEWAY_API_KEY, () => downloadTokens.values()],
 });
 const runtimeApiKeyStore = runtimeSecretList.store;
 const runtimeSecretRedactor = core.createSecretRedactor({ getSecrets: runtimeSecretList.getSecrets });
@@ -295,6 +298,7 @@ const modelFilesystemStore = core.createModelFilesystemStore({
   storage: modelStorage,
   modelsRoot: CONFIG.modelsRoot,
   hfCache: CONFIG.hfCache,
+  listRoots: () => listModelStorageRoots(modelStorage),
 });
 const {
   chooseGgufFile,
@@ -705,7 +709,7 @@ core.registerOpenAiBaseUrlHintRoutes(app, { openAiGatewayPath: "/serve/v1" });
 core.registerReferenceDataRoutes(app);
 app.use(managerSecurityGuard);
 app.use(core.createManagerApiSecretRedactionMiddleware({
-  getSecrets: () => [process.env.HF_TOKEN, process.env.AI_CLAUDE_GATEWAY_API_KEY, ...runtimeApiKeyStore.values()],
+  getSecrets: runtimeSecretList.getSecrets,
 }));
 app.use(express.json({ limit: "32mb" }));
 app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude", "/opencode/v1"], serviceGatewayMiddleware);
@@ -1003,68 +1007,18 @@ function describeCapabilityDataRequest() {
   };
 }
 
+// The download requests live in createDownloadRequestHandlers below; these
+// wrappers keep the hoisted names the routes were registered with.
 async function inspectDownloadResumeRequest(job) {
-  return core.inspectDownloadResume({
-    localDir: job.meta?.localDir,
-    fileManifest: job.meta?.fileManifest || [],
-    expectedBytes: job.meta?.expectedBytes || 0,
-    diskFreeBytes: await getModelsDiskFreeBytes(),
-  });
+  return downloadRequests.inspectDownloadResume(job);
 }
 
-// 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
 async function cleanupIncompleteRequest(body = {}) {
-  const name = cleanRequired(body.name, "name");
-  const localDir = resolveModelsRootChild(path.isAbsolute(name) ? name : path.join(CONFIG.modelsRoot, safeOutputName(name)));
-  const activeJob = Array.from(jobs.values()).find((job) => (
-    job.type === "download"
-    && ["running", "queued", "paused"].includes(job.status)
-    && core.normalizeLocalDirKey(job.meta?.localDir) === core.normalizeLocalDirKey(localDir)
-  ));
-  if (activeJob) {
-    const error = new Error(`任务 ${activeJob.id} 仍可能续传该目录（${activeJob.status}），暂不清理。`);
-    error.status = 409;
-    throw error;
-  }
-  const result = await modelFilesystemStore.cleanupIncompleteFiles(localDir);
-  runtimeSnapshotCache.invalidate("disk-usage");
-  return result;
+  return downloadRequests.cleanupIncomplete(body);
 }
 
-// 对比本地下载记录与 Hugging Face 上游 lastModified，判断是否有更新。
 async function checkModelUpstreamRequest(query = {}) {
-  const name = cleanRequired(query.name, "name");
-  const localDir = resolveModelsRootChild(path.isAbsolute(name) ? name : path.join(CONFIG.modelsRoot, safeOutputName(name)));
-  const key = core.normalizeLocalDirKey(localDir);
-  const downloadJob = Array.from(jobs.values())
-    .filter((job) => job.type === "download" && core.normalizeLocalDirKey(job.meta?.localDir) === key)
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
-  const repo = String(query.model || downloadJob?.meta?.model || "").trim();
-  if (!repo || !repo.includes("/")) {
-    return { ok: false, name, reason: "unknown_source", message: "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。" };
-  }
-  if (String(downloadJob?.meta?.source || "huggingface") !== "huggingface") {
-    return { ok: false, name, repo, reason: "unsupported_source", message: "上游更新检查目前只支持 Hugging Face 来源。" };
-  }
-  const info = await remoteModelService.getHuggingFaceModelInfo(repo);
-  const downloadedAt = downloadJob?.finishedAt || downloadJob?.updatedAt || null;
-  const updateAvailable = info.lastModified && downloadedAt
-    ? Date.parse(info.lastModified) > Date.parse(downloadedAt)
-    : null;
-  return {
-    ok: true,
-    name,
-    repo,
-    url: info.url,
-    lastModified: info.lastModified || null,
-    downloadedAt,
-    updateAvailable,
-    message: updateAvailable === null
-      ? "缺少可比对的时间信息，仅显示上游最近更新时间。"
-      : updateAvailable
-        ? "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
-        : "本地已是最新：上游在下载之后没有更新。",
-  };
+  return downloadRequests.checkModelUpstream(query);
 }
 
 async function listVllmModelCollections() {
@@ -1167,74 +1121,295 @@ async function deleteLocalModelRequest(body = {}) {
 }
 
 async function startDownloadRequest(body = {}) {
-  const requestedModel = cleanRequired(body.model, "model");
-  const source = cleanDownloadSource(body.source || "huggingface");
-  const reference = normalizeDownloadModelReference(requestedModel, body.precision);
-  const model = reference.model;
-  const precision = reference.precision;
-  const outputName = safeOutputName(body.outputName || model.replace(/[\\/]/g, "__"));
-  const localDir = modelStorage.downloadTarget(body.storageId, outputName);
-  await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache);
+  return downloadRequests.startDownload(body);
+}
 
-  const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
-  const repository = source === "huggingface"
-    ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision, includeExtras)
-    : null;
-  if (repository?.gated) {
-    const access = await hfAuthService.checkRepoAccess(model, {
-      token: body.hfToken,
-      probeFile: repository.probeFile,
-    });
-    if (!access.granted) throw createHfAccessError(model, access.status, repository.authorizationUrl);
-  }
-
-  const downloadSettings = downloadJobController.getDownloadSettings();
-  const forceOfficialHf = source === "huggingface" && (repository?.gated || Boolean(body.hfToken));
-  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, {
-    source,
-    hfMirror: forceOfficialHf ? false : downloadSettings.hfMirror,
-    hfTransfer: downloadSettings.hfTransfer,
-  });
-  if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
-
-  const download = buildDownloadCommand(source, model, localDir, { precision, extraIncludePatterns: includeExtras });
-  if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
-    throw core.missingDownloadCliError(download.command, source);
-  }
-  const expected = repository;
-  const diskFreeBytes = await getModelsDiskFreeBytes(path.dirname(localDir));
-  core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
-  modelStorage.assertUnlocked([localDir]);
-  modelStorage.prepareDownload(localDir, { model, source, precision });
-  const job = enqueueOrStartDownload(download.command, download.args, {
-    env,
-    title: `Download ${model} (${download.label})`,
-    meta: {
-      model,
-      outputName,
-      localDir,
-      source,
-      precision,
-      includeExtras: includeExtras.length ? includeExtras : undefined,
-      priority: core.normalizeDownloadPriority(body.priority),
-      expectedBytes: expected?.bytes || null,
-      expectedFiles: expected?.fileCount || null,
-      fileManifest: source === "huggingface" && Array.isArray(repository?.fileManifest) && repository.fileManifest.length
-        ? repository.fileManifest
-        : null,
+// HF download tokens are memory-only (08 P0-9, 00 §9.4). A job records only
+// meta.transfer.tokenRef; a manager restart forgets every token, so a gated
+// resume then fails cleanly with hf_token_expired. Nothing here touches the
+// runtime secret store or the disk.
+function createDownloadTokenStore({ onChange = () => {}, randomBytes = crypto.randomBytes } = {}) {
+  const tokens = new Map();
+  return {
+    register(token) {
+      const ref = `dlt_${randomBytes(16).toString("hex")}`;
+      tokens.set(ref, String(token));
+      onChange();
+      return ref;
     },
-    progressDir: localDir,
-    expectedBytes: expected?.bytes || null,
-  });
-  if (expected?.bytes) {
-    appendLog(job, `Estimated download size: ${formatBytes(expected.bytes)} across ${expected.fileCount} files.`);
-  } else if (expected?.error) {
-    appendLog(job, `Download size estimate unavailable: ${expected.error}`);
+    resolve(ref) {
+      return tokens.get(String(ref || "")) || null;
+    },
+    release(ref) {
+      if (tokens.delete(String(ref || ""))) onChange();
+    },
+    values() {
+      return tokens.values();
+    },
+    get size() {
+      return tokens.size;
+    },
+  };
+}
+
+// Disk usage lists every configured root, default first (08 P0-11).
+async function listModelStorageRoots(storage) {
+  const snapshot = await storage.snapshot();
+  return (snapshot.roots || []).map((root) => ({
+    id: root.id,
+    path: root.path,
+    label: root.label || root.id,
+    mode: root.mode,
+    default: root.id === snapshot.defaultRootId,
+    legacy: root.id === "legacy",
+  }));
+}
+
+function filterNoMatchError(precision, totalFiles) {
+  const { hint } = describeDownloadError("filter_no_match");
+  const error = new Error(`${hint.zh} / ${hint.en}`);
+  error.status = 422;
+  error.code = "filter_no_match";
+  error.details = { precision: precision || "", totalFiles: Number.isInteger(totalFiles) ? totalFiles : null };
+  return error;
+}
+
+function pathOutsideRootsError() {
+  const error = new Error("路径必须位于已登记的模型库内，且不能是模型库本身。 / The path must be inside a configured model library and must not be the library itself.");
+  error.status = 400;
+  error.code = "path_outside_roots";
+  return error;
+}
+
+async function readDownloadMarker(localDir) {
+  try {
+    const text = await fsp.readFile(path.join(localDir, ".platform-download.json"), "utf8");
+    const value = JSON.parse(text.replace(/^﻿/, ""));
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
   }
-  if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI with proxy env disabled.");
-  if (forceOfficialHf) appendLog(job, "Gated/authenticated Hugging Face download uses the official endpoint instead of the configured mirror.");
-  if (download.includePatterns?.length) appendLog(job, `Download include filter: ${download.includePatterns.join(", ")}`);
-  return { job };
+}
+
+// Download requests (08 P0-9, P0-10, P0-11), built from injected services so
+// their rules can be tested with fake remote services and temp storage.
+function createDownloadRequestHandlers(deps = {}) {
+  const {
+    modelsRoot,
+    hfCache,
+    modelStorage: storage,
+    remoteModelService: remote,
+    hfAuthService: hfAuth,
+    downloadTokens,
+    getJobs = () => [],
+    getDownloadSettings = () => ({}),
+    enqueueOrStartDownload: enqueue,
+    buildDownloadCommand: buildCommand,
+    getDiskFreeBytes = async () => null,
+    cleanupIncompleteFiles,
+    invalidateDiskUsage = () => {},
+    appendLog: log = () => {},
+    redact = (text) => text,
+    createAccessError = createHfAccessError,
+    ensureDirectories = ensureDirs,
+    fileExists = fs.existsSync,
+    readMarker = readDownloadMarker,
+    statfs,
+    env = process.env,
+  } = deps;
+
+  // A model directory named by `path` (inside any configured root) or by
+  // `name` (a folder of the legacy models root, as before). Either must
+  // resolve inside a root and must not be the root itself.
+  function resolveModelDirectory(input = {}) {
+    let target = String(input.path || "").trim();
+    if (!target) {
+      const name = cleanRequired(input.name, "name");
+      target = path.isAbsolute(name) ? name : path.join(modelsRoot, safeOutputName(name));
+    }
+    try {
+      return storage.resolvePath(target, { allowRoot: false });
+    } catch (error) {
+      // An offline library is not a bad path; it keeps its 503.
+      if (Number(error?.status) === 503) throw error;
+      throw pathOutsideRootsError();
+    }
+  }
+
+  function findDownloadJob(localDir, statuses = null) {
+    const key = core.normalizeLocalDirKey(localDir);
+    return Array.from(getJobs())
+      .filter((job) => job.type === "download"
+        && (!statuses || statuses.includes(job.status))
+        && core.normalizeLocalDirKey(job.meta?.localDir) === key)
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+  }
+
+  async function startDownload(body = {}) {
+    const requestedModel = cleanRequired(body.model, "model");
+    const source = cleanDownloadSource(body.source || "huggingface");
+    const reference = normalizeDownloadModelReference(requestedModel, body.precision);
+    const model = reference.model;
+    const precision = reference.precision;
+    const outputName = safeOutputName(body.outputName || model.replace(/[\\/]/g, "__"));
+    const localDir = storage.downloadTarget(body.storageId, outputName);
+    // An HF token is only for an HF download, which then uses the official endpoint.
+    const hfToken = source === "huggingface" && body.hfToken ? String(body.hfToken) : "";
+
+    const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
+    // An unreachable huggingface.co must not block a download the mirror can
+    // serve: a failed estimate only loses the size, disk and gated checks, and
+    // a gated repository then fails with a classified hf_approval_required.
+    const repository = source === "huggingface"
+      ? await remote.getHuggingFaceDownloadEstimate(model, precision, includeExtras)
+        .catch((error) => ({ error: redact(String(error?.message || error)) }))
+      : null;
+    // An include filter that matches nothing would "succeed" with no weights.
+    if (repository?.filtered && repository.matchedFiles === 0) throw filterNoMatchError(precision, repository.totalFiles);
+    await ensureDirectories(modelsRoot, hfCache);
+    if (repository?.gated) {
+      const access = await hfAuth.checkRepoAccess(model, {
+        token: body.hfToken,
+        probeFile: repository.probeFile,
+      });
+      if (!access.granted) throw createAccessError(model, access.status, repository.authorizationUrl);
+    }
+
+    const downloadSettings = getDownloadSettings() || {};
+    const forceOfficialHf = source === "huggingface" && (Boolean(repository?.gated) || Boolean(hfToken));
+    // Recorded once at enqueue, so resume and auto-retry keep this endpoint
+    // and these flags; the token stays in the in-memory map.
+    const transfer = core.normalizeDownloadTransfer({
+      hfMirror: forceOfficialHf ? false : Boolean(downloadSettings.hfMirror),
+      hfTransfer: Boolean(downloadSettings.hfTransfer),
+      gated: Boolean(repository?.gated),
+    });
+
+    const download = buildCommand(source, model, localDir, { precision, extraIncludePatterns: includeExtras });
+    if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fileExists(download.command))) {
+      throw core.missingDownloadCliError(download.command, source);
+    }
+    const expected = repository;
+    const diskFreeBytes = await getDiskFreeBytes(path.dirname(localDir));
+    core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
+    storage.assertUnlocked([localDir]);
+    storage.prepareDownload(localDir, { model, source, precision });
+    const tokenRef = hfToken ? downloadTokens.register(hfToken) : null;
+    const downloadEnv = core.buildDownloadEnv(hfCache, env, {
+      source,
+      hfMirror: transfer.hfMirror,
+      hfEndpoint: transfer.hfEndpoint,
+      hfTransfer: transfer.hfTransfer,
+      gated: transfer.gated,
+      token: hfToken || null,
+    });
+    let job;
+    try {
+      job = enqueue(download.command, download.args, {
+        env: downloadEnv,
+        title: `Download ${model} (${download.label})`,
+        meta: {
+          model,
+          outputName,
+          localDir,
+          source,
+          precision,
+          includeExtras: includeExtras.length ? includeExtras : undefined,
+          priority: core.normalizeDownloadPriority(body.priority),
+          expectedBytes: expected?.bytes || null,
+          // 0 stays 0; null means unknown (the estimate failed or not HF).
+          expectedFiles: Number.isInteger(expected?.fileCount) ? expected.fileCount : null,
+          fileManifest: source === "huggingface" && Array.isArray(repository?.fileManifest) && repository.fileManifest.length
+            ? repository.fileManifest
+            : null,
+          transfer: { ...transfer, tokenRef },
+        },
+        progressDir: localDir,
+        expectedBytes: expected?.bytes || null,
+      });
+    } catch (error) {
+      if (tokenRef) downloadTokens.release(tokenRef);
+      throw error;
+    }
+    if (expected?.bytes) {
+      log(job, `Estimated download size: ${formatBytes(expected.bytes)} across ${expected.fileCount} files.`);
+    } else if (expected?.error) {
+      log(job, `Download size estimate unavailable: ${expected.error}`);
+    }
+    if (source === "modelscope") log(job, "ModelScope source uses the local modelscope CLI with proxy env disabled.");
+    if (forceOfficialHf) log(job, "Gated/authenticated Hugging Face download uses the official endpoint instead of the configured mirror.");
+    if (download.includePatterns?.length) log(job, `Download include filter: ${download.includePatterns.join(", ")}`);
+    return { job };
+  }
+
+  // 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
+  async function cleanupIncomplete(body = {}) {
+    const localDir = resolveModelDirectory(body);
+    const activeJob = findDownloadJob(localDir, ["running", "queued", "paused"]);
+    if (activeJob) {
+      const error = new Error(`任务 ${activeJob.id} 仍可能续传该目录（${activeJob.status}），暂不清理。`);
+      error.status = 409;
+      throw error;
+    }
+    const result = await cleanupIncompleteFiles(localDir);
+    invalidateDiskUsage();
+    return result;
+  }
+
+  // 对比本地下载记录与 Hugging Face 上游 lastModified，判断是否有更新。没有
+  // 下载任务记录时，回退到 prepareDownload 写下的 .platform-download.json。
+  async function checkModelUpstream(query = {}) {
+    const localDir = resolveModelDirectory(query);
+    const name = String(query.name || "").trim() || path.basename(localDir);
+    const downloadJob = findDownloadJob(localDir);
+    const marker = downloadJob ? null : await readMarker(localDir);
+    const record = downloadJob
+      ? { model: downloadJob.meta?.model, source: downloadJob.meta?.source, downloadedAt: downloadJob.finishedAt || downloadJob.updatedAt || null, recordSource: "job" }
+      : marker
+        ? { model: marker.model, source: marker.source, downloadedAt: marker.createdAt || null, recordSource: "marker" }
+        : { recordSource: "request" };
+    const repo = String(query.model || record.model || "").trim();
+    if (!repo || !repo.includes("/")) {
+      return { ok: false, name, path: localDir, reason: "unknown_source", message: "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。" };
+    }
+    if (String(record.source || "huggingface") !== "huggingface") {
+      return { ok: false, name, path: localDir, repo, reason: "unsupported_source", message: "上游更新检查目前只支持 Hugging Face 来源。" };
+    }
+    const info = await remote.getHuggingFaceModelInfo(repo);
+    const downloadedAt = record.downloadedAt || null;
+    const updateAvailable = info.lastModified && downloadedAt
+      ? Date.parse(info.lastModified) > Date.parse(downloadedAt)
+      : null;
+    return {
+      ok: true,
+      name,
+      path: localDir,
+      repo,
+      url: info.url,
+      lastModified: info.lastModified || null,
+      downloadedAt,
+      recordSource: record.recordSource,
+      updateAvailable,
+      message: updateAvailable === null
+        ? "缺少可比对的时间信息，仅显示上游最近更新时间。"
+        : updateAvailable
+          ? "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
+          : "本地已是最新：上游在下载之后没有更新。",
+    };
+  }
+
+  // No diskFreeBytes: the check measures the disk that holds the job's own
+  // directory, not the default root's.
+  async function inspectDownloadResume(job) {
+    return core.inspectDownloadResume({
+      localDir: job.meta?.localDir,
+      fileManifest: job.meta?.fileManifest || [],
+      expectedBytes: job.meta?.expectedBytes || 0,
+      ...(typeof statfs === "function" ? { statfs } : {}),
+    });
+  }
+
+  return { startDownload, cleanupIncomplete, checkModelUpstream, inspectDownloadResume, resolveModelDirectory };
 }
 
 async function estimateDownloadRequest(query = {}) {
@@ -4826,6 +5001,8 @@ const downloadJobController = core.createDownloadJobController({
   },
   saveQueueMode: (settings) => atomicWriteJsonFile(CONFIG.downloadSettings, settings),
   resolvePartialPath: resolveModelsRootChild,
+  resolveDownloadSecret: (ref) => downloadTokens.resolve(ref),
+  releaseDownloadSecret: (ref) => downloadTokens.release(ref),
   // 「模型空闲时才下载」的忙碌判定：有请求在跑或排队即视为忙。
   isRuntimeBusy: async () => {
     const container = await getContainerStatus(CONFIG.containerName).catch(() => null);
@@ -4844,6 +5021,23 @@ const {
   drainDownloadQueue,
   healDownloadQueue,
 } = downloadJobController;
+const downloadRequests = createDownloadRequestHandlers({
+  modelsRoot: CONFIG.modelsRoot,
+  hfCache: CONFIG.hfCache,
+  modelStorage,
+  remoteModelService,
+  hfAuthService,
+  downloadTokens,
+  getJobs: () => jobs.values(),
+  getDownloadSettings: () => downloadJobController.getDownloadSettings(),
+  enqueueOrStartDownload,
+  buildDownloadCommand,
+  getDiskFreeBytes: getModelsDiskFreeBytes,
+  cleanupIncompleteFiles: (target) => modelFilesystemStore.cleanupIncompleteFiles(target),
+  invalidateDiskUsage: () => runtimeSnapshotCache.invalidate("disk-usage"),
+  appendLog,
+  redact: (text) => runtimeSecretRedactor.redact(text),
+});
 // 下载完成后的显存粗评：权重体积 vs 本机显存，给「能不能直接加载」一个直观结论。
 async function appendDownloadFitSummary(job) {
   try {
@@ -5410,6 +5604,9 @@ module.exports = {
   summarizeModelConfigCapabilities,
   buildModelStats,
   withSpeedWindowSeconds,
+  createDownloadRequestHandlers,
+  createDownloadTokenStore,
+  listModelStorageRoots,
   buildSglangRuntimeFacts,
   createLatestRuntimeFactsReader,
   getModelConfigRequest,

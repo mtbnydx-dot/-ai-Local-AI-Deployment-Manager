@@ -3,6 +3,7 @@ function sendError(res, error, fallbackStatus = 500) {
   // 让前端能定位冲突任务，例如重复下载返回的 existingJobId。
   if (error && error.existingJobId) payload.existingJobId = error.existingJobId;
   if (error && error.code) payload.code = error.code;
+  if (error && error.details && typeof error.details === "object") payload.details = error.details;
   if (error && error.authorizationUrl) payload.authorizationUrl = error.authorizationUrl;
   if (error && error.accessStatus) payload.accessStatus = error.accessStatus;
   return res.status(error.status || fallbackStatus).json(payload);
