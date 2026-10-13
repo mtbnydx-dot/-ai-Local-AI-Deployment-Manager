@@ -1373,6 +1373,15 @@ const runtimeRequestHandlers = core.createRuntimeRequestHandlers({
   prompt: "Reply with exactly: vLLM OK",
   getApiKey: async () => getVllmApiKey(await getContainerStatus(CONFIG.containerName)),
   authHeaders: (apiKey) => vllmAuthHeaders(apiKey),
+  // GET /api/logs?instance= reads only containers this manager owns (08 P0-3).
+  resolveLogContainer: core.createOwnedRuntimeContainerResolver({
+    primaryContainerName: CONFIG.containerName,
+    managerId: CONFIG.managerId,
+    ownerLabelKey: MANAGER_LABEL_KEY,
+    engines: ["vllm", "sglang"],
+    getContainerStatus: (name) => getContainerStatus(name),
+    listManagedContainers: () => listManagedContainers(),
+  }),
 });
 const {
   startDockerDesktopRequest,
@@ -4320,9 +4329,13 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const persistedFacts = runtimeEngine === "sglang"
     ? {}
     : await getPersistedRuntimeFacts(factModelHints, { engine: runtimeEngine }).catch(() => ({}));
-  let facts = core.mergeRuntimeFacts(persistedFacts, await getLatestRuntimeFacts(factModelHints).catch(() => ({})));
+  // Facts come from this container's logs and its own serve jobs (08 P0-3).
+  let facts = core.mergeRuntimeFacts(persistedFacts, await getLatestRuntimeFacts(factModelHints, {
+    containerName: container.name,
+  }).catch(() => ({})));
   if (!facts.kvCacheTokens && !facts.maxConcurrency) {
     facts = core.mergeRuntimeFacts(facts, await getLatestRuntimeFacts(factModelHints, {
+      containerName: container.name,
       tail: process.env.VLLM_RUNTIME_FACT_LOG_TAIL || "20000",
     }).catch(() => ({})));
   }
@@ -4653,18 +4666,35 @@ function parseDockerCreatedAtSeconds(value) {
   return Number.isFinite(parsedMs) && parsedMs > 0 ? parsedMs / 1000 : null;
 }
 
-async function getLatestRuntimeFacts(modelHints = [], options = {}) {
-  const tail = String(options.tail || "2000");
-  const out = await docker(["logs", "--tail", tail, CONFIG.containerName], {
-    rejectOnError: false,
-    maxBuffer: Number(options.maxBuffer || 32 * 1024 * 1024),
+function getLatestRuntimeFacts(modelHints = [], options = {}) {
+  const readRuntimeFacts = createLatestRuntimeFactsReader({
+    docker,
+    getJobs: () => jobs.values(),
+    primaryContainerName: CONFIG.containerName,
   });
-  const needles = core.normalizeRuntimeFactHints(modelHints);
-  const jobText = Array.from(jobs.values())
-    .filter((job) => job.type === "serve" && (!needles.length || jobMatchesRuntimeFactHints(job, needles)))
-    .map((job) => (job.logs || []).join("\n"))
-    .join("\n");
-  const text = `${jobText}\n${out.stdout}${out.stderr}`;
+  return readRuntimeFacts(modelHints, options);
+}
+
+// Runtime facts of one container: its docker logs plus the logs of the serve
+// jobs that launched it. Without containerName the primary container is read.
+function createLatestRuntimeFactsReader({ docker: runDocker, getJobs, primaryContainerName }) {
+  return async function readRuntimeFacts(modelHints = [], options = {}) {
+    const containerName = String(options.containerName || primaryContainerName);
+    const tail = String(options.tail || "2000");
+    const out = await runDocker(["logs", "--tail", tail, containerName], {
+      rejectOnError: false,
+      maxBuffer: Number(options.maxBuffer || 32 * 1024 * 1024),
+    });
+    const needles = core.normalizeRuntimeFactHints(modelHints);
+    const jobText = core.serveJobsForContainer(getJobs(), containerName, { primaryContainerName })
+      .filter((job) => !needles.length || jobMatchesRuntimeFactHints(job, needles))
+      .map((job) => (job.logs || []).join("\n"))
+      .join("\n");
+    return parseLatestRuntimeFactsText(`${jobText}\n${out.stdout || ""}${out.stderr || ""}`);
+  };
+}
+
+function parseLatestRuntimeFactsText(text) {
   return {
     kvCacheTokens: lastIntegerMatch(text, /GPU KV cache size:\s*([\d,]+)\s*tokens/gi),
     maxContextTokens: lastIntegerMatch(text, /Maximum concurrency for\s*([\d,]+)\s*tokens per request/gi),
@@ -5374,6 +5404,7 @@ module.exports = {
   summarizeModelConfigCapabilities,
   buildModelStats,
   buildSglangRuntimeFacts,
+  createLatestRuntimeFactsReader,
   getModelConfigRequest,
   buildVllmMemoryEstimate,
   buildServerMemoryEstimate,

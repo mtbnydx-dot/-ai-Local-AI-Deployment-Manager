@@ -1373,6 +1373,15 @@ const runtimeRequestHandlers = core.createRuntimeRequestHandlers({
   defaultTail: 200,
   cleanRequired,
   prompt: "Reply with exactly: llama.cpp OK",
+  // GET /api/logs?instance= reads only containers this manager owns (08 P0-3).
+  resolveLogContainer: core.createOwnedRuntimeContainerResolver({
+    primaryContainerName: CONFIG.containerName,
+    managerId: CONFIG.managerId,
+    ownerLabelKey: MANAGER_LABEL_KEY,
+    engines: ["llama"],
+    getContainerStatus: (name) => getContainerStatus(name),
+    listManagedContainers: () => listManagedContainers(),
+  }),
 });
 const {
   startDockerDesktopRequest,
@@ -3052,7 +3061,8 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const factModelHints = Array.from(new Set(servedModels
     .flatMap((model) => [model.id, model.root])
     .filter(Boolean)));
-  const facts = await getLatestRuntimeFacts(factModelHints).catch(() => ({}));
+  // Facts come from this container's logs and its own serve jobs (08 P0-3).
+  const facts = await getLatestRuntimeFacts(factModelHints, { containerName: container.name }).catch(() => ({}));
   const servedById = Object.fromEntries(servedModels.map((model) => [model.id, model]));
   const metrics = parsePrometheusMetrics(metricsText);
   const processStartSeconds = firstMetricValue(metrics, "process_start_time_seconds")
@@ -3221,15 +3231,20 @@ function deriveKvCapacityTokens(metrics, servedModel, facts) {
   return null;
 }
 
-async function getLatestRuntimeFacts(modelHints = []) {
-  const out = await docker(["logs", "--tail", "2000", CONFIG.containerName], { rejectOnError: false });
+async function getLatestRuntimeFacts(modelHints = [], options = {}) {
+  // Without containerName the primary container is read, as before.
+  const containerName = String(options.containerName || CONFIG.containerName);
+  const out = await docker(["logs", "--tail", "2000", containerName], { rejectOnError: false });
   const needles = core.normalizeRuntimeFactHints(modelHints);
-  const jobText = Array.from(jobs.values())
-    .filter((job) => job.type === "serve" && (!needles.length || jobMatchesRuntimeFactHints(job, needles)))
+  const containerServeJobs = core.serveJobsForContainer(jobs.values(), containerName, {
+    primaryContainerName: CONFIG.containerName,
+  });
+  const jobText = containerServeJobs
+    .filter((job) => !needles.length || jobMatchesRuntimeFactHints(job, needles))
     .map((job) => (job.logs || []).join("\n"))
     .join("\n");
-  const latestServe = Array.from(jobs.values()).filter((job) => job.type === "serve").at(-1);
-  const text = `${jobText}\n${out.stdout}${out.stderr}`;
+  const latestServe = containerServeJobs.at(-1);
+  const text = `${jobText}\n${out.stdout || ""}${out.stderr || ""}`;
   return {
     modelName: latestServe?.meta?.name || null,
     maxContextTokens: Number(latestServe?.meta?.maxModelLen || lastIntegerMatch(text, /(?:n_ctx|ctx-size|ctx_size)\s*[=:]\s*([\d,]+)/gi)) || null,
