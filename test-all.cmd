@@ -56,6 +56,7 @@ call :checkps1 "tts-platform\scripts\start_voxcpm.ps1"
 call :checkps1 "tts-platform\scripts\start_qwen_design.ps1"
 call :checkps1 "tts-platform\scripts\install_model.ps1"
 call :checkps1 "tts-platform\scripts\status.ps1"
+call :scriptEncoding
 call :findpy
 call :checkpy "tts-platform\gateway\main.py"
 call :checkpy "tts-platform\gateway\tts_config.py"
@@ -128,6 +129,20 @@ echo.
 echo == Syntax check %FILE% ==
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\check-powershell-syntax.ps1" "%ROOT%%FILE%"
 call :record "syntax %FILE%" %ERRORLEVEL%
+exit /b 0
+
+:scriptEncoding
+rem Tracked *.cmd and *.ps1 files must be CRLF without a BOM. Outside a git
+rem work tree (live root, extracted release) the check exits 2 and is skipped.
+echo.
+echo == Script encoding check (*.cmd, *.ps1) ==
+node "%ROOT%scripts\check-script-encoding.js"
+set "CODE=%ERRORLEVEL%"
+if "%CODE%"=="2" (
+  call :skip "script encoding check" "not a git work tree"
+  exit /b 0
+)
+call :record "script encoding check" %CODE%
 exit /b 0
 
 :findpy
