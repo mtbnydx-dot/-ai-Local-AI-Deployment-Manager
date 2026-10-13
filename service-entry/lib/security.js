@@ -22,6 +22,13 @@ const core = require("../../manager-core");
 
 const MANAGEMENT_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const KEY_STORE_CACHE_MS = 5000;
+const KEY_STORE_ISSUE_LOG_MS = 60_000;
+
+// Gateway callers may be anyone on the LAN or the internet, so their error
+// text never carries paths, ports or env switches. The detail goes to the
+// server log (redacted) instead.
+const GATEWAY_UNAVAILABLE_MESSAGE = "服务暂时不可用 / Service temporarily unavailable";
+const GATEWAY_KEY_NOT_CONFIGURED_MESSAGE = "服务端要求 API Key，但尚未配置任何密钥。 / An API key is required but none is configured on the server.";
 
 // Every header a reverse proxy (Caddy, cloudflared, a CDN) or this entry's own
 // hop may add. The presence of any of them marks a request as proxied, which
@@ -143,6 +150,8 @@ function createEntrySecurity(options = {}) {
   // that were started outside this process.
   let trustToken = options.trustToken || core.generateGatewayTrustToken();
   let keyStoreCache = { value: null, expiresAt: 0, promise: null };
+  let keyStoreIssueLog = { detail: "", at: 0 };
+  const logError = typeof options.logError === "function" ? options.logError : console.error;
 
   // Reachable from off-box: anything other than a loopback bind.
   const lanMode = !["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase());
@@ -317,12 +326,12 @@ function createEntrySecurity(options = {}) {
         try {
           settings = await core.readJsonFile(exposureFile, null);
         } catch (error) {
-          issues.push({ manager: manager.id, file: exposureFile, message: error.message });
+          issues.push({ manager: manager.id, file: exposureFile, message: core.redactSecrets(String(error.message || "")) });
         }
         try {
           clients = await core.readJsonFile(clientsFile, null);
         } catch (error) {
-          issues.push({ manager: manager.id, file: clientsFile, message: error.message });
+          issues.push({ manager: manager.id, file: clientsFile, message: core.redactSecrets(String(error.message || "")) });
         }
         stores.push({ manager, settings, clients });
       }
@@ -343,6 +352,16 @@ function createEntrySecurity(options = {}) {
     keyStoreCache = { value: null, expiresAt: 0, promise: null };
   }
 
+  // Every gateway request hits this while the store is broken, so the same
+  // detail is logged once a minute at most.
+  function logKeyStoreIssues(issues) {
+    const detail = issues.map((item) => `${item.manager}: ${item.file} (${item.message})`).join("; ");
+    const now = Date.now();
+    if (detail === keyStoreIssueLog.detail && now - keyStoreIssueLog.at < KEY_STORE_ISSUE_LOG_MS) return;
+    keyStoreIssueLog = { detail, at: now };
+    logError(core.redactSecrets(`gateway auth: service key store could not be read, refusing gateway requests: ${detail}`));
+  }
+
   async function authorizeGatewayRequest(req) {
     const current = policy();
     const presentedKey = core.extractServiceApiKey(req.headers || {}, { acceptRawAuthorization: true });
@@ -351,11 +370,12 @@ function createEntrySecurity(options = {}) {
     // A corrupt key store must never read as "no keys configured", which would
     // otherwise let an unauthenticated request through.
     if (issues.length) {
+      logKeyStoreIssues(issues);
       return {
         ok: false,
         status: 503,
         code: "key_store_unreadable",
-        message: `Service key store could not be read: ${issues.map((item) => item.file).join(", ")}`,
+        message: GATEWAY_UNAVAILABLE_MESSAGE,
       };
     }
 
@@ -370,11 +390,13 @@ function createEntrySecurity(options = {}) {
     });
     if (!configured.length) {
       if (!current.requireApiKey) return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
+      // The remedy (generate a key, or the env switch) is shown to the
+      // operator by describe(); the gateway caller only learns the state.
       return {
         ok: false,
         status: 503,
         code: "api_key_not_configured",
-        message: "An API key is required but none is configured. Generate one in a manager's service page, or set SERVICE_ENTRY_REQUIRE_API_KEY=0 to disable.",
+        message: GATEWAY_KEY_NOT_CONFIGURED_MESSAGE,
       };
     }
     if (!presentedKey) {

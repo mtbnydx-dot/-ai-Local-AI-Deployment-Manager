@@ -49,6 +49,9 @@ const FLEET_API_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_FLEE
 const GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_MAX_BODY_BYTES, 32 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
 const TTS_GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_TTS_MAX_BODY_BYTES, 16 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
 const TTS_UI_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+// /gateway/* answers anyone who can reach it, so an offline upstream is named
+// generically; which component on which port goes to the access log only.
+const UPSTREAM_DOWN_MESSAGE = "上游服务未运行 / Upstream service is not running";
 // A JSON body exists simultaneously as stream chunks, a concatenated Buffer,
 // a UTF-8 string and parsed objects. Account conservatively for that real peak
 // instead of treating one raw byte as one byte of process memory.
@@ -416,19 +419,24 @@ async function startServiceEntry() {
     process.exit(1);
   });
   server.listen(PORT, HOST, () => {
-    const state = security.policy();
-    console.log(`Service entry listening on http://${HOST}:${PORT}`);
-    console.log(`  gateway auth: ${state.requireApiKey ? "required" : "disabled"} (SERVICE_ENTRY_REQUIRE_API_KEY=${state.requireApiKeyMode})`);
-    console.log(`  lan admin:    ${state.allowLanAdmin ? "allowed" : "local only"} (SERVICE_ENTRY_ALLOW_LAN_ADMIN)`);
-    console.log(`  cors:         ${state.corsMode}${state.allowedOrigins.length ? ` (${state.allowedOrigins.join(", ")})` : ""}`);
-    if (state.lanMode && !state.requireApiKey) {
-      console.warn("  WARNING: listening off-loopback with API key enforcement disabled.");
-    }
-    if (!state.requireApiKey) {
-      console.warn("  HINT: 不受信环境请设置 SERVICE_ENTRY_REQUIRE_API_KEY=1，避免网页跨站盲打本地推理。");
-    }
+    logStartupSummary(security.policy());
   });
   return server;
+}
+
+// Only the real warning goes to stderr. The hint is advice for a default
+// loopback install, and log tooling classifies every stderr line as an error.
+function logStartupSummary(state, { host = HOST, port = PORT, log = console.log, warn = console.warn } = {}) {
+  log(`Service entry listening on http://${host}:${port}`);
+  log(`  gateway auth: ${state.requireApiKey ? "required" : "disabled"} (SERVICE_ENTRY_REQUIRE_API_KEY=${state.requireApiKeyMode})`);
+  log(`  lan admin:    ${state.allowLanAdmin ? "allowed" : "local only"} (SERVICE_ENTRY_ALLOW_LAN_ADMIN)`);
+  log(`  cors:         ${state.corsMode}${state.allowedOrigins.length ? ` (${state.allowedOrigins.join(", ")})` : ""}`);
+  if (state.lanMode && !state.requireApiKey) {
+    warn("  WARNING: listening off-loopback with API key enforcement disabled.");
+  }
+  if (!state.requireApiKey) {
+    log("  HINT: 不受信环境请设置 SERVICE_ENTRY_REQUIRE_API_KEY=1，避免网页跨站盲打本地推理。");
+  }
 }
 
 if (require.main === module) {
@@ -966,9 +974,8 @@ async function proxyTtsGatewayRequest(req, res, url) {
     ? { clientId: auth.client.id, managerId: auth.matchedManager || "tts", endpoint: synthesis.endpoint, kind: synthesis.kind, characters: 0, engine: "unknown" }
     : null;
   if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
-    const message = `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`;
-    appendTtsAccessLog(req, route, 503, startedAt, message);
-    return sendJson(res, { detail: message, code: "tts_gateway_offline" }, 503, gatewayCorsHeaders(req));
+    appendTtsAccessLog(req, route, 503, startedAt, `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`);
+    return sendJson(res, { detail: UPSTREAM_DOWN_MESSAGE, code: "service_unavailable" }, 503, gatewayCorsHeaders(req));
   }
 
   if (!(await acquireEntryConcurrency(req, res, auth))) return;
@@ -1200,7 +1207,7 @@ async function proxyGatewayRequest(req, res, url) {
     : requestBody;
   if (!(await isManagerPortListening(manager.port))) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, 503, startedAt, requestMetadata, `${manager.name} is not listening on port ${manager.port}.`, resolvedModel)).catch(() => {});
-    return sendJson(res, core.openAiGatewayError("manager_offline", `${manager.name} is not listening on port ${manager.port}.`), 503);
+    return sendJson(res, core.openAiGatewayError("service_unavailable", UPSTREAM_DOWN_MESSAGE), 503);
   }
   let targetPath = "";
   try {
@@ -1367,8 +1374,8 @@ async function handleGatewayStatus(req, res, url) {
 // --- search gateway / MCP proxies -------------------------------------------
 
 const AUX_UPSTREAMS = {
-  search: { port: () => SEARCH_GATEWAY_PORT, name: "Search gateway", offlineCode: "search_gateway_offline", timeoutMs: 10 * 60 * 1000 },
-  mcp: { port: () => PLATFORM_MCP_PORT, name: "MCP server", offlineCode: "mcp_offline", timeoutMs: 10 * 60 * 1000 },
+  search: { port: () => SEARCH_GATEWAY_PORT, name: "Search gateway", timeoutMs: 10 * 60 * 1000 },
+  mcp: { port: () => PLATFORM_MCP_PORT, name: "MCP server", timeoutMs: 10 * 60 * 1000 },
 };
 
 async function auxUpstreamCredential(service) {
@@ -1439,9 +1446,8 @@ async function proxyAuxGatewayRequest(req, res, url) {
   }
   const port = upstreamSpec.port();
   if (!(await isManagerPortListening(port))) {
-    const message = `${upstreamSpec.name} is not listening on port ${port}.`;
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, message)).catch(() => {});
-    return sendJson(res, core.openAiGatewayError(upstreamSpec.offlineCode, message), 503, gatewayCorsHeaders(req));
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, `${upstreamSpec.name} is not listening on port ${port}.`)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("service_unavailable", UPSTREAM_DOWN_MESSAGE), 503, gatewayCorsHeaders(req));
   }
   const declaredLength = Number(req.headers?.["content-length"] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > GATEWAY_MAX_BODY_BYTES) {
@@ -1653,7 +1659,9 @@ function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, bo
       ? Math.max(0, Number(parsedBody.toolSchemaCount))
       : Array.isArray(parsedBody?.tools) ? parsedBody.tools.length : 0,
     toolUseCount: 0,
-    error: String(error || "").slice(0, 240),
+    // Upstream and transport errors can echo request text; nothing secret
+    // reaches the log file.
+    error: core.redactSecrets(String(error || "")).slice(0, 240),
   };
 }
 
@@ -2465,6 +2473,7 @@ module.exports = {
   setEntryGatewayAccessSink,
   shouldLogTtsAccess,
   logEntryGatewayAccessWhenDone,
+  logStartupSummary,
   flushTtsSettlements: () => ttsReconciler.flush(),
   resetEntryRateLimitBuckets() {
     entryRateBuckets.clear();

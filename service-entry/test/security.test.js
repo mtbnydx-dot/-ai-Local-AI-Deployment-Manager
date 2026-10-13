@@ -51,6 +51,16 @@ function req(remoteAddress, headers = {}, method = "POST") {
   return { method, headers, socket: { remoteAddress } };
 }
 
+// Gateway error text must not tell a caller where files live, which port a
+// component uses, or which env switch to flip (P0-26).
+function assertPublicMessage(message, label = "message") {
+  const text = String(message || "");
+  assert.equal(text.includes(":\\"), false, `${label} has a Windows path: ${text}`);
+  assert.doesNotMatch(text, /(?:^|[\s"'(])\/[\w.-]+\/[\w./-]*/, `${label} has a path: ${text}`);
+  assert.equal(text.includes("5177"), false, `${label} has a port: ${text}`);
+  assert.doesNotMatch(text, /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/, `${label} names an env var: ${text}`);
+}
+
 test("requireApiKey switch: auto follows the bind address, 1 and 0 are explicit", (t) => {
   withCleanEnv(t);
   const local = createEntrySecurity({ host: "127.0.0.1", managers: [] });
@@ -272,11 +282,14 @@ test("gateway auth fails closed when a key store is unreadable or empty", async 
   const root = tempRoot(t, "entry-auth-bad-");
 
   const corrupt = [await makeManager(root, "vllm", { exposure: '{"enabled":true,"requi', clients: { clients: [] } })];
-  const corruptSecurity = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers: corrupt });
+  const corruptSecurity = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers: corrupt, logError: () => {} });
   const denied = await corruptSecurity.authorizeGatewayRequest(req("192.168.0.5", { authorization: "Bearer sk-anything" }));
   assert.equal(denied.ok, false);
   assert.equal(denied.status, 503);
   assert.equal(denied.code, "key_store_unreadable");
+  assertPublicMessage(denied.message, "key_store_unreadable");
+  assert.equal(denied.message.includes(root), false);
+  assert.equal(denied.message, "服务暂时不可用 / Service temporarily unavailable");
 
   // Requiring a key with none configured must refuse rather than wave traffic through.
   const empty = [await makeManager(root, "llama", {
@@ -288,6 +301,59 @@ test("gateway auth fails closed when a key store is unreadable or empty", async 
   assert.equal(noKeys.ok, false);
   assert.equal(noKeys.status, 503);
   assert.equal(noKeys.code, "api_key_not_configured");
+  assertPublicMessage(noKeys.message, "api_key_not_configured");
+});
+
+test("key store failures reach the server log with details, redacted and rate-limited", async (t) => {
+  withCleanEnv(t);
+  process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "1";
+  const root = tempRoot(t, "entry-auth-log-");
+  // A manager directory whose name looks like a key stands in for any secret
+  // that a file-system error message might echo.
+  const fakeKey = "sk-fakeStoreKey0001";
+  const managers = [await makeManager(root, fakeKey, { exposure: '{"enabled":true,"requi', clients: { clients: [] } })];
+  const logged = [];
+  const security = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers, logError: (line) => logged.push(line) });
+
+  for (let index = 0; index < 3; index += 1) {
+    const denied = await security.authorizeGatewayRequest(req("192.168.0.5", { authorization: "Bearer sk-anything" }));
+    assert.equal(denied.code, "key_store_unreadable");
+    assert.equal(denied.message.includes(fakeKey), false);
+  }
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /service-exposure-settings\.json/);
+  assert.match(logged[0], /not valid JSON/);
+  assert.match(logged[0], /<redacted>/);
+  assert.equal(logged[0].includes(fakeKey), false);
+
+  // The admin view keeps the paths it always had, minus anything secret.
+  const state = await security.describe();
+  assert.equal(state.keyStore.readable, false);
+  assert.ok(state.keyStore.issues.every((item) => !item.message.includes(fakeKey)));
+});
+
+test("the startup hint goes to stdout and the off-loopback warning stays on stderr", (t) => {
+  const entry = require("../server");
+  const stdout = t.mock.method(console, "log", () => {});
+  const stderr = t.mock.method(console, "warn", () => {});
+  const base = { requireApiKeyMode: "auto", allowLanAdmin: false, corsMode: "deny", allowedOrigins: [] };
+
+  entry.logStartupSummary({ ...base, lanMode: true, requireApiKey: false });
+  const out = stdout.mock.calls.map((call) => String(call.arguments[0]));
+  const err = stderr.mock.calls.map((call) => String(call.arguments[0]));
+  assert.ok(out.some((line) => line.includes("HINT:")), "HINT is printed with console.log");
+  assert.equal(err.some((line) => line.includes("HINT:")), false);
+  assert.deepEqual(err.filter((line) => line.includes("WARNING:")).length, 1);
+
+  stdout.mock.resetCalls();
+  stderr.mock.resetCalls();
+  entry.logStartupSummary({ ...base, lanMode: false, requireApiKey: false });
+  assert.ok(stdout.mock.calls.some((call) => String(call.arguments[0]).includes("HINT:")));
+  assert.equal(stderr.mock.callCount(), 0);
+
+  stdout.mock.resetCalls();
+  entry.logStartupSummary({ ...base, lanMode: true, requireApiKey: true });
+  assert.equal(stdout.mock.calls.some((call) => String(call.arguments[0]).includes("HINT:")), false);
 });
 
 test("describe() reports what is actually enforced, not just what is configured", async (t) => {
@@ -438,6 +504,7 @@ test("gateway rejects an unauthenticated request before proxying when a key is r
   assert.ok([401, 503].includes(response.status), `expected 401/503, got ${response.status}`);
   const body = await response.json();
   assert.ok(["unauthorized", "api_key_not_configured", "key_store_unreadable"].includes(body.error.code), body.error.code);
+  assertPublicMessage(body.error.message, body.error.code);
 });
 
 test("gateway mutating requests with a foreign Origin are rejected", (t) => {
