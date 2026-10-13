@@ -28,6 +28,8 @@ function normalizeAccessEvent(entry = {}, lanAddress = "") {
   const normalized = {
     at: entry.at || null,
     atMs: Number.isFinite(atMs) ? atMs : 0,
+    // requestId and terminalState are empty for entries written before P0-19.
+    requestId: String(entry.requestId || "").slice(0, 128),
     remoteAddress,
     external: isExternalAddress(remoteAddress, lanAddress),
     method: String(entry.method || "").toUpperCase(),
@@ -36,8 +38,10 @@ function normalizeAccessEvent(entry = {}, lanAddress = "") {
     status,
     ok: status >= 200 && status < 400,
     statusFamily: status ? `${Math.floor(status / 100)}xx` : "unknown",
+    terminalState: String(entry.terminalState || ""),
     model: String(entry.model || ""),
     resolvedModel: String(entry.resolvedModel || ""),
+    resolvedInstance: String(entry.resolvedInstance || ""),
     stream: Boolean(entry.stream),
     authSource: String(entry.authSource || ""),
     clientId: String(entry.clientId || ""),

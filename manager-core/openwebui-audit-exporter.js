@@ -7,7 +7,9 @@ import pathlib
 import sqlite3
 import sys
 
-DB = "/app/backend/data/webui.db"
+# OPENWEBUI_AUDIT_DB is only set by tests; inside the container the default
+# path is used.
+DB = os.environ.get("OPENWEBUI_AUDIT_DB") or "/app/backend/data/webui.db"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/openwebui_audit_export"
 # Optional cursor: only chats touched after this raw updated_at value are
 # exported. Passed back verbatim from a previous run's max_updated_at, so this
@@ -94,8 +96,25 @@ else:
     ).fetchall()
 
 total_chats = con.execute("select count(*) from chat").fetchone()[0]
-max_updated_row = con.execute("select max(updated_at) from chat").fetchone()
-max_updated_at = max_updated_row[0] if max_updated_row else None
+
+def cursor_from_rows(fetched, since):
+    # The next cursor comes from the rows this run actually exported. A
+    # separate "select max(updated_at)" could see chats written after the
+    # export query and would skip them forever. With no rows the cursor stays.
+    best = since
+    for row in fetched:
+        value = row["updated_at"]
+        if value is None:
+            continue
+        try:
+            newer = best is None or float(value) > float(best)
+        except Exception:
+            newer = best is None or str(value) > str(best)
+        if newer:
+            best = value
+    return best
+
+max_updated_at = cursor_from_rows(rows, SINCE)
 
 users = [dict(row) for row in con.execute("select id, name, email, role, created_at, updated_at, last_active_at from user order by created_at")]
 export = {
@@ -197,7 +216,7 @@ with open(md_path, "w", encoding="utf-8") as f:
 
 db_hashes = {}
 for name in ["webui.db", "webui.db-wal", "webui.db-shm"]:
-    p = os.path.join("/app/backend/data", name)
+    p = os.path.join(os.path.dirname(DB), name)
     if os.path.exists(p):
         db_hashes[name] = {
             "sha256": file_hash(p),

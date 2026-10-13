@@ -1018,28 +1018,34 @@ test("service gateway middleware enforces auth, CORS, limits, and emits metadata
   assert.equal(response.state.statusCode, 403);
   assert.equal(response.state.json.error.code, "origin_not_allowed");
 
+  // Open CORS is honoured only while an API key is required. It reflects the
+  // origin and requested headers, never allows credentials, and grants Private
+  // Network Access only when allowPrivateNetwork is on.
+  const openCorsSettings = {
+    enabled: true,
+    exposureMode: "lan",
+    corsMode: "open",
+    allowedOrigins: ["https://ignored-in-open-mode.example"],
+    requireApiKey: true,
+    apiKeyHash: core.hashServiceApiKey("sk-open-cors-test"),
+    exposeOpenAI: true,
+    allowPrivateNetwork: false,
+  };
   const openCorsMiddleware = core.createServiceGatewayMiddleware({
     gatewayName: "open-cors-manager",
     supportedKinds: ["openai"],
-    getServiceExposureSettings: async () => ({
-      enabled: true,
-      exposureMode: "lan",
-      corsMode: "open",
-      allowedOrigins: ["https://ignored-in-open-mode.example"],
-      requireApiKey: false,
-      exposeOpenAI: true,
-    }),
+    getServiceExposureSettings: async () => openCorsSettings,
     getServiceClientsLedger: async () => ({ clients: [] }),
     resolveServiceClientForApiKey: async () => null,
     rateBuckets: new Map(),
     concurrencyBuckets: new Map(),
     appendAccessLog: async () => {},
   });
-  response = makeResponse();
-  await openCorsMiddleware({
+  const openPreflight = () => ({
     method: "OPTIONS",
     originalUrl: "/serve/v1/chat/completions",
     headers: {
+      host: "192.168.1.2:5177",
       origin: "capacitor://localhost",
       "access-control-request-method": "POST",
       "access-control-request-headers": "authorization, content-type, user-agent, x-chatbox-custom",
@@ -1047,13 +1053,32 @@ test("service gateway middleware enforces auth, CORS, limits, and emits metadata
     },
     socket: { remoteAddress: "192.168.1.117" },
     body: {},
-  }, response.res, () => {});
+  });
+  response = makeResponse();
+  await openCorsMiddleware(openPreflight(), response.res, () => {});
   assert.equal(response.state.statusCode, 204);
   assert.equal(response.headers.get("access-control-allow-origin"), "capacitor://localhost");
   assert.equal(response.headers.get("access-control-allow-headers"), "authorization,content-type,user-agent,x-chatbox-custom");
-  assert.equal(response.headers.get("access-control-allow-credentials"), "true");
-  assert.equal(response.headers.get("access-control-allow-private-network"), "true");
+  assert.equal(response.headers.has("access-control-allow-credentials"), false);
+  assert.equal(response.headers.get("access-control-expose-headers"), "x-request-id, x-local-ai-route, retry-after");
+  assert.equal(response.headers.has("access-control-allow-private-network"), false);
   assert.match(response.headers.get("vary"), /Access-Control-Request-Headers/);
+
+  openCorsSettings.allowPrivateNetwork = true;
+  response = makeResponse();
+  await openCorsMiddleware(openPreflight(), response.res, () => {});
+  assert.equal(response.state.statusCode, 204);
+  assert.equal(response.headers.get("access-control-allow-private-network"), "true");
+  assert.equal(response.headers.has("access-control-allow-credentials"), false);
+
+  // Without a required API key the same open settings behave as restricted.
+  openCorsSettings.requireApiKey = false;
+  response = makeResponse();
+  await openCorsMiddleware(openPreflight(), response.res, () => {});
+  assert.equal(response.state.statusCode, 403);
+  assert.equal(response.state.json.error.code, "origin_not_allowed");
+  assert.equal(response.headers.has("access-control-allow-origin"), false);
+  assert.equal(response.headers.has("access-control-allow-private-network"), false);
 
   const globalSecret = "sk-global-billing-test";
   const globalSettings = {
@@ -1874,6 +1899,10 @@ test("service policy normalizes exposure settings and migrates secrets", () => {
     allowedOrigins: "https://ignored-in-open-mode.example",
   });
   assert.equal(openCors.corsMode, "open");
+  // Local mode defaults to no API key, so the stored "open" is not effective.
+  assert.equal(openCors.requireApiKey, false);
+  assert.equal(core.resolveEffectiveCorsMode(openCors), "restricted");
+  assert.equal(core.resolveEffectiveCorsMode({ ...openCors, requireApiKey: true }), "open");
 
   const partialCorsUpdate = core.normalizeServiceExposureSettings(
     { corsMode: "open" },
@@ -1881,11 +1910,79 @@ test("service policy normalizes exposure settings and migrates secrets", () => {
   );
   assert.equal(partialCorsUpdate.requireApiKey, false);
 
+  // Deny by default: no corsMode and no origins (llama's old default "open")
+  // and unknown values read as restricted. PNA is off unless enabled.
   const llama = core.normalizeServiceExposureSettings({ exposeOpenCode: true }, {}, { allowExposeOpenCode: false });
-  assert.equal(llama.corsMode, "open");
+  assert.equal(llama.corsMode, "restricted");
+  assert.equal(llama.allowPrivateNetwork, false);
   assert.equal(llama.exposeOpenCode, false);
+  assert.equal(core.normalizeServiceExposureSettings({ corsMode: "anything" }).corsMode, "restricted");
+  assert.equal(core.normalizeServiceExposureSettings({}, { corsMode: "open", allowPrivateNetwork: true }).allowPrivateNetwork, true);
+  assert.equal(core.normalizeCorsMode(undefined), "restricted");
   assert.equal(core.redactServiceExposureSettings(vllm).apiKeyHash, "");
   assert.equal(core.redactServiceExposureSettings(vllm).hasApiKey, true);
+});
+
+test("manager CORS is deny-by-default and open mode needs an API key", () => {
+  function corsResponse() {
+    const headers = new Map();
+    return {
+      headers,
+      setHeader(key, value) { headers.set(String(key).toLowerCase(), value); },
+      getHeader(key) { return headers.get(String(key).toLowerCase()); },
+    };
+  }
+  const request = (origin, extra = {}) => ({ headers: { host: "192.168.1.2:5177", origin, ...extra } });
+  const defaults = core.normalizeServiceExposureSettings({});
+  assert.equal(defaults.corsMode, "restricted");
+
+  // No Origin header and same-origin pages pass; any other origin is refused.
+  assert.deepEqual(core.applyServiceCorsHeaders({ headers: { host: "192.168.1.2:5177" } }, corsResponse(), defaults), { ok: true });
+  let res = corsResponse();
+  assert.equal(core.applyServiceCorsHeaders(request("http://192.168.1.2:5177"), res, defaults).ok, true);
+  assert.equal(res.headers.has("access-control-allow-credentials"), false);
+  res = corsResponse();
+  const refused = core.applyServiceCorsHeaders(request("https://evil.example"), res, defaults);
+  assert.equal(refused.ok, false);
+  assert.equal(res.headers.size, 0);
+
+  // Configured origins pass in restricted mode with the explicit expose list
+  // and no credentials. PNA needs allowPrivateNetwork and an allowed origin.
+  const restricted = { ...defaults, allowedOrigins: ["https://app.example"] };
+  res = corsResponse();
+  assert.equal(core.applyServiceCorsHeaders(request("https://app.example", { "access-control-request-private-network": "true" }), res, restricted).mode, "restricted");
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://app.example");
+  assert.equal(res.headers.get("access-control-expose-headers"), core.SERVICE_CORS_EXPOSE_HEADERS);
+  assert.equal(res.headers.get("access-control-expose-headers"), "x-request-id, x-local-ai-route, retry-after");
+  assert.equal(res.headers.has("access-control-allow-private-network"), false);
+  assert.equal(res.headers.has("access-control-allow-credentials"), false);
+  res = corsResponse();
+  core.applyServiceCorsHeaders(request("https://app.example", { "access-control-request-private-network": "true" }), res, { ...restricted, allowPrivateNetwork: true });
+  assert.equal(res.headers.get("access-control-allow-private-network"), "true");
+  res = corsResponse();
+  assert.equal(core.applyServiceCorsHeaders(request("https://other.example", { "access-control-request-private-network": "true" }), res, { ...restricted, allowPrivateNetwork: true }).ok, false);
+  assert.equal(res.headers.has("access-control-allow-private-network"), false);
+
+  // "*" and "open" both mean any origin, so both need a required API key.
+  assert.equal(core.applyServiceCorsHeaders(request("https://evil.example"), corsResponse(), { ...defaults, allowedOrigins: ["*"] }).ok, false);
+  assert.equal(core.applyServiceCorsHeaders(request("https://evil.example"), corsResponse(), { ...defaults, corsMode: "open" }).ok, false);
+  res = corsResponse();
+  assert.equal(core.applyServiceCorsHeaders(request("https://any.example"), res, { ...defaults, corsMode: "open", requireApiKey: true }).mode, "open");
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://any.example");
+  assert.equal(res.headers.has("access-control-allow-credentials"), false);
+
+  // GET /api/service-exposure explains why an explicit open is not in effect.
+  const openWithoutKey = core.normalizeServiceExposureSettings({ enabled: true, exposureMode: "lan", requireApiKey: false, corsMode: "open" });
+  const payload = core.buildServiceExposurePayloadSnapshot(openWithoutKey, { docker: { ok: true }, container: {}, endpoint: {}, runtime: {} }, { managerHost: "0.0.0.0", managerPort: 5177, lanAddress: "192.168.1.2" });
+  assert.deepEqual(payload.warnings.map((item) => item.code), ["cors_open_requires_api_key"]);
+  assert.match(payload.warnings[0].message, / \/ /, "server copy is bilingual");
+  assert.equal(payload.settings.allowPrivateNetwork, false);
+  const corsCheck = payload.checks.find((item) => item.title === "浏览器跨域（CORS）");
+  assert.equal(corsCheck.status, "warn");
+  assert.equal(corsCheck.detail, payload.warnings[0].message);
+  const openWithKey = core.normalizeServiceExposureSettings({ ...openWithoutKey, requireApiKey: true });
+  assert.deepEqual(core.buildServiceExposureWarnings(openWithKey), []);
+  assert.deepEqual(core.buildServiceExposurePayloadSnapshot(defaults, {}, {}).warnings, []);
 });
 
 test("service policy normalizes clients and enforces rate/concurrency buckets", () => {

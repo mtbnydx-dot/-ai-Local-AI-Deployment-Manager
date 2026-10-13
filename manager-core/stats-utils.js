@@ -122,28 +122,79 @@ function emptyStatsSummary(container, endpoint, options = {}) {
   };
 }
 
-function calculateRecentRates(samples, modelName, nowSeconds, counters, updateSamples) {
+// Recent-rate sampling window (docs/overhaul/08 P0-6). Each key keeps a short
+// in-memory ring of counter samples, so the rate no longer depends on how
+// often a UI happens to poll, and the 60 s history sampler alone still sees
+// traffic.
+const RECENT_RATE_SAMPLE_SPACING_SECONDS = 2;
+const RECENT_RATE_MIN_BASELINE_SECONDS = 10;
+const RECENT_RATE_MAX_SAMPLE_AGE_SECONDS = 150;
+const RECENT_RATE_MAX_SAMPLES = 40;
+const RECENT_RATE_DEFAULT_WINDOW_SECONDS = 60;
+
+function zeroRecentRates() {
+  return {
+    recentPromptTokensPerSecond: 0,
+    recentOutputTokensPerSecond: 0,
+    recentRequestsPerMinute: 0,
+  };
+}
+
+function recentRateSamples(value) {
+  if (Array.isArray(value)) return value.filter((sample) => sample && Number.isFinite(Number(sample.time)));
+  // A single object is the pre-window store shape.
+  return value && Number.isFinite(Number(value.time)) ? [value] : [];
+}
+
+/**
+ * Rates over the window ending now. The signature is kept; updateSamples is
+ * accepted and ignored, because every caller records a sample unless the
+ * newest is under 2 s old. The baseline is the sample aged 10-150 s whose age
+ * is closest to options.windowSeconds (default 60); without one the rates are
+ * zero. With a baseline the result adds windowSeconds, the baseline's age in
+ * whole seconds. A counter below the newest sample (an engine restart) clears
+ * the buffer and returns zeros.
+ */
+function calculateRecentRates(samples, modelName, nowSeconds, counters, _updateSamples, options = {}) {
   const store = samples && typeof samples.get === "function" && typeof samples.set === "function"
     ? samples
     : null;
+  const now = Number(nowSeconds);
   const promptTokens = Number(counters?.promptTokens || 0);
   const generationTokens = Number(counters?.generationTokens || 0);
   const requestCount = Number(counters?.requestCount || 0);
-  const previous = store?.get(modelName);
-  const current = { time: nowSeconds, promptTokens, generationTokens, requestCount };
-  if (store && updateSamples) store.set(modelName, current);
-  if (!previous || nowSeconds <= previous.time) {
-    return {
-      recentPromptTokensPerSecond: 0,
-      recentOutputTokensPerSecond: 0,
-      recentRequestsPerMinute: 0,
-    };
+  const current = { time: now, promptTokens, generationTokens, requestCount };
+  if (!Number.isFinite(now)) return zeroRecentRates();
+
+  let buffer = recentRateSamples(store?.get(modelName))
+    .filter((sample) => sample.time <= now && now - sample.time <= RECENT_RATE_MAX_SAMPLE_AGE_SECONDS);
+  const newest = buffer.at(-1);
+  if (newest && (promptTokens < Number(newest.promptTokens || 0)
+    || generationTokens < Number(newest.generationTokens || 0)
+    || requestCount < Number(newest.requestCount || 0))) {
+    store?.set(modelName, [current]);
+    return zeroRecentRates();
   }
-  const elapsed = nowSeconds - previous.time;
+
+  const targetSeconds = Number(options.windowSeconds) > 0 ? Number(options.windowSeconds) : RECENT_RATE_DEFAULT_WINDOW_SECONDS;
+  let baseline = null;
+  for (const sample of buffer) {
+    const age = now - sample.time;
+    if (age < RECENT_RATE_MIN_BASELINE_SECONDS) continue;
+    if (!baseline || Math.abs(age - targetSeconds) < Math.abs(now - baseline.time - targetSeconds)) baseline = sample;
+  }
+
+  if (!newest || now - newest.time >= RECENT_RATE_SAMPLE_SPACING_SECONDS) buffer.push(current);
+  if (buffer.length > RECENT_RATE_MAX_SAMPLES) buffer = buffer.slice(-RECENT_RATE_MAX_SAMPLES);
+  store?.set(modelName, buffer);
+
+  if (!baseline) return zeroRecentRates();
+  const elapsed = now - baseline.time;
   return {
-    recentPromptTokensPerSecond: Math.max(0, promptTokens - Number(previous.promptTokens || 0)) / elapsed,
-    recentOutputTokensPerSecond: Math.max(0, generationTokens - Number(previous.generationTokens || 0)) / elapsed,
-    recentRequestsPerMinute: Math.max(0, requestCount - Number(previous.requestCount || 0)) / elapsed * 60,
+    recentPromptTokensPerSecond: Math.max(0, promptTokens - Number(baseline.promptTokens || 0)) / elapsed,
+    recentOutputTokensPerSecond: Math.max(0, generationTokens - Number(baseline.generationTokens || 0)) / elapsed,
+    recentRequestsPerMinute: Math.max(0, requestCount - Number(baseline.requestCount || 0)) / elapsed * 60,
+    windowSeconds: Math.round(elapsed),
   };
 }
 

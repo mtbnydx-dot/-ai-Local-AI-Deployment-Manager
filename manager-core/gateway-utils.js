@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const { TextDecoder } = require("node:util");
 const { parseJsonSafe, waitForWritable } = require("./common-utils");
+const { normalizeRemoteAddress } = require("./network");
 const {
   GATEWAY_CLIENT_HEADER,
   GATEWAY_TIMESTAMP_HEADER,
@@ -16,6 +17,7 @@ const {
   hasGlobalServiceApiKey,
   globalServiceBillingClientId,
   isGlobalServiceApiKeyAccepted,
+  resolveEffectiveCorsMode,
   DEFAULT_GATEWAY_MAX_CONCURRENT,
 } = require("./service-policy");
 
@@ -1473,15 +1475,33 @@ function normalizeServiceCorsHeaderNames(value) {
     .filter((item) => /^[a-z0-9!#$%&'*+.^_`|~-]+$/i.test(item))));
 }
 
+// Response headers a cross-origin client may read. Never "*".
+const SERVICE_CORS_EXPOSE_HEADERS = "x-request-id, x-local-ai-route, retry-after";
+
+// An Origin that names the host the request was sent to is the manager's own
+// page; browsers send Origin on same-origin POSTs too.
+function isSameOriginRequest(req, origin) {
+  const host = String(req.headers?.host || "").trim().toLowerCase();
+  if (!host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host;
+  } catch {
+    return false;
+  }
+}
+
+// Deny by default (docs/overhaul/08 P0-21). Restricted mode admits same-origin
+// requests and the configured origins only. "open" reflects any origin, and
+// only while an API key is required. Credentials are never allowed, and a
+// Private Network Access preflight is granted only with allowPrivateNetwork.
 function applyServiceCorsHeaders(req, res, settings = {}, allowHeaders = DEFAULT_SERVICE_CORS_ALLOW_HEADERS) {
   const origin = String(req.headers.origin || "").trim();
   if (!origin) return { ok: true };
-  const configuredOrigins = Array.isArray(settings.allowedOrigins) ? settings.allowedOrigins : [];
-  const corsMode = settings.corsMode
-    ? String(settings.corsMode).toLowerCase()
-    : configuredOrigins.length ? "restricted" : "open";
-  const openCors = corsMode !== "restricted";
-  if (!openCors && !isServiceOriginAllowed(origin, configuredOrigins, false)) {
+  const openCors = resolveEffectiveCorsMode(settings) === "open";
+  // A "*" entry means any origin, so it follows the same API-key rule as open.
+  const configuredOrigins = (Array.isArray(settings.allowedOrigins) ? settings.allowedOrigins : [])
+    .filter((item) => openCors || String(item || "").trim() !== "*");
+  if (!openCors && !isSameOriginRequest(req, origin) && !isServiceOriginAllowed(origin, configuredOrigins, false)) {
     return { ok: false, message: `Origin is not allowed: ${origin}` };
   }
   const requestedHeaders = normalizeServiceCorsHeaderNames(req.headers["access-control-request-headers"]);
@@ -1498,11 +1518,9 @@ function applyServiceCorsHeaders(req, res, settings = {}, allowHeaders = DEFAULT
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
   res.setHeader("access-control-allow-headers", resolvedHeaders.join(","));
   res.setHeader("access-control-max-age", "600");
-  if (openCors) {
-    res.setHeader("access-control-allow-credentials", "true");
-    res.setHeader("access-control-expose-headers", "*");
-  }
-  if (String(req.headers["access-control-request-private-network"] || "").toLowerCase() === "true") {
+  res.setHeader("access-control-expose-headers", SERVICE_CORS_EXPOSE_HEADERS);
+  if (settings.allowPrivateNetwork === true
+    && String(req.headers["access-control-request-private-network"] || "").toLowerCase() === "true") {
     res.setHeader("access-control-allow-private-network", "true");
   }
   return { ok: true, mode: openCors ? "open" : "restricted", allowedHeaders: resolvedHeaders };
@@ -1584,19 +1602,65 @@ function gatewayHeaderHost(headers = {}, name) {
   }
 }
 
-function buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource) {
+// Calls callback({ terminalState }) exactly once: "completed" on finish, or
+// "client_abort" when the connection closes before the response finished
+// (a client that hangs up mid-stream never emits finish).
+function onResponseDone(res, callback) {
+  let settled = false;
+  const settle = (terminalState) => {
+    if (settled) return;
+    settled = true;
+    res.removeListener?.("finish", onFinish);
+    res.removeListener?.("close", onClose);
+    try {
+      callback({ terminalState });
+    } catch {
+      // Logging callbacks must never break the response path.
+    }
+  };
+  const onFinish = () => settle("completed");
+  const onClose = () => settle(res.writableFinished ? "completed" : "client_abort");
+  if (res.writableFinished) {
+    queueMicrotask(() => settle("completed"));
+    return;
+  }
+  res.once("finish", onFinish);
+  res.once("close", onClose);
+}
+
+// The caller's address for the access log. A request proxied by a trusted
+// service-entry hop logs the client the entry vouched for; anything else logs
+// the socket peer. Read when the request starts, because a socket that is
+// already destroyed may no longer report its peer.
+function resolveAccessLogOrigin(req) {
+  const fallback = normalizeRemoteAddress(req?.socket?.remoteAddress || req?.ip || "");
+  try {
+    const origin = resolveGatewayRequestOrigin(req);
+    return { address: origin.address || fallback, socketAddress: origin.socketAddress || fallback };
+  } catch {
+    return { address: fallback, socketAddress: fallback };
+  }
+}
+
+function buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource, details = {}) {
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const usage = req.serviceGatewayAccessUsage || {};
   const inputTokens = Number(usage.inputTokens ?? usage.promptTokens ?? 0);
   const outputTokens = Number(usage.outputTokens ?? usage.generationTokens ?? 0);
   const headers = req.headers || {};
+  const terminalState = details.terminalState || "completed";
+  const origin = details.origin || resolveAccessLogOrigin(req);
   return {
     at: new Date().toISOString(),
-    remoteAddress: req.socket?.remoteAddress || req.ip || "",
+    requestId: normalizeOpenAiGatewayRequestId(req.serviceGateway?.requestId || headers[OPENAI_GATEWAY_REQUEST_ID_HEADER]),
+    remoteAddress: origin.address,
+    socketAddress: origin.socketAddress,
     method: req.method,
     path: String(req.originalUrl || req.url || "").split("?")[0],
     kind,
-    status: res.statusCode,
+    // 499 (client closed request) when the client left before any header.
+    status: terminalState === "client_abort" && !res.headersSent ? 499 : res.statusCode,
+    terminalState,
     model: typeof body.model === "string" ? body.model.slice(0, 160) : "",
     resolvedModel: String(usage.resolvedModel || "").slice(0, 220),
     resolvedInstance: String(usage.resolvedInstance || "").slice(0, 128),
@@ -1621,9 +1685,11 @@ function buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource
 function attachServiceGatewayAccessLog(req, res, kind, appendAccessLog) {
   const startedAt = Date.now();
   const authSource = serviceApiKeySource(req.headers || {});
-  res.once("finish", () => {
-    const entry = buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource);
-    appendAccessLog(entry).catch(() => {});
+  const origin = resolveAccessLogOrigin(req);
+  onResponseDone(res, ({ terminalState }) => {
+    const entry = buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource, { terminalState, origin });
+    const pending = appendAccessLog(entry);
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
   });
 }
 
@@ -1865,6 +1931,7 @@ module.exports = {
   isServiceKindEnabled,
   appendVaryHeader,
   isServiceOriginAllowed,
+  SERVICE_CORS_EXPOSE_HEADERS,
   applyServiceCorsHeaders,
   configureGatewayTrust,
   resolveGatewayRequestOrigin,
@@ -1872,6 +1939,8 @@ module.exports = {
   isLocalRequester,
   serviceClientFingerprint,
   serviceGatewayReject,
+  onResponseDone,
   buildServiceGatewayAccessLogEntry,
+  attachServiceGatewayAccessLog,
   createServiceGatewayMiddleware,
 };

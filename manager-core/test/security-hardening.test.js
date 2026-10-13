@@ -273,13 +273,16 @@ test("reference data loads bundled tables and reports freshness", () => {
   core.clearReferenceDataCache();
 });
 
-test("audit retention keeps the newest export and prunes by count and age", () => {
-  const byCount = core.auditRetentionSettings({ auditMaxExports: 5, auditMaxAgeDays: 0 });
+test("audit retention keeps the newest full export chain and prunes older exports by count and age", () => {
+  const byCount = core.auditRetentionSettings({ auditMaxExports: 5, auditMaxAgeDays: 0, auditRebaselineDays: 0 });
   assert.equal(byCount.maxExports, 5);
   assert.equal(byCount.maxAgeDays, 0);
+  assert.equal(byCount.rebaselineDays, 0);
   const defaults = core.auditRetentionSettings({});
   assert.equal(defaults.maxExports, core.DEFAULT_AUDIT_MAX_EXPORTS);
   assert.equal(defaults.maxAgeDays, core.DEFAULT_AUDIT_MAX_AGE_DAYS);
+  assert.equal(defaults.rebaselineDays, core.DEFAULT_AUDIT_REBASELINE_DAYS);
+  assert.equal(core.DEFAULT_AUDIT_REBASELINE_DAYS, 7);
 });
 
 test("audit exports go incremental for automatic reasons and full for manual ones", async (t) => {
@@ -334,8 +337,10 @@ test("audit exports go incremental for automatic reasons and full for manual one
   const cursor = await store.readAuditCursor();
   assert.equal(cursor.maxUpdatedAt, 3000);
 
-  // Retention capped the directory count, and the newest export is still there.
+  // Chain-aware retention: the newest full export (and anything newer) is
+  // kept, and the exports older than it are capped by count.
   const remaining = await store.listAuditExports();
   assert.ok(remaining.length <= 2, `expected at most 2 exports, got ${remaining.length}`);
   assert.equal(remaining[0].auditId, forcedFull.auditId);
+  assert.equal(remaining[0].mode, "full");
 });

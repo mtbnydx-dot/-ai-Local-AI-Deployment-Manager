@@ -11,15 +11,21 @@ const { OPENWEBUI_AUDIT_EXPORTER } = require("./openwebui-audit-exporter");
 const DEFAULT_AUDIT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_AUDIT_MAX_EXPORTS = 30;
 const DEFAULT_AUDIT_MAX_AGE_DAYS = 90;
+const DEFAULT_AUDIT_REBASELINE_DAYS = 7;
 const AUDIT_CURSOR_FILE = ".audit-cursor.json";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function auditRetentionSettings(options = {}) {
   const maxExports = Number(options.auditMaxExports ?? process.env.AI_AUDIT_MAX_EXPORTS ?? DEFAULT_AUDIT_MAX_EXPORTS);
   const maxAgeDays = Number(options.auditMaxAgeDays ?? process.env.AI_AUDIT_MAX_AGE_DAYS ?? DEFAULT_AUDIT_MAX_AGE_DAYS);
+  const rebaselineDays = Number(options.auditRebaselineDays ?? process.env.AI_AUDIT_REBASELINE_DAYS ?? DEFAULT_AUDIT_REBASELINE_DAYS);
   return {
     // 0 disables the respective limit.
     maxExports: Number.isFinite(maxExports) && maxExports >= 0 ? Math.floor(maxExports) : DEFAULT_AUDIT_MAX_EXPORTS,
     maxAgeDays: Number.isFinite(maxAgeDays) && maxAgeDays >= 0 ? Math.floor(maxAgeDays) : DEFAULT_AUDIT_MAX_AGE_DAYS,
+    // An automatic export becomes a full one once the newest full export is
+    // older than this; 0 disables rebaselining.
+    rebaselineDays: Number.isFinite(rebaselineDays) && rebaselineDays >= 0 ? rebaselineDays : DEFAULT_AUDIT_REBASELINE_DAYS,
   };
 }
 
@@ -200,7 +206,20 @@ function createAuditStore(options = {}) {
     }
 
     const cursor = await readAuditCursor();
-    const full = context.full === true || (context.full === undefined && reason === "manual");
+    let full = context.full === true || (context.full === undefined && reason === "manual");
+    // Incrementals are only useful on top of a full export, so an automatic
+    // run rebaselines once the newest full is missing or too old.
+    let rebaseline = false;
+    const { rebaselineDays } = auditRetentionSettings(options);
+    if (!full && context.full === undefined && rebaselineDays > 0) {
+      const newestFull = (await listAuditExports()).find((item) => item.mode === "full");
+      const createdMs = Date.parse(newestFull?.createdAt || "");
+      const now = typeof options.now === "function" ? options.now() : Date.now();
+      if (!newestFull || !Number.isFinite(createdMs) || now - createdMs > rebaselineDays * DAY_MS) {
+        full = true;
+        rebaseline = true;
+      }
+    }
     const since = full ? "" : String(cursor.maxUpdatedAt ?? "");
 
     const auditId = `${compactTimestamp()}-${safeOutputName(reason)}-${safeOutputName(serviceContainer)}`;
@@ -216,12 +235,40 @@ function createAuditStore(options = {}) {
     if (since) execArgs.push(since);
     const run = await options.docker(execArgs, { rejectOnError: false });
     if (run.error) {
+      // A folder without a manifest would otherwise be listed as a full export.
+      await fsp.rm(auditDir, { recursive: true, force: true }).catch(() => {});
       throw new Error(`Open WebUI audit export failed: ${run.stderr || run.stdout || run.error.message}`);
     }
-    await options.docker(["cp", `${openWebuiContainer}:${remoteDir}/.`, auditDir]);
+    const summary = parseJsonSafe(String(run.stdout || "").trim().split(/\r?\n/).filter(Boolean).at(-1), {});
+    // An incremental run that found no changed chats writes no folder; the
+    // cursor only records that the run happened.
+    const emptyIncremental = Boolean(summary.incremental) && Number(summary.chat_count || 0) === 0;
+    if (!emptyIncremental) await options.docker(["cp", `${openWebuiContainer}:${remoteDir}/.`, auditDir]);
     await options.docker(["exec", openWebuiContainer, "sh", "-lc", `rm -rf ${shellQuote(remoteDir)} ${shellQuote(remoteScript)}`], { rejectOnError: false });
 
-    const summary = parseJsonSafe(run.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1), {});
+    if (emptyIncremental) {
+      await fsp.rm(auditDir, { recursive: true, force: true });
+      const lastHeartbeatAt = new Date().toISOString();
+      await writeAuditCursor({
+        ...cursor,
+        version: 1,
+        maxUpdatedAt: summary.max_updated_at ?? cursor.maxUpdatedAt ?? null,
+        lastHeartbeatAt,
+      }).catch(() => {});
+      const pruned = await pruneAuditExports().catch(() => ({ removed: [] }));
+      return {
+        ok: true,
+        skipped: true,
+        empty: true,
+        reason: "没有新的对话，未写入审计目录。 / No new conversations; no audit folder was written.",
+        mode: "incremental",
+        chatCount: 0,
+        totalChatCount: summary.total_chat_count ?? 0,
+        messageCount: 0,
+        lastHeartbeatAt,
+        pruned: pruned.removed,
+      };
+    }
     const manifest = {
       ok: true,
       auditId,
@@ -233,6 +280,7 @@ function createAuditStore(options = {}) {
       serviceContainer,
       context,
       mode: summary.incremental ? "incremental" : "full",
+      rebaseline,
       sinceUpdatedAt: summary.since_updated_at ?? null,
       summary,
       notice: "This folder may contain full Open WebUI conversation records. Keep it access-controlled and use it only for authorized audit or incident response.",
@@ -255,6 +303,7 @@ function createAuditStore(options = {}) {
     // Only advance the cursor after the export is durable on disk.
     if (summary.max_updated_at !== undefined && summary.max_updated_at !== null) {
       await writeAuditCursor({
+        ...cursor,
         version: 1,
         maxUpdatedAt: summary.max_updated_at,
         updatedAt: new Date().toISOString(),
@@ -269,6 +318,7 @@ function createAuditStore(options = {}) {
       auditId,
       auditDir,
       mode: manifest.mode,
+      rebaseline,
       chatCount: summary.chat_count || 0,
       totalChatCount: summary.total_chat_count ?? summary.chat_count ?? 0,
       messageCount: summary.message_count || 0,
@@ -278,27 +328,40 @@ function createAuditStore(options = {}) {
   }
 
   // Retention. Exports hold full conversation text, so unbounded accumulation
-  // is both a disk problem and a privacy one. The newest export is never removed.
+  // is both a disk problem and a privacy one. Retention is chain-aware: an
+  // incremental export is only readable on top of the full export before it,
+  // so the newest full export and every export newer than it are never
+  // removed. Older exports are pruned by count and age. An empty incremental
+  // holds nothing and is always prunable, except the newest export. Without
+  // any full export, non-empty incrementals are never pruned.
   async function pruneAuditExports(overrides = {}) {
     const { maxExports, maxAgeDays } = auditRetentionSettings({ ...options, ...overrides });
     const exports = await listAuditExports();
     if (exports.length <= 1) return { removed: [], kept: exports.length };
     const now = overrides.now ?? Date.now();
-    const maxAgeMs = maxAgeDays > 0 ? maxAgeDays * 24 * 60 * 60 * 1000 : 0;
-    const removed = [];
+    const maxAgeMs = maxAgeDays > 0 ? maxAgeDays * DAY_MS : 0;
     // listAuditExports is newest-first.
-    for (let index = 0; index < exports.length; index += 1) {
-      if (index === 0) continue;
+    const newestFullIndex = exports.findIndex((item) => item.mode === "full");
+    const removed = [];
+    for (let index = 1; index < exports.length; index += 1) {
+      if (newestFullIndex >= 0 && index <= newestFullIndex) continue;
       const item = exports[index];
-      const tooMany = maxExports > 0 && index >= maxExports;
-      const createdMs = Date.parse(item.createdAt || "");
-      const tooOld = maxAgeMs > 0 && Number.isFinite(createdMs) && now - createdMs > maxAgeMs;
-      if (!tooMany && !tooOld) continue;
+      const emptyIncremental = item.mode === "incremental" && Number(item.chatCount || 0) === 0;
+      let reason = "";
+      if (emptyIncremental) {
+        reason = "empty-incremental";
+      } else if (newestFullIndex >= 0) {
+        const tooMany = maxExports > 0 && index >= maxExports;
+        const createdMs = Date.parse(item.createdAt || "");
+        const tooOld = maxAgeMs > 0 && Number.isFinite(createdMs) && now - createdMs > maxAgeMs;
+        reason = tooMany ? "max-exports" : tooOld ? "max-age" : "";
+      }
+      if (!reason) continue;
       const target = path.resolve(item.auditDir);
       // Never step outside the audit root.
       if (!target.startsWith(path.resolve(auditRoot) + path.sep)) continue;
       await fsp.rm(target, { recursive: true, force: true });
-      removed.push({ auditId: item.auditId, reason: tooMany ? "max-exports" : "max-age" });
+      removed.push({ auditId: item.auditId, reason });
     }
     return { removed, kept: exports.length - removed.length };
   }
@@ -346,6 +409,7 @@ module.exports = {
   DEFAULT_AUDIT_SESSION_TTL_MS,
   DEFAULT_AUDIT_MAX_EXPORTS,
   DEFAULT_AUDIT_MAX_AGE_DAYS,
+  DEFAULT_AUDIT_REBASELINE_DAYS,
   AUDIT_CURSOR_FILE,
   auditRetentionSettings,
   createAuditStore,
