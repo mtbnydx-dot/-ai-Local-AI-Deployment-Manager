@@ -2,9 +2,24 @@ const fs = require("node:fs");
 
 const INVALID_PASSWORD = "\u5ba1\u8ba1\u5bc6\u7801\u4e0d\u6b63\u786e\u3002";
 
+const MARKDOWN_MISSING = "未找到该审计记录的 Markdown 文件。 / The audit Markdown file was not found.";
+const MARKDOWN_UNREADABLE = "无法读取该审计记录的 Markdown 文件。 / The audit Markdown file could not be read.";
+
+// The file can disappear between the existence check and the read (retention
+// prunes old exports). A read error then answers 404/500 JSON while nothing
+// was sent yet, and otherwise ends the connection; it never throws.
 function defaultStreamMarkdownFile(file, res) {
+  const stream = fs.createReadStream(file);
+  stream.on("error", (error) => {
+    if (!res.headersSent) {
+      const missing = error?.code === "ENOENT";
+      res.status(missing ? 404 : 500).type("application/json").json({ error: missing ? MARKDOWN_MISSING : MARKDOWN_UNREADABLE });
+    } else {
+      res.destroy?.();
+    }
+  });
   res.type("text/markdown; charset=utf-8");
-  return fs.createReadStream(file).pipe(res);
+  return stream.pipe(res);
 }
 
 function registerAuditRoutes(app, deps = {}) {
