@@ -263,6 +263,23 @@ const gpuAdmissionController = core.createGpuAdmissionController({
   getGpuStatus,
 });
 
+// /api/memory-estimate previews SGLang admission with the live admission
+// policy. A body-supplied admissionPolicy is always replaced.
+async function buildServerMemoryEstimate(body = {}) {
+  const policy = await gpuAdmissionController.getPolicy().catch(() => ({
+    reserveMb: gpuAdmissionController.reserveMb,
+    maxUtilizationPct: gpuAdmissionController.maxUtilizationPct,
+  }));
+  return buildVllmMemoryEstimate({
+    ...body,
+    admissionPolicy: {
+      reserveMb: policy.reserveMb,
+      maxUtilizationPct: policy.maxUtilizationPct,
+      startupMarginMb: gpuAdmissionController.startupMarginMb,
+    },
+  });
+}
+
 const remoteModelService = createVllmRemoteModelService();
 const hfAuthService = createHfAuthService({
   hfCli: CONFIG.hfCli,
@@ -762,7 +779,7 @@ core.registerManagerRoutes(app, {
     engine: runtime.engine,
     runtimeVersion: runtime.runtimeVersion,
   }),
-  buildMemoryEstimate: buildVllmMemoryEstimate,
+  buildMemoryEstimate: buildServerMemoryEstimate,
   collectStats,
   collectExternalAccessStats,
   searchAccessLogs: searchServiceGatewayAccessLogs,
@@ -5359,6 +5376,7 @@ module.exports = {
   buildSglangRuntimeFacts,
   getModelConfigRequest,
   buildVllmMemoryEstimate,
+  buildServerMemoryEstimate,
   buildVllmImagePullOptions,
   checkModelCompatibility,
   knownRuntimeImageMetadata,

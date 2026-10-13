@@ -31,6 +31,8 @@ function createVllmStartRuntimeRequest(deps) {
     acquireGpuAdmission = null,
     acquireGpuAdmissionAfterPrepare = null,
     reportGpuAdmissionError = () => {},
+    // Defaults to the lease-warning log line the servers already write.
+    reportGpuAdmissionWarning = (job, message) => reportGpuAdmissionError(job, new Error(message)),
     saveRuntimeApiKey = async () => "",
     deleteRuntimeApiKey = async () => {},
     normalizeRuntimeInstanceMode = (value) => String(value || "replace").toLowerCase() === "parallel" ? "parallel" : "replace",
@@ -180,10 +182,20 @@ function createVllmStartRuntimeRequest(deps) {
         maxNumSeqs,
         maxNumBatchedTokens,
       };
+    const sglangFractionOfFree = engine === "sglang" && !isPennyroyalImage(runtimeImage);
     if (engine === "sglang" && isPennyroyalImage(runtimeImage)) {
       gpuAdmissionRequest.requestedFraction = undefined;
       gpuAdmissionRequest.requestedMb = pennyroyalVramReservationMb({ sglangMaxTotalTokens, maxModelLen });
       gpuAdmissionRequest.estimatePolicy = "pennyroyal_v251_sm120_tp1_524k_measured";
+    } else if (sglangFractionOfFree) {
+      // The form value maps to --mem-fraction-static, a fraction of the memory
+      // free at engine start rather than of the whole device. A capped KV pool
+      // (--max-total-tokens) lets admission clamp to the safe budget and warn.
+      gpuAdmissionRequest.requestedFraction = undefined;
+      gpuAdmissionRequest.requestedFractionOfFree = gpuMemoryUtilization;
+      gpuAdmissionRequest.poolCappedTokens = sglangMaxTotalTokens || 0;
+      gpuAdmissionRequest.minClampMb = 4096;
+      gpuAdmissionRequest.estimatePolicy = "sglang_mem_fraction_static_of_free";
     }
     let admissionLease = null;
     if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
@@ -363,7 +375,9 @@ function createVllmStartRuntimeRequest(deps) {
         ...(job.meta || {}),
         gpuDeviceIds,
         gpuAdmission: admission,
+        ...(sglangFractionOfFree && admission ? { admission: summarizeFractionOfFreeAdmission(admission) } : {}),
       };
+      if (sglangFractionOfFree && admission?.warning) reportGpuAdmissionWarning(job, admission.warning);
       runOptions.gpuDeviceIds = gpuDeviceIds;
       runOptions.vramReservationMb = Number(admission?.requestedTotalMb || 0);
       runOptions.gpuAdmissionLeaseId = String(admission?.id || "");
@@ -420,6 +434,22 @@ function createVllmStartRuntimeRequest(deps) {
       });
 
     return { job };
+  };
+}
+
+// job.meta.admission for SGLang launches admitted by fraction of free memory.
+// Lease reservations hold the reserved MiB in requestedMb and the unclamped
+// request in estimateMb.
+function summarizeFractionOfFreeAdmission(lease = {}) {
+  const reservations = Array.isArray(lease.reservations) ? lease.reservations : [];
+  const total = (read) => reservations.reduce((sum, reservation) => sum + (Number(read(reservation)) || 0), 0);
+  return {
+    verdict: lease.verdict === "warn" ? "warn" : "ok",
+    requestedMb: total((reservation) => reservation?.estimateMb ?? reservation?.requestedMb),
+    reservedMb: total((reservation) => reservation?.requestedMb),
+    availableMb: total((reservation) => reservation?.availableMb),
+    clamped: Boolean(lease.clamped),
+    policy: "static-fraction-of-free",
   };
 }
 

@@ -476,3 +476,268 @@ test("runtime routes preserve structured admission errors", async () => {
     details: { availableMb: 9000 },
   });
 });
+
+const FLASH_NEXT_GPU = { id: "0", totalMb: 97887, usedMb: 600, freeMb: 97287 };
+const FLASH_NEXT_POLICY = { reserveMb: 8192, maxUtilization: 0.95, startupMarginMb: 1024 };
+const FLASH_NEXT_CAPPED = {
+  engine: "sglang",
+  requestedFractionOfFree: 0.995,
+  poolCappedTokens: 262144,
+  minClampMb: 4096,
+  estimatePolicy: "sglang_mem_fraction_static_of_free",
+};
+
+test("decideGpuReservation is a pure per-GPU decision for every admission knob", () => {
+  const cases = [
+    {
+      name: "capped SGLang pool is clamped to the safe budget",
+      request: FLASH_NEXT_CAPPED,
+      expected: { requestedMb: 96801, availableMb: 89095, freeBudgetMb: 89095, thresholdBudgetMb: 91368, reservedMb: 89095, clamped: true, verdict: "warn", maxFraction: 0.915 },
+    },
+    {
+      name: "uncapped SGLang pool is refused with the largest passing fraction",
+      request: { ...FLASH_NEXT_CAPPED, poolCappedTokens: 0 },
+      expected: { requestedMb: 96801, availableMb: 89095, freeBudgetMb: 89095, thresholdBudgetMb: 91368, reservedMb: 96801, clamped: false, verdict: "block", maxFraction: 0.915 },
+    },
+    {
+      name: "a fitting fraction of free memory is admitted as requested",
+      request: { ...FLASH_NEXT_CAPPED, requestedFractionOfFree: 0.9 },
+      expected: { requestedMb: 87559, availableMb: 89095, reservedMb: 87559, clamped: false, verdict: "ok", maxFraction: 0.915 },
+    },
+    {
+      name: "no clamp below the minimum clamp budget",
+      request: { ...FLASH_NEXT_CAPPED, minClampMb: 90000 },
+      expected: { reservedMb: 96801, clamped: false, verdict: "block" },
+    },
+    {
+      name: "vLLM device fraction keeps whole-device semantics",
+      request: { requestedFraction: 0.92, estimatePolicy: "vllm_gpu_memory_utilization" },
+      expected: { requestedMb: 90057, availableMb: 89095, reservedMb: 90057, clamped: false, verdict: "block", maxFraction: 0.91 },
+    },
+    {
+      name: "a measured MiB request has no fraction knob",
+      request: { requestedMb: 88000, estimatePolicy: "pennyroyal_v251_sm120_tp1_524k_measured" },
+      expected: { requestedMb: 88000, reservedMb: 88000, verdict: "ok", maxFraction: null },
+    },
+  ];
+  for (const { name, request, expected } of cases) {
+    const before = JSON.stringify(request);
+    const decision = core.decideGpuReservation(request, FLASH_NEXT_GPU, { ...FLASH_NEXT_POLICY, pendingMb: 0 });
+    for (const [key, value] of Object.entries(expected)) assert.equal(decision[key], value, `${name}: ${key}`);
+    assert.equal(JSON.stringify(request), before, `${name}: request is not mutated`);
+  }
+  // maxUtilization also accepts the percent form that the stored policy uses.
+  assert.deepEqual(
+    core.decideGpuReservation(FLASH_NEXT_CAPPED, FLASH_NEXT_GPU, { ...FLASH_NEXT_POLICY, maxUtilization: 95 }),
+    core.decideGpuReservation(FLASH_NEXT_CAPPED, FLASH_NEXT_GPU, FLASH_NEXT_POLICY),
+  );
+});
+
+test("the fraction-of-free base excludes memory that peers already hold", () => {
+  const pending = core.decideGpuReservation(
+    { requestedFractionOfFree: 0.5 },
+    { id: "0", totalMb: 40000, usedMb: 0, freeMb: 40000 },
+    { pendingMb: 10000, reserveMb: 1000, maxUtilization: 0.9, startupMarginMb: 500 },
+  );
+  assert.equal(pending.requestedMb, 15000);
+  assert.equal(pending.availableMb, 25500);
+  assert.equal(pending.maxFraction, 0.85);
+  // Nothing free means no fraction can pass, so the request is refused.
+  const exhausted = core.decideGpuReservation(
+    { requestedFractionOfFree: 0.5, poolCappedTokens: 4096 },
+    { id: "0", totalMb: 40000, usedMb: 40000, freeMb: 0 },
+    { pendingMb: 0, reserveMb: 1000, maxUtilization: 0.9, startupMarginMb: 500 },
+  );
+  assert.equal(exhausted.verdict, "block");
+  assert.equal(exhausted.maxFraction, null);
+});
+
+test("a clamped SGLang lease reserves the safe budget and peers count it as pending", async () => {
+  const root = await tempRoot();
+  try {
+    const controller = core.createGpuAdmissionController({
+      root,
+      reserveMb: 8192,
+      maxUtilizationPct: 95,
+      startupMarginMb: 1024,
+      policyFile: false,
+      getGpuStatus: telemetry([{ id: "0", totalMb: 97887, usedMb: 600 }]),
+    });
+    const lease = await controller.acquire({ ...FLASH_NEXT_CAPPED, instanceMode: "parallel", instanceId: "flash" });
+    assert.equal(lease.verdict, "warn");
+    assert.equal(lease.clamped, true);
+    assert.equal(lease.requestedTotalMb, 89095);
+    assert.equal(lease.reservations[0].requestedMb, 89095);
+    assert.equal(lease.reservations[0].estimateMb, 96801);
+    assert.equal(lease.reservations[0].availableMb, 89095);
+    assert.equal(lease.reservations[0].reservedMb, 89095);
+    assert.match(lease.warning, /KV 池已限制为 262144 tokens/);
+    assert.match(lease.warning, /The KV pool is capped at 262144 tokens, so the launch continues with a 89095 MiB reservation\./);
+    assert.deepEqual(lease.summary.reservations, lease.reservations);
+
+    await assert.rejects(
+      () => controller.acquire({ requestedMb: 1000, instanceMode: "parallel", instanceId: "second" }),
+      (error) => {
+        assert.equal(error.code, "insufficient_vram");
+        assert.equal(error.details.gpus[0].pendingMb, 89095);
+        assert.equal(error.details.mode, "parallel");
+        assert.equal(error.details.maxFraction, null);
+        return true;
+      },
+    );
+    await lease.release("test-finished");
+  } finally {
+    await removeRoot(root);
+  }
+});
+
+test("an uncapped SGLang replacement is refused with a replace-mode message and maxFraction", async () => {
+  const root = await tempRoot();
+  let usedMb = 90000;
+  try {
+    const controller = core.createGpuAdmissionController({
+      root,
+      reserveMb: 8192,
+      maxUtilizationPct: 95,
+      startupMarginMb: 1024,
+      policyFile: false,
+      getGpuStatus: async () => ({ ok: true, gpus: [{ id: "0", totalMb: 97887, usedMb }] }),
+    });
+    let rolledBack = false;
+    await assert.rejects(
+      () => controller.acquireAfterPrepare({ ...FLASH_NEXT_CAPPED, poolCappedTokens: 0, instanceMode: "replace" }, async () => {
+        usedMb = 600;
+        return { async rollback() { rolledBack = true; usedMb = 90000; } };
+      }),
+      (error) => {
+        assert.equal(error.code, "insufficient_vram");
+        assert.equal(error.status, 409);
+        assert.equal(error.details.mode, "replace");
+        assert.equal(error.details.maxFraction, 0.915);
+        assert.equal(error.details.gpus[0].requestedMb, 96801);
+        assert.equal(error.details.gpus[0].availableMb, 89095);
+        assert.equal(error.details.gpus[0].verdict, "block");
+        assert.equal(error.details.gpus[0].clamped, false);
+        assert.equal(
+          error.message,
+          "替换启动需要 96801 MiB，安全预算只有 89095 MiB。请把「静态显存比例（mem-fraction-static）」降到 0.915 以下，或设置 KV 池上限（max-total-tokens）。现有模型容器未改动。"
+            + " / Replacement launch needs 96801 MiB but the safe budget is 89095 MiB. Lower the static memory fraction (mem-fraction-static) to 0.915 or below, or cap the KV pool (max-total-tokens). Existing model containers were not changed.",
+        );
+        assert.doesNotMatch(error.message, /Parallel|并行/);
+        return true;
+      },
+    );
+    assert.equal(rolledBack, true);
+    assert.equal(Object.keys((await controller.inspect()).leases).length, 0);
+  } finally {
+    await removeRoot(root);
+  }
+});
+
+test("admission messages name the launch mode and the knob in use", () => {
+  const block = { verdict: "block", requestedMb: 20000, availableMb: 9000, maxFraction: 0.375 };
+  const parallelSglang = core.formatGpuAdmissionMessage(block, { requestedFractionOfFree: 0.8 }, { mode: "parallel" });
+  assert.match(parallelSglang, /^并行启动需要 20000 MiB，安全预算只有 9000 MiB。请把「静态显存比例（mem-fraction-static）」降到 0\.375 以下/);
+  assert.match(parallelSglang, / \/ Parallel launch needs 20000 MiB but the safe budget is 9000 MiB\. Lower the static memory fraction \(mem-fraction-static\) to 0\.375 or below/);
+  const replaceVllm = core.formatGpuAdmissionMessage(block, { requestedFraction: 0.92 }, { mode: "replace" });
+  assert.match(replaceVllm, /^替换启动需要 20000 MiB.*「显存预留比例（gpu-memory-utilization）」降到 0\.375 以下。现有模型容器未改动。/);
+  assert.match(replaceVllm, /Replacement launch needs 20000 MiB but the safe budget is 9000 MiB\. Lower the GPU memory reservation \(gpu-memory-utilization\) to 0\.375 or below\. Existing model containers were not changed\.$/);
+  assert.doesNotMatch(replaceVllm, /Parallel|max-total-tokens/);
+  const measured = core.formatGpuAdmissionMessage({ ...block, maxFraction: null }, { requestedMb: 20000 }, { mode: "replace" });
+  assert.equal(measured, "替换启动需要 20000 MiB，安全预算只有 9000 MiB。现有模型容器未改动。 / Replacement launch needs 20000 MiB but the safe budget is 9000 MiB. Existing model containers were not changed.");
+  assert.equal(core.formatGpuAdmissionMessage({ verdict: "ok" }, {}, { mode: "replace" }), "");
+});
+
+test("device-fraction requests keep their admission behaviour and read as ok", async () => {
+  const root = await tempRoot();
+  try {
+    const controller = core.createGpuAdmissionController({
+      root,
+      reserveMb: 1000,
+      maxUtilizationPct: 90,
+      startupMarginMb: 500,
+      policyFile: false,
+      getGpuStatus: telemetry([{ id: "0", totalMb: 24000, usedMb: 2000 }]),
+    });
+    const lease = await controller.acquire({ requestedFraction: 0.5, estimatePolicy: "vllm_gpu_memory_utilization", instanceId: "vllm" });
+    assert.equal(lease.reservations[0].requestedMb, 12000);
+    assert.equal(lease.reservations[0].estimateMb, 12000);
+    assert.equal(lease.requestedTotalMb, 12000);
+    assert.equal(lease.verdict, "ok");
+    assert.equal(lease.clamped, false);
+    assert.equal(Object.hasOwn(lease, "warning"), false);
+    await assert.rejects(
+      () => controller.acquire({ requestedFraction: 0.9, instanceId: "too-big" }),
+      (error) => error.code === "insufficient_vram"
+        && error.details.mode === "parallel"
+        && error.details.gpus[0].requestedMb === 21600
+        && error.details.maxFraction === 0.295
+        && /^并行启动需要 21600 MiB/.test(error.message)
+        && /Parallel launch needs 21600 MiB/.test(error.message),
+    );
+    await lease.release("test-finished");
+  } finally {
+    await removeRoot(root);
+  }
+});
+
+test("leases written before clamp-and-warn still count as pending and release normally", async () => {
+  const root = await tempRoot();
+  try {
+    await core.writeJsonFile(path.join(root, "leases.json"), {
+      version: 1,
+      leases: {
+        legacy: {
+          id: "legacy",
+          state: "pending",
+          estimatePolicy: "vllm_gpu_memory_utilization",
+          requestedTotalMb: 12000,
+          reservations: [{ gpuId: "0", gpuIndex: "0", requestedMb: 12000 }],
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+    });
+    const controller = core.createGpuAdmissionController({
+      root,
+      reserveMb: 1000,
+      maxUtilizationPct: 90,
+      startupMarginMb: 500,
+      policyFile: false,
+      getGpuStatus: telemetry([{ id: "0", totalMb: 24000, usedMb: 0 }]),
+    });
+    await assert.rejects(
+      () => controller.acquire({ requestedMb: 12000, instanceId: "blocked" }),
+      (error) => error.code === "insufficient_vram" && error.details.gpus[0].pendingMb === 12000,
+    );
+    assert.equal((await controller.release("legacy")).released, true);
+    const lease = await controller.acquire({ requestedMb: 12000, instanceId: "after-legacy" });
+    assert.equal(lease.verdict, "ok");
+    await lease.release("test-finished");
+  } finally {
+    await removeRoot(root);
+  }
+});
+
+test("replace-mode fail-closed messages never describe a parallel launch", async () => {
+  const root = await tempRoot();
+  try {
+    const controller = core.createGpuAdmissionController({
+      root,
+      policyFile: false,
+      getGpuStatus: async () => ({ ok: false, text: "nvidia-smi missing", gpus: [] }),
+    });
+    await assert.rejects(
+      () => controller.acquireAfterPrepare({ requestedMb: 1000, instanceMode: "replace" }, async () => ({})),
+      (error) => error.code === "vram_telemetry_unavailable"
+        && /replacement launch is blocked/.test(error.message)
+        && !/parallel/i.test(error.message),
+    );
+    await assert.rejects(
+      () => controller.acquire({ requestedMb: 1000, instanceMode: "parallel" }),
+      (error) => error.code === "vram_telemetry_unavailable" && /parallel launch is blocked/.test(error.message),
+    );
+  } finally {
+    await removeRoot(root);
+  }
+});

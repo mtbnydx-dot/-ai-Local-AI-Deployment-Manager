@@ -45,6 +45,52 @@ function normalizeMemoryEstimateGpus(value = []) {
   }).filter((gpu) => gpu.totalGb > 0 || gpu.totalMb > 0);
 }
 
+// Preview of the SGLang VRAM admission decision on the minimum-free selected
+// GPU. The policy comes from the server (never from the request body) and
+// defaults to the gpu-admission module defaults for direct calls.
+function previewSglangAdmission(input, selectedGpus) {
+  const gpus = core.normalizeGpuTelemetry({ gpus: selectedGpus });
+  if (!gpus.length) return null;
+  const gpu = gpus.reduce((lowest, item) => (item.freeMb < lowest.freeMb ? item : lowest));
+  const policySource = input.admissionPolicy && typeof input.admissionPolicy === "object" ? input.admissionPolicy : {};
+  const policy = core.normalizeGpuAdmissionPolicy(policySource, {
+    reserveMb: core.DEFAULT_RESERVE_MB,
+    maxUtilizationPct: core.DEFAULT_MAX_UTILIZATION_PCT,
+  });
+  const startupMarginMb = Math.max(0, Math.round(memoryEstimateNumber(policySource.startupMarginMb, core.DEFAULT_STARTUP_MARGIN_MB)));
+  const poolCappedTokens = Math.max(0, Math.floor(memoryEstimateNumber(input.sglangMaxTotalTokens, 0)));
+  const request = {
+    requestedFractionOfFree: memoryEstimateNumber(input.gpuMemoryUtilization ?? input.utilization, 0.9),
+    poolCappedTokens,
+    minClampMb: core.DEFAULT_MIN_CLAMP_MB,
+  };
+  let decision;
+  try {
+    decision = core.decideGpuReservation(request, gpu, {
+      pendingMb: 0,
+      reserveMb: policy.reserveMb,
+      maxUtilization: policy.maxUtilizationPct,
+      startupMarginMb,
+    });
+  } catch {
+    return null;
+  }
+  const mode = String(input.instanceMode || "replace").toLowerCase() === "parallel" ? "parallel" : "replace";
+  return {
+    preview: {
+      verdict: decision.verdict,
+      requestedMb: decision.requestedMb,
+      availableMb: decision.availableMb,
+      reservedMb: decision.reservedMb,
+      clamped: decision.clamped,
+      maxFraction: decision.maxFraction,
+      poolCappedTokens,
+      basis: "policy-snapshot",
+    },
+    message: core.formatGpuAdmissionMessage(decision, request, { mode }),
+  };
+}
+
 function buildVllmMemoryEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
   if (input.engine === "sglang" && isPennyroyalImage(input.runtimeImage)) {
@@ -82,6 +128,8 @@ function buildVllmMemoryEstimate(input = {}) {
     multimodalReserveGb: Math.max(0, memoryEstimateNumber(input.multimodalReserveGb, input.arch?.isMultimodal ? 2 : 0)) + speculativeReserveGb,
   });
   plan.speculativeReserveGb = speculativeReserveGb;
+  const sglang = input.engine === "sglang";
+  const admissionPreview = sglang ? previewSglangAdmission(input, selectedGpus) : null;
   const suggestions = [];
   if (!plan.selectedGpus.length) {
     suggestions.push("没有传入 GPU 显存数据，只能给出模型本身的理论占用。");
@@ -104,9 +152,21 @@ function buildVllmMemoryEstimate(input = {}) {
   if (speculativeReserveGb > 0) {
     suggestions.push(`已为 ${speculativeMode} 推测解码额外预留约 ${speculativeReserveGb.toFixed(1)} GiB；最终是否提速应以接受率和输出吞吐为准。`);
   }
+  if (sglang) {
+    plan.policy = core.STATIC_FRACTION_OF_FREE_POLICY;
+    plan.estimatePolicy = core.SGLANG_FRACTION_OF_FREE_ESTIMATE_POLICY;
+    plan.admissionPreview = admissionPreview ? admissionPreview.preview : null;
+    if (admissionPreview) {
+      // The admission verdict outranks the estimator: block is a launch the
+      // gate will refuse, warn is a clamped reservation. ok keeps the estimate.
+      if (admissionPreview.preview.verdict === "block") plan.status = "fail";
+      else if (admissionPreview.preview.verdict === "warn") plan.status = "warn";
+      if (admissionPreview.message) suggestions.unshift(admissionPreview.message);
+    }
+  }
   return {
     ok: true,
-    engine: "vllm",
+    engine: sglang ? "sglang" : "vllm",
     plan,
     recommendations: {
       status: plan.status,

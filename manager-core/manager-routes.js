@@ -105,9 +105,10 @@ function registerManagerRoutes(app, deps = {}) {
     res.json(await getManagerResourceSummary(gpu, container));
   });
 
-  app.post("/api/memory-estimate", (req, res) => {
+  app.post("/api/memory-estimate", async (req, res) => {
     try {
-      res.json(buildMemoryEstimate(req.body || {}));
+      // The vLLM builder is async: it reads the live GPU admission policy.
+      res.json(await buildMemoryEstimate(req.body || {}));
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message });
     }
