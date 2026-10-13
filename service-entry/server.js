@@ -49,6 +49,9 @@ const FLEET_API_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_FLEE
 const GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_MAX_BODY_BYTES, 32 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
 const TTS_GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_TTS_MAX_BODY_BYTES, 16 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
 const TTS_UI_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+// /gateway/* answers anyone who can reach it, so an offline upstream is named
+// generically; which component on which port goes to the access log only.
+const UPSTREAM_DOWN_MESSAGE = "上游服务未运行 / Upstream service is not running";
 // A JSON body exists simultaneously as stream chunks, a concatenated Buffer,
 // a UTF-8 string and parsed objects. Account conservatively for that real peak
 // instead of treating one raw byte as one byte of process memory.
@@ -416,19 +419,24 @@ async function startServiceEntry() {
     process.exit(1);
   });
   server.listen(PORT, HOST, () => {
-    const state = security.policy();
-    console.log(`Service entry listening on http://${HOST}:${PORT}`);
-    console.log(`  gateway auth: ${state.requireApiKey ? "required" : "disabled"} (SERVICE_ENTRY_REQUIRE_API_KEY=${state.requireApiKeyMode})`);
-    console.log(`  lan admin:    ${state.allowLanAdmin ? "allowed" : "local only"} (SERVICE_ENTRY_ALLOW_LAN_ADMIN)`);
-    console.log(`  cors:         ${state.corsMode}${state.allowedOrigins.length ? ` (${state.allowedOrigins.join(", ")})` : ""}`);
-    if (state.lanMode && !state.requireApiKey) {
-      console.warn("  WARNING: listening off-loopback with API key enforcement disabled.");
-    }
-    if (!state.requireApiKey) {
-      console.warn("  HINT: 不受信环境请设置 SERVICE_ENTRY_REQUIRE_API_KEY=1，避免网页跨站盲打本地推理。");
-    }
+    logStartupSummary(security.policy());
   });
   return server;
+}
+
+// Only the real warning goes to stderr. The hint is advice for a default
+// loopback install, and log tooling classifies every stderr line as an error.
+function logStartupSummary(state, { host = HOST, port = PORT, log = console.log, warn = console.warn } = {}) {
+  log(`Service entry listening on http://${host}:${port}`);
+  log(`  gateway auth: ${state.requireApiKey ? "required" : "disabled"} (SERVICE_ENTRY_REQUIRE_API_KEY=${state.requireApiKeyMode})`);
+  log(`  lan admin:    ${state.allowLanAdmin ? "allowed" : "local only"} (SERVICE_ENTRY_ALLOW_LAN_ADMIN)`);
+  log(`  cors:         ${state.corsMode}${state.allowedOrigins.length ? ` (${state.allowedOrigins.join(", ")})` : ""}`);
+  if (state.lanMode && !state.requireApiKey) {
+    warn("  WARNING: listening off-loopback with API key enforcement disabled.");
+  }
+  if (!state.requireApiKey) {
+    log("  HINT: 不受信环境请设置 SERVICE_ENTRY_REQUIRE_API_KEY=1，避免网页跨站盲打本地推理。");
+  }
 }
 
 if (require.main === module) {
@@ -814,6 +822,23 @@ function isTtsModelManagementRequest(req, route) {
   return method === "POST" && /^api\/models\/[a-z0-9_-]+\/actions\/(install|start|wake|unload|stop)$/i.test(rest);
 }
 
+// The TTS proxy logs only requests worth keeping: anything that is not a
+// read, every error, and billable synthesis under /gateway/tts/openai/v1/*.
+// Successful job polls and static GETs from the TTS UI were 99.8 % of the
+// entry access log and buried everything else.
+function shouldLogTtsAccess(req, res) {
+  const method = String(req?.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) return true;
+  if (Number(res?.statusCode || 0) >= 400) return true;
+  const pathname = String(req?.url || "").split("?")[0];
+  return /^\/gateway\/tts\/openai\/v1(?:\/|$)/i.test(pathname);
+}
+
+function appendTtsAccessLog(req, route, status, startedAt, error) {
+  if (!shouldLogTtsAccess(req, { statusCode: status })) return;
+  appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, error)).catch(() => {});
+}
+
 function createTtsBodyLimiter(maxBytes = TTS_GATEWAY_MAX_BODY_BYTES) {
   let total = 0;
   const limiter = new Transform({
@@ -909,13 +934,13 @@ async function proxyTtsGatewayRequest(req, res, url) {
   if (!isTtsUiShellRequest(req, route)) {
     const ban = checkAuthBan(req);
     if (ban) {
-      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, ban.message)).catch(() => {});
+      appendTtsAccessLog(req, route, 429, startedAt, ban.message);
       return sendJson(res, { detail: ban.message, code: "auth_banned" }, 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
     }
     auth = await security.authorizeGatewayRequest(req);
     if (!auth.ok) {
       noteAuthResult(req, auth);
-      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
+      appendTtsAccessLog(req, route, auth.status, startedAt, auth.message);
       const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
       return sendJson(res, { detail: auth.message, code: auth.code }, auth.status, headers);
     }
@@ -930,7 +955,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   );
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
+    appendTtsAccessLog(req, route, 429, startedAt, message);
     return sendJson(res, { detail: message, code: "rate_limit_exceeded" }, 429, {
       ...gatewayCorsHeaders(req),
       "retry-after": String(rate.retryAfterSeconds),
@@ -940,7 +965,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   const declaredLength = Number(req.headers?.["content-length"] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > TTS_GATEWAY_MAX_BODY_BYTES) {
     const message = `TTS request body exceeds ${TTS_GATEWAY_MAX_BODY_BYTES} bytes.`;
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 413, startedAt, null, message)).catch(() => {});
+    appendTtsAccessLog(req, route, 413, startedAt, message);
     return sendJson(res, { detail: message, code: "request_body_too_large" }, 413, gatewayCorsHeaders(req));
   }
   // TTS 用量计费（F3）：持客户端 Key 的合成请求按秒数 / 字符数进账本，并检查每日秒数配额。
@@ -949,9 +974,8 @@ async function proxyTtsGatewayRequest(req, res, url) {
     ? { clientId: auth.client.id, managerId: auth.matchedManager || "tts", endpoint: synthesis.endpoint, kind: synthesis.kind, characters: 0, engine: "unknown" }
     : null;
   if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
-    const message = `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`;
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, message)).catch(() => {});
-    return sendJson(res, { detail: message, code: "tts_gateway_offline" }, 503, gatewayCorsHeaders(req));
+    appendTtsAccessLog(req, route, 503, startedAt, `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`);
+    return sendJson(res, { detail: UPSTREAM_DOWN_MESSAGE, code: "service_unavailable" }, 503, gatewayCorsHeaders(req));
   }
 
   if (!(await acquireEntryConcurrency(req, res, auth))) return;
@@ -965,6 +989,10 @@ async function proxyTtsGatewayRequest(req, res, url) {
   target.search = url.search;
   const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
   const upstreamControl = createUpstreamControl(req, res, { timeoutMs: Math.min(ttsRequestTimeoutMs(req, route), Number(auth.client?.requestTimeoutSeconds || 7200) * 1000) });
+  const access = { error: "" };
+  logEntryGatewayAccessWhenDone(req, res, ({ status, terminalState, origin }) => buildEntryGatewayAccessEntry(
+    req, route, null, status, startedAt, null, access.error, "", { terminalState, origin },
+  ), shouldLogTtsAccess);
   let bodyLimitError = null;
   let releaseTtsBody = () => {};
   try {
@@ -994,6 +1022,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
       const authorization = getBillingStore().authorizeTtsRequest({ ...meter, estimatedMs });
       if (!authorization.allowed) {
         upstreamControl.clear();
+        access.error = String(authorization.code || "");
         return sendJson(res, { detail: "TTS billing allowance is insufficient for this request.", code: authorization.code }, authorization.code === "billing_insufficient_balance" ? 402 : 429, gatewayCorsHeaders(req));
       }
       req.ttsRequestId = meter.requestId;
@@ -1017,9 +1046,6 @@ async function proxyTtsGatewayRequest(req, res, url) {
       responseHeaders["permissions-policy"] = "camera=(), microphone=(self), geolocation=()";
     }
     res.writeHead(upstream.status, responseHeaders);
-    res.once("finish", () => {
-      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, upstream.status, startedAt, null, "")).catch(() => {});
-    });
     if (meter?.requestId) {
       if (!upstream.ok) recordTtsUsageSafely({ ...meter, status: upstream.status, ok: false, audioMs: 0, durationSource: "missing" });
       res.once("finish", () => ttsReconciler.flush().catch(() => {}));
@@ -1031,7 +1057,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     const status = Number(failure?.status || (error?.name === "TimeoutError" ? 504 : 502));
     const message = status === 413 ? failure.message : "TTS gateway upstream is unavailable.";
     // Ambiguous transport failures retain their reservation until a durable completion receipt arrives.
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, failure?.message || message)).catch(() => {});
+    access.error = failure?.message || message;
     if (!res.headersSent) {
       sendJson(res, { detail: message, code: failure?.code || "tts_gateway_proxy_error" }, status, gatewayCorsHeaders(req));
     } else if (!res.writableEnded) {
@@ -1181,7 +1207,7 @@ async function proxyGatewayRequest(req, res, url) {
     : requestBody;
   if (!(await isManagerPortListening(manager.port))) {
     appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, 503, startedAt, requestMetadata, `${manager.name} is not listening on port ${manager.port}.`, resolvedModel)).catch(() => {});
-    return sendJson(res, core.openAiGatewayError("manager_offline", `${manager.name} is not listening on port ${manager.port}.`), 503);
+    return sendJson(res, core.openAiGatewayError("service_unavailable", UPSTREAM_DOWN_MESSAGE), 503);
   }
   let targetPath = "";
   try {
@@ -1194,6 +1220,10 @@ async function proxyGatewayRequest(req, res, url) {
   const target = new URL(`http://127.0.0.1:${manager.port}${targetPath}`);
   target.search = url.search;
   const upstreamControl = createUpstreamControl(req, res);
+  const access = { error: "" };
+  logEntryGatewayAccessWhenDone(req, res, ({ status, terminalState, origin }) => buildEntryGatewayAccessEntry(
+    req, route, manager, status, startedAt, requestMetadata, access.error, resolvedModel, { terminalState, origin },
+  ));
   try {
     const upstream = await fetch(target, {
       method: req.method,
@@ -1221,16 +1251,13 @@ async function proxyGatewayRequest(req, res, url) {
         selection.reason || "",
       ].map((part) => String(part).replace(/[^\w.:@/-]+/g, "_")).join(" "),
     });
-    res.once("finish", () => {
-      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, upstream.status, startedAt, requestMetadata, "", resolvedModel)).catch(() => {});
-    });
     forwardUpstreamBody(upstream, res, upstreamControl);
   } catch (error) {
     upstreamControl.clear();
     requestBody = undefined;
     bodyForUpstream = undefined;
     releaseBodyBudget();
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, error.status || 502, startedAt, requestMetadata, error.message, resolvedModel)).catch(() => {});
+    access.error = error.message;
     if (!res.headersSent) {
       sendJson(res, core.openAiGatewayError("gateway_proxy_error", "gateway_proxy_error: upstream unavailable"), error.status || (error.name === "TimeoutError" ? 504 : 502));
     } else if (!res.writableEnded) {
@@ -1347,8 +1374,8 @@ async function handleGatewayStatus(req, res, url) {
 // --- search gateway / MCP proxies -------------------------------------------
 
 const AUX_UPSTREAMS = {
-  search: { port: () => SEARCH_GATEWAY_PORT, name: "Search gateway", offlineCode: "search_gateway_offline", timeoutMs: 10 * 60 * 1000 },
-  mcp: { port: () => PLATFORM_MCP_PORT, name: "MCP server", offlineCode: "mcp_offline", timeoutMs: 10 * 60 * 1000 },
+  search: { port: () => SEARCH_GATEWAY_PORT, name: "Search gateway", timeoutMs: 10 * 60 * 1000 },
+  mcp: { port: () => PLATFORM_MCP_PORT, name: "MCP server", timeoutMs: 10 * 60 * 1000 },
 };
 
 async function auxUpstreamCredential(service) {
@@ -1419,9 +1446,8 @@ async function proxyAuxGatewayRequest(req, res, url) {
   }
   const port = upstreamSpec.port();
   if (!(await isManagerPortListening(port))) {
-    const message = `${upstreamSpec.name} is not listening on port ${port}.`;
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, message)).catch(() => {});
-    return sendJson(res, core.openAiGatewayError(upstreamSpec.offlineCode, message), 503, gatewayCorsHeaders(req));
+    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, `${upstreamSpec.name} is not listening on port ${port}.`)).catch(() => {});
+    return sendJson(res, core.openAiGatewayError("service_unavailable", UPSTREAM_DOWN_MESSAGE), 503, gatewayCorsHeaders(req));
   }
   const declaredLength = Number(req.headers?.["content-length"] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > GATEWAY_MAX_BODY_BYTES) {
@@ -1434,6 +1460,10 @@ async function proxyAuxGatewayRequest(req, res, url) {
   target.search = url.search;
   const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
   const upstreamControl = createUpstreamControl(req, res, { timeoutMs: upstreamSpec.timeoutMs });
+  const access = { error: "" };
+  logEntryGatewayAccessWhenDone(req, res, ({ status, terminalState, origin }) => buildEntryGatewayAccessEntry(
+    req, route, null, status, startedAt, null, access.error, "", { terminalState, origin },
+  ));
   let bodyLimitError = null;
   try {
     let body;
@@ -1451,15 +1481,12 @@ async function proxyAuxGatewayRequest(req, res, url) {
       redirect: "manual",
     });
     res.writeHead(upstream.status, buildResponseHeaders(upstream.headers, req));
-    res.once("finish", () => {
-      appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, upstream.status, startedAt, null, "")).catch(() => {});
-    });
     forwardUpstreamBody(upstream, res, upstreamControl);
   } catch (error) {
     upstreamControl.clear();
     const failure = bodyLimitError || error?.cause || error;
     const status = Number(failure?.status || (error?.name === "TimeoutError" ? 504 : 502));
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, failure?.message || "upstream unavailable")).catch(() => {});
+    access.error = failure?.message || "upstream unavailable";
     if (!res.headersSent) {
       sendJson(res, core.openAiGatewayError(failure?.code || "gateway_proxy_error", status === 413 ? failure.message : `${upstreamSpec.name} upstream is unavailable.`), status, gatewayCorsHeaders(req));
     } else if (!res.writableEnded) {
@@ -1573,22 +1600,49 @@ function mergeManagerModelCatalogs(catalogs = []) {
   return data;
 }
 
-function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, body, error, resolvedModel = "") {
+// The caller's address for the access log, read when the request starts: a
+// socket that is already destroyed (client abort) may no longer report its peer.
+function entryAccessOrigin(req) {
+  return {
+    remoteAddress: security.resolveClientAddress(req),
+    socketAddress: String(req?.socket?.remoteAddress || ""),
+  };
+}
+
+// One access entry per proxied request, written when the response is done:
+// "completed" on finish, or "client_abort" when the client hung up first, with
+// 499 if no header was sent yet. A streaming client that disconnects never
+// emits finish, so those requests used to vanish from the log. `shouldLog`
+// lets the TTS proxy skip routine polls.
+function logEntryGatewayAccessWhenDone(req, res, buildEntry, shouldLog = null) {
+  const origin = entryAccessOrigin(req);
+  core.onResponseDone(res, ({ terminalState }) => {
+    const status = terminalState === "client_abort" && !res.headersSent ? 499 : res.statusCode;
+    if (typeof shouldLog === "function" && !shouldLog(req, { statusCode: status })) return;
+    appendEntryGatewayAccessLog(buildEntry({ status, terminalState, origin })).catch(() => {});
+  });
+}
+
+function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, body, error, resolvedModel = "", details = {}) {
   const parsedBody = Buffer.isBuffer(body)
     ? parseRequestJsonBody(body)
     : body && typeof body === "object" && !Array.isArray(body)
       ? body
       : null;
   const headers = req.headers || {};
+  const origin = details.origin || entryAccessOrigin(req);
   return {
     at: new Date().toISOString(),
-    remoteAddress: security.resolveClientAddress(req),
+    requestId: core.normalizeOpenAiGatewayRequestId(headers["x-request-id"]),
+    remoteAddress: origin.remoteAddress,
+    socketAddress: origin.socketAddress,
     method: req.method,
     path: String(req.url || "").split("?")[0],
     kind: route?.protocol || "",
     requestedEngine: route?.engine || "",
     resolvedEngine: manager?.id || "",
     status: Number(status || 0),
+    terminalState: details.terminalState || "completed",
     model: typeof parsedBody?.model === "string" ? parsedBody.model.slice(0, 160) : "",
     resolvedModel: String(resolvedModel || "").slice(0, 160),
     stream: parsedBody?.stream === true,
@@ -1605,7 +1659,9 @@ function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, bo
       ? Math.max(0, Number(parsedBody.toolSchemaCount))
       : Array.isArray(parsedBody?.tools) ? parsedBody.tools.length : 0,
     toolUseCount: 0,
-    error: String(error || "").slice(0, 240),
+    // Upstream and transport errors can echo request text; nothing secret
+    // reaches the log file.
+    error: core.redactSecrets(String(error || "")).slice(0, 240),
   };
 }
 
@@ -1675,8 +1731,20 @@ function parseRequestJsonBody(body, options = {}) {
   return data && typeof data === "object" && !Array.isArray(data) ? data : null;
 }
 
+// Where entry access events go. Tests swap it to capture events instead of
+// reading the shared log tree.
+let entryGatewayAccessSink = (entry) => core.appendAccessLog(GATEWAY_ACCESS_LOG, entry);
+
 async function appendEntryGatewayAccessLog(entry) {
-  return core.appendAccessLog(GATEWAY_ACCESS_LOG, entry);
+  return entryGatewayAccessSink(entry);
+}
+
+function setEntryGatewayAccessSink(sink) {
+  const previous = entryGatewayAccessSink;
+  if (typeof sink === "function") entryGatewayAccessSink = sink;
+  return () => {
+    entryGatewayAccessSink = previous;
+  };
 }
 
 // 状态页每 5 秒都会带上网关访问统计；重读日志尾部并全量聚合交给短 TTL 单飞缓存。
@@ -2402,6 +2470,10 @@ module.exports = {
   selectGatewayManager,
   serializeFleetRouteTarget,
   sendAggregatedModelList,
+  setEntryGatewayAccessSink,
+  shouldLogTtsAccess,
+  logEntryGatewayAccessWhenDone,
+  logStartupSummary,
   flushTtsSettlements: () => ttsReconciler.flush(),
   resetEntryRateLimitBuckets() {
     entryRateBuckets.clear();

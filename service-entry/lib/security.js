@@ -12,12 +12,113 @@
 // also used on trusted home LANs:
 //   SERVICE_ENTRY_REQUIRE_API_KEY = auto | 1 | 0
 //   SERVICE_ENTRY_ALLOW_LAN_ADMIN = 0 | 1
+//
+// Forwarded client addresses are honoured only from the reverse proxies listed
+// in SERVICE_ENTRY_TRUSTED_PROXIES (IPs or CIDRs, loopback by default).
 
+const net = require("node:net");
 const path = require("node:path");
 const core = require("../../manager-core");
 
 const MANAGEMENT_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const KEY_STORE_CACHE_MS = 5000;
+const KEY_STORE_ISSUE_LOG_MS = 60_000;
+
+// Gateway callers may be anyone on the LAN or the internet, so their error
+// text never carries paths, ports or env switches. The detail goes to the
+// server log (redacted) instead.
+const GATEWAY_UNAVAILABLE_MESSAGE = "服务暂时不可用 / Service temporarily unavailable";
+const GATEWAY_KEY_NOT_CONFIGURED_MESSAGE = "服务端要求 API Key，但尚未配置任何密钥。 / An API key is required but none is configured on the server.";
+
+// Every header a reverse proxy (Caddy, cloudflared, a CDN) or this entry's own
+// hop may add. The presence of any of them marks a request as proxied, which
+// can only demote it (no management, no billing admin), never promote it.
+// billing-http.js imports this list, so the two gates cannot disagree again.
+const FORWARDED_HEADERS = Object.freeze([
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-real-ip",
+  "cf-connecting-ip",
+  "true-client-ip",
+  "x-service-entry-gateway",
+]);
+
+// Headers that name the client, in the order they are believed when the socket
+// peer is a trusted proxy. The last X-Forwarded-For hop is the one the nearest
+// proxy appended itself; earlier hops are whatever the client claimed.
+const CLIENT_ADDRESS_HEADERS = ["x-real-ip", "cf-connecting-ip", "true-client-ip"];
+
+const DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128,::ffff:127.0.0.1/128";
+
+// Parses "IP" or "IP/prefix" entries into a net.BlockList (which also matches
+// IPv4-mapped IPv6 forms). Invalid entries are returned, never thrown, so a
+// typo in the env cannot take the entry down.
+function parseTrustedProxies(value) {
+  const list = new net.BlockList();
+  const entries = [];
+  const invalid = [];
+  for (const raw of String(value ?? "").split(/[;,]/)) {
+    const item = raw.trim();
+    if (!item) continue;
+    const slash = item.indexOf("/");
+    const address = (slash === -1 ? item : item.slice(0, slash)).replace(/^\[|\]$/g, "");
+    const prefixText = slash === -1 ? "" : item.slice(slash + 1);
+    const family = net.isIP(address);
+    const maxPrefix = family === 4 ? 32 : 128;
+    const prefix = prefixText === "" ? maxPrefix : /^\d{1,3}$/.test(prefixText) ? Number(prefixText) : -1;
+    if (!family || (slash !== -1 && prefixText === "") || prefix < 0 || prefix > maxPrefix) {
+      invalid.push(item);
+      continue;
+    }
+    try {
+      list.addSubnet(address, prefix, family === 4 ? "ipv4" : "ipv6");
+      entries.push(`${address}/${prefix}`);
+    } catch {
+      invalid.push(item);
+    }
+  }
+  return { list, entries, invalid };
+}
+
+let trustedProxyCache = { raw: null, parsed: null };
+const warnedTrustedProxyValues = new Set();
+
+function trustedProxyConfig(options = {}) {
+  const configured = options.value ?? process.env.SERVICE_ENTRY_TRUSTED_PROXIES;
+  const raw = String(configured ?? "").trim() || DEFAULT_TRUSTED_PROXIES;
+  if (trustedProxyCache.raw !== raw) {
+    trustedProxyCache = { raw, parsed: parseTrustedProxies(raw) };
+  }
+  const { parsed } = trustedProxyCache;
+  // One warning per distinct value: the env is re-read on every request, and a
+  // bad entry must not flood the log.
+  if (parsed.invalid.length && !warnedTrustedProxyValues.has(raw)) {
+    warnedTrustedProxyValues.add(raw);
+    const warn = typeof options.warn === "function" ? options.warn : console.warn;
+    warn(`SERVICE_ENTRY_TRUSTED_PROXIES: ignoring invalid entries: ${parsed.invalid.join(", ")}`);
+  }
+  return parsed;
+}
+
+// True when the socket peer is a configured reverse proxy whose forwarded
+// client headers may be believed.
+function isTrustedProxy(address, options = {}) {
+  const text = String(address || "").trim().replace(/^\[|\]$/g, "");
+  const family = net.isIP(text);
+  if (!family) return false;
+  try {
+    return trustedProxyConfig(options).list.check(text, family === 4 ? "ipv4" : "ipv6");
+  } catch {
+    return false;
+  }
+}
+
+function isForwardedRequest(req) {
+  const headers = req?.headers || {};
+  return FORWARDED_HEADERS.some((name) => String(headers[name] || "").trim());
+}
 
 function envText(name, fallback = "") {
   const value = process.env[name];
@@ -49,6 +150,8 @@ function createEntrySecurity(options = {}) {
   // that were started outside this process.
   let trustToken = options.trustToken || core.generateGatewayTrustToken();
   let keyStoreCache = { value: null, expiresAt: 0, promise: null };
+  let keyStoreIssueLog = { detail: "", at: 0 };
+  const logError = typeof options.logError === "function" ? options.logError : console.error;
 
   // Reachable from off-box: anything other than a loopback bind.
   const lanMode = !["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase());
@@ -126,30 +229,35 @@ function createEntrySecurity(options = {}) {
 
   // Requests that came through a reverse proxy (Caddy in deploy/public) reach
   // this process from 127.0.0.1, so the socket address alone would wrongly
-  // promote every public client to "local". Any forwarded-* header marks the
-  // request as proxied; headers can only be added by the proxy, so this can
-  // demote but never promote.
-  const PROXY_FORWARD_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"];
+  // promote every public client to "local". Any forwarded header marks the
+  // request as proxied, from any peer; this can demote but never promote.
   function isProxiedRequest(req) {
-    const headers = req?.headers || {};
-    return PROXY_FORWARD_HEADERS.some((name) => String(headers[name] || "").trim());
+    return isForwardedRequest(req);
   }
 
-  // 请求的真实客户端地址：代理转发的请求取 X-Forwarded-For 的最后一跳（Caddy 默认
-  // 会丢弃不可信的来路 XFF、只写入真实对端，所以最后一项永远是最近一级可信代理
-  // 写入的地址）；直连请求用 socket 对端。本机伪造转发头只会把自己降级成远端，
-  // 方向安全。
+  function trustsPeer(address) {
+    return isTrustedProxy(address, { warn: options.warn });
+  }
+
+  // 请求的真实客户端地址。只有 socket 对端是可信代理（SERVICE_ENTRY_TRUSTED_PROXIES，
+  // 默认仅回环）时才相信转发头：先取 X-Forwarded-For 最后一跳（最近一级可信代理
+  // 写入的对端），再依次取 X-Real-IP、CF-Connecting-IP、True-Client-IP。不可信
+  // 对端（例如局域网设备）带来的转发头一律忽略、只用 socket 地址，否则任何人都能
+  // 伪造自己的地址来骗过日志、限流和计费归属，甚至让管理器把它当成本机。
   function resolveClientAddress(req) {
-    if (isProxiedRequest(req)) {
-      const chain = String(req?.headers?.["x-forwarded-for"] || "")
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-      if (chain.length) return chain[chain.length - 1];
-      const realIp = String(req?.headers?.["x-real-ip"] || "").trim();
-      if (realIp) return realIp;
+    const socketAddress = req?.socket?.remoteAddress || "";
+    if (!isProxiedRequest(req) || !trustsPeer(socketAddress)) return socketAddress;
+    const headers = req?.headers || {};
+    const chain = String(headers["x-forwarded-for"] || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (chain.length) return chain[chain.length - 1];
+    for (const name of CLIENT_ADDRESS_HEADERS) {
+      const value = String(headers[name] || "").trim();
+      if (value) return value;
     }
-    return req?.socket?.remoteAddress || "";
+    return socketAddress;
   }
 
   // Management is localhost-only unless the LAN-admin switch is on; proxied
@@ -218,12 +326,12 @@ function createEntrySecurity(options = {}) {
         try {
           settings = await core.readJsonFile(exposureFile, null);
         } catch (error) {
-          issues.push({ manager: manager.id, file: exposureFile, message: error.message });
+          issues.push({ manager: manager.id, file: exposureFile, message: core.redactSecrets(String(error.message || "")) });
         }
         try {
           clients = await core.readJsonFile(clientsFile, null);
         } catch (error) {
-          issues.push({ manager: manager.id, file: clientsFile, message: error.message });
+          issues.push({ manager: manager.id, file: clientsFile, message: core.redactSecrets(String(error.message || "")) });
         }
         stores.push({ manager, settings, clients });
       }
@@ -244,6 +352,16 @@ function createEntrySecurity(options = {}) {
     keyStoreCache = { value: null, expiresAt: 0, promise: null };
   }
 
+  // Every gateway request hits this while the store is broken, so the same
+  // detail is logged once a minute at most.
+  function logKeyStoreIssues(issues) {
+    const detail = issues.map((item) => `${item.manager}: ${item.file} (${item.message})`).join("; ");
+    const now = Date.now();
+    if (detail === keyStoreIssueLog.detail && now - keyStoreIssueLog.at < KEY_STORE_ISSUE_LOG_MS) return;
+    keyStoreIssueLog = { detail, at: now };
+    logError(core.redactSecrets(`gateway auth: service key store could not be read, refusing gateway requests: ${detail}`));
+  }
+
   async function authorizeGatewayRequest(req) {
     const current = policy();
     const presentedKey = core.extractServiceApiKey(req.headers || {}, { acceptRawAuthorization: true });
@@ -252,11 +370,12 @@ function createEntrySecurity(options = {}) {
     // A corrupt key store must never read as "no keys configured", which would
     // otherwise let an unauthenticated request through.
     if (issues.length) {
+      logKeyStoreIssues(issues);
       return {
         ok: false,
         status: 503,
         code: "key_store_unreadable",
-        message: `Service key store could not be read: ${issues.map((item) => item.file).join(", ")}`,
+        message: GATEWAY_UNAVAILABLE_MESSAGE,
       };
     }
 
@@ -271,11 +390,13 @@ function createEntrySecurity(options = {}) {
     });
     if (!configured.length) {
       if (!current.requireApiKey) return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
+      // The remedy (generate a key, or the env switch) is shown to the
+      // operator by describe(); the gateway caller only learns the state.
       return {
         ok: false,
         status: 503,
         code: "api_key_not_configured",
-        message: "An API key is required but none is configured. Generate one in a manager's service page, or set SERVICE_ENTRY_REQUIRE_API_KEY=0 to disable.",
+        message: GATEWAY_KEY_NOT_CONFIGURED_MESSAGE,
       };
     }
     if (!presentedKey) {
@@ -366,6 +487,7 @@ function createEntrySecurity(options = {}) {
       allowLanAdmin: current.allowLanAdmin,
       corsMode: current.corsMode,
       allowedOrigins: current.allowedOrigins,
+      trustedProxies: trustedProxyConfig({ warn: options.warn }).entries,
       trustTokenActive: Boolean(trustToken),
       keyStore: keyStatus,
       configIssues: core.listConfigHealthIssues(),
@@ -376,6 +498,7 @@ function createEntrySecurity(options = {}) {
         SERVICE_ENTRY_ALLOW_LAN_ADMIN: "0 | 1 — 允许局域网设备访问管理端点",
         SERVICE_ENTRY_ALLOWED_ORIGINS: "逗号分隔的浏览器 Origin 白名单，留空表示不允许跨域",
         SERVICE_ENTRY_ALLOWED_HOSTS: "额外的 Host 白名单（反代域名）",
+        SERVICE_ENTRY_TRUSTED_PROXIES: "逗号分隔的可信反向代理 IP / CIDR，只有它们带来的转发头会被采信；默认仅回环",
       },
     };
   }
@@ -485,6 +608,7 @@ function createEntrySecurity(options = {}) {
     checkRequest,
     checkManagementAccess,
     isProxiedRequest,
+    isTrustedProxy: trustsPeer,
     resolveClientAddress,
     corsHeaders,
     authorizeGatewayRequest,
@@ -500,6 +624,10 @@ function createEntrySecurity(options = {}) {
 }
 
 module.exports = {
+  DEFAULT_TRUSTED_PROXIES,
+  FORWARDED_HEADERS,
   createEntrySecurity,
+  isTrustedProxy,
   normalizeRequireApiKeyMode,
+  parseTrustedProxies,
 };
