@@ -5,19 +5,11 @@ const {
   listPriceTemplates,
   previewPriceTemplateApplications,
 } = require("./billing-price-templates");
+// One forwarded-header list for every "is this request proxied?" gate.
+const { FORWARDED_HEADERS } = require("./security");
 
 const MAX_BILLING_BODY_BYTES = 256 * 1024;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
-const FORWARDED_HEADERS = [
-  "forwarded",
-  "x-forwarded-for",
-  "x-forwarded-host",
-  "x-forwarded-proto",
-  "cf-connecting-ip",
-  "true-client-ip",
-  "x-real-ip",
-  "x-service-entry-gateway",
-];
 const MICROCREDITS_PER_CREDIT = 1_000_000n;
 const SQLITE_MAX_INTEGER = 9_223_372_036_854_775_807n;
 
