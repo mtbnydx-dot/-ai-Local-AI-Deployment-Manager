@@ -1,3 +1,5 @@
+const { redactSecrets } = require("./secret-redactor");
+
 function sendJsonError(res, error, fallbackStatus = 500) {
   const payload = { error: error.message };
   if (error.code) payload.code = String(error.code);
@@ -27,6 +29,20 @@ function normalizeProxyResult(result) {
   };
 }
 
+// A text function or a bound redactor ({ redact }) from createSecretRedactor.
+function resolveTextRedactor(input) {
+  const custom = typeof input === "function" ? input
+    : (input && typeof input.redact === "function" ? (text) => input.redact(text) : null);
+  return (text) => {
+    if (!custom) return redactSecrets(text);
+    try {
+      return custom(text);
+    } catch {
+      return redactSecrets(text);
+    }
+  };
+}
+
 function registerRuntimeRoutes(app, deps = {}) {
   const {
     startRuntime,
@@ -38,6 +54,10 @@ function registerRuntimeRoutes(app, deps = {}) {
     listRuntimeInstances,
     stopRuntimeInstance,
   } = deps;
+  // /api/logs text is redacted before it leaves the manager (08 P0-5). The
+  // servers pass a createSecretRedactor that also knows the exact runtime keys;
+  // the default removes secret-shaped substrings only.
+  const redactLogs = resolveTextRedactor(deps.redactLogs);
 
   if (typeof startRuntime === "function") {
     app.post("/api/start", async (req, res) => {
@@ -83,9 +103,9 @@ function registerRuntimeRoutes(app, deps = {}) {
     app.get("/api/logs", async (req, res) => {
       try {
         const result = normalizeTextResult(await readRuntimeLogs({ req, query: req.query || {} }));
-        res.status(result.status || 200).type(result.type).send(result.text);
+        res.status(result.status || 200).type(result.type).send(redactLogs(String(result.text ?? "")));
       } catch (error) {
-        res.status(error.status || 500).type("text/plain").send(error.message);
+        res.status(error.status || 500).type("text/plain").send(redactLogs(String(error?.message ?? "")));
       }
     });
   }

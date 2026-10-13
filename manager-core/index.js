@@ -7,6 +7,7 @@ const MODULES = [
   "./compatibility-utils",
   "./health",
   "./secrets",
+  "./secret-redactor",
   "./runtime-secret-store",
   "./gateway-trust",
   "./billing-client",

@@ -1,3 +1,5 @@
+const { redactSecrets } = require("./secret-redactor");
+
 function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = Number(bytes || 0);
@@ -81,13 +83,21 @@ function appendJobLog(job, data, options = {}) {
   return added;
 }
 
-function sanitizeJobLogText(data) {
+// Text normalisation only (ANSI codes, line endings, control bytes). The
+// ledger store uses it to tell redaction changes apart from normalisation.
+function normalizeJobLogText(data) {
   return String(data || "")
     .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .replace(/\uFFFD+/g, "[旧日志含无法解码字节]")
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g, "");
+}
+
+// Every job log line passes through here, including callers outside the
+// ledger store, so secret-shaped substrings never reach a log or a ledger.
+function sanitizeJobLogText(data) {
+  return redactSecrets(normalizeJobLogText(data));
 }
 
 function applyJobProgress(job, progress = {}, options = {}) {
@@ -269,6 +279,7 @@ module.exports = {
   isActiveJob,
   markInterruptedJob,
   appendJobLog,
+  normalizeJobLogText,
   sanitizeJobLogText,
   applyJobProgress,
   markProcessJobStarted,
