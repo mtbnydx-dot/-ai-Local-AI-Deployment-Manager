@@ -13,6 +13,7 @@ const {
   formatDownloadErrorTitle,
   isDownloadErrorCode,
 } = require("./model-hub/errors");
+const { normalizeDownloadTransfer } = require("./download-utils");
 
 // Fields one classification writes onto job.meta; cleared again when the job
 // is resumed so the next failure is classified on its own evidence.
@@ -133,6 +134,12 @@ function createDownloadJobController(options = {}) {
     : (target) => fsp.rm(target, { recursive: true, force: true });
   const setRetryTimeout = typeof options.setRetryTimeout === "function" ? options.setRetryTimeout : setTimeout;
   const clearRetryTimeout = typeof options.clearRetryTimeout === "function" ? options.clearRetryTimeout : clearTimeout;
+  // Download tokens live in the manager's in-memory map; the controller only
+  // sees tokenRef. resolve is used when a spec is rebuilt, release once the
+  // job no longer needs the token (success, cancel, partial removal).
+  const resolveDownloadSecret = typeof options.resolveDownloadSecret === "function" ? options.resolveDownloadSecret : () => null;
+  const releaseDownloadSecret = typeof options.releaseDownloadSecret === "function" ? options.releaseDownloadSecret : () => {};
+  const releasedTokenRefs = new Set();
   const retryTimers = new Map();
   let autoRetryCount = clampInteger(options.autoRetryCount, 0, 10, 2);
   let autoRetryDelaySeconds = clampInteger(options.autoRetryDelaySeconds, 1, 3600, 10);
@@ -241,6 +248,7 @@ function createDownloadJobController(options = {}) {
       retryCount: clampInteger(jobOptions.meta?.retryCount, 0, 10, 0),
       maxRetries: clampInteger(jobOptions.meta?.maxRetries, 0, 10, autoRetryCount),
     };
+    if (jobOptions.meta?.transfer) meta.transfer = normalizeDownloadTransfer(jobOptions.meta.transfer);
     const job = options.createJob("download", jobOptions.title || "download", meta);
     if (shouldQueue) {
       job.status = "queued";
@@ -250,6 +258,7 @@ function createDownloadJobController(options = {}) {
         downloadSpecs.delete(job.id);
         markJobCancelRequested(job, "cancel");
         failJob(job, new Error(messages.queuedCancel));
+        releaseJobDownloadSecret(job);
       };
       scheduleSave(0);
     } else {
@@ -303,6 +312,7 @@ function createDownloadJobController(options = {}) {
     options.stopProgressTracker(job);
     markDownloadCancelled(job);
     options.appendLog(job, messages.cancelled);
+    releaseJobDownloadSecret(job);
     if (finalizeOptions.deletePartial === true) await deletePartialDownload(job);
     scheduleSave(0);
   }
@@ -318,6 +328,26 @@ function createDownloadJobController(options = {}) {
     const resolved = resolvePartialPath(localDir);
     await removePartialPath(resolved);
     options.appendLog(job, `${messages.partialDeleted}: ${resolved}`);
+    releaseJobDownloadSecret(job);
+  }
+
+  function releaseJobDownloadSecret(job) {
+    const ref = job?.meta?.transfer?.tokenRef;
+    if (!ref || releasedTokenRefs.has(ref)) return;
+    releasedTokenRefs.add(ref);
+    try {
+      releaseDownloadSecret(ref);
+    } catch {
+      // Releasing only drops an in-memory entry; never fail the job path on it.
+    }
+  }
+
+  // Finished downloads are seen here because every download's exit drains the
+  // queue; a successful job never needs its token again.
+  function releaseFinishedDownloadSecrets() {
+    for (const job of jobs.values()) {
+      if (job.type === "download" && job.status === "success") releaseJobDownloadSecret(job);
+    }
   }
 
   // Stalls are transient by definition (network hiccups, HF throttling, Xet
@@ -347,7 +377,7 @@ function createDownloadJobController(options = {}) {
     clearAutoRetry(job);
     let spec;
     try {
-      spec = options.buildDownloadSpecFromJob(job);
+      spec = options.buildDownloadSpecFromJob(job, { settings: getDownloadSettings(), resolveSecret: resolveDownloadSecret });
     } catch (error) {
       if (isDownloadErrorCode(error?.code)) failDownloadResume(job, error);
       throw error;
@@ -394,6 +424,7 @@ function createDownloadJobController(options = {}) {
   }
 
   function drainDownloadQueue() {
+    releaseFinishedDownloadSecrets();
     healDownloadQueue({ skipDrain: true });
     scheduleFailedDownloadRetries();
     if (hasRunningDownload()) return;
@@ -533,6 +564,7 @@ function createDownloadJobController(options = {}) {
     healDownloadQueue,
     startQueuedDownloadsNow,
     classifyFailedDownload,
+    releaseJobDownloadSecret,
     findActiveDownloadJobByLocalDir: (localDir, findOptions) => findActiveDownloadJobByLocalDir(jobs, localDir, findOptions),
     processStartedAt,
   };
