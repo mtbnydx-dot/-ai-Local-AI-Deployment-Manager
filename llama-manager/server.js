@@ -1799,9 +1799,11 @@ async function collectHealthReport() {
     runtimeSecretStoreError = error;
   }
   const checks = [];
-  checks.push(healthCheck("docker", "Docker", dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"]));
+  // actionDetails (08 P0-23) describe the remediation of a failing check; the
+  // string actions stay as they were.
+  checks.push(healthCheck("docker", "Docker", dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"], dockerStatus.ok ? [] : core.healthActionDetails(["start-docker"])));
   checks.push(healthCheck("gpu", "GPU", gpu.ok ? "ok" : "warn", gpu.ok ? `${gpu.name} · ${gpu.usedMb}/${gpu.totalMb} MB · ${gpu.util}%` : gpu.text || "No NVIDIA GPU detected"));
-  checks.push(healthCheck("image", "llama.cpp 镜像", image.ok ? "ok" : "warn", image.ok ? image.text : `${CONFIG.image} not found locally`, image.ok ? [] : ["pull-image"]));
+  checks.push(healthCheck("image", "llama.cpp 镜像", image.ok ? "ok" : "warn", image.ok ? image.text : `${CONFIG.image} not found locally`, image.ok ? [] : ["pull-image"], image.ok ? [] : core.healthActionDetails(["pull-image"], { image: CONFIG.image })));
   checks.push(healthCheck("image-pin", "镜像版本", isPinnedImageReference(CONFIG.image) ? "ok" : "warn", CONFIG.image));
   checks.push(healthCheck("container", "llama.cpp 容器", container.running ? "ok" : container.exists ? "warn" : "warn", container.status || (container.exists ? "exists" : "not started")));
   checks.push(healthCheck("api", "OpenAI 兼容 API", runtime?.models?.length ? "ok" : runtimeError ? "fail" : "warn", runtime?.models?.length ? `${runtime.models.length} model(s) served at ${runtime.endpoint.localUrl}` : runtimeError?.message || "No served model reported yet"));
@@ -1813,7 +1815,7 @@ async function collectHealthReport() {
   checks.push(await directoryHealth("hf-cache", "HF 缓存目录", CONFIG.hfCache));
   const hasHfLogin = Boolean(process.env.HF_TOKEN || hfAuthService.hasCachedToken());
   checks.push(healthCheck("hf-token", "Hugging Face 账号", hasHfLogin ? "ok" : "warn", hasHfLogin ? "本机已连接" : "下载 gated 模型前需要连接 Hugging Face 账号"));
-  checks.push(await commandHealth("hf-cli", "Hugging Face CLI", CONFIG.hfCli, ["--help"], "warn"));
+  checks.push(await commandHealth("hf-cli", "Hugging Face CLI", CONFIG.hfCli, ["--help"], "warn", core.healthActionDetails(["install-download-cli"])));
   checks.push(await commandHealth("modelscope-cli", "ModelScope CLI", CONFIG.modelScopeCli, ["--help"], "warn"));
   checks.push(healthCheck("logs", "最近日志", logs.issues?.some((item) => item.severity === "error") ? "fail" : logs.issues?.length ? "warn" : "ok", logs.stage || "No recent llama.cpp log issues"));
 
