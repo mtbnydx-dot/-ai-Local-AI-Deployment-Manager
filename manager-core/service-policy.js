@@ -29,9 +29,29 @@ function normalizeCsvList(value) {
   return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
 }
 
-function normalizeCorsMode(value, fallback = "open") {
-  const mode = String(value || fallback || "open").trim().toLowerCase();
-  return mode === "restricted" ? "restricted" : "open";
+// Deny by default (docs/overhaul/08 P0-21): anything but an explicit "open"
+// reads as restricted, including records saved before corsMode existed.
+function normalizeCorsMode(value, fallback = "restricted") {
+  const mode = String(value || fallback || "restricted").trim().toLowerCase();
+  return mode === "open" ? "open" : "restricted";
+}
+
+// "open" (any origin) is honoured only while the gateway requires an API key.
+// Without one any website could drive the manager from a visitor's browser,
+// so the effective mode falls back to restricted.
+function resolveEffectiveCorsMode(settings = {}) {
+  const requested = normalizeCorsMode(settings.corsMode);
+  return requested === "open" && settings.requireApiKey === true ? "open" : "restricted";
+}
+
+const CORS_OPEN_REQUIRES_API_KEY_MESSAGE = "已选择“任意来源”，但没有要求 API Key，因此仍按限制模式处理：只允许同源请求和已配置的 Origin。 / Any origin is selected but no API key is required, so CORS stays restricted: only same-origin requests and configured origins are allowed.";
+
+function buildServiceExposureWarnings(settings = {}) {
+  const warnings = [];
+  if (normalizeCorsMode(settings.corsMode) === "open" && resolveEffectiveCorsMode(settings) !== "open") {
+    warnings.push({ code: "cors_open_requires_api_key", message: CORS_OPEN_REQUIRES_API_KEY_MESSAGE });
+  }
+  return warnings;
 }
 
 function normalizeCorsHeaderList(value) {
@@ -115,11 +135,7 @@ function normalizeServiceExposureSettings(value = {}, previous = {}, options = {
   const mode = normalizeExposureMode(value.exposureMode || value.mode || previous.exposureMode);
   const apiKeySecret = normalizeServiceExposureSecret(value, previous);
   const allowedOrigins = normalizeCsvList(value.allowedOrigins !== undefined ? value.allowedOrigins : previous.allowedOrigins).slice(0, 20);
-  const inferredCorsMode = allowedOrigins.length ? "restricted" : "open";
-  const corsMode = normalizeCorsMode(
-    value.corsMode !== undefined ? value.corsMode : previous.corsMode,
-    inferredCorsMode,
-  );
+  const corsMode = normalizeCorsMode(value.corsMode !== undefined ? value.corsMode : previous.corsMode);
   const allowExposeOpenCode = options.allowExposeOpenCode !== false;
   const defaultExposeOpenCode = Boolean(options.exposeOpenCodeDefault);
   const exposeOpenCode = allowExposeOpenCode
@@ -149,6 +165,9 @@ function normalizeServiceExposureSettings(value = {}, previous = {}, options = {
     publicBaseUrl: normalizeUrlText(value.publicBaseUrl !== undefined ? value.publicBaseUrl : previous.publicBaseUrl),
     corsMode,
     allowedOrigins,
+    // Private Network Access preflights are granted only when this is on and
+    // the origin is allowed.
+    allowPrivateNetwork: Boolean(value.allowPrivateNetwork !== undefined ? value.allowPrivateNetwork : previous.allowPrivateNetwork),
     allowedHeaders: normalizeCorsHeaderList(value.allowedHeaders !== undefined ? value.allowedHeaders : previous.allowedHeaders).slice(0, 64),
     rateLimitRpm: clampNumber(value.rateLimitRpm !== undefined ? value.rateLimitRpm : previous.rateLimitRpm, 1, 5000, DEFAULT_GATEWAY_RATE_LIMIT_RPM),
     maxConcurrentRequests: clampNumber(value.maxConcurrentRequests !== undefined ? value.maxConcurrentRequests : previous.maxConcurrentRequests, 1, 256, DEFAULT_GATEWAY_MAX_CONCURRENT),
@@ -458,7 +477,8 @@ const DEFAULT_SERVICE_EXPOSURE_COPY = {
   gatewayEnabled: "管理器网关已开启，会按下方接口开关、鉴权、限流和并发策略处理请求。",
   gatewayDisabled: "管理器网关已关闭，/serve/v1、/claude 和 /opencode 请求都会被拒绝；不需要重启模型即可重新开启。",
   corsTitle: "浏览器跨域（CORS）",
-  corsOpen: "当前为临时全开放：允许任意浏览器 Origin，并反射预检请求头。API Key、限流和模型权限仍独立生效。",
+  corsOpen: "当前为任意来源模式：允许任意浏览器 Origin 并反射预检请求头，但不允许携带凭据，请求必须带 API Key；限流和模型权限仍独立生效。 / Any-origin mode: any browser Origin is allowed and preflight headers are reflected, without credentials, and requests must carry an API key. Rate limits and model permissions still apply.",
+  corsOpenNeedsApiKey: CORS_OPEN_REQUIRES_API_KEY_MESSAGE,
   corsRestricted: "当前为限制模式：只允许配置的 Origin，以及内置或额外配置的请求头。",
   gatewayApiKeyOk: "管理器网关会强制 Bearer Token；对外推荐使用 /serve/v1 或 /claude。",
   runtimeApiKeyOk: "运行中的推理服务已启用 Bearer Token。",
@@ -547,6 +567,7 @@ function buildServiceExposurePayloadSnapshot(settings = {}, context = {}, option
 
   return {
     settings: redactServiceExposureSettings(settings),
+    warnings: buildServiceExposureWarnings(settings),
     configHealth: {
       ok: !listConfigHealthIssues().length,
       issues: listConfigHealthIssues(),
@@ -641,13 +662,12 @@ function buildServiceExposureChecks(settings = {}, context = {}, options = {}) {
 
   if (!gatewayEnabled) return checks;
 
-  const corsOpen = settings.corsMode
-    ? String(settings.corsMode).toLowerCase() !== "restricted"
-    : !(Array.isArray(settings.allowedOrigins) && settings.allowedOrigins.length);
+  const corsRequestedOpen = normalizeCorsMode(settings.corsMode) === "open";
+  const corsOpen = resolveEffectiveCorsMode(settings) === "open";
   checks.push(serviceCheck(
-    corsOpen ? "warn" : "ok",
+    corsRequestedOpen ? "warn" : "ok",
     serviceExposureCopy(copy, "corsTitle"),
-    serviceExposureCopy(copy, corsOpen ? "corsOpen" : "corsRestricted"),
+    serviceExposureCopy(copy, corsOpen ? "corsOpen" : corsRequestedOpen ? "corsOpenNeedsApiKey" : "corsRestricted"),
   ));
 
   if (mode === "local") {
@@ -782,6 +802,7 @@ module.exports = {
   buildServiceClientsSummary,
   buildServiceExposureChecks,
   buildServiceExposurePayloadSnapshot,
+  buildServiceExposureWarnings,
   createServiceClientRecord,
   deleteServiceClientRecord,
   enterServiceConcurrency,
@@ -810,6 +831,7 @@ module.exports = {
   redactServiceClient,
   redactServiceClientsLedger,
   redactServiceExposureSettings,
+  resolveEffectiveCorsMode,
   resolveServiceClientForApiKey,
   rotateServiceClientKeyRecord,
   serviceCheck,

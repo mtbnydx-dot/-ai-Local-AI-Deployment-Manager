@@ -17,6 +17,7 @@ const {
   hasGlobalServiceApiKey,
   globalServiceBillingClientId,
   isGlobalServiceApiKeyAccepted,
+  resolveEffectiveCorsMode,
   DEFAULT_GATEWAY_MAX_CONCURRENT,
 } = require("./service-policy");
 
@@ -1474,15 +1475,33 @@ function normalizeServiceCorsHeaderNames(value) {
     .filter((item) => /^[a-z0-9!#$%&'*+.^_`|~-]+$/i.test(item))));
 }
 
+// Response headers a cross-origin client may read. Never "*".
+const SERVICE_CORS_EXPOSE_HEADERS = "x-request-id, x-local-ai-route, retry-after";
+
+// An Origin that names the host the request was sent to is the manager's own
+// page; browsers send Origin on same-origin POSTs too.
+function isSameOriginRequest(req, origin) {
+  const host = String(req.headers?.host || "").trim().toLowerCase();
+  if (!host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host;
+  } catch {
+    return false;
+  }
+}
+
+// Deny by default (docs/overhaul/08 P0-21). Restricted mode admits same-origin
+// requests and the configured origins only. "open" reflects any origin, and
+// only while an API key is required. Credentials are never allowed, and a
+// Private Network Access preflight is granted only with allowPrivateNetwork.
 function applyServiceCorsHeaders(req, res, settings = {}, allowHeaders = DEFAULT_SERVICE_CORS_ALLOW_HEADERS) {
   const origin = String(req.headers.origin || "").trim();
   if (!origin) return { ok: true };
-  const configuredOrigins = Array.isArray(settings.allowedOrigins) ? settings.allowedOrigins : [];
-  const corsMode = settings.corsMode
-    ? String(settings.corsMode).toLowerCase()
-    : configuredOrigins.length ? "restricted" : "open";
-  const openCors = corsMode !== "restricted";
-  if (!openCors && !isServiceOriginAllowed(origin, configuredOrigins, false)) {
+  const openCors = resolveEffectiveCorsMode(settings) === "open";
+  // A "*" entry means any origin, so it follows the same API-key rule as open.
+  const configuredOrigins = (Array.isArray(settings.allowedOrigins) ? settings.allowedOrigins : [])
+    .filter((item) => openCors || String(item || "").trim() !== "*");
+  if (!openCors && !isSameOriginRequest(req, origin) && !isServiceOriginAllowed(origin, configuredOrigins, false)) {
     return { ok: false, message: `Origin is not allowed: ${origin}` };
   }
   const requestedHeaders = normalizeServiceCorsHeaderNames(req.headers["access-control-request-headers"]);
@@ -1499,11 +1518,9 @@ function applyServiceCorsHeaders(req, res, settings = {}, allowHeaders = DEFAULT
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
   res.setHeader("access-control-allow-headers", resolvedHeaders.join(","));
   res.setHeader("access-control-max-age", "600");
-  if (openCors) {
-    res.setHeader("access-control-allow-credentials", "true");
-    res.setHeader("access-control-expose-headers", "*");
-  }
-  if (String(req.headers["access-control-request-private-network"] || "").toLowerCase() === "true") {
+  res.setHeader("access-control-expose-headers", SERVICE_CORS_EXPOSE_HEADERS);
+  if (settings.allowPrivateNetwork === true
+    && String(req.headers["access-control-request-private-network"] || "").toLowerCase() === "true") {
     res.setHeader("access-control-allow-private-network", "true");
   }
   return { ok: true, mode: openCors ? "open" : "restricted", allowedHeaders: resolvedHeaders };
@@ -1914,6 +1931,7 @@ module.exports = {
   isServiceKindEnabled,
   appendVaryHeader,
   isServiceOriginAllowed,
+  SERVICE_CORS_EXPOSE_HEADERS,
   applyServiceCorsHeaders,
   configureGatewayTrust,
   resolveGatewayRequestOrigin,
