@@ -98,6 +98,9 @@ function freshScenario() {
       totalTokens: "1500",
       projectedMicrocredits: "1750000",
       chargedMicrocredits: "1500000",
+      status: 200,
+      ok: true,
+      terminalState: "completed",
     }],
     ledger: [{
       entryId: "77777777-7777-4777-8777-777777777777",
@@ -521,6 +524,11 @@ test("standalone page exposes five tabs and renders hostile API text without sec
   await expect(pricesTab).not.toHaveCSS("transition-property", /(^|, )(?:all|color|border|border-color|border-bottom-color)(, |$)/);
 
   await page.getByRole("tab", { name: "总览", exact: true }).click();
+  // The usage API returns raw request rows, so the overview must not claim a monthly aggregate.
+  await expect(page.locator("#overviewUsageHeading")).toHaveText("最近请求（原始记录，最多 100 条）");
+  await expect(page.locator("table:has(#overviewUsageRows) thead th")).toHaveText(["时间", "客户", "管理器", "模型", "Tokens", "状态"]);
+  await expect(page.locator("#overviewUsageRows")).toContainText("local/base-7b");
+  await expect(page.locator("#overviewUsageRows")).toContainText("完成 · 200");
   await expect(page.locator("#overviewCustomerRows")).toContainText("XSS_SENTINEL");
   await expect(page.locator("#overviewCustomerRows img")).toHaveCount(0);
   expect(await page.evaluate(() => window.__billingXss)).toBeUndefined();
