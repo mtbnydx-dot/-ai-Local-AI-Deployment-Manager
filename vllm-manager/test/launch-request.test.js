@@ -380,3 +380,155 @@ test("vLLM prefix caching defaults to enabled unless explicitly disabled", async
   const disabled = await request({ body: { model: "model", instanceMode: "parallel", port: 8128, enablePrefixCaching: false } });
   assert.equal(disabled.job.meta.enablePrefixCaching, false);
 });
+
+function flashNextProfileConfig() {
+  const { createVllmDefaultLaunchProfiles } = require("../lib/default-profiles");
+  const profile = createVllmDefaultLaunchProfiles((config) => ({ ...config }))
+    .find((item) => item.id === "qwen38-flash-next-sglang-262k");
+  assert.ok(profile, "Flash-Next 262K default profile exists");
+  return profile.config;
+}
+
+// Replace-mode launch against the real admission controller and a fake 97887
+// MiB GPU: the old model holds most of it until prepare stops it (600 MiB left).
+async function launchFlashNextReplacement(body) {
+  const fsp = require("node:fs/promises");
+  const os = require("node:os");
+  const path = require("node:path");
+  const core = require("../../manager-core");
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "vllm-sglang-admission-"));
+  let usedMb = 90000;
+  const controller = core.createGpuAdmissionController({
+    root,
+    reserveMb: 8192,
+    maxUtilizationPct: 95,
+    startupMarginMb: 1024,
+    policyFile: false,
+    getGpuStatus: async () => ({ ok: true, gpus: [{ id: "0", totalMb: 97887, usedMb }] }),
+  });
+  const admissionRequests = [];
+  const warnings = [];
+  const events = [];
+  let settle;
+  const settled = new Promise((resolve) => { settle = resolve; });
+  const request = createVllmStartRuntimeRequest({
+    CONFIG: { defaultPort: 8000, containerName: "vllm-local", managerId: "vllm-manager" },
+    cleanRequired: (value) => String(value || ""),
+    deriveName: () => "model",
+    positiveInt: (value, fallback) => Number(value || fallback),
+    nonNegativeNumber: (value, fallback) => Number(value || fallback),
+    optionalNonNegativeNumber: () => null,
+    normalizeDtype: () => "auto",
+    normalizeQuantization: (value) => value || "",
+    normalizeLoadFormat: () => "auto",
+    cleanOptionalLaunchArg: () => "",
+    normalizeKvCacheDtype: () => "auto",
+    normalizeLaunchGpuSelection: async (ids) => ({ gpuDeviceIds: ids, selectedCount: ids.length, warnings: [] }),
+    normalizeGpuIds: (value) => (Array.isArray(value) ? value.map(String) : []),
+    normalizeClientPreset: (value) => value || "openai",
+    normalizeReasoningParser: (value) => value || "",
+    normalizeToolCallParser: (value) => value || "",
+    inferToolCallParser: () => "",
+    normalizeNetworkAccess: () => "local",
+    getLanAddress: () => "127.0.0.1",
+    createJob: (type, title, meta) => ({ id: "flash-next", type, title, meta, status: "running" }),
+    runStartJob: async (job, options) => {
+      await options.prepareGpuAdmission(async () => {
+        events.push("old-container-stopped");
+        usedMb = 600;
+        return {
+          async rollback() {
+            events.push("old-container-restored");
+            usedMb = 90000;
+          },
+        };
+      });
+      job.status = "success";
+    },
+    failJob: (job, error) => {
+      job.status = "failed";
+      settle({ job, error });
+    },
+    reportGpuAdmissionError: (_job, error) => warnings.push(error.message),
+    acquireGpuAdmission: controller.acquire,
+    acquireGpuAdmissionAfterPrepare: async (admissionRequest, prepare) => {
+      admissionRequests.push(JSON.parse(JSON.stringify(admissionRequest)));
+      return controller.acquireAfterPrepare(admissionRequest, prepare);
+    },
+  });
+  try {
+    const { job } = await request({ body });
+    const timer = setInterval(() => {
+      if (job.status !== "running") settle({ job, error: null });
+    }, 5);
+    const result = await settled;
+    clearInterval(timer);
+    // Let the commit or release that follows the job finish before inspecting.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { ...result, admissionRequests, warnings, events, state: await controller.inspect() };
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+test("Flash-Next 262K default profile is admitted with a clamped warn reservation", async () => {
+  const config = flashNextProfileConfig();
+  const { job, error, admissionRequests, warnings, events, state } = await launchFlashNextReplacement(config);
+  assert.equal(error, null);
+  assert.equal(job.status, "success");
+  assert.deepEqual(events, ["old-container-stopped"]);
+
+  const [admissionRequest] = admissionRequests;
+  assert.equal(admissionRequest.engine, "sglang");
+  assert.equal(admissionRequest.instanceMode, "replace");
+  assert.equal(admissionRequest.requestedFractionOfFree, 0.995);
+  assert.equal(admissionRequest.poolCappedTokens, 262144);
+  assert.equal(admissionRequest.minClampMb, 4096);
+  assert.equal(admissionRequest.estimatePolicy, "sglang_mem_fraction_static_of_free");
+  assert.equal(Object.hasOwn(admissionRequest, "requestedFraction"), false);
+  const requestText = JSON.stringify(admissionRequest);
+  for (const banned of ["free-fraction", "requestedMbCeiling", "requestedMbFloor", "sglang_bounded_up_to_budget"]) {
+    assert.equal(requestText.includes(banned), false, banned);
+  }
+
+  assert.deepEqual(job.meta.admission, {
+    verdict: "warn",
+    requestedMb: 96801,
+    reservedMb: 89095,
+    availableMb: 89095,
+    clamped: true,
+    policy: "static-fraction-of-free",
+  });
+  assert.equal(job.meta.gpuAdmission.verdict, "warn");
+  assert.equal(job.meta.gpuAdmission.clamped, true);
+  assert.equal(job.meta.gpuAdmission.requestedTotalMb, 89095);
+  assert.equal(job.meta.gpuAdmission.reservations[0].requestedMb, 89095);
+  assert.equal(job.meta.gpuAdmission.reservations[0].estimateMb, 96801);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^SGLang 静态显存比例按空闲显存折算需要 96801 MiB，超过安全预算 89095 MiB/);
+  assert.match(warnings[0], /The KV pool is capped at 262144 tokens/);
+
+  const leases = Object.values(state.leases);
+  assert.equal(leases.length, 1);
+  assert.equal(leases[0].state, "committed");
+  assert.equal(leases[0].reservations[0].requestedMb, 89095);
+  assert.equal(leases[0].reservations[0].estimateMb, 96801);
+});
+
+test("Flash-Next 262K without a KV pool cap is refused in replace mode and keeps the old model", async () => {
+  const { sglangMaxTotalTokens, ...config } = flashNextProfileConfig();
+  assert.equal(sglangMaxTotalTokens, 262144);
+  const { job, error, admissionRequests, events, state } = await launchFlashNextReplacement(config);
+  assert.equal(job.status, "failed");
+  assert.equal(admissionRequests[0].poolCappedTokens, 0);
+  assert.equal(error.code, "insufficient_vram");
+  assert.equal(error.status, 409);
+  assert.equal(error.details.mode, "replace");
+  assert.equal(error.details.maxFraction, 0.915);
+  assert.match(error.message, /^替换启动需要 96801 MiB，安全预算只有 89095 MiB。请把「静态显存比例（mem-fraction-static）」降到 0\.915 以下/);
+  assert.match(error.message, /Replacement launch needs 96801 MiB but the safe budget is 89095 MiB\. Lower the static memory fraction \(mem-fraction-static\) to 0\.915 or below/);
+  assert.doesNotMatch(error.message, /Parallel|并行/);
+  assert.deepEqual(events, ["old-container-stopped", "old-container-restored"]);
+  assert.equal(Object.keys(state.leases).length, 0);
+  assert.equal(job.meta.admission, undefined);
+});

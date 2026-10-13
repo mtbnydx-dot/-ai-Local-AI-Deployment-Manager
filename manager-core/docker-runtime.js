@@ -248,6 +248,56 @@ function createDockerRuntime(options = {}) {
   };
 }
 
+// Secrets reach `docker run` as name-only `-e NAME` flags, and the docker CLI
+// copies each value from its own environment (08 P0-4), so keys never sit in
+// the host process list, job logs or ledgers. Under the WSL prefix, WSLENV
+// must name each secret or wsl.exe drops it before docker sees it.
+function buildDockerChildEnv(secretEnv = {}, { viaWsl = false, baseEnv = process.env } = {}) {
+  const env = { ...baseEnv };
+  const names = [];
+  for (const [name, value] of Object.entries(secretEnv || {})) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || value === undefined || value === null || value === "") continue;
+    env[name] = String(value);
+    names.push(name);
+  }
+  if (!viaWsl || !names.length) return env;
+  // Windows env names are case-insensitive; reuse whatever casing exists.
+  const wslKey = Object.keys(env).find((key) => key.toUpperCase() === "WSLENV") || "WSLENV";
+  const entries = String(env[wslKey] || "").split(":").filter(Boolean);
+  const present = new Set(entries.map((entry) => entry.split("/")[0].toUpperCase()));
+  for (const name of names) {
+    if (present.has(name.toUpperCase())) continue;
+    entries.push(`${name}/u`);
+    present.add(name.toUpperCase());
+  }
+  env[wslKey] = entries.join(":");
+  return env;
+}
+
+// One `docker run` with the launch's retries. Every attempt (the first try,
+// the name-conflict retry and the LAN wildcard-bind retry) gets the same
+// options, so the secret env reaches all of them.
+async function dockerRunWithRetries({
+  docker,
+  runArgs,
+  dockerOptions = {},
+  isNameConflictError = () => false,
+  onNameConflict,
+  getBindRetryArgs,
+} = {}) {
+  try {
+    return await docker(runArgs, dockerOptions);
+  } catch (error) {
+    if (isNameConflictError(error)) {
+      if (typeof onNameConflict === "function") await onNameConflict(error);
+      return docker(runArgs, dockerOptions);
+    }
+    const retryArgs = typeof getBindRetryArgs === "function" ? getBindRetryArgs(error) : null;
+    if (!retryArgs) throw error;
+    return docker(retryArgs, dockerOptions);
+  }
+}
+
 function isDockerReadOnlyCommand(args = []) {
   const command = String(args[0] || "").toLowerCase();
   if (["--version", "version", "info", "inspect", "ps", "logs", "stats", "port", "images"].includes(command)) return true;
@@ -289,7 +339,9 @@ function timestampToSeconds(value) {
 }
 
 module.exports = {
+  buildDockerChildEnv,
   createDockerRuntime,
+  dockerRunWithRetries,
   isDockerReadOnlyCommand,
   formatDockerDaemonError,
   normalizeDockerContainerName,

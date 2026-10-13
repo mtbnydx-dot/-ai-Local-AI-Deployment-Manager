@@ -374,3 +374,74 @@ test("llama replace launch acquires after preparation and deletes its key even i
   assert.ok(events.some(([event, message]) => event === "warning" && message === "release failed"));
   assert.ok(events.some(([event, reference]) => event === "delete" && reference === "ref-replace"));
 });
+
+function minimalLlamaRequest(overrides = {}) {
+  return createLlamaStartRuntimeRequest({
+    CONFIG: { defaultPort: 8080, containerName: "llama-local", managerId: "llama-manager" },
+    cleanRequired: (value) => String(value || "model.gguf"),
+    deriveName: () => "model",
+    positiveInt: (value, fallback) => Number(value || fallback),
+    normalizeGpuLayers: () => -1,
+    normalizeLlamaCacheType: () => "q8_0",
+    normalizeOnOffAuto: () => "auto",
+    normalizeLaunchGpuSelection: async () => ({ gpuDeviceIds: ["0"], selectedCount: 1, warnings: [] }),
+    normalizeGpuIds: () => ["0"],
+    normalizeLlamaSplitMode: () => "none",
+    cleanOptionalLaunchArg: () => "",
+    normalizeClientPreset: () => "openai",
+    normalizeLlamaReasoningFormat: () => "none",
+    normalizeDefaultTrueBoolean: (_value, fallback) => fallback,
+    normalizeNetworkAccess: () => "local",
+    getLanAddress: () => "127.0.0.1",
+    getGpuStatus: async () => ({ gpus: [{ id: "0", totalMb: 24_000, usedMb: 0 }] }),
+    buildLlamaGpuPlan: () => ({ mainGpu: 0, mainGpuHostId: "0", selectedGpuIds: ["0"] }),
+    suggestTensorSplit: () => "",
+    createJob: (type, title, meta) => ({ id: "compat-job", type, title, meta, status: "running", logs: [] }),
+    runStartJob: async (job) => { job.status = "success"; },
+    failJob: () => {},
+    resolveLaunchModel: () => ({ selectedModel: { path: "C:/store/model.gguf", architecture: "made-up-arch-p0" } }),
+    ...overrides,
+  });
+}
+
+test("an unverified GGUF architecture still launches and the start job logs why (08 P0-15)", async () => {
+  const message = "made-up-arch-p0 不在已验证的架构列表中，能否运行取决于当前 llama.cpp 版本。 / made-up-arch-p0 is not in the verified architecture list. Whether it runs depends on the current llama.cpp build.";
+  const logged = [];
+  const checked = [];
+  const request = minimalLlamaRequest({
+    validateRuntimeCompatibility: async (architecture) => {
+      checked.push(architecture);
+      return { architecture, status: "unknown", supported: null, runtime: { buildNumber: 10630 }, message };
+    },
+    appendLog: (job, line) => logged.push([job.id, line]),
+  });
+  const result = await request({ body: { model: "C:/store/model.gguf" } });
+  assert.deepEqual(checked, ["made-up-arch-p0"]);
+  assert.equal(result.job.id, "compat-job");
+  assert.deepEqual(result.job.meta.runtimeCompatibility, {
+    architecture: "made-up-arch-p0",
+    status: "unknown",
+    supported: null,
+    message,
+  });
+  assert.deepEqual(logged, [["compat-job", message]]);
+});
+
+test("a verified architecture adds no compatibility note, and an unsupported one is still refused", async () => {
+  const logged = [];
+  const supported = minimalLlamaRequest({
+    validateRuntimeCompatibility: async (architecture) => ({ architecture, status: "not-required", supported: true, message: "ok" }),
+    appendLog: (_job, line) => logged.push(line),
+  });
+  const result = await supported({ body: { model: "C:/store/model.gguf" } });
+  assert.equal(result.job.meta.runtimeCompatibility, undefined);
+  assert.deepEqual(logged, []);
+
+  const unsupported = minimalLlamaRequest({
+    validateRuntimeCompatibility: async (architecture) => ({ architecture, status: "unsupported", supported: false, message: "not on llama.cpp" }),
+  });
+  await assert.rejects(
+    () => unsupported({ body: { model: "C:/store/model.gguf" } }),
+    (error) => error.status === 409 && error.code === "llama_runtime_arch_unsupported",
+  );
+});

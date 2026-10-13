@@ -23,6 +23,67 @@ async function readDockerRuntimeLogs(options = {}) {
   return `${out.stdout || ""}${out.stderr || ""}`;
 }
 
+// Docker container names and manager instance ids. Anything else is refused
+// before the server-side resolver runs.
+const RUNTIME_INSTANCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/;
+
+// /api/logs?instance= for an instance this manager does not own. The route
+// sends text results as they are, so the JSON error is returned as a result.
+function unknownRuntimeInstanceResult() {
+  return {
+    status: 404,
+    type: "application/json",
+    text: JSON.stringify({
+      error: "未找到属于本管理器的运行实例。 / No runtime instance owned by this manager matches the request.",
+      code: "unknown_instance",
+    }),
+  };
+}
+
+/**
+ * Resolves an instance id ("primary", an ai.manager.instance label or a
+ * container name) to the name of a container this manager owns, or null.
+ * The primary container counts when it is unlabelled (legacy) or ours, as in
+ * the instance list.
+ */
+function createOwnedRuntimeContainerResolver(options = {}) {
+  const primaryContainerName = String(options.primaryContainerName || "");
+  const managerId = String(options.managerId || "");
+  const ownerLabelKey = String(options.ownerLabelKey || "ai.manager");
+  const engines = new Set((options.engines || []).map(String));
+  return async function resolveOwnedRuntimeContainer(instance) {
+    const requested = String(instance || "").trim();
+    if (!requested || !managerId) return null;
+    if (requested === "primary" || requested === primaryContainerName) {
+      if (!primaryContainerName || typeof options.getContainerStatus !== "function") return null;
+      const primary = await options.getContainerStatus(primaryContainerName);
+      const owner = String(primary?.labels?.[ownerLabelKey] || "");
+      return primary?.exists && (!owner || owner === managerId) ? primaryContainerName : null;
+    }
+    if (typeof options.listManagedContainers !== "function") return null;
+    const managed = await options.listManagedContainers();
+    const target = (Array.isArray(managed) ? managed : []).find((container) => (
+      container?.manager === managerId
+      && (!engines.size || engines.has(String(container.engine || "")))
+      && (container.name === requested || container.labels?.["ai.manager.instance"] === requested)
+    ));
+    return target ? String(target.name) : null;
+  };
+}
+
+/**
+ * Serve jobs that launched the given container. Jobs from before parallel
+ * instances carry no containerName and belong to the primary container.
+ */
+function serveJobsForContainer(jobs, containerName, { primaryContainerName = "" } = {}) {
+  const target = String(containerName || "");
+  return Array.from(jobs || []).filter((job) => {
+    if (job?.type !== "serve") return false;
+    const jobContainer = String(job?.meta?.containerName || "");
+    return jobContainer ? jobContainer === target : Boolean(primaryContainerName) && target === String(primaryContainerName);
+  });
+}
+
 async function testOpenAiChatCompletion(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("testOpenAiChatCompletion requires fetch.");
@@ -180,9 +241,22 @@ function createRuntimeRequestHandlers(options = {}) {
   }
 
   async function readRuntimeLogsRequest({ query = {} } = {}) {
+    let containerName = options.containerName;
+    // Without ?instance= the primary container is read, as before (08 P0-3).
+    const hasInstance = query.instance !== undefined && query.instance !== null && query.instance !== "";
+    if (hasInstance) {
+      // Only a name the server resolved from its own instance list reaches
+      // docker; a caller-provided name never does.
+      const instance = typeof query.instance === "string" ? query.instance.trim() : "";
+      const resolved = instance && RUNTIME_INSTANCE_PATTERN.test(instance) && typeof options.resolveLogContainer === "function"
+        ? await options.resolveLogContainer(instance)
+        : null;
+      if (!resolved) return unknownRuntimeInstanceResult();
+      containerName = String(resolved);
+    }
     return readDockerRuntimeLogs({
       docker: options.docker,
-      containerName: options.containerName,
+      containerName,
       tail: query.tail,
       defaultTail: options.defaultTail || 200,
       maxTail: options.maxTail,
@@ -214,10 +288,12 @@ function createRuntimeRequestHandlers(options = {}) {
 }
 
 module.exports = {
+  createOwnedRuntimeContainerResolver,
   createRuntimeRequestHandlers,
   normalizeRuntimeLogTail,
   probeOpenAiGeneration,
   readDockerRuntimeLogs,
+  serveJobsForContainer,
   testOpenAiChatCompletion,
   validateGeneratedProbeText,
 };

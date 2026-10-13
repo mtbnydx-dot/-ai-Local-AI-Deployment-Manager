@@ -14,6 +14,10 @@ const DEFAULT_LEASE_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_COMMITTED_COOLDOWN_MS = 30 * 1000;
 const DEFAULT_LOCK_TIMEOUT_MS = 45 * 1000;
 const DEFAULT_STALE_LOCK_MS = 30 * 1000;
+// Below this budget a capped SGLang pool is not clamped; the launch is refused.
+const DEFAULT_MIN_CLAMP_MB = 4096;
+const SGLANG_FRACTION_OF_FREE_ESTIMATE_POLICY = "sglang_mem_fraction_static_of_free";
+const STATIC_FRACTION_OF_FREE_POLICY = "static-fraction-of-free";
 
 function defaultGpuAdmissionRoot() {
   const configured = String(process.env.MODEL_GPU_ADMISSION_ROOT || "").trim();
@@ -69,6 +73,12 @@ function createGpuAdmissionError(code, message, status = 503, details = {}) {
   error.status = Number(status || 503);
   error.details = details && typeof details === "object" ? details : {};
   return error;
+}
+
+// Fail-closed messages name the launch that was refused, so a replacement is
+// never described as a parallel launch.
+function launchPhrase(mode) {
+  return mode === "replace" ? "replacement launch" : "parallel launch";
 }
 
 function delay(ms) {
@@ -184,7 +194,7 @@ async function acquireAdmissionDirectoryLock(lockDir, options = {}) {
       if (Date.now() >= deadline) {
         throw createGpuAdmissionError(
           "vram_admission_lock_timeout",
-          "GPU admission is busy; parallel launch was not started and existing containers were not changed.",
+          `GPU admission is busy; ${launchPhrase(options.mode)} was not started and existing containers were not changed.`,
           503,
           { safetyPolicy: "fail_closed_parallel", timeoutMs },
         );
@@ -245,11 +255,11 @@ function normalizeGpuTelemetry(status = {}) {
   }).filter((gpu) => gpu.totalMb > 0);
 }
 
-function normalizeAdmissionState(value = {}) {
+function normalizeAdmissionState(value = {}, mode = "parallel") {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw createGpuAdmissionError(
       "vram_admission_state_unavailable",
-      "GPU admission state is invalid; parallel launch is blocked without changing existing containers.",
+      `GPU admission state is invalid; ${launchPhrase(mode)} is blocked without changing existing containers.`,
       503,
       { safetyPolicy: "fail_closed_parallel" },
     );
@@ -257,7 +267,7 @@ function normalizeAdmissionState(value = {}) {
   if (value.leases !== undefined && (!value.leases || typeof value.leases !== "object" || Array.isArray(value.leases))) {
     throw createGpuAdmissionError(
       "vram_admission_state_unavailable",
-      "GPU admission lease data is invalid; parallel launch is blocked without changing existing containers.",
+      `GPU admission lease data is invalid; ${launchPhrase(mode)} is blocked without changing existing containers.`,
       503,
       { safetyPolicy: "fail_closed_parallel" },
     );
@@ -295,7 +305,7 @@ function activeReservedMb(state, gpuKey, excludedLeaseIds = new Set()) {
   return total;
 }
 
-function selectAdmissionGpus(gpus, request = {}) {
+function selectAdmissionGpus(gpus, request = {}, mode = "parallel") {
   const requestedIds = Array.from(new Set((Array.isArray(request.gpuIds) ? request.gpuIds : [])
     .map((value) => String(value || "").trim())
     .filter(Boolean)));
@@ -310,7 +320,7 @@ function selectAdmissionGpus(gpus, request = {}) {
   if (missing.length) {
     throw createGpuAdmissionError(
       "gpu_selection_unavailable",
-      `Selected GPU telemetry is unavailable: ${missing.join(", ")}. Parallel launch is blocked without changing existing containers.`,
+      `Selected GPU telemetry is unavailable: ${missing.join(", ")}. ${mode === "replace" ? "Replacement" : "Parallel"} launch is blocked without changing existing containers.`,
       503,
       {
         safetyPolicy: "fail_closed_parallel",
@@ -322,28 +332,129 @@ function selectAdmissionGpus(gpus, request = {}) {
   return selected;
 }
 
-function requestedMbForGpu(request, gpu) {
+function fractionInRange(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 && number <= 1 ? number : null;
+}
+
+function admissionGpuAliases(gpu) {
+  return Array.isArray(gpu?.aliases) && gpu.aliases.length
+    ? gpu.aliases
+    : [String(gpu?.key ?? gpu?.id ?? "")].filter(Boolean);
+}
+
+function requestedMbForGpu(request, gpu, pendingMb = 0, mode = "parallel") {
   const byGpu = request.requestedMbByGpu && typeof request.requestedMbByGpu === "object"
     ? request.requestedMbByGpu
     : null;
   const mapped = byGpu
-    ? gpu.aliases.map((id) => Number(byGpu[id])).find((value) => Number.isFinite(value) && value > 0)
+    ? admissionGpuAliases(gpu).map((id) => Number(byGpu[id])).find((value) => Number.isFinite(value) && value > 0)
     : null;
   const requestedMb = Number(request.requestedMb);
   const fraction = Number(request.requestedFraction);
   const candidates = Number.isFinite(mapped) && mapped > 0 ? [mapped] : [requestedMb];
   if (Number.isFinite(fraction) && fraction > 0 && fraction <= 1) candidates.push(gpu.totalMb * fraction);
+  const fractionOfFree = fractionInRange(request.requestedFractionOfFree);
+  // SGLang's mem-fraction-static applies to the memory that is free when the
+  // engine starts, so the base is today's free memory minus what peers hold.
+  // With nothing free the request still needs at least 1 MiB and is refused.
+  if (fractionOfFree) candidates.push(Math.max(1, (finiteNumber(gpu.freeMb, 0) - pendingMb) * fractionOfFree));
   const trustworthy = candidates.filter((value) => Number.isFinite(value) && value > 0);
   if (trustworthy.length) return Math.ceil(Math.max(...trustworthy));
   throw createGpuAdmissionError(
     "vram_estimate_unavailable",
-    "A trustworthy VRAM reservation estimate is unavailable; parallel launch is blocked without changing existing containers.",
+    `A trustworthy VRAM reservation estimate is unavailable; ${launchPhrase(mode)} is blocked without changing existing containers.`,
     422,
     {
       safetyPolicy: "fail_closed_parallel",
       estimatePolicy: String(request.estimatePolicy || "missing"),
     },
   );
+}
+
+// The knob a user turns to shrink the request: SGLang mem-fraction-static
+// (fraction of free memory), vLLM gpu-memory-utilization (fraction of the
+// device), or none for measured and GGUF estimates.
+function admissionKnob(request = {}) {
+  if (fractionInRange(request.requestedFractionOfFree)) return "fraction-of-free";
+  if (fractionInRange(request.requestedFraction)) return "device-fraction";
+  return "";
+}
+
+function largestPassingFraction(request, { totalMb, freeMb, pendingMb, availableMb }) {
+  const knob = admissionKnob(request);
+  const base = knob === "fraction-of-free" ? freeMb - pendingMb : knob === "device-fraction" ? totalMb : 0;
+  if (!(base > 0)) return null;
+  return Math.min(1, Math.floor((availableMb / base) * 1000) / 1000);
+}
+
+/**
+ * Pure per-GPU admission decision shared by the admission controller and the
+ * /api/memory-estimate preview, so the two cannot disagree.
+ * reservedMb is what the lease holds: availableMb when a capped pool is
+ * clamped, otherwise requestedMb.
+ */
+function decideGpuReservation(request = {}, gpu = {}, options = {}) {
+  const pendingMb = nonNegativeInteger(options.pendingMb, 0);
+  const reserveMb = nonNegativeInteger(options.reserveMb, DEFAULT_RESERVE_MB);
+  const maxUtilization = normalizeMaxUtilization(options.maxUtilization ?? DEFAULT_MAX_UTILIZATION_PCT);
+  const startupMarginMb = nonNegativeInteger(options.startupMarginMb, DEFAULT_STARTUP_MARGIN_MB);
+  const totalMb = finiteNumber(gpu.totalMb, 0);
+  const usedMb = finiteNumber(gpu.usedMb, 0);
+  const freeMb = finiteNumber(gpu.freeMb, Math.max(0, totalMb - usedMb));
+  const requestedMb = requestedMbForGpu(request, gpu, pendingMb, options.mode);
+  const freeBudgetMb = Math.floor(freeMb - reserveMb - pendingMb);
+  const thresholdBudgetMb = Math.floor((totalMb * maxUtilization) - usedMb - pendingMb - startupMarginMb);
+  const availableMb = Math.max(0, Math.min(freeBudgetMb, thresholdBudgetMb));
+  const poolCappedTokens = nonNegativeInteger(request.poolCappedTokens, 0);
+  const minClampMb = nonNegativeInteger(request.minClampMb ?? DEFAULT_MIN_CLAMP_MB, DEFAULT_MIN_CLAMP_MB);
+  const fits = requestedMb <= availableMb;
+  // A capped KV pool lets the engine run inside a smaller reservation, so an
+  // oversized fraction is clamped to the safe budget instead of refused.
+  const clamped = !fits && poolCappedTokens > 0 && availableMb > 0 && availableMb >= minClampMb;
+  return {
+    requestedMb,
+    availableMb,
+    freeBudgetMb: Math.max(0, freeBudgetMb),
+    thresholdBudgetMb: Math.max(0, thresholdBudgetMb),
+    reservedMb: clamped ? availableMb : requestedMb,
+    clamped,
+    verdict: fits ? "ok" : clamped ? "warn" : "block",
+    maxFraction: largestPassingFraction(request, { totalMb, freeMb, pendingMb, availableMb }),
+  };
+}
+
+/**
+ * Bilingual "<zh> / <en>" text for a decision: the mode-aware refusal for
+ * "block", the clamp warning for "warn", and "" for "ok".
+ */
+function formatGpuAdmissionMessage(decision = {}, request = {}, { mode = "parallel" } = {}) {
+  const requestedMb = nonNegativeInteger(decision.requestedMb, 0);
+  const availableMb = nonNegativeInteger(decision.availableMb, 0);
+  if (decision.verdict === "warn") {
+    const tokens = nonNegativeInteger(request.poolCappedTokens, 0);
+    return `SGLang 静态显存比例按空闲显存折算需要 ${requestedMb} MiB，超过安全预算 ${availableMb} MiB；因 KV 池已限制为 ${tokens} tokens，按 ${availableMb} MiB 预留并继续启动。`
+      + ` / SGLang's static memory fraction of free memory would take ${requestedMb} MiB, above the safe budget of ${availableMb} MiB. The KV pool is capped at ${tokens} tokens, so the launch continues with a ${availableMb} MiB reservation.`;
+  }
+  if (decision.verdict !== "block") return "";
+  const replace = mode === "replace";
+  const zhLaunch = replace ? "替换启动" : "并行启动";
+  const enLaunch = replace ? "Replacement launch" : "Parallel launch";
+  const knob = admissionKnob(request);
+  const maxFraction = Number(decision.maxFraction);
+  let zhHint = "";
+  let enHint = "";
+  if (knob && Number.isFinite(maxFraction) && maxFraction > 0) {
+    if (knob === "fraction-of-free") {
+      zhHint = `请把「静态显存比例（mem-fraction-static）」降到 ${maxFraction} 以下，或设置 KV 池上限（max-total-tokens）。`;
+      enHint = ` Lower the static memory fraction (mem-fraction-static) to ${maxFraction} or below, or cap the KV pool (max-total-tokens).`;
+    } else {
+      zhHint = `请把「显存预留比例（gpu-memory-utilization）」降到 ${maxFraction} 以下。`;
+      enHint = ` Lower the GPU memory reservation (gpu-memory-utilization) to ${maxFraction} or below.`;
+    }
+  }
+  return `${zhLaunch}需要 ${requestedMb} MiB，安全预算只有 ${availableMb} MiB。${zhHint}现有模型容器未改动。`
+    + ` / ${enLaunch} needs ${requestedMb} MiB but the safe budget is ${availableMb} MiB.${enHint} Existing model containers were not changed.`;
 }
 
 function publicLeaseSummary(lease) {
@@ -358,6 +469,10 @@ function publicLeaseSummary(lease) {
     policy: lease.policy,
     estimatePolicy: lease.estimatePolicy,
     requestedTotalMb: lease.requestedTotalMb,
+    // Leases written before clamp-and-warn read as a plain "ok" admission.
+    verdict: lease.verdict === "warn" ? "warn" : "ok",
+    clamped: Boolean(lease.clamped),
+    ...(lease.warning ? { warning: String(lease.warning) } : {}),
     reservations: lease.reservations.map((reservation) => ({ ...reservation })),
     createdAt: lease.createdAt,
     expiresAt: lease.expiresAt,
@@ -422,15 +537,15 @@ function createGpuAdmissionController(options = {}) {
     }, fallbackPolicy);
   }
 
-  async function readState() {
+  async function readState(mode = "parallel") {
     try {
       const stored = await readJsonFile(stateFile, { version: ADMISSION_STATE_VERSION, leases: {} });
-      return normalizeAdmissionState(stored);
+      return normalizeAdmissionState(stored, mode);
     } catch (error) {
       if (error?.code === "vram_admission_state_unavailable") throw error;
       throw createGpuAdmissionError(
         "vram_admission_state_unavailable",
-        "GPU admission state cannot be read safely; parallel launch is blocked without changing existing containers.",
+        `GPU admission state cannot be read safely; ${launchPhrase(mode)} is blocked without changing existing containers.`,
         503,
         { safetyPolicy: "fail_closed_parallel", cause: String(error?.code || error?.message || "read_failed") },
       );
@@ -443,9 +558,9 @@ function createGpuAdmissionController(options = {}) {
     await writeJsonFile(stateFile, state);
   }
 
-  async function withAdmissionLock(work) {
+  async function withAdmissionLock(work, { mode = "parallel" } = {}) {
     await fsp.mkdir(root, { recursive: true });
-    const releaseLock = await acquireAdmissionDirectoryLock(lockDir, { timeoutMs: lockTimeoutMs, staleMs: staleLockMs });
+    const releaseLock = await acquireAdmissionDirectoryLock(lockDir, { timeoutMs: lockTimeoutMs, staleMs: staleLockMs, mode });
     try {
       return await work();
     } finally {
@@ -474,9 +589,10 @@ function createGpuAdmissionController(options = {}) {
     };
   }
 
-  async function acquireUnlocked(request = {}) {
+  async function acquireUnlocked(request = {}, context = {}) {
       const nowMs = now();
-      const state = await readState();
+      const mode = String(context.mode || request.instanceMode || "parallel").toLowerCase() === "replace" ? "replace" : "parallel";
+      const state = await readState(mode);
       const expiredLeaseIds = pruneExpiredLeases(state, nowMs);
       const policy = await getPolicy();
       const reserveMb = policy.reserveMb;
@@ -491,7 +607,7 @@ function createGpuAdmissionController(options = {}) {
         if (expiredLeaseIds.length) await saveState(state, nowMs);
         throw createGpuAdmissionError(
           "vram_telemetry_unavailable",
-          "Live GPU telemetry is unavailable; parallel launch is blocked without changing existing containers.",
+          `Live GPU telemetry is unavailable; ${launchPhrase(mode)} is blocked without changing existing containers.`,
           503,
           { safetyPolicy: "fail_closed_parallel", cause: String(error?.message || "gpu_probe_failed") },
         );
@@ -501,16 +617,16 @@ function createGpuAdmissionController(options = {}) {
         if (expiredLeaseIds.length) await saveState(state, nowMs);
         throw createGpuAdmissionError(
           "vram_telemetry_unavailable",
-          "Live per-GPU memory telemetry is unavailable; parallel launch is blocked without changing existing containers.",
+          `Live per-GPU memory telemetry is unavailable; ${launchPhrase(mode)} is blocked without changing existing containers.`,
           503,
           { safetyPolicy: "fail_closed_parallel", cause: String(status?.text || "no_gpu_memory_data") },
         );
       }
-      const selected = selectAdmissionGpus(gpus, request);
+      const selected = selectAdmissionGpus(gpus, request, mode);
       if (!selected.length) {
         throw createGpuAdmissionError(
           "gpu_selection_unavailable",
-          "No GPU is available for the requested parallel instance.",
+          `No GPU is available for the requested ${mode === "replace" ? "replacement" : "parallel"} instance.`,
           503,
           { safetyPolicy: "fail_closed_parallel" },
         );
@@ -518,10 +634,7 @@ function createGpuAdmissionController(options = {}) {
 
       const decisions = selected.map((gpu) => {
         const pendingMb = activeReservedMb(state, gpu.key, retiredLeaseIds);
-        const requestedMb = requestedMbForGpu(request, gpu);
-        const freeBudgetMb = Math.floor(gpu.freeMb - reserveMb - pendingMb);
-        const thresholdBudgetMb = Math.floor((gpu.totalMb * maxUtilization) - gpu.usedMb - pendingMb - startupMarginMb);
-        const availableMb = Math.max(0, Math.min(freeBudgetMb, thresholdBudgetMb));
+        const decision = decideGpuReservation(request, gpu, { pendingMb, reserveMb, maxUtilization, startupMarginMb, mode });
         return {
           gpuId: gpu.key,
           gpuIndex: gpu.id,
@@ -530,21 +643,36 @@ function createGpuAdmissionController(options = {}) {
           usedMb: gpu.usedMb,
           freeMb: gpu.freeMb,
           pendingMb,
-          requestedMb,
-          availableMb,
-          freeBudgetMb: Math.max(0, freeBudgetMb),
-          thresholdBudgetMb: Math.max(0, thresholdBudgetMb),
+          requestedMb: decision.requestedMb,
+          availableMb: decision.availableMb,
+          freeBudgetMb: decision.freeBudgetMb,
+          thresholdBudgetMb: decision.thresholdBudgetMb,
+          reservedMb: decision.reservedMb,
+          clamped: decision.clamped,
+          verdict: decision.verdict,
+          maxFraction: decision.maxFraction,
         };
       });
-      const rejected = decisions.filter((decision) => decision.requestedMb > decision.availableMb);
+      // A fraction must pass on every selected GPU, so the smallest one wins;
+      // one GPU without a usable base means no fraction passes at all.
+      const maxFractions = decisions.map((item) => item.maxFraction);
+      const maxFraction = maxFractions.some((value) => value === null) ? null : Math.min(...maxFractions);
+      const worstOf = (items) => ({
+        requestedMb: Math.max(...items.map((item) => item.requestedMb)),
+        availableMb: Math.min(...items.map((item) => item.availableMb)),
+        maxFraction,
+      });
+      const rejected = decisions.filter((decision) => decision.verdict === "block");
       if (rejected.length) {
         if (expiredLeaseIds.length) await saveState(state, nowMs);
         throw createGpuAdmissionError(
           "insufficient_vram",
-          `Parallel launch needs ${Math.max(...rejected.map((item) => item.requestedMb))} MiB on a selected GPU, but the safe admission budget is ${Math.min(...rejected.map((item) => item.availableMb))} MiB. Existing model containers were not changed.`,
+          formatGpuAdmissionMessage({ ...worstOf(rejected), verdict: "block" }, request, { mode }),
           409,
           {
             safetyPolicy: "fail_closed_parallel",
+            mode,
+            maxFraction,
             reserveMb,
             maxUtilizationPct: Math.round(maxUtilization * 10000) / 100,
             startupMarginMb,
@@ -555,6 +683,10 @@ function createGpuAdmissionController(options = {}) {
           },
         );
       }
+      const clampedDecisions = decisions.filter((decision) => decision.clamped);
+      const warning = clampedDecisions.length
+        ? formatGpuAdmissionMessage({ ...worstOf(clampedDecisions), verdict: "warn" }, request, { mode })
+        : "";
 
       // Replacement admission runs only after the exact target container has
       // been stopped under the same global lock. Its old cooldown/pending lease
@@ -574,8 +706,22 @@ function createGpuAdmissionController(options = {}) {
         model: String(request.model || "").slice(0, 240),
         policy: "host_atomic_vram_admission",
         estimatePolicy: String(request.estimatePolicy || "configured_gpu_fraction"),
-        requestedTotalMb: decisions.reduce((sum, item) => sum + item.requestedMb, 0),
-        reservations: decisions.map((item) => ({ gpuId: item.gpuId, gpuIndex: item.gpuIndex, requestedMb: item.requestedMb })),
+        // requestedMb is the reserved amount, which is what peers count as
+        // pending; estimateMb keeps the unclamped request for diagnostics.
+        requestedTotalMb: decisions.reduce((sum, item) => sum + item.reservedMb, 0),
+        verdict: clampedDecisions.length ? "warn" : "ok",
+        clamped: clampedDecisions.length > 0,
+        ...(warning ? { warning } : {}),
+        reservations: decisions.map((item) => ({
+          gpuId: item.gpuId,
+          gpuIndex: item.gpuIndex,
+          requestedMb: item.reservedMb,
+          estimateMb: item.requestedMb,
+          availableMb: item.availableMb,
+          reservedMb: item.reservedMb,
+          clamped: item.clamped,
+          verdict: item.verdict,
+        })),
         createdAt: new Date(nowMs).toISOString(),
         updatedAt: new Date(nowMs).toISOString(),
         expiresAt,
@@ -587,7 +733,7 @@ function createGpuAdmissionController(options = {}) {
   }
 
   async function acquire(request = {}) {
-    return withAdmissionLock(() => acquireUnlocked(request));
+    return withAdmissionLock(() => acquireUnlocked(request), { mode: request.instanceMode });
   }
 
   async function acquireAfterPrepare(request = {}, prepare = null) {
@@ -600,7 +746,7 @@ function createGpuAdmissionController(options = {}) {
         // committed before the lock is released, so no peer can claim the
         // temporarily freed VRAM in between.
         context = await prepare(request);
-        const lease = await acquireUnlocked(request);
+        const lease = await acquireUnlocked(request, { mode: "replace" });
         return { lease, context };
       } catch (error) {
         if (context && typeof context.rollback === "function") {
@@ -612,7 +758,7 @@ function createGpuAdmissionController(options = {}) {
         }
         throw error;
       }
-    });
+    }, { mode: "replace" });
   }
 
   async function renew(leaseId) {
@@ -708,11 +854,16 @@ module.exports = {
   DEFAULT_COMMITTED_COOLDOWN_MS,
   DEFAULT_LOCK_TIMEOUT_MS,
   DEFAULT_STALE_LOCK_MS,
+  DEFAULT_MIN_CLAMP_MB,
+  SGLANG_FRACTION_OF_FREE_ESTIMATE_POLICY,
+  STATIC_FRACTION_OF_FREE_POLICY,
   defaultGpuAdmissionRoot,
   defaultGpuAdmissionPolicyFile,
   normalizeMaxUtilization,
   normalizeGpuAdmissionPolicy,
   normalizeGpuTelemetry,
+  decideGpuReservation,
+  formatGpuAdmissionMessage,
   createGpuAdmissionError,
   acquireAdmissionDirectoryLock,
   createGpuAdmissionController,

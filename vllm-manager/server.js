@@ -6,6 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const net = require("net");
 const core = require("../manager-core");
+const { describeDownloadError } = require("../manager-core/model-hub/errors");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
@@ -188,7 +189,17 @@ const CONFIG = {
   claudeDefaultMaxTokens: Math.min(65536, Math.max(1024, positiveInt(process.env.VLLM_CLAUDE_DEFAULT_MAX_TOKENS || 8192, 8192))),
 };
 
-const runtimeApiKeyStore = core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys });
+// Job logs, the ledger, /api/logs and API responses redact the exact runtime
+// keys, the HF tokens of running downloads and the secret patterns (08 P0-5).
+// The list is cached; set/remove through runtimeApiKeyStore and every change
+// of the download-token map invalidate it.
+const downloadTokens = createDownloadTokenStore({ onChange: () => runtimeSecretList.invalidate() });
+const runtimeSecretList = core.createCachedSecretList({
+  store: core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys }),
+  sources: [() => process.env.HF_TOKEN, () => process.env.AI_CLAUDE_GATEWAY_API_KEY, () => downloadTokens.values()],
+});
+const runtimeApiKeyStore = runtimeSecretList.store;
+const runtimeSecretRedactor = core.createSecretRedactor({ getSecrets: runtimeSecretList.getSecrets });
 const billingClient = core.createBillingClient({
   managerId: CONFIG.managerId,
   root: DEFAULT_AI_ROOT,
@@ -255,6 +266,23 @@ const gpuAdmissionController = core.createGpuAdmissionController({
   getGpuStatus,
 });
 
+// /api/memory-estimate previews SGLang admission with the live admission
+// policy. A body-supplied admissionPolicy is always replaced.
+async function buildServerMemoryEstimate(body = {}) {
+  const policy = await gpuAdmissionController.getPolicy().catch(() => ({
+    reserveMb: gpuAdmissionController.reserveMb,
+    maxUtilizationPct: gpuAdmissionController.maxUtilizationPct,
+  }));
+  return buildVllmMemoryEstimate({
+    ...body,
+    admissionPolicy: {
+      reserveMb: policy.reserveMb,
+      maxUtilizationPct: policy.maxUtilizationPct,
+      startupMarginMb: gpuAdmissionController.startupMarginMb,
+    },
+  });
+}
+
 const remoteModelService = createVllmRemoteModelService();
 const hfAuthService = createHfAuthService({
   hfCli: CONFIG.hfCli,
@@ -270,6 +298,7 @@ const modelFilesystemStore = core.createModelFilesystemStore({
   storage: modelStorage,
   modelsRoot: CONFIG.modelsRoot,
   hfCache: CONFIG.hfCache,
+  listRoots: () => listModelStorageRoots(modelStorage),
 });
 const {
   chooseGgufFile,
@@ -371,7 +400,6 @@ const {
 const jobs = new Map();
 const progressTimers = new Map();
 const statsSamples = new Map();
-const sglangThroughputSamples = new Map();
 const serviceRateBuckets = new Map();
 const serviceConcurrencyBuckets = new Map();
 const GATEWAY_RUNTIME_CACHE_MS = Math.max(0, Number(process.env.VLLM_GATEWAY_RUNTIME_CACHE_MS || 5000));
@@ -416,6 +444,7 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   writeJsonFile,
   maxLogLines: MAX_LOG_LINES,
   maxPersistedJobs: MAX_PERSISTED_JOBS,
+  redact: runtimeSecretRedactor,
   serveDetail: "运行时 API 与最小生成自检均已通过。",
   stopProgressTracker,
   onJobSuccess: (job) => {
@@ -680,7 +709,7 @@ core.registerOpenAiBaseUrlHintRoutes(app, { openAiGatewayPath: "/serve/v1" });
 core.registerReferenceDataRoutes(app);
 app.use(managerSecurityGuard);
 app.use(core.createManagerApiSecretRedactionMiddleware({
-  getSecrets: () => [process.env.HF_TOKEN, process.env.AI_CLAUDE_GATEWAY_API_KEY, ...runtimeApiKeyStore.values()],
+  getSecrets: runtimeSecretList.getSecrets,
 }));
 app.use(express.json({ limit: "32mb" }));
 app.use(["/serve/v1", "/claude", "/v1/messages", "/v1/claude", "/opencode/v1"], serviceGatewayMiddleware);
@@ -709,7 +738,7 @@ core.registerManagerRoutes(app, {
   idleUnload: {
     listSleeping: () => idleUnloadController.listSleeping(),
     saveSettings: (body) => idleUnloadController.saveSettings(body),
-    wake: (id) => idleUnloadController.wake(id),
+    wake: (id, options) => idleUnloadController.wake(id, options),
     forget: (id) => idleUnloadController.forget(id),
   },
   listBenchmarkRuns: (query) => benchmarkHistoryStore.listBenchmarkRuns(query),
@@ -753,7 +782,7 @@ core.registerManagerRoutes(app, {
     engine: runtime.engine,
     runtimeVersion: runtime.runtimeVersion,
   }),
-  buildMemoryEstimate: buildVllmMemoryEstimate,
+  buildMemoryEstimate: buildServerMemoryEstimate,
   collectStats,
   collectExternalAccessStats,
   searchAccessLogs: searchServiceGatewayAccessLogs,
@@ -978,68 +1007,18 @@ function describeCapabilityDataRequest() {
   };
 }
 
+// The download requests live in createDownloadRequestHandlers below; these
+// wrappers keep the hoisted names the routes were registered with.
 async function inspectDownloadResumeRequest(job) {
-  return core.inspectDownloadResume({
-    localDir: job.meta?.localDir,
-    fileManifest: job.meta?.fileManifest || [],
-    expectedBytes: job.meta?.expectedBytes || 0,
-    diskFreeBytes: await getModelsDiskFreeBytes(),
-  });
+  return downloadRequests.inspectDownloadResume(job);
 }
 
-// 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
 async function cleanupIncompleteRequest(body = {}) {
-  const name = cleanRequired(body.name, "name");
-  const localDir = resolveModelsRootChild(path.isAbsolute(name) ? name : path.join(CONFIG.modelsRoot, safeOutputName(name)));
-  const activeJob = Array.from(jobs.values()).find((job) => (
-    job.type === "download"
-    && ["running", "queued", "paused"].includes(job.status)
-    && core.normalizeLocalDirKey(job.meta?.localDir) === core.normalizeLocalDirKey(localDir)
-  ));
-  if (activeJob) {
-    const error = new Error(`任务 ${activeJob.id} 仍可能续传该目录（${activeJob.status}），暂不清理。`);
-    error.status = 409;
-    throw error;
-  }
-  const result = await modelFilesystemStore.cleanupIncompleteFiles(localDir);
-  runtimeSnapshotCache.invalidate("disk-usage");
-  return result;
+  return downloadRequests.cleanupIncomplete(body);
 }
 
-// 对比本地下载记录与 Hugging Face 上游 lastModified，判断是否有更新。
 async function checkModelUpstreamRequest(query = {}) {
-  const name = cleanRequired(query.name, "name");
-  const localDir = resolveModelsRootChild(path.isAbsolute(name) ? name : path.join(CONFIG.modelsRoot, safeOutputName(name)));
-  const key = core.normalizeLocalDirKey(localDir);
-  const downloadJob = Array.from(jobs.values())
-    .filter((job) => job.type === "download" && core.normalizeLocalDirKey(job.meta?.localDir) === key)
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
-  const repo = String(query.model || downloadJob?.meta?.model || "").trim();
-  if (!repo || !repo.includes("/")) {
-    return { ok: false, name, reason: "unknown_source", message: "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。" };
-  }
-  if (String(downloadJob?.meta?.source || "huggingface") !== "huggingface") {
-    return { ok: false, name, repo, reason: "unsupported_source", message: "上游更新检查目前只支持 Hugging Face 来源。" };
-  }
-  const info = await remoteModelService.getHuggingFaceModelInfo(repo);
-  const downloadedAt = downloadJob?.finishedAt || downloadJob?.updatedAt || null;
-  const updateAvailable = info.lastModified && downloadedAt
-    ? Date.parse(info.lastModified) > Date.parse(downloadedAt)
-    : null;
-  return {
-    ok: true,
-    name,
-    repo,
-    url: info.url,
-    lastModified: info.lastModified || null,
-    downloadedAt,
-    updateAvailable,
-    message: updateAvailable === null
-      ? "缺少可比对的时间信息，仅显示上游最近更新时间。"
-      : updateAvailable
-        ? "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
-        : "本地已是最新：上游在下载之后没有更新。",
-  };
+  return downloadRequests.checkModelUpstream(query);
 }
 
 async function listVllmModelCollections() {
@@ -1142,74 +1121,295 @@ async function deleteLocalModelRequest(body = {}) {
 }
 
 async function startDownloadRequest(body = {}) {
-  const requestedModel = cleanRequired(body.model, "model");
-  const source = cleanDownloadSource(body.source || "huggingface");
-  const reference = normalizeDownloadModelReference(requestedModel, body.precision);
-  const model = reference.model;
-  const precision = reference.precision;
-  const outputName = safeOutputName(body.outputName || model.replace(/[\\/]/g, "__"));
-  const localDir = modelStorage.downloadTarget(body.storageId, outputName);
-  await ensureDirs(CONFIG.modelsRoot, CONFIG.hfCache);
+  return downloadRequests.startDownload(body);
+}
 
-  const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
-  const repository = source === "huggingface"
-    ? await remoteModelService.getHuggingFaceDownloadEstimate(model, precision, includeExtras)
-    : null;
-  if (repository?.gated) {
-    const access = await hfAuthService.checkRepoAccess(model, {
-      token: body.hfToken,
-      probeFile: repository.probeFile,
-    });
-    if (!access.granted) throw createHfAccessError(model, access.status, repository.authorizationUrl);
-  }
-
-  const downloadSettings = downloadJobController.getDownloadSettings();
-  const forceOfficialHf = source === "huggingface" && (repository?.gated || Boolean(body.hfToken));
-  const env = core.buildDownloadEnv(CONFIG.hfCache, process.env, {
-    source,
-    hfMirror: forceOfficialHf ? false : downloadSettings.hfMirror,
-    hfTransfer: downloadSettings.hfTransfer,
-  });
-  if (body.hfToken) env.HF_TOKEN = String(body.hfToken);
-
-  const download = buildDownloadCommand(source, model, localDir, { precision, extraIncludePatterns: includeExtras });
-  if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fs.existsSync(download.command))) {
-    throw core.missingDownloadCliError(download.command, source);
-  }
-  const expected = repository;
-  const diskFreeBytes = await getModelsDiskFreeBytes(path.dirname(localDir));
-  core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
-  modelStorage.assertUnlocked([localDir]);
-  modelStorage.prepareDownload(localDir, { model, source, precision });
-  const job = enqueueOrStartDownload(download.command, download.args, {
-    env,
-    title: `Download ${model} (${download.label})`,
-    meta: {
-      model,
-      outputName,
-      localDir,
-      source,
-      precision,
-      includeExtras: includeExtras.length ? includeExtras : undefined,
-      priority: core.normalizeDownloadPriority(body.priority),
-      expectedBytes: expected?.bytes || null,
-      expectedFiles: expected?.fileCount || null,
-      fileManifest: source === "huggingface" && Array.isArray(repository?.fileManifest) && repository.fileManifest.length
-        ? repository.fileManifest
-        : null,
+// HF download tokens are memory-only (08 P0-9, 00 §9.4). A job records only
+// meta.transfer.tokenRef; a manager restart forgets every token, so a gated
+// resume then fails cleanly with hf_token_expired. Nothing here touches the
+// runtime secret store or the disk.
+function createDownloadTokenStore({ onChange = () => {}, randomBytes = crypto.randomBytes } = {}) {
+  const tokens = new Map();
+  return {
+    register(token) {
+      const ref = `dlt_${randomBytes(16).toString("hex")}`;
+      tokens.set(ref, String(token));
+      onChange();
+      return ref;
     },
-    progressDir: localDir,
-    expectedBytes: expected?.bytes || null,
-  });
-  if (expected?.bytes) {
-    appendLog(job, `Estimated download size: ${formatBytes(expected.bytes)} across ${expected.fileCount} files.`);
-  } else if (expected?.error) {
-    appendLog(job, `Download size estimate unavailable: ${expected.error}`);
+    resolve(ref) {
+      return tokens.get(String(ref || "")) || null;
+    },
+    release(ref) {
+      if (tokens.delete(String(ref || ""))) onChange();
+    },
+    values() {
+      return tokens.values();
+    },
+    get size() {
+      return tokens.size;
+    },
+  };
+}
+
+// Disk usage lists every configured root, default first (08 P0-11).
+async function listModelStorageRoots(storage) {
+  const snapshot = await storage.snapshot();
+  return (snapshot.roots || []).map((root) => ({
+    id: root.id,
+    path: root.path,
+    label: root.label || root.id,
+    mode: root.mode,
+    default: root.id === snapshot.defaultRootId,
+    legacy: root.id === "legacy",
+  }));
+}
+
+function filterNoMatchError(precision, totalFiles) {
+  const { hint } = describeDownloadError("filter_no_match");
+  const error = new Error(`${hint.zh} / ${hint.en}`);
+  error.status = 422;
+  error.code = "filter_no_match";
+  error.details = { precision: precision || "", totalFiles: Number.isInteger(totalFiles) ? totalFiles : null };
+  return error;
+}
+
+function pathOutsideRootsError() {
+  const error = new Error("路径必须位于已登记的模型库内，且不能是模型库本身。 / The path must be inside a configured model library and must not be the library itself.");
+  error.status = 400;
+  error.code = "path_outside_roots";
+  return error;
+}
+
+async function readDownloadMarker(localDir) {
+  try {
+    const text = await fsp.readFile(path.join(localDir, ".platform-download.json"), "utf8");
+    const value = JSON.parse(text.replace(/^﻿/, ""));
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
   }
-  if (source === "modelscope") appendLog(job, "ModelScope source uses the local modelscope CLI with proxy env disabled.");
-  if (forceOfficialHf) appendLog(job, "Gated/authenticated Hugging Face download uses the official endpoint instead of the configured mirror.");
-  if (download.includePatterns?.length) appendLog(job, `Download include filter: ${download.includePatterns.join(", ")}`);
-  return { job };
+}
+
+// Download requests (08 P0-9, P0-10, P0-11), built from injected services so
+// their rules can be tested with fake remote services and temp storage.
+function createDownloadRequestHandlers(deps = {}) {
+  const {
+    modelsRoot,
+    hfCache,
+    modelStorage: storage,
+    remoteModelService: remote,
+    hfAuthService: hfAuth,
+    downloadTokens,
+    getJobs = () => [],
+    getDownloadSettings = () => ({}),
+    enqueueOrStartDownload: enqueue,
+    buildDownloadCommand: buildCommand,
+    getDiskFreeBytes = async () => null,
+    cleanupIncompleteFiles,
+    invalidateDiskUsage = () => {},
+    appendLog: log = () => {},
+    redact = (text) => text,
+    createAccessError = createHfAccessError,
+    ensureDirectories = ensureDirs,
+    fileExists = fs.existsSync,
+    readMarker = readDownloadMarker,
+    statfs,
+    env = process.env,
+  } = deps;
+
+  // A model directory named by `path` (inside any configured root) or by
+  // `name` (a folder of the legacy models root, as before). Either must
+  // resolve inside a root and must not be the root itself.
+  function resolveModelDirectory(input = {}) {
+    let target = String(input.path || "").trim();
+    if (!target) {
+      const name = cleanRequired(input.name, "name");
+      target = path.isAbsolute(name) ? name : path.join(modelsRoot, safeOutputName(name));
+    }
+    try {
+      return storage.resolvePath(target, { allowRoot: false });
+    } catch (error) {
+      // An offline library is not a bad path; it keeps its 503.
+      if (Number(error?.status) === 503) throw error;
+      throw pathOutsideRootsError();
+    }
+  }
+
+  function findDownloadJob(localDir, statuses = null) {
+    const key = core.normalizeLocalDirKey(localDir);
+    return Array.from(getJobs())
+      .filter((job) => job.type === "download"
+        && (!statuses || statuses.includes(job.status))
+        && core.normalizeLocalDirKey(job.meta?.localDir) === key)
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+  }
+
+  async function startDownload(body = {}) {
+    const requestedModel = cleanRequired(body.model, "model");
+    const source = cleanDownloadSource(body.source || "huggingface");
+    const reference = normalizeDownloadModelReference(requestedModel, body.precision);
+    const model = reference.model;
+    const precision = reference.precision;
+    const outputName = safeOutputName(body.outputName || model.replace(/[\\/]/g, "__"));
+    const localDir = storage.downloadTarget(body.storageId, outputName);
+    // An HF token is only for an HF download, which then uses the official endpoint.
+    const hfToken = source === "huggingface" && body.hfToken ? String(body.hfToken) : "";
+
+    const includeExtras = core.normalizeExtraIncludePatterns(body.includeExtras);
+    // An unreachable huggingface.co must not block a download the mirror can
+    // serve: a failed estimate only loses the size, disk and gated checks, and
+    // a gated repository then fails with a classified hf_approval_required.
+    const repository = source === "huggingface"
+      ? await remote.getHuggingFaceDownloadEstimate(model, precision, includeExtras)
+        .catch((error) => ({ error: redact(String(error?.message || error)) }))
+      : null;
+    // An include filter that matches nothing would "succeed" with no weights.
+    if (repository?.filtered && repository.matchedFiles === 0) throw filterNoMatchError(precision, repository.totalFiles);
+    await ensureDirectories(modelsRoot, hfCache);
+    if (repository?.gated) {
+      const access = await hfAuth.checkRepoAccess(model, {
+        token: body.hfToken,
+        probeFile: repository.probeFile,
+      });
+      if (!access.granted) throw createAccessError(model, access.status, repository.authorizationUrl);
+    }
+
+    const downloadSettings = getDownloadSettings() || {};
+    const forceOfficialHf = source === "huggingface" && (Boolean(repository?.gated) || Boolean(hfToken));
+    // Recorded once at enqueue, so resume and auto-retry keep this endpoint
+    // and these flags; the token stays in the in-memory map.
+    const transfer = core.normalizeDownloadTransfer({
+      hfMirror: forceOfficialHf ? false : Boolean(downloadSettings.hfMirror),
+      hfTransfer: Boolean(downloadSettings.hfTransfer),
+      gated: Boolean(repository?.gated),
+    });
+
+    const download = buildCommand(source, model, localDir, { precision, extraIncludePatterns: includeExtras });
+    if (!download.command || ((String(download.command).includes("/") || String(download.command).includes("\\")) && !fileExists(download.command))) {
+      throw core.missingDownloadCliError(download.command, source);
+    }
+    const expected = repository;
+    const diskFreeBytes = await getDiskFreeBytes(path.dirname(localDir));
+    core.assertDownloadDiskSpace(expected?.bytes, diskFreeBytes, formatBytes);
+    storage.assertUnlocked([localDir]);
+    storage.prepareDownload(localDir, { model, source, precision });
+    const tokenRef = hfToken ? downloadTokens.register(hfToken) : null;
+    const downloadEnv = core.buildDownloadEnv(hfCache, env, {
+      source,
+      hfMirror: transfer.hfMirror,
+      hfEndpoint: transfer.hfEndpoint,
+      hfTransfer: transfer.hfTransfer,
+      gated: transfer.gated,
+      token: hfToken || null,
+    });
+    let job;
+    try {
+      job = enqueue(download.command, download.args, {
+        env: downloadEnv,
+        title: `Download ${model} (${download.label})`,
+        meta: {
+          model,
+          outputName,
+          localDir,
+          source,
+          precision,
+          includeExtras: includeExtras.length ? includeExtras : undefined,
+          priority: core.normalizeDownloadPriority(body.priority),
+          expectedBytes: expected?.bytes || null,
+          // 0 stays 0; null means unknown (the estimate failed or not HF).
+          expectedFiles: Number.isInteger(expected?.fileCount) ? expected.fileCount : null,
+          fileManifest: source === "huggingface" && Array.isArray(repository?.fileManifest) && repository.fileManifest.length
+            ? repository.fileManifest
+            : null,
+          transfer: { ...transfer, tokenRef },
+        },
+        progressDir: localDir,
+        expectedBytes: expected?.bytes || null,
+      });
+    } catch (error) {
+      if (tokenRef) downloadTokens.release(tokenRef);
+      throw error;
+    }
+    if (expected?.bytes) {
+      log(job, `Estimated download size: ${formatBytes(expected.bytes)} across ${expected.fileCount} files.`);
+    } else if (expected?.error) {
+      log(job, `Download size estimate unavailable: ${expected.error}`);
+    }
+    if (source === "modelscope") log(job, "ModelScope source uses the local modelscope CLI with proxy env disabled.");
+    if (forceOfficialHf) log(job, "Gated/authenticated Hugging Face download uses the official endpoint instead of the configured mirror.");
+    if (download.includePatterns?.length) log(job, `Download include filter: ${download.includePatterns.join(", ")}`);
+    return { job };
+  }
+
+  // 只清 .incomplete 残留；有仍会续传的下载任务（运行/排队/暂停）时拒绝。
+  async function cleanupIncomplete(body = {}) {
+    const localDir = resolveModelDirectory(body);
+    const activeJob = findDownloadJob(localDir, ["running", "queued", "paused"]);
+    if (activeJob) {
+      const error = new Error(`任务 ${activeJob.id} 仍可能续传该目录（${activeJob.status}），暂不清理。`);
+      error.status = 409;
+      throw error;
+    }
+    const result = await cleanupIncompleteFiles(localDir);
+    invalidateDiskUsage();
+    return result;
+  }
+
+  // 对比本地下载记录与 Hugging Face 上游 lastModified，判断是否有更新。没有
+  // 下载任务记录时，回退到 prepareDownload 写下的 .platform-download.json。
+  async function checkModelUpstream(query = {}) {
+    const localDir = resolveModelDirectory(query);
+    const name = String(query.name || "").trim() || path.basename(localDir);
+    const downloadJob = findDownloadJob(localDir);
+    const marker = downloadJob ? null : await readMarker(localDir);
+    const record = downloadJob
+      ? { model: downloadJob.meta?.model, source: downloadJob.meta?.source, downloadedAt: downloadJob.finishedAt || downloadJob.updatedAt || null, recordSource: "job" }
+      : marker
+        ? { model: marker.model, source: marker.source, downloadedAt: marker.createdAt || null, recordSource: "marker" }
+        : { recordSource: "request" };
+    const repo = String(query.model || record.model || "").trim();
+    if (!repo || !repo.includes("/")) {
+      return { ok: false, name, path: localDir, reason: "unknown_source", message: "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。" };
+    }
+    if (String(record.source || "huggingface") !== "huggingface") {
+      return { ok: false, name, path: localDir, repo, reason: "unsupported_source", message: "上游更新检查目前只支持 Hugging Face 来源。" };
+    }
+    const info = await remote.getHuggingFaceModelInfo(repo);
+    const downloadedAt = record.downloadedAt || null;
+    const updateAvailable = info.lastModified && downloadedAt
+      ? Date.parse(info.lastModified) > Date.parse(downloadedAt)
+      : null;
+    return {
+      ok: true,
+      name,
+      path: localDir,
+      repo,
+      url: info.url,
+      lastModified: info.lastModified || null,
+      downloadedAt,
+      recordSource: record.recordSource,
+      updateAvailable,
+      message: updateAvailable === null
+        ? "缺少可比对的时间信息，仅显示上游最近更新时间。"
+        : updateAvailable
+          ? "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
+          : "本地已是最新：上游在下载之后没有更新。",
+    };
+  }
+
+  // No diskFreeBytes: the check measures the disk that holds the job's own
+  // directory, not the default root's.
+  async function inspectDownloadResume(job) {
+    return core.inspectDownloadResume({
+      localDir: job.meta?.localDir,
+      fileManifest: job.meta?.fileManifest || [],
+      expectedBytes: job.meta?.expectedBytes || 0,
+      ...(typeof statfs === "function" ? { statfs } : {}),
+    });
+  }
+
+  return { startDownload, cleanupIncomplete, checkModelUpstream, inspectDownloadResume, resolveModelDirectory };
 }
 
 async function estimateDownloadRequest(query = {}) {
@@ -1347,6 +1547,15 @@ const runtimeRequestHandlers = core.createRuntimeRequestHandlers({
   prompt: "Reply with exactly: vLLM OK",
   getApiKey: async () => getVllmApiKey(await getContainerStatus(CONFIG.containerName)),
   authHeaders: (apiKey) => vllmAuthHeaders(apiKey),
+  // GET /api/logs?instance= reads only containers this manager owns (08 P0-3).
+  resolveLogContainer: core.createOwnedRuntimeContainerResolver({
+    primaryContainerName: CONFIG.containerName,
+    managerId: CONFIG.managerId,
+    ownerLabelKey: MANAGER_LABEL_KEY,
+    engines: ["vllm", "sglang"],
+    getContainerStatus: (name) => getContainerStatus(name),
+    listManagedContainers: () => listManagedContainers(),
+  }),
 });
 const {
   startDockerDesktopRequest,
@@ -1414,18 +1623,28 @@ const idleUnloadController = core.createIdleUnloadController({
       activeRequests: Number(instance.activeRequests || 0),
       queuedRequests: Number(instance.queuedRequests || 0),
       vramReservationMb: Number(instance.vramReservationMb || 0),
+      instanceMode: instance.instanceMode,
       launchConfig: null,
     }));
   },
-  findLaunchConfig: (instance) => {
-    const model = String(instance.model || "").toLowerCase();
-    const match = recentLaunches.find((item) => String(item.model || "").toLowerCase() === model);
-    return match ? match.config : null;
-  },
   stopInstance: (instance) => stopRuntimeInstanceRequest({ id: instance.id }),
-  startRuntime: (config) => startRuntimeRequest(config),
   readLegacySettings: () => automationSettingsStore.getAutomationSettings(),
   log: (message) => console.log(`[idle-unload] ${message}`),
+  // Wake (08 P0-1): the launch record is matched by container, path, then
+  // served name; the API key is kept across sleep in the runtime secret store;
+  // a wake never replaces a running model without the explicit confirm.
+  ...core.createIdleWakeHooks({
+    managerId: CONFIG.managerId,
+    primaryContainerName: CONFIG.containerName,
+    managerLabelKey: MANAGER_LABEL_KEY,
+    apiKeyRefLabelKey: MANAGER_APIKEY_REF_LABEL_KEY,
+    apiKeyLabelKey: MANAGER_APIKEY_LABEL_KEY,
+    listRecentLaunches: () => recentLaunches,
+    getContainerStatus: (containerName) => getContainerStatusFresh(containerName),
+    secretStore: runtimeApiKeyStore,
+    startRuntimeRequest: (request) => startRuntimeRequest(request),
+    toContainerPath: (value) => windowsPathToContainerPath(value),
+  }),
 });
 
 // One check a minute is enough resolution for a timeout measured in tens of
@@ -1441,6 +1660,7 @@ core.registerRuntimeRoutes(app, {
   stopRuntime: stopRuntimeRequest,
   unloadRunningModel: unloadRunningModelRequest,
   readRuntimeLogs: readRuntimeLogsRequest,
+  redactLogs: runtimeSecretRedactor,
   testRuntimeCompletion: testRuntimeCompletionRequest,
   listRuntimeInstances: listRuntimeInstancesRequest,
   stopRuntimeInstance: stopRuntimeInstanceRequest,
@@ -1531,6 +1751,13 @@ function recordRecentLaunch(meta) {
     model: config.model,
     name: config.name || deriveName(config.model),
     launchedAt: new Date().toISOString(),
+    // Where the instance ran, so an idle wake puts it back in the same slot
+    // (08 P0-1). The config shape itself is unchanged.
+    ...(meta.instanceMode ? {
+      containerName: String(meta.containerName || ""),
+      instanceMode: meta.instanceMode === "parallel" ? "parallel" : "replace",
+      instanceId: String(meta.instanceId || ""),
+    } : {}),
     config,
   };
   const key = `${entry.model}::${entry.name}`;
@@ -1569,10 +1796,12 @@ async function collectHealthReport() {
     runtimeSecretStoreError = error;
   }
   const checks = [];
-  checks.push(healthCheck("docker", CONFIG.dockerRuntimeName, dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"]));
+  // actionDetails (08 P0-23) describe the remediation of a failing check; the
+  // string actions stay as they were.
+  checks.push(healthCheck("docker", CONFIG.dockerRuntimeName, dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"], dockerStatus.ok ? [] : core.healthActionDetails(["start-docker"])));
   checks.push(healthCheck("gpu", "GPU", gpu.ok ? "ok" : "warn", gpu.ok ? `${gpu.name} · ${gpu.usedMb}/${gpu.totalMb} MB · ${gpu.util}%` : gpu.text || "No NVIDIA GPU detected"));
   checks.push(healthCheck("runtime-compatibility", "vLLM 运行时兼容性", runtimeCompatibility.status, runtimeCompatibility.summary));
-  checks.push(healthCheck("image", "vLLM 镜像", image.ok ? "ok" : "warn", image.ok ? image.text : `${CONFIG.image} not found locally`, image.ok ? [] : ["pull-image"]));
+  checks.push(healthCheck("image", "vLLM 镜像", image.ok ? "ok" : "warn", image.ok ? image.text : `${CONFIG.image} not found locally`, image.ok ? [] : ["pull-image"], image.ok ? [] : core.healthActionDetails(["pull-image"], { image: CONFIG.image, platform: CONFIG.imagePlatform })));
   checks.push(healthCheck("image-pin", "镜像版本", isPinnedImageReference(CONFIG.image) ? "ok" : "warn", CONFIG.image));
   checks.push(healthCheck("container", "推理容器", container.running ? "ok" : container.exists ? "warn" : "warn", container.status || (container.exists ? "exists" : "not started")));
   checks.push(healthCheck("api", "OpenAI 兼容 API", runtime?.models?.length ? "ok" : runtimeError ? "fail" : "warn", runtime?.models?.length ? `${runtime.models.length} model(s) served at ${runtime.endpoint.localUrl}` : runtimeError?.message || "No served model reported yet"));
@@ -1584,7 +1813,7 @@ async function collectHealthReport() {
   checks.push(await directoryHealth("hf-cache", "HF 缓存目录", CONFIG.hfCache));
   const hasHfLogin = Boolean(process.env.HF_TOKEN || hfAuthService.hasCachedToken());
   checks.push(healthCheck("hf-token", "Hugging Face 账号", hasHfLogin ? "ok" : "warn", hasHfLogin ? "本机已连接" : "下载 gated 模型前需要连接 Hugging Face 账号"));
-  checks.push(await commandHealth("hf-cli", "Hugging Face CLI", CONFIG.hfCli, ["--help"]));
+  checks.push(await commandHealth("hf-cli", "Hugging Face CLI", CONFIG.hfCli, ["--help"], "fail", core.healthActionDetails(["install-download-cli"])));
   checks.push(await commandHealth("modelscope-cli", "ModelScope CLI", CONFIG.modelScopeCli, ["--help"], "warn"));
   checks.push(healthCheck("logs", "最近日志", logs.issues?.some((item) => item.severity === "error") ? "fail" : logs.issues?.length ? "warn" : "ok", logs.stage || "No recent vLLM log issues"));
 
@@ -4188,7 +4417,8 @@ async function collectStats() {
   ]);
   const liveSummary = await collectVllmMetricsSummary(container, gpu, { updateSamples: true });
   const ledger = await updateStatsLedger(liveSummary);
-  const summary = core.mergeLiveAndStatsLedgerInactive(liveSummary, ledger);
+  const merged = core.mergeLiveAndStatsLedgerInactive(liveSummary, ledger);
+  const summary = { ...merged, totals: withSpeedWindowSeconds(merged.totals, merged.models) };
   const pricing = core.loadModelPricing();
   const costComparison = priceProfiles().map((profile) => calculateCost(summary.totals.tokens, profile));
   const clientUsage = buildClientUsageSummary(summary.totals, ledger);
@@ -4276,9 +4506,13 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const persistedFacts = runtimeEngine === "sglang"
     ? {}
     : await getPersistedRuntimeFacts(factModelHints, { engine: runtimeEngine }).catch(() => ({}));
-  let facts = core.mergeRuntimeFacts(persistedFacts, await getLatestRuntimeFacts(factModelHints).catch(() => ({})));
+  // Facts come from this container's logs and its own serve jobs (08 P0-3).
+  let facts = core.mergeRuntimeFacts(persistedFacts, await getLatestRuntimeFacts(factModelHints, {
+    containerName: container.name,
+  }).catch(() => ({})));
   if (!facts.kvCacheTokens && !facts.maxConcurrency) {
     facts = core.mergeRuntimeFacts(facts, await getLatestRuntimeFacts(factModelHints, {
+      containerName: container.name,
       tail: process.env.VLLM_RUNTIME_FACT_LOG_TAIL || "20000",
     }).catch(() => ({})));
   }
@@ -4306,9 +4540,8 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
     engine: runtimeEngine,
     runtimeVersion: runtimeVersion.version || "",
     speculativeMode: facts.runtimeConfig?.speculativeMode,
-    runtimeSampleKey: [runtimeEngine, container?.id || container?.name || "runtime", processStartSeconds || "unknown"].join(":"),
   });
-  const totals = aggregateStats(models, uptimeSeconds);
+  const totals = withSpeedWindowSeconds(aggregateStats(models, uptimeSeconds), models);
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
 
   return {
@@ -4411,15 +4644,14 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const avgInterTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]);
     const avgTimePerOutputTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:request_time_per_output_token_seconds", "sglang:request_time_per_output_token_seconds"]);
     const sglangActiveAverage = tokensPerSecondFromSeconds(avgTimePerOutputTokenSeconds || avgInterTokenSeconds);
-    const sglangGenerationThroughput = firstMetricValue(scoped, "sglang:gen_throughput") || 0;
     const resolvedSglangThroughput = hasSglangMetrics
-      ? resolveSglangGenerationThroughput(
-        `${options.runtimeSampleKey || options.engine || "sglang"}:${name}`,
-        sglangGenerationThroughput,
-        sglangActiveAverage,
+      ? resolveSglangOutputSpeed({
+        gauge: firstMetricValue(scoped, "sglang:gen_throughput") || 0,
+        running: firstMetricValue(scoped, "sglang:num_running_reqs") || 0,
+        hasGenerationCounter: scoped.some((metric) => metric.name === "sglang:generation_tokens_total"),
+        windowRate: recent.recentOutputTokensPerSecond,
         nowSeconds,
-        options.updateSamples !== false,
-      )
+      })
       : null;
     const speculativeMode = hasSglangMetrics
       ? (sglangSpecAcceptLength > 0 || sglangSpecNumDraftTokens > 0
@@ -4465,10 +4697,11 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       },
       speed: {
         ...recent,
+        windowSeconds: Number(recent.windowSeconds || 0),
         recentOutputTokensPerSecond: hasSglangMetrics
           ? resolvedSglangThroughput.value
           : recent.recentOutputTokensPerSecond,
-        outputSource: hasSglangMetrics ? resolvedSglangThroughput.source : "counter_delta",
+        outputSource: hasSglangMetrics ? resolvedSglangThroughput.source : "counter_window",
         outputObservedAt: hasSglangMetrics ? resolvedSglangThroughput.observedAt : null,
         averageOutputTokensPerSecond: hasSglangMetrics
           ? sglangActiveAverage
@@ -4513,22 +4746,29 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
   return models.sort((a, b) => b.tokens.total - a.tokens.total);
 }
 
-function resolveSglangGenerationThroughput(key, currentValue, activeAverage, nowSeconds, updateSample = true) {
-  const value = Math.max(0, Number(currentValue || 0));
-  const previous = sglangThroughputSamples.get(key);
-  if (value > 0) {
-    const sample = { value, observedAt: nowSeconds };
-    if (updateSample) sglangThroughputSamples.set(key, sample);
-    return { ...sample, source: "sglang_live_gauge" };
+// SGLang output speed (08 P0-7). sglang:gen_throughput is a gauge the
+// scheduler only updates while it decodes, so an idle engine keeps showing the
+// last burst. The gauge counts only while requests run; otherwise the speed is
+// the counter window, or 0 on a build that exports no generation counter.
+function resolveSglangOutputSpeed({ gauge = 0, running = 0, hasGenerationCounter = false, windowRate = 0, nowSeconds = null } = {}) {
+  const value = Math.max(0, Number(gauge || 0));
+  if (Number(running || 0) > 0 && value > 0) {
+    return { value, observedAt: nowSeconds, source: "sglang_gen_throughput_gauge" };
   }
-  if (previous) {
-    return { ...previous, source: "sglang_recent_gauge" };
+  if (hasGenerationCounter) {
+    return { value: Math.max(0, Number(windowRate || 0)), observedAt: null, source: "counter_window" };
   }
-  const fallback = Math.max(0, Number(activeAverage || 0));
-  if (fallback > 0) {
-    return { value: fallback, observedAt: null, source: "sglang_active_average" };
-  }
-  return { value: 0, observedAt: null, source: "unavailable" };
+  return { value: 0, observedAt: null, source: "sglang_gen_throughput_gauge" };
+}
+
+// aggregateStats keeps its shape; the totals also carry the longest per-model
+// window so the summary can label its "{n} s average" (08 P0-7).
+function withSpeedWindowSeconds(totals, models) {
+  if (!totals?.speed) return totals;
+  const windows = (models || [])
+    .map((model) => Number(model?.speed?.windowSeconds || 0))
+    .filter((value) => value > 0);
+  return { ...totals, speed: { ...totals.speed, windowSeconds: windows.length ? Math.max(...windows) : 0 } };
 }
 
 function firstNonZeroMetricSum(metrics, names) {
@@ -4609,18 +4849,35 @@ function parseDockerCreatedAtSeconds(value) {
   return Number.isFinite(parsedMs) && parsedMs > 0 ? parsedMs / 1000 : null;
 }
 
-async function getLatestRuntimeFacts(modelHints = [], options = {}) {
-  const tail = String(options.tail || "2000");
-  const out = await docker(["logs", "--tail", tail, CONFIG.containerName], {
-    rejectOnError: false,
-    maxBuffer: Number(options.maxBuffer || 32 * 1024 * 1024),
+function getLatestRuntimeFacts(modelHints = [], options = {}) {
+  const readRuntimeFacts = createLatestRuntimeFactsReader({
+    docker,
+    getJobs: () => jobs.values(),
+    primaryContainerName: CONFIG.containerName,
   });
-  const needles = core.normalizeRuntimeFactHints(modelHints);
-  const jobText = Array.from(jobs.values())
-    .filter((job) => job.type === "serve" && (!needles.length || jobMatchesRuntimeFactHints(job, needles)))
-    .map((job) => (job.logs || []).join("\n"))
-    .join("\n");
-  const text = `${jobText}\n${out.stdout}${out.stderr}`;
+  return readRuntimeFacts(modelHints, options);
+}
+
+// Runtime facts of one container: its docker logs plus the logs of the serve
+// jobs that launched it. Without containerName the primary container is read.
+function createLatestRuntimeFactsReader({ docker: runDocker, getJobs, primaryContainerName }) {
+  return async function readRuntimeFacts(modelHints = [], options = {}) {
+    const containerName = String(options.containerName || primaryContainerName);
+    const tail = String(options.tail || "2000");
+    const out = await runDocker(["logs", "--tail", tail, containerName], {
+      rejectOnError: false,
+      maxBuffer: Number(options.maxBuffer || 32 * 1024 * 1024),
+    });
+    const needles = core.normalizeRuntimeFactHints(modelHints);
+    const jobText = core.serveJobsForContainer(getJobs(), containerName, { primaryContainerName })
+      .filter((job) => !needles.length || jobMatchesRuntimeFactHints(job, needles))
+      .map((job) => (job.logs || []).join("\n"))
+      .join("\n");
+    return parseLatestRuntimeFactsText(`${jobText}\n${out.stdout || ""}${out.stderr || ""}`);
+  };
+}
+
+function parseLatestRuntimeFactsText(text) {
   return {
     kvCacheTokens: lastIntegerMatch(text, /GPU KV cache size:\s*([\d,]+)\s*tokens/gi),
     maxContextTokens: lastIntegerMatch(text, /Maximum concurrency for\s*([\d,]+)\s*tokens per request/gi),
@@ -4746,6 +5003,8 @@ const downloadJobController = core.createDownloadJobController({
   },
   saveQueueMode: (settings) => atomicWriteJsonFile(CONFIG.downloadSettings, settings),
   resolvePartialPath: resolveModelsRootChild,
+  resolveDownloadSecret: (ref) => downloadTokens.resolve(ref),
+  releaseDownloadSecret: (ref) => downloadTokens.release(ref),
   // 「模型空闲时才下载」的忙碌判定：有请求在跑或排队即视为忙。
   isRuntimeBusy: async () => {
     const container = await getContainerStatus(CONFIG.containerName).catch(() => null);
@@ -4764,6 +5023,23 @@ const {
   drainDownloadQueue,
   healDownloadQueue,
 } = downloadJobController;
+const downloadRequests = createDownloadRequestHandlers({
+  modelsRoot: CONFIG.modelsRoot,
+  hfCache: CONFIG.hfCache,
+  modelStorage,
+  remoteModelService,
+  hfAuthService,
+  downloadTokens,
+  getJobs: () => jobs.values(),
+  getDownloadSettings: () => downloadJobController.getDownloadSettings(),
+  enqueueOrStartDownload,
+  buildDownloadCommand,
+  getDiskFreeBytes: getModelsDiskFreeBytes,
+  cleanupIncompleteFiles: (target) => modelFilesystemStore.cleanupIncompleteFiles(target),
+  invalidateDiskUsage: () => runtimeSnapshotCache.invalidate("disk-usage"),
+  appendLog,
+  redact: (text) => runtimeSecretRedactor.redact(text),
+});
 // 下载完成后的显存粗评：权重体积 vs 本机显存，给「能不能直接加载」一个直观结论。
 async function appendDownloadFitSummary(job) {
   try {
@@ -5082,7 +5358,7 @@ async function runStartJobOnce(job, opts) {
     throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
   }
 
-  let { runArgs, activePublishArgs, runtimeImage, runtimeEngine } = buildVllmRuntimeCommand(job, runtimeOpts);
+  let { runArgs, activePublishArgs, runtimeImage, runtimeEngine, secretEnv } = buildVllmRuntimeCommand(job, runtimeOpts);
   // 启动预检要拿实时镜像状态，绕过快照缓存。
   const imageStatus = await getImageStatusFresh(runtimeImage);
   if (!imageStatus.ok) {
@@ -5163,7 +5439,7 @@ async function runStartJobOnce(job, opts) {
         error.findings = admittedCompatibility.findings;
         throw error;
       }
-      ({ runArgs, activePublishArgs, runtimeImage, runtimeEngine } = buildVllmRuntimeCommand(job, runtimeOpts));
+      ({ runArgs, activePublishArgs, runtimeImage, runtimeEngine, secretEnv } = buildVllmRuntimeCommand(job, runtimeOpts));
     }
     setJobProgress(job, {
       percent: 32,
@@ -5180,25 +5456,28 @@ async function runStartJobOnce(job, opts) {
     scheduleJobsSave(0);
     appendLog(job, `> ${redactedLaunchCommand}`);
     assertStartJobActive(job);
-    let launched;
-    try {
-      launched = await docker(runArgs);
-    } catch (error) {
-      if (isContainerNameConflictError(error)) {
+    // Every attempt, including both retries, gets the secret env (08 P0-4).
+    const launched = await core.dockerRunWithRetries({
+      docker,
+      runArgs,
+      dockerOptions: { env: core.buildDockerChildEnv(secretEnv, { viaWsl: Boolean(CONFIG.dockerWslDistro) }) },
+      isNameConflictError: isContainerNameConflictError,
+      onNameConflict: async (error) => {
         appendLog(job, `容器名冲突，清理本次残留容器后重试：${error.stderr || error.message}`);
         await core.removeContainerIfPresent(docker, targetContainerName);
-        launched = await docker(runArgs);
-      } else if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
-        throw error;
-      } else {
+      },
+      getBindRetryArgs: (error) => {
+        if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
+          return null;
+        }
         activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
         const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
         appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
         appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
         appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
-        launched = await docker(retryArgs);
-      }
-    }
+        return retryArgs;
+      },
+    });
     job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
     scheduleJobsSave(0);
     assertStartJobActive(job);
@@ -5326,9 +5605,15 @@ module.exports = {
   normalizeModelConfig,
   summarizeModelConfigCapabilities,
   buildModelStats,
+  withSpeedWindowSeconds,
+  createDownloadRequestHandlers,
+  createDownloadTokenStore,
+  listModelStorageRoots,
   buildSglangRuntimeFacts,
+  createLatestRuntimeFactsReader,
   getModelConfigRequest,
   buildVllmMemoryEstimate,
+  buildServerMemoryEstimate,
   buildVllmImagePullOptions,
   checkModelCompatibility,
   knownRuntimeImageMetadata,

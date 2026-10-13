@@ -63,8 +63,55 @@ async function buildProcessHealth(options = {}) {
   };
 }
 
-function healthCheck(id, label, status, detail, actions = []) {
-  return { id, label, status, detail: String(detail || ""), actions };
+// Remediation actions a health check can offer (08 P0-23). `actions` keeps
+// the bare ids (must-keep); `actionDetails` describes each one for the UI.
+// An "api" action is a request the UI may send itself, and only the routes
+// in this allowlist qualify; a "command" action is text the user copies and
+// runs. Anything else is dropped.
+const HEALTH_API_ACTION_ALLOWLIST = Object.freeze(["POST /api/docker/start"]);
+
+function healthActionDetail(id, options = {}) {
+  if (id === "start-docker") {
+    return { id, kind: "api", method: "POST", path: "/api/docker/start", label: { zh: "启动 Docker", en: "Start Docker" } };
+  }
+  if (id === "pull-image") {
+    const image = String(options.image || "").trim();
+    // local/ images are built on this machine and are never pulled.
+    if (!image || /\s/.test(image) || /^local\//i.test(image)) return null;
+    const platform = String(options.platform || "").trim();
+    const platformArg = platform && !/\s/.test(platform) ? `--platform ${platform} ` : "";
+    return { id, kind: "command", command: `docker pull ${platformArg}${image}`, label: { zh: "复制拉取命令", en: "Copy pull command" } };
+  }
+  if (id === "install-download-cli") {
+    return {
+      id,
+      kind: "command",
+      command: "install-download-cli.cmd",
+      label: { zh: "安装下载工具：运行 install-download-cli.cmd", en: "Install the download tool: run install-download-cli.cmd" },
+    };
+  }
+  return null;
+}
+
+function isAllowedHealthAction(detail) {
+  if (!detail || typeof detail !== "object" || !detail.id || !detail.label) return false;
+  if (detail.kind === "api") return HEALTH_API_ACTION_ALLOWLIST.includes(`${String(detail.method || "").toUpperCase()} ${detail.path}`);
+  return detail.kind === "command" && typeof detail.command === "string" && detail.command.length > 0;
+}
+
+function healthActionDetails(ids = [], options = {}) {
+  return (Array.isArray(ids) ? ids : [ids])
+    .map((id) => healthActionDetail(id, options))
+    .filter(isAllowedHealthAction);
+}
+
+// actionDetails is added only when there is one, so a check without
+// remediation keeps its previous shape.
+function healthCheck(id, label, status, detail, actions = [], actionDetails = []) {
+  const check = { id, label, status, detail: String(detail || ""), actions };
+  const details = (Array.isArray(actionDetails) ? actionDetails : []).filter(isAllowedHealthAction);
+  if (details.length) check.actionDetails = details;
+  return check;
 }
 
 async function directoryHealth(id, label, dir, options = {}) {
@@ -78,17 +125,20 @@ async function directoryHealth(id, label, dir, options = {}) {
   }
 }
 
+// options.actionDetails are remediation steps, so they are attached only
+// while the command is missing or failing.
 async function commandHealth(id, label, command, args = ["--help"], options = {}) {
   const missingStatus = options.missingStatus || "fail";
   const execFileAsync = options.execFileAsync;
-  if (!command) return healthCheck(id, label, missingStatus, "未配置命令路径");
-  if (typeof execFileAsync !== "function") return healthCheck(id, label, missingStatus, "execFileAsync is not configured");
+  const remediation = options.actionDetails || [];
+  if (!command) return healthCheck(id, label, missingStatus, "未配置命令路径", [], remediation);
+  if (typeof execFileAsync !== "function") return healthCheck(id, label, missingStatus, "execFileAsync is not configured", [], remediation);
   try {
     const out = await execFileAsync(command, args, { rejectOnError: false, timeout: options.timeout || 8000, maxBuffer: options.maxBuffer || 256 * 1024 });
     const text = `${out.stdout}${out.stderr}`.trim().split(/\r?\n/)[0] || command;
-    return healthCheck(id, label, out.error ? "warn" : "ok", text);
+    return healthCheck(id, label, out.error ? "warn" : "ok", text, [], out.error ? remediation : []);
   } catch (error) {
-    return healthCheck(id, label, missingStatus, error.message);
+    return healthCheck(id, label, missingStatus, error.message, [], remediation);
   }
 }
 
@@ -96,9 +146,10 @@ function createHealthProbe(options = {}) {
   return {
     healthCheck,
     directoryHealth: (id, label, dir) => directoryHealth(id, label, dir, { ensureDirs: options.ensureDirs }),
-    commandHealth: (id, label, command, args = ["--help"], missingStatus = "fail") => commandHealth(id, label, command, args, {
+    commandHealth: (id, label, command, args = ["--help"], missingStatus = "fail", actionDetails = []) => commandHealth(id, label, command, args, {
       execFileAsync: options.execFileAsync,
       missingStatus,
+      actionDetails,
       timeout: options.timeout,
       maxBuffer: options.maxBuffer,
     }),
@@ -111,6 +162,9 @@ module.exports = {
   preparePidFile,
   writePidFile,
   buildProcessHealth,
+  HEALTH_API_ACTION_ALLOWLIST,
+  healthActionDetail,
+  healthActionDetails,
   healthCheck,
   directoryHealth,
   commandHealth,

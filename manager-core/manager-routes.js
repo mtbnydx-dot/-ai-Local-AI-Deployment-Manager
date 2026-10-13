@@ -1,3 +1,5 @@
+const { redactSecrets } = require("./secret-redactor");
+
 function registerManagerRoutes(app, deps = {}) {
   const {
     config,
@@ -103,9 +105,10 @@ function registerManagerRoutes(app, deps = {}) {
     res.json(await getManagerResourceSummary(gpu, container));
   });
 
-  app.post("/api/memory-estimate", (req, res) => {
+  app.post("/api/memory-estimate", async (req, res) => {
     try {
-      res.json(buildMemoryEstimate(req.body || {}));
+      // The vLLM builder is async: it reads the live GPU admission policy.
+      res.json(await buildMemoryEstimate(req.body || {}));
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message });
     }
@@ -265,12 +268,20 @@ function registerManagerRoutes(app, deps = {}) {
     });
 
     // Waking restarts a container, so it returns the serve job the caller can
-    // follow rather than blocking until the model is loaded.
+    // follow rather than blocking until the model is loaded. Replacing a
+    // running model needs the explicit { confirmReplace: true } (08 P0-1);
+    // refusals carry a stable code and details.
     app.post("/api/idle-unload/:id/wake", async (req, res) => {
       try {
-        res.json(await idleUnload.wake(req.params.id));
+        const confirmReplace = req.body?.confirmReplace === true;
+        res.json(await idleUnload.wake(req.params.id, { confirmReplace }));
       } catch (error) {
-        res.status(error.status || 500).json({ ok: false, error: error.message });
+        res.status(error.status || 500).json({
+          ok: false,
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+          ...(error.details ? { details: error.details } : {}),
+        });
       }
     });
 
@@ -312,7 +323,11 @@ function redactManagerSecrets(value, explicitSecrets = []) {
 
 function redactManagerSecretsValue(value, secrets) {
   if (typeof value === "string") {
-    return secrets.reduce((text, secret) => text.replaceAll(secret, "***"), value);
+    // Exact secrets only: API payloads carry model ids that the patterns
+    // could hit. The marker is the platform's <redacted> (08 §3).
+    return secrets.length
+      ? redactSecrets(value, { secrets, patterns: false, minSecretLength: 6 })
+      : value;
   }
   if (Array.isArray(value)) return value.map((item) => redactManagerSecretsValue(item, secrets));
   if (!value || typeof value !== "object") return value;
@@ -372,7 +387,58 @@ function createManagerApiSecretRedactionMiddleware(options = {}) {
   };
 }
 
+// Exact secrets for the job-log and /api/logs redactor (08 P0-5). The runtime
+// key store re-reads its file on every values() call and the ledger redacts on
+// every appendLog, so the list is cached. set/remove through the returned
+// store invalidate it at once; otherwise it is refreshed at most once per
+// refreshMs. A throwing source is not cached, so the redactor's patterns-only
+// fallback applies until the store reads again.
+function createCachedSecretList({ store, sources = [], refreshMs = 1000, now = Date.now } = {}) {
+  let cached = null;
+  let cachedAt = 0;
+
+  function invalidate() {
+    cached = null;
+  }
+
+  function getSecrets() {
+    const at = now();
+    if (cached && at - cachedAt < refreshMs) return cached;
+    const collected = [];
+    if (store && typeof store.values === "function") collected.push(...store.values());
+    for (const source of sources) {
+      const value = typeof source === "function" ? source() : source;
+      if (typeof value === "string") collected.push(value);
+      else if (value && typeof value[Symbol.iterator] === "function") collected.push(...value);
+    }
+    cached = Array.from(new Set(collected.filter((item) => typeof item === "string" && item)));
+    cachedAt = at;
+    return cached;
+  }
+
+  const wrappedStore = store ? {
+    ...store,
+    async set(...args) {
+      try {
+        return await store.set(...args);
+      } finally {
+        invalidate();
+      }
+    },
+    async remove(...args) {
+      try {
+        return await store.remove(...args);
+      } finally {
+        invalidate();
+      }
+    },
+  } : null;
+
+  return { getSecrets, invalidate, store: wrappedStore };
+}
+
 module.exports = {
+  createCachedSecretList,
   createManagerApiSecretRedactionMiddleware,
   redactManagerSecrets,
   registerManagerRoutes,
