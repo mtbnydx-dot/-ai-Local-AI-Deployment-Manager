@@ -41,6 +41,7 @@ const MODULES = [
   "./download-job-controller",
   "./job-utils",
   "./jobs-ledger-store",
+  "./ledger-scrub",
   "./process-job-runner",
   "./remote-model-utils",
   "./gguf-metadata",
