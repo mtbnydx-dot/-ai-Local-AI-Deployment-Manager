@@ -7,6 +7,40 @@ const {
   markJobFailed,
   prepareDownloadResume,
 } = require("./job-utils");
+const {
+  classifyDownloadFailure,
+  describeDownloadError,
+  formatDownloadErrorTitle,
+  isDownloadErrorCode,
+} = require("./model-hub/errors");
+const { normalizeDownloadTransfer } = require("./download-utils");
+
+// Fields one classification writes onto job.meta; cleared again when the job
+// is resumed so the next failure is classified on its own evidence.
+const FAILURE_CLASSIFICATION_KEYS = ["errorCode", "errorRetryable", "errorHint", "stalled", "verifyFailed"];
+const FAILURE_LOG_TAIL_LINES = 60;
+
+// The failing attempt's output starts after the runner's "> command" echo;
+// older attempts' lines (an earlier checksum or 403 line) must not decide
+// this failure.
+function collectDownloadFailureText(job) {
+  const logs = Array.isArray(job?.logs) ? job.logs.map((line) => String(line || "")) : [];
+  let start = 0;
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    if (logs[index].startsWith("> ")) {
+      start = index + 1;
+      break;
+    }
+  }
+  const tail = logs.slice(start).slice(-FAILURE_LOG_TAIL_LINES);
+  if (job?.error) tail.push(String(job.error));
+  return tail.join("\n");
+}
+
+function clearDownloadFailureClassification(job) {
+  if (!job?.meta) return;
+  for (const key of FAILURE_CLASSIFICATION_KEYS) delete job.meta[key];
+}
 
 function normalizeLocalDirKey(value) {
   const text = String(value || "").trim();
@@ -64,6 +98,8 @@ function createDownloadJobController(options = {}) {
     queueNextStart: "前一个下载已结束，开始本任务。",
     queueExpiredError: "下载队列状态已过期，请重新提交下载任务。",
     queueExpiredLog: "下载队列状态已过期：管理器重启或队列参数丢失，请重新提交下载任务。",
+    originalError: (code, text) => `原始错误 / Original error [${code}]: ${text}`,
+    notRetried: (title) => `此错误不会自动重试：${title.zh} / Not retried automatically: ${title.en}`,
     ...options.messages,
   };
 
@@ -98,6 +134,12 @@ function createDownloadJobController(options = {}) {
     : (target) => fsp.rm(target, { recursive: true, force: true });
   const setRetryTimeout = typeof options.setRetryTimeout === "function" ? options.setRetryTimeout : setTimeout;
   const clearRetryTimeout = typeof options.clearRetryTimeout === "function" ? options.clearRetryTimeout : clearTimeout;
+  // Download tokens live in the manager's in-memory map; the controller only
+  // sees tokenRef. resolve is used when a spec is rebuilt, release once the
+  // job no longer needs the token (success, cancel, partial removal).
+  const resolveDownloadSecret = typeof options.resolveDownloadSecret === "function" ? options.resolveDownloadSecret : () => null;
+  const releaseDownloadSecret = typeof options.releaseDownloadSecret === "function" ? options.releaseDownloadSecret : () => {};
+  const releasedTokenRefs = new Set();
   const retryTimers = new Map();
   let autoRetryCount = clampInteger(options.autoRetryCount, 0, 10, 2);
   let autoRetryDelaySeconds = clampInteger(options.autoRetryDelaySeconds, 1, 3600, 10);
@@ -127,7 +169,67 @@ function createDownloadJobController(options = {}) {
 
   function spawnDownload(job, command, args, opts) {
     try { return options.spawnJobProcess(job, command, args, opts); }
-    catch (error) { failJob(job, error); options.appendLog(job, error.message); scheduleSave(0); return job; }
+    catch (error) {
+      failJob(job, error);
+      options.appendLog(job, error.message);
+      // A resumed job is still "failed" here, so mark it from the error itself.
+      if (job.status === "failed") classifyFailedDownload(job, { error, text: error?.message || "" });
+      scheduleSave(0);
+      return job;
+    }
+  }
+
+  // Classifies a failed download once: the first time the controller sees the
+  // failure (or immediately, with `force`, for an error raised while preparing
+  // a resume). job.error becomes the bilingual title; the original text goes
+  // to the job log, which the ledger store redacts.
+  function classifyFailedDownload(job, classifyOptions = {}) {
+    if (!job || job.type !== "download") return null;
+    if (!classifyOptions.force && typeof job.meta?.errorRetryable === "boolean") return null;
+    if (classifyOptions.force) clearDownloadFailureClassification(job);
+    const original = String(job.error || "").trim();
+    const result = classifyDownloadFailure({
+      text: classifyOptions.text !== undefined
+        ? [classifyOptions.text, original].filter(Boolean).join("\n")
+        : collectDownloadFailureText(job),
+      exitCode: Number.isInteger(job.exitCode) ? job.exitCode : null,
+      error: classifyOptions.error || null,
+      meta: job.meta || {},
+    });
+    job.meta = {
+      ...(job.meta || {}),
+      errorCode: result.code,
+      errorRetryable: result.retryable,
+      errorHint: { ...result.hint },
+    };
+    job.error = formatDownloadErrorTitle(result);
+    const originalText = original || String(classifyOptions.error?.message || "").trim();
+    if (originalText && originalText !== job.error) options.appendLog(job, messages.originalError(result.code, originalText));
+    if (!result.retryable) options.appendLog(job, messages.notRetried(result.title));
+    scheduleSave(0);
+    return result;
+  }
+
+  // A resume that cannot even be prepared (for example the download token is
+  // gone after a restart) ends as a classified failure instead of leaving the
+  // job paused or interrupted with no reason.
+  function failDownloadResume(job, error) {
+    if (job.status !== "failed") {
+      const now = new Date().toISOString();
+      job.status = "failed";
+      job.pid = null;
+      job.finishedAt = now;
+      job.updatedAt = now;
+      options.stopProgressTracker(job);
+    }
+    job.meta = { ...(job.meta || {}), cancelRequested: false, cancelAction: null, failedAt: Date.now() };
+    job.error = null;
+    classifyFailedDownload(job, { error, text: error?.message || "", force: true });
+  }
+
+  function computeRetryDelaySeconds(job) {
+    const info = describeDownloadError(job.meta?.errorCode);
+    return Math.max(info.minRetryDelaySeconds, autoRetryDelaySeconds * info.retryDelayFactor);
   }
 
   function enqueueOrStartDownload(command, args, jobOptions = {}) {
@@ -146,6 +248,7 @@ function createDownloadJobController(options = {}) {
       retryCount: clampInteger(jobOptions.meta?.retryCount, 0, 10, 0),
       maxRetries: clampInteger(jobOptions.meta?.maxRetries, 0, 10, autoRetryCount),
     };
+    if (jobOptions.meta?.transfer) meta.transfer = normalizeDownloadTransfer(jobOptions.meta.transfer);
     const job = options.createJob("download", jobOptions.title || "download", meta);
     if (shouldQueue) {
       job.status = "queued";
@@ -155,6 +258,7 @@ function createDownloadJobController(options = {}) {
         downloadSpecs.delete(job.id);
         markJobCancelRequested(job, "cancel");
         failJob(job, new Error(messages.queuedCancel));
+        releaseJobDownloadSecret(job);
       };
       scheduleSave(0);
     } else {
@@ -208,6 +312,7 @@ function createDownloadJobController(options = {}) {
     options.stopProgressTracker(job);
     markDownloadCancelled(job);
     options.appendLog(job, messages.cancelled);
+    releaseJobDownloadSecret(job);
     if (finalizeOptions.deletePartial === true) await deletePartialDownload(job);
     scheduleSave(0);
   }
@@ -223,6 +328,26 @@ function createDownloadJobController(options = {}) {
     const resolved = resolvePartialPath(localDir);
     await removePartialPath(resolved);
     options.appendLog(job, `${messages.partialDeleted}: ${resolved}`);
+    releaseJobDownloadSecret(job);
+  }
+
+  function releaseJobDownloadSecret(job) {
+    const ref = job?.meta?.transfer?.tokenRef;
+    if (!ref || releasedTokenRefs.has(ref)) return;
+    releasedTokenRefs.add(ref);
+    try {
+      releaseDownloadSecret(ref);
+    } catch {
+      // Releasing only drops an in-memory entry; never fail the job path on it.
+    }
+  }
+
+  // Finished downloads are seen here because every download's exit drains the
+  // queue; a successful job never needs its token again.
+  function releaseFinishedDownloadSecrets() {
+    for (const job of jobs.values()) {
+      if (job.type === "download" && job.status === "success") releaseJobDownloadSecret(job);
+    }
   }
 
   // Stalls are transient by definition (network hiccups, HF throttling, Xet
@@ -237,6 +362,7 @@ function createDownloadJobController(options = {}) {
       cancelRequested: false,
       cancelAction: null,
       failedAt: Date.now(),
+      stalled: true,
     };
     failJob(job, new Error(messages.stallFailed));
     options.appendLog(job, messages.stallPreserved);
@@ -249,8 +375,15 @@ function createDownloadJobController(options = {}) {
     if (job.status === "running" || job.status === "queued") return job;
     if (job.status === "success") throw new Error("该下载任务已完成，不需要继续。");
     clearAutoRetry(job);
-    const spec = options.buildDownloadSpecFromJob(job);
+    let spec;
+    try {
+      spec = options.buildDownloadSpecFromJob(job, { settings: getDownloadSettings(), resolveSecret: resolveDownloadSecret });
+    } catch (error) {
+      if (isDownloadErrorCode(error?.code)) failDownloadResume(job, error);
+      throw error;
+    }
     prepareDownloadResume(job, spec.options.meta || {});
+    clearDownloadFailureClassification(job);
     if (Boolean(getQueueMode()) && hasRunningDownload()) {
       job.status = "queued";
       job.updatedAt = new Date().toISOString();
@@ -291,6 +424,7 @@ function createDownloadJobController(options = {}) {
   }
 
   function drainDownloadQueue() {
+    releaseFinishedDownloadSecrets();
     healDownloadQueue({ skipDrain: true });
     scheduleFailedDownloadRetries();
     if (hasRunningDownload()) return;
@@ -367,6 +501,10 @@ function createDownloadJobController(options = {}) {
   function scheduleFailedDownloadRetries() {
     for (const job of jobs.values()) {
       if (job.type !== "download" || job.status !== "failed" || job.meta?.cancelRequested) continue;
+      // Gated, missing, disk-full and similar failures cannot heal by
+      // retrying; only manual resume restarts them.
+      classifyFailedDownload(job);
+      if (job.meta?.errorRetryable === false) continue;
       const retries = clampInteger(job.meta?.retryCount, 0, 10, 0);
       const maxRetries = clampInteger(job.meta?.maxRetries, 0, 10, autoRetryCount);
       const failedAt = Number(job.meta?.failedAt || 0);
@@ -378,7 +516,7 @@ function createDownloadJobController(options = {}) {
         continue;
       }
       if (retries >= maxRetries || retryTimers.has(job.id)) continue;
-      const delaySeconds = autoRetryDelaySeconds;
+      const delaySeconds = computeRetryDelaySeconds(job);
       job.meta = {
         ...(job.meta || {}),
         retryCount: retries,
@@ -425,6 +563,8 @@ function createDownloadJobController(options = {}) {
     drainDownloadQueue,
     healDownloadQueue,
     startQueuedDownloadsNow,
+    classifyFailedDownload,
+    releaseJobDownloadSecret,
     findActiveDownloadJobByLocalDir: (localDir, findOptions) => findActiveDownloadJobByLocalDir(jobs, localDir, findOptions),
     processStartedAt,
   };

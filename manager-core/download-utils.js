@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { describeDownloadError } = require("./model-hub/errors");
 
 function cleanDownloadSource(value) {
   const source = String(value || "huggingface").toLowerCase();
@@ -150,6 +151,34 @@ const PROXY_ENV_KEYS = [
   "all_proxy",
 ];
 const PYTHON_DIRECT_DNS_PATH = path.join(__dirname, "python-direct-dns");
+const DEFAULT_HF_MIRROR_ENDPOINT = "https://hf-mirror.com";
+const HF_TOKEN_ENV_KEYS = ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"];
+
+// What a download job records about its transfer at enqueue (job.meta.transfer)
+// so resume and auto-retry use the same endpoint and flags. It never holds a
+// token: tokenRef names an entry in the manager's in-memory token map. Gated
+// and token-carrying downloads always use the official endpoint.
+function normalizeDownloadTransfer(value = {}) {
+  const input = value && typeof value === "object" ? value : {};
+  const tokenRef = typeof input.tokenRef === "string" && input.tokenRef.trim() ? input.tokenRef.trim() : null;
+  const gated = Boolean(input.gated);
+  const hfMirror = Boolean(input.hfMirror) && !gated && !tokenRef;
+  return {
+    hfMirror,
+    hfEndpoint: hfMirror ? String(input.hfEndpoint || DEFAULT_HF_MIRROR_ENDPOINT) : null,
+    hfTransfer: Boolean(input.hfTransfer),
+    tokenRef,
+    gated,
+  };
+}
+
+function downloadTokenExpiredError() {
+  const { hint } = describeDownloadError("hf_token_expired");
+  const error = new Error(`${hint.zh} / ${hint.en}`);
+  error.code = "hf_token_expired";
+  error.status = 409;
+  return error;
+}
 
 function buildDownloadEnv(hfCache, env = process.env, options = {}) {
   const downloadEnv = {
@@ -175,8 +204,15 @@ function buildDownloadEnv(hfCache, env = process.env, options = {}) {
     downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS = downloadEnv.MODELSCOPE_DIRECT_DNS_SERVERS || "223.5.5.5,119.29.29.29,1.1.1.1";
     downloadEnv.PYTHONPATH = [PYTHON_DIRECT_DNS_PATH, downloadEnv.PYTHONPATH].filter(Boolean).join(path.delimiter);
   }
-  if (options.hfMirror) {
-    downloadEnv.HF_ENDPOINT = options.hfEndpoint || "https://hf-mirror.com";
+  const token = options.token ? String(options.token) : "";
+  if (options.hfMirror && !token && !options.gated) {
+    downloadEnv.HF_ENDPOINT = options.hfEndpoint || DEFAULT_HF_MIRROR_ENDPOINT;
+    // A third-party mirror never receives a Hugging Face token: neither the
+    // inherited env tokens nor the implicit login token under HF_HOME.
+    for (const key of HF_TOKEN_ENV_KEYS) delete downloadEnv[key];
+    downloadEnv.HF_HUB_DISABLE_IMPLICIT_TOKEN = "1";
+  } else if (token) {
+    downloadEnv.HF_TOKEN = token;
   }
   if (options.hfTransfer) {
     // huggingface_hub 1.x uses Xet for large files; hf_transfer is deprecated.
@@ -213,7 +249,13 @@ function createDownloadCommandBuilder(options = {}) {
     });
   }
 
-  function buildDownloadSpecFromJob(job) {
+  // Resume and auto-retry rebuild the spawn spec from the job. Jobs that
+  // recorded meta.transfer get the same endpoint, flags and token back; legacy
+  // jobs use the current download settings. A token is only ever looked up
+  // through resolveSecret(tokenRef); when it is gone (tokens are memory-only),
+  // the rebuild fails with hf_token_expired instead of silently retrying
+  // without it.
+  function buildDownloadSpecFromJob(job, specOptions = {}) {
     const meta = job.meta || {};
     const model = cleanRequired(meta.model, "model");
     const source = cleanDownloadSource(meta.source || "huggingface");
@@ -221,14 +263,35 @@ function createDownloadCommandBuilder(options = {}) {
     const outputName = safeOutputName(meta.outputName || model.replace(/[\\/]/g, "__"));
     const localDir = resolveModelPath(meta.localDir || path.join(modelsRoot, outputName));
     const download = buildConfiguredDownloadCommand(source, model, localDir, { precision, extraIncludePatterns: meta.includeExtras });
+    const transfer = meta.transfer && typeof meta.transfer === "object" ? normalizeDownloadTransfer(meta.transfer) : null;
+    let envOptions;
+    if (transfer) {
+      let token = null;
+      if (transfer.tokenRef) {
+        token = typeof specOptions.resolveSecret === "function" ? specOptions.resolveSecret(transfer.tokenRef) : null;
+        if (!token) throw downloadTokenExpiredError();
+      }
+      envOptions = {
+        source,
+        hfMirror: transfer.hfMirror,
+        hfEndpoint: transfer.hfEndpoint,
+        hfTransfer: transfer.hfTransfer,
+        gated: transfer.gated,
+        token,
+      };
+    } else {
+      const settings = specOptions.settings || {};
+      envOptions = { source, hfMirror: Boolean(settings.hfMirror), hfTransfer: Boolean(settings.hfTransfer) };
+    }
     return {
       command: download.command,
       args: download.args,
       options: {
-        env: buildDownloadEnv(hfCache, env, { source }),
+        env: buildDownloadEnv(hfCache, env, envOptions),
         title: job.title || `Download ${model} (${download.label})`,
         meta: {
           ...meta,
+          ...(transfer ? { transfer } : {}),
           model,
           source,
           precision,
@@ -312,6 +375,7 @@ module.exports = {
   filterDownloadSiblings,
   selectDownloadSiblings,
   buildDownloadEnv,
+  normalizeDownloadTransfer,
   createDownloadCommandBuilder,
   buildDownloadCommand,
   normalizeExtraIncludePatterns,

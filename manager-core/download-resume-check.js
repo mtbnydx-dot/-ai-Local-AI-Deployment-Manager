@@ -35,6 +35,26 @@ async function walkFiles(root) {
   return out;
 }
 
+// Free space on the disk that holds the job's own directory. Storage roots can
+// live on different drives, so the default models root says nothing about a
+// download into another library. The directory may not exist yet (a fresh or
+// deleted download), so the nearest existing ancestor is measured.
+async function measureDiskFreeBytes(localDir, statfs = fsp.statfs) {
+  let target = path.dirname(path.resolve(String(localDir || "")));
+  for (let depth = 0; depth < 64; depth += 1) {
+    try {
+      const stat = await statfs(target);
+      const free = Number(stat.bavail) * Number(stat.bsize);
+      return Number.isFinite(free) && free >= 0 ? free : null;
+    } catch {
+      const parent = path.dirname(target);
+      if (parent === target) return null;
+      target = parent;
+    }
+  }
+  return null;
+}
+
 function isIncompleteFile(relative) {
   return /\.incomplete$/i.test(relative) || /(^|\/)\.cache\/huggingface\/download\//i.test(relative) || /(^|\/)\._{3,}temp(\/|$)/i.test(relative);
 }
@@ -72,7 +92,12 @@ async function inspectDownloadResume(options = {}) {
   const expectedBytes = Number(options.expectedBytes || 0) || manifestBytes || 0;
   const onDiskBytes = files.reduce((sum, file) => sum + file.size, 0);
   const remainingBytes = expectedBytes ? Math.max(0, expectedBytes - completeBytes - partialOnDiskBytes) : null;
-  const diskFreeBytes = Number(options.diskFreeBytes || 0) || null;
+  // Callers that pass diskFreeBytes (even null) keep it; omitting it measures
+  // the disk the job directory is on.
+  const measuredFreeBytes = options.diskFreeBytes === undefined
+    ? await measureDiskFreeBytes(localDir, typeof options.statfs === "function" ? options.statfs : undefined)
+    : options.diskFreeBytes;
+  const diskFreeBytes = Number(measuredFreeBytes || 0) || null;
   const reserve = diskFreeBytes ? Math.max(diskFreeBytes * 0.05, 10 * 1024 ** 3) : 0;
   const diskOk = remainingBytes === null || !diskFreeBytes ? null : remainingBytes <= diskFreeBytes - reserve;
 
@@ -106,4 +131,4 @@ async function inspectDownloadResume(options = {}) {
   };
 }
 
-module.exports = { inspectDownloadResume, isIncompleteFile };
+module.exports = { inspectDownloadResume, isIncompleteFile, measureDiskFreeBytes };

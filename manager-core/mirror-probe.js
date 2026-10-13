@@ -34,7 +34,9 @@ async function timeProbe(fetchImpl, source, repo, file, options = {}) {
       headers: {
         range: `bytes=0-${PROBE_RANGE_BYTES - 1}`,
         "user-agent": "local-model-manager-mirror-probe/2.0",
-        ...(options.token && source !== "modelscope" ? { authorization: `Bearer ${options.token}` } : {}),
+        // Only huggingface.co itself may see a Hugging Face token; never the
+        // third-party mirror or ModelScope.
+        ...(options.token && source === "official" ? { authorization: `Bearer ${options.token}` } : {}),
       },
       redirect: "follow",
       signal: AbortSignal.timeout(timeoutMs),

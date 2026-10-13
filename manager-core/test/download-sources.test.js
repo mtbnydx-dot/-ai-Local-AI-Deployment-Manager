@@ -49,6 +49,22 @@ test("three-source probe tries ModelScope candidates and recommends the clearly 
   assert.equal(probeUrl("modelscope", "Qwen/Qwen3-8B", "config.json"), "https://www.modelscope.cn/models/Qwen/Qwen3-8B/resolve/master/config.json");
 });
 
+test("the mirror probe sends a Hugging Face token to huggingface.co only", async () => {
+  const seen = [];
+  const fetchImpl = async (url, init = {}) => {
+    seen.push({ url, authorization: init.headers?.authorization });
+    return fakeResponse()();
+  };
+  await probeHfMirrorSpeed({ model: "Qwen/Qwen3-8B", token: "fake-probe-token-for-tests", fetchImpl });
+  const official = seen.filter((item) => item.url.startsWith("https://huggingface.co/"));
+  const others = seen.filter((item) => !item.url.startsWith("https://huggingface.co/"));
+  assert.equal(official.length, 1);
+  assert.equal(official[0].authorization, "Bearer fake-probe-token-for-tests");
+  assert.ok(others.some((item) => item.url.startsWith("https://hf-mirror.com/")), "the mirror was probed");
+  assert.ok(others.length >= 2);
+  for (const item of others) assert.equal(item.authorization, undefined, `${new URL(item.url).host} receives no Authorization`);
+});
+
 test("the official source keeps the recommendation unless another source is clearly faster", () => {
   const official = { source: "official", ok: true, bytes: 2 * 1024 * 1024, bytesPerSec: 10_000_000, ms: 200 };
   const mirror = { source: "mirror", ok: true, bytes: 2 * 1024 * 1024, bytesPerSec: 10_800_000, ms: 190 };

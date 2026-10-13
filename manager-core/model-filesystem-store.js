@@ -19,6 +19,9 @@ function createModelFilesystemStore(options = {}) {
   const sizeCache = new Map();
   const verificationCache = new Map();
   const sizeCacheTtlMs = Math.max(1000, Number(options.sizeCacheTtlMs || 5 * 60 * 1000));
+  // listRoots() → [{ id, path, label, default, legacy, mode? }]; the servers
+  // wire it from modelStorage.roots().
+  const listRoots = typeof options.listRoots === "function" ? options.listRoots : null;
 
   async function cachedDirSize(fullPath, stats) {
     const cached = sizeCache.get(fullPath);
@@ -148,25 +151,90 @@ function createModelFilesystemStore(options = {}) {
     return { local, cached };
   }
 
-  // 磁盘看板数据：模型盘剩余空间、各模型目录大小排行、HF 缓存体积和
-  // 可清理的 .incomplete 残留。目录大小复用 mtime 缓存。
-  async function getDiskUsage() {
-    await ensureDirs(modelsRoot);
-    const statfs = await fsp.statfs(modelsRoot).catch(() => null);
-    const entries = await fsp.readdir(modelsRoot, { withFileTypes: true });
-    const models = await mapWithConcurrency(entries.filter((entry) => entry.isDirectory()), 6, async (entry) => {
-      const fullPath = path.join(modelsRoot, entry.name);
-      const stats = await fsp.stat(fullPath);
-      const scan = await scanDownloadProgress(fullPath);
+  // 磁盘看板的存储位置：listRoots() 给出全部已登记的模型库（含默认库）；
+  // 未接入时只有旧的 modelsRoot，与以前一致。默认库排第一。
+  async function resolveDiskUsageRoots() {
+    const listed = listRoots ? await Promise.resolve().then(() => listRoots()).catch(() => null) : null;
+    const fallback = { id: "legacy", path: modelsRoot, label: "原模型库", default: true, legacy: true, mode: "library" };
+    const source = Array.isArray(listed) && listed.some((item) => item?.path) ? listed : [fallback];
+    const seen = new Set();
+    const roots = [];
+    for (const item of source) {
+      if (!item?.path) continue;
+      const resolved = path.resolve(String(item.path));
+      const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const id = String(item.id || `root-${roots.length + 1}`);
+      roots.push({
+        id,
+        path: String(item.path),
+        label: String(item.label || path.basename(String(item.path)) || id),
+        default: Boolean(item.default),
+        legacy: item.legacy !== undefined ? Boolean(item.legacy) : id === "legacy",
+        mode: item.mode === "model" ? "model" : "library",
+      });
+    }
+    let defaultIndex = roots.findIndex((root) => root.default);
+    if (defaultIndex < 0) defaultIndex = Math.max(0, roots.findIndex((root) => root.legacy));
+    roots.forEach((root, index) => { root.default = index === defaultIndex; });
+    return [roots[defaultIndex], ...roots.filter((_, index) => index !== defaultIndex)];
+  }
+
+  async function scanDiskUsageRoot(root) {
+    const statfs = await fsp.statfs(root.path).catch(() => null);
+    let dirs = [];
+    if (root.mode === "model") {
+      if (fs.existsSync(root.path)) dirs = [{ name: path.basename(root.path), fullPath: root.path }];
+    } else {
+      const entries = await fsp.readdir(root.path, { withFileTypes: true }).catch(() => []);
+      dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => ({ name: entry.name, fullPath: path.join(root.path, entry.name) }));
+    }
+    const models = await mapWithConcurrency(dirs, 6, async (entry) => {
+      const stats = await fsp.stat(entry.fullPath);
+      const scan = await scanDownloadProgress(entry.fullPath);
+      const bytes = await cachedDirSize(entry.fullPath, stats);
       return {
         name: entry.name,
-        path: fullPath,
-        bytes: await cachedDirSize(fullPath, stats),
+        path: entry.fullPath,
+        rootId: root.id,
+        bytes,
+        sizeBytes: bytes,
         incompleteFiles: scan.incompleteFiles,
         incompleteBytes: scan.partialBytes,
+        incomplete: scan.incompleteFiles > 0,
         modified: stats.mtime.toISOString(),
       };
     });
+    const disk = statfs ? {
+      freeBytes: Number(statfs.bavail) * Number(statfs.bsize),
+      totalBytes: Number(statfs.blocks) * Number(statfs.bsize),
+    } : null;
+    return {
+      disk,
+      models,
+      summary: {
+        ...root,
+        available: Boolean(statfs),
+        freeBytes: disk ? disk.freeBytes : null,
+        totalBytes: disk ? disk.totalBytes : null,
+        usedByModelsBytes: models.reduce((sum, item) => sum + item.bytes, 0),
+        modelCount: models.length,
+        incompleteBytes: models.reduce((sum, item) => sum + item.incompleteBytes, 0),
+        incompleteFiles: models.reduce((sum, item) => sum + item.incompleteFiles, 0),
+      },
+    };
+  }
+
+  // 磁盘看板数据：各存储位置的剩余空间、各模型目录大小排行（带 rootId）、
+  // HF 缓存体积和可清理的 .incomplete 残留。目录大小复用 mtime 缓存。
+  // 旧的顶层字段（root、disk、modelsBytes、incomplete*）按默认存储位置计算。
+  async function getDiskUsage() {
+    await ensureDirs(modelsRoot);
+    const roots = await resolveDiskUsageRoots();
+    const scans = await Promise.all(roots.map((root) => scanDiskUsageRoot(root)));
+    const primary = scans[0];
+    const models = scans.flatMap((scan) => scan.models);
     models.sort((a, b) => b.bytes - a.bytes);
     const [hubBytes, xetBytes, modelscopeBytes] = await Promise.all([
       dirSize(path.join(hfCache, "hub")),
@@ -175,16 +243,14 @@ function createModelFilesystemStore(options = {}) {
     ]);
     return {
       ok: true,
-      root: modelsRoot,
-      disk: statfs ? {
-        freeBytes: Number(statfs.bavail) * Number(statfs.bsize),
-        totalBytes: Number(statfs.blocks) * Number(statfs.bsize),
-      } : null,
-      modelsBytes: models.reduce((sum, item) => sum + item.bytes, 0),
+      root: primary.summary.path,
+      disk: primary.disk,
+      modelsBytes: primary.summary.usedByModelsBytes,
       models,
+      roots: scans.map((scan) => scan.summary),
       hfCache: { path: hfCache, hubBytes, xetBytes, modelscopeBytes },
-      incompleteBytes: models.reduce((sum, item) => sum + item.incompleteBytes, 0),
-      incompleteFiles: models.reduce((sum, item) => sum + item.incompleteFiles, 0),
+      incompleteBytes: primary.summary.incompleteBytes,
+      incompleteFiles: primary.summary.incompleteFiles,
       updatedAt: new Date().toISOString(),
     };
   }
