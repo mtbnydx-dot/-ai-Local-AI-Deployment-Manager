@@ -396,7 +396,6 @@ const {
 const jobs = new Map();
 const progressTimers = new Map();
 const statsSamples = new Map();
-const sglangThroughputSamples = new Map();
 const serviceRateBuckets = new Map();
 const serviceConcurrencyBuckets = new Map();
 const GATEWAY_RUNTIME_CACHE_MS = Math.max(0, Number(process.env.VLLM_GATEWAY_RUNTIME_CACHE_MS || 5000));
@@ -4241,7 +4240,8 @@ async function collectStats() {
   ]);
   const liveSummary = await collectVllmMetricsSummary(container, gpu, { updateSamples: true });
   const ledger = await updateStatsLedger(liveSummary);
-  const summary = core.mergeLiveAndStatsLedgerInactive(liveSummary, ledger);
+  const merged = core.mergeLiveAndStatsLedgerInactive(liveSummary, ledger);
+  const summary = { ...merged, totals: withSpeedWindowSeconds(merged.totals, merged.models) };
   const pricing = core.loadModelPricing();
   const costComparison = priceProfiles().map((profile) => calculateCost(summary.totals.tokens, profile));
   const clientUsage = buildClientUsageSummary(summary.totals, ledger);
@@ -4363,9 +4363,8 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
     engine: runtimeEngine,
     runtimeVersion: runtimeVersion.version || "",
     speculativeMode: facts.runtimeConfig?.speculativeMode,
-    runtimeSampleKey: [runtimeEngine, container?.id || container?.name || "runtime", processStartSeconds || "unknown"].join(":"),
   });
-  const totals = aggregateStats(models, uptimeSeconds);
+  const totals = withSpeedWindowSeconds(aggregateStats(models, uptimeSeconds), models);
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
 
   return {
@@ -4468,15 +4467,14 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const avgInterTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]);
     const avgTimePerOutputTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:request_time_per_output_token_seconds", "sglang:request_time_per_output_token_seconds"]);
     const sglangActiveAverage = tokensPerSecondFromSeconds(avgTimePerOutputTokenSeconds || avgInterTokenSeconds);
-    const sglangGenerationThroughput = firstMetricValue(scoped, "sglang:gen_throughput") || 0;
     const resolvedSglangThroughput = hasSglangMetrics
-      ? resolveSglangGenerationThroughput(
-        `${options.runtimeSampleKey || options.engine || "sglang"}:${name}`,
-        sglangGenerationThroughput,
-        sglangActiveAverage,
+      ? resolveSglangOutputSpeed({
+        gauge: firstMetricValue(scoped, "sglang:gen_throughput") || 0,
+        running: firstMetricValue(scoped, "sglang:num_running_reqs") || 0,
+        hasGenerationCounter: scoped.some((metric) => metric.name === "sglang:generation_tokens_total"),
+        windowRate: recent.recentOutputTokensPerSecond,
         nowSeconds,
-        options.updateSamples !== false,
-      )
+      })
       : null;
     const speculativeMode = hasSglangMetrics
       ? (sglangSpecAcceptLength > 0 || sglangSpecNumDraftTokens > 0
@@ -4522,10 +4520,11 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
       },
       speed: {
         ...recent,
+        windowSeconds: Number(recent.windowSeconds || 0),
         recentOutputTokensPerSecond: hasSglangMetrics
           ? resolvedSglangThroughput.value
           : recent.recentOutputTokensPerSecond,
-        outputSource: hasSglangMetrics ? resolvedSglangThroughput.source : "counter_delta",
+        outputSource: hasSglangMetrics ? resolvedSglangThroughput.source : "counter_window",
         outputObservedAt: hasSglangMetrics ? resolvedSglangThroughput.observedAt : null,
         averageOutputTokensPerSecond: hasSglangMetrics
           ? sglangActiveAverage
@@ -4570,22 +4569,29 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
   return models.sort((a, b) => b.tokens.total - a.tokens.total);
 }
 
-function resolveSglangGenerationThroughput(key, currentValue, activeAverage, nowSeconds, updateSample = true) {
-  const value = Math.max(0, Number(currentValue || 0));
-  const previous = sglangThroughputSamples.get(key);
-  if (value > 0) {
-    const sample = { value, observedAt: nowSeconds };
-    if (updateSample) sglangThroughputSamples.set(key, sample);
-    return { ...sample, source: "sglang_live_gauge" };
+// SGLang output speed (08 P0-7). sglang:gen_throughput is a gauge the
+// scheduler only updates while it decodes, so an idle engine keeps showing the
+// last burst. The gauge counts only while requests run; otherwise the speed is
+// the counter window, or 0 on a build that exports no generation counter.
+function resolveSglangOutputSpeed({ gauge = 0, running = 0, hasGenerationCounter = false, windowRate = 0, nowSeconds = null } = {}) {
+  const value = Math.max(0, Number(gauge || 0));
+  if (Number(running || 0) > 0 && value > 0) {
+    return { value, observedAt: nowSeconds, source: "sglang_gen_throughput_gauge" };
   }
-  if (previous) {
-    return { ...previous, source: "sglang_recent_gauge" };
+  if (hasGenerationCounter) {
+    return { value: Math.max(0, Number(windowRate || 0)), observedAt: null, source: "counter_window" };
   }
-  const fallback = Math.max(0, Number(activeAverage || 0));
-  if (fallback > 0) {
-    return { value: fallback, observedAt: null, source: "sglang_active_average" };
-  }
-  return { value: 0, observedAt: null, source: "unavailable" };
+  return { value: 0, observedAt: null, source: "sglang_gen_throughput_gauge" };
+}
+
+// aggregateStats keeps its shape; the totals also carry the longest per-model
+// window so the summary can label its "{n} s average" (08 P0-7).
+function withSpeedWindowSeconds(totals, models) {
+  if (!totals?.speed) return totals;
+  const windows = (models || [])
+    .map((model) => Number(model?.speed?.windowSeconds || 0))
+    .filter((value) => value > 0);
+  return { ...totals, speed: { ...totals.speed, windowSeconds: windows.length ? Math.max(...windows) : 0 } };
 }
 
 function firstNonZeroMetricSum(metrics, names) {
@@ -5403,6 +5409,7 @@ module.exports = {
   normalizeModelConfig,
   summarizeModelConfigCapabilities,
   buildModelStats,
+  withSpeedWindowSeconds,
   buildSglangRuntimeFacts,
   createLatestRuntimeFactsReader,
   getModelConfigRequest,

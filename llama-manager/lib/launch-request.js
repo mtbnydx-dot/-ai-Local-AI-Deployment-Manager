@@ -59,13 +59,25 @@ function createLlamaStartRuntimeRequest(deps) {
     buildRuntimeContainerName = (base, mode, id) => mode === "parallel" ? `${base}-${id}` : base,
     resolveLaunchModel = null,
     validateRuntimeCompatibility = null,
+    appendLog = () => {},
   } = deps;
 
   return async function startRuntimeRequest({ body = {} } = {}) {
     const model = resolveRequestedModel(cleanRequired(body.model, "model"));
     const launchResolution = typeof resolveLaunchModel === "function" ? resolveLaunchModel(model, "gguf") : null;
+    // An unverified architecture (supported === null) still launches; the start
+    // job carries the message so a failure can be traced to it (08 P0-15).
+    let unverifiedCompatibility = null;
     if (launchResolution?.selectedModel && typeof validateRuntimeCompatibility === "function") {
       const compatibility = await validateRuntimeCompatibility(launchResolution.selectedModel.architecture);
+      if (compatibility?.supported === null) {
+        unverifiedCompatibility = {
+          architecture: compatibility.architecture || launchResolution.selectedModel.architecture || "",
+          status: compatibility.status || "unknown",
+          supported: null,
+          message: String(compatibility.message || ""),
+        };
+      }
       if (compatibility?.supported === false) {
         const error = new Error(compatibility.message || `The configured llama.cpp runtime does not support ${launchResolution.selectedModel.architecture}.`);
         error.code = "llama_runtime_arch_unsupported";
@@ -284,6 +296,7 @@ function createLlamaStartRuntimeRequest(deps) {
         topK,
         hasApiKey: Boolean(llamaApiKey),
         gpuAdmission: admission,
+        ...(unverifiedCompatibility ? { runtimeCompatibility: unverifiedCompatibility } : {}),
       });
     } catch (error) {
       try {
@@ -293,6 +306,7 @@ function createLlamaStartRuntimeRequest(deps) {
       }
       throw error;
     }
+    if (unverifiedCompatibility?.message) appendLog(job, unverifiedCompatibility.message);
 
     const runOptions = {
       model,

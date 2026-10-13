@@ -508,6 +508,7 @@ test("runtime metrics use vLLM counters and SGLang native speculative gauges wit
     'sglang:spec_num_steps{model_name="qwen"} 1',
     'sglang:spec_num_draft_tokens{model_name="qwen"} 7',
     'sglang:gen_throughput{model_name="qwen"} 212.4',
+    'sglang:num_running_reqs{model_name="qwen"} 1',
     'sglang:max_total_num_tokens{model_name="qwen"} 373883',
     'sglang:inter_token_latency_seconds_sum{model_name="qwen"} 1',
     'sglang:inter_token_latency_seconds_count{model_name="qwen"} 100',
@@ -572,49 +573,47 @@ test("Docker creation timestamps provide a stable process fallback for runtimes 
   assert.equal(manager.parseDockerCreatedAtSeconds("not-a-date"), null);
 });
 
-test("SGLang speed keeps the last real gauge and falls back to the active average", () => {
-  const liveMetrics = manager.parsePrometheusMetrics([
-    'sglang:generation_tokens_total{model_name="qwen-speed-cache"} 200',
-    'sglang:gen_throughput{model_name="qwen-speed-cache"} 145.5',
+test("SGLang speed uses the gauge only while requests run, then the counter window (08 P0-7)", () => {
+  const servedById = { "qwen-speed-cache": { id: "qwen-speed-cache" } };
+  const sglangMetrics = (generated, gauge, running) => manager.parsePrometheusMetrics([
+    `sglang:generation_tokens_total{model_name="qwen-speed-cache"} ${generated}`,
+    `sglang:gen_throughput{model_name="qwen-speed-cache"} ${gauge}`,
+    `sglang:num_running_reqs{model_name="qwen-speed-cache"} ${running}`,
   ].join("\n"));
-  const [live] = manager.buildModelStats(liveMetrics, { "qwen-speed-cache": { id: "qwen-speed-cache" } }, {}, 1000, {
+  const [live] = manager.buildModelStats(sglangMetrics(200, 145.5, 2), servedById, {}, 1000, {
     updateSamples: true,
     engine: "sglang",
   });
   assert.equal(live.speed.recentOutputTokensPerSecond, 145.5);
-  assert.equal(live.speed.outputSource, "sglang_live_gauge");
+  assert.equal(live.speed.outputSource, "sglang_gen_throughput_gauge");
+  assert.equal(live.speed.outputObservedAt, 1000);
 
-  const idleMetrics = manager.parsePrometheusMetrics([
-    'sglang:generation_tokens_total{model_name="qwen-speed-cache"} 2200',
-    'sglang:gen_throughput{model_name="qwen-speed-cache"} 0',
-  ].join("\n"));
-  const [recent] = manager.buildModelStats(idleMetrics, { "qwen-speed-cache": { id: "qwen-speed-cache" } }, {}, 1005, {
+  // Idle: the gauge still holds the last burst, but the speed is the window.
+  const [idle] = manager.buildModelStats(sglangMetrics(2200, 145.5, 0), servedById, {}, 1061, {
     updateSamples: true,
     engine: "sglang",
   });
-  assert.equal(recent.speed.recentOutputTokensPerSecond, 145.5);
-  assert.equal(recent.speed.outputSource, "sglang_recent_gauge");
-
-  const [stillRecent] = manager.buildModelStats(idleMetrics, { "qwen-speed-cache": { id: "qwen-speed-cache" } }, {}, 1061, {
-    updateSamples: true,
-    engine: "sglang",
-  });
-  assert.equal(stillRecent.speed.recentOutputTokensPerSecond, 145.5);
-  assert.equal(stillRecent.speed.outputSource, "sglang_recent_gauge");
+  assert.equal(idle.speed.outputSource, "counter_window");
+  assert.equal(idle.speed.windowSeconds, 61);
+  assert.equal(idle.speed.recentOutputTokensPerSecond, 2000 / 61);
+  assert.equal(idle.speed.outputObservedAt, null);
 
   const averageOnlyMetrics = manager.parsePrometheusMetrics([
     'sglang:generation_tokens_total{model_name="qwen-average-only"} 1000',
     'sglang:gen_throughput{model_name="qwen-average-only"} 0',
+    'sglang:num_running_reqs{model_name="qwen-average-only"} 0',
     'sglang:inter_token_latency_seconds_sum{model_name="qwen-average-only"} 10',
     'sglang:inter_token_latency_seconds_count{model_name="qwen-average-only"} 1000',
   ].join("\n"));
   const [averageOnly] = manager.buildModelStats(averageOnlyMetrics, { "qwen-average-only": { id: "qwen-average-only" } }, {}, 2000, {
     updateSamples: true,
     engine: "sglang",
-    runtimeSampleKey: "fresh-runtime",
   });
-  assert.equal(averageOnly.speed.recentOutputTokensPerSecond, 100);
-  assert.equal(averageOnly.speed.outputSource, "sglang_active_average");
+  // The active average stays an average; it is never shown as the current speed.
+  assert.equal(averageOnly.speed.averageOutputTokensPerSecond, 100);
+  assert.equal(averageOnly.speed.recentOutputTokensPerSecond, 0);
+  assert.equal(averageOnly.speed.outputSource, "counter_window");
+  assert.equal(averageOnly.speed.windowSeconds, 0);
 });
 
 test("local model config request accepts the frontend local source", async () => {

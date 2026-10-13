@@ -380,6 +380,18 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
         : `${capability.label} 需要 llama.cpp b${minimumBuild}，但无法读取当前镜像版本。`,
     };
   }
+  // An architecture the matrix does not list is unknown, never "compatible"
+  // (00 §4.4, 08 P0-15). Launch still goes ahead; the start job logs this.
+  if (normalized && !capability.entry) {
+    return {
+      architecture: normalized,
+      status: "unknown",
+      supported: null,
+      runtime,
+      capability: summary,
+      message: `${normalized} 不在已验证的架构列表中，能否运行取决于当前 llama.cpp 版本。 / ${normalized} is not in the verified architecture list. Whether it runs depends on the current llama.cpp build.`,
+    };
+  }
   return {
     architecture: normalized,
     status: "not-required",
@@ -388,9 +400,7 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
     capability: summary,
     speculative: llamaCapabilities?.speculative || null,
     message: normalized
-      ? capability.entry
-        ? `${capability.label}：未配置额外的最低 llama.cpp 版本限制。`
-        : `未为 ${normalized} 配置额外的最低 llama.cpp 版本限制。`
+      ? `${capability.label}：未配置额外的最低 llama.cpp 版本限制。`
       : "没有可检查的 GGUF architecture。",
   };
 }
@@ -499,7 +509,6 @@ const {
   normalizeDefaultTrueBoolean,
   windowsPathToContainerPath,
   resolveLaunchModel,
-  validateRuntimeCompatibility: getLlamaArchitectureRuntimeCompatibility,
 });
 
 const jobs = new Map();
@@ -1425,6 +1434,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   normalizeRuntimeInstanceId: core.normalizeRuntimeInstanceId,
   buildRuntimeContainerName: core.buildRuntimeContainerName,
   resolveLaunchModel,
+  validateRuntimeCompatibility: getLlamaArchitectureRuntimeCompatibility,
+  appendLog,
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller
@@ -2984,7 +2995,8 @@ async function collectStats() {
     ...(await cacheHitTracker.getSummary()),
     error: error.message,
   }));
-  const summary = core.mergeLiveAndStatsLedger(liveSummary, ledger);
+  const merged = core.mergeLiveAndStatsLedger(liveSummary, ledger);
+  const summary = { ...merged, totals: withSpeedWindowSeconds(merged.totals, merged.models) };
   const pricing = core.loadModelPricing();
   const costComparison = priceProfiles().map((profile) => calculateCost(summary.totals.tokens, profile));
   const clientUsage = buildClientUsageSummary(summary.totals, ledger);
@@ -3071,7 +3083,7 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const nowSeconds = Date.now() / 1000;
   const uptimeSeconds = processStartSeconds ? Math.max(0, nowSeconds - processStartSeconds) : null;
   const models = buildModelStats(metrics, servedById, facts, nowSeconds, options);
-  const totals = aggregateStats(models, uptimeSeconds);
+  const totals = withSpeedWindowSeconds(aggregateStats(models, uptimeSeconds), models);
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
 
   return {
@@ -3170,10 +3182,15 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
           || (requestCount ? generationTokens / requestCount : null),
         requestedMaxTokens: histogramAverage(scoped, "vllm:request_params_max_tokens"),
       },
+      // llamacpp:*_tokens_seconds are averages since the server started, so
+      // they only feed the averages; the recent rates come from the token
+      // counters through the sampling window (08 P0-7).
       speed: {
         ...recent,
-        recentPromptTokensPerSecond: firstMetricValue(scoped, "llamacpp:prompt_tokens_seconds") || recent.recentPromptTokensPerSecond,
-        recentOutputTokensPerSecond: firstMetricValue(scoped, "llamacpp:predicted_tokens_seconds") || recent.recentOutputTokensPerSecond,
+        windowSeconds: Number(recent.windowSeconds || 0),
+        outputSource: "counter_window",
+        outputObservedAt: null,
+        averagePromptTokensPerSecond: firstMetricValue(scoped, "llamacpp:prompt_tokens_seconds") || null,
         averageOutputTokensPerSecond: firstMetricValue(scoped, "llamacpp:predicted_tokens_seconds")
           || tokensPerSecondFromSeconds(histogramAverage(scoped, "vllm:request_time_per_output_token_seconds")),
         lifetimeTokensPerSecond: null,
@@ -3196,6 +3213,16 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     });
   }
   return models.sort((a, b) => b.tokens.total - a.tokens.total);
+}
+
+// aggregateStats keeps its shape; the totals also carry the longest per-model
+// window so the summary can label its "{n} s average" (08 P0-7).
+function withSpeedWindowSeconds(totals, models) {
+  if (!totals?.speed) return totals;
+  const windows = (models || [])
+    .map((model) => Number(model?.speed?.windowSeconds || 0))
+    .filter((value) => value > 0);
+  return { ...totals, speed: { ...totals.speed, windowSeconds: windows.length ? Math.max(...windows) : 0 } };
 }
 
 function buildClientUsageSummary(totals, ledger) {
@@ -3833,6 +3860,8 @@ module.exports = {
   extractHostname,
   runtimeMatchesServiceGatewayInstance,
   buildLlamaMemoryEstimate,
+  buildModelStats,
+  withSpeedWindowSeconds,
   resolveLaunchModel,
   getLlamaArchitectureRuntimeCompatibility,
   evaluateLlamaArchitectureRuntimeCompatibility,

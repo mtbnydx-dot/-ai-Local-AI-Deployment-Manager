@@ -382,6 +382,24 @@ test("runtime compatibility keeps retired Muse blocked without deleting rollback
   assert.equal(manager.evaluateLlamaArchitectureRuntimeCompatibility("llama", {}).status, "not-required");
 });
 
+test("an architecture missing from the capability matrix is unknown, not compatible (08 P0-15)", () => {
+  const unknown = manager.evaluateLlamaArchitectureRuntimeCompatibility("Made-Up-Arch-P0", { buildNumber: 10630 });
+  assert.equal(unknown.status, "unknown");
+  assert.equal(unknown.supported, null);
+  assert.equal(unknown.architecture, "made-up-arch-p0");
+  assert.equal(
+    unknown.message,
+    "made-up-arch-p0 不在已验证的架构列表中，能否运行取决于当前 llama.cpp 版本。 / made-up-arch-p0 is not in the verified architecture list. Whether it runs depends on the current llama.cpp build.",
+  );
+  // A known architecture without a minimum build and an empty one keep not-required.
+  const known = manager.evaluateLlamaArchitectureRuntimeCompatibility("qwen3", {});
+  assert.equal(known.status, "not-required");
+  assert.equal(known.supported, true);
+  const empty = manager.evaluateLlamaArchitectureRuntimeCompatibility("", {});
+  assert.equal(empty.status, "not-required");
+  assert.equal(empty.supported, true);
+});
+
 test("memory estimate consumes GGUF variant metadata and component bytes", () => {
   const variant = {
     path: "D:/AI/models/muse/model.gguf",
