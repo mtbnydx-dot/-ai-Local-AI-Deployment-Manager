@@ -842,7 +842,7 @@ core.registerManagerRoutes(app, {
   idleUnload: {
     listSleeping: () => idleUnloadController.listSleeping(),
     saveSettings: (body) => idleUnloadController.saveSettings(body),
-    wake: (id) => idleUnloadController.wake(id),
+    wake: (id, options) => idleUnloadController.wake(id, options),
     forget: (id) => idleUnloadController.forget(id),
   },
   listBenchmarkRuns: (query) => benchmarkHistoryStore.listBenchmarkRuns(query),
@@ -1441,18 +1441,28 @@ const idleUnloadController = core.createIdleUnloadController({
       activeRequests: Number(instance.activeRequests || 0),
       queuedRequests: Number(instance.queuedRequests || 0),
       vramReservationMb: Number(instance.vramReservationMb || 0),
+      instanceMode: instance.instanceMode,
       launchConfig: null,
     }));
   },
-  findLaunchConfig: (instance) => {
-    const model = String(instance.model || "").toLowerCase();
-    const match = recentLaunches.find((item) => String(item.model || "").toLowerCase() === model);
-    return match ? match.config : null;
-  },
   stopInstance: (instance) => stopRuntimeInstanceRequest({ id: instance.id }),
-  startRuntime: (config) => startRuntimeRequest(config),
   readLegacySettings: () => automationSettingsStore.getAutomationSettings(),
   log: (message) => console.log(`[idle-unload] ${message}`),
+  // Wake (08 P0-1): the launch record is matched by container, path, then
+  // served name; the API key is kept across sleep in the runtime secret store;
+  // a wake never replaces a running model without the explicit confirm.
+  ...core.createIdleWakeHooks({
+    managerId: CONFIG.managerId,
+    primaryContainerName: CONFIG.containerName,
+    managerLabelKey: MANAGER_LABEL_KEY,
+    apiKeyRefLabelKey: MANAGER_APIKEY_REF_LABEL_KEY,
+    apiKeyLabelKey: MANAGER_APIKEY_LABEL_KEY,
+    listRecentLaunches: () => recentLaunches,
+    getContainerStatus: (containerName) => getContainerStatusFresh(containerName),
+    secretStore: runtimeApiKeyStore,
+    startRuntimeRequest: (request) => startRuntimeRequest(request),
+    toContainerPath: (value) => windowsPathToContainerPath(value),
+  }),
 });
 
 // One check a minute is enough resolution for a timeout measured in tens of
@@ -1546,6 +1556,13 @@ function recordRecentLaunch(meta) {
     model: config.model,
     name: config.name || deriveName(config.model),
     launchedAt: new Date().toISOString(),
+    // Where the instance ran, so an idle wake puts it back in the same slot
+    // (08 P0-1). The config shape itself is unchanged.
+    ...(meta.instanceMode ? {
+      containerName: String(meta.containerName || ""),
+      instanceMode: meta.instanceMode === "parallel" ? "parallel" : "replace",
+      instanceId: String(meta.instanceId || ""),
+    } : {}),
     config,
   };
   const key = `${entry.model}::${entry.name}`;

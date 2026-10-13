@@ -1,5 +1,7 @@
 "use strict";
 
+const { buildRuntimeContainerName } = require("./runtime-instance-utils");
+
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: false,
   idleMinutes: 30,
@@ -47,6 +49,25 @@ function normalizeIdleUnloadSettings(value = {}, previous = DEFAULT_SETTINGS) {
   };
 }
 
+// Where a released instance ran. A record without one (written before wake
+// kept placement) is treated as the primary replace slot, under the guard.
+function normalizeWakePlacement(value) {
+  if (!value || typeof value !== "object") return null;
+  const mode = String(value.instanceMode || "").trim().toLowerCase();
+  if (mode !== "replace" && mode !== "parallel") return null;
+  return {
+    instanceMode: mode,
+    instanceId: String(value.instanceId || "").trim().slice(0, 64),
+    containerName: String(value.containerName || "").trim().slice(0, 200),
+  };
+}
+
+// Only the opaque runtime-secret-store reference is ever kept in the ledger.
+function normalizeWakeSecretRef(value) {
+  const reference = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{8,160}$/.test(reference) ? reference : "";
+}
+
 function normalizeSleepRecord(value = {}) {
   if (!value || typeof value !== "object") return null;
   const id = String(value.id || "").trim();
@@ -64,8 +85,25 @@ function normalizeSleepRecord(value = {}) {
     vramMb: finiteNumber(value.vramMb, 0),
     wakeFailedAt: value.wakeFailedAt && Date.parse(value.wakeFailedAt) ? value.wakeFailedAt : null,
     wakeError: String(value.wakeError || "").slice(0, 500),
+    placement: normalizeWakePlacement(value.placement),
+    secretRef: normalizeWakeSecretRef(value.secretRef),
+    hasApiKey: Boolean(value.hasApiKey),
     config: value.config,
   };
+}
+
+function wakeRefusal(status, code, message, details) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  if (details) error.details = details;
+  return error;
+}
+
+const WAKE_API_KEY_MISSING_MESSAGE = "原 API Key 已不可用，请从启动页重新启动该模型。/ The original API key is no longer available. Start the model again from the launch page.";
+
+function wakeWouldReplaceMessage(model) {
+  return `唤醒会替换正在运行的 ${model}。/ Waking would replace the running model ${model}.`;
 }
 
 function normalizeSleepLedger(value = {}) {
@@ -85,6 +123,14 @@ function createIdleUnloadController(options = {}) {
   const stopInstance = options.stopInstance;
   const startRuntime = options.startRuntime;
   const findLaunchConfig = options.findLaunchConfig || (() => null);
+  // Optional wake hooks (08 P0-1). findWakePlan replaces findLaunchConfig when
+  // present; the secret hooks keep an instance's API key across sleep through
+  // the runtime secret store; canWake guards against replacing a running model.
+  const findWakePlan = typeof options.findWakePlan === "function" ? options.findWakePlan : null;
+  const canWake = typeof options.canWake === "function" ? options.canWake : null;
+  const prepareWakeSecrets = typeof options.prepareWakeSecrets === "function" ? options.prepareWakeSecrets : null;
+  const resolveWakeSecrets = typeof options.resolveWakeSecrets === "function" ? options.resolveWakeSecrets : null;
+  const releaseWakeSecrets = typeof options.releaseWakeSecrets === "function" ? options.releaseWakeSecrets : null;
   const now = options.now || (() => Date.now());
   const log = options.log || (() => {});
   if (!settingsFile || !sleepFile || typeof readJsonFile !== "function" || typeof writeJsonFile !== "function") {
@@ -154,8 +200,26 @@ function createIdleUnloadController(options = {}) {
     return {
       ok: true,
       settings: await getSettings(),
-      sleeping: ledger.sleeping.map(({ config, ...rest }) => ({ ...rest, hasConfig: Boolean(config) })),
+      // Neither the config nor the secret-store reference leaves the manager.
+      sleeping: ledger.sleeping.map(({ config, secretRef: _secretRef, ...rest }) => ({ ...rest, hasConfig: Boolean(config) })),
     };
+  }
+
+  // A wake key lives in the runtime secret store only while its record does,
+  // so every path that drops a record (wake, forget, clearFor, replacement,
+  // the ledger cap) releases it. Release failures are logged, never thrown.
+  async function releaseSecretsFor(records) {
+    if (!releaseWakeSecrets) return;
+    const seen = new Set();
+    for (const record of records) {
+      if (!record?.secretRef || seen.has(record.secretRef)) continue;
+      seen.add(record.secretRef);
+      try {
+        await releaseWakeSecrets(record);
+      } catch (error) {
+        log(`idle-unload could not release the wake key of ${record.model}: ${error.message}`);
+      }
+    }
   }
 
   function instanceKey(instance) {
@@ -192,14 +256,34 @@ function createIdleUnloadController(options = {}) {
   }
 
   async function sleepInstance(instance, context = {}) {
-    const config = instance.launchConfig || await findLaunchConfig(instance);
+    const plan = findWakePlan ? await findWakePlan(instance) : null;
+    const config = instance.launchConfig || (findWakePlan ? plan?.config : await findLaunchConfig(instance));
     if (!config || !config.model) {
       // Without a reproducible launch spec an unload would be a one-way stop,
       // so the runtime is left alone and the reason is reported once.
       log(`idle-unload skipped ${instance.model || instance.containerName}: launch configuration unavailable`);
       return { ok: false, reason: "launch_config_unavailable" };
     }
-    await stopInstance(instance);
+    // Stopping removes the container's key from the secret store, so it is
+    // copied under a wake ref first. A key that cannot be read makes the
+    // release one-way, and the runtime keeps running instead.
+    let secrets = null;
+    if (prepareWakeSecrets) {
+      try {
+        secrets = await prepareWakeSecrets(instance);
+      } catch (error) {
+        if (error?.code !== "api_key_unavailable") throw error;
+        log(`idle-unload skipped ${instance.model || instance.containerName}: API key unavailable`);
+        return { ok: false, reason: "api_key_unavailable" };
+      }
+    }
+    const secretRef = normalizeWakeSecretRef(secrets?.secretRef);
+    try {
+      await stopInstance(instance);
+    } catch (error) {
+      await releaseSecretsFor([{ model: instance.model, secretRef }]);
+      throw error;
+    }
     const ledger = await readLedger();
     const record = normalizeSleepRecord({
       id: instance.id || instance.containerName,
@@ -211,10 +295,16 @@ function createIdleUnloadController(options = {}) {
       reason: context.reason || "idle",
       idleMinutes: context.idleMinutes || 0,
       vramMb: instance.vramReservationMb,
+      placement: plan?.placement,
+      secretRef,
+      hasApiKey: Boolean(secretRef),
       config,
     });
-    ledger.sleeping = [record, ...ledger.sleeping.filter((item) => item.id !== record.id)].slice(0, 50);
+    const kept = [record, ...ledger.sleeping.filter((item) => item.id !== record.id)].slice(0, 50);
+    const dropped = ledger.sleeping.filter((item) => !kept.includes(item));
+    ledger.sleeping = kept;
     await writeLedger(ledger);
+    await releaseSecretsFor(dropped);
     forgetInstance(instance);
     log(`idle-unload released ${record.model} after ${Math.round(record.idleMinutes)} min idle; configuration kept for wake`);
     return { ok: true, record };
@@ -271,11 +361,49 @@ function createIdleUnloadController(options = {}) {
         error.status = 404;
         throw error;
       }
+      // Refusals below happen before anything starts, so the record is left
+      // exactly as it was and the caller can act on the code.
+      let apiKey = "";
+      if (resolveWakeSecrets && (record.secretRef || record.hasApiKey)) {
+        const resolved = await resolveWakeSecrets(record);
+        apiKey = String(resolved?.apiKey || "");
+      }
+      if (record.hasApiKey && !apiKey) {
+        throw wakeRefusal(409, "wake_api_key_missing", WAKE_API_KEY_MISSING_MESSAGE);
+      }
+      // Waking must never replace a running model implicitly; only the UI's
+      // explicit confirm sends confirmReplace.
+      if (canWake && wakeOptions.confirmReplace !== true) {
+        const verdict = await canWake(record);
+        if (verdict && verdict.ok === false) {
+          const runningModel = verdict.details?.runningModel || "";
+          throw wakeRefusal(
+            verdict.status || 409,
+            verdict.code || "wake_would_replace_running",
+            verdict.message || wakeWouldReplaceMessage(runningModel || record.model),
+            verdict.details,
+          );
+        }
+      }
+      // A legacy record has no placement and goes back to the replace slot.
+      const placement = record.placement;
+      const body = {
+        ...record.config,
+        instanceMode: placement?.instanceMode || "replace",
+        instanceId: placement?.instanceId || "",
+        apiKey,
+        ...(wakeOptions.overrides || {}),
+      };
       try {
-        const job = await startRuntime({ ...record.config, ...(wakeOptions.overrides || {}) });
+        const started = await startRuntime(body);
+        // The launch handler answers { job }; the wake response carries the job.
+        const job = started && typeof started === "object" && started.job ? started.job : started;
         const next = await readLedger();
+        const removed = next.sleeping.filter((item) => item.id === target);
         next.sleeping = next.sleeping.filter((item) => item.id !== target);
         await writeLedger(next);
+        // The launch saved the key under the new container's own ref.
+        await releaseSecretsFor([record, ...removed]);
         log(`idle-unload woke ${record.model}`);
         return { ok: true, id: target, model: record.model, job };
       } catch (error) {
@@ -296,9 +424,11 @@ function createIdleUnloadController(options = {}) {
     const target = String(id || "").trim();
     const ledger = await readLedger();
     const before = ledger.sleeping.length;
+    const removed = ledger.sleeping.filter((item) => item.id === target);
     ledger.sleeping = ledger.sleeping.filter((item) => item.id !== target);
     if (ledger.sleeping.length === before) return { ok: false, removed: 0 };
     await writeLedger(ledger);
+    await releaseSecretsFor(removed);
     return { ok: true, removed: before - ledger.sleeping.length };
   }
 
@@ -310,8 +440,10 @@ function createIdleUnloadController(options = {}) {
     const ledger = await readLedger();
     const filtered = ledger.sleeping.filter((item) => String(item.model || "").toLowerCase() !== needle);
     if (filtered.length !== ledger.sleeping.length) {
+      const removed = ledger.sleeping.filter((item) => !filtered.includes(item));
       ledger.sleeping = filtered;
       await writeLedger(ledger);
+      await releaseSecretsFor(removed);
     }
   }
 
@@ -338,8 +470,158 @@ function createIdleUnloadController(options = {}) {
   };
 }
 
+function normalizePathKey(value) {
+  return String(value || "").trim().replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+}
+
+// The servers' implementation of the wake hooks, shared by both managers so
+// the matching, the guard and the secret handling cannot drift apart. The
+// launch record keeps the host path while a running instance reports the
+// container path, so toContainerPath maps one onto the other for matching.
+function createIdleWakeHooks(options = {}) {
+  const {
+    managerId = "",
+    primaryContainerName,
+    managerLabelKey = "ai.manager",
+    apiKeyRefLabelKey = "ai.manager.api-key-ref",
+    apiKeyLabelKey = "ai.manager.api-key",
+    modelLabelKey = "ai.manager.model",
+    listRecentLaunches = () => [],
+    getContainerStatus,
+    secretStore,
+    startRuntimeRequest,
+    toContainerPath = (value) => value,
+    buildContainerName = buildRuntimeContainerName,
+  } = options;
+  if (!primaryContainerName || typeof getContainerStatus !== "function" || typeof startRuntimeRequest !== "function"
+    || !secretStore || typeof secretStore.get !== "function" || typeof secretStore.set !== "function"
+    || typeof secretStore.remove !== "function") {
+    throw new Error("createIdleWakeHooks requires primaryContainerName, getContainerStatus, startRuntimeRequest and a secret store.");
+  }
+
+  function pathMatches(entryModel, instancePath) {
+    if (!entryModel || !instancePath) return false;
+    let mapped = "";
+    try {
+      mapped = toContainerPath(entryModel);
+    } catch {
+      mapped = "";
+    }
+    return [entryModel, mapped].some((candidate) => candidate && normalizePathKey(candidate) === instancePath);
+  }
+
+  function placementFor(entry, instance) {
+    if (entry.instanceMode) {
+      return normalizeWakePlacement({
+        instanceMode: entry.instanceMode,
+        instanceId: entry.instanceId,
+        containerName: entry.containerName,
+      });
+    }
+    // Launch records written before placement was kept: use where the
+    // instance is actually running.
+    if (instance.instanceMode) {
+      return normalizeWakePlacement({
+        instanceMode: instance.instanceMode,
+        instanceId: instance.instanceId || (instance.id && instance.id !== "primary" ? instance.id : ""),
+        containerName: instance.containerName,
+      });
+    }
+    return null;
+  }
+
+  // Matching order (08 P0-1): container name, then model path, then served
+  // name. The primary slot is shared by every model ever launched into it, so
+  // a container-name match must also agree on the served name when one is known.
+  async function findWakePlan(instance = {}) {
+    const launches = (await listRecentLaunches() || []).filter((entry) => entry && entry.config && entry.config.model);
+    const containerName = String(instance.containerName || "");
+    const served = String(instance.model || "");
+    const instancePath = normalizePathKey(instance.name);
+    const entry = (containerName && launches.find((item) => item.containerName === containerName
+      && (!served || item.name === served || item.config.name === served)))
+      || (instancePath && launches.find((item) => pathMatches(item.model, instancePath)))
+      || (served && launches.find((item) => String(item.config.name || "") === served))
+      || null;
+    if (!entry) return null;
+    return { config: entry.config, placement: placementFor(entry, instance) };
+  }
+
+  async function canWake(record = {}) {
+    const placement = record.placement;
+    const parallel = placement?.instanceMode === "parallel";
+    const containerName = parallel
+      ? placement.containerName || buildContainerName(primaryContainerName, "parallel", placement.instanceId || record.config?.name || "")
+      : primaryContainerName;
+    const container = await getContainerStatus(containerName);
+    if (!container?.exists || !container.running) return { ok: true };
+    const owner = String(container.labels?.[managerLabelKey] || "");
+    // Replace placement (or a legacy record) only conflicts with the primary
+    // container this manager owns; a parallel slot conflicts with anything
+    // running under its name.
+    if (!parallel && owner && managerId && owner !== managerId) return { ok: true };
+    const runningModel = String(container.labels?.[modelLabelKey] || "").trim() || containerName;
+    return {
+      ok: false,
+      status: 409,
+      code: "wake_would_replace_running",
+      message: wakeWouldReplaceMessage(runningModel),
+      details: { runningModel, runningContainer: containerName },
+    };
+  }
+
+  async function prepareWakeSecrets(instance = {}) {
+    const container = await getContainerStatus(instance.containerName);
+    const labels = container?.labels || {};
+    const reference = String(labels[apiKeyRefLabelKey] || "").trim();
+    const legacyKey = String(labels[apiKeyLabelKey] || "").trim();
+    if (!reference && !legacyKey) return null;
+    let key = legacyKey;
+    if (reference) {
+      try {
+        key = String(secretStore.get(reference) || "");
+      } catch {
+        key = "";
+      }
+    }
+    if (!key) {
+      const error = new Error("The runtime API key of this instance cannot be read, so it is not released.");
+      error.code = "api_key_unavailable";
+      throw error;
+    }
+    const secretRef = await secretStore.set(key);
+    if (!secretRef) {
+      const error = new Error("The runtime API key could not be kept for wake, so the instance is not released.");
+      error.code = "api_key_unavailable";
+      throw error;
+    }
+    return { secretRef };
+  }
+
+  async function resolveWakeSecrets(record = {}) {
+    if (!record.secretRef) return { apiKey: "" };
+    return { apiKey: String(secretStore.get(record.secretRef) || "") };
+  }
+
+  async function releaseWakeSecrets(record = {}) {
+    if (record.secretRef) await secretStore.remove(record.secretRef);
+  }
+
+  return {
+    // The launch handler takes { body }; wake hands it the start body.
+    startRuntime: (body) => startRuntimeRequest({ body }),
+    findWakePlan,
+    canWake,
+    prepareWakeSecrets,
+    resolveWakeSecrets,
+    releaseWakeSecrets,
+  };
+}
+
 module.exports = {
   DEFAULT_IDLE_UNLOAD_SETTINGS: DEFAULT_SETTINGS,
+  createIdleWakeHooks,
+  normalizeWakePlacement,
   normalizeIdleUnloadSettings,
   normalizeSleepLedger,
   normalizeSleepRecord,

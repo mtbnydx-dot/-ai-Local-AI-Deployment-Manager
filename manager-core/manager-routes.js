@@ -267,12 +267,20 @@ function registerManagerRoutes(app, deps = {}) {
     });
 
     // Waking restarts a container, so it returns the serve job the caller can
-    // follow rather than blocking until the model is loaded.
+    // follow rather than blocking until the model is loaded. Replacing a
+    // running model needs the explicit { confirmReplace: true } (08 P0-1);
+    // refusals carry a stable code and details.
     app.post("/api/idle-unload/:id/wake", async (req, res) => {
       try {
-        res.json(await idleUnload.wake(req.params.id));
+        const confirmReplace = req.body?.confirmReplace === true;
+        res.json(await idleUnload.wake(req.params.id, { confirmReplace }));
       } catch (error) {
-        res.status(error.status || 500).json({ ok: false, error: error.message });
+        res.status(error.status || 500).json({
+          ok: false,
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+          ...(error.details ? { details: error.details } : {}),
+        });
       }
     });
 
