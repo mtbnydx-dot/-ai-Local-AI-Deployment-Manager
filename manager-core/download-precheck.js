@@ -11,6 +11,11 @@ const { getRuntimeRelease } = require("./runtime-manifest");
 
 const SEVERITY_RANK = { ok: 0, info: 1, warn: 2, block: 3 };
 const SHARD_PATTERN = /-(\d{5})-of-(\d{5})\.gguf$/i;
+// zh source strings; the UI translates them through shared-public/js/i18n-common.js
+// ("Inferred from the name (unverified)", "Enable trust-remote-code in the
+// launch options (this runs Python code from the repository).").
+const NAME_INFERRED_CONFIDENCE = "按名称推断（未验证）";
+const TRUST_REMOTE_CODE_DETAIL = "需要在启动参数中勾选 trust-remote-code（会执行仓库内的 Python 代码）。";
 
 function finding(severity, code, title, detail, extra = {}) {
   return { severity, code, title, detail, ...extra };
@@ -95,7 +100,11 @@ function assessDownloadCompatibility(input = {}) {
       ? `按仓库名推断为 ${capability.label}；下载后会用 config.json / GGUF 元数据重新判定。`
       : "无法从远端读取 config.json，架构与解析器将在下载后按本地文件判定。"));
   } else if (capability.entry) {
-    findings.push(finding("ok", "identity", "架构识别", `${capability.label}（${capability.matchedBy === "name" ? "按名称推断" : "按声明识别"}，矩阵置信度：${capability.confidence}）。`));
+    // A name match proves nothing about the checkpoint, so it never borrows the
+    // matrix entry's confidence.
+    findings.push(finding("ok", "identity", "架构识别", capability.matchedBy === "name"
+      ? `${capability.label}，置信度：${NAME_INFERRED_CONFIDENCE}。`
+      : `${capability.label}（按声明识别，矩阵置信度：${capability.confidence}）。`));
   } else {
     findings.push(finding("info", "identity_unlisted", "能力矩阵未收录", `${matrix.configIdentity(config || {}).architectures[0] || ggufArchitecture || "未知架构"}：不会自动填写 parser 或推测解码；启动前请核对引擎文档。`));
   }
@@ -136,8 +145,10 @@ function assessDownloadCompatibility(input = {}) {
     }
   }
 
+  // Launch only enables trust-remote-code from the checkbox or a preset; this
+  // finding must not promise that it happens on its own.
   if (engine === "vllm" && (config?.auto_map || engineCapabilities?.forceTrustRemoteCode)) {
-    findings.push(finding("info", "trust_remote_code", "需要 trust_remote_code", "该模型带自定义建模代码，启动时会自动开启 trust-remote-code。"));
+    findings.push(finding("info", "trust_remote_code", "需要 trust_remote_code", TRUST_REMOTE_CODE_DETAIL));
   }
   if (engineCapabilities?.requiredPluginFile) {
     const present = files.some((file) => file.name.toLowerCase().endsWith(engineCapabilities.requiredPluginFile.toLowerCase()));

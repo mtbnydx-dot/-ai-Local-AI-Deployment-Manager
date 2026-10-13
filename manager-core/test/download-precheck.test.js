@@ -76,6 +76,10 @@ test("Flash-Next reports its special runtime and hardware floor; Muse is blocked
   });
   assert.equal(flashNext.ok, true);
   assert.ok(flashNext.findings.some((item) => item.code === "trust_remote_code"));
+  // Launch enables trust-remote-code only from the option; the copy must not promise it.
+  const trust = flashNext.findings.find((item) => item.code === "trust_remote_code");
+  assert.equal(trust.detail, "需要在启动参数中勾选 trust-remote-code（会执行仓库内的 Python 代码）。");
+  assert.doesNotMatch(trust.detail, /自动开启/);
   assert.ok(flashNext.findings.some((item) => item.code === "vram_tight"));
   const olderGpu = assessDownloadCompatibility({
     engine: "vllm",
@@ -87,6 +91,27 @@ test("Flash-Next reports its special runtime and hardware floor; Muse is blocked
   assert.ok(olderGpu.findings.some((item) => item.code === "compute_capability" && item.severity === "block"));
   const muse = assessDownloadCompatibility({ engine: "vllm", model: "x/muse", config: { model_type: "muse_glimmer" }, runtime: VLLM_RUNTIME });
   assert.equal(muse.level, "block");
+});
+
+test("a name-only match reads as inferred and unverified instead of the matrix confidence", () => {
+  const byName = assessDownloadCompatibility({
+    engine: "vllm",
+    model: "Qwen/Qwen3-8B",
+    config: { hidden_size: 4096 },
+    siblings: [{ name: "config.json", size: 1 }, { name: "model.safetensors", size: 1e9 }],
+    runtime: VLLM_RUNTIME,
+  });
+  assert.equal(byName.capability.matchedBy, "name");
+  const identity = byName.findings.find((item) => item.code === "identity");
+  assert.ok(identity, "finding code is unchanged");
+  assert.match(identity.detail, /按名称推断（未验证）/);
+  assert.doesNotMatch(identity.detail, /矩阵置信度/);
+  assert.doesNotMatch(identity.detail, new RegExp(byName.capability.confidence));
+
+  const declared = assessDownloadCompatibility({ engine: "vllm", model: "Qwen/Qwen3-8B", config: { model_type: "qwen3" }, runtime: VLLM_RUNTIME });
+  const declaredIdentity = declared.findings.find((item) => item.code === "identity");
+  assert.equal(declared.capability.matchedBy, "modelType");
+  assert.match(declaredIdentity.detail, /按声明识别，矩阵置信度：/);
 });
 
 test("GGUF variants are grouped by quant with shard totals, companions and VRAM fit", () => {
