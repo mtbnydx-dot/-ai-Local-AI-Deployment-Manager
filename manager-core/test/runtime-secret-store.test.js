@@ -60,7 +60,7 @@ test("manager redaction removes known secrets embedded inside logs", () => {
   const redacted = core.redactManagerSecrets({
     logs: ["docker run -e HF_TOKEN=hf_private_token_value image"],
   }, ["hf_private_token_value"]);
-  assert.deepEqual(redacted.logs, ["docker run -e HF_TOKEN=*** image"]);
+  assert.deepEqual(redacted.logs, ["docker run -e HF_TOKEN=<redacted> image"]);
 });
 
 test("manager API redaction fails closed when secret enumeration is unavailable", () => {
@@ -111,4 +111,69 @@ test("manager API redaction preserves only one-time service client keys", () => 
 
   const unrelated = invoke("POST", "/api/service-exposure", source);
   assert.equal(Object.hasOwn(unrelated, "apiKey"), false);
+});
+
+test("cached secret list reads the store at most once per window and set/remove invalidate it", async () => {
+  const secrets = new Map([["ref-existing-01", "fixture-runtime-key-existing"]]);
+  let reads = 0;
+  let clock = 1000;
+  const store = {
+    file: "unused",
+    get: (reference) => secrets.get(reference) || "",
+    values: () => {
+      reads += 1;
+      return Array.from(secrets.values());
+    },
+    set: async (secret) => {
+      const reference = `ref-${secrets.size + 1}-generated`;
+      secrets.set(reference, secret);
+      return reference;
+    },
+    remove: async (reference) => secrets.delete(reference),
+  };
+  let extra = "fixture-extra-token-value";
+  const list = core.createCachedSecretList({ store, sources: [() => extra, () => "", () => undefined], refreshMs: 1000, now: () => clock });
+
+  assert.deepEqual(list.getSecrets(), ["fixture-runtime-key-existing", "fixture-extra-token-value"]);
+  list.getSecrets();
+  list.getSecrets();
+  assert.equal(reads, 1, "repeated redactions inside the window reuse the cached list");
+
+  const reference = await list.store.set("fixture-runtime-key-added");
+  assert.equal(list.store.get(reference), "fixture-runtime-key-added");
+  assert.ok(list.getSecrets().includes("fixture-runtime-key-added"), "set() invalidates the cache");
+  assert.equal(reads, 2);
+
+  await list.store.remove(reference);
+  assert.ok(!list.getSecrets().includes("fixture-runtime-key-added"), "remove() invalidates the cache");
+  assert.equal(reads, 3);
+
+  extra = "fixture-extra-token-rotated";
+  assert.ok(!list.getSecrets().includes(extra), "other sources refresh on the window, not per call");
+  clock += 1000;
+  assert.ok(list.getSecrets().includes(extra));
+  assert.equal(reads, 4);
+
+  list.invalidate();
+  list.getSecrets();
+  assert.equal(reads, 5);
+});
+
+test("cached secret list feeds the bound redactor and does not cache a failing store", () => {
+  let broken = true;
+  const store = {
+    values: () => {
+      if (broken) throw new Error("corrupt store");
+      return ["fixture-runtime-key-recovered"];
+    },
+    set: async () => "",
+    remove: async () => false,
+  };
+  const list = core.createCachedSecretList({ store, now: () => 0 });
+  const redactor = core.createSecretRedactor({ getSecrets: list.getSecrets });
+  // A failing store leaves the patterns-only fallback in place.
+  assert.equal(redactor.redact("--api-key fixture-runtime-key-recovered"), "--api-key <redacted>");
+  assert.equal(redactor.redact("plain fixture-runtime-key-recovered"), "plain fixture-runtime-key-recovered");
+  broken = false;
+  assert.equal(redactor.redact("plain fixture-runtime-key-recovered"), "plain <redacted>");
 });

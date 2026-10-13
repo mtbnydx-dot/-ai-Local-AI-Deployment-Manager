@@ -150,7 +150,15 @@ const CONFIG = {
   openWebuiContainer: process.env.OPEN_WEBUI_CONTAINER || "open-webui",
 };
 
-const runtimeApiKeyStore = core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys });
+// Job logs, the ledger and /api/logs redact the exact runtime keys plus the
+// secret patterns (08 P0-5). The key list is cached; set/remove through
+// runtimeApiKeyStore invalidate it.
+const runtimeSecretList = core.createCachedSecretList({
+  store: core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys }),
+  sources: [() => process.env.HF_TOKEN, () => process.env.AI_CLAUDE_GATEWAY_API_KEY],
+});
+const runtimeApiKeyStore = runtimeSecretList.store;
+const runtimeSecretRedactor = core.createSecretRedactor({ getSecrets: runtimeSecretList.getSecrets });
 const billingClient = core.createBillingClient({
   managerId: CONFIG.managerId,
   root: DEFAULT_AI_ROOT,
@@ -540,6 +548,7 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   writeJsonFile,
   maxLogLines: MAX_LOG_LINES,
   maxPersistedJobs: MAX_PERSISTED_JOBS,
+  redact: runtimeSecretRedactor,
   serveDetail: "llama.cpp API 已返回模型列表。",
   stopProgressTracker,
   onJobSuccess: (job) => {
@@ -1459,6 +1468,7 @@ core.registerRuntimeRoutes(app, {
   stopRuntime: stopRuntimeRequest,
   unloadRunningModel: unloadRunningModelRequest,
   readRuntimeLogs: readRuntimeLogsRequest,
+  redactLogs: runtimeSecretRedactor,
   testRuntimeCompletion: testRuntimeCompletionRequest,
   listRuntimeInstances: listRuntimeInstancesRequest,
   stopRuntimeInstance: stopRuntimeInstanceRequest,
@@ -3605,7 +3615,7 @@ async function runStartJobOnce(job, opts) {
     throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
   }
 
-  let { runArgs, activePublishArgs, runtimeImage } = buildLlamaRuntimeCommand(job, opts);
+  let { runArgs, activePublishArgs, runtimeImage, secretEnv } = buildLlamaRuntimeCommand(job, opts);
   // 启动预检要拿实时镜像状态，绕过快照缓存。
   const imageStatus = await getImageStatusFresh(runtimeImage);
   if (!imageStatus.ok) {
@@ -3652,7 +3662,7 @@ async function runStartJobOnce(job, opts) {
 
   try {
     if (typeof opts.prepareGpuAdmission === "function") {
-      ({ runArgs, activePublishArgs, runtimeImage } = buildLlamaRuntimeCommand(job, opts));
+      ({ runArgs, activePublishArgs, runtimeImage, secretEnv } = buildLlamaRuntimeCommand(job, opts));
     }
     setJobProgress(job, { percent: 32, stage: "启动 Docker 容器", detail: "Docker run 已开始；旧模型容器已保留为回滚点。" });
     const redactedLaunchCommand = `docker ${redactDockerArgs(runArgs, opts).join(" ")}`;
@@ -3665,25 +3675,28 @@ async function runStartJobOnce(job, opts) {
     scheduleJobsSave(0);
     appendLog(job, `> ${redactedLaunchCommand}`);
     assertStartJobActive(job);
-    let launched;
-    try {
-      launched = await docker(runArgs);
-    } catch (error) {
-      if (isContainerNameConflictError(error)) {
+    // Every attempt, including both retries, gets the secret env (08 P0-4).
+    const launched = await core.dockerRunWithRetries({
+      docker,
+      runArgs,
+      dockerOptions: { env: core.buildDockerChildEnv(secretEnv, { viaWsl: Boolean(CONFIG.dockerWslDistro) }) },
+      isNameConflictError: isContainerNameConflictError,
+      onNameConflict: async (error) => {
         appendLog(job, `容器名冲突，清理本次残留容器后重试：${error.stderr || error.message}`);
         await core.removeContainerIfPresent(docker, targetContainerName);
-        launched = await docker(runArgs);
-      } else if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
-        throw error;
-      } else {
+      },
+      getBindRetryArgs: (error) => {
+        if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
+          return null;
+        }
         activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
         const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
         appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
         appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
         appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
-        launched = await docker(retryArgs);
-      }
-    }
+        return retryArgs;
+      },
+    });
     job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
     scheduleJobsSave(0);
     assertStartJobActive(job);

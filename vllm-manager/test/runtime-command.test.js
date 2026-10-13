@@ -85,7 +85,7 @@ test("vLLM runtime command builds Docker args and redacts API keys", () => {
     dataParallelSize: 1,
   };
 
-  const { runArgs, activePublishArgs } = buildVllmRuntimeCommand(job, opts);
+  const { runArgs, activePublishArgs, secretEnv } = buildVllmRuntimeCommand(job, opts);
 
   assert.deepEqual(activePublishArgs, ["192.168.1.27:8000:8000"]);
   assert.equal(saved, true);
@@ -106,7 +106,12 @@ test("vLLM runtime command builds Docker args and redacts API keys", () => {
   assert.ok(runArgs.includes("--load-format"));
   assert.ok(!runArgs.includes("--quantization"));
   assert.ok(runArgs.includes("--tensor-parallel-size"));
-  assert.ok(runArgs.includes("--api-key"));
+  // 08 P0-4: the key travels through the docker child env, never argv.
+  assert.ok(!runArgs.includes("--api-key"));
+  assert.deepEqual(runArgs.slice(runArgs.indexOf("VLLM_API_KEY") - 1, runArgs.indexOf("VLLM_API_KEY") + 1), ["-e", "VLLM_API_KEY"]);
+  assert.ok(runArgs.indexOf("VLLM_API_KEY") < runArgs.indexOf("vllm/custom:pinned"));
+  assert.equal(secretEnv.VLLM_API_KEY, "secret-key");
+  assert.ok(!runArgs.some((arg) => String(arg).includes("secret-key")));
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--platform"), runArgs.indexOf("--platform") + 2), ["--platform", "linux/amd64"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--pull"), runArgs.indexOf("--pull") + 2), ["--pull", "never"]);
   assert.ok(runArgs.includes("ai.manager.api-key-ref=runtime-secret-ref"));
@@ -116,9 +121,70 @@ test("vLLM runtime command builds Docker args and redacts API keys", () => {
   assert.ok(runArgs.includes("ai.manager.vram-reservation-mb=12000"));
   assert.ok(runArgs.includes("ai.manager.gpu-admission-lease=lease-vllm"));
   assert.ok(runArgs.includes("ai.manager.max-model-len=65536"));
-  assert.ok(redactDockerArgs(runArgs, opts).join(" ").includes("***"));
+  // The vLLM argv holds no key to redact; SGLang still carries --api-key, so
+  // the marker check runs on an SGLang argv.
+  const sglangArgs = ["run", "-d", "--entrypoint", "sglang", "lmsysorg/sglang:pinned", "serve", "--api-key", "secret-key"];
+  assert.ok(redactDockerArgs(sglangArgs, opts).join(" ").includes("--api-key <redacted>"));
   assert.ok(!redactDockerArgs(runArgs, opts).join(" ").includes("secret-key"));
   assert.ok(logs.some((line) => line.includes("GGUF mode")));
+});
+
+test("vLLM runtime argv is fixed and never carries the API key or HF token value (08 P0-4)", () => {
+  const previousHfToken = process.env.HF_TOKEN;
+  process.env.HF_TOKEN = "fixture-hf-token-value";
+  try {
+    const { buildVllmRuntimeCommand } = createVllmRuntimeCommandBuilder({
+      CONFIG: { containerName: "vllm-local", managerId: "vllm-manager", hfCache: "C:/cache/hf", modelsRoot: "C:/store", image: "vllm/default:fixed" },
+      MANAGER_LABEL_KEY: "ai.manager", MANAGER_ENGINE_LABEL_KEY: "ai.manager.engine", MANAGER_APIKEY_REF_LABEL_KEY: "ai.manager.api-key-ref",
+      appendLog: () => {}, scheduleJobsSave: () => {}, dockerGpuArg: () => "device=0",
+      dockerPublishArgs: (port) => [`127.0.0.1:${port}:8000`], publishArgsToDockerRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
+      windowsPathToContainerPath: (value) => value, normalizeGpuIds: (value) => value, getLanAddress: () => "127.0.0.1",
+      resolveLaunchModel: () => ({ modelArg: "/models/qwen", effectiveLoadFormat: "auto", localPath: "C:/store/qwen" }),
+      effectiveLaunchQuantization: () => ({ value: "", modelConfigMethod: "" }),
+      resolveVllmRuntimePreset: () => ({}),
+    });
+    const baseOpts = {
+      model: "C:/store/qwen", loadFormat: "auto", quantization: "", port: 8001, networkAccess: "local",
+      serviceHost: "127.0.0.1", gpuDeviceIds: ["0"], name: "qwen-local", dtype: "auto",
+      maxModelLen: 32768, maxNumSeqs: 4, gpuMemoryUtilization: 0.9, tokenizer: "", kvCacheDtype: "auto",
+      cpuOffloadGb: 0, kvOffloadingSize: 0, languageModelOnly: false, tensorParallelSize: 1, pipelineParallelSize: 1, dataParallelSize: 1,
+    };
+    const expectedArgv = (envFlags, labelArgs = []) => [
+      "run", "-d", "--pull", "never", "--name", "vllm-local", "--restart", "on-failure:3",
+      "--label", "ai.manager=vllm-manager", "--label", "ai.manager.engine=vllm", "--label", "ai.manager.job=serve-argv",
+      "--label", "ai.manager.instance=primary", "--label", "ai.manager.instance-mode=replace", "--label", "ai.manager.model=qwen-local",
+      "--label", "ai.manager.port=8001", "--label", "ai.manager.gpu-ids=0", "--label", "ai.manager.vram-reservation-mb=0",
+      "--label", "ai.manager.max-model-len=32768", "--label", "ai.manager.max-num-seqs=4", "--label", "ai.manager.max-num-batched-tokens=0",
+      "--label", "ai.manager.gpu-memory-utilization=0.9", "--label", "ai.manager.gpu-admission-lease=",
+      "--gpus", "device=0", "--ipc=host",
+      "--health-cmd", "curl -fsS http://127.0.0.1:8000/health || exit 1", "--health-interval", "30s", "--health-timeout", "5s",
+      "--health-retries", "3", "--health-start-period", "60m",
+      "-p", "127.0.0.1:8001:8000", "-v", "C:/cache/hf:/root/.cache/huggingface", "-v", "C:/store:/models",
+      ...labelArgs,
+      ...envFlags,
+      "vllm/default:fixed", "--model", "/models/qwen", "--served-model-name", "qwen-local", "--dtype", "auto",
+      "--max-model-len", "32768", "--max-num-seqs", "4", "--gpu-memory-utilization", "0.9",
+    ];
+
+    const withoutKey = buildVllmRuntimeCommand({ id: "serve-argv", meta: {} }, baseOpts);
+    assert.deepEqual(withoutKey.runArgs, expectedArgv(["-e", "HF_TOKEN"]));
+    assert.deepEqual(withoutKey.secretEnv, { HF_TOKEN: "fixture-hf-token-value" });
+
+    const key = "fixture-vllm-key-0123456789";
+    const withKey = buildVllmRuntimeCommand({ id: "serve-argv", meta: {} }, { ...baseOpts, vllmApiKey: key, runtimeApiKeyRef: "fixture-ref-01" });
+    assert.deepEqual(withKey.runArgs, expectedArgv(
+      ["-e", "HF_TOKEN", "-e", "VLLM_API_KEY"],
+      ["--label", "ai.manager.api-key-ref=fixture-ref-01"],
+    ));
+    assert.deepEqual(withKey.secretEnv, { HF_TOKEN: "fixture-hf-token-value", VLLM_API_KEY: key });
+    for (const arg of withKey.runArgs) {
+      assert.ok(!String(arg).includes(key));
+      assert.ok(!String(arg).includes("fixture-hf-token-value"));
+    }
+  } finally {
+    if (previousHfToken === undefined) delete process.env.HF_TOKEN;
+    else process.env.HF_TOKEN = previousHfToken;
+  }
 });
 
 test("runtime preset can leave quantization and KV cache dtype to checkpoint auto-detection", () => {

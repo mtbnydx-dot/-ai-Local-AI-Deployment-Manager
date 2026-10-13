@@ -1,4 +1,5 @@
 const path = require("path");
+const { redactSecrets } = require("../../manager-core/secret-redactor");
 
 function createLlamaRuntimeCommandBuilder(deps) {
   const {
@@ -21,12 +22,14 @@ function createLlamaRuntimeCommandBuilder(deps) {
     return publishArgs.map((arg) => `-p ${arg}`).join(" ");
   }
 
+  // The builder no longer puts secrets in argv; this stays as a guard for the
+  // stored launchCommand and legacy argv, using the platform redactor.
   function redactDockerArgs(args, opts = {}) {
     const secrets = [opts.llamaApiKey, process.env.HF_TOKEN]
       .map((value) => String(value || ""))
       .filter((value) => value.length >= 6);
     if (!secrets.length) return args;
-    return args.map((arg) => secrets.reduce((value, secret) => String(value).replaceAll(secret, "***"), String(arg)));
+    return args.map((arg) => redactSecrets(String(arg), { secrets, patterns: false, minSecretLength: 6 }));
   }
 
   function buildLlamaRuntimeCommand(job, opts) {
@@ -136,7 +139,18 @@ function createLlamaRuntimeCommandBuilder(deps) {
         "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
       );
     }
-    if (process.env.HF_TOKEN) runArgs.push("-e", `HF_TOKEN=${process.env.HF_TOKEN}`);
+    // Secrets travel as name-only -e flags and the caller hands secretEnv to
+    // the docker child process (08 P0-4). llama-server binds --api-key to
+    // LLAMA_API_KEY (common/arg.cpp, set_env), so no key appears in argv.
+    const secretEnv = {};
+    if (process.env.HF_TOKEN) {
+      runArgs.push("-e", "HF_TOKEN");
+      secretEnv.HF_TOKEN = process.env.HF_TOKEN;
+    }
+    if (opts.llamaApiKey) {
+      runArgs.push("-e", "LLAMA_API_KEY");
+      secretEnv.LLAMA_API_KEY = String(opts.llamaApiKey);
+    }
 
     runArgs.push(runtimeImage);
     if (remoteRepo) {
@@ -204,13 +218,12 @@ function createLlamaRuntimeCommandBuilder(deps) {
     if (topP !== null) runArgs.push("--top-p", String(topP));
     if (topK !== null) runArgs.push("--top-k", String(topK));
     if (museGlimmer) appendLog(job, `Muse Glimmer sampling defaults: temp=${temperature}, top-p=${topP}, top-k=${topK}.`);
-    if (opts.llamaApiKey) runArgs.push("--api-key", opts.llamaApiKey);
     if (opts.tensorSplit && opts.multiGpuMode !== "none") runArgs.push("--tensor-split", opts.tensorSplit);
     if (Number(opts.cacheReuse || 0) > 0) runArgs.push("--cache-reuse", String(Math.floor(Number(opts.cacheReuse))));
     if (opts.noMmap) runArgs.push("--no-mmap");
     if (opts.noRepack) runArgs.push("--no-repack");
 
-    return { runArgs, activePublishArgs, runtimeImage };
+    return { runArgs, activePublishArgs, runtimeImage, secretEnv };
   }
 
   return {

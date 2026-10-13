@@ -188,7 +188,15 @@ const CONFIG = {
   claudeDefaultMaxTokens: Math.min(65536, Math.max(1024, positiveInt(process.env.VLLM_CLAUDE_DEFAULT_MAX_TOKENS || 8192, 8192))),
 };
 
-const runtimeApiKeyStore = core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys });
+// Job logs, the ledger and /api/logs redact the exact runtime keys plus the
+// secret patterns (08 P0-5). The key list is cached; set/remove through
+// runtimeApiKeyStore invalidate it.
+const runtimeSecretList = core.createCachedSecretList({
+  store: core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys }),
+  sources: [() => process.env.HF_TOKEN, () => process.env.AI_CLAUDE_GATEWAY_API_KEY],
+});
+const runtimeApiKeyStore = runtimeSecretList.store;
+const runtimeSecretRedactor = core.createSecretRedactor({ getSecrets: runtimeSecretList.getSecrets });
 const billingClient = core.createBillingClient({
   managerId: CONFIG.managerId,
   root: DEFAULT_AI_ROOT,
@@ -416,6 +424,7 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   writeJsonFile,
   maxLogLines: MAX_LOG_LINES,
   maxPersistedJobs: MAX_PERSISTED_JOBS,
+  redact: runtimeSecretRedactor,
   serveDetail: "运行时 API 与最小生成自检均已通过。",
   stopProgressTracker,
   onJobSuccess: (job) => {
@@ -1441,6 +1450,7 @@ core.registerRuntimeRoutes(app, {
   stopRuntime: stopRuntimeRequest,
   unloadRunningModel: unloadRunningModelRequest,
   readRuntimeLogs: readRuntimeLogsRequest,
+  redactLogs: runtimeSecretRedactor,
   testRuntimeCompletion: testRuntimeCompletionRequest,
   listRuntimeInstances: listRuntimeInstancesRequest,
   stopRuntimeInstance: stopRuntimeInstanceRequest,
@@ -5082,7 +5092,7 @@ async function runStartJobOnce(job, opts) {
     throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
   }
 
-  let { runArgs, activePublishArgs, runtimeImage, runtimeEngine } = buildVllmRuntimeCommand(job, runtimeOpts);
+  let { runArgs, activePublishArgs, runtimeImage, runtimeEngine, secretEnv } = buildVllmRuntimeCommand(job, runtimeOpts);
   // 启动预检要拿实时镜像状态，绕过快照缓存。
   const imageStatus = await getImageStatusFresh(runtimeImage);
   if (!imageStatus.ok) {
@@ -5163,7 +5173,7 @@ async function runStartJobOnce(job, opts) {
         error.findings = admittedCompatibility.findings;
         throw error;
       }
-      ({ runArgs, activePublishArgs, runtimeImage, runtimeEngine } = buildVllmRuntimeCommand(job, runtimeOpts));
+      ({ runArgs, activePublishArgs, runtimeImage, runtimeEngine, secretEnv } = buildVllmRuntimeCommand(job, runtimeOpts));
     }
     setJobProgress(job, {
       percent: 32,
@@ -5180,25 +5190,28 @@ async function runStartJobOnce(job, opts) {
     scheduleJobsSave(0);
     appendLog(job, `> ${redactedLaunchCommand}`);
     assertStartJobActive(job);
-    let launched;
-    try {
-      launched = await docker(runArgs);
-    } catch (error) {
-      if (isContainerNameConflictError(error)) {
+    // Every attempt, including both retries, gets the secret env (08 P0-4).
+    const launched = await core.dockerRunWithRetries({
+      docker,
+      runArgs,
+      dockerOptions: { env: core.buildDockerChildEnv(secretEnv, { viaWsl: Boolean(CONFIG.dockerWslDistro) }) },
+      isNameConflictError: isContainerNameConflictError,
+      onNameConflict: async (error) => {
         appendLog(job, `容器名冲突，清理本次残留容器后重试：${error.stderr || error.message}`);
         await core.removeContainerIfPresent(docker, targetContainerName);
-        launched = await docker(runArgs);
-      } else if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
-        throw error;
-      } else {
+      },
+      getBindRetryArgs: (error) => {
+        if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
+          return null;
+        }
         activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
         const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
         appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
         appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
         appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
-        launched = await docker(retryArgs);
-      }
-    }
+        return retryArgs;
+      },
+    });
     job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
     scheduleJobsSave(0);
     assertStartJobActive(job);

@@ -142,14 +142,22 @@ test("llama runtime command loads mmproj, protects API keys, and enables checkpo
     llamaApiKey: "llama-secret",
     runtimeApiKeyRef: "runtime-secret-ref",
   };
-  const { runArgs } = buildLlamaRuntimeCommand({}, opts);
+  const { runArgs, secretEnv } = buildLlamaRuntimeCommand({}, opts);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--ctx-size"), runArgs.indexOf("--ctx-size") + 2), ["--ctx-size", "131072"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--mmproj"), runArgs.indexOf("--mmproj") + 2), ["--mmproj", "/models/qwen/mmproj-F16.gguf"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--mmproj-device"), runArgs.indexOf("--mmproj-device") + 2), ["--mmproj-device", "CUDA0"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--spec-type"), runArgs.indexOf("--spec-type") + 2), ["--spec-type", "draft-mtp"]);
   assert.deepEqual(runArgs.slice(runArgs.indexOf("--spec-draft-n-max"), runArgs.indexOf("--spec-draft-n-max") + 2), ["--spec-draft-n-max", "5"]);
-  assert.ok(redactDockerArgs(runArgs, opts).join(" ").includes("***"));
-  assert.ok(!redactDockerArgs(runArgs, opts).join(" ").includes("llama-secret"));
+  // 08 P0-4: llama-server reads LLAMA_API_KEY, so the key leaves argv.
+  assert.ok(!runArgs.includes("--api-key"));
+  assert.deepEqual(runArgs.slice(runArgs.indexOf("LLAMA_API_KEY") - 1, runArgs.indexOf("LLAMA_API_KEY") + 1), ["-e", "LLAMA_API_KEY"]);
+  assert.ok(runArgs.indexOf("LLAMA_API_KEY") < runArgs.indexOf("llama:pinned"));
+  assert.equal(secretEnv.LLAMA_API_KEY, "llama-secret");
+  assert.ok(!runArgs.some((arg) => String(arg).includes("llama-secret")));
+  // redactDockerArgs still guards legacy argv that carries the key.
+  const legacyArgs = [...runArgs, "--api-key", "llama-secret"];
+  assert.ok(redactDockerArgs(legacyArgs, opts).join(" ").includes("--api-key <redacted>"));
+  assert.ok(!redactDockerArgs(legacyArgs, opts).join(" ").includes("llama-secret"));
   assert.ok(runArgs.includes("ai.manager.api-key-ref=runtime-secret-ref"));
   assert.ok(!runArgs.some((arg) => String(arg).startsWith("ai.manager.api-key=llama-secret")));
 });
@@ -228,4 +236,48 @@ test("llama runtime command auto-loads Muse mmproj and DFlash draft together", (
   assert.ok(logs.some((line) => line.includes("DFlash draft model")));
   assert.ok(logs.some((line) => line.includes("Muse Glimmer runtime image")));
   assert.ok(logs.some((line) => line.includes("sampling defaults")));
+});
+
+test("llama runtime passes the HF token name-only and returns it as secretEnv (08 P0-4)", () => {
+  const previousHfToken = process.env.HF_TOKEN;
+  process.env.HF_TOKEN = "fixture-hf-token-value";
+  try {
+    const { buildLlamaRuntimeCommand } = createLlamaRuntimeCommandBuilder({
+      CONFIG: { containerName: "llama-local", managerId: "llama-manager", hfCache: "C:/cache", modelsRoot: "C:/store", image: "llama:pinned" },
+      MANAGER_LABEL_KEY: "ai.manager",
+      MANAGER_ENGINE_LABEL_KEY: "ai.manager.engine",
+      MANAGER_APIKEY_REF_LABEL_KEY: "ai.manager.api-key-ref",
+      appendLog: () => {},
+      dockerGpuArg: () => "device=0",
+      dockerPublishArgs: () => ["127.0.0.1:8080:8080"],
+      publishArgsToDockerRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
+      normalizeGpuIds: (value) => value,
+      normalizeDefaultTrueBoolean: (value, fallback) => value ?? fallback,
+      windowsPathToContainerPath: (value) => value,
+      resolveLaunchModel: () => ({ modelArg: "/models/qwen/model.gguf", effectiveLoadFormat: "gguf", ggufFiles: [] }),
+    });
+    const opts = {
+      model: "C:/store/qwen/model.gguf", port: 8080, networkAccess: "local", serviceHost: "127.0.0.1",
+      gpuDeviceIds: ["0"], textOnlyMode: true, multiGpuMode: "none", mainGpu: 0, name: "qwen",
+      maxModelLen: 8192, maxNumSeqs: 1, batchSize: 2048, ubatchSize: 512, gpuLayers: -1,
+      cacheTypeK: "f16", cacheTypeV: "f16", flashAttention: "auto", reasoning: "auto", reasoningFormat: "auto",
+    };
+    const withoutKey = buildLlamaRuntimeCommand({}, opts);
+    assert.deepEqual(withoutKey.secretEnv, { HF_TOKEN: "fixture-hf-token-value" });
+    assert.deepEqual(withoutKey.runArgs.slice(withoutKey.runArgs.indexOf("HF_TOKEN") - 1, withoutKey.runArgs.indexOf("HF_TOKEN") + 1), ["-e", "HF_TOKEN"]);
+    assert.ok(!withoutKey.runArgs.includes("LLAMA_API_KEY"));
+
+    const key = "fixture-llama-key-0123456789";
+    const withKey = buildLlamaRuntimeCommand({}, { ...opts, llamaApiKey: key });
+    assert.deepEqual(withKey.secretEnv, { HF_TOKEN: "fixture-hf-token-value", LLAMA_API_KEY: key });
+    const imageIndex = withKey.runArgs.indexOf("llama:pinned");
+    assert.deepEqual(withKey.runArgs.slice(imageIndex - 4, imageIndex), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
+    for (const arg of withKey.runArgs) {
+      assert.ok(!String(arg).includes(key));
+      assert.ok(!String(arg).includes("fixture-hf-token-value"));
+    }
+  } finally {
+    if (previousHfToken === undefined) delete process.env.HF_TOKEN;
+    else process.env.HF_TOKEN = previousHfToken;
+  }
 });

@@ -1,4 +1,5 @@
 const path = require("path");
+const { redactSecrets } = require("../../manager-core/secret-redactor");
 const { PENNYROYAL_CACHE_VOLUME, PENNYROYAL_ROPE_OVERRIDE } = require("./pennyroyal");
 
 function createVllmRuntimeCommandBuilder(deps) {
@@ -25,12 +26,14 @@ function createVllmRuntimeCommandBuilder(deps) {
     return publishArgs.map((arg) => `-p ${arg}`).join(" ");
   }
 
+  // SGLang still passes --api-key in argv (08 O1), so the stored launchCommand
+  // and its log echo go through the platform redactor and show <redacted>.
   function redactDockerArgs(args, opts = {}) {
     const secrets = [opts.vllmApiKey, process.env.HF_TOKEN]
       .map((value) => String(value || ""))
       .filter((value) => value.length >= 6);
     if (!secrets.length) return args;
-    return args.map((arg) => secrets.reduce((value, secret) => String(value).replaceAll(secret, "***"), String(arg)));
+    return args.map((arg) => redactSecrets(String(arg), { secrets, patterns: false, minSecretLength: 6 }));
   }
 
   function buildVllmRuntimeCommand(job, opts) {
@@ -211,7 +214,17 @@ function createVllmRuntimeCommandBuilder(deps) {
     if (selectedGpuIds.length) {
       appendLog(job, `GPU isolation: --gpus device=${selectedGpuIds.join(",")}`);
     }
-    if (process.env.HF_TOKEN) runArgs.push("-e", `HF_TOKEN=${process.env.HF_TOKEN}`);
+    // Secrets travel as name-only -e flags and the caller hands secretEnv to
+    // the docker child process (08 P0-4). SGLang keeps --api-key (08 O1).
+    const secretEnv = {};
+    if (process.env.HF_TOKEN) {
+      runArgs.push("-e", "HF_TOKEN");
+      secretEnv.HF_TOKEN = process.env.HF_TOKEN;
+    }
+    if (opts.vllmApiKey && runtimeEngine !== "sglang") {
+      runArgs.push("-e", "VLLM_API_KEY");
+      secretEnv.VLLM_API_KEY = String(opts.vllmApiKey);
+    }
     for (const [key, value] of Object.entries(runtimePreset.env || {})) {
       if (value !== undefined && value !== null && value !== "") runArgs.push("-e", `${key}=${value}`);
     }
@@ -229,7 +242,7 @@ function createVllmRuntimeCommandBuilder(deps) {
         effectiveKvCacheDtypeArg,
         effectiveQuantization: runtimePreset.disableQuantizationArg ? "" : runtimePreset.quantization || quantization.value,
       });
-      return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine };
+      return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine, secretEnv };
     }
 
     runArgs.push(runtimeImage);
@@ -301,9 +314,9 @@ function createVllmRuntimeCommandBuilder(deps) {
     if (effectiveAutoToolChoice && effectiveToolCallParser) {
       runArgs.push("--enable-auto-tool-choice", "--tool-call-parser", effectiveToolCallParser);
     }
-    if (opts.vllmApiKey) runArgs.push("--api-key", opts.vllmApiKey);
+    // No --api-key here: vLLM reads VLLM_API_KEY (set above) when the flag is absent.
 
-    return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine };
+    return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine, secretEnv };
   }
 
   function appendSglangServeArgs(runArgs, options = {}) {
