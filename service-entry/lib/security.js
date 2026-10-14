@@ -23,6 +23,8 @@ const path = require("node:path");
 const core = require("../../manager-core");
 const { FORWARDING_HEADERS, hasForwardingHeaders, ipInCidrs, resolveClientIdentity } = require("./trusted-proxy");
 const { createAccessConfigSource } = require("./public-config");
+const keyPolicy = require("./key-policy");
+const { lookupPublicError } = require("./public-errors");
 
 const MANAGEMENT_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const KEY_STORE_CACHE_MS = 5000;
@@ -32,7 +34,6 @@ const KEY_STORE_ISSUE_LOG_MS = 60_000;
 // text never carries paths, ports or env switches. The detail goes to the
 // server log (redacted) instead.
 const GATEWAY_UNAVAILABLE_MESSAGE = "服务暂时不可用 / Service temporarily unavailable";
-const GATEWAY_KEY_NOT_CONFIGURED_MESSAGE = "服务端要求 API Key，但尚未配置任何密钥。 / An API key is required but none is configured on the server.";
 
 // The single shared list of forwarding headers (trusted-proxy.js). Their
 // presence marks a request as proxied, which can only demote it (no
@@ -93,6 +94,9 @@ function createEntrySecurity(options = {}) {
   // which would break every local-mode request instead of just the managers
   // that were started outside this process.
   let trustToken = options.trustToken || core.generateGatewayTrustToken();
+  // The platform access store (05 §6): the store, or a getter that returns it
+  // and throws while it cannot be opened. Gateway keys are read only there.
+  const keysStoreOption = options.keysStore || null;
   let keyStoreCache = { value: null, expiresAt: 0, promise: null };
   let keyStoreIssueLog = { detail: "", at: 0 };
   const logError = typeof options.logError === "function" ? options.logError : console.error;
@@ -370,10 +374,10 @@ function createEntrySecurity(options = {}) {
     };
   }
 
-  // --- Gateway authentication (moved up from the managers) ------------------
+  // --- Legacy manager key files (reporting only) ------------------------------
 
-  // Keys still live in the manager stores so existing clients and the manager
-  // UIs keep working; the entry just reads them and decides before proxying.
+  // Gateway auth reads the access store since PUB-8. describe() still reports
+  // the managers' own key files when no store is wired (tests, tools).
   async function loadKeyStores() {
     const now = Date.now();
     if (keyStoreCache.value && keyStoreCache.expiresAt > now) return keyStoreCache.value;
@@ -415,16 +419,6 @@ function createEntrySecurity(options = {}) {
     keyStoreCache = { value: null, expiresAt: 0, promise: null };
   }
 
-  // Every gateway request hits this while the store is broken, so the same
-  // detail is logged once a minute at most.
-  function logKeyStoreIssues(issues) {
-    const detail = issues.map((item) => `${item.manager}: ${item.file} (${item.message})`).join("; ");
-    const now = Date.now();
-    if (detail === keyStoreIssueLog.detail && now - keyStoreIssueLog.at < KEY_STORE_ISSUE_LOG_MS) return;
-    keyStoreIssueLog = { detail, at: now };
-    logError(core.redactSecrets(`gateway auth: service key store could not be read, refusing gateway requests: ${detail}`));
-  }
-
   // PUBLIC always requires a key on model routes (05 §3.3), and so does a
   // forwarded request that reached ADMIN's /gateway/* (admin.legacyProxyGateway
   // "serve"): its client is unknown, so it is never treated as the local owner.
@@ -432,73 +426,115 @@ function createEntrySecurity(options = {}) {
     return listenerKindOf(req) === "public" || isForwardedRequest(req);
   }
 
-  async function authorizeGatewayRequest(req) {
-    const current = { ...policy() };
-    if (keyRequiredFor(req)) current.requireApiKey = true;
+  // --- Gateway authentication: the platform access store (05 §6) -----------
+
+  // The store is wired by the entry (server.js getAccessStore); a getter that
+  // throws, or no store at all, means "unavailable", never "no keys".
+  function accessStore() {
+    const value = typeof keysStoreOption === "function" ? keysStoreOption() : keysStoreOption;
+    if (!value || typeof value.findBySecret !== "function") {
+      const error = new Error("The access store is not available.");
+      error.code = "access_store_unavailable";
+      throw error;
+    }
+    return value;
+  }
+
+  // Every gateway request hits this while the store is broken, so the same
+  // detail is logged once a minute at most. The detail stays in the log; the
+  // caller only learns auth_unavailable.
+  function logAccessStoreFailure(error) {
+    const detail = `${error?.code || "access_store_unavailable"}: ${error?.cause?.message || error?.message || error}`;
+    const now = Date.now();
+    if (detail === keyStoreIssueLog.detail && now - keyStoreIssueLog.at < KEY_STORE_ISSUE_LOG_MS) return;
+    keyStoreIssueLog = { detail, at: now };
+    logError(core.redactSecrets(`gateway auth: the access store could not be read, refusing gateway requests: ${detail}`));
+  }
+
+  function gatewayDenial(code, extra = {}) {
+    const item = lookupPublicError(code);
+    return { ok: false, status: item ? item.status : 500, code, message: item ? item.message : GATEWAY_UNAVAILABLE_MESSAGE, ...extra };
+  }
+
+  // A key caller in the shape the gateway code has always read (clientId,
+  // client, matchedManager), plus the key itself. A migrated global key keeps
+  // its legacy shape (no client: unmetered, default policy); its TTS owner is
+  // the key's own (V5 fix).
+  function keyCaller(key, listener, matched) {
+    const legacy = key.legacy && typeof key.legacy === "object" ? key.legacy : null;
+    const legacyGlobal = legacy?.source === "service-exposure";
+    const clientId = legacy ? (legacyGlobal ? "" : String(legacy.clientId || "")) : key.id;
+    const limits = key.limits || {};
+    const models = Array.isArray(key.models) ? key.models : [];
+    const client = clientId
+      ? {
+        id: clientId,
+        enabled: key.status === "active",
+        // Display only (/gateway/status); enforcement reads key.models.
+        allowedModels: models.length === 1 && models[0] === "*" ? [] : [...models],
+        rateLimitRpm: limits.rpm ?? undefined,
+        maxConcurrentRequests: limits.maxConcurrent ?? undefined,
+        maxQueuedRequests: limits.maxQueued ?? undefined,
+        queueTimeoutSeconds: limits.queueTimeoutSeconds ?? undefined,
+        requestTimeoutSeconds: limits.requestTimeoutSeconds ?? undefined,
+      }
+      : null;
+    return {
+      ok: true,
+      kind: "key",
+      principal: "key",
+      listener,
+      key,
+      keyId: key.id,
+      customerId: key.customerId || "",
+      scopes: Array.isArray(key.scopes) ? [...key.scopes] : [],
+      ttsOwner: String(key.ttsOwner || ""),
+      matched,
+      clientId,
+      client,
+      authRequired: true,
+      matchedManager: legacy ? String(legacy.managerId || "") : "",
+    };
+  }
+
+  function keylessCaller(listener) {
+    return { ok: true, kind: "keyless", principal: "", listener, key: null, clientId: "", client: null, authRequired: false, matchedManager: "" };
+  }
+
+  // authorizeGatewayRequest(req, { scope }) -> caller | { ok:false, status, code, message }
+  // The key comes from the access store (05 §6.2). A broken store fails
+  // closed with 503 auth_unavailable, whatever the keyless rules say. Without
+  // a key the keyless rules decide (exposure.requireApiKey; PUBLIC and
+  // forwarded requests always need one). A presented key is judged by
+  // key-policy: status, expiry, listener, allowed IPs and, when the route
+  // names one, the scope. The codes are 05 §10.2's.
+  async function authorizeGatewayRequest(req, options = {}) {
+    const listener = listenerKindOf(req);
+    const requireApiKey = policy().requireApiKey || keyRequiredFor(req);
     const presentedKey = core.extractServiceApiKey(req.headers || {}, { acceptRawAuthorization: true });
-    const { stores, issues } = await loadKeyStores();
-
-    // A corrupt key store must never read as "no keys configured", which would
-    // otherwise let an unauthenticated request through.
-    if (issues.length) {
-      logKeyStoreIssues(issues);
-      return {
-        ok: false,
-        status: 503,
-        code: "key_store_unreadable",
-        message: GATEWAY_UNAVAILABLE_MESSAGE,
-      };
+    let store;
+    let found = null;
+    try {
+      store = accessStore();
+      if (presentedKey) found = store.findBySecret(presentedKey, new Date());
+    } catch (error) {
+      logAccessStoreFailure(error);
+      return gatewayDenial("auth_unavailable");
     }
-
-    if (!current.requireApiKey && !presentedKey) {
-      return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
-    }
-
-    const configured = stores.filter((store) => {
-      const hasGlobal = core.hasGlobalServiceApiKey(store.settings || {});
-      const hasClients = core.hasActiveServiceClients(core.normalizeServiceClientsLedger(store.clients || {}));
-      return hasGlobal || hasClients;
+    if (!presentedKey) return requireApiKey ? gatewayDenial("missing_api_key") : keylessCaller(listener);
+    // An unknown key on a keyless loopback stays keyless, as it always was:
+    // local tools send placeholder keys.
+    if (!found) return requireApiKey ? gatewayDenial("invalid_api_key") : keylessCaller(listener);
+    const scope = options && typeof options === "object" && options.scope ? String(options.scope) : "";
+    const verdict = keyPolicy.evaluateKey(found.key, {
+      now: new Date(),
+      listener,
+      ip: resolveClientAddress(req),
+      scope,
+      exposeSearch: accessConfig().public?.exposeSearch === true,
     });
-    if (!configured.length) {
-      if (!current.requireApiKey) return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
-      // The remedy (generate a key, or the env switch) is shown to the
-      // operator by describe(); the gateway caller only learns the state.
-      return {
-        ok: false,
-        status: 503,
-        code: "api_key_not_configured",
-        message: GATEWAY_KEY_NOT_CONFIGURED_MESSAGE,
-      };
-    }
-    if (!presentedKey) {
-      return { ok: false, status: 401, code: "unauthorized", message: "Missing service API key." };
-    }
-    for (const store of configured) {
-      if (core.isGlobalServiceApiKeyAccepted(presentedKey, store.settings || {})) {
-        return { ok: true, clientId: "", client: null, authRequired: true, matchedManager: store.manager.id };
-      }
-      const client = core.resolveServiceClientForApiKey(store.clients || {}, presentedKey);
-      if (client) {
-        return {
-          ok: true,
-          clientId: client.id,
-          client: {
-            id: client.id,
-            enabled: client.enabled !== false,
-            allowedModels: Array.isArray(client.allowedModels) ? [...client.allowedModels] : [],
-            rateLimitRpm: client.rateLimitRpm,
-            maxConcurrentRequests: client.maxConcurrentRequests,
-            maxQueuedRequests: client.maxQueuedRequests,
-            queueTimeoutSeconds: client.queueTimeoutSeconds,
-            requestTimeoutSeconds: client.requestTimeoutSeconds,
-          },
-          authRequired: true,
-          matchedManager: store.manager.id,
-        };
-      }
-    }
-    if (!current.requireApiKey) return { ok: true, clientId: "", client: null, authRequired: false, matchedManager: "" };
-    return { ok: false, status: 401, code: "unauthorized", message: "Invalid service API key." };
+    if (!verdict.ok) return gatewayDenial(verdict.code, { reason: verdict.reason, param: verdict.param || null, keyId: found.key.id });
+    return keyCaller(found.key, listener, found.matched);
   }
 
   // --- Trust token ----------------------------------------------------------
@@ -528,12 +564,30 @@ function createEntrySecurity(options = {}) {
 
   // Surfaces what is actually enforced right now, so the UI can stop inferring
   // it from settings that may not have loaded.
-  async function describe() {
-    const current = policy();
-    let keyStatus = { readable: true, managersWithKeys: [], issues: [] };
+  // What the access store holds, for describe(): readable, the number of
+  // usable keys, and the managers whose migrated keys are among them.
+  function describeAccessStore() {
+    try {
+      const store = accessStore();
+      const counts = typeof store.countKeys === "function" ? store.countKeys() : null;
+      const managers = new Set();
+      if (typeof store.listKeys === "function") {
+        for (const key of store.listKeys({ status: "active", limit: 200 }).items || []) {
+          const managerId = key?.legacy?.managerId;
+          if (managerId) managers.add(String(managerId));
+        }
+      }
+      const activeKeys = counts ? Math.max(0, Number(counts.active || 0) - Number(counts.expired || 0)) : managers.size;
+      return { readable: true, issues: [], managersWithKeys: [...managers], activeKeys };
+    } catch (error) {
+      return { readable: false, issues: [{ file: "", message: core.redactSecrets(String(error?.code || "access_store_unavailable")) }], managersWithKeys: [], activeKeys: 0 };
+    }
+  }
+
+  async function describeManagerKeyFiles() {
     try {
       const { stores, issues } = await loadKeyStores();
-      keyStatus = {
+      return {
         readable: !issues.length,
         issues,
         managersWithKeys: stores
@@ -542,9 +596,14 @@ function createEntrySecurity(options = {}) {
           .map((store) => store.manager.id),
       };
     } catch (error) {
-      keyStatus = { readable: false, managersWithKeys: [], issues: [{ file: "", message: error.message }] };
+      return { readable: false, managersWithKeys: [], issues: [{ file: "", message: error.message }] };
     }
-    const enforced = current.requireApiKey && keyStatus.readable && keyStatus.managersWithKeys.length > 0;
+  }
+
+  async function describe() {
+    const current = policy();
+    const keyStatus = keysStoreOption ? describeAccessStore() : await describeManagerKeyFiles();
+    const enforced = current.requireApiKey && keyStatus.readable && (keyStatus.activeKeys ?? keyStatus.managersWithKeys.length) > 0;
     const publicBaseUrl = envText("SERVICE_ENTRY_PUBLIC_BASE_URL");
     return {
       lanMode: current.lanMode,
@@ -646,7 +705,7 @@ function createEntrySecurity(options = {}) {
       warnings.push({
         level: "fail",
         title: "要求 API Key 但没有可用密钥",
-        detail: "网关会以 503 拒绝全部请求。请在任一管理器的“对外服务”页生成密钥。",
+        detail: "网关会以 401 拒绝全部请求。请在任一管理器的“对外服务”页生成密钥。",
       });
     }
     if (!keyStatus.readable) {

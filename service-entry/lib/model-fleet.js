@@ -338,21 +338,38 @@ function selectFleetTarget(catalogs, request = {}) {
   const mode = normalizeFleetMode(request.mode);
   let candidates = catalogCandidates(catalogs);
   if (["vllm", "llama"].includes(engine)) candidates = candidates.filter((item) => item.managerId === engine);
+  // The caller's key filters (05 §8.1: modelAllowed/fleetAllowed) apply before
+  // matching, so a generic id only ever picks among models the key may use.
+  // A model that exists but is filtered out answers model_not_allowed, not
+  // "not found".
+  const filterCandidate = typeof request.filterCandidate === "function" ? request.filterCandidate : null;
+  const visible = filterCandidate ? candidates.filter((candidate) => filterCandidate(candidate) === true) : candidates;
 
+  // A generic id or a Claude compatibility alias picks among the visible
+  // (allowed) models only.
+  let pool = visible;
   if (!generic) {
     const value = requestedModel.toLowerCase();
-    const exact = candidates.filter((candidate) => {
+    const matches = (candidate) => {
       const model = candidate.model;
       const ids = [model.id, model.root, ...(Array.isArray(model.aliases) ? model.aliases : [])]
         .map((item) => String(item || "").toLowerCase())
         .filter(Boolean);
       return ids.includes(value);
-    });
+    };
+    const exact = visible.filter(matches);
+    if (!exact.length && filterCandidate && candidates.some(matches)) {
+      return targetError("model_not_allowed", capability, 403, `Requested model ${requestedModel} is not allowed for this caller.`);
+    }
     if (!exact.length && !claudeCompatibilityAlias) {
       return targetError("model_not_available", capability, 404, `Requested model ${requestedModel} is not available in the running fleet.`);
     }
-    if (exact.length) candidates = exact;
+    if (exact.length) pool = exact;
   }
+  if (filterCandidate && !pool.length && candidates.length) {
+    return targetError("model_not_allowed", capability, 403, "No model in the running fleet is allowed for this caller.");
+  }
+  candidates = pool;
 
   let capable = candidates.filter((candidate) => candidate.capabilities.includes(capability));
   // Tool schemas still work with a normal chat model when no dedicated
