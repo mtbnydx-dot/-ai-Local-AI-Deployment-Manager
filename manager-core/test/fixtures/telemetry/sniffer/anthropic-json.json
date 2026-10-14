@@ -1,0 +1,29 @@
+{
+  "description": "Non-stream Anthropic message: top-level usage and stop_reason end_turn.",
+  "options": {
+    "protocol": "claude",
+    "stream": false,
+    "contentType": "application/json"
+  },
+  "chunks": [
+    {
+      "tMs": 50,
+      "text": "{\"id\":\"msg_fixture_2\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"local-current\",\"content\":[{\"type\":\"text\",\"text\":\"Short reply.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":64,\"output_tokens\":5}}"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "reported",
+      "promptTokens": 64,
+      "cachedTokens": null,
+      "outputTokens": 5,
+      "reasoningTokens": null,
+      "totalTokens": 69
+    },
+    "finishReason": "stop",
+    "firstTokenAt": null,
+    "engineTimings": null,
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}
