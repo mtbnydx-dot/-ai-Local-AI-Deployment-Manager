@@ -19,6 +19,22 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CATALOG_PATTERN = /^launch-params\/[a-z][a-z0-9-]*\.json$/;
 // An image built from an env value, e.g. "vllm/vllm-openai:{value}".
 const IMAGE_TEMPLATE_PATTERN = /^[A-Za-z0-9._/:@-]*\{value\}[A-Za-z0-9._/:@-]*$/;
+// envOverride names are read from the manager's environment and their values
+// are shown in GET /api/engines and passed to docker, so data may name only
+// image variables (VLLM_IMAGE, VLLM_IMAGE_VERSION, LLAMA_IMAGE_DIGEST...) and
+// never one that could hold a secret (HF_TOKEN, VLLM_API_KEY; 01 §24).
+const IMAGE_ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,47}_IMAGE(?:_(?:VERSION|DIGEST|TAG))?$/;
+const SECRET_ENV_WORD_PATTERN = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|APIKEY|CREDENTIALS?|AUTH|COOKIE|SESSION|PRIVATE)(?:_|$)/;
+// A Docker image reference: [host[:port]/]path[:tag][@algorithm:hex].
+const IMAGE_PATH_COMPONENT = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+const IMAGE_DOMAIN_COMPONENT = "(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])";
+const IMAGE_REFERENCE_PATTERN = new RegExp(
+  `^(?:${IMAGE_DOMAIN_COMPONENT}(?:\\.${IMAGE_DOMAIN_COMPONENT})*(?::\\d{1,5})?/)?`
+  + `${IMAGE_PATH_COMPONENT}(?:/${IMAGE_PATH_COMPONENT})*`
+  + "(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?"
+  + "(?:@[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,})?$",
+);
+const MAX_IMAGE_REFERENCE_LENGTH = 512;
 const MAX_REGEX_LENGTH = 500;
 
 const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1]);
@@ -82,6 +98,16 @@ const MODES = Object.freeze(["bundled", "override", "draft"]);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Whether data may name this variable as an image override (envOverride). */
+function isImageEnvName(name) {
+  return typeof name === "string" && IMAGE_ENV_NAME_PATTERN.test(name) && !SECRET_ENV_WORD_PATTERN.test(name);
+}
+
+/** Whether a value read from the environment is a Docker image reference. */
+function isImageReference(value) {
+  return typeof value === "string" && value.length <= MAX_IMAGE_REFERENCE_LENGTH && IMAGE_REFERENCE_PATTERN.test(value);
 }
 
 function joinPath(base, key) {
@@ -280,10 +306,20 @@ function validateRuntimes(out, value, path, { partial = false } = {}) {
 // An envOverride entry is one variable that holds a full image reference, or a
 // precedence list of them where the first one that is set wins. A list item may
 // be {env, template} for a variable that holds only part of the reference
-// (VLLM_IMAGE_VERSION becomes vllm/vllm-openai:{value}).
+// (VLLM_IMAGE_VERSION becomes vllm/vllm-openai:{value}). Only image variables
+// may be named (isImageEnvName).
+function checkImageEnvName(out, value, path) {
+  if (!checkString(out, value, path, { required: true, pattern: ENV_NAME_PATTERN })) return false;
+  if (!isImageEnvName(value)) {
+    out.add(path, "env_not_allowed", `${path} must name an image variable (*_IMAGE, *_IMAGE_VERSION, *_IMAGE_DIGEST or *_IMAGE_TAG), not ${value}; no other environment variable is read.`);
+    return false;
+  }
+  return true;
+}
+
 function checkEnvOverride(out, spec, path) {
   if (typeof spec === "string") {
-    checkString(out, spec, path, { required: true, pattern: ENV_NAME_PATTERN });
+    checkImageEnvName(out, spec, path);
     return;
   }
   if (!Array.isArray(spec) || spec.length === 0) {
@@ -295,12 +331,12 @@ function checkEnvOverride(out, spec, path) {
     const itemPath = joinPath(path, index);
     let envName = item;
     if (typeof item === "string") {
-      if (!checkString(out, item, itemPath, { required: true, pattern: ENV_NAME_PATTERN })) return;
+      if (!checkImageEnvName(out, item, itemPath)) return;
     } else {
       if (!requireObject(out, item, itemPath)) return;
       checkKnownKeys(out, item, itemPath, ["env", "template"]);
       checkString(out, item.template, joinPath(itemPath, "template"), { required: true, pattern: IMAGE_TEMPLATE_PATTERN, maxLength: 512 });
-      if (!checkString(out, item.env, joinPath(itemPath, "env"), { required: true, pattern: ENV_NAME_PATTERN })) return;
+      if (!checkImageEnvName(out, item.env, joinPath(itemPath, "env"))) return;
       envName = item.env;
     }
     if (seen.has(envName)) out.add(itemPath, "duplicate", `${path} names ${envName} twice.`);
@@ -669,6 +705,8 @@ module.exports = {
   STATUSES,
   TIER1_ENGINE_IDS,
   UNKNOWN_ENGINE_ID,
+  isImageEnvName,
+  isImageReference,
   isPlainObject,
   validateDescriptor,
 };

@@ -169,21 +169,35 @@ async function buildEnginesPayload(options = {}) {
       health: {
         host: descriptor.host.default,
         hostReady: null,
-        instances: counts ? counts[engineId] || 0 : null,
+        instances: null,
       },
     };
   }));
 
   // One Docker host per manager: it is ready when it answered for any image.
   const hostReady = !presence || presenceAnswers.length === 0 ? null : presenceAnswers.some((value) => value !== null);
-  for (const engine of engines) engine.health.hostReady = hostReady;
+  // The managers' container listings answer [] when Docker is down, so an empty
+  // count from a host that answered no image probe is unknown, not zero.
+  const countsKnown = Boolean(counts) && !(hostReady === false && Object.keys(counts).length === 0);
+  for (const engine of engines) {
+    engine.health.hostReady = hostReady;
+    engine.health.instances = countsKnown ? counts[engine.engineId] || 0 : null;
+  }
+
+  // Each manager reports the problems of the engines it hosts plus the shared
+  // ones (the manifest, unreadable files, engines that failed to load); an
+  // engine another manager hosts is that manager's to report.
+  const hosted = new Set(registry.hostedBy(managerId));
+  const errors = registry.errors()
+    .filter((item) => !item.engineId || hosted.has(item.engineId) || !registry.has(item.engineId))
+    .map(formatRegistryError);
 
   return {
     ok: true,
     managerId,
     generatedAt: new Date(now()).toISOString(),
     engines,
-    errors: registry.errors().map(formatRegistryError),
+    errors,
   };
 }
 
@@ -200,7 +214,14 @@ function validateDraftRequest(registry, body) {
     return { status: 400, payload: errorEnvelope("invalid_body", "The request body must be {\"descriptor\": {...}}.") };
   }
   const { descriptor } = body;
-  const size = Buffer.byteLength(JSON.stringify(descriptor) ?? "", "utf8");
+  let size = 0;
+  try {
+    size = Buffer.byteLength(JSON.stringify(descriptor) ?? "", "utf8");
+  } catch {
+    // Only a pathological body gets here: nesting JSON.parse accepted but
+    // too deep to serialize again.
+    return { status: 400, payload: errorEnvelope("invalid_body", "The descriptor draft is nested too deeply to check.") };
+  }
   if (size > MAX_DRAFT_BYTES) {
     return {
       status: 413,

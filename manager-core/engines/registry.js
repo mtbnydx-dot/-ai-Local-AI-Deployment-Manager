@@ -14,6 +14,8 @@ const {
   ENGINE_ID_PATTERN,
   TIER1_ENGINE_IDS,
   UNKNOWN_ENGINE_ID,
+  isImageEnvName,
+  isImageReference,
   isPlainObject,
   validateDescriptor,
 } = require("./descriptor-schema");
@@ -173,14 +175,19 @@ function evaluateOverride(entry, { mode, engines, knownRuntimes }) {
 }
 
 // The image an env override puts in a slot: the first variable of the
-// envOverride entry that is set, through its template when it has one.
+// envOverride entry that is set, through its template when it has one. The
+// validators already limit names to image variables; this checks again, and a
+// value that is not an image reference counts as unset, so no other variable
+// (HF_TOKEN, an API key) can reach the API payload or docker's argv.
 function envImageFor(spec, env) {
   const entries = Array.isArray(spec) ? spec : spec ? [spec] : [];
   for (const entry of entries) {
     const name = typeof entry === "string" ? entry : entry?.env;
-    const value = name ? String(env[name] || "").trim() : "";
+    if (!isImageEnvName(name)) continue;
+    const value = String(env[name] || "").trim();
     if (!value) continue;
     const image = typeof entry?.template === "string" ? entry.template.replace("{value}", value) : value;
+    if (!isImageReference(image)) continue;
     return { name, image };
   }
   return null;

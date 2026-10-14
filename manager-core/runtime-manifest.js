@@ -10,11 +10,12 @@
 
 const path = require("node:path");
 const { loadReferenceFile } = require("./reference-data");
+// The image-variable allowlist is shared with descriptor runtimes.envOverride.
+const { isImageEnvName } = require("./engines/descriptor-schema");
 
 const MANIFEST_FILE = "runtime-manifest.json";
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const ENGINE_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
-const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const RUNTIME_STATUSES = Object.freeze(["pinned", "experimental", "retired", "unpinned"]);
 
 // Identity fields (engineId, compatVersion, features) are stable facts about a
@@ -195,7 +196,11 @@ function validateRuntimeManifest(data) {
         }
       }
     }
-    if (runtime.envOverride !== undefined && !ENV_NAME_PATTERN.test(String(runtime.envOverride))) errors.push(`${id}.envOverride must be an environment variable name`);
+    // The variable's value becomes the image shown by GET /api/engines and passed
+    // to docker, so only image variables may be named, never HF_TOKEN or an API key.
+    if (runtime.envOverride !== undefined && !isImageEnvName(runtime.envOverride)) {
+      errors.push(`${id}.envOverride must name an image variable (*_IMAGE, *_IMAGE_VERSION, *_IMAGE_DIGEST or *_IMAGE_TAG)`);
+    }
     if (runtime.imageAliases !== undefined && (!Array.isArray(runtime.imageAliases) || runtime.imageAliases.some((alias) => typeof alias !== "string" || !alias.trim()))) {
       errors.push(`${id}.imageAliases must be a list of image references`);
     }

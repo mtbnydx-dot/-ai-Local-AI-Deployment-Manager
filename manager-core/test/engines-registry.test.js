@@ -219,10 +219,10 @@ test("runtimeForImage covers every former knownRuntimeImageMetadata case", () =>
 
 test("resolveRuntime selects by runtimeId, manifest key or image and fails with unknown_runtime", () => {
   manifest.clearRuntimeManifestCache();
-  assert.equal(core.engines.resolveRuntime("sglang", { runtimeId: "sglang@pennyroyal-v2.5.1" }).manifestKey, "sglangPennyroyal");
-  assert.equal(core.engines.resolveRuntime("llamacpp", { manifestKey: "llama" }).runtimeId, "llamacpp@b10630");
-  assert.equal(core.engines.resolveRuntime("vllm", { image: IMAGES.gemma }).runtimeId, "vllm@v74b5964f");
-  const custom = core.engines.resolveRuntime("vllm", { image: "example/custom-vllm:1" });
+  assert.equal(core.engines.resolveManifestRuntime("sglang", { runtimeId: "sglang@pennyroyal-v2.5.1" }).manifestKey, "sglangPennyroyal");
+  assert.equal(core.engines.resolveManifestRuntime("llamacpp", { manifestKey: "llama" }).runtimeId, "llamacpp@b10630");
+  assert.equal(core.engines.resolveManifestRuntime("vllm", { image: IMAGES.gemma }).runtimeId, "vllm@v74b5964f");
+  const custom = core.engines.resolveManifestRuntime("vllm", { image: "example/custom-vllm:1" });
   assert.equal(custom.custom, true);
   assert.equal(custom.runtimeId, "vllm@custom");
   assert.deepEqual(custom.features, {}, "an unknown image assumes no gated feature");
@@ -232,7 +232,7 @@ test("resolveRuntime selects by runtimeId, manifest key or image and fails with 
     ["vllm", { image: IMAGES.sglangDefault }],
     ["vllm", {}],
   ]) {
-    assert.throws(() => core.engines.resolveRuntime(engineId, selector), (error) => error.code === "unknown_runtime" && error.status === 404);
+    assert.throws(() => core.engines.resolveManifestRuntime(engineId, selector), (error) => error.code === "unknown_runtime" && error.status === 404);
   }
 });
 
@@ -294,6 +294,55 @@ test("envOverride lists keep today's image precedence, including partial values"
   assert.equal(registry.resolveRuntime("vllm", { manifestKey: "vllmGemma" }).image, IMAGES.gemma);
   assert.equal(registry.resolveRuntime("sglang", { manifestKey: "sglangPennyroyal" }).image, IMAGES.pennyroyal);
   assert.equal(registry.resolveRuntime("vllm", { image: "vllm/vllm-openai:v0.29.1" }).manifestKey, "vllm", "the effective slot image resolves to its slot");
+});
+
+test("override data cannot make the registry read a secret variable into an image", (t) => {
+  const secret = "hf_FAKEFAKEFAKEFAKEFAKE";
+  const env = { HF_TOKEN: secret, VLLM_API_KEY: "sk-fake-fake-fake" };
+  const leaks = (registry) => JSON.stringify(["vllm", "sglang", "llamacpp"].map((engineId) => registry.runtimesFor(engineId)));
+
+  // A runtime-manifest override naming HF_TOKEN fails validation as a whole:
+  // the bundled table stays in force and the problem is reported.
+  const bundled = JSON.parse(fs.readFileSync(BUNDLED_MANIFEST, "utf8")).runtimes;
+  withManifestOverride(t, { sglangPennyroyal: { ...bundled.sglangPennyroyal, envOverride: "HF_TOKEN" } });
+  assert.equal(manifest.validateRuntimeManifest({ runtimes: { a: { version: "1", repository: "x", envOverride: "VLLM_API_KEY" } } }).ok, false);
+  const registry = createRegistry(t, { env });
+  const pennyroyal = registry.resolveRuntime("sglang", { manifestKey: "sglangPennyroyal" });
+  assert.equal(pennyroyal.image, IMAGES.pennyroyal);
+  assert.equal(pennyroyal.imageOverrideEnv, null);
+  assert.ok(!leaks(registry).includes(secret));
+  assert.deepEqual(registry.errors().map((item) => [item.source, item.code]), [["manifest", "manifest_invalid"]]);
+  assert.match(registry.errors()[0].message, /sglangPennyroyal\.envOverride must name an image variable/);
+
+  // Defence in depth: a manifest that skipped validation still cannot name one.
+  const unvalidated = {
+    ...manifest,
+    listRuntimes: (options) => manifest.listRuntimes(options).map((ref) => ({ ...ref, envOverride: ref.manifestKey === "sglangPennyroyal" ? "HF_TOKEN" : "VLLM_API_KEY" })),
+  };
+  const direct = createRegistry(t, { env, manifest: unvalidated });
+  assert.equal(direct.resolveRuntime("sglang", { manifestKey: "sglangPennyroyal" }).image, IMAGES.pennyroyal);
+  assert.ok(!leaks(direct).includes(secret) && !leaks(direct).includes("sk-fake"));
+});
+
+test("an env value that is not an image reference counts as unset", (t) => {
+  const vllmImage = (env) => pick(createRegistry(t, { env }).defaultRuntime("vllm"), ["image", "imageOverrideEnv"]);
+  for (const value of ["--privileged", "vllm/vllm-openai:v0.29.1 --rm", "Vllm/Upper:tag", "a;b", "x".repeat(600)]) {
+    assert.deepEqual(vllmImage({ VLLM_IMAGE: value }), { image: IMAGES.vllmDefault, imageOverrideEnv: null }, value.slice(0, 40));
+  }
+  // The next variable in the precedence list still applies, and a template
+  // result is checked as a whole.
+  assert.deepEqual(vllmImage({ VLLM_IMAGE: "--privileged", VLLM_IMAGE_VERSION: "v0.29.1" }), { image: "vllm/vllm-openai:v0.29.1", imageOverrideEnv: "VLLM_IMAGE_VERSION" });
+  assert.deepEqual(vllmImage({ VLLM_IMAGE_VERSION: "v0.29.1 --privileged" }), { image: IMAGES.vllmDefault, imageOverrideEnv: null });
+  // Real references of every shape the managers accept today still apply.
+  for (const image of [
+    "example/vllm:dev",
+    "registry.example.test:5000/team/vllm-openai:v0.29.1",
+    `vllm/vllm-openai@sha256:${"c".repeat(64)}`,
+    `ghcr.io/jpezzulli/sglang-rtxpro6000:v2.5.1@sha256:${"d".repeat(64)}`,
+    "sglang-flashnext-sm120:local",
+  ]) {
+    assert.deepEqual(vllmImage({ VLLM_IMAGE: image }), { image, imageOverrideEnv: "VLLM_IMAGE" }, image);
+  }
 });
 
 test("pull policy is auto for what a stable tier-1 engine pulls today and explicit otherwise", (t) => {
@@ -378,6 +427,10 @@ test("the namespace hangs off manager-core without flat exports", () => {
   assert.equal(typeof core.engines.registerEngineRoutes, "function");
   assert.equal(core.createEngineRegistry, undefined);
   assert.equal(core.validateDescriptor, undefined);
+  // The manifest-only lookup is named apart from registry.resolveRuntime, which
+  // applies env image overrides and allowCustomImage.
+  assert.equal(core.engines.resolveManifestRuntime, core.resolveRuntime);
+  assert.equal(core.engines.resolveRuntime, undefined);
   assert.equal(core.engines.getEngineRegistry(), core.engines.getEngineRegistry(), "one process-wide registry");
   core.engines.clearEngineRegistryCache();
 });

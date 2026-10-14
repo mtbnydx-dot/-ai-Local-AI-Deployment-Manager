@@ -434,10 +434,10 @@ test("an envOverride entry is one variable or a precedence list, with templates 
     ["empty list", [], "runtimes.envOverride.sglang", "type"],
     ["number", 7, "runtimes.envOverride.sglang", "type"],
     ["duplicate", ["SGLANG_IMAGE", { env: "SGLANG_IMAGE", template: "lmsysorg/sglang:{value}" }], "runtimes.envOverride.sglang[1]", "duplicate"],
-    ["template without placeholder", [{ env: "SGLANG_VERSION", template: "lmsysorg/sglang:latest" }], "runtimes.envOverride.sglang[0].template", "pattern"],
-    ["template with a space", [{ env: "SGLANG_VERSION", template: "lmsysorg/sglang:{value} --privileged" }], "runtimes.envOverride.sglang[0].template", "pattern"],
-    ["template missing", [{ env: "SGLANG_VERSION" }], "runtimes.envOverride.sglang[0].template", "required"],
-    ["unknown item field", [{ env: "SGLANG_VERSION", template: "lmsysorg/sglang:{value}", shell: true }], "runtimes.envOverride.sglang[0].shell", "unknown_field"],
+    ["template without placeholder", [{ env: "SGLANG_IMAGE_VERSION", template: "lmsysorg/sglang:latest" }], "runtimes.envOverride.sglang[0].template", "pattern"],
+    ["template with a space", [{ env: "SGLANG_IMAGE_VERSION", template: "lmsysorg/sglang:{value} --privileged" }], "runtimes.envOverride.sglang[0].template", "pattern"],
+    ["template missing", [{ env: "SGLANG_IMAGE_VERSION" }], "runtimes.envOverride.sglang[0].template", "required"],
+    ["unknown item field", [{ env: "SGLANG_IMAGE_VERSION", template: "lmsysorg/sglang:{value}", shell: true }], "runtimes.envOverride.sglang[0].shell", "unknown_field"],
   ];
   for (const [label, spec, pathName, code] of cases) {
     const descriptor = readBundled("sglang");
@@ -451,6 +451,51 @@ test("an envOverride entry is one variable or a precedence list, with templates 
   // envOverride is not an override field: the env names stay what the code reads.
   const override = validateDescriptor({ id: "vllm", runtimes: { envOverride: { vllm: "MY_IMAGE" } } }, { mode: "override" });
   assert.deepEqual(override.errors.map((item) => `${item.path}:${item.code}`), ["runtimes.envOverride:override_field_forbidden"]);
+});
+
+test("envOverride may name only image variables, never one that can hold a secret", (t) => {
+  const { isImageEnvName } = core.engines.descriptorSchema;
+  // Every variable the managers read for an image today.
+  for (const name of [
+    "VLLM_IMAGE", "VLLM_IMAGE_VERSION", "VLLM_QWEN_MOE_IMAGE", "VLLM_GEMMA_IMAGE", "SGLANG_IMAGE",
+    "SGLANG_FLASH_NEXT_IMAGE", "LLAMA_IMAGE", "LLAMA_IMAGE_DIGEST", "LLAMA_MUSE_IMAGE", "LMDEPLOY_IMAGE_TAG",
+  ]) {
+    assert.equal(isImageEnvName(name), true, name);
+  }
+  for (const name of ["HF_TOKEN", "VLLM_API_KEY", "OPENAI_API_KEY", "PATH", "IMAGE", "MY_KEY_IMAGE", "HF_TOKEN_IMAGE", "SECRET_IMAGE_TAG", "vllm_image", "", null]) {
+    assert.equal(isImageEnvName(name), false, String(name));
+  }
+
+  const cases = [
+    ["secret name", "HF_TOKEN", "runtimes.envOverride.sglang"],
+    ["API key", "VLLM_API_KEY", "runtimes.envOverride.sglang"],
+    ["secret word in an image name", "SGLANG_API_KEY_IMAGE", "runtimes.envOverride.sglang"],
+    ["list item", ["SGLANG_IMAGE", "HF_TOKEN"], "runtimes.envOverride.sglang[1]"],
+    ["template item", [{ env: "OPENAI_API_KEY", template: "lmsysorg/sglang:{value}" }], "runtimes.envOverride.sglang[0].env"],
+  ];
+  for (const [label, spec, pathName] of cases) {
+    const descriptor = readBundled("sglang");
+    descriptor.runtimes.envOverride.sglang = spec;
+    const result = validateDescriptor(descriptor);
+    assert.equal(result.ok, false, label);
+    assert.deepEqual(codesAt(result, pathName), ["env_not_allowed"], label);
+  }
+
+  // A custom engine cannot name a secret either: the draft check and the load
+  // both reject it, and nothing of the engine is applied.
+  withManifestOverride(t, { lmdeployLab: { engineId: "lmdeploy-lab", version: "0.10.2", image: "openmmlab/lmdeploy:v0.10.2" } });
+  const draft = templateDraft({ runtimes: { default: "lmdeployLab", allowed: ["lmdeployLab"], envOverride: { lmdeployLab: "HF_TOKEN" } } });
+  const registry = core.engines.createEngineRegistry({
+    overrideDir: makeOverrideDir(t, { "lmdeploy-lab.json": draft }),
+    env: { HF_TOKEN: "hf_FAKEFAKEFAKEFAKEFAKE" },
+  });
+  const loadErrors = registry.errors().map((item) => [item.source, item.engineId, item.path, item.code]);
+  assert.deepEqual(loadErrors, [["override", "lmdeploy-lab", "runtimes.envOverride.lmdeployLab", "env_not_allowed"]]);
+  assert.equal(registry.has("lmdeploy-lab"), false);
+  const verdict = core.engines.validateDraftRequest(registry, { descriptor: draft }).payload;
+  assert.equal(verdict.ok, false);
+  assert.deepEqual(verdict.errors.map((item) => `${item.path}:${item.code}`), ["runtimes.envOverride.lmdeployLab:env_not_allowed"]);
+  assert.ok(!JSON.stringify([registry.errors(), verdict]).includes("hf_FAKE"), "the variable's value is never read into a message");
 });
 
 test("unknown and external are reserved engine ids", () => {

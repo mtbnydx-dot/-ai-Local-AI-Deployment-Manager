@@ -171,6 +171,15 @@ test("image presence is cached for 60 s, and a Docker that cannot answer gives p
   const body = (await call(down.app, "GET /api/engines")).body;
   assert.deepEqual(body.engines[0].runtimes.map((runtime) => runtime.present), [null, null]);
   assert.equal(body.engines[0].health.hostReady, false);
+  // The container listing answers [] when Docker is down, so the count is unknown too.
+  assert.equal(body.engines[0].health.instances, null);
+  // A listing that did find running containers is still counted.
+  const listed = mount(t, {
+    managerId: "llama",
+    images: fakeImages(new Set(), { daemonDown: true }),
+    containers: [{ name: "llama-local", manager: "llama-manager", engine: "llama", running: true, labels: {} }],
+  });
+  assert.equal((await call(listed.app, "GET /api/engines")).body.engines[0].health.instances, 1);
 
   // Without Docker probes the fields are unknown rather than guessed.
   const app2 = recordingApp();
@@ -206,6 +215,80 @@ test("a bad override is listed in errors[] and the engines are still served", as
   const sglang = res.body.engines.find((engine) => engine.engineId === "sglang");
   assert.deepEqual(sglang.runtimes.map((runtime) => runtime.runtimeId), ACCEPTANCE_RUNTIME_IDS.filter((id) => id.startsWith("sglang@")));
   assert.deepEqual(sglang.runtimes.filter((runtime) => runtime.default).map((runtime) => runtime.runtimeId), ["sglang@0.5.17"]);
+});
+
+test("each manager reports the errors of its own engines plus the shared ones", async (t) => {
+  const files = {
+    "broken.json": "{ nope",
+    "llamacpp.json": { id: "llamacpp", status: "nonsense" },
+    "vllm.json": { id: "vllm", status: "nonsense" },
+    "new-engine.json": { id: "new-engine", adapter: "docker-template" },
+  };
+  const registry = core.engines.createEngineRegistry({ overrideDir: overrideDir(t, files), env: {} });
+  const errorsOf = async (managerId) => {
+    const body = (await call(mount(t, { managerId, registry }).app, "GET /api/engines")).body;
+    return [...new Set(body.errors.map((item) => `${path.basename(item.file)}:${item.engineId}`))].sort();
+  };
+  // Engine-less problems and engines that failed to load are shared, so the
+  // entry aggregate dedupes those; an engine's own errors appear once.
+  assert.deepEqual(await errorsOf("vllm"), ["broken.json:", "new-engine.json:new-engine", "vllm.json:vllm"]);
+  assert.deepEqual(await errorsOf("llama"), ["broken.json:", "llamacpp.json:llamacpp", "new-engine.json:new-engine"]);
+});
+
+test("GET /api/engines never shows a secret that override data names as an image variable", async (t) => {
+  const secret = "hf_FAKEFAKEFAKEFAKEFAKE";
+  const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "engines-manifest-"));
+  const bundled = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "data", "runtime-manifest.json"), "utf8"));
+  fs.writeFileSync(path.join(manifestDir, "runtime-manifest.json"), JSON.stringify({
+    asOf: "2026-10-14",
+    runtimes: { sglangPennyroyal: { ...bundled.runtimes.sglangPennyroyal, envOverride: "HF_TOKEN" } },
+  }));
+  process.env.AI_REFERENCE_DATA_DIR = manifestDir;
+  core.clearRuntimeManifestCache();
+  t.after(() => {
+    process.env.AI_REFERENCE_DATA_DIR = EMPTY_CONFIG_DIR;
+    core.clearRuntimeManifestCache();
+    fs.rmSync(manifestDir, { recursive: true, force: true });
+  });
+  const customEngine = {
+    schemaVersion: 1,
+    asOf: "2026-10-14",
+    staleAfterDays: 120,
+    id: "custom-lab",
+    label: { zh: "Custom lab", en: "Custom lab" },
+    family: "openai-server",
+    adapter: "docker-template",
+    tier: 2,
+    status: "experimental",
+    hostManager: "vllm",
+    artifactFormats: ["safetensors"],
+    runtimes: { default: "customLab", allowed: ["customLab"], envOverride: { customLab: "HF_TOKEN" } },
+    host: { kinds: ["docker"], default: "docker", containerPort: 8000 },
+    api: { openaiBase: "/v1", models: "/v1/models", health: "/health", ready: { kind: "models-list" } },
+    memoryModel: { kind: "measured" },
+    capabilities: {
+      parallelInstances: false, tensorParallel: false, pipelineParallel: false, dataParallel: false, expertParallel: false,
+      speculative: [], autoParsers: { tool: null, reasoning: null }, lora: false, multiModel: false, hotLoad: false, sleepWake: false, roles: ["chat"],
+    },
+    secrets: { apiKey: { mode: "unsupported" } },
+    template: { args: ["serve"] },
+  };
+  const images = fakeImages(new Set());
+  const registry = core.engines.createEngineRegistry({ overrideDir: overrideDir(t, { "custom-lab.json": customEngine }), env: { HF_TOKEN: secret } });
+  const { app } = mount(t, { managerId: "vllm", registry, images });
+  const res = await call(app, "GET /api/engines");
+  assert.equal(res.statusCode, 200);
+  assert.ok(!JSON.stringify(res.body).includes(secret), "the secret is not in the payload");
+  assert.ok(!images.calls.includes(secret), "the secret never reaches docker image inspect");
+  assert.deepEqual(res.body.engines.map((engine) => engine.engineId), ["vllm", "sglang"]);
+  const pennyroyal = res.body.engines[1].runtimes.find((runtime) => runtime.manifestKey === "sglangPennyroyal");
+  assert.equal(Object.hasOwn(pennyroyal, "imageOverrideEnv"), false);
+  // Both problems are reported: the manifest falls back to the bundled table
+  // and the custom engine is not loaded.
+  assert.deepEqual(res.body.errors.map((item) => [item.source, item.engineId, item.code]).sort(), [
+    ["manifest", "", "manifest_invalid"],
+    ["override", "custom-lab", "env_not_allowed"],
+  ]);
 });
 
 test("POST /api/engines/descriptors/validate reports draft errors and writes nothing", async (t) => {
@@ -261,6 +344,13 @@ test("POST /api/engines/descriptors/validate reports draft errors and writes not
   });
   assert.equal(huge.statusCode, 413);
   assert.equal(huge.body.error.code, "descriptor_too_large");
+
+  // Nesting JSON.parse accepts but JSON.stringify cannot walk is a 400, not a 500.
+  let deep = {};
+  for (let depth = 0; depth < 200_000; depth += 1) deep = { a: deep };
+  const nested = await call(app, "POST /api/engines/descriptors/validate", { body: { descriptor: { id: "deep-engine", notes: deep } } });
+  assert.equal(nested.statusCode, 400);
+  assert.equal(nested.body.error.code, "invalid_body");
 
   assert.deepEqual(fs.readdirSync(dir), []);
   assert.equal(JSON.stringify(registry.list()), before);

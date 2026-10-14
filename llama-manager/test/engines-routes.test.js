@@ -73,5 +73,6 @@ test("GET /api/engines lists llama.cpp with its runtimes over HTTP", async (t) =
     ["llamacpp@b10630", true, null, "auto"],
     ["llamacpp@muse-62bf73d", false, null, "explicit"],
   ]);
-  assert.deepEqual(llama.health, { host: "docker", hostReady: false, instances: 0 });
+  // Docker answered nothing, so the empty container listing is not a count of zero.
+  assert.deepEqual(llama.health, { host: "docker", hostReady: false, instances: null });
 });

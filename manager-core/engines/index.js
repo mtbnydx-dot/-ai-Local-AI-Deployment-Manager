@@ -5,6 +5,12 @@
 // (param catalog, recipes, metrics, memory models) cannot collide with the
 // older utilities. The runtime manifest identity helpers stay flat exports of
 // runtime-manifest.js and are re-exposed here for engine code.
+//
+// resolveManifestRuntime is the manifest-only lookup (core.resolveRuntime): it
+// ignores env image overrides (VLLM_IMAGE, SGLANG_IMAGE, LLAMA_IMAGE...) and
+// runtimes.allowCustomImage. Launch code resolves through the registry
+// (registry.resolveRuntime / runtimesFor), which applies both, so the image it
+// runs is the one CONFIG runs today.
 
 const descriptorSchema = require("./descriptor-schema");
 const registry = require("./registry");
@@ -24,7 +30,7 @@ module.exports = {
   buildEnginesPayload: routes.buildEnginesPayload,
   validateDraftRequest: routes.validateDraftRequest,
   listRuntimes: runtimeManifest.listRuntimes,
-  resolveRuntime: runtimeManifest.resolveRuntime,
+  resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,
   runtimeIdFor: runtimeManifest.runtimeIdFor,
 };
