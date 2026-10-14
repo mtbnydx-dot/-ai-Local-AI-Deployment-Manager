@@ -7,6 +7,8 @@ const {
 } = require("./billing-price-templates");
 // One forwarded-header list for every "is this request proxied?" gate.
 const { FORWARDED_HEADERS } = require("./security");
+// The one internal signing module; it owns the /internal/* prefix allowlist.
+const { BILLING_PATH_PREFIX, verifyInternalRequest } = require("../../manager-core/internal-auth");
 
 const MAX_BILLING_BODY_BYTES = 256 * 1024;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -266,16 +268,24 @@ function createBillingHttpHandler(options = {}) {
   if (typeof getStore !== "function" || typeof readRequestBody !== "function" || typeof sendJson !== "function") {
     throw new Error("Billing HTTP handler dependencies are incomplete.");
   }
+  // Manager calls verify through internal-auth, narrowed to the billing prefix.
+  // An injected verifier is still accepted and must keep the same contract.
+  const verifyInternal = typeof verifyBillingRequest === "function"
+    ? verifyBillingRequest
+    : (req, raw, token, verifyOptions) => verifyInternalRequest(req, raw, token, {
+      ...verifyOptions,
+      pathPrefixes: [BILLING_PATH_PREFIX],
+    });
 
   async function handleInternal(req, res, url) {
-    if (!url.pathname.startsWith("/internal/billing/")) return false;
+    if (!url.pathname.startsWith(BILLING_PATH_PREFIX)) return false;
     if (req.method !== "POST" || !["/internal/billing/authorize", "/internal/billing/settle"].includes(url.pathname)) {
       sendJson(res, { ok: false, code: "not_found", message: "Not found." }, 404);
       return true;
     }
     try {
       const { raw, data } = await readBillingBody(req, readRequestBody);
-      const verified = verifyBillingRequest(req, raw, getTrustToken(), { pathname: url.pathname });
+      const verified = verifyInternal(req, raw, getTrustToken(), { pathname: url.pathname });
       if (!verified.ok) {
         sendJson(res, { ok: false, allowed: false, code: "billing_unauthorized", message: "Billing request authentication failed." }, 401);
         return true;

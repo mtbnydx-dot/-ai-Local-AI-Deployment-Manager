@@ -150,7 +150,6 @@ const handleBillingHttpRequest = createBillingHttpHandler({
   getStore: getBillingStore,
   readRequestBody,
   sendJson,
-  verifyBillingRequest: core.verifyBillingRequest,
   getTrustToken: security.getTrustToken,
   isLocalAddress: core.isLocalAddress,
   extractHostname: core.extractHostname,

@@ -1,114 +1,71 @@
 "use strict";
 
-const crypto = require("node:crypto");
-const { createGatewayTrustReader } = require("./gateway-trust");
-const { isLocalAddress, normalizeRemoteAddress } = require("./network");
+// Manager -> entry billing calls. The names below are kept for existing
+// callers; signing and verification live in internal-auth.js (the manager
+// form of the one internal scheme), which reproduces the billing signature
+// byte for byte.
+const {
+  BILLING_PATH_PREFIX,
+  MANAGER_PRINCIPAL_HEADER,
+  MANAGER_TIMESTAMP_HEADER,
+  MANAGER_SIGNATURE_HEADER,
+  MANAGER_VERSION_HEADER,
+  bodySha256Hex,
+  normalizeInternalManagerId,
+  signInternal,
+  buildInternalRequestHeaders,
+  verifyInternalRequest,
+  normalizeInternalBaseUrl,
+  createInternalClient,
+} = require("./internal-auth");
 
-const BILLING_MANAGER_HEADER = "x-ai-billing-manager";
-const BILLING_TIMESTAMP_HEADER = "x-ai-billing-ts";
-const BILLING_SIGNATURE_HEADER = "x-ai-billing-signature";
-const BILLING_VERSION_HEADER = "x-ai-billing-version";
+const BILLING_MANAGER_HEADER = MANAGER_PRINCIPAL_HEADER;
+const BILLING_TIMESTAMP_HEADER = MANAGER_TIMESTAMP_HEADER;
+const BILLING_SIGNATURE_HEADER = MANAGER_SIGNATURE_HEADER;
+const BILLING_VERSION_HEADER = MANAGER_VERSION_HEADER;
 const DEFAULT_BILLING_BASE_URL = "http://127.0.0.1:5176";
 const DEFAULT_BILLING_TIMEOUT_MS = 3000;
-const DEFAULT_BILLING_MAX_SKEW_MS = 60 * 1000;
-
-function headerText(headers = {}, name) {
-  const value = headers[name] ?? headers[String(name).toLowerCase()];
-  return String(Array.isArray(value) ? value[0] : value || "").trim();
-}
-
-function safeEqualText(left, right) {
-  const a = Buffer.from(String(left || ""));
-  const b = Buffer.from(String(right || ""));
-  return Boolean(a.length && a.length === b.length && crypto.timingSafeEqual(a, b));
-}
 
 function normalizeBillingManagerId(value) {
-  const text = String(value || "").trim().toLowerCase();
-  if (!text || text.length > 80 || !/^[a-z0-9][a-z0-9._-]*$/.test(text)) return "";
-  return text;
+  return normalizeInternalManagerId(value);
 }
 
 function normalizeBillingPath(value) {
   const pathname = String(value || "").split("?")[0];
-  if (!pathname.startsWith("/internal/billing/")) return "";
+  if (!pathname.startsWith(BILLING_PATH_PREFIX)) return "";
   return pathname;
 }
 
 function billingBodyHash(body) {
-  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body || ""), "utf8");
-  return crypto.createHash("sha256").update(buffer).digest("hex");
+  return bodySha256Hex(body);
 }
 
 function signBillingRequest(token, method, pathname, managerId, timestamp, body) {
-  return crypto
-    .createHmac("sha256", String(token || ""))
-    .update([
-      String(method || "POST").toUpperCase(),
-      normalizeBillingPath(pathname),
-      normalizeBillingManagerId(managerId),
-      String(timestamp || ""),
-      billingBodyHash(body),
-    ].join("\n"), "utf8")
-    .digest("base64url");
+  return signInternal(token, {
+    method: String(method || "POST"),
+    path: normalizeBillingPath(pathname),
+    principal: normalizeBillingManagerId(managerId),
+    ts: String(timestamp || ""),
+    bodySha256: billingBodyHash(body),
+  });
 }
 
 function buildBillingRequestHeaders(token, method, pathname, managerId, body, now = Date.now()) {
-  const normalizedManagerId = normalizeBillingManagerId(managerId);
-  const normalizedPath = normalizeBillingPath(pathname);
-  const timestamp = String(now);
-  if (!token || !normalizedManagerId || !normalizedPath) return {};
-  return {
-    "content-type": "application/json",
-    "accept": "application/json",
-    [BILLING_MANAGER_HEADER]: normalizedManagerId,
-    [BILLING_TIMESTAMP_HEADER]: timestamp,
-    [BILLING_SIGNATURE_HEADER]: signBillingRequest(token, method, normalizedPath, normalizedManagerId, timestamp, body),
-    [BILLING_VERSION_HEADER]: "1",
-  };
+  if (!normalizeBillingPath(pathname)) return {};
+  return buildInternalRequestHeaders(token, method, pathname, managerId, body, now);
 }
 
+// Billing keeps its historical billing_* codes. A path outside the billing
+// prefix was reported as a missing signature before, and still is.
 function verifyBillingRequest(req, rawBody, token, options = {}) {
-  const socketAddress = normalizeRemoteAddress(req?.socket?.remoteAddress || req?.ip || "");
-  if (!isLocalAddress(socketAddress)) return { ok: false, code: "billing_loopback_required" };
-  const managerId = normalizeBillingManagerId(headerText(req?.headers || {}, BILLING_MANAGER_HEADER));
-  const allowedManagers = new Set((options.allowedManagers || ["vllm-manager", "llama-manager"])
-    .map(normalizeBillingManagerId)
-    .filter(Boolean));
-  if (!managerId || !allowedManagers.has(managerId)) return { ok: false, code: "billing_manager_not_allowed" };
-  const pathname = normalizeBillingPath(options.pathname || req?.url || "");
-  const timestamp = headerText(req?.headers || {}, BILLING_TIMESTAMP_HEADER);
-  const signature = headerText(req?.headers || {}, BILLING_SIGNATURE_HEADER);
-  const version = headerText(req?.headers || {}, BILLING_VERSION_HEADER);
-  if (!token || !pathname || !timestamp || !signature || version !== "1") {
-    return { ok: false, code: "billing_signature_missing" };
-  }
-  const issuedAt = Number(timestamp);
-  const now = Number(options.now ?? Date.now());
-  const maxSkewMs = Math.max(1000, Number(options.maxSkewMs ?? DEFAULT_BILLING_MAX_SKEW_MS));
-  if (!Number.isFinite(issuedAt) || Math.abs(now - issuedAt) > maxSkewMs) {
-    return { ok: false, code: "billing_signature_expired" };
-  }
-  const expected = signBillingRequest(token, req?.method || "POST", pathname, managerId, timestamp, rawBody);
-  if (!safeEqualText(signature, expected)) return { ok: false, code: "billing_signature_invalid" };
-  return { ok: true, managerId };
+  const verified = verifyInternalRequest(req, rawBody, token, { ...options, pathPrefixes: [BILLING_PATH_PREFIX] });
+  if (verified.ok) return verified;
+  if (verified.code === "internal_path_not_allowed") return { ok: false, code: "billing_signature_missing" };
+  return { ok: false, code: String(verified.code).replace(/^internal_/, "billing_") };
 }
 
 function normalizeBillingBaseUrl(value) {
-  const text = String(value || DEFAULT_BILLING_BASE_URL).trim().replace(/\/$/, "");
-  let parsed;
-  try {
-    parsed = new URL(text);
-  } catch {
-    throw new Error("Billing service URL is invalid.");
-  }
-  if (parsed.protocol !== "http:" || !["127.0.0.1", "[::1]", "localhost"].includes(parsed.hostname)) {
-    throw new Error("Billing service must use an HTTP loopback URL.");
-  }
-  if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password) {
-    throw new Error("Billing service URL must not contain credentials, a path, a query, or a fragment.");
-  }
-  return parsed.origin;
+  return normalizeInternalBaseUrl(value || DEFAULT_BILLING_BASE_URL, { label: "Billing service" });
 }
 
 function boundedBillingTimeout(value) {
@@ -128,17 +85,36 @@ function normalizeBillingResponse(data, response, fallbackCode) {
   };
 }
 
+function billingUnavailable(error) {
+  const messages = {
+    internal_key_unavailable: "Billing trust is unavailable.",
+    internal_timeout: "Billing service timed out.",
+  };
+  return {
+    ok: false,
+    allowed: false,
+    status: 503,
+    code: "billing_unavailable",
+    message: messages[error?.code] || "Billing service is unavailable.",
+  };
+}
+
 function createBillingClient(options = {}) {
   const managerId = normalizeBillingManagerId(options.managerId);
   if (!managerId) throw new Error("A valid billing manager id is required.");
   const baseUrl = normalizeBillingBaseUrl(options.baseUrl || process.env.AI_BILLING_BASE_URL || DEFAULT_BILLING_BASE_URL);
   const timeoutMs = boundedBillingTimeout(options.timeoutMs ?? process.env.AI_BILLING_TIMEOUT_MS);
-  const readToken = options.readToken || createGatewayTrustReader({
-    root: options.root,
-    file: options.trustFile,
-    cacheTtlMs: 0,
+  // The internal client reads the trust token per request, signs in the
+  // manager form and retries once on 401 after re-reading a rotated token.
+  const internalClient = createInternalClient({
+    managerId,
+    baseUrl,
+    timeoutMs,
+    aiRoot: options.root,
+    trustFile: options.trustFile,
+    readKey: options.readToken,
+    fetchFn: options.fetchFn,
   });
-  const fetchFn = options.fetchFn || ((...args) => fetch(...args));
 
   async function post(pathname, input = {}, postOptions = {}) {
     const normalizedPath = normalizeBillingPath(pathname);
@@ -151,37 +127,12 @@ function createBillingClient(options = {}) {
     const attempts = Math.min(3, Math.max(1, Number(postOptions.attempts || 1)));
     let lastResult = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      const token = String(readToken() || "").trim();
-      if (!token) {
-        lastResult = {
-          ok: false,
-          allowed: false,
-          status: 503,
-          code: "billing_unavailable",
-          message: "Billing trust is unavailable.",
-        };
-      } else {
-        try {
-          const response = await fetchFn(`${baseUrl}${normalizedPath}`, {
-            method: "POST",
-            headers: buildBillingRequestHeaders(token, "POST", normalizedPath, managerId, body),
-            body,
-            signal: AbortSignal.timeout(timeoutMs),
-          });
-          const text = await response.text();
-          let data = null;
-          try { data = text ? JSON.parse(text) : {}; } catch {}
-          lastResult = normalizeBillingResponse(data, response, "billing_rejected");
-          if (response.status < 500 || attempt === attempts) return lastResult;
-        } catch (error) {
-          lastResult = {
-            ok: false,
-            allowed: false,
-            status: 503,
-            code: "billing_unavailable",
-            message: error?.name === "TimeoutError" ? "Billing service timed out." : "Billing service is unavailable.",
-          };
-        }
+      try {
+        const { status, json } = await internalClient.request("POST", normalizedPath, body);
+        lastResult = normalizeBillingResponse(json, { ok: status >= 200 && status < 300, status }, "billing_rejected");
+        if (status < 500 || attempt === attempts) return lastResult;
+      } catch (error) {
+        lastResult = billingUnavailable(error);
       }
       if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
     }
