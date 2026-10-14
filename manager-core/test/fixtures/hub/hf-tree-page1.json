@@ -1,0 +1,36 @@
+[
+  {
+    "type": "directory",
+    "oid": "a17267d998977539ba869bca3aa290bec3fa155f",
+    "size": 0,
+    "path": "shards"
+  },
+  {
+    "type": "file",
+    "oid": "bf9473777fc46ae09873828ed699ed9487a376ec",
+    "size": 134,
+    "path": "shards/part-00001.safetensors",
+    "lfs": {
+      "oid": "dce1932a3fb5083f83cd02ffa27003a35b450ee8118a6dc6257bb0dfc0a60f19",
+      "size": 4000000000,
+      "pointerSize": 134
+    }
+  },
+  {
+    "type": "file",
+    "oid": "a5b64fea338946070dfef721a7d18eb938a35d6c",
+    "size": 134,
+    "path": "shards/part-00002.safetensors",
+    "lfs": {
+      "oid": "bea6249a2287cc53bca66102dcdfdcea7d091fb7e798cd937378489cac4437e2",
+      "size": 4000000000,
+      "pointerSize": 134
+    }
+  },
+  {
+    "type": "file",
+    "oid": "4b21f155d7a715cec3a1371f83f8474a05e3c685",
+    "size": 512,
+    "path": "config.json"
+  }
+]

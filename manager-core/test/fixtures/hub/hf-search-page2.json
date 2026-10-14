@@ -1,0 +1,36 @@
+[
+  {
+    "_id": "fc5cbde7d2a75b42decbbaf5",
+    "id": "another-org/Another-14B-AWQ",
+    "modelId": "another-org/Another-14B-AWQ",
+    "downloads": 9300,
+    "likes": 12,
+    "lastModified": "2026-09-10T01:00:00.000Z",
+    "pipeline_tag": "text-generation",
+    "library_name": "transformers",
+    "tags": [
+      "transformers",
+      "safetensors",
+      "awq",
+      "base_model:finetune:another-org/Another-14B"
+    ],
+    "gated": false,
+    "safetensors": {
+      "parameters": {
+        "I32": 1500000000,
+        "F16": 500000000
+      },
+      "total": 14000000000
+    }
+  },
+  {
+    "_id": "0861ce2f309a7ba6ea723921",
+    "id": "standalone-model",
+    "modelId": "standalone-model",
+    "downloads": 5,
+    "likes": 0,
+    "lastModified": "2025-01-01T00:00:00.000Z",
+    "pipeline_tag": "feature-extraction",
+    "tags": []
+  }
+]

@@ -1,0 +1,24 @@
+[
+  {
+    "type": "file",
+    "oid": "0d983e0b549774cc3fc884388ddf52c1889c52d9",
+    "size": 134,
+    "path": "shards/part-00003.safetensors",
+    "lfs": {
+      "oid": "9016039fd740195abc761495cf0b3d6d5e9031ae816234844723f9097465e34b",
+      "size": 2500000000,
+      "pointerSize": 134
+    }
+  },
+  {
+    "type": "file",
+    "oid": "3f08db158a31063b733472a586f2798b8d47083f",
+    "size": 134,
+    "path": "tokenizer.json",
+    "lfs": {
+      "oid": "1a35bbbdcf34146d14ad28b87f2f7917cfc6ecd6ea2a4f87a5680690c4882f77",
+      "size": 11422654,
+      "pointerSize": 134
+    }
+  }
+]
