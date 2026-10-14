@@ -1,0 +1,247 @@
+[
+  {
+    "artifactKey": "gguf:|Q4_K_M",
+    "kind": "gguf-quant",
+    "label": "Q4_K_M",
+    "format": "gguf",
+    "quant": "Q4_K_M",
+    "directory": "",
+    "bytes": 2102334455,
+    "fileCount": 1,
+    "multiPart": false,
+    "complete": true,
+    "totalBytes": 2102840618,
+    "files": [
+      {
+        "path": "Example-Mixed-Q4_K_M.gguf",
+        "size": 2102334455,
+        "sha256": "37de419d69adf21f9149642ec102f8cd481841a8bdb3416c7baa20fa1bad75e9",
+        "gitOid": "bce503267af3a963483189bbbd92892d0771e7d7",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "README.md",
+        "size": 3310,
+        "sha256": null,
+        "gitOid": "3cadb54878f4b63abfad8996cb9957a31e1a4fb8",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 920,
+        "sha256": null,
+        "gitOid": "e9a8240adea17121a65a99e846508979af449787",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer.model",
+        "size": 499723,
+        "sha256": "f8df713b53ca609b4dfbd69f9a5d3dc334fe8e94147d813efbe5c2166cdec6f2",
+        "gitOid": "d4cafe46760ded3d0dbda704969278b0a5e69c9e",
+        "lfs": true,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 2210,
+        "sha256": null,
+        "gitOid": "b4649568c6ee0174ed110149cebb66501cba8d8a",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [],
+      "draft": []
+    }
+  },
+  {
+    "artifactKey": "st:",
+    "kind": "safetensors-full",
+    "label": "safetensors",
+    "format": "safetensors",
+    "quant": null,
+    "directory": "",
+    "bytes": 4001122334,
+    "fileCount": 1,
+    "multiPart": false,
+    "complete": true,
+    "totalBytes": 4001685117,
+    "files": [
+      {
+        "path": "README.md",
+        "size": 3310,
+        "sha256": null,
+        "gitOid": "3cadb54878f4b63abfad8996cb9957a31e1a4fb8",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 920,
+        "sha256": null,
+        "gitOid": "e9a8240adea17121a65a99e846508979af449787",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "configuration_example.py",
+        "size": 4410,
+        "sha256": null,
+        "gitOid": "a07f9e9f4e3b4e0126b57f70e3a5c782309f9fb3",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "model.safetensors",
+        "size": 4001122334,
+        "sha256": "db53bdcbd69eaeedea0c57f2835bd8b34c76ce26167577aec21b96ebc14d6395",
+        "gitOid": "a4e314fa0d94f2e24016ba7365787b58aab213fd",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "modeling_example.py",
+        "size": 52210,
+        "sha256": null,
+        "gitOid": "198b0c476af03024588d4161f58401c4608f2ded",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer.model",
+        "size": 499723,
+        "sha256": "f8df713b53ca609b4dfbd69f9a5d3dc334fe8e94147d813efbe5c2166cdec6f2",
+        "gitOid": "d4cafe46760ded3d0dbda704969278b0a5e69c9e",
+        "lfs": true,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 2210,
+        "sha256": null,
+        "gitOid": "b4649568c6ee0174ed110149cebb66501cba8d8a",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [
+      "configuration_example.py",
+      "modeling_example.py"
+    ],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [],
+      "draft": []
+    }
+  },
+  {
+    "artifactKey": "st:fp8",
+    "kind": "safetensors-full",
+    "label": "fp8",
+    "format": "safetensors",
+    "quant": null,
+    "directory": "fp8",
+    "bytes": 3500000000,
+    "fileCount": 2,
+    "multiPart": true,
+    "complete": true,
+    "totalBytes": 3500603893,
+    "files": [
+      {
+        "path": "README.md",
+        "size": 3310,
+        "sha256": null,
+        "gitOid": "3cadb54878f4b63abfad8996cb9957a31e1a4fb8",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 920,
+        "sha256": null,
+        "gitOid": "e9a8240adea17121a65a99e846508979af449787",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "configuration_example.py",
+        "size": 4410,
+        "sha256": null,
+        "gitOid": "a07f9e9f4e3b4e0126b57f70e3a5c782309f9fb3",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "fp8/config.json",
+        "size": 1010,
+        "sha256": null,
+        "gitOid": "8f758e8d8a14bf5db3a1c0d0b36c486f6a91e129",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "fp8/model-00001-of-00002.safetensors",
+        "size": 1800000000,
+        "sha256": "bdfd2371aa01aa20aad9537a27eddca3215deaac018e5060e42d16af7003d93c",
+        "gitOid": "8f09e89eb80640b7b4edb7035d5d1256cd4353f5",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "fp8/model-00002-of-00002.safetensors",
+        "size": 1700000000,
+        "sha256": "8947971c03f3a1272232677d588aa667e0d351525e97b0784e8ea9a03c37fc68",
+        "gitOid": "df13bdfff0b5db78e828c91f8a7ff088accdf335",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "fp8/model.safetensors.index.json",
+        "size": 40100,
+        "sha256": null,
+        "gitOid": "6c6a01113911a12de46a5df3462728a75975c4aa",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "modeling_example.py",
+        "size": 52210,
+        "sha256": null,
+        "gitOid": "198b0c476af03024588d4161f58401c4608f2ded",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer.model",
+        "size": 499723,
+        "sha256": "f8df713b53ca609b4dfbd69f9a5d3dc334fe8e94147d813efbe5c2166cdec6f2",
+        "gitOid": "d4cafe46760ded3d0dbda704969278b0a5e69c9e",
+        "lfs": true,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 2210,
+        "sha256": null,
+        "gitOid": "b4649568c6ee0174ed110149cebb66501cba8d8a",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [
+      "configuration_example.py",
+      "modeling_example.py"
+    ],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [],
+      "draft": []
+    }
+  }
+]

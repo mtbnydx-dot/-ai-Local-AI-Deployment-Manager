@@ -1,0 +1,111 @@
+[
+  {
+    "artifactKey": "st:",
+    "kind": "safetensors-full",
+    "label": "safetensors",
+    "format": "safetensors",
+    "quant": null,
+    "directory": "",
+    "bytes": 9068245120,
+    "fileCount": 3,
+    "multiPart": true,
+    "complete": true,
+    "totalBytes": 9084212207,
+    "files": [
+      {
+        "path": "README.md",
+        "size": 6120,
+        "sha256": null,
+        "gitOid": "b10d539ee4461dcb2cdf33fa3d54ae0cd1c16bff",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 1480,
+        "sha256": null,
+        "gitOid": "a116ab0e25e1a65718c9d095d0acce6781a28806",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "generation_config.json",
+        "size": 214,
+        "sha256": null,
+        "gitOid": "dc7d6ae59c2a60a99b8148a992563de48696fae9",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "merges.txt",
+        "size": 1671853,
+        "sha256": null,
+        "gitOid": "70d643efd67a286230a5a27c6425a2bbf244a1db",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "model-00001-of-00003.safetensors",
+        "size": 3995391552,
+        "sha256": "e136045e4c0eb7d77100aab66a241a67bf342f93c0f4d6c8e11c4401642ed7f1",
+        "gitOid": "d0ba8360ef7db3a3d948eda284ac71d8e464b238",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "model-00002-of-00003.safetensors",
+        "size": 3982441240,
+        "sha256": "d6b6b6029714d9f1d29bce66a13525a129598d3b700c859e63955f8af85ea8bd",
+        "gitOid": "b2d01601569f68e6a82300c2dfc577e278d83dc1",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "model-00003-of-00003.safetensors",
+        "size": 1090412328,
+        "sha256": "c78d00bab0ba9e6a5645bd940091d5f4254aff6b307695b210309fbf0b79a942",
+        "gitOid": "6b48480d52784207560487a65daa4625620987b8",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "model.safetensors.index.json",
+        "size": 78201,
+        "sha256": null,
+        "gitOid": "de9db3bf6d14d22f83e156f8b61004a89b516db2",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer.json",
+        "size": 11422654,
+        "sha256": "0fc366ca1c1f33a2bf4a4d4e75ce22e2a9199fce231c22b8e5db42c52b05e1d8",
+        "gitOid": "58b963c9991e9868cc93ac48a0d75004d630c1aa",
+        "lfs": true,
+        "role": "sidecar"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 9732,
+        "sha256": null,
+        "gitOid": "3e0f742a357d5cf13a52e5492a200ec28f5a7f8e",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "vocab.json",
+        "size": 2776833,
+        "sha256": null,
+        "gitOid": "4ad3000c736508ea9a0ca70fcfee556ff07b7c2a",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [],
+      "draft": []
+    }
+  }
+]

@@ -1,0 +1,260 @@
+[
+  {
+    "artifactKey": "gguf:|Q2_K",
+    "kind": "gguf-quant",
+    "label": "Q2_K",
+    "format": "gguf",
+    "quant": "Q2_K",
+    "directory": "",
+    "bytes": 3282141632,
+    "fileCount": 1,
+    "multiPart": false,
+    "complete": true,
+    "totalBytes": 3282149084,
+    "files": [
+      {
+        "path": "Example-8B-Q2_K.gguf",
+        "size": 3282141632,
+        "sha256": "96b4d6a89406c576884327679ad5e7506593d9fd59a78864205acdd456b3f11c",
+        "gitOid": "1b8ec081a068093c6777013e71c76926907b3d9a",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "README.md",
+        "size": 7421,
+        "sha256": null,
+        "gitOid": "804ee6879f1e0694a523ec56efaffe9b4be5716b",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 31,
+        "sha256": null,
+        "gitOid": "73e1188c6a6071a46345aaad9fa31e290d82447e",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [
+        {
+          "path": "mmproj-F16.gguf",
+          "size": 1103892032
+        }
+      ],
+      "draft": []
+    }
+  },
+  {
+    "artifactKey": "gguf:|Q4_K_M",
+    "kind": "gguf-quant",
+    "label": "Q4_K_M",
+    "format": "gguf",
+    "quant": "Q4_K_M",
+    "directory": "",
+    "bytes": 5027783488,
+    "fileCount": 1,
+    "multiPart": false,
+    "complete": true,
+    "totalBytes": 5027790940,
+    "files": [
+      {
+        "path": "Example-8B-Q4_K_M.gguf",
+        "size": 5027783488,
+        "sha256": "4f471b38e45989b9a6a142aafff6e098064788b1d7ea394741d3aa9978c71411",
+        "gitOid": "c47bf8c0ce94f8353d6aa2b99bab08433327bc72",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "README.md",
+        "size": 7421,
+        "sha256": null,
+        "gitOid": "804ee6879f1e0694a523ec56efaffe9b4be5716b",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 31,
+        "sha256": null,
+        "gitOid": "73e1188c6a6071a46345aaad9fa31e290d82447e",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [
+        {
+          "path": "mmproj-F16.gguf",
+          "size": 1103892032
+        }
+      ],
+      "draft": []
+    }
+  },
+  {
+    "artifactKey": "gguf:|Q5_K_M",
+    "kind": "gguf-quant",
+    "label": "Q5_K_M",
+    "format": "gguf",
+    "quant": "Q5_K_M",
+    "directory": "",
+    "bytes": 5851112768,
+    "fileCount": 1,
+    "multiPart": false,
+    "complete": true,
+    "totalBytes": 5851120220,
+    "files": [
+      {
+        "path": "Example-8B-Q5_K_M.gguf",
+        "size": 5851112768,
+        "sha256": "e0d644c4c63863c7bbbcc2373f0ae56aa5166474cb7faaec53544ccf5bcea787",
+        "gitOid": "e27cfe6425d2623eba65798b361439972b915889",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "README.md",
+        "size": 7421,
+        "sha256": null,
+        "gitOid": "804ee6879f1e0694a523ec56efaffe9b4be5716b",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 31,
+        "sha256": null,
+        "gitOid": "73e1188c6a6071a46345aaad9fa31e290d82447e",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [
+        {
+          "path": "mmproj-F16.gguf",
+          "size": 1103892032
+        }
+      ],
+      "draft": []
+    }
+  },
+  {
+    "artifactKey": "gguf:|Q8_0",
+    "kind": "gguf-quant",
+    "label": "Q8_0",
+    "format": "gguf",
+    "quant": "Q8_0",
+    "directory": "",
+    "bytes": 8709518528,
+    "fileCount": 1,
+    "multiPart": false,
+    "complete": true,
+    "totalBytes": 8709525980,
+    "files": [
+      {
+        "path": "Example-8B-Q8_0.gguf",
+        "size": 8709518528,
+        "sha256": "f053eb267fdafb728f17172a90a7180c53704b2d0c58297fea89c33223e5fc5f",
+        "gitOid": "03a17186ef16792569c118560fbe54deff2a1ba0",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "README.md",
+        "size": 7421,
+        "sha256": null,
+        "gitOid": "804ee6879f1e0694a523ec56efaffe9b4be5716b",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 31,
+        "sha256": null,
+        "gitOid": "73e1188c6a6071a46345aaad9fa31e290d82447e",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [
+        {
+          "path": "mmproj-F16.gguf",
+          "size": 1103892032
+        }
+      ],
+      "draft": []
+    }
+  },
+  {
+    "artifactKey": "gguf:BF16|BF16",
+    "kind": "gguf-quant",
+    "label": "BF16",
+    "format": "gguf",
+    "quant": "BF16",
+    "directory": "BF16",
+    "bytes": 16386765728,
+    "fileCount": 2,
+    "multiPart": true,
+    "complete": true,
+    "totalBytes": 16386773180,
+    "files": [
+      {
+        "path": "BF16/Example-8B-BF16-00001-of-00002.gguf",
+        "size": 9993842240,
+        "sha256": "14d6db59c0e09150372ad34e708f9905e3cdde1b2d60605bfe3831b0cbdf690e",
+        "gitOid": "b8236804a42a9aa6e4ba7dacedc46bb28fbb2393",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "BF16/Example-8B-BF16-00002-of-00002.gguf",
+        "size": 6392923488,
+        "sha256": "e879e8d0cf69e47ba355f9e0ce2033983e8e0fd2a5e842ae9b528ce344fb6f71",
+        "gitOid": "8e872b7f1bcb5cc12fa857bc46eaf7df6e401925",
+        "lfs": true,
+        "role": "weight"
+      },
+      {
+        "path": "README.md",
+        "size": 7421,
+        "sha256": null,
+        "gitOid": "804ee6879f1e0694a523ec56efaffe9b4be5716b",
+        "lfs": false,
+        "role": "sidecar"
+      },
+      {
+        "path": "config.json",
+        "size": 31,
+        "sha256": null,
+        "gitOid": "73e1188c6a6071a46345aaad9fa31e290d82447e",
+        "lfs": false,
+        "role": "sidecar"
+      }
+    ],
+    "customCodeFiles": [],
+    "unsafePaths": [],
+    "companions": {
+      "mmproj": [
+        {
+          "path": "mmproj-F16.gguf",
+          "size": 1103892032
+        }
+      ],
+      "draft": []
+    }
+  }
+]
