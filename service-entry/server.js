@@ -163,7 +163,7 @@ const ROUTE_MODULES = [
   "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
   // "./lib/engine-routes",       // 01 ENG-19
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
-  // "./lib/telemetry-routes",    // 04 TEL-*
+  "./lib/telemetry-routes", // 04 TEL-18  /api/telemetry/import (TEL-11 adds the query routes)
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
   // "./lib/platform-routes",     // 06 OPS-13
 ];
@@ -857,6 +857,9 @@ async function startServiceEntry() {
     managerClient: routeMounts.ctx.managerClient,
     events: routeMounts.ctx.bus,
     processExitLog: PROCESS_EXIT_LOG,
+  }).then((runtime) => {
+    // The telemetry routes (TEL-18) read the store through ctx at request time.
+    routeMounts.ctx.telemetry = runtime;
   }).catch((error) => {
     console.warn(core.redactSecrets(`service-entry: telemetry did not start: ${error?.message || error}`));
   });

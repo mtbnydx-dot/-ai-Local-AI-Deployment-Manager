@@ -1237,6 +1237,10 @@ function requestCounts(db, { grain = "1m", from, to, filters = {}, timezoneOffse
 
 module.exports = {
   GRAINS,
+  // The importers (importers.js) fold imported rows with the same families
+  // and the same local-day calendar as the live job.
+  FAMILIES,
+  calendarFromState,
   CLOSE_DELAY_MS,
   COVERAGE_SOURCE,
   REQUEST_COVERAGE_COMPONENTS,

@@ -1,0 +1,227 @@
+{
+  "description": "Sanitised content of every 04 section 18 import source. telemetry-importers.test.js writes each entry to the file the platform keeps it in (an AI root in a temp folder), so the importers read real files. Addresses are documentation addresses; names are placeholders.",
+  "now": "2026-10-14T12:00:00.000Z",
+  "metricsHistory": {
+    "vllm": {
+      "version": 1,
+      "updatedAt": "2026-10-13T10:10:00.000Z",
+      "samples": [
+        { "at": "2026-09-20T06:10:00.000Z", "engine": "vllm", "container": "vllm-a", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 900, "ttftMs": 120, "tpotMs": 20, "queueMs": 5 },
+          "throughput": { "promptTokensPerSecond": 800, "outputTokensPerSecond": 90, "requestsPerMinute": 4 },
+          "requests": { "total": 1000, "running": 1, "waiting": 0 },
+          "gpu": { "usedMb": 18000, "totalMb": 24576, "utilizationPercent": 40, "temperatureC": 60, "powerWatts": 200, "powerLimitWatts": 450, "fanPercent": 40 },
+          "speculative": { "enabled": false, "mode": "", "draftTokens": 0, "acceptedTokens": 0, "acceptanceRate": 0 } },
+        { "at": "2026-09-20T06:40:00.000Z", "engine": "vllm", "container": "vllm-a", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 910, "ttftMs": 125, "tpotMs": 21, "queueMs": 5 },
+          "throughput": { "promptTokensPerSecond": 810, "outputTokensPerSecond": 91, "requestsPerMinute": 4 },
+          "requests": { "total": 1010, "running": 0, "waiting": 0 },
+          "gpu": { "usedMb": 18100, "totalMb": 24576, "utilizationPercent": 50, "temperatureC": 62, "powerWatts": 240, "powerLimitWatts": 450, "fanPercent": 42 },
+          "speculative": { "enabled": false, "mode": "", "draftTokens": 0, "acceptedTokens": 0, "acceptanceRate": 0 } },
+        { "at": "2026-09-20T07:05:00.000Z", "engine": "vllm", "container": "vllm-a", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 920, "ttftMs": 130, "tpotMs": 22, "queueMs": 6 },
+          "throughput": { "promptTokensPerSecond": 820, "outputTokensPerSecond": 92, "requestsPerMinute": 5 },
+          "requests": { "total": 1020, "running": 0, "waiting": 0 },
+          "gpu": { "usedMb": 18200, "totalMb": 24576, "utilizationPercent": 0, "temperatureC": 55, "powerWatts": 60, "powerLimitWatts": 450, "fanPercent": 30 },
+          "speculative": { "enabled": false, "mode": "", "draftTokens": 0, "acceptedTokens": 0, "acceptanceRate": 0 } },
+        { "at": "2026-10-12T22:10:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 950, "ttftMs": 140, "tpotMs": 24, "queueMs": 7 },
+          "throughput": { "promptTokensPerSecond": 850, "outputTokensPerSecond": 95, "requestsPerMinute": 5 },
+          "requests": { "total": 50, "running": 1, "waiting": 0 },
+          "gpu": { "usedMb": 19000, "totalMb": 24576, "utilizationPercent": 30, "temperatureC": 58, "powerWatts": 180, "powerLimitWatts": 450, "fanPercent": 35 },
+          "speculative": { "enabled": false, "mode": "", "draftTokens": 0, "acceptedTokens": 0, "acceptanceRate": 0 } },
+        { "at": "2026-10-12T22:40:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 960, "ttftMs": 141, "tpotMs": 24, "queueMs": 7 },
+          "throughput": { "promptTokensPerSecond": 860, "outputTokensPerSecond": 96, "requestsPerMinute": 5 },
+          "requests": { "total": 60, "running": 1, "waiting": 0 },
+          "gpu": { "usedMb": 19100, "totalMb": 24576, "utilizationPercent": 35, "temperatureC": 59, "powerWatts": 190, "powerLimitWatts": 450, "fanPercent": 36 },
+          "speculative": { "enabled": false, "mode": "", "draftTokens": 0, "acceptedTokens": 0, "acceptanceRate": 0 } },
+        { "at": "2026-10-13T08:10:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 1000, "ttftMs": 150, "tpotMs": 25, "queueMs": 8 },
+          "throughput": { "promptTokensPerSecond": 900, "outputTokensPerSecond": 100, "requestsPerMinute": 6 },
+          "requests": { "total": 100, "running": 2, "waiting": 0 },
+          "gpu": { "usedMb": 20000, "totalMb": 24576, "utilizationPercent": 60, "temperatureC": 65, "powerWatts": 300, "powerLimitWatts": 450, "fanPercent": 50 },
+          "speculative": { "enabled": true, "mode": "mtp", "draftTokens": 100, "acceptedTokens": 70, "acceptanceRate": 0.7 } },
+        { "at": "2026-10-13T08:40:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 1100, "ttftMs": 160, "tpotMs": 26, "queueMs": 9 },
+          "throughput": { "promptTokensPerSecond": 910, "outputTokensPerSecond": 101, "requestsPerMinute": 6 },
+          "requests": { "total": 130, "running": 1, "waiting": 0 },
+          "gpu": { "usedMb": 20100, "totalMb": 24576, "utilizationPercent": 80, "temperatureC": 70, "powerWatts": 360, "powerLimitWatts": 450, "fanPercent": 60 },
+          "speculative": { "enabled": true, "mode": "mtp", "draftTokens": 200, "acceptedTokens": 150, "acceptanceRate": 0.75 } },
+        { "at": "2026-10-13T08:20:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true, "gpu": {} },
+        { "at": "not a time", "engine": "vllm", "container": "vllm-a", "model": "model-a", "gpu": { "usedMb": 1 } },
+        { "at": "2026-10-13T09:10:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 1200, "ttftMs": 170, "tpotMs": 27, "queueMs": 9 },
+          "throughput": { "promptTokensPerSecond": 920, "outputTokensPerSecond": 102, "requestsPerMinute": 7 },
+          "requests": { "total": 150, "running": 1, "waiting": 0 },
+          "gpu": { "usedMb": 20200, "totalMb": 24576, "utilizationPercent": 70, "temperatureC": 68, "powerWatts": 330, "powerLimitWatts": 450, "fanPercent": 55 },
+          "speculative": { "enabled": true, "mode": "mtp", "draftTokens": 300, "acceptedTokens": 220, "acceptanceRate": 0.73 } },
+        { "at": "2026-10-13T09:40:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 1300, "ttftMs": 180, "tpotMs": 28, "queueMs": 10 },
+          "throughput": { "promptTokensPerSecond": 930, "outputTokensPerSecond": 103, "requestsPerMinute": 7 },
+          "requests": { "total": 10, "running": 1, "waiting": 0 },
+          "gpu": { "usedMb": 20300, "totalMb": 24576, "utilizationPercent": 75, "temperatureC": 69, "powerWatts": 340, "powerLimitWatts": 450, "fanPercent": 56 },
+          "speculative": { "enabled": true, "mode": "mtp", "draftTokens": 400, "acceptedTokens": 300, "acceptanceRate": 0.75 } },
+        { "at": "2026-10-13T10:10:00.000Z", "engine": "vllm", "container": "vllm-b", "model": "model-a", "running": true,
+          "latency": { "e2eMs": 1400, "ttftMs": 190, "tpotMs": 29, "queueMs": 11 },
+          "throughput": { "promptTokensPerSecond": 940, "outputTokensPerSecond": 104, "requestsPerMinute": 8 },
+          "requests": { "total": 25, "running": 1, "waiting": 0 },
+          "gpu": { "usedMb": 20400, "totalMb": 24576, "utilizationPercent": 77, "temperatureC": 70, "powerWatts": 350, "powerLimitWatts": 450, "fanPercent": 57 },
+          "speculative": { "enabled": true, "mode": "mtp", "draftTokens": 500, "acceptedTokens": 380, "acceptanceRate": 0.76 } }
+      ]
+    }
+  },
+  "statsLedger": {
+    "vllm": {
+      "version": 1,
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-10-13T09:00:00.000Z",
+      "models": {
+        "model-a": {
+          "name": "model-a",
+          "root": "<AI_ROOT>/models/model-a",
+          "tokens": { "prompt": 1000, "generation": 500, "cachedPrompt": 200, "total": 1500 },
+          "requests": { "total": 40, "success": 38, "error": 2, "aborted": 0 },
+          "last": { "updatedAt": "2026-10-13T09:00:00.000Z", "engine": "vllm" }
+        },
+        "model-unused": {
+          "name": "model-unused",
+          "root": "<AI_ROOT>/models/model-unused",
+          "tokens": { "prompt": 0, "generation": 0, "cachedPrompt": 0, "total": 0 },
+          "requests": { "total": 0, "success": 0, "error": 0, "aborted": 0 },
+          "last": {}
+        }
+      },
+      "runtimes": {},
+      "clients": {}
+    },
+    "llama": {
+      "version": 1,
+      "createdAt": "2026-08-15T00:00:00.000Z",
+      "updatedAt": "2026-10-12T09:00:00.000Z",
+      "models": {
+        "model-b": {
+          "name": "model-b",
+          "root": "<AI_ROOT>/models/model-b",
+          "tokens": { "prompt": 300, "generation": 120, "cachedPrompt": 0, "total": 420 },
+          "requests": { "total": 9, "success": 9, "error": 0, "aborted": 0 },
+          "last": { "updatedAt": "2026-10-12T09:00:00.000Z", "engine": "llama" }
+        }
+      },
+      "runtimes": {},
+      "clients": {}
+    }
+  },
+  "accessLogs": {
+    "vllm": [
+      { "at": "2026-10-13T10:00:00.000Z", "requestId": "req_aaaaaaaaaaaaaaaaaaaa", "remoteAddress": "192.0.2.10", "method": "POST", "path": "/serve/v1/chat/completions", "kind": "openai", "status": 200, "terminalState": "completed", "model": "model-a", "resolvedModel": "model-a", "resolvedInstance": "primary", "stream": true, "authSource": "bearer", "clientId": "client-1", "userAgent": "OpenAI/Python 1.40.0", "origin": "", "refererHost": "", "durationMs": 1200, "queuedMs": 3, "inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "stopReason": "", "toolSchemaCount": 0, "toolUseCount": 0, "error": "" },
+      { "at": "2026-10-13T10:30:00.000Z", "requestId": "req_bbbbbbbbbbbbbbbbbbbb", "remoteAddress": "192.0.2.11", "method": "POST", "path": "/claude/v1/messages", "kind": "claude", "status": 200, "terminalState": "completed", "model": "model-a", "resolvedModel": "model-a", "resolvedInstance": "", "stream": false, "authSource": "x-api-key", "clientId": "client-2", "userAgent": "claude-cli/1.0", "origin": "", "refererHost": "", "durationMs": 800, "queuedMs": 0, "inputTokens": 10, "outputTokens": 20, "totalTokens": 30, "stopReason": "end_turn", "toolSchemaCount": 2, "toolUseCount": 1, "error": "" },
+      { "at": "2026-08-01T10:00:10.000Z", "requestId": "", "remoteAddress": "192.0.2.12", "method": "POST", "path": "/serve/v1/chat/completions", "kind": "openai", "status": 200, "terminalState": "completed", "model": "model-a", "resolvedModel": "model-a", "stream": false, "authSource": "bearer", "clientId": "client-1", "userAgent": "curl/8.0", "durationMs": 2000, "queuedMs": 0, "inputTokens": 100, "outputTokens": 50, "totalTokens": 150, "stopReason": "stop" },
+      { "at": "2026-08-01T10:20:00.000Z", "requestId": "", "remoteAddress": "192.0.2.12", "method": "POST", "path": "/serve/v1/chat/completions", "kind": "openai", "status": 500, "terminalState": "completed", "model": "model-a", "resolvedModel": "model-a", "stream": false, "authSource": "bearer", "clientId": "client-1", "userAgent": "curl/8.0", "durationMs": 500, "queuedMs": 0, "inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "stopReason": "", "error": "upstream_error" },
+      { "at": "2026-10-13T10:40:00.000Z", "method": "GET", "path": "/serve/v1/models", "kind": "openai", "status": 200, "terminalState": "completed", "durationMs": 4 },
+      { "at": "2026-10-13T10:41:00.000Z", "method": "GET", "path": "/health", "kind": "", "status": 200, "terminalState": "completed", "durationMs": 1 },
+      "this line is not json",
+      { "method": "POST", "path": "/serve/v1/chat/completions", "status": 200 }
+    ],
+    "entry": [
+      { "at": "2026-10-13T10:00:00.400Z", "requestId": "req_aaaaaaaaaaaaaaaaaaaa", "remoteAddress": "192.0.2.10", "method": "POST", "path": "/gateway/vllm/openai/v1/chat/completions", "kind": "openai", "status": 200, "terminalState": "completed", "model": "model-a", "resolvedModel": "model-a", "resolvedInstance": "vllm:primary", "stream": true, "authSource": "bearer", "clientId": "client-1", "userAgent": "OpenAI/Python 1.40.0", "durationMs": 1300, "queuedMs": 3, "inputTokens": 0, "outputTokens": 0, "totalTokens": 0 },
+      { "at": "2026-10-13T11:00:00.000Z", "requestId": "req_cccccccccccccccccccc", "remoteAddress": "192.0.2.20", "method": "POST", "path": "/gateway/auto/openai/v1/chat/completions", "kind": "openai", "status": 200, "terminalState": "completed", "model": "model-b", "resolvedModel": "model-b", "resolvedInstance": "llama:primary", "stream": false, "authSource": "bearer", "clientId": "client-3", "userAgent": "Mozilla/5.0 (Windows NT 10.0) Chrome/120", "origin": "http://192.0.2.5:3000", "durationMs": 700, "queuedMs": 0, "inputTokens": 5, "outputTokens": 6, "totalTokens": 11, "stopReason": "stop" },
+      { "at": "2026-10-13T11:05:00.000Z", "method": "GET", "path": "/gateway/tts/api/jobs", "kind": "tts", "status": 200, "terminalState": "completed", "durationMs": 3 },
+      { "at": "2026-10-13T11:05:10.000Z", "method": "GET", "path": "/gateway/tts/api/jobs", "kind": "tts", "status": 200, "terminalState": "completed", "durationMs": 3 },
+      { "at": "2026-08-01T11:05:00.000Z", "method": "GET", "path": "/gateway/tts/api/jobs", "kind": "tts", "status": 200, "terminalState": "completed", "durationMs": 3 },
+      { "at": "2026-10-13T11:10:00.000Z", "remoteAddress": "192.0.2.30", "method": "GET", "path": "/gateway/health", "kind": "", "status": 401, "terminalState": "completed", "durationMs": 1, "error": "unauthorized" }
+    ]
+  },
+  "serviceUsage": {
+    "vllm": [
+      { "event_id": "ev-1", "at": "2026-10-13T10:00:00.800Z", "manager": "vllm-manager", "client_id": "client-1", "model": "model-a", "status": 200, "ok": 1, "prompt_tokens": 11, "generation_tokens": 22, "total_tokens": 33, "request_id": "", "usage_source": "reported", "stream": 1, "terminal_state": "completed", "cached_tokens": 4 },
+      { "event_id": "ev-2", "at": "2026-10-13T10:15:00.000Z", "manager": "vllm-manager", "client_id": "client-9", "model": "model-a", "status": 200, "ok": 1, "prompt_tokens": 7, "generation_tokens": 8, "total_tokens": 15, "request_id": "", "usage_source": "estimated", "stream": 0, "terminal_state": "completed", "cached_tokens": null },
+      { "event_id": "ev-3", "at": "2026-08-01T10:00:10.500Z", "manager": "vllm-manager", "client_id": "client-1", "model": "model-a", "status": 200, "ok": 1, "prompt_tokens": 100, "generation_tokens": 50, "total_tokens": 150, "request_id": "", "usage_source": "reported", "stream": 0, "terminal_state": "completed", "cached_tokens": null },
+      { "event_id": "ev-4", "at": "2026-10-13T10:41:00.000Z", "manager": "vllm-manager", "client_id": "client-1", "model": "model-a", "status": 200, "ok": 1, "prompt_tokens": 0, "generation_tokens": 0, "total_tokens": 0, "request_id": "", "usage_source": "missing", "stream": 0, "terminal_state": "completed", "cached_tokens": null }
+    ]
+  },
+  "jobsLedger": {
+    "vllm": {
+      "version": 1,
+      "updatedAt": "2026-10-13T00:00:00.000Z",
+      "jobs": [
+        { "id": "job-serve-ok", "type": "serve", "title": "Start model-a", "status": "success", "logs": [], "createdAt": "2026-10-12T08:00:00.000Z", "updatedAt": "2026-10-12T08:03:00.000Z", "finishedAt": "2026-10-12T08:03:00.000Z",
+          "meta": { "model": "<AI_ROOT>/models/model-a", "name": "model-a", "engine": "vllm", "launchId": "launch-1", "stageHistory": [
+            { "stage": "pull image", "at": "2026-10-12T08:00:01.000Z" },
+            { "stage": "load weights", "at": "2026-10-12T08:00:30.000Z" },
+            { "stage": "readiness check", "at": "2026-10-12T08:02:30.000Z" } ] } },
+        { "id": "job-serve-failed", "type": "serve", "title": "Start model-b", "status": "failed", "logs": [], "createdAt": "2026-10-12T09:00:00.000Z", "updatedAt": "2026-10-12T09:01:00.000Z", "finishedAt": "2026-10-12T09:01:00.000Z",
+          "error": { "code": "out_of_memory", "message": "CUDA out of memory" },
+          "meta": { "model": "<AI_ROOT>/models/model-b", "name": "model-b", "engine": "vllm", "stageHistory": [ { "stage": "load weights", "at": "2026-10-12T09:00:10.000Z" } ] } },
+        { "id": "job-guard-temp", "type": "automation", "title": "GPU temperature warning", "status": "success", "logs": [], "createdAt": "2026-10-12T12:00:00.000Z", "updatedAt": "2026-10-12T12:00:00.000Z", "meta": { "tempC": 86, "limitC": 85 } },
+        { "id": "job-unload", "type": "automation", "title": "Auto unload vLLM", "status": "success", "logs": [], "createdAt": "2026-10-12T13:00:00.000Z", "updatedAt": "2026-10-12T13:00:00.000Z", "meta": { "reason": "idle" } },
+        { "id": "job-download", "type": "download", "title": "Download model-c", "status": "success", "logs": [], "createdAt": "2026-10-11T08:00:00.000Z", "updatedAt": "2026-10-11T09:00:00.000Z", "meta": {} },
+        { "id": "job-bench", "type": "benchmark", "title": "Benchmark model-a", "status": "success", "logs": [], "createdAt": "2026-10-11T10:00:00.000Z", "updatedAt": "2026-10-11T10:10:00.000Z", "meta": {} }
+      ]
+    }
+  },
+  "processExit": {
+    "entry": [
+      { "at": "2026-10-14T07:00:00.000Z", "label": "Entry", "pid": 4001, "uptimeSeconds": 0, "event": "start", "node": "v24.0.0", "argv": ["server.js"] },
+      { "at": "2026-10-14T07:30:00.000Z", "label": "Entry", "pid": 4001, "uptimeSeconds": 1800, "event": "exit", "code": 0 },
+      { "at": "2026-10-14T07:31:00.000Z", "label": "Entry", "pid": 4002, "uptimeSeconds": 0, "event": "start", "node": "v24.0.0", "argv": ["server.js"] },
+      { "at": "2026-10-14T07:45:00.000Z", "label": "Entry", "pid": 4003, "uptimeSeconds": 0, "event": "start", "node": "v24.0.0", "argv": ["server.js"] },
+      { "at": "2026-10-14T07:50:00.000Z", "label": "Entry", "pid": 4003, "uptimeSeconds": 300, "event": "uncaught-exception", "error": "TypeError: example failure" },
+      { "note": "no event name" }
+    ],
+    "vllm": [
+      { "at": "2026-10-13T06:00:00.000Z", "label": "vLLM Manager", "pid": 5001, "uptimeSeconds": 0, "event": "start", "node": "v24.0.0", "argv": ["server.js"] }
+    ]
+  },
+  "auditManifests": {
+    "audit-fixture-1": {
+      "ok": true,
+      "auditId": "audit-fixture-1",
+      "reason": "scheduled",
+      "manager": "local-manager",
+      "createdAt": "2026-10-10T02:00:00.000Z",
+      "auditDir": "<AI_ROOT>/audit-logs/audit-fixture-1",
+      "mode": "full",
+      "rebaseline": false,
+      "summary": { "chat_count": 3, "message_count": 12, "total_chat_count": 3, "files": ["openwebui-chats-full.md"] },
+      "notice": "fixture"
+    },
+    "audit-fixture-2": {
+      "ok": true,
+      "auditId": "audit-fixture-2",
+      "reason": "manual",
+      "manager": "local-manager",
+      "createdAt": "2026-10-11T02:00:00.000Z",
+      "mode": "incremental",
+      "summary": { "chat_count": 1, "message_count": 4, "incremental": true }
+    }
+  },
+  "benchmarks": {
+    "vllm": {
+      "version": 1,
+      "updatedAt": "2026-10-12T00:00:00.000Z",
+      "runs": [
+        { "id": "bench-1", "at": "2026-10-12T00:00:00.000Z", "engine": "vllm", "model": "<AI_ROOT>/models/model-a", "label": "baseline",
+          "config": { "maxNumSeqs": 32 },
+          "load": { "requests": 20, "concurrency": 4, "maxTokens": 128, "stream": true, "warmupRequests": 2, "failedRequests": 0, "totalOutputTokens": 2560 },
+          "metrics": { "wallTokensPerSecond": 410.5, "avgTokensPerSecond": 105.2, "avgTtftMs": 140, "p95TtftMs": 220, "avgMs": 1300, "p50Ms": 1250, "p95Ms": 1900 } },
+        { "id": "bench-2", "at": "2026-10-12T01:00:00.000Z", "engine": "vllm", "model": "<AI_ROOT>/models/model-a", "label": "more seqs",
+          "config": { "maxNumSeqs": 64 },
+          "load": { "requests": 20, "concurrency": 4, "maxTokens": 128, "stream": true, "warmupRequests": 2, "failedRequests": 0, "totalOutputTokens": 2560 },
+          "metrics": { "wallTokensPerSecond": 450.1, "avgTokensPerSecond": 110.9, "avgTtftMs": 130, "p95TtftMs": 200, "avgMs": 1200, "p50Ms": 1150, "p95Ms": 1700 } }
+      ]
+    },
+    "llama": {
+      "version": 1,
+      "updatedAt": "2026-10-12T00:00:00.000Z",
+      "runs": [
+        { "id": "bench-l1", "at": "2026-10-12T02:00:00.000Z", "engine": "llama", "model": "model-b", "label": "", "config": {}, "load": { "requests": 10, "concurrency": 1 }, "metrics": { "wallTokensPerSecond": 60 } }
+      ]
+    }
+  },
+  "mcpAudit": [
+    { "requestId": "6f1c2b1e-0000-4000-8000-000000000001", "timestamp": "2026-10-13T08:05:00.000Z", "tool": "get_platform_status", "clientId": "client-fixture", "ok": true, "durationMs": 42, "errorCode": null },
+    { "requestId": "6f1c2b1e-0000-4000-8000-000000000002", "timestamp": "2026-10-13T08:05:01.000Z", "tool": "start_model", "clientId": "client-fixture", "ok": false, "durationMs": 1500, "errorCode": "ManagerRequestError" },
+    { "requestId": "6f1c2b1e-0000-4000-8000-000000000003", "timestamp": "2026-06-01T08:05:00.000Z", "tool": "list_models", "clientId": "client-fixture", "ok": true, "durationMs": 10, "errorCode": null }
+  ]
+}

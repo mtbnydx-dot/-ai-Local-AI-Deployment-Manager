@@ -891,15 +891,21 @@ function createStoreCore(options = {}) {
 
   // Named queries live in query.js (TEL-11) and run here, next to the
   // handle. The audit-log reads of audit-access-log.js are built in, so the
-  // entry can read the chain before and without query.js. Only own function
-  // exports are callable; names are never interpolated into SQL.
+  // entry can read the chain before and without query.js, and so are the
+  // importers' worker-side steps (importers.js WORKER_CALLS, TEL-18). Only own
+  // function exports are callable; names are never interpolated into SQL.
   async function call(queryName, params) {
     assertOpen();
     const queries = loadQueries();
     const name = typeof queryName === "string" ? queryName : "";
     const callable = (module) => Boolean(module) && Object.prototype.hasOwnProperty.call(module, name) && typeof module[name] === "function";
-    const source = callable(queries) ? queries : callable(auditAccessLog.queries) ? auditAccessLog.queries : null;
-    if (!/^[a-z][A-Za-z0-9]*$/.test(name) || !source) {
+    let source = null;
+    if (/^[a-z][A-Za-z0-9]*$/.test(name)) {
+      if (callable(queries)) source = queries;
+      else if (callable(auditAccessLog.queries)) source = auditAccessLog.queries;
+      else if (callable(require("./importers").WORKER_CALLS)) source = require("./importers").WORKER_CALLS;
+    }
+    if (!source) {
       throw storeError("unknown_query", "Unknown telemetry query.");
     }
     return source[name](db, params === undefined ? {} : params);
