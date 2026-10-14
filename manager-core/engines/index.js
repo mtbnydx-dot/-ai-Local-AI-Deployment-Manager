@@ -13,16 +13,17 @@
 // runs is the one CONFIG runs today.
 
 const descriptorSchema = require("./descriptor-schema");
+const dockerSegments = require("./adapters/_docker-segments");
 const registry = require("./registry");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
-const dockerSegments = require("./adapters/_docker-segments");
 
 // Adapter code modules by descriptor.adapter (01 §6). An engine whose adapter
 // has no module here is not launchable through an adapter yet.
 const adapters = Object.freeze({
   vllm: require("./adapters/vllm"),
   sglang: require("./adapters/sglang"),
+  llamacpp: require("./adapters/llamacpp"),
 });
 
 /** descriptor (or its adapter id) -> adapter module, or null. */
@@ -32,9 +33,6 @@ function adapterFor(descriptorOrAdapterId) {
 }
 
 module.exports = {
-  adapters,
-  adapterFor,
-  renderRunArgs: dockerSegments.renderRunArgs,
   descriptorSchema,
   validateDescriptor: descriptorSchema.validateDescriptor,
   TIER1_ENGINE_IDS: descriptorSchema.TIER1_ENGINE_IDS,
@@ -46,6 +44,10 @@ module.exports = {
   registerEngineRoutes: routes.registerEngineRoutes,
   buildEnginesPayload: routes.buildEnginesPayload,
   validateDraftRequest: routes.validateDraftRequest,
+  // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
+  adapters,
+  adapterFor,
+  renderRunArgs: dockerSegments.renderRunArgs,
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,

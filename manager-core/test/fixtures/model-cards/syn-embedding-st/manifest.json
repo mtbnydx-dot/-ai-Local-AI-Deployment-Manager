@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-embedding-st",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "Qwen3-Embedding-0.6B",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic sentence-transformers embedding model: Qwen3Model backbone without an LM head, modules.json with last-token pooling and normalisation, no chat template."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"1_Pooling/config.json","bytes":298,"kind":"captured"},
+    {"name":"LICENSE","bytes":11343,"kind":"placeholder"},
+    {"name":"README.md","bytes":18921,"kind":"placeholder"},
+    {"name":"config.json","bytes":722,"kind":"captured"},
+    {"name":"config_sentence_transformers.json","bytes":331,"kind":"captured"},
+    {"name":"merges.txt","bytes":1671853,"kind":"placeholder"},
+    {"name":"model.safetensors","bytes":1191586416,"kind":"safetensors"},
+    {"name":"modules.json","bytes":350,"kind":"captured"},
+    {"name":"tokenizer.json","bytes":11423705,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":202,"kind":"captured"},
+    {"name":"vocab.json","bytes":2776833,"kind":"placeholder"}
+  ]
+}

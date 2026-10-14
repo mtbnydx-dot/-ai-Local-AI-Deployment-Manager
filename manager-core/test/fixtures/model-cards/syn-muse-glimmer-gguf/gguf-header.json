@@ -1,0 +1,56 @@
+{
+  "format": "gguf",
+  "files": [
+    {
+      "name": "Muse-Glimmer-28B-Q4_K_M.gguf",
+      "bytes": 15188330112,
+      "version": 3,
+      "alignment": 32,
+      "headerBytes": 3065472,
+      "tensorCount": 471,
+      "kv": [
+        {"key":"general.architecture","type":"string","value":"muse-glimmer"},
+        {"key":"general.type","type":"string","value":"model"},
+        {"key":"general.name","type":"string","value":"Muse Glimmer 28B"},
+        {"key":"general.size_label","type":"string","value":"28B"},
+        {"key":"general.file_type","type":"uint32","value":15},
+        {"key":"general.quantization_version","type":"uint32","value":2},
+        {"key":"muse-glimmer.block_count","type":"uint32","value":52},
+        {"key":"muse-glimmer.context_length","type":"uint32","value":131072},
+        {"key":"muse-glimmer.embedding_length","type":"uint32","value":6656},
+        {"key":"muse-glimmer.feed_forward_length","type":"uint32","value":17920},
+        {"key":"muse-glimmer.attention.head_count","type":"uint32","value":32},
+        {"key":"muse-glimmer.attention.head_count_kv","type":"uint32","value":2},
+        {"key":"muse-glimmer.attention.key_length","type":"uint32","value":128},
+        {"key":"muse-glimmer.attention.value_length","type":"uint32","value":128},
+        {"key":"muse-glimmer.attention.sliding_window","type":"uint32","value":2048},
+        {"key":"muse-glimmer.attention.sliding_window_pattern","type":"array","itemType":"bool","value":[true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false,true,true,true,false]},
+        {"key":"muse-glimmer.attention.layer_norm_rms_epsilon","type":"float32","value":9.999999974752427e-7},
+        {"key":"muse-glimmer.rope.freq_base","type":"float32","value":1000000},
+        {"key":"tokenizer.ggml.model","type":"string","value":"gpt2"},
+        {"key":"tokenizer.ggml.pre","type":"string","value":"qwen2"},
+        {"key":"tokenizer.ggml.tokens","type":"array","itemType":"string","value":{"$array":"string","count":152064,"head":[]}},
+        {"key":"tokenizer.ggml.token_type","type":"array","itemType":"int32","value":{"$array":"int32","count":152064,"head":[1,1,1,1,1,1,1,1]}},
+        {"key":"tokenizer.ggml.merges","type":"array","itemType":"string","value":{"$array":"string","count":151387,"head":[]}},
+        {"key":"tokenizer.ggml.bos_token_id","type":"uint32","value":151643},
+        {"key":"tokenizer.ggml.eos_token_id","type":"uint32","value":151645},
+        {"key":"tokenizer.ggml.padding_token_id","type":"uint32","value":151643},
+        {"key":"tokenizer.chat_template","type":"string","value":"{#- Synthetic template for tests. -#}\n{%- for message in messages %}<|im_start|>{{ message.role }}\n{{ message.content }}<|im_end|>\n{% endfor %}{%- if add_generation_prompt %}<|im_start|>assistant\n<think>\n{% endif %}"}
+      ],
+      "groups": [
+        {"pattern":"blk.{L}.attn_k.weight","ranges":{"L":[0,51]},"type":"Q4_K","typeId":12,"dims":[6656,256],"bytesEach":958464},
+        {"pattern":"blk.{L}.attn_norm.weight","ranges":{"L":[0,51]},"type":"F32","typeId":0,"dims":[6656],"bytesEach":26624},
+        {"pattern":"blk.{L}.attn_output.weight","ranges":{"L":[0,51]},"type":"Q4_K","typeId":12,"dims":[4096,6656],"bytesEach":15335424},
+        {"pattern":"blk.{L}.attn_q.weight","ranges":{"L":[0,51]},"type":"Q4_K","typeId":12,"dims":[6656,4096],"bytesEach":15335424},
+        {"pattern":"blk.{L}.attn_v.weight","ranges":{"L":[0,51]},"type":"Q6_K","typeId":14,"dims":[6656,256],"bytesEach":1397760},
+        {"pattern":"blk.{L}.ffn_down.weight","ranges":{"L":[0,51]},"type":"Q6_K","typeId":14,"dims":[17920,6656],"bytesEach":97843200},
+        {"pattern":"blk.{L}.ffn_gate.weight","ranges":{"L":[0,51]},"type":"Q4_K","typeId":12,"dims":[6656,17920],"bytesEach":67092480},
+        {"pattern":"blk.{L}.ffn_norm.weight","ranges":{"L":[0,51]},"type":"F32","typeId":0,"dims":[6656],"bytesEach":26624},
+        {"pattern":"blk.{L}.ffn_up.weight","ranges":{"L":[0,51]},"type":"Q4_K","typeId":12,"dims":[6656,17920],"bytesEach":67092480},
+        {"pattern":"output.weight","type":"Q6_K","typeId":14,"dims":[6656,152064],"bytesEach":830269440},
+        {"pattern":"output_norm.weight","type":"F32","typeId":0,"dims":[6656],"bytesEach":26624},
+        {"pattern":"token_embd.weight","type":"Q4_K","typeId":12,"dims":[6656,152064],"bytesEach":569327616}
+      ]
+    }
+  ]
+}

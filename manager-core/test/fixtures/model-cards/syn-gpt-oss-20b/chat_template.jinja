@@ -1,0 +1,22 @@
+{#- Synthetic harmony-style template for tests; not the upstream template. -#}
+{%- set effort = reasoning_effort | default("medium") -%}
+<|start|>system<|message|>Reasoning: {{ effort }}
+{%- if tools %}
+
+# Tools
+{%- for tool in tools %}
+{{ tool.function.name }}: {{ tool.function.description }}
+{%- endfor %}
+{%- endif %}<|end|>
+{%- for message in messages %}
+{%- if message.role == "assistant" %}
+{%- if message.thinking %}<|start|>assistant<|channel|>analysis<|message|>{{ message.thinking }}<|end|>{% endif %}
+{%- if message.tool_calls %}
+{%- for call in message.tool_calls %}<|start|>assistant to=functions.{{ call.function.name }}<|channel|>commentary json<|message|>{{ call.function.arguments | tojson }}<|call|>{%- endfor %}
+{%- else %}<|start|>assistant<|channel|>final<|message|>{{ message.content }}<|end|>
+{%- endif %}
+{%- elif message.role == "tool" %}<|start|>functions.{{ message.name }} to=assistant<|channel|>commentary<|message|>{{ message.content | tojson }}<|end|>
+{%- else %}<|start|>{{ message.role }}<|message|>{{ message.content }}<|end|>
+{%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}<|start|>assistant{% endif %}

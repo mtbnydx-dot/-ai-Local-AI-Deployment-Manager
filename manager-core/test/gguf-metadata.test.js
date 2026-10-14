@@ -6,76 +6,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const core = require("..");
-
-function u32(value) {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32LE(Number(value));
-  return buffer;
-}
-
-function i32(value) {
-  const buffer = Buffer.alloc(4);
-  buffer.writeInt32LE(Number(value));
-  return buffer;
-}
-
-function f32(value) {
-  const buffer = Buffer.alloc(4);
-  buffer.writeFloatLE(Number(value));
-  return buffer;
-}
-
-function u64(value) {
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64LE(BigInt(value));
-  return buffer;
-}
-
-function ggufString(value) {
-  const content = Buffer.from(String(value), "utf8");
-  return Buffer.concat([u64(content.length), content]);
-}
-
-function ggufValue(value) {
-  if (typeof value === "string") return [8, ggufString(value)];
-  if (typeof value === "boolean") return [7, Buffer.from([value ? 1 : 0])];
-  if (Number.isInteger(value) && value >= 0) return [4, u32(value)];
-  if (Number.isInteger(value)) return [5, i32(value)];
-  if (typeof value === "number") return [6, f32(value)];
-  if (Array.isArray(value)) {
-    const elementType = value.every((item) => typeof item === "boolean") ? 7 : 4;
-    const encoded = value.map((item) => elementType === 7 ? Buffer.from([item ? 1 : 0]) : u32(item));
-    return [9, Buffer.concat([u32(elementType), u64(value.length), ...encoded])];
-  }
-  throw new Error(`Unsupported test GGUF value ${value}`);
-}
-
-function fakeGguf(metadata, tensors = [], paddingBytes = 0) {
-  const kv = [];
-  for (const [key, value] of Object.entries(metadata)) {
-    const [type, encoded] = ggufValue(value);
-    kv.push(ggufString(key), u32(type), encoded);
-  }
-  const descriptors = [];
-  for (const [index, tensor] of tensors.entries()) {
-    descriptors.push(
-      ggufString(tensor.name || `tensor.${index}`),
-      u32(tensor.dims.length),
-      ...tensor.dims.map(u64),
-      u32(tensor.type || 0),
-      u64(0),
-    );
-  }
-  return Buffer.concat([
-    Buffer.from("GGUF", "ascii"),
-    u32(3),
-    u64(tensors.length),
-    u64(Object.keys(metadata).length),
-    ...kv,
-    ...descriptors,
-    Buffer.alloc(paddingBytes),
-  ]);
-}
+const { fakeGguf } = require("./helpers/gguf-writer");
 
 function museMetadata(overrides = {}) {
   return {

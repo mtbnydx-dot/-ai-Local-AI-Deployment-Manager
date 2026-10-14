@@ -1,0 +1,4 @@
+Preparing the llama.cpp launch for /models/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf
+Multimodal mode is on: the launch profile requests image input.
+No mmproj-*.gguf file found next to the model and no mmproj path was given.
+Error: Multimodal mode requires an mmproj GGUF file in the model directory or an explicit mmproj path.

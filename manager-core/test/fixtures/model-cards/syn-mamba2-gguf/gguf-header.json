@@ -1,0 +1,53 @@
+{
+  "format": "gguf",
+  "files": [
+    {
+      "name": "mamba2-2.7b-Q8_0.gguf",
+      "bytes": 2879099360,
+      "version": 3,
+      "alignment": 32,
+      "headerBytes": 1037280,
+      "tensorCount": 578,
+      "kv": [
+        {"key":"general.architecture","type":"string","value":"mamba2"},
+        {"key":"general.type","type":"string","value":"model"},
+        {"key":"general.name","type":"string","value":"Mamba2 2.7B"},
+        {"key":"general.size_label","type":"string","value":"2.7B"},
+        {"key":"general.file_type","type":"uint32","value":7},
+        {"key":"general.quantization_version","type":"uint32","value":2},
+        {"key":"mamba2.context_length","type":"uint32","value":1048576},
+        {"key":"mamba2.embedding_length","type":"uint32","value":2560},
+        {"key":"mamba2.feed_forward_length","type":"uint32","value":0},
+        {"key":"mamba2.attention.head_count","type":"uint32","value":0},
+        {"key":"mamba2.block_count","type":"uint32","value":64},
+        {"key":"mamba2.ssm.conv_kernel","type":"uint32","value":4},
+        {"key":"mamba2.ssm.inner_size","type":"uint32","value":5120},
+        {"key":"mamba2.ssm.state_size","type":"uint32","value":128},
+        {"key":"mamba2.ssm.time_step_rank","type":"uint32","value":80},
+        {"key":"mamba2.ssm.group_count","type":"uint32","value":1},
+        {"key":"mamba2.attention.layer_norm_rms_epsilon","type":"float32","value":0.000009999999747378752},
+        {"key":"tokenizer.ggml.model","type":"string","value":"gpt2"},
+        {"key":"tokenizer.ggml.pre","type":"string","value":"olmo"},
+        {"key":"tokenizer.ggml.tokens","type":"array","itemType":"string","value":{"$array":"string","count":50288,"head":[]}},
+        {"key":"tokenizer.ggml.token_type","type":"array","itemType":"int32","value":{"$array":"int32","count":50288,"head":[1,1,1,1,1,1,1,1]}},
+        {"key":"tokenizer.ggml.merges","type":"array","itemType":"string","value":{"$array":"string","count":50009,"head":[]}},
+        {"key":"tokenizer.ggml.bos_token_id","type":"uint32","value":0},
+        {"key":"tokenizer.ggml.eos_token_id","type":"uint32","value":0},
+        {"key":"tokenizer.ggml.padding_token_id","type":"uint32","value":0}
+      ],
+      "groups": [
+        {"pattern":"blk.{L}.attn_norm.weight","ranges":{"L":[0,63]},"type":"F32","typeId":0,"dims":[2560],"bytesEach":10240},
+        {"pattern":"blk.{L}.ssm_a","ranges":{"L":[0,63]},"type":"F32","typeId":0,"dims":[1,80],"bytesEach":320},
+        {"pattern":"blk.{L}.ssm_conv1d.bias","ranges":{"L":[0,63]},"type":"F32","typeId":0,"dims":[5376],"bytesEach":21504},
+        {"pattern":"blk.{L}.ssm_conv1d.weight","ranges":{"L":[0,63]},"type":"F32","typeId":0,"dims":[4,5376],"bytesEach":86016},
+        {"pattern":"blk.{L}.ssm_d","ranges":{"L":[0,63]},"type":"F32","typeId":0,"dims":[1,80],"bytesEach":320},
+        {"pattern":"blk.{L}.ssm_dt.bias","ranges":{"L":[0,63]},"type":"F32","typeId":0,"dims":[80],"bytesEach":320},
+        {"pattern":"blk.{L}.ssm_in.weight","ranges":{"L":[0,63]},"type":"Q8_0","typeId":8,"dims":[2560,10576],"bytesEach":28766720},
+        {"pattern":"blk.{L}.ssm_norm.weight","ranges":{"L":[0,63]},"type":"F32","typeId":0,"dims":[5120,1],"bytesEach":20480},
+        {"pattern":"blk.{L}.ssm_out.weight","ranges":{"L":[0,63]},"type":"Q8_0","typeId":8,"dims":[5120,2560],"bytesEach":13926400},
+        {"pattern":"output_norm.weight","type":"F32","typeId":0,"dims":[2560],"bytesEach":10240},
+        {"pattern":"token_embd.weight","type":"Q8_0","typeId":8,"dims":[2560,50288],"bytesEach":136783360}
+      ]
+    }
+  ]
+}

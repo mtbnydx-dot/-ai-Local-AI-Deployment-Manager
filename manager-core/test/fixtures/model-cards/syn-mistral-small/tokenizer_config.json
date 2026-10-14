@@ -1,0 +1,10 @@
+{
+  "bos_token": "<s>",
+  "chat_template": "{#- Synthetic Mistral-style template for tests; not the upstream template. -#}\n{{- bos_token }}\n{%- if messages[0].role == 'system' %}[SYSTEM_PROMPT]{{ messages[0].content }}[/SYSTEM_PROMPT]{%- set messages = messages[1:] %}{%- endif %}\n{%- if tools %}[AVAILABLE_TOOLS]{{ tools | tojson }}[/AVAILABLE_TOOLS]{%- endif %}\n{%- for message in messages %}\n{%- if message.role == 'user' %}[INST]{{ message.content }}[/INST]\n{%- elif message.role == 'assistant' and message.tool_calls %}[TOOL_CALLS]{{ message.tool_calls | map(attribute='function') | list | tojson }}{{ eos_token }}\n{%- elif message.role == 'assistant' %}{{ message.content }}{{ eos_token }}\n{%- elif message.role == 'tool' %}[TOOL_RESULTS]{{ message.content }}[/TOOL_RESULTS]\n{%- endif %}\n{%- endfor %}",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "</s>",
+  "legacy": true,
+  "model_max_length": 131072,
+  "tokenizer_class": "LlamaTokenizerFast",
+  "unk_token": "<unk>"
+}
