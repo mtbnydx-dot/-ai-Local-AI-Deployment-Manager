@@ -72,6 +72,8 @@ function makeTree(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const entryDir = path.join(root, "service-entry");
   fs.cpSync(path.join(ENTRY_DIR, "console"), path.join(entryDir, "console"), { recursive: true });
+  // The tests below add their own stylesheets; the real ones (CON-3) would make the "only files held" checks vacuous.
+  fs.rmSync(path.join(entryDir, "console", "styles"), { recursive: true, force: true });
   fs.cpSync(path.join(AI_ROOT, "shared-public", "vendor"), path.join(root, "shared-public", "vendor"), { recursive: true });
   fs.copyFileSync(path.join(ENTRY_DIR, "index.html"), path.join(entryDir, "index.html"));
   fs.copyFileSync(path.join(ENTRY_DIR, "billing.html"), path.join(entryDir, "billing.html"));
