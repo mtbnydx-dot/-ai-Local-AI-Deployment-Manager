@@ -4,19 +4,28 @@
 // pre-download check can look at the declared architecture / quantization.
 // Both hubs serve raw files: Hugging Face under /resolve/main, ModelScope
 // under /resolve/master.
+//
+// URL building and the credential rule live in the model inspector's remote
+// clients (model-inspector/remote/{hf,modelscope}.js, 02 §6): a Hugging Face
+// token goes only to the official endpoint or the mirror the owner
+// configured, and never to ModelScope. This file keeps its old, small
+// contract for the managers and delegates the rest.
+
+const hf = require("./model-inspector/remote/hf");
+const modelscope = require("./model-inspector/remote/modelscope");
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 function encodeRepoPath(model) {
-  return String(model || "").split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  return hf.encodePath(model);
 }
 
 function remoteConfigUrl(source, model, options = {}) {
-  const repo = encodeRepoPath(model);
+  const file = options.file || "config.json";
   if (String(source || "").toLowerCase() === "modelscope") {
-    return `${options.modelScopeEndpoint || "https://www.modelscope.cn"}/models/${repo}/resolve/master/${options.file || "config.json"}`;
+    return modelscope.fileUrl(model, options.revision || "master", file, options.modelScopeEndpoint || undefined);
   }
-  return `${options.hfEndpoint || "https://huggingface.co"}/${repo}/resolve/main/${options.file || "config.json"}`;
+  return hf.fileUrl(model, options.revision || "main", file, options.hfEndpoint || undefined);
 }
 
 async function fetchRemoteModelConfig(options = {}) {
@@ -24,12 +33,14 @@ async function fetchRemoteModelConfig(options = {}) {
   const source = String(options.source || "huggingface").toLowerCase() === "modelscope" ? "modelscope" : "huggingface";
   const model = String(options.model || "").trim();
   if (!model || !model.includes("/")) return { ok: false, source, model, status: 0, config: null, reason: "model id must look like owner/name" };
-  const url = remoteConfigUrl(source, model, options);
-  const headers = { accept: "application/json", "user-agent": "local-model-manager-precheck/1.0" };
-  if (source === "huggingface" && options.token) headers.authorization = `Bearer ${options.token}`;
+  let url = "";
   try {
+    url = remoteConfigUrl(source, model, options);
+    const headers = { accept: "application/json", "user-agent": "local-model-manager-precheck/1.0" };
     const response = await fetchImpl(url, {
-      headers,
+      headers: source === "huggingface"
+        ? hf.requestHeaders({ token: options.token, url, endpoint: options.hfEndpoint, mirrors: options.mirrors, headers })
+        : headers,
       redirect: "follow",
       signal: AbortSignal.timeout(Math.max(2000, Number(options.timeoutMs || DEFAULT_TIMEOUT_MS))),
     });

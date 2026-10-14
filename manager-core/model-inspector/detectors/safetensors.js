@@ -48,6 +48,52 @@ function readExact(fd, buffer, position) {
 }
 
 /**
+ * Parses the JSON of one safetensors header (the bytes after the 8-byte
+ * length). fileBytes is the size of the whole file. Returns { headerBytes,
+ * metadata, tensors: [{name, dtype, shape, bytes, begin}], payloadBytes,
+ * truncated }; throws SafetensorsHeaderError for a malformed header. Shared
+ * by the file reader below and the remote Range reader (remote/collect.js).
+ */
+function parseSafetensorsHeader(buffer, headerBytes, fileBytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw new SafetensorsHeaderError("header is not JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new SafetensorsHeaderError("header is not an object");
+  const tensors = [];
+  let payloadBytes = 0;
+  for (const [name, info] of Object.entries(parsed)) {
+    if (name === "__metadata__") continue;
+    const offsets = info?.data_offsets;
+    const valid = info && typeof info.dtype === "string" && Array.isArray(info.shape)
+      && info.shape.every((dim) => Number.isSafeInteger(dim) && dim >= 0)
+      && Array.isArray(offsets) && offsets.length === 2
+      && offsets.every((value) => Number.isSafeInteger(value) && value >= 0) && offsets[1] >= offsets[0];
+    if (!valid) throw new SafetensorsHeaderError(`tensor entry ${JSON.stringify(name).slice(0, 120)} is malformed`);
+    tensors.push({ name, dtype: info.dtype, shape: info.shape, bytes: offsets[1] - offsets[0], begin: offsets[0] });
+    payloadBytes = Math.max(payloadBytes, offsets[1]);
+  }
+  const metadata = parsed.__metadata__ && typeof parsed.__metadata__ === "object" && !Array.isArray(parsed.__metadata__) ? parsed.__metadata__ : null;
+  return { headerBytes, metadata, tensors, payloadBytes, truncated: fileBytes < 8 + headerBytes + payloadBytes };
+}
+
+/**
+ * The header length a safetensors file declares in its first 8 bytes, checked
+ * against the file size and the 256 MiB guard; throws SafetensorsHeaderError.
+ */
+function safetensorsHeaderLength(first8, fileBytes) {
+  if (fileBytes < 8) throw new SafetensorsHeaderError("shorter than the header length field");
+  if (first8.length < 8) throw new SafetensorsHeaderError("unexpected end of file at byte 0");
+  const length = first8.readBigUInt64LE(0);
+  if (length > BigInt(MAX_SAFETENSORS_HEADER) || Number(length) + 8 > fileBytes) {
+    throw new SafetensorsHeaderError("header length is outside the file");
+  }
+  return Number(length);
+}
+
+/**
  * Reads one safetensors header. Returns { headerBytes, metadata, tensors:
  * [{name, dtype, shape, bytes, begin}], payloadBytes, truncated }; throws
  * SafetensorsHeaderError for a malformed header.
@@ -59,35 +105,10 @@ function readSafetensorsHeader(file, { size } = {}) {
   try {
     const lengthBuffer = Buffer.alloc(8);
     readExact(fd, lengthBuffer, 0);
-    const length = lengthBuffer.readBigUInt64LE(0);
-    if (length > BigInt(MAX_SAFETENSORS_HEADER) || Number(length) + 8 > fileBytes) {
-      throw new SafetensorsHeaderError("header length is outside the file");
-    }
-    const headerBytes = Number(length);
+    const headerBytes = safetensorsHeaderLength(lengthBuffer, fileBytes);
     const buffer = Buffer.alloc(headerBytes);
     readExact(fd, buffer, 8);
-    let parsed;
-    try {
-      parsed = JSON.parse(buffer.toString("utf8"));
-    } catch {
-      throw new SafetensorsHeaderError("header is not JSON");
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new SafetensorsHeaderError("header is not an object");
-    const tensors = [];
-    let payloadBytes = 0;
-    for (const [name, info] of Object.entries(parsed)) {
-      if (name === "__metadata__") continue;
-      const offsets = info?.data_offsets;
-      const valid = info && typeof info.dtype === "string" && Array.isArray(info.shape)
-        && info.shape.every((dim) => Number.isSafeInteger(dim) && dim >= 0)
-        && Array.isArray(offsets) && offsets.length === 2
-        && offsets.every((value) => Number.isSafeInteger(value) && value >= 0) && offsets[1] >= offsets[0];
-      if (!valid) throw new SafetensorsHeaderError(`tensor entry ${JSON.stringify(name).slice(0, 120)} is malformed`);
-      tensors.push({ name, dtype: info.dtype, shape: info.shape, bytes: offsets[1] - offsets[0], begin: offsets[0] });
-      payloadBytes = Math.max(payloadBytes, offsets[1]);
-    }
-    const metadata = parsed.__metadata__ && typeof parsed.__metadata__ === "object" && !Array.isArray(parsed.__metadata__) ? parsed.__metadata__ : null;
-    return { headerBytes, metadata, tensors, payloadBytes, truncated: fileBytes < 8 + headerBytes + payloadBytes };
+    return parseSafetensorsHeader(buffer, headerBytes, fileBytes);
   } finally {
     fs.closeSync(fd);
   }
@@ -144,7 +165,10 @@ function buildTensorTable(inv, facts, { files, depth = "full", classes } = {}) {
     for (const shard of shards) {
       let header;
       try {
-        header = readSafetensorsHeader(absolutePath(inv, shard.name), { size: shard.size });
+        // A remote inventory hands over the header it Range-read up front.
+        header = inv.remote
+          ? inv.remote.safetensorsHeader(shard.name, shard.size)
+          : readSafetensorsHeader(absolutePath(inv, shard.name), { size: shard.size });
       } catch (error) {
         tensors.markInexact();
         tensors.addLayout(shard.size);
@@ -173,5 +197,7 @@ module.exports = {
   SafetensorsHeaderError,
   buildTensorTable,
   indexedShards,
+  parseSafetensorsHeader,
   readSafetensorsHeader,
+  safetensorsHeaderLength,
 };

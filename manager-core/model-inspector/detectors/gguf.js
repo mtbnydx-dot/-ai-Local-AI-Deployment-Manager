@@ -74,6 +74,10 @@ const COPY = Object.freeze({
     zh: "文本输入；图像/音频输入来自同目录的投影文件。",
     en: "Text input; image and audio input come from projector files in the same folder.",
   },
+  headerUnavailable: {
+    zh: "没有读取到 GGUF 文件头（服务器没有按 Range 返回，或读取失败），来自头部的信息未知。",
+    en: "The GGUF header could not be read (the server did not honour Range, or the read failed); the facts it holds are unknown.",
+  },
   noProjector: {
     zh: "同目录没有多模态投影文件（mmproj），只接受文本输入。",
     en: "No projector (mmproj) file sits beside the model, so it takes text input only.",
@@ -107,14 +111,23 @@ function headerRole(header) {
   return header.role === "draft" ? "draft" : "model";
 }
 
-function readHeaders(inv, facts, names) {
+// unavailable: files of a remote inventory whose header could not be fetched.
+// That is not damage (the file is listed and sized), so it is no error and
+// no missing shard; the card just knows nothing from inside those files.
+function readHeaders(inv, facts, names, unavailable = []) {
   const headers = [];
   for (const name of names) {
     const entry = inv.files.find((item) => item.name === name);
     try {
-      const header = readGgufHeaderSync(absolutePath(inv, name), { stat: { size: entry.size } });
+      const header = inv.remote
+        ? inv.remote.ggufHeader(name, entry.size)
+        : readGgufHeaderSync(absolutePath(inv, name), { stat: { size: entry.size } });
       headers.push({ name, size: entry.size, header, role: headerRole(header) });
     } catch (error) {
+      if (inv.remote && error?.code === "remote_header_unavailable") {
+        unavailable.push(name);
+        continue;
+      }
       // File system errors name the absolute path; the card keeps the code only.
       const reason = typeof error?.code === "string" ? `read failed (${error.code})` : String(error?.message || error).slice(0, 160);
       facts.error("gguf_header_invalid", name, COPY.headerInvalid(name, reason));
@@ -338,6 +351,29 @@ function damagedGguf(inv, names) {
   };
 }
 
+// Remote GGUF files whose headers could not be read: sized by the listing,
+// described by nothing else (02 §6: header facts stay unknown, never guessed).
+function unavailableGguf(inv, facts, listed) {
+  facts.warn("gguf_header_unavailable", COPY.headerUnavailable);
+  const models = listed.filter((name) => !/mmproj|projector/i.test(path.posix.basename(name)));
+  const names = models.length ? models : listed;
+  const split = names.every((name) => SPLIT_GGUF.test(path.posix.basename(name)));
+  return {
+    kv: {},
+    file: names[0],
+    role: "model",
+    topology: null,
+    stats: null,
+    tensorTypes: {},
+    files: names.map((name) => inv.files.find((entry) => entry.name === name)),
+    layout: split ? "gguf-split" : names.length === 1 ? "single" : null,
+    missing: [],
+    truncated: [],
+    damaged: [],
+    projectors: [],
+  };
+}
+
 function baseModelOf(kv) {
   const url = kv["general.base_model.0.repo_url"];
   const match = typeof url === "string" ? url.match(/^https:\/\/huggingface\.co\/([^/\s?#]+\/[^/\s?#]+)\/?$/) : null;
@@ -354,7 +390,9 @@ function baseModelOf(kv) {
 function ggufFacts(inv, facts, { file = null, classes } = {}) {
   const names = filesOfKind(inv, "weights:gguf").map((entry) => entry.name);
   if (!names.length) return null;
-  const items = readHeaders(inv, facts, names);
+  const unavailable = [];
+  const items = readHeaders(inv, facts, names, unavailable);
+  if (!items.length && unavailable.length) return unavailableGguf(inv, facts, unavailable);
   // A requested file with an unreadable header is described as damaged, never
   // by another variant of the folder.
   if (file && !items.some((item) => item.name === file)) return damagedGguf(inv, [file]);
