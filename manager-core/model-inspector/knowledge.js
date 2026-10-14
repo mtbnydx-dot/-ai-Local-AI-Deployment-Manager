@@ -400,6 +400,16 @@ function whereHolds(clause, card) {
   }
 }
 
+// A clause with forModelTypes discriminates only the identities it lists (an entry
+// whose own identities are not shared with another family needs no template
+// proof for them); for any other card, including one matched by name, it is skipped.
+function clauseApplies(clause, card) {
+  if (!Array.isArray(clause.forModelTypes)) return true;
+  const identity = card.identity || {};
+  const types = [identity.modelType, identity.textModelType, ...(Array.isArray(identity.modelTypes) ? identity.modelTypes : [])].filter(Boolean);
+  return types.some((type) => clause.forModelTypes.includes(type));
+}
+
 function clauseHolds(clause, card) {
   const checks = [
     ["templateSignature", card.template?.signatureId],
@@ -450,9 +460,10 @@ function evaluateFamily(entry, card) {
   const matchedBy = byName ? [] : [...satisfied];
   let templateClause = false;
   for (const clause of match.require || []) {
+    if (!clauseApplies(clause, card)) continue;
     if (!clauseHolds(clause, card)) return null;
     templateClause ||= clause.templateSignature !== undefined;
-    matchedBy.push(...Object.keys(clause));
+    matchedBy.push(...Object.keys(clause).filter((key) => key !== "forModelTypes"));
   }
   for (const clause of match.where || []) {
     if (!whereHolds(clause, card)) return null;
@@ -1468,6 +1479,8 @@ module.exports = {
   REGEX_MAX_LENGTH,
   SCHEMA_VERSIONS,
   checkRegexSafety,
+  clauseApplies,
+  clauseHolds,
   clearKnowledgeCache,
   collectStatusDomains,
   compileSafeRegex,
@@ -1485,4 +1498,5 @@ module.exports = {
   matchFamily,
   prepareLogLines,
   registerStatusProvider,
+  whereHolds,
 };
