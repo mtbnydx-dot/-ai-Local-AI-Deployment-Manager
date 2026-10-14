@@ -24,9 +24,10 @@
 // mapping, buffered JSON), which entry backends use for their own manager
 // calls instead of building manager URLs.
 
-const crypto = require("node:crypto");
 const http = require("node:http");
 const { REDACTED, redactSecrets } = require("../../manager-core/secret-redactor");
+// 00 §3 and §9.9: req_ plus 20 lowercase base32 characters, minted by the entry.
+const { newRequestId } = require("../../manager-core/telemetry/ids");
 
 const PREFIX = "/api/m/";
 const UPSTREAM_HOST = "127.0.0.1";
@@ -51,7 +52,6 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
-const REQUEST_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 const REQUEST_ID_RE = /^req_[a-z2-7]{20}$/;
 // 07 §2.9: the proxied manager reads a viewer may call. Other specs register
 // their own (01: engines, engines/:id/schema, runtimes/:rid/flags).
@@ -67,14 +67,6 @@ function isPlainObject(value) {
 function positiveInt(value, fallback) {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-// 00 §3 and §9.9: req_ plus 20 characters of lowercase RFC 4648 base32, 100
-// random bits. 256 is a multiple of 32, so the low five bits are uniform.
-function newRequestId() {
-  let id = "req_";
-  for (const byte of crypto.randomBytes(20)) id += REQUEST_ID_ALPHABET[byte & 31];
-  return id;
 }
 
 function managerTable(managers) {
@@ -443,7 +435,8 @@ function createMgmtProxy(options = {}) {
         } catch {
           found = null;
         }
-        if (found && found.access === "viewer") return { ok: true, redact: true };
+        // A principal 05 serves unredacted (system:mcp) keeps the raw body.
+        if (found && found.access === "viewer") return { ok: true, redact: who.redact !== false };
       }
     }
     const allowed = auth.checkWrite(req) || {};
@@ -518,7 +511,7 @@ function createMgmtProxy(options = {}) {
       finishRedacted(job, status, Buffer.concat(chunks, total).toString("utf8"));
     });
     response.on("close", () => {
-      if (job.own || response.complete) return;
+      if (job.own || job.clientGone || response.complete) return;
       job.own = true;
       sendError(res, 502, requestId, "manager_unreachable", `The ${job.route.managerId} manager closed the connection mid-response.`, {
         managerId: job.route.managerId,
@@ -597,6 +590,7 @@ function createMgmtProxy(options = {}) {
     upstream.on("error", (error) => {
       settle();
       if (job.own || job.clientGone) return;
+      job.own = true;
       if (job.piping || res.headersSent) {
         res.destroy();
         return;
@@ -604,7 +598,10 @@ function createMgmtProxy(options = {}) {
       const { managerId } = route;
       if (timedOut) {
         noteDown(managerId, "timed out");
-        sendError(res, 504, requestId, "manager_timeout", `The ${managerId} manager did not answer within ${Math.round(requestTimeoutMs / 1000)} s.`, { managerId });
+        sendError(res, 504, requestId, "manager_timeout", `The ${managerId} manager did not answer within ${Math.max(1, Math.round(requestTimeoutMs / 1000))} s.`, {
+          managerId,
+          hint: "The manager may be busy loading a model; retry in a moment.",
+        });
         return;
       }
       noteDown(managerId, error?.code || error?.message || "connection failed");
@@ -845,6 +842,10 @@ function createManagerClient(options = {}) {
         response.on("close", () => {
           if (!response.complete) finish(failed(reason === "timeout" ? "manager_timeout" : "manager_unreachable", `The ${id} manager closed the connection mid-response.`));
         });
+      });
+      // Backstop: whatever ended the socket, the promise always settles.
+      upstream.on("close", () => {
+        if (!settled) finish(failed(reason === "timeout" ? "manager_timeout" : reason ? "aborted" : "manager_unreachable", `The ${id} manager closed the connection.`));
       });
       upstream.end(body && body.length ? body : undefined);
     });
