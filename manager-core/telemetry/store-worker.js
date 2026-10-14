@@ -33,6 +33,8 @@ const CORE_METHODS = Object.freeze([
   "insertRuntimeSamples",
   "insertGpuSamples",
   "insertEvents",
+  "recordControlCounts",
+  "recordCoverage",
   "appendAuditAccess",
   "call",
   "runRollups",
@@ -110,6 +112,13 @@ const INVALID = Symbol("invalidValue");
 const NUMERIC_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 // Masked client addresses: "a.b.c.x" or the first two IPv6 groups and "…".
 const MASKED_IP_SHAPE = /^(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.x|[0-9a-f]{0,4}:[0-9a-f]{0,4}:…)$/i;
+// control_counts_1m and coverage_1m keys written by the gateway recorder
+// (§5.5, §6.4): a route label of route-class.js and a collector name.
+const MINUTE_MS = 60_000;
+const CONTROL_ROUTE_PATTERN = /^[a-z0-9][a-z0-9:._-]{0,63}$/;
+const CONTROL_STATUS_CLASSES = Object.freeze(["2xx", "3xx", "4xx", "5xx", "none"]);
+const COVERAGE_COMPONENT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const MAX_CONTROL_COUNT = 1_000_000_000;
 
 function storeError(code, message, extra = {}) {
   const error = new Error(message);
@@ -707,6 +716,106 @@ function createStoreCore(options = {}) {
     return result;
   }
 
+  // The recorder's counter tables (§5.5, §6.4). `normalize(row)` returns the
+  // statement values or throws a row error; `afterRow(values)` runs inside
+  // the transaction for every row that changed the table. Failures are
+  // reported like insertRows: a bad row alone, a lock as retryable, a disk or
+  // I/O error as the whole batch dropped.
+  function writeKeyedRows(table, rows, normalize, sql, afterRow = null) {
+    assertOpen();
+    if (!Array.isArray(rows)) throw rowError("invalid_rows");
+    const result = { accepted: 0, duplicates: 0, rejected: 0, dropped: 0, errors: [] };
+    if (!rows.length) return result;
+    const tally = counters(table);
+    const write = prepared(`${table}.write`, sql);
+    try {
+      transaction(() => {
+        rows.forEach((row, index) => {
+          let values;
+          try {
+            values = normalize(row);
+          } catch (error) {
+            result.rejected += 1;
+            if (result.errors.length < MAX_ROW_ERRORS) {
+              const entry = { index, code: error.code && /^[a-z_]+$/.test(error.code) ? error.code : "invalid_row" };
+              if (error.field) entry.field = error.field;
+              result.errors.push(entry);
+            }
+            return;
+          }
+          if (Number(write.run(...values).changes) > 0) {
+            result.accepted += 1;
+            if (afterRow) afterRow(values);
+          } else {
+            result.duplicates += 1;
+          }
+        });
+      });
+    } catch (error) {
+      logFailureOnce(`write to ${table}`, error);
+      const code = errorCode(error);
+      const dropped = rows.length - result.rejected;
+      const retryable = RETRYABLE_CODES.has(code);
+      tally.rejected += result.rejected;
+      if (retryable) tally.busy += dropped;
+      else tally.dropped += dropped;
+      const failed = { accepted: 0, duplicates: 0, rejected: result.rejected, dropped, errors: result.errors, error: code };
+      if (retryable) failed.retryable = true;
+      return failed;
+    }
+    tally.accepted += result.accepted;
+    tally.duplicates += result.duplicates;
+    tally.rejected += result.rejected;
+    return result;
+  }
+
+  function minuteBucket(row) {
+    const at = toEpochMs(row && row.bucket);
+    if (at === null) throw rowError("invalid_value", "bucket");
+    return Math.floor(at / MINUTE_MS) * MINUTE_MS;
+  }
+
+  // Control and static gateway requests (§5.5): {bucket, route, statusClass,
+  // count}. Counts add up, so the recorder may flush one minute many times.
+  function recordControlCounts(rows) {
+    return writeKeyedRows(
+      "control_counts_1m",
+      rows,
+      (row) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) throw rowError("invalid_row");
+        const route = String(row.route ?? "");
+        if (!CONTROL_ROUTE_PATTERN.test(route)) throw rowError("invalid_value", "route");
+        const statusClass = String(row.statusClass ?? row.status_class ?? "");
+        if (!CONTROL_STATUS_CLASSES.includes(statusClass)) throw rowError("invalid_value", "status_class");
+        const count = Number(row.count);
+        if (!Number.isSafeInteger(count) || count < 1 || count > MAX_CONTROL_COUNT) throw rowError("invalid_value", "count");
+        return [minuteBucket(row), route, statusClass, count];
+      },
+      `INSERT INTO control_counts_1m (bucket, route, status_class, count) VALUES (?, ?, ?, ?)
+       ON CONFLICT(bucket, route, status_class) DO UPDATE SET count = count + excluded.count`,
+    );
+  }
+
+  // Collector coverage (§6.4): {bucket, component}. A request-coverage marker
+  // for a minute that is already rolled marks that minute dirty, so its
+  // zero-count marker row still appears (rollups.markDirty).
+  function recordCoverage(rows) {
+    return writeKeyedRows(
+      "coverage_1m",
+      rows,
+      (row) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) throw rowError("invalid_row");
+        const component = String(row.component ?? "");
+        if (!COVERAGE_COMPONENT_PATTERN.test(component)) throw rowError("invalid_value", "component");
+        return [minuteBucket(row), component];
+      },
+      "INSERT INTO coverage_1m (bucket, component) VALUES (?, ?) ON CONFLICT DO NOTHING",
+      ([bucket, component]) => {
+        if (rollups.REQUEST_COVERAGE_COMPONENTS.includes(component)) rollups.markDirty(db, bucket, "requests");
+      },
+    );
+  }
+
   // §10 late data: rows whose minute is already rolled mark it dirty, in the
   // insert's own transaction (rollups.markLate).
   function markLateRows(family, timeColumn) {
@@ -1301,6 +1410,8 @@ function createStoreCore(options = {}) {
     insertRuntimeSamples: (rows) => insertRows("runtime_samples", rows, { afterInsert: markLateRows("runtime", "at") }),
     insertGpuSamples: (rows) => insertRows("gpu_samples", rows, { afterInsert: markLateRows("gpu", "at") }),
     insertEvents: (rows) => insertRows("events", rows, { prepareRow: prepareEvent }),
+    recordControlCounts,
+    recordCoverage,
     appendAuditAccess,
     call,
     runRollups,

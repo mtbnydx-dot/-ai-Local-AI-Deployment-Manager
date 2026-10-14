@@ -5,6 +5,10 @@
 // failures inside `windowMs` is banned for `banMs`. The state is in-memory and
 // per process; the point is to turn a 401 storm from a public IP into a cheap
 // 429 instead of a key-store read plus an access-log line per attempt.
+//
+// `onBan({ ip, ipMasked, until, failures })` runs once per ban issued, so the
+// entry can record a security.ban telemetry event (04 §9). It runs after the
+// ban is in place and can neither throw into record() nor undo the ban.
 
 const DEFAULT_MAX_FAILURES = 20;
 const DEFAULT_WINDOW_MS = 60 * 1000;
@@ -34,6 +38,7 @@ function createAuthFailureGuard(options = {}) {
   const banMs = clampInt(options.banMs, 1000, 7 * 24 * 60 * 60 * 1000, DEFAULT_BAN_MS);
   const maxEntries = clampInt(options.maxEntries, 100, 1_000_000, DEFAULT_MAX_ENTRIES);
   const now = typeof options.now === "function" ? options.now : Date.now;
+  const onBan = typeof options.onBan === "function" ? options.onBan : null;
   const entries = new Map();
   let bansIssued = 0;
   let blockedRequests = 0;
@@ -83,6 +88,13 @@ function createAuthFailureGuard(options = {}) {
     }
     entries.set(normalized, entry);
     if (entries.size > maxEntries) prune(at);
+    if (banned && onBan) {
+      try {
+        onBan({ ip: normalized, ipMasked: maskAddress(normalized), until: new Date(entry.bannedUntil).toISOString(), failures: maxFailures });
+      } catch {
+        // Reporting a ban never affects the ban itself.
+      }
+    }
     return {
       banned,
       failures: banned ? maxFailures : entry.failures.length,

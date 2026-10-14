@@ -34,6 +34,8 @@ const METHODS = Object.freeze([
   "insertRuntimeSamples",
   "insertGpuSamples",
   "insertEvents",
+  "recordControlCounts",
+  "recordCoverage",
   "appendAuditAccess",
   "call",
   "runRollups",
@@ -48,6 +50,8 @@ const INSERT_COUNTERS = Object.freeze({
   insertRuntimeSamples: "runtimeSamples",
   insertGpuSamples: "gpuSamples",
   insertEvents: "events",
+  recordControlCounts: "controlCounts1m",
+  recordCoverage: "coverage1m",
 });
 const DEFAULT_FLUSH_MS = 2000;
 const STABLE_UPTIME_MS = 60_000;
@@ -133,6 +137,8 @@ async function openTelemetryStore(options = {}) {
   let info = null;
   let restarts = 0;
   let lastCrash = null;
+  // The recorder's counter tables (controlCounts1m, coverage1m) get a key
+  // once something of theirs was dropped.
   const dropped = { requests: 0, runtimeSamples: 0, gpuSamples: 0, events: 0, state: 0 };
 
   let worker = null;
@@ -359,7 +365,7 @@ async function openTelemetryStore(options = {}) {
     const counter = INSERT_COUNTERS[method];
     if (counter) {
       const count = Array.isArray(args[0]) ? args[0].length : 0;
-      dropped[counter] += count;
+      dropped[counter] = (dropped[counter] || 0) + count;
       return Promise.resolve({ accepted: 0, duplicates: 0, rejected: 0, dropped: count, errors: [], error: "telemetry_store_unavailable" });
     }
     switch (method) {
@@ -383,7 +389,8 @@ async function openTelemetryStore(options = {}) {
     const result = inProcess ? await runInProcess("stats", args) : await postCall(worker, "stats", args);
     const merged = { ...dropped };
     for (const key of Object.values(INSERT_COUNTERS)) {
-      merged[key] += Number(result.writes && result.writes[key] && result.writes[key].dropped) || 0;
+      const count = Number(result.writes && result.writes[key] && result.writes[key].dropped) || 0;
+      if (count || key in merged) merged[key] = (merged[key] || 0) + count;
     }
     return { ...result, mode, restarts, lastCrash, pending: pending.size, dropped: merged };
   }
