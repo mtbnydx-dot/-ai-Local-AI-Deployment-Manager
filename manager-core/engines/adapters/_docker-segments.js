@@ -31,6 +31,20 @@ function renderRunArgs(cmd) {
   ];
 }
 
+/** Label strings ("key=value") -> ["--label", "key=value", ...], in order. */
+function labelFlags(labels) {
+  return (Array.isArray(labels) ? labels : []).flatMap((label) => ["--label", String(label)]);
+}
+
+/** Recipe env as "-e NAME=value" flags, in order; unset and empty values are skipped. */
+function envAssignmentFlags(env) {
+  const flags = [];
+  for (const [key, value] of Object.entries(env && typeof env === "object" ? env : {})) {
+    if (value !== undefined && value !== null && value !== "") flags.push("-e", `${key}=${value}`);
+  }
+  return flags;
+}
+
 /**
  * The `--label key=value` pairs of a flag list as an object, in emission
  * order: the read-only LaunchCommand.labels mirror that inspect and the plan
@@ -51,6 +65,8 @@ function labelsFromFlags(flags) {
 }
 
 module.exports = {
+  envAssignmentFlags,
+  labelFlags,
   labelsFromFlags,
   renderRunArgs,
 };

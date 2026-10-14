@@ -14,10 +14,23 @@
 
 const descriptorSchema = require("./descriptor-schema");
 const dockerSegments = require("./adapters/_docker-segments");
-const llamacppAdapter = require("./adapters/llamacpp");
 const registry = require("./registry");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
+
+// Adapter code modules by descriptor.adapter (01 §6). An engine whose adapter
+// has no module here is not launchable through an adapter yet.
+const adapters = Object.freeze({
+  vllm: require("./adapters/vllm"),
+  sglang: require("./adapters/sglang"),
+  llamacpp: require("./adapters/llamacpp"),
+});
+
+/** descriptor (or its adapter id) -> adapter module, or null. */
+function adapterFor(descriptorOrAdapterId) {
+  const id = typeof descriptorOrAdapterId === "string" ? descriptorOrAdapterId : descriptorOrAdapterId?.adapter;
+  return typeof id === "string" && Object.hasOwn(adapters, id) ? adapters[id] : null;
+}
 
 module.exports = {
   descriptorSchema,
@@ -32,7 +45,8 @@ module.exports = {
   buildEnginesPayload: routes.buildEnginesPayload,
   validateDraftRequest: routes.validateDraftRequest,
   // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
-  adapters: Object.freeze({ llamacpp: llamacppAdapter }),
+  adapters,
+  adapterFor,
   renderRunArgs: dockerSegments.renderRunArgs,
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,

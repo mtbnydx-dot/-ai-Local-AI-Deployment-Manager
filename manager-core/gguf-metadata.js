@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { ggmlTensorBytes, ggmlTypeInfo } = require("./model-inspector/ggml-types");
 
 const GGUF_TYPES = Object.freeze({
   UINT8: 0,
@@ -69,12 +70,47 @@ const GGUF_FILE_TYPE_NAMES = Object.freeze({
   34: "MXFP4",
 });
 
+const GGUF_TYPE_NAMES = Object.freeze(Object.fromEntries(Object.entries(GGUF_TYPES).map(([name, id]) => [id, name.toLowerCase()])));
+
 const DEFAULT_CAPTURE_ARRAY_LIMIT = 4096;
 const DEFAULT_CAPTURE_STRING_BYTES = 1024 * 1024;
+const MAX_KEY_BYTES = 16 * 1024;
+const MAX_TENSOR_NAME_BYTES = 4096;
+const DEFAULT_ALIGNMENT = 32;
 const metadataCache = new Map();
 
-class BufferedFileReader {
+// Thrown by parseGgufHeaderBuffer in partial mode when the buffer ends inside
+// the header. requiredBytes is the smallest buffer length (from byte 0) that
+// gets the parse past the read that failed; the remote Range reader grows its
+// window to at least that and retries (02 §6.1).
+class GgufNeedMoreBytes extends Error {
+  constructor(requiredBytes, availableBytes) {
+    super(`GGUF header needs at least ${requiredBytes} bytes; ${availableBytes} are available.`);
+    this.name = "GgufNeedMoreBytes";
+    this.code = "gguf_need_more_bytes";
+    this.requiredBytes = requiredBytes;
+    this.availableBytes = availableBytes;
+  }
+}
+
+// Typed reads shared by the file and buffer readers; subclasses provide
+// readBuffer, skip and ensureAvailable.
+class GgufReaderBase {
+  uint8() { return this.readBuffer(1).readUInt8(0); }
+  int8() { return this.readBuffer(1).readInt8(0); }
+  uint16() { return this.littleEndian ? this.readBuffer(2).readUInt16LE(0) : this.readBuffer(2).readUInt16BE(0); }
+  int16() { return this.littleEndian ? this.readBuffer(2).readInt16LE(0) : this.readBuffer(2).readInt16BE(0); }
+  uint32() { return this.littleEndian ? this.readBuffer(4).readUInt32LE(0) : this.readBuffer(4).readUInt32BE(0); }
+  int32() { return this.littleEndian ? this.readBuffer(4).readInt32LE(0) : this.readBuffer(4).readInt32BE(0); }
+  float32() { return this.littleEndian ? this.readBuffer(4).readFloatLE(0) : this.readBuffer(4).readFloatBE(0); }
+  float64() { return this.littleEndian ? this.readBuffer(8).readDoubleLE(0) : this.readBuffer(8).readDoubleBE(0); }
+  uint64() { return this.littleEndian ? this.readBuffer(8).readBigUInt64LE(0) : this.readBuffer(8).readBigUInt64BE(0); }
+  int64() { return this.littleEndian ? this.readBuffer(8).readBigInt64LE(0) : this.readBuffer(8).readBigInt64BE(0); }
+}
+
+class BufferedFileReader extends GgufReaderBase {
   constructor(file, fileBytes, options = {}) {
+    super();
     this.file = file;
     this.fileBytes = Number(fileBytes || 0);
     this.fd = fs.openSync(file, "r");
@@ -128,17 +164,47 @@ class BufferedFileReader {
     this.ensureAvailable(bytes);
     this.offset += bytes;
   }
+}
 
-  uint8() { return this.readBuffer(1).readUInt8(0); }
-  int8() { return this.readBuffer(1).readInt8(0); }
-  uint16() { return this.littleEndian ? this.readBuffer(2).readUInt16LE(0) : this.readBuffer(2).readUInt16BE(0); }
-  int16() { return this.littleEndian ? this.readBuffer(2).readInt16LE(0) : this.readBuffer(2).readInt16BE(0); }
-  uint32() { return this.littleEndian ? this.readBuffer(4).readUInt32LE(0) : this.readBuffer(4).readUInt32BE(0); }
-  int32() { return this.littleEndian ? this.readBuffer(4).readInt32LE(0) : this.readBuffer(4).readInt32BE(0); }
-  float32() { return this.littleEndian ? this.readBuffer(4).readFloatLE(0) : this.readBuffer(4).readFloatBE(0); }
-  float64() { return this.littleEndian ? this.readBuffer(8).readDoubleLE(0) : this.readBuffer(8).readDoubleBE(0); }
-  uint64() { return this.littleEndian ? this.readBuffer(8).readBigUInt64LE(0) : this.readBuffer(8).readBigUInt64BE(0); }
-  int64() { return this.littleEndian ? this.readBuffer(8).readBigInt64LE(0) : this.readBuffer(8).readBigInt64BE(0); }
+// Reads a header from memory (the first bytes of a file, e.g. a remote Range
+// response). Without `partial` the buffer is the whole file and running past
+// its end is the usual bounds error; with `partial` it throws
+// GgufNeedMoreBytes, unless `fileBytes` shows the file itself is too short.
+class GgufBufferReader extends GgufReaderBase {
+  constructor(buffer, options = {}) {
+    super();
+    this.buffer = buffer;
+    this.partial = options.partial === true;
+    this.fileBytes = knownFileBytes(options.fileBytes);
+    this.offset = 0;
+    this.littleEndian = true;
+  }
+
+  close() {}
+
+  ensureAvailable(length) {
+    const bytes = Number(length || 0);
+    const end = this.offset + bytes;
+    if (Number.isSafeInteger(bytes) && bytes >= 0 && end <= this.buffer.length) return;
+    if (this.partial && Number.isSafeInteger(end) && bytes >= 0 && (this.fileBytes === null || end <= this.fileBytes)) {
+      throw new GgufNeedMoreBytes(end, this.buffer.length);
+    }
+    throw new Error(`GGUF metadata exceeds file bounds at byte ${this.offset}.`);
+  }
+
+  readBuffer(length) {
+    const bytes = Number(length || 0);
+    this.ensureAvailable(bytes);
+    const output = this.buffer.subarray(this.offset, this.offset + bytes);
+    this.offset += bytes;
+    return output;
+  }
+
+  skip(length) {
+    const bytes = Number(length || 0);
+    this.ensureAvailable(bytes);
+    this.offset += bytes;
+  }
 }
 
 function bigintToJsonNumber(value) {
@@ -156,17 +222,20 @@ function countValue(value, fallback = 0) {
   return Number.isSafeInteger(number) && number >= 0 ? number : fallback;
 }
 
-function readGgufString(reader, capture, maxCaptureBytes = DEFAULT_CAPTURE_STRING_BYTES) {
+// A string over the capture limit is skipped: null, or { $string: length }
+// when `placeholder` is set (widened capture keeps the fact that it exists).
+function readGgufString(reader, capture, maxCaptureBytes = DEFAULT_CAPTURE_STRING_BYTES, placeholder = false) {
   const length = countValue(reader.uint64(), -1);
   if (length < 0) throw new Error("GGUF string length is outside the supported range.");
   if (!capture || length > maxCaptureBytes) {
     reader.skip(length);
-    return capture ? null : undefined;
+    if (!capture) return undefined;
+    return placeholder ? { $string: length } : null;
   }
   return reader.readBuffer(length).toString("utf8");
 }
 
-function readGgufScalar(reader, type, capture = true) {
+function readGgufScalar(reader, type, capture = true, options = {}) {
   switch (type) {
     case GGUF_TYPES.UINT8: return capture ? reader.uint8() : reader.skip(1);
     case GGUF_TYPES.INT8: return capture ? reader.int8() : reader.skip(1);
@@ -176,7 +245,7 @@ function readGgufScalar(reader, type, capture = true) {
     case GGUF_TYPES.INT32: return capture ? reader.int32() : reader.skip(4);
     case GGUF_TYPES.FLOAT32: return capture ? reader.float32() : reader.skip(4);
     case GGUF_TYPES.BOOL: return capture ? Boolean(reader.uint8()) : reader.skip(1);
-    case GGUF_TYPES.STRING: return readGgufString(reader, capture);
+    case GGUF_TYPES.STRING: return readGgufString(reader, capture, DEFAULT_CAPTURE_STRING_BYTES, options.placeholders === true);
     case GGUF_TYPES.UINT64: return capture ? bigintToJsonNumber(reader.uint64()) : reader.skip(8);
     case GGUF_TYPES.INT64: return capture ? bigintToJsonNumber(reader.int64()) : reader.skip(8);
     case GGUF_TYPES.FLOAT64: return capture ? reader.float64() : reader.skip(8);
@@ -201,15 +270,19 @@ function skipGgufArray(reader, elementType, count) {
   throw new Error(`Unsupported GGUF array element type ${elementType}.`);
 }
 
+// options.placeholders: an array over maxArrayItems becomes
+// { $array: <item type>, count } and a long string { $string: length }
+// instead of null (02 §5.1).
 function readGgufValue(reader, type, capture = true, options = {}) {
-  if (type !== GGUF_TYPES.ARRAY) return readGgufScalar(reader, type, capture);
+  if (type !== GGUF_TYPES.ARRAY) return readGgufScalar(reader, type, capture, options);
   const elementType = reader.uint32();
   const count = countValue(reader.uint64(), -1);
   if (count < 0) throw new Error("GGUF array length is outside the supported range.");
   const maxItems = Math.max(0, Number(options.maxArrayItems ?? DEFAULT_CAPTURE_ARRAY_LIMIT));
   if (!capture || count > maxItems) {
     skipGgufArray(reader, elementType, count);
-    return capture ? null : undefined;
+    if (!capture) return undefined;
+    return options.placeholders === true ? { $array: GGUF_TYPE_NAMES[elementType], count } : null;
   }
   const values = [];
   for (let index = 0; index < count; index += 1) {
@@ -227,6 +300,95 @@ function shouldCaptureMetadataKey(key) {
   return /\.(?:architecture|context_length|embedding_length|block_count|feed_forward_length|expert_count|expert_used_count|head_count|head_count_kv|key_length|value_length|dimension_count|sliding_window|sliding_window_pattern|target_layers|block_size)$/.test(value);
 }
 
+// Widened capture keeps every KV pair; the legacy whitelist (above) still
+// decides what lands in `metadata`. A placeholder there was null before.
+function isGgufPlaceholder(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && (Object.hasOwn(value, "$array") || Object.hasOwn(value, "$string"));
+}
+
+function legacyMetadataValue(value) {
+  if (isGgufPlaceholder(value)) return null;
+  return Array.isArray(value) ? value.map(legacyMetadataValue) : value;
+}
+
+// GGUF keys are arbitrary text; defineProperty keeps "__proto__" an own key.
+function defineOwn(target, key, value) {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+function alignUp(value, alignment) {
+  return Math.ceil(value / alignment) * alignment;
+}
+
+// Decodes the magic, the counts, the KV block and the tensor-info table; no
+// tensor data is read. Legacy mode keeps the whitelisted keys and element
+// counts only. Widened mode (02 §5.1) also returns every KV pair in file
+// order (arrays over 4096 items as { $array, count }, strings over 1 MiB as
+// { $string }) and every tensor info with its exact bytes, null for an
+// unknown ggml type.
+function parseGgufHeader(reader, { widened = false } = {}) {
+  const magic = reader.readBuffer(4).toString("ascii");
+  if (magic === "GGUF") reader.littleEndian = true;
+  else if (magic === "FUGG") reader.littleEndian = false;
+  else throw new Error(`Invalid GGUF magic ${JSON.stringify(magic)}.`);
+  const version = reader.uint32();
+  if (version < 1 || version > 3) throw new Error(`Unsupported GGUF version ${version}.`);
+  const tensorCount = countValue(reader.uint64(), -1);
+  const metadataCount = countValue(reader.uint64(), -1);
+  if (tensorCount < 0 || metadataCount < 0) throw new Error("GGUF header counts exceed the supported range.");
+  const metadata = {};
+  const kv = widened ? {} : null;
+  for (let index = 0; index < metadataCount; index += 1) {
+    const key = readGgufString(reader, true, MAX_KEY_BYTES);
+    if (!key) throw new Error(`GGUF metadata key ${index} is empty or too large.`);
+    const type = reader.uint32();
+    const capture = shouldCaptureMetadataKey(key);
+    if (widened) {
+      const value = readGgufValue(reader, type, true, { maxArrayItems: DEFAULT_CAPTURE_ARRAY_LIMIT, placeholders: true });
+      defineOwn(kv, key, value);
+      const legacy = capture ? legacyMetadataValue(value) : null;
+      if (legacy !== undefined && legacy !== null) metadata[key] = legacy;
+      continue;
+    }
+    const value = readGgufValue(reader, type, capture, {
+      maxArrayItems: capture ? DEFAULT_CAPTURE_ARRAY_LIMIT : 0,
+    });
+    if (capture && value !== undefined && value !== null) metadata[key] = value;
+  }
+
+  let parameterCount = 0;
+  const tensors = widened ? [] : null;
+  for (let index = 0; index < tensorCount; index += 1) {
+    const name = readGgufString(reader, widened, MAX_TENSOR_NAME_BYTES);
+    if (widened && typeof name !== "string") throw new Error(`GGUF tensor ${index} name is too large.`);
+    const dimensions = reader.uint32();
+    if (dimensions > 8) throw new Error(`GGUF tensor ${index} has invalid dimension count ${dimensions}.`);
+    const dims = [];
+    let tensorElements = 1;
+    for (let dimension = 0; dimension < dimensions; dimension += 1) {
+      const length = countValue(reader.uint64(), -1);
+      if (length < 0) throw new Error(`GGUF tensor ${index} dimension is outside the supported range.`);
+      dims.push(length);
+      tensorElements *= length;
+    }
+    const typeId = reader.uint32();
+    const offset = countValue(reader.uint64(), -1);
+    parameterCount += tensorElements;
+    if (!widened) continue;
+    if (offset < 0) throw new Error(`GGUF tensor ${index} offset is outside the supported range.`);
+    tensors.push({
+      name,
+      type: ggmlTypeInfo(typeId)?.name ?? null,
+      typeId,
+      dims,
+      offset,
+      bytes: ggmlTensorBytes(typeId, dims),
+    });
+  }
+  return { version, tensorCount, metadataCount, metadata, kv, tensors, parameterCount, tensorInfoEnd: reader.offset };
+}
+
 function readGgufMetadataSync(file, options = {}) {
   const resolved = path.resolve(String(file || ""));
   const stat = options.stat || fs.statSync(resolved);
@@ -234,43 +396,7 @@ function readGgufMetadataSync(file, options = {}) {
   if (options.cache !== false && metadataCache.has(cacheKey)) return metadataCache.get(cacheKey);
   const reader = new BufferedFileReader(resolved, stat.size, options);
   try {
-    const magic = reader.readBuffer(4).toString("ascii");
-    if (magic === "GGUF") reader.littleEndian = true;
-    else if (magic === "FUGG") reader.littleEndian = false;
-    else throw new Error(`Invalid GGUF magic ${JSON.stringify(magic)}.`);
-    const version = reader.uint32();
-    if (version < 1 || version > 3) throw new Error(`Unsupported GGUF version ${version}.`);
-    const tensorCount = countValue(reader.uint64(), -1);
-    const metadataCount = countValue(reader.uint64(), -1);
-    if (tensorCount < 0 || metadataCount < 0) throw new Error("GGUF header counts exceed the supported range.");
-    const metadata = {};
-    for (let index = 0; index < metadataCount; index += 1) {
-      const key = readGgufString(reader, true, 16 * 1024);
-      if (!key) throw new Error(`GGUF metadata key ${index} is empty or too large.`);
-      const type = reader.uint32();
-      const capture = shouldCaptureMetadataKey(key);
-      const value = readGgufValue(reader, type, capture, {
-        maxArrayItems: capture ? DEFAULT_CAPTURE_ARRAY_LIMIT : 0,
-      });
-      if (capture && value !== undefined && value !== null) metadata[key] = value;
-    }
-
-    let parameterCount = 0;
-    for (let index = 0; index < tensorCount; index += 1) {
-      readGgufString(reader, false);
-      const dimensions = reader.uint32();
-      if (dimensions > 8) throw new Error(`GGUF tensor ${index} has invalid dimension count ${dimensions}.`);
-      let tensorElements = 1;
-      for (let dimension = 0; dimension < dimensions; dimension += 1) {
-        const length = countValue(reader.uint64(), -1);
-        if (length < 0) throw new Error(`GGUF tensor ${index} dimension is outside the supported range.`);
-        tensorElements *= length;
-      }
-      reader.uint32();
-      reader.uint64();
-      parameterCount += tensorElements;
-    }
-
+    const { version, tensorCount, metadataCount, metadata, parameterCount } = parseGgufHeader(reader);
     const architecture = String(metadata["general.architecture"] || "").trim().toLowerCase();
     const result = normalizeGgufMetadata({
       path: resolved,
@@ -292,6 +418,151 @@ function readGgufMetadataSync(file, options = {}) {
   } finally {
     reader.close();
   }
+}
+
+const TENSOR_WARNING_COPY = Object.freeze({
+  ggml_type_unknown: (count, ids) => ({
+    zh: `${count} 个张量使用未知的 ggml 类型（编号 ${ids}），它们的大小按文件布局取上限，不是精确值。`,
+    en: `${count} tensor(s) use unknown ggml type id(s) ${ids}; their sizes are upper bounds from the file layout, not exact.`,
+  }),
+  tensor_size_mismatch: (count) => ({
+    zh: `${count} 个张量的计算大小超出了到下一个张量的空间，权重大小不可靠。`,
+    en: `${count} tensor(s) are larger than the space before the next tensor; the weight bytes are not reliable.`,
+  }),
+  gguf_payload_short: () => ({
+    zh: "文件比头部声明的张量数据短，可能没有下载完整。",
+    en: "The file is shorter than the tensor data its header declares; it may be an incomplete download.",
+  }),
+});
+
+// Sizes come from the type table. Sorted by offset, the gap to the next tensor
+// (or to the end of the file, when its size is known) bounds each tensor: a
+// known size larger than the gap is a mismatch, and an unknown type gets the
+// gap as `bytesUpper`. Totals then hold the upper bound and exact is false.
+// tensorBytes sums the tensors; totalBytes is the file size the header lays
+// out (header, tensors and their alignment padding), which is what a complete
+// file, or a remote sibling listing, reports.
+function summarizeTensorBytes(tensors, { headerBytes, fileBytes, alignment }) {
+  const ordered = [...tensors].sort((left, right) => left.offset - right.offset);
+  const dataBytes = fileBytes === null ? null : fileBytes - headerBytes;
+  const byType = {};
+  const unknownTypeIds = new Set();
+  let tensorBytes = 0;
+  let unknown = 0;
+  let unbounded = 0;
+  let mismatched = 0;
+  let dataEnd = 0;
+  ordered.forEach((tensor, position) => {
+    const next = ordered[position + 1];
+    const limit = next ? next.offset : dataBytes;
+    const gap = limit === null ? null : limit - tensor.offset;
+    let bytes = tensor.bytes;
+    if (bytes === null) {
+      unknown += 1;
+      unknownTypeIds.add(tensor.typeId);
+      tensor.bytesUpper = gap !== null && gap >= 0 ? gap : null;
+      if (tensor.bytesUpper === null) unbounded += 1;
+      bytes = tensor.bytesUpper || 0;
+    } else if (next && bytes > gap) {
+      mismatched += 1;
+    }
+    const typeKey = tensor.type || `type-${tensor.typeId}`;
+    byType[typeKey] = (byType[typeKey] || 0) + bytes;
+    tensorBytes += bytes;
+    dataEnd = Math.max(dataEnd, tensor.offset + bytes);
+  });
+  const typeIds = Array.from(unknownTypeIds).sort((left, right) => left - right);
+  const warnings = [];
+  if (unknown) {
+    warnings.push({
+      code: "ggml_type_unknown",
+      tensors: unknown,
+      typeIds,
+      message: TENSOR_WARNING_COPY.ggml_type_unknown(unknown, typeIds.join(", ")),
+    });
+  }
+  if (mismatched) {
+    warnings.push({ code: "tensor_size_mismatch", tensors: mismatched, message: TENSOR_WARNING_COPY.tensor_size_mismatch(mismatched) });
+  }
+  if (dataBytes !== null && dataEnd > dataBytes) {
+    warnings.push({ code: "gguf_payload_short", message: TENSOR_WARNING_COPY.gguf_payload_short() });
+  }
+  return {
+    weights: {
+      exact: unknown === 0 && mismatched === 0,
+      totalBytes: headerBytes + alignUp(dataEnd, alignment),
+      tensorBytes,
+      byType,
+      unknownTypeIds: typeIds,
+      unboundedTensors: unbounded,
+    },
+    warnings,
+  };
+}
+
+function knownFileBytes(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+// The widened result: every field readGgufMetadataSync returns (same values;
+// `metadata` is still the whitelist) plus kv, alignment, headerBytes (the
+// aligned start of the tensor data), tensors, weights and warnings.
+function widenedHeaderResult(parsed, { file, fileBytes }) {
+  const alignmentValue = Number(parsed.kv["general.alignment"]);
+  const alignment = Number.isSafeInteger(alignmentValue) && alignmentValue > 0 ? alignmentValue : DEFAULT_ALIGNMENT;
+  const headerBytes = alignUp(parsed.tensorInfoEnd, alignment);
+  const { weights, warnings } = summarizeTensorBytes(parsed.tensors, { headerBytes, fileBytes, alignment });
+  return {
+    ...normalizeGgufMetadata({
+      path: file,
+      fileBytes,
+      version: parsed.version,
+      tensorCount: parsed.tensorCount,
+      metadataCount: parsed.metadataCount,
+      metadata: parsed.metadata,
+      parameterCount: parsed.parameterCount,
+    }),
+    fileBytes,
+    kv: parsed.kv,
+    alignment,
+    headerBytes,
+    tensors: parsed.tensors,
+    weights,
+    warnings,
+  };
+}
+
+/**
+ * Widened header of a local GGUF file (02 §5.1), read synchronously; only
+ * header bytes are read. Not cached: the model-card cache sits above it.
+ */
+function readGgufHeaderSync(file, options = {}) {
+  const resolved = path.resolve(String(file || ""));
+  const stat = options.stat || fs.statSync(resolved);
+  const reader = new BufferedFileReader(resolved, stat.size, options);
+  try {
+    return widenedHeaderResult(parseGgufHeader(reader, { widened: true }), { file: resolved, fileBytes: stat.size });
+  } finally {
+    reader.close();
+  }
+}
+
+/**
+ * Widened header from the first bytes of a GGUF file, e.g. a Range response.
+ * options: partial (the buffer may end inside the header: throw
+ * GgufNeedMoreBytes {requiredBytes} instead of a bounds error), fileBytes
+ * (the full file size when known: bounds unknown-type tensors and flags a
+ * short payload), path (a file name, used for role and split detection).
+ */
+function parseGgufHeaderBuffer(buffer, options = {}) {
+  if (!(buffer instanceof Uint8Array)) throw new TypeError("parseGgufHeaderBuffer needs a Buffer or Uint8Array.");
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const fileBytes = knownFileBytes(options.fileBytes);
+  const reader = new GgufBufferReader(bytes, { partial: options.partial === true, fileBytes });
+  const file = options.path ? String(options.path) : undefined;
+  return widenedHeaderResult(parseGgufHeader(reader, { widened: true }), { file, fileBytes });
 }
 
 function metadataNumber(metadata, keys, fallback = null) {
@@ -337,6 +608,10 @@ function normalizeGgufMetadata(input = {}) {
     generalType: metadata["general.type"],
   });
   const pattern = Array.isArray(slidingWindowPattern) ? slidingWindowPattern.map(Boolean) : null;
+  // Legacy semantics, kept because the legacy memory estimate reads it: a
+  // window without a pattern counts every layer as SWA. The model card does
+  // not inherit this (02 §5.1): from the widened `kv` a window-only file has
+  // an unknown layer split unless its family declares ggufSwaAllLayers.
   const slidingLayers = pattern ? pattern.filter(Boolean).length : slidingWindow ? blockCount : 0;
   const globalLayers = pattern && blockCount ? Math.max(0, blockCount - slidingLayers) : slidingWindow ? 0 : blockCount;
   return {
@@ -581,6 +856,7 @@ function gpuLayerFraction(gpuLayers, totalLayers) {
 module.exports = {
   GGUF_FILE_TYPE_NAMES,
   GGUF_TYPES,
+  GgufNeedMoreBytes,
   buildGgufInventory,
   classifyGgufRole,
   estimateGgufKvBytes,
@@ -588,6 +864,8 @@ module.exports = {
   gpuLayerFraction,
   inspectGgufFileSync,
   normalizeGgufMetadata,
+  parseGgufHeaderBuffer,
+  readGgufHeaderSync,
   readGgufMetadataSync,
   selectGgufModel,
   summarizeGgufGroup,

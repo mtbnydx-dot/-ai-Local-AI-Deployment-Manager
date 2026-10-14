@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "packages": [
+    {
+      "name": "htm",
+      "version": "3.1.1",
+      "license": "Apache-2.0",
+      "source": "npm:htm@3.1.1",
+      "integrity": "sha512-983Vyg8NwUE7JkZ6NmOqpCZ+sh1bKv2iYTlUkzlWmA5JD2acKoxd4KVxbMmxX/85mtfdnDmTFoNKcg5DGAvxNQ==",
+      "dir": "htm/3.1.1",
+      "entries": {
+        "htm": "htm.module.js"
+      },
+      "files": [
+        {
+          "path": "htm.module.js",
+          "from": "dist/htm.module.js",
+          "sha256": "ab33dd3f38059b9be4d5f5350128eefb2356639c4e0bbe9d9e8b3ba75847e9e4",
+          "bytes": 1207
+        },
+        {
+          "path": "LICENSE",
+          "from": "LICENSE",
+          "sha256": "740725f7252e750af735d0028cc534970772f513331e9f68150fede8fb3ce00f",
+          "bytes": 11341
+        }
+      ]
+    },
+    {
+      "name": "lucide",
+      "version": "0.454.0",
+      "license": "ISC",
+      "source": "scripts/vendor/lucide.full.min.js",
+      "generated": "scripts/build-lucide-subset.cjs",
+      "dir": "lucide/0.454.0",
+      "entries": {
+        "lucide": "icons.js"
+      },
+      "files": [
+        {
+          "path": "icons.js",
+          "from": "scripts/vendor/lucide.full.min.js",
+          "sha256": "53bf99c118925a3c9a5aabf78f7ce02574f2870d6e1f463bb0abe812f33f5503",
+          "bytes": 2326
+        },
+        {
+          "path": "LICENSE",
+          "from": "npm:lucide@0.454.0/LICENSE (copied by hand)",
+          "sha256": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
+          "bytes": 880
+        }
+      ]
+    },
+    {
+      "name": "preact",
+      "version": "10.29.8",
+      "license": "MIT",
+      "source": "npm:preact@10.29.8",
+      "integrity": "sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==",
+      "dir": "preact/10.29.8",
+      "entries": {
+        "preact": "preact.module.js",
+        "preact/hooks": "hooks.module.js"
+      },
+      "files": [
+        {
+          "path": "preact.module.js",
+          "from": "dist/preact.module.js",
+          "sha256": "25a5df7e9f628a587743c4641a368737a3b218f28ef738ba0376a2d5bdfc948c",
+          "bytes": 11651
+        },
+        {
+          "path": "hooks.module.js",
+          "from": "hooks/dist/hooks.module.js",
+          "rewrites": [
+            {
+              "from": "\"preact\"",
+              "to": "\"./preact.module.js\""
+            }
+          ],
+          "sha256": "9e7eff58e0ae604583461eba1344da69a6894eab575eb591c635cc0d3f9ec57d",
+          "bytes": 3618
+        },
+        {
+          "path": "LICENSE",
+          "from": "LICENSE",
+          "sha256": "1fe6958409c8c257a70c587a18b6f7f412b179b456630790d30b2ec9a8e4b7d4",
+          "bytes": 1087
+        }
+      ]
+    },
+    {
+      "name": "qrcode-generator",
+      "version": "2.0.4",
+      "license": "MIT",
+      "source": "npm:qrcode-generator@2.0.4",
+      "integrity": "sha512-mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g==",
+      "dir": "qrcode/2.0.4",
+      "entries": {
+        "qrcode-generator": "qrcode.mjs"
+      },
+      "files": [
+        {
+          "path": "qrcode.mjs",
+          "from": "dist/qrcode.mjs",
+          "sha256": "ea91d7118a5395289170da848b7c6758b996163bfbccf312591ab65a4911b7c0",
+          "bytes": 51907
+        },
+        {
+          "path": "LICENSE",
+          "generated": "MIT text for the notice in dist/qrcode.mjs; the tarball ships no LICENSE file",
+          "sha256": "3a850fa5f08101db6f40676c2786e10bd2cd5fff7b12ffdf1e0c434d4e49d90c",
+          "bytes": 1071
+        }
+      ]
+    },
+    {
+      "name": "uplot",
+      "version": "1.6.32",
+      "license": "MIT",
+      "source": "npm:uplot@1.6.32",
+      "integrity": "sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw==",
+      "dir": "uplot/1.6.32",
+      "entries": {
+        "uplot": "uPlot.esm.js"
+      },
+      "files": [
+        {
+          "path": "uPlot.esm.js",
+          "from": "dist/uPlot.esm.js",
+          "sha256": "5dd9b3281aa64b461b42d9945f6adb2649d346502b12281a9ae0d46599a80eba",
+          "bytes": 145423
+        },
+        {
+          "path": "uPlot.min.css",
+          "from": "dist/uPlot.min.css",
+          "sha256": "df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04",
+          "bytes": 1857
+        },
+        {
+          "path": "LICENSE",
+          "from": "LICENSE",
+          "sha256": "8f989229699b4fe2f1a0432d0e9edc338a8a911e250e2d1b01ecd770a5f5b1bd",
+          "bytes": 1078
+        }
+      ]
+    }
+  ],
+  "styles": {
+    "uplot": "uplot/1.6.32/uPlot.min.css"
+  },
+  "importMap": {
+    "htm": "htm/3.1.1/htm.module.js",
+    "lucide": "lucide/0.454.0/icons.js",
+    "preact": "preact/10.29.8/preact.module.js",
+    "preact/hooks": "preact/10.29.8/hooks.module.js",
+    "qrcode-generator": "qrcode/2.0.4/qrcode.mjs",
+    "uplot": "uplot/1.6.32/uPlot.esm.js"
+  }
+}
