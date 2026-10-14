@@ -1,0 +1,428 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "kind": "engine",
+  "engineId": "vllm",
+  "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+  "params": [
+    {
+      "id": "contextLength",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-model-len" },
+      "legacy": { "field": "maxModelLen", "domId": "maxModelLen" }
+    },
+    {
+      "id": "concurrency",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-num-seqs" },
+      "legacy": { "field": "maxNumSeqs", "domId": "maxNumSeqs" },
+      "vramEffect": "activations"
+    },
+    {
+      "id": "servedName",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--served-model-name" },
+      "legacy": { "field": "name", "domId": "servedName" }
+    },
+    {
+      "id": "dtype",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--dtype" },
+      "platformDefault": "auto",
+      "legacy": { "field": "dtype", "domId": "launchDtype" }
+    },
+    {
+      "id": "quantization",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--quantization" },
+      "legacy": { "field": "quantization", "domId": "launchQuantization" }
+    },
+    {
+      "id": "tokenizer",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--tokenizer", "transform": "containerPath" },
+      "legacy": { "field": "tokenizer", "domId": "ggufTokenizer" }
+    },
+    {
+      "id": "trustRemoteCode",
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--trust-remote-code" },
+      "legacy": { "field": "trustRemoteCode", "domId": null }
+    },
+    {
+      "id": "kvCacheDtype",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--kv-cache-dtype", "omitWhen": ["auto", null] },
+      "legacy": { "field": "kvCacheDtype", "domId": "kvCacheDtype" }
+    },
+    {
+      "id": "prefixCaching",
+      "emit": { "mode": "adapter", "kind": "bool-pair", "flag": "--enable-prefix-caching", "falseFlag": "--no-enable-prefix-caching" },
+      "legacy": { "field": "enablePrefixCaching", "aliases": ["disablePrefixCaching"], "domId": "disablePrefixCaching", "codec": "prefixCachingPair" }
+    },
+    {
+      "id": "tensorParallel",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--tensor-parallel-size", "omitWhen": [1, null] },
+      "legacy": { "field": "tensorParallelSize", "domId": "tensorParallelSize" }
+    },
+    {
+      "id": "pipelineParallel",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--pipeline-parallel-size", "omitWhen": [1, null] },
+      "legacy": { "field": "pipelineParallelSize", "domId": "pipelineParallelSize" }
+    },
+    {
+      "id": "dataParallel",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--data-parallel-size", "omitWhen": [1, null] },
+      "legacy": { "field": "dataParallelSize", "domId": "dataParallelSize" }
+    },
+    {
+      "id": "expertParallel",
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--enable-expert-parallel" },
+      "legacy": { "field": "enableExpertParallel", "domId": null }
+    },
+    {
+      "id": "reasoningParser",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning-parser", "omitWhen": ["auto", "none", null] },
+      "legacy": { "field": "reasoningParser", "domId": "reasoningParser" }
+    },
+    {
+      "id": "toolCallParser",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--tool-call-parser", "omitWhen": ["auto", "none", null] },
+      "legacy": { "field": "toolCallParser", "domId": "toolCallParser" }
+    },
+    {
+      "id": "autoToolChoice",
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--enable-auto-tool-choice" },
+      "legacy": { "field": "enableAutoToolChoice", "domId": "enableAutoToolChoice" }
+    },
+    {
+      "id": "reasoning.defaultEnabled",
+      "emit": { "mode": "adapter", "kind": "none", "via": "chatTemplateKwargs" }
+    },
+    {
+      "id": "speculative.method",
+      "emit": { "mode": "adapter", "kind": "json", "flag": "--speculative-config" },
+      "choices": [
+        { "value": "off", "label": { "zh": "关闭（稳定优先）", "en": "Off (stability first)" } },
+        { "value": "auto", "label": { "zh": "按模型自动（实验）", "en": "Auto from the model (experimental)" } },
+        { "value": "mtp", "label": { "zh": "MTP（模型自带多 token 预测）", "en": "MTP (the model's own multi-token prediction)" } },
+        { "value": "qwen3_next_mtp", "label": { "zh": "MTP（Qwen3-Next 写法）", "en": "MTP (Qwen3-Next spelling)" } },
+        { "value": "ngram", "label": { "zh": "N-gram（无需草稿模型）", "en": "N-gram (no draft model)" } },
+        { "value": "dspark", "label": { "zh": "DSpark（需 SGLang）", "en": "DSpark (needs SGLang)" } }
+      ],
+      "platformDefault": "off",
+      "rules": [
+        {
+          "kind": "warnIf",
+          "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["mtp", "qwen3_next_mtp"]] }, { "eq": [{ "fact": "model.nativeMtp.supported" }, false] }] },
+          "code": "mtp_not_in_checkpoint",
+          "message": { "zh": "这个模型没有自带 MTP 层，MTP 推测解码不会生效。", "en": "This model has no MTP layers of its own, so MTP speculative decoding has no effect." }
+        }
+      ],
+      "legacy": { "field": "speculativeMode", "domId": "speculativeMode" }
+    },
+    {
+      "id": "speculative.numTokens",
+      "emit": { "mode": "adapter", "kind": "none", "via": "speculative.method" },
+      "platformDefault": 1,
+      "legacy": { "field": "numSpeculativeTokens", "domId": "numSpeculativeTokens" }
+    },
+    {
+      "id": "speculative.draftModel",
+      "emit": { "mode": "adapter", "kind": "none", "via": "speculative.method", "transform": "containerPath" },
+      "legacy": { "field": "draftModel", "domId": "draftModel" }
+    },
+    {
+      "id": "clientPreset",
+      "emit": { "mode": "adapter", "kind": "none" },
+      "legacy": { "field": "clientPreset", "domId": "clientPreset" }
+    },
+    {
+      "id": "apiKey",
+      "emit": { "mode": "adapter", "kind": "env", "env": "VLLM_API_KEY" },
+      "legacy": { "field": "apiKey", "domId": "vllmApiKey" }
+    },
+    {
+      "id": "temperature",
+      "emit": { "mode": "adapter", "kind": "none", "via": "vllm.overrideGenerationConfig" }
+    },
+    {
+      "id": "topP",
+      "emit": { "mode": "adapter", "kind": "none", "via": "vllm.overrideGenerationConfig" }
+    },
+    {
+      "id": "topK",
+      "emit": { "mode": "adapter", "kind": "none", "via": "vllm.overrideGenerationConfig" }
+    },
+    {
+      "id": "chatTemplateKwargs",
+      "emit": { "mode": "adapter", "kind": "json", "flag": "--default-chat-template-kwargs" }
+    },
+    {
+      "id": "vllm.loadFormat",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--load-format", "omitWhen": ["auto", null] },
+      "legacy": { "field": "loadFormat", "domId": "loadFormat" }
+    },
+    {
+      "id": "generationConfig",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--generation-config" }
+    },
+    {
+      "id": "vllm.gpuMemoryUtilization",
+      "group": "memory", "level": "basic", "order": 10,
+      "type": "float", "unit": "fraction",
+      "label": { "zh": "显存预留比例（整卡）", "en": "VRAM reservation (whole GPU)" },
+      "summary": { "zh": "vLLM 启动时按每张卡总显存的这个比例预留，其余留给其它程序。", "en": "vLLM reserves this fraction of each GPU's total memory at start; the rest stays free for other programs." },
+      "help": {
+        "what": { "zh": "对应 --gpu-memory-utilization。预留量包括权重、激活和 KV 缓存，权重之外剩下的都用作 KV 缓存。", "en": "Maps to --gpu-memory-utilization. The reservation covers weights, activations and KV cache; whatever is left after the weights becomes KV cache." },
+        "whenToChange": { "zh": "同一张卡还要运行其它模型或桌面程序时调小；独占显卡、需要更多 KV 缓存时调大。", "en": "Lower it when other models or desktop apps share the GPU; raise it for a dedicated GPU that needs more KV cache." },
+        "tradeoffs": { "zh": "过高会与其它进程争抢显存、导致启动失败；过低则 KV 缓存不足，上下文或并发受限。", "en": "Too high fights other processes for memory and can fail the start; too low leaves too little KV cache for context or concurrency." }
+      },
+      "range": { "min": 0.05, "max": 1 },
+      "platformDefault": { "expr": { "if": [{ "eq": [{ "fact": "instance.mode" }, "parallel"] }, 0.7, 0.92] } },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--gpu-memory-utilization" },
+      "vramEffect": "fraction",
+      "rules": [
+        {
+          "kind": "warnIf",
+          "when": { "and": [{ "eq": [{ "fact": "instance.mode" }, "parallel"] }, { "gt": [{ "param": "vllm.gpuMemoryUtilization" }, 0.7] }] },
+          "code": "parallel_fraction_high",
+          "message": { "zh": "并行实例与其它模型共用显卡，整卡预留比例超过 0.7 容易挤占其它实例。", "en": "A parallel instance shares the GPU with other models; reserving more than 0.7 of it can crowd them out." }
+        }
+      ],
+      "legacy": { "field": "gpuMemoryUtilization", "domId": "gpuMemoryUtilization" }
+    },
+    {
+      "id": "vllm.maxNumBatchedTokens",
+      "group": "capacity", "level": "advanced", "order": 30,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "每步调度 token 上限", "en": "Tokens scheduled per step" },
+      "summary": { "zh": "每个调度步最多处理的 token 数，决定预填充分块的大小。", "en": "The most tokens processed per scheduler step, which sets the prefill chunk size." },
+      "help": {
+        "what": { "zh": "对应 --max-num-batched-tokens。0 或不设置时使用引擎默认值。", "en": "Maps to --max-num-batched-tokens. 0 or unset uses the engine default." },
+        "whenToChange": { "zh": "长提示词等很久才开始回答时调大；生成过程断断续续时调小。", "en": "Raise it when long prompts take a long time before the answer starts; lower it when generation stutters." },
+        "tradeoffs": { "zh": "越大预填充越快，但激活显存越多，也会拉长其它请求的出字间隔。", "en": "Larger values prefill faster but use more activation memory and delay other requests' tokens." }
+      },
+      "range": { "min": 0, "max": 4194304, "step": 1 },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-num-batched-tokens", "omitWhen": [0, null] },
+      "vramEffect": "activations",
+      "legacy": { "field": "maxNumBatchedTokens", "domId": "maxNumBatchedTokens" }
+    },
+    {
+      "id": "vllm.cpuOffloadGb",
+      "group": "memory", "level": "expert", "order": 70,
+      "type": "float", "unit": "GiB",
+      "label": { "zh": "权重卸载到内存（每卡）", "en": "Weight offload to RAM (per GPU)" },
+      "summary": { "zh": "每张卡把这么多 GiB 的权重放到系统内存，用到时再搬运。", "en": "Moves this many GiB of weights per GPU to system RAM and streams them in when needed." },
+      "help": {
+        "what": { "zh": "对应 --cpu-offload-gb，用 PCIe 带宽换显存。", "en": "Maps to --cpu-offload-gb; it trades PCIe bandwidth for GPU memory." },
+        "whenToChange": { "zh": "模型只差一点就能放进显卡时。", "en": "When the model is only slightly too big for the GPU." },
+        "tradeoffs": { "zh": "每生成一个 token 都要搬运权重，速度会明显下降。", "en": "Weights cross PCIe for every token, so generation slows down noticeably." }
+      },
+      "range": { "min": 0, "max": 4096 },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--cpu-offload-gb", "omitWhen": [0, null] },
+      "vramEffect": "offload",
+      "legacy": { "field": "cpuOffloadGb", "domId": "cpuOffloadGb" }
+    },
+    {
+      "id": "vllm.kvOffloadingSize",
+      "group": "memory", "level": "expert", "order": 80,
+      "type": "float", "unit": "GiB",
+      "label": { "zh": "KV 卸载到内存（总量）", "en": "KV offload to RAM (total)" },
+      "summary": { "zh": "把最多这么多 GiB 的 KV 缓存放到系统内存，保留更多可复用的前缀。", "en": "Keeps up to this many GiB of KV cache in system RAM so more reusable prefixes survive." },
+      "help": {
+        "what": { "zh": "对应 --kv-offloading-size，是所有卡的总量，不是每张卡。", "en": "Maps to --kv-offloading-size; it is a total for all GPUs, not per GPU." },
+        "whenToChange": { "zh": "多轮对话或共享前缀很多、显存里的前缀缓存经常被挤掉时。", "en": "When multi-turn chats or shared prefixes are common and the prefix cache in GPU memory keeps getting evicted." },
+        "tradeoffs": { "zh": "占用系统内存；从内存取回比重新计算快，但比显存慢。", "en": "Uses system RAM; fetching from RAM beats recomputing but is slower than GPU memory." }
+      },
+      "range": { "min": 0, "max": 4096 },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--kv-offloading-size", "omitWhen": [0, null] },
+      "vramEffect": "offload",
+      "legacy": { "field": "kvOffloadingSize", "domId": "kvOffloadingSize" }
+    },
+    {
+      "id": "vllm.mmProcessorCacheGb",
+      "group": "multimodal", "level": "expert", "order": 30,
+      "type": "float", "unit": "GiB",
+      "label": { "zh": "多模态预处理缓存", "en": "Multimodal preprocessor cache" },
+      "summary": { "zh": "缓存图片等多模态输入的预处理结果，重复输入时更快。", "en": "Caches preprocessed images and other multimodal inputs so repeats are faster." },
+      "help": {
+        "what": { "zh": "对应 --mm-processor-cache-gb，占用系统内存。0 表示关闭缓存。", "en": "Maps to --mm-processor-cache-gb and uses system RAM. 0 turns the cache off." },
+        "whenToChange": { "zh": "内存紧张时调小或设为 0；经常重复发送相同图片时调大。", "en": "Lower it or use 0 when RAM is tight; raise it when the same images are sent again and again." },
+        "tradeoffs": { "zh": "只占用系统内存，不影响显存。", "en": "Uses system RAM only, not GPU memory." }
+      },
+      "range": { "min": 0, "max": 1024 },
+      "engineDefault": 4,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mm-processor-cache-gb" },
+      "legacy": { "field": "mmProcessorCacheGb", "domId": "mmProcessorCacheGb" }
+    },
+    {
+      "id": "vllm.hfConfigPath",
+      "group": "model", "level": "expert", "order": 70,
+      "type": "path", "maxLength": 4096,
+      "label": { "zh": "HF 配置路径", "en": "HF config path" },
+      "summary": { "zh": "GGUF 模型使用的 Hugging Face 配置来源。", "en": "The Hugging Face config source used for a GGUF model." },
+      "help": {
+        "what": { "zh": "对应 --hf-config-path，可以填写仓库名或目录。", "en": "Maps to --hf-config-path; a repository name or a folder." },
+        "whenToChange": { "zh": "GGUF 文件里的配置不完整、vLLM 识别不出架构时。", "en": "When the GGUF's embedded config is incomplete and vLLM cannot identify the architecture." },
+        "tradeoffs": { "zh": "配置与权重不匹配会加载失败或输出异常。", "en": "A config that does not match the weights fails to load or produces bad output." }
+      },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--hf-config-path", "transform": "containerPath" },
+      "legacy": { "field": "hfConfigPath", "domId": "ggufHfConfigPath" }
+    },
+    {
+      "id": "vllm.languageModelOnly",
+      "group": "multimodal", "level": "advanced", "order": 10,
+      "type": "bool",
+      "label": { "zh": "仅语言模型", "en": "Language model only" },
+      "summary": { "zh": "多模态模型只加载文本部分，省下视觉编码器的显存。", "en": "Loads only the text part of a multimodal model and saves the vision encoder's memory." },
+      "help": {
+        "what": { "zh": "对应 --language-model-only。开启后不能再处理图片输入。", "en": "Maps to --language-model-only. Image inputs no longer work." },
+        "whenToChange": { "zh": "只做文本对话、显存紧张时。", "en": "When you only chat in text and memory is tight." },
+        "tradeoffs": { "zh": "部分不是纯语言模型的架构不支持，这时会被忽略。", "en": "Some architectures are not plain language models; for them it is ignored." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--language-model-only" },
+      "vramEffect": "weights",
+      "legacy": { "field": "languageModelOnly", "domId": "languageModelOnly" }
+    },
+    {
+      "id": "vllm.distributedExecutorBackend",
+      "group": "parallelism", "level": "expert", "order": 50,
+      "type": "enum",
+      "label": { "zh": "分布式执行后端", "en": "Distributed executor" },
+      "summary": { "zh": "多卡运行时，vLLM 用哪种方式管理工作进程。", "en": "How vLLM manages its worker processes across GPUs." },
+      "help": {
+        "what": { "zh": "mp 用于单机多卡；ray 用于多台机器或集群。", "en": "mp is for several GPUs on one host; ray is for several hosts or a cluster." },
+        "whenToChange": { "zh": "跨机器部署时选 ray。", "en": "Choose ray when deploying across machines." },
+        "tradeoffs": { "zh": "ray 需要额外的集群组件，单机上通常没有好处。", "en": "ray needs extra cluster components and rarely helps on a single host." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动", "en": "Auto" } },
+        { "value": "mp", "label": { "zh": "单机多进程（mp）", "en": "Single host, multiprocessing (mp)" } },
+        { "value": "ray", "label": { "zh": "多机或集群（ray）", "en": "Multi-host or cluster (ray)" } }
+      ],
+      "engineDefault": "auto",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--distributed-executor-backend", "omitWhen": ["auto", null] },
+      "appliesWhen": { "or": [
+        { "gt": [{ "param": "tensorParallel" }, 1] },
+        { "gt": [{ "param": "pipelineParallel" }, 1] },
+        { "gt": [{ "param": "dataParallel" }, 1] }
+      ] },
+      "rules": [
+        {
+          "kind": "warnIf",
+          "when": { "and": [{ "eq": [{ "param": "vllm.distributedExecutorBackend" }, "ray"] }, { "eq": [{ "fact": "host.platform" }, "win32"] }] },
+          "code": "ray_unverified_on_wsl",
+          "message": { "zh": "ray 后端在 Windows 的 Docker/WSL 环境下未经验证。", "en": "The ray backend is unverified under Docker/WSL on Windows." }
+        }
+      ],
+      "legacy": { "field": "distributedExecutorBackend", "domId": null }
+    },
+    {
+      "id": "vllm.enforceEager",
+      "group": "runtime-expert", "level": "expert", "order": 10,
+      "type": "bool",
+      "label": { "zh": "禁用 CUDA Graph（逐步执行）", "en": "Disable CUDA graphs (eager mode)" },
+      "summary": { "zh": "不捕获 CUDA Graph，按逐步执行的方式运行。", "en": "Skips CUDA graph capture and runs step by step." },
+      "help": {
+        "what": { "zh": "对应 --enforce-eager。启动更快、更省显存，但生成速度下降。", "en": "Maps to --enforce-eager. It starts faster and uses less memory, but generates more slowly." },
+        "whenToChange": { "zh": "在捕获 CUDA Graph 的阶段崩溃或卡住时，用来排查和绕过。", "en": "To work around crashes or hangs while CUDA graphs are being captured." },
+        "tradeoffs": { "zh": "解码速度会明显变慢。", "en": "Decoding becomes noticeably slower." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--enforce-eager" },
+      "vramEffect": "activations"
+    },
+    {
+      "id": "vllm.asyncScheduling",
+      "group": "runtime-expert", "level": "expert", "order": 20,
+      "type": "bool",
+      "label": { "zh": "异步调度", "en": "Async scheduling" },
+      "summary": { "zh": "让 CPU 调度与 GPU 计算同时进行，减少每一步的额外开销。", "en": "Overlaps CPU scheduling with GPU work to cut the overhead of each step." },
+      "help": {
+        "what": { "zh": "对应 --async-scheduling。", "en": "Maps to --async-scheduling." },
+        "whenToChange": { "zh": "已验证的方案需要它，或 CPU 调度成为瓶颈时。", "en": "When a validated recipe needs it, or CPU scheduling is the bottleneck." },
+        "tradeoffs": { "zh": "这是较新的功能，与部分特性同时使用时可能不稳定。", "en": "A newer feature that can be unstable together with some other features." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--async-scheduling" }
+    },
+    {
+      "id": "vllm.attentionBackend",
+      "group": "runtime-expert", "level": "expert", "order": 30,
+      "type": "enum", "pattern": "^[A-Za-z0-9_]{1,64}$",
+      "label": { "zh": "注意力后端", "en": "Attention backend" },
+      "summary": { "zh": "选择注意力计算使用的实现。", "en": "Chooses the implementation used for attention." },
+      "help": {
+        "what": { "zh": "对应 --attention-backend。不设置时 vLLM 按显卡和模型自动选择。", "en": "Maps to --attention-backend. Unset, vLLM picks one for the GPU and model." },
+        "whenToChange": { "zh": "自动选择的后端在当前显卡或模型上崩溃或输出异常时。", "en": "When the automatically chosen backend crashes or misbehaves on this GPU or model." },
+        "tradeoffs": { "zh": "不同后端的速度和支持的功能不同，选错可能无法启动。", "en": "Backends differ in speed and supported features; a wrong one may not start." }
+      },
+      "choices": ["FLASH_ATTN", "FLASHINFER", "TRITON_ATTN", "FLEX_ATTENTION"],
+      "choicesFrom": "introspect:--attention-backend",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--attention-backend" }
+    },
+    {
+      "id": "vllm.moeBackend",
+      "group": "runtime-expert", "level": "expert", "order": 40,
+      "type": "enum",
+      "label": { "zh": "MoE 计算后端", "en": "MoE kernel backend" },
+      "summary": { "zh": "MoE 模型专家层使用的计算实现。", "en": "The kernel implementation for a MoE model's expert layers." },
+      "help": {
+        "what": { "zh": "对应 --moe-backend。", "en": "Maps to --moe-backend." },
+        "whenToChange": { "zh": "量化的 MoE 模型输出异常或速度不理想时，按已验证方案选择。", "en": "When a quantized MoE model gives bad output or runs slowly, pick the backend a validated recipe names." },
+        "tradeoffs": { "zh": "部分后端只支持特定显卡架构，例如 flashinfer_b12x 需要 SM12x。", "en": "Some backends need a specific GPU architecture; flashinfer_b12x, for example, needs SM12x." }
+      },
+      "choices": ["auto", "cutlass", "emulation", "flashinfer_b12x", "flashinfer_cutedsl", "flashinfer_cutlass", "flashinfer_trtllm", "marlin", "triton", "triton_unfused"],
+      "choicesFrom": "introspect:--moe-backend",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--moe-backend" }
+    },
+    {
+      "id": "vllm.linearBackend",
+      "group": "runtime-expert", "level": "expert", "order": 50,
+      "type": "string", "maxLength": 64, "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+      "label": { "zh": "线性层后端", "en": "Linear layer backend" },
+      "summary": { "zh": "量化线性层使用的计算实现。", "en": "The kernel implementation for quantized linear layers." },
+      "help": {
+        "what": { "zh": "对应 --linear-backend。", "en": "Maps to --linear-backend." },
+        "whenToChange": { "zh": "已验证的方案指定了线性层后端时。", "en": "When a validated recipe names a linear backend." },
+        "tradeoffs": { "zh": "不匹配的后端可能无法加载权重或变慢。", "en": "A mismatched backend may fail to load the weights or run slower." }
+      },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--linear-backend" }
+    },
+    {
+      "id": "vllm.overrideGenerationConfig",
+      "group": "sampling", "level": "expert", "order": 50,
+      "type": "json", "maxLength": 8192,
+      "label": { "zh": "覆盖生成配置", "en": "Generation config override" },
+      "summary": { "zh": "用 JSON 覆盖默认的生成参数，例如 max_new_tokens 或 temperature。", "en": "Overrides default generation values as JSON, for example max_new_tokens or temperature." },
+      "help": {
+        "what": { "zh": "对应 --override-generation-config，在模型自带的生成配置之上生效。", "en": "Maps to --override-generation-config and applies on top of the model's own generation config." },
+        "whenToChange": { "zh": "客户端不传 max_tokens 时会一直生成到上下文用完，需要给一个默认上限时。", "en": "When clients that omit max_tokens would generate until the context runs out and you need a default cap." },
+        "tradeoffs": { "zh": "请求里明确给出的值仍然优先。", "en": "Values a request states explicitly still win." }
+      },
+      "emit": { "mode": "adapter", "kind": "json", "flag": "--override-generation-config" }
+    },
+    {
+      "id": "vllm.safetensorsLoadStrategy",
+      "group": "runtime-expert", "level": "expert", "order": 60,
+      "type": "enum", "pattern": "^[a-z_]{1,32}$",
+      "label": { "zh": "safetensors 加载策略", "en": "Safetensors load strategy" },
+      "summary": { "zh": "权重文件的读取方式；prefetch 会提前把文件读入内存。", "en": "How weight files are read; prefetch reads the files ahead into memory." },
+      "help": {
+        "what": { "zh": "对应 --safetensors-load-strategy。", "en": "Maps to --safetensors-load-strategy." },
+        "whenToChange": { "zh": "模型放在较慢的磁盘或网络存储上、加载很慢时可试 prefetch。", "en": "Try prefetch when the model sits on slow or network storage and loading takes long." },
+        "tradeoffs": { "zh": "prefetch 加载时会占用更多系统内存。", "en": "prefetch uses more system RAM while loading." }
+      },
+      "choices": ["lazy", "eager", "prefetch"],
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--safetensors-load-strategy" }
+    },
+    {
+      "id": "vllm.reasoningParserPlugin",
+      "group": "reasoning-tools", "level": "expert", "order": 70,
+      "type": "path", "maxLength": 4096,
+      "label": { "zh": "思考解析器插件", "en": "Reasoning parser plugin" },
+      "summary": { "zh": "模型目录里自带的思考解析器插件文件。", "en": "A reasoning-parser plugin file shipped in the model folder." },
+      "help": {
+        "what": { "zh": "对应 --reasoning-parser-plugin，用于引擎还没有内置解析器的新模型。", "en": "Maps to --reasoning-parser-plugin, for new models whose parser the engine does not ship yet." },
+        "whenToChange": { "zh": "模型说明要求加载自带的解析器插件时。", "en": "When the model card asks you to load its own parser plugin." },
+        "tradeoffs": { "zh": "插件是模型仓库提供的 Python 代码，只用于可信来源的模型。", "en": "The plugin is Python code from the model repository; use it only for models from trusted sources." }
+      },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning-parser-plugin", "transform": "containerPath" }
+    }
+  ]
+}
