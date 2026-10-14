@@ -539,7 +539,7 @@ test("the compat summary keeps the /api/keys shape and reads the store", (t) => 
 });
 
 test("the entry migrates before listening and serves /api/keys from the access store", async (t) => {
-  const { loadEntry, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
+  const { loadEntry, ownerSession, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
   const { entry, tempDir } = await loadEntry();
   assert.deepEqual(entry.MANAGERS.map((manager) => [manager.id, manager.billingId]), [
     ["vllm", process.env.VLLM_MANAGER_ID || "vllm-manager"],
@@ -567,7 +567,8 @@ test("the entry migrates before listening and serves /api/keys from the access s
   for (const [name, file] of Object.entries(snapshotFiles(legacyRoot))) assert.ok(file.bytes.equals(before[name].bytes), name);
 
   const port = await serveEntry(t, entry);
-  const response = await request(port, "/api/keys");
+  const owner = await ownerSession(entry, port);
+  const response = await request(port, "/api/keys", { owner });
   assert.equal(response.status, 200);
   assert.equal(response.json.ok, true);
   const keys = response.json.keys;
@@ -581,15 +582,19 @@ test("the entry migrates before listening and serves /api/keys from the access s
   assert.equal(keys.expired, 1);
   assert.equal(JSON.stringify(keys).includes(sha256(SECRETS.alice)), false);
 
-  const status = await request(port, "/api/status");
+  const status = await request(port, "/api/status", { owner });
   assert.equal(status.status, 200);
   assert.deepEqual(status.json.keys.perManager.map((item) => item.total), [7, 2], "/api/status carries the same summary");
   assert.equal(status.json.managers[0].billingId, entry.MANAGERS[0].billingId);
 
   // A read never opens the store: without it the summary is what the
-  // (here offline) managers report, in the same shape.
+  // (here offline) managers report, in the same shape. The caller is the
+  // CLI, whose signature needs no store (a session would reopen it).
   entry.closeAccessStore();
-  const fallback = await request(port, "/api/keys");
+  const internalAuth = require("../../manager-core/internal-auth");
+  const fallback = await request(port, "/api/keys", {
+    headers: internalAuth.buildMachineHeaders(entry.security.getTrustToken(), { method: "GET", pathWithQuery: "/api/keys", principal: "system:cli", body: "", now: Date.now() }),
+  });
   assert.equal(fallback.status, 200);
   assert.deepEqual(Object.keys(fallback.json.keys), Object.keys(keys));
   assert.equal(fallback.json.keys.total, 0);

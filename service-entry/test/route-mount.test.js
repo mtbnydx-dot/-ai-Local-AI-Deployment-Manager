@@ -5,6 +5,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { ownerSession } = require("./helpers/entry-harness");
 
 // The route-mount table (07 §2.7). Every upstream port the entry knows points
 // at a port nothing listens on, so no request can reach a real local service.
@@ -54,6 +55,8 @@ async function setup() {
 }
 
 test.after(() => {
+  // The owner session opened the access store; Windows will not delete an open file.
+  entry?.closeAccessStore();
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -62,9 +65,14 @@ function quietLogger() {
   return { lines, log: () => {}, warn: (line) => lines.push(String(line)), error: (line) => lines.push(String(line)) };
 }
 
+// These tests act as the console owner: a paired session (PUB-5), shared by
+// every server of this process because sessions live in the access store.
+let owner = null;
+
 async function startEntry(t, routes = null) {
   const server = entry.createServiceEntryServer(routes ? { routes } : {});
   const port = await listen(server);
+  if (!owner) owner = await ownerSession(entry, port);
   t.after(() => new Promise((resolve) => {
     if (!server.listening) return resolve();
     server.closeAllConnections?.();
@@ -75,7 +83,8 @@ async function startEntry(t, routes = null) {
 
 function raw(port, pathname, { method = "GET", headers = {} } = {}) {
   return new Promise((resolve, reject) => {
-    const request = http.request({ host: "127.0.0.1", port, path: pathname, method, headers }, (response) => {
+    const sent = { ...(owner ? owner.headers(method) : {}), ...headers };
+    const request = http.request({ host: "127.0.0.1", port, path: pathname, method, headers: sent }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks) }));
@@ -87,7 +96,7 @@ function raw(port, pathname, { method = "GET", headers = {} } = {}) {
 
 function openStream(port, pathname, headers = {}) {
   return new Promise((resolve, reject) => {
-    const request = http.get({ host: "127.0.0.1", port, path: pathname, headers }, (response) => {
+    const request = http.get({ host: "127.0.0.1", port, path: pathname, headers: { ...(owner ? owner.headers("GET") : {}), ...headers } }, (response) => {
       response.setEncoding("utf8");
       const stream = { status: response.statusCode, text: "", ended: false, close: () => request.destroy() };
       const waiters = new Set();

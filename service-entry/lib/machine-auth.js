@@ -11,10 +11,8 @@
 // principal: a bare marker header such as x-hub-shim is never a credential,
 // and a request without machine headers is judged on its other credentials.
 //
-// createEntryAdminAuth() is the PUB-25 form of 05's createAdminAuth: it adds
-// the pre-dispatch guard (machine scope, then deny-by-default for viewers)
-// on top of today's rule that a loopback caller is the owner and a LAN
-// caller a viewer. PUB-5 replaces it with sessions and keeps the guard.
+// The pre-dispatch guard that runs these checks, and the sessions and
+// viewers around them, live in admin-session.js (createAdminAuth).
 
 const crypto = require("node:crypto");
 const core = require("../../manager-core");
@@ -278,165 +276,11 @@ function createMachineAuth(options = {}) {
   };
 }
 
-function writeError(res, status, code, message, hint) {
-  if (res.headersSent) {
-    if (!res.writableEnded) res.destroy?.();
-    return;
-  }
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-    "x-content-type-options": "nosniff",
-    "x-frame-options": "DENY",
-    "referrer-policy": "no-referrer",
-  });
-  res.end(JSON.stringify({ ok: false, error: { code, message, ...(hint ? { hint } : {}) } }));
-}
-
-// Paths the guard leaves to their own authentication: the key-checked
-// gateway and the manager-signed /internal/* calls.
-function guardExempt(pathname) {
-  return pathname.startsWith("/gateway/") || pathname.startsWith("/internal/");
-}
-
-// The PUB-25 admin auth: today's loopback-owner rule plus machine principals
-// and the viewer registry. Same method names as 05's createAdminAuth, so the
-// request-auth seam delegates to it unchanged.
-function createEntryAdminAuth(options = {}) {
-  const security = options.security;
-  const machineAuth = options.machineAuth;
-  const viewerRegistry = options.viewerRegistry;
-  if (!security || typeof security.checkManagementAccess !== "function") throw new TypeError("createEntryAdminAuth needs the entry security object");
-  if (!machineAuth || typeof machineAuth.verifySignature !== "function") throw new TypeError("createEntryAdminAuth needs machine auth");
-  if (!viewerRegistry || typeof viewerRegistry.match !== "function") throw new TypeError("createEntryAdminAuth needs the viewer registry");
-  const sendError = typeof options.sendError === "function" ? options.sendError : writeError;
-
-  // Today's rule (until PUB-5): the owner iff checkManagementAccess passes,
-  // otherwise a viewer whose reads are redacted.
-  function legacy(req) {
-    const proxied = typeof security.isProxiedRequest === "function" && security.isProxiedRequest(req);
-    const via = proxied ? "proxy" : core.isLocalRequest(req) ? "loopback" : "lan";
-    const access = security.checkManagementAccess(req) || {};
-    const who = access.ok
-      ? { role: "owner", principal: via, via, redact: false }
-      : { role: "viewer", principal: via, via, redact: true };
-    return { who, access };
-  }
-
-  // A machine principal the guard verified for this request comes first.
-  function authenticate(req) {
-    const principal = machineAuth.principalOf(req);
-    if (principal) return { role: "system", principal, via: "hmac", redact: false };
-    return legacy(req).who;
-  }
-
-  function requestUrl(req) {
-    try {
-      return new URL(String(req?.url || "/"), "http://127.0.0.1");
-    } catch {
-      return new URL("http://127.0.0.1/");
-    }
-  }
-
-  function checkManagementAccess(req, { write = false } = {}) {
-    const principal = machineAuth.principalOf(req);
-    if (principal) {
-      const scope = machineAuth.authorize(principal, req?.method, requestUrl(req));
-      if (!scope.ok) return { ...scope, role: "system", principal, redact: false };
-      return { ok: true, role: "system", principal, redact: false };
-    }
-    const { who, access } = legacy(req);
-    if (access.ok) return { ok: true, role: who.role, principal: who.principal, redact: false };
-    return {
-      ok: false,
-      role: who.role,
-      principal: who.principal,
-      redact: true,
-      status: Number(access.status) || 403,
-      code: String(access.code || "management_local_only"),
-      message: String(access.message || (write ? "This action needs the console owner." : "This page needs the console owner.")),
-    };
-  }
-
-  function eventTypesFor(who) {
-    const role = who?.role;
-    if (role === "system") return machineAuth.eventTypesFor(String(who?.principal || ""));
-    if (role === "owner") return "*";
-    if (role === "viewer") return new Set(viewerRegistry.viewerEventTypes());
-    return new Set();
-  }
-
-  // The single pre-dispatch check (05 §5.4, §5.7). true means it answered.
-  // A signed request is verified (signature, then scope, then body digest)
-  // and never falls back to other credentials. An unsigned owner passes. A
-  // viewer passes only on a viewer entry, and req.viewer then carries the
-  // entry's redaction for sendJson.
-  async function guard(req, res, url) {
-    const pathname = String(url?.pathname || "");
-    if (guardExempt(pathname)) return false;
-    if (machineAuth.hasCredentials(req)) {
-      const signature = machineAuth.verifySignature(req, url);
-      if (!signature.ok) {
-        req.resume?.();
-        sendError(res, signature.status, signature.code, signature.message);
-        return true;
-      }
-      const scope = machineAuth.authorize(signature.principal, req.method, url);
-      if (!scope.ok) {
-        req.resume?.();
-        sendError(res, scope.status, scope.code, scope.message);
-        return true;
-      }
-      if (!READ_METHODS.has(String(req.method || "GET").toUpperCase())) {
-        const body = await machineAuth.verifyBody(req, url, signature.bodySha256);
-        // The client went away mid-body; there is nobody to answer.
-        if (body.aborted) {
-          res.destroy?.();
-          return true;
-        }
-        if (!body.ok) {
-          sendError(res, body.status, body.code, body.message);
-          return true;
-        }
-      }
-      machineAuth.remember(req, signature.principal);
-      return false;
-    }
-    const who = authenticate(req);
-    if (who.role === "owner") return false;
-    if (who.role === "viewer") {
-      let found = null;
-      try {
-        found = viewerRegistry.match(req.method, pathname);
-      } catch {
-        found = null;
-      }
-      if (found && found.access === "viewer") {
-        req.viewer = { redact: found.entry?.redact || null, ctx: { via: who.via, params: found.params || {} } };
-        return false;
-      }
-    }
-    req.resume?.();
-    sendError(res, 401, "admin_session_required", "This needs the console owner. Open the console on this machine.", "pair");
-    return true;
-  }
-
-  return {
-    // The console's bootstrap auth.mode (07 §2.5) until PUB-5's sessions.
-    mode: "loopback-trust",
-    authenticate,
-    checkManagementAccess,
-    eventTypesFor,
-    guard,
-  };
-}
-
 module.exports = {
   FORWARDING_HEADERS,
   MACHINE_HEADER_NAMES,
   MAX_BODY_BYTES,
   PRINCIPAL_EVENT_TYPES,
-  createEntryAdminAuth,
   createMachineAuth,
   machineEventTypes,
   machineScopeAllows,

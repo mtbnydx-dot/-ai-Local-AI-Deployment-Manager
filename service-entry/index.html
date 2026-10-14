@@ -394,6 +394,29 @@
     .toast.show { opacity: 1; transform: translateY(0); }
     .toast.show { pointer-events: auto; cursor: pointer; }
     .toast.error { border-color: color-mix(in srgb, var(--red) 60%, var(--line)); color: var(--red); }
+    .pairing-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: color-mix(in srgb, var(--bg) 70%, transparent);
+    }
+    .pairing-overlay[hidden] { display: none; }
+    .pairing-card {
+      width: min(520px, 100%);
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      color: var(--ink);
+    }
+    .pairing-card h2 { margin: 0 0 8px; font-size: 18px; }
+    .pairing-card code { overflow-wrap: anywhere; }
+    .pairing-card form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .pairing-card input { flex: 1 1 180px; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font: inherit; letter-spacing: 0.08em; }
     .sr-only {
       position: absolute !important;
       width: 1px !important;
@@ -1316,7 +1339,116 @@
       }
       document.title = `${document.querySelector('[data-entry-nav="' + pane + '"]').textContent} · 本地模型服务统一入口`;
     }
-    window.addEventListener("hashchange", selectEntryPane);
+    // Admin session (05 §5.5): GET /api/session once, x-csrf-token on every
+    // non-GET, the pairing screen on 401 admin_session_required, and one
+    // re-read plus one retry on 403 csrf_invalid. A #pair=<code> fragment from
+    // the launcher pairs this browser; it is stripped from the address bar
+    // before anything else reads the hash.
+    let adminSession = null;
+    let adminSessionLoad = null;
+    adminSessionLoad = consumePairFragment() || loadAdminSession(true);
+
+    // A pairing link opened in this tab (on load or as a hash change).
+    function consumePairFragment() {
+      const match = /^#pair=([A-Za-z2-7-]{10,16})$/.exec(location.hash);
+      if (!match) return null;
+      history.replaceState(null, "", location.pathname + location.search);
+      adminSessionLoad = pairBrowser(match[1]).then(() => loadAdminSession(true));
+      return adminSessionLoad;
+    }
+
+    function loadAdminSession(force = false) {
+      if (!force && adminSessionLoad) return adminSessionLoad;
+      adminSessionLoad = fetch("/api/session", { cache: "no-store", signal: AbortSignal.timeout(8000) })
+        .then((response) => (response.ok ? response.json() : null))
+        .catch(() => null)
+        .then((data) => {
+          adminSession = data && typeof data === "object" ? data : null;
+          return adminSession;
+        });
+      return adminSessionLoad;
+    }
+
+    async function pairBrowser(code) {
+      try {
+        const response = await fetch("/api/session/pair", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ code }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        showToast("此浏览器已与控制台配对 / This browser is now paired");
+        return true;
+      } catch {
+        showToast("配对失败：配对码无效或已过期 / Pairing failed: the code is invalid or expired", "error");
+        return false;
+      }
+    }
+
+    // fetch() for the admin APIs: the CSRF header on writes, pairing on 401,
+    // one retry with a fresh token on 403 csrf_invalid.
+    async function adminFetch(path, options = {}, retried = false) {
+      const method = String(options.method || "GET").toUpperCase();
+      const headers = { ...(options.headers || {}) };
+      if (method !== "GET" && method !== "HEAD") {
+        const session = await loadAdminSession();
+        if (session?.csrfToken) headers["x-csrf-token"] = session.csrfToken;
+      }
+      const response = await fetch(path, { ...options, headers });
+      if (response.status === 401 || response.status === 403) {
+        const data = await response.clone().json().catch(() => ({}));
+        const code = data?.error?.code || data?.code || "";
+        if (code === "csrf_invalid" && !retried) {
+          await loadAdminSession(true);
+          return adminFetch(path, options, true);
+        }
+        if (code === "admin_session_required") showPairingScreen();
+      }
+      return response;
+    }
+
+    function showPairingScreen() {
+      const cmd = adminSession?.pairCommand || "node service-entry\\scripts\\admin-pair.js --open";
+      let overlay = document.querySelector("#pairingOverlay");
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "pairingOverlay";
+        overlay.className = "pairing-overlay";
+        document.body.append(overlay);
+      }
+      overlay.innerHTML = `
+        <section class="pairing-card" role="dialog" aria-modal="true" aria-labelledby="pairingTitle">
+          <h2 id="pairingTitle">需要配对 / Pairing required</h2>
+          <p>此浏览器尚未与本机控制台配对。请从平台启动器打开控制台（会自动配对），或在终端运行 <code>${escapeHtml(cmd)}</code>。</p>
+          <p lang="en">This browser is not paired with the console yet. Open the console from the platform launcher (pairs automatically) or run <code>${escapeHtml(cmd)}</code> in a terminal.</p>
+          <form id="pairingForm">
+            <input id="pairingCode" name="code" autocomplete="off" spellcheck="false" maxlength="16" placeholder="配对码 / Pair code" aria-label="配对码 / Pair code">
+            <button type="submit">配对 / Pair</button>
+            <button type="button" data-pairing-close>稍后 / Later</button>
+          </form>
+        </section>
+      `;
+      overlay.hidden = false;
+      overlay.querySelector("[data-pairing-close]").addEventListener("click", () => { overlay.hidden = true; });
+      overlay.querySelector("#pairingForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const code = overlay.querySelector("#pairingCode").value.trim();
+        if (!code) return;
+        if (await pairBrowser(code)) {
+          overlay.hidden = true;
+          await loadAdminSession(true);
+          void refresh();
+        }
+      });
+      overlay.querySelector("#pairingCode").focus();
+    }
+
+    window.addEventListener("hashchange", () => {
+      if (consumePairFragment()) void adminSessionLoad.then(() => refresh());
+      selectEntryPane();
+    });
     selectEntryPane();
     document.addEventListener("visibilitychange", () => { if (!document.hidden) void refresh(); });
 
@@ -1401,7 +1533,7 @@
     }
 
     async function requestJson(path, options = {}) {
-      const response = await fetch(path, {
+      const response = await adminFetch(path, {
         cache: "no-store",
         ...options,
         headers: {
@@ -2299,7 +2431,12 @@
       if (!confirm("只关闭统一入口和两个管理器网页，不会停止后台模型容器。继续吗？")) return;
       stopBtn.disabled = true;
       try {
-        await fetch("/api/stop-all", { method: "POST", signal: AbortSignal.timeout(5000) });
+        const response = await adminFetch("/api/stop-all", { method: "POST", signal: AbortSignal.timeout(5000) });
+        // Not the owner: the pairing screen is up and nothing was stopped.
+        if (response.status === 401 || response.status === 403) {
+          stopBtn.disabled = false;
+          return;
+        }
         shutdown = true;
         clearInterval(refreshTimer);
         renderShutdownState();
@@ -2330,7 +2467,7 @@
       if (action === "stop" && !confirm("只关闭这个管理器网页，不会停止后台模型容器。继续吗？")) return;
       button.disabled = true;
       try {
-        const response = await fetch(`/api/managers/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, { method: "POST" });
+        const response = await adminFetch(`/api/managers/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, { method: "POST" });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
         showToast(action === "start" ? "启动请求已完成" : "关闭请求已发送");

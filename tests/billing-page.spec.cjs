@@ -43,6 +43,11 @@ function freshScenario() {
   return {
     failAll: false,
     requests: [],
+    // GET /api/session (05 §5.6): a paired owner whose CSRF token is "t".
+    session: { ok: true, role: "owner", via: "session", paired: true, csrfToken: "t", autoPairAvailable: false, pairCommand: "platform admin pair" },
+    sessionReads: 0,
+    csrfRejectOnce: false,
+    requireSession: false,
     customers: [{
       customerId: CUSTOMER_ID,
       externalRef: "CRM-XSS",
@@ -333,7 +338,14 @@ async function handleApi(req, res, url) {
 
   const method = String(req.method || "GET").toUpperCase();
   const body = method === "GET" ? null : await readJson(req);
-  scenario.requests.push({ method, path: url.pathname, body });
+  scenario.requests.push({ method, path: url.pathname, body, csrf: req.headers["x-csrf-token"] || null });
+  if (method !== "GET" && scenario.requireSession) {
+    return sendJson(res, 401, { ok: false, error: { code: "admin_session_required", message: "Pair this browser first.", hint: "pair" } });
+  }
+  if (method !== "GET" && (scenario.csrfRejectOnce || req.headers["x-csrf-token"] !== scenario.session.csrfToken)) {
+    scenario.csrfRejectOnce = false;
+    return sendJson(res, 403, { ok: false, error: { code: "csrf_invalid", message: "Reload the page.", hint: "reload" } });
+  }
 
   if (method === "GET" && url.pathname === "/api/status") return sendJson(res, 200, statusPayload());
   if (method === "GET" && url.pathname === "/api/billing/overview") return sendJson(res, 200, nextOverview());
@@ -495,6 +507,11 @@ function startHarness() {
         if (url.pathname === "/favicon.ico") {
           res.writeHead(204);
           res.end();
+          return;
+        }
+        if (url.pathname === "/api/session") {
+          scenario.sessionReads += 1;
+          sendJson(res, 200, scenario.session);
           return;
         }
         if (url.pathname === "/api/status" || url.pathname.startsWith("/api/billing")) {
@@ -738,6 +755,51 @@ test("customer, plan, credential, and balance forms issue bounded mutations and 
   await page.getByRole("tab", { name: "用量与账本", exact: true }).click();
   await expect(page.locator("#billingLedgerRows")).toContainText("退款差额调整");
   await expect(page.locator("#billingLedgerRows")).toContainText("-10.500001 积分");
+
+  // Every write carried the session's CSRF token (05 §5.5).
+  const writes = scenario.requests.filter((request) => request.method !== "GET");
+  expect(writes.length).toBeGreaterThanOrEqual(4);
+  expect(writes.map((request) => request.csrf)).toEqual(writes.map(() => "t"));
+});
+
+test("a stale CSRF token is re-read once and retried; an unpaired write shows the pairing screen", async ({ page }) => {
+  await loadBilling(page);
+  const customerForm = page.locator("#billingCustomerForm");
+  const createCustomer = async (name) => {
+    await customerForm.locator('[name="name"]').fill(name);
+    await customerForm.locator('[name="planId"]').selectOption(PLAN_ID);
+    await customerForm.getByRole("button", { name: "创建客户" }).click();
+  };
+
+  // The page reads /api/session at its first write.
+  await createCustomer("首个客户");
+  await expect(page.locator("#overviewCustomerRows")).toContainText("首个客户");
+
+  // The token rotated (the entry restarted): one 403 csrf_invalid, one fresh
+  // GET /api/session, one retry with the new token.
+  scenario.session = { ...scenario.session, csrfToken: "t2" };
+  scenario.csrfRejectOnce = true;
+  const readsBefore = scenario.sessionReads;
+  await createCustomer("重试客户");
+  await expect(page.locator("#overviewCustomerRows")).toContainText("重试客户");
+  const attempts = scenario.requests.filter((request) => request.method === "POST" && request.path === "/api/billing/customers");
+  expect(attempts.map((request) => request.csrf)).toEqual(["t", "t", "t2"]);
+  expect(scenario.sessionReads).toBe(readsBefore + 1);
+
+  // No owner session: the pairing screen names the pairing command.
+  scenario.requireSession = true;
+  await createCustomer("未配对客户");
+  const overlay = page.locator("#pairingOverlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toContainText("此浏览器尚未与本机控制台配对");
+  await expect(overlay).toContainText("This browser is not paired with the console yet");
+  await expect(overlay.locator("code").first()).toHaveText("platform admin pair");
+  await overlay.getByRole("button", { name: "稍后 / Later" }).click();
+  await expect(overlay).toBeHidden();
+  // The refused requests are the expected resource errors of this test.
+  const diagnostics = diagnosticsByPage.get(page);
+  expect(diagnostics.consoleErrors.every((message) => /40[13]/.test(message))).toBe(true);
+  diagnostics.consoleErrors.length = 0;
 });
 
 test("template filters, future-date guard, exact multiplier preview, mapping, and confirmed apply work end to end", async ({ page }) => {

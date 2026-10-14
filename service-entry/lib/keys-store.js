@@ -1036,6 +1036,156 @@ function createKeysStore(options = {}) {
     return Number(prepare("DELETE FROM status_samples WHERE minute < ?").run(minuteKey(beforeMinute)).changes);
   }
 
+  // ---- admin sessions (05 §5.3; the rules live in admin-session.js) -------
+  //
+  // Rows only: ids, hashes and times. Secrets never reach this module; the
+  // caller hashes them first and audits the events, since it knows the actor.
+
+  function sessionFromRow(row) {
+    if (!row) return null;
+    return {
+      id: row.session_id,
+      secretHash: row.secret_hash,
+      role: row.role,
+      createdAt: row.created_at,
+      lastSeenAt: row.last_seen_at,
+      expiresAt: row.expires_at,
+      createdIp: row.created_ip || null,
+      userAgent: row.user_agent || null,
+      revokedAt: row.revoked_at || null,
+    };
+  }
+
+  // Inserts a session and marks access_meta.autoPairConsumed: any pairing
+  // closes the first-run window. With `autoPair` the insert happens only
+  // while that window is unconsumed and nothing was ever paired; false
+  // means it was not.
+  function createAdminSession(input = {}, { autoPair = false } = {}) {
+    return transaction(() => {
+      if (autoPair) {
+        const consumed = prepare("SELECT value FROM access_meta WHERE key='autoPairConsumed'").get()?.value === "1";
+        if (consumed || Number(prepare("SELECT COUNT(*) AS n FROM admin_sessions").get().n) > 0) return false;
+      }
+      prepare(`
+        INSERT INTO admin_sessions (session_id, secret_hash, role, created_at, last_seen_at, expires_at, created_ip, user_agent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        String(input.id), String(input.secretHash), String(input.role || "owner"), String(input.createdAt),
+        String(input.createdAt), String(input.expiresAt), optionalIp(input.createdIp), input.userAgent ? String(input.userAgent).slice(0, 300) : null,
+      );
+      prepare("INSERT INTO access_meta (key, value) VALUES ('autoPairConsumed', '1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+      return true;
+    });
+  }
+
+  function getAdminSession(sessionId) {
+    return sessionFromRow(prepare("SELECT * FROM admin_sessions WHERE session_id=?").get(String(sessionId || "")));
+  }
+
+  function touchAdminSession(sessionId, { lastSeenAt, expiresAt }) {
+    prepare("UPDATE admin_sessions SET last_seen_at=?, expires_at=? WHERE session_id=? AND revoked_at IS NULL")
+      .run(String(lastSeenAt), String(expiresAt), String(sessionId || ""));
+  }
+
+  function listAdminSessions({ now: at } = {}) {
+    return prepare("SELECT * FROM admin_sessions WHERE revoked_at IS NULL AND expires_at > ? ORDER BY last_seen_at DESC, session_id LIMIT 500")
+      .all(nowIso(at)).map(sessionFromRow);
+  }
+
+  function countAdminSessions() {
+    return Number(prepare("SELECT COUNT(*) AS n FROM admin_sessions").get().n);
+  }
+
+  // Revokes the session and every elevation bound to it. False when it was
+  // unknown or already revoked.
+  function revokeAdminSession(sessionId, at) {
+    const when = nowIso(at);
+    const id = String(sessionId || "");
+    return transaction(() => {
+      const changes = Number(prepare("UPDATE admin_sessions SET revoked_at=? WHERE session_id=? AND revoked_at IS NULL").run(when, id).changes);
+      prepare("UPDATE admin_elevations SET revoked_at=? WHERE session_id=? AND revoked_at IS NULL").run(when, id);
+      return changes > 0;
+    });
+  }
+
+  function insertPairCode({ codeHash, expiresAt, createdBy, lan = false }) {
+    transaction(() => {
+      prepare("DELETE FROM admin_pair_codes WHERE expires_at <= ?").run(nowIso());
+      prepare("INSERT INTO admin_pair_codes (code_hash, expires_at, created_by, lan) VALUES (?, ?, ?, ?)")
+        .run(String(codeHash), String(expiresAt), actorText(createdBy), lan ? 1 : 0);
+    });
+  }
+
+  // Single use: the first caller marks the code used and gets its row; an
+  // unknown, used or expired code gives null.
+  function consumePairCode(codeHash, at) {
+    const when = nowIso(at);
+    return transaction(() => {
+      const row = prepare("SELECT * FROM admin_pair_codes WHERE code_hash=?").get(String(codeHash || ""));
+      if (!row || row.used_at || !(row.expires_at > when)) return null;
+      prepare("UPDATE admin_pair_codes SET used_at=? WHERE code_hash=? AND used_at IS NULL").run(when, row.code_hash);
+      return { expiresAt: row.expires_at, createdBy: row.created_by, lan: Number(row.lan) === 1 };
+    });
+  }
+
+  function tokenFromRow(row) {
+    if (!row) return null;
+    return {
+      id: row.token_id,
+      name: row.name,
+      tokenHash: row.token_hash,
+      role: row.role,
+      createdAt: row.created_at,
+      createdBy: row.created_by,
+      lastUsedAt: row.last_used_at || null,
+      revokedAt: row.revoked_at || null,
+    };
+  }
+
+  function insertAdminToken({ id, name, tokenHash, role, createdAt, createdBy }) {
+    prepare("INSERT INTO admin_tokens (token_id, name, token_hash, role, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(String(id), plainText(String(name ?? ""), "name", 1, 120), String(tokenHash), String(role), String(createdAt), actorText(createdBy));
+  }
+
+  function findAdminToken(tokenHash) {
+    return tokenFromRow(prepare("SELECT * FROM admin_tokens WHERE token_hash=?").get(String(tokenHash || "")));
+  }
+
+  function touchAdminToken(tokenId, at) {
+    prepare("UPDATE admin_tokens SET last_used_at=? WHERE token_id=?").run(nowIso(at), String(tokenId || ""));
+  }
+
+  function listAdminTokens() {
+    return prepare("SELECT * FROM admin_tokens ORDER BY created_at DESC, token_id LIMIT 500").all().map(tokenFromRow);
+  }
+
+  function revokeAdminToken(tokenId, at) {
+    return Number(prepare("UPDATE admin_tokens SET revoked_at=? WHERE token_id=? AND revoked_at IS NULL").run(nowIso(at), String(tokenId || "")).changes) > 0;
+  }
+
+  function insertElevation({ id, sessionId, scope, secretHash, createdAt, expiresAt }) {
+    prepare("INSERT INTO admin_elevations (elevation_id, session_id, scope, secret_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(String(id), String(sessionId), String(scope), String(secretHash), String(createdAt), String(expiresAt));
+  }
+
+  function getElevation(elevationId) {
+    const row = prepare("SELECT * FROM admin_elevations WHERE elevation_id=?").get(String(elevationId || ""));
+    if (!row) return null;
+    return {
+      id: row.elevation_id,
+      sessionId: row.session_id,
+      scope: row.scope,
+      secretHash: row.secret_hash,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      revokedAt: row.revoked_at || null,
+    };
+  }
+
+  function revokeElevation(elevationId, at) {
+    return Number(prepare("UPDATE admin_elevations SET revoked_at=? WHERE elevation_id=? AND revoked_at IS NULL").run(nowIso(at), String(elevationId || "")).changes) > 0;
+  }
+
   // ---- meta --------------------------------------------------------------
 
   function getMeta(keyInput) {
@@ -1079,6 +1229,24 @@ function createKeysStore(options = {}) {
     remove: removeAnnouncement,
   });
   const modelMeta = Object.freeze({ list: listModelMeta, get: getModelMeta, upsert: upsertModelMeta });
+  const admin = Object.freeze({
+    createSession: createAdminSession,
+    getSession: getAdminSession,
+    touchSession: touchAdminSession,
+    listSessions: listAdminSessions,
+    countSessions: countAdminSessions,
+    revokeSession: revokeAdminSession,
+    insertPairCode,
+    consumePairCode,
+    insertToken: insertAdminToken,
+    findToken: findAdminToken,
+    touchToken: touchAdminToken,
+    listTokens: listAdminTokens,
+    revokeToken: revokeAdminToken,
+    insertElevation,
+    getElevation,
+    revokeElevation,
+  });
 
   return {
     file,
@@ -1113,6 +1281,7 @@ function createKeysStore(options = {}) {
     updateAnnouncement,
     removeAnnouncement,
     modelMeta,
+    admin,
     listModelMeta,
     getModelMeta,
     upsertModelMeta,

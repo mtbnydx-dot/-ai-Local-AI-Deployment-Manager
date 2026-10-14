@@ -777,6 +777,26 @@
       .header-actions > *, #billingThemeMode { width: 100%; }
       .tab-button { min-width: 108px; min-height: 42px; font-size: 13px; }
     }
+    .pairing-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: color-mix(in srgb, var(--bg) 70%, transparent);
+    }
+    .pairing-overlay[hidden] { display: none; }
+    .pairing-card {
+      width: min(520px, 100%);
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+    }
+    .pairing-card h2 { margin: 0 0 8px; font-size: 18px; }
+    .pairing-card code { overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -1396,9 +1416,87 @@
       if (element) element.addEventListener(eventName, listener);
     }
 
+    // Admin session (05 §5.5): GET /api/session once, x-csrf-token on every
+    // non-GET, the pairing screen on 401 admin_session_required, and one
+    // re-read plus one retry on 403 csrf_invalid.
+    let adminSession = null;
+    let adminSessionLoad = null;
+
+    function loadAdminSession(force) {
+      if (!force && adminSessionLoad) return adminSessionLoad;
+      adminSessionLoad = fetch("/api/session", { cache: "no-store", signal: AbortSignal.timeout(10000) })
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .catch(function () { return null; })
+        .then(function (data) {
+          adminSession = data && typeof data === "object" ? data : null;
+          return adminSession;
+        });
+      return adminSessionLoad;
+    }
+
+    function showPairingScreen() {
+      const cmd = adminSession && adminSession.pairCommand ? adminSession.pairCommand : "node service-entry\\scripts\\admin-pair.js --open";
+      let overlay = document.querySelector("#pairingOverlay");
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "pairingOverlay";
+        overlay.className = "pairing-overlay";
+        document.body.append(overlay);
+      }
+      const card = document.createElement("section");
+      card.className = "pairing-card";
+      card.setAttribute("role", "dialog");
+      card.setAttribute("aria-modal", "true");
+      card.setAttribute("aria-labelledby", "pairingTitle");
+      const title = document.createElement("h2");
+      title.id = "pairingTitle";
+      title.textContent = "需要配对 / Pairing required";
+      card.append(title);
+      [
+        ["zh-CN", "此浏览器尚未与本机控制台配对。请从平台启动器打开控制台（会自动配对），或在终端运行 {cmd}。"],
+        ["en", "This browser is not paired with the console yet. Open the console from the platform launcher (pairs automatically) or run {cmd} in a terminal."],
+      ].forEach(function (entry) {
+        const paragraph = document.createElement("p");
+        paragraph.lang = entry[0];
+        const parts = entry[1].split("{cmd}");
+        const code = document.createElement("code");
+        code.textContent = cmd;
+        paragraph.append(parts[0], code, parts[1]);
+        card.append(paragraph);
+      });
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "稍后 / Later";
+      close.addEventListener("click", function () { overlay.hidden = true; });
+      card.append(close);
+      overlay.replaceChildren(card);
+      overlay.hidden = false;
+      close.focus();
+    }
+
+    async function adminFetch(path, options, retried) {
+      const method = String(options.method || "GET").toUpperCase();
+      const headers = { ...(options.headers || {}) };
+      if (method !== "GET" && method !== "HEAD") {
+        const session = await loadAdminSession(false);
+        if (session && session.csrfToken) headers["x-csrf-token"] = session.csrfToken;
+      }
+      const response = await fetch(path, { ...options, headers: headers });
+      if (response.status === 401 || response.status === 403) {
+        const data = await response.clone().json().catch(function () { return {}; });
+        const code = (data && data.error && typeof data.error === "object" ? data.error.code : "") || (data && data.code) || "";
+        if (code === "csrf_invalid" && !retried) {
+          await loadAdminSession(true);
+          return adminFetch(path, options, true);
+        }
+        if (code === "admin_session_required") showPairingScreen();
+      }
+      return response;
+    }
+
     async function requestJson(path, options) {
       const requestOptions = options || {};
-      const response = await fetch(path, {
+      const response = await adminFetch(path, {
         cache: "no-store",
         ...requestOptions,
         headers: {
@@ -1406,7 +1504,7 @@
           ...(requestOptions.headers || {}),
         },
         signal: requestOptions.signal || AbortSignal.timeout(10000),
-      });
+      }, false);
       const data = await response.json().catch(function () { return {}; });
       if (!response.ok) {
         // 新接口（如用量汇总）用 {error:{code,message}} 信封，旧接口是平铺的 message。

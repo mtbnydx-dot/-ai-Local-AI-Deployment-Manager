@@ -20,7 +20,8 @@ const { signedTtsHeaders, createTtsReconciler } = require("./lib/tts-bridge");
 const { createEventBus } = require("./lib/events");
 const { createRequestAuth, redactInstancesEventForViewer, redactStatusEventForViewer } = require("./lib/request-auth");
 const { createViewerRegistry } = require("./lib/viewer-allowlist");
-const { createEntryAdminAuth, createMachineAuth } = require("./lib/machine-auth");
+const { createMachineAuth } = require("./lib/machine-auth");
+const { createAdminAuth, registerSessionRoutes } = require("./lib/admin-session");
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
 const { createModelHub, discoverHubClis } = require("../manager-core/model-hub");
 const { createTelemetryRuntime } = require("./lib/telemetry-runtime");
@@ -156,7 +157,6 @@ const ROUTE_MODULES = [
   // "./lib/engine-routes",       // 01 ENG-19
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
   // "./lib/telemetry-routes",    // 04 TEL-*
-  // "./lib/admin-session",       // 05 PUB-5
   // "./lib/platform-routes",     // 06 OPS-13
 ];
 
@@ -348,7 +348,19 @@ function createEntryAccess(options = {}) {
       }
     },
   });
-  const adminAuth = createEntryAdminAuth({ security, machineAuth, viewerRegistry });
+  // Sessions live in the access store; while it cannot be opened nobody is
+  // the owner (fail closed) and signed machine principals still work.
+  const adminAuth = createAdminAuth({
+    store: () => getAccessStore(),
+    config: () => security.accessConfig(),
+    machineAuth,
+    viewerRegistry,
+    aiRoot: AI_ROOT,
+    getLanAddress: core.getLanAddress,
+    sendJson,
+    readJsonObjectBody,
+    logger,
+  });
   return {
     viewerRegistry,
     machineAuth,
@@ -491,7 +503,10 @@ async function handleRequest(req, res, routes = null) {
     // 05's pre-dispatch guard: a signed machine request is verified and held
     // to its scope, and a viewer reaches only registered routes, with the
     // entry's redaction set on req.viewer for sendJson.
-    if (await entryAccessFor(routes).adminAuth.guard(req, res, url)) return;
+    const { adminAuth } = entryAccessFor(routes);
+    if (await adminAuth.guard(req, res, url)) return;
+    // The session API (05 §5.6) comes before every other route.
+    if (await adminAuth.handle(req, res, url)) return;
     if (await handleBillingHttpRequest(req, res, url)) return;
     if (await dispatchRouteModules(routes, req, res, url)) return;
     if (req.method === "GET" && (url.pathname === "/billing" || url.pathname === "/billing/")) {
@@ -536,7 +551,7 @@ async function handleRequest(req, res, routes = null) {
       return proxyGatewayRequest(req, res, url);
     }
     if (req.method === "GET" && url.pathname === "/api/keys") {
-      const allowed = security.checkManagementAccess(req);
+      const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const managers = await Promise.all(MANAGERS.map((manager) => buildManagerStatus(manager, { force: url.searchParams.get("fresh") === "1" })));
       return sendJson(res, { ok: true, keys: buildKeySummary(managers) });
@@ -577,7 +592,7 @@ async function handleRequest(req, res, routes = null) {
       return sendJson(res, payload);
     }
     if (req.method === "GET" && url.pathname === "/api/mcp/status") {
-      const allowed = security.checkManagementAccess(req);
+      const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       return sendJson(res, await buildPlatformMcpStatus());
     }
@@ -585,7 +600,7 @@ async function handleRequest(req, res, routes = null) {
       return sendJson(res, await buildServiceEntryFleetSnapshot());
     }
     if (req.method === "POST" && url.pathname === "/api/fleet/settings") {
-      const allowed = security.checkManagementAccess(req);
+      const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       let body;
       try {
@@ -617,7 +632,7 @@ async function handleRequest(req, res, routes = null) {
     }
     const managerStartMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/start$/);
     if (req.method === "POST" && managerStartMatch) {
-      const allowed = security.checkManagementAccess(req);
+      const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const manager = findManager(managerStartMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
@@ -625,14 +640,14 @@ async function handleRequest(req, res, routes = null) {
     }
     const managerStopMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/stop$/);
     if (req.method === "POST" && managerStopMatch) {
-      const allowed = security.checkManagementAccess(req);
+      const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const manager = findManager(managerStopMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
       return sendJson(res, await stopManager(manager));
     }
     if (req.method === "POST" && url.pathname === "/api/stop-all") {
-      const allowed = security.checkManagementAccess(req);
+      const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const stopped = await Promise.all(MANAGERS.map((manager) => postJson(`http://127.0.0.1:${manager.port}/api/manager/shutdown`)));
       sendJson(res, { ok: true, stopped });
@@ -641,7 +656,7 @@ async function handleRequest(req, res, routes = null) {
     if (req.method === "POST" && (url.pathname === "/api/shutdown" || url.pathname === "/api/manager/shutdown")) {
       // Same gate as the other lifecycle endpoints; this one used to be open,
       // so any LAN device could stop the whole gateway.
-      const allowed = security.checkManagementAccess(req);
+      const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       sendJson(res, { ok: true });
       return shutdownSoon();
@@ -769,8 +784,9 @@ function registerEntryRoutes(registry) {
   for (const path of ["/", "/index.html", "/favicon.ico", "/shared-js/*", ...SERVED_DOCS.map((name) => `/docs/${name}`)]) {
     registry.registerRoute({ owner, path });
   }
-  // It answers the caller's own role (the session routes arrive with PUB-5).
-  registry.registerRoute({ owner, path: "/api/session" });
+  // GET /api/session answers the caller's own role; the rest of the
+  // session API is owner-only (PUB-5).
+  registerSessionRoutes(registry);
   registry.registerRoute({ owner, path: "/api/status", redact: redactStatusForRemote });
   registry.registerRoute({ owner, path: "/api/security", redact: redactSecurityForViewer });
   registry.registerRoute({ owner, path: "/api/fleet", redact: redactFleetForViewer });
@@ -781,7 +797,7 @@ function registerEntryRoutes(registry) {
   registry.registerRoute({ owner: "04", path: "/api/gateway-access", redact: redactAccessForRemote });
 
   const adminReads = [
-    "/api/keys", "/api/access/*", "/api/public/*", "/api/security/*", "/api/session/list", "/api/admin-tokens",
+    "/api/keys", "/api/access/*", "/api/public/*", "/api/security/*",
     "/api/mcp/status", "/billing", "/billing/", "/api/billing/*",
   ];
   for (const path of adminReads) registry.registerAdminOnly({ owner, method: "GET", path });

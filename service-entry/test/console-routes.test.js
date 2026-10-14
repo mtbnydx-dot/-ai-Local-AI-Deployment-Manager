@@ -22,6 +22,7 @@ const {
   readDefaultUi,
   registerConsoleRoutes,
 } = require("../lib/console-routes");
+const { ownerSession } = require("./helpers/entry-harness");
 
 // The console serving layer (07 §2.3–§2.6, §13.1). Each test builds its own
 // AI root in a temp folder: a copy of the real console, vendor tree and pages,
@@ -866,6 +867,8 @@ let entry = null;
 let entryTempDir = "";
 
 test.after(() => {
+  // Owner sessions opened the access store; Windows will not delete an open file.
+  entry?.closeAccessStore();
   if (entryTempDir) fs.rmSync(entryTempDir, { recursive: true, force: true });
 });
 
@@ -929,7 +932,10 @@ test("with the classic default the module declines / and /billing, and the inlin
   const plainPort = await startEntry(t);
   const { routes } = await mountConsole(t, tree);
   const port = await startEntry(t, routes);
-  for (const [pathname, headers] of [["/", {}], ["/", { accept: "text/html" }], ["/index.html", {}], ["/billing", { accept: "text/html" }], ["/billing/", {}], ["/billing?manager=vllm", { accept: "text/html" }]]) {
+  // /billing needs the owner (a paired session since PUB-5).
+  const owner = await ownerSession(entry, port);
+  for (const [pathname, plain] of [["/", {}], ["/", { accept: "text/html" }], ["/index.html", {}], ["/billing", { accept: "text/html" }], ["/billing/", {}], ["/billing?manager=vllm", { accept: "text/html" }]]) {
+    const headers = { ...plain, ...owner.headers() };
     const before = await raw(plainPort, pathname, { headers });
     const after = await raw(port, pathname, { headers });
     assert.equal(after.status, before.status, pathname);
@@ -943,7 +949,7 @@ test("with the classic default the module declines / and /billing, and the inlin
   assert.deepEqual(comparableHeaders(classic), comparableHeaders(before));
   assert.ok(classic.body.equals(before.body));
   // /billing/classic from loopback through the whole entry.
-  const billing = await raw(port, "/billing/classic?embed=1");
+  const billing = await raw(port, "/billing/classic?embed=1", { headers: owner.headers() });
   assert.equal(billing.status, 200);
   assert.equal(billing.headers["x-frame-options"], "SAMEORIGIN");
 });
@@ -955,10 +961,19 @@ test("through the entry: the role comes from request-auth, a proxied / is 404 an
   const { ctx, routes } = await mountConsole(t, tree);
   const port = await startEntry(t, routes);
 
-  // The entry's PUB-25 admin auth: loopback is the owner today.
-  const bootstrap = JSON.parse((await raw(port, "/api/console/bootstrap")).body);
+  // The entry's PUB-5 admin auth: loopback without a session is a viewer,
+  // and a paired session is the owner with its CSRF token in the bootstrap.
+  const anonymous = JSON.parse((await raw(port, "/api/console/bootstrap")).body);
+  assert.equal(anonymous.role, "viewer");
+  assert.equal(anonymous.auth.mode, "session");
+  assert.deepEqual({ ...anonymous.auth.session, autoPairAvailable: undefined }, { role: "viewer", via: "loopback", paired: false, autoPairAvailable: undefined });
+  assert.equal(anonymous.auth.csrf, null);
+  const owner = await ownerSession(entry, port);
+  const bootstrap = JSON.parse((await raw(port, "/api/console/bootstrap", { headers: owner.headers() })).body);
   assert.equal(bootstrap.role, "owner");
-  assert.equal(bootstrap.auth.mode, "loopback-trust");
+  assert.equal(bootstrap.auth.mode, "session");
+  assert.deepEqual(bootstrap.auth.session, { role: "owner", via: "session", paired: true, autoPairAvailable: false });
+  assert.equal(bootstrap.auth.csrf, owner.csrfToken);
   assert.equal(bootstrap.buildId, core.platform.getBuildId({ aiRoot: tree.root }).contentHash);
   assert.equal(ctx.auth.viewerRegistry.match("GET", "/c/x/app.js")?.access, "viewer");
 

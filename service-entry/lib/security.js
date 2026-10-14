@@ -154,6 +154,40 @@ function createEntrySecurity(options = {}) {
 
   // --- Host / Origin guard (S2) -------------------------------------------
 
+  // The exact origins of the ADMIN console (05 §3.3): scheme, host and port.
+  // A page on another port of the same host (the PUBLIC listener on 5186, a
+  // local dev server) is cross-origin and may not drive the console, which a
+  // hostname-only check allowed. The port is the configured ADMIN port and
+  // the port the request actually arrived on.
+  function adminOrigins(req) {
+    const config = accessConfig();
+    const ports = new Set([Number(config.listeners?.admin?.port) || 5176]);
+    const localPort = Number(req?.socket?.localPort);
+    if (Number.isInteger(localPort) && localPort > 0) ports.add(localPort);
+    const hosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
+    try {
+      const lan = String(getLanAddress() || "").toLowerCase();
+      if (lan) hosts.add(lan.includes(":") ? `[${lan}]` : lan);
+    } catch {
+      // Interface enumeration failed; loopback origins still apply.
+    }
+    for (const name of config.admin?.extraHosts || []) hosts.add(String(name).toLowerCase());
+    const origins = new Set();
+    for (const name of hosts) for (const port of ports) origins.add(`http://${name}:${port}`);
+    return origins;
+  }
+
+  function normalizeOrigin(origin) {
+    try {
+      const parsed = new URL(origin);
+      if (parsed.origin === "null") return "";
+      const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+      return `${parsed.protocol}//${parsed.hostname.toLowerCase()}:${port}`;
+    } catch {
+      return "";
+    }
+  }
+
   function checkRequest(req, url) {
     const hostname = core.extractHostname(req.headers?.host);
     if (!hostname || !allowedHostnames().has(hostname)) {
@@ -162,11 +196,18 @@ function createEntrySecurity(options = {}) {
     const method = String(req.method || "GET").toUpperCase();
     const origin = String(req.headers?.origin || "").trim();
     // Cross-site POSTs from a page the user happens to have open are the
-    // realistic attack here, so mutating requests must carry a same-site Origin.
+    // realistic attack here, so mutating requests must carry a same-site
+    // Origin: an exact console origin for the ADMIN routes, and (until the
+    // gateway pipeline owns its CORS policy) an allowed hostname for /gateway/*.
     if (!MANAGEMENT_SAFE_METHODS.has(method) && origin) {
-      const originHost = core.extractHostname(origin);
-      if (origin === "null" || !originHost || !allowedHostnames().has(originHost)) {
-        return { ok: false, status: 403, code: "origin_not_allowed", message: "Cross-site request rejected (Origin check failed)." };
+      const rejected = { ok: false, status: 403, code: "origin_not_allowed", message: "Cross-site request rejected (Origin check failed)." };
+      if (origin === "null") return rejected;
+      if (isGatewayPath(url)) {
+        const originHost = core.extractHostname(origin);
+        if (!originHost || !allowedHostnames().has(originHost)) return rejected;
+      } else {
+        const normalized = normalizeOrigin(origin);
+        if (!normalized || !adminOrigins(req).has(normalized)) return rejected;
       }
     }
     return { ok: true };
@@ -211,7 +252,10 @@ function createEntrySecurity(options = {}) {
   }
 
   // Management is localhost-only unless the LAN-admin switch is on; proxied
-  // requests are never management-eligible regardless of that switch.
+  // requests are never management-eligible regardless of that switch. This
+  // is only the network half of the rule: since PUB-5 the entry asks
+  // admin-session.js, which also requires an owner credential (a paired
+  // session, an owner token or a machine signature).
   function checkManagementAccess(req) {
     if (isProxiedRequest(req)) {
       return {

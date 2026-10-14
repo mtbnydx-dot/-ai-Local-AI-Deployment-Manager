@@ -3,6 +3,7 @@ const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -555,6 +556,8 @@ async function smokeEntryPage(page, baseUrl) {
   let resolveDelayedFleetReadStarted = () => {};
   const settingsRequests = [];
   const previewRequests = [];
+  // The x-csrf-token of every non-GET the page sent (05 §5.5).
+  const csrfHeaders = [];
   page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
     if (message.type() === "error") failures.push(`console: ${message.text()}`);
@@ -602,8 +605,17 @@ async function smokeEntryPage(page, baseUrl) {
       }),
     });
   });
+  // A paired owner (05 §5.6); writes must carry its CSRF token.
+  await page.route("**/api/session", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, role: "owner", via: "session", paired: true, csrfToken: "t", autoPairAvailable: false, pairCommand: "platform admin pair" }),
+    });
+  });
   await page.route("**/api/fleet/settings", async (route) => {
     const body = route.request().postDataJSON();
+    csrfHeaders.push(route.request().headers()["x-csrf-token"] || null);
     settingsRequests.push(body);
     fleetSettings = { ...fleetSettings, ...body };
     const fleet = buildFleetSmokeSnapshot(fleetSettings);
@@ -615,6 +627,7 @@ async function smokeEntryPage(page, baseUrl) {
   });
   await page.route("**/api/fleet/route-preview", async (route) => {
     const body = route.request().postDataJSON();
+    csrfHeaders.push(route.request().headers()["x-csrf-token"] || null);
     previewRequests.push(body);
     const unavailable = !["text", "tools"].includes(body.capability);
     await route.fulfill({
@@ -741,6 +754,8 @@ async function smokeEntryPage(page, baseUrl) {
     { capability: "text", engine: "auto", protocol: "openai" },
   ]);
   expect(JSON.stringify(previewRequests)).not.toMatch(/messages|prompt|content|image|audio/i);
+  expect(csrfHeaders.length).toBe(settingsRequests.length + previewRequests.length);
+  expect(csrfHeaders).toEqual(csrfHeaders.map(() => "t"));
 
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileShell = await page.evaluate(() => ({
@@ -775,6 +790,9 @@ async function smokeBillingPage(page) {
       body: await fs.readFile(path.join(ROOT, "service-entry", "billing.html"), "utf8"),
     });
   });
+  await page.route("http://ai-box.lan:5176/api/session", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, role: "owner", via: "session", paired: true, csrfToken: "t", pairCommand: "platform admin pair" }) });
+  });
   await page.route("http://ai-box.lan:5176/api/status", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ managers: [] }) });
   });
@@ -782,6 +800,7 @@ async function smokeBillingPage(page) {
     const url = new URL(route.request().url());
     const name = url.pathname.split("/").filter(Boolean).at(-1);
     if (url.pathname.endsWith("/ledger/adjustments") && route.request().method() === "POST") {
+      expect(route.request().headers()["x-csrf-token"]).toBe("t");
       adjustmentWrites += 1;
       await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
       return;
@@ -949,6 +968,69 @@ test.describe("manager frontends", () => {
       await smokeEntryPage(await context.newPage(), managers[0].url);
     } finally {
       await context.close();
+    }
+  });
+
+  // PUB-5 against a real entry with a fresh access store: the first browser
+  // that opens / auto-pairs (once) and is the owner of the classic console;
+  // a second browser is a viewer until it opens a #pair= link minted by the
+  // first, which pairs it and is stripped from the address bar.
+  test("the classic console works after pairing", async ({ browser }) => {
+    const entryPort = await getFreePort();
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "entry-pairing-"));
+    const upstreams = {};
+    for (const name of ["VLLM_MANAGER_PORT", "LLAMA_MANAGER_PORT", "TTS_GATEWAY_PORT", "SEARCH_GATEWAY_PORT", "PLATFORM_MCP_PORT"]) {
+      upstreams[name] = String(await getFreePort());
+    }
+    managers = [
+      await startManager({
+        cwd: path.join(ROOT, "service-entry"),
+        port: entryPort,
+        env: {
+          ...upstreams,
+          SERVICE_ENTRY_HOST: "127.0.0.1",
+          SERVICE_ENTRY_PORT: String(entryPort),
+          AI_BILLING_DB: path.join(dataDir, "billing.sqlite"),
+        },
+      }),
+    ];
+    const baseUrl = managers[0].url;
+    const sessionOf = (page) => page.evaluate(async () => (await fetch("/api/session", { cache: "no-store" })).json());
+    const first = await browser.newContext();
+    const second = await browser.newContext();
+    try {
+      const owner = await first.newPage();
+      await owner.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      await expect(owner.locator("h1")).toContainText("本地模型服务统一入口");
+      const ownerSession = await sessionOf(owner);
+      expect([ownerSession.role, ownerSession.via, ownerSession.paired]).toEqual(["owner", "session", true]);
+      const cookie = (await first.cookies()).find((item) => item.name === "lai_admin");
+      expect([cookie.httpOnly, cookie.sameSite, cookie.path]).toEqual([true, "Strict", "/"]);
+
+      // A write without the token is refused; with it the owner mints a code.
+      const refused = await owner.evaluate(async () => (await fetch("/api/session/pair-codes", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status);
+      expect(refused).toBe(403);
+      const minted = await owner.evaluate(async (csrf) => (await fetch("/api/session/pair-codes", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ ttlSeconds: 120 }),
+      })).json(), ownerSession.csrfToken);
+      expect(minted.url).toMatch(/#pair=[A-Z2-7]{10}$/);
+
+      // Auto-pair fired once: the second browser is a viewer.
+      const other = await second.newPage();
+      await other.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      expect((await sessionOf(other)).role).toBe("viewer");
+      await other.goto(`${baseUrl}#pair=${minted.code}`, { waitUntil: "domcontentloaded" });
+      await expect(other.locator("#toast")).toContainText("此浏览器已与控制台配对");
+      expect(other.url()).toBe(baseUrl);
+      expect((await sessionOf(other)).role).toBe("owner");
+    } finally {
+      await first.close();
+      await second.close();
+      await Promise.all(managers.map((manager) => manager.stop()));
+      managers = [];
+      await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
     }
   });
 
