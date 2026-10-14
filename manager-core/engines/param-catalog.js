@@ -575,6 +575,8 @@ function paramAvailability(param, runtime, introspected) {
   const flags = candidateFlags(param, runtime);
   const index = introspectedFlagIndex(introspected);
   if (!flags.length) {
+    const renamed = index && Array.isArray(param.flags) ? param.flags.find((item) => index.has(item.flag)) : null;
+    if (renamed) return { state: "available", flag: renamed.flag, reason: AVAILABILITY_REASONS.inRuntime };
     if (param.emit?.kind === "env") {
       const confirmed = index && [...index.values()].some((entry) => entry.env === param.emit.env);
       return confirmed
@@ -1036,9 +1038,14 @@ function createParamCatalog(options = {}) {
     const { runtime = null, introspected = null } = loadOptions;
     const params = base.params.map((param) => {
       const availability = paramAvailability(param, runtime, introspected);
+      const choiceFlag = param.choicesFrom?.slice("introspect:".length);
+      const runtimeChoices = choiceFlag ? introspectedFlagIndex(introspected)?.get(choiceFlag)?.choices : null;
       return Object.freeze({
         ...param,
         choices: effectiveChoices(param, introspected),
+        // An enum becomes closed once the runtime gives its actual choices.
+        // A permissive fallback pattern must not admit flags it cannot accept.
+        pattern: param.type === "enum" && runtimeChoices?.length ? null : param.pattern,
         availability,
         flag: availability.flag || param.emit.flag || param.emit.falseFlag || null,
       });
@@ -1314,6 +1321,7 @@ module.exports = {
   effectiveChoices,
   getParamCatalog,
   hostFactsFromGpus,
+  introspectedFlagIndex,
   isQuietLegacyValue,
   loadCatalog,
   mergeParam,
