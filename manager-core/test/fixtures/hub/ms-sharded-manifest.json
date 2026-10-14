@@ -1,0 +1,41 @@
+{
+  "namespace": "modelscope",
+  "repo": "example-org/Example-7B-Instruct",
+  "revision": "master",
+  "revisionSha": null,
+  "gated": false,
+  "private": false,
+  "lastModified": "2026-09-02T08:00:00.000Z",
+  "tags": ["text-generation"],
+  "pipelineTag": "text-generation",
+  "library": null,
+  "baseModel": null,
+  "license": "apache-2.0",
+  "structured": {
+    "safetensors": null,
+    "gguf": null,
+    "config": { "model_type": "example" }
+  },
+  "files": [
+    { "path": ".gitattributes", "size": 1519, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "LICENSE", "size": 11357, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "README.md", "size": 4120, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "config.json", "size": 690, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "configuration.json", "size": 55, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "generation_config.json", "size": 132, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "model-00001-of-00002.safetensors", "size": 4900000000, "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "gitOid": null, "lfs": true },
+    { "path": "model-00002-of-00002.safetensors", "size": 4100000000, "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "gitOid": null, "lfs": true },
+    { "path": "model.safetensors.index.json", "size": 31245, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "tokenizer.json", "size": 7031645, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "tokenizer_config.json", "size": 5412, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "vocab.json", "size": 2776833, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "merges.txt", "size": 1671853, "sha256": null, "gitOid": null, "lfs": false },
+    { "path": "gguf/example-7b-q4_k_m.gguf", "size": 4400000000, "sha256": "3333333333333333333333333333333333333333333333333333333333333333", "gitOid": null, "lfs": true },
+    { "path": "gguf/example-7b-q8_0.gguf", "size": 7700000000, "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "gitOid": null, "lfs": true },
+    { "path": "gguf/mmproj-example-f16.gguf", "size": 900000000, "sha256": null, "gitOid": null, "lfs": true }
+  ],
+  "filesTruncated": false,
+  "fetchedAt": "2026-10-14T08:00:00.000Z",
+  "fetchedFrom": "https://www.modelscope.cn",
+  "warnings": []
+}
