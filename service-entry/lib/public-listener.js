@@ -11,6 +11,8 @@
 //   deps.gateway(req, res, url, route)   key routes (the shared pipeline, 08)
 //   deps.portal.handle(req, res, url, route) -> boolean   portal shell,
 //                                        /assets/<buildId>/*, the *.json routes
+//   deps.data.respond(pathname, req) -> object|null   the four portal JSON
+//                                        documents (status-sampler.js, PUB-14)
 // A route nobody serves yet answers like any unknown path (404) for the
 // portal, and 503 service_unavailable for the key routes.
 
@@ -27,6 +29,15 @@ const ENGINE_ID = "[A-Za-z0-9][A-Za-z0-9._@-]{0,63}";
 const GATEWAY_KEY_RE = new RegExp(`^/gateway/(?:auto|vllm|llama|external/${ENGINE_ID}|(?!(?:tts|mcp|search|health|status|me)/)${ENGINE_ID})/(?:openai|claude|opencode)(?:/.*)?$`);
 const GATEWAY_FIXED_KEY_PATHS = new Set(["/gateway/status", "/gateway/me", "/gateway/tts/openai/v1/audio/speech"]);
 const API_PREFIX_RE = /^\/(?:v1|anthropic\/v1|vllm\/v1|llama\/v1)(?:\/.*)?$/;
+// The portal documents are public and cheap; status, catalog and announcements
+// are rebuilt at most every 15 s anyway (05 §12.2). portal-config follows the
+// Host (LAN-only deployments) and the build id.
+const JSON_CACHE = {
+  "/status.json": { "cache-control": "public, max-age=15" },
+  "/catalog.json": { "cache-control": "public, max-age=15" },
+  "/announcements.json": { "cache-control": "public, max-age=15" },
+  "/portal-config.json": { "cache-control": "no-cache", vary: "host" },
+};
 const ROBOTS_TXT = "User-agent: *\nDisallow: /v1/\nDisallow: /anthropic/\nDisallow: /me\nDisallow: /playground\n";
 
 // The kind of a PUBLIC request: "healthz", "gateway_health", "robots",
@@ -89,11 +100,13 @@ function sendJsonBody(req, res, status, body, headers = {}) {
 }
 
 /**
- * createPublicListener({ security, gateway, portal, logger }) -> { handle(req, res) }
+ * createPublicListener({ security, gateway, portal, data, logger }) -> { handle(req, res) }
  *   security  createEntrySecurity() result: publicHostnames()
+ *   data      createPublicData() result; answers /status.json, /catalog.json,
+ *             /announcements.json and /portal-config.json
  * The returned handle never rejects.
  */
-function createPublicListener({ security, gateway = null, portal = null, logger = console } = {}) {
+function createPublicListener({ security, gateway = null, portal = null, data = null, logger = console } = {}) {
   if (!security || typeof security.publicHostnames !== "function") throw new TypeError("createPublicListener needs the entry security (publicHostnames).");
 
   async function handle(req, res) {
@@ -131,9 +144,20 @@ function createPublicListener({ security, gateway = null, portal = null, logger 
           return sendJsonBody(req, res, 200, { ok: true, service: "local-ai-gateway", time: new Date().toISOString() });
         case "robots":
           return sendText(req, res, 200, ROBOTS_TXT, { "cache-control": "public, max-age=3600" });
+        case "json":
+          if (data && typeof data.respond === "function") {
+            let body;
+            try {
+              body = await data.respond(url.pathname, req);
+            } catch (error) {
+              logger?.error?.(core.redactSecrets(`public data ${url.pathname}: ${error?.message || error}`));
+              return sendPublicError(req, res, "service_unavailable", { requestId });
+            }
+            if (body) return sendJsonBody(req, res, 200, body, JSON_CACHE[url.pathname] || {});
+          }
+        // falls through: the portal handler may serve it
         case "portal":
         case "asset":
-        case "json":
           if (portal && typeof portal.handle === "function" && (await portal.handle(req, res, url, route)) === true) return undefined;
           if (res.headersSent) return undefined;
           return sendPublicError(req, res, "not_found", { requestId });

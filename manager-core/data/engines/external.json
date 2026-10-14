@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 120,
+  "id": "external",
+  "label": { "zh": "外部端点", "en": "External endpoints" },
+  "description": {
+    "zh": "已注册的 OpenAI 兼容端点（Ollama、LM Studio 等）；由服务入口托管，不启动容器。",
+    "en": "Registered OpenAI-compatible endpoints (Ollama, LM Studio and others), hosted by the service entry; no container is started."
+  },
+  "family": "openai-server",
+  "adapter": "external",
+  "tier": 3,
+  "status": "stable",
+  "hostManager": "entry",
+  "legacy": { "engineLabel": "external" },
+  "artifactFormats": [],
+  "host": {
+    "kinds": ["external"],
+    "default": "external",
+    "containerPort": 80,
+    "ipc": "none",
+    "init": false,
+    "ulimits": [],
+    "restart": "no",
+    "gpus": "none",
+    "allowLan": true,
+    "healthcheck": null,
+    "cacheMounts": []
+  },
+  "api": {
+    "openaiBase": "/v1",
+    "models": "/v1/models",
+    "health": "/v1/models",
+    "version": [],
+    "ready": { "kind": "models-list" },
+    "probe": { "kind": "models-list", "maxTokens": 1 }
+  },
+  "apiSurface": { "chat": true, "completions": true, "responses": false, "messages": false, "embeddings": false, "rerank": false },
+  "memoryModel": { "kind": "server-reported" },
+  "capabilities": {
+    "parallelInstances": true,
+    "tensorParallel": false,
+    "pipelineParallel": false,
+    "dataParallel": false,
+    "expertParallel": false,
+    "speculative": [],
+    "autoParsers": { "tool": null, "reasoning": null },
+    "lora": false,
+    "multiModel": true,
+    "hotLoad": true,
+    "sleepWake": false,
+    "roles": ["chat"]
+  },
+  "knowledgeKeys": [],
+  "external": { "registry": "service-entry/data/external-endpoints.json", "secretNamespace": "engines.external" },
+  "logPhases": [],
+  "logFacts": [],
+  "errorSignatures": []
+}

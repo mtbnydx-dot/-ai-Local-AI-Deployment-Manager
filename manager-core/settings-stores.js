@@ -1,4 +1,6 @@
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
 
 function clipText(value, maxLength) {
   const text = String(value || "").trim();
@@ -61,7 +63,35 @@ function createLaunchProfilesStore({
   defaultLaunchProfiles,
   makeProfileId,
   limit = 40,
+  // 01 §22: profile entries are written as v2 ({schemaVersion, engineId,
+  // values, ...}) with their flat config kept. toV2(profile) converts one
+  // entry; reads keep returning the v1 shape. The first write that would
+  // change a v1 file saves it once as launch-profiles.v1.bak.json.
+  toV2 = null,
+  backupFile = path.join(path.dirname(String(file || ".")), "launch-profiles.v1.bak.json"),
 }) {
+  function backupV1Once() {
+    if (!toV2 || !file) return;
+    try {
+      if (fs.existsSync(backupFile)) return;
+      const raw = fs.readFileSync(file, "utf8");
+      const saved = JSON.parse(raw.replace(/^﻿/, ""));
+      const entries = Array.isArray(saved?.profiles) ? saved.profiles : [];
+      if (!entries.some((item) => item && item.schemaVersion !== 2)) return;
+      fs.writeFileSync(backupFile, raw, { flag: "wx" });
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "EEXIST") console.warn(`[launch-profiles] backup failed: ${error.message}`);
+    }
+  }
+
+  async function writeProfiles(profiles, updatedAt) {
+    if (toV2) {
+      backupV1Once();
+      profiles = profiles.map((item) => toV2(item));
+    }
+    await writeJsonFile(file, { version: 1, updatedAt, profiles });
+  }
+
   async function getLaunchProfiles() {
     const saved = await readJsonFile(file, { version: 1, profiles: [] });
     const userProfiles = Array.isArray(saved.profiles) ? saved.profiles.map(normalizeLaunchProfile).filter(Boolean) : [];
@@ -91,11 +121,7 @@ function createLaunchProfilesStore({
       .filter(Boolean)
       .filter((item) => item.id !== profile.id);
     profiles.unshift(profile);
-    await writeJsonFile(file, {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      profiles: profiles.slice(0, limit),
-    });
+    await writeProfiles(profiles.slice(0, limit), new Date().toISOString());
     return { ok: true, profile };
   }
 
@@ -109,7 +135,7 @@ function createLaunchProfilesStore({
     const ledger = await readJsonFile(file, { version: 1, profiles: [] });
     const before = Array.isArray(ledger.profiles) ? ledger.profiles.length : 0;
     const profiles = (Array.isArray(ledger.profiles) ? ledger.profiles : []).filter((item) => item?.id !== target);
-    await writeJsonFile(file, { version: 1, updatedAt: new Date().toISOString(), profiles });
+    await writeProfiles(profiles, new Date().toISOString());
     return { ok: true, removed: before - profiles.length, id: target };
   }
 

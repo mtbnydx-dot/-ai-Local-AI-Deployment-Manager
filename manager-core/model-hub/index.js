@@ -20,11 +20,18 @@ const hubSettings = require("./settings");
 const { readHubConfig } = require("./config");
 const hubErrors = require("./errors");
 const { createLibrary } = require("./library");
+const { createTokenVault } = require("./tokens");
+const { createHubAuth } = require("./auth");
+const { createSourceProbe } = require("./sources");
+const { createProviders } = require("./providers");
 
 const DEFAULT_AI_ROOT = path.resolve(__dirname, "..", "..");
 // downloads.json is re-stamped this often while the hub runs; readers treat
 // a stamp older than two minutes as a stopped hub (03 §8).
 const HEARTBEAT_MS = 30 * 1000;
+// Temporary tokens no job needs any more are released at start and then this
+// often (03 §12).
+const TOKEN_SWEEP_MS = 60 * 60 * 1000;
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -107,6 +114,22 @@ function createModelHub(options = {}) {
       ...(isPlainObject(options.libraryOptions) ? options.libraryOptions : {}),
     })
     : null;
+  // Temporary Hugging Face tokens (03 §12): memory-only unless the caller
+  // asked to remember one and a secret store exists.
+  const tokens = options.tokens || createTokenVault({ secretStore, clock, logger });
+  const providers = options.providers || createProviders({ settings, fetchImpl: options.fetchImpl, clock });
+  const auth = createHubAuth({
+    hfCli,
+    hfHome,
+    service: options.hfAuthService || null,
+    providers,
+    fetchImpl: options.fetchImpl,
+    tokens,
+    logger,
+    ...(isPlainObject(options.hfAuthOptions) ? options.hfAuthOptions : {}),
+  });
+  const sources = createSourceProbe({ auth, fetchImpl: options.fetchImpl, clock, ...(isPlainObject(options.sourceProbeOptions) ? options.sourceProbeOptions : {}) });
+  const tokenSweepMs = Number(options.tokenSweepMs) > 0 ? Number(options.tokenSweepMs) : TOKEN_SWEEP_MS;
   const readConfig = typeof options.readConfig === "function" ? options.readConfig : () => readHubConfig(aiRoot, env);
 
   let state = "idle";
@@ -115,6 +138,7 @@ function createModelHub(options = {}) {
   let startedAt = null;
   let startError = null;
   let heartbeat = null;
+  let tokenSweep = null;
   let downloads = { schemaVersion: STORE_SCHEMA_VERSION, jobs: [] };
   let migrationSteps = [];
   let storeErrors = [];
@@ -122,7 +146,7 @@ function createModelHub(options = {}) {
 
   function warn(line) {
     try {
-      (typeof logger?.warn === "function" ? logger.warn : console.warn).call(logger, redactSecrets(String(line)));
+      (typeof logger?.warn === "function" ? logger.warn : console.warn).call(logger, redactSecrets(String(line), { secrets: tokens.values() }));
     } catch {
       // Logging never breaks the hub.
     }
@@ -158,6 +182,17 @@ function createModelHub(options = {}) {
     }
   }
 
+  // 03 §12: tokens of ready and cancelled jobs, of jobs that failed more than
+  // seven days ago and of refs no job carries are released.
+  async function sweepTokens() {
+    try {
+      return await tokens.sweep(downloads.jobs);
+    } catch (error) {
+      warn(`model hub: the token sweep failed: ${error?.message || error}`);
+      return [];
+    }
+  }
+
   async function doStart() {
     state = "starting";
     storeErrors = [];
@@ -186,6 +221,11 @@ function createModelHub(options = {}) {
     migrationSteps = Array.isArray(migrations.value?.steps) ? migrations.value.steps.filter(isPlainObject) : [];
 
     await store.writeDownloads(downloads);
+    await sweepTokens();
+    tokenSweep = setInterval(() => {
+      if (state === "running") sweepTokens();
+    }, tokenSweepMs);
+    tokenSweep.unref?.();
     if (library) {
       library.start();
       // The first scan runs in the background, so a large library never
@@ -226,6 +266,8 @@ function createModelHub(options = {}) {
       state = "stopping";
       if (heartbeat) clearInterval(heartbeat);
       heartbeat = null;
+      if (tokenSweep) clearInterval(tokenSweep);
+      tokenSweep = null;
       try {
         await library?.stop();
       } catch (error) {
@@ -303,6 +345,14 @@ function createModelHub(options = {}) {
         return settings.update(patch);
       },
     },
+    // The temporary-token vault (03 §12). Routes put a token here and hand
+    // the job only the tokenRef; the queue releases a ref when its job ends.
+    tokens,
+    sweepTokens,
+    // 03 §12: login status, the local login window and the gated-access check
+    // (first weight file). sources.probe is the informational speed probe.
+    auth: { status: auth.status, login: auth.login, access: auth.access },
+    sources: { probe: sources.probe },
     // The registry (03 §9), null until a modelStorage is given. Later
     // packages add checkUpdate, update, importCache, remove and cleanupResidue.
     library,
