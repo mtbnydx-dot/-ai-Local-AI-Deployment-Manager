@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "qwen38-27b-dspark-draft",
+  "synthetic": false,
+  "license": "other",
+  "licenseSource": "readme",
+  "folderName": "RadixArk-Qwen3.8-27B-DSpark",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["DSpark draft model for Qwen3.8-27B: DSparkDraftModel with dflash_config, num_target_layers and auto_map custom code (the .py files are listed, not copied).","License \"other\" in the README front matter (the card defers to the source model's terms); captured with --allow-license: metadata, tensor names and shapes only, no weights, code or README text."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"README.md","bytes":2809,"kind":"placeholder"},
+    {"name":"config.json","bytes":1620,"kind":"captured"},
+    {"name":"dflash.py","bytes":20347,"kind":"placeholder"},
+    {"name":"dspark.py","bytes":7016,"kind":"placeholder"},
+    {"name":"model.safetensors","bytes":2718576122,"kind":"safetensors"}
+  ]
+}

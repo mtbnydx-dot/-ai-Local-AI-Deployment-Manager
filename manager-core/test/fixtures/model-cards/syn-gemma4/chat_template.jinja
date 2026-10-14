@@ -1,0 +1,21 @@
+{#- Synthetic Gemma-4-style template for tests; not the upstream template. -#}
+{{ bos_token }}
+{%- if tools %}<start_of_turn>system
+You can call these functions:
+{% for tool in tools %}{{ tool | tojson }}
+{% endfor %}<end_of_turn>
+{%- endif %}
+{%- for message in messages %}
+{%- set role = 'model' if message.role == 'assistant' else message.role %}
+<start_of_turn>{{ role }}
+{%- if message.content is string %}
+{{ message.content }}
+{%- else %}
+{%- for part in message.content %}{% if part.type == 'image' %}<start_of_image>{% elif part.type == 'text' %}{{ part.text }}{% endif %}{% endfor %}
+{%- endif %}
+{%- for call in message.tool_calls | default([]) %}<start_function_call>call:{{ call.function.name }}{{ call.function.arguments | tojson }}<end_function_call>{%- endfor %}
+<end_of_turn>
+{%- endfor %}
+{%- if add_generation_prompt %}
+<start_of_turn>model
+{%- endif %}

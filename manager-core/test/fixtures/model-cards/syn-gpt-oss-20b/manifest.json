@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-gpt-oss-20b",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "gpt-oss-20b",
+  "layout": "indexed",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic gpt-oss checkpoint: harmony chat format, MXFP4 routed experts (U8 blocks + scales), alternating sliding/full attention."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"LICENSE","bytes":11357,"kind":"placeholder"},
+    {"name":"README.md","bytes":7089,"kind":"placeholder"},
+    {"name":"USAGE_POLICY","bytes":200,"kind":"placeholder"},
+    {"name":"chat_template.jinja","bytes":1150,"kind":"captured"},
+    {"name":"config.json","bytes":1827,"kind":"captured"},
+    {"name":"generation_config.json","bytes":177,"kind":"captured"},
+    {"name":"model-00000-of-00002.safetensors","bytes":4973192904,"kind":"safetensors"},
+    {"name":"model-00001-of-00002.safetensors","bytes":3814925936,"kind":"safetensors"},
+    {"name":"model-00002-of-00002.safetensors","bytes":4973198896,"kind":"safetensors"},
+    {"name":"model.safetensors.index.json","bytes":38210,"kind":"index"},
+    {"name":"special_tokens_map.json","bytes":98,"kind":"placeholder"},
+    {"name":"tokenizer.json","bytes":27868174,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":285,"kind":"captured"}
+  ]
+}

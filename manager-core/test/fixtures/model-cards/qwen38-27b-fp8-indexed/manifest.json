@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "qwen38-27b-fp8-indexed",
+  "synthetic": false,
+  "license": "apache-2.0",
+  "licenseSource": "readme",
+  "folderName": "orcarouter-Qwen3.8-27B-Uncensored-FP8",
+  "layout": "indexed",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Qwen3.8-27B FP8 fine-tune in standard model-0000N-of-00007 shards with an index; same chat template as qwen38-27b-fp8 (template signature, rename invariance)."],
+  "warnings": [],
+  "scrubbed": [
+    {"file":"tokenizer_config.json","pointer":"/added_tokens_decoder","reason":"tokenizer_vocabulary","count":33}
+  ],
+  "files": [
+    {"name":"LICENSE","bytes":11544,"kind":"placeholder"},
+    {"name":"README.md","bytes":15665,"kind":"placeholder"},
+    {"name":"chat_template.jinja","bytes":8952,"kind":"captured"},
+    {"name":"config.json","bytes":51352,"kind":"captured"},
+    {"name":"generation_config.json","bytes":176,"kind":"captured"},
+    {"name":"merges.txt","bytes":3353259,"kind":"placeholder"},
+    {"name":"model-00001-of-00007.safetensors","bytes":3969317448,"kind":"safetensors"},
+    {"name":"model-00002-of-00007.safetensors","bytes":4939321704,"kind":"safetensors"},
+    {"name":"model-00003-of-00007.safetensors","bytes":4939863424,"kind":"safetensors"},
+    {"name":"model-00004-of-00007.safetensors","bytes":4971328696,"kind":"safetensors"},
+    {"name":"model-00005-of-00007.safetensors","bytes":4955596064,"kind":"safetensors"},
+    {"name":"model-00006-of-00007.safetensors","bytes":4071440632,"kind":"safetensors"},
+    {"name":"model-00007-of-00007.safetensors","bytes":3019999168,"kind":"safetensors"},
+    {"name":"model.safetensors.index.json","bytes":156034,"kind":"index"},
+    {"name":"preprocessor_config.json","bytes":337,"kind":"captured"},
+    {"name":"tokenizer.json","bytes":12809320,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":10364,"kind":"captured"},
+    {"name":"video_preprocessor_config.json","bytes":385,"kind":"placeholder"},
+    {"name":"vocab.json","bytes":6722759,"kind":"placeholder"}
+  ]
+}

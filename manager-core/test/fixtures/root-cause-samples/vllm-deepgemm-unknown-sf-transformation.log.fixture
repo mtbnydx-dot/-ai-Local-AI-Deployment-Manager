@@ -1,0 +1,17 @@
+> docker run -d --name vllm-qwen38-flashnext --gpus device=0 --ipc host -p 127.0.0.1:8000:8000 -v <AI_ROOT>\models\Qwen3.8-Flash-Next-NVFP4:/models/Qwen3.8-Flash-Next-NVFP4:ro -e VLLM_API_KEY vllm/vllm-openai:nightly --model /models/Qwen3.8-Flash-Next-NVFP4 --served-model-name qwen3.8-flash-next --max-model-len 262144 --trust-remote-code --api-key <redacted>
+(APIServer pid=1) INFO 10-14 06:12:09 [api_server.py:1896] vLLM API server version 0.11.1rc2.dev214
+(APIServer pid=1) INFO 10-14 06:12:20 [model.py:547] Resolved architecture: Qwen4ExpForCausalLM
+(EngineCore_DP0 pid=231) INFO 10-14 06:12:41 [gpu_model_runner.py:2602] Starting to load model /models/Qwen3.8-Flash-Next-NVFP4...
+(EngineCore_DP0 pid=231) INFO 10-14 06:12:42 [fp8_utils.py:118] Using DeepGEMM kernels for block-scaled GEMM.
+(EngineCore_DP0 pid=231) INFO 10-14 06:15:03 [default_loader.py:267] Loading weights took 139.84 seconds
+(EngineCore_DP0 pid=231) INFO 10-14 06:15:07 [gpu_model_runner.py:2653] Model loading took 58.3125 GiB and 145.51 seconds
+(EngineCore_DP0 pid=231) INFO 10-14 06:15:09 [deep_gemm_warmup.py:212] Warming up DeepGEMM kernels for 96 GEMM shapes
+(EngineCore_DP0 pid=231) ERROR 10-14 06:15:11 [core.py:708] EngineCore failed to start.
+(EngineCore_DP0 pid=231) ERROR 10-14 06:15:11 [core.py:708] Traceback (most recent call last):
+(EngineCore_DP0 pid=231) ERROR 10-14 06:15:11 [core.py:708]   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/warmup/deep_gemm_warmup.py", line 140, in _deepgemm_fp8_gemm_nt_warmup
+(EngineCore_DP0 pid=231) ERROR 10-14 06:15:11 [core.py:708]     fp8_gemm_nt((a1q, a1q_scales), (w, ws), out)
+(EngineCore_DP0 pid=231) ERROR 10-14 06:15:11 [core.py:708]   File "/usr/local/lib/python3.12/dist-packages/vllm/utils/deep_gemm.py", line 201, in fp8_gemm_nt
+(EngineCore_DP0 pid=231) ERROR 10-14 06:15:11 [core.py:708]     return _fp8_gemm_nt_impl(*args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs)
+(EngineCore_DP0 pid=231) ERROR 10-14 06:15:11 [core.py:708] RuntimeError: Assertion error (csrc/apis/../jit_kernels/impls/../../utils/layout.hpp:61): Unknown SF transformation
+(EngineCore_DP0 pid=231) Process EngineCore_DP0:
+(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}

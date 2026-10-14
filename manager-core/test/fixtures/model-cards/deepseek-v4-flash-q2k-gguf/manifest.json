@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "deepseek-v4-flash-q2k-gguf",
+  "synthetic": false,
+  "license": "mit",
+  "licenseSource": "gguf",
+  "folderName": "huihui-ai-Huihui-DeepSeek-V4-Flash-0731-abliterated-GGUF",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["DeepSeek-V4-Flash Q2_K single-file GGUF (deepseek4): compressed attention with an indexer, 256 experts (6 active, 1 shared), nextn layer, DSML tool-call template."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"DeepSeek-V4-Flash-Q2_K-0731.gguf","bytes":97591747456,"kind":"gguf"}
+  ]
+}
