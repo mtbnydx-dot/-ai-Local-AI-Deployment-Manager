@@ -24,7 +24,9 @@ const {
 } = require("./http");
 
 const DEFAULT_ENDPOINT = "https://huggingface.co";
-// 03 §4.2: the fields requested with expand[] on a search.
+// 03 §4.2: the fields requested with expand[] on a search. The spec also lists
+// usedStorage, but the live search endpoint rejects it with HTTP 400, so it is
+// not requested (the field stays optional in a normalised item).
 const SEARCH_EXPAND = Object.freeze([
   "downloads",
   "likes",
@@ -36,7 +38,6 @@ const SEARCH_EXPAND = Object.freeze([
   "safetensors",
   "gguf",
   "cardData",
-  "usedStorage",
 ]);
 const SORT_ALIASES = Object.freeze({
   trending: "trendingScore",
