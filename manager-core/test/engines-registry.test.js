@@ -118,9 +118,9 @@ test("hostedBy lists the engines each manager hosts", (t) => {
   assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang"]);
   assert.deepEqual(registry.hostedBy("vllm-manager"), ["vllm", "sglang"]);
   assert.deepEqual(registry.hostedBy("llama"), ["llamacpp"]);
-  assert.deepEqual(registry.hostedBy("entry"), []);
+  assert.deepEqual(registry.hostedBy("entry"), ["external"]);
   assert.deepEqual(registry.hostedBy("other"), []);
-  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp"]);
+  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp", "external"]);
 });
 
 test("every key of the bundled JSON manifest maps to exactly one runtimeId and engineId", (t) => {
@@ -144,7 +144,7 @@ test("every key of the bundled JSON manifest maps to exactly one runtimeId and e
     assert.equal(seenRuntimeIds.has(ref.runtimeId), false, `${ref.runtimeId} is unique`);
     seenRuntimeIds.add(ref.runtimeId);
     // Exactly one engine allows the key, and it is the key's own engine.
-    const owners = registry.list().filter((descriptor) => descriptor.runtimes.allowed.includes(key)).map((descriptor) => descriptor.id);
+    const owners = registry.list().filter((descriptor) => descriptor.runtimes?.allowed.includes(key)).map((descriptor) => descriptor.id);
     assert.deepEqual(owners, [entry.engineId], key);
     assert.ok(registry.runtimesFor(entry.engineId).some((item) => item.manifestKey === key), key);
   }

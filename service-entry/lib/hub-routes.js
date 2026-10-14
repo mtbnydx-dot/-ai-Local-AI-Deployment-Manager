@@ -21,6 +21,7 @@
 // Errors use the 00 §4.2 envelope. Request bodies are capped at 64 KiB.
 
 const { redactSecrets } = require("../../manager-core/secret-redactor");
+const { HubError, toEnvelope } = require("../../manager-core/model-hub/errors");
 
 const OWNER = "03";
 const PREFIX = "/api/hub/";
@@ -99,6 +100,17 @@ function redactLibraryEventForViewer(data) {
   return data;
 }
 
+// 03 §12: the GET auth rows give a viewer only whether the login works and
+// whether access is granted; names, orgs and the authorization link stay with
+// the owner.
+function redactHfAuthForViewer(body) {
+  return isPlainObject(body) ? { ok: body.ok, connected: Boolean(body.connected) } : body;
+}
+
+function redactHfAccessForViewer(body) {
+  return isPlainObject(body) ? { ok: body.ok, granted: Boolean(body.granted), status: body.status } : body;
+}
+
 // Every route this module serves.
 const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/status", handler: "status" }),
@@ -110,6 +122,10 @@ const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/verify", handler: "libraryVerify" }),
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify", handler: "libraryIdentify" }),
   Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", handler: "taskGet" }),
+  Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface", handler: "authStatus" }),
+  Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login", handler: "authLogin" }),
+  Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", handler: "authAccess" }),
+  Object.freeze({ method: "POST", path: "/api/hub/sources/probe", handler: "sourcesProbe" }),
 ]);
 
 // "/api/hub/library/:id" → a matcher for the pathname; named segments are one
@@ -159,6 +175,8 @@ const HUB_VIEWER_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/library", redact: redactLibraryListForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/library/:id", redact: redactLibraryDetailForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", redact: redactHubTaskBodyForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface", redact: redactHfAuthForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", redact: redactHfAccessForViewer }),
 ]);
 
 // Event types a viewer may receive (03 §13.1), with their redaction.
@@ -172,6 +190,8 @@ const HUB_ADMIN_ONLY_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/library/rescan" }),
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/verify" }),
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify" }),
+  Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login" }),
+  Object.freeze({ method: "POST", path: "/api/hub/sources/probe" }),
 ]);
 
 // The hub calls a manager shim may make (03 §15 table); the shim rows of
@@ -179,6 +199,12 @@ const HUB_ADMIN_ONLY_ROUTES = Object.freeze([
 const SHIM_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/settings" }),
   Object.freeze({ method: "PUT", path: "/api/hub/settings" }),
+  // Login and probe are things the managers already did locally; the login
+  // (like a token) additionally needs the signed origin.clientLocal (03 §12).
+  Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface" }),
+  Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login" }),
+  Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access" }),
+  Object.freeze({ method: "POST", path: "/api/hub/sources/probe" }),
 ]);
 
 function routeKey(method, path) {
@@ -210,16 +236,92 @@ function resolveHubPrincipal(auth, req) {
     who = {};
   }
   const principal = String(who.principal || "");
-  if (who.role === "owner") return { kind: "owner", principal, redact: Boolean(who.redact) };
+  const network = typeof who.network === "string" ? who.network : "";
+  const via = typeof who.via === "string" ? who.via : "";
+  if (who.role === "owner") return { kind: "owner", principal, network, via, redact: Boolean(who.redact) };
   if (who.role === "system") {
     const shim = SHIM_PRINCIPAL_RE.exec(principal);
     if (shim) return { kind: "shim", principal, managerId: shim[1], redact: false };
-    if (principal === "system:cli") return { kind: "owner", principal, redact: false };
+    if (principal === "system:cli") return { kind: "owner", principal, network: "", via, redact: false };
     if (principal === "system:mcp") return { kind: "reader", principal, redact: false };
     return { kind: "machine", principal, redact: false };
   }
   if (who.role === "viewer") return { kind: "viewer", principal, redact: true };
   return { kind: "none", principal, redact: true };
+}
+
+// --- local-only credentials (03 §12, §13.1) -------------------------------------
+
+const LOOPBACK_ADDRESS_RE = /^(?:127(?:\.\d{1,3}){3}|::1|::ffff:127(?:\.\d{1,3}){3})$/i;
+const FORWARDING_HEADERS = Object.freeze(["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "via"]);
+
+// The socket itself is on the loopback interface and no proxy header says
+// otherwise. The principal's own network verdict is checked as well; this is
+// the second, independent look.
+function isLoopbackSocket(req) {
+  const address = String(req?.socket?.remoteAddress || "");
+  if (!LOOPBACK_ADDRESS_RE.test(address)) return false;
+  const headers = req?.headers || {};
+  return !FORWARDING_HEADERS.some((name) => headers[name] !== undefined);
+}
+
+/**
+ * True when this caller may open the Hugging Face login window or send
+ * credential.hfToken: an owner on a loopback, non-proxied socket (a LAN
+ * owner session is not enough), the CLI principal (its signature already
+ * needs a loopback socket), or a signed hub shim whose body says
+ * origin.clientLocal is true, which is the manager verdict on its own
+ * caller (03 §15).
+ */
+function tokenAllowed(req, who, body) {
+  if (!who) return false;
+  if (who.kind === "shim") return isPlainObject(body) && isPlainObject(body.origin) && body.origin.clientLocal === true;
+  if (who.kind !== "owner") return false;
+  if (!isLoopbackSocket(req)) return false;
+  return who.network === "loopback" || who.via === "loopback" || who.via === "hmac";
+}
+
+function tokenRequiresLocal(what) {
+  return new HubError("token_requires_local", `${what} is only available from this machine.`, {
+    status: 403,
+    hint: "Open the console on the machine that runs the platform, or use hf auth login in a local terminal.",
+  });
+}
+
+/**
+ * The credential of a request body, as the job transfer options carry it
+ * (03 §12): null when the body has no credential.hfToken, otherwise
+ * { credentialMode: "temp-token", tokenRef, remember } after the token went
+ * into the vault. The token itself is never returned or logged.
+ * Throws HubError: 403 token_requires_local (checked before anything else
+ * about the token), 400 invalid_request, 422 invalid_token or 422
+ * remember_unavailable. POST /plan, /downloads and /downloads/:id/resume
+ * call this.
+ */
+async function acceptHubCredential({ hub, req, who, body }) {
+  const credential = isPlainObject(body) ? body.credential : undefined;
+  if (credential === undefined || credential === null) return null;
+  if (!isPlainObject(credential)) {
+    throw new HubError("invalid_request", "credential must be an object.", { status: 400, details: { field: "credential" } });
+  }
+  const hasToken = credential.hfToken !== undefined && credential.hfToken !== null && credential.hfToken !== "";
+  if (hasToken && !tokenAllowed(req, who, body)) throw tokenRequiresLocal("A Hugging Face token");
+  if (credential.remember !== undefined && typeof credential.remember !== "boolean") {
+    throw new HubError("invalid_request", "credential.remember must be true or false.", { status: 400, details: { field: "credential.remember" } });
+  }
+  if (!hasToken) {
+    if (credential.remember === true) {
+      throw new HubError("invalid_request", "credential.remember needs credential.hfToken.", { status: 400, details: { field: "credential.hfToken" } });
+    }
+    return null;
+  }
+  if (typeof credential.hfToken !== "string") {
+    throw new HubError("invalid_request", "credential.hfToken must be a string.", { status: 400, details: { field: "credential.hfToken" } });
+  }
+  if (!hub?.tokens) throw new HubError("hub_unavailable", "The model hub is not running.", { status: 503 });
+  const remember = credential.remember === true;
+  const tokenRef = await hub.tokens.put(credential.hfToken, { remember });
+  return { credentialMode: "temp-token", tokenRef, remember };
 }
 
 function defaultSendJson(res, data, status = 200) {
@@ -379,6 +481,19 @@ function createHubRoutes(options = {}) {
     sendError(res, 500, "internal_error", "Service entry error.");
   }
 
+  // A HubError carries its status, code and hint (errors.js toEnvelope
+  // redacts the text); anything else is an internal error that is logged, not
+  // sent.
+  function sendHubError(res, error, what) {
+    if (error instanceof HubError) {
+      const { status, body } = toEnvelope(error);
+      sendJson(res, body, status);
+      return;
+    }
+    warn(`hub-routes: ${what} failed: ${error?.message || error}`);
+    sendError(res, 500, "internal_error", "Service entry error.");
+  }
+
   function libraryOrFail(res) {
     if (hub.library) return hub.library;
     sendError(res, 503, "hub_unavailable", "The model library is not available.", { hint: "Restart service-entry and check its log for the hub start error." });
@@ -482,6 +597,69 @@ function createHubRoutes(options = {}) {
       sendRead(req, res, url.pathname, { ok: true, task }, who);
     },
 
+    // 03 §12. The status never carries a token; a viewer gets { connected }.
+    async authStatus(req, res, url, who) {
+      let status;
+      try {
+        status = await hub.auth.status();
+      } catch (error) {
+        sendHubError(res, error, "reading the Hugging Face login status");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, ...status }, who);
+    },
+
+    // The login runs in a local PowerShell window; the token never passes
+    // through this process. Loopback owner (or a clientLocal shim) only.
+    async authLogin(req, res, url, who) {
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (!tokenAllowed(req, who, body)) {
+        sendHubError(res, tokenRequiresLocal("The Hugging Face login"), "login");
+        return;
+      }
+      try {
+        const launched = hub.auth.login();
+        sendJson(res, { ok: true, launched: Boolean(launched?.launched), tokenUrl: launched?.tokenUrl || "https://huggingface.co/settings/tokens" });
+      } catch (error) {
+        sendHubError(res, error, "opening the Hugging Face login window");
+      }
+    },
+
+    async authAccess(req, res, url, who) {
+      const repo = url.searchParams.get("repo");
+      if (!repo) {
+        sendError(res, 400, "invalid_request", "repo is required.", { details: { field: "repo" } });
+        return;
+      }
+      let result;
+      try {
+        result = await hub.auth.access({ repo, artifactKey: url.searchParams.get("artifactKey") || "", revision: url.searchParams.get("revision") || "main" });
+      } catch (error) {
+        sendHubError(res, error, "checking Hugging Face access");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, ...result }, who);
+    },
+
+    async sourcesProbe(req, res) {
+      const body = await readBody(req, res);
+      if (body === false) return;
+      for (const field of ["repo", "artifactKey"]) {
+        if (body[field] !== undefined && body[field] !== null && typeof body[field] !== "string") {
+          sendError(res, 400, "invalid_request", `${field} must be a string.`, { details: { field } });
+          return;
+        }
+      }
+      try {
+        const result = await hub.sources.probe({ repo: body.repo || "", artifactKey: body.artifactKey || "", refresh: body.refresh === true });
+        const { ok: reachable, ...rest } = result;
+        sendJson(res, { ok: true, reachable, ...rest });
+      } catch (error) {
+        sendHubError(res, error, "probing the sources");
+      }
+    },
+
     // PUT takes a partial patch, bare or as { settings }, and answers the
     // full settings (03 §14). A shim's signed body also carries origin
     // (03 §15), which is request metadata, not a setting.
@@ -547,7 +725,7 @@ function createHubRoutes(options = {}) {
     return true;
   }
 
-  return { handle };
+  return { handle, acceptCredential: (args) => acceptHubCredential({ hub, ...args }) };
 }
 
 // Registers HUB_VIEWER_ROUTES and the owner-only declarations in 05's
@@ -607,6 +785,10 @@ module.exports = {
   createHubRoutes,
   mount,
   name: "hub",
+  acceptHubCredential,
+  isLoopbackSocket,
+  redactHfAccessForViewer,
+  redactHfAuthForViewer,
   redactHubStatusForViewer,
   redactHubTaskBodyForViewer,
   redactLibraryDetailForViewer,
@@ -615,4 +797,5 @@ module.exports = {
   redactLibraryListForViewer,
   registerHubRoutes,
   resolveHubPrincipal,
+  tokenAllowed,
 };

@@ -247,10 +247,14 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "GET", path: "/api/hub/library", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/library/:id", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/tasks/:id", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/auth/huggingface", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/auth/huggingface/access", access: "viewer" },
     { owner: "03", method: "PUT", path: "/api/hub/settings", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/library/rescan", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/library/:id/verify", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/library/:id/identify", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/auth/huggingface/login", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/sources/probe", access: "admin" },
   ]);
   assert.deepEqual(registry.inventory().filter((item) => item.method === "EVENT" && item.path === "library"), [{ owner: "03", method: "EVENT", path: "library", access: "viewer" }]);
 
