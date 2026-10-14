@@ -99,7 +99,7 @@
               "type": "string", "format": "https-url", "default": "",
               "title": { "zh-CN": "公网地址", "en-US": "Public address" },
               "description": { "zh-CN": "外部用户访问本服务的 https 地址，例如隧道域名。留空表示只在局域网内使用。", "en-US": "The https address outside users reach this service at, such as your tunnel domain. Leave it empty to use the service on your LAN only." },
-              "env": ["SERVICE_ENTRY_PUBLIC_BASE_URL"], "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "access"
+              "env": ["SERVICE_ENTRY_PUBLIC_BASE_URL"], "consumers": ["entry"], "restartRequired": ["entry"], "secret": false, "group": "access"
             }
           }
         }
@@ -171,19 +171,19 @@
           "type": "array", "items": { "type": "string", "format": "cidr" }, "default": ["127.0.0.1/32", "::1/128"],
           "title": { "zh-CN": "可信代理地址", "en-US": "Trusted proxy addresses" },
           "description": { "zh-CN": "只有来自这些地址段的请求才会采信转发头中的客户端 IP，通常保持本机地址即可。", "en-US": "Forwarded client IP headers are believed only from these address ranges. Keeping the local addresses is usually right." },
-          "env": ["SERVICE_ENTRY_TRUSTED_PROXIES"], "envParse": "csv", "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "access"
+          "env": ["SERVICE_ENTRY_TRUSTED_PROXIES"], "envParse": "csv", "consumers": ["entry"], "restartRequired": ["entry"], "secret": false, "group": "access"
         },
         "clientIpHeader": {
           "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$", "default": "cf-connecting-ip",
           "title": { "zh-CN": "客户端 IP 请求头", "en-US": "Client IP header" },
           "description": { "zh-CN": "可信代理用来传递真实客户端 IP 的请求头，Cloudflare 隧道使用 cf-connecting-ip。", "en-US": "The header a trusted proxy uses to pass the real client IP. Cloudflare tunnels use cf-connecting-ip." },
-          "env": ["SERVICE_ENTRY_CLIENT_IP_HEADER"], "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "access"
+          "env": ["SERVICE_ENTRY_CLIENT_IP_HEADER"], "consumers": ["entry"], "restartRequired": ["entry"], "secret": false, "group": "access"
         },
         "countryHeader": {
           "type": "string", "pattern": "^[A-Za-z0-9-]{0,64}$", "default": "cf-ipcountry",
           "title": { "zh-CN": "客户端国家请求头", "en-US": "Client country header" },
           "description": { "zh-CN": "可信代理用来传递客户端国家或地区代码的请求头，用于统计；留空表示不读取。", "en-US": "The header a trusted proxy uses to pass the client's country code, used in statistics. Leave it empty to ignore it." },
-          "restartRequired": false, "secret": false, "group": "access"
+          "restartRequired": ["entry"], "secret": false, "group": "access"
         }
       }
     },

@@ -119,6 +119,7 @@
   },
   "forceInclude": [
     "*/test/fixtures/**",
+    "service-entry/console/**",
     "shared-public/vendor/**",
     "shared-public/styles/**"
   ],

@@ -13,12 +13,16 @@
 //   SERVICE_ENTRY_REQUIRE_API_KEY = auto | 1 | 0
 //   SERVICE_ENTRY_ALLOW_LAN_ADMIN = 0 | 1
 //
-// Forwarded client addresses are honoured only from the reverse proxies listed
-// in SERVICE_ENTRY_TRUSTED_PROXIES (IPs or CIDRs, loopback by default).
+// Client identity comes from trusted-proxy.js (05 §4): the ADMIN listener
+// never honours forwarded headers, and the PUBLIC listener honours the one
+// configured header only from trustedProxies.cidrs. Those settings are read
+// through the access config adapter (public-config.js), i.e. OPS-3's
+// readSection with env > platform.json > default.
 
-const net = require("node:net");
 const path = require("node:path");
 const core = require("../../manager-core");
+const { FORWARDING_HEADERS, hasForwardingHeaders, ipInCidrs, resolveClientIdentity } = require("./trusted-proxy");
+const { createAccessConfigSource } = require("./public-config");
 
 const MANAGEMENT_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const KEY_STORE_CACHE_MS = 5000;
@@ -30,94 +34,20 @@ const KEY_STORE_ISSUE_LOG_MS = 60_000;
 const GATEWAY_UNAVAILABLE_MESSAGE = "服务暂时不可用 / Service temporarily unavailable";
 const GATEWAY_KEY_NOT_CONFIGURED_MESSAGE = "服务端要求 API Key，但尚未配置任何密钥。 / An API key is required but none is configured on the server.";
 
-// Every header a reverse proxy (Caddy, cloudflared, a CDN) or this entry's own
-// hop may add. The presence of any of them marks a request as proxied, which
-// can only demote it (no management, no billing admin), never promote it.
-// billing-http.js imports this list, so the two gates cannot disagree again.
-const FORWARDED_HEADERS = Object.freeze([
-  "forwarded",
-  "x-forwarded-for",
-  "x-forwarded-host",
-  "x-forwarded-proto",
-  "x-real-ip",
-  "cf-connecting-ip",
-  "true-client-ip",
-  "x-service-entry-gateway",
-]);
-
-// Headers that name the client, in the order they are believed when the socket
-// peer is a trusted proxy. The last X-Forwarded-For hop is the one the nearest
-// proxy appended itself; earlier hops are whatever the client claimed.
-const CLIENT_ADDRESS_HEADERS = ["x-real-ip", "cf-connecting-ip", "true-client-ip"];
-
-const DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128,::ffff:127.0.0.1/128";
-
-// Parses "IP" or "IP/prefix" entries into a net.BlockList (which also matches
-// IPv4-mapped IPv6 forms). Invalid entries are returned, never thrown, so a
-// typo in the env cannot take the entry down.
-function parseTrustedProxies(value) {
-  const list = new net.BlockList();
-  const entries = [];
-  const invalid = [];
-  for (const raw of String(value ?? "").split(/[;,]/)) {
-    const item = raw.trim();
-    if (!item) continue;
-    const slash = item.indexOf("/");
-    const address = (slash === -1 ? item : item.slice(0, slash)).replace(/^\[|\]$/g, "");
-    const prefixText = slash === -1 ? "" : item.slice(slash + 1);
-    const family = net.isIP(address);
-    const maxPrefix = family === 4 ? 32 : 128;
-    const prefix = prefixText === "" ? maxPrefix : /^\d{1,3}$/.test(prefixText) ? Number(prefixText) : -1;
-    if (!family || (slash !== -1 && prefixText === "") || prefix < 0 || prefix > maxPrefix) {
-      invalid.push(item);
-      continue;
-    }
-    try {
-      list.addSubnet(address, prefix, family === 4 ? "ipv4" : "ipv6");
-      entries.push(`${address}/${prefix}`);
-    } catch {
-      invalid.push(item);
-    }
-  }
-  return { list, entries, invalid };
-}
-
-let trustedProxyCache = { raw: null, parsed: null };
-const warnedTrustedProxyValues = new Set();
-
-function trustedProxyConfig(options = {}) {
-  const configured = options.value ?? process.env.SERVICE_ENTRY_TRUSTED_PROXIES;
-  const raw = String(configured ?? "").trim() || DEFAULT_TRUSTED_PROXIES;
-  if (trustedProxyCache.raw !== raw) {
-    trustedProxyCache = { raw, parsed: parseTrustedProxies(raw) };
-  }
-  const { parsed } = trustedProxyCache;
-  // One warning per distinct value: the env is re-read on every request, and a
-  // bad entry must not flood the log.
-  if (parsed.invalid.length && !warnedTrustedProxyValues.has(raw)) {
-    warnedTrustedProxyValues.add(raw);
-    const warn = typeof options.warn === "function" ? options.warn : console.warn;
-    warn(`SERVICE_ENTRY_TRUSTED_PROXIES: ignoring invalid entries: ${parsed.invalid.join(", ")}`);
-  }
-  return parsed;
-}
-
-// True when the socket peer is a configured reverse proxy whose forwarded
-// client headers may be believed.
-function isTrustedProxy(address, options = {}) {
-  const text = String(address || "").trim().replace(/^\[|\]$/g, "");
-  const family = net.isIP(text);
-  if (!family) return false;
-  try {
-    return trustedProxyConfig(options).list.check(text, family === 4 ? "ipv4" : "ipv6");
-  } catch {
-    return false;
-  }
-}
+// The single shared list of forwarding headers (trusted-proxy.js). Their
+// presence marks a request as proxied, which can only demote it (no
+// management, no billing admin), never promote it. billing-http.js and
+// machine-auth.js import it from here, so the gates cannot disagree again.
+const FORWARDED_HEADERS = FORWARDING_HEADERS;
 
 function isForwardedRequest(req) {
-  const headers = req?.headers || {};
-  return FORWARDED_HEADERS.some((name) => String(headers[name] || "").trim());
+  return hasForwardingHeaders(req?.headers || {});
+}
+
+// The default access settings source: OPS-3's readSection over the entry's
+// AI root (env > <AI_ROOT>/config/platform.json > schema default).
+function defaultReadSection(aiRoot) {
+  return (name) => core.platform.readSection(name, { ...(aiRoot ? { aiRoot } : {}), env: process.env });
 }
 
 function envText(name, fallback = "") {
@@ -152,6 +82,27 @@ function createEntrySecurity(options = {}) {
   let keyStoreCache = { value: null, expiresAt: 0, promise: null };
   let keyStoreIssueLog = { detail: "", at: 0 };
   const logError = typeof options.logError === "function" ? options.logError : console.error;
+  const warn = typeof options.warn === "function" ? options.warn : console.warn;
+  // Access settings (05 §3.4): an injected source, an injected readSection, or
+  // OPS-3's readSection over options.aiRoot. Re-read live (2 s cache).
+  const accessSource = options.accessConfig && typeof options.accessConfig.get === "function"
+    ? options.accessConfig
+    : createAccessConfigSource({ readSection: typeof options.readSection === "function" ? options.readSection : defaultReadSection(options.aiRoot) });
+  let warnedAccessIssues = "";
+
+  // One warning per distinct set of problems: the settings are re-read while
+  // the entry runs, and a bad value must not flood the log.
+  function accessConfig() {
+    const config = accessSource.get();
+    if (config.issues.length) {
+      const signature = JSON.stringify(config.issues);
+      if (signature !== warnedAccessIssues) {
+        warnedAccessIssues = signature;
+        warn(`access settings: ignoring invalid values (defaults in force): ${config.issues.map((issue) => `${issue.env || issue.field}: ${issue.message}`).join("; ")}`);
+      }
+    }
+    return config;
+  }
 
   // Reachable from off-box: anything other than a loopback bind.
   const lanMode = !["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase());
@@ -235,29 +186,28 @@ function createEntrySecurity(options = {}) {
     return isForwardedRequest(req);
   }
 
+  // True when the socket peer is inside trustedProxies.cidrs.
   function trustsPeer(address) {
-    return isTrustedProxy(address, { warn: options.warn });
+    return ipInCidrs(address, accessConfig().trustedCidrs);
   }
 
-  // 请求的真实客户端地址。只有 socket 对端是可信代理（SERVICE_ENTRY_TRUSTED_PROXIES，
-  // 默认仅回环）时才相信转发头：先取 X-Forwarded-For 最后一跳（最近一级可信代理
-  // 写入的对端），再依次取 X-Real-IP、CF-Connecting-IP、True-Client-IP。不可信
-  // 对端（例如局域网设备）带来的转发头一律忽略、只用 socket 地址，否则任何人都能
-  // 伪造自己的地址来骗过日志、限流和计费归属，甚至让管理器把它当成本机。
+  // 请求的客户端身份（05 §4）。按请求到达的监听端口判断：ADMIN（5176，未标记的
+  // 请求也按 ADMIN 处理）永远只用 socket 地址；PUBLIC 只在 socket 对端属于
+  // trustedProxies.cidrs 时才采信配置的那一个请求头（默认 cf-connecting-ip，
+  // X-Forwarded-For 从右往左跳过可信代理）。局域网设备伪造的转发头一律忽略，
+  // 否则任何人都能骗过日志、限流和计费归属，甚至让管理器把它当成本机。
+  function identifyClient(req) {
+    const config = accessConfig();
+    return resolveClientIdentity(req, {
+      listener: req?.listener,
+      cidrs: config.trustedCidrs,
+      clientIpHeader: config.trustedProxies.clientIpHeader,
+      countryHeader: config.trustedProxies.countryHeader,
+    });
+  }
+
   function resolveClientAddress(req) {
-    const socketAddress = req?.socket?.remoteAddress || "";
-    if (!isProxiedRequest(req) || !trustsPeer(socketAddress)) return socketAddress;
-    const headers = req?.headers || {};
-    const chain = String(headers["x-forwarded-for"] || "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    if (chain.length) return chain[chain.length - 1];
-    for (const name of CLIENT_ADDRESS_HEADERS) {
-      const value = String(headers[name] || "").trim();
-      if (value) return value;
-    }
-    return socketAddress;
+    return identifyClient(req).ip;
   }
 
   // Management is localhost-only unless the LAN-admin switch is on; proxied
@@ -487,7 +437,7 @@ function createEntrySecurity(options = {}) {
       allowLanAdmin: current.allowLanAdmin,
       corsMode: current.corsMode,
       allowedOrigins: current.allowedOrigins,
-      trustedProxies: trustedProxyConfig({ warn: options.warn }).entries,
+      trustedProxies: accessConfig().trustedProxies.cidrs.slice(),
       trustTokenActive: Boolean(trustToken),
       keyStore: keyStatus,
       configIssues: core.listConfigHealthIssues(),
@@ -610,6 +560,8 @@ function createEntrySecurity(options = {}) {
     isProxiedRequest,
     isTrustedProxy: trustsPeer,
     resolveClientAddress,
+    identifyClient,
+    accessConfig,
     corsHeaders,
     authorizeGatewayRequest,
     loadKeyStores,
@@ -624,10 +576,7 @@ function createEntrySecurity(options = {}) {
 }
 
 module.exports = {
-  DEFAULT_TRUSTED_PROXIES,
   FORWARDED_HEADERS,
   createEntrySecurity,
-  isTrustedProxy,
   normalizeRequireApiKeyMode,
-  parseTrustedProxies,
 };

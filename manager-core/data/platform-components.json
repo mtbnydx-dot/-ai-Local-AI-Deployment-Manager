@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 365,
+  "$comment": "Component registry (docs/overhaul/06-ops.md §3). Read only through manager-core/platform/components.js. Overrides live under components.<id> in <AI_ROOT>/config/platform.json; there is no separate override file.",
+  "requirements": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0",
+    "builtinModules": ["node:sqlite"],
+    "python": ">=3.10"
+  },
+  "packages": [
+    { "dir": "vllm-manager", "live": true, "components": ["vllm-manager"] },
+    { "dir": "llama-manager", "live": true, "components": ["llama-manager"] },
+    {
+      "dir": "platform-mcp", "live": true, "components": ["platform-mcp"],
+      "build": { "script": "build", "inputs": ["src/**/*.ts", "package.json", "package-lock.json", "tsconfig.json"], "stamp": "dist/.build-stamp.json" }
+    },
+    { "dir": "search-gateway", "live": false, "reason": "runs in Docker; host deps are test-only" },
+    { "dir": ".", "live": false, "reason": "Playwright, test-only" }
+  ],
+  "components": [
+    {
+      "id": "docker", "kind": "external", "profile": "core", "autostart": true,
+      "label": { "zh-CN": "Docker 引擎", "en-US": "Docker engine" },
+      "description": { "zh-CN": "运行模型容器和搜索网关的 Docker 引擎。平台只负责确认它已启动，不会停止它。", "en-US": "The Docker engine that runs model containers and the search gateway. The platform only makes sure it is running and never stops it." },
+      "readiness": { "command": ["${DOCKER}", "info", "--format", "{{.ServerVersion}}"], "timeoutSec": 180, "intervalMs": 3000 },
+      "ensure": { "via": "docker-runtime", "mode": "${config:docker.ensureOnStart}" },
+      "stop": { "strategy": "never" },
+      "docs": "/docs/troubleshooting.md#docker"
+    },
+    {
+      "id": "entry", "legacyId": "entry", "kind": "node", "profile": "core", "autostart": true, "after": ["docker"],
+      "label": { "zh-CN": "统一入口", "en-US": "Service entry" },
+      "description": { "zh-CN": "控制台、网关和计费中心所在的统一入口（管理端口）。", "en-US": "The service entry that serves the console, the gateway and the billing center (admin port)." },
+      "cwd": "service-entry", "command": "${NODE}", "args": ["server.js"],
+      "env": { "AI_ROOT": "${AI_ROOT}" },
+      "ports": [ { "name": "admin", "port": "${config:listeners.admin.port}", "bind": "${config:listeners.admin.host}" } ],
+      "readiness": { "http": "http://127.0.0.1:${port:admin}/gateway/health", "expectJson": { "service": "local-ai-gateway" }, "timeoutSec": 30 },
+      "liveness": { "http": "http://127.0.0.1:${port:admin}/gateway/health", "intervalSec": 10, "failureThreshold": 6, "onFailure": "report" },
+      "stop": { "strategy": "http-then-kill", "http": "http://127.0.0.1:${port:admin}/api/manager/shutdown", "auth": "system", "graceSec": 15 },
+      "busy": { "http": "http://127.0.0.1:${port:admin}/api/platform/busy", "parser": "entry-busy", "auth": "system" },
+      "logDir": "logs/entry",
+      "paths": ["service-entry/**", "manager-core/**", "!manager-core/platform/**", "shared-public/**"]
+    },
+    {
+      "id": "service-entry-public", "kind": "listener", "parent": "entry", "profile": "core", "autostart": true,
+      "label": { "zh-CN": "公网入口监听", "en-US": "Public listener" },
+      "description": { "zh-CN": "统一入口进程里的公网监听端口，是 Cloudflare 隧道或反向代理唯一应该指向的地址。", "en-US": "The public listening port inside the service entry process; the only address a Cloudflare tunnel or reverse proxy should target." },
+      "ports": [ { "name": "public", "port": "${config:listeners.public.port}", "bind": "${config:listeners.public.host}", "when": "${config:listeners.public.enabled}" } ],
+      "readiness": { "http": "http://127.0.0.1:${port:public}/healthz", "expectStatus": 200, "timeoutSec": 30 },
+      "liveness": { "http": "http://127.0.0.1:${port:public}/healthz", "intervalSec": 15, "failureThreshold": 4, "onFailure": "report" },
+      "stop": { "strategy": "never" },
+      "docs": "/docs/client-setup-guide.md#public"
+    },
+    {
+      "id": "vllm-manager", "legacyId": "vllm", "kind": "node", "profile": "core", "autostart": true, "after": ["entry", "docker"],
+      "label": { "zh-CN": "vLLM / SGLang 管理器", "en-US": "vLLM / SGLang manager" },
+      "description": { "zh-CN": "启动和管理 vLLM、SGLang 模型容器的管理器。停止管理器不会停止模型容器。", "en-US": "The manager that launches and supervises vLLM and SGLang model containers. Stopping it leaves the model containers running." },
+      "cwd": "vllm-manager", "command": "${NODE}", "args": ["server.js"],
+      "env": { "AI_ROOT": "${AI_ROOT}", "VLLM_MANAGER_ALLOW_REMOTE": "0" },
+      "ports": [ { "name": "api", "port": "${config:managers.vllm.port}", "bind": "${config:managers.vllm.host}" } ],
+      "readiness": { "http": "http://127.0.0.1:${port:api}/api/manager/health", "expectJson": { "ok": true }, "timeoutSec": 30 },
+      "liveness": { "http": "http://127.0.0.1:${port:api}/api/manager/health", "intervalSec": 10, "failureThreshold": 6, "onFailure": "report" },
+      "stop": { "strategy": "http-then-kill", "http": "http://127.0.0.1:${port:api}/api/manager/shutdown", "graceSec": 15 },
+      "busy": { "http": "http://127.0.0.1:${port:api}/api/jobs?fields=summary", "parser": "manager-jobs" },
+      "logDir": "logs/vllm-manager",
+      "paths": ["vllm-manager/**", "manager-core/**", "!manager-core/platform/**", "shared-public/**"]
+    },
+    {
+      "id": "llama-manager", "legacyId": "llama", "kind": "node", "profile": "core", "autostart": true, "after": ["entry", "docker"],
+      "label": { "zh-CN": "llama.cpp 管理器", "en-US": "llama.cpp manager" },
+      "description": { "zh-CN": "启动和管理 llama.cpp 模型容器的管理器。停止管理器不会停止模型容器。", "en-US": "The manager that launches and supervises llama.cpp model containers. Stopping it leaves the model containers running." },
+      "cwd": "llama-manager", "command": "${NODE}", "args": ["server.js"],
+      "env": { "AI_ROOT": "${AI_ROOT}", "LLAMA_MANAGER_ALLOW_REMOTE": "0" },
+      "ports": [ { "name": "api", "port": "${config:managers.llama.port}", "bind": "${config:managers.llama.host}" } ],
+      "readiness": { "http": "http://127.0.0.1:${port:api}/api/manager/health", "expectJson": { "ok": true }, "timeoutSec": 30 },
+      "liveness": { "http": "http://127.0.0.1:${port:api}/api/manager/health", "intervalSec": 10, "failureThreshold": 6, "onFailure": "report" },
+      "stop": { "strategy": "http-then-kill", "http": "http://127.0.0.1:${port:api}/api/manager/shutdown", "graceSec": 15 },
+      "busy": { "http": "http://127.0.0.1:${port:api}/api/jobs?fields=summary", "parser": "manager-jobs" },
+      "logDir": "logs/llama-manager",
+      "paths": ["llama-manager/**", "manager-core/**", "!manager-core/platform/**", "shared-public/**"]
+    },
+    {
+      "id": "platform-mcp", "legacyId": "mcp", "kind": "node", "profile": "full", "autostart": true, "after": ["entry", "vllm-manager", "llama-manager"],
+      "label": { "zh-CN": "MCP 服务", "en-US": "MCP server" },
+      "description": { "zh-CN": "给 AI 客户端使用的本机 MCP 服务，只监听本机回环地址，需要访问密钥。", "en-US": "The local MCP server for AI clients. It listens on loopback only and needs its access key." },
+      "cwd": "platform-mcp", "command": "${NODE}", "args": ["dist/src/index.js"], "hook": "platform-mcp",
+      "env": {
+        "AI_ROOT": "${AI_ROOT}",
+        "PLATFORM_MCP_HOST": "127.0.0.1",
+        "PLATFORM_MCP_SEARCH_GATEWAY_URL": "http://127.0.0.1:${config:search.port}",
+        "PLATFORM_MCP_AUDIT_LOG": "${AI_ROOT}/audit-logs/platform-mcp.jsonl",
+        "PLATFORM_MCP_ALLOWED_HOSTS": "127.0.0.1,localhost,::1,host.docker.internal"
+      },
+      "requires": { "files": ["platform-mcp/dist/src/index.js"], "doctor": ["env.mcp-dist"] },
+      "ports": [ { "name": "mcp", "port": "${config:platformMcp.port}", "bind": "127.0.0.1" } ],
+      "readiness": { "http": "http://127.0.0.1:${port:mcp}/health", "expectJson": { "ok": true, "service": "local-ai-platform-mcp" }, "timeoutSec": 20 },
+      "stop": { "strategy": "kill" },
+      "logDir": "logs/platform-mcp",
+      "paths": ["platform-mcp/**"],
+      "docs": "/docs/mcp-platform-guide.md"
+    },
+    {
+      "id": "tts-gateway", "legacyId": "tts", "kind": "process", "profile": "full", "autostart": true, "after": ["entry"],
+      "label": { "zh-CN": "语音网关", "en-US": "TTS gateway" },
+      "description": { "zh-CN": "语音合成网关。各语音引擎的工作进程按需单独启动。", "en-US": "The text-to-speech gateway. The engine workers start separately, on demand." },
+      "command": "${PWSH}", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/start_gateway.ps1"],
+      "requires": { "files": ["${TTS_RUNTIME_ROOT}/envs/gateway/Scripts/python.exe"], "optional": true },
+      "ports": [ { "name": "http", "port": "${config:tts.gatewayPort}", "bind": "127.0.0.1" } ],
+      "readiness": { "http": "http://127.0.0.1:${port:http}/health", "timeoutSec": 60 },
+      "stop": { "strategy": "script-then-kill", "script": ["${PWSH}", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/stop_gateway.ps1"], "graceSec": 10, "tree": true },
+      "extraLogs": ["${TTS_RUNTIME_ROOT}/state/gateway-stdout.log", "${TTS_RUNTIME_ROOT}/state/gateway-stderr.log"],
+      "logDir": "logs/tts-gateway",
+      "paths": ["tts-platform/gateway/**", "tts-platform/scripts/**"]
+    },
+    {
+      "id": "tts-workers", "kind": "group", "profile": "full", "autostart": false, "dependsOn": ["tts-gateway"],
+      "label": { "zh-CN": "语音工作进程", "en-US": "TTS workers" },
+      "description": { "zh-CN": "各语音引擎的工作进程，会加载较大的模型，只在需要时启动。", "en-US": "The speech engine workers. They load large models, so they start only on request." },
+      "members": [
+        { "name": "chatterbox", "command": "${PWSH}", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/start_chatterbox.ps1"],
+          "ports": [ { "name": "http", "port": 7011, "bind": "127.0.0.1" } ], "readiness": { "tcp": 7011, "timeoutSec": 300 } },
+        { "name": "qwen", "command": "${PWSH}", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/start_qwen.ps1"],
+          "ports": [ { "name": "http", "port": 7012, "bind": "127.0.0.1" } ], "readiness": { "tcp": 7012, "timeoutSec": 300 } },
+        { "name": "fish", "command": "${PWSH}", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/start_fish.ps1"],
+          "ports": [ { "name": "http", "port": 7013, "bind": "127.0.0.1" } ], "readiness": { "tcp": 7013, "timeoutSec": 300 } },
+        { "name": "step", "command": "${PWSH}", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/start_step_docker.ps1"],
+          "dependsOn": ["docker"], "requires": { "dockerImage": "step-audio-editx", "optional": true },
+          "ports": [ { "name": "http", "port": 7014, "bind": "127.0.0.1" } ], "readiness": { "tcp": 7014, "timeoutSec": 300 },
+          "stop": { "strategy": "compose", "container": "step-audio", "action": "stop" } },
+        { "name": "voxcpm", "autostart": false, "command": "${PWSH}", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/start_voxcpm.ps1"],
+          "ports": [ { "name": "http", "port": 7015, "bind": "127.0.0.1" } ], "readiness": { "tcp": 7015, "timeoutSec": 300 } },
+        { "name": "qwen-design", "autostart": false, "command": "${PWSH}", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/start_qwen_design.ps1"],
+          "ports": [ { "name": "http", "port": 7016, "bind": "127.0.0.1" } ], "readiness": { "tcp": 7016, "timeoutSec": 300 } }
+      ],
+      "stop": { "strategy": "script-then-kill", "script": ["${PWSH}", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tts-platform/scripts/stop_workers.ps1"], "graceSec": 10, "tree": true },
+      "logDir": "logs/tts-workers"
+    },
+    {
+      "id": "search-gateway", "legacyId": "search", "kind": "compose", "profile": "full", "autostart": true, "dependsOn": ["docker"], "after": ["entry"],
+      "label": { "zh-CN": "联网搜索网关", "en-US": "Web search gateway" },
+      "description": { "zh-CN": "在 Docker 里运行的联网搜索网关（含 SearXNG），通过本机模型回答带搜索的问题。", "en-US": "The web search gateway with SearXNG, running in Docker. It answers search-augmented chats through a local model." },
+      "compose": { "file": "search-gateway/docker-compose.yml", "project": "local-ai-search", "build": "if-changed" }, "hook": "search-gateway",
+      "ports": [ { "name": "http", "port": "${config:search.port}", "bind": "127.0.0.1" }, { "name": "searxng", "port": 8180, "bind": "127.0.0.1" } ],
+      "readiness": { "http": "http://127.0.0.1:${port:http}/health", "expectJson": { "service": "local-ai-search-gateway" }, "timeoutSec": 180 },
+      "restartPolicy": { "mode": "docker" },
+      "stop": { "strategy": "compose", "action": "down" },
+      "paths": ["search-gateway/**"]
+    },
+    {
+      "id": "legacy-claude-proxy", "kind": "external", "profile": "none", "deprecated": true, "detectOnly": true,
+      "label": { "zh-CN": "旧版 Claude 代理", "en-US": "Legacy Claude proxy" },
+      "description": { "zh-CN": "旧的 8001 端口 Claude 代理。它绕过网关鉴权，平台只检测、不启动也不停止它。", "en-US": "The old Claude proxy on port 8001. It bypasses gateway authentication; the platform only detects it and never starts or stops it." },
+      "ports": [ { "name": "http", "port": 8001, "bind": "127.0.0.1" } ],
+      "detect": { "commandLineIncludes": "claude-vllm-anthropic-proxy.py", "runValue": "ClaudeVllmProxy" },
+      "stop": { "strategy": "never" },
+      "docs": "/docs/troubleshooting.md#legacy-claude-proxy"
+    }
+  ]
+}

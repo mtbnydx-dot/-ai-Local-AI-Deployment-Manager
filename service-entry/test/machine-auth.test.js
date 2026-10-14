@@ -191,7 +191,6 @@ test("a bad, stale, misplaced or tampered signature is 401 and never falls back 
     ["unknown principal", { headers: { "x-ai-internal-principal": "system:root" } }, "internal_signature_invalid"],
     ["no signature", { headers: { "x-ai-internal-signature": "" } }, "internal_signature_invalid"],
     ["LAN socket", { peer: LAN }, "internal_signature_invalid"],
-    ["forwarding header", { headers: { "cf-ray": "8d2f0c1e3a" } }, "internal_signature_invalid"],
   ];
   for (const [label, options, code] of cases) {
     const response = await signed(port, "GET", "/api/hub/downloads?state=active", { principal, token, ...options });
@@ -206,6 +205,10 @@ test("a bad, stale, misplaced or tampered signature is 401 and never falls back 
   const proxied = await signed(port, "GET", "/api/hub/downloads", { principal, token, headers: { "x-forwarded-for": "203.0.113.9" } });
   assert.equal(proxied.status, 404);
   assert.equal(proxied.json.code, "public_proxy_gateway_only");
+  // cf-ray is in the shared forwarding list (05 §4), so it stops there too.
+  const ray = await signed(port, "GET", "/api/hub/downloads?state=active", { principal, token, headers: { "cf-ray": "8d2f0c1e3a" } });
+  assert.equal(ray.status, 404);
+  assert.equal(ray.json.code, "public_proxy_gateway_only");
   assert.deepEqual(spy.seen, []);
 });
 

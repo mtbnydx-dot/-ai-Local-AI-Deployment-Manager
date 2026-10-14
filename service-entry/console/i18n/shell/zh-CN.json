@@ -1,0 +1,10 @@
+{
+  "$locale": "zh-CN",
+  "$prefixes": ["shell.", "common.", "status.", "error.", "overview.", "deploy.", "playground.", "billing.", "voice.", "prefs.", "uikit.", "notify."],
+  "shell.boot.failed": "控制台未能加载。请刷新页面，或先使用经典控制台。",
+  "shell.boot.loading": "正在加载控制台…",
+  "shell.boot.noscript": "需要启用 JavaScript",
+  "shell.boot.openClassic": "打开经典控制台",
+  "shell.boot.preview": "新版控制台仍在建设中，日常操作请继续使用经典控制台。",
+  "shell.product": "本地 AI 平台"
+}

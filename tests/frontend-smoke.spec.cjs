@@ -652,7 +652,8 @@ async function smokeEntryPage(page, baseUrl) {
       body: JSON.stringify(buildFleetSmokeSnapshot(responseSettings)),
     });
   });
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  // The classic console lives at /classic since 07 CON-2; / stays classic by default.
+  await page.goto(`${baseUrl}classic`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("h1")).toContainText("本地模型服务统一入口");
   await expect(page.locator("#entrySummary")).toBeVisible();
   await expect(page.locator("#fleet")).toBeHidden();
@@ -768,7 +769,7 @@ async function smokeBillingPage(page) {
       return window.__billingConfirmResult;
     };
   });
-  await page.route("http://ai-box.lan:5176/billing**", async (route) => {
+  await page.route("http://ai-box.lan:5176/billing/classic**", async (route) => {
     await route.fulfill({
       contentType: "text/html; charset=utf-8",
       body: await fs.readFile(path.join(ROOT, "service-entry", "billing.html"), "utf8"),
@@ -802,7 +803,7 @@ async function smokeBillingPage(page) {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(payloads[name] || { items: [], total: 0 }) });
   });
 
-  await page.goto("http://ai-box.lan:5176/billing?manager=llama", { waitUntil: "domcontentloaded" });
+  await page.goto("http://ai-box.lan:5176/billing/classic?manager=llama", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-manager-view="service"]')).toHaveAttribute("href", "http://ai-box.lan:5178/#service");
   await expect(page.locator("#billingManagerReturn")).toHaveAttribute("href", "http://ai-box.lan:5178/#service");
   await expect(page.locator(".app-signature")).toContainText("本地模型服务平台 · 2026");
@@ -825,6 +826,68 @@ async function smokeBillingPage(page) {
   await form.locator('button[type="submit"]').click();
   await expect.poll(() => adjustmentWrites).toBe(1);
   expect(failures, "billing frontend errors").toEqual([]);
+}
+
+// 07 §2.3: the shell's policy. The smoke loads the new console under it and
+// fails on any violation the browser reports.
+const CONSOLE_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'none'";
+
+async function smokeConsoleShell(page, baseUrl) {
+  const failures = [];
+  page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error" || /Content Security Policy/i.test(message.text())) failures.push(`console: ${message.text()}`);
+  });
+  page.on("response", (response) => {
+    const type = response.request().resourceType();
+    if (["document", "script", "stylesheet", "fetch", "xhr"].includes(type) && response.status() >= 400) {
+      failures.push(`${type} ${response.status()}: ${response.url()}`);
+    }
+  });
+  await page.addInitScript(() => {
+    window.__cspViolations = [];
+    document.addEventListener("securitypolicyviolation", (event) => {
+      window.__cspViolations.push(`${event.violatedDirective} ${event.blockedURI}`);
+    });
+  });
+
+  // / stays the classic console by default (07 C10).
+  const root = await page.request.get(baseUrl);
+  expect(await root.text()).toContain("本地模型服务统一入口");
+  expect(root.headers()["content-security-policy"]).toBeUndefined();
+
+  for (const pathname of ["?ui=new", "overview", "deployments/vllm:primary"]) {
+    const response = await page.goto(`${baseUrl}${pathname}`, { waitUntil: "domcontentloaded" });
+    expect(response.status(), pathname).toBe(200);
+    expect(response.headers()["content-security-policy"], pathname).toBe(CONSOLE_CSP);
+    await expect(page.locator("#app")).not.toHaveAttribute("aria-busy", /.+/);
+    await expect(page.locator("#app h1")).toHaveText("本地 AI 平台");
+    await expect(page).toHaveTitle("本地 AI 平台");
+    await expect(page.locator('#app a[href="/classic"]')).toHaveText("打开经典控制台");
+    expect(await page.evaluate(() => window.__cspViolations), `${pathname} CSP violations`).toEqual([]);
+  }
+
+  const buildId = await page.locator('meta[name="console-build"]').getAttribute("content");
+  expect(buildId).toMatch(/^[0-9a-f]{12}$/);
+  const asset = await page.request.get(`${baseUrl}c/${buildId}/app.js`);
+  expect(asset.status()).toBe(200);
+  expect(asset.headers()["cache-control"]).toBe("public, max-age=31536000, immutable");
+  const stale = await page.request.get(`${baseUrl}c/000000000000/app.js`);
+  expect(stale.status()).toBe(410);
+  expect((await stale.json()).error.code).toBe("console_stale");
+
+  // The preferences cookie picks the server-injected language and theme.
+  await page.context().addCookies([{ name: "console_prefs", value: "locale:en-US|theme:dark", url: baseUrl }]);
+  await page.goto(`${baseUrl}overview`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("#app h1")).toHaveText("Local AI Platform");
+  await expect(page.locator('#app a[href="/classic"]')).toHaveText("Open the classic console");
+  expect(await page.evaluate(() => window.__cspViolations), "English shell CSP violations").toEqual([]);
+
+  const classic = await page.request.get(`${baseUrl}classic`);
+  expect(await classic.text()).toBe(await root.text());
+  expect(failures, "console shell frontend errors").toEqual([]);
 }
 
 test.describe("manager frontends", () => {
@@ -884,6 +947,34 @@ test.describe("manager frontends", () => {
     const context = await browser.newContext();
     try {
       await smokeEntryPage(await context.newPage(), managers[0].url);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("the new console shell boots under its CSP", async ({ browser }) => {
+    const entryPort = await getFreePort();
+    // Nothing listens on the upstream ports: the shell needs no other service.
+    const upstreams = {};
+    for (const name of ["VLLM_MANAGER_PORT", "LLAMA_MANAGER_PORT", "TTS_GATEWAY_PORT", "SEARCH_GATEWAY_PORT", "PLATFORM_MCP_PORT"]) {
+      upstreams[name] = String(await getFreePort());
+    }
+    managers = [
+      await startManager({
+        cwd: path.join(ROOT, "service-entry"),
+        port: entryPort,
+        env: {
+          ...upstreams,
+          SERVICE_ENTRY_HOST: "127.0.0.1",
+          SERVICE_ENTRY_PORT: String(entryPort),
+        },
+      }),
+    ];
+
+    // Without a preference cookie the browser language picks the shell language.
+    const context = await browser.newContext({ locale: "zh-CN" });
+    try {
+      await smokeConsoleShell(await context.newPage(), managers[0].url);
     } finally {
       await context.close();
     }
