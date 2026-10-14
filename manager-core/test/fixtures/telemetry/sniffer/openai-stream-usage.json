@@ -1,0 +1,46 @@
+{
+  "description": "vLLM-style chat stream: a role-only first chunk, reasoning, content, finish_reason and a final usage chunk with cached and reasoning token details.",
+  "options": {
+    "protocol": "openai",
+    "stream": true,
+    "contentType": "text/event-stream; charset=utf-8",
+    "estimatedInputTokens": 900
+  },
+  "chunks": [
+    {
+      "tMs": 1000,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}],\"usage\":null}\n\n"
+    },
+    {
+      "tMs": 1350,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Thinking about the request.\"},\"finish_reason\":null}],\"usage\":null}\n\n"
+    },
+    {
+      "tMs": 1400,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer\"},\"finish_reason\":null}],\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" is 42.\"},\"finish_reason\":null}],\"usage\":null}\n\n"
+    },
+    {
+      "tMs": 1500,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\n"
+    },
+    {
+      "tMs": 1510,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":57,\"total_tokens\":1257,\"prompt_tokens_details\":{\"cached_tokens\":1024},\"completion_tokens_details\":{\"reasoning_tokens\":21}}}\n\ndata: [DONE]\n\n"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "reported",
+      "promptTokens": 1200,
+      "cachedTokens": 1024,
+      "outputTokens": 57,
+      "reasoningTokens": 21,
+      "totalTokens": 1257
+    },
+    "finishReason": "stop",
+    "firstTokenAt": 1350,
+    "engineTimings": null,
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}

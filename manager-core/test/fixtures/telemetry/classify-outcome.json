@@ -1,0 +1,90 @@
+{
+  "description": "Golden rows for 04 §5.4 (terminal state and error taxonomy). Each case names the spec row it covers; the first matching row wins.",
+  "cases": [
+    { "row": "completed", "input": { "phase": "stream", "status": 200 }, "expected": { "terminalState": "completed", "errorClass": "none", "errorCode": null } },
+    { "row": "completed", "input": { "phase": "upstream", "status": 204 }, "expected": { "terminalState": "completed", "errorClass": "none", "errorCode": null } },
+    { "row": "completed", "input": { "phase": "upstream", "status": 302 }, "expected": { "terminalState": "completed", "errorClass": "none", "errorCode": null } },
+
+    { "row": "client_abort", "input": { "phase": "stream", "status": 200, "aborted": true }, "expected": { "terminalState": "client_abort", "errorClass": "client_abort", "errorCode": "client_abort" } },
+    { "row": "client_abort", "input": { "phase": "upstream", "status": 499, "aborted": true }, "expected": { "terminalState": "client_abort", "errorClass": "client_abort", "errorCode": "client_abort" } },
+    { "row": "client_abort", "input": { "phase": "upstream", "status": 499 }, "expected": { "terminalState": "client_abort", "errorClass": "client_abort", "errorCode": "client_abort" } },
+    { "row": "client_abort", "input": { "phase": "stream", "status": 200, "aborted": true, "streamError": true }, "expected": { "terminalState": "client_abort", "errorClass": "client_abort", "errorCode": "client_abort" } },
+
+    { "row": "timeout", "input": { "phase": "stream", "status": 200, "aborted": true, "timedOut": true }, "expected": { "terminalState": "timeout", "errorClass": "upstream_timeout", "errorCode": "upstream_timeout" } },
+    { "row": "timeout", "input": { "phase": "upstream", "status": 504, "code": "gateway_proxy_error" }, "expected": { "terminalState": "timeout", "errorClass": "upstream_timeout", "errorCode": "gateway_proxy_error" } },
+    { "row": "timeout", "input": { "phase": "upstream", "status": 500, "code": "request_timeout" }, "expected": { "terminalState": "timeout", "errorClass": "upstream_timeout", "errorCode": "request_timeout" } },
+    { "row": "timeout", "input": { "phase": "upstream", "status": 502, "code": "timed_out" }, "expected": { "terminalState": "timeout", "errorClass": "upstream_timeout", "errorCode": "timed_out" } },
+    { "row": "timeout", "input": { "phase": "upstream", "status": 0, "timedOut": true }, "expected": { "terminalState": "timeout", "errorClass": "upstream_timeout", "errorCode": "upstream_timeout" } },
+
+    { "row": "auth_failed", "input": { "phase": "pre_upstream", "status": 401, "code": "unauthorized" }, "expected": { "terminalState": "rejected", "errorClass": "auth_failed", "errorCode": "unauthorized" } },
+    { "row": "auth_failed", "input": { "phase": "upstream", "status": 401, "code": "invalid_api_key" }, "expected": { "terminalState": "rejected", "errorClass": "auth_failed", "errorCode": "invalid_api_key" } },
+    { "row": "auth_failed", "input": { "phase": "pre_upstream", "status": 401 }, "expected": { "terminalState": "rejected", "errorClass": "auth_failed", "errorCode": "auth_failed" } },
+    { "row": "auth_failed", "input": { "phase": "upstream", "status": 403, "code": "invalid_api_key" }, "expected": { "terminalState": "rejected", "errorClass": "auth_failed", "errorCode": "invalid_api_key" } },
+
+    { "row": "auth_banned", "input": { "phase": "pre_upstream", "status": 429, "code": "auth_banned" }, "expected": { "terminalState": "rejected", "errorClass": "auth_banned", "errorCode": "auth_banned" } },
+
+    { "row": "forbidden", "input": { "phase": "pre_upstream", "status": 403, "code": "manager_forbidden" }, "expected": { "terminalState": "rejected", "errorClass": "forbidden", "errorCode": "manager_forbidden" } },
+    { "row": "forbidden", "input": { "phase": "pre_upstream", "status": 403, "code": "model_forbidden" }, "expected": { "terminalState": "rejected", "errorClass": "forbidden", "errorCode": "model_forbidden" } },
+    { "row": "forbidden", "input": { "phase": "pre_upstream", "status": 403, "code": "origin_not_allowed" }, "expected": { "terminalState": "rejected", "errorClass": "forbidden", "errorCode": "origin_not_allowed" } },
+    { "row": "forbidden", "input": { "phase": "pre_upstream", "status": 403, "code": "local_only" }, "expected": { "terminalState": "rejected", "errorClass": "forbidden", "errorCode": "local_only" } },
+    { "row": "forbidden", "input": { "phase": "pre_upstream", "status": 403, "code": "scope_forbidden" }, "expected": { "terminalState": "rejected", "errorClass": "forbidden", "errorCode": "scope_forbidden" } },
+    { "row": "forbidden", "input": { "phase": "pre_upstream", "status": 403, "code": "tts_model_management_local_only" }, "expected": { "terminalState": "rejected", "errorClass": "forbidden", "errorCode": "tts_model_management_local_only" } },
+
+    { "row": "rate_limited", "input": { "phase": "pre_upstream", "status": 429, "code": "rate_limit_exceeded" }, "expected": { "terminalState": "rejected", "errorClass": "rate_limited", "errorCode": "rate_limit_exceeded" } },
+    { "row": "rate_limited", "input": { "phase": "pre_upstream", "status": 429, "code": "concurrency_queue_timeout" }, "expected": { "terminalState": "rejected", "errorClass": "rate_limited", "errorCode": "concurrency_queue_timeout" } },
+    { "row": "rate_limited", "input": { "phase": "pre_upstream", "status": 429, "code": "concurrency_queue_full" }, "expected": { "terminalState": "rejected", "errorClass": "rate_limited", "errorCode": "concurrency_queue_full" } },
+    { "row": "rate_limited", "input": { "phase": "pre_upstream", "status": 429, "code": "tpm_limit_exceeded" }, "expected": { "terminalState": "rejected", "errorClass": "rate_limited", "errorCode": "tpm_limit_exceeded" } },
+
+    { "row": "quota_denied", "input": { "phase": "pre_upstream", "status": 429, "code": "billing_quota_exhausted" }, "expected": { "terminalState": "rejected", "errorClass": "quota_denied", "errorCode": "billing_quota_exhausted" } },
+    { "row": "quota_denied", "input": { "phase": "pre_upstream", "status": 402, "code": "billing_insufficient_balance" }, "expected": { "terminalState": "rejected", "errorClass": "quota_denied", "errorCode": "billing_insufficient_balance" } },
+    { "row": "quota_denied", "input": { "phase": "upstream", "status": 429, "code": "insufficient_quota" }, "expected": { "terminalState": "rejected", "errorClass": "quota_denied", "errorCode": "insufficient_quota" } },
+    { "row": "quota_denied", "input": { "phase": "pre_upstream", "status": 429, "code": "billing_tts_daily_limit" }, "expected": { "terminalState": "rejected", "errorClass": "quota_denied", "errorCode": "billing_tts_daily_limit" } },
+    { "row": "quota_denied", "input": { "phase": "pre_upstream", "status": 429, "code": "billing_period_credit_limit" }, "expected": { "terminalState": "rejected", "errorClass": "quota_denied", "errorCode": "billing_period_credit_limit" } },
+    { "row": "quota_denied", "input": { "phase": "pre_upstream", "status": 402 }, "expected": { "terminalState": "rejected", "errorClass": "quota_denied", "errorCode": "quota_denied" } },
+
+    { "row": "billing_unavailable", "input": { "phase": "pre_upstream", "status": 503, "code": "billing_unavailable" }, "expected": { "terminalState": "rejected", "errorClass": "billing_unavailable", "errorCode": "billing_unavailable" } },
+
+    { "row": "no_runtime", "input": { "phase": "pre_upstream", "status": 503, "code": "manager_offline" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "manager_offline" } },
+    { "row": "no_runtime", "input": { "phase": "pre_upstream", "status": 503, "code": "tts_gateway_offline" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "tts_gateway_offline" } },
+    { "row": "no_runtime", "input": { "phase": "pre_upstream", "status": 503, "code": "no_matching_model" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "no_matching_model" } },
+    { "row": "no_runtime", "input": { "phase": "upstream", "status": 503, "code": "model_not_loaded" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "model_not_loaded" } },
+    { "row": "no_runtime", "input": { "phase": "pre_upstream", "status": 503, "code": "fleet_settings_unavailable" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "fleet_settings_unavailable" } },
+    { "row": "no_runtime (fleet selection)", "input": { "phase": "pre_upstream", "status": 404, "code": "model_not_available" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "model_not_available" } },
+    { "row": "no_runtime (fleet selection)", "input": { "phase": "pre_upstream", "status": 503, "code": "capability_not_available" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "capability_not_available" } },
+    { "row": "no_runtime (manager port down today)", "input": { "phase": "pre_upstream", "status": 503, "code": "service_unavailable" }, "expected": { "terminalState": "rejected", "errorClass": "no_runtime", "errorCode": "service_unavailable" } },
+
+    { "row": "config_error", "input": { "phase": "pre_upstream", "status": 503, "code": "api_key_not_configured" }, "expected": { "terminalState": "rejected", "errorClass": "config_error", "errorCode": "api_key_not_configured" } },
+    { "row": "config_error", "input": { "phase": "pre_upstream", "status": 503, "code": "key_store_unreadable" }, "expected": { "terminalState": "rejected", "errorClass": "config_error", "errorCode": "key_store_unreadable" } },
+
+    { "row": "context_overflow", "input": { "phase": "upstream", "status": 400, "code": "invalid_request_error", "upstreamErrorText": "This model's maximum context length is 32768 tokens. However, you requested 40000 tokens." }, "expected": { "terminalState": "failed", "errorClass": "context_overflow", "errorCode": "invalid_request_error" } },
+    { "row": "context_overflow", "input": { "phase": "upstream", "status": 400, "upstreamErrorText": "The input (40000 tokens) is longer than the model's context length (32768 tokens)." }, "expected": { "terminalState": "failed", "errorClass": "context_overflow", "errorCode": "context_overflow" } },
+    { "row": "context_overflow", "input": { "phase": "upstream", "status": 400, "upstreamErrorText": "the request exceeds the available context size, try increasing it" }, "expected": { "terminalState": "failed", "errorClass": "context_overflow", "errorCode": "context_overflow" } },
+    { "row": "context_overflow", "input": { "phase": "upstream", "status": 400, "upstreamErrorText": "prompt is too long: 210000 tokens > 200000 maximum" }, "expected": { "terminalState": "failed", "errorClass": "context_overflow", "errorCode": "context_overflow" } },
+    { "row": "context_overflow", "input": { "phase": "upstream", "status": 400, "upstreamErrorText": "Too many tokens in the request" }, "expected": { "terminalState": "failed", "errorClass": "context_overflow", "errorCode": "context_overflow" } },
+    { "row": "context_overflow", "input": { "phase": "upstream", "status": 400, "code": "context_length_exceeded" }, "expected": { "terminalState": "failed", "errorClass": "context_overflow", "errorCode": "context_length_exceeded" } },
+
+    { "row": "bad_request (pre_upstream)", "input": { "phase": "pre_upstream", "status": 400, "code": "invalid_request" }, "expected": { "terminalState": "rejected", "errorClass": "bad_request", "errorCode": "invalid_request" } },
+    { "row": "bad_request (pre_upstream)", "input": { "phase": "pre_upstream", "status": 404, "code": "not_found" }, "expected": { "terminalState": "rejected", "errorClass": "bad_request", "errorCode": "not_found" } },
+    { "row": "bad_request (pre_upstream)", "input": { "phase": "pre_upstream", "status": 405 }, "expected": { "terminalState": "rejected", "errorClass": "bad_request", "errorCode": "bad_request" } },
+    { "row": "bad_request (pre_upstream)", "input": { "phase": "pre_upstream", "status": 413, "code": "request_body_too_large" }, "expected": { "terminalState": "rejected", "errorClass": "bad_request", "errorCode": "request_body_too_large" } },
+    { "row": "bad_request (pre_upstream)", "input": { "phase": "pre_upstream", "status": 415, "code": "unsupported_media_type" }, "expected": { "terminalState": "rejected", "errorClass": "bad_request", "errorCode": "unsupported_media_type" } },
+    { "row": "bad_request (upstream)", "input": { "phase": "upstream", "status": 422, "code": "BadRequestError", "upstreamErrorText": "temperature must be non-negative" }, "expected": { "terminalState": "failed", "errorClass": "bad_request", "errorCode": "bad_request" } },
+    { "row": "bad_request (upstream)", "input": { "phase": "upstream", "status": 400, "code": 400, "upstreamErrorText": "messages must not be empty" }, "expected": { "terminalState": "failed", "errorClass": "bad_request", "errorCode": "bad_request" } },
+    { "row": "bad_request (upstream)", "input": { "phase": "upstream", "status": 404 }, "expected": { "terminalState": "failed", "errorClass": "bad_request", "errorCode": "bad_request" } },
+
+    { "row": "upstream_unreachable", "input": { "phase": "upstream", "status": 502, "code": "gateway_proxy_error" }, "expected": { "terminalState": "failed", "errorClass": "upstream_unreachable", "errorCode": "gateway_proxy_error" } },
+    { "row": "upstream_unreachable", "input": { "phase": "upstream", "status": 502, "code": "ECONNREFUSED" }, "expected": { "terminalState": "failed", "errorClass": "upstream_unreachable", "errorCode": "upstream_unreachable" } },
+    { "row": "upstream_unreachable", "input": { "phase": "upstream", "status": 0, "code": "fetch_failed" }, "expected": { "terminalState": "failed", "errorClass": "upstream_unreachable", "errorCode": "fetch_failed" } },
+
+    { "row": "upstream_5xx", "input": { "phase": "upstream", "status": 500 }, "expected": { "terminalState": "failed", "errorClass": "upstream_5xx", "errorCode": "upstream_5xx" } },
+    { "row": "upstream_5xx", "input": { "phase": "upstream", "status": 503, "code": "overloaded_error" }, "expected": { "terminalState": "failed", "errorClass": "upstream_5xx", "errorCode": "overloaded_error" } },
+    { "row": "upstream_5xx", "input": { "phase": "upstream", "status": 502, "code": "InternalServerError" }, "expected": { "terminalState": "failed", "errorClass": "upstream_5xx", "errorCode": "upstream_5xx" } },
+
+    { "row": "stream_error", "input": { "phase": "stream", "status": 200, "streamError": true }, "expected": { "terminalState": "failed", "errorClass": "stream_error", "errorCode": "stream_error" } },
+    { "row": "stream_error", "input": { "phase": "stream", "status": 200, "streamError": true, "code": "econnreset" }, "expected": { "terminalState": "failed", "errorClass": "stream_error", "errorCode": "econnreset" } },
+
+    { "row": "internal", "input": { "phase": "pre_upstream", "status": 500, "code": "gateway_error" }, "expected": { "terminalState": "failed", "errorClass": "internal", "errorCode": "gateway_error" } },
+    { "row": "internal", "input": { "phase": "pre_upstream", "status": 500 }, "expected": { "terminalState": "failed", "errorClass": "internal", "errorCode": "internal" } },
+    { "row": "internal", "input": {}, "expected": { "terminalState": "failed", "errorClass": "internal", "errorCode": "internal" } }
+  ]
+}

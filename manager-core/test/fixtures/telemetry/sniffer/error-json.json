@@ -1,0 +1,34 @@
+{
+  "description": "A 400 upstream body that reports a context overflow: code and type are kept, usage is missing, and the message is only exposed as the non-enumerable classification text.",
+  "options": {
+    "protocol": "openai",
+    "stream": true,
+    "contentType": "application/json",
+    "status": 400
+  },
+  "chunks": [
+    {
+      "tMs": 15,
+      "text": "{\"error\":{\"message\":\"This model's maximum context length is 32768 tokens. However, your messages resulted in 40960 tokens.\",\"type\":\"invalid_request_error\",\"param\":\"messages\",\"code\":\"context_length_exceeded\"}}"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "missing",
+      "promptTokens": null,
+      "cachedTokens": null,
+      "outputTokens": null,
+      "reasoningTokens": null,
+      "totalTokens": null
+    },
+    "finishReason": null,
+    "firstTokenAt": null,
+    "engineTimings": null,
+    "upstreamError": {
+      "code": "context_length_exceeded",
+      "type": "invalid_request_error"
+    },
+    "skippedEvents": 0
+  },
+  "expectedErrorText": "This model's maximum context length is 32768 tokens. However, your messages resulted in 40960 tokens."
+}

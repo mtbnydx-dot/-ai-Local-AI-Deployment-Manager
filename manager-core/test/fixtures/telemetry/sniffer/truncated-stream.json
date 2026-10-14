@@ -1,0 +1,38 @@
+{
+  "description": "The connection drops in the middle of the final usage event: the half event is not parsed, so usage is estimated from the content that arrived.",
+  "options": {
+    "protocol": "openai",
+    "stream": true,
+    "contentType": "text/event-stream",
+    "estimatedInputTokens": 70
+  },
+  "chunks": [
+    {
+      "tMs": 20,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 60,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Partial output before the drop\"},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 75,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "estimated",
+      "promptTokens": 70,
+      "cachedTokens": null,
+      "outputTokens": 7,
+      "reasoningTokens": null,
+      "totalTokens": 77
+    },
+    "finishReason": null,
+    "firstTokenAt": 60,
+    "engineTimings": null,
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}

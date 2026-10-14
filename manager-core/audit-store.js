@@ -7,18 +7,23 @@ const { ensureDirs, hashFilesInDir, readJsonFileTolerant, writeJsonFile } = requ
 const { timingSafeEqualText } = require("./secrets");
 const { safeOutputName } = require("./settings-stores");
 const { OPENWEBUI_AUDIT_EXPORTER } = require("./openwebui-audit-exporter");
+const { AUDIT_RETENTION_DEFAULTS, planAuditRetention } = require("./telemetry/audit-chain");
 
 const DEFAULT_AUDIT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-const DEFAULT_AUDIT_MAX_EXPORTS = 30;
-const DEFAULT_AUDIT_MAX_AGE_DAYS = 90;
-const DEFAULT_AUDIT_REBASELINE_DAYS = 7;
+const DEFAULT_AUDIT_MAX_EXPORTS = AUDIT_RETENTION_DEFAULTS.maxExports;
+const DEFAULT_AUDIT_MAX_AGE_DAYS = AUDIT_RETENTION_DEFAULTS.maxAgeDays;
+const DEFAULT_AUDIT_REBASELINE_DAYS = AUDIT_RETENTION_DEFAULTS.rebaselineDays;
+const DEFAULT_AUDIT_MAX_CHAINS = AUDIT_RETENTION_DEFAULTS.maxChains;
 const AUDIT_CURSOR_FILE = ".audit-cursor.json";
-const DAY_MS = 24 * 60 * 60 * 1000;
+const AUDIT_EXPORT_LOCK_FILE = ".audit-export.lock";
+const AUDIT_EXPORT_LOCK_STALE_MS = 30 * 60 * 1000;
+const EXPORT_IN_PROGRESS_MESSAGE = "另一个审计导出正在进行，本次已跳过。 / Another audit export is in progress; this run was skipped.";
 
 function auditRetentionSettings(options = {}) {
   const maxExports = Number(options.auditMaxExports ?? process.env.AI_AUDIT_MAX_EXPORTS ?? DEFAULT_AUDIT_MAX_EXPORTS);
   const maxAgeDays = Number(options.auditMaxAgeDays ?? process.env.AI_AUDIT_MAX_AGE_DAYS ?? DEFAULT_AUDIT_MAX_AGE_DAYS);
   const rebaselineDays = Number(options.auditRebaselineDays ?? process.env.AI_AUDIT_REBASELINE_DAYS ?? DEFAULT_AUDIT_REBASELINE_DAYS);
+  const maxChains = Number(options.auditMaxChains ?? DEFAULT_AUDIT_MAX_CHAINS);
   return {
     // 0 disables the respective limit.
     maxExports: Number.isFinite(maxExports) && maxExports >= 0 ? Math.floor(maxExports) : DEFAULT_AUDIT_MAX_EXPORTS,
@@ -26,7 +31,22 @@ function auditRetentionSettings(options = {}) {
     // An automatic export becomes a full one once the newest full export is
     // older than this; 0 disables rebaselining.
     rebaselineDays: Number.isFinite(rebaselineDays) && rebaselineDays >= 0 ? rebaselineDays : DEFAULT_AUDIT_REBASELINE_DAYS,
+    // Whole export chains kept (audit.retention.maxChains); it has no
+    // environment variable.
+    maxChains: Number.isFinite(maxChains) && maxChains >= 0 ? Math.floor(maxChains) : DEFAULT_AUDIT_MAX_CHAINS,
   };
+}
+
+// process.kill(pid, 0) only probes; EPERM means the process exists but
+// belongs to someone else.
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
 }
 
 function createAuditStore(options = {}) {
@@ -38,6 +58,11 @@ function createAuditStore(options = {}) {
   let passwordCache = null;
 
   const cursorFile = path.join(auditRoot, AUDIT_CURSOR_FILE);
+  const lockFile = path.join(auditRoot, AUDIT_EXPORT_LOCK_FILE);
+  const lockOwner = options.managerName || "local-manager";
+  const processAlive = typeof options.isProcessAlive === "function" ? options.isProcessAlive : isProcessAlive;
+  const onLog = typeof options.onLog === "function" ? options.onLog : (message) => console.log(message);
+  const nowMs = () => (typeof options.now === "function" ? options.now() : Date.now());
 
   async function readAuditCursor() {
     const value = await readJsonFileTolerant(cursorFile, {});
@@ -46,6 +71,96 @@ function createAuditStore(options = {}) {
 
   async function writeAuditCursor(value) {
     await writeJsonFile(cursorFile, value);
+  }
+
+  // One exporter at a time per audit root (docs/overhaul/04 §16.1). Both
+  // managers share the root and its cursor, so the lock is a file next to
+  // them, created with wx and holding {pid, at, owner}. Exports and pruning
+  // take it; a held lock means the caller skips with export_in_progress. A
+  // lock older than 30 minutes, or one whose process has exited, is broken
+  // and logged. Returns null while someone else holds it.
+  async function acquireExportLock() {
+    const text = `${JSON.stringify({ pid: process.pid, at: new Date(nowMs()).toISOString(), owner: lockOwner })}\n`;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await fsp.writeFile(lockFile, text, { encoding: "utf8", flag: "wx" });
+        return { release: () => releaseExportLock(text) };
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+      }
+      const held = await inspectExportLock();
+      if (held.gone) continue;
+      if (!held.stale || !(await breakExportLock(held))) return null;
+    }
+    return null;
+  }
+
+  async function inspectExportLock() {
+    const [raw, stat] = await Promise.all([
+      fsp.readFile(lockFile, "utf8").catch(() => null),
+      fsp.stat(lockFile).catch(() => null),
+    ]);
+    if (raw === null && !stat) return { gone: true };
+    const parsed = parseJsonSafe(raw, null);
+    const info = parsed && typeof parsed === "object" ? parsed : {};
+    const pid = Number(info.pid);
+    const atMs = Date.parse(info.at || "");
+    // A lock caught between its creation and its first write has no content
+    // yet; its file time stands in for "at".
+    const sinceMs = Number.isFinite(atMs) ? atMs : Number(stat?.mtimeMs);
+    const ageMs = nowMs() - sinceMs;
+    let stale = "";
+    if (Number.isInteger(pid) && pid > 0 && !processAlive(pid)) stale = "owner process has exited";
+    else if (Number.isFinite(ageMs) && Math.abs(ageMs) > AUDIT_EXPORT_LOCK_STALE_MS) stale = "older than 30 minutes";
+    return { raw, pid: Number.isInteger(pid) ? pid : null, owner: String(info.owner || ""), at: String(info.at || ""), stale };
+  }
+
+  // The stale lock is first moved aside, which is atomic, and only counts as
+  // broken when the moved file is still the one that was judged stale. When
+  // another process broke it first and already holds a fresh lock, that lock
+  // is put back (link never overwrites) and this caller treats it as held.
+  async function breakExportLock(held) {
+    const aside = `${lockFile}.${process.pid}-${crypto.randomBytes(4).toString("hex")}.stale`;
+    try {
+      await fsp.rename(lockFile, aside);
+    } catch (error) {
+      return error.code === "ENOENT";
+    }
+    const moved = await fsp.readFile(aside, "utf8").catch(() => null);
+    if (moved !== held.raw) {
+      // Without hard links (FAT, exFAT) a plain rename is the best effort.
+      await fsp.link(aside, lockFile).catch((error) => (error.code === "EEXIST" ? null : fsp.rename(aside, lockFile).catch(() => {})));
+      await fsp.rm(aside, { force: true }).catch(() => {});
+      return false;
+    }
+    await fsp.rm(aside, { force: true }).catch(() => {});
+    onLog(`audit-export: broke a stale export lock (${held.stale}; pid ${held.pid ?? "unknown"}, owner ${held.owner || "unknown"}, taken ${held.at || "unknown"})`);
+    return true;
+  }
+
+  async function releaseExportLock(text) {
+    // A lock that was broken and taken again meanwhile is not ours to remove.
+    const current = await fsp.readFile(lockFile, "utf8").catch(() => null);
+    if (current !== text) return;
+    // A scanner briefly holding the fresh file must not leave the lock
+    // behind for 30 minutes, so a busy file is retried.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await fsp.unlink(lockFile);
+        return;
+      } catch (error) {
+        if (error.code === "ENOENT") return;
+        if (attempt >= 5 || !["EBUSY", "EPERM", "EACCES"].includes(error.code)) {
+          onLog(`audit-export: could not release the export lock: ${error.code || error.message}`);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+      }
+    }
+  }
+
+  function exportInProgress() {
+    return { ok: false, skipped: true, reason: "export_in_progress", message: EXPORT_IN_PROGRESS_MESSAGE };
   }
 
   async function verifyAuditPassword(candidate) {
@@ -194,7 +309,6 @@ function createAuditStore(options = {}) {
   async function exportOpenWebuiAudit(reason = "manual", context = {}) {
     await ensureDirs(auditRoot);
     const openWebuiContainer = options.openWebuiContainer;
-    const serviceContainer = options.serviceContainer;
     const container = await options.getContainerStatus(openWebuiContainer);
     if (!container.exists) {
       return {
@@ -205,17 +319,28 @@ function createAuditStore(options = {}) {
       };
     }
 
+    const lock = await acquireExportLock();
+    if (!lock) return exportInProgress();
+    try {
+      return await writeOpenWebuiAudit(reason, context);
+    } finally {
+      await lock.release();
+    }
+  }
+
+  // Runs with the export lock held.
+  async function writeOpenWebuiAudit(reason, context) {
+    const openWebuiContainer = options.openWebuiContainer;
+    const serviceContainer = options.serviceContainer;
     const cursor = await readAuditCursor();
     let full = context.full === true || (context.full === undefined && reason === "manual");
     // Incrementals are only useful on top of a full export, so an automatic
-    // run rebaselines once the newest full is missing or too old.
+    // run rebaselines once the newest full is missing or too old. The rule is
+    // the retention planner's, so there is exactly one.
     let rebaseline = false;
-    const { rebaselineDays } = auditRetentionSettings(options);
-    if (!full && context.full === undefined && rebaselineDays > 0) {
-      const newestFull = (await listAuditExports()).find((item) => item.mode === "full");
-      const createdMs = Date.parse(newestFull?.createdAt || "");
-      const now = typeof options.now === "function" ? options.now() : Date.now();
-      if (!newestFull || !Number.isFinite(createdMs) || now - createdMs > rebaselineDays * DAY_MS) {
+    const settings = auditRetentionSettings(options);
+    if (!full && context.full === undefined && settings.rebaselineDays > 0) {
+      if (planAuditRetention(await listAuditExports(), settings, nowMs()).needsRebaseline) {
         full = true;
         rebaseline = true;
       }
@@ -255,7 +380,7 @@ function createAuditStore(options = {}) {
         maxUpdatedAt: summary.max_updated_at ?? cursor.maxUpdatedAt ?? null,
         lastHeartbeatAt,
       }).catch(() => {});
-      const pruned = await pruneAuditExports().catch(() => ({ removed: [] }));
+      const pruned = await pruneExportsLocked().catch(() => ({ removed: [] }));
       return {
         ok: true,
         skipped: true,
@@ -311,7 +436,7 @@ function createAuditStore(options = {}) {
       }).catch(() => {});
     }
 
-    const pruned = await pruneAuditExports().catch(() => ({ removed: [] }));
+    const pruned = await pruneExportsLocked().catch(() => ({ removed: [] }));
 
     return {
       ok: true,
@@ -328,42 +453,37 @@ function createAuditStore(options = {}) {
   }
 
   // Retention. Exports hold full conversation text, so unbounded accumulation
-  // is both a disk problem and a privacy one. Retention is chain-aware: an
-  // incremental export is only readable on top of the full export before it,
-  // so the newest full export and every export newer than it are never
-  // removed. Older exports are pruned by count and age. An empty incremental
-  // holds nothing and is always prunable, except the newest export. Without
-  // any full export, non-empty incrementals are never pruned.
+  // is both a disk problem and a privacy one. The rules are chain-aware and
+  // live in telemetry/audit-chain.js#planAuditRetention: the newest full
+  // export and its chain are never removed, older exports are pruned by count
+  // and age, empty incrementals always go except the newest export, and only
+  // the newest maxChains chains are kept. Pruning takes the export lock.
   async function pruneAuditExports(overrides = {}) {
-    const { maxExports, maxAgeDays } = auditRetentionSettings({ ...options, ...overrides });
+    await ensureDirs(auditRoot);
+    const lock = await acquireExportLock();
+    if (!lock) return { ...exportInProgress(), removed: [] };
+    try {
+      return await pruneExportsLocked(overrides);
+    } finally {
+      await lock.release();
+    }
+  }
+
+  // Runs with the export lock held; deletes exactly what the plan names.
+  async function pruneExportsLocked(overrides = {}) {
+    const settings = auditRetentionSettings({ ...options, ...overrides });
     const exports = await listAuditExports();
-    if (exports.length <= 1) return { removed: [], kept: exports.length };
-    const now = overrides.now ?? Date.now();
-    const maxAgeMs = maxAgeDays > 0 ? maxAgeDays * DAY_MS : 0;
-    // listAuditExports is newest-first.
-    const newestFullIndex = exports.findIndex((item) => item.mode === "full");
+    const plan = planAuditRetention(exports, settings, overrides.now ?? nowMs());
+    const byId = new Map(exports.map((item) => [item.auditId, item]));
     const removed = [];
-    for (let index = 1; index < exports.length; index += 1) {
-      if (newestFullIndex >= 0 && index <= newestFullIndex) continue;
-      const item = exports[index];
-      const emptyIncremental = item.mode === "incremental" && Number(item.chatCount || 0) === 0;
-      let reason = "";
-      if (emptyIncremental) {
-        reason = "empty-incremental";
-      } else if (newestFullIndex >= 0) {
-        const tooMany = maxExports > 0 && index >= maxExports;
-        const createdMs = Date.parse(item.createdAt || "");
-        const tooOld = maxAgeMs > 0 && Number.isFinite(createdMs) && now - createdMs > maxAgeMs;
-        reason = tooMany ? "max-exports" : tooOld ? "max-age" : "";
-      }
-      if (!reason) continue;
-      const target = path.resolve(item.auditDir);
+    for (const { auditId, reason } of plan.remove) {
+      const target = path.resolve(byId.get(auditId).auditDir);
       // Never step outside the audit root.
       if (!target.startsWith(path.resolve(auditRoot) + path.sep)) continue;
       await fsp.rm(target, { recursive: true, force: true });
-      removed.push({ auditId: item.auditId, reason });
+      removed.push({ auditId, reason });
     }
-    return { removed, kept: exports.length - removed.length };
+    return { removed, kept: exports.length - removed.length, warnings: plan.warnings };
   }
 
   return {
@@ -410,7 +530,10 @@ module.exports = {
   DEFAULT_AUDIT_MAX_EXPORTS,
   DEFAULT_AUDIT_MAX_AGE_DAYS,
   DEFAULT_AUDIT_REBASELINE_DAYS,
+  DEFAULT_AUDIT_MAX_CHAINS,
   AUDIT_CURSOR_FILE,
+  AUDIT_EXPORT_LOCK_FILE,
+  AUDIT_EXPORT_LOCK_STALE_MS,
   auditRetentionSettings,
   createAuditStore,
   normalizeAuditPassword,

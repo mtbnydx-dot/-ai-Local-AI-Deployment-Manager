@@ -107,5 +107,8 @@ function mergeExports(moduleNames) {
 module.exports = mergeExports(MODULES);
 module.exports.MODULES = MODULES.slice();
 module.exports.mergeExports = mergeExports;
+// Internal auth is a namespace, not flat names (00 §9.17): callers use
+// core.internalAuth.createInternalClient(...) or require("./internal-auth").
+module.exports.internalAuth = require("./internal-auth");
 // New subsystems are namespaces, never spread into the flat list (00 §9.17).
 module.exports.engines = require("./engines");
