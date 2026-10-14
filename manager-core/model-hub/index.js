@@ -1,0 +1,260 @@
+"use strict";
+
+// Model hub (03): the one engine-agnostic download and library service. It
+// runs inside service-entry (5176), because engine deploys restart the
+// managers and a manager restart used to kill every download.
+//
+// createModelHub() only wires objects and touches no file. start() prepares
+// the data directory (sweeping temp files a crash left), loads the settings
+// and stamps downloads.json; stop() flushes everything and is what the
+// entry's shutdown awaits. This is the HUB-1 skeleton: store, settings, the
+// downloadsOwner flag and the status. Search, plan, queue, transfer, verify
+// and library come with the later HUB packages and hang off the same object.
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { redactSecrets } = require("../secret-redactor");
+const { firstExisting, looksLikePath } = require("../file-utils");
+const { createHubStore, hubWriterIsLive, HUB_FILES, STORE_SCHEMA_VERSION } = require("./store");
+const hubSettings = require("./settings");
+const { readHubConfig } = require("./config");
+
+const DEFAULT_AI_ROOT = path.resolve(__dirname, "..", "..");
+// downloads.json is re-stamped this often while the hub runs; readers treat
+// a stamp older than two minutes as a stopped hub (03 §8).
+const HEARTBEAT_MS = 30 * 1000;
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The download CLIs in the managers' discovery order (03 §3.1): the
+ * HF_CLI/MODELSCOPE_CLI override, then the download-cli, ai312 and ai311
+ * venvs, then PATH.
+ */
+function discoverHubClis({ aiRoot = DEFAULT_AI_ROOT, env = process.env } = {}) {
+  const venv = (...parts) => path.join(aiRoot, "venvs", ...parts);
+  return {
+    hfCli: firstExisting([
+      env.HF_CLI,
+      venv("download-cli", "Scripts", "hf.exe"),
+      venv("ai312", "Scripts", "hf.exe"),
+      venv("ai311", "Scripts", "hf.exe"),
+      "hf",
+      venv("ai312", "Scripts", "huggingface-cli.exe"),
+      venv("ai311", "Scripts", "huggingface-cli.exe"),
+      "huggingface-cli",
+    ]),
+    modelScopeCli: firstExisting([
+      env.MODELSCOPE_CLI,
+      venv("download-cli", "Scripts", "modelscope.exe"),
+      venv("ai312", "Scripts", "modelscope.exe"),
+      venv("ai311", "Scripts", "modelscope.exe"),
+      "modelscope",
+    ]),
+  };
+}
+
+// path is the configured command; found is false for a missing file and
+// null for a bare command name left to PATH. The version probe belongs to
+// the transfer engine (HUB-5), so it stays null here.
+function cliInfo(command) {
+  const text = String(command || "");
+  if (!text) return { path: null, found: false, version: null };
+  return { path: text, found: looksLikePath(text) ? fs.existsSync(text) : null, version: null };
+}
+
+/**
+ * createModelHub({ aiRoot, dataDir, hfHome, hfCli, modelScopeCli, secretStore,
+ * events, managers, models, env, clock, logger, ... }) → Hub (03 §3.1).
+ * Options the later packages consume (modelStorage, fsStore, fetchImpl,
+ * getRuntimeLoad, getGpus, getCompatibilityContext, spawnImpl, platform) are
+ * accepted and kept on the options object until then.
+ */
+function createModelHub(options = {}) {
+  const aiRoot = path.resolve(String(options.aiRoot || DEFAULT_AI_ROOT));
+  const dataDir = path.resolve(String(options.dataDir || path.join(aiRoot, "service-entry", "data", "hub")));
+  const env = options.env || process.env;
+  const clock = options.clock && typeof options.clock.now === "function" ? options.clock : Date;
+  const logger = options.logger || console;
+  const heartbeatMs = Number(options.heartbeatMs) > 0 ? Number(options.heartbeatMs) : HEARTBEAT_MS;
+  const store = options.store || createHubStore({ dataDir, clock });
+  const settings = hubSettings.createSettingsService({ store, env });
+  const hfHome = path.resolve(String(options.hfHome || path.join(aiRoot, "cache", "huggingface")));
+  const hfCli = String(options.hfCli || "");
+  const modelScopeCli = String(options.modelScopeCli || "");
+  const secretStore = options.secretStore || null;
+  const models = options.models || null;
+  const readConfig = typeof options.readConfig === "function" ? options.readConfig : () => readHubConfig(aiRoot, env);
+
+  let state = "idle";
+  let startPromise = null;
+  let stopPromise = null;
+  let startedAt = null;
+  let startError = null;
+  let heartbeat = null;
+  let downloads = { schemaVersion: STORE_SCHEMA_VERSION, jobs: [] };
+  let migrationSteps = [];
+  let storeErrors = [];
+
+  function warn(line) {
+    try {
+      (typeof logger?.warn === "function" ? logger.warn : console.warn).call(logger, redactSecrets(String(line)));
+    } catch {
+      // Logging never breaks the hub.
+    }
+  }
+
+  function dataError(result, name, extra) {
+    return { file: result.file, name, code: result.error.code, message: `${result.error.message}${extra ? ` ${extra}` : ""}` };
+  }
+
+  async function doStart() {
+    state = "starting";
+    storeErrors = [];
+    const swept = await store.init();
+    if (swept.removedTemps.length) warn(`model hub: removed ${swept.removedTemps.length} temp file(s) an interrupted write left in the data directory.`);
+    settings.load();
+
+    // The queue (HUB-7) owns the jobs; until then they are carried over as
+    // they are. A corrupt ledger is kept aside, never overwritten.
+    const current = store.readDownloads();
+    if (current.error) {
+      try {
+        fs.copyFileSync(current.file, `${current.file}.corrupt`);
+      } catch {
+        // The original stays in place until the next write.
+      }
+      storeErrors.push(dataError(current, HUB_FILES.downloads, "It was copied to downloads.json.corrupt and the hub starts with an empty queue."));
+      downloads = { schemaVersion: STORE_SCHEMA_VERSION, jobs: [] };
+    } else {
+      downloads = { schemaVersion: current.value.schemaVersion, jobs: current.value.jobs };
+    }
+
+    const migrations = store.read("migrations");
+    if (migrations.error) storeErrors.push(dataError(migrations, HUB_FILES.migrations));
+    migrationSteps = Array.isArray(migrations.value?.steps) ? migrations.value.steps.filter(isPlainObject) : [];
+
+    await store.writeDownloads(downloads);
+    heartbeat = setInterval(() => {
+      if (state !== "running") return;
+      store.writeDownloads(downloads).catch((error) => warn(`model hub: downloads.json heartbeat failed: ${error?.message || error}`));
+    }, heartbeatMs);
+    heartbeat.unref?.();
+    startedAt = new Date(clock.now()).toISOString();
+    state = "running";
+  }
+
+  function start() {
+    if (startPromise) return startPromise;
+    if (stopPromise) return Promise.resolve();
+    startPromise = doStart().catch((error) => {
+      state = "failed";
+      startError = { code: String(error?.code || "hub_start_failed"), message: redactSecrets(String(error?.message || error)) };
+      warn(`model hub: start failed: ${error?.message || error}`);
+      throw error;
+    });
+    return startPromise;
+  }
+
+  // Idempotent; never rejects. Pending writes settle first, then
+  // downloads.json is written synchronously so the stamp is on disk even if
+  // the process exits right after.
+  function stop({ reason = "shutdown" } = {}) {
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      if (startPromise) await startPromise.catch(() => {});
+      const wasRunning = state === "running";
+      state = "stopping";
+      if (heartbeat) clearInterval(heartbeat);
+      heartbeat = null;
+      try {
+        await store.flush();
+      } catch {
+        // A failed write was already reported by its caller.
+      }
+      if (wasRunning) {
+        try {
+          store.writeDownloads(downloads, { sync: true });
+        } catch (error) {
+          warn(`model hub: final downloads.json write failed (${reason}): ${error?.message || error}`);
+        }
+      }
+      state = "stopped";
+    })();
+    return stopPromise;
+  }
+
+  async function settled() {
+    if (state === "starting" && startPromise) await startPromise.catch(() => {});
+  }
+
+  function migrationDone() {
+    return migrationSteps.length > 0 && migrationSteps.every((step) => step.done === true);
+  }
+
+  // GET /api/hub/status (03 §13). Queue counts stay 0 until the queue lands
+  // (HUB-7). The viewer copy drops cli paths, dataDir and dataErrors[].file.
+  function status() {
+    const config = readConfig();
+    return {
+      ok: true,
+      state,
+      owner: config.downloadsOwner,
+      ownerSource: config.source,
+      active: 0,
+      queued: 0,
+      waiting: 0,
+      speedBps: 0,
+      cli: { hf: cliInfo(hfCli), modelscope: cliInfo(modelScopeCli) },
+      dataDir,
+      dataErrors: [...storeErrors, ...settings.errors()],
+      configErrors: Array.isArray(config.errors) ? config.errors : [],
+      migration: { done: migrationDone() },
+      features: { runAfter: false, rememberToken: Boolean(secretStore), models: Boolean(models) },
+      startedAt,
+      ...(startError ? { startError } : {}),
+    };
+  }
+
+  return {
+    dataDir,
+    hfHome,
+    start,
+    stop,
+    status,
+    config: () => readConfig(),
+    settings: {
+      async get() {
+        await settled();
+        return settings.get();
+      },
+      // A hub that is not running (not started yet, failed or stopping)
+      // writes nothing.
+      async update(patch) {
+        await settled();
+        if (state !== "running") return { ok: false, code: "hub_unavailable", message: "The model hub is not running." };
+        return settings.update(patch);
+      },
+    },
+    // 06 OPS-13's busy probe; the queue fills it in (HUB-7).
+    busy: () => ({ downloads: 0, verifying: 0 }),
+    get state() {
+      return state;
+    },
+  };
+}
+
+module.exports = {
+  HEARTBEAT_MS,
+  createModelHub,
+  discoverHubClis,
+  hubWriterIsLive,
+  readHubConfig,
+  HUB_SETTINGS_SCHEMA: hubSettings.HUB_SETTINGS_SCHEMA,
+  defaultSettings: hubSettings.defaultSettings,
+  fromLegacy: hubSettings.fromLegacy,
+  toLegacy: hubSettings.toLegacy,
+  validateSettings: hubSettings.validateSettings,
+};

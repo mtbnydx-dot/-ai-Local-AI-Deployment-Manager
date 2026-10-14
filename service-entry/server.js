@@ -22,6 +22,7 @@ const { createRequestAuth, redactInstancesEventForViewer, redactStatusEventForVi
 const { createViewerRegistry } = require("./lib/viewer-allowlist");
 const { createEntryAdminAuth, createMachineAuth } = require("./lib/machine-auth");
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
+const { createModelHub, discoverHubClis } = require("../manager-core/model-hub");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -151,7 +152,7 @@ const ROUTE_MODULES = [
   "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
   "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
   // "./lib/engine-routes",       // 01 ENG-19
-  // "./lib/hub-routes",          // 03 HUB-7
+  "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
   // "./lib/telemetry-routes",    // 04 TEL-*
   // "./lib/admin-session",       // 05 PUB-5
   // "./lib/platform-routes",     // 06 OPS-13
@@ -160,6 +161,9 @@ const ROUTE_MODULES = [
 
 let server = null;
 let routeMounts = null;
+// The model hub (03), built once by startServiceEntry() and stopped by
+// shutdownSoon(). null in tests and when it could not be built.
+let modelHub = null;
 let billingStore = null;
 let accessStore = null;
 let accessStoreFailure = null;
@@ -805,8 +809,13 @@ async function startServiceEntry() {
     console.warn(`Unable to publish gateway trust token: ${error.message}`);
   });
   // The request-auth seam and the event bus come first, then every route
-  // module; a module that fails to mount never stops the entry.
-  routeMounts = await mountRouteModules({ ctx: createRouteContext() });
+  // module; a module that fails to mount never stops the entry. The model
+  // hub is built before the mount (its routes read ctx.hub) and started after
+  // listen, so loading its files never delays the port.
+  const ctx = createRouteContext();
+  modelHub = createEntryHub({ events: ctx.bus });
+  ctx.hub = modelHub;
+  routeMounts = await mountRouteModules({ ctx });
   // Every module has registered its viewer routes; a later one would be a bug.
   routeMounts.ctx.auth.viewerRegistry.freeze();
   server = createServiceEntryServer({ routes: routeMounts });
@@ -819,8 +828,52 @@ async function startServiceEntry() {
   });
   server.listen(PORT, HOST, () => {
     logStartupSummary(security.policy());
+    modelHub?.start().catch((error) => {
+      console.warn(core.redactSecrets(`Model hub failed to start; its routes answer hub_unavailable: ${error?.message || error}`));
+    });
   });
   return server;
+}
+
+// The entry's one model hub (03 §3): data under service-entry/data/hub, the
+// download CLIs in the managers' discovery order. Building it touches no
+// file; a hub that cannot be built leaves its routes answering 503.
+function createEntryHub({ events = null } = {}) {
+  try {
+    const { hfCli, modelScopeCli } = discoverHubClis({ aiRoot: AI_ROOT, env: process.env });
+    return createModelHub({
+      aiRoot: AI_ROOT,
+      dataDir: path.join(ROOT, "data", "hub"),
+      hfHome: process.env.HF_HOME || path.join(AI_ROOT, "cache", "huggingface"),
+      hfCli,
+      modelScopeCli,
+      events,
+      managers: MANAGERS.map(({ id, port }) => ({ id, port })),
+      logger: console,
+    });
+  } catch (error) {
+    console.warn(core.redactSecrets(`Model hub could not be created; its routes answer hub_unavailable: ${error?.message || error}`));
+    return null;
+  }
+}
+
+// Stops the hub (flushing its files) within `timeoutMs`; never throws.
+async function stopModelHub(hub, { reason = "shutdown", timeoutMs = 5000 } = {}) {
+  if (!hub || typeof hub.stop !== "function") return;
+  let timer;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => hub.stop({ reason })),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    console.warn(core.redactSecrets(`Model hub did not stop cleanly: ${error?.message || error}`));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Only the real warning goes to stderr. The hint is advice for a default
@@ -843,6 +896,7 @@ if (require.main === module) {
     label: "service-entry",
     file: PROCESS_EXIT_LOG,
     onSignal: async () => {
+      await stopModelHub(modelHub);
       await security.revokeTrustToken().catch(() => {});
       if (server) await new Promise((resolve) => server.close(resolve));
     },
@@ -2781,10 +2835,14 @@ function sendJson(res, data, status = 200, extraHeaders = {}) {
 
 function shutdownSoon(options = {}) {
   const targetServer = options.server !== undefined ? options.server : server;
+  const hub = options.hub !== undefined ? options.hub : modelHub;
   const exitProcess = typeof options.exit === "function" ? options.exit : (code) => process.exit(code);
   const graceMs = Math.max(100, Number(options.graceMs || process.env.SERVICE_ENTRY_SHUTDOWN_GRACE_MS || 5000));
   const delayMs = options.delayMs ?? 100;
   setTimeout(async () => {
+    // The hub goes first (03 §8): its in-process downloads become
+    // interrupted and its files are flushed before anything else closes.
+    await stopModelHub(hub, { reason: "shutdown", timeoutMs: graceMs });
     // Drop the published token so a stale file cannot authorize a later process.
     await security.revokeTrustToken().catch(() => {});
     const closeBillingStore = () => {
@@ -2909,6 +2967,8 @@ module.exports = {
   mountRouteModules,
   // The live mount table (ctx.bus, ctx.auth) once startServiceEntry() ran.
   getRouteMounts: () => routeMounts,
+  // The model hub once startServiceEntry() built it (03 §3).
+  getModelHub: () => modelHub,
   flushTtsSettlements: () => ttsReconciler.flush(),
   resetEntryRateLimitBuckets() {
     entryRateBuckets.clear();
