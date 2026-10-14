@@ -1693,7 +1693,8 @@ core.registerRuntimeRoutes(app, {
 // Engine registry (docs/overhaul/01-engines.md ENG-2): GET /api/engines lists the
 // engines this manager hosts with their manifest runtimes, and the descriptor
 // validator checks drafts without writing anything. Image presence uses the
-// uncached inspect behind the route's own 60 s cache.
+// uncached inspect behind the route's own 60 s cache. GET /api/engines/:id/schema
+// (ENG-3) serves the parameter catalog with host facts from the cached GPU probe.
 const engineRegistry = core.engines.createEngineRegistry({ env: process.env });
 core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
@@ -1702,6 +1703,7 @@ core.engines.registerEngineRoutes(app, {
   isLocalRequest,
   getImageStatus: getImageStatusFresh,
   listManagedContainers: () => listManagedContainers(),
+  getGpuStatus,
 });
 
 core.registerAuditRoutes(app, {

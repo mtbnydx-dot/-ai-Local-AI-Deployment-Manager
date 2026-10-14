@@ -107,6 +107,29 @@ function mergeExports(moduleNames) {
 module.exports = mergeExports(MODULES);
 module.exports.MODULES = MODULES.slice();
 module.exports.mergeExports = mergeExports;
+
+// core.platform (06 §2.1, 00 §9.17): the ops modules as one namespace, loaded
+// on first use so a manager that never reads platform config pays nothing.
+// Each module is core.platform.<name>; config's functions (readSection,
+// writeSection, loadPlatformConfig...) are also on the namespace itself.
+const PLATFORM_MODULES = Object.freeze({
+  config: "./platform/config",
+  semver: "./platform/semver",
+});
+let platformNamespace = null;
+
+function loadPlatformNamespace() {
+  if (platformNamespace) return platformNamespace;
+  const namespace = { ...require(PLATFORM_MODULES.config) };
+  for (const [name, file] of Object.entries(PLATFORM_MODULES)) {
+    Object.defineProperty(namespace, name, { enumerable: true, get: () => require(file) });
+  }
+  platformNamespace = Object.freeze(namespace);
+  return platformNamespace;
+}
+
+Object.defineProperty(module.exports, "platform", { enumerable: true, configurable: true, get: loadPlatformNamespace });
+
 // Internal auth is a namespace, not flat names (00 §9.17): callers use
 // core.internalAuth.createInternalClient(...) or require("./internal-auth").
 module.exports.internalAuth = require("./internal-auth");
