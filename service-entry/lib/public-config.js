@@ -319,6 +319,7 @@ function specProblem(spec, value) {
   if (typeof value === "number") {
     if (spec.minimum !== undefined && value < spec.minimum) return `must be at least ${spec.minimum}`;
     if (spec.maximum !== undefined && value > spec.maximum) return `must be at most ${spec.maximum}`;
+    if (spec.format === "port") return FORMAT_PROBLEMS.port(value);
   }
   if (typeof value === "string") {
     if (spec.format && FORMAT_PROBLEMS[spec.format]) {
@@ -377,6 +378,7 @@ function safeIssue(issue, fallbackField) {
     code: String(issue?.code || "invalid_value"),
     message: String(issue?.message || "The value is invalid; the default is in force.").slice(0, 300),
     ...(issue?.source ? { source: String(issue.source) } : {}),
+    ...(issue?.env ? { env: String(issue.env) } : {}),
   };
 }
 

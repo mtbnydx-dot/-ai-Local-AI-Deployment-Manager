@@ -437,7 +437,7 @@ function createEntrySecurity(options = {}) {
       allowLanAdmin: current.allowLanAdmin,
       corsMode: current.corsMode,
       allowedOrigins: current.allowedOrigins,
-      trustedProxies: trustedProxyConfig({ warn: options.warn }).entries,
+      trustedProxies: accessConfig().trustedProxies.cidrs.slice(),
       trustTokenActive: Boolean(trustToken),
       keyStore: keyStatus,
       configIssues: core.listConfigHealthIssues(),
@@ -560,6 +560,8 @@ function createEntrySecurity(options = {}) {
     isProxiedRequest,
     isTrustedProxy: trustsPeer,
     resolveClientAddress,
+    identifyClient,
+    accessConfig,
     corsHeaders,
     authorizeGatewayRequest,
     loadKeyStores,
@@ -574,10 +576,7 @@ function createEntrySecurity(options = {}) {
 }
 
 module.exports = {
-  DEFAULT_TRUSTED_PROXIES,
   FORWARDED_HEADERS,
   createEntrySecurity,
-  isTrustedProxy,
   normalizeRequireApiKeyMode,
-  parseTrustedProxies,
 };
