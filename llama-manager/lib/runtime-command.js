@@ -1,5 +1,6 @@
 const { redactSecrets } = require("../../manager-core/secret-redactor");
 const runtimeManifest = require("../../manager-core/runtime-manifest");
+const engines = require("../../manager-core/engines");
 const llamacpp = require("../../manager-core/engines/adapters/llamacpp");
 const { renderRunArgs } = require("../../manager-core/engines/adapters/_docker-segments");
 
@@ -11,16 +12,12 @@ const { renderRunArgs } = require("../../manager-core/engines/adapters/_docker-s
 
 const ENGINE_ID = llamacpp.id;
 
-// The Muse Glimmer preset as an applied recipe, until recipes are data
-// (ENG-6, recipe llama-muse-glimmer) and the resolver selects them (ENG-7): the
-// retired Muse runtime and its sampling values. The adapter reads only the
-// recipe, never the model family.
-const MUSE_GLIMMER_RECIPE = Object.freeze({
-  id: "llama-muse-glimmer",
-  runtime: Object.freeze({ ref: "llamaMuse" }),
-  values: Object.freeze({ temperature: 1, topP: 0.95, topK: 64 }),
-  legacy: Object.freeze({ presetLabel: "Muse Glimmer" }),
-});
+// The Muse Glimmer preset is the recipe llama-muse-glimmer
+// (manager-core/data/recipes, ENG-6): the retired Muse runtime and its
+// sampling values. The resolver selects recipes by plan (ENG-7); until then
+// this wrapper applies it the way the old branch did, by architecture or name.
+// The adapter reads only the recipe, never the model family.
+const MUSE_GLIMMER_RECIPE_ID = "llama-muse-glimmer";
 
 function createLlamaRuntimeCommandBuilder(deps) {
   const {
@@ -53,7 +50,9 @@ function createLlamaRuntimeCommandBuilder(deps) {
 
   function selectRecipe(opts, launch) {
     const architecture = String(launch.selectedModel?.architecture || "").trim().toLowerCase();
-    return architecture === "muse-glimmer" || /muse[-_. ]glimmer/i.test(String(opts.model || "")) ? MUSE_GLIMMER_RECIPE : null;
+    return architecture === "muse-glimmer" || /muse[-_. ]glimmer/i.test(String(opts.model || ""))
+      ? engines.recipes.getRecipeStore().get(MUSE_GLIMMER_RECIPE_ID)
+      : null;
   }
 
   // The images this manager runs for its manifest runtimes; CONFIG applied

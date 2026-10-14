@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "qwen38-sglang",
+  "kind": "model",
+  "status": "verified",
+  "label": {
+    "zh": "Qwen3.8 · SGLang · FlashInfer",
+    "en": "Qwen3.8 · SGLang · FlashInfer"
+  },
+  "engineId": "sglang",
+  "match": {
+    "capabilityIds": [
+      "qwen3.8"
+    ]
+  },
+  "priority": 50,
+  "values": {
+    "sglang.attentionBackend": "flashinfer",
+    "sglang.chunkedPrefillSize": 8192,
+    "sglang.mambaSchedulerStrategy": "extra_buffer",
+    "sglang.disablePrefillCudaGraph": true,
+    "sglang.mmFeatureTransport": "cpu"
+  },
+  "locks": [
+    {
+      "param": "trustRemoteCode",
+      "value": true,
+      "reason": {
+        "zh": "该架构需要仓库代码",
+        "en": "This architecture needs repository code"
+      }
+    },
+    {
+      "param": "reasoningParser",
+      "value": "qwen3",
+      "reason": {
+        "zh": "该模型已验证的解析器",
+        "en": "Parser validated for this model"
+      }
+    },
+    {
+      "param": "toolCallParser",
+      "value": "qwen3_coder",
+      "reason": {
+        "zh": "该模型已验证的解析器",
+        "en": "Parser validated for this model"
+      }
+    },
+    {
+      "param": "autoToolChoice",
+      "value": true,
+      "reason": {
+        "zh": "随解析器开启",
+        "en": "Enabled with the parser"
+      }
+    }
+  ],
+  "memory": {
+    "policy": "static-fraction-of-free",
+    "calibrate": true
+  },
+  "notes": [
+    {
+      "zh": "SM120 使用 FlashInfer；本机不支持 FA3",
+      "en": "uses FlashInfer on SM120; FA3 is not supported on this host"
+    },
+    {
+      "zh": "多模态特征走 CPU 传输，避免 Docker Desktop/WSL 的 CUDA IPC 失败",
+      "en": "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures"
+    }
+  ],
+  "legacy": {
+    "presetId": "sglang-openai-runtime",
+    "presetLabel": "SGLang OpenAI runtime",
+    "notesEn": [
+      "uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000",
+      "uses FlashInfer on SM120; FA3 is not supported on this host",
+      "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures"
+    ]
+  }
+}

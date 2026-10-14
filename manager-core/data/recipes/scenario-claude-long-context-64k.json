@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-claude-long-context-64k",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "Claude 长上下文 64K",
+    "en": "Claude long context 64K"
+  },
+  "profile": {
+    "id": "claude-long-context-64k",
+    "name": "Claude 长上下文 64K",
+    "description": "本地 Claude 单人使用，启动更稳，适合日常编码和工具调用。",
+    "managerId": "vllm",
+    "order": 7,
+    "values": {
+      "contextLength": 65536,
+      "concurrency": 2,
+      "vllm.gpuMemoryUtilization": 0.9,
+      "kvCacheDtype": "fp8",
+      "speculative.method": "off",
+      "reasoningParser": "auto",
+      "toolCallParser": "auto",
+      "clientPreset": "claude-cowork"
+    }
+  }
+}

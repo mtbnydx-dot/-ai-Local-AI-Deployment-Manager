@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "qwen38-vllm-nvfp4",
+  "kind": "model",
+  "status": "verified",
+  "label": {
+    "zh": "Qwen3.8 · vLLM · NVFP4 容量档",
+    "en": "Qwen3.8 · vLLM · NVFP4 capacity"
+  },
+  "engineId": "vllm",
+  "match": {
+    "capabilityIds": [
+      "qwen3.8"
+    ],
+    "quant": [
+      "nvfp4",
+      "modelopt_fp4"
+    ]
+  },
+  "appliesWhen": {
+    "eq": [
+      {
+        "fact": "model.quantMethod"
+      },
+      "nvfp4"
+    ]
+  },
+  "priority": 60,
+  "values": {
+    "vllm.safetensorsLoadStrategy": "prefetch"
+  },
+  "locks": [
+    {
+      "param": "reasoningParser",
+      "value": "qwen3",
+      "reason": {
+        "zh": "该模型已验证的解析器",
+        "en": "Parser validated for this model"
+      }
+    },
+    {
+      "param": "toolCallParser",
+      "value": "qwen3_coder",
+      "reason": {
+        "zh": "该模型已验证的解析器",
+        "en": "Parser validated for this model"
+      }
+    },
+    {
+      "param": "autoToolChoice",
+      "value": true,
+      "reason": {
+        "zh": "随解析器开启",
+        "en": "Enabled with the parser"
+      }
+    }
+  ],
+  "slots": {
+    "modelArgStyle": "positional",
+    "disableQuantizationArg": true,
+    "disableKvCacheDtypeArg": true
+  },
+  "memory": {
+    "policy": "device-fraction",
+    "calibrate": true
+  },
+  "notes": [
+    {
+      "zh": "让 compressed-tensors 自动识别 NVFP4 布局并预取 safetensors",
+      "en": "lets compressed-tensors auto-detect the NVFP4 layout and prefetches safetensors"
+    }
+  ],
+  "legacy": {
+    "presetId": "qwen3.8-vllm-nvfp4",
+    "presetLabel": "Qwen3.8 / vLLM / NVFP4",
+    "notesEn": [
+      {
+        "text": "uses the Qwen3.8-compatible vLLM build {{manifest:vllm.version}}"
+      },
+      "uses positional model syntax required by current vLLM serve CLI",
+      "uses qwen3 reasoning and qwen3_coder tool parsing",
+      "lets compressed-tensors auto-detect the NVFP4 layout and prefetches safetensors"
+    ],
+    "preset": {
+      "engine": "vllm",
+      "positionalModel": true,
+      "reasoningParser": {
+        "recipe": "reasoningParser"
+      },
+      "toolCallParser": {
+        "recipe": "toolCallParser"
+      },
+      "enableAutoToolChoice": {
+        "recipe": "autoToolChoice"
+      },
+      "disableQuantizationArg": true,
+      "disableKvCacheDtypeArg": true,
+      "safetensorsLoadStrategy": {
+        "recipe": "vllm.safetensorsLoadStrategy"
+      }
+    }
+  },
+  "profile": {
+    "id": "qwen38-nvfp4-capacity",
+    "name": "Qwen3.8 NVFP4 容量档",
+    "description": "使用 NVFP4 权重与原生 MTP-3，显存更省；质量优先场景仍建议 FP8 稳定档。",
+    "managerId": "vllm",
+    "order": 5,
+    "requirements": {
+      "minGpuCount": 1,
+      "minSingleGpuMemoryGb": 32
+    },
+    "values": {
+      "contextLength": 262144,
+      "concurrency": 4,
+      "vllm.gpuMemoryUtilization": 0.8,
+      "kvCacheDtype": "auto",
+      "speculative.method": "mtp",
+      "speculative.numTokens": 3,
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_coder",
+      "clientPreset": "openwebui",
+      "vllm.languageModelOnly": true
+    },
+    "legacy": {
+      "gpuDeviceIds": [
+        "0"
+      ],
+      "multiGpuMode": "single"
+    }
+  },
+  "evidence": {
+    "gpu": "RTX PRO 6000 Blackwell 96 GB",
+    "host": "Windows 11 + Docker Desktop/WSL2",
+    "date": "2026-09",
+    "jobId": null
+  }
+}

@@ -27,9 +27,12 @@
 //
 // Ordering comparisons (gt, gte, lt, lte) need two numbers and are false
 // otherwise. Arithmetic needs numbers and gives null otherwise (floorDiv by 0
-// is null too). `matches` is false for a non-string subject. `versionGte`
-// compares dotted versions (a leading "v" or "b" and a suffix after the
-// numeric part are ignored) and is false when either side is not a version.
+// is null too). `number` reads a number from text the way Number() does (env
+// inputs arrive as text): a finite number stays, non-blank text that converts
+// to a finite number becomes it, anything else is null. `matches` is false for
+// a non-string subject. `versionGte` compares dotted versions (a leading "v" or
+// "b" and a suffix after the numeric part are ignored) and is false when either
+// side is not a version.
 
 const LIMITS = Object.freeze({ maxDepth: 32, maxNodes: 512, maxRegexLength: 200 });
 
@@ -86,6 +89,7 @@ const OPERATORS = Object.freeze({
   sub: { arity: 2 },
   mul: { min: 1 },
   floorDiv: { arity: 2 },
+  number: { unary: true },
   matches: { arity: 2 },
   versionGte: { arity: 2 },
   json: { object: true },
@@ -560,6 +564,15 @@ function makeOperator(op, args) {
       return (ctx) => arithmetic(evaluateAll(args, ctx), ([a, b]) => a - b);
     case "floorDiv":
       return (ctx) => arithmetic(evaluateAll(args, ctx), ([a, b]) => (b === 0 ? null : Math.floor(a / b)));
+    case "number":
+      return (ctx) => {
+        const value = args[0](ctx);
+        if (value === UNKNOWN) return UNKNOWN;
+        if (isNumber(value)) return value;
+        if (typeof value !== "string" || !value.trim()) return null;
+        const number = Number(value.trim());
+        return isNumber(number) ? number : null;
+      };
     case "versionGte":
       return (ctx) => {
         const [a, b] = evaluateAll(args, ctx);

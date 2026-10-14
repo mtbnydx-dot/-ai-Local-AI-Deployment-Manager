@@ -10,8 +10,6 @@ const { describeDownloadError } = require("../manager-core/model-hub/errors");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
-const { PENNYROYAL_DEFAULTS, PENNYROYAL_TOKENIZER_SHA256, isPennyroyalImage,
-  pennyroyalOptionErrors, createPennyroyalPreset } = require("./lib/pennyroyal");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
 const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
@@ -88,8 +86,8 @@ const ALLOW_REMOTE_MANAGEMENT = process.env.VLLM_MANAGER_ALLOW_REMOTE === "1";
 const DEFAULT_VLLM_IMAGE = process.env.VLLM_IMAGE_VERSION
   ? `vllm/vllm-openai:${process.env.VLLM_IMAGE_VERSION}`
   : defaultVllmImageReference();
-const DEFAULT_GEMMA_VLLM_IMAGE = "vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b";
-const DEFAULT_QWEN_MOE_VLLM_IMAGE = "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb";
+const DEFAULT_GEMMA_VLLM_IMAGE = core.runtimeImageReference("vllmGemma");
+const DEFAULT_QWEN_MOE_VLLM_IMAGE = core.runtimeImageReference("vllmQwenMoe");
 const DEFAULT_SGLANG_IMAGE = `${DEFAULT_SGLANG_RELEASE.repository}@${DEFAULT_SGLANG_RELEASE.platformDigest}`;
 const DEFAULT_SGLANG_FLASH_NEXT_IMAGE = core.runtimeImageReference("sglangFlashNext");
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
@@ -689,6 +687,7 @@ const managerLifecycle = core.createManagerLifecycle({
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
     sseHub.close();
+    recipeWatcher?.close();
     core.interruptRunningDownloadJobs(jobs);
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
     await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
@@ -1687,6 +1686,12 @@ core.registerRuntimeRoutes(app, {
 // uncached inspect behind the route's own 60 s cache. GET /api/engines/:id/schema
 // (ENG-3) serves the parameter catalog with host facts from the cached GPU probe.
 const engineRegistry = core.engines.createEngineRegistry({ env: process.env });
+// Recipes as data (ENG-6): bundled manager-core/data/recipes plus the owner's
+// <AI_ROOT>/config/recipes, validated against this registry. POST
+// /api/recipes/reload re-reads them; hand edits are picked up by the watcher
+// started with the manager (an invalid file keeps its last good version).
+const recipeStore = core.engines.createRecipeStore({ registry: engineRegistry });
+let recipeWatcher = null;
 // Per-instance engine metrics (ENG-14): the sampler scrapes each running
 // instance's /metrics every 10 s in the background, and
 // GET /api/instances/:id/metrics serves its latest snapshot, so the route never
@@ -1703,6 +1708,7 @@ const instanceMetricsSampler = core.engines.metrics.createInstanceMetricsSampler
 });
 core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
+  recipeStore,
   managerId: "vllm",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -1785,6 +1791,7 @@ app.use((error, _req, res, next) => {
 });
 
 if (require.main === module) {
+  recipeWatcher = core.engines.watchRecipeOverrides({ store: recipeStore, log: (line) => console.warn(line) });
   startManager().catch((error) => {
     console.error(error);
     process.exitCode = 1;
@@ -1895,48 +1902,22 @@ async function collectHealthReport() {
   };
 }
 
+// The release facts (versions, digests, minimum driver and compute gates) of
+// the manifest runtime an image reference names, or null. The manifest is the
+// only source (ENG-6; it replaces the image literals that used to live here):
+// core.runtimeForImage matches the default tag, the digest forms and the
+// aliases, and a runtime built on a base inherits the base release with its
+// own digests. Only pinned runtimes that describe a release (they carry a
+// transformers version) answer, so a custom-built image such as Pennyroyal and
+// the experimental local builds keep answering null like before.
 function knownRuntimeImageMetadata(imageReference) {
-  const image = String(imageReference || "").trim().toLowerCase();
-  const defaultReferences = new Set([
-    defaultVllmImageReference().toLowerCase(),
-    `${DEFAULT_VLLM_RELEASE.repository}@${DEFAULT_VLLM_RELEASE.manifestDigest}`.toLowerCase(),
-    `${DEFAULT_VLLM_RELEASE.repository}:${DEFAULT_VLLM_RELEASE.version}`.toLowerCase(),
-  ]);
-  if (defaultReferences.has(image)) return DEFAULT_VLLM_RELEASE;
-  const sglangReferences = new Set([
-    DEFAULT_SGLANG_IMAGE.toLowerCase(),
-    `${DEFAULT_SGLANG_RELEASE.repository}:${DEFAULT_SGLANG_RELEASE.version}`.toLowerCase(),
-    "lmsysorg/sglang:latest-runtime",
-  ]);
-  if (sglangReferences.has(image)) return DEFAULT_SGLANG_RELEASE;
-  if (image === DEFAULT_SGLANG_FLASH_NEXT_IMAGE.toLowerCase()) {
-    const flashNext = core.getRuntimeRelease("sglangFlashNext") || {};
-    return {
-      ...DEFAULT_SGLANG_RELEASE,
-      ...flashNext,
-      manifestDigest: "",
-      platformDigest: "",
-    };
-  }
-  if (image === DEFAULT_QWEN_MOE_VLLM_IMAGE.toLowerCase()) {
-    return {
-      ...DEFAULT_VLLM_RELEASE,
-      version: "nightly-a16dbd5b8572d4128be9f10b9dcff4999b594b25",
-      manifestDigest: "",
-      platformDigest: DEFAULT_QWEN_MOE_VLLM_IMAGE.split("@")[1],
-      transformersVersion: "5.12.1",
-    };
-  }
-  if (image === DEFAULT_GEMMA_VLLM_IMAGE.toLowerCase()) {
-    return {
-      ...DEFAULT_VLLM_RELEASE,
-      version: "v74b5964f02c7e023fadd3004cfac8a61c52eef1f",
-      manifestDigest: "",
-      platformDigest: DEFAULT_GEMMA_VLLM_IMAGE.split("@")[1],
-      transformersVersion: "5.10.2",
-    };
-  }
-  return null;
+  const ref = core.runtimeForImage(imageReference);
+  const release = ref?.release;
+  if (!release || !release.transformersVersion || ref.status !== "pinned") return null;
+  // A commit build's short manifest version carries the full revision.
+  return release.revision && /^[a-z-]*[0-9a-f]{8}$/.test(String(release.version || ""))
+    ? { ...release, version: String(release.version).replace(/[0-9a-f]{8}$/, release.revision) }
+    : release;
 }
 
 function normalizeLaunchProfile(value) {
@@ -2011,7 +1992,7 @@ function normalizeLaunchConfig(config = {}) {
 }
 
 function defaultLaunchProfiles() {
-  return createVllmDefaultLaunchProfiles(normalizeLaunchConfig);
+  return createVllmDefaultLaunchProfiles(normalizeLaunchConfig, { modelsRoot: CONFIG.modelsRoot, imageFor: runtimeImageForManifestKey });
 }
 
 function safeProfileId(value) {
@@ -2048,7 +2029,13 @@ async function checkModelCompatibility(input = {}) {
   const compatibilityRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang"
     ? qwen38FlashNextNvfp4 ? CONFIG.sglangFlashNextImage : CONFIG.sglangImage
     : CONFIG.image);
-  const pennyroyal = runtimeEngine === "sglang" && isPennyroyalImage(compatibilityRuntimeImage);
+  // The recipe this request resolves to (an image that pins a recipe, else the
+  // top eligible one). Its legacy.check supplies the Pennyroyal and Flash-Next
+  // findings and recommendations below (ENG-6).
+  const recipeOptions = legacyRecipeOptions(input, runtimeEngine);
+  const recipeContext = legacyRecipeContext(input, model, localConfig, { speculativeMode: normalizeSpeculativeMode(input.speculativeMode) });
+  const recipeSelection = core.engines.recipes.selectLegacyRecipe(runtimeEngine, recipeOptions, recipeContext);
+  const pennyroyal = Boolean(recipeSelection?.pinned);
   const capabilities = resolveVllmModelCapabilities({
     model,
     localPath: local?.path,
@@ -2171,80 +2158,23 @@ async function checkModelCompatibility(input = {}) {
     recommendations.reasoningParser = "qwen3";
     recommendations.toolCallParser = "qwen3_coder";
   }
-  if (pennyroyal) {
-    Object.assign(recommendations, normalizeLaunchConfig({ ...PENNYROYAL_DEFAULTS, model,
-      name: input.name || "pennyroyal", port: input.port || CONFIG.defaultPort,
-      maxModelLen: input.maxModelLen || 524288,
-      maxNumSeqs: input.maxNumSeqs || 4,
-      sglangDisableThinkingByDefault: Boolean(input.sglangDisableThinkingByDefault),
-    }));
-    if (!qwen38FlashNextNvfp4) findings.push(finding("fail", "Pennyroyal 模型不匹配", "此预设仅用于 Qwen3.8 Flash-Next NVFP4 checkpoint。"));
-    for (const detail of pennyroyalOptionErrors(input)) findings.push(finding("fail", "Pennyroyal 参数校验", detail));
-    if (local?.path) {
-      try {
-        const tokenizer = await fsp.readFile(path.join(local.path, "tokenizer.json"));
-        if (crypto.createHash("sha256").update(tokenizer).digest("hex") !== PENNYROYAL_TOKENIZER_SHA256) {
-          findings.push(finding("fail", "FR-Spec tokenizer 不匹配", "本地 tokenizer 与固定 token map 不一致，禁止使用该 FR-Spec 预设。"));
-        }
-      } catch (error) {
-        findings.push(finding("fail", "FR-Spec tokenizer 未验证", error.message));
-      }
-    }
-    findings.push(finding("ok", "Pennyroyal WSL 路径", "NVFP4、Online FP8、FP8 KV、FR-Spec/NEXTN-3、RAM PLE；GPU radix 缓存开启，CPU HiCache/NIXL 关闭。"));
-    findings.push(finding("warn", "容量与冷启动", "524288 tokens 为共享 KV 容量，不是 4 路各 524K；本机曾通过 500016-token 合成检索。F 盘冷加载约 16 分钟。"));
-  } else if (qwen38FlashNextNvfp4 && runtimeEngine === "sglang") {
-    findings.push(finding("ok", "Flash-Next 稳定路径", "PLE embedding 放入 CPU RAM；GDN prefill 使用 Triton、decode 使用 FlashInfer；Mamba state 使用 BF16。"));
-    findings.push(finding("ok", "262K 单路档", "max Mamba cache 8 为 262K 稳定档保留显存，运行时有效并发为 1；需要并发时应单独做较短上下文 A/B。"));
-    recommendations.runtimeImage = CONFIG.sglangFlashNextImage;
-    recommendations.maxModelLen = Number(input.maxModelLen || 262144);
-    recommendations.maxNumSeqs = 1;
-    recommendations.gpuMemoryUtilization = Number(input.gpuMemoryUtilization || 0.995);
-    recommendations.quantization = "modelopt_fp4";
-    recommendations.kvCacheDtype = "auto";
-    recommendations.trustRemoteCode = true;
-    recommendations.speculativeMode = "off";
-    recommendations.sglangMaxTotalTokens = Number(input.sglangMaxTotalTokens || 262144);
-    recommendations.sglangPageSize = Number(input.sglangPageSize || 64);
-    recommendations.sglangChunkedPrefillSize = Number(input.sglangChunkedPrefillSize || 4096);
-    recommendations.sglangFp4GemmBackend = String(input.sglangFp4GemmBackend || "flashinfer_cutlass");
-    recommendations.sglangAttentionBackend = String(input.sglangAttentionBackend || "triton");
-    recommendations.sglangPleOffloadEmbedding = true;
-    recommendations.sglangLinearAttnPrefillBackend = String(input.sglangLinearAttnPrefillBackend || "triton");
-    recommendations.sglangLinearAttnDecodeBackend = String(input.sglangLinearAttnDecodeBackend || "flashinfer");
-    recommendations.sglangMambaSsmDtype = String(input.sglangMambaSsmDtype || "bfloat16");
-    recommendations.sglangMambaRadixCacheStrategy = String(input.sglangMambaRadixCacheStrategy || "extra_buffer");
-    recommendations.sglangMambaTrackInterval = Number(input.sglangMambaTrackInterval || 64);
-    recommendations.sglangMaxMambaCacheSize = Number(input.sglangMaxMambaCacheSize || 8);
-    recommendations.sglangDisableThinkingByDefault = true;
-    if (String(input.kvCacheDtype || "auto").toLowerCase() !== "auto") {
-      findings.push(finding("fail", "Flash-Next FP8 KV 未开放", "QSA 路径仍有 query BF16 与 K/V FP8 dtype mismatch；请把 KV cache 精度设为 auto（当前会得到 BF16）。"));
-    }
-    const stableBackendRequirements = [
-      ["sglangAttentionBackend", "triton", "QSA / attention backend"],
-      ["sglangLinearAttnPrefillBackend", "triton", "Linear attention prefill"],
-      ["sglangLinearAttnDecodeBackend", "flashinfer", "Linear attention decode"],
-      ["sglangMambaSsmDtype", "bfloat16", "Mamba state dtype"],
-    ];
-    for (const [key, expected, label] of stableBackendRequirements) {
-      const value = String(input[key] || "").toLowerCase();
-      if (value && value !== expected) {
-        findings.push(finding("fail", `${label} 不匹配`, `262K 稳定档要求 ${expected}，当前选择 ${value}。`));
-      }
-    }
-    if (Object.hasOwn(input, "sglangPleOffloadEmbedding") && !input.sglangPleOffloadEmbedding) {
-      findings.push(finding("fail", "PLE CPU offload 未启用", "该 checkpoint 的约 51GB PLE embedding 必须放入 128GB 系统内存；请启用 PLE embedding → CPU RAM。"));
-    }
-    if (normalizeSpeculativeMode(input.speculativeMode) !== "off") {
-      findings.push(finding("fail", "Flash-Next 稳定档关闭推测解码", "当前已验证的 262K SGLang 档未启用 MTP/DSpark；请先使用 off，避免把未验证变量带入长上下文服务。"));
-    }
-    if (!input.sglangDisableThinkingByDefault && String(input.toolCallParser || "qwen3_coder") === "qwen3_coder") {
-      findings.push(finding("warn", "Thinking + qwen3_coder 风险", "当前上游仍有 token-0 循环问题；建议勾选“默认关闭 thinking”，客户端确有需要时再逐请求开启。"));
-    }
-    if (requestedRuntimeImage && requestedRuntimeImage.toLowerCase() !== CONFIG.sglangFlashNextImage.toLowerCase()) {
-      findings.push(finding("warn", "自定义 Flash-Next 镜像", `当前只验证了 ${CONFIG.sglangFlashNextImage}；自定义镜像必须确认含完整 SM120 QSA 修复。`));
-    }
-    if (Number(input.maxModelLen || 0) >= 229492 && Number(input.sglangMaxMambaCacheSize || 8) > 8) {
-      findings.push(finding("warn", "极限上下文 Mamba cache 风险", "本机 max Mamba cache 24 在 229K 输入最后一个 prefill chunk OOM；262K 档请保持 8，较大值只用于单独的短上下文并发 A/B。"));
+  if (recipeSelection?.recipe?.legacy?.check) {
+    const check = await core.engines.recipes.legacyCompatibility(recipeSelection.recipe, recipeOptions, {
+      ...recipeContext,
+      mismatch: recipeSelection.mismatch,
+      localPath: local?.path,
+    });
+    for (const item of check.findings) findings.push(finding(item.severity, item.title, item.detail));
+    if (check.complete) {
+      // A recipe that recommends its whole profile (Pennyroyal) replaces the form.
+      Object.assign(recommendations, normalizeLaunchConfig({
+        ...check.recommendations,
+        model,
+        name: input.name || check.recommendations.name,
+        port: input.port || CONFIG.defaultPort,
+      }));
+    } else {
+      Object.assign(recommendations, check.recommendations);
     }
   }
   if (normalizeSpeculativeMode(input.speculativeMode) === "dspark") {
@@ -3694,30 +3624,83 @@ function selectedHostGpus(opts = {}) {
   return gpus.filter((gpu) => selectedIds.has(String(gpu.id)) || selectedIds.has(String(gpu.index)));
 }
 
-function hasSm12Gpu(opts = {}) {
-  return selectedHostGpus(opts).some((gpu) => {
-    const computeCap = String(gpu.computeCap || gpu.compute_cap || "").trim();
-    const name = String(gpu.name || "").toLowerCase();
-    return computeCap.startsWith("12") || (name.includes("blackwell") && /rtx\s+pro\s+[56]000/.test(name));
-  });
+// The legacy name/config model classifiers (isQwen38Model, isQwen36*,
+// isDiffusionGemmaModel) as the model facts recipes match on (ENG-6). The
+// recipes name capability ids of the capability matrix plus conditions over
+// model.quantMethod and model.architectures; until the ModelCard supplies
+// those facts (02), this shim derives them from the same name and config
+// checks the old branches used, adding the canonical architecture where only
+// the name said so. ENG-23 deletes it together with the predicates.
+const LEGACY_ARCHITECTURE_HINTS = Object.freeze({
+  qwen36Moe: "Qwen3_5MoeForConditionalGeneration",
+  qwen36Dense: "Qwen3_5ForConditionalGeneration",
+  diffusionGemma: "DiffusionGemmaForBlockDiffusion",
+});
+
+function legacyModelFacts(model, config = null) {
+  const capabilityIds = [];
+  const architectures = Array.isArray(config?.architectures) ? config.architectures.map(String) : [];
+  const hint = (name) => {
+    if (!architectures.includes(name)) architectures.push(name);
+  };
+  let quantMethod = "other";
+  if (isQwen38Model(model, config)) {
+    capabilityIds.push("qwen3.8");
+    if (isQwen38FlashNextNvfp4Model(model, config)) capabilityIds.push("qwen3.8-flash-next");
+    if (isQwen38Nvfp4Model(model, config)) quantMethod = "nvfp4";
+  } else {
+    const flags = qwen36Nvfp4ModelFlags(model, config);
+    if (flags.qwen36Moe || flags.qwen36Hybrid) {
+      capabilityIds.push("qwen3.5-3.6");
+      hint(flags.qwen36Moe ? LEGACY_ARCHITECTURE_HINTS.qwen36Moe : LEGACY_ARCHITECTURE_HINTS.qwen36Dense);
+      if (flags.modeloptNvfp4) quantMethod = "nvfp4";
+    }
+  }
+  if (isDiffusionGemmaModel(model, config)) {
+    capabilityIds.push("gemma4");
+    hint(LEGACY_ARCHITECTURE_HINTS.diffusionGemma);
+  }
+  return {
+    capabilityIds,
+    ...(capabilityIds[0] ? { capabilityId: capabilityIds[0] } : {}),
+    quantMethod,
+    ...(architectures.length ? { architectures } : {}),
+  };
 }
 
-function qwenMoeNvfp4BackendValue(opts = {}) {
-  const configured = String(process.env.VLLM_QWEN_MOE_BACKEND || "").trim().toLowerCase();
-  const allowed = new Set([
-    "auto",
-    "cutlass",
-    "emulation",
-    "flashinfer_b12x",
-    "flashinfer_cutedsl",
-    "flashinfer_cutlass",
-    "flashinfer_trtllm",
-    "marlin",
-    "triton",
-    "triton_unfused",
-  ]);
-  if (configured && allowed.has(configured)) return configured;
-  return hasSm12Gpu(opts) ? "flashinfer_b12x" : "marlin";
+// The image this manager runs for a manifest runtime key; undefined for a
+// runtime it has no configured slot for (the registry answers for those).
+function runtimeImageForManifestKey(manifestKey) {
+  return {
+    vllm: CONFIG.image,
+    vllmQwenMoe: CONFIG.qwenMoeImage,
+    vllmGemma: CONFIG.gemmaImage,
+    sglang: CONFIG.sglangImage,
+    sglangFlashNext: CONFIG.sglangFlashNextImage,
+  }[manifestKey];
+}
+
+// Everything recipe selection and rendering reads from this manager: the
+// recipe store, the model facts, the selected GPUs, the platform and the
+// environment the recipes allowlist, and the image slots of CONFIG.
+function legacyRecipeContext(opts, model, localConfig, extra = {}) {
+  return {
+    store: recipeStore,
+    model: legacyModelFacts(model, localConfig),
+    hostGpus: selectedHostGpus(opts),
+    platform: process.platform,
+    env: process.env,
+    imageFor: runtimeImageForManifestKey,
+    defaultImage: (engineId) => (engineId === "sglang" ? CONFIG.sglangImage : CONFIG.image),
+    ...extra,
+  };
+}
+
+// The body the recipes read: the speculative mode is the normalised one, as the
+// old preset code read it, and the engine is the resolved engine.
+function legacyRecipeOptions(opts, runtimeEngine) {
+  const given = opts.speculativeMode !== undefined && opts.speculativeMode !== null && opts.speculativeMode !== "";
+  return { ...opts, engine: runtimeEngine, ...(given ? { speculativeMode: normalizeSpeculativeMode(opts.speculativeMode) } : {}) };
 }
 
 function resolveVllmRuntimePreset(opts = {}, launch = {}) {
@@ -3725,15 +3708,12 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
   const localConfig = readLocalModelConfig(launch.localPath);
   const requestedRuntimeImage = String(opts.runtimeImage || "").trim();
   const baseRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang" ? CONFIG.sglangImage : CONFIG.image);
-  if (runtimeEngine === "sglang" && isPennyroyalImage(requestedRuntimeImage)) {
-    const preset = createPennyroyalPreset(opts);
-    if (!isQwen38FlashNextNvfp4Model(opts.model || launch.modelArg, localConfig)) {
-      preset.unsupportedReason = "Pennyroyal FR-Spec 预设仅支持 Qwen3.8 Flash-Next NVFP4。";
-    }
-    return preset;
-  }
-  const capabilities = resolveVllmModelCapabilities({
-    model: opts.model || launch.modelArg,
+  const model = opts.model || launch.modelArg;
+  const recipeOptions = legacyRecipeOptions(opts, runtimeEngine);
+  // The capability scan runs on first use: a recipe that merges no model
+  // capabilities (Pennyroyal) never reads the model directory for them.
+  const capabilities = () => resolveVllmModelCapabilities({
+    model,
     localPath: launch.localPath,
     config: localConfig || {},
     quantization: opts.quantization,
@@ -3742,224 +3722,11 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
     runtimeMetadata: knownRuntimeImageMetadata(baseRuntimeImage),
     allowMuseGlimmer: envFlagEnabled(process.env.VLLM_ALLOW_MUSE_GLIMMER),
   });
-  const withCapabilities = (preset = {}) => {
-    const hasCapabilityPreset = Boolean(
-      capabilities.speculativeConfig
-      || capabilities.reasoningParser
-      || capabilities.toolCallParser
-      || capabilities.reasoningParserPlugin
-      || capabilities.unsupportedReason
-      || Object.keys(capabilities.env || {}).length
-    );
-    return {
-      ...preset,
-      id: preset.id || (hasCapabilityPreset ? `model-${capabilities.modelType || "capabilities"}` : ""),
-      label: preset.label || (hasCapabilityPreset ? `${capabilities.architecture || capabilities.modelType || "Model"} capability profile` : ""),
-      env: { ...(capabilities.env || {}), ...(preset.env || {}) },
-      forceTrustRemoteCode: Boolean(preset.forceTrustRemoteCode || capabilities.forceTrustRemoteCode),
-      reasoningParser: preset.reasoningParser || capabilities.reasoningParser,
-      reasoningParserPlugin: preset.reasoningParserPlugin || capabilities.reasoningParserPlugin,
-      toolCallParser: preset.toolCallParser || capabilities.toolCallParser,
-      enableAutoToolChoice: Boolean(preset.enableAutoToolChoice || capabilities.enableAutoToolChoice),
-      speculativeConfig: preset.speculativeConfig || capabilities.speculativeConfig,
-      unsupportedReason: preset.unsupportedReason || capabilities.unsupportedReason,
-      notes: [...(preset.notes || []), ...(capabilities.notes || [])],
-      capabilities,
-    };
-  };
-  if (runtimeEngine === "sglang") {
-    const sglangSpeculativeMode = normalizeSpeculativeMode(opts.speculativeMode);
-    const dspark = sglangSpeculativeMode === "dspark";
-    const draft = dspark ? resolveDsparkDraftModel(opts.draftModel) : { path: "", ok: true, reason: "" };
-    const qwen38 = isQwen38Model(opts.model || launch.modelArg, localConfig);
-    const flashNextNvfp4 = isQwen38FlashNextNvfp4Model(opts.model || launch.modelArg, localConfig);
-    const image = requestedRuntimeImage || (flashNextNvfp4 ? CONFIG.sglangFlashNextImage : baseRuntimeImage);
-    const maxMambaCacheSize = positiveInt(opts.sglangMaxMambaCacheSize, flashNextNvfp4 ? 8 : 0);
-    const requestedMaxRunningRequests = positiveInt(opts.maxNumSeqs, 1);
-    const effectiveMaxRunningRequests = flashNextNvfp4
-      ? Math.min(requestedMaxRunningRequests, Math.max(1, Math.floor(maxMambaCacheSize / 5)))
-      : requestedMaxRunningRequests;
-    return withCapabilities({
-      id: flashNextNvfp4 ? "qwen3.8-flash-next-sglang-sm120" : dspark ? "qwen3.8-sglang-dspark" : "sglang-openai-runtime",
-      label: flashNextNvfp4 ? "Qwen3.8 Flash-Next / SGLang / SM120" : dspark ? "Qwen3.8 / SGLang / DSpark" : "SGLang OpenAI runtime",
-      engine: "sglang",
-      image,
-      quantization: flashNextNvfp4 ? "modelopt_fp4" : "",
-      forceTrustRemoteCode: qwen38,
-      attentionBackend: String(opts.sglangAttentionBackend || (flashNextNvfp4 ? "triton" : qwen38 ? "flashinfer" : "")),
-      reasoningParser: qwen38 ? "qwen3" : capabilities.reasoningParser,
-      toolCallParser: qwen38 ? "qwen3_coder" : capabilities.toolCallParser,
-      enableAutoToolChoice: Boolean(qwen38 || capabilities.enableAutoToolChoice),
-      maxRunningRequests: effectiveMaxRunningRequests,
-      effectiveMaxRunningRequests,
-      maxTotalTokens: positiveInt(opts.sglangMaxTotalTokens, flashNextNvfp4 ? positiveInt(opts.maxModelLen, 262144) : 0),
-      pageSize: positiveInt(opts.sglangPageSize, flashNextNvfp4 ? 64 : 0),
-      chunkedPrefillSize: positiveInt(opts.sglangChunkedPrefillSize, flashNextNvfp4 ? 4096 : qwen38 ? 8192 : 8192),
-      fp4GemmBackend: String(opts.sglangFp4GemmBackend || (flashNextNvfp4 ? "flashinfer_cutlass" : "")),
-      pleOffloadEmbedding: Boolean(opts.sglangPleOffloadEmbedding || flashNextNvfp4),
-      linearAttnPrefillBackend: String(opts.sglangLinearAttnPrefillBackend || (flashNextNvfp4 ? "triton" : "")),
-      linearAttnDecodeBackend: String(opts.sglangLinearAttnDecodeBackend || (flashNextNvfp4 ? "flashinfer" : "")),
-      mambaSsmDtype: String(opts.sglangMambaSsmDtype || (flashNextNvfp4 ? "bfloat16" : "")),
-      mambaRadixCacheStrategy: String(opts.sglangMambaRadixCacheStrategy || (flashNextNvfp4 ? "extra_buffer" : "")),
-      mambaTrackInterval: positiveInt(opts.sglangMambaTrackInterval, flashNextNvfp4 ? 64 : 0),
-      maxMambaCacheSize,
-      disableThinkingByDefault: Boolean(opts.sglangDisableThinkingByDefault),
-      defaultChatTemplateKwargs: opts.sglangDisableThinkingByDefault
-        ? JSON.stringify({ enable_thinking: false })
-        : "",
-      mambaSchedulerStrategy: qwen38 && !flashNextNvfp4 ? "extra_buffer" : "",
-      disablePrefillCudaGraph: qwen38 && !flashNextNvfp4,
-      mmFeatureTransport: qwen38 && !flashNextNvfp4 ? "cpu" : "",
-      speculativeConfig: null,
-      speculativeAlgorithm: dspark ? "DSPARK" : "",
-      draftModel: draft.path,
-      dsparkBlockSize: Math.min(32, Math.max(1, positiveInt(opts.dsparkBlockSize, 7))),
-      draftModelQuantization: "unquant",
-      unsupportedReason: flashNextNvfp4 && sglangSpeculativeMode !== "off"
-        ? "Qwen3.8 Flash-Next 的已验证 262K SGLang 档当前要求关闭 MTP/DSpark。"
-        : !["off", "dspark"].includes(sglangSpeculativeMode)
-        ? `SGLang 档当前只开放 off 或 dspark，不会静默转换 ${sglangSpeculativeMode}。`
-        : !qwen38 && dspark
-        ? "当前 DSpark 档只对已验证的 Qwen3.8 主模型开放。"
-        : draft.reason,
-      notes: [
-        ...(flashNextNvfp4 ? [
-          "uses the Qwen3.8 Flash-Next day-0 image plus full SM120 QSA fix dac5523d",
-          "keeps KV cache in BF16/auto; FP8 KV is intentionally blocked for the current QSA path",
-          "offloads PLE embeddings to CPU RAM and uses Triton prefill plus FlashInfer decode for GDN",
-          `uses Mamba cache ${maxMambaCacheSize}; effective max running requests is ${effectiveMaxRunningRequests}`,
-        ] : ["uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000"]),
-        ...(qwen38 && !flashNextNvfp4 ? ["uses FlashInfer on SM120; FA3 is not supported on this host", "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures"] : []),
-        ...(dspark ? ["uses the RadixArk Qwen3.8 DSpark draft checkpoint with block size 7 and overlap scheduling"] : []),
-      ],
-    });
-  }
-  if (normalizeSpeculativeMode(opts.speculativeMode) === "dspark") {
-    return withCapabilities({
-      id: "vllm-dspark-wsl-unsupported",
-      label: "vLLM / DSpark",
-      engine: "vllm",
-      image: baseRuntimeImage,
-      unsupportedReason: "本机的 RadixArk Qwen3.8 DSpark checkpoint 在 vLLM V2 runner 会因 WSL UVA 不可用失败，V1 又会按 DeepSeekV4 错误解析；请选择 SGLang + DSpark 档。",
-      notes: [],
-    });
-  }
-  if (isQwen38Model(opts.model || launch.modelArg, localConfig)) {
-    const nvfp4 = isQwen38Nvfp4Model(opts.model || launch.modelArg, localConfig);
-    return withCapabilities({
-      id: nvfp4 ? "qwen3.8-vllm-nvfp4" : "qwen3.8-vllm-fp8",
-      label: nvfp4 ? "Qwen3.8 / vLLM / NVFP4" : "Qwen3.8 / vLLM / FP8",
-      engine: "vllm",
-      image: baseRuntimeImage,
-      positionalModel: true,
-      reasoningParser: "qwen3",
-      toolCallParser: "qwen3_coder",
-      enableAutoToolChoice: true,
-      disableQuantizationArg: nvfp4,
-      disableKvCacheDtypeArg: nvfp4,
-      safetensorsLoadStrategy: nvfp4 ? "prefetch" : "",
-      notes: [
-        `uses the Qwen3.8-compatible vLLM build ${DEFAULT_VLLM_RELEASE.version}`,
-        "uses positional model syntax required by current vLLM serve CLI",
-        "uses qwen3 reasoning and qwen3_coder tool parsing",
-        ...(nvfp4 ? ["lets compressed-tensors auto-detect the NVFP4 layout and prefetches safetensors"] : ["keeps KV cache dtype auto for quality-first operation"]),
-      ],
-    });
-  }
-  if (isQwen36MoeNvfp4Model(opts.model || launch.modelArg, localConfig)) {
-    const effectiveKvCacheDtype = !opts.kvCacheDtype || opts.kvCacheDtype === "auto" ? "fp8" : opts.kvCacheDtype;
-    const moeBackend = qwenMoeNvfp4BackendValue(opts);
-    return withCapabilities({
-      id: "qwen3.6-moe-nvfp4",
-      label: "Qwen3.6 MoE / NVFP4",
-      image: CONFIG.qwenMoeImage,
-      dtype: moeBackend === "flashinfer_b12x" ? "bfloat16" : undefined,
-      forceTrustRemoteCode: true,
-      attentionBackend: "flashinfer",
-      moeBackend,
-      generationConfig: "vllm",
-      reasoningParser: "qwen3",
-      toolCallParser: "qwen3_xml",
-      enableAutoToolChoice: true,
-      kvCacheDtype: effectiveKvCacheDtype,
-      maxNumBatchedTokens: 8192,
-      asyncScheduling: true,
-      notes: [
-        "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
-        "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
-        "adds --attention-backend flashinfer for the Qwen3.6 MoE path that previously validated locally",
-        `uses --moe-backend ${moeBackend}${moeBackend === "flashinfer_b12x" ? " on SM12x Blackwell to avoid the Marlin NVFP4 output degeneration seen on this host" : ""}`,
-        "uses --generation-config vllm because the checkpoint generation_config caused repeated ! output on this host",
-        "uses FP8 KV cache for the Qwen3.6 MoE ModelOpt checkpoint unless the launch form explicitly selects another dtype",
-        "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
-        "leaves thinking mode to request-level chat_template_kwargs from the client",
-        "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance",
-      ],
-    });
-  }
-  if (isQwen36DenseNvfp4Model(opts.model || launch.modelArg, localConfig)) {
-    return withCapabilities({
-      id: "qwen3.6-dense-nvfp4",
-      label: "Qwen3.6 Dense / NVFP4",
-      image: CONFIG.qwenMoeImage,
-      forceTrustRemoteCode: true,
-      attentionBackend: "TRITON_ATTN",
-      reasoningParser: "qwen3",
-      toolCallParser: "qwen3_xml",
-      enableAutoToolChoice: true,
-      disableQuantizationArg: true,
-      disableKvCacheDtypeArg: true,
-      maxNumBatchedTokens: 8192,
-      asyncScheduling: true,
-      notes: [
-        "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
-        "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
-        "lets vLLM auto-detect ModelOpt mixed quantization and KV cache dtype from the dense checkpoint",
-        "uses --attention-backend TRITON_ATTN because FlashInfer can crash or degenerate with the dense Qwen3.6 NVFP4 FP8 KV prefill path",
-        "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
-        "leaves thinking mode to request-level chat_template_kwargs from the client",
-        "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance",
-      ],
-    });
-  }
-  if (!isDiffusionGemmaModel(opts.model || launch.modelArg, localConfig)) return withCapabilities({ id: "", env: {} });
-  const effectiveKvCacheDtype = !opts.kvCacheDtype || opts.kvCacheDtype === "auto" ? "fp8" : opts.kvCacheDtype;
-  const gemmaModelRunner = gemmaModelRunnerEnvValue();
-  const gemmaMaxNewTokens = gemmaMaxNewTokensValue();
-  const unsupportedReason = diffusionGemmaWindowsBlockReason();
-  return withCapabilities({
-    id: "diffusion-gemma",
-    label: "DiffusionGemma / Gemma4",
-    image: CONFIG.gemmaImage,
-    unsupportedReason,
-    env: { VLLM_USE_V2_MODEL_RUNNER: gemmaModelRunner },
-    forceTrustRemoteCode: true,
-    enforceEager: gemmaModelRunner === "0",
-    attentionBackend: "TRITON_ATTN",
-    reasoningParser: "gemma4",
-    toolCallParser: "gemma4",
-    enableAutoToolChoice: true,
-    kvCacheDtype: effectiveKvCacheDtype,
-    disablePrefixCaching: true,
-    disableLanguageModelOnly: true,
-    overrideGenerationConfig: JSON.stringify({ max_new_tokens: gemmaMaxNewTokens }),
-    notes: [
-      "uses vllm/vllm-openai:gemma-compatible runtime",
-      `sets VLLM_USE_V2_MODEL_RUNNER=${gemmaModelRunner}${gemmaModelRunner === "0" ? " to avoid WSL UVA initialization failures" : ""}`,
-      "adds --attention-backend TRITON_ATTN",
-      ...(gemmaModelRunner === "0" ? ["adds --enforce-eager to avoid CUDA graph profiling assertion failures"] : []),
-      `caps default generation to ${gemmaMaxNewTokens} tokens so clients that omit max_tokens do not request the full context window`,
-      "leaves thinking mode to request-level chat_template_kwargs from the client",
-      "uses gemma4 reasoning/tool parsers",
-      ...(unsupportedReason ? [`blocked on this host: ${unsupportedReason}`] : []),
-    ],
-  });
-}
-
-function gemmaMaxNewTokensValue() {
-  const configured = Number(process.env.VLLM_GEMMA_MAX_NEW_TOKENS || 0);
-  if (Number.isFinite(configured) && configured >= 128) return Math.floor(configured);
-  return 4096;
+  return core.engines.recipes.legacyRuntimePreset(runtimeEngine, recipeOptions, launch, legacyRecipeContext(opts, model, localConfig, {
+    speculativeMode: normalizeSpeculativeMode(opts.speculativeMode),
+    capabilities,
+    resolveDraftModel: (value) => resolveDsparkDraftModel(value),
+  }));
 }
 
 function gemmaModelRunnerEnvValue() {
@@ -5641,7 +5408,8 @@ async function runStartJobOnce(job, opts) {
     // ten minutes inside a quiet read. Keep the overall startup timeout and
     // dead-container checks, but do not apply the small-model quiet limit.
     const stallTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_STALL_TIMEOUT_MS
-      || (runtimePreset.pennyroyal ? 30 : 10) * 60 * 1000));
+      || core.engines.recipes.stallMsForPreset(runtimePreset, recipeStore)
+      || 10 * 60 * 1000));
     const result = await core.waitForRuntimeReady({
       job,
       port: opts.port,

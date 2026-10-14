@@ -1,0 +1,768 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "qwen38-flashnext-262k",
+  "kind": "model",
+  "status": "verified",
+  "label": {
+    "zh": "Qwen3.8 Flash-Next · SGLang · 262K 稳定档",
+    "en": "Qwen3.8 Flash-Next · SGLang · 262K stable"
+  },
+  "engineId": "sglang",
+  "runtime": {
+    "ref": "sglangFlashNext",
+    "allowOverride": true
+  },
+  "match": {
+    "capabilityIds": [
+      "qwen3.8-flash-next"
+    ],
+    "quant": [
+      "modelopt_fp4",
+      "nvfp4",
+      "fp4"
+    ],
+    "minComputeCapability": "12.0",
+    "minGpuMemoryGb": 80
+  },
+  "appliesWhen": {
+    "eq": [
+      {
+        "fact": "model.quantMethod"
+      },
+      "nvfp4"
+    ]
+  },
+  "priority": 100,
+  "values": {
+    "quantization": "modelopt_fp4",
+    "sglang.maxTotalTokens": {
+      "expr": {
+        "coalesce": [
+          {
+            "if": [
+              {
+                "gt": [
+                  {
+                    "user": "contextLength"
+                  },
+                  0
+                ]
+              },
+              {
+                "user": "contextLength"
+              },
+              null
+            ]
+          },
+          262144
+        ]
+      }
+    },
+    "sglang.pageSize": 64,
+    "sglang.chunkedPrefillSize": 4096,
+    "sglang.fp4GemmBackend": "flashinfer_cutlass",
+    "sglang.attentionBackend": "triton",
+    "sglang.linearAttnPrefillBackend": "triton",
+    "sglang.linearAttnDecodeBackend": "flashinfer",
+    "sglang.mambaSsmDtype": "bfloat16",
+    "sglang.mambaRadixCacheStrategy": "extra_buffer",
+    "sglang.mambaTrackInterval": 64,
+    "sglang.maxMambaCacheSize": 8
+  },
+  "derived": {
+    "sglang.pleOffloadEmbedding": {
+      "or": [
+        {
+          "user": "sglang.pleOffloadEmbedding"
+        },
+        true
+      ]
+    },
+    "sglang.maxRunningRequests": {
+      "min": [
+        {
+          "coalesce": [
+            {
+              "if": [
+                {
+                  "gt": [
+                    {
+                      "user": "concurrency"
+                    },
+                    0
+                  ]
+                },
+                {
+                  "user": "concurrency"
+                },
+                null
+              ]
+            },
+            1
+          ]
+        },
+        {
+          "max": [
+            1,
+            {
+              "floorDiv": [
+                {
+                  "param": "sglang.maxMambaCacheSize"
+                },
+                5
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "locks": [
+    {
+      "param": "trustRemoteCode",
+      "value": true,
+      "reason": {
+        "zh": "Qwen3.8 架构需要仓库代码",
+        "en": "Qwen3.8 needs repository code"
+      }
+    },
+    {
+      "param": "reasoningParser",
+      "value": "qwen3",
+      "reason": {
+        "zh": "Qwen3.8 已验证解析器",
+        "en": "Validated parser for Qwen3.8"
+      }
+    },
+    {
+      "param": "toolCallParser",
+      "value": "qwen3_coder",
+      "reason": {
+        "zh": "Qwen3.8 已验证解析器",
+        "en": "Validated parser for Qwen3.8"
+      }
+    },
+    {
+      "param": "autoToolChoice",
+      "value": true,
+      "reason": {
+        "zh": "随解析器开启",
+        "en": "Enabled with the parser"
+      }
+    }
+  ],
+  "blockIf": [
+    {
+      "when": {
+        "notIn": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "off",
+            null
+          ]
+        ]
+      },
+      "code": "recipe_requires_speculative_off",
+      "message": {
+        "zh": "Qwen3.8 Flash-Next 的已验证 262K SGLang 档当前要求关闭 MTP/DSpark。",
+        "en": "The validated Flash-Next 262K SGLang recipe requires speculative decoding off."
+      }
+    }
+  ],
+  "validation": [
+    {
+      "kind": "kvCacheDtypeIn",
+      "values": [
+        "auto"
+      ],
+      "severity": "fail",
+      "code": "flashnext_fp8_kv_blocked",
+      "title": {
+        "zh": "Flash-Next FP8 KV 未开放",
+        "en": "Flash-Next FP8 KV is not available"
+      },
+      "message": {
+        "zh": "QSA 路径仍有 query BF16 与 K/V FP8 dtype mismatch；请把 KV cache 精度设为 auto（当前会得到 BF16）。",
+        "en": "The QSA path still has a query BF16 versus K/V FP8 dtype mismatch; set the KV cache precision to auto (BF16 for now)."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "fail",
+      "code": "flashnext_attention_backend",
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.attentionBackend"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.attentionBackend"
+              },
+              "triton"
+            ]
+          }
+        ]
+      },
+      "title": {
+        "zh": "QSA / attention backend 不匹配",
+        "en": "QSA / attention backend mismatch"
+      },
+      "message": {
+        "zh": "262K 稳定档要求 triton，当前选择 {{user:sglang.attentionBackend}}。",
+        "en": "The 262K stable recipe requires triton; {{user:sglang.attentionBackend}} is selected."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "fail",
+      "code": "flashnext_linear_prefill_backend",
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.linearAttnPrefillBackend"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.linearAttnPrefillBackend"
+              },
+              "triton"
+            ]
+          }
+        ]
+      },
+      "title": {
+        "zh": "Linear attention prefill 不匹配",
+        "en": "Linear attention prefill mismatch"
+      },
+      "message": {
+        "zh": "262K 稳定档要求 triton，当前选择 {{user:sglang.linearAttnPrefillBackend}}。",
+        "en": "The 262K stable recipe requires triton; {{user:sglang.linearAttnPrefillBackend}} is selected."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "fail",
+      "code": "flashnext_linear_decode_backend",
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.linearAttnDecodeBackend"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.linearAttnDecodeBackend"
+              },
+              "flashinfer"
+            ]
+          }
+        ]
+      },
+      "title": {
+        "zh": "Linear attention decode 不匹配",
+        "en": "Linear attention decode mismatch"
+      },
+      "message": {
+        "zh": "262K 稳定档要求 flashinfer，当前选择 {{user:sglang.linearAttnDecodeBackend}}。",
+        "en": "The 262K stable recipe requires flashinfer; {{user:sglang.linearAttnDecodeBackend}} is selected."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "fail",
+      "code": "flashnext_mamba_dtype",
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.mambaSsmDtype"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.mambaSsmDtype"
+              },
+              "bfloat16"
+            ]
+          }
+        ]
+      },
+      "title": {
+        "zh": "Mamba state dtype 不匹配",
+        "en": "Mamba state dtype mismatch"
+      },
+      "message": {
+        "zh": "262K 稳定档要求 bfloat16，当前选择 {{user:sglang.mambaSsmDtype}}。",
+        "en": "The 262K stable recipe requires bfloat16; {{user:sglang.mambaSsmDtype}} is selected."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "fail",
+      "code": "flashnext_ple_offload_required",
+      "when": {
+        "eq": [
+          {
+            "user": "sglang.pleOffloadEmbedding"
+          },
+          false
+        ]
+      },
+      "title": {
+        "zh": "PLE CPU offload 未启用",
+        "en": "PLE CPU offload is off"
+      },
+      "message": {
+        "zh": "该 checkpoint 的约 51GB PLE embedding 必须放入 128GB 系统内存；请启用 PLE embedding → CPU RAM。",
+        "en": "This checkpoint's PLE embedding (about 51 GB) must live in the 128 GB of system RAM; enable PLE embedding to CPU RAM."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "fail",
+      "code": "flashnext_speculative_off",
+      "when": {
+        "ne": [
+          {
+            "coalesce": [
+              {
+                "user": "speculative.method"
+              },
+              "off"
+            ]
+          },
+          "off"
+        ]
+      },
+      "title": {
+        "zh": "Flash-Next 稳定档关闭推测解码",
+        "en": "Flash-Next stable recipe keeps speculative decoding off"
+      },
+      "message": {
+        "zh": "当前已验证的 262K SGLang 档未启用 MTP/DSpark；请先使用 off，避免把未验证变量带入长上下文服务。",
+        "en": "The validated 262K SGLang recipe runs without MTP/DSpark; use off so no unverified variable enters the long-context service."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "warn",
+      "code": "flashnext_thinking_tool_parser",
+      "when": {
+        "and": [
+          {
+            "ne": [
+              {
+                "user": "reasoning.defaultEnabled"
+              },
+              false
+            ]
+          },
+          {
+            "eq": [
+              {
+                "coalesce": [
+                  {
+                    "user": "toolCallParser"
+                  },
+                  "qwen3_coder"
+                ]
+              },
+              "qwen3_coder"
+            ]
+          }
+        ]
+      },
+      "title": {
+        "zh": "Thinking + qwen3_coder 风险",
+        "en": "Thinking with qwen3_coder is risky"
+      },
+      "message": {
+        "zh": "当前上游仍有 token-0 循环问题；建议勾选“默认关闭 thinking”，客户端确有需要时再逐请求开启。",
+        "en": "Upstream still has a token-0 loop issue; turn thinking off by default and enable it per request when a client needs it."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "warn",
+      "code": "flashnext_custom_image",
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "runtimeImage"
+            }
+          },
+          {
+            "ne": [
+              {
+                "fact": "runtime.id"
+              },
+              "sglang@qwen38flashnext-sm120-dac5523d"
+            ]
+          }
+        ]
+      },
+      "title": {
+        "zh": "自定义 Flash-Next 镜像",
+        "en": "Custom Flash-Next image"
+      },
+      "message": {
+        "zh": "当前只验证了 {{recipe.runtimeImage}}；自定义镜像必须确认含完整 SM120 QSA 修复。",
+        "en": "Only {{recipe.runtimeImage}} is validated; a custom image must include the full SM120 QSA fix."
+      }
+    },
+    {
+      "kind": "rule",
+      "severity": "warn",
+      "code": "flashnext_mamba_cache_extreme_context",
+      "when": {
+        "and": [
+          {
+            "gte": [
+              {
+                "coalesce": [
+                  {
+                    "user": "contextLength"
+                  },
+                  0
+                ]
+              },
+              229492
+            ]
+          },
+          {
+            "gt": [
+              {
+                "coalesce": [
+                  {
+                    "user": "sglang.maxMambaCacheSize"
+                  },
+                  8
+                ]
+              },
+              8
+            ]
+          }
+        ]
+      },
+      "title": {
+        "zh": "极限上下文 Mamba cache 风险",
+        "en": "Mamba cache risk at extreme context"
+      },
+      "message": {
+        "zh": "本机 max Mamba cache 24 在 229K 输入最后一个 prefill chunk OOM；262K 档请保持 8，较大值只用于单独的短上下文并发 A/B。",
+        "en": "A max Mamba cache of 24 ran out of memory on the last prefill chunk of a 229K input; keep 8 for the 262K recipe and use larger values only for separate short-context concurrency A/B runs."
+      }
+    }
+  ],
+  "fixedArgs": [],
+  "env": {},
+  "labels": [],
+  "dockerFlags": [],
+  "slots": {},
+  "memory": {
+    "policy": "static-fraction-of-free",
+    "calibrate": true
+  },
+  "notes": [
+    {
+      "zh": "使用 Qwen3.8 Flash-Next day-0 镜像与 SM120 QSA 修复 dac5523d",
+      "en": "uses the Qwen3.8 Flash-Next day-0 image plus full SM120 QSA fix dac5523d"
+    },
+    {
+      "zh": "KV cache 保持 BF16/auto；当前 QSA 路径有意阻止 FP8 KV",
+      "en": "keeps the KV cache in BF16/auto; FP8 KV is intentionally blocked for the current QSA path"
+    }
+  ],
+  "legacy": {
+    "presetId": "qwen3.8-flash-next-sglang-sm120",
+    "presetLabel": "Qwen3.8 Flash-Next / SGLang / SM120",
+    "notesEn": [
+      "uses the Qwen3.8 Flash-Next day-0 image plus full SM120 QSA fix dac5523d",
+      "keeps KV cache in BF16/auto; FP8 KV is intentionally blocked for the current QSA path",
+      "offloads PLE embeddings to CPU RAM and uses Triton prefill plus FlashInfer decode for GDN",
+      {
+        "text": "uses Mamba cache {{param:sglang.maxMambaCacheSize}}; effective max running requests is {{param:sglang.maxRunningRequests}}"
+      }
+    ],
+    "check": {
+      "recommendations": {
+        "runtimeImage": {
+          "text": "{{recipe.runtimeImage}}"
+        },
+        "maxModelLen": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "contextLength"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "contextLength"
+                  },
+                  null
+                ]
+              },
+              262144
+            ]
+          }
+        },
+        "maxNumSeqs": 1,
+        "gpuMemoryUtilization": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "sglang.memFractionStatic"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "sglang.memFractionStatic"
+                  },
+                  null
+                ]
+              },
+              0.995
+            ]
+          }
+        },
+        "quantization": "modelopt_fp4",
+        "kvCacheDtype": "auto",
+        "trustRemoteCode": true,
+        "speculativeMode": "off",
+        "sglangMaxTotalTokens": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "sglang.maxTotalTokens"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "sglang.maxTotalTokens"
+                  },
+                  null
+                ]
+              },
+              262144
+            ]
+          }
+        },
+        "sglangPageSize": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.pageSize"
+              },
+              64
+            ]
+          }
+        },
+        "sglangChunkedPrefillSize": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.chunkedPrefillSize"
+              },
+              4096
+            ]
+          }
+        },
+        "sglangFp4GemmBackend": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.fp4GemmBackend"
+              },
+              "flashinfer_cutlass"
+            ]
+          }
+        },
+        "sglangAttentionBackend": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.attentionBackend"
+              },
+              "triton"
+            ]
+          }
+        },
+        "sglangPleOffloadEmbedding": true,
+        "sglangLinearAttnPrefillBackend": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.linearAttnPrefillBackend"
+              },
+              "triton"
+            ]
+          }
+        },
+        "sglangLinearAttnDecodeBackend": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.linearAttnDecodeBackend"
+              },
+              "flashinfer"
+            ]
+          }
+        },
+        "sglangMambaSsmDtype": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.mambaSsmDtype"
+              },
+              "bfloat16"
+            ]
+          }
+        },
+        "sglangMambaRadixCacheStrategy": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.mambaRadixCacheStrategy"
+              },
+              "extra_buffer"
+            ]
+          }
+        },
+        "sglangMambaTrackInterval": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.mambaTrackInterval"
+              },
+              64
+            ]
+          }
+        },
+        "sglangMaxMambaCacheSize": {
+          "expr": {
+            "coalesce": [
+              {
+                "user": "sglang.maxMambaCacheSize"
+              },
+              8
+            ]
+          }
+        },
+        "sglangDisableThinkingByDefault": true
+      },
+      "findings": [
+        {
+          "severity": "ok",
+          "title": {
+            "zh": "Flash-Next 稳定路径",
+            "en": "Flash-Next stable path"
+          },
+          "detail": {
+            "zh": "PLE embedding 放入 CPU RAM；GDN prefill 使用 Triton、decode 使用 FlashInfer；Mamba state 使用 BF16。",
+            "en": "PLE embedding lives in CPU RAM; GDN prefill uses Triton and decode uses FlashInfer; the Mamba state is BF16."
+          }
+        },
+        {
+          "severity": "ok",
+          "title": {
+            "zh": "262K 单路档",
+            "en": "262K single-request recipe"
+          },
+          "detail": {
+            "zh": "max Mamba cache 8 为 262K 稳定档保留显存，运行时有效并发为 1；需要并发时应单独做较短上下文 A/B。",
+            "en": "A max Mamba cache of 8 reserves memory for the 262K stable recipe, so the effective concurrency is 1; run a separate shorter-context A/B when you need concurrency."
+          }
+        },
+        {
+          "from": "validation"
+        }
+      ]
+    }
+  },
+  "profile": {
+    "id": "qwen38-flash-next-sglang-262k",
+    "name": "Qwen3.8 Flash-Next SGLang 262K 稳定档",
+    "description": "本机 RTX PRO 6000 + 128GB RAM 已验证：完整 SM120 QSA 修复、NVFP4、PLE→CPU、BF16 KV、GDN Triton/FlashInfer；262K 单路长上下文。",
+    "managerId": "vllm",
+    "order": 2,
+    "requirements": {
+      "minGpuCount": 1,
+      "minSingleGpuMemoryGb": 80
+    },
+    "modelDir": "RadixArk-Qwen3.8-Flash-Next-NVFP4",
+    "pinRuntimeImage": true,
+    "values": {
+      "servedName": "qwen3.8-flash-next",
+      "dtype": "auto",
+      "quantization": "modelopt_fp4",
+      "trustRemoteCode": true,
+      "contextLength": 262144,
+      "concurrency": 1,
+      "sglang.chunkedPrefillSize": 4096,
+      "sglang.memFractionStatic": 0.995,
+      "kvCacheDtype": "auto",
+      "prefixCaching": true,
+      "sglang.maxTotalTokens": 262144,
+      "sglang.pageSize": 64,
+      "sglang.pleOffloadEmbedding": true,
+      "sglang.mambaSsmDtype": "bfloat16",
+      "sglang.mambaRadixCacheStrategy": "extra_buffer",
+      "sglang.mambaTrackInterval": 64,
+      "sglang.maxMambaCacheSize": 8,
+      "speculative.method": "off",
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_coder",
+      "autoToolChoice": true,
+      "reasoning.defaultEnabled": false,
+      "clientPreset": "claude-code",
+      "sglang.attentionBackend": "triton",
+      "sglang.fp4GemmBackend": "flashinfer_cutlass",
+      "sglang.linearAttnPrefillBackend": "triton",
+      "sglang.linearAttnDecodeBackend": "flashinfer"
+    },
+    "legacy": {
+      "port": 8000,
+      "gpuDeviceIds": [
+        "0"
+      ],
+      "multiGpuMode": "single"
+    }
+  },
+  "evidence": {
+    "gpu": "RTX PRO 6000 Blackwell 96 GB",
+    "host": "Windows 11 + Docker Desktop/WSL2",
+    "date": "2026-09",
+    "jobId": null
+  }
+}

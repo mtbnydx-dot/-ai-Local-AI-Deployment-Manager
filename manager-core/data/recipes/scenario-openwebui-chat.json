@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-openwebui-chat",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "OpenWebUI 日常聊天",
+    "en": "OpenWebUI daily chat"
+  },
+  "profile": {
+    "id": "openwebui-chat",
+    "name": "OpenWebUI 日常聊天",
+    "description": "偏稳定和吞吐，适合 OpenWebUI 直接聊天。",
+    "managerId": "vllm",
+    "order": 9,
+    "values": {
+      "contextLength": 32768,
+      "concurrency": 4,
+      "vllm.gpuMemoryUtilization": 0.9,
+      "speculative.method": "off",
+      "reasoningParser": "auto",
+      "toolCallParser": "auto",
+      "clientPreset": "openwebui"
+    }
+  }
+}

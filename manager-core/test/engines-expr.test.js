@@ -113,6 +113,23 @@ test("fact names are the documented set plus runtime.features.<key>", () => {
   assert.deepEqual(codes(validateExpr({ fact: "runtime.features.bad-key" })), ["unknown_fact"]);
 });
 
+test("number reads env text the way Number() does", () => {
+  const read = { number: { env: "VLLM_GEMMA_MAX_NEW_TOKENS" } };
+  const run = (value) => evaluate(read, { env: value === undefined ? {} : { VLLM_GEMMA_MAX_NEW_TOKENS: value } });
+  assert.equal(run("4096"), 4096);
+  assert.equal(run(" 2048 "), 2048);
+  assert.equal(run("1e3"), 1000);
+  assert.equal(run("128.5"), 128.5);
+  assert.equal(run("many"), null);
+  assert.equal(run(""), null);
+  assert.equal(run(undefined), null);
+  assert.equal(evaluate({ number: 7 }), 7);
+  assert.equal(evaluate({ number: [true] }), null);
+  assert.equal(evaluate({ number: { fact: "host.maxComputeCap" } }, { fact: {} }), UNKNOWN);
+  assert.equal(evaluate({ gte: [{ number: "512" }, 128] }), true);
+  assert.deepEqual(codes(validateExpr({ number: [1, 2] })), ["bad_arity"]);
+});
+
 test("unknown operators, bad arity and bad ids fail validation", () => {
   assert.deepEqual(codes(validateExpr({ regexReplace: ["a", "b"] })), ["unknown_operator"]);
   assert.deepEqual(codes(validateExpr({ eq: [1] })), ["bad_arity"]);

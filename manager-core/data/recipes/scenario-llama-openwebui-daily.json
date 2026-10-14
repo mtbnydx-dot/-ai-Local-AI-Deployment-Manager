@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-llama-openwebui-daily",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "OpenWebUI 日常聊天",
+    "en": "OpenWebUI daily chat"
+  },
+  "profile": {
+    "id": "llama-openwebui-daily",
+    "name": "OpenWebUI 日常聊天",
+    "description": "适合网页聊天和轻并发，保留较好的响应速度。",
+    "managerId": "llama",
+    "order": 4,
+    "values": {
+      "contextLength": 32768,
+      "concurrency": 4,
+      "llamacpp.cacheTypeK": "q8_0",
+      "llamacpp.cacheTypeV": "q8_0",
+      "llamacpp.planningUtilization": 0.9,
+      "llamacpp.splitMode": "layer",
+      "clientPreset": "openwebui",
+      "llamacpp.textOnly": true
+    }
+  }
+}

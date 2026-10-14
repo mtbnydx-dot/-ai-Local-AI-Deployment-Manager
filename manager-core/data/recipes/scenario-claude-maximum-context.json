@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-claude-maximum-context",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "Claude 极限上下文",
+    "en": "Claude maximum context"
+  },
+  "profile": {
+    "id": "claude-maximum-context",
+    "name": "Claude 极限上下文",
+    "description": "冲 128K/192K/256K 时使用，牺牲并发换上下文。",
+    "managerId": "vllm",
+    "order": 8,
+    "values": {
+      "contextLength": 262144,
+      "concurrency": 1,
+      "vllm.gpuMemoryUtilization": 0.94,
+      "kvCacheDtype": "fp8",
+      "speculative.method": "off",
+      "reasoningParser": "auto",
+      "toolCallParser": "auto",
+      "clientPreset": "claude-cowork",
+      "vllm.languageModelOnly": true
+    }
+  }
+}

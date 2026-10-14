@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "qwen38-dspark-vllm",
+  "kind": "model",
+  "status": "blocked",
+  "label": {
+    "zh": "Qwen3.8 · vLLM · DSpark（本机不可用）",
+    "en": "Qwen3.8 · vLLM · DSpark (unavailable on this host)"
+  },
+  "engineId": "vllm",
+  "appliesWhen": {
+    "eq": [
+      {
+        "user": "speculative.method"
+      },
+      "dspark"
+    ]
+  },
+  "priority": 200,
+  "blockIf": [
+    {
+      "when": true,
+      "code": "vllm_dspark_wsl_unsupported",
+      "message": {
+        "zh": "本机的 RadixArk Qwen3.8 DSpark checkpoint 在 vLLM V2 runner 会因 WSL UVA 不可用失败，V1 又会按 DeepSeekV4 错误解析；请选择 SGLang + DSpark 档。",
+        "en": "On this host the RadixArk Qwen3.8 DSpark checkpoint fails on the vLLM V2 runner because WSL has no UVA, and V1 misparses it as DeepSeekV4; choose the SGLang + DSpark recipe."
+      }
+    }
+  ],
+  "memory": {
+    "policy": "device-fraction",
+    "calibrate": false
+  },
+  "legacy": {
+    "presetId": "vllm-dspark-wsl-unsupported",
+    "presetLabel": "vLLM / DSpark",
+    "notesEn": [],
+    "preset": {
+      "engine": "vllm"
+    }
+  }
+}

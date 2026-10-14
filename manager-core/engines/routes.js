@@ -3,8 +3,9 @@
 // Manager routes for the engine registry (docs/overhaul/01-engines.md §21.1):
 //   GET  /api/engines                      hosted engines, runtimes, health
 //   POST /api/engines/descriptors/validate side-effect-free draft validation
-//   GET  /api/engines/:engineId/schema     parameter catalog + availability + facts
+//   GET  /api/engines/:engineId/schema     parameter catalog + availability + facts + recipes
 //   GET  /api/instances/:id/metrics        latest sampler snapshot (01 §16.1)
+//   POST /api/recipes/reload               re-read config/recipes (01 §10.3)
 // Later packages (launch plan) add their routes here too.
 // Docker is touched only through the injected getImageStatus/listManagedContainers
 // reads, both cached, so a dashboard polling this route stays cheap. The metrics
@@ -12,6 +13,7 @@
 
 const { isPlainObject } = require("./descriptor-schema");
 const { buildFacts, buildSchemaPayload, getParamCatalog, hostFactsFromGpus } = require("./param-catalog");
+const { matchRecipes } = require("./recipes");
 const { normalizeManagerId } = require("./registry");
 const { createRuntimeFacts } = require("./runtime-facts");
 const { buildIntrospectionCommand, introspectRuntime, diffFlagSets, refineAutoParsers } = require("./introspect");
@@ -222,7 +224,11 @@ async function buildEnginesPayload(options = {}) {
   // ones (the manifest, unreadable files, engines that failed to load); an
   // engine another manager hosts is that manager's to report.
   const hosted = new Set(registry.hostedBy(managerId));
-  const errors = registry.errors()
+  const errors = [
+    ...registry.errors(),
+    // A recipe file that failed to load (its last good version stays in use).
+    ...(options.recipeStore ? options.recipeStore.errors() : []),
+  ]
     .filter((item) => !item.engineId || hosted.has(item.engineId) || !registry.has(item.engineId))
     .map(formatRegistryError);
 
@@ -232,6 +238,36 @@ async function buildEnginesPayload(options = {}) {
     generatedAt: new Date(now()).toISOString(),
     engines,
     errors,
+  };
+}
+
+function recipeLabel(recipe) {
+  return { zh: recipe.label?.zh || recipe.id, en: recipe.label?.en || recipe.id };
+}
+
+// One recipe as the schema endpoint lists it: what the console shows and what
+// its appliesWhen/lock editing needs (01 §21.1).
+function recipeView(recipe, match, store) {
+  return {
+    id: recipe.id,
+    kind: recipe.kind,
+    label: recipeLabel(recipe),
+    ...(recipe.description ? { description: clone(recipe.description) } : {}),
+    status: recipe.status,
+    source: store.sourceOf(recipe.id),
+    ...(match ? { eligible: match.eligible, score: match.score, reasons: [...match.reasons] } : {}),
+    locks: clone(recipe.locks || []),
+    values: clone(recipe.values || {}),
+    profile: clone(recipe.profile || null),
+  };
+}
+
+/** Model recipes of the engine ranked for the model and host, and the manager's scenarios. */
+function recipeListing({ store, engineId, managerId, model, host, runtime }) {
+  const matches = matchRecipes({ engineId, model: model || {}, hostFacts: host, runtime }, store);
+  return {
+    recipes: matches.map((match) => recipeView(match.recipe, match, store)),
+    scenarios: store.list({ kind: "scenario", managerId }).map((recipe) => recipeView(recipe, null, store)),
   };
 }
 
@@ -268,8 +304,9 @@ async function readHostFacts(getGpuStatus, platform) {
  * parameter catalog for one runtime, every param with its legacy domId,
  * availability and effective choices, plus the facts that appliesWhen, rules
  * and platform defaults read, so the console can evaluate them itself.
- * Without introspection every runtime flag is "unverified". Recipes and
- * scenarios stay empty until recipes are data (ENG-6).
+ * Without introspection every runtime flag is "unverified". recipes are the
+ * engine's model recipes ranked for ?model= and the host, scenarios the
+ * manager's builtin launch profiles (options.recipeStore; empty without one).
  *
  * query: { runtime?, model?, instanceMode? }. Hooks (all optional):
  *   getGpuStatus()                → the manager's cached GPU probe
@@ -317,7 +354,11 @@ async function buildEngineSchemaPayload(options = {}) {
     instanceMode: INSTANCE_MODES.includes(mode) ? mode : null,
     factNames: catalog.factNames,
   });
-  const payload = buildSchemaPayload({ catalog, runtime, introspection, facts, recipes: [], scenarios: [] });
+  // Without a recipe store (no recipe data wired in) the lists stay empty.
+  const listing = options.recipeStore
+    ? recipeListing({ store: options.recipeStore, engineId, managerId, model, host, runtime })
+    : { recipes: [], scenarios: [] };
+  const payload = buildSchemaPayload({ catalog, runtime, introspection, facts, recipes: listing.recipes, scenarios: listing.scenarios });
   return { ...payload, managerId, generatedAt: new Date(now()).toISOString() };
 }
 
@@ -427,6 +468,7 @@ function registerEngineRoutes(app, deps = {}) {
         presence,
         instanceCounts,
         isIntrospected: deps.isIntrospected,
+        recipeStore: deps.recipeStore,
         getIntrospection,
         now,
       }));
@@ -446,6 +488,7 @@ function registerEngineRoutes(app, deps = {}) {
         getGpuStatus: deps.getGpuStatus,
         getIntrospection,
         getModelFacts: deps.getModelFacts,
+        recipeStore: deps.recipeStore,
         now,
       }));
     } catch (error) {
@@ -461,6 +504,23 @@ function registerEngineRoutes(app, deps = {}) {
     const { status, payload } = validateDraftRequest(registry, req.body);
     return res.status(status).json(payload);
   });
+
+  // Re-reads <AI_ROOT>/config/recipes (01 §10.3): the entry calls it after it
+  // writes a recipe file. An invalid file keeps its last good version and is
+  // listed in errors[] (ok:false); plans already resolved keep their snapshot.
+  const recipeStore = deps.recipeStore || null;
+  if (recipeStore) {
+    app.post("/api/recipes/reload", (req, res) => {
+      if (!isLocalRequest(req)) {
+        return res.status(403).json(errorEnvelope("forbidden", "Recipes can only be reloaded from this computer."));
+      }
+      try {
+        return res.json(recipeStore.reload());
+      } catch (error) {
+        return res.status(500).json(errorEnvelope("recipe_reload_failed", error.message));
+      }
+    });
+  }
 
   app.get("/api/engines/:engineId/runtimes/:runtimeId/flags", async (req, res) => {
     try {
