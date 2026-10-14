@@ -14,6 +14,9 @@
 
 const descriptorSchema = require("./descriptor-schema");
 const dockerSegments = require("./adapters/_docker-segments");
+const expr = require("./expr");
+const legacyAliases = require("./legacy-aliases");
+const paramCatalog = require("./param-catalog");
 const registry = require("./registry");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
@@ -43,7 +46,20 @@ module.exports = {
   unknownEngineError: registry.unknownEngineError,
   registerEngineRoutes: routes.registerEngineRoutes,
   buildEnginesPayload: routes.buildEnginesPayload,
+  buildEngineSchemaPayload: routes.buildEngineSchemaPayload,
   validateDraftRequest: routes.validateDraftRequest,
+  // Parameter catalogs (01 §9), the expression language recipes and catalogs
+  // share (01 §10.2), and the legacy alias table (01 §9.5).
+  paramCatalog,
+  createParamCatalog: paramCatalog.createParamCatalog,
+  getParamCatalog: paramCatalog.getParamCatalog,
+  loadCatalog: paramCatalog.loadCatalog,
+  validateValues: paramCatalog.validateValues,
+  expr,
+  legacyAliases,
+  legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
+  legacyConfigToValues: legacyAliases.legacyConfigToValues,
+  valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,
   // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
   adapters,
   adapterFor,

@@ -3,11 +3,13 @@
 // Manager routes for the engine registry (docs/overhaul/01-engines.md §21.1):
 //   GET  /api/engines                      hosted engines, runtimes, health
 //   POST /api/engines/descriptors/validate side-effect-free draft validation
-// Later packages (schema, metrics, launch plan) add their routes here too.
+//   GET  /api/engines/:engineId/schema     parameter catalog + availability + facts
+// Later packages (metrics, launch plan) add their routes here too.
 // Docker is touched only through the injected getImageStatus/listManagedContainers
 // reads, both cached, so a dashboard polling this route stays cheap.
 
 const { isPlainObject } = require("./descriptor-schema");
+const { buildFacts, buildSchemaPayload, getParamCatalog, hostFactsFromGpus } = require("./param-catalog");
 const { normalizeManagerId } = require("./registry");
 
 const MAX_DRAFT_BYTES = 256 * 1024;
@@ -17,6 +19,8 @@ const IMAGE_UNKNOWN_TTL_MS = 5_000;
 const INSTANCE_COUNT_TTL_MS = 10_000;
 const ENGINE_ID_LABEL_KEY = "ai.manager.engine-id";
 const LEGACY_ENGINE_LABEL_KEY = "ai.manager.engine";
+const INSTANCE_MODES = Object.freeze(["replace", "parallel", "add"]);
+const MAX_QUERY_TEXT = 1024;
 
 // 00 §4.2 error envelope for the new admin JSON APIs.
 function errorEnvelope(code, message, hint) {
@@ -25,6 +29,20 @@ function errorEnvelope(code, message, hint) {
 
 function clone(value) {
   return value == null ? null : JSON.parse(JSON.stringify(value));
+}
+
+function httpError(status, code, message, hint) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  if (hint) error.hint = hint;
+  return error;
+}
+
+// One query value as trimmed text (Express gives arrays for repeated keys).
+function queryText(value) {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" ? first.trim().slice(0, MAX_QUERY_TEXT) : "";
 }
 
 /**
@@ -202,6 +220,92 @@ async function buildEnginesPayload(options = {}) {
 }
 
 /**
+ * The runtime a schema is made for: ?runtime= names a runtimeId or a manifest
+ * key of this engine; without it the engine's default runtime (env image
+ * overrides applied, as the launch uses it).
+ */
+function selectSchemaRuntime(registry, engineId, selector) {
+  if (!selector) return registry.defaultRuntime(engineId);
+  const runtimes = registry.runtimesFor(engineId);
+  const found = runtimes.find((ref) => ref.runtimeId === selector || ref.manifestKey === selector);
+  if (!found) {
+    throw httpError(404, "unknown_runtime", `Unknown runtime for ${engineId}: ${selector.slice(0, 64)}`,
+      `Known runtimes: ${runtimes.map((ref) => ref.runtimeId).join(", ") || "(none)"}`);
+  }
+  return found;
+}
+
+// Host facts from the manager's cached GPU probe; a failed probe leaves the
+// GPU facts unknown (null) instead of claiming "no SM12x GPU".
+async function readHostFacts(getGpuStatus, platform) {
+  if (typeof getGpuStatus !== "function") return hostFactsFromGpus(null, platform);
+  try {
+    const status = await getGpuStatus();
+    return hostFactsFromGpus(status?.ok && Array.isArray(status.gpus) ? status.gpus : null, platform);
+  } catch {
+    return hostFactsFromGpus(null, platform);
+  }
+}
+
+/**
+ * The GET /api/engines/:engineId/schema body (01 §21.1): the engine's
+ * parameter catalog for one runtime, every param with its legacy domId,
+ * availability and effective choices, plus the facts that appliesWhen, rules
+ * and platform defaults read, so the console can evaluate them itself.
+ * Without introspection every runtime flag is "unverified". Recipes and
+ * scenarios stay empty until recipes are data (ENG-6).
+ *
+ * query: { runtime?, model?, instanceMode? }. Hooks (all optional):
+ *   getGpuStatus()                → the manager's cached GPU probe
+ *   getIntrospection(runtimeRef)  → { capturedAt, flags[] } | null
+ *   getModelFacts(modelRef, ctx)  → { capabilityId, familyId, quantMethod, architectures, nativeMtp } | null
+ */
+async function buildEngineSchemaPayload(options = {}) {
+  const { registry, query = {} } = options;
+  const catalogLoader = options.paramCatalog || getParamCatalog();
+  const managerId = normalizeManagerId(options.managerId);
+  const now = typeof options.now === "function" ? options.now : Date.now;
+  const descriptor = registry.require(options.engineId);
+  const engineId = descriptor.id;
+  if (!registry.hostedBy(managerId).includes(engineId)) {
+    throw httpError(404, "engine_not_hosted", `Engine ${engineId} is not hosted by the ${managerId} manager.`,
+      `Ask the ${descriptor.hostManager} manager: /api/m/${descriptor.hostManager}/engines/${engineId}/schema`);
+  }
+  const runtime = selectSchemaRuntime(registry, engineId, queryText(query.runtime));
+
+  let introspection = null;
+  if (runtime && typeof options.getIntrospection === "function") {
+    try {
+      introspection = (await options.getIntrospection(runtime)) || null;
+    } catch {
+      introspection = null;
+    }
+  }
+  const catalog = catalogLoader.loadCatalog(engineId, { runtime, introspected: introspection });
+
+  const modelRef = queryText(query.model);
+  let model = null;
+  if (modelRef && typeof options.getModelFacts === "function") {
+    try {
+      model = (await options.getModelFacts(modelRef, { engineId, runtime })) || null;
+    } catch {
+      model = null;
+    }
+  }
+  const mode = queryText(query.instanceMode);
+  const host = await readHostFacts(options.getGpuStatus, options.platform || process.platform);
+  const facts = buildFacts({
+    host,
+    model,
+    runtime,
+    instanceMode: INSTANCE_MODES.includes(mode) ? mode : null,
+    factNames: catalog.factNames,
+  });
+  const payload = buildSchemaPayload({ catalog, runtime, introspection, facts, recipes: [], scenarios: [] });
+  return { ...payload, managerId, generatedAt: new Date(now()).toISOString() };
+}
+
+/**
  * POST /api/engines/descriptors/validate body → { status, payload }. Runs the
  * "draft" rules (an existing id is an override limited to the override fields,
  * a new id must use a data-driven adapter), then re-checks the merged result
@@ -270,6 +374,25 @@ function registerEngineRoutes(app, deps = {}) {
     }
   });
 
+  app.get("/api/engines/:engineId/schema", async (req, res) => {
+    try {
+      res.json(await buildEngineSchemaPayload({
+        registry,
+        managerId,
+        engineId: req.params?.engineId,
+        query: req.query || {},
+        paramCatalog: deps.paramCatalog,
+        getGpuStatus: deps.getGpuStatus,
+        getIntrospection: deps.getIntrospection,
+        getModelFacts: deps.getModelFacts,
+        now,
+      }));
+    } catch (error) {
+      const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 500;
+      res.status(status).json(errorEnvelope(error.code || "schema_unavailable", error.message, error.hint));
+    }
+  });
+
   app.post("/api/engines/descriptors/validate", (req, res) => {
     if (!isLocalRequest(req)) {
       return res.status(403).json(errorEnvelope("forbidden", "Descriptor validation is only available from this computer."));
@@ -283,6 +406,7 @@ function registerEngineRoutes(app, deps = {}) {
 
 module.exports = {
   MAX_DRAFT_BYTES,
+  buildEngineSchemaPayload,
   buildEnginesPayload,
   createImagePresenceProbe,
   createInstanceCounter,

@@ -1,0 +1,492 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "kind": "engine",
+  "engineId": "sglang",
+  "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+  "params": [
+    {
+      "id": "contextLength",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--context-length" },
+      "legacy": { "field": "maxModelLen", "domId": "maxModelLen" }
+    },
+    {
+      "id": "concurrency",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-running-requests" },
+      "legacy": { "field": "maxNumSeqs", "domId": "maxNumSeqs" }
+    },
+    {
+      "id": "servedName",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--served-model-name" },
+      "legacy": { "field": "name", "domId": "servedName" }
+    },
+    {
+      "id": "dtype",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--dtype", "omitWhen": ["auto", null] },
+      "legacy": { "field": "dtype", "domId": "launchDtype" }
+    },
+    {
+      "id": "quantization",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--quantization" },
+      "legacy": { "field": "quantization", "domId": "launchQuantization" }
+    },
+    {
+      "id": "tokenizer",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--tokenizer-path", "transform": "containerPath" }
+    },
+    {
+      "id": "trustRemoteCode",
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--trust-remote-code" },
+      "legacy": { "field": "trustRemoteCode", "domId": null }
+    },
+    {
+      "id": "kvCacheDtype",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--kv-cache-dtype", "omitWhen": ["auto", null] },
+      "legacy": { "field": "kvCacheDtype", "domId": "kvCacheDtype" }
+    },
+    {
+      "id": "prefixCaching",
+      "emit": { "mode": "adapter", "kind": "bool-pair", "falseFlag": "--disable-radix-cache" },
+      "help": {
+        "what": { "zh": "SGLang 默认开启 RadixAttention 前缀缓存；选择关会传 --disable-radix-cache。", "en": "SGLang keeps its RadixAttention prefix cache on by default; Off passes --disable-radix-cache." }
+      },
+      "legacy": { "field": "enablePrefixCaching", "aliases": ["disablePrefixCaching"], "domId": "disablePrefixCaching", "codec": "prefixCachingPair" }
+    },
+    {
+      "id": "tensorParallel",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--tp-size" },
+      "platformDefault": 1,
+      "legacy": { "field": "tensorParallelSize", "domId": "tensorParallelSize" }
+    },
+    {
+      "id": "pipelineParallel",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--pp-size", "omitWhen": [1, null] }
+    },
+    {
+      "id": "dataParallel",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--dp-size", "omitWhen": [1, null] }
+    },
+    {
+      "id": "expertParallel",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--ep-size", "via": "tensorParallel" },
+      "help": {
+        "what": { "zh": "开启后按张量并行卡数传 --ep-size，让专家分布在同一组 GPU 上。", "en": "When on, --ep-size is passed with the tensor-parallel GPU count so the experts spread over the same GPUs." }
+      }
+    },
+    {
+      "id": "reasoningParser",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning-parser", "omitWhen": ["auto", "none", null] },
+      "legacy": { "field": "reasoningParser", "domId": "reasoningParser" }
+    },
+    {
+      "id": "toolCallParser",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--tool-call-parser", "omitWhen": ["auto", "none", null] },
+      "legacy": { "field": "toolCallParser", "domId": "toolCallParser" }
+    },
+    {
+      "id": "autoToolChoice",
+      "emit": { "mode": "adapter", "kind": "none", "via": "toolCallParser" },
+      "help": {
+        "what": { "zh": "SGLang 设置了工具调用解析器就会自动选择工具；关闭时不传解析器。", "en": "SGLang chooses tools automatically whenever a tool-call parser is set; Off leaves the parser out." }
+      },
+      "legacy": { "field": "enableAutoToolChoice", "domId": "enableAutoToolChoice" }
+    },
+    {
+      "id": "reasoning.defaultEnabled",
+      "emit": { "mode": "adapter", "kind": "json", "flag": "--default-chat-template-kwargs", "via": "chatTemplateKwargs" },
+      "legacy": { "field": "sglangDisableThinkingByDefault", "domId": "sglangDisableThinkingByDefault", "codec": "invertedBool" }
+    },
+    {
+      "id": "speculative.method",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--speculative-algorithm" },
+      "choices": [
+        { "value": "off", "label": { "zh": "关闭（稳定优先）", "en": "Off (stability first)" } },
+        { "value": "dspark", "label": { "zh": "DSpark（草稿模型）", "en": "DSpark (draft model)" } },
+        { "value": "mtp", "label": { "zh": "MTP / NEXTN（仅限已验证方案）", "en": "MTP / NEXTN (validated recipes only)" } }
+      ],
+      "platformDefault": "off",
+      "rules": [
+        {
+          "kind": "errorIf",
+          "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["mtp", "qwen3_next_mtp"]] }, { "eq": [{ "fact": "model.nativeMtp.supported" }, false] }] },
+          "code": "mtp_not_in_checkpoint",
+          "message": { "zh": "这个模型的权重里没有 MTP 层，不能使用 MTP 推测解码；请关闭推测解码或换用其他方式。", "en": "This checkpoint has no MTP layers, so MTP speculative decoding cannot start; turn speculative decoding off or pick another method." }
+        }
+      ],
+      "legacy": { "field": "speculativeMode", "domId": "speculativeMode" }
+    },
+    {
+      "id": "speculative.numTokens",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--speculative-num-draft-tokens" },
+      "legacy": { "field": "numSpeculativeTokens", "domId": "numSpeculativeTokens", "formDefault": 1 }
+    },
+    {
+      "id": "speculative.draftModel",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--speculative-draft-model-path", "transform": "containerPath" },
+      "legacy": { "field": "draftModel", "domId": "draftModel" }
+    },
+    {
+      "id": "clientPreset",
+      "emit": { "mode": "adapter", "kind": "none" },
+      "legacy": { "field": "clientPreset", "domId": "clientPreset" }
+    },
+    {
+      "id": "apiKey",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--api-key" },
+      "help": {
+        "what": { "zh": "SGLang 目前只能通过启动参数接收密钥；平台会在命令、日志和界面中把它替换为 <redacted>。", "en": "SGLang only takes the key as a launch flag today; the platform replaces it with <redacted> in commands, logs and the console." }
+      },
+      "legacy": { "field": "apiKey", "domId": "vllmApiKey" }
+    },
+    {
+      "id": "chatTemplateKwargs",
+      "emit": { "mode": "adapter", "kind": "json", "flag": "--default-chat-template-kwargs" }
+    },
+    {
+      "id": "vllm.loadFormat",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--load-format", "omitWhen": ["auto", null] },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动", "en": "Auto" } },
+        { "value": "hf", "label": { "zh": "HF / safetensors", "en": "HF / safetensors" } },
+        { "value": "gguf", "label": { "zh": "GGUF 单文件", "en": "Single GGUF file" } },
+        { "value": "safetensors", "label": { "zh": "safetensors（显式传给引擎）", "en": "safetensors (passed to the engine)" } }
+      ],
+      "legacy": { "field": "loadFormat", "domId": "loadFormat" }
+    },
+    {
+      "id": "sglang.memFractionStatic",
+      "group": "memory", "level": "basic", "order": 10,
+      "type": "float", "unit": "fraction",
+      "label": { "zh": "静态显存比例（启动时空闲显存）", "en": "Static memory fraction (of free VRAM at start)" },
+      "summary": { "zh": "SGLang 按启动时空闲显存的这个比例分配权重和 KV 池。", "en": "SGLang sizes the weights plus the KV pool as this fraction of the memory free when it starts." },
+      "help": {
+        "what": { "zh": "对应 --mem-fraction-static。它是空闲显存的比例，不是整卡比例：桌面或其它模型已经占用的显存不算在内。", "en": "Maps to --mem-fraction-static. It is a fraction of free memory, not of the whole GPU: memory the desktop or other models already use is not counted." },
+        "whenToChange": { "zh": "启动时报显存不足就调小；需要更大的 KV 池时调大。", "en": "Lower it when the start runs out of memory; raise it for a bigger KV pool." },
+        "tradeoffs": { "zh": "过高会让 CUDA Graph 和激活没有余量而崩溃；配合 KV 池容量上限可以让显存准入的预算可预测。", "en": "Too high leaves no room for CUDA graphs and activations and can crash; pairing it with a KV pool size limit keeps the admission budget predictable." }
+      },
+      "range": { "min": 0.05, "max": 1 },
+      "platformDefault": { "expr": { "if": [{ "eq": [{ "fact": "instance.mode" }, "parallel"] }, 0.7, 0.92] } },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mem-fraction-static" },
+      "vramEffect": "fraction",
+      "legacy": { "field": "gpuMemoryUtilization", "domId": "gpuMemoryUtilization" }
+    },
+    {
+      "id": "sglang.maxTotalTokens",
+      "group": "memory", "level": "advanced", "order": 220,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "KV 池容量上限", "en": "KV pool size limit" },
+      "summary": { "zh": "SGLang 共享 KV 池最多容纳的 token 数，所有并发请求共用。", "en": "Maximum tokens in SGLang's shared KV pool; all concurrent requests share it." },
+      "help": {
+        "what": { "zh": "对应 --max-total-tokens。不设置时，SGLang 用静态显存比例在权重之外剩下的全部空间。", "en": "Maps to --max-total-tokens. Unset, SGLang fills whatever the static memory fraction leaves after the weights." },
+        "whenToChange": { "zh": "需要限制显存占用，或让显存准入的预算可预测时。", "en": "To bound memory use and make the admission budget predictable." },
+        "tradeoffs": { "zh": "越小越省显存，但长上下文的并发请求会排队。", "en": "Smaller saves memory; long concurrent requests queue." }
+      },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-total-tokens", "omitWhen": [0, null] },
+      "vramEffect": "kv-pool",
+      "legacy": { "field": "sglangMaxTotalTokens", "domId": "sglangMaxTotalTokens", "unset": 0 }
+    },
+    {
+      "id": "sglang.pageSize",
+      "group": "memory", "level": "expert", "order": 230,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "KV 页大小", "en": "KV page size" },
+      "summary": { "zh": "KV 缓存按多少个 token 为一页来分配。", "en": "How many tokens make up one KV cache page." },
+      "help": {
+        "what": { "zh": "对应 --page-size。部分注意力后端和混合架构要求特定的页大小。", "en": "Maps to --page-size. Some attention backends and hybrid architectures need a specific page size." },
+        "whenToChange": { "zh": "按已验证方案或注意力后端的要求设置。", "en": "Set it as a validated recipe or the attention backend requires." },
+        "tradeoffs": { "zh": "页越大，前缀复用的粒度越粗，未填满的页浪费越多。", "en": "Bigger pages reuse prefixes more coarsely and waste more on partly filled pages." }
+      },
+      "range": { "min": 1, "max": 4096, "step": 1 },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--page-size", "omitWhen": [0, null] },
+      "legacy": { "field": "sglangPageSize", "domId": "sglangPageSize", "unset": 0 }
+    },
+    {
+      "id": "sglang.chunkedPrefillSize",
+      "group": "capacity", "level": "advanced", "order": 40,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "分块预填充大小", "en": "Chunked prefill size" },
+      "summary": { "zh": "长提示词按这么多 token 一块分批预填充。", "en": "Long prompts are prefilled in chunks of this many tokens." },
+      "help": {
+        "what": { "zh": "对应 --chunked-prefill-size，平台默认 8192。", "en": "Maps to --chunked-prefill-size; the platform default is 8192." },
+        "whenToChange": { "zh": "预填充长提示词时显存峰值过高就调小。", "en": "Lower it when prefilling long prompts peaks too high in memory." },
+        "tradeoffs": { "zh": "越小越省激活显存，但长提示词开始回答得更慢。", "en": "Smaller chunks save activation memory but make long prompts slower to start answering." }
+      },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
+      "platformDefault": 8192,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--chunked-prefill-size" },
+      "vramEffect": "activations",
+      "legacy": { "field": "sglangChunkedPrefillSize", "domId": "sglangChunkedPrefillSize", "unset": 0 }
+    },
+    {
+      "id": "sglang.maxRunningRequests",
+      "group": "capacity", "level": "expert", "order": 50,
+      "type": "int", "unit": "requests",
+      "label": { "zh": "实际运行请求上限", "en": "Effective running-request cap" },
+      "summary": { "zh": "直接设定 SGLang 的运行请求上限，优先于“最大并发请求”；已验证方案通常按缓存容量推导它。", "en": "Sets SGLang's running-request cap directly and wins over Max concurrent requests; validated recipes usually derive it from cache capacity." },
+      "help": {
+        "what": { "zh": "设置后用它代替最大并发请求作为 --max-running-requests。", "en": "When set, it replaces Max concurrent requests as --max-running-requests." },
+        "whenToChange": { "zh": "混合架构的状态缓存只够少数请求同时运行时。", "en": "When a hybrid architecture's state cache only fits a few requests at once." },
+        "tradeoffs": { "zh": "低于最大并发请求时，多出来的请求会排队。", "en": "Below Max concurrent requests, the extra requests wait in the queue." }
+      },
+      "range": { "min": 1, "max": 1024, "step": 1 },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-running-requests" }
+    },
+    {
+      "id": "sglang.attentionBackend",
+      "group": "runtime-expert", "level": "expert", "order": 110,
+      "type": "enum",
+      "label": { "zh": "注意力后端", "en": "Attention backend" },
+      "summary": { "zh": "SGLang 注意力计算使用的实现。", "en": "The implementation SGLang uses for attention." },
+      "help": {
+        "what": { "zh": "对应 --attention-backend。不设置时按模型档或引擎默认选择。", "en": "Maps to --attention-backend. Unset, the model profile or the engine default decides." },
+        "whenToChange": { "zh": "当前显卡不支持默认后端，或已验证方案指定了后端时。", "en": "When this GPU does not support the default backend, or a validated recipe names one." },
+        "tradeoffs": { "zh": "不同后端的速度和稳定性不同，选错可能启动失败或输出异常。", "en": "Backends differ in speed and stability; a wrong one may fail to start or misbehave." }
+      },
+      "choices": [
+        { "value": "triton", "label": { "zh": "Triton", "en": "Triton" } },
+        { "value": "flashinfer", "label": { "zh": "FlashInfer", "en": "FlashInfer" } },
+        { "value": "qsa", "label": { "zh": "QSA", "en": "QSA" } },
+        { "value": "fa4", "label": { "zh": "FA4", "en": "FA4" } }
+      ],
+      "choicesFrom": "introspect:--attention-backend",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--attention-backend" },
+      "legacy": { "field": "sglangAttentionBackend", "domId": "sglangAttentionBackend" }
+    },
+    {
+      "id": "sglang.fp4GemmBackend",
+      "group": "runtime-expert", "level": "expert", "order": 120,
+      "type": "enum",
+      "label": { "zh": "NVFP4 GEMM 后端", "en": "NVFP4 GEMM backend" },
+      "summary": { "zh": "NVFP4 权重矩阵乘法使用的实现。", "en": "The implementation used for NVFP4 weight matrix multiplication." },
+      "help": {
+        "what": { "zh": "对应 --fp4-gemm-backend，只对 FP4 量化的模型有意义。", "en": "Maps to --fp4-gemm-backend; it only matters for FP4-quantized models." },
+        "whenToChange": { "zh": "NVFP4 模型输出异常或速度不理想时，按已验证方案选择。", "en": "When an NVFP4 model gives bad output or runs slowly, pick the backend a validated recipe names." },
+        "tradeoffs": { "zh": "部分后端只支持特定显卡架构。", "en": "Some backends only support specific GPU architectures." }
+      },
+      "choices": ["auto", "flashinfer_cutlass", "flashinfer_cudnn", "flashinfer_cutedsl", "flashinfer_trtllm", "marlin"],
+      "choicesFrom": "introspect:--fp4-gemm-backend",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--fp4-gemm-backend" },
+      "appliesWhen": { "or": [
+        { "in": [{ "fact": "model.quantMethod" }, ["modelopt_fp4", "nvfp4", "fp4"]] },
+        { "in": [{ "param": "quantization" }, ["modelopt_fp4", "nvfp4", "fp4"]] }
+      ] },
+      "legacy": { "field": "sglangFp4GemmBackend", "domId": "sglangFp4GemmBackend" }
+    },
+    {
+      "id": "sglang.pleOffloadEmbedding",
+      "group": "memory", "level": "expert", "order": 240,
+      "type": "bool",
+      "label": { "zh": "PLE 嵌入放内存", "en": "PLE embeddings in RAM" },
+      "summary": { "zh": "把逐层嵌入（PLE）表放到系统内存，给 KV 缓存腾出显存。", "en": "Keeps per-layer embedding (PLE) tables in system RAM to free GPU memory for the KV cache." },
+      "help": {
+        "what": { "zh": "对应 --ple-offload-embedding，需要运行时支持 PLE 卸载。", "en": "Maps to --ple-offload-embedding and needs a runtime that supports PLE offload." },
+        "whenToChange": { "zh": "带 PLE 的模型显存紧张、又需要长上下文时。", "en": "When a model with PLE tables is short on memory and needs long context." },
+        "tradeoffs": { "zh": "占用系统内存，嵌入查找会稍慢。", "en": "Uses system RAM, and embedding lookups get slightly slower." }
+      },
+      "requiresFeature": "pleOffload",
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--ple-offload-embedding" },
+      "vramEffect": "offload",
+      "legacy": { "field": "sglangPleOffloadEmbedding", "domId": "sglangPleOffloadEmbedding", "formDefault": true }
+    },
+    {
+      "id": "sglang.linearAttnPrefillBackend",
+      "group": "runtime-expert", "level": "expert", "order": 130,
+      "type": "enum",
+      "label": { "zh": "线性注意力预填充后端", "en": "Linear-attention prefill backend" },
+      "summary": { "zh": "混合线性注意力模型在预填充阶段使用的实现。", "en": "The implementation hybrid linear-attention models use while prefilling." },
+      "help": {
+        "what": { "zh": "对应 --linear-attn-prefill-backend，需要运行时支持。", "en": "Maps to --linear-attn-prefill-backend and needs runtime support." },
+        "whenToChange": { "zh": "按已验证方案设置，或默认后端在当前显卡上出错时。", "en": "Set it as a validated recipe says, or when the default fails on this GPU." },
+        "tradeoffs": { "zh": "不同后端的速度和稳定性不同。", "en": "Backends differ in speed and stability." }
+      },
+      "choices": ["triton", "flashinfer", "cutedsl"],
+      "requiresFeature": "linearAttnBackends",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--linear-attn-prefill-backend" },
+      "legacy": { "field": "sglangLinearAttnPrefillBackend", "domId": "sglangLinearAttnPrefillBackend" }
+    },
+    {
+      "id": "sglang.linearAttnDecodeBackend",
+      "group": "runtime-expert", "level": "expert", "order": 140,
+      "type": "enum",
+      "label": { "zh": "线性注意力解码后端", "en": "Linear-attention decode backend" },
+      "summary": { "zh": "混合线性注意力模型在逐 token 生成阶段使用的实现。", "en": "The implementation hybrid linear-attention models use while generating tokens." },
+      "help": {
+        "what": { "zh": "对应 --linear-attn-decode-backend，需要运行时支持。", "en": "Maps to --linear-attn-decode-backend and needs runtime support." },
+        "whenToChange": { "zh": "按已验证方案设置，或默认后端在当前显卡上出错时。", "en": "Set it as a validated recipe says, or when the default fails on this GPU." },
+        "tradeoffs": { "zh": "不同后端的速度和稳定性不同。", "en": "Backends differ in speed and stability." }
+      },
+      "choices": ["flashinfer", "triton", "cutedsl"],
+      "requiresFeature": "linearAttnBackends",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--linear-attn-decode-backend" },
+      "legacy": { "field": "sglangLinearAttnDecodeBackend", "domId": "sglangLinearAttnDecodeBackend" }
+    },
+    {
+      "id": "sglang.mambaSsmDtype",
+      "group": "memory", "level": "expert", "order": 250,
+      "type": "enum",
+      "label": { "zh": "Mamba 状态精度", "en": "Mamba state dtype" },
+      "summary": { "zh": "混合 Mamba/线性注意力模型保存递归状态的精度。", "en": "The precision hybrid Mamba or linear-attention models keep their recurrent state in." },
+      "help": {
+        "what": { "zh": "对应 --mamba-ssm-dtype，需要运行时支持 Mamba 控制项。", "en": "Maps to --mamba-ssm-dtype and needs a runtime with Mamba controls." },
+        "whenToChange": { "zh": "按已验证方案设置；输出异常时可以试更高精度。", "en": "Set it as a validated recipe says; try a higher precision when output looks wrong." },
+        "tradeoffs": { "zh": "精度越高状态缓存越占显存。", "en": "Higher precision makes the state cache use more memory." }
+      },
+      "choices": ["bfloat16", "float16", "float32"],
+      "requiresFeature": "mambaControls",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mamba-ssm-dtype" },
+      "vramEffect": "kv-dtype",
+      "legacy": { "field": "sglangMambaSsmDtype", "domId": "sglangMambaSsmDtype" }
+    },
+    {
+      "id": "sglang.mambaRadixCacheStrategy",
+      "group": "memory", "level": "expert", "order": 260,
+      "type": "enum",
+      "label": { "zh": "Mamba 缓存策略", "en": "Mamba cache strategy" },
+      "summary": { "zh": "混合模型的状态缓存如何配合前缀缓存使用。", "en": "How a hybrid model's state cache works with the prefix cache." },
+      "help": {
+        "what": { "zh": "对应 --mamba-radix-cache-strategy，需要运行时支持 Mamba 控制项。", "en": "Maps to --mamba-radix-cache-strategy and needs a runtime with Mamba controls." },
+        "whenToChange": { "zh": "按已验证方案设置。", "en": "Set it as a validated recipe says." },
+        "tradeoffs": { "zh": "额外缓冲能提高前缀复用率，但会占用更多显存。", "en": "Extra buffers improve prefix reuse but use more memory." }
+      },
+      "choices": ["extra_buffer", "extra_buffer_lazy", "no_buffer", "auto"],
+      "requiresFeature": "mambaControls",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mamba-radix-cache-strategy" },
+      "legacy": { "field": "sglangMambaRadixCacheStrategy", "domId": "sglangMambaRadixCacheStrategy" }
+    },
+    {
+      "id": "sglang.mambaTrackInterval",
+      "group": "memory", "level": "expert", "order": 270,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "Mamba 跟踪间隔", "en": "Mamba track interval" },
+      "summary": { "zh": "每隔多少个 token 保存一次可复用的状态快照。", "en": "How many tokens pass between reusable state snapshots." },
+      "help": {
+        "what": { "zh": "对应 --mamba-track-interval，需要运行时支持 Mamba 控制项。", "en": "Maps to --mamba-track-interval and needs a runtime with Mamba controls." },
+        "whenToChange": { "zh": "按已验证方案设置。", "en": "Set it as a validated recipe says." },
+        "tradeoffs": { "zh": "间隔越小前缀复用越细，但快照占用更多显存。", "en": "Shorter intervals reuse prefixes more finely, but snapshots use more memory." }
+      },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
+      "requiresFeature": "mambaControls",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mamba-track-interval", "omitWhen": [0, null] },
+      "legacy": { "field": "sglangMambaTrackInterval", "domId": "sglangMambaTrackInterval", "unset": 0 }
+    },
+    {
+      "id": "sglang.maxMambaCacheSize",
+      "group": "memory", "level": "expert", "order": 280,
+      "type": "int", "unit": "slots",
+      "label": { "zh": "Mamba 缓存槽数", "en": "Mamba cache slots" },
+      "summary": { "zh": "状态缓存最多保存的槽位数，限制了能同时运行的请求数。", "en": "The most slots the state cache holds, which limits how many requests run at once." },
+      "help": {
+        "what": { "zh": "对应 --max-mamba-cache-size，需要运行时支持 Mamba 控制项。", "en": "Maps to --max-mamba-cache-size and needs a runtime with Mamba controls." },
+        "whenToChange": { "zh": "按已验证方案设置；需要更多并发、显存又有余量时调大。", "en": "Set it as a validated recipe says; raise it for more concurrency when memory allows." },
+        "tradeoffs": { "zh": "槽位越多越占显存。", "en": "More slots use more memory." }
+      },
+      "range": { "min": 1, "max": 4096, "step": 1 },
+      "requiresFeature": "mambaControls",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-mamba-cache-size", "omitWhen": [0, null] },
+      "vramEffect": "kv-pool",
+      "legacy": { "field": "sglangMaxMambaCacheSize", "domId": "sglangMaxMambaCacheSize", "unset": 0 }
+    },
+    {
+      "id": "sglang.dsparkBlockSize",
+      "group": "speculative", "level": "expert", "order": 40,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "DSpark 块大小", "en": "DSpark block size" },
+      "summary": { "zh": "DSpark 草稿每块预测的 token 数。", "en": "How many tokens each DSpark draft block predicts." },
+      "help": {
+        "what": { "zh": "对应 --speculative-dspark-block-size，只在推测解码方式为 DSpark 时使用。", "en": "Maps to --speculative-dspark-block-size and is only used with DSpark speculative decoding." },
+        "whenToChange": { "zh": "一般保持已验证的 7；按草稿接受率微调。", "en": "Usually keep the validated 7; tune it by the draft acceptance rate." },
+        "tradeoffs": { "zh": "块越大，猜中时加速越多，猜错时浪费也越多。", "en": "Bigger blocks gain more when accepted and waste more when rejected." }
+      },
+      "range": { "min": 1, "max": 32, "step": 1 },
+      "platformDefault": 7,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--speculative-dspark-block-size" },
+      "appliesWhen": { "eq": [{ "param": "speculative.method" }, "dspark"] },
+      "legacy": { "field": "dsparkBlockSize", "domId": "dsparkBlockSize" }
+    },
+    {
+      "id": "sglang.draftModelQuantization",
+      "group": "speculative", "level": "expert", "order": 50,
+      "type": "string", "maxLength": 64, "pattern": "^[a-z0-9_.-]{1,64}$",
+      "label": { "zh": "草稿模型量化", "en": "Draft model quantization" },
+      "summary": { "zh": "草稿模型权重的量化方式；unquant 表示不量化。", "en": "How the draft model's weights are quantized; unquant means not at all." },
+      "help": {
+        "what": { "zh": "对应 --speculative-draft-model-quantization。", "en": "Maps to --speculative-draft-model-quantization." },
+        "whenToChange": { "zh": "草稿模型本身是量化权重，或已验证方案指定时。", "en": "When the draft model itself is quantized, or a validated recipe names a value." },
+        "tradeoffs": { "zh": "量化草稿更省显存，但接受率可能下降。", "en": "A quantized draft saves memory but may be accepted less often." }
+      },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--speculative-draft-model-quantization" },
+      "appliesWhen": { "notIn": [{ "param": "speculative.method" }, ["off", "none", null]] }
+    },
+    {
+      "id": "sglang.mambaSchedulerStrategy",
+      "group": "runtime-expert", "level": "expert", "order": 150,
+      "type": "string", "maxLength": 64, "pattern": "^[a-z0-9_]{1,64}$",
+      "label": { "zh": "Mamba 调度策略", "en": "Mamba scheduler strategy" },
+      "summary": { "zh": "混合模型在调度器里如何分配状态缓存。", "en": "How the scheduler hands out state cache for hybrid models." },
+      "help": {
+        "what": { "zh": "对应 --mamba-scheduler-strategy。", "en": "Maps to --mamba-scheduler-strategy." },
+        "whenToChange": { "zh": "按已验证方案设置。", "en": "Set it as a validated recipe says." },
+        "tradeoffs": { "zh": "设置不当会降低并发或前缀复用率。", "en": "A poor choice lowers concurrency or prefix reuse." }
+      },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mamba-scheduler-strategy" }
+    },
+    {
+      "id": "sglang.disablePrefillCudaGraph",
+      "group": "runtime-expert", "level": "expert", "order": 160,
+      "type": "bool",
+      "label": { "zh": "预填充不用 CUDA Graph", "en": "No CUDA graphs for prefill" },
+      "summary": { "zh": "预填充阶段不使用 CUDA Graph。", "en": "Prefill runs without CUDA graphs." },
+      "help": {
+        "what": { "zh": "对应 --disable-prefill-cuda-graph。", "en": "Maps to --disable-prefill-cuda-graph." },
+        "whenToChange": { "zh": "预填充阶段的 CUDA Graph 在当前显卡或模型上出错时。", "en": "When prefill CUDA graphs fail on this GPU or model." },
+        "tradeoffs": { "zh": "预填充稍慢，但启动时显存峰值更低。", "en": "Prefill gets slightly slower, but the start-up memory peak is lower." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--disable-prefill-cuda-graph" }
+    },
+    {
+      "id": "sglang.mmFeatureTransport",
+      "group": "multimodal", "level": "expert", "order": 40,
+      "type": "enum", "pattern": "^[a-z0-9_]{1,32}$",
+      "label": { "zh": "多模态特征传输方式", "en": "Multimodal feature transport" },
+      "summary": { "zh": "图片等多模态特征在进程之间如何传递。", "en": "How image and other multimodal features move between processes." },
+      "help": {
+        "what": { "zh": "对应 --mm-feature-transport。cpu 经系统内存传递。", "en": "Maps to --mm-feature-transport. cpu passes them through system RAM." },
+        "whenToChange": { "zh": "在 Docker Desktop/WSL 下遇到 CUDA IPC 错误时选 cpu。", "en": "Choose cpu when CUDA IPC errors appear under Docker Desktop/WSL." },
+        "tradeoffs": { "zh": "经内存传递稍慢，但更兼容。", "en": "Going through RAM is slightly slower but more compatible." }
+      },
+      "choices": [{ "value": "cpu", "label": { "zh": "经系统内存（cpu）", "en": "Through system RAM (cpu)" } }],
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mm-feature-transport" }
+    },
+    {
+      "id": "sglang.sleepOnIdle",
+      "group": "runtime-expert", "level": "expert", "order": 170,
+      "type": "bool",
+      "label": { "zh": "空闲时降低 CPU 占用", "en": "Sleep when idle" },
+      "summary": { "zh": "没有请求时让调度循环休眠，降低空闲时的 CPU 占用。", "en": "Lets the scheduler loop sleep while no requests arrive, which lowers idle CPU use." },
+      "help": {
+        "what": { "zh": "对应 --sleep-on-idle，平台默认开启。", "en": "Maps to --sleep-on-idle; the platform turns it on by default." },
+        "whenToChange": { "zh": "极少需要修改；排查首个请求延迟时可以关闭对比。", "en": "Rarely needs changing; turn it off to compare when investigating first-request latency." },
+        "tradeoffs": { "zh": "空闲后的第一个请求可能略慢。", "en": "The first request after an idle period may be slightly slower." }
+      },
+      "platformDefault": true,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--sleep-on-idle" }
+    },
+    {
+      "id": "sglang.enableMetrics",
+      "group": "runtime-expert", "level": "expert", "order": 180,
+      "type": "bool", "managed": true,
+      "label": { "zh": "Prometheus 指标", "en": "Prometheus metrics" },
+      "summary": { "zh": "输出 /metrics 指标；平台统计依赖它，始终开启。", "en": "Exposes /metrics; platform statistics depend on it, so it is always on." },
+      "help": {
+        "what": { "zh": "对应 --enable-metrics，由平台管理。", "en": "Maps to --enable-metrics and is managed by the platform." },
+        "whenToChange": { "zh": "不能修改。", "en": "It cannot be changed." },
+        "tradeoffs": { "zh": "开销可以忽略。", "en": "The overhead is negligible." }
+      },
+      "platformDefault": true,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--enable-metrics" }
+    }
+  ]
+}
