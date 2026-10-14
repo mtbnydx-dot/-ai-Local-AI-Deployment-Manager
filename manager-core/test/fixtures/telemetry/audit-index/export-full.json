@@ -1,0 +1,59 @@
+{
+  "exported_at_utc": "2026-10-01T04:00:00+00:00",
+  "since_updated_at": null,
+  "chat_count": 3,
+  "message_count": 6,
+  "chats": [
+    {
+      "id": "chat-alpha",
+      "user_id": "u-1",
+      "user_name": "Alice Example",
+      "user_email": "alice@example.invalid",
+      "user_role": "user",
+      "title": "部署笔记 Deployment notes",
+      "archived": false,
+      "created_at": "2026-09-30T08:00:00+00:00",
+      "updated_at": "2026-09-30T08:05:00+00:00",
+      "models": ["qwen3-8b"],
+      "message_count": 3,
+      "messages": [
+        { "id": "a-1", "parent_id": null, "role": "user", "model": null, "timestamp": "2026-09-30T08:00:00+00:00", "content": "如何部署 vLLM 服务？" },
+        { "id": "a-2", "parent_id": "a-1", "role": "assistant", "model": "qwen3-8b", "timestamp": "2026-09-30T08:00:30+00:00", "content": "使用 docker compose 启动 vLLM，然后检查健康端点。" },
+        { "id": "a-2", "parent_id": "a-1", "role": "assistant", "model": "qwen3-8b", "timestamp": "2026-09-30T08:00:30+00:00", "content": "duplicate listing of the same history message" }
+      ]
+    },
+    {
+      "id": "chat-beta",
+      "user_id": "u-2",
+      "user_name": "Bob Example",
+      "user_email": "bob@example.invalid",
+      "user_role": "admin",
+      "title": "Quarterly budget",
+      "archived": false,
+      "created_at": "2026-09-29T10:00:00+00:00",
+      "updated_at": "2026-09-29T10:10:00+00:00",
+      "models": [],
+      "message_count": 2,
+      "messages": [
+        { "id": "b-1", "parent_id": null, "role": "user", "model": null, "timestamp": "2026-09-29T10:00:00+00:00", "content": "Please summarise the quarterly budget spreadsheet." },
+        { "id": "b-2", "parent_id": "b-1", "role": "assistant", "model": "llama-3-70b", "timestamp": "2026-09-29T10:01:00+00:00", "content": "The <b>quarterly</b> budget grew by 4 percent." }
+      ]
+    },
+    {
+      "id": "chat-gamma",
+      "user_id": "u-1",
+      "user_name": "Alice Example",
+      "user_email": "alice@example.invalid",
+      "user_role": "user",
+      "title": "旧对话",
+      "archived": true,
+      "created_at": "2026-08-01T00:00:00+00:00",
+      "updated_at": "2026-08-01T00:10:00+00:00",
+      "models": ["qwen3-8b"],
+      "message_count": 1,
+      "messages": [
+        { "id": "g-1", "parent_id": null, "role": "user", "model": null, "timestamp": "2026-08-01T00:00:00+00:00", "content": "你好" }
+      ]
+    }
+  ]
+}
