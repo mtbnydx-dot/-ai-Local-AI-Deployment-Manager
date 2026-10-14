@@ -1,0 +1,45 @@
+{
+  "description": "OpenAI Responses stream: the first output_text delta is the first token; usage and status come from response.completed.",
+  "options": {
+    "protocol": "openai",
+    "stream": true,
+    "contentType": "text/event-stream"
+  },
+  "chunks": [
+    {
+      "tMs": 0,
+      "text": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fixture_1\",\"object\":\"response\",\"status\":\"in_progress\",\"usage\":null}}\n\n"
+    },
+    {
+      "tMs": 30,
+      "text": "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n"
+    },
+    {
+      "tMs": 220,
+      "text": "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\"}\n\n"
+    },
+    {
+      "tMs": 240,
+      "text": "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\" again\"}\n\n"
+    },
+    {
+      "tMs": 260,
+      "text": "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture_1\",\"object\":\"response\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hi again\"}]}],\"usage\":{\"input_tokens\":33,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":3,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":36}}}\n\n"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "reported",
+      "promptTokens": 33,
+      "cachedTokens": 0,
+      "outputTokens": 3,
+      "reasoningTokens": 0,
+      "totalTokens": 36
+    },
+    "finishReason": "stop",
+    "firstTokenAt": 220,
+    "engineTimings": null,
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}

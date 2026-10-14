@@ -16,6 +16,93 @@ const TERMINAL_STATE_ALIASES = new Map([
   ["aborted", "cancelled"],
   ["timed_out", "timeout"],
 ]);
+const MAX_TZ_OFFSET_MINUTES = 14 * 60;
+const STORED_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const CREDENTIAL_LOOKUP_TTL_MS = 60_000;
+const CREDENTIAL_LOOKUP_MAX_ENTRIES = 1024;
+const USAGE_SUMMARY_MAX_LIMIT = 1000;
+const USAGE_SUMMARY_MAX_RANGE_MS = 400 * 24 * 60 * 60 * 1000;
+const USAGE_SUMMARY_QUERY_KEYS = ["kind", "groupBy", "from", "to", "customerId", "managerId", "tzOffsetMinutes", "limit"];
+// summarizeUsage GROUP BY whitelist (04 §15). Every name maps to a fixed
+// column expression, so request input never reaches the SQL text; the time
+// keys only add the validated integer tz offset to strftime.
+const USAGE_SUMMARY_GROUP_BY = Object.freeze([
+  "customer", "model", "manager", "endpoint", "day", "hour", "month",
+  "terminal_state", "usage_source", "decision_code", "enforcement_mode",
+]);
+const USAGE_SUMMARY_TIME_FORMATS = Object.freeze({ day: "%Y-%m-%d", hour: "%Y-%m-%dT%H:00", month: "%Y-%m" });
+const USAGE_SUMMARY_SOURCES = Object.freeze({
+  llm: Object.freeze({
+    table: "billing_usage_events",
+    dimensions: Object.freeze({
+      customer: { column: "u.customer_id", field: "customerId" },
+      model: { column: "u.model", field: "model" },
+      manager: { column: "u.manager_id", field: "managerId" },
+      endpoint: { column: "u.endpoint", field: "endpoint" },
+      terminal_state: { column: "u.terminal_state", field: "terminalState" },
+      usage_source: { column: "u.usage_source", field: "usageSource" },
+      decision_code: { column: "u.decision_code", field: "decisionCode" },
+      enforcement_mode: { column: "u.enforcement_mode", field: "enforcementMode" },
+    }),
+    metrics: `
+      COUNT(*) AS requests,
+      COALESCE(SUM(u.ok), 0) AS ok_requests,
+      COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+      COALESCE(SUM(u.cached_input_tokens), 0) AS cached_input_tokens,
+      COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+      COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+      COALESCE(SUM(u.projected_microcredits), 0) AS projected_microcredits,
+      COALESCE(SUM(u.charged_microcredits), 0) AS charged_microcredits,
+      COALESCE(SUM(CASE WHEN u.usage_source='estimated' THEN 1 ELSE 0 END), 0) AS estimated_usage_requests,
+      COALESCE(SUM(CASE WHEN u.enforcement_mode='shadow' THEN 1 ELSE 0 END), 0) AS shadow_requests`,
+    shape: (row) => ({
+      requests: Number(row?.requests || 0),
+      ok: Number(row?.ok_requests || 0),
+      inputTokens: Number(row?.input_tokens || 0),
+      cachedInputTokens: Number(row?.cached_input_tokens || 0),
+      outputTokens: Number(row?.output_tokens || 0),
+      totalTokens: Number(row?.total_tokens || 0),
+      projectedMicrocredits: decimal(row?.projected_microcredits || 0),
+      chargedMicrocredits: decimal(row?.charged_microcredits || 0),
+      estimatedUsageRequests: Number(row?.estimated_usage_requests || 0),
+      shadowRequests: Number(row?.shadow_requests || 0),
+    }),
+  }),
+  // TTS rows have no model, terminal state or token columns: "model" is the
+  // TTS engine, "usage_source" is how the audio duration was obtained, and
+  // terminal_state is rejected rather than guessed from the HTTP status.
+  tts: Object.freeze({
+    table: "billing_tts_usage_events",
+    dimensions: Object.freeze({
+      customer: { column: "u.customer_id", field: "customerId" },
+      model: { column: "u.engine", field: "model" },
+      manager: { column: "u.manager_id", field: "managerId" },
+      endpoint: { column: "u.endpoint", field: "endpoint" },
+      usage_source: { column: "u.duration_source", field: "usageSource" },
+      decision_code: { column: "u.decision_code", field: "decisionCode" },
+      enforcement_mode: { column: "u.enforcement_mode", field: "enforcementMode" },
+    }),
+    metrics: `
+      COUNT(*) AS requests,
+      COALESCE(SUM(u.ok), 0) AS ok_requests,
+      COALESCE(SUM(u.characters), 0) AS characters,
+      COALESCE(SUM(u.audio_ms), 0) AS audio_ms,
+      COALESCE(SUM(u.projected_microcredits), 0) AS projected_microcredits,
+      COALESCE(SUM(u.charged_microcredits), 0) AS charged_microcredits,
+      COALESCE(SUM(CASE WHEN u.duration_source='missing' THEN 1 ELSE 0 END), 0) AS missing_duration_requests,
+      COALESCE(SUM(CASE WHEN u.enforcement_mode='shadow' THEN 1 ELSE 0 END), 0) AS shadow_requests`,
+    shape: (row) => ({
+      requests: Number(row?.requests || 0),
+      ok: Number(row?.ok_requests || 0),
+      characters: Number(row?.characters || 0),
+      audioMs: Number(row?.audio_ms || 0),
+      projectedMicrocredits: decimal(row?.projected_microcredits || 0),
+      chargedMicrocredits: decimal(row?.charged_microcredits || 0),
+      missingDurationRequests: Number(row?.missing_duration_requests || 0),
+      shadowRequests: Number(row?.shadow_requests || 0),
+    }),
+  }),
+});
 
 class BillingStoreError extends Error {
   constructor(code, message, status = 400) {
@@ -42,6 +129,10 @@ function createBillingStore(options = {}) {
   if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   let closed = false;
+  // lookupCustomerForCredential runs on the telemetry hot path; bindings change
+  // rarely, so answers (including "unbound") are reused for 60 s and dropped
+  // whenever this store rebinds a credential or edits a customer.
+  const credentialCustomerCache = new Map();
 
   configureDatabase(db, busyTimeoutMs);
   ensureSchema(db);
@@ -298,7 +389,7 @@ function createBillingStore(options = {}) {
         ? (current.tts_daily_seconds_limit === null || current.tts_daily_seconds_limit === undefined ? null : BigInt(current.tts_daily_seconds_limit))
         : optionalQuotaInt64(patch.ttsDailySecondsLimit, "ttsDailySecondsLimit"),
     };
-    return transaction(() => {
+    const updated = transaction(() => {
       if (planId && !getPlanRow(planId)) throw new BillingStoreError("billing_plan_not_found", "Plan not found.", 404);
       try {
         prepare(`
@@ -313,6 +404,8 @@ function createBillingStore(options = {}) {
       insertAudit({ actorId: patch.actorId || "system", action: "customer.update", targetType: "customer", targetId: customerId, customerId, details: { externalRef: next.externalRef, name: next.name, status: next.status, planId, enforcementMode, creditLimitMicrocredits: decimal(next.creditLimit), monthlyTokenLimit: decimal(next.tokenLimit), monthlyRequestLimit: decimal(next.requestLimit) } });
       return getCustomer(customerId);
     });
+    credentialCustomerCache.clear();
+    return updated;
   }
 
   function updateCustomerPolicy(customerId, patch = {}) {
@@ -352,7 +445,7 @@ function createBillingStore(options = {}) {
     const label = optionalText(input.label, "label", 120);
     const active = booleanInteger(input.active, true, "active");
     const at = nowIso();
-    return transaction(() => {
+    const binding = transaction(() => {
       if (!getCustomerRow(customerId)) throw new BillingStoreError("billing_customer_not_found", "Customer not found.", 404);
       const existing = prepare("SELECT binding_id FROM billing_credential_bindings WHERE manager_id=? AND service_client_id=?").get(managerId, serviceClientId);
       const bindingId = existing?.binding_id || uuid(input.bindingId, "bindingId", { generate: true });
@@ -366,6 +459,43 @@ function createBillingStore(options = {}) {
       insertAudit({ actorId: input.actorId || "system", action: existing ? "credential.rebind" : "credential.bind", targetType: "credential_binding", targetId: bindingId, customerId, details: { managerId, serviceClientId, label, active: Boolean(active) } });
       return credentialBindingFromRow(getBindingRow(managerId, serviceClientId));
     });
+    credentialCustomerCache.clear();
+    return binding;
+  }
+
+  // Read-only: the active binding's customer for a (manager, service client)
+  // pair, or null. Invalid identifiers answer null instead of throwing because
+  // the caller is the telemetry recorder, which must never fail a request.
+  function lookupCustomerForCredential(managerIdInput, clientIdInput) {
+    let managerId;
+    let clientId;
+    try {
+      managerId = managerIdentifier(managerIdInput);
+      clientId = clientIdentifier(clientIdInput);
+    } catch {
+      return null;
+    }
+    const key = `${managerId}\n${clientId}`;
+    const nowMs = nowDate().getTime();
+    const cached = credentialCustomerCache.get(key);
+    if (cached && nowMs < cached.expiresAt && nowMs >= cached.expiresAt - CREDENTIAL_LOOKUP_TTL_MS) {
+      return cached.value ? { ...cached.value } : null;
+    }
+    const row = prepare(`
+      SELECT b.binding_id, b.customer_id, c.status AS customer_status
+      FROM billing_credential_bindings b
+      JOIN billing_customers c ON c.customer_id=b.customer_id
+      WHERE b.manager_id=? AND b.service_client_id=? AND b.active=1
+    `).get(managerId, clientId);
+    const value = row
+      ? { customerId: row.customer_id, customerStatus: row.customer_status, bindingId: row.binding_id }
+      : null;
+    credentialCustomerCache.delete(key);
+    if (credentialCustomerCache.size >= CREDENTIAL_LOOKUP_MAX_ENTRIES) {
+      credentialCustomerCache.delete(credentialCustomerCache.keys().next().value);
+    }
+    credentialCustomerCache.set(key, { value, expiresAt: nowMs + CREDENTIAL_LOOKUP_TTL_MS });
+    return value ? { ...value } : null;
   }
 
   function getBindingRow(managerId, serviceClientId) {
@@ -849,9 +979,124 @@ function createBillingStore(options = {}) {
     }
     if (query.customerId) { where.push("customer_id=?"); params.push(uuid(query.customerId, "customerId")); }
     if (query.requestId) { where.push("request_id=?"); params.push(uuid(query.requestId, "requestId")); }
-    const sql = `SELECT * FROM billing_usage_events ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY at DESC LIMIT ? OFFSET ?`;
+    // Keyset paging on (at, usage_id): usage_id breaks ties between rows
+    // settled in the same millisecond, so pages never repeat or skip a row.
+    if (query.cursor !== undefined && query.cursor !== null && query.cursor !== "") {
+      const cursor = decodeUsageCursor(query.cursor);
+      where.push("(at<? OR (at=? AND usage_id<?))");
+      params.push(cursor.at, cursor.at, cursor.usageId);
+    }
+    const sql = `SELECT * FROM billing_usage_events ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY at DESC, usage_id DESC LIMIT ? OFFSET ?`;
     params.push(BigInt(limit), BigInt(offset));
     return prepare(sql).all(...params).map(usageFromRow);
+  }
+
+  // GROUP BY over the immutable usage tables (04 §15). Read-only: it only
+  // prepares SELECT statements and never opens a transaction. Microcredit
+  // sums come back from SQLite as exact BigInts (readBigInts) and leave as
+  // decimal strings; totals cover the whole filtered range even when the
+  // grouped rows are truncated at `limit`.
+  function summarizeUsage(query = {}) {
+    rejectUnknownKeys(query, USAGE_SUMMARY_QUERY_KEYS, "usage summary query");
+    const kind = usageSummaryKind(query.kind);
+    const source = USAGE_SUMMARY_SOURCES[kind];
+    const groupBy = usageSummaryGroupBy(query.groupBy, kind);
+    const tzOffsetMinutes = query.tzOffsetMinutes === undefined || query.tzOffsetMinutes === null || query.tzOffsetMinutes === ""
+      ? defaultTzOffsetMinutes
+      : strictTzOffsetMinutes(query.tzOffsetMinutes);
+    const range = usageSummaryRange(query.from, query.to, tzOffsetMinutes, nowDate());
+    const limit = boundedInteger(query.limit ?? USAGE_SUMMARY_MAX_LIMIT, "limit", 1, USAGE_SUMMARY_MAX_LIMIT);
+    const where = ["u.at>=?", "u.at<?"];
+    const params = [range.from, range.to];
+    if (query.customerId) { where.push("u.customer_id=?"); params.push(uuid(query.customerId, "customerId")); }
+    if (query.managerId) { where.push("u.manager_id=?"); params.push(managerIdentifier(query.managerId)); }
+    const whereSql = where.join(" AND ");
+
+    let rows = [];
+    let truncated = false;
+    if (groupBy.length) {
+      // The only value interpolated into the SQL is the integer offset that
+      // strictTzOffsetMinutes validated; everything else is a fixed string.
+      const modifier = `${tzOffsetMinutes < 0 ? "-" : "+"}${Math.abs(tzOffsetMinutes)} minutes`;
+      const keys = groupBy.map((name, index) => {
+        const format = USAGE_SUMMARY_TIME_FORMATS[name];
+        return format
+          ? { name, field: name, time: true, sql: `strftime('${format}', u.at, '${modifier}') AS g${index}` }
+          : { name, field: source.dimensions[name].field, time: false, sql: `${source.dimensions[name].column} AS g${index}` };
+      });
+      const withCustomer = groupBy.includes("customer");
+      const ordinals = keys.map((_, index) => index + 1);
+      // Time keys run chronologically; within a bucket the busiest groups come
+      // first, so truncation drops the smallest groups, never a whole period.
+      const orderBy = [
+        ...ordinals.filter((_, index) => keys[index].time).map((ordinal) => `${ordinal} ASC`),
+        "COUNT(*) DESC",
+        ...ordinals.filter((_, index) => !keys[index].time).map((ordinal) => `${ordinal} ASC`),
+      ];
+      const found = prepare(`
+        SELECT ${keys.map((key) => key.sql).join(", ")}${withCustomer ? ", MAX(c.name) AS customer_name" : ""},
+               ${source.metrics}
+        FROM ${source.table} u
+        ${withCustomer ? "LEFT JOIN billing_customers c ON c.customer_id=u.customer_id" : ""}
+        WHERE ${whereSql}
+        GROUP BY ${ordinals.join(", ")}
+        ORDER BY ${orderBy.join(", ")}
+        LIMIT ?
+      `).all(...params, BigInt(limit + 1));
+      truncated = found.length > limit;
+      rows = found.slice(0, limit).map((row) => {
+        const output = {};
+        keys.forEach((key, index) => {
+          const value = row[`g${index}`];
+          output[key.field] = value === null || value === undefined ? null : String(value);
+          if (key.name === "customer") output.customerName = row.customer_name ?? null;
+        });
+        return { ...output, ...source.shape(row) };
+      });
+    }
+    const totals = prepare(`SELECT ${source.metrics} FROM ${source.table} u WHERE ${whereSql}`).get(...params);
+    return {
+      ok: true,
+      kind,
+      groupBy,
+      from: range.from,
+      to: range.to,
+      tzOffsetMinutes,
+      rows,
+      totals: source.shape(totals),
+      truncated,
+    };
+  }
+
+  // Read-only drill-down for a gateway request id (04 §11.6): the latest usage
+  // event whose external_request_id is any of the given ids (request_id and
+  // manager_request_id), plus its reservation decision, or null.
+  function getUsageByExternalRequestId(input) {
+    const ids = [...new Set((Array.isArray(input) ? input : [input])
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .filter(Boolean))];
+    if (!ids.length) return null;
+    if (ids.length > 8 || ids.some((id) => id.length > 128)) {
+      throw new BillingStoreError("billing_invalid_input", "externalRequestId must be at most 8 ids of at most 128 characters.");
+    }
+    const row = prepare(`
+      SELECT * FROM billing_usage_events
+      WHERE external_request_id IN (${ids.map(() => "?").join(", ")})
+      ORDER BY at DESC, usage_id DESC
+      LIMIT 1
+    `).get(...ids);
+    if (!row) return null;
+    const reservation = getReservationRow(row.request_id);
+    return {
+      usage: usageFromRow(row),
+      reservation: reservation
+        ? {
+          enforcementMode: reservation.enforcement_mode,
+          decisionCode: reservation.decision_code,
+          reservationMicrocredits: decimal(reservation.reservation_microcredits),
+        }
+        : null,
+    };
   }
 
   function listLedger(query = {}) {
@@ -1201,6 +1446,9 @@ function createBillingStore(options = {}) {
     listPrices,
     getRequest,
     listUsage,
+    summarizeUsage,
+    getUsageByExternalRequestId,
+    lookupCustomerForCredential,
     listLedger,
     listAuditEvents,
     writeAdminAudit,
@@ -1357,6 +1605,10 @@ function ensureSchema(db) {
       decision_code TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_billing_usage_customer_at ON billing_usage_events(customer_id, at);
+    -- Usage summary and request drill-down (04 §15). The immutability triggers
+    -- block only UPDATE and DELETE, so adding an index is allowed.
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_at ON billing_usage_events(at);
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_external ON billing_usage_events(external_request_id);
     CREATE TABLE IF NOT EXISTS billing_wallet_ledger (
       entry_id TEXT PRIMARY KEY,
       at TEXT NOT NULL,
@@ -1430,6 +1682,7 @@ function ensureSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_billing_tts_usage_customer_at ON billing_tts_usage_events(customer_id, at);
     CREATE INDEX IF NOT EXISTS idx_billing_tts_usage_client_at ON billing_tts_usage_events(manager_id, service_client_id, at);
+    CREATE INDEX IF NOT EXISTS idx_billing_tts_usage_at ON billing_tts_usage_events(at);
     CREATE TRIGGER IF NOT EXISTS billing_tts_usage_events_no_update
       BEFORE UPDATE ON billing_tts_usage_events BEGIN SELECT RAISE(ABORT, 'billing tts usage events are immutable'); END;
     CREATE TRIGGER IF NOT EXISTS billing_tts_usage_events_no_delete
@@ -2036,6 +2289,113 @@ function utcMonthPeriod(date, tzOffsetMinutes = 0) {
   return monthPeriod(date, tzOffsetMinutes);
 }
 
+// Unlike clampTzOffsetMinutes (kept for listUsage), the summary rejects a bad
+// offset: it becomes part of the strftime modifier, so it must be an integer.
+function strictTzOffsetMinutes(value) {
+  const text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
+  if (!/^[+-]?\d{1,4}$/.test(text)) {
+    throw new BillingStoreError("billing_invalid_tz_offset", "tzOffsetMinutes must be an integer number of minutes.");
+  }
+  const minutes = Number(text);
+  if (Math.abs(minutes) > MAX_TZ_OFFSET_MINUTES) {
+    throw new BillingStoreError("billing_invalid_tz_offset", "tzOffsetMinutes must be between -840 and 840.");
+  }
+  return minutes || 0;
+}
+
+function usageSummaryKind(value) {
+  const kind = value === undefined || value === null || value === "" ? "llm" : String(value).trim().toLowerCase();
+  if (!Object.hasOwn(USAGE_SUMMARY_SOURCES, kind)) throw new BillingStoreError("billing_invalid_kind", "kind must be llm or tts.");
+  return kind;
+}
+
+function usageSummaryGroupBy(value, kind) {
+  const list = value === undefined || value === null || value === ""
+    ? []
+    : Array.isArray(value) ? value : String(value).split(",");
+  const names = [];
+  for (const item of list) {
+    const name = typeof item === "string" ? item.trim().toLowerCase() : "";
+    if (!USAGE_SUMMARY_GROUP_BY.includes(name)) {
+      throw new BillingStoreError("billing_invalid_group_by", `groupBy accepts only: ${USAGE_SUMMARY_GROUP_BY.join(", ")}.`);
+    }
+    if (!USAGE_SUMMARY_TIME_FORMATS[name] && !USAGE_SUMMARY_SOURCES[kind].dimensions[name]) {
+      throw new BillingStoreError("billing_invalid_group_by", `${name} is not recorded for ${kind} usage.`);
+    }
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+// from/to accept epoch milliseconds, ISO 8601 with Z or an explicit offset, or
+// a YYYY-MM-DD date taken as midnight at tzOffsetMinutes. The default window
+// is the current billing month, like the overview's "this period".
+function usageSummaryRange(fromInput, toInput, tzOffsetMinutes, now) {
+  const period = monthPeriod(now, tzOffsetMinutes);
+  const from = isBlank(fromInput) ? new Date(period.start) : usageSummaryInstant(fromInput, "from", tzOffsetMinutes);
+  const to = isBlank(toInput) ? new Date(period.end) : usageSummaryInstant(toInput, "to", tzOffsetMinutes);
+  if (from.getTime() >= to.getTime()) throw new BillingStoreError("billing_invalid_range", "from must be earlier than to.");
+  if (to.getTime() - from.getTime() > USAGE_SUMMARY_MAX_RANGE_MS) {
+    throw new BillingStoreError("billing_range_too_large", "A usage summary covers at most 400 days.");
+  }
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+function usageSummaryInstant(value, name, tzOffsetMinutes) {
+  let ms = Number.NaN;
+  if (typeof value === "number") {
+    ms = Number.isSafeInteger(value) ? value : Number.NaN;
+  } else if (value instanceof Date) {
+    ms = value.getTime();
+  } else if (typeof value === "string") {
+    const text = value.trim();
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (/^\d{1,15}$/.test(text)) {
+      ms = Number(text);
+    } else if (dateOnly) {
+      const [year, month, day] = dateOnly.slice(1).map(Number);
+      const midnight = new Date(Date.UTC(year, month - 1, day));
+      if (midnight.getUTCFullYear() === year && midnight.getUTCMonth() === month - 1 && midnight.getUTCDate() === day) {
+        ms = midnight.getTime() - tzOffsetMinutes * 60 * 1000;
+      }
+    } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(text)) {
+      ms = Date.parse(text);
+    }
+  }
+  // Stored `at` values are toISOString() text compared lexically, which only
+  // holds for four-digit years.
+  if (!Number.isFinite(ms) || ms < 0 || ms > Date.UTC(9999, 11, 31)) {
+    throw new BillingStoreError("billing_invalid_time", `${name} must be epoch milliseconds, an ISO 8601 time with an offset, or a YYYY-MM-DD date.`);
+  }
+  return new Date(ms);
+}
+
+function isBlank(value) {
+  return value === undefined || value === null || value === "";
+}
+
+// listUsage keyset cursor: base64url JSON {t: at, id: usageId} of the last row
+// of a page, the same shape as the telemetry request cursor (04 §11.5).
+function encodeUsageCursor(item) {
+  const at = item?.at;
+  const usageId = item?.usageId;
+  if (typeof at !== "string" || typeof usageId !== "string" || !STORED_AT_RE.test(at) || !UUID_RE.test(usageId)) return null;
+  return Buffer.from(JSON.stringify({ t: at, id: usageId }), "utf8").toString("base64url");
+}
+
+function decodeUsageCursor(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  let parsed = null;
+  if (text.length <= 512 && /^[A-Za-z0-9_-]+$/.test(text)) {
+    try { parsed = JSON.parse(Buffer.from(text, "base64url").toString("utf8")); } catch { parsed = null; }
+  }
+  if (!parsed || typeof parsed !== "object" || typeof parsed.t !== "string" || typeof parsed.id !== "string"
+    || !STORED_AT_RE.test(parsed.t) || !UUID_RE.test(parsed.id)) {
+    throw new BillingStoreError("billing_invalid_cursor", "cursor is invalid.");
+  }
+  return { at: parsed.t, usageId: parsed.id.toLowerCase() };
+}
+
 function limitMessage(code) {
   return {
     billing_insufficient_balance: "Insufficient billing balance.",
@@ -2053,9 +2413,12 @@ function sqliteConstraint(error, code, message) {
 module.exports = {
   BillingStoreError,
   MICROCREDS_PER_MILLION_TOKENS,
+  USAGE_SUMMARY_GROUP_BY,
   calculateMicrocredits,
   clampTzOffsetMinutes,
   createBillingStore,
+  decodeUsageCursor,
+  encodeUsageCursor,
   monthPeriod,
   utcMonthPeriod,
 };

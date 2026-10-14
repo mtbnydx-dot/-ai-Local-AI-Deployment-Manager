@@ -240,3 +240,48 @@ test("billing POST with empty JSON body returns 400 instead of 500", async () =>
   assert.notEqual(res.state.status, 500);
   assert.equal(res.state.data.code, "invalid_json");
 });
+
+test("internal billing calls verify through manager-core internal-auth by default", async () => {
+  const token = "billing-http-internal-auth-token";
+  const internalAuth = require("../../manager-core/internal-auth");
+  const calls = [];
+  const handler = createBillingHttpHandler({
+    getStore: () => ({
+      settleRequest(data) {
+        calls.push(data);
+        return { ok: true, settled: true };
+      },
+    }),
+    readRequestBody: async (req) => req.raw,
+    sendJson(res, data, status = 200) {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(data));
+    },
+    getTrustToken: () => token,
+    isLocalAddress: core.isLocalAddress,
+    extractHostname: core.extractHostname,
+  });
+  const url = new URL("http://127.0.0.1/internal/billing/settle");
+  const payload = { requestId: "req-default-verify", managerId: "llama-manager" };
+  const headers = internalAuth.buildInternalRequestHeaders(token, "POST", url.pathname, "llama-manager", JSON.stringify(payload));
+  const ok = responseState();
+  await handler(request("POST", url.pathname, payload, headers), ok.res, url);
+  assert.equal(ok.state.status, 200);
+  assert.equal(calls.length, 1);
+
+  // A signature for another internal prefix, a LAN socket or a machine-form
+  // principal never reaches the billing store.
+  const telemetryHeaders = internalAuth.buildInternalRequestHeaders(token, "POST", "/internal/telemetry/requests", "llama-manager", JSON.stringify(payload));
+  const machineHeaders = internalAuth.buildMachineHeaders(token, { method: "POST", pathWithQuery: url.pathname, principal: "system:cli", body: JSON.stringify(payload) });
+  for (const [label, req] of [
+    ["other prefix", request("POST", url.pathname, payload, telemetryHeaders)],
+    ["lan socket", request("POST", url.pathname, payload, headers, "192.168.1.50")],
+    ["machine form", request("POST", url.pathname, payload, machineHeaders)],
+  ]) {
+    const denied = responseState();
+    await handler(req, denied.res, url);
+    assert.equal(denied.state.status, 401, label);
+    assert.equal(denied.state.data.code, "billing_unauthorized", label);
+  }
+  assert.equal(calls.length, 1);
+});
