@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test \"test/**/*.test.{js,mjs}\""
   },
   "dependencies": {
     "express": "^5.2.1"
