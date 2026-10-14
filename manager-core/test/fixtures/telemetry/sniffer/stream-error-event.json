@@ -1,0 +1,37 @@
+{
+  "description": "A stream that fails after 2xx headers with an OpenAI-style error event.",
+  "options": {
+    "protocol": "openai",
+    "stream": true,
+    "contentType": "text/event-stream"
+  },
+  "chunks": [
+    {
+      "tMs": 10,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Start\"},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 30,
+      "text": "data: {\"error\":{\"message\":\"Upstream stream failed: engine restarted\",\"type\":\"gateway_error\",\"code\":\"gateway_error\"}}\n\n"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "estimated",
+      "promptTokens": 0,
+      "cachedTokens": null,
+      "outputTokens": 2,
+      "reasoningTokens": null,
+      "totalTokens": 2
+    },
+    "finishReason": null,
+    "firstTokenAt": 10,
+    "engineTimings": null,
+    "upstreamError": {
+      "code": "gateway_error",
+      "type": "gateway_error"
+    },
+    "skippedEvents": 0
+  },
+  "expectedErrorText": "Upstream stream failed: engine restarted"
+}

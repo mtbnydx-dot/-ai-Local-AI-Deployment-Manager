@@ -1,0 +1,490 @@
+{
+  "description": "Source-program golden rows. `legacyLabel` is what access-log.js inferAccessSourceProgram returned before TEL-4 (captured from the pre-change code); `slug` is the telemetry slug (null when an explicit sourceProgram short-circuits inference).",
+  "accessLogCases": [
+    {
+      "name": "workbuddy",
+      "entry": {
+        "userAgent": "WorkBuddy/5.1.7",
+        "path": "/serve/v1/chat/completions",
+        "kind": "openai"
+      },
+      "slug": "workbuddy",
+      "legacyLabel": "WorkBuddy"
+    },
+    {
+      "name": "openwebui",
+      "entry": {
+        "userAgent": "open-webui/0.6.5",
+        "path": "/serve/v1/chat/completions"
+      },
+      "slug": "openwebui",
+      "legacyLabel": "OpenWebUI"
+    },
+    {
+      "name": "openwebui spaced",
+      "entry": {
+        "userAgent": "Open WebUI (backend)"
+      },
+      "slug": "openwebui",
+      "legacyLabel": "OpenWebUI"
+    },
+    {
+      "name": "openwebui python backend",
+      "entry": {
+        "userAgent": "Python/3.11 aiohttp/3.11.18",
+        "path": "/serve/v1/chat/completions"
+      },
+      "slug": "python",
+      "legacyLabel": "Python 客户端"
+    },
+    {
+      "name": "chatbox",
+      "entry": {
+        "userAgent": "Chatbox/1.9.8 (Windows)"
+      },
+      "slug": "chatbox",
+      "legacyLabel": "Chatbox"
+    },
+    {
+      "name": "lobechat",
+      "entry": {
+        "userAgent": "LobeChat/1.40.0"
+      },
+      "slug": "lobechat",
+      "legacyLabel": "LobeChat"
+    },
+    {
+      "name": "lobehub",
+      "entry": {
+        "userAgent": "lobehub-server/1.0"
+      },
+      "slug": "lobechat",
+      "legacyLabel": "LobeChat"
+    },
+    {
+      "name": "claude cli ua",
+      "entry": {
+        "userAgent": "claude-cli/2.0.14 (external, cli)",
+        "path": "/v1/messages"
+      },
+      "slug": "claude-compat",
+      "legacyLabel": "Claude 兼容客户端"
+    },
+    {
+      "name": "claude path",
+      "entry": {
+        "path": "/claude/messages"
+      },
+      "slug": "claude-compat",
+      "legacyLabel": "Claude 兼容客户端"
+    },
+    {
+      "name": "claude nested path",
+      "entry": {
+        "path": "/gateway/auto/claude/v1/messages"
+      },
+      "slug": "claude-compat",
+      "legacyLabel": "Claude 兼容客户端"
+    },
+    {
+      "name": "claude kind",
+      "entry": {
+        "kind": "claude",
+        "path": "/v1/messages"
+      },
+      "slug": "claude-compat",
+      "legacyLabel": "Claude 兼容客户端"
+    },
+    {
+      "name": "opencode ua",
+      "entry": {
+        "userAgent": "opencode/0.15.2 ai-sdk/provider-utils/3.0.9"
+      },
+      "slug": "opencode",
+      "legacyLabel": "OpenCode"
+    },
+    {
+      "name": "opencode path",
+      "entry": {
+        "path": "/opencode/v1/chat/completions"
+      },
+      "slug": "opencode",
+      "legacyLabel": "OpenCode"
+    },
+    {
+      "name": "opencode kind",
+      "entry": {
+        "kind": "opencode",
+        "path": "/v1/chat/completions"
+      },
+      "slug": "opencode",
+      "legacyLabel": "OpenCode"
+    },
+    {
+      "name": "openai python dashed",
+      "entry": {
+        "userAgent": "openai-python/1.51.0"
+      },
+      "slug": "openai-python",
+      "legacyLabel": "OpenAI Python SDK"
+    },
+    {
+      "name": "openai python sdk header style",
+      "entry": {
+        "userAgent": "OpenAI/Python 1.51.0",
+        "path": "/serve/v1/chat/completions"
+      },
+      "slug": "openai-compat",
+      "legacyLabel": "OpenAI 兼容客户端"
+    },
+    {
+      "name": "openai node",
+      "entry": {
+        "userAgent": "openai-node/4.67.3"
+      },
+      "slug": "openai-node",
+      "legacyLabel": "OpenAI Node SDK"
+    },
+    {
+      "name": "openai js",
+      "entry": {
+        "userAgent": "OpenAI/JS 4.67.3"
+      },
+      "slug": "openai-node",
+      "legacyLabel": "OpenAI Node SDK"
+    },
+    {
+      "name": "python requests",
+      "entry": {
+        "userAgent": "python-requests/2.32.3"
+      },
+      "slug": "python",
+      "legacyLabel": "Python 客户端"
+    },
+    {
+      "name": "python httpx",
+      "entry": {
+        "userAgent": "python-httpx/0.27.2"
+      },
+      "slug": "python",
+      "legacyLabel": "Python 客户端"
+    },
+    {
+      "name": "curl",
+      "entry": {
+        "userAgent": "curl/8.9.1"
+      },
+      "slug": "curl",
+      "legacyLabel": "curl"
+    },
+    {
+      "name": "powershell",
+      "entry": {
+        "userAgent": "Mozilla/5.0 (Windows NT; Windows NT 10.0; en-US) WindowsPowerShell/5.1.26100.1"
+      },
+      "slug": "powershell",
+      "legacyLabel": "PowerShell"
+    },
+    {
+      "name": "node fetch",
+      "entry": {
+        "userAgent": "node-fetch/1.0"
+      },
+      "slug": "node",
+      "legacyLabel": "Node.js 客户端"
+    },
+    {
+      "name": "undici",
+      "entry": {
+        "userAgent": "undici"
+      },
+      "slug": "node",
+      "legacyLabel": "Node.js 客户端"
+    },
+    {
+      "name": "axios",
+      "entry": {
+        "userAgent": "axios/1.7.7"
+      },
+      "slug": "node",
+      "legacyLabel": "Node.js 客户端"
+    },
+    {
+      "name": "go",
+      "entry": {
+        "userAgent": "Go-http-client/2.0"
+      },
+      "slug": "go",
+      "legacyLabel": "Go 客户端"
+    },
+    {
+      "name": "okhttp",
+      "entry": {
+        "userAgent": "okhttp/4.12.0"
+      },
+      "slug": "java",
+      "legacyLabel": "Java/OkHttp 客户端"
+    },
+    {
+      "name": "java",
+      "entry": {
+        "userAgent": "Java/21.0.4"
+      },
+      "slug": "java",
+      "legacyLabel": "Java/OkHttp 客户端"
+    },
+    {
+      "name": "browser with origin",
+      "entry": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "origin": "http://192.0.2.10:3000"
+      },
+      "slug": "browser",
+      "legacyLabel": "浏览器 · 192.0.2.10:3000"
+    },
+    {
+      "name": "origin without ua",
+      "entry": {
+        "origin": "https://chat.example.test"
+      },
+      "slug": "browser",
+      "legacyLabel": "浏览器 · chat.example.test"
+    },
+    {
+      "name": "referer host only",
+      "entry": {
+        "refererHost": "https://198.51.100.7:8080/app/index.html"
+      },
+      "slug": "browser",
+      "legacyLabel": "浏览器 · 198.51.100.7:8080"
+    },
+    {
+      "name": "browser without origin",
+      "entry": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
+      },
+      "slug": "browser",
+      "legacyLabel": "浏览器客户端"
+    },
+    {
+      "name": "edge",
+      "entry": {
+        "userAgent": "Edg/129.0.0.0"
+      },
+      "slug": "browser",
+      "legacyLabel": "浏览器客户端"
+    },
+    {
+      "name": "openai kind fallback",
+      "entry": {
+        "kind": "openai",
+        "path": "/v1/chat/completions"
+      },
+      "slug": "openai-compat",
+      "legacyLabel": "OpenAI 兼容客户端"
+    },
+    {
+      "name": "serve path fallback",
+      "entry": {
+        "path": "/serve/v1/embeddings"
+      },
+      "slug": "openai-compat",
+      "legacyLabel": "OpenAI 兼容客户端"
+    },
+    {
+      "name": "gateway openai path fallback",
+      "entry": {
+        "path": "/gateway/vllm/openai/v1/chat/completions"
+      },
+      "slug": "openai-compat",
+      "legacyLabel": "OpenAI 兼容客户端"
+    },
+    {
+      "name": "unknown ua",
+      "entry": {
+        "userAgent": "SomeTool/0.1",
+        "path": "/api/tts"
+      },
+      "slug": "unknown",
+      "legacyLabel": "未知来源"
+    },
+    {
+      "name": "empty",
+      "entry": {},
+      "slug": "unknown",
+      "legacyLabel": "未知来源"
+    },
+    {
+      "name": "uppercase claude path",
+      "entry": {
+        "path": "/CLAUDE/V1/MESSAGES"
+      },
+      "slug": "claude-compat",
+      "legacyLabel": "Claude 兼容客户端"
+    },
+    {
+      "name": "workbuddy beats claude path",
+      "entry": {
+        "userAgent": "WorkBuddy/5.1.7",
+        "path": "/claude/v1/messages",
+        "kind": "claude"
+      },
+      "slug": "workbuddy",
+      "legacyLabel": "WorkBuddy"
+    },
+    {
+      "name": "claude ua beats opencode path",
+      "entry": {
+        "userAgent": "claude-cli/2.0.14",
+        "path": "/opencode/v1/chat/completions"
+      },
+      "slug": "claude-compat",
+      "legacyLabel": "Claude 兼容客户端"
+    },
+    {
+      "name": "curl with origin",
+      "entry": {
+        "userAgent": "curl/8.9.1",
+        "origin": "http://192.0.2.10"
+      },
+      "slug": "curl",
+      "legacyLabel": "curl"
+    },
+    {
+      "name": "origin beats openai path",
+      "entry": {
+        "origin": "http://203.0.113.5:3000",
+        "path": "/serve/v1/chat/completions"
+      },
+      "slug": "browser",
+      "legacyLabel": "浏览器 · 203.0.113.5:3000"
+    },
+    {
+      "name": "whitespace origin falls through",
+      "entry": {
+        "origin": "   ",
+        "userAgent": "Mozilla/5.0"
+      },
+      "slug": "browser",
+      "legacyLabel": "浏览器客户端"
+    },
+    {
+      "name": "explicit source program",
+      "entry": {
+        "sourceProgram": "Custom Tool",
+        "userAgent": "curl/8.9.1"
+      },
+      "slug": null,
+      "legacyLabel": "Custom Tool"
+    }
+  ],
+  "hintCases": [
+    {
+      "name": "x-title cherry studio",
+      "input": {
+        "xTitle": "Cherry Studio",
+        "userAgent": "Mozilla/5.0 CherryStudio/1.5.0 Chrome/130.0.0.0 Electron/33.0.0"
+      },
+      "slug": "cherry-studio"
+    },
+    {
+      "name": "x-ai-client claude code",
+      "input": {
+        "aiClient": "claude-code",
+        "userAgent": "claude-cli/2.0.14 (external, cli)"
+      },
+      "slug": "claude-code"
+    },
+    {
+      "name": "x-title claude cli alias",
+      "input": {
+        "xTitle": "claude-cli"
+      },
+      "slug": "claude-code"
+    },
+    {
+      "name": "x-title cursor",
+      "input": {
+        "xTitle": "Cursor"
+      },
+      "slug": "cursor"
+    },
+    {
+      "name": "x-title open webui alias",
+      "input": {
+        "xTitle": "Open WebUI",
+        "userAgent": "Python/3.11 aiohttp/3.11.18"
+      },
+      "slug": "openwebui"
+    },
+    {
+      "name": "x-title lobehub alias",
+      "input": {
+        "xTitle": "LobeHub"
+      },
+      "slug": "lobechat"
+    },
+    {
+      "name": "x-title wins over user agent",
+      "input": {
+        "xTitle": "Chatbox",
+        "userAgent": "curl/8.9.1"
+      },
+      "slug": "chatbox"
+    },
+    {
+      "name": "x-title unknown app keeps its slug",
+      "input": {
+        "xTitle": "My Notes App (beta)!"
+      },
+      "slug": "my-notes-app-beta"
+    },
+    {
+      "name": "x-title accents folded",
+      "input": {
+        "xTitle": "Crème Studio"
+      },
+      "slug": "creme-studio"
+    },
+    {
+      "name": "x-title truncated to 40",
+      "input": {
+        "xTitle": "A Very Long Application Title That Keeps Going On And On"
+      },
+      "slug": "a-very-long-application-title-that-keeps"
+    },
+    {
+      "name": "x-title without usable characters falls through",
+      "input": {
+        "xTitle": "笔记助手",
+        "userAgent": "curl/8.9.1"
+      },
+      "slug": "curl"
+    },
+    {
+      "name": "header array takes the first value",
+      "input": {
+        "xTitle": [
+          "Chatbox",
+          "Other"
+        ]
+      },
+      "slug": "chatbox"
+    },
+    {
+      "name": "protocol fallback",
+      "input": {
+        "protocol": "openai",
+        "path": "/gateway/auto/openai/v1/chat/completions"
+      },
+      "slug": "openai-compat"
+    },
+    {
+      "name": "referer without origin",
+      "input": {
+        "referer": "http://192.0.2.44:8080/chat"
+      },
+      "slug": "browser"
+    }
+  ]
+}

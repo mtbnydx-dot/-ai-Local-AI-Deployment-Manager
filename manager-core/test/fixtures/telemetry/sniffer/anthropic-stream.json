@@ -1,0 +1,50 @@
+{
+  "description": "Anthropic Messages stream: input and cache-read tokens from message_start, output tokens and stop_reason from message_delta, first token at the first content_block_delta.",
+  "options": {
+    "protocol": "claude",
+    "stream": true,
+    "contentType": "text/event-stream; charset=utf-8",
+    "estimatedInputTokens": 2000
+  },
+  "chunks": [
+    {
+      "tMs": 0,
+      "text": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"local-current\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":2100,\"cache_read_input_tokens\":1800,\"output_tokens\":1}}}\n\n"
+    },
+    {
+      "tMs": 5,
+      "text": "event: ping\ndata: {\"type\":\"ping\"}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+    },
+    {
+      "tMs": 410,
+      "text": "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Let me check\"}}\n\n"
+    },
+    {
+      "tMs": 430,
+      "text": "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" the weather.\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+    },
+    {
+      "tMs": 450,
+      "text": "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_fixture_1\",\"name\":\"get_weather\",\"input\":{}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"Example City\\\"}\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+    },
+    {
+      "tMs": 470,
+      "text": "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":87}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "reported",
+      "promptTokens": 2100,
+      "cachedTokens": 1800,
+      "outputTokens": 87,
+      "reasoningTokens": null,
+      "totalTokens": 2187
+    },
+    "finishReason": "tool_calls",
+    "firstTokenAt": 410,
+    "engineTimings": null,
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}
