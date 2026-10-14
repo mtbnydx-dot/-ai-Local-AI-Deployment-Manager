@@ -210,6 +210,8 @@ test.after(async () => {
   } catch {
     // Already closed.
   }
+  // Gateway auth opens the access store beside the ledger (PUB-8).
+  entry?.closeAccessStore();
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
@@ -286,7 +288,9 @@ async function runScenarios() {
     const headerNames = [...response.headers.keys()]
       .filter((key) => !["x-request-id", "x-client-request-id", "date"].includes(key))
       .sort();
-    results[name] = { status: response.status, text: response.text, headerNames };
+    // 05 §10.1 error bodies carry the request id, which differs per request.
+    const text = response.text.replace(/"request_id":"req_[a-z2-7]{20}"/g, "\"request_id\":\"<id>\"");
+    results[name] = { status: response.status, text, headerNames };
   }
   return results;
 }
@@ -338,7 +342,9 @@ test("TELEMETRY_ENABLED=0 leaves the gateway exactly as it was", async () => {
   const hitsBefore = upstreamHits.length;
   const response = await chat("json", "tel/disabled", { headers: { "x-request-id": "client-id-1" } });
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-request-id"), null, "no id is minted while telemetry is off");
+  // 05 §8.2 (PUB-8): every gateway answer carries the entry's request id,
+  // also while telemetry is off; upstream still gets the client's id.
+  assert.match(String(response.headers.get("x-request-id")), REQUEST_ID, "the entry mints an id while telemetry is off");
   assert.equal(response.headers.get("x-client-request-id"), null);
   assert.equal(upstreamHits.slice(hitsBefore).find((hit) => hit.mode === "json").headers["x-request-id"], "client-id-1", "the client's id is forwarded as before");
   assert.equal(fs.existsSync(dbFile), false, "no store is created");
