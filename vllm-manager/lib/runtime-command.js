@@ -83,6 +83,8 @@ function createVllmRuntimeCommandBuilder(deps) {
         presetQuantization: PRESET_QUANTIZATION_ENGINES.has(engineId),
       }),
       fixed: legacyFixedData(opts, runtimePreset),
+      // The recipe the preset was rendered from, for the ai.manager.recipe label.
+      recipeId: safeCall(() => engines.recipes.recipeForLegacyPreset(runtimePreset)?.id, null) || "",
       instance: {
         id: opts.instanceId,
         mode: opts.instanceMode,
@@ -121,7 +123,8 @@ function createVllmRuntimeCommandBuilder(deps) {
       secrets: { apiKey: opts.vllmApiKey, apiKeyRef: opts.runtimeApiKeyRef, hfToken: process.env.HF_TOKEN },
       jobId: job.id,
       admission: { leaseId: opts.gpuAdmissionLeaseId, vramReservationMb: opts.vramReservationMb },
-      launchId: null,
+      // LaunchStore id (01 §15): the server mints it into job.meta before the build.
+      launchId: opts.launchId || job?.meta?.launchId || null,
       toContainerPath: windowsPathToContainerPath,
       dockerGpuArg,
       dockerPublishArgs,

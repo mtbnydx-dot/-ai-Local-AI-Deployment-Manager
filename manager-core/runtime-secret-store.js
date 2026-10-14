@@ -5,9 +5,10 @@
 // This is a facade over the platform's single secret store (06 OPS-3b,
 // manager-core/secret-store.js): the keys live DPAPI-wrapped in
 // <AI_ROOT>/.runtime/secrets/<namespace>.json. The API is unchanged:
-// set(secret) returns a new UUID reference, get/values are synchronous (values
-// feeds the managers' redactor), remove is async, and an unreadable store
-// throws RUNTIME_SECRET_STORE_UNAVAILABLE (503).
+// set(secret, { prefix? }) returns a new UUID reference (optionally
+// <prefix>-<uuid>), get/values are synchronous (values feeds the managers'
+// redactor), remove is async, and an unreadable store throws
+// RUNTIME_SECRET_STORE_UNAVAILABLE (503).
 //
 // The old plaintext file (<manager>/logs/runtime-api-keys.json, or the old
 // default logs/runtime-secrets.json) is migrated once: its entries are imported
@@ -118,10 +119,13 @@ function createRuntimeSecretStore(options = {}) {
     }
   }
 
-  async function set(secret) {
+  // options.prefix names the kind of reference (idle wake keeps its copies as
+  // wake-<uuid>, 01 §15.3); the reference stays unique and opaque either way.
+  async function set(secret, options = {}) {
     const value = String(secret || "").trim();
     if (!value) return "";
-    const reference = crypto.randomUUID();
+    const prefix = /^[a-z][a-z0-9]{0,15}$/.test(String(options?.prefix || "")) ? `${options.prefix}-` : "";
+    const reference = `${prefix}${crypto.randomUUID()}`;
     try {
       await ready();
       await store.set(reference, value);

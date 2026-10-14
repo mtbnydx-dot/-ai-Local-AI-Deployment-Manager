@@ -200,7 +200,9 @@ test("the vLLM adapter honours the recipe slots and appends recipe args last", (
   assert.ok(flags.indexOf("--init") > flags.indexOf("C:/fixture/models:/models"));
   assert.ok(flags.indexOf("ai.runtime.fixture=yes") > flags.indexOf("--init"));
   assert.ok(flags.indexOf("C:/fixture/cache/vllm:/root/.cache/vllm") > flags.indexOf("ai.runtime.fixture=yes"));
-  assert.deepEqual(flags.slice(-2), ["-e", "VLLM_FIXTURE=1"]);
+  // The recipe env is last before the four launch identity label pairs (01 §15.2).
+  assert.deepEqual(flags.slice(-10, -8), ["-e", "VLLM_FIXTURE=1"]);
+  assert.equal(flags.at(-7), "ai.manager.launch-id=");
 });
 
 test("the SGLang adapter places every recipe slot where the legacy builder did", () => {
@@ -240,7 +242,9 @@ test("the SGLang adapter places every recipe slot where the legacy builder did",
   assert.equal(command.labels["ai.sglang.effective-max-running-requests"], "2");
   assert.equal(command.labels["ai.sglang.max-total-tokens"], "65536");
   assert.equal(command.labels["ai.manager.gpu-memory-utilization"], "0.85");
-  assert.deepEqual(flags.slice(-2), ["-e", "SGLANG_FIXTURE=1"]);
+  // The recipe env is last before the four launch identity label pairs (01 §15.2).
+  assert.deepEqual(flags.slice(-10, -8), ["-e", "SGLANG_FIXTURE=1"]);
+  assert.equal(flags.at(-7), "ai.manager.launch-id=");
 
   assert.equal(valueAfter(args, "--max-running-requests"), "2");
   assert.equal(valueAfter(args, "--mem-fraction-static"), "0.85");

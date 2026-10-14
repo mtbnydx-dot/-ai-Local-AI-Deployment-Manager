@@ -142,6 +142,14 @@
       "CUDA_VISIBLE_DEVICES=0,1",
       "-e",
       "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=llamacpp",
+      "--label",
+      "ai.manager.recipe=",
+      "--label",
+      "ai.manager.runtime-id=llamacpp@b10630",
       "ghcr.io/ggml-org/llama.cpp@sha256:test",
       "--hf-repo",
       "user/qwen-gguf",
@@ -215,6 +223,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

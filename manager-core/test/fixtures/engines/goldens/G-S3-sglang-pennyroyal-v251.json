@@ -298,6 +298,14 @@
       "SGLANG_CACHE_DIR=/cache/sglang",
       "-e",
       "SGLANG_JIT_CACHE_DIR=/cache/sglang/jit",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=sglang",
+      "--label",
+      "ai.manager.recipe=pennyroyal-v251",
+      "--label",
+      "ai.manager.runtime-id=sglang@pennyroyal-v2.5.1",
       "--entrypoint",
       "sglang",
       "ghcr.io/jpezzulli/sglang-rtxpro6000:v2.5.1@sha256:76258532b1c01f7583fbe951f90b80903db931030291db9db4e5a68b28567866",
@@ -447,6 +455,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

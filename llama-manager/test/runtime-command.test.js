@@ -271,7 +271,9 @@ test("llama runtime passes the HF token name-only and returns it as secretEnv (0
     const withKey = buildLlamaRuntimeCommand({}, { ...opts, llamaApiKey: key });
     assert.deepEqual(withKey.secretEnv, { HF_TOKEN: "fixture-hf-token-value", LLAMA_API_KEY: key });
     const imageIndex = withKey.runArgs.indexOf("llama:pinned");
-    assert.deepEqual(withKey.runArgs.slice(imageIndex - 4, imageIndex), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
+    // The four launch identity label pairs (01 §15.2) follow the secret env names.
+    assert.deepEqual(withKey.runArgs.slice(imageIndex - 12, imageIndex - 8), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
+    assert.equal(withKey.runArgs[imageIndex - 7], "ai.manager.launch-id=");
     for (const arg of withKey.runArgs) {
       assert.ok(!String(arg).includes(key));
       assert.ok(!String(arg).includes("fixture-hf-token-value"));

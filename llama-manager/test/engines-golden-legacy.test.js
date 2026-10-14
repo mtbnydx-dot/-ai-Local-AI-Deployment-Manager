@@ -42,7 +42,9 @@ test("llama goldens pin the secret channel by name and hold no key value", () =>
   assert.deepEqual(keyed.expect.secretEnvNames, ["HF_TOKEN", "LLAMA_API_KEY"]);
   assert.deepEqual(keyed.expect.secretEnv, { HF_TOKEN: "<secret:hfToken>", LLAMA_API_KEY: "<secret:apiKey>" });
   const imageIndex = keyed.expect.runArgs.indexOf(keyed.expect.runtimeImage);
-  assert.deepEqual(keyed.expect.runArgs.slice(imageIndex - 4, imageIndex), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
+  // The four launch identity label pairs (01 §15.2) follow the secret env names.
+  assert.deepEqual(keyed.expect.runArgs.slice(imageIndex - 12, imageIndex - 8), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
+  assert.equal(keyed.expect.runArgs[imageIndex - 7], "ai.manager.launch-id=");
   assert.equal(keyed.expect.runArgs.includes("--api-key"), false);
   assert.equal(JSON.stringify(keyed.expect.runArgs).includes("<secret:"), false);
   const request = byCode.get("R-L1").expect;

@@ -146,6 +146,14 @@
       "HF_TOKEN",
       "-e",
       "LLAMA_API_KEY",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=llamacpp",
+      "--label",
+      "ai.manager.recipe=",
+      "--label",
+      "ai.manager.runtime-id=llamacpp@b10630",
       "llama:pinned",
       "--model",
       "/models/qwen/model.gguf",
@@ -219,6 +227,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

@@ -47,6 +47,7 @@ function buildCommand(plan, ctx, effects) {
   ggufLogs(plan, ctx, logs);
   const { flags, publish, secretEnv } = managerDockerFlags(plan, ctx, {
     logs,
+    engineId: ENGINE_ID,
     engineLabel,
     fraction: values["vllm.gpuMemoryUtilization"],
     apiKeyEnv: API_KEY_ENV,

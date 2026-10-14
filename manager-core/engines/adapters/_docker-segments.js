@@ -36,6 +36,27 @@ function labelFlags(labels) {
   return (Array.isArray(labels) ? labels : []).flatMap((label) => ["--label", String(label)]);
 }
 
+// The launch identity labels (01 §15.2, 00 §9.9), emitted by every adapter as
+// the last docker flags before the entrypoint/image. Containers started by
+// older code lack them and are adopted through LaunchStore instead.
+const LAUNCH_LABEL_KEYS = Object.freeze({
+  launchId: "ai.manager.launch-id",
+  engineId: "ai.manager.engine-id",
+  recipe: "ai.manager.recipe",
+  runtimeId: "ai.manager.runtime-id",
+});
+
+/** { launchId, engineId, recipeId, runtimeId } -> the four label pairs; unknown values are empty. */
+function launchLabelFlags({ launchId, engineId, recipeId, runtimeId } = {}) {
+  const text = (value) => (value === undefined || value === null ? "" : String(value));
+  return [
+    "--label", `${LAUNCH_LABEL_KEYS.launchId}=${text(launchId)}`,
+    "--label", `${LAUNCH_LABEL_KEYS.engineId}=${text(engineId)}`,
+    "--label", `${LAUNCH_LABEL_KEYS.recipe}=${text(recipeId)}`,
+    "--label", `${LAUNCH_LABEL_KEYS.runtimeId}=${text(runtimeId)}`,
+  ];
+}
+
 /** Recipe env as "-e NAME=value" flags, in order; unset and empty values are skipped. */
 function envAssignmentFlags(env) {
   const flags = [];
@@ -65,8 +86,10 @@ function labelsFromFlags(flags) {
 }
 
 module.exports = {
+  LAUNCH_LABEL_KEYS,
   envAssignmentFlags,
   labelFlags,
+  launchLabelFlags,
   labelsFromFlags,
   renderRunArgs,
 };
