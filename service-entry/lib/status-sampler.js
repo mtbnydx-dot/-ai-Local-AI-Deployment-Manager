@@ -566,8 +566,12 @@ function buildPortalConfig({ req, config, getBuildId }) {
   const cfg = readConfig(config);
   const base = requestBase(req, cfg);
   let buildId = "";
+  let commit = "";
   try {
-    buildId = String((typeof getBuildId === "function" ? getBuildId() : null)?.contentHash || "");
+    const build = typeof getBuildId === "function" ? getBuildId() : null;
+    buildId = String(build?.contentHash || "");
+    // The footer shows the commit (05 §12.1); present only when the build has one.
+    commit = typeof build?.commit === "string" && /^[0-9a-f]{7,64}$/.test(build.commit) ? build.commit.slice(0, 12) : "";
   } catch {
     buildId = "";
   }
@@ -580,6 +584,7 @@ function buildPortalConfig({ req, config, getBuildId }) {
       "en-US": cfg.public?.brand?.["en-US"] || "Local Model Service",
     },
     buildId,
+    ...(commit ? { commit } : {}),
     features: {
       playground: true,
       showPrices: cfg.public?.catalog?.showPrices !== false,
