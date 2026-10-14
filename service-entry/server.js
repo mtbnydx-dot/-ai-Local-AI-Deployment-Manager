@@ -156,6 +156,7 @@ const ROUTE_MODULES = [
   // "./lib/engine-routes",       // 01 ENG-19
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
   // "./lib/telemetry-routes",    // 04 TEL-*
+  "./lib/audit-http", // 04 TEL-16  /api/audit/*
   // "./lib/admin-session",       // 05 PUB-5
   // "./lib/platform-routes",     // 06 OPS-13
 ];

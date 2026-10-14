@@ -18,7 +18,6 @@
 // needs a call from the gateway's event loop. They are off by default (tests
 // and tools open the store without them); configureJobs() changes them live.
 
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { isMainThread, parentPort, workerData } = require("node:worker_threads");
@@ -26,6 +25,7 @@ const schema = require("./schema");
 const rollups = require("./rollups");
 const { redactSecrets, redactValue } = require("../secret-redactor");
 const { maskAddress } = require("../auth-failure-guard");
+const auditAccessLog = require("./audit-access-log");
 
 const WORKER_KIND = "telemetry-store";
 const CORE_METHODS = Object.freeze([
@@ -79,11 +79,9 @@ const SIZE_GUARD = Object.freeze({ requestsDays: 7, samplesHours: 12 });
 const PRESSURE_I18N_KEY = "obs.event.retentionPressure";
 const MAX_ROW_ERRORS = 20;
 const MAX_STATE_BYTES = 256 * 1024;
-const GENESIS_HASH = "0".repeat(64);
-// The canonical audit row of §16.4, in hash order.
-const AUDIT_HASH_FIELDS = Object.freeze([
-  "at", "source", "actor", "session", "client_ip", "user_agent", "action", "target", "outcome", "detail",
-]);
+// The audit row hash of §16.4 lives in audit-access-log.js, which also reads
+// the chain back for the entry; the worker only appends with it.
+const { GENESIS_HASH, AUDIT_HASH_FIELDS } = auditAccessLog;
 // Column rewrites applied before validation. The path column never keeps a
 // query string (§4.2).
 const COLUMN_TRANSFORMS = Object.freeze({
@@ -276,19 +274,9 @@ function maskClientIp(value) {
   return MASKED_IP_SHAPE.test(masked) ? masked : "…";
 }
 
-function auditCanonicalJson(row) {
-  const canonical = {};
-  for (const field of AUDIT_HASH_FIELDS) {
-    const value = row[field];
-    canonical[field] = value === undefined ? null : typeof value === "bigint" ? Number(value) : value;
-  }
-  return JSON.stringify(canonical);
-}
-
-// §16.4: hash = sha256(prev_hash + "\n" + canonical JSON of the stored row).
-function auditChainHash(prevHash, row) {
-  return crypto.createHash("sha256").update(`${prevHash}\n${auditCanonicalJson(row)}`, "utf8").digest("hex");
-}
+// §16.4: hash = sha256(prev_hash + newline + canonical JSON of the stored row).
+const auditCanonicalJson = auditAccessLog.canonicalAuditJson;
+const auditChainHash = auditAccessLog.chainHash;
 
 // An unset key (null, "", a config section with holes) keeps its default;
 // only a supplied number is clamped to the key's range.
@@ -793,17 +781,19 @@ function createStoreCore(options = {}) {
   }
 
   // Named queries live in query.js (TEL-11) and run here, next to the
-  // handle. Only own function exports are callable; names are never
-  // interpolated into SQL.
+  // handle. The audit-log reads of audit-access-log.js are built in, so the
+  // entry can read the chain before and without query.js. Only own function
+  // exports are callable; names are never interpolated into SQL.
   async function call(queryName, params) {
     assertOpen();
     const queries = loadQueries();
     const name = typeof queryName === "string" ? queryName : "";
-    if (!/^[a-z][A-Za-z0-9]*$/.test(name) || !queries || !Object.prototype.hasOwnProperty.call(queries, name)
-      || typeof queries[name] !== "function") {
+    const callable = (module) => Boolean(module) && Object.prototype.hasOwnProperty.call(module, name) && typeof module[name] === "function";
+    const source = callable(queries) ? queries : callable(auditAccessLog.queries) ? auditAccessLog.queries : null;
+    if (!/^[a-z][A-Za-z0-9]*$/.test(name) || !source) {
       throw storeError("unknown_query", "Unknown telemetry query.");
     }
-    return queries[name](db, params === undefined ? {} : params);
+    return source[name](db, params === undefined ? {} : params);
   }
 
   // The rollup settings of one run: the job configuration, overridden by the
