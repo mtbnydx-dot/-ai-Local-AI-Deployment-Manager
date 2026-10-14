@@ -68,7 +68,30 @@
   "managedFlags": ["--model-path", "--served-model-name", "--host", "--port", "--api-key", "--enable-metrics"],
   "extraEnvAllow": ["SGLANG_", "NCCL_", "PYTORCH_", "TORCH_", "TRITON_", "FLASHINFER_"],
   "introspection": { "entrypoint": "python3", "argv": ["-m", "sglang.launch_server", "--help"], "parser": "argparse" },
-  "metricsMap": { "path": "/metrics", "format": "prometheus", "map": {} },
+  "metricsMap": {
+    "path": "/metrics",
+    "format": "prometheus",
+    "map": {
+      "promptTokensTotal": [{ "name": "sglang:prompt_tokens_total", "kind": "counter" }],
+      "generationTokensTotal": [{ "name": "sglang:generation_tokens_total", "kind": "counter" }],
+      "cachedPromptTokensTotal": [{ "name": "sglang:cached_tokens_total", "kind": "counter" }],
+      "requestsTotal": [{ "name": "sglang:num_requests_total", "kind": "counter" }],
+      "prefixQueriesTotal": [{ "name": "sglang:prompt_tokens_total", "kind": "counter" }],
+      "prefixHitsTotal": [{ "name": "sglang:cached_tokens_total", "kind": "counter" }],
+      "specDraftsTotal": [{ "name": "sglang:spec_verify_calls_total", "kind": "counter" }],
+      "requestsRunning": [{ "name": "sglang:num_running_reqs", "kind": "gauge" }],
+      "requestsWaiting": [{ "name": "sglang:num_queue_reqs", "kind": "gauge" }],
+      "kvUsageRatio": [{ "name": "sglang:full_token_usage", "kind": "gauge" }, { "name": "sglang:token_usage", "kind": "gauge" }],
+      "kvCapacityTokens": [{ "name": "sglang:max_total_num_tokens", "kind": "gauge" }],
+      "specAcceptRate": [{ "name": "sglang:spec_accept_rate", "kind": "gauge" }],
+      "genThroughputTps": [{ "name": "sglang:gen_throughput", "kind": "gauge" }],
+      "ttftSeconds": [{ "name": "sglang:time_to_first_token_seconds", "kind": "histogram" }],
+      "itlSeconds": [{ "name": "sglang:inter_token_latency_seconds", "kind": "histogram" }],
+      "tpotSeconds": [{ "name": "sglang:request_time_per_output_token_seconds", "kind": "histogram" }],
+      "e2eSeconds": [{ "name": "sglang:e2e_request_latency_seconds", "kind": "histogram" }],
+      "queueSeconds": [{ "name": "sglang:queue_time_seconds", "kind": "histogram" }]
+    }
+  },
   "logPhases": [],
   "logFacts": [],
   "errorSignatures": []

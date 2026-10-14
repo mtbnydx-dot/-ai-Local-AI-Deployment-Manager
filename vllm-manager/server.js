@@ -666,10 +666,12 @@ const managerLifecycle = core.createManagerLifecycle({
     billingPendingQueue.flush().catch(() => {});
     await core.sweepStaleRollbackContainers({ docker, managerId: CONFIG.managerId }).catch(() => {});
     startAutomationMonitor();
+    startInstanceMetricsSampler();
   },
   onShutdown: async () => {
     jobsLedgerStore.clearJobsSaveTimer();
     if (automationMonitorTimer) clearInterval(automationMonitorTimer);
+    instanceMetricsSampler.stop();
     clearInterval(idleUnloadTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
@@ -1672,6 +1674,20 @@ core.registerRuntimeRoutes(app, {
 // uncached inspect behind the route's own 60 s cache. GET /api/engines/:id/schema
 // (ENG-3) serves the parameter catalog with host facts from the cached GPU probe.
 const engineRegistry = core.engines.createEngineRegistry({ env: process.env });
+// Per-instance engine metrics (ENG-14): the sampler scrapes each running
+// instance's /metrics every 10 s in the background, and
+// GET /api/instances/:id/metrics serves its latest snapshot, so the route never
+// scrapes an engine or calls Docker. /api/stats keeps its own scrape path.
+const instanceMetricsSampler = core.engines.metrics.createInstanceMetricsSampler({
+  registry: engineRegistry,
+  managerId: "vllm",
+  ownerLabelValue: CONFIG.managerId,
+  primaryContainerName: CONFIG.containerName,
+  listContainers: listMetricsSamplerContainers,
+  endpointFor: (container) => getContainerEndpoint(container),
+  headersFor: (container) => vllmAuthHeaders(getVllmApiKey(container)),
+  adapterFor: core.engines.adapterFor,
+});
 core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
   managerId: "vllm",
@@ -1680,6 +1696,7 @@ core.engines.registerEngineRoutes(app, {
   getImageStatus: getImageStatusFresh,
   listManagedContainers: () => listManagedContainers(),
   getGpuStatus,
+  metricsSampler: instanceMetricsSampler,
 });
 
 core.registerAuditRoutes(app, {
@@ -3959,6 +3976,27 @@ async function getManagerResourceSummary(gpu = null, ownContainer = null) {
   };
 }
 
+// The containers the metrics sampler may scrape: this manager's labelled
+// containers plus the primary one, with the container id and creation time
+// that docker ps -a --filter name= reports (the runtimeKey needs both). The
+// sampler applies the ownership and engine rules itself.
+async function listMetricsSamplerContainers() {
+  const managed = await listManagedContainers();
+  const names = new Set([CONFIG.containerName]);
+  for (const container of managed) {
+    if (container.manager === CONFIG.managerId) names.add(container.name);
+  }
+  const statuses = await Promise.all([...names].map((name) => getContainerStatus(name)));
+  return statuses.filter((status) => status?.exists);
+}
+
+// The frontend smoke tests start real managers; they must not scrape the
+// engines this computer is running.
+function startInstanceMetricsSampler() {
+  if (process.env.AI_FRONTEND_SMOKE === "1") return;
+  instanceMetricsSampler.start();
+}
+
 async function listManagedContainers() {
   const out = await docker(["ps", "-a", "--filter", `label=${MANAGER_LABEL_KEY}`, "--format", "{{json .}}"], {
     rejectOnError: false,
@@ -5584,6 +5622,7 @@ module.exports = {
   app,
   CONFIG,
   engineRegistry,
+  instanceMetricsSampler,
   startManager,
   shutdownManager,
   firstExisting,
