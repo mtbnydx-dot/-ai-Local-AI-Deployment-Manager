@@ -385,3 +385,21 @@ test("multimodal mode keeps text traffic on text-only instances even when they a
   });
   assert.equal(target.model.id, "qwen-text", "text requests should spare the vision instance");
 });
+
+test("filterCandidate applies before matching: generic ids pick allowed models, filtered ids are model_not_allowed", () => {
+  const catalogs = [
+    { manager: vllm, running: true, models: [{ id: "qwen-chat", instance_id: "primary" }] },
+    { manager: llama, running: true, models: [{ id: "gemma-gguf", instance_id: "primary" }] },
+  ];
+  const onlyGemma = (candidate) => candidate.managerId === "llama";
+  const request = { protocol: "openai", path: "v1/chat/completions", body: {}, dryRun: true, filterCandidate: onlyGemma };
+  assert.equal(fleet.selectFleetTarget(catalogs, { ...request, requestedModel: "auto", mode: "throughput" }).model.id, "gemma-gguf");
+  const denied = fleet.selectFleetTarget(catalogs, { ...request, requestedModel: "qwen-chat" });
+  assert.deepEqual([denied.error, denied.status], ["model_not_allowed", 403]);
+  const missing = fleet.selectFleetTarget(catalogs, { ...request, requestedModel: "no-such-model" });
+  assert.deepEqual([missing.error, missing.status], ["model_not_available", 404]);
+  const none = fleet.selectFleetTarget(catalogs, { ...request, requestedModel: "auto", filterCandidate: () => false });
+  assert.deepEqual([none.error, none.status], ["model_not_allowed", 403]);
+  // Without a filter nothing changes.
+  assert.equal(fleet.selectFleetTarget(catalogs, { ...request, requestedModel: "qwen-chat", filterCandidate: undefined }).model.id, "qwen-chat");
+});
