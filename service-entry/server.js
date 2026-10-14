@@ -9,6 +9,8 @@ const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
 const core = require("../manager-core");
 const { createEntrySecurity } = require("./lib/security");
+const { startListeners, tagListener } = require("./lib/listeners");
+const { createPublicListener } = require("./lib/public-listener");
 const { createBillingStore } = require("./lib/billing-store");
 const { createBillingHttpHandler, strictLocalBillingAdmin } = require("./lib/billing-http");
 const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview");
@@ -169,6 +171,7 @@ const ROUTE_MODULES = [
 ];
 
 let server = null;
+let listeners = null;
 let routeMounts = null;
 // The model hub (03), built once by startServiceEntry() and stopped by
 // shutdownSoon(). null in tests and when it could not be built.
@@ -310,11 +313,9 @@ async function isManagerPortListening(port) {
   }
 }
 
-function createServiceEntryServer(options = {}) {
-  const routes = options.routes || null;
-  const httpServer = http.createServer(routes ? (req, res) => handleRequest(req, res, routes) : handleRequest);
-  httpServer.keepAliveTimeout = 65_000;
-  httpServer.headersTimeout = 66_000;
+// The entry-wide hooks of one listening server: the TTS reconciliation timer
+// and, with a mount table, closing its modules before the server stops.
+function decorateEntryServer(httpServer, routes = null) {
   let reconciliationTimer;
   httpServer.once("listening", () => {
     reconciliationTimer = setInterval(() => ttsReconciler.flush().catch((error) => console.warn(`TTS reconciliation: ${error.message}`)), 5000);
@@ -332,6 +333,56 @@ function createServiceEntryServer(options = {}) {
     httpServer.once("close", () => routes.close());
   }
   return httpServer;
+}
+
+// The ADMIN server alone (tests, and the handler startListeners wraps). Its
+// requests carry no listener tag, which counts as ADMIN.
+function createServiceEntryServer(options = {}) {
+  const routes = options.routes || null;
+  const httpServer = http.createServer(routes ? (req, res) => handleRequest(req, res, routes) : handleRequest);
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+  return decorateEntryServer(httpServer, routes);
+}
+
+// The PUBLIC handler (05 §3.2): the route table of public-listener.js over
+// this file's security and gateway code. `deps.gateway` and `deps.portal`
+// replace the defaults (later packages and tests).
+function createPublicHandler(deps = {}) {
+  const listener = createPublicListener({
+    security: deps.security || security,
+    gateway: deps.gateway === undefined ? serveGatewayRouteOnPublic : deps.gateway,
+    portal: deps.portal || null,
+    logger: deps.logger || console,
+  });
+  return listener.handle;
+}
+
+// A PUBLIC server whose requests are tagged public (tests; the entry itself
+// binds through startListeners). deps as for createPublicHandler.
+function createPublicServer(deps = {}) {
+  const handle = createPublicHandler(deps);
+  const lanBound = deps.lanBound === true;
+  const httpServer = http.createServer((req, res) => {
+    tagListener(req, "public", lanBound);
+    handle(req, res);
+  });
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+  return httpServer;
+}
+
+// Key routes on PUBLIC run the entry's existing gateway code on the
+// ADMIN-form path until the shared pipeline replaces it (08). The listener tag
+// makes authorizeGatewayRequest demand a key, and the gateway CORS headers are
+// empty on PUBLIC.
+async function serveGatewayRouteOnPublic(req, res, url, route) {
+  const target = new URL(route.gatewayPath + url.search, "http://public.invalid");
+  req.url = `${target.pathname}${target.search}`;
+  beginGatewayRecord(req, res, target);
+  if (isTtsGatewayPath(target.pathname)) return proxyTtsGatewayRequest(req, res, target);
+  if (req.method === "GET" && (target.pathname === "/gateway/status" || target.pathname === "/gateway/status/")) return handleGatewayStatus(req, res, target);
+  return proxyGatewayRequest(req, res, target);
 }
 
 // 05's access layer for one route context: the viewer registry with this
@@ -399,6 +450,7 @@ function createRouteContext(overrides = {}) {
   const auth = overrides.auth || createRequestAuth({ security, adminAuth: access.adminAuth, viewerRegistry: access.viewerRegistry });
   const bus = overrides.bus || createEventBus({ auth, logger: console });
   access.attachBus(bus);
+  security.setEventSink((data) => bus.publish("security", data));
   const ctx = {
     rootDir: ROOT,
     aiRoot: AI_ROOT,
@@ -494,6 +546,18 @@ async function dispatchRouteModules(routes, req, res, url) {
   return false;
 }
 
+// The admin_via_proxy security event goes to the bus of the route context the
+// request is served from (a test's own server has its own).
+let adminViaProxyBus = null;
+function noteAdminViaProxy(routes, req, info) {
+  const bus = routes?.ctx?.bus;
+  if (bus && bus !== adminViaProxyBus) {
+    adminViaProxyBus = bus;
+    security.setEventSink((data) => bus.publish("security", data));
+  }
+  security.noteAdminViaProxy(req, info);
+}
+
 async function handleRequest(req, res, routes = null) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
@@ -509,8 +573,22 @@ async function handleRequest(req, res, routes = null) {
     }
     // 反向代理（deploy/public 的 Caddy）转发进来的请求只允许走 /gateway/*：
     // 控制台页面、管理 API、计费和文档都不该出现在公网上。
-    if (!url.pathname.startsWith("/gateway/") && security.isProxiedRequest(req)) {
-      return sendJson(res, { error: "Only /gateway/* endpoints are served through the public proxy.", code: "public_proxy_gateway_only" }, 404);
+    if (security.isProxiedRequest(req)) {
+      // A forwarded header on ADMIN means a tunnel or proxy is pointed at the
+      // wrong port (05 §3.3). Either way the event names it for the console.
+      if (!url.pathname.startsWith("/gateway/")) {
+        noteAdminViaProxy(routes, req, { pathClass: "admin", outcome: "public_proxy_gateway_only" });
+        return sendJson(res, { error: "Only /gateway/* endpoints are served through the public proxy.", code: "public_proxy_gateway_only" }, 404);
+      }
+      // admin.legacyProxyGateway: "serve" keeps old tunnels working (the
+      // client is the socket address and a key is required, see security.js);
+      // "reject" tells them to use the PUBLIC listener.
+      if (security.accessConfig().admin.legacyProxyGateway === "reject") {
+        noteAdminViaProxy(routes, req, { pathClass: "gateway", outcome: "use_public_listener" });
+        gatewayRec?.reject({ status: 421, code: "use_public_listener" });
+        return sendJson(res, { error: "This address is for the console. Use the public listener for API traffic.", code: "use_public_listener" }, 421);
+      }
+      noteAdminViaProxy(routes, req, { pathClass: "gateway", outcome: "served_legacy" });
     }
     // 05's pre-dispatch guard: a signed machine request is verified and held
     // to its scope, and a viewer reaches only registered routes, with the
@@ -860,19 +938,44 @@ async function startServiceEntry() {
   }).catch((error) => {
     console.warn(core.redactSecrets(`service-entry: telemetry did not start: ${error?.message || error}`));
   });
-  server = createServiceEntryServer({ routes: routeMounts });
-  server.on("error", (error) => {
+  // Two listeners in one process (05 §3.1): ADMIN keeps today's handler and
+  // PUBLIC answers only its own route table. ADMIN failing to bind is fatal;
+  // PUBLIC failing leaves ADMIN up and the console shows it red.
+  const config = security.accessConfig();
+  const publicHandler = createPublicHandler();
+  try {
+    listeners = await startListeners({
+      config,
+      adminHandler: (req, res) => handleRequest(req, res, routeMounts),
+      publicHandler,
+      decorate: (kind, httpServer) => {
+        if (kind === "admin") decorateEntryServer(httpServer, routeMounts);
+      },
+      onPublicUnavailable: (error) => {
+        try {
+          routeMounts.ctx.bus.publish("platform", { kind: "public_listener_unavailable", code: error.code });
+        } catch {
+          // The bus never stops the entry.
+        }
+      },
+    });
+  } catch (error) {
     const detail = error?.code === "EADDRINUSE"
-      ? `端口 ${PORT} 已被占用，无法启动统一入口。`
+      ? `端口 ${config.listeners.admin.port} 已被占用，无法启动统一入口。`
       : (error?.message || String(error));
     console.error(`Service entry listen failed: ${detail}`);
     process.exit(1);
+  }
+  server = listeners.admin;
+  server.on("error", (error) => {
+    console.error(`Service entry server error: ${error?.message || error}`);
   });
-  server.listen(PORT, HOST, () => {
-    logStartupSummary(security.policy());
-    modelHub?.start().catch((error) => {
-      console.warn(core.redactSecrets(`Model hub failed to start; its routes answer hub_unavailable: ${error?.message || error}`));
-    });
+  logStartupSummary(security.policy(), { host: listeners.binds.admin.host, port: listeners.binds.admin.port });
+  if (listeners.public) {
+    console.log(`Public listener on http://${listeners.binds.public.host}:${listeners.binds.public.port}`);
+  }
+  modelHub?.start().catch((error) => {
+    console.warn(core.redactSecrets(`Model hub failed to start; its routes answer hub_unavailable: ${error?.message || error}`));
   });
   return server;
 }
@@ -952,7 +1055,7 @@ if (require.main === module) {
     onSignal: async () => {
       await stopModelHub(modelHub);
       await security.revokeTrustToken().catch(() => {});
-      const closing = server ? new Promise((resolve) => server.close(resolve)) : null;
+      const closing = listeners ? listeners.close() : server ? new Promise((resolve) => server.close(resolve)) : null;
       // In-flight records are finalised and flushed (2 s cap) even when open
       // streams keep the server from closing.
       await stopTelemetry();
@@ -2871,6 +2974,9 @@ function buildResponseHeaders(headers, req) {
 // The previous version reflected whatever the caller sent, which let any page
 // the user visited read and write the local gateway.
 function gatewayCorsHeaders(req) {
+  // PUBLIC has no ambient CORS: per-key origins are the pipeline's (05 §11),
+  // and the env origins of the keyless ADMIN gateway never apply there.
+  if (security.listenerKind(req) === "public") return {};
   return security.corsHeaders(req);
 }
 
@@ -3216,6 +3322,10 @@ module.exports = {
   createTtsBodyLimiter,
   createRouteContext,
   createServiceEntryServer,
+  // The bound listeners once startServiceEntry() ran: { admin, public, publicError, binds }.
+  getListeners: () => listeners,
+  createPublicServer,
+  createPublicHandler,
   dispatchRouteModules,
   emptyManagerCatalog,
   findManager,

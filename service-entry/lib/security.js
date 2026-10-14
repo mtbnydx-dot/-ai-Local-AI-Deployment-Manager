@@ -44,6 +44,20 @@ function isForwardedRequest(req) {
   return hasForwardingHeaders(req?.headers || {});
 }
 
+// "admin" or "public": the listener a request arrived on (listeners.js tags
+// req.listener = { kind, lanBound }). An untagged request is an ADMIN one, so
+// code that calls the handler directly keeps today's behaviour (05 §3.1).
+function listenerKindOf(req) {
+  const listener = req?.listener;
+  const kind = typeof listener === "string" ? listener : listener?.kind;
+  return kind === "public" ? "public" : "admin";
+}
+
+// Hosts the PUBLIC listener always answers to besides the configured ones:
+// the loopback names, and OpenWebUI in Docker (05 §3.3).
+const PUBLIC_BASE_HOSTS = ["127.0.0.1", "localhost", "host.docker.internal"];
+const ADMIN_VIA_PROXY_THROTTLE_MS = 1000;
+
 // The default access settings source: OPS-3's readSection over the entry's
 // AI root (env > <AI_ROOT>/config/platform.json > schema default).
 function defaultReadSection(aiRoot) {
@@ -83,6 +97,9 @@ function createEntrySecurity(options = {}) {
   let keyStoreIssueLog = { detail: "", at: 0 };
   const logError = typeof options.logError === "function" ? options.logError : console.error;
   const warn = typeof options.warn === "function" ? options.warn : console.warn;
+  // Security events (05 §15): the entry wires the event bus here. Never throws.
+  let eventSink = typeof options.onEvent === "function" ? options.onEvent : null;
+  const eventThrottle = new Map();
   // Access settings (05 §3.4): an injected source, an injected readSection, or
   // OPS-3's readSection over options.aiRoot. Re-read live (2 s cache).
   const accessSource = options.accessConfig && typeof options.accessConfig.get === "function"
@@ -104,10 +121,44 @@ function createEntrySecurity(options = {}) {
     return config;
   }
 
-  // Reachable from off-box: anything other than a loopback bind.
-  const lanMode = !["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase());
+  // Reachable from off-box: anything other than a loopback bind. The constructor
+  // host is the legacy switch; listeners.admin.lan (or a wildcard
+  // listeners.admin.host) from the access settings counts the same (05 §3.1).
+  const hostLanBound = !["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase());
+  function adminLanBound() {
+    return hostLanBound || accessConfig().adminLanBound === true;
+  }
+
+  // One security event per kind and path class per second: a scanner pointed
+  // at the wrong port must not flood the ring buffer.
+  function emitEvent(data) {
+    if (!eventSink) return;
+    const key = `${data.kind}:${data.pathClass || ""}:${data.outcome || ""}`;
+    const now = Date.now();
+    if (now - (eventThrottle.get(key) || 0) < ADMIN_VIA_PROXY_THROTTLE_MS) return;
+    eventThrottle.set(key, now);
+    if (eventThrottle.size > 64) eventThrottle.clear();
+    try {
+      eventSink(data);
+    } catch {
+      // Events never throw into a request.
+    }
+  }
+
+  // A forwarded header on ADMIN means a tunnel or proxy is pointed at the
+  // wrong port (05 §3.3). Header names only, never values.
+  function noteAdminViaProxy(req, { pathClass = "", outcome = "" } = {}) {
+    emitEvent({
+      kind: "admin_via_proxy",
+      pathClass,
+      outcome,
+      headers: FORWARDING_HEADERS.filter((name) => String(req?.headers?.[name] ?? "").trim() !== ""),
+      lanBound: adminLanBound(),
+    });
+  }
 
   function policy() {
+    const lanMode = adminLanBound();
     const requireApiKeyMode = normalizeRequireApiKeyMode(envText("SERVICE_ENTRY_REQUIRE_API_KEY", "auto"));
     const allowLanAdmin = envFlag("SERVICE_ENTRY_ALLOW_LAN_ADMIN", false);
     const allowedOrigins = envText("SERVICE_ENTRY_ALLOWED_ORIGINS")
@@ -132,23 +183,44 @@ function createEntrySecurity(options = {}) {
     };
   }
 
-  function allowedHostnames() {
-    const names = new Set(["127.0.0.1", "localhost", "::1", host.toLowerCase()]);
+  function lanAddress() {
     try {
-      const lan = String(getLanAddress() || "").toLowerCase();
-      if (lan) names.add(lan);
+      return String(getLanAddress() || "").toLowerCase();
     } catch {
       // Interface enumeration failed; loopback names still apply.
+      return "";
     }
-    // 配置了公网 Base URL 就意味着 Caddy 会带着该域名的 Host 转发过来；
-    // 不自动放行的话，照 deploy/public 部署会全站 403。
-    const publicHost = core.extractHostname(envText("SERVICE_ENTRY_PUBLIC_BASE_URL"));
-    if (publicHost) names.add(publicHost);
-    const extra = envText("SERVICE_ENTRY_ALLOWED_HOSTS")
-      .split(/[;,]/)
-      .map((item) => core.extractHostname(item.trim()))
-      .filter(Boolean);
-    for (const name of extra) names.add(name);
+  }
+
+  // The ADMIN Host allowlist (05 §3.3): the loopback names, the LAN address
+  // when ADMIN is LAN-bound, and admin.extraHosts. The public host is not
+  // admitted here, so a tunnel pointed at ADMIN gets 403 host_not_allowed.
+  function allowedHostnames(kind = "admin") {
+    if (kind === "public") return publicHostnames();
+    const names = new Set(["127.0.0.1", "localhost", "::1"]);
+    const lan = lanAddress();
+    if (lan && adminLanBound()) names.add(lan);
+    if (hostLanBound && !["0.0.0.0", "::", "[::]"].includes(host.toLowerCase())) names.add(host.toLowerCase());
+    for (const name of accessConfig().admin?.extraHosts || []) {
+      const hostname = core.extractHostname(String(name));
+      if (hostname) names.add(hostname.toLowerCase());
+    }
+    return names;
+  }
+
+  // The PUBLIC Host allowlist (05 §3.3): the public base URL's host, the
+  // loopback names, host.docker.internal, the LAN address when PUBLIC is
+  // LAN-bound, and public.extraHosts. Anything else is answered with 421.
+  function publicHostnames() {
+    const config = accessConfig();
+    const names = new Set(PUBLIC_BASE_HOSTS);
+    if (config.publicHost) names.add(String(config.publicHost).toLowerCase());
+    const lan = lanAddress();
+    if (lan && config.publicLanBound) names.add(lan);
+    for (const name of config.public?.extraHosts || []) {
+      const hostname = core.extractHostname(String(name));
+      if (hostname) names.add(hostname.toLowerCase());
+    }
     return names;
   }
 
@@ -165,12 +237,8 @@ function createEntrySecurity(options = {}) {
     const localPort = Number(req?.socket?.localPort);
     if (Number.isInteger(localPort) && localPort > 0) ports.add(localPort);
     const hosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
-    try {
-      const lan = String(getLanAddress() || "").toLowerCase();
-      if (lan) hosts.add(lan.includes(":") ? `[${lan}]` : lan);
-    } catch {
-      // Interface enumeration failed; loopback origins still apply.
-    }
+    const lan = lanAddress();
+    if (lan) hosts.add(lan.includes(":") ? `[${lan}]` : lan);
     for (const name of config.admin?.extraHosts || []) hosts.add(String(name).toLowerCase());
     const origins = new Set();
     for (const name of hosts) for (const port of ports) origins.add(`http://${name}:${port}`);
@@ -258,6 +326,7 @@ function createEntrySecurity(options = {}) {
   // session, an owner token or a machine signature).
   function checkManagementAccess(req) {
     if (isProxiedRequest(req)) {
+      noteAdminViaProxy(req, { pathClass: "management", outcome: "management_local_only" });
       return {
         ok: false,
         status: 403,
@@ -356,8 +425,16 @@ function createEntrySecurity(options = {}) {
     logError(core.redactSecrets(`gateway auth: service key store could not be read, refusing gateway requests: ${detail}`));
   }
 
+  // PUBLIC always requires a key on model routes (05 §3.3), and so does a
+  // forwarded request that reached ADMIN's /gateway/* (admin.legacyProxyGateway
+  // "serve"): its client is unknown, so it is never treated as the local owner.
+  function keyRequiredFor(req) {
+    return listenerKindOf(req) === "public" || isForwardedRequest(req);
+  }
+
   async function authorizeGatewayRequest(req) {
-    const current = policy();
+    const current = { ...policy() };
+    if (keyRequiredFor(req)) current.requireApiKey = true;
     const presentedKey = core.extractServiceApiKey(req.headers || {}, { acceptRawAuthorization: true });
     const { stores, issues } = await loadKeyStores();
 
@@ -606,6 +683,14 @@ function createEntrySecurity(options = {}) {
     resolveClientAddress,
     identifyClient,
     accessConfig,
+    publicHostnames,
+    noteAdminViaProxy,
+    // A new sink is a new subscription: the per-path throttle starts over.
+    setEventSink(sink) {
+      eventSink = typeof sink === "function" ? sink : null;
+      eventThrottle.clear();
+    },
+    listenerKind: listenerKindOf,
     corsHeaders,
     authorizeGatewayRequest,
     loadKeyStores,
@@ -621,6 +706,7 @@ function createEntrySecurity(options = {}) {
 
 module.exports = {
   FORWARDED_HEADERS,
+  listenerKindOf,
   createEntrySecurity,
   normalizeRequireApiKeyMode,
 };
