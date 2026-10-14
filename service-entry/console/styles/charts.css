@@ -45,7 +45,7 @@
   width: 10px;
   height: 10px;
   border-radius: 2px;
-  background: var(--swatch, var(--chart-1));
+  background: var(--series, var(--swatch, var(--chart-1)));
 }
 
 .chart-tooltip {
@@ -125,4 +125,210 @@
 
 .seg-over {
   background: repeating-linear-gradient(45deg, var(--danger) 0 4px, transparent 4px 8px);
+}
+
+/* TimeSeriesChart (components/time-series-chart.js): the toolbar, the plot
+ * frame with its loading and error states, the series legend buttons, the
+ * annotation list and the table view. */
+.chart-block {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.chart-toolbar {
+  min-height: var(--sp-6);
+}
+
+.chart-frame {
+  position: relative;
+}
+
+.chart-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: stretch;
+}
+
+.chart-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-2);
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+button.chart-legend-item {
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button.chart-legend-item[aria-pressed="false"] {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.chart-annotations {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chart-annotations li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.chart-mark {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid var(--chart-2);
+}
+
+.chart-mark-restart { border-top-style: dashed; border-top-color: var(--chart-3); }
+.chart-mark-config { border-top-style: dotted; border-top-color: var(--chart-4); }
+.chart-mark-alert { border-top-style: double; border-top-width: 4px; border-top-color: var(--danger); }
+
+.chart-hint {
+  margin: 0;
+}
+
+.chart-table {
+  max-height: 360px;
+  overflow: auto;
+}
+
+/* GpuMemoryBar (components/gpu-memory-bar.js): one bar per GPU. Every kind has
+ * a color and its own pattern, shared by the bar and the legend swatch, so the
+ * bar reads without color. */
+.gpu-bar {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.gpu-bar-track {
+  position: relative;
+  display: flex;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--surface-3);
+}
+
+.gpu-bar-seg {
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+.gpu-bar-over {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-inline-start: 2px solid var(--danger);
+  background: repeating-linear-gradient(135deg, var(--danger) 0 3px, transparent 3px 6px);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.gpu-bar-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-inline-start: 2px solid var(--text);
+  pointer-events: none;
+}
+
+.gpu-bar-admission {
+  border-inline-start-style: dashed;
+}
+
+.gpu-bar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gpu-bar-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.gpu-bar-swatch {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+
+.gpu-bar-swatch-budget {
+  border-width: 0 0 0 2px;
+  border-radius: 0;
+  border-color: var(--text);
+  width: 0;
+}
+
+.gpu-bar-swatch-admission {
+  border-width: 0 0 0 2px;
+  border-style: dashed;
+  border-radius: 0;
+  border-color: var(--text);
+  width: 0;
+}
+
+.gpu-seg-weights { background: var(--chart-1); }
+.gpu-seg-kv { background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.5) 0 2px, transparent 2px 5px), var(--chart-2); }
+.gpu-seg-activations { background: radial-gradient(circle, rgba(0, 0, 0, 0.45) 1.2px, transparent 1.6px) 0 0 / 6px 6px, var(--chart-3); }
+.gpu-seg-draft { background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.5) 0 2px, transparent 2px 5px), var(--chart-4); }
+.gpu-seg-mmproj { background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.35) 0 1px, transparent 1px 5px), repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.35) 0 1px, transparent 1px 5px), var(--chart-5); }
+.gpu-seg-overhead { background: var(--chart-8); }
+.gpu-seg-unknown { background: var(--chart-8); }
+.gpu-seg-tenants { background: repeating-linear-gradient(45deg, var(--chart-8) 0 4px, transparent 4px 8px); }
+.gpu-seg-free { background: var(--surface-3); }
+
+/* TimeRangePicker (components/time-range-picker.js) */
+.range-picker {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.range-current {
+  margin: 0;
+}
+
+.range-custom {
+  align-items: flex-end;
+}
+
+.range-custom .field {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 200px;
 }

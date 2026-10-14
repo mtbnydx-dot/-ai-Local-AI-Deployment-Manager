@@ -1,7 +1,10 @@
 {
   "prefixes": [
     "common.badge.",
+    "common.chart.annotation.",
+    "common.gpu.kind.",
     "common.provenance.",
+    "common.range.",
     "common.step.",
     "error.code.",
     "shell.nav.",
