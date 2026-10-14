@@ -26,7 +26,8 @@
 //        prepareCommand?(runOptions, { jobId, launchId }) → { adapter, plan, ctx, recipe?, preset? },
 //        getHostGpus?() → gpus[] | null, imagePresence?(image) → true|false|null,
 //        admissionPreview?(admissionRequest, { mode, releasedMbByGpu }) → gpu-admission evaluate() result,
-//        listContainers?() → [{ name, running, labels }], platform? }
+//        listContainers?() → [{ name, running, labels }], platform?,
+//        getIntrospection?(runtime) → { flags[] } | null, modelStorage? (resolvePath, toContainerPath) }
 //
 // Plan mode is side-effect free: it reads files, telemetry, leases and the
 // container list and never takes a lock, creates a job or touches a container.
@@ -37,6 +38,7 @@
 
 const crypto = require("crypto");
 const expr = require("./expr");
+const extraArgs = require("./extra-args");
 const legacyAliases = require("./legacy-aliases");
 const paramCatalog = require("./param-catalog");
 const recipes = require("./recipes");
@@ -655,16 +657,12 @@ async function resolveLaunchPlan(request, ctx = {}) {
       "This is an experimental engine; acknowledge it before launching (acknowledge: experimental-engine)"));
   }
   if (origin === "v2") {
-    // Parts of LaunchRequestV2 the resolver does not launch yet (ENG-15, ENG-26).
+    // Parts of LaunchRequestV2 the resolver does not launch yet (ENG-26).
     if (request.prospective === true) {
       errors.push(fieldError("prospective", "prospective_unsupported", "这个管理器还不能为未下载的模型生成计划", "This manager cannot plan a model that is not on disk yet"));
     }
     if (instance.mode !== undefined && !["replace", "parallel"].includes(instance.mode)) {
       errors.push(fieldError("instance.mode", "instance_mode_unsupported", `不支持的实例模式“${String(instance.mode).slice(0, 32)}”；可选 replace、parallel`, `Unsupported instance mode "${String(instance.mode).slice(0, 32)}"; use replace or parallel`));
-    }
-    if ((Array.isArray(request.extraArgs) && request.extraArgs.length) || (isPlainObject(request.extraEnv) && Object.keys(request.extraEnv).length)) {
-      errors.push(fieldError(Array.isArray(request.extraArgs) && request.extraArgs.length ? "extraArgs" : "extraEnv", "extra_args_unsupported",
-        "这个管理器还不能附加自定义参数或环境变量", "This manager cannot pass extra engine arguments or environment variables yet"));
     }
     if (isBlank(request.model?.ref)) errors.push(fieldError("model.ref", "required", "请选择模型", "Choose a model"));
   }
@@ -694,6 +692,30 @@ async function resolveLaunchPlan(request, ctx = {}) {
       blockers.push({ code: "recipe_blocked", message: splitBilingual(block.message), recipeId: requestedRecipe.id });
     }
   }
+  // 5b. Free-form extraArgs/extraEnv (01 §18). Only a v2 request carries them.
+  const custom = { args: [], env: {} };
+  if (origin === "v2" && (request.extraArgs !== undefined || request.extraEnv !== undefined)) {
+    let introspected = null;
+    if (runtime && typeof ctx.getIntrospection === "function") {
+      try {
+        introspected = (await ctx.getIntrospection(runtime)) || null;
+      } catch {
+        introspected = null;
+      }
+    }
+    const checkedArgs = extraArgs.validateExtraArgs(request.extraArgs, {
+      catalog,
+      introspected,
+      descriptor,
+      storage: ctx.modelStorage || null,
+      values: requestedApplied ? { ...user, ...requestedApplied.values } : user,
+    });
+    const checkedEnv = extraArgs.validateExtraEnv(request.extraEnv, { descriptor });
+    errors.push(...checkedArgs.errors, ...checkedEnv.errors);
+    warnings.push(...checkedArgs.warnings, ...checkedEnv.warnings);
+    custom.args = checkedArgs.args;
+    custom.env = checkedEnv.env;
+  }
   // A launch with a known blocker stops here; a plan goes on to show the rest.
   if (errors.length || (mode === "launch" && blockers.length)) return finish(plan);
 
@@ -712,9 +734,19 @@ async function resolveLaunchPlan(request, ctx = {}) {
     return finish(plan);
   }
   const runOptions = normalized.runOptions;
+  // Validated extraArgs/extraEnv ride on the run options (the adapters append
+  // them last) and are recorded in job meta (01 §18). Absent when not given.
+  const hasCustom = custom.args.length > 0 || Object.keys(custom.env).length > 0;
+  let jobMeta = normalized.jobMeta || null;
+  if (hasCustom) {
+    if (custom.args.length) runOptions.extraArgs = [...custom.args];
+    if (Object.keys(custom.env).length) runOptions.extraEnv = { ...custom.env };
+    jobMeta = { ...(jobMeta || {}), ...(custom.args.length ? { extraArgs: [...custom.args] } : {}), ...(Object.keys(custom.env).length ? { extraEnv: { ...custom.env } } : {}) };
+    plan.custom = { extraArgs: [...custom.args], extraEnv: { ...custom.env } };
+  }
   Object.assign(plan.legacy, {
     runOptions,
-    jobMeta: normalized.jobMeta || null,
+    jobMeta,
     admissionRequest: normalized.admissionRequest || null,
     extras: normalized.extras || null,
   });
@@ -945,6 +977,8 @@ function createLaunchPlanner(options = {}) {
       imagePresence: hook("imagePresence"),
       admissionPreview: hook("admissionPreview"),
       listContainers: hook("listContainers"),
+      getIntrospection: hook("getIntrospection"),
+      modelStorage: options.modelStorage || null,
     };
   }
   return {

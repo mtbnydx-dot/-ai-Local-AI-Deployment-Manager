@@ -116,6 +116,7 @@ function createLlamaRuntimeCommandBuilder(deps) {
       },
       model: { ...launch, ref: opts.model },
       secrets: { hfToken: process.env.HF_TOKEN },
+      extra: { args: opts.extraArgs, env: opts.extraEnv },
       launchId: null,
       toContainerPath: windowsPathToContainerPath,
       dockerGpuArg,

@@ -199,6 +199,8 @@ function fakeVllmManager(options = {}) {
       calls.push("listContainers");
       return options.containers || [];
     },
+    getIntrospection: options.getIntrospection,
+    modelStorage: options.modelStorage,
   });
   return { start, builder, calls, started, CONFIG, registry };
 }
@@ -598,7 +600,74 @@ test("gpu-admission evaluate() previews the P0-RT-3 decision without a lock or a
 test("v2 parts of later packages are plan errors, not silent drops", async () => {
   const host = fakeVllmManager();
   const plan = await host.start.planLaunch(v2Body({ prospective: true, instance: { mode: "add" }, extraArgs: ["--x"] }));
-  assert.deepEqual(plan.errors.map((item) => item.code).sort(), ["extra_args_unsupported", "instance_mode_unsupported", "prospective_unsupported"]);
+  // extraArgs became real in ENG-15: without introspection an unknown flag is a warning.
+  assert.deepEqual(plan.errors.map((item) => item.code).sort(), ["instance_mode_unsupported", "prospective_unsupported"]);
+  assert.ok(plan.warnings.some((item) => item.code === "extra_arg_unverified"));
+});
+
+test("extraArgs and extraEnv are validated, shown as custom, appended last and run as planned (ENG-15)", async () => {
+  const host = fakeVllmManager();
+  const body = v2Body({ extraArgs: ["--swap-space", "4"], extraEnv: { VLLM_FIXTURE_FLAG: "1" } });
+  const plan = await host.start.planLaunch(body);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors.concat(plan.blockers)));
+  assert.deepEqual(plan.custom, { extraArgs: ["--swap-space", "4"], extraEnv: { VLLM_FIXTURE_FLAG: "1" } });
+  assert.deepEqual(plan.command.argv.slice(-2), ["--swap-space", "4"]);
+  assert.equal(plan.command.env.VLLM_FIXTURE_FLAG, "1");
+  assert.ok(plan.warnings.some((item) => item.field === "extraArgs[0]" && item.code === "extra_arg_unverified"));
+  const baseline = await host.start.planLaunch(v2Body());
+  assert.equal(Object.hasOwn(baseline, "custom"), false, "a plan without extras is unchanged");
+  assert.notEqual(plan.planHash, baseline.planHash);
+
+  const result = await host.start({ body });
+  await settle();
+  const { job, runOptions } = host.started[0];
+  assert.equal(result.plan.planHash, plan.planHash);
+  assert.deepEqual(runOptions.extraArgs, ["--swap-space", "4"]);
+  assert.deepEqual(runOptions.extraEnv, { VLLM_FIXTURE_FLAG: "1" });
+  assert.deepEqual(job.meta.extraArgs, ["--swap-space", "4"]);
+  assert.deepEqual(job.meta.extraEnv, { VLLM_FIXTURE_FLAG: "1" });
+});
+
+test("extraArgs with a managed flag, a set parameter's flag or a denied variable are plan errors", async () => {
+  const host = fakeVllmManager();
+  const managed = await host.start.planLaunch(v2Body({ extraArgs: ["--port", "9000"] }));
+  assert.equal(managed.ok, false);
+  assert.deepEqual(managed.errors.map((item) => item.code), ["extra_arg_denied"]);
+  assert.equal(managed.command, null);
+  const duplicate = await host.start.planLaunch(v2Body({ extraArgs: ["--max-model-len", "4096"] }));
+  assert.deepEqual(duplicate.errors.map((item) => item.code), ["extra_arg_denied"]);
+  const env = await host.start.planLaunch(v2Body({ extraEnv: { HF_TOKEN: "x", VLLM_OK: "1" } }));
+  assert.deepEqual(env.errors.map((item) => item.code), ["extra_env_denied"]);
+  await assert.rejects(() => host.start({ body: v2Body({ extraArgs: ["--port", "9000"] }) }), (error) => error.status === 400);
+  assert.equal(host.started.length, 0);
+});
+
+test("with introspection an unknown extra flag is an error, and a path flag is confined to model storage", async () => {
+  const root = "C:/fixture/models";
+  const modelStorage = {
+    fromContainerPath: (value) => String(value),
+    resolvePath(value) {
+      if (!String(value).startsWith(`${root}/`)) throw new Error("outside");
+      return value;
+    },
+    toContainerPath(value) {
+      modelStorage.resolvePath(value);
+      return String(value).replace(root, "/models");
+    },
+  };
+  const getIntrospection = async () => ({ flags: [
+    { flag: "--swap-space", aliases: [], takesValue: true, valueHint: "SWAP_SPACE" },
+    { flag: "--chat-template", aliases: [], takesValue: true, valueHint: "CHAT_TEMPLATE_FILE" },
+  ] });
+  const host = fakeVllmManager({ getIntrospection, modelStorage });
+  const unknown = await host.start.planLaunch(v2Body({ extraArgs: ["--nope", "1"] }));
+  assert.deepEqual(unknown.errors.map((item) => item.code), ["extra_arg_unknown"]);
+  const outside = await host.start.planLaunch(v2Body({ extraArgs: ["--chat-template", "C:/elsewhere/t.jinja"] }));
+  assert.deepEqual(outside.errors.map((item) => item.code), ["extra_arg_denied"]);
+  const inside = await host.start.planLaunch(v2Body({ extraArgs: ["--chat-template", `${root}/t.jinja`, "--swap-space", "2"] }));
+  assert.equal(inside.ok, true, JSON.stringify(inside.errors));
+  assert.deepEqual(inside.command.argv.slice(-4), ["--chat-template", "/models/t.jinja", "--swap-space", "2"]);
+  assert.deepEqual(inside.warnings.filter((item) => item.code === "extra_arg_unverified"), []);
 });
 
 test("a blocked recipe is blocker recipe_blocked in the plan and 422 at /api/start", async () => {

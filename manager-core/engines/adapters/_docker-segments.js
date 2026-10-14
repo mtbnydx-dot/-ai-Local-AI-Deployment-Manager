@@ -46,6 +46,26 @@ function envAssignmentFlags(env) {
 }
 
 /**
+ * Appends the validated extraArgs/extraEnv (01 §18, extra-args.js) to a built
+ * LaunchCommand: the arguments last, after every generated engine argument,
+ * and the environment before the label block, which stays the last docker
+ * flags. A command without extras is returned untouched.
+ */
+function applyExtra(command, extra) {
+  const args = Array.isArray(extra?.args) ? extra.args.map(String) : [];
+  const env = extra?.env && typeof extra.env === "object" ? Object.entries(extra.env) : [];
+  if (!args.length && !env.length) return command;
+  if (env.length) {
+    const flags = command.docker.flags;
+    const at = flags.indexOf("--label");
+    const envFlags = env.flatMap(([name, value]) => ["-e", `${name}=${value}`]);
+    flags.splice(at >= 0 ? at : flags.length, 0, ...envFlags);
+  }
+  if (args.length) command.docker.args.push(...args);
+  return command;
+}
+
+/**
  * The `--label key=value` pairs of a flag list as an object, in emission
  * order: the read-only LaunchCommand.labels mirror that inspect and the plan
  * read. A later pair for the same key wins, as it does for docker.
@@ -65,6 +85,7 @@ function labelsFromFlags(flags) {
 }
 
 module.exports = {
+  applyExtra,
   envAssignmentFlags,
   labelFlags,
   labelsFromFlags,

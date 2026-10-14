@@ -51,6 +51,8 @@ function createVllmStartRuntimeRequest(deps) {
     imagePresence = null,
     admissionPreview = null,
     listContainers = null,
+    getIntrospection = null,
+    modelStorage = null,
   } = deps;
 
   /**
@@ -359,6 +361,8 @@ function createVllmStartRuntimeRequest(deps) {
     imagePresence,
     admissionPreview,
     listContainers,
+    getIntrospection,
+    modelStorage,
   });
 
   async function startRuntimeRequest({ body = {} } = {}) {

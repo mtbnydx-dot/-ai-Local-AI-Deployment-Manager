@@ -13,11 +13,17 @@
 //   --include <glob>  extra files relative to the root, repeatable
 //   exit 0 clean, 2 matches found (dry run) or left in backups, 1 error
 //
-// Scans <root>/*/logs/*.json. Secret stores (runtime-api-keys.json and any
+// Scans <root>/*/logs/*.json (which includes each manager's launch-store.json).
+// Secret stores (runtime-api-keys.json and any
 // { version, secrets } file) are listed as skipped and never rewritten.
 // <root>/backups/* is reported and never changed, because rewriting a
 // snapshot would break its manifest hashes. Output is counts and relative
 // names only.
+//
+// <root>/.runtime/launch-files/*/ holds per-launch template files that must
+// already be gone once a container is created (01-engines section 18). A file
+// found there is reported as a hit, counts toward exit code 2, and is never
+// rewritten or deleted by this script.
 
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
@@ -162,6 +168,18 @@ async function listBackupFiles(root) {
   await walkFiles(path.join(root, "backups"), 0, (file) => {
     if (/\.json$/i.test(file)) files.push(file);
   });
+  return files.sort((left, right) => toRelative(root, left).localeCompare(toRelative(root, right)));
+}
+
+// <root>/.runtime/launch-files/<launchId>/<file>: leftovers of docker-template
+// launches. Reported only; the folder is a dot-folder the ledger scan skips.
+async function listLaunchFiles(root) {
+  const files = [];
+  const base = path.join(root, ".runtime", "launch-files");
+  for (const entry of await listDir(base)) {
+    if (!entry.isDirectory()) continue;
+    await walkFiles(path.join(base, entry.name), 0, (file) => files.push(file));
+  }
   return files.sort((left, right) => toRelative(root, left).localeCompare(toRelative(root, right)));
 }
 
@@ -344,17 +362,22 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     }
   }
 
+  const launchFiles = await listLaunchFiles(root);
+  if (launchFiles.length) out("Launch files that should already be gone (reported only, never changed):");
+  for (const file of launchFiles) out(`  ${toRelative(root, file)}: leftover launch file`);
+
   out(`Summary: scanned ${plural(scans.length, "ledger file")}; ${plural(ledgerMatches, "match")} in ${plural(filesWithMatches, "file")}`
     + (options.apply ? `, ${plural(rewritten, "file")} rewritten` : "")
     + `; ${plural(backupMatches, "match")} in ${plural(backupFilesWithMatches, "backup file")}`
+    + (launchFiles.length ? `; ${plural(launchFiles.length, "leftover launch file")}` : "")
     + `; ${plural(storesSkipped, "secret store")} skipped.`);
-  if (ledgerMatches || backupMatches) {
+  if (ledgerMatches || backupMatches || launchFiles.length) {
     out("Key rotation: treat every key that was found as exposed. Restart the affected models with new keys and update their clients.");
     out("密钥轮换：已发现的密钥都应视为已泄露。请用新密钥重新启动相关模型并更新客户端。");
     if (backupMatches) out("Backup snapshots can be deleted whole once the keys are rotated; editing them would break their manifests.");
   }
   if (errors) return 1;
-  return remaining || backupMatches ? 2 : 0;
+  return remaining || backupMatches || launchFiles.length ? 2 : 0;
 }
 
 if (require.main === module) {
