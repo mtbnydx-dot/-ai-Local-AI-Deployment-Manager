@@ -174,6 +174,18 @@ function plainValues(values) {
   return out;
 }
 
+// The values a request set for parameters the adapters emit through the generic
+// catalog block (emit.mode "catalog"); null when there are none.
+function catalogEmittedValues(catalog, values) {
+  const out = {};
+  for (const param of catalog.params) {
+    if (param.emit?.mode !== "catalog" || ["none", "env"].includes(param.emit.kind)) continue;
+    const value = values[param.id];
+    if (value !== undefined && value !== null) out[param.id] = clone(value);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // Provenance of a request value: "planner" for {value, source:"planner"} (00 §9.10), else "user".
 function requestSource(entry) {
   return isSourcedValue(entry) && entry.source === "planner" ? "planner" : "user";
@@ -712,6 +724,11 @@ async function resolveLaunchPlan(request, ctx = {}) {
     return finish(plan);
   }
   const runOptions = normalized.runOptions;
+  // Catalog parameters the legacy run options have no field for (01 §9.4) ride
+  // along in runOptions.catalogValues, so the launch builds the command the
+  // plan showed. Only a v2 request carries them, and only when it set some.
+  const catalogValues = origin === "v2" ? catalogEmittedValues(catalog, merged) : null;
+  if (catalogValues && isPlainObject(runOptions)) runOptions.catalogValues = catalogValues;
   Object.assign(plan.legacy, {
     runOptions,
     jobMeta: normalized.jobMeta || null,

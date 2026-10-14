@@ -24,6 +24,9 @@ const LEVELS = Object.freeze(["basic", "advanced", "expert"]);
 const EMIT_MODES = Object.freeze(["adapter", "catalog"]);
 const EMIT_KINDS = Object.freeze(["flag-value", "flag-bool", "bool-pair", "json", "repeat", "csv", "env", "none"]);
 const TRANSFORMS = Object.freeze(["containerPath", "ctxTimesConcurrency", "jsonStringify"]);
+// emit.format names how a list or composite value becomes argv (adapters/_catalog-emit.js).
+const EMIT_FORMATS = Object.freeze(["tensor-override", "lora-scaled", "lora-modules", "speculative-config"]);
+const ITEM_FIELD_TYPES = Object.freeze(["string", "number"]);
 const RULE_KINDS = Object.freeze(["errorIf", "warnIf", "requires", "conflicts"]);
 const VRAM_EFFECTS = Object.freeze(["none", "weights", "kv-linear", "kv-dtype", "kv-pool", "fraction", "activations", "offload", "draft", "mmproj", "split"]);
 const LEGACY_CODECS = Object.freeze(["direct", "invertedBool", "prefixCachingPair", "defaultTrueBool"]);
@@ -34,7 +37,7 @@ const PARAM_FIELDS = new Set([
   "id", "group", "level", "order", "type", "unit", "label", "summary", "help", "docs",
   "range", "choices", "choicesFrom", "pattern", "maxLength", "engineDefault", "platformDefault",
   "emit", "flags", "vramEffect", "rules", "managed", "secret", "legacy", "appliesWhen",
-  "fromModel", "requiresFeature",
+  "fromModel", "requiresFeature", "item",
 ]);
 // Overrides may tune copy, ranges, defaults and choices, never the security
 // properties of a parameter.
@@ -148,7 +151,7 @@ function checkEmit(emit, where, errors) {
     errors.push({ path: where, code: "required", message: `${where} must describe how the parameter reaches the engine.` });
     return;
   }
-  const allowed = new Set(["mode", "kind", "flag", "falseFlag", "env", "omitWhen", "transform", "via"]);
+  const allowed = new Set(["mode", "kind", "flag", "falseFlag", "env", "omitWhen", "transform", "via", "map", "format"]);
   for (const key of Object.keys(emit)) {
     if (!allowed.has(key)) errors.push({ path: joinPath(where, key), code: "unknown_field", message: `Unknown emit field ${key}.` });
   }
@@ -175,6 +178,53 @@ function checkEmit(emit, where, errors) {
   }
   if (emit.via !== undefined && emit.via !== null && (typeof emit.via !== "string" || !expr.PARAM_ID_PATTERN.test(emit.via))) {
     errors.push({ path: joinPath(where, "via"), code: "invalid_value", message: "emit.via must name the parameter the value flows through." });
+  }
+  if (emit.format !== undefined && emit.format !== null && !EMIT_FORMATS.includes(emit.format)) {
+    errors.push({ path: joinPath(where, "format"), code: "invalid_value", message: `emit.format must be one of ${EMIT_FORMATS.join(", ")}.` });
+  }
+  if (emit.map !== undefined && emit.map !== null) {
+    const entries = isPlainObject(emit.map) ? Object.entries(emit.map) : null;
+    if (!entries || !entries.length || entries.length > MAX_CHOICES || entries.some(([key, argv]) => UNSAFE_KEYS.has(key)
+      || !Array.isArray(argv) || argv.length > 8 || !argv.every((token) => typeof token === "string" && token.length > 0 && token.length <= 64 && !/[\u0000\r\n]/.test(token)))) {
+      errors.push({ path: joinPath(where, "map"), code: "invalid_value", message: "emit.map maps each value to a short list of argv tokens." });
+    } else if (emit.kind !== "flag-value") {
+      errors.push({ path: joinPath(where, "map"), code: "invalid_value", message: "emit.map needs emit.kind flag-value." });
+    }
+  }
+}
+
+// A list parameter describes its items: { maxItems?, fields: { name: { type, required?, maxLength?, min?, max?, pattern?, choices? } } }.
+function checkItem(item, where, errors) {
+  if (!isPlainObject(item)) {
+    errors.push({ path: where, code: "invalid_type", message: `${where} must be { maxItems?, fields }.` });
+    return;
+  }
+  for (const key of Object.keys(item)) {
+    if (!["maxItems", "fields"].includes(key)) errors.push({ path: joinPath(where, key), code: "unknown_field", message: `Unknown item field ${key}.` });
+  }
+  if (item.maxItems !== undefined && (!Number.isInteger(item.maxItems) || item.maxItems < 1 || item.maxItems > 256)) {
+    errors.push({ path: joinPath(where, "maxItems"), code: "invalid_value", message: "item.maxItems must be a positive integer." });
+  }
+  if (!isPlainObject(item.fields) || !Object.keys(item.fields).length) {
+    errors.push({ path: joinPath(where, "fields"), code: "required", message: "item.fields lists the fields of one list item." });
+    return;
+  }
+  for (const [name, field] of Object.entries(item.fields)) {
+    const at = joinPath(joinPath(where, "fields"), name);
+    if (!LEGACY_FIELD_PATTERN.test(name) || UNSAFE_KEYS.has(name) || !isPlainObject(field) || !ITEM_FIELD_TYPES.includes(field.type)) {
+      errors.push({ path: at, code: "invalid_value", message: `${at} needs a name and a type (string or number).` });
+      continue;
+    }
+    for (const key of Object.keys(field)) {
+      if (!["type", "required", "maxLength", "min", "max", "pattern", "choices"].includes(key)) errors.push({ path: joinPath(at, key), code: "unknown_field", message: `Unknown item field ${key}.` });
+    }
+    if (field.pattern !== undefined) checkPattern(field.pattern, joinPath(at, "pattern"), errors);
+    if (field.choices !== undefined && (!Array.isArray(field.choices) || !field.choices.every((choice) => typeof choice === "string"))) {
+      errors.push({ path: joinPath(at, "choices"), code: "invalid_value", message: `${joinPath(at, "choices")} must list strings.` });
+    }
+    for (const key of ["maxLength", "min", "max"]) {
+      if (field[key] !== undefined && !Number.isFinite(field[key])) errors.push({ path: joinPath(at, key), code: "invalid_value", message: `${joinPath(at, key)} must be a number.` });
+    }
   }
 }
 
@@ -350,6 +400,10 @@ function validateParam(param, where, options = {}) {
     if (param[key] !== undefined && typeof param[key] !== "boolean") errors.push({ path: joinPath(where, key), code: "invalid_type", message: `${key} must be true or false.` });
   }
   if (param.legacy !== undefined) checkLegacy(param.legacy, joinPath(where, "legacy"), errors);
+  if (param.item !== undefined && param.item !== null) {
+    if (param.type !== "list") errors.push({ path: joinPath(where, "item"), code: "invalid_type", message: "item describes the items of a list parameter." });
+    else checkItem(param.item, joinPath(where, "item"), errors);
+  }
   if (param.appliesWhen !== undefined && param.appliesWhen !== null) checkExpression(param.appliesWhen, joinPath(where, "appliesWhen"), errors, options.paramIds);
   if (param.requiresFeature !== undefined && param.requiresFeature !== null && (typeof param.requiresFeature !== "string" || !FEATURE_PATTERN.test(param.requiresFeature))) {
     errors.push({ path: joinPath(where, "requiresFeature"), code: "invalid_value", message: "requiresFeature names a runtime feature flag." });
@@ -452,6 +506,7 @@ function normalizeParam(param, docs) {
     appliesWhen: param.appliesWhen ?? null,
     fromModel: param.fromModel === true,
     requiresFeature: param.requiresFeature ?? null,
+    item: param.item ?? null,
   };
 }
 
@@ -726,6 +781,65 @@ function checkType(param, value) {
     default:
       return false;
   }
+}
+
+/**
+ * The errors of a list value against the parameter's item description: too
+ * many items, a non-object item, an unknown or missing field, a wrong type, a
+ * value outside the field's length, range, pattern or choices. Each error's
+ * field is the path of the item, for example "llamacpp.overrideTensor[1].buffer".
+ */
+function listItemErrors(param, value) {
+  const spec = param.item;
+  if (!spec || !Array.isArray(value)) return [];
+  const errors = [];
+  const label = param.label;
+  if (Number.isInteger(spec.maxItems) && value.length > spec.maxItems) {
+    errors.push(fieldError(param.id, "too_many_items",
+      `“${label.zh}”最多 ${spec.maxItems} 项`, `"${label.en}" may have at most ${spec.maxItems} items`));
+    return errors;
+  }
+  value.forEach((entry, index) => {
+    const at = `${param.id}[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(fieldError(at, "invalid_item", `“${label.zh}”的第 ${index + 1} 项必须是对象`, `Item ${index + 1} of "${label.en}" must be an object`));
+      return;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!Object.hasOwn(spec.fields, key)) {
+        errors.push(fieldError(`${at}.${key}`, "unknown_item_field", `“${label.zh}”的第 ${index + 1} 项没有“${key}”字段`, `Item ${index + 1} of "${label.en}" has no field "${key}"`));
+      }
+    }
+    for (const [name, field] of Object.entries(spec.fields)) {
+      const item = entry[name];
+      const where = `${at}.${name}`;
+      if (item === undefined || item === null || item === "") {
+        if (field.required) errors.push(fieldError(where, "item_field_required", `“${label.zh}”的第 ${index + 1} 项需要“${name}”`, `Item ${index + 1} of "${label.en}" needs "${name}"`));
+        continue;
+      }
+      const typeOk = field.type === "number" ? typeof item === "number" && Number.isFinite(item) : typeof item === "string" && !/[\u0000\r\n]/.test(item);
+      if (!typeOk) {
+        errors.push(fieldError(where, "invalid_type", `“${label.zh}”第 ${index + 1} 项的“${name}”类型不对（需要 ${field.type}）`, `"${name}" in item ${index + 1} of "${label.en}" needs a ${field.type} value`));
+        continue;
+      }
+      if (field.type === "string") {
+        if (Number.isFinite(field.maxLength) && item.length > field.maxLength) {
+          errors.push(fieldError(where, "too_long", `“${label.zh}”第 ${index + 1} 项的“${name}”最长 ${field.maxLength} 个字符`, `"${name}" in item ${index + 1} of "${label.en}" may be at most ${field.maxLength} characters`));
+          continue;
+        }
+        if (field.pattern && !new RegExp(field.pattern).test(item)) {
+          errors.push(fieldError(where, "invalid_item_value", `“${label.zh}”第 ${index + 1} 项的“${name}”格式不对`, `"${name}" in item ${index + 1} of "${label.en}" has an invalid format`));
+          continue;
+        }
+        if (Array.isArray(field.choices) && !field.choices.includes(item)) {
+          errors.push(fieldError(where, "invalid_choice", `“${label.zh}”第 ${index + 1} 项的“${name}”不能是 ${item}；可选：${field.choices.join(", ")}`, `"${name}" in item ${index + 1} of "${label.en}" cannot be ${item}; choose one of: ${field.choices.join(", ")}`));
+        }
+      } else if ((Number.isFinite(field.min) && item < field.min) || (Number.isFinite(field.max) && item > field.max)) {
+        errors.push(fieldError(where, "out_of_range", `“${label.zh}”第 ${index + 1} 项的“${name}”须在 ${field.min ?? "-∞"} 到 ${field.max ?? "∞"} 之间`, `"${name}" in item ${index + 1} of "${label.en}" must be between ${field.min ?? "-∞"} and ${field.max ?? "∞"}`));
+      }
+    }
+  });
+  return errors;
 }
 
 function serializedLength(value) {
@@ -1188,6 +1302,13 @@ function validateValues(values, catalog, ctx = {}) {
       errors.push(fieldError(id, "invalid_type", `“${label.zh}”的值类型不对（需要 ${param.type}）`, `"${label.en}" needs a ${param.type} value`));
       continue;
     }
+    if (param.type === "list") {
+      const itemProblems = listItemErrors(param, value);
+      if (itemProblems.length) {
+        errors.push(...itemProblems);
+        continue;
+      }
+    }
     if (param.maxLength && serializedLength(value) > param.maxLength) {
       errors.push(fieldError(id, "too_long", `“${label.zh}”最长 ${param.maxLength} 个字符`, `"${label.en}" may be at most ${param.maxLength} characters`));
       continue;
@@ -1305,6 +1426,7 @@ function buildSchemaPayload({ catalog, runtime = null, introspection = null, fac
 module.exports = {
   AVAILABILITY_REASONS,
   BUNDLED_PARAMS_DIR,
+  EMIT_FORMATS,
   EMIT_KINDS,
   EMIT_MODES,
   LEGACY_CODECS,

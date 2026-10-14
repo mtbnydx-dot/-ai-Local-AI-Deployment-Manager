@@ -78,10 +78,10 @@ function createVllmRuntimeCommandBuilder(deps) {
     const fractionParam = descriptor?.memoryModel?.fractionParam || FRACTION_PARAMS[engineId];
     const plan = {
       engineId,
-      values: legacyRunValues(opts, runtimePreset, quantization, {
+      values: withCatalogValues(legacyRunValues(opts, runtimePreset, quantization, {
         fractionParam,
         presetQuantization: PRESET_QUANTIZATION_ENGINES.has(engineId),
-      }),
+      }), opts.catalogValues),
       fixed: legacyFixedData(opts, runtimePreset),
       instance: {
         id: opts.instanceId,
@@ -253,6 +253,20 @@ function legacyRunValues(opts, preset, quantization, { fractionParam, presetQuan
     "sglang.dsparkBlockSize": preset.dsparkBlockSize || null,
     "sglang.draftModelQuantization": preset.draftModelQuantization || null,
   };
+}
+
+/**
+ * The values a v2 launch request set for catalog parameters that have no
+ * legacy run option (01 §9.4, runOptions.catalogValues from the resolver)
+ * fill the ids the legacy mapping left unset; the adapter appends them.
+ */
+function withCatalogValues(values, catalogValues) {
+  if (!catalogValues || typeof catalogValues !== "object" || Array.isArray(catalogValues)) return values;
+  const out = { ...values };
+  for (const [id, value] of Object.entries(catalogValues)) {
+    if (out[id] === undefined || out[id] === null || out[id] === "") out[id] = value;
+  }
+  return out;
 }
 
 /**

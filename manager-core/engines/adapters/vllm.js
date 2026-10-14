@@ -18,6 +18,7 @@ const {
   managerDockerFlags,
   requestedOption,
 } = require("./_vllm-manager");
+const { emitCatalogArgs, skipSpeculativeWhen } = require("./_catalog-emit");
 
 const ENGINE_ID = "vllm";
 // vLLM reads its API key from this variable when --api-key is absent.
@@ -104,7 +105,7 @@ function buildCommand(plan, ctx, effects) {
   if (values["vllm.attentionBackend"]) args.push("--attention-backend", values["vllm.attentionBackend"]);
   if (values["vllm.moeBackend"]) args.push("--moe-backend", values["vllm.moeBackend"]);
   if (values["vllm.linearBackend"]) args.push("--linear-backend", values["vllm.linearBackend"]);
-  if (values.generationConfig) args.push("--generation-config", values.generationConfig);
+  if (values.generationConfig) args.push("--generation-config", generationConfigArg(values.generationConfig, ctx));
   if (values["vllm.overrideGenerationConfig"]) {
     args.push("--override-generation-config", jsonArg(values["vllm.overrideGenerationConfig"]));
   }
@@ -124,8 +125,23 @@ function buildCommand(plan, ctx, effects) {
   }
   // Recipe fixed args close the engine args; no --api-key (VLLM_API_KEY above).
   args.push(...(fixed.args || []));
+  // Catalog parameters that did not exist before P1 (01 §9.4): appended, in
+  // catalog order, only when set. A recipe's own --speculative-config wins.
+  args.push(...emitCatalogArgs({
+    engineId: ENGINE_ID,
+    ctx,
+    values,
+    existingArgs: args,
+    skip: skipSpeculativeWhen(args, "--speculative-config"),
+  }));
 
   return launchCommand(ctx, { flags, entrypoint: null, image, args, publish, secretEnv, metaPatch, logs });
+}
+
+// --generation-config takes auto, vllm or a folder; a host path becomes its
+// container path, the two keywords and container paths stay as they are.
+function generationConfigArg(value, ctx) {
+  return /^(?:[A-Za-z]:[\\/]|\\\\)/.test(String(value)) ? ctx.toContainerPath(String(value)) : value;
 }
 
 module.exports = {

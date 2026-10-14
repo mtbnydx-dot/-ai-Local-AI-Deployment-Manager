@@ -99,11 +99,25 @@
     },
     {
       "id": "speculative.method",
-      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--speculative-algorithm" },
+      "emit": {
+        "mode": "catalog", "kind": "flag-value", "flag": "--speculative-algorithm",
+        "map": {
+          "eagle": ["--speculative-algorithm", "EAGLE"],
+          "eagle3": ["--speculative-algorithm", "EAGLE3"],
+          "nextn": ["--speculative-algorithm", "NEXTN"],
+          "standalone": ["--speculative-algorithm", "STANDALONE"],
+          "ngram": ["--speculative-algorithm", "NGRAM"]
+        }
+      },
       "choices": [
         { "value": "off", "label": { "zh": "关闭（稳定优先）", "en": "Off (stability first)" } },
         { "value": "dspark", "label": { "zh": "DSpark（草稿模型）", "en": "DSpark (draft model)" } },
-        { "value": "mtp", "label": { "zh": "MTP / NEXTN（仅限已验证方案）", "en": "MTP / NEXTN (validated recipes only)" } }
+        { "value": "mtp", "label": { "zh": "MTP / NEXTN（仅限已验证方案）", "en": "MTP / NEXTN (validated recipes only)" } },
+        { "value": "eagle", "label": { "zh": "EAGLE（需要草稿模型）", "en": "EAGLE (needs a draft model)" } },
+        { "value": "eagle3", "label": { "zh": "EAGLE3（需要草稿模型）", "en": "EAGLE3 (needs a draft model)" } },
+        { "value": "nextn", "label": { "zh": "NEXTN（模型自带 MTP 层）", "en": "NEXTN (the model's own MTP layers)" } },
+        { "value": "standalone", "label": { "zh": "独立草稿模型（需要草稿模型）", "en": "Standalone draft model (needs a draft model)" } },
+        { "value": "ngram", "label": { "zh": "N-gram（无需草稿模型）", "en": "N-gram (no draft model)" } }
       ],
       "platformDefault": "off",
       "rules": [
@@ -112,6 +126,12 @@
           "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["mtp", "qwen3_next_mtp"]] }, { "eq": [{ "fact": "model.nativeMtp.supported" }, false] }] },
           "code": "mtp_not_in_checkpoint",
           "message": { "zh": "这个模型的权重里没有 MTP 层，不能使用 MTP 推测解码；请关闭推测解码或换用其他方式。", "en": "This checkpoint has no MTP layers, so MTP speculative decoding cannot start; turn speculative decoding off or pick another method." }
+        },
+        {
+          "kind": "errorIf",
+          "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["eagle","eagle3","standalone"]] }, { "or": [{ "not": { "isSet": { "param": "speculative.draftModel" } } }, { "eq": [{ "param": "speculative.draftModel" }, ""] }] }] },
+          "code": "speculative_needs_draft_model",
+          "message": { "zh": "这种推测解码方式必须指定草稿模型，请在“草稿模型”里选择一个，或换用其他方式。", "en": "This speculative decoding method needs a draft model; choose one in “Draft model” or pick another method." }
         }
       ],
       "legacy": { "field": "speculativeMode", "domId": "speculativeMode" }
@@ -123,7 +143,7 @@
     },
     {
       "id": "speculative.draftModel",
-      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--speculative-draft-model-path", "transform": "containerPath" },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--speculative-draft-model-path", "transform": "containerPath" },
       "legacy": { "field": "draftModel", "domId": "draftModel" }
     },
     {
@@ -487,6 +507,151 @@
       },
       "platformDefault": true,
       "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--enable-metrics" }
+    },
+    {
+      "id": "sglang.epSize",
+      "group": "parallelism", "level": "expert", "order": 35,
+      "type": "int", "unit": "GPUs",
+      "label": { "zh": "专家并行卡数", "en": "Expert-parallel size" },
+      "summary": { "zh": "MoE 专家分布到几张卡上。", "en": "How many GPUs the MoE experts are spread over." },
+      "help": {
+        "what": { "zh": "对应 --ep-size。设置后优先于“MoE 专家并行”开关（后者按张量并行卡数传 --ep-size）。", "en": "Maps to --ep-size. When set it wins over the “MoE expert parallel” switch, which passes --ep-size with the tensor-parallel GPU count." },
+        "whenToChange": { "zh": "MoE 模型要把专家分到与张量并行不同数量的卡上时。", "en": "When an MoE model's experts should spread over a different number of GPUs than tensor parallelism uses." },
+        "tradeoffs": { "zh": "需要足够的卡数，并且要能整除专家数和张量并行卡数；卡间通信量上升。", "en": "It needs enough GPUs and must divide the expert count and the tensor-parallel size; inter-GPU traffic goes up." }
+      },
+      "range": { "min": 1, "max": 64, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--ep-size", "omitWhen": [1, null] },
+      "vramEffect": "split"
+    },
+    {
+      "id": "sglang.maxPrefillTokens",
+      "group": "capacity", "level": "advanced", "order": 45,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "单批预填充 token 上限", "en": "Prefill tokens per batch" },
+      "summary": { "zh": "一批预填充最多处理多少个 token。", "en": "The most tokens one prefill batch may process." },
+      "help": {
+        "what": { "zh": "对应 --max-prefill-tokens。它和“分块预填充大小”一起决定预填充的显存峰值。", "en": "Maps to --max-prefill-tokens. Together with “Chunked prefill size” it sets the prefill memory peak." },
+        "whenToChange": { "zh": "长提示词预填充时显存紧张就调小；显存宽裕且想加快预填充就调大。", "en": "Lower it when long-prompt prefill runs short of memory; raise it to prefill faster when memory is plentiful." },
+        "tradeoffs": { "zh": "越大预填充越快，但激活值占用的显存越多，也可能挤占解码。", "en": "Larger values prefill faster but use more activation memory and can crowd out decoding." }
+      },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--max-prefill-tokens", "omitWhen": [0, null] },
+      "vramEffect": "activations"
+    },
+    {
+      "id": "sglang.cudaGraphMaxBs",
+      "group": "runtime-expert", "level": "expert", "order": 190,
+      "type": "int", "unit": "requests",
+      "label": { "zh": "CUDA Graph 最大批大小", "en": "CUDA graph max batch size" },
+      "summary": { "zh": "为多大的解码批捕获 CUDA Graph。", "en": "The largest decode batch that gets a captured CUDA graph." },
+      "help": {
+        "what": { "zh": "对应 --cuda-graph-max-bs；0.5.21 及之后的运行时改名为 --cuda-graph-max-bs-decode，平台按运行时版本或参数检测结果自动选择。", "en": "Maps to --cuda-graph-max-bs; runtimes from 0.5.21 renamed it --cuda-graph-max-bs-decode, and the platform picks the right one from the runtime version or flag introspection." },
+        "whenToChange": { "zh": "并发较高、超过默认捕获范围时调大；启动时显存紧张或捕获太慢时调小。", "en": "Raise it for high concurrency above the default capture range; lower it when startup memory is tight or capture takes too long." },
+        "tradeoffs": { "zh": "越大覆盖的批越多、解码越快，但捕获更久、占用更多显存。", "en": "Larger values cover more batches and decode faster, but capture takes longer and uses more memory." }
+      },
+      "range": { "min": 1, "max": 4096, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--cuda-graph-max-bs", "omitWhen": [0, null] },
+      "flags": [{ "flag": "--cuda-graph-max-bs", "until": "0.5.20" }, { "flag": "--cuda-graph-max-bs-decode", "since": "0.5.21" }],
+      "vramEffect": "activations"
+    },
+    {
+      "id": "sglang.speculativeNumSteps",
+      "group": "speculative", "level": "expert", "order": 60,
+      "type": "int", "unit": "steps",
+      "label": { "zh": "草稿推测步数", "en": "Speculative draft steps" },
+      "summary": { "zh": "EAGLE 类方法每轮连续猜几步。", "en": "How many steps in a row EAGLE-style methods draft per round." },
+      "help": {
+        "what": { "zh": "对应 --speculative-num-steps，只用于 EAGLE、EAGLE3、NEXTN 和 STANDALONE。", "en": "Maps to --speculative-num-steps; only EAGLE, EAGLE3, NEXTN and STANDALONE use it." },
+        "whenToChange": { "zh": "按模型作者推荐的值设置；接受率高时可以尝试加大。", "en": "Set the value the model's authors recommend; try raising it when the acceptance rate is high." },
+        "tradeoffs": { "zh": "步数越多，猜中时收益越大，猜错时浪费的草稿计算也越多。", "en": "More steps gain more when the guesses hold and waste more draft work when they fail." }
+      },
+      "range": { "min": 1, "max": 32, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--speculative-num-steps" },
+      "vramEffect": "draft",
+      "appliesWhen": { "in": [{ "param": "speculative.method" }, ["eagle", "eagle3", "nextn", "standalone"]] }
+    },
+    {
+      "id": "sglang.speculativeEagleTopk",
+      "group": "speculative", "level": "expert", "order": 70,
+      "type": "int", "unit": "branches",
+      "label": { "zh": "草稿分支数", "en": "Speculative draft branches" },
+      "summary": { "zh": "EAGLE 类方法每一步保留几条候选分支。", "en": "How many candidate branches EAGLE-style methods keep at each step." },
+      "help": {
+        "what": { "zh": "对应 --speculative-eagle-topk，只用于 EAGLE、EAGLE3、NEXTN 和 STANDALONE。1 表示单链草稿。", "en": "Maps to --speculative-eagle-topk; only EAGLE, EAGLE3, NEXTN and STANDALONE use it. 1 means a single draft chain." },
+        "whenToChange": { "zh": "按模型作者推荐的值设置；显存和算力有余时加大分支能提高接受率。", "en": "Set the value the model's authors recommend; with spare memory and compute, more branches raise the acceptance rate." },
+        "tradeoffs": { "zh": "分支越多，验证的 token 越多，显存和算力开销越大。", "en": "More branches verify more tokens and cost more memory and compute." }
+      },
+      "range": { "min": 1, "max": 32, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--speculative-eagle-topk" },
+      "vramEffect": "draft",
+      "appliesWhen": { "in": [{ "param": "speculative.method" }, ["eagle", "eagle3", "nextn", "standalone"]] }
+    },
+    {
+      "id": "sglang.hicache.enable",
+      "group": "memory", "level": "expert", "order": 290,
+      "type": "bool",
+      "label": { "zh": "分层 KV 缓存（内存）", "en": "Hierarchical KV cache (RAM)" },
+      "summary": { "zh": "把放不下显存的 KV 缓存换到系统内存里，需要时再读回。", "en": "Moves KV cache that does not fit in VRAM to system memory and reads it back when needed." },
+      "help": {
+        "what": { "zh": "对应 --enable-hierarchical-cache。内存池大小由“内存与显存缓存比例”决定。", "en": "Maps to --enable-hierarchical-cache. The memory pool size follows “RAM-to-VRAM cache ratio”." },
+        "whenToChange": { "zh": "多轮长对话或共享长前缀很多，显存里的前缀缓存放不下、命中率低时。", "en": "For many multi-turn long conversations or shared long prefixes that do not fit in the VRAM prefix cache and give a low hit rate." },
+        "tradeoffs": { "zh": "换入换出要经过 PCIe 和内存，命中缓存时也比显存慢；需要足够的系统内存。", "en": "Swapping crosses PCIe and system memory and is slower than a VRAM hit; it needs enough system RAM." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "catalog", "kind": "flag-bool", "flag": "--enable-hierarchical-cache" },
+      "vramEffect": "offload",
+      "rules": [
+        {
+          "kind": "warnIf",
+          "when": { "and": [{ "eq": [{ "fact": "host.platform" }, "win32"] }, { "eq": [{ "param": "sglang.hicache.enable" }, true] }] },
+          "code": "hicache_wsl_unverified",
+          "message": { "zh": "CPU HiCache 在 WSL 下未验证", "en": "CPU HiCache is unverified under WSL" }
+        }
+      ]
+    },
+    {
+      "id": "sglang.hicache.ratio",
+      "group": "memory", "level": "expert", "order": 295,
+      "type": "float", "unit": "x",
+      "label": { "zh": "内存与显存缓存比例", "en": "RAM-to-VRAM cache ratio" },
+      "summary": { "zh": "内存里的 KV 缓存池是显存池的多少倍。", "en": "How many times larger the RAM KV pool is than the VRAM pool." },
+      "help": {
+        "what": { "zh": "对应 --hicache-ratio。只在开启分层 KV 缓存时使用，不设置时 SGLang 取 2。", "en": "Maps to --hicache-ratio. It is only used with the hierarchical KV cache on; unset, SGLang uses 2." },
+        "whenToChange": { "zh": "系统内存很充裕并希望缓存更多前缀时调大；内存紧张时调小。", "en": "Raise it when system RAM is plentiful and you want to cache more prefixes; lower it when RAM is tight." },
+        "tradeoffs": { "zh": "比例越大占用的系统内存越多，可能挤占其他程序。", "en": "A larger ratio uses more system RAM and can crowd out other programs." }
+      },
+      "range": { "min": 1, "max": 32, "step": 0.1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--hicache-ratio" },
+      "appliesWhen": { "eq": [{ "param": "sglang.hicache.enable" }, true] }
+    },
+    {
+      "id": "role",
+      "group": "model", "level": "advanced", "order": 15,
+      "type": "enum",
+      "label": { "zh": "模型用途", "en": "Model role" },
+      "summary": { "zh": "这个模型是对话模型还是向量（embedding）模型。", "en": "Whether this model is a chat model or an embedding model." },
+      "help": {
+        "what": { "zh": "chat 不加任何参数；embedding 对应 --is-embedding。", "en": "chat adds nothing; embedding maps to --is-embedding." },
+        "whenToChange": { "zh": "启动向量模型时。对话模型保持默认。", "en": "When you start an embedding model. Leave chat models at the default." },
+        "tradeoffs": { "zh": "embedding 实例不提供对话接口。", "en": "Embedding instances do not serve the chat API." }
+      },
+      "choices": [{ "value": "chat", "label": { "zh": "对话", "en": "Chat" } }, { "value": "embedding", "label": { "zh": "向量（embedding）", "en": "Embedding" } }],
+      "engineDefault": "chat",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--is-embedding", "map": { "chat": [], "embedding": ["--is-embedding"] } }
+    },
+    {
+      "id": "hfOverrides",
+      "group": "model", "level": "expert", "order": 90,
+      "type": "json",
+      "label": { "zh": "覆盖 HF 配置（JSON）", "en": "Override HF config (JSON)" },
+      "summary": { "zh": "用一个 JSON 对象覆盖模型 config.json 里的字段。", "en": "Overrides fields of the model's config.json with a JSON object." },
+      "help": {
+        "what": { "zh": "对应 --json-model-override-args。最长 8 KiB。扩展上下文时可填 {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}，辅助界面会帮你生成。", "en": "Maps to --json-model-override-args. At most 8 KiB. To extend the context use {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}; a helper in the console builds it for you." },
+        "whenToChange": { "zh": "需要改模型配置而不想复制整个模型目录，例如用 YaRN 扩展上下文，或修正错误的架构名。", "en": "When you need to change the model config without copying the model folder, for example to extend the context with YaRN or fix a wrong architecture name." },
+        "tradeoffs": { "zh": "字段写错或和权重不匹配会让加载失败或输出异常；它会改变模型行为，请对照模型卡。", "en": "A wrong field or one that does not match the weights fails to load or garbles output; it changes model behaviour, so check it against the model card." }
+      },
+      "maxLength": 8192,
+      "emit": { "mode": "catalog", "kind": "json", "flag": "--json-model-override-args" }
     }
   ]
 }

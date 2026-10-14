@@ -94,13 +94,15 @@
     },
     {
       "id": "speculative.method",
-      "emit": { "mode": "adapter", "kind": "json", "flag": "--speculative-config" },
+      "emit": { "mode": "catalog", "kind": "json", "flag": "--speculative-config", "format": "speculative-config" },
       "choices": [
         { "value": "off", "label": { "zh": "关闭（稳定优先）", "en": "Off (stability first)" } },
         { "value": "auto", "label": { "zh": "按模型自动（实验）", "en": "Auto from the model (experimental)" } },
         { "value": "mtp", "label": { "zh": "MTP（模型自带多 token 预测）", "en": "MTP (the model's own multi-token prediction)" } },
         { "value": "qwen3_next_mtp", "label": { "zh": "MTP（Qwen3-Next 写法）", "en": "MTP (Qwen3-Next spelling)" } },
         { "value": "ngram", "label": { "zh": "N-gram（无需草稿模型）", "en": "N-gram (no draft model)" } },
+        { "value": "eagle3", "label": { "zh": "EAGLE3（需要草稿模型）", "en": "EAGLE3 (needs a draft model)" } },
+        { "value": "draft_model", "label": { "zh": "草稿模型（需要草稿模型）", "en": "Draft model (needs a draft model)" } },
         { "value": "dspark", "label": { "zh": "DSpark（需 SGLang）", "en": "DSpark (needs SGLang)" } }
       ],
       "platformDefault": "off",
@@ -110,6 +112,12 @@
           "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["mtp", "qwen3_next_mtp"]] }, { "eq": [{ "fact": "model.nativeMtp.supported" }, false] }] },
           "code": "mtp_not_in_checkpoint",
           "message": { "zh": "这个模型的权重里没有 MTP 层，不能使用 MTP 推测解码；请关闭推测解码或换用其他方式。", "en": "This checkpoint has no MTP layers, so MTP speculative decoding cannot start; turn speculative decoding off or pick another method." }
+        },
+        {
+          "kind": "errorIf",
+          "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["eagle3","draft_model"]] }, { "or": [{ "not": { "isSet": { "param": "speculative.draftModel" } } }, { "eq": [{ "param": "speculative.draftModel" }, ""] }] }] },
+          "code": "speculative_needs_draft_model",
+          "message": { "zh": "这种推测解码方式必须指定草稿模型，请在“草稿模型”里选择一个，或换用其他方式。", "en": "This speculative decoding method needs a draft model; choose one in “Draft model” or pick another method." }
         }
       ],
       "legacy": { "field": "speculativeMode", "domId": "speculativeMode" }
@@ -423,6 +431,96 @@
         "tradeoffs": { "zh": "插件是模型仓库提供的 Python 代码，只用于可信来源的模型。", "en": "The plugin is Python code from the model repository; use it only for models from trusted sources." }
       },
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning-parser-plugin", "transform": "containerPath" }
+    },
+    {
+      "id": "hfOverrides",
+      "group": "model", "level": "expert", "order": 90,
+      "type": "json",
+      "label": { "zh": "覆盖 HF 配置（JSON）", "en": "Override HF config (JSON)" },
+      "summary": { "zh": "用一个 JSON 对象覆盖模型 config.json 里的字段。", "en": "Overrides fields of the model's config.json with a JSON object." },
+      "help": {
+        "what": { "zh": "对应 --hf-overrides。最长 8 KiB。扩展上下文时可填 {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}，辅助界面会帮你生成。", "en": "Maps to --hf-overrides. At most 8 KiB. To extend the context use {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}; a helper in the console builds it for you." },
+        "whenToChange": { "zh": "需要改模型配置而不想复制整个模型目录，例如用 YaRN 扩展上下文，或修正错误的架构名。", "en": "When you need to change the model config without copying the model folder, for example to extend the context with YaRN or fix a wrong architecture name." },
+        "tradeoffs": { "zh": "字段写错或和权重不匹配会让加载失败或输出异常；它会改变模型行为，请对照模型卡。", "en": "A wrong field or one that does not match the weights fails to load or garbles output; it changes model behaviour, so check it against the model card." }
+      },
+      "maxLength": 8192,
+      "emit": { "mode": "catalog", "kind": "json", "flag": "--hf-overrides" }
+    },
+    {
+      "id": "chatTemplate",
+      "group": "model", "level": "advanced", "order": 80,
+      "type": "path",
+      "label": { "zh": "聊天模板文件", "en": "Chat template file" },
+      "summary": { "zh": "用你提供的 Jinja 聊天模板文件，替换模型自带的模板。", "en": "Replaces the model's own template with a Jinja chat template file you provide." },
+      "help": {
+        "what": { "zh": "对应 --chat-template。文件必须在平台的模型存储目录下。", "en": "Maps to --chat-template. The file must be under the platform's model storage roots." },
+        "whenToChange": { "zh": "模型自带模板有缺陷、缺少工具调用或思考开关，或者官方发布了修正后的模板时。", "en": "When the model's own template is faulty, lacks tool calling or a thinking switch, or an official fixed template was published." },
+        "tradeoffs": { "zh": "模板和模型不匹配会让输出格式出错；只在确认模板来源可靠时使用。", "en": "A template that does not fit the model breaks the output format; use it only when you trust where the template came from." }
+      },
+      "maxLength": 4096,
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--chat-template", "transform": "containerPath" }
+    },
+    {
+      "id": "role",
+      "group": "model", "level": "advanced", "order": 15,
+      "type": "enum",
+      "label": { "zh": "模型用途", "en": "Model role" },
+      "summary": { "zh": "这个模型是对话模型、向量（embedding）模型还是重排序模型。", "en": "Whether this model is a chat model, an embedding model or a reranker." },
+      "help": {
+        "what": { "zh": "chat 不加任何参数；embedding 对应 --runner pooling --convert embed；rerank 对应 --runner pooling --convert classify。", "en": "chat adds nothing; embedding maps to --runner pooling --convert embed; rerank maps to --runner pooling --convert classify." },
+        "whenToChange": { "zh": "启动向量模型或重排序模型时。对话模型保持默认。", "en": "When you start an embedding or reranking model. Leave chat models at the default." },
+        "tradeoffs": { "zh": "embedding 和 rerank 实例不提供对话接口。", "en": "Embedding and rerank instances do not serve the chat API." }
+      },
+      "choices": [{ "value": "chat", "label": { "zh": "对话", "en": "Chat" } }, { "value": "embedding", "label": { "zh": "向量（embedding）", "en": "Embedding" } }, { "value": "rerank", "label": { "zh": "重排序", "en": "Rerank" } }],
+      "engineDefault": "chat",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--runner", "map": { "chat": [], "embedding": ["--runner", "pooling", "--convert", "embed"], "rerank": ["--runner", "pooling", "--convert", "classify"] } }
+    },
+    {
+      "id": "lora.adapters",
+      "group": "lora", "level": "advanced", "order": 10,
+      "type": "list",
+      "label": { "zh": "LoRA 适配器", "en": "LoRA adapters" },
+      "summary": { "zh": "启动时加载的 LoRA 适配器，每个有名字和目录，最多 8 个。", "en": "LoRA adapters loaded at launch, each with a name and a folder, up to 8." },
+      "help": {
+        "what": { "zh": "对应 --enable-lora --lora-modules 名字=路径 …。客户端在请求的 model 字段里写适配器名字即可使用。路径必须在平台的模型存储目录下。", "en": "Maps to --enable-lora --lora-modules name=path …. Clients select an adapter by putting its name in the request's model field. Paths must be under the platform's model storage roots." },
+        "whenToChange": { "zh": "同一个基础模型要服务多个微调版本时。", "en": "When one base model must serve several fine-tuned variants." },
+        "tradeoffs": { "zh": "开启 LoRA 会占用额外显存并略微降低吞吐；适配器的秩不能超过“LoRA 最大秩”。", "en": "Enabling LoRA uses extra VRAM and lowers throughput slightly; an adapter's rank cannot exceed “LoRA max rank”." }
+      },
+      "item": { "maxItems": 8, "fields": { "name": { "type": "string", "required": true, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }, "path": { "type": "string", "required": true, "maxLength": 4096 } } },
+      "emit": { "mode": "catalog", "kind": "repeat", "flag": "--lora-modules", "format": "lora-modules" },
+      "vramEffect": "weights"
+    },
+    {
+      "id": "vllm.lora.maxLoras",
+      "group": "lora", "level": "expert", "order": 20,
+      "type": "int", "unit": "adapters",
+      "label": { "zh": "同时加载的 LoRA 数", "en": "Max LoRAs in one batch" },
+      "summary": { "zh": "同一批请求里最多能同时用到几个不同的 LoRA。", "en": "How many different LoRAs one batch of requests may use at once." },
+      "help": {
+        "what": { "zh": "对应 --max-loras。只在配置了 LoRA 适配器时生效。", "en": "Maps to --max-loras. It only takes effect when LoRA adapters are configured." },
+        "whenToChange": { "zh": "多个适配器会同时被不同请求使用时调大。", "en": "Raise it when several adapters are used by different requests at the same time." },
+        "tradeoffs": { "zh": "每多一个槽位都会预留一份适配器显存。", "en": "Every extra slot reserves another adapter's worth of VRAM." }
+      },
+      "range": { "min": 1, "max": 64, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--max-loras" },
+      "vramEffect": "weights",
+      "appliesWhen": { "isSet": { "param": "lora.adapters" } }
+    },
+    {
+      "id": "vllm.lora.maxRank",
+      "group": "lora", "level": "expert", "order": 30,
+      "type": "int", "unit": "rank",
+      "label": { "zh": "LoRA 最大秩", "en": "LoRA max rank" },
+      "summary": { "zh": "允许加载的 LoRA 适配器的最大秩。", "en": "The largest rank of a LoRA adapter that may be loaded." },
+      "help": {
+        "what": { "zh": "对应 --max-lora-rank，范围 1 到 512。必须不小于所有适配器的实际秩。", "en": "Maps to --max-lora-rank, 1 to 512. It must be at least the real rank of every adapter." },
+        "whenToChange": { "zh": "适配器的秩大于默认上限，启动时报秩过大的错误时。", "en": "When an adapter's rank is above the default limit and startup reports the rank as too large." },
+        "tradeoffs": { "zh": "上限越大，为每个槽位预留的显存越多。", "en": "A higher limit reserves more VRAM for every slot." }
+      },
+      "range": { "min": 1, "max": 512, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--max-lora-rank" },
+      "vramEffect": "weights",
+      "appliesWhen": { "isSet": { "param": "lora.adapters" } }
     }
   ]
 }
