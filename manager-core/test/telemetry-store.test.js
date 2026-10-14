@@ -6,7 +6,8 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
+const { EventEmitter } = require("node:events");
 const sqlite = require("node:sqlite");
 const schema = require("../telemetry/schema");
 const storeWorker = require("../telemetry/store-worker");
@@ -140,9 +141,15 @@ test("the §4.2 DDL is created and stats() reports the §4.1 PRAGMAs", async (t)
   const dir = tempDir(t);
   const file = path.join(dir, "data", "telemetry.sqlite");
   const store = await openTelemetryStore({ file, logger: quietLogger() });
-  const stats = await store.stats();
+  const cheap = await store.stats();
+  const stats = await store.stats({ rows: true });
   await store.close();
 
+  // Exact row counts scan every table, so a plain stats() skips them.
+  assert.equal(cheap.rows, null);
+  assert.equal(cheap.rowsExact, false);
+  assert.deepEqual(cheap.pragmas, stats.pragmas);
+  assert.equal(stats.rowsExact, true);
   assert.equal(stats.ok, true);
   assert.equal(stats.store, "ok");
   assert.equal(stats.mode, "worker");
@@ -225,7 +232,7 @@ test("migrations run from an empty file and from v0 without losing rows, and reo
 
   const again = await openTelemetryStore({ file: v0File, logger: quietLogger() });
   assert.deepEqual(again.info.migration, { from: 1, to: 1, applied: [] });
-  assert.equal((await again.stats()).rows.requests, 1);
+  assert.equal((await again.stats({ rows: true })).rows.requests, 1);
   await again.close();
 
   readDb(v0File, (db) => {
@@ -273,9 +280,9 @@ test("worker round trip and a 10k-row batch insert complete in under 1 s", async
   const replay = await store.insertRequests(rows.slice(0, 500));
   assert.equal(replay.accepted, 0);
   assert.equal(replay.duplicates, 500);
-  const stats = await store.stats();
+  const stats = await store.stats({ rows: true });
   assert.equal(stats.rows.requests, 10_000);
-  assert.deepEqual(stats.writes.requests, { accepted: 10_000, duplicates: 500, rejected: 0, dropped: 0 });
+  assert.deepEqual(stats.writes.requests, { accepted: 10_000, duplicates: 500, rejected: 0, dropped: 0, busy: 0 });
 });
 
 test("rows are normalised, validated and capped before the INSERT", async (t) => {
@@ -295,21 +302,39 @@ test("rows are normalised, validated and capped before the INSERT", async (t) =>
     requestRow(4, { status: undefined }),
     requestRow(5, { durationMs: "not a number" }),
     "not a row",
+    // A supplied value that does not fit its column is rejected; it never
+    // silently becomes the column default (stream "yes" is not stream 0).
+    requestRow(6, { stream: "yes" }),
+    requestRow(7, { userAgent: { nested: true } }),
+    requestRow(8, { ttftMs: Number.NaN }),
+    // An empty numeric cell (imports) counts as absent.
+    requestRow(9, { ttftMs: "", bytesOut: "  " }),
   ]);
-  assert.equal(result.accepted, 2);
-  assert.equal(result.rejected, 4);
+  assert.equal(result.accepted, 3);
+  assert.equal(result.rejected, 7);
   assert.deepEqual(result.errors, [
     { index: 2, code: "invalid_value", field: "terminal_state" },
     { index: 3, code: "missing_field", field: "status" },
     { index: 4, code: "invalid_value", field: "duration_ms" },
     { index: 5, code: "invalid_row" },
+    { index: 6, code: "invalid_value", field: "stream" },
+    { index: 7, code: "invalid_value", field: "user_agent" },
+    { index: 8, code: "invalid_value", field: "ttft_ms" },
   ]);
+  const circular = { name: "loop" };
+  circular.self = circular;
+  assert.deepEqual(
+    (await store.insertEvents([{ type: "x.y", source: "entry", title: "cyclic data", data: circular }])).errors,
+    [{ index: 0, code: "invalid_value", field: "data" }],
+  );
   await assert.rejects(store.insertRequests({ not: "an array" }), (error) => error instanceof TelemetryStoreError && error.code === "invalid_rows");
   await store.close();
 
   readDb(file, (db) => {
     const rows = db.prepare("SELECT request_id, received_at, path, stream, status, source_program, extra, usage_source FROM requests ORDER BY id").all();
-    assert.equal(rows.length, 2);
+    assert.equal(rows.length, 3);
+    const blank = db.prepare("SELECT ttft_ms, bytes_out FROM requests WHERE request_id = ?").get(requestId(9));
+    assert.deepEqual({ ...blank }, { ttft_ms: null, bytes_out: null });
     assert.equal(rows[0].extra, null, "oversized extra JSON is dropped, not truncated");
     assert.equal(rows[0].stream, 1);
     assert.deepEqual({ ...rows[1] }, {
@@ -471,7 +496,7 @@ test("retention deletes in batches, keeps forever data and masks client data aft
   assert.equal(result.ttl.requestsDays, 30);
   assert.equal(result.optimized, true);
 
-  const stats = await reopened.stats();
+  const stats = await reopened.stats({ rows: true });
   assert.equal(stats.rows.requests, 23);
   assert.equal(stats.rows.rollup1d, 1, "daily rollups are kept forever");
   assert.equal(stats.retention.lastRunAt, NOW);
@@ -685,17 +710,13 @@ test("a crashed worker restarts with backoff and calls in between are retryable"
 
   await waitFor(() => store.state === "ready" && store[STORE_WORKER]() !== null);
   assert.equal((await store.insertRequests([requestRow(3)])).accepted, 1);
-  const stats = await store.stats();
+  const stats = await store.stats({ rows: true });
   assert.equal(stats.restarts, 1);
   assert.equal(stats.rows.requests, during ? 2 : 3);
   assert.ok(logger.lines.some((line) => /restarting in 50 ms/.test(line.message)));
 });
 
-test("the backup snapshots the telemetry database with VACUUM INTO while the store is open", async (t) => {
-  const backupScript = fs.readFileSync(path.join(REPO_ROOT, "scripts", "backup-platform.ps1"), "utf8");
-  assert.match(backupScript, /Add-File \$telemetryDb 'service-entry\\data\\telemetry\.sqlite' 'sqlite'/);
-  assert.match(backupScript, /'service-entry\\data\\telemetry\.sqlite'/);
-
+test("sqlite-snapshot.js copies the telemetry database with VACUUM INTO while the store is open", async (t) => {
   const dir = tempDir(t);
   const file = path.join(dir, "telemetry.sqlite");
   const store = await openTelemetryStore({ file, logger: quietLogger() });
@@ -727,4 +748,335 @@ test("store-worker helpers: TTL clamping, IP masking and the audit hash", () => 
     '{"at":1,"source":"entry","actor":"a","session":null,"client_ip":null,"user_agent":null,"action":"verify","target":null,"outcome":"ok","detail":null}',
   );
   assert.equal(storeWorker.auditChainHash(storeWorker.GENESIS_HASH, row).length, 64);
+});
+
+function clientDataOf(file, id) {
+  return readDb(file, (db) => ({
+    ...db.prepare("SELECT client_ip, user_agent, owui_user_id, owui_chat_id FROM requests WHERE request_id = ?").get(id),
+  }));
+}
+
+const MASKED_V4 = { client_ip: "203.0.113.x", user_agent: null, owui_user_id: null, owui_chat_id: null };
+
+test("rows that arrive behind the masking watermark are masked on insert, whatever the insert order", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const store = await openTelemetryStore({ file, logger: quietLogger() });
+  await store.insertRequests([requestRow(1, { receivedAt: NOW - 10 * DAY_MS })]);
+  assert.equal((await store.runRetention(NOW, { ipDays: 7 })).masked, 1);
+
+  // An access-log import or a long spool replay lands after the pass, with
+  // rows far older than the range the next pass re-checks.
+  const old = { receivedAt: NOW - 20 * DAY_MS, clientIp: "203.0.113.50", userAgent: "agent/1", owuiUserId: "u-1", owuiChatId: "c-1" };
+  const fresh = { receivedAt: NOW - DAY_MS, clientIp: "203.0.113.51", userAgent: "agent/2" };
+  assert.equal((await store.insertRequests([requestRow(2, old), requestRow(3, fresh)])).accepted, 2);
+  assert.deepEqual(clientDataOf(file, requestId(2)), MASKED_V4);
+  assert.deepEqual(clientDataOf(file, requestId(3)), { client_ip: "203.0.113.51", user_agent: "agent/2", owui_user_id: null, owui_chat_id: null });
+  for (const at of [NOW + 3_600_000, NOW + DAY_MS]) {
+    assert.equal((await store.runRetention(at, { ipDays: 7 })).ok, true);
+    assert.deepEqual(clientDataOf(file, requestId(2)), MASKED_V4);
+  }
+  const stats = await store.stats();
+  assert.equal(stats.masking.maskedOnInsert, 1);
+  assert.equal(stats.masking.maskBefore, NOW + DAY_MS - 7 * DAY_MS);
+  await store.close();
+
+  // A new store instance takes the watermark from collector_state.
+  const reopened = await openTelemetryStore({ file, logger: quietLogger() });
+  cleanup(t, () => reopened.close());
+  await reopened.insertRequests([requestRow(4, old)]);
+  assert.deepEqual(clientDataOf(file, requestId(4)), MASKED_V4);
+});
+
+test("rows written while a masking pass yields are masked even behind its cursor", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const store = await openTelemetryStore({ file, logger: quietLogger(), retention: { batchRows: 100, yieldMs: 60 } });
+  cleanup(t, () => store.close());
+  assert.equal((await store.runRetention(NOW, { ipDays: 7 })).ok, true);
+  await store.insertRequests(Array.from({ length: 300 }, (unused, index) => requestRow(1000 + index, { receivedAt: NOW - 5 * DAY_MS + index })));
+
+  // The pass at NOW+3d masks up to NOW-4d in three batches with yields. The
+  // late row is newer than the old watermark (NOW-7d) and older than the
+  // cursor, so neither the old insert check nor the scan would catch it.
+  const pass = store.runRetention(NOW + 3 * DAY_MS, { ipDays: 7 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const late = requestRow(1, { receivedAt: NOW - 6 * DAY_MS, clientIp: "203.0.113.60", userAgent: "agent/3", owuiUserId: "u-3" });
+  assert.equal((await store.insertRequests([late])).accepted, 1);
+  const result = await pass;
+  assert.equal(result.ok, true);
+  assert.equal(result.masked, 300);
+  assert.deepEqual(clientDataOf(file, requestId(1)), MASKED_V4);
+  assert.equal((await store.stats()).masking.maskedOnInsert, 1);
+  assert.equal((await store.runRetention(NOW + 3 * DAY_MS + 60_000, { ipDays: 7 })).masked, 0);
+});
+
+test("a lock that outlasts busy_timeout is reported as retryable, not as dropped", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const queryModule = path.join(dir, "busy-queries.js");
+  fs.writeFileSync(queryModule, [
+    '"use strict";',
+    "exports.setBusyTimeout = (db, params) => { db.exec(`PRAGMA busy_timeout = ${Number(params.ms)}`); return true; };",
+    "",
+  ].join("\n"));
+  const store = await openTelemetryStore({ file, queryModule, logger: quietLogger() });
+  cleanup(t, () => store.close());
+  await store.call("setBusyTimeout", { ms: 50 });
+
+  const blocker = new sqlite.DatabaseSync(file);
+  blocker.exec("BEGIN IMMEDIATE");
+  let busy;
+  let stateError;
+  try {
+    busy = await store.insertRequests([requestRow(1), requestRow(2)]);
+    stateError = await store.setState("rollup.1m", { watermark: 1 }).then(() => null, (error) => error);
+  } finally {
+    blocker.exec("ROLLBACK");
+    blocker.close();
+  }
+  assert.deepEqual(busy, {
+    accepted: 0, duplicates: 0, rejected: 0, dropped: 2, errors: [], error: "telemetry_store_busy", retryable: true,
+  });
+  assert.ok(stateError instanceof TelemetryStoreError);
+  assert.equal(stateError.code, "telemetry_store_busy");
+  assert.equal(stateError.retryable, true);
+
+  await store.call("setBusyTimeout", { ms: 5000 });
+  assert.equal((await store.insertRequests([requestRow(1), requestRow(2)])).accepted, 2);
+  const stats = await store.stats();
+  assert.deepEqual(stats.writes.requests, { accepted: 2, duplicates: 0, rejected: 0, dropped: 0, busy: 2 });
+  assert.equal(stats.dropped.requests, 0);
+  assert.deepEqual(stats.pragmaMismatches, []);
+});
+
+test("close() stops a yielding retention pass at its next batch and waits for it", async (t) => {
+  for (const inProcess of [false, true]) {
+    const dir = tempDir(t);
+    const file = path.join(dir, "telemetry.sqlite");
+    const retention = { batchRows: 100, yieldMs: 50 };
+    const store = await openTelemetryStore({ file, inProcess, logger: quietLogger(), retention });
+    await store.insertRequests(Array.from({ length: 2000 }, (unused, index) => requestRow(index, { receivedAt: NOW - 40 * DAY_MS + index })));
+
+    const pass = store.runRetention(NOW);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const started = performance.now();
+    const closed = await store.close();
+    const closeMs = performance.now() - started;
+    assert.deepEqual(closed, { ok: true, timedOut: false }, inProcess ? "in-process" : "worker");
+    assert.deepEqual(await pass, { ok: false, aborted: true, reason: "store_closed" });
+    assert.ok(closeMs < 1000, `close took ${closeMs} ms`);
+
+    // The pass stopped between batches: some rows are gone, the rest are
+    // intact, and no half-written retention summary was stored.
+    const reopened = await openTelemetryStore({ file, inProcess, logger: quietLogger(), retention: { batchRows: 5000, yieldMs: 1 } });
+    const stats = await reopened.stats({ rows: true });
+    assert.ok(stats.rows.requests > 0 && stats.rows.requests < 2000, `${stats.rows.requests} rows left`);
+    assert.equal(stats.retention, null);
+    assert.equal((await reopened.runRetention(NOW)).ok, true);
+    assert.equal((await reopened.stats({ rows: true })).rows.requests, 0);
+    await reopened.close();
+  }
+});
+
+// Fake workers for the restart paths. A private copy of store.js is loaded
+// with worker_threads.Worker swapped for a factory that follows `plan`:
+// "ready" opens at once, "exit" dies before it is ready, "hang" never answers
+// and "throw" makes the constructor throw (ERR_WORKER_INIT_FAILED).
+class FakeWorker extends EventEmitter {
+  constructor(mode) {
+    super();
+    this.mode = mode;
+    this.exited = false;
+    if (mode === "ready") setImmediate(() => this.emit("message", { type: "ready", ok: true, info: { file: "fake", thread: "worker", schemaVersion: 1 } }));
+    if (mode === "exit") this.exitSoon();
+  }
+
+  exitSoon() {
+    if (this.exited) return;
+    this.exited = true;
+    setImmediate(() => this.emit("exit", 1));
+  }
+
+  postMessage(message) {
+    if (this.mode !== "ready" || !message || message.type !== "call") return;
+    setImmediate(() => this.emit("message", { type: "result", id: message.id, ok: true, result: { ok: true, method: message.method } }));
+  }
+
+  ref() {}
+
+  unref() {}
+
+  terminate() {
+    this.exitSoon();
+    return Promise.resolve(1);
+  }
+}
+
+function storeWithScriptedWorkers(plan) {
+  const threads = require("node:worker_threads");
+  const storePath = require.resolve("../telemetry/store");
+  const cached = require.cache[storePath];
+  const RealWorker = threads.Worker;
+  const created = [];
+  delete require.cache[storePath];
+  threads.Worker = function ScriptedWorker(file, options) {
+    const mode = plan.length ? plan.shift() : "ready";
+    if (mode === "throw") throw Object.assign(new Error("Worker initialization failure"), { code: "ERR_WORKER_INIT_FAILED" });
+    const instance = mode === "real" ? new RealWorker(file, options) : new FakeWorker(mode);
+    created.push(instance);
+    return instance;
+  };
+  try {
+    return { ...require(storePath), created };
+  } finally {
+    threads.Worker = RealWorker;
+    delete require.cache[storePath];
+    if (cached) require.cache[storePath] = cached;
+  }
+}
+
+function restartDelays(logger) {
+  return logger.lines.map((line) => /restarting in (\d+) ms/.exec(line.message)).filter(Boolean).map((match) => Number(match[1]));
+}
+
+test("restart backoff keeps doubling while restarts die before ready, even after a long-lived worker", async (t) => {
+  const dir = tempDir(t);
+  const scripted = storeWithScriptedWorkers(["ready", "exit", "exit", "exit", "ready"]);
+  const logger = quietLogger();
+  const store = await scripted.openTelemetryStore({
+    file: path.join(dir, "fake.sqlite"), logger, restartMinMs: 20, restartMaxMs: 80, stableUptimeMs: 300,
+  });
+  cleanup(t, () => store.close());
+  assert.equal(store.state, "ready");
+  // The first worker counts as stable, so its crash restarts after the minimum.
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  await store[scripted.STORE_WORKER]().terminate();
+  await waitFor(() => scripted.created.length === 5 && store.state === "ready");
+  assert.deepEqual(restartDelays(logger), [20, 40, 80, 80]);
+  assert.equal((await store.stats()).restarts, 1);
+
+  // The fifth worker was ready only briefly, so a crash now keeps the delay.
+  await store[scripted.STORE_WORKER]().terminate();
+  await waitFor(() => scripted.created.length === 6 && store.state === "ready");
+  assert.deepEqual(restartDelays(logger), [20, 40, 80, 80, 80]);
+});
+
+test("a Worker constructor that throws degrades a first open and is retried during a restart", async (t) => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  t.after(() => process.off("unhandledRejection", onUnhandled));
+  const dir = tempDir(t);
+
+  const first = storeWithScriptedWorkers(["throw"]);
+  const firstLogger = quietLogger();
+  const degraded = await first.openTelemetryStore({ file: path.join(dir, "fake.sqlite"), logger: firstLogger });
+  assert.equal(degraded.state, "unavailable");
+  const degradedStats = await degraded.stats();
+  assert.equal(degradedStats.store, "unavailable");
+  assert.equal(degradedStats.error.cause, "ERR_WORKER_INIT_FAILED");
+  assert.equal((await degraded.insertRequests([requestRow(1)])).dropped, 1);
+  await degraded.close();
+
+  const restarting = storeWithScriptedWorkers(["ready", "throw", "throw", "ready"]);
+  const logger = quietLogger();
+  const store = await restarting.openTelemetryStore({
+    file: path.join(dir, "fake.sqlite"), logger, restartMinMs: 10, restartMaxMs: 40,
+  });
+  cleanup(t, () => store.close());
+  await store[restarting.STORE_WORKER]().terminate();
+  await waitFor(() => restarting.created.length === 2 && store.state === "ready");
+  assert.deepEqual(restartDelays(logger), [10, 20, 40]);
+  assert.equal(logger.lines.filter((line) => /could not start/.test(line.message)).length, 2);
+  assert.deepEqual(await store.getState("x"), { ok: true, method: "getState" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(unhandled, []);
+});
+
+test("an open timeout during a restart backs off and retries instead of degrading", async (t) => {
+  const dir = tempDir(t);
+  const scripted = storeWithScriptedWorkers(["ready", "hang", "ready"]);
+  const logger = quietLogger();
+  const store = await scripted.openTelemetryStore({
+    file: path.join(dir, "fake.sqlite"), logger, restartMinMs: 10, restartMaxMs: 40, openTimeoutMs: 100,
+  });
+  cleanup(t, () => store.close());
+  await store[scripted.STORE_WORKER]().terminate();
+  await waitFor(() => scripted.created.length === 3 && store.state === "ready");
+  assert.equal(scripted.created[1].exited, true, "the hung worker was terminated");
+  assert.deepEqual(restartDelays(logger), [10, 20]);
+  assert.ok(logger.lines.some((line) => /did not open within 100 ms/.test(line.message)));
+  assert.equal(logger.lines.some((line) => /unavailable/.test(line.message)), false);
+
+  // A first open that times out still degrades.
+  const first = storeWithScriptedWorkers(["hang"]);
+  const degraded = await first.openTelemetryStore({ file: path.join(dir, "fake.sqlite"), logger: quietLogger(), openTimeoutMs: 100 });
+  assert.equal(degraded.state, "unavailable");
+  assert.equal((await degraded.stats()).error.cause, "telemetry_store_open_timeout");
+  await degraded.close();
+});
+
+test("the daily backup includes the telemetry database, and a broken one only adds a warning", {
+  skip: process.platform !== "win32" && "backup-platform.ps1 runs on Windows only",
+}, async (t) => {
+  const dir = tempDir(t, "telemetry-backup-");
+  const root = path.join(dir, "root");
+  const data = path.join(root, "service-entry", "data");
+  fs.mkdirSync(data, { recursive: true });
+  const billing = new sqlite.DatabaseSync(path.join(data, "platform-billing.sqlite"));
+  billing.exec("CREATE TABLE ledger (id INTEGER PRIMARY KEY, cents INTEGER NOT NULL); INSERT INTO ledger (cents) VALUES (125);");
+  billing.close();
+  fs.writeFileSync(path.join(data, "keys.json"), '{"keys":[]}');
+  const telemetry = path.join(data, "telemetry.sqlite");
+  // Every path the script reads or writes stays under the temp folder. A
+  // PSModulePath inherited from PowerShell 7 (test-all started from pwsh)
+  // makes Windows PowerShell load the wrong Utility module, so it is dropped
+  // and powershell.exe rebuilds its default, as the scheduled task gets.
+  const env = { ...process.env, TTS_ENV_FILE: path.join(dir, "no-tts.env"), TTS_DATA_ROOT: path.join(dir, "tts") };
+  for (const key of Object.keys(env)) {
+    if (["AI_TELEMETRY_DB", "PSMODULEPATH"].includes(key.toUpperCase())) delete env[key];
+  }
+  const script = path.join(REPO_ROOT, "scripts", "backup-platform.ps1");
+  const runBackup = (name) => {
+    const backupRoot = path.join(dir, name);
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
+      "-Root", root, "-BackupRoot", backupRoot, "-NoPrune",
+    ], { env, encoding: "utf8", windowsHide: true, timeout: 120_000 });
+    const output = `${result.stdout || ""}${result.stderr || ""}`;
+    assert.equal(result.status, 0, output);
+    const [snapshot] = fs.readdirSync(backupRoot);
+    const folder = path.join(backupRoot, snapshot);
+    const manifest = JSON.parse(fs.readFileSync(path.join(folder, "backup-manifest.json"), "utf8").replace(/^﻿/, ""));
+    return { folder, manifest, output };
+  };
+  const telemetryEntry = "service-entry\\data\\telemetry.sqlite";
+
+  // A corrupt telemetry file (the store runs degraded on it and never
+  // repairs it) must not cost the billing ledger and the JSON ledgers.
+  fs.writeFileSync(telemetry, "this file is not a database ".repeat(64));
+  const broken = runBackup("backups-broken");
+  assert.deepEqual(broken.manifest.files.map((file) => file.path).sort(), [
+    "service-entry\\data\\keys.json", "service-entry\\data\\platform-billing.sqlite",
+  ]);
+  assert.deepEqual(broken.manifest.warnings.map((warning) => [warning.code, warning.path]), [["telemetry_snapshot_failed", telemetryEntry]]);
+  assert.equal(fs.existsSync(path.join(broken.folder, telemetryEntry)), false, "no partial snapshot is left behind");
+  assert.match(broken.output, /Verified 2 backup files/);
+
+  // A healthy store, open in its worker, is snapshotted with VACUUM INTO.
+  fs.rmSync(telemetry);
+  const store = await openTelemetryStore({ file: telemetry, logger: quietLogger() });
+  cleanup(t, () => store.close());
+  await store.insertRequests(Array.from({ length: 25 }, (unused, index) => requestRow(index)));
+  await store.appendAuditAccess({ source: "entry", actor: "system:cli", action: "verify", outcome: "ok" });
+  const healthy = runBackup("backups-healthy");
+  assert.deepEqual(healthy.manifest.warnings, []);
+  const entry = healthy.manifest.files.find((file) => file.path === telemetryEntry);
+  assert.equal(entry && entry.kind, "sqlite");
+  assert.equal(healthy.manifest.files.at(-1).path, telemetryEntry, "telemetry is copied after the must-keep files");
+  readDb(path.join(healthy.folder, telemetryEntry), (db) => {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM requests").get().n, 25);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_access_log").get().n, 1);
+  });
 });

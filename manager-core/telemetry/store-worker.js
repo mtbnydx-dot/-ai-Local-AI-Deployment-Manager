@@ -44,8 +44,9 @@ const RETENTION_DEFAULTS = Object.freeze({
   yieldMs: 20,
   vacuumPages: 2000,
   optimizeEveryMs: DAY_MS,
-  // Rows that arrive late (spool replays) may land just behind the masking
-  // watermark; each pass re-checks this much of the already masked range.
+  // Each pass re-checks this much of the already masked range, for rows a
+  // second writer (another store instance on the same file) inserted behind
+  // the watermark. This instance masks such rows on insert.
   maskSlackMs: DAY_MS,
 });
 const MAX_ROW_ERRORS = 20;
@@ -64,6 +65,15 @@ const COLUMN_TRANSFORMS = Object.freeze({
 });
 // SQLite primary result codes that abort a whole batch instead of one row.
 const FATAL_SQLITE_CODES = new Set([1, 5, 6, 7, 8, 10, 11, 13, 14, 26]);
+// Error codes for transient failures: the rows were not written, and the
+// caller may keep and resend them (busy_timeout ran out on a lock).
+const RETRYABLE_CODES = new Set(["telemetry_store_busy"]);
+// The requests columns cleared after ipDays (§4.3, §21). client_ip is masked,
+// the others become NULL.
+const MASKED_REQUEST_COLUMNS = Object.freeze(["client_ip", "user_agent", "owui_user_id", "owui_chat_id"]);
+// A supplied value that cannot be stored in its column. normalizeRow rejects
+// the row instead of silently storing the column default.
+const INVALID = Symbol("invalidValue");
 
 function storeError(code, message, extra = {}) {
   const error = new Error(message);
@@ -147,6 +157,8 @@ function toText(value, maxChars) {
   return null;
 }
 
+// Oversized JSON follows the column rule (dropped or replaced by a marker);
+// a value JSON cannot represent (a cycle, a function) is INVALID.
 function toJsonText(value, rule) {
   let text;
   if (typeof value === "string") {
@@ -160,10 +172,10 @@ function toJsonText(value, rule) {
     try {
       text = JSON.stringify(value);
     } catch {
-      return null;
+      return INVALID;
     }
   }
-  if (text === undefined) return null;
+  if (text === undefined) return INVALID;
   if (Buffer.byteLength(text, "utf8") <= rule.maxBytes) return text;
   return rule.oversize === null ? null : JSON.stringify(rule.oversize);
 }
@@ -330,16 +342,25 @@ function buildTableSpec(db, table, { exclude = [] } = {}) {
       transform: transforms[column.name] || null,
     }));
   const keyColumns = withoutRowid ? all.filter((column) => column.pk > 0).sort((a, b) => a.pk - b.pk).map((column) => column.name) : ["rowid"];
-  return { table, columns, keyColumns, withoutRowid };
+  const index = Object.fromEntries(columns.map((column, position) => [column.name, position]));
+  return { table, columns, keyColumns, withoutRowid, index };
 }
 
+// null means "not supplied" (the column default applies); INVALID means a
+// value was supplied but does not fit the column, e.g. stream: "yes".
 function coerceColumn(column, raw) {
   if (raw === undefined || raw === null) return null;
   const value = column.transform ? column.transform(raw) : raw;
-  if (column.kind === "integer") return toInteger(value);
-  if (column.kind === "real") return toReal(value);
+  if (value === undefined || value === null) return null;
+  if (column.kind === "integer" || column.kind === "real") {
+    // An empty cell (CSV or log imports) counts as absent, not as invalid.
+    if (typeof value === "string" && !value.trim()) return null;
+    const number = column.kind === "integer" ? toInteger(value) : toReal(value);
+    return number === null ? INVALID : number;
+  }
   if (column.json) return toJsonText(value, column.json);
-  return toText(value, column.maxChars);
+  const text = toText(value, column.maxChars);
+  return text === null ? INVALID : text;
 }
 
 function normalizeRow(spec, row) {
@@ -350,6 +371,7 @@ function normalizeRow(spec, row) {
     let raw = row[column.key];
     if (raw === undefined) raw = row[column.name];
     let value = coerceColumn(column, raw);
+    if (value === INVALID) throw rowError("invalid_value", column.name);
     if (value === null && column.fallback !== undefined) value = column.fallback;
     if (value === null && column.required) {
       throw rowError(raw === undefined || raw === null ? "missing_field" : "invalid_value", column.name);
@@ -360,8 +382,10 @@ function normalizeRow(spec, row) {
   return values;
 }
 
+// `busy` counts rows a lock kept out; the caller was told to retry them, so
+// they are not part of `dropped`.
 function emptyWriteCounters() {
-  return { accepted: 0, duplicates: 0, rejected: 0, dropped: 0 };
+  return { accepted: 0, duplicates: 0, rejected: 0, dropped: 0, busy: 0 };
 }
 
 function createStoreCore(options = {}) {
@@ -392,8 +416,17 @@ function createStoreCore(options = {}) {
   }
 
   let closed = false;
+  // Set by beginClose(): a yielding retention pass stops at its next batch.
+  let stopping = false;
   let retentionRunning = false;
   let queryModule;
+  // requests rows with received_at below this are masked as they are
+  // inserted. It is the cutoff of the last masking pass, and a pass moves it
+  // to its new cutoff before it scans, so an import of old rows or a write
+  // that lands while the pass yields never keeps raw client data past
+  // ipDays. undefined: not read from collector_state yet; null: no pass ran.
+  let maskBeforeMs;
+  let maskedOnInsert = 0;
   const loggedFailures = new Set();
   const writes = {};
   const tableSpecs = new Map();
@@ -401,6 +434,11 @@ function createStoreCore(options = {}) {
 
   function assertOpen() {
     if (closed) throw storeError("telemetry_store_closed", "The telemetry store is closed.");
+  }
+
+  function assertRunning() {
+    assertOpen();
+    if (stopping) throw storeError("telemetry_store_closed", "The telemetry store is closing.");
   }
 
   function prepared(key, sql) {
@@ -450,10 +488,35 @@ function createStoreCore(options = {}) {
     }
   }
 
+  function maskThreshold() {
+    if (maskBeforeMs === undefined) {
+      const through = Number((getState("retention") || {}).maskedThrough);
+      maskBeforeMs = Number.isFinite(through) ? through : null;
+    }
+    return maskBeforeMs;
+  }
+
+  // Masks the client columns of a normalised requests row in place when it
+  // is already older than the masking cutoff. Returns true when it did.
+  function maskStaleRequest(spec, values) {
+    const threshold = maskThreshold();
+    if (threshold === null || !(Number(values[spec.index.received_at]) < threshold)) return false;
+    let changed = false;
+    for (const name of MASKED_REQUEST_COLUMNS) {
+      const position = spec.index[name];
+      if (position === undefined || values[position] === null) continue;
+      const next = name === "client_ip" ? maskClientIp(values[position]) : null;
+      if (next !== values[position]) changed = true;
+      values[position] = next;
+    }
+    return changed;
+  }
+
   // One transaction per call. A row that fails validation or a constraint is
   // rejected alone; a disk, lock or I/O failure drops the whole batch, which
-  // is counted and reported instead of thrown (§22).
-  function insertRows(table, rows, prepareRow) {
+  // is counted and reported instead of thrown (§22). A lock that outlasts
+  // busy_timeout is reported as retryable, so the caller keeps the rows.
+  function insertRows(table, rows, { prepareRow, finishRow } = {}) {
     assertOpen();
     if (!Array.isArray(rows)) throw rowError("invalid_rows");
     const list = rows;
@@ -461,6 +524,7 @@ function createStoreCore(options = {}) {
     if (!list.length) return result;
     const spec = specFor(table);
     const tally = counters(table);
+    let masked = 0;
     const reject = (index, error) => {
       result.rejected += 1;
       if (result.errors.length < MAX_ROW_ERRORS) {
@@ -479,10 +543,15 @@ function createStoreCore(options = {}) {
             reject(index, error);
             continue;
           }
+          const rewritten = finishRow ? finishRow(spec, values) : false;
           try {
             const outcome = spec.insert.run(...values);
-            if (Number(outcome.changes) > 0) result.accepted += 1;
-            else result.duplicates += 1;
+            if (Number(outcome.changes) > 0) {
+              result.accepted += 1;
+              if (rewritten) masked += 1;
+            } else {
+              result.duplicates += 1;
+            }
           } catch (error) {
             if (FATAL_SQLITE_CODES.has(sqlitePrimaryCode(error))) throw error;
             reject(index, { code: "constraint_failed" });
@@ -491,14 +560,20 @@ function createStoreCore(options = {}) {
       });
     } catch (error) {
       logFailureOnce(`insert into ${table}`, error);
+      const code = errorCode(error);
       const dropped = list.length - result.rejected;
+      const retryable = RETRYABLE_CODES.has(code);
       tally.rejected += result.rejected;
-      tally.dropped += dropped;
-      return { accepted: 0, duplicates: 0, rejected: result.rejected, dropped, errors: result.errors, error: errorCode(error) };
+      if (retryable) tally.busy += dropped;
+      else tally.dropped += dropped;
+      const failed = { accepted: 0, duplicates: 0, rejected: result.rejected, dropped, errors: result.errors, error: code };
+      if (retryable) failed.retryable = true;
+      return failed;
     }
     tally.accepted += result.accepted;
     tally.duplicates += result.duplicates;
     tally.rejected += result.rejected;
+    maskedOnInsert += masked;
     return result;
   }
 
@@ -606,7 +681,7 @@ function createStoreCore(options = {}) {
       `DELETE FROM ${quoteIdentifier(table)} WHERE (${keys}) IN (SELECT ${keys} FROM ${quoteIdentifier(table)} WHERE ${whereSql} LIMIT ${retentionOptions.batchRows})`,
     );
     for (;;) {
-      assertOpen();
+      assertRunning();
       const changes = Number(statement.run(...params).changes);
       if (changes > 0) {
         tally.deleted[table] = (tally.deleted[table] || 0) + changes;
@@ -619,7 +694,8 @@ function createStoreCore(options = {}) {
 
   // §4.3 and §21: the IP, user agent and OpenWebUI ids are kept for ipDays.
   // Keyset pages over (received_at, id) from the last pass's watermark, so a
-  // pass reads only rows that crossed the cutoff since then.
+  // pass reads only rows that crossed the cutoff since then. Rows that arrive
+  // already older than the watermark are masked on insert (maskStaleRequest).
   async function maskClientData(fromMs, cutoffMs) {
     const select = prepared("retention:mask:select", `
       SELECT id, received_at, client_ip FROM requests
@@ -635,7 +711,7 @@ function createStoreCore(options = {}) {
     let cursorAt = fromMs - 1;
     let cursorId = 0;
     for (;;) {
-      assertOpen();
+      assertRunning();
       const rows = select.all(cutoffMs, cursorAt, cursorId);
       if (!rows.length) return masked;
       transaction(() => {
@@ -669,8 +745,11 @@ function createStoreCore(options = {}) {
     const ipCutoff = at - ttl.ipDays * DAY_MS;
     const watermark = Number(previous.maskedThrough);
     const maskFrom = Number.isFinite(watermark) ? Math.max(0, Math.min(watermark, ipCutoff) - retentionOptions.maskSlackMs) : 0;
+    // From here on, inserts below the new cutoff are masked on the way in:
+    // the scan below may already be past their received_at.
+    maskBeforeMs = ipCutoff;
     const masked = await maskClientData(maskFrom, ipCutoff);
-    assertOpen();
+    assertRunning();
     db.exec(`PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
     let lastOptimizeAt = Number(previous.lastOptimizeAt) || 0;
     let optimized = false;
@@ -685,7 +764,9 @@ function createStoreCore(options = {}) {
       deleted: tally.deleted,
       batches: tally.batches,
       masked,
-      maskedThrough: Math.max(ipCutoff, Number.isFinite(watermark) ? watermark : 0),
+      // Every requests row below this is masked. It follows the current
+      // cutoff, so it moves back when ipDays grows.
+      maskedThrough: ipCutoff,
       lastOptimizeAt,
       ttl,
     };
@@ -696,13 +777,13 @@ function createStoreCore(options = {}) {
   // Deletes in batches and yields between them, so inserts queued behind a
   // long pass still run (each batch is its own short transaction).
   async function runRetention(now, ttl) {
-    assertOpen();
+    assertRunning();
     if (retentionRunning) return { ok: false, skipped: true, reason: "retention_running" };
     retentionRunning = true;
     try {
       return await retentionPass(toEpochMs(now) ?? Date.now(), normalizeTtl(ttl));
     } catch (error) {
-      if (closed) return { ok: false, aborted: true, reason: "store_closed" };
+      if (closed || stopping) return { ok: false, aborted: true, reason: "store_closed" };
       logFailureOnce("retention", error);
       return { ok: false, error: errorCode(error) };
     } finally {
@@ -718,8 +799,12 @@ function createStoreCore(options = {}) {
     }
   }
 
+  // Exact row counts scan every table, which blocks the worker (and the
+  // inserts queued behind it) for hundreds of ms on a full-size database, so
+  // they are opt-in: stats({ rows: true }) for tests and diagnostics.
   function stats(options = {}) {
     assertOpen();
+    const countRows = Boolean(options && options.rows === true);
     const pragmas = {};
     const pragmaMismatches = [];
     for (const pragma of schema.PRAGMAS) {
@@ -731,8 +816,9 @@ function createStoreCore(options = {}) {
     const pageCount = Number(Object.values(db.prepare("PRAGMA page_count").get())[0]);
     const pageSize = Number(Object.values(db.prepare("PRAGMA page_size").get())[0]);
     const freelistPages = Number(Object.values(db.prepare("PRAGMA freelist_count").get())[0]);
-    const rows = {};
-    if (options.rows !== false) {
+    let rows = null;
+    if (countRows) {
+      rows = {};
       const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
       for (const { name } of tables) {
         rows[snakeToCamel(name)] = Number(db.prepare(`SELECT COUNT(*) AS n FROM ${quoteIdentifier(name)}`).get().n);
@@ -756,14 +842,24 @@ function createStoreCore(options = {}) {
       pageSize,
       freelistPages,
       rows,
+      rowsExact: countRows,
       writes: JSON.parse(JSON.stringify(writes)),
       retention: getState("retention"),
+      masking: { maskBefore: maskThreshold(), maskedOnInsert },
       degraded: [],
     };
   }
 
+  // Called before close() while in-flight calls drain: a yielding retention
+  // pass stops at its next batch boundary and resolves { aborted: true }.
+  function beginClose() {
+    stopping = true;
+    return { ok: true };
+  }
+
   function close() {
     if (closed) return { ok: true };
+    stopping = true;
     closed = true;
     try { db.exec("PRAGMA optimize"); } catch {}
     db.close();
@@ -772,10 +868,10 @@ function createStoreCore(options = {}) {
 
   return {
     info: { file, thread: isMainThread ? "main" : "worker", schemaVersion: migration.to, migration },
-    insertRequests: (rows) => insertRows("requests", rows),
+    insertRequests: (rows) => insertRows("requests", rows, { finishRow: maskStaleRequest }),
     insertRuntimeSamples: (rows) => insertRows("runtime_samples", rows),
     insertGpuSamples: (rows) => insertRows("gpu_samples", rows),
-    insertEvents: (rows) => insertRows("events", rows, prepareEvent),
+    insertEvents: (rows) => insertRows("events", rows, { prepareRow: prepareEvent }),
     appendAuditAccess,
     call,
     runRollups,
@@ -783,6 +879,7 @@ function createStoreCore(options = {}) {
     getState,
     setState,
     stats,
+    beginClose,
     close,
   };
 }
@@ -800,16 +897,30 @@ function startWorker() {
     return;
   }
   port.postMessage({ type: "ready", ok: true, info: core.info });
+  // Calls run in arrival order, but an async one (a retention pass) yields
+  // and lets later calls run. "close" first stops such passes at their next
+  // batch boundary and waits for them, so the handle never closes under one.
+  const inflight = new Set();
   port.on("message", async (message) => {
     if (!message || message.type !== "call") return;
     const { id, method } = message;
-    try {
+    const task = (async () => {
       if (!CORE_METHODS.includes(method)) throw storeError("unknown_method", "Unknown telemetry store method.");
       const args = Array.isArray(message.args) ? message.args : [];
-      const result = await core[method](...args);
+      if (method === "close") {
+        core.beginClose();
+        await Promise.allSettled(Array.from(inflight));
+      }
+      return core[method](...args);
+    })();
+    inflight.add(task);
+    try {
+      const result = await task;
       port.postMessage({ type: "result", id, ok: true, result: result === undefined ? null : result });
     } catch (error) {
       port.postMessage({ type: "result", id, ok: false, error: serializeError(error) });
+    } finally {
+      inflight.delete(task);
     }
   });
 }

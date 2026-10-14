@@ -16,7 +16,12 @@
 // - Worker crash: pending calls reject with telemetry_store_crashed, calls
 //   during the restart reject with telemetry_store_restarting (both
 //   retryable, so the recorder keeps its buffer), and the worker restarts
-//   with backoff from 1 s to 60 s.
+//   with backoff from 1 s to 60 s. A restart that dies, throws or times out
+//   before it is ready backs off further; the delay resets only after a
+//   worker stayed up for STABLE_UPTIME_MS.
+// - Lock contention past busy_timeout: inserts resolve with
+//   error:"telemetry_store_busy" and retryable:true, other calls reject with
+//   a retryable TelemetryStoreError.
 
 const path = require("node:path");
 const { Worker } = require("node:worker_threads");
@@ -45,6 +50,7 @@ const INSERT_COUNTERS = Object.freeze({
 });
 const DEFAULT_FLUSH_MS = 2000;
 const STABLE_UPTIME_MS = 60_000;
+const RETRYABLE_CODES = new Set(["telemetry_store_busy", "telemetry_store_restarting", "telemetry_store_crashed"]);
 // Test hook: returns the live Worker so a test can crash it.
 const STORE_WORKER = Symbol("telemetryStoreWorker");
 
@@ -83,6 +89,7 @@ function normalizeLogger(logger) {
 function fromSerialized(error, fallbackCode) {
   const code = (error && error.code) || fallbackCode;
   return new TelemetryStoreError(code, (error && error.message) || code, {
+    retryable: RETRYABLE_CODES.has(code),
     cause: error && error.cause,
     field: error && error.field,
     sqliteCode: error && error.sqliteCode,
@@ -112,6 +119,7 @@ async function openTelemetryStore(options = {}) {
   const restartMinMs = clampInt(options.restartMinMs, 10, 60_000, 1000);
   const restartMaxMs = clampInt(options.restartMaxMs, restartMinMs, 600_000, 60_000);
   const openTimeoutMs = clampInt(options.openTimeoutMs, 100, 120_000, 15_000);
+  const stableUptimeMs = clampInt(options.stableUptimeMs, 0, 3_600_000, STABLE_UPTIME_MS);
 
   let state = "opening";
   let unavailable = null;
@@ -196,11 +204,12 @@ async function openTelemetryStore(options = {}) {
     else entry.reject(fromSerialized(message.error, "telemetry_store_error"));
   }
 
-  function scheduleRestart() {
-    if (Date.now() - startedAt >= STABLE_UPTIME_MS) restartDelay = restartMinMs;
+  // Only onWorkerExit resets the delay, and only for a worker that was ready
+  // long enough; restarts that fail before ready keep doubling it.
+  function scheduleRestart(reason = "stopped unexpectedly") {
     const wait = restartDelay;
     restartDelay = Math.min(restartMaxMs, restartDelay * 2);
-    log("error", `Telemetry store worker stopped unexpectedly; restarting in ${wait} ms.`);
+    log("error", `Telemetry store worker ${reason}; restarting in ${wait} ms.`);
     restartTimer = setTimeout(() => {
       restartTimer = null;
       if (state === "restarting") startWorker();
@@ -217,6 +226,7 @@ async function openTelemetryStore(options = {}) {
     }
     rejectPending(new TelemetryStoreError("telemetry_store_crashed", "The telemetry store worker stopped.", { retryable: true }));
     if (state !== "ready") return;
+    if (Date.now() - startedAt >= stableUptimeMs) restartDelay = restartMinMs;
     state = "restarting";
     restarts += 1;
     lastCrash = {
@@ -227,12 +237,25 @@ async function openTelemetryStore(options = {}) {
     scheduleRestart();
   }
 
-  // Resolves once the worker is ready or the store is degraded; never rejects.
+  // Resolves once the worker is ready, the store is degraded or a restart is
+  // scheduled; never rejects.
   function startWorker() {
     return new Promise((resolve) => {
       let settled = false;
       let lastError = null;
-      const instance = new Worker(WORKER_FILE, { workerData: { kind: WORKER_KIND, options: coreOptions } });
+      let instance;
+      try {
+        instance = new Worker(WORKER_FILE, { workerData: { kind: WORKER_KIND, options: coreOptions } });
+      } catch (error) {
+        // e.g. ERR_WORKER_INIT_FAILED. A first open degrades; a restart backs
+        // off and tries again.
+        if (state === "restarting") scheduleRestart("could not start");
+        else if (state === "opening") {
+          becomeUnavailable({ code: (error && error.code) || "telemetry_store_worker_failed", message: error && error.message });
+        }
+        resolve();
+        return;
+      }
       worker = instance;
       const settle = () => {
         if (settled) return false;
@@ -243,8 +266,9 @@ async function openTelemetryStore(options = {}) {
       };
       const openTimer = setTimeout(() => {
         if (!settle()) return;
-        if (state !== "closed") becomeUnavailable({ code: "telemetry_store_open_timeout", message: `The store did not open within ${openTimeoutMs} ms.` });
         instance.terminate().catch(() => {});
+        if (state === "restarting") scheduleRestart(`did not open within ${openTimeoutMs} ms`);
+        else if (state !== "closed") becomeUnavailable({ code: "telemetry_store_open_timeout", message: `The store did not open within ${openTimeoutMs} ms.` });
       }, openTimeoutMs);
       instance.on("message", (message) => {
         if (message && message.type === "ready") {
@@ -272,7 +296,7 @@ async function openTelemetryStore(options = {}) {
         // first start that dies, or any failed open, means degraded mode.
         const beforeReady = settle();
         if (beforeReady && state === "restarting") {
-          scheduleRestart();
+          scheduleRestart("exited before it was ready");
         } else if (beforeReady && state === "opening") {
           becomeUnavailable(lastError
             ? { code: lastError.code || "telemetry_store_worker_failed", message: lastError.message }
@@ -374,14 +398,18 @@ async function openTelemetryStore(options = {}) {
     restartTimer = null;
     const wait = clampInt(flushMs, 0, 60_000, DEFAULT_FLUSH_MS);
     if (inProcess) {
+      if (core) core.beginClose();
       const flushed = await withTimeout(Promise.allSettled(Array.from(inflight)), wait);
       try { core && core.close(); } catch {}
       return { ok: true, timedOut: !flushed };
     }
     const instance = worker;
     if (!instance) return { ok: true, timedOut: false };
-    // Calls already posted are answered before "close" (the worker handles
-    // messages in order), so this waits for in-flight writes up to flushMs.
+    // The worker runs calls in arrival order, so every write posted before
+    // "close" has run by then. An async call that is still yielding (a
+    // retention pass) stops at its next batch and resolves {aborted: true};
+    // the worker waits for it before closing the handle. All of this is
+    // bounded by flushMs, after which the worker is terminated.
     const flushed = previous === "ready" ? await withTimeout(postCall(instance, "close", []), wait) : true;
     await instance.terminate().catch(() => {});
     return { ok: true, timedOut: !flushed };
