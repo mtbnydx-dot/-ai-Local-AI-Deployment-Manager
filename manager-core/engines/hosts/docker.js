@@ -528,7 +528,7 @@ function createDockerHost(options = {}) {
       docker,
       runArgs,
       dockerOptions: { env: childEnv(secretEnv) },
-      isNameConflictError,
+      isNameConflictError: isContainerNameConflictError,
       onNameConflict: async (error) => {
         attempts += 1;
         if (onRetry) await onRetry({ kind: "name-conflict", error, name });
