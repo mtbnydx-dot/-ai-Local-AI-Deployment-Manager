@@ -74,8 +74,6 @@ const {
   normalizeDownloadModelReference,
   encodeRepoId,
   deriveName,
-  createDockerRuntime,
-  isContainerNameConflictError,
 } = core;
 let DatabaseSync = null;
 try {
@@ -100,24 +98,17 @@ const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
 const MANAGER_APIKEY_LABEL_KEY = "ai.manager.api-key";
 const MANAGER_APIKEY_REF_LABEL_KEY = "ai.manager.api-key-ref";
-const DOCKER_WSL_DISTRO = String(process.env.DOCKER_WSL_DISTRO || "").trim();
-if (DOCKER_WSL_DISTRO && !/^[A-Za-z0-9._-]+$/.test(DOCKER_WSL_DISTRO)) {
-  throw new Error("DOCKER_WSL_DISTRO contains unsupported characters.");
-}
-
-const CONFIG = {
-  dockerWslDistro: DOCKER_WSL_DISTRO,
-  dockerExe: DOCKER_WSL_DISTRO ? (process.env.WSL_EXE || "wsl.exe") : firstExisting([
+// Docker Desktop or docker inside a WSL distro (01-engines §13, ENG-9):
+// DOCKER_WSL_DISTRO env > platform.json docker.wslDistro > Docker Desktop. An
+// invalid DOCKER_WSL_DISTRO still stops the manager at startup.
+const DOCKER_HOST_CONFIG = core.engines.createDockerHostConfig(process.env, undefined, {
+  dockerExeCandidates: [
     process.env.DOCKER_EXE,
     defaultDevToolsPath("Docker", "resources", "bin", "docker.exe"),
     "docker",
-  ]),
-  dockerArgsPrefix: DOCKER_WSL_DISTRO ? ["-d", DOCKER_WSL_DISTRO, "--exec", "docker"] : [],
-  dockerRuntimeName: DOCKER_WSL_DISTRO ? `WSL ${DOCKER_WSL_DISTRO}` : "Docker Desktop",
-  dockerDaemonStartFile: DOCKER_WSL_DISTRO ? (process.env.WSL_EXE || "wsl.exe") : "",
-  dockerDaemonStartArgs: DOCKER_WSL_DISTRO ? ["-d", DOCKER_WSL_DISTRO, "--exec", "sleep", "infinity"] : [],
-  dockerDesktopExe: firstExisting([
-    process.env.DOCKER_DESKTOP_EXE,
+  ],
+  // The configured docker.desktopExe (DOCKER_DESKTOP_EXE first) goes in front.
+  desktopExeCandidates: [
     defaultDevToolsPath("Docker", "Docker Desktop.exe"),
     defaultDevToolsPath("Docker", "frontend", "Docker Desktop.exe"),
     // Docker's CLI is normally <install>/resources/bin/docker.exe. Discover
@@ -126,7 +117,17 @@ const CONFIG = {
       .filter(directory => directory && fs.existsSync(path.join(directory, "docker.exe")))
       .map(directory => path.resolve(directory, "..", "..", "Docker Desktop.exe")) : []),
     "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
-  ]),
+  ],
+});
+
+const CONFIG = {
+  dockerWslDistro: DOCKER_HOST_CONFIG.wslDistro,
+  dockerExe: DOCKER_HOST_CONFIG.dockerExe,
+  dockerArgsPrefix: [...DOCKER_HOST_CONFIG.dockerArgsPrefix],
+  dockerRuntimeName: DOCKER_HOST_CONFIG.runtimeName,
+  dockerDaemonStartFile: DOCKER_HOST_CONFIG.daemonStartFile,
+  dockerDaemonStartArgs: [...DOCKER_HOST_CONFIG.daemonStartArgs],
+  dockerDesktopExe: DOCKER_HOST_CONFIG.dockerDesktopExe,
   hfCli: firstExisting([
     process.env.HF_CLI,
     defaultAiPath("venvs", "download-cli", "Scripts", "hf.exe"),
@@ -222,17 +223,17 @@ const billingPendingQueue = core.createBillingPendingQueue({
 const RUNTIME_SNAPSHOT_CACHE_MS = Math.max(500, Number(process.env.MANAGER_STATUS_CACHE_MS || 2000));
 const runtimeSnapshotCache = core.createSingleFlightCache({ ttlMs: RUNTIME_SNAPSHOT_CACHE_MS });
 
-const dockerRuntime = createDockerRuntime({
-  dockerExe: CONFIG.dockerExe,
-  dockerArgsPrefix: CONFIG.dockerArgsPrefix,
-  dockerDesktopExe: CONFIG.dockerDesktopExe,
-  daemonStartFile: CONFIG.dockerDaemonStartFile,
-  daemonStartArgs: CONFIG.dockerDaemonStartArgs,
-  runtimeName: CONFIG.dockerRuntimeName,
+// DockerHost (01 §13) owns the docker runtime; the helpers destructured below
+// are its runtime's, so every docker call keeps the WSL prefix when one is set.
+const dockerHost = core.engines.createDockerHost({
+  config: DOCKER_HOST_CONFIG,
+  managerLabelValue: CONFIG.managerId,
+  ownerLabelKey: MANAGER_LABEL_KEY,
   formatBytes,
   parseJsonSafe,
   delay,
 });
+const dockerRuntime = dockerHost.runtime;
 const {
   execFileAsync,
   docker,
@@ -240,7 +241,6 @@ const {
   ensureDockerDaemonRunning,
   checkDockerDaemon,
   getImageStatus: getImageStatusFresh,
-  pullImageWithRetry,
   normalizeDockerContainerName,
 } = dockerRuntime;
 const getDockerVersion = () => runtimeSnapshotCache.get("docker-version", getDockerVersionFresh, {
@@ -367,8 +367,6 @@ const {
   portPublishArg,
   dockerPublishArgs,
   publishArgsToDockerRunArgs,
-  replaceDockerPublishArgs,
-  isDockerPublishBindError,
   stripHostBrackets,
   isLoopbackHost,
   isWildcardHost,
@@ -5376,17 +5374,15 @@ async function runStartJobOnce(job, opts) {
   }
 
   let { runArgs, activePublishArgs, runtimeImage, runtimeEngine, secretEnv } = buildVllmRuntimeCommand(job, runtimeOpts);
-  // 启动预检要拿实时镜像状态，绕过快照缓存。
-  const imageStatus = await getImageStatusFresh(runtimeImage);
-  if (!imageStatus.ok) {
-    appendLog(job, `Runtime image preflight: ${imageStatus.text || runtimeImage}. Pulling before current model is stopped.`);
-    const pulled = await pullImageWithRetry(runtimeImage, {
-      ...buildVllmImagePullOptions(),
-      onAttempt: ({ attempt, attempts }) => appendLog(job, `Docker image pull attempt ${attempt}/${attempts}: ${runtimeImage}`),
-      onFailure: ({ attempt, attempts, detail }) => appendLog(job, `Docker image pull ${attempt}/${attempts} failed: ${detail}`),
-    });
-    appendLog(job, pulled.stdout || pulled.stderr);
-  }
+  // 启动预检要拿实时镜像状态，绕过快照缓存（DockerHost 不缓存镜像状态）。
+  const ensuredImage = await dockerHost.ensureImage(runtimeImage, {
+    policy: "auto",
+    ...buildVllmImagePullOptions(),
+    onMissing: ({ status }) => appendLog(job, `Runtime image preflight: ${status?.text || runtimeImage}. Pulling before current model is stopped.`),
+    onAttempt: ({ attempt, attempts }) => appendLog(job, `Docker image pull attempt ${attempt}/${attempts}: ${runtimeImage}`),
+    onFailure: ({ attempt, attempts, detail }) => appendLog(job, `Docker image pull ${attempt}/${attempts} failed: ${detail}`),
+  });
+  if (ensuredImage.pulled) appendLog(job, ensuredImage.result.stdout || ensuredImage.result.stderr);
   assertStartJobActive(job);
 
   await snapshotCurrentStats("before-start").catch(() => {});
@@ -5473,26 +5469,21 @@ async function runStartJobOnce(job, opts) {
     scheduleJobsSave(0);
     appendLog(job, `> ${redactedLaunchCommand}`);
     assertStartJobActive(job);
-    // Every attempt, including both retries, gets the secret env (08 P0-4).
-    const launched = await core.dockerRunWithRetries({
-      docker,
-      runArgs,
-      dockerOptions: { env: core.buildDockerChildEnv(secretEnv, { viaWsl: Boolean(CONFIG.dockerWslDistro) }) },
-      isNameConflictError: isContainerNameConflictError,
-      onNameConflict: async (error) => {
-        appendLog(job, `容器名冲突，清理本次残留容器后重试：${error.stderr || error.message}`);
-        await core.removeContainerIfPresent(docker, targetContainerName);
-      },
-      getBindRetryArgs: (error) => {
-        if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
-          return null;
+    // DockerHost.create runs it: every attempt, including the name-conflict and
+    // LAN-bind retries, gets the secret env, with WSLENV under WSL (08 P0-4).
+    const launched = await dockerHost.create({ runArgs, publish: activePublishArgs, name: targetContainerName }, {
+      secretEnv,
+      lanFallback: opts.networkAccess === "lan",
+      bindRetryPublish: () => dockerPublishArgs(opts.port, "lan", "0.0.0.0"),
+      onRetry: (retry) => {
+        if (retry.kind === "name-conflict") {
+          appendLog(job, `容器名冲突，清理本次残留容器后重试：${retry.error.stderr || retry.error.message}`);
+          return;
         }
-        activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
-        const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
-        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
+        activePublishArgs = retry.publish;
+        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${retry.error.stderr || retry.error.message}`);
         appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
-        appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
-        return retryArgs;
+        appendLog(job, `> docker ${redactDockerArgs(retry.runArgs, opts).join(" ")}`);
       },
     });
     job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
@@ -5527,6 +5518,8 @@ async function runStartJobOnce(job, opts) {
       fetchServedModels: () => getServedModelsFresh(opts.port, opts.vllmApiKey),
       getContainerStatus: getContainerStatusFresh,
       docker,
+      // Log reads go through the DockerHost (01 §13); same `docker logs --tail N`.
+      readLogs: dockerHost.logs,
       extractLogIssues,
       setJobProgress,
       appendLog,
