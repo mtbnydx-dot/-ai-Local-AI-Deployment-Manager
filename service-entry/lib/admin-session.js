@@ -103,6 +103,13 @@ function headerText(headers, name) {
   return String(Array.isArray(value) ? value[0] : value ?? "").trim();
 }
 
+// "admin" or "public": req.listener is { kind, lanBound } once listeners.js
+// tagged the request (05 §3.1); a bare kind string is accepted too.
+function listenerKind(req) {
+  const listener = req?.listener;
+  return (typeof listener === "string" ? listener : listener?.kind) === "public" ? "public" : "admin";
+}
+
 function hasForwardingHeaders(req) {
   return FORWARDING_HEADERS.some((name) => req?.headers?.[name] !== undefined);
 }
@@ -419,7 +426,7 @@ function createAdminAuth(options = {}) {
   function identify(req) {
     const machine = machineAuth.principalOf(req);
     if (machine) return { role: "system", principal: machine, via: "hmac", redact: false };
-    if (hasForwardingHeaders(req) || req?.listener === "public") return { role: "none", principal: "", via: "none", redact: true };
+    if (hasForwardingHeaders(req) || listenerKind(req) === "public") return { role: "none", principal: "", via: "none", redact: true };
     const local = core.isLocalRequest(req);
     const network = local ? "loopback" : "lan";
     const { admin } = config();
@@ -564,7 +571,7 @@ function createAdminAuth(options = {}) {
 
   // Every request condition of §5.2 item 2, each one required.
   function autoPairRequestEligible(req) {
-    if (req?.listener && req.listener !== "admin") return false;
+    if (req?.listener && listenerKind(req) !== "admin") return false;
     if (!isLoopback(req)) return false;
     if (String(req?.method || "").toUpperCase() !== "GET") return false;
     if (requestUrl(req).pathname !== "/") return false;
@@ -603,7 +610,7 @@ function createAdminAuth(options = {}) {
   function pairWithCode(req, code) {
     const invalid = { ok: false, status: 400, code: "pair_code_invalid", message: "The pairing code is not valid. Ask for a new one." };
     const text = normalizePairCode(code);
-    if (!PAIR_CODE_RE.test(text) || hasForwardingHeaders(req) || (req?.listener && req.listener !== "admin")) return invalid;
+    if (!PAIR_CODE_RE.test(text) || hasForwardingHeaders(req) || (req?.listener && listenerKind(req) !== "admin")) return invalid;
     const target = store({ required: true });
     const at = clockMs();
     const used = target.admin.consumePairCode(sha256Hex(text), iso(at));

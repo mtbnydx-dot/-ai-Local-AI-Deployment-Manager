@@ -161,7 +161,8 @@ test("loopback without a session is a viewer; a session or token is the owner; L
 
 test("proxied requests are never management-eligible, even from loopback or with LAN admin on", (t) => {
   withCleanEnv(t);
-  const security = createEntrySecurity({ host: "0.0.0.0", managers: [] });
+  const events = [];
+  const security = createEntrySecurity({ host: "0.0.0.0", managers: [], onEvent: (event) => events.push(event) });
 
   // deploy/public 拓扑：Caddy 从 127.0.0.1 转发公网请求，并带上 X-Forwarded-For。
   for (const header of ["x-forwarded-for", "forwarded", "x-forwarded-host", "x-real-ip"]) {
@@ -175,17 +176,51 @@ test("proxied requests are never management-eligible, even from loopback or with
   const stillDenied = security.checkManagementAccess(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" }));
   assert.equal(stillDenied.ok, false);
 
+  // The refusal is the same on ADMIN, and it raises admin_via_proxy (header
+  // names only, never values; throttled per path class; PUB-6).
+  assert.equal(events.length >= 1, true);
+  assert.equal(events[0].kind, "admin_via_proxy");
+  assert.equal(events[0].pathClass, "management");
+  assert.equal(events.every((event) => !JSON.stringify(event).includes("203.0.113.9")), true);
+
   // 没有转发头的本机请求不受影响。
   assert.equal(security.checkManagementAccess(req("127.0.0.1")).ok, true);
   assert.equal(security.isProxiedRequest(req("127.0.0.1")), false);
   assert.equal(security.isProxiedRequest(req("127.0.0.1", { "x-forwarded-for": "1.2.3.4" })), true);
 });
 
-test("the public base URL hostname is admitted by the host whitelist", (t) => {
+test("the public base URL host is admitted on PUBLIC, not on ADMIN (05 §3.3)", (t) => {
   withCleanEnv(t);
-  process.env.SERVICE_ENTRY_PUBLIC_BASE_URL = "https://models.example.com";
-  const security = createEntrySecurity({ host: "127.0.0.1", managers: [] });
-  assert.equal(security.allowedHostnames().has("models.example.com"), true);
+  const readSection = defaultAccessReader(t, {
+    SERVICE_ENTRY_PUBLIC_BASE_URL: "https://models.example.com",
+    SERVICE_ENTRY_ALLOWED_HOSTS: "relay.example.com",
+  });
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [], getLanAddress: () => "192.168.0.10", readSection });
+  const url = new URL("http://127.0.0.1:5176/api/status");
+
+  // ADMIN: loopback names only (the LAN address needs a LAN-bound ADMIN).
+  assert.equal(security.allowedHostnames().has("models.example.com"), false);
+  assert.equal(security.allowedHostnames().has("relay.example.com"), false);
+  assert.equal(security.allowedHostnames().has("192.168.0.10"), false);
+  const tunnel = security.checkRequest(req("127.0.0.1", { host: "models.example.com" }, "GET"), url);
+  assert.deepEqual([tunnel.ok, tunnel.status, tunnel.code], [false, 403, "host_not_allowed"]);
+
+  // PUBLIC: the base URL host, public.extraHosts, the loopback names and
+  // host.docker.internal; the LAN address only when PUBLIC is LAN-bound.
+  const names = security.publicHostnames();
+  for (const name of ["models.example.com", "relay.example.com", "127.0.0.1", "localhost", "host.docker.internal"]) assert.equal(names.has(name), true, name);
+  assert.equal(names.has("192.168.0.10"), false);
+  assert.equal(names.has("evil.example.com"), false);
+  const lanPublic = createEntrySecurity({ host: "127.0.0.1", managers: [], getLanAddress: () => "192.168.0.10", readSection: defaultAccessReader(t, { SERVICE_ENTRY_PUBLIC_HOST: "0.0.0.0" }) });
+  assert.equal(lanPublic.publicHostnames().has("192.168.0.10"), true);
+
+  // admin.extraHosts widen ADMIN only.
+  const aiRoot = tempRoot(t, "security-extra-");
+  fs.mkdirSync(path.join(aiRoot, "config"), { recursive: true });
+  fs.writeFileSync(path.join(aiRoot, "config", "platform.json"), JSON.stringify({ schemaVersion: 1, admin: { extraHosts: ["console.example.com"] } }), "utf8");
+  const extra = createEntrySecurity({ host: "127.0.0.1", managers: [], readSection: (name) => core.platform.readSection(name, { aiRoot, env: {} }) });
+  assert.equal(extra.allowedHostnames().has("console.example.com"), true);
+  assert.equal(extra.publicHostnames().has("console.example.com"), false);
 });
 
 test("declaring a public base URL makes auto require an API key even on a loopback bind", (t) => {
@@ -200,6 +235,31 @@ test("declaring a public base URL makes auto require an API key even on a loopba
   // 显式关闭仍然是允许的逃生门。
   process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "0";
   assert.equal(security.policy().requireApiKey, false);
+});
+
+test("PUBLIC always requires a key on model routes, even with requireApiKey off", async (t) => {
+  withCleanEnv(t);
+  const root = tempRoot(t, "entry-public-key-");
+  const manager = await makeManager(root, "vllm", { exposure: {}, clients: {} });
+  process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "0";
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [manager] });
+  const onPublic = (headers = {}) => ({ ...req("127.0.0.1", headers, "POST"), listener: { kind: "public", lanBound: false } });
+  // ADMIN loopback stays keyless; PUBLIC does not, and a store with no keys
+  // fails closed instead of reading as "open".
+  assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1"))).ok, true);
+  const publicNoKey = await security.authorizeGatewayRequest(onPublic());
+  assert.equal(publicNoKey.ok, false);
+  assert.equal(publicNoKey.code, "api_key_not_configured");
+  // A forwarded request that reached ADMIN's /gateway/* (legacyProxyGateway
+  // "serve") needs a key as well.
+  const forwarded = await security.authorizeGatewayRequest(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" }));
+  assert.equal(forwarded.ok, false);
+
+  const record = core.createServiceClientRecord({}, { name: "public customer" });
+  const keyed = await makeManager(root, "llama", { exposure: {}, clients: record.ledger });
+  const withKey = createEntrySecurity({ host: "127.0.0.1", managers: [keyed] });
+  assert.equal((await withKey.authorizeGatewayRequest(onPublic())).code, "unauthorized");
+  assert.equal((await withKey.authorizeGatewayRequest(onPublic({ authorization: `Bearer ${record.apiKey}` }))).ok, true);
 });
 
 test("resolveClientAddress and trustHeaders vouch the resolved client, not the proxy socket", (t) => {
@@ -229,11 +289,14 @@ test("resolveClientAddress and trustHeaders vouch the resolved client, not the p
 
 test("host whitelist and Origin check reject cross-site mutations", (t) => {
   withCleanEnv(t);
-  const security = createEntrySecurity({ host: "127.0.0.1", managers: [], getLanAddress: () => "192.168.0.10" });
+  const security = createEntrySecurity({ host: "0.0.0.0", managers: [], getLanAddress: () => "192.168.0.10" });
   const url = new URL("http://127.0.0.1:5176/api/stop-all");
 
   assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176" }), url).ok, true);
   assert.equal(security.checkRequest(req("127.0.0.1", { host: "192.168.0.10:5176" }), url).ok, true);
+  // The LAN address is a Host of ADMIN only while ADMIN is LAN-bound (05 §3.3).
+  const loopbackOnly = createEntrySecurity({ host: "127.0.0.1", managers: [], getLanAddress: () => "192.168.0.10", readSection: defaultAccessReader(t) });
+  assert.equal(loopbackOnly.checkRequest(req("127.0.0.1", { host: "192.168.0.10:5176" }), url).code, "host_not_allowed");
 
   // DNS rebinding lands on an unexpected Host.
   const badHost = security.checkRequest(req("127.0.0.1", { host: "evil.example.com" }), url);
@@ -263,8 +326,11 @@ test("host whitelist and Origin check reject cross-site mutations", (t) => {
   // Reads are not Origin-gated.
   assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176", origin: "https://evil.example.com" }, "GET"), url).ok, true);
 
-  process.env.SERVICE_ENTRY_ALLOWED_HOSTS = "llm.example.com";
-  assert.equal(security.checkRequest(req("127.0.0.1", { host: "llm.example.com" }), url).ok, true);
+  // SERVICE_ENTRY_ALLOWED_HOSTS is public.extraHosts: it widens PUBLIC, and
+  // ADMIN keeps refusing the name.
+  const widened = createEntrySecurity({ host: "0.0.0.0", managers: [], readSection: defaultAccessReader(t, { SERVICE_ENTRY_ALLOWED_HOSTS: "llm.example.com" }) });
+  assert.equal(widened.checkRequest(req("127.0.0.1", { host: "llm.example.com" }), url).code, "host_not_allowed");
+  assert.equal(widened.publicHostnames().has("llm.example.com"), true);
 });
 
 test("CORS does not reflect arbitrary origins", (t) => {

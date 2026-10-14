@@ -31,7 +31,9 @@ test("public checklist fails the key item when a public deployment has no enforc
   assert.equal(byId["api-key"].state, "fail");
   assert.equal(byId["lan-admin"].state, "fail");
   assert.equal(byId.https.state, "fail", "http:// public base URL is flagged");
-  assert.equal(byId["loopback-bind"].state, "ok");
+  // SERVICE_ENTRY_ALLOW_LAN_ADMIN maps to listeners.admin.lan (OPS-3), so
+  // ADMIN is LAN-bound here even though the constructor host is loopback.
+  assert.equal(byId["loopback-bind"].state, "warn");
   assert.equal(byId["caddy-paths"].state, "manual");
   assert.equal(security.describePublic(state).exposure, "public");
   assert.equal(security.describePublic(state).publicChecklist, undefined, "LAN callers do not get the checklist");
