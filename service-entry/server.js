@@ -353,6 +353,7 @@ function createPublicHandler(deps = {}) {
     security: deps.security || security,
     gateway: deps.gateway === undefined ? serveGatewayRouteOnPublic : deps.gateway,
     portal: deps.portal || null,
+    data: deps.data || null,
     logger: deps.logger || console,
   });
   return listener.handle;
