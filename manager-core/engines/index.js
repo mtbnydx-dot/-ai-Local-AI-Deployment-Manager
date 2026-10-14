@@ -15,6 +15,7 @@
 const descriptorSchema = require("./descriptor-schema");
 const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
+const dockerHost = require("./hosts/docker");
 const legacyAliases = require("./legacy-aliases");
 const metrics = require("./metrics");
 const paramCatalog = require("./param-catalog");
@@ -28,6 +29,11 @@ const adapters = Object.freeze({
   vllm: require("./adapters/vllm"),
   sglang: require("./adapters/sglang"),
   llamacpp: require("./adapters/llamacpp"),
+});
+
+// RuntimeHosts by kind (01 §13). Native (ENG-22) and external (ENG-19) join later.
+const hosts = Object.freeze({
+  docker: dockerHost,
 });
 
 /** descriptor (or its adapter id) -> adapter module, or null. */
@@ -70,6 +76,11 @@ module.exports = {
   adapters,
   adapterFor,
   renderRunArgs: dockerSegments.renderRunArgs,
+  // RuntimeHosts (01 §13): DockerHost for Docker Desktop and docker in WSL,
+  // configured by createDockerHostConfig (env > platform.json docker > Desktop).
+  hosts,
+  createDockerHost: dockerHost.createDockerHost,
+  createDockerHostConfig: dockerHost.createDockerHostConfig,
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,

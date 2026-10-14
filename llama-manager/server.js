@@ -62,8 +62,6 @@ const {
   cleanDownloadSource,
   normalizeDownloadModelReference,
   deriveName,
-  createDockerRuntime,
-  isContainerNameConflictError,
 } = core;
 let DatabaseSync = null;
 try {
@@ -90,18 +88,31 @@ const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
 const MANAGER_APIKEY_LABEL_KEY = "ai.manager.api-key";
 const MANAGER_APIKEY_REF_LABEL_KEY = "ai.manager.api-key-ref";
 
-const CONFIG = {
-  dockerExe: firstExisting([
+// Docker Desktop or docker inside a WSL distro, shared with vllm-manager so both
+// managers see the same containers (01-engines §13 and §28.4, ENG-9):
+// DOCKER_WSL_DISTRO env > platform.json docker.wslDistro > Docker Desktop.
+const DOCKER_HOST_CONFIG = core.engines.createDockerHostConfig(process.env, undefined, {
+  dockerExeCandidates: [
     process.env.DOCKER_EXE,
     defaultDevToolsPath("Docker", "resources", "bin", "docker.exe"),
     "docker",
-  ]),
-  dockerDesktopExe: firstExisting([
-    process.env.DOCKER_DESKTOP_EXE,
+  ],
+  // The configured docker.desktopExe (DOCKER_DESKTOP_EXE first) goes in front.
+  desktopExeCandidates: [
     defaultDevToolsPath("Docker", "Docker Desktop.exe"),
     defaultDevToolsPath("Docker", "frontend", "Docker Desktop.exe"),
     "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
-  ]),
+  ],
+});
+
+const CONFIG = {
+  dockerWslDistro: DOCKER_HOST_CONFIG.wslDistro,
+  dockerExe: DOCKER_HOST_CONFIG.dockerExe,
+  dockerArgsPrefix: [...DOCKER_HOST_CONFIG.dockerArgsPrefix],
+  dockerRuntimeName: DOCKER_HOST_CONFIG.runtimeName,
+  dockerDaemonStartFile: DOCKER_HOST_CONFIG.daemonStartFile,
+  dockerDaemonStartArgs: [...DOCKER_HOST_CONFIG.daemonStartArgs],
+  dockerDesktopExe: DOCKER_HOST_CONFIG.dockerDesktopExe,
   hfCli: firstExisting([
     process.env.HF_CLI,
     defaultAiPath("venvs", "download-cli", "Scripts", "hf.exe"),
@@ -184,13 +195,17 @@ const billingPendingQueue = core.createBillingPendingQueue({
 const RUNTIME_SNAPSHOT_CACHE_MS = Math.max(500, Number(process.env.MANAGER_STATUS_CACHE_MS || 2000));
 const runtimeSnapshotCache = core.createSingleFlightCache({ ttlMs: RUNTIME_SNAPSHOT_CACHE_MS });
 
-const dockerRuntime = createDockerRuntime({
-  dockerExe: CONFIG.dockerExe,
-  dockerDesktopExe: CONFIG.dockerDesktopExe,
+// DockerHost (01 §13) owns the docker runtime; the helpers destructured below
+// are its runtime's, so every docker call keeps the WSL prefix when one is set.
+const dockerHost = core.engines.createDockerHost({
+  config: DOCKER_HOST_CONFIG,
+  managerLabelValue: CONFIG.managerId,
+  ownerLabelKey: MANAGER_LABEL_KEY,
   formatBytes,
   parseJsonSafe,
   delay,
 });
+const dockerRuntime = dockerHost.runtime;
 const {
   execFileAsync,
   docker,
@@ -198,7 +213,6 @@ const {
   checkDockerDaemon,
   ensureDockerDaemonRunning,
   getImageStatus: getImageStatusFresh,
-  pullImageWithRetry,
   normalizeDockerContainerName,
   normalizeDockerTimestamp,
   timestampToSeconds,
@@ -488,8 +502,6 @@ const {
   portPublishArg,
   dockerPublishArgs,
   publishArgsToDockerRunArgs,
-  replaceDockerPublishArgs,
-  isDockerPublishBindError,
   stripHostBrackets,
   isLoopbackHost,
   isWildcardHost,
@@ -591,6 +603,7 @@ const statsLedgerStore = core.createStatsLedgerStore({
 const {
   loadStatsLedger,
   updateStatsLedger,
+  previewStatsLedger,
   recordClaudeBridgeUsage,
   flushClaudeUsageWrites,
   waitForStatsLedgerWrites,
@@ -712,6 +725,17 @@ const metricsHistoryStore = core.createMetricsHistoryStore({
   writeJsonFile,
 });
 
+// Background stats sampler (04 TEL-1): scrapes every running instance every
+// STATS_SAMPLE_INTERVAL_MS, independent of the UI. GET /api/stats reads its
+// newest sample, and the stats ledger and metrics history are written from it
+// once a minute.
+const statsSampler = core.telemetry.createStatsSampler({
+  intervalMs: core.telemetry.resolveStatsSampleIntervalMs(process.env.STATS_SAMPLE_INTERVAL_MS),
+  listInstances: listStatsSampleInstances,
+  scrapeInstance: scrapeStatsSampleInstance,
+  onPersist: persistStatsSample,
+});
+
 // Benchmark results outlive the job ledger here so that a configuration change
 // can be compared against the run that preceded it.
 const benchmarkHistoryStore = core.createBenchmarkHistoryStore({
@@ -785,9 +809,11 @@ const managerLifecycle = core.createManagerLifecycle({
     startAutomationMonitor();
     startCacheHitMonitor();
     startInstanceMetricsSampler();
+    startStatsSampler();
   },
   onShutdown: async () => {
     jobsLedgerStore.clearJobsSaveTimer();
+    await statsSampler.stop();
     if (automationMonitorTimer) clearInterval(automationMonitorTimer);
     instanceMetricsSampler.stop();
     clearInterval(idleUnloadTimer);
@@ -1841,7 +1867,7 @@ async function collectHealthReport() {
   const checks = [];
   // actionDetails (08 P0-23) describe the remediation of a failing check; the
   // string actions stay as they were.
-  checks.push(healthCheck("docker", "Docker", dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"], dockerStatus.ok ? [] : core.healthActionDetails(["start-docker"])));
+  checks.push(healthCheck("docker", CONFIG.dockerWslDistro ? CONFIG.dockerRuntimeName : "Docker", dockerStatus.ok ? "ok" : "fail", dockerStatus.text || "Docker not available", ["start-docker"], dockerStatus.ok ? [] : core.healthActionDetails(["start-docker"])));
   checks.push(healthCheck("gpu", "GPU", gpu.ok ? "ok" : "warn", gpu.ok ? `${gpu.name} · ${gpu.usedMb}/${gpu.totalMb} MB · ${gpu.util}%` : gpu.text || "No NVIDIA GPU detected"));
   checks.push(healthCheck("image", "llama.cpp 镜像", image.ok ? "ok" : "warn", image.ok ? image.text : `${CONFIG.image} not found locally`, image.ok ? [] : ["pull-image"], image.ok ? [] : core.healthActionDetails(["pull-image"], { image: CONFIG.image })));
   checks.push(healthCheck("image-pin", "镜像版本", isPinnedImageReference(CONFIG.image) ? "ok" : "warn", CONFIG.image));
@@ -2205,11 +2231,69 @@ function buildServiceExposureChecks(settings, context) {
 function startAutomationMonitor() {
   if (automationMonitorTimer) return;
   automationMonitorTimer = setInterval(() => {
-    sampleMetricsHistory().catch((error) => console.warn(`metrics history sample failed: ${error.message}`));
     inspectAutomationRules().catch((error) => console.warn(`automation monitor failed: ${error.message}`));
   }, 60 * 1000);
   automationMonitorTimer.unref?.();
-  sampleMetricsHistory().catch((error) => console.warn(`initial metrics history sample failed: ${error.message}`));
+}
+
+// Frontend smoke runs serve stubbed stats and must not scrape a runtime that
+// happens to run on this host.
+function startStatsSampler() {
+  if (process.env.AI_FRONTEND_SMOKE === "1") return;
+  statsSampler.start();
+}
+
+// The running instances the stats sampler scrapes, keyed as /api/instances
+// keys them: the primary container and this manager's parallel containers.
+async function listStatsSampleInstances() {
+  const instances = [];
+  const primary = await getContainerStatus(CONFIG.containerName);
+  if (primary?.running) instances.push({ id: "primary", primary: true, container: primary });
+  const managed = await listManagedContainers().catch(() => []);
+  for (const item of managed) {
+    if (!item.running || item.name === CONFIG.containerName) continue;
+    if (item.manager !== CONFIG.managerId || item.engine !== "llama") continue;
+    const container = await getContainerStatus(item.name);
+    if (!container?.running) continue;
+    instances.push({ id: item.labels?.["ai.manager.instance"] || item.name, primary: false, container });
+  }
+  return instances;
+}
+
+// One sampler scrape: the summary /api/stats serves, plus the text and the
+// latency histograms of the same /metrics read.
+async function scrapeStatsSampleInstance(instance) {
+  const capture = {};
+  const gpu = instance.primary ? await getGpuStatus().catch(() => null) : null;
+  const summary = await collectVllmMetricsSummaryFresh(instance.container, gpu, { capture });
+  const container = instance.container || {};
+  return {
+    summary,
+    text: capture.text,
+    scrapedAt: capture.scrapedAt,
+    histograms: capture.histograms,
+    // A failed read has no process start and must not look like a new runtime.
+    runtimeKey: summary?.processStartSeconds ? `${container.id || container.name || ""}:${summary.processStartSeconds}` : "",
+  };
+}
+
+// At most once a minute: the primary's newest sample goes into the stats
+// ledger and the 24 h metrics history. snapshotCurrentStats still writes the
+// ledger right before a stop or a start.
+async function persistStatsSample(records, { at }) {
+  const record = records.find((item) => item.instanceId === "primary");
+  const container = record?.instance?.container;
+  const live = record?.summary;
+  if (!live || !container?.running) return;
+  await updateStatsLedger(live).catch((error) => console.warn(`stats ledger update failed: ${error.message}`));
+  await metricsHistoryStore.recordMetricsHistory({
+    updatedAt: new Date(at).toISOString(),
+    container,
+    gpu: live.gpu,
+    live,
+    totals: live.totals,
+    models: live.models,
+  });
 }
 
 const CACHE_HIT_POLL_MS = clampNumber(Number(process.env.LLAMA_CACHE_HIT_POLL_MS || 2000), 1000, 10_000);
@@ -2311,20 +2395,6 @@ function startCacheHitMonitor() {
   tick();
 }
 
-async function sampleMetricsHistory() {
-  const [gpu, container] = await Promise.all([getGpuStatus(), getContainerStatus(CONFIG.containerName)]);
-  if (!container?.running) return null;
-  const live = await collectVllmMetricsSummary(container, gpu, { updateSamples: false });
-  return metricsHistoryStore.recordMetricsHistory({
-    updatedAt: new Date().toISOString(),
-    container,
-    gpu,
-    live,
-    totals: live.totals,
-    models: live.models,
-  });
-}
-
 // GPU 温度 / 功耗墙告警：达到阈值时生成一条 automation 任务提醒，各自 10 分钟冷却，只警不动。
 const gpuGuardState = {};
 async function inspectGpuTemperatureGuard(settings) {
@@ -2347,7 +2417,7 @@ async function inspectAutomationRules() {
     runtimeActivity = { ...runtimeActivity, initialized: false, lastRequestCount: null, lastTokenCount: null, unloading: false };
     return;
   }
-  const summary = await collectVllmMetricsSummary(container, gpu, { updateSamples: false }).catch(() => null);
+  const summary = await collectVllmMetricsSummary(container, gpu).catch(() => null);
   const requestCount = Number(summary?.totals?.requests?.total || 0);
   const tokenCount = Number(summary?.totals?.tokens?.total || 0);
   const now = Date.now();
@@ -3043,7 +3113,7 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
   const servedModels = activeContainer.running ? await getServedModels(endpoint.port, llamaApiKey) : [];
   const includeMetrics = options.includeMetrics !== false;
   const runtimeStats = activeContainer.running && includeMetrics
-    ? await collectVllmMetricsSummary(activeContainer, gpu, { updateSamples: false }).catch(() => null)
+    ? await collectVllmMetricsSummary(activeContainer, gpu).catch(() => null)
     : null;
   const historicalStats = includeMetrics
     ? await loadStatsLedger().then((ledger) => core.statsLedgerToSummary(ledger)).catch(() => null)
@@ -3269,14 +3339,22 @@ async function collectStats() {
     getGpuStatus(),
     getContainerStatus(CONFIG.containerName),
   ]);
-  const liveSummary = await collectVllmMetricsSummary(container, gpu, { updateSamples: true });
-  const ledger = await updateStatsLedger(liveSummary);
-  const cacheHit = await sampleCacheHitStats(container).catch(async (error) => ({
-    ...(await cacheHitTracker.getSummary()),
-    error: error.message,
-  }));
+  // The stats sampler scrapes the engine every 10 s (04 TEL-1). A poll reads
+  // its newest sample and never scrapes, and the ledger it merges is a
+  // preview; the sampler writes the file at most once a minute. The cache-hit
+  // monitor polls /slots every 2 s, so the poll reads its summary too.
+  const { summary: liveSummary, latency } = core.telemetry.sampledStatsSummary(statsSampler, "primary", {
+    container,
+    gpu,
+    empty: emptyRuntimeStatsSummary(container),
+  });
+  const ledger = await previewStatsLedger(liveSummary);
+  const cacheHit = await cacheHitTracker.getSummary();
   const merged = core.mergeLiveAndStatsLedger(liveSummary, ledger);
-  const summary = { ...merged, totals: withSpeedWindowSeconds(merged.totals, merged.models) };
+  const summary = core.telemetry.applyStatsWindows(
+    { ...merged, totals: withSpeedWindowSeconds(merged.totals, merged.models) },
+    latency,
+  );
   const pricing = core.loadModelPricing();
   const costComparison = priceProfiles().map((profile) => calculateCost(summary.totals.tokens, profile));
   const clientUsage = buildClientUsageSummary(summary.totals, ledger);
@@ -3298,15 +3376,16 @@ async function collectStats() {
     pricingFreshness: pricing.freshness,
     pricingSource: pricing.source,
     ...summary,
-    live: liveSummary,
+    live: core.telemetry.applyStatsWindows(liveSummary, latency),
     historical: core.statsLedgerToSummary(ledger),
     clientUsage,
     recentAccess,
     cacheHit,
     costComparison,
   };
-  await metricsHistoryStore.recordMetricsHistory(response).catch(() => {});
-  response.trends = await metricsHistoryStore.getMetricsHistory({ hours: 24 }).catch(() => ({ hours: 24, samples: [] }));
+  // The sampler records the history once a minute; trends only reads it.
+  const trends = await metricsHistoryStore.getMetricsHistory({ hours: 24 }).catch(() => ({ hours: 24, samples: [] }));
+  response.trends = { ...trends, samples: core.telemetry.downsampleTrendSamples(trends.samples) };
   return response;
 }
 
@@ -3316,28 +3395,33 @@ async function snapshotCurrentStats(reason = "snapshot") {
     getContainerStatus(CONFIG.containerName),
   ]);
   if (!container?.running) return null;
-  const summary = await collectVllmMetricsSummary(container, gpu, { updateSamples: false });
+  const summary = await collectVllmMetricsSummary(container, gpu);
   const ledger = await updateStatsLedger(summary, reason);
   return ledger;
 }
 
 async function collectVllmMetricsSummary(container, gpu, options = {}) {
-  // updateSamples 会推进速度采样窗口，必须每次真实执行；只缓存只读快照。
-  if (options.updateSamples) return collectVllmMetricsSummaryFresh(container, gpu, options);
   const cacheKey = `metrics-summary:${container?.name || container?.id || "none"}:${container?.running ? 1 : 0}`;
   return runtimeSnapshotCache.get(cacheKey, () => collectVllmMetricsSummaryFresh(container, gpu, options));
 }
 
-async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
-  const endpoint = getContainerEndpoint(container);
-  const llamaApiKey = getLlamaApiKey(container);
-  const empty = core.emptyStatsSummary(container, endpoint, {
+function emptyRuntimeStatsSummary(container) {
+  return core.emptyStatsSummary(container, getContainerEndpoint(container), {
     stoppedNote: "llama.cpp container is not running.",
     missingNote: "No managed llama.cpp container is running.",
   });
+}
+
+// options.capture, when given, receives the raw /metrics text, its time and
+// the latency histograms of this read for the stats sampler (04 TEL-1).
+async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
+  const endpoint = getContainerEndpoint(container);
+  const llamaApiKey = getLlamaApiKey(container);
+  const empty = emptyRuntimeStatsSummary(container);
   if (!container?.running) return empty;
 
   let metricsText = "";
+  let scrapedAt = "";
   try {
     const response = await fetch(`http://127.0.0.1:${endpoint.port}/metrics`, {
       signal: AbortSignal.timeout(4000),
@@ -3345,6 +3429,7 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
     });
     if (!response.ok) throw new Error(`metrics returned ${response.status}`);
     metricsText = await response.text();
+    scrapedAt = new Date().toISOString();
   } catch (error) {
     return { ...empty, error: error.message };
   }
@@ -3362,9 +3447,21 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
     || null;
   const nowSeconds = Date.now() / 1000;
   const uptimeSeconds = processStartSeconds ? Math.max(0, nowSeconds - processStartSeconds) : null;
-  const models = buildModelStats(metrics, servedById, facts, nowSeconds, options);
+  const models = buildModelStats(metrics, servedById, facts, nowSeconds, {
+    // A parallel container keeps its own recent-rate samples, so a model it
+    // shares with the primary cannot reset the primary's window.
+    sampleScope: container.name && container.name !== CONFIG.containerName ? container.name : "",
+  });
   const totals = withSpeedWindowSeconds(aggregateStats(models, uptimeSeconds), models);
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
+  if (options.capture && typeof options.capture === "object") {
+    options.capture.text = metricsText;
+    options.capture.scrapedAt = scrapedAt;
+    // llama.cpp series carry no model_name, so they all belong to the model.
+    options.capture.histograms = core.telemetry.latencyHistogramsFromSeries(metrics, models.map((model) => model.name), {
+      includeUnlabeled: true,
+    });
+  }
 
   return {
     source: `http://127.0.0.1:${endpoint.port}/metrics`,
@@ -3416,11 +3513,14 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const promptBySource = sumByLabel(scoped, "vllm:prompt_tokens_by_source_total", "source");
     const prefixQueries = sumMetric(scoped, "vllm:prefix_cache_queries_total");
     const prefixHits = sumMetric(scoped, "vllm:prefix_cache_hits_total");
-    const recent = core.calculateRecentRates(statsSamples, name, nowSeconds, {
+    const sampleKey = options.sampleScope ? `${options.sampleScope}:${name}` : name;
+    const recent = core.calculateRecentRates(statsSamples, sampleKey, nowSeconds, {
       promptTokens,
       generationTokens,
       requestCount,
-    }, options.updateSamples !== false);
+    });
+    const averagePromptGauge = firstMetricValue(scoped, "llamacpp:prompt_tokens_seconds");
+    const averageOutputGauge = firstMetricValue(scoped, "llamacpp:predicted_tokens_seconds");
 
     models.push({
       name,
@@ -3470,9 +3570,11 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
         windowSeconds: Number(recent.windowSeconds || 0),
         outputSource: "counter_window",
         outputObservedAt: null,
-        averagePromptTokensPerSecond: firstMetricValue(scoped, "llamacpp:prompt_tokens_seconds") || null,
-        averageOutputTokensPerSecond: firstMetricValue(scoped, "llamacpp:predicted_tokens_seconds")
+        averagePromptTokensPerSecond: averagePromptGauge || null,
+        averageOutputTokensPerSecond: averageOutputGauge
           || tokensPerSecondFromSeconds(histogramAverage(scoped, "vllm:request_time_per_output_token_seconds")),
+        // 04 TEL-1: says when an average above is a llama.cpp lifetime gauge.
+        averageSource: averagePromptGauge || averageOutputGauge ? core.telemetry.AVERAGE_SOURCE_LIFETIME_GAUGE : null,
         lifetimeTokensPerSecond: null,
       },
       cache: {
@@ -3694,7 +3796,7 @@ const downloadJobController = core.createDownloadJobController({
   isRuntimeBusy: async () => {
     const container = await getContainerStatus(CONFIG.containerName).catch(() => null);
     if (!container?.running) return false;
-    const summary = await collectVllmMetricsSummary(container, null, { updateSamples: false }).catch(() => null);
+    const summary = await collectVllmMetricsSummary(container, null).catch(() => null);
     return (summary?.models || []).some((model) => Number(model?.requests?.running || 0) + Number(model?.requests?.waiting || 0) > 0);
   },
 });
@@ -3933,10 +4035,10 @@ async function runStartJobOnce(job, opts) {
     appendLog(job, dockerReady.raw || dockerReady.error);
     setJobProgress(job, {
       percent: 4,
-      stage: "启动 Docker Desktop",
-      detail: "Docker daemon 未就绪，正在自动启动 Docker Desktop 并等待引擎可用。",
+      stage: `启动 ${CONFIG.dockerRuntimeName}`,
+      detail: `Docker daemon 未就绪，正在自动启动 ${CONFIG.dockerRuntimeName} 并等待引擎可用。`,
     });
-    appendLog(job, "Docker daemon is not ready; requesting Docker Desktop startup.");
+    appendLog(job, `Docker daemon is not ready; requesting ${CONFIG.dockerRuntimeName} startup.`);
     dockerReady = await ensureDockerDaemonRunning(120000);
   }
   if (!dockerReady.ok) {
@@ -3952,7 +4054,7 @@ async function runStartJobOnce(job, opts) {
   }
   appendLog(job, dockerReady.alreadyRunning
     ? `Docker daemon ready: ${dockerReady.version}`
-    : `Docker Desktop started; daemon ready: ${dockerReady.version}`);
+    : `${CONFIG.dockerRuntimeName} started; daemon ready: ${dockerReady.version}`);
   for (const warning of opts.gpuWarnings || []) appendLog(job, `GPU selection warning: ${warning}`);
 
   setJobProgress(job, {
@@ -3974,19 +4076,19 @@ async function runStartJobOnce(job, opts) {
   }
 
   let { runArgs, activePublishArgs, runtimeImage, secretEnv } = buildLlamaRuntimeCommand(job, opts);
-  // 启动预检要拿实时镜像状态，绕过快照缓存。
-  const imageStatus = await getImageStatusFresh(runtimeImage);
-  if (!imageStatus.ok) {
-    const imageName = String(runtimeImage || "");
-    if (imageName.startsWith("local/") || imageName === CONFIG.museImage) {
-      throw new Error(`本地运行时镜像不存在：${imageName}。请先运行 scripts/build-muse-runtime.ps1 构建镜像，不要对 local/ 前缀执行 docker pull。`);
-    }
-    appendLog(job, `Runtime image preflight: ${imageStatus.text || runtimeImage}. Pulling before current model is stopped.`);
-    const pulled = await pullImageWithRetry(runtimeImage, {
-      onAttempt: ({ attempt, attempts, image }) => appendLog(job, `正在拉取镜像 ${image}（第 ${attempt}/${attempts} 次）`),
-    });
-    appendLog(job, pulled.stdout || pulled.stderr);
-  }
+  // 启动预检要拿实时镜像状态，绕过快照缓存（DockerHost 不缓存镜像状态）。
+  const ensuredImage = await dockerHost.ensureImage(runtimeImage, {
+    policy: "auto",
+    onMissing: ({ status }) => {
+      const imageName = String(runtimeImage || "");
+      if (imageName.startsWith("local/") || imageName === CONFIG.museImage) {
+        throw new Error(`本地运行时镜像不存在：${imageName}。请先运行 scripts/build-muse-runtime.ps1 构建镜像，不要对 local/ 前缀执行 docker pull。`);
+      }
+      appendLog(job, `Runtime image preflight: ${status?.text || runtimeImage}. Pulling before current model is stopped.`);
+    },
+    onAttempt: ({ attempt, attempts, image }) => appendLog(job, `正在拉取镜像 ${image}（第 ${attempt}/${attempts} 次）`),
+  });
+  if (ensuredImage.pulled) appendLog(job, ensuredImage.result.stdout || ensuredImage.result.stderr);
   await snapshotCurrentStats("before-start").catch(() => {});
   setJobProgress(job, {
     percent: 18,
@@ -4033,26 +4135,21 @@ async function runStartJobOnce(job, opts) {
     scheduleJobsSave(0);
     appendLog(job, `> ${redactedLaunchCommand}`);
     assertStartJobActive(job);
-    // Every attempt, including both retries, gets the secret env (08 P0-4).
-    const launched = await core.dockerRunWithRetries({
-      docker,
-      runArgs,
-      dockerOptions: { env: core.buildDockerChildEnv(secretEnv, { viaWsl: Boolean(CONFIG.dockerWslDistro) }) },
-      isNameConflictError: isContainerNameConflictError,
-      onNameConflict: async (error) => {
-        appendLog(job, `容器名冲突，清理本次残留容器后重试：${error.stderr || error.message}`);
-        await core.removeContainerIfPresent(docker, targetContainerName);
-      },
-      getBindRetryArgs: (error) => {
-        if (opts.networkAccess !== "lan" || !isDockerPublishBindError(error) || activePublishArgs.some((arg) => arg.startsWith("0.0.0.0:"))) {
-          return null;
+    // DockerHost.create runs it: every attempt, including the name-conflict and
+    // LAN-bind retries, gets the secret env, with WSLENV under WSL (08 P0-4).
+    const launched = await dockerHost.create({ runArgs, publish: activePublishArgs, name: targetContainerName }, {
+      secretEnv,
+      lanFallback: opts.networkAccess === "lan",
+      bindRetryPublish: () => dockerPublishArgs(opts.port, "lan", "0.0.0.0"),
+      onRetry: (retry) => {
+        if (retry.kind === "name-conflict") {
+          appendLog(job, `容器名冲突，清理本次残留容器后重试：${retry.error.stderr || retry.error.message}`);
+          return;
         }
-        activePublishArgs = dockerPublishArgs(opts.port, "lan", "0.0.0.0");
-        const retryArgs = replaceDockerPublishArgs(runArgs, activePublishArgs);
-        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${error.stderr || error.message}`);
+        activePublishArgs = retry.publish;
+        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${retry.error.stderr || retry.error.message}`);
         appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
-        appendLog(job, `> docker ${redactDockerArgs(retryArgs, opts).join(" ")}`);
-        return retryArgs;
+        appendLog(job, `> docker ${redactDockerArgs(retry.runArgs, opts).join(" ")}`);
       },
     });
     job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
@@ -4078,6 +4175,8 @@ async function runStartJobOnce(job, opts) {
       fetchServedModels: () => getServedModels(opts.port, opts.llamaApiKey),
       getContainerStatus,
       docker,
+      // Log reads go through the DockerHost (01 §13); same `docker logs --tail N`.
+      readLogs: dockerHost.logs,
       extractLogIssues,
       setJobProgress,
       appendLog,
@@ -4163,6 +4262,7 @@ module.exports = {
   buildLlamaMemoryEstimate,
   buildModelStats,
   withSpeedWindowSeconds,
+  statsSampler,
   createDownloadRequestHandlers,
   createDownloadTokenStore,
   listModelStorageRoots,
