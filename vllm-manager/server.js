@@ -1666,6 +1666,20 @@ core.registerRuntimeRoutes(app, {
   stopRuntimeInstance: stopRuntimeInstanceRequest,
 });
 
+// Engine registry (docs/overhaul/01-engines.md ENG-2): GET /api/engines lists the
+// engines this manager hosts with their manifest runtimes, and the descriptor
+// validator checks drafts without writing anything. Image presence uses the
+// uncached inspect behind the route's own 60 s cache.
+const engineRegistry = core.engines.createEngineRegistry({ env: process.env });
+core.engines.registerEngineRoutes(app, {
+  registry: engineRegistry,
+  managerId: "vllm",
+  ownerLabelValue: CONFIG.managerId,
+  isLocalRequest,
+  getImageStatus: getImageStatusFresh,
+  listManagedContainers: () => listManagedContainers(),
+});
+
 core.registerAuditRoutes(app, {
   auditRoot: CONFIG.auditRoot,
   auditPasswordFile: AUDIT_PASSWORD_FILE,
@@ -5567,6 +5581,7 @@ function delay(ms) {
 module.exports = {
   app,
   CONFIG,
+  engineRegistry,
   startManager,
   shutdownManager,
   firstExisting,

@@ -23,6 +23,51 @@ test("bundled runtime manifest validates and matches the pinned defaults", () =>
   assert.equal(manifest.getRuntimeRelease("llama").build, 10630);
   assert.match(manifest.getRuntimeRelease("sglangFlashNext").build.context, /build-sources/);
   assert.ok(Object.isFrozen(loaded.runtimes.vllm), "runtime entries are frozen like the old constants");
+  // Every bundled entry names its engine and maps to exactly one runtimeId (01-engines §5).
+  assert.deepEqual(loaded.identity.errors, []);
+  for (const [id, runtime] of Object.entries(loaded.runtimes)) {
+    assert.ok(runtime.engineId, `${id}.engineId`);
+    assert.ok(manifest.RUNTIME_STATUSES.includes(runtime.status), `${id}.status`);
+    assert.equal(typeof runtime.features, "object", `${id}.features`);
+    assert.ok(Object.hasOwn(runtime, "compatVersion"), `${id}.compatVersion`);
+    assert.equal(loaded.identity.refs.get(id).runtimeId, manifest.runtimeIdFor(runtime.engineId, runtime.version));
+  }
+  assert.equal(manifest.runtimeImageReference("sglangPennyroyal"), "ghcr.io/jpezzulli/sglang-rtxpro6000:v2.5.1@sha256:76258532b1c01f7583fbe951f90b80903db931030291db9db4e5a68b28567866");
+  assert.equal(manifest.runtimeImageReference("vllmQwenMoe"), "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb");
+  assert.equal(manifest.getRuntimeRelease("sglangFlashNextNvme").status, "experimental");
+  const described = manifest.describeRuntimeManifest();
+  assert.equal(described.runtimes.find((runtime) => runtime.id === "llama").runtimeId, "llamacpp@b10630");
+  assert.deepEqual(described.identityErrors, []);
+});
+
+test("the fallback table maps every runtime to the same identity as the bundled data", () => {
+  const bundled = manifest.loadRuntimeManifest({ force: true });
+  for (const [id, runtime] of Object.entries(manifest.FALLBACK_RUNTIMES)) {
+    assert.ok(bundled.runtimes[id], `${id} exists in the bundled data`);
+    assert.equal(runtime.engineId, bundled.runtimes[id].engineId, id);
+    assert.equal(manifest.runtimeIdFor(runtime.engineId, runtime.version), bundled.identity.refs.get(id).runtimeId, id);
+    assert.deepEqual(runtime.features, bundled.runtimes[id].features, id);
+  }
+  assert.deepEqual(Object.keys(manifest.FALLBACK_RUNTIMES).sort(), Object.keys(bundled.runtimes).sort());
+});
+
+test("validation checks the registry identity fields", () => {
+  const result = manifest.validateRuntimeManifest({
+    runtimes: {
+      a: { version: "1", repository: "x", engineId: "Not An Id" },
+      b: { version: "1", repository: "x", status: "stable" },
+      c: { version: "1", repository: "x", features: ["pleOffload"] },
+      d: { version: "1", repository: "x", compatVersion: 5 },
+      e: { version: "1", repository: "x", features: { nested: { deep: true } } },
+      f: { version: "1", repository: "x", imageAliases: "x:latest" },
+      ok: { version: "1", repository: "x", engineId: "sglang", status: "unpinned", compatVersion: null, features: { pleOffload: true } },
+    },
+  });
+  assert.equal(result.ok, false);
+  for (const fragment of ["a.engineId", "b.status", "c.features", "d.compatVersion", "e.features.nested", "f.imageAliases"]) {
+    assert.ok(result.errors.some((item) => item.startsWith(fragment)), fragment);
+  }
+  assert.equal(result.errors.some((item) => item.startsWith("ok")), false);
 });
 
 test("the FlashNext local build records everything a rebuild needs", () => {
