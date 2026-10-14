@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "about": "Foreground/background token pairs checked by service-entry/test/console/tokens-contrast.test.js against both themes of tokens.css. min is a WCAG ratio, either one number or {light, dark}. A bg of @surfaces expands to every surface in surfaces. kind: text needs at least 4.5; large-text, icon, border and focus need at least 3 (a min below that floor fails the test).",
+  "surfaces": ["--bg", "--surface-1", "--surface-2", "--surface-3"],
+  "pairs": [
+    { "fg": "--text", "bg": "@surfaces", "kind": "text", "min": 11.1 },
+    { "fg": "--text-muted", "bg": "@surfaces", "kind": "text", "min": { "light": 5.5, "dark": 6.0 } },
+    { "fg": "--accent", "bg": "@surfaces", "kind": "text", "min": 5.48 },
+    { "fg": "--accent-ink", "bg": "--accent", "kind": "text", "min": { "light": 6.7, "dark": 8.59 } },
+    { "fg": "--accent", "bg": "--accent-soft", "kind": "text", "min": 4.5 },
+    { "fg": "--success", "bg": "@surfaces", "kind": "text", "min": { "light": 4.61, "dark": 4.77 } },
+    { "fg": "--warn", "bg": "@surfaces", "kind": "text", "min": { "light": 4.61, "dark": 4.77 } },
+    { "fg": "--danger", "bg": "@surfaces", "kind": "text", "min": { "light": 4.61, "dark": 4.77 } },
+    { "fg": "--success-ink", "bg": "--success-soft", "kind": "text", "min": 8.15 },
+    { "fg": "--warn-ink", "bg": "--warn-soft", "kind": "text", "min": 8.15 },
+    { "fg": "--danger-ink", "bg": "--danger-soft", "kind": "text", "min": 8.15 },
+    { "fg": "--brand-ink", "bg": "@surfaces", "kind": "text", "min": { "light": 6.2, "dark": 7.0 } },
+    { "fg": "--border-strong", "bg": "--surface-1", "kind": "border", "min": { "light": 3.7, "dark": 3.08 } },
+    { "fg": "--border-strong", "bg": "@surfaces", "kind": "border", "min": 3 },
+    { "fg": "--focus-ring", "bg": "@surfaces", "kind": "focus", "min": { "light": 4.2, "dark": 5.9 } },
+    { "fg": "--brand", "bg": "--surface-1", "kind": "icon", "min": 3 },
+    { "fg": "--chart-1", "bg": "--surface-1", "kind": "icon", "min": 3.68 },
+    { "fg": "--chart-2", "bg": "--surface-1", "kind": "icon", "min": 3.68 },
+    { "fg": "--chart-3", "bg": "--surface-1", "kind": "icon", "min": 3.68 },
+    { "fg": "--chart-4", "bg": "--surface-1", "kind": "icon", "min": 3.68 },
+    { "fg": "--chart-5", "bg": "--surface-1", "kind": "icon", "min": 3.68 },
+    { "fg": "--chart-6", "bg": "--surface-1", "kind": "icon", "min": 3.68 },
+    { "fg": "--chart-7", "bg": "--surface-1", "kind": "icon", "min": 3.68 },
+    { "fg": "--chart-8", "bg": "--surface-1", "kind": "icon", "min": 3.68 }
+  ]
+}

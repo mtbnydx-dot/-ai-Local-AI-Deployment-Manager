@@ -1,0 +1,128 @@
+/* Console charts (07 §4.1 chart palette and memory segments): theming for the
+ * lazily loaded uPlot charts and the stacked memory bar. Series colors come
+ * from --chart-1..8; the Chart component re-reads them when the theme changes,
+ * so nothing here is theme specific. */
+
+.chart {
+  position: relative;
+  width: 100%;
+  min-height: 160px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.chart .u-legend {
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.chart .u-select {
+  background: var(--accent-soft);
+  opacity: 0.6;
+}
+
+.chart .u-cursor-x,
+.chart .u-cursor-y {
+  border-color: var(--border-strong);
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-xs);
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--swatch, var(--chart-1));
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  pointer-events: none;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  box-shadow: var(--shadow-2);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  color: var(--text-muted);
+}
+
+/* Series color classes for SVG and DOM marks. */
+.series-1 { --series: var(--chart-1); }
+.series-2 { --series: var(--chart-2); }
+.series-3 { --series: var(--chart-3); }
+.series-4 { --series: var(--chart-4); }
+.series-5 { --series: var(--chart-5); }
+.series-6 { --series: var(--chart-6); }
+.series-7 { --series: var(--chart-7); }
+.series-8 { --series: var(--chart-8); }
+
+/* Sparkline */
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 32px;
+}
+
+.sparkline path {
+  fill: none;
+  stroke: var(--series, var(--chart-1));
+  stroke-width: 1.5;
+}
+
+/* StackedBar: memory segments (weights, kv, activations, draft, mmproj,
+ * overhead, other tenants, headroom, over budget). */
+.stacked-bar {
+  display: flex;
+  height: 16px;
+  overflow: hidden;
+  border-radius: var(--r-2);
+  background: var(--surface-3);
+}
+
+.stacked-bar-seg {
+  flex: 0 0 auto;
+  min-width: 0;
+  background: var(--seg, var(--chart-8));
+}
+
+.seg-weights { --seg: var(--chart-1); }
+.seg-kv { --seg: var(--chart-2); }
+.seg-activations { --seg: var(--chart-3); }
+.seg-draft { --seg: var(--chart-4); }
+.seg-mmproj { --seg: var(--chart-5); }
+.seg-overhead { --seg: var(--chart-8); }
+
+.seg-other {
+  background: repeating-linear-gradient(45deg, var(--chart-8) 0 4px, transparent 4px 8px);
+}
+
+.seg-headroom {
+  background: var(--surface-3);
+}
+
+.seg-over {
+  background: repeating-linear-gradient(45deg, var(--danger) 0 4px, transparent 4px 8px);
+}

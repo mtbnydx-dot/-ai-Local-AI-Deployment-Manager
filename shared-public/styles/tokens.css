@@ -1,0 +1,193 @@
+/* Design tokens shared by the console (07 §4.1) and the public portal (05).
+ * Primitives on :root, then the semantic layer. Light is the default; dark is
+ * applied by the OS preference (unless data-theme="light" pins light) and by
+ * data-theme="dark". The two dark blocks must stay identical: the contrast
+ * test compares them. Only :root selectors live here, no console classes and
+ * no component or density tokens (those are in console/styles/base.css), so a
+ * page can link this file alone. Components use semantic tokens only. */
+
+:root {
+  color-scheme: light;
+
+  /* Primitives: neutral ramp */
+  --n-0: #ffffff;
+  --n-50: #f5f7fa;
+  --n-100: #eef2f6;
+  --n-200: #e3e9ef;
+  --n-300: #d5dde5;
+  --n-400: #a3b1bf;
+  --n-500: #6b7785;
+  --n-600: #4f5d6b;
+  --n-700: #223144;
+  --n-800: #1a2532;
+  --n-900: #121a24;
+  --n-1000: #0b1118;
+
+  /* Primitives: hues */
+  --teal-400: #2dd4bf;
+  --teal-500: #14b8a6;
+  --teal-700: #0f766e;
+  --teal-800: #115e59;
+  --blue-300: #7cb0ff;
+  --blue-600: #2563eb;
+  --blue-700: #1d4ed8;
+  --green-400: #4ade80;
+  --green-800: #166534;
+  --amber-400: #fbbf24;
+  --amber-700: #a15207;
+  --red-400: #f87171;
+  --red-700: #b42318;
+
+  /* Primitives: type families, spacing (4 px grid), radii */
+  --font-sans: system-ui, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 10px;
+  --r-4: 14px;
+
+  /* Semantic: surfaces, text, borders */
+  --bg: #f5f7fa;
+  --surface-1: #ffffff;
+  --surface-2: #eef2f6;
+  --surface-3: #e3e9ef;
+  --text: #16202b;
+  --text-muted: var(--n-600);
+  --border: var(--n-300);
+  --border-strong: var(--n-500);
+
+  /* Semantic: accent, brand, focus */
+  --accent: var(--blue-700);
+  --accent-ink: var(--n-0);
+  --accent-soft: #e6edfd;
+  --brand: var(--teal-700);
+  --brand-ink: var(--teal-800);
+  --focus-ring: var(--blue-600);
+
+  /* Semantic: status. The plain color is for text and icons on any surface;
+   * -soft is a tinted fill and -ink the text on it. */
+  --success: var(--green-800);
+  --warn: var(--amber-700);
+  --danger: var(--red-700);
+  --success-soft: #dcfce7;
+  --success-ink: #14532d;
+  --warn-soft: #fef3c7;
+  --warn-ink: #78350f;
+  --danger-soft: #fee2e2;
+  --danger-ink: #7f1d1d;
+
+  /* Semantic: overlays and elevation */
+  --scrim: rgba(11, 17, 24, 0.45);
+  --shadow-1: 0 1px 2px rgba(22, 32, 43, 0.08);
+  --shadow-2: 0 4px 12px rgba(22, 32, 43, 0.12);
+  --shadow-3: 0 12px 32px rgba(22, 32, 43, 0.18);
+
+  /* Semantic: chart palette (categorical, at least 3:1 on --surface-1) */
+  --chart-1: #2563eb;
+  --chart-2: #0d9488;
+  --chart-3: #c2410c;
+  --chart-4: #7c3aed;
+  --chart-5: #db2777;
+  --chart-6: #4d7c0f;
+  --chart-7: #0891b2;
+  --chart-8: #64748b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg: #0b1118;
+    --surface-1: #121a24;
+    --surface-2: #1a2532;
+    --surface-3: #223144;
+    --text: #e6edf3;
+    --text-muted: #a3b1bf;
+    --border: #2a3a4c;
+    --border-strong: #6b7c8f;
+
+    --accent: var(--blue-300);
+    --accent-ink: var(--n-1000);
+    --accent-soft: #16263f;
+    --brand: var(--teal-500);
+    --brand-ink: var(--teal-400);
+    --focus-ring: var(--blue-300);
+
+    --success: var(--green-400);
+    --warn: var(--amber-400);
+    --danger: var(--red-400);
+    --success-soft: #12301f;
+    --success-ink: #bbf7d0;
+    --warn-soft: #33270a;
+    --warn-ink: #fde68a;
+    --danger-soft: #3a1416;
+    --danger-ink: #fecaca;
+
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55);
+
+    --chart-1: #60a5fa;
+    --chart-2: #2dd4bf;
+    --chart-3: #fbbf24;
+    --chart-4: #fb923c;
+    --chart-5: #a78bfa;
+    --chart-6: #f472b6;
+    --chart-7: #a3e635;
+    --chart-8: #22d3ee;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0b1118;
+  --surface-1: #121a24;
+  --surface-2: #1a2532;
+  --surface-3: #223144;
+  --text: #e6edf3;
+  --text-muted: #a3b1bf;
+  --border: #2a3a4c;
+  --border-strong: #6b7c8f;
+
+  --accent: var(--blue-300);
+  --accent-ink: var(--n-1000);
+  --accent-soft: #16263f;
+  --brand: var(--teal-500);
+  --brand-ink: var(--teal-400);
+  --focus-ring: var(--blue-300);
+
+  --success: var(--green-400);
+  --warn: var(--amber-400);
+  --danger: var(--red-400);
+  --success-soft: #12301f;
+  --success-ink: #bbf7d0;
+  --warn-soft: #33270a;
+  --warn-ink: #fde68a;
+  --danger-soft: #3a1416;
+  --danger-ink: #fecaca;
+
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  --chart-1: #60a5fa;
+  --chart-2: #2dd4bf;
+  --chart-3: #fbbf24;
+  --chart-4: #fb923c;
+  --chart-5: #a78bfa;
+  --chart-6: #f472b6;
+  --chart-7: #a3e635;
+  --chart-8: #22d3ee;
+}
