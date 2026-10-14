@@ -20,6 +20,7 @@ const { createRequestAuth, redactInstancesEventForViewer, redactStatusEventForVi
 const { createViewerRegistry } = require("./lib/viewer-allowlist");
 const { createEntryAdminAuth, createMachineAuth } = require("./lib/machine-auth");
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
+const { createTelemetryRuntime } = require("./lib/telemetry-runtime");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -151,6 +152,8 @@ const ROUTE_MODULES = [
 
 let server = null;
 let routeMounts = null;
+// 04 telemetry (store and collectors); created by startServiceEntry().
+let telemetryRuntime = null;
 let billingStore = null;
 const managerModelCache = new Map();
 const managerStatusCache = new Map();
@@ -487,6 +490,7 @@ async function handleRequest(req, res, routes = null) {
       }
       const currentSettings = await getFleetSettings();
       const settings = await saveFleetSettings({ ...currentSettings, ...(body.settings || body) });
+      telemetryRuntime?.recordConfigChange("fleet", { before: currentSettings, after: settings });
       const fleet = await buildServiceEntryFleetSnapshot(settings);
       return sendJson(res, { ok: true, settings, fleet });
     }
@@ -705,6 +709,7 @@ async function startServiceEntry() {
   routeMounts = await mountRouteModules({ ctx: createRouteContext() });
   // Every module has registered its viewer routes; a later one would be a bug.
   routeMounts.ctx.auth.viewerRegistry.freeze();
+  telemetryRuntime = startTelemetryRuntime(routeMounts.ctx);
   server = createServiceEntryServer({ routes: routeMounts });
   server.on("error", (error) => {
     const detail = error?.code === "EADDRINUSE"
@@ -734,11 +739,44 @@ function logStartupSummary(state, { host = HOST, port = PORT, log = console.log,
   }
 }
 
+// Telemetry reads the bus, the manager client and the log files; it never
+// holds up startup or shutdown. Smoke runs (AI_FRONTEND_SMOKE=1) start
+// next to whatever listens on the default ports, so they run no collectors.
+function startTelemetryRuntime(ctx) {
+  if (process.env.AI_FRONTEND_SMOKE === "1") return null;
+  const runtime = createTelemetryRuntime({
+    aiRoot: AI_ROOT,
+    dataDir: path.join(ROOT, "data"),
+    managers: MANAGERS,
+    managerClient: ctx.managerClient,
+    events: ctx.bus,
+    processExitLog: PROCESS_EXIT_LOG,
+  });
+  runtime.start().catch((error) => console.warn(core.redactSecrets(`Telemetry failed to start: ${error?.message || error}`)));
+  return runtime;
+}
+
+async function stopTelemetryRuntime() {
+  const runtime = telemetryRuntime;
+  telemetryRuntime = null;
+  if (!runtime) return;
+  let guard = null;
+  await Promise.race([
+    runtime.stop().catch(() => {}),
+    new Promise((resolve) => {
+      guard = setTimeout(resolve, 3000);
+      guard.unref?.();
+    }),
+  ]);
+  clearTimeout(guard);
+}
+
 if (require.main === module) {
   core.installProcessExitLogging({
     label: "service-entry",
     file: PROCESS_EXIT_LOG,
     onSignal: async () => {
+      await stopTelemetryRuntime();
       await security.revokeTrustToken().catch(() => {});
       if (server) await new Promise((resolve) => server.close(resolve));
     },
@@ -2699,6 +2737,7 @@ function shutdownSoon(options = {}) {
       exited = true;
       Promise.resolve()
         .then(() => core.flushAllAccessLogs())
+        .then(() => stopTelemetryRuntime())
         .catch(() => {})
         .finally(() => {
           closeBillingStore();
