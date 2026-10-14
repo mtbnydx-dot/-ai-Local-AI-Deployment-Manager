@@ -76,7 +76,7 @@ function baseCtx(engineId, overrides = {}) {
       calls.push("dockerPublishArgs");
       return [`${host || "127.0.0.1"}:${port}:8000`];
     },
-    publishArgsToRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
+    publishArgsToDockerRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
     normalizeGpuIds: (ids) => ids || [],
     lanAddress: () => {
       calls.push("lanAddress");
@@ -153,6 +153,29 @@ test("the vLLM adapter returns a LaunchCommand with the key only in the secret c
   const timed = engines.adapters.vllm.buildLaunch(basePlan(), baseCtx("vllm", { hostFacts: { env: { VLLM_START_TIMEOUT_MS: "600000" } } }).ctx);
   assert.equal(valueAfter(timed.docker.flags, "--health-start-period"), "10m");
   assert.deepEqual(timed.secretEnv, {});
+});
+
+test("both adapters read values wrapped with their provenance like plain values", () => {
+  const plain = basePlan({
+    values: {
+      ...basePlan().values,
+      quantization: "fp8",
+      chatTemplateKwargs: { enable_thinking: false },
+      "sglang.maxRunningRequests": 2,
+    },
+  });
+  const wrapped = {
+    ...plain,
+    values: Object.fromEntries(Object.entries(plain.values).map(([id, value]) => [id, { value, source: "user", reason: "fixture" }])),
+  };
+  for (const engineId of ["vllm", "sglang"]) {
+    const expected = engines.adapters[engineId].buildLaunch({ ...plain, engineId }, baseCtx(engineId).ctx);
+    const actual = engines.adapters[engineId].buildLaunch({ ...wrapped, engineId }, baseCtx(engineId).ctx);
+    assert.deepEqual(actual, expected, engineId);
+    assert.equal(valueAfter(actual.docker.args, "--default-chat-template-kwargs"), JSON.stringify({ enable_thinking: false }));
+  }
+  // The caller's plan is not rewritten.
+  assert.deepEqual(wrapped.values.quantization, { value: "fp8", source: "user", reason: "fixture" });
 });
 
 test("the vLLM adapter honours the recipe slots and appends recipe args last", () => {

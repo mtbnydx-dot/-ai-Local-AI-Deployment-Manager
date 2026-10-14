@@ -159,6 +159,23 @@ test("a blocking preset writes the legacy job effects and throws its reason with
   ]);
 });
 
+test("a preset quantization is emitted where the legacy builder emitted it: SGLang only", () => {
+  const quantized = (engine) => builderDeps({
+    effectiveLaunchQuantization: () => ({ value: "fp8", modelConfigMethod: "fp8" }),
+    resolveVllmRuntimePreset: () => ({ id: `fixture-${engine}`, engine, quantization: "modelopt_fp4" }),
+  });
+  for (const [engine, emitted] of [["vllm", "fp8"], ["sglang", "modelopt_fp4"]]) {
+    const { deps, logs } = quantized(engine);
+    const job = { id: `serve-${engine}`, meta: {} };
+    const { runArgs } = createVllmRuntimeCommandBuilder(deps).buildVllmRuntimeCommand(job, { ...BASE_OPTS, engine, quantization: "fp8" });
+    assert.equal(runArgs[runArgs.indexOf("--quantization") + 1], emitted, engine);
+    assert.equal(runArgs.filter((arg) => arg === "--quantization").length, 1, engine);
+    // job.meta and the override line record the preset value for both engines.
+    assert.equal(job.meta.quantization, "modelopt_fp4", engine);
+    assert.ok(logs.includes("Quantization runtime override: fp8 -> modelopt_fp4."), engine);
+  }
+});
+
 test("without a preset the builder writes no job meta and saves nothing", () => {
   const { deps, logs, calls } = builderDeps();
   const { buildVllmRuntimeCommand } = createVllmRuntimeCommandBuilder(deps);

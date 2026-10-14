@@ -9,6 +9,7 @@
 
 const {
   blockedError,
+  effectivePlan,
   ggufLogs,
   jsonArg,
   launchCommand,
@@ -25,8 +26,9 @@ const API_KEY_ENV = "VLLM_API_KEY";
  * plan + ctx -> LaunchCommand. Throws { code: "blocked", findings, launch }
  * when the runtime preset (recipe) blocks the launch.
  */
-function buildLaunch(plan, ctx) {
-  const values = plan.values || {};
+function buildLaunch(input, ctx) {
+  const plan = effectivePlan(input);
+  const values = plan.values;
   const fixed = plan.fixed || {};
   const slots = fixed.slots || {};
   const model = ctx.model || {};

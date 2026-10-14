@@ -16,6 +16,10 @@ const MANAGER_ID = "vllm";
 const LEGACY_BUILDER_ADAPTERS = new Set(["vllm", "sglang"]);
 const LEGACY_ENGINES = new Set(["vllm", "sglang"]);
 const FRACTION_PARAMS = Object.freeze({ vllm: "vllm.gpuMemoryUtilization", sglang: "sglang.memFractionStatic" });
+// Engines whose legacy branch emitted a preset's quantization. The vLLM branch
+// emitted the model/form value and only recorded a preset's in job.meta; no
+// vLLM preset sets one, so this keeps hand-made presets byte-identical too.
+const PRESET_QUANTIZATION_ENGINES = new Set(["sglang"]);
 
 function createVllmRuntimeCommandBuilder(deps) {
   const {
@@ -75,7 +79,10 @@ function createVllmRuntimeCommandBuilder(deps) {
     const fractionParam = descriptor?.memoryModel?.fractionParam || FRACTION_PARAMS[engineId];
     const plan = {
       engineId,
-      values: legacyRunValues(opts, runtimePreset, quantization, fractionParam),
+      values: legacyRunValues(opts, runtimePreset, quantization, {
+        fractionParam,
+        presetQuantization: PRESET_QUANTIZATION_ENGINES.has(engineId),
+      }),
       fixed: legacyFixedData(opts, runtimePreset),
       instance: {
         id: opts.instanceId,
@@ -119,7 +126,7 @@ function createVllmRuntimeCommandBuilder(deps) {
       toContainerPath: windowsPathToContainerPath,
       dockerGpuArg,
       dockerPublishArgs,
-      publishArgsToRunArgs: publishArgsToDockerRunArgs,
+      publishArgsToDockerRunArgs,
       normalizeGpuIds,
       lanAddress: getLanAddress,
     };
@@ -183,7 +190,7 @@ function positiveInteger(value) {
  * Only fields the legacy builder read are mapped, and each keeps the raw value
  * the builder used, so the adapters emit today's argv byte for byte.
  */
-function legacyRunValues(opts, preset, quantization, fractionParam) {
+function legacyRunValues(opts, preset, quantization, { fractionParam, presetQuantization }) {
   const maxNumBatchedTokens = Math.max(positiveInteger(opts.maxNumBatchedTokens), positiveInteger(preset.maxNumBatchedTokens));
   return {
     servedName: opts.name,
@@ -192,8 +199,8 @@ function legacyRunValues(opts, preset, quantization, fractionParam) {
     [fractionParam]: opts.gpuMemoryUtilization,
     dtype: preset.dtype || opts.dtype,
     // The model config declares the quantization before the form does
-    // (effectiveLaunchQuantization); a preset may still pin it.
-    quantization: preset.quantization || quantization.value || "",
+    // (effectiveLaunchQuantization); an SGLang preset may still pin it.
+    quantization: (presetQuantization && preset.quantization) || quantization.value || "",
     kvCacheDtype: preset.kvCacheDtype || opts.kvCacheDtype,
     tokenizer: opts.tokenizer,
     trustRemoteCode: Boolean(opts.trustRemoteCode || preset.forceTrustRemoteCode),
@@ -240,7 +247,8 @@ function legacyRunValues(opts, preset, quantization, fractionParam) {
     "sglang.disablePrefillCudaGraph": Boolean(preset.disablePrefillCudaGraph),
     "sglang.mmFeatureTransport": preset.mmFeatureTransport || null,
     "speculative.method": preset.speculativeAlgorithm || null,
-    "speculative.draftModel": preset.draftModel || null,
+    // Raw, as the builder passed it to the path converter.
+    "speculative.draftModel": preset.draftModel,
     "sglang.dsparkBlockSize": preset.dsparkBlockSize || null,
     "sglang.draftModelQuantization": preset.draftModelQuantization || null,
   };

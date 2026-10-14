@@ -9,7 +9,8 @@
 //
 // What an adapter reads (ENG-5):
 //   plan.values    effective values by catalog param id (contextLength,
-//                  concurrency, vllm.*, sglang.*, ...)
+//                  concurrency, vllm.*, sglang.*, ...), plain or wrapped as
+//                  { value, source } the way a resolved LaunchPlan carries them
 //   plan.fixed     recipe data { args, env, labels, dockerFlags, slots }. Slots:
 //                  restart, hfCacheMount, modelMountReadOnly, cacheMount,
 //                  modelArgStyle, disableQuantizationArg, disableKvCacheDtypeArg,
@@ -22,7 +23,7 @@
 //                    model, hostFacts: { env }, secrets: { apiKey, apiKeyRef, hfToken },
 //                    jobId, admission: { leaseId, vramReservationMb },
 //                    toContainerPath, dockerGpuArg, dockerPublishArgs,
-//                    publishArgsToRunArgs, normalizeGpuIds, lanAddress }
+//                    publishArgsToDockerRunArgs, normalizeGpuIds, lanAddress }
 // Secrets reach the adapter only through ctx.secrets, never through the plan,
 // so a plan can be shown, hashed and stored as it is.
 
@@ -32,6 +33,24 @@ const { envAssignmentFlags, labelFlags, labelsFromFlags } = require("./_docker-s
 const HEALTH_CMD = "curl -fsS http://127.0.0.1:8000/health || exit 1";
 const HF_CACHE_TARGET = "/root/.cache/huggingface";
 const VLLM_CACHE_TARGET = "/root/.cache/vllm";
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The plan an adapter builds from: plan.values as plain values. A resolved
+ * plan wraps each value with its provenance (00 §4.3); the legacy wrapper
+ * passes plain values. Both build the same command.
+ */
+function effectivePlan(plan) {
+  const source = isPlainObject(plan) ? plan : {};
+  const values = {};
+  for (const [id, entry] of Object.entries(isPlainObject(source.values) ? source.values : {})) {
+    values[id] = isPlainObject(entry) && Object.hasOwn(entry, "value") && Object.hasOwn(entry, "source") ? entry.value : entry;
+  }
+  return { ...source, values };
+}
 
 function positiveInteger(value) {
   const number = Number(value || 0);
@@ -229,7 +248,7 @@ function managerDockerFlags(plan, ctx, options) {
     "--health-timeout", "5s",
     "--health-retries", "3",
     "--health-start-period", `${startPeriodMinutes(ctx.hostFacts?.env?.VLLM_START_TIMEOUT_MS)}m`,
-    ...ctx.publishArgsToRunArgs(publish),
+    ...ctx.publishArgsToDockerRunArgs(publish),
     ...(slots.hfCacheMount === false ? [] : ["-v", `${config.hfCache}:${HF_CACHE_TARGET}`]),
     ...(host.modelMountArgs || []).map((arg, index) => (slots.modelMountReadOnly && index % 2 === 1 ? `${arg}:ro` : arg)),
     ...engineLabelFlags,
@@ -288,6 +307,7 @@ function launchCommand(ctx, { flags, entrypoint = null, image, args, publish, se
 
 module.exports = {
   blockedError,
+  effectivePlan,
   ggufLogs,
   jsonArg,
   launchCommand,
