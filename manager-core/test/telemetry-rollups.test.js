@@ -483,6 +483,53 @@ test("coverage gives null for a collection gap and 0 for a covered bucket withou
   });
 });
 
+test("an hour rebuilt from raw rows after coverage_1m was pruned keeps its coverage", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const store = await openStore(t, file);
+  const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
+  // 13 days before NOW: inside minuteDays now, past it two days later.
+  const hour = Date.UTC(2026, 9, 1, 10, 0, 0);
+  const day = rollups.alignDay(hour, TZ);
+  const options = { timezoneOffsetMinutes: TZ };
+  insertCoverage(file, Array.from({ length: 60 }, (unused, minute) => hour + minute * MINUTE_MS));
+  await store.insertRequests([simpleRequest(1, hour + 5 * MINUTE_MS)]);
+  await store.runRollups(NOW, options);
+  const counts = (grain, from, to) => withDb(file, (db) => rollups.requestCounts(db, {
+    grain, from, to, filters: { model: "model-b" }, timezoneOffsetMinutes: TZ,
+  }).map((row) => row.requests));
+  assert.deepEqual(counts("1h", hour, hour + HOUR_MS), [0], "covered, no model-b requests");
+  assert.deepEqual(counts("1d", day, day + DAY_MS), [0]);
+
+  // Two days later retention prunes the 1m rows and coverage_1m of that
+  // hour; its raw requests stay (requestsDays 30).
+  const later = NOW + 2 * DAY_MS;
+  await store.runRollups(later, options);
+  await store.runRetention(later);
+  readDb(file, (db) => {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM coverage_1m WHERE bucket >= ? AND bucket < ?").get(hour, hour + HOUR_MS).n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rollup_1m WHERE bucket >= ? AND bucket < ?").get(hour, hour + HOUR_MS).n, 0);
+  });
+
+  // A late row for that hour (a spool replay) rebuilds it from raw rows.
+  await store.insertRequests([simpleRequest(2, hour + 7 * MINUTE_MS)]);
+  const result = await store.runRollups(later + MINUTE_MS, options);
+  assert.deepEqual(result.recomputed, { "1m": 0, "1h": 1, "1d": 1 });
+  assert.equal(requestTotal(file, "rollup_1h", "bucket = ?", hour), 2);
+  assert.equal(requestTotal(file, "rollup_1d", "bucket = ?", day), 2);
+  assert.deepEqual(counts("1h", hour, hour + HOUR_MS), [0], "the rebuilt hour is still covered");
+  assert.deepEqual(counts("1d", day, day + DAY_MS), [0]);
+  readDb(file, (db) => {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rollup_1h WHERE bucket = ? AND source = 'coverage'").get(hour).n, 1);
+  });
+
+  // An uncovered hour rebuilt the same way gets no marker.
+  const gap = hour + 3 * HOUR_MS;
+  await store.insertRequests([simpleRequest(3, gap + MINUTE_MS)]);
+  await store.runRollups(later + 2 * MINUTE_MS, options);
+  assert.deepEqual(counts("1h", gap, gap + HOUR_MS), [null]);
+});
+
 test("local days follow the +08:00 boundary, close at 00:10 and survive an offset change", async (t) => {
   const dir = tempDir(t);
   const file = path.join(dir, "telemetry.sqlite");
@@ -730,13 +777,87 @@ test("dirty buckets past raw retention are dropped with a counter; younger ones 
   assert.equal(dirtyRows(file).length, 2);
   const result = await store.runRollups(NOW + MINUTE_MS, options);
   assert.equal(result.droppedDirty, 1);
-  assert.deepEqual(result.recomputed, { "1m": 1, "1h": 1, "1d": 1 });
+  assert.deepEqual(result.recomputed, { "1m": 0, "1h": 1, "1d": 1 }, "the pruned minute is not written again; its hour and day are");
   assert.deepEqual(dirtyRows(file), []);
   assert.equal(requestTotal(file, "rollup_1m", "bucket = ?", minute), 0, "a pruned 1m bucket is not written again");
   assert.equal(requestTotal(file, "rollup_1h", "bucket = ?", hour), 3, "the hour is rebuilt from the raw rows");
   assert.equal(requestTotal(file, "rollup_1d", "bucket = ?", day), 3);
   assert.equal(requestTotal(file, "rollup_1d", "bucket = ?", rollups.alignDay(NOW - 31 * DAY_MS, TZ)), 0);
   assert.equal((await store.stats()).rollups.droppedDirty, 1);
+});
+
+test("a bare (grain, bucket) dirty row from another writer recomputes every family", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const store = await openStore(t, file);
+  const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
+  const minute = NOW - 90 * MINUTE_MS;
+  const hour = Math.floor(minute / HOUR_MS) * HOUR_MS;
+  const sample = { at: minute, fleetId: "vllm:a", managerId: "vllm", runtimeKey: "k", scrapeOk: 1 };
+  await store.insertRequests([simpleRequest(1, minute + 1_000)]);
+  await store.insertRuntimeSamples([sample]);
+  await store.insertGpuSamples([{ at: minute, gpuIndex: 0, utilPct: 10 }]);
+  const options = { timezoneOffsetMinutes: TZ };
+  await store.runRollups(NOW, options);
+
+  // Rows written behind the store's back, marked the way §10 words it.
+  withDb(file, (db) => {
+    db.prepare("INSERT INTO runtime_samples (at, fleet_id, model, manager_id, runtime_key, scrape_ok) VALUES (?, 'vllm:a', '', 'vllm', 'k', 1)")
+      .run(minute + 10_000);
+    db.prepare("INSERT INTO gpu_samples (at, gpu_index, util_pct) VALUES (?, 0, 30)").run(minute + 10_000);
+    db.prepare("INSERT INTO rollup_dirty (grain, bucket) VALUES ('1m', ?)").run(minute);
+  });
+  const result = await store.runRollups(NOW + MINUTE_MS, options);
+  assert.equal(result.recomputed["1m"], 1, "one dirty bucket, every family rewritten");
+  assert.equal(result.recomputed["1h"], 1);
+  assert.equal(result.dirtyPending, 0);
+  assert.deepEqual(dirtyRows(file), []);
+  readDb(file, (db) => {
+    assert.equal(db.prepare("SELECT sample_count FROM runtime_rollup_1m WHERE bucket = ?").get(minute).sample_count, 2);
+    assert.equal(db.prepare("SELECT sample_count FROM runtime_rollup_1h WHERE bucket = ?").get(hour).sample_count, 2);
+    assert.equal(db.prepare("SELECT util_pct_avg FROM gpu_rollup_1h WHERE bucket = ?").get(hour).util_pct_avg, 20);
+  });
+  assert.equal(requestTotal(file, "rollup_1h", "bucket = ?", hour), 1, "the requests family is unchanged");
+});
+
+test("a step budget of 0 still makes progress on every call", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
+  const core = storeWorker.createStoreCore({ file, allowMainThread: true, retention: { yieldMs: 1 } });
+  cleanup(t, () => core.close());
+  core.insertRequests([simpleRequest(1, NOW - 10 * MINUTE_MS), simpleRequest(2, NOW - 3 * HOUR_MS)]);
+  const options = { budgetMs: 0, timezoneOffsetMinutes: TZ };
+  const run = await core.runRollups(NOW, options);
+  assert.equal(run.ok, true);
+  assert.equal(run.more, false);
+  assert.ok(run.steps > 1, `one unit per step (${run.steps} steps)`);
+  assert.equal(core.getState("rollup.1m").watermark, Math.floor((NOW - 90_000) / MINUTE_MS) * MINUTE_MS, "the pending minute is closed");
+  assert.equal(requestTotal(file, "rollup_1m"), 2);
+  assert.equal(requestTotal(file, "rollup_1h"), 1);
+
+  // Dirty minutes too, and a 0 budget from the job settings.
+  core.insertRequests([3, 4, 5].map((index) => simpleRequest(index, NOW - (20 + index) * MINUTE_MS)));
+  assert.equal(dirtyRows(file).length, 3);
+  assert.equal(core.configureJobs({ rollupBudgetMs: 0 }).jobs.rollupBudgetMs, 0);
+  const late = await core.runRollups(NOW + MINUTE_MS, { timezoneOffsetMinutes: TZ });
+  assert.equal(late.ok, true);
+  assert.equal(late.recomputed["1m"], 3);
+  assert.equal(late.dirtyPending, 0);
+  assert.ok(late.steps >= 3);
+
+  // Directly: a call that asks for more has done at least one unit.
+  withDb(file, (db) => {
+    db.prepare("INSERT INTO rollup_dirty (grain, bucket) VALUES ('requests.1m', ?), ('requests.1m', ?)")
+      .run(NOW - 30 * MINUTE_MS, NOW - 31 * MINUTE_MS);
+    for (let calls = 0; ; calls += 1) {
+      assert.ok(calls < 20, "the pass ends");
+      const step = rollups.runRollups(db, NOW + 2 * MINUTE_MS, options);
+      if (!step.more) break;
+      assert.ok(step.units >= 1);
+    }
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rollup_dirty").get().n, 0);
+  });
 });
 
 test("the size guard deletes old raw rows first and records a pressure warning", async (t) => {
@@ -777,6 +898,7 @@ test("the size guard deletes old raw rows first and records a pressure warning",
     assert.equal(events[0].type, "telemetry.retention.pressure");
     assert.equal(events[0].severity, "warning");
     assert.deepEqual(JSON.parse(events[0].data).deleted, pressed.pressure.deleted);
+    assert.equal(JSON.parse(events[0].data).i18nKey, "obs.event.retentionPressure", "the console localises the English title");
   });
   assert.equal(requestTotal(file, "rollup_1m", "bucket = ?", oldMinute), 1, "rollups of the deleted rows stay");
 
@@ -893,6 +1015,30 @@ test("the worker schedules rollups every 30 s and retention every hour, and sett
   assert.equal(clock.delays().length, 2);
   core.beginClose();
   assert.deepEqual(clock.delays(), [], "closing stops the schedule");
+});
+
+test("ttl patches keep the retention keys they leave out, in configureJobs and per call", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
+  const core = storeWorker.createStoreCore({ file, allowMainThread: true, clock: fakeClock(NOW), retention: { yieldMs: 1 } });
+  cleanup(t, () => core.close());
+  core.configureJobs({ ttl: { requestsDays: 90, minuteDays: 30 } });
+  // Unset, empty and non-numeric values keep the current value too.
+  const second = core.configureJobs({ ttl: { ipDays: 10, hourDays: null, eventsDays: "", samplesHours: "x" } });
+  const expected = { ...schema.TTL_DEFAULTS, requestsDays: 90, minuteDays: 30, ipDays: 10 };
+  assert.deepEqual(second.jobs.ttl, expected);
+  assert.deepEqual(core.configureJobs({ maxDbMb: 512 }).jobs.ttl, expected, "a patch without ttl keeps it");
+  assert.deepEqual(core.configureJobs({ ttl: null }).jobs.ttl, expected);
+  assert.deepEqual(storeWorker.normalizeJobs({ ttl: { minuteDays: 7 } }, second.jobs).ttl, { ...expected, minuteDays: 7 });
+
+  // A per-call ttl patches the job's ttl as well: requestsDays stays 90.
+  core.insertRequests([simpleRequest(1, NOW - 40 * DAY_MS), simpleRequest(2, NOW - 100 * DAY_MS)]);
+  const pass = await core.runRetention(NOW, { ipDays: 5 });
+  assert.equal(pass.ok, true);
+  assert.deepEqual(pass.ttl, { ...expected, ipDays: 5 });
+  assert.deepEqual(readDb(file, (db) => db.prepare("SELECT request_id FROM requests").all().map((row) => row.request_id)), [requestId(1)]);
+  assert.deepEqual(core.stats().jobs.ttl, expected, "a per-call ttl does not change the job");
 });
 
 test("jobs are off by default and run inside the worker when enabled, also after a restart", async (t) => {

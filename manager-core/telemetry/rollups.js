@@ -20,16 +20,18 @@
 // Watermarks (collector_state rollup.1m, rollup.1h, rollup.1d): every bucket
 // below a grain's watermark is closed. The live roll closes a minute 90 s
 // after it ends, an hour at minute 2 and a local day at 00:10. An insert into
-// a closed minute adds (<family>.1m, bucket) to rollup_dirty (markLate). The
-// next pass recomputes that minute and marks its hour and day dirty when they
-// are closed. Dirty buckets whose inputs retention already pruned are dropped
-// and counted.
+// a closed minute adds (<family>.1m, bucket) to rollup_dirty (markLate); a
+// bare grain ('1m', bucket) from another writer means every family. The next
+// pass recomputes that minute and marks its hour and day dirty when they are
+// closed. Dirty buckets whose inputs retention already pruned are dropped and
+// counted.
 //
 // Coverage (§6.4): a closed minute with a coverage_1m row from the recorder
 // gets a zero-count marker row in rollup_1m (every dimension '', source
 // 'coverage'), which folds into the hour and the day. A request count is null
 // for a bucket with neither data nor a marker (a collection gap), and 0 for a
-// covered bucket without matching requests (requestCounts).
+// covered bucket without matching requests (requestCounts). An hour rebuilt
+// from raw rows after coverage_1m was pruned keeps its marker.
 //
 // Local days use timezoneOffsetMinutes, whole hours only. A changed offset
 // starts a new calendar segment at the day watermark: closed days keep their
@@ -506,7 +508,10 @@ const runtimeFamily = {
     group.intervalMs += Number(child.interval_ms_sum) || 0;
     group.idleMs += Math.round((Number(child.idle_seconds) || 0) * 1000);
     for (const name of RUNTIME_DELTAS) group.deltas[name] = addNullable(group.deltas[name], child[name]);
-    // Gauge averages are weighted by the scrapes that could report them.
+    // Gauge averages are weighted by the scrapes that could report them. The
+    // schema keeps no per-gauge count, so a gauge that only some successful
+    // scrapes of a minute reported weighs as if all of them had: exact per
+    // sample while a gauge is either always or never reported.
     const weight = Math.max(1, samples - failures);
     for (const name of RUNTIME_GAUGES) addGauge(group.gauges[name], child[`${name}_avg`], weight, child[`${name}_max`]);
     group.kvCapacity = maxNullable(group.kvCapacity, child.kv_capacity_tokens);
@@ -611,6 +616,7 @@ const gpuFamily = {
     if (child.name !== null && child.name !== undefined) group.name = text(child.name);
     const samples = Number(child.sample_count) || 0;
     group.sampleCount += samples;
+    // Weighted by sample_count, as for runtime gauges (no per-gauge count).
     for (const [name, average, max] of GPU_AVERAGES) addGauge(group.gauges[name], child[average], Math.max(1, samples), child[max]);
     group.memUsedMax = maxNullable(group.memUsedMax, child.mem_used_mb_max);
     group.memTotal = maxNullable(group.memTotal, child.mem_total_mb);
@@ -681,6 +687,10 @@ function computeCutoffs(now, ttl, floors) {
   };
 }
 
+// `budgetMs` bounds one call: no budget (null) is unlimited, and a negative
+// one counts as 0. The budget is only checked once the call has done one
+// unit of work (one dirty entry or one bucket close), so every call makes
+// progress even with a budget of 0.
 function createContext(db, now, options = {}) {
   const at = Number(now);
   if (!Number.isFinite(at)) throw rollupError("invalid_time", "Rollups need a finite time.");
@@ -688,8 +698,10 @@ function createContext(db, now, options = {}) {
   const ttl = ttlFrom(options.ttl);
   const floors = options.floors || readState(db, "retention.floors") || {};
   const sampleIntervalMs = Math.max(1000, numberOrNull(options.sampleIntervalMs) || DEFAULT_SAMPLE_INTERVAL_MS);
-  const budgetMs = numberOrNull(options.budgetMs);
+  const budget = numberOrNull(options.budgetMs);
+  const budgetMs = budget === null ? null : Math.max(0, budget);
   const started = Date.now();
+  let units = 0;
   let gpuIndexes = null;
   return {
     db,
@@ -699,8 +711,14 @@ function createContext(db, now, options = {}) {
     cutoffs: computeCutoffs(at, ttl, floors),
     calendar: options.calendar || calendarFromState(db, offset),
     sampleIntervalMs,
+    progress() {
+      units += 1;
+    },
+    units() {
+      return units;
+    },
     overBudget() {
-      return budgetMs !== null && budgetMs >= 0 && Date.now() - started >= budgetMs;
+      return budgetMs !== null && units > 0 && Date.now() - started >= budgetMs;
     },
     gpuIndexes() {
       if (!gpuIndexes) gpuIndexes = listGpuIndexes(db);
@@ -845,7 +863,27 @@ function computeBucket(ctx, family, grain, bucket) {
     if (rows === null) return null;
     children.push(...rows);
   }
+  // coverage_1m is pruned with the 1m rows (minuteDays), so minutes rebuilt
+  // from raw rows past that point no longer know they were covered. Coverage
+  // only ever grows, so the bucket keeps the marker it already has.
+  if (family === requestsFamily && bucket < ctx.cutoffs["1m"] && !children.some(isCoverageRow)
+    && hasCoverageMarker(ctx.db, family.tables[grain], bucket)) {
+    children.push(coverageRow(bucket));
+  }
   return foldRows(family, children, bucket);
+}
+
+function isCoverageRow(row) {
+  return row.source === COVERAGE_SOURCE;
+}
+
+function coverageRow(bucket) {
+  return requestsFamily.finish(requestsFamily.newGroup(coverageKey()), bucket);
+}
+
+function hasCoverageMarker(db, table, bucket) {
+  return Boolean(statement(db, `SELECT 1 AS covered FROM ${table} WHERE bucket = ? AND source = ? LIMIT 1`)
+    .get(bucket, COVERAGE_SOURCE));
 }
 
 function writeBucket(ctx, family, grain, bucket, rows) {
@@ -892,8 +930,9 @@ function nextDataTime(ctx, grain, from, to) {
 
 // ---------------------------------------------------------------- dirty marks
 
+// `family` null writes the bare grain, which stands for every family.
 function insertDirty(db, family, grain, bucket) {
-  statement(db, "INSERT OR IGNORE INTO rollup_dirty (grain, bucket) VALUES (?, ?)").run(`${family}.${grain}`, bucket);
+  statement(db, "INSERT OR IGNORE INTO rollup_dirty (grain, bucket) VALUES (?, ?)").run(family ? `${family}.${grain}` : grain, bucket);
 }
 
 // Marks the closed minutes that rows inserted late belong to. `items` are
@@ -985,11 +1024,29 @@ function watermarkOf(marks, grain) {
   return grain === "1m" ? marks.minute : grain === "1h" ? marks.hour : marks.day;
 }
 
+// The hour of a minute or the local day of an hour, when it is closed.
+function closedParent(ctx, marks, grain, bucket) {
+  if (grain === "1m") {
+    const hour = floorTo(bucket, HOUR_MS);
+    return hour < marks.hour ? { grain: "1h", bucket: hour } : null;
+  }
+  if (grain === "1h") {
+    const day = ctx.calendar.dayOf(bucket);
+    return day < marks.day ? { grain: "1d", bucket: day } : null;
+  }
+  return null;
+}
+
 // Recomputes the dirty buckets of one grain, oldest first, and marks each
-// parent dirty when the parent is already closed.
+// parent dirty when the parent is already closed. markLate writes
+// '<family>.<grain>' entries; a bare grain ('1m', the (grain, bucket) form of
+// §10) stands for every family. A bucket counts as recomputed when at least
+// one family rewrote it, and as dropped when no family could rebuild it; a
+// bare entry marks its parent bare too. A minute below the 1m TTL is not
+// written again, but its hour still is.
 function processDirty(ctx, marks, grain, result) {
   const db = ctx.db;
-  const names = FAMILY_NAMES.map((name) => `${name}.${grain}`);
+  const names = [grain, ...FAMILY_NAMES.map((name) => `${name}.${grain}`)];
   const select = statement(db, `SELECT grain, bucket FROM rollup_dirty WHERE grain IN (${names.map(() => "?").join(", ")})
     ORDER BY bucket, grain LIMIT ${DIRTY_PAGE}`);
   const remove = statement(db, "DELETE FROM rollup_dirty WHERE grain = ? AND bucket = ?");
@@ -998,28 +1055,31 @@ function processDirty(ctx, marks, grain, result) {
     if (!page.length) return true;
     for (const entry of page) {
       if (ctx.overBudget()) return false;
-      const familyName = String(entry.grain).split(".")[0];
-      const family = FAMILIES[familyName];
+      const bare = entry.grain === grain;
+      const families = bare ? Object.values(FAMILIES) : [FAMILIES[String(entry.grain).split(".")[0]]];
       const bucket = Number(entry.bucket);
       inTransaction(db, () => {
         remove.run(entry.grain, entry.bucket);
         // Not closed yet: the live roll computes it.
         if (bucket >= watermarkOf(marks, grain)) return;
-        const rows = computeBucket(ctx, family, grain, bucket);
-        if (rows === null) {
+        const rebuilt = [];
+        let written = 0;
+        for (const family of families) {
+          const rows = computeBucket(ctx, family, grain, bucket);
+          if (rows === null) continue;
+          rebuilt.push(family.name);
+          if (writeBucket(ctx, family, grain, bucket, rows)) written += 1;
+        }
+        if (!rebuilt.length) {
           result.droppedDirty += 1;
           return;
         }
-        writeBucket(ctx, family, grain, bucket, rows);
-        result.recomputed[grain] += 1;
-        if (grain === "1m") {
-          const hour = floorTo(bucket, HOUR_MS);
-          if (hour < marks.hour) insertDirty(db, family.name, "1h", hour);
-        } else if (grain === "1h") {
-          const day = ctx.calendar.dayOf(bucket);
-          if (day < marks.day) insertDirty(db, family.name, "1d", day);
-        }
+        if (written) result.recomputed[grain] += 1;
+        const parent = closedParent(ctx, marks, grain, bucket);
+        if (!parent) return;
+        for (const name of bare ? [null] : rebuilt) insertDirty(db, name, parent.grain, parent.bucket);
       });
+      ctx.progress();
     }
   }
 }
@@ -1048,6 +1108,7 @@ function closeBuckets(ctx, marks, grain, limit, result) {
       return true;
     });
     if (closed) result.closed[grain] += 1;
+    ctx.progress();
   }
 }
 
@@ -1057,7 +1118,9 @@ function countDirty(db) {
 
 // One bounded pass: dirty minutes, the live minute roll, dirty and closing
 // hours, dirty and closing days. Stops early when `budgetMs` runs out and
-// reports more:true; the next call continues where this one stopped.
+// reports more:true; the next call continues where this one stopped. `units`
+// counts the dirty entries and bucket closes handled; a call that reports
+// more:true has handled at least one.
 function runRollups(db, now, options = {}) {
   const started = Date.now();
   const ctx = createContext(db, now, options);
@@ -1091,6 +1154,7 @@ function runRollups(db, now, options = {}) {
   writeState(db, "rollup", summary);
   return {
     ...result,
+    units: ctx.units(),
     durationMs: summary.durationMs,
     dirtyPending: summary.dirtyPending,
     watermarks: { "1m": marks.minute, "1h": marks.hour, "1d": marks.day },

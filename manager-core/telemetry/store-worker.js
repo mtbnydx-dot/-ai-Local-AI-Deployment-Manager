@@ -76,6 +76,7 @@ const JOB_TIMINGS = Object.freeze([
 // §4.3 size guard: when the file outgrows telemetry.maxDbMb, raw requests
 // older than this and samples older than this go first.
 const SIZE_GUARD = Object.freeze({ requestsDays: 7, samplesHours: 12 });
+const PRESSURE_I18N_KEY = "obs.event.retentionPressure";
 const MAX_ROW_ERRORS = 20;
 const MAX_STATE_BYTES = 256 * 1024;
 const GENESIS_HASH = "0".repeat(64);
@@ -303,10 +304,27 @@ function normalizeTtl(ttl) {
   return output;
 }
 
-// Merges a jobs patch into `previous`. Unset keys keep their value, like
-// normalizeTtl. An invalid time zone offset throws invalid_timezone_offset
-// when `strict` (configureJobs); at open it is logged and the previous value
-// is kept, so a bad setting never takes the store down.
+// A ttl patch on top of `current` (a normalised ttl, or null for the
+// defaults): keys the patch supplies as numbers replace, every other key keeps
+// its current value. normalizeTtl alone would put them back to the defaults,
+// and the next retention pass would delete what the owner chose to keep.
+// ipDays stays clamped to requestsDays, so a patch that raises requestsDays
+// past an earlier ipDays should carry ipDays too.
+function mergeTtl(current, patch) {
+  const output = { ...normalizeTtl(current) };
+  if (patch && typeof patch === "object") {
+    for (const key of Object.keys(schema.TTL_DEFAULTS)) {
+      const number = suppliedNumber(patch[key]);
+      if (number !== null) output[key] = number;
+    }
+  }
+  return normalizeTtl(output);
+}
+
+// Merges a jobs patch into `previous`. Unset keys keep their value, also
+// inside ttl (mergeTtl). An invalid time zone offset throws
+// invalid_timezone_offset when `strict` (configureJobs); at open it is logged
+// and the previous value is kept, so a bad setting never takes the store down.
 function normalizeJobs(input, previous, { strict = false, log = () => {} } = {}) {
   const source = input && typeof input === "object" ? input : {};
   const output = { ...previous };
@@ -320,8 +338,7 @@ function normalizeJobs(input, previous, { strict = false, log = () => {} } = {})
   output.retentionEveryMs = Math.max(10, output.retentionEveryMs);
   const maxDbMb = suppliedNumber(source.maxDbMb);
   if (maxDbMb !== null && maxDbMb > 0) output.maxDbMb = maxDbMb;
-  if (source.ttl !== undefined && source.ttl !== null) output.ttl = normalizeTtl(source.ttl);
-  if (!output.ttl) output.ttl = normalizeTtl(null);
+  output.ttl = mergeTtl(output.ttl, source.ttl);
   const hasOffset = Object.prototype.hasOwnProperty.call(source, "timezoneOffsetMinutes");
   if (hasOffset || output.timezoneOffsetMinutes === null || output.timezoneOffsetMinutes === undefined) {
     try {
@@ -791,7 +808,7 @@ function createStoreCore(options = {}) {
 
   // The rollup settings of one run: the job configuration, overridden by the
   // caller's options ({timezoneOffsetMinutes, ttl, sampleIntervalMs,
-  // budgetMs}).
+  // budgetMs}). A ttl there patches the job's ttl (mergeTtl).
   function rollupSettings(options) {
     const input = options && typeof options === "object" ? options : {};
     const settings = {
@@ -803,7 +820,7 @@ function createStoreCore(options = {}) {
     if (Object.prototype.hasOwnProperty.call(input, "timezoneOffsetMinutes")) {
       settings.timezoneOffsetMinutes = rollups.normalizeTimezoneOffset(input.timezoneOffsetMinutes);
     }
-    if (input.ttl !== undefined && input.ttl !== null) settings.ttl = normalizeTtl(input.ttl);
+    settings.ttl = mergeTtl(jobs.ttl, input.ttl);
     for (const key of ["sampleIntervalMs", "budgetMs"]) {
       const number = suppliedNumber(input[key]);
       if (number !== null && number >= 0) settings[key] = number;
@@ -813,7 +830,10 @@ function createStoreCore(options = {}) {
 
   // §10. Each rollups.runRollups step does a bounded amount of work; between
   // steps the worker yields, so inserts queued behind a long catch-up (after
-  // a restart, or an import that dirtied many minutes) still run.
+  // a restart, or an import that dirtied many minutes) still run. Every step
+  // that asks for more has handled at least one unit; one that did not would
+  // spin here forever and block every later run, so it ends the catch-up
+  // (more:true) and the next scheduled run continues.
   async function runRollups(now, options) {
     assertRunning();
     const settings = rollupSettings(options);
@@ -834,6 +854,12 @@ function createStoreCore(options = {}) {
           totals.recomputed[grain] += step.recomputed[grain];
         }
         if (!step.more) break;
+        if (!(step.units > 0)) {
+          const stalled = new Error("A rollup step asked for more work without doing any.");
+          stalled.code = "rollups_no_progress";
+          logFailureOnce("rollups", stalled);
+          break;
+        }
         await delay(retentionOptions.yieldMs);
       }
       return {
@@ -841,6 +867,7 @@ function createStoreCore(options = {}) {
         at,
         durationMs: Date.now() - started,
         ...totals,
+        more: Boolean(step.more),
         dirtyPending: step.dirtyPending,
         watermarks: step.watermarks,
       };
@@ -995,7 +1022,9 @@ function createStoreCore(options = {}) {
       severity: "warning",
       source: "telemetry",
       title: "Telemetry database is over its size limit; older raw rows were deleted",
-      data: pressure,
+      // §9: titles are English; the console localises by data.i18nKey (the
+      // telemetry i18n area owns obs.*).
+      data: { i18nKey: PRESSURE_I18N_KEY, ...pressure },
     }], { prepareRow: prepareEvent });
     log("warn", `Telemetry database is ${dbBytes} bytes, over its ${maxDbBytes}-byte limit; `
       + `deleted raw requests before ${new Date(requestsBefore).toISOString()} and samples before ${new Date(samplesBefore).toISOString()}.`);
@@ -1072,8 +1101,8 @@ function createStoreCore(options = {}) {
 
   // Deletes in batches and yields between them, so inserts queued behind a
   // long pass still run (each batch is its own short transaction). `ttl`
-  // defaults to the job's telemetry.retention settings, and options.maxDbMb
-  // to its telemetry.maxDbMb.
+  // patches the job's telemetry.retention settings (keys it leaves out keep
+  // the job's value), and options.maxDbMb defaults to its telemetry.maxDbMb.
   async function runRetention(now, ttl, options) {
     assertRunning();
     if (retentionRunning) return { ok: false, skipped: true, reason: "retention_running" };
@@ -1081,7 +1110,7 @@ function createStoreCore(options = {}) {
     const input = options && typeof options === "object" ? options : {};
     const maxDbMb = suppliedNumber(input.maxDbMb) ?? jobs.maxDbMb;
     try {
-      return await retentionPass(toEpochMs(now) ?? clock.now(), normalizeTtl(ttl === undefined ? jobs.ttl : ttl), { maxDbMb });
+      return await retentionPass(toEpochMs(now) ?? clock.now(), mergeTtl(jobs.ttl, ttl), { maxDbMb });
     } catch (error) {
       if (closed || stopping) return { ok: false, aborted: true, reason: "store_closed" };
       logFailureOnce("retention", error);
