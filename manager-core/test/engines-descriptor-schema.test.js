@@ -94,7 +94,7 @@ function templateDraft(overrides = {}) {
 
 test("every bundled descriptor validates and is named after its id", () => {
   const files = fs.readdirSync(BUNDLED_DIR).filter((name) => name.endsWith(".json")).sort();
-  assert.deepEqual(files, ["llamacpp.json", "sglang.json", "vllm.json"]);
+  assert.deepEqual(files, ["external.json", "llamacpp.json", "sglang.json", "vllm.json"]);
   for (const file of files) {
     const descriptor = JSON.parse(fs.readFileSync(path.join(BUNDLED_DIR, file), "utf8"));
     const result = validateDescriptor(descriptor, { mode: "bundled" });
@@ -104,7 +104,7 @@ test("every bundled descriptor validates and is named after its id", () => {
     assert.equal(descriptor.schemaVersion, 1);
     assert.match(descriptor.asOf, /^\d{4}-\d{2}-\d{2}$/);
     assert.ok(descriptor.staleAfterDays > 0);
-    assert.equal(descriptor.tier, 1);
+    assert.equal(descriptor.tier, descriptor.adapter === "external" ? 3 : 1);
     assert.equal(descriptor.status, "stable");
   }
 });
@@ -199,7 +199,7 @@ test("an invalid override is reported with its file and the bundled descriptor s
     "c-bad-default.json": { id: "sglang", runtimes: { default: "sglangNowhere" } },
   });
   const registry = core.engines.createEngineRegistry({ overrideDir, env: {} });
-  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp"]);
+  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp", "external"]);
   assert.equal(registry.get("vllm").status, "stable");
   assert.equal(registry.get("sglang").runtimes.default, "sglang");
 
