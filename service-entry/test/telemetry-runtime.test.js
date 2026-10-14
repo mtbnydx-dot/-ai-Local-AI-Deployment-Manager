@@ -1,114 +1,133 @@
+"use strict";
+
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { DatabaseSync } = require("node:sqlite");
-const { createTelemetryRuntime } = require("../lib/telemetry-runtime");
+const { buildTailFiles, createTelemetryRuntime, mcpAuditLogFile, resolveTelemetryConfig } = require("../lib/telemetry-runtime");
 
-const QUIET = { log() {}, warn() {}, error() {} };
+// The runtime wires the EventCollector to the entry. Every dependency is a
+// fake: the bus, the store and the docker source; no process starts.
 
-function tempRoot(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "entry-telemetry-runtime-"));
-  t.after(() => {
-    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch {}
-  });
-  return dir;
+function fakeBus() {
+  const calls = [];
+  let handler = null;
+  return {
+    calls,
+    subscribe(fn, options) {
+      calls.push({ fn: typeof fn, types: options?.types });
+      handler = fn;
+      return () => {
+        handler = null;
+        calls.push({ unsubscribed: true });
+      };
+    },
+    deliver(type, data) {
+      if (handler) handler({ id: 1, type, at: new Date().toISOString(), data });
+    },
+    publish() {
+      throw new Error("the telemetry runtime must not publish");
+    },
+  };
 }
 
-function runtimeFor(root, extra = {}) {
-  return createTelemetryRuntime({
-    aiRoot: root,
-    dataDir: path.join(root, "data"),
-    logger: QUIET,
-    inProcess: true,
-    jobs: { enabled: false },
-    flushMs: 30,
-    ...extra,
-  });
+function fakeStore() {
+  const rows = [];
+  const state = new Map();
+  return {
+    rows,
+    state: "ok",
+    async insertEvents(batch) {
+      rows.push(...batch);
+      return { accepted: batch.length, duplicates: 0, rejected: 0, dropped: 0, errors: [] };
+    },
+    async getState(name) {
+      return state.get(name) ?? null;
+    },
+    async setState(name, value) {
+      state.set(name, JSON.parse(JSON.stringify(value)));
+    },
+    async close() {
+      this.closed = true;
+    },
+  };
 }
 
-test("TELEMETRY_ENABLED=0 disables the recorder and creates no store", async (t) => {
-  const root = tempRoot(t);
-  for (const off of ["0", "false", "off"]) {
-    const runtime = runtimeFor(root, { env: { TELEMETRY_ENABLED: off } });
-    assert.equal(runtime.enabled, false, off);
-    assert.equal(runtime.recorder, null);
-    const status = await runtime.start();
-    assert.equal(status.store, "disabled");
-    assert.equal(status.recorder, null);
-    assert.deepEqual(await runtime.stop(), { ok: true });
-    assert.equal(await runtime.recordSecurityBan({ ip: "203.0.113.1" }), null);
-  }
-  assert.equal(fs.existsSync(path.join(root, "data")), false, "nothing was created");
-});
-
-test("settings come from the environment while platform.json has no telemetry section, and from config when given", async (t) => {
-  const root = tempRoot(t);
-  const fromEnv = runtimeFor(root, { env: { AI_TELEMETRY_DB: path.join(root, "elsewhere", "t.sqlite"), TELEMETRY_ENABLED: "1" } });
-  await fromEnv.start();
-  assert.equal(fromEnv.status().store, "ready");
-  assert.equal(fs.existsSync(path.join(root, "elsewhere", "t.sqlite")), true);
-  await fromEnv.stop();
-
-  const defaults = runtimeFor(root, { env: {} });
-  await defaults.start();
-  assert.equal(fs.existsSync(path.join(root, "data", "telemetry.sqlite")), true, "the default is service-entry/data/telemetry.sqlite");
-  await defaults.stop();
-
-  const configured = runtimeFor(root, { config: () => ({ enabled: true, dbPath: "relative/t2.sqlite" }), env: { TELEMETRY_ENABLED: "0" } });
-  assert.equal(configured.enabled, true, "an explicit config wins over the environment fallback");
-  await configured.start();
-  assert.equal(fs.existsSync(path.join(root, "relative", "t2.sqlite")), true, "a relative path is under the platform root");
-  await configured.stop();
-});
-
-test("start and stop are idempotent, and the runtime serves nothing over HTTP yet", async (t) => {
-  const root = tempRoot(t);
-  const runtime = runtimeFor(root, { env: {} });
-  assert.equal(runtime.status().store, "not_started");
+test("the runtime subscribes once through events.subscribe and records config changes", async () => {
+  const bus = fakeBus();
+  const store = fakeStore();
+  const runtime = createTelemetryRuntime({
+    aiRoot: os.tmpdir(),
+    dataDir: os.tmpdir(),
+    managers: [],
+    events: bus,
+    env: {},
+    docker: false,
+    logger: null,
+    openStore: async () => store,
+    config: {},
+  });
   await runtime.start();
-  const again = await runtime.start();
-  assert.equal(again.started, true);
-  assert.equal(runtime.recorder.stats().running, true);
-  assert.equal(runtime.handleHttp({}, {}, new URL("http://127.0.0.1/api/telemetry/status")), false);
-  assert.equal(runtime.handleInternal({}, {}, new URL("http://127.0.0.1/internal/telemetry/requests")), false);
-  const first = await runtime.stop();
-  assert.equal(first.ok, true);
-  assert.equal(first.timedOut, false);
-  assert.deepEqual(await runtime.stop(), { ok: true });
-  assert.equal(runtime.status().stopped, true);
-});
+  assert.equal(bus.calls.length, 1);
+  assert.deepEqual(bus.calls[0].types, ["jobs", "instances", "status", "downloads", "security", "access", "platform"]);
 
-test("keepJsonlAccessLog is a live setting, re-read at most every few seconds", async (t) => {
-  const root = tempRoot(t);
-  let clock = 1_000_000;
-  let keep = true;
-  const runtime = runtimeFor(root, { now: () => clock, config: () => ({ enabled: true, keepJsonlAccessLog: keep }) });
-  assert.equal(runtime.keepJsonlAccessLog(), true);
-  keep = false;
-  clock += 1000;
-  assert.equal(runtime.keepJsonlAccessLog(), true, "still the cached value");
-  clock += 6000;
-  assert.equal(runtime.keepJsonlAccessLog(), false);
-});
+  runtime.recordConfigChange("fleet", { before: { a: 1, b: { c: 2 } }, after: { a: 1, b: { c: 3 } } });
+  assert.equal(runtime.recordConfigChange("nonsense", ["x"]), null);
+  await runtime.collectors.events.flush();
+  const row = store.rows.find((item) => item.type === "config.fleet");
+  assert.ok(row);
+  assert.deepEqual(row.data.changed, ["b.c"]);
+  assert.equal(JSON.stringify(row).includes('"3"'), false);
+  assert.equal(runtime.status().collectors.events.docker.state, "disabled");
 
-test("a ban is recorded as a security.ban event once the store is open, keyed by address and expiry", async (t) => {
-  const root = tempRoot(t);
-  const runtime = runtimeFor(root, { env: {} });
-  assert.equal(await runtime.recordSecurityBan({ ip: "203.0.113.5", ipMasked: "203.0.113.x", until: "2026-10-14T08:10:00.000Z", failures: 20 }), null, "before start there is nowhere to write");
-  await runtime.start();
-  const ban = { ip: "203.0.113.5", ipMasked: "203.0.113.x", until: "2026-10-14T08:10:00.000Z", failures: 20 };
-  await runtime.recordSecurityBan(ban);
-  await runtime.recordSecurityBan(ban);
   await runtime.stop();
-  const db = new DatabaseSync(path.join(root, "data", "telemetry.sqlite"), { readOnly: true });
+  assert.equal(store.closed, true);
+  assert.ok(bus.calls.some((call) => call.unsubscribed));
+});
+
+test("TELEMETRY_ENABLED=0 runs nothing, and a store that cannot open never throws", async () => {
+  let opened = 0;
+  const off = createTelemetryRuntime({
+    aiRoot: os.tmpdir(), dataDir: os.tmpdir(), events: fakeBus(), env: { TELEMETRY_ENABLED: "0" }, docker: false, logger: null, config: {},
+    openStore: async () => { opened += 1; return fakeStore(); },
+  });
+  await off.start();
+  assert.equal(opened, 0);
+  assert.equal(off.status().store, "disabled");
+  assert.equal(off.recordConfigChange("fleet", ["x"]), null);
+
+  const broken = createTelemetryRuntime({
+    aiRoot: os.tmpdir(), dataDir: os.tmpdir(), events: fakeBus(), env: {}, docker: false, logger: null, config: {},
+    openStore: async () => { throw new Error("disk is read-only"); },
+  });
+  await broken.start();
+  assert.match(broken.status().lastError, /read-only/);
+  assert.equal(broken.recordConfigChange("fleet", ["x"]), null);
+  await broken.stop();
+});
+
+test("tail files cover the entry, each manager and the MCP audit log inside the AI root", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-runtime-"));
   try {
-    const rows = db.prepare("SELECT type, severity, source, dedupe_key, data FROM events WHERE type = 'security.ban'").all();
-    assert.equal(rows.length, 1, "the dedupe key makes a replay idempotent");
-    assert.equal(rows[0].dedupe_key, "security.ban:203.0.113.5:2026-10-14T08:10:00.000Z");
-    assert.deepEqual(JSON.parse(rows[0].data), { ...ban, i18nKey: "obs.event.securityBan" });
+    const tails = buildTailFiles({
+      aiRoot: root,
+      managers: [{ id: "vllm", root: path.join(root, "vllm-manager") }, { id: "llama", root: path.join(root, "llama-manager") }, { id: "", root: "" }],
+      processExitLog: path.join(root, "service-entry", "logs", "process-exit.log"),
+      env: {},
+    });
+    assert.deepEqual(tails.map((item) => item.id), ["process-exit:entry", "process-exit:vllm", "process-exit:llama", "mcp"]);
+    assert.equal(tails[1].file, path.join(root, "vllm-manager", "logs", "process-exit.log"));
+    assert.equal(tails[3].file, path.join(root, "audit-logs", "platform-mcp.jsonl"));
+    assert.equal(mcpAuditLogFile(root, { PLATFORM_MCP_AUDIT_LOG: path.join(os.tmpdir(), "elsewhere", "x.jsonl") }), "");
   } finally {
-    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("settings: env beats the section, and the default database sits in the data directory", () => {
+  const dataDir = path.join(os.tmpdir(), "telemetry-data");
+  assert.equal(resolveTelemetryConfig({ config: {}, env: {}, dataDir }).dbPath, path.join(dataDir, "telemetry.sqlite"));
+  assert.equal(resolveTelemetryConfig({ config: { enabled: false }, env: {}, dataDir }).enabled, false);
+  assert.equal(resolveTelemetryConfig({ config: { enabled: false }, env: { TELEMETRY_ENABLED: "1" }, dataDir }).enabled, true);
 });

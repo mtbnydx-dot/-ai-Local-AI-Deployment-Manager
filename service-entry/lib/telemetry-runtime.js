@@ -1,118 +1,179 @@
 "use strict";
 
-// The entry's telemetry runtime (docs/overhaul/04-telemetry.md §3, §6, §20).
+// Telemetry runtime of the service entry (docs/overhaul/04-telemetry.md §3).
 //
-// createTelemetryRuntime({ aiRoot, dataDir, managers, auth, getBillingStore,
-//   events, getFleetCatalogs, docker, execFile, config, secretStore })
-//   → { start(), stop(), recorder, handleHttp(req, res, url) → bool,
-//       handleInternal(req, res, url) → bool, status(), recordEvent(event),
-//       recordSecurityBan(ban), keepJsonlAccessLog() }
+// One object owns the TelemetryStore (service-entry/data/telemetry.sqlite,
+// worker thread), the gateway recorder (TEL-5) and the collectors that run in
+// the entry (the EventCollector, TEL-9). The runtime and GPU collectors
+// (TEL-7, TEL-8), the query routes (TEL-11) and the internal ingest (TEL-6)
+// attach to the same object.
 //
-// It owns the TelemetryStore (a worker thread over node:sqlite) and the
-// GatewayRecorder. Settings come from readSection("telemetry") (06 OPS-3,
-// env > platform.json > default); `config` may replace that read with a
-// function or a plain values object (tests). With telemetry.enabled false
-// (TELEMETRY_ENABLED=0) there is no store and `recorder` is null, so the
-// gateway runs exactly as it did before telemetry existed.
-//
-// The store opens in start(); a store that cannot open leaves telemetry in
-// degraded mode (writes discarded and counted) and never stops the entry.
-// stop() finalises in-flight records, flushes (2 s cap) and closes the store.
-// handleHttp and handleInternal answer nothing yet: the query routes (TEL-11)
-// and the manager ingest (TEL-6) mount here later.
+// - The GatewayRecorder (manager-core/telemetry/recorder.js) is created with
+//   the runtime and writes through the store once it is open; rows that are
+//   finalised before that, or while the store is unavailable, are buffered
+//   and then dropped and counted, never blocking a response. `onRow` feeds
+//   the legacy gateway-access.log from finalised rows (§6.5).
+
+// - Events come in only through events.subscribe() on the ENT-EV bus; this
+//   module never publishes and never edits the bus. Manager `jobs` and
+//   `instances` arrive through ENT-EV's manager relay.
+// - Telemetry is never on a request's path. A store that cannot open leaves
+//   the store in degraded mode (writes are counted and dropped), a collector
+//   failure is logged, and the entry keeps serving.
+// - TELEMETRY_ENABLED=0 (or telemetry.enabled=false) runs nothing.
+// - Docker is reached the way the managers reach it (DOCKER_WSL_DISTRO,
+//   DOCKER_EXE), and only through `docker events`; telemetry never starts
+//   Docker Desktop or a WSL distro.
 
 const path = require("node:path");
-const core = require("../../manager-core");
 const { openTelemetryStore } = require("../../manager-core/telemetry/store");
+const { createEventCollector, dockerEventSourceFromEnv } = require("../../manager-core/telemetry/collectors/events");
 const { createGatewayRecorder } = require("../../manager-core/telemetry/recorder");
+const { redactSecrets } = require("../../manager-core/secret-redactor");
 
-const DEFAULT_SETTINGS = Object.freeze({
-  enabled: true,
-  dbPath: "",
-  sampleIntervalMs: 10_000,
-  timezoneOffsetMinutes: null,
-  keepJsonlAccessLog: true,
-  maxDbMb: 2048,
-  retention: Object.freeze({}),
-});
+const DEFAULT_DB_FILE = "telemetry.sqlite";
+const STOP_FLUSH_MS = 2000;
 // Live settings (§20 "live") are re-read at most this often, so a request
 // never pays for a platform.json stat.
 const LIVE_SETTINGS_TTL_MS = 5000;
-const DEFAULT_STOP_FLUSH_MS = 2000;
 
-function plainObject(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function envFlag(value) {
   const text = String(value ?? "").trim().toLowerCase();
-  if (["0", "false", "off", "no"].includes(text)) return false;
-  if (["1", "true", "on", "yes"].includes(text)) return true;
+  if (!text) return null;
+  if (["0", "false", "no", "off"].includes(text)) return false;
+  if (["1", "true", "yes", "on"].includes(text)) return true;
   return null;
 }
 
-// The §20 environment variables, read directly while platform.json has no
-// "telemetry" section in its schema (the section arrives with a later
-// package). Once it does, readSection applies the same env > file > default
-// precedence and this is never reached.
-function settingsFromEnv(env) {
-  const values = {};
-  const enabled = envFlag(env.TELEMETRY_ENABLED);
-  if (enabled !== null) values.enabled = enabled;
-  const dbPath = String(env.AI_TELEMETRY_DB || "").trim();
-  if (dbPath) values.dbPath = dbPath;
-  const interval = Number(env.TELEMETRY_SAMPLE_INTERVAL_MS);
-  if (Number.isFinite(interval) && interval >= 5000 && interval <= 60_000) values.sampleIntervalMs = Math.floor(interval);
-  return values;
+// The `telemetry` section as readSection("telemetry") returns it, or {}
+// while 04's schema fragment is not installed (unknown_section).
+function readTelemetrySection(aiRoot, env) {
+  try {
+    const { readSection } = require("../../manager-core/platform/config");
+    const result = readSection("telemetry", { aiRoot, env });
+    return isPlainObject(result?.values) ? result.values : {};
+  } catch {
+    return {};
+  }
 }
 
+/**
+ * Effective settings: env > platform.json > default (D9). `config` is the
+ * telemetry section when the caller already has it.
+ */
+function resolveTelemetryConfig({ config, env = process.env, aiRoot, dataDir } = {}) {
+  const section = isPlainObject(config) ? config : readTelemetrySection(aiRoot, env);
+  const enabledEnv = envFlag(env.TELEMETRY_ENABLED);
+  const enabled = enabledEnv !== null ? enabledEnv : section.enabled !== false;
+  const configuredPath = String(env.AI_TELEMETRY_DB || section.dbPath || "").trim();
+  // A relative path is under the platform root, not the process's cwd.
+  const dbPath = configuredPath ? path.resolve(aiRoot || process.cwd(), configuredPath) : path.join(dataDir, DEFAULT_DB_FILE);
+  const interval = Number(env.TELEMETRY_SAMPLE_INTERVAL_MS);
+  const sampleIntervalMs = Number.isFinite(interval) && interval >= 5000 && interval <= 60_000
+    ? Math.floor(interval)
+    : Number.isFinite(section.sampleIntervalMs) ? section.sampleIntervalMs : 10_000;
+  return {
+    enabled,
+    dbPath,
+    sampleIntervalMs,
+    keepJsonlAccessLog: section.keepJsonlAccessLog !== false,
+    timezoneOffsetMinutes: Number.isFinite(section.timezoneOffsetMinutes) ? section.timezoneOffsetMinutes : null,
+    maxDbMb: Number.isFinite(section.maxDbMb) ? section.maxDbMb : undefined,
+    retention: isPlainObject(section.retention) ? { ...section.retention } : {},
+  };
+}
+
+// PLATFORM_MCP_AUDIT_LOG is read the way platform-mcp reads it: env, else
+// <AI_ROOT>/audit-logs/platform-mcp.jsonl, and only inside the AI root.
+function mcpAuditLogFile(aiRoot, env) {
+  const root = path.resolve(aiRoot);
+  const file = path.resolve(String(env.PLATFORM_MCP_AUDIT_LOG || path.join(root, "audit-logs", "platform-mcp.jsonl")));
+  const relative = path.relative(root, file);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return "";
+  return file;
+}
+
+/**
+ * The log tails of the EventCollector: process-exit.log of the entry and of
+ * each manager (<manager root>/logs/process-exit.log) and the platform-mcp
+ * audit log.
+ */
+function buildTailFiles({ aiRoot, managers = [], processExitLog = "", env = process.env } = {}) {
+  const tails = [];
+  if (processExitLog) tails.push({ id: "process-exit:entry", kind: "process-exit", managerId: "entry", file: processExitLog });
+  for (const manager of Array.isArray(managers) ? managers : []) {
+    const id = String(manager?.id || "").trim();
+    const root = String(manager?.root || "").trim();
+    if (!id || !root) continue;
+    tails.push({ id: `process-exit:${id}`, kind: "process-exit", managerId: id, file: path.join(root, "logs", "process-exit.log") });
+  }
+  const mcpLog = aiRoot ? mcpAuditLogFile(aiRoot, env) : "";
+  if (mcpLog) tails.push({ id: "mcp", kind: "mcp", file: mcpLog });
+  return tails;
+}
+
+function normalizeLogger(logger) {
+  const target = logger === undefined ? console : logger;
+  return (level, message) => {
+    if (!target) return;
+    const line = redactSecrets(String(message));
+    const method = typeof target[level] === "function" ? target[level] : target.log;
+    if (typeof method === "function") method.call(target, line);
+  };
+}
+
+/**
+ * options: { aiRoot, dataDir, managers, managerClient, events, config, env,
+ * logger, docker, processExitLog, platformConfigFile, openStore, now, timers }.
+ * - managers: the entry's MANAGERS ({id, root, port}).
+ * - managerClient: the entry's shared manager client (mgmt-proxy) with
+ *   get(managerId, target) → {ok, status, data}.
+ * - events: the ENT-EV bus.
+ * - docker: a docker event source ({precheck, open}), false to skip docker,
+ *   or {spawn, execFile} for the default one built from the environment.
+ * Returns { start(), stop(), recorder, handleHttp, handleInternal, status(),
+ * recordConfigChange(section, change, extra) }.
+ */
 function createTelemetryRuntime(options = {}) {
-  const aiRoot = options.aiRoot ? path.resolve(options.aiRoot) : path.resolve(__dirname, "..", "..");
-  const dataDir = options.dataDir ? path.resolve(options.dataDir) : path.join(aiRoot, "service-entry", "data");
   const env = options.env || process.env;
-  const logger = options.logger === undefined ? console : options.logger;
+  const aiRoot = options.aiRoot ? path.resolve(options.aiRoot) : "";
+  const dataDir = options.dataDir ? path.resolve(options.dataDir) : path.join(__dirname, "..", "data");
+  const log = normalizeLogger(options.logger);
+  const openStore = typeof options.openStore === "function" ? options.openStore : openTelemetryStore;
+  const configOption = () => (typeof options.config === "function" ? options.config() : options.config);
+  const settings = resolveTelemetryConfig({ config: configOption(), env, aiRoot, dataDir });
   const now = typeof options.now === "function" ? options.now : Date.now;
   const getBillingStore = typeof options.getBillingStore === "function" ? options.getBillingStore : null;
-
-  function readSettings() {
-    let values = {};
-    try {
-      if (typeof options.config === "function") values = plainObject(options.config());
-      else if (options.config && typeof options.config === "object") values = options.config;
-      else {
-        const section = core.platform.readSection("telemetry", { aiRoot, env });
-        const unknownSection = Array.isArray(section.errors) && section.errors.some((item) => item && item.code === "unknown_section");
-        values = unknownSection ? settingsFromEnv(env) : plainObject(section.values);
-      }
-    } catch (error) {
-      warn(`telemetry settings could not be read; using defaults: ${error && error.message}`);
-      values = {};
-    }
-    return { ...DEFAULT_SETTINGS, ...values, retention: { ...plainObject(values.retention) } };
-  }
-
-  function warn(message) {
-    if (!logger) return;
-    const method = typeof logger.warn === "function" ? logger.warn : logger.log;
-    if (typeof method === "function") method.call(logger, core.redactSecrets(`service-entry: ${message}`));
-  }
-
-  const settings = readSettings();
-  const enabled = settings.enabled !== false;
   let live = { at: now(), settings };
-  let store = null;
-  let started = false;
-  let stopped = false;
+  const managers = Array.isArray(options.managers) ? options.managers : [];
+  const client = options.managerClient && typeof options.managerClient.get === "function" ? options.managerClient : null;
 
-  function liveSettings() {
-    if (now() - live.at >= LIVE_SETTINGS_TTL_MS) live = { at: now(), settings: readSettings() };
-    return live.settings;
+  let store = null;
+  let events = null;
+  let started = false;
+  let starting = null;
+  let stopped = false;
+  let lastError = null;
+
+  function dockerSource() {
+    if (options.docker === false) return null;
+    if (options.docker && typeof options.docker.open === "function") return options.docker;
+    const extra = isPlainObject(options.docker) ? options.docker : {};
+    return dockerEventSourceFromEnv(env, extra);
   }
 
-  function databaseFile() {
-    const configured = String(settings.dbPath || "").trim();
-    if (!configured) return path.join(dataDir, "telemetry.sqlite");
-    return path.isAbsolute(configured) ? configured : path.resolve(aiRoot, configured);
+  function platformConfigFile() {
+    if (options.platformConfigFile !== undefined) return options.platformConfigFile || "";
+    if (!aiRoot) return "";
+    try {
+      return require("../../manager-core/platform/config").platformConfigFile({ aiRoot, env });
+    } catch {
+      return "";
+    }
   }
 
   // Billing's cached credential → customer lookup (TEL-14, §5.3).
@@ -124,7 +185,9 @@ function createTelemetryRuntime(options = {}) {
       : null;
   }
 
-  const recorder = enabled
+  // The recorder exists from creation and writes to whichever store is open;
+  // with telemetry off there is none, so the gateway runs as it did before.
+  const recorder = settings.enabled
     ? createGatewayRecorder({
       store: () => store,
       lookupCustomer,
@@ -132,59 +195,98 @@ function createTelemetryRuntime(options = {}) {
       bufferMax: options.bufferMax,
       flushMs: options.flushMs,
       now,
-      logger,
+      logger: options.logger === undefined ? console : options.logger,
     })
     : null;
 
-  async function start() {
-    if (!enabled || started || stopped) return status();
-    started = true;
+  async function startCollectors() {
     try {
-      store = await openTelemetryStore({
-        file: databaseFile(),
+      store = await openStore({
+        file: settings.dbPath,
+        logger: options.logger === undefined ? console : options.logger,
         inProcess: options.inProcess === true,
-        logger,
         // The worker runs the rollup (30 s) and retention (1 h) jobs itself.
         jobs: {
           enabled: true,
           ttl: settings.retention,
           maxDbMb: settings.maxDbMb,
-          timezoneOffsetMinutes: settings.timezoneOffsetMinutes ?? null,
+          timezoneOffsetMinutes: settings.timezoneOffsetMinutes,
           sampleIntervalMs: settings.sampleIntervalMs,
-          ...plainObject(options.jobs),
+          ...(isPlainObject(options.jobs) ? options.jobs : {}),
         },
       });
     } catch (error) {
-      store = null;
-      warn(`telemetry store could not be opened; requests are not recorded: ${error && error.message}`);
+      lastError = String(error?.message || error);
+      log("error", `Telemetry is off for this run: the store could not be opened (${lastError}).`);
+      return;
     }
-    recorder.start();
-    return status();
+    if (stopped) {
+      await store.close({ flushMs: 0 }).catch(() => {});
+      return;
+    }
+    events = createEventCollector({
+      store,
+      events: options.events || null,
+      managers: client ? { ids: managers.map((manager) => manager.id), get: (managerId, target) => client.get(managerId, target) } : null,
+      dockerEvents: dockerSource(),
+      tailFiles: buildTailFiles({ aiRoot, managers, processExitLog: options.processExitLog || "", env }),
+      platformConfigFile: platformConfigFile(),
+      now: options.now,
+      timers: options.timers,
+      logger: options.logger,
+    });
+    events.start();
   }
 
-  async function stop({ flushMs = DEFAULT_STOP_FLUSH_MS } = {}) {
-    if (stopped) return { ok: true };
+  function start() {
+    if (!settings.enabled) return Promise.resolve(api);
+    if (!starting) {
+      stopped = false;
+      started = true;
+      if (recorder) recorder.start();
+      starting = startCollectors().catch((error) => {
+        lastError = String(error?.message || error);
+        log("error", `Telemetry failed to start: ${lastError}`);
+      }).then(() => api);
+    }
+    return starting;
+  }
+
+  async function stop({ flushMs = STOP_FLUSH_MS } = {}) {
     stopped = true;
-    if (!enabled) return { ok: true };
+    if (starting) await starting;
+    starting = null;
+    const collector = events;
+    events = null;
+    if (collector) await collector.stop().catch(() => {});
+    // In-flight records are finalised and written before the store closes.
     const deadline = now() + Math.max(0, Number(flushMs) || 0);
-    const flushed = await recorder.stop({ flushMs });
-    const remaining = Math.max(0, deadline - now());
-    let closed = { ok: true, timedOut: false };
-    if (store) closed = await store.close({ flushMs: remaining }).catch(() => ({ ok: false, timedOut: true }));
+    let flushed = { timedOut: false };
+    if (recorder) flushed = (await recorder.stop({ flushMs }).catch(() => null)) || flushed;
+    const current = store;
+    store = null;
+    let closed = { timedOut: false };
+    if (current) closed = (await current.close({ flushMs: Math.max(0, deadline - now()) }).catch(() => ({ timedOut: true }))) || closed;
     return { ok: true, timedOut: Boolean(flushed.timedOut || closed.timedOut) };
   }
 
-  // One event row (§4.2 events). Until TEL-9's EventCollector exists the
-  // entry writes the few events it produces itself through here.
-  function recordEvent(event) {
-    if (!store || stopped || !event || typeof event !== "object") return Promise.resolve(null);
-    return store.insertEvents([{ at: now(), source: "entry", ...event }]).catch(() => null);
+  // telemetry.keepJsonlAccessLog (§6.5, live): the legacy gateway-access.log is
+  // fed from recorded rows until P8 turns it off.
+  function keepJsonlAccessLog() {
+    if (now() - live.at >= LIVE_SETTINGS_TTL_MS) {
+      live = { at: now(), settings: resolveTelemetryConfig({ config: configOption(), env, aiRoot, dataDir }) };
+    }
+    return live.settings.keepJsonlAccessLog !== false;
   }
 
-  // createAuthFailureGuard({ onBan }) → security.ban (§9 source 6).
+  // createAuthFailureGuard({ onBan }) → a security.ban event (§9 source 6).
+  // Dedupe on address and expiry makes a replay idempotent.
   function recordSecurityBan(ban = {}) {
+    if (!store || stopped) return Promise.resolve(null);
     const until = String(ban.until || "");
-    return recordEvent({
+    return Promise.resolve(store.insertEvents([{
+      at: now(),
+      source: "entry",
       type: "security.ban",
       severity: "warning",
       title: "Client address banned after repeated authentication failures",
@@ -196,44 +298,57 @@ function createTelemetryRuntime(options = {}) {
         i18nKey: "obs.event.securityBan",
       },
       dedupeKey: `security.ban:${String(ban.ip || "")}:${until}`,
-    });
+    }])).catch(() => null);
+  }
+
+  // Config writers call this after a successful write; it never throws.
+  function recordConfigChange(section, change, extra = {}) {
+    try {
+      return events ? events.recordConfigChange(section, change, extra) : null;
+    } catch {
+      return null;
+    }
   }
 
   function status() {
     return {
-      enabled,
+      enabled: settings.enabled,
       started,
       stopped,
-      store: !enabled ? "disabled" : store ? store.state : started ? "unavailable" : "not_started",
       recorder: recorder ? recorder.stats() : null,
       keepJsonlAccessLog: keepJsonlAccessLog(),
+      store: store ? store.state : settings.enabled ? "stopped" : "disabled",
+      lastError,
+      collectors: { events: events ? events.status() : null },
     };
   }
 
-  // telemetry.keepJsonlAccessLog (§6.5): the legacy gateway-access.log is fed
-  // from recorded rows until P8 turns it off.
-  function keepJsonlAccessLog() {
-    return liveSettings().keepJsonlAccessLog !== false;
-  }
-
-  return {
-    enabled,
-    recorder,
+  const api = {
     start,
     stop,
-    status,
-    recordEvent,
+    enabled: settings.enabled,
+    // null with telemetry off: the gateway then runs without records.
+    recorder,
     recordSecurityBan,
     keepJsonlAccessLog,
-    handleHttp: () => false,
-    handleInternal: () => false,
+    // /api/telemetry/* (TEL-11) and /internal/telemetry/* (TEL-6).
+    handleHttp: async () => false,
+    handleInternal: async () => false,
+    status,
+    recordConfigChange,
+    get collectors() {
+      return { events };
+    },
     get store() {
       return store;
     },
   };
+  return api;
 }
 
 module.exports = {
-  DEFAULT_SETTINGS,
+  buildTailFiles,
   createTelemetryRuntime,
+  mcpAuditLogFile,
+  resolveTelemetryConfig,
 };

@@ -15,7 +15,9 @@
 const descriptorSchema = require("./descriptor-schema");
 const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
+const dockerHost = require("./hosts/docker");
 const legacyAliases = require("./legacy-aliases");
+const metrics = require("./metrics");
 const paramCatalog = require("./param-catalog");
 const registry = require("./registry");
 const routes = require("./routes");
@@ -27,6 +29,11 @@ const adapters = Object.freeze({
   vllm: require("./adapters/vllm"),
   sglang: require("./adapters/sglang"),
   llamacpp: require("./adapters/llamacpp"),
+});
+
+// RuntimeHosts by kind (01 §13). Native (ENG-22) and external (ENG-19) join later.
+const hosts = Object.freeze({
+  docker: dockerHost,
 });
 
 /** descriptor (or its adapter id) -> adapter module, or null. */
@@ -48,6 +55,7 @@ module.exports = {
   buildEnginesPayload: routes.buildEnginesPayload,
   buildEngineSchemaPayload: routes.buildEngineSchemaPayload,
   validateDraftRequest: routes.validateDraftRequest,
+  readInstanceMetrics: routes.readInstanceMetrics,
   // Parameter catalogs (01 §9), the expression language recipes and catalogs
   // share (01 §10.2), and the legacy alias table (01 §9.5).
   paramCatalog,
@@ -60,10 +68,19 @@ module.exports = {
   legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
   legacyConfigToValues: legacyAliases.legacyConfigToValues,
   valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,
+  // The only Prometheus parser and the canonical metric mapping (01 §16.1,
+  // 00 §9.12): parsePrometheus, mapPrometheus and summarize for the 04
+  // collector, the histogram helpers, and the per-manager instance sampler.
+  metrics,
   // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
   adapters,
   adapterFor,
   renderRunArgs: dockerSegments.renderRunArgs,
+  // RuntimeHosts (01 §13): DockerHost for Docker Desktop and docker in WSL,
+  // configured by createDockerHostConfig (env > platform.json docker > Desktop).
+  hosts,
+  createDockerHost: dockerHost.createDockerHost,
+  createDockerHostConfig: dockerHost.createDockerHostConfig,
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "namespace": "hub",
+  "owner": "03-hub",
+  "asOf": "2026-10-14",
+  "staleAfterDays": 365,
+  "title": { "zh-CN": "模型下载中心", "en-US": "Model hub" },
+  "properties": {
+    "downloadsOwner": {
+      "type": "string", "enum": ["hub", "manager"], "default": "hub",
+      "title": { "zh-CN": "由谁执行模型下载", "en-US": "Who runs model downloads" },
+      "description": { "zh-CN": "hub：统一入口的下载中心排队执行所有模型下载，管理器重启或部署不会中断下载。manager：回退到两个管理器各自的旧下载队列，下载中心只提供模型库和搜索。修改后需要重启两个管理器。", "en-US": "hub: the model hub in service-entry queues and runs every model download, so manager restarts and deploys no longer interrupt them. manager: fall back to each manager's own legacy download queue; the hub then only serves the library and search. A change needs both managers restarted." },
+      "env": ["AI_HUB_DOWNLOADS_OWNER"], "envValues": { "hub": "hub", "manager": "manager" },
+      "consumers": ["entry", "vllm-manager", "llama-manager"],
+      "restartRequired": ["vllm-manager", "llama-manager"], "secret": false, "group": "downloads"
+    }
+  }
+}

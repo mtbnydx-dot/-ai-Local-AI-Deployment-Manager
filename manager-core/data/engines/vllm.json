@@ -72,7 +72,31 @@
   "managedFlags": ["--model", "--served-model-name", "--host", "--port", "--api-key"],
   "extraEnvAllow": ["VLLM_", "NCCL_", "PYTORCH_", "TORCH_", "TRITON_", "FLASHINFER_"],
   "introspection": { "entrypoint": "vllm", "argv": ["serve", "--help=all"], "parser": "argparse" },
-  "metricsMap": { "path": "/metrics", "format": "prometheus", "map": {} },
+  "metricsMap": {
+    "path": "/metrics",
+    "format": "prometheus",
+    "map": {
+      "promptTokensTotal": [{ "name": "vllm:prompt_tokens_total", "kind": "counter" }],
+      "generationTokensTotal": [{ "name": "vllm:generation_tokens_total", "kind": "counter" }],
+      "cachedPromptTokensTotal": [{ "name": "vllm:prompt_tokens_cached_total", "kind": "counter" }],
+      "requestsTotal": [{ "name": "vllm:request_success_total", "kind": "counter" }, { "name": "vllm:request_prompt_tokens_count", "kind": "counter" }],
+      "requestsByFinishReason": [{ "name": "vllm:request_success_total", "kind": "counter", "label": "finished_reason" }],
+      "prefixQueriesTotal": [{ "name": "vllm:prefix_cache_queries_total", "kind": "counter" }],
+      "prefixHitsTotal": [{ "name": "vllm:prefix_cache_hits_total", "kind": "counter" }],
+      "preemptionsTotal": [{ "name": "vllm:num_preemptions_total", "kind": "counter" }],
+      "specDraftTokensTotal": [{ "name": "vllm:spec_decode_num_draft_tokens_total", "kind": "counter" }, { "name": "vllm:spec_decode_draft_tokens_total", "kind": "counter" }],
+      "specAcceptedTokensTotal": [{ "name": "vllm:spec_decode_num_accepted_tokens_total", "kind": "counter" }, { "name": "vllm:spec_decode_num_accepted_tokens", "kind": "counter" }, { "name": "vllm:spec_decode_accepted_tokens_total", "kind": "counter" }],
+      "specDraftsTotal": [{ "name": "vllm:spec_decode_num_drafts_total", "kind": "counter" }, { "name": "vllm:spec_decode_num_drafts", "kind": "counter" }],
+      "requestsRunning": [{ "name": "vllm:num_requests_running", "kind": "gauge" }],
+      "requestsWaiting": [{ "name": "vllm:num_requests_waiting", "kind": "gauge" }],
+      "kvUsageRatio": [{ "name": "vllm:kv_cache_usage_perc", "kind": "gauge" }],
+      "ttftSeconds": [{ "name": "vllm:time_to_first_token_seconds", "kind": "histogram" }],
+      "itlSeconds": [{ "name": "vllm:inter_token_latency_seconds", "kind": "histogram" }],
+      "tpotSeconds": [{ "name": "vllm:request_time_per_output_token_seconds", "kind": "histogram" }],
+      "e2eSeconds": [{ "name": "vllm:e2e_request_latency_seconds", "kind": "histogram" }],
+      "queueSeconds": [{ "name": "vllm:request_queue_time_seconds", "kind": "histogram" }]
+    }
+  },
   "logPhases": [],
   "logFacts": [],
   "errorSignatures": []

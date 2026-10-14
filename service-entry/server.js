@@ -22,6 +22,7 @@ const { createRequestAuth, redactInstancesEventForViewer, redactStatusEventForVi
 const { createViewerRegistry } = require("./lib/viewer-allowlist");
 const { createEntryAdminAuth, createMachineAuth } = require("./lib/machine-auth");
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
+const { createModelHub, discoverHubClis } = require("../manager-core/model-hub");
 const { createTelemetryRuntime } = require("./lib/telemetry-runtime");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
@@ -43,9 +44,10 @@ const ROOT = __dirname;
 const AI_ROOT = path.dirname(ROOT);
 const PLATFORM_MCP_ENV_FILE = process.env.PLATFORM_MCP_ENV_FILE || path.join(AI_ROOT, ".runtime", "platform-mcp", "server.env");
 const PROCESS_EXIT_LOG = path.join(ROOT, "logs", "process-exit.log");
-// The telemetry runtime (04 TEL-5): the gateway recorder and its store. It is
-// set by startTelemetry() and cleared by stopTelemetry(); while it is null,
-// or disabled (TELEMETRY_ENABLED=0), the gateway runs exactly as before.
+// The telemetry runtime (04): the gateway recorder (TEL-5), the store and the
+// collectors. It is set by startTelemetry() and cleared by stopTelemetry();
+// while it is null, or disabled (TELEMETRY_ENABLED=0), the gateway runs
+// exactly as before.
 let telemetry = null;
 // 401 风暴防护：同一客户端地址在窗口内连续鉴权失败即临时封禁，公网扫描者
 // 拿到的是廉价的 429 而不是每次一遍密钥库读取 + 访问日志。
@@ -157,16 +159,19 @@ const ROUTE_MODULES = [
   "./lib/events", // ENT-EV1  /api/events, /api/events/recent
   "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
   "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
+  "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
   // "./lib/engine-routes",       // 01 ENG-19
-  // "./lib/hub-routes",          // 03 HUB-7
+  "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
   // "./lib/telemetry-routes",    // 04 TEL-*
   // "./lib/admin-session",       // 05 PUB-5
   // "./lib/platform-routes",     // 06 OPS-13
-  // "./lib/console-routes",      // 07 CON-2
 ];
 
 let server = null;
 let routeMounts = null;
+// The model hub (03), built once by startServiceEntry() and stopped by
+// shutdownSoon(). null in tests and when it could not be built.
+let modelHub = null;
 let billingStore = null;
 let accessStore = null;
 let accessStoreFailure = null;
@@ -601,6 +606,7 @@ async function handleRequest(req, res, routes = null) {
       }
       const currentSettings = await getFleetSettings();
       const settings = await saveFleetSettings({ ...currentSettings, ...(body.settings || body) });
+      telemetry?.recordConfigChange("fleet", { before: currentSettings, after: settings });
       const fleet = await buildServiceEntryFleetSnapshot(settings);
       return sendJson(res, { ok: true, settings, fleet });
     }
@@ -812,21 +818,31 @@ async function startServiceEntry() {
   // The access store opens and the managers' legacy keys migrate before the
   // entry listens (05 §6, §6.7); a failure of either leaves the entry up.
   await prepareAccessStore();
-  // The gateway recorder and its store (04 TEL-5). A store that cannot open
-  // leaves telemetry degraded; it never stops the entry.
-  await startTelemetry().catch((error) => {
-    console.warn(core.redactSecrets(`service-entry: telemetry did not start: ${error?.message || error}`));
-  });
   // Publish the trust token before accepting traffic so managers started
   // independently can verify proxied requests from the first one.
   await security.issueTrustToken().catch((error) => {
     console.warn(`Unable to publish gateway trust token: ${error.message}`);
   });
   // The request-auth seam and the event bus come first, then every route
-  // module; a module that fails to mount never stops the entry.
-  routeMounts = await mountRouteModules({ ctx: createRouteContext() });
+  // module; a module that fails to mount never stops the entry. The model
+  // hub is built before the mount (its routes read ctx.hub) and started after
+  // listen, so loading its files never delays the port.
+  const ctx = createRouteContext();
+  modelHub = createEntryHub({ events: ctx.bus });
+  ctx.hub = modelHub;
+  routeMounts = await mountRouteModules({ ctx });
   // Every module has registered its viewer routes; a later one would be a bug.
   routeMounts.ctx.auth.viewerRegistry.freeze();
+  // The gateway recorder, the store and the collectors (04). A store that
+  // cannot open leaves telemetry degraded; it never stops the entry.
+  await startTelemetry({
+    managers: MANAGERS,
+    managerClient: routeMounts.ctx.managerClient,
+    events: routeMounts.ctx.bus,
+    processExitLog: PROCESS_EXIT_LOG,
+  }).catch((error) => {
+    console.warn(core.redactSecrets(`service-entry: telemetry did not start: ${error?.message || error}`));
+  });
   server = createServiceEntryServer({ routes: routeMounts });
   server.on("error", (error) => {
     const detail = error?.code === "EADDRINUSE"
@@ -837,8 +853,52 @@ async function startServiceEntry() {
   });
   server.listen(PORT, HOST, () => {
     logStartupSummary(security.policy());
+    modelHub?.start().catch((error) => {
+      console.warn(core.redactSecrets(`Model hub failed to start; its routes answer hub_unavailable: ${error?.message || error}`));
+    });
   });
   return server;
+}
+
+// The entry's one model hub (03 §3): data under service-entry/data/hub, the
+// download CLIs in the managers' discovery order. Building it touches no
+// file; a hub that cannot be built leaves its routes answering 503.
+function createEntryHub({ events = null } = {}) {
+  try {
+    const { hfCli, modelScopeCli } = discoverHubClis({ aiRoot: AI_ROOT, env: process.env });
+    return createModelHub({
+      aiRoot: AI_ROOT,
+      dataDir: path.join(ROOT, "data", "hub"),
+      hfHome: process.env.HF_HOME || path.join(AI_ROOT, "cache", "huggingface"),
+      hfCli,
+      modelScopeCli,
+      events,
+      managers: MANAGERS.map(({ id, port }) => ({ id, port })),
+      logger: console,
+    });
+  } catch (error) {
+    console.warn(core.redactSecrets(`Model hub could not be created; its routes answer hub_unavailable: ${error?.message || error}`));
+    return null;
+  }
+}
+
+// Stops the hub (flushing its files) within `timeoutMs`; never throws.
+async function stopModelHub(hub, { reason = "shutdown", timeoutMs = 5000 } = {}) {
+  if (!hub || typeof hub.stop !== "function") return;
+  let timer;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => hub.stop({ reason })),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    console.warn(core.redactSecrets(`Model hub did not stop cleanly: ${error?.message || error}`));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Only the real warning goes to stderr. The hint is advice for a default
@@ -861,6 +921,7 @@ if (require.main === module) {
     label: "service-entry",
     file: PROCESS_EXIT_LOG,
     onSignal: async () => {
+      await stopModelHub(modelHub);
       await security.revokeTrustToken().catch(() => {});
       const closing = server ? new Promise((resolve) => server.close(resolve)) : null;
       // In-flight records are finalised and flushed (2 s cap) even when open
@@ -2216,6 +2277,9 @@ function handleTelemetryRow(row, { req } = {}) {
 // telemetry.enabled false (TELEMETRY_ENABLED=0) nothing is recorded.
 async function startTelemetry(options = {}) {
   if (telemetry) return telemetry;
+  // Smoke runs (AI_FRONTEND_SMOKE=1) start next to whatever listens on the
+  // default ports, so they run no recorder and no collectors.
+  if (process.env.AI_FRONTEND_SMOKE === "1") return null;
   const runtime = createTelemetryRuntime({
     aiRoot: AI_ROOT,
     dataDir: path.join(ROOT, "data"),
@@ -2233,11 +2297,21 @@ async function stopTelemetry(options = {}) {
   const runtime = telemetry;
   telemetry = null;
   if (!runtime) return { ok: true };
+  // Telemetry never holds up shutdown for long.
+  let guard = null;
   try {
-    return await runtime.stop(options);
+    return await Promise.race([
+      runtime.stop(options),
+      new Promise((resolve) => {
+        guard = setTimeout(() => resolve({ ok: true, timedOut: true }), 3000);
+        guard.unref?.();
+      }),
+    ]);
   } catch (error) {
     console.warn(core.redactSecrets(`service-entry: telemetry did not stop cleanly: ${error?.message || error}`));
     return { ok: false };
+  } finally {
+    clearTimeout(guard);
   }
 }
 
@@ -3027,10 +3101,14 @@ function sendJson(res, data, status = 200, extraHeaders = {}) {
 
 function shutdownSoon(options = {}) {
   const targetServer = options.server !== undefined ? options.server : server;
+  const hub = options.hub !== undefined ? options.hub : modelHub;
   const exitProcess = typeof options.exit === "function" ? options.exit : (code) => process.exit(code);
   const graceMs = Math.max(100, Number(options.graceMs || process.env.SERVICE_ENTRY_SHUTDOWN_GRACE_MS || 5000));
   const delayMs = options.delayMs ?? 100;
   setTimeout(async () => {
+    // The hub goes first (03 §8): its in-process downloads become
+    // interrupted and its files are flushed before anything else closes.
+    await stopModelHub(hub, { reason: "shutdown", timeoutMs: graceMs });
     // Drop the published token so a stale file cannot authorize a later process.
     await security.revokeTrustToken().catch(() => {});
     const closeBillingStore = () => {
@@ -3160,6 +3238,8 @@ module.exports = {
   mountRouteModules,
   // The live mount table (ctx.bus, ctx.auth) once startServiceEntry() ran.
   getRouteMounts: () => routeMounts,
+  // The model hub once startServiceEntry() built it (03 §3).
+  getModelHub: () => modelHub,
   flushTtsSettlements: () => ttsReconciler.flush(),
   resetEntryRateLimitBuckets() {
     entryRateBuckets.clear();

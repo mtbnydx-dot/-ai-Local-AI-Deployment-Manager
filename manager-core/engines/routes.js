@@ -4,9 +4,11 @@
 //   GET  /api/engines                      hosted engines, runtimes, health
 //   POST /api/engines/descriptors/validate side-effect-free draft validation
 //   GET  /api/engines/:engineId/schema     parameter catalog + availability + facts
-// Later packages (metrics, launch plan) add their routes here too.
+//   GET  /api/instances/:id/metrics        latest sampler snapshot (01 §16.1)
+// Later packages (launch plan) add their routes here too.
 // Docker is touched only through the injected getImageStatus/listManagedContainers
-// reads, both cached, so a dashboard polling this route stays cheap.
+// reads, both cached, so a dashboard polling this route stays cheap. The metrics
+// route reads the background sampler only: no engine scrape and no Docker call.
 
 const { isPlainObject } = require("./descriptor-schema");
 const { buildFacts, buildSchemaPayload, getParamCatalog, hostFactsFromGpus } = require("./param-catalog");
@@ -336,6 +338,31 @@ function validateDraftRequest(registry, body) {
   return { status: 200, payload: { ok, kind, errors } };
 }
 
+/**
+ * GET /api/instances/:id/metrics → { status, payload }. The id resolves
+ * against the sampler's last listing (the P0-RT-4 ownership rule), never
+ * against Docker, and the body is the sampler's latest snapshot: a request
+ * never scrapes. Until the first listing has finished, no id can be judged
+ * unknown, so the answer is 503 metrics_not_ready instead of a false 404.
+ */
+function readInstanceMetrics(sampler, instanceId) {
+  if (!sampler.ready()) {
+    return {
+      status: 503,
+      payload: errorEnvelope("metrics_not_ready", "The metrics sampler has not listed this manager's instances yet.", "Retry in a few seconds."),
+    };
+  }
+  const payload = sampler.read(typeof instanceId === "string" ? instanceId : "");
+  if (!payload) {
+    const shown = String(instanceId ?? "").slice(0, 64);
+    return {
+      status: 404,
+      payload: errorEnvelope("unknown_instance", `Unknown instance: ${shown || "(empty)"}`, "List this manager's instances with GET /api/instances."),
+    };
+  }
+  return { status: 200, payload };
+}
+
 function registerEngineRoutes(app, deps = {}) {
   const { registry } = deps;
   if (!registry || typeof registry.hostedBy !== "function" || typeof registry.checkOverride !== "function") {
@@ -358,6 +385,7 @@ function registerEngineRoutes(app, deps = {}) {
       now,
     })
     : null;
+  const metricsSampler = deps.metricsSampler && typeof deps.metricsSampler.read === "function" ? deps.metricsSampler : null;
 
   app.get("/api/engines", async (_req, res) => {
     try {
@@ -401,7 +429,14 @@ function registerEngineRoutes(app, deps = {}) {
     return res.status(status).json(payload);
   });
 
-  return { presence, instanceCounts };
+  if (metricsSampler) {
+    app.get("/api/instances/:id/metrics", (req, res) => {
+      const { status, payload } = readInstanceMetrics(metricsSampler, req.params?.id);
+      res.status(status).json(payload);
+    });
+  }
+
+  return { presence, instanceCounts, metricsSampler };
 }
 
 module.exports = {
@@ -411,6 +446,7 @@ module.exports = {
   createImagePresenceProbe,
   createInstanceCounter,
   errorEnvelope,
+  readInstanceMetrics,
   registerEngineRoutes,
   validateDraftRequest,
 };

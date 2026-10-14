@@ -1,0 +1,32 @@
+{
+  "description": "platform-mcp audit lines (platform-mcp/src/audit.ts), one object per line.",
+  "lines": [
+    {
+      "requestId": "6f1c2b1e-0000-4000-8000-000000000001",
+      "timestamp": "2026-10-14T08:05:00.000Z",
+      "tool": "get_platform_status",
+      "clientId": "client-fixture",
+      "ok": true,
+      "durationMs": 42,
+      "errorCode": null
+    },
+    {
+      "requestId": "6f1c2b1e-0000-4000-8000-000000000002",
+      "timestamp": "2026-10-14T08:05:01.000Z",
+      "tool": "start_model",
+      "clientId": "client-fixture",
+      "ok": false,
+      "durationMs": 1500,
+      "errorCode": "ManagerRequestError"
+    },
+    {
+      "requestId": "6f1c2b1e-0000-4000-8000-000000000003",
+      "timestamp": "2026-10-14T08:05:02.000Z",
+      "tool": "list_models",
+      "clientId": "client-fixture",
+      "ok": false,
+      "durationMs": 0,
+      "errorCode": "rate_limited"
+    }
+  ]
+}
