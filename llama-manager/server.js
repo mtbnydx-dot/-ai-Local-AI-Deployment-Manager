@@ -624,6 +624,8 @@ const cacheHitTracker = createCacheHitTracker({
 const AUDIT_PASSWORD_FILE = process.env.AI_AUDIT_PASSWORD_FILE || path.join(CONFIG.auditRoot, "audit-admin-password.txt");
 const launchProfilesStore = core.createLaunchProfilesStore({
   file: CONFIG.launchProfiles,
+  // 01 §22: written as v2 entries (flat config kept); the v1 file is saved once.
+  toV2: (profile) => core.engines.legacyProfileToV2(profile, { managerId: CONFIG.managerId }),
   readJsonFile,
   writeJsonFile,
   normalizeLaunchProfile,
@@ -1880,6 +1882,8 @@ async function loadRecentLaunches() {
   recentLaunches = Array.isArray(data?.launches)
     ? data.launches.filter((item) => item && item.config && item.config.model).slice(0, MAX_RECENT_LAUNCHES)
     : [];
+  // 01 §22: the file's entries enter LaunchStore once, as source "migration".
+  trackLaunch(() => launchStore.importRecentLaunches(recentLaunches));
 }
 
 // Keep the successful llama.cpp launch presets available after a manager restart.

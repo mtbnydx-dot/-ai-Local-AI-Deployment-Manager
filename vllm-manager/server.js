@@ -500,6 +500,8 @@ const {
 } = statsLedgerStore;
 const launchProfilesStore = core.createLaunchProfilesStore({
   file: CONFIG.launchProfiles,
+  // 01 §22: written as v2 entries (flat config kept); the v1 file is saved once.
+  toV2: (profile) => core.engines.legacyProfileToV2(profile, { managerId: CONFIG.managerId }),
   readJsonFile,
   writeJsonFile,
   normalizeLaunchProfile,
@@ -1865,6 +1867,8 @@ async function loadRecentLaunches() {
   recentLaunches = Array.isArray(data?.launches)
     ? data.launches.filter((item) => item && item.config && item.config.model).slice(0, MAX_RECENT_LAUNCHES)
     : [];
+  // 01 §22: the file's entries enter LaunchStore once, as source \"migration\".
+  trackLaunch(() => launchStore.importRecentLaunches(recentLaunches));
 }
 
 // 启动成功后记录配置，按 model+name 去重，最新的排最前

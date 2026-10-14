@@ -17,6 +17,7 @@ const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
 const dockerHost = require("./hosts/docker");
 const launchStore = require("./launch-store");
+const externalHost = require("./hosts/external");
 const legacyAliases = require("./legacy-aliases");
 const memoryModels = require("./memory-models");
 const metrics = require("./metrics");
@@ -37,11 +38,13 @@ const adapters = Object.freeze({
   vllm: require("./adapters/vllm"),
   sglang: require("./adapters/sglang"),
   llamacpp: require("./adapters/llamacpp"),
+  external: require("./adapters/external"),
 });
 
-// RuntimeHosts by kind (01 §13). Native (ENG-22) and external (ENG-19) join later.
+// RuntimeHosts by kind (01 §13). Native (ENG-22) joins later.
 const hosts = Object.freeze({
   docker: dockerHost,
+  external: externalHost,
 });
 
 /** descriptor (or its adapter id) -> adapter module, or null. */
@@ -91,6 +94,7 @@ module.exports = {
   legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
   legacyConfigToValues: legacyAliases.legacyConfigToValues,
   valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,
+  legacyProfileToV2: legacyAliases.legacyProfileToV2,
   requestToLegacyRunOptions: legacyAliases.requestToLegacyRunOptions,
   // The launch-plan resolver (01 §11): POST /api/launch/plan and /api/start.
   launchPlan: resolveLaunchPlanModule,
@@ -123,9 +127,14 @@ module.exports = {
   hosts,
   createDockerHost: dockerHost.createDockerHost,
   createDockerHostConfig: dockerHost.createDockerHostConfig,
+<<<<<<< HEAD
   // The runtime supervisor (01 §14): the one start pipeline both managers run.
   runtimeSupervisor,
   createRuntimeSupervisor: runtimeSupervisor.createRuntimeSupervisor,
+=======
+  // ExternalHost (01 §20): health, model listing and resolveUpstream for registered endpoints.
+  createExternalHost: externalHost.createExternalHost,
+>>>>>>> feature/platform-overhaul-20261014
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,
