@@ -137,3 +137,9 @@ Object.defineProperty(module.exports, "platform", { enumerable: true, configurab
 module.exports.internalAuth = require("./internal-auth");
 // New subsystems are namespaces, never spread into the flat list (00 §9.17).
 module.exports.engines = require("./engines");
+// core.telemetry (04 §3): the telemetry pieces that run inside the managers.
+// The stats sampler's functions are on the namespace itself
+// (core.telemetry.createStatsSampler, applyStatsWindows...) and its module is
+// core.telemetry.statsSampler.
+const statsSampler = require("./telemetry/collectors/manager-stats-sampler");
+module.exports.telemetry = Object.freeze({ ...statsSampler, statsSampler });
