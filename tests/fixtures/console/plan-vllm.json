@@ -1,0 +1,83 @@
+{
+  "ok": false,
+  "engineId": "vllm",
+  "catalogVersion": "2026-10-14+2026-10-14",
+  "planHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "prospective": false,
+  "runtime": {
+    "id": "vllm@0.28.0",
+    "image": "local/vllm:fixture"
+  },
+  "recipe": null,
+  "values": {
+    "servedName": {
+      "value": "qwen3.8",
+      "source": "user"
+    },
+    "contextLength": {
+      "value": 131072,
+      "source": "user"
+    },
+    "concurrency": {
+      "value": 2,
+      "source": "user"
+    },
+    "vllm.gpuMemoryUtilization": {
+      "value": 0.92,
+      "source": "platform-default"
+    },
+    "speculative.method": {
+      "value": "mtp",
+      "source": "planner",
+      "reason": "规划器：模型自带 MTP 头 / Planner: the model ships MTP heads"
+    },
+    "speculative.numTokens": {
+      "value": 3,
+      "source": "planner",
+      "reason": "规划器建议 3 / Planner suggests 3"
+    },
+    "quantization": {
+      "value": "modelopt_fp4",
+      "source": "model",
+      "reason": "config.json quantization_config.quant_method"
+    },
+    "reasoningParser": {
+      "value": "qwen3",
+      "source": "knowledge"
+    },
+    "kvCacheDtype": {
+      "value": "auto",
+      "source": "platform-default"
+    },
+    "dtype": {
+      "value": "auto",
+      "source": "engine-default"
+    }
+  },
+  "overrides": [],
+  "blockers": [],
+  "errors": [
+    {
+      "field": "contextLength",
+      "code": "out_of_range",
+      "message": "上下文长度 131072 超出显存允许的范围 / Context length 131072 does not fit in memory",
+      "suggestion": {
+        "value": 65536,
+        "why": "按当前显存，65536 可放下 / 65536 fits in the current memory"
+      }
+    },
+    {
+      "field": "tensorParallel",
+      "code": "gpu_count_mismatch",
+      "message": "张量并行 2 需要 2 张 GPU，当前只选了 1 张 / Tensor parallel 2 needs 2 GPUs but 1 is selected"
+    }
+  ],
+  "warnings": [],
+  "steps": [],
+  "command": null,
+  "memory": null,
+  "admission": {
+    "verdict": "block",
+    "message": "显存不足 / Not enough memory"
+  }
+}

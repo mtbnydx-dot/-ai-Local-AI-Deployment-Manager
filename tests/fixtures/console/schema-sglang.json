@@ -1,0 +1,5571 @@
+{
+  "ok": true,
+  "engineId": "sglang",
+  "catalogVersion": "2026-10-14+2026-10-14",
+  "runtime": {
+    "runtimeId": "sglang@0.5.17",
+    "manifestKey": "sglang",
+    "image": "lmsysorg/sglang@sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df",
+    "status": "pinned",
+    "features": {},
+    "introspected": false,
+    "introspectedAt": null,
+    "flagCount": null
+  },
+  "facts": {
+    "host.platform": "win32",
+    "host.anySm12x": true,
+    "host.maxComputeCap": 12,
+    "model.capabilityId": "qwen3.8-flash-next",
+    "model.familyId": "qwen3.8-flash-next",
+    "model.quantMethod": "modelopt_fp4",
+    "model.architectures": [
+      "Qwen3_8NextForCausalLM"
+    ],
+    "model.nativeMtp.supported": false,
+    "runtime.id": "sglang@0.5.17",
+    "runtime.compatVersion": "0.5.17",
+    "instance.mode": null,
+    "runtime.features.linearAttnBackends": null,
+    "runtime.features.mambaControls": null,
+    "runtime.features.pleOffload": null
+  },
+  "groups": [
+    {
+      "id": "model",
+      "order": 10,
+      "label": {
+        "zh": "模型与模板",
+        "en": "Model & template"
+      }
+    },
+    {
+      "id": "capacity",
+      "order": 20,
+      "label": {
+        "zh": "容量与并发",
+        "en": "Capacity & concurrency"
+      }
+    },
+    {
+      "id": "memory",
+      "order": 30,
+      "label": {
+        "zh": "显存与 KV 缓存",
+        "en": "Memory & KV cache"
+      }
+    },
+    {
+      "id": "parallelism",
+      "order": 40,
+      "label": {
+        "zh": "多卡与并行",
+        "en": "Multi-GPU & parallelism"
+      }
+    },
+    {
+      "id": "speculative",
+      "order": 50,
+      "label": {
+        "zh": "推测解码",
+        "en": "Speculative decoding"
+      }
+    },
+    {
+      "id": "reasoning-tools",
+      "order": 60,
+      "label": {
+        "zh": "思考与工具调用",
+        "en": "Reasoning & tools"
+      }
+    },
+    {
+      "id": "multimodal",
+      "order": 70,
+      "label": {
+        "zh": "多模态",
+        "en": "Multimodal"
+      }
+    },
+    {
+      "id": "network-security",
+      "order": 100,
+      "label": {
+        "zh": "网络与安全",
+        "en": "Network & security"
+      }
+    },
+    {
+      "id": "runtime-expert",
+      "order": 110,
+      "label": {
+        "zh": "运行时与专家选项",
+        "en": "Runtime & expert"
+      }
+    }
+  ],
+  "params": [
+    {
+      "id": "servedName",
+      "group": "model",
+      "level": "basic",
+      "order": 10,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "服务名",
+        "en": "Served model name"
+      },
+      "summary": {
+        "zh": "客户端在 API 请求里用来指定这个模型的名字。",
+        "en": "The name clients use to pick this model in API requests."
+      },
+      "help": {
+        "what": {
+          "zh": "OpenAI 兼容接口 /v1/models 返回的模型名。留空时按模型目录或仓库名自动生成。",
+          "en": "The model name listed by the OpenAI-compatible /v1/models endpoint. Empty means it is derived from the model folder or repository."
+        },
+        "whenToChange": {
+          "zh": "客户端配置里写死了某个模型名，或想给同一模型的不同启动方案起不同名字时。",
+          "en": "When a client is configured with a fixed model name, or to tell launch variants of one model apart."
+        },
+        "tradeoffs": {
+          "zh": "改名后，仍按旧名字调用的客户端需要同步修改。",
+          "en": "Clients that still call the old name must be updated."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 128,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--served-model-name"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "servedName",
+        "codec": "direct",
+        "field": "name"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--served-model-name",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--served-model-name",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "role",
+      "group": "model",
+      "level": "advanced",
+      "order": 15,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "模型用途",
+        "en": "Model role"
+      },
+      "summary": {
+        "zh": "这个模型是对话模型还是向量（embedding）模型。",
+        "en": "Whether this model is a chat model or an embedding model."
+      },
+      "help": {
+        "what": {
+          "zh": "chat 不加任何参数；embedding 对应 --is-embedding。",
+          "en": "chat adds nothing; embedding maps to --is-embedding."
+        },
+        "whenToChange": {
+          "zh": "启动向量模型时。对话模型保持默认。",
+          "en": "When you start an embedding model. Leave chat models at the default."
+        },
+        "tradeoffs": {
+          "zh": "embedding 实例不提供对话接口。",
+          "en": "Embedding instances do not serve the chat API."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "chat",
+          "label": {
+            "zh": "对话",
+            "en": "Chat"
+          }
+        },
+        {
+          "value": "embedding",
+          "label": {
+            "zh": "向量（embedding）",
+            "en": "Embedding"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "chat",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--is-embedding",
+        "map": {
+          "chat": [],
+          "embedding": [
+            "--is-embedding"
+          ]
+        }
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--is-embedding",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--is-embedding",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "dtype",
+      "group": "model",
+      "level": "advanced",
+      "order": 20,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "计算精度",
+        "en": "Compute dtype"
+      },
+      "summary": {
+        "zh": "权重与激活使用的浮点精度；auto 按模型配置选择。",
+        "en": "The floating-point type for weights and activations; auto follows the model config."
+      },
+      "help": {
+        "what": {
+          "zh": "模型计算使用的数据类型。auto 读取模型 config.json 中的 torch_dtype。",
+          "en": "The data type used for model computation. auto reads torch_dtype from the model's config.json."
+        },
+        "whenToChange": {
+          "zh": "较老的显卡不支持 BF16 时改为 float16；排查数值问题时可以试 float32。",
+          "en": "Use float16 on older GPUs without BF16 support; try float32 when chasing numerical problems."
+        },
+        "tradeoffs": {
+          "zh": "float32 精度最高，但显存和速度代价都很大；float16 在部分模型上可能溢出。",
+          "en": "float32 is the most precise but costs a lot of memory and speed; float16 can overflow on some models."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动（按模型）",
+            "en": "Auto (from the model)"
+          }
+        },
+        {
+          "value": "bfloat16",
+          "label": {
+            "zh": "BF16",
+            "en": "BF16"
+          }
+        },
+        {
+          "value": "float16",
+          "label": {
+            "zh": "FP16",
+            "en": "FP16"
+          }
+        },
+        {
+          "value": "half",
+          "label": {
+            "zh": "FP16（half）",
+            "en": "FP16 (half)"
+          }
+        },
+        {
+          "value": "float32",
+          "label": {
+            "zh": "FP32",
+            "en": "FP32"
+          }
+        },
+        {
+          "value": "float",
+          "label": {
+            "zh": "FP32（float）",
+            "en": "FP32 (float)"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "auto",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--dtype"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "launchDtype",
+        "codec": "direct",
+        "field": "dtype"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--dtype",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--dtype",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "quantization",
+      "group": "model",
+      "level": "advanced",
+      "order": 30,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "权重量化方式",
+        "en": "Weight quantization"
+      },
+      "summary": {
+        "zh": "权重使用的量化格式；留空时从模型配置自动识别。",
+        "en": "The quantization format of the weights; empty detects it from the model config."
+      },
+      "help": {
+        "what": {
+          "zh": "量化权重的解码方式，例如 AWQ、GPTQ、FP8 或 NVFP4。模型 config.json 声明了 quant_method 时以模型为准。",
+          "en": "How quantized weights are decoded, for example AWQ, GPTQ, FP8 or NVFP4. When the model's config.json declares quant_method, the model wins."
+        },
+        "whenToChange": {
+          "zh": "模型没有声明量化方式，或要把未量化的权重在线量化成 FP8 时。",
+          "en": "When the model does not declare its quantization, or to quantize unquantized weights to FP8 while loading."
+        },
+        "tradeoffs": {
+          "zh": "格式选错会加载失败；在线量化省显存，但可能略微降低质量。",
+          "en": "A wrong format fails to load; quantizing while loading saves memory but can cost a little quality."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "awq",
+          "label": {
+            "zh": "AWQ",
+            "en": "AWQ"
+          }
+        },
+        {
+          "value": "gptq",
+          "label": {
+            "zh": "GPTQ",
+            "en": "GPTQ"
+          }
+        },
+        {
+          "value": "bitsandbytes",
+          "label": {
+            "zh": "BitsAndBytes",
+            "en": "BitsAndBytes"
+          }
+        },
+        {
+          "value": "fp8",
+          "label": {
+            "zh": "FP8",
+            "en": "FP8"
+          }
+        },
+        {
+          "value": "modelopt",
+          "label": {
+            "zh": "ModelOpt FP8",
+            "en": "ModelOpt FP8"
+          }
+        },
+        {
+          "value": "modelopt_fp4",
+          "label": {
+            "zh": "NVFP4（ModelOpt）",
+            "en": "NVFP4 (ModelOpt)"
+          }
+        },
+        {
+          "value": "compressed-tensors",
+          "label": {
+            "zh": "Compressed Tensors",
+            "en": "Compressed Tensors"
+          }
+        }
+      ],
+      "choicesFrom": "introspect:--quantization",
+      "pattern": "^[a-z0-9_.-]{1,64}$",
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--quantization"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "launchQuantization",
+        "codec": "direct",
+        "field": "quantization"
+      },
+      "appliesWhen": null,
+      "fromModel": true,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--quantization",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--quantization",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "tokenizer",
+      "group": "model",
+      "level": "expert",
+      "order": 40,
+      "type": "path",
+      "unit": null,
+      "label": {
+        "zh": "分词器路径",
+        "en": "Tokenizer path"
+      },
+      "summary": {
+        "zh": "单独指定分词器所在的目录或 Hugging Face 仓库。",
+        "en": "A separate folder or Hugging Face repository for the tokenizer."
+      },
+      "help": {
+        "what": {
+          "zh": "默认使用模型目录里的分词器。GGUF 模型常常需要指向对应的原始仓库。",
+          "en": "By default the tokenizer inside the model folder is used. GGUF models often need the original repository here."
+        },
+        "whenToChange": {
+          "zh": "模型目录缺少分词器文件，或 GGUF 转换出的分词器不准确时。",
+          "en": "When the model folder has no tokenizer files, or the tokenizer converted from GGUF is inaccurate."
+        },
+        "tradeoffs": {
+          "zh": "分词器与模型不匹配会导致输出乱码。",
+          "en": "A tokenizer that does not match the model produces garbled output."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": "containerPath",
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--tokenizer-path"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--tokenizer-path",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--tokenizer-path",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "trustRemoteCode",
+      "group": "model",
+      "level": "advanced",
+      "order": 50,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "信任模型仓库代码",
+        "en": "Trust model repository code"
+      },
+      "summary": {
+        "zh": "允许加载模型仓库自带的 Python 代码。",
+        "en": "Allows the Python code shipped with the model repository to run."
+      },
+      "help": {
+        "what": {
+          "zh": "新架构或自定义架构的模型需要执行仓库里的建模代码才能加载。",
+          "en": "New or custom architectures need the repository's modeling code to load."
+        },
+        "whenToChange": {
+          "zh": "模型说明要求 trust_remote_code，或加载时报告未知架构时。",
+          "en": "When the model card asks for trust_remote_code, or loading reports an unknown architecture."
+        },
+        "tradeoffs": {
+          "zh": "会在容器里执行第三方代码，只对来源可信的模型开启。",
+          "en": "Third-party code runs inside the container; turn it on only for models from sources you trust."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--trust-remote-code"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": null,
+        "codec": "direct",
+        "field": "trustRemoteCode"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--trust-remote-code",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--trust-remote-code",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.loadFormat",
+      "group": "model",
+      "level": "expert",
+      "order": 60,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "权重加载格式",
+        "en": "Weight load format"
+      },
+      "summary": {
+        "zh": "指定权重文件的格式；auto 按目录里的文件判断。",
+        "en": "Which weight file format to load; auto decides from the files present."
+      },
+      "help": {
+        "what": {
+          "zh": "auto 在目录里只有 GGUF 文件时按 GGUF 加载，否则按 Hugging Face 格式加载。",
+          "en": "auto loads GGUF when the folder only holds GGUF files, and the Hugging Face format otherwise."
+        },
+        "whenToChange": {
+          "zh": "目录里同时有多种格式、自动判断不对时。",
+          "en": "When a folder holds several formats and auto picks the wrong one."
+        },
+        "tradeoffs": {
+          "zh": "vLLM 对 GGUF 的支持仍是实验性的。",
+          "en": "vLLM's GGUF support is still experimental."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动",
+            "en": "Auto"
+          }
+        },
+        {
+          "value": "hf",
+          "label": {
+            "zh": "HF / safetensors",
+            "en": "HF / safetensors"
+          }
+        },
+        {
+          "value": "gguf",
+          "label": {
+            "zh": "GGUF 单文件",
+            "en": "Single GGUF file"
+          }
+        },
+        {
+          "value": "safetensors",
+          "label": {
+            "zh": "safetensors（显式传给引擎）",
+            "en": "safetensors (passed to the engine)"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "auto",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--load-format"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "loadFormat",
+        "codec": "direct",
+        "field": "loadFormat"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--load-format",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--load-format",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "hfOverrides",
+      "group": "model",
+      "level": "expert",
+      "order": 90,
+      "type": "json",
+      "unit": null,
+      "label": {
+        "zh": "覆盖 HF 配置（JSON）",
+        "en": "Override HF config (JSON)"
+      },
+      "summary": {
+        "zh": "用一个 JSON 对象覆盖模型 config.json 里的字段。",
+        "en": "Overrides fields of the model's config.json with a JSON object."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --json-model-override-args。最长 8 KiB。扩展上下文时可填 {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}，辅助界面会帮你生成。",
+          "en": "Maps to --json-model-override-args. At most 8 KiB. To extend the context use {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}; a helper in the console builds it for you."
+        },
+        "whenToChange": {
+          "zh": "需要改模型配置而不想复制整个模型目录，例如用 YaRN 扩展上下文，或修正错误的架构名。",
+          "en": "When you need to change the model config without copying the model folder, for example to extend the context with YaRN or fix a wrong architecture name."
+        },
+        "tradeoffs": {
+          "zh": "字段写错或和权重不匹配会让加载失败或输出异常；它会改变模型行为，请对照模型卡。",
+          "en": "A wrong field or one that does not match the weights fails to load or garbles output; it changes model behaviour, so check it against the model card."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 8192,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "json",
+        "flag": "--json-model-override-args"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--json-model-override-args",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--json-model-override-args",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "contextLength",
+      "group": "capacity",
+      "level": "basic",
+      "order": 10,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "上下文长度（每请求）",
+        "en": "Context length (per request)"
+      },
+      "summary": {
+        "zh": "单个请求最多可用的 token 数，包括提示词和生成内容。",
+        "en": "The most tokens one request may use, prompt and output together."
+      },
+      "help": {
+        "what": {
+          "zh": "模型在一次请求里能看到的最大 token 数。更长的请求会被拒绝。",
+          "en": "The largest number of tokens the model sees in one request. Longer requests are rejected."
+        },
+        "whenToChange": {
+          "zh": "处理长文档、长对话或整个代码库时调大；只做短问答时调小以节省显存。",
+          "en": "Raise it for long documents, long chats or whole code bases; lower it for short questions to save memory."
+        },
+        "tradeoffs": {
+          "zh": "越大越占 KV 缓存显存，同样的显存能同时服务的长请求越少。",
+          "en": "Larger values need more KV-cache memory, so fewer long requests fit at the same time."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4194304,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": 8192,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--context-length"
+      },
+      "flags": null,
+      "vramEffect": "kv-linear",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "maxModelLen",
+        "codec": "direct",
+        "field": "maxModelLen"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--context-length",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--context-length",
+      "platformDefaultValue": 8192
+    },
+    {
+      "id": "concurrency",
+      "group": "capacity",
+      "level": "basic",
+      "order": 20,
+      "type": "int",
+      "unit": "requests",
+      "label": {
+        "zh": "最大并发请求",
+        "en": "Max concurrent requests"
+      },
+      "summary": {
+        "zh": "引擎同时处理的请求数上限，多出来的请求排队等待。",
+        "en": "How many requests the engine serves at the same time; the rest wait in a queue."
+      },
+      "help": {
+        "what": {
+          "zh": "同时运行的请求（序列）数量上限。",
+          "en": "The cap on requests (sequences) running at once."
+        },
+        "whenToChange": {
+          "zh": "多人或多个客户端同时使用时调大；单人使用长上下文时调小。",
+          "en": "Raise it when several people or clients share the model; lower it for one user with long context."
+        },
+        "tradeoffs": {
+          "zh": "并发越高总吞吐越大，但每个请求分到的 KV 缓存越少，长请求更容易排队。",
+          "en": "More concurrency raises total throughput, but each request gets less KV cache and long requests queue sooner."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 1024,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": 4,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-running-requests"
+      },
+      "flags": null,
+      "vramEffect": "kv-linear",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "maxNumSeqs",
+        "codec": "direct",
+        "field": "maxNumSeqs"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-running-requests",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-running-requests",
+      "platformDefaultValue": 4
+    },
+    {
+      "id": "sglang.chunkedPrefillSize",
+      "group": "capacity",
+      "level": "advanced",
+      "order": 40,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "分块预填充大小",
+        "en": "Chunked prefill size"
+      },
+      "summary": {
+        "zh": "长提示词按这么多 token 一块分批预填充。",
+        "en": "Long prompts are prefilled in chunks of this many tokens."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --chunked-prefill-size，平台默认 8192。",
+          "en": "Maps to --chunked-prefill-size; the platform default is 8192."
+        },
+        "whenToChange": {
+          "zh": "预填充长提示词时显存峰值过高就调小。",
+          "en": "Lower it when prefilling long prompts peaks too high in memory."
+        },
+        "tradeoffs": {
+          "zh": "越小越省激活显存，但长提示词开始回答得更慢。",
+          "en": "Smaller chunks save activation memory but make long prompts slower to start answering."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4194304,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": 8192,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--chunked-prefill-size"
+      },
+      "flags": null,
+      "vramEffect": "activations",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangChunkedPrefillSize",
+        "codec": "direct",
+        "field": "sglangChunkedPrefillSize",
+        "unset": 0
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--chunked-prefill-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--chunked-prefill-size",
+      "platformDefaultValue": 8192
+    },
+    {
+      "id": "sglang.maxPrefillTokens",
+      "group": "capacity",
+      "level": "advanced",
+      "order": 45,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "单批预填充 token 上限",
+        "en": "Prefill tokens per batch"
+      },
+      "summary": {
+        "zh": "一批预填充最多处理多少个 token。",
+        "en": "The most tokens one prefill batch may process."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --max-prefill-tokens。它和“分块预填充大小”一起决定预填充的显存峰值。",
+          "en": "Maps to --max-prefill-tokens. Together with “Chunked prefill size” it sets the prefill memory peak."
+        },
+        "whenToChange": {
+          "zh": "长提示词预填充时显存紧张就调小；显存宽裕且想加快预填充就调大。",
+          "en": "Lower it when long-prompt prefill runs short of memory; raise it to prefill faster when memory is plentiful."
+        },
+        "tradeoffs": {
+          "zh": "越大预填充越快，但激活值占用的显存越多，也可能挤占解码。",
+          "en": "Larger values prefill faster but use more activation memory and can crowd out decoding."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4194304,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--max-prefill-tokens"
+      },
+      "flags": null,
+      "vramEffect": "activations",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-prefill-tokens",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-prefill-tokens",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.maxRunningRequests",
+      "group": "capacity",
+      "level": "expert",
+      "order": 50,
+      "type": "int",
+      "unit": "requests",
+      "label": {
+        "zh": "实际运行请求上限",
+        "en": "Effective running-request cap"
+      },
+      "summary": {
+        "zh": "直接设定 SGLang 的运行请求上限，优先于“最大并发请求”；已验证方案通常按缓存容量推导它。",
+        "en": "Sets SGLang's running-request cap directly and wins over Max concurrent requests; validated recipes usually derive it from cache capacity."
+      },
+      "help": {
+        "what": {
+          "zh": "设置后用它代替最大并发请求作为 --max-running-requests。",
+          "en": "When set, it replaces Max concurrent requests as --max-running-requests."
+        },
+        "whenToChange": {
+          "zh": "混合架构的状态缓存只够少数请求同时运行时。",
+          "en": "When a hybrid architecture's state cache only fits a few requests at once."
+        },
+        "tradeoffs": {
+          "zh": "低于最大并发请求时，多出来的请求会排队。",
+          "en": "Below Max concurrent requests, the extra requests wait in the queue."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 1024,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-running-requests"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-running-requests",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-running-requests",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.memFractionStatic",
+      "group": "memory",
+      "level": "basic",
+      "order": 10,
+      "type": "float",
+      "unit": "fraction",
+      "label": {
+        "zh": "静态显存比例（启动时空闲显存）",
+        "en": "Static memory fraction (of free VRAM at start)"
+      },
+      "summary": {
+        "zh": "SGLang 按启动时空闲显存的这个比例分配权重和 KV 池。",
+        "en": "SGLang sizes the weights plus the KV pool as this fraction of the memory free when it starts."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --mem-fraction-static。它是空闲显存的比例，不是整卡比例：桌面或其它模型已经占用的显存不算在内。",
+          "en": "Maps to --mem-fraction-static. It is a fraction of free memory, not of the whole GPU: memory the desktop or other models already use is not counted."
+        },
+        "whenToChange": {
+          "zh": "启动时报显存不足就调小；需要更大的 KV 池时调大。",
+          "en": "Lower it when the start runs out of memory; raise it for a bigger KV pool."
+        },
+        "tradeoffs": {
+          "zh": "过高会让 CUDA Graph 和激活没有余量而崩溃；配合 KV 池容量上限可以让显存准入的预算可预测。",
+          "en": "Too high leaves no room for CUDA graphs and activations and can crash; pairing it with a KV pool size limit keeps the admission budget predictable."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 0.05,
+        "max": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": {
+        "expr": {
+          "if": [
+            {
+              "eq": [
+                {
+                  "fact": "instance.mode"
+                },
+                "parallel"
+              ]
+            },
+            0.7,
+            0.92
+          ]
+        }
+      },
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--mem-fraction-static"
+      },
+      "flags": null,
+      "vramEffect": "fraction",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "gpuMemoryUtilization",
+        "codec": "direct",
+        "field": "gpuMemoryUtilization"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--mem-fraction-static",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--mem-fraction-static",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "kvCacheDtype",
+      "group": "memory",
+      "level": "basic",
+      "order": 30,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "KV 缓存精度",
+        "en": "KV cache precision"
+      },
+      "summary": {
+        "zh": "KV 缓存的数据类型；FP8 大约能省一半 KV 显存。",
+        "en": "The data type of the KV cache; FP8 roughly halves KV memory."
+      },
+      "help": {
+        "what": {
+          "zh": "保存注意力键值（KV）使用的精度。auto 与模型计算精度相同。",
+          "en": "The precision used to store attention keys and values. auto matches the model's compute dtype."
+        },
+        "whenToChange": {
+          "zh": "需要更长上下文或更多并发、而显存不够时选 FP8。",
+          "en": "Choose FP8 when you need longer context or more concurrency than memory allows."
+        },
+        "tradeoffs": {
+          "zh": "FP8 KV 可能轻微影响长上下文质量，部分模型路径不支持。",
+          "en": "FP8 KV can slightly reduce long-context quality, and some model paths do not support it."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动（同计算精度）",
+            "en": "Auto (same as compute)"
+          }
+        },
+        {
+          "value": "fp8",
+          "label": {
+            "zh": "FP8",
+            "en": "FP8"
+          }
+        },
+        {
+          "value": "fp8_e5m2",
+          "label": {
+            "zh": "FP8 E5M2",
+            "en": "FP8 E5M2"
+          }
+        },
+        {
+          "value": "fp8_e4m3",
+          "label": {
+            "zh": "FP8 E4M3",
+            "en": "FP8 E4M3"
+          }
+        }
+      ],
+      "choicesFrom": "introspect:--kv-cache-dtype",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "auto",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--kv-cache-dtype"
+      },
+      "flags": null,
+      "vramEffect": "kv-dtype",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "kvCacheDtype",
+        "codec": "direct",
+        "field": "kvCacheDtype"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--kv-cache-dtype",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--kv-cache-dtype",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "prefixCaching",
+      "group": "memory",
+      "level": "advanced",
+      "order": 60,
+      "type": "tristate",
+      "unit": null,
+      "label": {
+        "zh": "前缀缓存",
+        "en": "Prefix caching"
+      },
+      "summary": {
+        "zh": "复用开头相同的提示词的计算结果，加快多轮对话和重复的系统提示。",
+        "en": "Reuses work for prompts that start the same way, which speeds up multi-turn chats and repeated system prompts."
+      },
+      "help": {
+        "what": {
+          "zh": "SGLang 默认开启 RadixAttention 前缀缓存；选择关会传 --disable-radix-cache。",
+          "en": "SGLang keeps its RadixAttention prefix cache on by default; Off passes --disable-radix-cache."
+        },
+        "whenToChange": {
+          "zh": "排查与缓存相关的输出异常，或模型路径不支持前缀缓存时关闭。",
+          "en": "Turn it off to rule out cache-related output problems, or when the model path does not support it."
+        },
+        "tradeoffs": {
+          "zh": "开启几乎总是更快，会用一部分 KV 缓存保存可复用的前缀。",
+          "en": "On is almost always faster; it keeps part of the KV cache for reusable prefixes."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": true,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "bool-pair",
+        "falseFlag": "--disable-radix-cache"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [
+          "disablePrefixCaching"
+        ],
+        "domId": "disablePrefixCaching",
+        "codec": "prefixCachingPair",
+        "field": "enablePrefixCaching"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--disable-radix-cache",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--disable-radix-cache",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.maxTotalTokens",
+      "group": "memory",
+      "level": "advanced",
+      "order": 220,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "KV 池容量上限",
+        "en": "KV pool size limit"
+      },
+      "summary": {
+        "zh": "SGLang 共享 KV 池最多容纳的 token 数，所有并发请求共用。",
+        "en": "Maximum tokens in SGLang's shared KV pool; all concurrent requests share it."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --max-total-tokens。不设置时，SGLang 用静态显存比例在权重之外剩下的全部空间。",
+          "en": "Maps to --max-total-tokens. Unset, SGLang fills whatever the static memory fraction leaves after the weights."
+        },
+        "whenToChange": {
+          "zh": "需要限制显存占用，或让显存准入的预算可预测时。",
+          "en": "To bound memory use and make the admission budget predictable."
+        },
+        "tradeoffs": {
+          "zh": "越小越省显存，但长上下文的并发请求会排队。",
+          "en": "Smaller saves memory; long concurrent requests queue."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4194304,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-total-tokens"
+      },
+      "flags": null,
+      "vramEffect": "kv-pool",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangMaxTotalTokens",
+        "codec": "direct",
+        "field": "sglangMaxTotalTokens",
+        "unset": 0
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-total-tokens",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-total-tokens",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.pageSize",
+      "group": "memory",
+      "level": "expert",
+      "order": 230,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "KV 页大小",
+        "en": "KV page size"
+      },
+      "summary": {
+        "zh": "KV 缓存按多少个 token 为一页来分配。",
+        "en": "How many tokens make up one KV cache page."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --page-size。部分注意力后端和混合架构要求特定的页大小。",
+          "en": "Maps to --page-size. Some attention backends and hybrid architectures need a specific page size."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案或注意力后端的要求设置。",
+          "en": "Set it as a validated recipe or the attention backend requires."
+        },
+        "tradeoffs": {
+          "zh": "页越大，前缀复用的粒度越粗，未填满的页浪费越多。",
+          "en": "Bigger pages reuse prefixes more coarsely and waste more on partly filled pages."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4096,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--page-size"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangPageSize",
+        "codec": "direct",
+        "field": "sglangPageSize",
+        "unset": 0
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--page-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--page-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.pleOffloadEmbedding",
+      "group": "memory",
+      "level": "expert",
+      "order": 240,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "PLE 嵌入放内存",
+        "en": "PLE embeddings in RAM"
+      },
+      "summary": {
+        "zh": "把逐层嵌入（PLE）表放到系统内存，给 KV 缓存腾出显存。",
+        "en": "Keeps per-layer embedding (PLE) tables in system RAM to free GPU memory for the KV cache."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --ple-offload-embedding，需要运行时支持 PLE 卸载。",
+          "en": "Maps to --ple-offload-embedding and needs a runtime that supports PLE offload."
+        },
+        "whenToChange": {
+          "zh": "带 PLE 的模型显存紧张、又需要长上下文时。",
+          "en": "When a model with PLE tables is short on memory and needs long context."
+        },
+        "tradeoffs": {
+          "zh": "占用系统内存，嵌入查找会稍慢。",
+          "en": "Uses system RAM, and embedding lookups get slightly slower."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--ple-offload-embedding"
+      },
+      "flags": null,
+      "vramEffect": "offload",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangPleOffloadEmbedding",
+        "codec": "direct",
+        "field": "sglangPleOffloadEmbedding",
+        "formDefault": true
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": "pleOffload",
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--ple-offload-embedding",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--ple-offload-embedding",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.mambaSsmDtype",
+      "group": "memory",
+      "level": "expert",
+      "order": 250,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "Mamba 状态精度",
+        "en": "Mamba state dtype"
+      },
+      "summary": {
+        "zh": "混合 Mamba/线性注意力模型保存递归状态的精度。",
+        "en": "The precision hybrid Mamba or linear-attention models keep their recurrent state in."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --mamba-ssm-dtype，需要运行时支持 Mamba 控制项。",
+          "en": "Maps to --mamba-ssm-dtype and needs a runtime with Mamba controls."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案设置；输出异常时可以试更高精度。",
+          "en": "Set it as a validated recipe says; try a higher precision when output looks wrong."
+        },
+        "tradeoffs": {
+          "zh": "精度越高状态缓存越占显存。",
+          "en": "Higher precision makes the state cache use more memory."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "bfloat16"
+        },
+        {
+          "value": "float16"
+        },
+        {
+          "value": "float32"
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--mamba-ssm-dtype"
+      },
+      "flags": null,
+      "vramEffect": "kv-dtype",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangMambaSsmDtype",
+        "codec": "direct",
+        "field": "sglangMambaSsmDtype"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": "mambaControls",
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--mamba-ssm-dtype",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--mamba-ssm-dtype",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.mambaRadixCacheStrategy",
+      "group": "memory",
+      "level": "expert",
+      "order": 260,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "Mamba 缓存策略",
+        "en": "Mamba cache strategy"
+      },
+      "summary": {
+        "zh": "混合模型的状态缓存如何配合前缀缓存使用。",
+        "en": "How a hybrid model's state cache works with the prefix cache."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --mamba-radix-cache-strategy，需要运行时支持 Mamba 控制项。",
+          "en": "Maps to --mamba-radix-cache-strategy and needs a runtime with Mamba controls."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案设置。",
+          "en": "Set it as a validated recipe says."
+        },
+        "tradeoffs": {
+          "zh": "额外缓冲能提高前缀复用率，但会占用更多显存。",
+          "en": "Extra buffers improve prefix reuse but use more memory."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "extra_buffer"
+        },
+        {
+          "value": "extra_buffer_lazy"
+        },
+        {
+          "value": "no_buffer"
+        },
+        {
+          "value": "auto"
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--mamba-radix-cache-strategy"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangMambaRadixCacheStrategy",
+        "codec": "direct",
+        "field": "sglangMambaRadixCacheStrategy"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": "mambaControls",
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--mamba-radix-cache-strategy",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--mamba-radix-cache-strategy",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.mambaTrackInterval",
+      "group": "memory",
+      "level": "expert",
+      "order": 270,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "Mamba 跟踪间隔",
+        "en": "Mamba track interval"
+      },
+      "summary": {
+        "zh": "每隔多少个 token 保存一次可复用的状态快照。",
+        "en": "How many tokens pass between reusable state snapshots."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --mamba-track-interval，需要运行时支持 Mamba 控制项。",
+          "en": "Maps to --mamba-track-interval and needs a runtime with Mamba controls."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案设置。",
+          "en": "Set it as a validated recipe says."
+        },
+        "tradeoffs": {
+          "zh": "间隔越小前缀复用越细，但快照占用更多显存。",
+          "en": "Shorter intervals reuse prefixes more finely, but snapshots use more memory."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4194304,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--mamba-track-interval"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangMambaTrackInterval",
+        "codec": "direct",
+        "field": "sglangMambaTrackInterval",
+        "unset": 0
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": "mambaControls",
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--mamba-track-interval",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--mamba-track-interval",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.maxMambaCacheSize",
+      "group": "memory",
+      "level": "expert",
+      "order": 280,
+      "type": "int",
+      "unit": "slots",
+      "label": {
+        "zh": "Mamba 缓存槽数",
+        "en": "Mamba cache slots"
+      },
+      "summary": {
+        "zh": "状态缓存最多保存的槽位数，限制了能同时运行的请求数。",
+        "en": "The most slots the state cache holds, which limits how many requests run at once."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --max-mamba-cache-size，需要运行时支持 Mamba 控制项。",
+          "en": "Maps to --max-mamba-cache-size and needs a runtime with Mamba controls."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案设置；需要更多并发、显存又有余量时调大。",
+          "en": "Set it as a validated recipe says; raise it for more concurrency when memory allows."
+        },
+        "tradeoffs": {
+          "zh": "槽位越多越占显存。",
+          "en": "More slots use more memory."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4096,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-mamba-cache-size"
+      },
+      "flags": null,
+      "vramEffect": "kv-pool",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangMaxMambaCacheSize",
+        "codec": "direct",
+        "field": "sglangMaxMambaCacheSize",
+        "unset": 0
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": "mambaControls",
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-mamba-cache-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-mamba-cache-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.hicache.enable",
+      "group": "memory",
+      "level": "expert",
+      "order": 290,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "分层 KV 缓存（内存）",
+        "en": "Hierarchical KV cache (RAM)"
+      },
+      "summary": {
+        "zh": "把放不下显存的 KV 缓存换到系统内存里，需要时再读回。",
+        "en": "Moves KV cache that does not fit in VRAM to system memory and reads it back when needed."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --enable-hierarchical-cache。内存池大小由“内存与显存缓存比例”决定。",
+          "en": "Maps to --enable-hierarchical-cache. The memory pool size follows “RAM-to-VRAM cache ratio”."
+        },
+        "whenToChange": {
+          "zh": "多轮长对话或共享长前缀很多，显存里的前缀缓存放不下、命中率低时。",
+          "en": "For many multi-turn long conversations or shared long prefixes that do not fit in the VRAM prefix cache and give a low hit rate."
+        },
+        "tradeoffs": {
+          "zh": "换入换出要经过 PCIe 和内存，命中缓存时也比显存慢；需要足够的系统内存。",
+          "en": "Swapping crosses PCIe and system memory and is slower than a VRAM hit; it needs enough system RAM."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-bool",
+        "flag": "--enable-hierarchical-cache"
+      },
+      "flags": null,
+      "vramEffect": "offload",
+      "rules": [
+        {
+          "kind": "warnIf",
+          "when": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "fact": "host.platform"
+                  },
+                  "win32"
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "param": "sglang.hicache.enable"
+                  },
+                  true
+                ]
+              }
+            ]
+          },
+          "code": "hicache_wsl_unverified",
+          "message": {
+            "zh": "CPU HiCache 在 WSL 下未验证",
+            "en": "CPU HiCache is unverified under WSL"
+          }
+        }
+      ],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--enable-hierarchical-cache",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--enable-hierarchical-cache",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.hicache.ratio",
+      "group": "memory",
+      "level": "expert",
+      "order": 295,
+      "type": "float",
+      "unit": "x",
+      "label": {
+        "zh": "内存与显存缓存比例",
+        "en": "RAM-to-VRAM cache ratio"
+      },
+      "summary": {
+        "zh": "内存里的 KV 缓存池是显存池的多少倍。",
+        "en": "How many times larger the RAM KV pool is than the VRAM pool."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --hicache-ratio。只在开启分层 KV 缓存时使用，不设置时 SGLang 取 2。",
+          "en": "Maps to --hicache-ratio. It is only used with the hierarchical KV cache on; unset, SGLang uses 2."
+        },
+        "whenToChange": {
+          "zh": "系统内存很充裕并希望缓存更多前缀时调大；内存紧张时调小。",
+          "en": "Raise it when system RAM is plentiful and you want to cache more prefixes; lower it when RAM is tight."
+        },
+        "tradeoffs": {
+          "zh": "比例越大占用的系统内存越多，可能挤占其他程序。",
+          "en": "A larger ratio uses more system RAM and can crowd out other programs."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 32,
+        "step": 0.1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--hicache-ratio"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": {
+        "eq": [
+          {
+            "param": "sglang.hicache.enable"
+          },
+          true
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--hicache-ratio",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--hicache-ratio",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "tensorParallel",
+      "group": "parallelism",
+      "level": "advanced",
+      "order": 10,
+      "type": "int",
+      "unit": "GPUs",
+      "label": {
+        "zh": "张量并行卡数",
+        "en": "Tensor-parallel GPUs"
+      },
+      "summary": {
+        "zh": "把每一层切开，放到几张 GPU 上一起计算。",
+        "en": "How many GPUs split each layer between them."
+      },
+      "help": {
+        "what": {
+          "zh": "张量并行在层内切分权重，需要 GPU 之间有高速互联。",
+          "en": "Tensor parallelism splits the weights inside each layer and needs fast links between the GPUs."
+        },
+        "whenToChange": {
+          "zh": "单卡放不下模型，或想用多卡加快单个请求时。",
+          "en": "When the model does not fit on one GPU, or to speed up single requests with several GPUs."
+        },
+        "tradeoffs": {
+          "zh": "卡数必须能整除注意力头数；卡间带宽不足时提速有限。",
+          "en": "The GPU count must divide the attention heads; slow links limit the speed-up."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": 1,
+      "platformDefault": 1,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--tp-size"
+      },
+      "flags": null,
+      "vramEffect": "split",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "tensorParallelSize",
+        "codec": "direct",
+        "field": "tensorParallelSize"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--tp-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--tp-size",
+      "platformDefaultValue": 1
+    },
+    {
+      "id": "pipelineParallel",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 20,
+      "type": "int",
+      "unit": "stages",
+      "label": {
+        "zh": "流水线并行段数",
+        "en": "Pipeline stages"
+      },
+      "summary": {
+        "zh": "把模型的层按顺序分成几段，放到不同的 GPU 上。",
+        "en": "Splits the model's layers into consecutive stages on different GPUs."
+      },
+      "help": {
+        "what": {
+          "zh": "流水线并行按层分段，GPU 之间的通信量比张量并行少。",
+          "en": "Pipeline parallelism splits by layer and needs less GPU-to-GPU traffic than tensor parallelism."
+        },
+        "whenToChange": {
+          "zh": "单卡放不下模型、而 GPU 之间只有 PCIe 等较慢的连接时。",
+          "en": "When the model does not fit on one GPU and the GPUs only have slower links such as PCIe."
+        },
+        "tradeoffs": {
+          "zh": "单个请求的延迟通常高于张量并行，需要一定并发才能让各段都忙起来。",
+          "en": "Single requests are usually slower than with tensor parallelism; it needs concurrency to keep every stage busy."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": 1,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          1,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--pp-size"
+      },
+      "flags": null,
+      "vramEffect": "split",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--pp-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--pp-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "dataParallel",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 30,
+      "type": "int",
+      "unit": "replicas",
+      "label": {
+        "zh": "数据并行副本",
+        "en": "Data-parallel replicas"
+      },
+      "summary": {
+        "zh": "在多张 GPU 上各放一份完整模型，分摊请求。",
+        "en": "Runs a full copy of the model per GPU group and spreads requests across the copies."
+      },
+      "help": {
+        "what": {
+          "zh": "每个副本独立处理请求，总吞吐随副本数增加。",
+          "en": "Each replica serves requests on its own, so total throughput grows with the replica count."
+        },
+        "whenToChange": {
+          "zh": "单卡放得下模型、需要更高总吞吐时。",
+          "en": "When one GPU holds the model and you need more total throughput."
+        },
+        "tradeoffs": {
+          "zh": "每个副本都需要完整的权重显存，单个请求不会变快。",
+          "en": "Every replica needs the full weight memory, and single requests do not get faster."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": 1,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          1,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--dp-size"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--dp-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--dp-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.epSize",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 35,
+      "type": "int",
+      "unit": "GPUs",
+      "label": {
+        "zh": "专家并行卡数",
+        "en": "Expert-parallel size"
+      },
+      "summary": {
+        "zh": "MoE 专家分布到几张卡上。",
+        "en": "How many GPUs the MoE experts are spread over."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --ep-size。设置后优先于“MoE 专家并行”开关（后者按张量并行卡数传 --ep-size）。",
+          "en": "Maps to --ep-size. When set it wins over the “MoE expert parallel” switch, which passes --ep-size with the tensor-parallel GPU count."
+        },
+        "whenToChange": {
+          "zh": "MoE 模型要把专家分到与张量并行不同数量的卡上时。",
+          "en": "When an MoE model's experts should spread over a different number of GPUs than tensor parallelism uses."
+        },
+        "tradeoffs": {
+          "zh": "需要足够的卡数，并且要能整除专家数和张量并行卡数；卡间通信量上升。",
+          "en": "It needs enough GPUs and must divide the expert count and the tensor-parallel size; inter-GPU traffic goes up."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          1,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--ep-size"
+      },
+      "flags": null,
+      "vramEffect": "split",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--ep-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--ep-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "expertParallel",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 40,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "MoE 专家并行",
+        "en": "MoE expert parallel"
+      },
+      "summary": {
+        "zh": "把混合专家（MoE）模型的专家分到多张 GPU 上。",
+        "en": "Spreads the experts of a mixture-of-experts (MoE) model across GPUs."
+      },
+      "help": {
+        "what": {
+          "zh": "开启后按张量并行卡数传 --ep-size，让专家分布在同一组 GPU 上。",
+          "en": "When on, --ep-size is passed with the tensor-parallel GPU count so the experts spread over the same GPUs."
+        },
+        "whenToChange": {
+          "zh": "多卡运行大型 MoE 模型、张量并行扩展效果不好时。",
+          "en": "For large MoE models on several GPUs when tensor parallelism scales poorly."
+        },
+        "tradeoffs": {
+          "zh": "专家负载不均时，部分 GPU 会成为瓶颈。",
+          "en": "Uneven expert load can make some GPUs the bottleneck."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "tensorParallel",
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--ep-size"
+      },
+      "flags": null,
+      "vramEffect": "split",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--ep-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--ep-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "speculative.method",
+      "group": "speculative",
+      "level": "basic",
+      "order": 10,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "推测解码方式",
+        "en": "Speculative decoding method"
+      },
+      "summary": {
+        "zh": "先用草稿预测几个 token，再一次性验证，以加快生成。",
+        "en": "Drafts several tokens and verifies them in one step to speed up generation."
+      },
+      "help": {
+        "what": {
+          "zh": "可用方式取决于引擎和模型：MTP 需要模型自带多 token 预测层，草稿模型方式需要额外的小模型。",
+          "en": "The methods available depend on the engine and model: MTP needs the model's own multi-token prediction layers, draft-model methods need an extra small model."
+        },
+        "whenToChange": {
+          "zh": "单个请求生成太慢、显存还有余量时开启；排查问题时关闭。",
+          "en": "Turn it on when single requests generate too slowly and memory allows; turn it off when troubleshooting."
+        },
+        "tradeoffs": {
+          "zh": "额外占用显存；并发越高加速越小，草稿接受率低时甚至会变慢。",
+          "en": "Uses extra memory; the gain shrinks at high concurrency and can become a slowdown when few drafts are accepted."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "off",
+          "label": {
+            "zh": "关闭（稳定优先）",
+            "en": "Off (stability first)"
+          }
+        },
+        {
+          "value": "dspark",
+          "label": {
+            "zh": "DSpark（草稿模型）",
+            "en": "DSpark (draft model)"
+          }
+        },
+        {
+          "value": "mtp",
+          "label": {
+            "zh": "MTP / NEXTN（仅限已验证方案）",
+            "en": "MTP / NEXTN (validated recipes only)"
+          }
+        },
+        {
+          "value": "eagle",
+          "label": {
+            "zh": "EAGLE（需要草稿模型）",
+            "en": "EAGLE (needs a draft model)"
+          }
+        },
+        {
+          "value": "eagle3",
+          "label": {
+            "zh": "EAGLE3（需要草稿模型）",
+            "en": "EAGLE3 (needs a draft model)"
+          }
+        },
+        {
+          "value": "nextn",
+          "label": {
+            "zh": "NEXTN（模型自带 MTP 层）",
+            "en": "NEXTN (the model's own MTP layers)"
+          }
+        },
+        {
+          "value": "standalone",
+          "label": {
+            "zh": "独立草稿模型（需要草稿模型）",
+            "en": "Standalone draft model (needs a draft model)"
+          }
+        },
+        {
+          "value": "ngram",
+          "label": {
+            "zh": "N-gram（无需草稿模型）",
+            "en": "N-gram (no draft model)"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": "off",
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--speculative-algorithm",
+        "map": {
+          "eagle": [
+            "--speculative-algorithm",
+            "EAGLE"
+          ],
+          "eagle3": [
+            "--speculative-algorithm",
+            "EAGLE3"
+          ],
+          "nextn": [
+            "--speculative-algorithm",
+            "NEXTN"
+          ],
+          "standalone": [
+            "--speculative-algorithm",
+            "STANDALONE"
+          ],
+          "ngram": [
+            "--speculative-algorithm",
+            "NGRAM"
+          ]
+        }
+      },
+      "flags": null,
+      "vramEffect": "draft",
+      "rules": [
+        {
+          "kind": "errorIf",
+          "when": {
+            "and": [
+              {
+                "in": [
+                  {
+                    "param": "speculative.method"
+                  },
+                  [
+                    "mtp",
+                    "qwen3_next_mtp"
+                  ]
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "fact": "model.nativeMtp.supported"
+                  },
+                  false
+                ]
+              }
+            ]
+          },
+          "code": "mtp_not_in_checkpoint",
+          "message": {
+            "zh": "这个模型的权重里没有 MTP 层，不能使用 MTP 推测解码；请关闭推测解码或换用其他方式。",
+            "en": "This checkpoint has no MTP layers, so MTP speculative decoding cannot start; turn speculative decoding off or pick another method."
+          }
+        },
+        {
+          "kind": "errorIf",
+          "when": {
+            "and": [
+              {
+                "in": [
+                  {
+                    "param": "speculative.method"
+                  },
+                  [
+                    "eagle",
+                    "eagle3",
+                    "standalone"
+                  ]
+                ]
+              },
+              {
+                "or": [
+                  {
+                    "not": {
+                      "isSet": {
+                        "param": "speculative.draftModel"
+                      }
+                    }
+                  },
+                  {
+                    "eq": [
+                      {
+                        "param": "speculative.draftModel"
+                      },
+                      ""
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "code": "speculative_needs_draft_model",
+          "message": {
+            "zh": "这种推测解码方式必须指定草稿模型，请在“草稿模型”里选择一个，或换用其他方式。",
+            "en": "This speculative decoding method needs a draft model; choose one in “Draft model” or pick another method."
+          }
+        }
+      ],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "speculativeMode",
+        "codec": "direct",
+        "field": "speculativeMode"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-algorithm",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-algorithm",
+      "platformDefaultValue": "off"
+    },
+    {
+      "id": "speculative.numTokens",
+      "group": "speculative",
+      "level": "advanced",
+      "order": 20,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "每步草稿 token 数",
+        "en": "Draft tokens per step"
+      },
+      "summary": {
+        "zh": "每一步先猜几个 token 再验证。",
+        "en": "How many tokens are guessed before each verification step."
+      },
+      "help": {
+        "what": {
+          "zh": "草稿越长，猜中时加速越明显。",
+          "en": "Longer drafts help more when the guesses are accepted."
+        },
+        "whenToChange": {
+          "zh": "输出可预测（例如代码）、接受率高时调大；接受率低时调小。",
+          "en": "Raise it when output is predictable (code, for example) and acceptance is high; lower it when acceptance is low."
+        },
+        "tradeoffs": {
+          "zh": "猜错的 token 会浪费计算，设得过大反而变慢。",
+          "en": "Rejected tokens waste compute, so too many slows generation down."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 16,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--speculative-num-draft-tokens"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "numSpeculativeTokens",
+        "codec": "direct",
+        "field": "numSpeculativeTokens",
+        "formDefault": 1
+      },
+      "appliesWhen": {
+        "notIn": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "off",
+            "none",
+            null
+          ]
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-num-draft-tokens",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-num-draft-tokens",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "speculative.draftModel",
+      "group": "speculative",
+      "level": "advanced",
+      "order": 30,
+      "type": "path",
+      "unit": null,
+      "label": {
+        "zh": "草稿模型",
+        "en": "Draft model"
+      },
+      "summary": {
+        "zh": "推测解码使用的小模型路径。",
+        "en": "The path of the small model used for speculative decoding."
+      },
+      "help": {
+        "what": {
+          "zh": "留空时在模型目录附近自动查找可用的草稿模型。",
+          "en": "Empty means a suitable draft model is looked up next to the model."
+        },
+        "whenToChange": {
+          "zh": "自动查找不到草稿模型，或想换用另一个草稿模型时。",
+          "en": "When no draft model is found automatically, or to use a different one."
+        },
+        "tradeoffs": {
+          "zh": "草稿模型必须与主模型使用同一分词器，并会额外占用显存。",
+          "en": "The draft must share the main model's tokenizer, and it uses extra memory."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": "containerPath",
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--speculative-draft-model-path"
+      },
+      "flags": null,
+      "vramEffect": "draft",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "draftModel",
+        "codec": "direct",
+        "field": "draftModel"
+      },
+      "appliesWhen": {
+        "notIn": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "off",
+            "none",
+            null
+          ]
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-draft-model-path",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-draft-model-path",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.dsparkBlockSize",
+      "group": "speculative",
+      "level": "expert",
+      "order": 40,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "DSpark 块大小",
+        "en": "DSpark block size"
+      },
+      "summary": {
+        "zh": "DSpark 草稿每块预测的 token 数。",
+        "en": "How many tokens each DSpark draft block predicts."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --speculative-dspark-block-size，只在推测解码方式为 DSpark 时使用。",
+          "en": "Maps to --speculative-dspark-block-size and is only used with DSpark speculative decoding."
+        },
+        "whenToChange": {
+          "zh": "一般保持已验证的 7；按草稿接受率微调。",
+          "en": "Usually keep the validated 7; tune it by the draft acceptance rate."
+        },
+        "tradeoffs": {
+          "zh": "块越大，猜中时加速越多，猜错时浪费也越多。",
+          "en": "Bigger blocks gain more when accepted and waste more when rejected."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 32,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": 7,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--speculative-dspark-block-size"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "dsparkBlockSize",
+        "codec": "direct",
+        "field": "dsparkBlockSize"
+      },
+      "appliesWhen": {
+        "eq": [
+          {
+            "param": "speculative.method"
+          },
+          "dspark"
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-dspark-block-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-dspark-block-size",
+      "platformDefaultValue": 7
+    },
+    {
+      "id": "sglang.draftModelQuantization",
+      "group": "speculative",
+      "level": "expert",
+      "order": 50,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "草稿模型量化",
+        "en": "Draft model quantization"
+      },
+      "summary": {
+        "zh": "草稿模型权重的量化方式；unquant 表示不量化。",
+        "en": "How the draft model's weights are quantized; unquant means not at all."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --speculative-draft-model-quantization。",
+          "en": "Maps to --speculative-draft-model-quantization."
+        },
+        "whenToChange": {
+          "zh": "草稿模型本身是量化权重，或已验证方案指定时。",
+          "en": "When the draft model itself is quantized, or a validated recipe names a value."
+        },
+        "tradeoffs": {
+          "zh": "量化草稿更省显存，但接受率可能下降。",
+          "en": "A quantized draft saves memory but may be accepted less often."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": "^[a-z0-9_.-]{1,64}$",
+      "maxLength": 64,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--speculative-draft-model-quantization"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": {
+        "notIn": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "off",
+            "none",
+            null
+          ]
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-draft-model-quantization",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-draft-model-quantization",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.speculativeNumSteps",
+      "group": "speculative",
+      "level": "expert",
+      "order": 60,
+      "type": "int",
+      "unit": "steps",
+      "label": {
+        "zh": "草稿推测步数",
+        "en": "Speculative draft steps"
+      },
+      "summary": {
+        "zh": "EAGLE 类方法每轮连续猜几步。",
+        "en": "How many steps in a row EAGLE-style methods draft per round."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --speculative-num-steps，只用于 EAGLE、EAGLE3、NEXTN 和 STANDALONE。",
+          "en": "Maps to --speculative-num-steps; only EAGLE, EAGLE3, NEXTN and STANDALONE use it."
+        },
+        "whenToChange": {
+          "zh": "按模型作者推荐的值设置；接受率高时可以尝试加大。",
+          "en": "Set the value the model's authors recommend; try raising it when the acceptance rate is high."
+        },
+        "tradeoffs": {
+          "zh": "步数越多，猜中时收益越大，猜错时浪费的草稿计算也越多。",
+          "en": "More steps gain more when the guesses hold and waste more draft work when they fail."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 32,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--speculative-num-steps"
+      },
+      "flags": null,
+      "vramEffect": "draft",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": {
+        "in": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "eagle",
+            "eagle3",
+            "nextn",
+            "standalone"
+          ]
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-num-steps",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-num-steps",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.speculativeEagleTopk",
+      "group": "speculative",
+      "level": "expert",
+      "order": 70,
+      "type": "int",
+      "unit": "branches",
+      "label": {
+        "zh": "草稿分支数",
+        "en": "Speculative draft branches"
+      },
+      "summary": {
+        "zh": "EAGLE 类方法每一步保留几条候选分支。",
+        "en": "How many candidate branches EAGLE-style methods keep at each step."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --speculative-eagle-topk，只用于 EAGLE、EAGLE3、NEXTN 和 STANDALONE。1 表示单链草稿。",
+          "en": "Maps to --speculative-eagle-topk; only EAGLE, EAGLE3, NEXTN and STANDALONE use it. 1 means a single draft chain."
+        },
+        "whenToChange": {
+          "zh": "按模型作者推荐的值设置；显存和算力有余时加大分支能提高接受率。",
+          "en": "Set the value the model's authors recommend; with spare memory and compute, more branches raise the acceptance rate."
+        },
+        "tradeoffs": {
+          "zh": "分支越多，验证的 token 越多，显存和算力开销越大。",
+          "en": "More branches verify more tokens and cost more memory and compute."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 32,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--speculative-eagle-topk"
+      },
+      "flags": null,
+      "vramEffect": "draft",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": {
+        "in": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "eagle",
+            "eagle3",
+            "nextn",
+            "standalone"
+          ]
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-eagle-topk",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-eagle-topk",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "reasoningParser",
+      "group": "reasoning-tools",
+      "level": "basic",
+      "order": 10,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "思考内容解析器",
+        "en": "Reasoning parser"
+      },
+      "summary": {
+        "zh": "把模型的思考过程从回答里拆出来，放进 reasoning_content 字段。",
+        "en": "Separates the model's thinking from the answer and returns it as reasoning_content."
+      },
+      "help": {
+        "what": {
+          "zh": "不同模型标记思考内容的方式不同，解析器要与模型匹配。自动建议会按模型选择；关闭则原样输出。",
+          "en": "Models mark their thinking differently, so the parser must match the model. Auto suggests one for the model; Off returns the raw text."
+        },
+        "whenToChange": {
+          "zh": "客户端看到 <think> 标签混在回答里，或思考内容丢失时。",
+          "en": "When clients see <think> tags mixed into the answer, or the thinking goes missing."
+        },
+        "tradeoffs": {
+          "zh": "选错解析器可能吞掉部分回答。",
+          "en": "A wrong parser can swallow part of the answer."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动建议",
+            "en": "Suggest automatically"
+          }
+        },
+        {
+          "value": "none",
+          "label": {
+            "zh": "关闭（原样输出）",
+            "en": "Off (raw output)"
+          }
+        },
+        {
+          "value": "qwen3"
+        },
+        {
+          "value": "deepseek_r1"
+        },
+        {
+          "value": "deepseek_v3"
+        },
+        {
+          "value": "gptoss"
+        },
+        {
+          "value": "gemma4"
+        },
+        {
+          "value": "granite"
+        },
+        {
+          "value": "hunyuan_a13b"
+        },
+        {
+          "value": "kimi_k2"
+        },
+        {
+          "value": "mistral"
+        },
+        {
+          "value": "nemotron_v3"
+        },
+        {
+          "value": "olmo3"
+        },
+        {
+          "value": "step3"
+        },
+        {
+          "value": "step3p5"
+        },
+        {
+          "value": "identity"
+        },
+        {
+          "value": "nano_v3"
+        }
+      ],
+      "choicesFrom": "introspect:--reasoning-parser",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          "none",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--reasoning-parser"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "reasoningParser",
+        "codec": "direct",
+        "field": "reasoningParser"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--reasoning-parser",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--reasoning-parser",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "toolCallParser",
+      "group": "reasoning-tools",
+      "level": "basic",
+      "order": 20,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "工具调用解析器",
+        "en": "Tool-call parser"
+      },
+      "summary": {
+        "zh": "把模型输出的工具调用转换成 OpenAI 的 tool_calls 格式。",
+        "en": "Turns the model's tool calls into OpenAI tool_calls."
+      },
+      "help": {
+        "what": {
+          "zh": "解析器要与模型的聊天模板匹配。自动建议会按模型推断；关闭则不解析工具调用。",
+          "en": "The parser must match the model's chat template. Auto infers one from the model; Off leaves tool calls unparsed."
+        },
+        "whenToChange": {
+          "zh": "Claude Code、OpenWebUI 等客户端调用工具失败，或工具调用以普通文本出现时。",
+          "en": "When clients such as Claude Code or OpenWebUI fail to call tools, or tool calls show up as plain text."
+        },
+        "tradeoffs": {
+          "zh": "选错解析器会让工具调用失败或混进回答。",
+          "en": "A wrong parser makes tool calls fail or leak into the answer."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动建议",
+            "en": "Suggest automatically"
+          }
+        },
+        {
+          "value": "none",
+          "label": {
+            "zh": "关闭",
+            "en": "Off"
+          }
+        },
+        {
+          "value": "qwen3_coder"
+        },
+        {
+          "value": "qwen3_xml"
+        },
+        {
+          "value": "hermes"
+        },
+        {
+          "value": "deepseek_v3"
+        },
+        {
+          "value": "mistral"
+        },
+        {
+          "value": "llama3_json"
+        },
+        {
+          "value": "llama4_pythonic"
+        },
+        {
+          "value": "xlam"
+        },
+        {
+          "value": "gemma4"
+        },
+        {
+          "value": "pythonic"
+        },
+        {
+          "value": "granite"
+        },
+        {
+          "value": "minimax"
+        }
+      ],
+      "choicesFrom": "introspect:--tool-call-parser",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          "none",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--tool-call-parser"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "toolCallParser",
+        "codec": "direct",
+        "field": "toolCallParser"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--tool-call-parser",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--tool-call-parser",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "autoToolChoice",
+      "group": "reasoning-tools",
+      "level": "advanced",
+      "order": 30,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "自动工具调用",
+        "en": "Automatic tool choice"
+      },
+      "summary": {
+        "zh": "允许模型自己决定是否调用工具（tool_choice=auto）。",
+        "en": "Lets the model decide by itself whether to call a tool (tool_choice=auto)."
+      },
+      "help": {
+        "what": {
+          "zh": "SGLang 设置了工具调用解析器就会自动选择工具；关闭时不传解析器。",
+          "en": "SGLang chooses tools automatically whenever a tool-call parser is set; Off leaves the parser out."
+        },
+        "whenToChange": {
+          "zh": "客户端只发送 tool_choice=required，或根本不用工具时可以关闭。",
+          "en": "Turn it off when clients only send tool_choice=required, or use no tools at all."
+        },
+        "tradeoffs": {
+          "zh": "关闭后，没有明确要求工具的请求不会触发工具调用。",
+          "en": "When off, requests that do not explicitly require a tool never call one."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": true,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "toolCallParser",
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "enableAutoToolChoice",
+        "codec": "direct",
+        "field": "enableAutoToolChoice"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": true
+    },
+    {
+      "id": "reasoning.defaultEnabled",
+      "group": "reasoning-tools",
+      "level": "advanced",
+      "order": 40,
+      "type": "tristate",
+      "unit": null,
+      "label": {
+        "zh": "默认开启思考",
+        "en": "Thinking on by default"
+      },
+      "summary": {
+        "zh": "客户端没有说明时，模型是否默认先思考再回答。",
+        "en": "Whether the model thinks before answering when the client does not say."
+      },
+      "help": {
+        "what": {
+          "zh": "通过聊天模板参数 enable_thinking 设定默认值；客户端请求里的设置仍然优先。",
+          "en": "Sets the chat template's default enable_thinking; a setting in the client's request still wins."
+        },
+        "whenToChange": {
+          "zh": "希望默认快速直接回答时选关；希望默认深入思考时选开。",
+          "en": "Choose Off for quick direct answers by default, or On for deeper reasoning by default."
+        },
+        "tradeoffs": {
+          "zh": "思考会显著增加输出 token 数和等待时间。",
+          "en": "Thinking adds many output tokens and waiting time."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "chatTemplateKwargs",
+        "mode": "adapter",
+        "kind": "json",
+        "flag": "--default-chat-template-kwargs"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangDisableThinkingByDefault",
+        "codec": "invertedBool",
+        "field": "sglangDisableThinkingByDefault"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--default-chat-template-kwargs",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--default-chat-template-kwargs",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "clientPreset",
+      "group": "reasoning-tools",
+      "level": "advanced",
+      "order": 50,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "客户端预设",
+        "en": "Client preset"
+      },
+      "summary": {
+        "zh": "按主要使用的客户端调整推荐值，本身不改变启动参数。",
+        "en": "Tunes suggested values for your main client; it does not change launch flags by itself."
+      },
+      "help": {
+        "what": {
+          "zh": "用于控制台的推荐值和网关默认行为，例如 Claude Code 桥接或 OpenWebUI。",
+          "en": "Used for console suggestions and gateway defaults, for example the Claude Code bridge or OpenWebUI."
+        },
+        "whenToChange": {
+          "zh": "主要使用的客户端变了时。",
+          "en": "When your main client changes."
+        },
+        "tradeoffs": {
+          "zh": "只影响推荐值，实际行为以各参数的设置为准。",
+          "en": "It only affects suggestions; the actual parameter values decide the behaviour."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "openwebui",
+          "label": {
+            "zh": "Open WebUI",
+            "en": "Open WebUI"
+          }
+        },
+        {
+          "value": "claude-code",
+          "label": {
+            "zh": "Claude Code 桥接",
+            "en": "Claude Code bridge"
+          }
+        },
+        {
+          "value": "claude-cowork",
+          "label": {
+            "zh": "Claude Cowork 桥接",
+            "en": "Claude Cowork bridge"
+          }
+        },
+        {
+          "value": "generic",
+          "label": {
+            "zh": "通用 OpenAI 兼容",
+            "en": "Generic OpenAI-compatible"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": "openwebui",
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "clientPreset",
+        "codec": "direct",
+        "field": "clientPreset"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": "openwebui"
+    },
+    {
+      "id": "chatTemplateKwargs",
+      "group": "reasoning-tools",
+      "level": "expert",
+      "order": 60,
+      "type": "json",
+      "unit": null,
+      "label": {
+        "zh": "聊天模板默认参数",
+        "en": "Chat template default arguments"
+      },
+      "summary": {
+        "zh": "传给聊天模板的默认参数（JSON 对象），例如 enable_thinking。",
+        "en": "Default arguments for the chat template, as a JSON object, such as enable_thinking."
+      },
+      "help": {
+        "what": {
+          "zh": "客户端请求里的 chat_template_kwargs 会覆盖同名的项。",
+          "en": "chat_template_kwargs in a client request override matching keys."
+        },
+        "whenToChange": {
+          "zh": "模型模板支持额外的开关、需要统一默认值时。",
+          "en": "When the model's template has extra switches you want to default."
+        },
+        "tradeoffs": {
+          "zh": "键名必须与模板一致，写错会被静默忽略。",
+          "en": "Keys must match the template; unknown keys are silently ignored."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 8192,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "json",
+        "flag": "--default-chat-template-kwargs"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--default-chat-template-kwargs",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--default-chat-template-kwargs",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.mmFeatureTransport",
+      "group": "multimodal",
+      "level": "expert",
+      "order": 40,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "多模态特征传输方式",
+        "en": "Multimodal feature transport"
+      },
+      "summary": {
+        "zh": "图片等多模态特征在进程之间如何传递。",
+        "en": "How image and other multimodal features move between processes."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --mm-feature-transport。cpu 经系统内存传递。",
+          "en": "Maps to --mm-feature-transport. cpu passes them through system RAM."
+        },
+        "whenToChange": {
+          "zh": "在 Docker Desktop/WSL 下遇到 CUDA IPC 错误时选 cpu。",
+          "en": "Choose cpu when CUDA IPC errors appear under Docker Desktop/WSL."
+        },
+        "tradeoffs": {
+          "zh": "经内存传递稍慢，但更兼容。",
+          "en": "Going through RAM is slightly slower but more compatible."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "cpu",
+          "label": {
+            "zh": "经系统内存（cpu）",
+            "en": "Through system RAM (cpu)"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": "^[a-z0-9_]{1,32}$",
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--mm-feature-transport"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--mm-feature-transport",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--mm-feature-transport",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "apiKey",
+      "group": "network-security",
+      "level": "basic",
+      "order": 10,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "模型直连 API Key",
+        "en": "Direct model API key"
+      },
+      "summary": {
+        "zh": "直接访问模型端口时需要提供的密钥；经网关访问不受影响。",
+        "en": "The key needed to call the model port directly; access through the gateway is unaffected."
+      },
+      "help": {
+        "what": {
+          "zh": "SGLang 目前只能通过启动参数接收密钥；平台会在命令、日志和界面中把它替换为 <redacted>。",
+          "en": "SGLang only takes the key as a launch flag today; the platform replaces it with <redacted> in commands, logs and the console."
+        },
+        "whenToChange": {
+          "zh": "允许局域网设备直连模型端口时，强烈建议设置。",
+          "en": "Strongly recommended when LAN devices can reach the model port directly."
+        },
+        "tradeoffs": {
+          "zh": "所有直连的客户端都要配置同一个密钥。",
+          "en": "Every direct client needs the same key."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 512,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--api-key"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": true,
+      "legacy": {
+        "aliases": [],
+        "domId": "vllmApiKey",
+        "codec": "direct",
+        "field": "apiKey"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--api-key",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--api-key",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.attentionBackend",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 110,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "注意力后端",
+        "en": "Attention backend"
+      },
+      "summary": {
+        "zh": "SGLang 注意力计算使用的实现。",
+        "en": "The implementation SGLang uses for attention."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --attention-backend。不设置时按模型档或引擎默认选择。",
+          "en": "Maps to --attention-backend. Unset, the model profile or the engine default decides."
+        },
+        "whenToChange": {
+          "zh": "当前显卡不支持默认后端，或已验证方案指定了后端时。",
+          "en": "When this GPU does not support the default backend, or a validated recipe names one."
+        },
+        "tradeoffs": {
+          "zh": "不同后端的速度和稳定性不同，选错可能启动失败或输出异常。",
+          "en": "Backends differ in speed and stability; a wrong one may fail to start or misbehave."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "triton",
+          "label": {
+            "zh": "Triton",
+            "en": "Triton"
+          }
+        },
+        {
+          "value": "flashinfer",
+          "label": {
+            "zh": "FlashInfer",
+            "en": "FlashInfer"
+          }
+        },
+        {
+          "value": "qsa",
+          "label": {
+            "zh": "QSA",
+            "en": "QSA"
+          }
+        },
+        {
+          "value": "fa4",
+          "label": {
+            "zh": "FA4",
+            "en": "FA4"
+          }
+        }
+      ],
+      "choicesFrom": "introspect:--attention-backend",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--attention-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangAttentionBackend",
+        "codec": "direct",
+        "field": "sglangAttentionBackend"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--attention-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--attention-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.fp4GemmBackend",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 120,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "NVFP4 GEMM 后端",
+        "en": "NVFP4 GEMM backend"
+      },
+      "summary": {
+        "zh": "NVFP4 权重矩阵乘法使用的实现。",
+        "en": "The implementation used for NVFP4 weight matrix multiplication."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --fp4-gemm-backend，只对 FP4 量化的模型有意义。",
+          "en": "Maps to --fp4-gemm-backend; it only matters for FP4-quantized models."
+        },
+        "whenToChange": {
+          "zh": "NVFP4 模型输出异常或速度不理想时，按已验证方案选择。",
+          "en": "When an NVFP4 model gives bad output or runs slowly, pick the backend a validated recipe names."
+        },
+        "tradeoffs": {
+          "zh": "部分后端只支持特定显卡架构。",
+          "en": "Some backends only support specific GPU architectures."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto"
+        },
+        {
+          "value": "flashinfer_cutlass"
+        },
+        {
+          "value": "flashinfer_cudnn"
+        },
+        {
+          "value": "flashinfer_cutedsl"
+        },
+        {
+          "value": "flashinfer_trtllm"
+        },
+        {
+          "value": "marlin"
+        }
+      ],
+      "choicesFrom": "introspect:--fp4-gemm-backend",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--fp4-gemm-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangFp4GemmBackend",
+        "codec": "direct",
+        "field": "sglangFp4GemmBackend"
+      },
+      "appliesWhen": {
+        "or": [
+          {
+            "in": [
+              {
+                "fact": "model.quantMethod"
+              },
+              [
+                "modelopt_fp4",
+                "nvfp4",
+                "fp4"
+              ]
+            ]
+          },
+          {
+            "in": [
+              {
+                "param": "quantization"
+              },
+              [
+                "modelopt_fp4",
+                "nvfp4",
+                "fp4"
+              ]
+            ]
+          }
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--fp4-gemm-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--fp4-gemm-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.linearAttnPrefillBackend",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 130,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "线性注意力预填充后端",
+        "en": "Linear-attention prefill backend"
+      },
+      "summary": {
+        "zh": "混合线性注意力模型在预填充阶段使用的实现。",
+        "en": "The implementation hybrid linear-attention models use while prefilling."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --linear-attn-prefill-backend，需要运行时支持。",
+          "en": "Maps to --linear-attn-prefill-backend and needs runtime support."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案设置，或默认后端在当前显卡上出错时。",
+          "en": "Set it as a validated recipe says, or when the default fails on this GPU."
+        },
+        "tradeoffs": {
+          "zh": "不同后端的速度和稳定性不同。",
+          "en": "Backends differ in speed and stability."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "triton"
+        },
+        {
+          "value": "flashinfer"
+        },
+        {
+          "value": "cutedsl"
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--linear-attn-prefill-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangLinearAttnPrefillBackend",
+        "codec": "direct",
+        "field": "sglangLinearAttnPrefillBackend"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": "linearAttnBackends",
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--linear-attn-prefill-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--linear-attn-prefill-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.linearAttnDecodeBackend",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 140,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "线性注意力解码后端",
+        "en": "Linear-attention decode backend"
+      },
+      "summary": {
+        "zh": "混合线性注意力模型在逐 token 生成阶段使用的实现。",
+        "en": "The implementation hybrid linear-attention models use while generating tokens."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --linear-attn-decode-backend，需要运行时支持。",
+          "en": "Maps to --linear-attn-decode-backend and needs runtime support."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案设置，或默认后端在当前显卡上出错时。",
+          "en": "Set it as a validated recipe says, or when the default fails on this GPU."
+        },
+        "tradeoffs": {
+          "zh": "不同后端的速度和稳定性不同。",
+          "en": "Backends differ in speed and stability."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "flashinfer"
+        },
+        {
+          "value": "triton"
+        },
+        {
+          "value": "cutedsl"
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--linear-attn-decode-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "sglangLinearAttnDecodeBackend",
+        "codec": "direct",
+        "field": "sglangLinearAttnDecodeBackend"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": "linearAttnBackends",
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--linear-attn-decode-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--linear-attn-decode-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.mambaSchedulerStrategy",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 150,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "Mamba 调度策略",
+        "en": "Mamba scheduler strategy"
+      },
+      "summary": {
+        "zh": "混合模型在调度器里如何分配状态缓存。",
+        "en": "How the scheduler hands out state cache for hybrid models."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --mamba-scheduler-strategy。",
+          "en": "Maps to --mamba-scheduler-strategy."
+        },
+        "whenToChange": {
+          "zh": "按已验证方案设置。",
+          "en": "Set it as a validated recipe says."
+        },
+        "tradeoffs": {
+          "zh": "设置不当会降低并发或前缀复用率。",
+          "en": "A poor choice lowers concurrency or prefix reuse."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": "^[a-z0-9_]{1,64}$",
+      "maxLength": 64,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--mamba-scheduler-strategy"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--mamba-scheduler-strategy",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--mamba-scheduler-strategy",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.disablePrefillCudaGraph",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 160,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "预填充不用 CUDA Graph",
+        "en": "No CUDA graphs for prefill"
+      },
+      "summary": {
+        "zh": "预填充阶段不使用 CUDA Graph。",
+        "en": "Prefill runs without CUDA graphs."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --disable-prefill-cuda-graph。",
+          "en": "Maps to --disable-prefill-cuda-graph."
+        },
+        "whenToChange": {
+          "zh": "预填充阶段的 CUDA Graph 在当前显卡或模型上出错时。",
+          "en": "When prefill CUDA graphs fail on this GPU or model."
+        },
+        "tradeoffs": {
+          "zh": "预填充稍慢，但启动时显存峰值更低。",
+          "en": "Prefill gets slightly slower, but the start-up memory peak is lower."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--disable-prefill-cuda-graph"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--disable-prefill-cuda-graph",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--disable-prefill-cuda-graph",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "sglang.sleepOnIdle",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 170,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "空闲时降低 CPU 占用",
+        "en": "Sleep when idle"
+      },
+      "summary": {
+        "zh": "没有请求时让调度循环休眠，降低空闲时的 CPU 占用。",
+        "en": "Lets the scheduler loop sleep while no requests arrive, which lowers idle CPU use."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --sleep-on-idle，平台默认开启。",
+          "en": "Maps to --sleep-on-idle; the platform turns it on by default."
+        },
+        "whenToChange": {
+          "zh": "极少需要修改；排查首个请求延迟时可以关闭对比。",
+          "en": "Rarely needs changing; turn it off to compare when investigating first-request latency."
+        },
+        "tradeoffs": {
+          "zh": "空闲后的第一个请求可能略慢。",
+          "en": "The first request after an idle period may be slightly slower."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": true,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--sleep-on-idle"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--sleep-on-idle",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--sleep-on-idle",
+      "platformDefaultValue": true
+    },
+    {
+      "id": "sglang.enableMetrics",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 180,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "Prometheus 指标",
+        "en": "Prometheus metrics"
+      },
+      "summary": {
+        "zh": "输出 /metrics 指标；平台统计依赖它，始终开启。",
+        "en": "Exposes /metrics; platform statistics depend on it, so it is always on."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --enable-metrics，由平台管理。",
+          "en": "Maps to --enable-metrics and is managed by the platform."
+        },
+        "whenToChange": {
+          "zh": "不能修改。",
+          "en": "It cannot be changed."
+        },
+        "tradeoffs": {
+          "zh": "开销可以忽略。",
+          "en": "The overhead is negligible."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": true,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--enable-metrics"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": true,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--enable-metrics",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--enable-metrics",
+      "platformDefaultValue": true
+    },
+    {
+      "id": "sglang.cudaGraphMaxBs",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 190,
+      "type": "int",
+      "unit": "requests",
+      "label": {
+        "zh": "CUDA Graph 最大批大小",
+        "en": "CUDA graph max batch size"
+      },
+      "summary": {
+        "zh": "为多大的解码批捕获 CUDA Graph。",
+        "en": "The largest decode batch that gets a captured CUDA graph."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --cuda-graph-max-bs；0.5.21 及之后的运行时改名为 --cuda-graph-max-bs-decode，平台按运行时版本或参数检测结果自动选择。",
+          "en": "Maps to --cuda-graph-max-bs; runtimes from 0.5.21 renamed it --cuda-graph-max-bs-decode, and the platform picks the right one from the runtime version or flag introspection."
+        },
+        "whenToChange": {
+          "zh": "并发较高、超过默认捕获范围时调大；启动时显存紧张或捕获太慢时调小。",
+          "en": "Raise it for high concurrency above the default capture range; lower it when startup memory is tight or capture takes too long."
+        },
+        "tradeoffs": {
+          "zh": "越大覆盖的批越多、解码越快，但捕获更久、占用更多显存。",
+          "en": "Larger values cover more batches and decode faster, but capture takes longer and uses more memory."
+        }
+      },
+      "docs": "https://docs.sglang.io/advanced_features/server_arguments.html",
+      "range": {
+        "min": 1,
+        "max": 4096,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--cuda-graph-max-bs"
+      },
+      "flags": [
+        {
+          "flag": "--cuda-graph-max-bs",
+          "until": "0.5.20"
+        },
+        {
+          "flag": "--cuda-graph-max-bs-decode",
+          "since": "0.5.21"
+        }
+      ],
+      "vramEffect": "activations",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--cuda-graph-max-bs",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--cuda-graph-max-bs",
+      "platformDefaultValue": null
+    }
+  ],
+  "notApplicable": [
+    "chatTemplate",
+    "generationConfig",
+    "llamacpp.batchSize",
+    "llamacpp.cacheReuse",
+    "llamacpp.cacheTypeK",
+    "llamacpp.cacheTypeV",
+    "llamacpp.chatTemplateName",
+    "llamacpp.cpuMoe",
+    "llamacpp.fitCtx",
+    "llamacpp.fitTargetMb",
+    "llamacpp.flashAttention",
+    "llamacpp.gpuLayers",
+    "llamacpp.kvUnified",
+    "llamacpp.mainGpu",
+    "llamacpp.mmproj",
+    "llamacpp.mmprojDevice",
+    "llamacpp.nCpuMoe",
+    "llamacpp.noMmap",
+    "llamacpp.noRepack",
+    "llamacpp.overrideTensor",
+    "llamacpp.planningUtilization",
+    "llamacpp.reasoning",
+    "llamacpp.reasoningBudget",
+    "llamacpp.reasoningEffort",
+    "llamacpp.reasoningFormat",
+    "llamacpp.splitMode",
+    "llamacpp.swaFull",
+    "llamacpp.tensorSplit",
+    "llamacpp.textOnly",
+    "llamacpp.threads",
+    "llamacpp.threadsBatch",
+    "llamacpp.ubatchSize",
+    "lora.adapters",
+    "rope.freqBase",
+    "rope.scale",
+    "rope.scaling",
+    "rope.yarnOrigCtx",
+    "temperature",
+    "topK",
+    "topP",
+    "vllm.asyncScheduling",
+    "vllm.attentionBackend",
+    "vllm.cpuOffloadGb",
+    "vllm.distributedExecutorBackend",
+    "vllm.enforceEager",
+    "vllm.gpuMemoryUtilization",
+    "vllm.hfConfigPath",
+    "vllm.kvOffloadingSize",
+    "vllm.languageModelOnly",
+    "vllm.linearBackend",
+    "vllm.lora.maxLoras",
+    "vllm.lora.maxRank",
+    "vllm.maxNumBatchedTokens",
+    "vllm.mmProcessorCacheGb",
+    "vllm.moeBackend",
+    "vllm.overrideGenerationConfig",
+    "vllm.reasoningParserPlugin",
+    "vllm.safetensorsLoadStrategy"
+  ],
+  "legacyIgnored": [],
+  "recipes": [
+    {
+      "id": "pennyroyal-v251",
+      "kind": "model",
+      "label": {
+        "zh": "Pennyroyal v2.5.1 · Flash-Next · 仅 GPU 缓存",
+        "en": "Pennyroyal v2.5.1 · Flash-Next · GPU cache only"
+      },
+      "description": {
+        "zh": "固定 digest 的 SGLang 镜像：NVFP4 + 在线 FP8 + FP8 KV + FR-Spec/NEXTN-3 + RAM PLE，524K 共享 KV，单卡 TP1。",
+        "en": "Digest-pinned SGLang image: NVFP4, online FP8, FP8 KV, FR-Spec/NEXTN-3 and RAM PLE with a shared 524K KV pool on one GPU."
+      },
+      "status": "verified",
+      "source": "bundled",
+      "eligible": false,
+      "score": 85,
+      "reasons": [
+        "family",
+        "runtime_mismatch",
+        "quant",
+        "compute_capability",
+        "gpu_memory_unknown"
+      ],
+      "locks": [
+        {
+          "param": "quantization",
+          "value": "modelopt_fp4",
+          "reason": {
+            "zh": "Pennyroyal 固定 NVFP4 权重",
+            "en": "Pennyroyal runs NVFP4 weights"
+          }
+        },
+        {
+          "param": "dtype",
+          "value": "bfloat16",
+          "reason": {
+            "zh": "Pennyroyal 固定 bfloat16",
+            "en": "Pennyroyal runs bfloat16"
+          }
+        },
+        {
+          "param": "kvCacheDtype",
+          "value": "fp8_e4m3",
+          "reason": {
+            "zh": "已验证的 FP8 KV",
+            "en": "Validated FP8 KV cache"
+          }
+        },
+        {
+          "param": "trustRemoteCode",
+          "value": true,
+          "reason": {
+            "zh": "该架构需要仓库代码",
+            "en": "This architecture needs repository code"
+          }
+        },
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_coder",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        },
+        {
+          "param": "sglang.attentionBackend",
+          "value": "flashinfer",
+          "reason": {
+            "zh": "已验证的注意力后端",
+            "en": "Validated attention backend"
+          }
+        },
+        {
+          "param": "sglang.fp4GemmBackend",
+          "value": "flashinfer_cutlass",
+          "reason": {
+            "zh": "已验证的 FP4 GEMM 后端",
+            "en": "Validated FP4 GEMM backend"
+          }
+        },
+        {
+          "param": "sglang.pageSize",
+          "value": 64,
+          "reason": {
+            "zh": "已验证的页大小",
+            "en": "Validated page size"
+          }
+        },
+        {
+          "param": "sglang.chunkedPrefillSize",
+          "value": 4096,
+          "reason": {
+            "zh": "已验证的分块预填充",
+            "en": "Validated chunked prefill"
+          }
+        },
+        {
+          "param": "sglang.pleOffloadEmbedding",
+          "value": true,
+          "reason": {
+            "zh": "PLE 必须放入内存",
+            "en": "PLE must live in system RAM"
+          }
+        },
+        {
+          "param": "sglang.linearAttnPrefillBackend",
+          "value": "flashinfer",
+          "reason": {
+            "zh": "已验证的线性注意力后端",
+            "en": "Validated linear attention backend"
+          }
+        },
+        {
+          "param": "sglang.linearAttnDecodeBackend",
+          "value": "flashinfer",
+          "reason": {
+            "zh": "已验证的线性注意力后端",
+            "en": "Validated linear attention backend"
+          }
+        },
+        {
+          "param": "sglang.mambaSsmDtype",
+          "value": "bfloat16",
+          "reason": {
+            "zh": "已验证的 Mamba 状态精度",
+            "en": "Validated Mamba state dtype"
+          }
+        },
+        {
+          "param": "sglang.mambaRadixCacheStrategy",
+          "value": "extra_buffer",
+          "reason": {
+            "zh": "已验证的 Mamba 缓存策略",
+            "en": "Validated Mamba cache strategy"
+          }
+        },
+        {
+          "param": "sglang.mambaTrackInterval",
+          "value": 64,
+          "reason": {
+            "zh": "已验证的 Mamba 跟踪间隔",
+            "en": "Validated Mamba track interval"
+          }
+        },
+        {
+          "param": "sglang.maxMambaCacheSize",
+          "value": 24,
+          "reason": {
+            "zh": "已验证的 Mamba 缓存大小",
+            "en": "Validated Mamba cache size"
+          }
+        }
+      ],
+      "values": {
+        "sglang.maxTotalTokens": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "sglang.maxTotalTokens"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "sglang.maxTotalTokens"
+                  },
+                  null
+                ]
+              },
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "contextLength"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "contextLength"
+                  },
+                  null
+                ]
+              },
+              524288
+            ]
+          }
+        }
+      },
+      "profile": {
+        "id": "orcarouter-pennyroyal-v251-524k",
+        "name": "OrcaRouter · Pennyroyal v2.5.1 · 524K",
+        "description": "RTX PRO 6000 96GB + 128GB RAM：FR-Spec / Online FP8 / FP8 KV / RAM PLE；GPU 缓存，CPU HiCache/NIXL 关闭。已做 500K 合成检索验证，冷加载约 16 分钟。先选择本机 OrcaRouter 模型目录。",
+        "managerId": "vllm",
+        "order": 1,
+        "requirements": {
+          "minGpuCount": 1,
+          "minSingleGpuMemoryGb": 90
+        },
+        "pinRuntimeImage": true,
+        "values": {
+          "servedName": "pennyroyal",
+          "dtype": "bfloat16",
+          "quantization": "modelopt_fp4",
+          "trustRemoteCode": true,
+          "vllm.loadFormat": "safetensors",
+          "contextLength": 524288,
+          "concurrency": 4,
+          "sglang.chunkedPrefillSize": 4096,
+          "sglang.memFractionStatic": 0.981,
+          "kvCacheDtype": "fp8_e4m3",
+          "prefixCaching": true,
+          "sglang.maxTotalTokens": 524288,
+          "sglang.pageSize": 64,
+          "sglang.pleOffloadEmbedding": true,
+          "sglang.mambaSsmDtype": "bfloat16",
+          "sglang.mambaRadixCacheStrategy": "extra_buffer",
+          "sglang.mambaTrackInterval": 64,
+          "sglang.maxMambaCacheSize": 24,
+          "tensorParallel": 1,
+          "speculative.method": "mtp",
+          "speculative.numTokens": 3,
+          "speculative.draftModel": null,
+          "reasoningParser": "qwen3",
+          "toolCallParser": "qwen3_coder",
+          "autoToolChoice": true,
+          "reasoning.defaultEnabled": null,
+          "clientPreset": "claude-code",
+          "sglang.attentionBackend": "flashinfer",
+          "sglang.fp4GemmBackend": "flashinfer_cutlass",
+          "sglang.linearAttnPrefillBackend": "flashinfer",
+          "sglang.linearAttnDecodeBackend": "flashinfer"
+        },
+        "legacy": {
+          "port": 8000,
+          "maxNumBatchedTokens": 0,
+          "cpuOffloadGb": 0,
+          "kvOffloadingSize": 0,
+          "pipelineParallelSize": 1,
+          "dataParallelSize": 1,
+          "enableExpertParallel": false,
+          "gpuDeviceIds": [
+            "0"
+          ],
+          "multiGpuMode": "single",
+          "networkAccess": "local",
+          "languageModelOnly": false
+        }
+      }
+    },
+    {
+      "id": "qwen38-flashnext-262k",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.8 Flash-Next · SGLang · 262K 稳定档",
+        "en": "Qwen3.8 Flash-Next · SGLang · 262K stable"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "eligible": false,
+      "score": 85,
+      "reasons": [
+        "family",
+        "quant",
+        "compute_capability",
+        "gpu_memory_unknown",
+        "applies_when_false"
+      ],
+      "locks": [
+        {
+          "param": "trustRemoteCode",
+          "value": true,
+          "reason": {
+            "zh": "Qwen3.8 架构需要仓库代码",
+            "en": "Qwen3.8 needs repository code"
+          }
+        },
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "Qwen3.8 已验证解析器",
+            "en": "Validated parser for Qwen3.8"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_coder",
+          "reason": {
+            "zh": "Qwen3.8 已验证解析器",
+            "en": "Validated parser for Qwen3.8"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        }
+      ],
+      "values": {
+        "quantization": "modelopt_fp4",
+        "sglang.maxTotalTokens": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "contextLength"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "contextLength"
+                  },
+                  null
+                ]
+              },
+              262144
+            ]
+          }
+        },
+        "sglang.pageSize": 64,
+        "sglang.chunkedPrefillSize": 4096,
+        "sglang.fp4GemmBackend": "flashinfer_cutlass",
+        "sglang.attentionBackend": "triton",
+        "sglang.linearAttnPrefillBackend": "triton",
+        "sglang.linearAttnDecodeBackend": "flashinfer",
+        "sglang.mambaSsmDtype": "bfloat16",
+        "sglang.mambaRadixCacheStrategy": "extra_buffer",
+        "sglang.mambaTrackInterval": 64,
+        "sglang.maxMambaCacheSize": 8
+      },
+      "profile": {
+        "id": "qwen38-flash-next-sglang-262k",
+        "name": "Qwen3.8 Flash-Next SGLang 262K 稳定档",
+        "description": "本机 RTX PRO 6000 + 128GB RAM 已验证：完整 SM120 QSA 修复、NVFP4、PLE→CPU、BF16 KV、GDN Triton/FlashInfer；262K 单路长上下文。",
+        "managerId": "vllm",
+        "order": 2,
+        "requirements": {
+          "minGpuCount": 1,
+          "minSingleGpuMemoryGb": 80
+        },
+        "modelDir": "RadixArk-Qwen3.8-Flash-Next-NVFP4",
+        "pinRuntimeImage": true,
+        "values": {
+          "servedName": "qwen3.8-flash-next",
+          "dtype": "auto",
+          "quantization": "modelopt_fp4",
+          "trustRemoteCode": true,
+          "contextLength": 262144,
+          "concurrency": 1,
+          "sglang.chunkedPrefillSize": 4096,
+          "sglang.memFractionStatic": 0.995,
+          "kvCacheDtype": "auto",
+          "prefixCaching": true,
+          "sglang.maxTotalTokens": 262144,
+          "sglang.pageSize": 64,
+          "sglang.pleOffloadEmbedding": true,
+          "sglang.mambaSsmDtype": "bfloat16",
+          "sglang.mambaRadixCacheStrategy": "extra_buffer",
+          "sglang.mambaTrackInterval": 64,
+          "sglang.maxMambaCacheSize": 8,
+          "speculative.method": "off",
+          "reasoningParser": "qwen3",
+          "toolCallParser": "qwen3_coder",
+          "autoToolChoice": true,
+          "reasoning.defaultEnabled": false,
+          "clientPreset": "claude-code",
+          "sglang.attentionBackend": "triton",
+          "sglang.fp4GemmBackend": "flashinfer_cutlass",
+          "sglang.linearAttnPrefillBackend": "triton",
+          "sglang.linearAttnDecodeBackend": "flashinfer"
+        },
+        "legacy": {
+          "port": 8000,
+          "gpuDeviceIds": [
+            "0"
+          ],
+          "multiGpuMode": "single"
+        }
+      }
+    },
+    {
+      "id": "qwen38-dspark-sglang",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.8 · SGLang · DSpark",
+        "en": "Qwen3.8 · SGLang · DSpark"
+      },
+      "status": "experimental",
+      "source": "bundled",
+      "eligible": false,
+      "score": 0,
+      "reasons": [
+        "family_mismatch",
+        "applies_when_false"
+      ],
+      "locks": [
+        {
+          "param": "trustRemoteCode",
+          "value": true,
+          "reason": {
+            "zh": "该架构需要仓库代码",
+            "en": "This architecture needs repository code"
+          }
+        },
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_coder",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        }
+      ],
+      "values": {
+        "sglang.attentionBackend": "flashinfer",
+        "sglang.chunkedPrefillSize": 8192,
+        "sglang.mambaSchedulerStrategy": "extra_buffer",
+        "sglang.disablePrefillCudaGraph": true,
+        "sglang.mmFeatureTransport": "cpu",
+        "sglang.dsparkBlockSize": {
+          "expr": {
+            "min": [
+              32,
+              {
+                "max": [
+                  1,
+                  {
+                    "coalesce": [
+                      {
+                        "if": [
+                          {
+                            "gt": [
+                              {
+                                "user": "sglang.dsparkBlockSize"
+                              },
+                              0
+                            ]
+                          },
+                          {
+                            "user": "sglang.dsparkBlockSize"
+                          },
+                          null
+                        ]
+                      },
+                      7
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "profile": {
+        "id": "qwen38-sglang-dspark-fastest",
+        "name": "Qwen3.8 旧版 SGLang + DSpark 实验档",
+        "description": "保留给旧 Qwen3.8 27B FP8 + DSpark 的实验方案；Flash-Next NVFP4 请用上面的 262K 稳定档。",
+        "managerId": "vllm",
+        "order": 4,
+        "requirements": {
+          "minGpuCount": 1,
+          "minSingleGpuMemoryGb": 48
+        },
+        "values": {
+          "contextLength": 262144,
+          "concurrency": 4,
+          "sglang.memFractionStatic": 0.8,
+          "prefixCaching": true,
+          "speculative.method": "dspark",
+          "sglang.dsparkBlockSize": 7,
+          "reasoningParser": "qwen3",
+          "toolCallParser": "qwen3_coder",
+          "clientPreset": "openwebui"
+        },
+        "legacy": {
+          "gpuDeviceIds": [
+            "0"
+          ],
+          "multiGpuMode": "single"
+        }
+      }
+    },
+    {
+      "id": "qwen38-sglang",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.8 · SGLang · FlashInfer",
+        "en": "Qwen3.8 · SGLang · FlashInfer"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "eligible": false,
+      "score": 5,
+      "reasons": [
+        "family_mismatch"
+      ],
+      "locks": [
+        {
+          "param": "trustRemoteCode",
+          "value": true,
+          "reason": {
+            "zh": "该架构需要仓库代码",
+            "en": "This architecture needs repository code"
+          }
+        },
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_coder",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        }
+      ],
+      "values": {
+        "sglang.attentionBackend": "flashinfer",
+        "sglang.chunkedPrefillSize": 8192,
+        "sglang.mambaSchedulerStrategy": "extra_buffer",
+        "sglang.disablePrefillCudaGraph": true,
+        "sglang.mmFeatureTransport": "cpu"
+      },
+      "profile": null
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "scenario-blackwell-96gb-256k",
+      "kind": "scenario",
+      "label": {
+        "zh": "96GB 单卡 256K",
+        "en": "96 GB single GPU 256K"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "blackwell-96gb-256k",
+        "name": "96GB 单卡 256K",
+        "description": "RTX PRO 6000 / 80GB+ 单卡优先方案：单路长上下文，保守显存占用，适合本地 Claude。",
+        "managerId": "vllm",
+        "order": 6,
+        "requirements": {
+          "minGpuCount": 1,
+          "minSingleGpuMemoryGb": 80
+        },
+        "values": {
+          "contextLength": 262144,
+          "concurrency": 1,
+          "vllm.gpuMemoryUtilization": 0.9,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "claude-cowork",
+          "vllm.languageModelOnly": true
+        },
+        "legacy": {
+          "gpuDeviceIds": [
+            "0"
+          ],
+          "multiGpuMode": "single"
+        }
+      }
+    },
+    {
+      "id": "scenario-claude-long-context-64k",
+      "kind": "scenario",
+      "label": {
+        "zh": "Claude 长上下文 64K",
+        "en": "Claude long context 64K"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "claude-long-context-64k",
+        "name": "Claude 长上下文 64K",
+        "description": "本地 Claude 单人使用，启动更稳，适合日常编码和工具调用。",
+        "managerId": "vllm",
+        "order": 7,
+        "values": {
+          "contextLength": 65536,
+          "concurrency": 2,
+          "vllm.gpuMemoryUtilization": 0.9,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "claude-cowork"
+        }
+      }
+    },
+    {
+      "id": "scenario-claude-maximum-context",
+      "kind": "scenario",
+      "label": {
+        "zh": "Claude 极限上下文",
+        "en": "Claude maximum context"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "claude-maximum-context",
+        "name": "Claude 极限上下文",
+        "description": "冲 128K/192K/256K 时使用，牺牲并发换上下文。",
+        "managerId": "vllm",
+        "order": 8,
+        "values": {
+          "contextLength": 262144,
+          "concurrency": 1,
+          "vllm.gpuMemoryUtilization": 0.94,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "claude-cowork",
+          "vllm.languageModelOnly": true
+        }
+      }
+    },
+    {
+      "id": "scenario-low-vram-safe",
+      "kind": "scenario",
+      "label": {
+        "zh": "低显存保守模式",
+        "en": "Low-VRAM safe mode"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "low-vram-safe",
+        "name": "低显存保守模式",
+        "description": "启动失败或显存吃紧时先用这个排查。",
+        "managerId": "vllm",
+        "order": 10,
+        "requirements": {
+          "minGpuCount": 1
+        },
+        "values": {
+          "contextLength": 16384,
+          "concurrency": 1,
+          "vllm.gpuMemoryUtilization": 0.82,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "clientPreset": "generic",
+          "vllm.languageModelOnly": true
+        }
+      }
+    },
+    {
+      "id": "scenario-openwebui-chat",
+      "kind": "scenario",
+      "label": {
+        "zh": "OpenWebUI 日常聊天",
+        "en": "OpenWebUI daily chat"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "openwebui-chat",
+        "name": "OpenWebUI 日常聊天",
+        "description": "偏稳定和吞吐，适合 OpenWebUI 直接聊天。",
+        "managerId": "vllm",
+        "order": 9,
+        "values": {
+          "contextLength": 32768,
+          "concurrency": 4,
+          "vllm.gpuMemoryUtilization": 0.9,
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "openwebui"
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "managerId": "vllm",
+  "generatedAt": "2026-10-14T00:00:00.000Z"
+}

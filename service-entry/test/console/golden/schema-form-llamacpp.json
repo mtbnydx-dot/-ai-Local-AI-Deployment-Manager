@@ -1,0 +1,1847 @@
+{
+  "basic": {
+    "engineId": "llamacpp",
+    "mode": "launch",
+    "level": "basic",
+    "counts": {
+      "visible": 13,
+      "hidden": 33,
+      "notApplicable": 66,
+      "changed": 5,
+      "errors": 0
+    },
+    "unplaced": [],
+    "groups": [
+      {
+        "id": "model",
+        "label": "Model & template",
+        "hiddenCount": 5,
+        "fields": [
+          {
+            "id": "servedName",
+            "domId": "servedName",
+            "widget": "text",
+            "type": "string",
+            "label": "Served model name",
+            "unit": null,
+            "flag": "--alias",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3.8-gguf",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": "qwen3.8-gguf",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "capacity",
+        "label": "Capacity & concurrency",
+        "hiddenCount": 2,
+        "fields": [
+          {
+            "id": "contextLength",
+            "domId": "maxModelLen",
+            "widget": "number",
+            "type": "int",
+            "label": "Context length (per request)",
+            "unit": "tokens",
+            "flag": "--ctx-size",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": 65536,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": 65536,
+            "hint": "65,536 = 64K",
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "concurrency",
+            "domId": "maxNumSeqs",
+            "widget": "number",
+            "type": "int",
+            "label": "Max concurrent requests",
+            "unit": "requests",
+            "flag": "--parallel",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "memory",
+        "label": "Memory & KV cache",
+        "hiddenCount": 9,
+        "fields": [
+          {
+            "id": "llamacpp.gpuLayers",
+            "domId": "gpuLayers",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Layers on GPU",
+            "unit": "layers",
+            "flag": "--n-gpu-layers",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "all",
+              "auto"
+            ]
+          },
+          {
+            "id": "llamacpp.cacheTypeK",
+            "domId": "cacheTypeK",
+            "widget": "select",
+            "type": "enum",
+            "label": "K cache type",
+            "unit": null,
+            "flag": "--cache-type-k",
+            "level": "basic",
+            "userValue": "q8_0",
+            "effective": {
+              "value": "q8_0",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [
+              {
+                "code": "quantized_k_cache",
+                "message": "A quantized K cache can lower long-context quality",
+                "source": "plan"
+              }
+            ],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "f16",
+              "bf16",
+              "f32",
+              "q8_0",
+              "q5_1",
+              "q5_0",
+              "q4_1",
+              "q4_0",
+              "iq4_nl"
+            ]
+          },
+          {
+            "id": "llamacpp.cacheTypeV",
+            "domId": "cacheTypeV",
+            "widget": "select",
+            "type": "enum",
+            "label": "V cache type",
+            "unit": null,
+            "flag": "--cache-type-v",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "f16",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "f16",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "f16",
+              "bf16",
+              "f32",
+              "q8_0",
+              "q5_1",
+              "q5_0",
+              "q4_1",
+              "q4_0",
+              "iq4_nl"
+            ]
+          },
+          {
+            "id": "llamacpp.overrideTensor",
+            "domId": "sf-llamacpp-overrideTensor",
+            "widget": "rows",
+            "type": "list",
+            "label": "Tensor placement rules",
+            "unit": null,
+            "flag": "-ot",
+            "level": "expert",
+            "userValue": [
+              {
+                "pattern": "ffn_.*_exps",
+                "buffer": "CPU"
+              }
+            ],
+            "effective": {
+              "value": [
+                {
+                  "pattern": "ffn_.*_exps",
+                  "buffer": "CPU"
+                }
+              ],
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "speculative",
+        "label": "Speculative decoding",
+        "hiddenCount": 2,
+        "fields": [
+          {
+            "id": "speculative.method",
+            "domId": "speculativeMode",
+            "widget": "select",
+            "type": "enum",
+            "label": "Speculative decoding method",
+            "unit": null,
+            "flag": "--spec-type",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "off",
+              "none",
+              "draft-mtp",
+              "draft-dflash",
+              "draft-simple",
+              "ngram-simple",
+              "ngram-map-k",
+              "ngram-map-k4v",
+              "ngram-mod",
+              "ngram-cache"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "reasoning-tools",
+        "label": "Reasoning & tools",
+        "hiddenCount": 3,
+        "fields": [
+          {
+            "id": "llamacpp.reasoning",
+            "domId": "reasoningMode",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Reasoning mode",
+            "unit": null,
+            "flag": "--reasoning",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "on",
+              "off"
+            ]
+          },
+          {
+            "id": "llamacpp.reasoningFormat",
+            "domId": "reasoningParser",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Reasoning format",
+            "unit": null,
+            "flag": "--reasoning-format",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "deepseek",
+              "deepseek-legacy"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "multimodal",
+        "label": "Multimodal",
+        "hiddenCount": 2,
+        "fields": [
+          {
+            "id": "llamacpp.textOnly",
+            "domId": "textOnlyMode",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Text-only mode",
+            "unit": null,
+            "flag": null,
+            "level": "basic",
+            "userValue": false,
+            "effective": {
+              "value": false,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "network-security",
+        "label": "Network & security",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "apiKey",
+            "domId": "llamaApiKey",
+            "widget": "secret",
+            "type": "string",
+            "label": "Direct model API key",
+            "unit": null,
+            "flag": null,
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null,
+              "redacted": true
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": "pending",
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "runtime-expert",
+        "label": "Runtime & expert",
+        "hiddenCount": 3,
+        "fields": [
+          {
+            "id": "llamacpp.threads",
+            "domId": "sf-llamacpp-threads",
+            "widget": "number",
+            "type": "int",
+            "label": "Generation threads",
+            "unit": "threads",
+            "flag": "-t",
+            "level": "advanced",
+            "userValue": 8,
+            "effective": {
+              "value": 8,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      }
+    ]
+  },
+  "expert": {
+    "engineId": "llamacpp",
+    "mode": "launch",
+    "level": "expert",
+    "counts": {
+      "visible": 46,
+      "hidden": 0,
+      "notApplicable": 66,
+      "changed": 5,
+      "errors": 0
+    },
+    "unplaced": [],
+    "groups": [
+      {
+        "id": "model",
+        "label": "Model & template",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "servedName",
+            "domId": "servedName",
+            "widget": "text",
+            "type": "string",
+            "label": "Served model name",
+            "unit": null,
+            "flag": "--alias",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3.8-gguf",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": "qwen3.8-gguf",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "chatTemplate",
+            "domId": "sf-chatTemplate",
+            "widget": "path",
+            "type": "path",
+            "label": "Chat template file",
+            "unit": null,
+            "flag": "--chat-template-file",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.chatTemplateName",
+            "domId": "sf-llamacpp-chatTemplateName",
+            "widget": "text",
+            "type": "enum",
+            "label": "Built-in chat template",
+            "unit": null,
+            "flag": "--chat-template",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "rope.scaling",
+            "domId": "sf-rope-scaling",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "RoPE scaling method",
+            "unit": null,
+            "flag": "--rope-scaling",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "none",
+              "linear",
+              "yarn"
+            ]
+          },
+          {
+            "id": "rope.scale",
+            "domId": "sf-rope-scale",
+            "widget": "number",
+            "type": "float",
+            "label": "RoPE scale factor",
+            "unit": null,
+            "flag": "--rope-scale",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "rope.freqBase",
+            "domId": "sf-rope-freqBase",
+            "widget": "number",
+            "type": "float",
+            "label": "RoPE base frequency",
+            "unit": null,
+            "flag": "--rope-freq-base",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "capacity",
+        "label": "Capacity & concurrency",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "contextLength",
+            "domId": "maxModelLen",
+            "widget": "number",
+            "type": "int",
+            "label": "Context length (per request)",
+            "unit": "tokens",
+            "flag": "--ctx-size",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": 65536,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": 65536,
+            "hint": "65,536 = 64K",
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "concurrency",
+            "domId": "maxNumSeqs",
+            "widget": "number",
+            "type": "int",
+            "label": "Max concurrent requests",
+            "unit": "requests",
+            "flag": "--parallel",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.batchSize",
+            "domId": "batchSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Logical batch",
+            "unit": "tokens",
+            "flag": "--batch-size",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 2048,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 2048,
+            "hint": "2,048 = 2K",
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.ubatchSize",
+            "domId": "ubatchSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Physical batch",
+            "unit": "tokens",
+            "flag": "--ubatch-size",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 512,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 512,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "memory",
+        "label": "Memory & KV cache",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "llamacpp.gpuLayers",
+            "domId": "gpuLayers",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Layers on GPU",
+            "unit": "layers",
+            "flag": "--n-gpu-layers",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "all",
+              "auto"
+            ]
+          },
+          {
+            "id": "llamacpp.cacheTypeK",
+            "domId": "cacheTypeK",
+            "widget": "select",
+            "type": "enum",
+            "label": "K cache type",
+            "unit": null,
+            "flag": "--cache-type-k",
+            "level": "basic",
+            "userValue": "q8_0",
+            "effective": {
+              "value": "q8_0",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [
+              {
+                "code": "quantized_k_cache",
+                "message": "A quantized K cache can lower long-context quality",
+                "source": "plan"
+              }
+            ],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "f16",
+              "bf16",
+              "f32",
+              "q8_0",
+              "q5_1",
+              "q5_0",
+              "q4_1",
+              "q4_0",
+              "iq4_nl"
+            ]
+          },
+          {
+            "id": "llamacpp.cacheTypeV",
+            "domId": "cacheTypeV",
+            "widget": "select",
+            "type": "enum",
+            "label": "V cache type",
+            "unit": null,
+            "flag": "--cache-type-v",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "f16",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "f16",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "f16",
+              "bf16",
+              "f32",
+              "q8_0",
+              "q5_1",
+              "q5_0",
+              "q4_1",
+              "q4_0",
+              "iq4_nl"
+            ]
+          },
+          {
+            "id": "llamacpp.flashAttention",
+            "domId": "flashAttention",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Flash Attention",
+            "unit": null,
+            "flag": "--flash-attn",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "on",
+              "off"
+            ]
+          },
+          {
+            "id": "llamacpp.planningUtilization",
+            "domId": "gpuMemoryUtilization",
+            "widget": "number",
+            "type": "float",
+            "label": "Planning headroom",
+            "unit": "fraction",
+            "flag": null,
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.fitTargetMb",
+            "domId": "sf-llamacpp-fitTargetMb",
+            "widget": "number",
+            "type": "int",
+            "label": "Auto-fit headroom",
+            "unit": "MiB",
+            "flag": "--fit-target",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.fitCtx",
+            "domId": "sf-llamacpp-fitCtx",
+            "widget": "number",
+            "type": "int",
+            "label": "Auto-fit context",
+            "unit": "tokens",
+            "flag": "--fit-ctx",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.cacheReuse",
+            "domId": "cacheReuse",
+            "widget": "number",
+            "type": "int",
+            "label": "KV shift-reuse chunk",
+            "unit": "tokens",
+            "flag": "--cache-reuse",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 512,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 512,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.nCpuMoe",
+            "domId": "sf-llamacpp-nCpuMoe",
+            "widget": "number",
+            "type": "int",
+            "label": "MoE experts of the first N layers in RAM",
+            "unit": "layers",
+            "flag": "--n-cpu-moe",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.cpuMoe",
+            "domId": "sf-llamacpp-cpuMoe",
+            "widget": "switch",
+            "type": "bool",
+            "label": "All MoE experts in RAM",
+            "unit": null,
+            "flag": "--cpu-moe",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.overrideTensor",
+            "domId": "sf-llamacpp-overrideTensor",
+            "widget": "rows",
+            "type": "list",
+            "label": "Tensor placement rules",
+            "unit": null,
+            "flag": "-ot",
+            "level": "expert",
+            "userValue": [
+              {
+                "pattern": "ffn_.*_exps",
+                "buffer": "CPU"
+              }
+            ],
+            "effective": {
+              "value": [
+                {
+                  "pattern": "ffn_.*_exps",
+                  "buffer": "CPU"
+                }
+              ],
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.kvUnified",
+            "domId": "sf-llamacpp-kvUnified",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Unified KV pool",
+            "unit": null,
+            "flag": "--kv-unified",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.swaFull",
+            "domId": "sf-llamacpp-swaFull",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Full-size sliding-window cache",
+            "unit": null,
+            "flag": "--swa-full",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "parallelism",
+        "label": "Multi-GPU & parallelism",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "llamacpp.splitMode",
+            "domId": "multiGpuMode",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Split mode",
+            "unit": null,
+            "flag": "--split-mode",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "layer",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "layer",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "layer",
+              "row",
+              "tensor",
+              "none"
+            ]
+          },
+          {
+            "id": "llamacpp.tensorSplit",
+            "domId": "tensorSplit",
+            "widget": "text",
+            "type": "string",
+            "label": "Split ratios",
+            "unit": null,
+            "flag": "--tensor-split",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.mainGpu",
+            "domId": "mainGpu",
+            "widget": "number",
+            "type": "int",
+            "label": "Main GPU",
+            "unit": "GPU index",
+            "flag": "--main-gpu",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 0,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 0,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "speculative",
+        "label": "Speculative decoding",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "speculative.method",
+            "domId": "speculativeMode",
+            "widget": "select",
+            "type": "enum",
+            "label": "Speculative decoding method",
+            "unit": null,
+            "flag": "--spec-type",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "off",
+              "none",
+              "draft-mtp",
+              "draft-dflash",
+              "draft-simple",
+              "ngram-simple",
+              "ngram-map-k",
+              "ngram-map-k4v",
+              "ngram-mod",
+              "ngram-cache"
+            ]
+          },
+          {
+            "id": "speculative.numTokens",
+            "domId": "numSpeculativeTokens",
+            "widget": "number",
+            "type": "int",
+            "label": "Draft tokens per step",
+            "unit": "tokens",
+            "flag": "--spec-draft-n-max",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 3,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 3,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "speculative.draftModel",
+            "domId": "dflash",
+            "widget": "path",
+            "type": "path",
+            "label": "Draft model",
+            "unit": null,
+            "flag": "--model-draft",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "reasoning-tools",
+        "label": "Reasoning & tools",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "llamacpp.reasoning",
+            "domId": "reasoningMode",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Reasoning mode",
+            "unit": null,
+            "flag": "--reasoning",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "on",
+              "off"
+            ]
+          },
+          {
+            "id": "llamacpp.reasoningFormat",
+            "domId": "reasoningParser",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Reasoning format",
+            "unit": null,
+            "flag": "--reasoning-format",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "deepseek",
+              "deepseek-legacy"
+            ]
+          },
+          {
+            "id": "llamacpp.reasoningEffort",
+            "domId": "reasoningEffort",
+            "widget": "select",
+            "type": "enum",
+            "label": "Reasoning effort",
+            "unit": null,
+            "flag": "--reasoning-effort",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "default",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "default",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "default",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          {
+            "id": "llamacpp.reasoningBudget",
+            "domId": "reasoningBudget",
+            "widget": "number",
+            "type": "int",
+            "label": "Reasoning budget",
+            "unit": "tokens",
+            "flag": "--reasoning-budget",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": -1,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": -1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "clientPreset",
+            "domId": "clientPreset",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Client preset",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "openwebui",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "openwebui",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "openwebui",
+              "claude-code",
+              "claude-cowork",
+              "generic"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "multimodal",
+        "label": "Multimodal",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "llamacpp.textOnly",
+            "domId": "textOnlyMode",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Text-only mode",
+            "unit": null,
+            "flag": null,
+            "level": "basic",
+            "userValue": false,
+            "effective": {
+              "value": false,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.mmproj",
+            "domId": "mmproj",
+            "widget": "path",
+            "type": "path",
+            "label": "Vision projector",
+            "unit": null,
+            "flag": "--mmproj",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.mmprojDevice",
+            "domId": "mmprojDevice",
+            "widget": "text",
+            "type": "string",
+            "label": "Projector device",
+            "unit": null,
+            "flag": "--mmproj-device",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "lora",
+        "label": "LoRA adapters",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "lora.adapters",
+            "domId": "sf-lora-adapters",
+            "widget": "rows",
+            "type": "list",
+            "label": "LoRA adapters",
+            "unit": null,
+            "flag": "--lora",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "sampling",
+        "label": "Default sampling",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "temperature",
+            "domId": "sf-temperature",
+            "widget": "number",
+            "type": "float",
+            "label": "Default temperature",
+            "unit": null,
+            "flag": "--temp",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "topP",
+            "domId": "sf-topP",
+            "widget": "number",
+            "type": "float",
+            "label": "Default top-p",
+            "unit": null,
+            "flag": "--top-p",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "topK",
+            "domId": "sf-topK",
+            "widget": "number",
+            "type": "int",
+            "label": "Default top-k",
+            "unit": null,
+            "flag": "--top-k",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "network-security",
+        "label": "Network & security",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "apiKey",
+            "domId": "llamaApiKey",
+            "widget": "secret",
+            "type": "string",
+            "label": "Direct model API key",
+            "unit": null,
+            "flag": null,
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null,
+              "redacted": true
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": "pending",
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "runtime-expert",
+        "label": "Runtime & expert",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "llamacpp.noMmap",
+            "domId": "sf-llamacpp-noMmap",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Disable mmap",
+            "unit": null,
+            "flag": "--no-mmap",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.noRepack",
+            "domId": "sf-llamacpp-noRepack",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Disable repack",
+            "unit": null,
+            "flag": "--no-repack",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.threads",
+            "domId": "sf-llamacpp-threads",
+            "widget": "number",
+            "type": "int",
+            "label": "Generation threads",
+            "unit": "threads",
+            "flag": "-t",
+            "level": "advanced",
+            "userValue": 8,
+            "effective": {
+              "value": 8,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "llamacpp.threadsBatch",
+            "domId": "sf-llamacpp-threadsBatch",
+            "widget": "number",
+            "type": "int",
+            "label": "Batch (prefill) threads",
+            "unit": "threads",
+            "flag": "-tb",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      }
+    ]
+  }
+}

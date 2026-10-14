@@ -1,0 +1,100 @@
+{
+  "ok": true,
+  "engineId": "llamacpp",
+  "catalogVersion": "2026-10-14+2026-10-14",
+  "planHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "prospective": false,
+  "runtime": {
+    "id": "llamacpp@b10630",
+    "image": "local/llamacpp:fixture"
+  },
+  "recipe": null,
+  "values": {
+    "servedName": {
+      "value": "qwen3.8-gguf",
+      "source": "user"
+    },
+    "contextLength": {
+      "value": 65536,
+      "source": "user"
+    },
+    "concurrency": {
+      "value": 1,
+      "source": "platform-default"
+    },
+    "llamacpp.gpuLayers": {
+      "value": "auto",
+      "source": "platform-default"
+    },
+    "llamacpp.flashAttention": {
+      "value": "auto",
+      "source": "platform-default"
+    },
+    "llamacpp.cacheTypeK": {
+      "value": "q8_0",
+      "source": "user"
+    },
+    "llamacpp.textOnly": {
+      "value": true,
+      "source": "platform-default"
+    },
+    "llamacpp.threads": {
+      "value": 8,
+      "source": "knowledge",
+      "reason": "知识库：物理核心数 / Knowledge: physical core count"
+    }
+  },
+  "overrides": [],
+  "errors": [],
+  "blockers": [],
+  "warnings": [
+    {
+      "field": "llamacpp.cacheTypeK",
+      "code": "quantized_k_cache",
+      "message": "量化 K 缓存可能降低长上下文质量 / A quantized K cache can lower long-context quality"
+    }
+  ],
+  "steps": [
+    {
+      "kind": "start",
+      "containerName": "fixture-llama",
+      "port": 8000,
+      "gpuIds": [
+        "0"
+      ]
+    }
+  ],
+  "command": {
+    "argv": [
+      "docker",
+      "run",
+      "-d",
+      "local/llamacpp:fixture",
+      "--api-key",
+      "<redacted>"
+    ],
+    "env": {},
+    "labels": {}
+  },
+  "memory": {
+    "perGpuMb": {
+      "0": 42000
+    },
+    "breakdown": {
+      "weights": 30000,
+      "kv": 8000,
+      "activations": 2000,
+      "draft": 0,
+      "mmproj": 0,
+      "overhead": 2000
+    },
+    "admissionRequestMb": 42000,
+    "kvPoolTokens": 65536,
+    "maxFullLengthRequests": 1,
+    "policy": "gguf-estimate"
+  },
+  "admission": {
+    "verdict": "ok",
+    "message": "可用 / OK"
+  }
+}
