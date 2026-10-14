@@ -1,99 +1,11 @@
 const { test, expect } = require("@playwright/test");
-const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
-const http = require("node:http");
-const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
+const { getFreePort, startManager } = require("./frontend/helpers/console-harness.js");
+
 const ROOT = path.resolve(__dirname, "..");
-
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-function waitForHttp(url, timeoutMs = 20_000) {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const poll = () => {
-      const req = http.get(url, (res) => {
-        res.resume();
-        if (res.statusCode && res.statusCode < 500) {
-          resolve();
-          return;
-        }
-        retry();
-      });
-      req.on("error", retry);
-      req.setTimeout(2_000, () => {
-        req.destroy();
-        retry();
-      });
-    };
-    const retry = () => {
-      if (Date.now() >= deadline) {
-        reject(new Error(`Timed out waiting for ${url}`));
-        return;
-      }
-      setTimeout(poll, 300);
-    };
-    poll();
-  });
-}
-
-function killProcessTree(child) {
-  if (!child || child.killed) return Promise.resolve();
-  if (process.platform !== "win32") {
-    child.kill("SIGTERM");
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    execFile("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true }, () => resolve());
-  });
-}
-
-async function startManager({ cwd, env, port }) {
-  const logs = [];
-  const pidFile = env.LLAMA_MANAGER_PID_FILE || env.VLLM_MANAGER_PID_FILE || "";
-  const child = spawn(process.execPath, ["server.js"], {
-    cwd,
-    env: {
-      ...process.env,
-      ...env,
-      AI_FRONTEND_SMOKE: "1",
-      NO_COLOR: "1",
-    },
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (chunk) => logs.push(String(chunk)));
-  child.stderr.on("data", (chunk) => logs.push(String(chunk)));
-  child.once("exit", (code) => {
-    if (code !== null && code !== 0) logs.push(`process exited with code ${code}`);
-  });
-  try {
-    await waitForHttp(`http://127.0.0.1:${port}/`, 25_000);
-  } catch (error) {
-    await killProcessTree(child);
-    throw new Error(`${error.message}\n${logs.join("").slice(-4000)}`);
-  }
-  return {
-    url: `http://127.0.0.1:${port}/`,
-    logs,
-    stop: async () => {
-      await killProcessTree(child);
-      if (pidFile) await fs.rm(pidFile, { force: true }).catch(() => {});
-    },
-  };
-}
 
 async function verifyVllmSchedulerLaunch(page) {
   const launches = [];
