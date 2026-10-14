@@ -24,6 +24,7 @@ const paramCatalog = require("./param-catalog");
 const recipeSchema = require("./recipe-schema");
 const recipes = require("./recipes");
 const registry = require("./registry");
+const resolveLaunchPlanModule = require("./resolve-launch-plan");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
 
@@ -87,6 +88,12 @@ module.exports = {
   legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
   legacyConfigToValues: legacyAliases.legacyConfigToValues,
   valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,
+  requestToLegacyRunOptions: legacyAliases.requestToLegacyRunOptions,
+  // The launch-plan resolver (01 §11): POST /api/launch/plan and /api/start.
+  launchPlan: resolveLaunchPlanModule,
+  resolveLaunchPlan: resolveLaunchPlanModule.resolveLaunchPlan,
+  planLaunch: resolveLaunchPlanModule.planLaunch,
+  createLaunchPlanner: resolveLaunchPlanModule.createLaunchPlanner,
   // The only Prometheus parser and the canonical metric mapping (01 §16.1,
   // 00 §9.12): parsePrometheus, mapPrometheus and summarize for the 04
   // collector, the histogram helpers, and the per-manager instance sampler.

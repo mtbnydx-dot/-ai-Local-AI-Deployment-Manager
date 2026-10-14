@@ -4,6 +4,13 @@ function sendJsonError(res, error, fallbackStatus = 500) {
   const payload = { error: error.message };
   if (error.code) payload.code = String(error.code);
   if (error.details && typeof error.details === "object") payload.details = error.details;
+  // A launch the plan refused (01-engines §21.1): the legacy shape plus
+  // ok:false, the plan's field errors and the next step.
+  if (Array.isArray(error.errors) && !(error instanceof AggregateError)) {
+    payload.ok = false;
+    payload.errors = error.errors;
+    if (error.hint) payload.hint = String(error.hint);
+  }
   res.status(error.status || fallbackStatus).json(payload);
 }
 

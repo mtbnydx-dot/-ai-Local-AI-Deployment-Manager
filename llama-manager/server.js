@@ -511,6 +511,7 @@ const {
 const {
   buildLlamaRuntimeCommand,
   formatDockerPublishArgs,
+  planLlamaLaunch,
   redactDockerArgs,
 } = createLlamaRuntimeCommandBuilder({
   getModelMountArgs: () => modelStorage.dockerMountArgs(),
@@ -1654,6 +1655,25 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   resolveLaunchModel,
   validateRuntimeCompatibility: getLlamaArchitectureRuntimeCompatibility,
   appendLog,
+  // Launch plan (ENG-7): /api/start and POST /api/launch/plan resolve through the
+  // same plan. The getters are read per request (the registry, the recipe store
+  // and the engine routes are created further down).
+  getEngineRegistry: () => engineRegistry,
+  getRecipeStore: () => recipeStore,
+  // The command preview: the adapter input runStartJob builds from these run
+  // options; the plan carries the recipe the wrapper applied.
+  prepareLaunchCommand: (runOptions, { jobId }) => {
+    const { plan, ctx } = planLlamaLaunch({ id: jobId, meta: {} }, runOptions);
+    return { adapter: core.engines.adapters.llamacpp, plan, ctx, recipe: plan.recipe || null };
+  },
+  getHostGpus: async () => {
+    const status = await getGpuStatus();
+    // runStartJob builds with the probe's GPU list the same way.
+    return Array.isArray(status?.gpus) ? status.gpus : null;
+  },
+  imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
+  admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
+  listContainers: () => listManagedContainers(),
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller
@@ -1752,9 +1772,11 @@ const instanceMetricsSampler = core.engines.metrics.createInstanceMetricsSampler
   getDerivedInputs: metricsDerivedInputs,
   adapterFor: core.engines.adapterFor,
 });
-core.engines.registerEngineRoutes(app, {
+const engineRoutes = core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
   recipeStore,
+  // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
+  planLaunch: (body) => startRuntimeRequest.planLaunch(body),
   managerId: "llama",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,

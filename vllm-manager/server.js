@@ -374,6 +374,7 @@ const {
 const {
   buildVllmRuntimeCommand,
   formatDockerPublishArgs,
+  prepareLaunch,
   redactDockerArgs,
 } = createVllmRuntimeCommandBuilder({
   getModelMountArgs: () => modelStorage.dockerMountArgs(),
@@ -1612,6 +1613,25 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   normalizeRuntimeInstanceMode: core.normalizeRuntimeInstanceMode,
   normalizeRuntimeInstanceId: core.normalizeRuntimeInstanceId,
   buildRuntimeContainerName: core.buildRuntimeContainerName,
+  // Launch plan (ENG-7): /api/start and POST /api/launch/plan resolve through the
+  // same plan. The getters are read per request (the registry, the recipe store
+  // and the engine routes are created further down).
+  getEngineRegistry: () => engineRegistry,
+  getRecipeStore: () => recipeStore,
+  // The command preview: the adapter input runStartJob builds from these run
+  // options, and the recipe the legacy preset was rendered from.
+  prepareLaunchCommand: (runOptions, { jobId }) => {
+    const prepared = prepareLaunch({ id: jobId, meta: {} }, runOptions);
+    return { ...prepared, recipe: core.engines.recipes.recipeForLegacyPreset(prepared.preset) };
+  },
+  getHostGpus: async () => {
+    const status = await getGpuStatus();
+    // runStartJob builds with the probe's GPU list the same way.
+    return Array.isArray(status?.gpus) ? status.gpus : null;
+  },
+  imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
+  admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
+  listContainers: () => listManagedContainers(),
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller
@@ -1706,9 +1726,11 @@ const instanceMetricsSampler = core.engines.metrics.createInstanceMetricsSampler
   headersFor: (container) => vllmAuthHeaders(getVllmApiKey(container)),
   adapterFor: core.engines.adapterFor,
 });
-core.engines.registerEngineRoutes(app, {
+const engineRoutes = core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
   recipeStore,
+  // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
+  planLaunch: (body) => startRuntimeRequest.planLaunch(body),
   managerId: "vllm",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,

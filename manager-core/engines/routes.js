@@ -15,6 +15,7 @@ const { isPlainObject } = require("./descriptor-schema");
 const { buildFacts, buildSchemaPayload, getParamCatalog, hostFactsFromGpus } = require("./param-catalog");
 const { matchRecipes } = require("./recipes");
 const { normalizeManagerId } = require("./registry");
+const { publicPlan } = require("./resolve-launch-plan");
 const { createRuntimeFacts } = require("./runtime-facts");
 const { buildIntrospectionCommand, introspectRuntime, diffFlagSets, refineAutoParsers } = require("./introspect");
 
@@ -504,6 +505,28 @@ function registerEngineRoutes(app, deps = {}) {
     const { status, payload } = validateDraftRequest(registry, req.body);
     return res.status(status).json(payload);
   });
+
+  // The launch plan (01 §11, 00 §4.3 and §9.2): the plan POST /api/start would
+  // execute for this body (a LaunchRequestV2 or a legacy /api/start body),
+  // without creating a job, taking a lease or touching a container. Every plan
+  // problem answers 200 with ok:false; 400 is only a malformed body or an
+  // unknown engine.
+  if (typeof deps.planLaunch === "function") {
+    app.post("/api/launch/plan", async (req, res) => {
+      if (!isLocalRequest(req)) {
+        return res.status(403).json(errorEnvelope("forbidden", "Launch plans are only available from this computer."));
+      }
+      try {
+        return res.json(publicPlan(await deps.planLaunch(req.body)));
+      } catch (error) {
+        const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 500 ? error.status : 500;
+        return res.status(status).json({
+          ...errorEnvelope(error.code || (status === 500 ? "launch_plan_failed" : "invalid_request"), error.message, error.hint),
+          ...(error.details ? { details: clone(error.details) } : {}),
+        });
+      }
+    });
+  }
 
   // Re-reads <AI_ROOT>/config/recipes (01 §10.3): the entry calls it after it
   // writes a recipe file. An invalid file keeps its last good version and is

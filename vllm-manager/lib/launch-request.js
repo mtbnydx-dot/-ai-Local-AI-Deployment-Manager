@@ -1,4 +1,5 @@
 const { isPennyroyalImage, pennyroyalVramReservationMb } = require("./pennyroyal");
+const { createLaunchPlanner } = require("../../manager-core/engines/resolve-launch-plan");
 
 function createVllmStartRuntimeRequest(deps) {
   const {
@@ -38,9 +39,28 @@ function createVllmStartRuntimeRequest(deps) {
     normalizeRuntimeInstanceMode = (value) => String(value || "replace").toLowerCase() === "parallel" ? "parallel" : "replace",
     normalizeRuntimeInstanceId = (value, fallback) => String(value || fallback || "model").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "model",
     buildRuntimeContainerName = (base, mode, id) => mode === "parallel" ? `${base}-${id}` : base,
+    // Launch plan (01-engines ENG-7): the resolver, the engine registry and the
+    // recipes default to the shared ones; the server adds the command preview
+    // (the runtime-command builder's prepareLaunch), GPU telemetry, image
+    // presence, the gpu-admission preview and the container listing.
+    getEngineRegistry = null,
+    getRecipeStore = null,
+    paramCatalog = null,
+    prepareLaunchCommand = null,
+    getHostGpus = null,
+    imagePresence = null,
+    admissionPreview = null,
+    listContainers = null,
   } = deps;
 
-  return async function startRuntimeRequest({ body = {} } = {}) {
+  /**
+   * Today's /api/start normalisation of a legacy body, side-effect free: the
+   * run options, job.meta and gpu-admission request before admission (the
+   * R-* goldens pin all three). The resolver calls it for /api/start and for
+   * POST /api/launch/plan alike; a v2 request reaches it as the legacy body
+   * the alias table writes.
+   */
+  async function normalizeStartBody(body = {}) {
     const model = resolveRequestedModel(cleanRequired(body.model, "model"));
     const name = String(body.name || deriveName(model));
     const engine = normalizeRuntimeEngine(body.engine);
@@ -197,105 +217,68 @@ function createVllmStartRuntimeRequest(deps) {
       gpuAdmissionRequest.minClampMb = 4096;
       gpuAdmissionRequest.estimatePolicy = "sglang_mem_fraction_static_of_free";
     }
-    let admissionLease = null;
-    if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
-      admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
-    } else if (instanceMode === "replace"
-      && typeof acquireGpuAdmission === "function"
-      && typeof acquireGpuAdmissionAfterPrepare !== "function") {
-      const error = new Error("GPU replacement admission is unavailable; the existing model was not changed.");
-      error.code = "vram_admission_unavailable";
-      error.status = 503;
-      throw error;
-    }
-    let admission = admissionLease?.summary || null;
-    if (!gpuDeviceIds.length && admission?.reservations?.length) {
-      // Docker interprets an empty selection as "all GPUs". Bind the runtime to
-      // exactly the devices that the atomic admission controller reserved.
-      gpuDeviceIds = Array.from(new Set(admission.reservations
-        .map((reservation) => String(reservation.gpuIndex ?? reservation.gpuId ?? "").trim())
-        .filter(Boolean)));
-    }
-    let runtimeApiKeyRef = "";
-    try {
-      if (vllmApiKey) runtimeApiKeyRef = await saveRuntimeApiKey(vllmApiKey);
-    } catch (error) {
-      try { await admissionLease?.release?.("api-key-store-failed"); } catch {}
-      throw error;
-    }
-    let job;
-    try {
-      job = createJob("serve", `Start ${name}`, {
-        model,
-        engine,
-        name,
-        instanceMode,
-        instanceId,
-        containerName,
-        port,
-        maxModelLen,
-        maxNumSeqs,
-        maxNumBatchedTokens,
-        gpuMemoryUtilization,
-        cpuOffloadGb,
-        kvOffloadingSize,
-        mmProcessorCacheGb,
-        dtype,
-        quantization,
-        loadFormat,
-        tokenizer,
-        hfConfigPath,
-        kvCacheDtype,
-        trustRemoteCode,
-        gpuDeviceIds,
-        gpuSelectionExplicit,
-        multiGpuMode,
-        tensorParallelSize,
-        pipelineParallelSize,
-        dataParallelSize,
-        gpuWarnings: gpuSelection.warnings,
-        distributedExecutorBackend,
-        enableExpertParallel,
-        enablePrefixCaching,
-        disablePrefixCaching,
-        languageModelOnly,
-        clientPreset,
-        reasoningParser,
-        enableAutoToolChoice,
-        toolCallParser,
-        networkAccess,
-        hasApiKey: Boolean(vllmApiKey),
-        serviceHost,
-        serviceUrl,
-        speculativeMode,
-        numSpeculativeTokens,
-        runtimeImage,
-        draftModel,
-        dsparkBlockSize,
-        sglangMaxTotalTokens,
-        sglangPageSize,
-        sglangChunkedPrefillSize,
-        sglangFp4GemmBackend,
-        sglangAttentionBackend,
-        sglangPleOffloadEmbedding,
-        sglangLinearAttnPrefillBackend,
-        sglangLinearAttnDecodeBackend,
-        sglangMambaSsmDtype,
-        sglangMambaRadixCacheStrategy,
-        sglangMambaTrackInterval,
-        sglangMaxMambaCacheSize,
-        sglangDisableThinkingByDefault,
-        gpuAdmission: admission,
-      });
-    } catch (error) {
-      try {
-        await admissionLease?.release?.("job-create-failed");
-      } catch {} finally {
-        try { await deleteRuntimeApiKey(runtimeApiKeyRef); } catch {}
-      }
-      throw error;
-    }
-
+    const jobMeta = {
+      model,
+      engine,
+      name,
+      instanceMode,
+      instanceId,
+      containerName,
+      port,
+      maxModelLen,
+      maxNumSeqs,
+      maxNumBatchedTokens,
+      gpuMemoryUtilization,
+      cpuOffloadGb,
+      kvOffloadingSize,
+      mmProcessorCacheGb,
+      dtype,
+      quantization,
+      loadFormat,
+      tokenizer,
+      hfConfigPath,
+      kvCacheDtype,
+      trustRemoteCode,
+      gpuDeviceIds,
+      gpuSelectionExplicit,
+      multiGpuMode,
+      tensorParallelSize,
+      pipelineParallelSize,
+      dataParallelSize,
+      gpuWarnings: gpuSelection.warnings,
+      distributedExecutorBackend,
+      enableExpertParallel,
+      enablePrefixCaching,
+      disablePrefixCaching,
+      languageModelOnly,
+      clientPreset,
+      reasoningParser,
+      enableAutoToolChoice,
+      toolCallParser,
+      networkAccess,
+      hasApiKey: Boolean(vllmApiKey),
+      serviceHost,
+      serviceUrl,
+      speculativeMode,
+      numSpeculativeTokens,
+      runtimeImage,
+      draftModel,
+      dsparkBlockSize,
+      sglangMaxTotalTokens,
+      sglangPageSize,
+      sglangChunkedPrefillSize,
+      sglangFp4GemmBackend,
+      sglangAttentionBackend,
+      sglangPleOffloadEmbedding,
+      sglangLinearAttnPrefillBackend,
+      sglangLinearAttnDecodeBackend,
+      sglangMambaSsmDtype,
+      sglangMambaRadixCacheStrategy,
+      sglangMambaTrackInterval,
+      sglangMaxMambaCacheSize,
+      sglangDisableThinkingByDefault,
+      gpuAdmission: null,
+    };
     const runOptions = {
       model,
       engine,
@@ -336,7 +319,7 @@ function createVllmStartRuntimeRequest(deps) {
       toolCallParser,
       networkAccess,
       vllmApiKey,
-      runtimeApiKeyRef,
+      runtimeApiKeyRef: "",
       serviceHost,
       serviceUrl,
       speculativeMode,
@@ -358,10 +341,79 @@ function createVllmStartRuntimeRequest(deps) {
       sglangMaxMambaCacheSize,
       sglangDisableThinkingByDefault,
       modelCompatibility,
+      vramReservationMb: 0,
+      gpuAdmissionLeaseId: "",
+      gpuAdmissionFinalized: false,
+    };
+    return { runOptions, jobMeta, admissionRequest: gpuAdmissionRequest };
+  }
+
+  const planner = createLaunchPlanner({
+    managerId: "vllm",
+    normalize: normalizeStartBody,
+    getEngineRegistry,
+    getRecipeStore,
+    paramCatalog,
+    prepareLaunchCommand,
+    getHostGpus,
+    imagePresence,
+    admissionPreview,
+    listContainers,
+  });
+
+  async function startRuntimeRequest({ body = {} } = {}) {
+    // alias → resolver → requestToLegacyRunOptions: what was planned is what runs.
+    const plan = await planner.launch(body);
+    const runOptions = planner.runOptions(plan);
+    const gpuAdmissionRequest = plan.legacy.admissionRequest;
+    const { name, engine, instanceMode, containerName, vllmApiKey, runtimeImage } = runOptions;
+    let { gpuDeviceIds } = runOptions;
+    const sglangFractionOfFree = engine === "sglang" && !isPennyroyalImage(runtimeImage);
+    let admissionLease = null;
+    if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
+      admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
+    } else if (instanceMode === "replace"
+      && typeof acquireGpuAdmission === "function"
+      && typeof acquireGpuAdmissionAfterPrepare !== "function") {
+      const error = new Error("GPU replacement admission is unavailable; the existing model was not changed.");
+      error.code = "vram_admission_unavailable";
+      error.status = 503;
+      throw error;
+    }
+    let admission = admissionLease?.summary || null;
+    if (!gpuDeviceIds.length && admission?.reservations?.length) {
+      // Docker interprets an empty selection as "all GPUs". Bind the runtime to
+      // exactly the devices that the atomic admission controller reserved.
+      gpuDeviceIds = Array.from(new Set(admission.reservations
+        .map((reservation) => String(reservation.gpuIndex ?? reservation.gpuId ?? "").trim())
+        .filter(Boolean)));
+    }
+    let runtimeApiKeyRef = "";
+    try {
+      if (vllmApiKey) runtimeApiKeyRef = await saveRuntimeApiKey(vllmApiKey);
+    } catch (error) {
+      try { await admissionLease?.release?.("api-key-store-failed"); } catch {}
+      throw error;
+    }
+    let job;
+    try {
+      job = createJob("serve", `Start ${name}`, { ...plan.legacy.jobMeta, gpuDeviceIds, gpuAdmission: admission });
+    } catch (error) {
+      try {
+        await admissionLease?.release?.("job-create-failed");
+      } catch {} finally {
+        try { await deleteRuntimeApiKey(runtimeApiKeyRef); } catch {}
+      }
+      throw error;
+    }
+
+    Object.assign(runOptions, {
+      gpuDeviceIds,
+      runtimeApiKeyRef,
       vramReservationMb: Number(admission?.requestedTotalMb || 0),
       gpuAdmissionLeaseId: String(admission?.id || ""),
       gpuAdmissionFinalized: Boolean(admissionLease),
-    };
+    });
     let stopAdmissionHeartbeat = () => {};
     const attachAdmissionLease = (lease) => {
       admissionLease = lease || null;
@@ -433,8 +485,11 @@ function createVllmStartRuntimeRequest(deps) {
         failJob(job, error);
       });
 
-    return { job };
-  };
+    return { job, plan: planner.summary(plan) };
+  }
+
+  startRuntimeRequest.planLaunch = (body) => planner.plan(body);
+  return startRuntimeRequest;
 }
 
 // job.meta.admission for SGLang launches admitted by fraction of free memory.
