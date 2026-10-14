@@ -111,10 +111,13 @@ module.exports.mergeExports = mergeExports;
 // core.platform (06 §2.1, 00 §9.17): the ops modules as one namespace, loaded
 // on first use so a manager that never reads platform config pays nothing.
 // Each module is core.platform.<name>; config's functions (readSection,
-// writeSection, loadPlatformConfig...) and version's (getBuildId, readVersion,
-// computeLiveDrift...) are also on the namespace itself.
+// writeSection, loadPlatformConfig...), version's (getBuildId, readVersion,
+// computeLiveDrift...) and the registry's (loadComponentRegistry,
+// resolveComponent, startOrder...) are also on the namespace itself.
 const PLATFORM_MODULES = Object.freeze({
+  components: "./platform/components",
   config: "./platform/config",
+  messages: "./platform/messages",
   semver: "./platform/semver",
   version: "./platform/version",
 });
@@ -122,7 +125,7 @@ let platformNamespace = null;
 
 function loadPlatformNamespace() {
   if (platformNamespace) return platformNamespace;
-  const namespace = { ...require(PLATFORM_MODULES.config), ...require(PLATFORM_MODULES.version) };
+  const namespace = { ...require(PLATFORM_MODULES.config), ...require(PLATFORM_MODULES.version), ...require(PLATFORM_MODULES.components) };
   for (const [name, file] of Object.entries(PLATFORM_MODULES)) {
     Object.defineProperty(namespace, name, { enumerable: true, get: () => require(file) });
   }
