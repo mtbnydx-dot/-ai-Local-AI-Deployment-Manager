@@ -13,20 +13,30 @@
 //   the legacy gpu-runtime.js query. The query that worked is cached for one
 //   hour; when it fails the chain is walked again in the same tick. A missing
 //   binary, a permission error or a timeout ends the walk, since no other
-//   field list can fix those.
+//   field list can fix those. Only a step reached through field errors (the
+//   driver rejecting the lists above it) is cached: a step that answered
+//   after a transient driver error ("Unknown Error", GPU busy) serves that
+//   tick alone, and the cached query survives such an error, so one hiccup
+//   cannot lock in a poorer field list for an hour.
 // - "N/A", "[N/A]" and the other bracketed placeholders ("[Not Supported]")
 //   parse to NULL, never to 0. power_limit_w prefers enforced.power.limit.
 // - The throttle mask is decoded with THROTTLE_REASONS; bits outside the
 //   table stay visible as "bit_0x…" (the host reports 0x400 today).
 // - Per-process VRAM: one --query-compute-apps call per minute. When every
 //   used_memory is [N/A], which is what Windows WDDM reports (F10), procs
-//   stays NULL and the call is disabled for one hour. Per-instance VRAM in
-//   the UI comes from vramReservationMb instead.
+//   stays NULL and the call is disabled for one hour. An empty process list
+//   is stored as [] only on a host that has reported per-process numbers
+//   before; otherwise it cannot tell "no process" from "cannot measure" and
+//   procs stays NULL. Per-instance VRAM in the UI comes from
+//   vramReservationMb instead.
 // - energy_wh = power_w × min(Δt, 2 × intervalMs) / 3600 (energy.js), so a
 //   gap in the samples is never filled in beyond two intervals.
 // - nvidia-smi missing, or three failed ticks in a row: the interval backs off
 //   to 60 s and status().state becomes "degraded" (the telemetry_stale alert
 //   reads it). The first good sample restores the interval and "ok".
+// - Store writes never hold up sampling: at most one insert batch is in
+//   flight, rows sampled meanwhile wait (bounded) for the next batch, and the
+//   next tick is scheduled as soon as nvidia-smi has answered.
 //
 // The cached query, the per-process pause and each GPU's last sample time are
 // kept in collector_state ("collector.gpu"), so an entry restart neither
@@ -57,6 +67,11 @@ const STATE_NAME = "collector.gpu";
 const MAX_PROCS_PER_GPU = 48;
 const MAX_PROCESS_NAME_CHARS = 64;
 const MAX_ERROR_CHARS = 300;
+// Rows waiting while an insert batch is in flight; past this the oldest are
+// dropped and counted (about three hours of a two-GPU host at 10 s).
+const MAX_PENDING_ROWS = 2048;
+// How long stop() waits for queued rows (the store's own close default).
+const STOP_FLUSH_MS = 2000;
 
 // §8 decode table. `hardware` marks the reasons the gpu.hw_throttle_share
 // alert metric counts (§13.1).
@@ -136,6 +151,11 @@ const SAMPLE_KEYS = Object.freeze([
 
 const NUMBER_CELL = /^([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:%|W|MiB|MHz|C)?$/i;
 const FATAL_EXEC_CODES = new Set(["nvidia_smi_missing", "nvidia_smi_denied", "nvidia_smi_timeout"]);
+// nvidia-smi exits with 2 ("a supplied argument or flag is invalid") and
+// prints `Field "x" is not a valid field to query.` for a field the driver
+// does not know. Only this moves the cached query down the chain.
+const INVALID_ARGUMENT_EXIT = 2;
+const INVALID_FIELD_TEXT = /is not a valid field/i;
 
 function clampInt(value, min, max, fallback) {
   const number = typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : Number.NaN;
@@ -211,11 +231,23 @@ function decodeThrottle(mask) {
   return reasons;
 }
 
-// SQLite stores INTEGER as signed 64 bits: masks above 2^53 travel as a
-// two's-complement bigint so no bit is lost.
-function storedMask(value) {
+// Rows stay JSON-safe in memory (latest() is serialised for the live view):
+// a mask above 2^53 is kept as its "0x…" hex text, never as a bigint.
+function rowMask(value) {
   if (value === null) return null;
-  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : BigInt.asIntN(64, value);
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : `0x${value.toString(16)}`;
+}
+
+// SQLite stores INTEGER as signed 64 bits: a mask above 2^53 goes to the
+// store as a two's-complement bigint so no bit is lost.
+function storedMask(mask) {
+  if (typeof mask !== "string") return mask;
+  const value = maskValue(mask);
+  return value === null ? null : BigInt.asIntN(64, value);
+}
+
+function storeRow(row) {
+  return typeof row.throttleMask === "string" ? { ...row, throttleMask: storedMask(row.throttleMask) } : row;
 }
 
 // Splits one CSV line into exactly fields.length cells. nvidia-smi does not
@@ -234,7 +266,8 @@ function splitCells(line, fieldCount, textIndex) {
 // Parses `--query-gpu=<fields> --format=csv,noheader,nounits` output into
 // gpu_samples rows (without `at`, energyWh and procs). Lines that are not
 // GPU rows (error text, "No devices were found") are skipped, and a GPU
-// index seen twice keeps its first row.
+// index seen twice keeps its first row. throttleMask is a number, or the
+// "0x…" text of a mask above 2^53 (see rowMask).
 function parseNvidiaSmiTelemetry(stdout, fields) {
   const fieldList = normalizeFields(fields);
   if (!fieldList.length) return [];
@@ -266,7 +299,7 @@ function parseNvidiaSmiTelemetry(stdout, fields) {
     if (row.gpuIndex === null || seen.has(row.gpuIndex)) continue;
     seen.add(row.gpuIndex);
     row.powerLimitW = extra.enforcedPowerLimitW ?? extra.configuredPowerLimitW;
-    row.throttleMask = storedMask(extra.throttleMask);
+    row.throttleMask = rowMask(extra.throttleMask);
     row.throttle = extra.throttleMask === null ? null : decodeThrottle(extra.throttleMask).join(",");
     rows.push(row);
   }
@@ -314,6 +347,8 @@ function firstLine(text) {
   return String(text ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
 }
 
+// `fieldError` marks nvidia-smi rejecting the field list itself, the only
+// failure another list in the chain can fix for good.
 function execFailure(error, stdout, stderr) {
   const code = error && error.code;
   let reason = "nvidia_smi_failed";
@@ -321,9 +356,11 @@ function execFailure(error, stdout, stderr) {
   else if (code === "EACCES" || code === "EPERM") reason = "nvidia_smi_denied";
   else if (code === "ETIMEDOUT" || (error && (error.killed || error.signal))) reason = "nvidia_smi_timeout";
   const detail = firstLine(stderr) || firstLine(stdout) || firstLine(error && error.message) || reason;
+  const fatal = FATAL_EXEC_CODES.has(reason);
   return {
     ok: false,
-    fatal: FATAL_EXEC_CODES.has(reason),
+    fatal,
+    fieldError: !fatal && (code === INVALID_ARGUMENT_EXIT || INVALID_FIELD_TEXT.test(`${stdout ?? ""}\n${stderr ?? ""}`)),
     error: { code: reason, message: redactSecrets(detail).slice(0, MAX_ERROR_CHARS) },
   };
 }
@@ -357,9 +394,10 @@ function liveGpu(row) {
 }
 
 // options: { store, execFile, intervalMs = 10000, now, events, logger,
-// timers: { setTimeout, clearTimeout } }. `execFile` has the
-// child_process.execFile signature (a promise-returning function resolving
-// to { stdout } works too). Tests drive tick() directly or inject timers.
+// timers: { setTimeout, clearTimeout }, stopFlushMs = 2000 }. `execFile` has
+// the child_process.execFile signature (a promise-returning function
+// resolving to { stdout } works too). Tests drive tick() directly or inject
+// timers.
 function createGpuCollector(options = {}) {
   const store = options.store || null;
   const execFile = typeof options.execFile === "function" ? options.execFile : childProcess.execFile;
@@ -368,13 +406,19 @@ function createGpuCollector(options = {}) {
     ? options.timers
     : { setTimeout, clearTimeout };
   const log = normalizeLogger(options.logger);
+  const stopFlushMs = clampInt(options.stopFlushMs, 0, MINUTE_MS, STOP_FLUSH_MS);
 
   let baseIntervalMs = clampInt(options.intervalMs, 1000, HOUR_MS, DEFAULT_INTERVAL_MS);
   let intervalMs = baseIntervalMs;
   let state = "idle";
   let running = false;
   let stopped = false;
+  // Bumped by start() and stop(). A timer callback of an earlier run sees a
+  // stale generation and does not reschedule, so start() right after an
+  // unawaited stop() never leaves two sampling loops behind.
+  let generation = 0;
   let timer = null;
+  let lastTickStartedAt = null;
   let inflight = null;
   let stateLoaded = false;
   let consecutiveFailures = 0;
@@ -383,9 +427,21 @@ function createGpuCollector(options = {}) {
   let lastError = null;
   // { step, fields, cachedUntil } for the query that last worked.
   let query = null;
-  const procs = { fields: null, nextAt: 0, pausedUntil: 0, pauseReason: null, lastAt: null, lastError: null };
-  const lastSampleAt = new Map();
+  // memoryReported: true once nvidia-smi gave a per-process number, false
+  // once it gave only [N/A] (WDDM), null before either.
+  const procs = {
+    fields: null, nextAt: 0, pausedUntil: 0, pauseReason: null, memoryReported: null, lastAt: null, lastError: null,
+  };
+  // gpuIndex → { at, intervalMs } of that GPU's previous sample. intervalMs
+  // is the base interval in force then, so changing the interval does not
+  // cut a gap that was scheduled under the old one.
+  const lastSample = new Map();
   let latestSample = null;
+  // Store writes: one batch in flight (`writing`); rows sampled meanwhile
+  // wait in pendingRows for the batch `pendingFlush` will send.
+  let pendingRows = [];
+  let pendingFlush = null;
+  let writing = null;
   const counters = { ticks: 0, written: 0, dropped: 0, storeErrors: 0 };
 
   function clock() {
@@ -436,56 +492,73 @@ function createGpuCollector(options = {}) {
     if (!out.ok) return out;
     const rows = parseNvidiaSmiTelemetry(out.stdout, fields);
     if (!rows.length) {
-      return { ok: false, fatal: false, error: { code: "no_gpu", message: redactSecrets(firstLine(out.stdout) || "nvidia-smi reported no GPU").slice(0, MAX_ERROR_CHARS) } };
+      return {
+        ok: false,
+        fatal: false,
+        fieldError: INVALID_FIELD_TEXT.test(out.stdout),
+        error: { code: "no_gpu", message: redactSecrets(firstLine(out.stdout) || "nvidia-smi reported no GPU").slice(0, MAX_ERROR_CHARS) },
+      };
     }
     return { ok: true, rows };
   }
 
-  // The cached query first; when it fails (or expired) the chain from the
-  // top, skipping the step that just failed.
+  // The cached query first. A field error drops it and the chain is walked
+  // from the top, skipping the step that just failed. Any other non-fatal
+  // failure keeps it: the chain is still walked for this tick's sample, but
+  // whatever answers is not cached. A step is cached only when every step
+  // tried before it failed with a field error.
   async function sample(at) {
     let skip = -1;
+    let cacheable = true;
+    let last = null;
     if (query && at < query.cachedUntil) {
       const cached = await runQuery(query.fields);
-      if (cached.ok) return cached;
+      if (cached.ok || cached.fatal) return cached;
+      last = cached;
       skip = query.step;
+      if (cached.fieldError) query = null;
+      else cacheable = false;
+    } else {
       query = null;
-      if (cached.fatal) return cached;
     }
-    query = null;
-    let last = null;
     for (let step = 0; step < QUERY_CHAIN.length; step += 1) {
       if (step === skip) continue;
       const attempt = await runQuery(QUERY_CHAIN[step]);
       if (attempt.ok) {
-        query = { step, fields: QUERY_CHAIN[step], cachedUntil: at + QUERY_CACHE_MS };
+        if (cacheable) query = { step, fields: QUERY_CHAIN[step], cachedUntil: at + QUERY_CACHE_MS };
         return attempt;
       }
       last = attempt;
       if (attempt.fatal) break;
+      if (!attempt.fieldError) cacheable = false;
     }
     return last || { ok: false, fatal: false, error: { code: "nvidia_smi_failed", message: "nvidia-smi query failed" } };
   }
 
+  // The cached variant, or gpu_uuid first and the plain list after it. The
+  // same rule as the GPU chain: the plain list is kept only when the driver
+  // rejected gpu_uuid, and the kept variant is dropped only on a field error.
   async function queryProcs() {
     const variants = procs.fields ? [procs.fields] : [PROCS_FIELDS, PROCS_PLAIN_FIELDS];
+    let cacheable = true;
     let last = null;
     for (const fields of variants) {
       const out = await run([`--query-compute-apps=${fields.join(",")}`, "--format=csv,noheader,nounits"]);
       if (out.ok) {
-        procs.fields = fields;
+        if (cacheable) procs.fields = fields;
         return { ok: true, fields, entries: parseComputeApps(out.stdout, fields) };
       }
       last = out;
       if (out.fatal) break;
+      if (!out.fieldError) cacheable = false;
     }
-    procs.fields = null;
+    if (last && last.fieldError) procs.fields = null;
     return last;
   }
 
   // Once a minute, unless paused. With uuids the entries go to their GPU;
   // without them only a single-GPU host can be attributed. GPUs with no
-  // compute process get [].
+  // compute process get [] once the host has shown it reports numbers.
   async function attachProcs(rows, at) {
     if (at < procs.nextAt || at < procs.pausedUntil) return;
     procs.nextAt = at + PROCS_EVERY_MS;
@@ -498,15 +571,20 @@ function createGpuCollector(options = {}) {
     procs.lastError = null;
     const { entries } = result;
     if (entries.length && entries.every((entry) => entry.usedMb === null)) {
-      if (procs.pauseReason !== "per_process_memory_unavailable") {
+      if (procs.memoryReported !== false) {
         log("log", "GPU telemetry: nvidia-smi reports no per-process memory (WDDM); the per-process query is paused for 1 hour.");
       }
+      procs.memoryReported = false;
       procs.pausedUntil = at + PROCS_PAUSE_MS;
       procs.pauseReason = "per_process_memory_unavailable";
       return;
     }
     procs.pausedUntil = 0;
     procs.pauseReason = null;
+    if (entries.some((entry) => entry.usedMb !== null)) procs.memoryReported = true;
+    // No compute process on a host that never reported a number (WDDM with
+    // nothing running) cannot be told from "cannot measure": NULL, not [].
+    if (!entries.length && procs.memoryReported !== true) return;
     const withUuid = result.fields.includes("gpu_uuid");
     for (const row of rows) {
       if (withUuid && row.gpuUuid) {
@@ -559,10 +637,13 @@ function createGpuCollector(options = {}) {
       procs.pausedUntil = Math.min(pausedUntil, at + PROCS_PAUSE_MS);
       procs.pauseReason = typeof saved.procsPauseReason === "string" ? saved.procsPauseReason : "per_process_memory_unavailable";
     }
+    if (typeof saved.procsMemoryReported === "boolean") procs.memoryReported = saved.procsMemoryReported;
     if (saved.lastSampleAt && typeof saved.lastSampleAt === "object") {
       for (const [index, value] of Object.entries(saved.lastSampleAt)) {
         const sampleAt = finiteOrNull(value);
-        if (/^\d{1,4}$/.test(index) && sampleAt !== null && sampleAt < at) lastSampleAt.set(Number(index), sampleAt);
+        if (/^\d{1,4}$/.test(index) && sampleAt !== null && sampleAt < at) {
+          lastSample.set(Number(index), { at: sampleAt, intervalMs: baseIntervalMs });
+        }
       }
     }
   }
@@ -575,13 +656,14 @@ function createGpuCollector(options = {}) {
         queryCachedUntil: query ? query.cachedUntil : null,
         procsPausedUntil: procs.pausedUntil || null,
         procsPauseReason: procs.pauseReason,
-        lastSampleAt: Object.fromEntries(lastSampleAt),
+        procsMemoryReported: procs.memoryReported,
+        lastSampleAt: Object.fromEntries(Array.from(lastSample, ([index, entry]) => [index, entry.at])),
       });
     } catch {}
   }
 
   async function writeRows(rows) {
-    if (!store || typeof store.insertGpuSamples !== "function") return;
+    if (!rows.length || typeof store.insertGpuSamples !== "function") return;
     try {
       const result = await store.insertGpuSamples(rows);
       counters.written += Number(result && result.accepted) || 0;
@@ -590,6 +672,36 @@ function createGpuCollector(options = {}) {
       counters.storeErrors += 1;
       counters.dropped += rows.length;
     }
+  }
+
+  function flushPending() {
+    const batch = pendingRows;
+    pendingRows = [];
+    pendingFlush = null;
+    const current = (async () => {
+      await writeRows(batch);
+      await saveState();
+    })();
+    writing = current;
+    return current.finally(() => {
+      if (writing === current) writing = null;
+    });
+  }
+
+  // Queues rows for the store without waiting for it, so a slow or busy
+  // store worker never delays sampling. Rows that arrive while a batch is in
+  // flight go out together once it settles; past MAX_PENDING_ROWS the oldest
+  // are dropped and counted. Resolves once these rows were written or dropped.
+  function persist(rows) {
+    if (!store) return Promise.resolve();
+    pendingRows.push(...rows.map(storeRow));
+    const overflow = pendingRows.length - MAX_PENDING_ROWS;
+    if (overflow > 0) {
+      pendingRows.splice(0, overflow);
+      counters.dropped += overflow;
+    }
+    if (!pendingFlush) pendingFlush = (writing || Promise.resolve()).then(flushPending);
+    return pendingFlush;
   }
 
   async function runTick() {
@@ -604,22 +716,23 @@ function createGpuCollector(options = {}) {
     }
     const rows = result.rows.map((row) => {
       const current = { at, ...row, energyWh: null, procs: null };
-      const prevAt = lastSampleAt.get(row.gpuIndex);
-      current.energyWh = integrateEnergyWh(prevAt === undefined ? null : { at: prevAt }, current, { intervalMs: baseIntervalMs });
-      lastSampleAt.set(row.gpuIndex, at);
+      const previous = lastSample.get(row.gpuIndex);
+      current.energyWh = integrateEnergyWh(previous ? { at: previous.at } : null, current, {
+        intervalMs: previous ? Math.max(previous.intervalMs, baseIntervalMs) : baseIntervalMs,
+      });
+      lastSample.set(row.gpuIndex, { at, intervalMs: baseIntervalMs });
       return current;
     });
     await attachProcs(rows, at);
     onSuccess(at);
     latestSample = { at, rows: rows.map((row) => ({ ...row })) };
     if (stopped) return { ok: true, at, rows, written: false };
-    await writeRows(rows);
-    await saveState();
-    return { ok: true, at, rows };
+    return { ok: true, at, rows, persisted: persist(rows) };
   }
 
-  // One sample now. Concurrent calls share the tick in flight.
-  function tick() {
+  // One sampling pass; concurrent callers share the pass in flight. It
+  // settles once nvidia-smi has answered, before the rows are stored.
+  function sampleOnce() {
     if (!inflight) {
       inflight = runTick().finally(() => {
         inflight = null;
@@ -628,47 +741,83 @@ function createGpuCollector(options = {}) {
     return inflight;
   }
 
+  // One sample now, resolved after its rows reached the store.
+  async function tick() {
+    const { persisted, ...result } = await sampleOnce();
+    if (persisted) await persisted;
+    return result;
+  }
+
+  // Resolves once every queued row has been written (or dropped).
+  async function flush() {
+    while (pendingFlush || writing) await (pendingFlush || writing);
+  }
+
   // The next tick is due intervalMs after the previous one started, so the
-  // exec time does not stretch the sampling period.
-  function schedule(delayMs) {
-    if (!running) return;
-    timer = timers.setTimeout(async () => {
-      timer = null;
-      if (!running) return;
+  // exec time does not stretch the sampling period. The store write is not
+  // awaited here.
+  function schedule(delayMs, runId) {
+    if (!running || runId !== generation) return;
+    const handle = timers.setTimeout(async () => {
+      if (timer === handle) timer = null;
+      if (!running || runId !== generation) return;
       const startedAt = clock();
+      lastTickStartedAt = startedAt;
       try {
-        await tick();
+        await sampleOnce();
       } catch (error) {
         log("error", `GPU telemetry tick failed: ${error && error.message ? error.message : error}`);
       }
-      schedule(Math.max(0, intervalMs - (clock() - startedAt)));
+      schedule(Math.max(0, intervalMs - (clock() - startedAt)), runId);
     }, delayMs);
-    if (timer && typeof timer.unref === "function") timer.unref();
+    timer = handle;
+    if (handle && typeof handle.unref === "function") handle.unref();
   }
 
   function start() {
     if (running) return api;
     running = true;
     stopped = false;
+    generation += 1;
+    lastTickStartedAt = null;
     if (state === "idle" || state === "stopped") state = "starting";
-    schedule(0);
+    schedule(0, generation);
     return api;
   }
 
+  // Waits for the tick in flight and, for at most stopFlushMs, for the
+  // queued rows, so a wedged store cannot hold up the entry's shutdown.
   async function stop() {
     running = false;
     stopped = true;
+    generation += 1;
     state = "stopped";
     if (timer) timers.clearTimeout(timer);
     timer = null;
     if (inflight) await inflight.catch(() => {});
+    if (!pendingFlush && !writing) return;
+    let guard = null;
+    await Promise.race([
+      flush(),
+      new Promise((resolve) => {
+        guard = setTimeout(resolve, stopFlushMs);
+        guard.unref?.();
+      }),
+    ]);
+    clearTimeout(guard);
   }
 
-  // A live telemetry.sampleIntervalMs change (§20). It applies from the next
-  // tick; a degraded collector keeps its backoff until it recovers.
+  // A live telemetry.sampleIntervalMs change (§20). A wait already scheduled
+  // is re-timed to the new interval, counted from the last tick's start; a
+  // degraded collector keeps its backoff until it recovers.
   function setIntervalMs(value) {
     baseIntervalMs = clampInt(value, 1000, HOUR_MS, baseIntervalMs);
     if (state !== "degraded") intervalMs = baseIntervalMs;
+    if (running && timer && lastTickStartedAt !== null) {
+      timers.clearTimeout(timer);
+      timer = null;
+      schedule(Math.max(0, intervalMs - (clock() - lastTickStartedAt)), generation);
+    }
     return baseIntervalMs;
   }
 
@@ -686,15 +835,18 @@ function createGpuCollector(options = {}) {
         enabled: !(procs.pausedUntil > clock()),
         pausedUntil: procs.pausedUntil || null,
         reason: procs.pauseReason,
+        memoryReported: procs.memoryReported,
         lastAt: procs.lastAt,
         lastError: procs.lastError ? { ...procs.lastError } : null,
       },
       gpus: latestSample ? latestSample.rows.length : 0,
+      pendingRows: pendingRows.length,
       ...counters,
     };
   }
 
   // The last good sample in the §11.1 `gpus[]` shape, plus the stored rows.
+  // Both are JSON-safe.
   function latest() {
     if (!latestSample) return null;
     return {
@@ -704,7 +856,7 @@ function createGpuCollector(options = {}) {
     };
   }
 
-  const api = { start, stop, tick, status, latest, setIntervalMs };
+  const api = { start, stop, tick, flush, status, latest, setIntervalMs };
   return api;
 }
 

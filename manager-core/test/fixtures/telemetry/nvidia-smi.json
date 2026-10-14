@@ -61,7 +61,8 @@
     },
     "noDevices": "No devices were found\r\n",
     "invalidField": "Field \"clocks_event_reasons.active\" is not a valid field to query.\r\n",
-    "driverUnavailable": "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running.\r\n"
+    "driverUnavailable": "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running.\r\n",
+    "deviceHandleUnknown": "Unable to determine the device handle for GPU0000:01:00.0: Unknown Error\r\n"
   },
   "computeApps": {
     "wddm": {

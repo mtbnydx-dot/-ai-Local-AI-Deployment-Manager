@@ -81,6 +81,20 @@ function invalidField(field) {
   return { error: Object.assign(new Error("Command failed: nvidia-smi"), { code: 2 }), stdout: `Field "${field}" is not a valid field to query.\r\n` };
 }
 
+// A transient driver error (exit 15, "GPU is lost or inaccessible"): not a
+// field error, so no other field list is the fix.
+function deviceHandleError() {
+  return { error: Object.assign(new Error("Command failed: nvidia-smi"), { code: 15 }), stdout: fixture.queryGpu.deviceHandleUnknown };
+}
+
+function settle() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function joined(list) {
+  return list.map((fields) => fields.join(","));
+}
+
 // A fake nvidia-smi behind the child_process.execFile signature. `fields` is
 // what the "driver" supports: an unknown field fails the way nvidia-smi does
 // (exit code 2, the message on stdout). `apps(requestedFields)` answers
@@ -149,6 +163,7 @@ function fakeTimers() {
       if (handle) handle.cleared = true;
     },
     async runNext() {
+      while (timers.pending.length && timers.pending[0].cleared) timers.pending.shift();
       const handle = timers.pending.shift();
       assert.ok(handle && !handle.cleared, "a live timer is scheduled");
       await handle.fn();
@@ -261,11 +276,14 @@ test("decodeThrottle: the §8 table, unknown bits as bit_0x…, and the host's 0
   assert.deepEqual(THROTTLE_REASONS.filter((reason) => reason.hardware).map((reason) => reason.slug),
     ["hw_slowdown", "hw_thermal", "hw_power_brake"]);
 
-  // A mask above 2^53 is stored as a signed 64-bit bigint, so no bit is lost.
+  // A mask above 2^53 stays JSON-safe as hex text in memory; the store copy
+  // is a signed 64-bit bigint (see the gpu_samples test below).
   const [high] = parseNvidiaSmiTelemetry("0, 0x8000000000000400\n", "index,clocks_event_reasons.active");
-  assert.equal(typeof high.throttleMask, "bigint");
-  assert.equal(BigInt.asUintN(64, high.throttleMask), 0x8000000000000400n);
+  assert.equal(high.throttleMask, "0x8000000000000400");
   assert.equal(high.throttle, "bit_0x400,bit_0x8000000000000000");
+  assert.deepEqual(decodeThrottle(high.throttleMask), ["bit_0x400", "bit_0x8000000000000000"]);
+  const [safe] = parseNvidiaSmiTelemetry("0, 0x001fffffffffffff\n", "index,clocks_event_reasons.active");
+  assert.equal(safe.throttleMask, Number.MAX_SAFE_INTEGER);
 });
 
 test("the fallback chain uses the first query the driver accepts", async () => {
@@ -361,6 +379,68 @@ test("a cached query that starts failing re-walks the chain in the same tick", a
   assert.equal(collector.status().consecutiveFailures, 0);
 });
 
+test("a transient driver error keeps the cached query; the step that answers serves that tick only", async () => {
+  const clock = fakeClock();
+  let hiccups = 0;
+  // The driver knows every field except the pre-535 throttle spelling.
+  const driver = fakeDriver({
+    fields: without(ALL_FIELDS, "clocks_throttle_reasons.active"),
+    fail: (args) => {
+      if (hiccups > 0 && args[0] === `--query-gpu=${QUERY_CHAIN[0].join(",")}`) {
+        hiccups -= 1;
+        return deviceHandleError();
+      }
+      return null;
+    },
+  });
+  const { collector } = makeCollector(driver, { clock });
+  await collector.tick();
+  assert.equal(collector.status().query.step, 0);
+
+  hiccups = 1;
+  clock.advance(10_000);
+  const hiccup = await collector.tick();
+  assert.equal(hiccup.ok, true, "a lower step still delivers this tick's sample");
+  assert.deepEqual(driver.gpuQueries().slice(1), joined(QUERY_CHAIN.slice(0, 3)));
+  assert.equal(hiccup.rows[0].memUtilPct, null);
+  assertClose(hiccup.rows[0].energyWh, (412.35 * 10) / 3600, "energy keeps integrating");
+  assert.equal(collector.status().query.step, 0, "the full query stays cached");
+  assert.equal(collector.status().consecutiveFailures, 0);
+
+  clock.advance(10_000);
+  const next = await collector.tick();
+  assert.deepEqual(driver.gpuQueries().slice(4), joined([QUERY_CHAIN[0]]));
+  assert.equal(next.rows[0].memUtilPct, 41);
+});
+
+test("without a cached query, a step reached past a driver error is used once and not cached", async () => {
+  const clock = fakeClock();
+  let hiccups = 1;
+  const driver = fakeDriver({ fail: () => (hiccups-- > 0 ? deviceHandleError() : null) });
+  const { collector } = makeCollector(driver, { clock });
+  const first = await collector.tick();
+  assert.equal(first.ok, true);
+  assert.deepEqual(driver.gpuQueries(), joined(QUERY_CHAIN.slice(0, 2)));
+  assert.equal(collector.status().query, null);
+  clock.advance(10_000);
+  await collector.tick();
+  assert.deepEqual(driver.gpuQueries().slice(2), joined([QUERY_CHAIN[0]]));
+  assert.equal(collector.status().query.step, 0);
+});
+
+test("a rejected field is recognised by exit code 2 or by nvidia-smi's message", async () => {
+  const failures = [
+    { error: Object.assign(new Error("Command failed: nvidia-smi"), { code: 255 }), stdout: fixture.queryGpu.invalidField },
+    { error: Object.assign(new Error("Command failed: nvidia-smi"), { code: 2 }), stdout: "" },
+  ];
+  for (const failure of failures) {
+    const driver = fakeDriver({ fail: (args) => (args[0].includes("clocks_event_reasons.active") ? failure : null) });
+    const { collector } = makeCollector(driver);
+    await collector.tick();
+    assert.equal(collector.status().query.step, 1, `exit ${failure.error.code}`);
+  }
+});
+
 test("a missing nvidia-smi degrades at once and backs off to 60 s; a good sample restores 10 s", async () => {
   const clock = fakeClock();
   const timers = fakeTimers();
@@ -419,9 +499,11 @@ test("three failed ticks in a row degrade the collector; a single failure does n
   const before = driver.gpuQueries().length;
   clock.advance(10_000);
   await timers.runNext();
-  // The failed tick dropped the cache, so this one walks the whole chain.
+  // The cached query first, then the rest of the chain; a driver error is
+  // not a field error, so the cache survives it.
   assert.equal(driver.gpuQueries().length - before, QUERY_CHAIN.length);
   assert.equal(collector.status().state, "ok");
+  assert.equal(collector.status().query.step, 0);
   clock.advance(10_000);
   await timers.runNext();
   status = collector.status();
@@ -432,9 +514,11 @@ test("three failed ticks in a row degrade the collector; a single failure does n
 
   failing = false;
   clock.advance(60_000);
+  const recovered = driver.gpuQueries().length;
   await timers.runNext();
   assert.equal(collector.status().state, "ok");
   assert.equal(collector.status().consecutiveFailures, 0);
+  assert.deepEqual(driver.gpuQueries().slice(recovered), [QUERY_CHAIN[0].join(",")], "the kept cache answers at once");
   assert.equal(timers.next().ms, 10_000);
   await collector.stop();
 });
@@ -544,6 +628,59 @@ test("per-process VRAM without gpu_uuid is attributed only on a single-GPU host"
   const dual = fakeDriver({ apps });
   const dualRows = (await makeCollector(dual).collector.tick()).rows;
   assert.deepEqual(dualRows.map((row) => row.procs), [null, null]);
+});
+
+test("per-process VRAM: a driver error on the gpu_uuid variant does not lock in the plain list", async () => {
+  let hiccups = 1;
+  const apps = (requested) => {
+    if (requested.includes("gpu_uuid") && hiccups-- > 0) return deviceHandleError();
+    return appsFrom(requested.includes("gpu_uuid") ? fixture.computeApps.numbers : fixture.computeApps.plain)(requested);
+  };
+  const clock = fakeClock();
+  const driver = fakeDriver({ apps });
+  const { collector } = makeCollector(driver, { clock });
+  const first = await collector.tick();
+  assert.deepEqual(first.rows.map((row) => row.procs), [null, null], "the plain list cannot be attributed on two GPUs");
+  assert.deepEqual(driver.appQueries(), [PROCS_FIELDS.join(","), PROCS_PLAIN_FIELDS.join(",")]);
+  clock.at = NOW + MINUTE_MS;
+  const second = await collector.tick();
+  assert.deepEqual(driver.appQueries().slice(2), [PROCS_FIELDS.join(",")], "gpu_uuid is tried first again");
+  assert.deepEqual(second.rows[0].procs.map((entry) => entry.pid), [101, 102]);
+});
+
+test("per-process VRAM: an empty list is [] only on a host that has reported per-process numbers", async () => {
+  const clock = fakeClock();
+  const store = memoryStore();
+  let stdout = "";
+  const driver = fakeDriver({ apps: () => ({ stdout }) });
+  const { collector } = makeCollector(driver, { clock, store });
+  const fresh = await collector.tick();
+  assert.deepEqual(fresh.rows.map((row) => row.procs), [null, null], "no compute process yet: cannot tell WDDM from idle");
+  assert.equal(collector.status().procs.memoryReported, null);
+
+  stdout = fixture.computeApps.numbers.stdout;
+  clock.at = NOW + MINUTE_MS;
+  await collector.tick();
+  assert.equal(collector.status().procs.memoryReported, true);
+  stdout = "";
+  clock.at = NOW + 2 * MINUTE_MS;
+  const idle = await collector.tick();
+  assert.deepEqual(idle.rows.map((row) => row.procs), [[], []], "this host measures, so the list is really empty");
+
+  stdout = fixture.computeApps.wddm.stdout;
+  clock.at = NOW + 3 * MINUTE_MS;
+  await collector.tick();
+  assert.equal(collector.status().procs.memoryReported, false);
+  await collector.stop();
+
+  // After the pause, and across a restart, an empty WDDM list stays NULL.
+  stdout = "";
+  clock.at = NOW + 3 * MINUTE_MS + HOUR_MS;
+  const restarted = makeCollector(driver, { clock, store }).collector;
+  const wddmIdle = await restarted.tick();
+  assert.deepEqual(wddmIdle.rows.map((row) => row.procs), [null, null]);
+  assert.equal(restarted.status().procs.memoryReported, false);
+  assert.equal(driver.appQueries().length, 5);
 });
 
 test("integrateEnergyWh caps gaps at two intervals and never fills in missing readings", () => {
@@ -810,23 +947,47 @@ test("collector_state carries the cached query, the procs pause and energy acros
   assert.equal(fresh.rows[0].energyWh, null);
 });
 
-test("stop() halts scheduling and nothing is written afterwards; setIntervalMs applies to the next tick", async () => {
+test("a mask above 2^53 reaches gpu_samples as signed 64 bits and latest() stays JSON-safe", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-gpu-"));
+  const file = path.join(dir, "telemetry.sqlite");
+  const store = await openTelemetryStore({ file, inProcess: true, logger: null });
+  t.after(async () => {
+    await store.close().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  const gpu = { ...fixture.gpus[0], "clocks_event_reasons.active": "0x8000000000000400" };
+  const { collector } = makeCollector(fakeDriver({ gpus: [gpu] }), { store });
+  const { rows } = await collector.tick();
+  assert.equal(rows[0].throttleMask, "0x8000000000000400");
+  assert.equal(rows[0].throttle, "bit_0x400,bit_0x8000000000000000");
+  const live = JSON.parse(JSON.stringify(collector.latest()));
+  assert.equal(live.samples[0].throttleMask, "0x8000000000000400");
+  assert.deepEqual(live.gpus[0].throttle, ["bit_0x400", "bit_0x8000000000000000"]);
+  assert.equal(collector.status().written, 1);
+  await store.close();
+
+  const db = new DatabaseSync(file);
+  try {
+    const select = db.prepare("SELECT throttle_mask, throttle FROM gpu_samples");
+    select.setReadBigInts(true);
+    const [row] = select.all();
+    assert.equal(BigInt.asUintN(64, row.throttle_mask), 0x8000000000000400n);
+    assert.equal(row.throttle, "bit_0x400,bit_0x8000000000000000");
+  } finally {
+    db.close();
+  }
+});
+
+test("stop() halts scheduling and nothing is written afterwards", async () => {
   const store = memoryStore();
   const clock = fakeClock();
   const timers = fakeTimers();
   const { collector } = makeCollector(fakeDriver(), { clock, timers, store });
   collector.start();
   await timers.runNext();
+  await collector.flush();
   assert.equal(store.rows.length, 2);
   assert.equal(timers.next().ms, 10_000);
-
-  assert.equal(collector.setIntervalMs(20_000), 20_000);
-  clock.advance(10_000);
-  await timers.runNext();
-  assert.equal(timers.next().ms, 20_000);
-  assert.equal(collector.setIntervalMs("garbage"), 20_000);
-  assert.equal(collector.setIntervalMs(5), 1000);
-  collector.setIntervalMs(10_000);
 
   await collector.stop();
   assert.equal(collector.status().state, "stopped");
@@ -835,5 +996,143 @@ test("stop() halts scheduling and nothing is written afterwards; setIntervalMs a
   clock.advance(10_000);
   await collector.tick();
   assert.equal(store.rows.length, written);
+  assert.equal(collector.status().state, "stopped");
+});
+
+test("start() right after an unawaited stop() leaves a single sampling loop", async () => {
+  const clock = fakeClock();
+  const timers = fakeTimers();
+  const driver = fakeDriver();
+  let gate = null;
+  const execFile = (file, args, options, callback) => {
+    if (gate) gate.then(() => driver.execFile(file, args, options, callback));
+    else driver.execFile(file, args, options, callback);
+  };
+  const { collector } = makeCollector(driver, { clock, timers, execFile });
+  collector.start();
+  let open = null;
+  gate = new Promise((resolve) => {
+    open = resolve;
+  });
+  const firstTick = timers.runNext();
+  await settle();
+  assert.equal(driver.calls.length, 0, "the first tick is waiting on nvidia-smi");
+  const stopping = collector.stop();
+  collector.start();
+  gate = null;
+  open();
+  await firstTick;
+  await stopping;
+  const live = timers.pending.filter((handle) => !handle.cleared);
+  assert.equal(live.length, 1, "the old loop does not reschedule");
+  assert.equal(live[0].ms, 0, "the new loop's first tick");
+  await timers.runNext();
+  assert.equal(timers.pending.filter((handle) => !handle.cleared).length, 1);
+  assert.equal(collector.status().state, "ok");
+  await collector.stop();
+});
+
+test("setIntervalMs re-times the wait already scheduled; energy keeps a gap scheduled under the old interval", async () => {
+  const clock = fakeClock();
+  const timers = fakeTimers();
+  const { collector } = makeCollector(fakeDriver(), { clock, timers, intervalMs: 60_000 });
+  collector.start();
+  await timers.runNext();
+  assert.equal(timers.next().ms, 60_000);
+
+  clock.advance(20_000);
+  assert.equal(collector.setIntervalMs(5000), 5000);
+  assert.equal(timers.next().ms, 0, "20 s have passed, so the next tick is due at once");
+  await timers.runNext();
+  // The 20 s gap was scheduled under 60 s: integrated in full, not cut to 2 × 5 s.
+  assertClose(collector.latest().samples[0].energyWh, (412.35 * 20) / 3600, "gap under the old interval");
+  assert.equal(timers.next().ms, 5000);
+  clock.advance(5000);
+  await timers.runNext();
+  assertClose(collector.latest().samples[0].energyWh, (412.35 * 5) / 3600, "the new interval");
+
+  clock.advance(2000);
+  assert.equal(collector.setIntervalMs(30_000), 30_000);
+  assert.equal(timers.next().ms, 28_000, "a longer interval counts from the last tick's start");
+  assert.equal(collector.setIntervalMs("garbage"), 30_000);
+  assert.equal(collector.setIntervalMs(5), 1000);
+  assert.equal(collector.status().intervalMs, 1000);
+  await collector.stop();
+  assert.equal(timers.next(), null);
+});
+
+test("a slow store never delays sampling: one batch in flight, rows sampled meanwhile go out together", async () => {
+  const clock = fakeClock();
+  const timers = fakeTimers();
+  const store = memoryStore();
+  const batches = [];
+  const releases = [];
+  store.insertGpuSamples = (rows) => {
+    batches.push(rows.map((row) => row.at));
+    return new Promise((resolve) => {
+      releases.push(() => {
+        store.rows.push(...rows);
+        resolve({ accepted: rows.length, duplicates: 0, rejected: 0, dropped: 0, errors: [] });
+      });
+    });
+  };
+  const { collector } = makeCollector(fakeDriver(), { clock, timers, store });
+  collector.start();
+  await timers.runNext();
+  await settle();
+  assert.deepEqual(batches, [[NOW, NOW]]);
+  assert.equal(timers.next().ms, 10_000, "the next tick is scheduled while the write is pending");
+  for (let index = 1; index <= 3; index += 1) {
+    clock.advance(10_000);
+    await timers.runNext();
+    await settle();
+  }
+  let status = collector.status();
+  assert.equal(status.ticks, 4);
+  assert.equal(status.pendingRows, 6);
+  assert.equal(batches.length, 1, "one batch in flight");
+
+  releases.shift()();
+  await settle();
+  assert.equal(batches.length, 2);
+  assert.deepEqual(batches[1], [10_000, 10_000, 20_000, 20_000, 30_000, 30_000].map((ms) => NOW + ms));
+  releases.shift()();
+  await collector.flush();
+  status = collector.status();
+  assert.equal(store.rows.length, 8);
+  assert.equal(status.written, 8);
+  assert.equal(status.pendingRows, 0);
+  assert.deepEqual(store.states.get("collector.gpu").lastSampleAt, { 0: NOW + 30_000, 1: NOW + 30_000 });
+  await collector.stop();
+});
+
+test("past the pending cap the oldest waiting rows are dropped and counted; stop() does not wait on a wedged store", async () => {
+  const clock = fakeClock();
+  const timers = fakeTimers();
+  const gpus = Array.from({ length: 512 }, (_, index) => ({
+    ...fixture.gpus[0],
+    index: String(index),
+    uuid: `GPU-${String(index).padStart(8, "0")}-0000-4000-8000-000000000000`,
+  }));
+  const store = memoryStore();
+  let calls = 0;
+  store.insertGpuSamples = () => {
+    calls += 1;
+    return new Promise(() => {});
+  };
+  const { collector } = makeCollector(fakeDriver({ gpus }), { clock, timers, store, stopFlushMs: 20 });
+  collector.start();
+  for (let index = 0; index < 6; index += 1) {
+    await timers.runNext();
+    await settle();
+    clock.advance(10_000);
+  }
+  const status = collector.status();
+  assert.equal(calls, 1, "the first batch never settles");
+  assert.equal(status.pendingRows, 2048);
+  assert.equal(status.dropped, 512, "one tick's rows were dropped");
+  const started = Date.now();
+  await collector.stop();
+  assert.ok(Date.now() - started < 1000, "stop() gave up on the wedged store");
   assert.equal(collector.status().state, "stopped");
 });
