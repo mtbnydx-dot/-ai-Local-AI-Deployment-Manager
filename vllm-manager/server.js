@@ -1716,6 +1716,11 @@ core.engines.registerEngineRoutes(app, {
   listManagedContainers: () => listManagedContainers(),
   getGpuStatus,
   metricsSampler: instanceMetricsSampler,
+  dockerConfig: DOCKER_HOST_CONFIG,
+  createJob,
+  appendLog,
+  finishJob,
+  failJob,
 });
 
 core.registerAuditRoutes(app, {
