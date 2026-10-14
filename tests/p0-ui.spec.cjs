@@ -767,4 +767,86 @@ test.describe("manager pages", () => {
     await expect(page.locator("#modelList .runtime-compat-ok")).toHaveCount(0);
     expect(failures).toEqual([]);
   });
+
+  for (const label of ["vLLM", "llama"]) {
+    test(`P0-23 ${label} health actions: allowlisted request, copy-only commands, nothing else`, async ({ page }) => {
+      const dockerStarts = [];
+      let healthReads = 0;
+      const writes = [];
+      page.on("request", (request) => {
+        if (!["GET", "HEAD"].includes(request.method())) writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+      });
+      await page.addInitScript(() => {
+        window.__copied = [];
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: { writeText: async (text) => { window.__copied.push(String(text)); } },
+        });
+      });
+      const { failures, unclaimedWrites } = await openManagerPage(page, managers[label].url, async () => {
+        await page.route("**/api/tools/health", (route) => {
+          healthReads += 1;
+          return route.fulfill({
+            json: {
+              ok: false,
+              score: 60,
+              generatedAt: "2026-10-14T02:00:00.000Z",
+              checks: [
+                {
+                  id: "docker", label: "Docker", status: "fail", detail: "Docker Desktop is not running", actions: ["start-docker"],
+                  actionDetails: [{ id: "start-docker", kind: "api", method: "POST", path: "/api/docker/start", label: { zh: "启动 Docker", en: "Start Docker" } }],
+                },
+                {
+                  id: "image", label: "Runtime image", status: "warn", detail: "image missing", actions: ["pull-image"],
+                  actionDetails: [{ id: "pull-image", kind: "command", command: "docker pull example/runtime:1", label: { zh: "复制拉取命令", en: "Copy pull command" } }],
+                },
+                {
+                  // A forged payload: neither entry may render a control.
+                  id: "forged", label: "Forged", status: "warn", detail: "not from the allowlist", actions: [],
+                  actionDetails: [
+                    { id: "stop-all", kind: "api", method: "POST", path: "/api/stop", label: { zh: "停止全部", en: "Stop all" } },
+                    { id: "script", kind: "script", command: "anything", label: { zh: "脚本", en: "Script" } },
+                  ],
+                },
+              ],
+            },
+          });
+        });
+        await page.route("**/api/docker/start", async (route) => {
+          dockerStarts.push(route.request().method());
+          await route.fulfill({ json: { ok: true } });
+        });
+      });
+      await openView(page, "tools");
+      const cards = page.locator("#healthGrid .tool-card");
+      await expect(cards).toHaveCount(3);
+      const forged = cards.filter({ hasText: "Forged" });
+      await expect(forged.locator("button")).toHaveCount(0);
+      await expect(forged).not.toContainText("停止全部");
+
+      const writesBeforeCopy = writes.length;
+      const copy = cards.filter({ hasText: "Runtime image" }).locator("[data-health-action='copy']");
+      await expect(copy).toHaveText("复制拉取命令");
+      await copy.click();
+      await expect.poll(() => page.evaluate(() => window.__copied)).toEqual(["docker pull example/runtime:1"]);
+      await page.waitForTimeout(200);
+      // The vLLM launch form posts its memory estimate in the background; that is a read.
+      expect(writes.slice(writesBeforeCopy).filter((write) => write !== "POST /api/memory-estimate"), "copying a command sends no request").toEqual([]);
+
+      const readsBeforeStart = healthReads;
+      const start = cards.filter({ hasText: "Docker Desktop is not running" }).locator("[data-health-action='api']");
+      await expect(start).toHaveText("启动 Docker");
+      await start.click();
+      await expect.poll(() => dockerStarts).toEqual(["POST"]);
+      await expect.poll(() => healthReads).toBeGreaterThan(readsBeforeStart);
+
+      await page.locator("#languageMode").selectOption("en-US");
+      await expect(page.locator("#healthGrid [data-health-action='api']")).toHaveText("Start Docker");
+      await expect(page.locator("#healthGrid [data-health-action='copy']")).toHaveText("Copy pull command");
+      await page.locator("#languageMode").selectOption("zh-CN");
+      expect(unclaimedWrites.filter((write) => write.path === "/api/stop")).toEqual([]);
+      expect(writes.filter((write) => write.endsWith("/api/stop"))).toEqual([]);
+      expect(failures).toEqual([]);
+    });
+  }
 });

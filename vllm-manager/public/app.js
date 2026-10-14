@@ -300,6 +300,11 @@ const toolPanelRenderer = window.LocalAiToolPanelRenderer.create({
   formatDateTime,
   miniStat,
   renderIcons: () => renderIcons(),
+  api,
+  notify,
+  getLanguage: effectiveLanguage,
+  // A remediation action (start Docker) changes what the checks report.
+  onHealthAction: () => Promise.all([refreshHealth().catch(() => {}), refreshStatus().catch(() => {})]),
   onApplyModelCheck: (result) => {
     applyLaunchProfile(result.recommendations || {});
     notify("已套用兼容性推荐", result.model, "success");
@@ -1263,8 +1268,9 @@ function bindEvents() {
     state.uiPrefs.language = event.currentTarget.value || "auto";
     localStorage.setItem("languageMode", state.uiPrefs.language);
     applyLanguageMode();
-    // Download failure hints come from job meta in both languages.
+    // Download failure hints and health action labels come from the server in both languages.
     renderJobs();
+    renderHealth();
   });
   $("#modelPickerToggle").addEventListener("click", (event) => {
     event.preventDefault();
