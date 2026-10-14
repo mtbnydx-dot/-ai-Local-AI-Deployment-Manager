@@ -1683,6 +1683,22 @@ core.engines.registerEngineRoutes(app, {
   getGpuStatus,
 });
 
+// Model knowledge (docs/overhaul/02-models.md MOD-5): GET /api/knowledge/status lists the
+// layers, files and invalid entries of the model knowledge, the engine descriptors and the
+// launch parameter catalogs. The deps are what the probe (MOD-13) and the qualification
+// suite (MOD-16) routes added to the same module need: the local-request gate, this
+// manager's job functions, the docker runner, the instance lookup and its data directory.
+core.registerModelInspectorRoutes(app, {
+  managerId: "vllm",
+  isLocalRequest,
+  jobs: { createJob, appendLog, finishJob, failJob, setJobProgress },
+  docker,
+  listInstances: listRuntimeInstancesRequest,
+  dataDir: path.join(__dirname, "data"),
+  registry: engineRegistry,
+  paramCatalog: core.engines.getParamCatalog(),
+});
+
 core.registerAuditRoutes(app, {
   auditRoot: CONFIG.auditRoot,
   auditPasswordFile: AUDIT_PASSWORD_FILE,

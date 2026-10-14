@@ -12,6 +12,7 @@ const contentDigest = require("./content-digest");
 const evidence = require("./evidence");
 const inspect = require("./inspect");
 const jsonSchemaLite = require("./json-schema-lite");
+const knowledge = require("./knowledge");
 const topology = require("./detectors/topology");
 
 module.exports = {
@@ -41,4 +42,23 @@ module.exports = {
   cardIdFor: cache.cardIdFor,
   tensorClasses: topology.DEFAULT_TENSOR_CLASSES,
   jsonSchema: { compileSchema: jsonSchemaLite.compileSchema, validate: jsonSchemaLite.validate },
+  // Layered knowledge (02 §8, MOD-5). The loader reads the bundled data, the
+  // owner's <AI_ROOT>/config/knowledge.d files and the engine descriptors'
+  // error-signature additions; it never throws.
+  knowledge: {
+    load: knowledge.loadKnowledge,
+    status: knowledge.knowledgeStatus,
+    matchFamily: knowledge.matchFamily,
+    errorSignatures: knowledge.errorSignatures,
+    familyIdForCapabilityId: knowledge.familyIdForCapabilityId,
+    registerStatusProvider: knowledge.registerStatusProvider,
+    createLoader: knowledge.createKnowledgeLoader,
+    getLoader: knowledge.getKnowledgeLoader,
+    clearCache: knowledge.clearKnowledgeCache,
+    checkRegexSafety: knowledge.checkRegexSafety,
+    compileSafeRegex: knowledge.compileSafeRegex,
+    prepareLogLines: knowledge.prepareLogLines,
+    KINDS: knowledge.KINDS,
+    LAYERS: knowledge.LAYERS,
+  },
 };

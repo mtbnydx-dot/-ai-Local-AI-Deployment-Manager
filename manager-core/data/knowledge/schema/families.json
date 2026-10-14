@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Knowledge file of kind families (docs/overhaul/02-models.md 8.2). The loader validates the header, each tensor class and each entry on its own, so one bad entry never hides its neighbours. Entries accept extra keys: newer data stays loadable by an older loader.",
+  "title": "Model families",
+  "type": "object",
+  "required": ["kind", "entries"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "kind": { "const": "families" },
+    "asOf": { "$ref": "#/$defs/date" },
+    "staleAfterDays": { "type": "integer", "minimum": 1, "maximum": 3650 },
+    "pack": { "type": "object" },
+    "tensorClasses": { "type": "array", "items": { "$ref": "#/$defs/tensorClass" } },
+    "capabilityIdAliases": { "type": "object", "propertyNames": { "$ref": "#/$defs/id" }, "additionalProperties": { "$ref": "#/$defs/id" } },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(?:[T ].*)?$" },
+    "i18n": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": { "zh": { "type": "string", "maxLength": 600 }, "en": { "type": "string", "maxLength": 600 } },
+      "additionalProperties": false
+    },
+    "text": { "anyOf": [{ "type": "string", "maxLength": 600 }, { "$ref": "#/$defs/i18n" }] },
+    "stringList": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },
+    "tensorClass": {
+      "type": "object",
+      "required": ["class", "patterns"],
+      "properties": {
+        "class": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$" },
+        "patterns": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },
+        "layerGroup": { "type": "integer", "minimum": 1, "maximum": 4 }
+      }
+    },
+    "clause": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "templateSignature": { "$ref": "#/$defs/stringList" },
+        "quantMethod": { "$ref": "#/$defs/stringList" },
+        "role": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "where": {
+      "type": "object",
+      "required": ["path", "op"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^/[A-Za-z0-9_./-]{0,120}$" },
+        "op": { "enum": ["eq", "ne", "in", "gt", "gte", "lt", "lte", "exists", "includes", "matches"] },
+        "value": {}
+      }
+    },
+    "match": {
+      "type": "object",
+      "properties": {
+        "modelTypes": { "$ref": "#/$defs/stringList" },
+        "architectures": { "$ref": "#/$defs/stringList" },
+        "architecturePatterns": { "$ref": "#/$defs/stringList" },
+        "ggufArchitectures": { "$ref": "#/$defs/stringList" },
+        "namePatterns": { "$ref": "#/$defs/stringList" },
+        "require": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/clause" } },
+        "where": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/where" } }
+      },
+      "anyOf": [
+        { "required": ["modelTypes"], "properties": { "modelTypes": { "minItems": 1 } } },
+        { "required": ["architectures"], "properties": { "architectures": { "minItems": 1 } } },
+        { "required": ["architecturePatterns"], "properties": { "architecturePatterns": { "minItems": 1 } } },
+        { "required": ["ggufArchitectures"], "properties": { "ggufArchitectures": { "minItems": 1 } } },
+        { "required": ["namePatterns"], "properties": { "namePatterns": { "minItems": 1 } } },
+        { "required": ["require"], "properties": { "require": { "minItems": 1 } } },
+        { "required": ["where"], "properties": { "where": { "minItems": 1 } } }
+      ]
+    },
+    "modelMatch": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "contentDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "repo": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 520 }
+      },
+      "additionalProperties": false
+    },
+    "engineEntry": {
+      "type": "object",
+      "properties": {
+        "support": { "enum": ["verified", "documented", "experimental", "unsupported", "blocked", "unknown"] },
+        "parsers": {
+          "type": "object",
+          "properties": { "tool": { "type": ["string", "null"], "maxLength": 80 }, "reasoning": { "type": ["string", "null"], "maxLength": 80 } }
+        },
+        "parsersByQuant": { "type": "object", "additionalProperties": { "type": "object" } },
+        "enableAutoToolChoice": { "type": "boolean" },
+        "trustRemoteCode": { "type": "boolean" },
+        "env": { "type": "object", "additionalProperties": { "type": "string", "maxLength": 300 } },
+        "requiredPluginFile": { "type": ["string", "null"], "maxLength": 200 },
+        "minimumVersion": { "type": ["string", "null"], "maxLength": 80 },
+        "minimumBuild": { "type": ["string", "integer", "null"] }
+      }
+    },
+    "block": {
+      "type": "object",
+      "required": ["engines", "code"],
+      "properties": {
+        "engines": { "$ref": "#/$defs/stringList" },
+        "when": { "type": "object" },
+        "unlessEnv": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,79}$" },
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$" },
+        "reason": { "$ref": "#/$defs/text" }
+      }
+    },
+    "entryBody": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "$merge": { "const": "deep" },
+        "label": { "$ref": "#/$defs/text" },
+        "priority": { "type": "integer", "minimum": -1000, "maximum": 1000 },
+        "confidence": { "enum": ["verified", "documented", "community"] },
+        "contextMax": { "type": ["integer", "null"], "minimum": 1 },
+        "sampling": { "type": ["object", "null"] },
+        "speculative": { "type": ["object", "null"] },
+        "engines": { "type": "object", "additionalProperties": { "$ref": "#/$defs/engineEntry" } },
+        "blocks": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/block" } },
+        "download": {
+          "type": "object",
+          "properties": { "level": { "enum": ["ok", "warn", "block"] }, "reason": { "type": ["string", "null"], "maxLength": 600 }, "bypass": { "type": "boolean" } }
+        },
+        "requires": { "type": "object" },
+        "notes": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/text" } },
+        "fixtures": { "$ref": "#/$defs/stringList" },
+        "sources": { "type": "array", "maxItems": 32 }
+      }
+    },
+    "entry": {
+      "allOf": [
+        { "$ref": "#/$defs/entryBody" },
+        { "type": "object", "required": ["id", "match"], "properties": { "match": { "$ref": "#/$defs/match" } } }
+      ]
+    },
+    "scopedEntry": {
+      "allOf": [
+        { "$ref": "#/$defs/entryBody" },
+        { "type": "object", "required": ["id", "match"], "properties": { "match": { "$ref": "#/$defs/modelMatch" } } }
+      ]
+    }
+  }
+}
