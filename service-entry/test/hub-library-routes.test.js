@@ -15,7 +15,14 @@ const internalAuth = require("../../manager-core/internal-auth");
 const { createModelStorage } = require("../../manager-core/model-storage");
 const { createModelHub } = require("../../manager-core/model-hub");
 const hubRoutes = require("../lib/hub-routes");
-const { loadEntry, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
+const { loadEntry, ownerSession, quietLogger, request: rawRequest, serveEntry } = require("./helpers/entry-harness");
+
+// The console owner is a paired session since PUB-5: plain loopback calls carry its cookie.
+const owners = new Map();
+function request(port, pathname, options = {}) {
+  const owner = !options.peer && !options.headers ? owners.get(port) : undefined;
+  return rawRequest(port, pathname, owner ? { ...options, owner } : options);
+}
 
 const LAN = "192.168.1.50";
 const SHA = "a".repeat(40);
@@ -71,6 +78,7 @@ async function mountEntry(t, hub) {
   t.after(() => routes.close());
   assert.deepEqual(routes.failed, []);
   const port = await serveEntry(t, entry, routes);
+  owners.set(port, await ownerSession(entry, port));
   return { entry, ctx, port, token: entry.security.getTrustToken() };
 }
 

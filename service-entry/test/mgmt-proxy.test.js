@@ -8,6 +8,7 @@ const test = require("node:test");
 
 const mgmt = require("../lib/mgmt-proxy");
 const { createRequestAuth } = require("../lib/request-auth");
+const { ownerSession } = require("./helpers/entry-harness");
 
 // The management proxy (07 §2.10). Every manager here is a fake on a free
 // loopback port; no request can reach a real local service.
@@ -965,6 +966,7 @@ async function setupEntry() {
 
 test.after(async () => {
   if (entryVllm) await closeServer(entryVllm.server);
+  entry?.closeAccessStore();
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -985,7 +987,9 @@ test("the entry mounts the proxy right after the event bus and serves /api/m/* t
   // those are not proxied.
   const relayReads = new Set(["/api/events", "/api/jobs?fields=summary", "/api/instances", "/api/manager/health"]);
   const proxiedSeen = () => vllm.seen.filter((hit) => !relayReads.has(hit.url));
-  const engines = await send(port, "/api/m/vllm/engines?model=x");
+  // The console owner: a paired session since PUB-5.
+  const owner = await ownerSession(server, port);
+  const engines = await send(port, "/api/m/vllm/engines?model=x", { headers: owner.headers() });
   assert.equal(engines.status, 200);
   assert.deepEqual(engines.json, { ok: true, url: "/api/engines?model=x" });
   assertMinted(engines);
@@ -1010,7 +1014,7 @@ test("the entry mounts the proxy right after the event bus and serves /api/m/* t
   assert.deepEqual(viaClient.data, { ok: true, url: "/api/engines" });
 
   // Server close ends a proxied stream instead of waiting on it.
-  const stream = await openStream(port, "/api/m/vllm/events");
+  const stream = await openStream(port, "/api/m/vllm/events", owner.headers());
   await waitFor(() => stream.text.includes("hello"), 2000, "the proxied stream");
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("server.close() hung on the proxied stream")), 3000);

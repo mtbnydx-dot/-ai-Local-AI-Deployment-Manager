@@ -132,7 +132,6 @@ test("signed principals reach exactly their scope; out of scope is 403 principal
     ["system:supervisor", "POST", "/api/shutdown"],
     ["system:supervisor", "GET", "/api/platform/busy"],
     ["system:cli", "POST", "/api/stop-all", {}],
-    ["system:cli", "POST", "/api/session/pair-codes", { ttlSeconds: 120 }],
   ];
   for (const [principal, method, target, body] of allowed) {
     const response = await signed(port, method, target, { principal, token, body });
@@ -162,6 +161,11 @@ test("signed principals reach exactly their scope; out of scope is 403 principal
     assert.equal(response.json.error.code, "principal_scope_denied");
   }
   assert.equal(spy.seen.length, before, "no out-of-scope call reached a route");
+
+  // The CLI mints pair codes (the session API answers before any module).
+  const minted = await signed(port, "POST", "/api/session/pair-codes", { principal: "system:cli", token, body: { ttlSeconds: 120 } });
+  assert.equal(minted.status, 200, minted.text);
+  assert.match(minted.json.url, /^http:\/\/127\.0\.0\.1:\d+\/#pair=[A-Z2-7]{10}$/);
 
   // Real routes: the CLI is owner-equivalent, system:mcp reads viewer routes
   // unredacted and its signed POST body reaches the route preview.
@@ -237,11 +241,12 @@ test("a bare x-hub-shim header grants nothing", async (t) => {
   assert.equal(lan.json.error.code, "admin_session_required", "a LAN caller stays an anonymous viewer");
   assert.deepEqual(spy.seen, []);
 
-  // On loopback it is judged like any request without credentials, which is
-  // the owner until PUB-5 (and a viewer after it), never a machine principal.
+  // On loopback it is judged like any request without credentials: a
+  // viewer since PUB-5, never a machine principal, so the write is refused.
   const loopback = await request(port, "/api/hub/downloads", { method: "POST", body: {}, headers: { "x-hub-shim": "vllm" } });
-  assert.equal(loopback.status, 200);
-  assert.deepEqual({ role: loopback.json.role, principal: loopback.json.principal }, { role: "owner", principal: "loopback" });
+  assert.equal(loopback.status, 401);
+  assert.equal(loopback.json.error.code, "admin_session_required");
+  assert.deepEqual(spy.seen, []);
 });
 
 // --- event streams --------------------------------------------------------------

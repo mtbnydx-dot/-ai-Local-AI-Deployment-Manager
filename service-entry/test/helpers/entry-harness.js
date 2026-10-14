@@ -87,12 +87,14 @@ async function serveEntry(t, entry, routes = null) {
   return port;
 }
 
-function request(port, pathname, { method = "GET", headers = {}, body, peer } = {}) {
+// `owner` (an ownerSession()) sends the owner's cookie and CSRF token.
+function request(port, pathname, { method = "GET", headers = {}, body, peer, owner } = {}) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
     const outgoing = {
       host: "127.0.0.1:5176",
       ...(payload ? { "content-type": "application/json", "content-length": String(payload.length) } : {}),
+      ...(owner ? owner.headers(method) : {}),
       ...headers,
       ...(peer ? { [PEER_HEADER]: peer } : {}),
     };
@@ -113,6 +115,42 @@ function request(port, pathname, { method = "GET", headers = {}, body, peer } = 
     call.on("error", reject);
     call.end(payload || undefined);
   });
+}
+
+// A paired owner session for tests that act as the console owner (05 §5.2):
+// a pair code minted with a system:cli signature, redeemed like the console
+// does. Loopback without a session is only a viewer since PUB-5. One session
+// per entry module is enough: sessions live in the entry's access store.
+// headers(method) carries the cookie, plus x-csrf-token for a non-GET.
+const ownerSessions = new WeakMap();
+
+async function ownerSession(entry, port) {
+  if (ownerSessions.has(entry)) return ownerSessions.get(entry);
+  const internalAuth = require("../../../manager-core/internal-auth");
+  const body = JSON.stringify({});
+  const minted = await request(port, "/api/session/pair-codes", {
+    method: "POST",
+    body,
+    headers: internalAuth.buildMachineHeaders(entry.security.getTrustToken(), {
+      method: "POST", pathWithQuery: "/api/session/pair-codes", principal: "system:cli", body, now: Date.now(),
+    }),
+  });
+  if (minted.status !== 200) throw new Error(`minting a pair code failed: HTTP ${minted.status} ${minted.text}`);
+  const paired = await request(port, "/api/session/pair", { method: "POST", body: { code: minted.json.code } });
+  if (paired.status !== 200) throw new Error(`pairing failed: HTTP ${paired.status} ${paired.text}`);
+  const setCookie = [].concat(paired.headers["set-cookie"] || []).find((line) => line.startsWith("lai_admin="));
+  const cookie = String(setCookie || "").split(";")[0];
+  const session = {
+    cookie,
+    csrfToken: paired.json.csrfToken,
+    headers(method = "GET") {
+      return String(method).toUpperCase() === "GET" || String(method).toUpperCase() === "HEAD"
+        ? { cookie }
+        : { cookie, "x-csrf-token": paired.json.csrfToken };
+    },
+  };
+  ownerSessions.set(entry, session);
+  return session;
 }
 
 // A route module that records who reached it. It answers every path in
@@ -143,6 +181,7 @@ function spyModule(claims) {
 module.exports = {
   listen,
   loadEntry,
+  ownerSession,
   quietLogger,
   request,
   serveEntry,

@@ -14,7 +14,7 @@ const { openTelemetryStore } = require("../../manager-core/telemetry/store");
 const accessLog = require("../../manager-core/telemetry/audit-access-log");
 const { createAuditScheduler } = require("../../manager-core/telemetry/audit-scheduler");
 const { AUDIT_ROUTES, createAuditHttp, createAuditSessions, createLoginThrottle } = require("../lib/audit-http");
-const { loadEntry, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
+const { loadEntry, ownerSession, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
 
 const PASSWORD = "correct horse battery staple";
 const START = Date.UTC(2026, 9, 14, 12, 0, 0);
@@ -808,8 +808,8 @@ test("the real entry registers every audit route owner-only and answers a LAN vi
     assert.equal(lan.status, 401, `${route.method} ${pathname}`);
     assert.equal(lan.json.error.code, "admin_session_required");
   }
-  // The loopback owner reaches the module, which owns the 404.
-  const unknown = await request(port, "/api/audit/nope");
+  // The paired owner reaches the module, which owns the 404.
+  const unknown = await request(port, "/api/audit/nope", { owner: await ownerSession(entry, port) });
   assert.equal(unknown.status, 404);
   assert.equal(unknown.json.error.code, "not_found");
   assert.equal(typeof ctx.audit.checkSession, "function");

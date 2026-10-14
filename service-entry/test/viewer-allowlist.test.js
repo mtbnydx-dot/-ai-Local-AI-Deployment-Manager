@@ -7,7 +7,7 @@ const test = require("node:test");
 
 const { createViewerRegistry } = require("../lib/viewer-allowlist");
 const { redactManagerReadForViewer } = require("../lib/mgmt-proxy");
-const { loadEntry, quietLogger, request, serveEntry, spyModule } = require("./helpers/entry-harness");
+const { loadEntry, ownerSession, quietLogger, request, serveEntry, spyModule } = require("./helpers/entry-harness");
 
 // 05 §5.4: deny by default, central redaction, viewer event types, and the
 // route inventory that every entry GET must be part of.
@@ -127,12 +127,12 @@ async function mountEntry(t, extraModules = []) {
   t.after(() => routes.close());
   assert.deepEqual(routes.failed, []);
   const port = await serveEntry(t, entry, routes);
-  return { entry, ctx, routes, port };
+  return { entry, ctx, routes, port, owner: await ownerSession(entry, port) };
 }
 
 test("LAN viewers are denied by default before any route code runs", async (t) => {
   const spy = spyModule(["/api/spy", "/api/hub/", "/api/stop-all"]);
-  const { port } = await mountEntry(t, [spy]);
+  const { port, owner: session } = await mountEntry(t, [spy]);
 
   const denied = [
     ["GET", "/api/spy"],
@@ -162,11 +162,17 @@ test("LAN viewers are denied by default before any route code runs", async (t) =
   }
   assert.notEqual((await request(port, "/api/security", { method: "HEAD", peer: LAN })).status, 401, "HEAD follows GET");
 
-  // PUB-25 keeps loopback without credentials as the owner; PUB-5 flips it.
-  const owner = await request(port, "/api/spy");
+  // Since PUB-5 loopback without credentials is a viewer too; a paired
+  // session is the owner.
+  const before = spy.seen.length;
+  assert.equal((await request(port, "/api/spy")).status, 401);
+  assert.equal((await request(port, "/api/keys")).status, 401);
+  assert.equal((await request(port, "/api/security")).status, 200);
+  assert.equal(spy.seen.length, before);
+  const owner = await request(port, "/api/spy", { owner: session });
   assert.equal(owner.status, 200);
   assert.equal(owner.json.role, "owner");
-  assert.equal((await request(port, "/api/keys")).status, 200);
+  assert.equal((await request(port, "/api/keys", { owner: session })).status, 200);
 });
 
 test("registered routes are redacted centrally through sendJson", async (t) => {
@@ -179,9 +185,9 @@ test("registered routes are redacted centrally through sendJson", async (t) => {
     note: "weights read from /mnt/models/demo",
     gpu: { usedMb: 100 },
   };
-  const { port } = await mountEntry(t, [reportModule(report)]);
+  const { port, owner: session } = await mountEntry(t, [reportModule(report)]);
 
-  const owner = await request(port, "/api/fixture/report");
+  const owner = await request(port, "/api/fixture/report", { owner: session });
   assert.deepEqual(owner.json, report, "the owner gets the body as the route sent it");
 
   const viewer = await request(port, "/api/fixture/report", { peer: LAN });
@@ -201,13 +207,13 @@ test("registered routes are redacted centrally through sendJson", async (t) => {
   assert.deepEqual(broken.json, { ok: false, error: { code: "internal_error", message: "Service entry error." } });
   assert.equal(broken.text.includes("demo-model"), false);
   assert.equal(errors.mock.calls.length, 1);
-  assert.equal((await request(port, "/api/fixture/broken")).status, 200, "the owner is not redacted");
+  assert.equal((await request(port, "/api/fixture/broken", { owner: session })).status, 200, "the owner is not redacted");
 });
 
 test("the 05 baseline serves LAN viewers redacted copies of status, security, fleet and access", async (t) => {
-  const { port } = await mountEntry(t);
+  const { port, owner } = await mountEntry(t);
 
-  const ownerStatus = (await request(port, "/api/status")).json;
+  const ownerStatus = (await request(port, "/api/status", { owner })).json;
   assert.equal(typeof ownerStatus.entry.pid, "number");
   const status = await request(port, "/api/status", { peer: LAN });
   assert.equal(status.status, 200);
@@ -219,7 +225,7 @@ test("the 05 baseline serves LAN viewers redacted copies of status, security, fl
 
   const security = await request(port, "/api/security", { peer: LAN });
   assert.deepEqual(Object.keys(security.json.security).sort(), ["allowLanAdmin", "apiKeyEnforced", "corsMode", "exposure", "lanMode", "publicMode", "requireApiKey", "requireApiKeyMode"]);
-  assert.ok((await request(port, "/api/security")).json.security.switches, "the owner keeps the switches");
+  assert.ok((await request(port, "/api/security", { owner })).json.security.switches, "the owner keeps the switches");
 
   const fleet = await request(port, "/api/fleet", { peer: LAN });
   assert.equal(fleet.status, 200);

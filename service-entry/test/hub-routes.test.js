@@ -15,7 +15,7 @@ const test = require("node:test");
 const internalAuth = require("../../manager-core/internal-auth");
 const { createModelHub, defaultSettings } = require("../../manager-core/model-hub");
 const hubRoutes = require("../lib/hub-routes");
-const { loadEntry, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
+const { loadEntry, ownerSession, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
 
 const LAN = "192.168.1.50";
 
@@ -48,7 +48,9 @@ async function mountEntry(t, { hub = null } = {}) {
   t.after(() => routes.close());
   assert.deepEqual(routes.failed, []);
   const port = await serveEntry(t, entry, routes);
-  return { entry, ctx, port, token: entry.security.getTrustToken() };
+  // The console owner is a paired session since PUB-5.
+  const owner = await ownerSession(entry, port);
+  return { entry, ctx, port, owner, token: entry.security.getTrustToken() };
 }
 
 // A request signed in 05's machine form; `sign` overrides what is signed.
@@ -67,9 +69,9 @@ function readSettingsFile(file) {
 
 test("the owner reads the full status and settings; a LAN viewer gets the redacted status", async (t) => {
   const { hub, root, dataDir, settingsFile } = await startHub(t, { corruptSettings: true });
-  const { port } = await mountEntry(t, { hub });
+  const { port, owner: session } = await mountEntry(t, { hub });
 
-  const owner = await request(port, "/api/hub/status");
+  const owner = await request(port, "/api/hub/status", { owner: session });
   assert.equal(owner.status, 200);
   assert.equal(owner.json.ok, true);
   assert.equal(owner.json.owner, "hub");
@@ -92,7 +94,7 @@ test("the owner reads the full status and settings; a LAN viewer gets the redact
   assert.equal(head.status, 200);
   assert.equal(head.text, "");
 
-  const ownerSettings = await request(port, "/api/hub/settings");
+  const ownerSettings = await request(port, "/api/hub/settings", { owner: session });
   assert.equal(ownerSettings.status, 200);
   assert.deepEqual(ownerSettings.json, { ok: true, settings: defaultSettings() });
   const viewerSettings = await request(port, "/api/hub/settings", { peer: LAN });
@@ -103,16 +105,16 @@ test("the owner reads the full status and settings; a LAN viewer gets the redact
 
 test("the owner saves a partial patch; viewers, invalid patches and bad bodies change nothing", async (t) => {
   const { hub, settingsFile } = await startHub(t);
-  const { port } = await mountEntry(t, { hub });
+  const { port, owner } = await mountEntry(t, { hub });
 
-  const saved = await request(port, "/api/hub/settings", { method: "PUT", body: { transfer: { maxConcurrent: 2 } } });
+  const saved = await request(port, "/api/hub/settings", { method: "PUT", owner, body: { transfer: { maxConcurrent: 2 } } });
   assert.equal(saved.status, 200);
   assert.equal(saved.json.ok, true);
   assert.equal(saved.json.settings.transfer.maxConcurrent, 2);
   assert.equal(saved.json.settings.sources.policy, "huggingface", "a patch keeps every other setting");
   assert.deepEqual(readSettingsFile(settingsFile), saved.json.settings);
 
-  const wrapped = await request(port, "/api/hub/settings", { method: "PUT", body: { settings: { queue: { idleOnly: true } } } });
+  const wrapped = await request(port, "/api/hub/settings", { method: "PUT", owner, body: { settings: { queue: { idleOnly: true } } } });
   assert.equal(wrapped.status, 200);
   assert.equal(wrapped.json.settings.queue.idleOnly, true);
   const current = readSettingsFile(settingsFile);
@@ -121,7 +123,7 @@ test("the owner saves a partial patch; viewers, invalid patches and bad bodies c
   assert.equal(lan.status, 401);
   assert.equal(lan.json.error.code, "admin_session_required");
 
-  const invalid = await request(port, "/api/hub/settings", { method: "PUT", body: { transfer: { maxConcurrent: 9 }, sources: { mirrorEndpoint: "http://mirror.example" }, bogus: 1 } });
+  const invalid = await request(port, "/api/hub/settings", { method: "PUT", owner, body: { transfer: { maxConcurrent: 9 }, sources: { mirrorEndpoint: "http://mirror.example" }, bogus: 1 } });
   assert.equal(invalid.status, 400);
   assert.equal(invalid.json.ok, false);
   assert.equal(invalid.json.error.code, "settings_invalid");
@@ -133,19 +135,19 @@ test("the owner saves a partial patch; viewers, invalid patches and bad bodies c
   ]);
   for (const error of invalid.json.errors) assert.equal(typeof error.message, "string");
 
-  const malformed = await request(port, "/api/hub/settings", { method: "PUT", body: "{ not json" });
+  const malformed = await request(port, "/api/hub/settings", { method: "PUT", owner, body: "{ not json" });
   assert.deepEqual([malformed.status, malformed.json.ok, malformed.json.error.code], [400, false, "invalid_json"]);
-  const list = await request(port, "/api/hub/settings", { method: "PUT", body: "[1]" });
+  const list = await request(port, "/api/hub/settings", { method: "PUT", owner, body: "[1]" });
   assert.deepEqual([list.status, list.json.error.code], [400, "invalid_json"]);
-  const oversized = await request(port, "/api/hub/settings", { method: "PUT", body: { pad: "x".repeat(70 * 1024) } });
+  const oversized = await request(port, "/api/hub/settings", { method: "PUT", owner, body: { pad: "x".repeat(70 * 1024) } });
   assert.deepEqual([oversized.status, oversized.json.error.code], [413, "request_too_large"]);
 
-  const wrongMethod = await request(port, "/api/hub/settings", { method: "POST", body: {} });
+  const wrongMethod = await request(port, "/api/hub/settings", { method: "POST", owner, body: {} });
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.json.error.code, "method_not_allowed");
   assert.equal(wrongMethod.headers.allow, "GET, PUT");
 
-  const crossSite = await request(port, "/api/hub/settings", { method: "PUT", headers: { origin: "https://evil.example" }, body: { verify: { sha256: false } } });
+  const crossSite = await request(port, "/api/hub/settings", { method: "PUT", owner, headers: { origin: "https://evil.example" }, body: { verify: { sha256: false } } });
   assert.equal(crossSite.status, 403);
 
   assert.deepEqual(readSettingsFile(settingsFile), current, "no refused request wrote anything");
@@ -262,17 +264,17 @@ test("the mount registers the viewer routes and events, declares the writes owne
 });
 
 test("without a hub the routes answer 503 hub_unavailable, features.hub stays off and other hub paths fall through", async (t) => {
-  const { ctx, port } = await mountEntry(t);
+  const { ctx, port, owner } = await mountEntry(t);
   assert.equal(ctx.features.hub, false);
   assert.equal(ctx.auth.viewerRegistry.match("GET", "/api/hub/status").access, "viewer", "the registrations do not depend on the hub");
   for (const [method, target] of [["GET", "/api/hub/status"], ["GET", "/api/hub/settings"], ["PUT", "/api/hub/settings"]]) {
-    const response = await request(port, target, { method, ...(method === "PUT" ? { body: {} } : {}) });
+    const response = await request(port, target, { method, owner, ...(method === "PUT" ? { body: {} } : {}) });
     assert.equal(response.status, 503, `${method} ${target}`);
     assert.equal(response.json.ok, false);
     assert.equal(response.json.error.code, "hub_unavailable");
     assert.equal(typeof response.json.error.hint, "string");
   }
-  const later = await request(port, "/api/hub/downloads");
+  const later = await request(port, "/api/hub/downloads", { owner });
   assert.equal(later.status, 404, "a route of a later package is not answered here");
   assert.deepEqual(later.json, { error: "Not found" });
 });

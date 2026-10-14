@@ -6,8 +6,24 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
+// The entry loaded below keeps its ledgers and access store (owner sessions)
+// in a temp dir.
+const ENTRY_TEMP = fs.mkdtempSync(path.join(os.tmpdir(), "entry-security-"));
+process.env.AI_BILLING_DB = path.join(ENTRY_TEMP, "billing.sqlite");
+test.after(() => {
+  require.cache[require.resolve("../server")]?.exports.closeAccessStore();
+  try {
+    fs.rmSync(ENTRY_TEMP, { recursive: true, force: true });
+  } catch {
+    // A ledger still open on Windows; the OS temp cleanup takes it.
+  }
+});
+
 const core = require("../../manager-core");
+const internalAuth = require("../../manager-core/internal-auth");
 const { createEntrySecurity, normalizeRequireApiKeyMode } = require("../lib/security");
+const { cookiePair, fakeRequest, makeAdminAuth } = require("./helpers/admin-auth-fixture");
+const { ownerSession } = require("./helpers/entry-harness");
 
 const SWITCH_ENV = [
   "SERVICE_ENTRY_REQUIRE_API_KEY",
@@ -106,18 +122,41 @@ test("client policy survives entry auth while open local compatibility is preser
   assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: "Bearer local-placeholder" }))).status, 401);
 });
 
-test("management endpoints are local-only until the LAN admin switch is set", (t) => {
+test("loopback without a session is a viewer; a session or token is the owner; LAN owners need allowLanOwner and pairing", (t) => {
   withCleanEnv(t);
-  const security = createEntrySecurity({ host: "0.0.0.0", managers: [] });
+  const fixture = makeAdminAuth();
+  const write = (options) => fixture.auth.checkManagementAccess(fakeRequest({ method: "POST", url: "/api/stop-all", ...options }), { write: true });
 
-  assert.equal(security.checkManagementAccess(req("127.0.0.1")).ok, true);
-  const denied = security.checkManagementAccess(req("192.168.0.44"));
-  assert.equal(denied.ok, false);
-  assert.equal(denied.status, 403);
-  assert.equal(denied.code, "management_local_only");
+  const anonymous = write({});
+  assert.deepEqual([anonymous.ok, anonymous.status, anonymous.code, anonymous.role], [false, 401, "admin_session_required", "viewer"]);
+  assert.equal(fixture.auth.authenticate(fakeRequest()).role, "viewer");
 
-  process.env.SERVICE_ENTRY_ALLOW_LAN_ADMIN = "1";
-  assert.equal(security.checkManagementAccess(req("192.168.0.44")).ok, true);
+  const code = fixture.auth.mintPairCode({ actor: "test" }).code;
+  const paired = fixture.auth.pairWithCode(fakeRequest({ method: "POST" }), code);
+  const cookie = cookiePair(paired.setCookie);
+  assert.equal(write({ headers: { cookie, "x-csrf-token": paired.csrfToken } }).ok, true);
+  const token = fixture.auth.issueToolToken({ name: "script", role: "owner", actor: "test" }).token;
+  assert.equal(write({ headers: { authorization: `Bearer ${token}` } }).ok, true);
+
+  // SERVICE_ENTRY_ALLOW_LAN_ADMIN no longer makes a LAN socket the owner: the
+  // merged OPS-3 schema maps it to listeners.admin.lan (a LAN-bound ADMIN),
+  // and a LAN owner also needs admin.allowLanOwner plus a paired session.
+  const security = createEntrySecurity({ host: "0.0.0.0", managers: [], readSection: defaultAccessReader(t, { SERVICE_ENTRY_ALLOW_LAN_ADMIN: "1" }) });
+  assert.equal(security.accessConfig().adminLanBound, true);
+  assert.equal(security.accessConfig().admin.allowLanOwner, false);
+  fixture.setConfig({ admin: { allowLanOwner: false }, lanBound: true });
+  assert.equal(write({ peer: "192.168.0.44" }).code, "admin_session_required");
+  assert.throws(() => fixture.auth.mintPairCode({ actor: "test", lan: true }), (error) => error.code === "lan_owner_disabled");
+  fixture.setConfig({ admin: { allowLanOwner: true }, lanBound: true });
+  assert.equal(write({ peer: "192.168.0.44" }).code, "admin_session_required", "allowLanOwner alone is no credential");
+  const lanCode = fixture.auth.mintPairCode({ actor: "test", lan: true }).code;
+  const lanPaired = fixture.auth.pairWithCode(fakeRequest({ method: "POST", peer: "192.168.0.44" }), lanCode);
+  const lanHeaders = { cookie: cookiePair(lanPaired.setCookie), "x-csrf-token": lanPaired.csrfToken };
+  assert.equal(write({ peer: "192.168.0.44", headers: lanHeaders }).ok, true);
+
+  fixture.setConfig({ admin: { allowLanOwner: false }, lanBound: true });
+  const lanDenied = write({ peer: "192.168.0.44", headers: lanHeaders });
+  assert.deepEqual([lanDenied.ok, lanDenied.status, lanDenied.code], [false, 403, "lan_owner_disabled"]);
 });
 
 test("proxied requests are never management-eligible, even from loopback or with LAN admin on", (t) => {
@@ -211,6 +250,15 @@ test("host whitelist and Origin check reject cross-site mutations", (t) => {
 
   assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176", origin: "null" }), url).ok, false);
   assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176", origin: "http://127.0.0.1:5176" }), url).ok, true);
+  assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176", origin: "http://192.168.0.10:5176" }), url).ok, true);
+
+  // The Origin is matched exactly, port included: the PUBLIC listener's
+  // origin on the same host may not drive the console (PUB-5).
+  for (const origin of ["http://127.0.0.1:5186", "http://localhost:5186", "http://192.168.0.10:5186", "https://127.0.0.1:5176"]) {
+    const sameHost = security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176", origin }), url);
+    assert.equal(sameHost.ok, false, origin);
+    assert.equal(sameHost.code, "origin_not_allowed", origin);
+  }
 
   // Reads are not Origin-gated.
   assert.equal(security.checkRequest(req("127.0.0.1", { host: "127.0.0.1:5176", origin: "https://evil.example.com" }, "GET"), url).ok, true);
@@ -461,7 +509,7 @@ test("proxy headers strip client-supplied trust headers before re-signing", (t) 
   assert.equal(headers["x-service-entry-client"], "192.168.0.99");
 });
 
-test("shutdown and status endpoints enforce the management gate", async (t) => {
+test("shutdown needs an owner session plus CSRF, an owner token or a cli/supervisor signature; status stays readable and redacted", async (t) => {
   withCleanEnv(t);
   const entry = require("../server");
   const server = entry.createServiceEntryServer();
@@ -493,11 +541,51 @@ test("shutdown and status endpoints enforce the management gate", async (t) => {
   assert.equal(crossSite.status, 403);
   assert.equal(crossSite.body.code, "origin_not_allowed");
 
+  // Loopback without credentials is a viewer: no shutdown, a redacted status.
+  for (const pathname of ["/api/shutdown", "/api/manager/shutdown", "/api/stop-all"]) {
+    const refused = await rawPost(pathname, { host: "127.0.0.1:5176" });
+    assert.equal(refused.status, 401, pathname);
+    assert.equal(refused.body.error.code, "admin_session_required", pathname);
+  }
   const security = await fetch(`http://127.0.0.1:${port}/api/security`);
   assert.equal(security.status, 200);
   const payload = await security.json();
   assert.equal(payload.ok, true);
-  assert.ok(payload.security.switches);
+  assert.equal(payload.security.switches, undefined, "the viewer copy is redacted");
+  const status = await fetch(`http://127.0.0.1:${port}/api/status`);
+  assert.equal(status.status, 200);
+  assert.equal((await status.json()).entry.pid, undefined);
+
+  // A session without its CSRF token, and a signature outside its scope.
+  const owner = await ownerSession(entry, port);
+  const noCsrf = await rawPost("/api/shutdown", { host: "127.0.0.1:5176", cookie: owner.cookie });
+  assert.equal(noCsrf.status, 403);
+  assert.equal(noCsrf.body.error.code, "csrf_invalid");
+  const token = entry.security.getTrustToken();
+  const shimHeaders = internalAuth.buildMachineHeaders(token, { method: "POST", pathWithQuery: "/api/shutdown", principal: "system:hub-shim:vllm", body: "", now: Date.now() });
+  const shim = await rawPost("/api/shutdown", { host: "127.0.0.1:5176", ...shimHeaders });
+  assert.equal(shim.status, 403);
+  assert.equal(shim.body.error.code, "principal_scope_denied");
+  const ownerSecurity = await fetch(`http://127.0.0.1:${port}/api/security`, { headers: owner.headers() });
+  assert.ok((await ownerSecurity.json()).security.switches, "the owner reads the full view");
+
+  // The accepted credentials, checked without stopping this process.
+  const fixture = makeAdminAuth();
+  const shutdown = (options) => fixture.auth.checkManagementAccess(fakeRequest({ method: "POST", url: "/api/shutdown", ...options }), { write: true });
+  const code = fixture.auth.mintPairCode({ actor: "test" }).code;
+  const paired = fixture.auth.pairWithCode(fakeRequest({ method: "POST" }), code);
+  assert.equal(shutdown({ headers: { cookie: cookiePair(paired.setCookie), "x-csrf-token": paired.csrfToken } }).ok, true);
+  assert.equal(shutdown({ headers: { cookie: cookiePair(paired.setCookie) } }).code, "csrf_invalid");
+  const ownerToken = fixture.auth.issueToolToken({ name: "ops", role: "owner", actor: "test" }).token;
+  assert.equal(shutdown({ headers: { authorization: `Bearer ${ownerToken}` } }).ok, true);
+  for (const principal of ["system:cli", "system:supervisor"]) {
+    const signed = fakeRequest({ method: "POST", url: "/api/shutdown" });
+    fixture.machineAuth.remember(signed, principal);
+    assert.equal(fixture.auth.checkManagementAccess(signed, { write: true }).ok, true, principal);
+  }
+  const mcp = fakeRequest({ method: "POST", url: "/api/shutdown" });
+  fixture.machineAuth.remember(mcp, "system:mcp");
+  assert.equal(fixture.auth.checkManagementAccess(mcp, { write: true }).code, "principal_scope_denied");
 });
 
 test("gateway rejects an unauthenticated request before proxying when a key is required", async (t) => {

@@ -11,6 +11,7 @@ const test = require("node:test");
 const relayModule = require("../lib/manager-event-relay");
 const { createEventBus } = require("../lib/events");
 const { createRequestAuth } = require("../lib/request-auth");
+const { ownerSession } = require("./helpers/entry-harness");
 
 const { createManagerEventRelay, createSseParser, instanceFingerprint } = relayModule;
 
@@ -1009,12 +1010,13 @@ test.after(async () => {
   if (!entrySetup) return;
   await closeServer(entrySetup.vllm.server);
   await closeServer(entrySetup.llama.server);
+  entrySetup.entry.closeAccessStore();
   fs.rmSync(entrySetup.tempDir, { recursive: true, force: true });
 });
 
-function openStream(port, pathname) {
+function openStream(port, pathname, headers = {}) {
   return new Promise((resolve, reject) => {
-    const request = http.get({ host: "127.0.0.1", port, path: pathname }, (response) => {
+    const request = http.get({ host: "127.0.0.1", port, path: pathname, headers }, (response) => {
       response.setEncoding("utf8");
       const stream = { status: response.statusCode, frames: [], close: () => request.destroy() };
       let buffer = "";
@@ -1035,9 +1037,9 @@ function openStream(port, pathname) {
   });
 }
 
-function send(port, pathname, { method = "GET", body = "" } = {}) {
+function send(port, pathname, { method = "GET", body = "", owner = null } = {}) {
   return new Promise((resolve, reject) => {
-    const headers = body ? { "content-type": "application/json", "content-length": Buffer.byteLength(body) } : {};
+    const headers = { ...(owner ? owner.headers(method) : {}), ...(body ? { "content-type": "application/json", "content-length": Buffer.byteLength(body) } : {}) };
     const request = http.request({ host: "127.0.0.1", port, path: pathname, method, headers }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
@@ -1063,7 +1065,9 @@ test("with two fake managers a job state change reaches an /api/events client as
     await waitFor(() => manager.hits("/api/jobs") >= 1 && manager.hits("/api/instances") >= 1, 3000, `${manager.name} seed reads`);
   }
 
-  const stream = await openStream(port, "/api/events?types=jobs,instances&client=console");
+  // The console owner: a paired session since PUB-5.
+  const owner = await ownerSession(entry, port);
+  const stream = await openStream(port, "/api/events?types=jobs,instances&client=console", owner.headers());
   assert.equal(stream.status, 200);
   const frames = (type, managerId) => stream.frames.filter((frame) => frame.envelope.type === type && frame.envelope.data.managerId === managerId);
 
@@ -1081,7 +1085,7 @@ test("with two fake managers a job state change reaches an /api/events client as
   // A write through the management proxy pokes the relay, so the new
   // instance shows up without waiting for the 10 s poll.
   llama.state.instances = [instance("primary")];
-  const started = await send(port, "/api/m/llama/start", { method: "POST", body: "{}" });
+  const started = await send(port, "/api/m/llama/start", { method: "POST", body: "{}", owner });
   assert.equal(started.status, 200, started.body);
   await waitFor(() => frames("instances", "llama").length === 1, 3000, "the poked instances event");
   assert.deepEqual(frames("instances", "llama")[0].envelope.data, { managerId: "llama", changed: ["primary"], removed: [], native: false });

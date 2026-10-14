@@ -401,15 +401,23 @@ function createRequestAuth(options = {}) {
     return typeof redact === "function" ? redact(body, { via: who.via, params: found.params || {} }) : body;
   }
 
+  // The GET /api/session body of 05's admin auth (role, via, paired,
+  // csrfToken, autoPairAvailable, pairCommand), or null before it is
+  // attached. The console bootstrap reads it (07 §2.5).
+  function session(req) {
+    if (!adminAuth || typeof adminAuth.sessionInfo !== "function") return null;
+    return adminAuth.sessionInfo(req);
+  }
+
   const api = {
     principal,
+    session,
     checkWrite,
     eventTypesFor,
     viewerRegistry,
     redactFor,
     attach,
-    // "session" once 05's admin auth is attached (bootstrap auth.mode, 07 §2.5);
-    // PUB-25's admin auth still trusts loopback and says so through its mode.
+    // "session" once 05's admin auth is attached (bootstrap auth.mode, 07 §2.5).
     get mode() {
       if (!adminAuth) return "loopback-trust";
       return typeof adminAuth.mode === "string" && adminAuth.mode ? adminAuth.mode : "session";

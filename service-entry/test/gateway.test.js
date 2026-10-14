@@ -1,10 +1,28 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { Readable } = require("node:stream");
 const test = require("node:test");
 const zlib = require("node:zlib");
 
+// The entry's ledgers, and with them the access store that holds owner
+// sessions, live in a temp dir for this file.
+const ENTRY_TEMP = fs.mkdtempSync(path.join(os.tmpdir(), "entry-gateway-"));
+process.env.AI_BILLING_DB = path.join(ENTRY_TEMP, "billing.sqlite");
+
 const core = require("../../manager-core");
 const entry = require("../server");
+const { ownerSession } = require("./helpers/entry-harness");
+
+test.after(() => {
+  entry.closeAccessStore();
+  try {
+    fs.rmSync(ENTRY_TEMP, { recursive: true, force: true });
+  } catch {
+    // A ledger still open on Windows; the OS temp cleanup takes it.
+  }
+});
 
 test("parses gateway routes and maps them to manager paths", () => {
   const openAiRoute = entry.parseGatewayRoute("/gateway/auto/openai/v1/chat/completions");
@@ -284,10 +302,18 @@ test("entry server serves only whitelisted docs", async () => {
     assert.equal(okResponse.status, 200);
     assert.match(await okResponse.text(), /# 客户端连接指南/);
 
-    const missingResponse = await fetch(`http://127.0.0.1:${port}/docs/server.js`);
+    // An unlisted path is no viewer route (401); the owner sees it is missing.
+    assert.equal((await fetch(`http://127.0.0.1:${port}/docs/server.js`)).status, 401);
+    const owner = await ownerSession(entry, port);
+    const missingResponse = await fetch(`http://127.0.0.1:${port}/docs/server.js`, { headers: owner.headers() });
     assert.equal(missingResponse.status, 404);
 
-    const billingResponse = await fetch(`http://127.0.0.1:${port}/billing`);
+    // /billing needs the owner: without a session the browser gets the
+    // pairing page, and after pairing the billing page.
+    const unpaired = await fetch(`http://127.0.0.1:${port}/billing`, { headers: { accept: "text/html" } });
+    assert.equal(unpaired.status, 401);
+    assert.match(await unpaired.text(), /admin-pair\.js --open|platform admin pair/);
+    const billingResponse = await fetch(`http://127.0.0.1:${port}/billing`, { headers: owner.headers() });
     assert.equal(billingResponse.status, 200);
     assert.match(await billingResponse.text(), /<title>模型计费中心<\/title>/);
     assert.match(String(billingResponse.headers.get("content-security-policy")), /default-src 'none'/);
