@@ -6,6 +6,13 @@ function formatElapsedZh(ms) {
   return `${Math.floor(ms / 60000)} 分 ${Math.floor((ms % 60000) / 1000)} 秒`;
 }
 
+// readLogs may answer with text or with a docker() result ({stdout, stderr}).
+function logTextOf(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") return `${value.stdout || ""}${value.stderr || ""}`;
+  return "";
+}
+
 async function waitForRuntimeReady(options = {}) {
   const {
     job,
@@ -36,7 +43,17 @@ async function waitForRuntimeReady(options = {}) {
     probeRetryIntervalMs = 15 * 1000,
     noLogIssue = `${engineName} 启动日志长时间无变化。`,
     pollDetail,
+    // Host-neutral hooks (01-engines §13, ENG-9). inferProgress(logText,
+    // elapsed, timeout) maps the latest log window to {percent, stage, detail};
+    // readLogs(containerName, {tail}) returns the log text. The defaults are
+    // today's regex stages and `docker logs --tail N`.
+    inferProgress: inferProgressOption,
+    readLogs: readLogsOption,
   } = options;
+  const inferProgress = typeof inferProgressOption === "function" ? inferProgressOption : inferStartupProgress;
+  const readLogs = typeof readLogsOption === "function"
+    ? async (name, readOptions) => logTextOf(await readLogsOption(name, readOptions))
+    : async (name, { tail }) => logTextOf(await docker(["logs", "--tail", String(tail), name], { rejectOnError: false }));
 
   appendLog(job, `Service URL: ${serviceUrl}`);
   appendLog(job, `Waiting for ${waitUrl}`);
@@ -122,7 +139,9 @@ async function waitForRuntimeReady(options = {}) {
     const elapsed = nowFn() - started;
     const currentPollIntervalMs = adaptivePolling && elapsed < 60_000 ? 1500 : basePollIntervalMs;
     const currentLogPollIntervalMs = adaptiveLogPolling && elapsed < 60_000 ? 2000 : baseLogPollIntervalMs;
-    const inferred = inferStartupProgress(lastLogSnapshot, elapsed, startupTimeoutMs);
+    // A hook that has no answer for this window leaves today's stages in force.
+    const inferred = inferProgress(lastLogSnapshot, elapsed, startupTimeoutMs)
+      || inferStartupProgress(lastLogSnapshot, elapsed, startupTimeoutMs);
     setJobProgress(job, {
       percent: inferred.percent,
       stage: inferred.stage,
@@ -171,8 +190,7 @@ async function waitForRuntimeReady(options = {}) {
 
     if (!container.running) {
       await delayFn(1000);
-      const logs = await docker(["logs", "--tail", "260", containerName], { rejectOnError: false });
-      const logText = `${logs.stdout}${logs.stderr}`;
+      const logText = await readLogs(containerName, { tail: 260 });
       const deltaText = logSnapshotDelta(lastLogSnapshot, logText);
       if (deltaText) appendLog(job, deltaText);
       lastLogSnapshot = logText;
@@ -190,8 +208,7 @@ async function waitForRuntimeReady(options = {}) {
 
     if (nowFn() - lastLogCheck > currentLogPollIntervalMs) {
       lastLogCheck = nowFn();
-      const logs = await docker(["logs", "--tail", "30", containerName], { rejectOnError: false });
-      const logText = `${logs.stdout}${logs.stderr}`;
+      const logText = await readLogs(containerName, { tail: 30 });
       const changed = logText !== lastLogSnapshot;
       if (stallTimeoutMs > 0 && changed) {
         lastLogChangeAt = nowFn();
@@ -236,8 +253,7 @@ async function waitForRuntimeReady(options = {}) {
     }
   }
 
-  const logs = await docker(["logs", "--tail", "180", containerName], { rejectOnError: false });
-  const logText = `${logs.stdout}${logs.stderr}`;
+  const logText = await readLogs(containerName, { tail: 180 });
   const deltaText = logSnapshotDelta(lastLogSnapshot, logText);
   if (deltaText) appendLog(job, deltaText);
   const issues = extractLogIssues(logText);
