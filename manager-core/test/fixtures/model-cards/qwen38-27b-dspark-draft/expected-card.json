@@ -1,7 +1,7 @@
 {
   "schema": "modelcard/v1",
   "contentDigest": "sha256:57ba9edc3f081e31d3feea4cf8dc1d19c3974163d9c2c181150891bc000dd9a3",
-  "inspectorVersion": "1.0.0",
+  "inspectorVersion": "1.1.0",
   "knowledgeDigest": null,
   "origin": null,
   "format": {
@@ -12,7 +12,10 @@
     "missing": [],
     "layout": "single"
   },
-  "role": null,
+  "role": {
+    "value": "draft",
+    "runnable": false
+  },
   "identity": {
     "modelType": "qwen3",
     "textModelType": null,
@@ -123,7 +126,11 @@
     "draftOf": null,
     "compatibleDrafts": null
   },
-  "compatibleWith": null,
+  "compatibleWith": {
+    "hiddenSize": 5120,
+    "vocabSize": 248320,
+    "targetLayers": 64
+  },
   "customCode": {
     "autoMap": {
       "AutoModel": "dspark.DSparkDraftModel"
@@ -227,7 +234,14 @@
     {"fact":"/format/complete","value":true,"source":{"kind":"file","ref":null},"confidence":"detected"},
     {"fact":"/format/layout","value":"single","source":{"kind":"file","ref":null},"confidence":"detected"},
     {"fact":"/customCode/files","source":{"kind":"file","ref":"dflash.py"},"confidence":"declared"},
-    {"fact":"/speculative/nativeMtp","value":false,"source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected","note":{"zh":"没有找到 MTP 张量。","en":"No MTP tensors were found."}}
+    {"fact":"/speculative/nativeMtp","value":false,"source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected","note":{"zh":"没有找到 MTP 张量。","en":"No MTP tensors were found."}},
+    {"fact":"/role/value","value":"draft","source":{"kind":"file","ref":"config.json#/architectures"},"confidence":"declared","note":{"zh":"这是推测解码草稿模型。","en":"This is a speculative-decoding draft model."}},
+    {"fact":"/role/runnable","value":false,"source":{"kind":"file","ref":"config.json#/architectures"},"confidence":"declared","note":{"zh":"这是推测解码草稿模型。","en":"This is a speculative-decoding draft model."}},
+    {"fact":"/role/value","source":{"kind":"file","ref":"config.json#/dflash_config"},"confidence":"declared","note":{"zh":"这是推测解码草稿模型。","en":"This is a speculative-decoding draft model."}},
+    {"fact":"/role/value","source":{"kind":"file","ref":"config.json#/num_target_layers"},"confidence":"declared","note":{"zh":"这是推测解码草稿模型。","en":"This is a speculative-decoding draft model."}},
+    {"fact":"/compatibleWith/hiddenSize","value":5120,"source":{"kind":"file","ref":"config.json#/hidden_size"},"confidence":"declared"},
+    {"fact":"/compatibleWith/vocabSize","value":248320,"source":{"kind":"file","ref":"config.json#/vocab_size"},"confidence":"declared"},
+    {"fact":"/compatibleWith/targetLayers","value":64,"source":{"kind":"file","ref":"config.json#/num_target_layers"},"confidence":"declared"}
   ],
   "warnings": [
     {

@@ -13,7 +13,8 @@
 //
 // Until the knowledge layers land (MOD-5..MOD-7), derived fields stay at
 // their "not matched" values: familyId null, support "unknown", parsers null.
-// Role detection and companion pairing are MOD-4; role stays null here.
+// The role (and a companion's compatibleWith) comes from detectors/role.js;
+// pairing companions with mains needs several cards and lives there too.
 
 const fsp = require("node:fs/promises");
 const path = require("node:path");
@@ -32,11 +33,12 @@ const {
   abortError, filesOfKind, inventoryWarnings, scanInventory, transformersLayout, transformersWeights,
 } = require("./detectors/inventory");
 const { detectQuant } = require("./detectors/quant");
+const { detectRole, writeRole } = require("./detectors/role");
 const { buildTensorTable } = require("./detectors/safetensors");
 const { detectTemplate } = require("./detectors/template");
 const { buildTopology, writeWeights } = require("./detectors/topology");
 
-const INSPECTOR_VERSION = "1.0.0";
+const INSPECTOR_VERSION = "1.1.0";
 const DEPTHS = Object.freeze(["full", "quick"]);
 const DEFAULT_TIMEOUT_MS = 120_000;
 const WORKER_IDLE_MS = 30_000;
@@ -183,6 +185,9 @@ async function collectLocalFacts(dir, options = {}) {
     facts.set("/speculative/nativeMtp", mtpTensors > 0, { kind: "tensor-table", ref: stats.ref }, "detected", mtpTensors > 0 ? COPY.mtpPackaged : COPY.noMtp);
   }
 
+  const roleContext = { config: configInfo?.config || null, gguf, stats, file };
+  writeRole(facts, detectRole(facts, inv, roleContext), roleContext);
+
   const contentDigest = await contentDigestForDir(inv.dir, { file, inventory: inv });
   return {
     contentDigest,
@@ -284,7 +289,7 @@ function buildCard(cardId, entry, ref, { includeTemplate = false } = {}) {
     parsers: null,
     sampling: sampling && sampling.source ? sampling : null,
     speculative: withDefaults(SECTION_DEFAULTS.speculative, data.speculative),
-    compatibleWith: null,
+    compatibleWith: data.compatibleWith || null,
     customCode: withDefaults(SECTION_DEFAULTS.customCode, data.customCode),
     support: "unknown",
     remote: null,
