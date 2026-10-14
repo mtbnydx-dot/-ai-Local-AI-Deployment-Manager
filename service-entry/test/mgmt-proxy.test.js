@@ -980,25 +980,29 @@ test("the entry mounts the proxy right after the event bus and serves /api/m/* t
   const port = await listen(http5176);
   t.after(() => closeServer(http5176));
 
+  // The manager event relay (ENT-EV3) mounts with the table and reads the
+  // same fake manager (its stream, jobs and instances); those are not proxied.
+  const relayReads = new Set(["/api/events", "/api/jobs?fields=summary", "/api/instances"]);
+  const proxiedSeen = () => vllm.seen.filter((hit) => !relayReads.has(hit.url));
   const engines = await send(port, "/api/m/vllm/engines?model=x");
   assert.equal(engines.status, 200);
   assert.deepEqual(engines.json, { ok: true, url: "/api/engines?model=x" });
   assertMinted(engines);
-  assert.equal(vllm.seen.at(-1).headers["x-request-id"], engines.headers["x-request-id"]);
+  assert.equal(proxiedSeen().at(-1).headers["x-request-id"], engines.headers["x-request-id"]);
 
   const offline = await send(port, "/api/m/llama/status");
   assert.equal(offline.status, 502);
   assert.equal(offline.json.error.code, "manager_unreachable");
 
   // The entry's own guards run first: nothing proxied, nothing cross-site.
-  const before = vllm.seen.length;
+  const before = proxiedSeen().length;
   const proxied = await send(port, "/api/m/vllm/status", { headers: { "x-forwarded-for": "203.0.113.5" } });
   assert.equal(proxied.status, 404);
   assert.equal(proxied.json.code, "public_proxy_gateway_only");
   const crossSite = await send(port, "/api/m/vllm/start", { method: "POST", headers: { origin: "https://evil.example.com" }, body: "{}" });
   assert.equal(crossSite.status, 403);
   assert.equal(crossSite.json.code, "origin_not_allowed");
-  assert.equal(vllm.seen.length, before);
+  assert.equal(proxiedSeen().length, before);
 
   // The in-process client reaches the same manager.
   const viaClient = await ctx.managerClient.get("vllm", "engines");

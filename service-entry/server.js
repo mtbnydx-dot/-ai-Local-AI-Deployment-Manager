@@ -137,7 +137,7 @@ const security = createEntrySecurity({
 const ROUTE_MODULES = [
   "./lib/events", // ENT-EV1  /api/events, /api/events/recent
   "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
-  // "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
+  "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
   // "./lib/engine-routes",       // 01 ENG-19
   // "./lib/hub-routes",          // 03 HUB-7
   // "./lib/telemetry-routes",    // 04 TEL-*
