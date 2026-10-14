@@ -10,6 +10,8 @@ param(
 
 # Daily snapshot of the platform's small, valuable state:
 #   * service-entry\data\platform-billing.sqlite  (billing ledger; copied with VACUUM INTO)
+#   * service-entry\data\telemetry.sqlite  (telemetry and the audit-of-audit log; VACUUM INTO;
+#     AI_TELEMETRY_DB overrides the source path)
 #   * TTS history database (tts-history.sqlite3) when present
 #   * service-entry\data\*.json, <manager>\logs\*.json ledgers, .runtime\gateway-trust is NOT copied
 # into backups\<yyyyMMdd-HHmm>\ with a manifest, pruning snapshots older than -KeepDays.
@@ -54,6 +56,9 @@ function Add-File([string]$source, [string]$relative, [string]$kind) {
 }
 
 Add-File (Join-Path $Root "service-entry\data\platform-billing.sqlite") "service-entry\data\platform-billing.sqlite" "sqlite"
+$telemetryDb = if ($env:AI_TELEMETRY_DB) { $env:AI_TELEMETRY_DB } else { Join-Path $Root 'service-entry\data\telemetry.sqlite' }
+if (-not [IO.Path]::IsPathRooted($telemetryDb)) { $telemetryDb = Join-Path $Root $telemetryDb }
+Add-File $telemetryDb 'service-entry\data\telemetry.sqlite' 'sqlite'
 Get-ChildItem -LiteralPath (Join-Path $Root "service-entry\data") -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
     Add-File $_.FullName ("service-entry\data\" + $_.Name) "json"
 }
