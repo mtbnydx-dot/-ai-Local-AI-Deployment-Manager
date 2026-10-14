@@ -178,12 +178,14 @@ function createRecipeStore(options = {}) {
     const problems = new Map();
     const warnings = [];
     const state = new Map();
+    // id → number of extends links up to its root, so the limit does not depend on which recipe resolves first.
+    const links = new Map();
     const fail = (id, items) => {
       problems.set(id, [...(problems.get(id) || []), ...items]);
       state.set(id, "failed");
       return null;
     };
-    function resolve(id, depth) {
+    function resolve(id) {
       if (state.get(id) === "done") return recipes.get(id);
       if (state.get(id) === "failed") return null;
       const entry = rawById.get(id);
@@ -193,13 +195,14 @@ function createRecipeStore(options = {}) {
       let recipe = clone(entry.raw);
       if (entry.raw.extends !== undefined) {
         const parentId = entry.raw.extends;
-        if (depth >= MAX_EXTENDS_DEPTH) return fail(id, [{ path: "extends", code: "extends_too_deep", message: `${id} extends more than ${MAX_EXTENDS_DEPTH} levels.` }]);
         if (typeof parentId !== "string" || !rawById.has(parentId)) {
           return fail(id, [{ path: "extends", code: "extends_unknown", message: `${id} extends ${parentId}, which is not a recipe.` }]);
         }
-        const parent = resolve(parentId, depth + 1);
+        const parent = resolve(parentId);
         if (state.get(id) === "failed") return null;
         if (!parent) return fail(id, [{ path: "extends", code: "extends_invalid", message: `${id} extends ${parentId}, which is not valid.` }]);
+        links.set(id, (links.get(parentId) || 0) + 1);
+        if (links.get(id) > MAX_EXTENDS_DEPTH) return fail(id, [{ path: "extends", code: "extends_too_deep", message: `${id} extends more than ${MAX_EXTENDS_DEPTH} levels.` }]);
         const { profile: _profile, ...inherited } = clone(parent);
         recipe = deepMerge(inherited, entry.raw);
       }
@@ -210,7 +213,7 @@ function createRecipeStore(options = {}) {
       state.set(id, "done");
       return recipes.get(id);
     }
-    for (const id of rawById.keys()) resolve(id, 0);
+    for (const id of rawById.keys()) resolve(id);
     return { recipes, problems, warnings };
   }
 
@@ -1307,6 +1310,14 @@ function watchRecipeOverrides(options = {}) {
   let timer = null;
   let watcher = null;
   let closed = false;
+
+  // Load now, as the manager does at start, so a file edited before the first
+  // lookup already has a last good version to fall back to.
+  try {
+    store.snapshot();
+  } catch (error) {
+    log(`[recipes] initial load failed: ${error.message}`);
+  }
 
   function fire() {
     timer = null;
