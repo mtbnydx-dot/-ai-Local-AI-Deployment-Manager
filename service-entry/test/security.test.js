@@ -22,6 +22,8 @@ test.after(() => {
 const core = require("../../manager-core");
 const internalAuth = require("../../manager-core/internal-auth");
 const { createEntrySecurity, normalizeRequireApiKeyMode } = require("../lib/security");
+const { createKeysStore } = require("../lib/keys-store");
+const keyMigration = require("../lib/key-migration");
 const { cookiePair, fakeRequest, makeAdminAuth } = require("./helpers/admin-auth-fixture");
 const { ownerSession } = require("./helpers/entry-harness");
 
@@ -74,6 +76,36 @@ function req(remoteAddress, headers = {}, method = "POST") {
   return { method, headers, socket: { remoteAddress } };
 }
 
+// Gateway keys live in the platform access store since PUB-8 (05 §6). The
+// managers' legacy files are migrated into a temp store, as the entry does
+// at its first start.
+function tempKeysStore(t, prefix = "entry-keys-") {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const store = createKeysStore({ file: path.join(dir, "platform-access.sqlite") });
+  // Closed before its directory goes: Windows keeps an open SQLite file.
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return store;
+}
+
+async function migratedStore(t, managers) {
+  const store = tempKeysStore(t);
+  const outcome = await keyMigration.runKeyMigration({
+    store,
+    managers: managers.map(({ id, root }) => ({ id, billingId: `${id}-manager`, root })),
+    listBindings: () => [],
+    actor: "migration",
+  });
+  assert.equal(outcome.ran, true);
+  return store;
+}
+
+function pick(result) {
+  return [result.ok, result.status, result.code];
+}
+
 // Gateway error text must not tell a caller where files live, which port a
 // component uses, or which env switch to flip (P0-26).
 function assertPublicMessage(message, label = "message") {
@@ -111,7 +143,8 @@ test("client policy survives entry auth while open local compatibility is preser
   const root = tempRoot(t, "entry-client-policy-");
   const record = core.createServiceClientRecord({}, { name: "TTS client", rateLimitRpm: 1, maxConcurrentRequests: 1, maxQueuedRequests: 0, queueTimeoutSeconds: 15, requestTimeoutSeconds: 30 });
   const manager = await makeManager(root, "vllm", { exposure: {}, clients: record.ledger });
-  const security = createEntrySecurity({ host: "127.0.0.1", managers: [manager] });
+  const keysStore = await migratedStore(t, [manager]);
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [manager], keysStore, readSection: defaultAccessReader(t) });
   const auth = await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: `Bearer ${record.apiKey}` }));
   assert.equal(auth.client.rateLimitRpm, 1);
   assert.equal(auth.client.maxConcurrentRequests, 1);
@@ -119,7 +152,7 @@ test("client policy survives entry auth while open local compatibility is preser
   assert.equal(auth.client.requestTimeoutSeconds, 30);
   assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: "Bearer local-placeholder" }))).ok, true);
   process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "1";
-  assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: "Bearer local-placeholder" }))).status, 401);
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: "Bearer local-placeholder" }))), [false, 401, "invalid_api_key"]);
 });
 
 test("loopback without a session is a viewer; a session or token is the owner; LAN owners need allowLanOwner and pairing", (t) => {
@@ -239,27 +272,26 @@ test("declaring a public base URL makes auto require an API key even on a loopba
 
 test("PUBLIC always requires a key on model routes, even with requireApiKey off", async (t) => {
   withCleanEnv(t);
-  const root = tempRoot(t, "entry-public-key-");
-  const manager = await makeManager(root, "vllm", { exposure: {}, clients: {} });
   process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "0";
-  const security = createEntrySecurity({ host: "127.0.0.1", managers: [manager] });
+  const keysStore = tempKeysStore(t);
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [], keysStore, readSection: defaultAccessReader(t) });
   const onPublic = (headers = {}) => ({ ...req("127.0.0.1", headers, "POST"), listener: { kind: "public", lanBound: false } });
-  // ADMIN loopback stays keyless; PUBLIC does not, and a store with no keys
-  // fails closed instead of reading as "open".
-  assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1"))).ok, true);
-  const publicNoKey = await security.authorizeGatewayRequest(onPublic());
-  assert.equal(publicNoKey.ok, false);
-  assert.equal(publicNoKey.code, "api_key_not_configured");
+  // ADMIN loopback stays keyless; PUBLIC does not.
+  const keyless = await security.authorizeGatewayRequest(req("127.0.0.1"));
+  assert.deepEqual([keyless.ok, keyless.kind], [true, "keyless"]);
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(onPublic())), [false, 401, "missing_api_key"]);
   // A forwarded request that reached ADMIN's /gateway/* (legacyProxyGateway
   // "serve") needs a key as well.
-  const forwarded = await security.authorizeGatewayRequest(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" }));
-  assert.equal(forwarded.ok, false);
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" }))), [false, 401, "missing_api_key"]);
 
-  const record = core.createServiceClientRecord({}, { name: "public customer" });
-  const keyed = await makeManager(root, "llama", { exposure: {}, clients: record.ledger });
-  const withKey = createEntrySecurity({ host: "127.0.0.1", managers: [keyed] });
-  assert.equal((await withKey.authorizeGatewayRequest(onPublic())).code, "unauthorized");
-  assert.equal((await withKey.authorizeGatewayRequest(onPublic({ authorization: `Bearer ${record.apiKey}` }))).ok, true);
+  const { secret } = keysStore.createKey({ name: "public customer", class: "friend", scopes: ["models.read", "chat"], models: ["*"], listeners: ["public"] }, { actor: "test" });
+  assert.equal((await security.authorizeGatewayRequest(onPublic({ authorization: "Bearer sk-plat-wrong" }))).code, "invalid_api_key");
+  const keyed = await security.authorizeGatewayRequest(onPublic({ authorization: `Bearer ${secret}` }), { scope: "chat" });
+  assert.deepEqual([keyed.ok, keyed.kind, keyed.listener], [true, "key", "public"]);
+  // The key's listeners, and the scope a route needs, are enforced.
+  assert.equal((await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: `Bearer ${secret}` }))).code, "scope_denied");
+  const noScope = await security.authorizeGatewayRequest(onPublic({ authorization: `Bearer ${secret}` }), { scope: "embeddings" });
+  assert.deepEqual([...pick(noScope), noScope.param], [false, 403, "scope_denied", "embeddings"]);
 });
 
 test("resolveClientAddress and trustHeaders vouch the resolved client, not the proxy socket", (t) => {
@@ -350,7 +382,7 @@ test("CORS does not reflect arbitrary origins", (t) => {
   );
 });
 
-test("gateway auth accepts manager keys and rejects missing or wrong ones", async (t) => {
+test("gateway auth reads migrated keys from the access store and rejects missing or wrong ones", async (t) => {
   withCleanEnv(t);
   process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "1";
   const root = tempRoot(t, "entry-auth-");
@@ -378,85 +410,111 @@ test("gateway auth accepts manager keys and rejects missing or wrong ones", asyn
       },
     }),
   ];
-  const security = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers });
+  const keysStore = await migratedStore(t, managers);
+  // The managers' files are no longer read: removing them changes nothing.
+  for (const manager of managers) fs.rmSync(manager.root, { recursive: true, force: true });
+  const security = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers, keysStore, readSection: defaultAccessReader(t) });
 
-  assert.equal((await security.authorizeGatewayRequest(req("192.168.0.5", {}))).ok, false);
-  assert.equal((await security.authorizeGatewayRequest(req("192.168.0.5", {}))).status, 401);
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(req("192.168.0.5", {}))), [false, 401, "missing_api_key"]);
 
   const withGlobal = await security.authorizeGatewayRequest(req("192.168.0.5", { authorization: `Bearer ${globalKey}` }));
   assert.equal(withGlobal.ok, true);
   assert.equal(withGlobal.matchedManager, "vllm");
+  assert.equal(withGlobal.keyId, "vllm.global");
+  assert.equal(withGlobal.client, null, "a global key stays unmetered, as before");
+  assert.deepEqual(withGlobal.key.fleetAllow, ["vllm:*"]);
 
   // A per-client key from either manager is accepted, and the client is identified.
   const withClient = await security.authorizeGatewayRequest(req("192.168.0.5", { "x-api-key": clientKey }));
   assert.equal(withClient.ok, true);
   assert.equal(withClient.clientId, "opencode");
+  assert.equal(withClient.keyId, "llama.opencode");
+  assert.equal(withClient.matchedManager, "llama");
   assert.deepEqual(withClient.client.allowedModels, ["allowed-model"]);
+  assert.deepEqual(withClient.key.models, ["allowed-model"]);
   assert.equal(Object.hasOwn(withClient.client, "keyHash"), false);
+  assert.equal(JSON.stringify(withClient).includes(core.hashServiceApiKey(clientKey)), false, "no key hash leaves the store");
 
-  const wrong = await security.authorizeGatewayRequest(req("192.168.0.5", { authorization: "Bearer sk-nope" }));
-  assert.equal(wrong.ok, false);
-  assert.equal(wrong.status, 401);
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(req("192.168.0.5", { authorization: "Bearer sk-nope" }))), [false, 401, "invalid_api_key"]);
+
+  // Migrated keys carry the legacy scope set: no debug.route.
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(req("192.168.0.5", { "x-api-key": clientKey }), { scope: "debug.route" })), [false, 403, "scope_denied"]);
+  // Status and expiry are the store's.
+  keysStore.updateKey("llama.opencode", { status: "disabled" }, { actor: "test" });
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(req("192.168.0.5", { "x-api-key": clientKey }))), [false, 403, "key_disabled"]);
+  keysStore.updateKey("llama.opencode", { status: "active", expiresAt: "2020-01-01T00:00:00.000Z" }, { actor: "test" });
+  assert.deepEqual(pick(await security.authorizeGatewayRequest(req("192.168.0.5", { "x-api-key": clientKey }))), [false, 401, "key_expired"]);
 
   // The switch turns enforcement off wholesale.
   process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "0";
-  security.invalidateKeyStores();
   assert.equal((await security.authorizeGatewayRequest(req("192.168.0.5", {}))).ok, true);
 });
 
-test("gateway auth fails closed when a key store is unreadable or empty", async (t) => {
+test("gateway auth fails closed with 503 auth_unavailable when the access store is corrupt or missing", async (t) => {
   withCleanEnv(t);
-  process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "1";
   const root = tempRoot(t, "entry-auth-bad-");
+  const corruptFile = path.join(root, "platform-access.sqlite");
+  fs.writeFileSync(corruptFile, "this is not a SQLite database, it only has the name of one. ".repeat(40));
+  const keysStore = () => createKeysStore({ file: corruptFile });
+  assert.throws(keysStore, (error) => error.code === "access_store_unavailable");
+  const corrupt = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers: [], keysStore, readSection: defaultAccessReader(t), logError: () => {} });
+  for (const required of ["1", "0"]) {
+    process.env.SERVICE_ENTRY_REQUIRE_API_KEY = required;
+    for (const headers of [{ authorization: "Bearer sk-anything" }, {}]) {
+      const denied = await corrupt.authorizeGatewayRequest(req("127.0.0.1", headers));
+      // A broken store never reads as "no keys", not even for keyless loopback.
+      assert.deepEqual(pick(denied), [false, 503, "auth_unavailable"], `${required} ${JSON.stringify(headers)}`);
+      assertPublicMessage(denied.message, "auth_unavailable");
+      assert.equal(denied.message.includes(root), false);
+      assert.equal(/sqlite|platform-access/i.test(denied.message), false, "no file names in the message");
+    }
+  }
 
-  const corrupt = [await makeManager(root, "vllm", { exposure: '{"enabled":true,"requi', clients: { clients: [] } })];
-  const corruptSecurity = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers: corrupt, logError: () => {} });
-  const denied = await corruptSecurity.authorizeGatewayRequest(req("192.168.0.5", { authorization: "Bearer sk-anything" }));
-  assert.equal(denied.ok, false);
-  assert.equal(denied.status, 503);
-  assert.equal(denied.code, "key_store_unreadable");
-  assertPublicMessage(denied.message, "key_store_unreadable");
-  assert.equal(denied.message.includes(root), false);
-  assert.equal(denied.message, "服务暂时不可用 / Service temporarily unavailable");
+  // No store wired at all is the same refusal.
+  const unwired = createEntrySecurity({ host: "127.0.0.1", managers: [], readSection: defaultAccessReader(t), logError: () => {} });
+  assert.equal((await unwired.authorizeGatewayRequest(req("127.0.0.1"))).code, "auth_unavailable");
 
-  // Requiring a key with none configured must refuse rather than wave traffic through.
-  const empty = [await makeManager(root, "llama", {
-    exposure: { version: 1, enabled: true, requireApiKey: true },
-    clients: { version: 1, clients: [] },
-  })];
-  const emptySecurity = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers: empty });
-  const noKeys = await emptySecurity.authorizeGatewayRequest(req("192.168.0.5", {}));
-  assert.equal(noKeys.ok, false);
-  assert.equal(noKeys.status, 503);
-  assert.equal(noKeys.code, "api_key_not_configured");
-  assertPublicMessage(noKeys.message, "api_key_not_configured");
+  // Requiring a key with none in the store refuses rather than waves traffic through.
+  process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "1";
+  const empty = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers: [], keysStore: tempKeysStore(t), readSection: defaultAccessReader(t) });
+  const noKeys = await empty.authorizeGatewayRequest(req("192.168.0.5", {}));
+  assert.deepEqual(pick(noKeys), [false, 401, "missing_api_key"]);
+  assertPublicMessage(noKeys.message, "missing_api_key");
+  const state = await empty.describe();
+  assert.deepEqual([state.keyStore.readable, state.keyStore.activeKeys, state.apiKeyEnforced], [true, 0, false]);
 });
 
-test("key store failures reach the server log with details, redacted and rate-limited", async (t) => {
+test("access store failures reach the server log with details, redacted and rate-limited", async (t) => {
   withCleanEnv(t);
   process.env.SERVICE_ENTRY_REQUIRE_API_KEY = "1";
   const root = tempRoot(t, "entry-auth-log-");
-  // A manager directory whose name looks like a key stands in for any secret
-  // that a file-system error message might echo.
+  // A path whose name looks like a key stands in for any secret that a
+  // file-system error message might echo.
   const fakeKey = "sk-fakeStoreKey0001";
-  const managers = [await makeManager(root, fakeKey, { exposure: '{"enabled":true,"requi', clients: { clients: [] } })];
+  const keysStore = () => {
+    const error = new Error("Access store could not be opened.");
+    error.code = "access_store_unavailable";
+    error.cause = new Error(`file is not a database: ${path.join(root, fakeKey, "platform-access.sqlite")}`);
+    throw error;
+  };
   const logged = [];
-  const security = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers, logError: (line) => logged.push(line) });
+  const security = createEntrySecurity({ host: "0.0.0.0", aiRoot: root, managers: [], keysStore, readSection: defaultAccessReader(t), logError: (line) => logged.push(line) });
 
   for (let index = 0; index < 3; index += 1) {
     const denied = await security.authorizeGatewayRequest(req("192.168.0.5", { authorization: "Bearer sk-anything" }));
-    assert.equal(denied.code, "key_store_unreadable");
+    assert.equal(denied.code, "auth_unavailable");
     assert.equal(denied.message.includes(fakeKey), false);
   }
   assert.equal(logged.length, 1);
-  assert.match(logged[0], /service-exposure-settings\.json/);
-  assert.match(logged[0], /not valid JSON/);
+  assert.match(logged[0], /access_store_unavailable/);
+  assert.match(logged[0], /not a database/);
   assert.match(logged[0], /<redacted>/);
   assert.equal(logged[0].includes(fakeKey), false);
 
-  // The admin view keeps the paths it always had, minus anything secret.
+  // The admin view says the store is unreadable, minus anything secret.
   const state = await security.describe();
   assert.equal(state.keyStore.readable, false);
+  assert.equal(state.apiKeyEnforced, false);
   assert.ok(state.keyStore.issues.every((item) => !item.message.includes(fakeKey)));
 });
 
@@ -668,10 +726,10 @@ test("gateway rejects an unauthenticated request before proxying when a key is r
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "local-current", messages: [] }),
   });
-  // Either "no key presented" or "no key configured" -- both refuse the request.
+  // No key presented: 401 (05 §10.2), or 503 while the access store is down.
   assert.ok([401, 503].includes(response.status), `expected 401/503, got ${response.status}`);
   const body = await response.json();
-  assert.ok(["unauthorized", "api_key_not_configured", "key_store_unreadable"].includes(body.error.code), body.error.code);
+  assert.ok(["missing_api_key", "auth_unavailable"].includes(body.error.code), body.error.code);
   assertPublicMessage(body.error.message, body.error.code);
 });
 

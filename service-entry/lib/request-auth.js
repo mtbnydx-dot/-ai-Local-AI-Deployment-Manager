@@ -422,6 +422,12 @@ function createRequestAuth(options = {}) {
       if (!adminAuth) return "loopback-trust";
       return typeof adminAuth.mode === "string" && adminAuth.mode ? adminAuth.mode : "session";
     },
+    // The ADMIN gateway accepts the owner's session as the console-session
+    // principal (05 §5.8, PUB-8) once owner sessions exist, i.e. once 05's
+    // admin auth is attached (bootstrap gateway.consoleSession, 07 C13).
+    get consoleSession() {
+      return Boolean(adminAuth);
+    },
   };
   if (options.viewerRegistry) attach({ viewerRegistry: options.viewerRegistry });
   return api;
