@@ -1,0 +1,87 @@
+[
+  {
+    "_id": "065944d4b6ef6af05cc8f14d",
+    "id": "example-org/Example-8B-GGUF",
+    "modelId": "example-org/Example-8B-GGUF",
+    "downloads": 120000,
+    "likes": 300,
+    "lastModified": "2026-09-18T10:21:34.000Z",
+    "pipeline_tag": "text-generation",
+    "library_name": "gguf",
+    "tags": [
+      "gguf",
+      "text-generation",
+      "base_model:quantized:Example-Org/Example-8B",
+      "license:apache-2.0"
+    ],
+    "gated": false,
+    "gguf": {
+      "total": 8190735360,
+      "architecture": "qwen3",
+      "context_length": 40960,
+      "chat_template": "{{ x }}"
+    },
+    "cardData": {
+      "base_model": "Example-Org/Example-8B",
+      "license": "apache-2.0"
+    },
+    "usedStorage": 62000000000
+  },
+  {
+    "_id": "49e80e57439f0abd3a150b6c",
+    "id": "example-org/Example-8B-FP8",
+    "modelId": "example-org/Example-8B-FP8",
+    "downloads": 54000,
+    "likes": 41,
+    "lastModified": "2026-09-20T07:02:11.000Z",
+    "pipeline_tag": "text-generation",
+    "library_name": "transformers",
+    "tags": [
+      "transformers",
+      "safetensors",
+      "fp8",
+      "license:apache-2.0"
+    ],
+    "gated": false,
+    "safetensors": {
+      "parameters": {
+        "BF16": 1243136000,
+        "F8_E4M3": 6947599360
+      },
+      "total": 8190735360
+    },
+    "cardData": {
+      "base_model": [
+        "Example-Org/Example-8B"
+      ]
+    },
+    "usedStorage": 9068245120
+  },
+  {
+    "_id": "d6c80a4a5c0f11feddf7c72d",
+    "id": "example-org/Example-Mixed",
+    "modelId": "example-org/Example-Mixed",
+    "downloads": 2100,
+    "likes": 7,
+    "lastModified": "2026-08-30T12:00:00.000Z",
+    "pipeline_tag": "image-text-to-text",
+    "library_name": "transformers",
+    "tags": [
+      "transformers",
+      "custom_code"
+    ],
+    "gated": "manual"
+  },
+  {
+    "_id": "173010401828afb2d79533b5",
+    "id": "community-user/tiny-gguf-test",
+    "modelId": "community-user/tiny-gguf-test",
+    "lastModified": "2026-07-01T00:00:00.000Z",
+    "tags": [
+      "gguf"
+    ]
+  },
+  {
+    "_id": "ffffffffffffffffffffff01"
+  }
+]
