@@ -118,7 +118,9 @@
     ]
   },
   "forceInclude": [
-    "*/test/fixtures/**"
+    "*/test/fixtures/**",
+    "shared-public/vendor/**",
+    "shared-public/styles/**"
   ],
   "syntaxCheck": {
     "esmGlobs": [
