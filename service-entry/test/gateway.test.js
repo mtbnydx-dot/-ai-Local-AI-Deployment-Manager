@@ -702,6 +702,10 @@ test("entry rate-limits aggregated model list after auth", async () => {
     assert.equal(second.status, 429);
     const body = await second.json();
     assert.equal(body.error?.code || body.code, "rate_limit_exceeded");
+    // 05 §9.6: the keyless ADMIN gateway reports its rpm too.
+    assert.equal(second.headers.get("x-ratelimit-limit-requests"), "1");
+    assert.equal(second.headers.get("x-ratelimit-remaining-requests"), "0");
+    assert.ok(Number(second.headers.get("retry-after")) >= 1);
   } finally {
     if (previous == null) delete process.env.SERVICE_ENTRY_RATE_LIMIT_RPM;
     else process.env.SERVICE_ENTRY_RATE_LIMIT_RPM = previous;
