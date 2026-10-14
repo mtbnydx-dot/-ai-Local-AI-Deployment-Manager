@@ -87,7 +87,7 @@
       "enableAutoToolChoice": false,
       "toolCallParser": "",
       "networkAccess": "local",
-      "vllmApiKey": "<redacted>",
+      "vllmApiKey": "<secret:apiKey>",
       "runtimeApiKeyRef": "ref-replace",
       "serviceHost": "127.0.0.1",
       "serviceUrl": "http://127.0.0.1:8000/v1",

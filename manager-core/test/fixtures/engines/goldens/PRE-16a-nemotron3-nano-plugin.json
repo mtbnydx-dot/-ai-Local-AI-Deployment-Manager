@@ -32,7 +32,7 @@
       "label": "NemotronHForCausalLM capability profile",
       "forceTrustRemoteCode": true,
       "reasoningParser": "nano_v3",
-      "reasoningParserPlugin": "C:/fixture/models/nvidia-Nemotron-3-Nano-30B-A3B/nano_v3_reasoning_parser.py",
+      "reasoningParserPlugin": "C:\\fixture\\models\\nvidia-Nemotron-3-Nano-30B-A3B\\nano_v3_reasoning_parser.py",
       "toolCallParser": "qwen3_coder",
       "enableAutoToolChoice": true,
       "speculativeConfig": null,
@@ -66,7 +66,7 @@
           "confidence": "verified"
         },
         "reasoningParser": "nano_v3",
-        "reasoningParserPlugin": "C:/fixture/models/nvidia-Nemotron-3-Nano-30B-A3B/nano_v3_reasoning_parser.py",
+        "reasoningParserPlugin": "C:\\fixture\\models\\nvidia-Nemotron-3-Nano-30B-A3B\\nano_v3_reasoning_parser.py",
         "toolCallParser": "qwen3_coder",
         "enableAutoToolChoice": true,
         "forceTrustRemoteCode": true,

@@ -59,7 +59,7 @@
       "mmFeatureTransport": "cpu",
       "speculativeConfig": null,
       "speculativeAlgorithm": "DSPARK",
-      "draftModel": "C:/fixture/models/RadixArk-Qwen3.8-27B-DSpark",
+      "draftModel": "C:\\fixture\\models\\RadixArk-Qwen3.8-27B-DSpark",
       "dsparkBlockSize": 7,
       "draftModelQuantization": "unquant",
       "notes": [

@@ -233,6 +233,7 @@
       "127.0.0.1:8080:8080"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "local/llama.cpp:server-cuda-muse-62bf73d",
     "runtimeEngine": null,
     "jobMeta": null,

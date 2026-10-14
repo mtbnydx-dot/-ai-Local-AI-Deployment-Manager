@@ -201,6 +201,10 @@
       "HF_TOKEN",
       "LLAMA_API_KEY"
     ],
+    "secretEnv": {
+      "HF_TOKEN": "<secret:hfToken>",
+      "LLAMA_API_KEY": "<secret:apiKey>"
+    },
     "runtimeImage": "llama:pinned",
     "runtimeEngine": null,
     "jobMeta": null,

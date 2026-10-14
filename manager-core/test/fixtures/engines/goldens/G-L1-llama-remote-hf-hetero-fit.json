@@ -197,6 +197,7 @@
       "192.168.1.27:8080:8080"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "ghcr.io/ggml-org/llama.cpp@sha256:test",
     "runtimeEngine": null,
     "jobMeta": null,

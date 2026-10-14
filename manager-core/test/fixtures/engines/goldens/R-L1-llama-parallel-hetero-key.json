@@ -122,8 +122,8 @@
       "temperature": null,
       "topP": null,
       "topK": null,
-      "llamaApiKey": "<redacted>",
-      "runtimeApiKeyRef": "ref-<redacted>",
+      "llamaApiKey": "<secret:apiKey>",
+      "runtimeApiKeyRef": "ref-<secret:apiKey>",
       "vramReservationMb": 10000,
       "gpuAdmissionLeaseId": "lease-llama"
     },

@@ -7,9 +7,12 @@
 // for the cases that load a manager, and one runner per fixture kind.
 //
 // Fixtures never hold a secret or a machine path. Inputs name secrets as
-// "<secret:apiKey>" and local paths under the canonical root "C:/fixture"; the
-// runner swaps in fake values and a temp directory before the call, and maps
-// them back to "<redacted>" and "C:/fixture" in the captured result.
+// "<secret:apiKey>" and local paths under the canonical root "C:/fixture" (or
+// "C:\fixture"); the runner swaps in fake values and a temp directory before
+// the call, and maps them back in the captured result. A fake value goes back
+// to its own placeholder, never to the redactor's "<redacted>", so a golden
+// tells a delivered key from one the code redacted. Only the temp root itself
+// is replaced: the separators the code produced around it are kept.
 //
 // runGoldenFixture(fixture, overrides) accepts replacement modules
 // (vllmRuntimeCommand, llamaRuntimeCommand, vllmLaunchRequest, ...) so later
@@ -25,6 +28,7 @@ const FIXTURES_DIR = path.join(REPO_ROOT, "manager-core", "test", "fixtures", "e
 const GOLDEN_DIR = path.join(FIXTURES_DIR, "goldens");
 const MODEL_SAMPLES_DIR = path.join(FIXTURES_DIR, "model-samples");
 const CANONICAL_ROOT = "C:/fixture";
+const CANONICAL_ROOT_BACKSLASH = "C:\\fixture";
 const REDACTED = "<redacted>";
 const FUNCTION_MARKER = "<function>";
 // Obviously fake values behind the "<secret:name>" placeholders. They exist
@@ -472,27 +476,39 @@ function resolveSecretPlaceholder(text) {
   return FAKE_SECRETS[secret[1]];
 }
 
+// Fixture form -> runtime form. "C:/fixture/models/X" becomes the temp root in
+// forward-slash form plus "/models/X", "C:\fixture\models\X" its backslash
+// form plus "\models\X": the separators the fixture declares reach the code.
 function materializeValue(value, env) {
+  const roots = [
+    [CANONICAL_ROOT, "/", env.root.replaceAll("\\", "/")],
+    [CANONICAL_ROOT_BACKSLASH, "\\", env.root.replaceAll("/", "\\")],
+  ];
   return mapStrings(value, (text) => {
     if (SECRET_PLACEHOLDER.test(text)) return resolveSecretPlaceholder(text);
-    if (text === CANONICAL_ROOT || text.startsWith(`${CANONICAL_ROOT}/`)) {
-      return path.join(env.root, ...text.slice(CANONICAL_ROOT.length).split("/").filter(Boolean));
+    for (const [canonical, separator, root] of roots) {
+      if (text === canonical || text.startsWith(`${canonical}${separator}`)) return `${root}${text.slice(canonical.length)}`;
     }
-    if (text.includes(CANONICAL_ROOT)) throw new Error(`Fixture paths must start with ${CANONICAL_ROOT}: ${text}`);
+    if (text.toLowerCase().includes(CANONICAL_ROOT.toLowerCase()) || text.toLowerCase().includes(CANONICAL_ROOT_BACKSLASH.toLowerCase())) {
+      throw new Error(`Fixture paths must start with ${CANONICAL_ROOT}/ or ${CANONICAL_ROOT_BACKSLASH}\\: ${text}`);
+    }
     return text;
   });
 }
 
+// Runtime form -> fixture form. Each fake secret goes back to its placeholder
+// ("<secret:apiKey>"), so "<redacted>" in a golden is always the code's own
+// redaction. Each match of the temp root becomes "C:\fixture" when it was
+// written with backslashes and "C:/fixture" otherwise; nothing after the root
+// is touched, so a separator change in the code changes the golden.
 function canonicalizeValue(value, env) {
-  const secrets = Object.values(FAKE_SECRETS);
+  const secrets = Object.entries(FAKE_SECRETS);
   return mapStrings(value, (text) => {
     let result = text;
-    for (const secret of secrets) result = result.split(secret).join(REDACTED);
+    for (const [name, secret] of secrets) result = result.split(secret).join(`<secret:${name}>`);
     env.rootPattern.lastIndex = 0;
-    if (env.rootPattern.test(result)) {
-      env.rootPattern.lastIndex = 0;
-      result = result.replace(env.rootPattern, CANONICAL_ROOT).replaceAll("\\", "/");
-    }
+    result = result.replace(env.rootPattern, (match) => (match.includes("\\") ? CANONICAL_ROOT_BACKSLASH : CANONICAL_ROOT));
+    env.rootPattern.lastIndex = 0;
     return result;
   });
 }
@@ -615,6 +631,9 @@ function assertFixtureSecretEnv(secretEnv) {
 
 // The builder expect block: the legacy return value plus job.meta and the
 // appendLog lines. A builder that throws records the message instead.
+// secretEnvNames is the spec's name list; secretEnv maps each name to the
+// placeholder of the fake value it carried, so a swapped or substituted
+// secret changes the golden while no value is ever written.
 function builderExpect(build, { job, logs, jobsSaved = null }) {
   let result = null;
   let error = null;
@@ -624,10 +643,12 @@ function builderExpect(build, { job, logs, jobsSaved = null }) {
     error = String(caught?.message || caught);
   }
   assertFixtureSecretEnv(result?.secretEnv);
+  const secretEnvNames = result ? Object.keys(result.secretEnv || {}).sort() : null;
   const expect = {
     runArgs: result ? result.runArgs : null,
     activePublishArgs: result ? result.activePublishArgs : null,
-    secretEnvNames: result ? Object.keys(result.secretEnv || {}).sort() : null,
+    secretEnvNames,
+    secretEnv: result ? Object.fromEntries(secretEnvNames.map((name) => [name, result.secretEnv[name]])) : null,
     runtimeImage: result ? result.runtimeImage ?? null : null,
     runtimeEngine: result ? result.runtimeEngine ?? null : null,
     jobMeta: job?.meta ?? null,
@@ -938,6 +959,7 @@ function findMachineData(text) {
 module.exports = {
   BUILDER_STUB_SETS,
   CANONICAL_ROOT,
+  CANONICAL_ROOT_BACKSLASH,
   FAKE_SECRETS,
   GOLDEN_DIR,
   MODEL_SAMPLES_DIR,
@@ -945,11 +967,13 @@ module.exports = {
   REDACTED,
   REPO_ROOT,
   REQUEST_STUB_SETS,
+  canonicalizeValue,
   encodeGguf,
   findMachineData,
   loadGoldenFixtures,
   loadServer,
   materializeModelSample,
+  materializeValue,
   prepareGoldenEnvironment,
   readModelSample,
   runGoldenFixture,

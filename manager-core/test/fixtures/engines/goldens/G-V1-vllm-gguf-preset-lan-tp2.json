@@ -211,6 +211,10 @@
       "HF_TOKEN",
       "VLLM_API_KEY"
     ],
+    "secretEnv": {
+      "HF_TOKEN": "<secret:hfToken>",
+      "VLLM_API_KEY": "<secret:apiKey>"
+    },
     "runtimeImage": "vllm/custom:pinned",
     "runtimeEngine": "vllm",
     "jobMeta": {

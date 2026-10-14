@@ -199,6 +199,7 @@
       "127.0.0.1:8000:8000"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "lmsysorg/sglang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "runtimeEngine": "sglang",
     "jobMeta": {

@@ -86,9 +86,9 @@
       "-p",
       "127.0.0.1:8000:8000",
       "-v",
-      "C:/fixture/ai/cache/huggingface:/root/.cache/huggingface",
+      "C:\\fixture\\ai\\cache\\huggingface:/root/.cache/huggingface",
       "-v",
-      "C:/fixture/models:/models",
+      "C:\\fixture\\models:/models",
       "--label",
       "ai.sglang.max-total-tokens=262144",
       "--label",
@@ -100,7 +100,7 @@
       "--label",
       "ai.sglang.ple-offload-embedding=true",
       "-v",
-      "C:/fixture/ai/cache/sglang-qwen38:/root/.cache",
+      "C:\\fixture\\ai\\cache\\sglang-qwen38:/root/.cache",
       "--entrypoint",
       "sglang",
       "local/sglang:qwen38flashnext-sm120-dac5523d",
@@ -160,6 +160,7 @@
       "127.0.0.1:8000:8000"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "local/sglang:qwen38flashnext-sm120-dac5523d",
     "runtimeEngine": "sglang",
     "jobMeta": {

@@ -216,6 +216,7 @@
       "127.0.0.1:8000:8000"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "local/sglang:qwen38flashnext-sm120-dac5523d",
     "runtimeEngine": "sglang",
     "jobMeta": {

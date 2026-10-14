@@ -144,6 +144,7 @@
       "127.0.0.1:8000:8000"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "vllm/qwen38:fixed",
     "runtimeEngine": "vllm",
     "jobMeta": {

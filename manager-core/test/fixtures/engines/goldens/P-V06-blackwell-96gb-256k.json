@@ -86,11 +86,11 @@
       "-p",
       "127.0.0.1:8000:8000",
       "-v",
-      "C:/fixture/ai/cache/huggingface:/root/.cache/huggingface",
+      "C:\\fixture\\ai\\cache\\huggingface:/root/.cache/huggingface",
       "-v",
-      "C:/fixture/models:/models",
+      "C:\\fixture\\models:/models",
       "-v",
-      "C:/fixture/ai/cache/vllm-qwen38:/root/.cache/vllm",
+      "C:\\fixture\\ai\\cache\\vllm-qwen38:/root/.cache/vllm",
       "vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
       "--model",
       "/models/Meta-Llama-3-8B-Instruct",
@@ -117,6 +117,7 @@
       "127.0.0.1:8000:8000"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
     "runtimeEngine": "vllm",
     "jobMeta": {

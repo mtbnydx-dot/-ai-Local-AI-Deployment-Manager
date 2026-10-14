@@ -86,7 +86,7 @@
       "-p",
       "127.0.0.1:8000:8000",
       "-v",
-      "C:/fixture/models:/models:ro",
+      "C:\\fixture\\models:/models:ro",
       "--label",
       "ai.sglang.max-total-tokens=524288",
       "--label",
@@ -271,6 +271,7 @@
       "127.0.0.1:8000:8000"
     ],
     "secretEnvNames": [],
+    "secretEnv": {},
     "runtimeImage": "ghcr.io/jpezzulli/sglang-rtxpro6000:v2.5.1@sha256:76258532b1c01f7583fbe951f90b80903db931030291db9db4e5a68b28567866",
     "runtimeEngine": "sglang",
     "jobMeta": {
