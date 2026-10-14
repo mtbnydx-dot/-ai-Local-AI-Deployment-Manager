@@ -1,158 +1,70 @@
-// This adapter is deliberately scoped to the immutable, locally qualified image.
-// Other SGLang/Flash-Next images retain their existing compatibility rules.
-const PENNYROYAL_IMAGE = "ghcr.io/jpezzulli/sglang-rtxpro6000:v2.5.1@sha256:76258532b1c01f7583fbe951f90b80903db931030291db9db4e5a68b28567866";
-const PENNYROYAL_CACHE_VOLUME = "pennyroyal-orcarouter-v251-compiler";
+const engines = require("../../manager-core/engines");
+const runtimeManifest = require("../../manager-core/runtime-manifest");
+
+// The Pennyroyal v2.5.1 profile is the recipe `pennyroyal-v251`
+// (manager-core/data/recipes, docs/overhaul/01-engines.md §10.3, ENG-6): its
+// constraints, launch data, memory formula and builtin profile are data. This
+// module keeps the names the manager and its tests import and answers them from
+// that recipe and the runtime manifest; the preset is scoped to the one
+// immutable, locally qualified image, and other SGLang/Flash-Next images keep
+// their existing compatibility rules.
+const RECIPE_ID = "pennyroyal-v251";
+const MANIFEST_KEY = "sglangPennyroyal";
+
+function recipes() {
+  return engines.recipes;
+}
+
+function pennyroyalRecipe() {
+  const recipe = recipes().getRecipeStore().get(RECIPE_ID);
+  if (!recipe) throw new Error(`The bundled recipe ${RECIPE_ID} is not available.`);
+  return recipe;
+}
+
+const PENNYROYAL_IMAGE = runtimeManifest.runtimeImageReference(MANIFEST_KEY);
+const bundled = pennyroyalRecipe();
+const PENNYROYAL_CACHE_VOLUME = /source=([^,]+)/.exec(bundled.slots?.cacheMount || "")?.[1] || "";
+const PENNYROYAL_TOKENIZER_SHA256 = bundled.validation.find((rule) => rule.kind === "tokenizerSha256").sha256;
+const PENNYROYAL_ROPE_OVERRIDE = bundled.fixedArgs[bundled.fixedArgs.indexOf("--json-model-override-args") + 1];
 // Qualified 524K/TP1 profile peaked at ~86,855 MiB excluding the desktop.
 // Admission adds its existing OS reserve and startup margin on top of this.
 // SGLang's mem-fraction-static is not a vLLM whole-device reservation fraction.
-const PENNYROYAL_VRAM_RESERVATION_MIB = 88000;
-function pennyroyalVramReservationMb(options = {}) {
-  // The qualified runtime logs allocate 6 GiB target + 0.5 GiB draft KV
-  // at 524288 tokens. Scale only that allocation; keep all other peak margin.
-  const capacity = Math.min(524288, Math.max(262144, Number(options.sglangMaxTotalTokens || options.maxModelLen || options.contextTokens || 524288)));
-  return PENNYROYAL_VRAM_RESERVATION_MIB - Math.floor((524288 - capacity) / 524288 * 6656);
-}
-const PENNYROYAL_TOKENIZER_SHA256 = "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3";
-const PENNYROYAL_DEFAULTS = Object.freeze({
-  engine: "sglang", name: "pennyroyal", port: 8000,
-  runtimeImage: PENNYROYAL_IMAGE,
-  maxModelLen: 524288, maxNumSeqs: 4, gpuMemoryUtilization: 0.981,
-  maxNumBatchedTokens: 0, cpuOffloadGb: 0, kvOffloadingSize: 0,
-  tensorParallelSize: 1, pipelineParallelSize: 1, dataParallelSize: 1,
-  enableExpertParallel: false, draftModel: "",
-  dtype: "bfloat16", quantization: "modelopt_fp4", loadFormat: "safetensors",
-  kvCacheDtype: "fp8_e4m3", trustRemoteCode: true,
-  gpuDeviceIds: ["0"], multiGpuMode: "single", networkAccess: "local",
-  clientPreset: "claude-code", reasoningParser: "qwen3", toolCallParser: "qwen3_coder",
-  enableAutoToolChoice: true, speculativeMode: "mtp", numSpeculativeTokens: 3,
-  enablePrefixCaching: true, disablePrefixCaching: false, languageModelOnly: false,
-  sglangMaxTotalTokens: 524288, sglangPageSize: 64, sglangChunkedPrefillSize: 4096,
-  sglangFp4GemmBackend: "flashinfer_cutlass", sglangAttentionBackend: "flashinfer",
-  sglangPleOffloadEmbedding: true, sglangLinearAttnPrefillBackend: "flashinfer",
-  sglangLinearAttnDecodeBackend: "flashinfer", sglangMambaSsmDtype: "bfloat16",
-  sglangMambaRadixCacheStrategy: "extra_buffer", sglangMambaTrackInterval: 64,
-  sglangMaxMambaCacheSize: 24, sglangDisableThinkingByDefault: false,
-});
+const PENNYROYAL_VRAM_RESERVATION_MIB = recipes().measuredMemoryMiB(bundled, { sglangMaxTotalTokens: 524288 });
+// The profile's launch form, as the old PENNYROYAL_DEFAULTS spelled it.
+const PENNYROYAL_DEFAULTS = Object.freeze(recipes().profileLegacyConfig(bundled));
 
 function isPennyroyalImage(image) {
-  return String(image || "").trim() === PENNYROYAL_IMAGE;
+  const text = String(image || "").trim();
+  if (!text) return false;
+  try {
+    return engines.getEngineRegistry().resolveRuntime("sglang", { image: text }).manifestKey === MANIFEST_KEY;
+  } catch {
+    return false;
+  }
+}
+
+// The reserved VRAM of the 524K qualified profile, scaled by the shared KV
+// pool actually requested (memory.measuredMiB of the recipe).
+function pennyroyalVramReservationMb(options = {}) {
+  const reserved = recipes().measuredMemoryMiB(RECIPE_ID, {
+    sglangMaxTotalTokens: options.sglangMaxTotalTokens,
+    maxModelLen: options.maxModelLen || options.contextTokens,
+  });
+  return reserved ?? PENNYROYAL_VRAM_RESERVATION_MIB;
 }
 
 function pennyroyalOptionErrors(options = {}) {
-  const errors = [];
-  if (!isPennyroyalImage(options.runtimeImage)) errors.push("请选择固定 digest 的 Pennyroyal v2.5.1 镜像。");
-  for (const [key, expected] of Object.entries({
-    kvCacheDtype: "fp8_e4m3", speculativeMode: "mtp",
-    sglangAttentionBackend: "flashinfer", sglangLinearAttnPrefillBackend: "flashinfer",
-    sglangFp4GemmBackend: "flashinfer_cutlass",
-    sglangLinearAttnDecodeBackend: "flashinfer", sglangMambaSsmDtype: "bfloat16",
-    sglangMambaRadixCacheStrategy: "extra_buffer",
-  })) {
-    if (options[key] && options[key] !== expected) errors.push(`${key} 要求 ${expected}。`);
-  }
-  for (const [key, expected] of Object.entries({
-    numSpeculativeTokens: 3, sglangPageSize: 64, sglangChunkedPrefillSize: 4096,
-    sglangMambaTrackInterval: 64, sglangMaxMambaCacheSize: 24,
-  })) {
-    if (Number(options[key]) > 0 && Number(options[key]) !== expected) errors.push(`${key} 要求 ${expected}。`);
-  }
-  if (Number(options.maxModelLen) > 524288 || Number(options.sglangMaxTotalTokens) > 524288) errors.push("本预设上限为 524288 tokens，且多请求共享 GPU KV 池。");
-  if (Number(options.maxNumSeqs) > 4) errors.push("本预设最多同时运行 4 个请求。");
-  if (Number(options.gpuMemoryUtilization) > 0.981) errors.push("本预设 mem-fraction-static 上限为 0.981；显存门禁使用实测预留并保留系统安全余量。");
-  if (Number(options.tensorParallelSize) > 1 || (options.multiGpuMode && options.multiGpuMode !== "single")) errors.push("本预设仅验证单卡 TP=1。");
-  if (options.sglangPleOffloadEmbedding === false) errors.push("Pennyroyal RAM PLE 必须启用。");
-  if (Number(options.cpuOffloadGb) > 0 || Number(options.kvOffloadingSize) > 0) errors.push("Pennyroyal 使用 RAM PLE；CPU HiCache/NIXL 关闭，不接受 vLLM offload 参数。");
-  return errors;
+  return recipes().legacyOptionErrors(RECIPE_ID, options);
 }
 
 function createPennyroyalPreset(options = {}) {
-  const errors = pennyroyalOptionErrors(options);
-  return {
-    id: "pennyroyal-v2.5.1-flash-next-wsl", label: "Pennyroyal v2.5.1 / Flash-Next / GPU cache only",
-    pennyroyal: true, engine: "sglang", image: PENNYROYAL_IMAGE,
-    dtype: "bfloat16", kvCacheDtype: "fp8_e4m3", quantization: "modelopt_fp4",
-    forceTrustRemoteCode: true, reasoningParser: "qwen3", toolCallParser: "qwen3_coder",
-    enableAutoToolChoice: true, attentionBackend: "flashinfer", fp4GemmBackend: "flashinfer_cutlass",
-    maxTotalTokens: Number(options.sglangMaxTotalTokens || options.maxModelLen || 524288),
-    maxRunningRequests: Number(options.maxNumSeqs || 4), effectiveMaxRunningRequests: Number(options.maxNumSeqs || 4),
-    pageSize: 64, chunkedPrefillSize: 4096, pleOffloadEmbedding: true,
-    linearAttnPrefillBackend: "flashinfer", linearAttnDecodeBackend: "flashinfer",
-    mambaSsmDtype: "bfloat16", mambaRadixCacheStrategy: "extra_buffer",
-    mambaTrackInterval: 64, maxMambaCacheSize: 24,
-    defaultChatTemplateKwargs: JSON.stringify({ enable_thinking: !options.sglangDisableThinkingByDefault, preserve_thinking: true, reasoning_effort: "medium" }),
-    speculativeAlgorithm: "NEXTN", speculativeConfig: null,
-    unsupportedReason: errors.join(" "),
-    env: {
-      PYTHONPATH: "/opt/pennyroyal/python", SGLANG_SM120_ONLINE_MXFP8: "true",
-      SGLANG_MM_PREPROCESS_DEVICE: "cpu", NUMPY_MADVISE_HUGEPAGE: "0",
-      SGLANG_NUMA_BIND_V2: "true", SGLANG_AUTO_NUMA_BIND: "false",
-      SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN: "1", SGLANG_MAMBA_CONV_DTYPE: "bfloat16",
-      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True", TOKENIZERS_PARALLELISM: "false",
-      CUDA_DEVICE_ORDER: "PCI_BUS_ID", CUDA_VISIBLE_DEVICES: "0",
-      OMP_NUM_THREADS: "4", MKL_NUM_THREADS: "4", HF_HOME: "/cache/huggingface",
-      XDG_CACHE_HOME: "/cache", TORCH_HOME: "/cache/torch", TORCHINDUCTOR_CACHE_DIR: "/cache/torchinductor",
-      TRITON_CACHE_DIR: "/cache/triton", CUDA_CACHE_PATH: "/cache/cuda",
-      FLASHINFER_WORKSPACE_BASE: "/cache/flashinfer", SGLANG_CACHE_DIR: "/cache/sglang",
-      SGLANG_JIT_CACHE_DIR: "/cache/sglang/jit",
-    },
-    notes: [
-      "Pennyroyal v2.5.1: NVFP4 + online FP8 + FP8 KV + FR-Spec/NEXTN-3 + RAM PLE",
-      "CPU HiCache/NIXL disabled for WSL compatibility; GPU radix cache remains enabled",
-      "524288 shared KV capacity; 500016-token synthetic retrieval qualified; cold load about 16 minutes",
-    ],
-  };
+  return recipes().presetFromRecipe(RECIPE_ID, options, {}, {});
 }
 
-const PENNYROYAL_ROPE_OVERRIDE = JSON.stringify({ text_config: { rope_parameters: {
-  mrope_interleaved: true, mrope_section: [11, 11, 10], rope_type: "yarn", rope_theta: 10000000,
-  partial_rotary_factor: 0.25, factor: 2, original_max_position_embeddings: 262144,
-} } });
-
-// The qualified launch data of the Pennyroyal profile, in the recipe "fixed"
-// shape the SGLang adapter consumes through its slots (01-engines §7): docker
-// flags and ai.runtime.* labels after the ai.sglang.* labels, the compiler
-// cache volume instead of the cache root, read-only model mounts, no HF cache
-// mount, restart "no", and the NEXTN/FR-Spec tail before --api-key. The env
-// stays on the preset. ENG-6 moves this into recipe pennyroyal-v251.
-function pennyroyalLaunchFixed(options = {}, preset = {}) {
-  return {
-    dockerFlags: ["--init", "--ulimit", "memlock=-1:-1"],
-    labels: [
-      "ai.runtime.profile=pennyroyal-v2.5.1-gpu-cache-only",
-      "ai.runtime.kv-dtype=fp8_e4m3",
-      "ai.runtime.speculative-mode=mtp",
-      "ai.runtime.cpu-cache=disabled",
-      "ai.runtime.online-fp8=true",
-      "ai.runtime.fr-spec=true",
-      "ai.runtime.speculative=nextn-frspec",
-      "ai.runtime.storage=ram-ple",
-      "ai.runtime.ple-dtype=fp8",
-      "ai.runtime.mamba-dtype=bfloat16",
-      "ai.runtime.linear-attn=flashinfer/flashinfer",
-      "ai.runtime.cache=gpu-radix; cpu-hicache/nixl disabled",
-      `ai.runtime.thinking=${options.sglangDisableThinkingByDefault ? "disabled-by-default" : "enabled-by-default"}`,
-      `ai.runtime.context-length=${options.maxModelLen}`,
-      `ai.runtime.max-total-tokens=${preset.maxTotalTokens}`,
-      "ai.runtime.chunked-prefill=4096",
-      "ai.runtime.fp4-backend=flashinfer_cutlass",
-    ],
-    args: ["--load-format", "safetensors", "--warmups=structured_output",
-      "--json-model-override-args", PENNYROYAL_ROPE_OVERRIDE,
-      "--gdn-mtp-cache-mode", "none",
-      "--chat-template", "/opt/pennyroyal/configs/pennyroyal/templates/froggeric-v22.5.jinja",
-      "--image-processor-backend", "pil", "--enable-request-time-stats-logging",
-      "--speculative-algorithm", "NEXTN", "--speculative-num-steps", "3",
-      "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", "4",
-      "--speculative-draft-model-quantization", "unquant",
-      "--speculative-token-map", "/opt/pennyroyal/configs/pennyroyal/frspec/flash-next-64k.pt",
-      "--watchdog-timeout", "1800"],
-    slots: {
-      restart: "no",
-      hfCacheMount: false,
-      modelMountReadOnly: true,
-      cacheMount: `type=volume,source=${PENNYROYAL_CACHE_VOLUME},target=/cache`,
-    },
-  };
+// The qualified launch data of the Pennyroyal profile in the recipe "fixed"
+// shape the SGLang adapter consumes through its slots (01-engines §7).
+function pennyroyalLaunchFixed(options = {}) {
+  return recipes().renderLaunchFixed(pennyroyalRecipe(), { opts: options });
 }
 
 module.exports = { PENNYROYAL_IMAGE, PENNYROYAL_CACHE_VOLUME, PENNYROYAL_DEFAULTS,

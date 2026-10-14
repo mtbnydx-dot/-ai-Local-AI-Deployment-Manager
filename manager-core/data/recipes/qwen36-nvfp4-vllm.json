@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "qwen36-nvfp4-vllm",
+  "kind": "model",
+  "status": "verified",
+  "label": {
+    "zh": "Qwen3.6 MoE · vLLM · NVFP4",
+    "en": "Qwen3.6 MoE · vLLM · NVFP4"
+  },
+  "engineId": "vllm",
+  "runtime": {
+    "ref": "vllmQwenMoe",
+    "allowOverride": false
+  },
+  "match": {
+    "capabilityIds": [
+      "qwen3.5-3.6"
+    ],
+    "quant": [
+      "nvfp4",
+      "modelopt_fp4"
+    ]
+  },
+  "appliesWhen": {
+    "and": [
+      {
+        "eq": [
+          {
+            "fact": "model.quantMethod"
+          },
+          "nvfp4"
+        ]
+      },
+      {
+        "in": [
+          "Qwen3_5MoeForConditionalGeneration",
+          {
+            "fact": "model.architectures"
+          }
+        ]
+      }
+    ]
+  },
+  "inputs": {
+    "env": [
+      "VLLM_QWEN_MOE_BACKEND"
+    ]
+  },
+  "priority": 50,
+  "values": {
+    "vllm.moeBackend": {
+      "expr": {
+        "coalesce": [
+          {
+            "if": [
+              {
+                "in": [
+                  {
+                    "env": "VLLM_QWEN_MOE_BACKEND"
+                  },
+                  [
+                    "auto",
+                    "cutlass",
+                    "emulation",
+                    "flashinfer_b12x",
+                    "flashinfer_cutedsl",
+                    "flashinfer_cutlass",
+                    "flashinfer_trtllm",
+                    "marlin",
+                    "triton",
+                    "triton_unfused"
+                  ]
+                ]
+              },
+              {
+                "env": "VLLM_QWEN_MOE_BACKEND"
+              },
+              null
+            ]
+          },
+          {
+            "if": [
+              {
+                "fact": "host.anySm12x"
+              },
+              "flashinfer_b12x",
+              "marlin"
+            ]
+          }
+        ]
+      }
+    },
+    "dtype": {
+      "expr": {
+        "if": [
+          {
+            "eq": [
+              {
+                "param": "vllm.moeBackend"
+              },
+              "flashinfer_b12x"
+            ]
+          },
+          "bfloat16",
+          null
+        ]
+      }
+    },
+    "vllm.attentionBackend": "flashinfer",
+    "generationConfig": "vllm",
+    "vllm.asyncScheduling": true,
+    "vllm.maxNumBatchedTokens": {
+      "expr": {
+        "max": [
+          8192,
+          {
+            "coalesce": [
+              {
+                "user": "vllm.maxNumBatchedTokens"
+              },
+              0
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "derived": {
+    "kvCacheDtype": {
+      "if": [
+        {
+          "notIn": [
+            {
+              "user": "kvCacheDtype"
+            },
+            [
+              null,
+              "auto"
+            ]
+          ]
+        },
+        {
+          "user": "kvCacheDtype"
+        },
+        "fp8"
+      ]
+    }
+  },
+  "locks": [
+    {
+      "param": "trustRemoteCode",
+      "value": true,
+      "reason": {
+        "zh": "该架构需要仓库代码",
+        "en": "This architecture needs repository code"
+      }
+    },
+    {
+      "param": "reasoningParser",
+      "value": "qwen3",
+      "reason": {
+        "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+        "en": "Parser from the NVIDIA Qwen3.6 guidance"
+      }
+    },
+    {
+      "param": "toolCallParser",
+      "value": "qwen3_xml",
+      "reason": {
+        "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+        "en": "Parser from the NVIDIA Qwen3.6 guidance"
+      }
+    },
+    {
+      "param": "autoToolChoice",
+      "value": true,
+      "reason": {
+        "zh": "随解析器开启",
+        "en": "Enabled with the parser"
+      }
+    }
+  ],
+  "memory": {
+    "policy": "device-fraction",
+    "calibrate": true
+  },
+  "notes": [
+    {
+      "zh": "使用 vLLM nightly 运行 Qwen3.6 MoE NVFP4；SM12x 上使用 flashinfer_b12x 避免 Marlin 输出退化",
+      "en": "runs the vLLM nightly for Qwen3.6 MoE NVFP4; on SM12x it uses flashinfer_b12x to avoid Marlin output degeneration"
+    }
+  ],
+  "legacy": {
+    "presetId": "qwen3.6-moe-nvfp4",
+    "presetLabel": "Qwen3.6 MoE / NVFP4",
+    "vars": {
+      "moeSuffix": {
+        "if": [
+          {
+            "eq": [
+              {
+                "param": "vllm.moeBackend"
+              },
+              "flashinfer_b12x"
+            ]
+          },
+          " on SM12x Blackwell to avoid the Marlin NVFP4 output degeneration seen on this host",
+          ""
+        ]
+      }
+    },
+    "notesEn": [
+      "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
+      "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
+      "adds --attention-backend flashinfer for the Qwen3.6 MoE path that previously validated locally",
+      {
+        "text": "uses --moe-backend {{param:vllm.moeBackend}}{{var:moeSuffix}}"
+      },
+      "uses --generation-config vllm because the checkpoint generation_config caused repeated ! output on this host",
+      "uses FP8 KV cache for the Qwen3.6 MoE ModelOpt checkpoint unless the launch form explicitly selects another dtype",
+      "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
+      "leaves thinking mode to request-level chat_template_kwargs from the client",
+      "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance"
+    ],
+    "preset": {
+      "dtype": {
+        "recipe": "dtype"
+      },
+      "forceTrustRemoteCode": {
+        "recipe": "trustRemoteCode"
+      },
+      "attentionBackend": {
+        "recipe": "vllm.attentionBackend"
+      },
+      "moeBackend": {
+        "recipe": "vllm.moeBackend"
+      },
+      "generationConfig": {
+        "recipe": "generationConfig"
+      },
+      "reasoningParser": {
+        "recipe": "reasoningParser"
+      },
+      "toolCallParser": {
+        "recipe": "toolCallParser"
+      },
+      "enableAutoToolChoice": {
+        "recipe": "autoToolChoice"
+      },
+      "kvCacheDtype": {
+        "recipe": "kvCacheDtype"
+      },
+      "maxNumBatchedTokens": 8192,
+      "asyncScheduling": {
+        "recipe": "vllm.asyncScheduling"
+      }
+    }
+  },
+  "evidence": {
+    "gpu": "RTX PRO 6000 Blackwell 96 GB",
+    "host": "Windows 11 + Docker Desktop/WSL2",
+    "date": "2026-09",
+    "jobId": null
+  }
+}

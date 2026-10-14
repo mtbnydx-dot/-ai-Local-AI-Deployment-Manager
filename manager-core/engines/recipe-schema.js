@@ -401,7 +401,7 @@ function checkStringList(report, value, where, { pattern = null, min = 1 } = {})
   if (new Set(value).size !== value.length) report.error(where, "duplicate_value", `${where} lists a value twice.`);
 }
 
-function checkMatch(report, recipe, runtimeRef) {
+function checkMatch(report, recipe, runtimeRef, mode) {
   const match = recipe.match;
   if (match === undefined) return;
   if (!isPlainObject(match)) {
@@ -416,7 +416,9 @@ function checkMatch(report, recipe, runtimeRef) {
   if (match.contentDigest !== undefined) checkString(report, match.contentDigest, "match.contentDigest", { pattern: SHA256_PATTERN });
   if (match.capabilityIds !== undefined) {
     checkStringList(report, match.capabilityIds, "match.capabilityIds", { pattern: /^[a-z0-9][a-z0-9._-]{0,63}$/ });
-    report.warn("match.capabilityIds", "recipe_match_deprecated", "match.capabilityIds is the deprecated v1 capability alias; use match.familyId.");
+    // Bundled recipes use the alias until ENG-25 moves them to familyId, so
+    // only an owner file (mode "override") is told to migrate.
+    if (mode !== "bundled") report.warn("match.capabilityIds", "recipe_match_deprecated", "match.capabilityIds is the deprecated v1 capability alias; use match.familyId.");
   }
   if (match.quant !== undefined) checkStringList(report, match.quant, "match.quant", { pattern: /^[a-z0-9][a-z0-9_-]{0,31}$/ });
   if (match.minComputeCapability !== undefined) checkString(report, match.minComputeCapability, "match.minComputeCapability", { pattern: COMPUTE_CAP_PATTERN });
@@ -898,7 +900,7 @@ function validateRecipe(obj, options = {}) {
     checkHeader(report, obj);
     checkIdentity(report, obj, { registry });
     const runtimeRef = checkRuntime(report, obj, { registry });
-    checkMatch(report, obj, runtimeRef);
+    checkMatch(report, obj, runtimeRef, options.mode === "bundled" ? "bundled" : "override");
     checkInputs(report, obj);
     const scope = recipeScope(obj, { catalogs, registry });
     const manifestOk = (key) => {

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-blackwell-96gb-256k",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "96GB 单卡 256K",
+    "en": "96 GB single GPU 256K"
+  },
+  "profile": {
+    "id": "blackwell-96gb-256k",
+    "name": "96GB 单卡 256K",
+    "description": "RTX PRO 6000 / 80GB+ 单卡优先方案：单路长上下文，保守显存占用，适合本地 Claude。",
+    "managerId": "vllm",
+    "order": 6,
+    "requirements": {
+      "minGpuCount": 1,
+      "minSingleGpuMemoryGb": 80
+    },
+    "values": {
+      "contextLength": 262144,
+      "concurrency": 1,
+      "vllm.gpuMemoryUtilization": 0.9,
+      "kvCacheDtype": "fp8",
+      "speculative.method": "off",
+      "reasoningParser": "auto",
+      "toolCallParser": "auto",
+      "clientPreset": "claude-cowork",
+      "vllm.languageModelOnly": true
+    },
+    "legacy": {
+      "gpuDeviceIds": [
+        "0"
+      ],
+      "multiGpuMode": "single"
+    }
+  }
+}

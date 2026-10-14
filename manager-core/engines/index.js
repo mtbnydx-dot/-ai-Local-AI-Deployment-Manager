@@ -17,6 +17,8 @@ const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
 const legacyAliases = require("./legacy-aliases");
 const paramCatalog = require("./param-catalog");
+const recipeSchema = require("./recipe-schema");
+const recipes = require("./recipes");
 const registry = require("./registry");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
@@ -57,6 +59,21 @@ module.exports = {
   validateValues: paramCatalog.validateValues,
   expr,
   legacyAliases,
+  // Recipes as data (01 §10): the validator (02's save-as-recipe and the
+  // console call recipeSchema.validateRecipe) and the loader.
+  recipeSchema,
+  validateRecipe: recipeSchema.validateRecipe,
+  recipes,
+  getRecipeStore: recipes.getRecipeStore,
+  createRecipeStore: recipes.createRecipeStore,
+  clearRecipeStoreCache: recipes.clearRecipeStoreCache,
+  loadRecipes: recipes.loadRecipes,
+  reloadRecipes: recipes.reloadRecipes,
+  matchRecipes: recipes.matchRecipes,
+  applyRecipe: recipes.applyRecipe,
+  presetFromRecipe: recipes.presetFromRecipe,
+  builtinProfiles: recipes.builtinProfiles,
+  watchRecipeOverrides: recipes.watchRecipeOverrides,
   legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
   legacyConfigToValues: legacyAliases.legacyConfigToValues,
   valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,

@@ -869,7 +869,7 @@ function legacyFacts(ctx, engineId, opts, store) {
  * The recipe today's preset code would have used: a runtime image that pins a
  * recipe (the Pennyroyal image) selects it even for another model, which is
  * then a mismatch; otherwise the top eligible model recipe of the engine.
- * → { recipe, mismatch } or null.
+ * → { recipe, mismatch, pinned } or null.
  */
 function selectLegacyRecipe(engineId, opts, ctx = {}) {
   const store = storeOf(ctx);
@@ -877,12 +877,12 @@ function selectLegacyRecipe(engineId, opts, ctx = {}) {
   const pinned = runtime.manifestKey ? legacyAliases.RUNTIME_RECIPES[runtime.manifestKey] : null;
   if (pinned) {
     const recipe = store.get(pinned);
-    if (recipe && recipe.engineId === engineId) return { recipe, mismatch: !identityMatch(recipe, ctx.model || {}).ok };
+    if (recipe && recipe.engineId === engineId) return { recipe, mismatch: !identityMatch(recipe, ctx.model || {}).ok, pinned: true };
   }
   const user = legacyUserValues(opts, engineId, store);
   const ranked = matchRecipes({ engineId, model: ctx.model || {}, hostFacts: ctx.hostFacts, runtime, user, facts, env: ctx.env }, store);
   const top = ranked.find((item) => item.eligible);
-  return top ? { recipe: top.recipe, mismatch: false } : null;
+  return top ? { recipe: top.recipe, mismatch: false, pinned: false } : null;
 }
 
 /** withCapabilities of resolveVllmRuntimePreset: capability defaults under the preset's own fields. */
@@ -1034,17 +1034,25 @@ function presetFromRecipe(recipeId, legacyOpts = {}, launch = {}, ctx = {}) {
   const mode = String(ctx.speculativeMode || state.user["speculative.method"] || "off");
   const rule = draftRule(recipe);
   let draft = { path: "", ok: true, reason: "" };
-  if (rule && typeof ctx.resolveDraftModel === "function") {
+  if (rule && mode === "dspark" && typeof ctx.resolveDraftModel === "function") {
     draft = ctx.resolveDraftModel(textOf(state.user["speculative.draftModel"]), { architecture: rule.architecture, defaultDir: rule.defaultDir }) || draft;
   }
   state.placeholders["draft.path"] = draft.path || "";
 
+  // Model capabilities fill the preset's parser and speculative defaults. They
+  // are resolved on first use (ctx.capabilities may be a function), because a
+  // preset that merges none (Pennyroyal) never pays for the model scan.
+  let capabilities;
+  const capabilitiesOf = () => {
+    if (capabilities === undefined) capabilities = typeof ctx.capabilities === "function" ? ctx.capabilities() : ctx.capabilities;
+    return capabilities;
+  };
   const useBase = engineId === "sglang" && recipe?.legacy?.base !== false;
-  let preset = useBase ? sglangBasePreset(state, { ...ctx, image }, mode, Boolean(rule)) : {};
+  let preset = useBase ? sglangBasePreset(state, { ...ctx, image, capabilities: capabilitiesOf() }, mode, Boolean(rule)) : {};
   let reason = useBase ? preset.unsupportedReason : "";
   if (!recipe) {
     if (!useBase) preset = { id: "", env: {} };
-    return ctx.capabilities === null ? preset : mergeCapabilityPreset(preset, ctx.capabilities || {});
+    return capabilitiesOf() === null ? preset : mergeCapabilityPreset(preset, capabilitiesOf() || {});
   }
   const legacy = recipe.legacy || {};
   preset.id = legacy.presetId || recipe.id;
@@ -1062,7 +1070,7 @@ function presetFromRecipe(recipeId, legacyOpts = {}, launch = {}, ctx = {}) {
   else if (!reason && !draft.ok) reason = draft.reason || "";
   preset.unsupportedReason = reason;
   preset.notes = (legacy.notesEn || []).map((note) => renderTemplate(note, state)).filter((note) => note !== undefined);
-  return legacy.mergeCapabilities === false ? preset : mergeCapabilityPreset(preset, ctx.capabilities || {});
+  return legacy.mergeCapabilities === false ? preset : mergeCapabilityPreset(preset, capabilitiesOf() || {});
 }
 
 /** selectLegacyRecipe + presetFromRecipe: today's resolveVllmRuntimePreset over recipe data. */
@@ -1104,6 +1112,27 @@ function renderLaunchFixed(recipe, { opts = {}, ctx = {} } = {}) {
   };
 }
 
+/**
+ * The recipe's measured memory (memory.measuredMiB, an expression over the
+ * legacy option body) in MiB, or null when it has none. The GPU admission gate
+ * and the memory estimate of a measured recipe (Pennyroyal) use it.
+ */
+function measuredMemoryMiB(recipeId, opts = {}, ctx = {}) {
+  const store = storeOf(ctx);
+  const recipe = typeof recipeId === "object" ? recipeId : store.get(recipeId);
+  if (!recipe?.memory) return null;
+  const user = legacyUserValues(opts, recipe.engineId, store);
+  const { facts } = legacyFacts(ctx, recipe.engineId, opts, store);
+  const memory = evaluateMemory(recipe, runApply(recipe, user, { facts, env: ctx.env }).state);
+  return Number.isFinite(memory?.measuredMiB) ? memory.measuredMiB : null;
+}
+
+/** The recipe a legacy runtime preset was rendered from, or null: how long its launch may stall (ms). */
+function stallMsForPreset(preset, store = getRecipeStore()) {
+  const recipe = recipeForLegacyPreset(preset, store);
+  return Number.isInteger(recipe?.stallMs) ? recipe.stallMs : null;
+}
+
 /** The legacy option errors of a recipe: its blockIf messages (zh), in order. */
 function legacyOptionErrors(recipeId, opts = {}, ctx = {}) {
   const store = storeOf(ctx);
@@ -1128,7 +1157,7 @@ async function tokenizerFinding(rule, localPath) {
  * The findings and recommendations checkModelCompatibility shows for a recipe
  * (legacy.check), in its order: static findings, the model mismatch, the
  * blocks, and the validation rules (tokenizer hashes need ctx.localPath).
- * → { findings: [{ severity, title, detail }], recommendations: { legacyField: value } }.
+ * → { findings: [{ severity, title, detail }], recommendations: { legacyField: value }, complete }.
  */
 async function legacyCompatibility(recipeId, input = {}, ctx = {}) {
   const store = storeOf(ctx);
@@ -1177,7 +1206,8 @@ async function legacyCompatibility(recipeId, input = {}, ctx = {}) {
     const rendered = renderTemplate(template, state);
     if (rendered !== undefined) recommendations[field] = rendered;
   }
-  return { findings, recommendations };
+  // complete: the recommendations are the recipe's whole launch profile, not a few fields.
+  return { findings, recommendations, complete: Boolean(check.recommendFromProfile) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1353,6 +1383,7 @@ module.exports = {
   legacyUserValues,
   loadRecipes,
   matchRecipes,
+  measuredMemoryMiB,
   mergeCapabilityPreset,
   presetFromRecipe,
   profileLegacyConfig,
@@ -1361,5 +1392,6 @@ module.exports = {
   reloadRecipes,
   renderLaunchFixed,
   selectLegacyRecipe,
+  stallMsForPreset,
   watchRecipeOverrides,
 };

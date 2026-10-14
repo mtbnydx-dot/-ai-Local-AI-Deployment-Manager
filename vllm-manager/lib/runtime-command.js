@@ -1,6 +1,5 @@
 const { redactSecrets } = require("../../manager-core/secret-redactor");
 const engines = require("../../manager-core/engines");
-const { pennyroyalLaunchFixed } = require("./pennyroyal");
 
 // The vLLM/SGLang launch command is built by the engine adapters
 // (manager-core/engines/adapters/{vllm,sglang}.js, 01-engines ENG-5). This
@@ -258,8 +257,9 @@ function legacyRunValues(opts, preset, quantization, { fractionParam, presetQuan
 
 /**
  * The preset's launch data in the recipe "fixed" shape: its env, the switches
- * that change how values are emitted, and Pennyroyal's qualified data from
- * pennyroyal.js (01-engines §7: preset passthrough until recipes, ENG-6).
+ * that change how values are emitted, and the fixed launch data (args, labels,
+ * docker flags, docker slots) of the recipe the preset was rendered from, e.g.
+ * Pennyroyal's qualified tail (01-engines §7, §10.3).
  */
 function legacyFixedData(opts, preset) {
   const fixed = { args: [], env: { ...(preset.env || {}) }, labels: [], dockerFlags: [], slots: {} };
@@ -267,12 +267,15 @@ function legacyFixedData(opts, preset) {
   if (preset.disableQuantizationArg) fixed.slots.disableQuantizationArg = true;
   if (preset.disableKvCacheDtypeArg) fixed.slots.disableKvCacheDtypeArg = true;
   if (preset.disableLanguageModelOnly) fixed.slots.disableLanguageModelOnly = true;
-  if (preset.pennyroyal) {
-    const pennyroyal = pennyroyalLaunchFixed(opts, preset);
-    fixed.args.push(...pennyroyal.args);
-    fixed.labels.push(...pennyroyal.labels);
-    fixed.dockerFlags.push(...pennyroyal.dockerFlags);
-    Object.assign(fixed.slots, pennyroyal.slots);
+  const recipe = engines.recipes.recipeForLegacyPreset(preset);
+  const carriesLaunchData = recipe && (recipe.fixedArgs?.length || recipe.labels?.length || recipe.dockerFlags?.length
+    || engines.recipes.LEGACY_DOCKER_SLOTS.some((key) => Object.hasOwn(recipe.slots || {}, key)));
+  if (carriesLaunchData) {
+    const data = engines.recipes.renderLaunchFixed(recipe, { opts });
+    fixed.args.push(...data.args);
+    fixed.labels.push(...data.labels);
+    fixed.dockerFlags.push(...data.dockerFlags);
+    Object.assign(fixed.slots, data.slots);
   }
   return fixed;
 }

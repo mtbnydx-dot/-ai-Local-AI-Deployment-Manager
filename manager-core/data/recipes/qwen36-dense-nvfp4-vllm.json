@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "qwen36-dense-nvfp4-vllm",
+  "kind": "model",
+  "status": "verified",
+  "label": {
+    "zh": "Qwen3.6 Dense · vLLM · NVFP4",
+    "en": "Qwen3.6 Dense · vLLM · NVFP4"
+  },
+  "engineId": "vllm",
+  "runtime": {
+    "ref": "vllmQwenMoe",
+    "allowOverride": false
+  },
+  "match": {
+    "capabilityIds": [
+      "qwen3.5-3.6"
+    ],
+    "quant": [
+      "nvfp4",
+      "modelopt_fp4"
+    ]
+  },
+  "appliesWhen": {
+    "and": [
+      {
+        "eq": [
+          {
+            "fact": "model.quantMethod"
+          },
+          "nvfp4"
+        ]
+      },
+      {
+        "in": [
+          "Qwen3_5ForConditionalGeneration",
+          {
+            "fact": "model.architectures"
+          }
+        ]
+      }
+    ]
+  },
+  "priority": 50,
+  "values": {
+    "vllm.attentionBackend": "TRITON_ATTN",
+    "vllm.asyncScheduling": true,
+    "vllm.maxNumBatchedTokens": {
+      "expr": {
+        "max": [
+          8192,
+          {
+            "coalesce": [
+              {
+                "user": "vllm.maxNumBatchedTokens"
+              },
+              0
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "locks": [
+    {
+      "param": "trustRemoteCode",
+      "value": true,
+      "reason": {
+        "zh": "该架构需要仓库代码",
+        "en": "This architecture needs repository code"
+      }
+    },
+    {
+      "param": "reasoningParser",
+      "value": "qwen3",
+      "reason": {
+        "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+        "en": "Parser from the NVIDIA Qwen3.6 guidance"
+      }
+    },
+    {
+      "param": "toolCallParser",
+      "value": "qwen3_xml",
+      "reason": {
+        "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+        "en": "Parser from the NVIDIA Qwen3.6 guidance"
+      }
+    },
+    {
+      "param": "autoToolChoice",
+      "value": true,
+      "reason": {
+        "zh": "随解析器开启",
+        "en": "Enabled with the parser"
+      }
+    }
+  ],
+  "slots": {
+    "disableQuantizationArg": true,
+    "disableKvCacheDtypeArg": true
+  },
+  "memory": {
+    "policy": "device-fraction",
+    "calibrate": true
+  },
+  "notes": [
+    {
+      "zh": "dense 模型使用 TRITON_ATTN，避免 FlashInfer + FP8 KV prefill 崩溃",
+      "en": "the dense model uses TRITON_ATTN because FlashInfer can crash with the FP8 KV prefill path"
+    }
+  ],
+  "legacy": {
+    "presetId": "qwen3.6-dense-nvfp4",
+    "presetLabel": "Qwen3.6 Dense / NVFP4",
+    "notesEn": [
+      "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
+      "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
+      "lets vLLM auto-detect ModelOpt mixed quantization and KV cache dtype from the dense checkpoint",
+      "uses --attention-backend TRITON_ATTN because FlashInfer can crash or degenerate with the dense Qwen3.6 NVFP4 FP8 KV prefill path",
+      "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
+      "leaves thinking mode to request-level chat_template_kwargs from the client",
+      "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance"
+    ],
+    "preset": {
+      "forceTrustRemoteCode": {
+        "recipe": "trustRemoteCode"
+      },
+      "attentionBackend": {
+        "recipe": "vllm.attentionBackend"
+      },
+      "reasoningParser": {
+        "recipe": "reasoningParser"
+      },
+      "toolCallParser": {
+        "recipe": "toolCallParser"
+      },
+      "enableAutoToolChoice": {
+        "recipe": "autoToolChoice"
+      },
+      "disableQuantizationArg": true,
+      "disableKvCacheDtypeArg": true,
+      "maxNumBatchedTokens": 8192,
+      "asyncScheduling": {
+        "recipe": "vllm.asyncScheduling"
+      }
+    }
+  },
+  "evidence": {
+    "gpu": "RTX PRO 6000 Blackwell 96 GB",
+    "host": "Windows 11 + Docker Desktop/WSL2",
+    "date": "2026-09",
+    "jobId": null
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "llama-muse-glimmer",
+  "kind": "model",
+  "status": "blocked",
+  "label": {
+    "zh": "Muse Glimmer · llama.cpp（已弃用）",
+    "en": "Muse Glimmer · llama.cpp (retired)"
+  },
+  "engineId": "llamacpp",
+  "runtime": {
+    "ref": "llamaMuse",
+    "allowOverride": true
+  },
+  "match": {
+    "capabilityIds": [
+      "muse-glimmer"
+    ]
+  },
+  "priority": 10,
+  "values": {
+    "temperature": 1,
+    "topP": 0.95,
+    "topK": 64
+  },
+  "blockIf": [
+    {
+      "when": true,
+      "code": "recipe_retired",
+      "message": {
+        "zh": "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。",
+        "en": "Muse Glimmer has been retired from the local stack and llama-manager no longer launches it."
+      }
+    }
+  ],
+  "memory": {
+    "policy": "gguf-estimate",
+    "calibrate": false
+  },
+  "legacy": {
+    "presetLabel": "Muse Glimmer"
+  }
+}

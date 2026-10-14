@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-low-vram-safe",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "低显存保守模式",
+    "en": "Low-VRAM safe mode"
+  },
+  "profile": {
+    "id": "low-vram-safe",
+    "name": "低显存保守模式",
+    "description": "启动失败或显存吃紧时先用这个排查。",
+    "managerId": "vllm",
+    "order": 10,
+    "requirements": {
+      "minGpuCount": 1
+    },
+    "values": {
+      "contextLength": 16384,
+      "concurrency": 1,
+      "vllm.gpuMemoryUtilization": 0.82,
+      "kvCacheDtype": "fp8",
+      "speculative.method": "off",
+      "clientPreset": "generic",
+      "vllm.languageModelOnly": true
+    }
+  }
+}

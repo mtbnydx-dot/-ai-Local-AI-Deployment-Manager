@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "qwen38-dspark-sglang",
+  "kind": "model",
+  "status": "experimental",
+  "extends": "qwen38-sglang",
+  "label": {
+    "zh": "Qwen3.8 · SGLang · DSpark",
+    "en": "Qwen3.8 · SGLang · DSpark"
+  },
+  "engineId": "sglang",
+  "appliesWhen": {
+    "eq": [
+      {
+        "user": "speculative.method"
+      },
+      "dspark"
+    ]
+  },
+  "priority": 60,
+  "values": {
+    "sglang.dsparkBlockSize": {
+      "expr": {
+        "min": [
+          32,
+          {
+            "max": [
+              1,
+              {
+                "coalesce": [
+                  {
+                    "if": [
+                      {
+                        "gt": [
+                          {
+                            "user": "sglang.dsparkBlockSize"
+                          },
+                          0
+                        ]
+                      },
+                      {
+                        "user": "sglang.dsparkBlockSize"
+                      },
+                      null
+                    ]
+                  },
+                  7
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "validation": [
+    {
+      "kind": "draftArchitecture",
+      "architecture": "DSparkDraftModel",
+      "defaultDir": "RadixArk-Qwen3.8-27B-DSpark",
+      "severity": "fail",
+      "code": "dspark_draft_invalid",
+      "title": {
+        "zh": "DSpark 草稿模型不可用",
+        "en": "DSpark draft model is unavailable"
+      }
+    }
+  ],
+  "notes": [
+    {
+      "zh": "使用 RadixArk Qwen3.8 DSpark 草稿 checkpoint，block size 7，开启 overlap 调度",
+      "en": "uses the RadixArk Qwen3.8 DSpark draft checkpoint with block size 7 and overlap scheduling"
+    }
+  ],
+  "legacy": {
+    "presetId": "qwen3.8-sglang-dspark",
+    "presetLabel": "Qwen3.8 / SGLang / DSpark",
+    "notesEn": [
+      "uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000",
+      "uses FlashInfer on SM120; FA3 is not supported on this host",
+      "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures",
+      "uses the RadixArk Qwen3.8 DSpark draft checkpoint with block size 7 and overlap scheduling"
+    ],
+    "preset": {
+      "draftModel": {
+        "text": "{{draft.path}}"
+      }
+    }
+  },
+  "profile": {
+    "id": "qwen38-sglang-dspark-fastest",
+    "name": "Qwen3.8 旧版 SGLang + DSpark 实验档",
+    "description": "保留给旧 Qwen3.8 27B FP8 + DSpark 的实验方案；Flash-Next NVFP4 请用上面的 262K 稳定档。",
+    "managerId": "vllm",
+    "order": 4,
+    "requirements": {
+      "minGpuCount": 1,
+      "minSingleGpuMemoryGb": 48
+    },
+    "values": {
+      "contextLength": 262144,
+      "concurrency": 4,
+      "sglang.memFractionStatic": 0.8,
+      "prefixCaching": true,
+      "speculative.method": "dspark",
+      "sglang.dsparkBlockSize": 7,
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_coder",
+      "clientPreset": "openwebui"
+    },
+    "legacy": {
+      "gpuDeviceIds": [
+        "0"
+      ],
+      "multiGpuMode": "single"
+    }
+  },
+  "evidence": {
+    "gpu": "RTX PRO 6000 Blackwell 96 GB",
+    "host": "Windows 11 + Docker Desktop/WSL2",
+    "date": "2026-08",
+    "jobId": null
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-llama-hetero-64k-safe",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "Claude 64K 稳妥异构",
+    "en": "Claude 64K safe heterogeneous"
+  },
+  "profile": {
+    "id": "llama-hetero-64k-safe",
+    "name": "Claude 64K 稳妥异构",
+    "description": "异构多卡本地 Claude 单路优先，layer 分层，速度和稳定性比较均衡。",
+    "managerId": "llama",
+    "order": 2,
+    "requirements": {
+      "minGpuCount": 2
+    },
+    "values": {
+      "contextLength": 65536,
+      "concurrency": 2,
+      "llamacpp.cacheTypeK": "q8_0",
+      "llamacpp.cacheTypeV": "q8_0",
+      "llamacpp.planningUtilization": 0.9,
+      "llamacpp.splitMode": "layer",
+      "llamacpp.tensorSplit": "22,8",
+      "llamacpp.mainGpu": 0,
+      "llamacpp.reasoning": "auto",
+      "llamacpp.reasoningFormat": "deepseek",
+      "clientPreset": "claude-cowork",
+      "llamacpp.textOnly": true
+    },
+    "legacy": {
+      "gpuDeviceIds": [
+        "0",
+        "1"
+      ]
+    }
+  }
+}

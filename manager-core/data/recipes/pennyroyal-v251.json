@@ -1,0 +1,1265 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "pennyroyal-v251",
+  "kind": "model",
+  "status": "verified",
+  "label": {
+    "zh": "Pennyroyal v2.5.1 · Flash-Next · 仅 GPU 缓存",
+    "en": "Pennyroyal v2.5.1 · Flash-Next · GPU cache only"
+  },
+  "description": {
+    "zh": "固定 digest 的 SGLang 镜像：NVFP4 + 在线 FP8 + FP8 KV + FR-Spec/NEXTN-3 + RAM PLE，524K 共享 KV，单卡 TP1。",
+    "en": "Digest-pinned SGLang image: NVFP4, online FP8, FP8 KV, FR-Spec/NEXTN-3 and RAM PLE with a shared 524K KV pool on one GPU."
+  },
+  "engineId": "sglang",
+  "runtime": {
+    "ref": "sglangPennyroyal",
+    "allowOverride": false
+  },
+  "match": {
+    "capabilityIds": [
+      "qwen3.8-flash-next"
+    ],
+    "runtimeId": "sglang@pennyroyal-v2.5.1",
+    "quant": [
+      "nvfp4",
+      "modelopt_fp4"
+    ],
+    "minComputeCapability": "12.0",
+    "minGpuMemoryGb": 90
+  },
+  "priority": 100,
+  "values": {
+    "sglang.maxTotalTokens": {
+      "expr": {
+        "coalesce": [
+          {
+            "if": [
+              {
+                "gt": [
+                  {
+                    "user": "sglang.maxTotalTokens"
+                  },
+                  0
+                ]
+              },
+              {
+                "user": "sglang.maxTotalTokens"
+              },
+              null
+            ]
+          },
+          {
+            "if": [
+              {
+                "gt": [
+                  {
+                    "user": "contextLength"
+                  },
+                  0
+                ]
+              },
+              {
+                "user": "contextLength"
+              },
+              null
+            ]
+          },
+          524288
+        ]
+      }
+    }
+  },
+  "derived": {
+    "sglang.maxRunningRequests": {
+      "coalesce": [
+        {
+          "if": [
+            {
+              "gt": [
+                {
+                  "user": "concurrency"
+                },
+                0
+              ]
+            },
+            {
+              "user": "concurrency"
+            },
+            null
+          ]
+        },
+        4
+      ]
+    }
+  },
+  "locks": [
+    {
+      "param": "quantization",
+      "value": "modelopt_fp4",
+      "reason": {
+        "zh": "Pennyroyal 固定 NVFP4 权重",
+        "en": "Pennyroyal runs NVFP4 weights"
+      }
+    },
+    {
+      "param": "dtype",
+      "value": "bfloat16",
+      "reason": {
+        "zh": "Pennyroyal 固定 bfloat16",
+        "en": "Pennyroyal runs bfloat16"
+      }
+    },
+    {
+      "param": "kvCacheDtype",
+      "value": "fp8_e4m3",
+      "reason": {
+        "zh": "已验证的 FP8 KV",
+        "en": "Validated FP8 KV cache"
+      }
+    },
+    {
+      "param": "trustRemoteCode",
+      "value": true,
+      "reason": {
+        "zh": "该架构需要仓库代码",
+        "en": "This architecture needs repository code"
+      }
+    },
+    {
+      "param": "reasoningParser",
+      "value": "qwen3",
+      "reason": {
+        "zh": "该模型已验证的解析器",
+        "en": "Parser validated for this model"
+      }
+    },
+    {
+      "param": "toolCallParser",
+      "value": "qwen3_coder",
+      "reason": {
+        "zh": "该模型已验证的解析器",
+        "en": "Parser validated for this model"
+      }
+    },
+    {
+      "param": "autoToolChoice",
+      "value": true,
+      "reason": {
+        "zh": "随解析器开启",
+        "en": "Enabled with the parser"
+      }
+    },
+    {
+      "param": "sglang.attentionBackend",
+      "value": "flashinfer",
+      "reason": {
+        "zh": "已验证的注意力后端",
+        "en": "Validated attention backend"
+      }
+    },
+    {
+      "param": "sglang.fp4GemmBackend",
+      "value": "flashinfer_cutlass",
+      "reason": {
+        "zh": "已验证的 FP4 GEMM 后端",
+        "en": "Validated FP4 GEMM backend"
+      }
+    },
+    {
+      "param": "sglang.pageSize",
+      "value": 64,
+      "reason": {
+        "zh": "已验证的页大小",
+        "en": "Validated page size"
+      }
+    },
+    {
+      "param": "sglang.chunkedPrefillSize",
+      "value": 4096,
+      "reason": {
+        "zh": "已验证的分块预填充",
+        "en": "Validated chunked prefill"
+      }
+    },
+    {
+      "param": "sglang.pleOffloadEmbedding",
+      "value": true,
+      "reason": {
+        "zh": "PLE 必须放入内存",
+        "en": "PLE must live in system RAM"
+      }
+    },
+    {
+      "param": "sglang.linearAttnPrefillBackend",
+      "value": "flashinfer",
+      "reason": {
+        "zh": "已验证的线性注意力后端",
+        "en": "Validated linear attention backend"
+      }
+    },
+    {
+      "param": "sglang.linearAttnDecodeBackend",
+      "value": "flashinfer",
+      "reason": {
+        "zh": "已验证的线性注意力后端",
+        "en": "Validated linear attention backend"
+      }
+    },
+    {
+      "param": "sglang.mambaSsmDtype",
+      "value": "bfloat16",
+      "reason": {
+        "zh": "已验证的 Mamba 状态精度",
+        "en": "Validated Mamba state dtype"
+      }
+    },
+    {
+      "param": "sglang.mambaRadixCacheStrategy",
+      "value": "extra_buffer",
+      "reason": {
+        "zh": "已验证的 Mamba 缓存策略",
+        "en": "Validated Mamba cache strategy"
+      }
+    },
+    {
+      "param": "sglang.mambaTrackInterval",
+      "value": 64,
+      "reason": {
+        "zh": "已验证的 Mamba 跟踪间隔",
+        "en": "Validated Mamba track interval"
+      }
+    },
+    {
+      "param": "sglang.maxMambaCacheSize",
+      "value": 24,
+      "reason": {
+        "zh": "已验证的 Mamba 缓存大小",
+        "en": "Validated Mamba cache size"
+      }
+    }
+  ],
+  "blockIf": [
+    {
+      "when": {
+        "ne": [
+          {
+            "fact": "runtime.id"
+          },
+          "sglang@pennyroyal-v2.5.1"
+        ]
+      },
+      "code": "pennyroyal_image_required",
+      "message": {
+        "zh": "请选择固定 digest 的 Pennyroyal v2.5.1 镜像。",
+        "en": "Choose the digest-pinned Pennyroyal v2.5.1 image."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "kvCacheDtype"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "kvCacheDtype"
+              },
+              "fp8_e4m3"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_kv_cache_dtype",
+      "message": {
+        "zh": "kvCacheDtype 要求 fp8_e4m3。",
+        "en": "kvCacheDtype must be fp8_e4m3."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "speculative.method"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "speculative.method"
+              },
+              "mtp"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_speculative_mode",
+      "message": {
+        "zh": "speculativeMode 要求 mtp。",
+        "en": "speculativeMode must be mtp."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.attentionBackend"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.attentionBackend"
+              },
+              "flashinfer"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_attention_backend",
+      "message": {
+        "zh": "sglangAttentionBackend 要求 flashinfer。",
+        "en": "sglangAttentionBackend must be flashinfer."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.linearAttnPrefillBackend"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.linearAttnPrefillBackend"
+              },
+              "flashinfer"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_linear_attn_prefill_backend",
+      "message": {
+        "zh": "sglangLinearAttnPrefillBackend 要求 flashinfer。",
+        "en": "sglangLinearAttnPrefillBackend must be flashinfer."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.fp4GemmBackend"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.fp4GemmBackend"
+              },
+              "flashinfer_cutlass"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_fp4_gemm_backend",
+      "message": {
+        "zh": "sglangFp4GemmBackend 要求 flashinfer_cutlass。",
+        "en": "sglangFp4GemmBackend must be flashinfer_cutlass."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.linearAttnDecodeBackend"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.linearAttnDecodeBackend"
+              },
+              "flashinfer"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_linear_attn_decode_backend",
+      "message": {
+        "zh": "sglangLinearAttnDecodeBackend 要求 flashinfer。",
+        "en": "sglangLinearAttnDecodeBackend must be flashinfer."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.mambaSsmDtype"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.mambaSsmDtype"
+              },
+              "bfloat16"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_mamba_ssm_dtype",
+      "message": {
+        "zh": "sglangMambaSsmDtype 要求 bfloat16。",
+        "en": "sglangMambaSsmDtype must be bfloat16."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "isSet": {
+              "user": "sglang.mambaRadixCacheStrategy"
+            }
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.mambaRadixCacheStrategy"
+              },
+              "extra_buffer"
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_mamba_radix_cache_strategy",
+      "message": {
+        "zh": "sglangMambaRadixCacheStrategy 要求 extra_buffer。",
+        "en": "sglangMambaRadixCacheStrategy must be extra_buffer."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "gt": [
+              {
+                "user": "speculative.numTokens"
+              },
+              0
+            ]
+          },
+          {
+            "ne": [
+              {
+                "user": "speculative.numTokens"
+              },
+              3
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_num_speculative_tokens",
+      "message": {
+        "zh": "numSpeculativeTokens 要求 3。",
+        "en": "numSpeculativeTokens must be 3."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "gt": [
+              {
+                "user": "sglang.pageSize"
+              },
+              0
+            ]
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.pageSize"
+              },
+              64
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_page_size",
+      "message": {
+        "zh": "sglangPageSize 要求 64。",
+        "en": "sglangPageSize must be 64."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "gt": [
+              {
+                "user": "sglang.chunkedPrefillSize"
+              },
+              0
+            ]
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.chunkedPrefillSize"
+              },
+              4096
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_chunked_prefill_size",
+      "message": {
+        "zh": "sglangChunkedPrefillSize 要求 4096。",
+        "en": "sglangChunkedPrefillSize must be 4096."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "gt": [
+              {
+                "user": "sglang.mambaTrackInterval"
+              },
+              0
+            ]
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.mambaTrackInterval"
+              },
+              64
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_mamba_track_interval",
+      "message": {
+        "zh": "sglangMambaTrackInterval 要求 64。",
+        "en": "sglangMambaTrackInterval must be 64."
+      }
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "gt": [
+              {
+                "user": "sglang.maxMambaCacheSize"
+              },
+              0
+            ]
+          },
+          {
+            "ne": [
+              {
+                "user": "sglang.maxMambaCacheSize"
+              },
+              24
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_max_mamba_cache_size",
+      "message": {
+        "zh": "sglangMaxMambaCacheSize 要求 24。",
+        "en": "sglangMaxMambaCacheSize must be 24."
+      }
+    },
+    {
+      "when": {
+        "or": [
+          {
+            "gt": [
+              {
+                "user": "contextLength"
+              },
+              524288
+            ]
+          },
+          {
+            "gt": [
+              {
+                "user": "sglang.maxTotalTokens"
+              },
+              524288
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_context_cap",
+      "message": {
+        "zh": "本预设上限为 524288 tokens，且多请求共享 GPU KV 池。",
+        "en": "This recipe is capped at 524288 tokens, shared by all requests in the GPU KV pool."
+      }
+    },
+    {
+      "when": {
+        "gt": [
+          {
+            "user": "concurrency"
+          },
+          4
+        ]
+      },
+      "code": "pennyroyal_concurrency_cap",
+      "message": {
+        "zh": "本预设最多同时运行 4 个请求。",
+        "en": "This recipe runs at most 4 requests at a time."
+      }
+    },
+    {
+      "when": {
+        "gt": [
+          {
+            "user": "sglang.memFractionStatic"
+          },
+          0.981
+        ]
+      },
+      "code": "pennyroyal_mem_fraction_cap",
+      "message": {
+        "zh": "本预设 mem-fraction-static 上限为 0.981；显存门禁使用实测预留并保留系统安全余量。",
+        "en": "mem-fraction-static is capped at 0.981 for this recipe; the GPU admission gate uses the measured reservation and keeps the system safety margin."
+      }
+    },
+    {
+      "when": {
+        "or": [
+          {
+            "gt": [
+              {
+                "user": "tensorParallel"
+              },
+              1
+            ]
+          },
+          {
+            "and": [
+              {
+                "isSet": {
+                  "user": "multiGpuMode"
+                }
+              },
+              {
+                "ne": [
+                  {
+                    "user": "multiGpuMode"
+                  },
+                  "single"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_single_gpu_only",
+      "message": {
+        "zh": "本预设仅验证单卡 TP=1。",
+        "en": "This recipe is only validated on a single GPU with TP=1."
+      }
+    },
+    {
+      "when": {
+        "eq": [
+          {
+            "user": "sglang.pleOffloadEmbedding"
+          },
+          false
+        ]
+      },
+      "code": "pennyroyal_ple_required",
+      "message": {
+        "zh": "Pennyroyal RAM PLE 必须启用。",
+        "en": "Pennyroyal RAM PLE must stay enabled."
+      }
+    },
+    {
+      "when": {
+        "or": [
+          {
+            "gt": [
+              {
+                "user": "vllm.cpuOffloadGb"
+              },
+              0
+            ]
+          },
+          {
+            "gt": [
+              {
+                "user": "vllm.kvOffloadingSize"
+              },
+              0
+            ]
+          }
+        ]
+      },
+      "code": "pennyroyal_no_vllm_offload",
+      "message": {
+        "zh": "Pennyroyal 使用 RAM PLE；CPU HiCache/NIXL 关闭，不接受 vLLM offload 参数。",
+        "en": "Pennyroyal uses RAM PLE; CPU HiCache/NIXL are off and vLLM offload settings are not accepted."
+      }
+    }
+  ],
+  "validation": [
+    {
+      "kind": "tokenizerSha256",
+      "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "severity": "fail",
+      "code": "frspec_tokenizer_mismatch",
+      "title": {
+        "zh": "FR-Spec tokenizer 不匹配",
+        "en": "FR-Spec tokenizer mismatch"
+      },
+      "message": {
+        "zh": "本地 tokenizer 与固定 token map 不一致，禁止使用该 FR-Spec 预设。",
+        "en": "The local tokenizer differs from the pinned token map; the FR-Spec recipe is not allowed."
+      },
+      "unverifiedTitle": {
+        "zh": "FR-Spec tokenizer 未验证",
+        "en": "FR-Spec tokenizer not verified"
+      }
+    }
+  ],
+  "fixedArgs": [
+    "--load-format",
+    "safetensors",
+    "--warmups=structured_output",
+    "--json-model-override-args",
+    "{\"text_config\":{\"rope_parameters\":{\"mrope_interleaved\":true,\"mrope_section\":[11,11,10],\"rope_type\":\"yarn\",\"rope_theta\":10000000,\"partial_rotary_factor\":0.25,\"factor\":2,\"original_max_position_embeddings\":262144}}}",
+    "--gdn-mtp-cache-mode",
+    "none",
+    "--chat-template",
+    "/opt/pennyroyal/configs/pennyroyal/templates/froggeric-v22.5.jinja",
+    "--image-processor-backend",
+    "pil",
+    "--enable-request-time-stats-logging",
+    "--speculative-algorithm",
+    "NEXTN",
+    "--speculative-num-steps",
+    "3",
+    "--speculative-eagle-topk",
+    "1",
+    "--speculative-num-draft-tokens",
+    "4",
+    "--speculative-draft-model-quantization",
+    "unquant",
+    "--speculative-token-map",
+    "/opt/pennyroyal/configs/pennyroyal/frspec/flash-next-64k.pt",
+    "--watchdog-timeout",
+    "1800"
+  ],
+  "env": {
+    "PYTHONPATH": "/opt/pennyroyal/python",
+    "SGLANG_SM120_ONLINE_MXFP8": "true",
+    "SGLANG_MM_PREPROCESS_DEVICE": "cpu",
+    "NUMPY_MADVISE_HUGEPAGE": "0",
+    "SGLANG_NUMA_BIND_V2": "true",
+    "SGLANG_AUTO_NUMA_BIND": "false",
+    "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN": "1",
+    "SGLANG_MAMBA_CONV_DTYPE": "bfloat16",
+    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    "TOKENIZERS_PARALLELISM": "false",
+    "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "OMP_NUM_THREADS": "4",
+    "MKL_NUM_THREADS": "4",
+    "HF_HOME": "/cache/huggingface",
+    "XDG_CACHE_HOME": "/cache",
+    "TORCH_HOME": "/cache/torch",
+    "TORCHINDUCTOR_CACHE_DIR": "/cache/torchinductor",
+    "TRITON_CACHE_DIR": "/cache/triton",
+    "CUDA_CACHE_PATH": "/cache/cuda",
+    "FLASHINFER_WORKSPACE_BASE": "/cache/flashinfer",
+    "SGLANG_CACHE_DIR": "/cache/sglang",
+    "SGLANG_JIT_CACHE_DIR": "/cache/sglang/jit"
+  },
+  "labels": [
+    {
+      "key": "ai.runtime.profile",
+      "value": "pennyroyal-v2.5.1-gpu-cache-only"
+    },
+    {
+      "key": "ai.runtime.kv-dtype",
+      "value": "fp8_e4m3"
+    },
+    {
+      "key": "ai.runtime.speculative-mode",
+      "value": "mtp"
+    },
+    {
+      "key": "ai.runtime.cpu-cache",
+      "value": "disabled"
+    },
+    {
+      "key": "ai.runtime.online-fp8",
+      "value": "true"
+    },
+    {
+      "key": "ai.runtime.fr-spec",
+      "value": "true"
+    },
+    {
+      "key": "ai.runtime.speculative",
+      "value": "nextn-frspec"
+    },
+    {
+      "key": "ai.runtime.storage",
+      "value": "ram-ple"
+    },
+    {
+      "key": "ai.runtime.ple-dtype",
+      "value": "fp8"
+    },
+    {
+      "key": "ai.runtime.mamba-dtype",
+      "value": "bfloat16"
+    },
+    {
+      "key": "ai.runtime.linear-attn",
+      "value": "flashinfer/flashinfer"
+    },
+    {
+      "key": "ai.runtime.cache",
+      "value": "gpu-radix; cpu-hicache/nixl disabled"
+    },
+    {
+      "key": "ai.runtime.thinking",
+      "value": {
+        "expr": {
+          "if": [
+            {
+              "eq": [
+                {
+                  "user": "reasoning.defaultEnabled"
+                },
+                false
+              ]
+            },
+            "disabled-by-default",
+            "enabled-by-default"
+          ]
+        }
+      }
+    },
+    {
+      "key": "ai.runtime.context-length",
+      "value": {
+        "text": "{{user:contextLength}}"
+      }
+    },
+    {
+      "key": "ai.runtime.max-total-tokens",
+      "value": {
+        "text": "{{param:sglang.maxTotalTokens}}"
+      }
+    },
+    {
+      "key": "ai.runtime.chunked-prefill",
+      "value": "4096"
+    },
+    {
+      "key": "ai.runtime.fp4-backend",
+      "value": "flashinfer_cutlass"
+    }
+  ],
+  "dockerFlags": [
+    "--init",
+    "--ulimit",
+    "memlock=-1:-1"
+  ],
+  "slots": {
+    "restart": "no",
+    "hfCacheMount": false,
+    "modelMountReadOnly": true,
+    "cacheMount": "type=volume,source=pennyroyal-orcarouter-v251-compiler,target=/cache"
+  },
+  "memory": {
+    "policy": "measured",
+    "calibrate": true,
+    "measuredMiB": {
+      "expr": {
+        "sub": [
+          88000,
+          {
+            "floorDiv": [
+              {
+                "mul": [
+                  {
+                    "sub": [
+                      524288,
+                      {
+                        "min": [
+                          524288,
+                          {
+                            "max": [
+                              262144,
+                              {
+                                "coalesce": [
+                                  {
+                                    "if": [
+                                      {
+                                        "gt": [
+                                          {
+                                            "user": "sglang.maxTotalTokens"
+                                          },
+                                          0
+                                        ]
+                                      },
+                                      {
+                                        "user": "sglang.maxTotalTokens"
+                                      },
+                                      null
+                                    ]
+                                  },
+                                  {
+                                    "if": [
+                                      {
+                                        "gt": [
+                                          {
+                                            "user": "contextLength"
+                                          },
+                                          0
+                                        ]
+                                      },
+                                      {
+                                        "user": "contextLength"
+                                      },
+                                      null
+                                    ]
+                                  },
+                                  524288
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  6656
+                ]
+              },
+              524288
+            ]
+          }
+        ]
+      }
+    },
+    "estimatePolicy": "pennyroyal_v251_sm120_tp1_524k_measured"
+  },
+  "stallMs": 1800000,
+  "notes": [
+    {
+      "zh": "Pennyroyal v2.5.1：NVFP4 + 在线 FP8 + FP8 KV + FR-Spec/NEXTN-3 + RAM PLE",
+      "en": "Pennyroyal v2.5.1: NVFP4, online FP8, FP8 KV, FR-Spec/NEXTN-3 and RAM PLE"
+    },
+    {
+      "zh": "为兼容 WSL 关闭 CPU HiCache/NIXL，GPU radix 缓存保持开启",
+      "en": "CPU HiCache/NIXL are off for WSL compatibility; the GPU radix cache stays on"
+    },
+    {
+      "zh": "524288 为共享 KV 容量，不是 4 路各 524K；已通过 500016-token 合成检索，冷加载约 16 分钟",
+      "en": "524288 is a shared KV capacity, not 524K per request; a 500016-token synthetic retrieval passed and a cold load takes about 16 minutes"
+    }
+  ],
+  "legacy": {
+    "presetId": "pennyroyal-v2.5.1-flash-next-wsl",
+    "presetLabel": "Pennyroyal v2.5.1 / Flash-Next / GPU cache only",
+    "base": false,
+    "mergeCapabilities": false,
+    "notesEn": [
+      "Pennyroyal v2.5.1: NVFP4 + online FP8 + FP8 KV + FR-Spec/NEXTN-3 + RAM PLE",
+      "CPU HiCache/NIXL disabled for WSL compatibility; GPU radix cache remains enabled",
+      "524288 shared KV capacity; 500016-token synthetic retrieval qualified; cold load about 16 minutes"
+    ],
+    "preset": {
+      "pennyroyal": true,
+      "engine": "sglang",
+      "dtype": {
+        "recipe": "dtype"
+      },
+      "kvCacheDtype": {
+        "recipe": "kvCacheDtype"
+      },
+      "quantization": {
+        "recipe": "quantization"
+      },
+      "forceTrustRemoteCode": {
+        "recipe": "trustRemoteCode"
+      },
+      "reasoningParser": {
+        "recipe": "reasoningParser"
+      },
+      "toolCallParser": {
+        "recipe": "toolCallParser"
+      },
+      "enableAutoToolChoice": {
+        "recipe": "autoToolChoice"
+      },
+      "attentionBackend": {
+        "recipe": "sglang.attentionBackend"
+      },
+      "fp4GemmBackend": {
+        "recipe": "sglang.fp4GemmBackend"
+      },
+      "maxTotalTokens": {
+        "recipe": "sglang.maxTotalTokens"
+      },
+      "maxRunningRequests": {
+        "recipe": "sglang.maxRunningRequests"
+      },
+      "effectiveMaxRunningRequests": {
+        "recipe": "sglang.maxRunningRequests"
+      },
+      "pageSize": {
+        "recipe": "sglang.pageSize"
+      },
+      "chunkedPrefillSize": {
+        "recipe": "sglang.chunkedPrefillSize"
+      },
+      "pleOffloadEmbedding": {
+        "recipe": "sglang.pleOffloadEmbedding"
+      },
+      "linearAttnPrefillBackend": {
+        "recipe": "sglang.linearAttnPrefillBackend"
+      },
+      "linearAttnDecodeBackend": {
+        "recipe": "sglang.linearAttnDecodeBackend"
+      },
+      "mambaSsmDtype": {
+        "recipe": "sglang.mambaSsmDtype"
+      },
+      "mambaRadixCacheStrategy": {
+        "recipe": "sglang.mambaRadixCacheStrategy"
+      },
+      "mambaTrackInterval": {
+        "recipe": "sglang.mambaTrackInterval"
+      },
+      "maxMambaCacheSize": {
+        "recipe": "sglang.maxMambaCacheSize"
+      },
+      "defaultChatTemplateKwargs": {
+        "expr": {
+          "json": {
+            "enable_thinking": {
+              "ne": [
+                {
+                  "user": "reasoning.defaultEnabled"
+                },
+                false
+              ]
+            },
+            "preserve_thinking": true,
+            "reasoning_effort": "medium"
+          }
+        },
+        "format": "json"
+      },
+      "speculativeAlgorithm": "NEXTN",
+      "speculativeConfig": null,
+      "env": {
+        "fixed": "env"
+      }
+    },
+    "mismatch": {
+      "reason": {
+        "zh": "Pennyroyal FR-Spec 预设仅支持 Qwen3.8 Flash-Next NVFP4。",
+        "en": "The Pennyroyal FR-Spec recipe only supports Qwen3.8 Flash-Next NVFP4."
+      },
+      "check": {
+        "title": {
+          "zh": "Pennyroyal 模型不匹配",
+          "en": "Pennyroyal model mismatch"
+        },
+        "detail": {
+          "zh": "此预设仅用于 Qwen3.8 Flash-Next NVFP4 checkpoint。",
+          "en": "This recipe is only for the Qwen3.8 Flash-Next NVFP4 checkpoint."
+        }
+      }
+    },
+    "check": {
+      "blockTitle": {
+        "zh": "Pennyroyal 参数校验",
+        "en": "Pennyroyal parameter check"
+      },
+      "recommendFromProfile": true,
+      "recommendations": {
+        "maxModelLen": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "contextLength"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "contextLength"
+                  },
+                  null
+                ]
+              },
+              524288
+            ]
+          }
+        },
+        "maxNumSeqs": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "concurrency"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "concurrency"
+                  },
+                  null
+                ]
+              },
+              4
+            ]
+          }
+        },
+        "sglangDisableThinkingByDefault": {
+          "expr": {
+            "eq": [
+              {
+                "user": "reasoning.defaultEnabled"
+              },
+              false
+            ]
+          }
+        }
+      },
+      "findings": [
+        {
+          "from": "mismatch"
+        },
+        {
+          "from": "blockIf"
+        },
+        {
+          "from": "validation"
+        },
+        {
+          "severity": "ok",
+          "title": {
+            "zh": "Pennyroyal WSL 路径",
+            "en": "Pennyroyal WSL path"
+          },
+          "detail": {
+            "zh": "NVFP4、Online FP8、FP8 KV、FR-Spec/NEXTN-3、RAM PLE；GPU radix 缓存开启，CPU HiCache/NIXL 关闭。",
+            "en": "NVFP4, online FP8, FP8 KV, FR-Spec/NEXTN-3 and RAM PLE; GPU radix cache on, CPU HiCache/NIXL off."
+          }
+        },
+        {
+          "severity": "warn",
+          "title": {
+            "zh": "容量与冷启动",
+            "en": "Capacity and cold start"
+          },
+          "detail": {
+            "zh": "524288 tokens 为共享 KV 容量，不是 4 路各 524K；本机曾通过 500016-token 合成检索。F 盘冷加载约 16 分钟。",
+            "en": "524288 tokens is a shared KV capacity, not 524K for each of 4 requests; a 500016-token synthetic retrieval passed on the reference host. A cold load takes about 16 minutes."
+          }
+        }
+      ]
+    }
+  },
+  "profile": {
+    "id": "orcarouter-pennyroyal-v251-524k",
+    "name": "OrcaRouter · Pennyroyal v2.5.1 · 524K",
+    "description": "RTX PRO 6000 96GB + 128GB RAM：FR-Spec / Online FP8 / FP8 KV / RAM PLE；GPU 缓存，CPU HiCache/NIXL 关闭。已做 500K 合成检索验证，冷加载约 16 分钟。先选择本机 OrcaRouter 模型目录。",
+    "managerId": "vllm",
+    "order": 1,
+    "requirements": {
+      "minGpuCount": 1,
+      "minSingleGpuMemoryGb": 90
+    },
+    "pinRuntimeImage": true,
+    "values": {
+      "servedName": "pennyroyal",
+      "dtype": "bfloat16",
+      "quantization": "modelopt_fp4",
+      "trustRemoteCode": true,
+      "vllm.loadFormat": "safetensors",
+      "contextLength": 524288,
+      "concurrency": 4,
+      "sglang.chunkedPrefillSize": 4096,
+      "sglang.memFractionStatic": 0.981,
+      "kvCacheDtype": "fp8_e4m3",
+      "prefixCaching": true,
+      "sglang.maxTotalTokens": 524288,
+      "sglang.pageSize": 64,
+      "sglang.pleOffloadEmbedding": true,
+      "sglang.mambaSsmDtype": "bfloat16",
+      "sglang.mambaRadixCacheStrategy": "extra_buffer",
+      "sglang.mambaTrackInterval": 64,
+      "sglang.maxMambaCacheSize": 24,
+      "tensorParallel": 1,
+      "speculative.method": "mtp",
+      "speculative.numTokens": 3,
+      "speculative.draftModel": null,
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_coder",
+      "autoToolChoice": true,
+      "reasoning.defaultEnabled": null,
+      "clientPreset": "claude-code",
+      "sglang.attentionBackend": "flashinfer",
+      "sglang.fp4GemmBackend": "flashinfer_cutlass",
+      "sglang.linearAttnPrefillBackend": "flashinfer",
+      "sglang.linearAttnDecodeBackend": "flashinfer"
+    },
+    "legacy": {
+      "port": 8000,
+      "maxNumBatchedTokens": 0,
+      "cpuOffloadGb": 0,
+      "kvOffloadingSize": 0,
+      "pipelineParallelSize": 1,
+      "dataParallelSize": 1,
+      "enableExpertParallel": false,
+      "gpuDeviceIds": [
+        "0"
+      ],
+      "multiGpuMode": "single",
+      "networkAccess": "local",
+      "languageModelOnly": false
+    }
+  },
+  "evidence": {
+    "gpu": "RTX PRO 6000 Blackwell 96 GB",
+    "host": "Windows 11 + Docker Desktop/WSL2",
+    "date": "2026-09",
+    "jobId": null
+  }
+}

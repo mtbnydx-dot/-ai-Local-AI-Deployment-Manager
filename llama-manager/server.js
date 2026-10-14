@@ -791,6 +791,7 @@ const managerLifecycle = core.createManagerLifecycle({
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
     sseHub.close();
+    recipeWatcher?.close();
     core.interruptRunningDownloadJobs(jobs);
     await saveJobsLedgerNow().catch((error) => console.warn(`Unable to save jobs ledger during shutdown: ${error.message}`));
     await flushClaudeUsageWrites().catch((error) => console.warn(`Unable to save Claude usage during shutdown: ${error.message}`));
@@ -1697,8 +1698,15 @@ core.registerRuntimeRoutes(app, {
 // uncached inspect behind the route's own 60 s cache. GET /api/engines/:id/schema
 // (ENG-3) serves the parameter catalog with host facts from the cached GPU probe.
 const engineRegistry = core.engines.createEngineRegistry({ env: process.env });
+// Recipes as data (ENG-6): the same bundled recipes and <AI_ROOT>/config/recipes
+// the vllm manager loads; this manager runs the llama.cpp ones and its builtin
+// launch profiles. POST /api/recipes/reload re-reads them and the watcher
+// started with the manager picks up hand edits.
+const recipeStore = core.engines.createRecipeStore({ registry: engineRegistry });
+let recipeWatcher = null;
 core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
+  recipeStore,
   managerId: "llama",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -1747,6 +1755,7 @@ core.registerToolsRoutes(app, {
 });
 
 if (require.main === module) {
+  recipeWatcher = core.engines.watchRecipeOverrides({ store: recipeStore, log: (line) => console.warn(line) });
   startManager().catch((error) => {
     console.error(error);
     process.exitCode = 1;

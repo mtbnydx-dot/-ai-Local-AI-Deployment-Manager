@@ -1,0 +1,487 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "diffusiongemma-windows",
+  "kind": "model",
+  "status": "experimental",
+  "label": {
+    "zh": "DiffusionGemma · vLLM · Gemma 专用运行时",
+    "en": "DiffusionGemma · vLLM · Gemma runtime"
+  },
+  "engineId": "vllm",
+  "runtime": {
+    "ref": "vllmGemma",
+    "allowOverride": false
+  },
+  "match": {
+    "capabilityIds": [
+      "gemma4"
+    ]
+  },
+  "appliesWhen": {
+    "in": [
+      "DiffusionGemmaForBlockDiffusion",
+      {
+        "fact": "model.architectures"
+      }
+    ]
+  },
+  "inputs": {
+    "env": [
+      "VLLM_GEMMA_USE_V2_MODEL_RUNNER",
+      "VLLM_GEMMA_MAX_NEW_TOKENS",
+      "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA"
+    ]
+  },
+  "priority": 50,
+  "values": {
+    "vllm.attentionBackend": "TRITON_ATTN",
+    "vllm.enforceEager": {
+      "expr": {
+        "eq": [
+          {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "in": [
+                      {
+                        "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                      },
+                      [
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                        "v2"
+                      ]
+                    ]
+                  },
+                  "1",
+                  null
+                ]
+              },
+              {
+                "if": [
+                  {
+                    "in": [
+                      {
+                        "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                      },
+                      [
+                        "0",
+                        "false",
+                        "no",
+                        "off",
+                        "v1"
+                      ]
+                    ]
+                  },
+                  "0",
+                  null
+                ]
+              },
+              {
+                "if": [
+                  {
+                    "eq": [
+                      {
+                        "fact": "host.platform"
+                      },
+                      "win32"
+                    ]
+                  },
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "0"
+        ]
+      }
+    },
+    "vllm.overrideGenerationConfig": {
+      "expr": {
+        "json": {
+          "max_new_tokens": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gte": [
+                      {
+                        "number": {
+                          "env": "VLLM_GEMMA_MAX_NEW_TOKENS"
+                        }
+                      },
+                      128
+                    ]
+                  },
+                  {
+                    "floorDiv": [
+                      {
+                        "number": {
+                          "env": "VLLM_GEMMA_MAX_NEW_TOKENS"
+                        }
+                      },
+                      1
+                    ]
+                  },
+                  null
+                ]
+              },
+              4096
+            ]
+          }
+        }
+      }
+    }
+  },
+  "derived": {
+    "kvCacheDtype": {
+      "if": [
+        {
+          "notIn": [
+            {
+              "user": "kvCacheDtype"
+            },
+            [
+              null,
+              "auto"
+            ]
+          ]
+        },
+        {
+          "user": "kvCacheDtype"
+        },
+        "fp8"
+      ]
+    }
+  },
+  "locks": [
+    {
+      "param": "trustRemoteCode",
+      "value": true,
+      "reason": {
+        "zh": "该架构需要仓库代码",
+        "en": "This architecture needs repository code"
+      }
+    },
+    {
+      "param": "reasoningParser",
+      "value": "gemma4",
+      "reason": {
+        "zh": "Gemma4 解析器",
+        "en": "Gemma4 parser"
+      }
+    },
+    {
+      "param": "toolCallParser",
+      "value": "gemma4",
+      "reason": {
+        "zh": "Gemma4 解析器",
+        "en": "Gemma4 parser"
+      }
+    },
+    {
+      "param": "autoToolChoice",
+      "value": true,
+      "reason": {
+        "zh": "随解析器开启",
+        "en": "Enabled with the parser"
+      }
+    },
+    {
+      "param": "prefixCaching",
+      "value": false,
+      "reason": {
+        "zh": "DiffusionGemma 不支持前缀缓存",
+        "en": "DiffusionGemma does not support prefix caching"
+      }
+    }
+  ],
+  "blockIf": [
+    {
+      "when": {
+        "and": [
+          {
+            "eq": [
+              {
+                "fact": "host.platform"
+              },
+              "win32"
+            ]
+          },
+          {
+            "not": {
+              "in": [
+                {
+                  "env": "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA"
+                },
+                [
+                  "1",
+                  "true",
+                  "yes",
+                  "on"
+                ]
+              ]
+            }
+          }
+        ]
+      },
+      "code": "diffusiongemma_windows_blocked",
+      "message": {
+        "zh": "DiffusionGemma NVFP4 在 Windows Docker/WSL 下当前不可稳定运行：V2 runner 会因 UVA 不可用启动失败，V1 fallback 可加载但首个 chat 请求可能触发 CUDA device-side assert。请改用常规 Gemma-4/Qwen，或在原生 Linux 上运行；确认要自行承担风险时设置 VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1。",
+        "en": "DiffusionGemma NVFP4 does not run reliably under Windows Docker/WSL: the V2 runner fails because UVA is unavailable, and the V1 fallback loads but the first chat request can trigger a CUDA device-side assert. Use a regular Gemma-4 or Qwen model, run on native Linux, or set VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1 to accept the risk."
+      }
+    }
+  ],
+  "env": {
+    "VLLM_USE_V2_MODEL_RUNNER": {
+      "var": "runner"
+    }
+  },
+  "slots": {
+    "disableLanguageModelOnly": true
+  },
+  "memory": {
+    "policy": "device-fraction",
+    "calibrate": true
+  },
+  "notes": [
+    {
+      "zh": "需要 Gemma 专用 vLLM 镜像；Windows/WSL 默认阻止启动",
+      "en": "needs the Gemma vLLM image; launching on Windows/WSL is blocked by default"
+    }
+  ],
+  "legacy": {
+    "presetId": "diffusion-gemma",
+    "presetLabel": "DiffusionGemma / Gemma4",
+    "vars": {
+      "runner": {
+        "coalesce": [
+          {
+            "if": [
+              {
+                "in": [
+                  {
+                    "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                  },
+                  [
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                    "v2"
+                  ]
+                ]
+              },
+              "1",
+              null
+            ]
+          },
+          {
+            "if": [
+              {
+                "in": [
+                  {
+                    "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                  },
+                  [
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                    "v1"
+                  ]
+                ]
+              },
+              "0",
+              null
+            ]
+          },
+          {
+            "if": [
+              {
+                "eq": [
+                  {
+                    "fact": "host.platform"
+                  },
+                  "win32"
+                ]
+              },
+              "0",
+              "1"
+            ]
+          }
+        ]
+      },
+      "runnerSuffix": {
+        "if": [
+          {
+            "eq": [
+              {
+                "coalesce": [
+                  {
+                    "if": [
+                      {
+                        "in": [
+                          {
+                            "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                          },
+                          [
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                            "v2"
+                          ]
+                        ]
+                      },
+                      "1",
+                      null
+                    ]
+                  },
+                  {
+                    "if": [
+                      {
+                        "in": [
+                          {
+                            "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                          },
+                          [
+                            "0",
+                            "false",
+                            "no",
+                            "off",
+                            "v1"
+                          ]
+                        ]
+                      },
+                      "0",
+                      null
+                    ]
+                  },
+                  {
+                    "if": [
+                      {
+                        "eq": [
+                          {
+                            "fact": "host.platform"
+                          },
+                          "win32"
+                        ]
+                      },
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "0"
+            ]
+          },
+          " to avoid WSL UVA initialization failures",
+          ""
+        ]
+      },
+      "maxNewTokens": {
+        "coalesce": [
+          {
+            "if": [
+              {
+                "gte": [
+                  {
+                    "number": {
+                      "env": "VLLM_GEMMA_MAX_NEW_TOKENS"
+                    }
+                  },
+                  128
+                ]
+              },
+              {
+                "floorDiv": [
+                  {
+                    "number": {
+                      "env": "VLLM_GEMMA_MAX_NEW_TOKENS"
+                    }
+                  },
+                  1
+                ]
+              },
+              null
+            ]
+          },
+          4096
+        ]
+      }
+    },
+    "notesEn": [
+      "uses vllm/vllm-openai:gemma-compatible runtime",
+      {
+        "text": "sets VLLM_USE_V2_MODEL_RUNNER={{var:runner}}{{var:runnerSuffix}}"
+      },
+      "adds --attention-backend TRITON_ATTN",
+      {
+        "text": "adds --enforce-eager to avoid CUDA graph profiling assertion failures",
+        "when": {
+          "eq": [
+            {
+              "param": "vllm.enforceEager"
+            },
+            true
+          ]
+        }
+      },
+      {
+        "text": "caps default generation to {{var:maxNewTokens}} tokens so clients that omit max_tokens do not request the full context window"
+      },
+      "leaves thinking mode to request-level chat_template_kwargs from the client",
+      "uses gemma4 reasoning/tool parsers",
+      {
+        "text": "blocked on this host: {{blockReason}}",
+        "skipEmpty": true
+      }
+    ],
+    "preset": {
+      "env": {
+        "fixed": "env"
+      },
+      "forceTrustRemoteCode": {
+        "recipe": "trustRemoteCode"
+      },
+      "enforceEager": {
+        "recipe": "vllm.enforceEager"
+      },
+      "attentionBackend": {
+        "recipe": "vllm.attentionBackend"
+      },
+      "reasoningParser": {
+        "recipe": "reasoningParser"
+      },
+      "toolCallParser": {
+        "recipe": "toolCallParser"
+      },
+      "enableAutoToolChoice": {
+        "recipe": "autoToolChoice"
+      },
+      "kvCacheDtype": {
+        "recipe": "kvCacheDtype"
+      },
+      "disablePrefixCaching": true,
+      "disableLanguageModelOnly": true,
+      "overrideGenerationConfig": {
+        "recipe": "vllm.overrideGenerationConfig",
+        "format": "json"
+      }
+    }
+  },
+  "evidence": {
+    "gpu": "RTX PRO 6000 Blackwell 96 GB",
+    "host": "Windows 11 + Docker Desktop/WSL2",
+    "date": "2026-09",
+    "jobId": null
+  }
+}

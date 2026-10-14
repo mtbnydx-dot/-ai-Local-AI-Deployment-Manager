@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-llama-single-gpu-debug",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "单卡排错模式",
+    "en": "Single-GPU debug mode"
+  },
+  "profile": {
+    "id": "llama-single-gpu-debug",
+    "name": "单卡排错模式",
+    "description": "启动失败时先用单卡验证模型、路径和 GGUF 文件。",
+    "managerId": "llama",
+    "order": 5,
+    "requirements": {
+      "minGpuCount": 1
+    },
+    "values": {
+      "contextLength": 16384,
+      "concurrency": 1,
+      "llamacpp.cacheTypeK": "q8_0",
+      "llamacpp.cacheTypeV": "q8_0",
+      "llamacpp.planningUtilization": 0.82,
+      "llamacpp.splitMode": "none",
+      "llamacpp.mainGpu": 0,
+      "clientPreset": "generic",
+      "llamacpp.textOnly": true
+    },
+    "legacy": {
+      "gpuDeviceIds": [
+        "0"
+      ]
+    }
+  }
+}

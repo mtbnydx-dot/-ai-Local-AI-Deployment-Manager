@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-llama-96gb-single-256k",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "96GB 单卡 256K",
+    "en": "96 GB single GPU 256K"
+  },
+  "profile": {
+    "id": "llama-96gb-single-256k",
+    "name": "96GB 单卡 256K",
+    "description": "RTX PRO 6000 / 80GB+ 单卡优先方案：不传 tensor-split，低并发长上下文，适合本地 Claude。",
+    "managerId": "llama",
+    "order": 1,
+    "requirements": {
+      "minGpuCount": 1,
+      "minSingleGpuMemoryGb": 80
+    },
+    "values": {
+      "contextLength": 262144,
+      "concurrency": 1,
+      "llamacpp.cacheTypeK": "q4_0",
+      "llamacpp.cacheTypeV": "q4_0",
+      "llamacpp.planningUtilization": 0.9,
+      "llamacpp.splitMode": "none",
+      "llamacpp.tensorSplit": null,
+      "llamacpp.mainGpu": 0,
+      "llamacpp.reasoning": "auto",
+      "llamacpp.reasoningFormat": "deepseek",
+      "clientPreset": "claude-cowork",
+      "llamacpp.textOnly": true
+    },
+    "legacy": {
+      "gpuDeviceIds": [
+        "0"
+      ]
+    }
+  }
+}

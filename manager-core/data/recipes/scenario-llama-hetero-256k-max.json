@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "id": "scenario-llama-hetero-256k-max",
+  "kind": "scenario",
+  "status": "verified",
+  "label": {
+    "zh": "Claude 256K 极限上下文",
+    "en": "Claude 256K maximum context"
+  },
+  "profile": {
+    "id": "llama-hetero-256k-max",
+    "name": "Claude 256K 极限上下文",
+    "description": "牺牲并发换上下文，KV cache 用 q4_0，建议先单路使用。",
+    "managerId": "llama",
+    "order": 3,
+    "requirements": {
+      "minGpuCount": 2
+    },
+    "values": {
+      "contextLength": 262144,
+      "concurrency": 1,
+      "llamacpp.cacheTypeK": "q4_0",
+      "llamacpp.cacheTypeV": "q4_0",
+      "llamacpp.planningUtilization": 0.94,
+      "llamacpp.splitMode": "layer",
+      "llamacpp.tensorSplit": "28,15",
+      "llamacpp.mainGpu": 0,
+      "llamacpp.reasoning": "auto",
+      "llamacpp.reasoningFormat": "deepseek",
+      "clientPreset": "claude-cowork",
+      "llamacpp.textOnly": true
+    },
+    "legacy": {
+      "gpuDeviceIds": [
+        "0",
+        "1"
+      ]
+    }
+  }
+}
