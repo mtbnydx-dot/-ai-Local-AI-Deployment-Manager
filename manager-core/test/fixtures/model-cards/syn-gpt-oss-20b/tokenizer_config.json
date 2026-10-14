@@ -1,0 +1,12 @@
+{
+  "bos_token": "<|startoftext|>",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "<|return|>",
+  "model_input_names": [
+    "input_ids",
+    "attention_mask"
+  ],
+  "model_max_length": 131072,
+  "pad_token": "<|endoftext|>",
+  "tokenizer_class": "PreTrainedTokenizerFast"
+}

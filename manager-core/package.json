@@ -5,6 +5,6 @@
   "description": "Shared utilities for local model service managers.",
   "main": "index.js",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test \"test/**/*.test.{js,mjs}\""
   }
 }

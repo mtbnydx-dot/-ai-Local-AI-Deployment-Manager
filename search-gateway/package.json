@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-isolation=none test/*.test.js"
+    "test": "node --test --test-isolation=none \"test/**/*.test.{js,mjs}\""
   },
   "engines": {
     "node": ">=22.22.2"
