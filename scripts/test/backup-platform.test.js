@@ -17,10 +17,10 @@ const test = require("node:test");
 const SCRIPT = path.resolve(__dirname, "..", "backup-platform.ps1");
 
 // Windows PowerShell 5.1 below a pwsh 7 session must not inherit pwsh's
-// PSModulePath (see release-manifest.test.js). The TTS variables would point
+// PSModulePath (see release-manifest.test.js). The TTS and telemetry variables would point
 // the listing outside the fixture root.
 function scriptEnv() {
-  const drop = new Set(["psmodulepath", "tts_env_file", "tts_data_root"]);
+  const drop = new Set(["psmodulepath", "tts_env_file", "tts_data_root", "ai_telemetry_db"]);
   return Object.fromEntries(Object.entries(process.env).filter(([name]) => !drop.has(name.toLowerCase())));
 }
 
@@ -43,6 +43,7 @@ test("the backup listing of a fixture root excludes every denied secret path", {
   const backups = path.join(base, "backups");
   const allowed = {
     "service-entry/data/platform-billing.sqlite": "",
+    "service-entry/data/telemetry.sqlite": "",
     "service-entry/data/keys.json": "{}",
     "vllm-manager/logs/jobs-ledger.json": "{}",
     "vllm-manager/logs/launch-profiles.json": "{}",
