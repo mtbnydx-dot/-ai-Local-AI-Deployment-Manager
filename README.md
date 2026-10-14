@@ -202,6 +202,7 @@ start-service-entry.cmd lan
 | `MODEL_REMOTE_SEARCH_CACHE_MS` | `90000` | HF/ModelScope 在线搜索结果缓存 TTL |
 | `MODEL_REMOTE_INFO_CACHE_MS` | `300000` | 模型详情与下载体积预估缓存 TTL |
 | `METRICS_HISTORY_FLUSH_MS` | `300000` | 指标历史落盘间隔（内存实时可读；`0` = 每次采样即写） |
+| `STATS_SAMPLE_INTERVAL_MS` | `10000` | 管理器统计后台采样间隔（5000–60000）；统计页只读最新样本，不再触发引擎 /metrics 抓取 |
 
 ### 统一启动、公网模式与运维（2026-09-03）
 
@@ -460,6 +461,7 @@ Behavior changes as of 2026-08-22: a stalled download (no byte growth for 5 minu
 | `MODEL_REMOTE_SEARCH_CACHE_MS` | `90000` | HF/ModelScope online search cache TTL |
 | `MODEL_REMOTE_INFO_CACHE_MS` | `300000` | Model info and download size estimate cache TTL |
 | `METRICS_HISTORY_FLUSH_MS` | `300000` | Metrics history flush interval (reads stay in-memory; `0` writes every sample) |
+| `STATS_SAMPLE_INTERVAL_MS` | `10000` | Manager stats background sampling interval (5000-60000); the stats page reads the newest sample and never triggers an engine /metrics scrape |
 
 ### Unified Startup, Public Mode And Operations (2026-09-03)
 

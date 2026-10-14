@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="%LANG%" %THEME_ATTR% data-density="%DENSITY%">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark"><meta name="console-build" content="%BUILD_ID%">
+  <title>%TITLE%</title>
+  <link rel="icon" type="image/svg+xml" href="/c/%BUILD_ID%/assets/favicon.svg">
+  <link rel="stylesheet" href="/c/%BUILD_ID%/shared/styles/tokens.css">
+  <link rel="stylesheet" href="/c/%BUILD_ID%/styles/base.css">
+  <link rel="stylesheet" href="/c/%BUILD_ID%/styles/components.css">
+  <link rel="modulepreload" href="/c/%BUILD_ID%/app.js">
+  <script type="application/json" id="console-bootstrap">%BOOTSTRAP_JSON%</script>
+  <script type="module" src="/c/%BUILD_ID%/app.js"></script>
+</head>
+<body><div id="app" aria-busy="true"><p class="boot-splash">%BOOT_TEXT%</p><noscript>%NOSCRIPT_TEXT%</noscript></div></body>
+</html>
