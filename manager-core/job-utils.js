@@ -34,7 +34,15 @@ function normalizePersistedJob(value, options = {}) {
     createdAt: value.createdAt || new Date().toISOString(),
     updatedAt: value.updatedAt || value.createdAt || new Date().toISOString(),
     finishedAt: value.finishedAt || null,
+    // Additive serve-job fields (01 §14): the lifecycle phases and the job
+    // error object survive a restart; jobs without them keep today's shape.
+    ...(isPlainObject(value.lifecycle) ? { lifecycle: value.lifecycle } : {}),
+    ...(isPlainObject(value.failure) ? { failure: value.failure } : {}),
   };
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function createJobRecord(type, title, meta = {}, options = {}) {
@@ -103,6 +111,7 @@ function sanitizeJobLogText(data) {
 function applyJobProgress(job, progress = {}, options = {}) {
   if (!job || typeof job !== "object") return null;
   const updatedAt = options.now || new Date().toISOString();
+  const previous = job.progress;
   job.progress = {
     kind: job.type,
     percent: progress.percent ?? job.progress?.percent ?? null,
@@ -112,6 +121,12 @@ function applyJobProgress(job, progress = {}, options = {}) {
     issues: progress.issues || job.progress?.issues || [],
     updatedAt,
   };
+  // Additive supervisor fields (01 §14): set by a stage, carried forward by
+  // later updates that do not name them (finish and fail included).
+  for (const key of ["phase", "stageKey", "stageText"]) {
+    const value = progress[key] ?? previous?.[key];
+    if (value !== undefined && value !== null) job.progress[key] = value;
+  }
   job.updatedAt = updatedAt;
   return job.progress;
 }
