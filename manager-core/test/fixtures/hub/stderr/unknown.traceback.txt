@@ -1,0 +1,3 @@
+Traceback (most recent call last):
+  File "hf.py", line 10, in <module>
+PermissionError: [Errno 13] Permission denied: 'model.safetensors.incomplete'

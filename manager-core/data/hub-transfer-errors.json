@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "classes": {
+    "stall": "watchdog",
+    "verify_failed": "integrity",
+    "checksum_mismatch": "integrity",
+    "cli_missing": "tooling",
+    "disk_full": "storage",
+    "hf_approval_required": "auth",
+    "hf_auth_invalid": "auth",
+    "hf_token_expired": "auth",
+    "repo_not_found": "not_found",
+    "revision_not_found": "not_found",
+    "filter_no_match": "selection",
+    "rate_limited": "server",
+    "network_unreachable": "network",
+    "unknown": "unknown"
+  },
+  "maxAttempts": {
+    "stall": 3,
+    "network_unreachable": 3,
+    "rate_limited": 3,
+    "verify_failed": 2,
+    "checksum_mismatch": 2,
+    "unknown": 1
+  },
+  "patterns": [
+    { "code": "hf_approval_required", "match": "Access denied\\b[^\\n]*\\bapproval|requires approval" },
+    { "code": "repo_not_found", "match": "modelscope.*\\b(?:401|403)\\b|NotExistError" },
+    { "code": "network_unreachable", "match": "ProxyError|407 Proxy Authentication" }
+  ],
+  "refinements": [
+    {
+      "code": "network_timeout",
+      "base": "network_unreachable",
+      "when": { "text": "ReadTimeout|timed out|ETIMEDOUT" },
+      "retryable": true,
+      "title": { "zh": "连接下载源超时", "en": "The download source timed out" },
+      "hint": { "zh": "将自动重试；若持续超时，可切换下载源。", "en": "Retrying automatically. If it keeps timing out, switch the source." }
+    },
+    {
+      "code": "hf_login_required",
+      "base": "hf_auth_invalid",
+      "when": { "credentialMode": ["none", "cached-login"], "cachedToken": false },
+      "retryable": false,
+      "title": { "zh": "需要登录 Hugging Face", "en": "Hugging Face sign-in required" },
+      "hint": { "zh": "点击「登录」，在本机窗口完成登录后重试。", "en": "Click Sign in, finish in the local window, then retry." }
+    },
+    {
+      "code": "transfer_empty",
+      "base": "filter_no_match",
+      "when": { "signal": "emptySelection" },
+      "retryable": false,
+      "title": { "zh": "下载结束但所选文件为空", "en": "The download finished but the selected files are empty" },
+      "hint": { "zh": "查看日志；仓库可能在下载期间被修改，请重新选择规格。", "en": "Check the log. The repository may have changed during the download; pick the artifact again." }
+    }
+  ],
+  "remedies": [
+    { "code": "unknown", "when": { "text": "hf_xet|xet[ _-]?(?:error|panic)" }, "set": { "xet": "off" }, "maxTimes": 1 }
+  ]
+}
