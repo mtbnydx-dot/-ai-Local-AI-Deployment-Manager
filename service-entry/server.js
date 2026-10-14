@@ -153,6 +153,7 @@ const ROUTE_MODULES = [
   // "./lib/engine-routes",       // 01 ENG-19
   // "./lib/hub-routes",          // 03 HUB-7
   // "./lib/telemetry-routes",    // 04 TEL-*
+  "./lib/audit-http", // 04 TEL-16  /api/audit/*
   // "./lib/admin-session",       // 05 PUB-5
   // "./lib/platform-routes",     // 06 OPS-13
   // "./lib/console-routes",      // 07 CON-2

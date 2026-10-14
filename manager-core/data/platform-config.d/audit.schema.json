@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "namespace": "audit",
+  "owner": "04-telemetry",
+  "asOf": "2026-10-14",
+  "staleAfterDays": 365,
+  "title": { "zh-CN": "会话审计", "en-US": "Conversation audit" },
+  "properties": {
+    "root": {
+      "type": "string", "format": "path", "default": "",
+      "title": { "zh-CN": "审计导出目录", "en-US": "Audit export folder" },
+      "description": { "zh-CN": "存放 Open WebUI 会话审计导出的文件夹，留空使用平台根目录下的 audit-logs。导出内容含完整对话，请只授权可信账户访问。修改后需要重启入口服务和两个管理器。", "en-US": "The folder that holds the Open WebUI conversation audit exports; empty uses audit-logs under the platform root. Exports contain full conversations, so keep access to trusted accounts. A change needs the entry and both managers restarted." },
+      "env": ["AI_AUDIT_ROOT"], "consumers": ["entry", "vllm-manager", "llama-manager"],
+      "restartRequired": ["entry", "vllm-manager", "llama-manager"], "secret": false, "group": "audit"
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean", "default": true,
+          "title": { "zh-CN": "定时导出", "en-US": "Scheduled exports" },
+          "description": { "zh-CN": "由入口服务按计划导出会话审计：定期增量，并在需要新基线时于固定时刻做完整导出。找不到 Open WebUI 容器时只记录跳过，不会启动任何容器。", "en-US": "Let the entry export the conversation audit on a schedule: periodic incrementals, and a full export at a fixed time when a new baseline is needed. If the Open WebUI container does not exist the run is only recorded as skipped, and no container is ever started." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "audit"
+        },
+        "incrementalEveryMinutes": {
+          "type": "integer", "minimum": 15, "maximum": 1440, "default": 60,
+          "title": { "zh-CN": "增量间隔", "en-US": "Incremental interval" },
+          "description": { "zh-CN": "两次增量导出之间间隔的分钟数，范围 15 到 1440。", "en-US": "Minutes between incremental exports, from 15 to 1440." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "audit"
+        },
+        "fullAtLocal": {
+          "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$", "default": "04:00",
+          "title": { "zh-CN": "完整导出时刻", "en-US": "Full export time" },
+          "description": { "zh-CN": "本机时间 HH:MM。完整基线超过保留天数后，会在此后的第一个该时刻重新做一次完整导出，使历史始终可恢复。", "en-US": "Local time as HH:MM. Once the full baseline is older than the baseline interval, a new full export runs at the first such time after that, so history stays recoverable." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "audit"
+        }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "properties": {
+        "maxExports": {
+          "type": "integer", "minimum": 1, "maximum": 10000, "default": 30,
+          "title": { "zh-CN": "导出数量上限", "en-US": "Export count limit" },
+          "description": { "zh-CN": "保留的审计导出数量软上限；最新的导出链不会被拆开，所以实际数量可能略多。", "en-US": "A soft cap on how many audit exports are kept. The newest chain is never split, so slightly more may stay." },
+          "env": ["AI_AUDIT_MAX_EXPORTS"], "consumers": ["entry", "vllm-manager", "llama-manager"], "restartRequired": false, "secret": false, "group": "audit"
+        },
+        "maxAgeDays": {
+          "type": "integer", "minimum": 1, "maximum": 3650, "default": 90,
+          "title": { "zh-CN": "导出保留天数", "en-US": "Keep exports for (days)" },
+          "description": { "zh-CN": "超过这个天数的较旧审计导出会被清理，最新的完整基线及其后的导出除外。", "en-US": "Older audit exports beyond this many days are pruned, except the newest full baseline and the exports after it." },
+          "env": ["AI_AUDIT_MAX_AGE_DAYS"], "consumers": ["entry", "vllm-manager", "llama-manager"], "restartRequired": false, "secret": false, "group": "audit"
+        },
+        "rebaselineDays": {
+          "type": "integer", "minimum": 0, "maximum": 365, "default": 7,
+          "title": { "zh-CN": "完整基线间隔", "en-US": "Full baseline every (days)" },
+          "description": { "zh-CN": "最新的完整导出超过这个天数后，需要重新做完整导出；0 表示不再自动重做基线。", "en-US": "Once the newest full export is older than this many days a new full export is needed; 0 turns automatic rebaselining off." },
+          "env": ["AI_AUDIT_REBASELINE_DAYS"], "consumers": ["entry", "vllm-manager", "llama-manager"], "restartRequired": false, "secret": false, "group": "audit"
+        },
+        "maxChains": {
+          "type": "integer", "minimum": 2, "maximum": 100, "default": 8,
+          "title": { "zh-CN": "保留的导出链数量", "en-US": "Export chains to keep" },
+          "description": { "zh-CN": "一个完整导出加上其后的增量算一条导出链，只保留最新的这么多条；当前正在使用的链不会被删除。", "en-US": "One full export plus the incrementals after it make a chain, and only the newest chains are kept. The active chain is never removed." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "audit"
+        }
+      }
+    },
+    "logQueryText": {
+      "type": "boolean", "default": false,
+      "title": { "zh-CN": "记录审计搜索原文", "en-US": "Log audit search text" },
+      "description": { "zh-CN": "关闭时，审计访问记录里只保存搜索词的哈希和长度；开启后同时保存搜索原文，便于追溯，但记录本身会含有对话相关的词句。", "en-US": "When off, the audit access log keeps only the hash and length of a search term. When on it also keeps the text, which helps tracing but puts conversation words into the log." },
+      "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "audit"
+    }
+  }
+}
