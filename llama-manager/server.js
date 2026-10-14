@@ -565,20 +565,6 @@ let cacheHitLastWarningAt = 0;
 let lastSlotOccupancy = null;
 let recentLaunches = [];
 const MAX_RECENT_LAUNCHES = 8;
-// 启动任务串行化：同一管理器内同一时刻只允许一个 serve 启动流程在跑，
-// 避免并发 docker run 竞争同一个容器名（llama-local）造成 "container name already in use"。
-// 第二个启动请求会排队等待前一个完成（成功或失败）后再执行，保留"启动即替换"语义。
-const serveQueues = new Map();
-function serializeServeJob(work, queueKey = "replace") {
-  const key = String(queueKey || "replace");
-  const state = serveQueues.get(key) || { chain: Promise.resolve(), busy: false };
-  const queued = state.busy;
-  state.busy = true;
-  const result = state.chain.then(() => work());
-  state.chain = result.then(() => { state.busy = false; }, () => { state.busy = false; });
-  serveQueues.set(key, state);
-  return { result, queued };
-}
 let runtimeActivity = {
   initialized: false,
   lastActivityAt: null,
@@ -601,7 +587,7 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   serveDetail: "llama.cpp API 已返回模型列表。",
   stopProgressTracker,
   onJobSuccess: (job) => {
-    if (job.type === "serve") recordRecentLaunch(job.meta);
+    if (job.type === "serve" && !job.meta?.skipped) recordRecentLaunch(job.meta);
     if (job.type === "download") assessDownloadedModelFit(job).catch(() => {});
   },
   onJobsChanged: () => broadcastJobsSnapshot(),
@@ -1903,13 +1889,8 @@ async function loadRecentLaunches() {
 // Keep the successful llama.cpp launch presets available after a manager restart.
 function recordRecentLaunch(meta) {
   if (!meta || !meta.model) return;
+  // The LaunchStore record is marked running by the supervisor's commit stage.
   clearRuntimeInstancesCache();
-  if (meta.launchId) {
-    trackLaunch(() => launchStore.markStatus(meta.launchId, "running", {
-      event: "ready",
-      patch: { containerName: String(meta.containerName || CONFIG.containerName) },
-    }));
-  }
   const config = normalizeLaunchConfig(meta);
   const entry = {
     model: config.model,
@@ -3130,6 +3111,7 @@ async function removeManagedContainer(reason = "replace", containerName = CONFIG
   await docker(["rm", "-f", targetContainerName]);
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearRuntimeInstancesCache();
+  runtimeSupervisor.emitInstances({ removed: [llamaInstanceId(targetContainerName, container.labels)] });
   return { removed: true, containerName: targetContainerName, owner: owner || null, jobId: containerJobId || null, reason };
 }
 
@@ -3327,7 +3309,7 @@ async function listRuntimeInstancesRequest() {
         ? enrichedModels
         : lastKnownModel ? [{ id: lastKnownModel, lastKnown: true }] : [];
       return {
-        id: primary ? "primary" : labels["ai.manager.instance"] || container.name,
+        id: llamaInstanceId(container.name, labels),
         instanceMode: primary ? "replace" : labels["ai.manager.instance-mode"] || "parallel",
         primary,
         containerName: container.name,
@@ -3380,6 +3362,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
   const runtimeApiKeyRef = String(target.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearRuntimeInstancesCache();
+  runtimeSupervisor.emitInstances({ removed: [llamaInstanceId(target.name, target.labels)] });
   return { ok: true, id: requested, containerName: target.name, stopped: true };
 }
 
@@ -3797,8 +3780,11 @@ function finishJob(job, meta = {}) {
 function failJob(job, error) {
   // 下载失败要带上新鲜的 failedAt，否则自动续传会把它当成重启前的旧任务跳过。
   if (job?.type === "download" && job.meta) job.meta.failedAt = Date.now();
+  // The supervisor fails a serve job itself; the caller's second failJob is a
+  // no-op and must not add a second "failed" launch event.
+  const wasActive = job?.status === "running" || job?.status === "queued";
   const result = jobsLedgerStore.failJob(job, error);
-  if (job?.type === "serve" && job.meta?.launchId) {
+  if (wasActive && job?.type === "serve" && job.meta?.launchId) {
     trackLaunch(() => launchStore.markStatus(job.meta.launchId, "failed", { event: "failed", detail: job.error || "" }));
   }
   return result;
@@ -4080,231 +4066,97 @@ function stopProgressTracker(job) {
   progressTimers.delete(job.id);
 }
 
-async function runStartJob(job, opts) {
-  const queueKey = opts.instanceMode === "parallel" ? (opts.containerName || "parallel") : "replace";
-  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts), queueKey);
-  if (queued) {
-    appendLog(job, "已有启动任务进行中，排队等待其完成后再启动，避免容器名冲突。");
-    setJobProgress(job, {
-      percent: 1,
-      stage: "等待前一个启动任务",
-      detail: "已有启动任务正在进行，排队等待其完成后再启动，避免容器名冲突。",
-    });
-  }
-  return result;
+// runtime-supervisor (01 §14): the start pipeline (preflight, image, checkpoint,
+// create, wait, probe, commit) with lifecycle phases, the job error object and
+// jobs/instances events on this manager's hub. llama.cpp had no runtime gate,
+// so it runs in warn mode: findings are logged and never fail a start.
+const runtimeSupervisor = core.engines.createRuntimeSupervisor({
+  managerId: CONFIG.managerId,
+  ownerLabelValue: CONFIG.managerId,
+  containerBaseName: CONFIG.containerName,
+  host: dockerHost,
+  launchStore,
+  events: sseHub,
+  secrets: runtimeApiKeyStore,
+  redactor: runtimeSecretRedactor,
+  runtimeGatePolicy: "warn",
+  jobs: { appendLog, setJobProgress, scheduleJobsSave, finishJob, failJob, assertActive: assertStartJobActive },
+  probes: {
+    nvidiaCompatibility: () => core.engines.runtimeSupervisor.probeNvidiaCompatibility(execFileAsync),
+    gpuStatus: getGpuStatusFresh,
+    portStatus: checkPortAvailability,
+  },
+  // Fresh getters during a start (the vLLM fix, now for llama too): the
+  // snapshot-cached getContainerStatus/getServedModels could report a
+  // container or model list up to the cache TTL old.
+  getters: { containerStatus: getContainerStatusFresh, servedModels: getServedModelsFresh },
+  publishedPort: (ports) => parseDockerPortPublish(ports)?.port ?? null,
+  hooks: {
+    beforeStart: () => snapshotCurrentStats("before-start"),
+    afterChange: () => clearRuntimeInstancesCache(),
+  },
+  timeouts: {
+    startMs: CONFIG.startupTimeoutMs,
+    stallMs: () => Math.max(60000, Number(process.env.LLAMA_START_STALL_TIMEOUT_MS || 10 * 60 * 1000)),
+    readyProbeMs: Math.max(60000, Number(process.env.LLAMA_READY_PROBE_TIMEOUT_MS || 5 * 60 * 1000)),
+    probeRequestMs: Math.max(30000, Number(process.env.LLAMA_READY_PROBE_REQUEST_TIMEOUT_MS || 180000)),
+  },
+  fetchImpl: fetch,
+  delay,
+});
+
+// The /api/instances id of a container: "primary" for the replace slot, else
+// its instance label or name. jobs/instances events name instances by it.
+function llamaInstanceId(containerName, labels = {}) {
+  if (containerName === CONFIG.containerName) return "primary";
+  return labels?.["ai.manager.instance"] || containerName;
 }
 
-async function runStartJobOnce(job, opts) {
-  // 排队期间任务可能已被用户取消（cancel -> failJob）。拿到锁后若已不在 running 态，直接放弃，
-  // 避免给一个已取消的任务启动容器、再被 finishJob 复活。
-  if (job.status !== "running") {
-    appendLog(job, `任务已不再运行（status=${job.status}），跳过启动。`);
-    return;
-  }
-  // The launch record and its id (job.meta.launchId), which the builder emits
-  // as the ai.manager.launch-id label.
-  trackLaunch(() => launchStore.beginLaunch(job, opts));
-  setJobProgress(job, {
-    percent: 3,
-    stage: "准备启动",
-    detail: "正在准备 llama.cpp 启动任务。",
-  });
+async function runStartJob(job, opts) {
+  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: "api" });
+}
 
-  const targetContainerName = opts.containerName || CONFIG.containerName;
-  const portConflict = (await listManagedContainers().catch(() => [])).find((container) => (
-    parseDockerPortPublish(container.ports)?.port === opts.port
-    && normalizeDockerContainerName(container.name) !== normalizeDockerContainerName(targetContainerName)
-  ));
-  if (portConflict) {
-    throw new Error(`端口 ${opts.port} 已被托管容器 ${portConflict.name} 占用；并行实例必须使用独立端口。`);
-  }
-
-  setJobProgress(job, {
-    percent: 4,
-    stage: "检查 Docker",
-    detail: "启动模型前先确认 Docker daemon 已经可用。",
-  });
-  let dockerReady = await checkDockerDaemon();
-  if (!dockerReady.ok) {
-    appendLog(job, dockerReady.raw || dockerReady.error);
-    setJobProgress(job, {
-      percent: 4,
-      stage: `启动 ${CONFIG.dockerRuntimeName}`,
-      detail: `Docker daemon 未就绪，正在自动启动 ${CONFIG.dockerRuntimeName} 并等待引擎可用。`,
-    });
-    appendLog(job, `Docker daemon is not ready; requesting ${CONFIG.dockerRuntimeName} startup.`);
-    dockerReady = await ensureDockerDaemonRunning(120000);
-  }
-  if (!dockerReady.ok) {
-    appendLog(job, dockerReady.raw || dockerReady.error);
-    setJobProgress(job, {
-      percent: 4,
-      stage: "Docker 未就绪",
-      detail: dockerReady.error,
-      state: "fail",
-      issues: [dockerReady.error],
-    });
-    throw new Error(dockerReady.error);
-  }
-  appendLog(job, dockerReady.alreadyRunning
-    ? `Docker daemon ready: ${dockerReady.version}`
-    : `${CONFIG.dockerRuntimeName} started; daemon ready: ${dockerReady.version}`);
-  for (const warning of opts.gpuWarnings || []) appendLog(job, `GPU selection warning: ${warning}`);
-
-  setJobProgress(job, {
-    percent: 8,
-    stage: "启动前预检",
-    detail: "正在校验端口、模型并生成完整 Docker 命令；此阶段不会停止当前模型。",
-  });
-  const portStatus = await checkPortAvailability(opts.port, targetContainerName).catch(() => null);
-  if (portStatus && !portStatus.available && !portStatus.isOwnContainer) {
-    appendLog(job, `Port check failed: ${portStatus.detail}`);
-    setJobProgress(job, {
-      percent: 18,
-      stage: "端口被占用",
-      detail: `${portStatus.detail} 请换一个端口或先停止占用方。`,
-      state: "fail",
-      issues: [portStatus.detail],
-    });
-    throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
-  }
-
-  let { runArgs, activePublishArgs, runtimeImage, secretEnv } = buildLlamaRuntimeCommand(job, opts);
-
-  trackLaunch(() => launchStore.recordCommand(job.meta?.launchId, runArgs, { redact: (argv) => runtimeSecretRedactor.redactValue(argv) }));
-  // 启动预检要拿实时镜像状态，绕过快照缓存（DockerHost 不缓存镜像状态）。
-  const ensuredImage = await dockerHost.ensureImage(runtimeImage, {
-    policy: "auto",
-    onMissing: ({ status }) => {
-      const imageName = String(runtimeImage || "");
+// The run context the supervisor needs: the legacy run options, the llama
+// builder, and the llama-specific image refusal and wait details. The lease
+// and the new API-key ref stay with launch-request.js (cleanup "caller").
+function llamaRunContext(opts) {
+  return {
+    options: opts,
+    engineId: "llamacpp",
+    engineName: "llama.cpp",
+    apiLabel: "llama.cpp API",
+    containerName: opts.containerName || CONFIG.containerName,
+    instanceId: llamaInstanceId(opts.containerName || CONFIG.containerName, { "ai.manager.instance": opts.instanceId }),
+    port: opts.port,
+    gpuIds: opts.gpuDeviceIds,
+    warnings: opts.gpuWarnings || [],
+    apiKeyRef: opts.runtimeApiKeyRef,
+    cleanup: "caller",
+    admissionRequest: opts.gpuAdmissionRequest,
+    prepareAdmission: typeof opts.prepareGpuAdmission === "function" ? opts.prepareGpuAdmission : undefined,
+    lanFallback: opts.networkAccess === "lan",
+    bindRetryPublish: () => dockerPublishArgs(opts.port, "lan", "0.0.0.0"),
+    formatPublish: formatDockerPublishArgs,
+    redactArgs: (argv) => redactDockerArgs(argv, opts),
+    buildCommand: (job) => {
+      const built = buildLlamaRuntimeCommand(job, opts);
+      return { runArgs: built.runArgs, publish: built.activePublishArgs, image: built.runtimeImage, secretEnv: built.secretEnv };
+    },
+    imagePolicy: "auto",
+    onMissingImage: ({ image }) => {
+      const imageName = String(image || "");
       if (imageName.startsWith("local/") || imageName === CONFIG.museImage) {
         throw new Error(`本地运行时镜像不存在：${imageName}。请先运行 scripts/build-muse-runtime.ps1 构建镜像，不要对 local/ 前缀执行 docker pull。`);
       }
-      appendLog(job, `Runtime image preflight: ${status?.text || runtimeImage}. Pulling before current model is stopped.`);
     },
-    onAttempt: ({ attempt, attempts, image }) => appendLog(job, `正在拉取镜像 ${image}（第 ${attempt}/${attempts} 次）`),
-  });
-  if (ensuredImage.pulled) appendLog(job, ensuredImage.result.stdout || ensuredImage.result.stderr);
-  await snapshotCurrentStats("before-start").catch(() => {});
-  setJobProgress(job, {
-    percent: 18,
-    stage: "创建可回滚切换点",
-    detail: `正在保留 ${targetContainerName} 的完整容器配置，若新实例失败会自动恢复。`,
-  });
-  let previousRuntimeApiKeyRef = "";
-  const prepareReplacement = async (admissionRequest = opts.gpuAdmissionRequest) => {
-    const previousContainer = await getContainerStatusFresh(targetContainerName);
-    previousRuntimeApiKeyRef = String(previousContainer.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
-    const previousGpuAdmissionLeaseId = String(previousContainer.labels?.["ai.manager.gpu-admission-lease"] || "");
-    if (admissionRequest && previousGpuAdmissionLeaseId) {
-      admissionRequest.retireLeaseIds = Array.from(new Set([
-        ...(Array.isArray(admissionRequest.retireLeaseIds) ? admissionRequest.retireLeaseIds : []),
-        previousGpuAdmissionLeaseId,
-      ]));
-    }
-    return core.beginContainerReplacement({
-      docker,
-      containerName: targetContainerName,
-      managerId: CONFIG.managerId,
-      ownerLabelKey: MANAGER_LABEL_KEY,
-      onEvent: (event) => {
-        if (event.type === "backup-ready") appendLog(job, `Rollback checkpoint ready: ${event.backupName}`);
-      },
-    });
-  };
-  const replacement = typeof opts.prepareGpuAdmission === "function"
-    ? await opts.prepareGpuAdmission(prepareReplacement)
-    : await prepareReplacement();
-
-  try {
-    if (typeof opts.prepareGpuAdmission === "function") {
-      ({ runArgs, activePublishArgs, runtimeImage, secretEnv } = buildLlamaRuntimeCommand(job, opts));
-      trackLaunch(() => launchStore.recordCommand(job.meta?.launchId, runArgs, { redact: (argv) => runtimeSecretRedactor.redactValue(argv) }));
-    }
-    setJobProgress(job, { percent: 32, stage: "启动 Docker 容器", detail: "Docker run 已开始；旧模型容器已保留为回滚点。" });
-    const redactedLaunchCommand = `docker ${redactDockerArgs(runArgs, opts).join(" ")}`;
-    job.meta = {
-      ...(job.meta || {}),
-      launchCommand: redactedLaunchCommand,
-      runtimeLaunchStarted: true,
-      runtimeContainerCreated: false,
-    };
-    scheduleJobsSave(0);
-    appendLog(job, `> ${redactedLaunchCommand}`);
-    assertStartJobActive(job);
-    // DockerHost.create runs it: every attempt, including the name-conflict and
-    // LAN-bind retries, gets the secret env, with WSLENV under WSL (08 P0-4).
-    const launched = await dockerHost.create({ runArgs, publish: activePublishArgs, name: targetContainerName }, {
-      secretEnv,
-      lanFallback: opts.networkAccess === "lan",
-      bindRetryPublish: () => dockerPublishArgs(opts.port, "lan", "0.0.0.0"),
-      onRetry: (retry) => {
-        if (retry.kind === "name-conflict") {
-          appendLog(job, `容器名冲突，清理本次残留容器后重试：${retry.error.stderr || retry.error.message}`);
-          return;
-        }
-        activePublishArgs = retry.publish;
-        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${retry.error.stderr || retry.error.message}`);
-        appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
-        appendLog(job, `> docker ${redactDockerArgs(retry.runArgs, opts).join(" ")}`);
-      },
-    });
-    job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
-    scheduleJobsSave(0);
-    assertStartJobActive(job);
-    appendLog(job, launched.stdout || launched.stderr);
-
-    setJobProgress(job, { percent: 45, stage: "等待模型加载", detail: "容器已创建，正在等待 llama.cpp server 返回 /v1/models。" });
-    const startupTimeoutMs = CONFIG.startupTimeoutMs;
-    const stallTimeoutMs = Math.max(60000, Number(process.env.LLAMA_START_STALL_TIMEOUT_MS || 10 * 60 * 1000));
-    const result = await core.waitForRuntimeReady({
-      job,
-      port: opts.port,
+    wait: {
       apiKey: opts.llamaApiKey,
       serviceUrl: opts.serviceUrl,
-      engineName: "llama.cpp",
-      apiLabel: "llama.cpp API",
-      containerName: targetContainerName,
-      startupTimeoutMs,
-      stallTimeoutMs,
-      finalReadyCheck: true,
-      timeoutBudgetLog: `Startup timeout budget: ${Math.round(startupTimeoutMs / 60_000)} minutes`,
-      fetchServedModels: () => getServedModels(opts.port, opts.llamaApiKey),
-      getContainerStatus,
-      docker,
-      // Log reads go through the DockerHost (01 §13); same `docker logs --tail N`.
-      readLogs: dockerHost.logs,
-      extractLogIssues,
-      setJobProgress,
-      appendLog,
-      finishJob,
-      delayFn: delay,
-      probeRuntime: ({ servedModels }) => core.probeOpenAiGeneration({
-        fetchImpl: fetch,
-        servedModels,
-        port: opts.port,
-        apiKey: opts.llamaApiKey,
-        timeoutMs: Math.max(30000, Number(process.env.LLAMA_READY_PROBE_REQUEST_TIMEOUT_MS || 180000)),
-        maxTokens: 32,
-      }),
-      readyProbeTimeoutMs: Math.max(60000, Number(process.env.LLAMA_READY_PROBE_TIMEOUT_MS || 5 * 60 * 1000)),
+      loadingDetail: "容器已创建，正在等待 llama.cpp server 返回 /v1/models。",
       noLogIssue: "llama.cpp 启动日志长时间无变化。",
-    });
-    const replacementCommit = await replacement.commit().catch((error) => {
-      appendLog(job, `新模型已就绪，但清理回滚快照失败：${error.message}`);
-      return null;
-    });
-    if (replacementCommit?.committed && previousRuntimeApiKeyRef && previousRuntimeApiKeyRef !== opts.runtimeApiKeyRef) {
-      await runtimeApiKeyStore.remove(previousRuntimeApiKeyRef).catch(() => {});
-    }
-    clearRuntimeInstancesCache();
-    return result;
-  } catch (error) {
-    const rollback = await replacement.rollback(error).catch((rollbackError) => ({ rollbackError }));
-    if (rollback?.restoredPrevious) appendLog(job, `新模型启动失败，已恢复原容器 ${targetContainerName}。`);
-    else if (rollback?.rollbackError) appendLog(job, `自动回滚失败：${rollback.rollbackError.message}`);
-    throw error;
-  }
+      extractLogIssues,
+    },
+  };
 }
 
 function assertStartJobActive(job) {
@@ -4372,4 +4224,8 @@ module.exports = {
   checkModelCompatibility,
   applySafeGgufRuntimeRecommendations,
   runtimeFactsFromContainerLabels,
+  runtimeSupervisor,
+  llamaRunContext,
+  getContainerStatusFresh,
+  getServedModelsFresh,
 };

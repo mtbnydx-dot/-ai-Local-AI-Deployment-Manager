@@ -23,6 +23,7 @@ const memoryModels = require("./memory-models");
 const metrics = require("./metrics");
 const introspect = require("./introspect");
 const runtimeFacts = require("./runtime-facts");
+const runtimeSupervisor = require("./runtime-supervisor");
 const paramCatalog = require("./param-catalog");
 const recipeSchema = require("./recipe-schema");
 const recipes = require("./recipes");
@@ -126,6 +127,9 @@ module.exports = {
   hosts,
   createDockerHost: dockerHost.createDockerHost,
   createDockerHostConfig: dockerHost.createDockerHostConfig,
+  // The runtime supervisor (01 §14): the one start pipeline both managers run.
+  runtimeSupervisor,
+  createRuntimeSupervisor: runtimeSupervisor.createRuntimeSupervisor,
   // ExternalHost (01 §20): health, model listing and resolveUpstream for registered endpoints.
   createExternalHost: externalHost.createExternalHost,
   listRuntimes: runtimeManifest.listRuntimes,
