@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "nemotron3-nano-no-plugin",
+  "description": "Nemotron-3-Nano checkpoint without its reasoning parser plugin file.",
+  "entries": [
+    {
+      "path": "nvidia-Nemotron-3-Nano-30B-A3B/config.json",
+      "json": {
+        "architectures": [
+          "NemotronHForCausalLM"
+        ],
+        "model_type": "nemotron_h"
+      }
+    }
+  ]
+}

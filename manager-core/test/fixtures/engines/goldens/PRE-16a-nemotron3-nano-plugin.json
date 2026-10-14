@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-16a-nemotron3-nano-plugin",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/model-capabilities.test.js (Nemotron-3-Nano with its reasoning parser plugin)",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "model": "C:/fixture/models/nvidia-Nemotron-3-Nano-30B-A3B"
+    },
+    "launch": {
+      "modelArg": "/models/nvidia-Nemotron-3-Nano-30B-A3B",
+      "localPath": "C:/fixture/models/nvidia-Nemotron-3-Nano-30B-A3B"
+    },
+    "modelFixture": "nemotron3-nano-plugin"
+  },
+  "expect": {
+    "preset": {
+      "id": "model-nemotron_h",
+      "env": {
+        "VLLM_USE_FLASHINFER_MOE_FP4": "1",
+        "VLLM_FLASHINFER_MOE_BACKEND": "throughput"
+      },
+      "label": "NemotronHForCausalLM capability profile",
+      "forceTrustRemoteCode": true,
+      "reasoningParser": "nano_v3",
+      "reasoningParserPlugin": "C:\\fixture\\models\\nvidia-Nemotron-3-Nano-30B-A3B\\nano_v3_reasoning_parser.py",
+      "toolCallParser": "qwen3_coder",
+      "enableAutoToolChoice": true,
+      "speculativeConfig": null,
+      "notes": [
+        "Nemotron 3 Nano uses its checkpoint-specific reasoning parser plugin and qwen3_coder tool parser."
+      ],
+      "capabilities": {
+        "architecture": "NemotronHForCausalLM",
+        "modelType": "nemotron_h",
+        "quantMethod": "",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "nemotron-3-nano",
+          "label": "NVIDIA Nemotron 3 Nano",
+          "matchedBy": "architecture",
+          "heuristic": false,
+          "confidence": "verified"
+        },
+        "reasoningParser": "nano_v3",
+        "reasoningParserPlugin": "C:\\fixture\\models\\nvidia-Nemotron-3-Nano-30B-A3B\\nano_v3_reasoning_parser.py",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": true,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {
+          "VLLM_USE_FLASHINFER_MOE_FP4": "1",
+          "VLLM_FLASHINFER_MOE_BACKEND": "throughput"
+        },
+        "notes": [
+          "Nemotron 3 Nano uses its checkpoint-specific reasoning parser plugin and qwen3_coder tool parser."
+        ]
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

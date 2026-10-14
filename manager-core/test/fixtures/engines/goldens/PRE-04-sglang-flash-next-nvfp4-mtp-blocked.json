@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-04-sglang-flash-next-nvfp4-mtp-blocked",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/core.test.js › Qwen3.8 Flash-Next NVFP4 resolves to the patched SM120 SGLang profile (inputs), with speculativeMode mtp",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "engine": "sglang",
+      "model": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+      "maxModelLen": 262144,
+      "maxNumSeqs": 4,
+      "speculativeMode": "mtp",
+      "sglangDisableThinkingByDefault": true
+    },
+    "launch": {},
+    "modelFixture": null
+  },
+  "expect": {
+    "preset": {
+      "id": "qwen3.8-flash-next-sglang-sm120",
+      "label": "Qwen3.8 Flash-Next / SGLang / SM120",
+      "engine": "sglang",
+      "image": "local/sglang:qwen38flashnext-sm120-dac5523d",
+      "quantization": "modelopt_fp4",
+      "forceTrustRemoteCode": true,
+      "attentionBackend": "triton",
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_coder",
+      "enableAutoToolChoice": true,
+      "maxRunningRequests": 1,
+      "effectiveMaxRunningRequests": 1,
+      "maxTotalTokens": 262144,
+      "pageSize": 64,
+      "chunkedPrefillSize": 4096,
+      "fp4GemmBackend": "flashinfer_cutlass",
+      "pleOffloadEmbedding": true,
+      "linearAttnPrefillBackend": "triton",
+      "linearAttnDecodeBackend": "flashinfer",
+      "mambaSsmDtype": "bfloat16",
+      "mambaRadixCacheStrategy": "extra_buffer",
+      "mambaTrackInterval": 64,
+      "maxMambaCacheSize": 8,
+      "disableThinkingByDefault": true,
+      "defaultChatTemplateKwargs": "{\"enable_thinking\":false}",
+      "mambaSchedulerStrategy": "",
+      "disablePrefillCudaGraph": false,
+      "mmFeatureTransport": "",
+      "speculativeConfig": null,
+      "speculativeAlgorithm": "",
+      "draftModel": "",
+      "dsparkBlockSize": 7,
+      "draftModelQuantization": "unquant",
+      "unsupportedReason": "Qwen3.8 Flash-Next 的已验证 262K SGLang 档当前要求关闭 MTP/DSpark。",
+      "notes": [
+        "uses the Qwen3.8 Flash-Next day-0 image plus full SM120 QSA fix dac5523d",
+        "keeps KV cache in BF16/auto; FP8 KV is intentionally blocked for the current QSA path",
+        "offloads PLE embeddings to CPU RAM and uses Triton prefill plus FlashInfer decode for GDN",
+        "uses Mamba cache 8; effective max running requests is 1",
+        "Capability entry \"Qwen3.8 Flash-Next (Qwen4 preview)\" was matched by model name only; add config.json to the model directory for a declared identity."
+      ],
+      "env": {},
+      "reasoningParserPlugin": "",
+      "capabilities": {
+        "architecture": "",
+        "modelType": "",
+        "quantMethod": "",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "mtp",
+          "method": "off",
+          "tokens": 0,
+          "reason": "mtp was requested but this checkpoint has no usable draft head, so it stays off."
+        },
+        "capabilityEntry": {
+          "id": "qwen3.8-flash-next",
+          "label": "Qwen3.8 Flash-Next (Qwen4 preview)",
+          "matchedBy": "name",
+          "heuristic": true,
+          "confidence": "verified"
+        },
+        "reasoningParser": "qwen3",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": true,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "lmsysorg/sglang",
+          "version": "0.5.17"
+        },
+        "env": {},
+        "notes": [
+          "Capability entry \"Qwen3.8 Flash-Next (Qwen4 preview)\" was matched by model name only; add config.json to the model directory for a declared identity."
+        ]
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

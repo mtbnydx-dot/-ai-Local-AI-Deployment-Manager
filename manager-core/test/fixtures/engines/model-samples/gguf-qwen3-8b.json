@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "gguf-qwen3-8b",
+  "description": "Single-file Qwen3 GGUF with a readable header (architecture, layers, context and attention shape) for the llama builtin profiles.",
+  "entries": [
+    {
+      "path": "Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf",
+      "gguf": {
+        "version": 3,
+        "metadata": {
+          "general.architecture": "qwen3",
+          "general.type": "model",
+          "general.name": "Qwen3 8B",
+          "general.file_type": 15,
+          "qwen3.block_count": 36,
+          "qwen3.context_length": 40960,
+          "qwen3.embedding_length": 4096,
+          "qwen3.attention.head_count": 32,
+          "qwen3.attention.head_count_kv": 8,
+          "qwen3.attention.key_length": 128,
+          "qwen3.attention.value_length": 128
+        },
+        "tensors": [
+          {
+            "name": "weight",
+            "elements": 1000
+          }
+        ],
+        "padding": 4096
+      }
+    }
+  ]
+}
