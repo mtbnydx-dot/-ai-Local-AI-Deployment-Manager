@@ -69,6 +69,10 @@ const DEFAULT_INTERNAL_MAX_SKEW_MS = 60 * 1000;
 const SSE_MIN_RETRY_MS = 1000;
 const SSE_MAX_RETRY_MS = 30000;
 const SSE_MAX_LINE_BYTES = 1024 * 1024;
+// The entry sends each event as one JSON data line; the event cap leaves room
+// for multi-line data while still bounding an event that never ends.
+const SSE_MAX_EVENT_BYTES = 4 * SSE_MAX_LINE_BYTES;
+const SSE_PARSER_ERROR_CODES = Object.freeze(["internal_sse_line_too_long", "internal_sse_event_too_large"]);
 
 function headerText(headers = {}, name) {
   const value = headers[name] ?? headers[String(name).toLowerCase()];
@@ -109,12 +113,23 @@ function hasUnsafePathSegment(pathname) {
 }
 
 // Caller prefixes can only narrow the module allowlist: a prefix outside it is
-// ignored, so no caller can open a new internal surface by passing one.
+// ignored, so no caller can open a new internal surface by passing one. Only
+// an omitted option means "all four"; any other non-array (a bare string, null)
+// allows nothing, so a malformed narrowing never falls back to the full list.
 function effectivePrefixes(pathPrefixes) {
-  const requested = Array.isArray(pathPrefixes) ? pathPrefixes : INTERNAL_PATH_PREFIXES;
-  return requested
-    .map((prefix) => String(prefix || ""))
-    .filter((prefix) => INTERNAL_PATH_PREFIXES.some((root) => prefix.startsWith(root)));
+  if (pathPrefixes === undefined) return INTERNAL_PATH_PREFIXES;
+  if (!Array.isArray(pathPrefixes)) return [];
+  return pathPrefixes.filter((prefix) => typeof prefix === "string"
+    && INTERNAL_PATH_PREFIXES.some((root) => prefix.startsWith(root)));
+}
+
+// A manager list the caller passes is used as given; a malformed one (not an
+// array) allows no manager rather than the defaults.
+function allowedManagerSet(allowedManagers) {
+  const list = allowedManagers === undefined || allowedManagers === null
+    ? DEFAULT_ALLOWED_MANAGERS
+    : (Array.isArray(allowedManagers) ? allowedManagers : []);
+  return new Set(list.map(normalizeInternalManagerId).filter(Boolean));
 }
 
 function isInternalPathAllowed(pathname, pathPrefixes) {
@@ -134,8 +149,18 @@ function requestTarget(req) {
   }
 }
 
-function skewWindow(value) {
-  return Math.max(1000, Number(value ?? DEFAULT_INTERNAL_MAX_SKEW_MS));
+function finiteNumber(value, fallback) {
+  const number = Number(value ?? fallback);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+// A non-numeric window or clock ("60s", NaN, Infinity) falls back to the
+// default: NaN in the comparison below would otherwise switch expiry off.
+function isExpired(timestamp, options) {
+  const issuedAt = Number(timestamp);
+  const now = finiteNumber(options.now, Date.now());
+  const maxSkewMs = Math.max(1000, finiteNumber(options.maxSkewMs, DEFAULT_INTERNAL_MAX_SKEW_MS));
+  return !Number.isFinite(issuedAt) || Math.abs(now - issuedAt) > maxSkewMs;
 }
 
 function signInternal(token, { method, path: signedPath, principal, ts, bodySha256 } = {}) {
@@ -185,20 +210,13 @@ function verifyInternalRequest(req, rawBody, token, options = {}) {
   const socketAddress = normalizeRemoteAddress(req?.socket?.remoteAddress || req?.ip || "");
   if (!isLocalAddress(socketAddress)) return fail("loopback_required");
   const managerId = normalizeInternalManagerId(headerText(headers, MANAGER_PRINCIPAL_HEADER));
-  const allowedManagers = new Set((options.allowedManagers || DEFAULT_ALLOWED_MANAGERS)
-    .map(normalizeInternalManagerId)
-    .filter(Boolean));
-  if (!managerId || !allowedManagers.has(managerId)) return fail("manager_not_allowed");
+  if (!managerId || !allowedManagerSet(options.allowedManagers).has(managerId)) return fail("manager_not_allowed");
   if (!isInternalPathAllowed(pathname, options.pathPrefixes)) return { ok: false, code: "internal_path_not_allowed" };
   const timestamp = headerText(headers, MANAGER_TIMESTAMP_HEADER);
   const signature = headerText(headers, MANAGER_SIGNATURE_HEADER);
   const version = headerText(headers, MANAGER_VERSION_HEADER);
   if (!token || !timestamp || !signature || version !== "1") return fail("signature_missing");
-  const issuedAt = Number(timestamp);
-  const now = Number(options.now ?? Date.now());
-  if (!Number.isFinite(issuedAt) || Math.abs(now - issuedAt) > skewWindow(options.maxSkewMs)) {
-    return fail("signature_expired");
-  }
+  if (isExpired(timestamp, options)) return fail("signature_expired");
   const expected = signInternal(token, {
     method: String(req?.method || "POST"),
     path: pathname,
@@ -251,11 +269,7 @@ function verifyMachineSignature(req, token, options = {}) {
   if (!token || !timestamp || !signature || version !== "1" || !/^[a-f0-9]{64}$/.test(bodySha256)) {
     return { ok: false, code: "internal_signature_invalid" };
   }
-  const issuedAt = Number(timestamp);
-  const now = Number(options.now ?? Date.now());
-  if (!Number.isFinite(issuedAt) || Math.abs(now - issuedAt) > skewWindow(options.maxSkewMs)) {
-    return { ok: false, code: "internal_signature_expired" };
-  }
+  if (isExpired(timestamp, options)) return { ok: false, code: "internal_signature_expired" };
   const expected = signInternal(token, {
     method: String(req?.method || "GET"),
     path: options.pathWithQuery ?? requestTarget(req),
@@ -344,10 +358,12 @@ async function discardBody(response) {
 }
 
 // Minimal text/event-stream parser: data/event/id fields, comments ignored,
-// CRLF, CR or LF line ends, and a line split across chunks.
+// CRLF, CR or LF line ends, and a line split across chunks. Both the
+// unterminated tail and the data an event collects before its blank line are
+// capped, so a stream that never ends a line or an event cannot grow memory.
 function createSseParser(dispatch) {
   let buffer = "";
-  let fields = { id: null, event: "", data: [] };
+  let fields = { id: null, event: "", data: [], size: 0 };
   function line(text) {
     if (text === "") {
       if (fields.data.length) {
@@ -356,7 +372,7 @@ function createSseParser(dispatch) {
         try { data = JSON.parse(raw); } catch {}
         dispatch({ id: fields.id, event: fields.event || "message", data });
       }
-      fields = { id: null, event: "", data: [] };
+      fields = { id: null, event: "", data: [], size: 0 };
       return;
     }
     if (text.startsWith(":")) return;
@@ -364,8 +380,13 @@ function createSseParser(dispatch) {
     const name = colon < 0 ? text : text.slice(0, colon);
     let value = colon < 0 ? "" : text.slice(colon + 1);
     if (value.startsWith(" ")) value = value.slice(1);
-    if (name === "data") fields.data.push(value);
-    else if (name === "event") fields.event = value;
+    if (name === "data") {
+      fields.size += value.length + 1;
+      if (fields.size > SSE_MAX_EVENT_BYTES) {
+        throw internalError("internal_sse_event_too_large", "Internal event stream sent an oversized event.");
+      }
+      fields.data.push(value);
+    } else if (name === "event") fields.event = value;
     else if (name === "id" && !value.includes("\0")) fields.id = value;
   }
   return function push(chunk) {
@@ -483,37 +504,51 @@ function createInternalClient(options = {}) {
   // re-signs; a 401 reloads the key and retries once at once, other failures
   // back off (1 s doubling to 30 s) and resume with Last-Event-ID. A 4xx other
   // than 401/408/429 is final. Errors reach onError without any token.
+  //
+  // close() can run during any await below. Every point that resumes after an
+  // await checks `closed` before it fetches, reads or dispatches, so a closed
+  // subscription never opens another connection or delivers another event,
+  // even when an injected fetch ignores the abort signal.
   function sse(pathWithQuery, onEvent, sseOptions = {}) {
     if (typeof onEvent !== "function") throw new TypeError("An internal event stream needs an onEvent callback.");
     const { href, pathname, target } = resolveTarget(pathWithQuery);
     const reconnect = sseOptions.reconnect !== false;
-    const minRetryMs = Math.max(10, Number(sseOptions.retryMs ?? SSE_MIN_RETRY_MS));
-    const maxRetryMs = Math.max(minRetryMs, Number(sseOptions.maxRetryMs ?? SSE_MAX_RETRY_MS));
+    const minRetryMs = Math.max(10, finiteNumber(sseOptions.retryMs, SSE_MIN_RETRY_MS));
+    const maxRetryMs = Math.max(minRetryMs, finiteNumber(sseOptions.maxRetryMs, SSE_MAX_RETRY_MS));
     const report = (error) => {
       try { sseOptions.onError?.(error); } catch {}
     };
     let closed = false;
     let controller = null;
+    let activeReader = null;
     let timer = null;
     let lastEventId = "";
     let retryDelay = minRetryMs;
 
     async function connectOnce(token, allowKeyReload) {
+      if (closed) return;
       if (!token) throw internalError("internal_key_unavailable", "Internal trust key is unavailable.");
-      controller = new AbortController();
+      const connection = new AbortController();
+      controller = connection;
       const extra = { ...(sseOptions.headers || {}), ...(lastEventId ? { "last-event-id": lastEventId } : {}) };
       let response;
       try {
         response = await fetchFn(href, {
           method: "GET",
           headers: signedHeaders(token, "GET", target, undefined, extra, "text/event-stream"),
-          signal: controller.signal,
+          signal: connection.signal,
         });
       } catch (error) {
+        if (closed) return;
         throw transportError(error, pathname);
+      }
+      if (closed) {
+        await discardBody(response);
+        return;
       }
       if (response.status === 401 && allowKeyReload) {
         await discardBody(response);
+        if (closed) return;
         return connectOnce(reloadKey(), false);
       }
       if (!response.ok || !response.body) {
@@ -526,7 +561,9 @@ function createInternalClient(options = {}) {
       }
       retryDelay = minRetryMs;
       try { sseOptions.onOpen?.({ status: response.status }); } catch {}
+      // A handler may call close(); the rest of the chunk is then dropped.
       const push = createSseParser((event) => {
+        if (closed) return;
         if (event.id !== null) lastEventId = event.id;
         try {
           onEvent(event);
@@ -536,18 +573,34 @@ function createInternalClient(options = {}) {
       });
       const decoder = new TextDecoder();
       const reader = response.body.getReader();
+      activeReader = reader;
+      let ended = false;
       try {
-        for (;;) {
+        while (!closed) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+            ended = true;
+            break;
+          }
+          if (closed) break;
           push(decoder.decode(value, { stream: true }));
         }
       } catch (error) {
-        if (error?.code === "internal_sse_line_too_long") throw error;
+        if (closed) return;
+        if (SSE_PARSER_ERROR_CODES.includes(error?.code)) throw error;
         throw transportError(error, pathname);
       } finally {
+        // Leaving before the stream ended (close(), oversized input) releases
+        // the connection: abort the fetch and cancel the body, which also
+        // covers a fetch that does not honour the signal.
+        if (!ended) {
+          try { connection.abort(); } catch {}
+          reader.cancel().catch(() => {});
+        }
+        if (activeReader === reader) activeReader = null;
         try { reader.releaseLock(); } catch {}
       }
+      if (closed) return;
       throw internalError("internal_sse_closed", `Internal event stream ${pathname} ended.`);
     }
 
@@ -574,6 +627,8 @@ function createInternalClient(options = {}) {
         if (timer) clearTimeout(timer);
         timer = null;
         try { controller?.abort(); } catch {}
+        // Ends a read still pending on a fetch that ignores the signal.
+        try { activeReader?.cancel().catch(() => {}); } catch {}
       },
     };
   }

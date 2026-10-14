@@ -228,6 +228,28 @@ test("caller prefixes narrow the allowlist but can never widen it", () => {
     verifyInternalRequest(fakeRequest({ url: hubPath, headers: hubHeaders }), "", TOKEN, { now, pathPrefixes: ["/api/hub/"] }).code,
     "internal_path_not_allowed",
   );
+  // A malformed narrowing (a bare string, null, an object) allows nothing; it
+  // never falls back to all four prefixes.
+  for (const pathPrefixes of ["/internal/telemetry/", null, { 0: "/internal/telemetry/" }, 0, ""]) {
+    for (const [url, headers] of [[billingPath, billingHeaders], [telemetry, telemetryHeaders]]) {
+      assert.equal(
+        verifyInternalRequest(fakeRequest({ url, headers }), "{}", TOKEN, { now, pathPrefixes }).code,
+        "internal_path_not_allowed",
+        `${JSON.stringify(pathPrefixes)} ${url}`,
+      );
+    }
+  }
+  // Non-string entries are ignored rather than coerced into a prefix.
+  assert.equal(
+    verifyInternalRequest(fakeRequest({ url: telemetry, headers: telemetryHeaders }), "{}", TOKEN, { now, pathPrefixes: [["/internal/telemetry/"]] }).code,
+    "internal_path_not_allowed",
+  );
+  // A malformed manager list allows no manager rather than the defaults.
+  assert.equal(
+    verifyInternalRequest(fakeRequest({ url: telemetry, headers: telemetryHeaders }), "{}", TOKEN, { now, allowedManagers: "llama-manager" }).code,
+    "internal_manager_not_allowed",
+  );
+  assert.equal(verifyInternalRequest(fakeRequest({ url: telemetry, headers: telemetryHeaders }), "{}", TOKEN, { now, allowedManagers: null }).ok, true);
 });
 
 test("manager form rejects tampered method, path, manager, ts or body and enforces a 60 s window", () => {
@@ -257,6 +279,15 @@ test("manager form rejects tampered method, path, manager, ts or body and enforc
   assert.equal(verify({}, { now: now + 60_000 }).ok, true);
   assert.equal(verify({}, { now: now + 60_001 }).code, "internal_signature_expired");
   assert.equal(verify({}, { now: now - 61_000 }).code, "internal_signature_expired");
+  // A non-numeric window or clock never switches expiry off: the window falls
+  // back to 60 s and the clock to the real one (far from this fixed ts).
+  for (const maxSkewMs of ["60s", Number.NaN, Number.POSITIVE_INFINITY, {}]) {
+    assert.equal(verify({}, { now: now + 86_400_000, maxSkewMs }).code, "internal_signature_expired", String(maxSkewMs));
+    assert.equal(verify({}, { now: now + 30_000, maxSkewMs }).ok, true, String(maxSkewMs));
+  }
+  for (const badNow of ["later", Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(verify({}, { now: badNow }).code, "internal_signature_expired", String(badNow));
+  }
   // Billing paths keep the billing_* codes through the same verifier.
   const billingPath = "/internal/billing/settle";
   const billingHeaders = buildInternalRequestHeaders(TOKEN, "POST", billingPath, "vllm-manager", body, now);
@@ -316,6 +347,8 @@ test("machine form binds the query and rejects tampered method, path, principal,
   assert.equal(verify({}, { now: now + 60_000 }).ok, true);
   assert.equal(verify({}, { now: now + 61_000 }).code, "internal_signature_expired");
   assert.equal(verify({}, { now: now - 61_000 }).code, "internal_signature_expired");
+  assert.equal(verify({}, { now: now + 86_400_000, maxSkewMs: "60s" }).code, "internal_signature_expired");
+  assert.equal(verify({}, { now: "later" }).code, "internal_signature_expired");
   // No machine header at all is "missing", so the caller judges other credentials.
   assert.equal(verify({ headers: {} }).code, "internal_signature_missing");
   assert.equal(verify({ headers: { "x-hub-shim": "1" } }).code, "internal_signature_missing");
@@ -550,6 +583,204 @@ test("sse treats a scope refusal as final and close() stops reconnecting", { tim
   assert.equal(reconnects, settled);
   assert.throws(() => flaky.sse("/api/events"), /onEvent/);
   t.diagnostic(`reconnect attempts before close: ${settled}`);
+
+  // A non-numeric retry option keeps the default backoff instead of a 1 ms loop.
+  let hammered = 0;
+  const misconfigured = createInternalClient({
+    principal: "system:supervisor",
+    readKey: () => TOKEN,
+    fetchFn: async () => {
+      hammered += 1;
+      throw new Error("connection refused");
+    },
+  });
+  const slowStream = misconfigured.sse("/api/events", () => {}, { retryMs: "fast", maxRetryMs: "slow" });
+  await delay(80);
+  slowStream.close();
+  assert.equal(hammered, 1);
+});
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// An event-stream body that ignores the fetch abort signal, the way an
+// injected or misbehaving fetch can: only a reader cancel stops it.
+function fakeEventBody({ first = "", intervalMs = 5, onCancel, cancelDelayMs = 0, silent = false } = {}) {
+  const encoder = new TextEncoder();
+  let sent = 0;
+  let cancelled = false;
+  return new ReadableStream({
+    start(controller) {
+      if (first) controller.enqueue(encoder.encode(first));
+    },
+    pull(controller) {
+      if (silent) return new Promise(() => {});
+      return delay(intervalMs).then(() => {
+        if (cancelled) return;
+        sent += 1;
+        controller.enqueue(encoder.encode(`id: tick-${sent}\ndata: {"tick":${sent}}\n\n`));
+      });
+    },
+    cancel() {
+      cancelled = true;
+      onCancel?.();
+      return cancelDelayMs ? delay(cancelDelayMs) : undefined;
+    },
+  });
+}
+
+function eventResponse(body) {
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+test("sse close() leaves no live stream, whichever await it interrupts", { timeout: 15000 }, async () => {
+  // 1. close() while the 401 body is still being discarded: no second fetch,
+  //    no event after close().
+  {
+    let calls = 0;
+    const delivered = [];
+    let discardStarted;
+    const discarding = new Promise((resolve) => { discardStarted = resolve; });
+    const client = createInternalClient({
+      principal: "system:supervisor",
+      readKey: () => TOKEN,
+      fetchFn: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response(new ReadableStream({
+            cancel() {
+              discardStarted();
+              return delay(50);
+            },
+          }), { status: 401 });
+        }
+        return eventResponse(fakeEventBody());
+      },
+    });
+    const stream = client.sse("/api/events", (event) => delivered.push(event), { retryMs: 10 });
+    await discarding;
+    stream.close();
+    await delay(150);
+    assert.equal(calls, 1, "no reconnect after close() during the 401 discard");
+    assert.deepEqual(delivered, []);
+  }
+
+  // 2. close() while the fetch is pending, with a fetch that ignores the abort
+  //    signal: the late response is discarded and nothing is delivered.
+  {
+    let calls = 0;
+    let cancelled = 0;
+    const delivered = [];
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const client = createInternalClient({
+      principal: "system:supervisor",
+      readKey: () => TOKEN,
+      fetchFn: async () => {
+        calls += 1;
+        await gate;
+        return eventResponse(fakeEventBody({ first: "id: 1\ndata: {}\n\n", onCancel: () => { cancelled += 1; } }));
+      },
+    });
+    const stream = client.sse("/api/events", (event) => delivered.push(event), { retryMs: 10 });
+    await delay(10);
+    stream.close();
+    release();
+    await delay(60);
+    assert.equal(calls, 1);
+    assert.equal(cancelled, 1, "the late response body is cancelled");
+    assert.deepEqual(delivered, []);
+  }
+
+  // 3. A handler that calls close() on the first of several events in a chunk:
+  //    the rest of the chunk is dropped and the body is cancelled.
+  {
+    let calls = 0;
+    let cancelled = 0;
+    const delivered = [];
+    const errors = [];
+    const client = createInternalClient({
+      principal: "system:hub-shim:llama",
+      readKey: () => TOKEN,
+      fetchFn: async () => {
+        calls += 1;
+        return eventResponse(fakeEventBody({
+          first: "id: 1\ndata: {\"n\":1}\n\nid: 2\ndata: {\"n\":2}\n\nid: 3\ndata: {\"n\":3}\n\n",
+          onCancel: () => { cancelled += 1; },
+        }));
+      },
+    });
+    let stream = null;
+    stream = client.sse("/api/events", (event) => {
+      delivered.push(event.id);
+      stream.close();
+    }, { retryMs: 10, onError: (error) => errors.push(error.code) });
+    await delay(80);
+    assert.deepEqual(delivered, ["1"]);
+    assert.equal(calls, 1);
+    assert.ok(cancelled >= 1, "the body is cancelled once the handler closes");
+    assert.deepEqual(errors, []);
+  }
+
+  // 4. close() while a read is pending on a silent stream whose fetch ignores
+  //    the abort signal: the pending read is cancelled, nothing is reported.
+  {
+    let cancelled = 0;
+    const errors = [];
+    let opened;
+    const open = new Promise((resolve) => { opened = resolve; });
+    const client = createInternalClient({
+      principal: "system:mcp",
+      readKey: () => TOKEN,
+      fetchFn: async () => eventResponse(fakeEventBody({ first: ": hello\n\n", silent: true, onCancel: () => { cancelled += 1; } })),
+    });
+    const stream = client.sse("/api/events", () => {}, {
+      retryMs: 10,
+      onOpen: () => opened(),
+      onError: (error) => errors.push(error.code),
+    });
+    await open;
+    await delay(10);
+    stream.close();
+    await delay(30);
+    assert.equal(cancelled, 1);
+    assert.deepEqual(errors, []);
+  }
+});
+
+test("sse bounds an event that never ends and releases its connection", { timeout: 15000 }, async () => {
+  let cancelled = 0;
+  const delivered = [];
+  const errors = [];
+  const line = `data: ${"x".repeat(64 * 1024)}\n`;
+  let sent = 0;
+  const client = createInternalClient({
+    principal: "system:supervisor",
+    readKey: () => TOKEN,
+    fetchFn: async () => eventResponse(new ReadableStream({
+      pull(controller) {
+        // Short data lines and never a blank line: 8 MiB in one unfinished
+        // event. Only the per-event cap stops it before the stream ends.
+        if (sent >= 128) return controller.close();
+        sent += 1;
+        controller.enqueue(new TextEncoder().encode(line));
+        return undefined;
+      },
+      cancel() { cancelled += 1; },
+    })),
+  });
+  await new Promise((resolve) => {
+    client.sse("/api/events", (event) => delivered.push(event), {
+      reconnect: false,
+      onError: (error) => { errors.push(error); resolve(); },
+    });
+  });
+  await delay(20);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, "internal_sse_event_too_large");
+  assert.deepEqual(delivered, []);
+  assert.equal(cancelled, 1, "the oversized stream is cancelled, not left open");
 });
 
 test("no token appears in any thrown message, result or log line", { timeout: 15000 }, async (t) => {
