@@ -88,7 +88,46 @@ function loadForbiddenNameRule(scriptText) {
   return { copies, isForbiddenName };
 }
 
-/** Tracked plus untracked-but-not-ignored files that exist on disk, or null outside git. */
+/**
+ * The privacy check's content rule (identity needles and credential patterns),
+ * read from the build script. The script carries both lists twice (the privacy
+ * check, and the forceInclude filter that reads every candidate as text); the
+ * copies must be identical. forRoot(root) returns file -> true when the build
+ * would refuse to force-include that file.
+ */
+function loadForbiddenContentRule(scriptText) {
+  const copiesOf = (name) => Array.from(
+    scriptText.matchAll(new RegExp(`\\$(?:forceInclude)?${name} = @\\(\\r?\\n([\\s\\S]*?)\\r?\\n\\)`, "g")),
+    (match) => match[1].split(/\r?\n/).map((line) => line.trim().replace(/,$/, "")).filter(Boolean),
+  );
+  const needleCopies = copiesOf("[Ii]dentityNeedles");
+  const patternCopies = copiesOf("[Cc]redentialPatterns");
+  // PowerShell -match ignores case; the patterns are single-quoted literals.
+  const patterns = (patternCopies[0] || []).map((item) => new RegExp(item.replace(/^'|'$/g, "").replace(/''/g, "'"), "i"));
+  function needlesFor(root) {
+    return (needleCopies[0] || []).map((item) => {
+      const variable = /^\$env:(\w+)$/.exec(item);
+      if (variable) return process.env[variable[1]];
+      if (item === "$projectRoot") return root;
+      throw new Error(`the release-manifest test does not know the privacy needle ${item}`);
+    }).filter((needle) => needle && needle.trim()).map((needle) => needle.toLowerCase());
+  }
+  function forRoot(root) {
+    const needles = needlesFor(root);
+    return (file) => {
+      const bytes = fs.readFileSync(path.join(root, ...file.split("/")));
+      const texts = [bytes.toString("utf8"), bytes.toString("latin1")];
+      if (bytes[0] === 0xff && bytes[1] === 0xfe) texts.push(bytes.toString("utf16le"));
+      return texts.some((text) => {
+        const lower = text.toLowerCase();
+        return needles.some((needle) => lower.includes(needle)) || patterns.some((pattern) => pattern.test(text));
+      });
+    };
+  }
+  return { needleCopies, patternCopies, forRoot };
+}
+
+/** Tracked plus untracked-but-not-ignored files that exist on disk, or null when git fails. */
 function gitFiles(root) {
   const result = spawnSync("git", ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
     encoding: "utf8",
@@ -101,10 +140,42 @@ function gitFiles(root) {
 }
 
 /**
+ * The repository checks need the source repository's file list, so they run
+ * only at the top of a git work tree that is not a built release. Every build
+ * writes RELEASE-MANIFEST.md at the release root and the source repository
+ * never has one, so it marks a built or extracted release even under git (the
+ * public GitHub repository is the staged tree under git). A release unpacked
+ * in an ignored folder of another work tree is not that work tree's top, and
+ * git would list nothing there. Returns { files }, { skip } with a note, or
+ * { error } when the root holds .git but git cannot list it.
+ */
+function sourceRepositoryFiles(root) {
+  if (fs.existsSync(path.join(root, "RELEASE-MANIFEST.md"))) {
+    return { skip: "a built release (RELEASE-MANIFEST.md is at its root), not the source repository" };
+  }
+  const prefix = spawnSync("git", ["-C", root, "rev-parse", "--show-prefix"], { encoding: "utf8", windowsHide: true });
+  if (prefix.error || prefix.status !== 0) {
+    if (fs.existsSync(path.join(root, ".git"))) {
+      return { error: `git cannot read the work tree at the repository root: ${prefix.error ? prefix.error.message : String(prefix.stderr).trim()}` };
+    }
+    return { skip: "not a git checkout (an extracted release), so tracked files cannot be listed" };
+  }
+  const nested = prefix.stdout.trim();
+  if (nested) return { skip: `an extracted release at ${nested} inside another git work tree, not the source repository` };
+  const files = gitFiles(root);
+  return files ? { files } : { error: "git ls-files failed at the top of the source repository" };
+}
+
+/** The privacy rules the forceInclude step applies to files under root. */
+function privacyRulesFor(root) {
+  return { isForbiddenName: forbiddenNameRule.isForbiddenName, hasForbiddenContent: forbiddenContentRule.forRoot(root) };
+}
+
+/**
  * Decides, for every file, what the build does with it and reports the files
  * the manifest does not account for. Returns { shipped: Map(file -> via), problems }.
  */
-function classifyRelease(manifest, files, { isForbiddenName = () => false } = {}) {
+function classifyRelease(manifest, files, { isForbiddenName = () => false, hasForbiddenContent = () => false } = {}) {
   const rootFiles = new Set(list(manifest.files));
   const extraFiles = new Set(list(manifest.extraFiles));
   const directories = list(manifest.directories);
@@ -142,9 +213,10 @@ function classifyRelease(manifest, files, { isForbiddenName = () => false } = {}
     }
     if (!dropped) return { shipped: true, via: `directory ${directory}` };
     const force = forceInclude.find((entry) => entry.re.test(file));
-    if (force && !isForbiddenName(name)) return { shipped: true, via: `forceInclude ${force.glob}` };
-    if (force) return { shipped: false, why: `${dropped}, and forceInclude skips it because the privacy check rejects its name` };
-    return { shipped: false, why: `it is inside ${directory}, but ${dropped}` };
+    if (!force) return { shipped: false, why: `it is inside ${directory}, but ${dropped}` };
+    if (isForbiddenName(name)) return { shipped: false, why: `${dropped}, and forceInclude skips it because the privacy check rejects its name` };
+    if (hasForbiddenContent(file)) return { shipped: false, why: `${dropped}, and forceInclude skips it because the privacy check rejects its content` };
+    return { shipped: true, via: `forceInclude ${force.glob}` };
   }
 
   const shipped = new Map();
@@ -266,9 +338,19 @@ function report(title, problems, hint = "") {
 
 const scriptText = fs.readFileSync(BUILD_SCRIPT, "utf8");
 const forbiddenNameRule = loadForbiddenNameRule(scriptText);
+const forbiddenContentRule = loadForbiddenContentRule(scriptText);
 const manifest = readJson(MANIFEST_PATH);
-const repositoryFiles = gitFiles(ROOT);
-const NOT_GIT = "not a git checkout (an extracted release), so tracked files cannot be listed";
+const repository = sourceRepositoryFiles(ROOT);
+
+/** The source repository's files, or null after skipping the test with a note. */
+function repositoryFilesOrSkip(t) {
+  if (repository.error) assert.fail(repository.error);
+  if (repository.skip) {
+    t.skip(repository.skip);
+    return null;
+  }
+  return repository.files;
+}
 
 test("release-manifest.json has the schemaVersion 1 shape", () => {
   const problems = validateManifest(manifest);
@@ -277,19 +359,22 @@ test("release-manifest.json has the schemaVersion 1 shape", () => {
 });
 
 test("every repository file is shipped or excluded with a reason", (t) => {
-  if (!repositoryFiles) return t.skip(NOT_GIT);
-  const { problems } = classifyRelease(manifest, repositoryFiles, forbiddenNameRule);
+  const repositoryFiles = repositoryFilesOrSkip(t);
+  if (!repositoryFiles) return;
+  const { problems } = classifyRelease(manifest, repositoryFiles, privacyRulesFor(ROOT));
   assert.deepEqual(problems, [], report("release-manifest.json does not account for these files:", problems, SHIP_OR_EXCLUDE));
 });
 
 test("every listed file and directory exists and README-linked docs ship", (t) => {
-  if (!repositoryFiles) return t.skip(NOT_GIT);
+  const repositoryFiles = repositoryFilesOrSkip(t);
+  if (!repositoryFiles) return;
   const problems = checkListedPaths(manifest, repositoryFiles, ROOT);
   assert.deepEqual(problems, [], report("release-manifest.json lists paths that do not hold up:", problems));
 });
 
 test("every excluded glob still matches a repository file", (t) => {
-  if (!repositoryFiles) return t.skip(NOT_GIT);
+  const repositoryFiles = repositoryFilesOrSkip(t);
+  if (!repositoryFiles) return;
   const stale = list(manifest.excluded)
     .filter((entry) => !repositoryFiles.some((file) => globToRegExp(entry.glob).test(file)))
     .map((entry) => `excluded glob "${entry.glob}" matches nothing; remove it`);
@@ -354,22 +439,29 @@ test("forceInclude keeps tracked fixtures that robocopy excludes would drop", ()
     "manager-core/test/fixtures/trace.jsonl",
     "manager-core/test/fixtures/.env",
     "manager-core/test/fixtures/sample.env.example",
+    "manager-core/test/fixtures/logs/leaky.log",
+    "manager-core/test/fixtures/leaky.json",
     "manager-core/tests/fixtures/run.log",
     "manager-core/lib/test/fixtures/run.log",
   ];
   const fixtureManifest = { ...manifest, excluded: [] };
-  const { shipped, problems } = classifyRelease(fixtureManifest, files, forbiddenNameRule);
+  const hasForbiddenContent = (file) => path.posix.basename(file).startsWith("leaky.");
+  const { shipped, problems } = classifyRelease(fixtureManifest, files, { ...forbiddenNameRule, hasForbiddenContent });
   assert.equal(shipped.get("manager-core/test/fixtures/logs/run.log"), "forceInclude */test/fixtures/**");
   assert.equal(shipped.get("manager-core/test/fixtures/models/card.json"), "forceInclude */test/fixtures/**");
   assert.equal(shipped.get("manager-core/test/fixtures/sample.env.example"), "directory manager-core");
-  // Names the privacy check rejects are never force-included, and "*" covers one segment only.
+  // A file robocopy keeps goes through the unchanged privacy scan instead.
+  assert.equal(shipped.get("manager-core/test/fixtures/leaky.json"), "directory manager-core");
+  // Names or contents the privacy check rejects are never force-included, and "*" covers one segment only.
   assert.deepEqual(problems.map((problem) => problem.split(":")[0]), [
     "manager-core/test/fixtures/trace.jsonl",
     "manager-core/test/fixtures/.env",
+    "manager-core/test/fixtures/logs/leaky.log",
     "manager-core/tests/fixtures/run.log",
     "manager-core/lib/test/fixtures/run.log",
   ]);
   assert.match(problems[0], /forceInclude skips it because the privacy check rejects its name/);
+  assert.match(problems[2], /forceInclude skips it because the privacy check rejects its content/);
 });
 
 test("manifest globs follow the build script's segment rules", () => {
@@ -403,6 +495,70 @@ test("the forceInclude name filter is the privacy check's rule", () => {
   for (const name of [".env.example", "run.log", "card.json"]) {
     assert.ok(!forbiddenNameRule.isForbiddenName(name), name);
   }
+});
+
+// Fake credentials are assembled at run time, so no tracked file holds a
+// credential-shaped string that the release privacy scan would reject.
+const FAKE_OPENAI_KEY = ["sk", "FAKEFAKEFAKEFAKEFAKEFAKE0000"].join("-");
+const FAKE_AWS_KEY_ID = ["AKIA", "FAKEFAKEFAKEFAKE"].join("");
+
+test("the forceInclude content filter is the privacy check's rule", async (t) => {
+  const { needleCopies, patternCopies } = forbiddenContentRule;
+  assert.equal(needleCopies.length, 2, "build-github-release.ps1 holds the identity needles in the privacy check and in the forceInclude filter");
+  assert.equal(patternCopies.length, 2, "build-github-release.ps1 holds the credential patterns in the privacy check and in the forceInclude filter");
+  assert.deepEqual(needleCopies[1], needleCopies[0]);
+  assert.deepEqual(patternCopies[1], patternCopies[0]);
+  assert.ok(needleCopies[0].includes("$projectRoot") && patternCopies[0].length >= 6);
+
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "release-content-"));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  await writeFile(root, "fixtures/clean.log", "INFO started\n");
+  await writeFile(root, "fixtures/key.log", `INFO key=${FAKE_OPENAI_KEY}\n`);
+  await writeFile(root, "fixtures/aws.tmp", `id=${FAKE_AWS_KEY_ID.toLowerCase()}\n`);
+  await writeFile(root, "fixtures/root.log", `cwd=${path.join(root, "pkg")}\n`);
+  await fsp.writeFile(path.join(root, "fixtures", "wide.txt"), Buffer.from(`\uFEFFkey=${FAKE_OPENAI_KEY}\n`, "utf16le"));
+  const hasForbiddenContent = forbiddenContentRule.forRoot(root);
+  assert.equal(hasForbiddenContent("fixtures/clean.log"), false);
+  assert.equal(hasForbiddenContent("fixtures/key.log"), true);
+  assert.equal(hasForbiddenContent("fixtures/aws.tmp"), true, "PowerShell -match ignores case");
+  assert.equal(hasForbiddenContent("fixtures/root.log"), true, "the project root is an identity needle");
+  assert.equal(hasForbiddenContent("fixtures/wide.txt"), true, "UTF-16 text is read too");
+});
+
+test("the repository checks run only at the top of the source repository", async (t) => {
+  const probe = spawnSync("git", ["--version"], { windowsHide: true });
+  if (probe.error || probe.status !== 0) return t.skip("git is not available");
+  const base = await fsp.mkdtemp(path.join(os.tmpdir(), "release-source-"));
+  t.after(() => fsp.rm(base, { recursive: true, force: true }));
+  const git = (cwd, ...args) => spawnSync("git", ["-C", cwd, "-c", "core.autocrlf=false", ...args], { encoding: "utf8", windowsHide: true });
+
+  // The top of a work tree that is not a built release: its files are listed.
+  const source = path.join(base, "source");
+  await writeFile(source, ".gitignore", "artifacts/\n");
+  await writeFile(source, "README.md", "# Source\n");
+  assert.equal(git(source, "init", "-q").status, 0);
+  assert.equal(git(source, "add", "-A").status, 0);
+  assert.deepEqual(sourceRepositoryFiles(source), { files: [".gitignore", "README.md"] });
+
+  // A release unpacked in that work tree's ignored artifacts folder, where git lists nothing.
+  const extract = path.join(source, "artifacts", "extract", "fixture-v0.0.1");
+  await writeFile(extract, "README.md", "# Release\n");
+  assert.deepEqual(gitFiles(extract), []);
+  assert.match(String(sourceRepositoryFiles(extract).skip), /^an extracted release at artifacts\/extract\/fixture-v0\.0\.1\/ inside another git work tree/);
+
+  // A built release under git, like the public GitHub repository.
+  const published = path.join(base, "published");
+  await writeFile(published, "README.md", "# Release\n");
+  await writeFile(published, "RELEASE-MANIFEST.md", "# Release Manifest\n");
+  assert.equal(git(published, "init", "-q").status, 0);
+  assert.equal(git(published, "add", "-A").status, 0);
+  assert.match(String(sourceRepositoryFiles(published).skip), /^a built release/);
+
+  // A .git that git cannot read is an error, never a silent skip.
+  const broken = path.join(base, "broken");
+  await writeFile(broken, "README.md", "# Broken\n");
+  await writeFile(broken, ".git", "gitdir: missing-git-dir\n");
+  assert.match(String(sourceRepositoryFiles(broken).error), /^git cannot read the work tree at the repository root/);
 });
 
 // Windows PowerShell 5.1 started below a pwsh 7 session (pwsh > cmd > npm >
@@ -439,11 +595,21 @@ function listFiles(root) {
   return files.sort();
 }
 
-test("the release build ships a tracked fixture through forceInclude", { timeout: 180000, skip: !hasWindowsPowerShell() && "the release build needs Windows PowerShell and robocopy" }, async (t) => {
+function runReleaseBuild(scriptPath, out) {
+  return spawnSync("powershell.exe", [
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+    "-Version", "0.0.1", "-OutputDirectory", out,
+  ], { encoding: "utf8", env: windowsPowerShellEnv(), windowsHide: true, timeout: 120000 });
+}
+
+test("the release build ships a tracked fixture through forceInclude", { timeout: 300000, skip: !hasWindowsPowerShell() && "the release build needs Windows PowerShell and robocopy" }, async (t) => {
   const base = await fsp.mkdtemp(path.join(os.tmpdir(), "release-manifest-"));
   t.after(() => fsp.rm(base, { recursive: true, force: true }));
   const repo = path.join(base, "repo");
-  const out = path.join(base, "out");
+  // The default output folder: inside the project, in a folder git ignores.
+  const out = path.join(repo, "artifacts", "github-release");
+  const machineName = process.env.COMPUTERNAME;
+  assert.ok(machineName, "Windows sets COMPUTERNAME");
 
   const fixtureManifest = {
     schemaVersion: 1,
@@ -458,10 +624,12 @@ test("the release build ships a tracked fixture through forceInclude", { timeout
       { glob: "pkg/data/**", reason: "runtime data" },
       { glob: "pkg/test/fixtures/trace.jsonl", reason: "the privacy check rejects .jsonl names" },
       { glob: "pkg/test/fixtures/.env", reason: "env files never ship" },
+      { glob: "pkg/test/fixtures/*/leaky.*", reason: "holds a fake credential, so the privacy check rejects its content" },
+      { glob: "pkg/test/fixtures/logs/host.tmp", reason: "names this machine, so the privacy check rejects its content" },
       { glob: "pkg/tests/fixtures/**", reason: "outside the forceInclude glob" },
     ],
   };
-  await writeFile(repo, ".gitignore", "*.log\nlogs/\n");
+  await writeFile(repo, ".gitignore", "*.log\nlogs/\nartifacts/\n");
   await writeFile(repo, "README.md", "# Fixture release\n");
   await writeFile(repo, "package.json", `${JSON.stringify({ name: "fixture", version: "0.0.1" })}\n`);
   await writeFile(repo, "release-manifest.json", `${JSON.stringify(fixtureManifest, null, 2)}\n`);
@@ -474,13 +642,18 @@ test("the release build ships a tracked fixture through forceInclude", { timeout
   await writeFile(repo, "pkg/test/fixtures/cache/entry.json", "{\"cached\":true}\n");
   await writeFile(repo, "pkg/test/fixtures/trace.jsonl", "{}\n");
   await writeFile(repo, "pkg/test/fixtures/.env", "FIXTURE_ONLY=1\n");
+  // Robocopy drops these and the privacy check only reads known text
+  // extensions, so the forceInclude filter itself must reject their content.
+  await writeFile(repo, "pkg/test/fixtures/logs/leaky.log", `INFO key=${FAKE_OPENAI_KEY}\n`);
+  await writeFile(repo, "pkg/test/fixtures/cache/leaky.json", `{"key":"${FAKE_OPENAI_KEY}"}\n`);
+  await writeFile(repo, "pkg/test/fixtures/logs/host.tmp", `host=${machineName}\n`);
   await writeFile(repo, "pkg/test/fixtures/stray.log", "ignored and untracked\n");
   await writeFile(repo, "pkg/tests/fixtures/other.log", "not under a test/fixtures folder\n");
 
-  const git = (...args) => spawnSync("git", ["-C", repo, "-c", "core.autocrlf=false", ...args], { encoding: "utf8", windowsHide: true });
-  const init = git("init", "-q");
+  const git = (cwd, ...args) => spawnSync("git", ["-C", cwd, "-c", "core.autocrlf=false", ...args], { encoding: "utf8", windowsHide: true });
+  const init = git(repo, "init", "-q");
   if (init.error || init.status !== 0) return t.skip("git is not available");
-  assert.equal(git("add", "-A").status, 0);
+  assert.equal(git(repo, "add", "-A").status, 0);
   // Tracked on purpose although .gitignore matches some of them, like a real
   // fixture added with -f (-f also keeps a global excludes file out of the way).
   const trackedFixtures = [
@@ -488,33 +661,90 @@ test("the release build ships a tracked fixture through forceInclude", { timeout
     "pkg/test/fixtures/cache/entry.json",
     "pkg/test/fixtures/trace.jsonl",
     "pkg/test/fixtures/.env",
+    "pkg/test/fixtures/logs/leaky.log",
+    "pkg/test/fixtures/cache/leaky.json",
+    "pkg/test/fixtures/logs/host.tmp",
     "pkg/tests/fixtures/other.log",
   ];
-  assert.equal(git("add", "-f", ...trackedFixtures).status, 0);
+  assert.equal(git(repo, "add", "-f", ...trackedFixtures).status, 0);
 
   const tracked = gitFiles(repo);
   assert.ok(tracked.includes("pkg/test/fixtures/logs/sample.log"));
   assert.ok(!tracked.includes("pkg/test/fixtures/stray.log"));
-  const model = classifyRelease(fixtureManifest, tracked, forbiddenNameRule);
+  const model = classifyRelease(fixtureManifest, tracked, privacyRulesFor(repo));
   assert.deepEqual(model.problems, []);
 
-  const build = spawnSync("powershell.exe", [
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(repo, "build-github-release.ps1"),
-    "-Version", "0.0.1", "-OutputDirectory", out,
-  ], { encoding: "utf8", env: windowsPowerShellEnv(), windowsHide: true, timeout: 170000 });
+  const build = runReleaseBuild(path.join(repo, "build-github-release.ps1"), out);
   assert.equal(build.status, 0, `release build failed:\n${build.stdout}\n${build.stderr}`);
-  assert.match(build.stdout, /Not force-including pkg\/test\/fixtures\/trace\.jsonl/);
+  assert.match(build.stdout, /forceInclude candidates come from git ls-files\./);
+  assert.match(build.stdout, /Not force-including pkg\/test\/fixtures\/trace\.jsonl: the privacy check rejects this file name/);
+  for (const file of ["logs/leaky.log", "cache/leaky.json", "logs/host.tmp"]) {
+    assert.ok(build.stdout.includes(`Not force-including pkg/test/fixtures/${file}: the privacy check rejects its content.`), file);
+  }
+  assert.ok(!build.stdout.includes(FAKE_OPENAI_KEY), "the build never prints what it rejected");
   assert.match(build.stdout, /Force-included 2 fixture file\(s\)/);
 
-  const staged = listFiles(path.join(out, "fixture-platform-v0.0.1"));
+  const stagedRoot = path.join(out, "fixture-platform-v0.0.1");
+  const staged = listFiles(stagedRoot);
   assert.ok(staged.includes("pkg/test/fixtures/logs/sample.log"), "a tracked fixture under logs/ named *.log ships");
   assert.ok(staged.includes("pkg/test/fixtures/cache/entry.json"), "a tracked fixture under cache/ ships");
-  for (const file of ["pkg/test/fixtures/trace.jsonl", "pkg/test/fixtures/.env", "pkg/test/fixtures/stray.log", "pkg/tests/fixtures/other.log", "pkg/logs/runtime.txt", "pkg/data/state.json"]) {
+  for (const file of [
+    "pkg/test/fixtures/trace.jsonl", "pkg/test/fixtures/.env", "pkg/test/fixtures/logs/leaky.log", "pkg/test/fixtures/cache/leaky.json",
+    "pkg/test/fixtures/logs/host.tmp", "pkg/test/fixtures/stray.log", "pkg/tests/fixtures/other.log", "pkg/logs/runtime.txt", "pkg/data/state.json",
+  ]) {
     assert.ok(!staged.includes(file), `${file} must not ship`);
   }
   // The model and the real build agree file for file.
   assert.deepEqual(staged, [...model.shipped.keys(), "RELEASE-MANIFEST.md"].sort());
-  const releaseNotes = fs.readFileSync(path.join(out, "fixture-platform-v0.0.1", "RELEASE-MANIFEST.md"), "utf8");
+  const releaseNotes = fs.readFileSync(path.join(stagedRoot, "RELEASE-MANIFEST.md"), "utf8");
   assert.match(releaseNotes, /release-manifest\.json \(schemaVersion 1\)/);
   assert.ok(fs.existsSync(path.join(out, "fixture-platform-v0.0.1.zip")));
+
+  // The repository checks skip in the staged release and in a git-initialised
+  // copy of it (the public GitHub repository), whose tracked files are release files.
+  assert.match(String(sourceRepositoryFiles(stagedRoot).skip), /^a built release/);
+  const published = path.join(base, "published");
+  await fsp.cp(stagedRoot, published, { recursive: true });
+  assert.equal(git(published, "init", "-q").status, 0);
+  assert.equal(git(published, "add", "-A").status, 0);
+  assert.ok(gitFiles(published).includes("RELEASE-MANIFEST.md"));
+  assert.match(String(sourceRepositoryFiles(published).skip), /^a built release/);
+
+  // Rebuilding from the staged release, which sits in an ignored folder of the
+  // fixture work tree where git lists nothing, walks the release directories
+  // and ships the same files. The walk does not follow a junction, so a log
+  // outside the project that robocopy drops is not force-included either.
+  await writeFile(base, "outside/linked.log", "outside the project\n");
+  fs.symlinkSync(path.join(base, "outside"), path.join(stagedRoot, "pkg", "test", "fixtures", "linked"), "junction");
+  const rebuild = runReleaseBuild(path.join(stagedRoot, "build-github-release.ps1"), path.join(base, "rebuild"));
+  assert.equal(rebuild.status, 0, `rebuild failed:\n${rebuild.stdout}\n${rebuild.stderr}`);
+  assert.match(rebuild.stdout, /forceInclude candidates come from a walk of the release directories \(inside another git work tree at artifacts\/github-release\/fixture-platform-v0\.0\.1\/\)\./);
+  assert.match(rebuild.stdout, /Force-included 2 fixture file\(s\)/);
+  assert.deepEqual(listFiles(path.join(base, "rebuild", "fixture-platform-v0.0.1")), staged);
+
+  async function copyProject(name) {
+    const target = path.join(base, name);
+    for (const file of [".gitignore", "README.md", "package.json", "release-manifest.json", "build-github-release.ps1", "pkg/index.js"]) {
+      await fsp.mkdir(path.dirname(path.join(target, file)), { recursive: true });
+      await fsp.copyFile(path.join(repo, file), path.join(target, file));
+    }
+    return target;
+  }
+
+  // A work tree whose git cannot run stops the build instead of walking it.
+  const broken = await copyProject("broken");
+  await writeFile(broken, ".git", "gitdir: missing-git-dir\n");
+  const failed = runReleaseBuild(path.join(broken, "build-github-release.ps1"), path.join(base, "broken-out"));
+  assert.notEqual(failed.status, 0, "a broken work tree must fail the build");
+  assert.match(`${failed.stdout}\n${failed.stderr}`, /forceInclude\s+could\s+not\s+list\s+the\s+files\s+of\s+this\s+git\s+work\s+tree/);
+  assert.ok(!fs.existsSync(path.join(base, "broken-out", "fixture-platform-v0.0.1.zip")));
+
+  // A manifest path that leaves the project is refused before anything is copied.
+  const escaping = await copyProject("escaping");
+  await writeFile(base, "outside.txt", "outside the project\n");
+  await writeFile(escaping, "release-manifest.json", `${JSON.stringify({ ...fixtureManifest, files: [...fixtureManifest.files, "../outside.txt"] }, null, 2)}\n`);
+  const refused = runReleaseBuild(path.join(escaping, "build-github-release.ps1"), path.join(base, "escaping-out"));
+  assert.notEqual(refused.status, 0, "a manifest path outside the project must fail the build");
+  assert.match(`${refused.stdout}\n${refused.stderr}`, /files\s+entry\s+must\s+be\s+a\s+relative\s+forward-slash\s+path\s+inside\s+the\s+project/);
+  assert.ok(!fs.existsSync(path.join(base, "escaping-out", "fixture-platform-v0.0.1")));
 });
