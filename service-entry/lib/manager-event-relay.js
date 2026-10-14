@@ -29,6 +29,18 @@
 // The relay only ever issues GETs and never writes to a manager. A dropped
 // stream reconnects with a 1 s → 30 s jittered backoff; only the up and down
 // transitions are logged and published, never each retry.
+//
+// A relay stream must never keep a stopping manager alive. A manager ends
+// its event streams first when it shuts down (sse-hub close()), then flushes
+// for a while and only then stops listening; its HTTP server waits for every
+// open connection before the process exits. So a stream the manager ended
+// waits at least its advertised `retry:` before the next attempt, and every
+// stream is watched: GET /api/manager/health on a connection of its own
+// records the process behind it (pid and start time) and is repeated every
+// 15 s, every 2 s for the first minute after a stream the manager ended. A
+// refused connection (the manager stopped listening) or another process
+// (it restarted) drops the stream, which lets the old process exit and
+// reattaches the relay to the new one.
 
 const http = require("node:http");
 const { redactSecrets, redactValue } = require("../../manager-core/secret-redactor");
@@ -39,6 +51,7 @@ const UPSTREAM_HOST = "127.0.0.1";
 const EVENTS_PATH = "/api/events";
 const JOBS_TARGET = "jobs?fields=summary";
 const INSTANCES_TARGET = "instances";
+const IDENTITY_TARGET = "manager/health";
 const DEFAULT_MIN_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30000;
 const DEFAULT_INSTANCES_POLL_MS = 10000;
@@ -56,6 +69,14 @@ const FETCH_LIMIT_BYTES = 16 << 20;
 // Without a seeded map, a job last updated more than this before the stream
 // opened is history, not a change (both clocks are this host's).
 const NO_BASELINE_SLACK_MS = 5000;
+// How often the process behind a stream is checked: normally, and while a
+// stream that followed one the manager ended may belong to a process that
+// is still shutting down.
+const DEFAULT_IDENTITY_CHECK_MS = 15000;
+const DEFAULT_SUSPECT_CHECK_MS = 2000;
+// A manager reports startedAt as now minus its uptime, so it wobbles from
+// one answer to the next; only a larger move means another process.
+const START_TIME_TOLERANCE_MS = 30000;
 const SOURCE_SET = new Set(EVENT_SOURCES);
 
 function isPlainObject(value) {
@@ -147,10 +168,11 @@ function instanceList(value) {
 }
 
 // Incremental text/event-stream parser (WHATWG rules: LF, CR or CRLF line
-// ends, `:` comments, multi-line data, `id`/`retry` ignored here). onEvent
-// receives (eventName, dataText) for each frame that has data. push() returns
+// ends, `:` comments, multi-line data, `id` ignored here). onEvent receives
+// (eventName, dataText) for each frame that has data, onRetry the
+// reconnection time in ms of each all-digit `retry:` field. push() returns
 // false once a single frame grows past maxChars.
-function createSseParser({ onEvent, maxChars = DEFAULT_MAX_FRAME_CHARS } = {}) {
+function createSseParser({ onEvent, onRetry, maxChars = DEFAULT_MAX_FRAME_CHARS } = {}) {
   let buffer = "";
   let eventName = "";
   let dataLines = [];
@@ -182,6 +204,8 @@ function createSseParser({ onEvent, maxChars = DEFAULT_MAX_FRAME_CHARS } = {}) {
     } else if (field === "data") {
       dataLines.push(value);
       dataChars += value.length + 1;
+    } else if (field === "retry" && /^\d{1,9}$/.test(value) && typeof onRetry === "function") {
+      onRetry(Number(value));
     }
   }
 
@@ -279,7 +303,9 @@ function createDefaultFetchJson({ ports, httpGet, timeoutMs }) {
       finish({ ok: false, status: 0, code: "manager_unreachable", data: null });
       return;
     }
-    request.on("error", () => finish({ ok: false, status: 0, code: "manager_unreachable", data: null }));
+    // `error` carries the socket code (ECONNREFUSED: nothing listens), as the
+    // entry's manager client does.
+    request.on("error", (error) => finish({ ok: false, status: 0, code: "manager_unreachable", error: String(error?.code || error?.message || ""), data: null }));
     request.on("close", () => finish({ ok: false, status: 0, code: "manager_unreachable", data: null }));
     request.setTimeout?.(timeoutMs, () => {
       finish({ ok: false, status: 0, code: "manager_timeout", data: null });
@@ -300,6 +326,8 @@ function createManagerEventRelay(options = {}) {
   const idleTimeoutMs = positiveInt(options.idleTimeoutMs, DEFAULT_IDLE_TIMEOUT_MS);
   const fetchTimeoutMs = positiveInt(options.fetchTimeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
   const maxFrameChars = positiveInt(options.maxFrameChars, DEFAULT_MAX_FRAME_CHARS);
+  const identityCheckMs = positiveInt(options.identityCheckMs, DEFAULT_IDENTITY_CHECK_MS);
+  const suspectCheckMs = positiveInt(options.suspectCheckMs, DEFAULT_SUSPECT_CHECK_MS);
   const jitter = Number.isFinite(Number(options.jitter)) ? Math.min(1, Math.max(0, Number(options.jitter))) : DEFAULT_JITTER;
   const random = typeof options.random === "function" ? options.random : Math.random;
   const timers = {
@@ -333,8 +361,18 @@ function createManagerEventRelay(options = {}) {
       // connection sees a different number and does nothing.
       generation: 0,
       request: null,
+      // Ends the current stream from outside its callbacks (a stale process).
+      drop: null,
       retryTimer: null,
       pollTimer: null,
+      identityTimer: null,
+      // Why the last stream or attempt ended, and the manager's `retry:`.
+      lastLoss: "",
+      retryHintMs: 0,
+      // { pid, startedMs } of the process behind the current stream.
+      identity: null,
+      // Until then the identity is checked every suspectCheckMs.
+      suspectUntilMs: 0,
       // null until the first read: there is nothing to diff against yet.
       jobs: null,
       instances: null,
@@ -415,6 +453,7 @@ function createManagerEventRelay(options = {}) {
     if (!running) return;
     link.generation += 1;
     const generation = link.generation;
+    link.retryHintMs = 0;
     let ended = false;
     const lose = (reason) => {
       if (ended || generation !== link.generation) return;
@@ -447,6 +486,9 @@ function createManagerEventRelay(options = {}) {
           onEvent: (event, data) => {
             if (!ended && generation === link.generation) managerEvent(link, event, data);
           },
+          onRetry: (ms) => {
+            if (!ended && generation === link.generation) link.retryHintMs = ms;
+          },
         });
         response.setEncoding?.("utf8");
         response.on("data", (chunk) => {
@@ -466,6 +508,10 @@ function createManagerEventRelay(options = {}) {
       return;
     }
     link.request = request;
+    link.drop = (reason) => {
+      lose(reason);
+      request.destroy?.();
+    };
     request.on("error", (error) => lose(error?.code || error?.message || "error"));
     request.on("close", () => lose("closed"));
     request.setTimeout?.(idleTimeoutMs, () => {
@@ -488,12 +534,18 @@ function createManagerEventRelay(options = {}) {
     link.nativeInstances = false;
     link.snapshotSinceConnect = false;
     link.pendingJobs = null;
+    // Right after a stream the manager ended, this one may belong to the same
+    // process, still flushing before it stops listening: it is checked often
+    // until it has lasted as long as a stable connection.
+    link.identity = null;
+    link.suspectUntilMs = link.lastLoss === "ended" ? at + resetAfterMs : 0;
     if (wasDown) {
       log.info(`manager-event-relay: the ${link.id} manager event stream is back after ${Math.max(0, Math.round(downForMs / 1000))} s`);
     } else {
       log.info(`manager-event-relay: relaying jobs and instances from the ${link.id} manager`);
     }
     publish("status", { reason: "manager_up", managerId: link.id }, "entry");
+    checkIdentity(link, generation);
     seedJobs(link, generation);
     readInstances(link, { native: false });
     schedulePoll(link);
@@ -502,12 +554,20 @@ function createManagerEventRelay(options = {}) {
   function disconnected(link, reason) {
     const at = clockMs();
     link.request = null;
+    link.drop = null;
     cancel(link.pollTimer);
     link.pollTimer = null;
+    cancel(link.identityTimer);
+    link.identityTimer = null;
     link.seeding = false;
     link.pendingJobs = null;
+    link.lastLoss = reason;
     if (link.state === "connected" && at - link.connectedAtMs >= resetAfterMs) link.failures = 0;
-    const delay = backoffDelay(link.failures);
+    let delay = backoffDelay(link.failures);
+    // A stream the manager ended is its shutdown: the next attempt waits at
+    // least the manager's `retry:` (never past the cap), by which time it
+    // has usually stopped listening.
+    if (reason === "ended" && link.retryHintMs > 0) delay = Math.max(delay, Math.min(maxBackoffMs, link.retryHintMs));
     link.failures += 1;
     if (link.state !== "down") {
       const seen = link.state === "connected";
@@ -524,6 +584,52 @@ function createManagerEventRelay(options = {}) {
       link.retryTimer = null;
       connect(link);
     }, delay);
+  }
+
+  // --- the process behind a stream ----------------------------------------
+
+  // { pid, startedMs } from a GET /api/manager/health answer, or null.
+  function identityOf(result) {
+    const pid = Number(result?.data?.currentPid);
+    if (!result?.ok || !Number.isInteger(pid) || pid <= 0) return null;
+    const startedMs = Date.parse(result.data.startedAt);
+    return { pid, startedMs: Number.isFinite(startedMs) ? startedMs : null };
+  }
+
+  function sameProcess(known, seen) {
+    if (known.pid !== seen.pid) return false;
+    if (known.startedMs === null || seen.startedMs === null) return true;
+    return Math.abs(known.startedMs - seen.startedMs) <= START_TIME_TOLERANCE_MS;
+  }
+
+  // Nothing listens on the port any more. A timeout or an error answer says
+  // nothing about the stream and keeps it.
+  function refused(result) {
+    return Boolean(result) && !result.ok && (result.error === "ECONNREFUSED" || result.code === "ECONNREFUSED");
+  }
+
+  // Every check reads on a connection of its own (both manager clients use
+  // agent: false). The first answer of a stream records its process; a
+  // refused read or another process drops the stream.
+  function checkIdentity(link, generation) {
+    cancel(link.identityTimer);
+    link.identityTimer = null;
+    Promise.resolve()
+      .then(() => fetchJson(link.id, IDENTITY_TARGET, { timeoutMs: fetchTimeoutMs }))
+      .catch(() => null)
+      .then((result) => {
+        if (generation !== link.generation || !running || link.state !== "connected") return;
+        const seen = identityOf(result);
+        if (refused(result) || (seen && link.identity && !sameProcess(link.identity, seen))) {
+          link.drop?.("stale_stream");
+          return;
+        }
+        if (seen && !link.identity) link.identity = seen;
+        link.identityTimer = schedule(() => {
+          link.identityTimer = null;
+          checkIdentity(link, generation);
+        }, clockMs() < link.suspectUntilMs ? suspectCheckMs : identityCheckMs);
+      });
   }
 
   // --- manager events ----------------------------------------------------
@@ -609,7 +715,7 @@ function createManagerEventRelay(options = {}) {
       const fingerprint = stableStringify(job);
       const state = jobState(job);
       const before = previous.get(id);
-      next.set(id, { fingerprint, state });
+      next.set(id, { fingerprint, state, updatedMs: jobUpdatedMs(job) });
       if (!before || before.fingerprint !== fingerprint) changed.push(job);
       if (before && before.state !== state) stateChanged = true;
     }
@@ -648,9 +754,24 @@ function createManagerEventRelay(options = {}) {
         link.pendingJobs = null;
         if (pending) {
           link.snapshotSinceConnect = true;
-          relayJobs(link, pending);
+          relayJobs(link, list ? heldAfterSeed(link, pending) : pending);
         }
       });
+  }
+
+  // The held snapshot and the seed travel on different sockets, so the
+  // snapshot may be the older one. A job the seed shows with a later
+  // updatedAt keeps its seeded copy, and the snapshot is merged rather than
+  // taken as the whole list, so it never removes a job the seed has (managers
+  // keep their jobs; a real removal shows in the next full snapshot).
+  function heldAfterSeed(link, held) {
+    const seeded = link.jobs || new Map();
+    const jobs = held.jobs.filter((job) => {
+      const before = seeded.get(jobId(job));
+      const updated = jobUpdatedMs(job);
+      return !before || before.updatedMs === null || updated === null || updated >= before.updatedMs;
+    });
+    return { jobs, full: false, removed: held.removed };
   }
 
   // --- instances ---------------------------------------------------------
@@ -779,6 +900,7 @@ function createManagerEventRelay(options = {}) {
       link.state = "connecting";
       link.sinceMs = clockMs();
       link.failures = 0;
+      link.lastLoss = "";
       connect(link);
     }
     return api;
@@ -795,8 +917,11 @@ function createManagerEventRelay(options = {}) {
       link.sinceMs = at;
       cancel(link.retryTimer);
       cancel(link.pollTimer);
+      cancel(link.identityTimer);
       link.retryTimer = null;
       link.pollTimer = null;
+      link.identityTimer = null;
+      link.drop = null;
       link.seeding = false;
       link.pendingJobs = null;
       link.reading = null;

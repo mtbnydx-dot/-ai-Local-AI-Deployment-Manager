@@ -92,6 +92,7 @@ function fakeClock(start = T0) {
     },
     next,
     pendingCount: () => pending.size,
+    hasPending: (ms) => [...pending].some((timer) => timer.ms === ms),
     async advance(ms) {
       const target = current + ms;
       for (;;) {
@@ -116,13 +117,17 @@ function instance(id, extra = {}) {
   return { id, containerName: `ai-${id}`, running: true, status: "Up 5 minutes", port: 8000, requestsTotal: 0, models: [{ id: "qwen-test", requestsTotal: 0 }], ...extra };
 }
 
+let fakePids = 41000;
+
 // A manager with the routes the relay reads: an SSE hub at /api/events (the
-// manager-core sse-hub wire format), /api/jobs?fields=summary and
-// /api/instances. `extra` maps a path to (req, res, hit) for other routes.
+// manager-core sse-hub wire format), /api/jobs?fields=summary, /api/instances
+// and /api/manager/health (the process identity, a fake pid per manager).
+// `extra` maps a path to (req, res, hit) for other routes.
 async function fakeManager(t, name, { jobs = [], instances = [], extra = {} } = {}) {
   const seen = [];
   const streams = new Set();
-  const state = { jobs, instances, jobsStatus: 200, instancesStatus: 200 };
+  fakePids += 1;
+  const state = { jobs, instances, jobsStatus: 200, instancesStatus: 200, healthStatus: 200, pid: fakePids, startedAt: "2026-10-14T06:00:00.000Z" };
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -145,6 +150,10 @@ async function fakeManager(t, name, { jobs = [], instances = [], extra = {} } = 
       if (pathname === "/api/instances") {
         res.writeHead(state.instancesStatus, { "content-type": "application/json" });
         return res.end(JSON.stringify({ ok: true, primaryContainer: `ai-${name}`, instances: state.instances }));
+      }
+      if (pathname === "/api/manager/health") {
+        res.writeHead(state.healthStatus, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ ok: true, engine: name, managerId: name, currentPid: state.pid, startedAt: state.startedAt }));
       }
       res.writeHead(404, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: "not found" }));
@@ -212,7 +221,7 @@ async function connectedRelay(t, managers, options = {}) {
   for (const manager of managers) {
     await waitFor(() => linkOf(made.relay, manager.name)?.state === "connected" && manager.streams.size === 1, 3000, `${manager.name} connected`);
     // The connect-time reads are served before anything else is changed.
-    await waitFor(() => manager.hits("/api/jobs") >= 1 && manager.hits("/api/instances") >= 1, 3000, `${manager.name} seed reads`);
+    await waitFor(() => manager.hits("/api/jobs") >= 1 && manager.hits("/api/instances") >= 1 && manager.hits("/api/manager/health") >= 1, 3000, `${manager.name} seed reads`);
   }
   return made;
 }
@@ -221,12 +230,15 @@ async function connectedRelay(t, managers, options = {}) {
 
 test("the SSE parser follows the wire rules and reports an oversize frame", () => {
   const events = [];
-  const parser = createSseParser({ onEvent: (name, data) => events.push([name, data]), maxChars: 64 });
+  const retries = [];
+  const parser = createSseParser({ onEvent: (name, data) => events.push([name, data]), onRetry: (ms) => retries.push(ms), maxChars: 64 });
   assert.equal(parser.push("retry: 3000\n\n: ping 1\n\nid: 7\nevent: jobs\ndata: [1,"), true);
+  assert.deepEqual(retries, [3000], "an all-digit retry field is reported");
   assert.deepEqual(events, []);
   parser.push("2]\n\nevent: instances\r\ndata: {\"a\":1}\r");
   parser.push("\n\r\ndata: one\ndata: two\n\n");
   parser.push("event: lonely\n\n");
+  parser.push("retry: 2s\nretry: -5\nretry:\n\n");
   parser.push("data:no-space\r\rdata\n\n");
   assert.deepEqual(events, [
     ["jobs", "[1,2]"],
@@ -235,6 +247,7 @@ test("the SSE parser follows the wire rules and reports an oversize frame", () =
     ["message", "no-space"],
     ["message", ""],
   ]);
+  assert.deepEqual(retries, [3000], "a retry field that is not all digits is ignored");
   assert.equal(parser.push(`event: jobs\ndata: ${"x".repeat(80)}`), false, "a frame past the cap is reported");
 });
 
@@ -371,6 +384,40 @@ test("a failed seed read never floods: only jobs updated since the stream opened
   assert.equal(llama.hits("/api/jobs"), 0, "the stub answered every read");
 });
 
+test("a snapshot held during the seed read never regresses a job or removes one the seed has", async (t) => {
+  const at = (seconds) => new Date(T0 + seconds * 1000).toISOString();
+  // The snapshot was built before the seed answer: s was created and a
+  // finished in between, but b moved on again after the seed.
+  const seed = [job("s", "running", { updatedAt: at(2) }), job("a", "done", { updatedAt: at(2) }), job("b", "running", { updatedAt: at(2) })];
+  const held = [job("a", "running", { updatedAt: at(1) }), job("b", "done", { updatedAt: at(3) })];
+  const vllm = await fakeManager(t, "vllm");
+  let releaseSeed = null;
+  const fetchJson = async (managerId, target) => {
+    if (target.startsWith("jobs")) {
+      await new Promise((resolve) => {
+        releaseSeed = resolve;
+      });
+      return { ok: true, status: 200, data: seed };
+    }
+    return { ok: true, status: 200, data: { instances: [] } };
+  };
+  const { relay, published } = makeRelay(t, [vllm], { fetchJson });
+  relay.start();
+  await waitFor(() => vllm.streams.size === 1 && releaseSeed, 3000, "the stream and the seed read");
+  vllm.send("jobs", held);
+  await waitFor(() => linkOf(relay).lastEventAt, 3000, "the held snapshot");
+  releaseSeed();
+  await waitFor(() => published("jobs").length === 1, 3000, "the reconciled delta");
+  assert.deepEqual(published("jobs")[0].data, { managerId: "vllm", jobs: [held[1]], removed: [] });
+
+  // The map now holds the newest copy of every job: repeating it is silent.
+  const current = [seed[0], seed[1], held[1]];
+  vllm.send("jobs", current);
+  vllm.send("jobs", [job("c", "running", { updatedAt: at(4) }), ...current]);
+  await waitFor(() => published("jobs").length === 2, 3000, "the next delta");
+  assert.deepEqual(published("jobs")[1].data, { managerId: "vllm", jobs: [job("c", "running", { updatedAt: at(4) })], removed: [] });
+});
+
 // --- connection, backoff and status ---------------------------------------
 
 // A stand-in for http.get: "refuse" fails like a stopped manager, "accept"
@@ -501,6 +548,164 @@ test("the backoff jitter stays within ±20 % and never passes the cap", async (t
     relay.stop();
     assert.equal(clock.pendingCount(), 0, "stop cancels the retry timer");
   }
+});
+
+test("a stream the manager ended waits for its retry hint before the next attempt; a dropped one does not", async (t) => {
+  const clock = fakeClock();
+  const stub = stubHttpGet(clock);
+  stub.mode = "accept";
+  const { relay } = makeRelay(t, [{ id: "vllm", port: 5999 }], { now: clock.now, timers: clock.timers, httpGet: stub.httpGet, fetchJson: emptyFetch });
+  relay.start();
+  const endWith = async (hint, finish) => {
+    await waitFor(() => linkOf(relay).state === "connected", 2000, "the stream");
+    const { response } = stub.current;
+    response.write(`retry: ${hint}\n\n`);
+    await flush();
+    finish(response);
+    await waitFor(() => linkOf(relay).state === "down", 2000, "the end of the stream");
+    const delay = clock.next().at - clock.now();
+    await clock.advance(delay);
+    return delay;
+  };
+  // A graceful end is a manager shutting down: the 1 s backoff becomes 5 s.
+  assert.equal(await endWith(5000, (response) => response.end()), 5000);
+  // A hint is honoured up to the backoff cap only.
+  assert.equal(await endWith(3600000, (response) => response.end()), 30000);
+  // A broken stream keeps the plain backoff (1 s doubled twice).
+  assert.equal(await endWith(5000, (response) => response.destroy(Object.assign(new Error("reset"), { code: "ECONNRESET" }))), 4000);
+  await waitFor(() => linkOf(relay).state === "connected", 2000, "the last reconnect");
+  assert.equal(linkOf(relay).reconnects, 3);
+});
+
+test("a stream is dropped when its manager stops listening or another process answers", async (t) => {
+  const clock = fakeClock();
+  const vllm = await fakeManager(t, "vllm");
+  const { relay, logger } = await connectedRelay(t, [vllm], { now: clock.now, timers: clock.timers });
+  assert.equal(vllm.hits("/api/manager/health"), 1, "the process is recorded on connect");
+  // The next check is due 15 s after an answer arrived.
+  const nextCheck = (count) => waitFor(() => vllm.hits("/api/manager/health") === count && clock.hasPending(15000), 3000, `check ${count}`);
+  await nextCheck(1);
+
+  // Answers that say nothing about the process keep the stream: an error
+  // status, then the start time moving by a few seconds (it is derived from
+  // the manager's uptime on every answer).
+  vllm.state.healthStatus = 500;
+  await clock.advance(15000);
+  await nextCheck(2);
+  vllm.state.healthStatus = 200;
+  vllm.state.startedAt = "2026-10-14T06:00:04.000Z";
+  await clock.advance(15000);
+  await nextCheck(3);
+  assert.equal(linkOf(relay).state, "connected");
+  assert.equal(vllm.streams.size, 1);
+
+  // The manager restarted on the same port: another pid answers.
+  vllm.state.pid += 1;
+  await clock.advance(15000);
+  await waitFor(() => linkOf(relay).state === "down", 3000, "the drop after a restart");
+  assert.ok(logger.lines.some((item) => item.line.includes("lost the vllm manager event stream (stale_stream)")));
+  await waitFor(() => vllm.streams.size === 0, 3000, "the stale stream to close");
+  await clock.advance(clock.next().at - clock.now());
+  await waitFor(() => linkOf(relay).state === "connected" && vllm.streams.size === 1, 3000, "the reconnect");
+  await nextCheck(5);
+
+  // The manager stopped listening but its open stream would keep it alive:
+  // the next check is refused and the relay lets go, so the server closes.
+  let serverClosed = false;
+  vllm.server.close(() => {
+    serverClosed = true;
+  });
+  await clock.advance(15000);
+  await waitFor(() => serverClosed, 3000, "the manager's server to close");
+  assert.equal(linkOf(relay).state, "down");
+  assert.equal(linkOf(relay).reconnects, 1);
+  assertOnlyGets(vllm);
+});
+
+test("a manager that shuts down slowly is let go, and its successor on the same port is relayed", async (t) => {
+  // The real manager-core hub and lifecycle: onShutdown closes the hub first
+  // and flushes for a while before the server stops listening, longer than
+  // the relay's first retry, so the relay reattaches to the stopping process.
+  const { createSseHub } = require("../../manager-core/sse-hub");
+  const { createManagerLifecycle } = require("../../manager-core/manager-lifecycle");
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "entry-relay-lifecycle-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const silent = { log() {}, warn() {}, error() {} };
+  const startManager = async (port, { pid, tailMs, jobs }) => {
+    const hub = createSseHub();
+    const eventRequests = [];
+    const handler = (req, res) => {
+      const pathname = req.url.split("?")[0];
+      const json = (body) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      };
+      if (req.method !== "GET") {
+        res.writeHead(405);
+        return res.end();
+      }
+      if (pathname === "/api/events") {
+        eventRequests.push(Date.now());
+        return hub.handleRequest(req, res);
+      }
+      if (pathname === "/api/jobs") return json(jobs);
+      if (pathname === "/api/instances") return json({ ok: true, instances: [] });
+      if (pathname === "/api/manager/health") return json({ ok: true, currentPid: pid, startedAt: new Date(T0 + pid).toISOString() });
+      res.writeHead(404);
+      return res.end();
+    };
+    const app = {
+      listen: (listenPort, host, onListening) => {
+        const server = http.createServer(handler);
+        server.listen(listenPort, host, onListening);
+        return server;
+      },
+    };
+    const lifecycle = createManagerLifecycle({
+      app,
+      host: "127.0.0.1",
+      port,
+      label: "fake manager",
+      pidFile: path.join(tempDir, `manager-${pid}.pid`),
+      logger: silent,
+      onShutdown: async () => {
+        hub.close();
+        await new Promise((resolve) => setTimeout(resolve, tailMs));
+      },
+    });
+    const server = await lifecycle.startManager();
+    await new Promise((resolve, reject) => {
+      if (server.listening) return resolve();
+      server.once("listening", resolve);
+      server.once("error", reject);
+      return undefined;
+    });
+    return { hub, lifecycle, server, eventRequests };
+  };
+
+  const first = await startManager(0, { pid: 41001, tailMs: 1500, jobs: [] });
+  const port = first.server.address().port;
+  const { relay, published } = makeRelay(t, [{ id: "vllm", port }], { minBackoffMs: 100, maxBackoffMs: 300, suspectCheckMs: 50 });
+  relay.start();
+  await waitFor(() => linkOf(relay).state === "connected" && first.hub.clientCount() === 1, 3000, "the first stream");
+
+  let shutDown = false;
+  const shutdown = first.lifecycle.shutdownManager("api").then(() => {
+    shutDown = true;
+  });
+  await waitFor(() => shutDown, 5000, "the manager shutdown to finish");
+  await shutdown;
+  assert.equal(first.eventRequests.length, 2, "the relay reattached while the manager was flushing");
+
+  const second = await startManager(port, { pid: 41002, tailMs: 0, jobs: [] });
+  t.after(async () => {
+    relay.stop();
+    await second.lifecycle.shutdownManager("test");
+  });
+  await waitFor(() => linkOf(relay).state === "connected" && second.hub.clientCount() === 1, 5000, "the stream to the new manager");
+  second.hub.broadcast("jobs", [job("after-restart", "running", { updatedAt: new Date().toISOString() })]);
+  await waitFor(() => published("jobs").some((event) => event.data.jobs.some((item) => item.id === "after-restart")), 3000, "the new manager's job");
+  assert.ok(linkOf(relay).reconnects >= 2);
 });
 
 test("a manager answering without an event stream is down, not connected", async (t) => {
@@ -719,7 +924,7 @@ test("no non-GET request ever reaches a manager", async (t) => {
   await relay.poke("vllm");
   assert.ok(vllm.seen.length >= 8, `requests: ${vllm.seen.map((hit) => hit.url).join(", ")}`);
   assertOnlyGets(vllm);
-  assert.deepEqual([...new Set(vllm.seen.map((hit) => hit.url))].sort(), ["/api/events", "/api/instances", "/api/jobs?fields=summary"]);
+  assert.deepEqual([...new Set(vllm.seen.map((hit) => hit.url))].sort(), ["/api/events", "/api/instances", "/api/jobs?fields=summary", "/api/manager/health"]);
 });
 
 test("the route module sets ctx.relay, answers no route and is not started in smoke runs", async (t) => {

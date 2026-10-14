@@ -981,8 +981,9 @@ test("the entry mounts the proxy right after the event bus and serves /api/m/* t
   t.after(() => closeServer(http5176));
 
   // The manager event relay (ENT-EV3) mounts with the table and reads the
-  // same fake manager (its stream, jobs and instances); those are not proxied.
-  const relayReads = new Set(["/api/events", "/api/jobs?fields=summary", "/api/instances"]);
+  // same fake manager (its stream, jobs, instances and process identity);
+  // those are not proxied.
+  const relayReads = new Set(["/api/events", "/api/jobs?fields=summary", "/api/instances", "/api/manager/health"]);
   const proxiedSeen = () => vllm.seen.filter((hit) => !relayReads.has(hit.url));
   const engines = await send(port, "/api/m/vllm/engines?model=x");
   assert.equal(engines.status, 200);
