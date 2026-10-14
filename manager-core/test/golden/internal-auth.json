@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "description": "PUB-24 internal-auth goldens. Billing entries were captured from the pre-PUB-24 signBillingRequest/buildBillingRequestHeaders; machine entries follow the 05 section 5.7 formula. All tokens are fake.",
+  "billing": [
+    {
+      "name": "authorize-vllm-json",
+      "token": "fake-internal-token-0001",
+      "method": "POST",
+      "path": "/internal/billing/authorize",
+      "managerId": "vllm-manager",
+      "ts": 1800000000000,
+      "body": "{\"requestId\":\"req-golden-1\",\"managerId\":\"vllm-manager\",\"clientId\":\"golden-client\",\"model\":\"demo\"}",
+      "expected": {
+        "bodySha256": "55a45bb122e0ea89a065b8dc847cefe6270c1689591b56961194869f5d8df264",
+        "signature": "lQjRqjDWynbSJ9i5fzVSuC2ECXirZEI_l01ONKHseeg",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-ai-billing-manager": "vllm-manager",
+          "x-ai-billing-ts": "1800000000000",
+          "x-ai-billing-signature": "lQjRqjDWynbSJ9i5fzVSuC2ECXirZEI_l01ONKHseeg",
+          "x-ai-billing-version": "1"
+        }
+      }
+    },
+    {
+      "name": "settle-llama-unicode",
+      "token": "fake-internal-token-0002",
+      "method": "POST",
+      "path": "/internal/billing/settle",
+      "managerId": "llama-manager",
+      "ts": 1800000000123,
+      "body": "{\"requestId\":\"req-golden-2\",\"managerId\":\"llama-manager\",\"note\":\"中文 计费 ✓\",\"usage\":{\"input\":12,\"output\":34}}",
+      "expected": {
+        "bodySha256": "e7e35f2197e1d3b7e6ade68c6000f2aa9d3f7a7dbb5007bf70f3866efc2eefd6",
+        "signature": "h8e4Q7C1gGn_wSphVaSGxDTyJFyK8V_C73zhnZ-lfaw",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-ai-billing-manager": "llama-manager",
+          "x-ai-billing-ts": "1800000000123",
+          "x-ai-billing-signature": "h8e4Q7C1gGn_wSphVaSGxDTyJFyK8V_C73zhnZ-lfaw",
+          "x-ai-billing-version": "1"
+        }
+      }
+    },
+    {
+      "name": "lowercase-method-query-mixed-case-manager-empty-body",
+      "token": "fake-internal-token-0003",
+      "method": "post",
+      "path": "/internal/billing/authorize?trace=1&x=y",
+      "managerId": " VLLM-Manager ",
+      "ts": 1800000060000,
+      "body": "",
+      "expected": {
+        "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "signature": "WO0bDJtetNNlub2VOanFEPjD6Jlzt9SNbBkzBcCz6Zc",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-ai-billing-manager": "vllm-manager",
+          "x-ai-billing-ts": "1800000060000",
+          "x-ai-billing-signature": "WO0bDJtetNNlub2VOanFEPjD6Jlzt9SNbBkzBcCz6Zc",
+          "x-ai-billing-version": "1"
+        }
+      }
+    },
+    {
+      "name": "buffer-body-custom-manager",
+      "token": "fake+internal/token=0004",
+      "method": "PUT",
+      "path": "/internal/billing/settle",
+      "managerId": "billing.vllm_01",
+      "ts": 1799999999999,
+      "bodyBase64": "AAH+/3t9Cg==",
+      "expected": {
+        "bodySha256": "a01ccfca3175dc69e523f0728cba76ebe00e47b18e1f70cdd24df4b5e0a7e941",
+        "signature": "Cd4kkhAIBbMpJjApA8XxBlXJKXLOJAVVbfOfnBTXJSQ",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-ai-billing-manager": "billing.vllm_01",
+          "x-ai-billing-ts": "1799999999999",
+          "x-ai-billing-signature": "Cd4kkhAIBbMpJjApA8XxBlXJKXLOJAVVbfOfnBTXJSQ",
+          "x-ai-billing-version": "1"
+        }
+      }
+    },
+    {
+      "name": "default-method-whitespace-body",
+      "token": "fake-internal-token-0005",
+      "method": null,
+      "path": "/internal/billing/authorize",
+      "managerId": "llama-manager",
+      "ts": 1800000999999,
+      "body": "{\n  \"requestId\": \"req-golden-5\",\n  \"managerId\": \"llama-manager\"\n}\n",
+      "expected": {
+        "bodySha256": "e25d6dd399f78250030eb25588999fc57585581c8e5a806b27fbc7754434a778",
+        "signature": "DQh_7t0Mut7IW6uImHg-BrnROLflEtnRdy2gjw4MLpo",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-ai-billing-manager": "llama-manager",
+          "x-ai-billing-ts": "1800000999999",
+          "x-ai-billing-signature": "DQh_7t0Mut7IW6uImHg-BrnROLflEtnRdy2gjw4MLpo",
+          "x-ai-billing-version": "1"
+        }
+      }
+    }
+  ],
+  "machine": [
+    {
+      "name": "supervisor-sse-with-query",
+      "token": "fake-internal-token-0101",
+      "method": "GET",
+      "pathWithQuery": "/api/events?client=supervisor&types=status,notification",
+      "principal": "system:supervisor",
+      "ts": 1800000000000,
+      "body": "",
+      "expected": {
+        "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "signature": "dszug5hML5UCcIyGZaEYgU3qmD_YDDkhtjWmIYNX65E",
+        "headers": {
+          "x-ai-internal-principal": "system:supervisor",
+          "x-ai-internal-ts": "1800000000000",
+          "x-ai-internal-signature": "dszug5hML5UCcIyGZaEYgU3qmD_YDDkhtjWmIYNX65E",
+          "x-ai-internal-body-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "x-ai-internal-version": "1"
+        }
+      }
+    },
+    {
+      "name": "hub-shim-post-json",
+      "token": "fake-internal-token-0102",
+      "method": "POST",
+      "pathWithQuery": "/api/hub/downloads",
+      "principal": "system:hub-shim:vllm",
+      "ts": 1800000000456,
+      "body": "{\"repo\":\"example/demo-model\",\"revision\":\"main\"}",
+      "expected": {
+        "bodySha256": "7ec56b17f4495053446fb0a9a938177fd5590cd3b66d77579a37ac2db8470107",
+        "signature": "0enHFFJPOhJEphrqo31SWcY_wBANoRfDnmvm_dDj33g",
+        "headers": {
+          "x-ai-internal-principal": "system:hub-shim:vllm",
+          "x-ai-internal-ts": "1800000000456",
+          "x-ai-internal-signature": "0enHFFJPOhJEphrqo31SWcY_wBANoRfDnmvm_dDj33g",
+          "x-ai-internal-body-sha256": "7ec56b17f4495053446fb0a9a938177fd5590cd3b66d77579a37ac2db8470107",
+          "x-ai-internal-version": "1"
+        }
+      }
+    },
+    {
+      "name": "cli-shutdown-empty-body",
+      "token": "fake-internal-token-0103",
+      "method": "POST",
+      "pathWithQuery": "/api/shutdown",
+      "principal": "system:cli",
+      "ts": 1800000001000,
+      "body": "",
+      "expected": {
+        "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "signature": "bxUKcrXSGKoAsnY7KqU1JcPyAp90QxMVdegdNChuaT8",
+        "headers": {
+          "x-ai-internal-principal": "system:cli",
+          "x-ai-internal-ts": "1800000001000",
+          "x-ai-internal-signature": "bxUKcrXSGKoAsnY7KqU1JcPyAp90QxMVdegdNChuaT8",
+          "x-ai-internal-body-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "x-ai-internal-version": "1"
+        }
+      }
+    }
+  ]
+}

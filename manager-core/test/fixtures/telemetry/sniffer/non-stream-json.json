@@ -1,0 +1,33 @@
+{
+  "description": "Non-stream chat completion JSON delivered in two chunks: usage and choices[0].finish_reason are read once the body is complete; no first-token time.",
+  "options": {
+    "protocol": "openai",
+    "stream": false,
+    "contentType": "application/json"
+  },
+  "chunks": [
+    {
+      "tMs": 900,
+      "text": "{\"id\":\"chatcmpl-fixture-2\",\"object\":\"chat.completion\",\"created\":1760400000,\"m"
+    },
+    {
+      "tMs": 905,
+      "text": "odel\":\"local-current\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"A complete but cut-off answer\"},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":128,\"total_tokens\":428,\"prompt_tokens_details\":{\"cached_tokens\":256}}}"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "reported",
+      "promptTokens": 300,
+      "cachedTokens": 256,
+      "outputTokens": 128,
+      "reasoningTokens": null,
+      "totalTokens": 428
+    },
+    "finishReason": "length",
+    "firstTokenAt": null,
+    "engineTimings": null,
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}

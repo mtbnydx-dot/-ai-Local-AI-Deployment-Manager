@@ -1,0 +1,45 @@
+{
+  "description": "llama.cpp server stream: the final chunk carries usage and llama.cpp `timings` (prompt_ms, predicted_per_second, cache_n).",
+  "options": {
+    "protocol": "openai",
+    "stream": true,
+    "contentType": "text/event-stream"
+  },
+  "chunks": [
+    {
+      "tMs": 5,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 240,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 260,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" there\"},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 300,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"completion_tokens\":16,\"prompt_tokens\":512,\"total_tokens\":528},\"timings\":{\"cache_n\":448,\"prompt_n\":64,\"prompt_ms\":187.5,\"prompt_per_token_ms\":2.9296875,\"prompt_per_second\":341.33,\"predicted_n\":16,\"predicted_ms\":260.4,\"predicted_per_token_ms\":16.275,\"predicted_per_second\":61.44}}\n\ndata: [DONE]\n\n"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "reported",
+      "promptTokens": 512,
+      "cachedTokens": null,
+      "outputTokens": 16,
+      "reasoningTokens": null,
+      "totalTokens": 528
+    },
+    "finishReason": "length",
+    "firstTokenAt": 240,
+    "engineTimings": {
+      "promptMs": 187.5,
+      "decodeTps": 61.44,
+      "cachedTokens": 448
+    },
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}

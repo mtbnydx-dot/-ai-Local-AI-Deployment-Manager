@@ -76,6 +76,7 @@ call :checkpy "tts-platform\workers\voxcpm_worker.py"
 call :checkpy "tts-platform\workers\qwen_design_worker.py"
 call :testpy
 call :i18nReport
+call :testscripts
 call :test "manager-core"
 call :test "service-entry"
 call :test "platform-mcp"
@@ -196,6 +197,22 @@ echo.
 echo == i18n coverage report (static manager strings without an English entry) ==
 node "%ROOT%scripts\check-i18n.js"
 call :record "i18n coverage report" %ERRORLEVEL%
+exit /b 0
+
+:testscripts
+rem Root script tests (scripts\test), including the release-manifest check that
+rem every tracked file is shipped or excluded with a reason.
+if not exist "%ROOT%package.json" (
+  call :skip "scripts tests" "package.json not found"
+  exit /b 0
+)
+echo.
+echo == Testing scripts ==
+pushd "%ROOT%" >nul || (call :record "scripts tests" 1 & exit /b 0)
+call npm run test:scripts
+set "CODE=%ERRORLEVEL%"
+popd >nul
+call :record "scripts tests" %CODE%
 exit /b 0
 
 :test
