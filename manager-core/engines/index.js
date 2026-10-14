@@ -13,6 +13,8 @@
 // runs is the one CONFIG runs today.
 
 const descriptorSchema = require("./descriptor-schema");
+const dockerSegments = require("./adapters/_docker-segments");
+const llamacppAdapter = require("./adapters/llamacpp");
 const registry = require("./registry");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
@@ -29,6 +31,9 @@ module.exports = {
   registerEngineRoutes: routes.registerEngineRoutes,
   buildEnginesPayload: routes.buildEnginesPayload,
   validateDraftRequest: routes.validateDraftRequest,
+  // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
+  adapters: Object.freeze({ llamacpp: llamacppAdapter }),
+  renderRunArgs: dockerSegments.renderRunArgs,
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,

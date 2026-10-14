@@ -1,0 +1,16 @@
+{
+  "auto_map": {
+    "AutoTokenizer": [
+      "tokenization_kimi.TikTokenTokenizer",
+      null
+    ]
+  },
+  "bos_token": "[BOS]",
+  "chat_template": "{#- Synthetic Kimi-K2-style template for tests; not the upstream template. -#}\n{%- if tools -%}<|im_system|>tool_declare<|im_middle|>{{ tools | tojson }}<|im_end|>{%- endif -%}\n{%- for message in messages -%}\n{%- if message.role == 'user' -%}<|im_user|>user<|im_middle|>{{ message.content }}<|im_end|>\n{%- elif message.role == 'assistant' -%}<|im_assistant|>assistant<|im_middle|>{{ message.content or '' }}\n{%- if message.tool_calls -%}<|tool_calls_section_begin|>\n{%- for call in message.tool_calls -%}<|tool_call_begin|>functions.{{ call.function.name }}:{{ loop.index0 }}<|tool_call_argument_begin|>{{ call.function.arguments | tojson }}<|tool_call_end|>{%- endfor -%}\n<|tool_calls_section_end|>\n{%- endif -%}<|im_end|>\n{%- elif message.role == 'tool' -%}<|im_system|>tool<|im_middle|>## Return of {{ message.tool_call_id }}\n{{ message.content }}<|im_end|>\n{%- else -%}<|im_system|>{{ message.role }}<|im_middle|>{{ message.content }}<|im_end|>\n{%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}<|im_assistant|>assistant<|im_middle|>{%- endif -%}",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "[EOS]",
+  "model_max_length": 1048576,
+  "pad_token": "[PAD]",
+  "tokenizer_class": "TikTokenTokenizer",
+  "unk_token": "[UNK]"
+}

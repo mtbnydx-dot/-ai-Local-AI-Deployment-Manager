@@ -1,0 +1,14 @@
+{
+  "add_bos_token": false,
+  "add_eos_token": false,
+  "bos_token": "<｜begin▁of▁sentence｜>",
+  "chat_template": "{#- Synthetic DeepSeek-V3-style template for tests; not the upstream template. -#}\n{{ bos_token }}{%- for message in messages %}\n{%- if message.role == 'system' %}{{ message.content }}\n{%- elif message.role == 'user' %}<｜User｜>{{ message.content }}\n{%- elif message.role == 'assistant' and message.tool_calls %}<｜Assistant｜><｜tool▁calls▁begin｜>\n{%- for call in message.tool_calls %}<｜tool▁call▁begin｜>function<｜tool▁sep｜>{{ call.function.name }}\n```json\n{{ call.function.arguments | tojson }}\n```<｜tool▁call▁end｜>{%- endfor %}<｜tool▁calls▁end｜><｜end▁of▁sentence｜>\n{%- elif message.role == 'assistant' %}<｜Assistant｜>{{ message.content }}<｜end▁of▁sentence｜>\n{%- elif message.role == 'tool' %}<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>{{ message.content }}<｜tool▁output▁end｜><｜tool▁outputs▁end｜>\n{%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}<｜Assistant｜><think>\n{% endif %}",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "<｜end▁of▁sentence｜>",
+  "legacy": true,
+  "model_max_length": 163840,
+  "pad_token": "<｜end▁of▁sentence｜>",
+  "tokenizer_class": "LlamaTokenizerFast",
+  "unk_token": null,
+  "use_default_system_prompt": false
+}

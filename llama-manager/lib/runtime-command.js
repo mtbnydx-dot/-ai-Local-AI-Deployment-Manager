@@ -1,5 +1,26 @@
-const path = require("path");
 const { redactSecrets } = require("../../manager-core/secret-redactor");
+const runtimeManifest = require("../../manager-core/runtime-manifest");
+const llamacpp = require("../../manager-core/engines/adapters/llamacpp");
+const { renderRunArgs } = require("../../manager-core/engines/adapters/_docker-segments");
+
+// Thin wrapper over the llamacpp engine adapter (docs/overhaul/01-engines.md
+// §7, ENG-4). buildLlamaRuntimeCommand keeps its legacy signature and return
+// shape: it maps the run options to a plan, resolves the runtime the launch
+// runs, calls adapter.buildLaunch, replays the adapter's log lines through
+// appendLog and renders runArgs with the shared docker renderer.
+
+const ENGINE_ID = llamacpp.id;
+
+// The Muse Glimmer preset as an applied recipe, until recipes are data
+// (ENG-6, recipe llama-muse-glimmer) and the resolver selects them (ENG-7): the
+// retired Muse runtime and its sampling values. The adapter reads only the
+// recipe, never the model family.
+const MUSE_GLIMMER_RECIPE = Object.freeze({
+  id: "llama-muse-glimmer",
+  runtime: Object.freeze({ ref: "llamaMuse" }),
+  values: Object.freeze({ temperature: 1, topP: 0.95, topK: 64 }),
+  legacy: Object.freeze({ presetLabel: "Muse Glimmer" }),
+});
 
 function createLlamaRuntimeCommandBuilder(deps) {
   const {
@@ -18,9 +39,7 @@ function createLlamaRuntimeCommandBuilder(deps) {
     resolveLaunchModel,
   } = deps;
 
-  function formatDockerPublishArgs(publishArgs) {
-    return publishArgs.map((arg) => `-p ${arg}`).join(" ");
-  }
+  const formatDockerPublishArgs = llamacpp.formatDockerPublishArgs;
 
   // The builder no longer puts secrets in argv; this stays as a guard for the
   // stored launchCommand and legacy argv, using the platform redactor.
@@ -32,231 +51,112 @@ function createLlamaRuntimeCommandBuilder(deps) {
     return args.map((arg) => redactSecrets(String(arg), { secrets, patterns: false, minSecretLength: 6 }));
   }
 
-  function buildLlamaRuntimeCommand(job, opts) {
+  function selectRecipe(opts, launch) {
+    const architecture = String(launch.selectedModel?.architecture || "").trim().toLowerCase();
+    return architecture === "muse-glimmer" || /muse[-_. ]glimmer/i.test(String(opts.model || "")) ? MUSE_GLIMMER_RECIPE : null;
+  }
+
+  // The images this manager runs for its manifest runtimes; CONFIG applied
+  // env > manifest the way the registry's envOverride does.
+  function slotImage(manifestKey) {
+    if (manifestKey === "llama") return CONFIG.image;
+    if (manifestKey === "llamaMuse") return CONFIG.museImage;
+    return "";
+  }
+
+  function manifestRuntime(selector) {
+    try {
+      return runtimeManifest.resolveRuntime(ENGINE_ID, selector);
+    } catch {
+      return null;
+    }
+  }
+
+  // RuntimeRef of the image a launch runs (01 §5). An image this manager
+  // configured for a manifest runtime keeps that runtime's identity and
+  // features; any other image resolves through the manifest, and one the
+  // manifest does not know is a custom runtime with features {}, so every
+  // gated control reads as unsupported. default marks the configured default
+  // image, which supportsB10630Controls compared against before.
+  function resolveRuntime(image) {
+    const slotKey = ["llama", "llamaMuse"].find((key) => slotImage(key) && slotImage(key) === image);
+    const ref = (slotKey && manifestRuntime({ manifestKey: slotKey })) || manifestRuntime({ image });
+    return {
+      runtimeId: ref?.runtimeId || `${ENGINE_ID}@custom`,
+      manifestKey: ref?.manifestKey ?? null,
+      image,
+      features: ref?.features ? { ...ref.features } : {},
+      compatVersion: ref?.compatVersion ?? null,
+      status: ref?.status || "unpinned",
+      default: image === CONFIG.image,
+    };
+  }
+
+  /**
+   * Legacy run options -> { plan, ctx } for adapter.buildLaunch. The model is
+   * resolved here (filesystem I/O), as the builder did first.
+   */
+  function planLlamaLaunch(job, opts) {
     const launch = opts.launch?.selectedModel ? opts.launch : resolveLaunchModel(opts.model, "gguf");
-    const modelArg = launch.modelArg;
-    const selectedArchitecture = String(launch.selectedModel?.architecture || "").trim().toLowerCase();
-    const museGlimmer = selectedArchitecture === "muse-glimmer" || /muse[-_. ]glimmer/i.test(String(opts.model || ""));
-    const runtimeImage = String(opts.runtimeImage || (museGlimmer ? CONFIG.museImage : "") || CONFIG.image);
-    const supportsB10630Controls = runtimeImage === CONFIG.image;
-    const reasoningEffort = String(opts.reasoningEffort || "default");
-    const reasoningBudget = Number.isInteger(Number(opts.reasoningBudget)) ? Number(opts.reasoningBudget) : -1;
-    const mmprojDevice = String(opts.mmprojDevice || "auto").trim() || "auto";
-    const remoteRepo = !path.isAbsolute(opts.model)
-      && /^[^/\s]+\/[^/\s]+/.test(opts.model)
-      && !String(opts.model).toLowerCase().endsWith(".gguf");
+    const recipe = selectRecipe(opts, launch);
+    const runtimeImage = String(opts.runtimeImage || (recipe ? slotImage(recipe.runtime.ref) : "") || CONFIG.image);
+    const plan = llamacpp.planFromRunOptions(opts, { jobId: job?.id, recipe, normalizeDefaultTrueBoolean });
+    const ctx = {
+      runtime: resolveRuntime(runtimeImage),
+      host: {
+        kind: "docker",
+        containerPort: 8080,
+        config: {
+          containerName: CONFIG.containerName,
+          managerLabelValue: CONFIG.managerId,
+          hfCache: CONFIG.hfCache,
+          modelsRoot: CONFIG.modelsRoot,
+        },
+        labelKeys: { manager: MANAGER_LABEL_KEY, engine: MANAGER_ENGINE_LABEL_KEY, apiKeyRef: MANAGER_APIKEY_REF_LABEL_KEY },
+        modelMountArgs: getModelMountArgs(),
+      },
+      model: { ...launch, ref: opts.model },
+      secrets: { hfToken: process.env.HF_TOKEN },
+      launchId: null,
+      toContainerPath: windowsPathToContainerPath,
+      dockerGpuArg,
+      dockerPublishArgs,
+      publishArgsToDockerRunArgs,
+      normalizeGpuIds,
+    };
+    return { plan, ctx };
+  }
 
-    if (remoteRepo) {
-      appendLog(job, `Remote GGUF repo mode: ${opts.model}`);
-    } else {
-      appendLog(job, `GGUF model: using ${modelArg}`);
+  function buildLlamaRuntimeCommand(job, opts) {
+    const { plan, ctx } = planLlamaLaunch(job, opts);
+    let command;
+    try {
+      command = llamacpp.buildLaunch(plan, ctx);
+    } catch (error) {
+      for (const line of error?.logs || []) appendLog(job, line);
+      throw error;
     }
-    if (launch.selectedGgufFile && (launch.ggufInventory?.models?.length || 0) > 1) {
-      appendLog(job, `Multiple GGUF model variants found; selected: ${path.basename(launch.selectedGgufFile)}`);
-    }
-    if (museGlimmer && runtimeImage !== CONFIG.image) {
-      appendLog(job, `Muse Glimmer runtime image: ${runtimeImage}`);
-    }
-    const textOnlyMode = normalizeDefaultTrueBoolean(opts.textOnlyMode, opts.languageModelOnly);
-    const explicitMmproj = String(opts.mmproj || "").trim();
-    const autoMmproj = launch.mmprojFiles?.[0]?.path
-      || launch.ggufFiles.find((item) => item.role === "mmproj" || /(?:^|[\\/])mmproj[^\\/]*\.gguf$/i.test(String(item.path || item.name || "")))?.path
-      || "";
-    const mmproj = explicitMmproj || autoMmproj;
-    if (textOnlyMode) {
-      appendLog(job, "Text-only mode: no mmproj/projector will be loaded.");
-    } else if (mmproj) {
-      appendLog(job, `Multimodal projector: ${mmproj}`);
-    } else if (!remoteRepo) {
-      throw new Error("Multimodal mode requires an mmproj GGUF file in the model directory or an explicit mmproj path.");
-    } else {
-      appendLog(job, "Multimodal projector: llama.cpp will auto-resolve mmproj from the remote Hugging Face repository.");
-    }
-    const explicitDraftModel = String(opts.draftModel || "").trim();
-    const autoDraftModel = launch.draftFiles?.[0]?.path || "";
-    const draftModel = explicitDraftModel || autoDraftModel;
-    const speculativeMode = normalizeLlamaSpeculativeMode(opts.speculativeMode, opts.model, {
-      draftModel,
-      draftArchitecture: launch.draftFiles?.[0]?.architecture || "",
-    });
-    const temperature = optionalSamplingNumber(opts.temperature, museGlimmer ? 1 : null, 0, 5);
-    const topP = optionalSamplingNumber(opts.topP ?? opts.top_p, museGlimmer ? 0.95 : null, 0, 1);
-    const topK = optionalSamplingNumber(opts.topK ?? opts.top_k, museGlimmer ? 64 : null, 0, 100_000, true);
-    const usesExternalDraft = (speculativeMode === "draft-dflash" || speculativeMode === "draft-simple") && Boolean(draftModel);
-    if ((opts.gpuDeviceIds || []).length > 1) {
-      appendLog(job, `Heterogeneous GPU split: mode=${opts.multiGpuMode}, tensor-split=${opts.tensorSplit || "auto"}, main-gpu=${opts.mainGpu}`);
-      if (opts.gpuPlan?.summary) appendLog(job, `GPU plan: ${opts.gpuPlan.summary}`);
-      if (opts.gpuPlan?.mainGpuHostId !== undefined) appendLog(job, `Host GPU ${opts.gpuPlan.mainGpuHostId} is visible as llama.cpp main-gpu ${opts.mainGpu}`);
-    }
-
-    const activePublishArgs = dockerPublishArgs(opts.port, opts.networkAccess, opts.serviceHost);
-    appendLog(job, `Docker publish: ${formatDockerPublishArgs(activePublishArgs)}`);
-    const gpuVisibility = normalizeGpuIds(opts.gpuDeviceIds).join(",");
-    const vramReservationMb = Math.max(0, Math.round(Number(opts.vramReservationMb || 0)));
-    const runArgs = [
-      "run", "-d",
-      "--name", opts.containerName || CONFIG.containerName,
-      "--restart", "on-failure:3",
-      "--label", `${MANAGER_LABEL_KEY}=${CONFIG.managerId}`,
-      "--label", `${MANAGER_ENGINE_LABEL_KEY}=llama`,
-      "--label", `ai.manager.job=${job?.id || ""}`,
-      "--label", `ai.manager.instance=${opts.instanceId || "primary"}`,
-      "--label", `ai.manager.instance-mode=${opts.instanceMode || "replace"}`,
-      "--label", `ai.manager.model=${opts.name || ""}`,
-      "--label", `ai.manager.port=${opts.port}`,
-      "--label", `ai.manager.gpu-ids=${gpuVisibility}`,
-      "--label", `ai.manager.vram-reservation-mb=${vramReservationMb}`,
-      "--label", `ai.manager.max-model-len=${opts.maxModelLen}`,
-      "--label", `ai.manager.max-num-seqs=${opts.maxNumSeqs}`,
-      "--label", `ai.manager.gpu-memory-utilization=${opts.gpuMemoryUtilization}`,
-      "--label", `ai.manager.gpu-layers=${opts.gpuLayers}`,
-      "--label", `ai.manager.cache-type-k=${opts.cacheTypeK || ""}`,
-      "--label", `ai.manager.cache-type-v=${opts.cacheTypeV || ""}`,
-      "--label", `ai.manager.tensor-split=${opts.tensorSplit || ""}`,
-      "--label", `ai.manager.speculative-mode=${speculativeMode}`,
-      "--label", `ai.manager.reasoning-effort=${supportsB10630Controls ? reasoningEffort : "default"}`,
-      "--label", `ai.manager.reasoning-budget=${reasoningBudget}`,
-      "--label", `ai.manager.mmproj-device=${supportsB10630Controls ? mmprojDevice : "auto"}`,
-      "--label", `ai.manager.fit-target-mb=${Math.max(0, Number(opts.fitTargetMb || 0))}`,
-      "--label", `ai.manager.fit-ctx=${Math.max(0, Number(opts.fitCtx || 0))}`,
-      "--label", `ai.manager.mmproj=${Boolean(mmproj)}`,
-      "--label", `ai.manager.draft-model=${usesExternalDraft}`,
-      "--label", `ai.manager.text-only=${Boolean(textOnlyMode)}`,
-      "--label", `ai.manager.gpu-admission-lease=${opts.gpuAdmissionLeaseId || ""}`,
-      "--gpus", dockerGpuArg(opts.gpuDeviceIds || []),
-      "--ipc=host",
-      ...publishArgsToDockerRunArgs(activePublishArgs),
-      "-v", `${CONFIG.hfCache}:/root/.cache/huggingface`,
-      ...getModelMountArgs(),
-    ];
-    if (opts.runtimeApiKeyRef && MANAGER_APIKEY_REF_LABEL_KEY) {
-      runArgs.push("--label", `${MANAGER_APIKEY_REF_LABEL_KEY}=${opts.runtimeApiKeyRef}`);
-    }
-    if (gpuVisibility) {
-      runArgs.push(
-        "-e", `NVIDIA_VISIBLE_DEVICES=${gpuVisibility}`,
-        "-e", `CUDA_VISIBLE_DEVICES=${gpuVisibility}`,
-        "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
-      );
-    }
-    // Secrets travel as name-only -e flags and the caller hands secretEnv to
-    // the docker child process (08 P0-4). llama-server binds --api-key to
-    // LLAMA_API_KEY (common/arg.cpp, set_env), so no key appears in argv.
-    const secretEnv = {};
-    if (process.env.HF_TOKEN) {
-      runArgs.push("-e", "HF_TOKEN");
-      secretEnv.HF_TOKEN = process.env.HF_TOKEN;
-    }
-    if (opts.llamaApiKey) {
-      runArgs.push("-e", "LLAMA_API_KEY");
-      secretEnv.LLAMA_API_KEY = String(opts.llamaApiKey);
-    }
-
-    runArgs.push(runtimeImage);
-    if (remoteRepo) {
-      runArgs.push("--hf-repo", opts.model);
-      // llama.cpp enables automatic mmproj discovery for --hf-repo by default.
-      // Make the manager's text-only switch authoritative so the launched
-      // runtime matches both the UI promise and the VRAM admission estimate.
-      if (textOnlyMode) runArgs.push("--no-mmproj");
-    } else {
-      runArgs.push("--model", modelArg);
-    }
-    const totalContextSize = Math.max(1, Number(opts.maxModelLen || 1)) * Math.max(1, Number(opts.maxNumSeqs || 1));
-    appendLog(job, `Context budget: ${opts.maxModelLen} tokens per slot x ${opts.maxNumSeqs} slots = --ctx-size ${totalContextSize}.`);
-    runArgs.push(
-      "--alias", opts.name,
-      "--host", "0.0.0.0",
-      "--port", "8080",
-      "--ctx-size", String(totalContextSize),
-      "--parallel", String(opts.maxNumSeqs),
-      "--batch-size", String(opts.batchSize),
-      "--ubatch-size", String(opts.ubatchSize),
-      "--n-gpu-layers", opts.gpuLayers,
-      "--split-mode", opts.multiGpuMode,
-      "--main-gpu", String(opts.mainGpu),
-      "--cache-type-k", opts.cacheTypeK,
-      "--cache-type-v", opts.cacheTypeV,
-      "--flash-attn", opts.flashAttention,
-      "--reasoning", opts.reasoning,
-      "--reasoning-format", opts.reasoningFormat,
-      "--reasoning-budget", String(reasoningBudget),
-      "--metrics",
-      "--jinja"
-    );
-    if (supportsB10630Controls) {
-      runArgs.push("--reasoning-effort", reasoningEffort);
-    } else if (reasoningEffort !== "default") {
-      appendLog(job, `Runtime ${runtimeImage} predates --reasoning-effort; requested ${reasoningEffort} was left at template default.`);
-    }
-    if (Number(opts.fitTargetMb || 0) > 0) {
-      runArgs.push("--fit", "on", "--fit-target", String(Math.floor(Number(opts.fitTargetMb))));
-    }
-    if (Number(opts.fitCtx || 0) > 0) {
-      runArgs.push("--fit-ctx", String(Math.floor(Number(opts.fitCtx))));
-    }
-    if (!textOnlyMode && mmproj) runArgs.push("--mmproj", windowsPathToContainerPath(mmproj));
-    if (!textOnlyMode && supportsB10630Controls) {
-      runArgs.push("--mmproj-device", mmprojDevice);
-    } else if (!textOnlyMode && mmprojDevice !== "auto") {
-      appendLog(job, `Runtime ${runtimeImage} predates --mmproj-device; requested ${mmprojDevice} was left at auto.`);
-    }
-    if (speculativeMode !== "none") {
-      runArgs.push("--spec-type", speculativeMode);
-      if (speculativeMode.startsWith("draft-")) {
-        if (speculativeMode === "draft-dflash") {
-          if (!draftModel) throw new Error("draft-dflash requires a local DFlash GGUF draft model.");
-          runArgs.push("--model-draft", windowsPathToContainerPath(draftModel));
-          appendLog(job, `DFlash draft model: ${draftModel}`);
-        } else if (speculativeMode === "draft-simple" && draftModel) {
-          runArgs.push("--model-draft", windowsPathToContainerPath(draftModel));
-        }
-        runArgs.push("--spec-draft-n-max", String(clampSpeculativeTokens(opts.numSpeculativeTokens)));
-      }
-    }
-    if (temperature !== null) runArgs.push("--temp", String(temperature));
-    if (topP !== null) runArgs.push("--top-p", String(topP));
-    if (topK !== null) runArgs.push("--top-k", String(topK));
-    if (museGlimmer) appendLog(job, `Muse Glimmer sampling defaults: temp=${temperature}, top-p=${topP}, top-k=${topK}.`);
-    if (opts.tensorSplit && opts.multiGpuMode !== "none") runArgs.push("--tensor-split", opts.tensorSplit);
-    if (Number(opts.cacheReuse || 0) > 0) runArgs.push("--cache-reuse", String(Math.floor(Number(opts.cacheReuse))));
-    if (opts.noMmap) runArgs.push("--no-mmap");
-    if (opts.noRepack) runArgs.push("--no-repack");
-
-    return { runArgs, activePublishArgs, runtimeImage, secretEnv };
+    for (const line of command.logs) appendLog(job, line);
+    if (job && Object.keys(command.metaPatch).length) job.meta = { ...(job.meta || {}), ...command.metaPatch };
+    return {
+      runArgs: renderRunArgs(command),
+      activePublishArgs: command.publish,
+      runtimeImage: command.docker.image,
+      secretEnv: command.secretEnv,
+    };
   }
 
   return {
     buildLlamaRuntimeCommand,
     formatDockerPublishArgs,
+    planLlamaLaunch,
     redactDockerArgs,
   };
 }
 
-function optionalSamplingNumber(value, fallback, min, max, integer = false) {
-  if (value === undefined || value === null || String(value).trim() === "") return fallback;
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < min || number > max) return fallback;
-  return integer ? Math.floor(number) : number;
-}
-
-function normalizeLlamaSpeculativeMode(value, model = "", options = {}) {
-  const mode = String(value || "auto").trim().toLowerCase().replaceAll("_", "-");
-  if (mode === "off" || mode === "none") return "none";
-  if (mode === "auto") {
-    if (/(?:^|[-_/.])mtp(?:$|[-_/.])/i.test(String(model || ""))) return "draft-mtp";
-    if (/dflash/i.test(`${options.draftArchitecture || ""} ${options.draftModel || ""}`)) return "draft-dflash";
-    if (options.draftModel) return "draft-simple";
-    return "none";
-  }
-  return new Set(["draft-simple", "draft-mtp", "draft-dflash", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-mod", "ngram-cache"]).has(mode)
-    ? mode
-    : "none";
-}
-
-function clampSpeculativeTokens(value) {
-  const number = Number(value || 3);
-  return Math.min(16, Math.max(1, Number.isFinite(number) ? Math.floor(number) : 3));
-}
-
-module.exports = { clampSpeculativeTokens, createLlamaRuntimeCommandBuilder, normalizeLlamaSpeculativeMode, optionalSamplingNumber };
+module.exports = {
+  clampSpeculativeTokens: llamacpp.clampSpeculativeTokens,
+  createLlamaRuntimeCommandBuilder,
+  normalizeLlamaSpeculativeMode: llamacpp.normalizeLlamaSpeculativeMode,
+  optionalSamplingNumber: llamacpp.optionalSamplingNumber,
+};
