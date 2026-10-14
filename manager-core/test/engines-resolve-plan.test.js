@@ -733,3 +733,23 @@ test("llama-manager plans through the same resolver: the VRAM estimate runs in a
   assert.equal(plan.steps[1].containerName, "llama-local-model-gguf");
   assert.equal(engines.requestToLegacyRunOptions(plan).llamaApiKey, "");
 });
+
+test("P0 flags: a v2 request's catalog-only values reach the planned command, a legacy body never carries them", async () => {
+  const host = fakeVllmManager();
+  const overrides = { rope_scaling: { rope_type: "yarn", factor: 4, original_max_position_embeddings: 32768 } };
+  const plan = await host.start.planLaunch(v2Body({ values: { contextLength: 65536, concurrency: 4, hfOverrides: overrides, role: "embedding" } }));
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors.concat(plan.blockers)));
+  const argv = plan.command.argv;
+  assert.equal(argv[argv.indexOf("--hf-overrides") + 1], JSON.stringify(overrides));
+  assert.deepEqual(argv.slice(argv.indexOf("--runner"), argv.indexOf("--runner") + 4), ["--runner", "pooling", "--convert", "embed"]);
+  // Both sit after the legacy engine args: the baseline argv is a prefix-preserving subset.
+  const baseline = await host.start.planLaunch(v2Body());
+  assert.ok(argv.indexOf("--runner") > baseline.command.argv.indexOf("--max-num-seqs"));
+  const legacy = await host.start.planLaunch(legacyBody());
+  assert.equal(Object.hasOwn(legacy.legacy?.runOptions || {}, "catalogValues"), false);
+  assert.ok(!legacy.command.argv.includes("--hf-overrides"));
+  // A rule violation is a field error, not a silently dropped value.
+  const bad = await host.start.planLaunch(v2Body({ values: { contextLength: 65536, concurrency: 4, "speculative.method": "eagle3" } }));
+  assert.equal(bad.ok, false);
+  assert.ok(bad.errors.some((item) => item.field === "speculative.method" && item.code === "speculative_needs_draft_model"));
+});

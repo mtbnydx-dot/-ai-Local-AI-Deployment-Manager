@@ -24,6 +24,7 @@ const {
   managerDockerFlags,
 } = require("./_vllm-manager");
 const memoryModels = require("../memory-models");
+const { emitCatalogArgs, skipSpeculativeWhen } = require("./_catalog-emit");
 
 const ENGINE_ID = "sglang";
 const ENTRYPOINT = "sglang";
@@ -130,7 +131,7 @@ function buildCommand(plan, ctx, effects) {
   }
   // Only DSPARK has a generic emission today; recipes that pin another
   // speculative method (NEXTN/FR-Spec) carry it in their fixed args.
-  if (values["speculative.method"] === "DSPARK") {
+  if (String(values["speculative.method"] || "").toUpperCase() === "DSPARK") {
     args.push(
       "--speculative-algorithm", "DSPARK",
       "--speculative-draft-model-path", ctx.toContainerPath(values["speculative.draftModel"]),
@@ -139,6 +140,17 @@ function buildCommand(plan, ctx, effects) {
     );
   }
   args.push(...(fixed.args || []));
+  // Catalog parameters that did not exist before P1 (01 §9.4): after the
+  // legacy engine args and before --api-key, in catalog order, only when set.
+  // A speculative algorithm already in the args (DSPARK above, a recipe's
+  // NEXTN tail) keeps the whole speculative group out.
+  args.push(...emitCatalogArgs({
+    engineId: ENGINE_ID,
+    ctx,
+    values,
+    existingArgs: args,
+    skip: skipSpeculativeWhen(args, "--speculative-algorithm"),
+  }));
   if (secrets.apiKey) args.push("--api-key", secrets.apiKey);
 
   return launchCommand(ctx, { flags, entrypoint: ENTRYPOINT, image, args, publish, secretEnv, metaPatch, logs });

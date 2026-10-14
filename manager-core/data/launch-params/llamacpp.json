@@ -47,6 +47,9 @@
         { "value": "draft-dflash", "label": { "zh": "DFlash 草稿模型", "en": "DFlash draft model" } },
         { "value": "draft-simple", "label": { "zh": "普通草稿模型", "en": "Plain draft model" } },
         { "value": "ngram-simple", "label": { "zh": "N-gram（简单）", "en": "N-gram (simple)" } },
+        { "value": "ngram-map-k", "label": { "zh": "N-gram（键映射）", "en": "N-gram (key map)" } },
+        { "value": "ngram-map-k4v", "label": { "zh": "N-gram（键值映射）", "en": "N-gram (key-value map)" } },
+        { "value": "ngram-mod", "label": { "zh": "N-gram（模块化）", "en": "N-gram (modular)" } },
         { "value": "ngram-cache", "label": { "zh": "N-gram（缓存）", "en": "N-gram (cache)" } }
       ],
       "platformDefault": "auto",
@@ -190,6 +193,14 @@
       "platformDefault": 512,
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--ubatch-size" },
       "vramEffect": "activations",
+      "rules": [
+        {
+          "kind": "errorIf",
+          "when": { "gt": [{ "param": "llamacpp.ubatchSize" }, { "param": "llamacpp.batchSize" }] },
+          "code": "ubatch_exceeds_batch",
+          "message": { "zh": "物理批大小不能大于逻辑批大小，请调小物理批或调大逻辑批。", "en": "The physical batch cannot exceed the logical batch; lower the physical batch or raise the logical batch." }
+        }
+      ],
       "legacy": { "field": "ubatchSize", "domId": "ubatchSize" }
     },
     {
@@ -226,6 +237,14 @@
       "platformDefault": "f16",
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--cache-type-v" },
       "vramEffect": "kv-dtype",
+      "rules": [
+        {
+          "kind": "errorIf",
+          "when": { "and": [{ "in": [{ "param": "llamacpp.cacheTypeV" }, ["q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"]] }, { "eq": [{ "param": "llamacpp.flashAttention" }, "off"] }] },
+          "code": "quantized_v_cache_needs_flash_attention",
+          "message": { "zh": "量化的 V 缓存需要开启 Flash Attention，请把 Flash Attention 设为 on 或 auto，或把 V 缓存精度改成 f16。", "en": "A quantized V cache needs Flash Attention; set Flash Attention to on or auto, or change the V cache type to f16." }
+        }
+      ],
       "legacy": { "field": "cacheTypeV", "aliases": ["kvCacheDtype"], "domId": "cacheTypeV" }
     },
     {
@@ -472,6 +491,218 @@
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mmproj-device" },
       "appliesWhen": { "eq": [{ "param": "llamacpp.textOnly" }, false] },
       "legacy": { "field": "mmprojDevice", "domId": "mmprojDevice" }
+    },
+    {
+      "id": "llamacpp.nCpuMoe",
+      "group": "memory", "level": "expert", "order": 130,
+      "type": "int", "unit": "layers",
+      "label": { "zh": "前 N 层 MoE 专家放内存", "en": "MoE experts of the first N layers in RAM" },
+      "summary": { "zh": "把前 N 层的混合专家（MoE）权重留在系统内存，其余层仍在显卡上。", "en": "Keeps the mixture-of-experts (MoE) weights of the first N layers in system memory while the rest stay on the GPU." },
+      "help": {
+        "what": { "zh": "对应 --n-cpu-moe N。只对 MoE 模型有效，注意力等其他权重仍按 GPU 层数放到显卡。不能与“全部 MoE 专家放内存”同时使用。", "en": "Maps to --n-cpu-moe N. It only affects MoE models; attention and the other weights still follow the GPU layer count. It cannot be combined with “All MoE experts in RAM”." },
+        "whenToChange": { "zh": "MoE 模型的权重放不进显存、又不想把整个模型挪到内存时，从小到大逐步增加 N，直到能启动。", "en": "When an MoE model does not fit in VRAM and you do not want to move the whole model to RAM: raise N step by step until it starts." },
+        "tradeoffs": { "zh": "N 越大越省显存，但每个 token 都要经过内存带宽，生成速度下降；需要足够的系统内存。", "en": "A larger N saves more VRAM, but every token then crosses memory bandwidth and generation slows down; it needs enough system RAM." }
+      },
+      "range": { "min": 0, "max": 512, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--n-cpu-moe", "omitWhen": [0, null] },
+      "vramEffect": "offload",
+      "rules": [
+        {
+          "kind": "conflicts",
+          "when": { "eq": [{ "param": "llamacpp.cpuMoe" }, true] },
+          "code": "cpu_moe_conflict",
+          "message": { "zh": "“前 N 层 MoE 专家放内存”不能与“全部 MoE 专家放内存”同时使用，请只保留一个。", "en": "“MoE experts of the first N layers in RAM” and “All MoE experts in RAM” cannot be used together; keep only one." }
+        }
+      ]
+    },
+    {
+      "id": "llamacpp.cpuMoe",
+      "group": "memory", "level": "expert", "order": 135,
+      "type": "bool",
+      "label": { "zh": "全部 MoE 专家放内存", "en": "All MoE experts in RAM" },
+      "summary": { "zh": "把所有层的混合专家（MoE）权重留在系统内存，只把其余权重放进显卡。", "en": "Keeps the mixture-of-experts (MoE) weights of every layer in system memory and puts only the other weights on the GPU." },
+      "help": {
+        "what": { "zh": "对应 --cpu-moe。只对 MoE 模型有效。不能与“前 N 层 MoE 专家放内存”同时使用。", "en": "Maps to --cpu-moe. It only affects MoE models. It cannot be combined with “MoE experts of the first N layers in RAM”." },
+        "whenToChange": { "zh": "大型 MoE 模型在显存里放不下专家权重，但注意力和共享层可以放下时。", "en": "When a large MoE model's expert weights do not fit in VRAM but its attention and shared layers do." },
+        "tradeoffs": { "zh": "显存占用最低，但专家计算要经过内存带宽，生成速度明显下降；需要足够的系统内存。", "en": "VRAM use is lowest, but expert computation crosses memory bandwidth and generation slows down noticeably; it needs enough system RAM." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "catalog", "kind": "flag-bool", "flag": "--cpu-moe" },
+      "vramEffect": "offload"
+    },
+    {
+      "id": "llamacpp.overrideTensor",
+      "group": "memory", "level": "expert", "order": 140,
+      "type": "list",
+      "label": { "zh": "张量放置规则", "en": "Tensor placement rules" },
+      "summary": { "zh": "按名称匹配张量，并指定放在哪块显卡或内存里。", "en": "Matches tensors by name and says which GPU or system memory they live in." },
+      "help": {
+        "what": { "zh": "对应 -ot <正则>=<缓冲区>，每条规则一个 -ot。缓冲区写 CPU（内存）或 CUDA0、CUDA1……（显卡序号）。正则不能包含“=”和“,”，最长 200 个字符。", "en": "Maps to -ot <regex>=<buffer>, one -ot per rule. The buffer is CPU (system memory) or CUDA0, CUDA1 … (GPU index). The regex cannot contain “=” or “,” and may be at most 200 characters." },
+        "whenToChange": { "zh": "需要精确控制哪些张量放内存、哪些放显卡时，例如只把某些层的 ffn 专家权重放到 CPU。", "en": "When you need exact control over which tensors go to memory and which to a GPU, for example only the ffn expert weights of some layers on the CPU." },
+        "tradeoffs": { "zh": "规则写错会让张量落在意想不到的位置，轻则变慢，重则显存不足；改动前先看启动日志里的张量分配。", "en": "A wrong rule puts tensors somewhere unexpected: slower at best, out of memory at worst. Check the tensor placement in the startup log after changing it." }
+      },
+      "item": { "maxItems": 32, "fields": { "pattern": { "type": "string", "required": true, "maxLength": 200, "pattern": "^[^=,]+$" }, "buffer": { "type": "string", "required": true, "pattern": "^(CPU|CUDA[0-9]+)$" } } },
+      "emit": { "mode": "catalog", "kind": "repeat", "flag": "-ot", "format": "tensor-override" },
+      "vramEffect": "offload"
+    },
+    {
+      "id": "llamacpp.threads",
+      "group": "runtime-expert", "level": "advanced", "order": 190,
+      "type": "int", "unit": "threads",
+      "label": { "zh": "生成线程数", "en": "Generation threads" },
+      "summary": { "zh": "CPU 参与生成时使用的线程数。", "en": "How many CPU threads take part in generation." },
+      "help": {
+        "what": { "zh": "对应 -t。不设置时 llama.cpp 按 CPU 核心数自动选择。", "en": "Maps to -t. Unset, llama.cpp picks a count from the CPU core number." },
+        "whenToChange": { "zh": "有层或 MoE 专家放在内存里、CPU 成为瓶颈时，设为物理核心数附近的值。", "en": "When layers or MoE experts live in system memory and the CPU is the bottleneck: set it near the physical core count." },
+        "tradeoffs": { "zh": "线程多于物理核心通常不会更快，还会和其他程序抢 CPU。", "en": "More threads than physical cores are usually not faster and compete with other programs for the CPU." }
+      },
+      "range": { "min": 1, "max": 256, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "-t" }
+    },
+    {
+      "id": "llamacpp.threadsBatch",
+      "group": "runtime-expert", "level": "advanced", "order": 195,
+      "type": "int", "unit": "threads",
+      "label": { "zh": "预填充线程数", "en": "Batch (prefill) threads" },
+      "summary": { "zh": "处理提示词（预填充）时使用的 CPU 线程数。", "en": "How many CPU threads process the prompt (prefill)." },
+      "help": {
+        "what": { "zh": "对应 -tb。不设置时与生成线程数相同。", "en": "Maps to -tb. Unset, it follows the generation threads." },
+        "whenToChange": { "zh": "预填充时 CPU 参与较多、而且核心比生成时更空闲时，可以比生成线程数更大。", "en": "When the CPU does a lot of the prefill work and has more idle cores than during generation, it can exceed the generation threads." },
+        "tradeoffs": { "zh": "同样受物理核心数限制，设太大反而互相争抢。", "en": "It is also bounded by the physical cores; too many threads fight each other." }
+      },
+      "range": { "min": 1, "max": 256, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "-tb" }
+    },
+    {
+      "id": "chatTemplate",
+      "group": "model", "level": "advanced", "order": 80,
+      "type": "path",
+      "label": { "zh": "聊天模板文件", "en": "Chat template file" },
+      "summary": { "zh": "用你提供的 Jinja 聊天模板文件，替换模型自带的模板。", "en": "Replaces the model's own template with a Jinja chat template file you provide." },
+      "help": {
+        "what": { "zh": "对应 --chat-template-file。文件必须在平台的模型存储目录下；启动时已启用 --jinja。", "en": "Maps to --chat-template-file. The file must be under the platform's model storage roots; --jinja is already on at launch." },
+        "whenToChange": { "zh": "模型自带模板有缺陷、缺少工具调用或思考开关，或者官方发布了修正后的模板时。", "en": "When the model's own template is faulty, lacks tool calling or a thinking switch, or an official fixed template was published." },
+        "tradeoffs": { "zh": "模板和模型不匹配会让输出格式出错；只在确认模板来源可靠时使用。", "en": "A template that does not fit the model breaks the output format; use it only when you trust where the template came from." }
+      },
+      "maxLength": 4096,
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--chat-template-file", "transform": "containerPath" }
+    },
+    {
+      "id": "llamacpp.chatTemplateName",
+      "group": "model", "level": "advanced", "order": 85,
+      "type": "enum",
+      "label": { "zh": "内置聊天模板", "en": "Built-in chat template" },
+      "summary": { "zh": "选择 llama.cpp 内置的聊天模板名称。", "en": "Picks one of llama.cpp's built-in chat templates by name." },
+      "help": {
+        "what": { "zh": "对应 --chat-template NAME。可选名称来自当前运行时的参数检测；还没检测时只检查名称格式。", "en": "Maps to --chat-template NAME. The names come from the current runtime's flag introspection; before introspection only the name format is checked." },
+        "whenToChange": { "zh": "模型文件里没有模板，或模板无法被 llama.cpp 解析、但内置模板与模型格式一致时。", "en": "When the model file has no template or llama.cpp cannot parse it, and a built-in template matches the model's format." },
+        "tradeoffs": { "zh": "内置模板只覆盖常见格式，不含工具调用和思考开关的细节。", "en": "Built-in templates cover common formats only and lack the details of tool calling and thinking switches." }
+      },
+      "choicesFrom": "introspect:--chat-template",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--chat-template" }
+    },
+    {
+      "id": "llamacpp.kvUnified",
+      "group": "memory", "level": "expert", "order": 150,
+      "type": "bool",
+      "label": { "zh": "共享 KV 池", "en": "Unified KV pool" },
+      "summary": { "zh": "让所有并发槽共用一个 KV 池，而不是每个槽各分一块。", "en": "Lets all concurrent slots share one KV pool instead of giving each slot its own block." },
+      "help": {
+        "what": { "zh": "对应 --kv-unified。开启后 KV 池由各槽共享，--ctx-size 就等于整个池的大小；单个请求最多可用到整个池，不再被限制在“每请求上下文”以内。", "en": "Maps to --kv-unified. With it on the pool is shared by all slots, so --ctx-size equals the pool; one request may use up to the whole pool instead of being capped at the per-request context." },
+        "whenToChange": { "zh": "请求长度差别很大、希望长请求能用到空闲槽的缓存时。", "en": "When request lengths vary a lot and you want a long request to use the cache of idle slots." },
+        "tradeoffs": { "zh": "并发请求会互相挤占缓存；总池大小不变，所以并发满载时长请求可能被拒绝或排队。", "en": "Concurrent requests compete for the cache; the total pool is unchanged, so under full load a long request can be refused or queued." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "catalog", "kind": "flag-bool", "flag": "--kv-unified" },
+      "vramEffect": "kv-pool"
+    },
+    {
+      "id": "llamacpp.swaFull",
+      "group": "memory", "level": "expert", "order": 155,
+      "type": "bool",
+      "label": { "zh": "完整大小的滑动窗口缓存", "en": "Full-size sliding-window cache" },
+      "summary": { "zh": "为使用滑动窗口注意力（SWA）的层保留完整大小的 KV 缓存。", "en": "Keeps a full-size KV cache for layers that use sliding-window attention (SWA)." },
+      "help": {
+        "what": { "zh": "对应 --swa-full。使用滑动窗口注意力的模型默认只缓存窗口内的 token；开启后这些层也缓存全部 token。", "en": "Maps to --swa-full. Models with sliding-window attention normally cache only the tokens inside the window; with it on those layers cache every token." },
+        "whenToChange": { "zh": "需要前缀缓存复用或长对话回退，而模型的 SWA 缓存让命中率很低时。", "en": "When you need prefix-cache reuse or long-conversation rewinds and the model's SWA cache makes the hit rate very low." },
+        "tradeoffs": { "zh": "这些层的缓存会大幅增长，占用更多显存。", "en": "The cache of those layers grows a lot and uses more VRAM." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "catalog", "kind": "flag-bool", "flag": "--swa-full" },
+      "vramEffect": "kv-linear"
+    },
+    {
+      "id": "lora.adapters",
+      "group": "lora", "level": "advanced", "order": 10,
+      "type": "list",
+      "label": { "zh": "LoRA 适配器", "en": "LoRA adapters" },
+      "summary": { "zh": "启动时加载的 LoRA 适配器文件，最多 8 个。", "en": "LoRA adapter files loaded at launch, up to 8." },
+      "help": {
+        "what": { "zh": "对应 --lora <路径>；填了缩放系数的写成 --lora-scaled <路径> <系数>。路径必须在平台的模型存储目录下，并且是和基础模型配套的 GGUF 适配器。", "en": "Maps to --lora <path>; an entry with a scale becomes --lora-scaled <path> <scale>. Paths must be under the platform's model storage roots and be GGUF adapters made for the base model." },
+        "whenToChange": { "zh": "需要在同一个基础模型上叠加风格或领域微调，而不想合并出一份新权重时。", "en": "When you want a style or domain fine-tune on top of one base model without merging a new set of weights." },
+        "tradeoffs": { "zh": "适配器会占用额外显存并略微降低速度；和基础模型不匹配的适配器会让输出变差甚至启动失败。", "en": "Adapters use extra VRAM and slow generation slightly; an adapter that does not match the base model degrades the output or fails to start." }
+      },
+      "item": { "maxItems": 8, "fields": { "path": { "type": "string", "required": true, "maxLength": 4096 }, "scale": { "type": "number", "min": -16, "max": 16 } } },
+      "emit": { "mode": "catalog", "kind": "repeat", "flag": "--lora", "format": "lora-scaled" },
+      "vramEffect": "weights"
+    },
+    {
+      "id": "rope.scaling",
+      "group": "model", "level": "expert", "order": 90,
+      "type": "enum",
+      "label": { "zh": "RoPE 缩放方式", "en": "RoPE scaling method" },
+      "summary": { "zh": "用位置编码缩放把上下文拉长到超出模型原生长度。", "en": "Stretches the context beyond the model's native length by scaling the position encoding." },
+      "help": {
+        "what": { "zh": "对应 --rope-scaling。none 表示不缩放，linear 为线性缩放，yarn 为 YaRN。", "en": "Maps to --rope-scaling. none disables scaling, linear scales linearly and yarn uses YaRN." },
+        "whenToChange": { "zh": "需要的上下文超过模型原生长度，并且模型卡说明可以这样扩展时（YaRN 通常最稳）。", "en": "When you need more context than the model's native length and the model card says it can be extended this way (YaRN is usually the steadiest)." },
+        "tradeoffs": { "zh": "扩展后短文本的质量可能略有下降，倍数越大越明显。", "en": "Short-text quality can drop slightly after extension, more so at larger factors." }
+      },
+      "choices": [{ "value": "none", "label": { "zh": "不缩放", "en": "None" } }, { "value": "linear", "label": { "zh": "线性缩放", "en": "Linear" } }, { "value": "yarn", "label": { "zh": "YaRN", "en": "YaRN" } }],
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--rope-scaling" }
+    },
+    {
+      "id": "rope.scale",
+      "group": "model", "level": "expert", "order": 91,
+      "type": "float",
+      "label": { "zh": "RoPE 缩放倍数", "en": "RoPE scale factor" },
+      "summary": { "zh": "上下文相对原生长度放大的倍数。", "en": "How many times the context is stretched relative to the native length." },
+      "help": {
+        "what": { "zh": "对应 --rope-scale。例如原生 32K、想用 128K 时填 4。", "en": "Maps to --rope-scale. For example, 4 for 128K from a native 32K." },
+        "whenToChange": { "zh": "配合“RoPE 缩放方式”扩展上下文时。", "en": "When you extend the context together with “RoPE scaling method”." },
+        "tradeoffs": { "zh": "倍数超过模型能承受的范围时，长文本质量会明显下降。", "en": "Beyond what the model tolerates, long-text quality drops noticeably." }
+      },
+      "range": { "min": 0.1, "max": 64, "step": 0.1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--rope-scale" }
+    },
+    {
+      "id": "rope.freqBase",
+      "group": "model", "level": "expert", "order": 92,
+      "type": "float",
+      "label": { "zh": "RoPE 基础频率", "en": "RoPE base frequency" },
+      "summary": { "zh": "位置编码的基础频率，通常保持模型自带的值。", "en": "The base frequency of the position encoding; normally left at the model's own value." },
+      "help": {
+        "what": { "zh": "对应 --rope-freq-base。不设置时使用模型文件里的值。", "en": "Maps to --rope-freq-base. Unset, the value in the model file is used." },
+        "whenToChange": { "zh": "按模型卡的说明做 NTK 感知缩放，需要调大基础频率时。", "en": "When a model card describes NTK-aware scaling that asks for a larger base frequency." },
+        "tradeoffs": { "zh": "随意修改会破坏模型的位置感知，输出变得混乱。", "en": "Changing it at random breaks the model's sense of position and garbles the output." }
+      },
+      "range": { "min": 1, "max": 100000000, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--rope-freq-base" }
+    },
+    {
+      "id": "rope.yarnOrigCtx",
+      "group": "model", "level": "expert", "order": 93,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "YaRN 原始上下文长度", "en": "YaRN original context" },
+      "summary": { "zh": "YaRN 缩放所依据的模型原生上下文长度。", "en": "The native context length that YaRN scaling is based on." },
+      "help": {
+        "what": { "zh": "对应 --yarn-orig-ctx。只在缩放方式为 YaRN 时使用；不设置时取模型文件里的训练长度。", "en": "Maps to --yarn-orig-ctx. It is only used with the YaRN scaling method; unset, the training length in the model file is used." },
+        "whenToChange": { "zh": "模型文件里没有记录原生长度，或记录的值和模型卡不一致时。", "en": "When the model file does not record the native length or records one that disagrees with the model card." },
+        "tradeoffs": { "zh": "填错会让缩放比例算错，长文本质量下降。", "en": "A wrong value miscomputes the scaling and lowers long-text quality." }
+      },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
+      "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--yarn-orig-ctx" },
+      "appliesWhen": { "eq": [{ "param": "rope.scaling" }, "yarn"] }
     }
   ]
 }

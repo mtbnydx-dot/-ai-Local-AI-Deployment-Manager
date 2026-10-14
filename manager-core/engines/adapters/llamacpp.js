@@ -39,6 +39,7 @@ const { normalizeGpuIds: defaultNormalizeGpuIds } = require("../../common-utils"
 const { publishArgsToDockerRunArgs: defaultPublishArgsToDockerRunArgs } = require("../../docker-utils");
 const { applyExtra, labelsFromFlags } = require("./_docker-segments");
 const memoryModels = require("../memory-models");
+const { emitCatalogArgs } = require("./_catalog-emit");
 
 const ENGINE_ID = "llamacpp";
 // llama-server binds --api-key to LLAMA_API_KEY (common/arg.cpp, set_env); the
@@ -329,6 +330,9 @@ function buildCommand(plan, ctx, logs) {
   if (Number(cacheReuse || 0) > 0) args.push("--cache-reuse", String(Math.floor(Number(cacheReuse))));
   if (value("llamacpp.noMmap")) args.push("--no-mmap");
   if (value("llamacpp.noRepack")) args.push("--no-repack");
+  // Catalog parameters that did not exist before P1 (01 §9.4): appended after
+  // the legacy engine args, in catalog order, only when set.
+  args.push(...emitCatalogArgs({ engineId: ENGINE_ID, ctx, values, existingArgs: args }));
 
   return applyExtra({
     host: "docker",
@@ -402,6 +406,13 @@ function planFromRunOptions(opts = {}, { jobId, recipe = null, normalizeDefaultT
     if (item !== undefined) values[id] = item;
   }
   values["llamacpp.textOnly"] = normalizeDefaultTrueBoolean(opts.textOnlyMode, opts.languageModelOnly);
+  // Catalog parameters with no legacy run option (01 §9.4): what a v2 launch
+  // request set, carried by the resolver in runOptions.catalogValues.
+  if (isPlainObject(opts.catalogValues)) {
+    for (const [id, item] of Object.entries(opts.catalogValues)) {
+      if (values[id] === undefined || values[id] === null || values[id] === "") values[id] = item;
+    }
+  }
   return {
     engineId: ENGINE_ID,
     values,
