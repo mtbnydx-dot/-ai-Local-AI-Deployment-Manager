@@ -1,0 +1,4 @@
+{
+  "prefixes": [],
+  "unused": ["shell.boot.loading", "shell.boot.noscript"]
+}

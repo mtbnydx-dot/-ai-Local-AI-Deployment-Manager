@@ -67,7 +67,19 @@
   "managedFlags": ["--model", "-m", "--hf-repo", "-hf", "--alias", "-a", "--host", "--port", "--api-key", "--metrics"],
   "extraEnvAllow": ["LLAMA_ARG_", "GGML_"],
   "introspection": { "entrypoint": "/app/llama-server", "argv": ["--help"], "parser": "llama-help" },
-  "metricsMap": { "path": "/metrics", "format": "prometheus", "map": {} },
+  "metricsMap": {
+    "path": "/metrics",
+    "format": "prometheus",
+    "map": {
+      "promptTokensTotal": [{ "name": "llamacpp:prompt_tokens_total", "kind": "counter" }],
+      "generationTokensTotal": [{ "name": "llamacpp:tokens_predicted_total", "kind": "counter" }],
+      "cachedPromptTokensTotal": [{ "derive": "cacheHit.cachedTokens" }],
+      "requestsTotal": [{ "name": "llamacpp:requests_total", "kind": "counter" }],
+      "requestsRunning": [{ "name": "llamacpp:requests_processing", "kind": "gauge" }],
+      "requestsWaiting": [{ "name": "llamacpp:requests_deferred", "kind": "gauge" }],
+      "kvUsageRatio": [{ "name": "llamacpp:kv_cache_usage_ratio", "kind": "gauge" }, { "derive": "busySlots/nSlots" }]
+    }
+  },
   "logPhases": [],
   "logFacts": [],
   "errorSignatures": []
