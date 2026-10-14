@@ -117,9 +117,12 @@ module.exports.mergeExports = mergeExports;
 const PLATFORM_MODULES = Object.freeze({
   components: "./platform/components",
   config: "./platform/config",
+  launcher: "./platform/launcher",
+  logs: "./platform/logs",
   messages: "./platform/messages",
   semver: "./platform/semver",
   version: "./platform/version",
+  winproc: "./platform/winproc",
 });
 let platformNamespace = null;
 

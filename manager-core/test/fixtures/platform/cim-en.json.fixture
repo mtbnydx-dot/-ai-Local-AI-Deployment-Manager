@@ -1,0 +1,1 @@
+[{"pid":4100,"processCreatedAt":"2026-10-14T01:02:03.123Z","exe":"C:\\fixture\\bin\\node.exe","commandLine":"node server.js","parentPid":4000},{"pid":4104,"processCreatedAt":"2026-10-14T11:02:04+10:00","exe":"C:\\fixture\\bin\\python.exe","commandLine":"python gateway.py","parentPid":4000}]

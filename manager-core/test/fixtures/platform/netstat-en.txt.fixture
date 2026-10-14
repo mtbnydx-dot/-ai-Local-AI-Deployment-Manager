@@ -1,0 +1,8 @@
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    127.0.0.1:5176         0.0.0.0:0              LISTENING       4100
+  TCP    0.0.0.0:5177           0.0.0.0:0              LISTENING       4101
+  TCP    [::]:5178              [::]:0                 LISTENING       4102
+  TCP    [::1]:60000            [::1]:5176             ESTABLISHED     4103
+  UDP    0.0.0.0:5353           *:*                                    4104
