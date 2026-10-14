@@ -1,0 +1,25 @@
+{
+  "Code": 200,
+  "Message": "success",
+  "Success": true,
+  "Data": {
+    "Model": {
+      "TotalCount": 3,
+      "Models": [
+        {
+          "Id": "example-org/Example-Last",
+          "Path": "example-org",
+          "Name": "Example-Last",
+          "Tasks": [
+            {
+              "Name": "text-generation"
+            }
+          ],
+          "Downloads": 1,
+          "Stars": 0,
+          "LastUpdatedTime": 1788200000
+        }
+      ]
+    }
+  }
+}

@@ -20,6 +20,7 @@ const {
 } = require("../model-hub/providers/http");
 const { SEARCH_EXPAND, TREE_FALLBACK_FILES, createHuggingFaceProvider, normalizeRepoInfo } = require("../model-hub/providers/huggingface");
 const { createHfMirrorProvider } = require("../model-hub/providers/hf-mirror");
+const { buildModelScopeCliEnv, createModelScopeProvider } = require("../model-hub/providers/modelscope");
 const { MIRROR_FALLBACK_CODE, createProviders } = require("../model-hub/providers");
 const { createSingleFlightCache } = require("../single-flight-cache");
 
@@ -609,6 +610,229 @@ test("credential_host_violation: the hf-mirror provider refuses every credential
   assert.equal(fetchImpl.calls.at(-1).headers.authorization, undefined);
 });
 
+// ---------------------------------------------------------- ModelScope
+
+function msProvider(fetchImpl, extra = {}) {
+  return createModelScopeProvider({ fetchImpl, clock: fakeClock(), ...extra });
+}
+
+const MS_REVISION = "3f2c9d1e5a7b4c8d9e0f1a2b3c4d5e6f7a8b9c0d";
+
+test("modelscope: search PUTs the dolphin body, normalises items and pages by PageNumber", async () => {
+  const pages = [fixture("modelscope-search-page1.json"), fixture("modelscope-search-page2.json")];
+  const fetchImpl = recordingFetch((url, init) => json(pages[JSON.parse(init.body).PageNumber - 1]));
+  const ms = msProvider(fetchImpl);
+  assert.equal(ms.id, "modelscope");
+  assert.equal(ms.namespace, "modelscope");
+  assert.equal(ms.sendsCredentials, false);
+
+  const first = await ms.search({ q: "Qwen3 GGUF", sort: "downloads", limit: 3 });
+  const call = fetchImpl.calls[0];
+  assert.equal(call.url, "https://www.modelscope.cn/api/v1/dolphin/models");
+  assert.equal(call.method, "PUT");
+  assert.equal(call.headers.authorization, undefined);
+  assert.deepEqual(JSON.parse(call.body), { PageSize: 3, PageNumber: 1, SortBy: "DownloadsCount", Name: "Qwen3 GGUF", Criterion: [], SingleCriterion: [], Target: "" });
+  assert.deepEqual(first.items.map((item) => item.repo), ["example-org/Example-Qwen3-8B-GGUF", "example-org/Example-Vision-7B", "other-org/Example-Base-1B"]);
+  assert.equal(first.nextCursor, null, "three of three: no next page");
+
+  const [gguf, vision, base] = first.items;
+  assert.equal(gguf.namespace, "modelscope");
+  assert.equal(gguf.author, "example-org");
+  assert.equal(gguf.pipelineTag, "text-generation");
+  assert.equal(gguf.library, "gguf");
+  assert.deepEqual(gguf.tags, ["text-generation", "gguf", "qwen3"]);
+  assert.equal(gguf.downloads, 12034);
+  assert.equal(gguf.likes, 57);
+  assert.equal(gguf.lastModified, new Date(1788000000 * 1000).toISOString());
+  assert.equal(gguf.createdAt, new Date(1787000000000).toISOString());
+  assert.equal(gguf.license, "Apache License 2.0");
+  assert.equal(gguf.gated, false);
+  assert.equal(vision.downloads, 900, "DownloadsCount alias");
+  assert.equal(vision.likes, 3);
+  assert.equal(vision.pipelineTag, "image-text-to-text");
+  assert.equal(base.downloads, 15, "numeric strings parse");
+  assert.equal(base.likes, null);
+
+  // A page size below the total gives a page-number cursor.
+  const paged = await ms.search({ q: "Qwen3 GGUF", sort: "downloads", limit: 2 });
+  assert.equal(paged.nextCursor, "2");
+  const second = await ms.search({ q: "Qwen3 GGUF", sort: "downloads", limit: 2, cursor: paged.nextCursor });
+  assert.equal(JSON.parse(fetchImpl.calls.at(-1).body).PageNumber, 2);
+  assert.deepEqual(second.items.map((item) => item.repo), ["example-org/Example-Last"]);
+  assert.equal(second.nextCursor, null);
+});
+
+test("modelscope: sort and cursor are validated, and search tolerates a legacy list location", async () => {
+  const fetchImpl = recordingFetch(() => json({ Data: { Models: [{ Path: "o", Name: "m" }, { Name: "no-owner" }, null] } }));
+  const ms = msProvider(fetchImpl);
+  assert.deepEqual((await ms.search({})).items.map((item) => item.repo), ["o/m"]);
+  assert.equal(JSON.parse(fetchImpl.calls[0].body).SortBy, "Default");
+  assert.equal(JSON.parse(fetchImpl.calls[0].body).PageSize, 24);
+  await ms.search({ sort: "likes", limit: 500 });
+  assert.equal(JSON.parse(fetchImpl.calls.at(-1).body).SortBy, "StarsCount");
+  assert.equal(JSON.parse(fetchImpl.calls.at(-1).body).PageSize, 100);
+  const before = fetchImpl.calls.length;
+  await assert.rejects(ms.search({ sort: "bogus" }), (error) => error.code === "invalid_query");
+  for (const cursor of ["0", "-1", "abc", "https://evil.example/x", "99999"]) {
+    await assert.rejects(ms.search({ cursor }), (error) => error.code === "invalid_cursor", cursor);
+  }
+  assert.equal(fetchImpl.calls.length, before, "invalid input sends nothing");
+  await assert.rejects(msProvider(recordingFetch(() => json({ nope: true }))).search({}), (error) => error.code === "provider_bad_response");
+});
+
+test("modelscope: the manifest normalises Files[] with sizes and sha256, skipping directories", async () => {
+  const fetchImpl = recordingFetch(() => json(fixture("modelscope-files.json")));
+  const ms = msProvider(fetchImpl);
+  const manifest = await ms.getRepo("example-org/Example-Qwen3-8B-GGUF", { revision: MS_REVISION });
+  assert.equal(fetchImpl.calls[0].url, `https://www.modelscope.cn/api/v1/models/example-org/Example-Qwen3-8B-GGUF/repo/files?Revision=${MS_REVISION}&Recursive=true`);
+  assert.equal(fetchImpl.calls[0].headers.authorization, undefined);
+  assert.equal(manifest.namespace, "modelscope");
+  assert.equal(manifest.repo, "example-org/Example-Qwen3-8B-GGUF");
+  assert.equal(manifest.revision, MS_REVISION);
+  assert.equal(manifest.revisionSha, MS_REVISION);
+  assert.equal(manifest.gated, false);
+  assert.equal(manifest.filesTruncated, false);
+  assert.equal(manifest.fetchedFrom, "https://www.modelscope.cn");
+  assert.equal(manifest.fetchedAt, new Date(FIXED_NOW).toISOString());
+  assert.deepEqual(manifest.files.map((file) => file.path), [
+    "README.md",
+    "config.json",
+    "Q4_K_M/Example-Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
+    "Q4_K_M/Example-Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
+    "tokenizer.json",
+  ]);
+  const byPath = Object.fromEntries(manifest.files.map((file) => [file.path, file]));
+  assert.deepEqual(byPath["README.md"], { path: "README.md", size: 2048, sha256: "a".repeat(64), gitOid: null, lfs: false });
+  assert.equal(byPath["config.json"].sha256, "b".repeat(64), "upper case is lowered");
+  assert.equal(byPath["Q4_K_M/Example-Qwen3-8B-Q4_K_M-00001-of-00002.gguf"].size, 3000000000);
+  assert.equal(byPath["Q4_K_M/Example-Qwen3-8B-Q4_K_M-00001-of-00002.gguf"].lfs, true);
+  assert.equal(byPath["Q4_K_M/Example-Qwen3-8B-Q4_K_M-00002-of-00002.gguf"].sha256, "d".repeat(64), "sha256: prefix is stripped");
+  assert.equal(byPath["tokenizer.json"].size, 7031645, "numeric string sizes parse");
+  assert.equal(byPath["tokenizer.json"].sha256, null, "a malformed hash is dropped, not trusted");
+});
+
+test("modelscope: a missing Revision gives revisionSha null; a malformed one is ignored", async () => {
+  const fetchImpl = recordingFetch(() => json(fixture("modelscope-files-no-revision.json")));
+  const ms = msProvider(fetchImpl);
+  const manifest = await ms.getRepo("example-org/Example-Qwen3-8B-GGUF");
+  assert.equal(manifest.revision, "master");
+  assert.equal(manifest.revisionSha, null);
+  assert.equal(manifest.files.length, 5);
+  assert.match(fetchImpl.calls[0].url, /Revision=master&Recursive=true$/);
+
+  // Without a full-SHA request, the first well-formed Files[].Revision wins.
+  const mixed = fixture("modelscope-files.json");
+  mixed.Data.Files[0].Revision = "abc123";
+  const viaFiles = await msProvider(recordingFetch(() => json(mixed))).getRepo("example-org/Example-Qwen3-8B-GGUF", { revision: "master" });
+  assert.equal(viaFiles.revisionSha, MS_REVISION);
+
+  const empty = await msProvider(recordingFetch(() => json({ Data: { Files: [] } }))).getRepo("a/b");
+  assert.deepEqual(empty.files, []);
+  assert.equal(empty.revisionSha, null);
+});
+
+test("modelscope: private, gated and missing repositories are repo_not_found with a ModelScope detail", async () => {
+  for (const status of [401, 403, 404]) {
+    const ms = msProvider(recordingFetch(() => json({ Code: status, Success: false, Message: "no" }, { status })));
+    await assert.rejects(ms.getRepo("a/b"), (error) => {
+      assert.equal(error.code, "repo_not_found", String(status));
+      assert.equal(error.status, status);
+      assert.equal(error.details.provider, "modelscope");
+      assert.equal(error.details.publicOnly, true);
+      assert.ok(error.details.hint.zh && error.details.hint.en);
+      return true;
+    });
+  }
+  // Failures carried in a 200 envelope.
+  const envelope = msProvider(recordingFetch(() => json({ Code: 10010204004, Success: false, Message: "The model does not exist." })));
+  await assert.rejects(envelope.getRepo("a/b"), (error) => error.code === "repo_not_found" && error.details.provider === "modelscope");
+  const other = msProvider(recordingFetch(() => json({ Code: 500, Success: false, Message: "boom" })));
+  await assert.rejects(other.getRepo("a/b"), (error) => error.code === "provider_http_error" && error.retryable === true && !error.networkClass);
+  // Server trouble stays network class so callers may retry.
+  await assert.rejects(msProvider(recordingFetch(() => json({}, { status: 503 }))).getRepo("a/b"), (error) => error.code === "provider_http_error" && error.networkClass === true);
+  await assert.rejects(msProvider(recordingFetch(() => { throw networkFailure(); })).getRepo("a/b"), (error) => error.code === "provider_unreachable" && error.networkClass === true);
+  // Bad input never reaches the network.
+  const fetchImpl = recordingFetch(() => json({}));
+  const ms = msProvider(fetchImpl);
+  for (const repo of ["", "single", "a/b/c", "../x/y", "a/b c"]) await assert.rejects(ms.getRepo(repo), (error) => error.code === "invalid_repo", repo);
+  await assert.rejects(ms.getRepo("a/b", { revision: ".." }), (error) => error.code === "invalid_revision");
+  assert.equal(fetchImpl.calls.length, 0);
+});
+
+test("modelscope: README and fileUrl use the repo endpoint; a missing README is not a failure", async () => {
+  const fetchImpl = recordingFetch((url) => (url.searchParams.get("FilePath") === "README.md" ? textResponse("# Example\n") : json({}, { status: 404 })));
+  const ms = msProvider(fetchImpl);
+  const readme = await ms.getReadme("example-org/Example-Qwen3-8B-GGUF");
+  assert.deepEqual({ markdown: readme.markdown, truncated: readme.truncated, missing: readme.missing }, { markdown: "# Example\n", truncated: false, missing: false });
+  assert.equal(fetchImpl.calls[0].url, "https://www.modelscope.cn/api/v1/models/example-org/Example-Qwen3-8B-GGUF/repo?Revision=master&FilePath=README.md");
+
+  const capped = await ms.getReadme("example-org/Example-Qwen3-8B-GGUF", { maxBytes: 4 });
+  assert.equal(capped.truncated, true);
+
+  const missing = await msProvider(recordingFetch(() => json({}, { status: 404 }))).getReadme("a/b");
+  assert.equal(missing.missing, true);
+  const envelope = await msProvider(recordingFetch(() => textResponse(JSON.stringify({ Code: 404, Success: false, Message: "file not found" })))).getReadme("a/b");
+  assert.equal(envelope.missing, true);
+
+  assert.equal(ms.fileUrl("a/b", "dir/m odel.gguf", MS_REVISION), `https://www.modelscope.cn/api/v1/models/a/b/repo?Revision=${MS_REVISION}&FilePath=dir%2Fm%20odel.gguf`);
+  assert.throws(() => ms.fileUrl("a/b", "../x"), (error) => error.code === "unsafe_path");
+  assert.throws(() => ms.fileUrl("a/b", "a//b"), (error) => error.code === "unsafe_path");
+});
+
+test("modelscope: no credential is ever sent, and the handed-out fetch refuses one", async () => {
+  const fetchImpl = recordingFetch((url) => (url.pathname.endsWith("/files") ? json(fixture("modelscope-files.json")) : json({ Data: { Models: [] } })));
+  const ms = msProvider(fetchImpl);
+  await ms.search({ q: "x" });
+  await ms.getRepo("a/b");
+  assert.ok(fetchImpl.calls.every((call) => call.headers.authorization === undefined));
+  const before = fetchImpl.calls.length;
+  await assert.rejects(ms.fetchImpl("https://www.modelscope.cn/x", { token: FAKE_TOKEN }), (error) => error.code === "credential_host_violation");
+  await assert.rejects(ms.fetchImpl("https://www.modelscope.cn/x", { headers: { Authorization: `Bearer ${FAKE_TOKEN}` } }), (error) => error.code === "credential_host_violation");
+  assert.equal(fetchImpl.calls.length, before);
+  await ms.fetchImpl("https://www.modelscope.cn/x", { headers: { range: "bytes=0-9" } });
+  assert.equal(fetchImpl.calls.at(-1).headers.range, "bytes=0-9");
+});
+
+test("modelscope: searches and manifests are cached on their own TTLs", async () => {
+  const clock = fakeClock();
+  const cache = {
+    search: createSingleFlightCache({ ttlMs: 90 * 1000, now: () => clock.now() }),
+    manifest: createSingleFlightCache({ ttlMs: 5 * 60 * 1000, now: () => clock.now() }),
+    readme: createSingleFlightCache({ ttlMs: 30 * 60 * 1000, now: () => clock.now() }),
+  };
+  const fetchImpl = recordingFetch((url) => (url.pathname.endsWith("/files") ? json(fixture("modelscope-files.json")) : json(fixture("modelscope-search-page1.json"))));
+  const ms = msProvider(fetchImpl, { cache, clock });
+  const [a, b] = await Promise.all([ms.getRepo("a/b"), ms.getRepo("a/b")]);
+  a.files.length = 0;
+  assert.equal(b.files.length, 5, "callers get clones");
+  await ms.getRepo("a/b");
+  await ms.getRepo("a/b", { revision: "dev" });
+  await ms.search({ q: "x" });
+  await ms.search({ q: "x" });
+  assert.equal(fetchImpl.calls.length, 3);
+  clock.advance(91 * 1000);
+  await ms.search({ q: "x" });
+  await ms.getRepo("a/b");
+  assert.equal(fetchImpl.calls.length, 4, "search expired at 90 s, the manifest has not");
+  clock.advance(5 * 60 * 1000);
+  await ms.getRepo("a/b");
+  assert.equal(fetchImpl.calls.length, 5);
+  await ms.getRepo("a/b", { force: true });
+  assert.equal(fetchImpl.calls.length, 6);
+});
+
+test("modelscope: the CLI environment reuses the proxy-strip and direct-DNS helper", () => {
+  const env = buildModelScopeCliEnv(path.join("cache-root", "hf"), { HTTPS_PROXY: "http://127.0.0.1:1", http_proxy: "http://127.0.0.1:1", ALL_PROXY: "x", KEEP: "1" });
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) assert.equal(env[key], undefined, key);
+  assert.equal(env.NO_PROXY, "*");
+  assert.equal(env.no_proxy, "*");
+  assert.equal(env.MODELSCOPE_DIRECT_DNS, "1");
+  assert.ok(env.MODELSCOPE_DIRECT_DNS_SERVERS);
+  assert.ok(env.PYTHONPATH.split(path.delimiter).some((entry) => /python-direct-dns$/.test(entry)));
+  assert.equal(env.MODELSCOPE_CACHE, path.join("cache-root", "hf", "modelscope"));
+  assert.equal(env.KEEP, "1");
+});
+
 // ------------------------------------------------ transport failures
 
 test("transport failures become network-class ProviderErrors; a caller abort stays an abort", async () => {
@@ -758,7 +982,10 @@ test("createProviders: endpoints follow the settings, unknown and unavailable pr
   assert.equal(providers.get("hf-mirror").apiBase, "https://hf-mirror.com");
   settings.sources.mirrorEndpoint = "https://mirror.example/hf";
   assert.equal(providers.get("hf-mirror").apiBase, "https://mirror.example/hf");
-  assert.throws(() => providers.get("modelscope"), (error) => error.code === "provider_unavailable");
+  assert.equal(providers.get("modelscope").apiBase, "https://www.modelscope.cn");
+  assert.equal(providers.forNamespace("modelscope").id, "modelscope");
+  settings.sources.modelScopeEndpoint = "https://ms.example";
+  assert.equal(providers.get("modelscope").apiBase, "https://ms.example");
   assert.throws(() => providers.get("nope"), (error) => error.code === "unknown_provider");
   assert.throws(() => providers.forNamespace("nope"), (error) => error.code === "unknown_provider");
   assert.deepEqual([...providers.ids], ["huggingface", "hf-mirror", "modelscope"]);
@@ -849,8 +1076,8 @@ test("search, manifest and readme use their own TTLs and the token is never part
 // ------------------------------------------------------------ hygiene
 
 test("the provider fixtures hold no paths, e-mail addresses or tokens", () => {
-  const files = fs.readdirSync(FIXTURES).filter((name) => /^hf-.*\.json$/.test(name));
-  assert.ok(files.length >= 7, files.join(", "));
+  const files = fs.readdirSync(FIXTURES).filter((name) => /^(?:hf|modelscope)-.*\.json$/.test(name));
+  assert.ok(files.length >= 11, files.join(", "));
   const patterns = [
     { id: "drive path", pattern: /(?<![A-Za-z0-9_])[A-Za-z]:[\\/]/ },
     { id: "user path", pattern: /[\\/]Users[\\/]|\/home\//i },
