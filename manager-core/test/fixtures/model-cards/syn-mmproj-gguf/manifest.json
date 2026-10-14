@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-mmproj-gguf",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "Qwen2.5-VL-7B-Instruct-GGUF",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic llama.cpp vision folder: a qwen2vl Q4_K_M main model and its clip mmproj projector (projection_dim equals the main embedding length), hermes-style <tool_call> template."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf","bytes":4931859936,"kind":"gguf"},
+    {"name":"README.md","bytes":2981,"kind":"placeholder"},
+    {"name":"mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf","bytes":1354162752,"kind":"gguf"}
+  ]
+}
