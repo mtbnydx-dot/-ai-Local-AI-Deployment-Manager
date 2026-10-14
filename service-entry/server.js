@@ -12,6 +12,8 @@ const { createEntrySecurity } = require("./lib/security");
 const { createBillingStore } = require("./lib/billing-store");
 const { createBillingHttpHandler, strictLocalBillingAdmin } = require("./lib/billing-http");
 const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview");
+const { ACCESS_STORE_FILENAME, createKeysStore } = require("./lib/keys-store");
+const keyMigration = require("./lib/key-migration");
 const { parseAuxGatewayRoute, buildAuxUpstreamPath, parseEnvFileValue } = require("./lib/aux-gateway");
 const { ttsSynthesisRoute, countTtsCharacters, ttsEngineFromBody, createWavDurationProbe, createJsonCollector, parseTtsJsonDuration } = require("./lib/tts-usage");
 const { signedTtsHeaders, createTtsReconciler } = require("./lib/tts-bridge");
@@ -51,6 +53,9 @@ const authGuard = core.createAuthFailureGuard({
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
 const FLEET_SETTINGS_FILE = path.join(ROOT, "data", "fleet-settings.json");
 const BILLING_DB_FILE = process.env.AI_BILLING_DB || path.join(ROOT, "data", "platform-billing.sqlite");
+// The platform access store lives beside the billing ledger (05 §6).
+const ACCESS_DB_FILE = path.join(path.dirname(BILLING_DB_FILE), ACCESS_STORE_FILENAME);
+const ACCESS_STORE_RETRY_MS = 30_000;
 const FLEET_API_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_FLEET_MAX_BODY_BYTES, 1024 * 1024, 64 * 1024, 4 * 1024 * 1024);
 const GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_MAX_BODY_BYTES, 32 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
 const TTS_GATEWAY_MAX_BODY_BYTES = boundedByteLimit(process.env.SERVICE_ENTRY_TTS_MAX_BODY_BYTES, 16 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024);
@@ -106,6 +111,9 @@ const MANAGERS = [
     name: "vLLM Manager",
     root: path.join(AI_ROOT, "vllm-manager"),
     port: Number(process.env.VLLM_MANAGER_PORT || 5177),
+    // The id this manager's billing client sends; migrated keys keep billing
+    // under it (05 §6.4).
+    billingId: process.env.VLLM_MANAGER_ID || "vllm-manager",
     envPort: "VLLM_MANAGER_PORT",
     envHost: "VLLM_MANAGER_HOST",
     defaultHost: process.env.VLLM_MANAGER_HOST || "0.0.0.0",
@@ -117,6 +125,7 @@ const MANAGERS = [
     name: "llama.cpp Manager",
     root: path.join(AI_ROOT, "llama-manager"),
     port: Number(process.env.LLAMA_MANAGER_PORT || 5178),
+    billingId: process.env.LLAMA_MANAGER_ID || "llama-manager",
     envPort: "LLAMA_MANAGER_PORT",
     envHost: "LLAMA_MANAGER_HOST",
     defaultHost: process.env.LLAMA_MANAGER_HOST || "0.0.0.0",
@@ -155,6 +164,8 @@ let routeMounts = null;
 // 04 telemetry (store and collectors); created by startServiceEntry().
 let telemetryRuntime = null;
 let billingStore = null;
+let accessStore = null;
+let accessStoreFailure = null;
 const managerModelCache = new Map();
 const managerStatusCache = new Map();
 // Manager liveness rarely flips, so a short probe cache turns the per-request
@@ -171,6 +182,96 @@ function getBillingStore() {
     defaultEnforcementMode: "shadow",
   });
   return billingStore;
+}
+
+// The platform access store (05 §6). Opening is retried at most every 30 s
+// after a failure; the throw means "store unavailable" to every caller, which
+// fails closed for auth and never reads as "no keys".
+function getAccessStore() {
+  if (accessStore) return accessStore;
+  if (accessStoreFailure && Date.now() - accessStoreFailure.at < ACCESS_STORE_RETRY_MS) throw accessStoreFailure.error;
+  try {
+    accessStore = createKeysStore({ DatabaseSync, file: ACCESS_DB_FILE });
+    accessStoreFailure = null;
+    return accessStore;
+  } catch (error) {
+    accessStoreFailure = { at: Date.now(), error };
+    console.error(core.redactSecrets(`service-entry: the access store could not be opened (${error?.code || "access_store_unavailable"}): ${error?.cause?.message || error?.message || error}`));
+    throw error;
+  }
+}
+
+function closeAccessStore() {
+  if (!accessStore) return;
+  try {
+    accessStore.close();
+  } catch {
+    // Shutting down; the OS closes the SQLite handle if this fails.
+  }
+  accessStore = null;
+}
+
+// Imports the managers' legacy keys into the access store (05 §6.7). It runs
+// once (access_meta['migration.v1']) unless `force`; the managers' files are
+// only read. Tests pass their own store, managers and billing store.
+async function migrateLegacyKeys(options = {}) {
+  const store = options.store || getAccessStore();
+  const managers = (options.managers || MANAGERS).map(({ id, billingId, root }) => ({ id, billingId, root }));
+  const billing = options.billingStore || getBillingStore();
+  return keyMigration.runKeyMigration({
+    store,
+    managers,
+    listBindings: () => keyMigration.listBillingBindings(billing),
+    force: options.force === true,
+    actor: "migration",
+  });
+}
+
+// Entry start: open the access store and migrate before listening. Neither
+// failure stops the entry; the store is retried by its next caller and an
+// incomplete migration by the next start.
+async function prepareAccessStore(options = {}) {
+  const log = options.logger || console;
+  let store;
+  try {
+    store = getAccessStore();
+  } catch (error) {
+    return { ok: false, code: error?.code || "access_store_unavailable" };
+  }
+  try {
+    const outcome = await migrateLegacyKeys({ ...options, store });
+    if (outcome.ran) logKeyMigration(outcome, log);
+    return { ok: true, migration: outcome };
+  } catch (error) {
+    log.error(core.redactSecrets(`service-entry: legacy key migration failed; it runs again at the next start: ${error?.message || error}`));
+    return { ok: false, code: "key_migration_failed" };
+  }
+}
+
+// One line, ids and codes only: the report itself is in access_meta.
+function logKeyMigration(outcome, log = console) {
+  const counts = outcome.report?.counts || {};
+  const codes = Array.from(new Set((outcome.report?.warnings || []).map((item) => item.code))).sort();
+  const line = `service-entry: legacy key migration imported ${counts.inserted || 0} key(s), skipped ${counts.skipped || 0}`
+    + `${codes.length ? `, warnings: ${codes.join(", ")}` : ""}${outcome.complete ? "" : "; incomplete, it runs again at the next start"}`;
+  if (codes.length || !outcome.complete) log.warn(line);
+  else log.log(line);
+}
+
+// The compat key summary of /api/keys and /api/status (05 §13.1): the same
+// shape as before, read from the access store the entry opened before
+// listening. A read never opens the database itself; while the store is not
+// open (it failed at start, or the entry was never started, as in tests)
+// the summary comes from what the managers report, as before P5.
+function buildKeySummary(managers) {
+  if (accessStore) {
+    try {
+      return keyMigration.summarizeStoreKeys(accessStore, managers);
+    } catch (error) {
+      console.error(core.redactSecrets(`service-entry: key summary from the access store failed; using the managers' lists: ${error?.message || error}`));
+    }
+  }
+  return summarizeServiceKeys(managers);
 }
 
 const handleBillingHttpRequest = createBillingHttpHandler({
@@ -434,7 +535,7 @@ async function handleRequest(req, res, routes = null) {
       const allowed = security.checkManagementAccess(req);
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const managers = await Promise.all(MANAGERS.map((manager) => buildManagerStatus(manager, { force: url.searchParams.get("fresh") === "1" })));
-      return sendJson(res, { ok: true, keys: summarizeServiceKeys(managers) });
+      return sendJson(res, { ok: true, keys: buildKeySummary(managers) });
     }
     // Viewer copies of /api/security, /api/status, /api/fleet, the route
     // preview and /api/gateway-access come from their registered redaction,
@@ -466,7 +567,7 @@ async function handleRequest(req, res, routes = null) {
         mcp,
         tts,
         search,
-        keys: summarizeServiceKeys(managers),
+        keys: buildKeySummary(managers),
         components: summarizeComponents(managers, mcp, tts, search),
       };
       return sendJson(res, payload);
@@ -699,6 +800,9 @@ async function startServiceEntry() {
   // traffic. A broken ledger must fail startup instead of silently bypassing
   // quota enforcement after managers begin forwarding requests.
   getBillingStore();
+  // The access store opens and the managers' legacy keys migrate before the
+  // entry listens (05 §6, §6.7); a failure of either leaves the entry up.
+  await prepareAccessStore();
   // Publish the trust token before accepting traffic so managers started
   // independently can verify proxied requests from the first one.
   await security.issueTrustToken().catch((error) => {
@@ -2741,6 +2845,7 @@ function shutdownSoon(options = {}) {
         .catch(() => {})
         .finally(() => {
           closeBillingStore();
+          closeAccessStore();
           exitProcess(code);
         });
     };
@@ -2801,7 +2906,12 @@ module.exports = {
   flattenCatalogModels,
   forwardUpstreamBody,
   getFleetCatalogs,
+  getAccessStore,
+  closeAccessStore,
   getBillingStore,
+  buildKeySummary,
+  migrateLegacyKeys,
+  prepareAccessStore,
   getFleetSettings,
   getManagerModelCatalog,
   handleRequest,

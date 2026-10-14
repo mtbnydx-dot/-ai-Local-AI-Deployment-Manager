@@ -137,3 +137,7 @@ Object.defineProperty(module.exports, "platform", { enumerable: true, configurab
 module.exports.internalAuth = require("./internal-auth");
 // New subsystems are namespaces, never spread into the flat list (00 §9.17).
 module.exports.engines = require("./engines");
+// The single secret store (06 OPS-3b); runtime-secret-store.js stays flat as its facade.
+module.exports.secrets = require("./secret-store");
+// The ModelCard v1 local inspector (02 MOD-3); a namespace like engines and secrets.
+module.exports.models = require("./model-inspector");
