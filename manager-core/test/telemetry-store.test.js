@@ -309,9 +309,14 @@ test("rows are normalised, validated and capped before the INSERT", async (t) =>
     requestRow(8, { ttftMs: Number.NaN }),
     // An empty numeric cell (imports) counts as absent.
     requestRow(9, { ttftMs: "", bytesOut: "  " }),
+    // Only time columns read date text. V8's Date.parse takes "status 200"
+    // for the year 200, which must not become a status code.
+    requestRow(10, { status: "status 200" }),
+    requestRow(11, { durationMs: "abc 2" }),
+    requestRow(12, { status: " 201 ", promptTokens: "1e2", receivedAt: new Date(NOW).toUTCString() }),
   ]);
-  assert.equal(result.accepted, 3);
-  assert.equal(result.rejected, 7);
+  assert.equal(result.accepted, 4);
+  assert.equal(result.rejected, 9);
   assert.deepEqual(result.errors, [
     { index: 2, code: "invalid_value", field: "terminal_state" },
     { index: 3, code: "missing_field", field: "status" },
@@ -320,6 +325,8 @@ test("rows are normalised, validated and capped before the INSERT", async (t) =>
     { index: 6, code: "invalid_value", field: "stream" },
     { index: 7, code: "invalid_value", field: "user_agent" },
     { index: 8, code: "invalid_value", field: "ttft_ms" },
+    { index: 10, code: "invalid_value", field: "status" },
+    { index: 11, code: "invalid_value", field: "duration_ms" },
   ]);
   const circular = { name: "loop" };
   circular.self = circular;
@@ -332,7 +339,9 @@ test("rows are normalised, validated and capped before the INSERT", async (t) =>
 
   readDb(file, (db) => {
     const rows = db.prepare("SELECT request_id, received_at, path, stream, status, source_program, extra, usage_source FROM requests ORDER BY id").all();
-    assert.equal(rows.length, 3);
+    assert.equal(rows.length, 4);
+    const numeric = db.prepare("SELECT status, prompt_tokens, received_at FROM requests WHERE request_id = ?").get(requestId(12));
+    assert.deepEqual({ ...numeric }, { status: 201, prompt_tokens: 100, received_at: NOW });
     const blank = db.prepare("SELECT ttft_ms, bytes_out FROM requests WHERE request_id = ?").get(requestId(9));
     assert.deepEqual({ ...blank }, { ttft_ms: null, bytes_out: null });
     assert.equal(rows[0].extra, null, "oversized extra JSON is dropped, not truncated");
@@ -694,6 +703,17 @@ test("state round trip, flush on close and closed-store errors", async (t) => {
   readDb(file, (db) => assert.equal(db.prepare("SELECT COUNT(*) AS n FROM requests").get().n, 2000));
 });
 
+test("close({ flushMs: null }) keeps the default flush window instead of skipping the flush", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const store = await openTelemetryStore({ file, logger: quietLogger() });
+  const pendingWrite = store.insertRequests(Array.from({ length: 10_000 }, (unused, index) => requestRow(index)));
+  pendingWrite.catch(() => {});
+  assert.deepEqual(await store.close({ flushMs: null }), { ok: true, timedOut: false });
+  assert.equal((await pendingWrite).accepted, 10_000);
+  readDb(file, (db) => assert.equal(db.prepare("SELECT COUNT(*) AS n FROM requests").get().n, 10_000));
+});
+
 test("a crashed worker restarts with backoff and calls in between are retryable", async (t) => {
   const dir = tempDir(t);
   const logger = quietLogger();
@@ -739,10 +759,26 @@ test("store-worker helpers: TTL clamping, IP masking and the audit hash", () => 
   assert.deepEqual(storeWorker.normalizeTtl({ requestsDays: 1, ipDays: 400, samplesHours: "x", eventsDays: 90.7 }), {
     ...schema.TTL_DEFAULTS, requestsDays: 7, ipDays: 7, eventsDays: 90,
   });
+  // Number() reads all of these as 0. An unset key keeps its default; it is
+  // never clamped to the minimum, which would delete data for good.
+  const unset = { requestsDays: null, ipDays: null, samplesHours: null, minuteDays: null, hourDays: null, eventsDays: null };
+  assert.deepEqual(storeWorker.normalizeTtl(unset), { ...schema.TTL_DEFAULTS });
+  assert.deepEqual(storeWorker.normalizeTtl({ hourDays: "", eventsDays: false, minuteDays: [], samplesHours: "  ", ipDays: {} }), {
+    ...schema.TTL_DEFAULTS,
+  });
+  assert.deepEqual(storeWorker.normalizeTtl({ hourDays: "30", requestsDays: 0, ipDays: "1e1" }), {
+    ...schema.TTL_DEFAULTS, hourDays: 30, requestsDays: 7, ipDays: 7,
+  });
   assert.equal(storeWorker.maskClientIp("192.0.2.200"), "192.0.2.x");
   assert.equal(storeWorker.maskClientIp("192.0.2.x"), "192.0.2.x");
   assert.equal(storeWorker.maskClientIp("2001:db8::1"), "2001:db8:…");
+  assert.equal(storeWorker.maskClientIp("2001:db8:…"), "2001:db8:…");
   assert.equal(storeWorker.maskClientIp("unknown"), "…");
+  // A port or brackets never keep the whole address.
+  assert.equal(storeWorker.maskClientIp("203.0.113.5:443"), "203.0.113.x");
+  assert.equal(storeWorker.maskClientIp("[2001:db8::1]:443"), "2001:db8:…");
+  assert.equal(storeWorker.maskClientIp("[::ffff:198.51.100.4]:8080"), "198.51.100.x");
+  assert.equal(storeWorker.maskClientIp("203.0.113.5:http"), "…");
   const row = { at: 1, source: "entry", actor: "a", action: "verify", outcome: "ok" };
   assert.equal(
     storeWorker.auditCanonicalJson(row),
@@ -876,6 +912,47 @@ test("rows written while a masking pass yields are masked even behind its cursor
   assert.deepEqual(clientDataOf(file, requestId(1)), MASKED_V4);
   assert.equal((await store.stats()).masking.maskedOnInsert, 1);
   assert.equal((await store.runRetention(NOW + 3 * DAY_MS + 60_000, { ipDays: 7 })).masked, 0);
+});
+
+test("unset TTL and tuning values keep their defaults, so retention never wipes the store", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const store = await openTelemetryStore({ file, logger: quietLogger() });
+  await store.insertRequests([
+    ...[1, 2, 3].map((index) => requestRow(index, { receivedAt: NOW - 31 * DAY_MS + index })),
+    requestRow(4, { receivedAt: NOW - 10 * DAY_MS, clientIp: "203.0.113.5:443" }),
+  ]);
+  await store.insertEvents([{ at: NOW - 5 * DAY_MS, type: "alert.firing", source: "telemetry", title: "recent alert" }]);
+  await store.close();
+  // Hourly rollups one day apart; the rollup job ships in TEL-10.
+  const db = new sqlite.DatabaseSync(file);
+  const hourly = db.prepare(`INSERT INTO rollup_1h (bucket, requests, completed, client_aborts, streams, prompt_tokens, cached_tokens,
+    output_tokens, estimated_usage, finish_length, finish_tool, duration_ms_sum, ttft_ms_sum, ttft_n, decode_tps_sum, decode_tps_n)
+    VALUES (?, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)`);
+  for (let day = 0; day < 100; day += 1) hourly.run(NOW - day * DAY_MS - 3_600_000);
+  db.close();
+
+  // A config section with unset keys, passed straight through. Number()
+  // reads null, "" and false as 0, the minimum of every range.
+  const reopened = await openTelemetryStore({
+    file, logger: quietLogger(), retention: { batchRows: null, yieldMs: null, optimizeEveryMs: null },
+  });
+  cleanup(t, () => reopened.close());
+  const unset = { requestsDays: null, ipDays: 7, samplesHours: "", minuteDays: false, hourDays: null, eventsDays: null };
+  const result = await reopened.runRetention(NOW, unset);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.ttl, { ...schema.TTL_DEFAULTS, ipDays: 7 });
+  assert.deepEqual(result.deleted, { requests: 3 });
+  assert.equal(result.batches.requests, 1, "batchRows: null keeps batches of 5000");
+  assert.equal(result.masked, 1);
+  assert.deepEqual(clientDataOf(file, requestId(4)), MASKED_V4, "the port does not keep the address whole");
+  const stats = await reopened.stats({ rows: true });
+  assert.equal(stats.rows.rollup1h, 100);
+  assert.equal(stats.rows.events, 1);
+
+  const again = await reopened.runRetention(NOW + 60_000, unset);
+  assert.deepEqual(again.deleted, {});
+  assert.equal(again.optimized, false, "optimizeEveryMs: null keeps the daily optimize");
 });
 
 test("a lock that outlasts busy_timeout is reported as retryable, not as dropped", async (t) => {
@@ -1105,12 +1182,12 @@ test("the daily backup includes the telemetry database, and a broken one only ad
     if (["AI_TELEMETRY_DB", "PSMODULEPATH"].includes(key.toUpperCase())) delete env[key];
   }
   const script = path.join(REPO_ROOT, "scripts", "backup-platform.ps1");
-  const runBackup = (name) => {
+  const runBackup = (name, extraEnv = {}) => {
     const backupRoot = path.join(dir, name);
     const result = spawnSync("powershell.exe", [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
       "-Root", root, "-BackupRoot", backupRoot, "-NoPrune",
-    ], { env, encoding: "utf8", windowsHide: true, timeout: 120_000 });
+    ], { env: { ...env, ...extraEnv }, encoding: "utf8", windowsHide: true, timeout: 120_000 });
     const output = `${result.stdout || ""}${result.stderr || ""}`;
     assert.equal(result.status, 0, output);
     const [snapshot] = fs.readdirSync(backupRoot);
@@ -1146,4 +1223,13 @@ test("the daily backup includes the telemetry database, and a broken one only ad
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM requests").get().n, 25);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_access_log").get().n, 1);
   });
+
+  // A configured location that holds no database is a warning, not a
+  // silent skip: the backup would otherwise have no telemetry at all.
+  const moved = runBackup("backups-moved", { AI_TELEMETRY_DB: path.join(dir, "elsewhere", "telemetry.sqlite") });
+  assert.deepEqual(moved.manifest.files.map((file) => file.path).sort(), [
+    "service-entry\\data\\keys.json", "service-entry\\data\\platform-billing.sqlite",
+  ]);
+  assert.deepEqual(moved.manifest.warnings.map((warning) => [warning.code, warning.path]), [["telemetry_db_missing", telemetryEntry]]);
+  assert.match(moved.output, /AI_TELEMETRY_DB names a file that does not exist/);
 });

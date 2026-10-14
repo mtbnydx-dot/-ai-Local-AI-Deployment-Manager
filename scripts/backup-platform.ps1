@@ -13,7 +13,9 @@ param(
 #   * service-entry\data\telemetry.sqlite  (telemetry and the audit-of-audit log; VACUUM INTO;
 #     AI_TELEMETRY_DB overrides the source path). Optional: the store runs degraded on an
 #     unreadable file and never repairs it (04-telemetry section 4.1), so a failed
-#     snapshot becomes a manifest warning and the rest of the backup still runs.
+#     snapshot becomes a manifest warning and the rest of the backup still runs. So does an
+#     AI_TELEMETRY_DB that names no file. The store can grow to telemetry.maxDbMb (2 GB by
+#     default); VACUUM INTO copies live pages only, but each kept snapshot is that size.
 #   * TTS history database (tts-history.sqlite3) when present
 #   * service-entry\data\*.json, <manager>\logs\*.json ledgers, .runtime\gateway-trust is NOT copied
 # into backups\<yyyyMMdd-HHmm>\ with a manifest, pruning snapshots older than -KeepDays.
@@ -107,7 +109,14 @@ foreach ($relative in @('.runtime\platform-mcp\server.env','search-gateway\.env'
 # Last, after every must-keep file: telemetry is optional (see the header).
 $telemetryDb = if ($env:AI_TELEMETRY_DB) { $env:AI_TELEMETRY_DB } else { Join-Path $Root 'service-entry\data\telemetry.sqlite' }
 if (-not [IO.Path]::IsPathRooted($telemetryDb)) { $telemetryDb = Join-Path $Root $telemetryDb }
-Add-OptionalSqlite $telemetryDb 'service-entry\data\telemetry.sqlite' 'telemetry_snapshot_failed'
+if ($env:AI_TELEMETRY_DB -and -not (Test-Path -LiteralPath $telemetryDb -PathType Leaf)) {
+    # Add-File skips a missing source quietly; a configured location must not.
+    $message = "AI_TELEMETRY_DB names a file that does not exist: $telemetryDb"
+    Write-Warning "Skipped service-entry\data\telemetry.sqlite: $message"
+    $manifest.warnings += [ordered]@{ code = 'telemetry_db_missing'; path = 'service-entry\data\telemetry.sqlite'; message = $message }
+} else {
+    Add-OptionalSqlite $telemetryDb 'service-entry\data\telemetry.sqlite' 'telemetry_snapshot_failed'
+}
 
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $target "backup-manifest.json") -Encoding UTF8
 Write-Host ("Backup written: {0} ({1} files, {2} warnings)" -f $target, $manifest.files.Count, $manifest.warnings.Count)

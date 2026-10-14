@@ -74,6 +74,10 @@ const UNMASKED_REQUEST_SQL = `(user_agent IS NOT NULL OR owui_user_id IS NOT NUL
 // A supplied value that cannot be stored in its column. normalizeRow rejects
 // the row instead of silently storing the column default.
 const INVALID = Symbol("invalidValue");
+// Decimal text accepted where a number is expected ("12", "-3.5", "1e3").
+const NUMERIC_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+// Masked client addresses: "a.b.c.x" or the first two IPv6 groups and "…".
+const MASKED_IP_SHAPE = /^(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.x|[0-9a-f]{0,4}:[0-9a-f]{0,4}:…)$/i;
 
 function storeError(code, message, extra = {}) {
   const error = new Error(message);
@@ -122,6 +126,16 @@ function quoteIdentifier(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
 }
 
+// The number a caller supplied, or null when it supplied none. Only numbers
+// and numeric text count: Number() reads null, "", false and [] as 0, which
+// would turn an unset TTL key into its minimum and delete data for good.
+function suppliedNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && NUMERIC_TEXT.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
 function toEpochMs(value) {
   if (value === undefined || value === null || value === "") return null;
   if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
@@ -129,7 +143,7 @@ function toEpochMs(value) {
   if (typeof value === "number") return Number.isFinite(value) ? Math.round(value) : null;
   if (typeof value === "string") {
     const text = value.trim();
-    if (/^-?\d+(\.\d+)?$/.test(text)) return Math.round(Number(text));
+    if (NUMERIC_TEXT.test(text)) return Math.round(Number(text));
     const parsed = Date.parse(text);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -144,10 +158,18 @@ function toReal(value) {
   return null;
 }
 
-function toInteger(value) {
+// Only time columns read date text; anywhere else V8's lenient Date.parse
+// would store "status 200" as a year-200 timestamp instead of rejecting it.
+function toInteger(value, isTime) {
   if (typeof value === "boolean") return value ? 1 : 0;
   if (typeof value === "bigint") return value;
-  return toEpochMs(value);
+  if (isTime) return toEpochMs(value);
+  const number = suppliedNumber(value);
+  return number === null ? null : Math.round(number);
+}
+
+function isTimeColumn(name) {
+  return name === "at" || name.endsWith("_at");
 }
 
 function toText(value, maxChars) {
@@ -207,12 +229,19 @@ function delay(ms) {
 function maskClientIp(value) {
   if (value === null || value === undefined) return null;
   let text = String(value).trim();
+  // "[v6]:port", "[v6]" and "v4:port" lose the brackets and port first:
+  // maskAddress splits on ":" and would keep "a.b.c.d:443" whole.
+  const bracketed = /^\[([^\]]*)\](?::\d+)?$/.exec(text);
+  const withPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/.exec(text);
+  if (bracketed) text = bracketed[1];
+  else if (withPort) text = withPort[1];
   const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(text);
   if (mapped) text = mapped[1];
   const masked = maskAddress(text);
-  // The retention query recognises masked values by these suffixes, so a
-  // value maskAddress cannot shape (not an address at all) becomes "…".
-  return masked.endsWith(".x") || masked.endsWith("…") ? masked : "…";
+  // The retention query recognises masked values by their suffix, so
+  // anything maskAddress cannot shape into a masked address (not an address
+  // at all, or one with a stray port) becomes "…".
+  return MASKED_IP_SHAPE.test(masked) ? masked : "…";
 }
 
 function auditCanonicalJson(row) {
@@ -229,13 +258,15 @@ function auditChainHash(prevHash, row) {
   return crypto.createHash("sha256").update(`${prevHash}\n${auditCanonicalJson(row)}`, "utf8").digest("hex");
 }
 
+// An unset key (null, "", a config section with holes) keeps its default;
+// only a supplied number is clamped to the key's range.
 function normalizeTtl(ttl) {
   const input = ttl && typeof ttl === "object" ? ttl : {};
   const output = {};
   for (const [key, fallback] of Object.entries(schema.TTL_DEFAULTS)) {
     const [min, max] = schema.TTL_LIMITS[key];
-    const number = Number(input[key]);
-    output[key] = Number.isFinite(number) ? Math.min(max, Math.max(min, Math.floor(number))) : fallback;
+    const number = suppliedNumber(input[key]);
+    output[key] = number === null ? fallback : Math.min(max, Math.max(min, Math.floor(number)));
   }
   output.ipDays = Math.min(output.ipDays, output.requestsDays);
   return output;
@@ -245,8 +276,8 @@ function pickPositiveNumbers(input, defaults) {
   const output = { ...defaults };
   if (!input || typeof input !== "object") return output;
   for (const key of Object.keys(defaults)) {
-    const number = Number(input[key]);
-    if (Number.isFinite(number) && number >= 0) output[key] = Math.floor(number);
+    const number = suppliedNumber(input[key]);
+    if (number !== null && number >= 0) output[key] = Math.floor(number);
   }
   output.batchRows = Math.max(1, output.batchRows);
   return output;
@@ -334,6 +365,7 @@ function buildTableSpec(db, table, { exclude = [] } = {}) {
       name: column.name,
       key: snakeToCamel(column.name),
       kind: columnKind(column.type),
+      time: isTimeColumn(column.name),
       required: column.notnull && (column.dflt === null || column.dflt === undefined),
       fallback: parseDefault(column.dflt),
       choices: enums[column.name] || null,
@@ -355,7 +387,7 @@ function coerceColumn(column, raw) {
   if (column.kind === "integer" || column.kind === "real") {
     // An empty cell (CSV or log imports) counts as absent, not as invalid.
     if (typeof value === "string" && !value.trim()) return null;
-    const number = column.kind === "integer" ? toInteger(value) : toReal(value);
+    const number = column.kind === "integer" ? toInteger(value, column.time) : toReal(value);
     return number === null ? INVALID : number;
   }
   if (column.json) return toJsonText(value, column.json);

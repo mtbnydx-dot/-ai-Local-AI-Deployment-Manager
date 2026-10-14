@@ -66,8 +66,11 @@ class TelemetryStoreError extends Error {
   }
 }
 
+// Only a number or numeric text counts as supplied: Number(null) is 0, so
+// close({ flushMs: null }) would otherwise skip the flush entirely.
 function clampInt(value, min, max, fallback) {
-  const number = Number(value);
+  const supplied = typeof value === "number" || (typeof value === "string" && value.trim() !== "");
+  const number = supplied ? Number(value) : Number.NaN;
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(number)));
 }
