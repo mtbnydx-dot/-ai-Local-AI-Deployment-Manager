@@ -1,0 +1,65 @@
+{
+  "Code": 200,
+  "Message": "success",
+  "Success": true,
+  "RequestId": "00000000-0000-0000-0000-000000000001",
+  "Data": {
+    "Model": {
+      "TotalCount": 3,
+      "Models": [
+        {
+          "Id": "example-org/Example-Qwen3-8B-GGUF",
+          "Path": "example-org",
+          "Name": "Example-Qwen3-8B-GGUF",
+          "ChineseName": "示例千问3 8B GGUF",
+          "Description": "Example GGUF quantisations.",
+          "Tasks": [
+            {
+              "Name": "text-generation"
+            }
+          ],
+          "Tags": [
+            "gguf",
+            "qwen3"
+          ],
+          "Libraries": [
+            "gguf"
+          ],
+          "Downloads": 12034,
+          "Stars": 57,
+          "LastUpdatedTime": 1788000000,
+          "GmtCreate": 1787000000000,
+          "License": "Apache License 2.0",
+          "StorageSize": 5027783488
+        },
+        {
+          "Id": "example-org/Example-Vision-7B",
+          "Path": "example-org",
+          "Name": "Example-Vision-7B",
+          "Tasks": [
+            {
+              "Name": "image-text-to-text"
+            },
+            {
+              "Name": "visual-question-answering"
+            }
+          ],
+          "Tags": [
+            "vision"
+          ],
+          "DownloadsCount": 900,
+          "StarsCount": 3,
+          "GmtModified": 1788100000
+        },
+        {
+          "Id": "",
+          "Path": "other-org",
+          "Name": "Example-Base-1B",
+          "Tasks": [],
+          "Downloads": "15",
+          "Stars": null
+        }
+      ]
+    }
+  }
+}

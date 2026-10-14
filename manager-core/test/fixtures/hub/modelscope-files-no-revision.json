@@ -1,0 +1,56 @@
+{
+  "Code": 200,
+  "Message": "success",
+  "Success": true,
+  "Data": {
+    "Files": [
+      {
+        "Name": "README.md",
+        "Path": "README.md",
+        "Type": "blob",
+        "Size": 2048,
+        "Sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "IsLFS": false,
+        "CommitMessage": "Update README.md"
+      },
+      {
+        "Name": "config.json",
+        "Path": "config.json",
+        "Type": "blob",
+        "Size": 812,
+        "Sha256": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "IsLFS": false
+      },
+      {
+        "Name": "Q4_K_M",
+        "Path": "Q4_K_M",
+        "Type": "tree",
+        "Size": 0,
+        "Sha256": ""
+      },
+      {
+        "Name": "Example-Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
+        "Path": "Q4_K_M/Example-Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
+        "Type": "blob",
+        "Size": 3000000000,
+        "Sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "IsLFS": true
+      },
+      {
+        "Name": "Example-Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
+        "Path": "Q4_K_M/Example-Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
+        "Type": "blob",
+        "Size": 2027783488,
+        "Sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "IsLFS": true
+      },
+      {
+        "Name": "tokenizer.json",
+        "Path": "tokenizer.json",
+        "Type": "blob",
+        "Size": "7031645",
+        "Sha256": "not-a-hash"
+      }
+    ]
+  }
+}

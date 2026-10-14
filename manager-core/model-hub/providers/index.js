@@ -16,6 +16,7 @@ const { defaultSettings } = require("../settings");
 const { ProviderError, isNetworkClassError } = require("./http");
 const { createHuggingFaceProvider } = require("./huggingface");
 const { createHfMirrorProvider } = require("./hf-mirror");
+const { createModelScopeProvider } = require("./modelscope");
 
 const PROVIDER_IDS = Object.freeze(["huggingface", "hf-mirror", "modelscope"]);
 const NAMESPACES = Object.freeze(["huggingface", "modelscope"]);
@@ -136,8 +137,8 @@ function createProviders(options = {}) {
       return memo(id, sources.mirrorEndpoint, () => createHfMirrorProvider({ endpoint: sources.mirrorEndpoint, fetchImpl, cache, clock, timeoutMs }));
     }
     if (id === "modelscope") {
-      // HUB-3 registers it here.
-      throw new ProviderError("provider_unavailable", "The ModelScope provider is not available.", { baseCode: "unknown", details: { provider: id } });
+      // Without an injected fetch, metadata goes through the system-proxy fallback.
+      return memo(id, sources.modelScopeEndpoint, () => createModelScopeProvider({ endpoint: sources.modelScopeEndpoint, fetchImpl: options.fetchImpl, cache, clock, timeoutMs }));
     }
     throw new ProviderError("unknown_provider", `Unknown provider "${String(id).slice(0, 40)}".`, { baseCode: "unknown", details: { provider: String(id).slice(0, 40) } });
   }
