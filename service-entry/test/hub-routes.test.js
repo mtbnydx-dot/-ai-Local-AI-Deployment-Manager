@@ -226,7 +226,7 @@ test("proxied requests never reach the hub routes", async (t) => {
 
 // --- registration and mounting ---------------------------------------------------
 
-test("the mount registers both routes for viewers, declares PUT owner-only and turns on features.hub", async (t) => {
+test("the mount registers the viewer routes and events, declares the writes owner-only and turns on features.hub", async (t) => {
   const { hub } = await startHub(t);
   const { entry, ctx } = await mountEntry(t, { hub });
   assert.ok(entry.ROUTE_MODULES.includes("./lib/hub-routes"));
@@ -242,8 +242,15 @@ test("the mount registers both routes for viewers, declares PUT owner-only and t
   assert.deepEqual(registry.inventory().filter((item) => item.path.startsWith("/api/hub/")), [
     { owner: "03", method: "GET", path: "/api/hub/status", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/settings", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/library", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/library/:id", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/tasks/:id", access: "viewer" },
     { owner: "03", method: "PUT", path: "/api/hub/settings", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/library/rescan", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/library/:id/verify", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/library/:id/identify", access: "admin" },
   ]);
+  assert.deepEqual(registry.inventory().filter((item) => item.method === "EVENT" && item.path === "library"), [{ owner: "03", method: "EVENT", path: "library", access: "viewer" }]);
 
   // HUB_VIEWER_ROUTES (or the owner-only list) covers every GET the module
   // serves, and the shim list names served routes only.

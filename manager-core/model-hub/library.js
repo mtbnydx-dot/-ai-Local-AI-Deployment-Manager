@@ -471,6 +471,7 @@ function createLibrary(options = {}) {
   const tasks = new Map();
   const verifyChains = new Map();
   const pendingJobs = new Map();
+  const backgroundWork = new Set();
 
   function warn(line) {
     try {
@@ -628,7 +629,7 @@ function createLibrary(options = {}) {
       const provider = namespaceOf(meta.source);
       if (!repo || !provider) continue;
       return {
-        source: hit.via ? "migration-record" : "legacy-ledger",
+        source: hit.via === "migration" ? "migration-record" : "legacy-ledger",
         confidence: "declared",
         fields: {
           provider,
@@ -1014,7 +1015,8 @@ function createLibrary(options = {}) {
     if (!reuse || !previous?.card?.cardId) cardPart = await readCard(candidate, cache ? contentDir : null);
     const role = toolingOnly ? "tooling-only" : cardPart.card.role;
     const card = { ...cardPart.card, role };
-    const verification = previous?.verification || { status: "unchecked", checksum: "none", checkedAt: null, issues: [] };
+    // A verification judges the files it saw; changed files start unchecked.
+    const verification = reuse && previous.verification ? previous.verification : { status: "unchecked", checksum: "none", checkedAt: null, issues: [] };
     const cardRunnable = reuse && previous?.card?.cardId ? previous.internal?.cardRunnable ?? null : cardPart.runnable;
 
     const mtime = iso(Math.max(dirMtimeMs, maxMtime));
@@ -1444,7 +1446,15 @@ function createLibrary(options = {}) {
     const task = newTask("rescan");
     task.key = key;
     task.progress.unit = "candidates";
-    void runTask(task, async (progress) => runScan({ rootIds: scope, onProgress: progress }));
+    void runTask(task, async (progress) => {
+      const result = await runScan({ rootIds: scope, onProgress: progress });
+      // The identifyOnline setting: confirm folder-name candidates after the
+      // scan, in the background (03 §9.3 step 4).
+      const background = confirmCandidatesInBackground().catch((error) => warn(`library: confirming candidates failed: ${error?.message || error}`));
+      backgroundWork.add(background);
+      background.finally(() => backgroundWork.delete(background));
+      return result;
+    });
     return { taskId: task.id, task: publicTask(task) };
   }
 
@@ -1534,7 +1544,7 @@ function createLibrary(options = {}) {
     }
     const status = issues.some((item) => item.severity === "fail") ? "fail" : issues.some((item) => item.severity === "warn") ? "warn" : "ok";
     entry.verification = { status, checksum, checkedAt: verifiedAt, issues };
-    if (entry.card?.role !== "tooling-only") entry.runnable = status === "fail" ? false : entry.runnable !== false || entry.verification.status !== "fail" ? entry.runnable : true;
+    entry.runnable = computeRunnable(entry.card?.role, entry.internal?.cardRunnable ?? null, status);
     await persist();
     emitChanged([entry.id]);
     progress({ done: 1, total: 1 });
@@ -1759,7 +1769,7 @@ function createLibrary(options = {}) {
     if (watchTimer) clearInterval(watchTimer);
     watchTimer = null;
     await scanChain.catch(() => {});
-    await Promise.allSettled([...verifyChains.values()]);
+    await Promise.allSettled([...verifyChains.values(), ...backgroundWork]);
     await store.flush?.().catch(() => {});
   }
 

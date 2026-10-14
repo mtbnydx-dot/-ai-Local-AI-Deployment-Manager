@@ -2,7 +2,9 @@
 
 // Model hub routes (03 §13), mounted for /api/hub/ by one line in the entry's
 // route-mount table. HUB-1 serves GET /api/hub/status and GET/PUT
-// /api/hub/settings; the later hub packages add their rows to HUB_ROUTES.
+// /api/hub/settings; HUB-8 adds the library list, detail, rescan, verify and
+// identify routes and the task poll. The later hub packages add their rows to
+// HUB_ROUTES; a path may name segments (/api/hub/library/:id).
 // A path this module does not serve falls through to the entry's 404.
 //
 // Access (03 §13.1). Proxied requests never get here (the entry's proxied-
@@ -48,23 +50,128 @@ function redactHubStatusForViewer(body) {
   return out;
 }
 
+// 03 §13.1: a viewer sees the library with root-relative paths ("Library
+// F/Qwen-Qwen3.8-27B-FP8"), never the absolute path or an alias. The entry
+// carries the display forms (displayPath, aliasDisplay) next to the real ones;
+// the viewer copy swaps them in and drops the extras.
+function redactLibraryEntryForViewer(entry) {
+  if (!isPlainObject(entry)) return entry;
+  const out = omit(omit(omit(entry, "displayPath"), "aliasDisplay"), "internal");
+  out.path = typeof entry.displayPath === "string" ? entry.displayPath : String(entry.rootLabel || "(library)") + "/" + String(entry.relativePath || "");
+  out.aliases = Array.isArray(entry.aliasDisplay) ? entry.aliasDisplay.map((item) => String(item)) : [];
+  return out;
+}
+
+// A viewer sees the roots by label; the folder behind a root stays private.
+function redactLibraryRootForViewer(root) {
+  return isPlainObject(root) ? omit(root, "path") : root;
+}
+
+function redactLibraryListForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  const out = { ...body };
+  if (Array.isArray(body.entries)) out.entries = body.entries.map(redactLibraryEntryForViewer);
+  if (Array.isArray(body.roots)) out.roots = body.roots.map(redactLibraryRootForViewer);
+  return out;
+}
+
+function redactLibraryDetailForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  return isPlainObject(body.entry) ? { ...body, entry: redactLibraryEntryForViewer(body.entry) } : body;
+}
+
+// A task keeps its progress and a short error message; error.detail (a stack
+// or a path) is dropped.
+function redactHubTask(task) {
+  if (!isPlainObject(task)) return task;
+  return isPlainObject(task.error) ? { ...task, error: omit(task.error, "detail") } : task;
+}
+
+function redactHubTaskBodyForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  return isPlainObject(body.task) ? { ...body, task: redactHubTask(body.task) } : body;
+}
+
+// The `library` event for viewers: entry ids and task progress only.
+function redactLibraryEventForViewer(data) {
+  if (!isPlainObject(data)) return null;
+  if (data.kind === "task") return { ...data, task: redactHubTask(data.task) };
+  return data;
+}
+
 // Every route this module serves.
 const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/status", handler: "status" }),
   Object.freeze({ method: "GET", path: "/api/hub/settings", handler: "getSettings" }),
   Object.freeze({ method: "PUT", path: "/api/hub/settings", handler: "putSettings" }),
+  Object.freeze({ method: "GET", path: "/api/hub/library", handler: "libraryList" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/rescan", handler: "libraryRescan" }),
+  Object.freeze({ method: "GET", path: "/api/hub/library/:id", handler: "libraryGet" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/verify", handler: "libraryVerify" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify", handler: "libraryIdentify" }),
+  Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", handler: "taskGet" }),
 ]);
+
+// "/api/hub/library/:id" → a matcher for the pathname; named segments are one
+// path segment each.
+function compileRoutePath(pattern) {
+  const names = [];
+  const parts = pattern.split("/").slice(1).map((segment) => {
+    if (segment.startsWith(":")) {
+      names.push(segment.slice(1));
+      return "([^/]+)";
+    }
+    return segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  });
+  return { regex: new RegExp(`^/${parts.join("/")}$`), names };
+}
+
+const ROUTE_MATCHERS = HUB_ROUTES.map((route) => ({ route, ...compileRoutePath(route.path) }));
+
+function decodeSegment(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+// Every row whose path matches the pathname, with the named segments of the
+// first match (a literal segment and a named one never both match the same
+// request in this table).
+function matchRoutes(pathname) {
+  const rows = [];
+  let params = {};
+  for (const matcher of ROUTE_MATCHERS) {
+    const found = matcher.regex.exec(pathname);
+    if (!found) continue;
+    if (!rows.length) params = Object.fromEntries(matcher.names.map((name, index) => [name, decodeSegment(found[index + 1])]));
+    rows.push(matcher.route);
+  }
+  return { rows, params };
+}
 
 // The viewer registrations of 03 §13.1, registered at mount. Settings hold
 // no secret, so their viewer copy is the owner's.
 const HUB_VIEWER_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/status", redact: redactHubStatusForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/settings", redact: null }),
+  Object.freeze({ method: "GET", path: "/api/hub/library", redact: redactLibraryListForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/library/:id", redact: redactLibraryDetailForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", redact: redactHubTaskBodyForViewer }),
+]);
+
+// Event types a viewer may receive (03 §13.1), with their redaction.
+const HUB_VIEWER_EVENTS = Object.freeze([
+  Object.freeze({ type: "library", redact: redactLibraryEventForViewer }),
 ]);
 
 // Declared owner-only, so 05's route inventory sees them.
 const HUB_ADMIN_ONLY_ROUTES = Object.freeze([
   Object.freeze({ method: "PUT", path: "/api/hub/settings" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/rescan" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/verify" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify" }),
 ]);
 
 // The hub calls a manager shim may make (03 §15 table); the shim rows of
@@ -247,6 +354,37 @@ function createHubRoutes(options = {}) {
     return null;
   }
 
+  // A body for the POST routes: {} when empty; false after answering 4xx.
+  async function readBody(req, res) {
+    try {
+      return await readJsonObjectBody(req, maxBodyBytes);
+    } catch (error) {
+      if (Number(error?.status) === 413) {
+        sendError(res, 413, "request_too_large", `The request body may be at most ${maxBodyBytes} bytes.`);
+      } else {
+        sendError(res, 400, "invalid_json", "The request body must be a JSON object.");
+      }
+      return false;
+    }
+  }
+
+  // The registry's own errors carry their status, code and hint; anything
+  // else is an internal error whose text is logged, not sent.
+  function sendLibraryError(res, error, what) {
+    if (error && error.name === "LibraryError") {
+      sendError(res, Number(error.status) || 400, error.code, error.message, { hint: error.hint, details: error.details });
+      return;
+    }
+    warn(`hub-routes: ${what} failed: ${error?.message || error}`);
+    sendError(res, 500, "internal_error", "Service entry error.");
+  }
+
+  function libraryOrFail(res) {
+    if (hub.library) return hub.library;
+    sendError(res, 503, "hub_unavailable", "The model library is not available.", { hint: "Restart service-entry and check its log for the hub start error." });
+    return null;
+  }
+
   const handlers = {
     status(req, res, url, who) {
       sendRead(req, res, url.pathname, hub.status(), who);
@@ -255,6 +393,93 @@ function createHubRoutes(options = {}) {
     async getSettings(req, res, url, who) {
       const settings = await hub.settings.get();
       sendRead(req, res, url.pathname, { ok: true, settings }, who);
+    },
+
+    async libraryList(req, res, url, who) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const query = {};
+      for (const key of ["q", "rootId", "format", "provenance", "duplicates", "cursor", "limit"]) {
+        const value = url.searchParams.get(key);
+        if (value !== null) query[key] = value;
+      }
+      let result;
+      try {
+        result = await library.list(query);
+      } catch (error) {
+        sendLibraryError(res, error, "listing the library");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, ...result }, who);
+    },
+
+    async libraryGet(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const entry = library.get(params.id);
+      if (!entry) {
+        sendError(res, 404, "library_entry_not_found", "No such library entry.");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, entry }, who);
+    },
+
+    async libraryRescan(req, res) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      try {
+        const started = await library.rescan({ rootIds: body.rootIds === undefined ? null : body.rootIds });
+        sendJson(res, { ok: true, taskId: started.taskId, task: started.task }, 202);
+      } catch (error) {
+        sendLibraryError(res, error, "starting a rescan");
+      }
+    },
+
+    async libraryVerify(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (body.checksums !== undefined && typeof body.checksums !== "boolean") {
+        sendError(res, 400, "invalid_request", "checksums must be true or false.", { details: { field: "checksums" } });
+        return;
+      }
+      try {
+        const started = library.verify(params.id, { checksums: body.checksums === true });
+        sendJson(res, { ok: true, taskId: started.taskId, task: started.task }, 202);
+      } catch (error) {
+        sendLibraryError(res, error, "starting a verification");
+      }
+    },
+
+    async libraryIdentify(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      for (const field of ["provider", "repo"]) {
+        if (body[field] !== undefined && body[field] !== null && typeof body[field] !== "string") {
+          sendError(res, 400, "invalid_request", `${field} must be a string.`, { details: { field } });
+          return;
+        }
+      }
+      try {
+        const entry = await library.identify(params.id, { provider: body.provider, repo: body.repo, force: body.force === true });
+        sendJson(res, { ok: true, entry });
+      } catch (error) {
+        sendLibraryError(res, error, "identifying a library entry");
+      }
+    },
+
+    async taskGet(req, res, url, who, params) {
+      const task = hub.tasks?.get(params.id) || null;
+      if (!task) {
+        sendError(res, 404, "task_not_found", "No such task.");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, task }, who);
     },
 
     // PUT takes a partial patch, bare or as { settings }, and answers the
@@ -297,7 +522,7 @@ function createHubRoutes(options = {}) {
   async function handle(req, res, url) {
     const pathname = String(url?.pathname || "");
     if (!pathname.startsWith(PREFIX)) return false;
-    const rows = HUB_ROUTES.filter((route) => route.path === pathname);
+    const { rows, params } = matchRoutes(pathname);
     if (!rows.length) return false;
     const requested = String(req.method || "GET").toUpperCase();
     const method = requested === "HEAD" ? "GET" : requested;
@@ -318,7 +543,7 @@ function createHubRoutes(options = {}) {
       sendError(res, 503, "hub_unavailable", "The model hub is not running.", { hint: "Restart service-entry and check its log for the hub start error." });
       return true;
     }
-    await handlers[route.handler](req, res, url, who);
+    await handlers[route.handler](req, res, url, who, params);
     return true;
   }
 
@@ -332,6 +557,7 @@ function registerHubRoutes(registry, warn = () => {}) {
   const registrations = [
     ...HUB_VIEWER_ROUTES.map((route) => () => registry.registerRoute({ owner: OWNER, method: route.method, path: route.path, ...(route.redact ? { redact: route.redact } : {}) })),
     ...HUB_ADMIN_ONLY_ROUTES.map((route) => () => registry.registerAdminOnly({ owner: OWNER, method: route.method, path: route.path })),
+    ...HUB_VIEWER_EVENTS.map((event) => () => registry.registerEventType({ owner: OWNER, type: event.type, redact: event.redact })),
   ];
   for (const register of registrations) {
     try {
@@ -374,6 +600,7 @@ function mount(ctx) {
 module.exports = {
   HUB_ADMIN_ONLY_ROUTES,
   HUB_ROUTES,
+  HUB_VIEWER_EVENTS,
   HUB_VIEWER_ROUTES,
   MAX_BODY_BYTES,
   SHIM_ROUTES,
@@ -381,6 +608,11 @@ module.exports = {
   mount,
   name: "hub",
   redactHubStatusForViewer,
+  redactHubTaskBodyForViewer,
+  redactLibraryDetailForViewer,
+  redactLibraryEntryForViewer,
+  redactLibraryEventForViewer,
+  redactLibraryListForViewer,
   registerHubRoutes,
   resolveHubPrincipal,
 };
