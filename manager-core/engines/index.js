@@ -16,8 +16,25 @@ const descriptorSchema = require("./descriptor-schema");
 const registry = require("./registry");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
+const dockerSegments = require("./adapters/_docker-segments");
+
+// Adapter code modules by descriptor.adapter (01 §6). An engine whose adapter
+// has no module here is not launchable through an adapter yet.
+const adapters = Object.freeze({
+  vllm: require("./adapters/vllm"),
+  sglang: require("./adapters/sglang"),
+});
+
+/** descriptor (or its adapter id) -> adapter module, or null. */
+function adapterFor(descriptorOrAdapterId) {
+  const id = typeof descriptorOrAdapterId === "string" ? descriptorOrAdapterId : descriptorOrAdapterId?.adapter;
+  return typeof id === "string" && Object.hasOwn(adapters, id) ? adapters[id] : null;
+}
 
 module.exports = {
+  adapters,
+  adapterFor,
+  renderRunArgs: dockerSegments.renderRunArgs,
   descriptorSchema,
   validateDescriptor: descriptorSchema.validateDescriptor,
   TIER1_ENGINE_IDS: descriptorSchema.TIER1_ENGINE_IDS,

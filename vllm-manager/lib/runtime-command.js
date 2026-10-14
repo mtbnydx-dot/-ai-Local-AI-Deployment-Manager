@@ -1,6 +1,21 @@
-const path = require("path");
 const { redactSecrets } = require("../../manager-core/secret-redactor");
-const { PENNYROYAL_CACHE_VOLUME, PENNYROYAL_ROPE_OVERRIDE } = require("./pennyroyal");
+const engines = require("../../manager-core/engines");
+const { pennyroyalLaunchFixed } = require("./pennyroyal");
+
+// The vLLM/SGLang launch command is built by the engine adapters
+// (manager-core/engines/adapters/{vllm,sglang}.js, 01-engines ENG-5). This
+// module is the legacy wrapper around them: it maps the run options and the
+// runtime preset to a plan (catalog values, recipe fixed data, instance) and a
+// context (host config, model facts, secrets, docker helpers), dispatches to
+// the adapter by engineId, and turns the LaunchCommand back into the legacy
+// { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine,
+// secretEnv } while writing the same job.meta, log lines and ledger save.
+
+const MANAGER_ID = "vllm";
+// The adapters this wrapper can feed from legacy run options.
+const LEGACY_BUILDER_ADAPTERS = new Set(["vllm", "sglang"]);
+const LEGACY_ENGINES = new Set(["vllm", "sglang"]);
+const FRACTION_PARAMS = Object.freeze({ vllm: "vllm.gpuMemoryUtilization", sglang: "sglang.memFractionStatic" });
 
 function createVllmRuntimeCommandBuilder(deps) {
   const {
@@ -20,7 +35,12 @@ function createVllmRuntimeCommandBuilder(deps) {
     resolveLaunchModel,
     effectiveLaunchQuantization,
     resolveVllmRuntimePreset,
+    engineRegistry = null,
   } = deps;
+
+  function registry() {
+    return engineRegistry || engines.getEngineRegistry();
+  }
 
   function formatDockerPublishArgs(publishArgs) {
     return publishArgs.map((arg) => `-p ${arg}`).join(" ");
@@ -36,375 +56,120 @@ function createVllmRuntimeCommandBuilder(deps) {
     return args.map((arg) => redactSecrets(String(arg), { secrets, patterns: false, minSecretLength: 6 }));
   }
 
-  function buildVllmRuntimeCommand(job, opts) {
+  /**
+   * Legacy run options -> { engineId, adapter, plan, ctx, preset }: the
+   * adapter input buildVllmRuntimeCommand runs. Exposed so tests (and the
+   * launch-plan resolver until legacy-aliases.js takes over) can call the
+   * adapter on exactly what the manager would launch.
+   */
+  function prepareLaunch(job, opts) {
     const launch = resolveLaunchModel(opts.model, opts.loadFormat);
-    const modelArg = launch.modelArg;
-    const quantization = effectiveLaunchQuantization(opts.quantization, launch);
-    const runtimePreset = resolveVllmRuntimePreset(opts, launch);
-    const runtimeEngine = normalizeRuntimeEngine(runtimePreset.engine || opts.engine);
+    const quantization = effectiveLaunchQuantization(opts.quantization, launch) || {};
+    const runtimePreset = resolveVllmRuntimePreset(opts, launch) || {};
+    const source = registry();
+    const engineId = normalizeRuntimeEngine(runtimePreset.engine || opts.engine, source);
+    const descriptor = safeCall(() => source.get(engineId), null);
+    const adapter = engines.adapterFor(descriptor || engineId);
+    if (!adapter) throw new Error(`No launch adapter for engine ${engineId}.`);
     const runtimeImage = runtimePreset.image || CONFIG.image;
-    const effectiveDtype = runtimePreset.dtype || opts.dtype;
-    const effectiveKvCacheDtype = runtimePreset.kvCacheDtype || opts.kvCacheDtype;
-    const effectiveKvCacheDtypeArg = runtimePreset.disableKvCacheDtypeArg ? "" : effectiveKvCacheDtype;
-    const effectiveReasoningParser = runtimePreset.reasoningParser || opts.reasoningParser;
-    const effectiveToolCallParser = runtimePreset.toolCallParser || opts.toolCallParser;
-    const effectiveAutoToolChoice = Boolean(runtimePreset.enableAutoToolChoice || opts.enableAutoToolChoice);
-    const effectiveMaxNumBatchedTokens = Math.max(
-      positiveInteger(opts.maxNumBatchedTokens),
-      positiveInteger(runtimePreset.maxNumBatchedTokens)
-    );
-
-    if (quantization.modelConfigMethod && opts.quantization && quantization.value !== opts.quantization) {
-      appendLog(job, `Quantization override: model config declares "${quantization.modelConfigMethod}", ignoring requested "${opts.quantization}".`);
-    }
-    if (runtimePreset.id) {
-      job.meta = {
-        ...job.meta,
-        runtimePreset: runtimePreset.id,
-        engine: runtimeEngine,
-        runtimeImage,
-        runtimeNotes: runtimePreset.notes || [],
-        dtype: effectiveDtype,
-        kvCacheDtype: runtimePreset.disableKvCacheDtypeArg ? "auto" : effectiveKvCacheDtype,
-        trustRemoteCode: Boolean(opts.trustRemoteCode || runtimePreset.forceTrustRemoteCode),
-        enablePrefixCaching: Boolean(opts.enablePrefixCaching && !runtimePreset.disablePrefixCaching),
-        // vLLM enables prefix caching by default. The form exposes a *disable*
-        // toggle (and presets can force it), so we emit the explicit disable
-        // flag instead of relying on "no flag" which still leaves caching on.
-        disablePrefixCaching: Boolean(opts.disablePrefixCaching || runtimePreset.disablePrefixCaching),
-        languageModelOnly: Boolean(opts.languageModelOnly && !runtimePreset.disableLanguageModelOnly),
-        enforceEager: Boolean(runtimePreset.enforceEager),
-        reasoningParser: effectiveReasoningParser,
-        toolCallParser: effectiveToolCallParser,
-        enableAutoToolChoice: effectiveAutoToolChoice,
-        moeBackend: runtimePreset.moeBackend || "",
-        generationConfig: runtimePreset.generationConfig || "",
-        quantization: runtimePreset.quantization || quantization.value || "",
-        speculativeConfig: runtimePreset.speculativeConfig || null,
-        draftModel: runtimePreset.draftModel || opts.draftModel || "",
-        dsparkBlockSize: runtimePreset.dsparkBlockSize || opts.dsparkBlockSize || null,
-        reasoningParserPlugin: runtimePreset.reasoningParserPlugin || "",
-        sglangMaxTotalTokens: runtimePreset.maxTotalTokens || 0,
-        sglangPageSize: runtimePreset.pageSize || 0,
-        sglangChunkedPrefillSize: runtimePreset.chunkedPrefillSize || 0,
-        sglangFp4GemmBackend: runtimePreset.fp4GemmBackend || "",
-        sglangAttentionBackend: runtimePreset.attentionBackend || "",
-        sglangPleOffloadEmbedding: Boolean(runtimePreset.pleOffloadEmbedding),
-        sglangLinearAttnPrefillBackend: runtimePreset.linearAttnPrefillBackend || "",
-        sglangLinearAttnDecodeBackend: runtimePreset.linearAttnDecodeBackend || "",
-        sglangMambaSsmDtype: runtimePreset.mambaSsmDtype || "",
-        sglangMambaRadixCacheStrategy: runtimePreset.mambaRadixCacheStrategy || "",
-        sglangMambaTrackInterval: runtimePreset.mambaTrackInterval || 0,
-        sglangMaxMambaCacheSize: runtimePreset.maxMambaCacheSize || 0,
-        sglangDisableThinkingByDefault: Boolean(runtimePreset.disableThinkingByDefault),
-        effectiveMaxRunningRequests: runtimePreset.effectiveMaxRunningRequests || opts.maxNumSeqs,
-        ...(effectiveMaxNumBatchedTokens ? { maxNumBatchedTokens: effectiveMaxNumBatchedTokens } : {}),
-      };
-      scheduleJobsSave();
-      appendLog(job, `Runtime preset: ${runtimePreset.label || runtimePreset.id}; using ${runtimeEngine} image ${runtimeImage}.`);
-      for (const note of runtimePreset.notes || []) appendLog(job, `Runtime preset note: ${note}`);
-      if (runtimePreset.kvCacheDtype && runtimePreset.kvCacheDtype !== opts.kvCacheDtype) {
-        appendLog(job, `KV cache dtype override: ${opts.kvCacheDtype || "auto"} -> ${runtimePreset.kvCacheDtype}.`);
-      }
-      if (runtimePreset.dtype && runtimePreset.dtype !== opts.dtype) {
-        appendLog(job, `Dtype override: ${opts.dtype || "auto"} -> ${runtimePreset.dtype}.`);
-      }
-      if (runtimePreset.generationConfig) {
-        appendLog(job, `Generation config override: using ${runtimePreset.generationConfig}.`);
-      }
-      if (runtimePreset.quantization && runtimePreset.quantization !== quantization.value) {
-        appendLog(job, `Quantization runtime override: ${quantization.value || "auto"} -> ${runtimePreset.quantization}.`);
-      }
-      if (runtimePreset.disableKvCacheDtypeArg && opts.kvCacheDtype && opts.kvCacheDtype !== "auto") {
-        appendLog(job, `KV cache dtype override: ignoring requested "${opts.kvCacheDtype}" so vLLM can auto-detect this checkpoint.`);
-      }
-      if (runtimePreset.disableQuantizationArg && quantization.value) {
-        appendLog(job, `Quantization override: ignoring requested "${opts.quantization || quantization.value}" so vLLM can auto-detect this checkpoint.`);
-      }
-      if (runtimePreset.unsupportedReason) {
-        appendLog(job, `Runtime preset blocked: ${runtimePreset.unsupportedReason}`);
-        throw new Error(runtimePreset.unsupportedReason);
-      }
-    }
-    if (launch.effectiveLoadFormat === "gguf") {
-      appendLog(job, `GGUF mode: using ${modelArg}`);
-      if (launch.selectedGgufFile && launch.ggufFiles.length > 1) {
-        appendLog(job, `Multiple GGUF files found; selected largest file: ${path.basename(launch.selectedGgufFile)}`);
-      }
-      if (!opts.tokenizer) {
-        appendLog(job, "GGUF warning: tokenizer is empty. vLLM can try GGUF tokenizer conversion, but a base Hugging Face tokenizer is usually faster and more stable.");
-      }
-    }
-
-    const activePublishArgs = dockerPublishArgs(opts.port, opts.networkAccess, opts.serviceHost);
-    appendLog(job, `Docker publish: ${formatDockerPublishArgs(activePublishArgs)}`);
-    const selectedGpuIds = normalizeGpuIds(opts.gpuDeviceIds);
-    const vramReservationMb = Math.max(0, Math.round(Number(opts.vramReservationMb || 0)));
-    const runArgs = [
-      "run", "-d",
-      ...(CONFIG.imagePlatform ? ["--platform", CONFIG.imagePlatform] : []),
-      "--pull", "never",
-      "--name", opts.containerName || CONFIG.containerName,
-      "--restart", runtimePreset.pennyroyal ? "no" : "on-failure:3",
-      "--label", `${MANAGER_LABEL_KEY}=${CONFIG.managerId}`,
-      "--label", `${MANAGER_ENGINE_LABEL_KEY}=${runtimeEngine}`,
-      "--label", `ai.manager.job=${job.id}`,
-      "--label", `ai.manager.instance=${opts.instanceId || "primary"}`,
-      "--label", `ai.manager.instance-mode=${opts.instanceMode || "replace"}`,
-      "--label", `ai.manager.model=${opts.name || ""}`,
-      "--label", `ai.manager.port=${opts.port}`,
-      "--label", `ai.manager.gpu-ids=${selectedGpuIds.join(",")}`,
-      "--label", `ai.manager.vram-reservation-mb=${vramReservationMb}`,
-      "--label", `ai.manager.max-model-len=${opts.maxModelLen}`,
-      "--label", `ai.manager.max-num-seqs=${opts.maxNumSeqs}`,
-      "--label", `ai.manager.max-num-batched-tokens=${effectiveMaxNumBatchedTokens || 0}`,
-      "--label", `ai.manager.gpu-memory-utilization=${opts.gpuMemoryUtilization}`,
-      "--label", `ai.manager.gpu-admission-lease=${opts.gpuAdmissionLeaseId || ""}`,
-      "--gpus", dockerGpuArg(opts.gpuDeviceIds || []),
-      "--ipc=host",
-      "--health-cmd", "curl -fsS http://127.0.0.1:8000/health || exit 1",
-      "--health-interval", "30s",
-      "--health-timeout", "5s",
-      "--health-retries", "3",
-      "--health-start-period", `${Math.min(60, Math.max(5, Math.round(Math.max(5 * 60 * 1000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000)) / 60000)))}m`,
-      ...publishArgsToDockerRunArgs(activePublishArgs),
-      ...(!runtimePreset.pennyroyal ? ["-v", `${CONFIG.hfCache}:/root/.cache/huggingface`] : []),
-      ...getModelMountArgs().map((arg, index) => runtimePreset.pennyroyal && index % 2 === 1 ? `${arg}:ro` : arg),
-    ];
-    if (runtimeEngine === "sglang") {
-      runArgs.push(
-        "--label", `ai.sglang.max-total-tokens=${runtimePreset.maxTotalTokens || 0}`,
-        "--label", `ai.sglang.page-size=${runtimePreset.pageSize || 0}`,
-        "--label", `ai.sglang.max-mamba-cache-size=${runtimePreset.maxMambaCacheSize || 0}`,
-        "--label", `ai.sglang.effective-max-running-requests=${runtimePreset.effectiveMaxRunningRequests || opts.maxNumSeqs}`,
-        "--label", `ai.sglang.ple-offload-embedding=${Boolean(runtimePreset.pleOffloadEmbedding)}`
-      );
-    }
-    if (runtimePreset.pennyroyal) {
-      runArgs.push("--init", "--ulimit", "memlock=-1:-1",
-        "--label", "ai.runtime.profile=pennyroyal-v2.5.1-gpu-cache-only",
-        "--label", "ai.runtime.kv-dtype=fp8_e4m3",
-        "--label", "ai.runtime.speculative-mode=mtp",
-        "--label", "ai.runtime.cpu-cache=disabled",
-        "--label", "ai.runtime.online-fp8=true",
-        "--label", "ai.runtime.fr-spec=true",
-        "--label", "ai.runtime.speculative=nextn-frspec",
-        "--label", "ai.runtime.storage=ram-ple",
-        "--label", "ai.runtime.ple-dtype=fp8",
-        "--label", "ai.runtime.mamba-dtype=bfloat16",
-        "--label", "ai.runtime.linear-attn=flashinfer/flashinfer",
-        "--label", "ai.runtime.cache=gpu-radix; cpu-hicache/nixl disabled",
-        "--label", `ai.runtime.thinking=${opts.sglangDisableThinkingByDefault ? "disabled-by-default" : "enabled-by-default"}`,
-        "--label", `ai.runtime.context-length=${opts.maxModelLen}`,
-        "--label", `ai.runtime.max-total-tokens=${runtimePreset.maxTotalTokens}`,
-        "--label", "ai.runtime.chunked-prefill=4096",
-        "--label", "ai.runtime.fp4-backend=flashinfer_cutlass",
-        "--mount", `type=volume,source=${PENNYROYAL_CACHE_VOLUME},target=/cache`);
-    } else if (runtimeEngine === "sglang" && CONFIG.sglangCache) {
-      runArgs.push("-v", `${CONFIG.sglangCache}:/root/.cache`);
-    } else if (CONFIG.vllmCache) {
-      runArgs.push("-v", `${CONFIG.vllmCache}:/root/.cache/vllm`);
-    }
-    if (opts.runtimeApiKeyRef && MANAGER_APIKEY_REF_LABEL_KEY) {
-      runArgs.push("--label", `${MANAGER_APIKEY_REF_LABEL_KEY}=${opts.runtimeApiKeyRef}`);
-    }
-    if (opts.networkAccess === "lan" && !opts.vllmApiKey) {
-      appendLog(job, `安全警告：服务将通过 Docker 发布到 ${opts.serviceHost || getLanAddress()}（局域网可访问），但没有设置 API Key。同一网络内的任何设备都可以调用该模型。建议在启动参数中填写 API Key。`);
-    }
-    if (selectedGpuIds.length) {
-      appendLog(job, `GPU isolation: --gpus device=${selectedGpuIds.join(",")}`);
-    }
-    // Secrets travel as name-only -e flags and the caller hands secretEnv to
-    // the docker child process (08 P0-4). SGLang keeps --api-key (08 O1).
-    const secretEnv = {};
-    if (process.env.HF_TOKEN) {
-      runArgs.push("-e", "HF_TOKEN");
-      secretEnv.HF_TOKEN = process.env.HF_TOKEN;
-    }
-    if (opts.vllmApiKey && runtimeEngine !== "sglang") {
-      runArgs.push("-e", "VLLM_API_KEY");
-      secretEnv.VLLM_API_KEY = String(opts.vllmApiKey);
-    }
-    for (const [key, value] of Object.entries(runtimePreset.env || {})) {
-      if (value !== undefined && value !== null && value !== "") runArgs.push("-e", `${key}=${value}`);
-    }
-
-    if (runtimeEngine === "sglang") {
-      runArgs.push("--entrypoint", "sglang", runtimeImage);
-      appendSglangServeArgs(runArgs, {
-        ...opts,
-        modelArg,
-        runtimePreset,
-        effectiveReasoningParser,
-        effectiveToolCallParser,
-        effectiveAutoToolChoice,
-        effectiveDtype,
-        effectiveKvCacheDtypeArg,
-        effectiveQuantization: runtimePreset.disableQuantizationArg ? "" : runtimePreset.quantization || quantization.value,
-      });
-      return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine, secretEnv };
-    }
-
-    runArgs.push(runtimeImage);
-    if (runtimePreset.positionalModel) runArgs.push(modelArg);
-    else runArgs.push("--model", modelArg);
-    runArgs.push(
-      "--served-model-name", opts.name,
-      "--dtype", effectiveDtype,
-      "--max-model-len", String(opts.maxModelLen),
-      "--max-num-seqs", String(opts.maxNumSeqs),
-      "--gpu-memory-utilization", String(opts.gpuMemoryUtilization)
-    );
-    if (effectiveMaxNumBatchedTokens) {
-      runArgs.push("--max-num-batched-tokens", String(effectiveMaxNumBatchedTokens));
-    }
-    if (quantization.value && !runtimePreset.disableQuantizationArg) runArgs.push("--quantization", quantization.value);
-    if (launch.effectiveLoadFormat === "gguf") {
-      if (opts.quantization || quantization.value) {
-        appendLog(job, `Ignoring quantization "${opts.quantization || quantization.value}" because GGUF already contains quantized weights.`);
-      }
-      const quantIndex = runArgs.indexOf("--quantization");
-      if (quantIndex >= 0) runArgs.splice(quantIndex, 2);
-      runArgs.push("--load-format", "gguf");
-    }
-    if (opts.tokenizer) runArgs.push("--tokenizer", windowsPathToContainerPath(opts.tokenizer));
-    if (opts.hfConfigPath) runArgs.push("--hf-config-path", windowsPathToContainerPath(opts.hfConfigPath));
-    if (effectiveKvCacheDtypeArg && effectiveKvCacheDtypeArg !== "auto") runArgs.push("--kv-cache-dtype", effectiveKvCacheDtypeArg);
-    if (opts.cpuOffloadGb > 0) runArgs.push("--cpu-offload-gb", String(opts.cpuOffloadGb));
-    if (opts.kvOffloadingSize > 0) runArgs.push("--kv-offloading-size", String(opts.kvOffloadingSize));
-    if (opts.mmProcessorCacheGb !== null && opts.mmProcessorCacheGb !== undefined) {
-      runArgs.push("--mm-processor-cache-gb", String(opts.mmProcessorCacheGb));
-    }
-    if (opts.disablePrefixCaching || runtimePreset.disablePrefixCaching) {
-      runArgs.push("--no-enable-prefix-caching");
-    } else if (opts.enablePrefixCaching) {
-      runArgs.push("--enable-prefix-caching");
-    }
-    if (opts.languageModelOnly && runtimePreset.disableLanguageModelOnly) {
-      appendLog(job, "Runtime preset disabled --language-model-only because this architecture is not a plain language-only model.");
-    } else if (opts.languageModelOnly) {
-      runArgs.push("--language-model-only");
-    }
-    if (opts.trustRemoteCode || runtimePreset.forceTrustRemoteCode) runArgs.push("--trust-remote-code");
-    if (opts.tensorParallelSize > 1) runArgs.push("--tensor-parallel-size", String(opts.tensorParallelSize));
-    if (opts.pipelineParallelSize > 1) runArgs.push("--pipeline-parallel-size", String(opts.pipelineParallelSize));
-    if (opts.dataParallelSize > 1) runArgs.push("--data-parallel-size", String(opts.dataParallelSize));
-    if (opts.distributedExecutorBackend && opts.distributedExecutorBackend !== "auto") {
-      runArgs.push("--distributed-executor-backend", opts.distributedExecutorBackend);
-    }
-    if (opts.enableExpertParallel) runArgs.push("--enable-expert-parallel");
-    if (runtimePreset.enforceEager) runArgs.push("--enforce-eager");
-    if (runtimePreset.asyncScheduling) runArgs.push("--async-scheduling");
-    if (runtimePreset.attentionBackend) runArgs.push("--attention-backend", runtimePreset.attentionBackend);
-    if (runtimePreset.moeBackend) runArgs.push("--moe-backend", runtimePreset.moeBackend);
-    if (runtimePreset.linearBackend) runArgs.push("--linear-backend", runtimePreset.linearBackend);
-    if (runtimePreset.generationConfig) runArgs.push("--generation-config", runtimePreset.generationConfig);
-    if (runtimePreset.overrideGenerationConfig) runArgs.push("--override-generation-config", runtimePreset.overrideGenerationConfig);
-    if (runtimePreset.defaultChatTemplateKwargs) runArgs.push("--default-chat-template-kwargs", runtimePreset.defaultChatTemplateKwargs);
-    if (runtimePreset.speculativeConfig) runArgs.push("--speculative-config", JSON.stringify(runtimePreset.speculativeConfig));
-    if (runtimePreset.safetensorsLoadStrategy) {
-      runArgs.push("--safetensors-load-strategy", runtimePreset.safetensorsLoadStrategy);
-    }
-    if (runtimePreset.reasoningParserPlugin) {
-      runArgs.push("--reasoning-parser-plugin", windowsPathToContainerPath(runtimePreset.reasoningParserPlugin));
-    }
-    if (effectiveReasoningParser && effectiveReasoningParser !== "auto") {
-      runArgs.push("--reasoning-parser", effectiveReasoningParser);
-    }
-    if (effectiveAutoToolChoice && effectiveToolCallParser) {
-      runArgs.push("--enable-auto-tool-choice", "--tool-call-parser", effectiveToolCallParser);
-    }
-    // No --api-key here: vLLM reads VLLM_API_KEY (set above) when the flag is absent.
-
-    return { runArgs, activePublishArgs, runtimeImage, runtimePreset, runtimeEngine, secretEnv };
+    const fractionParam = descriptor?.memoryModel?.fractionParam || FRACTION_PARAMS[engineId];
+    const plan = {
+      engineId,
+      values: legacyRunValues(opts, runtimePreset, quantization, fractionParam),
+      fixed: legacyFixedData(opts, runtimePreset),
+      instance: {
+        id: opts.instanceId,
+        mode: opts.instanceMode,
+        port: opts.port,
+        networkAccess: opts.networkAccess,
+        serviceHost: opts.serviceHost,
+        containerName: opts.containerName,
+        gpuIds: opts.gpuDeviceIds,
+      },
+      legacy: { preset: runtimePreset, runOptions: opts, quantization },
+    };
+    const ctx = {
+      descriptor,
+      runtime: runtimeRef(source, engineId, runtimeImage),
+      host: {
+        kind: "docker",
+        containerPort: descriptor?.host?.containerPort ?? 8000,
+        config: {
+          modelsRoot: CONFIG.modelsRoot,
+          hfCache: CONFIG.hfCache,
+          vllmCache: CONFIG.vllmCache,
+          sglangCache: CONFIG.sglangCache,
+          imagePlatform: CONFIG.imagePlatform,
+          containerName: CONFIG.containerName,
+          managerLabelValue: CONFIG.managerId,
+        },
+        labelKeys: { manager: MANAGER_LABEL_KEY, engine: MANAGER_ENGINE_LABEL_KEY, apiKeyRef: MANAGER_APIKEY_REF_LABEL_KEY },
+        modelMountArgs: getModelMountArgs(),
+      },
+      model: { ...launch, quantMethod: quantization.modelConfigMethod || "" },
+      hostFacts: {
+        platform: process.platform,
+        gpus: Array.isArray(opts.hostGpus) ? opts.hostGpus : [],
+        env: { VLLM_START_TIMEOUT_MS: process.env.VLLM_START_TIMEOUT_MS },
+      },
+      secrets: { apiKey: opts.vllmApiKey, apiKeyRef: opts.runtimeApiKeyRef, hfToken: process.env.HF_TOKEN },
+      jobId: job.id,
+      admission: { leaseId: opts.gpuAdmissionLeaseId, vramReservationMb: opts.vramReservationMb },
+      launchId: null,
+      toContainerPath: windowsPathToContainerPath,
+      dockerGpuArg,
+      dockerPublishArgs,
+      publishArgsToRunArgs: publishArgsToDockerRunArgs,
+      normalizeGpuIds,
+      lanAddress: getLanAddress,
+    };
+    return { engineId, adapter, plan, ctx, preset: runtimePreset };
   }
 
-  function appendSglangServeArgs(runArgs, options = {}) {
-    const { runtimePreset = {} } = options;
-    runArgs.push(
-      "serve",
-      "--model-path", options.modelArg,
-      "--served-model-name", options.name,
-      "--host", "0.0.0.0",
-      "--port", "8000",
-      "--tp-size", String(Math.max(1, Number(options.tensorParallelSize || 1))),
-      "--mem-fraction-static", String(options.gpuMemoryUtilization),
-      "--max-running-requests", String(runtimePreset.maxRunningRequests || options.maxNumSeqs),
-      "--context-length", String(options.maxModelLen),
-      "--chunked-prefill-size", String(runtimePreset.chunkedPrefillSize || 8192),
-      "--enable-metrics",
-      "--sleep-on-idle"
-    );
-    if (runtimePreset.maxTotalTokens) runArgs.push("--max-total-tokens", String(runtimePreset.maxTotalTokens));
-    if (runtimePreset.pageSize) runArgs.push("--page-size", String(runtimePreset.pageSize));
-    if (options.effectiveDtype && options.effectiveDtype !== "auto") runArgs.push("--dtype", options.effectiveDtype);
-    if (options.effectiveQuantization) runArgs.push("--quantization", options.effectiveQuantization);
-    if (options.effectiveKvCacheDtypeArg && options.effectiveKvCacheDtypeArg !== "auto") {
-      runArgs.push("--kv-cache-dtype", options.effectiveKvCacheDtypeArg);
+  // job.meta, the ledger save and the log lines the legacy builder wrote.
+  function applyLegacyEffects(job, { metaPatch, logs }) {
+    if (metaPatch) {
+      job.meta = { ...job.meta, ...metaPatch };
+      scheduleJobsSave();
     }
-    if (runtimePreset.fp4GemmBackend) runArgs.push("--fp4-gemm-backend", runtimePreset.fp4GemmBackend);
-    if (runtimePreset.pleOffloadEmbedding) runArgs.push("--ple-offload-embedding");
-    if (runtimePreset.linearAttnPrefillBackend) {
-      runArgs.push("--linear-attn-prefill-backend", runtimePreset.linearAttnPrefillBackend);
+    for (const line of logs || []) appendLog(job, line);
+  }
+
+  function buildVllmRuntimeCommand(job, opts) {
+    const { engineId, adapter, plan, ctx, preset } = prepareLaunch(job, opts);
+    let command;
+    try {
+      command = adapter.buildLaunch(plan, ctx);
+    } catch (error) {
+      if (error?.code !== "blocked" || !error.launch) throw error;
+      applyLegacyEffects(job, error.launch);
+      throw new Error(error.message);
     }
-    if (runtimePreset.linearAttnDecodeBackend) {
-      runArgs.push("--linear-attn-decode-backend", runtimePreset.linearAttnDecodeBackend);
-    }
-    if (runtimePreset.mambaSsmDtype) runArgs.push("--mamba-ssm-dtype", runtimePreset.mambaSsmDtype);
-    if (runtimePreset.mambaRadixCacheStrategy) {
-      runArgs.push("--mamba-radix-cache-strategy", runtimePreset.mambaRadixCacheStrategy);
-    }
-    if (runtimePreset.mambaTrackInterval) {
-      runArgs.push("--mamba-track-interval", String(runtimePreset.mambaTrackInterval));
-    }
-    if (runtimePreset.maxMambaCacheSize) {
-      runArgs.push("--max-mamba-cache-size", String(runtimePreset.maxMambaCacheSize));
-    }
-    if (runtimePreset.defaultChatTemplateKwargs) {
-      runArgs.push("--default-chat-template-kwargs", runtimePreset.defaultChatTemplateKwargs);
-    }
-    if (runtimePreset.mambaSchedulerStrategy) {
-      runArgs.push("--mamba-scheduler-strategy", runtimePreset.mambaSchedulerStrategy);
-    }
-    if (runtimePreset.attentionBackend) runArgs.push("--attention-backend", runtimePreset.attentionBackend);
-    if (runtimePreset.disablePrefillCudaGraph) runArgs.push("--disable-prefill-cuda-graph");
-    if (runtimePreset.mmFeatureTransport) runArgs.push("--mm-feature-transport", runtimePreset.mmFeatureTransport);
-    if (options.disablePrefixCaching || runtimePreset.disablePrefixCaching) runArgs.push("--disable-radix-cache");
-    if (options.trustRemoteCode || runtimePreset.forceTrustRemoteCode) runArgs.push("--trust-remote-code");
-    if (options.effectiveReasoningParser && options.effectiveReasoningParser !== "auto") {
-      runArgs.push("--reasoning-parser", options.effectiveReasoningParser);
-    }
-    if (options.effectiveAutoToolChoice && options.effectiveToolCallParser) {
-      runArgs.push("--tool-call-parser", options.effectiveToolCallParser);
-    }
-    if (runtimePreset.speculativeAlgorithm === "DSPARK") {
-      runArgs.push(
-        "--speculative-algorithm", "DSPARK",
-        "--speculative-draft-model-path", windowsPathToContainerPath(runtimePreset.draftModel),
-        "--speculative-dspark-block-size", String(runtimePreset.dsparkBlockSize || 7),
-        "--speculative-draft-model-quantization", runtimePreset.draftModelQuantization || "unquant"
-      );
-    }
-    if (runtimePreset.pennyroyal) {
-      runArgs.push("--load-format", "safetensors", "--warmups=structured_output",
-        "--json-model-override-args", PENNYROYAL_ROPE_OVERRIDE,
-        "--gdn-mtp-cache-mode", "none",
-        "--chat-template", "/opt/pennyroyal/configs/pennyroyal/templates/froggeric-v22.5.jinja",
-        "--image-processor-backend", "pil", "--enable-request-time-stats-logging",
-        "--speculative-algorithm", "NEXTN", "--speculative-num-steps", "3",
-        "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", "4",
-        "--speculative-draft-model-quantization", "unquant",
-        "--speculative-token-map", "/opt/pennyroyal/configs/pennyroyal/frspec/flash-next-64k.pt",
-        "--watchdog-timeout", "1800");
-    }
-    if (options.vllmApiKey) runArgs.push("--api-key", options.vllmApiKey);
+    applyLegacyEffects(job, command);
+    return {
+      runArgs: engines.renderRunArgs(command),
+      activePublishArgs: command.publish,
+      runtimeImage: command.docker.image,
+      runtimePreset: preset,
+      runtimeEngine: safeCall(() => registry().toLegacy(engineId), engineId) || engineId,
+      secretEnv: command.secretEnv,
+    };
   }
 
   return {
     buildVllmRuntimeCommand,
     formatDockerPublishArgs,
+    prepareLaunch,
     redactDockerArgs,
   };
+}
+
+function safeCall(fn, fallback) {
+  try {
+    return fn();
+  } catch {
+    return fallback;
+  }
 }
 
 function positiveInteger(value) {
@@ -412,8 +177,129 @@ function positiveInteger(value) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
 }
 
-function normalizeRuntimeEngine(value) {
-  return String(value || "vllm").trim().toLowerCase() === "sglang" ? "sglang" : "vllm";
+/**
+ * Run options + runtime preset -> effective values by catalog param id, with
+ * the legacy precedence (a preset value beats the form value, `preset || opts`).
+ * Only fields the legacy builder read are mapped, and each keeps the raw value
+ * the builder used, so the adapters emit today's argv byte for byte.
+ */
+function legacyRunValues(opts, preset, quantization, fractionParam) {
+  const maxNumBatchedTokens = Math.max(positiveInteger(opts.maxNumBatchedTokens), positiveInteger(preset.maxNumBatchedTokens));
+  return {
+    servedName: opts.name,
+    contextLength: opts.maxModelLen,
+    concurrency: opts.maxNumSeqs,
+    [fractionParam]: opts.gpuMemoryUtilization,
+    dtype: preset.dtype || opts.dtype,
+    // The model config declares the quantization before the form does
+    // (effectiveLaunchQuantization); a preset may still pin it.
+    quantization: preset.quantization || quantization.value || "",
+    kvCacheDtype: preset.kvCacheDtype || opts.kvCacheDtype,
+    tokenizer: opts.tokenizer,
+    trustRemoteCode: Boolean(opts.trustRemoteCode || preset.forceTrustRemoteCode),
+    prefixCaching: opts.disablePrefixCaching || preset.disablePrefixCaching ? false : opts.enablePrefixCaching ? true : null,
+    tensorParallel: opts.tensorParallelSize,
+    pipelineParallel: opts.pipelineParallelSize,
+    dataParallel: opts.dataParallelSize,
+    expertParallel: Boolean(opts.enableExpertParallel),
+    reasoningParser: preset.reasoningParser || opts.reasoningParser,
+    toolCallParser: preset.toolCallParser || opts.toolCallParser,
+    autoToolChoice: Boolean(preset.enableAutoToolChoice || opts.enableAutoToolChoice),
+    chatTemplateKwargs: preset.defaultChatTemplateKwargs || null,
+    generationConfig: preset.generationConfig || null,
+    "vllm.maxNumBatchedTokens": maxNumBatchedTokens || null,
+    "vllm.cpuOffloadGb": opts.cpuOffloadGb,
+    "vllm.kvOffloadingSize": opts.kvOffloadingSize,
+    "vllm.mmProcessorCacheGb": opts.mmProcessorCacheGb,
+    "vllm.hfConfigPath": opts.hfConfigPath,
+    "vllm.languageModelOnly": Boolean(opts.languageModelOnly && !preset.disableLanguageModelOnly),
+    "vllm.distributedExecutorBackend": opts.distributedExecutorBackend,
+    "vllm.enforceEager": Boolean(preset.enforceEager),
+    "vllm.asyncScheduling": Boolean(preset.asyncScheduling),
+    "vllm.attentionBackend": preset.attentionBackend || null,
+    "vllm.moeBackend": preset.moeBackend || null,
+    "vllm.linearBackend": preset.linearBackend || null,
+    "vllm.overrideGenerationConfig": preset.overrideGenerationConfig || null,
+    "vllm.speculativeConfig": preset.speculativeConfig || null,
+    "vllm.safetensorsLoadStrategy": preset.safetensorsLoadStrategy || null,
+    "vllm.reasoningParserPlugin": preset.reasoningParserPlugin || null,
+    "sglang.maxRunningRequests": preset.maxRunningRequests || null,
+    "sglang.maxTotalTokens": preset.maxTotalTokens || null,
+    "sglang.pageSize": preset.pageSize || null,
+    "sglang.chunkedPrefillSize": preset.chunkedPrefillSize || null,
+    "sglang.fp4GemmBackend": preset.fp4GemmBackend || null,
+    "sglang.attentionBackend": preset.attentionBackend || null,
+    "sglang.pleOffloadEmbedding": Boolean(preset.pleOffloadEmbedding),
+    "sglang.linearAttnPrefillBackend": preset.linearAttnPrefillBackend || null,
+    "sglang.linearAttnDecodeBackend": preset.linearAttnDecodeBackend || null,
+    "sglang.mambaSsmDtype": preset.mambaSsmDtype || null,
+    "sglang.mambaRadixCacheStrategy": preset.mambaRadixCacheStrategy || null,
+    "sglang.mambaTrackInterval": preset.mambaTrackInterval || null,
+    "sglang.maxMambaCacheSize": preset.maxMambaCacheSize || null,
+    "sglang.mambaSchedulerStrategy": preset.mambaSchedulerStrategy || null,
+    "sglang.disablePrefillCudaGraph": Boolean(preset.disablePrefillCudaGraph),
+    "sglang.mmFeatureTransport": preset.mmFeatureTransport || null,
+    "speculative.method": preset.speculativeAlgorithm || null,
+    "speculative.draftModel": preset.draftModel || null,
+    "sglang.dsparkBlockSize": preset.dsparkBlockSize || null,
+    "sglang.draftModelQuantization": preset.draftModelQuantization || null,
+  };
+}
+
+/**
+ * The preset's launch data in the recipe "fixed" shape: its env, the switches
+ * that change how values are emitted, and Pennyroyal's qualified data from
+ * pennyroyal.js (01-engines §7: preset passthrough until recipes, ENG-6).
+ */
+function legacyFixedData(opts, preset) {
+  const fixed = { args: [], env: { ...(preset.env || {}) }, labels: [], dockerFlags: [], slots: {} };
+  if (preset.positionalModel) fixed.slots.modelArgStyle = "positional";
+  if (preset.disableQuantizationArg) fixed.slots.disableQuantizationArg = true;
+  if (preset.disableKvCacheDtypeArg) fixed.slots.disableKvCacheDtypeArg = true;
+  if (preset.disableLanguageModelOnly) fixed.slots.disableLanguageModelOnly = true;
+  if (preset.pennyroyal) {
+    const pennyroyal = pennyroyalLaunchFixed(opts, preset);
+    fixed.args.push(...pennyroyal.args);
+    fixed.labels.push(...pennyroyal.labels);
+    fixed.dockerFlags.push(...pennyroyal.dockerFlags);
+    Object.assign(fixed.slots, pennyroyal.slots);
+  }
+  return fixed;
+}
+
+// The image the launch runs always wins; the manifest identity is attached
+// when the registry knows it, and an unknown image runs as a custom runtime.
+function runtimeRef(source, engineId, image) {
+  const ref = safeCall(() => source.resolveRuntime(engineId, { image }), null);
+  return {
+    runtimeId: ref?.runtimeId || null,
+    manifestKey: ref?.manifestKey || null,
+    image,
+    features: ref?.features || {},
+    compatVersion: ref?.compatVersion || null,
+  };
+}
+
+/**
+ * Legacy engine value (body field, preset engine, container label) -> engineId.
+ * Delegates to the engine registry (01 §3); a value the registry does not map
+ * to an engine this manager launches through an adapter, or a registry that
+ * cannot load, falls back to the legacy coercion (anything but "sglang" is
+ * vLLM). Unknown values become 400 unknown_engine at the request layer (ENG-7).
+ */
+function normalizeRuntimeEngine(value, registry = null) {
+  const engineId = safeCall(() => {
+    const source = registry || engines.getEngineRegistry();
+    const mapped = source.fromLegacy(value, MANAGER_ID);
+    const descriptor = source.hostedBy(MANAGER_ID).includes(mapped) ? source.get(mapped) : null;
+    return descriptor && LEGACY_BUILDER_ADAPTERS.has(descriptor.adapter) && engines.adapterFor(descriptor) ? mapped : "";
+  }, "");
+  return engineId || legacyRuntimeEngine(value);
+}
+
+function legacyRuntimeEngine(value) {
+  const text = String(value || "vllm").trim().toLowerCase();
+  return LEGACY_ENGINES.has(text) ? text : "vllm";
 }
 
 module.exports = { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine };
