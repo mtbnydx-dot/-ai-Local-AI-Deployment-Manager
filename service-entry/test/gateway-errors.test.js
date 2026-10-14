@@ -82,6 +82,8 @@ test.after(async () => {
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   }
+  // Gateway auth opens the access store beside the ledger (PUB-8).
+  entry?.closeAccessStore();
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

@@ -366,9 +366,15 @@ test("auto gateway selects the manager that owns the requested model", () => {
   assert.equal(entry.selectGatewayManager(catalogs, "typo-does-not-exist"), null);
 });
 
-test("service API keys are scoped to the manager that authenticated them", async () => {
+test("a migrated key is scoped to its manager by fleetAllow", async () => {
   const managers = [entry.findManager("vllm"), entry.findManager("llama")];
-  const vllmAuth = { ok: true, matchedManager: "vllm", client: null };
+  // Migration gives a manager's key fleetAllow ["<manager>:*"] (05 §6.7).
+  const { secret } = entry.getAccessStore().createKey({
+    name: "migrated vllm client", class: "friend", scopes: ["models.read", "chat"], models: ["*"], fleetAllow: ["vllm:*"],
+  }, { actor: "test" });
+  const vllmAuth = await entry.security.authorizeGatewayRequest({ method: "GET", headers: { authorization: `Bearer ${secret}` }, socket: { remoteAddress: "127.0.0.1" } });
+  assert.equal(vllmAuth.ok, true);
+  assert.deepEqual(vllmAuth.key.fleetAllow, ["vllm:*"]);
   assert.deepEqual(
     entry.selectGatewayManagersForAuth("auto", vllmAuth, managers).map((manager) => manager.id),
     ["vllm"],
@@ -379,10 +385,11 @@ test("service API keys are scoped to the manager that authenticated them", async
   );
   assert.deepEqual(entry.selectGatewayManagersForAuth("llama", vllmAuth, managers), []);
   assert.deepEqual(
-    entry.selectGatewayManagersForAuth("auto", { ok: true, matchedManager: "" }, managers).map((manager) => manager.id),
+    entry.selectGatewayManagersForAuth("auto", { ok: true, kind: "keyless", matchedManager: "" }, managers).map((manager) => manager.id),
     ["vllm", "llama"],
   );
 
+  // The llama route answers 403; ADMIN keeps the code manager_forbidden.
   const state = { status: 0, body: null };
   const response = {
     writeHead(status) { state.status = status; },
