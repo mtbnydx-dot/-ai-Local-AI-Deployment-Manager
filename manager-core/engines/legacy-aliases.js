@@ -427,6 +427,19 @@ function legacyBodyToRequest(body, options = {}) {
   return { request, warnings };
 }
 
+/**
+ * requestToLegacyRunOptions(plan) → the run options today's launch-request.js
+ * hands to runStartJob (01 §9.5), from the plan the resolver made for this
+ * launch. The manager's own normalisation produced them while the plan was
+ * resolved (resolve-launch-plan.js), so the R-* goldens hold: a shallow copy
+ * keeps the key order, and the launch fills the admission fields in place.
+ */
+function requestToLegacyRunOptions(plan) {
+  const runOptions = plan?.legacy?.runOptions;
+  if (!isPlainObject(runOptions)) throw new TypeError("requestToLegacyRunOptions needs a resolved launch plan.");
+  return { ...runOptions };
+}
+
 module.exports = {
   CODECS,
   LAYOUT_PARAMS,
@@ -435,5 +448,6 @@ module.exports = {
   legacyBodyToRequest,
   legacyConfigToValues,
   legacyFieldSet,
+  requestToLegacyRunOptions,
   valuesToLegacyConfig,
 };

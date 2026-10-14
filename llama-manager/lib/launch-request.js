@@ -12,6 +12,8 @@ const {
   findSiblingGgufFilesSync,
 } = require("../../manager-core");
 
+const { createLaunchPlanner } = require("../../manager-core/engines/resolve-launch-plan");
+
 const LLAMA_CONTEXT_ESTIMATE_MAX_MB = 512 * 1024;
 
 function createLlamaStartRuntimeRequest(deps) {
@@ -60,9 +62,28 @@ function createLlamaStartRuntimeRequest(deps) {
     resolveLaunchModel = null,
     validateRuntimeCompatibility = null,
     appendLog = () => {},
+    // Launch plan (01-engines ENG-7): the resolver, the engine registry and the
+    // recipes default to the shared ones; the server adds the command preview
+    // (the runtime-command builder's planLlamaLaunch), GPU telemetry, image
+    // presence, the gpu-admission preview and the container listing.
+    getEngineRegistry = null,
+    getRecipeStore = null,
+    paramCatalog = null,
+    prepareLaunchCommand = null,
+    getHostGpus = null,
+    imagePresence = null,
+    admissionPreview = null,
+    listContainers = null,
   } = deps;
 
-  return async function startRuntimeRequest({ body = {} } = {}) {
+  /**
+   * Today's /api/start normalisation of a legacy body, side-effect free: the
+   * run options, job.meta and gpu-admission request before admission (the
+   * R-* goldens pin all three). The resolver calls it for /api/start and for
+   * POST /api/launch/plan alike; a plan always runs the VRAM estimate, which a
+   * launch runs only when it admits.
+   */
+  async function normalizeStartBody(body = {}, { mode = "launch" } = {}) {
     const model = resolveRequestedModel(cleanRequired(body.model, "model"));
     const launchResolution = typeof resolveLaunchModel === "function" ? resolveLaunchModel(model, "gguf") : null;
     // An unverified architecture (supported === null) still launches; the start
@@ -177,7 +198,7 @@ function createLlamaStartRuntimeRequest(deps) {
     const estimateGpuDeviceIds = gpuDeviceIds.length
       ? gpuDeviceIds
       : Array.isArray(gpuPlan.selectedGpuIds) ? gpuPlan.selectedGpuIds : [];
-    const estimate = (typeof acquireGpuAdmission === "function" || typeof acquireGpuAdmissionAfterPrepare === "function")
+    const estimate = (mode === "plan" || typeof acquireGpuAdmission === "function" || typeof acquireGpuAdmissionAfterPrepare === "function")
       ? await estimateParallelVram({
         model,
         launch: launchResolution,
@@ -220,94 +241,58 @@ function createLlamaStartRuntimeRequest(deps) {
       fitTargetMb,
       fitCtx,
     };
-    let admissionLease = null;
-    if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
-      admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
-    } else if (instanceMode === "replace"
-      && typeof acquireGpuAdmission === "function"
-      && typeof acquireGpuAdmissionAfterPrepare !== "function") {
-      const error = new Error("GPU replacement admission is unavailable; the existing model was not changed.");
-      error.code = "vram_admission_unavailable";
-      error.status = 503;
-      throw error;
-    }
-    let admission = admissionLease?.summary || null;
-    if (!gpuDeviceIds.length && admission?.reservations?.length) {
-      gpuDeviceIds = Array.from(new Set(admission.reservations
-        .map((reservation) => String(reservation.gpuIndex ?? reservation.gpuId ?? "").trim())
-        .filter(Boolean)));
-    }
-    let runtimeApiKeyRef = "";
-    try {
-      if (llamaApiKey) runtimeApiKeyRef = await saveRuntimeApiKey(llamaApiKey);
-    } catch (error) {
-      try { await admissionLease?.release?.("api-key-store-failed"); } catch {}
-      throw error;
-    }
-    let job;
-    try {
-      job = createJob("serve", `Start ${name}`, {
-        model,
-        resolvedModel: launchResolution?.selectedGgufFile || model,
-        name,
-        instanceMode,
-        instanceId,
-        containerName,
-        port,
-        maxModelLen,
-        maxNumSeqs,
-        gpuMemoryUtilization,
-        gpuLayers,
-        fitTargetMb,
-        fitCtx,
-        batchSize,
-        ubatchSize,
-        cacheTypeK,
-        cacheTypeV,
-        flashAttention,
-        cacheReuse,
-        noMmap,
-        noRepack,
-        gpuDeviceIds,
-        multiGpuMode,
-        visibleGpuCount,
-        tensorSplit: effectiveTensorSplit,
-        mainGpu,
-        mainGpuHostId: gpuPlan.mainGpuHostId,
-        gpuPlan,
-        gpuWarnings: gpuSelection.warnings,
-        clientPreset,
-        reasoning,
-        reasoningFormat,
-        reasoningEffort,
-        reasoningBudget,
-        textOnlyMode,
-        languageModelOnly: textOnlyMode,
-        networkAccess,
-        serviceHost,
-        serviceUrl,
-        mmproj,
-        mmprojDevice,
-        draftModel,
-        speculativeMode,
-        numSpeculativeTokens,
-        temperature,
-        topP,
-        topK,
-        hasApiKey: Boolean(llamaApiKey),
-        gpuAdmission: admission,
-        ...(unverifiedCompatibility ? { runtimeCompatibility: unverifiedCompatibility } : {}),
-      });
-    } catch (error) {
-      try {
-        await admissionLease?.release?.("job-create-failed");
-      } catch {} finally {
-        try { await deleteRuntimeApiKey(runtimeApiKeyRef); } catch {}
-      }
-      throw error;
-    }
-    if (unverifiedCompatibility?.message) appendLog(job, unverifiedCompatibility.message);
-
+    const jobMeta = {
+      model,
+      resolvedModel: launchResolution?.selectedGgufFile || model,
+      name,
+      instanceMode,
+      instanceId,
+      containerName,
+      port,
+      maxModelLen,
+      maxNumSeqs,
+      gpuMemoryUtilization,
+      gpuLayers,
+      fitTargetMb,
+      fitCtx,
+      batchSize,
+      ubatchSize,
+      cacheTypeK,
+      cacheTypeV,
+      flashAttention,
+      cacheReuse,
+      noMmap,
+      noRepack,
+      gpuDeviceIds,
+      multiGpuMode,
+      visibleGpuCount,
+      tensorSplit: effectiveTensorSplit,
+      mainGpu,
+      mainGpuHostId: gpuPlan.mainGpuHostId,
+      gpuPlan,
+      gpuWarnings: gpuSelection.warnings,
+      clientPreset,
+      reasoning,
+      reasoningFormat,
+      reasoningEffort,
+      reasoningBudget,
+      textOnlyMode,
+      languageModelOnly: textOnlyMode,
+      networkAccess,
+      serviceHost,
+      serviceUrl,
+      mmproj,
+      mmprojDevice,
+      draftModel,
+      speculativeMode,
+      numSpeculativeTokens,
+      temperature,
+      topP,
+      topK,
+      hasApiKey: Boolean(llamaApiKey),
+      gpuAdmission: null,
+      ...(unverifiedCompatibility ? { runtimeCompatibility: unverifiedCompatibility } : {}),
+    };
     const runOptions = {
       model,
       launch: launchResolution,
@@ -357,10 +342,83 @@ function createLlamaStartRuntimeRequest(deps) {
       topP,
       topK,
       llamaApiKey,
+      runtimeApiKeyRef: "",
+      vramReservationMb: 0,
+      gpuAdmissionLeaseId: "",
+    };
+    return {
+      runOptions,
+      jobMeta,
+      admissionRequest: gpuAdmissionRequest,
+      extras: { gpu, tensorSplit, mainGpuInput: body.mainGpu, unverifiedCompatibility },
+    };
+  }
+
+  const planner = createLaunchPlanner({
+    managerId: "llama",
+    normalize: normalizeStartBody,
+    getEngineRegistry,
+    getRecipeStore,
+    paramCatalog,
+    prepareLaunchCommand,
+    getHostGpus,
+    imagePresence,
+    admissionPreview,
+    listContainers,
+  });
+
+  async function startRuntimeRequest({ body = {} } = {}) {
+    // alias → resolver → requestToLegacyRunOptions: what was planned is what runs.
+    const plan = await planner.launch(body);
+    const runOptions = planner.runOptions(plan);
+    const gpuAdmissionRequest = plan.legacy.admissionRequest;
+    const { gpu, tensorSplit, mainGpuInput, unverifiedCompatibility } = plan.legacy.extras;
+    const { name, instanceMode, containerName, llamaApiKey, gpuMemoryUtilization, multiGpuMode } = runOptions;
+    let { gpuDeviceIds, gpuPlan, mainGpu } = runOptions;
+    let effectiveTensorSplit = runOptions.tensorSplit;
+    let admissionLease = null;
+    if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
+      admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
+    } else if (instanceMode === "replace"
+      && typeof acquireGpuAdmission === "function"
+      && typeof acquireGpuAdmissionAfterPrepare !== "function") {
+      const error = new Error("GPU replacement admission is unavailable; the existing model was not changed.");
+      error.code = "vram_admission_unavailable";
+      error.status = 503;
+      throw error;
+    }
+    let admission = admissionLease?.summary || null;
+    if (!gpuDeviceIds.length && admission?.reservations?.length) {
+      gpuDeviceIds = Array.from(new Set(admission.reservations
+        .map((reservation) => String(reservation.gpuIndex ?? reservation.gpuId ?? "").trim())
+        .filter(Boolean)));
+    }
+    let runtimeApiKeyRef = "";
+    try {
+      if (llamaApiKey) runtimeApiKeyRef = await saveRuntimeApiKey(llamaApiKey);
+    } catch (error) {
+      try { await admissionLease?.release?.("api-key-store-failed"); } catch {}
+      throw error;
+    }
+    let job;
+    try {
+      job = createJob("serve", `Start ${name}`, { ...plan.legacy.jobMeta, gpuDeviceIds, gpuAdmission: admission });
+    } catch (error) {
+      try {
+        await admissionLease?.release?.("job-create-failed");
+      } catch {} finally {
+        try { await deleteRuntimeApiKey(runtimeApiKeyRef); } catch {}
+      }
+      throw error;
+    }
+    if (unverifiedCompatibility?.message) appendLog(job, unverifiedCompatibility.message);
+
+    Object.assign(runOptions, {
+      gpuDeviceIds,
       runtimeApiKeyRef,
       vramReservationMb: Number(admission?.requestedTotalMb || 0),
       gpuAdmissionLeaseId: String(admission?.id || ""),
-    };
+    });
     let stopAdmissionHeartbeat = () => {};
     const attachAdmissionLease = (lease) => {
       admissionLease = lease || null;
@@ -369,7 +427,7 @@ function createLlamaStartRuntimeRequest(deps) {
         gpuDeviceIds = Array.from(new Set(admission.reservations
           .map((reservation) => String(reservation.gpuIndex ?? reservation.gpuId ?? "").trim())
           .filter(Boolean)));
-        gpuPlan = buildLlamaGpuPlan(gpu, gpuDeviceIds, gpuMemoryUtilization, multiGpuMode, body.mainGpu);
+        gpuPlan = buildLlamaGpuPlan(gpu, gpuDeviceIds, gpuMemoryUtilization, multiGpuMode, mainGpuInput);
         mainGpu = gpuPlan.mainGpu;
         effectiveTensorSplit = tensorSplit || suggestTensorSplit(gpu.gpus || [], gpuDeviceIds, gpuMemoryUtilization, multiGpuMode);
       }
@@ -441,8 +499,11 @@ function createLlamaStartRuntimeRequest(deps) {
         failJob(job, error);
       });
 
-    return { job };
-  };
+    return { job, plan: planner.summary(plan) };
+  }
+
+  startRuntimeRequest.planLaunch = (body) => planner.plan(body);
+  return startRuntimeRequest;
 }
 
 async function estimateLlamaParallelVram(options = {}) {
