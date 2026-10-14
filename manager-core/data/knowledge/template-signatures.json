@@ -3,5 +3,148 @@
   "kind": "template-signatures",
   "asOf": "2026-10-14",
   "staleAfterDays": 180,
-  "entries": []
+  "entries": [
+    {
+      "id": "qwen38-xml-effort",
+      "label": { "zh": "Qwen XML 函数调用 + 思考强度", "en": "Qwen XML function calls + reasoning effort" },
+      "sha256": ["c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"],
+      "features": { "all": ["<tool_call>", "<function=", "<parameter="], "regex": ["reasoning_effort"] },
+      "toolFormat": "qwen-xml-function",
+      "reasoningFormat": "think-tags",
+      "thinking": { "kwarg": "enable_thinking", "defaultOn": true, "effortKwarg": "reasoning_effort", "effortValues": ["xhigh", "medium", "low"] },
+      "parsers": {
+        "vllm": { "tool": "qwen3_coder", "reasoning": "qwen3", "alternatives": ["qwen3_xml"] },
+        "sglang": { "tool": "qwen3_coder", "reasoning": "qwen3" },
+        "llamacpp": { "tool": "auto", "reasoning": "auto", "reasoningFormat": "deepseek" }
+      }
+    },
+    {
+      "id": "qwen-xml-function",
+      "label": { "zh": "Qwen XML 函数调用", "en": "Qwen XML function calls" },
+      "features": { "all": ["<tool_call>", "<function=", "<parameter="] },
+      "toolFormat": "qwen-xml-function",
+      "reasoningFormat": "think-tags",
+      "thinking": { "kwarg": "enable_thinking", "defaultOn": true },
+      "parsers": {
+        "vllm": { "tool": "qwen3_coder", "reasoning": "qwen3", "alternatives": ["qwen3_xml"] },
+        "sglang": { "tool": "qwen3_coder", "reasoning": "qwen3" },
+        "llamacpp": { "tool": "auto", "reasoning": "auto", "reasoningFormat": "deepseek" }
+      }
+    },
+    {
+      "id": "hermes-json",
+      "label": { "zh": "Hermes JSON 工具调用", "en": "Hermes JSON tool calls" },
+      "features": { "all": ["<tool_call>"], "none": ["<function=", "<arg_key>"], "regex": ["tojson"] },
+      "toolFormat": "hermes-json",
+      "parsers": {
+        "vllm": { "tool": "hermes" },
+        "sglang": { "tool": "qwen25" },
+        "llamacpp": { "tool": "auto" }
+      }
+    },
+    {
+      "id": "glm-arg-key",
+      "label": { "zh": "GLM 键值参数工具调用", "en": "GLM key/value argument tool calls" },
+      "features": { "all": ["<tool_call>", "<arg_key>"] },
+      "toolFormat": "glm-arg-key",
+      "reasoningFormat": "think-tags",
+      "parsers": {
+        "vllm": { "tool": "glm45", "reasoning": "glm45" },
+        "sglang": { "tool": "glm45", "reasoning": "glm45" },
+        "llamacpp": { "tool": "auto", "reasoning": "auto" }
+      }
+    },
+    {
+      "id": "deepseek-dsml",
+      "label": { "zh": "DeepSeek DSML 工具调用", "en": "DeepSeek DSML tool calls" },
+      "features": { "all": ["DSML", "tool_calls", "invoke"] },
+      "toolFormat": "deepseek-dsml",
+      "reasoningFormat": "think-tags",
+      "thinking": { "kwarg": "thinking", "aliases": ["enable_thinking"], "defaultOn": false },
+      "parsers": {
+        "vllm": { "tool": null, "reasoning": null },
+        "sglang": { "tool": "deepseekv4", "reasoning": "deepseek-v4" },
+        "llamacpp": { "tool": "auto", "reasoning": "auto" }
+      }
+    },
+    {
+      "id": "deepseek-v3-markers",
+      "label": { "zh": "DeepSeek V3 工具调用标记", "en": "DeepSeek V3 tool-call markers" },
+      "features": { "any": ["tool▁calls▁begin", "tool▁call▁begin"] },
+      "toolFormat": "deepseek-v3",
+      "reasoningFormat": "think-tags",
+      "parsers": {
+        "vllm": { "tool": "deepseek_v3", "reasoning": "deepseek_r1" },
+        "sglang": { "tool": "deepseekv3", "reasoning": "deepseek-r1" },
+        "llamacpp": { "tool": "auto", "reasoning": "auto" }
+      }
+    },
+    {
+      "id": "kimi-tool-section",
+      "label": { "zh": "Kimi 工具调用段", "en": "Kimi tool-call section" },
+      "features": { "all": ["<|tool_calls_section_begin|>"] },
+      "toolFormat": "kimi-k2",
+      "parsers": {
+        "vllm": { "tool": "kimi_k2" },
+        "sglang": { "tool": "kimi_k2" },
+        "llamacpp": { "tool": "auto" }
+      }
+    },
+    {
+      "id": "mistral-tool-calls",
+      "label": { "zh": "Mistral 工具调用", "en": "Mistral tool calls" },
+      "features": { "all": ["[TOOL_CALLS]"] },
+      "toolFormat": "mistral",
+      "parsers": {
+        "vllm": { "tool": "mistral" },
+        "sglang": { "tool": "mistral" },
+        "llamacpp": { "tool": "auto" }
+      }
+    },
+    {
+      "id": "harmony",
+      "label": { "zh": "Harmony 通道格式", "en": "Harmony channel format" },
+      "features": { "all": ["<|channel|>"] },
+      "toolFormat": "harmony",
+      "reasoningFormat": "harmony-channels",
+      "parsers": {
+        "vllm": { "tool": "openai", "reasoning": "openai_gptoss", "alternatives": ["gptoss"] },
+        "sglang": { "tool": "gpt-oss", "reasoning": "gpt-oss" },
+        "llamacpp": { "tool": "auto", "reasoning": "auto" }
+      }
+    },
+    {
+      "id": "llama3-json",
+      "label": { "zh": "Llama 3 JSON 工具调用", "en": "Llama 3 JSON tool calls" },
+      "features": { "all": ["<|python_tag|>"] },
+      "toolFormat": "llama3-json",
+      "parsers": {
+        "vllm": { "tool": "llama3_json" },
+        "sglang": { "tool": "llama3" },
+        "llamacpp": { "tool": "auto" }
+      }
+    },
+    {
+      "id": "gemma4",
+      "label": { "zh": "Gemma 4 函数调用", "en": "Gemma 4 function calls" },
+      "features": { "any": ["<start_function_call>", "<|tool_call>"] },
+      "toolFormat": "gemma",
+      "parsers": {
+        "vllm": { "tool": "gemma4", "reasoning": "gemma4" },
+        "llamacpp": { "tool": "auto", "reasoning": "auto" }
+      }
+    },
+    {
+      "id": "think-only",
+      "priority": -10,
+      "label": { "zh": "仅思考标签（无工具调用）", "en": "Think tags only (no tool calls)" },
+      "features": { "all": ["<think>"], "none": ["<tool_call>", "[TOOL_CALLS]", "DSML", "<|channel|>"] },
+      "toolFormat": "none",
+      "reasoningFormat": "think-tags",
+      "parsers": {
+        "vllm": { "reasoning": "deepseek_r1" },
+        "llamacpp": { "reasoning": "auto" }
+      }
+    }
+  ]
 }
