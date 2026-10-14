@@ -9,6 +9,7 @@
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -20,6 +21,10 @@ const CONFIG_MODULE = path.join(__dirname, "..", "platform", "config.js");
 const CORE_SCHEMA = path.join(__dirname, "..", "data", "platform-config.schema.json");
 const BUNDLED_FRAGMENTS = path.join(__dirname, "..", "data", "platform-config.d");
 const NO_ENV = Object.freeze({});
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function tempDir(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -338,6 +343,33 @@ test("childEnv injects secrets from the store only into their consumers, through
   assert.equal("PLATFORM_MCP_API_KEY" in entry, false);
   assert.equal(entry.SERVICE_ENTRY_SEARCH_GATEWAY_KEY, "fake-search-key-for-tests");
   assert.equal("SEARCH_GATEWAY_API_KEY" in entry, false);
+
+  // A secret set in the true env wins over the store and reaches the aliases
+  // the other consumers read, so the entry and the gateway share one key.
+  const shell = load(root, { env: { SEARCH_GATEWAY_API_KEY: "fake-search-env-key-0006" }, secrets: vault });
+  assert.equal(shell.sources["search.apiKey"], "env");
+  assert.equal(config.childEnv(shell, "entry", null, { secrets: vault }).env.SERVICE_ENTRY_SEARCH_GATEWAY_KEY, "fake-search-env-key-0006");
+  assert.equal("SEARCH_GATEWAY_API_KEY" in config.childEnv(shell, "search-gateway", null, { secrets: vault }).env, false, "the true env already has it");
+  assert.equal(JSON.stringify(shell).includes("fake-search-env-key"), false, "the loaded config never holds the text");
+});
+
+test("childEnv never turns a LAN bind host into SERVICE_ENTRY_ALLOW_LAN_ADMIN=1", (t) => {
+  // start-service-entry.cmd lan binds the LAN but keeps management local-only.
+  const fromEnv = load(tempRoot(t), { env: { SERVICE_ENTRY_HOST: "0.0.0.0" } });
+  assert.equal(fromEnv.values["listeners.admin.lan"], true);
+  assert.equal(fromEnv.sources["listeners.admin.lan"], "derived");
+  const envChild = config.childEnv(fromEnv, "entry").env;
+  assert.equal(envChild.SERVICE_ENTRY_ALLOW_LAN_ADMIN, "0");
+  assert.equal("SERVICE_ENTRY_HOST" in envChild, false, "the true env already has it");
+  const fromFile = config.childEnv(load(tempRoot(t, { listeners: { admin: { host: "0.0.0.0" } } })), "entry").env;
+  assert.equal(fromFile.SERVICE_ENTRY_HOST, "0.0.0.0");
+  assert.equal(fromFile.SERVICE_ENTRY_ALLOW_LAN_ADMIN, "0");
+  // An explicit lan is the owner's choice and is passed on.
+  const explicit = config.childEnv(load(tempRoot(t, { listeners: { admin: { lan: true } } })), "entry").env;
+  assert.equal(explicit.SERVICE_ENTRY_ALLOW_LAN_ADMIN, "1");
+  assert.equal(explicit.SERVICE_ENTRY_HOST, "0.0.0.0");
+  const runtime = config.childEnv(load(tempRoot(t), { runtimeOverrides: { "listeners.admin.lan": true } }), "entry").env;
+  assert.equal(runtime.SERVICE_ENTRY_ALLOW_LAN_ADMIN, "1");
 });
 
 // --- file handling ----------------------------------------------------------
@@ -362,7 +394,7 @@ test("a BOM-prefixed file is read, and corrupt or unreadable files never throw",
     assert.ok(config.describeEffectiveConfig(loaded).groups.length > 0);
     // The writer refuses to replace a file it cannot read.
     const before = fs.readFileSync(configFile(root));
-    const result = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, actor: "test" });
+    const result = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, env: NO_ENV, actor: "test" });
     assert.equal(result.ok, false);
     assert.equal(result.code, "config_invalid");
     assert.deepEqual(fs.readFileSync(configFile(root)), before, `${name} stays byte-identical`);
@@ -395,7 +427,7 @@ test("unknown and retired keys are warnings, so an older build reads a newer fil
 
 test("unknown keys survive a write by this build", async (t) => {
   const root = tempRoot(t, { schemaVersion: 1, futureNamespace: { enabled: true } });
-  const result = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, actor: "test" });
+  const result = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, env: NO_ENV, actor: "test" });
   assert.equal(result.ok, true);
   assert.deepEqual(readPlatformJson(root), { schemaVersion: 1, futureNamespace: { enabled: true }, console: { defaultUi: "new" } });
 });
@@ -411,7 +443,7 @@ test("cross-field rules: lan_implied_by_host, insecure_combination, port_conflic
   const insecure = load(tempRoot(t, { listeners: { admin: { lan: true } }, exposure: { requireApiKey: "off" } }));
   assert.equal(insecure.errors.find((error) => error.code === "insecure_combination")?.field, "exposure.requireApiKey");
   const lanRoot = tempRoot(t, { listeners: { admin: { lan: true } } });
-  const refused = await config.writeSection("exposure", { requireApiKey: "off" }, { aiRoot: lanRoot, actor: "test" });
+  const refused = await config.writeSection("exposure", { requireApiKey: "off" }, { aiRoot: lanRoot, env: NO_ENV, actor: "test" });
   assert.equal(refused.ok, false);
   assert.equal(refused.code, "config_invalid");
   assert.equal(refused.status, 400);
@@ -424,7 +456,7 @@ test("cross-field rules: lan_implied_by_host, insecure_combination, port_conflic
   const reserved = load(tempRoot(t), { reservedPorts: [{ name: "searxng", port: 5190 }] });
   assert.equal(reserved.errors[0].code, "port_conflict");
   const portRoot = tempRoot(t);
-  const portRefused = await config.writeSection("listeners", { public: { port: 5177 } }, { aiRoot: portRoot, actor: "test" });
+  const portRefused = await config.writeSection("listeners", { public: { port: 5177 } }, { aiRoot: portRoot, env: NO_ENV, actor: "test" });
   assert.equal(portRefused.code, "config_invalid");
   assert.equal(portRefused.errors[0].code, "port_conflict");
   assert.equal(fs.existsSync(configFile(portRoot)), false);
@@ -432,15 +464,73 @@ test("cross-field rules: lan_implied_by_host, insecure_combination, port_conflic
   const formats = load(tempRoot(t, { listeners: { public: { baseUrl: "http://models.example.test" } }, trustedProxies: { cidrs: ["10.0.0.0/33"] } }));
   assert.deepEqual(formats.errors.map((error) => `${error.field}:${error.code}`).sort(), ["listeners.public.baseUrl:invalid_format", "trustedProxies.cidrs:invalid_format"]);
   assert.equal(formats.values["listeners.public.baseUrl"], "");
-  const formatRefused = await config.writeSection("listeners", { public: { baseUrl: "ftp://models.example.test" } }, { aiRoot: tempRoot(t), actor: "test" });
+  const formatRefused = await config.writeSection("listeners", { public: { baseUrl: "ftp://models.example.test" } }, { aiRoot: tempRoot(t), env: NO_ENV, actor: "test" });
   assert.equal(formatRefused.errors[0].code, "invalid_format");
-  const ok = await config.writeSection("listeners", { public: { baseUrl: "https://models.example.test" } }, { aiRoot: tempRoot(t), actor: "test" });
+  const ok = await config.writeSection("listeners", { public: { baseUrl: "https://models.example.test" } }, { aiRoot: tempRoot(t), env: NO_ENV, actor: "test" });
   assert.equal(ok.ok, true);
 
   // A problem already in the file does not block an unrelated write.
   const existing = tempRoot(t, { listeners: { public: { port: 5176 } } });
-  const unrelated = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: existing, actor: "test" });
+  const unrelated = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: existing, env: NO_ENV, actor: "test" });
   assert.equal(unrelated.ok, true);
+});
+
+test("the writer judges insecure_combination on the effective config, so a LAN bind from env or runtime counts", async (t) => {
+  const refusedWith = async (options, patch = { requireApiKey: "off" }, section = "exposure") => {
+    const root = tempRoot(t);
+    const result = await config.writeSection(section, patch, { aiRoot: root, actor: "test", ...options });
+    assert.equal(result.ok, false, JSON.stringify(options));
+    assert.equal(result.code, "config_invalid");
+    assert.deepEqual(result.errors.map((error) => error.code), ["insecure_combination"]);
+    assert.equal(fs.existsSync(configFile(root)), false, "a refused write writes nothing");
+  };
+  // start-service-entry.cmd lan, or setx SERVICE_ENTRY_HOST=0.0.0.0.
+  await refusedWith({ env: { SERVICE_ENTRY_HOST: "0.0.0.0" } });
+  await refusedWith({ env: { SERVICE_ENTRY_ALLOW_LAN_ADMIN: "1" } });
+  await refusedWith({ env: { SERVICE_ENTRY_PUBLIC_HOST: "0.0.0.0" } });
+  // A parent injected the bind (from --lan): the child demotes those names,
+  // but its running listener was still bound with them.
+  await refusedWith({ env: { SERVICE_ENTRY_HOST: "0.0.0.0", SERVICE_ENTRY_ALLOW_LAN_ADMIN: "1", PLATFORM_CONFIG_ENV_KEYS: "SERVICE_ENTRY_ALLOW_LAN_ADMIN,SERVICE_ENTRY_HOST" } });
+  await refusedWith({ env: NO_ENV, runtimeOverrides: { "listeners.admin.lan": true } });
+  // Keys are off through env and the write adds the LAN.
+  await refusedWith({ env: { SERVICE_ENTRY_REQUIRE_API_KEY: "off" } }, { admin: { lan: true } }, "listeners");
+
+  // Without options.env the writer reads process.env, as the entry does.
+  const previous = process.env.SERVICE_ENTRY_HOST;
+  process.env.SERVICE_ENTRY_HOST = "0.0.0.0";
+  try {
+    await refusedWith({});
+  } finally {
+    if (previous === undefined) delete process.env.SERVICE_ENTRY_HOST;
+    else process.env.SERVICE_ENTRY_HOST = previous;
+  }
+
+  // Keys stay on, or the problem was already there: the write goes through.
+  const lanEnv = { SERVICE_ENTRY_HOST: "0.0.0.0" };
+  assert.equal((await config.writeSection("exposure", { requireApiKey: "on" }, { aiRoot: tempRoot(t), env: lanEnv, actor: "test" })).ok, true);
+  const already = { ...lanEnv, SERVICE_ENTRY_REQUIRE_API_KEY: "off" };
+  assert.equal((await config.writeSection("console", { defaultUi: "new" }, { aiRoot: tempRoot(t), env: already, actor: "test" })).ok, true);
+  assert.equal((await config.writeSection("exposure", { requireApiKey: "off" }, { aiRoot: tempRoot(t), env: NO_ENV, actor: "test" })).ok, true, "a loopback-only entry may turn keys off");
+});
+
+test("any non-loopback bind host counts as LAN for lan_implied_by_host and insecure_combination", async (t) => {
+  for (const host of ["0.0.0.0", "::", "192.0.2.10", "models-box"]) {
+    const loaded = load(tempRoot(t, { listeners: { admin: { host } } }));
+    assert.equal(loaded.values["listeners.admin.lan"], true, host);
+    assert.equal(loaded.sources["listeners.admin.lan"], "derived", host);
+    assert.deepEqual(loaded.warnings.map((warning) => warning.code), ["lan_implied_by_host"], host);
+  }
+  for (const host of ["127.0.0.1", "127.0.0.2", "localhost", "::1"]) {
+    const loaded = load(tempRoot(t, { listeners: { admin: { host } } }));
+    assert.equal(loaded.values["listeners.admin.lan"], false, host);
+    assert.deepEqual(loaded.warnings, [], host);
+  }
+  const lanIp = tempRoot(t, { listeners: { admin: { host: "192.0.2.10" } } });
+  const refused = await config.writeSection("exposure", { requireApiKey: "off" }, { aiRoot: lanIp, env: NO_ENV, actor: "test" });
+  assert.deepEqual(refused.errors.map((error) => error.code), ["insecure_combination"]);
+  // A disabled public listener binds nothing.
+  const disabled = tempRoot(t, { listeners: { public: { enabled: false, host: "0.0.0.0" } } });
+  assert.equal((await config.writeSection("exposure", { requireApiKey: "off" }, { aiRoot: disabled, env: NO_ENV, actor: "test" })).ok, true);
 });
 
 // --- the writer --------------------------------------------------------------
@@ -451,6 +541,7 @@ test("writes are atomic, keep a .bak and log the changed keys without values", a
   const { etag } = config.readSection("listeners", { aiRoot: root, env: NO_ENV });
   const result = await config.writePlatformConfig({
     aiRoot: root,
+    env: NO_ENV,
     set: { "listeners.admin.port": 6302, "console.defaultUi": "new" },
     etag,
     actor: "test-suite",
@@ -472,15 +563,15 @@ test("writes are atomic, keep a .bak and log the changed keys without values", a
   assert.equal(JSON.stringify(lines[0]).includes("6302"), false);
 
   // A default value is not stored, and a write that changes nothing writes nothing.
-  const reset = await config.writeSection("listeners", { admin: { port: 5176 } }, { aiRoot: root, actor: "test-suite" });
+  const reset = await config.writeSection("listeners", { admin: { port: 5176 } }, { aiRoot: root, env: NO_ENV, actor: "test-suite" });
   assert.deepEqual(reset.changed, ["listeners.admin.port"]);
   assert.deepEqual(readPlatformJson(root), { schemaVersion: 1, console: { defaultUi: "new" } });
-  const noop = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, actor: "test-suite" });
+  const noop = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, env: NO_ENV, actor: "test-suite" });
   assert.equal(noop.ok, true);
   assert.deepEqual(noop.changed, []);
   assert.equal(changeLogLines(root).length, 2);
   // A derived key keeps an explicit value, which pins it.
-  const pinned = await config.writeSection("listeners", { admin: { host: "127.0.0.1" } }, { aiRoot: root, actor: "test-suite" });
+  const pinned = await config.writeSection("listeners", { admin: { host: "127.0.0.1" } }, { aiRoot: root, env: NO_ENV, actor: "test-suite" });
   assert.deepEqual(pinned.changed, ["listeners.admin.host"]);
   assert.equal(readPlatformJson(root).listeners.admin.host, "127.0.0.1");
 });
@@ -489,9 +580,9 @@ test("a stale etag is config_conflict and a held lock is config_locked", async (
   const root = tempRoot(t);
   const first = config.readSection("console", { aiRoot: root, env: NO_ENV });
   assert.equal(first.etag, "none");
-  const written = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, etag: first.etag, actor: "tab-1" });
+  const written = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, env: NO_ENV, etag: first.etag, actor: "tab-1" });
   assert.equal(written.ok, true);
-  const stale = await config.writeSection("console", { defaultUi: "classic" }, { aiRoot: root, etag: first.etag, actor: "tab-2" });
+  const stale = await config.writeSection("console", { defaultUi: "classic" }, { aiRoot: root, env: NO_ENV, etag: first.etag, actor: "tab-2" });
   assert.equal(stale.ok, false);
   assert.equal(stale.code, "config_conflict");
   assert.equal(stale.status, 409);
@@ -501,7 +592,7 @@ test("a stale etag is config_conflict and a held lock is config_locked", async (
   const lockFile = `${configFile(root)}.lock`;
   fs.writeFileSync(lockFile, "{}");
   const before = fs.readFileSync(configFile(root));
-  const locked = await config.writeSection("console", { defaultUi: "classic" }, { aiRoot: root, actor: "test", lockWaitMs: 50 });
+  const locked = await config.writeSection("console", { defaultUi: "classic" }, { aiRoot: root, env: NO_ENV, actor: "test", lockWaitMs: 50 });
   assert.equal(locked.ok, false);
   assert.equal(locked.code, "config_locked");
   assert.equal(locked.status, 409);
@@ -511,9 +602,52 @@ test("a stale etag is config_conflict and a held lock is config_locked", async (
   // A lock older than 10 s is stale and taken over.
   const old = new Date(Date.now() - 60_000);
   fs.utimesSync(lockFile, old, old);
-  const recovered = await config.writeSection("console", { defaultUi: "classic" }, { aiRoot: root, actor: "test", lockWaitMs: 50 });
+  const recovered = await config.writeSection("console", { defaultUi: "classic" }, { aiRoot: root, env: NO_ENV, actor: "test", lockWaitMs: 50 });
   assert.equal(recovered.ok, true);
   assert.equal(fs.existsSync(lockFile), false);
+});
+
+test("writers that find the same stale lock take it over one at a time", async (t) => {
+  const root = tempRoot(t, { console: { defaultUi: "new" } });
+  const lockFile = `${configFile(root)}.lock`;
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 1, at: "2026-01-01T00:00:00.000Z", token: "dead-writer" }));
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(lockFile, old, old);
+  // The first removal of the stale lock is held back, so the other writers,
+  // which saw the same stale lock, act in between; every save is slowed down
+  // so that two holders at once would overlap.
+  const { rm, writeFile } = fsp;
+  let heldBack = false;
+  let inside = 0;
+  let most = 0;
+  fsp.rm = async function slowFirstRm(target, ...rest) {
+    if (!heldBack && path.resolve(String(target)) === lockFile) {
+      heldBack = true;
+      await delay(100);
+    }
+    return rm.call(this, target, ...rest);
+  };
+  fsp.writeFile = async function slowSave(target, ...rest) {
+    if (!String(target).endsWith(".tmp")) return writeFile.call(this, target, ...rest);
+    inside += 1;
+    most = Math.max(most, inside);
+    try {
+      await delay(150);
+      return await writeFile.call(this, target, ...rest);
+    } finally {
+      inside -= 1;
+    }
+  };
+  let results;
+  try {
+    results = await Promise.all([1, 2, 3].map((days) => config.writeSection("admin", { sessionDays: days }, { aiRoot: root, env: NO_ENV, actor: `writer-${days}`, lockWaitMs: 5000 })));
+  } finally {
+    Object.assign(fsp, { rm, writeFile });
+  }
+  assert.deepEqual(results.map((result) => result.code || "ok"), ["ok", "ok", "ok"]);
+  assert.equal(most, 1, "never two lock holders at once");
+  assert.equal(changeLogLines(root).length, 3);
+  assert.deepEqual(fs.readdirSync(path.join(root, "config")).sort(), ["platform.json", "platform.json.bak"], "no lock, guard or tmp file is left");
 });
 
 const CONCURRENT_WRITER = `
@@ -524,7 +658,7 @@ const [root, actor, rounds] = [process.argv[2], process.argv[3], Number(process.
   let retries = 0;
   while (done < rounds) {
     const read = config.readSection("admin", { aiRoot: root, env: {} });
-    const result = await config.writeSection("admin", { sessionDays: read.values.sessionDays + 1 }, { aiRoot: root, etag: read.etag, actor });
+    const result = await config.writeSection("admin", { sessionDays: read.values.sessionDays + 1 }, { aiRoot: root, env: {}, etag: read.etag, actor });
     if (result.ok) { done += 1; continue; }
     if (result.code !== "config_conflict" && result.code !== "config_locked") throw new Error(result.code);
     retries += 1;
@@ -559,10 +693,10 @@ test("two processes writing concurrently through writeSection never lose an upda
 
 test("secret leaves never reach platform.json or the description, and secret_via_store is enforced", async (t) => {
   const root = tempRoot(t);
-  const direct = await config.writePlatformConfig({ aiRoot: root, set: { "platformMcp.apiKey": "fake-direct-value-0001" }, actor: "test" });
+  const direct = await config.writePlatformConfig({ aiRoot: root, env: NO_ENV, set: { "platformMcp.apiKey": "fake-direct-value-0001" }, actor: "test" });
   assert.equal(direct.ok, false);
   assert.equal(direct.code, "secret_via_store");
-  const viaSection = await config.writeSection("search", { apiKey: "fake-section-value-0002", port: 5181 }, { aiRoot: root, actor: "test" });
+  const viaSection = await config.writeSection("search", { apiKey: "fake-section-value-0002", port: 5181 }, { aiRoot: root, env: NO_ENV, actor: "test" });
   assert.equal(viaSection.code, "secret_via_store");
   assert.equal(fs.existsSync(configFile(root)), false, "a refused write writes nothing");
 
@@ -588,7 +722,7 @@ test("secret leaves never reach platform.json or the description, and secret_via
   assert.equal(config.describeEffectiveConfig(planted).groups.flatMap((group) => group.items).some((item) => item.key === "hf.token"), false);
 
   // The planted value can be removed through the writer.
-  const cleaned = await config.writePlatformConfig({ aiRoot: root, unset: ["platformMcp.apiKey"], actor: "test" });
+  const cleaned = await config.writePlatformConfig({ aiRoot: root, env: NO_ENV, unset: ["platformMcp.apiKey"], actor: "test" });
   assert.equal(cleaned.ok, true);
   assert.deepEqual(readPlatformJson(root), { platformMcp: { port: 5191 }, schemaVersion: 1 });
 
@@ -619,6 +753,66 @@ test("secret leaves never reach platform.json or the description, and secret_via
       assert.equal(text.includes(value), false, `${path.relative(root, file)} holds ${value}`);
     }
   }
+});
+
+test("component overrides cannot carry credentials or mapped env names", async (t) => {
+  const root = tempRoot(t);
+  const refused = [
+    { "platform-mcp": { env: { PLATFORM_MCP_API_KEY: "fake-components-value-0101" } } },
+    { "vllm-manager": { env: { hf_token: "fake-components-value-0102" } } },
+    { "tts-workers": { env: { OPENAI_API_KEY: "fake-components-value-0103" } } },
+    { "vllm-manager": { args: ["--api-key", "fake-components-value-0104"] } },
+    { "llama-manager": { args: ["--hf-token=fake-components-value-0105"] } },
+    { "search-gateway": { env: ["UPSTREAM_API_KEY=fake-components-value-0106"] } },
+  ];
+  for (const patch of refused) {
+    const result = await config.writeSection("components", patch, { aiRoot: root, env: NO_ENV, actor: "test" });
+    assert.equal(result.code, "secret_via_store", JSON.stringify(Object.keys(patch)));
+    assert.equal(result.status, 400);
+    assert.equal(JSON.stringify(result).includes("fake-components-value"), false, "the answer names fields, never values");
+  }
+  assert.equal(fs.existsSync(configFile(root)), false, "a refused write writes nothing");
+
+  // A mapped env name is set through its key, never through an override.
+  const mapped = await config.writeSection("components", { entry: { env: { SERVICE_ENTRY_HOST: "0.0.0.0", PLATFORM_MCP_SERVICE_ENTRY_URL: "http://127.0.0.1:1", PLATFORM_CONFIG_ENV_KEYS: "" } } }, { aiRoot: root, env: NO_ENV, actor: "test" });
+  assert.equal(mapped.code, "config_invalid");
+  assert.deepEqual(mapped.errors.map((error) => `${error.field}:${error.code}`), [
+    "components.entry.env.SERVICE_ENTRY_HOST:mapped_env",
+    "components.entry.env.PLATFORM_MCP_SERVICE_ENTRY_URL:mapped_env",
+    "components.entry.env.PLATFORM_CONFIG_ENV_KEYS:mapped_env",
+  ]);
+
+  // Ordinary overrides are stored.
+  const allowed = {
+    "tts-workers": { autostart: true, env: { TOKENIZERS_PARALLELISM: "false", CUDA_VISIBLE_DEVICES: "0" } },
+    "vllm-manager": { args: ["--max-num-batched-tokens", "8192", "--tokenizer-mode", "auto"] },
+  };
+  const saved = await config.writeSection("components", allowed, { aiRoot: root, env: NO_ENV, actor: "test" });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(readPlatformJson(root).components, allowed);
+
+  // Values planted by hand are dropped on read and never surface.
+  writePlatformJson(root, { components: {
+    "platform-mcp": { autostart: false, env: { PLATFORM_MCP_API_KEY: "fake-planted-value-0201", NODE_OPTIONS: "--max-old-space-size=4096" } },
+    "vllm-manager": { env: { HF_TOKEN: "fake-planted-value-0202", VLLM_MANAGER_HOST: "0.0.0.0" }, args: ["--api-key", "fake-planted-value-0203"] },
+  } });
+  const planted = load(root);
+  assert.deepEqual(planted.values.components, { "platform-mcp": { autostart: false, env: { NODE_OPTIONS: "--max-old-space-size=4096" } }, "vllm-manager": { env: {} } });
+  assert.deepEqual(planted.errors.map((error) => `${error.field}:${error.code}`).sort(), [
+    "components.platform-mcp.env.PLATFORM_MCP_API_KEY:secret_via_store",
+    "components.vllm-manager.args:secret_via_store",
+    "components.vllm-manager.env.HF_TOKEN:secret_via_store",
+    "components.vllm-manager.env.VLLM_MANAGER_HOST:mapped_env",
+  ]);
+  const described = config.describeEffectiveConfig(planted, { includeSecrets: true });
+  assert.equal(described.groups.flatMap((group) => group.items).find((item) => item.key === "components").error.code, "secret_via_store");
+  const section = config.readSection("components", { aiRoot: root, env: NO_ENV });
+  assert.equal(section.errors.length, 4);
+  const surfaces = JSON.stringify([planted, described, section, config.childEnv(planted, "vllm-manager")]);
+  assert.equal(surfaces.includes("fake-planted-value"), false);
+
+  // No refused value reached any file under the root.
+  for (const file of walkFiles(root)) assert.equal(fs.readFileSync(file, "utf8").includes("fake-components-value"), false, path.relative(root, file));
 });
 
 // --- the env map ---------------------------------------------------------------
@@ -681,8 +875,11 @@ test("every legacy env name lands on exactly one key", async (t) => {
       assert.equal(loaded.sources[key], "env");
     });
   }
-  // The table is the whole map: a new env name needs a row here.
-  assert.deepEqual(Array.from(index.keys()).sort(), Array.from(new Set(LEGACY_ENV.map(([name]) => name))).sort());
+  // The table is the whole map of the core file: a new env name there needs a
+  // row here. Fragment names are covered by the uniqueness test below.
+  const coreOrigin = schema.leaves.get("listeners.admin.port").origin;
+  const coreNames = Array.from(index).filter(([, key]) => schema.leaves.get(key).origin === coreOrigin).map(([name]) => name);
+  assert.deepEqual(coreNames.sort(), Array.from(new Set(LEGACY_ENV.map(([name]) => name))).sort());
   // Derived output names are not inputs.
   assert.equal(index.has("PLATFORM_MCP_SERVICE_ENTRY_URL"), false);
   assert.equal(schema.derivedEnvIndex.get("PLATFORM_MCP_SERVICE_ENTRY_URL"), "listeners.admin.port");
@@ -787,7 +984,7 @@ test("05 example: listeners and exposure round-trip through readSection/writeSec
   // updateAccessSection("listeners", patch, { etag, writeSection }) per 05 §3.4.
   const listeners = config.readSection("listeners", { aiRoot: root, env: NO_ENV });
   assert.equal(listeners.values.public.baseUrl, "");
-  const saved = await config.writeSection("listeners", { public: { baseUrl: "https://models.example.test" }, admin: { lan: true } }, { aiRoot: root, etag: listeners.etag, actor: "owner" });
+  const saved = await config.writeSection("listeners", { public: { baseUrl: "https://models.example.test" }, admin: { lan: true } }, { aiRoot: root, env: NO_ENV, etag: listeners.etag, actor: "owner" });
   assert.equal(saved.ok, true);
   assert.deepEqual(saved.changed, ["listeners.admin.lan", "listeners.public.baseUrl"]);
   assert.deepEqual(saved.restartRequired, ["entry"]);
@@ -798,12 +995,12 @@ test("05 example: listeners and exposure round-trip through readSection/writeSec
   assert.equal(reread.sources["listeners.admin.host"], "derived");
   assert.equal(reread.sources["listeners.public.baseUrl"], "file");
   // A dotted patch key works too, and the etag from before is now stale.
-  const stale = await config.writeSection("listeners", { "public.port": 5286 }, { aiRoot: root, etag: listeners.etag, actor: "owner" });
+  const stale = await config.writeSection("listeners", { "public.port": 5286 }, { aiRoot: root, env: NO_ENV, etag: listeners.etag, actor: "owner" });
   assert.equal(stale.code, "config_conflict");
 
   const exposure = config.readSection("exposure", { aiRoot: root, env: NO_ENV });
   assert.deepEqual(exposure.values, { requireApiKey: "auto", allowedOrigins: [] });
-  const exposureSaved = await config.writeSection("exposure", { requireApiKey: "on", allowedOrigins: ["https://app.example.test"] }, { aiRoot: root, etag: exposure.etag, actor: "owner" });
+  const exposureSaved = await config.writeSection("exposure", { requireApiKey: "on", allowedOrigins: ["https://app.example.test"] }, { aiRoot: root, env: NO_ENV, etag: exposure.etag, actor: "owner" });
   assert.equal(exposureSaved.ok, true);
   assert.deepEqual(exposureSaved.restartRequired, [], "exposure.* is applied live");
   assert.deepEqual(config.readSection("exposure", { aiRoot: root, env: NO_ENV }).values, { requireApiKey: "on", allowedOrigins: ["https://app.example.test"] });
@@ -813,13 +1010,27 @@ test("05 example: listeners and exposure round-trip through readSection/writeSec
   assert.equal(shadowed.sources["exposure.requireApiKey"], "env");
 });
 
+test("a section with secret leaves can be read and written back whole", async (t) => {
+  const root = tempRoot(t);
+  const read = config.readSection("search", { aiRoot: root, env: NO_ENV });
+  assert.deepEqual(read.values.apiKey, { set: null });
+  const saved = await config.writeSection("search", { ...read.values, port: 5181 }, { aiRoot: root, env: NO_ENV, etag: read.etag, actor: "owner" });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(saved.changed, ["search.port"]);
+  assert.deepEqual(readPlatformJson(root), { schemaVersion: 1, search: { port: 5181 } });
+  // Anything other than the {set} placeholder is still refused.
+  const sneaky = await config.writeSection("search", { apiKey: { set: true, value: "fake-placeholder-value-0301" } }, { aiRoot: root, env: NO_ENV, actor: "owner" });
+  assert.equal(sneaky.code, "secret_via_store");
+  assert.equal(fs.readFileSync(configFile(root), "utf8").includes("fake-placeholder-value"), false);
+});
+
 test("console round-trips and null unsets a key back to its default", async (t) => {
   const root = tempRoot(t);
-  const saved = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, actor: "owner" });
+  const saved = await config.writeSection("console", { defaultUi: "new" }, { aiRoot: root, env: NO_ENV, actor: "owner" });
   assert.equal(saved.ok, true);
   assert.deepEqual(saved.restartRequired, []);
   assert.deepEqual(config.readSection("console", { aiRoot: root, env: NO_ENV }).values, { defaultUi: "new" });
-  const unset = await config.writeSection("console", { defaultUi: null }, { aiRoot: root, actor: "owner" });
+  const unset = await config.writeSection("console", { defaultUi: null }, { aiRoot: root, env: NO_ENV, actor: "owner" });
   assert.deepEqual(unset.changed, ["console.defaultUi"]);
   const after = config.readSection("console", { aiRoot: root, env: NO_ENV });
   assert.deepEqual(after.values, { defaultUi: "classic" });
@@ -839,7 +1050,7 @@ test("04 example: a telemetry fragment round-trips through readSection/writeSect
   const put = await config.writeSection("telemetry", {
     retention: { requestsDays: 45 },
     energy: { pricePerKwh: 0.6, tariffs: [{ from: "22:00", to: "06:00", pricePerKwh: 0.3 }] },
-  }, { aiRoot: root, etag: read.etag, actor: "owner", schema });
+  }, { aiRoot: root, env: NO_ENV, etag: read.etag, actor: "owner", schema });
   assert.equal(put.ok, true);
   assert.deepEqual(put.changed, ["telemetry.energy.pricePerKwh", "telemetry.energy.tariffs", "telemetry.retention.requestsDays"]);
   assert.deepEqual(put.restartRequired, []);
@@ -848,37 +1059,37 @@ test("04 example: a telemetry fragment round-trips through readSection/writeSect
   assert.deepEqual(reread.values.energy.tariffs, [{ from: "22:00", to: "06:00", pricePerKwh: 0.3 }]);
   assert.equal(reread.sources["telemetry.retention.ipDays"], "default");
   // A conflicting second tab gets 409; an invalid value gets the field errors.
-  assert.equal((await config.writeSection("telemetry", { enabled: false }, { aiRoot: root, etag: read.etag, actor: "owner", schema })).status, 409);
-  const invalid = await config.writeSection("telemetry", { sampleIntervalMs: 10, energy: { tariffs: [{ from: "late", to: "06:00", extra: 1 }] } }, { aiRoot: root, actor: "owner", schema });
+  assert.equal((await config.writeSection("telemetry", { enabled: false }, { aiRoot: root, env: NO_ENV, etag: read.etag, actor: "owner", schema })).status, 409);
+  const invalid = await config.writeSection("telemetry", { sampleIntervalMs: 10, energy: { tariffs: [{ from: "late", to: "06:00", extra: 1 }] } }, { aiRoot: root, env: NO_ENV, actor: "owner", schema });
   assert.equal(invalid.code, "config_invalid");
   assert.deepEqual(invalid.errors.map((error) => `${error.field}:${error.code}`).sort(), ["telemetry.energy.tariffs[0].from:invalid_format", "telemetry.energy.tariffs[0].extra:unknown_key", "telemetry.sampleIntervalMs:out_of_range"].sort());
   // 04 §20 cross-field rules: ipDays <= requestsDays, whole-hour offsets, no overlapping tariffs.
-  const longIp = await config.writeSection("telemetry", { retention: { ipDays: 60 } }, { aiRoot: root, actor: "owner", schema });
+  const longIp = await config.writeSection("telemetry", { retention: { ipDays: 60 } }, { aiRoot: root, env: NO_ENV, actor: "owner", schema });
   assert.deepEqual(longIp.errors.map((error) => error.code), ["retention_order"]);
-  const halfHour = await config.writeSection("telemetry", { timezoneOffsetMinutes: 330 }, { aiRoot: root, actor: "owner", schema });
+  const halfHour = await config.writeSection("telemetry", { timezoneOffsetMinutes: 330 }, { aiRoot: root, env: NO_ENV, actor: "owner", schema });
   assert.deepEqual(halfHour.errors.map((error) => `${error.field}:${error.code}`), ["telemetry.timezoneOffsetMinutes:invalid_format"]);
-  const overlapping = await config.writeSection("telemetry", { energy: { tariffs: [{ from: "22:00", to: "06:00", pricePerKwh: 0.3 }, { from: "05:00", to: "08:00", pricePerKwh: 0.5 }] } }, { aiRoot: root, actor: "owner", schema });
+  const overlapping = await config.writeSection("telemetry", { energy: { tariffs: [{ from: "22:00", to: "06:00", pricePerKwh: 0.3 }, { from: "05:00", to: "08:00", pricePerKwh: 0.5 }] } }, { aiRoot: root, env: NO_ENV, actor: "owner", schema });
   assert.deepEqual(overlapping.errors.map((error) => error.code), ["tariff_overlap"]);
-  const adjacent = await config.writeSection("telemetry", { energy: { tariffs: [{ from: "22:00", to: "06:00", pricePerKwh: 0.3 }, { from: "06:00", to: "22:00", pricePerKwh: 0.5 }] } }, { aiRoot: root, actor: "owner", schema });
+  const adjacent = await config.writeSection("telemetry", { energy: { tariffs: [{ from: "22:00", to: "06:00", pricePerKwh: 0.3 }, { from: "06:00", to: "22:00", pricePerKwh: 0.5 }] } }, { aiRoot: root, env: NO_ENV, actor: "owner", schema });
   assert.equal(adjacent.ok, true);
   // Its env names map like the core ones.
   const fromEnv = config.readSection("telemetry", { aiRoot: root, env: { TELEMETRY_ENABLED: "0" }, schema });
   assert.equal(fromEnv.values.enabled, false);
   assert.equal(fromEnv.sources["telemetry.enabled"], "env");
-  assert.deepEqual((await config.writeSection("telemetry", { enabled: false }, { aiRoot: root, actor: "owner", schema })).restartRequired, ["entry"]);
+  assert.deepEqual((await config.writeSection("telemetry", { enabled: false }, { aiRoot: root, env: NO_ENV, actor: "owner", schema })).restartRequired, ["entry"]);
 });
 
 test("writeSection refuses keys outside its section with section_mismatch", async (t) => {
   const root = tempRoot(t);
-  const nested = await config.writeSection("exposure", { listeners: { admin: { lan: true } } }, { aiRoot: root, actor: "test" });
+  const nested = await config.writeSection("exposure", { listeners: { admin: { lan: true } } }, { aiRoot: root, env: NO_ENV, actor: "test" });
   assert.equal(nested.ok, false);
   assert.equal(nested.code, "section_mismatch");
   assert.equal(nested.status, 400);
-  const dotted = await config.writeSection("console", { "exposure.requireApiKey": "off" }, { aiRoot: root, actor: "test" });
+  const dotted = await config.writeSection("console", { "exposure.requireApiKey": "off" }, { aiRoot: root, env: NO_ENV, actor: "test" });
   assert.equal(dotted.code, "section_mismatch");
-  const absoluteInside = await config.writeSection("console", { "console.defaultUi": "new" }, { aiRoot: root, actor: "test" });
+  const absoluteInside = await config.writeSection("console", { "console.defaultUi": "new" }, { aiRoot: root, env: NO_ENV, actor: "test" });
   assert.equal(absoluteInside.ok, true);
-  const unknown = await config.writeSection("console", { nonsense: 1 }, { aiRoot: root, actor: "test" });
+  const unknown = await config.writeSection("console", { nonsense: 1 }, { aiRoot: root, env: NO_ENV, actor: "test" });
   assert.equal(unknown.code, "config_invalid");
   assert.equal(unknown.errors[0].code, "unknown_key");
   assert.equal((await config.writeSection("nowhere", {}, { aiRoot: root })).code, "unknown_section");
@@ -901,6 +1112,28 @@ test("readSection is cached per file state and sees writes from elsewhere", asyn
   const fresh = config.readSection("console", { aiRoot: root, env: NO_ENV });
   assert.equal(fresh.values.defaultUi, "classic");
   assert.notEqual(fresh.etag, first.etag);
+});
+
+test("a failed read is not cached, so readSection recovers once the file can be read", (t) => {
+  const root = tempRoot(t, { exposure: { requireApiKey: "on" } });
+  const target = configFile(root);
+  // A sharing violation (backup or AV scanner) leaves the file's stat unchanged.
+  const original = fs.readFileSync;
+  fs.readFileSync = function busy(file, ...rest) {
+    if (typeof file === "string" && path.resolve(file) === target) throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    return original.call(this, file, ...rest);
+  };
+  let during;
+  try {
+    during = config.readSection("exposure", { aiRoot: root, env: NO_ENV });
+  } finally {
+    fs.readFileSync = original;
+  }
+  assert.equal(during.values.requireApiKey, "auto");
+  assert.deepEqual(during.errors.map((error) => error.code), ["read_error"]);
+  const after = config.readSection("exposure", { aiRoot: root, env: NO_ENV });
+  assert.equal(after.values.requireApiKey, "on");
+  assert.deepEqual(after.errors, []);
 });
 
 // --- description and namespace -----------------------------------------------

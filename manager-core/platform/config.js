@@ -11,6 +11,7 @@
 // a corrupt file or an invalid value leaves the next source in force with the
 // reason in errors[]. Secret leaves never live in platform.json; their values
 // go to the secret store (setSecretLeaf) and are only ever reported as {set}.
+// Component overrides cannot carry them either (no credential env or args).
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -40,6 +41,15 @@ const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const WILDCARD_HOSTS = new Set(["0.0.0.0", "::", "[::]", "*"]);
 const LOOPBACK_HOST = "127.0.0.1";
 const WILDCARD_HOST = "0.0.0.0";
+// components.<id> overrides (§3.6) are one free-form leaf; their env and args
+// are screened so no credential and no mapped env name is stored through them.
+const COMPONENTS_KEY = "components";
+const RESERVED_ENV_NAMES = new Set(["PLATFORM_CONFIG_ENV_KEYS", "PLATFORM_CONFIG_FILE"]);
+// Underscore segments that make an unmapped env name read as a credential
+// (HF_TOKEN, OPENAI_API_KEY, DB_PASSWORD), without catching TOKENIZERS_PARALLELISM.
+const SECRET_ENV_SEGMENTS = new Set(["TOKEN", "SECRET", "PASSWORD", "PASSWD", "APIKEY", "KEY", "CREDENTIAL", "CREDENTIALS"]);
+// A command-line flag that carries a credential (--api-key, --hf-token=...).
+const SECRET_ARG_PATTERN = /^--?[a-z0-9_-]*?(?:api[-_]?key|token|secret|password|passwd)(?:=|$)/i;
 // The same words service-entry's envFlag accepts, so a reported value always
 // matches what the consumer of the env var sees.
 const TRUE_WORDS = Object.freeze(["1", "true", "yes", "on"]);
@@ -141,6 +151,18 @@ function isHttpsUrl(value) {
 
 function isPathText(value) {
   return value === "" || (!String(value).includes("\0") && String(value).length <= 1024);
+}
+
+// A bind host only this machine can reach: localhost, 127.0.0.0/8 or ::1.
+function isLoopbackHost(value) {
+  const text = String(value).trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return text === "localhost" || text === "::1" || (net.isIPv4(text) && text.startsWith("127."));
+}
+
+// Any other bind host (a wildcard, a LAN address, a host name) is reachable
+// from the LAN, as the entry's own lanMode treats it.
+function isLanHost(value) {
+  return typeof value === "string" && value.trim() !== "" && !isLoopbackHost(value);
 }
 
 const FORMAT_CHECKS = Object.freeze({
@@ -725,6 +747,82 @@ function unknownKeyWarning(schema, key) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// components.<id> overrides (§3.6)
+
+function envAssignmentName(text) {
+  return /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(String(text))?.[1] || "";
+}
+
+// Env names are case-insensitive on Windows, so hf_token is HF_TOKEN.
+function isSecretEnvName(schema, name) {
+  const upper = String(name).toUpperCase();
+  const key = schema.envIndex.get(upper);
+  if (key) return Boolean(schema.leaves.get(key)?.secret);
+  return upper.split("_").some((segment) => SECRET_ENV_SEGMENTS.has(segment));
+}
+
+function overrideEnvProblem(schema, name, field) {
+  const upper = String(name).toUpperCase();
+  const mapped = schema.envIndex.get(upper);
+  if (isSecretEnvName(schema, upper)) {
+    return { code: "secret_via_store", message: `${field}: ${upper} carries a credential${mapped ? ` (${mapped})` : ""}; keep it in the secret store, never in platform.json.` };
+  }
+  if (mapped) return { code: "mapped_env", message: `${field}: ${upper} is set through ${mapped}; change that setting instead.` };
+  if (schema.derivedEnvIndex.has(upper)) return { code: "mapped_env", message: `${field}: ${upper} is derived from ${schema.derivedEnvIndex.get(upper)}; change that setting instead.` };
+  if (RESERVED_ENV_NAMES.has(upper)) return { code: "mapped_env", message: `${field}: ${upper} is set by the platform.` };
+  return null;
+}
+
+function isSecretArg(schema, arg) {
+  if (typeof arg !== "string") return false;
+  const assigned = envAssignmentName(arg);
+  return SECRET_ARG_PATTERN.test(arg.trim()) || Boolean(assigned && isSecretEnvName(schema, assigned));
+}
+
+// Problems in components.<id>.env and .args: a credential (secret_via_store)
+// or an env name that a key already sets (mapped_env). Names only, never values.
+function componentOverrideProblems(schema, components) {
+  const problems = [];
+  if (!isPlainObject(components)) return problems;
+  for (const [id, override] of Object.entries(components)) {
+    if (!isPlainObject(override)) continue;
+    const env = override.env;
+    const names = isPlainObject(env) ? Object.keys(env) : Array.isArray(env) ? env.map(envAssignmentName).filter(Boolean) : [];
+    for (const name of names) {
+      const field = `${COMPONENTS_KEY}.${id}.env.${name}`;
+      const problem = overrideEnvProblem(schema, name, field);
+      if (problem) problems.push({ id, part: "env", name, field, ...problem });
+    }
+    if (Array.isArray(override.args) && override.args.some((arg) => isSecretArg(schema, arg))) {
+      const field = `${COMPONENTS_KEY}.${id}.args`;
+      problems.push({ id, part: "args", field, code: "secret_via_store", message: `${field} passes a credential on the command line; secrets reach a component only through env from the secret store.` });
+    }
+  }
+  return problems;
+}
+
+function overrideError(problem, source) {
+  return { field: problem.field, fields: [COMPONENTS_KEY], code: problem.code, ...(source ? { source } : {}), message: problem.message };
+}
+
+// Drops what componentOverrideProblems reports (a whole args list, single env
+// names) and records it, so a credential planted in the file never reaches a
+// result. The rest of the overrides stays in force.
+function screenComponents(schema, value, errors, source) {
+  const problems = componentOverrideProblems(schema, value);
+  if (!problems.length) return value;
+  const screened = clone(value);
+  for (const problem of problems) {
+    errors.push(overrideError(problem, source));
+    const override = screened[problem.id];
+    if (problem.part === "args") delete override.args;
+    else if (isPlainObject(override.env)) delete override.env[problem.name];
+    else override.env = override.env.filter((item) => envAssignmentName(item) !== problem.name);
+  }
+  return screened;
+}
+
 // platform.json -> Map(key -> raw value). Secret leaves found in the file are
 // reported and dropped, so their values never reach any result.
 function collectFileValues(schema, parsed, errors, warnings) {
@@ -736,7 +834,7 @@ function collectFileValues(schema, parsed, errors, warnings) {
         errors.push({ field: key, code: "secret_via_store", source: "file", message: `${key} is a secret and is ignored in platform.json; set it through the secret store.` });
         return;
       }
-      values.set(key, value);
+      values.set(key, key === COMPONENTS_KEY ? screenComponents(schema, value, errors, "file") : value);
       return;
     }
     if (schema.branches.has(key)) {
@@ -815,10 +913,6 @@ function presentEnvNames(leaf, env, demoted) {
 // ---------------------------------------------------------------------------
 // Resolution (§4.4): runtime > env > file > derived > default
 
-function isWildcardHost(value) {
-  return typeof value === "string" && WILDCARD_HOSTS.has(value.trim());
-}
-
 function resolveValues(schema, { fileValues, env, runtime, aiRoot, secrets, reservedPorts }) {
   const errors = [];
   const warnings = [];
@@ -890,10 +984,11 @@ function resolveValues(schema, { fileValues, env, runtime, aiRoot, secrets, rese
     }
   }
 
-  // lan_implied_by_host: a wildcard ADMIN host binds the LAN whatever `lan`
-  // says, so an unset `lan` reports true with source "derived" (05's
-  // SERVICE_ENTRY_HOST=0.0.0.0 rule).
-  if (schema.leaves.has("listeners.admin.lan") && isWildcardHost(values["listeners.admin.host"]) && values["listeners.admin.lan"] !== true) {
+  // lan_implied_by_host: a wildcard (or any other non-loopback) ADMIN host
+  // binds the LAN whatever `lan` says, so an unset `lan` reports true with
+  // source "derived" (05's SERVICE_ENTRY_HOST=0.0.0.0 rule). childEnv never
+  // passes such an implied `lan` on as SERVICE_ENTRY_ALLOW_LAN_ADMIN.
+  if (schema.leaves.has("listeners.admin.lan") && isLanHost(values["listeners.admin.host"]) && values["listeners.admin.lan"] !== true) {
     warnings.push({ field: "listeners.admin.lan", code: "lan_implied_by_host", message: `listeners.admin.host is ${values["listeners.admin.host"]}, so the console is reachable from the LAN even though listeners.admin.lan is off.` });
     if (sources["listeners.admin.lan"] === "default") {
       values["listeners.admin.lan"] = true;
@@ -938,18 +1033,27 @@ function crossFieldErrors(schema, values, reservedPorts = []) {
       seen.set(port, leaf.key);
     }
   }
-  const adminLan = values["listeners.admin.lan"] === true || isWildcardHost(values["listeners.admin.host"]);
-  const publicLan = values["listeners.public.lan"] === true || isWildcardHost(values["listeners.public.host"]);
-  if ((adminLan || publicLan) && values["exposure.requireApiKey"] === "off") {
-    errors.push({
-      field: "exposure.requireApiKey",
-      code: "insecure_combination",
-      fields: [adminLan ? "listeners.admin.lan" : "listeners.public.lan", "exposure.requireApiKey"],
-      message: "LAN access cannot be combined with exposure.requireApiKey = off: anyone on the network could use the models without a key.",
-    });
-  }
+  const lan = lanReach(values);
+  if (lan && values["exposure.requireApiKey"] === "off") errors.push(insecureCombination(lan));
   errors.push(...telemetryRuleErrors(schema, values));
   return errors;
+}
+
+// The listener reachable from the LAN, if any: `lan` on, or a non-loopback
+// host (a wildcard, a LAN address or a host name).
+function lanReach(values) {
+  if (values["listeners.admin.lan"] === true || isLanHost(values["listeners.admin.host"])) return "listeners.admin.lan";
+  if (values["listeners.public.enabled"] !== false && (values["listeners.public.lan"] === true || isLanHost(values["listeners.public.host"]))) return "listeners.public.lan";
+  return "";
+}
+
+function insecureCombination(lanField) {
+  return {
+    field: "exposure.requireApiKey",
+    code: "insecure_combination",
+    fields: [lanField, "exposure.requireApiKey"],
+    message: "LAN access cannot be combined with exposure.requireApiKey = off: anyone on the network could use the models without a key.",
+  };
 }
 
 function minutesOfDay(text) {
@@ -1018,7 +1122,7 @@ function loadPlatformConfig(options = {}) {
     const leaf = schema.leaves.get(key);
     if (!leaf) warnings.push(unknownKeyWarning(schema, key));
     else if (leaf.secret) errors.push({ field: key, code: "secret_via_store", source: "runtime", message: `${key} is a secret and cannot be set as a runtime override.` });
-    else runtime[key] = value;
+    else runtime[key] = key === COMPONENTS_KEY ? screenComponents(schema, value, errors, "runtime") : value;
   }
   const resolved = resolveValues(schema, { fileValues, env, runtime, aiRoot, secrets: options.secrets, reservedPorts: options.reservedPorts });
   const loaded = {
@@ -1037,6 +1141,9 @@ function loadPlatformConfig(options = {}) {
   };
   Object.defineProperty(loaded, "schema", { value: schema, enumerable: false });
   Object.defineProperty(loaded, "get", { value: (key) => clone(loaded.values[key]), enumerable: false });
+  // childEnv passes an env-sourced secret on under the aliases other consumers
+  // read; the text is looked up then and never copied into this object.
+  Object.defineProperty(loaded, "envText", { value: (name) => (env[name] === undefined || env[name] === null ? "" : String(env[name])), enumerable: false });
   return loaded;
 }
 
@@ -1066,6 +1173,9 @@ function cachedLoad(options) {
   const hit = readCache.get(cacheKey);
   if (hit) return hit.loaded;
   const loaded = loadPlatformConfig({ aiRoot, file, env, schema });
+  // A failed read (a sharing violation, an AV scanner) leaves the file's stat
+  // unchanged, so caching it would serve defaults until the next write.
+  if (loaded.errors.some((error) => error.code === "read_error")) return loaded;
   readCache.set(cacheKey, { file, loaded });
   while (readCache.size > READ_CACHE_LIMIT) readCache.delete(readCache.keys().next().value);
   return loaded;
@@ -1089,6 +1199,8 @@ function errorFields(error) {
  * One namespace (or any branch, e.g. "listeners.admin") of the effective
  * config, cached per (aiRoot, file mtime/size/inode, schema, mapped env), so
  * the entry may call it on every request. `value` is an alias of `values`.
+ * Secret leaves read {set}; writing that placeholder back is a no-op, so a
+ * caller may send a whole section it read.
  */
 function readSection(name, options = {}) {
   const schema = options.schema || loadPlatformSchema();
@@ -1178,19 +1290,84 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// platform.json.lock is created with "wx" and holds only {pid, at}. A lock
-// older than staleMs belonged to a writer that died and is taken over.
-async function acquireLock(lockFile, { waitMs, staleMs }) {
+// platform.json.lock is created with "wx" and holds {pid, at, token}. A lock
+// older than staleMs belonged to a writer that died and is taken over, but
+// only under a short second lock (platform.json.lock.takeover) and only while
+// the lock file is still the one judged stale, so two writers that saw the
+// same stale lock never delete each other's fresh one. A holder removes the
+// lock only while it still carries its own token.
+function lockToken(text) {
+  try {
+    const token = JSON.parse(text)?.token;
+    return typeof token === "string" ? token : "";
+  } catch {
+    return "";
+  }
+}
+
+// null when there is no lock; throws while it is being replaced or deleted.
+async function readLockState(lockFile) {
+  try {
+    const stat = await fsp.stat(lockFile);
+    const text = await fsp.readFile(lockFile, "utf8");
+    return { mtimeMs: stat.mtimeMs, signature: `${stat.mtimeMs}:${stat.size}:${text}`, token: lockToken(text) };
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function ownsLock(lockFile, token) {
+  try {
+    return (await readLockState(lockFile))?.token === token;
+  } catch {
+    return false;
+  }
+}
+
+async function createLock(lockFile, token) {
+  const handle = await fsp.open(lockFile, "wx");
+  try {
+    await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString(), token }));
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fsp.rm(lockFile, { force: true }).catch(() => {});
+    throw error;
+  }
+  await handle.close();
+}
+
+async function removeStaleLock(lockFile, observed, staleMs) {
+  const guard = `${lockFile}.takeover`;
+  let handle;
+  try {
+    handle = await fsp.open(guard, "wx");
+  } catch (error) {
+    if (error?.code !== "EEXIST" && error?.code !== "EPERM") throw error;
+    // A guard lives for a few milliseconds; an old one was left by a writer
+    // that died during a takeover.
+    const stat = await fsp.stat(guard).catch(() => null);
+    if (stat && Date.now() - stat.mtimeMs > staleMs) await fsp.rm(guard, { force: true }).catch(() => {});
+    return false;
+  }
+  try {
+    await handle.close();
+    const current = await readLockState(lockFile);
+    if (!current) return true;
+    if (current.signature !== observed.signature) return false;
+    await fsp.rm(lockFile, { force: true });
+    return true;
+  } finally {
+    await fsp.rm(guard, { force: true }).catch(() => {});
+  }
+}
+
+async function acquireLock(lockFile, { waitMs, staleMs, token }) {
   const deadline = Date.now() + Math.max(0, Number(waitMs) || 0);
   let immediateRetries = 0;
   for (;;) {
     try {
-      const handle = await fsp.open(lockFile, "wx");
-      try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
-      } finally {
-        await handle.close();
-      }
+      await createLock(lockFile, token);
       return true;
     } catch (error) {
       // Windows answers EPERM while another writer's lock is being deleted.
@@ -1198,13 +1375,11 @@ async function acquireLock(lockFile, { waitMs, staleMs }) {
     }
     let retryNow = false;
     try {
-      const stat = await fsp.stat(lockFile);
-      if (Date.now() - stat.mtimeMs > staleMs) {
-        await fsp.rm(lockFile, { force: true });
-        retryNow = true;
-      }
-    } catch (error) {
-      if (error?.code === "ENOENT") retryNow = true;
+      const observed = await readLockState(lockFile);
+      if (!observed) retryNow = true;
+      else if (Date.now() - observed.mtimeMs > staleMs) retryNow = await removeStaleLock(lockFile, observed, staleMs);
+    } catch {
+      // The lock is being replaced or deleted; look again after the pause.
     }
     if (retryNow && immediateRetries < 5) {
       immediateRetries += 1;
@@ -1213,6 +1388,10 @@ async function acquireLock(lockFile, { waitMs, staleMs }) {
     if (Date.now() >= deadline) return false;
     await delay(15 + Math.floor(Math.random() * 25));
   }
+}
+
+async function releaseLock(lockFile, token) {
+  if (await ownsLock(lockFile, token)) await fsp.rm(lockFile, { force: true }).catch(() => {});
 }
 
 function cleanActor(actor) {
@@ -1245,41 +1424,82 @@ function crossFieldSignature(error) {
   return `${error.code}:${errorFields(error).sort().join(",")}`;
 }
 
-// Cross-field problems of the file alone (env and runtime left out), so the
-// writer judges what it stores rather than the caller's environment.
-function fileViewErrors(schema, object, aiRoot, reservedPorts) {
-  const scratchErrors = [];
-  const fileValues = collectFileValues(schema, object, scratchErrors, []);
-  return resolveValues(schema, { fileValues, env: {}, runtime: {}, aiRoot, reservedPorts }).crossField;
+// The views a write is judged on: the file alone (what is stored), the
+// effective config (file + env + runtime, so a LAN bind from
+// SERVICE_ENTRY_HOST, setx or --lan counts) and, when a parent injected env
+// from config, the env the running process was started with
+// (PLATFORM_CONFIG_ENV_KEYS not honoured). A write may not introduce a
+// cross-field problem in any of them; insecure_combination pairs LAN reach
+// from any view with requireApiKey "off" from a view that is applied live
+// (the file or the effective config).
+function writeGuardErrors(schema, object, context) {
+  const fileValues = collectFileValues(schema, object, [], []);
+  const resolve = (env, runtime) => resolveValues(schema, { fileValues, env, runtime, aiRoot: context.aiRoot, reservedPorts: context.reservedPorts });
+  const live = [resolve({}, {}), resolve(context.env, context.runtime)];
+  const views = parseNameList(context.env.PLATFORM_CONFIG_ENV_KEYS).size
+    ? [...live, resolve({ ...context.env, PLATFORM_CONFIG_ENV_KEYS: "" }, context.runtime)]
+    : live;
+  const errors = views.flatMap((view) => view.crossField.filter((error) => error.code !== "insecure_combination"));
+  const lan = views.map((view) => lanReach(view.values)).find(Boolean);
+  if (lan && live.some((view) => view.values["exposure.requireApiKey"] === "off")) errors.push(insecureCombination(lan));
+  return Array.from(new Map(errors.map((error) => [crossFieldSignature(error), error])).values());
+}
+
+function guardRuntime(schema, overrides) {
+  const runtime = {};
+  for (const [key, value] of Object.entries(isPlainObject(overrides) ? overrides : {})) {
+    const leaf = schema.leaves.get(key);
+    if (leaf && !leaf.secret) runtime[key] = value;
+  }
+  return runtime;
+}
+
+// What readSection returns for a secret leaf; it carries no value.
+function isSecretPlaceholder(value) {
+  return isPlainObject(value) && Object.keys(value).length === 1 && [true, false, null].includes(value.set);
 }
 
 /**
  * The only code path that writes platform.json (06 §4.6): lock, etag check,
  * validation of the merged file, .bak copy, tmp + rename, and one line in
  * logs/platform/config-changes.jsonl with the changed keys (never values).
- * Never throws for a refused write; I/O failures come back as
- * config_write_failed.
+ * Cross-field rules are judged on the file and on the effective config with
+ * `env` (default process.env) and `runtimeOverrides`, so a LAN bind from env
+ * cannot be paired with requireApiKey "off". Never throws for a refused
+ * write; I/O failures come back as config_write_failed.
  */
 async function writePlatformConfig(options = {}) {
   const schema = options.schema || loadPlatformSchema();
-  const { aiRoot, file, changeLog } = resolvePaths(options, options.env || process.env);
-  const set = isPlainObject(options.set) ? options.set : {};
+  const env = options.env || process.env;
+  const { aiRoot, file, changeLog } = resolvePaths(options, env);
+  const set = {};
   const unset = Array.isArray(options.unset) ? options.unset.map(String) : [];
   const errors = [];
-  for (const [key, value] of Object.entries(set)) {
+  for (const [key, value] of Object.entries(isPlainObject(options.set) ? options.set : {})) {
     const leaf = schema.leaves.get(key);
     if (!leaf) {
       errors.push(unknownKeyWarning(schema, key));
       continue;
     }
     if (leaf.secret) {
+      // A section read and sent back unchanged leaves the secret alone.
+      if (isSecretPlaceholder(value)) continue;
       return failure("secret_via_store", `${key} is a secret; set it with setSecretLeaf so it goes to the secret store, never platform.json.`, { errors: [{ field: key, code: "secret_via_store", message: `${key} is stored in the secret store.` }] });
     }
     if (value === undefined) {
       errors.push({ field: key, code: "invalid_type", message: `${key} has no value; use unset to remove it.` });
       continue;
     }
+    if (key === COMPONENTS_KEY) {
+      const problems = componentOverrideProblems(schema, value);
+      const secrets = problems.filter((problem) => problem.code === "secret_via_store");
+      if (secrets.length) {
+        return failure("secret_via_store", "Component overrides cannot carry credentials; keep them in the secret store, never platform.json.", { errors: secrets.map((problem) => overrideError(problem)) });
+      }
+      errors.push(...problems.map((problem) => overrideError(problem)));
+    }
     errors.push(...validateLeafValue(leaf, value));
+    set[key] = value;
   }
   for (const key of unset) {
     if (!key.split(".").every((segment) => segment && !UNSAFE_KEYS.has(segment))) errors.push({ field: key, code: "invalid_key", message: `${key} is not a valid key.` });
@@ -1287,10 +1507,11 @@ async function writePlatformConfig(options = {}) {
   if (errors.length) return failure("config_invalid", "The settings were not saved because some values are invalid.", { errors });
 
   const lockFile = `${file}.lock`;
+  const token = crypto.randomBytes(12).toString("hex");
   let temp = "";
   try {
     await fsp.mkdir(path.dirname(file), { recursive: true });
-    const locked = await acquireLock(lockFile, { waitMs: options.lockWaitMs ?? LOCK_WAIT_MS, staleMs: options.lockStaleMs ?? LOCK_STALE_MS });
+    const locked = await acquireLock(lockFile, { waitMs: options.lockWaitMs ?? LOCK_WAIT_MS, staleMs: options.lockStaleMs ?? LOCK_STALE_MS, token });
     if (!locked) return failure("config_locked", "Another process is saving the settings right now; try again in a moment.");
   } catch (error) {
     return failure("config_write_failed", `The settings lock could not be taken (${error?.code || "error"}).`);
@@ -1316,14 +1537,19 @@ async function writePlatformConfig(options = {}) {
     const changed = Array.from(new Set([...unset, ...Object.keys(set)])).filter((key) => !deepEqual(getPath(before, key), getPath(next, key))).sort();
     if (!changed.length) return { ok: true, etag: current.etag, changed: [], restartRequired: [], errors: [] };
 
-    const known = new Set(fileViewErrors(schema, before, aiRoot, options.reservedPorts).map(crossFieldSignature));
-    const introduced = fileViewErrors(schema, next, aiRoot, options.reservedPorts).filter((error) => !known.has(crossFieldSignature(error)));
+    // A problem that is already there does not block an unrelated write; one
+    // this write introduces does.
+    const guard = { env, runtime: guardRuntime(schema, options.runtimeOverrides), aiRoot, reservedPorts: options.reservedPorts };
+    const known = new Set(writeGuardErrors(schema, before, guard).map(crossFieldSignature));
+    const introduced = writeGuardErrors(schema, next, guard).filter((error) => !known.has(crossFieldSignature(error)));
     if (introduced.length) return failure("config_invalid", "The settings were not saved because they conflict with each other.", { etag: current.etag, errors: introduced });
 
     const document = { schemaVersion: CONFIG_SCHEMA_VERSION, ...next };
     const text = `${JSON.stringify(document, null, 2)}\n`;
     temp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
     await fsp.writeFile(temp, text, "utf8");
+    // A writer that outlived staleMs may have lost its lock to a takeover.
+    if (!(await ownsLock(lockFile, token))) return failure("config_locked", "The settings lock was taken over while saving; try again.", { etag: current.etag });
     if (current.exists) await fsp.copyFile(file, `${file}.bak`);
     await replaceFileAtomically(temp, file);
     temp = "";
@@ -1339,7 +1565,7 @@ async function writePlatformConfig(options = {}) {
     return failure("config_write_failed", `The settings could not be saved (${error?.code || "error"}).`);
   } finally {
     if (temp) await fsp.rm(temp, { force: true }).catch(() => {});
-    await fsp.rm(lockFile, { force: true }).catch(() => {});
+    await releaseLock(lockFile, token);
   }
 }
 
@@ -1461,10 +1687,24 @@ function registryComponentId(registry, componentId) {
   return match?.id || componentId;
 }
 
+// The text of a secret leaf for a child: from the env var that won (so every
+// alias carries the same key), otherwise from the store; "" when neither has it.
+function secretText(loaded, leaf, secrets) {
+  const state = loaded.secrets?.[leaf.key];
+  if (loaded.sources[leaf.key] === "env") return state?.env && typeof loaded.envText === "function" ? loaded.envText(state.env) : "";
+  if (!secrets || typeof secrets.get !== "function") return "";
+  try {
+    return String(secrets.get(leaf.secret.namespace, leaf.secret.name) || "");
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Env for a child process (06 §4.4): every mapped env var the component
- * consumes whose value did not come from the true environment, the derived
- * env (MCP URLs), and secret values from `secrets` (env only, never argv).
+ * consumes that the true environment does not already set (an alias gets the
+ * value of the name that won), the derived env (MCP URLs), and secret values
+ * from `secrets` or the winning env var (env only, never argv).
  * PLATFORM_CONFIG_ENV_KEYS lists the injected names, so the child reports
  * file/default instead of env for them.
  */
@@ -1480,18 +1720,16 @@ function childEnv(loaded, componentId, registry, { secrets } = {}) {
   };
   for (const leaf of schema.leaves.values()) {
     const alreadySet = new Set(loaded.envSet?.[leaf.key] || []);
-    const value = loaded.values[leaf.key];
+    // A derived value of a leaf without a derive rule came from
+    // lan_implied_by_host. A host bind must not turn into
+    // SERVICE_ENTRY_ALLOW_LAN_ADMIN=1 (LAN management in the entry), so the
+    // child gets the value from before the implication: the default.
+    const implied = loaded.sources[leaf.key] === "derived" && !DERIVE_RULES[leaf.key];
+    const value = implied ? expandDefault(leaf.default, loaded.aiRoot || DEFAULT_AI_ROOT) : loaded.values[leaf.key];
     for (const entry of leaf.env) {
       if (!consumes(entry.consumers, id) || alreadySet.has(entry.name)) continue;
       if (leaf.secret) {
-        if (loaded.sources[leaf.key] === "env" || !secrets || typeof secrets.get !== "function") continue;
-        let secretValue = "";
-        try {
-          secretValue = String(secrets.get(leaf.secret.namespace, leaf.secret.name) || "");
-        } catch {
-          secretValue = "";
-        }
-        put(entry.name, secretValue);
+        put(entry.name, secretText(loaded, leaf, secrets));
         continue;
       }
       put(entry.name, serializeEnvValue(leaf, value));
