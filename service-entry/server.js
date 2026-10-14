@@ -141,12 +141,12 @@ const ROUTE_MODULES = [
   "./lib/events", // ENT-EV1  /api/events, /api/events/recent
   "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
   "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
+  "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
   // "./lib/engine-routes",       // 01 ENG-19
   // "./lib/hub-routes",          // 03 HUB-7
   // "./lib/telemetry-routes",    // 04 TEL-*
   // "./lib/admin-session",       // 05 PUB-5
   // "./lib/platform-routes",     // 06 OPS-13
-  // "./lib/console-routes",      // 07 CON-2
 ];
 
 let server = null;
