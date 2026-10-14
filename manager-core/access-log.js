@@ -2,6 +2,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { isExternalAddress, normalizeRemoteAddress } = require("./network");
 const { createSingleFlightCache } = require("./single-flight-cache");
+const { inferSourceProgram, labelFor } = require("./telemetry/source-program");
 const accessLogQueues = new Map();
 const accessLogBuffers = new Map();
 
@@ -216,32 +217,19 @@ function normalizeAccessHost(value) {
   }
 }
 
+// The access log keeps its Chinese labels; the rules live in
+// telemetry/source-program.js so telemetry rows use the same slugs.
 function inferAccessSourceProgram(entry = {}) {
   const explicit = truncateAccessMeta(entry.sourceProgram || "");
   if (explicit) return explicit;
-  const userAgent = truncateAccessMeta(entry.userAgent || "");
-  const ua = userAgent.toLowerCase();
-  const pathValue = String(entry.path || "").toLowerCase();
-  const kind = String(entry.kind || "").toLowerCase();
-  if (/workbuddy/.test(ua)) return "WorkBuddy";
-  if (/open[-_\s]?webui/.test(ua)) return "OpenWebUI";
-  if (/chatbox/.test(ua)) return "Chatbox";
-  if (/lobe[-_\s]?chat|lobehub/.test(ua)) return "LobeChat";
-  if (/claude/.test(ua) || kind === "claude" || pathValue.startsWith("/claude") || pathValue.includes("/claude/")) return "Claude 兼容客户端";
-  if (/opencode/.test(ua) || kind === "opencode" || pathValue.includes("/opencode")) return "OpenCode";
-  if (/openai[-_\s]?python/.test(ua)) return "OpenAI Python SDK";
-  if (/openai[-_\s]?(node|js)|openai\/js/.test(ua)) return "OpenAI Node SDK";
-  if (/python-requests|httpx|aiohttp|python\//.test(ua)) return "Python 客户端";
-  if (/curl\//.test(ua)) return "curl";
-  if (/powershell|microsoft powershell/.test(ua)) return "PowerShell";
-  if (/node\.js|node-fetch|undici|axios/.test(ua)) return "Node.js 客户端";
-  if (/go-http-client/.test(ua)) return "Go 客户端";
-  if (/okhttp|java\//.test(ua)) return "Java/OkHttp 客户端";
-  const originHost = normalizeAccessHost(entry.origin || entry.refererHost || "");
-  if (originHost) return `浏览器 · ${originHost}`;
-  if (/mozilla|chrome|safari|edg\//.test(ua)) return "浏览器客户端";
-  if (kind === "openai" || pathValue.includes("/serve/v1") || pathValue.includes("/openai/")) return "OpenAI 兼容客户端";
-  return "未知来源";
+  const slug = inferSourceProgram({
+    userAgent: entry.userAgent,
+    origin: entry.origin,
+    referer: entry.refererHost,
+    protocol: entry.kind,
+    path: entry.path,
+  });
+  return labelFor(slug, "zh", { originHost: normalizeAccessHost(entry.origin || entry.refererHost || "") });
 }
 
 function incrementCounter(counter, key) {

@@ -15,13 +15,64 @@ if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
   throw "Version contains unsupported characters: $Version"
 }
 
+# release-manifest.json is the single source of the release allowlist: the
+# directories, root files, extra files, runtime data, robocopy excludes and the
+# forceInclude rule. scripts/test/release-manifest.test.js proves that every
+# tracked file is either shipped or excluded there with a reason.
+$releaseManifestPath = Join-Path $projectRoot "release-manifest.json"
+if (-not (Test-Path -LiteralPath $releaseManifestPath -PathType Leaf)) {
+  throw "Required release manifest is missing: release-manifest.json"
+}
+$releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($releaseManifest.schemaVersion -ne 1) {
+  throw "Unsupported release-manifest.json schemaVersion: $($releaseManifest.schemaVersion)"
+}
+$releasePackageName = [string]$releaseManifest.packageName
+if ($releasePackageName -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
+  throw "release-manifest.json packageName contains unsupported characters: $releasePackageName"
+}
+
+function Get-ReleaseManifestList {
+  param($Value)
+
+  return ,@(@($Value) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+}
+
+$releaseDirectories = Get-ReleaseManifestList $releaseManifest.directories
+$runtimeDataDirectories = Get-ReleaseManifestList $releaseManifest.runtimeDataDirectories
+$releaseFiles = Get-ReleaseManifestList $releaseManifest.files
+$releaseExtraFiles = Get-ReleaseManifestList $releaseManifest.extraFiles
+$robocopyExcludeDirs = Get-ReleaseManifestList $releaseManifest.robocopy.excludeDirs
+$robocopyExcludeFiles = Get-ReleaseManifestList $releaseManifest.robocopy.excludeFiles
+$forceIncludeGlobs = Get-ReleaseManifestList $releaseManifest.forceInclude
+
+# Manifest paths are relative forward-slash paths inside the project, the rule
+# the release-manifest test also checks. Checking it here keeps a bad entry from
+# copying from or deleting outside the project and the staging folder.
+function Assert-ReleaseManifestPath {
+  param(
+    [Parameter(Mandatory = $true)][string]$Key,
+    [Parameter(Mandatory = $true)][string]$Path
+  )
+
+  $invalidSegments = @($Path.Split('/') | Where-Object { ($_ -eq '') -or ($_ -eq '.') -or ($_ -eq '..') })
+  if ($Path.Contains('\') -or $Path.Contains(':') -or ($invalidSegments.Count -gt 0)) {
+    throw "release-manifest.json $Key entry must be a relative forward-slash path inside the project: $Path"
+  }
+}
+
+foreach ($manifestPath in $releaseDirectories) { Assert-ReleaseManifestPath -Key "directories" -Path $manifestPath }
+foreach ($manifestPath in $runtimeDataDirectories) { Assert-ReleaseManifestPath -Key "runtimeDataDirectories" -Path $manifestPath }
+foreach ($manifestPath in $releaseFiles) { Assert-ReleaseManifestPath -Key "files" -Path $manifestPath }
+foreach ($manifestPath in $releaseExtraFiles) { Assert-ReleaseManifestPath -Key "extraFiles" -Path $manifestPath }
+
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
   $OutputDirectory = Join-Path $projectRoot "artifacts\github-release"
 } elseif (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
   $OutputDirectory = Join-Path $projectRoot $OutputDirectory
 }
 $outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory)
-$packageName = "local-model-service-platform-v$Version"
+$packageName = "$releasePackageName-v$Version"
 $stagingRoot = Join-Path $outputRoot $packageName
 $zipPath = Join-Path $outputRoot "$packageName.zip"
 
@@ -38,6 +89,12 @@ function Assert-ChildPath {
   }
 }
 
+function ConvertTo-WindowsRelativePath {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  return $Path.Replace('/', '\')
+}
+
 function Copy-ReleaseDirectory {
   param(
     [Parameter(Mandatory = $true)][string]$RelativeSource,
@@ -49,6 +106,7 @@ function Copy-ReleaseDirectory {
     throw "Required release directory is missing: $RelativeSource"
   }
   $target = Join-Path $stagingRoot $RelativeTarget
+  Assert-ChildPath -Path $target -Parent $stagingRoot
   New-Item -ItemType Directory -Force -Path $target | Out-Null
   $robocopyArgs = @(
     $source,
@@ -60,51 +118,14 @@ function Copy-ReleaseDirectory {
     "/NDL",
     "/NJH",
     "/NJS",
-    "/NP",
-    "/XD",
-    "node_modules",
-    ".git",
-    ".claude",
-    "logs",
-    "__pycache__",
-    ".cache",
-    "cache",
-    "models",
-    "audit-logs",
-    "openwebui-exports",
-    "venvs",
-    "projects",
-    "test-results",
-    "playwright-report",
-    "dist",
-    "/XF",
-    ".env",
-    ".env.*",
-    ".manager.pid",
-    "*.log",
-    "*.pid",
-    "*.tmp",
-    "*.db",
-    "*.db-*",
-    "*.sqlite",
-    "*.sqlite-*",
-    "*.sqlite3",
-    "*.sqlite3-*",
-    "*.jsonl",
-    "*.wal",
-    "*.shm",
-    "*.local.json",
-    "*.secret.json",
-    "stats-ledger.json",
-    "jobs-ledger.json",
-    "service-exposure.json",
-    "service-api-key.json",
-    "manager-public-proxy.js",
-    "public-port-proxy.js",
-    "start-manager-public-proxy.cmd",
-    "stop-manager-public-proxy.cmd",
-    "upnp-port-map.js"
+    "/NP"
   )
+  if ($robocopyExcludeDirs.Count -gt 0) {
+    $robocopyArgs += @("/XD") + $robocopyExcludeDirs
+  }
+  if ($robocopyExcludeFiles.Count -gt 0) {
+    $robocopyArgs += @("/XF") + $robocopyExcludeFiles
+  }
   & robocopy @robocopyArgs | Out-Null
   if ($LASTEXITCODE -gt 7) {
     throw "Failed to copy release directory '$RelativeSource' (robocopy exit code $LASTEXITCODE)."
@@ -122,9 +143,246 @@ function Copy-ReleaseFile {
     throw "Required release file is missing: $RelativeSource"
   }
   $target = Join-Path $stagingRoot $RelativeTarget
+  Assert-ChildPath -Path $target -Parent $stagingRoot
   $targetParent = Split-Path -Parent $target
   New-Item -ItemType Directory -Force -Path $targetParent | Out-Null
   Copy-Item -LiteralPath $source -Destination $target -Force
+}
+
+# Manifest globs match forward-slash paths relative to the project root,
+# ignoring case: "*" and "?" stay inside one path segment and a "**" segment
+# matches any number of segments. The release-manifest test uses the same rule.
+function ConvertTo-ReleaseGlobRegex {
+  param([Parameter(Mandatory = $true)][string]$Glob)
+
+  $segments = $Glob.Split('/')
+  $builder = New-Object System.Text.StringBuilder
+  [void]$builder.Append('^')
+  for ($index = 0; $index -lt $segments.Count; $index++) {
+    $segment = $segments[$index]
+    $isLast = $index -eq ($segments.Count - 1)
+    if ($segment -eq '**') {
+      if ($isLast) {
+        [void]$builder.Append('.*')
+      } else {
+        [void]$builder.Append('(?:[^/]*/)*')
+      }
+      continue
+    }
+    foreach ($character in $segment.ToCharArray()) {
+      if ($character -eq [char]'*') {
+        [void]$builder.Append('[^/]*')
+      } elseif ($character -eq [char]'?') {
+        [void]$builder.Append('[^/]')
+      } else {
+        [void]$builder.Append([regex]::Escape([string]$character))
+      }
+    }
+    if (-not $isLast) {
+      [void]$builder.Append('/')
+    }
+  }
+  [void]$builder.Append('$')
+  return $builder.ToString()
+}
+
+function Test-ReleasePathUnder {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [string[]]$Directories = @()
+  )
+
+  foreach ($directory in $Directories) {
+    $prefix = $directory.Replace('\', '/').TrimEnd('/') + '/'
+    if ($Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+      return $true
+    }
+  }
+  return $false
+}
+
+# Same file-name rule as the privacy check below; the release-manifest test
+# keeps the two copies identical.
+function Test-ReleaseForbiddenName {
+  param([Parameter(Mandatory = $true)][string]$Name)
+
+  return ($Name -eq ".env") -or
+    (($Name -like ".env.*") -and ($Name -ne ".env.example")) -or
+    ($Name -match '(?i)(\.pem$|\.key$|id_rsa|id_ed25519|credential|\.secret\.json$|service-api-key\.json$|\.sqlite3?(?:-(?:wal|shm))?$|\.db(?:-(?:wal|shm))?$|\.jsonl$)')
+}
+
+# Same identity needles and credential patterns as the privacy check below; the
+# release-manifest test keeps the copies identical. The privacy check reads only
+# known text extensions, but a fixture that robocopy dropped is often a *.log or
+# *.tmp, so every forceInclude candidate is read as text here whatever its
+# extension, both as UTF-8 and in the ANSI code page.
+$forceIncludeIdentityNeedles = @(
+  $env:USERNAME,
+  $env:COMPUTERNAME,
+  $env:USERPROFILE,
+  $projectRoot
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique
+$forceIncludeCredentialPatterns = @(
+  '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----',
+  '\bAKIA[0-9A-Z]{16}\b',
+  '\bgh[pousr]_[A-Za-z0-9]{20,}\b',
+  '\bgithub_pat_[A-Za-z0-9_]{20,}\b',
+  '\bsk-[A-Za-z0-9_-]{20,}\b',
+  '\bxox[baprs]-[A-Za-z0-9-]{10,}\b'
+)
+
+function Test-ReleaseForbiddenContent {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $texts = @(
+    [System.IO.File]::ReadAllText($Path),
+    [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::Default)
+  )
+  foreach ($content in $texts) {
+    foreach ($needle in $forceIncludeIdentityNeedles) {
+      if ($content.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return $true
+      }
+    }
+    foreach ($pattern in $forceIncludeCredentialPatterns) {
+      if ($content -match $pattern) {
+        return $true
+      }
+    }
+  }
+  return $false
+}
+
+# Runs git in the project root. Standard output is read as UTF-8 so non-ASCII
+# file names survive Windows PowerShell's console code page.
+function Invoke-ReleaseGit {
+  param(
+    [Parameter(Mandatory = $true)][string]$GitPath,
+    [Parameter(Mandatory = $true)][string]$Arguments
+  )
+
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $GitPath
+  $startInfo.Arguments = $Arguments
+  $startInfo.WorkingDirectory = $projectRoot
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  $stderrTask = $process.StandardError.ReadToEndAsync()
+  $stdout = $process.StandardOutput.ReadToEnd()
+  $process.WaitForExit()
+  return [pscustomobject]@{
+    ExitCode = $process.ExitCode
+    Output = $stdout
+    Error = ([string]$stderrTask.Result).Trim()
+  }
+}
+
+# True when a file below the folder (a forward-slash path relative to the
+# project root) can still match the glob, so the walk below never enters a
+# folder that no forceInclude glob reaches (models, venvs, caches and so on).
+function Test-ReleaseGlobPrefix {
+  param(
+    [Parameter(Mandatory = $true)][string]$Glob,
+    [Parameter(Mandatory = $true)][string]$Directory
+  )
+
+  $globSegments = $Glob.Split('/')
+  $directorySegments = $Directory.Split('/')
+  for ($index = 0; $index -lt $directorySegments.Count; $index++) {
+    $segment = $globSegments[$index]
+    if ($segment -eq '**') {
+      return $true
+    }
+    if ($index -eq ($globSegments.Count - 1)) {
+      return $false
+    }
+    if ($directorySegments[$index] -notmatch (ConvertTo-ReleaseGlobRegex -Glob $segment)) {
+      return $false
+    }
+  }
+  return $true
+}
+
+# Fallback outside a git work tree: the files below the release directories
+# that a forceInclude glob can reach. Dependency trees, junctions and symbolic
+# links (which can loop or point outside the project) are skipped.
+function Get-WalkedReleaseFiles {
+  param(
+    [string[]]$Directories = @(),
+    [string[]]$Globs = @()
+  )
+
+  $files = [System.Collections.Generic.List[string]]::new()
+  $pending = [System.Collections.Generic.Stack[string]]::new()
+  foreach ($directory in $Directories) {
+    $pending.Push($directory.Replace('\', '/').TrimEnd('/'))
+  }
+  while ($pending.Count -gt 0) {
+    $relativeDirectory = $pending.Pop()
+    $reachable = $false
+    foreach ($glob in $Globs) {
+      if (Test-ReleaseGlobPrefix -Glob $glob -Directory $relativeDirectory) {
+        $reachable = $true
+        break
+      }
+    }
+    if (-not $reachable) { continue }
+    $fullDirectory = Join-Path $projectRoot (ConvertTo-WindowsRelativePath $relativeDirectory)
+    if (-not (Test-Path -LiteralPath $fullDirectory -PathType Container)) { continue }
+    foreach ($entry in Get-ChildItem -LiteralPath $fullDirectory -Force) {
+      if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+      $relativeEntry = "$relativeDirectory/$($entry.Name)"
+      if ($entry.PSIsContainer) {
+        if (@("node_modules", ".git") -notcontains $entry.Name) {
+          $pending.Push($relativeEntry)
+        }
+      } else {
+        $files.Add($relativeEntry)
+      }
+    }
+  }
+  return ,$files.ToArray()
+}
+
+# forceInclude candidates as forward-slash paths relative to the project root.
+# At the top of a git work tree (the source repository or a clone of the public
+# one) they are the tracked plus untracked-but-not-ignored files. Anywhere else
+# the release directories are walked: an extracted release, also one unpacked in
+# an ignored folder of another work tree, where git would list nothing. A work
+# tree whose git cannot run stops the build instead of falling back to the walk,
+# which would also pick up ignored and untracked files.
+function Get-ForceIncludeCandidates {
+  $walk = "a walk of the release directories"
+  $isWorkTreeRoot = Test-Path -LiteralPath (Join-Path $projectRoot ".git")
+  $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $git) {
+    if ($isWorkTreeRoot) {
+      throw "forceInclude needs git to list the files of this git work tree, but git is not on PATH."
+    }
+    return [pscustomobject]@{ Source = "$walk (git is not installed)"; Files = (Get-WalkedReleaseFiles -Directories $releaseDirectories -Globs $forceIncludeGlobs) }
+  }
+  $prefix = Invoke-ReleaseGit -GitPath $git.Path -Arguments "rev-parse --show-prefix"
+  if ($prefix.ExitCode -ne 0) {
+    if ($isWorkTreeRoot) {
+      throw "forceInclude could not list the files of this git work tree (git rev-parse exit code $($prefix.ExitCode)): $($prefix.Error)"
+    }
+    return [pscustomobject]@{ Source = "$walk (not a git work tree)"; Files = (Get-WalkedReleaseFiles -Directories $releaseDirectories -Globs $forceIncludeGlobs) }
+  }
+  if (-not [string]::IsNullOrWhiteSpace($prefix.Output)) {
+    return [pscustomobject]@{ Source = "$walk (inside another git work tree at $($prefix.Output.Trim()))"; Files = (Get-WalkedReleaseFiles -Directories $releaseDirectories -Globs $forceIncludeGlobs) }
+  }
+  $listing = Invoke-ReleaseGit -GitPath $git.Path -Arguments "ls-files -z --cached --others --exclude-standard"
+  if ($listing.ExitCode -ne 0) {
+    throw "forceInclude could not list the files of this git work tree (git ls-files exit code $($listing.ExitCode)): $($listing.Error)"
+  }
+  return [pscustomobject]@{
+    Source = "git ls-files"
+    Files = @($listing.Output.Split([char]0) | Where-Object { $_ } | ForEach-Object { $_.Replace('\', '/') })
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
@@ -138,93 +396,71 @@ if (Test-Path -LiteralPath $zipPath) {
 }
 New-Item -ItemType Directory -Path $stagingRoot | Out-Null
 
-$releaseDirectories = @(
-  ".github",
-  "tests",
-  "manager-core",
-  "platform-mcp",
-  "search-gateway",
-  "shared-public",
-  "scripts",
-  "service-entry",
-  "tts-platform",
-  "vllm-manager",
-  "llama-manager",
-  "model-capability-tests",
-  "vllm",
-  "deploy\public"
-)
 foreach ($directory in $releaseDirectories) {
-  Copy-ReleaseDirectory -RelativeSource $directory
+  Copy-ReleaseDirectory -RelativeSource (ConvertTo-WindowsRelativePath $directory)
 }
 
 # service-entry/data is runtime state (fleet settings and the billing database).
 # Keep manager-core/data because it contains bundled public reference tables.
-$runtimeDataDirectories = @(
-  "service-entry\data",
-  "vllm-manager\data",
-  "llama-manager\data",
-  "tts-platform\voices",
-  "tts-platform\outputs",
-  "tts-platform\logs"
-)
 foreach ($relativeDataDirectory in $runtimeDataDirectories) {
-  $runtimeDataPath = Join-Path $stagingRoot $relativeDataDirectory
+  $runtimeDataPath = Join-Path $stagingRoot (ConvertTo-WindowsRelativePath $relativeDataDirectory)
   if (Test-Path -LiteralPath $runtimeDataPath) {
     Assert-ChildPath -Path $runtimeDataPath -Parent $stagingRoot
     Remove-Item -LiteralPath $runtimeDataPath -Recurse -Force
   }
 }
 
-$releaseFiles = @(
-  ".gitattributes",
-  ".gitignore",
-  "README.md",
-  "package.json",
-  "package-lock.json",
-  "playwright.config.cjs",
-  "SYNC_POLICY.md",
-  "install-all.cmd",
-  "install-download-cli.cmd",
-  "test-all.cmd",
-  "start-platform.cmd",
-  "stop-platform.cmd",
-  "status-platform.cmd",
-  "start-service-entry.cmd",
-  "start-service-entry-lan.cmd",
-  "stop-service-entry.cmd",
-  "status-service-entry.cmd",
-  "start-tts-platform.cmd",
-  "status-tts-platform.cmd",
-  "start-search-gateway.cmd",
-  "stop-search-gateway.cmd",
-  "install-tts-gateway.cmd",
-  "update-platform.cmd",
-  "start-platform-mcp.cmd",
-  "stop-platform-mcp.cmd",
-  "status-platform-mcp.cmd",
-  "start-claude-vllm-proxy.ps1",
-  "claude-vllm-anthropic-proxy.py",
-  "build-github-release.ps1"
-)
-foreach ($file in $releaseFiles) {
-  Copy-ReleaseFile -RelativeSource $file
+# forceInclude is the negation rule for tracked test fixtures: a fixture that a
+# robocopy exclude dropped (one under a logs\ folder or named *.log) is copied
+# back. Only files inside a release directory and outside the runtime data
+# directories qualify, and a file whose name or content the privacy check
+# rejects is never copied: it is skipped with a message and stays out.
+if ($forceIncludeGlobs.Count -gt 0) {
+  $forceIncludePatterns = @($forceIncludeGlobs | ForEach-Object { ConvertTo-ReleaseGlobRegex -Glob $_ })
+  $forceIncludeCandidates = Get-ForceIncludeCandidates
+  Write-Host "forceInclude candidates come from $($forceIncludeCandidates.Source)."
+  $forceIncludedCount = 0
+  foreach ($candidate in $forceIncludeCandidates.Files) {
+    if (-not (Test-ReleasePathUnder -Path $candidate -Directories $releaseDirectories)) { continue }
+    if (Test-ReleasePathUnder -Path $candidate -Directories $runtimeDataDirectories) { continue }
+    $matchesForceInclude = $false
+    foreach ($pattern in $forceIncludePatterns) {
+      if ($candidate -match $pattern) {
+        $matchesForceInclude = $true
+        break
+      }
+    }
+    if (-not $matchesForceInclude) { continue }
+    $relativeCandidate = ConvertTo-WindowsRelativePath $candidate
+    if (Test-Path -LiteralPath (Join-Path $stagingRoot $relativeCandidate) -PathType Leaf) { continue }
+    $candidatePath = Join-Path $projectRoot $relativeCandidate
+    if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { continue }
+    if (Test-ReleaseForbiddenName -Name (Split-Path -Leaf $relativeCandidate)) {
+      Write-Host "Not force-including $($candidate): the privacy check rejects this file name."
+      continue
+    }
+    if (Test-ReleaseForbiddenContent -Path $candidatePath) {
+      Write-Host "Not force-including $($candidate): the privacy check rejects its content."
+      continue
+    }
+    Copy-ReleaseFile -RelativeSource $relativeCandidate
+    $forceIncludedCount++
+  }
+  if ($forceIncludedCount -gt 0) {
+    Write-Host "Force-included $forceIncludedCount fixture file(s) that robocopy excludes dropped."
+  }
 }
-Copy-ReleaseFile -RelativeSource "deploy\public\.env.example"
-Copy-ReleaseFile -RelativeSource "platform-mcp\.env.example"
-Copy-ReleaseFile -RelativeSource "search-gateway\.env.example"
-Copy-ReleaseFile -RelativeSource "tts-platform\.env.example"
-Copy-ReleaseFile -RelativeSource "docs\client-setup-guide.md"
-Copy-ReleaseFile -RelativeSource "docs\git-worktree-workflow.md"
-Copy-ReleaseFile -RelativeSource "docs\mcp-platform-guide.md"
-Copy-ReleaseFile -RelativeSource "docs\qwen38-acceleration-guide.md"
-Copy-ReleaseFile -RelativeSource "docs\service-runbook.md"
-Copy-ReleaseFile -RelativeSource "docs\model-storage-guide.md"
-Copy-ReleaseFile -RelativeSource "docs\update-guide.md"
+
+foreach ($file in $releaseFiles) {
+  Copy-ReleaseFile -RelativeSource (ConvertTo-WindowsRelativePath $file)
+}
+foreach ($file in $releaseExtraFiles) {
+  Copy-ReleaseFile -RelativeSource (ConvertTo-WindowsRelativePath $file)
+}
 
 # README documentation links must survive packaging. This catches the common
 # failure mode where a new guide is linked from README but omitted from the
-# explicit, privacy-preserving release allowlist above.
+# explicit, privacy-preserving release allowlist in release-manifest.json.
 $stagedReadme = Get-Content -LiteralPath (Join-Path $stagingRoot "README.md") -Raw
 $linkedDocs = [regex]::Matches($stagedReadme, '\]\((docs/[^)#?]+\.md)(?:#[^)]*)?\)') |
   ForEach-Object { $_.Groups[1].Value.Replace('/', '\') } |
@@ -240,6 +476,7 @@ $manifest = @(
   "",
   "- Package: $packageName",
   "- Built: $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz'))",
+  "- Allowlist: release-manifest.json (schemaVersion $($releaseManifest.schemaVersion))",
   "",
   "## Included",
   "",

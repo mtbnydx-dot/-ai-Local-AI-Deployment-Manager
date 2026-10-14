@@ -291,6 +291,29 @@
     }
     /* 总览里的原始请求记录最多 100 行，限制高度后在表格内滚动。 */
     .table-wrap.scroll-y { max-height: 440px; overflow-y: auto; }
+    /* 本期汇总：每日柱状图是内联 SVG（不引图表库），横向随面板伸缩；坐标文字放在 SVG 外，窄屏也不会被缩小。 */
+    .usage-summary-body { display: grid; gap: 14px; }
+    .usage-chart { margin: 0; min-width: 0; display: grid; gap: 6px; }
+    .usage-chart[hidden], .usage-summary-truncated[hidden] { display: none; }
+    .usage-chart figcaption { color: var(--muted); font-size: 12px; font-weight: 650; }
+    .usage-chart svg {
+      display: block;
+      width: 100%;
+      height: 132px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+    }
+    .usage-chart-bar { fill: var(--teal); }
+    .usage-chart-bar:hover { fill: var(--blue); }
+    .usage-chart-baseline { stroke: var(--line-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .usage-chart-axis { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    /* 窄屏时表格在 .table-wrap 内横向滚动：客户与模型保留最小宽度，月份和数值不折行。 */
+    .usage-summary-table td:nth-child(-n+2) { min-width: 9.5em; }
+    .usage-summary-table td:nth-child(n+3) { white-space: nowrap; }
+    .usage-summary-table th.num, .usage-summary-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .usage-summary-table tfoot td { border-top: 1px solid var(--line-strong); background: var(--surface-soft); font-weight: 750; }
+    .usage-summary-truncated { color: var(--muted); font-size: 12px; line-height: 1.5; }
     table {
       width: 100%;
       min-width: 760px;
@@ -892,9 +915,31 @@
         </div>
       </div>
 
+      <!-- 汇总面板只在 /api/billing/usage/summary 按汇总契约应答后显示；标题、表头等文案由脚本按语言写入。 -->
+      <section class="panel" id="overviewSummaryPanel" aria-labelledby="overviewSummaryHeading" hidden>
+        <div class="panel-head">
+          <div class="panel-title"><h2 id="overviewSummaryHeading"></h2><p id="overviewSummaryNote"></p></div>
+        </div>
+        <div class="panel-body usage-summary-body">
+          <figure class="usage-chart" id="overviewDailyChart" hidden>
+            <figcaption id="overviewDailyChartCaption"></figcaption>
+            <svg id="overviewDailyChartSvg" role="img" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"></svg>
+            <div class="usage-chart-axis" id="overviewDailyChartAxis"></div>
+          </figure>
+          <div class="table-wrap">
+            <table class="usage-summary-table">
+              <thead><tr id="overviewSummaryHead"></tr></thead>
+              <tbody id="overviewSummaryRows"></tbody>
+              <tfoot id="overviewSummaryTotals"></tfoot>
+            </table>
+          </div>
+          <p class="usage-summary-truncated" id="overviewSummaryTruncated" hidden></p>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-head">
-          <div class="panel-title"><h2 id="overviewUsageHeading">最近请求（原始记录，最多 100 条）</h2><p>本月最近的逐条请求记录，未做聚合；按客户和月份的汇总视图会随遥测存储一起提供。消费与扣款明细见「用量与账本」</p></div>
+          <div class="panel-title"><h2 id="overviewUsageHeading">最近请求（原始记录，最多 100 条）</h2><p>本月最近的逐条请求记录，未做聚合。消费与扣款明细见「用量与账本」</p></div>
           <button class="small" type="button" data-open-tab="usage">查看账本</button>
         </div>
         <div class="panel-body">
@@ -1148,6 +1193,39 @@
       vllm: Object.freeze({ name: "vLLM Manager", mark: "vL", label: "vLLM · 5177", port: 5177 }),
     });
     const BILLING_SECRET_PATTERN = /(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|\b(?:sk|pk|rk)-[A-Za-z0-9._-]{8,}|\b(?:api[_ -]?key|keyhash|token|secret)\s*[:=]\s*\S+)/gi;
+    // 本页其余文案只有中文；本期汇总面板另有英文，可用 ?lang=en-US 或与管理器控制台
+    // 同名的 languageMode 偏好切换，未指定时跟随本页语言（中文）。
+    const BILLING_LANGUAGE_STORAGE_KEY = "languageMode";
+    const BILLING_DAY_MS = 24 * 60 * 60 * 1000;
+    const USAGE_SUMMARY_COPY = Object.freeze({
+      "zh-CN": Object.freeze({
+        heading: "本期用量（按客户 × 模型 × 月汇总）",
+        note: "统计区间 {from} 至 {to}（{tz}）。按不可变用量记录汇总，金额以整数微积分精确累加；逐条记录见下方。",
+        columns: ["客户", "模型", "月份", "请求", "成功", "输入 Tokens", "缓存 Tokens", "输出 Tokens", "预计消费", "已扣"],
+        total: "合计",
+        empty: "本期暂无请求。",
+        unbound: "未绑定客户",
+        credits: "积分",
+        truncated: "仅显示请求最多的前 {count} 组；合计行覆盖本期全部用量。",
+        chart: "每日 Tokens（峰值 {peak}）",
+        chartLabel: "本期每日 Tokens 柱状图，共 {days} 天，峰值 {peak}",
+        bar: "{day}：{requests} 次请求 · {tokens} Tokens · 预计 {credits}",
+      }),
+      "en-US": Object.freeze({
+        heading: "Usage this period (by customer × model × month)",
+        note: "Period {from} to {to} ({tz}). Summed from the immutable usage records; amounts are exact integer microcredits. Individual requests are listed below.",
+        columns: ["Customer", "Model", "Month", "Requests", "Succeeded", "Input tokens", "Cached tokens", "Output tokens", "Projected", "Charged"],
+        total: "Total",
+        empty: "No requests this period.",
+        unbound: "Unbound customer",
+        credits: "credits",
+        truncated: "Showing the {count} groups with the most requests; the total row covers all usage this period.",
+        chart: "Daily tokens (peak {peak})",
+        chartLabel: "Bar chart of daily tokens this period, {days} days, peak {peak}",
+        bar: "{day} · requests {requests} · tokens {tokens} · projected {credits}",
+      }),
+    });
+    const USAGE_SUMMARY_KEY_COLUMNS = 3; // 客户、模型、月份；之后都是右对齐的数值列
 
     const workbench = document.querySelector("#billingWorkbench");
     const apiState = document.querySelector("#billingApiState");
@@ -1221,6 +1299,8 @@
         prices: [],
         credentials: [],
         usage: [],
+        usageSummary: null,
+        usageDaily: null,
         ledger: [],
         auditEvents: [],
         templates: [],
@@ -1315,7 +1395,9 @@
       });
       const data = await response.json().catch(function () { return {}; });
       if (!response.ok) {
-        const message = safeNarrative(data.message || data.error || ("HTTP " + response.status), 280);
+        // 新接口（如用量汇总）用 {error:{code,message}} 信封，旧接口是平铺的 message。
+        const envelopeMessage = data.error && typeof data.error === "object" ? data.error.message : data.error;
+        const message = safeNarrative(data.message || envelopeMessage || ("HTTP " + response.status), 280);
         const error = new Error(message);
         error.status = response.status;
         error.payload = data;
@@ -1334,6 +1416,7 @@
       if (refreshInFlight) return refreshInFlight;
       setBillingBusy(true);
       setApiState("正在读取", "warn");
+      const tzOffsetMinutes = -new Date().getTimezoneOffset();
       const requests = settings.templatesOnly
         ? [["templates", "/api/billing/templates"]]
         : [
@@ -1343,7 +1426,9 @@
             ["plans", "/api/billing/plans?limit=100"],
             ["prices", "/api/billing/prices?limit=200"],
             ["credentials", "/api/billing/credentials?limit=200"],
-            ["usage", `/api/billing/usage?window=month&limit=100&tzOffsetMinutes=${-new Date().getTimezoneOffset()}`],
+            ["usage", `/api/billing/usage?window=month&limit=100&tzOffsetMinutes=${tzOffsetMinutes}`],
+            ["usageSummary", `/api/billing/usage/summary?groupBy=customer,model,month&tzOffsetMinutes=${tzOffsetMinutes}`],
+            ["usageDaily", `/api/billing/usage/summary?groupBy=day&tzOffsetMinutes=${tzOffsetMinutes}`],
             ["ledger", "/api/billing/ledger?limit=100"],
             ["auditEvents", "/api/billing/audit-events?limit=100"],
             ["templates", "/api/billing/templates"],
@@ -1399,6 +1484,10 @@
     function applyBillingResponse(kind, payload) {
       if (kind === "overview") {
         billingState.summary = normalizeSummary(payload && (payload.overview || payload.summary || payload.data || payload));
+        return;
+      }
+      if (kind === "usageSummary" || kind === "usageDaily") {
+        billingState[kind] = normalizeUsageSummary(payload);
         return;
       }
       if (kind === "templates") {
@@ -1575,6 +1664,43 @@
       };
     }
 
+    // 汇总接口的应答必须带 rows 和 groupBy 数组；其他形状（例如尚未提供汇总接口的后端）
+    // 返回 null，面板保持隐藏，不会把逐条记录冒充成汇总。
+    function normalizeUsageSummary(payload) {
+      if (!payload || typeof payload !== "object" || payload.ok === false) return null;
+      if (!Array.isArray(payload.rows) || !Array.isArray(payload.groupBy)) return null;
+      const tzOffsetMinutes = Number(payload.tzOffsetMinutes);
+      return {
+        from: safeText(payload.from, 40),
+        to: safeText(payload.to, 40),
+        tzOffsetMinutes: Number.isInteger(tzOffsetMinutes) && Math.abs(tzOffsetMinutes) <= 840 ? tzOffsetMinutes : 0,
+        rows: payload.rows.slice(0, BILLING_MAX_ITEMS).map(normalizeUsageSummaryRow),
+        totals: normalizeUsageSummaryRow(payload.totals),
+        truncated: payload.truncated === true || payload.rows.length > BILLING_MAX_ITEMS,
+      };
+    }
+
+    function normalizeUsageSummaryRow(value) {
+      const source = value && typeof value === "object" ? value : {};
+      const month = safeText(source.month, 7);
+      const day = safeText(source.day, 10);
+      return {
+        customerId: safeId(source.customerId),
+        customerName: safeText(source.customerName, 80),
+        model: safeText(source.model, 160),
+        month: /^\d{4}-\d{2}$/.test(month) ? month : "",
+        day: /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "",
+        requests: integerFromApi(source.requests, "0"),
+        ok: integerFromApi(source.ok, "0"),
+        inputTokens: integerFromApi(source.inputTokens, "0"),
+        cachedInputTokens: integerFromApi(source.cachedInputTokens, "0"),
+        outputTokens: integerFromApi(source.outputTokens, "0"),
+        totalTokens: integerFromApi(source.totalTokens, "0"),
+        projectedMicrocredits: integerFromApi(source.projectedMicrocredits, "0"),
+        chargedMicrocredits: integerFromApi(source.chargedMicrocredits, "0"),
+      };
+    }
+
     function normalizeLedger(value) {
       const source = value && typeof value === "object" ? value : {};
       return {
@@ -1664,6 +1790,7 @@
     function renderBillingCenter() {
       renderSummary();
       renderOverviewCustomers();
+      renderUsageSummary();
       renderOverviewUsage();
       renderCustomers();
       renderCredentials();
@@ -1772,6 +1899,157 @@
         addCell(row, usageStatusNode(usage), { node: true });
         return row;
       }));
+    }
+
+    function billingSummaryLanguage() {
+      let requested = new URLSearchParams(window.location.search).get("lang") || "";
+      if (!requested) {
+        try { requested = localStorage.getItem(BILLING_LANGUAGE_STORAGE_KEY) || ""; } catch { /* fall back to the page language */ }
+      }
+      const value = String(requested).trim().toLowerCase();
+      return value === "en" || value === "en-us" ? "en-US" : "zh-CN";
+    }
+
+    function fillTemplate(text, values) {
+      return String(text).replace(/\{(\w+)\}/g, function (match, key) {
+        return Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match;
+      });
+    }
+
+    // 本期汇总：上方每日柱状图（groupBy=day），下方按客户 × 模型 × 月的汇总表（groupBy=customer,model,month）。
+    function renderUsageSummary() {
+      const panel = document.querySelector("#overviewSummaryPanel");
+      const summary = billingState.usageSummary;
+      if (!summary) {
+        panel.hidden = true;
+        return;
+      }
+      const language = billingSummaryLanguage();
+      const copy = USAGE_SUMMARY_COPY[language];
+      panel.lang = language;
+      setText("#overviewSummaryHeading", copy.heading);
+      setText("#overviewSummaryNote", fillTemplate(copy.note, summaryPeriodLabels(summary)));
+      renderUsageSummaryTable(summary, copy);
+      renderDailyUsageChart(billingState.usageDaily, copy);
+      panel.hidden = false;
+    }
+
+    function summaryPeriodLabels(summary) {
+      const offsetMs = summary.tzOffsetMinutes * 60 * 1000;
+      const localDay = function (ms) { return Number.isFinite(ms) ? new Date(ms + offsetMs).toISOString().slice(0, 10) : "—"; };
+      const minutes = Math.abs(summary.tzOffsetMinutes);
+      return {
+        from: localDay(Date.parse(summary.from)),
+        to: localDay(Date.parse(summary.to) - 1),
+        tz: "UTC" + (summary.tzOffsetMinutes < 0 ? "-" : "+") + String(Math.floor(minutes / 60)).padStart(2, "0") + ":" + String(minutes % 60).padStart(2, "0"),
+      };
+    }
+
+    function renderUsageSummaryTable(summary, copy) {
+      document.querySelector("#overviewSummaryHead").replaceChildren(...copy.columns.map(function (label, index) {
+        return node("th", index >= USAGE_SUMMARY_KEY_COLUMNS ? "num" : "", label);
+      }));
+      const body = document.querySelector("#overviewSummaryRows");
+      const totals = document.querySelector("#overviewSummaryTotals");
+      if (!summary.rows.length) {
+        setEmptyTable(body, copy.columns.length, copy.empty);
+        totals.replaceChildren();
+      } else {
+        body.replaceChildren(...summary.rows.map(function (item) {
+          const row = node("tr");
+          addCell(row, item.customerName || (item.customerId ? customerLabel(item.customerId) : copy.unbound));
+          addCell(row, item.model || "—");
+          addCell(row, item.month || "—");
+          appendSummaryNumbers(row, item, copy);
+          return row;
+        }));
+        const footer = node("tr");
+        addCell(footer, copy.total);
+        addCell(footer, "");
+        addCell(footer, "");
+        appendSummaryNumbers(footer, summary.totals, copy);
+        totals.replaceChildren(footer);
+      }
+      const truncatedNote = document.querySelector("#overviewSummaryTruncated");
+      truncatedNote.hidden = !summary.truncated;
+      truncatedNote.textContent = summary.truncated ? fillTemplate(copy.truncated, { count: formatInteger(String(summary.rows.length)) }) : "";
+    }
+
+    function appendSummaryNumbers(row, item, copy) {
+      [item.requests, item.ok, item.inputTokens, item.cachedInputTokens, item.outputTokens].forEach(function (value) {
+        addCell(row, formatInteger(value)).className = "num";
+      });
+      addCell(row, summaryCredits(item.projectedMicrocredits, copy)).className = "num";
+      addCell(row, summaryCredits(item.chargedMicrocredits, copy)).className = "num";
+    }
+
+    function summaryCredits(microcredits, copy) {
+      return formatDecimal(microcreditsToCredits(microcredits, "0")) + " " + copy.credits;
+    }
+
+    function renderDailyUsageChart(daily, copy) {
+      const figure = document.querySelector("#overviewDailyChart");
+      const days = daily ? summaryDayKeys(daily) : [];
+      if (!days.length) {
+        figure.hidden = true;
+        return;
+      }
+      const byDay = new Map(daily.rows.filter(function (item) { return item.day; }).map(function (item) { return [item.day, item]; }));
+      const tokens = days.map(function (day) { return BigInt(byDay.get(day)?.totalTokens || "0"); });
+      const peak = tokens.reduce(function (max, value) { return value > max ? value : max; }, 0n);
+      const peakLabel = formatInteger(peak.toString());
+      const slot = 10;
+      const width = days.length * slot;
+      const svg = document.querySelector("#overviewDailyChartSvg");
+      svg.setAttribute("viewBox", "0 0 " + width + " 100");
+      svg.setAttribute("aria-label", fillTemplate(copy.chartLabel, { days: days.length, peak: peakLabel }));
+      const shapes = [svgNode("line", { class: "usage-chart-baseline", x1: 0, y1: 99.5, x2: width, y2: 99.5 })];
+      days.forEach(function (day, index) {
+        const value = tokens[index];
+        if (value <= 0n) return;
+        // 比例用 BigInt 计算，Token 很大时也不丢精度；最矮 1 个单位，小值也看得见。
+        const height = Math.max(1, Number((value * 1000n) / peak) / 10);
+        const bar = svgNode("rect", { class: "usage-chart-bar", x: index * slot + 1.5, y: 100 - height, width: slot - 3, height: height });
+        const item = byDay.get(day);
+        const title = svgNode("title", {});
+        title.textContent = fillTemplate(copy.bar, {
+          day: day,
+          requests: formatInteger(item.requests),
+          tokens: formatInteger(item.totalTokens),
+          credits: summaryCredits(item.projectedMicrocredits, copy),
+        });
+        bar.append(title);
+        shapes.push(bar);
+      });
+      svg.replaceChildren(...shapes);
+      setText("#overviewDailyChartCaption", fillTemplate(copy.chart, { peak: peakLabel }));
+      const ticks = Array.from(new Set([days[0], days[Math.floor((days.length - 1) / 2)], days[days.length - 1]]));
+      document.querySelector("#overviewDailyChartAxis").replaceChildren(...ticks.map(function (day) { return node("span", "", day.slice(5)); }));
+      figure.hidden = false;
+    }
+
+    // 当期每天一个柱位（没有用量的日子留空），日期按接口返回的时区偏移换算。
+    function summaryDayKeys(daily) {
+      const keys = [];
+      const from = Date.parse(daily.from);
+      const to = Date.parse(daily.to);
+      const offsetMs = daily.tzOffsetMinutes * 60 * 1000;
+      if (Number.isFinite(from) && Number.isFinite(to) && to > from) {
+        for (let at = from; at < to && keys.length < 62; at += BILLING_DAY_MS) {
+          const key = new Date(at + offsetMs).toISOString().slice(0, 10);
+          if (!keys.includes(key)) keys.push(key);
+        }
+      }
+      daily.rows.forEach(function (item) {
+        if (item.day && !keys.includes(item.day) && keys.length < 62) keys.push(item.day);
+      });
+      return keys.sort();
+    }
+
+    function svgNode(tag, attributes) {
+      const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      Object.entries(attributes).forEach(function (entry) { element.setAttribute(entry[0], String(entry[1])); });
+      return element;
     }
 
     const USAGE_TERMINAL_STATES = {
@@ -2859,6 +3137,8 @@
         prices: "价格",
         credentials: "凭证",
         usage: "用量",
+        usageSummary: "用量汇总",
+        usageDaily: "每日用量",
         ledger: "账本",
         auditEvents: "审计",
         templates: "官方模板",

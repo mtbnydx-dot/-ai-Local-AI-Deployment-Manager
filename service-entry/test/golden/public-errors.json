@@ -1,0 +1,1112 @@
+{
+  "schemaVersion": 1,
+  "requestId": "req_abcdefghijklmnopqrst",
+  "codes": {
+    "missing_api_key": {
+      "status": 401,
+      "anthropicStatus": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Missing API key. Send it in the Authorization header as 'Bearer <key>'.",
+          "type": "authentication_error",
+          "code": "missing_api_key",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "authentication_error",
+          "message": "Missing API key. Send it in the Authorization header as 'Bearer <key>'."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "invalid_api_key": {
+      "status": 401,
+      "anthropicStatus": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Invalid API key. Check the key; it may be mistyped or may have been rotated.",
+          "type": "authentication_error",
+          "code": "invalid_api_key",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "authentication_error",
+          "message": "Invalid API key. Check the key; it may be mistyped or may have been rotated."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "key_expired": {
+      "status": 401,
+      "anthropicStatus": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "This API key has expired. Ask the service owner to renew it.",
+          "type": "authentication_error",
+          "code": "key_expired",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "authentication_error",
+          "message": "This API key has expired. Ask the service owner to renew it."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "key_disabled": {
+      "status": 403,
+      "anthropicStatus": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "This API key is disabled or has been revoked.",
+          "type": "permission_error",
+          "code": "key_disabled",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "permission_error",
+          "message": "This API key is disabled or has been revoked."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "scope_denied": {
+      "status": 403,
+      "anthropicStatus": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "This API key is not allowed to use this endpoint.",
+          "type": "permission_error",
+          "code": "scope_denied",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "permission_error",
+          "message": "This API key is not allowed to use this endpoint."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "model_not_allowed": {
+      "status": 403,
+      "anthropicStatus": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "This API key is not allowed to use the requested model.",
+          "type": "permission_error",
+          "code": "model_not_allowed",
+          "param": "model"
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "permission_error",
+          "message": "This API key is not allowed to use the requested model."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "origin_not_allowed": {
+      "status": 403,
+      "anthropicStatus": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Requests from this web origin are not allowed for this API key. Add the origin under My Key.",
+          "type": "permission_error",
+          "code": "origin_not_allowed",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "permission_error",
+          "message": "Requests from this web origin are not allowed for this API key. Add the origin under My Key."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "ip_not_allowed": {
+      "status": 403,
+      "anthropicStatus": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Requests from this IP address are not allowed for this API key.",
+          "type": "permission_error",
+          "code": "ip_not_allowed",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "permission_error",
+          "message": "Requests from this IP address are not allowed for this API key."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "csrf_invalid": {
+      "status": 403,
+      "anthropicStatus": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The console session check failed. Reload the console and try again.",
+          "type": "permission_error",
+          "code": "csrf_invalid",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "permission_error",
+          "message": "The console session check failed. Reload the console and try again."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "model_not_found": {
+      "status": 404,
+      "anthropicStatus": 404,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The requested model does not exist or is not published. List the available models at /v1/models.",
+          "type": "invalid_request_error",
+          "code": "model_not_found",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "not_found_error",
+          "message": "The requested model does not exist or is not published. List the available models at /v1/models."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "not_found": {
+      "status": 404,
+      "anthropicStatus": 404,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The requested resource was not found.",
+          "type": "invalid_request_error",
+          "code": "not_found",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "not_found_error",
+          "message": "The requested resource was not found."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "method_not_allowed": {
+      "status": 405,
+      "anthropicStatus": 405,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "This HTTP method is not allowed for this endpoint.",
+          "type": "invalid_request_error",
+          "code": "method_not_allowed",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "not_found_error",
+          "message": "This HTTP method is not allowed for this endpoint."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "invalid_request": {
+      "status": 400,
+      "anthropicStatus": 400,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The request is invalid.",
+          "type": "invalid_request_error",
+          "code": "invalid_request",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "The request is invalid."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "invalid_json": {
+      "status": 400,
+      "anthropicStatus": 400,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The request body is not valid JSON.",
+          "type": "invalid_request_error",
+          "code": "invalid_json",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "The request body is not valid JSON."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "max_tokens_exceeded": {
+      "status": 400,
+      "anthropicStatus": 400,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The requested maximum output tokens exceed the limit for this API key.",
+          "type": "invalid_request_error",
+          "code": "max_tokens_exceeded",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "The requested maximum output tokens exceed the limit for this API key."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "request_exceeds_tpm": {
+      "status": 400,
+      "anthropicStatus": 400,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "This request needs more tokens than the per-minute token limit of this API key allows. Reduce the input or the maximum output tokens.",
+          "type": "invalid_request_error",
+          "code": "request_exceeds_tpm",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "This request needs more tokens than the per-minute token limit of this API key allows. Reduce the input or the maximum output tokens."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "unknown_engine": {
+      "status": 400,
+      "anthropicStatus": 400,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Unknown engine in the request path.",
+          "type": "invalid_request_error",
+          "code": "unknown_engine",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "Unknown engine in the request path."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "request_too_large": {
+      "status": 413,
+      "anthropicStatus": 413,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The request body is too large.",
+          "type": "invalid_request_error",
+          "code": "request_too_large",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "request_too_large",
+          "message": "The request body is too large."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "unsupported_media_type": {
+      "status": 415,
+      "anthropicStatus": 415,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Unsupported content type. Send the request body as JSON with content-type application/json.",
+          "type": "invalid_request_error",
+          "code": "unsupported_media_type",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "Unsupported content type. Send the request body as JSON with content-type application/json."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "ip_rate_limited": {
+      "status": 429,
+      "anthropicStatus": 429,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst",
+        "retry-after": "60"
+      },
+      "openai": {
+        "error": {
+          "message": "Too many requests from this address. Retry after the time in the retry-after header.",
+          "type": "rate_limit_error",
+          "code": "ip_rate_limited",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "Too many requests from this address. Retry after the time in the retry-after header."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "auth_banned": {
+      "status": 429,
+      "anthropicStatus": 429,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst",
+        "retry-after": "60"
+      },
+      "openai": {
+        "error": {
+          "message": "Too many failed authentication attempts from this address. Retry after the time in the retry-after header.",
+          "type": "rate_limit_error",
+          "code": "auth_banned",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "Too many failed authentication attempts from this address. Retry after the time in the retry-after header."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "rate_limit_exceeded": {
+      "status": 429,
+      "anthropicStatus": 429,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst",
+        "retry-after": "60"
+      },
+      "openai": {
+        "error": {
+          "message": "Request rate limit reached for this API key. Back off and retry after the time in the retry-after header.",
+          "type": "rate_limit_error",
+          "code": "rate_limit_exceeded",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "Request rate limit reached for this API key. Back off and retry after the time in the retry-after header."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "tokens_rate_limit_exceeded": {
+      "status": 429,
+      "anthropicStatus": 429,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst",
+        "retry-after": "60"
+      },
+      "openai": {
+        "error": {
+          "message": "Token rate limit reached for this API key. Back off and retry after the time in the retry-after header.",
+          "type": "rate_limit_error",
+          "code": "tokens_rate_limit_exceeded",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "Token rate limit reached for this API key. Back off and retry after the time in the retry-after header."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "concurrency_limit_exceeded": {
+      "status": 429,
+      "anthropicStatus": 429,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst",
+        "retry-after": "60"
+      },
+      "openai": {
+        "error": {
+          "message": "Too many concurrent requests for this API key. Wait for a running request to finish.",
+          "type": "rate_limit_error",
+          "code": "concurrency_limit_exceeded",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "Too many concurrent requests for this API key. Wait for a running request to finish."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "insufficient_quota": {
+      "status": 429,
+      "anthropicStatus": 429,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst",
+        "retry-after": "60"
+      },
+      "openai": {
+        "error": {
+          "message": "The quota for this API key is used up. It resets at the start of the next period.",
+          "type": "insufficient_quota",
+          "code": "insufficient_quota",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "The quota for this API key is used up. It resets at the start of the next period."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "overloaded": {
+      "status": 503,
+      "anthropicStatus": 529,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst",
+        "retry-after": "5"
+      },
+      "openai": {
+        "error": {
+          "message": "The service is at capacity. Retry shortly.",
+          "type": "server_error",
+          "code": "overloaded",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "overloaded_error",
+          "message": "The service is at capacity. Retry shortly."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "model_unavailable": {
+      "status": 503,
+      "anthropicStatus": 503,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The requested model is not available right now. Check the service status page.",
+          "type": "server_error",
+          "code": "model_unavailable",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "The requested model is not available right now. Check the service status page."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "service_unavailable": {
+      "status": 503,
+      "anthropicStatus": 503,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The service is temporarily unavailable. Check the service status page.",
+          "type": "server_error",
+          "code": "service_unavailable",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "The service is temporarily unavailable. Check the service status page."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "auth_unavailable": {
+      "status": 503,
+      "anthropicStatus": 503,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Authentication is temporarily unavailable. Retry shortly.",
+          "type": "server_error",
+          "code": "auth_unavailable",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "Authentication is temporarily unavailable. Retry shortly."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "billing_unavailable": {
+      "status": 503,
+      "anthropicStatus": 503,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Billing is temporarily unavailable. Retry shortly.",
+          "type": "server_error",
+          "code": "billing_unavailable",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "Billing is temporarily unavailable. Retry shortly."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "upstream_error": {
+      "status": 502,
+      "anthropicStatus": 502,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The model service returned an error. Quote the request_id when reporting it.",
+          "type": "server_error",
+          "code": "upstream_error",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "The model service returned an error. Quote the request_id when reporting it."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "upstream_timeout": {
+      "status": 504,
+      "anthropicStatus": 504,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "The model service did not respond in time. Quote the request_id when reporting it.",
+          "type": "server_error",
+          "code": "upstream_timeout",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "The model service did not respond in time. Quote the request_id when reporting it."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    },
+    "internal_error": {
+      "status": 500,
+      "anthropicStatus": 500,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "req_abcdefghijklmnopqrst"
+      },
+      "openai": {
+        "error": {
+          "message": "Internal error. Quote the request_id when reporting it.",
+          "type": "server_error",
+          "code": "internal_error",
+          "param": null
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      },
+      "anthropic": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "Internal error. Quote the request_id when reporting it."
+        },
+        "request_id": "req_abcdefghijklmnopqrst"
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "scope_denied names the endpoint",
+      "code": "scope_denied",
+      "opts": {
+        "param": "/v1/embeddings"
+      },
+      "expect": {
+        "status": 403,
+        "anthropicStatus": 403,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "x-request-id": "req_abcdefghijklmnopqrst"
+        },
+        "openai": {
+          "error": {
+            "message": "This API key is not allowed to use this endpoint.",
+            "type": "permission_error",
+            "code": "scope_denied",
+            "param": "/v1/embeddings"
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        },
+        "anthropic": {
+          "type": "error",
+          "error": {
+            "type": "permission_error",
+            "message": "This API key is not allowed to use this endpoint."
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        }
+      }
+    },
+    {
+      "name": "max_tokens_exceeded names the field",
+      "code": "max_tokens_exceeded",
+      "opts": {
+        "param": "max_tokens"
+      },
+      "expect": {
+        "status": 400,
+        "anthropicStatus": 400,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "x-request-id": "req_abcdefghijklmnopqrst"
+        },
+        "openai": {
+          "error": {
+            "message": "The requested maximum output tokens exceed the limit for this API key.",
+            "type": "invalid_request_error",
+            "code": "max_tokens_exceeded",
+            "param": "max_tokens"
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        },
+        "anthropic": {
+          "type": "error",
+          "error": {
+            "type": "invalid_request_error",
+            "message": "The requested maximum output tokens exceed the limit for this API key."
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        }
+      }
+    },
+    {
+      "name": "insufficient_quota names the cap and rounds retry-after up",
+      "code": "insufficient_quota",
+      "opts": {
+        "param": "daily_tokens",
+        "retryAfterSeconds": 3600.2
+      },
+      "expect": {
+        "status": 429,
+        "anthropicStatus": 429,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "x-request-id": "req_abcdefghijklmnopqrst",
+          "retry-after": "3601"
+        },
+        "openai": {
+          "error": {
+            "message": "The quota for this API key is used up. It resets at the start of the next period.",
+            "type": "insufficient_quota",
+            "code": "insufficient_quota",
+            "param": "daily_tokens"
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        },
+        "anthropic": {
+          "type": "error",
+          "error": {
+            "type": "rate_limit_error",
+            "message": "The quota for this API key is used up. It resets at the start of the next period."
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        }
+      }
+    },
+    {
+      "name": "rate_limit_exceeded carries the bucket reset",
+      "code": "rate_limit_exceeded",
+      "opts": {
+        "retryAfterSeconds": 4
+      },
+      "expect": {
+        "status": 429,
+        "anthropicStatus": 429,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "x-request-id": "req_abcdefghijklmnopqrst",
+          "retry-after": "4"
+        },
+        "openai": {
+          "error": {
+            "message": "Request rate limit reached for this API key. Back off and retry after the time in the retry-after header.",
+            "type": "rate_limit_error",
+            "code": "rate_limit_exceeded",
+            "param": null
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        },
+        "anthropic": {
+          "type": "error",
+          "error": {
+            "type": "rate_limit_error",
+            "message": "Request rate limit reached for this API key. Back off and retry after the time in the retry-after header."
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        }
+      }
+    },
+    {
+      "name": "service_unavailable may carry retry-after",
+      "code": "service_unavailable",
+      "opts": {
+        "retryAfterSeconds": 30
+      },
+      "expect": {
+        "status": 503,
+        "anthropicStatus": 503,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "x-request-id": "req_abcdefghijklmnopqrst",
+          "retry-after": "30"
+        },
+        "openai": {
+          "error": {
+            "message": "The service is temporarily unavailable. Check the service status page.",
+            "type": "server_error",
+            "code": "service_unavailable",
+            "param": null
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        },
+        "anthropic": {
+          "type": "error",
+          "error": {
+            "type": "api_error",
+            "message": "The service is temporarily unavailable. Check the service status page."
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        }
+      }
+    },
+    {
+      "name": "an unknown code renders as internal_error",
+      "code": "manager_not_listening",
+      "opts": {},
+      "expect": {
+        "status": 500,
+        "anthropicStatus": 500,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "x-request-id": "req_abcdefghijklmnopqrst"
+        },
+        "openai": {
+          "error": {
+            "message": "Internal error. Quote the request_id when reporting it.",
+            "type": "server_error",
+            "code": "internal_error",
+            "param": null
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        },
+        "anthropic": {
+          "type": "error",
+          "error": {
+            "type": "api_error",
+            "message": "Internal error. Quote the request_id when reporting it."
+          },
+          "request_id": "req_abcdefghijklmnopqrst"
+        }
+      }
+    }
+  ]
+}

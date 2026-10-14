@@ -1,0 +1,42 @@
+{
+  "description": "Chat stream without a usage chunk (stream_options not honoured): usage falls back to the output estimator, exactly as createOpenAiSseUsageParser estimates it. The tool call is the first token.",
+  "options": {
+    "protocol": "opencode",
+    "stream": true,
+    "contentType": "text/event-stream",
+    "estimatedInputTokens": 40
+  },
+  "chunks": [
+    {
+      "tMs": 10,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 80,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 95,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\": \\\"Example City\\\", \\\"unit\\\": \\\"celsius\\\"}\"}}]},\"finish_reason\":null}]}\n\n"
+    },
+    {
+      "tMs": 120,
+      "text": "data: {\"id\":\"chatcmpl-fixture-1\",\"object\":\"chat.completion.chunk\",\"created\":1760400000,\"model\":\"local-current\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+    }
+  ],
+  "expected": {
+    "usage": {
+      "source": "estimated",
+      "promptTokens": 40,
+      "cachedTokens": null,
+      "outputTokens": 15,
+      "reasoningTokens": null,
+      "totalTokens": 55
+    },
+    "finishReason": "tool_calls",
+    "firstTokenAt": 80,
+    "engineTimings": null,
+    "upstreamError": null,
+    "skippedEvents": 0
+  }
+}
