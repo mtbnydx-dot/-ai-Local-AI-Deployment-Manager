@@ -560,6 +560,30 @@ async function runKeyMigration(options = {}) {
   const store = options.store;
   if (!store || typeof store.getMeta !== "function") throw new TypeError("runKeyMigration needs an access store.");
   if (!options.force && store.getMeta(MIGRATION_MARKER) !== null) return { ran: false, reason: "already_migrated" };
+  const { plan, runWarnings } = await planFromLegacyFiles(options);
+  const complete = runWarnings.length === 0;
+  const applied = applyKeyMigration(store, plan, { actor: options.actor || "migration", now: options.now, complete, warnings: runWarnings });
+  return { ran: true, complete, plan, ...applied };
+}
+
+/**
+ * planLegacyKeyMigration({ store, managers, listBindings, readFile })
+ *   -> { plan, complete, warnings }
+ *
+ * The read half of runKeyMigration for the dry run (05 §13.1
+ * `migration/plan`): it reads the managers' legacy files and the billing
+ * bindings and plans against the store's current key ids. It writes nothing
+ * and ignores the migration marker, so it also shows what a forced run adds.
+ */
+async function planLegacyKeyMigration(options = {}) {
+  const store = options.store;
+  if (!store || typeof store.listKeys !== "function") throw new TypeError("planLegacyKeyMigration needs an access store.");
+  const { plan, runWarnings } = await planFromLegacyFiles(options);
+  return { plan, complete: runWarnings.length === 0, warnings: runWarnings };
+}
+
+async function planFromLegacyFiles(options) {
+  const store = options.store;
   const runWarnings = [];
   const managers = [];
   for (const manager of list(options.managers)) {
@@ -572,9 +596,7 @@ async function runKeyMigration(options = {}) {
   }
   const bindings = typeof options.listBindings === "function" ? await options.listBindings() : list(options.bindings);
   const plan = planKeyMigration({ managers, bindings, existingKeyIds: listStoreKeys(store).map((key) => key.id) });
-  const complete = runWarnings.length === 0;
-  const applied = applyKeyMigration(store, plan, { actor: options.actor || "migration", now: options.now, complete, warnings: runWarnings });
-  return { ran: true, complete, plan, ...applied };
+  return { plan, runWarnings };
 }
 
 // ---- compat summaries (GET /api/keys, /api/status `keys`) -----------------
@@ -670,6 +692,7 @@ module.exports = {
   listBillingBindings,
   listStoreKeys,
   planKeyMigration,
+  planLegacyKeyMigration,
   readLegacyKeyFiles,
   readMigrationReport,
   runKeyMigration,

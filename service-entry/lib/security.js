@@ -106,6 +106,10 @@ function createEntrySecurity(options = {}) {
     ? options.accessConfig
     : createAccessConfigSource({ readSection: typeof options.readSection === "function" ? options.readSection : defaultReadSection(options.aiRoot) });
   let warnedAccessIssues = "";
+  // The latest exposure report (05 §13.2), a function returning the cached
+  // ExposureReport or null. PUB-19 supplies the scan; until then the
+  // checklist's proxy-target and firewall items stay manual.
+  let exposureReport = typeof options.exposureReport === "function" ? options.exposureReport : null;
 
   // One warning per distinct set of problems: the settings are re-read while
   // the entry runs, and a bad value must not flood the log.
@@ -546,6 +550,12 @@ function createEntrySecurity(options = {}) {
     }
     const enforced = current.requireApiKey && keyStatus.readable && keyStatus.managersWithKeys.length > 0;
     const publicBaseUrl = envText("SERVICE_ENTRY_PUBLIC_BASE_URL");
+    let report = null;
+    try {
+      report = exposureReport ? await exposureReport() : null;
+    } catch {
+      report = null;
+    }
     return {
       lanMode: current.lanMode,
       publicMode: current.publicMode,
@@ -563,7 +573,7 @@ function createEntrySecurity(options = {}) {
       keyStore: keyStatus,
       configIssues: core.listConfigHealthIssues(),
       warnings: buildWarnings(current, keyStatus, enforced),
-      publicChecklist: buildPublicChecklist(current, keyStatus, enforced, publicBaseUrl),
+      publicChecklist: buildPublicChecklist(current, keyStatus, enforced, publicBaseUrl, report),
       switches: {
         SERVICE_ENTRY_REQUIRE_API_KEY: "auto | 1 | 0 — auto 表示仅在局域网模式下强制；不受信环境请设为 1",
         SERVICE_ENTRY_ALLOW_LAN_ADMIN: "0 | 1 — 允许局域网设备访问管理端点",
@@ -577,7 +587,7 @@ function createEntrySecurity(options = {}) {
   // The go-live checklist for a LAN or public deployment. Each item is a fact
   // the entry can verify itself; items it cannot verify (firewall, Caddy path
   // restriction) are listed as "manual" so the operator still sees them.
-  function buildPublicChecklist(current, keyStatus, enforced, publicBaseUrl = "") {
+  function buildPublicChecklist(current, keyStatus, enforced, publicBaseUrl = "", report = null) {
     const items = [];
     const push = (id, state, title, detail) => items.push({ id, state, title, detail });
     const exposed = current.lanMode || current.publicMode;
@@ -605,10 +615,24 @@ function createEntrySecurity(options = {}) {
     }
     push("rate-limit", "ok", "限流与 401 风暴防护",
       `每客户端 ${envText("SERVICE_ENTRY_RATE_LIMIT_RPM", "600")} 请求/分钟；连续鉴权失败会被临时封禁（SERVICE_ENTRY_AUTH_FAIL_LIMIT / SERVICE_ENTRY_AUTH_BAN_SECONDS）。`);
-    push("caddy-paths", "manual", "Caddy 只转发 /gateway/*",
-      "deploy/public/Caddyfile 已按路径收紧；用 scripts/setup-public.ps1 生成 .env 并校验配置。");
-    push("firewall", "manual", "路由器 / 防火墙只开放 80/443",
-      "5176/5177/5178/7000/5180/5190 不得对公网开放；模型容器使用本地网络模式。");
+    // proxy-target and firewall come from the exposure scan (05 §13.2) when
+    // one has run; without it they stay manual items, as before.
+    const checks = new Map((Array.isArray(report?.checks) ? report.checks : []).map((check) => [check?.id, check]));
+    const fromChecks = (ids, fallbackState, fallbackDetail) => {
+      const found = ids.map((id) => checks.get(id)).filter(Boolean);
+      const known = found.filter((check) => ["ok", "warn", "fail"].includes(check.state));
+      if (!known.length) return { state: fallbackState, detail: fallbackDetail };
+      const rank = { ok: 0, warn: 1, fail: 2 };
+      const worst = known.reduce((a, b) => (rank[b.state] > rank[a.state] ? b : a));
+      const evidence = typeof worst.evidence === "string" && worst.evidence ? worst.evidence : fallbackDetail;
+      return { state: worst.state, detail: evidence };
+    };
+    const target = fromChecks(["tunnel_target", "legacy_proxy"], "manual",
+      "公网转发目标应是 5186（PUBLIC 监听）而不是 5177/5178；在“公网访问”页运行检查可自动验证。");
+    push("proxy-target", target.state, "公网转发只指向 PUBLIC 监听", target.detail);
+    const firewall = fromChecks(["firewall_profiles", "wildcard_listeners"], "manual",
+      "路由器 / 防火墙只开放 80/443；5176/5177/5178/7000/5180/5190 不得对公网开放。运行检查可读取本机防火墙状态。");
+    push("firewall", firewall.state, "路由器 / 防火墙只开放 80/443", firewall.detail);
     return items;
   }
 
@@ -683,6 +707,10 @@ function createEntrySecurity(options = {}) {
     resolveClientAddress,
     identifyClient,
     accessConfig,
+    // Re-reads the settings now (after the console saved them), instead of at the next 2 s tick.
+    refreshAccessConfig() {
+      return accessSource.refresh();
+    },
     publicHostnames,
     noteAdminViaProxy,
     // A new sink is a new subscription: the per-path throttle starts over.
@@ -701,6 +729,10 @@ function createEntrySecurity(options = {}) {
     trustHeaders,
     describe,
     describePublic,
+    // PUB-19 supplies the scan: a function returning the cached report or null.
+    setExposureReport(fn) {
+      exposureReport = typeof fn === "function" ? fn : null;
+    },
   };
 }
 
