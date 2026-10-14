@@ -15,6 +15,8 @@ const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview")
 const { parseAuxGatewayRoute, buildAuxUpstreamPath, parseEnvFileValue } = require("./lib/aux-gateway");
 const { ttsSynthesisRoute, countTtsCharacters, ttsEngineFromBody, createWavDurationProbe, createJsonCollector, parseTtsJsonDuration } = require("./lib/tts-usage");
 const { signedTtsHeaders, createTtsReconciler } = require("./lib/tts-bridge");
+const { createEventBus } = require("./lib/events");
+const { createRequestAuth } = require("./lib/request-auth");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -126,7 +128,26 @@ const security = createEntrySecurity({
   getLanAddress: core.getLanAddress,
 });
 
+// Entry backends are route modules (07 §2.7), mounted once at startup in this
+// order; the first module whose handle() returns true answers the request.
+// Each package adds one line. Contract (CommonJS):
+//   module.exports = { name, feature /* optional; turns on bootstrap features.<feature> */,
+//     mount(ctx) { return { handle: async (req, res, url) => false /* true = handled */, close() {} }; } };
+// ctx is one shared object (createRouteContext); modules read ctx.relay at call time.
+const ROUTE_MODULES = [
+  "./lib/events", // ENT-EV1  /api/events, /api/events/recent
+  // "./lib/mgmt-proxy",          // ENT-EV2  /api/m/:managerId/*
+  // "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
+  // "./lib/engine-routes",       // 01 ENG-19
+  // "./lib/hub-routes",          // 03 HUB-7
+  // "./lib/telemetry-routes",    // 04 TEL-*
+  // "./lib/admin-session",       // 05 PUB-5
+  // "./lib/platform-routes",     // 06 OPS-13
+  // "./lib/console-routes",      // 07 CON-2
+];
+
 let server = null;
+let routeMounts = null;
 let billingStore = null;
 const managerModelCache = new Map();
 const managerStatusCache = new Map();
@@ -173,8 +194,9 @@ async function isManagerPortListening(port) {
   }
 }
 
-function createServiceEntryServer() {
-  const httpServer = http.createServer(handleRequest);
+function createServiceEntryServer(options = {}) {
+  const routes = options.routes || null;
+  const httpServer = http.createServer(routes ? (req, res) => handleRequest(req, res, routes) : handleRequest);
   httpServer.keepAliveTimeout = 65_000;
   httpServer.headersTimeout = 66_000;
   let reconciliationTimer;
@@ -183,10 +205,118 @@ function createServiceEntryServer() {
     reconciliationTimer.unref();
   });
   httpServer.once("close", () => clearInterval(reconciliationTimer));
+  if (routes) {
+    // Event streams never end on their own, so close() would wait on them
+    // forever: the mounted modules (streams, timers, relay sockets) close first.
+    const closeServer = httpServer.close.bind(httpServer);
+    httpServer.close = (callback) => {
+      routes.close();
+      return closeServer(callback);
+    };
+    httpServer.once("close", () => routes.close());
+  }
   return httpServer;
 }
 
-async function handleRequest(req, res) {
+// The one ctx object every route module receives (07 §2.7). auth and bus are
+// created here unless a caller (a test) supplies its own.
+function createRouteContext(overrides = {}) {
+  const auth = overrides.auth || createRequestAuth({ security });
+  const bus = overrides.bus || createEventBus({ auth, logger: console });
+  return {
+    rootDir: ROOT,
+    aiRoot: AI_ROOT,
+    managers: MANAGERS.map(({ id, port }) => ({ id, port })),
+    security,
+    relay: null,
+    features: {},
+    sendJson,
+    readJsonObjectBody,
+    logger: console,
+    now: Date.now,
+    ...overrides,
+    auth,
+    bus,
+  };
+}
+
+// Mounts each module in order. A module that cannot be loaded or whose
+// mount() throws is skipped with one log line, and its feature stays off;
+// the entry keeps serving everything else.
+async function mountRouteModules(options = {}) {
+  const ctx = options.ctx || createRouteContext();
+  const specs = Array.isArray(options.modules) ? options.modules : ROUTE_MODULES;
+  const load = typeof options.load === "function" ? options.load : (spec) => require(spec);
+  const warn = typeof ctx.logger?.warn === "function" ? (line) => ctx.logger.warn(line) : (line) => console.warn(line);
+  if (!ctx.features || typeof ctx.features !== "object") ctx.features = {};
+  const modules = [];
+  const failed = [];
+  for (const spec of specs) {
+    let definition = null;
+    const label = typeof spec === "string" ? spec : String(spec?.name || "(unnamed)");
+    try {
+      definition = typeof spec === "string" ? load(spec) : spec;
+      if (!definition || typeof definition.mount !== "function") throw new Error("it exports no mount(ctx)");
+      const mounted = await definition.mount(ctx);
+      if (!mounted || typeof mounted.handle !== "function") throw new Error("mount(ctx) returned no handle()");
+      const name = String(definition.name || label);
+      const feature = definition.feature ? String(definition.feature) : "";
+      modules.push({ name, feature, api: mounted });
+      if (feature) ctx.features[feature] = true;
+    } catch (error) {
+      const name = String(definition?.name || label);
+      failed.push({ name, error: String(error?.message || error) });
+      if (definition?.feature && ctx.features[definition.feature] !== true) ctx.features[String(definition.feature)] = false;
+      warn(core.redactSecrets(`service-entry: route module ${name} was not mounted and is skipped: ${error?.message || error}`));
+    }
+  }
+  let closed = false;
+  return {
+    ctx,
+    modules,
+    failed,
+    close() {
+      if (closed) return;
+      closed = true;
+      for (const mounted of [...modules].reverse()) {
+        try {
+          mounted.api.close?.();
+        } catch (error) {
+          warn(core.redactSecrets(`service-entry: route module ${mounted.name} failed to close: ${error?.message || error}`));
+        }
+      }
+      try {
+        ctx.bus?.close?.();
+      } catch (error) {
+        warn(core.redactSecrets(`service-entry: event bus failed to close: ${error?.message || error}`));
+      }
+    },
+  };
+}
+
+// Runs after the host/origin, proxied-request and billing checks and before
+// the inline routes. /gateway/* never reaches a module.
+async function dispatchRouteModules(routes, req, res, url) {
+  if (!routes?.modules?.length || url.pathname.startsWith("/gateway/")) return false;
+  for (const mounted of routes.modules) {
+    let handled = false;
+    try {
+      handled = await mounted.api.handle(req, res, url);
+    } catch (error) {
+      console.error(core.redactSecrets(`service-entry: route module ${mounted.name} failed: ${error?.stack || error?.message || error}`));
+      if (!res.headersSent) {
+        sendJson(res, { ok: false, error: { code: "internal_error", message: "Service entry error." } }, 500);
+      } else {
+        res.destroy();
+      }
+      return true;
+    }
+    if (handled === true || res.headersSent) return true;
+  }
+  return false;
+}
+
+async function handleRequest(req, res, routes = null) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
     // Host whitelist + Origin check for mutating requests. Without this any page
@@ -199,6 +329,7 @@ async function handleRequest(req, res) {
       return sendJson(res, { error: "Only /gateway/* endpoints are served through the public proxy.", code: "public_proxy_gateway_only" }, 404);
     }
     if (await handleBillingHttpRequest(req, res, url)) return;
+    if (await dispatchRouteModules(routes, req, res, url)) return;
     if (req.method === "GET" && (url.pathname === "/billing" || url.pathname === "/billing/")) {
       if (!isStrictLocalBillingPageRequest(req)) {
         return sendJson(res, { error: "Billing administration is available only through localhost.", code: "billing_admin_local_only" }, 403);
@@ -410,7 +541,10 @@ async function startServiceEntry() {
   await security.issueTrustToken().catch((error) => {
     console.warn(`Unable to publish gateway trust token: ${error.message}`);
   });
-  server = createServiceEntryServer();
+  // The request-auth seam and the event bus come first, then every route
+  // module; a module that fails to mount never stops the entry.
+  routeMounts = await mountRouteModules({ ctx: createRouteContext() });
+  server = createServiceEntryServer({ routes: routeMounts });
   server.on("error", (error) => {
     const detail = error?.code === "EADDRINUSE"
       ? `端口 ${PORT} 已被占用，无法启动统一入口。`
@@ -2409,6 +2543,7 @@ function shutdownSoon(options = {}) {
 
 module.exports = {
   MANAGERS,
+  ROUTE_MODULES,
   TTS_UI_CSP,
   buildEntryGatewayAccessEntry,
   buildEntryGatewayUrls,
@@ -2436,7 +2571,9 @@ module.exports = {
   collectEntryGatewayAccessStats,
   createUpstreamControl,
   createTtsBodyLimiter,
+  createRouteContext,
   createServiceEntryServer,
+  dispatchRouteModules,
   emptyManagerCatalog,
   findManager,
   flattenCatalogModels,
@@ -2474,6 +2611,9 @@ module.exports = {
   shouldLogTtsAccess,
   logEntryGatewayAccessWhenDone,
   logStartupSummary,
+  mountRouteModules,
+  // The live mount table (ctx.bus, ctx.auth) once startServiceEntry() ran.
+  getRouteMounts: () => routeMounts,
   flushTtsSettlements: () => ttsReconciler.flush(),
   resetEntryRateLimitBuckets() {
     entryRateBuckets.clear();
