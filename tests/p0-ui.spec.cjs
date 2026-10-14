@@ -227,8 +227,14 @@ async function openManagerPage(page, baseUrl, setup = async () => {}) {
     body: "window.lucide={createIcons(){}};",
   }));
   await page.route("**/api/models", (route) => route.fulfill({ json: { local: [], cached: [] } }));
+  // Catalog, estimate and precheck calls would otherwise reach Hugging Face.
   await page.route("**/api/remote-models?*", (route) => route.fulfill({ json: { models: [], limit: 48, source: "huggingface", sort: "trending" } }));
+  await page.route("**/api/remote-models/*-variants?*", (route) => route.fulfill({ json: { variants: [] } }));
+  await page.route("**/api/download/estimate?*", (route) => route.fulfill({ json: { bytes: 1024, fileCount: 1, diskFreeBytes: 100 * 1024 ** 3 } }));
+  await page.route("**/api/download/precheck?*", (route) => route.fulfill({ json: { ok: true, findings: [] } }));
   await page.route("**/api/stats", (route) => route.fulfill({ json: statsPayload() }));
+  // Job snapshots come from the stubs only; a long retry keeps EventSource quiet.
+  await page.route("**/api/events", (route) => route.fulfill({ contentType: "text/event-stream", body: "retry: 600000\n\n" }));
   await setup();
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".app-shell")).toBeVisible();
@@ -534,6 +540,231 @@ test.describe("manager pages", () => {
     await page.locator("#actionConfirmSubmit").click();
     await expect(page.locator("#toastRoot")).toContainText("原 API Key 已不可用，请从启动页重新启动该模型。");
     expect(wakes).toHaveLength(4);
+    expect(failures).toEqual([]);
+  });
+
+  for (const label of ["vLLM", "llama"]) {
+    test(`P0-8 ${label} failed download card renders the classified reason from meta`, async ({ page }) => {
+      const jobs = [
+        {
+          id: "dl-gated",
+          type: "download",
+          status: "failed",
+          title: "下载 example/gated-model",
+          error: "需要申请访问权限 / Access approval required",
+          updatedAt: "2026-10-14T01:00:00.000Z",
+          logs: ["403 Client Error"],
+          meta: {
+            model: "example/gated-model",
+            maxRetries: 2,
+            retryCount: 0,
+            errorCode: "hf_approval_required",
+            errorRetryable: false,
+            errorHint: { zh: "需要先在 Hugging Face 模型页申请访问权限并等待批准。", en: "Request access on the Hugging Face model page and wait for approval." },
+          },
+        },
+        {
+          // A code the UI has never heard of (the hub may add derived codes).
+          id: "dl-derived",
+          type: "download",
+          status: "failed",
+          title: "下载 example/empty-model",
+          error: "传输为空 / Transfer was empty",
+          updatedAt: "2026-10-14T00:50:00.000Z",
+          logs: [],
+          meta: {
+            model: "example/empty-model",
+            maxRetries: 2,
+            retryCount: 1,
+            errorCode: "transfer_empty",
+            errorRetryable: true,
+            errorHint: { zh: "下载结束但没有写入任何文件。", en: "The download finished without writing any file." },
+          },
+        },
+      ];
+      const { failures } = await openManagerPage(page, managers[label].url, async () => {
+        await page.route("**/api/jobs?*", (route) => route.fulfill({ json: jobs }));
+      });
+      await openView(page, "download");
+      const gated = page.locator("#jobList [data-download-error='hf_approval_required']");
+      await expect(gated).toContainText("需要申请访问权限");
+      await expect(gated).not.toContainText("Access approval required");
+      await expect(gated).toContainText("需要先在 Hugging Face 模型页申请访问权限并等待批准。");
+      await expect(gated).toContainText("此错误不会自动重试");
+      await expect(page.locator("#jobList .job-row").filter({ has: page.locator("[data-download-error='hf_approval_required']") })).not.toContainText("自动重试 0/2");
+      const derived = page.locator("#jobList [data-download-error='transfer_empty']");
+      await expect(derived).toContainText("传输为空");
+      await expect(derived).toContainText("下载结束但没有写入任何文件。");
+      await expect(derived).not.toContainText("此错误不会自动重试");
+      await expect(page.locator("#jobList .job-row").filter({ has: page.locator("[data-download-error='transfer_empty']") })).toContainText("自动重试 1/2");
+
+      await page.locator("#languageMode").selectOption("en-US");
+      await expect(gated).toContainText("Access approval required");
+      await expect(gated).toContainText("Request access on the Hugging Face model page and wait for approval.");
+      await expect(gated).toContainText("Not retried automatically");
+      await expect(derived).toContainText("The download finished without writing any file.");
+      await page.locator("#languageMode").selectOption("zh-CN");
+      expect(failures).toEqual([]);
+    });
+
+    test(`P0-13 ${label} mirror probe suggests and only Apply saves the setting`, async ({ page }) => {
+      const settingsWrites = [];
+      const { failures } = await openManagerPage(page, managers[label].url, async () => {
+        await page.route("**/api/download/settings", async (route) => {
+          if (route.request().method() === "POST") {
+            settingsWrites.push(requestBody(route.request()));
+            await route.fulfill({ json: { ok: true, ...requestBody(route.request()) } });
+            return;
+          }
+          await route.fulfill({ json: { queueMode: false, autoRetryCount: 2, autoRetryDelaySeconds: 10, hfMirror: false, hfTransfer: false, verifyChecksums: true, idleOnlyQueue: false } });
+        });
+        await page.route("**/api/download/mirror-probe", (route) => route.fulfill({
+          json: {
+            ok: true,
+            recommended: "mirror",
+            recommendedLabel: "hf-mirror.com",
+            official: { ok: true, ms: 900, bytesPerSec: 100_000 },
+            mirror: { ok: true, ms: 200, bytesPerSec: 2_000_000 },
+            modelscope: { ok: false, error: "HTTP 404" },
+            modelScopeRepo: "",
+          },
+        }));
+      });
+      await openView(page, "download");
+      const mirror = page.locator("#downloadHfMirror");
+      await expect(mirror).not.toBeChecked();
+      await page.locator("#downloadMirrorProbeBtn").click();
+      await expect(page.locator("#downloadMirrorProbeText")).toHaveText("镜像可用，建议开启");
+      await expect(page.locator("#downloadMirrorProbeSummary")).toContainText("镜像 200ms");
+      await page.waitForTimeout(300);
+      await expect(mirror).not.toBeChecked();
+      expect(settingsWrites, "a probe must not save settings").toEqual([]);
+      await page.locator("#downloadMirrorApplyBtn").click();
+      await expect.poll(() => settingsWrites.length).toBe(1);
+      expect(settingsWrites[0]).toMatchObject({ hfMirror: true });
+      await expect(mirror).toBeChecked();
+      await expect(page.locator("#downloadMirrorApplyBtn")).toBeHidden();
+      expect(failures).toEqual([]);
+    });
+
+    test(`P0-11 ${label} disk panel lists every storage root and addresses models by path`, async ({ page }) => {
+      const cleanups = [];
+      const upstreamQueries = [];
+      const gib = 1024 ** 3;
+      const diskUsage = {
+        ok: true,
+        root: "/srv/lib-a",
+        disk: { freeBytes: 400 * gib, totalBytes: 1000 * gib },
+        modelsBytes: 5 * gib,
+        models: [
+          { name: "alpha", path: "/srv/lib-a/alpha", rootId: "main", bytes: 5 * gib, sizeBytes: 5 * gib, incompleteFiles: 0, incompleteBytes: 0 },
+          { name: "beta", path: "/srv/lib-b/beta", rootId: "second", bytes: 2 * gib, sizeBytes: 2 * gib, incompleteFiles: 2, incompleteBytes: 1024 },
+        ],
+        roots: [
+          { id: "main", label: "Main library", path: "/srv/lib-a", default: true, legacy: false, available: true, freeBytes: 400 * gib, totalBytes: 1000 * gib, usedByModelsBytes: 5 * gib, modelCount: 1 },
+          { id: "second", label: "Second library", path: "/srv/lib-b", default: false, legacy: false, available: true, freeBytes: 50 * gib, totalBytes: 500 * gib, usedByModelsBytes: 2 * gib, modelCount: 1 },
+          { id: "legacy", label: "原模型库", path: "/srv/legacy", default: false, legacy: true, available: true, freeBytes: 50 * gib, totalBytes: 500 * gib, usedByModelsBytes: 0, modelCount: 0 },
+        ],
+        hfCache: { hubBytes: 0, xetBytes: 0, modelscopeBytes: 0 },
+        incompleteBytes: 0,
+        incompleteFiles: 0,
+      };
+      const { failures } = await openManagerPage(page, managers[label].url, async () => {
+        await page.route("**/api/models/disk-usage", (route) => route.fulfill({ json: diskUsage }));
+        await page.route("**/api/models/cleanup-incomplete", async (route) => {
+          cleanups.push(requestBody(route.request()));
+          await route.fulfill({ json: { ok: true, removed: ["a.incomplete", "b.incomplete"], removedBytes: 1024 } });
+        });
+        await page.route("**/api/models/upstream-status?*", async (route) => {
+          upstreamQueries.push(Object.fromEntries(new URL(route.request().url()).searchParams));
+          await route.fulfill({ json: { ok: true, updateAvailable: false, message: "up to date" } });
+        });
+      });
+      await openView(page, "models");
+      const roots = page.locator("#diskUsagePanel .disk-usage-roots");
+      await expect(roots.locator("thead th")).toHaveText(["存储位置", "可用", "模型占用"]);
+      await expect(roots.locator("tbody tr")).toHaveCount(3);
+      await expect(roots.locator("tbody tr").nth(0)).toContainText("Main library");
+      await expect(roots.locator("tbody tr").nth(0)).toContainText("默认");
+      await expect(roots.locator("tbody tr").nth(2)).toContainText("原模型库");
+      const rows = page.locator("#diskUsagePanel .disk-usage-row");
+      await expect(rows.filter({ hasText: "alpha" }).locator(".disk-usage-root")).toHaveText("Main library");
+      await expect(rows.filter({ hasText: "beta" }).locator(".disk-usage-root")).toHaveText("Second library");
+      await rows.filter({ hasText: "beta" }).locator("[data-disk-action='cleanup']").click();
+      await expect.poll(() => cleanups.length).toBe(1);
+      expect(cleanups[0]).toEqual({ path: "/srv/lib-b/beta", name: "beta" });
+      await rows.filter({ hasText: "alpha" }).locator("[data-disk-action='upstream']").click();
+      await expect.poll(() => upstreamQueries.length).toBe(1);
+      expect(upstreamQueries[0]).toEqual({ name: "alpha", path: "/srv/lib-a/alpha" });
+      expect(failures).toEqual([]);
+    });
+  }
+
+  test("P0-13 vLLM download request carries the chosen priority", async ({ page }) => {
+    const downloads = [];
+    const { failures } = await openManagerPage(page, managers.vLLM.url, async () => {
+      await page.route("**/api/download", async (route) => {
+        downloads.push(requestBody(route.request()));
+        await route.fulfill({ json: { ok: true, job: { id: "dl-1" } } });
+      });
+    });
+    await openView(page, "download");
+    await page.locator("#downloadModel").fill("example/tiny-model");
+    await page.locator("#downloadPriority").selectOption("high");
+    await page.locator("#downloadForm button[type='submit']").click();
+    await expect.poll(() => downloads.length).toBe(1);
+    expect(downloads[0]).toMatchObject({ model: "example/tiny-model", priority: "high" });
+    expect(failures).toEqual([]);
+  });
+
+  test("P0-12 llama presets point at GGUF repositories with a quant that exists", async ({ page }) => {
+    const { failures } = await openManagerPage(page, managers.llama.url);
+    await expect(page.locator("#startModel")).toHaveValue("Qwen/Qwen3-0.6B-GGUF");
+    await openView(page, "download");
+    await expect(page.locator("#downloadModel")).toHaveValue("Qwen/Qwen3-0.6B-GGUF");
+    await expect(page.locator("#downloadPrecision")).toHaveValue("q8_0");
+    await page.locator("#downloadSpec").selectOption("8B");
+    await expect(page.locator("#downloadModel")).toHaveValue("Qwen/Qwen3-8B-GGUF");
+    await expect(page.locator("#downloadPrecision")).toHaveValue("q4_k_m");
+    await page.locator("#downloadDeveloper").selectOption("Meta");
+    await expect(page.locator("#downloadModel")).toHaveValue("bartowski/Meta-Llama-3.1-8B-Instruct-GGUF");
+    await expect(page.locator("#downloadPrecision")).toHaveValue("q4_k_m");
+    await expect(page.locator("#downloadPresetHint")).not.toContainText("授权 token");
+    expect(failures).toEqual([]);
+  });
+
+  test("P0-15 llama shows an unverified GGUF architecture as unknown, not compatible", async ({ page }) => {
+    const { failures } = await openManagerPage(page, managers.llama.url, async () => {
+      await page.route("**/api/models", (route) => route.fulfill({
+        json: {
+          local: [{
+            id: "newarch-model",
+            label: "newarch-model",
+            path: "D:/models/newarch-model",
+            launchModel: "D:/models/newarch-model/newarch.Q4_K_M.gguf",
+            hasGguf: true,
+            size: 4_000_000_000,
+            ggufVariants: [{
+              launchModel: "D:/models/newarch-model/newarch.Q4_K_M.gguf",
+              name: "newarch.Q4_K_M.gguf",
+              fileBytes: 4_000_000_000,
+              architecture: "newarch",
+              runtimeCompatibility: {
+                status: "unknown",
+                supported: null,
+                message: "newarch 不在已验证的架构列表中，能否运行取决于当前 llama.cpp 版本。 / newarch is not in the verified architecture list. Whether it runs depends on the current llama.cpp build.",
+              },
+            }],
+          }],
+          cached: [],
+        },
+      }));
+    });
+    await openView(page, "models");
+    const badge = page.locator("#modelList .runtime-compat").first();
+    await expect(badge).toHaveText("未知（未验证）");
+    await expect(badge).toHaveClass(/runtime-compat-warn/);
+    await expect(page.locator("#modelList .runtime-compat-ok")).toHaveCount(0);
     expect(failures).toEqual([]);
   });
 });

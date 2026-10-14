@@ -751,8 +751,13 @@
                 <label class="check-row" title="开启 Hugging Face Xet 高性能分块下载（大文件更快）"><input id="downloadHfTransfer" type="checkbox" /><span>启用 Xet 高性能下载</span></label>
                 <label class="check-row" title="下载完成后按 Hugging Face LFS 清单逐文件校验 SHA256；发现损坏文件会自动删除并按重试策略只重下这些文件"><input id="downloadVerifyChecksums" type="checkbox" checked /><span>完成后 SHA256 校验</span></label>
                 <label class="check-row" title="排队中的下载只在模型服务空闲（没有请求在处理）时自动开始，避免和推理抢带宽与磁盘"><input id="downloadIdleOnlyQueue" type="checkbox" /><span>模型空闲时才开始队列</span></label>
-                <button class="ghost-mini-button" id="downloadMirrorProbeBtn" type="button" title="对 huggingface.co 与 hf-mirror.com 各做一次计时下载并自动选择更快的一侧"><i data-lucide="gauge"></i><span>测速选镜像</span></button>
+                <button class="ghost-mini-button" id="downloadMirrorProbeBtn" type="button" title="对 huggingface.co、hf-mirror.com 和 ModelScope 各做一次计时下载并给出建议；点「应用建议」才会修改设置"><i data-lucide="gauge"></i><span>镜像测速</span></button>
                 <button class="ghost-mini-button" id="downloadNotifyBtn" type="button" title="页面在后台时，下载结束弹系统通知"><i data-lucide="bell"></i><span>开启完成通知</span></button>
+              </div>
+              <div class="selection-hint mirror-probe-result" id="downloadMirrorProbeResult" style="display: none" aria-live="polite">
+                <strong id="downloadMirrorProbeText"></strong>
+                <span id="downloadMirrorProbeSummary"></span>
+                <button class="ghost-mini-button" id="downloadMirrorApplyBtn" type="button" style="display: none">应用建议</button>
               </div>
               <div class="link-resolver">
                 <label>
@@ -1318,7 +1323,7 @@
     <script src="/js/model-utils.js?v=20260615-model-utils" defer></script>
     <script src="/shared-js/gpu-planning-utils.js?v=20260615-gpu-planning" defer></script>
     <script src="/js/job-utils.js?v=20260615-job-utils" defer></script>
-    <script src="/shared-js/job-renderer.js?v=20260822-ui-round5" defer></script>
+    <script src="/shared-js/job-renderer.js?v=20261014-p0-ui" defer></script>
     <script src="/shared-js/local-model-renderer.js?v=20260615-local-models" defer></script>
     <script src="/shared-js/model-picker-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/remote-model-renderer.js?v=20260615-remote-models" defer></script>

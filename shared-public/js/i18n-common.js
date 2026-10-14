@@ -350,6 +350,26 @@ const UI_TEXT_TRANSLATIONS = {
   "日志": "Logs",
   "查看此实例的日志": "Show this instance's logs",
   "查看主实例日志": "Show primary instance logs",
+  // 下载失败卡片、镜像测速建议、多存储位置磁盘面板（08 P0-8 / P0-13 / P0-11）
+  "此错误不会自动重试": "Not retried automatically",
+  "镜像测速": "Test mirror speed",
+  "对 huggingface.co、hf-mirror.com 和 ModelScope 各做一次计时下载并给出建议；点「应用建议」才会修改设置": "Times one download from huggingface.co, hf-mirror.com and ModelScope and suggests the fastest; settings change only when you click “Apply suggestion”",
+  "应用建议": "Apply suggestion",
+  "已应用测速建议": "Suggestion applied",
+  "应用测速建议失败": "Could not apply the suggestion",
+  "镜像可用，建议开启": "Mirror reachable, recommended",
+  "镜像不可用": "Mirror unreachable",
+  "镜像可用，但官方源更快，建议关闭镜像": "Mirror reachable, but the official source is faster; turning the mirror off is recommended",
+  "ModelScope 更快，建议改用 ModelScope 下载": "ModelScope is faster; downloading from ModelScope is recommended",
+  "存储位置": "Storage location",
+  "模型占用": "Used by models",
+  "默认": "Default",
+  "不可用": "Unavailable",
+  "原模型库": "Original model library",
+  // GGUF 架构不在已验证列表（08 P0-15）与下载前预检文案（08 P0-14）
+  "未知（未验证）": "Unknown (unverified)",
+  "该架构不在已验证的架构列表中，能否运行取决于当前 llama.cpp 版本。": "This architecture is not in the verified architecture list. Whether it runs depends on the current llama.cpp build.",
+  "需要在启动参数中勾选 trust-remote-code（会执行仓库内的 Python 代码）。": "Enable trust-remote-code in the launch options (this runs Python code from the repository).",
   "测速历史与配置对比": "Benchmark history and configuration comparison",
   "每次测速都会连同当时的启动参数一起保存。勾选两条以上即可看出\"改了哪个参数、快了多少\"。": "Every benchmark is stored with the launch settings it ran under. Select two or more to see which setting changed and how much it helped.",
   "暂无测速记录。跑一次测速后，这里会连同当时的启动参数一起保存，供后续对比。": "No benchmark runs yet. After a run, it is stored here together with its launch settings for later comparison.",
@@ -896,6 +916,11 @@ const UI_TRANSLATION_PATTERNS = [
   [/^将按释放前的启动参数重新启动 (.+)。加载需要时间，期间会占用显存。$/u, "$1 will start again with the launch settings it had before release. Loading takes a while and uses VRAM meanwhile."],
   [/^将删除 (.+) 的休眠记录，之后无法一键唤醒（模型文件和启动方案不受影响）。$/u, "The release record of $1 will be deleted, so it can no longer be woken with one click (model files and launch profiles are not affected)."],
   [/^实例：(.+)$/u, "Instance: $1"],
+  [/^官方 (.+) · 镜像 (.+) · ModelScope (.+)$/u, (match, official, mirror, modelscope) => {
+    const probe = (value) => value.replace(/^失败（(.*)）$/u, (_all, reason) => `failed (${reason === "无响应" ? "no response" : reason})`);
+    return `Official ${probe(official)} · Mirror ${probe(mirror)} · ModelScope ${probe(modelscope)}`;
+  }],
+  [/^(.+)，置信度：按名称推断（未验证）。$/u, "$1, confidence: inferred from the name (unverified)."],
   // 闲置释放 / 测速历史：句子里带数值，只能按模式翻译
   [/^已开启：空闲超过 (.+) 分钟且没有排队请求的实例会被释放，启动参数会保留以便唤醒。$/u, "On: an instance idle for more than $1 minutes with nothing queued is released, and its launch settings are kept so it can be woken."],
   [/^(.+) 释放 · 约 (.+) GB 显存已释放 · 空闲 (.+) 分钟$/u, "Released $1 · about $2 GB of VRAM freed · idle $3 minutes"],
@@ -984,6 +1009,9 @@ const UI_TRANSLATION_PATTERNS = [
   [/^在线查找 (.+) 的 (.+) GGUF$/u, "Find $1 $2 GGUF online"],
   [/^没有匹配 (.+) 的文件，请换真实 GGUF 仓库或改成下载整个仓库。 模型盘剩余 (.+)。$/u, "No files match $1. Choose an actual GGUF repository or download the whole repository. Model drive free: $2."],
   [/^只下载匹配 (.+) 的文件。当前元数据没有匹配文件，请先确认仓库内真的存在 (.+)。$/u, "Download only files matching $1. No current metadata matches; confirm that $2 actually exists in the repository."],
+  // The GGUF presets (08 P0-12) now match files, so the matched form shows by default.
+  [/^只下载匹配 (.+) 的文件。当前元数据匹配 (\d+)\/(\d+) 个文件。$/u, "Download only files matching $1. Current metadata matches $2 of $3 files."],
+  [/^只下载匹配 (.+) 的文件。下载时会给 hf CLI 附加 include 过滤。$/u, "Download only files matching $1. The hf CLI gets an include filter at download time."],
   [/^自动重试 (\d+)\/(\d+) · 计划 (.+)$/u, "Automatic retry $1/$2 · Scheduled $3"],
   [/^自动重试 (.+)\/(.+)$/u, "Automatic retry $1/$2"],
   [/^温度 (.+)$/u, "Temperature $1"],
@@ -1029,6 +1057,17 @@ const UI_TRANSLATION_PATTERNS = [
 ];
 
 const UI_PARTIAL_TRANSLATIONS = [
+  // llama.cpp 下载预设说明（catalog.js MODEL_PRESETS）
+  [/单卡友好的日常中文模型。/g, "A single-GPU-friendly everyday Chinese model."],
+  [/质量和速度比较均衡。/g, "A good balance of quality and speed."],
+  [/更强推理，建议高显存或量化。/g, "Stronger reasoning; use a high-VRAM GPU or quantization."],
+  [/适合多卡或量化部署。/g, "Suited to multi-GPU or quantized deployment."],
+  [/推理蒸馏小规格。/g, "A small reasoning-distilled model."],
+  [/推理能力更稳，显存需求更高。/g, "Steadier reasoning with higher VRAM needs."],
+  [/建议多卡或量化版本。/g, "Multi-GPU or a quantized build is recommended."],
+  [/英文和通用任务稳定。/g, "Stable for English and general tasks."],
+  [/轻量 instruction 模型。/g, "A lightweight instruction model."],
+  [/中等规模通用模型，建议高显存。/g, "A mid-size general model; high VRAM recommended."],
   [/发现需要处理的问题/g, "Issues need attention"],
   [/Docker Desktop 引擎未就绪。请先用页面的一键 Docker 按钮启动 Docker Desktop，等状态变为可用后再启动模型。/g, "Docker Desktop is not ready. Start Docker Desktop with the Docker button, wait until it is available, then start the model."],
   [/已定稿 /g, "Finalized "],

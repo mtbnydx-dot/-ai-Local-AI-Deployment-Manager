@@ -190,6 +190,7 @@ const jobRenderer = window.LocalAiJobRenderer.create({
   showMeta: true,
   showLogActions: true,
   showVerifyActions: true,
+  getLanguage: effectiveLanguage,
 });
 const serviceExposureRenderer = window.LocalAiServiceExposureRenderer.create({
   $,
@@ -1119,6 +1120,8 @@ function bindEvents() {
     state.uiPrefs.language = event.currentTarget.value || "auto";
     localStorage.setItem("llamaLanguageMode", state.uiPrefs.language);
     applyLanguageMode();
+    // Download failure hints come from job meta in both languages.
+    renderJobs();
   });
   $("#modelPickerToggle")?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -1322,6 +1325,7 @@ function bindEvents() {
   $("#downloadVerifyChecksums")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadIdleOnlyQueue")?.addEventListener("change", saveDownloadQueueMode);
   $("#downloadMirrorProbeBtn")?.addEventListener("click", probeDownloadMirror);
+  $("#downloadMirrorApplyBtn")?.addEventListener("click", () => applyMirrorProbeSuggestion().catch((error) => reportActionError("应用测速建议失败", error)));
   $("#downloadNotifyBtn")?.addEventListener("click", enableDownloadNotifications);
   if ("Notification" in window && Notification.permission === "granted" && $("#downloadNotifyBtn")) $("#downloadNotifyBtn").hidden = true;
   $("#multiGpuMode").addEventListener("change", () => {
@@ -2101,15 +2105,26 @@ function renderDiskUsage(data) {
   const pct = (value) => total ? Math.max(0, Math.min(100, (value / total) * 100)) : 0;
   const cache = data.hfCache || {};
   const cacheTotal = Number(cache.hubBytes || 0) + Number(cache.xetBytes || 0) + Number(cache.modelscopeBytes || 0);
+  // Models from every storage root (08 P0-11): each row names its root, and
+  // the actions address the directory by path so they work outside the
+  // legacy models root too.
+  const roots = Array.isArray(data.roots) ? data.roots : [];
+  const rootLabels = new Map(roots.map((item) => [item.id, item.label || item.id]));
   const rows = (data.models || []).slice(0, 8).map((model) => `
     <div class="disk-usage-row">
-      <span class="disk-usage-name" title="${escapeAttr(model.path)}">${escapeHtml(model.name)}</span>
+      <span class="disk-usage-name" title="${escapeAttr(model.path)}">${escapeHtml(model.name)}${rootLabels.has(model.rootId) ? ` · <small class="disk-usage-root">${escapeHtml(rootLabels.get(model.rootId))}</small>` : ""}</span>
       <span class="disk-usage-size">${escapeHtml(fmtBytes(model.bytes))}</span>
       <span class="disk-usage-actions">
-        ${model.incompleteFiles > 0 ? `<button type="button" class="job-action-button" data-disk-action="cleanup" data-model="${escapeAttr(model.name)}" title="删除 ${model.incompleteFiles} 个 .incomplete 残留（${escapeAttr(fmtBytes(model.incompleteBytes))}）">清理残留</button>` : ""}
-        <button type="button" class="job-action-button" data-disk-action="upstream" data-model="${escapeAttr(model.name)}" title="对比 Hugging Face 上游是否有更新">检查更新</button>
+        ${model.incompleteFiles > 0 ? `<button type="button" class="job-action-button" data-disk-action="cleanup" data-model="${escapeAttr(model.name)}" data-path="${escapeAttr(model.path || "")}" title="删除 ${model.incompleteFiles} 个 .incomplete 残留（${escapeAttr(fmtBytes(model.incompleteBytes))}）">清理残留</button>` : ""}
+        <button type="button" class="job-action-button" data-disk-action="upstream" data-model="${escapeAttr(model.name)}" data-path="${escapeAttr(model.path || "")}" title="对比 Hugging Face 上游是否有更新">检查更新</button>
       </span>
     </div>`).join("");
+  const rootRows = roots.map((item) => `
+    <tr data-root-id="${escapeAttr(item.id)}">
+      <td title="${escapeAttr(item.path || "")}"><span>${escapeHtml(item.label || item.id)}</span>${item.default ? ` <span class="pill">默认</span>` : ""}${item.available === false ? ` <span class="pill warn">不可用</span>` : ""}</td>
+      <td>${item.available === false || item.freeBytes == null ? "-" : `${escapeHtml(fmtBytes(item.freeBytes))} / ${escapeHtml(fmtBytes(item.totalBytes || 0))}`}</td>
+      <td>${escapeHtml(fmtBytes(item.usedByModelsBytes || 0))}</td>
+    </tr>`).join("");
   const hidden = Math.max(0, (data.models || []).length - 8);
   root.innerHTML = `
     ${total ? `
@@ -2123,6 +2138,11 @@ function renderDiskUsage(data) {
         <span><i class="dot other"></i>其他 ${escapeHtml(fmtBytes(otherBytes))}</span>
         <span><i class="dot free"></i>剩余 ${escapeHtml(fmtBytes(free))} / ${escapeHtml(fmtBytes(total))}</span>
       </div>` : ""}
+    ${roots.length ? `
+      <table class="disk-usage-roots" style="width: 100%; text-align: left">
+        <thead><tr><th style="text-align: left">存储位置</th><th style="text-align: left">可用</th><th style="text-align: left">模型占用</th></tr></thead>
+        <tbody>${rootRows}</tbody>
+      </table>` : ""}
     <div class="disk-usage-meta">HF 缓存 ${escapeHtml(fmtBytes(cacheTotal))}（hub ${escapeHtml(fmtBytes(Number(cache.hubBytes || 0)))} · Xet ${escapeHtml(fmtBytes(Number(cache.xetBytes || 0)))}）${data.incompleteFiles ? ` · 残留 ${data.incompleteFiles} 个 .incomplete / ${escapeHtml(fmtBytes(data.incompleteBytes))}` : " · 无 .incomplete 残留"}</div>
     <div class="disk-usage-list">${rows || `<div class="empty compact">模型目录为空。</div>`}</div>
     ${hidden ? `<div class="disk-usage-meta">还有 ${hidden} 个较小目录未列出。</div>` : ""}
@@ -2133,10 +2153,11 @@ async function handleDiskUsageAction(event) {
   const button = event.target.closest("[data-disk-action]");
   if (!button) return;
   const name = button.dataset.model || "";
+  const modelPath = button.dataset.path || "";
   if (button.dataset.diskAction === "cleanup") {
     const clearBusy = setButtonBusy(button, "清理中...");
     try {
-      const result = await api("/api/models/cleanup-incomplete", { method: "POST", body: JSON.stringify({ name }) });
+      const result = await api("/api/models/cleanup-incomplete", { method: "POST", body: JSON.stringify(modelPath ? { path: modelPath, name } : { name }) });
       notify("残留清理完成", `${name} · 删除 ${result.removed?.length || 0} 个文件 / ${fmtBytes(result.removedBytes || 0)}`, "success");
       await refreshDiskUsage();
     } catch (error) {
@@ -2149,7 +2170,9 @@ async function handleDiskUsageAction(event) {
   if (button.dataset.diskAction === "upstream") {
     const clearBusy = setButtonBusy(button, "检查中...");
     try {
-      const result = await api(`/api/models/upstream-status?name=${encodeURIComponent(name)}`);
+      const query = new URLSearchParams({ name });
+      if (modelPath) query.set("path", modelPath);
+      const result = await api(`/api/models/upstream-status?${query}`);
       notify(
         result.ok ? (result.updateAvailable ? "上游有更新" : result.updateAvailable === false ? "本地已是最新" : "无法比对时间") : "无法检查更新",
         result.message || "",
@@ -2171,27 +2194,57 @@ async function probeDownloadMirror(event) {
       method: "POST",
       body: JSON.stringify(model.includes("/") ? { model } : {}),
     });
-    const fmtProbe = (item) => item?.ok
-      ? `${Math.round(item.ms)}ms / ${fmtBytes(item.bytesPerSec)}\/s`
-      : `失败（${item?.error || "无响应"}）`;
-    const useMirror = result.recommended === "mirror";
-    if ($("#downloadHfMirror")) $("#downloadHfMirror").checked = useMirror;
-    await saveDownloadQueueMode();
-    const summary = `官方 ${fmtProbe(result.official)} · 镜像 ${fmtProbe(result.mirror)} · ModelScope ${fmtProbe(result.modelscope)}`;
-    // ModelScope 明显更快且找到了同源仓：直接把来源和仓库切过去，估算会随之刷新。
-    if (result.recommended === "modelscope" && result.modelScopeRepo && model.includes("/") && $("#downloadSource") && $("#downloadModel")) {
-      $("#downloadSource").value = "modelscope";
-      $("#downloadModel").value = result.modelScopeRepo;
-      scheduleDownloadEstimate();
-      notify("ModelScope 更快，已切换下载来源", `${summary}；仓库 ${result.modelScopeRepo}`, "success");
-    } else {
-      notify(`已选择 ${result.recommendedLabel}`, summary, "success");
-    }
+    renderMirrorProbeResult(result, model);
   } catch (error) {
     reportActionError("镜像测速失败", error);
   } finally {
     clearBusy();
   }
+}
+
+function mirrorProbeSuggestion(result, model) {
+  if (result.recommended === "modelscope" && result.modelScopeRepo && model.includes("/")) {
+    return { kind: "modelscope", text: "ModelScope 更快，建议改用 ModelScope 下载", repo: result.modelScopeRepo };
+  }
+  if (result.recommended === "mirror") return { kind: "mirror", text: "镜像可用，建议开启", hfMirror: true };
+  if (!result.mirror?.ok) return { kind: "official", text: "镜像不可用", hfMirror: false };
+  return { kind: "official", text: "镜像可用，但官方源更快，建议关闭镜像", hfMirror: false };
+}
+
+function renderMirrorProbeResult(result, model) {
+  const fmtProbe = (item) => item?.ok
+    ? `${Math.round(item.ms)}ms / ${fmtBytes(item.bytesPerSec)}\/s`
+    : `失败（${item?.error || "无响应"}）`;
+  const suggestion = mirrorProbeSuggestion(result, model);
+  const changesSomething = suggestion.kind === "modelscope"
+    ? $("#downloadSource")?.value !== "modelscope" || $("#downloadModel")?.value.trim() !== suggestion.repo
+    : Boolean($("#downloadHfMirror")) && $("#downloadHfMirror").checked !== suggestion.hfMirror;
+  state.mirrorProbeSuggestion = changesSomething ? suggestion : null;
+  const box = $("#downloadMirrorProbeResult");
+  if (box) box.style.display = "";
+  const text = $("#downloadMirrorProbeText");
+  if (text) text.textContent = suggestion.text;
+  const summary = $("#downloadMirrorProbeSummary");
+  if (summary) summary.textContent = `官方 ${fmtProbe(result.official)} · 镜像 ${fmtProbe(result.mirror)} · ModelScope ${fmtProbe(result.modelscope)}`;
+  const apply = $("#downloadMirrorApplyBtn");
+  if (apply) apply.style.display = changesSomething ? "" : "none";
+}
+
+async function applyMirrorProbeSuggestion() {
+  const suggestion = state.mirrorProbeSuggestion;
+  if (!suggestion) return;
+  state.mirrorProbeSuggestion = null;
+  const apply = $("#downloadMirrorApplyBtn");
+  if (apply) apply.style.display = "none";
+  if (suggestion.kind === "modelscope") {
+    if ($("#downloadSource")) $("#downloadSource").value = "modelscope";
+    if ($("#downloadModel")) $("#downloadModel").value = suggestion.repo;
+    scheduleDownloadEstimate();
+  } else if ($("#downloadHfMirror")) {
+    $("#downloadHfMirror").checked = suggestion.hfMirror;
+    await saveDownloadQueueMode();
+  }
+  notify("已应用测速建议", suggestion.text, "success");
 }
 
 async function loadDownloadSettings() {
