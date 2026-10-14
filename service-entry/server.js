@@ -163,7 +163,7 @@ const ROUTE_MODULES = [
   "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
   "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
   "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
-  // "./lib/engine-routes",       // 01 ENG-19
+  "./lib/engine-routes", // 01 ENG-19  /api/engines, /api/engines/external/endpoints
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
   "./lib/telemetry-routes", // 04 TEL-18  /api/telemetry/import (TEL-11 adds the query routes)
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
