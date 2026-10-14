@@ -191,7 +191,8 @@ test("secrets travel by name only and come back for the docker child and the red
   );
   const runArgs = renderRunArgs(command);
   const imageIndex = runArgs.indexOf("llama:pinned");
-  assert.deepEqual(runArgs.slice(imageIndex - 4, imageIndex), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
+  // The four launch identity label pairs (01 §15.2) follow the secret env names.
+  assert.deepEqual(runArgs.slice(imageIndex - 12, imageIndex - 8), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
   assert.deepEqual(command.secretEnv, { HF_TOKEN: FAKE_HF_TOKEN, LLAMA_API_KEY: FAKE_API_KEY });
   assert.deepEqual([...command.redactions].sort(), [FAKE_API_KEY, FAKE_HF_TOKEN].sort());
   assert.equal(JSON.stringify(runArgs).includes(FAKE_API_KEY), false);

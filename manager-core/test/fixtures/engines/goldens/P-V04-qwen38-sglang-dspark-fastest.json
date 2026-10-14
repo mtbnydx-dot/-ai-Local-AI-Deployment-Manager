@@ -101,6 +101,14 @@
       "ai.sglang.ple-offload-embedding=false",
       "-v",
       "C:\\fixture\\ai\\cache\\sglang-qwen38:/root/.cache",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=sglang",
+      "--label",
+      "ai.manager.recipe=qwen38-dspark-sglang",
+      "--label",
+      "ai.manager.runtime-id=sglang@0.5.17",
       "--entrypoint",
       "sglang",
       "lmsysorg/sglang@sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df",
@@ -247,6 +255,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

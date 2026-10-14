@@ -166,6 +166,14 @@
       "VLLM_API_KEY",
       "-e",
       "VLLM_TEST=1",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=vllm",
+      "--label",
+      "ai.manager.recipe=",
+      "--label",
+      "ai.manager.runtime-id=vllm@custom",
       "vllm/custom:pinned",
       "--model",
       "/models/qwen/model.gguf",
@@ -277,6 +285,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

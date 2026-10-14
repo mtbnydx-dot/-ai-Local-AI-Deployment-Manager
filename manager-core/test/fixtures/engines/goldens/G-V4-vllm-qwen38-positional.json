@@ -123,6 +123,14 @@
       "D:/AI/models:/models",
       "-v",
       "D:/AI/cache/vllm-qwen38:/root/.cache/vllm",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=vllm",
+      "--label",
+      "ai.manager.recipe=qwen38-vllm-mtp3",
+      "--label",
+      "ai.manager.runtime-id=vllm@custom",
       "vllm/qwen38:fixed",
       "/models/Qwen-Qwen3.8-27B-FP8",
       "--served-model-name",
@@ -196,6 +204,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

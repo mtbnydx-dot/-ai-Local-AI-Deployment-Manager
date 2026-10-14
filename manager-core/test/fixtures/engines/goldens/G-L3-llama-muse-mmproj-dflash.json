@@ -177,6 +177,14 @@
       "CUDA_VISIBLE_DEVICES=0",
       "-e",
       "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=llamacpp",
+      "--label",
+      "ai.manager.recipe=llama-muse-glimmer",
+      "--label",
+      "ai.manager.runtime-id=llamacpp@muse-62bf73d",
       "local/llama.cpp:server-cuda-muse-62bf73d",
       "--model",
       "/models/muse/muse-glimmer-dynamic.gguf",
@@ -252,6 +260,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

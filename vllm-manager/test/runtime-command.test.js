@@ -162,6 +162,9 @@ test("vLLM runtime argv is fixed and never carries the API key or HF token value
       "-p", "127.0.0.1:8001:8000", "-v", "C:/cache/hf:/root/.cache/huggingface", "-v", "C:/store:/models",
       ...labelArgs,
       ...envFlags,
+      // The launch identity labels (01 §15.2) are the last docker flags.
+      "--label", "ai.manager.launch-id=", "--label", "ai.manager.engine-id=vllm", "--label", "ai.manager.recipe=",
+      "--label", "ai.manager.runtime-id=vllm@custom",
       "vllm/default:fixed", "--model", "/models/qwen", "--served-model-name", "qwen-local", "--dtype", "auto",
       "--max-model-len", "32768", "--max-num-seqs", "4", "--gpu-memory-utilization", "0.9",
     ];

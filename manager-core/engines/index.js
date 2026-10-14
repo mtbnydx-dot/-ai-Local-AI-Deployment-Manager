@@ -16,6 +16,7 @@ const descriptorSchema = require("./descriptor-schema");
 const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
 const dockerHost = require("./hosts/docker");
+const launchStore = require("./launch-store");
 const legacyAliases = require("./legacy-aliases");
 const memoryModels = require("./memory-models");
 const metrics = require("./metrics");
@@ -112,6 +113,10 @@ module.exports = {
   adapters,
   adapterFor,
   renderRunArgs: dockerSegments.renderRunArgs,
+  LAUNCH_LABEL_KEYS: dockerSegments.LAUNCH_LABEL_KEYS,
+  // LaunchStore (01 §15): launch records, launch-id adoption and the wake plan.
+  launchStore,
+  createLaunchStore: launchStore.createLaunchStore,
   // RuntimeHosts (01 §13): DockerHost for Docker Desktop and docker in WSL,
   // configured by createDockerHostConfig (env > platform.json docker > Desktop).
   hosts,

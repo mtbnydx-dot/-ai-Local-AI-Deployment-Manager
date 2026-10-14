@@ -101,6 +101,14 @@
       "ai.sglang.ple-offload-embedding=true",
       "-v",
       "C:\\fixture\\ai\\cache\\sglang-qwen38:/root/.cache",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=sglang",
+      "--label",
+      "ai.manager.recipe=qwen38-flashnext-262k",
+      "--label",
+      "ai.manager.runtime-id=sglang@qwen38flashnext-sm120-dac5523d",
       "--entrypoint",
       "sglang",
       "local/sglang:qwen38flashnext-sm120-dac5523d",
@@ -255,6 +263,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

@@ -105,6 +105,14 @@
       "CUDA_VISIBLE_DEVICES=0,1",
       "-e",
       "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=llamacpp",
+      "--label",
+      "ai.manager.recipe=",
+      "--label",
+      "ai.manager.runtime-id=llamacpp@b10630",
       "ghcr.io/ggml-org/llama.cpp@sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3",
       "--model",
       "/models/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf",
@@ -318,6 +326,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

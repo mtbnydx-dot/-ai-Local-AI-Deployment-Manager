@@ -91,6 +91,14 @@
       "C:\\fixture\\models:/models",
       "-v",
       "C:\\fixture\\ai\\cache\\vllm-qwen38:/root/.cache/vllm",
+      "--label",
+      "ai.manager.launch-id=",
+      "--label",
+      "ai.manager.engine-id=vllm",
+      "--label",
+      "ai.manager.recipe=",
+      "--label",
+      "ai.manager.runtime-id=vllm@0.28.0",
       "vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
       "--model",
       "/models/Meta-Llama-3-8B-Instruct",
@@ -197,6 +205,10 @@
     {
       "at": "2026-10-14",
       "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "launch-id labels"
     }
   ]
 }

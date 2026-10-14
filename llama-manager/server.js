@@ -151,6 +151,7 @@ const CONFIG = {
   claudeCompressionSettings: path.join(__dirname, "logs", "claude-context-compression.json"),
   launchProfiles: path.join(__dirname, "logs", "launch-profiles.json"),
   recentLaunches: path.join(__dirname, "logs", "recent-launches.json"),
+  launchStore: path.join(__dirname, "logs", "launch-store.json"),
   modelNotes: path.join(__dirname, "logs", "model-notes.json"),
   automationSettings: path.join(__dirname, "logs", "automation-settings.json"),
   serviceExposureSettings: path.join(__dirname, "logs", "service-exposure-settings.json"),
@@ -174,6 +175,25 @@ const runtimeSecretList = core.createCachedSecretList({
 });
 const runtimeApiKeyStore = runtimeSecretList.store;
 const runtimeSecretRedactor = core.createSecretRedactor({ getSecrets: runtimeSecretList.getSecrets });
+// LaunchStore (01 §15): one record per launch, linked to its container by the
+// ai.manager.launch-id label. Idle wake reads it; containers started by older
+// code are adopted. Store failures are logged and never fail a launch.
+const launchStore = core.engines.createLaunchStore({
+  file: CONFIG.launchStore,
+  managerId: CONFIG.managerId,
+  normalizeConfig: (config) => normalizeLaunchConfig(config),
+  toContainerPath: (value) => windowsPathToContainerPath(value),
+  secretValues: () => runtimeSecretList.getSecrets(),
+  log: (message) => console.warn(`[launch-store] ${message}`),
+});
+function trackLaunch(action) {
+  try {
+    return action();
+  } catch (error) {
+    console.warn(`[launch-store] ${error.message}`);
+    return null;
+  }
+}
 const billingClient = core.createBillingClient({
   managerId: CONFIG.managerId,
   root: DEFAULT_AI_ROOT,
@@ -1718,6 +1738,9 @@ const idleUnloadController = core.createIdleUnloadController({
     apiKeyRefLabelKey: MANAGER_APIKEY_REF_LABEL_KEY,
     apiKeyLabelKey: MANAGER_APIKEY_LABEL_KEY,
     listRecentLaunches: () => recentLaunches,
+    // 01 ENG-8: the wake plan comes from LaunchStore (launch-id label first).
+    launchStore,
+    jobsLedgerLookup: (jobId) => jobs.get(jobId) || null,
     getContainerStatus: (containerName) => getContainerStatusFresh(containerName),
     secretStore: runtimeApiKeyStore,
     startRuntimeRequest: (request) => startRuntimeRequest(request),
@@ -1877,6 +1900,12 @@ async function loadRecentLaunches() {
 function recordRecentLaunch(meta) {
   if (!meta || !meta.model) return;
   clearRuntimeInstancesCache();
+  if (meta.launchId) {
+    trackLaunch(() => launchStore.markStatus(meta.launchId, "running", {
+      event: "ready",
+      patch: { containerName: String(meta.containerName || CONFIG.containerName) },
+    }));
+  }
   const config = normalizeLaunchConfig(meta);
   const entry = {
     model: config.model,
@@ -3764,7 +3793,11 @@ function finishJob(job, meta = {}) {
 function failJob(job, error) {
   // 下载失败要带上新鲜的 failedAt，否则自动续传会把它当成重启前的旧任务跳过。
   if (job?.type === "download" && job.meta) job.meta.failedAt = Date.now();
-  return jobsLedgerStore.failJob(job, error);
+  const result = jobsLedgerStore.failJob(job, error);
+  if (job?.type === "serve" && job.meta?.launchId) {
+    trackLaunch(() => launchStore.markStatus(job.meta.launchId, "failed", { event: "failed", detail: job.error || "" }));
+  }
+  return result;
 }
 
 function setJobProgress(job, progress = {}) {
@@ -4064,6 +4097,9 @@ async function runStartJobOnce(job, opts) {
     appendLog(job, `任务已不再运行（status=${job.status}），跳过启动。`);
     return;
   }
+  // The launch record and its id (job.meta.launchId), which the builder emits
+  // as the ai.manager.launch-id label.
+  trackLaunch(() => launchStore.beginLaunch(job, opts));
   setJobProgress(job, {
     percent: 3,
     stage: "准备启动",
@@ -4130,6 +4166,8 @@ async function runStartJobOnce(job, opts) {
   }
 
   let { runArgs, activePublishArgs, runtimeImage, secretEnv } = buildLlamaRuntimeCommand(job, opts);
+
+  trackLaunch(() => launchStore.recordCommand(job.meta?.launchId, runArgs, { redact: (argv) => runtimeSecretRedactor.redactValue(argv) }));
   // 启动预检要拿实时镜像状态，绕过快照缓存（DockerHost 不缓存镜像状态）。
   const ensuredImage = await dockerHost.ensureImage(runtimeImage, {
     policy: "auto",
@@ -4177,6 +4215,7 @@ async function runStartJobOnce(job, opts) {
   try {
     if (typeof opts.prepareGpuAdmission === "function") {
       ({ runArgs, activePublishArgs, runtimeImage, secretEnv } = buildLlamaRuntimeCommand(job, opts));
+      trackLaunch(() => launchStore.recordCommand(job.meta?.launchId, runArgs, { redact: (argv) => runtimeSecretRedactor.redactValue(argv) }));
     }
     setJobProgress(job, { percent: 32, stage: "启动 Docker 容器", detail: "Docker run 已开始；旧模型容器已保留为回滚点。" });
     const redactedLaunchCommand = `docker ${redactDockerArgs(runArgs, opts).join(" ")}`;

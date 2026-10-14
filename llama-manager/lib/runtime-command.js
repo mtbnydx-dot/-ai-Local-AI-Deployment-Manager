@@ -117,7 +117,8 @@ function createLlamaRuntimeCommandBuilder(deps) {
       model: { ...launch, ref: opts.model },
       secrets: { hfToken: process.env.HF_TOKEN },
       extra: { args: opts.extraArgs, env: opts.extraEnv },
-      launchId: null,
+      // LaunchStore id (01 §15): the server mints it into job.meta before the build.
+      launchId: opts.launchId || job?.meta?.launchId || null,
       toContainerPath: windowsPathToContainerPath,
       dockerGpuArg,
       dockerPublishArgs,

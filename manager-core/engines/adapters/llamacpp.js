@@ -37,7 +37,7 @@
 const path = require("node:path");
 const { normalizeGpuIds: defaultNormalizeGpuIds } = require("../../common-utils");
 const { publishArgsToDockerRunArgs: defaultPublishArgsToDockerRunArgs } = require("../../docker-utils");
-const { applyExtra, labelsFromFlags } = require("./_docker-segments");
+const { applyExtra, labelsFromFlags, launchLabelFlags } = require("./_docker-segments");
 const memoryModels = require("../memory-models");
 const { emitCatalogArgs } = require("./_catalog-emit");
 
@@ -258,6 +258,13 @@ function buildCommand(plan, ctx, logs) {
     flags.push("-e", API_KEY_ENV);
     secretEnv[API_KEY_ENV] = String(secrets.apiKey);
   }
+  // The launch identity labels (01 §15.2) are the last docker flags.
+  flags.push(...launchLabelFlags({
+    launchId: ctx.launchId,
+    engineId: ctx.descriptor?.id || ENGINE_ID,
+    recipeId: recipe?.id,
+    runtimeId: runtime.runtimeId,
+  }));
 
   const args = [];
   if (remoteRepo) {

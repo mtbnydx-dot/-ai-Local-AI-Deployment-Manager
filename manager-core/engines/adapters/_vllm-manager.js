@@ -28,7 +28,7 @@
 // so a plan can be shown, hashed and stored as it is.
 
 const path = require("node:path");
-const { applyExtra, envAssignmentFlags, labelFlags, labelsFromFlags } = require("./_docker-segments");
+const { applyExtra, envAssignmentFlags, labelFlags, labelsFromFlags, launchLabelFlags } = require("./_docker-segments");
 
 const HEALTH_CMD = "curl -fsS http://127.0.0.1:8000/health || exit 1";
 const HF_CACHE_TARGET = "/root/.cache/huggingface";
@@ -218,13 +218,14 @@ function ggufLogs(plan, ctx, logs) {
  * platform, name, restart, the ai.manager.* labels, GPUs, health check,
  * publish, the HF cache and model mounts, the engine's labels, the recipe's
  * docker flags and labels, the cache mount, the API-key ref label, then the
- * secret env names and the recipe env. Also logs the publish, LAN and GPU lines.
+ * secret env names, the recipe env and last the launch identity labels (01
+ * §15.2). Also logs the publish, LAN and GPU lines.
  *
- * options: { logs, engineLabel, fraction, engineLabelFlags, engineCacheMount:{configKey,target}, apiKeyEnv }
+ * options: { logs, engineId, engineLabel, fraction, engineLabelFlags, engineCacheMount:{configKey,target}, apiKeyEnv }
  * -> { flags, publish, secretEnv }
  */
 function managerDockerFlags(plan, ctx, options) {
-  const { logs, engineLabel, fraction, engineLabelFlags = [], engineCacheMount = null, apiKeyEnv = "" } = options;
+  const { logs, engineId = "", engineLabel, fraction, engineLabelFlags = [], engineCacheMount = null, apiKeyEnv = "" } = options;
   const values = plan.values || {};
   const fixed = plan.fixed || {};
   const slots = fixed.slots || {};
@@ -304,6 +305,12 @@ function managerDockerFlags(plan, ctx, options) {
     secretEnv[apiKeyEnv] = String(secrets.apiKey);
   }
   flags.push(...envAssignmentFlags(fixed.env));
+  flags.push(...launchLabelFlags({
+    launchId: ctx.launchId,
+    engineId: ctx.descriptor?.id || plan.engineId || engineId,
+    recipeId: plan.recipeId ?? plan.recipe?.id,
+    runtimeId: ctx.runtime?.runtimeId,
+  }));
   return { flags, publish, secretEnv };
 }
 

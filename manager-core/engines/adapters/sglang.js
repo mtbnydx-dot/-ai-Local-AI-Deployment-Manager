@@ -63,6 +63,7 @@ function buildCommand(plan, ctx, effects) {
   ggufLogs(plan, ctx, logs);
   const { flags, publish, secretEnv } = managerDockerFlags(plan, ctx, {
     logs,
+    engineId: ENGINE_ID,
     engineLabel,
     fraction: values["sglang.memFractionStatic"],
     engineLabelFlags: [
