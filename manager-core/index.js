@@ -117,6 +117,7 @@ module.exports.mergeExports = mergeExports;
 const PLATFORM_MODULES = Object.freeze({
   components: "./platform/components",
   config: "./platform/config",
+  doctor: "./platform/doctor",
   launcher: "./platform/launcher",
   logs: "./platform/logs",
   messages: "./platform/messages",

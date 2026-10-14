@@ -1,0 +1,553 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-14T08:00:00.000Z",
+  "durationMs": 0,
+  "summary": {
+    "ok": 14,
+    "warn": 2,
+    "fail": 1,
+    "info": 3,
+    "skip": 1
+  },
+  "checks": [
+    {
+      "id": "env.node-version",
+      "group": "env",
+      "status": "ok",
+      "title": {
+        "zh-CN": "Node.js 版本",
+        "en-US": "Node.js version"
+      },
+      "detail": "Node.js v24.16.0 satisfies ^22.22.2 || ^24.15.0 || >=26.0.0.",
+      "data": {
+        "version": "v24.16.0",
+        "requirement": "^22.22.2 || ^24.15.0 || >=26.0.0"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "env.node-sqlite",
+      "group": "env",
+      "status": "ok",
+      "title": {
+        "zh-CN": "Node.js SQLite 模块",
+        "en-US": "Node.js SQLite module"
+      },
+      "detail": "The node:sqlite DatabaseSync API is available.",
+      "data": {
+        "available": true
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "env.deps.vllm-manager",
+      "group": "env",
+      "status": "ok",
+      "title": {
+        "zh-CN": "vllm-manager 依赖",
+        "en-US": "vllm-manager dependencies"
+      },
+      "detail": "vllm-manager dependencies match the recorded package-lock.json hash.",
+      "data": {
+        "package": "vllm-manager",
+        "installed": true,
+        "lockHash": "lock-fixture",
+        "recordedHash": "lock-fixture",
+        "versionsMatch": true,
+        "verification": "deps-state"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "env.deps.platform-mcp",
+      "group": "env",
+      "status": "ok",
+      "title": {
+        "zh-CN": "platform-mcp 依赖",
+        "en-US": "platform-mcp dependencies"
+      },
+      "detail": "platform-mcp dependencies match the recorded package-lock.json hash.",
+      "data": {
+        "package": "platform-mcp",
+        "installed": true,
+        "lockHash": "lock-fixture",
+        "recordedHash": "lock-fixture",
+        "versionsMatch": true,
+        "verification": "deps-state"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "env.mcp-dist",
+      "group": "env",
+      "status": "ok",
+      "title": {
+        "zh-CN": "MCP 构建",
+        "en-US": "MCP build"
+      },
+      "detail": "The MCP entry point exists and its build stamp matches the current sources.",
+      "data": {
+        "package": "platform-mcp",
+        "exists": true,
+        "currentHash": "build-fixture",
+        "stampHash": "build-fixture",
+        "running": false
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "env.download-cli",
+      "group": "env",
+      "status": "warn",
+      "title": {
+        "zh-CN": "模型下载工具",
+        "en-US": "Model download tool"
+      },
+      "detail": "The optional Hugging Face download CLI is missing. A supported Python is available for installation.",
+      "data": {
+        "present": false,
+        "path": null,
+        "python": {
+          "present": true,
+          "version": "3.11.9",
+          "requirement": ">=3.10",
+          "supported": true
+        }
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "install-download-cli",
+        "risk": "confirm",
+        "label": {
+          "zh-CN": "安装模型下载工具",
+          "en-US": "Install model download tool"
+        },
+        "command": "platform doctor --fix=env.download-cli",
+        "docs": "/docs/getting-started.md#download-tool",
+        "requires": {
+          "python": ">=3.10"
+        }
+      },
+      "actions": [
+        "install-download-cli"
+      ]
+    },
+    {
+      "id": "env.python",
+      "group": "env",
+      "status": "info",
+      "title": {
+        "zh-CN": "Python 环境",
+        "en-US": "Python environment"
+      },
+      "detail": "Python is available (3.11.9). It satisfies >=3.10.",
+      "data": {
+        "present": true,
+        "version": "3.11.9",
+        "requirement": ">=3.10",
+        "supported": true
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "env.pwsh",
+      "group": "env",
+      "status": "info",
+      "title": {
+        "zh-CN": "PowerShell 环境",
+        "en-US": "PowerShell environment"
+      },
+      "detail": "PowerShell is available (7.5.0).",
+      "data": {
+        "present": true,
+        "version": "7.5.0"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "env.git",
+      "group": "env",
+      "status": "info",
+      "title": {
+        "zh-CN": "Git 环境",
+        "en-US": "Git environment"
+      },
+      "detail": "Git is available (2.50.0).",
+      "data": {
+        "present": true,
+        "version": "2.50.0"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "runtime.docker-cli",
+      "group": "runtime",
+      "status": "ok",
+      "title": {
+        "zh-CN": "Docker 命令行",
+        "en-US": "Docker CLI"
+      },
+      "detail": "Docker CLI is available.",
+      "data": {
+        "present": true,
+        "version": "Docker version fixture"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "runtime.docker-daemon",
+      "group": "runtime",
+      "status": "fail",
+      "title": {
+        "zh-CN": "Docker 引擎",
+        "en-US": "Docker engine"
+      },
+      "detail": "Docker engine is not responding; Doctor has not started it.",
+      "data": {
+        "ready": false
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "start-docker",
+        "risk": "confirm",
+        "label": {
+          "zh-CN": "启动 Docker Desktop",
+          "en-US": "Start Docker Desktop"
+        },
+        "command": "platform doctor --fix=runtime.docker-daemon",
+        "docs": "/docs/troubleshooting.md#docker"
+      },
+      "actions": [
+        "start-docker"
+      ]
+    },
+    {
+      "id": "runtime.wsl",
+      "group": "runtime",
+      "status": "ok",
+      "title": {
+        "zh-CN": "WSL 发行版",
+        "en-US": "WSL distributions"
+      },
+      "detail": "The selected Docker WSL distribution uses WSL 2.",
+      "data": {
+        "distributions": [
+          {
+            "name": "docker-desktop",
+            "state": "Running",
+            "version": 2
+          }
+        ],
+        "requested": "docker-desktop"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "runtime.wslconfig",
+      "group": "runtime",
+      "status": "ok",
+      "title": {
+        "zh-CN": "WSL 内存与交换空间",
+        "en-US": "WSL memory and swap"
+      },
+      "detail": "The WSL memory allocation meets the configured minimum.",
+      "data": {
+        "exists": true,
+        "memoryGb": 64,
+        "swapGb": 0,
+        "totalMemoryGb": 128,
+        "effectiveMemoryGb": 64,
+        "minimumGb": 48,
+        "memorySource": "file",
+        "suggested": "[wsl2]\nmemory=48GB\nswap=0"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "runtime.nvidia-driver",
+      "group": "runtime",
+      "status": "ok",
+      "title": {
+        "zh-CN": "NVIDIA 驱动与 GPU",
+        "en-US": "NVIDIA driver and GPUs"
+      },
+      "detail": "The installed driver and at least one GPU meet every active runtime's requirements.",
+      "data": {
+        "gpus": [
+          {
+            "name": "Fixture GPU",
+            "driverVersion": "581.15",
+            "computeCapability": "12.0",
+            "memoryMb": 98304
+          }
+        ],
+        "affected": []
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "runtime.images",
+      "group": "runtime",
+      "status": "warn",
+      "title": {
+        "zh-CN": "运行时镜像",
+        "en-US": "Runtime images"
+      },
+      "detail": "Some launch images are missing; no image has been pulled.",
+      "data": {
+        "runtimes": [
+          {
+            "runtimeId": "vllm@1.0.0",
+            "engineId": "vllm",
+            "image": "fixture/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "present": false,
+            "localBuild": false,
+            "pullPolicy": "auto",
+            "note": "Stable tier-1 images auto-pull at launch.",
+            "fix": {
+              "id": "pull-image:vllm@1.0.0",
+              "risk": "confirm",
+              "label": {
+                "zh-CN": "拉取运行时镜像",
+                "en-US": "Pull runtime image"
+              },
+              "command": "platform doctor --fix=runtime.images",
+              "docs": "/docs/troubleshooting.md#runtime",
+              "runtimeId": "vllm@1.0.0",
+              "engineId": "vllm",
+              "via": "manager",
+              "apiCall": {
+                "method": "POST",
+                "path": "/api/runtimes/vllm%401.0.0/pull",
+                "body": {
+                  "confirm": true
+                }
+              }
+            }
+          },
+          {
+            "runtimeId": "sglang@experimental",
+            "engineId": "sglang",
+            "image": "fixture/experimental:one",
+            "present": true,
+            "localBuild": false,
+            "pullPolicy": "explicit",
+            "note": "This runtime requires an explicit pull before launch.",
+            "fix": null
+          },
+          {
+            "runtimeId": "sglang@local",
+            "engineId": "sglang",
+            "image": "fixture/local:one",
+            "present": true,
+            "localBuild": true,
+            "pullPolicy": "local-build",
+            "note": "Local builds need their recorded rebuild script.",
+            "fix": null
+          }
+        ],
+        "localBuilds": [
+          "sglang@local"
+        ]
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "pull-image:vllm@1.0.0",
+        "risk": "confirm",
+        "label": {
+          "zh-CN": "拉取运行时镜像",
+          "en-US": "Pull runtime image"
+        },
+        "command": "platform doctor --fix=runtime.images",
+        "docs": "/docs/troubleshooting.md#runtime",
+        "runtimeId": "vllm@1.0.0",
+        "engineId": "vllm",
+        "via": "manager",
+        "apiCall": {
+          "method": "POST",
+          "path": "/api/runtimes/vllm%401.0.0/pull",
+          "body": {
+            "confirm": true
+          }
+        }
+      },
+      "actions": [
+        "pull-image:vllm@1.0.0"
+      ]
+    },
+    {
+      "id": "runtime.gpu-in-docker",
+      "group": "runtime",
+      "status": "skip",
+      "title": {
+        "zh-CN": "Docker GPU 深度检查",
+        "en-US": "Docker GPU deep check"
+      },
+      "detail": "Deep probe was not requested.",
+      "data": {
+        "reason": "deep_not_requested"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "storage.ai-root",
+      "group": "storage",
+      "status": "ok",
+      "title": {
+        "zh-CN": "平台目录空间",
+        "en-US": "Platform folder space"
+      },
+      "detail": "Free disk space meets the configured minimum.",
+      "data": {
+        "disks": [
+          {
+            "id": "ai-root",
+            "path": "<AI_ROOT>",
+            "measuredPath": "<AI_ROOT>",
+            "exists": true,
+            "freeGb": 128,
+            "totalGb": 512
+          }
+        ],
+        "minimumGb": 20,
+        "criticalGb": 5
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "storage.model-roots",
+      "group": "storage",
+      "status": "ok",
+      "title": {
+        "zh-CN": "模型库空间",
+        "en-US": "Model library space"
+      },
+      "detail": "Free disk space meets the configured minimum.",
+      "data": {
+        "disks": [
+          {
+            "id": "legacy",
+            "path": "<AI_ROOT>/models",
+            "measuredPath": "<AI_ROOT>/models",
+            "exists": true,
+            "freeGb": 128,
+            "totalGb": 512
+          }
+        ],
+        "minimumGb": 50
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "storage.hf-cache",
+      "group": "storage",
+      "status": "ok",
+      "title": {
+        "zh-CN": "Hugging Face 缓存空间",
+        "en-US": "Hugging Face cache space"
+      },
+      "detail": "Free disk space meets the configured minimum.",
+      "data": {
+        "disks": [
+          {
+            "id": "hf-cache",
+            "path": "<AI_ROOT>/hf-cache",
+            "measuredPath": "<AI_ROOT>/hf-cache",
+            "exists": true,
+            "freeGb": 128,
+            "totalGb": 512
+          }
+        ],
+        "minimumGb": 50
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "storage.docker-data",
+      "group": "storage",
+      "status": "ok",
+      "title": {
+        "zh-CN": "Docker 数据磁盘",
+        "en-US": "Docker data drive"
+      },
+      "detail": "Free disk space meets the configured minimum.",
+      "data": {
+        "disks": [
+          {
+            "id": "docker-data",
+            "path": "<AI_ROOT>/docker-data",
+            "measuredPath": "<AI_ROOT>/docker-data",
+            "exists": true,
+            "freeGb": 128,
+            "totalGb": 512
+          }
+        ],
+        "minimumGb": 30
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "storage.writable",
+      "group": "storage",
+      "status": "ok",
+      "title": {
+        "zh-CN": "平台目录写入检查",
+        "en-US": "Platform folder write check"
+      },
+      "detail": "Unique temporary probe files were created and removed in the platform folders.",
+      "data": {
+        "directories": [
+          {
+            "path": "<AI_ROOT>/config",
+            "writable": true
+          },
+          {
+            "path": "<AI_ROOT>/logs",
+            "writable": true
+          },
+          {
+            "path": "<AI_ROOT>/.runtime",
+            "writable": true
+          }
+        ]
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    }
+  ]
+}
