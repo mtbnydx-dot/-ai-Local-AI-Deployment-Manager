@@ -153,12 +153,16 @@ function openStream(port, pathname, headers = {}) {
   return new Promise((resolve, reject) => {
     const request = http.get({ host: "127.0.0.1", port, path: pathname, headers, agent: false }, (response) => {
       response.setEncoding("utf8");
-      const stream = { status: response.statusCode, headers: response.headers, text: "", ended: false, close: () => request.destroy() };
+      const stream = { status: response.statusCode, headers: response.headers, text: "", ended: false, closed: false, complete: false, close: () => request.destroy() };
       response.on("data", (chunk) => {
         stream.text += chunk;
       });
       response.on("end", () => {
         stream.ended = true;
+      });
+      response.on("close", () => {
+        stream.closed = true;
+        stream.complete = response.complete;
       });
       response.on("error", () => {});
       resolve(stream);
@@ -611,6 +615,43 @@ test("502 manager_unreachable, 504 manager_timeout and 413 body_too_large use th
   assert.deepEqual(logger.lines.log.slice(logged).filter((line) => line.includes("answers again")).length, 1);
 });
 
+test("a write gets the longer write deadline, so a slow manager action is not cut off at the read timeout", async (t) => {
+  const vllm = await fakeManager(t, "vllm", {
+    // Answers after 300 ms, like POST /api/docker/start waiting for Docker.
+    "/api/docker/start": (req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"ok":true,"started":true}');
+      }, 300);
+    },
+    "/api/hang": () => {},
+  });
+  const proxy = mgmt.createMgmtProxy({ managers: managerList(vllm), auth: legacyAuth(), requestTimeoutMs: 100, writeTimeoutMs: 1000, logger: quietLogger() });
+  t.after(() => proxy.close());
+  const port = await proxyServer(t, proxy);
+
+  const read = await send(port, "/api/m/vllm/docker/start");
+  assert.equal(read.status, 504);
+  assert.equal(read.json.error.code, "manager_timeout");
+  const write = await send(port, "/api/m/vllm/docker/start", { method: "POST", body: "{}" });
+  assert.equal(write.status, 200);
+  assert.deepEqual(write.json, { ok: true, started: true });
+  // A write still has a deadline.
+  const started = Date.now();
+  const hung = await send(port, "/api/m/vllm/hang", { method: "POST", body: "{}" });
+  assert.equal(hung.status, 504);
+  assert.equal(hung.json.error.code, "manager_timeout");
+  assert.ok(Date.now() - started >= 900, "the write deadline, not the read one");
+
+  // The in-process client splits its defaults the same way.
+  const client = mgmt.createManagerClient({ managers: managerList(vllm), requestTimeoutMs: 100, writeTimeoutMs: 1000 });
+  t.after(() => client.close());
+  assert.equal((await client.get("vllm", "docker/start")).code, "manager_timeout");
+  const posted = await client.post("vllm", "docker/start", {});
+  assert.equal(posted.ok, true);
+  assert.deepEqual(posted.data, { ok: true, started: true });
+});
+
 test("relay.poke follows a 2xx POST once the relay is mounted and is skipped without it", async (t) => {
   const vllm = await fakeManager(t, "vllm", {
     "/api/broken": (req, res) => {
@@ -652,20 +693,33 @@ test("relay.poke follows a 2xx POST once the relay is mounted and is skipped wit
   assert.equal((await send(port, "/api/m/vllm/start", { method: "POST", body: "{}" })).status, 200);
 });
 
-test("close() ends proxied streams and later requests get 503", async (t) => {
+test("close() ends proxied streams, visibly cuts any other body, and later requests get 503", async (t) => {
   const vllm = await fakeManager(t, "vllm", {
     "/api/events": (req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write("data: open\n\n");
     },
+    // A JSON body the manager is still writing when the entry shuts down.
+    "/api/backups": (req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"ok":true,"items":["first"');
+    },
   });
   const proxy = mgmt.createMgmtProxy({ managers: managerList(vllm), auth: legacyAuth(), logger: quietLogger() });
   const port = await proxyServer(t, proxy);
   const stream = await openStream(port, "/api/m/vllm/events");
+  const partial = await openStream(port, "/api/m/vllm/backups");
   await waitFor(() => stream.text.includes("open"), 2000, "the stream");
-  assert.equal(proxy.stats().inflight, 1);
+  await waitFor(() => partial.text.includes("first"), 2000, "the partial body");
+  assert.equal(proxy.stats().inflight, 2);
   proxy.close();
-  await waitFor(() => stream.ended, 2000, "the stream to end");
+  // The event stream ends cleanly, so an EventSource just reconnects.
+  await waitFor(() => stream.ended && stream.closed, 2000, "the stream to end");
+  assert.equal(stream.complete, true);
+  // The cut JSON body is an aborted response, never a complete one.
+  await waitFor(() => partial.closed, 2000, "the partial response to close");
+  assert.equal(partial.ended, false);
+  assert.equal(partial.complete, false);
   assert.equal(proxy.stats().inflight, 0);
   const late = await send(port, "/api/m/vllm/status");
   assert.equal(late.status, 503);
@@ -717,6 +771,91 @@ test("the viewer redaction strips paths, pids, client details and key-shaped fie
   assert.equal(input.pid, 1, "the input is not changed");
   assert.equal(mgmt.redactManagerReadForViewer("plain"), "plain");
   assert.deepEqual(mgmt.redactManagerReadForViewer([1, null, true]), [1, null, true]);
+});
+
+test("viewers of a manager's stats never learn who called it", async (t) => {
+  const { buildRecentAccessStats, groupAccessEvents, normalizeAccessEvent } = require("../../manager-core/access-log");
+  const now = Date.now();
+  const at = (agoMs) => new Date(now - agoMs).toISOString();
+  // A LAN browser and a LAN script that names itself, as the gateway logs them.
+  const events = [
+    {
+      at: at(3000), remoteAddress: "192.168.1.77", method: "POST", path: "/serve/v1/chat/completions", status: 200, model: "Qwen3-8B",
+      userAgent: "Mozilla/5.0 Phone-of-Alice", origin: "http://alice-laptop.lan:3000", referer: "http://alice-laptop.lan:3000/chat",
+      clientId: "cl_alice", inputTokens: 10, outputTokens: 5, durationMs: 120,
+    },
+    {
+      at: at(2000), remoteAddress: "10.0.0.23", method: "POST", path: "/claude/v1/messages", status: 500, model: "Qwen3-8B",
+      userAgent: "python-requests/2.31 bobs-workstation", sourceProgram: "bobs-nightly-batch", inputTokens: 3, durationMs: 40,
+    },
+    {
+      at: at(1000), remoteAddress: "192.168.1.78", method: "POST", path: "/serve/v1/chat/completions", status: 200, model: "Qwen3-8B",
+      userAgent: "Mozilla/5.0 Tablet-of-Carol", referer: "http://carol-tablet.lan/notes", inputTokens: 4, outputTokens: 2, durationMs: 80,
+    },
+  ];
+  // GET /api/stats as both managers build it, plus the same per-caller
+  // groups under a key the redaction has no special case for.
+  const stats = {
+    ok: true,
+    recentAccess: buildRecentAccessStats({ now, events }),
+    accessByModel: groupAccessEvents(events.map((entry) => normalizeAccessEvent(entry)), (entry) => entry.model),
+  };
+  const callers = [
+    "192.168.1.77", "192.168.1.78", "10.0.0.23", "Mozilla", "Phone-of-Alice", "Tablet-of-Carol", "python-requests",
+    "bobs-workstation", "bobs-nightly-batch", "alice-laptop", "carol-tablet", "cl_alice",
+  ];
+  for (const needle of callers) assert.ok(JSON.stringify(stats).includes(needle), `the fixture carries ${needle}`);
+
+  const vllm = await fakeManager(t, "vllm", {
+    "/api/stats": (req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(stats));
+    },
+  });
+  const { port } = await mountedProxy(t, [vllm]);
+
+  // The owner sees every caller.
+  const owner = await send(port, "/api/m/vllm/stats");
+  assert.deepEqual(owner.json, JSON.parse(JSON.stringify(stats)));
+
+  const viewer = await send(port, "/api/m/vllm/stats", { headers: { "x-test-role": "viewer" } });
+  assert.equal(viewer.status, 200);
+  assertMinted(viewer);
+  for (const needle of callers) assert.equal(viewer.text.includes(needle), false, needle);
+  // The access summary keeps its counts; the per-caller groups and the
+  // single requests are gone.
+  assert.deepEqual(Object.keys(viewer.json.recentAccess), ["ok", "updatedAt", "windowMs", "startAt", "endAt", "totals"]);
+  assert.equal(viewer.json.recentAccess.totals.requests.total, 3);
+  assert.equal(viewer.json.recentAccess.totals.requests.error, 1);
+  assert.equal(viewer.json.recentAccess.totals.tokens.total, 24);
+  // Anywhere else, the client maps and their top entries are dropped and
+  // the aggregate counts stay.
+  const group = viewer.json.accessByModel[0];
+  assert.equal(group.key, "Qwen3-8B");
+  assert.equal(group.count, 3);
+  for (const key of [
+    "remoteAddresses", "userAgents", "origins", "refererHosts", "sourcePrograms",
+    "topRemoteAddress", "topUserAgent", "topOrigin", "topRefererHost", "topSourceProgram",
+  ]) {
+    assert.equal(key in group, false, key);
+  }
+
+  // The single-field spellings go the same way.
+  assert.deepEqual(mgmt.redactManagerReadForViewer({
+    model: "m",
+    origin: "http://a.lan",
+    Referer: "http://a.lan/x",
+    referrerHost: "a.lan",
+    sourceProgram: "x",
+    "x-forwarded-for": "192.168.1.5",
+    remote_host: "a.lan",
+    top_user_agent: ["ua", 1],
+    clientIps: ["192.168.1.5"],
+  }), { model: "m" });
+  // An access summary that failed to load keeps its error, scrubbed.
+  assert.deepEqual(mgmt.redactManagerReadForViewer({ recentAccess: { ok: false, error: "cannot read E:\\logs\\access.jsonl", sources: [] } }), {
+    recentAccess: { ok: false, error: "cannot read <redacted>" },
+  });
 });
 
 test("the in-process manager client uses the same mapping and never throws", async (t) => {

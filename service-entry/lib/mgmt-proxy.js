@@ -32,6 +32,11 @@ const { newRequestId } = require("../../manager-core/telemetry/ids");
 const PREFIX = "/api/m/";
 const UPSTREAM_HOST = "127.0.0.1";
 const DEFAULT_TIMEOUT_MS = 30000;
+// Manager actions answer when they are done: POST /api/docker/start waits up
+// to 120 s for Docker Desktop, /api/test and benchmarks run a real completion
+// (up to 180 s). A write therefore gets a longer idle deadline than a read, so
+// the console is not told 504 while the action is still running.
+const DEFAULT_WRITE_TIMEOUT_MS = 300000;
 const REQUEST_BODY_LIMIT_BYTES = 2 << 20;
 const RESPONSE_LIMIT_BYTES = 4 << 20;
 // content-length is recomputed from the buffered body; x-request-id is minted.
@@ -248,13 +253,37 @@ const VIEWER_DROPPED_KEYS = new Set([
   // Host paths, command lines and process detail.
   "path", "paths", "root", "dir", "cwd", "mounts", "volumes", "binds", "argv", "args", "command", "commandline",
   "cmdline", "cmd", "env", "environment", "extraenv", "logs", "hostname", "machinename", "computername", "username",
-  // Client details.
-  "client", "clients", "clientid", "clientip", "clientaddress", "clientname", "remoteaddress", "remoteip", "ip",
-  "useragent", "serviceclients", "recentclients", "externalaccess", "byclient", "topclients", "callers",
+  // Client details that are not one of CLIENT_DETAIL_NAMES' forms.
+  "serviceclients", "recentclients", "externalaccess", "byclient", "callers",
 ]);
 
+// Who called, from where and with what (07 §2.9 "client details"). Each name
+// is also dropped as a plural, with a "top" prefix and with - or _ in it, so
+// the access groups in a manager's stats (manager-core/access-log.js:
+// remoteAddresses, userAgents, origins, refererHosts, sourcePrograms and
+// topRemoteAddress, topUserAgent, topOrigin, topRefererHost,
+// topSourceProgram) go along with the single fields.
+const CLIENT_DETAIL_NAMES = new Set([
+  "client", "clientid", "clientip", "clientaddress", "clientname", "remoteaddress", "remoteip", "remotehost", "ip",
+  "useragent", "origin", "referer", "referrer", "refererhost", "referrerhost", "sourceprogram", "forwardedfor",
+  "xforwardedfor", "xrealip",
+]);
+
+function isClientDetailKey(key) {
+  const bare = key.toLowerCase().replace(/[-_]/g, "").replace(/^top/, "");
+  return CLIENT_DETAIL_NAMES.has(bare) || CLIENT_DETAIL_NAMES.has(bare.replace(/(es|s)$/, ""));
+}
+
+// A manager's access summary (recentAccess in GET /api/stats, built by
+// access-log.js buildRecentAccessStats) is grouped by caller: its source
+// groups are keyed by a program label that carries the caller's origin host
+// ("Browser · host"), and `recent` lists single requests. A viewer keeps the
+// counts only.
+const ACCESS_SUMMARY_KEYS = new Set(["recentaccess"]);
+const ACCESS_SUMMARY_KEPT = Object.freeze(["ok", "updatedAt", "windowMs", "startAt", "endAt", "totals", "error"]);
+
 function viewerDropsKey(key) {
-  if (key === "__proto__" || VIEWER_DROPPED_KEYS.has(key.toLowerCase())) return true;
+  if (key === "__proto__" || VIEWER_DROPPED_KEYS.has(key.toLowerCase()) || isClientDetailKey(key)) return true;
   return /token$/i.test(key) // token, hfToken, trustToken
     || /secret$/i.test(key) // clientSecret
     || /api[-_]?keys?$/i.test(key) // apiKey, api_key, x-api-key, VLLM_API_KEY
@@ -293,14 +322,26 @@ function redactViewerValue(value, depth) {
     if (viewerDropsKey(key)) continue;
     const name = scrubViewerString(key);
     if (name === "__proto__") continue;
-    out[name] = redactViewerValue(item, depth + 1);
+    out[name] = ACCESS_SUMMARY_KEYS.has(key.toLowerCase()) && isPlainObject(item)
+      ? redactAccessSummary(item, depth + 1)
+      : redactViewerValue(item, depth + 1);
+  }
+  return out;
+}
+
+function redactAccessSummary(summary, depth) {
+  const out = {};
+  for (const key of ACCESS_SUMMARY_KEPT) {
+    if (Object.prototype.hasOwnProperty.call(summary, key)) out[key] = redactViewerValue(summary[key], depth + 1);
   }
   return out;
 }
 
 // The registered redaction for the proxied manager reads: strips host paths,
-// PIDs, command lines, client details and key-shaped fields (apiKey, *Token,
-// authorization), and redacts secret-shaped text. It builds a new value.
+// PIDs, command lines, client details (addresses, user agents, origins,
+// referrers, source programs, per-caller access groups) and key-shaped fields
+// (apiKey, *Token, authorization), and redacts secret-shaped text. It builds
+// a new value.
 function redactManagerReadForViewer(body) {
   return redactViewerValue(body, 0);
 }
@@ -354,6 +395,7 @@ function createMgmtProxy(options = {}) {
   }
   const table = managerTable(options.managers);
   const requestTimeoutMs = positiveInt(options.requestTimeoutMs, DEFAULT_TIMEOUT_MS);
+  const writeTimeoutMs = positiveInt(options.writeTimeoutMs, DEFAULT_WRITE_TIMEOUT_MS);
   const bodyLimit = positiveInt(options.maxBodyBytes, REQUEST_BODY_LIMIT_BYTES);
   const responseLimit = positiveInt(options.maxResponseBytes, RESPONSE_LIMIT_BYTES);
   const httpRequest = typeof options.httpRequest === "function" ? options.httpRequest : http.request;
@@ -528,6 +570,7 @@ function createMgmtProxy(options = {}) {
     // A live stream has no deadline; it ends when either side goes away.
     if (stream) upstream.setTimeout(0);
     job.piping = true;
+    job.stream = stream;
     res.writeHead(status, passThroughHeaders(response.headers, requestId, stream));
     if (stream) {
       res.socket?.setNoDelay?.(true);
@@ -573,8 +616,11 @@ function createMgmtProxy(options = {}) {
         job.own = true;
         upstream.destroy();
         try {
-          if (res.headersSent) res.end();
-          else res.destroy();
+          // An event stream ends cleanly (EventSource reconnects). Any other
+          // response cut short is destroyed, so a partly piped body never
+          // looks complete to the client.
+          if (job.stream && res.headersSent) res.end();
+          else if (!res.writableEnded) res.destroy();
         } catch {
           // Already gone.
         }
@@ -583,9 +629,10 @@ function createMgmtProxy(options = {}) {
     inflight.add(flight);
     const settle = () => inflight.delete(flight);
     let timedOut = false;
-    upstream.setTimeout(requestTimeoutMs, () => {
+    const timeoutMs = READ_METHODS.has(method) ? requestTimeoutMs : writeTimeoutMs;
+    upstream.setTimeout(timeoutMs, () => {
       timedOut = true;
-      upstream.destroy(new Error(`no answer within ${requestTimeoutMs} ms`));
+      upstream.destroy(new Error(`no answer within ${timeoutMs} ms`));
     });
     upstream.on("error", (error) => {
       settle();
@@ -598,7 +645,7 @@ function createMgmtProxy(options = {}) {
       const { managerId } = route;
       if (timedOut) {
         noteDown(managerId, "timed out");
-        sendError(res, 504, requestId, "manager_timeout", `The ${managerId} manager did not answer within ${Math.max(1, Math.round(requestTimeoutMs / 1000))} s.`, {
+        sendError(res, 504, requestId, "manager_timeout", `The ${managerId} manager did not answer within ${Math.max(1, Math.round(timeoutMs / 1000))} s.`, {
           managerId,
           hint: "The manager may be busy loading a model; retry in a moment.",
         });
@@ -678,6 +725,7 @@ function createMgmtProxy(options = {}) {
       responseLimit,
       own: false,
       piping: false,
+      stream: false,
       clientGone: false,
     });
     return true;
@@ -736,6 +784,7 @@ function failureMessage(data) {
 function createManagerClient(options = {}) {
   const table = managerTable(options.managers);
   const defaultTimeoutMs = positiveInt(options.requestTimeoutMs, DEFAULT_TIMEOUT_MS);
+  const defaultWriteTimeoutMs = positiveInt(options.writeTimeoutMs, DEFAULT_WRITE_TIMEOUT_MS);
   const responseLimit = positiveInt(options.maxResponseBytes, RESPONSE_LIMIT_BYTES);
   const httpRequest = typeof options.httpRequest === "function" ? options.httpRequest : http.request;
   const inflight = new Set();
@@ -762,7 +811,7 @@ function createManagerClient(options = {}) {
     } else if (!READ_METHODS.has(method)) {
       body = Buffer.alloc(0);
     }
-    const timeoutMs = positiveInt(opts.timeoutMs, defaultTimeoutMs);
+    const timeoutMs = positiveInt(opts.timeoutMs, READ_METHODS.has(method) ? defaultTimeoutMs : defaultWriteTimeoutMs);
     return new Promise((resolve) => {
       const headers = { accept: "application/json", "x-request-id": requestId };
       if (body) {
