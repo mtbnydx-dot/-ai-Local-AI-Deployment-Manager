@@ -758,10 +758,13 @@ test("the size guard deletes old raw rows first and records a pressure warning",
   assert.equal(calm.pressure, null);
   assert.deepEqual(calm.deleted, {});
 
-  const dbBytes = (await store.stats()).dbBytes;
-  const pressed = await store.runRetention(NOW + MINUTE_MS, undefined, { maxDbMb: (dbBytes - 4096) / (1024 * 1024) });
+  // The limit sits one page below the pages in use, so reclaiming free
+  // pages alone cannot satisfy it.
+  const { pageCount, freelistPages, pageSize } = await store.stats();
+  const usedBytes = (pageCount - freelistPages) * pageSize;
+  const pressed = await store.runRetention(NOW + MINUTE_MS, undefined, { maxDbMb: (usedBytes - pageSize) / (1024 * 1024) });
   assert.ok(pressed.pressure, "the guard triggers");
-  assert.equal(pressed.pressure.dbBytes, dbBytes);
+  assert.equal(pressed.pressure.dbBytes, usedBytes);
   assert.equal(pressed.pressure.requestsBefore, NOW + MINUTE_MS - 7 * DAY_MS);
   assert.equal(pressed.pressure.samplesBefore, NOW + MINUTE_MS - 12 * HOUR_MS);
   assert.deepEqual(pressed.pressure.deleted, { requests: 1, runtime_samples: 1, gpu_samples: 1 });
@@ -783,6 +786,33 @@ test("the size guard deletes old raw rows first and records a pressure warning",
   const rolled = await store.runRollups(NOW + 2 * MINUTE_MS, { timezoneOffsetMinutes: TZ });
   assert.equal(rolled.droppedDirty, 1);
   assert.equal(requestTotal(file, "rollup_1m", "bucket = ?", oldMinute), 1);
+});
+
+test("the size guard gives free pages back before it deletes any row", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
+  // 50 pages vacuumed per pass: an earlier big delete leaves the file large.
+  const store = await openStore(t, file, { retention: { yieldMs: 1, vacuumPages: 50 } });
+  const expired = Array.from({ length: 3000 }, (unused, index) => simpleRequest(index + 1, NOW - 31 * DAY_MS + index, {
+    userAgent: `agent-${"x".repeat(200)}-${index}`,
+  }));
+  await store.insertRequests([...expired, simpleRequest(9001, NOW - 8 * DAY_MS)]);
+  const pruned = await store.runRetention(NOW);
+  assert.equal(pruned.deleted.requests, 3000);
+  const { pageCount, freelistPages, pageSize } = await store.stats();
+  assert.ok(freelistPages > 50, `the delete left free pages (${freelistPages})`);
+
+  // Over the limit only because of the free pages: they go back, rows stay.
+  const result = await store.runRetention(NOW + MINUTE_MS, undefined, { maxDbMb: ((pageCount - 1) * pageSize) / (1024 * 1024) });
+  assert.equal(result.ok, true);
+  assert.equal(result.pressure, null);
+  assert.deepEqual(result.deleted, {});
+  const after = await store.stats({ rows: true });
+  assert.equal(after.freelistPages, 0);
+  assert.equal(after.pageCount, pageCount - freelistPages);
+  assert.equal(after.rows.requests, 1, "the 8-day-old row is not deleted");
+  assert.equal(after.rows.events, 0, "no pressure event");
 });
 
 function fakeClock(start) {

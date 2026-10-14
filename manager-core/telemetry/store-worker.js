@@ -942,14 +942,39 @@ function createStoreCore(options = {}) {
     return Number(Object.values(db.prepare(`PRAGMA ${name}`).get())[0]);
   }
 
+  function databaseBytes() {
+    return pragmaNumber("page_count") * pragmaNumber("page_size");
+  }
+
+  // Gives every free page back to the file system: incremental_vacuum in
+  // steps of vacuumPages with a yield between them, so inserts queued behind
+  // it still run. Stops when the freelist is empty or no longer shrinks (a
+  // file created without auto_vacuum=INCREMENTAL cannot shrink this way).
+  async function vacuumFreePages() {
+    let free = pragmaNumber("freelist_count");
+    while (free > 0) {
+      assertRunning();
+      db.exec(`PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
+      const left = pragmaNumber("freelist_count");
+      if (left >= free) return;
+      free = left;
+      if (free > 0) await delay(retentionOptions.yieldMs);
+    }
+  }
+
   // §4.3 size guard: past telemetry.maxDbMb, raw requests older than 7 days
   // and samples older than 12 hours are deleted first (their rollups stay),
-  // and a telemetry.retention.pressure warning is recorded.
+  // and a telemetry.retention.pressure warning is recorded. Free pages count
+  // in page_count until they are vacuumed (2000 per pass), so they go back
+  // first: a file that is large only because of an earlier big delete loses
+  // no rows.
   async function applySizeGuard(at, maxDbMb, tally) {
     const limitMb = suppliedNumber(maxDbMb);
     if (limitMb === null || !(limitMb > 0)) return null;
     const maxDbBytes = Math.floor(limitMb * 1024 * 1024);
-    const dbBytes = pragmaNumber("page_count") * pragmaNumber("page_size");
+    if (databaseBytes() <= maxDbBytes) return null;
+    await vacuumFreePages();
+    const dbBytes = databaseBytes();
     if (dbBytes <= maxDbBytes) return null;
     const requestsBefore = at - SIZE_GUARD.requestsDays * DAY_MS;
     const samplesBefore = at - SIZE_GUARD.samplesHours * HOUR_MS;
@@ -1017,7 +1042,8 @@ function createStoreCore(options = {}) {
     if (sinceId !== null) masked += await maskInsertedSince(sinceId, ipCutoff);
     assertRunning();
     // Under pressure every free page goes back, so the file really shrinks.
-    db.exec(pressure ? "PRAGMA incremental_vacuum" : `PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
+    if (pressure) await vacuumFreePages();
+    else db.exec(`PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
     let lastOptimizeAt = Number(previous.lastOptimizeAt) || 0;
     let optimized = false;
     if (at - lastOptimizeAt >= retentionOptions.optimizeEveryMs) {
