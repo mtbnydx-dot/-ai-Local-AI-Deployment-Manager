@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-llama3-8b",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "Llama-3.1-8B-Instruct",
+  "layout": "indexed",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic Llama 3.1 8B checkpoint: dense GQA model, llama3 RoPE scaling, <|python_tag|> tool calls, template inside tokenizer_config.json (its added_tokens_decoder is dropped by the capture tool), original/ folder with the consolidated weights."],
+  "warnings": [],
+  "scrubbed": [
+    {"file":"tokenizer_config.json","pointer":"/added_tokens_decoder","reason":"tokenizer_vocabulary","count":7}
+  ],
+  "files": [
+    {"name":"LICENSE","bytes":7627,"kind":"placeholder"},
+    {"name":"README.md","bytes":44003,"kind":"placeholder"},
+    {"name":"USE_POLICY.md","bytes":4691,"kind":"placeholder"},
+    {"name":"config.json","bytes":871,"kind":"captured"},
+    {"name":"generation_config.json","bytes":189,"kind":"captured"},
+    {"name":"model-00001-of-00004.safetensors","bytes":4540473632,"kind":"safetensors"},
+    {"name":"model-00002-of-00004.safetensors","bytes":3489800376,"kind":"safetensors"},
+    {"name":"model-00003-of-00004.safetensors","bytes":3489800392,"kind":"safetensors"},
+    {"name":"model-00004-of-00004.safetensors","bytes":4540481976,"kind":"safetensors"},
+    {"name":"model.safetensors.index.json","bytes":23950,"kind":"index"},
+    {"name":"original/consolidated.00.pth","bytes":16060617592,"kind":"placeholder"},
+    {"name":"original/params.json","bytes":199,"kind":"placeholder"},
+    {"name":"original/tokenizer.model","bytes":2183982,"kind":"placeholder"},
+    {"name":"special_tokens_map.json","bytes":296,"kind":"placeholder"},
+    {"name":"tokenizer.json","bytes":9085657,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":1204,"kind":"captured"}
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-gemma4",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "gemma-4-12b-it",
+  "layout": "indexed",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic Gemma 4 checkpoint: text decoder with five sliding-window layers per full layer, SigLIP-style vision tower and projector, tied embeddings."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"README.md","bytes":9733,"kind":"placeholder"},
+    {"name":"chat_template.jinja","bytes":873,"kind":"captured"},
+    {"name":"config.json","bytes":2539,"kind":"captured"},
+    {"name":"generation_config.json","bytes":230,"kind":"captured"},
+    {"name":"model-00001-of-00005.safetensors","bytes":7339396808,"kind":"safetensors"},
+    {"name":"model-00002-of-00005.safetensors","bytes":4482996960,"kind":"safetensors"},
+    {"name":"model-00003-of-00005.safetensors","bytes":4482996960,"kind":"safetensors"},
+    {"name":"model-00004-of-00005.safetensors","bytes":4482996960,"kind":"safetensors"},
+    {"name":"model-00005-of-00005.safetensors","bytes":3586405352,"kind":"safetensors"},
+    {"name":"model.safetensors.index.json","bytes":108605,"kind":"index"},
+    {"name":"preprocessor_config.json","bytes":421,"kind":"captured"},
+    {"name":"processor_config.json","bytes":70,"kind":"placeholder"},
+    {"name":"special_tokens_map.json","bytes":662,"kind":"placeholder"},
+    {"name":"tokenizer.json","bytes":33384568,"kind":"placeholder"},
+    {"name":"tokenizer.model","bytes":4689074,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":221,"kind":"captured"}
+  ]
+}

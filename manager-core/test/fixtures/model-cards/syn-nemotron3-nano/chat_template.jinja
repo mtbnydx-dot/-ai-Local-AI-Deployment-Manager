@@ -1,0 +1,35 @@
+{#- Synthetic Nemotron-3-style template for tests; not the upstream template. -#}
+{%- set thinking = enable_thinking | default(true) -%}
+<|im_start|>system
+{%- if tools %}
+# Tools
+<tools>
+{% for tool in tools %}{{ tool | tojson }}
+{% endfor %}</tools>
+Call a tool as <tool_call>
+<function=example_function>
+<parameter=example_parameter>value</parameter>
+</function>
+</tool_call>
+{%- endif %}<|im_end|>
+{%- for message in messages %}
+{%- if message.role == 'assistant' %}<|im_start|>assistant
+{%- if message.reasoning_content %}<think>{{ message.reasoning_content }}</think>{% endif %}
+{{ message.content }}
+{%- for call in message.tool_calls | default([]) %}
+<tool_call>
+<function={{ call.function.name }}>
+{%- for k, v in call.function.arguments.items() %}
+<parameter={{ k }}>{{ v }}</parameter>
+{%- endfor %}
+</function>
+</tool_call>
+{%- endfor %}<|im_end|>
+{%- elif message.role == 'tool' %}<|im_start|>user
+<tool_response>{{ message.content }}</tool_response><|im_end|>
+{%- else %}<|im_start|>{{ message.role }}
+{{ message.content }}<|im_end|>
+{%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}<|im_start|>assistant
+{% if thinking %}<think>{% else %}<think></think>{% endif %}{%- endif %}

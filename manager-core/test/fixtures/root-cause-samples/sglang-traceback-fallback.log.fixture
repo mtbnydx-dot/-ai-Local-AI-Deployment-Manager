@@ -1,0 +1,20 @@
+> docker run -d --name sglang-qwen38-27b --gpus device=0 --ipc host --shm-size 32g -p 127.0.0.1:30000:30000 -v <AI_ROOT>\models\Qwen-Qwen3.8-27B-FP8:/models/Qwen-Qwen3.8-27B-FP8:ro lmsysorg/sglang:v0.5.17-cu129 python3 -m sglang.launch_server --model-path /models/Qwen-Qwen3.8-27B-FP8 --served-model-name qwen3.8-27b --host 0.0.0.0 --port 30000 --context-length 262144 --api-key <redacted>
+[2026-10-14 05:31:02] server_args=ServerArgs(model_path='/models/Qwen-Qwen3.8-27B-FP8', tokenizer_path='/models/Qwen-Qwen3.8-27B-FP8', context_length=262144, mem_fraction_static=0.86)
+[2026-10-14 05:31:09] Using default HuggingFace chat template with detected content format: openai
+[2026-10-14 05:31:18 TP0] Attention backend not explicitly specified. Use flashinfer backend by default.
+[2026-10-14 05:31:18 TP0] Init torch distributed begin.
+[2026-10-14 05:31:19 TP0] Init torch distributed ends. mem usage=0.00 GB
+[2026-10-14 05:31:20 TP0] Load weight begin. avail mem=94.31 GB
+[2026-10-14 05:31:51 TP0] Load weight end. type=Qwen3_5ForConditionalGeneration, dtype=torch.bfloat16, avail mem=65.10 GB, mem usage=29.21 GB.
+[2026-10-14 05:31:52 TP0] Scheduler hit an exception: Traceback (most recent call last):
+  File "/sgl-workspace/sglang/python/sglang/srt/managers/scheduler.py", line 2964, in run_scheduler_process
+    scheduler = Scheduler(server_args, port_args, gpu_id, tp_rank, moe_ep_rank, pp_rank, dp_rank)
+  File "/sgl-workspace/sglang/python/sglang/srt/model_executor/model_runner.py", line 1712, in init_memory_pool
+    self.req_to_token_pool = HybridReqToTokenPool(
+  File "/sgl-workspace/sglang/python/sglang/srt/mem_cache/memory_pool.py", line 211, in __init__
+    self._init_mamba_pool(size, mamba_spec)
+  File "/sgl-workspace/sglang/python/sglang/srt/mem_cache/memory_pool.py", line 248, in _init_mamba_pool
+    assert num_mamba_layers == len(self.mamba_layer_ids), (num_mamba_layers, self.mamba_layer_ids)
+AssertionError: (48, [])
+
+[2026-10-14 05:31:52] Received sigquit from a child process. It usually means the child failed.
