@@ -88,6 +88,61 @@ test("signed manager requests reach billing authorize and tampering is rejected"
   assert.equal(calls.length, 1);
 });
 
+test("platform bindings are accepted and signed manager calls bill the credential scope", async (t) => {
+  const { DatabaseSync } = require("node:sqlite");
+  const { createBillingStore } = require("../lib/billing-store");
+  const token = "billing-http-test-token";
+  const store = createBillingStore({ DatabaseSync, clock: () => new Date("2026-08-11T00:00:00.000Z") });
+  t.after(() => store.close());
+  const handler = createHandler(store, token);
+  const customer = store.createCustomer({ name: "Platform customer" });
+  const keyId = "k_7f3m9q2x8v4c1n6t5r0w";
+
+  const bound = responseState();
+  const bindUrl = new URL("http://127.0.0.1/api/billing/credentials");
+  await handler(request("POST", bindUrl.pathname, { customerId: customer.customerId, managerId: "platform", serviceClientId: keyId }), bound.res, bindUrl);
+  assert.equal(bound.state.status, 200);
+  assert.equal(bound.state.data.managerId, "platform");
+  assert.equal(bound.state.data.serviceClientId, keyId);
+
+  async function internal(pathname, payload) {
+    const url = new URL(`http://127.0.0.1${pathname}`);
+    const headers = core.buildBillingRequestHeaders(token, "POST", pathname, payload.managerId, JSON.stringify(payload));
+    const reply = responseState();
+    await handler(request("POST", pathname, payload, headers), reply.res, url);
+    return reply.state;
+  }
+  const authorize = {
+    requestId: "6f1c8a52-3b7e-4d0a-9c2f-8e5d4b3a2f10",
+    managerId: "llama-manager",
+    credentialManagerId: "platform",
+    clientId: keyId,
+    model: "model-a",
+    endpoint: "/v1/chat/completions",
+  };
+  const authorized = await internal("/internal/billing/authorize", authorize);
+  assert.equal(authorized.status, 200);
+  assert.equal(authorized.data.bound, true);
+  assert.equal(authorized.data.customerId, customer.customerId);
+
+  const { credentialManagerId: _omitted, ...unscoped } = authorize;
+  const conflict = await internal("/internal/billing/authorize", unscoped);
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.data.code, "billing_idempotency_conflict");
+
+  const { endpoint: _endpoint, ...settleIdentity } = authorize;
+  const settled = await internal("/internal/billing/settle", {
+    ...settleIdentity, ok: true, usageSource: "reported", inputTokens: 10, outputTokens: 5,
+  });
+  assert.equal(settled.status, 200);
+  assert.equal(settled.data.customerId, customer.customerId);
+  assert.equal(settled.data.managerId, "llama-manager");
+
+  const invalid = await internal("/internal/billing/authorize", { ...authorize, requestId: "0b7d2e4f-6a1c-4e3b-8d5f-2c9a7b6e4d31", credentialManagerId: "bad scope" });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.data.code, "billing_invalid_input");
+});
+
 test("billing admin routes dispatch lists and bounded JSON mutations", async () => {
   const calls = [];
   const store = {
