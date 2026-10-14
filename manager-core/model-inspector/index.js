@@ -10,6 +10,7 @@ const cache = require("./cache");
 const cardSchema = require("./card-schema");
 const contentDigest = require("./content-digest");
 const evidence = require("./evidence");
+const fit = require("./fit");
 const inspect = require("./inspect");
 const jsonSchemaLite = require("./json-schema-lite");
 const knowledge = require("./knowledge");
@@ -65,6 +66,19 @@ module.exports = {
     readLocalTemplate: templateSignatures.readLocalTemplate,
     templateSha256: templateSignatures.templateSha256,
     CATALOG_IDS: templateSignatures.CATALOG_IDS,
+  },
+  // Memory fit (02 §10, MOD-9): artifact inputs for 01's memory models and grading.
+  fit: {
+    artifactMemoryInputs: fit.artifactMemoryInputs,
+    kvBytes: fit.kvBytes,
+    estimateFit: fit.estimateFit,
+    legacyEstimate: fit.legacyEstimate,
+    validateFitResult: fit.validateFitResult,
+    resolveFitConstants: fit.resolveFitConstants,
+    fitConstantsFromConfig: fit.fitConstantsFromConfig,
+    FIT_CONSTANTS: fit.FIT_CONSTANTS,
+    FIT_RESULT_SCHEMA: fit.FIT_RESULT_SCHEMA,
+    MEMORY_POLICIES: fit.MEMORY_POLICIES,
   },
   tensorClasses: topology.DEFAULT_TENSOR_CLASSES,
   jsonSchema: { compileSchema: jsonSchemaLite.compileSchema, validate: jsonSchemaLite.validate },
