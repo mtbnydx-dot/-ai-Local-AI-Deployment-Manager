@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 1,
+  "timeZone": "UTC",
+  "now": "2026-10-14T08:00:00.000Z",
+  "cases": [
+    {
+      "case": "bytes(0)",
+      "zh-CN": "0 B",
+      "en-US": "0 B"
+    },
+    {
+      "case": "bytes(512)",
+      "zh-CN": "512 B",
+      "en-US": "512 B"
+    },
+    {
+      "case": "bytes(1536)",
+      "zh-CN": "1.5 KiB",
+      "en-US": "1.5 KiB"
+    },
+    {
+      "case": "bytes(5027783488)",
+      "zh-CN": "4.7 GiB",
+      "en-US": "4.7 GiB"
+    },
+    {
+      "case": "bytes(62491774157)",
+      "zh-CN": "58.2 GiB",
+      "en-US": "58.2 GiB"
+    },
+    {
+      "case": "bytes(102641946624)",
+      "zh-CN": "95.6 GiB",
+      "en-US": "95.6 GiB"
+    },
+    {
+      "case": "bytes(1200000000000000)",
+      "zh-CN": "1.1 PiB",
+      "en-US": "1.1 PiB"
+    },
+    {
+      "case": "bytes(5027783488, {\"unit\":\"MiB\"})",
+      "zh-CN": "4,794.9 MiB",
+      "en-US": "4,794.9 MiB"
+    },
+    {
+      "case": "bytes(5027783488, {\"unit\":\"GiB\"})",
+      "zh-CN": "4.7 GiB",
+      "en-US": "4.7 GiB"
+    },
+    {
+      "case": "bytes(null)",
+      "zh-CN": "—",
+      "en-US": "—"
+    },
+    {
+      "case": "bytes(-2048)",
+      "zh-CN": "-2 KiB",
+      "en-US": "-2 KiB"
+    },
+    {
+      "case": "mib(96801)",
+      "zh-CN": "96,801 MiB",
+      "en-US": "96,801 MiB"
+    },
+    {
+      "case": "mib(512.4)",
+      "zh-CN": "512 MiB",
+      "en-US": "512 MiB"
+    },
+    {
+      "case": "mib()",
+      "zh-CN": "—",
+      "en-US": "—"
+    },
+    {
+      "case": "tokens(0)",
+      "zh-CN": "0",
+      "en-US": "0"
+    },
+    {
+      "case": "tokens(512)",
+      "zh-CN": "512",
+      "en-US": "512"
+    },
+    {
+      "case": "tokens(8192)",
+      "zh-CN": "8,192 (8K)",
+      "en-US": "8,192 (8K)"
+    },
+    {
+      "case": "tokens(131072)",
+      "zh-CN": "131,072 (128K)",
+      "en-US": "131,072 (128K)"
+    },
+    {
+      "case": "tokens(262144)",
+      "zh-CN": "262,144 (256K)",
+      "en-US": "262,144 (256K)"
+    },
+    {
+      "case": "tokens(1048576)",
+      "zh-CN": "1,048,576 (1M)",
+      "en-US": "1,048,576 (1M)"
+    },
+    {
+      "case": "tokens(200000)",
+      "zh-CN": "200,000 (195.3K)",
+      "en-US": "200,000 (195.3K)"
+    },
+    {
+      "case": "tokens(\"x\")",
+      "zh-CN": "—",
+      "en-US": "—"
+    },
+    {
+      "case": "duration(0)",
+      "zh-CN": "0毫秒",
+      "en-US": "0 ms"
+    },
+    {
+      "case": "duration(512)",
+      "zh-CN": "512毫秒",
+      "en-US": "512 ms"
+    },
+    {
+      "case": "duration(1000)",
+      "zh-CN": "1秒",
+      "en-US": "1 sec"
+    },
+    {
+      "case": "duration(59999)",
+      "zh-CN": "59秒",
+      "en-US": "59 sec"
+    },
+    {
+      "case": "duration(545000)",
+      "zh-CN": "9分钟5秒",
+      "en-US": "9 min 5 sec"
+    },
+    {
+      "case": "duration(3600000)",
+      "zh-CN": "1小时",
+      "en-US": "1 hr"
+    },
+    {
+      "case": "duration(3723000)",
+      "zh-CN": "1小时2分钟",
+      "en-US": "1 hr 2 min"
+    },
+    {
+      "case": "duration(90061000)",
+      "zh-CN": "1天1小时",
+      "en-US": "1 day 1 hr"
+    },
+    {
+      "case": "duration(545000, {\"style\":\"narrow\"})",
+      "zh-CN": "9分钟5秒",
+      "en-US": "9m 5s"
+    },
+    {
+      "case": "duration(-5000)",
+      "zh-CN": "-5秒",
+      "en-US": "-5 sec"
+    },
+    {
+      "case": "duration(NaN)",
+      "zh-CN": "—",
+      "en-US": "—"
+    },
+    {
+      "case": "relative(\"2026-10-14T07:59:55.000Z\")",
+      "zh-CN": "5秒钟前",
+      "en-US": "5 seconds ago"
+    },
+    {
+      "case": "relative(\"2026-10-14T07:57:00.000Z\")",
+      "zh-CN": "3分钟前",
+      "en-US": "3 minutes ago"
+    },
+    {
+      "case": "relative(\"2026-10-14T05:00:00.000Z\")",
+      "zh-CN": "3小时前",
+      "en-US": "3 hours ago"
+    },
+    {
+      "case": "relative(\"2026-10-13T08:00:00.000Z\")",
+      "zh-CN": "昨天",
+      "en-US": "yesterday"
+    },
+    {
+      "case": "relative(\"2026-09-01T08:00:00.000Z\")",
+      "zh-CN": "上个月",
+      "en-US": "last month"
+    },
+    {
+      "case": "relative(\"2024-10-14T08:00:00.000Z\")",
+      "zh-CN": "2年前",
+      "en-US": "2 years ago"
+    },
+    {
+      "case": "relative(\"2026-10-14T10:00:00.000Z\")",
+      "zh-CN": "2小时后",
+      "en-US": "in 2 hours"
+    },
+    {
+      "case": "relative(\"not a date\")",
+      "zh-CN": "—",
+      "en-US": "—"
+    },
+    {
+      "case": "percent(0.612)",
+      "zh-CN": "61.2%",
+      "en-US": "61.2%"
+    },
+    {
+      "case": "percent(1)",
+      "zh-CN": "100.0%",
+      "en-US": "100.0%"
+    },
+    {
+      "case": "percent(0.0005, 2)",
+      "zh-CN": "0.05%",
+      "en-US": "0.05%"
+    },
+    {
+      "case": "percent(0.24, 0)",
+      "zh-CN": "24%",
+      "en-US": "24%"
+    },
+    {
+      "case": "percent(null)",
+      "zh-CN": "—",
+      "en-US": "—"
+    },
+    {
+      "case": "number(1234567.891)",
+      "zh-CN": "1,234,567.89",
+      "en-US": "1,234,567.89"
+    },
+    {
+      "case": "number(0.5, 0)",
+      "zh-CN": "1",
+      "en-US": "1"
+    },
+    {
+      "case": "integer(1234567.5)",
+      "zh-CN": "1,234,568",
+      "en-US": "1,234,568"
+    },
+    {
+      "case": "rate(38.64, \"tok/s\")",
+      "zh-CN": "38.6 tok/s",
+      "en-US": "38.6 tok/s"
+    },
+    {
+      "case": "rate(1200, \"req/min\")",
+      "zh-CN": "1,200 req/min",
+      "en-US": "1,200 req/min"
+    },
+    {
+      "case": "dateTime(\"2026-10-14T08:00:00.000Z\")",
+      "zh-CN": "2026年10月14日 08:00",
+      "en-US": "Oct 14, 2026, 08:00"
+    },
+    {
+      "case": "dateTime(\"2026-10-14T08:00:00.000Z\", {\"style\":\"short\"})",
+      "zh-CN": "2026/10/14 08:00",
+      "en-US": "10/14/26, 08:00"
+    },
+    {
+      "case": "dateTime(\"2026-10-14T08:00:00.000Z\", {\"style\":\"long\"})",
+      "zh-CN": "2026年10月14日 08:00:00",
+      "en-US": "Oct 14, 2026, 08:00:00"
+    },
+    {
+      "case": "dateTime(\"2026-10-14T08:00:00.000Z\", {\"style\":\"date\"})",
+      "zh-CN": "2026年10月14日",
+      "en-US": "Oct 14, 2026"
+    },
+    {
+      "case": "dateTime(\"garbage\")",
+      "zh-CN": "—",
+      "en-US": "—"
+    },
+    {
+      "case": "time(\"2026-10-14T08:00:05.000Z\")",
+      "zh-CN": "08:00:05",
+      "en-US": "08:00:05"
+    },
+    {
+      "case": "range(\"2026-10-14T08:00:00.000Z\", \"2026-10-14T09:30:00.000Z\")",
+      "zh-CN": "2026/10/14 08:00–09:30",
+      "en-US": "Oct 14, 2026, 08:00 – 09:30"
+    },
+    {
+      "case": "range(\"2026-10-14T08:00:00.000Z\", \"2026-10-15T09:30:00.000Z\")",
+      "zh-CN": "2026/10/14 08:00 – 2026/10/15 09:30",
+      "en-US": "Oct 14, 2026, 08:00 – Oct 15, 2026, 09:30"
+    }
+  ]
+}

@@ -1,4 +1,18 @@
 {
-  "prefixes": [],
-  "unused": ["shell.boot.loading", "shell.boot.noscript"]
+  "prefixes": [
+    "error.code.",
+    "shell.nav.",
+    "status."
+  ],
+  "unused": [
+    "common.window.1h",
+    "deploy.list.count",
+    "shell.boot.loading",
+    "shell.boot.noscript",
+    "shell.conn.offline",
+    "shell.conn.polling",
+    "shell.readonly",
+    "shell.skip",
+    "shell.update"
+  ]
 }
