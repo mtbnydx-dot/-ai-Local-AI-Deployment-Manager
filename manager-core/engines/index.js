@@ -16,6 +16,7 @@ const descriptorSchema = require("./descriptor-schema");
 const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
 const legacyAliases = require("./legacy-aliases");
+const metrics = require("./metrics");
 const paramCatalog = require("./param-catalog");
 const registry = require("./registry");
 const routes = require("./routes");
@@ -48,6 +49,7 @@ module.exports = {
   buildEnginesPayload: routes.buildEnginesPayload,
   buildEngineSchemaPayload: routes.buildEngineSchemaPayload,
   validateDraftRequest: routes.validateDraftRequest,
+  readInstanceMetrics: routes.readInstanceMetrics,
   // Parameter catalogs (01 §9), the expression language recipes and catalogs
   // share (01 §10.2), and the legacy alias table (01 §9.5).
   paramCatalog,
@@ -60,6 +62,10 @@ module.exports = {
   legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
   legacyConfigToValues: legacyAliases.legacyConfigToValues,
   valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,
+  // The only Prometheus parser and the canonical metric mapping (01 §16.1,
+  // 00 §9.12): parsePrometheus, mapPrometheus and summarize for the 04
+  // collector, the histogram helpers, and the per-manager instance sampler.
+  metrics,
   // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
   adapters,
   adapterFor,

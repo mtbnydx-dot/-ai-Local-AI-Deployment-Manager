@@ -528,6 +528,8 @@ let cacheHitMonitorTimer = null;
 let cacheHitMonitorBusy = false;
 let cacheHitRuntimeContext = { checkedAt: 0, container: null };
 let cacheHitLastWarningAt = 0;
+// Busy and total slots from the last /slots poll of the primary container.
+let lastSlotOccupancy = null;
 let recentLaunches = [];
 const MAX_RECENT_LAUNCHES = 8;
 // 启动任务串行化：同一管理器内同一时刻只允许一个 serve 启动流程在跑，
@@ -782,10 +784,12 @@ const managerLifecycle = core.createManagerLifecycle({
     await core.sweepStaleRollbackContainers({ docker, managerId: CONFIG.managerId }).catch(() => {});
     startAutomationMonitor();
     startCacheHitMonitor();
+    startInstanceMetricsSampler();
   },
   onShutdown: async () => {
     jobsLedgerStore.clearJobsSaveTimer();
     if (automationMonitorTimer) clearInterval(automationMonitorTimer);
+    instanceMetricsSampler.stop();
     clearInterval(idleUnloadTimer);
     if (cacheHitMonitorTimer) clearInterval(cacheHitMonitorTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
@@ -1697,6 +1701,24 @@ core.registerRuntimeRoutes(app, {
 // uncached inspect behind the route's own 60 s cache. GET /api/engines/:id/schema
 // (ENG-3) serves the parameter catalog with host facts from the cached GPU probe.
 const engineRegistry = core.engines.createEngineRegistry({ env: process.env });
+// Per-instance engine metrics (ENG-14): the sampler scrapes each running
+// instance's /metrics every 10 s in the background, and
+// GET /api/instances/:id/metrics serves its latest snapshot, so the route never
+// scrapes an engine or calls Docker. /api/stats keeps its own scrape path.
+// llama.cpp's derived inputs (descriptor metricsMap) come from the /slots
+// poll the cache-hit monitor already runs: slot occupancy for kvUsageRatio
+// and the tracker's cumulative cached tokens for cachedPromptTokensTotal.
+const instanceMetricsSampler = core.engines.metrics.createInstanceMetricsSampler({
+  registry: engineRegistry,
+  managerId: "llama",
+  ownerLabelValue: CONFIG.managerId,
+  primaryContainerName: CONFIG.containerName,
+  listContainers: listMetricsSamplerContainers,
+  endpointFor: (container) => getContainerEndpoint(container),
+  headersFor: (container) => llamaAuthHeaders(getLlamaApiKey(container)),
+  getDerivedInputs: metricsDerivedInputs,
+  adapterFor: core.engines.adapterFor,
+});
 core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
   managerId: "llama",
@@ -1705,6 +1727,7 @@ core.engines.registerEngineRoutes(app, {
   getImageStatus: getImageStatusFresh,
   listManagedContainers: () => listManagedContainers(),
   getGpuStatus,
+  metricsSampler: instanceMetricsSampler,
 });
 
 core.registerAuditRoutes(app, {
@@ -2216,6 +2239,7 @@ async function resolveCacheHitContainer(containerHint = null) {
 async function sampleCacheHitStats(containerHint = null) {
   const container = await resolveCacheHitContainer(containerHint);
   if (!container?.running) {
+    lastSlotOccupancy = null;
     await cacheHitTracker.clearActive();
     return cacheHitTracker.getSummary();
   }
@@ -2228,11 +2252,40 @@ async function sampleCacheHitStats(containerHint = null) {
   });
   if (!response.ok) throw new Error(`slots returned ${response.status}`);
   const slots = await response.json();
+  lastSlotOccupancy = slotOccupancy(slots, container);
   return cacheHitTracker.observeSlots(slots, {
     runtimeId: cacheHitRuntimeId(container),
     model: String(container.labels?.["ai.manager.model"] || ""),
     source,
   });
+}
+
+function slotOccupancy(slots, container) {
+  const list = Array.isArray(slots) ? slots : [];
+  return {
+    containerName: normalizeDockerContainerName(container?.name || CONFIG.containerName),
+    busySlots: list.filter((slot) => slot?.is_processing).length,
+    nSlots: list.length,
+    observedAt: Date.now(),
+  };
+}
+
+// Inputs for the llamacpp descriptor's derive sources. They describe the
+// primary container only (the cache-hit monitor polls that one), and slot
+// occupancy older than three polls counts as unknown.
+async function metricsDerivedInputs(instance) {
+  if (!instance?.primary) return null;
+  const inputs = {};
+  const occupancy = lastSlotOccupancy;
+  if (occupancy && occupancy.containerName === instance.containerName && Date.now() - occupancy.observedAt <= 3 * CACHE_HIT_POLL_MS) {
+    inputs.busySlots = occupancy.busySlots;
+    inputs.nSlots = occupancy.nSlots;
+  }
+  const summary = await cacheHitTracker.getSummary().catch(() => null);
+  if (summary?.cumulative && Number.isFinite(Number(summary.cumulative.cachedTokens))) {
+    inputs.cacheHit = { cachedTokens: Number(summary.cumulative.cachedTokens) };
+  }
+  return inputs;
 }
 
 function startCacheHitMonitor() {
@@ -2802,6 +2855,7 @@ async function getContainerStatusFresh(containerName) {
     return {
       exists: true,
       running: String(info.State || "").toLowerCase() === "running",
+      id: info.ID || "",
       name: info.Names,
       status: info.Status,
       ports: info.Ports,
@@ -2843,6 +2897,27 @@ async function getManagerResourceSummary(gpu = null, ownContainer = null) {
     peerRunningCount: runningPeers.length,
     hasPeerRunning: runningPeers.length > 0,
   };
+}
+
+// The containers the metrics sampler may scrape: this manager's labelled
+// containers plus the primary one, with the container id and start time that
+// docker ps -a --filter name= reports (the runtimeKey needs both). The sampler
+// applies the ownership and engine rules itself.
+async function listMetricsSamplerContainers() {
+  const managed = await listManagedContainers();
+  const names = new Set([CONFIG.containerName]);
+  for (const container of managed) {
+    if (container.manager === CONFIG.managerId) names.add(container.name);
+  }
+  const statuses = await Promise.all([...names].map((name) => getContainerStatus(name)));
+  return statuses.filter((status) => status?.exists);
+}
+
+// The frontend smoke tests start real managers; they must not scrape the
+// engines this computer is running.
+function startInstanceMetricsSampler() {
+  if (process.env.AI_FRONTEND_SMOKE === "1") return;
+  instanceMetricsSampler.start();
 }
 
 async function listManagedContainers() {
@@ -4051,6 +4126,7 @@ module.exports = {
   app,
   CONFIG,
   engineRegistry,
+  instanceMetricsSampler,
   startManager,
   shutdownManager,
   firstExisting,
