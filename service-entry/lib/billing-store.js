@@ -438,6 +438,38 @@ function createBillingStore(options = {}) {
     return prepare(sql).all(...params).map((row) => customerFromRow(row, walletState(row.customer_id)));
   }
 
+  // Read-only billing snapshot of one customer for /v1/me (05 §6.4), or null
+  // when the customer does not exist. `at` picks the billing month (store tz
+  // offset); the balance is the current wallet balance. Period spend is what
+  // the month's LLM and TTS usage cost: the debit for Hard rows, the projected
+  // cost for Shadow rows, which are never charged.
+  function getCustomerSummary(customerIdInput, options = {}) {
+    rejectUnknownKeys(options, ["at"], "customer summary options");
+    const customerId = uuid(customerIdInput, "customerId");
+    const atDate = isBlank(options.at) ? nowDate() : usageSummaryInstant(options.at, "at", defaultTzOffsetMinutes);
+    const customer = prepare(`
+      SELECT c.enforcement_mode AS customer_enforcement_mode, p.enforcement_mode AS plan_enforcement_mode
+      FROM billing_customers c
+      LEFT JOIN billing_plans p ON p.plan_id=c.plan_id
+      WHERE c.customer_id=?
+    `).get(customerId);
+    if (!customer) return null;
+    const period = monthPeriod(atDate, defaultTzOffsetMinutes);
+    const spendSql = (table) => `
+      SELECT COALESCE(SUM(CASE WHEN enforcement_mode='hard' THEN charged_microcredits ELSE projected_microcredits END), 0) AS total
+      FROM ${table} WHERE customer_id=? AND at>=? AND at<?
+    `;
+    const llmSpend = prepare(spendSql("billing_usage_events")).get(customerId, period.start, period.end);
+    const ttsSpend = prepare(spendSql("billing_tts_usage_events")).get(customerId, period.start, period.end);
+    const balance = prepare("SELECT COALESCE(SUM(delta_microcredits), 0) AS total FROM billing_wallet_ledger WHERE customer_id=?").get(customerId);
+    return {
+      enforcementMode: customer.customer_enforcement_mode || customer.plan_enforcement_mode || defaultEnforcementMode,
+      balanceMicrocredits: decimal(BigInt(balance?.total || 0)),
+      periodSpendMicrocredits: decimal(BigInt(llmSpend?.total || 0) + BigInt(ttsSpend?.total || 0)),
+      period,
+    };
+  }
+
   function bindCredential(input = {}) {
     const customerId = uuid(input.customerId, "customerId");
     const managerId = managerIdentifier(input.managerId);
@@ -711,7 +743,9 @@ function createBillingStore(options = {}) {
 
       const atDate = authorizationTime;
       const at = atDate.toISOString();
-      const binding = getBindingRow(request.managerId, request.clientId);
+      // The binding is looked up under the credential's billing scope (05 §6.4);
+      // the price below still resolves for the manager that serves the request.
+      const binding = getBindingRow(request.credentialManagerId, request.clientId);
       const period = monthPeriod(atDate, defaultTzOffsetMinutes);
       const base = {
         ...request,
@@ -781,8 +815,9 @@ function createBillingStore(options = {}) {
          binding_id, plan_id, price_id, model, endpoint, stream, enforcement_mode, allowed, decision_code,
          decision_message, status, estimated_input_tokens, max_output_tokens, cached_input_tokens,
          reservation_microcredits, price_input_per_million, price_output_per_million, price_cached_input_per_million,
-         price_fixed_request, period_key, period_start, period_end, authorized_at, expires_at, settled_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+         price_fixed_request, period_key, period_start, period_end, authorized_at, expires_at, settled_at,
+         credential_manager_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
     `).run(
       input.requestId, input.reservationId, input.externalRequestId || null, input.managerId, input.clientId,
       binding?.customer_id || null, binding?.binding_id || null, binding?.plan_id || null, price?.price_id || null,
@@ -792,6 +827,7 @@ function createBillingStore(options = {}) {
       price?.input_per_million_microcredits ?? 0n, price?.output_per_million_microcredits ?? 0n,
       price?.cached_input_per_million_microcredits ?? 0n, price?.fixed_request_microcredits ?? 0n,
       input.period.key, input.period.start, input.period.end, input.at, input.expiresAt,
+      input.credentialManagerId,
     );
     return getReservationRow(input.requestId);
   }
@@ -801,7 +837,7 @@ function createBillingStore(options = {}) {
     return transaction(() => {
       const existingUsage = getUsageRow(settlement.requestId);
       if (existingUsage) {
-        assertUsageIdentity(existingUsage, settlement);
+        assertUsageIdentity(existingUsage, settlement, getReservationRow(settlement.requestId));
         return settlementFromRow(existingUsage, true);
       }
       const reservation = getReservationRow(settlement.requestId);
@@ -1437,6 +1473,7 @@ function createBillingStore(options = {}) {
     updateCustomer,
     updateCustomerPolicy,
     getCustomer,
+    getCustomerSummary,
     listCustomers,
     bindCredential,
     listCredentialBindings,
@@ -1657,6 +1694,9 @@ function ensureSchema(db) {
   ensureColumn(db, "billing_plans", "tts_per_minute_microcredits", "INTEGER NOT NULL DEFAULT 0 CHECK(tts_per_minute_microcredits >= 0)");
   ensureColumn(db, "billing_plans", "tts_per_thousand_chars_microcredits", "INTEGER NOT NULL DEFAULT 0 CHECK(tts_per_thousand_chars_microcredits >= 0)");
   ensureColumn(db, "billing_customers", "tts_daily_seconds_limit", "INTEGER CHECK(tts_daily_seconds_limit IS NULL OR tts_daily_seconds_limit >= 0)");
+  // Billing principal (05 §6.4): the scope the credential binding was found
+  // under. NULL on older reservations, which read as their manager_id.
+  ensureColumn(db, "billing_request_reservations", "credential_manager_id", "TEXT");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_customer_external_ref
       ON billing_customers(external_ref) WHERE external_ref IS NOT NULL;
@@ -1737,17 +1777,19 @@ function ensureColumn(db, table, column, definition) {
 
 function normalizeAuthorizeInput(input, uuid) {
   rejectUnknownKeys(input, [
-    "requestId", "externalRequestId", "managerId", "clientId", "serviceClientId", "model", "endpoint", "stream",
-    "estimatedInputTokens", "maxOutputTokens", "cachedInputTokens",
+    "requestId", "externalRequestId", "managerId", "credentialManagerId", "clientId", "serviceClientId", "model",
+    "endpoint", "stream", "estimatedInputTokens", "maxOutputTokens", "cachedInputTokens",
   ], "authorization request");
   const estimatedInputTokens = nonNegativeInt64(input.estimatedInputTokens ?? 0, "estimatedInputTokens");
   const maxOutputTokens = nonNegativeInt64(input.maxOutputTokens ?? 0, "maxOutputTokens");
   const cachedInputTokens = nonNegativeInt64(input.cachedInputTokens ?? 0, "cachedInputTokens");
   if (cachedInputTokens > estimatedInputTokens) throw new BillingStoreError("billing_invalid_tokens", "cachedInputTokens cannot exceed estimatedInputTokens.");
+  const managerId = managerIdentifier(input.managerId);
   return {
     requestId: uuid(input.requestId, "requestId"),
     externalRequestId: optionalText(input.externalRequestId, "externalRequestId", 128),
-    managerId: managerIdentifier(input.managerId),
+    managerId,
+    credentialManagerId: credentialManagerIdentifier(input.credentialManagerId, managerId),
     clientId: clientIdentifier(input.clientId ?? input.serviceClientId),
     model: text(input.model, "model", 1, 256),
     endpoint: text(input.endpoint, "endpoint", 1, 256),
@@ -1760,8 +1802,8 @@ function normalizeAuthorizeInput(input, uuid) {
 
 function normalizeSettlementInput(input, uuid) {
   rejectUnknownKeys(input, [
-    "requestId", "externalRequestId", "managerId", "clientId", "serviceClientId", "model", "status", "ok",
-    "terminalState", "usageSource", "inputTokens", "outputTokens", "totalTokens", "cachedInputTokens",
+    "requestId", "externalRequestId", "managerId", "credentialManagerId", "clientId", "serviceClientId", "model",
+    "status", "ok", "terminalState", "usageSource", "inputTokens", "outputTokens", "totalTokens", "cachedInputTokens",
   ], "settlement request");
   const inputTokens = nonNegativeInt64(input.inputTokens ?? 0, "inputTokens");
   const outputTokens = nonNegativeInt64(input.outputTokens ?? 0, "outputTokens");
@@ -1774,10 +1816,12 @@ function normalizeSettlementInput(input, uuid) {
   const rawTerminalState = String(input.terminalState || (input.ok ? "completed" : "failed")).trim().toLowerCase();
   const terminalState = TERMINAL_STATE_ALIASES.get(rawTerminalState) || rawTerminalState;
   if (!TERMINAL_STATES.has(terminalState)) throw new BillingStoreError("billing_invalid_terminal_state", "terminalState is invalid.");
+  const managerId = managerIdentifier(input.managerId);
   return {
     requestId: uuid(input.requestId, "requestId"),
     externalRequestId: optionalText(input.externalRequestId, "externalRequestId", 128),
-    managerId: managerIdentifier(input.managerId),
+    managerId,
+    credentialManagerId: credentialManagerIdentifier(input.credentialManagerId, managerId),
     clientId: clientIdentifier(input.clientId ?? input.serviceClientId),
     model: text(input.model, "model", 1, 256),
     status: boundedInteger(input.status ?? 0, "status", 0, 599),
@@ -1807,8 +1851,15 @@ function ceilDiv(value, divisor) {
   return (value + divisor - 1n) / divisor;
 }
 
+// COALESCE(credential_manager_id, manager_id): reservations written before the
+// column existed were always bound under their serving manager.
+function reservationCredentialManagerId(row) {
+  return row.credential_manager_id || row.manager_id;
+}
+
 function assertReservationIdentity(row, input) {
-  if (row.manager_id !== input.managerId || row.service_client_id !== input.clientId || row.model !== input.model) {
+  if (row.manager_id !== input.managerId || row.service_client_id !== input.clientId || row.model !== input.model
+    || reservationCredentialManagerId(row) !== input.credentialManagerId) {
     throw new BillingStoreError("billing_idempotency_conflict", "requestId was already used for a different billing request.", 409);
   }
   if (input.externalRequestId && row.external_request_id && input.externalRequestId !== row.external_request_id) {
@@ -1816,8 +1867,11 @@ function assertReservationIdentity(row, input) {
   }
 }
 
-function assertUsageIdentity(row, input) {
-  if (row.manager_id !== input.managerId || row.service_client_id !== input.clientId || row.model !== input.model) {
+// The immutable usage row has no credential column, so a replayed settlement
+// checks the credential scope against the reservation it settled.
+function assertUsageIdentity(row, input, reservation) {
+  if (row.manager_id !== input.managerId || row.service_client_id !== input.clientId || row.model !== input.model
+    || (reservation && reservationCredentialManagerId(reservation) !== input.credentialManagerId)) {
     throw new BillingStoreError("billing_idempotency_conflict", "requestId was already settled for a different billing request.", 409);
   }
 }
@@ -2055,6 +2109,14 @@ function identifier(value, name, min = 1, max = 128) {
 
 function managerIdentifier(value) {
   return identifier(value, "managerId", 1, 64).toLowerCase();
+}
+
+// The billing scope a credential is bound under (05 §6.4): "platform" for
+// platform keys, a manager billing id for migrated ones. It defaults to the
+// serving manager, which is the only scope requests carried before.
+function credentialManagerIdentifier(value, managerId) {
+  if (isBlank(value)) return managerId;
+  return identifier(value, "credentialManagerId", 1, 64).toLowerCase();
 }
 
 function clientIdentifier(value) {
