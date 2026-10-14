@@ -202,6 +202,10 @@ function isEventStream(headers) {
 // Buffers a request body up to `limit`. An oversized body is discarded rather
 // than cut off, so the 413 reaches a client that is still sending.
 function readRequestBody(req, limit) {
+  // 05's guard already read a signed request's body into req.rawBody (05 §5.7).
+  if (Buffer.isBuffer(req.rawBody)) {
+    return Promise.resolve(req.rawBody.length > limit ? { tooLarge: true } : { body: req.rawBody });
+  }
   return new Promise((resolve) => {
     const declared = Number(req.headers?.["content-length"]);
     if (Number.isFinite(declared) && declared > limit) {

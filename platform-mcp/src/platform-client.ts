@@ -1,4 +1,5 @@
 import type { PlatformMcpConfig, ManagerTarget } from "./config.js";
+import { createSignedEntryFetch, createTrustTokenReader } from "./entry-auth.js";
 import { FixedHttpClient, UpstreamRequestError, type JsonObject } from "./http-client.js";
 import { cleanText } from "./redaction.js";
 import { UpstreamCache } from "./upstream-cache.js";
@@ -678,6 +679,12 @@ export class LocalPlatformClient implements PlatformDataSource {
     this.http = http ?? new FixedHttpClient({
       timeoutMs: config.timeoutMs,
       maxResponseBytes: config.maxUpstreamBytes,
+      // Service entry calls are signed as system:mcp (05 §5.7); manager and
+      // search gateway calls pass through unchanged.
+      fetchImpl: createSignedEntryFetch({
+        entryUrl: config.serviceEntryUrl,
+        tokens: createTrustTokenReader(config.aiRoot),
+      }),
     });
     this.cache = cache ?? new UpstreamCache({ ttlMs: config.cacheTtlMs });
   }

@@ -1,28 +1,38 @@
 @echo off
 setlocal
 rem Stops the service entry and both managers. Each one first gets a graceful
-rem POST /api/manager/shutdown. A port that still listens after 10 seconds is
-rem force-stopped through the PID in that component's .manager.pid, but only
-rem when CIM shows the PID is a node process with server.js in its command
-rem line and it owns the port; anything else is reported, left alone, and the
-rem script exits 1. SERVICE_ENTRY_PORT, VLLM_MANAGER_PORT and
-rem LLAMA_MANAGER_PORT override the default ports 5176-5178.
+rem POST /api/manager/shutdown. The entry's request is signed as the machine
+rem principal system:cli through service-entry\scripts\entry-call.js (05
+rem PUB-25), which reads the entry trust token; when it cannot be signed or is
+rem refused, the unsigned request is tried as before. A port that still listens
+rem after 10 seconds is force-stopped through the PID in that component's
+rem .manager.pid, but only when CIM shows the PID is a node process with
+rem server.js in its command line and it owns the port; anything else is
+rem reported, left alone, and the script exits 1. SERVICE_ENTRY_PORT,
+rem VLLM_MANAGER_PORT and LLAMA_MANAGER_PORT override the default ports
+rem 5176-5178; NODE_EXE overrides the node used for the signed request.
 set "ROOT=%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$root=$env:ROOT;" ^
+  "$node=$env:NODE_EXE; if ([string]::IsNullOrWhiteSpace($node)) { $node='node' }" ^
+  "$entryCall=Join-Path $root 'service-entry\scripts\entry-call.js';" ^
   "function Get-PortSetting($name, [int]$default) { $raw=[Environment]::GetEnvironmentVariable($name, 'Process'); if ([string]::IsNullOrWhiteSpace($raw)) { return $default }; $value=$raw -as [int]; if (!$value -or $value -lt 1 -or $value -gt 65535) { throw ($name + ' must be a port number between 1 and 65535: ' + $raw) }; return $value }" ^
   "$items=@(" ^
-  "  @{Name='Service Entry'; Root=(Join-Path $root 'service-entry'); Port=(Get-PortSetting 'SERVICE_ENTRY_PORT' 5176)}," ^
-  "  @{Name='vLLM Manager'; Root=(Join-Path $root 'vllm-manager'); Port=(Get-PortSetting 'VLLM_MANAGER_PORT' 5177)}," ^
-  "  @{Name='llama.cpp Manager'; Root=(Join-Path $root 'llama-manager'); Port=(Get-PortSetting 'LLAMA_MANAGER_PORT' 5178)}" ^
+  "  @{Name='Service Entry'; Root=(Join-Path $root 'service-entry'); Port=(Get-PortSetting 'SERVICE_ENTRY_PORT' 5176); Signed=$true}," ^
+  "  @{Name='vLLM Manager'; Root=(Join-Path $root 'vllm-manager'); Port=(Get-PortSetting 'VLLM_MANAGER_PORT' 5177); Signed=$false}," ^
+  "  @{Name='llama.cpp Manager'; Root=(Join-Path $root 'llama-manager'); Port=(Get-PortSetting 'LLAMA_MANAGER_PORT' 5178); Signed=$false}" ^
   ");" ^
   "function Get-Listener([int]$port) { Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 }" ^
   "function Wait-PortClosed([int]$port, [int]$seconds) { $deadline=(Get-Date).AddSeconds($seconds); while ((Get-Date) -lt $deadline) { if (!(Get-Listener $port)) { return $true }; Start-Sleep -Milliseconds 250 }; return !(Get-Listener $port) }" ^
+  "function Send-Shutdown([int]$port) { try { Invoke-RestMethod -UseBasicParsing -Method Post -Uri ('http://127.0.0.1:' + $port + '/api/manager/shutdown') -TimeoutSec 2 | Out-Null; return '' } catch { return $_.Exception.Message } }" ^
+  "function Send-SignedShutdown([int]$port) { try { $out=& $node $entryCall POST /api/manager/shutdown --port $port --timeout-ms 3000 --quiet 2>&1; if ($LASTEXITCODE -eq 0) { return '' }; return (($out | Out-String).Trim()) } catch { return $_.Exception.Message } }" ^
   "$failed=@();" ^
   "foreach ($item in $items) {" ^
   "  $port=$item.Port;" ^
   "  if (!(Get-Listener $port)) { Write-Host ($item.Name + ' on ' + $port + ' is not running.'); continue }" ^
-  "  try { Invoke-RestMethod -UseBasicParsing -Method Post -Uri ('http://127.0.0.1:' + $port + '/api/manager/shutdown') -TimeoutSec 2 | Out-Null } catch { Write-Host ($item.Name + ' on ' + $port + ' did not accept the shutdown request: ' + $_.Exception.Message) }" ^
+  "  $why='';" ^
+  "  if ($item.Signed) { $why=Send-SignedShutdown $port; if ($why) { Write-Host ($item.Name + ' on ' + $port + ' did not accept the signed shutdown request: ' + $why); $why=Send-Shutdown $port } } else { $why=Send-Shutdown $port }" ^
+  "  if ($why) { Write-Host ($item.Name + ' on ' + $port + ' did not accept the shutdown request: ' + $why) }" ^
   "  if (Wait-PortClosed $port 10) { Write-Host ('Stopped ' + $item.Name + ' on ' + $port); continue }" ^
   "  $pidFile=Join-Path $item.Root '.manager.pid'; $pidValue=$null;" ^
   "  if (Test-Path -LiteralPath $pidFile) { $pidValue=Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1 }" ^
