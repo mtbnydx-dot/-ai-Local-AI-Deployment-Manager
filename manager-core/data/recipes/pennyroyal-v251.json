@@ -19,9 +19,7 @@
     "allowOverride": false
   },
   "match": {
-    "capabilityIds": [
-      "qwen3.8-flash-next"
-    ],
+    "familyId": "qwen3.8-flash-next",
     "runtimeId": "sglang@pennyroyal-v2.5.1",
     "quant": [
       "nvfp4",

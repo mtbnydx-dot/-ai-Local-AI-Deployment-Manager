@@ -171,8 +171,9 @@ test("an unknown match key is rejected, and a scenario never carries a match", (
 
 test("match.capabilityIds is accepted; an owner file is told to move to familyId", () => {
   const recipe = bundled("qwen38-flashnext-262k");
-  assert.deepEqual(recipe.match.capabilityIds, ["qwen3.8-flash-next"]);
-  assert.equal(recipe.match.familyId, undefined);
+  assert.equal(recipe.match.familyId, "qwen3.8-flash-next");
+  assert.equal(recipe.match.capabilityIds, undefined, "ENG-25: no bundled recipe uses the deprecated alias");
+  recipe.match = { capabilityIds: ["qwen3.8-flash-next"], quant: recipe.match.quant };
 
   const asBundled = recipeSchema.validateRecipe(recipe, options({ mode: "bundled" }));
   assert.equal(asBundled.ok, true);

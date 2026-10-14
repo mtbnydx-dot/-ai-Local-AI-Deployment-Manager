@@ -56,6 +56,30 @@ function minimalRecipe(id, extra = {}) {
 const DIGEST_A = "a".repeat(64);
 
 // ---------------------------------------------------------------------------
+
+test("no bundled recipe uses match.capabilityIds, and every bundled familyId is a known family", () => {
+  const knowledge = require("../model-inspector/knowledge");
+  for (const recipe of recipes.getRecipeStore().list()) {
+    assert.equal(recipe.match?.capabilityIds, undefined, recipe.id);
+    if (recipe.match?.familyId) assert.equal(knowledge.familyIdForCapabilityId(recipe.match.familyId), recipe.match.familyId, recipe.id);
+  }
+});
+
+test("an override file with match.capabilityIds still matches and warns recipe_match_deprecated", (t) => {
+  const { store } = newStore(t, {
+    "legacy.json": minimalRecipe("owner-legacy", { match: { capabilityIds: ["qwen3.8"] } }),
+  });
+  assert.ok(store.get("owner-legacy"), "the override loads");
+  assert.ok(store.warnings().some((item) => item.id === "owner-legacy" && item.code === "recipe_match_deprecated"));
+  for (const model of [{ capabilityIds: ["qwen3.8"] }, { familyId: "qwen3.8" }, { capabilityId: "qwen3.8" }]) {
+    const hit = recipes.matchRecipes({ engineId: "sglang", model }, store).find((item) => item.recipe.id === "owner-legacy");
+    assert.equal(hit.eligible, true, JSON.stringify(model));
+  }
+  const miss = recipes.matchRecipes({ engineId: "sglang", model: { capabilityIds: ["gemma4"] } }, store).find((item) => item.recipe.id === "owner-legacy");
+  assert.equal(miss.eligible, false);
+});
+
+// ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
 
@@ -434,7 +458,7 @@ test("matchRecipes scores contentDigest above familyId above quant and filters b
   assert.deepEqual(flags, [...flags].sort((a, b) => b - a));
 });
 
-test("matchRecipes: capabilityIds count like familyId, hardware matches add their score, scenarios never match", () => {
+test("matchRecipes: model capability ids resolve to their family, hardware matches add their score, scenarios never match", () => {
   const store = recipes.getRecipeStore();
   const ranked = recipes.matchRecipes({
     engineId: "sglang",
@@ -446,8 +470,8 @@ test("matchRecipes: capabilityIds count like familyId, hardware matches add thei
   assert.equal(top.recipe.id, "qwen38-flashnext-262k");
   assert.equal(top.eligible, true);
   const { SCORES } = recipes;
-  assert.equal(top.score, SCORES.capabilityIds + SCORES.quant + SCORES.sm + SCORES.memory + SCORES.runtime + SCORES.verified);
-  assert.ok(top.reasons.includes("capability") && top.reasons.includes("compute_capability") && top.reasons.includes("gpu_memory"));
+  assert.equal(top.score, SCORES.familyId + SCORES.quant + SCORES.sm + SCORES.memory + SCORES.runtime + SCORES.verified);
+  assert.ok(top.reasons.includes("family") && top.reasons.includes("compute_capability") && top.reasons.includes("gpu_memory"));
   assert.equal(ranked.some((item) => item.recipe.kind === "scenario"), false);
 
   const smallHost = recipes.matchRecipes({
@@ -460,7 +484,7 @@ test("matchRecipes: capabilityIds count like familyId, hardware matches add thei
   assert.ok(smallHost.score < top.score);
 
   const unknown = recipes.matchRecipes({ engineId: "sglang", model: {} }, store);
-  assert.equal(unknown.some((item) => item.eligible && item.recipe.match?.capabilityIds), false);
+  assert.equal(unknown.some((item) => item.eligible && item.recipe.match?.familyId), false);
 });
 
 // ---------------------------------------------------------------------------

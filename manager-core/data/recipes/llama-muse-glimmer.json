@@ -15,9 +15,7 @@
     "allowOverride": true
   },
   "match": {
-    "capabilityIds": [
-      "muse-glimmer"
-    ]
+    "familyId": "muse-glimmer"
   },
   "priority": 10,
   "values": {

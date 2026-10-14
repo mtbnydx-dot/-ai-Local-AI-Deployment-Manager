@@ -534,6 +534,28 @@ function modelCapabilityIds(model) {
   return ids;
 }
 
+// 02's capabilityId -> familyId alias table (knowledge data). Loaded lazily so a
+// recipe store without the knowledge layer still works; an unknown id -> null.
+function familyIdForCapabilityId(id) {
+  try {
+    return require("../model-inspector/knowledge").familyIdForCapabilityId(id);
+  } catch {
+    return null;
+  }
+}
+
+// The family ids a model answers to: its own familyId plus every capability id
+// it carries, resolved through the alias table (v1 callers pass only the latter).
+function modelFamilyIds(model) {
+  const ids = new Set();
+  if (model?.familyId) ids.add(String(model.familyId));
+  for (const id of modelCapabilityIds(model)) {
+    const familyId = familyIdForCapabilityId(id);
+    if (familyId) ids.add(familyId);
+  }
+  return ids;
+}
+
 /** Identity verdict of one recipe for a model: { ok, score, reasons }. */
 function identityMatch(recipe, model) {
   const match = recipe.match || {};
@@ -550,7 +572,7 @@ function identityMatch(recipe, model) {
     }
   }
   if (match.familyId !== undefined) {
-    if (model?.familyId && model.familyId === match.familyId) {
+    if (modelFamilyIds(model).has(match.familyId)) {
       score += SCORES.familyId;
       reasons.push("family");
     } else {
@@ -560,7 +582,9 @@ function identityMatch(recipe, model) {
   }
   if (match.capabilityIds !== undefined) {
     const ids = modelCapabilityIds(model);
-    if (match.capabilityIds.some((id) => ids.has(id))) {
+    // Deprecated alias: an id matches directly or through its family id.
+    const families = modelFamilyIds(model);
+    if (match.capabilityIds.some((id) => ids.has(id) || families.has(familyIdForCapabilityId(id) || id))) {
       score += SCORES.capabilityIds;
       reasons.push("capability");
     } else {
