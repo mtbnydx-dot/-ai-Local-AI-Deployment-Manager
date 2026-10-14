@@ -1,7 +1,19 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const matrix = require("../model-capability-matrix");
+
+const FIXTURES = path.join(__dirname, "fixtures", "model-cards");
+// The chat template signature of Qwen3.8 checkpoints (XML tool calls plus reasoning_effort).
+// Detecting it from chat_template.jinja belongs to the template-signature work (MOD-7); here
+// the caller states it, as the card pipeline will.
+const QWEN38_SIGNATURE = "qwen38-xml-effort";
+
+function fixtureConfig(name) {
+  return JSON.parse(fs.readFileSync(path.join(FIXTURES, name, "config.json"), "utf8"));
+}
 
 test("declared model_type wins over an earlier entry that only matches the name", () => {
   const resolved = matrix.resolveModelCapabilityEntry({
@@ -24,13 +36,34 @@ test("Qwen3.5 ModelOpt checkpoints get qwen3_xml while Qwen3.8 keeps qwen3_coder
   assert.equal(vllm36.speculative.auto, "off");
   assert.match(vllm36.speculative.reason, /stays off/);
 
+  // Real Qwen3.8 checkpoints declare qwen3_5 (02 section 2); only the template tells them from Qwen3.5/3.6.
   const qwen38 = matrix.resolveModelCapabilityEntry({
-    model: "Qwen/Qwen3.8-27B-NVFP4",
-    config: { model_type: "qwen3_8", quantization_config: { quant_method: "modelopt" } },
+    model: "Qwen/Qwen3.8-27B-FP8",
+    config: fixtureConfig("qwen38-27b-fp8"),
+    templateSignature: QWEN38_SIGNATURE,
   });
   assert.equal(qwen38.id, "qwen3.8");
+  assert.match(qwen38.matchedBy, /templateSignature/);
+  assert.equal(qwen38.heuristic, false);
   const vllm38 = matrix.resolveEngineCapabilities(qwen38.entry, "vllm", { quantMethod: "modelopt" });
   assert.equal(vllm38.toolCallParser, "qwen3_coder");
+  assert.equal(vllm38.speculative.auto, "off");
+
+  // The same declared type without the Qwen3.8 template stays Qwen3.5/3.6, and so does a real 3.6 checkpoint.
+  const withoutTemplate = matrix.resolveModelCapabilityEntry({ model: "Qwen/Qwen3.8-27B-FP8", config: fixtureConfig("qwen38-27b-fp8") });
+  assert.equal(withoutTemplate.id, "qwen3.5-3.6");
+  const real36 = matrix.resolveModelCapabilityEntry({ model: "Qwen/Qwen3.6-35B-A3B-FP8", config: fixtureConfig("qwen36-35b-a3b-fp8"), templateSignature: null });
+  assert.equal(real36.id, "qwen3.5-3.6");
+});
+
+test("the old fictional qwen3_8 identity and Qwen3.8 repository names still resolve to qwen3.8", () => {
+  const typed = matrix.resolveModelCapabilityEntry({ model: "Qwen/Qwen3.8-27B-NVFP4", config: { model_type: "qwen3_8", quantization_config: { quant_method: "modelopt" } } });
+  assert.equal(typed.id, "qwen3.8");
+  assert.equal(typed.matchedBy, "modelType");
+  const named = matrix.resolveModelCapabilityEntry({ model: "Qwen/Qwen3.8-27B" });
+  assert.equal(named.id, "qwen3.8");
+  assert.equal(named.heuristic, true);
+  assert.equal(matrix.resolveModelCapabilityEntry({ model: "Qwen/Qwen3.8-Flash-Next-NVFP4" }).id, "qwen3.8-flash-next");
 });
 
 test("Flash-Next is recognised by qwen4_exp identity and gates the SGLang image on NVFP4 weights", () => {

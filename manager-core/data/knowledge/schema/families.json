@@ -40,7 +40,8 @@
       "properties": {
         "templateSignature": { "$ref": "#/$defs/stringList" },
         "quantMethod": { "$ref": "#/$defs/stringList" },
-        "role": { "$ref": "#/$defs/stringList" }
+        "role": { "$ref": "#/$defs/stringList" },
+        "forModelTypes": { "$ref": "#/$defs/stringList" }
       }
     },
     "where": {
@@ -127,7 +128,7 @@
         "blocks": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/block" } },
         "download": {
           "type": "object",
-          "properties": { "level": { "enum": ["ok", "warn", "block"] }, "reason": { "type": ["string", "null"], "maxLength": 600 }, "bypass": { "type": "boolean" } }
+          "properties": { "level": { "enum": ["ok", "info", "warn", "block"] }, "reason": { "type": ["string", "null"], "maxLength": 600 }, "bypass": { "type": "boolean" } }
         },
         "requires": { "type": "object" },
         "notes": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/text" } },
