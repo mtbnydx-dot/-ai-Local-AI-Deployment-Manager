@@ -1,0 +1,153 @@
+{
+  "description": "Manager jobs payloads as ENT-EV's relay publishes them ({managerId, jobs: [changed JobSummary], removed}). __FIXTURE_KEY__ is replaced at run time with a fake key built in the test, so this file holds no key-shaped text.",
+  "ready": [
+    {
+      "managerId": "vllm",
+      "jobs": [
+        {
+          "id": "mfx01-serve",
+          "type": "serve",
+          "title": "Start qwen-test",
+          "status": "running",
+          "logs": ["Pulling image"],
+          "logCount": 1,
+          "logsTruncated": false,
+          "meta": {
+            "model": "/models/qwen-test",
+            "engine": "sglang",
+            "name": "qwen-test",
+            "instanceMode": "replace",
+            "instanceId": "qwen-test",
+            "port": 8000,
+            "stageHistory": [{ "stage": "拉取镜像", "at": "2026-10-14T08:00:01.000Z" }]
+          },
+          "progress": { "kind": "serve", "percent": 5, "stage": "拉取镜像", "detail": "", "state": "running" },
+          "createdAt": "2026-10-14T08:00:00.000Z",
+          "updatedAt": "2026-10-14T08:00:01.000Z"
+        }
+      ],
+      "removed": []
+    },
+    {
+      "managerId": "vllm",
+      "jobs": [
+        {
+          "id": "mfx01-serve",
+          "type": "serve",
+          "title": "Start qwen-test",
+          "status": "running",
+          "logs": ["Loading weights"],
+          "logCount": 2,
+          "logsTruncated": false,
+          "meta": {
+            "model": "/models/qwen-test",
+            "engine": "sglang",
+            "name": "qwen-test",
+            "instanceMode": "replace",
+            "instanceId": "qwen-test",
+            "port": 8000,
+            "stageHistory": [
+              { "stage": "拉取镜像", "at": "2026-10-14T08:00:01.000Z" },
+              { "stage": "加载权重", "at": "2026-10-14T08:00:10.000Z" },
+              { "stage": "就绪检查", "at": "2026-10-14T08:01:30.000Z" }
+            ]
+          },
+          "progress": { "kind": "serve", "percent": 80, "stage": "就绪检查", "detail": "", "state": "running" },
+          "createdAt": "2026-10-14T08:00:00.000Z",
+          "updatedAt": "2026-10-14T08:01:30.000Z"
+        }
+      ],
+      "removed": []
+    },
+    {
+      "managerId": "vllm",
+      "jobs": [
+        {
+          "id": "mfx01-serve",
+          "type": "serve",
+          "title": "Start qwen-test",
+          "status": "success",
+          "logs": ["Ready"],
+          "logCount": 3,
+          "logsTruncated": false,
+          "meta": {
+            "model": "/models/qwen-test",
+            "engine": "sglang",
+            "name": "qwen-test",
+            "instanceMode": "replace",
+            "instanceId": "qwen-test",
+            "port": 8000,
+            "stageHistory": [
+              { "stage": "拉取镜像", "at": "2026-10-14T08:00:01.000Z" },
+              { "stage": "加载权重", "at": "2026-10-14T08:00:10.000Z" },
+              { "stage": "就绪检查", "at": "2026-10-14T08:01:30.000Z" }
+            ]
+          },
+          "progress": { "kind": "serve", "percent": 100, "stage": "服务已就绪", "detail": "", "state": "ok" },
+          "createdAt": "2026-10-14T08:00:00.000Z",
+          "updatedAt": "2026-10-14T08:02:00.000Z",
+          "finishedAt": "2026-10-14T08:02:00.000Z"
+        }
+      ],
+      "removed": []
+    }
+  ],
+  "failed": [
+    {
+      "managerId": "llama",
+      "jobs": [
+        {
+          "id": "mfx02-serve",
+          "type": "serve",
+          "title": "Start demo-gguf",
+          "status": "running",
+          "logs": [],
+          "logCount": 0,
+          "logsTruncated": false,
+          "meta": {
+            "model": "/models/demo-gguf/model-q4.gguf",
+            "engine": "llama",
+            "name": "demo-gguf",
+            "instanceMode": "parallel",
+            "instanceId": "draft-b",
+            "stageHistory": [{ "stage": "启动容器", "at": "2026-10-14T09:00:02.000Z" }]
+          },
+          "createdAt": "2026-10-14T09:00:00.000Z",
+          "updatedAt": "2026-10-14T09:00:02.000Z"
+        }
+      ],
+      "removed": []
+    },
+    {
+      "managerId": "llama",
+      "jobs": [
+        {
+          "id": "mfx02-serve",
+          "type": "serve",
+          "title": "Start demo-gguf",
+          "status": "failed",
+          "logs": ["Error: docker run failed"],
+          "logCount": 1,
+          "logsTruncated": false,
+          "error": "Command failed: docker run --name llama-draft-b --api-key __FIXTURE_KEY__ -e HF_TOKEN=__FIXTURE_KEY__ local/llama:test --model /models/demo-gguf/model-q4.gguf\nAuthorization: Bearer __FIXTURE_KEY__\nCUDA error: out of memory while allocating the KV cache for 262144 tokens on device 0; the requested context does not fit next to the weights already resident on this GPU, so the server exited before it reported ready and the health check never passed",
+          "meta": {
+            "model": "/models/demo-gguf/model-q4.gguf",
+            "engine": "llama",
+            "name": "demo-gguf",
+            "instanceMode": "parallel",
+            "instanceId": "draft-b",
+            "stageHistory": [
+              { "stage": "启动容器", "at": "2026-10-14T09:00:02.000Z" },
+              { "stage": "加载权重", "at": "2026-10-14T09:00:05.000Z" }
+            ]
+          },
+          "progress": { "kind": "serve", "percent": 40, "stage": "加载权重", "detail": "", "state": "fail" },
+          "createdAt": "2026-10-14T09:00:00.000Z",
+          "updatedAt": "2026-10-14T09:00:40.000Z",
+          "finishedAt": "2026-10-14T09:00:40.000Z"
+        }
+      ],
+      "removed": []
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+usage: vllm serve [options]
+
+Model options:
+  --model MODEL         Model name or local path.
+  --max-model-len N      Maximum context length (default: None).
+  --kv-cache-dtype {auto,fp8,fp8_e4m3,fp8_e5m2}
+                        KV cache data type (default: auto).
+  --tool-call-parser {auto,hermes,llama3_json}
+                        Tool call parser (default: auto).
+  --reasoning-parser {auto,deepseek_r1,qwen3}
+                        Reasoning parser (default: auto).
+  --enable-prefix-caching, --no-enable-prefix-caching
+                        Enable prefix cache (default: True).
+  --old-size N          Deprecated, use --new-size.
+  --port PORT           Server port (default: 8000).

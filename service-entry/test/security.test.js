@@ -47,6 +47,13 @@ async function makeManager(root, id, { exposure, clients } = {}) {
   return { id, name: `${id} manager`, root: path.join(root, id), port: 5177 };
 }
 
+// Access settings from an empty temp AI root, so this machine's platform.json
+// never leaks into a test.
+function defaultAccessReader(t, env = {}) {
+  const aiRoot = tempRoot(t, "security-access-");
+  return (name) => core.platform.readSection(name, { aiRoot, env });
+}
+
 function req(remoteAddress, headers = {}, method = "POST") {
   return { method, headers, socket: { remoteAddress } };
 }
@@ -156,22 +163,29 @@ test("declaring a public base URL makes auto require an API key even on a loopba
   assert.equal(security.policy().requireApiKey, false);
 });
 
-test("resolveClientAddress and trustHeaders vouch the forwarded client, not the proxy socket", (t) => {
+test("resolveClientAddress and trustHeaders vouch the resolved client, not the proxy socket", (t) => {
   withCleanEnv(t);
-  const security = createEntrySecurity({ host: "127.0.0.1", managers: [] });
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [], readSection: defaultAccessReader(t) });
+  const pub = (peer, headers) => ({ ...req(peer, headers), listener: { kind: "public", lanBound: false } });
 
   // 直连：用 socket 地址。
   assert.equal(security.resolveClientAddress(req("192.168.0.44")), "192.168.0.44");
-  // 经 Caddy：取 X-Forwarded-For 最后一跳（最近一级可信代理写入的真实客户端）。
-  assert.equal(security.resolveClientAddress(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" })), "203.0.113.9");
-  assert.equal(security.resolveClientAddress(req("127.0.0.1", { "x-forwarded-for": "10.0.0.5, 203.0.113.9" })), "203.0.113.9");
-  assert.equal(security.resolveClientAddress(req("127.0.0.1", { "x-real-ip": "203.0.113.10" })), "203.0.113.10");
+  // PUBLIC 经 Caddy/cloudflared：可信回环对端带来的 cf-connecting-ip 才被采信。
+  assert.equal(security.resolveClientAddress(pub("127.0.0.1", { "cf-connecting-ip": "203.0.113.9" })), "203.0.113.9");
+  // 局域网设备伪造的转发头一律忽略（V2）。
+  assert.equal(security.resolveClientAddress(pub("192.168.0.44", { "cf-connecting-ip": "127.0.0.1", "x-forwarded-for": "127.0.0.1" })), "192.168.0.44");
+  // ADMIN（含未标记的请求）永远不采信任何转发头。
+  assert.equal(security.resolveClientAddress(req("127.0.0.1", { "cf-connecting-ip": "203.0.113.9", "x-forwarded-for": "203.0.113.9" })), "127.0.0.1");
+  assert.equal(security.resolveClientAddress({ ...req("127.0.0.1", { "cf-connecting-ip": "203.0.113.9" }), listener: { kind: "admin", lanBound: true } }), "127.0.0.1");
 
-  // trustHeaders 担保的地址必须是真实客户端，否则管理器会把公网请求当成本机、
+  // trustHeaders 担保的地址必须是解析后的客户端，否则管理器会把公网请求当成本机、
   // local-only 暴露模式随之失效。
-  const headers = security.trustHeaders(req("127.0.0.1", { "x-forwarded-for": "203.0.113.9" }));
-  assert.equal(Object.values(headers).includes("203.0.113.9"), true);
-  assert.equal(Object.values(headers).includes("127.0.0.1"), false);
+  const vouched = security.trustHeaders(pub("127.0.0.1", { "cf-connecting-ip": "203.0.113.9" }));
+  assert.equal(Object.values(vouched).includes("203.0.113.9"), true);
+  assert.equal(Object.values(vouched).includes("127.0.0.1"), false);
+  const lan = security.trustHeaders(pub("192.168.0.44", { "cf-connecting-ip": "127.0.0.1" }));
+  assert.equal(Object.values(lan).includes("192.168.0.44"), true);
+  assert.equal(Object.values(lan).includes("127.0.0.1"), false);
 });
 
 test("host whitelist and Origin check reject cross-site mutations", (t) => {

@@ -1,0 +1,10 @@
+{
+  "$locale": "en-US",
+  "$prefixes": ["shell.", "common.", "status.", "error.", "overview.", "deploy.", "playground.", "billing.", "voice.", "prefs.", "uikit.", "notify."],
+  "shell.boot.failed": "The console could not load. Reload the page, or use the classic console for now.",
+  "shell.boot.loading": "Loading console…",
+  "shell.boot.noscript": "JavaScript is required",
+  "shell.boot.openClassic": "Open the classic console",
+  "shell.boot.preview": "The new console is still being built. Keep using the classic console for daily work.",
+  "shell.product": "Local AI Platform"
+}
