@@ -37,6 +37,12 @@ test("the llama manager registers the engine routes and hosts llamacpp", () => {
   }
 });
 
+test("each registry runtime slot runs the image CONFIG runs, env overrides included", () => {
+  // Both read process.env: LLAMA_IMAGE, then LLAMA_IMAGE_DIGEST, then the manifest.
+  assert.equal(manager.engineRegistry.defaultRuntime("llamacpp").image, manager.CONFIG.image);
+  assert.equal(manager.engineRegistry.resolveRuntime("llamacpp", { manifestKey: "llamaMuse" }).image, manager.CONFIG.museImage);
+});
+
 test("GET /api/engines lists llama.cpp with its runtimes over HTTP", async (t) => {
   const overrideDir = fs.mkdtempSync(path.join(os.tmpdir(), "llama-engines-override-"));
   t.after(() => fs.rmSync(overrideDir, { recursive: true, force: true }));

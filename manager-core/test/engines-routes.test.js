@@ -186,6 +186,7 @@ test("a bad override is listed in errors[] and the engines are still served", as
     files: {
       "broken.json": "{ nope",
       "vllm.json": { id: "vllm", status: "nonsense" },
+      "sglang.json": { id: "sglang", runtimes: { allowed: ["sglang", "sglangX"], default: "sglangX" } },
     },
   });
   const res = await call(app, "GET /api/engines");
@@ -194,11 +195,17 @@ test("a bad override is listed in errors[] and the engines are still served", as
   assert.deepEqual(res.body.engines.map((engine) => [engine.engineId, engine.status]), [["vllm", "stable"], ["sglang", "stable"]]);
   assert.deepEqual(res.body.errors.map((item) => [path.basename(item.file), item.source, item.code]).sort(), [
     ["broken.json", "override", "invalid_json"],
+    ["sglang.json", "override", "default_runtime_unresolved"],
+    ["sglang.json", "override", "unknown_runtime"],
     ["vllm.json", "override", "enum"],
   ]);
   const enumError = res.body.errors.find((item) => item.code === "enum");
   assert.equal(enumError.engineId, "vllm");
   assert.equal(enumError.path, "status");
+  // The rejected sglang override left every runtime and the default in place.
+  const sglang = res.body.engines.find((engine) => engine.engineId === "sglang");
+  assert.deepEqual(sglang.runtimes.map((runtime) => runtime.runtimeId), ACCEPTANCE_RUNTIME_IDS.filter((id) => id.startsWith("sglang@")));
+  assert.deepEqual(sglang.runtimes.filter((runtime) => runtime.default).map((runtime) => runtime.runtimeId), ["sglang@0.5.17"]);
 });
 
 test("POST /api/engines/descriptors/validate reports draft errors and writes nothing", async (t) => {
@@ -220,6 +227,29 @@ test("POST /api/engines/descriptors/validate reports draft errors and writes not
   const override = await call(app, "POST /api/engines/descriptors/validate", { body: { descriptor: { id: "sglang", status: "disabled" } } });
   assert.deepEqual(override.body, { ok: true, kind: "override", errors: [] });
   assert.equal(registry.get("sglang").status, "stable", "validation never applies the draft");
+
+  // A well-formed override whose runtimes would not resolve is rejected, as
+  // loading it would be: the engine would lose its default runtime.
+  const foreign = await call(app, "POST /api/engines/descriptors/validate", {
+    body: { descriptor: { id: "llamacpp", runtimes: { allowed: ["vllmGemma"], default: "vllmGemma" } } },
+  });
+  assert.equal(foreign.statusCode, 200);
+  assert.equal(foreign.body.ok, false);
+  assert.equal(foreign.body.kind, "override");
+  assert.deepEqual(foreign.body.errors.map((item) => `${item.path}:${item.code}`), [
+    "runtimes.allowed[0]:runtime_engine_mismatch",
+    "runtimes.default:default_runtime_unresolved",
+  ]);
+  const typo = await call(app, "POST /api/engines/descriptors/validate", {
+    body: { descriptor: { id: "sglang", runtimes: { allowed: ["sglang", "sglangX"], default: "sglangX" } } },
+  });
+  assert.equal(typo.body.ok, false);
+  assert.deepEqual(typo.body.errors.map((item) => `${item.path}:${item.code}`), [
+    "runtimes.allowed[1]:unknown_runtime",
+    "runtimes.default:default_runtime_unresolved",
+  ]);
+  assert.ok(typo.body.errors.every((item) => item.message && !Object.hasOwn(item, "manifestKey")));
+  assert.equal(registry.defaultRuntime("sglang").runtimeId, "sglang@0.5.17");
 
   const missing = await call(app, "POST /api/engines/descriptors/validate", { body: {} });
   assert.equal(missing.statusCode, 400);
@@ -249,6 +279,7 @@ test("descriptor validation is local-only and the route needs a registry and a m
   assert.equal((await call(app2, "POST /api/engines/descriptors/validate", { body: { descriptor: {} } })).statusCode, 403);
 
   assert.throws(() => core.engines.registerEngineRoutes(recordingApp(), { managerId: "vllm" }), TypeError);
+  assert.throws(() => core.engines.registerEngineRoutes(recordingApp(), { registry: { hostedBy: () => [] }, managerId: "vllm" }), TypeError, "the draft check needs registry.checkOverride");
   assert.throws(() => core.engines.registerEngineRoutes(recordingApp(), { registry: core.engines.getEngineRegistry(), managerId: "tts" }), TypeError);
   core.engines.clearEngineRegistryCache();
 });

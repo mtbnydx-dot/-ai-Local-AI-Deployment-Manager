@@ -34,6 +34,23 @@ test("the vLLM manager registers the engine routes and hosts vllm and sglang", (
   assert.deepEqual(manager.engineRegistry.errors(), []);
 });
 
+test("each registry runtime slot runs the image CONFIG runs, env overrides included", () => {
+  // Both read process.env: the descriptor envOverride lists must spell out the
+  // same precedence as the CONFIG expressions (VLLM_IMAGE, then VLLM_IMAGE_VERSION).
+  const slots = [
+    ["vllm", "vllm", "image"],
+    ["vllm", "vllmQwenMoe", "qwenMoeImage"],
+    ["vllm", "vllmGemma", "gemmaImage"],
+    ["sglang", "sglang", "sglangImage"],
+    ["sglang", "sglangFlashNext", "sglangFlashNextImage"],
+  ];
+  for (const [engineId, manifestKey, field] of slots) {
+    assert.equal(manager.engineRegistry.resolveRuntime(engineId, { manifestKey }).image, manager.CONFIG[field], `${manifestKey} vs CONFIG.${field}`);
+  }
+  assert.equal(manager.engineRegistry.defaultRuntime("vllm").manifestKey, "vllm");
+  assert.equal(manager.engineRegistry.defaultRuntime("sglang").manifestKey, "sglang");
+});
+
 test("runtimeForImage reproduces knownRuntimeImageMetadata for every configured image", (t) => {
   const cases = [
     ["image", "vllm", ["VLLM_IMAGE", "VLLM_IMAGE_VERSION"]],

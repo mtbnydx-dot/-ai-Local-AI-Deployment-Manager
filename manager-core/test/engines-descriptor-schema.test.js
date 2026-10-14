@@ -17,6 +17,7 @@ process.env.AI_REFERENCE_DATA_DIR = EMPTY_CONFIG_DIR;
 test.after(() => fs.rmSync(EMPTY_CONFIG_DIR, { recursive: true, force: true }));
 
 const core = require("..");
+const manifest = require("../runtime-manifest");
 
 const { validateDescriptor } = core.engines;
 const BUNDLED_DIR = path.join(__dirname, "..", "data", "engines");
@@ -32,6 +33,20 @@ function makeOverrideDir(t, files = {}) {
     fs.writeFileSync(path.join(dir, name), typeof content === "string" ? content : JSON.stringify(content, null, 2));
   }
   return dir;
+}
+
+// A runtime-manifest override under a temp AI_REFERENCE_DATA_DIR, restored
+// after the test.
+function withManifestOverride(t, runtimes) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engines-manifest-"));
+  fs.writeFileSync(path.join(dir, manifest.RUNTIME_MANIFEST_FILE), JSON.stringify({ asOf: "2026-10-14", runtimes }));
+  process.env.AI_REFERENCE_DATA_DIR = dir;
+  manifest.clearRuntimeManifestCache();
+  t.after(() => {
+    process.env.AI_REFERENCE_DATA_DIR = EMPTY_CONFIG_DIR;
+    manifest.clearRuntimeManifestCache();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 }
 
 function codesAt(result, pathName) {
@@ -218,18 +233,115 @@ test("tier-1 engines cannot be added or redefined through an override", (t) => {
   assert.ok(codes("tier1-claim.json").includes("tier:tier_mismatch"));
 });
 
-test("an override can add a data-driven engine; its unknown runtime is reported, not fatal", (t) => {
+test("an override can add a data-driven engine whose runtime is in the manifest", (t) => {
+  withManifestOverride(t, { lmdeployLab: { engineId: "lmdeploy-lab", version: "0.10.2", image: "openmmlab/lmdeploy:v0.10.2" } });
   const overrideDir = makeOverrideDir(t, { "lmdeploy-lab.json": templateDraft() });
   const registry = core.engines.createEngineRegistry({ overrideDir, env: {} });
+  assert.deepEqual(registry.errors(), []);
   assert.equal(registry.get("lmdeploy-lab").adapter, "docker-template");
   assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang", "lmdeploy-lab"]);
-  assert.deepEqual(registry.runtimesFor("lmdeploy-lab"), []);
-  assert.deepEqual(registry.errors().map((item) => [item.source, item.engineId, item.path, item.code]), [
-    ["registry", "lmdeploy-lab", "runtimes.allowed[0]", "unknown_runtime"],
+  assert.deepEqual(registry.runtimesFor("lmdeploy-lab").map((ref) => [ref.runtimeId, ref.status, ref.default, ref.pullPolicy]), [
+    ["lmdeploy-lab@0.10.2", "unpinned", true, "explicit"],
   ]);
+  assert.deepEqual(registry.status().overrides.map((item) => [item.engineId, item.applied, item.kind]), [["lmdeploy-lab", true, "descriptor"]]);
+});
+
+test("a new engine whose runtimes do not resolve is dropped and reported, not fatal", (t) => {
+  const overrideDir = makeOverrideDir(t, { "lmdeploy-lab.json": templateDraft() });
+  const registry = core.engines.createEngineRegistry({ overrideDir, env: {} });
+  assert.equal(registry.has("lmdeploy-lab"), false);
+  assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang"]);
+  const expected = [
+    ["override", "lmdeploy-lab", "runtimes.allowed[0]", "unknown_runtime"],
+    ["override", "lmdeploy-lab", "runtimes.default", "default_runtime_unresolved"],
+  ];
+  assert.deepEqual(registry.errors().map((item) => [item.source, item.engineId, item.path, item.code]), expected);
+  assert.ok(registry.errors().every((item) => path.basename(item.file) === "lmdeploy-lab.json"));
+  assert.deepEqual(registry.status().overrides.map((item) => [item.engineId, item.applied]), [["lmdeploy-lab", false]]);
+  // The console's draft check gives the same verdict as loading the file.
+  const draft = core.engines.validateDraftRequest(registry, { descriptor: templateDraft() }).payload;
+  assert.equal(draft.ok, false);
+  assert.deepEqual(draft.errors.map((item) => ["override", "lmdeploy-lab", item.path, item.code]), expected);
+});
+
+test("an override that points runtimes at a missing or foreign key is dropped and the descriptor stays", (t) => {
+  const files = {
+    // Another engine's runtime, as default and only allowed entry.
+    "a-foreign.json": { id: "llamacpp", runtimes: { allowed: ["vllmGemma"], default: "vllmGemma" } },
+    // A typo in the default, which is also listed.
+    "b-typo.json": { id: "sglang", runtimes: { allowed: ["sglang", "sglangX"], default: "sglangX" } },
+    // The default resolves, but one allowed key does not.
+    "c-extra.json": [{ id: "vllm", runtimes: { allowed: ["vllm", "vllmNowhere"] } }],
+  };
+  const registry = core.engines.createEngineRegistry({ overrideDir: makeOverrideDir(t, files), env: {} });
+  const rows = registry.errors().map((item) => [path.basename(item.file), item.index ?? null, item.source, item.engineId, item.path, item.code]);
+  assert.deepEqual(rows, [
+    ["a-foreign.json", null, "override", "llamacpp", "runtimes.allowed[0]", "runtime_engine_mismatch"],
+    ["a-foreign.json", null, "override", "llamacpp", "runtimes.default", "default_runtime_unresolved"],
+    ["b-typo.json", null, "override", "sglang", "runtimes.allowed[1]", "unknown_runtime"],
+    ["b-typo.json", null, "override", "sglang", "runtimes.default", "default_runtime_unresolved"],
+    ["c-extra.json", 0, "override", "vllm", "runtimes.allowed[1]", "unknown_runtime"],
+  ]);
+  assert.deepEqual(registry.status().overrides.map((item) => [path.basename(item.file), item.engineId, item.applied]), [
+    ["a-foreign.json", "llamacpp", false],
+    ["b-typo.json", "sglang", false],
+    ["c-extra.json", "vllm", false],
+  ]);
+
+  // The bundled descriptors stay in force with every runtime and their defaults.
+  for (const engineId of ["vllm", "sglang", "llamacpp"]) {
+    assert.deepEqual(registry.get(engineId).runtimes, readBundled(engineId).runtimes, engineId);
+  }
+  assert.equal(registry.defaultRuntime("llamacpp").runtimeId, "llamacpp@b10630");
+  assert.equal(registry.defaultRuntime("sglang").runtimeId, "sglang@0.5.17");
+  assert.equal(registry.resolveRuntime("sglang").runtimeId, "sglang@0.5.17", "a legacy launch still resolves its runtime");
+  assert.equal(registry.runtimesFor("sglang").length, 4);
+  assert.equal(registry.runtimesFor("vllm").length, 3);
+
+  // The draft check rejects each of them with the errors the load reported.
+  for (const [file, content] of Object.entries(files)) {
+    const entry = Array.isArray(content) ? content[0] : content;
+    const draft = core.engines.validateDraftRequest(registry, { descriptor: entry }).payload;
+    assert.equal(draft.ok, false, file);
+    assert.equal(draft.kind, "override", file);
+    assert.deepEqual(
+      draft.errors.map((item) => `${item.path}:${item.code}`),
+      registry.errors().filter((item) => path.basename(item.file) === file).map((item) => `${item.path}:${item.code}`),
+      file,
+    );
+  }
+});
+
+test("the draft verdict always equals the load verdict for the same entry", (t) => {
+  const entries = [
+    { id: "sglang", status: "experimental" },
+    { id: "sglang", runtimes: { allowed: ["sglangFlashNext", "sglang"], default: "sglangFlashNext" } },
+    { id: "sglang", runtimes: { allowed: ["sglangFlashNext"] } },
+    { id: "sglang", runtimes: { default: "sglangPennyroyal" } },
+    { id: "sglang", runtimes: { default: "llama" } },
+    { id: "llamacpp", runtimes: { allowed: ["llama", "sglang"] } },
+    { id: "vllm", runtimes: { allowed: ["vllm"], default: "vllm" }, label: { en: "vLLM (pinned)" } },
+    { id: "vllm", host: { containerPort: 9000 } },
+    templateDraft(),
+    templateDraft({ id: "unknown" }),
+    templateDraft({ id: "external" }),
+    templateDraft({ adapter: "sglang" }),
+  ];
+  for (const entry of entries) {
+    const registry = core.engines.createEngineRegistry({ overrideDir: makeOverrideDir(t, { "entry.json": entry }), env: {} });
+    const [loaded] = registry.status().overrides;
+    const loadErrors = registry.errors().filter((item) => item.source === "override").map((item) => `${item.path}:${item.code}`);
+    const pristine = core.engines.createEngineRegistry({ overrideDir: makeOverrideDir(t), env: {} });
+    const draft = core.engines.validateDraftRequest(pristine, { descriptor: entry }).payload;
+    const label = JSON.stringify(entry).slice(0, 120);
+    assert.equal(draft.ok, loaded.applied, label);
+    assert.deepEqual(draft.errors.map((item) => `${item.path}:${item.code}`), loadErrors, label);
+    assert.deepEqual(registry.errors().filter((item) => item.source !== "override"), [], label);
+  }
 });
 
 test("draft mode applies the override rules and writes nothing", (t) => {
+  withManifestOverride(t, { lmdeployLab: { engineId: "lmdeploy-lab", version: "0.10.2", image: "openmmlab/lmdeploy:v0.10.2" } });
   const overrideDir = makeOverrideDir(t);
   const registry = core.engines.createEngineRegistry({ overrideDir, env: {} });
   const before = JSON.stringify(registry.list());
@@ -309,4 +421,56 @@ test("structural problems carry a path and a code", () => {
   assert.deepEqual(validateDescriptor(null).errors.map((item) => `${item.path}:${item.code}`), [":type"]);
   assert.deepEqual(validateDescriptor([]).errors.map((item) => item.code), ["type"]);
   assert.throws(() => validateDescriptor({}, { mode: "write" }), TypeError);
+});
+
+test("an envOverride entry is one variable or a precedence list, with templates for partial values", () => {
+  // The bundled data spells out today's precedence: VLLM_IMAGE, then
+  // VLLM_IMAGE_VERSION as a tag; LLAMA_IMAGE, then LLAMA_IMAGE_DIGEST.
+  assert.deepEqual(readBundled("vllm").runtimes.envOverride.vllm, ["VLLM_IMAGE", { env: "VLLM_IMAGE_VERSION", template: "vllm/vllm-openai:{value}" }]);
+  assert.deepEqual(readBundled("llamacpp").runtimes.envOverride.llama, ["LLAMA_IMAGE", "LLAMA_IMAGE_DIGEST"]);
+
+  const cases = [
+    ["lowercase-name", "sglang_image", "runtimes.envOverride.sglang", "pattern"],
+    ["empty list", [], "runtimes.envOverride.sglang", "type"],
+    ["number", 7, "runtimes.envOverride.sglang", "type"],
+    ["duplicate", ["SGLANG_IMAGE", { env: "SGLANG_IMAGE", template: "lmsysorg/sglang:{value}" }], "runtimes.envOverride.sglang[1]", "duplicate"],
+    ["template without placeholder", [{ env: "SGLANG_VERSION", template: "lmsysorg/sglang:latest" }], "runtimes.envOverride.sglang[0].template", "pattern"],
+    ["template with a space", [{ env: "SGLANG_VERSION", template: "lmsysorg/sglang:{value} --privileged" }], "runtimes.envOverride.sglang[0].template", "pattern"],
+    ["template missing", [{ env: "SGLANG_VERSION" }], "runtimes.envOverride.sglang[0].template", "required"],
+    ["unknown item field", [{ env: "SGLANG_VERSION", template: "lmsysorg/sglang:{value}", shell: true }], "runtimes.envOverride.sglang[0].shell", "unknown_field"],
+  ];
+  for (const [label, spec, pathName, code] of cases) {
+    const descriptor = readBundled("sglang");
+    descriptor.runtimes.envOverride.sglang = spec;
+    assert.deepEqual(codesAt(validateDescriptor(descriptor), pathName), [code], label);
+  }
+  const list = readBundled("sglang");
+  list.runtimes.envOverride.sglang = ["SGLANG_IMAGE", { env: "SGLANG_IMAGE_VERSION", template: "lmsysorg/sglang:{value}" }];
+  assert.deepEqual(validateDescriptor(list).errors, []);
+
+  // envOverride is not an override field: the env names stay what the code reads.
+  const override = validateDescriptor({ id: "vllm", runtimes: { envOverride: { vllm: "MY_IMAGE" } } }, { mode: "override" });
+  assert.deepEqual(override.errors.map((item) => `${item.path}:${item.code}`), ["runtimes.envOverride:override_field_forbidden"]);
+});
+
+test("unknown and external are reserved engine ids", () => {
+  for (const mode of ["bundled", "override", "draft"]) {
+    const unknown = validateDescriptor(templateDraft({ id: "unknown" }), { mode });
+    assert.ok(codesAt(unknown, "id").includes("reserved_engine_id"), mode);
+  }
+  assert.deepEqual(codesAt(validateDescriptor(templateDraft({ id: "external" }), { mode: "draft" }), "id"), ["reserved_engine_id"]);
+  const external = templateDraft({
+    id: "external",
+    adapter: "external",
+    tier: 3,
+    hostManager: "entry",
+    artifactFormats: [],
+    runtimes: undefined,
+    api: undefined,
+    secrets: undefined,
+    template: undefined,
+    external: {},
+    host: { kinds: ["external"], default: "external" },
+  });
+  assert.deepEqual(validateDescriptor(JSON.parse(JSON.stringify(external)), { mode: "draft" }).errors, []);
 });

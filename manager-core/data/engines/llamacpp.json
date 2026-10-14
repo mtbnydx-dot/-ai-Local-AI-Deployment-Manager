@@ -18,7 +18,7 @@
   "runtimes": {
     "default": "llama",
     "allowed": ["llama", "llamaMuse"],
-    "envOverride": { "llama": "LLAMA_IMAGE", "llamaMuse": "LLAMA_MUSE_IMAGE" },
+    "envOverride": { "llama": ["LLAMA_IMAGE", "LLAMA_IMAGE_DIGEST"], "llamaMuse": "LLAMA_MUSE_IMAGE" },
     "allowCustomImage": true
   },
   "host": {

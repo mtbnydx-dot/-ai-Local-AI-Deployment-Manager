@@ -7,8 +7,8 @@
 // Docker is touched only through the injected getImageStatus/listManagedContainers
 // reads, both cached, so a dashboard polling this route stays cheap.
 
-const { isPlainObject, validateDescriptor } = require("./descriptor-schema");
-const { mergeDescriptor, normalizeManagerId } = require("./registry");
+const { isPlainObject } = require("./descriptor-schema");
+const { normalizeManagerId } = require("./registry");
 
 const MAX_DRAFT_BYTES = 256 * 1024;
 const IMAGE_PRESENCE_TTL_MS = 60_000;
@@ -190,8 +190,10 @@ async function buildEnginesPayload(options = {}) {
 /**
  * POST /api/engines/descriptors/validate body → { status, payload }. Runs the
  * "draft" rules (an existing id is an override limited to the override fields,
- * a new id must use a data-driven adapter) and, for an override, re-checks the
- * merged result. Nothing is written and the registry is not changed.
+ * a new id must use a data-driven adapter), then re-checks the merged result
+ * and its runtimes against the manifest through registry.checkOverride, the
+ * same verdict load() gives an override file. Nothing is written and the
+ * registry is not changed.
  */
 function validateDraftRequest(registry, body) {
   if (!isPlainObject(body) || body.descriptor === undefined) {
@@ -205,17 +207,15 @@ function validateDraftRequest(registry, body) {
       payload: errorEnvelope("descriptor_too_large", `A descriptor draft may be at most ${MAX_DRAFT_BYTES / 1024} KiB (got ${Math.ceil(size / 1024)} KiB).`),
     };
   }
-  const result = validateDescriptor(descriptor, { mode: "draft", knownIds: registry.list().map((item) => item.id) });
-  let errors = result.errors;
-  if (result.ok && result.kind === "override") {
-    errors = validateDescriptor(mergeDescriptor(registry.get(descriptor.id), descriptor), { mode: "bundled" }).errors;
-  }
-  return { status: 200, payload: { ok: errors.length === 0, kind: result.kind, errors } };
+  const { ok, kind, errors } = registry.checkOverride(descriptor, { mode: "draft" });
+  return { status: 200, payload: { ok, kind, errors } };
 }
 
 function registerEngineRoutes(app, deps = {}) {
   const { registry } = deps;
-  if (!registry || typeof registry.hostedBy !== "function") throw new TypeError("registerEngineRoutes needs an engine registry.");
+  if (!registry || typeof registry.hostedBy !== "function" || typeof registry.checkOverride !== "function") {
+    throw new TypeError("registerEngineRoutes needs an engine registry.");
+  }
   const managerId = normalizeManagerId(deps.managerId);
   if (!managerId) throw new TypeError(`registerEngineRoutes: unknown managerId ${deps.managerId}`);
   // Writes stay local-only, deny by default when the caller passes no predicate.

@@ -18,7 +18,11 @@
   "runtimes": {
     "default": "vllm",
     "allowed": ["vllm", "vllmQwenMoe", "vllmGemma"],
-    "envOverride": { "vllm": "VLLM_IMAGE", "vllmQwenMoe": "VLLM_QWEN_MOE_IMAGE", "vllmGemma": "VLLM_GEMMA_IMAGE" },
+    "envOverride": {
+      "vllm": ["VLLM_IMAGE", { "env": "VLLM_IMAGE_VERSION", "template": "vllm/vllm-openai:{value}" }],
+      "vllmQwenMoe": "VLLM_QWEN_MOE_IMAGE",
+      "vllmGemma": "VLLM_GEMMA_IMAGE"
+    },
     "allowCustomImage": true
   },
   "host": {

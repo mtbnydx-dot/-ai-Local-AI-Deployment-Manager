@@ -72,6 +72,10 @@ function createRegistry(t, options = {}) {
   return core.engines.createEngineRegistry({ overrideDir: emptyOverrideDir(t), env: {}, ...options });
 }
 
+function pick(object, keys) {
+  return Object.fromEntries(keys.map((key) => [key, object?.[key]]));
+}
+
 test("require() throws 400 unknown_engine and never coerces", (t) => {
   const registry = createRegistry(t);
   assert.equal(registry.require("sglang").id, "sglang");
@@ -247,14 +251,52 @@ test("env image overrides replace a slot's image and keep its identity and featu
   assert.equal(registry.resolveRuntime("llamacpp", { image: envImage }).manifestKey, "llama");
   assert.equal(registry.resolveRuntime("llamacpp").manifestKey, "llama", "no selector gives the default runtime");
   assert.equal(registry.resolveRuntime("sglang", { image: IMAGES.flashNext }).manifestKey, "sglangFlashNext");
+  // The manifest image of an env-overridden slot is still that slot's runtime,
+  // carrying the image the caller asked for.
+  const pinned = registry.resolveRuntime("llamacpp", { image: core.runtimeImageReference("llama") });
+  assert.equal(pinned.runtimeId, "llamacpp@b10630");
+  assert.equal(pinned.image, core.runtimeImageReference("llama"));
+  assert.equal(pinned.imageOverrideEnv, null);
   const custom = registry.resolveRuntime("vllm", { image: "example/custom-vllm:1" });
   assert.equal(custom.custom, true);
-  assert.equal(custom.pullPolicy, "explicit");
+  assert.equal(custom.default, false);
   assert.throws(() => registry.resolveRuntime("vllm", { image: IMAGES.flashNext }), (error) => error.code === "unknown_runtime");
   assert.throws(() => registry.resolveRuntime("nope", {}), (error) => error.code === "unknown_engine");
 });
 
-test("pull policy is auto for pinned runtimes of stable tier-1 engines and explicit otherwise", (t) => {
+test("envOverride lists keep today's image precedence, including partial values", (t) => {
+  const vllmImage = (env) => createRegistry(t, { env }).defaultRuntime("vllm");
+  // vllm-manager: CONFIG.image = VLLM_IMAGE || (VLLM_IMAGE_VERSION ? vllm/vllm-openai:<version> : manifest).
+  assert.deepEqual(pick(vllmImage({}), ["image", "imageOverrideEnv"]), { image: IMAGES.vllmDefault, imageOverrideEnv: null });
+  assert.deepEqual(pick(vllmImage({ VLLM_IMAGE_VERSION: "v0.29.1" }), ["runtimeId", "image", "imageOverrideEnv"]), {
+    runtimeId: "vllm@0.28.0",
+    image: "vllm/vllm-openai:v0.29.1",
+    imageOverrideEnv: "VLLM_IMAGE_VERSION",
+  });
+  assert.deepEqual(pick(vllmImage({ VLLM_IMAGE: "example/vllm:dev", VLLM_IMAGE_VERSION: "v0.29.1" }), ["image", "imageOverrideEnv"]), {
+    image: "example/vllm:dev",
+    imageOverrideEnv: "VLLM_IMAGE",
+  });
+  assert.deepEqual(pick(vllmImage({ VLLM_IMAGE: "  ", VLLM_IMAGE_VERSION: "v0.29.1" }), ["image"]), { image: "vllm/vllm-openai:v0.29.1" }, "a blank variable is unset");
+  // An env value equal to the manifest image is not reported as an override.
+  assert.equal(vllmImage({ VLLM_IMAGE: IMAGES.vllmDefault }).imageOverrideEnv, null);
+
+  // llama-manager: CONFIG.image = LLAMA_IMAGE || LLAMA_IMAGE_DIGEST || manifest.
+  const llamaImage = (env) => createRegistry(t, { env }).defaultRuntime("llamacpp");
+  const digestImage = `ghcr.io/ggml-org/llama.cpp@sha256:${"b".repeat(64)}`;
+  assert.deepEqual(pick(llamaImage({ LLAMA_IMAGE_DIGEST: digestImage }), ["image", "imageOverrideEnv"]), { image: digestImage, imageOverrideEnv: "LLAMA_IMAGE_DIGEST" });
+  assert.deepEqual(pick(llamaImage({ LLAMA_IMAGE: "example/llama:dev", LLAMA_IMAGE_DIGEST: digestImage }), ["image", "imageOverrideEnv"]), {
+    image: "example/llama:dev",
+    imageOverrideEnv: "LLAMA_IMAGE",
+  });
+  // Single-variable slots and slots without an override are untouched by unrelated variables.
+  const registry = createRegistry(t, { env: { VLLM_IMAGE_VERSION: "v0.29.1", LLAMA_IMAGE_DIGEST: digestImage } });
+  assert.equal(registry.resolveRuntime("vllm", { manifestKey: "vllmGemma" }).image, IMAGES.gemma);
+  assert.equal(registry.resolveRuntime("sglang", { manifestKey: "sglangPennyroyal" }).image, IMAGES.pennyroyal);
+  assert.equal(registry.resolveRuntime("vllm", { image: "vllm/vllm-openai:v0.29.1" }).manifestKey, "vllm", "the effective slot image resolves to its slot");
+});
+
+test("pull policy is auto for what a stable tier-1 engine pulls today and explicit otherwise", (t) => {
   manifest.clearRuntimeManifestCache();
   const registry = createRegistry(t);
   const policies = Object.fromEntries(["vllm", "sglang", "llamacpp"].flatMap((engineId) => (
@@ -273,11 +315,24 @@ test("pull policy is auto for pinned runtimes of stable tier-1 engines and expli
     "llamacpp@muse-62bf73d": "explicit",
   });
 
+  // A stable tier-1 engine pulls the images it pulls today before the
+  // checkpoint (00 §9.2): env image overrides and a per-launch runtimeImage
+  // (a custom image), whether tagged or pinned by digest.
+  const overridden = createRegistry(t, { env: { SGLANG_IMAGE: "lmsysorg/sglang:0.5.21" } });
+  assert.equal(overridden.defaultRuntime("sglang").pullPolicy, "auto");
+  for (const image of ["example/custom-vllm:1", `example/custom-vllm@sha256:${"c".repeat(64)}`]) {
+    const custom = registry.resolveRuntime("vllm", { image });
+    assert.equal(custom.custom, true, image);
+    assert.equal(custom.pullPolicy, "auto", image);
+  }
+
   // An experimental engine never pulls implicitly, whatever its runtimes are.
   const overrideDir = emptyOverrideDir(t);
   fs.writeFileSync(path.join(overrideDir, "sglang.json"), JSON.stringify({ id: "sglang", status: "experimental" }));
   const experimental = core.engines.createEngineRegistry({ overrideDir, env: {} });
   assert.ok(experimental.runtimesFor("sglang").every((ref) => ref.pullPolicy === "explicit"));
+  assert.equal(experimental.resolveRuntime("sglang", { image: "example/custom-sglang:1" }).pullPolicy, "explicit");
+  assert.equal(experimental.pullPolicy("sglang", null), "explicit");
 });
 
 test("a runtime-manifest override is mapped too: tags read unpinned, engineId is inferred, gaps are reported", (t) => {
