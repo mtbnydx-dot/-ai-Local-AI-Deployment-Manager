@@ -5,7 +5,8 @@ param(
     [int]$KeepDays = 14,
     [switch]$Register,
     [string]$DailyAt = "03:30",
-    [switch]$NoPrune
+    [switch]$NoPrune,
+    [switch]$ListOnly
 )
 
 # Daily snapshot of the platform's small, valuable state:
@@ -13,6 +14,9 @@ param(
 #   * TTS history database (tts-history.sqlite3) when present
 #   * service-entry\data\*.json, <manager>\logs\*.json ledgers, .runtime\gateway-trust is NOT copied
 # into backups\<yyyyMMdd-HHmm>\ with a manifest, pruning snapshots older than -KeepDays.
+# Secrets never enter a backup (06 OPS-3b): the deny list below wins over every
+# include. DPAPI CurrentUser blobs would not restore on another account anyway.
+# -ListOnly prints the files a backup would copy as JSON and writes nothing.
 # -Register creates a Windows scheduled task that runs this script daily.
 
 $ErrorActionPreference = "Stop"
@@ -32,11 +36,39 @@ if ($Register) {
 $BackupRoot = [IO.Path]::GetFullPath($BackupRoot).TrimEnd('\')
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
 $target = Join-Path $BackupRoot $stamp
-New-Item -ItemType Directory -Force -Path $target | Out-Null
-$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& icacls.exe $target /inheritance:r /grant:r "*$($currentSid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not protect backup credentials with a private ACL' }
+if (-not $ListOnly) {
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    & icacls.exe $target /inheritance:r /grant:r "*$($currentSid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not protect backup credentials with a private ACL' }
+}
 $manifest = [ordered]@{ format = 'local-ai-platform-backup-v2'; at = (Get-Date).ToString("o"); root = $Root; files = @() }
+$planned = [System.Collections.Generic.List[object]]::new()
+
+# Root-relative paths (-like patterns) that are never copied: the secret store,
+# the legacy runtime-key files and the MCP key file.
+$deniedPaths = @(
+    '.runtime\secrets\*',
+    '*\logs\runtime-api-keys.json',
+    'logs\runtime-secrets.json',
+    '*\logs\runtime-secrets.json',
+    '.runtime\platform-mcp\server.env'
+)
+
+function Get-RootRelativePath([string]$source) {
+    $full = [IO.Path]::GetFullPath($source)
+    $prefix = $Root.TrimEnd('\') + '\'
+    if ($full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $full.Substring($prefix.Length) }
+    return $full
+}
+
+function Test-BackupDenied([string]$source) {
+    $relative = Get-RootRelativePath $source
+    foreach ($pattern in $deniedPaths) {
+        if ($relative -like $pattern) { return $true }
+    }
+    return $false
+}
 
 function Copy-Sqlite([string]$source, [string]$destination) {
     # VACUUM INTO produces a consistent copy even while the service holds the file open.
@@ -46,6 +78,11 @@ function Copy-Sqlite([string]$source, [string]$destination) {
 
 function Add-File([string]$source, [string]$relative, [string]$kind) {
     if (-not (Test-Path -LiteralPath $source)) { return }
+    if (Test-BackupDenied $source) { return }
+    if ($ListOnly) {
+        $planned.Add([ordered]@{ path = $relative; kind = $kind; source = (Get-RootRelativePath $source) })
+        return
+    }
     $destination = Join-Path $target $relative
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
     if ($kind -eq "sqlite") { Copy-Sqlite $source $destination } else { Copy-Item -LiteralPath $source -Destination $destination -Force }
@@ -87,6 +124,11 @@ foreach ($folder in @('voices','outputs')) {
 Add-File $ttsEnvFile 'config\tts.env' 'config'
 foreach ($relative in @('.runtime\platform-mcp\server.env','search-gateway\.env')) {
     Add-File (Join-Path $Root $relative) (Join-Path 'config' $relative) 'config'
+}
+
+if ($ListOnly) {
+    ConvertTo-Json -InputObject @($planned.ToArray()) -Depth 3
+    return
 }
 
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $target "backup-manifest.json") -Encoding UTF8

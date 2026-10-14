@@ -112,3 +112,5 @@ module.exports.mergeExports = mergeExports;
 module.exports.internalAuth = require("./internal-auth");
 // New subsystems are namespaces, never spread into the flat list (00 §9.17).
 module.exports.engines = require("./engines");
+// The single secret store (06 OPS-3b); runtime-secret-store.js stays flat as its facade.
+module.exports.secrets = require("./secret-store");
