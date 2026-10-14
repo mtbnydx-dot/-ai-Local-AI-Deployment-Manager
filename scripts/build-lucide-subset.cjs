@@ -182,7 +182,7 @@ function readVendorManifest(file) {
   if (!fs.existsSync(file)) {
     throw new Error(`${file} is missing; run node scripts/vendor-browser-libs.mjs first, it creates the vendor manifest`);
   }
-  return JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, ""));
+  return JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
 }
 
 /**
