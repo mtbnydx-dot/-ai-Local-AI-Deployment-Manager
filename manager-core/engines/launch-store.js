@@ -279,6 +279,8 @@ function createLaunchStore(options = {}) {
   const protectedLaunchIds = typeof options.protectedLaunchIds === "function" ? options.protectedLaunchIds : () => [];
   const log = typeof options.log === "function" ? options.log : () => {};
   let launches = null;
+  // One-shot migration markers (01 §22), kept next to the records.
+  let migrations = {};
   let writing = Promise.resolve();
 
   function registry() {
@@ -303,6 +305,7 @@ function createLaunchStore(options = {}) {
     try {
       const parsed = JSON.parse(raw.replace(/^﻿/, ""));
       const seen = new Set();
+      if (isPlainObject(parsed?.migrations)) migrations = clone(parsed.migrations);
       for (const item of Array.isArray(parsed?.launches) ? parsed.launches : []) {
         const record = normalizeRecord(item, clock);
         // A launch still starting when the manager went away never finished;
@@ -350,7 +353,9 @@ function createLaunchStore(options = {}) {
     } catch {
       secrets = [];
     }
-    return redactValue({ schemaVersion: SCHEMA_VERSION, launches: load() }, { secrets });
+    const body = { schemaVersion: SCHEMA_VERSION, launches: load() };
+    if (Object.keys(migrations).length) body.migrations = migrations;
+    return redactValue(body, { secrets });
   }
 
   // Writes are chained, and each one takes the state at the time it runs.
@@ -454,14 +459,14 @@ function createLaunchStore(options = {}) {
     const record = normalizeRecord({
       launchId,
       managerId,
-      createdAt: nowIso(),
+      createdAt: createOptions.createdAt || nowIso(),
       source: createOptions.source || "api",
       status: createOptions.status || "starting",
       spec,
       resolved: createOptions.resolved || {},
       jobId: createOptions.jobId,
       containerName: createOptions.containerName,
-      history: [{ at: nowIso(), event: createOptions.event || "started", detail: createOptions.detail || "" }],
+      history: [{ at: createOptions.createdAt || nowIso(), event: createOptions.event || "started", detail: createOptions.detail || "" }],
       partial: createOptions.partial === true,
     }, clock);
     list.unshift(record);
@@ -698,6 +703,49 @@ function createLaunchStore(options = {}) {
     return entries;
   }
 
+  // Deterministic: the same recent-launch entry always migrates to the same id.
+  function migratedLaunchId(entry = {}) {
+    const material = [
+      "migration", managerId, text(entry.model || entry.config?.model, 300),
+      text(entry.name || entry.config?.name, 200), text(entry.launchedAt, 40),
+    ].join("\n");
+    return `lch_${base32(crypto.createHash("sha256").update(material, "utf8").digest())}`;
+  }
+
+  /**
+   * One-time import of recent-launches.json (01 §22): each entry becomes a
+   * stopped record with source "migration", oldest first so the newest ends up
+   * first. The marker is stored in the file, so the import runs once even
+   * after the records are evicted. -> { imported, already }
+   */
+  function importRecentLaunches(entries = []) {
+    load();
+    if (migrations.recentLaunches) return { imported: 0, already: true };
+    const list = (Array.isArray(entries) ? entries : []).filter((entry) => isPlainObject(entry) && isPlainObject(entry.config) && entry.config.model);
+    let imported = 0;
+    for (const entry of [...list].reverse()) {
+      const launchId = migratedLaunchId(entry);
+      if (find(launchId)) continue;
+      const placement = entry.instanceMode
+        ? { instanceMode: entry.instanceMode === "parallel" ? "parallel" : "replace", instanceId: text(entry.instanceId, 120) }
+        : null;
+      const launchedAt = entry.launchedAt && Date.parse(entry.launchedAt) ? entry.launchedAt : undefined;
+      create(specFromLegacyConfig({ ...entry.config, name: entry.name || entry.config.name }, { placement }), {
+        launchId,
+        source: "migration",
+        status: "stopped",
+        event: "adopted",
+        detail: "recent-launches migration",
+        createdAt: launchedAt,
+        containerName: entry.containerName,
+      });
+      imported += 1;
+    }
+    migrations = { ...migrations, recentLaunches: nowIso() };
+    persist();
+    return { imported, already: false };
+  }
+
   // ---- Launch lifecycle, called by the managers' start path ----------------
 
   /**
@@ -751,6 +799,7 @@ function createLaunchStore(options = {}) {
     findWakePlan,
     adopt,
     toRecentLaunches,
+    importRecentLaunches,
     beginLaunch,
     recordCommand,
     specFromLegacyConfig,
