@@ -1,0 +1,1839 @@
+{
+  "schemaVersion": 1,
+  "plan": {
+    "inserts": [
+      {
+        "id": "vllm.global",
+        "name": "Global key (vllm)",
+        "status": "active",
+        "class": "owner",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "*"
+        ],
+        "fleetAllow": [
+          "vllm:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 600,
+          "tpm": null,
+          "maxConcurrent": 8,
+          "maxQueued": 64,
+          "queueTimeoutSeconds": 20,
+          "requestTimeoutSeconds": 900,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": null,
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "global-6136052343d1abc7a47d7ecf"
+        },
+        "ttsOwner": "vllm:global-6136052343d1abc7a47d7ecf",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "global-6136052343d1abc7a47d7ecf",
+          "source": "service-exposure"
+        },
+        "keyHash": "6136052343d1abc7a47d7ecff4069be4b1ac0e4c50f2db4c141bdadfd1c50071",
+        "preview": "fixture...0001",
+        "createdAt": null,
+        "lastUsedAt": null
+      },
+      {
+        "id": "vllm.alice",
+        "name": "Alice laptop",
+        "status": "active",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "qwen3.8-35b-a3b"
+        ],
+        "fleetAllow": [
+          "vllm:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 30,
+          "tpm": null,
+          "maxConcurrent": 2,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": "2027-01-12T00:00:00.000Z",
+        "notes": "Weekend projects",
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "alice"
+        },
+        "ttsOwner": "vllm:alice",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "alice",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 12,
+              "success": 11,
+              "error": 1
+            },
+            "tokens": {
+              "prompt": 900,
+              "generation": 300,
+              "total": 1200
+            },
+            "lastStatus": 200,
+            "lastModel": "qwen3.8-35b-a3b",
+            "lastAt": "2026-10-01T12:00:00.000Z"
+          },
+          "lastUsedAt": "2026-10-01T12:00:00.000Z"
+        },
+        "keyHash": "e3152a8696a879949465b017116fb4adacdcb8a1e4fc39d862ea77ea28a17ad4",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": "2026-10-01T12:00:00.000Z"
+      },
+      {
+        "id": "vllm.bob",
+        "name": "Bob (paused)",
+        "status": "disabled",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "*"
+        ],
+        "fleetAllow": [
+          "vllm:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": null,
+        "notes": null,
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "bob"
+        },
+        "ttsOwner": "vllm:bob",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "bob",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "f5a3fe81dd256d18ae33e7050a36a0cf8a732e16c654dfafd91c0d67760c7023",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      },
+      {
+        "id": "vllm.carol",
+        "name": "Carol trial",
+        "status": "active",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "*"
+        ],
+        "fleetAllow": [
+          "vllm:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": "2026-09-01T00:00:00.000Z",
+        "notes": null,
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "carol"
+        },
+        "ttsOwner": "vllm:carol",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "carol",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "3a683e9c88bf5d47f42b7fb5c209d0b6f590c0555f49e37167e58e1ca88f7443",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      },
+      {
+        "id": "vllm.dave",
+        "name": "Dave Co",
+        "status": "active",
+        "class": "customer",
+        "customerId": "0b6f7c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e",
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "qwen3.8-35b-a3b",
+          "gemma-4-31b"
+        ],
+        "fleetAllow": [
+          "vllm:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": null,
+        "notes": null,
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "dave"
+        },
+        "ttsOwner": "vllm:dave",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "dave",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "8bf2c02925a1d4b4e22839b284e9ffc9c6b9f90ee0fda83e7125f3cdba2090ed",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      },
+      {
+        "id": "vllm.m2e7aebd0",
+        "name": "Odd client",
+        "status": "active",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "*"
+        ],
+        "fleetAllow": [
+          "vllm:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": null,
+        "notes": null,
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "m2e7aebd0"
+        },
+        "ttsOwner": "vllm:m2e7aebd0",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "Odd Client #1",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "102e851cd308fffce24b97b4ab7dfdb132309dcf4bcaf8c64b1227ced6fcdcd0",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      },
+      {
+        "id": "vllm.shared",
+        "name": "Shared desktop",
+        "status": "active",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "*"
+        ],
+        "fleetAllow": [
+          "vllm:*",
+          "llama:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": null,
+        "notes": null,
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "shared"
+        },
+        "ttsOwner": "vllm:shared",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "shared",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "5279dada7729d153afe676714e55dbdd942f1d6a6779162dcdd91823b053fefd",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      },
+      {
+        "id": "vllm.m8001c274",
+        "name": "Client named global",
+        "status": "active",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "*"
+        ],
+        "fleetAllow": [
+          "vllm:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [
+          "https://chat.example.com"
+        ],
+        "expiresAt": null,
+        "notes": null,
+        "billing": {
+          "scope": "vllm-manager",
+          "clientId": "global"
+        },
+        "ttsOwner": "vllm:global",
+        "legacy": {
+          "managerId": "vllm",
+          "clientId": "global",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "4d728407caa91905787a4914f124f926a3ba4424081a3f8bc8e4190b9d20417b",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      },
+      {
+        "id": "llama.alice",
+        "name": "Alice on llama",
+        "status": "active",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "*"
+        ],
+        "fleetAllow": [
+          "llama:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [],
+        "expiresAt": null,
+        "notes": null,
+        "billing": {
+          "scope": "llama-manager",
+          "clientId": "alice"
+        },
+        "ttsOwner": "llama:alice",
+        "legacy": {
+          "managerId": "llama",
+          "clientId": "alice",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "e8f0e8746a05d96320f188ad162b1f5ca4de5139a4c6ac750a8c538b9917bb3f",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      },
+      {
+        "id": "llama.erin",
+        "name": "Erin",
+        "status": "active",
+        "class": "friend",
+        "customerId": null,
+        "scopes": [
+          "models.read",
+          "chat",
+          "completions",
+          "responses",
+          "embeddings",
+          "messages",
+          "audio.speech",
+          "audio.clone",
+          "search",
+          "mcp",
+          "self.read"
+        ],
+        "models": [
+          "qwen3.8-*"
+        ],
+        "fleetAllow": [
+          "llama:*"
+        ],
+        "listeners": [
+          "public",
+          "admin"
+        ],
+        "limits": {
+          "rpm": 480,
+          "tpm": null,
+          "maxConcurrent": 16,
+          "maxQueued": 128,
+          "queueTimeoutSeconds": 30,
+          "requestTimeoutSeconds": 600,
+          "dailyTokens": null,
+          "monthlyTokens": null,
+          "dailyRequests": null,
+          "maxOutputTokens": null
+        },
+        "allowedOrigins": [],
+        "expiresAt": null,
+        "notes": null,
+        "billing": {
+          "scope": "llama-manager",
+          "clientId": "erin"
+        },
+        "ttsOwner": "llama:erin",
+        "legacy": {
+          "managerId": "llama",
+          "clientId": "erin",
+          "source": "service-clients",
+          "usage": {
+            "requests": {
+              "total": 0,
+              "success": 0,
+              "error": 0
+            },
+            "tokens": {
+              "prompt": 0,
+              "generation": 0,
+              "total": 0
+            },
+            "lastStatus": 0,
+            "lastModel": "",
+            "lastAt": null
+          },
+          "lastUsedAt": null
+        },
+        "keyHash": "0c682a3c71cca5f20eafee0b357e59ba96d5979045f5001e22984b14a38ca3e8",
+        "preview": "fixture...0001",
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "lastUsedAt": null
+      }
+    ],
+    "skipped": [
+      {
+        "keyId": "vllm.twin",
+        "managerId": "vllm",
+        "clientId": "twin",
+        "source": "service-clients",
+        "reason": "duplicate_key_hash",
+        "duplicateOf": "vllm.alice"
+      },
+      {
+        "keyId": "vllm.broken",
+        "managerId": "vllm",
+        "clientId": "broken",
+        "source": "service-clients",
+        "reason": "unusable_hash"
+      }
+    ],
+    "warnings": [
+      {
+        "code": "origin_not_migrated",
+        "managerId": "vllm",
+        "origin": "*"
+      },
+      {
+        "code": "origin_not_migrated",
+        "managerId": "vllm",
+        "origin": "https://app.example.com/path"
+      },
+      {
+        "code": "global_key_converted",
+        "managerId": "vllm",
+        "keyId": "vllm.global"
+      },
+      {
+        "code": "client_id_rewritten",
+        "managerId": "vllm",
+        "keyId": "vllm.m2e7aebd0",
+        "clientId": "Odd Client #1",
+        "reason": "invalid_characters",
+        "billingClientId": "m2e7aebd0"
+      },
+      {
+        "code": "client_id_rewritten",
+        "managerId": "vllm",
+        "keyId": "vllm.m8001c274",
+        "clientId": "global",
+        "reason": "reserved"
+      },
+      {
+        "code": "cors_open_not_migrated",
+        "managerId": "llama"
+      },
+      {
+        "code": "duplicate_key_across_managers",
+        "managerId": "vllm",
+        "keyId": "vllm.shared",
+        "duplicate": {
+          "managerId": "llama",
+          "clientId": "shared-copy",
+          "keyId": "llama.shared-copy",
+          "billing": {
+            "scope": "llama-manager",
+            "clientId": "shared-copy"
+          },
+          "customerId": "7d1e2f3a-4b5c-4d6e-9f70-8a9b0c1d2e3f"
+        }
+      },
+      {
+        "code": "model_pattern_dropped",
+        "managerId": "llama",
+        "keyId": "llama.erin",
+        "pattern": "two words"
+      }
+    ]
+  },
+  "rows": [
+    {
+      "id": "llama.alice",
+      "name": "Alice on llama",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [
+        "llama:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "llama-manager",
+        "clientId": "alice"
+      },
+      "ttsOwner": "llama:alice",
+      "legacy": {
+        "managerId": "llama",
+        "clientId": "alice",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "llama.erin",
+      "name": "Erin",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "qwen3.8-*"
+      ],
+      "fleetAllow": [
+        "llama:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "llama-manager",
+        "clientId": "erin"
+      },
+      "ttsOwner": "llama:erin",
+      "legacy": {
+        "managerId": "llama",
+        "clientId": "erin",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.alice",
+      "name": "Alice laptop",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "qwen3.8-35b-a3b"
+      ],
+      "fleetAllow": [
+        "vllm:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 30,
+        "tpm": null,
+        "maxConcurrent": 2,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": "2027-01-12T00:00:00.000Z",
+      "notes": "Weekend projects",
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "alice"
+      },
+      "ttsOwner": "vllm:alice",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "alice",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 12,
+            "success": 11,
+            "error": 1
+          },
+          "tokens": {
+            "prompt": 900,
+            "generation": 300,
+            "total": 1200
+          },
+          "lastStatus": 200,
+          "lastModel": "qwen3.8-35b-a3b",
+          "lastAt": "2026-10-01T12:00:00.000Z"
+        },
+        "lastUsedAt": "2026-10-01T12:00:00.000Z"
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": "2026-10-01T12:00:00.000Z",
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.bob",
+      "name": "Bob (paused)",
+      "preview": "fixture...0001",
+      "status": "disabled",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [
+        "vllm:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "bob"
+      },
+      "ttsOwner": "vllm:bob",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "bob",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.carol",
+      "name": "Carol trial",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [
+        "vllm:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": "2026-09-01T00:00:00.000Z",
+      "notes": null,
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "carol"
+      },
+      "ttsOwner": "vllm:carol",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "carol",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.dave",
+      "name": "Dave Co",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "customer",
+      "customerId": "0b6f7c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e",
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "qwen3.8-35b-a3b",
+        "gemma-4-31b"
+      ],
+      "fleetAllow": [
+        "vllm:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "dave"
+      },
+      "ttsOwner": "vllm:dave",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "dave",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.global",
+      "name": "Global key (vllm)",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "owner",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [
+        "vllm:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 600,
+        "tpm": null,
+        "maxConcurrent": 8,
+        "maxQueued": 64,
+        "queueTimeoutSeconds": 20,
+        "requestTimeoutSeconds": 900,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "global-6136052343d1abc7a47d7ecf"
+      },
+      "ttsOwner": "vllm:global-6136052343d1abc7a47d7ecf",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "global-6136052343d1abc7a47d7ecf",
+        "source": "service-exposure"
+      },
+      "createdAt": "2026-10-14T08:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.m2e7aebd0",
+      "name": "Odd client",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [
+        "vllm:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "m2e7aebd0"
+      },
+      "ttsOwner": "vllm:m2e7aebd0",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "Odd Client #1",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.m8001c274",
+      "name": "Client named global",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [
+        "vllm:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "global"
+      },
+      "ttsOwner": "vllm:global",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "global",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "vllm.shared",
+      "name": "Shared desktop",
+      "preview": "fixture...0001",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [
+        "vllm:*",
+        "llama:*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 480,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": 128,
+        "queueTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 600,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [
+        "https://chat.example.com"
+      ],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "vllm-manager",
+        "clientId": "shared"
+      },
+      "ttsOwner": "vllm:shared",
+      "legacy": {
+        "managerId": "vllm",
+        "clientId": "shared",
+        "source": "service-clients",
+        "usage": {
+          "requests": {
+            "total": 0,
+            "success": 0,
+            "error": 0
+          },
+          "tokens": {
+            "prompt": 0,
+            "generation": 0,
+            "total": 0
+          },
+          "lastStatus": 0,
+          "lastModel": "",
+          "lastAt": null
+        },
+        "lastUsedAt": null
+      },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "createdBy": "migration",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "revokedAt": null,
+      "lastUsedAt": null,
+      "lastUsedIp": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    }
+  ],
+  "report": {
+    "version": 1,
+    "at": "2026-10-14T08:00:00.000Z",
+    "actor": "migration",
+    "complete": true,
+    "counts": {
+      "planned": 10,
+      "inserted": 10,
+      "skipped": 2,
+      "warnings": 8
+    },
+    "keys": [
+      {
+        "keyId": "vllm.global",
+        "name": "Global key (vllm)",
+        "source": "service-exposure",
+        "warnings": [
+          "origin_not_migrated",
+          "global_key_converted"
+        ]
+      },
+      {
+        "keyId": "vllm.alice",
+        "name": "Alice laptop",
+        "source": "service-clients",
+        "warnings": [
+          "origin_not_migrated"
+        ]
+      },
+      {
+        "keyId": "vllm.bob",
+        "name": "Bob (paused)",
+        "source": "service-clients",
+        "warnings": [
+          "origin_not_migrated"
+        ]
+      },
+      {
+        "keyId": "vllm.carol",
+        "name": "Carol trial",
+        "source": "service-clients",
+        "warnings": [
+          "origin_not_migrated"
+        ]
+      },
+      {
+        "keyId": "vllm.dave",
+        "name": "Dave Co",
+        "source": "service-clients",
+        "warnings": [
+          "origin_not_migrated"
+        ]
+      },
+      {
+        "keyId": "vllm.m2e7aebd0",
+        "name": "Odd client",
+        "source": "service-clients",
+        "warnings": [
+          "origin_not_migrated",
+          "client_id_rewritten"
+        ]
+      },
+      {
+        "keyId": "vllm.shared",
+        "name": "Shared desktop",
+        "source": "service-clients",
+        "warnings": [
+          "origin_not_migrated",
+          "duplicate_key_across_managers"
+        ]
+      },
+      {
+        "keyId": "vllm.m8001c274",
+        "name": "Client named global",
+        "source": "service-clients",
+        "warnings": [
+          "origin_not_migrated",
+          "client_id_rewritten"
+        ]
+      },
+      {
+        "keyId": "llama.alice",
+        "name": "Alice on llama",
+        "source": "service-clients",
+        "warnings": [
+          "cors_open_not_migrated"
+        ]
+      },
+      {
+        "keyId": "llama.erin",
+        "name": "Erin",
+        "source": "service-clients",
+        "warnings": [
+          "cors_open_not_migrated",
+          "model_pattern_dropped"
+        ]
+      }
+    ],
+    "skipped": [
+      {
+        "keyId": "vllm.twin",
+        "managerId": "vllm",
+        "clientId": "twin",
+        "source": "service-clients",
+        "reason": "duplicate_key_hash",
+        "duplicateOf": "vllm.alice"
+      },
+      {
+        "keyId": "vllm.broken",
+        "managerId": "vllm",
+        "clientId": "broken",
+        "source": "service-clients",
+        "reason": "unusable_hash"
+      }
+    ],
+    "warnings": [
+      {
+        "code": "origin_not_migrated",
+        "managerId": "vllm",
+        "origin": "*"
+      },
+      {
+        "code": "origin_not_migrated",
+        "managerId": "vllm",
+        "origin": "https://app.example.com/path"
+      },
+      {
+        "code": "global_key_converted",
+        "managerId": "vllm",
+        "keyId": "vllm.global"
+      },
+      {
+        "code": "client_id_rewritten",
+        "managerId": "vllm",
+        "keyId": "vllm.m2e7aebd0",
+        "clientId": "Odd Client #1",
+        "reason": "invalid_characters",
+        "billingClientId": "m2e7aebd0"
+      },
+      {
+        "code": "client_id_rewritten",
+        "managerId": "vllm",
+        "keyId": "vllm.m8001c274",
+        "clientId": "global",
+        "reason": "reserved"
+      },
+      {
+        "code": "cors_open_not_migrated",
+        "managerId": "llama"
+      },
+      {
+        "code": "duplicate_key_across_managers",
+        "managerId": "vllm",
+        "keyId": "vllm.shared",
+        "duplicate": {
+          "managerId": "llama",
+          "clientId": "shared-copy",
+          "keyId": "llama.shared-copy",
+          "billing": {
+            "scope": "llama-manager",
+            "clientId": "shared-copy"
+          },
+          "customerId": "7d1e2f3a-4b5c-4d6e-9f70-8a9b0c1d2e3f"
+        }
+      },
+      {
+        "code": "model_pattern_dropped",
+        "managerId": "llama",
+        "keyId": "llama.erin",
+        "pattern": "two words"
+      }
+    ]
+  }
+}
