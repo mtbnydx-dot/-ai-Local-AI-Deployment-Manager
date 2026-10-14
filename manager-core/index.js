@@ -107,3 +107,5 @@ function mergeExports(moduleNames) {
 module.exports = mergeExports(MODULES);
 module.exports.MODULES = MODULES.slice();
 module.exports.mergeExports = mergeExports;
+// New subsystems are namespaces, never spread into the flat list (00 §9.17).
+module.exports.engines = require("./engines");

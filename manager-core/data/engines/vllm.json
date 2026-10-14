@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 120,
+  "id": "vllm",
+  "label": { "zh": "vLLM", "en": "vLLM" },
+  "description": {
+    "zh": "通用高吞吐推理引擎：safetensors、FP8/NVFP4 与实验性 GGUF；Linux/Docker。",
+    "en": "General high-throughput engine for safetensors, FP8/NVFP4 and experimental GGUF; Linux/Docker only."
+  },
+  "family": "vllm",
+  "adapter": "vllm",
+  "tier": 1,
+  "status": "stable",
+  "hostManager": "vllm",
+  "legacy": { "engineLabel": "vllm", "managerEngineField": "vllm" },
+  "artifactFormats": ["safetensors", "fp8", "nvfp4", "awq", "gptq", "gguf"],
+  "runtimes": {
+    "default": "vllm",
+    "allowed": ["vllm", "vllmQwenMoe", "vllmGemma"],
+    "envOverride": { "vllm": "VLLM_IMAGE", "vllmQwenMoe": "VLLM_QWEN_MOE_IMAGE", "vllmGemma": "VLLM_GEMMA_IMAGE" },
+    "allowCustomImage": true
+  },
+  "host": {
+    "kinds": ["docker"],
+    "default": "docker",
+    "containerPort": 8000,
+    "ipc": "host",
+    "init": false,
+    "ulimits": [],
+    "restart": "on-failure:3",
+    "gpus": "required",
+    "allowLan": true,
+    "healthcheck": { "cmd": "curl -fsS http://127.0.0.1:8000/health || exit 1", "interval": "30s", "timeout": "5s", "retries": 3 },
+    "cacheMounts": [
+      { "configKey": "hfCache", "target": "/root/.cache/huggingface" },
+      { "configKey": "vllmCache", "target": "/root/.cache/vllm" }
+    ]
+  },
+  "api": {
+    "openaiBase": "/v1",
+    "models": "/v1/models",
+    "health": "/health",
+    "version": ["/version"],
+    "ready": { "kind": "models-list" },
+    "probe": { "kind": "chat-generation", "maxTokens": 32 }
+  },
+  "apiSurface": { "chat": true, "completions": true, "responses": true, "messages": false, "embeddings": false, "rerank": false },
+  "apiQuirks": { "reasoningField": "reasoning" },
+  "catalog": "launch-params/vllm.json",
+  "memoryModel": { "kind": "device-fraction", "fractionParam": "vllm.gpuMemoryUtilization" },
+  "capabilities": {
+    "parallelInstances": true,
+    "tensorParallel": true,
+    "pipelineParallel": true,
+    "dataParallel": true,
+    "expertParallel": true,
+    "speculative": ["mtp", "eagle", "eagle3", "draft_model", "ngram"],
+    "autoParsers": { "tool": null, "reasoning": null },
+    "lora": true,
+    "multiModel": false,
+    "hotLoad": false,
+    "sleepWake": false,
+    "roles": ["chat", "embedding", "rerank"]
+  },
+  "knowledgeKeys": ["reasoningParser", "toolCallParser", "enableAutoToolChoice", "forceTrustRemoteCode", "env", "requiredPluginFile", "speculative"],
+  "secrets": { "apiKey": { "mode": "env", "env": "VLLM_API_KEY" } },
+  "managedFlags": ["--model", "--served-model-name", "--host", "--port", "--api-key"],
+  "extraEnvAllow": ["VLLM_", "NCCL_", "PYTORCH_", "TORCH_", "TRITON_", "FLASHINFER_"],
+  "introspection": { "entrypoint": "vllm", "argv": ["serve", "--help=all"], "parser": "argparse" },
+  "metricsMap": { "path": "/metrics", "format": "prometheus", "map": {} },
+  "logPhases": [],
+  "logFacts": [],
+  "errorSignatures": []
+}

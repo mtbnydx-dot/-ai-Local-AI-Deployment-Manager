@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 120,
+  "id": "llamacpp",
+  "label": { "zh": "llama.cpp", "en": "llama.cpp" },
+  "description": {
+    "zh": "GGUF 量化模型，可在显存与内存之间分层加载；Docker（CUDA）。",
+    "en": "GGUF models with layer offload between VRAM and RAM; Docker (CUDA)."
+  },
+  "family": "llamacpp",
+  "adapter": "llamacpp",
+  "tier": 1,
+  "status": "stable",
+  "hostManager": "llama",
+  "legacy": { "engineLabel": "llama", "managerEngineField": "llama" },
+  "artifactFormats": ["gguf"],
+  "runtimes": {
+    "default": "llama",
+    "allowed": ["llama", "llamaMuse"],
+    "envOverride": { "llama": "LLAMA_IMAGE", "llamaMuse": "LLAMA_MUSE_IMAGE" },
+    "allowCustomImage": true
+  },
+  "host": {
+    "kinds": ["docker"],
+    "default": "docker",
+    "containerPort": 8080,
+    "ipc": "host",
+    "init": false,
+    "ulimits": [],
+    "restart": "on-failure:3",
+    "gpus": "required",
+    "allowLan": true,
+    "healthcheck": null,
+    "cacheMounts": [
+      { "configKey": "hfCache", "target": "/root/.cache/huggingface" }
+    ]
+  },
+  "api": {
+    "openaiBase": "/v1",
+    "models": "/v1/models",
+    "health": "/health",
+    "version": ["/props"],
+    "ready": { "kind": "health-503-loading" },
+    "probe": { "kind": "chat-generation", "maxTokens": 32 }
+  },
+  "apiSurface": { "chat": true, "completions": true, "responses": false, "messages": false, "embeddings": false, "rerank": false },
+  "apiQuirks": { "reasoningField": "reasoning_content" },
+  "catalog": "launch-params/llamacpp.json",
+  "memoryModel": { "kind": "gguf-estimate" },
+  "capabilities": {
+    "parallelInstances": true,
+    "tensorParallel": false,
+    "pipelineParallel": false,
+    "dataParallel": false,
+    "expertParallel": false,
+    "speculative": ["draft-simple", "draft-mtp", "draft-dflash", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-mod", "ngram-cache"],
+    "autoParsers": { "tool": "auto", "reasoning": "auto" },
+    "lora": true,
+    "multiModel": false,
+    "hotLoad": false,
+    "sleepWake": false,
+    "roles": ["chat", "embedding", "rerank"]
+  },
+  "knowledgeKeys": [],
+  "secrets": { "apiKey": { "mode": "env", "env": "LLAMA_API_KEY" } },
+  "managedFlags": ["--model", "-m", "--hf-repo", "-hf", "--alias", "-a", "--host", "--port", "--api-key", "--metrics"],
+  "extraEnvAllow": ["LLAMA_ARG_", "GGML_"],
+  "introspection": { "entrypoint": "/app/llama-server", "argv": ["--help"], "parser": "llama-help" },
+  "metricsMap": { "path": "/metrics", "format": "prometheus", "map": {} },
+  "logPhases": [],
+  "logFacts": [],
+  "errorSignatures": []
+}

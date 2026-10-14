@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 120,
+  "id": "sglang",
+  "label": { "zh": "SGLang", "en": "SGLang" },
+  "description": {
+    "zh": "长上下文与 Flash-Next 路径；Linux/Docker。",
+    "en": "Long-context and Flash-Next path; Linux/Docker only."
+  },
+  "family": "sglang",
+  "adapter": "sglang",
+  "tier": 1,
+  "status": "stable",
+  "hostManager": "vllm",
+  "legacy": { "engineLabel": "sglang", "managerEngineField": "sglang" },
+  "artifactFormats": ["safetensors", "fp8", "nvfp4", "awq", "gptq"],
+  "runtimes": {
+    "default": "sglang",
+    "allowed": ["sglang", "sglangFlashNext", "sglangPennyroyal", "sglangFlashNextNvme"],
+    "envOverride": { "sglang": "SGLANG_IMAGE", "sglangFlashNext": "SGLANG_FLASH_NEXT_IMAGE" },
+    "allowCustomImage": true
+  },
+  "host": {
+    "kinds": ["docker"],
+    "default": "docker",
+    "containerPort": 8000,
+    "ipc": "host",
+    "init": false,
+    "ulimits": [],
+    "restart": "on-failure:3",
+    "gpus": "required",
+    "allowLan": true,
+    "healthcheck": { "cmd": "curl -fsS http://127.0.0.1:8000/health || exit 1", "interval": "30s", "timeout": "5s", "retries": 3 },
+    "cacheMounts": [
+      { "configKey": "hfCache", "target": "/root/.cache/huggingface" },
+      { "configKey": "sglangCache", "target": "/root/.cache" }
+    ]
+  },
+  "api": {
+    "openaiBase": "/v1",
+    "models": "/v1/models",
+    "health": "/health",
+    "version": ["/get_server_info", "/server_info"],
+    "ready": { "kind": "models-list" },
+    "probe": { "kind": "chat-generation", "maxTokens": 32 }
+  },
+  "apiSurface": { "chat": true, "completions": true, "responses": true, "messages": true, "embeddings": false, "rerank": false },
+  "apiQuirks": { "reasoningField": "reasoning_content" },
+  "catalog": "launch-params/sglang.json",
+  "memoryModel": { "kind": "static-fraction-of-free", "fractionParam": "sglang.memFractionStatic", "poolTokensParam": "sglang.maxTotalTokens" },
+  "capabilities": {
+    "parallelInstances": true,
+    "tensorParallel": true,
+    "pipelineParallel": true,
+    "dataParallel": true,
+    "expertParallel": true,
+    "speculative": ["DSPARK", "NEXTN", "EAGLE", "EAGLE3", "STANDALONE", "NGRAM"],
+    "autoParsers": { "tool": null, "reasoning": null },
+    "lora": true,
+    "multiModel": false,
+    "hotLoad": false,
+    "sleepWake": false,
+    "roles": ["chat", "embedding"]
+  },
+  "knowledgeKeys": [],
+  "secrets": { "apiKey": { "mode": "flag", "flag": "--api-key" } },
+  "managedFlags": ["--model-path", "--served-model-name", "--host", "--port", "--api-key", "--enable-metrics"],
+  "extraEnvAllow": ["SGLANG_", "NCCL_", "PYTORCH_", "TORCH_", "TRITON_", "FLASHINFER_"],
+  "introspection": { "entrypoint": "python3", "argv": ["-m", "sglang.launch_server", "--help"], "parser": "argparse" },
+  "metricsMap": { "path": "/metrics", "format": "prometheus", "map": {} },
+  "logPhases": [],
+  "logFacts": [],
+  "errorSignatures": []
+}
