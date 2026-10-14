@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Knowledge file of kind template-signatures (docs/overhaul/02-models.md 8.3). Entries are validated one by one; extra keys are accepted.",
+  "title": "Chat template signatures",
+  "type": "object",
+  "required": ["kind", "entries"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "template-signatures" },
+    "asOf": { "$ref": "#/$defs/date" },
+    "staleAfterDays": { "type": "integer", "minimum": 1, "maximum": 3650 },
+    "pack": { "type": "object" },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(?:[T ].*)?$" },
+    "i18n": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": { "zh": { "type": "string", "maxLength": 600 }, "en": { "type": "string", "maxLength": 600 } },
+      "additionalProperties": false
+    },
+    "stringList": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },
+    "format": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$" },
+    "parserName": { "type": ["string", "null"], "maxLength": 80 },
+    "engineParsers": {
+      "type": "object",
+      "properties": {
+        "tool": { "$ref": "#/$defs/parserName" },
+        "reasoning": { "$ref": "#/$defs/parserName" },
+        "alternatives": { "$ref": "#/$defs/stringList" },
+        "reasoningFormat": { "type": ["string", "null"], "maxLength": 40 }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "$merge": { "const": "deep" },
+        "label": { "$ref": "#/$defs/i18n" },
+        "priority": { "type": "integer", "minimum": -1000, "maximum": 1000 },
+        "sha256": { "type": "array", "maxItems": 64, "items": { "type": "string", "pattern": "^[0-9a-f]{16,64}$" } },
+        "features": {
+          "type": "object",
+          "properties": {
+            "all": { "$ref": "#/$defs/stringList" },
+            "any": { "$ref": "#/$defs/stringList" },
+            "none": { "$ref": "#/$defs/stringList" },
+            "regex": { "$ref": "#/$defs/stringList" }
+          }
+        },
+        "flags": { "type": "string", "pattern": "^[ims]{0,3}$" },
+        "toolFormat": { "$ref": "#/$defs/format" },
+        "reasoningFormat": { "$ref": "#/$defs/format" },
+        "thinking": { "type": ["object", "null"] },
+        "parsers": { "type": "object", "additionalProperties": { "$ref": "#/$defs/engineParsers" } },
+        "notes": { "type": "array", "maxItems": 32 }
+      },
+      "anyOf": [
+        { "required": ["sha256"], "properties": { "sha256": { "minItems": 1 } } },
+        { "required": ["features"], "properties": { "features": { "minProperties": 1 } } }
+      ]
+    }
+  }
+}

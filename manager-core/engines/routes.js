@@ -13,6 +13,8 @@
 const { isPlainObject } = require("./descriptor-schema");
 const { buildFacts, buildSchemaPayload, getParamCatalog, hostFactsFromGpus } = require("./param-catalog");
 const { normalizeManagerId } = require("./registry");
+const { createRuntimeFacts } = require("./runtime-facts");
+const { buildIntrospectionCommand, introspectRuntime, diffFlagSets, refineAutoParsers } = require("./introspect");
 
 const MAX_DRAFT_BYTES = 256 * 1024;
 const IMAGE_PRESENCE_TTL_MS = 60_000;
@@ -61,11 +63,11 @@ function createImagePresenceProbe(options = {}) {
   async function inspect(image) {
     try {
       const status = await getImageStatus(image);
-      if (status?.ok) return true;
-      if (status?.reason === "missing-image") return false;
-      return null;
+      if (status?.ok) return { value: true, imageId: status.id || null };
+      if (status?.reason === "missing-image") return { value: false, imageId: null };
+      return { value: null, imageId: null };
     } catch {
-      return null;
+      return { value: null, imageId: null };
     }
   }
 
@@ -75,15 +77,21 @@ function createImagePresenceProbe(options = {}) {
     const cached = entries.get(key);
     if (cached?.promise) return cached.promise;
     if (cached && cached.expiresAt > now()) return Promise.resolve(cached.value);
-    const promise = inspect(key).then((value) => {
-      entries.set(key, { value, expiresAt: now() + (value === null ? unknownTtlMs : ttlMs) });
-      return value;
+    const promise = inspect(key).then((answer) => {
+      entries.set(key, { ...answer, expiresAt: now() + (answer.value === null ? unknownTtlMs : ttlMs) });
+      return answer.value;
     });
     entries.set(key, { ...(cached || {}), promise });
     return promise;
   }
 
-  return { present, clear: () => entries.clear() };
+  async function imageId(image, { force = false } = {}) {
+    if (force) entries.delete(image);
+    await present(image);
+    return entries.get(image)?.imageId || null;
+  }
+
+  return { present, imageId, clear: () => entries.clear() };
 }
 
 /** counts() → { [engineId]: runningContainers } for this manager, or null when unknown. */
@@ -152,8 +160,14 @@ async function buildEnginesPayload(options = {}) {
 
   const engines = await Promise.all(registry.hostedBy(managerId).map(async (engineId) => {
     const descriptor = registry.get(engineId);
+    let defaultIntrospection = null;
     const runtimes = await Promise.all(registry.runtimesFor(engineId).map(async (ref) => {
       const present = presence ? await presence.present(ref.image) : null;
+      let introspection = null;
+      if (typeof options.getIntrospection === "function") {
+        try { introspection = await options.getIntrospection(ref); } catch {}
+      }
+      if (ref.default) defaultIntrospection = introspection;
       presenceAnswers.push(present);
       return {
         runtimeId: ref.runtimeId,
@@ -165,7 +179,7 @@ async function buildEnginesPayload(options = {}) {
         ...(ref.imageOverrideEnv ? { imageOverrideEnv: ref.imageOverrideEnv } : {}),
         default: ref.default,
         present,
-        introspected: Boolean(isIntrospected(ref.runtimeId)),
+        introspected: Boolean(introspection || isIntrospected(ref.runtimeId)),
         features: clone(ref.features),
         status: ref.status,
         localBuild: ref.localBuild,
@@ -183,7 +197,7 @@ async function buildEnginesPayload(options = {}) {
       hostKinds: [...descriptor.host.kinds],
       artifactFormats: [...descriptor.artifactFormats],
       runtimes,
-      capabilities: clone(descriptor.capabilities),
+      capabilities: refineAutoParsers(descriptor.capabilities, defaultIntrospection),
       apiSurface: clone(descriptor.apiSurface || null),
       memoryModel: { kind: descriptor.memoryModel.kind },
       health: {
@@ -386,6 +400,24 @@ function registerEngineRoutes(app, deps = {}) {
     })
     : null;
   const metricsSampler = deps.metricsSampler && typeof deps.metricsSampler.read === "function" ? deps.metricsSampler : null;
+  const runtimeFacts = deps.runtimeFacts || createRuntimeFacts({
+    registry,
+    aiRoot: deps.aiRoot,
+    now,
+    resolveImageId: presence ? presence.imageId : async () => null,
+  });
+  const getIntrospection = deps.getIntrospection || (async (runtime) => (await runtimeFacts.get(runtime.runtimeId))?.flags || null);
+  const isAdminRequest = deps.isAdminRequest || isLocalRequest;
+
+  function requireHostedRuntime(req) {
+    const descriptor = registry.require(req.params?.engineId);
+    if (!registry.hostedBy(managerId).includes(descriptor.id)) throw httpError(404, "engine_not_hosted", `Engine ${descriptor.id} is not hosted by this manager.`);
+    return { descriptor, runtime: registry.resolveRuntime(descriptor.id, { runtimeId: req.params?.runtimeId }) };
+  }
+
+  function sendRuntimeError(res, error) {
+    return res.status(error.status || 500).json(errorEnvelope(error.code || "runtime_facts_unavailable", error.message, error.hint));
+  }
 
   app.get("/api/engines", async (_req, res) => {
     try {
@@ -395,6 +427,7 @@ function registerEngineRoutes(app, deps = {}) {
         presence,
         instanceCounts,
         isIntrospected: deps.isIntrospected,
+        getIntrospection,
         now,
       }));
     } catch (error) {
@@ -411,7 +444,7 @@ function registerEngineRoutes(app, deps = {}) {
         query: req.query || {},
         paramCatalog: deps.paramCatalog,
         getGpuStatus: deps.getGpuStatus,
-        getIntrospection: deps.getIntrospection,
+        getIntrospection,
         getModelFacts: deps.getModelFacts,
         now,
       }));
@@ -429,6 +462,56 @@ function registerEngineRoutes(app, deps = {}) {
     return res.status(status).json(payload);
   });
 
+  app.get("/api/engines/:engineId/runtimes/:runtimeId/flags", async (req, res) => {
+    try {
+      const { descriptor, runtime } = requireHostedRuntime(req);
+      const facts = await runtimeFacts.get(runtime.runtimeId);
+      if (!facts?.flags) throw httpError(404, "runtime_not_introspected", "请先检测运行时参数 / Introspect runtime flags first");
+      const payload = { ok: true, engineId: descriptor.id, runtimeId: runtime.runtimeId, imageId: facts.imageId, flags: facts.flags, registries: facts.registries };
+      const against = queryText(req.query?.against);
+      if (against) {
+        const catalog = (deps.paramCatalog || getParamCatalog()).loadCatalog(descriptor.id, { runtime });
+        let baseline;
+        if (against === "catalog") {
+          baseline = catalog.params.flatMap((param) => [param.emit.flag, param.emit.falseFlag, ...(param.flags || []).map((entry) => entry.flag)].filter(Boolean).map((flag) => ({ flag, choices: (param.choices || []).map((entry) => entry.value), default: param.engineDefault })));
+        } else {
+          const other = registry.resolveRuntime(descriptor.id, { runtimeId: against });
+          baseline = (await runtimeFacts.get(other.runtimeId))?.flags;
+          if (!baseline) throw httpError(404, "runtime_not_introspected", "The comparison runtime has no introspected flags.");
+        }
+        payload.diff = diffFlagSets(baseline, facts.flags, catalog);
+      }
+      return res.json(payload);
+    } catch (error) { return sendRuntimeError(res, error); }
+  });
+
+  app.post("/api/engines/:engineId/runtimes/:runtimeId/introspect", async (req, res) => {
+    if (!isAdminRequest(req)) return res.status(403).json(errorEnvelope("forbidden", "Flag introspection requires administrator access."));
+    if (req.body?.confirm !== true) return res.status(400).json(errorEnvelope("confirmation_required", "Confirm the runtime flag introspection with confirm:true."));
+    try {
+      const { descriptor, runtime } = requireHostedRuntime(req);
+      // Validate support and image presence before creating a ledger job.
+      buildIntrospectionCommand(descriptor, runtime.image);
+      if (!["createJob", "finishJob", "failJob"].every((name) => typeof deps[name] === "function")) throw httpError(503, "introspection_unavailable", "The introspection job runner is unavailable.");
+      if (!await runtimeFacts.imageId(runtime.image, { force: true })) throw httpError(409, "runtime_image_missing", "请先拉取镜像 / Pull the image first");
+      const job = deps.createJob("introspect", `检测运行时参数 / Introspect ${runtime.runtimeId}`, { engineId: descriptor.id, runtimeId: runtime.runtimeId });
+      const runner = deps.introspectRuntime || introspectRuntime;
+      // Send a snapshot of the job before the background work can finish.
+      res.json({ job: clone(job) });
+      Promise.resolve().then(() => runner(descriptor.id, runtime.runtimeId, { registry, runtimeFacts, dockerConfig: deps.dockerConfig, execFileAsync: deps.execFileAsync, now }))
+        .then((result) => {
+          deps.appendLog?.(job, `检测完成 / Captured ${result.flags.flags.length} runtime flags.`);
+          deps.finishJob(job, { imageId: result.imageId, flagCount: result.flags.flags.length });
+        })
+        .catch((error) => {
+          // Keep the machine-readable error in the existing job envelope too.
+          job.meta.errorCode = error.code || "introspection_failed";
+          deps.failJob(job, error);
+        });
+      return res;
+    } catch (error) { return sendRuntimeError(res, error); }
+  });
+
   if (metricsSampler) {
     app.get("/api/instances/:id/metrics", (req, res) => {
       const { status, payload } = readInstanceMetrics(metricsSampler, req.params?.id);
@@ -436,7 +519,7 @@ function registerEngineRoutes(app, deps = {}) {
     });
   }
 
-  return { presence, instanceCounts, metricsSampler };
+  return { presence, instanceCounts, metricsSampler, runtimeFacts };
 }
 
 module.exports = {

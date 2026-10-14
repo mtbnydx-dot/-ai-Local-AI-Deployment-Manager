@@ -1,0 +1,9 @@
+common params:
+  -h,    --help                 print usage and exit
+  -c,    --ctx-size N           size of the prompt context (default: 4096)
+                               (env: LLAMA_ARG_CTX_SIZE)
+  -ctk,  --cache-type-k TYPE    KV cache type for K (default: f16)
+                               (env: LLAMA_ARG_CACHE_TYPE_K)
+  --api-key KEY                API key to use for requests (default: none)
+                               (env: LLAMA_API_KEY)
+  --jinja                      use jinja template rendering (default: false)
