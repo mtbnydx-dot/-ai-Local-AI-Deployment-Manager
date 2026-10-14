@@ -1,14 +1,14 @@
-> docker run -d --name llama-deepseek-v4-flash --gpus device=0 -p 127.0.0.1:8080:8080 -v <AI_ROOT>\models\DeepSeek-V4-Flash-GGUF:/models/DeepSeek-V4-Flash-GGUF:ro -e LLAMA_API_KEY local/llama.cpp:deepseek4-b10630 -m /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf --host 0.0.0.0 --port 8080 -c 65536 -ngl 999 --jinja
+> docker run -d --name llama-deepseek-v4-flash --gpus device=0 -p 127.0.0.1:8080:8080 -v <AI_ROOT>\models\DeepSeek-V4-Flash-GGUF:/models/DeepSeek-V4-Flash-GGUF:ro -e LLAMA_API_KEY local/llama.cpp:deepseek4-b10630 -m /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf --host 0.0.0.0 --port 8080 -c 65536 -ngl 999 --jinja
 main: loading model
-srv    load_model: loading model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf'
+srv    load_model: loading model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf'
 llama_model_load_from_file_impl: using device CUDA0 (NVIDIA RTX PRO 6000 Blackwell Workstation Edition) - 96498 MiB free
-llama_model_loader: loaded meta data with 61 key-value pairs and 1306 tensors from /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf (version GGUF V3 (latest))
+llama_model_loader: loaded meta data with 62 key-value pairs and 1328 tensors from /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf (version GGUF V3 (latest))
 print_info: file format = GGUF V3 (latest)
-print_info: file type   = Q2_K - Medium
-print_info: file size   = 90.89 GiB (2.96 BPW)
+print_info: file type   = IQ2_XXS - 2.0625 bpw
+print_info: file size   = 90.88 GiB (2.75 BPW)
 print_info: arch             = deepseek4
 print_info: n_ctx_train      = 1048576
-print_info: n_embd           = 7168
+print_info: n_embd           = 4096
 print_info: n_layer          = 43
 print_info: n_expert         = 256
 print_info: n_expert_used    = 6
@@ -20,6 +20,6 @@ ggml_backend_cuda_buffer_type_alloc_buffer: allocating 83983.17 MiB on device 0:
 alloc_tensor_range: failed to allocate CUDA0 buffer of size 88062733312
 llama_model_load: error loading model: unable to allocate CUDA0 buffer
 llama_model_load_from_file_impl: failed to load model
-common_init_from_params: failed to load model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf'
-srv    load_model: failed to load model, '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf'
+common_init_from_params: failed to load model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf'
+srv    load_model: failed to load model, '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf'
 main: exiting due to model loading error

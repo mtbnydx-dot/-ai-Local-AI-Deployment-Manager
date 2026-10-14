@@ -233,7 +233,8 @@ function readFileBounded(abs, maxBytes, code) {
 
 // ---------------------------------------------------------------------------
 // Scrubbing: absolute paths are reduced to their last segment; tokenizer
-// vocabularies are dropped. Every change is listed in manifest.scrubbed.
+// vocabularies are dropped; text files get LF line endings. Every change is
+// listed in manifest.scrubbed.
 
 const WHOLE_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'<>|*?]*$/;
 const EMBEDDED_PATHS = [
@@ -275,21 +276,28 @@ function scrubJsonValue(value, pointer, changes) {
   return value;
 }
 
+// Text kept as text (templates, unparsable JSON). The fixtures' .gitattributes
+// stores them with LF, so CRLF becomes LF here and manifest bytes match the
+// checked-out file; template hashes normalise line endings the same way.
+function scrubTextFile(name, text, scrubbed) {
+  let next = scrubString(text);
+  if (next !== text) scrubbed.push({ file: name, pointer: null, reason: "absolute_path" });
+  if (next.includes("\r\n")) {
+    next = next.replace(/\r\n/g, "\n");
+    scrubbed.push({ file: name, pointer: null, reason: "line_endings" });
+  }
+  return next;
+}
+
 function scrubCapturedFile(name, buffer, scrubbed, warnings) {
   const text = buffer.toString("utf8");
-  if (!name.endsWith(".json")) {
-    const next = scrubString(text);
-    if (next !== text) scrubbed.push({ file: name, pointer: null, reason: "absolute_path" });
-    return next;
-  }
+  if (!name.endsWith(".json")) return scrubTextFile(name, text, scrubbed);
   let parsed;
   try {
     parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch {
     warnings.push({ code: "json_invalid", file: name });
-    const next = scrubString(text);
-    if (next !== text) scrubbed.push({ file: name, pointer: null, reason: "absolute_path" });
-    return next;
+    return scrubTextFile(name, text, scrubbed);
   }
   if (name === "tokenizer_config.json" && parsed && typeof parsed === "object" && !Array.isArray(parsed)
     && Object.hasOwn(parsed, "added_tokens_decoder")) {
@@ -1061,27 +1069,57 @@ function detectLayout(inventory, tensorTable, gguf) {
   return weights.length > 1 ? "unindexed-shards" : "single";
 }
 
-function identityNeedles() {
+// Account and host names too common to identify anyone: a chat template's
+// "user" role or a "root-cause" sample must not read as this machine's name.
+// A name inside a path is caught anyway (\Users\<name>, /home/<name>, drives).
+const GENERIC_IDENTITY_NAMES = new Set([
+  "admin", "administrator", "arch", "box", "build", "builder", "default", "defaultuser0", "desktop",
+  "dev", "developer", "docker", "gpu", "guest", "home", "host", "laptop", "linux", "local", "localhost",
+  "node", "owner", "public", "root", "runner", "server", "system", "test", "tester", "ubuntu", "user",
+  "users", "vagrant", "worker", "workstation",
+]);
+
+// Lower-cased needles; short and generic names are dropped.
+function filterIdentityNeedles(values) {
   const needles = new Set();
+  for (const value of values || []) {
+    const needle = String(value ?? "").trim().toLowerCase();
+    if (needle.length >= 3 && !GENERIC_IDENTITY_NAMES.has(needle)) needles.add(needle);
+  }
+  return Array.from(needles);
+}
+
+// This account, host and home folder, plus `extra` (e.g. the repository path).
+function identityNeedles(extra = []) {
+  const values = [];
   try {
-    const user = os.userInfo().username;
-    if (user && user.length >= 3) needles.add(user.toLowerCase());
+    values.push(os.userInfo().username);
   } catch {
     // userInfo throws when the account has no name; nothing to check then.
   }
-  const host = os.hostname();
-  if (host && host.length >= 3) needles.add(host.toLowerCase());
-  const home = os.homedir();
-  if (home && home.length >= 3) needles.add(home.toLowerCase());
-  return Array.from(needles);
+  values.push(os.hostname(), os.homedir(), ...extra);
+  return filterIdentityNeedles(values);
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Whole tokens only: a needle with a letter or digit on either side is part of
+// another word ("anna" in "annals", "kim" in "kimi").
+function identityPatterns(needles) {
+  return filterIdentityNeedles(needles).map((needle) => new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(needle)}(?![A-Za-z0-9])`, "i"));
+}
+
+function containsIdentity(text, needles) {
+  return identityPatterns(needles).some((pattern) => pattern.test(text));
 }
 
 // Returns check ids only, never the matched text (it could be a secret).
 function privacyFindings(text, needles = identityNeedles()) {
   const findings = [];
   for (const entry of PRIVACY_PATTERNS) if (entry.pattern.test(text)) findings.push(entry.id);
-  const lower = text.toLowerCase();
-  if (needles.some((needle) => lower.includes(needle))) findings.push("identity");
+  if (containsIdentity(text, needles)) findings.push("identity");
   return findings;
 }
 
@@ -1312,6 +1350,7 @@ if (require.main === module) {
 module.exports = {
   CAPTURED_ROOT_FILES,
   CREDENTIAL_PATTERNS,
+  GENERIC_IDENTITY_NAMES,
   GGML_TYPES,
   GGML_TYPE_IDS,
   GGUF_VALUE_TYPES,
@@ -1323,13 +1362,16 @@ module.exports = {
   buildFixture,
   compareSafetensorsDtype,
   compressTensors,
+  containsIdentity,
   decompose,
   expandGroupNames,
   expandGroupTensors,
   expandRangeSpec,
   fillPlaceholders,
+  filterIdentityNeedles,
   formatJson,
   ggmlTensorBytes,
+  identityNeedles,
   main,
   parseArgs,
   privacyFindings,

@@ -8,8 +8,10 @@
 // Sizing: files are extended with truncate, which is sparse on Linux and
 // macOS. NTFS reserves the space of a plain extended file, so on Windows each
 // large file is first marked sparse with `fsutil sparse setflag` (no
-// elevation needed). sizes: "auto" (default) falls back to header-only sizes
-// when that is impossible, "real" throws instead, "header" never extends.
+// elevation needed). What Windows has to extend without the flag (small
+// files, and every file when marking fails: FAT/exFAT, a network share, fsutil
+// blocked) shares one budget per call; past it, sizes: "auto" (default) leaves
+// files at header size, "real" throws instead, "header" never extends.
 // Every result file reports `sized` and `exact`, so tests can tell.
 
 const fs = require("node:fs");
@@ -23,7 +25,7 @@ const { buildSafetensorsHeader } = require("./safetensors-writer");
 
 const FIXTURES_ROOT = path.join(__dirname, "..", "fixtures", "model-cards");
 const SPARSE_MIN_BYTES = 1024 * 1024;
-const NON_SPARSE_LIMIT = 256 * 1024 * 1024;
+const NON_SPARSE_BUDGET = 256 * 1024 * 1024;
 const SPARSE_CONCURRENCY = 8;
 
 function fixtureDir(id, root = FIXTURES_ROOT) {
@@ -85,14 +87,14 @@ function markSparse(file) {
   });
 }
 
-async function markSparseAll(files) {
+async function markSparseAll(files, mark) {
   const results = new Map();
   let next = 0;
   const worker = async () => {
     while (next < files.length) {
       const file = files[next];
       next += 1;
-      results.set(file, await markSparse(file));
+      results.set(file, await mark(file));
     }
   };
   await Promise.all(Array.from({ length: Math.min(SPARSE_CONCURRENCY, files.length) }, worker));
@@ -101,16 +103,21 @@ async function markSparseAll(files) {
 
 /**
  * entries: [{file, bytes}] for files that already hold their header. Extends
- * each to `bytes`. Returns a Map file → sized (boolean).
+ * each to `bytes`. Returns a Map file → sized (boolean). `markSparse` and
+ * `nonSparseBudget` exist for tests.
  */
-async function resizeFiles(entries, { sizes = "auto", platform = process.platform } = {}) {
+async function resizeFiles(entries, {
+  sizes = "auto", platform = process.platform, markSparse: mark = markSparse, nonSparseBudget = NON_SPARSE_BUDGET,
+} = {}) {
   const result = new Map();
   if (sizes === "header") {
     for (const entry of entries) result.set(entry.file, fs.statSync(entry.file).size === entry.bytes);
     return result;
   }
+  const windows = platform === "win32";
   const large = entries.filter((entry) => entry.bytes >= SPARSE_MIN_BYTES && fs.statSync(entry.file).size < entry.bytes);
-  const sparse = platform === "win32" && large.length ? await markSparseAll(large.map((entry) => entry.file)) : null;
+  const sparse = windows && large.length ? await markSparseAll(large.map((entry) => entry.file), mark) : new Map();
+  let reserved = 0;
   for (const entry of entries) {
     const current = fs.statSync(entry.file).size;
     if (current >= entry.bytes) {
@@ -118,11 +125,16 @@ async function resizeFiles(entries, { sizes = "auto", platform = process.platfor
       result.set(entry.file, true);
       continue;
     }
-    const isSparse = sparse ? sparse.get(entry.file) !== false : true;
-    if (sparse && sparse.has(entry.file) && !isSparse && entry.bytes > NON_SPARSE_LIMIT) {
-      if (sizes === "real") throw new Error(`Cannot mark ${path.basename(entry.file)} sparse; refusing to reserve ${entry.bytes} bytes.`);
-      result.set(entry.file, false);
-      continue;
+    if (windows && sparse.get(entry.file) !== true) {
+      const growth = entry.bytes - current;
+      if (reserved + growth > nonSparseBudget) {
+        if (sizes === "real") {
+          throw new Error(`Cannot extend ${path.basename(entry.file)} sparsely; refusing to reserve ${growth} more bytes past the ${nonSparseBudget}-byte budget.`);
+        }
+        result.set(entry.file, false);
+        continue;
+      }
+      reserved += growth;
     }
     try {
       await fsp.truncate(entry.file, entry.bytes);
@@ -162,8 +174,10 @@ function writeIndexFile(target, index, safetensorsFiles, tensorsByFile) {
 /**
  * Builds the model folder for fixture `id` under `parent` (default: a new
  * temp folder). `name` overrides the folder name (rename tests); the default
- * is manifest.folderName. Returns { root, dir, files, cleanup }, where files
- * lists {name, kind, bytes (captured), actualBytes, sized, exact}.
+ * is manifest.folderName. `sizes` as above; `platform`, `markSparse` and
+ * `nonSparseBudget` pass through to resizeFiles. Returns { root, dir, files,
+ * cleanup }, where files lists {name, kind, bytes (captured), actualBytes,
+ * sized, exact}.
  */
 async function materializeFixture(id, options = {}) {
   const fixture = loadFixture(id, options.fixturesRoot);
@@ -226,7 +240,12 @@ async function materializeFixture(id, options = {}) {
     }
   }
 
-  const sized = await resizeFiles(toSize, { sizes: options.sizes || "auto" });
+  const sized = await resizeFiles(toSize, {
+    sizes: options.sizes || "auto",
+    platform: options.platform,
+    markSparse: options.markSparse,
+    nonSparseBudget: options.nonSparseBudget,
+  });
   const files = manifest.files.map((entry) => {
     const file = target(entry.name);
     const actualBytes = fs.statSync(file).size;

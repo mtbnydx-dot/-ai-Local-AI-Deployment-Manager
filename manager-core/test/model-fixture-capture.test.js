@@ -184,6 +184,65 @@ test("privacy refusal names the file and check, never the value, and writes noth
   assert.match(named.err, /config\.json: identity/);
 });
 
+test("identity needles match whole tokens and skip generic account and host names", async (t) => {
+  // Chat-template roles and log words that are also common account or host names.
+  const template = "{%- if message.role == 'user' %}<|user|>{%- elif message.role == 'root' %}{% endif %}\n";
+  const { work, source } = await makeSafetensorsModel(t, {
+    files: {
+      "chat_template.jinja": template,
+      "generation_config.json": { temperature: 0.6, note: "root-cause test on the dev server (Ubuntu, RTX PRO 6000 Workstation Edition)" },
+    },
+  });
+  const out = path.join(work, "fixtures");
+  const generic = await runMain(["--from", source, "--id", "generic", "--out", out], {
+    needles: ["User", "root", "TEST", "dev", "Workstation", "ubuntu", "server", "Administrator", "localhost"],
+  });
+  assert.equal(generic.code, 0, generic.err);
+  assert.equal(fs.readFileSync(path.join(out, "generic", "chat_template.jinja"), "utf8"), template);
+
+  assert.deepEqual(capture.filterIdentityNeedles(["User", " ROOT ", "ab", "", null, "Zq-Builder", "zq-builder"]), ["zq-builder"]);
+  assert.equal(capture.containsIdentity("served by zq-builder.", ["zq-builder"]), true);
+  assert.equal(capture.containsIdentity("served by ZQ-BUILDER_7", ["zq-builder"]), true);
+  assert.equal(capture.containsIdentity("served by zq-builders", ["zq-builder"]), false);
+  assert.equal(capture.containsIdentity("role user", ["user"]), false);
+  for (const name of capture.GENERIC_IDENTITY_NAMES) assert.equal(name, name.toLowerCase());
+
+  // The tool's own needles never hold a generic name, whatever the account is called.
+  const original = { userInfo: os.userInfo, hostname: os.hostname };
+  try {
+    os.userInfo = () => ({ username: "User" });
+    os.hostname = () => "WORKSTATION";
+    const needles = capture.identityNeedles(["<repo>"]);
+    assert.ok(!needles.includes("user") && !needles.includes("workstation"), needles.join(","));
+    assert.ok(needles.includes("<repo>"));
+    os.userInfo = () => ({ username: "zq-builder" });
+    assert.ok(capture.identityNeedles().includes("zq-builder"));
+  } finally {
+    Object.assign(os, original);
+  }
+
+  const distinctive = await runMain(["--from", source, "--id", "distinctive", "--out", out], { needles: ["tiny-model-7b"] });
+  assert.equal(distinctive.code, 2);
+  assert.match(distinctive.err, /config\.json: identity/);
+});
+
+test("captured text files are stored with LF line endings", async (t) => {
+  const { work, source } = await makeSafetensorsModel(t, {
+    files: { "chat_template.jinja": "{%- for message in messages %}\r\n{{ message.content }}\r\n{%- endfor %}\r\n" },
+  });
+  const out = path.join(work, "fixtures");
+  const result = await runMain(["--from", source, "--id", "crlf", "--out", out]);
+  assert.equal(result.code, 0, result.err);
+  const file = path.join(out, "crlf", "chat_template.jinja");
+  const text = fs.readFileSync(file, "utf8");
+  assert.equal(text, "{%- for message in messages %}\n{{ message.content }}\n{%- endfor %}\n");
+  const manifest = JSON.parse(fs.readFileSync(path.join(out, "crlf", "manifest.json"), "utf8"));
+  assert.equal(manifest.files.find((entry) => entry.name === "chat_template.jinja").bytes, fs.statSync(file).size);
+  assert.deepEqual(manifest.scrubbed.filter((entry) => entry.file === "chat_template.jinja"), [
+    { file: "chat_template.jinja", pointer: null, reason: "line_endings" },
+  ]);
+});
+
 test("--out inside --from, an existing fixture, --force and --dry-run", async (t) => {
   const { work, source } = await makeSafetensorsModel(t);
   const before = snapshot(source);

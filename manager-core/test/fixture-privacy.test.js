@@ -11,7 +11,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { CREDENTIAL_PATTERNS: CAPTURE_CREDENTIALS } = require("../../scripts/capture-model-fixture.js");
+const {
+  CREDENTIAL_PATTERNS: CAPTURE_CREDENTIALS,
+  GENERIC_IDENTITY_NAMES,
+  containsIdentity,
+  filterIdentityNeedles,
+  identityNeedles: captureIdentityNeedles,
+} = require("../../scripts/capture-model-fixture.js");
 
 const REPO_ROOT = path.join(__dirname, "..", "..");
 const FIXTURE_DIRS = ["model-cards", "root-cause-samples"].map((name) => path.join(__dirname, "fixtures", name));
@@ -50,20 +56,11 @@ function credentialPatterns() {
   return [...(release.length ? release : FALLBACK_CREDENTIALS), HF_TOKEN];
 }
 
+// The capture tool's rule, so a fixture it writes passes here: this account,
+// host and home folder plus the repository path, generic names (user, root,
+// dev, server, ...) dropped, matched as whole tokens only.
 function identityNeedles() {
-  const needles = new Set();
-  const add = (value) => {
-    if (value && String(value).length >= 3) needles.add(String(value).toLowerCase());
-  };
-  try {
-    add(os.userInfo().username);
-  } catch {
-    // No account name to check.
-  }
-  add(os.hostname());
-  add(os.homedir());
-  add(path.resolve(REPO_ROOT));
-  return Array.from(needles);
+  return captureIdentityNeedles([path.resolve(REPO_ROOT)]);
 }
 
 function walk(dir, base = dir) {
@@ -84,8 +81,7 @@ function contentFindings(text, credentials, needles) {
   const findings = [];
   for (const entry of PATHS) if (entry.pattern.test(text)) findings.push(entry.id);
   if (credentials.some((pattern) => pattern.test(text))) findings.push("credential");
-  const lower = text.toLowerCase();
-  if (needles.some((needle) => lower.includes(needle))) findings.push("machine or user name");
+  if (containsIdentity(text, needles)) findings.push("machine or user name");
   return findings;
 }
 
@@ -134,15 +130,42 @@ test("the capture tool refuses everything the release scan rejects", (t) => {
   }
 });
 
-test("no fixture contains paths, credentials, e-mail addresses or machine names", () => {
+function scanFixtures(needles) {
   const credentials = credentialPatterns();
-  const needles = identityNeedles();
   const hits = [];
   for (const file of fixtureFiles()) {
     const text = fs.readFileSync(file.full, "utf8");
     for (const finding of contentFindings(text, credentials, needles)) hits.push(`${file.root}/${file.rel}: ${finding}`);
   }
-  assert.deepEqual(hits, []);
+  return hits;
+}
+
+test("no fixture contains paths, credentials, e-mail addresses or machine names", () => {
+  assert.deepEqual(scanFixtures(identityNeedles()), []);
+});
+
+// The result must not depend on what the machine running the suite is called.
+test("generic account and host names never count; distinctive names match whole tokens", () => {
+  const credentials = credentialPatterns();
+  const template = "{%- if message.role == 'user' %}<|user|>{{ message.content }}{%- endif %} root-cause test on the dev server";
+  assert.deepEqual(contentFindings(template, credentials, ["user", "root", "test", "dev", "server"]), []);
+  assert.deepEqual(contentFindings(`${template} built by zq-builder`, credentials, ["user", "zq-builder"]), ["machine or user name"]);
+  assert.deepEqual(contentFindings(`${template} built by zq-builders`, credentials, ["zq-builder"]), []);
+  assert.deepEqual(filterIdentityNeedles(["User", "WORKSTATION", "Ubuntu", "zq-builder"]), ["zq-builder"]);
+
+  const original = { userInfo: os.userInfo, hostname: os.hostname };
+  try {
+    for (const name of ["User", "root", "test", "dev", "server", "workstation", "ubuntu", "admin"]) {
+      assert.ok(GENERIC_IDENTITY_NAMES.has(name.toLowerCase()), name);
+      os.userInfo = () => ({ username: name });
+      os.hostname = () => name.toUpperCase();
+      const needles = identityNeedles();
+      assert.ok(!needles.includes(name.toLowerCase()), `${name} is not a needle`);
+      assert.deepEqual(scanFixtures(needles), [], `account and host named ${name}`);
+    }
+  } finally {
+    Object.assign(os, original);
+  }
 });
 
 test("fixture names survive .gitignore and the release robocopy", () => {

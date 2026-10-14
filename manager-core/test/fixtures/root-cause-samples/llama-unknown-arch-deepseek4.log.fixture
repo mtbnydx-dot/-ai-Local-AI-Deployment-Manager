@@ -1,4 +1,4 @@
-> docker run -d --name llama-deepseek-v4-flash --gpus device=0 -p 127.0.0.1:8080:8080 -v <AI_ROOT>\models\DeepSeek-V4-Flash-GGUF:/models/DeepSeek-V4-Flash-GGUF:ro -e LLAMA_API_KEY ghcr.io/ggml-org/llama.cpp:server-cuda-b6890 -m /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf --host 0.0.0.0 --port 8080 -c 32768 -ngl 999 --jinja
+> docker run -d --name llama-deepseek-v4-flash --gpus device=0 -p 127.0.0.1:8080:8080 -v <AI_ROOT>\models\DeepSeek-V4-Flash-GGUF:/models/DeepSeek-V4-Flash-GGUF:ro -e LLAMA_API_KEY ghcr.io/ggml-org/llama.cpp:server-cuda-b6890 -m /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf --host 0.0.0.0 --port 8080 -c 32768 -ngl 999 --jinja
 ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
 ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
 ggml_cuda_init: found 1 CUDA devices:
@@ -8,21 +8,28 @@ system info: n_threads = 16, n_threads_batch = 16, total_threads = 32
 main: binding port with default address family
 main: HTTP server is listening, hostname: 0.0.0.0, port: 8080, http threads: 31
 main: loading model
-srv    load_model: loading model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf'
+srv    load_model: loading model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf'
 llama_model_load_from_file_impl: using device CUDA0 (NVIDIA RTX PRO 6000 Blackwell Workstation Edition) - 96498 MiB free
-llama_model_loader: loaded meta data with 61 key-value pairs and 1306 tensors from /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf (version GGUF V3 (latest))
+llama_model_loader: loaded meta data with 62 key-value pairs and 1328 tensors from /models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
 llama_model_loader: - kv   0:                       general.architecture str              = deepseek4
 llama_model_loader: - kv   1:                               general.type str              = model
-llama_model_loader: - kv   2:                               general.name str              = DeepSeek V4 Flash
-llama_model_loader: - kv   3:                     deepseek4.block_count u32              = 43
-llama_model_loader: - type  f32:  517 tensors
-llama_model_loader: - type q2_K:  258 tensors
-llama_model_loader: - type q4_K:  445 tensors
-llama_model_loader: - type q6_K:   86 tensors
+llama_model_loader: - kv   2:                     general.sampling.top_p f32              = 1.000000
+llama_model_loader: - kv   3:                      general.sampling.temp f32              = 1.000000
+llama_model_loader: - kv   4:                               general.name str              = DeepSeek V4 Flash
+llama_model_loader: - kv   5:                         general.size_label str              = 256x8.4B
+llama_model_loader: - kv   6:                            general.license str              = mit
+llama_model_loader: - kv   7:                      deepseek4.block_count u32              = 43
+llama_model_loader: - type  f32:  492 tensors
+llama_model_loader: - type  f16:  359 tensors
+llama_model_loader: - type q8_0:  345 tensors
+llama_model_loader: - type q2_K:   37 tensors
+llama_model_loader: - type q4_K:   18 tensors
+llama_model_loader: - type iq2_xxs:   74 tensors
+llama_model_loader: - type  i32:    3 tensors
 llama_model_load: error loading model: error loading model architecture: unknown model architecture: 'deepseek4'
 llama_model_load_from_file_impl: failed to load model
-common_init_from_params: failed to load model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf'
-srv    load_model: failed to load model, '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K.gguf'
+common_init_from_params: failed to load model '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf'
+srv    load_model: failed to load model, '/models/DeepSeek-V4-Flash-GGUF/DeepSeek-V4-Flash-Q2_K-0731.gguf'
 srv   operator(): operator(): cleaning up before exit...
 main: exiting due to model loading error

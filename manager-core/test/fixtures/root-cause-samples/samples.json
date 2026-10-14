@@ -3,7 +3,9 @@
   "notes": [
     "Job-log snippets for the root-cause tests (docs/overhaul/02-models.md §14, §21.2), written in the shape of the managers' jobs ledger: the redacted docker run line, then container output.",
     "Host paths appear only as <AI_ROOT>; container paths are kept. vllm-port-in-use-with-secrets carries obviously fake secrets and ANSI colour codes on purpose, so the redaction and normalisation steps have something to remove.",
-    "expected.code and expected.signatureId follow the error-signature ids of 02 §8.4; a null signatureId means the traceback fallback (engine_start_failed) or an engine-descriptor addition whose id 01 defines."
+    "expected.code and expected.signatureId follow the error-signature ids of 02 §8.4; a null signatureId means the traceback fallback (engine_start_failed). llama-mmproj-missing names the id the root-cause test gives its stubbed llama.cpp descriptor addition (01 §16.3).",
+    "Model facts in samples with a modelFixture (file name, KV and tensor counts, tensor type counts, n_embd, n_layer, experts, file size and BPW) match that fixture; the trigger strings are the ones 02 §21.2 names. Device names, free memory, buffer sizes, timings and build ids are illustrative.",
+    "expected.redactedWithSecrets: gone after redactSecrets(text, {secrets: that list}). expected.redactedByPatterns: gone after redactSecrets(text) with the default patterns only, as the job-log path (job-utils sanitizeJobLogText) calls it. The API key in vLLM's 'non-default args' list literal is redacted only as a known secret: the key-value pattern stops at '['."
   ],
   "samples": [
     {
@@ -36,6 +38,7 @@
       "engineId": "llamacpp",
       "phase": "weights",
       "trigger": "unknown model architecture: 'deepseek4'",
+      "modelFixture": "deepseek-v4-flash-q2k-gguf",
       "expected": { "code": "llama_unknown_arch", "signatureId": "llama-unknown-arch", "capture": "deepseek4" }
     },
     {
@@ -44,6 +47,7 @@
       "engineId": "llamacpp",
       "phase": "weights",
       "trigger": "failed to allocate CUDA0 buffer of size 88062733312",
+      "modelFixture": "deepseek-v4-flash-q2k-gguf",
       "expected": { "code": "cuda_buffer_alloc", "signatureId": "cuda-buffer-alloc" }
     },
     {
@@ -52,7 +56,7 @@
       "engineId": "llamacpp",
       "phase": "container",
       "trigger": "Multimodal mode requires an mmproj",
-      "expected": { "code": "mmproj_missing", "signatureId": null, "source": "llama.cpp descriptor errorSignatures addition (01 §16.3)" }
+      "expected": { "code": "mmproj_missing", "signatureId": "llama-mmproj-missing", "source": "stubbed llama.cpp descriptor errorSignatures addition (01 §16.3); the stub carries this id" }
     },
     {
       "id": "sglang-traceback-fallback",
@@ -79,7 +83,8 @@
       "expected": {
         "code": "port_in_use",
         "signatureId": "port-in-use",
-        "redacted": ["fake-root-cause-api-key-0001", "fake-root-cause-hf-token-0002", "fake-root-cause-bearer-0003"]
+        "redactedWithSecrets": ["fake-root-cause-api-key-0001", "fake-root-cause-hf-token-0002", "fake-root-cause-bearer-0003"],
+        "redactedByPatterns": ["fake-root-cause-hf-token-0002", "fake-root-cause-bearer-0003"]
       }
     }
   ]

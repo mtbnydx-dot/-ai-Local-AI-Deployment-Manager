@@ -8,6 +8,8 @@
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const core = require("..");
@@ -18,6 +20,7 @@ const {
   listFixtures,
   loadFixture,
   materializeFixture,
+  resizeFiles,
   stableCardProjection,
 } = require("./helpers/fixture-materialize");
 const { DTYPE_BYTES } = require("./helpers/safetensors-writer");
@@ -357,6 +360,39 @@ test("header-only materialization keeps headers and reports unsized files", asyn
   assert.equal(metadata.architecture, "mamba2");
 });
 
+// Where Windows cannot mark files sparse (FAT/exFAT, a share, fsutil blocked),
+// everything extended counts against one budget: ple-quant-tooling alone would
+// otherwise reserve 128 × 250 MB of real disk.
+test("without sparse files, real extension stays within one budget per call", async (t) => {
+  const marked = [];
+  const failing = async (file) => {
+    marked.push(path.basename(file));
+    return false;
+  };
+  const budget = 4 * 1024 * 1024;
+  const materialized = await materializeFixture("ple-quant-tooling", { platform: "win32", markSparse: failing, nonSparseBudget: budget });
+  t.after(materialized.cleanup);
+  assert.ok(marked.length >= 128, "every large file was offered to fsutil");
+  const grown = materialized.files.filter((file) => file.kind !== "captured" && file.kind !== "index" && file.sized);
+  assert.ok(grown.reduce((sum, file) => sum + file.actualBytes, 0) <= budget);
+  const shards = materialized.files.filter((file) => file.bytes >= 1024 * 1024);
+  assert.ok(shards.length >= 128);
+  for (const file of shards) assert.equal(file.sized, false, `${file.name} stays at header size`);
+
+  const work = await fsp.mkdtemp(path.join(os.tmpdir(), "fixture-budget-"));
+  t.after(() => fsp.rm(work, { recursive: true, force: true }));
+  const entries = ["a", "b", "c"].map((name) => ({ file: path.join(work, name), bytes: 2 * 1024 * 1024 }));
+  entries.push({ file: path.join(work, "small"), bytes: 4096 });
+  for (const entry of entries) fs.writeFileSync(entry.file, "");
+  const sized = await resizeFiles(entries, { platform: "win32", markSparse: failing, nonSparseBudget: budget });
+  assert.deepEqual(entries.map((entry) => sized.get(entry.file)), [true, true, false, false]);
+  assert.deepEqual(entries.map((entry) => fs.statSync(entry.file).size), [2 * 1024 * 1024, 2 * 1024 * 1024, 0, 0]);
+  await assert.rejects(resizeFiles([entries[2]], { platform: "win32", markSparse: failing, nonSparseBudget: 1024, sizes: "real" }), /refusing to reserve/);
+  // Marked files never count against the budget.
+  const marking = await resizeFiles([entries[2]], { platform: "win32", markSparse: async () => true, nonSparseBudget: 0 });
+  assert.equal(marking.get(entries[2].file), true);
+});
+
 test("stableCardProjection drops inspectedAt, ref and cardId", () => {
   const card = { schema: "modelcard/v1", cardId: "mc_x", inspectedAt: "2026-10-14T00:00:00.000Z", ref: { kind: "local" }, identity: { modelType: "llama" } };
   assert.deepEqual(stableCardProjection(card), { schema: "modelcard/v1", identity: { modelType: "llama" } });
@@ -374,9 +410,66 @@ test("root-cause samples are indexed and carry their trigger lines", () => {
     assert.match(sample.expected.code, /^[a-z][a-z0-9_]*$/, sample.id);
     const text = fs.readFileSync(path.join(SAMPLES_DIR, sample.file), "utf8");
     assert.ok(text.includes(sample.trigger), `${sample.id}: trigger line`);
-    for (const secret of sample.expected.redacted || []) {
+    // Only the traceback fallback has no signature; a descriptor addition is stubbed with a named id.
+    assert.equal(sample.expected.signatureId === null, sample.expected.code === "engine_start_failed", `${sample.id}: signatureId`);
+    if (sample.expected.signatureId !== null) assert.match(sample.expected.signatureId, /^[a-z][a-z0-9-]*$/, sample.id);
+    const withSecrets = sample.expected.redactedWithSecrets || [];
+    const byPatterns = sample.expected.redactedByPatterns || [];
+    for (const secret of byPatterns) assert.ok(withSecrets.includes(secret), `${sample.id}: ${secret} is listed with the known secrets`);
+    for (const secret of withSecrets) {
       assert.ok(text.includes(secret), `${sample.id}: carries ${secret}`);
-      assert.ok(!core.redactSecrets(text, { secrets: sample.expected.redacted }).includes(secret), `${sample.id}: ${secret} is redactable`);
+      assert.ok(!core.redactSecrets(text, { secrets: withSecrets }).includes(secret), `${sample.id}: ${secret} is redacted as a known secret`);
+    }
+    const patternsOnly = core.redactSecrets(text);
+    for (const secret of byPatterns) assert.ok(!patternsOnly.includes(secret), `${sample.id}: ${secret} is redacted by the default patterns`);
+  }
+});
+
+// The llama.cpp loader lines must not contradict the GGUF fixture they name.
+test("root-cause samples agree with the model fixture they describe", () => {
+  const index = JSON.parse(fs.readFileSync(path.join(SAMPLES_DIR, "samples.json"), "utf8"));
+  const described = index.samples.filter((sample) => sample.modelFixture);
+  assert.ok(described.length >= 2);
+  for (const sample of described) {
+    const text = fs.readFileSync(path.join(SAMPLES_DIR, sample.file), "utf8");
+    const header = loadFixture(sample.modelFixture).ggufHeader.files[0];
+    const tensors = expandGroups(header.groups);
+    const kv = (key) => header.kv.find((entry) => entry.key === key)?.value;
+    const arch = kv("general.architecture");
+    assert.ok(text.includes(`/${header.name}`), `${sample.id}: file name ${header.name}`);
+    const loaded = text.match(/loaded meta data with (\d+) key-value pairs and (\d+) tensors/);
+    assert.ok(loaded, `${sample.id}: loader summary line`);
+    assert.deepEqual([Number(loaded[1]), Number(loaded[2])], [header.kv.length, header.tensorCount], `${sample.id}: KV and tensor counts`);
+    const types = [...text.matchAll(/- type\s+(\S+):\s+(\d+) tensors/g)];
+    if (types.length) {
+      const counts = {};
+      for (const tensor of tensors) counts[tensor.type.toLowerCase()] = (counts[tensor.type.toLowerCase()] || 0) + 1;
+      assert.deepEqual(Object.fromEntries(types.map((match) => [match[1].toLowerCase(), Number(match[2])])), counts, `${sample.id}: type counts`);
+    }
+    for (const match of text.matchAll(/- kv\s+(\d+):\s+(\S+)\s+\S+\s+= (.*)$/gm)) {
+      const entry = header.kv[Number(match[1])];
+      assert.equal(entry?.key, match[2], `${sample.id}: kv ${match[1]}`);
+      // llama.cpp prints float32 values with six decimals.
+      assert.equal(match[3], entry.type === "float32" ? Number(entry.value).toFixed(6) : String(entry.value), `${sample.id}: ${entry.key}`);
+    }
+    const info = Object.fromEntries([...text.matchAll(/^print_info: (\w+)\s+= (.*)$/gm)].map((match) => [match[1], match[2]]));
+    const expected = {
+      arch,
+      n_ctx_train: kv(`${arch}.context_length`),
+      n_embd: kv(`${arch}.embedding_length`),
+      n_layer: kv(`${arch}.block_count`),
+      n_expert: kv(`${arch}.expert_count`),
+      n_expert_used: kv(`${arch}.expert_used_count`),
+    };
+    for (const [key, value] of Object.entries(expected)) {
+      if (Object.hasOwn(info, key)) assert.equal(info[key], String(value), `${sample.id}: ${key}`);
+    }
+    const size = text.match(/^print_info: file size\s+= ([\d.]+) GiB \(([\d.]+) BPW\)$/m);
+    if (size) {
+      // llama.cpp prints the tensor bytes, not the file size.
+      const bytes = tensors.reduce((sum, tensor) => sum + tensor.bytesEach, 0);
+      const elements = tensors.reduce((sum, tensor) => sum + tensor.dims.reduce((product, dim) => product * dim, 1), 0);
+      assert.deepEqual([size[1], size[2]], [(bytes / 2 ** 30).toFixed(2), (bytes * 8 / elements).toFixed(2)], `${sample.id}: file size`);
     }
   }
 });
