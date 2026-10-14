@@ -13,12 +13,12 @@ const runtimeManifest = require("../runtime-manifest");
 const {
   ENGINE_ID_PATTERN,
   TIER1_ENGINE_IDS,
+  UNKNOWN_ENGINE_ID,
   isPlainObject,
   validateDescriptor,
 } = require("./descriptor-schema");
 
 const BUNDLED_ENGINES_DIR = path.join(__dirname, "..", "data", "engines");
-const UNKNOWN_ENGINE_ID = "unknown";
 
 // API managerId (00 §3) and the ai.manager label values the managers use today.
 const MANAGER_ALIASES = Object.freeze({
@@ -96,6 +96,97 @@ function prefixErrors(errors, extra) {
 }
 
 /**
+ * Ties runtimes.allowed to the manifest: every key must name a runtime of this
+ * engine, and runtimes.default must be one of those, or the engine has no
+ * default runtime and every legacy launch fails with unknown_runtime.
+ * -> { refs, problems: [{ path, code, message, manifestKey }] }
+ */
+function resolveRuntimeKeys(descriptor, knownRuntimes) {
+  const refs = [];
+  const problems = [];
+  const runtimes = isPlainObject(descriptor?.runtimes) ? descriptor.runtimes : null;
+  if (!runtimes) return { refs, problems };
+  for (const [index, manifestKey] of (Array.isArray(runtimes.allowed) ? runtimes.allowed : []).entries()) {
+    const ref = knownRuntimes.get(manifestKey);
+    const where = { path: `runtimes.allowed[${index}]`, manifestKey };
+    if (!ref) {
+      problems.push({ ...where, code: "unknown_runtime", message: `Runtime ${manifestKey} is not in the runtime manifest.` });
+    } else if (ref.engineId !== descriptor.id) {
+      problems.push({ ...where, code: "runtime_engine_mismatch", message: `Runtime ${manifestKey} (${ref.runtimeId}) belongs to engine ${ref.engineId}.` });
+    } else {
+      refs.push(ref);
+    }
+  }
+  if (runtimes.default !== undefined && !refs.some((ref) => ref.manifestKey === runtimes.default)) {
+    problems.push({
+      path: "runtimes.default",
+      manifestKey: runtimes.default,
+      code: "default_runtime_unresolved",
+      message: `runtimes.default ${runtimes.default} is not a runtime of engine ${descriptor.id}, so the engine would have no default runtime.`,
+    });
+  }
+  return { refs, problems };
+}
+
+function publicProblem({ manifestKey: _manifestKey, ...problem }) {
+  return problem;
+}
+
+// The runtime problems an override brings in: those of the merged descriptor
+// that the descriptor it replaces did not have already. A bundled key that a
+// runtime-manifest override broke stays the registry's problem, so an override
+// that only changes the status is still applied.
+function introducedRuntimeProblems(merged, base, knownRuntimes) {
+  const problemKey = (problem) => `${problem.code}:${problem.manifestKey}`;
+  const inherited = new Set(base ? resolveRuntimeKeys(base, knownRuntimes).problems.map(problemKey) : []);
+  return resolveRuntimeKeys(merged, knownRuntimes).problems
+    .filter((problem) => !inherited.has(problemKey(problem)))
+    .map(publicProblem);
+}
+
+/**
+ * One override entry (a file, an item of a list file, or a console draft)
+ * against the engines loaded so far -> { ok, kind, errors, merged }. load() and
+ * the side-effect-free draft check share it, so a draft is accepted exactly
+ * when loading it as an override file would apply it. merged is frozen and
+ * set only when ok.
+ */
+function evaluateOverride(entry, { mode, engines, knownRuntimes }) {
+  let kind = "descriptor";
+  try {
+    const result = validateDescriptor(entry, { mode, knownIds: [...engines.keys()] });
+    kind = result.kind;
+    if (!result.ok) return { ok: false, kind, errors: result.errors, merged: null };
+    const base = kind === "override" ? engines.get(entry.id) || null : null;
+    const merged = base ? mergeDescriptor(base, entry) : clone(entry);
+    // The merged result must still be a complete, coherent descriptor
+    // (runtimes.default inside runtimes.allowed, and so on) whose runtimes
+    // resolve in the manifest.
+    let errors = validateDescriptor(merged, { mode: "bundled" }).errors;
+    if (!errors.length) errors = introducedRuntimeProblems(merged, base, knownRuntimes);
+    if (errors.length) return { ok: false, kind, errors, merged: null };
+    return { ok: true, kind, errors: [], merged: deepFreeze(merged) };
+  } catch (error) {
+    // Only a pathological value gets here (nesting too deep to copy).
+    return { ok: false, kind, errors: [{ path: "", code: "invalid_override", message: `The descriptor could not be checked: ${error.message}` }], merged: null };
+  }
+}
+
+// The image an env override puts in a slot: the first variable of the
+// envOverride entry that is set, through its template when it has one.
+function envImageFor(spec, env) {
+  const entries = Array.isArray(spec) ? spec : spec ? [spec] : [];
+  for (const entry of entries) {
+    const name = typeof entry === "string" ? entry : entry?.env;
+    const value = name ? String(env[name] || "").trim() : "";
+    if (!value) continue;
+    const image = typeof entry?.template === "string" ? entry.template.replace("{value}", value) : value;
+    return { name, image };
+  }
+  return null;
+}
+
+/**
  * createEngineRegistry({ bundledDir?, overrideDir?, env?, manifest? })
  *
  * manifest defaults to the runtime-manifest module (bundled data plus its own
@@ -114,6 +205,8 @@ function createEngineRegistry(options = {}) {
     const engines = new Map();
     const bundledIds = [];
     const overrides = [];
+    const manifestOptions = loadOptions.force ? { force: true } : {};
+    const knownRuntimes = new Map(manifest.listRuntimes(manifestOptions).map((ref) => [ref.manifestKey, ref]));
 
     const bundled = listJsonFiles(bundledDir);
     if (bundled.error) errors.push({ source: "bundled", file: bundledDir, path: "", code: "unreadable", message: bundled.error.message });
@@ -137,6 +230,8 @@ function createEngineRegistry(options = {}) {
       bundledIds.push(engineId);
     }
 
+    // A rejected override is dropped whole and the descriptor it would have
+    // replaced stays in force (01 §4).
     const overrideFiles = listJsonFiles(overrideDir);
     if (overrideFiles.error) errors.push({ source: "override", file: overrideDir, path: "", code: "unreadable", message: overrideFiles.error.message });
     for (const file of overrideFiles.files) {
@@ -150,46 +245,24 @@ function createEngineRegistry(options = {}) {
       entries.forEach((entry, index) => {
         const where = Array.isArray(read.value) ? { file, index } : { file };
         const engineId = typeof entry?.id === "string" ? entry.id : "";
-        const result = validateDescriptor(entry, { mode: "override", knownIds: [...engines.keys()] });
-        let merged = null;
-        let mergeErrors = [];
-        if (result.ok) {
-          merged = result.kind === "override" ? mergeDescriptor(engines.get(engineId), entry) : clone(entry);
-          // The merged result must still be a complete, coherent descriptor
-          // (runtimes.default inside runtimes.allowed, and so on).
-          mergeErrors = validateDescriptor(merged, { mode: "bundled" }).errors;
-        }
-        const problems = result.ok ? mergeErrors : result.errors;
-        if (problems.length) {
-          errors.push(...prefixErrors(problems, { source: "override", ...where, engineId }));
+        const verdict = evaluateOverride(entry, { mode: "override", engines, knownRuntimes });
+        if (!verdict.ok) {
+          errors.push(...prefixErrors(verdict.errors, { source: "override", ...where, engineId }));
           overrides.push({ ...where, engineId, applied: false });
           return;
         }
-        engines.set(engineId, merged);
-        overrides.push({ ...where, engineId, applied: true, kind: result.kind });
+        engines.set(engineId, verdict.merged);
+        overrides.push({ ...where, engineId, applied: true, kind: verdict.kind });
       });
     }
 
-    // Tie every engine to its manifest runtimes. A key that does not resolve is
-    // reported and left out; the engine itself stays usable.
+    // Tie every engine to its manifest runtimes. Only a bundled descriptor can
+    // still have a key that does not resolve (a runtime-manifest override broke
+    // it); that key is reported and left out, and the engine stays usable.
     const runtimeRefs = new Map();
-    const manifestOptions = loadOptions.force ? { force: true } : {};
-    const knownRuntimes = new Map(manifest.listRuntimes(manifestOptions).map((ref) => [ref.manifestKey, ref]));
     for (const [engineId, descriptor] of engines) {
-      const refs = [];
-      for (const [index, manifestKey] of (descriptor.runtimes?.allowed || []).entries()) {
-        const ref = knownRuntimes.get(manifestKey);
-        const where = { source: "registry", engineId, path: `runtimes.allowed[${index}]` };
-        if (!ref) {
-          errors.push({ ...where, code: "unknown_runtime", message: `Runtime ${manifestKey} is not in the runtime manifest.` });
-          continue;
-        }
-        if (ref.engineId !== engineId) {
-          errors.push({ ...where, code: "runtime_engine_mismatch", message: `Runtime ${manifestKey} (${ref.runtimeId}) belongs to engine ${ref.engineId}.` });
-          continue;
-        }
-        refs.push(ref);
-      }
+      const { refs, problems } = resolveRuntimeKeys(descriptor, knownRuntimes);
+      errors.push(...prefixErrors(problems.map(publicProblem), { source: "registry", engineId }));
       runtimeRefs.set(engineId, refs);
     }
     for (const item of manifest.listRuntimeIdentityErrors(manifestOptions)) {
@@ -212,6 +285,7 @@ function createEngineRegistry(options = {}) {
     state = {
       engines: frozen,
       bundledIds: Object.freeze(bundledIds),
+      knownRuntimes,
       runtimeRefs,
       overrides: deepFreeze(overrides),
       errors: deepFreeze(errors),
@@ -279,15 +353,14 @@ function createEngineRegistry(options = {}) {
   }
 
   function effectiveRuntimeRef(descriptor, ref) {
-    const envName = descriptor.runtimes?.envOverride?.[ref.manifestKey] || ref.envOverride || "";
-    const envImage = envName ? String(env[envName] || "").trim() : "";
+    const override = envImageFor(descriptor.runtimes?.envOverride?.[ref.manifestKey] || ref.envOverride || null, env);
     // An env override replaces the slot's image and keeps its identity and
     // features, exactly as CONFIG.image = env || manifest does today.
-    const image = envImage || ref.image;
+    const image = override?.image || ref.image;
     return Object.freeze({
       ...ref,
       image,
-      imageOverrideEnv: envImage && envImage !== ref.image ? envName : null,
+      imageOverrideEnv: override && override.image !== ref.image ? override.name : null,
       default: descriptor.runtimes?.default === ref.manifestKey,
       pullPolicy: pullPolicy(descriptor, ref),
     });
@@ -320,8 +393,12 @@ function createEngineRegistry(options = {}) {
       found = runtimes.find((ref) => ref.image === text) || null;
       if (!found) {
         const known = manifest.runtimeForImage(text);
-        found = known ? runtimes.find((ref) => ref.manifestKey === known.manifestKey) || null : null;
-        if (!found && !known && descriptor.runtimes?.allowCustomImage) {
+        const slot = known ? runtimes.find((ref) => ref.manifestKey === known.manifestKey) : null;
+        // The manifest knows the image as this slot's runtime, but the slot runs
+        // another image (an env override) or spells it differently: the ref
+        // carries the image the caller asked for, since that is what is run.
+        if (slot) return Object.freeze({ ...slot, image: text, imageOverrideEnv: null });
+        if (!known && descriptor.runtimes?.allowCustomImage) {
           const custom = manifest.resolveRuntime(descriptor.id, { image: text });
           return Object.freeze({ ...custom, imageOverrideEnv: null, default: false, pullPolicy: pullPolicy(descriptor, custom) });
         }
@@ -339,16 +416,28 @@ function createEngineRegistry(options = {}) {
   }
 
   /**
-   * Pull policy per runtime (01 §5): "auto" (today's implicit pull before the
-   * checkpoint, env image overrides included) for pinned runtimes of a stable
-   * tier-1 engine; "explicit" for experimental engines and for unpinned,
-   * experimental or retired runtimes. Local builds keep "auto" here; a
-   * missing local build is a runtime_local_build_missing blocker, not a pull.
+   * Pull policy per runtime (01 §5, 00 §9.2): "auto" (today's implicit pull
+   * before the checkpoint) for a stable tier-1 engine's pinned runtimes, its
+   * env image overrides and its custom images, all of which the managers pull
+   * today; "explicit" for experimental engines and for unpinned, experimental
+   * or retired manifest runtimes. Local builds keep "auto" here; a missing
+   * local build is a runtime_local_build_missing blocker, not a pull.
    */
   function pullPolicy(descriptor, ref) {
     const engine = typeof descriptor === "string" ? get(descriptor) : descriptor;
     if (!engine || !ref) return "explicit";
-    return engine.tier === 1 && engine.status === "stable" && ref.status === "pinned" ? "auto" : "explicit";
+    if (engine.tier !== 1 || engine.status !== "stable") return "explicit";
+    return ref.custom || ref.status === "pinned" ? "auto" : "explicit";
+  }
+
+  /**
+   * How load() would treat this entry as an override file, against the
+   * current registry: { ok, kind, errors }. Nothing is written or changed.
+   */
+  function checkOverride(entry, { mode = "draft" } = {}) {
+    const snapshot = current();
+    const { ok, kind, errors } = evaluateOverride(entry, { mode, engines: snapshot.engines, knownRuntimes: snapshot.knownRuntimes });
+    return { ok, kind, errors };
   }
 
   function errors() {
@@ -371,6 +460,7 @@ function createEngineRegistry(options = {}) {
   return {
     UNKNOWN_ENGINE_ID,
     bundledIds: () => current().bundledIds,
+    checkOverride,
     defaultEngineFor,
     defaultRuntime,
     errors,

@@ -17,10 +17,17 @@ const DURATION_PATTERN = /^\d+(?:ms|s|m|h)$/;
 const RESTART_PATTERN = /^(?:no|always|unless-stopped|on-failure(?::\d+)?)$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CATALOG_PATTERN = /^launch-params\/[a-z][a-z0-9-]*\.json$/;
+// An image built from an env value, e.g. "vllm/vllm-openai:{value}".
+const IMAGE_TEMPLATE_PATTERN = /^[A-Za-z0-9._/:@-]*\{value\}[A-Za-z0-9._/:@-]*$/;
 const MAX_REGEX_LENGTH = 500;
 
 const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1]);
 const TIER1_ENGINE_IDS = Object.freeze(["vllm", "sglang", "llamacpp"]);
+// Ids with a fixed meaning elsewhere: "unknown" is the engineId of adopted
+// containers whose engine is not registered (00 §9.9), and "external" is the
+// registered-endpoint engine (00 §3), so only the external adapter may use it.
+const UNKNOWN_ENGINE_ID = "unknown";
+const EXTERNAL_ENGINE_ID = "external";
 const FAMILIES = Object.freeze(["vllm", "sglang", "llamacpp", "openai-server", "multi-model-server"]);
 const ADAPTERS = Object.freeze(["vllm", "sglang", "llamacpp", "docker-template", "external"]);
 const TIER1_ADAPTERS = Object.freeze(["vllm", "sglang", "llamacpp"]);
@@ -261,13 +268,44 @@ function validateRuntimes(out, value, path, { partial = false } = {}) {
   // envOverride may name runtimes an override later drops from allowed; such
   // entries are simply unused, so only their shape is checked.
   if (requireObject(out, value.envOverride, joinPath(path, "envOverride"), { required: false })) {
-    for (const [key, envName] of Object.entries(value.envOverride)) {
+    for (const [key, spec] of Object.entries(value.envOverride)) {
       const entryPath = joinPath(joinPath(path, "envOverride"), key);
       if (!MANIFEST_KEY_PATTERN.test(key)) out.add(entryPath, "pattern", `envOverride keys are manifest keys (got "${key}").`);
-      checkString(out, envName, entryPath, { required: true, pattern: ENV_NAME_PATTERN });
+      checkEnvOverride(out, spec, entryPath);
     }
   }
   checkBoolean(out, value.allowCustomImage, joinPath(path, "allowCustomImage"));
+}
+
+// An envOverride entry is one variable that holds a full image reference, or a
+// precedence list of them where the first one that is set wins. A list item may
+// be {env, template} for a variable that holds only part of the reference
+// (VLLM_IMAGE_VERSION becomes vllm/vllm-openai:{value}).
+function checkEnvOverride(out, spec, path) {
+  if (typeof spec === "string") {
+    checkString(out, spec, path, { required: true, pattern: ENV_NAME_PATTERN });
+    return;
+  }
+  if (!Array.isArray(spec) || spec.length === 0) {
+    out.add(path, "type", `${path} must be an environment variable name or a non-empty list of them.`);
+    return;
+  }
+  const seen = new Set();
+  spec.forEach((item, index) => {
+    const itemPath = joinPath(path, index);
+    let envName = item;
+    if (typeof item === "string") {
+      if (!checkString(out, item, itemPath, { required: true, pattern: ENV_NAME_PATTERN })) return;
+    } else {
+      if (!requireObject(out, item, itemPath)) return;
+      checkKnownKeys(out, item, itemPath, ["env", "template"]);
+      checkString(out, item.template, joinPath(itemPath, "template"), { required: true, pattern: IMAGE_TEMPLATE_PATTERN, maxLength: 512 });
+      if (!checkString(out, item.env, joinPath(itemPath, "env"), { required: true, pattern: ENV_NAME_PATTERN })) return;
+      envName = item.env;
+    }
+    if (seen.has(envName)) out.add(itemPath, "duplicate", `${path} names ${envName} twice.`);
+    seen.add(envName);
+  });
 }
 
 function validateHost(out, value, path) {
@@ -503,6 +541,9 @@ function validateFull(out, obj, { newEngine }) {
   checkEnum(out, obj.status, "status", STATUSES, { required: true });
   const hostManagerOk = checkEnum(out, obj.hostManager, "hostManager", HOST_MANAGERS, { required: true });
 
+  if (obj.id === EXTERNAL_ENGINE_ID && obj.adapter !== "external") {
+    out.add("id", "reserved_engine_id", `Engine id "${EXTERNAL_ENGINE_ID}" is reserved for the external adapter.`);
+  }
   if (adapterOk) {
     const tier1Adapter = TIER1_ADAPTERS.includes(obj.adapter);
     if (newEngine && !OVERRIDE_ADAPTERS.includes(obj.adapter)) {
@@ -605,6 +646,9 @@ function validateDescriptor(obj, options = {}) {
     return { ok: false, errors: out.errors, kind: "descriptor" };
   }
   checkString(out, obj.id, "id", { required: true, pattern: ENGINE_ID_PATTERN });
+  if (obj.id === UNKNOWN_ENGINE_ID) {
+    out.add("id", "reserved_engine_id", `Engine id "${UNKNOWN_ENGINE_ID}" is reserved for containers whose engine is not registered.`);
+  }
   const knownIds = new Set([...TIER1_ENGINE_IDS, ...(options.knownIds || [])]);
   const isOverride = mode !== "bundled" && typeof obj.id === "string" && knownIds.has(obj.id);
   if (isOverride) validateOverridePatch(out, obj);
@@ -616,6 +660,7 @@ module.exports = {
   ADAPTERS,
   ARTIFACT_FORMATS,
   ENGINE_ID_PATTERN,
+  EXTERNAL_ENGINE_ID,
   MEMORY_MODEL_KINDS,
   METRIC_KINDS,
   OVERRIDE_ADAPTERS,
@@ -623,6 +668,7 @@ module.exports = {
   ROLES,
   STATUSES,
   TIER1_ENGINE_IDS,
+  UNKNOWN_ENGINE_ID,
   isPlainObject,
   validateDescriptor,
 };
