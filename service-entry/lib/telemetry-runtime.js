@@ -44,6 +44,28 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function envFlag(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["0", "false", "off", "no"].includes(text)) return false;
+  if (["1", "true", "on", "yes"].includes(text)) return true;
+  return null;
+}
+
+// The §20 environment variables, read directly while platform.json has no
+// "telemetry" section in its schema (the section arrives with a later
+// package). Once it does, readSection applies the same env > file > default
+// precedence and this is never reached.
+function settingsFromEnv(env) {
+  const values = {};
+  const enabled = envFlag(env.TELEMETRY_ENABLED);
+  if (enabled !== null) values.enabled = enabled;
+  const dbPath = String(env.AI_TELEMETRY_DB || "").trim();
+  if (dbPath) values.dbPath = dbPath;
+  const interval = Number(env.TELEMETRY_SAMPLE_INTERVAL_MS);
+  if (Number.isFinite(interval) && interval >= 5000 && interval <= 60_000) values.sampleIntervalMs = Math.floor(interval);
+  return values;
+}
+
 function createTelemetryRuntime(options = {}) {
   const aiRoot = options.aiRoot ? path.resolve(options.aiRoot) : path.resolve(__dirname, "..", "..");
   const dataDir = options.dataDir ? path.resolve(options.dataDir) : path.join(aiRoot, "service-entry", "data");
@@ -57,7 +79,11 @@ function createTelemetryRuntime(options = {}) {
     try {
       if (typeof options.config === "function") values = plainObject(options.config());
       else if (options.config && typeof options.config === "object") values = options.config;
-      else values = plainObject(core.platform.readSection("telemetry", { aiRoot, env }).values);
+      else {
+        const section = core.platform.readSection("telemetry", { aiRoot, env });
+        const unknownSection = Array.isArray(section.errors) && section.errors.some((item) => item && item.code === "unknown_section");
+        values = unknownSection ? settingsFromEnv(env) : plainObject(section.values);
+      }
     } catch (error) {
       warn(`telemetry settings could not be read; using defaults: ${error && error.message}`);
       values = {};
@@ -199,8 +225,8 @@ function createTelemetryRuntime(options = {}) {
     recordEvent,
     recordSecurityBan,
     keepJsonlAccessLog,
-    handleHttp: async () => false,
-    handleInternal: async () => false,
+    handleHttp: () => false,
+    handleInternal: () => false,
     get store() {
       return store;
     },

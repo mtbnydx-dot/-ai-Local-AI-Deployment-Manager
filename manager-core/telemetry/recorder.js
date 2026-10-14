@@ -492,6 +492,7 @@ function createGatewayRecorder(options = {}) {
           code,
           upstreamErrorText: upstreamError ? upstreamError.text : "",
           streamError: state.streamError && phase === "stream",
+          timedOut: state.timedOut,
         });
       }
       const durationMs = Math.max(0, endT - startT);
