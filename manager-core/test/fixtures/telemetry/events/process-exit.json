@@ -1,0 +1,73 @@
+{
+  "description": "process-exit.log lines (manager-core/process-exit-log.js) split at an entry restart: the collector reads firstRun, stops, and a new collector reads secondRun. pid 4102 never logs an exit, so its successor is a suspected hard kill. __FIXTURE_KEY__ is replaced at run time.",
+  "firstRun": [
+    {
+      "at": "2026-10-14T07:00:00.000Z",
+      "label": "vLLM Manager",
+      "pid": 4101,
+      "uptimeSeconds": 0,
+      "event": "start",
+      "node": "v24.15.0",
+      "argv": [
+        "server.js"
+      ]
+    },
+    {
+      "at": "2026-10-14T07:30:00.000Z",
+      "label": "vLLM Manager",
+      "pid": 4101,
+      "uptimeSeconds": 1800,
+      "event": "signal",
+      "signal": "SIGINT",
+      "reason": "interrupted from the console (Ctrl+C)"
+    },
+    {
+      "at": "2026-10-14T07:30:01.000Z",
+      "label": "vLLM Manager",
+      "pid": 4101,
+      "uptimeSeconds": 1801,
+      "event": "exit",
+      "code": 0
+    },
+    {
+      "at": "2026-10-14T07:31:00.000Z",
+      "label": "vLLM Manager",
+      "pid": 4102,
+      "uptimeSeconds": 0,
+      "event": "start",
+      "node": "v24.15.0",
+      "argv": [
+        "server.js"
+      ]
+    }
+  ],
+  "secondRun": [
+    {
+      "at": "2026-10-14T07:45:00.000Z",
+      "label": "vLLM Manager",
+      "pid": 4103,
+      "uptimeSeconds": 0,
+      "event": "start",
+      "node": "v24.15.0",
+      "argv": [
+        "server.js"
+      ]
+    },
+    {
+      "at": "2026-10-14T07:50:00.000Z",
+      "label": "vLLM Manager",
+      "pid": 4103,
+      "uptimeSeconds": 300,
+      "event": "uncaught-exception",
+      "error": "Error: upstream refused --api-key __FIXTURE_KEY__\n    at handler (server.js:1:1)"
+    },
+    {
+      "at": "2026-10-14T07:50:00.500Z",
+      "label": "vLLM Manager",
+      "pid": 4103,
+      "uptimeSeconds": 300,
+      "event": "exit",
+      "code": 1
+    }
+  ]
+}

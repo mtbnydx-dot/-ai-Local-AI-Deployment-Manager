@@ -4,6 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>模型计费中心</title>
+  <script>
+    // 嵌入模式（07 C8）：新版控制台以 /billing/classic?embed=1 内嵌本页，侧栏与主题选择由
+    // 控制台提供。首帧前标记，侧栏不会先闪出来。
+    if (new URLSearchParams(window.location.search).get("embed") === "1") document.documentElement.dataset.embed = "1";
+  </script>
   <style>
     :root {
       color-scheme: light;
@@ -661,6 +666,9 @@
     .brand-copy p { color: var(--muted); font-size: 13px; }
     .header-actions { flex-wrap: wrap; gap: 10px; }
     #billingThemeMode { width: auto; min-width: 126px; }
+    :root[data-embed="1"] .app-shell { grid-template-columns: minmax(0, 1fr); }
+    :root[data-embed="1"] .manager-sidebar,
+    :root[data-embed="1"] #billingThemeMode { display: none; }
     .api-status { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 35%, transparent); color: var(--green); }
     button, .button { background: var(--surface); border-color: var(--line-strong); color: var(--ink); }
     button:hover, .button:hover { background: var(--surface-hover); border-color: var(--line-strong); }
@@ -1345,12 +1353,18 @@
       returnLink.setAttribute("aria-label", "返回 " + manager.name);
 
       // 从管理器带过来的 ?theme= 优先于本页记忆，跳转时视觉不突变；之后本页自己记住。
+      // 嵌入模式下主题归控制台管：只跟随 ?theme=，不写入本页记忆。
       const urlTheme = new URLSearchParams(window.location.search).get("theme");
+      const embedded = document.documentElement.dataset.embed === "1";
       let storedTheme = "auto";
       try { storedTheme = localStorage.getItem(BILLING_THEME_STORAGE_KEY) || "auto"; } catch { /* use auto */ }
       if (urlTheme && ["auto", "light", "dark"].includes(urlTheme)) {
         storedTheme = urlTheme;
-        try { localStorage.setItem(BILLING_THEME_STORAGE_KEY, urlTheme); } catch { /* optional */ }
+        if (!embedded) {
+          try { localStorage.setItem(BILLING_THEME_STORAGE_KEY, urlTheme); } catch { /* optional */ }
+        }
+      } else if (embedded) {
+        storedTheme = "auto";
       }
       storedTheme = normalizeBillingTheme(storedTheme);
       themeMode.value = storedTheme;

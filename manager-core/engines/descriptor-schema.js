@@ -68,6 +68,10 @@ const MEMORY_MODEL_KINDS = Object.freeze([
 const SECRET_MODES = Object.freeze(["env", "flag", "file", "unsupported"]);
 const METRIC_KINDS = Object.freeze(["counter", "gauge", "histogram"]);
 const METRIC_FORMATS = Object.freeze(["prometheus", "json"]);
+// A metricsMap derive source reads values the manager supplies next to the
+// scrape (engines/metrics.js): "name" or "a/b", each a dotted path such as
+// "busySlots/nSlots" or "cacheHit.cachedTokens".
+const METRIC_DERIVE_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*(?:\/[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)?$/;
 const INTROSPECTION_PARSERS = Object.freeze(["argparse", "llama-help", "click"]);
 const ROLES = Object.freeze(["chat", "embedding", "rerank"]);
 const LIFECYCLE_PHASES = Object.freeze(["pull", "admission", "container", "weights", "kv", "graphs", "api", "probe", "ready"]);
@@ -494,7 +498,7 @@ function validateMetricsMap(out, value, path) {
         out.add(joinPath(sourcePath, "scale"), "type", "scale must be a finite number.");
       }
       checkString(out, source.label, joinPath(sourcePath, "label"), { pattern: /^[A-Za-z_][A-Za-z0-9_]*$/ });
-      checkString(out, source.derive, joinPath(sourcePath, "derive"));
+      checkString(out, source.derive, joinPath(sourcePath, "derive"), { pattern: METRIC_DERIVE_PATTERN });
       checkString(out, source.pick, joinPath(sourcePath, "pick"));
       if (source.ratio !== undefined) {
         const ratioPath = joinPath(sourcePath, "ratio");
@@ -698,6 +702,7 @@ module.exports = {
   ENGINE_ID_PATTERN,
   EXTERNAL_ENGINE_ID,
   MEMORY_MODEL_KINDS,
+  METRIC_DERIVE_PATTERN,
   METRIC_KINDS,
   OVERRIDE_ADAPTERS,
   OVERRIDE_FIELDS,

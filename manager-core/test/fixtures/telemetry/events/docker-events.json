@@ -1,0 +1,158 @@
+{
+  "description": "docker events --filter label=ai.manager --format \"{{json .}}\" output, one object per line (the test serialises each). Container ids are fake.",
+  "events": [
+    {
+      "status": "start",
+      "id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "from": "local/sglang:test",
+      "Type": "container",
+      "Action": "start",
+      "Actor": {
+        "ID": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "Attributes": {
+          "ai.manager": "vllm-manager",
+          "ai.manager.engine": "sglang",
+          "ai.manager.instance": "qwen-test",
+          "ai.manager.instance-mode": "replace",
+          "ai.manager.launch-id": "lch_aaaaaaaaaaaaaaaaaaaa",
+          "ai.manager.model": "qwen-test",
+          "ai.manager.job": "mfx01-serve",
+          "image": "local/sglang:test",
+          "name": "vllm-runtime"
+        }
+      },
+      "scope": "local",
+      "time": 1791964900,
+      "timeNano": 1791964900000000000
+    },
+    {
+      "status": "oom",
+      "id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "from": "local/sglang:test",
+      "Type": "container",
+      "Action": "oom",
+      "Actor": {
+        "ID": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "Attributes": {
+          "ai.manager": "vllm-manager",
+          "ai.manager.engine": "sglang",
+          "ai.manager.instance": "qwen-test",
+          "ai.manager.instance-mode": "replace",
+          "ai.manager.launch-id": "lch_aaaaaaaaaaaaaaaaaaaa",
+          "ai.manager.model": "qwen-test",
+          "ai.manager.job": "mfx01-serve",
+          "image": "local/sglang:test",
+          "name": "vllm-runtime"
+        }
+      },
+      "scope": "local",
+      "time": 1791965000,
+      "timeNano": 1791965000100000000
+    },
+    {
+      "status": "die",
+      "id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "from": "local/sglang:test",
+      "Type": "container",
+      "Action": "die",
+      "Actor": {
+        "ID": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "Attributes": {
+          "ai.manager": "vllm-manager",
+          "ai.manager.engine": "sglang",
+          "ai.manager.instance": "qwen-test",
+          "ai.manager.instance-mode": "replace",
+          "ai.manager.launch-id": "lch_aaaaaaaaaaaaaaaaaaaa",
+          "ai.manager.model": "qwen-test",
+          "ai.manager.job": "mfx01-serve",
+          "image": "local/sglang:test",
+          "name": "vllm-runtime",
+          "exitCode": "137"
+        }
+      },
+      "scope": "local",
+      "time": 1791965000,
+      "timeNano": 1791965000200000000
+    },
+    {
+      "status": "health_status: unhealthy",
+      "id": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "from": "local/llama:test",
+      "Type": "container",
+      "Action": "health_status: unhealthy",
+      "Actor": {
+        "ID": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "Attributes": {
+          "ai.manager": "llama-manager",
+          "ai.manager.engine": "llama",
+          "ai.manager.instance": "draft-b",
+          "ai.manager.instance-mode": "parallel",
+          "ai.manager.model": "demo-gguf",
+          "image": "local/llama:test",
+          "name": "llama-runtime-draft-b"
+        }
+      },
+      "scope": "local",
+      "time": 1791965100,
+      "timeNano": 1791965100000000000
+    },
+    {
+      "Type": "network",
+      "Action": "connect",
+      "Actor": {
+        "ID": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        "Attributes": {
+          "name": "bridge"
+        }
+      },
+      "scope": "local",
+      "time": 1791965101,
+      "timeNano": 1791965101000000000
+    },
+    {
+      "status": "exec_create: ls",
+      "id": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "from": "local/llama:test",
+      "Type": "container",
+      "Action": "exec_create: ls",
+      "Actor": {
+        "ID": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "Attributes": {
+          "ai.manager": "llama-manager",
+          "ai.manager.engine": "llama",
+          "ai.manager.instance": "draft-b",
+          "ai.manager.instance-mode": "parallel",
+          "ai.manager.model": "demo-gguf",
+          "image": "local/llama:test",
+          "name": "llama-runtime-draft-b"
+        }
+      },
+      "scope": "local",
+      "time": 1791965102,
+      "timeNano": 1791965102000000000
+    },
+    {
+      "status": "die",
+      "id": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "from": "local/llama:test",
+      "Type": "container",
+      "Action": "die",
+      "Actor": {
+        "ID": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "Attributes": {
+          "ai.manager": "llama-manager",
+          "ai.manager.engine": "llama",
+          "ai.manager.instance": "draft-b",
+          "ai.manager.instance-mode": "parallel",
+          "ai.manager.model": "demo-gguf",
+          "image": "local/llama:test",
+          "name": "llama-runtime-draft-b",
+          "exitCode": "0"
+        }
+      },
+      "scope": "local",
+      "time": 1791965200,
+      "timeNano": 1791965200000000000
+    }
+  ]
+}

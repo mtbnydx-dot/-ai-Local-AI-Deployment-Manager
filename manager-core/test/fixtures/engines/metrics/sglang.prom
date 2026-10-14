@@ -1,0 +1,163 @@
+# HELP python_gc_objects_collected_total Objects collected during gc
+# TYPE python_gc_objects_collected_total counter
+python_gc_objects_collected_total{generation="0"} 21843.0
+python_gc_objects_collected_total{generation="1"} 4310.0
+python_gc_objects_collected_total{generation="2"} 812.0
+# HELP python_info Python platform information
+# TYPE python_info gauge
+python_info{implementation="CPython",major="3",minor="12",patchlevel="11",version="3.12.11"} 1.0
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 4.218470400e+09
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.760400000e+09
+# HELP sglang:num_running_reqs The number of running requests.
+# TYPE sglang:num_running_reqs gauge
+sglang:num_running_reqs{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 1.0
+# HELP sglang:num_used_tokens The number of used tokens.
+# TYPE sglang:num_used_tokens gauge
+sglang:num_used_tokens{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 81264.0
+# HELP sglang:token_usage The token usage.
+# TYPE sglang:token_usage gauge
+sglang:token_usage{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 0.62
+# HELP sglang:full_token_usage The token usage of the full attention layers.
+# TYPE sglang:full_token_usage gauge
+sglang:full_token_usage{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 0.31
+# HELP sglang:gen_throughput The generation throughput (token/s).
+# TYPE sglang:gen_throughput gauge
+sglang:gen_throughput{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 41.5
+# HELP sglang:num_queue_reqs The number of requests in the waiting queue.
+# TYPE sglang:num_queue_reqs gauge
+sglang:num_queue_reqs{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 0.0
+# HELP sglang:cache_hit_rate The prefix cache hit rate.
+# TYPE sglang:cache_hit_rate gauge
+sglang:cache_hit_rate{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 0.667
+# HELP sglang:max_total_num_tokens Maximum total number of tokens in the KV cache pool.
+# TYPE sglang:max_total_num_tokens gauge
+sglang:max_total_num_tokens{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 262144.0
+# HELP sglang:spec_accept_length The average acceptance length of speculative decoding.
+# TYPE sglang:spec_accept_length gauge
+sglang:spec_accept_length{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 2.84
+# HELP sglang:spec_accept_rate The average acceptance rate of speculative decoding.
+# TYPE sglang:spec_accept_rate gauge
+sglang:spec_accept_rate{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 0.61
+# HELP sglang:prompt_tokens_total Number of prefill tokens processed.
+# TYPE sglang:prompt_tokens_total counter
+sglang:prompt_tokens_total{model_name="qwen3.8-flash-next"} 1.203345e+06
+# HELP sglang:generation_tokens_total Number of generation tokens processed.
+# TYPE sglang:generation_tokens_total counter
+sglang:generation_tokens_total{model_name="qwen3.8-flash-next"} 402211.0
+# HELP sglang:cached_tokens_total Number of cached prompt tokens.
+# TYPE sglang:cached_tokens_total counter
+sglang:cached_tokens_total{model_name="qwen3.8-flash-next"} 803000.0
+# HELP sglang:num_requests_total Number of requests processed.
+# TYPE sglang:num_requests_total counter
+sglang:num_requests_total{model_name="qwen3.8-flash-next"} 912.0
+# HELP sglang:num_aborted_requests_total Number of requests aborted.
+# TYPE sglang:num_aborted_requests_total counter
+sglang:num_aborted_requests_total{model_name="qwen3.8-flash-next"} 9.0
+# HELP sglang:spec_verify_calls_total Number of speculative verify calls.
+# TYPE sglang:spec_verify_calls_total counter
+sglang:spec_verify_calls_total{engine_type="unified",model_name="qwen3.8-flash-next",pp_rank="0",tp_rank="0"} 141633.0
+# HELP sglang:time_to_first_token_seconds Histogram of time to first token in seconds.
+# TYPE sglang:time_to_first_token_seconds histogram
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="0.1"} 100.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="0.2"} 301.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="0.4"} 611.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="0.6"} 812.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="0.8"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="1.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="2.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="4.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="6.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="8.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="10.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="20.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="40.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="60.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="80.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="100.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="200.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="400.0"} 912.0
+sglang:time_to_first_token_seconds_bucket{model_name="qwen3.8-flash-next",le="+Inf"} 912.0
+sglang:time_to_first_token_seconds_count{model_name="qwen3.8-flash-next"} 912.0
+sglang:time_to_first_token_seconds_sum{model_name="qwen3.8-flash-next"} 402.1
+# HELP sglang:inter_token_latency_seconds Histogram of inter-token latency in seconds.
+# TYPE sglang:inter_token_latency_seconds histogram
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.002"} 132.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.004"} 264.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.006"} 396.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.008"} 528.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.01"} 44836.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.015"} 133452.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.02"} 266395.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.025"} 355011.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.03"} 399319.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.035"} 399451.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.04"} 399583.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.06"} 399715.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.08"} 399847.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.1"} 399979.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.2"} 400111.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.4"} 400243.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.6"} 400375.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.8"} 400507.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="1.0"} 400639.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="2.0"} 400771.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="4.0"} 400903.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="6.0"} 401035.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="8.0"} 401167.0
+sglang:inter_token_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="+Inf"} 401299.0
+sglang:inter_token_latency_seconds_count{model_name="qwen3.8-flash-next"} 401299.0
+sglang:inter_token_latency_seconds_sum{model_name="qwen3.8-flash-next"} 9631.2
+# HELP sglang:e2e_request_latency_seconds Histogram of End-to-end request latency in seconds
+# TYPE sglang:e2e_request_latency_seconds histogram
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.1"} 0.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.2"} 0.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.4"} 0.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.6"} 0.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="0.8"} 0.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="1.0"} 0.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="2.0"} 100.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="4.0"} 301.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="6.0"} 611.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="8.0"} 812.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="10.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="20.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="40.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="60.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="80.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="100.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="200.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="400.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="600.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="1200.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="1800.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="2400.0"} 912.0
+sglang:e2e_request_latency_seconds_bucket{model_name="qwen3.8-flash-next",le="+Inf"} 912.0
+sglang:e2e_request_latency_seconds_count{model_name="qwen3.8-flash-next"} 912.0
+sglang:e2e_request_latency_seconds_sum{model_name="qwen3.8-flash-next"} 10281.6
+# HELP sglang:queue_time_seconds Histogram of queueing time in seconds.
+# TYPE sglang:queue_time_seconds histogram
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="0.1"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="0.2"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="0.4"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="0.6"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="0.8"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="1.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="2.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="4.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="6.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="8.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="10.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="20.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="40.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="60.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="80.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="100.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="200.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="400.0"} 912.0
+sglang:queue_time_seconds_bucket{model_name="qwen3.8-flash-next",le="+Inf"} 912.0
+sglang:queue_time_seconds_count{model_name="qwen3.8-flash-next"} 912.0
+sglang:queue_time_seconds_sum{model_name="qwen3.8-flash-next"} 21.4
