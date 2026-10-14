@@ -38,7 +38,10 @@ function resolveBrowserChannel() {
 const browserChannel = resolveBrowserChannel();
 
 module.exports = defineConfig({
+  // Specs are discovered: any *.spec.{cjs,js,mjs} under tests/ runs without a
+  // config or package.json edit. tests/helpers and tests/fixtures hold no specs.
   testDir: "./tests",
+  testMatch: ["**/*.spec.cjs", "**/*.spec.js", "**/*.spec.mjs"],
   timeout: 60_000,
   fullyParallel: false,
   retries: 0,

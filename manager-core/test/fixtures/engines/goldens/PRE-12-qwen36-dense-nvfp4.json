@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-12-qwen36-dense-nvfp4",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/core.test.js › Qwen3.6 MoE NVFP4 uses the nightly runtime preset (inputs), dense checkpoint",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "model": "nvidia/Qwen3.6-27B-NVFP4",
+      "kvCacheDtype": "auto"
+    },
+    "launch": {},
+    "modelFixture": null
+  },
+  "expect": {
+    "preset": {
+      "id": "qwen3.6-dense-nvfp4",
+      "label": "Qwen3.6 Dense / NVFP4",
+      "image": "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb",
+      "forceTrustRemoteCode": true,
+      "attentionBackend": "TRITON_ATTN",
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_xml",
+      "enableAutoToolChoice": true,
+      "disableQuantizationArg": true,
+      "disableKvCacheDtypeArg": true,
+      "maxNumBatchedTokens": 8192,
+      "asyncScheduling": true,
+      "notes": [
+        "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
+        "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
+        "lets vLLM auto-detect ModelOpt mixed quantization and KV cache dtype from the dense checkpoint",
+        "uses --attention-backend TRITON_ATTN because FlashInfer can crash or degenerate with the dense Qwen3.6 NVFP4 FP8 KV prefill path",
+        "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
+        "leaves thinking mode to request-level chat_template_kwargs from the client",
+        "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance",
+        "Capability entry \"Qwen3.5 / Qwen3.6\" was matched by model name only; add config.json to the model directory for a declared identity."
+      ],
+      "env": {},
+      "reasoningParserPlugin": "",
+      "speculativeConfig": null,
+      "capabilities": {
+        "architecture": "",
+        "modelType": "",
+        "quantMethod": "",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "qwen3.5-3.6",
+          "label": "Qwen3.5 / Qwen3.6",
+          "matchedBy": "name",
+          "heuristic": true,
+          "confidence": "verified"
+        },
+        "reasoningParser": "qwen3",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "qwen3_xml",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": [
+          "Capability entry \"Qwen3.5 / Qwen3.6\" was matched by model name only; add config.json to the model directory for a declared identity."
+        ]
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

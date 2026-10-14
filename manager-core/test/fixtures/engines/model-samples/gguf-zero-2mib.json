@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "gguf-zero-2mib",
+  "description": "2 MiB local file named model.gguf with no readable header, as in the llama parallel VRAM estimate test.",
+  "entries": [
+    {
+      "path": "local-gguf/model.gguf",
+      "zeros": 2097152
+    }
+  ]
+}

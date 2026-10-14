@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-18-muse-glimmer",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/model-capabilities.test.js › Muse Glimmer is blocked before vLLM container startup",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "model": "C:/fixture/models/meta-muse-glimmer"
+    },
+    "launch": {
+      "modelArg": "/models/meta-muse-glimmer",
+      "localPath": "C:/fixture/models/meta-muse-glimmer"
+    },
+    "modelFixture": "muse-glimmer"
+  },
+  "expect": {
+    "preset": {
+      "id": "model-muse_glimmer",
+      "env": {},
+      "label": "MuseGlimmerForConditionalGeneration capability profile",
+      "forceTrustRemoteCode": false,
+      "reasoningParser": "",
+      "reasoningParserPlugin": "",
+      "toolCallParser": "",
+      "enableAutoToolChoice": false,
+      "speculativeConfig": null,
+      "unsupportedReason": "Muse Glimmer has been retired from this local stack and is not a supported launch target (vLLM v0.28.0 / Transformers 5.15.1; checkpoint Transformers 5.15.0.dev0). Choose another model; VLLM_ALLOW_MUSE_GLIMMER no longer bypasses this policy.",
+      "notes": [
+        "Muse Glimmer remains blocked before container creation; no model or image data is deleted by this policy."
+      ],
+      "capabilities": {
+        "architecture": "MuseGlimmerForConditionalGeneration",
+        "modelType": "muse_glimmer",
+        "quantMethod": "",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "muse-glimmer",
+          "label": "Muse Glimmer",
+          "matchedBy": "modelType",
+          "heuristic": false,
+          "confidence": "verified"
+        },
+        "reasoningParser": "",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "",
+        "enableAutoToolChoice": false,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "muse_glimmer",
+        "isMuseGlimmer": true,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": [
+          "Muse Glimmer remains blocked before container creation; no model or image data is deleted by this policy."
+        ],
+        "unsupportedReason": "Muse Glimmer has been retired from this local stack and is not a supported launch target (vLLM v0.28.0 / Transformers 5.15.1; checkpoint Transformers 5.15.0.dev0). Choose another model; VLLM_ALLOW_MUSE_GLIMMER no longer bypasses this policy."
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

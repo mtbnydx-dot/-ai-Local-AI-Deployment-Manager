@@ -1,0 +1,4 @@
+# Fixture bytes are golden data (file sizes, content digests, template hashes):
+# keep LF on every checkout, whatever core.autocrlf says.
+model-cards/** text eol=lf
+root-cause-samples/** text eol=lf

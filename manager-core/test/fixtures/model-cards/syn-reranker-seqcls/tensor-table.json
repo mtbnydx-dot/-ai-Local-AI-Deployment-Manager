@@ -1,0 +1,34 @@
+{
+  "format": "safetensors",
+  "index": null,
+  "files": [
+    {"name":"model.safetensors","bytes":2271071852,"headerBytes":48736,"tensors":393,"metadata":{"format":"pt"}}
+  ],
+  "groups": [
+    {"pattern":"classifier.dense.bias","dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"classifier.dense.weight","dtype":"F32","shape":[1024,1024],"bytesEach":4194304,"file":"model.safetensors"},
+    {"pattern":"classifier.out_proj.bias","dtype":"F32","shape":[1],"bytesEach":4,"file":"model.safetensors"},
+    {"pattern":"classifier.out_proj.weight","dtype":"F32","shape":[1,1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.embeddings.LayerNorm.bias","dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.embeddings.LayerNorm.weight","dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.embeddings.position_embeddings.weight","dtype":"F32","shape":[8194,1024],"bytesEach":33562624,"file":"model.safetensors"},
+    {"pattern":"roberta.embeddings.token_type_embeddings.weight","dtype":"F32","shape":[1,1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.embeddings.word_embeddings.weight","dtype":"F32","shape":[250002,1024],"bytesEach":1024008192,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.output.LayerNorm.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.output.LayerNorm.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.output.dense.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.output.dense.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024,1024],"bytesEach":4194304,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.self.key.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.self.key.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024,1024],"bytesEach":4194304,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.self.query.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.self.query.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024,1024],"bytesEach":4194304,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.self.value.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.attention.self.value.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024,1024],"bytesEach":4194304,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.intermediate.dense.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[4096],"bytesEach":16384,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.intermediate.dense.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[4096,1024],"bytesEach":16777216,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.output.LayerNorm.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.output.LayerNorm.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.output.dense.bias","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024],"bytesEach":4096,"file":"model.safetensors"},
+    {"pattern":"roberta.encoder.layer.{L}.output.dense.weight","ranges":{"L":[0,23]},"dtype":"F32","shape":[1024,4096],"bytesEach":16777216,"file":"model.safetensors"}
+  ]
+}

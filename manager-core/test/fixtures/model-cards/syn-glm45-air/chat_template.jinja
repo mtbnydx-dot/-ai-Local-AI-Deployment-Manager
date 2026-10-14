@@ -1,0 +1,37 @@
+{#- Synthetic GLM-4.5-style template for tests; not the upstream template. -#}
+[gMASK]<sop>
+{%- if tools -%}
+<|system|>
+# Tools
+{% for tool in tools %}{{ tool | tojson }}
+{% endfor %}
+For each function call, output the name and arguments inside <tool_call></tool_call>:
+<tool_call>{function-name}
+<arg_key>{arg-key-1}</arg_key>
+<arg_value>{arg-value-1}</arg_value>
+</tool_call>
+{%- endif -%}
+{%- for m in messages -%}
+{%- if m.role == 'user' -%}<|user|>
+{{ m.content }}{{ ' /nothink' if enable_thinking is defined and not enable_thinking else '' }}
+{%- elif m.role == 'assistant' -%}<|assistant|>
+{%- if m.reasoning_content %}<think>{{ m.reasoning_content }}</think>{% else %}<think></think>{% endif %}
+{{ m.content }}
+{%- for tc in m.tool_calls | default([]) %}
+<tool_call>{{ tc.function.name }}
+{%- for k, v in tc.function.arguments.items() %}
+<arg_key>{{ k }}</arg_key>
+<arg_value>{{ v | tojson }}</arg_value>
+{%- endfor %}
+</tool_call>
+{%- endfor %}
+{%- elif m.role == 'tool' -%}<|observation|>
+<tool_response>
+{{ m.content }}
+</tool_response>
+{%- elif m.role == 'system' -%}<|system|>
+{{ m.content }}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}<|assistant|>{%- if enable_thinking is defined and not enable_thinking %}
+<think></think>{%- endif -%}{%- endif -%}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "nemotron3-nano-plugin",
+  "description": "Nemotron-3-Nano checkpoint that ships its reasoning parser plugin file.",
+  "entries": [
+    {
+      "path": "nvidia-Nemotron-3-Nano-30B-A3B/config.json",
+      "json": {
+        "architectures": [
+          "NemotronHForCausalLM"
+        ],
+        "model_type": "nemotron_h"
+      }
+    },
+    {
+      "path": "nvidia-Nemotron-3-Nano-30B-A3B/nano_v3_reasoning_parser.py",
+      "text": "# Fixture stand-in for the checkpoint's reasoning parser plugin.\n"
+    }
+  ]
+}

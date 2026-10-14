@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "qwen38-flash-next-nvfp4",
+  "description": "Qwen3.8 Flash-Next NVFP4 checkpoint: declared qwen4_exp identity and NVFP4 quantisation (Pennyroyal and the Flash-Next SGLang profile).",
+  "entries": [
+    {
+      "path": "RadixArk-Qwen3.8-Flash-Next-NVFP4/config.json",
+      "json": {
+        "architectures": [
+          "Qwen4ExpForConditionalGeneration"
+        ],
+        "model_type": "qwen4_exp",
+        "max_position_embeddings": 262144,
+        "quantization_config": {
+          "quant_algo": "NVFP4"
+        }
+      }
+    },
+    {
+      "path": "RadixArk-Qwen3.8-Flash-Next-NVFP4/tokenizer.json",
+      "text": "{\"version\":\"1.0\",\"fixture\":\"qwen38-flash-next-nvfp4\",\"model\":{\"type\":\"BPE\",\"vocab\":{\"<s>\":0,\"</s>\":1},\"merges\":[]}}\n"
+    }
+  ]
+}

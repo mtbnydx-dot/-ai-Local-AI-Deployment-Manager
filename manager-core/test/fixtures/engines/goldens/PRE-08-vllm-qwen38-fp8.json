@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-08-vllm-qwen38-fp8",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vLLM Qwen3.8 FP8 with packaged MTP tensors and speculativeMode mtp",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "engine": "vllm",
+      "model": "C:/fixture/models/Qwen-Qwen3.8-27B-FP8",
+      "quantization": "fp8",
+      "speculativeMode": "mtp",
+      "numSpeculativeTokens": 3
+    },
+    "launch": {
+      "modelArg": "/models/Qwen-Qwen3.8-27B-FP8",
+      "localPath": "C:/fixture/models/Qwen-Qwen3.8-27B-FP8"
+    },
+    "modelFixture": "qwen38-27b-fp8-mtp"
+  },
+  "expect": {
+    "preset": {
+      "id": "qwen3.8-vllm-fp8",
+      "label": "Qwen3.8 / vLLM / FP8",
+      "engine": "vllm",
+      "image": "vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
+      "positionalModel": true,
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_coder",
+      "enableAutoToolChoice": true,
+      "disableQuantizationArg": false,
+      "disableKvCacheDtypeArg": false,
+      "safetensorsLoadStrategy": "",
+      "notes": [
+        "uses the Qwen3.8-compatible vLLM build v0.28.0",
+        "uses positional model syntax required by current vLLM serve CLI",
+        "uses qwen3 reasoning and qwen3_coder tool parsing",
+        "keeps KV cache dtype auto for quality-first operation",
+        "Speculative decoding enabled with mtp and 3 draft tokens."
+      ],
+      "env": {},
+      "forceTrustRemoteCode": false,
+      "reasoningParserPlugin": "",
+      "speculativeConfig": {
+        "method": "mtp",
+        "num_speculative_tokens": 3
+      },
+      "capabilities": {
+        "architecture": "Qwen3_8ForConditionalGeneration",
+        "modelType": "qwen3_8",
+        "quantMethod": "fp8",
+        "nativeMtp": {
+          "layers": 1,
+          "declared": true,
+          "tensorCount": 2,
+          "evidence": "model.safetensors.index.json",
+          "inspected": true,
+          "supported": true
+        },
+        "speculativeConfig": {
+          "method": "mtp",
+          "num_speculative_tokens": 3
+        },
+        "speculativeDecision": {
+          "requested": "mtp",
+          "method": "mtp",
+          "tokens": 3,
+          "reason": "Explicitly requested mtp; validate acceptance rate and throughput on this checkpoint."
+        },
+        "capabilityEntry": {
+          "id": "qwen3.8",
+          "label": "Qwen3.8",
+          "matchedBy": "modelType",
+          "heuristic": false,
+          "confidence": "verified"
+        },
+        "reasoningParser": "qwen3",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": [
+          "Speculative decoding enabled with mtp and 3 draft tokens."
+        ]
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}
