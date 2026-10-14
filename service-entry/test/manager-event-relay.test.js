@@ -324,6 +324,53 @@ test("the first snapshot after a reconnect is diffed against the previous map", 
   assertOnlyGets(vllm);
 });
 
+test("a failed seed read never floods: only jobs updated since the stream opened are relayed", async (t) => {
+  const clock = fakeClock();
+  const history = Array.from({ length: 40 }, (_, index) => job(`old-${index}`, "done"));
+  const fresh = (id, status) => job(id, status, { updatedAt: new Date(T0 + 1000).toISOString() });
+  // vllm: the seed read is still running when the first snapshot arrives,
+  // then fails. llama: the seed read fails at once, before any snapshot.
+  const vllm = await fakeManager(t, "vllm", { jobs: history });
+  const llama = await fakeManager(t, "llama", { jobs: history });
+  let failVllmSeed = null;
+  const seedReads = [];
+  const fetchJson = async (managerId, target) => {
+    const manager = managerId === "vllm" ? vllm : llama;
+    if (target.startsWith("jobs")) {
+      seedReads.push(managerId);
+      if (managerId === "vllm") {
+        await new Promise((resolve) => {
+          failVllmSeed = resolve;
+        });
+        return { ok: false, status: 0, code: "manager_timeout", data: null };
+      }
+      return { ok: false, status: 500, data: null };
+    }
+    return { ok: true, status: 200, data: { instances: manager.state.instances } };
+  };
+  const { relay, published } = makeRelay(t, [vllm, llama], { now: clock.now, timers: clock.timers, fetchJson });
+  relay.start();
+  await waitFor(() => vllm.streams.size === 1 && llama.streams.size === 1 && seedReads.length === 2 && failVllmSeed, 3000, "both streams and seed reads");
+
+  vllm.send("jobs", [fresh("v-new", "running"), ...history]);
+  await waitFor(() => linkOf(relay, "vllm").lastEventAt, 3000, "the held vllm snapshot");
+  assert.equal(published("jobs").length, 0, "a snapshot is held while the seed read runs");
+  failVllmSeed();
+  await waitFor(() => published("jobs").length === 1, 3000, "the vllm delta");
+  assert.deepEqual(published("jobs")[0].data, { managerId: "vllm", jobs: [fresh("v-new", "running")], removed: [] });
+
+  llama.send("jobs", [...history.slice(0, 39), fresh("l-new", "running")]);
+  await waitFor(() => published("jobs").length === 2, 3000, "the llama delta");
+  assert.deepEqual(published("jobs")[1].data, { managerId: "llama", jobs: [fresh("l-new", "running")], removed: [] });
+
+  // From then on the map decides, whatever a job's timestamp says.
+  llama.send("jobs", [{ ...history[0], status: "failed" }, fresh("l-new", "running")]);
+  await waitFor(() => published("jobs").length === 3, 3000, "the next llama delta");
+  assert.deepEqual(published("jobs")[2].data.jobs.map((item) => `${item.id}:${item.status}`), ["old-0:failed"]);
+  assert.deepEqual(published("jobs")[2].data.removed, history.slice(1, 39).map((item) => item.id));
+  assert.equal(llama.hits("/api/jobs"), 0, "the stub answered every read");
+});
+
 // --- connection, backoff and status ---------------------------------------
 
 // A stand-in for http.get: "refuse" fails like a stopped manager, "accept"

@@ -14,7 +14,8 @@
 // what was already relayed publishes nothing. Every (re)connect reads
 // /api/jobs?fields=summary once: the first read only seeds the map, a later
 // one is diffed against it, so neither a fresh entry nor a reconnect floods
-// the stream with the whole job history.
+// the stream with the whole job history. When that first read fails, jobs
+// the manager has not updated since the stream opened seed the map silently.
 //
 // Managers do not emit `instances` yet (01 ENG-10/ENG-13 add it). Until a
 // manager does, the relay synthesises the event: while anyone subscribes to
@@ -52,6 +53,9 @@ const DEFAULT_FETCH_TIMEOUT_MS = 15000;
 // One frame carries the whole job list; anything above this is not a manager.
 const DEFAULT_MAX_FRAME_CHARS = 16 << 20;
 const FETCH_LIMIT_BYTES = 16 << 20;
+// Without a seeded map, a job last updated more than this before the stream
+// opened is history, not a change (both clocks are this host's).
+const NO_BASELINE_SLACK_MS = 5000;
 const SOURCE_SET = new Set(EVENT_SOURCES);
 
 function isPlainObject(value) {
@@ -100,6 +104,13 @@ function jobId(job) {
 function jobState(job) {
   if (typeof job?.state === "string") return job.state;
   return typeof job?.status === "string" ? job.status : "";
+}
+
+// Every manager job update stamps `updatedAt` (manager-core/job-utils.js).
+function jobUpdatedMs(job) {
+  const value = job?.updatedAt;
+  const ms = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) ? ms : null;
 }
 
 function instanceId(instance) {
@@ -561,6 +572,22 @@ function createManagerEventRelay(options = {}) {
       return;
     }
     link.snapshotSinceConnect = true;
+    relayJobs(link, snapshot);
+  }
+
+  // With a map, the snapshot is diffed against it. Without one (the seed read
+  // failed), only jobs updated since shortly before the stream opened count
+  // as changes and the rest seed the map silently, so a failed seed never
+  // floods the bus with the job history.
+  function relayJobs(link, snapshot) {
+    if (link.jobs === null) {
+      const since = link.connectedAtMs - NO_BASELINE_SLACK_MS;
+      const history = snapshot.jobs.filter((job) => {
+        const updated = jobUpdatedMs(job);
+        return updated === null || updated < since;
+      });
+      applyJobs(link, { jobs: history, full: false, removed: [] }, { publish: false });
+    }
     applyJobs(link, snapshot, { publish: true });
   }
 
@@ -615,13 +642,13 @@ function createManagerEventRelay(options = {}) {
           // the stream was down is relayed.
           applyJobs(link, { jobs: list.filter(isPlainObject), full: true, removed: [] }, { publish: link.jobs !== null });
         }
-        // When the seed read failed, the held snapshot is relayed in full
-        // rather than losing the change that caused it.
+        // A snapshot held while the read ran is diffed against its result;
+        // when the read failed, against the jobs it shows as untouched.
         const pending = link.pendingJobs;
         link.pendingJobs = null;
         if (pending) {
           link.snapshotSinceConnect = true;
-          applyJobs(link, pending, { publish: true });
+          relayJobs(link, pending);
         }
       });
   }
