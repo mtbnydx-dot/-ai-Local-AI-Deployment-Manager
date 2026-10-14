@@ -1,0 +1,1093 @@
+{
+  "docker": {
+    "id": "docker",
+    "kind": "external",
+    "profile": "core",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "Docker 引擎",
+      "en-US": "Docker engine"
+    },
+    "description": {
+      "zh-CN": "运行模型容器和搜索网关的 Docker 引擎。平台只负责确认它已启动，不会停止它。",
+      "en-US": "The Docker engine that runs model containers and the search gateway. The platform only makes sure it is running and never stops it."
+    },
+    "dependsOn": [],
+    "after": [],
+    "ports": [],
+    "urls": {},
+    "readiness": {
+      "intervalMs": 3000,
+      "command": [
+        "docker.exe",
+        "info",
+        "--format",
+        "{{.ServerVersion}}"
+      ],
+      "timeoutSec": 180
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "stop": {
+      "strategy": "never"
+    },
+    "ensure": {
+      "via": "docker-runtime",
+      "mode": "start"
+    },
+    "docs": "/docs/troubleshooting.md#docker"
+  },
+  "entry": {
+    "id": "entry",
+    "legacyId": "entry",
+    "kind": "node",
+    "profile": "core",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "统一入口",
+      "en-US": "Service entry"
+    },
+    "description": {
+      "zh-CN": "控制台、网关和计费中心所在的统一入口（管理端口）。",
+      "en-US": "The service entry that serves the console, the gateway and the billing center (admin port)."
+    },
+    "dependsOn": [],
+    "after": [
+      "docker"
+    ],
+    "ports": [
+      {
+        "name": "admin",
+        "port": 5176,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "admin": "http://127.0.0.1:5176"
+    },
+    "readiness": {
+      "intervalMs": 1000,
+      "http": "http://127.0.0.1:5176/gateway/health",
+      "expectJson": {
+        "service": "local-ai-gateway"
+      },
+      "timeoutSec": 30
+    },
+    "liveness": {
+      "timeoutMs": 2000,
+      "onFailure": "report",
+      "http": "http://127.0.0.1:5176/gateway/health",
+      "intervalSec": 10,
+      "failureThreshold": 6
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "cwd": "<AI_ROOT>/service-entry",
+    "command": "node.exe",
+    "args": [
+      "server.js"
+    ],
+    "argv": [
+      "node.exe",
+      "server.js"
+    ],
+    "env": {
+      "SERVICE_ENTRY_HOST": "127.0.0.1",
+      "SERVICE_ENTRY_PORT": "5176",
+      "SERVICE_ENTRY_ALLOW_LAN_ADMIN": "0",
+      "SERVICE_ENTRY_PUBLIC_LISTENER": "1",
+      "SERVICE_ENTRY_PUBLIC_HOST": "127.0.0.1",
+      "SERVICE_ENTRY_PUBLIC_PORT": "5186",
+      "SERVICE_ENTRY_RATE_LIMIT_RPM": "600",
+      "SERVICE_ENTRY_TRUSTED_PROXIES": "127.0.0.1/32,::1/128",
+      "SERVICE_ENTRY_CLIENT_IP_HEADER": "cf-connecting-ip",
+      "SERVICE_ENTRY_REQUIRE_API_KEY": "auto",
+      "VLLM_MANAGER_HOST": "127.0.0.1",
+      "VLLM_MANAGER_PORT": "5177",
+      "LLAMA_MANAGER_HOST": "127.0.0.1",
+      "LLAMA_MANAGER_PORT": "5178",
+      "SERVICE_ENTRY_CONSOLE_DEFAULT": "classic",
+      "TTS_GATEWAY_PORT": "7000",
+      "SEARCH_GATEWAY_PORT": "5180",
+      "SERVICE_ENTRY_SEARCH_GATEWAY_KEY": "fake-search-key-0123456789",
+      "HF_HOME": "<AI_ROOT>/cache/huggingface",
+      "PLATFORM_CONFIG_ENV_KEYS": "HF_HOME,LLAMA_MANAGER_HOST,LLAMA_MANAGER_PORT,SEARCH_GATEWAY_PORT,SERVICE_ENTRY_ALLOW_LAN_ADMIN,SERVICE_ENTRY_CLIENT_IP_HEADER,SERVICE_ENTRY_CONSOLE_DEFAULT,SERVICE_ENTRY_HOST,SERVICE_ENTRY_PORT,SERVICE_ENTRY_PUBLIC_HOST,SERVICE_ENTRY_PUBLIC_LISTENER,SERVICE_ENTRY_PUBLIC_PORT,SERVICE_ENTRY_RATE_LIMIT_RPM,SERVICE_ENTRY_REQUIRE_API_KEY,SERVICE_ENTRY_SEARCH_GATEWAY_KEY,SERVICE_ENTRY_TRUSTED_PROXIES,TTS_GATEWAY_PORT,VLLM_MANAGER_HOST,VLLM_MANAGER_PORT",
+      "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json",
+      "AI_ROOT": "<AI_ROOT>"
+    },
+    "stop": {
+      "strategy": "http-then-kill",
+      "http": "http://127.0.0.1:5176/api/manager/shutdown",
+      "auth": "system",
+      "graceSec": 15
+    },
+    "busy": {
+      "http": "http://127.0.0.1:5176/api/platform/busy",
+      "parser": "entry-busy",
+      "auth": "system"
+    },
+    "paths": [
+      "service-entry/**",
+      "manager-core/**",
+      "!manager-core/platform/**",
+      "shared-public/**"
+    ],
+    "logDir": "<AI_ROOT>/logs/entry",
+    "logs": {
+      "out": "<AI_ROOT>/logs/entry/entry.out.log",
+      "err": "<AI_ROOT>/logs/entry/entry.err.log"
+    }
+  },
+  "service-entry-public": {
+    "id": "service-entry-public",
+    "kind": "listener",
+    "profile": "core",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "公网入口监听",
+      "en-US": "Public listener"
+    },
+    "description": {
+      "zh-CN": "统一入口进程里的公网监听端口，是 Cloudflare 隧道或反向代理唯一应该指向的地址。",
+      "en-US": "The public listening port inside the service entry process; the only address a Cloudflare tunnel or reverse proxy should target."
+    },
+    "parent": "entry",
+    "dependsOn": [],
+    "after": [],
+    "ports": [
+      {
+        "name": "public",
+        "port": 5186,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "public": "http://127.0.0.1:5186"
+    },
+    "readiness": {
+      "intervalMs": 1000,
+      "http": "http://127.0.0.1:5186/healthz",
+      "expectStatus": 200,
+      "timeoutSec": 30
+    },
+    "liveness": {
+      "timeoutMs": 2000,
+      "onFailure": "report",
+      "http": "http://127.0.0.1:5186/healthz",
+      "intervalSec": 15,
+      "failureThreshold": 4
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "enabled": true,
+    "stop": {
+      "strategy": "never"
+    },
+    "docs": "/docs/client-setup-guide.md#public"
+  },
+  "vllm-manager": {
+    "id": "vllm-manager",
+    "legacyId": "vllm",
+    "kind": "node",
+    "profile": "core",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "vLLM / SGLang 管理器",
+      "en-US": "vLLM / SGLang manager"
+    },
+    "description": {
+      "zh-CN": "启动和管理 vLLM、SGLang 模型容器的管理器。停止管理器不会停止模型容器。",
+      "en-US": "The manager that launches and supervises vLLM and SGLang model containers. Stopping it leaves the model containers running."
+    },
+    "dependsOn": [],
+    "after": [
+      "entry",
+      "docker"
+    ],
+    "ports": [
+      {
+        "name": "api",
+        "port": 5177,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "api": "http://127.0.0.1:5177"
+    },
+    "readiness": {
+      "intervalMs": 1000,
+      "http": "http://127.0.0.1:5177/api/manager/health",
+      "expectJson": {
+        "ok": true
+      },
+      "timeoutSec": 30
+    },
+    "liveness": {
+      "timeoutMs": 2000,
+      "onFailure": "report",
+      "http": "http://127.0.0.1:5177/api/manager/health",
+      "intervalSec": 10,
+      "failureThreshold": 6
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "cwd": "<AI_ROOT>/vllm-manager",
+    "command": "node.exe",
+    "args": [
+      "server.js"
+    ],
+    "argv": [
+      "node.exe",
+      "server.js"
+    ],
+    "env": {
+      "VLLM_MANAGER_HOST": "127.0.0.1",
+      "VLLM_MANAGER_PORT": "5177",
+      "HF_HOME": "<AI_ROOT>/cache/huggingface",
+      "PLATFORM_CONFIG_ENV_KEYS": "HF_HOME,VLLM_MANAGER_HOST,VLLM_MANAGER_PORT",
+      "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json",
+      "AI_ROOT": "<AI_ROOT>",
+      "VLLM_MANAGER_ALLOW_REMOTE": "0"
+    },
+    "stop": {
+      "strategy": "http-then-kill",
+      "http": "http://127.0.0.1:5177/api/manager/shutdown",
+      "graceSec": 15
+    },
+    "busy": {
+      "http": "http://127.0.0.1:5177/api/jobs?fields=summary",
+      "parser": "manager-jobs"
+    },
+    "paths": [
+      "vllm-manager/**",
+      "manager-core/**",
+      "!manager-core/platform/**",
+      "shared-public/**"
+    ],
+    "logDir": "<AI_ROOT>/logs/vllm-manager",
+    "logs": {
+      "out": "<AI_ROOT>/logs/vllm-manager/vllm-manager.out.log",
+      "err": "<AI_ROOT>/logs/vllm-manager/vllm-manager.err.log"
+    }
+  },
+  "llama-manager": {
+    "id": "llama-manager",
+    "legacyId": "llama",
+    "kind": "node",
+    "profile": "core",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "llama.cpp 管理器",
+      "en-US": "llama.cpp manager"
+    },
+    "description": {
+      "zh-CN": "启动和管理 llama.cpp 模型容器的管理器。停止管理器不会停止模型容器。",
+      "en-US": "The manager that launches and supervises llama.cpp model containers. Stopping it leaves the model containers running."
+    },
+    "dependsOn": [],
+    "after": [
+      "entry",
+      "docker"
+    ],
+    "ports": [
+      {
+        "name": "api",
+        "port": 5178,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "api": "http://127.0.0.1:5178"
+    },
+    "readiness": {
+      "intervalMs": 1000,
+      "http": "http://127.0.0.1:5178/api/manager/health",
+      "expectJson": {
+        "ok": true
+      },
+      "timeoutSec": 30
+    },
+    "liveness": {
+      "timeoutMs": 2000,
+      "onFailure": "report",
+      "http": "http://127.0.0.1:5178/api/manager/health",
+      "intervalSec": 10,
+      "failureThreshold": 6
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "cwd": "<AI_ROOT>/llama-manager",
+    "command": "node.exe",
+    "args": [
+      "server.js"
+    ],
+    "argv": [
+      "node.exe",
+      "server.js"
+    ],
+    "env": {
+      "LLAMA_MANAGER_HOST": "127.0.0.1",
+      "LLAMA_MANAGER_PORT": "5178",
+      "HF_HOME": "<AI_ROOT>/cache/huggingface",
+      "PLATFORM_CONFIG_ENV_KEYS": "HF_HOME,LLAMA_MANAGER_HOST,LLAMA_MANAGER_PORT",
+      "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json",
+      "AI_ROOT": "<AI_ROOT>",
+      "LLAMA_MANAGER_ALLOW_REMOTE": "0"
+    },
+    "stop": {
+      "strategy": "http-then-kill",
+      "http": "http://127.0.0.1:5178/api/manager/shutdown",
+      "graceSec": 15
+    },
+    "busy": {
+      "http": "http://127.0.0.1:5178/api/jobs?fields=summary",
+      "parser": "manager-jobs"
+    },
+    "paths": [
+      "llama-manager/**",
+      "manager-core/**",
+      "!manager-core/platform/**",
+      "shared-public/**"
+    ],
+    "logDir": "<AI_ROOT>/logs/llama-manager",
+    "logs": {
+      "out": "<AI_ROOT>/logs/llama-manager/llama-manager.out.log",
+      "err": "<AI_ROOT>/logs/llama-manager/llama-manager.err.log"
+    }
+  },
+  "platform-mcp": {
+    "id": "platform-mcp",
+    "legacyId": "mcp",
+    "kind": "node",
+    "profile": "full",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "MCP 服务",
+      "en-US": "MCP server"
+    },
+    "description": {
+      "zh-CN": "给 AI 客户端使用的本机 MCP 服务，只监听本机回环地址，需要访问密钥。",
+      "en-US": "The local MCP server for AI clients. It listens on loopback only and needs its access key."
+    },
+    "dependsOn": [],
+    "after": [
+      "entry",
+      "vllm-manager",
+      "llama-manager"
+    ],
+    "ports": [
+      {
+        "name": "mcp",
+        "port": 5190,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "mcp": "http://127.0.0.1:5190"
+    },
+    "readiness": {
+      "intervalMs": 1000,
+      "http": "http://127.0.0.1:5190/health",
+      "expectJson": {
+        "ok": true,
+        "service": "local-ai-platform-mcp"
+      },
+      "timeoutSec": 20
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "cwd": "<AI_ROOT>/platform-mcp",
+    "command": "node.exe",
+    "args": [
+      "dist/src/index.js"
+    ],
+    "argv": [
+      "node.exe",
+      "dist/src/index.js"
+    ],
+    "env": {
+      "PLATFORM_MCP_SERVICE_ENTRY_URL": "http://127.0.0.1:5176",
+      "PLATFORM_MCP_VLLM_MANAGER_URL": "http://127.0.0.1:5177",
+      "PLATFORM_MCP_LLAMA_MANAGER_URL": "http://127.0.0.1:5178",
+      "PLATFORM_MCP_PORT": "5190",
+      "PLATFORM_MCP_TOOL_PROFILE": "all",
+      "PLATFORM_MCP_OUTPUT_SCHEMA": "compact",
+      "PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE": "20",
+      "PLATFORM_MCP_LOCAL_RATE_LIMIT_PER_MINUTE": "120",
+      "PLATFORM_MCP_CACHE_TTL_MS": "2000",
+      "PLATFORM_MCP_API_KEY": "fake-mcp-key-0123456789abcdef0123456789abcdef",
+      "PLATFORM_MCP_SEARCH_GATEWAY_API_KEY": "fake-search-key-0123456789",
+      "PLATFORM_CONFIG_ENV_KEYS": "PLATFORM_MCP_API_KEY,PLATFORM_MCP_CACHE_TTL_MS,PLATFORM_MCP_LLAMA_MANAGER_URL,PLATFORM_MCP_LOCAL_RATE_LIMIT_PER_MINUTE,PLATFORM_MCP_OUTPUT_SCHEMA,PLATFORM_MCP_PORT,PLATFORM_MCP_SEARCH_GATEWAY_API_KEY,PLATFORM_MCP_SEARCH_RATE_LIMIT_PER_MINUTE,PLATFORM_MCP_SERVICE_ENTRY_URL,PLATFORM_MCP_TOOL_PROFILE,PLATFORM_MCP_VLLM_MANAGER_URL",
+      "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json",
+      "AI_ROOT": "<AI_ROOT>",
+      "PLATFORM_MCP_HOST": "127.0.0.1",
+      "PLATFORM_MCP_SEARCH_GATEWAY_URL": "http://127.0.0.1:5180",
+      "PLATFORM_MCP_AUDIT_LOG": "<AI_ROOT>/audit-logs/platform-mcp.jsonl",
+      "PLATFORM_MCP_ALLOWED_HOSTS": "127.0.0.1,localhost,::1,host.docker.internal"
+    },
+    "stop": {
+      "strategy": "kill"
+    },
+    "hook": "platform-mcp",
+    "docs": "/docs/mcp-platform-guide.md",
+    "paths": [
+      "platform-mcp/**"
+    ],
+    "requires": {
+      "files": [
+        "<AI_ROOT>/platform-mcp/dist/src/index.js"
+      ],
+      "doctor": [
+        "env.mcp-dist"
+      ]
+    },
+    "logDir": "<AI_ROOT>/logs/platform-mcp",
+    "logs": {
+      "out": "<AI_ROOT>/logs/platform-mcp/platform-mcp.out.log",
+      "err": "<AI_ROOT>/logs/platform-mcp/platform-mcp.err.log"
+    }
+  },
+  "tts-gateway": {
+    "id": "tts-gateway",
+    "legacyId": "tts",
+    "kind": "process",
+    "profile": "full",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "语音网关",
+      "en-US": "TTS gateway"
+    },
+    "description": {
+      "zh-CN": "语音合成网关。各语音引擎的工作进程按需单独启动。",
+      "en-US": "The text-to-speech gateway. The engine workers start separately, on demand."
+    },
+    "dependsOn": [],
+    "after": [
+      "entry"
+    ],
+    "ports": [
+      {
+        "name": "http",
+        "port": 7000,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "http": "http://127.0.0.1:7000"
+    },
+    "readiness": {
+      "intervalMs": 1000,
+      "http": "http://127.0.0.1:7000/health",
+      "timeoutSec": 60
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "cwd": "<AI_ROOT>",
+    "command": "pwsh.exe",
+    "args": [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "tts-platform/scripts/start_gateway.ps1"
+    ],
+    "argv": [
+      "pwsh.exe",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "tts-platform/scripts/start_gateway.ps1"
+    ],
+    "env": {
+      "TTS_GATEWAY_PORT": "7000",
+      "PLATFORM_CONFIG_ENV_KEYS": "TTS_GATEWAY_PORT",
+      "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+    },
+    "stop": {
+      "strategy": "script-then-kill",
+      "script": [
+        "pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "tts-platform/scripts/stop_gateway.ps1"
+      ],
+      "graceSec": 10,
+      "tree": true
+    },
+    "paths": [
+      "tts-platform/gateway/**",
+      "tts-platform/scripts/**"
+    ],
+    "requires": {
+      "files": [
+        "<AI_ROOT>/tts-runtime/envs/gateway/Scripts/python.exe"
+      ],
+      "optional": true
+    },
+    "logDir": "<AI_ROOT>/logs/tts-gateway",
+    "logs": {
+      "out": "<AI_ROOT>/logs/tts-gateway/tts-gateway.out.log",
+      "err": "<AI_ROOT>/logs/tts-gateway/tts-gateway.err.log"
+    },
+    "extraLogs": [
+      "<AI_ROOT>/tts-runtime/state/gateway-stdout.log",
+      "<AI_ROOT>/tts-runtime/state/gateway-stderr.log"
+    ]
+  },
+  "tts-workers": {
+    "id": "tts-workers",
+    "kind": "group",
+    "profile": "full",
+    "autostart": false,
+    "disabled": false,
+    "label": {
+      "zh-CN": "语音工作进程",
+      "en-US": "TTS workers"
+    },
+    "description": {
+      "zh-CN": "各语音引擎的工作进程，会加载较大的模型，只在需要时启动。",
+      "en-US": "The speech engine workers. They load large models, so they start only on request."
+    },
+    "dependsOn": [
+      "tts-gateway"
+    ],
+    "after": [],
+    "ports": [],
+    "urls": {},
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "cwd": "<AI_ROOT>",
+    "members": [
+      {
+        "name": "chatterbox",
+        "autostart": true,
+        "cwd": "<AI_ROOT>",
+        "command": "pwsh.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_chatterbox.ps1"
+        ],
+        "argv": [
+          "pwsh.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_chatterbox.ps1"
+        ],
+        "env": {
+          "PLATFORM_CONFIG_ENV_KEYS": "",
+          "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+        },
+        "dependsOn": [],
+        "ports": [
+          {
+            "name": "http",
+            "port": 7011,
+            "bind": "127.0.0.1",
+            "enabled": true
+          }
+        ],
+        "urls": {
+          "http": "http://127.0.0.1:7011"
+        },
+        "readiness": {
+          "intervalMs": 1000,
+          "tcp": 7011,
+          "timeoutSec": 300
+        }
+      },
+      {
+        "name": "qwen",
+        "autostart": true,
+        "cwd": "<AI_ROOT>",
+        "command": "pwsh.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_qwen.ps1"
+        ],
+        "argv": [
+          "pwsh.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_qwen.ps1"
+        ],
+        "env": {
+          "PLATFORM_CONFIG_ENV_KEYS": "",
+          "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+        },
+        "dependsOn": [],
+        "ports": [
+          {
+            "name": "http",
+            "port": 7012,
+            "bind": "127.0.0.1",
+            "enabled": true
+          }
+        ],
+        "urls": {
+          "http": "http://127.0.0.1:7012"
+        },
+        "readiness": {
+          "intervalMs": 1000,
+          "tcp": 7012,
+          "timeoutSec": 300
+        }
+      },
+      {
+        "name": "fish",
+        "autostart": true,
+        "cwd": "<AI_ROOT>",
+        "command": "pwsh.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_fish.ps1"
+        ],
+        "argv": [
+          "pwsh.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_fish.ps1"
+        ],
+        "env": {
+          "PLATFORM_CONFIG_ENV_KEYS": "",
+          "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+        },
+        "dependsOn": [],
+        "ports": [
+          {
+            "name": "http",
+            "port": 7013,
+            "bind": "127.0.0.1",
+            "enabled": true
+          }
+        ],
+        "urls": {
+          "http": "http://127.0.0.1:7013"
+        },
+        "readiness": {
+          "intervalMs": 1000,
+          "tcp": 7013,
+          "timeoutSec": 300
+        }
+      },
+      {
+        "name": "step",
+        "autostart": true,
+        "cwd": "<AI_ROOT>",
+        "command": "pwsh.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_step_docker.ps1"
+        ],
+        "argv": [
+          "pwsh.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_step_docker.ps1"
+        ],
+        "env": {
+          "PLATFORM_CONFIG_ENV_KEYS": "",
+          "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+        },
+        "dependsOn": [
+          "docker"
+        ],
+        "ports": [
+          {
+            "name": "http",
+            "port": 7014,
+            "bind": "127.0.0.1",
+            "enabled": true
+          }
+        ],
+        "urls": {
+          "http": "http://127.0.0.1:7014"
+        },
+        "readiness": {
+          "intervalMs": 1000,
+          "tcp": 7014,
+          "timeoutSec": 300
+        },
+        "requires": {
+          "dockerImage": "step-audio-editx",
+          "optional": true
+        },
+        "stop": {
+          "strategy": "compose",
+          "container": "step-audio",
+          "action": "stop"
+        }
+      },
+      {
+        "name": "voxcpm",
+        "autostart": false,
+        "cwd": "<AI_ROOT>",
+        "command": "pwsh.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_voxcpm.ps1"
+        ],
+        "argv": [
+          "pwsh.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_voxcpm.ps1"
+        ],
+        "env": {
+          "PLATFORM_CONFIG_ENV_KEYS": "",
+          "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+        },
+        "dependsOn": [],
+        "ports": [
+          {
+            "name": "http",
+            "port": 7015,
+            "bind": "127.0.0.1",
+            "enabled": true
+          }
+        ],
+        "urls": {
+          "http": "http://127.0.0.1:7015"
+        },
+        "readiness": {
+          "intervalMs": 1000,
+          "tcp": 7015,
+          "timeoutSec": 300
+        }
+      },
+      {
+        "name": "qwen-design",
+        "autostart": false,
+        "cwd": "<AI_ROOT>",
+        "command": "pwsh.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_qwen_design.ps1"
+        ],
+        "argv": [
+          "pwsh.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "tts-platform/scripts/start_qwen_design.ps1"
+        ],
+        "env": {
+          "PLATFORM_CONFIG_ENV_KEYS": "",
+          "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+        },
+        "dependsOn": [],
+        "ports": [
+          {
+            "name": "http",
+            "port": 7016,
+            "bind": "127.0.0.1",
+            "enabled": true
+          }
+        ],
+        "urls": {
+          "http": "http://127.0.0.1:7016"
+        },
+        "readiness": {
+          "intervalMs": 1000,
+          "tcp": 7016,
+          "timeoutSec": 300
+        }
+      }
+    ],
+    "stop": {
+      "strategy": "script-then-kill",
+      "script": [
+        "pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "tts-platform/scripts/stop_workers.ps1"
+      ],
+      "graceSec": 10,
+      "tree": true
+    },
+    "logDir": "<AI_ROOT>/logs/tts-workers",
+    "logs": {
+      "out": "<AI_ROOT>/logs/tts-workers/tts-workers.out.log",
+      "err": "<AI_ROOT>/logs/tts-workers/tts-workers.err.log"
+    }
+  },
+  "search-gateway": {
+    "id": "search-gateway",
+    "legacyId": "search",
+    "kind": "compose",
+    "profile": "full",
+    "autostart": true,
+    "disabled": false,
+    "label": {
+      "zh-CN": "联网搜索网关",
+      "en-US": "Web search gateway"
+    },
+    "description": {
+      "zh-CN": "在 Docker 里运行的联网搜索网关（含 SearXNG），通过本机模型回答带搜索的问题。",
+      "en-US": "The web search gateway with SearXNG, running in Docker. It answers search-augmented chats through a local model."
+    },
+    "dependsOn": [
+      "docker"
+    ],
+    "after": [
+      "entry"
+    ],
+    "ports": [
+      {
+        "name": "http",
+        "port": 5180,
+        "bind": "127.0.0.1",
+        "enabled": true
+      },
+      {
+        "name": "searxng",
+        "port": 8180,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "http": "http://127.0.0.1:5180",
+      "searxng": "http://127.0.0.1:8180"
+    },
+    "readiness": {
+      "intervalMs": 1000,
+      "http": "http://127.0.0.1:5180/health",
+      "expectJson": {
+        "service": "local-ai-search-gateway"
+      },
+      "timeoutSec": 180
+    },
+    "restartPolicy": {
+      "mode": "docker",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "cwd": "<AI_ROOT>",
+    "env": {
+      "SERVICE_ENTRY_PORT": "5176",
+      "SERVICE_ENTRY_PUBLIC_PORT": "5186",
+      "SEARCH_GATEWAY_PORT": "5180",
+      "SEARCH_GATEWAY_API_KEY": "fake-search-key-0123456789",
+      "UPSTREAM_API_KEY": "fake-upstream-key-0123456789",
+      "PLATFORM_CONFIG_ENV_KEYS": "SEARCH_GATEWAY_API_KEY,SEARCH_GATEWAY_PORT,SERVICE_ENTRY_PORT,SERVICE_ENTRY_PUBLIC_PORT,UPSTREAM_API_KEY",
+      "PLATFORM_CONFIG_FILE": "<AI_ROOT>/config/platform.json"
+    },
+    "compose": {
+      "file": "<AI_ROOT>/search-gateway/docker-compose.yml",
+      "project": "local-ai-search",
+      "build": "if-changed"
+    },
+    "stop": {
+      "strategy": "compose",
+      "action": "down"
+    },
+    "hook": "search-gateway",
+    "paths": [
+      "search-gateway/**"
+    ]
+  },
+  "legacy-claude-proxy": {
+    "id": "legacy-claude-proxy",
+    "kind": "external",
+    "profile": "none",
+    "autostart": false,
+    "disabled": false,
+    "label": {
+      "zh-CN": "旧版 Claude 代理",
+      "en-US": "Legacy Claude proxy"
+    },
+    "description": {
+      "zh-CN": "旧的 8001 端口 Claude 代理。它绕过网关鉴权，平台只检测、不启动也不停止它。",
+      "en-US": "The old Claude proxy on port 8001. It bypasses gateway authentication; the platform only detects it and never starts or stops it."
+    },
+    "deprecated": true,
+    "detectOnly": true,
+    "detect": {
+      "commandLineIncludes": "claude-vllm-anthropic-proxy.py",
+      "runValue": "ClaudeVllmProxy"
+    },
+    "dependsOn": [],
+    "after": [],
+    "ports": [
+      {
+        "name": "http",
+        "port": 8001,
+        "bind": "127.0.0.1",
+        "enabled": true
+      }
+    ],
+    "urls": {
+      "http": "http://127.0.0.1:8001"
+    },
+    "restartPolicy": {
+      "mode": "on-failure",
+      "maxRestarts": 5,
+      "windowSec": 600,
+      "backoffSec": [
+        1,
+        2,
+        5,
+        15,
+        30,
+        60
+      ],
+      "stableAfterSec": 600
+    },
+    "stop": {
+      "strategy": "never"
+    },
+    "docs": "/docs/troubleshooting.md#legacy-claude-proxy"
+  }
+}
