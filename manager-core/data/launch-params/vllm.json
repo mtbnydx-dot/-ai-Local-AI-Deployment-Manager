@@ -106,10 +106,10 @@
       "platformDefault": "off",
       "rules": [
         {
-          "kind": "warnIf",
+          "kind": "errorIf",
           "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["mtp", "qwen3_next_mtp"]] }, { "eq": [{ "fact": "model.nativeMtp.supported" }, false] }] },
           "code": "mtp_not_in_checkpoint",
-          "message": { "zh": "这个模型没有自带 MTP 层，MTP 推测解码不会生效。", "en": "This model has no MTP layers of its own, so MTP speculative decoding has no effect." }
+          "message": { "zh": "这个模型的权重里没有 MTP 层，不能使用 MTP 推测解码；请关闭推测解码或换用其他方式。", "en": "This checkpoint has no MTP layers, so MTP speculative decoding cannot start; turn speculative decoding off or pick another method." }
         }
       ],
       "legacy": { "field": "speculativeMode", "domId": "speculativeMode" }

@@ -13,6 +13,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const harness = require("./helpers/engine-golden-stubs");
+const { legacyFormDefaults } = require("./helpers/legacy-form-defaults");
 
 harness.prepareGoldenEnvironment();
 const core = require("../index");
@@ -94,6 +95,32 @@ test("present-but-unset fields stay null in values and come back in their legacy
     { sglangMaxTotalTokens: 262144, sglangPageSize: 0 });
   // Planner entries carry their value inside.
   assert.deepEqual(aliases.valuesToLegacyConfig({ contextLength: { value: 131072, source: "planner" } }, "sglang", { catalog: sglang }), { maxModelLen: 131072 });
+  // Form strings are numbers first: "0" is the legacy unset too, as boundedNonNegativeInteger reads it.
+  const strings = aliases.legacyConfigToValues({ sglangMaxTotalTokens: "0", sglangPageSize: " 0 ", sglangChunkedPrefillSize: "8192", sglangMambaTrackInterval: "0", sglangMaxMambaCacheSize: "0" }, "sglang", { catalog: sglang });
+  assert.deepEqual(strings, { "sglang.maxTotalTokens": null, "sglang.pageSize": null, "sglang.chunkedPrefillSize": 8192, "sglang.mambaTrackInterval": null, "sglang.maxMambaCacheSize": null });
+  assert.deepEqual(core.engines.validateValues(strings, sglang, { legacy: true }).errors, []);
+  const vllm = loader.loadCatalog("vllm");
+  assert.deepEqual(aliases.legacyConfigToValues({ maxNumBatchedTokens: "0" }, "vllm", { catalog: vllm }), { "vllm.maxNumBatchedTokens": null });
+});
+
+test("legacy values today's managers accept validate: Pennyroyal's load format and free-text tensor splits", (t) => {
+  const loader = catalogs(t);
+  const sglang = loader.loadCatalog("sglang");
+  const llama = loader.loadCatalog("llamacpp");
+  // The one SGLang recipe that sets --load-format passes safetensors.
+  const { PENNYROYAL_DEFAULTS } = require("../../vllm-manager/lib/pennyroyal");
+  const pennyroyal = aliases.legacyConfigToValues(PENNYROYAL_DEFAULTS, "sglang", { catalog: sglang });
+  assert.equal(pennyroyal["vllm.loadFormat"], "safetensors");
+  assert.deepEqual(core.engines.validateValues(pennyroyal, sglang, { legacy: true }).errors, []);
+  // llama.cpp splits --tensor-split on commas or slashes and skips spaces; the form passes the text through.
+  for (const split of ["24,8", "24, 8", "24/8", " 24 , 8 ", "0.75,0.25", ".5,1"]) {
+    const values = aliases.legacyConfigToValues({ tensorSplit: split }, "llamacpp", { catalog: llama });
+    assert.deepEqual(core.engines.validateValues(values, llama, {}).errors, [], split);
+  }
+  for (const split of ["24,,8", "a,b", "24;8", "-1,2"]) {
+    const values = aliases.legacyConfigToValues({ tensorSplit: split }, "llamacpp", { catalog: llama });
+    assert.deepEqual(core.engines.validateValues(values, llama, {}).errors.map((item) => item.code), ["invalid_choice"], split);
+  }
 });
 
 test("prefix caching reads the enable/disable pair the way the launch path does", (t) => {
@@ -206,29 +233,27 @@ test("legacyBodyToRequest maps a vllm-manager form body to a v2 request", (t) =>
 test("legacyBodyToRequest stays quiet about untouched form defaults and keeps the chosen parallel size", (t) => {
   const engines = registry(t);
   const loader = catalogs(t);
-  const formDefaults = {
-    model: "C:/fixture/models/demo",
-    maxNumBatchedTokens: 0,
-    cpuOffloadGb: 0,
-    kvOffloadingSize: 0,
-    mmProcessorCacheGb: 4,
-    hfConfigPath: "",
-    tokenizer: "",
-    languageModelOnly: false,
-    distributedExecutorBackend: "auto",
-    pipelineParallelSize: 1,
-    dataParallelSize: 1,
-    enableExpertParallel: false,
-    sglangPageSize: 0,
-    sglangDisableThinkingByDefault: false,
-    dsparkBlockSize: 7,
-  };
+  // The body each shipped form posts untouched, read from its index.html.
+  const vllmForm = legacyFormDefaults("vllm");
+  // The PLE box is checked by default and posted for every engine.
+  assert.equal(vllmForm.sglangPleOffloadEmbedding, true);
   for (const engine of ["sglang", "vllm", ""]) {
-    const { request, warnings } = aliases.legacyBodyToRequest({ ...formDefaults, engine }, { managerId: "vllm", registry: engines, paramCatalog: loader });
+    const { request, warnings } = aliases.legacyBodyToRequest({ ...vllmForm, model: "C:/fixture/models/demo", engine }, { managerId: "vllm", registry: engines, paramCatalog: loader });
     assert.equal(request.engineId, engine || "vllm");
     assert.deepEqual(warnings, [], engine || "(default)");
     assert.deepEqual(request.legacy, { multiGpuMode: "single" });
+    // validateValues has nothing to say about the defaults either.
+    assert.deepEqual(core.engines.validateValues(request.values, loader.loadCatalog(request.engineId), { legacy: true }), { errors: [], warnings: [] }, engine || "(default)");
   }
+  const llamaForm = legacyFormDefaults("llama");
+  llamaForm.languageModelOnly = llamaForm.textOnlyMode;
+  const llama = aliases.legacyBodyToRequest({ ...llamaForm, model: "C:/fixture/models/demo.gguf" }, { managerId: "llama", registry: engines, paramCatalog: loader });
+  assert.deepEqual(llama.warnings, []);
+  assert.deepEqual(core.engines.validateValues(llama.request.values, loader.loadCatalog("llamacpp"), { legacy: true }), { errors: [], warnings: [] });
+
+  // A value the user changed still warns.
+  const changed = aliases.legacyBodyToRequest({ ...vllmForm, engine: "vllm", sglangPleOffloadEmbedding: false, sglangMaxTotalTokens: 4096 }, { managerId: "vllm", registry: engines, paramCatalog: loader });
+  assert.deepEqual(changed.warnings.map((item) => [item.field, item.code]), [["sglangMaxTotalTokens", "param_not_applicable"]]);
   const tensor = aliases.legacyBodyToRequest({ model: "m", multiGpuMode: "tensor", tensorParallelSize: 2, pipelineParallelSize: 4 }, { managerId: "vllm", registry: engines, paramCatalog: loader }).request;
   assert.deepEqual([tensor.values.tensorParallel, tensor.values.pipelineParallel, tensor.values.dataParallel], [2, 1, 1]);
   // Without a size for the chosen mode the resolver fills it from the GPU count.
@@ -247,8 +272,22 @@ test("legacyBodyToRequest resolves runtime images to runtimeIds, the Pennyroyal 
   assert.deepEqual([custom.runtimeId, custom.runtime], [undefined, { imageOverride: "example.invalid/custom/vllm:dev" }]);
   const none = aliases.legacyBodyToRequest({ engine: "vllm", model: "m", runtimeImage: "" }, options).request;
   assert.deepEqual([none.runtimeId, none.runtime], [undefined, undefined]);
-  assert.throws(() => aliases.legacyBodyToRequest({ engine: "vllm", model: "m", runtimeImage: "bad image; rm -rf" }, options),
-    (error) => error.status === 400 && error.code === "invalid_runtime_image");
+  // Validated by today's normalizeRuntimeImage: what it accepts still launches as an override.
+  for (const image of ["Local/SGLang:Dev", "example.invalid/team/sglang@sha256:" + "a".repeat(64)]) {
+    const accepted = aliases.legacyBodyToRequest({ engine: "sglang", model: "m", runtimeImage: image }, options);
+    assert.deepEqual(accepted.request.runtime, { imageOverride: image }, image);
+    assert.deepEqual(accepted.warnings, [], image);
+  }
+  for (const image of ["bad image; rm -rf", "--privileged", "-v/:/host", `a${"b".repeat(512)}`]) {
+    assert.throws(() => aliases.legacyBodyToRequest({ engine: "vllm", model: "m", runtimeImage: image }, options),
+      (error) => error.status === 400 && error.code === "invalid_runtime_image" && / \/ /.test(error.message), image);
+  }
+  // Another engine's manifest image is no 404: today it simply runs, so it becomes an override with a warning.
+  const vllmImage = engines.defaultRuntime("vllm").image;
+  const crossed = aliases.legacyBodyToRequest({ engine: "sglang", model: "m", runtimeImage: vllmImage }, options);
+  assert.deepEqual([crossed.request.runtimeId, crossed.request.runtime], [undefined, { imageOverride: vllmImage }]);
+  assert.deepEqual(crossed.warnings.map((item) => [item.field, item.code, item.engineId]), [["runtimeImage", "runtime_other_engine", "vllm"]]);
+  assert.match(crossed.warnings[0].message, /vLLM/);
 });
 
 test("legacyBodyToRequest never coerces the engine (01 §3)", (t) => {

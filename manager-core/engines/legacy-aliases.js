@@ -6,8 +6,9 @@
 // sglangMaxTotalTokens, ...}); v2 requests speak catalog param ids. The mapping
 // itself is catalog data: each param names its legacy field, aliases, codec
 // and, where it is not an empty string, the legacy spelling of "unset"
-// (param.legacy). This module holds the codecs plus the few legacy fields that
-// are LaunchRequest fields rather than params.
+// (param.legacy.unset) and the value the untouched form sends
+// (param.legacy.formDefault). This module holds the codecs plus the few legacy
+// fields that are LaunchRequest fields rather than params.
 //
 // Round trip: valuesToLegacyConfig(legacyConfigToValues(config, e), e, { base: config })
 // returns config for every config the managers' normalizeLaunchConfig builds.
@@ -15,7 +16,6 @@
 // spelling ("" for text, legacy.unset such as 0 for sglangMaxTotalTokens) comes
 // back. Secret params (the API key) never enter values.
 
-const { isImageReference } = require("./descriptor-schema");
 const paramCatalog = require("./param-catalog");
 const { normalizeManagerId, unknownEngineError } = require("./registry");
 const { normalizeGpuIds, normalizeNetworkAccess } = require("../common-utils");
@@ -38,6 +38,9 @@ const LAYOUT_PARAMS = Object.freeze({ tensor: "tensorParallel", pipeline: "pipel
 const RUNTIME_RECIPES = Object.freeze({ sglangPennyroyal: "pennyroyal-v251" });
 
 const TEXT_TYPES = new Set(["string", "path", "enum"]);
+// Today's normalizeRuntimeImage (vllm-manager/lib/launch-request.js), which
+// still validates a legacy runtimeImage (01 §9.5).
+const LEGACY_IMAGE_PATTERN = /^[a-z0-9][a-z0-9._/:@-]{0,511}$/i;
 const TRUE_TEXT = /^(?:true|on|yes|1)$/i;
 const FALSE_TEXT = /^(?:false|off|no|0)$/i;
 
@@ -96,15 +99,17 @@ function readRaw(config, param) {
   return blank || { found: false };
 }
 
+// Form strings become numbers first, so "0" is the legacy unset 0 as well.
 function decodeScalar(param, raw) {
-  if (param.legacy.unset !== undefined && raw === param.legacy.unset) return null;
   if (isBlank(raw)) return null;
+  let value = raw;
   if (param.type === "int" || param.type === "float") {
-    if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw.trim())) return Number(raw.trim());
-    return raw;
+    if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw.trim())) value = Number(raw.trim());
+  } else if (param.type === "bool" || param.type === "tristate") {
+    value = toBool(raw);
   }
-  if (param.type === "bool" || param.type === "tristate") return toBool(raw);
-  return raw;
+  if (param.legacy.unset !== undefined && value === param.legacy.unset) return null;
+  return value;
 }
 
 // null → the legacy spelling of unset, or no field at all when there is none.
@@ -253,18 +258,6 @@ function valuesToLegacyConfig(values, engineId, options = {}) {
   return out;
 }
 
-// A value the user did not really choose: unset, omitted from argv, or the
-// platform/engine default. Such values never warn when an engine ignores them,
-// because the old forms send every field for every engine.
-function isQuietValue(param, value) {
-  if (value === null || value === undefined) return true;
-  if ((param.emit?.omitWhen || []).some((item) => item === value)) return true;
-  for (const fallback of [param.platformDefault, param.engineDefault]) {
-    if (fallback !== null && fallback !== undefined && !isPlainObject(fallback) && fallback === value) return true;
-  }
-  return (param.type === "bool" || param.type === "tristate") && value === false && param.platformDefault !== true;
-}
-
 function resolveLegacyEngine(value, managerId, registry) {
   const hosted = registry.hostedBy(managerId);
   const text = String(value ?? "").trim();
@@ -299,7 +292,8 @@ function ignoredFieldWarnings(body, { engineId, catalog, otherCatalogs, registry
       const field = param.legacy.field;
       if (own.has(field) || seen.has(field)) continue;
       const decoded = codecFor(param).decode(param, body);
-      if (!decoded.found || isQuietValue(param, decoded.value)) continue;
+      // Only a value the user changed warns (paramCatalog.isQuietLegacyValue).
+      if (!decoded.found || paramCatalog.isQuietLegacyValue(param, decoded.value)) continue;
       seen.add(field);
       const mine = catalog.byId.get(param.id);
       warnings.push(mine
@@ -334,6 +328,52 @@ function badRequest(code, message) {
   error.status = 400;
   error.code = code;
   return error;
+}
+
+// The engine whose manifest runtime this image is, when it is not this one's.
+function imageOwner(image, engineId, registry) {
+  for (const descriptor of registry.list()) {
+    if (descriptor.id === engineId) continue;
+    try {
+      if (!registry.resolveRuntime(descriptor.id, { image }).custom) return descriptor.id;
+    } catch {
+      // Not this engine's image either.
+    }
+  }
+  return null;
+}
+
+/**
+ * A legacy runtimeImage (01 §9.5): this engine's manifest image sets runtimeId
+ * (the Pennyroyal image also its recipe); any other reference today's
+ * normalizeRuntimeImage accepts becomes runtime.imageOverride, because today
+ * the image is simply what runs. That includes an image the manifest lists
+ * for another engine, which also warns.
+ */
+function legacyRuntimeSelection(image, { engineId, registry, warnings }) {
+  if (!LEGACY_IMAGE_PATTERN.test(image)) {
+    throw badRequest("invalid_runtime_image", bilingual("runtimeImage 必须是合法的 Docker 镜像引用，且不能包含空格或命令选项。", "runtimeImage must be a valid Docker image reference without spaces or command options."));
+  }
+  let ref;
+  try {
+    ref = registry.resolveRuntime(engineId, { image });
+  } catch (error) {
+    if (error?.code !== "unknown_runtime") throw error;
+    const owner = imageOwner(image, engineId, registry);
+    if (owner) {
+      const label = engineLabel(registry, engineId);
+      const ownerLabel = engineLabel(registry, owner);
+      warnings.push(fieldWarning("runtimeImage", "runtime_other_engine",
+        `这个镜像是 ${ownerLabel.zh} 的运行时，${label.zh} 会把它当作自定义镜像启动`,
+        `This image is a ${ownerLabel.en} runtime; ${label.en} will start it as a custom image`,
+        { engineId: owner }));
+    }
+    return { runtime: { imageOverride: image } };
+  }
+  if (ref.custom) return { runtime: { imageOverride: image } };
+  return RUNTIME_RECIPES[ref.manifestKey]
+    ? { runtimeId: ref.runtimeId, recipeId: RUNTIME_RECIPES[ref.manifestKey] }
+    : { runtimeId: ref.runtimeId };
 }
 
 /**
@@ -380,16 +420,7 @@ function legacyBodyToRequest(body, options = {}) {
   if (!isBlank(body.port)) request.instance.port = Number(body.port);
 
   const image = String(body.runtimeImage ?? "").trim();
-  if (image) {
-    if (!isImageReference(image)) throw badRequest("invalid_runtime_image", "runtimeImage is not a Docker image reference.");
-    const ref = registry.resolveRuntime(engineId, { image });
-    if (ref.custom) {
-      request.runtime = { imageOverride: image };
-    } else {
-      request.runtimeId = ref.runtimeId;
-      if (RUNTIME_RECIPES[ref.manifestKey]) request.recipeId = RUNTIME_RECIPES[ref.manifestKey];
-    }
-  }
+  if (image) Object.assign(request, legacyRuntimeSelection(image, { engineId, registry, warnings }));
   const apiKey = String(body.apiKey ?? "").trim();
   if (apiKey) request.apiKey = apiKey;
   if (multiGpuMode) request.legacy = { multiGpuMode };

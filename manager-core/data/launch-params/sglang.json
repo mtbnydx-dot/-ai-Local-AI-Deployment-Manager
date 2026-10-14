@@ -106,12 +106,20 @@
         { "value": "mtp", "label": { "zh": "MTP / NEXTN（仅限已验证方案）", "en": "MTP / NEXTN (validated recipes only)" } }
       ],
       "platformDefault": "off",
+      "rules": [
+        {
+          "kind": "errorIf",
+          "when": { "and": [{ "in": [{ "param": "speculative.method" }, ["mtp", "qwen3_next_mtp"]] }, { "eq": [{ "fact": "model.nativeMtp.supported" }, false] }] },
+          "code": "mtp_not_in_checkpoint",
+          "message": { "zh": "这个模型的权重里没有 MTP 层，不能使用 MTP 推测解码；请关闭推测解码或换用其他方式。", "en": "This checkpoint has no MTP layers, so MTP speculative decoding cannot start; turn speculative decoding off or pick another method." }
+        }
+      ],
       "legacy": { "field": "speculativeMode", "domId": "speculativeMode" }
     },
     {
       "id": "speculative.numTokens",
       "emit": { "mode": "catalog", "kind": "flag-value", "flag": "--speculative-num-draft-tokens" },
-      "legacy": { "field": "numSpeculativeTokens", "domId": "numSpeculativeTokens" }
+      "legacy": { "field": "numSpeculativeTokens", "domId": "numSpeculativeTokens", "formDefault": 1 }
     },
     {
       "id": "speculative.draftModel",
@@ -138,6 +146,12 @@
     {
       "id": "vllm.loadFormat",
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--load-format", "omitWhen": ["auto", null] },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动", "en": "Auto" } },
+        { "value": "hf", "label": { "zh": "HF / safetensors", "en": "HF / safetensors" } },
+        { "value": "gguf", "label": { "zh": "GGUF 单文件", "en": "Single GGUF file" } },
+        { "value": "safetensors", "label": { "zh": "safetensors（显式传给引擎）", "en": "safetensors (passed to the engine)" } }
+      ],
       "legacy": { "field": "loadFormat", "domId": "loadFormat" }
     },
     {
@@ -274,7 +288,7 @@
       "requiresFeature": "pleOffload",
       "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--ple-offload-embedding" },
       "vramEffect": "offload",
-      "legacy": { "field": "sglangPleOffloadEmbedding", "domId": "sglangPleOffloadEmbedding" }
+      "legacy": { "field": "sglangPleOffloadEmbedding", "domId": "sglangPleOffloadEmbedding", "formDefault": true }
     },
     {
       "id": "sglang.linearAttnPrefillBackend",

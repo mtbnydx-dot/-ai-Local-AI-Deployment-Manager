@@ -225,11 +225,11 @@ function checkChoices(choices, where, errors) {
 function checkLegacy(legacy, where, errors) {
   if (legacy === null) return;
   if (!isPlainObject(legacy)) {
-    errors.push({ path: where, code: "invalid_type", message: `${where} must be {field, aliases?, domId, codec?, unset?} or null.` });
+    errors.push({ path: where, code: "invalid_type", message: `${where} must be {field, aliases?, domId, codec?, unset?, formDefault?} or null.` });
     return;
   }
   for (const key of Object.keys(legacy)) {
-    if (!["field", "aliases", "domId", "codec", "unset"].includes(key)) errors.push({ path: joinPath(where, key), code: "unknown_field", message: `Unknown legacy field ${key}.` });
+    if (!["field", "aliases", "domId", "codec", "unset", "formDefault"].includes(key)) errors.push({ path: joinPath(where, key), code: "unknown_field", message: `Unknown legacy field ${key}.` });
   }
   if (typeof legacy.field !== "string" || !LEGACY_FIELD_PATTERN.test(legacy.field)) {
     errors.push({ path: joinPath(where, "field"), code: "required", message: "legacy.field must name the legacy body/config field." });
@@ -243,6 +243,11 @@ function checkLegacy(legacy, where, errors) {
   // The legacy spelling of "unset" when it is not an empty string (sglangMaxTotalTokens 0).
   if (legacy.unset !== undefined && legacy.unset !== null && !["string", "number", "boolean"].includes(typeof legacy.unset)) {
     errors.push({ path: joinPath(where, "unset"), code: "invalid_type", message: "legacy.unset must be a scalar." });
+  }
+  // The decoded value an untouched legacy form sends (the PLE box is checked
+  // by default): such a value is not a user choice and never warns.
+  if (legacy.formDefault !== undefined && !["string", "number", "boolean"].includes(typeof legacy.formDefault)) {
+    errors.push({ path: joinPath(where, "formDefault"), code: "invalid_type", message: "legacy.formDefault must be a scalar." });
   }
   if (legacy.codec !== undefined && !LEGACY_CODECS.includes(legacy.codec)) {
     errors.push({ path: joinPath(where, "codec"), code: "invalid_value", message: `legacy.codec must be one of ${LEGACY_CODECS.join(", ")}.` });
@@ -474,11 +479,20 @@ function sortParams(params, groupOrder) {
 // File reading
 // ---------------------------------------------------------------------------
 
+// fs messages name the absolute path ("EACCES: permission denied, scandir
+// '<path>'"); catalog errors reach viewer-readable routes, so they carry the
+// error code only. The file stays in the error's own `file` field.
+function readProblem(error, what) {
+  if (error instanceof SyntaxError) return { code: "invalid_json", message: error.message };
+  const code = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(error.code) ? ` (${error.code})` : "";
+  return { code: "unreadable", message: `The ${what} cannot be read${code}.` };
+}
+
 function readJsonFile(file) {
   try {
-    return { ok: true, value: JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, "")) };
+    return { ok: true, value: JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "")) };
   } catch (error) {
-    return { ok: false, error };
+    return { ok: false, error, problem: readProblem(error, "file") };
   }
 }
 
@@ -490,7 +504,7 @@ function listJsonFiles(dir) {
       .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
     return { files, error: null };
   } catch (error) {
-    return { files: [], error: error.code === "ENOENT" ? null : error };
+    return { files: [], error: error.code === "ENOENT" ? null : error, problem: readProblem(error, "directory") };
   }
 }
 
@@ -667,6 +681,22 @@ function fieldError(field, code, zh, en, extra = {}) {
   return { field, code, message: bilingual(zh, en), ...extra };
 }
 
+/**
+ * A legacy value the user did not really choose: unset, omitted from argv,
+ * the platform or engine default, what the untouched legacy form sends
+ * (legacy.formDefault), or an unchecked box. The old forms send every field
+ * for every engine, so such a value never warns when an engine ignores it or
+ * when it has no effect with the current settings.
+ */
+function isQuietLegacyValue(param, value) {
+  if (value === null || value === undefined) return true;
+  if ((param.emit?.omitWhen || []).some((item) => item === value)) return true;
+  for (const fallback of [param.platformDefault, param.engineDefault, param.legacy?.formDefault]) {
+    if (fallback !== null && fallback !== undefined && !isPlainObject(fallback) && fallback === value) return true;
+  }
+  return (param.type === "bool" || param.type === "tristate") && value === false && param.platformDefault !== true;
+}
+
 function choiceValues(choices) {
   return (choices || []).map((choice) => choice.value);
 }
@@ -727,7 +757,7 @@ function createParamCatalog(options = {}) {
     let common = { asOf: "", groups: [], params: new Map(), staleAfterDays: null };
     const commonRead = readJsonFile(commonPath);
     if (!commonRead.ok) {
-      report({ source: "bundled", file: commonPath, engineId: "", path: "", code: "invalid_json", message: commonRead.error.message });
+      report({ source: "bundled", file: commonPath, engineId: "", path: "", ...commonRead.problem });
     } else {
       const headerErrors = [];
       checkFileHeader(commonRead.value, "common", headerErrors);
@@ -756,12 +786,12 @@ function createParamCatalog(options = {}) {
     // Bundled engine files: bindings and engine parameters.
     const engines = new Map();
     const bundled = listJsonFiles(bundledDir);
-    if (bundled.error) report({ source: "bundled", file: bundledDir, engineId: "", path: "", code: "unreadable", message: bundled.error.message });
+    if (bundled.error) report({ source: "bundled", file: bundledDir, engineId: "", path: "", ...bundled.problem });
     for (const file of bundled.files) {
       if (path.basename(file) === COMMON_FILE) continue;
       const read = readJsonFile(file);
       if (!read.ok) {
-        report({ source: "bundled", file, engineId: "", path: "", code: "invalid_json", message: read.error.message });
+        report({ source: "bundled", file, engineId: "", path: "", ...read.problem });
         continue;
       }
       const headerErrors = [];
@@ -789,11 +819,11 @@ function createParamCatalog(options = {}) {
     // Overrides: {kind:"common"|"engine", engineId?, params:[partial or new]} merged by id.
     const commonOverrides = [];
     const overrideFiles = listJsonFiles(overrideDir);
-    if (overrideFiles.error) report({ source: "override", file: overrideDir, engineId: "", path: "", code: "unreadable", message: overrideFiles.error.message });
+    if (overrideFiles.error) report({ source: "override", file: overrideDir, engineId: "", path: "", ...overrideFiles.problem });
     for (const file of overrideFiles.files) {
       const read = readJsonFile(file);
       if (!read.ok) {
-        report({ source: "override", file, engineId: "", path: "", code: "invalid_json", message: read.error.message });
+        report({ source: "override", file, engineId: "", path: "", ...read.problem });
         continue;
       }
       const value = read.value;
@@ -1105,7 +1135,9 @@ function platformDefaultValue(param, catalog, { facts = {}, param: readParam = (
  *
  * values: { paramId: value | { value, source } }. ctx: { facts, legacy }. A
  * legacy body turns not-applicable, managed and not-in-runtime values into
- * warnings (they are ignored, as today); a v2 request gets errors.
+ * warnings (they are ignored, as today) and keeps quiet about form defaults
+ * that have no effect; a v2 request gets errors. A secret param in values is
+ * always an error (secret_in_values): it belongs in the request's apiKey.
  */
 function validateValues(values, catalog, ctx = {}) {
   const errors = [];
@@ -1132,6 +1164,15 @@ function validateValues(values, catalog, ctx = {}) {
     }
     if (value === null || value === undefined) continue;
     const label = param.label;
+    // A key travels as the request's own apiKey field (01 §11): values are
+    // echoed in plans and kept in the launch store. The value is never quoted.
+    if (param.secret) {
+      errors.push(fieldError(id, "secret_in_values",
+        `“${label.zh}”是密钥，不能放在参数值里；请用请求的 ${id} 字段传递`,
+        `"${label.en}" is a secret and cannot be sent in values; send it as the request's ${id} field`,
+        { use: id }));
+      continue;
+    }
     if (param.managed) {
       soft(fieldError(id, "param_managed", `“${label.zh}”由平台管理，不能修改`, `"${label.en}" is managed by the platform and cannot be set`));
       continue;
@@ -1194,7 +1235,11 @@ function validateValues(values, catalog, ctx = {}) {
   for (const param of catalog.params) {
     const compiled = compiledFor(catalog, param.id);
     const isSet = supplied.has(param.id);
-    if (isSet && compiled.appliesWhen?.ok && compiled.appliesWhen.run(exprCtx) === false) {
+    // A legacy body repeats the form's defaults for fields the settings make
+    // irrelevant (one draft token with speculation off); only a changed value
+    // is worth an "inactive" note.
+    const quiet = legacy && isSet && isQuietLegacyValue(param, supplied.get(param.id));
+    if (isSet && !quiet && compiled.appliesWhen?.ok && compiled.appliesWhen.run(exprCtx) === false) {
       warnings.push(fieldError(param.id, "param_inactive", `“${param.label.zh}”在当前设置下不起作用`, `"${param.label.en}" has no effect with the current settings`));
     }
     for (const { rule, when } of compiled.rules) {
@@ -1269,6 +1314,7 @@ module.exports = {
   effectiveChoices,
   getParamCatalog,
   hostFactsFromGpus,
+  isQuietLegacyValue,
   loadCatalog,
   mergeParam,
   paramAvailability,

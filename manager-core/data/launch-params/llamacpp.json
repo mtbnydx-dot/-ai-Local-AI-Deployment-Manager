@@ -289,7 +289,7 @@
     {
       "id": "llamacpp.tensorSplit",
       "group": "parallelism", "level": "advanced", "order": 70,
-      "type": "string", "maxLength": 256, "pattern": "^[0-9]+(?:\\.[0-9]+)?(?:,[0-9]+(?:\\.[0-9]+)?)*$",
+      "type": "string", "maxLength": 256, "pattern": "^ *(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?: *[,/] *(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+))* *$",
       "label": { "zh": "切分比例", "en": "Split ratios" },
       "summary": { "zh": "各张 GPU 分到的模型比例，例如 24,8。留空按推荐方案自动计算。", "en": "The share of the model each GPU gets, for example 24,8. Empty computes the recommended split." },
       "help": {

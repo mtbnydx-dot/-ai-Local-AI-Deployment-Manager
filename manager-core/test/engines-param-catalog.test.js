@@ -424,15 +424,82 @@ test("validateValues: v2 errors, legacy warnings, ranges with suggestions, choic
   const sglang = loader.loadCatalog("sglang");
   assert.deepEqual(paramCatalog.validateValues({ "sglang.enableMetrics": false }, sglang, {}).errors.map((item) => item.code), ["param_managed"]);
 
-  // Rules read params and facts: MTP on a checkpoint without MTP layers warns.
-  const mtp = paramCatalog.validateValues({ "speculative.method": "mtp" }, vllm, { facts: { "model.nativeMtp.supported": false } });
-  assert.deepEqual(mtp.warnings.map((item) => item.code), ["mtp_not_in_checkpoint"]);
-  assert.deepEqual(paramCatalog.validateValues({ "speculative.method": "mtp" }, vllm, { facts: {} }).warnings, []);
+  // Rules read params and facts: MTP on a checkpoint without MTP layers is
+  // refused, as today's checkModelCompatibility refuses it (on both engines).
+  for (const catalog of [vllm, sglang]) {
+    const mtp = paramCatalog.validateValues({ "speculative.method": "mtp" }, catalog, { facts: { "model.nativeMtp.supported": false } });
+    assert.deepEqual(mtp.errors.map((item) => item.code), ["mtp_not_in_checkpoint"], catalog.engineId);
+    assert.deepEqual(mtp.warnings, [], catalog.engineId);
+    assert.deepEqual(paramCatalog.validateValues({ "speculative.method": "mtp" }, catalog, { facts: {} }), { errors: [], warnings: [] }, catalog.engineId);
+    assert.deepEqual(paramCatalog.validateValues({ "speculative.method": "mtp" }, catalog, { facts: { "model.nativeMtp.supported": true } }).errors, [], catalog.engineId);
+  }
 
   // appliesWhen: a value set where it has no effect is reported, not rejected.
   const inactive = paramCatalog.validateValues({ "speculative.method": "off", "speculative.numTokens": 3 }, vllm, {});
   assert.deepEqual(inactive.errors, []);
   assert.deepEqual(inactive.warnings.map((item) => [item.field, item.code]), [["speculative.numTokens", "param_inactive"]]);
+  // A legacy body repeats form defaults for inactive fields: only a changed value is noted.
+  const formDefaults = { "speculative.method": "off", "speculative.numTokens": 1, "sglang.dsparkBlockSize": 7, "sglang.pleOffloadEmbedding": true };
+  assert.deepEqual(paramCatalog.validateValues(formDefaults, sglang, { legacy: true }), { errors: [], warnings: [] });
+  assert.deepEqual(paramCatalog.validateValues({ ...formDefaults, "speculative.numTokens": 4, "sglang.dsparkBlockSize": 9 }, sglang, { legacy: true }).warnings.map((item) => [item.field, item.code]),
+    [["speculative.numTokens", "param_inactive"], ["sglang.dsparkBlockSize", "param_inactive"]]);
+  // v2 requests still hear about every inactive value.
+  assert.deepEqual(paramCatalog.validateValues(formDefaults, sglang, {}).warnings.map((item) => item.field), ["speculative.numTokens", "sglang.dsparkBlockSize"]);
+});
+
+test("validateValues refuses a secret in values without quoting it, in v2 and legacy mode", (t) => {
+  const loader = bundledLoader(t);
+  const fakeKey = "fake-catalog-key-0001";
+  for (const engineId of ENGINES) {
+    const catalog = loader.loadCatalog(engineId);
+    for (const ctx of [{}, { legacy: true }]) {
+      const result = paramCatalog.validateValues({ apiKey: fakeKey, contextLength: 8192 }, catalog, ctx);
+      assert.deepEqual(result.errors.map((item) => [item.field, item.code, item.use]), [["apiKey", "secret_in_values", "apiKey"]], engineId);
+      assert.doesNotMatch(JSON.stringify(result), new RegExp(fakeKey), engineId);
+    }
+    // null is "unset" and harmless.
+    assert.deepEqual(paramCatalog.validateValues({ apiKey: null }, catalog, {}).errors, [], engineId);
+  }
+});
+
+test("quiet legacy values: unset, omitted, defaults, the untouched form's value and unchecked boxes", (t) => {
+  const loader = bundledLoader(t);
+  const sglang = loader.loadCatalog("sglang");
+  const vllm = loader.loadCatalog("vllm");
+  const quiet = (catalog, id, value) => paramCatalog.isQuietLegacyValue(catalog.byId.get(id), value);
+  assert.equal(quiet(sglang, "sglang.pleOffloadEmbedding", true), true, "the PLE box is checked by default");
+  assert.equal(quiet(sglang, "sglang.pleOffloadEmbedding", false), true);
+  assert.equal(quiet(sglang, "speculative.numTokens", 1), true, "the form sends one draft token");
+  assert.equal(quiet(sglang, "speculative.numTokens", 3), false);
+  assert.equal(quiet(sglang, "sglang.maxTotalTokens", null), true);
+  assert.equal(quiet(sglang, "sglang.maxTotalTokens", 4096), false);
+  assert.equal(quiet(vllm, "vllm.distributedExecutorBackend", "auto"), true, "omitted from argv");
+  assert.equal(quiet(vllm, "vllm.distributedExecutorBackend", "ray"), false);
+  assert.equal(quiet(vllm, "speculative.numTokens", 1), true, "platform default");
+  // formDefault is a scalar.
+  const broken = overrideLoader(t, { "a.json": { kind: "engine", engineId: "sglang", params: [{ id: "sglang.pleOffloadEmbedding", legacy: { field: "sglangPleOffloadEmbedding", formDefault: { on: true } } }] } });
+  assert.deepEqual(broken.loadCatalog("sglang").errors.map((item) => [item.path, item.code]), [["params[0].legacy.formDefault", "invalid_type"]]);
+  assert.equal(broken.loadCatalog("sglang").byId.get("sglang.pleOffloadEmbedding").legacy.formDefault, true);
+});
+
+test("an unreadable override directory is reported by error code, without its path", (t) => {
+  const dir = emptyDir(t);
+  const notADir = path.join(dir, "launch-params");
+  fs.writeFileSync(notADir, "not a directory");
+  const loader = paramCatalog.createParamCatalog({ overrideDir: notADir });
+  const problems = loader.status().errors.filter((item) => item.code === "unreadable");
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].source, "override");
+  assert.equal(problems[0].file, notADir);
+  assert.match(problems[0].message, /^The directory cannot be read \([A-Z]+\)\.$/);
+  // The schema payload drops the file and carries no path at all.
+  const payload = paramCatalog.buildSchemaPayload({ catalog: loader.loadCatalog("sglang") });
+  const shared = payload.errors.find((item) => item.code === "unreadable");
+  assert.ok(shared);
+  assert.equal(Object.hasOwn(shared, "file"), false);
+  for (const item of payload.errors) assert.ok(!Object.values(item).some((value) => String(value).includes(dir)), `absolute path in errors[]: ${item.message}`);
+  // The bundled catalog stays in force.
+  assert.ok(loader.loadCatalog("sglang").byId.has("sglang.maxTotalTokens"));
 });
 
 test("platform defaults reproduce today's server defaults, including fact-dependent ones", (t) => {
