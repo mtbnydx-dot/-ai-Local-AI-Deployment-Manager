@@ -56,6 +56,11 @@ const LEGACY_SHIMS = [
 ];
 const MAX_SHIM_LINES = 8;
 const COMPONENT_REGISTRY = "manager-core/data/platform-components.json";
+// The root shim as a command, at a path boundary once %~dp0 and %NAME% are
+// read as folders: "%~dp0platform.cmd", %~dp0..\platform.cmd,
+// "%ROOT%platform.cmd" or a bare platform.cmd. start-platform.cmd and
+// start-tts-platform.cmd merely end in "platform.cmd" and do not count.
+const PLATFORM_CMD_COMMAND = /(?:^|[\s"(&|\\/])platform\.cmd(?=$|[\s"&|)<>])/i;
 
 const repository = repositoryFiles(ROOT);
 
@@ -68,12 +73,16 @@ function trackedFilesOrSkip(t) {
   return repository.files;
 }
 
-function readText(relativePath) {
-  return fs.readFileSync(path.join(ROOT, ...relativePath.split("/")), "utf8").replace(/^\uFEFF/, "");
+function fullPath(relativePath, root = ROOT) {
+  return path.join(root, ...relativePath.split("/"));
 }
 
-function readJson(relativePath) {
-  return JSON.parse(readText(relativePath));
+function readText(relativePath, root = ROOT) {
+  return fs.readFileSync(fullPath(relativePath, root), "utf8").replace(/^\uFEFF/, "");
+}
+
+function readJson(relativePath, root = ROOT) {
+  return JSON.parse(readText(relativePath, root));
 }
 
 function hasBom(bytes) {
@@ -101,12 +110,55 @@ function bomAllowance(root, files) {
 }
 
 /**
- * OPS-8 flips every launcher at once. Until start-platform.cmd calls
- * platform.cmd the launchers keep their full bodies and the README its old
- * wording.
+ * True when a batch file runs the root platform.cmd on some line. rem, :: and
+ * echo lines only mention names, so they never count.
  */
-function legacyShimsLanded() {
-  return fs.existsSync(path.join(ROOT, "platform.cmd")) && /platform\.cmd/i.test(readText("start-platform.cmd"));
+function callsPlatformCmd(text) {
+  return text.split(/\r?\n/).some((line) => {
+    const statement = line.trim().replace(/^@/, "");
+    if (/^(?:rem\b|::|echo\b)/i.test(statement)) return false;
+    return PLATFORM_CMD_COMMAND.test(statement.replace(/%~[a-z]*[0-9]|%[^%\s]+%/gi, "\\"));
+  });
+}
+
+/**
+ * OPS-8 turns every launcher into a platform.cmd shim at once (06 §6.6), so
+ * the shim and README checks start when start-platform.cmd itself calls
+ * platform.cmd. platform.cmd alone (OPS-7a adds it) does not start them, and
+ * neither do the launchers' mentions of start-platform.cmd or
+ * start-tts-platform.cmd. The gate looks at the call only, not the length, so
+ * an over-long shim after OPS-8 fails instead of skipping.
+ */
+function legacyShimsLanded(root = ROOT) {
+  return fs.existsSync(fullPath("start-platform.cmd", root)) && callsPlatformCmd(readText("start-platform.cmd", root));
+}
+
+/** After OPS-8: every §6.6 launcher is at most MAX_SHIM_LINES lines and calls platform.cmd. */
+function legacyShimProblems(root = ROOT) {
+  const problems = [];
+  if (!fs.existsSync(fullPath("platform.cmd", root))) problems.push("platform.cmd is missing, but start-platform.cmd calls it");
+  for (const file of LEGACY_SHIMS) {
+    if (!fs.existsSync(fullPath(file, root))) {
+      problems.push(`${file} is missing`);
+      continue;
+    }
+    const lines = readText(file, root).split(/\r?\n/);
+    while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+    if (lines.length > MAX_SHIM_LINES) problems.push(`${file} has ${lines.length} lines (at most ${MAX_SHIM_LINES})`);
+    if (!callsPlatformCmd(lines.join("\n"))) problems.push(`${file} does not call platform.cmd`);
+  }
+  return problems;
+}
+
+/** { skip: reason } until OPS-4 and OPS-8 have landed, then { problems }. */
+function readmeNodeRangeCheck(root = ROOT) {
+  if (!fs.existsSync(fullPath(COMPONENT_REGISTRY, root)) || !legacyShimsLanded(root)) {
+    return { skip: "requirements.node lands with the component registry (OPS-4) and the README range with OPS-8" };
+  }
+  const { requirements } = readJson(COMPONENT_REGISTRY, root);
+  const range = requirements && requirements.node;
+  if (typeof range !== "string" || !range.trim()) return { problems: [`${COMPONENT_REGISTRY} has no requirements.node`] };
+  return { problems: readText("README.md", root).includes(range) ? [] : [`README.md must state the Node range ${range} exactly`] };
 }
 
 function describeProblems(problems) {
@@ -170,24 +222,112 @@ test("the legacy launcher names stay, and after OPS-8 each one is a short platfo
   assert.deepEqual(missing, [], "06 §6.6 keeps these launcher names (scheduled tasks and habits use them)");
 
   if (!legacyShimsLanded()) return t.skip("the launchers become platform.cmd shims in OPS-8");
-  const problems = [];
-  for (const file of LEGACY_SHIMS) {
-    const lines = readText(file).split(/\r?\n/);
-    while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
-    if (lines.length > MAX_SHIM_LINES) problems.push(`${file} has ${lines.length} lines (at most ${MAX_SHIM_LINES})`);
-    if (!/platform\.cmd/i.test(lines.join("\n"))) problems.push(`${file} does not call platform.cmd`);
-  }
-  assert.deepEqual(problems, []);
+  assert.deepEqual(legacyShimProblems(), []);
 });
 
 test("README states the Node range of requirements.node", (t) => {
-  if (!fs.existsSync(path.join(ROOT, ...COMPONENT_REGISTRY.split("/"))) || !legacyShimsLanded()) {
-    return t.skip("requirements.node lands with the component registry (OPS-4) and the README range with OPS-8");
+  const { skip, problems } = readmeNodeRangeCheck();
+  if (skip) return t.skip(skip);
+  assert.deepEqual(problems, []);
+});
+
+test("only a command that runs the root shim counts as calling platform.cmd", () => {
+  for (const text of [
+    'call "%~dp0platform.cmd" start %1 %2 --legacy-args',
+    'call "%~dp0..\\platform.cmd" stop vllm-manager --open',
+    '"%ROOT%platform.cmd" status',
+    "%~dp0platform.cmd stop all",
+    "@call platform.cmd status entry",
+    'if /i "%~1"=="all" (call "%~dp0platform.cmd" stop all) else (call "%~dp0platform.cmd" stop core)',
+    'rem Usage: shim\r\ncall "%~dp0platform.cmd" start core --lan\r\nexit /b %ERRORLEVEL%',
+  ]) {
+    assert.equal(callsPlatformCmd(text), true, text);
   }
-  const { requirements } = readJson(COMPONENT_REGISTRY);
-  const range = requirements && requirements.node;
-  assert.ok(typeof range === "string" && range.trim(), `${COMPONENT_REGISTRY} has no requirements.node`);
-  assert.ok(readText("README.md").includes(range), `README.md must state the Node range ${range} exactly`);
+  for (const text of [
+    "rem   start-platform.cmd core lan   core with the entry bound to the LAN",
+    "rem Stops the platform processes started by start-platform.cmd.",
+    'call "%ROOT%start-tts-platform.cmd" -GatewayOnly -NoBrowser',
+    'if not exist "%ROOT%start-tts-platform.cmd" (',
+    "  echo start-tts-platform.cmd not found; skipping TTS.",
+    'call "%~dp0start-platform.cmd" core lan',
+    'if exist "%ROOT%stop-platform-mcp.cmd" call "%ROOT%stop-platform-mcp.cmd"',
+    "rem Thin wrapper over platform.cmd",
+    ":: platform.cmd does the work",
+    "echo Run platform.cmd start instead.",
+    'call "%~dp0platform.cmd.bak" start',
+  ]) {
+    assert.equal(callsPlatformCmd(text), false, text);
+  }
+});
+
+// Lines of today's start-platform.cmd that name *platform.cmd files without
+// calling the root shim.
+const LEGACY_START_PLATFORM = [
+  "@echo off",
+  "setlocal",
+  "rem One command for the whole platform.",
+  "rem   start-platform.cmd            core: service entry + both managers (loopback entry)",
+  "rem   start-platform.cmd all lan    same, entry on the LAN",
+  'set "ROOT=%~dp0"',
+  ":startTts",
+  'if not exist "%ROOT%start-tts-platform.cmd" (',
+  "  echo start-tts-platform.cmd not found; skipping TTS.",
+  '  set "ST_TTS=SKIPPED start-tts-platform.cmd not found"',
+  "  exit /b 0",
+  ")",
+  'call "%ROOT%start-tts-platform.cmd" -GatewayOnly -NoBrowser',
+  "exit /b 0",
+  "",
+].join("\r\n");
+const NODE_RANGE = "^22.22.2 || ^24.15.0 || >=26.0.0";
+
+/** The §6.6 shim body for one launcher. */
+function shimBody(file) {
+  const platform = file.includes("/") ? "%~dp0..\\platform.cmd" : "%~dp0platform.cmd";
+  return `@echo off\r\nsetlocal\r\ncall "${platform}" start %*\r\nexit /b %ERRORLEVEL%\r\n`;
+}
+
+test("platform.cmd alone (OPS-7a) leaves the shim and README checks off", async (t) => {
+  const root = await makeRoot(t, "scripts-hygiene-ops7a-");
+  await writeFile(root, "start-platform.cmd", LEGACY_START_PLATFORM);
+  await writeFile(root, "stop-platform.cmd", "@echo off\r\nrem Stops the platform processes started by start-platform.cmd.\r\n");
+  await writeFile(root, "platform.cmd", '@echo off\r\nsetlocal\r\n"%PLATFORM_NODE%" "%~dp0scripts\\platformctl.js" %*\r\nexit /b %ERRORLEVEL%\r\n');
+  await writeFile(root, COMPONENT_REGISTRY, JSON.stringify({ schemaVersion: 1, requirements: { node: NODE_RANGE } }));
+  await writeFile(root, "README.md", "Node.js >=26 or 24 LTS\n");
+
+  assert.equal(legacyShimsLanded(root), false);
+  assert.match(readmeNodeRangeCheck(root).skip, /OPS-8/);
+});
+
+test("after OPS-8 every launcher must be a short platform.cmd shim and README must state requirements.node", async (t) => {
+  const root = await makeRoot(t, "scripts-hygiene-ops8-");
+  await writeFile(root, "platform.cmd", "@echo off\r\n");
+  for (const file of LEGACY_SHIMS) await writeFile(root, file, shimBody(file));
+  await writeFile(root, COMPONENT_REGISTRY, JSON.stringify({ schemaVersion: 1, requirements: { node: NODE_RANGE } }));
+  await writeFile(root, "README.md", `Node.js ${NODE_RANGE}\n`);
+  assert.equal(legacyShimsLanded(root), true);
+  assert.deepEqual(legacyShimProblems(root), []);
+  assert.deepEqual(readmeNodeRangeCheck(root), { problems: [] });
+
+  // A shim that hands over to another launcher, and a launcher that only
+  // mentions start-platform.cmd, do not call platform.cmd.
+  await writeFile(root, "start-service-entry-lan.cmd", '@echo off\r\ncall "%~dp0start-platform.cmd" core lan\r\n');
+  await writeFile(root, "stop-platform.cmd", '@echo off\r\nrem Stops what start-platform.cmd started.\r\ncall "%~dp0stop-service-entry.cmd"\r\n');
+  await writeFile(root, "status-platform.cmd", `${shimBody("status-platform.cmd")}${"rem padding\r\n".repeat(5)}`);
+  await writeFile(root, "README.md", "Node.js >=26\n");
+  await fsp.rm(fullPath("llama-manager/stop-manager.cmd", root));
+  assert.deepEqual(legacyShimProblems(root), [
+    "stop-platform.cmd does not call platform.cmd",
+    "status-platform.cmd has 9 lines (at most 8)",
+    "start-service-entry-lan.cmd does not call platform.cmd",
+    "llama-manager/stop-manager.cmd is missing",
+  ]);
+  assert.deepEqual(readmeNodeRangeCheck(root), { problems: [`README.md must state the Node range ${NODE_RANGE} exactly`] });
+
+  // start-platform.cmd calling a platform.cmd that is not there is a failure, not a skip.
+  await fsp.rm(fullPath("platform.cmd", root));
+  assert.equal(legacyShimsLanded(root), true);
+  assert.equal(legacyShimProblems(root)[0], "platform.cmd is missing, but start-platform.cmd calls it");
 });
 
 test("fixture and helper folders hold no test or spec files", (t) => {

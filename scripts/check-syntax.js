@@ -9,20 +9,24 @@
 // Files come from git (tracked plus untracked-but-not-ignored) at the top of a
 // git work tree. Anywhere else (a deployed live root, an extracted release, a
 // temp dir) the release-manifest.json directories and root files are walked,
-// or the whole root when there is no manifest. node_modules, dist and the
-// manifest's syntaxCheck.skipGlobs are never checked.
+// or the whole root when there is no manifest; the walk leaves out what the
+// release build drops (robocopy excludes, runtime data) unless forceInclude
+// keeps it. node_modules, dist and the manifest's syntaxCheck.skipGlobs are
+// never checked.
 //
-// js   *.cjs is checked as CommonJS with `node --check`. *.mjs, *.js below a
+// js   Every file is checked with its source on stdin, so Node's module
+//      detection never decides: Node 24 returns 0 from `node --check x.js` for
+//      an ESM-syntax file with a syntax error (V13). *.mjs, *.js below a
 //      package.json with "type": "module", files matched by
 //      syntaxCheck.esmGlobs and any *.js with a top-level import or export
-//      statement are checked as ES modules through
-//      `node --input-type=module --check` with the source on stdin: Node 24
-//      returns 0 from `node --check x.js` for an ESM-syntax file with a syntax
-//      error, because module detection skips the check. Everything else uses
-//      `node --check`. Eight checks run at a time.
+//      statement go through `node --input-type=module --check`. Everything
+//      else, *.cjs included, goes through `node --input-type=commonjs --check`,
+//      so module syntax the detection above misses (an indented export, say)
+//      fails instead of passing unchecked. Eight checks run at a time.
 // ps1  One Windows PowerShell call to scripts/check-powershell-syntax.ps1.
 // py   One Python process runs ast.parse over tts-platform/**/*.py. Exit code
-//      77 means Python was not found, and test-all reports a skipped step.
+//      77 means no Python was found; test-all reports a skipped step. A
+//      --python that cannot be started fails the step instead.
 //
 // Exit codes: 0 all files parse, 1 a file failed, 2 usage error, 77 the
 // language's interpreter is missing.
@@ -51,6 +55,9 @@ const POWERSHELL_ARGUMENT_BUDGET = 24000;
 // import.meta are allowed in CommonJS, and "import x" without "from" is the
 // Python statement embedded in some template strings.
 const MODULE_SYNTAX = /^(?:import\s*(?:["'{*]|[\w$]+\s*(?:,\s*[{*]|from\s*["']))|export\s*(?:[{*]|default\b|(?:const|let|var|function\*?|class|async)\s))/m;
+// What Node reports when CommonJS meets an import or export statement.
+const MODULE_SYNTAX_ERROR = /Cannot use import statement outside a module|Unexpected token 'export'/;
+const MISSED_MODULE_HINT = "Hint: if this is an ES module, start its import and export statements at the beginning of a line, or add it to syntaxCheck.esmGlobs in release-manifest.json.";
 
 function toPosix(relativePath) {
   return relativePath.split(path.sep).join("/");
@@ -62,6 +69,11 @@ function list(value) {
 
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** A robocopy /XD or /XF name pattern: "*" and "?" over the whole name, ignoring case. */
+function wildcardToRegExp(pattern) {
+  return new RegExp(`^${Array.from(pattern, (c) => (c === "*" ? ".*" : c === "?" ? "." : escapeRegExp(c))).join("")}$`, "i");
 }
 
 /**
@@ -112,31 +124,55 @@ function gitFiles(root) {
 }
 
 /**
- * Walks what a release would hold: the manifest's directories and root files,
- * leaving out folders the release never ships (robocopy excludes and runtime
- * data). Without a manifest the whole root is walked.
+ * True when a file below the folder (a forward-slash path relative to the
+ * root) can still match the glob: Test-ReleaseGlobPrefix of
+ * build-github-release.ps1.
+ */
+function globReachesBelow(glob, directory) {
+  const globSegments = glob.split("/");
+  const directorySegments = directory.split("/");
+  for (let index = 0; index < directorySegments.length; index += 1) {
+    if (globSegments[index] === "**") return true;
+    if (index === globSegments.length - 1) return false;
+    if (!globToRegExp(globSegments[index]).test(directorySegments[index])) return false;
+  }
+  return true;
+}
+
+/**
+ * Walks what a release would hold, as build-github-release.ps1 copies it: the
+ * manifest's directories without the folder and file names robocopy excludes
+ * (unless a forceInclude glob keeps the file) and without runtime data, plus
+ * the manifest's root files. Without a manifest the whole root is walked.
  */
 function walkFiles(root, manifest) {
-  const skippedNames = new Set(ALWAYS_SKIPPED_DIRECTORIES.map((name) => name.toLowerCase()));
-  const skippedPatterns = [];
-  for (const pattern of list(manifest && manifest.robocopy && manifest.robocopy.excludeDirs)) {
-    if (/[*?]/.test(pattern)) skippedPatterns.push(new RegExp(`^${Array.from(pattern, (c) => (c === "*" ? ".*" : c === "?" ? "." : escapeRegExp(c))).join("")}$`, "i"));
-    else skippedNames.add(pattern.toLowerCase());
-  }
+  const alwaysSkipped = new Set(ALWAYS_SKIPPED_DIRECTORIES.map((name) => name.toLowerCase()));
+  const robocopy = (manifest && manifest.robocopy) || {};
+  const excludedDirs = list(robocopy.excludeDirs).map(wildcardToRegExp);
+  const excludedFiles = list(robocopy.excludeFiles).map(wildcardToRegExp);
+  const forceInclude = list(manifest && manifest.forceInclude);
+  const forceIncluded = forceInclude.map(globToRegExp);
   const runtimeData = new Set(list(manifest && manifest.runtimeDataDirectories).map((directory) => directory.toLowerCase()));
-  const skipDirectory = (name, relativePath) =>
-    skippedNames.has(name.toLowerCase()) || skippedPatterns.some((re) => re.test(name)) || runtimeData.has(relativePath.toLowerCase());
 
   const files = new Set();
-  const pending = manifest ? list(manifest.directories).filter((directory) => fs.existsSync(path.join(root, directory))) : [""];
+  // Each folder carries whether robocopy already dropped it; inside a dropped
+  // folder only forceInclude matches are kept.
+  const pending = manifest
+    ? list(manifest.directories).filter((directory) => fs.existsSync(path.join(root, directory))).map((directory) => ({ directory, dropped: false }))
+    : [{ directory: "", dropped: false }];
   while (pending.length) {
-    const relativeDir = pending.pop();
+    const { directory: relativeDir, dropped } = pending.pop();
     for (const entry of fs.readdirSync(path.join(root, relativeDir), { withFileTypes: true })) {
       const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (!skipDirectory(entry.name, relativePath)) pending.push(relativePath);
+        if (alwaysSkipped.has(entry.name.toLowerCase()) || runtimeData.has(relativePath.toLowerCase())) continue;
+        const droppedHere = dropped || excludedDirs.some((re) => re.test(entry.name));
+        if (!droppedHere || forceInclude.some((glob) => globReachesBelow(glob, relativePath))) {
+          pending.push({ directory: relativePath, dropped: droppedHere });
+        }
       } else if (entry.isFile()) {
-        files.add(relativePath);
+        const droppedHere = dropped || excludedFiles.some((re) => re.test(entry.name));
+        if (!droppedHere || forceIncluded.some((re) => re.test(relativePath))) files.add(relativePath);
       }
     }
   }
@@ -185,7 +221,11 @@ function hasTopLevelModuleSyntax(source) {
   return MODULE_SYNTAX.test(source);
 }
 
-/** Returns file -> the "type" of its nearest package.json at or below root. */
+/**
+ * Returns file -> the "type" its nearest package.json at or below root states,
+ * or "" when that package.json has none (Node then detects module syntax) or
+ * there is no package.json.
+ */
 function createPackageTypeLookup(root) {
   const cache = new Map();
   function typeOfDirectory(relativeDir) {
@@ -193,10 +233,9 @@ function createPackageTypeLookup(root) {
     let type = "";
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(root, relativeDir, "package.json"), "utf8").replace(/^\uFEFF/, ""));
-      type = typeof pkg.type === "string" ? pkg.type : "commonjs";
+      type = typeof pkg.type === "string" ? pkg.type : "";
     } catch (error) {
-      if (error.code !== "ENOENT") type = "commonjs";
-      else if (relativeDir) type = typeOfDirectory(path.posix.dirname(relativeDir) === "." ? "" : path.posix.dirname(relativeDir));
+      if (error.code === "ENOENT" && relativeDir) type = typeOfDirectory(path.posix.dirname(relativeDir) === "." ? "" : path.posix.dirname(relativeDir));
     }
     cache.set(relativeDir, type);
     return type;
@@ -211,18 +250,23 @@ function createPackageTypeLookup(root) {
 function classifyJsFile(file, source, { esmGlobs = [], packageTypeOf = () => "" } = {}) {
   if (/\.cjs$/i.test(file)) return { mode: "cjs", reason: ".cjs" };
   if (/\.mjs$/i.test(file)) return { mode: "esm", reason: ".mjs" };
-  if (packageTypeOf(file) === "module") return { mode: "esm", reason: "package.json type module" };
+  const packageType = packageTypeOf(file);
+  if (packageType === "module") return { mode: "esm", reason: "package.json type module" };
+  // esmGlobs name browser modules, which Node never loads, so they win over the
+  // package type. Node does not detect module syntax below an explicit
+  // "type": "commonjs", so neither does this check.
   if (esmGlobs.some((re) => re.test(file))) return { mode: "esm", reason: "syntaxCheck.esmGlobs" };
+  if (packageType === "commonjs") return { mode: "cjs", reason: "package.json type commonjs" };
   if (hasTopLevelModuleSyntax(source)) return { mode: "esm", reason: "top-level import or export" };
   return { mode: "cjs", reason: "default" };
 }
 
-function run(command, args, { cwd, input, env } = {}) {
+function run(command, args, { cwd, input, env, windowsVerbatimArguments = false } = {}) {
   return new Promise((resolve) => {
     let output = "";
     let child;
     try {
-      child = spawn(command, args, { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(command, args, { cwd, env, windowsHide: true, windowsVerbatimArguments, stdio: ["pipe", "pipe", "pipe"] });
     } catch (error) {
       resolve({ code: null, output: "", error });
       return;
@@ -260,10 +304,10 @@ async function checkJsFiles(files, { root = DEFAULT_ROOT, manifest = null, concu
     const fullPath = path.join(root, ...file.split("/"));
     const source = fs.readFileSync(fullPath, "utf8").replace(/^\uFEFF/, "");
     const { mode, reason } = classifyJsFile(file, source, { esmGlobs, packageTypeOf });
-    const result = mode === "esm"
-      ? await run(process.execPath, ["--input-type=module", "--check"], { cwd: root, input: source })
-      : await run(process.execPath, ["--check", fullPath], { cwd: root });
-    const output = result.error ? result.error.message : result.output.replace(/\[stdin\]/g, file).trim();
+    const inputType = mode === "esm" ? "module" : "commonjs";
+    const result = await run(process.execPath, [`--input-type=${inputType}`, "--check"], { cwd: root, input: source });
+    let output = result.error ? result.error.message : result.output.replace(/\[stdin\]/g, file).trim();
+    if (!result.error && result.code !== 0 && reason === "default" && MODULE_SYNTAX_ERROR.test(output)) output += `\n${MISSED_MODULE_HINT}`;
     return { file, mode, reason, ok: result.code === 0, output };
   });
 }
@@ -310,26 +354,69 @@ async function checkPowerShellFiles(files, { root = DEFAULT_ROOT, executable = p
   return { missing: false, checked: files.length, failed, output: output.trim() };
 }
 
-const PYTHON_CHECKER = [
-  "import ast, json, sys",
-  "failed = 0",
-  "for name in json.loads(sys.stdin.read()):",
-  "    try:",
-  "        with open(name, encoding='utf-8-sig') as handle:",
-  "            ast.parse(handle.read(), filename=name)",
-  "    except SyntaxError as error:",
-  "        failed += 1",
-  "        print('FAILED %s:%s: %s' % (name, error.lineno, error.msg))",
-  "    except (OSError, UnicodeDecodeError, ValueError) as error:",
-  "        failed += 1",
-  "        print('FAILED %s: %s' % (name, error))",
-  "sys.exit(1 if failed else 0)",
-].join("\n");
+/**
+ * The checker script. It runs as "<python> -" with the script on stdin and
+ * carries the file list as an ASCII JSON string, so no argument needs quoting,
+ * not even through cmd.exe.
+ */
+function pythonChecker(files) {
+  const asciiJson = JSON.stringify(files).replace(/[^\x00-\x7e]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return [
+    "import ast, json, sys",
+    "failed = 0",
+    `for name in json.loads(${JSON.stringify(asciiJson)}):`,
+    "    try:",
+    "        with open(name, encoding='utf-8-sig') as handle:",
+    "            ast.parse(handle.read(), filename=name)",
+    "    except SyntaxError as error:",
+    "        failed += 1",
+    "        print('FAILED %s:%s: %s' % (name, error.lineno, error.msg))",
+    "    except (OSError, UnicodeDecodeError, ValueError) as error:",
+    "        failed += 1",
+    "        print('FAILED %s: %s' % (name, error))",
+    "sys.exit(1 if failed else 0)",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The batch file cmd.exe would run for this interpreter name or path, or "".
+ * pyenv-win and similar installs put a python.bat on PATH, which CreateProcess
+ * cannot start, while test-all's own "%PYEXE%" lines run it through cmd.exe.
+ */
+function resolveBatchFile(executable) {
+  if (process.platform !== "win32") return "";
+  if (/\.(?:bat|cmd)$/i.test(executable)) return fs.existsSync(executable) ? path.resolve(executable) : "";
+  if (path.extname(executable) || /[\\/]/.test(executable)) return "";
+  // cmd.exe's order: each PATH folder in turn, each PATHEXT extension in it.
+  // A program found first (python.exe) is started directly, as before.
+  const extensions = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  for (const directory of (process.env.PATH || "").split(path.delimiter)) {
+    const folder = directory.trim().replace(/^"(.*)"$/, "$1");
+    if (!folder) continue;
+    for (const extension of extensions) {
+      const candidate = path.join(folder, `${executable}${extension}`);
+      if (fs.existsSync(candidate)) return /^\.(?:bat|cmd)$/i.test(extension) ? candidate : "";
+    }
+  }
+  return "";
+}
+
+/** How to run "<python> -": { command, args, windowsVerbatimArguments }. */
+function pythonInvocation(executable) {
+  const batch = resolveBatchFile(executable);
+  if (!batch) return { command: executable, args: ["-"], windowsVerbatimArguments: false };
+  // cmd /s /c drops the outer quotes and runs: "<batch>" -
+  return { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `""${batch}" -"`], windowsVerbatimArguments: true };
+}
 
 /** The first candidate that runs as Python 3, or "". */
 function findPython(candidates = process.platform === "win32" ? ["python", "python3"] : ["python3", "python"]) {
   for (const candidate of candidates) {
-    const probe = spawnSync(candidate, ["-c", "import sys; print(sys.version_info[0])"], { encoding: "utf8", windowsHide: true, timeout: 30000 });
+    const { command, args, windowsVerbatimArguments } = pythonInvocation(candidate);
+    const probe = spawnSync(command, args, {
+      input: "import sys\nprint(sys.version_info[0])\n", encoding: "utf8", windowsHide: true, windowsVerbatimArguments, timeout: 30000,
+    });
     if (!probe.error && probe.status === 0 && probe.stdout.trim() === "3") return candidate;
   }
   return "";
@@ -339,12 +426,14 @@ function findPython(candidates = process.platform === "win32" ? ["python", "pyth
 async function checkPythonFiles(files, { root = DEFAULT_ROOT, python = "" } = {}) {
   const executable = python || findPython();
   if (!executable) return { missing: true, checked: 0, failed: 0, output: "Python 3 was not found; pass --python <exe>." };
+  const { command, args, windowsVerbatimArguments } = pythonInvocation(executable);
   // UTF-8 both ways, so non-ASCII paths survive a non-UTF-8 console code page.
   const env = { ...process.env, PYTHONIOENCODING: "utf-8" };
-  const result = await run(executable, ["-c", PYTHON_CHECKER], { cwd: root, input: JSON.stringify(files), env });
+  const result = await run(command, args, { cwd: root, input: pythonChecker(files), env, windowsVerbatimArguments });
   if (result.error) {
-    if (result.error.code === "ENOENT") return { missing: true, checked: 0, failed: 0, output: `${executable} was not found.` };
-    throw result.error;
+    // A --python (test-all passes the one it found) or a just-probed Python
+    // that cannot be started fails the step; only finding none is a skip.
+    return { missing: false, checked: 0, failed: files.length, output: `${executable} could not be started: ${result.error.message}` };
   }
   const failed = (result.output.match(/^FAILED /gm) || []).length;
   if (result.code !== 0 && !failed) {
@@ -449,5 +538,7 @@ module.exports = {
   hasTopLevelModuleSyntax,
   listSyntaxFiles,
   main,
+  pythonInvocation,
   repositoryFiles,
+  resolveBatchFile,
 };
