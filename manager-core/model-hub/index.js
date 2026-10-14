@@ -19,6 +19,7 @@ const { createHubStore, hubWriterIsLive, HUB_FILES, STORE_SCHEMA_VERSION } = req
 const hubSettings = require("./settings");
 const { readHubConfig } = require("./config");
 const hubErrors = require("./errors");
+const { createLibrary } = require("./library");
 
 const DEFAULT_AI_ROOT = path.resolve(__dirname, "..", "..");
 // downloads.json is re-stamped this often while the hub runs; readers treat
@@ -69,9 +70,11 @@ function cliInfo(command) {
 /**
  * createModelHub({ aiRoot, dataDir, hfHome, hfCli, modelScopeCli, secretStore,
  * events, managers, models, env, clock, logger, ... }) → Hub (03 §3.1).
- * Options the later packages consume (modelStorage, fsStore, fetchImpl,
- * getRuntimeLoad, getGpus, getCompatibilityContext, spawnImpl, platform) are
- * accepted and kept on the options object until then.
+ * modelStorage (with fsStore, fit, providers, libraryOptions) switches the
+ * library registry on (HUB-8, 03 §9); without it hub.library is null. The
+ * options the later packages consume (fetchImpl, getRuntimeLoad, getGpus,
+ * getCompatibilityContext, spawnImpl, platform) are accepted and kept on the
+ * options object until then.
  */
 function createModelHub(options = {}) {
   const aiRoot = path.resolve(String(options.aiRoot || DEFAULT_AI_ROOT));
@@ -87,6 +90,23 @@ function createModelHub(options = {}) {
   const modelScopeCli = String(options.modelScopeCli || "");
   const secretStore = options.secretStore || null;
   const models = options.models || null;
+  const library = options.modelStorage
+    ? createLibrary({
+      store,
+      modelStorage: options.modelStorage,
+      fsStore: options.fsStore || null,
+      hfHome,
+      fit: options.fit || null,
+      models,
+      providers: options.providers || null,
+      events: options.events || null,
+      getSettings: () => settings.get(),
+      aiRoot,
+      clock,
+      logger,
+      ...(isPlainObject(options.libraryOptions) ? options.libraryOptions : {}),
+    })
+    : null;
   const readConfig = typeof options.readConfig === "function" ? options.readConfig : () => readHubConfig(aiRoot, env);
 
   let state = "idle";
@@ -166,6 +186,14 @@ function createModelHub(options = {}) {
     migrationSteps = Array.isArray(migrations.value?.steps) ? migrations.value.steps.filter(isPlainObject) : [];
 
     await store.writeDownloads(downloads);
+    if (library) {
+      library.start();
+      // The first scan runs in the background, so a large library never
+      // delays the hub; GET /library shows the persisted registry meanwhile.
+      if (settings.get().library?.rescanOnStart !== false) {
+        library.rescan().catch((error) => warn(`model hub: the start scan failed: ${error?.message || error}`));
+      }
+    }
     heartbeat = setInterval(() => {
       if (state !== "running") return;
       store.writeDownloads(downloads).catch((error) => warn(`model hub: downloads.json heartbeat failed: ${error?.message || error}`));
@@ -198,6 +226,11 @@ function createModelHub(options = {}) {
       state = "stopping";
       if (heartbeat) clearInterval(heartbeat);
       heartbeat = null;
+      try {
+        await library?.stop();
+      } catch (error) {
+        warn(`model hub: stopping the library failed (${reason}): ${error?.message || error}`);
+      }
       try {
         await store.flush();
       } catch {
@@ -238,7 +271,7 @@ function createModelHub(options = {}) {
       speedBps: 0,
       cli: { hf: cliInfo(hfCli), modelscope: cliInfo(modelScopeCli) },
       dataDir,
-      dataErrors: [...storeErrors, ...settings.errors(), ...transferErrors.errors],
+      dataErrors: [...storeErrors, ...settings.errors(), ...transferErrors.errors, ...(library ? library.errors() : [])],
       configErrors: Array.isArray(config.errors) ? config.errors : [],
       migration: { done: migrationDone() },
       features: { runAfter: false, rememberToken: Boolean(secretStore), models: Boolean(models) },
@@ -270,8 +303,13 @@ function createModelHub(options = {}) {
         return settings.update(patch);
       },
     },
-    // 06 OPS-13's busy probe; the queue fills it in (HUB-7).
-    busy: () => ({ downloads: 0, verifying: 0 }),
+    // The registry (03 §9), null until a modelStorage is given. Later
+    // packages add checkUpdate, update, importCache, remove and cleanupResidue.
+    library,
+    // GET /api/hub/tasks/:id: library tasks (rescan, verify), in memory.
+    tasks: { get: (id) => (library ? library.getTask(id) : null) },
+    // 06 OPS-13's busy probe; the queue fills in downloads (HUB-7).
+    busy: () => ({ downloads: 0, verifying: library ? library.activeVerifications() : 0 }),
     get state() {
       return state;
     },

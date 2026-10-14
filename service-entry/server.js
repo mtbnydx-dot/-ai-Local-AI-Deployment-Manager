@@ -847,10 +847,22 @@ async function startServiceEntry() {
 function createEntryHub({ events = null } = {}) {
   try {
     const { hfCli, modelScopeCli } = discoverHubClis({ aiRoot: AI_ROOT, env: process.env });
+    const hfHome = process.env.HF_HOME || path.join(AI_ROOT, "cache", "huggingface");
+    // The same storage registry the managers use (03 §3): roots and aliases
+    // live in the shared model-storage.json; the hub reads them for the
+    // library (03 §9) and never writes it.
+    const modelsRoot = process.env.VLLM_MODELS_ROOT || path.join(AI_ROOT, "models");
+    const modelStorage = core.createModelStorage({
+      modelsRoot,
+      file: process.env.MODEL_STORAGE_FILE || path.join(ROOT, "data", "model-storage.json"),
+    });
+    const fsStore = core.createModelFilesystemStore({ storage: modelStorage, modelsRoot, hfCache: hfHome, listRoots: () => modelStorage.roots() });
     return createModelHub({
       aiRoot: AI_ROOT,
       dataDir: path.join(ROOT, "data", "hub"),
-      hfHome: process.env.HF_HOME || path.join(AI_ROOT, "cache", "huggingface"),
+      hfHome,
+      modelStorage,
+      fsStore,
       hfCli,
       modelScopeCli,
       events,
