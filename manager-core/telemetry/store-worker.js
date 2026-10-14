@@ -12,12 +12,18 @@
 // answers every {type:"call", id, method, args} with {type:"result", id, ok,
 // result|error}. Log lines go to the parent as {type:"log", level, message};
 // the worker never writes to a log sink itself.
+//
+// Background jobs (§2, §10, §4.3): with `jobs.enabled` the worker itself runs
+// the rollup job every 30 s and the retention job every hour, so neither
+// needs a call from the gateway's event loop. They are off by default (tests
+// and tools open the store without them); configureJobs() changes them live.
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { isMainThread, parentPort, workerData } = require("node:worker_threads");
 const schema = require("./schema");
+const rollups = require("./rollups");
 const { redactSecrets, redactValue } = require("../secret-redactor");
 const { maskAddress } = require("../auth-failure-guard");
 
@@ -31,12 +37,14 @@ const CORE_METHODS = Object.freeze([
   "call",
   "runRollups",
   "runRetention",
+  "configureJobs",
   "getState",
   "setState",
   "stats",
   "close",
 ]);
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 // §4.3: batches of 5000 rows, 20 ms between batches, incremental_vacuum(2000)
 // after each pass and PRAGMA optimize once a day. Unit tests shrink the batch.
 const RETENTION_DEFAULTS = Object.freeze({
@@ -45,6 +53,30 @@ const RETENTION_DEFAULTS = Object.freeze({
   vacuumPages: 2000,
   optimizeEveryMs: DAY_MS,
 });
+// The worker's own schedule (§2: RollupJob 30 s, RetentionJob 1 h). The first
+// rollup runs soon after open to catch up after a restart; the first
+// retention pass waits until one is due, but never runs during startup.
+// maxDbMb, timezoneOffsetMinutes and ttl are the telemetry.* settings (§20);
+// timezoneOffsetMinutes null means the host offset.
+const JOB_DEFAULTS = Object.freeze({
+  enabled: false,
+  rollupEveryMs: 30_000,
+  retentionEveryMs: HOUR_MS,
+  firstRollupDelayMs: 5_000,
+  firstRetentionDelayMs: 60_000,
+  rollupBudgetMs: rollups.DEFAULT_BUDGET_MS,
+  sampleIntervalMs: 10_000,
+  maxDbMb: 2048,
+  timezoneOffsetMinutes: null,
+  ttl: null,
+});
+const JOB_TIMINGS = Object.freeze([
+  "rollupEveryMs", "retentionEveryMs", "firstRollupDelayMs", "firstRetentionDelayMs", "rollupBudgetMs", "sampleIntervalMs",
+]);
+// §4.3 size guard: when the file outgrows telemetry.maxDbMb, raw requests
+// older than this and samples older than this go first.
+const SIZE_GUARD = Object.freeze({ requestsDays: 7, samplesHours: 12 });
+const PRESSURE_I18N_KEY = "obs.event.retentionPressure";
 const MAX_ROW_ERRORS = 20;
 const MAX_STATE_BYTES = 256 * 1024;
 const GENESIS_HASH = "0".repeat(64);
@@ -272,6 +304,54 @@ function normalizeTtl(ttl) {
   return output;
 }
 
+// A ttl patch on top of `current` (a normalised ttl, or null for the
+// defaults): keys the patch supplies as numbers replace, every other key keeps
+// its current value. normalizeTtl alone would put them back to the defaults,
+// and the next retention pass would delete what the owner chose to keep.
+// ipDays stays clamped to requestsDays, so a patch that raises requestsDays
+// past an earlier ipDays should carry ipDays too.
+function mergeTtl(current, patch) {
+  const output = { ...normalizeTtl(current) };
+  if (patch && typeof patch === "object") {
+    for (const key of Object.keys(schema.TTL_DEFAULTS)) {
+      const number = suppliedNumber(patch[key]);
+      if (number !== null) output[key] = number;
+    }
+  }
+  return normalizeTtl(output);
+}
+
+// Merges a jobs patch into `previous`. Unset keys keep their value, also
+// inside ttl (mergeTtl). An invalid time zone offset throws
+// invalid_timezone_offset when `strict` (configureJobs); at open it is logged
+// and the previous value is kept, so a bad setting never takes the store down.
+function normalizeJobs(input, previous, { strict = false, log = () => {} } = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const output = { ...previous };
+  if (typeof source.enabled === "boolean") output.enabled = source.enabled;
+  for (const key of JOB_TIMINGS) {
+    const number = suppliedNumber(source[key]);
+    if (number !== null && number >= 0) output[key] = Math.floor(number);
+  }
+  // Timers below 10 ms would spin the worker.
+  output.rollupEveryMs = Math.max(10, output.rollupEveryMs);
+  output.retentionEveryMs = Math.max(10, output.retentionEveryMs);
+  const maxDbMb = suppliedNumber(source.maxDbMb);
+  if (maxDbMb !== null && maxDbMb > 0) output.maxDbMb = maxDbMb;
+  output.ttl = mergeTtl(output.ttl, source.ttl);
+  const hasOffset = Object.prototype.hasOwnProperty.call(source, "timezoneOffsetMinutes");
+  if (hasOffset || output.timezoneOffsetMinutes === null || output.timezoneOffsetMinutes === undefined) {
+    try {
+      output.timezoneOffsetMinutes = rollups.normalizeTimezoneOffset(hasOffset ? source.timezoneOffsetMinutes : null);
+    } catch (error) {
+      if (strict) throw error;
+      if (!Number.isInteger(output.timezoneOffsetMinutes)) output.timezoneOffsetMinutes = rollups.hostTimezoneOffsetMinutes();
+      log("warn", `${error.message} Keeping ${output.timezoneOffsetMinutes}.`);
+    }
+  }
+  return output;
+}
+
 function pickPositiveNumbers(input, defaults) {
   const output = { ...defaults };
   if (!input || typeof input !== "object") return output;
@@ -430,6 +510,15 @@ function createStoreCore(options = {}) {
   const log = typeof options.log === "function" ? options.log : () => {};
   const file = resolveDatabaseFile(options.file);
   const retentionOptions = pickPositiveNumbers(options.retention, RETENTION_DEFAULTS);
+  // Unit tests inject a fake clock for the job schedule; the worker always
+  // uses the real one (functions cannot cross the worker boundary).
+  const clock = {
+    now: Date.now,
+    setTimeout: (callback, ms) => setTimeout(callback, ms),
+    clearTimeout: (timer) => clearTimeout(timer),
+    ...(options.clock && typeof options.clock === "object" ? options.clock : {}),
+  };
+  let jobs = normalizeJobs(options.jobs, JOB_DEFAULTS, { log });
   const queryModuleFile = options.queryModule ? path.resolve(String(options.queryModule)) : path.join(__dirname, "query.js");
   const { DatabaseSync } = require("node:sqlite");
 
@@ -451,6 +540,9 @@ function createStoreCore(options = {}) {
   // Set by beginClose(): a yielding retention pass stops at its next batch.
   let stopping = false;
   let retentionRunning = false;
+  let rollupsRunning = false;
+  const jobTimers = new Map();
+  const jobRuns = { rollup: null, retention: null };
   let queryModule;
   // requests rows with received_at below this are masked as they are
   // inserted. It is the cutoff of the last masking pass, and a pass moves it
@@ -550,7 +642,8 @@ function createStoreCore(options = {}) {
   // rejected alone; a disk, lock or I/O failure drops the whole batch, which
   // is counted and reported instead of thrown (§22). A lock that outlasts
   // busy_timeout is reported as retryable, so the caller keeps the rows.
-  function insertRows(table, rows, { prepareRow, finishRow } = {}) {
+  // `afterInsert(spec, valuesOfInsertedRows)` runs inside the transaction.
+  function insertRows(table, rows, { prepareRow, finishRow, afterInsert } = {}) {
     assertOpen();
     if (!Array.isArray(rows)) throw rowError("invalid_rows");
     const list = rows;
@@ -558,6 +651,7 @@ function createStoreCore(options = {}) {
     if (!list.length) return result;
     const spec = specFor(table);
     const tally = counters(table);
+    const inserted = afterInsert ? [] : null;
     let masked = 0;
     const reject = (index, error) => {
       result.rejected += 1;
@@ -583,6 +677,7 @@ function createStoreCore(options = {}) {
             if (Number(outcome.changes) > 0) {
               result.accepted += 1;
               if (rewritten) masked += 1;
+              if (inserted) inserted.push(values);
             } else {
               result.duplicates += 1;
             }
@@ -591,6 +686,7 @@ function createStoreCore(options = {}) {
             reject(index, { code: "constraint_failed" });
           }
         }
+        if (inserted && inserted.length) afterInsert(spec, inserted);
       });
     } catch (error) {
       logFailureOnce(`insert into ${table}`, error);
@@ -609,6 +705,19 @@ function createStoreCore(options = {}) {
     tally.rejected += result.rejected;
     maskedOnInsert += masked;
     return result;
+  }
+
+  // §10 late data: rows whose minute is already rolled mark it dirty, in the
+  // insert's own transaction (rollups.markLate).
+  function markLateRows(family, timeColumn) {
+    return (spec, list) => {
+      const at = spec.index[timeColumn];
+      const gpu = family === "gpu" ? spec.index.gpu_index : undefined;
+      rollups.markLate(db, family, list.map((values) => ({
+        at: values[at],
+        gpuIndex: gpu === undefined ? undefined : values[gpu],
+      })));
+    };
   }
 
   function prepareEvent(event) {
@@ -697,14 +806,78 @@ function createStoreCore(options = {}) {
     return queries[name](db, params === undefined ? {} : params);
   }
 
-  // Rollups are TEL-10's rollups.js. Until it is installed this reports a skip.
-  function runRollups(now) {
-    assertOpen();
-    const rollups = optionalModule(path.join(__dirname, "rollups.js"));
-    if (!rollups || typeof rollups.runRollups !== "function") {
-      return { ok: true, skipped: true, reason: "rollups_unavailable" };
+  // The rollup settings of one run: the job configuration, overridden by the
+  // caller's options ({timezoneOffsetMinutes, ttl, sampleIntervalMs,
+  // budgetMs}). A ttl there patches the job's ttl (mergeTtl).
+  function rollupSettings(options) {
+    const input = options && typeof options === "object" ? options : {};
+    const settings = {
+      timezoneOffsetMinutes: jobs.timezoneOffsetMinutes,
+      ttl: jobs.ttl,
+      sampleIntervalMs: jobs.sampleIntervalMs,
+      budgetMs: jobs.rollupBudgetMs,
+    };
+    if (Object.prototype.hasOwnProperty.call(input, "timezoneOffsetMinutes")) {
+      settings.timezoneOffsetMinutes = rollups.normalizeTimezoneOffset(input.timezoneOffsetMinutes);
     }
-    return rollups.runRollups(db, toEpochMs(now) ?? Date.now());
+    settings.ttl = mergeTtl(jobs.ttl, input.ttl);
+    for (const key of ["sampleIntervalMs", "budgetMs"]) {
+      const number = suppliedNumber(input[key]);
+      if (number !== null && number >= 0) settings[key] = number;
+    }
+    return settings;
+  }
+
+  // §10. Each rollups.runRollups step does a bounded amount of work; between
+  // steps the worker yields, so inserts queued behind a long catch-up (after
+  // a restart, or an import that dirtied many minutes) still run. Every step
+  // that asks for more has handled at least one unit; one that did not would
+  // spin here forever and block every later run, so it ends the catch-up
+  // (more:true) and the next scheduled run continues.
+  async function runRollups(now, options) {
+    assertRunning();
+    const settings = rollupSettings(options);
+    if (rollupsRunning) return { ok: false, skipped: true, reason: "rollups_running" };
+    rollupsRunning = true;
+    const at = toEpochMs(now) ?? clock.now();
+    const started = Date.now();
+    const totals = { closed: { "1m": 0, "1h": 0, "1d": 0 }, recomputed: { "1m": 0, "1h": 0, "1d": 0 }, droppedDirty: 0, steps: 0 };
+    try {
+      let step;
+      for (;;) {
+        assertRunning();
+        step = rollups.runRollups(db, at, settings);
+        totals.steps += 1;
+        totals.droppedDirty += step.droppedDirty;
+        for (const grain of rollups.GRAINS) {
+          totals.closed[grain] += step.closed[grain];
+          totals.recomputed[grain] += step.recomputed[grain];
+        }
+        if (!step.more) break;
+        if (!(step.units > 0)) {
+          const stalled = new Error("A rollup step asked for more work without doing any.");
+          stalled.code = "rollups_no_progress";
+          logFailureOnce("rollups", stalled);
+          break;
+        }
+        await delay(retentionOptions.yieldMs);
+      }
+      return {
+        ok: true,
+        at,
+        durationMs: Date.now() - started,
+        ...totals,
+        more: Boolean(step.more),
+        dirtyPending: step.dirtyPending,
+        watermarks: step.watermarks,
+      };
+    } catch (error) {
+      if (closed || stopping) return { ok: false, aborted: true, reason: "store_closed" };
+      logFailureOnce("rollups", error);
+      return { ok: false, error: errorCode(error) };
+    } finally {
+      rollupsRunning = false;
+    }
   }
 
   async function deleteInBatches(table, whereSql, params, tally) {
@@ -775,10 +948,100 @@ function createStoreCore(options = {}) {
     return maskPages(select, [fromId, cutoffMs], (last) => [Number(last.id), cutoffMs]);
   }
 
-  async function retentionPass(at, ttl) {
+  // The oldest time each input still has rows for: raw requests, raw samples,
+  // 1m and 1h rollups. Raised before a delete starts and never lowered, so
+  // the rollup job never rebuilds a bucket from inputs a pass is pruning or
+  // already pruned (the size guard deletes below the TTL).
+  function raiseFloors(values) {
+    const floors = getState("retention.floors") || {};
+    let changed = false;
+    for (const [name, value] of Object.entries(values)) {
+      const current = Number(floors[name]);
+      if (Number.isFinite(value) && (!Number.isFinite(current) || value > current)) {
+        floors[name] = value;
+        changed = true;
+      }
+    }
+    if (changed) setState("retention.floors", floors);
+  }
+
+  function pragmaNumber(name) {
+    return Number(Object.values(db.prepare(`PRAGMA ${name}`).get())[0]);
+  }
+
+  function databaseBytes() {
+    return pragmaNumber("page_count") * pragmaNumber("page_size");
+  }
+
+  // Gives every free page back to the file system: incremental_vacuum in
+  // steps of vacuumPages with a yield between them, so inserts queued behind
+  // it still run. Stops when the freelist is empty or no longer shrinks (a
+  // file created without auto_vacuum=INCREMENTAL cannot shrink this way).
+  async function vacuumFreePages() {
+    let free = pragmaNumber("freelist_count");
+    while (free > 0) {
+      assertRunning();
+      db.exec(`PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
+      const left = pragmaNumber("freelist_count");
+      if (left >= free) return;
+      free = left;
+      if (free > 0) await delay(retentionOptions.yieldMs);
+    }
+  }
+
+  // §4.3 size guard: past telemetry.maxDbMb, raw requests older than 7 days
+  // and samples older than 12 hours are deleted first (their rollups stay),
+  // and a telemetry.retention.pressure warning is recorded. Free pages count
+  // in page_count until they are vacuumed (2000 per pass), so they go back
+  // first: a file that is large only because of an earlier big delete loses
+  // no rows.
+  async function applySizeGuard(at, maxDbMb, tally) {
+    const limitMb = suppliedNumber(maxDbMb);
+    if (limitMb === null || !(limitMb > 0)) return null;
+    const maxDbBytes = Math.floor(limitMb * 1024 * 1024);
+    if (databaseBytes() <= maxDbBytes) return null;
+    await vacuumFreePages();
+    const dbBytes = databaseBytes();
+    if (dbBytes <= maxDbBytes) return null;
+    const requestsBefore = at - SIZE_GUARD.requestsDays * DAY_MS;
+    const samplesBefore = at - SIZE_GUARD.samplesHours * HOUR_MS;
+    raiseFloors({ requests: requestsBefore, samples: samplesBefore });
+    const before = { ...tally.deleted };
+    await deleteInBatches("requests", `${quoteIdentifier("received_at")} < ?`, [requestsBefore], tally);
+    await deleteInBatches("runtime_samples", `${quoteIdentifier("at")} < ?`, [samplesBefore], tally);
+    await deleteInBatches("gpu_samples", `${quoteIdentifier("at")} < ?`, [samplesBefore], tally);
+    const deleted = {};
+    for (const [table, count] of Object.entries(tally.deleted)) {
+      if (count > (before[table] || 0)) deleted[table] = count - (before[table] || 0);
+    }
+    const pressure = { dbBytes, maxDbBytes, requestsBefore, samplesBefore, deleted };
+    assertRunning();
+    insertRows("events", [{
+      at,
+      type: "telemetry.retention.pressure",
+      severity: "warning",
+      source: "telemetry",
+      title: "Telemetry database is over its size limit; older raw rows were deleted",
+      // §9: titles are English; the console localises by data.i18nKey (the
+      // telemetry i18n area owns obs.*).
+      data: { i18nKey: PRESSURE_I18N_KEY, ...pressure },
+    }], { prepareRow: prepareEvent });
+    log("warn", `Telemetry database is ${dbBytes} bytes, over its ${maxDbBytes}-byte limit; `
+      + `deleted raw requests before ${new Date(requestsBefore).toISOString()} and samples before ${new Date(samplesBefore).toISOString()}.`);
+    return pressure;
+  }
+
+  async function retentionPass(at, ttl, options = {}) {
     const started = Date.now();
     const previous = getState("retention") || {};
     const tally = { deleted: {}, batches: {} };
+    const pressure = await applySizeGuard(at, options.maxDbMb, tally);
+    raiseFloors({
+      requests: at - ttl.requestsDays * DAY_MS,
+      samples: at - ttl.samplesHours * HOUR_MS,
+      minute: at - ttl.minuteDays * DAY_MS,
+      hour: at - ttl.hourDays * DAY_MS,
+    });
     for (const target of schema.RETENTION_TARGETS) {
       const cutoff = at - ttl[target.ttl] * target.unitMs;
       await deleteInBatches(target.table, `${quoteIdentifier(target.column)} < ?`, [cutoff], tally);
@@ -807,7 +1070,9 @@ function createStoreCore(options = {}) {
     const sinceId = Number.isFinite(previousMaxId) ? previousMaxId : Number.isFinite(watermark) ? 0 : null;
     if (sinceId !== null) masked += await maskInsertedSince(sinceId, ipCutoff);
     assertRunning();
-    db.exec(`PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
+    // Under pressure every free page goes back, so the file really shrinks.
+    if (pressure) await vacuumFreePages();
+    else db.exec(`PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
     let lastOptimizeAt = Number(previous.lastOptimizeAt) || 0;
     let optimized = false;
     if (at - lastOptimizeAt >= retentionOptions.optimizeEveryMs) {
@@ -831,17 +1096,21 @@ function createStoreCore(options = {}) {
       ttl,
     };
     setState("retention", summary);
-    return { ok: true, ...summary, optimized };
+    return { ok: true, ...summary, optimized, pressure };
   }
 
   // Deletes in batches and yields between them, so inserts queued behind a
-  // long pass still run (each batch is its own short transaction).
-  async function runRetention(now, ttl) {
+  // long pass still run (each batch is its own short transaction). `ttl`
+  // patches the job's telemetry.retention settings (keys it leaves out keep
+  // the job's value), and options.maxDbMb defaults to its telemetry.maxDbMb.
+  async function runRetention(now, ttl, options) {
     assertRunning();
     if (retentionRunning) return { ok: false, skipped: true, reason: "retention_running" };
     retentionRunning = true;
+    const input = options && typeof options === "object" ? options : {};
+    const maxDbMb = suppliedNumber(input.maxDbMb) ?? jobs.maxDbMb;
     try {
-      return await retentionPass(toEpochMs(now) ?? Date.now(), normalizeTtl(ttl));
+      return await retentionPass(toEpochMs(now) ?? clock.now(), mergeTtl(jobs.ttl, ttl), { maxDbMb });
     } catch (error) {
       if (closed || stopping) return { ok: false, aborted: true, reason: "store_closed" };
       logFailureOnce("retention", error);
@@ -849,6 +1118,93 @@ function createStoreCore(options = {}) {
     } finally {
       retentionRunning = false;
     }
+  }
+
+  // ---- background jobs (§2): rollups every 30 s, retention every hour.
+
+  function cancelJob(name) {
+    const timer = jobTimers.get(name);
+    if (timer === undefined) return;
+    jobTimers.delete(name);
+    clock.clearTimeout(timer);
+  }
+
+  function stopJobs() {
+    for (const name of Array.from(jobTimers.keys())) cancelJob(name);
+  }
+
+  function scheduleJob(name, delayMs, run) {
+    cancelJob(name);
+    if (!jobs.enabled || stopping || closed) return;
+    const timer = clock.setTimeout(() => {
+      jobTimers.delete(name);
+      run();
+    }, Math.max(0, delayMs));
+    if (timer && typeof timer.unref === "function") timer.unref();
+    jobTimers.set(name, timer);
+  }
+
+  function noteJobRun(name, result, started) {
+    jobRuns[name] = {
+      at: started,
+      durationMs: Math.max(0, clock.now() - started),
+      ok: Boolean(result && result.ok !== false),
+      error: (result && result.error) || null,
+    };
+  }
+
+  async function rollupJob() {
+    const started = clock.now();
+    try {
+      noteJobRun("rollup", await runRollups(started), started);
+    } catch (error) {
+      logFailureOnce("scheduled rollups", error);
+      noteJobRun("rollup", { ok: false, error: errorCode(error) }, started);
+    } finally {
+      scheduleJob("rollup", jobs.rollupEveryMs, rollupJob);
+    }
+  }
+
+  async function retentionJob() {
+    const started = clock.now();
+    try {
+      noteJobRun("retention", await runRetention(started, jobs.ttl, { maxDbMb: jobs.maxDbMb }), started);
+    } catch (error) {
+      logFailureOnce("scheduled retention", error);
+      noteJobRun("retention", { ok: false, error: errorCode(error) }, started);
+    } finally {
+      scheduleJob("retention", jobs.retentionEveryMs, retentionJob);
+    }
+  }
+
+  // The next retention pass is due an hour after the last one (state survives
+  // restarts, so frequent deploys do not postpone it forever).
+  function startJobs() {
+    stopJobs();
+    if (!jobs.enabled || stopping || closed) return;
+    scheduleJob("rollup", jobs.firstRollupDelayMs, rollupJob);
+    const lastRunAt = Number((getState("retention") || {}).lastRunAt);
+    const due = Number.isFinite(lastRunAt) ? lastRunAt + jobs.retentionEveryMs - clock.now() : 0;
+    scheduleJob("retention", Math.min(jobs.retentionEveryMs, Math.max(jobs.firstRetentionDelayMs, due)), retentionJob);
+  }
+
+  function describeJobs() {
+    return {
+      ...jobs,
+      ttl: { ...jobs.ttl },
+      scheduled: Array.from(jobTimers.keys()).sort(),
+      lastRuns: { rollup: jobRuns.rollup, retention: jobRuns.retention },
+    };
+  }
+
+  // Live settings (§20): telemetry.retention.*, maxDbMb and
+  // timezoneOffsetMinutes apply without a restart. Unset keys keep their
+  // value; an offset that is not a whole hour is refused.
+  function configureJobs(patch) {
+    assertRunning();
+    jobs = normalizeJobs(patch, jobs, { strict: true, log });
+    startJobs();
+    return { ok: true, jobs: describeJobs() };
   }
 
   function fileSize(target) {
@@ -906,36 +1262,50 @@ function createStoreCore(options = {}) {
       writes: JSON.parse(JSON.stringify(writes)),
       retention: getState("retention"),
       masking: { maskBefore: maskThreshold(), maskedOnInsert },
+      rollups: {
+        ...(getState("rollup") || {}),
+        watermarks: Object.fromEntries(rollups.GRAINS.map((grain) => [grain, (getState(`rollup.${grain}`) || {}).watermark ?? null])),
+      },
+      jobs: describeJobs(),
       degraded: [],
     };
   }
 
   // Called before close() while in-flight calls drain: a yielding retention
-  // pass stops at its next batch boundary and resolves { aborted: true }.
+  // pass or rollup catch-up stops at its next batch boundary and resolves
+  // { aborted: true }, and no scheduled job starts any more.
   function beginClose() {
     stopping = true;
+    stopJobs();
     return { ok: true };
   }
 
   function close() {
     if (closed) return { ok: true };
     stopping = true;
+    stopJobs();
     closed = true;
     try { db.exec("PRAGMA optimize"); } catch {}
     db.close();
     return { ok: true };
   }
 
+  startJobs();
+
   return {
     info: { file, thread: isMainThread ? "main" : "worker", schemaVersion: migration.to, migration },
-    insertRequests: (rows) => insertRows("requests", rows, { finishRow: maskStaleRequest }),
-    insertRuntimeSamples: (rows) => insertRows("runtime_samples", rows),
-    insertGpuSamples: (rows) => insertRows("gpu_samples", rows),
+    insertRequests: (rows) => insertRows("requests", rows, {
+      finishRow: maskStaleRequest,
+      afterInsert: markLateRows("requests", "received_at"),
+    }),
+    insertRuntimeSamples: (rows) => insertRows("runtime_samples", rows, { afterInsert: markLateRows("runtime", "at") }),
+    insertGpuSamples: (rows) => insertRows("gpu_samples", rows, { afterInsert: markLateRows("gpu", "at") }),
     insertEvents: (rows) => insertRows("events", rows, { prepareRow: prepareEvent }),
     appendAuditAccess,
     call,
     runRollups,
     runRetention,
+    configureJobs,
     getState,
     setState,
     stats,
@@ -991,6 +1361,8 @@ module.exports = {
   WORKER_KIND,
   CORE_METHODS,
   RETENTION_DEFAULTS,
+  JOB_DEFAULTS,
+  SIZE_GUARD,
   GENESIS_HASH,
   AUDIT_HASH_FIELDS,
   createStoreCore,
@@ -999,4 +1371,5 @@ module.exports = {
   auditChainHash,
   maskClientIp,
   normalizeTtl,
+  normalizeJobs,
 };
