@@ -1,0 +1,813 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "case": "headings, paragraphs and emphasis",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "heading",
+            "level": 1,
+            "children": [
+              {
+                "type": "text",
+                "text": "Title"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "Some "
+              },
+              {
+                "type": "strong",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "bold"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": ", "
+              },
+              {
+                "type": "em",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "italic"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": ", "
+              },
+              {
+                "type": "del",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "gone"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " and "
+              },
+              {
+                "type": "code",
+                "text": "code"
+              },
+              {
+                "type": "text",
+                "text": "."
+              }
+            ]
+          },
+          {
+            "type": "heading",
+            "level": 1,
+            "children": [
+              {
+                "type": "text",
+                "text": "Setext"
+              }
+            ]
+          },
+          {
+            "type": "heading",
+            "level": 2,
+            "children": [
+              {
+                "type": "text",
+                "text": "Second"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "raw script block stays text",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "<script>alert(1)</script>"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "after"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "raw html inside a paragraph stays text",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "hello <b onclick=\"x()\">bold</b> <img src=x onerror=alert(1)> end"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "nested html",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "<div><div><iframe src=\"https://evil.invalid\"></iframe></div></div>"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "html comment and cdata",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "<!-- hidden --> text <![CDATA[ x ]]>"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "javascript links are dropped",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "a b c [d](java\tscript:alert(1)) e"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "other unsafe schemes are dropped",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "a b c d e"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "safe links survive",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "link",
+                "href": "https://example.invalid/a?b=1#c",
+                "title": "",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "web"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "link",
+                "href": "./docs/readme.md",
+                "title": "",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "rel"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "link",
+                "href": "../x",
+                "title": "",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "up"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "link",
+                "href": "#top",
+                "title": "",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "anchor"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "link",
+                "href": "?page=2",
+                "title": "",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "query"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "link",
+                "href": "https://example.invalid/auto",
+                "title": "",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "https://example.invalid/auto"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "unsafe autolink and image",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "<javascript:alert(1)> x "
+              },
+              {
+                "type": "image",
+                "src": "/img/a.png",
+                "alt": "ok",
+                "title": "title"
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "image",
+                "src": "https://example.invalid/p.png",
+                "alt": "remote",
+                "title": ""
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "link text keeps its formatting when the link is dropped",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "strong",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "bold"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "code",
+                "text": "code"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "lists",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "list",
+            "ordered": false,
+            "start": 1,
+            "items": [
+              {
+                "children": [
+                  {
+                    "type": "paragraph",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "a"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "children": [
+                  {
+                    "type": "paragraph",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "b"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "list",
+                    "ordered": false,
+                    "start": 1,
+                    "items": [
+                      {
+                        "children": [
+                          {
+                            "type": "paragraph",
+                            "children": [
+                              {
+                                "type": "text",
+                                "text": "nested"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "paragraph",
+                            "children": [
+                              {
+                                "type": "text",
+                                "text": "nested two"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "children": [
+                  {
+                    "type": "paragraph",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "c"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "ordered": true,
+            "start": 1,
+            "items": [
+              {
+                "children": [
+                  {
+                    "type": "paragraph",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "one"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "children": [
+                  {
+                    "type": "paragraph",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "two"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "ordered": true,
+            "start": 3,
+            "items": [
+              {
+                "children": [
+                  {
+                    "type": "paragraph",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "three"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "code fences keep html as text",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "code",
+            "lang": "html",
+            "text": "<script>alert(1)</script>"
+          },
+          {
+            "type": "code",
+            "lang": "",
+            "text": "plain"
+          },
+          {
+            "type": "code",
+            "lang": "",
+            "text": "indented <b>\ncode"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "tables with alignment",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "table",
+            "align": [
+              "left",
+              "center",
+              "right"
+            ],
+            "head": [
+              [
+                {
+                  "type": "text",
+                  "text": "a"
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": "b"
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": "c"
+                }
+              ]
+            ],
+            "rows": [
+              [
+                [
+                  {
+                    "type": "text",
+                    "text": "1"
+                  }
+                ],
+                [
+                  {
+                    "type": "strong",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "2"
+                      }
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "type": "text",
+                    "text": "x"
+                  }
+                ]
+              ],
+              [
+                [
+                  {
+                    "type": "text",
+                    "text": "3"
+                  }
+                ],
+                [
+                  {
+                    "type": "text",
+                    "text": "`"
+                  }
+                ],
+                [
+                  {
+                    "type": "text",
+                    "text": "`"
+                  }
+                ]
+              ]
+            ],
+            "truncated": false
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "block quote and rule",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "blockquote",
+            "children": [
+              {
+                "type": "paragraph",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "quote\nmore"
+                  }
+                ]
+              },
+              {
+                "type": "blockquote",
+                "children": [
+                  {
+                    "type": "paragraph",
+                    "children": [
+                      {
+                        "type": "text",
+                        "text": "nested"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "hr"
+          },
+          {
+            "type": "hr"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "escapes and breaks",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "line one"
+              },
+              {
+                "type": "br"
+              },
+              {
+                "type": "text",
+                "text": "line two"
+              },
+              {
+                "type": "br"
+              },
+              {
+                "type": "text",
+                "text": "line three *not em* and <b>"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "unicode",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "你好 "
+              },
+              {
+                "type": "strong",
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "世界"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "table",
+            "align": [
+              null,
+              null
+            ],
+            "head": [
+              [
+                {
+                  "type": "text",
+                  "text": "表"
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": "值"
+                }
+              ]
+            ],
+            "rows": [
+              [
+                [
+                  {
+                    "type": "text",
+                    "text": "甲"
+                  }
+                ],
+                [
+                  {
+                    "type": "text",
+                    "text": "乙"
+                  }
+                ]
+              ]
+            ],
+            "truncated": false
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "unclosed constructs stay text",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "**open [link](https://example.invalid `code"
+              }
+            ]
+          },
+          {
+            "type": "code",
+            "lang": "",
+            "text": "unclosed fence"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "case": "a stray html table is text",
+      "tree": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "text": "<table><tr><td>x</td></tr></table>"
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    }
+  ]
+}

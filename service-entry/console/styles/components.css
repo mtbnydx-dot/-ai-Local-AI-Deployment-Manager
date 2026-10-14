@@ -829,3 +829,53 @@ dialog::backdrop {
 
 /* /system/ui-kit page frame (routes/system/ui-kit.js) */
 .uikit { max-width: var(--content-max); margin-inline: auto; padding: var(--sp-6) var(--sp-4); }
+
+/* DataTable: toolbar, sortable headers, column chooser, windowed body, cards. */
+.data-table { display: flex; flex-direction: column; gap: var(--sp-3); }
+.table-toolbar { justify-content: flex-end; }
+.th-sort { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; color: inherit; font: inherit; white-space: nowrap; }
+.th-sort:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.data-scroll { max-width: 100%; }
+.data-windowed { max-height: 70vh; overflow: auto; }
+.data-windowed .table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; }
+.table tr[data-clickable="true"] { cursor: pointer; }
+.row-spacer td { height: 0; }
+.table-empty { padding: var(--sp-6) var(--sp-4); text-align: center; }
+.column-chooser { position: relative; }
+.column-chooser summary { list-style: none; cursor: pointer; }
+.column-chooser summary::-webkit-details-marker { display: none; }
+.column-chooser-list { position: absolute; inset-inline-end: 0; z-index: var(--z-popover, 20); display: flex; flex-direction: column; gap: var(--sp-2); min-width: 200px; margin: var(--sp-1) 0 0; padding: var(--sp-3); border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-1); }
+.data-cards { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.data-card { padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-1); }
+.data-card[data-clickable="true"] { cursor: pointer; }
+.data-card .kv { grid-template-columns: minmax(80px, max-content) 1fr; margin: 0; }
+.data-card dd { margin: 0; overflow-wrap: anywhere; }
+
+/* LogViewer: a monospace box, level colors that never rely on color alone (the text carries the level). */
+.log-viewer { display: flex; flex-direction: column; gap: var(--sp-2); }
+.log-search { flex: 1 1 200px; width: auto; min-width: 140px; }
+.log-level { width: auto; }
+.log-box-wrap { position: relative; }
+.log-box { height: min(60vh, 520px); min-height: 160px; overflow: auto; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; }
+.log-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-error { color: var(--danger); }
+.log-warn { color: var(--warn); }
+.log-line mark { background: var(--accent-soft); color: inherit; border-radius: 2px; }
+.log-jump { position: absolute; inset-block-end: var(--sp-3); inset-inline-end: var(--sp-4); }
+.log-empty { margin: 0; }
+
+/* MarkdownViewer */
+.markdown { overflow-wrap: anywhere; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown .md-table, .markdown .code-block { margin: 0 0 var(--sp-3); }
+.markdown ul, .markdown ol { padding-inline-start: var(--sp-6); }
+.markdown blockquote { padding-inline-start: var(--sp-3); border-inline-start: 3px solid var(--border-strong); color: var(--text-muted); }
+.md-heading { margin: var(--sp-4) 0 var(--sp-2); }
+.md-code-inline { padding: 1px 4px; border-radius: 3px; background: var(--surface-3); font-family: var(--font-mono); font-size: 0.92em; }
+.md-image { max-width: 100%; height: auto; }
+.md-image-blocked { display: inline-block; padding: 0 var(--sp-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-control); color: var(--text-muted); font-size: var(--fs-sm); }
+.md-align-center { text-align: center; }
+.md-align-right { text-align: end; }
+.md-table .table th, .md-table .table td { height: auto; padding: var(--sp-1) var(--sp-3); }
+.md-code { margin: 0 0 var(--sp-3); padding: var(--sp-3); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
