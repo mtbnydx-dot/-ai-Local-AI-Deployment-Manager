@@ -117,9 +117,12 @@ module.exports.mergeExports = mergeExports;
 const PLATFORM_MODULES = Object.freeze({
   components: "./platform/components",
   config: "./platform/config",
+  launcher: "./platform/launcher",
+  logs: "./platform/logs",
   messages: "./platform/messages",
   semver: "./platform/semver",
   version: "./platform/version",
+  winproc: "./platform/winproc",
 });
 let platformNamespace = null;
 
@@ -150,3 +153,6 @@ module.exports.telemetry = Object.freeze({ ...statsSampler, statsSampler });
 module.exports.secrets = require("./secret-store");
 // The ModelCard v1 local inspector (02 MOD-3); a namespace like engines and secrets.
 module.exports.models = require("./model-inspector");
+// Manager routes of the model inspector (02 MOD-5, GET /api/knowledge/status). It is
+// registered by name instead of through MODULES, which must not list model-inspector files.
+module.exports.registerModelInspectorRoutes = require("./model-inspector-routes").registerModelInspectorRoutes;
