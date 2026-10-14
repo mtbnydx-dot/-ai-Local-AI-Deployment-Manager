@@ -66,11 +66,25 @@ function mod(value, divisor) {
   return ((value % divisor) + divisor) % divisor;
 }
 
+// The sampling interval behind a pair of samples: options.intervalMs when the
+// caller passes it, else the larger `intervalMs` the samples carry (the
+// interval in force when each was taken, so a live interval change does not
+// cut a gap scheduled under the old one), else the 10 s default. A caller
+// sampling at another interval must supply it one of these ways, or gaps
+// beyond 20 s are cut short.
+function capIntervalMs(prev, cur, options) {
+  const explicit = positive(options && options.intervalMs);
+  if (explicit !== null) return explicit;
+  const carried = [prev && prev.intervalMs, cur && cur.intervalMs].map(positive).filter((value) => value !== null);
+  return carried.length ? Math.max(...carried) : DEFAULT_INTERVAL_MS;
+}
+
 // Wh drawn between two samples of one GPU: cur.powerW × min(Δt, 2 × interval)
 // (§8). The cap keeps a collector outage, a restart or a stuck clock from
 // being filled in at the last power reading. A sample without a power
 // reading or a predecessor, or with a clock that did not move forward,
 // integrates nothing and returns null (never 0).
+// prev, cur: { at, powerW, intervalMs? }; options: { intervalMs }.
 function integrateEnergyWh(prev, cur, options = {}) {
   const power = nonNegative(cur && cur.powerW);
   if (power === null) return null;
@@ -79,7 +93,7 @@ function integrateEnergyWh(prev, cur, options = {}) {
   if (prevAt === null || curAt === null) return null;
   const elapsedMs = curAt - prevAt;
   if (!(elapsedMs > 0)) return null;
-  const intervalMs = positive(options && options.intervalMs) ?? DEFAULT_INTERVAL_MS;
+  const intervalMs = capIntervalMs(prev, cur, options);
   return round6((power * Math.min(elapsedMs, 2 * intervalMs)) / HOUR_MS);
 }
 

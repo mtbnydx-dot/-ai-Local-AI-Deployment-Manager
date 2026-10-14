@@ -17,7 +17,7 @@ const {
   decodeThrottle,
 } = require("../telemetry/collectors/gpu");
 const { integrateEnergyWh, priceAt, costOf } = require("../telemetry/energy");
-const { openTelemetryStore } = require("../telemetry/store");
+const { openTelemetryStore, TelemetryStoreError } = require("../telemetry/store");
 const fixture = require("./fixtures/telemetry/nvidia-smi.json");
 
 const NOW = Date.UTC(2026, 9, 14, 8, 0, 0);
@@ -276,14 +276,18 @@ test("decodeThrottle: the §8 table, unknown bits as bit_0x…, and the host's 0
   assert.deepEqual(THROTTLE_REASONS.filter((reason) => reason.hardware).map((reason) => reason.slug),
     ["hw_slowdown", "hw_thermal", "hw_power_brake"]);
 
-  // A mask above 2^53 stays JSON-safe as hex text in memory; the store copy
-  // is a signed 64-bit bigint (see the gpu_samples test below).
-  const [high] = parseNvidiaSmiTelemetry("0, 0x8000000000000400\n", "index,clocks_event_reasons.active");
-  assert.equal(high.throttleMask, "0x8000000000000400");
-  assert.equal(high.throttle, "bit_0x400,bit_0x8000000000000000");
-  assert.deepEqual(decodeThrottle(high.throttleMask), ["bit_0x400", "bit_0x8000000000000000"]);
-  const [safe] = parseNvidiaSmiTelemetry("0, 0x001fffffffffffff\n", "index,clocks_event_reasons.active");
-  assert.equal(safe.throttleMask, Number.MAX_SAFE_INTEGER);
+  // throttleMask keeps bits 0-52 as a safe integer; `throttle` is decoded
+  // from all 64 bits (see the gpu_samples test below).
+  const masks = parseNvidiaSmiTelemetry(
+    "0, 0x8000000000000400\n1, 0x0020000000000041\n2, 0x001fffffffffffff\n3, 0xffffffffffffffff\n",
+    "index,clocks_event_reasons.active",
+  );
+  assert.deepEqual(masks.map((row) => row.throttleMask), [0x400, 0x41, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]);
+  assert.ok(masks.every((row) => Number.isSafeInteger(row.throttleMask)));
+  assert.equal(masks[0].throttle, "bit_0x400,bit_0x8000000000000000");
+  assert.equal(masks[1].throttle, "gpu_idle,hw_thermal,bit_0x20000000000000");
+  assert.equal(masks[3].throttle.split(",").length, 64, "every bit of an all-ones mask is listed");
+  assert.deepEqual(decodeThrottle(masks[0].throttleMask), ["bit_0x400"]);
 });
 
 test("the fallback chain uses the first query the driver accepts", async () => {
@@ -691,6 +695,15 @@ test("integrateEnergyWh caps gaps at two intervals and never fills in missing re
   assertClose(integrateEnergyWh({ at: NOW }, { at: NOW + HOUR_MS, powerW: 360 }), 2, "an hour of downtime is not filled in");
   assertClose(integrateEnergyWh({ at: NOW }, { at: NOW + 90_000, powerW: 360 }, { intervalMs: 60_000 }), 9, "backoff interval");
   assertClose(integrateEnergyWh({ at: NOW }, { at: NOW + 600_000, powerW: 360 }, { intervalMs: 60_000 }), 12, "capped at 120 s");
+  // The §3 two-argument form takes the interval from the samples.
+  assertClose(integrateEnergyWh({ at: NOW }, { at: NOW + 90_000, powerW: 360, intervalMs: 60_000 }), 9, "interval on cur");
+  assertClose(integrateEnergyWh({ at: NOW, intervalMs: 60_000 }, { at: NOW + 600_000, powerW: 360 }), 12, "interval on prev");
+  assertClose(integrateEnergyWh({ at: NOW, intervalMs: 60_000 }, { at: NOW + 90_000, powerW: 360, intervalMs: 5000 }), 9,
+    "the larger of the two intervals");
+  assertClose(integrateEnergyWh({ at: NOW, intervalMs: 60_000 }, { at: NOW + 90_000, powerW: 360 }, { intervalMs: 10_000 }), 2,
+    "an explicit option wins");
+  assertClose(integrateEnergyWh({ at: NOW, intervalMs: "x" }, { at: NOW + 90_000, powerW: 360, intervalMs: -1 }), 2,
+    "unusable intervals fall back to 10 s");
   assertClose(integrateEnergyWh({ at: new Date(NOW).toISOString() }, { at: new Date(NOW + 10_000).toISOString(), powerW: 360 }), 1, "ISO times");
   assert.equal(integrateEnergyWh({ at: NOW }, { at: NOW + 10_000, powerW: 0 }), 0, "a real 0 W reading is 0 Wh");
   for (const powerW of [null, undefined, "", Number.NaN, -5, "[N/A]"]) {
@@ -947,7 +960,7 @@ test("collector_state carries the cached query, the procs pause and energy acros
   assert.equal(fresh.rows[0].energyWh, null);
 });
 
-test("a mask above 2^53 reaches gpu_samples as signed 64 bits and latest() stays JSON-safe", async (t) => {
+test("a mask above 2^53 keeps gpu_samples readable by plain node:sqlite queries; latest() stays JSON-safe", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-gpu-"));
   const file = path.join(dir, "telemetry.sqlite");
   const store = await openTelemetryStore({ file, inProcess: true, logger: null });
@@ -955,24 +968,30 @@ test("a mask above 2^53 reaches gpu_samples as signed 64 bits and latest() stays
     await store.close().catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
+  // NVML's old "Unknown" reason is bit 63.
   const gpu = { ...fixture.gpus[0], "clocks_event_reasons.active": "0x8000000000000400" };
-  const { collector } = makeCollector(fakeDriver({ gpus: [gpu] }), { store });
+  const clock = fakeClock();
+  const { collector } = makeCollector(fakeDriver({ gpus: [gpu] }), { clock, store });
   const { rows } = await collector.tick();
-  assert.equal(rows[0].throttleMask, "0x8000000000000400");
+  assert.equal(rows[0].throttleMask, 0x400);
   assert.equal(rows[0].throttle, "bit_0x400,bit_0x8000000000000000");
   const live = JSON.parse(JSON.stringify(collector.latest()));
-  assert.equal(live.samples[0].throttleMask, "0x8000000000000400");
+  assert.equal(live.samples[0].throttleMask, 0x400);
   assert.deepEqual(live.gpus[0].throttle, ["bit_0x400", "bit_0x8000000000000000"]);
-  assert.equal(collector.status().written, 1);
+  clock.advance(10_000);
+  await collector.tick();
+  assert.equal(collector.status().written, 2);
   await store.close();
 
+  // The reads a rollup or an export makes, without setReadBigInts: a 64-bit
+  // value in the row would throw ERR_OUT_OF_RANGE here.
   const db = new DatabaseSync(file);
   try {
-    const select = db.prepare("SELECT throttle_mask, throttle FROM gpu_samples");
-    select.setReadBigInts(true);
-    const [row] = select.all();
-    assert.equal(BigInt.asUintN(64, row.throttle_mask), 0x8000000000000400n);
-    assert.equal(row.throttle, "bit_0x400,bit_0x8000000000000000");
+    const stored = db.prepare("SELECT * FROM gpu_samples WHERE gpu_index = ? ORDER BY at").all(0);
+    assert.equal(stored.length, 2);
+    assert.equal(stored[0].throttle_mask, 0x400);
+    assert.equal(stored[0].throttle, "bit_0x400,bit_0x8000000000000000");
+    assert.equal(db.prepare("SELECT sum(throttle_mask) AS total FROM gpu_samples").get().total, 0x800);
   } finally {
     db.close();
   }
@@ -1135,4 +1154,96 @@ test("past the pending cap the oldest waiting rows are dropped and counted; stop
   await collector.stop();
   assert.ok(Date.now() - started < 1000, "stop() gave up on the wedged store");
   assert.equal(collector.status().state, "stopped");
+});
+
+// insertGpuSamples answers from `outcomes` in order ("busy", "restarting",
+// "crashed", "closed" or "ok"), then "ok"; every batch is recorded.
+function scriptedStore(outcomes) {
+  const store = memoryStore();
+  store.batches = [];
+  store.insertGpuSamples = async (rows) => {
+    store.batches.push(rows.map((row) => row.at));
+    const outcome = outcomes.shift() || "ok";
+    if (outcome === "busy") {
+      return { accepted: 0, duplicates: 0, rejected: 0, dropped: rows.length, errors: [], error: "telemetry_store_busy", retryable: true };
+    }
+    if (outcome === "restarting" || outcome === "crashed") {
+      throw new TelemetryStoreError(`telemetry_store_${outcome}`, "The telemetry store is restarting.", { retryable: true });
+    }
+    if (outcome === "closed") throw new TelemetryStoreError("telemetry_store_closed", "The telemetry store is closed.");
+    store.rows.push(...rows.map((row) => ({ ...row })));
+    return { accepted: rows.length, duplicates: 0, rejected: 0, dropped: 0, errors: [] };
+  };
+  return store;
+}
+
+test("a busy, restarting or crashed store gets the batch again; no sample and no energy is lost", async () => {
+  const clock = fakeClock();
+  const store = scriptedStore(["busy", "restarting", "crashed"]);
+  const { collector } = makeCollector(fakeDriver(), { clock, store });
+  await collector.tick();
+  let status = collector.status();
+  assert.deepEqual([status.written, status.dropped, status.storeErrors, status.pendingRows], [0, 0, 1, 2]);
+
+  for (let index = 1; index <= 3; index += 1) {
+    clock.advance(10_000);
+    await collector.tick();
+  }
+  assert.deepEqual(store.batches, [
+    [NOW, NOW],
+    [NOW, NOW, NOW + 10_000, NOW + 10_000],
+    [NOW, NOW, NOW + 10_000, NOW + 10_000, NOW + 20_000, NOW + 20_000],
+    [NOW, NOW, NOW + 10_000, NOW + 10_000, NOW + 20_000, NOW + 20_000, NOW + 30_000, NOW + 30_000],
+  ], "handed-back rows go out first, with the next tick's rows");
+  status = collector.status();
+  assert.deepEqual([status.written, status.dropped, status.storeErrors, status.pendingRows], [8, 0, 3, 0]);
+  const gpu0 = store.rows.filter((row) => row.gpuIndex === 0);
+  assert.deepEqual(gpu0.map((row) => row.at), [0, 10_000, 20_000, 30_000].map((ms) => NOW + ms));
+  assert.equal(gpu0[0].energyWh, null);
+  for (const row of gpu0.slice(1)) assertClose(row.energyWh, (412.35 * 10) / 3600, "every interval keeps its energy");
+  assert.deepEqual(store.states.get("collector.gpu").lastSampleAt, { 0: NOW + 30_000, 1: NOW + 30_000 });
+});
+
+test("a final store error drops the batch; flush() and stop() give handed-back rows one more try", async () => {
+  const clock = fakeClock();
+  const store = scriptedStore(["closed", "busy", "busy", "busy"]);
+  const { collector } = makeCollector(fakeDriver(), { clock, store });
+  await collector.tick();
+  let status = collector.status();
+  assert.deepEqual([status.written, status.dropped, status.storeErrors, status.pendingRows], [0, 2, 1, 0], "not retryable");
+
+  clock.advance(10_000);
+  await collector.tick();
+  assert.equal(collector.status().pendingRows, 2);
+  await collector.flush();
+  assert.equal(store.batches.length, 3, "flush() tried once more");
+  assert.equal(collector.status().pendingRows, 2, "and stops when the store hands the rows back again");
+  await collector.flush();
+  assert.equal(store.batches.length, 4);
+
+  await collector.stop();
+  assert.equal(store.batches.length, 5, "stop() makes the last attempt");
+  status = collector.status();
+  assert.deepEqual([status.written, status.dropped, status.storeErrors, status.pendingRows], [2, 2, 4, 0]);
+  assert.deepEqual(store.rows.map((row) => row.at), [NOW + 10_000, NOW + 10_000]);
+});
+
+test("rows handed back by the store still respect the pending cap", async () => {
+  const clock = fakeClock();
+  const gpus = Array.from({ length: 512 }, (_, index) => ({
+    ...fixture.gpus[0],
+    index: String(index),
+    uuid: `GPU-${String(index).padStart(8, "0")}-0000-4000-8000-000000000000`,
+  }));
+  const store = scriptedStore(Array.from({ length: 6 }, () => "busy"));
+  const { collector } = makeCollector(fakeDriver({ gpus }), { clock, store });
+  for (let index = 0; index < 5; index += 1) {
+    await collector.tick();
+    clock.advance(10_000);
+  }
+  const status = collector.status();
+  assert.equal(status.pendingRows, 2048);
+  assert.equal(status.dropped, 512, "the oldest tick's rows were dropped");
+  assert.equal(store.batches[4].length, 2048);
+  assert.equal(store.batches[4][0], NOW + 10_000, "the batch starts with the oldest rows kept");
 });

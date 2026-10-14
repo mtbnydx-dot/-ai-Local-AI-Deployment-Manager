@@ -22,6 +22,8 @@
 //   parse to NULL, never to 0. power_limit_w prefers enforced.power.limit.
 // - The throttle mask is decoded with THROTTLE_REASONS; bits outside the
 //   table stay visible as "bit_0x…" (the host reports 0x400 today).
+//   throttle_mask keeps bits 0-52 only, so it is always a JS-safe integer
+//   (see storedMask); `throttle` lists every bit.
 // - Per-process VRAM: one --query-compute-apps call per minute. When every
 //   used_memory is [N/A], which is what Windows WDDM reports (F10), procs
 //   stays NULL and the call is disabled for one hour. An empty process list
@@ -36,7 +38,9 @@
 //   reads it). The first good sample restores the interval and "ok".
 // - Store writes never hold up sampling: at most one insert batch is in
 //   flight, rows sampled meanwhile wait (bounded) for the next batch, and the
-//   next tick is scheduled as soon as nvidia-smi has answered.
+//   next tick is scheduled as soon as nvidia-smi has answered. A batch the
+//   store could not take for now (busy, worker restarting or crashed) goes
+//   back to the queue, so a store restart costs no samples and no energy.
 //
 // The cached query, the per-process pause and each GPU's last sample time are
 // kept in collector_state ("collector.gpu"), so an entry restart neither
@@ -231,23 +235,14 @@ function decodeThrottle(mask) {
   return reasons;
 }
 
-// Rows stay JSON-safe in memory (latest() is serialised for the live view):
-// a mask above 2^53 is kept as its "0x…" hex text, never as a bigint.
-function rowMask(value) {
-  if (value === null) return null;
-  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : `0x${value.toString(16)}`;
-}
-
-// SQLite stores INTEGER as signed 64 bits: a mask above 2^53 goes to the
-// store as a two's-complement bigint so no bit is lost.
-function storedMask(mask) {
-  if (typeof mask !== "string") return mask;
-  const value = maskValue(mask);
-  return value === null ? null : BigInt.asIntN(64, value);
-}
-
-function storeRow(row) {
-  return typeof row.throttleMask === "string" ? { ...row, throttleMask: storedMask(row.throttleMask) } : row;
+// The throttleMask a row carries, in memory and in gpu_samples.throttle_mask:
+// bits 0-52 of the mask as a Number. node:sqlite throws ERR_OUT_OF_RANGE on
+// a default read of any INTEGER beyond ±(2^53 - 1), so a single 64-bit mask
+// would break every plain SELECT of that GPU's rows (rollups included). The
+// only NVML reason above bit 52 is the old "Unknown" bit 63, and `throttle`
+// still lists it (bit_0x8000000000000000), so no reason is lost.
+function storedMask(value) {
+  return value === null ? null : Number(BigInt.asUintN(53, value));
 }
 
 // Splits one CSV line into exactly fields.length cells. nvidia-smi does not
@@ -266,8 +261,8 @@ function splitCells(line, fieldCount, textIndex) {
 // Parses `--query-gpu=<fields> --format=csv,noheader,nounits` output into
 // gpu_samples rows (without `at`, energyWh and procs). Lines that are not
 // GPU rows (error text, "No devices were found") are skipped, and a GPU
-// index seen twice keeps its first row. throttleMask is a number, or the
-// "0x…" text of a mask above 2^53 (see rowMask).
+// index seen twice keeps its first row. throttleMask is a safe integer (bits
+// 0-52, see storedMask) and `throttle` is decoded from the full mask.
 function parseNvidiaSmiTelemetry(stdout, fields) {
   const fieldList = normalizeFields(fields);
   if (!fieldList.length) return [];
@@ -299,7 +294,7 @@ function parseNvidiaSmiTelemetry(stdout, fields) {
     if (row.gpuIndex === null || seen.has(row.gpuIndex)) continue;
     seen.add(row.gpuIndex);
     row.powerLimitW = extra.enforcedPowerLimitW ?? extra.configuredPowerLimitW;
-    row.throttleMask = rowMask(extra.throttleMask);
+    row.throttleMask = storedMask(extra.throttleMask);
     row.throttle = extra.throttleMask === null ? null : decodeThrottle(extra.throttleMask).join(",");
     rows.push(row);
   }
@@ -662,24 +657,52 @@ function createGpuCollector(options = {}) {
     } catch {}
   }
 
+  // Returns the rows to queue again: the whole batch when the store says
+  // "not now" (busy past busy_timeout resolves retryable:true; a worker that
+  // is restarting or crashed rejects with a retryable error), as the
+  // recorder keeps its buffer for the same errors. A re-sent row the crashed
+  // worker had already committed is ignored as a duplicate (gpu_index, at).
+  // Anything else is final: written, rejected or dropped and counted.
   async function writeRows(rows) {
-    if (!rows.length || typeof store.insertGpuSamples !== "function") return;
+    if (!rows.length || typeof store.insertGpuSamples !== "function") return [];
     try {
       const result = await store.insertGpuSamples(rows);
+      if (result && result.retryable === true) {
+        counters.storeErrors += 1;
+        return rows;
+      }
       counters.written += Number(result && result.accepted) || 0;
       counters.dropped += (Number(result && result.dropped) || 0) + (Number(result && result.rejected) || 0);
-    } catch {
+    } catch (error) {
       counters.storeErrors += 1;
+      if (error && error.retryable === true) return rows;
       counters.dropped += rows.length;
+    }
+    return [];
+  }
+
+  // Past MAX_PENDING_ROWS the oldest waiting rows are dropped and counted.
+  function capPending() {
+    const overflow = pendingRows.length - MAX_PENDING_ROWS;
+    if (overflow > 0) {
+      pendingRows.splice(0, overflow);
+      counters.dropped += overflow;
     }
   }
 
+  // Rows handed back by a retryable failure go ahead of the ones sampled
+  // meanwhile and leave with the next batch: the one already waiting on this
+  // write, or else the next tick's. They are never retried in a loop.
   function flushPending() {
     const batch = pendingRows;
     pendingRows = [];
     pendingFlush = null;
     const current = (async () => {
-      await writeRows(batch);
+      const retry = await writeRows(batch);
+      if (retry.length) {
+        pendingRows = retry.concat(pendingRows);
+        capPending();
+      }
       await saveState();
     })();
     writing = current;
@@ -688,20 +711,20 @@ function createGpuCollector(options = {}) {
     });
   }
 
-  // Queues rows for the store without waiting for it, so a slow or busy
-  // store worker never delays sampling. Rows that arrive while a batch is in
-  // flight go out together once it settles; past MAX_PENDING_ROWS the oldest
-  // are dropped and counted. Resolves once these rows were written or dropped.
-  function persist(rows) {
-    if (!store) return Promise.resolve();
-    pendingRows.push(...rows.map(storeRow));
-    const overflow = pendingRows.length - MAX_PENDING_ROWS;
-    if (overflow > 0) {
-      pendingRows.splice(0, overflow);
-      counters.dropped += overflow;
-    }
+  function scheduleFlush() {
     if (!pendingFlush) pendingFlush = (writing || Promise.resolve()).then(flushPending);
     return pendingFlush;
+  }
+
+  // Queues rows for the store without waiting for it, so a slow or busy
+  // store worker never delays sampling. Rows that arrive while a batch is in
+  // flight go out together once it settles. Resolves once these rows were
+  // written, dropped, or handed back to the queue by a retryable failure.
+  function persist(rows) {
+    if (!store) return Promise.resolve();
+    pendingRows.push(...rows);
+    capPending();
+    return scheduleFlush();
   }
 
   async function runTick() {
@@ -716,10 +739,10 @@ function createGpuCollector(options = {}) {
     }
     const rows = result.rows.map((row) => {
       const current = { at, ...row, energyWh: null, procs: null };
-      const previous = lastSample.get(row.gpuIndex);
-      current.energyWh = integrateEnergyWh(previous ? { at: previous.at } : null, current, {
-        intervalMs: previous ? Math.max(previous.intervalMs, baseIntervalMs) : baseIntervalMs,
-      });
+      // Both samples carry the base interval in force when they were taken;
+      // the cap uses the larger one (energy.js).
+      const previous = lastSample.get(row.gpuIndex) || null;
+      current.energyWh = integrateEnergyWh(previous, { at, powerW: row.powerW, intervalMs: baseIntervalMs });
       lastSample.set(row.gpuIndex, { at, intervalMs: baseIntervalMs });
       return current;
     });
@@ -748,8 +771,11 @@ function createGpuCollector(options = {}) {
     return result;
   }
 
-  // Resolves once every queued row has been written (or dropped).
+  // Sends the waiting rows (one more attempt for any a retryable failure
+  // handed back) and resolves once nothing is in flight. Rows the store
+  // hands back again stay queued for the next tick.
   async function flush() {
+    if (store && pendingRows.length) scheduleFlush();
     while (pendingFlush || writing) await (pendingFlush || writing);
   }
 
@@ -795,7 +821,7 @@ function createGpuCollector(options = {}) {
     if (timer) timers.clearTimeout(timer);
     timer = null;
     if (inflight) await inflight.catch(() => {});
-    if (!pendingFlush && !writing) return;
+    if (!pendingFlush && !writing && !pendingRows.length) return;
     let guard = null;
     await Promise.race([
       flush(),
