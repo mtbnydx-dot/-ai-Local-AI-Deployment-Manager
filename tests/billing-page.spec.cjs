@@ -102,6 +102,65 @@ function freshScenario() {
       ok: true,
       terminalState: "completed",
     }],
+    // GET /api/billing/usage/summary answers (TEL-14), keyed by groupBy. The
+    // first row's projected sum is past 2^53 to prove the page keeps it exact.
+    summaryRequests: [],
+    usageSummary: [{
+      customerId: CUSTOMER_ID,
+      customerName: XSS_SENTINEL,
+      model: "local/base-7b",
+      month: "2026-08",
+      requests: 3,
+      ok: 2,
+      inputTokens: 3600,
+      cachedInputTokens: 600,
+      outputTokens: 900,
+      totalTokens: 4500,
+      projectedMicrocredits: "9007199254740993",
+      chargedMicrocredits: "4500000",
+      estimatedUsageRequests: 1,
+      shadowRequests: 0,
+    }, {
+      customerId: null,
+      customerName: null,
+      model: "local/tiny-1b",
+      month: "2026-08",
+      requests: 1,
+      ok: 1,
+      inputTokens: 10,
+      cachedInputTokens: 0,
+      outputTokens: 5,
+      totalTokens: 15,
+      projectedMicrocredits: "0",
+      chargedMicrocredits: "0",
+      estimatedUsageRequests: 0,
+      shadowRequests: 1,
+    }],
+    dailySummary: [{
+      day: "2026-08-10",
+      requests: 1,
+      ok: 1,
+      inputTokens: 1200,
+      cachedInputTokens: 0,
+      outputTokens: 300,
+      totalTokens: 1500,
+      projectedMicrocredits: "1750000",
+      chargedMicrocredits: "1500000",
+      estimatedUsageRequests: 0,
+      shadowRequests: 0,
+    }, {
+      day: "2026-08-11",
+      requests: 3,
+      ok: 2,
+      inputTokens: 2410,
+      cachedInputTokens: 600,
+      outputTokens: 605,
+      totalTokens: 3015,
+      projectedMicrocredits: "9007199252990993",
+      chargedMicrocredits: "3000000",
+      estimatedUsageRequests: 1,
+      shadowRequests: 1,
+    }],
     ledger: [{
       entryId: "77777777-7777-4777-8777-777777777777",
       at: FIXED_NOW,
@@ -210,6 +269,36 @@ function statusPayload() {
   };
 }
 
+function usageSummaryPayload(url) {
+  const groupBy = String(url.searchParams.get("groupBy") || "").split(",").filter(Boolean);
+  scenario.summaryRequests.push({ groupBy: groupBy.join(","), tzOffsetMinutes: url.searchParams.get("tzOffsetMinutes") });
+  const rows = groupBy.join(",") === "day" ? scenario.dailySummary : scenario.usageSummary;
+  const sum = (key) => rows.reduce((total, row) => total + BigInt(row[key]), 0n);
+  return {
+    ok: true,
+    kind: "llm",
+    groupBy,
+    // August 2026 at UTC+08:00, independent of the browser's own time zone.
+    from: "2026-07-31T16:00:00.000Z",
+    to: "2026-08-31T16:00:00.000Z",
+    tzOffsetMinutes: 480,
+    rows,
+    totals: {
+      requests: Number(sum("requests")),
+      ok: Number(sum("ok")),
+      inputTokens: Number(sum("inputTokens")),
+      cachedInputTokens: Number(sum("cachedInputTokens")),
+      outputTokens: Number(sum("outputTokens")),
+      totalTokens: Number(sum("totalTokens")),
+      projectedMicrocredits: sum("projectedMicrocredits").toString(),
+      chargedMicrocredits: sum("chargedMicrocredits").toString(),
+      estimatedUsageRequests: Number(sum("estimatedUsageRequests")),
+      shadowRequests: Number(sum("shadowRequests")),
+    },
+    truncated: false,
+  };
+}
+
 function previewTemplates(body) {
   return previewPriceTemplateApplications(body, { clock: () => new Date(FIXED_NOW) });
 }
@@ -251,6 +340,7 @@ async function handleApi(req, res, url) {
   if (method === "GET" && url.pathname === "/api/billing/credentials") return sendJson(res, 200, { ok: true, items: scenario.credentials });
   if (method === "GET" && url.pathname === "/api/billing/prices") return sendJson(res, 200, { ok: true, items: scenario.prices });
   if (method === "GET" && url.pathname === "/api/billing/usage") return sendJson(res, 200, { ok: true, items: scenario.usage });
+  if (method === "GET" && url.pathname === "/api/billing/usage/summary") return sendJson(res, 200, usageSummaryPayload(url));
   if (method === "GET" && url.pathname === "/api/billing/ledger") return sendJson(res, 200, { ok: true, items: scenario.ledger });
   if (method === "GET" && url.pathname === "/api/billing/audit-events") return sendJson(res, 200, { ok: true, items: scenario.auditEvents });
   if (method === "GET" && url.pathname === "/api/billing/templates") {
@@ -749,4 +839,119 @@ test("390px viewport has no page-level horizontal overflow", async ({ page }) =>
   expect(dimensions.activeBilling.left).toBeGreaterThanOrEqual(dimensions.managerNav.left - 1);
   expect(dimensions.activeBilling.right).toBeLessThanOrEqual(dimensions.managerNav.right + 1);
   await expect(page.locator("#billingTemplateRows")).toBeVisible();
+});
+
+const SUMMARY_COPY = {
+  zh: {
+    heading: "本期用量（按客户 × 模型 × 月汇总）",
+    columns: ["客户", "模型", "月份", "请求", "成功", "输入 Tokens", "缓存 Tokens", "输出 Tokens", "预计消费", "已扣"],
+    note: "统计区间 2026-08-01 至 2026-08-31（UTC+08:00）",
+    unbound: "未绑定客户",
+    projected: "9,007,199,254.740993 积分",
+    charged: "4.5 积分",
+    total: "合计",
+    caption: "每日 Tokens（峰值 3,015）",
+    bar: "2026-08-10：1 次请求 · 1,500 Tokens · 预计 1.75 积分",
+  },
+  en: {
+    heading: "Usage this period (by customer × model × month)",
+    columns: ["Customer", "Model", "Month", "Requests", "Succeeded", "Input tokens", "Cached tokens", "Output tokens", "Projected", "Charged"],
+    note: "Period 2026-08-01 to 2026-08-31 (UTC+08:00)",
+    unbound: "Unbound customer",
+    projected: "9,007,199,254.740993 credits",
+    charged: "4.5 credits",
+    total: "Total",
+    caption: "Daily tokens (peak 3,015)",
+    bar: "2026-08-10 · requests 1 · tokens 1,500 · projected 1.75 credits",
+  },
+};
+
+async function expectUsageSummary(page, copy, lang) {
+  const panel = page.locator("#overviewSummaryPanel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute("lang", lang);
+  await expect(page.locator("#overviewSummaryHeading")).toHaveText(copy.heading);
+  await expect(page.locator("#overviewSummaryNote")).toContainText(copy.note);
+  await expect(page.locator("#overviewSummaryHead th")).toHaveText(copy.columns);
+  const rows = page.locator("#overviewSummaryRows tr");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator("td")).toHaveText([
+    XSS_SENTINEL, "local/base-7b", "2026-08", "3", "2", "3,600", "600", "900", copy.projected, copy.charged,
+  ]);
+  await expect(rows.nth(1).locator("td").first()).toHaveText(copy.unbound);
+  await expect(page.locator("#overviewSummaryTotals td")).toHaveText([
+    copy.total, "", "", "4", "3", "3,610", "600", "905", copy.projected, copy.charged,
+  ]);
+  await expect(panel.locator("img")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__billingXss)).toBeUndefined();
+
+  // The daily chart is inline SVG: one slot per day of August, a bar per day with usage.
+  await expect(page.locator("#overviewDailyChartCaption")).toHaveText(copy.caption);
+  await expect(page.locator("#overviewDailyChartSvg")).toHaveAttribute("viewBox", "0 0 310 100");
+  const bars = page.locator("#overviewDailyChartSvg rect.usage-chart-bar");
+  await expect(bars).toHaveCount(2);
+  expect(await bars.first().locator("title").textContent()).toBe(copy.bar);
+  await expect(page.locator("#overviewDailyChartAxis span")).toHaveText(["08-01", "08-16", "08-31"]);
+
+  // P0-17's raw table keeps its heading and columns below the aggregate.
+  await expect(page.locator("#overviewUsageHeading")).toHaveText("最近请求（原始记录，最多 100 条）");
+  await expect(page.locator("table:has(#overviewUsageRows) thead th")).toHaveText(["时间", "客户", "管理器", "模型", "Tokens", "状态"]);
+  await expect(page.locator("section.panel:has(#overviewUsageRows)")).not.toContainText("随遥测存储一起提供");
+  const layout = await page.evaluate(() => {
+    const summary = document.querySelector("#overviewSummaryPanel");
+    const raw = document.querySelector("#overviewUsageRows").closest("section.panel");
+    const summaryBox = summary.getBoundingClientRect();
+    const head = summary.querySelector(".panel-head");
+    const chart = document.querySelector("#overviewDailyChartSvg").getBoundingClientRect();
+    return {
+      before: Boolean(summary.compareDocumentPosition(raw) & Node.DOCUMENT_POSITION_FOLLOWING),
+      summaryBottom: summaryBox.bottom,
+      rawTop: raw.getBoundingClientRect().top,
+      summaryLeft: summaryBox.left,
+      summaryRight: summaryBox.right,
+      chartRight: chart.right,
+      headScrollWidth: head.scrollWidth,
+      headClientWidth: head.clientWidth,
+      clientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+    };
+  });
+  expect(layout.before, "the aggregate precedes the raw table").toBe(true);
+  expect(layout.summaryBottom).toBeLessThanOrEqual(layout.rawTop);
+  expect(layout.documentScrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+  expect(layout.bodyScrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+  expect(layout.summaryLeft).toBeGreaterThanOrEqual(-1);
+  expect(layout.summaryRight).toBeLessThanOrEqual(layout.clientWidth + 1);
+  expect(layout.chartRight).toBeLessThanOrEqual(layout.summaryRight + 1);
+  expect(layout.headScrollWidth).toBeLessThanOrEqual(layout.headClientWidth + 1);
+}
+
+test("overview aggregates this period by customer × model × month above the raw table in zh and en at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loadBilling(page);
+  expect(scenario.summaryRequests.map((request) => request.groupBy).sort()).toEqual(["customer,model,month", "day"]);
+  expect(scenario.summaryRequests.every((request) => /^-?\d+$/.test(request.tzOffsetMinutes || ""))).toBe(true);
+  await expectUsageSummary(page, SUMMARY_COPY.zh, "zh-CN");
+
+  // English follows the consoles' languageMode preference...
+  await page.evaluate(() => localStorage.setItem("languageMode", "en-US"));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
+  await expectUsageSummary(page, SUMMARY_COPY.en, "en-US");
+
+  // ...and an explicit ?lang= wins over it.
+  await page.goto(new URL("?lang=zh-CN", page.url()).href, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
+  await expectUsageSummary(page, SUMMARY_COPY.zh, "zh-CN");
+});
+
+test("usage summary stays hidden when the API answers without summary rows", async ({ page }) => {
+  // The shape of an entry without the summary route behind a generic stub.
+  await page.route("**/api/billing/usage/summary**", (route) => route.fulfill({ json: { ok: true, items: [] } }));
+  await loadBilling(page);
+  await expect(page.locator("#overviewSummaryPanel")).toBeHidden();
+  await expect(page.locator("#overviewSummaryHeading")).toHaveText("");
+  await expect(page.locator("body")).not.toContainText("本期用量");
+  await expect(page.locator("#overviewUsageRows")).toContainText("local/base-7b");
 });
