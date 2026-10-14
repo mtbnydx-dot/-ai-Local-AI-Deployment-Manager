@@ -123,6 +123,29 @@ function createStatsLedgerStore(options = {}) {
     return ledger;
   }
 
+  // Adds a live summary's per-runtime counter deltas to a ledger in memory.
+  // Returns false when the summary has nothing to add (no process start or no
+  // models), which leaves the ledger untouched.
+  function applyStatsSummary(ledger, summary, reason) {
+    if (!summary?.processStartSeconds || !Array.isArray(summary.models) || !summary.models.length) {
+      return false;
+    }
+    for (const model of summary.models) {
+      const runtimeEngine = String(model.engine || summary.engine || "runtime").trim().toLowerCase() || "runtime";
+      const runtimeKey = `${runtimeEngine}:${summary.processStartSeconds}:${model.name}`;
+      const previous = ledger.runtimes[runtimeKey] || emptyRuntimeCounters();
+      const current = runtimeCountersFromStatsModel(model);
+      const effectiveCurrent = useMonotonicRuntimeCounters ? maxRuntimeCounters(current, previous) : current;
+      const delta = diffRuntimeCounters(effectiveCurrent, previous);
+      mergeStatsLedgerModelDelta(ledger, model, delta, summary, reason);
+      if (persistRuntimeFacts) mergeRuntimeFactsLedger(ledger, model, summary, reason);
+      ledger.runtimes[runtimeKey] = effectiveCurrent;
+    }
+    ledger.updatedAt = new Date().toISOString();
+    ledger.version = 1;
+    return true;
+  }
+
   async function updateStatsLedger(summary, reason = "collect") {
     return withStatsLedgerWrite(async () => {
       const ledger = normalizeStatsLedger(await readJsonFile(file, {}));
@@ -131,25 +154,19 @@ function createStatsLedgerStore(options = {}) {
       if (claudeUsageCache) {
         ledger.clients = normalizeClients({ ...ledger.clients, claude: claudeUsageCache });
       }
-      if (!summary?.processStartSeconds || !Array.isArray(summary.models) || !summary.models.length) {
-        return ledger;
-      }
-      for (const model of summary.models) {
-        const runtimeEngine = String(model.engine || summary.engine || "runtime").trim().toLowerCase() || "runtime";
-        const runtimeKey = `${runtimeEngine}:${summary.processStartSeconds}:${model.name}`;
-        const previous = ledger.runtimes[runtimeKey] || emptyRuntimeCounters();
-        const current = runtimeCountersFromStatsModel(model);
-        const effectiveCurrent = useMonotonicRuntimeCounters ? maxRuntimeCounters(current, previous) : current;
-        const delta = diffRuntimeCounters(effectiveCurrent, previous);
-        mergeStatsLedgerModelDelta(ledger, model, delta, summary, reason);
-        if (persistRuntimeFacts) mergeRuntimeFactsLedger(ledger, model, summary, reason);
-        ledger.runtimes[runtimeKey] = effectiveCurrent;
-      }
-      ledger.updatedAt = new Date().toISOString();
-      ledger.version = 1;
+      if (!applyStatsSummary(ledger, summary, reason)) return ledger;
       await writeJsonFile(file, normalizeStatsLedger(ledger));
       return ledger;
     });
+  }
+
+  // The ledger updateStatsLedger would produce for this summary, without
+  // writing it (04 TEL-1): /api/stats shows the newest sample on top of the
+  // persisted totals while the sampler writes the file at most once a minute.
+  async function previewStatsLedger(summary, reason = "collect") {
+    const ledger = await loadStatsLedger();
+    applyStatsSummary(ledger, summary, reason);
+    return ledger;
   }
 
   // Hot-path entry: accumulate in memory and schedule a debounced save. Does
@@ -244,6 +261,7 @@ function createStatsLedgerStore(options = {}) {
     saveStatsLedger,
     normalizeStatsLedger,
     updateStatsLedger,
+    previewStatsLedger,
     recordClaudeBridgeUsage,
     flushClaudeUsageWrites,
     getPersistedRuntimeFacts,

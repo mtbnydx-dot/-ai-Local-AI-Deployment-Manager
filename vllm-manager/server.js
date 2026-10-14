@@ -473,6 +473,7 @@ const statsLedgerStore = core.createStatsLedgerStore({
 const {
   loadStatsLedger,
   updateStatsLedger,
+  previewStatsLedger,
   recordClaudeBridgeUsage,
   flushClaudeUsageWrites,
   getPersistedRuntimeFacts,
@@ -595,6 +596,17 @@ const metricsHistoryStore = core.createMetricsHistoryStore({
   writeJsonFile,
 });
 
+// Background stats sampler (04 TEL-1): scrapes every running instance every
+// STATS_SAMPLE_INTERVAL_MS, independent of the UI. GET /api/stats reads its
+// newest sample, and the stats ledger and metrics history are written from it
+// once a minute.
+const statsSampler = core.telemetry.createStatsSampler({
+  intervalMs: core.telemetry.resolveStatsSampleIntervalMs(process.env.STATS_SAMPLE_INTERVAL_MS),
+  listInstances: listStatsSampleInstances,
+  scrapeInstance: scrapeStatsSampleInstance,
+  onPersist: persistStatsSample,
+});
+
 // Benchmark results outlive the job ledger here so that a configuration change
 // can be compared against the run that preceded it.
 const benchmarkHistoryStore = core.createBenchmarkHistoryStore({
@@ -668,9 +680,11 @@ const managerLifecycle = core.createManagerLifecycle({
     await core.sweepStaleRollbackContainers({ docker, managerId: CONFIG.managerId }).catch(() => {});
     startAutomationMonitor();
     startInstanceMetricsSampler();
+    startStatsSampler();
   },
   onShutdown: async () => {
     jobsLedgerStore.clearJobsSaveTimer();
+    await statsSampler.stop();
     if (automationMonitorTimer) clearInterval(automationMonitorTimer);
     instanceMetricsSampler.stop();
     clearInterval(idleUnloadTimer);
@@ -2425,21 +2439,63 @@ function serviceClientAllowsModel(client, model, runtime = null) {
 function startAutomationMonitor() {
   if (automationMonitorTimer) return;
   automationMonitorTimer = setInterval(() => {
-    sampleMetricsHistory().catch((error) => console.warn(`metrics history sample failed: ${error.message}`));
     inspectAutomationRules().catch((error) => console.warn(`automation monitor failed: ${error.message}`));
   }, 60 * 1000);
   automationMonitorTimer.unref?.();
-  sampleMetricsHistory().catch((error) => console.warn(`initial metrics history sample failed: ${error.message}`));
 }
 
-async function sampleMetricsHistory() {
-  const [gpu, container] = await Promise.all([getGpuStatus(), getContainerStatus(CONFIG.containerName)]);
-  if (!container?.running) return null;
-  const live = await collectVllmMetricsSummary(container, gpu, { updateSamples: false });
-  return metricsHistoryStore.recordMetricsHistory({
-    updatedAt: new Date().toISOString(),
+// Frontend smoke runs serve stubbed stats and must not scrape a runtime that
+// happens to run on this host.
+function startStatsSampler() {
+  if (process.env.AI_FRONTEND_SMOKE === "1") return;
+  statsSampler.start();
+}
+
+// The running instances the stats sampler scrapes, keyed as /api/instances
+// keys them: the primary container and this manager's parallel containers.
+async function listStatsSampleInstances() {
+  const instances = [];
+  const primary = await getContainerStatus(CONFIG.containerName);
+  if (primary?.running) instances.push({ id: "primary", primary: true, container: primary });
+  const managed = await listManagedContainers().catch(() => []);
+  for (const item of managed) {
+    if (!item.running || item.name === CONFIG.containerName) continue;
+    if (item.manager !== CONFIG.managerId || !["vllm", "sglang"].includes(item.engine)) continue;
+    const container = await getContainerStatus(item.name);
+    if (!container?.running) continue;
+    instances.push({ id: item.labels?.["ai.manager.instance"] || item.name, primary: false, container });
+  }
+  return instances;
+}
+
+// One sampler scrape: the summary /api/stats serves, plus the text and the
+// latency histograms of the same /metrics read.
+async function scrapeStatsSampleInstance(instance) {
+  const capture = {};
+  const gpu = instance.primary ? await getGpuStatus().catch(() => null) : null;
+  const summary = await collectVllmMetricsSummaryFresh(instance.container, gpu, { capture });
+  return {
+    summary,
+    text: capture.text,
+    scrapedAt: capture.scrapedAt,
+    histograms: capture.histograms,
+    runtimeKey: summary?.runtimeId || "",
+  };
+}
+
+// At most once a minute: the primary's newest sample goes into the stats
+// ledger and the 24 h metrics history. snapshotCurrentStats still writes the
+// ledger right before a stop or a start.
+async function persistStatsSample(records, { at }) {
+  const record = records.find((item) => item.instanceId === "primary");
+  const container = record?.instance?.container;
+  const live = record?.summary;
+  if (!live || !container?.running) return;
+  await updateStatsLedger(live).catch((error) => console.warn(`stats ledger update failed: ${error.message}`));
+  await metricsHistoryStore.recordMetricsHistory({
+    updatedAt: new Date(at).toISOString(),
     container,
-    gpu,
+    gpu: live.gpu,
     live,
     totals: live.totals,
     models: live.models,
@@ -2471,7 +2527,7 @@ async function inspectAutomationRules() {
     runtimeActivity = { ...runtimeActivity, initialized: false, lastRequestCount: null, lastTokenCount: null, unloading: false };
     return;
   }
-  const summary = await collectVllmMetricsSummary(container, gpu, { updateSamples: false }).catch(() => null);
+  const summary = await collectVllmMetricsSummary(container, gpu).catch(() => null);
   const requestCount = Number(summary?.totals?.requests?.total || 0);
   const tokenCount = Number(summary?.totals?.tokens?.total || 0);
   const now = Date.now();
@@ -4170,7 +4226,7 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
     : [[], { engine: runtimeEngine, version: "", source: "" }];
   const includeMetrics = options.includeMetrics !== false;
   const runtimeStats = activeContainer.running && includeMetrics
-    ? await collectVllmMetricsSummary(activeContainer, gpu, { updateSamples: false }).catch(() => null)
+    ? await collectVllmMetricsSummary(activeContainer, gpu).catch(() => null)
     : null;
   const gpuText = gpu?.ok
     ? `${gpu.usedMb}/${gpu.totalMb} MB (${gpu.util}%)`
@@ -4470,10 +4526,20 @@ async function collectStats() {
     getGpuStatus(),
     getContainerStatus(CONFIG.containerName),
   ]);
-  const liveSummary = await collectVllmMetricsSummary(container, gpu, { updateSamples: true });
-  const ledger = await updateStatsLedger(liveSummary);
+  // The stats sampler scrapes the engine every 10 s (04 TEL-1). A poll reads
+  // its newest sample and never scrapes, and the ledger it merges is a
+  // preview; the sampler writes the file at most once a minute.
+  const { summary: liveSummary, latency } = core.telemetry.sampledStatsSummary(statsSampler, "primary", {
+    container,
+    gpu,
+    empty: emptyRuntimeStatsSummary(container),
+  });
+  const ledger = await previewStatsLedger(liveSummary);
   const merged = core.mergeLiveAndStatsLedgerInactive(liveSummary, ledger);
-  const summary = { ...merged, totals: withSpeedWindowSeconds(merged.totals, merged.models) };
+  const summary = core.telemetry.applyStatsWindows(
+    { ...merged, totals: withSpeedWindowSeconds(merged.totals, merged.models) },
+    latency,
+  );
   const pricing = core.loadModelPricing();
   const costComparison = priceProfiles().map((profile) => calculateCost(summary.totals.tokens, profile));
   const clientUsage = buildClientUsageSummary(summary.totals, ledger);
@@ -4495,19 +4561,18 @@ async function collectStats() {
     pricingFreshness: pricing.freshness,
     pricingSource: pricing.source,
     ...summary,
-    live: liveSummary,
+    live: core.telemetry.applyStatsWindows(liveSummary, latency),
     historical: core.statsLedgerToSummary(ledger),
     clientUsage,
     recentAccess,
     costComparison,
   };
-  await metricsHistoryStore.recordMetricsHistory(response, {
-    engine: normalizeRuntimeEngine(container.labels?.[MANAGER_ENGINE_LABEL_KEY]),
-  }).catch(() => {});
-  response.trends = await metricsHistoryStore.getMetricsHistory({
+  // The sampler records the history once a minute; trends only reads it.
+  const trends = await metricsHistoryStore.getMetricsHistory({
     hours: 24,
     engine: response.live?.engine || "",
   }).catch(() => ({ hours: 24, samples: [] }));
+  response.trends = { ...trends, samples: core.telemetry.downsampleTrendSamples(trends.samples) };
   return response;
 }
 
@@ -4517,29 +4582,34 @@ async function snapshotCurrentStats(reason = "snapshot") {
     getContainerStatus(CONFIG.containerName),
   ]);
   if (!container?.running) return null;
-  const summary = await collectVllmMetricsSummary(container, gpu, { updateSamples: false });
+  const summary = await collectVllmMetricsSummary(container, gpu);
   const ledger = await updateStatsLedger(summary, reason);
   return ledger;
 }
 
 async function collectVllmMetricsSummary(container, gpu, options = {}) {
-  // updateSamples 会推进速度采样窗口，必须每次真实执行；只缓存只读快照。
-  if (options.updateSamples) return collectVllmMetricsSummaryFresh(container, gpu, options);
   const cacheKey = `metrics-summary:${container?.name || container?.id || "none"}:${container?.running ? 1 : 0}`;
   return runtimeSnapshotCache.get(cacheKey, () => collectVllmMetricsSummaryFresh(container, gpu, options));
 }
 
+function emptyRuntimeStatsSummary(container) {
+  return core.emptyStatsSummary(container, getContainerEndpoint(container), {
+    stoppedNote: "vLLM container is not running.",
+    missingNote: "No managed vLLM container is running.",
+  });
+}
+
+// options.capture, when given, receives the raw /metrics text, its time and
+// the latency histograms of this read for the stats sampler (04 TEL-1).
 async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const runtimeEngine = normalizeRuntimeEngine(container?.labels?.[MANAGER_ENGINE_LABEL_KEY]);
   const endpoint = getContainerEndpoint(container);
   const vllmApiKey = getVllmApiKey(container);
-  const empty = core.emptyStatsSummary(container, endpoint, {
-    stoppedNote: "vLLM container is not running.",
-    missingNote: "No managed vLLM container is running.",
-  });
+  const empty = emptyRuntimeStatsSummary(container);
   if (!container?.running) return empty;
 
   let metricsText = "";
+  let scrapedAt = "";
   try {
     const response = await fetch(`http://127.0.0.1:${endpoint.port}/metrics`, {
       signal: AbortSignal.timeout(4000),
@@ -4547,6 +4617,7 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
     });
     if (!response.ok) throw new Error(`metrics returned ${response.status}`);
     metricsText = await response.text();
+    scrapedAt = new Date().toISOString();
   } catch (error) {
     return { ...empty, error: error.message };
   }
@@ -4591,13 +4662,22 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const nowSeconds = Date.now() / 1000;
   const uptimeSeconds = processStartSeconds ? Math.max(0, nowSeconds - processStartSeconds) : null;
   const models = buildModelStats(metrics, servedById, facts, nowSeconds, {
-    ...options,
     engine: runtimeEngine,
     runtimeVersion: runtimeVersion.version || "",
     speculativeMode: facts.runtimeConfig?.speculativeMode,
+    // A parallel container keeps its own recent-rate samples, so a model it
+    // shares with the primary cannot reset the primary's window.
+    sampleScope: container.name && container.name !== CONFIG.containerName ? container.name : "",
   });
   const totals = withSpeedWindowSeconds(aggregateStats(models, uptimeSeconds), models);
   const modelsByName = Object.fromEntries(models.map((model) => [model.name, model]));
+  if (options.capture && typeof options.capture === "object") {
+    options.capture.text = metricsText;
+    options.capture.scrapedAt = scrapedAt;
+    options.capture.histograms = core.telemetry.latencyHistogramsFromSeries(metrics, models.map((model) => model.name), {
+      includeUnlabeled: Object.keys(servedById).length === 1,
+    });
+  }
 
   return {
     engine: runtimeEngine,
@@ -4689,11 +4769,12 @@ function buildModelStats(metrics, servedById, facts, nowSeconds, options = {}) {
     const cacheInfo = scoped.find((metric) => metric.name === "vllm:cache_config_info");
     const mambaBlockSize = positiveInt(cacheInfo?.labels?.mamba_block_size, 0);
     const attentionBlockSize = positiveInt(cacheInfo?.labels?.block_size, 0);
-    const recent = core.calculateRecentRates(statsSamples, `${options.engine || "runtime"}:${name}`, nowSeconds, {
+    const sampleKey = `${options.sampleScope ? `${options.sampleScope}:` : ""}${options.engine || "runtime"}:${name}`;
+    const recent = core.calculateRecentRates(statsSamples, sampleKey, nowSeconds, {
       promptTokens,
       generationTokens,
       requestCount,
-    }, options.updateSamples !== false);
+    });
     const avgE2eSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:e2e_request_latency_seconds", "sglang:e2e_request_latency_seconds"]);
     const avgTtftSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:time_to_first_token_seconds", "sglang:time_to_first_token_seconds"]);
     const avgInterTokenSeconds = firstNonZeroHistogramAverage(scoped, ["vllm:inter_token_latency_seconds", "sglang:inter_token_latency_seconds"]);
@@ -5064,7 +5145,7 @@ const downloadJobController = core.createDownloadJobController({
   isRuntimeBusy: async () => {
     const container = await getContainerStatus(CONFIG.containerName).catch(() => null);
     if (!container?.running) return false;
-    const summary = await collectVllmMetricsSummary(container, null, { updateSamples: false }).catch(() => null);
+    const summary = await collectVllmMetricsSummary(container, null).catch(() => null);
     return (summary?.models || []).some((model) => Number(model?.requests?.running || 0) + Number(model?.requests?.waiting || 0) > 0);
   },
 });
@@ -5663,6 +5744,7 @@ module.exports = {
   summarizeModelConfigCapabilities,
   buildModelStats,
   withSpeedWindowSeconds,
+  statsSampler,
   createDownloadRequestHandlers,
   createDownloadTokenStore,
   listModelStorageRoots,
