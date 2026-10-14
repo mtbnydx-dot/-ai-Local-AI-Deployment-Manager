@@ -1,0 +1,14 @@
+usage: launch_server.py [options]
+
+Server options:
+  --model-path MODEL_PATH, --model MODEL_PATH
+                        Model location.
+  --context-length CONTEXT_LENGTH
+                        Context length (default: None).
+  --kv-cache-dtype {auto,fp8_e4m3,fp8_e5m2,bf16}
+                        KV cache precision (default: auto).
+  --attention-backend {flashinfer,triton,fa3}
+                        Attention backend (default: flashinfer).
+  --mem-fraction-static MEM_FRACTION_STATIC
+                        Fraction of free memory (default: 0.88).
+  --disable-radix-cache  Disable radix caching (default: False).
