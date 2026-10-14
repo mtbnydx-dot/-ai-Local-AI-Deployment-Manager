@@ -135,3 +135,4 @@ Object.defineProperty(module.exports, "platform", { enumerable: true, configurab
 module.exports.internalAuth = require("./internal-auth");
 // New subsystems are namespaces, never spread into the flat list (00 §9.17).
 module.exports.engines = require("./engines");
+module.exports.models = require("./model-inspector");

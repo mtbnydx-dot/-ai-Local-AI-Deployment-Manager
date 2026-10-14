@@ -1,0 +1,242 @@
+{
+  "schema": "modelcard/v1",
+  "contentDigest": "sha256:57ba9edc3f081e31d3feea4cf8dc1d19c3974163d9c2c181150891bc000dd9a3",
+  "inspectorVersion": "1.0.0",
+  "knowledgeDigest": null,
+  "origin": null,
+  "format": {
+    "kind": "safetensors",
+    "weightFiles": 1,
+    "weightBytes": 2718576122,
+    "complete": true,
+    "missing": [],
+    "layout": "single"
+  },
+  "role": null,
+  "identity": {
+    "modelType": "qwen3",
+    "textModelType": null,
+    "architectures": ["DSparkDraftModel"],
+    "ggufArchitecture": null,
+    "transformersVersion": "5.12.1",
+    "baseModel": null,
+    "displayName": null,
+    "familyId": null,
+    "familyLabel": null,
+    "matchedBy": ""
+  },
+  "topology": {
+    "paramsTotal": 1359284737,
+    "paramsActive": null,
+    "hiddenSize": 5120,
+    "vocabSize": 248320,
+    "layers": 5,
+    "heads": 40,
+    "kvHeads": 8,
+    "headDim": 128,
+    "attention": {
+      "histogram": {
+        "full": 5
+      },
+      "runs": [
+        {"kind":"full","count":1}
+      ],
+      "kinds": {
+        "full": {
+          "kvHeads": 8,
+          "kDim": 128,
+          "vDim": 128
+        },
+        "swa": null,
+        "linear": null,
+        "mla": null,
+        "compressed": null,
+        "indexer": null
+      }
+    },
+    "moe": null,
+    "mtp": null,
+    "ple": null
+  },
+  "weights": {
+    "exact": true,
+    "totalBytes": 2718576122,
+    "tensorBytes": 2718569474,
+    "byDtype": {
+      "BF16": 2718569474
+    },
+    "byClass": {
+      "dense": 2718569474,
+      "experts": 0,
+      "embedding": 0,
+      "lmHead": 0,
+      "vision": 0,
+      "audio": 0,
+      "mtp": 0,
+      "ple": 0,
+      "other": 0
+    },
+    "expertsByLayer": null
+  },
+  "context": {
+    "native": 262144,
+    "ropeScaling": {
+      "type": "yarn",
+      "factor": 32,
+      "originalContext": 8192
+    },
+    "slidingWindow": null
+  },
+  "quant": {
+    "method": "none",
+    "algo": null,
+    "weightBits": 16,
+    "groupSize": null,
+    "activation": null,
+    "kvScheme": null,
+    "excludedModules": null,
+    "ggufFileType": null,
+    "ggufTensorTypes": null
+  },
+  "modalities": {
+    "input": ["text"],
+    "output": null,
+    "visionTower": false,
+    "audioTower": false,
+    "projectorFiles": []
+  },
+  "template": {
+    "source": "none",
+    "sha256": null,
+    "bytes": null,
+    "signatureId": null,
+    "exact": null,
+    "toolFormat": null,
+    "reasoningFormat": null,
+    "thinking": null,
+    "systemRole": null
+  },
+  "parsers": null,
+  "sampling": null,
+  "speculative": {
+    "nativeMtp": false,
+    "draftOf": null,
+    "compatibleDrafts": null
+  },
+  "compatibleWith": null,
+  "customCode": {
+    "autoMap": {
+      "AutoModel": "dspark.DSparkDraftModel"
+    },
+    "files": ["dflash.py","dspark.py"],
+    "trustRemoteCodeRequired": true
+  },
+  "support": "unknown",
+  "remote": null,
+  "evidence": [
+    {"fact":"/identity/modelType","value":"qwen3","source":{"kind":"file","ref":"config.json#/model_type"},"confidence":"declared"},
+    {"fact":"/identity/architectures","source":{"kind":"file","ref":"config.json#/architectures"},"confidence":"declared"},
+    {"fact":"/identity/transformersVersion","value":"5.12.1","source":{"kind":"file","ref":"config.json#/transformers_version"},"confidence":"declared"},
+    {"fact":"/context/native","value":262144,"source":{"kind":"file","ref":"config.json#/max_position_embeddings"},"confidence":"declared"},
+    {"fact":"/context/ropeScaling","source":{"kind":"file","ref":"config.json#/rope_parameters"},"confidence":"declared"},
+    {
+      "fact": "/modalities/input",
+      "source": {
+        "kind": "file",
+        "ref": "config.json"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "文本输入；视觉/音频输入来自 config.json 中声明的编码器。",
+        "en": "Text input; image and audio input come from encoders declared in config.json."
+      }
+    },
+    {"fact":"/modalities/visionTower","value":false,"source":{"kind":"file","ref":"config.json"},"confidence":"detected"},
+    {"fact":"/modalities/audioTower","value":false,"source":{"kind":"file","ref":"config.json"},"confidence":"detected"},
+    {"fact":"/customCode/autoMap","source":{"kind":"file","ref":"config.json#/auto_map"},"confidence":"declared"},
+    {
+      "fact": "/customCode/trustRemoteCodeRequired",
+      "value": true,
+      "source": {
+        "kind": "file",
+        "ref": "config.json#/auto_map"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "config.json 的 auto_map 指向模型自带的 Python 代码。",
+        "en": "config.json auto_map points at Python code shipped with the model."
+      }
+    },
+    {"fact":"/template/source","value":"none","source":{"kind":"file","ref":null},"confidence":"detected"},
+    {
+      "fact": "/quant/method",
+      "value": "none",
+      "source": {
+        "kind": "file",
+        "ref": "config.json"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "没有量化配置（quantization_config 或 hf_quant_config.json），按未量化处理。",
+        "en": "No quantization config (quantization_config or hf_quant_config.json); treated as unquantized."
+      }
+    },
+    {
+      "fact": "/quant/weightBits",
+      "value": 16,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "model.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按张量中占比最大的浮点类型 BF16 计算。",
+        "en": "From the dominant floating-point tensor dtype, BF16."
+      }
+    },
+    {"fact":"/topology/hiddenSize","value":5120,"source":{"kind":"file","ref":"config.json#/hidden_size"},"confidence":"declared"},
+    {"fact":"/topology/vocabSize","value":248320,"source":{"kind":"file","ref":"config.json#/vocab_size"},"confidence":"declared"},
+    {"fact":"/topology/layers","value":5,"source":{"kind":"file","ref":"config.json#/num_hidden_layers"},"confidence":"declared"},
+    {"fact":"/topology/heads","value":40,"source":{"kind":"file","ref":"config.json#/num_attention_heads"},"confidence":"declared"},
+    {"fact":"/topology/kvHeads","value":8,"source":{"kind":"file","ref":"config.json#/num_key_value_heads"},"confidence":"declared"},
+    {"fact":"/topology/headDim","value":128,"source":{"kind":"file","ref":"config.json#/head_dim"},"confidence":"declared"},
+    {"fact":"/topology/paramsTotal","value":1359284737,"source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected"},
+    {"fact":"/topology/attention/histogram","source":{"kind":"file","ref":"config.json#/layer_types"},"confidence":"declared"},
+    {"fact":"/topology/attention/runs","source":{"kind":"file","ref":"config.json#/layer_types"},"confidence":"declared"},
+    {"fact":"/topology/attention/kinds/full","source":{"kind":"file","ref":"config.json"},"confidence":"declared"},
+    {"fact":"/weights/exact","value":true,"source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected"},
+    {
+      "fact": "/weights/totalBytes",
+      "value": 2718576122,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "model.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按文件头布局计算的权重文件总大小（头、张量和对齐填充），即完整下载的大小；tensorBytes 只计张量。",
+        "en": "The weight files as their headers lay them out (header, tensors, padding): the size of a complete download. tensorBytes counts tensors only."
+      }
+    },
+    {"fact":"/weights/tensorBytes","value":2718569474,"source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/byDtype","source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/byClass","source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected"},
+    {"fact":"/format/kind","value":"safetensors","source":{"kind":"file","ref":null},"confidence":"declared","note":{"zh":"来自文件夹列表（只读取文件大小）。","en":"From the folder listing (file sizes only)."}},
+    {"fact":"/format/weightFiles","value":1,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/weightBytes","value":2718576122,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/complete","value":true,"source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/format/layout","value":"single","source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/customCode/files","source":{"kind":"file","ref":"dflash.py"},"confidence":"declared"},
+    {"fact":"/speculative/nativeMtp","value":false,"source":{"kind":"tensor-table","ref":"model.safetensors"},"confidence":"detected","note":{"zh":"没有找到 MTP 张量。","en":"No MTP tensors were found."}}
+  ],
+  "warnings": [
+    {
+      "code": "template_missing",
+      "message": {
+        "zh": "没有找到聊天模板（chat_template.jinja、tokenizer_config.json 或 GGUF），工具调用和思考格式未知。",
+        "en": "No chat template was found (chat_template.jinja, tokenizer_config.json or GGUF); the tool-call and reasoning formats are unknown."
+      }
+    }
+  ],
+  "errors": []
+}
