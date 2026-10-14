@@ -19,6 +19,8 @@ const { REPO_ID } = require("./hf-config");
 const { absolutePath, filesOfKind } = require("./inventory");
 const { createTensorStats, field } = require("./topology");
 
+const SPLIT_GGUF = /^.*-\d{5}-of-\d{5}\.gguf$/i;
+
 const COPY = Object.freeze({
   headerInvalid: (name, reason) => ({
     zh: `${name} 的 GGUF 头无效（${reason}）。`,
@@ -35,6 +37,10 @@ const COPY = Object.freeze({
   shardsMissing: (count) => ({
     zh: `缺少 ${count} 个 GGUF 分片。`,
     en: `${count} GGUF shard(s) are missing.`,
+  }),
+  truncated: (count) => ({
+    zh: `${count} 个 GGUF 文件比头部声明的张量数据短，可能没有下载完整。`,
+    en: `${count} GGUF file(s) are shorter than the tensor data their headers declare; the download may be incomplete.`,
   }),
   allFull: {
     zh: "GGUF 没有声明逐层注意力类型，按全部为全注意力处理。",
@@ -109,7 +115,9 @@ function readHeaders(inv, facts, names) {
       const header = readGgufHeaderSync(absolutePath(inv, name), { stat: { size: entry.size } });
       headers.push({ name, size: entry.size, header, role: headerRole(header) });
     } catch (error) {
-      facts.error("gguf_header_invalid", name, COPY.headerInvalid(name, String(error.message || error).slice(0, 160)));
+      // File system errors name the absolute path; the card keeps the code only.
+      const reason = typeof error?.code === "string" ? `read failed (${error.code})` : String(error?.message || error).slice(0, 160);
+      facts.error("gguf_header_invalid", name, COPY.headerInvalid(name, reason));
     }
   }
   return headers;
@@ -310,6 +318,26 @@ function ggufTopologyInput(kv, file) {
   };
 }
 
+// GGUF files whose headers could not be read, and nothing else to describe:
+// the card lists them as damaged (02 §20) and knows nothing from inside them.
+function damagedGguf(inv, names) {
+  const split = names.every((name) => SPLIT_GGUF.test(path.posix.basename(name)));
+  return {
+    kv: {},
+    file: names[0],
+    role: "model",
+    topology: null,
+    stats: null,
+    tensorTypes: {},
+    files: names.map((name) => inv.files.find((entry) => entry.name === name)),
+    layout: split ? "gguf-split" : names.length === 1 ? "single" : null,
+    missing: [],
+    truncated: [],
+    damaged: [...names],
+    projectors: [],
+  };
+}
+
 function baseModelOf(kv) {
   const url = kv["general.base_model.0.repo_url"];
   const match = typeof url === "string" ? url.match(/^https:\/\/huggingface\.co\/([^/\s?#]+\/[^/\s?#]+)\/?$/) : null;
@@ -319,14 +347,19 @@ function baseModelOf(kv) {
 /**
  * ggufFacts(inv, facts, {file, classes}) -> null without GGUF files, else
  * { kv, file, role, topology, stats, tensorTypes, files: [entries], layout,
- *   missing: [name], truncated: [name], projectors: [name] }.
+ *   missing: [name], truncated: [name], damaged: [name], projectors: [name] }.
+ * When no header can be read (or the requested file's cannot), kv is empty,
+ * topology and stats are null and `damaged` names the files.
  */
 function ggufFacts(inv, facts, { file = null, classes } = {}) {
   const names = filesOfKind(inv, "weights:gguf").map((entry) => entry.name);
   if (!names.length) return null;
   const items = readHeaders(inv, facts, names);
+  // A requested file with an unreadable header is described as damaged, never
+  // by another variant of the folder.
+  if (file && !items.some((item) => item.name === file)) return damagedGguf(inv, [file]);
   const set = selectGgufSet(items, { file });
-  if (!set) return null;
+  if (!set) return damagedGguf(inv, names);
   const { main } = set;
   const first = main.first.name;
   const kv = main.first.header.kv || {};
@@ -413,12 +446,13 @@ function ggufFacts(inv, facts, { file = null, classes } = {}) {
     file: first,
     role: main.role,
     topology,
-    stats: stats.stats,
+    stats,
     tensorTypes,
     files: main.shards.map((item) => inv.files.find((entry) => entry.name === item.name)),
     layout: main.count > 1 ? "gguf-split" : "single",
     missing: main.missing,
     truncated,
+    damaged: [],
     projectors: projectorFiles,
   };
 }

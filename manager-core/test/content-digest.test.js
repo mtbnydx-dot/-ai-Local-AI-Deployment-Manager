@@ -250,3 +250,42 @@ test("fingerprintLocal: the stat-only cache key, and the digest reused while the
   assert.notEqual(touched.key, first.key, "mtime is part of the key");
   assert.equal(touched.contentDigest, first.contentDigest, "but not of the content");
 });
+
+test("a damaged GGUF header or an unreadable small file still gives a digest (02 §20)", async (t) => {
+  const dir = await tempDir(t);
+  await fsp.writeFile(path.join(dir, "broken.gguf"), Buffer.from("GGUF not a header"));
+  const broken = await contentDigestForDir(dir);
+  assert.match(broken, DIGEST);
+  await fsp.writeFile(path.join(dir, "broken.gguf"), Buffer.from("GGUF not a header either"));
+  assert.notEqual(await contentDigestForDir(dir), broken, "its size still counts");
+
+  const parent = await tempDir(t);
+  const model = await materializeFixture("syn-llama3-8b", { parent, name: "llama" });
+  const digest = await contentDigestForDir(model.dir);
+  // A file that fails halfway hashes like one that fails at once.
+  const failing = (failAfterReads) => ({
+    promises: {
+      async open(file, flags) {
+        const handle = await fs.promises.open(file, flags);
+        if (path.basename(String(file)) !== "config.json") return handle;
+        let reads = 0;
+        const read = handle.read.bind(handle);
+        handle.read = async (...args) => {
+          reads += 1;
+          if (reads > failAfterReads) throw Object.assign(new Error("simulated read failure"), { code: "EIO" });
+          return read(...args);
+        };
+        return handle;
+      },
+    },
+  });
+  const atOnce = await contentDigestForDir(model.dir, { fs: failing(0) });
+  assert.match(atOnce, DIGEST);
+  assert.notEqual(atOnce, digest);
+  assert.equal(await contentDigestForDir(model.dir, { fs: failing(0) }), atOnce, "deterministic");
+  // A config.json over one read chunk (1 MiB): the first chunk reads, the second fails.
+  const configFile = path.join(model.dir, "config.json");
+  const text = await fsp.readFile(configFile, "utf8");
+  await fsp.writeFile(configFile, text + " ".repeat(2 * MiB));
+  assert.equal(await contentDigestForDir(model.dir, { fs: failing(1) }), await contentDigestForDir(model.dir, { fs: failing(0) }));
+});

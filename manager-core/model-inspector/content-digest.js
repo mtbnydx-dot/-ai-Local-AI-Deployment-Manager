@@ -42,18 +42,26 @@ async function readAt(handle, position, length) {
   return offset === length ? buffer : buffer.subarray(0, offset);
 }
 
-async function hashFileInto(hash, file, size, fs) {
-  const handle = await fs.promises.open(file, "r");
+// The chunks of a small file, or null when it cannot be read. Nothing reaches
+// the hash until the whole file is in, so a read that fails halfway leaves
+// the same digest as one that fails at once.
+async function readChunks(file, size, fs) {
+  let handle;
   try {
+    handle = await fs.promises.open(file, "r");
+    const chunks = [];
     let position = 0;
     while (position < size) {
       const chunk = await readAt(handle, position, Math.min(CHUNK_BYTES, size - position));
       if (!chunk.length) break;
-      hash.update(chunk);
+      chunks.push(chunk);
       position += chunk.length;
     }
+    return chunks;
+  } catch {
+    return null;
   } finally {
-    await handle.close();
+    await handle?.close().catch(() => {});
   }
 }
 
@@ -151,15 +159,28 @@ async function contentDigestForDir(dir, options = {}) {
       hash.update(`${label} ${entry.name} ${entry.size} unhashed\n`);
       return;
     }
+    const chunks = await readChunks(absolutePath(inv, entry.name), entry.size, fs);
+    if (!chunks) {
+      hash.update(`${label} ${entry.name} ${entry.size} unreadable\n`);
+      return;
+    }
     hash.update(`${label} ${entry.name} ${entry.size}\n`);
-    await hashFileInto(hash, absolutePath(inv, entry.name), entry.size, fs);
+    for (const chunk of chunks) hash.update(chunk);
     hash.update("\n");
   };
   for (const entry of plan.small) await hashEntry("file", entry);
   if (plan.index) await hashEntry("index", plan.index);
   for (const entry of plan.gguf) {
-    const header = await readGgufHead(absolutePath(inv, entry.name), entry.size, fs);
-    hash.update(`gguf-kv ${entry.name}\n${JSON.stringify(canonicalGgufKv(header.kv))}\n`);
+    // A damaged header is reported by the GGUF detector (02 §20); the digest
+    // still covers the file by name and size.
+    let header = null;
+    try {
+      header = await readGgufHead(absolutePath(inv, entry.name), entry.size, fs);
+    } catch {
+      header = null;
+    }
+    if (header) hash.update(`gguf-kv ${entry.name}\n${JSON.stringify(canonicalGgufKv(header.kv))}\n`);
+    else hash.update(`gguf-kv ${entry.name} unreadable\n`);
   }
   hash.update("weights\n");
   for (const entry of plan.weights) hash.update(`${entry.name}\t${entry.size}\n`);

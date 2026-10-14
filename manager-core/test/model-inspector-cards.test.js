@@ -414,11 +414,8 @@ test("Flash-Next (418 files): cold inspect < 10 s without blocking the event loo
   const started = performance.now();
   const cold = await models.inspectLocalDetailed(model.dir, { cacheDir: localCache });
   const coldMs = performance.now() - started;
-  histogram.disable();
   assert.equal(cold.cached, false);
   assert.ok(coldMs < 10_000, `cold inspect took ${Math.round(coldMs)} ms`);
-  const maxDelayMs = histogram.max / 1e6;
-  assert.ok(maxDelayMs < 100, `the event loop was blocked for ${maxDelayMs.toFixed(1)} ms`);
 
   const timed = async () => {
     const begin = performance.now();
@@ -426,16 +423,23 @@ test("Flash-Next (418 files): cold inspect < 10 s without blocking the event loo
     assert.equal(result.cached, true);
     return performance.now() - begin;
   };
-  // Best of three: one slow sample on a busy machine is noise, not the cache.
-  const memoryMs = Math.min(await timed(), await timed(), await timed());
+  // Best of five: a cached read still stats all 418 files, so a slow sample on
+  // a busy disk is noise, not the cache.
+  const memorySamples = [];
+  for (let index = 0; index < 5; index += 1) memorySamples.push(await timed());
+  const memoryMs = Math.min(...memorySamples);
   assert.ok(memoryMs < 50, `cached inspect (memory) took ${memoryMs.toFixed(1)} ms`);
   const diskSamples = [];
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < 5; index += 1) {
     await resetInspector();
     diskSamples.push(await timed());
   }
   const diskMs = Math.min(...diskSamples);
   assert.ok(diskMs < 50, `cached inspect (cache file) took ${diskMs.toFixed(1)} ms`);
+  // The loop stayed free through the cold inspection and every cached read.
+  histogram.disable();
+  const maxDelayMs = histogram.max / 1e6;
+  assert.ok(maxDelayMs < 100, `the event loop was blocked for ${maxDelayMs.toFixed(1)} ms`);
 });
 
 test("a stuck inspection times out and the next one starts a fresh worker", async () => {
@@ -493,7 +497,8 @@ test("damaged downloads: missing and truncated shards, bad headers and bad JSON 
   await fsp.writeFile(path.join(model.dir, "generation_config.json"), "{ broken");
   const card = await models.inspectLocal(model.dir, { cacheDir });
   assert.equal(card.format.complete, false);
-  assert.deepEqual(card.format.missing, ["model-00003-of-00004.safetensors", "model-00004-of-00004.safetensors"]);
+  // Absent, truncated and unreadable shards all keep the download incomplete.
+  assert.deepEqual(card.format.missing, ["model-00002-of-00004.safetensors", "model-00003-of-00004.safetensors", "model-00004-of-00004.safetensors"]);
   assert.equal(card.weights.exact, false);
   assert.deepEqual(card.errors.map((error) => `${error.code} ${error.file}`), [
     "json_invalid generation_config.json",
@@ -517,6 +522,43 @@ test("a .complete.json marker without its shard is a missing shard", async (t) =
   const card = await models.inspectLocal(dir, { cacheDir });
   assert.deepEqual(card.format.missing, ["part-b.safetensors"]);
   assert.equal(card.format.complete, false);
+});
+
+test("a GGUF whose header cannot be read is a damaged artifact, not a failed inspection (02 §20)", async (t) => {
+  const dir = await tempDir(t);
+  await fsp.writeFile(path.join(dir, "broken-Q8_0.gguf"), Buffer.from("GGUF not really a header"));
+  const folder = await models.inspectLocal(dir, { cacheDir });
+  assert.deepEqual([folder.format.kind, folder.format.complete, folder.format.missing, folder.format.layout], ["gguf", false, ["broken-Q8_0.gguf"], "single"]);
+  assert.deepEqual(folder.errors.map((error) => `${error.code} ${error.file}`), ["gguf_header_invalid broken-Q8_0.gguf"]);
+  assert.equal(folder.weights, null, "nothing inside the file is known");
+  assert.match(folder.contentDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(models.validateCard(folder).errors, []);
+
+  // With a readable variant beside it, the folder card describes that one,
+  // and a card for the broken file never borrows the other variant's facts.
+  const { buildGguf } = require("./helpers/gguf-writer");
+  const built = buildGguf({
+    kv: [
+      { key: "general.architecture", type: "string", value: "llama" },
+      { key: "llama.block_count", type: "uint32", value: 2 },
+    ],
+    tensors: [{ name: "token_embd.weight", dims: [64, 32], typeId: 1 }],
+  });
+  const good = path.join(dir, "good-Q4_K_M.gguf");
+  await fsp.writeFile(good, built.header);
+  await fsp.truncate(good, built.totalBytes);
+  const both = await models.inspectLocal(dir, { cacheDir });
+  assert.deepEqual([both.identity.ggufArchitecture, both.format.complete, both.format.missing], ["llama", true, []]);
+  const broken = await models.inspectLocal(path.join(dir, "broken-Q8_0.gguf"), { cacheDir });
+  assert.deepEqual([broken.identity.ggufArchitecture, broken.format.complete, broken.format.missing], [null, false, ["broken-Q8_0.gguf"]]);
+  assert.deepEqual(models.validateCard(broken).errors, []);
+
+  // A file cut short of its tensor data keeps its header facts but is incomplete.
+  await fsp.truncate(good, built.totalBytes - 16);
+  const short = await models.inspectLocal(good, { cacheDir });
+  assert.deepEqual([short.identity.ggufArchitecture, short.format.complete, short.format.missing], ["llama", false, ["good-Q4_K_M.gguf"]]);
+  assert.ok(short.warnings.some((warning) => warning.code === "weights_truncated"));
+  assert.deepEqual(models.validateCard(short).errors, []);
 });
 
 test("inspect targets: a folder or a GGUF file; missing, non-model, UNC and out-of-library paths are refused", async (t) => {

@@ -112,14 +112,15 @@ function statsRef(files) {
 /**
  * buildTensorTable(inv, facts, {files, depth, classes}) -> TensorTable
  * TensorTable: { stats (TensorStats, null for depth "quick"), indexName,
- * indexTotalBytes, missing: [name], truncated: [name] }. Errors and warnings
- * go to the fact set.
+ * indexTotalBytes, missing: [name], truncated: [name], damaged: [name] (an
+ * unreadable header) }. Errors and warnings go to the fact set.
  */
 function buildTensorTable(inv, facts, { files, depth = "full", classes } = {}) {
   const shards = files.filter((entry) => entry.kind === "weights:safetensors");
   const present = new Set(inv.files.map((entry) => entry.name));
   const missing = new Set();
   const truncated = [];
+  const damaged = [];
 
   const indexEntry = weightIndex(inv);
   const index = indexEntry ? readJsonFile(inv, indexEntry.name, facts, { maxBytes: MAX_INDEX_BYTES }) : null;
@@ -135,6 +136,7 @@ function buildTensorTable(inv, facts, { files, depth = "full", classes } = {}) {
     indexTotalBytes: Number.isSafeInteger(indexTotal) && indexTotal >= 0 ? indexTotal : null,
     missing: [],
     truncated,
+    damaged,
   };
 
   if (depth !== "quick" && shards.length) {
@@ -146,7 +148,8 @@ function buildTensorTable(inv, facts, { files, depth = "full", classes } = {}) {
       } catch (error) {
         tensors.markInexact();
         tensors.addLayout(shard.size);
-        const reason = error instanceof SafetensorsHeaderError ? error.message : "read failed";
+        damaged.push(shard.name);
+        const reason = error instanceof SafetensorsHeaderError ? error.message : `read failed${typeof error?.code === "string" ? ` (${error.code})` : ""}`;
         facts.error("safetensors_header_invalid", shard.name, COPY.headerInvalid(shard.name, reason));
         continue;
       }

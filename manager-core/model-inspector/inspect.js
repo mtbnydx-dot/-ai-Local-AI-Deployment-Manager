@@ -106,7 +106,7 @@ function writeFormat(inv, facts, { gguf, table, transformers, quantMethod }) {
     kind = "gguf";
     files = gguf.files;
     layout = gguf.layout;
-    missing = [...gguf.missing, ...gguf.truncated];
+    missing = [...gguf.missing, ...gguf.truncated, ...gguf.damaged];
   } else if (transformers.files.length) {
     const kinds = new Set(transformers.files.map((entry) => entry.kind));
     if (hasGguf || kinds.size > 1) kind = "mixed";
@@ -114,7 +114,7 @@ function writeFormat(inv, facts, { gguf, table, transformers, quantMethod }) {
     else kind = "pytorch-bin";
     files = transformers.files;
     layout = hasGguf ? "custom" : transformersLayout(inv, transformers);
-    missing = [...(table?.missing || []), ...(table?.truncated || [])];
+    missing = [...(table?.missing || []), ...(table?.truncated || []), ...(table?.damaged || [])];
     if (hasGguf) facts.warn("mixed_weight_formats", COPY.mixed);
   }
   missing = Array.from(new Set(missing)).sort();
@@ -397,7 +397,9 @@ function createWorkerRunner({ file = WORKER_FILE, idleMs = WORKER_IDLE_MS } = {}
 // inspectLocal
 
 let runner = null;
-const flights = createSingleFlightCache({ ttlMs: 0, maxEntries: 64 });
+// In-flight sharing only: every get passes ttlMs 0, so a finished detection
+// is never served from here (the memory map and the cache file do that).
+const flights = createSingleFlightCache({ maxEntries: 64 });
 const memory = new Map();
 let cacheWriteWarned = false;
 
@@ -554,7 +556,7 @@ async function inspectLocalDetailed(target, options = {}) {
       }
     }
     return detected;
-  }), options.signal);
+  }, { ttlMs: 0 }), options.signal);
   return finish(entry, false);
 }
 
