@@ -15,9 +15,7 @@
     "allowOverride": false
   },
   "match": {
-    "capabilityIds": [
-      "qwen3.5-3.6"
-    ],
+    "familyId": "qwen3.5-3.6",
     "quant": [
       "nvfp4",
       "modelopt_fp4"

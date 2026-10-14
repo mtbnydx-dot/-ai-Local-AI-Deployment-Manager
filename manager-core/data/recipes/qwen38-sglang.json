@@ -11,9 +11,7 @@
   },
   "engineId": "sglang",
   "match": {
-    "capabilityIds": [
-      "qwen3.8"
-    ]
+    "familyId": "qwen3.8"
   },
   "priority": 50,
   "values": {

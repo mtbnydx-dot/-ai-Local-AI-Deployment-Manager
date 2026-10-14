@@ -15,9 +15,7 @@
     "allowOverride": false
   },
   "match": {
-    "capabilityIds": [
-      "gemma4"
-    ]
+    "familyId": "gemma4"
   },
   "appliesWhen": {
     "in": [

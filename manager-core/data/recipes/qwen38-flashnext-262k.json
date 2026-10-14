@@ -15,9 +15,7 @@
     "allowOverride": true
   },
   "match": {
-    "capabilityIds": [
-      "qwen3.8-flash-next"
-    ],
+    "familyId": "qwen3.8-flash-next",
     "quant": [
       "modelopt_fp4",
       "nvfp4",

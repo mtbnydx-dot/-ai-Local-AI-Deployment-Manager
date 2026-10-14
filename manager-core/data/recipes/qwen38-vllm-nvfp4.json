@@ -11,9 +11,7 @@
   },
   "engineId": "vllm",
   "match": {
-    "capabilityIds": [
-      "qwen3.8"
-    ],
+    "familyId": "qwen3.8",
     "quant": [
       "nvfp4",
       "modelopt_fp4"
