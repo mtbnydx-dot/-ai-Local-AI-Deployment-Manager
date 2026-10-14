@@ -9,11 +9,7 @@ const {
 const { FORWARDED_HEADERS } = require("./security");
 const { encodeUsageCursor } = require("./billing-store");
 // The one internal signing module; it owns the /internal/* prefix allowlist.
-const {
-  BILLING_PATH_PREFIX,
-  normalizeInternalManagerId,
-  verifyInternalRequest,
-} = require("../../manager-core/internal-auth");
+const { BILLING_PATH_PREFIX, verifyInternalRequest } = require("../../manager-core/internal-auth");
 
 const MAX_BILLING_BODY_BYTES = 256 * 1024;
 const USAGE_SUMMARY_PATH = "/api/billing/usage/summary";
@@ -252,15 +248,6 @@ async function readBillingBody(req, readRequestBody) {
   return { raw, data };
 }
 
-// A manager bills for the principal the entry vouched for (05 §6.4), so the
-// binding scope (credentialManagerId) may name "platform" or another manager's
-// billing id, for a migrated key served by the other manager. Only its form is
-// checked here; an unknown scope finds no binding and bills as unbound.
-function isCredentialScope(value) {
-  if (value === undefined || value === null || value === "") return true;
-  return typeof value === "string" && Boolean(normalizeInternalManagerId(value));
-}
-
 function storeMethod(store, name) {
   const fn = store?.[name];
   if (typeof fn !== "function") throw new Error(`Billing store method is unavailable: ${name}`);
@@ -333,10 +320,6 @@ function createBillingHttpHandler(options = {}) {
       }
       if (String(data.managerId || "").trim().toLowerCase() !== verified.managerId) {
         sendJson(res, { ok: false, allowed: false, code: "billing_manager_mismatch", message: "Billing manager identity does not match." }, 401);
-        return true;
-      }
-      if (!isCredentialScope(data.credentialManagerId)) {
-        sendJson(res, { ok: false, allowed: false, code: "billing_credential_scope_invalid", message: "Billing credential scope is invalid." }, 400);
         return true;
       }
       const store = getStore();
