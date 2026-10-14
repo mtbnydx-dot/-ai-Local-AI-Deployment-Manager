@@ -31,6 +31,8 @@ async function verifyDownloadChecksums(localDir, manifest, options = {}) {
   const root = path.resolve(String(localDir || ""));
   const entries = normalizeManifest(manifest);
   const onFile = typeof options.onFile === "function" ? options.onFile : () => {};
+  // The model hub's hash worker passes a hasher that reports progress (03 §3).
+  const hashFile = typeof options.sha256File === "function" ? options.sha256File : sha256File;
   const result = { checked: 0, matched: 0, mismatched: [], missing: [], totalBytes: 0 };
   for (const entry of entries) {
     const filePath = path.resolve(root, entry.name);
@@ -54,7 +56,7 @@ async function verifyDownloadChecksums(localDir, manifest, options = {}) {
       onFile({ name: entry.name, status: "size-mismatch" });
       continue;
     }
-    const digest = await sha256File(filePath);
+    const digest = await hashFile(filePath, entry);
     result.checked += 1;
     result.totalBytes += stat.size;
     if (digest === entry.sha256) {
