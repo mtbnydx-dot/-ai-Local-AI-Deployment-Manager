@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "kind": "families",
+  "asOf": "2026-10-14",
+  "staleAfterDays": 120,
+  "tensorClasses": [
+    {
+      "class": "mtp",
+      "patterns": [
+        "^(?:model\\.)?mtp\\.",
+        "\\.nextn\\.",
+        "^blk\\.\\d+\\.nextn\\."
+      ]
+    },
+    {
+      "class": "vision",
+      "patterns": [
+        "(?:^|\\.)visual\\.",
+        "vision_tower",
+        "^v\\.",
+        "multi_modal_projector"
+      ]
+    },
+    {
+      "class": "audio",
+      "patterns": [
+        "audio_tower",
+        "^a\\."
+      ]
+    },
+    {
+      "class": "ple",
+      "patterns": [
+        "\\.ple\\.",
+        "per_layer_embed"
+      ]
+    },
+    {
+      "class": "experts",
+      "patterns": [
+        "\\.experts\\.\\d+\\.",
+        "\\.mlp\\.experts\\.",
+        "^blk\\.\\d+\\.ffn_(?:gate|up|down|gate_up)_exps\\."
+      ],
+      "layerGroup": 1
+    },
+    {
+      "class": "embedding",
+      "patterns": [
+        "embed_tokens\\.weight$",
+        "^token_embd\\."
+      ]
+    },
+    {
+      "class": "lmHead",
+      "patterns": [
+        "^lm_head\\.",
+        "^output\\.weight$"
+      ]
+    }
+  ],
+  "capabilityIdAliases": {},
+  "entries": []
+}
