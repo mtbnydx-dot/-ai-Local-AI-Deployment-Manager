@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "namespace": "public",
+  "owner": "05-public",
+  "asOf": "2026-10-14",
+  "staleAfterDays": 365,
+  "title": { "zh-CN": "公网服务", "en-US": "Public service" },
+  "properties": {
+    "extraHosts": {
+      "type": "array", "items": { "type": "string", "format": "hostname" }, "default": [],
+      "title": { "zh-CN": "额外允许的公网主机名", "en-US": "Extra public host names" },
+      "description": { "zh-CN": "除公网地址中的域名外，公网监听端口还接受这些主机名，例如反向代理使用的其他域名。", "en-US": "Host names the public listener accepts besides the one in the public address, such as another domain your reverse proxy uses." },
+      "env": ["SERVICE_ENTRY_ALLOWED_HOSTS"], "envParse": "csv", "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "access"
+    },
+    "brand": {
+      "type": "object",
+      "properties": {
+        "zh-CN": {
+          "type": "string", "pattern": "^[^\\u0000-\\u001f]{1,60}$", "default": "本地模型服务",
+          "title": { "zh-CN": "门户名称（中文）", "en-US": "Portal name (Chinese)" },
+          "description": { "zh-CN": "公网门户中文界面显示的服务名称。", "en-US": "The service name the public portal shows in Chinese." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "en-US": {
+          "type": "string", "pattern": "^[^\\u0000-\\u001f]{1,60}$", "default": "Local Model Service",
+          "title": { "zh-CN": "门户名称（英文）", "en-US": "Portal name (English)" },
+          "description": { "zh-CN": "公网门户英文界面显示的服务名称。", "en-US": "The service name the public portal shows in English." },
+          "restartRequired": false, "secret": false, "group": "access"
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "properties": {
+        "publish": {
+          "type": "array", "items": { "type": "string", "pattern": "^[^\\s,]{1,200}$" }, "default": ["*"],
+          "title": { "zh-CN": "公开的模型", "en-US": "Published models" },
+          "description": { "zh-CN": "公网门户的模型目录和状态页列出哪些模型，可用 * 通配，例如 qwen*；只写 * 表示全部。", "en-US": "Which models the public catalog and status page list. Patterns may use *, for example qwen*; * alone lists every model." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "showPrices": {
+          "type": "boolean", "default": true,
+          "title": { "zh-CN": "公开显示价格", "en-US": "Show prices publicly" },
+          "description": { "zh-CN": "在公网模型目录中显示每个模型的计费价格。", "en-US": "Show each model's prices in the public model catalog." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "allowColdStart": {
+          "type": "boolean", "default": false,
+          "title": { "zh-CN": "允许公网请求唤醒模型", "en-US": "Let public requests start models" },
+          "description": { "zh-CN": "公网请求指向已休眠或未运行的模型时，是否允许自动唤醒或启动它。关闭时返回“模型未就绪”。", "en-US": "Whether a public request for a sleeping or stopped model may wake or start it. When off, the request gets a model-not-ready error." },
+          "restartRequired": false, "secret": false, "group": "access"
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "rpm": {
+          "type": "integer", "minimum": 1, "maximum": 100000, "default": 60,
+          "title": { "zh-CN": "每个密钥默认每分钟请求数", "en-US": "Default requests per minute per key" },
+          "description": { "zh-CN": "公网密钥没有单独设置时，每分钟最多可发送的请求数。", "en-US": "How many requests per minute a public key may send when it has no limit of its own." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "tpm": {
+          "type": "integer", "minimum": 1, "maximum": 100000000, "default": 200000,
+          "title": { "zh-CN": "每个密钥默认每分钟令牌数", "en-US": "Default tokens per minute per key" },
+          "description": { "zh-CN": "公网密钥没有单独设置时，每分钟最多可使用的输入加输出令牌数。", "en-US": "How many input plus output tokens per minute a public key may use when it has no limit of its own." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "maxConcurrent": {
+          "type": "integer", "minimum": 1, "maximum": 256, "default": 2,
+          "title": { "zh-CN": "每个密钥默认并发请求数", "en-US": "Default concurrent requests per key" },
+          "description": { "zh-CN": "公网密钥没有单独设置时，同时进行中的请求上限。", "en-US": "How many requests a public key may have in flight at once when it has no limit of its own." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "maxQueued": {
+          "type": "integer", "minimum": 0, "maximum": 1024, "default": 4,
+          "title": { "zh-CN": "每个密钥默认排队请求数", "en-US": "Default queued requests per key" },
+          "description": { "zh-CN": "达到并发上限后，公网密钥最多可排队等待的请求数。", "en-US": "How many requests a public key may have waiting once it reaches its concurrency limit." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "queueTimeoutSeconds": {
+          "type": "integer", "minimum": 1, "maximum": 600, "default": 30,
+          "title": { "zh-CN": "默认排队等待时间（秒）", "en-US": "Default queue wait (seconds)" },
+          "description": { "zh-CN": "排队的公网请求最多等待的秒数，超时后返回繁忙错误。", "en-US": "How many seconds a queued public request waits at most before it gets a busy error." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "maxOutputTokens": {
+          "type": "integer", "minimum": 1, "maximum": 1048576, "default": 8192,
+          "title": { "zh-CN": "默认单次最大输出令牌数", "en-US": "Default output token limit per request" },
+          "description": { "zh-CN": "公网密钥没有单独设置时，单个请求最多可生成的输出令牌数。", "en-US": "The largest output a single public request may ask for when its key has no limit of its own." },
+          "restartRequired": false, "secret": false, "group": "access"
+        }
+      }
+    },
+    "share": {
+      "type": "object",
+      "properties": {
+        "maxConcurrent": {
+          "type": "integer", "minimum": 1, "maximum": 256, "default": 4,
+          "title": { "zh-CN": "公网总并发请求数", "en-US": "Public concurrent requests in total" },
+          "description": { "zh-CN": "所有公网密钥合计同时进行中的请求上限，为本机自用保留算力。", "en-US": "How many public requests may be in flight at once across all keys, so the owner keeps capacity." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "maxQueued": {
+          "type": "integer", "minimum": 0, "maximum": 4096, "default": 16,
+          "title": { "zh-CN": "公网总排队请求数", "en-US": "Public queued requests in total" },
+          "description": { "zh-CN": "所有公网密钥合计最多可排队等待的请求数。", "en-US": "How many public requests may wait in total across all keys." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "queueTimeoutSeconds": {
+          "type": "integer", "minimum": 1, "maximum": 600, "default": 30,
+          "title": { "zh-CN": "公网排队等待时间（秒）", "en-US": "Public queue wait (seconds)" },
+          "description": { "zh-CN": "等待公网总并发名额的请求最多等待的秒数。", "en-US": "How many seconds a request waiting for a public slot waits at most." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "ownerActiveMaxConcurrent": {
+          "type": "integer", "minimum": 0, "maximum": 256, "default": 2,
+          "title": { "zh-CN": "本机使用时的公网并发数", "en-US": "Public concurrency while the owner is active" },
+          "description": { "zh-CN": "本机或控制台正在使用模型时，公网总并发请求降到这个数；它不能大于公网总并发请求数。", "en-US": "While the owner or the console is using the models, public requests in flight drop to this number. It cannot exceed the public total." },
+          "restartRequired": false, "secret": false, "group": "access"
+        }
+      }
+    },
+    "preAuth": {
+      "type": "object",
+      "properties": {
+        "rpm": {
+          "type": "integer", "minimum": 1, "maximum": 100000, "default": 120,
+          "title": { "zh-CN": "验证前每个 IP 每分钟请求数", "en-US": "Requests per minute per IP before the key check" },
+          "description": { "zh-CN": "验证密钥之前，每个来源 IP 每分钟最多可发送的请求数，用于拖慢扫描。", "en-US": "How many requests per minute one source IP may send before its key is checked, to slow down scanners." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "burst": {
+          "type": "integer", "minimum": 1, "maximum": 10000, "default": 30,
+          "title": { "zh-CN": "验证前每个 IP 突发请求数", "en-US": "Burst per IP before the key check" },
+          "description": { "zh-CN": "每个来源 IP 在短时间内可以连续发送的请求数。", "en-US": "How many requests one source IP may send in a short burst." },
+          "restartRequired": false, "secret": false, "group": "access"
+        }
+      }
+    },
+    "authFailure": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer", "minimum": 1, "maximum": 10000, "default": 20,
+          "title": { "zh-CN": "密钥错误次数上限", "en-US": "Failed key attempts allowed" },
+          "description": { "zh-CN": "同一来源在统计窗口内密钥验证失败达到这个次数后被临时封禁。", "en-US": "How many failed key checks from one source within the window lead to a temporary ban." },
+          "env": ["SERVICE_ENTRY_AUTH_FAIL_LIMIT"], "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "access"
+        },
+        "windowSeconds": {
+          "type": "integer", "minimum": 1, "maximum": 86400, "default": 60,
+          "title": { "zh-CN": "密钥错误统计窗口（秒）", "en-US": "Failed attempt window (seconds)" },
+          "description": { "zh-CN": "统计密钥验证失败次数所用的时间窗口。", "en-US": "The time window failed key checks are counted in." },
+          "env": ["SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS"], "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "access"
+        },
+        "banSeconds": {
+          "type": "integer", "minimum": 1, "maximum": 2592000, "default": 600,
+          "title": { "zh-CN": "首次封禁时长（秒）", "en-US": "First ban length (seconds)" },
+          "description": { "zh-CN": "来源第一次被封禁的秒数，再次触发时逐步加长；不能大于最长封禁时长。", "en-US": "How many seconds the first ban of a source lasts; repeat bans grow longer. It cannot exceed the longest ban." },
+          "env": ["SERVICE_ENTRY_AUTH_BAN_SECONDS"], "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "access"
+        },
+        "maxBanSeconds": {
+          "type": "integer", "minimum": 1, "maximum": 2592000, "default": 86400,
+          "title": { "zh-CN": "最长封禁时长（秒）", "en-US": "Longest ban (seconds)" },
+          "description": { "zh-CN": "逐步加长后封禁时长的上限。", "en-US": "The upper limit growing bans reach." },
+          "restartRequired": false, "secret": false, "group": "access"
+        }
+      }
+    },
+    "maxBodyBytes": {
+      "type": "integer", "minimum": 1048576, "maximum": 67108864, "default": 16777216,
+      "title": { "zh-CN": "公网请求体上限（字节）", "en-US": "Public request body limit (bytes)" },
+      "description": { "zh-CN": "公网单个请求体的最大字节数，超出时请求被拒绝。", "en-US": "The largest body a single public request may send, in bytes; larger requests are refused." },
+      "restartRequired": false, "secret": false, "group": "access"
+    },
+    "exposeSearch": {
+      "type": "boolean", "default": false,
+      "title": { "zh-CN": "向公网开放联网搜索", "en-US": "Offer web search publicly" },
+      "description": { "zh-CN": "允许带有搜索权限的公网密钥使用联网搜索接口。", "en-US": "Let public keys with the search permission use the web search API." },
+      "restartRequired": false, "secret": false, "group": "access"
+    },
+    "exposeTts": {
+      "type": "boolean", "default": true,
+      "title": { "zh-CN": "向公网开放语音合成", "en-US": "Offer text to speech publicly" },
+      "description": { "zh-CN": "允许带有语音权限的公网密钥调用语音合成接口。声音克隆始终只在本机可用。", "en-US": "Let public keys with the speech permission call the text-to-speech API. Voice cloning always stays on this machine." },
+      "restartRequired": false, "secret": false, "group": "access"
+    },
+    "quotaTzOffsetMinutes": {
+      "type": ["integer", "null"], "minimum": -720, "maximum": 840, "default": null,
+      "title": { "zh-CN": "额度统计时区（分钟）", "en-US": "Quota time zone (minutes)" },
+      "description": { "zh-CN": "每日和每月额度按与 UTC 相差的这些分钟数切换周期；留空跟随计费中心的时区。", "en-US": "Daily and monthly quotas roll over at this offset from UTC, in minutes. Leave it empty to follow the billing time zone." },
+      "restartRequired": false, "secret": false, "group": "access"
+    },
+    "managersGatewayOnly": {
+      "type": "string", "enum": ["off", "warn", "enforce"], "default": "warn",
+      "title": { "zh-CN": "管理器只接受入口转发", "en-US": "Managers accept only the entry" },
+      "description": { "zh-CN": "模型管理器如何处理没有经过入口转发的模型请求：off 照常处理，warn 处理并记录，enforce 拒绝。", "en-US": "How the model managers treat model requests that did not come through the entry: off serves them, warn serves and logs them, enforce refuses them." },
+      "env": ["MANAGER_GATEWAY_ONLY"], "consumers": ["entry", "vllm-manager", "llama-manager"], "restartRequired": false, "secret": false, "group": "access"
+    }
+  }
+}
