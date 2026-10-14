@@ -11,6 +11,8 @@
       notify = () => {},
       reportError = (_title, error) => console.error(error),
       onInstancesChanged = () => {},
+      // openLogs(instanceId) shows the logs view for one instance (/api/logs?instance=).
+      openLogs = null,
       getLanguage = () => "zh-CN",
       engineLabel = "model runtime",
     } = deps;
@@ -30,6 +32,8 @@
         context: "context",
         port: "Port",
         copy: "Copy local API URL",
+        logs: "Logs",
+        logsTitle: "Show this instance's logs",
         stop: "Stop this instance",
         stopConfirm: "Stop this managed instance? Its model will be unloaded, while other instances stay running.",
         refreshed: "Runtime instances refreshed",
@@ -46,6 +50,8 @@
         context: "上下文",
         port: "端口",
         copy: "复制本机 API 地址",
+        logs: "日志",
+        logsTitle: "查看此实例的日志",
         stop: "停止此实例",
         stopConfirm: "确认停止这个管理实例？该实例的模型会被卸载，其他实例不受影响。",
         refreshed: "运行实例已刷新",
@@ -118,6 +124,7 @@
             </div>
             <div class="mini-actions runtime-instance-actions">
               ${url ? `<button type="button" title="${escapeAttr(labels.copy)}" data-instance-action="copy" data-url="${escapeAttr(url)}"><i data-lucide="copy"></i></button>` : ""}
+              ${typeof openLogs === "function" ? `<button type="button" class="runtime-instance-logs" title="${escapeAttr(labels.logsTitle)}" data-instance-action="logs" data-instance-id="${escapeAttr(instance.id || instance.containerName || "")}"><i data-lucide="scroll-text"></i><span>${escapeHtml(labels.logs)}</span></button>` : ""}
               <button type="button" class="danger" title="${escapeAttr(labels.stop)}" data-instance-action="stop" data-instance-id="${escapeAttr(instance.id || instance.containerName || "")}" data-instance-name="${escapeAttr(instance.containerName || instance.id || "")}"><i data-lucide="square"></i></button>
             </div>
           </article>
@@ -133,6 +140,10 @@
       if (action === "copy") {
         await navigator.clipboard.writeText(button.dataset.url || "");
         notify(copy().copied, button.dataset.url || "", "success");
+        return;
+      }
+      if (action === "logs") {
+        if (typeof openLogs === "function") openLogs(button.dataset.instanceId || "");
         return;
       }
       if (action !== "stop" || !window.confirm(copy().stopConfirm)) return;

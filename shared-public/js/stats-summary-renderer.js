@@ -24,8 +24,13 @@
       liveTokensLabel: "Current run tokens",
       liveRequestsLabel: "Current run requests",
       currentInstanceLabel: "当前实例",
-      currentSpeedLabel: "当前输出速度",
-      latencyLabel: "平均延迟",
+      // The speed label names where the number comes from (08 P0-7): the
+      // engine's live gauge, a counter window of n seconds, or nothing yet.
+      speedLiveLabel: "输出速度（实时）",
+      speedWindowLabel: (seconds) => `输出速度（近 ${seconds} 秒平均）`,
+      speedMixedLabel: "输出速度（多来源合计）",
+      speedSamplingLabel: "输出速度（采样中）",
+      latencyLabel: "平均延迟（启动以来）",
       kvLabel: "活跃 KV cache",
       kvDetail: "只表示当前正在推理的请求；聊天历史在 Open WebUI 侧保存",
       prefixCacheLabel: "Prefix cache 命中",
@@ -85,7 +90,7 @@
       }
 
       cards.push(
-        statsMetric(settings.currentSpeedLabel, fmtRate(speed.recentOutputTokensPerSecond, " tok/s"), `${fmtRate(speed.recentPromptTokensPerSecond, " in/s")} · ${fmtRate(speed.recentRequestsPerMinute, " req/min")}${speed.outputSource === "sglang_recent_gauge" ? " · 最近一次活跃采样" : speed.outputSource === "sglang_active_average" ? " · 启动以来活跃平均" : ""}`),
+        statsMetric(speedLabel(speed), fmtRate(speed.recentOutputTokensPerSecond, " tok/s"), `${fmtRate(speed.recentPromptTokensPerSecond, " in/s")} · ${fmtRate(speed.recentRequestsPerMinute, " req/min")}`),
         statsMetric(settings.latencyLabel, fmtSeconds(latency.avgE2eSeconds), `TTFT ${fmtSeconds(latency.avgTtftSeconds)}`),
         statsMetric(settings.kvLabel, formatContextUsage(context.activeTokens, context.capacityTokens, context.kvUsagePercent), settings.kvDetail),
       );
@@ -155,6 +160,19 @@
       const uptimeSeconds = settings.preferLiveRuntimeMetrics && stats.live ? stats.live.uptimeSeconds : stats.uptimeSeconds;
       cards.push(statsMetric(settings.uptimeLabel, uptimeSeconds ? formatDuration(uptimeSeconds) : "-", `${settings.lifetimeLabel} ${fmtRate(speed.lifetimeTokensPerSecond, " tok/s")}`));
       root.innerHTML = cards.join("");
+    }
+
+    // outputSource is counter_window | sglang_gen_throughput_gauge per model and
+    // also mixed | unavailable in the totals. A window without a baseline yet
+    // (windowSeconds missing or 0), "unavailable" and any legacy or unknown value
+    // read as sampling rather than borrowing a label that would overstate it.
+    function speedLabel(speed) {
+      const source = String(speed.outputSource || "");
+      const windowSeconds = Math.round(Number(speed.windowSeconds || 0));
+      if (source === "sglang_gen_throughput_gauge") return settings.speedLiveLabel;
+      if (source === "counter_window" && windowSeconds > 0) return settings.speedWindowLabel(windowSeconds);
+      if (source === "mixed") return settings.speedMixedLabel;
+      return settings.speedSamplingLabel;
     }
 
     function requestDetail(requests) {

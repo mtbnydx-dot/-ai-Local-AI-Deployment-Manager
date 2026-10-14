@@ -215,6 +215,7 @@ const runtimeInstancesController = window.LocalAiRuntimeInstances.create({
   getLanguage: effectiveLanguage,
   engineLabel: "llama.cpp",
   onInstancesChanged: () => Promise.all([refreshStatus(), refreshStats().catch(() => {})]),
+  openLogs: (instanceId) => openInstanceLogs(instanceId),
 });
 const accessLogBrowser = window.LocalAiAccessLogBrowser.create({
   $,
@@ -1184,6 +1185,7 @@ function bindEvents() {
     }
   });
   $("#reloadLogsBtn").addEventListener("click", refreshLogs);
+  $("#logsShowPrimaryBtn")?.addEventListener("click", () => openInstanceLogs(""));
   $("#reloadStatsBtn").addEventListener("click", refreshStats);
   $("#openBenchmarkBtn")?.addEventListener("click", () => {
     showView("tools");
@@ -2351,10 +2353,42 @@ async function refreshModelPickerData(event) {
   }
 }
 
+// The logs view reads the primary container unless an instance row asked for
+// its own logs (GET /api/logs?instance=, 08 P0-3).
+function openInstanceLogs(instanceId) {
+  state.logsInstance = String(instanceId || "");
+  showView("logs");
+}
+
+function renderLogsInstance() {
+  const instance = state.logsInstance || "";
+  const label = $("#logsInstanceLabel");
+  if (label) {
+    // .pill and the mini buttons set display, which would beat the hidden attribute.
+    label.style.display = instance ? "" : "none";
+    label.textContent = instance ? `实例：${instance}` : "";
+  }
+  const showPrimary = $("#logsShowPrimaryBtn");
+  if (showPrimary) showPrimary.style.display = instance ? "" : "none";
+}
+
 async function refreshLogs() {
+  renderLogsInstance();
+  const query = new URLSearchParams({ tail: "220" });
+  if (state.logsInstance) query.set("instance", state.logsInstance);
   try {
-    const response = await fetch("/api/logs?tail=220");
+    const response = await fetch(`/api/logs?${query}`);
     const text = await response.text();
+    if (!response.ok) {
+      let message = text;
+      try {
+        message = JSON.parse(text).error || text;
+      } catch {
+        // Plain-text error body.
+      }
+      $("#logsBox").textContent = message || response.statusText;
+      return;
+    }
     $("#logsBox").textContent = text.trim() || "暂无日志";
   } catch (error) {
     $("#logsBox").textContent = error.message;
@@ -4007,7 +4041,9 @@ function buildServiceExposurePayload(overrides = {}) {
     exposureMode: settings.exposureMode || "local",
     requireApiKey: Boolean(settings.requireApiKey),
     publicBaseUrl: settings.publicBaseUrl || "",
-    corsMode: settings.corsMode || ((settings.allowedOrigins || []).length ? "restricted" : "open"),
+    // Deny-by-default (08 P0-21): a record without corsMode is restricted.
+    corsMode: settings.corsMode === "open" ? "open" : "restricted",
+    allowPrivateNetwork: settings.allowPrivateNetwork === true,
     allowedOrigins: (settings.allowedOrigins || []).join("\n"),
     allowedHeaders: (settings.allowedHeaders || []).join("\n"),
     rateLimitRpm: Number(settings.rateLimitRpm || 120),
@@ -4036,7 +4072,8 @@ async function saveServiceExposure(event) {
     apiKey: fields.apiKey.value.trim(),
     clearApiKey: fields.clearApiKey.checked,
     publicBaseUrl: fields.publicBaseUrl.value.trim(),
-    corsMode: fields.corsMode?.value || "open",
+    corsMode: fields.corsMode?.value === "open" && fields.requireApiKey.checked ? "open" : "restricted",
+    allowPrivateNetwork: Boolean(fields.allowPrivateNetwork?.checked),
     allowedOrigins: fields.allowedOrigins.value,
     allowedHeaders: fields.allowedHeaders?.value || "",
     rateLimitRpm: Number(fields.rateLimitRpm.value || 120),

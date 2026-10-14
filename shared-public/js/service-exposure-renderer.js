@@ -41,7 +41,10 @@
       setChecked("#exposureRequireApiKey", Boolean(settings.requireApiKey));
       setChecked("#exposureClearApiKey", false);
       setValue("#exposurePublicBaseUrl", settings.publicBaseUrl || "");
-      setValue("#exposureCorsMode", settings.corsMode || ((settings.allowedOrigins || []).length ? "restricted" : "open"));
+      // Records without corsMode read as restricted (08 P0-21); the option-state
+      // pass that follows also drops a saved "open" while no API key is required.
+      setValue("#exposureCorsMode", settings.corsMode === "open" ? "open" : "restricted");
+      setChecked("#exposureAllowPrivateNetwork", settings.allowPrivateNetwork === true);
       setValue("#exposureRateLimitRpm", settings.rateLimitRpm || 120);
       setValue("#exposureMaxConcurrentRequests", settings.maxConcurrentRequests || 4);
       setValue("#exposureMaxQueuedRequests", settings.maxQueuedRequests ?? 128);

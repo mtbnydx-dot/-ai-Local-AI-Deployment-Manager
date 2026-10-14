@@ -63,6 +63,51 @@
       renderIcons();
     }
 
+    function requestWake(wakeId, body) {
+      return api(`/api/idle-unload/${encodeURIComponent(wakeId)}/wake`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    }
+
+    // Waking into a busy primary slot would stop the running model, so the
+    // server refuses with 409 wake_would_replace_running until the user
+    // confirms here; only that confirm re-posts with confirmReplace (08 P0-1).
+    async function wake(wakeId) {
+      const item = state.sleeping.find((entry) => entry.id === wakeId);
+      // A cold start takes minutes and competes for VRAM, so it is never
+      // kicked off by a stray click.
+      if (!await confirmAction({
+        title: "唤醒模型",
+        body: escapeHtml(`将按释放前的启动参数重新启动 ${item?.model || wakeId}。加载需要时间，期间会占用显存。`),
+        confirmLabel: "唤醒",
+      })) return;
+      try {
+        let result;
+        try {
+          result = await requestWake(wakeId, {});
+        } catch (error) {
+          if (error?.code !== "wake_would_replace_running") throw error;
+          const running = error.details?.runningModel || error.details?.runningContainer || "";
+          if (!await confirmAction({
+            title: "替换正在运行的模型",
+            body: escapeHtml(`唤醒会停止并替换正在运行的「${running}」。确定继续？`),
+            confirmLabel: "替换并唤醒",
+            danger: true,
+          })) return;
+          result = await requestWake(wakeId, { confirmReplace: true });
+        }
+        notify("唤醒任务已创建", result?.model || "", "success");
+        onWake(result);
+      } catch (error) {
+        const detail = error?.code === "wake_api_key_missing"
+          ? "原 API Key 已不可用，请从启动页重新启动该模型。"
+          : error?.message || String(error || "");
+        notify("唤醒失败", detail, "error");
+      }
+      await refresh();
+    }
+
     async function refresh() {
       try {
         const result = await api("/api/idle-unload");
@@ -107,23 +152,7 @@
       root.addEventListener("click", async (event) => {
         const wakeId = event.target?.dataset?.idleWake;
         if (wakeId) {
-          const item = state.sleeping.find((entry) => entry.id === wakeId);
-          // A cold start takes minutes and competes for VRAM, so it is never
-          // kicked off by a stray click.
-          if (!await confirmAction({
-            title: "唤醒模型",
-            body: `将按释放前的启动参数重新启动 ${item?.model || wakeId}。加载需要时间，期间会占用显存。`,
-            confirmText: "唤醒",
-          })) return;
-          try {
-            const result = await api(`/api/idle-unload/${encodeURIComponent(wakeId)}/wake`, { method: "POST" });
-            notify("唤醒任务已创建", result.model || "", "success");
-            onWake(result);
-            await refresh();
-          } catch (error) {
-            notify(`唤醒失败：${error.message}`, true);
-            await refresh();
-          }
+          await wake(wakeId);
           return;
         }
         const forgetId = event.target?.dataset?.idleForget;
@@ -131,8 +160,8 @@
         const item = state.sleeping.find((entry) => entry.id === forgetId);
         if (!await confirmAction({
           title: "忘记休眠记录",
-          body: `将删除 ${item?.model || forgetId} 的休眠记录，之后无法一键唤醒（模型文件和启动方案不受影响）。`,
-          confirmText: "忘记",
+          body: escapeHtml(`将删除 ${item?.model || forgetId} 的休眠记录，之后无法一键唤醒（模型文件和启动方案不受影响）。`),
+          confirmLabel: "忘记",
           danger: true,
         })) return;
         try {

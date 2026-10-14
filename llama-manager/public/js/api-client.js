@@ -31,6 +31,8 @@
       const error = new Error(body && body.error ? body.error : text || response.statusText);
       error.status = response.status;
       error.code = body && body.code ? body.code : null;
+      // Structured refusals (e.g. the wake 409) carry their facts in details.
+      error.details = body && body.details && typeof body.details === "object" ? body.details : null;
       if (body && body.existingJobId) error.existingJobId = body.existingJobId;
       throw error;
     }

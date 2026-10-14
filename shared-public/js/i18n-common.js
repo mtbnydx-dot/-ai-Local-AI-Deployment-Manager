@@ -339,6 +339,17 @@ const UI_TEXT_TRANSLATIONS = {
   "当前没有被释放的实例。": "No instances are currently released.",
   "唤醒": "Wake",
   "忘记": "Forget",
+  "唤醒模型": "Wake model",
+  "唤醒任务已创建": "Wake task created",
+  "唤醒失败": "Wake failed",
+  "替换正在运行的模型": "Replace the running model",
+  "替换并唤醒": "Replace and wake",
+  "原 API Key 已不可用，请从启动页重新启动该模型。": "The original API key is no longer available. Start the model again from the launch page.",
+  "忘记休眠记录": "Forget the release record",
+  // 运行实例 → 按实例查看日志（08 P0-3）
+  "日志": "Logs",
+  "查看此实例的日志": "Show this instance's logs",
+  "查看主实例日志": "Show primary instance logs",
   "测速历史与配置对比": "Benchmark history and configuration comparison",
   "每次测速都会连同当时的启动参数一起保存。勾选两条以上即可看出\"改了哪个参数、快了多少\"。": "Every benchmark is stored with the launch settings it ran under. Select two or more to see which setting changed and how much it helped.",
   "暂无测速记录。跑一次测速后，这里会连同当时的启动参数一起保存，供后续对比。": "No benchmark runs yet. After a run, it is stored here together with its launch settings for later comparison.",
@@ -394,7 +405,11 @@ const UI_TEXT_TRANSLATIONS = {
   "DSpark 接受率": "DSpark acceptance",
   "请求数": "Requests",
   "当前实例": "Current instance",
-  "当前输出速度": "Current output speed",
+  "输出速度（实时）": "Output speed (live)",
+  "输出速度（采样中）": "Output speed (sampling)",
+  "输出速度（多来源合计）": "Output speed (combined sources)",
+  "平均延迟（启动以来）": "Average latency (since start)",
+  // The access-log card (external-access.js) still renders the plain label.
   "平均延迟": "Average latency",
   "活跃 KV cache": "Active KV cache",
   "只表示当前正在推理的请求；聊天历史在 Open WebUI 侧保存": "Only active inference requests are shown. Chat history is stored by OpenWebUI.",
@@ -538,7 +553,11 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
   "生成": "Generate",
   "公网 Base URL": "Public base URL",
   "CORS 策略": "CORS policy",
-  "临时全开放：允许任意浏览器 Origin，并反射预检请求头；API Key、限流和模型权限仍独立生效。": "Temporarily open to any browser Origin and reflect preflight headers. API keys, rate limits, and model permissions still apply independently.",
+  "限制来源与请求头": "Restrict origins and headers",
+  "任意来源（需 API Key）": "Any origin (API key required)",
+  "允许公网网页访问本机/局域网地址（Private Network Access）": "Allow public websites to reach this private address (Private Network Access)",
+  "任意来源：允许任意浏览器 Origin 并反射预检请求头，但从不允许携带凭据；只在要求 API Key 时生效，限流和模型权限仍独立生效。": "Any origin: every browser Origin is allowed and preflight headers are reflected, but credentials are never allowed. This applies only while an API key is required; rate limits and model permissions still apply independently.",
+  "限制模式：只允许下方 Origin；请求头使用内置安全列表和额外允许列表。要选择任意来源，请先勾选“对外访问必须使用 API Key”。": "Restricted mode: only the origins below are allowed; request headers use the built-in safe list plus the additional allowlist. To allow any origin, first enable “Require API key for external access”.",
   "OpenAI 兼容接口": "OpenAI-compatible endpoint",
   "OpenCode 代理": "OpenCode proxy",
   "暴露 metrics": "Expose metrics",
@@ -871,6 +890,12 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
 });
 
 const UI_TRANSLATION_PATTERNS = [
+  // 统计速度来源标签与唤醒替换确认（08 P0-7 / P0-1）
+  [/^输出速度（近 (\d+) 秒平均）$/u, "Output speed ($1 s average)"],
+  [/^唤醒会停止并替换正在运行的「(.+)」。确定继续？$/u, "Waking will stop and replace the running model \"$1\". Continue?"],
+  [/^将按释放前的启动参数重新启动 (.+)。加载需要时间，期间会占用显存。$/u, "$1 will start again with the launch settings it had before release. Loading takes a while and uses VRAM meanwhile."],
+  [/^将删除 (.+) 的休眠记录，之后无法一键唤醒（模型文件和启动方案不受影响）。$/u, "The release record of $1 will be deleted, so it can no longer be woken with one click (model files and launch profiles are not affected)."],
+  [/^实例：(.+)$/u, "Instance: $1"],
   // 闲置释放 / 测速历史：句子里带数值，只能按模式翻译
   [/^已开启：空闲超过 (.+) 分钟且没有排队请求的实例会被释放，启动参数会保留以便唤醒。$/u, "On: an instance idle for more than $1 minutes with nothing queued is released, and its launch settings are kept so it can be woken."],
   [/^(.+) 释放 · 约 (.+) GB 显存已释放 · 空闲 (.+) 分钟$/u, "Released $1 · about $2 GB of VRAM freed · idle $3 minutes"],

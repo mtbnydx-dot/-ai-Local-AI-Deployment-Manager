@@ -1147,7 +1147,11 @@
         <section class="panel logs-panel view-panel" id="logs" data-view-panel="logs">
           <div class="panel-head">
             <h3>运行日志</h3>
-            <button class="icon-button" id="reloadLogsBtn" title="刷新日志"><i data-lucide="scroll-text"></i></button>
+            <div class="mini-actions logs-instance-actions">
+              <span class="pill" id="logsInstanceLabel" style="display: none"></span>
+              <button class="ghost-mini-button" id="logsShowPrimaryBtn" type="button" style="display: none">查看主实例日志</button>
+              <button class="icon-button" id="reloadLogsBtn" title="刷新日志"><i data-lucide="scroll-text"></i></button>
+            </div>
           </div>
           <pre id="logsBox" class="logs-box">暂无日志</pre>
         </section>
@@ -1158,8 +1162,8 @@
     <div class="toast-root" id="toastRoot" aria-live="polite" aria-atomic="false"></div>
     <script src="/shared-js/dom-utils.js?v=20260811-design-audit" defer></script>
     <script src="/js/formatters.js?v=20260615-modular-client" defer></script>
-    <script src="/js/api-client.js?v=20260615-modular-client" defer></script>
-    <script src="/shared-js/i18n-common.js?v=20260822-ui-round5" defer></script>
+    <script src="/js/api-client.js?v=20261014-p0-ui" defer></script>
+    <script src="/shared-js/i18n-common.js?v=20261014-p0-ui" defer></script>
     <script src="/js/i18n-copy.js?v=20260822-ui-round5" defer></script>
     <script src="/js/catalog.js?v=20260615-modular-data" defer></script>
     <script src="/js/ui-utils.js?v=20260615-modular-ui2" defer></script>
@@ -1171,26 +1175,26 @@
     <script src="/shared-js/local-model-renderer.js?v=20260615-local-models" defer></script>
     <script src="/shared-js/model-picker-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/remote-model-renderer.js?v=20260615-remote-models" defer></script>
-  <script src="/shared-js/service-exposure-renderer.js?v=20260811-design-audit" defer></script>
+  <script src="/shared-js/service-exposure-renderer.js?v=20261014-p0-ui" defer></script>
   <script src="/shared-js/service-client-renderer.js?v=20260615-service-clients" defer></script>
   <script src="/shared-js/runtime-status-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/tool-panel-renderer.js?v=20260822-ui-round5" defer></script>
   <script src="/shared-js/profile-renderer.js?v=20260711-guided-flow3" defer></script>
   <script src="/shared-js/stats-ui.js?v=20260615-stats-ui" defer></script>
-    <script src="/shared-js/stats-summary-renderer.js?v=20260615-stats-summary" defer></script>
+    <script src="/shared-js/stats-summary-renderer.js?v=20261014-p0-ui" defer></script>
     <script src="/shared-js/stats-list-renderer.js?v=20260615-stats-list" defer></script>
     <script src="/shared-js/audit-renderer.js?v=20260615-audit-renderer" defer></script>
     <script src="/js/runtime-insights.js?v=20260811-gguf-parity" defer></script>
     <script src="/shared-js/external-access.js?v=20260615-external-access" defer></script>
-    <script src="/shared-js/runtime-instances.js?v=20260716-instances" defer></script>
+    <script src="/shared-js/runtime-instances.js?v=20261014-p0-ui" defer></script>
     <script src="/shared-js/access-log-browser.js?v=20260716-log-search" defer></script>
     <script src="/shared-js/manager-backups.js?v=20260716-backups" defer></script>
-    <script src="/shared-js/idle-unload-renderer.js?v=20261005-idle-unload" defer></script>
+    <script src="/shared-js/idle-unload-renderer.js?v=20261014-p0-ui" defer></script>
     <script src="/shared-js/benchmark-history-renderer.js?v=20261005-benchmark-history" defer></script>
     <script src="/shared-js/connection-status.js?v=20260804-connection-status" defer></script>
-    <script src="/shared-js/ui-architecture.js?v=20260902-improvement" defer></script>
+    <script src="/shared-js/ui-architecture.js?v=20261014-p0-ui" defer></script>
     <script src="/shared-js/download-compat-renderer.js?v=20260903-phase2" defer></script>
-    <script src="/app.js?v=20260903-phase2" defer></script>
+    <script src="/app.js?v=20261014-p0-ui" defer></script>
     <script src="/shared-js/lucide.min.js?v=20260811-46-icons" defer onload="window.renderIcons && window.renderIcons()"></script>
     <script src="/shared-js/storage-selector.js" defer></script>
 </body>
