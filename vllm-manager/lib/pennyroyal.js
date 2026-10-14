@@ -53,6 +53,17 @@ function pennyroyalVramReservationMb(options = {}) {
   return reserved ?? PENNYROYAL_VRAM_RESERVATION_MIB;
 }
 
+// The recipe memory the SGLang memory model reserves for this profile
+// (memory-models.js recipeMemory, 01-engines §12): the measured MiB above and
+// the recipe's estimatePolicy.
+function pennyroyalRecipeMemory(options = {}) {
+  return {
+    policy: "measured",
+    measuredMiB: pennyroyalVramReservationMb(options),
+    estimatePolicy: pennyroyalRecipe().memory?.estimatePolicy || "pennyroyal_v251_sm120_tp1_524k_measured",
+  };
+}
+
 function pennyroyalOptionErrors(options = {}) {
   return recipes().legacyOptionErrors(RECIPE_ID, options);
 }
@@ -68,6 +79,6 @@ function pennyroyalLaunchFixed(options = {}) {
 }
 
 module.exports = { PENNYROYAL_IMAGE, PENNYROYAL_CACHE_VOLUME, PENNYROYAL_DEFAULTS,
-  PENNYROYAL_VRAM_RESERVATION_MIB, pennyroyalVramReservationMb,
+  PENNYROYAL_VRAM_RESERVATION_MIB, pennyroyalVramReservationMb, pennyroyalRecipeMemory,
   PENNYROYAL_TOKENIZER_SHA256, PENNYROYAL_ROPE_OVERRIDE,
   isPennyroyalImage, pennyroyalOptionErrors, createPennyroyalPreset, pennyroyalLaunchFixed };

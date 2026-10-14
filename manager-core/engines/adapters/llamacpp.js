@@ -38,6 +38,7 @@ const path = require("node:path");
 const { normalizeGpuIds: defaultNormalizeGpuIds } = require("../../common-utils");
 const { publishArgsToDockerRunArgs: defaultPublishArgsToDockerRunArgs } = require("../../docker-utils");
 const { labelsFromFlags } = require("./_docker-segments");
+const memoryModels = require("../memory-models");
 
 const ENGINE_ID = "llamacpp";
 // llama-server binds --api-key to LLAMA_API_KEY (common/arg.cpp, set_env); the
@@ -424,10 +425,16 @@ function planFromRunOptions(opts = {}, { jobId, recipe = null, normalizeDefaultT
   };
 }
 
+/** plan + ctx -> MemoryEstimate (01 §12): MemoryInputs from the plan; the policy lives in memory-models.js. */
+function estimateMemory(plan, ctx = {}) {
+  return memoryModels.estimate(ENGINE_ID, memoryModels.inputsFromPlan(plan, ctx), { descriptor: ctx.descriptor });
+}
+
 module.exports = {
   id: ENGINE_ID,
   API_KEY_ENV,
   buildLaunch,
+  estimateMemory,
   clampSpeculativeTokens,
   formatDockerPublishArgs,
   normalizeLlamaSpeculativeMode,

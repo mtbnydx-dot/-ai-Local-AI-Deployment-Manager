@@ -18,6 +18,7 @@ const {
   managerDockerFlags,
   requestedOption,
 } = require("./_vllm-manager");
+const memoryModels = require("../memory-models");
 
 const ENGINE_ID = "vllm";
 // vLLM reads its API key from this variable when --api-key is absent.
@@ -128,8 +129,14 @@ function buildCommand(plan, ctx, effects) {
   return launchCommand(ctx, { flags, entrypoint: null, image, args, publish, secretEnv, metaPatch, logs });
 }
 
+/** plan + ctx -> MemoryEstimate (01 §12): MemoryInputs from the plan; the policy lives in memory-models.js. */
+function estimateMemory(plan, ctx = {}) {
+  return memoryModels.estimate(ENGINE_ID, memoryModels.inputsFromPlan(plan, ctx), { descriptor: ctx.descriptor });
+}
+
 module.exports = {
   id: ENGINE_ID,
   API_KEY_ENV,
   buildLaunch,
+  estimateMemory,
 };

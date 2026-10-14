@@ -22,11 +22,18 @@
 //   publicPlan(plan)               → the JSON body of a plan (secrets were never in it)
 //
 // ctx: { mode: "plan"|"launch", managerId, registry, paramCatalog?, recipeStore?,
-//        normalize(legacyBody, { mode }) → { runOptions, jobMeta, admissionRequest, extras? },
+//        normalize(legacyBody, { mode, calibrationFor }) → { runOptions, jobMeta, admissionRequest, extras?, memory? },
 //        prepareCommand?(runOptions, { jobId, launchId }) → { adapter, plan, ctx, recipe?, preset? },
 //        getHostGpus?() → gpus[] | null, imagePresence?(image) → true|false|null,
 //        admissionPreview?(admissionRequest, { mode, releasedMbByGpu }) → gpu-admission evaluate() result,
-//        listContainers?() → [{ name, running, labels }], platform? }
+//        listContainers?() → [{ name, running, labels }], platform?,
+//        calibrationFor?(card, engineId, runtimeId, paramsKey) → calibration | null }
+//
+// calibrationFor is 02's calibration lookup (MOD-10) and defaults to
+// () => null. normalize gets it bound to this request's card, engine and
+// runtime as calibrationFor(paramsKey), so the manager's memory model
+// (memory-models.js, 01 §12) builds the admission request from it; memory is
+// that MemoryEstimate and fills the plan's memory block.
 //
 // Plan mode is side-effect free: it reads files, telemetry, leases and the
 // container list and never takes a lock, creates a job or touches a container.
@@ -44,6 +51,9 @@ const registryModule = require("./registry");
 const { normalizeManagerId, unknownEngineError } = registryModule;
 const { renderRunArgs } = require("./adapters/_docker-segments");
 const { REDACTED, redactSecrets } = require("../secret-redactor");
+
+// 02 calibrationFor() until MOD-10 wires the calibration store (01 §12).
+const NO_CALIBRATION = () => null;
 
 // The job id, launch id and key reference a plan builds with (01 §11 step 7).
 // Labels whose value is minted per launch stay out of planHash: the job and
@@ -472,7 +482,7 @@ function memoryPolicy(request) {
   return policy ? "gguf-estimate" : null;
 }
 
-function memoryView(admissionRequest) {
+function memoryView(admissionRequest, estimate = null) {
   if (!admissionRequest) return null;
   const request = {};
   for (const field of ADMISSION_REQUEST_FIELDS) {
@@ -480,7 +490,7 @@ function memoryView(admissionRequest) {
   }
   const requestedMb = Number(admissionRequest.requestedMb);
   const pool = Number(admissionRequest.poolCappedTokens);
-  return {
+  const view = {
     perGpuMb: {},
     breakdown: { ...EMPTY_BREAKDOWN },
     admissionRequestMb: Number.isFinite(requestedMb) && requestedMb > 0 ? requestedMb : null,
@@ -489,6 +499,19 @@ function memoryView(admissionRequest) {
     policy: memoryPolicy(admissionRequest),
     admissionRequest: request,
   };
+  // The memory model's estimate (01 §12) adds its breakdown, policy and
+  // findings; the request shown stays the one admission gets.
+  if (isPlainObject(estimate)) {
+    if (isPlainObject(estimate.breakdown)) view.breakdown = { ...EMPTY_BREAKDOWN, ...clone(estimate.breakdown) };
+    if (estimate.kvPoolTokens > 0) view.kvPoolTokens = estimate.kvPoolTokens;
+    if (Number.isFinite(estimate.maxFullLengthRequests)) view.maxFullLengthRequests = estimate.maxFullLengthRequests;
+    if (estimate.policy) view.policy = estimate.policy;
+    if (estimate.confidence) view.confidence = estimate.confidence;
+    for (const field of ["notes", "warnings", "errors"]) {
+      if (Array.isArray(estimate[field]) && estimate[field].length) view[field] = clone(estimate[field]);
+    }
+  }
+  return view;
 }
 
 // What the running container in the replace slot holds now, by GPU, from its labels.
@@ -617,7 +640,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
   };
   // In-process only (never serialized): what the launch executes.
   Object.defineProperty(plan, "legacy", {
-    value: { runOptions: null, jobMeta: null, admissionRequest: null, extras: null, preset: null, failure: null },
+    value: { runOptions: null, jobMeta: null, admissionRequest: null, extras: null, memory: null, preset: null, failure: null },
     enumerable: false,
     writable: true,
   });
@@ -700,9 +723,20 @@ async function resolveLaunchPlan(request, ctx = {}) {
   // The legacy run options: the manager's own normalisation of the body.
   const merged = requestedApplied ? { ...user, ...requestedApplied.values } : user;
   const body = legacyBody || synthesizeLegacyBody(request, { engineId, registry, catalog, runtime, explicitRuntime, values: merged });
+  // 02's calibration for this card, engine, runtime and paramsKey (01 §12);
+  // a failing lookup only means no calibration.
+  const lookupCalibration = typeof ctx.calibrationFor === "function" ? ctx.calibrationFor : NO_CALIBRATION;
+  const card = isPlainObject(request.model?.card) ? request.model.card : null;
+  const calibrationFor = async (key) => {
+    try {
+      return (await lookupCalibration(card, engineId, runtime?.runtimeId || null, key)) || null;
+    } catch {
+      return null;
+    }
+  };
   let normalized;
   try {
-    normalized = await ctx.normalize(body, { mode });
+    normalized = await ctx.normalize(body, { mode, calibrationFor });
   } catch (error) {
     recordFailure(plan, error);
     return finish(plan);
@@ -717,6 +751,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
     jobMeta: normalized.jobMeta || null,
     admissionRequest: normalized.admissionRequest || null,
     extras: normalized.extras || null,
+    memory: normalized.memory || null,
   });
 
   // 5-7. The command, built by the adapter from exactly these run options.
@@ -830,7 +865,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
   });
 
   // 9. Memory and the admission preview (the launch admits for itself).
-  plan.memory = memoryView(plan.legacy.admissionRequest);
+  plan.memory = memoryView(plan.legacy.admissionRequest, plan.legacy.memory);
   if (mode === "plan" && plan.legacy.admissionRequest && typeof ctx.admissionPreview === "function") {
     let preview;
     try {
@@ -923,7 +958,7 @@ function launchSummary(plan) {
  * The managers' launch-request wiring: createLaunchPlanner({ managerId,
  * normalize, getEngineRegistry?, getRecipeStore?, paramCatalog?,
  * prepareLaunchCommand?, getHostGpus?, imagePresence?, admissionPreview?,
- * listContainers? }) → { plan(body), launch(body), runOptions(plan), summary(plan) }.
+ * listContainers?, calibrationFor? }) → { plan(body), launch(body), runOptions(plan), summary(plan) }.
  * plan() is the POST /api/launch/plan body; launch() resolves the same plan
  * in launch mode and throws planLaunchError for a plan with problems.
  * The registry and recipe getters are read per request, so a manager can wire
@@ -945,6 +980,7 @@ function createLaunchPlanner(options = {}) {
       imagePresence: hook("imagePresence"),
       admissionPreview: hook("admissionPreview"),
       listContainers: hook("listContainers"),
+      calibrationFor: hook("calibrationFor") || NO_CALIBRATION,
     };
   }
   return {
