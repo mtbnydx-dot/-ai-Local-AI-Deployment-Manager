@@ -1,5 +1,6 @@
-const { isPennyroyalImage, pennyroyalVramReservationMb } = require("./pennyroyal");
+const { isPennyroyalImage, pennyroyalRecipeMemory } = require("./pennyroyal");
 const { createLaunchPlanner } = require("../../manager-core/engines/resolve-launch-plan");
+const memoryModels = require("../../manager-core/engines/memory-models");
 
 function createVllmStartRuntimeRequest(deps) {
   const {
@@ -53,6 +54,7 @@ function createVllmStartRuntimeRequest(deps) {
     listContainers = null,
     getIntrospection = null,
     modelStorage = null,
+    calibrationFor = null,
   } = deps;
 
   /**
@@ -60,9 +62,10 @@ function createVllmStartRuntimeRequest(deps) {
    * run options, job.meta and gpu-admission request before admission (the
    * R-* goldens pin all three). The resolver calls it for /api/start and for
    * POST /api/launch/plan alike; a v2 request reaches it as the legacy body
-   * the alias table writes.
+   * the alias table writes. calibrationFor(paramsKey) is the resolver's 02
+   * calibration lookup for this request (01-engines §12), null until MOD-10.
    */
-  async function normalizeStartBody(body = {}) {
+  async function normalizeStartBody(body = {}, { calibrationFor: lookupCalibration = null } = {}) {
     const model = resolveRequestedModel(cleanRequired(body.model, "model"));
     const name = String(body.name || deriveName(model));
     const engine = normalizeRuntimeEngine(body.engine);
@@ -204,21 +207,43 @@ function createVllmStartRuntimeRequest(deps) {
         maxNumSeqs,
         maxNumBatchedTokens,
       };
-    const sglangFractionOfFree = engine === "sglang" && !isPennyroyalImage(runtimeImage);
-    if (engine === "sglang" && isPennyroyalImage(runtimeImage)) {
-      gpuAdmissionRequest.requestedFraction = undefined;
-      gpuAdmissionRequest.requestedMb = pennyroyalVramReservationMb({ sglangMaxTotalTokens, maxModelLen });
-      gpuAdmissionRequest.estimatePolicy = "pennyroyal_v251_sm120_tp1_524k_measured";
-    } else if (sglangFractionOfFree) {
-      // The form value maps to --mem-fraction-static, a fraction of the memory
-      // free at engine start rather than of the whole device. A capped KV pool
-      // (--max-total-tokens) lets admission clamp to the safe budget and warn.
-      gpuAdmissionRequest.requestedFraction = undefined;
-      gpuAdmissionRequest.requestedFractionOfFree = gpuMemoryUtilization;
-      gpuAdmissionRequest.poolCappedTokens = sglangMaxTotalTokens || 0;
-      gpuAdmissionRequest.minClampMb = 4096;
-      gpuAdmissionRequest.estimatePolicy = "sglang_mem_fraction_static_of_free";
-    }
+    // The engine's memory model (manager-core/engines/memory-models.js, 01 §12)
+    // owns the admission request: vLLM reserves a fraction of the device;
+    // SGLang's --mem-fraction-static is a fraction of the memory free at
+    // engine start, and a capped KV pool (--max-total-tokens) lets admission
+    // clamp to the safe budget and warn; the Pennyroyal recipe reserves its
+    // measured footprint; an exact calibration replaces the SGLang fraction.
+    const memoryValues = engine === "sglang"
+      ? {
+        contextLength: maxModelLen,
+        concurrency: maxNumSeqs,
+        kvCacheDtype: kvCacheDtype || "auto",
+        "sglang.memFractionStatic": gpuMemoryUtilization,
+        "sglang.maxTotalTokens": sglangMaxTotalTokens || 0,
+        "sglang.chunkedPrefillSize": sglangChunkedPrefillSize,
+        "sglang.maxMambaCacheSize": sglangMaxMambaCacheSize,
+        tensorParallel: tensorParallelSize,
+      }
+      : {
+        contextLength: maxModelLen,
+        concurrency: maxNumSeqs,
+        kvCacheDtype: kvCacheDtype || "auto",
+        "vllm.gpuMemoryUtilization": gpuMemoryUtilization,
+        "vllm.maxNumBatchedTokens": maxNumBatchedTokens,
+        tensorParallel: tensorParallelSize,
+        pipelineParallel: pipelineParallelSize,
+      };
+    const memoryKey = memoryModels.paramsKey({ engineId: engine, values: memoryValues });
+    const calibration = typeof lookupCalibration === "function" ? (await lookupCalibration(memoryKey)) || null : null;
+    const memory = memoryModels.estimate(engine, {
+      values: memoryValues,
+      mode: instanceMode,
+      recipeMemory: engine === "sglang" && isPennyroyalImage(runtimeImage)
+        ? pennyroyalRecipeMemory({ sglangMaxTotalTokens, maxModelLen })
+        : null,
+      calibration,
+    });
+    Object.assign(gpuAdmissionRequest, { requestedFraction: undefined }, memory.admissionRequest);
     const jobMeta = {
       model,
       engine,
@@ -347,7 +372,7 @@ function createVllmStartRuntimeRequest(deps) {
       gpuAdmissionLeaseId: "",
       gpuAdmissionFinalized: false,
     };
-    return { runOptions, jobMeta, admissionRequest: gpuAdmissionRequest };
+    return { runOptions, jobMeta, admissionRequest: gpuAdmissionRequest, memory };
   }
 
   const planner = createLaunchPlanner({
@@ -363,6 +388,7 @@ function createVllmStartRuntimeRequest(deps) {
     listContainers,
     getIntrospection,
     modelStorage,
+    calibrationFor,
   });
 
   async function startRuntimeRequest({ body = {} } = {}) {
@@ -370,9 +396,13 @@ function createVllmStartRuntimeRequest(deps) {
     const plan = await planner.launch(body);
     const runOptions = planner.runOptions(plan);
     const gpuAdmissionRequest = plan.legacy.admissionRequest;
-    const { name, engine, instanceMode, containerName, vllmApiKey, runtimeImage } = runOptions;
+    const { name, engine, instanceMode, containerName, vllmApiKey } = runOptions;
     let { gpuDeviceIds } = runOptions;
-    const sglangFractionOfFree = engine === "sglang" && !isPennyroyalImage(runtimeImage);
+    // SGLang requests with a KV pool cap (the fraction of free memory, or a
+    // calibration) are the ones admission may clamp; job.meta.admission
+    // reports that decision. The Pennyroyal measured request has no cap.
+    const sglangClampable = engine === "sglang" && Object.hasOwn(gpuAdmissionRequest || {}, "poolCappedTokens");
+    const admissionPolicy = plan.memory?.policy || "static-fraction-of-free";
     let admissionLease = null;
     if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
       admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
@@ -431,9 +461,9 @@ function createVllmStartRuntimeRequest(deps) {
         ...(job.meta || {}),
         gpuDeviceIds,
         gpuAdmission: admission,
-        ...(sglangFractionOfFree && admission ? { admission: summarizeFractionOfFreeAdmission(admission) } : {}),
+        ...(sglangClampable && admission ? { admission: summarizeFractionOfFreeAdmission(admission, admissionPolicy) } : {}),
       };
-      if (sglangFractionOfFree && admission?.warning) reportGpuAdmissionWarning(job, admission.warning);
+      if (sglangClampable && admission?.warning) reportGpuAdmissionWarning(job, admission.warning);
       runOptions.gpuDeviceIds = gpuDeviceIds;
       runOptions.vramReservationMb = Number(admission?.requestedTotalMb || 0);
       runOptions.gpuAdmissionLeaseId = String(admission?.id || "");
@@ -499,7 +529,7 @@ function createVllmStartRuntimeRequest(deps) {
 // job.meta.admission for SGLang launches admitted by fraction of free memory.
 // Lease reservations hold the reserved MiB in requestedMb and the unclamped
 // request in estimateMb.
-function summarizeFractionOfFreeAdmission(lease = {}) {
+function summarizeFractionOfFreeAdmission(lease = {}, policy = "static-fraction-of-free") {
   const reservations = Array.isArray(lease.reservations) ? lease.reservations : [];
   const total = (read) => reservations.reduce((sum, reservation) => sum + (Number(read(reservation)) || 0), 0);
   return {
@@ -508,7 +538,7 @@ function summarizeFractionOfFreeAdmission(lease = {}) {
     reservedMb: total((reservation) => reservation?.requestedMb),
     availableMb: total((reservation) => reservation?.availableMb),
     clamped: Boolean(lease.clamped),
-    policy: "static-fraction-of-free",
+    policy,
   };
 }
 

@@ -17,6 +17,7 @@ const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
 const dockerHost = require("./hosts/docker");
 const legacyAliases = require("./legacy-aliases");
+const memoryModels = require("./memory-models");
 const metrics = require("./metrics");
 const introspect = require("./introspect");
 const runtimeFacts = require("./runtime-facts");
@@ -98,6 +99,13 @@ module.exports = {
   // 00 §9.12): parsePrometheus, mapPrometheus and summarize for the 04
   // collector, the histogram helpers, and the per-manager instance sampler.
   metrics,
+  // The one engine-side memory estimator (01 §12, 00 §9.1): 02 fit.js calls
+  // memoryModels.estimate with artifact inputs and keys calibrations by
+  // paramsKey(plan).
+  memoryModels,
+  estimateMemory: memoryModels.estimate,
+  paramsKey: memoryModels.paramsKey,
+  MEMORY_CONSTANTS: memoryModels.MEMORY_CONSTANTS,
   introspect,
   runtimeFacts,
   // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.

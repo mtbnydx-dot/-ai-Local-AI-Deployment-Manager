@@ -23,6 +23,7 @@ const {
   legacyPresetEffects,
   managerDockerFlags,
 } = require("./_vllm-manager");
+const memoryModels = require("../memory-models");
 
 const ENGINE_ID = "sglang";
 const ENTRYPOINT = "sglang";
@@ -143,8 +144,14 @@ function buildCommand(plan, ctx, effects) {
   return launchCommand(ctx, { flags, entrypoint: ENTRYPOINT, image, args, publish, secretEnv, metaPatch, logs });
 }
 
+/** plan + ctx -> MemoryEstimate (01 §12): MemoryInputs from the plan; the policy lives in memory-models.js. */
+function estimateMemory(plan, ctx = {}) {
+  return memoryModels.estimate(ENGINE_ID, memoryModels.inputsFromPlan(plan, ctx), { descriptor: ctx.descriptor });
+}
+
 module.exports = {
   id: ENGINE_ID,
   ENTRYPOINT,
   buildLaunch,
+  estimateMemory,
 };

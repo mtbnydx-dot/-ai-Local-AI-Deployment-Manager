@@ -381,6 +381,30 @@ function admissionKnob(request = {}) {
   return "";
 }
 
+// The catalog params (01-engines §9) a console focuses to shrink a refused
+// request, each with a suggested value (01 §12, ENG-12). Additive to the P0
+// insufficient_vram details: SGLang's static fraction and KV pool cap, the
+// device fraction of vLLM, and llama.cpp's planning headroom.
+const SUGGESTED_POOL_TOKENS = 131072;
+
+function admissionKnobs(request = {}, maxFraction = null) {
+  const knob = admissionKnob(request);
+  const suggestion = Number.isFinite(Number(maxFraction)) && Number(maxFraction) > 0 ? Number(maxFraction) : null;
+  if (knob === "fraction-of-free") {
+    const contextTokens = nonNegativeInteger(request.maxModelLen, 0);
+    return [
+      { param: "sglang.memFractionStatic", suggestion },
+      { param: "sglang.maxTotalTokens", suggestion: contextTokens ? Math.min(contextTokens, SUGGESTED_POOL_TOKENS) : SUGGESTED_POOL_TOKENS },
+    ];
+  }
+  if (knob === "device-fraction") {
+    const engine = String(request.engine || "").toLowerCase();
+    const param = engine === "llama" || engine === "llamacpp" ? "llamacpp.planningUtilization" : "vllm.gpuMemoryUtilization";
+    return [{ param, suggestion }];
+  }
+  return [];
+}
+
 function largestPassingFraction(request, { totalMb, freeMb, pendingMb, availableMb }) {
   const knob = admissionKnob(request);
   const base = knob === "fraction-of-free" ? freeMb - pendingMb : knob === "device-fraction" ? totalMb : 0;
@@ -706,6 +730,7 @@ function createGpuAdmissionController(options = {}) {
             instanceId: String(request.instanceId || ""),
             estimatePolicy: String(request.estimatePolicy || "configured_gpu_fraction"),
             gpus: decisions,
+            knobs: admissionKnobs(request, maxFraction),
           },
         );
       }
@@ -969,6 +994,7 @@ module.exports = {
   normalizeGpuTelemetry,
   decideGpuReservation,
   formatGpuAdmissionMessage,
+  admissionKnobs,
   createGpuAdmissionError,
   acquireAdmissionDirectoryLock,
   createGpuAdmissionController,

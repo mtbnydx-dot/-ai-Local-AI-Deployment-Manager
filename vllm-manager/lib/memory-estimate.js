@@ -1,5 +1,19 @@
 const core = require("../../manager-core");
-const { isPennyroyalImage, pennyroyalVramReservationMb } = require("./pennyroyal");
+const { isPennyroyalImage, pennyroyalRecipeMemory } = require("./pennyroyal");
+
+// SGLang bodies go through the engine memory model (01-engines §12), so this
+// preview and the launch ask admission for the same request.
+function estimateSglangMemory(input, recipeMemory = null) {
+  const pool = Math.max(0, Math.floor(memoryEstimateNumber(input.sglangMaxTotalTokens, 0)));
+  return core.engines.memoryModels.estimate("sglang", {
+    values: {
+      contextLength: Math.floor(memoryEstimateNumber(input.contextTokens ?? input.maxModelLen, 0)) || undefined,
+      "sglang.memFractionStatic": memoryEstimateNumber(input.gpuMemoryUtilization ?? input.utilization, 0.9),
+      "sglang.maxTotalTokens": pool,
+    },
+    recipeMemory,
+  });
+}
 
 function memoryEstimateNumber(value, fallback = 0) {
   const number = Number(value);
@@ -58,12 +72,8 @@ function previewSglangAdmission(input, selectedGpus) {
     maxUtilizationPct: core.DEFAULT_MAX_UTILIZATION_PCT,
   });
   const startupMarginMb = Math.max(0, Math.round(memoryEstimateNumber(policySource.startupMarginMb, core.DEFAULT_STARTUP_MARGIN_MB)));
-  const poolCappedTokens = Math.max(0, Math.floor(memoryEstimateNumber(input.sglangMaxTotalTokens, 0)));
-  const request = {
-    requestedFractionOfFree: memoryEstimateNumber(input.gpuMemoryUtilization ?? input.utilization, 0.9),
-    poolCappedTokens,
-    minClampMb: core.DEFAULT_MIN_CLAMP_MB,
-  };
+  const request = estimateSglangMemory(input).admissionRequest;
+  const poolCappedTokens = request.poolCappedTokens;
   let decision;
   try {
     decision = core.decideGpuReservation(request, gpu, {
@@ -94,12 +104,13 @@ function previewSglangAdmission(input, selectedGpus) {
 function buildVllmMemoryEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
   if (input.engine === "sglang" && isPennyroyalImage(input.runtimeImage)) {
-    const perGpuGb = pennyroyalVramReservationMb(input) / 1024;
+    const measured = estimateSglangMemory(input, pennyroyalRecipeMemory(input)).admissionRequest;
+    const perGpuGb = measured.requestedMb / 1024;
     const minUsableGb = selectedGpus.length ? Math.min(...selectedGpus.map(gpu => gpu.freeGb)) : 0;
     const status = selectedGpus.length && perGpuGb > minUsableGb ? "fail" : "warn";
     return {
       ok: true, engine: "sglang",
-      plan: { estimatePolicy: "pennyroyal_v251_sm120_tp1_524k_measured", selectedGpus,
+      plan: { estimatePolicy: measured.estimatePolicy, selectedGpus,
         perGpuGb, minUsableGb, status, memorySplitFactor: 1,
         overflowPerGpuGb: Math.max(0, perGpuGb - minUsableGb) },
       recommendations: { status, summary: "Pennyroyal 实测预留；启动仍需通过实时显存门禁",
@@ -153,8 +164,9 @@ function buildVllmMemoryEstimate(input = {}) {
     suggestions.push(`已为 ${speculativeMode} 推测解码额外预留约 ${speculativeReserveGb.toFixed(1)} GiB；最终是否提速应以接受率和输出吞吐为准。`);
   }
   if (sglang) {
-    plan.policy = core.STATIC_FRACTION_OF_FREE_POLICY;
-    plan.estimatePolicy = core.SGLANG_FRACTION_OF_FREE_ESTIMATE_POLICY;
+    const sglangMemory = estimateSglangMemory(input);
+    plan.policy = sglangMemory.policy;
+    plan.estimatePolicy = sglangMemory.admissionRequest.estimatePolicy;
     plan.admissionPreview = admissionPreview ? admissionPreview.preview : null;
     if (admissionPreview) {
       // The admission verdict outranks the estimator: block is a launch the
