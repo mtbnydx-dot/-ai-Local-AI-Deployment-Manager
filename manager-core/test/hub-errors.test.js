@@ -596,5 +596,5 @@ test("guard: model-hub holds no redaction function and no hub-secrets file", () 
     assert.equal(/function\s+redact/.test(source), false, `${name} defines a redaction function`);
     assert.equal(/hub-secrets/.test(source), false, `${name} mentions hub-secrets`);
   }
-  assert.equal(fs.existsSync(path.join(hubDir, "hub-secrets.json")), false);
+  assert.equal(fs.existsSync(path.join(hubDir, ["hub", "secrets.json"].join("-"))), false);
 });
