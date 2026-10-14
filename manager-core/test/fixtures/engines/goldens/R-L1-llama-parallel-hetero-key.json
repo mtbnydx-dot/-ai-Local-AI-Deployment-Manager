@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "id": "R-L1-llama-parallel-hetero-key",
+  "kind": "request",
+  "manager": "llama",
+  "source": "llama-manager/test/launch-request.test.js › llama launch request keeps hetero GPU plan and tensor split in sync (first request)",
+  "stubs": "llama-request-test-v1",
+  "env": {},
+  "input": {
+    "body": {
+      "model": "D:/AI/models/model.gguf",
+      "instanceMode": "parallel",
+      "instanceId": "vision",
+      "port": "8180",
+      "gpuDeviceIds": "0,1",
+      "multiGpuMode": "layer",
+      "networkAccess": "lan",
+      "reasoning": "on",
+      "reasoningEffort": "high",
+      "reasoningBudget": "2048",
+      "mmproj": "D:/AI/models/mmproj.gguf",
+      "mmprojDevice": "CUDA0",
+      "speculativeMode": "draft-mtp",
+      "numSpeculativeTokens": "4",
+      "gpuLayers": "auto",
+      "fitTargetMb": 4096,
+      "fitCtx": 8192,
+      "apiKey": "<secret:apiKey>"
+    },
+    "modelFixture": null
+  },
+  "expect": {
+    "calls": [
+      "estimateParallelVram",
+      "acquireGpuAdmission",
+      "saveRuntimeApiKey",
+      "createJob",
+      "heartbeat-start",
+      "runStartJob",
+      "heartbeat-stop",
+      "commit:serve-llama:llama-local-vision"
+    ],
+    "gpuAdmissionRequest": {
+      "managerId": "llama-manager",
+      "engine": "llama",
+      "instanceMode": "parallel",
+      "instanceId": "vision",
+      "containerName": "llama-local-vision",
+      "model": "D:/AI/models/model.gguf",
+      "resolvedModel": "D:/AI/models/model.gguf",
+      "gpuIds": [
+        "0",
+        "1"
+      ],
+      "useAllGpus": true,
+      "requestedFraction": null,
+      "requestedMb": 10000,
+      "requestedMbByGpu": {
+        "0": 5000,
+        "1": 5000
+      },
+      "estimatePolicy": "test_local_gguf_estimate",
+      "maxModelLen": 8192,
+      "maxNumSeqs": 4,
+      "gpuLayers": "auto",
+      "fitTargetMb": 4096,
+      "fitCtx": 8192
+    },
+    "runOptions": {
+      "model": "D:/AI/models/model.gguf",
+      "launch": null,
+      "name": "model.gguf",
+      "instanceMode": "parallel",
+      "instanceId": "vision",
+      "containerName": "llama-local-vision",
+      "port": 8180,
+      "maxModelLen": 8192,
+      "maxNumSeqs": 4,
+      "gpuMemoryUtilization": 0.7,
+      "gpuLayers": "auto",
+      "fitTargetMb": 4096,
+      "fitCtx": 8192,
+      "batchSize": 2048,
+      "ubatchSize": 512,
+      "cacheTypeK": "q8_0",
+      "cacheTypeV": "q8_0",
+      "flashAttention": "auto",
+      "cacheReuse": 512,
+      "noMmap": false,
+      "noRepack": false,
+      "gpuDeviceIds": [
+        "0",
+        "1"
+      ],
+      "multiGpuMode": "layer",
+      "visibleGpuCount": 2,
+      "tensorSplit": "2,1",
+      "mainGpu": "0",
+      "mainGpuHostId": "host-0",
+      "gpuPlan": {
+        "mainGpu": "0",
+        "mainGpuHostId": "host-0"
+      },
+      "gpuWarnings": [
+        "hetero"
+      ],
+      "clientPreset": "openai",
+      "reasoning": "on",
+      "reasoningFormat": "none",
+      "reasoningEffort": "high",
+      "reasoningBudget": 2048,
+      "textOnlyMode": true,
+      "languageModelOnly": true,
+      "networkAccess": "lan",
+      "serviceHost": "192.168.1.27",
+      "serviceUrl": "http://192.168.1.27:8180/v1",
+      "mmproj": "D:/AI/models/mmproj.gguf",
+      "mmprojDevice": "CUDA0",
+      "draftModel": "",
+      "speculativeMode": "draft-mtp",
+      "numSpeculativeTokens": 4,
+      "temperature": null,
+      "topP": null,
+      "topK": null,
+      "llamaApiKey": "<redacted>",
+      "runtimeApiKeyRef": "ref-<redacted>",
+      "vramReservationMb": 10000,
+      "gpuAdmissionLeaseId": "lease-llama"
+    },
+    "jobMeta": {
+      "model": "D:/AI/models/model.gguf",
+      "resolvedModel": "D:/AI/models/model.gguf",
+      "name": "model.gguf",
+      "instanceMode": "parallel",
+      "instanceId": "vision",
+      "containerName": "llama-local-vision",
+      "port": 8180,
+      "maxModelLen": 8192,
+      "maxNumSeqs": 4,
+      "gpuMemoryUtilization": 0.7,
+      "gpuLayers": "auto",
+      "fitTargetMb": 4096,
+      "fitCtx": 8192,
+      "batchSize": 2048,
+      "ubatchSize": 512,
+      "cacheTypeK": "q8_0",
+      "cacheTypeV": "q8_0",
+      "flashAttention": "auto",
+      "cacheReuse": 512,
+      "noMmap": false,
+      "noRepack": false,
+      "gpuDeviceIds": [
+        "0",
+        "1"
+      ],
+      "multiGpuMode": "layer",
+      "visibleGpuCount": 2,
+      "tensorSplit": "2,1",
+      "mainGpu": "0",
+      "mainGpuHostId": "host-0",
+      "gpuPlan": {
+        "mainGpu": "0",
+        "mainGpuHostId": "host-0"
+      },
+      "gpuWarnings": [
+        "hetero"
+      ],
+      "clientPreset": "openai",
+      "reasoning": "on",
+      "reasoningFormat": "none",
+      "reasoningEffort": "high",
+      "reasoningBudget": 2048,
+      "textOnlyMode": true,
+      "languageModelOnly": true,
+      "networkAccess": "lan",
+      "serviceHost": "192.168.1.27",
+      "serviceUrl": "http://192.168.1.27:8180/v1",
+      "mmproj": "D:/AI/models/mmproj.gguf",
+      "mmprojDevice": "CUDA0",
+      "draftModel": "",
+      "speculativeMode": "draft-mtp",
+      "numSpeculativeTokens": 4,
+      "temperature": null,
+      "topP": null,
+      "topK": null,
+      "hasApiKey": true,
+      "gpuAdmission": {
+        "id": "lease-llama",
+        "requestedTotalMb": 10000,
+        "reservations": [
+          {
+            "gpuId": "GPU-A",
+            "gpuIndex": "0",
+            "requestedMb": 5000
+          },
+          {
+            "gpuId": "GPU-B",
+            "gpuIndex": "1",
+            "requestedMb": 5000
+          }
+        ]
+      }
+    },
+    "jobStatus": "success"
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

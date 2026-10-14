@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-15-gpt-oss-matrix-parsers",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/model-capabilities.test.js (matrix parsers for a declared gpt-oss checkpoint)",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "model": "C:/fixture/models/openai-gpt-oss-20b"
+    },
+    "launch": {
+      "modelArg": "/models/openai-gpt-oss-20b",
+      "localPath": "C:/fixture/models/openai-gpt-oss-20b"
+    },
+    "modelFixture": "gpt-oss-20b"
+  },
+  "expect": {
+    "preset": {
+      "id": "model-gpt_oss",
+      "env": {},
+      "label": "GptOssForCausalLM capability profile",
+      "forceTrustRemoteCode": false,
+      "reasoningParser": "openai_gptoss",
+      "reasoningParserPlugin": "",
+      "toolCallParser": "openai",
+      "enableAutoToolChoice": true,
+      "speculativeConfig": null,
+      "notes": [],
+      "capabilities": {
+        "architecture": "GptOssForCausalLM",
+        "modelType": "gpt_oss",
+        "quantMethod": "mxfp4",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "gpt-oss",
+          "label": "OpenAI gpt-oss",
+          "matchedBy": "modelType",
+          "heuristic": false,
+          "confidence": "documented"
+        },
+        "reasoningParser": "openai_gptoss",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "openai",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": []
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

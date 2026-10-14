@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-05-sglang-qwen38-fp8-dspark",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › SGLang Qwen3.8 FP8 with the DSpark draft at its default location",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "engine": "sglang",
+      "model": "C:/fixture/models/Qwen-Qwen3.8-27B-FP8",
+      "maxModelLen": 262144,
+      "maxNumSeqs": 4,
+      "speculativeMode": "dspark",
+      "dsparkBlockSize": 7
+    },
+    "launch": {
+      "modelArg": "/models/Qwen-Qwen3.8-27B-FP8",
+      "localPath": "C:/fixture/models/Qwen-Qwen3.8-27B-FP8"
+    },
+    "modelFixture": "qwen38-27b-fp8-mtp"
+  },
+  "expect": {
+    "preset": {
+      "id": "qwen3.8-sglang-dspark",
+      "label": "Qwen3.8 / SGLang / DSpark",
+      "engine": "sglang",
+      "image": "lmsysorg/sglang@sha256:3ea7c6d74312d964edbcf9b3819425ea42117eb967ef1cfec632a70c926027df",
+      "quantization": "",
+      "forceTrustRemoteCode": true,
+      "attentionBackend": "flashinfer",
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_coder",
+      "enableAutoToolChoice": true,
+      "maxRunningRequests": 4,
+      "effectiveMaxRunningRequests": 4,
+      "maxTotalTokens": 0,
+      "pageSize": 0,
+      "chunkedPrefillSize": 8192,
+      "fp4GemmBackend": "",
+      "pleOffloadEmbedding": false,
+      "linearAttnPrefillBackend": "",
+      "linearAttnDecodeBackend": "",
+      "mambaSsmDtype": "",
+      "mambaRadixCacheStrategy": "",
+      "mambaTrackInterval": 0,
+      "maxMambaCacheSize": 0,
+      "disableThinkingByDefault": false,
+      "defaultChatTemplateKwargs": "",
+      "mambaSchedulerStrategy": "extra_buffer",
+      "disablePrefillCudaGraph": true,
+      "mmFeatureTransport": "cpu",
+      "speculativeConfig": null,
+      "speculativeAlgorithm": "DSPARK",
+      "draftModel": "C:/fixture/models/RadixArk-Qwen3.8-27B-DSpark",
+      "dsparkBlockSize": 7,
+      "draftModelQuantization": "unquant",
+      "notes": [
+        "uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000",
+        "uses FlashInfer on SM120; FA3 is not supported on this host",
+        "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures",
+        "uses the RadixArk Qwen3.8 DSpark draft checkpoint with block size 7 and overlap scheduling"
+      ],
+      "env": {},
+      "reasoningParserPlugin": "",
+      "capabilities": {
+        "architecture": "Qwen3_8ForConditionalGeneration",
+        "modelType": "qwen3_8",
+        "quantMethod": "fp8",
+        "nativeMtp": {
+          "layers": 1,
+          "declared": true,
+          "tensorCount": 2,
+          "evidence": "model.safetensors.index.json",
+          "inspected": true,
+          "supported": true
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "dspark",
+          "method": "dspark",
+          "tokens": 0,
+          "reason": "DSpark draft model runs inside SGLang; vLLM does not receive a speculative config."
+        },
+        "capabilityEntry": {
+          "id": "qwen3.8",
+          "label": "Qwen3.8",
+          "matchedBy": "modelType",
+          "heuristic": false,
+          "confidence": "verified"
+        },
+        "reasoningParser": "qwen3",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "lmsysorg/sglang",
+          "version": "0.5.17"
+        },
+        "env": {},
+        "notes": []
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

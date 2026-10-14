@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "llama-bnb-4bit",
+  "description": "BitsAndBytes 4-bit Llama checkpoint, which the pinned vLLM image cannot load without vllm-bnb-plugin.",
+  "entries": [
+    {
+      "path": "unsloth-Llama-30B-bnb-4bit/config.json",
+      "json": {
+        "architectures": [
+          "LlamaForCausalLM"
+        ],
+        "model_type": "llama",
+        "quantization_config": {
+          "quant_method": "bitsandbytes_4bit"
+        }
+      }
+    }
+  ]
+}

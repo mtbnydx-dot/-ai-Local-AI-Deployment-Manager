@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "qwen38-27b-nvfp4",
+  "description": "Qwen3.8 27B ModelOpt NVFP4 checkpoint (not Flash-Next).",
+  "entries": [
+    {
+      "path": "Qwen-Qwen3.8-27B-NVFP4/config.json",
+      "json": {
+        "architectures": [
+          "Qwen3_8ForConditionalGeneration"
+        ],
+        "model_type": "qwen3_8",
+        "max_position_embeddings": 262144,
+        "quantization_config": {
+          "quant_method": "modelopt",
+          "quant_algo": "NVFP4"
+        }
+      }
+    }
+  ]
+}

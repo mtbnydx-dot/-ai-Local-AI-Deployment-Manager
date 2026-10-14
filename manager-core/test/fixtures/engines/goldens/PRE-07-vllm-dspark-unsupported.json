@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-07-vllm-dspark-unsupported",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vLLM with speculativeMode dspark (unsupported on this host)",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "engine": "vllm",
+      "model": "C:/fixture/models/Qwen-Qwen3.8-27B-FP8",
+      "speculativeMode": "dspark"
+    },
+    "launch": {
+      "modelArg": "/models/Qwen-Qwen3.8-27B-FP8",
+      "localPath": "C:/fixture/models/Qwen-Qwen3.8-27B-FP8"
+    },
+    "modelFixture": "qwen38-27b-fp8-mtp"
+  },
+  "expect": {
+    "preset": {
+      "id": "vllm-dspark-wsl-unsupported",
+      "label": "vLLM / DSpark",
+      "engine": "vllm",
+      "image": "vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
+      "unsupportedReason": "本机的 RadixArk Qwen3.8 DSpark checkpoint 在 vLLM V2 runner 会因 WSL UVA 不可用失败，V1 又会按 DeepSeekV4 错误解析；请选择 SGLang + DSpark 档。",
+      "notes": [],
+      "env": {},
+      "forceTrustRemoteCode": false,
+      "reasoningParser": "qwen3",
+      "reasoningParserPlugin": "",
+      "toolCallParser": "qwen3_coder",
+      "enableAutoToolChoice": true,
+      "speculativeConfig": null,
+      "capabilities": {
+        "architecture": "Qwen3_8ForConditionalGeneration",
+        "modelType": "qwen3_8",
+        "quantMethod": "fp8",
+        "nativeMtp": {
+          "layers": 1,
+          "declared": true,
+          "tensorCount": 2,
+          "evidence": "model.safetensors.index.json",
+          "inspected": true,
+          "supported": true
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "dspark",
+          "method": "dspark",
+          "tokens": 0,
+          "reason": "DSpark draft model runs inside SGLang; vLLM does not receive a speculative config."
+        },
+        "capabilityEntry": {
+          "id": "qwen3.8",
+          "label": "Qwen3.8",
+          "matchedBy": "modelType",
+          "heuristic": false,
+          "confidence": "verified"
+        },
+        "reasoningParser": "qwen3",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "qwen3_coder",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": []
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}
