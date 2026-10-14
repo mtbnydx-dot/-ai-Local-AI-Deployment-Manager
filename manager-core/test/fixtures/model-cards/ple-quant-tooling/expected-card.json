@@ -1,7 +1,7 @@
 {
   "schema": "modelcard/v1",
   "contentDigest": "sha256:21598912c77305b43cd50ecbc7054b934b445a5814b5456df5456b1b9ceb0841",
-  "inspectorVersion": "1.0.0",
+  "inspectorVersion": "1.1.0",
   "knowledgeDigest": null,
   "origin": null,
   "format": {
@@ -12,7 +12,10 @@
     "missing": [],
     "layout": "custom"
   },
-  "role": null,
+  "role": {
+    "value": "tooling-only",
+    "runnable": false
+  },
   "identity": {
     "modelType": null,
     "textModelType": null,
@@ -148,7 +151,33 @@
         "en": "No config.json auto_map; no model-supplied code needs to run."
       }
     },
-    {"fact":"/speculative/nativeMtp","value":false,"source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected","note":{"zh":"没有找到 MTP 张量。","en":"No MTP tensors were found."}}
+    {"fact":"/speculative/nativeMtp","value":false,"source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected","note":{"zh":"没有找到 MTP 张量。","en":"No MTP tensors were found."}},
+    {
+      "fact": "/role/value",
+      "value": "tooling-only",
+      "source": {
+        "kind": "file",
+        "ref": null
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "文件夹里没有 config.json，根目录也没有可加载的权重（只有脚本、文档或自定义子目录），不能启动。",
+        "en": "No config.json and no loadable weights at the folder root (scripts, notes or a custom subfolder layout only); it cannot be launched."
+      }
+    },
+    {
+      "fact": "/role/runnable",
+      "value": false,
+      "source": {
+        "kind": "file",
+        "ref": null
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "文件夹里没有 config.json，根目录也没有可加载的权重（只有脚本、文档或自定义子目录），不能启动。",
+        "en": "No config.json and no loadable weights at the folder root (scripts, notes or a custom subfolder layout only); it cannot be launched."
+      }
+    }
   ],
   "warnings": [
     {

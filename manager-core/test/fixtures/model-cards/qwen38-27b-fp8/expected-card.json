@@ -1,7 +1,7 @@
 {
   "schema": "modelcard/v1",
   "contentDigest": "sha256:c1d78123fc03cc90b2baab4d8fe5926bb25a11cda71ec8c705af7fab4a61add0",
-  "inspectorVersion": "1.0.0",
+  "inspectorVersion": "1.1.0",
   "knowledgeDigest": null,
   "origin": null,
   "format": {
@@ -12,7 +12,10 @@
     "missing": [],
     "layout": "indexed"
   },
-  "role": null,
+  "role": {
+    "value": "main",
+    "runnable": true
+  },
   "identity": {
     "modelType": "qwen3_5",
     "textModelType": "qwen3_5_text",
@@ -217,7 +220,33 @@
     {"fact":"/format/weightBytes","value":30866866928,"source":{"kind":"file","ref":null},"confidence":"declared"},
     {"fact":"/format/complete","value":true,"source":{"kind":"file","ref":null},"confidence":"detected"},
     {"fact":"/format/layout","value":"indexed","source":{"kind":"file","ref":null},"confidence":"detected"},
-    {"fact":"/speculative/nativeMtp","value":true,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected","note":{"zh":"检查点包含 MTP 张量。","en":"The checkpoint packages MTP tensors."}}
+    {"fact":"/speculative/nativeMtp","value":true,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected","note":{"zh":"检查点包含 MTP 张量。","en":"The checkpoint packages MTP tensors."}},
+    {
+      "fact": "/role/value",
+      "value": "main",
+      "source": {
+        "kind": "tensor-table",
+        "ref": "*.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "有权重和输出层（或共享词嵌入），可作为主模型。",
+        "en": "Weights with an LM head (or tied embeddings): a main model."
+      }
+    },
+    {
+      "fact": "/role/runnable",
+      "value": true,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "*.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "有权重和输出层（或共享词嵌入），可作为主模型。",
+        "en": "Weights with an LM head (or tied embeddings): a main model."
+      }
+    }
   ],
   "warnings": [],
   "errors": []

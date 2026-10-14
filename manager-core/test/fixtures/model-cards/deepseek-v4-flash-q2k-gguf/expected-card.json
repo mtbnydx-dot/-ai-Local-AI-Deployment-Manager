@@ -1,7 +1,7 @@
 {
   "schema": "modelcard/v1",
   "contentDigest": "sha256:1ef1cb87841acf34b0cff124021909c6f49a6d78b5483b750649de1eddd60c04",
-  "inspectorVersion": "1.0.0",
+  "inspectorVersion": "1.1.0",
   "knowledgeDigest": null,
   "origin": null,
   "format": {
@@ -12,7 +12,10 @@
     "missing": [],
     "layout": "single"
   },
-  "role": null,
+  "role": {
+    "value": "main",
+    "runnable": true
+  },
   "identity": {
     "modelType": null,
     "textModelType": null,
@@ -286,6 +289,32 @@
       "note": {
         "zh": "没有找到 MTP 张量。",
         "en": "No MTP tensors were found."
+      }
+    },
+    {
+      "fact": "/role/value",
+      "value": "main",
+      "source": {
+        "kind": "tensor-table",
+        "ref": "DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "有权重和输出层（或共享词嵌入），可作为主模型。",
+        "en": "Weights with an LM head (or tied embeddings): a main model."
+      }
+    },
+    {
+      "fact": "/role/runnable",
+      "value": true,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "有权重和输出层（或共享词嵌入），可作为主模型。",
+        "en": "Weights with an LM head (or tied embeddings): a main model."
       }
     }
   ],

@@ -14,6 +14,7 @@ const inspect = require("./inspect");
 const jsonSchemaLite = require("./json-schema-lite");
 const knowledge = require("./knowledge");
 const rangeReader = require("./remote/range-reader");
+const role = require("./detectors/role");
 const topology = require("./detectors/topology");
 
 module.exports = {
@@ -36,6 +37,9 @@ module.exports = {
   },
   cache: {
     cardIdFor: cache.cardIdFor,
+  ROLES: role.ROLES,
+  detectRole: role.detectRole,
+  pairCompanions: role.pairCompanions,
     canonicalRef: cache.canonicalRef,
     fingerprintLocal: cache.fingerprintLocal,
     readCachedFacts: cache.readCachedFacts,
