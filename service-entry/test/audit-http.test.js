@@ -814,3 +814,53 @@ test("the real entry registers every audit route owner-only and answers a LAN vi
   assert.equal(unknown.json.error.code, "not_found");
   assert.equal(typeof ctx.audit.checkSession, "function");
 });
+
+test("the chats endpoints serve the real conversation index only with an audit session, and every view is logged", async (t) => {
+  const { openAuditIndex, EXPORT_JSON } = require("../../manager-core/telemetry/audit-index");
+  const fixtures = path.join(__dirname, "..", "..", "manager-core", "test", "fixtures", "telemetry", "audit-index");
+  const exportsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "audit-http-index-"));
+  t.after(() => { try { fs.rmSync(exportsRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch {} });
+  const items = [["20261001-full", "2026-10-01T04:00:00.000Z", "export-full.json"], ["20261005-inc", "2026-10-05T04:00:00.000Z", "export-incremental.json"]];
+  for (const [auditId, createdAt, fixture] of items) {
+    const dir = path.join(exportsRoot, auditId);
+    fs.mkdirSync(dir);
+    fs.copyFileSync(path.join(fixtures, fixture), path.join(dir, EXPORT_JSON));
+    fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ auditId, createdAt }));
+  }
+  const index = openAuditIndex({ file: path.join(exportsRoot, ".index", "audit-index.sqlite"), logger: quietLogger() });
+  t.after(() => index.close());
+  await index.backfill(exportsRoot);
+
+  const api = await startAudit(t, { index });
+  const search = `/api/audit/chats?q=${encodeURIComponent("健康端点")}`;
+  for (const pathname of [search, "/api/audit/chats/chat-alpha", "/api/audit/chats/chat-alpha/versions"]) {
+    const denied = await api.call("GET", pathname);
+    assert.equal(denied.status, 401, pathname);
+    assert.equal(denied.json.error.code, "audit_session_required");
+    assert.equal(denied.text.includes("alice@"), false);
+  }
+  assert.equal((await api.rows()).filter((row) => /chat|search/.test(row.action) && row.outcome === "ok").length, 0, "denied requests read nothing");
+
+  const headers = await api.unlocked();
+  const found = await api.call("GET", search, { headers });
+  assert.equal(found.status, 200);
+  assert.deepEqual(found.json.rows.map((row) => [row.chatId, row.auditId, row.versions]), [["chat-alpha", "20261005-inc", 2]]);
+
+  const chat = await api.call("GET", "/api/audit/chats/chat-alpha", { headers });
+  assert.equal(chat.status, 200);
+  assert.equal(chat.json.isLatest, true);
+  assert.equal(chat.json.auditId, "20261005-inc");
+  assert.equal(chat.json.messages.length, 4);
+  assert.equal(chat.json.messages[0].content, "如何部署 vLLM 服务？");
+  const old = await api.call("GET", "/api/audit/chats/chat-alpha?auditId=20261001-full", { headers });
+  assert.equal(old.json.isLatest, false);
+  assert.equal(old.json.messages.length, 2);
+  const versions = await api.call("GET", "/api/audit/chats/chat-alpha/versions", { headers });
+  assert.deepEqual(versions.json.versions.map((v) => v.auditId), ["20261005-inc", "20261001-full"]);
+  assert.equal((await api.call("GET", "/api/audit/chats/nope", { headers })).json.error.code, "chat_not_found");
+
+  const logged = (await api.rows()).filter((row) => ["search", "view_chat", "chat_versions"].includes(row.action)).map((row) => `${row.action}:${row.outcome}`);
+  assert.deepEqual(logged.filter((entry) => !entry.endsWith(":denied")), ["search:ok", "view_chat:ok", "view_chat:ok", "chat_versions:ok", "view_chat:error"]);
+  const status = await api.call("GET", "/api/audit/status");
+  assert.equal(status.json.index.chats, 4);
+});

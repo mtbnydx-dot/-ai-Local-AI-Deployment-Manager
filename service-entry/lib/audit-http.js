@@ -19,8 +19,11 @@
 // before it answers and fails closed: if the row cannot be written the
 // content is not sent. Login failures are throttled per IP.
 //
-// The conversation endpoints are served from the index of TEL-17 and answer
-// 503 audit_index_unavailable until it is mounted (deps.index).
+// The conversation endpoints are served from the index of TEL-17
+// (manager-core/telemetry/audit-index.js). mount() opens it on first use at
+// <auditRoot>/.index/audit-index.sqlite and back-fills it from the existing
+// exports in the background; they answer 503 audit_index_unavailable while
+// there is no index (deps.index).
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -28,6 +31,7 @@ const path = require("node:path");
 const core = require("../../manager-core");
 const { compilePath } = require("./viewer-allowlist");
 const { groupAuditChains } = require("../../manager-core/telemetry/audit-chain");
+const { openAuditIndex } = require("../../manager-core/telemetry/audit-index");
 const { describeSearchQuery } = require("../../manager-core/telemetry/audit-access-log");
 const { normalizeSchedule, createAuditScheduler } = require("../../manager-core/telemetry/audit-scheduler");
 
@@ -866,6 +870,49 @@ function mount(ctx) {
     lazyStore[method] = async (...args) => (await openStore())[method](...args);
   }
 
+  // The index file and its folder are created on first use, so a mounted but
+  // unused audit API leaves nothing behind. A failure to open it is logged once
+  // and leaves the conversation routes answering 503.
+  let lazyIndex = null;
+  function createLazyIndex(auditRoot) {
+    let opened = null;
+    let failed = false;
+    function open() {
+      if (opened || failed) return opened;
+      try {
+        opened = openAuditIndex({ file: path.join(auditRoot, ".index", "audit-index.sqlite"), logger });
+        if (backgroundAllowed) {
+          opened.backfill(auditRoot).then((summary) => {
+            if (summary.indexed.length || summary.removed.length || summary.failed.length) {
+              logger.log?.(`audit-http: index back-fill indexed ${summary.indexed.length}, removed ${summary.removed.length}, failed ${summary.failed.length} export(s)`);
+            }
+          }, (error) => logger.warn?.(core.redactSecrets(`audit-http: index back-fill failed: ${error?.code || error?.message || error}`)));
+        }
+      } catch (error) {
+        failed = true;
+        logger.warn?.(core.redactSecrets(`audit-http: the conversation index could not be opened: ${error?.code || error?.message || error}`));
+      }
+      return opened;
+    }
+    function need() {
+      const instance = open();
+      if (!instance) throw Object.assign(new Error("The conversation index is not available."), { code: "audit_index_unavailable" });
+      return instance;
+    }
+    lazyIndex = {
+      warm: open,
+      indexExport: async (...args) => need().indexExport(...args),
+      removeExport: async (...args) => need().removeExport(...args),
+      searchChats: async (...args) => need().searchChats(...args),
+      getChat: async (...args) => need().getChat(...args),
+      chatVersions: async (...args) => need().chatVersions(...args),
+      // Never opens the index just to report on it.
+      stats: async () => (opened || failed ? opened?.stats() ?? null : null),
+      close: async () => opened?.close(),
+    };
+    return lazyIndex;
+  }
+
   function buildRuntime() {
     const aiRoot = ctx.aiRoot || process.env.AI_ROOT || ".";
     const platform = core.platform;
@@ -904,7 +951,7 @@ function mount(ctx) {
       get auditMaxChains() { return current().retention.maxChains; },
     };
     const auditStore = core.createAuditStore(auditStoreOptions);
-    const index = ctx.auditIndex || null;
+    const index = ctx.auditIndex || createLazyIndex(auditRoot);
     const scheduler = createAuditScheduler({
       auditStore,
       index,
@@ -947,6 +994,7 @@ function mount(ctx) {
   if (backgroundAllowed) {
     try {
       getRuntime().scheduler.start();
+      lazyIndex?.warm();
     } catch (error) {
       logger.warn?.(core.redactSecrets(`audit-http: the export scheduler was not started: ${error?.message || error}`));
     }
@@ -956,6 +1004,7 @@ function mount(ctx) {
     handle: (req, res, url) => (String(url?.pathname || "").startsWith("/api/audit/") ? getRuntime().http.handle(req, res, url) : false),
     close() {
       runtime?.scheduler.stop();
+      lazyIndex?.close().catch(() => {});
       if (ownedStore) {
         ownedStore.then((opened) => opened.close?.(), () => {});
       }
