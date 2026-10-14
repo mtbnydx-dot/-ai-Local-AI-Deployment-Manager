@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "notes": [
+    "Job-log snippets for the root-cause tests (docs/overhaul/02-models.md §14, §21.2), written in the shape of the managers' jobs ledger: the redacted docker run line, then container output.",
+    "Host paths appear only as <AI_ROOT>; container paths are kept. vllm-port-in-use-with-secrets carries obviously fake secrets and ANSI colour codes on purpose, so the redaction and normalisation steps have something to remove.",
+    "expected.code and expected.signatureId follow the error-signature ids of 02 §8.4; a null signatureId means the traceback fallback (engine_start_failed) or an engine-descriptor addition whose id 01 defines."
+  ],
+  "samples": [
+    {
+      "id": "vllm-modelopt-exceeds-dimension",
+      "file": "vllm-modelopt-exceeds-dimension.log.fixture",
+      "engineId": "vllm",
+      "phase": "weights",
+      "trigger": "exceeds dimension size",
+      "expected": { "code": "modelopt_layout_mismatch", "signatureId": "modelopt-layout-mismatch" }
+    },
+    {
+      "id": "vllm-deepgemm-unknown-sf-transformation",
+      "file": "vllm-deepgemm-unknown-sf-transformation.log.fixture",
+      "engineId": "vllm",
+      "phase": "weights",
+      "trigger": "Unknown SF transformation",
+      "expected": { "code": "deepgemm_sf_transform", "signatureId": "deepgemm-sf-transform" }
+    },
+    {
+      "id": "vllm-transformers-unknown-arch",
+      "file": "vllm-transformers-unknown-arch.log.fixture",
+      "engineId": "vllm",
+      "phase": "weights",
+      "trigger": "does not recognize this architecture",
+      "expected": { "code": "transformers_unknown_arch", "signatureId": "transformers-unknown-arch", "capture": "qwen4_exp" }
+    },
+    {
+      "id": "llama-unknown-arch-deepseek4",
+      "file": "llama-unknown-arch-deepseek4.log.fixture",
+      "engineId": "llamacpp",
+      "phase": "weights",
+      "trigger": "unknown model architecture: 'deepseek4'",
+      "expected": { "code": "llama_unknown_arch", "signatureId": "llama-unknown-arch", "capture": "deepseek4" }
+    },
+    {
+      "id": "llama-cuda-buffer-alloc",
+      "file": "llama-cuda-buffer-alloc.log.fixture",
+      "engineId": "llamacpp",
+      "phase": "weights",
+      "trigger": "failed to allocate CUDA0 buffer of size 88062733312",
+      "expected": { "code": "cuda_buffer_alloc", "signatureId": "cuda-buffer-alloc" }
+    },
+    {
+      "id": "llama-mmproj-missing",
+      "file": "llama-mmproj-missing.log.fixture",
+      "engineId": "llamacpp",
+      "phase": "container",
+      "trigger": "Multimodal mode requires an mmproj",
+      "expected": { "code": "mmproj_missing", "signatureId": null, "source": "llama.cpp descriptor errorSignatures addition (01 §16.3)" }
+    },
+    {
+      "id": "sglang-traceback-fallback",
+      "file": "sglang-traceback-fallback.log.fixture",
+      "engineId": "sglang",
+      "phase": "kv",
+      "trigger": "AssertionError: (48, [])",
+      "expected": { "code": "engine_start_failed", "signatureId": null, "logExcerptIncludes": "AssertionError: (48, [])" }
+    },
+    {
+      "id": "vllm-kv-too-small",
+      "file": "vllm-kv-too-small.log.fixture",
+      "engineId": "vllm",
+      "phase": "kv",
+      "trigger": "larger than the available KV cache memory",
+      "expected": { "code": "kv_too_small", "signatureId": "vllm-kv-too-small" }
+    },
+    {
+      "id": "vllm-port-in-use-with-secrets",
+      "file": "vllm-port-in-use-with-secrets.log.fixture",
+      "engineId": "vllm",
+      "phase": "container",
+      "trigger": "address already in use",
+      "expected": {
+        "code": "port_in_use",
+        "signatureId": "port-in-use",
+        "redacted": ["fake-root-cause-api-key-0001", "fake-root-cause-hf-token-0002", "fake-root-cause-bearer-0003"]
+      }
+    }
+  ]
+}

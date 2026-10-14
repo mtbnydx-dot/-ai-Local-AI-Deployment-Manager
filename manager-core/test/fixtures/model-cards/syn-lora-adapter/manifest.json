@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-lora-adapter",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "llama3.1-8b-instruct-sql-lora",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic PEFT LoRA adapter (rank 16 on the attention projections) for a Llama 3.1 8B base; no config.json, one adapter_model.safetensors."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"README.md","bytes":5104,"kind":"placeholder"},
+    {"name":"adapter_config.json","bytes":573,"kind":"captured"},
+    {"name":"adapter_model.safetensors","bytes":54560368,"kind":"safetensors"},
+    {"name":"special_tokens_map.json","bytes":325,"kind":"placeholder"},
+    {"name":"tokenizer.json","bytes":9085657,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":1096,"kind":"captured"},
+    {"name":"training_args.bin","bytes":5432,"kind":"placeholder"}
+  ]
+}

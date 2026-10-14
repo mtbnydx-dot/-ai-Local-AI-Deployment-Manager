@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-reranker-seqcls",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "bge-reranker-v2-m3",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic cross-encoder reranker: XLMRobertaForSequenceClassification with a single label (id2label has one entry), F32 weights, sentencepiece tokenizer."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"README.md","bytes":13277,"kind":"placeholder"},
+    {"name":"config.json","bytes":764,"kind":"captured"},
+    {"name":"model.safetensors","bytes":2271071852,"kind":"safetensors"},
+    {"name":"sentencepiece.bpe.model","bytes":5069051,"kind":"placeholder"},
+    {"name":"special_tokens_map.json","bytes":964,"kind":"placeholder"},
+    {"name":"tokenizer.json","bytes":17098108,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":279,"kind":"captured"}
+  ]
+}

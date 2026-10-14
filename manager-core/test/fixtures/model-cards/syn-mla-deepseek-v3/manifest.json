@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-mla-deepseek-v3",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "deepseek-v3-mla-synthetic",
+  "layout": "indexed",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic scaled-down DeepSeek-V3 checkpoint: MLA attention (q_lora_rank 768, kv_lora_rank 512, rope 64), 64 routed plus 2 shared experts, FP8 128x128 block quantization, layer 27 is the next-n (MTP) layer, deepseek-v3 tool-call markers."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"LICENSE","bytes":1084,"kind":"placeholder"},
+    {"name":"README.md","bytes":12580,"kind":"placeholder"},
+    {"name":"config.json","bytes":1555,"kind":"captured"},
+    {"name":"configuration_deepseek.py","bytes":9897,"kind":"placeholder"},
+    {"name":"generation_config.json","bytes":171,"kind":"captured"},
+    {"name":"model-00001-of-00005.safetensors","bytes":3522307144,"kind":"safetensors"},
+    {"name":"model-00002-of-00005.safetensors","bytes":3496920520,"kind":"safetensors"},
+    {"name":"model-00003-of-00005.safetensors","bytes":3496922144,"kind":"safetensors"},
+    {"name":"model-00004-of-00005.safetensors","bytes":3496922144,"kind":"safetensors"},
+    {"name":"model-00005-of-00005.safetensors","bytes":3936668904,"kind":"safetensors"},
+    {"name":"model.safetensors.index.json","bytes":1040572,"kind":"index"},
+    {"name":"modeling_deepseek.py","bytes":75769,"kind":"placeholder"},
+    {"name":"tokenizer.json","bytes":7847602,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":1410,"kind":"captured"}
+  ]
+}
