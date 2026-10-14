@@ -7,8 +7,11 @@ const {
 } = require("./billing-price-templates");
 // One forwarded-header list for every "is this request proxied?" gate.
 const { FORWARDED_HEADERS } = require("./security");
+const { encodeUsageCursor } = require("./billing-store");
 
 const MAX_BILLING_BODY_BYTES = 256 * 1024;
+const USAGE_SUMMARY_PATH = "/api/billing/usage/summary";
+const USAGE_SUMMARY_PARAMS = ["kind", "groupBy", "from", "to", "customerId", "managerId", "tzOffsetMinutes", "limit"];
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 const MICROCREDITS_PER_CREDIT = 1_000_000n;
 const SQLITE_MAX_INTEGER = 9_223_372_036_854_775_807n;
@@ -164,12 +167,37 @@ function usageOptions(url) {
   if (tzOffsetMinutes !== undefined && !Number.isFinite(tzOffsetMinutes)) {
     throw billingHttpError(400, "invalid_tz_offset", "tzOffsetMinutes must be a number of minutes.");
   }
+  const cursor = String(url.searchParams.get("cursor") || "").trim();
+  if (cursor.length > 512) throw billingHttpError(400, "invalid_cursor", "cursor is invalid.");
   return {
     ...listOptions(url),
     window,
     ...(customerId ? { customerId: cleanRouteId(customerId, "customerId") } : {}),
     ...(tzOffsetMinutes !== undefined ? { tzOffsetMinutes } : {}),
+    ...(cursor ? { cursor } : {}),
   };
+}
+
+// The summary takes a closed parameter list (unknown names are typos, not
+// options) and hands the raw strings to the store, which owns the validation
+// so that store callers such as the telemetry runtime get the same checks.
+function usageSummaryOptions(url) {
+  for (const key of url.searchParams.keys()) {
+    if (!USAGE_SUMMARY_PARAMS.includes(key)) {
+      const name = String(key).slice(0, 40).replace(/[^A-Za-z0-9_.-]/g, "?");
+      throw billingHttpError(400, "unknown_parameter", `Unknown query parameter: ${name}.`);
+    }
+  }
+  const options = {};
+  for (const key of USAGE_SUMMARY_PARAMS) {
+    const values = url.searchParams.getAll(key);
+    if (!values.length) continue;
+    if (key !== "groupBy" && values.length > 1) throw billingHttpError(400, "duplicate_parameter", `${key} may be given only once.`);
+    const text = (key === "groupBy" ? values.join(",") : values[0]).trim();
+    if (text.length > 512) throw billingHttpError(400, "invalid_parameter", `${key} is too long.`);
+    if (text) options[key] = text;
+  }
+  return options;
 }
 
 function booleanQuery(value, field) {
@@ -300,7 +328,8 @@ function createBillingHttpHandler(options = {}) {
   async function handleAdmin(req, res, url) {
     if (!url.pathname.startsWith("/api/billing")) return false;
     if (!strictLocalBillingAdmin(req, { isLocalAddress, extractHostname })) {
-      sendJson(res, { ok: false, code: "billing_admin_local_only", message: "Billing administration is available only through localhost." }, 403);
+      const denied = { code: "billing_admin_local_only", message: "Billing administration is available only through localhost." };
+      sendJson(res, url.pathname === USAGE_SUMMARY_PATH ? { ok: false, error: denied } : { ok: false, ...denied }, 403);
       return true;
     }
     try {
@@ -320,7 +349,18 @@ function createBillingHttpHandler(options = {}) {
       } else if (method === "GET" && url.pathname === "/api/billing/prices") {
         result = await storeMethod(store, "listPrices")(priceOptions(url));
       } else if (method === "GET" && url.pathname === "/api/billing/usage") {
-        result = await storeMethod(store, "listUsage")(usageOptions(url));
+        const options = usageOptions(url);
+        const items = await storeMethod(store, "listUsage")(options);
+        // A full page carries the keyset cursor for the next one; the existing
+        // `items` array and offset paging are unchanged.
+        result = {
+          items,
+          nextCursor: Array.isArray(items) && items.length >= options.limit ? encodeUsageCursor(items[items.length - 1]) : null,
+        };
+      } else if (method === "GET" && url.pathname === USAGE_SUMMARY_PATH) {
+        // Owner-only once 05 PUB-5 adds roles; until then the direct-localhost
+        // gate above (strictLocalBillingAdmin) guards it like every billing admin route.
+        result = await storeMethod(store, "summarizeUsage")(usageSummaryOptions(url));
       } else if (method === "GET" && url.pathname === "/api/billing/ledger") {
         result = await storeMethod(store, "listLedger")({
           ...listOptions(url),
@@ -373,7 +413,12 @@ function createBillingHttpHandler(options = {}) {
       sendJson(res, jsonSafe(payload), 200);
     } catch (error) {
       const safe = publicError(error);
-      sendJson(res, safe.body, safe.status);
+      // The summary is a new endpoint, so it answers with the 00 §4.2 error
+      // envelope; the older billing routes keep their flat {ok, code, message}.
+      const body = url.pathname === USAGE_SUMMARY_PATH
+        ? { ok: false, error: { code: safe.body.code, message: safe.body.message } }
+        : safe.body;
+      sendJson(res, body, safe.status);
     }
     return true;
   }
@@ -396,6 +441,7 @@ module.exports = {
   localAdminInput,
   priceOptions,
   templateFilters,
+  usageSummaryOptions,
   zeroMeansUnset,
   jsonSafe,
   createBillingHttpHandler,
