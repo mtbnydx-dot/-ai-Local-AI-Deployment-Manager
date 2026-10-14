@@ -12,7 +12,9 @@
 
 import { createFormatters } from "../../lib/format.js";
 import { createI18n } from "../../lib/i18n.js";
+import { createPrefsStore } from "../../lib/prefs.js";
 import { createQueryCache } from "../../lib/store.js";
+import { createStorage } from "../../lib/storage.js";
 import { createServices, ServicesContext } from "../../ui/context.js";
 import { useT } from "../../ui/hooks.js";
 import { html, render } from "../../ui/html.js";
@@ -26,6 +28,7 @@ const SECTIONS = [
   () => import("./ui-kit/actions.js"),
   () => import("./ui-kit/overlays.js"),
   () => import("./ui-kit/display.js"),
+  () => import("./ui-kit/data.js"),
 ];
 
 function UiKit() {
@@ -55,7 +58,7 @@ export default UiKit;
  * @returns a function that unmounts the page
  */
 export function mountUiKit(root, { catalog = {}, locale = "en-US" } = {}) {
-  const services = createServices({ api: {}, cache: createQueryCache(), i18n: createI18n({ locale, catalog }), formatters: createFormatters(locale), toasts: createToasts() });
+  const services = createServices({ api: {}, cache: createQueryCache(), i18n: createI18n({ locale, catalog }), formatters: createFormatters(locale), toasts: createToasts(), prefs: createPrefsStore(createStorage()) });
   root.replaceChildren?.();
   render(html`<${ServicesContext.Provider} value=${services}><main id="main"><${UiKit} /></main><//>`, root);
   return () => render(null, root);
