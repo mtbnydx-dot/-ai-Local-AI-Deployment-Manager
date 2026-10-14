@@ -1,0 +1,292 @@
+{
+  "schema": "modelcard/v1",
+  "contentDigest": "sha256:78fb3201c7b0986521ef1ad367c09ddb0a805aa446a13b6f08dd4094609ac457",
+  "inspectorVersion": "1.0.0",
+  "knowledgeDigest": null,
+  "origin": null,
+  "format": {
+    "kind": "safetensors",
+    "weightFiles": 206,
+    "weightBytes": 135195303851,
+    "complete": true,
+    "missing": [],
+    "layout": "indexed"
+  },
+  "role": null,
+  "identity": {
+    "modelType": "qwen4_exp",
+    "textModelType": "qwen4_exp_text",
+    "architectures": ["Qwen4ExpForConditionalGeneration"],
+    "ggufArchitecture": null,
+    "transformersVersion": "5.8.0.dev0",
+    "baseModel": null,
+    "displayName": null,
+    "familyId": null,
+    "familyLabel": null,
+    "matchedBy": ""
+  },
+  "topology": {
+    "paramsTotal": 179999981459,
+    "paramsActive": 61563322259,
+    "hiddenSize": 2560,
+    "vocabSize": 248320,
+    "layers": 48,
+    "heads": 24,
+    "kvHeads": 2,
+    "headDim": 256,
+    "attention": {
+      "histogram": {
+        "full": 12,
+        "linear": 36
+      },
+      "runs": [
+        {"kind":"linear","count":3},
+        {"kind":"full","count":1}
+      ],
+      "kinds": {
+        "full": {
+          "kvHeads": 2,
+          "kDim": 256,
+          "vDim": 256
+        },
+        "swa": null,
+        "linear": {
+          "variant": "gated-deltanet",
+          "convKernel": 4,
+          "kHeads": 16,
+          "vHeads": 48,
+          "kDim": 128,
+          "vDim": 128,
+          "ssmDtype": "float32"
+        },
+        "mla": null,
+        "compressed": null,
+        "indexer": {
+          "compressRatio": 4,
+          "kDim": 128,
+          "kvHeads": 1,
+          "heads": 4
+        }
+      }
+    },
+    "moe": {
+      "experts": 512,
+      "active": 10,
+      "shared": 1,
+      "expertBytes": 67948314624,
+      "nonExpertBytes": 67207806970,
+      "expertBytesPerLayer": [1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888]
+    },
+    "mtp": {
+      "layers": 1,
+      "tensorCount": 31,
+      "bytes": 5214301696
+    },
+    "ple": {
+      "layers": [2],
+      "bytes": 51265925402,
+      "dtype": "float8_e4m3fn"
+    }
+  },
+  "weights": {
+    "exact": true,
+    "totalBytes": 135195303851,
+    "tensorBytes": 135156121594,
+    "byDtype": {
+      "BF16": 16007560930,
+      "F32": 589824,
+      "F8_E4M3": 58749992960,
+      "I64": 280,
+      "U8": 60397977600
+    },
+    "byClass": {
+      "dense": 7286920960,
+      "experts": 67948314624,
+      "embedding": 1271398400,
+      "lmHead": 1271398400,
+      "vision": 897862112,
+      "audio": 0,
+      "mtp": 5214301696,
+      "ple": 51265925402,
+      "other": 0
+    },
+    "expertsByLayer": [1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888,1415589888]
+  },
+  "context": {
+    "native": 262144,
+    "ropeScaling": null,
+    "slidingWindow": null
+  },
+  "quant": {
+    "method": "modelopt",
+    "algo": "NVFP4",
+    "weightBits": 4,
+    "groupSize": 16,
+    "activation": "static",
+    "kvScheme": null,
+    "excludedModules": 13,
+    "ggufFileType": null,
+    "ggufTensorTypes": null
+  },
+  "modalities": {
+    "input": ["text","image","video"],
+    "output": ["text"],
+    "visionTower": true,
+    "audioTower": false,
+    "projectorFiles": []
+  },
+  "template": {
+    "source": "chat_template.jinja",
+    "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+    "bytes": 8952,
+    "signatureId": null,
+    "exact": null,
+    "toolFormat": null,
+    "reasoningFormat": null,
+    "thinking": null,
+    "systemRole": null
+  },
+  "parsers": null,
+  "sampling": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 20,
+    "source": "generation_config.json"
+  },
+  "speculative": {
+    "nativeMtp": true,
+    "draftOf": null,
+    "compatibleDrafts": null
+  },
+  "compatibleWith": null,
+  "customCode": {
+    "autoMap": null,
+    "files": [],
+    "trustRemoteCodeRequired": false
+  },
+  "support": "unknown",
+  "remote": null,
+  "evidence": [
+    {"fact":"/identity/modelType","value":"qwen4_exp","source":{"kind":"file","ref":"config.json#/model_type"},"confidence":"declared"},
+    {"fact":"/identity/textModelType","value":"qwen4_exp_text","source":{"kind":"file","ref":"config.json#/text_config/model_type"},"confidence":"declared"},
+    {"fact":"/identity/architectures","source":{"kind":"file","ref":"config.json#/architectures"},"confidence":"declared"},
+    {"fact":"/identity/transformersVersion","value":"5.8.0.dev0","source":{"kind":"file","ref":"config.json#/transformers_version"},"confidence":"declared"},
+    {"fact":"/context/native","value":262144,"source":{"kind":"file","ref":"config.json#/text_config/max_position_embeddings"},"confidence":"declared"},
+    {
+      "fact": "/modalities/input",
+      "source": {
+        "kind": "file",
+        "ref": "config.json#/vision_config"
+      },
+      "confidence": "declared",
+      "note": {
+        "zh": "文本输入；视觉/音频输入来自 config.json 中声明的编码器。",
+        "en": "Text input; image and audio input come from encoders declared in config.json."
+      }
+    },
+    {"fact":"/modalities/visionTower","value":true,"source":{"kind":"file","ref":"config.json#/vision_config"},"confidence":"declared"},
+    {"fact":"/modalities/audioTower","value":false,"source":{"kind":"file","ref":"config.json"},"confidence":"detected"},
+    {"fact":"/modalities/output","source":{"kind":"file","ref":"config.json#/architectures"},"confidence":"declared"},
+    {"fact":"/customCode/trustRemoteCodeRequired","value":false,"source":{"kind":"file","ref":"config.json"},"confidence":"detected","note":{"zh":"config.json 没有 auto_map。","en":"config.json has no auto_map."}},
+    {"fact":"/sampling/temperature","value":1,"source":{"kind":"file","ref":"generation_config.json#/temperature"},"confidence":"declared"},
+    {"fact":"/sampling/top_p","value":0.95,"source":{"kind":"file","ref":"generation_config.json#/top_p"},"confidence":"declared"},
+    {"fact":"/sampling/top_k","value":20,"source":{"kind":"file","ref":"generation_config.json#/top_k"},"confidence":"declared"},
+    {"fact":"/sampling/source","value":"generation_config.json","source":{"kind":"file","ref":"generation_config.json"},"confidence":"declared"},
+    {"fact":"/template/source","value":"chat_template.jinja","source":{"kind":"file","ref":"chat_template.jinja"},"confidence":"declared"},
+    {"fact":"/template/sha256","value":"c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041","source":{"kind":"file","ref":"chat_template.jinja"},"confidence":"detected"},
+    {"fact":"/template/bytes","value":8952,"source":{"kind":"file","ref":"chat_template.jinja"},"confidence":"detected"},
+    {"fact":"/quant/method","value":"modelopt","source":{"kind":"file","ref":"hf_quant_config.json#/producer/name"},"confidence":"declared"},
+    {"fact":"/quant/algo","value":"NVFP4","source":{"kind":"file","ref":"hf_quant_config.json#/quantization/quant_algo"},"confidence":"declared"},
+    {"fact":"/quant/weightBits","value":4,"source":{"kind":"file","ref":"config.json#/quantization_config/config_groups/group_0/weights/num_bits"},"confidence":"declared"},
+    {"fact":"/quant/groupSize","value":16,"source":{"kind":"file","ref":"hf_quant_config.json#/quantization/group_size"},"confidence":"declared"},
+    {"fact":"/quant/activation","value":"static","source":{"kind":"file","ref":"config.json#/quantization_config/config_groups/group_0/input_activations/dynamic"},"confidence":"declared"},
+    {"fact":"/quant/excludedModules","value":13,"source":{"kind":"file","ref":"hf_quant_config.json#/quantization/exclude_modules"},"confidence":"declared"},
+    {"fact":"/topology/hiddenSize","value":2560,"source":{"kind":"file","ref":"config.json#/text_config/hidden_size"},"confidence":"declared"},
+    {"fact":"/topology/vocabSize","value":248320,"source":{"kind":"file","ref":"config.json#/text_config/vocab_size"},"confidence":"declared"},
+    {"fact":"/topology/layers","value":48,"source":{"kind":"file","ref":"config.json#/text_config/num_hidden_layers"},"confidence":"declared"},
+    {"fact":"/topology/heads","value":24,"source":{"kind":"file","ref":"config.json#/text_config/num_attention_heads"},"confidence":"declared"},
+    {"fact":"/topology/kvHeads","value":2,"source":{"kind":"file","ref":"config.json#/text_config/num_key_value_heads"},"confidence":"declared"},
+    {"fact":"/topology/headDim","value":256,"source":{"kind":"file","ref":"config.json#/text_config/head_dim"},"confidence":"declared"},
+    {
+      "fact": "/topology/paramsTotal",
+      "value": 179999981459,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "*.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按张量形状计数，打包的低比特权重按每元素多个参数换算。",
+        "en": "Counted from tensor shapes; packed low-bit weights count several parameters per element."
+      }
+    },
+    {
+      "fact": "/topology/paramsActive",
+      "value": 61563322259,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "*.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按每个 token 激活 10/512 个专家计算。",
+        "en": "Counts 10 of 512 routed experts as active per token."
+      }
+    },
+    {"fact":"/topology/attention/histogram","source":{"kind":"file","ref":"config.json#/text_config/layer_types"},"confidence":"declared"},
+    {"fact":"/topology/attention/runs","source":{"kind":"file","ref":"config.json#/text_config/layer_types"},"confidence":"declared"},
+    {"fact":"/topology/attention/kinds/full","source":{"kind":"file","ref":"config.json#/text_config"},"confidence":"declared"},
+    {"fact":"/topology/attention/kinds/linear","source":{"kind":"file","ref":"config.json#/text_config"},"confidence":"declared"},
+    {"fact":"/topology/attention/kinds/indexer","source":{"kind":"file","ref":"config.json#/text_config/indexer_compress_ratio"},"confidence":"declared"},
+    {"fact":"/topology/moe/experts","value":512,"source":{"kind":"file","ref":"config.json#/text_config/num_experts"},"confidence":"declared"},
+    {"fact":"/topology/moe/active","value":10,"source":{"kind":"file","ref":"config.json#/text_config/num_experts_per_tok"},"confidence":"declared"},
+    {
+      "fact": "/topology/moe/shared",
+      "value": 1,
+      "source": {
+        "kind": "file",
+        "ref": "config.json#/text_config/shared_expert_intermediate_size"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "配置声明了共享专家的中间层大小，按 1 个共享专家计。",
+        "en": "The config sets a shared-expert intermediate size; counted as one shared expert."
+      }
+    },
+    {"fact":"/topology/moe/expertBytes","value":67948314624,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/topology/moe/nonExpertBytes","value":67207806970,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/topology/moe/expertBytesPerLayer","source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/topology/mtp/layers","value":1,"source":{"kind":"file","ref":"config.json#/text_config/mtp_num_hidden_layers"},"confidence":"declared"},
+    {"fact":"/topology/mtp/tensorCount","value":31,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/topology/mtp/bytes","value":5214301696,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/topology/ple/layers","source":{"kind":"file","ref":"config.json#/text_config/ple_layer_ids"},"confidence":"declared"},
+    {"fact":"/topology/ple/dtype","value":"float8_e4m3fn","source":{"kind":"file","ref":"config.json#/text_config/ple_embedding_dtype"},"confidence":"declared"},
+    {"fact":"/topology/ple/bytes","value":51265925402,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/exact","value":true,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {
+      "fact": "/weights/totalBytes",
+      "value": 135195303851,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "*.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按文件头布局计算的权重文件总大小（头、张量和对齐填充），即完整下载的大小；tensorBytes 只计张量。",
+        "en": "The weight files as their headers lay them out (header, tensors, padding): the size of a complete download. tensorBytes counts tensors only."
+      }
+    },
+    {"fact":"/weights/tensorBytes","value":135156121594,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/byDtype","source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/byClass","source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/expertsByLayer","source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected"},
+    {"fact":"/format/kind","value":"safetensors","source":{"kind":"file","ref":null},"confidence":"declared","note":{"zh":"来自文件夹列表（只读取文件大小）。","en":"From the folder listing (file sizes only)."}},
+    {"fact":"/format/weightFiles","value":206,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/weightBytes","value":135195303851,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/complete","value":true,"source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/format/layout","value":"indexed","source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/speculative/nativeMtp","value":true,"source":{"kind":"tensor-table","ref":"*.safetensors"},"confidence":"detected","note":{"zh":"检查点包含 MTP 张量。","en":"The checkpoint packages MTP tensors."}}
+  ],
+  "warnings": [],
+  "errors": []
+}

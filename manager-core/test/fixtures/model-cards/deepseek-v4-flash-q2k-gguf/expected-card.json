@@ -1,0 +1,294 @@
+{
+  "schema": "modelcard/v1",
+  "contentDigest": "sha256:1ef1cb87841acf34b0cff124021909c6f49a6d78b5483b750649de1eddd60c04",
+  "inspectorVersion": "1.0.0",
+  "knowledgeDigest": null,
+  "origin": null,
+  "format": {
+    "kind": "gguf",
+    "weightFiles": 1,
+    "weightBytes": 97591747456,
+    "complete": true,
+    "missing": [],
+    "layout": "single"
+  },
+  "role": null,
+  "identity": {
+    "modelType": null,
+    "textModelType": null,
+    "architectures": null,
+    "ggufArchitecture": "deepseek4",
+    "transformersVersion": null,
+    "baseModel": null,
+    "displayName": "DeepSeek V4 Flash",
+    "familyId": null,
+    "familyLabel": null,
+    "matchedBy": ""
+  },
+  "topology": {
+    "paramsTotal": 284334567511,
+    "paramsActive": 13801959511,
+    "hiddenSize": 4096,
+    "vocabSize": 129280,
+    "layers": 43,
+    "heads": 64,
+    "kvHeads": 1,
+    "headDim": 512,
+    "attention": {
+      "histogram": {
+        "compressed": 43
+      },
+      "runs": [
+        {"kind":"compressed","count":1}
+      ],
+      "kinds": {
+        "full": null,
+        "swa": null,
+        "linear": null,
+        "mla": null,
+        "compressed": {
+          "window": 128,
+          "latentDim": 512,
+          "ratios": [0,0,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,128,4,0],
+          "indexer": {
+            "heads": 64,
+            "kDim": 128,
+            "topK": 512
+          }
+        },
+        "indexer": null
+      }
+    },
+    "moe": {
+      "experts": 256,
+      "active": 6,
+      "shared": 1,
+      "expertBytes": 88785027072,
+      "nonExpertBytes": 8801384796,
+      "expertBytesPerLayer": [1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,3623878656,3623878656,3623878656,3623878656,3623878656,3623878656]
+    },
+    "mtp": {
+      "layers": 1,
+      "tensorCount": 0,
+      "bytes": 0
+    },
+    "ple": null
+  },
+  "weights": {
+    "exact": true,
+    "totalBytes": 97591747456,
+    "tensorBytes": 97586411868,
+    "byDtype": {
+      "F16": 2191345664,
+      "F32": 1845596,
+      "I32": 9308160,
+      "IQ2_XXS": 40969961472,
+      "Q2_K": 26071793664,
+      "Q4_K": 21743271936,
+      "Q8_0": 6598885376
+    },
+    "byClass": {
+      "dense": 7179696476,
+      "experts": 88785027072,
+      "embedding": 1059061760,
+      "lmHead": 562626560,
+      "vision": 0,
+      "audio": 0,
+      "mtp": 0,
+      "ple": 0,
+      "other": 0
+    },
+    "expertsByLayer": [1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,1811939328,3623878656,3623878656,3623878656,3623878656,3623878656,3623878656]
+  },
+  "context": {
+    "native": 1048576,
+    "ropeScaling": {
+      "type": "yarn",
+      "factor": 16,
+      "originalContext": 65536
+    },
+    "slidingWindow": 128
+  },
+  "quant": {
+    "method": "gguf",
+    "algo": "IQ2_XXS",
+    "weightBits": null,
+    "groupSize": null,
+    "activation": null,
+    "kvScheme": null,
+    "excludedModules": null,
+    "ggufFileType": 19,
+    "ggufTensorTypes": {
+      "F16": 359,
+      "F32": 492,
+      "I32": 3,
+      "IQ2_XXS": 74,
+      "Q2_K": 37,
+      "Q4_K": 18,
+      "Q8_0": 345
+    }
+  },
+  "modalities": {
+    "input": ["text"],
+    "output": ["text"],
+    "visionTower": false,
+    "audioTower": false,
+    "projectorFiles": []
+  },
+  "template": {
+    "source": "gguf",
+    "sha256": "872492071c22c8d2025238120309ffbddddb666b49f4433f55c19b69bf51af27",
+    "bytes": 5016,
+    "signatureId": null,
+    "exact": null,
+    "toolFormat": null,
+    "reasoningFormat": null,
+    "thinking": null,
+    "systemRole": null
+  },
+  "parsers": null,
+  "sampling": {
+    "temperature": 1,
+    "top_p": 1,
+    "source": "gguf"
+  },
+  "speculative": {
+    "nativeMtp": false,
+    "draftOf": null,
+    "compatibleDrafts": null
+  },
+  "compatibleWith": null,
+  "customCode": {
+    "autoMap": null,
+    "files": [],
+    "trustRemoteCodeRequired": false
+  },
+  "support": "unknown",
+  "remote": null,
+  "evidence": [
+    {"fact":"/identity/ggufArchitecture","value":"deepseek4","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#general.architecture"},"confidence":"declared"},
+    {"fact":"/identity/displayName","value":"DeepSeek V4 Flash","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#general.name"},"confidence":"declared"},
+    {"fact":"/context/native","value":1048576,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.context_length"},"confidence":"declared"},
+    {"fact":"/context/ropeScaling","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.rope.scaling.type"},"confidence":"declared"},
+    {"fact":"/context/slidingWindow","value":128,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.attention.sliding_window"},"confidence":"declared"},
+    {
+      "fact": "/modalities/input",
+      "source": {
+        "kind": "file",
+        "ref": "DeepSeek-V4-Flash-Q2_K-0731.gguf"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "同目录没有多模态投影文件（mmproj），只接受文本输入。",
+        "en": "No projector (mmproj) file sits beside the model, so it takes text input only."
+      }
+    },
+    {"fact":"/modalities/visionTower","value":false,"source":{"kind":"file","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf"},"confidence":"detected"},
+    {"fact":"/modalities/audioTower","value":false,"source":{"kind":"file","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf"},"confidence":"detected"},
+    {"fact":"/modalities/output","source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/template/source","value":"gguf","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tokenizer.chat_template"},"confidence":"declared"},
+    {"fact":"/template/sha256","value":"872492071c22c8d2025238120309ffbddddb666b49f4433f55c19b69bf51af27","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tokenizer.chat_template"},"confidence":"detected"},
+    {"fact":"/template/bytes","value":5016,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tokenizer.chat_template"},"confidence":"detected"},
+    {"fact":"/sampling/temperature","value":1,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#general.sampling.temp"},"confidence":"declared"},
+    {"fact":"/sampling/top_p","value":1,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#general.sampling.top_p"},"confidence":"declared"},
+    {"fact":"/sampling/source","value":"gguf","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf"},"confidence":"declared"},
+    {"fact":"/quant/method","value":"gguf","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf"},"confidence":"declared"},
+    {"fact":"/quant/ggufFileType","value":19,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#general.file_type"},"confidence":"declared"},
+    {"fact":"/quant/algo","value":"IQ2_XXS","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#general.file_type"},"confidence":"declared"},
+    {"fact":"/quant/ggufTensorTypes","source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/topology/hiddenSize","value":4096,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.embedding_length"},"confidence":"declared"},
+    {"fact":"/topology/vocabSize","value":129280,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.vocab_size"},"confidence":"declared"},
+    {"fact":"/topology/layers","value":43,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.block_count"},"confidence":"declared"},
+    {"fact":"/topology/heads","value":64,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.attention.head_count"},"confidence":"declared"},
+    {"fact":"/topology/kvHeads","value":1,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.attention.head_count_kv"},"confidence":"declared"},
+    {"fact":"/topology/headDim","value":512,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.attention.key_length"},"confidence":"declared"},
+    {"fact":"/topology/paramsTotal","value":284334567511,"source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {
+      "fact": "/topology/paramsActive",
+      "value": 13801959511,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按每个 token 激活 6/256 个专家计算。",
+        "en": "Counts 6 of 256 routed experts as active per token."
+      }
+    },
+    {
+      "fact": "/topology/attention/histogram",
+      "source": {
+        "kind": "gguf",
+        "ref": "DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.attention.compress_ratios"
+      },
+      "confidence": "declared",
+      "note": {
+        "zh": "GGUF 声明了 attention.compress_ratios：所有层使用压缩注意力，比率逐层不同。",
+        "en": "The GGUF declares attention.compress_ratios: every layer uses compressed attention with its own ratio."
+      }
+    },
+    {"fact":"/topology/attention/runs","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.attention.compress_ratios"},"confidence":"declared"},
+    {"fact":"/topology/attention/kinds/compressed","source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.attention.compress_ratios"},"confidence":"declared"},
+    {"fact":"/topology/moe/experts","value":256,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.expert_count"},"confidence":"declared"},
+    {"fact":"/topology/moe/active","value":6,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.expert_used_count"},"confidence":"declared"},
+    {"fact":"/topology/moe/shared","value":1,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.expert_shared_count"},"confidence":"declared"},
+    {"fact":"/topology/moe/expertBytes","value":88785027072,"source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/topology/moe/nonExpertBytes","value":8801384796,"source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/topology/moe/expertBytesPerLayer","source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/topology/mtp/layers","value":1,"source":{"kind":"gguf","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#deepseek4.nextn_predict_layers"},"confidence":"declared"},
+    {"fact":"/topology/mtp/tensorCount","value":0,"source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/topology/mtp/bytes","value":0,"source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/weights/exact","value":true,"source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {
+      "fact": "/weights/totalBytes",
+      "value": 97591747456,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按文件头布局计算的权重文件总大小（头、张量和对齐填充），即完整下载的大小；tensorBytes 只计张量。",
+        "en": "The weight files as their headers lay them out (header, tensors, padding): the size of a complete download. tensorBytes counts tensors only."
+      }
+    },
+    {"fact":"/weights/tensorBytes","value":97586411868,"source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/weights/byDtype","source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/weights/byClass","source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/weights/expertsByLayer","source":{"kind":"tensor-table","ref":"DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"},"confidence":"detected"},
+    {"fact":"/format/kind","value":"gguf","source":{"kind":"file","ref":null},"confidence":"declared","note":{"zh":"来自文件夹列表（只读取文件大小）。","en":"From the folder listing (file sizes only)."}},
+    {"fact":"/format/weightFiles","value":1,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/weightBytes","value":97591747456,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/complete","value":true,"source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/format/layout","value":"single","source":{"kind":"file","ref":null},"confidence":"detected"},
+    {
+      "fact": "/customCode/trustRemoteCodeRequired",
+      "value": false,
+      "source": {
+        "kind": "file",
+        "ref": null
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "没有 config.json 的 auto_map，也不需要运行模型自带的代码。",
+        "en": "No config.json auto_map; no model-supplied code needs to run."
+      }
+    },
+    {
+      "fact": "/speculative/nativeMtp",
+      "value": false,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "DeepSeek-V4-Flash-Q2_K-0731.gguf#tensor_infos"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "没有找到 MTP 张量。",
+        "en": "No MTP tensors were found."
+      }
+    }
+  ],
+  "warnings": [],
+  "errors": []
+}

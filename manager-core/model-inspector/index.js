@@ -1,0 +1,44 @@
+"use strict";
+
+// core.models (docs/overhaul/02-models.md §3.1, 00 §9.17): the model inspector
+// as one namespace on manager-core, exposed by a single line in
+// manager-core/index.js and never spread into the flat export list, so no
+// name here can collide with the older utilities. Later packages add their
+// members (knowledge, parsers, compatibility, fit, ...) to this object.
+
+const cache = require("./cache");
+const cardSchema = require("./card-schema");
+const contentDigest = require("./content-digest");
+const evidence = require("./evidence");
+const inspect = require("./inspect");
+const jsonSchemaLite = require("./json-schema-lite");
+const topology = require("./detectors/topology");
+
+module.exports = {
+  INSPECTOR_VERSION: inspect.INSPECTOR_VERSION,
+  inspectLocal: inspect.inspectLocal,
+  inspectLocalDetailed: inspect.inspectLocalDetailed,
+  getCard: inspect.getCard,
+  InspectError: inspect.InspectError,
+  projectCard: cardSchema.projectCard,
+  validateCard: cardSchema.validateCard,
+  MODEL_CARD_SCHEMA: cardSchema.MODEL_CARD_SCHEMA,
+  contentDigest: { forDir: contentDigest.contentDigestForDir },
+  evidence: {
+    addEvidence: evidence.addEvidence,
+    confidenceOf: evidence.confidenceOf,
+    CONFIDENCE_RANK: evidence.CONFIDENCE_RANK,
+    CONFIDENCES: evidence.CONFIDENCES,
+  },
+  cache: {
+    cardIdFor: cache.cardIdFor,
+    canonicalRef: cache.canonicalRef,
+    fingerprintLocal: cache.fingerprintLocal,
+    readCachedFacts: cache.readCachedFacts,
+    writeCachedFacts: cache.writeCachedFacts,
+    defaultCacheDir: cache.defaultCacheDir,
+  },
+  cardIdFor: cache.cardIdFor,
+  tensorClasses: topology.DEFAULT_TENSOR_CLASSES,
+  jsonSchema: { compileSchema: jsonSchemaLite.compileSchema, validate: jsonSchemaLite.validate },
+};

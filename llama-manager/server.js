@@ -157,7 +157,8 @@ const CONFIG = {
 // of the download-token map invalidate it.
 const downloadTokens = createDownloadTokenStore({ onChange: () => runtimeSecretList.invalidate() });
 const runtimeSecretList = core.createCachedSecretList({
-  store: core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys }),
+  // DPAPI secret store (06 OPS-3b); the old plaintext file is migrated once.
+  store: core.createRuntimeSecretStore({ file: CONFIG.runtimeApiKeys, namespace: "runtime.llama", aiRoot: DEFAULT_AI_ROOT }),
   sources: [() => process.env.HF_TOKEN, () => process.env.AI_CLAUDE_GATEWAY_API_KEY, () => downloadTokens.values()],
 });
 const runtimeApiKeyStore = runtimeSecretList.store;
