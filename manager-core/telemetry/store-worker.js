@@ -44,10 +44,6 @@ const RETENTION_DEFAULTS = Object.freeze({
   yieldMs: 20,
   vacuumPages: 2000,
   optimizeEveryMs: DAY_MS,
-  // Each pass re-checks this much of the already masked range, for rows a
-  // second writer (another store instance on the same file) inserted behind
-  // the watermark. This instance masks such rows on insert.
-  maskSlackMs: DAY_MS,
 });
 const MAX_ROW_ERRORS = 20;
 const MAX_STATE_BYTES = 256 * 1024;
@@ -71,6 +67,10 @@ const RETRYABLE_CODES = new Set(["telemetry_store_busy"]);
 // The requests columns cleared after ipDays (§4.3, §21). client_ip is masked,
 // the others become NULL.
 const MASKED_REQUEST_COLUMNS = Object.freeze(["client_ip", "user_agent", "owui_user_id", "owui_chat_id"]);
+// A requests row that still holds client data. Masked addresses end in ".x"
+// or "…" (maskClientIp).
+const UNMASKED_REQUEST_SQL = `(user_agent IS NOT NULL OR owui_user_id IS NOT NULL OR owui_chat_id IS NOT NULL
+  OR (client_ip IS NOT NULL AND client_ip NOT LIKE '%.x' AND client_ip NOT LIKE '%…'))`;
 // A supplied value that cannot be stored in its column. normalizeRow rejects
 // the row instead of silently storing the column default.
 const INVALID = Symbol("invalidValue");
@@ -423,8 +423,10 @@ function createStoreCore(options = {}) {
   // requests rows with received_at below this are masked as they are
   // inserted. It is the cutoff of the last masking pass, and a pass moves it
   // to its new cutoff before it scans, so an import of old rows or a write
-  // that lands while the pass yields never keeps raw client data past
-  // ipDays. undefined: not read from collector_state yet; null: no pass ran.
+  // that lands while the pass yields is never stored with raw client data
+  // past ipDays. undefined: not read from collector_state yet; null: no pass
+  // ran. A second store instance on the same file may hold an older value;
+  // the next pass still masks its rows (maskInsertedSince).
   let maskBeforeMs;
   let maskedOnInsert = 0;
   const loggedFailures = new Set();
@@ -692,38 +694,53 @@ function createStoreCore(options = {}) {
     }
   }
 
-  // §4.3 and §21: the IP, user agent and OpenWebUI ids are kept for ipDays.
-  // Keyset pages over (received_at, id) from the last pass's watermark, so a
-  // pass reads only rows that crossed the cutoff since then. Rows that arrive
-  // already older than the watermark are masked on insert (maskStaleRequest).
-  async function maskClientData(fromMs, cutoffMs) {
-    const select = prepared("retention:mask:select", `
-      SELECT id, received_at, client_ip FROM requests
-      WHERE received_at < ? AND (received_at, id) > (?, ?)
-        AND (user_agent IS NOT NULL OR owui_user_id IS NOT NULL OR owui_chat_id IS NOT NULL
-             OR (client_ip IS NOT NULL AND client_ip NOT LIKE '%.x' AND client_ip NOT LIKE '%…'))
-      ORDER BY received_at, id LIMIT ${retentionOptions.batchRows}`);
+  // Pages through `select` (keyset, one short transaction per page, a yield
+  // between pages) and masks every row it returns. `cursor(row)` gives the
+  // next page's parameters.
+  async function maskPages(select, firstParams, cursor) {
     const update = prepared(
       "retention:mask:update",
       "UPDATE requests SET client_ip = ?, user_agent = NULL, owui_user_id = NULL, owui_chat_id = NULL WHERE id = ?",
     );
     let masked = 0;
-    let cursorAt = fromMs - 1;
-    let cursorId = 0;
+    let params = firstParams;
     for (;;) {
       assertRunning();
-      const rows = select.all(cutoffMs, cursorAt, cursorId);
+      const rows = select.all(...params);
       if (!rows.length) return masked;
       transaction(() => {
         for (const row of rows) update.run(maskClientIp(row.client_ip), row.id);
       });
       masked += rows.length;
-      const last = rows[rows.length - 1];
-      cursorAt = Number(last.received_at);
-      cursorId = Number(last.id);
       if (rows.length < retentionOptions.batchRows) return masked;
+      params = cursor(rows[rows.length - 1]);
       await delay(retentionOptions.yieldMs);
     }
+  }
+
+  // §4.3 and §21: the IP, user agent and OpenWebUI ids are kept for ipDays.
+  // Keyset pages over (received_at, id) from the last pass's watermark, so a
+  // pass reads only rows that crossed the cutoff since then.
+  function maskCrossedCutoff(fromMs, cutoffMs) {
+    const select = prepared("retention:mask:crossed", `
+      SELECT id, received_at, client_ip FROM requests
+      WHERE received_at < ? AND (received_at, id) > (?, ?) AND ${UNMASKED_REQUEST_SQL}
+      ORDER BY received_at, id LIMIT ${retentionOptions.batchRows}`);
+    return maskPages(select, [cutoffMs, fromMs - 1, 0], (last) => [cutoffMs, Number(last.received_at), Number(last.id)]);
+  }
+
+  // Rows inserted since the last pass that were already past the cutoff:
+  // access-log imports, long spool replays, or a second store instance whose
+  // insert-time check was stale. Insert order no longer matters: requests
+  // ids only grow between passes (retention is the only delete), so this is
+  // a rowid range scan over the new rows. The unary + keeps SQLite off the
+  // received_at index, whose range below the cutoff holds every older row.
+  function maskInsertedSince(fromId, cutoffMs) {
+    const select = prepared("retention:mask:since", `
+      SELECT id, client_ip FROM requests
+      WHERE id > ? AND +received_at < ? AND ${UNMASKED_REQUEST_SQL}
+      ORDER BY id LIMIT ${retentionOptions.batchRows}`);
+    return maskPages(select, [fromId, cutoffMs], (last) => [Number(last.id), cutoffMs]);
   }
 
   async function retentionPass(at, ttl) {
@@ -744,11 +761,19 @@ function createStoreCore(options = {}) {
     }
     const ipCutoff = at - ttl.ipDays * DAY_MS;
     const watermark = Number(previous.maskedThrough);
-    const maskFrom = Number.isFinite(watermark) ? Math.max(0, Math.min(watermark, ipCutoff) - retentionOptions.maskSlackMs) : 0;
+    const maskFrom = Number.isFinite(watermark) ? Math.max(0, Math.min(watermark, ipCutoff)) : 0;
     // From here on, inserts below the new cutoff are masked on the way in:
-    // the scan below may already be past their received_at.
+    // the scans below may already be past their received_at or id.
     maskBeforeMs = ipCutoff;
-    const masked = await maskClientData(maskFrom, ipCutoff);
+    // Read after the deletes above, so a reused id (the newest rows were
+    // deleted) is still above it. Rows inserted from here on are the next
+    // pass's maskInsertedSince range.
+    const maxId = Number(prepared("retention:mask:max", "SELECT max(id) AS id FROM requests").get().id) || 0;
+    let masked = await maskCrossedCutoff(maskFrom, ipCutoff);
+    // The first pass scanned every row from 0 already.
+    const previousMaxId = Number(previous.maskedMaxId);
+    const sinceId = Number.isFinite(previousMaxId) ? previousMaxId : Number.isFinite(watermark) ? 0 : null;
+    if (sinceId !== null) masked += await maskInsertedSince(sinceId, ipCutoff);
     assertRunning();
     db.exec(`PRAGMA incremental_vacuum(${retentionOptions.vacuumPages})`);
     let lastOptimizeAt = Number(previous.lastOptimizeAt) || 0;
@@ -767,6 +792,9 @@ function createStoreCore(options = {}) {
       // Every requests row below this is masked. It follows the current
       // cutoff, so it moves back when ipDays grows.
       maskedThrough: ipCutoff,
+      // The highest requests id this pass checked; the next pass also masks
+      // every newer row that is already past its cutoff.
+      maskedMaxId: maxId,
       lastOptimizeAt,
       ttl,
     };

@@ -501,6 +501,7 @@ test("retention deletes in batches, keeps forever data and masks client data aft
   assert.equal(stats.rows.rollup1d, 1, "daily rollups are kept forever");
   assert.equal(stats.retention.lastRunAt, NOW);
   assert.equal(stats.retention.maskedThrough, NOW - 7 * DAY_MS);
+  assert.equal(stats.retention.maskedMaxId, 3523, "the highest requests id left after the deletes");
 
   readDb(file, (check) => {
     const titles = check.prepare("SELECT title FROM events ORDER BY id").all().map((row) => row.title);
@@ -786,6 +787,72 @@ test("rows that arrive behind the masking watermark are masked on insert, whatev
   cleanup(t, () => reopened.close());
   await reopened.insertRequests([requestRow(4, old)]);
   assert.deepEqual(clientDataOf(file, requestId(4)), MASKED_V4);
+});
+
+test("the next pass masks old rows a second writer stored raw, whatever their received_at", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const owner = await openTelemetryStore({ file, logger: quietLogger() });
+  cleanup(t, () => owner.close());
+  // A second store on the same file (an import run from another process)
+  // reads the masking cutoff before any pass ran and keeps that value.
+  const importer = await openTelemetryStore({ file, logger: quietLogger() });
+  cleanup(t, () => importer.close());
+  await importer.insertRequests([requestRow(1, { receivedAt: NOW - 10 * DAY_MS })]);
+  assert.equal((await owner.runRetention(NOW, { ipDays: 7 })).masked, 1);
+
+  // Rows far behind the range the next pass re-checks by time, and one that
+  // only crosses the cutoff later.
+  const rows = [
+    requestRow(2, { receivedAt: NOW - 20 * DAY_MS, clientIp: "203.0.113.50", userAgent: "agent/1", owuiUserId: "u-1", owuiChatId: "c-1" }),
+    requestRow(3, { receivedAt: NOW - 29 * DAY_MS, clientIp: "203.0.113.52", userAgent: "agent/1" }),
+    requestRow(4, { receivedAt: NOW - 6 * DAY_MS, clientIp: "203.0.113.53", userAgent: "agent/1" }),
+  ];
+  assert.equal((await importer.insertRequests(rows)).accepted, 3);
+  assert.equal(clientDataOf(file, requestId(2)).client_ip, "203.0.113.50", "the stale writer stored it raw");
+
+  const next = await owner.runRetention(NOW + 3_600_000, { ipDays: 7 });
+  assert.equal(next.masked, 2);
+  assert.deepEqual(clientDataOf(file, requestId(2)), MASKED_V4);
+  assert.deepEqual(clientDataOf(file, requestId(3)), MASKED_V4);
+  assert.equal(clientDataOf(file, requestId(4)).client_ip, "203.0.113.53", "still inside ipDays");
+  assert.equal((await owner.stats()).retention.maskedMaxId, 4);
+
+  // The fresh row crosses the cutoff a day later and is masked by time.
+  const later = await owner.runRetention(NOW + DAY_MS + 3_600_000, { ipDays: 7 });
+  assert.equal(later.masked, 1);
+  assert.deepEqual(clientDataOf(file, requestId(4)), MASKED_V4);
+  assert.equal((await owner.runRetention(NOW + DAY_MS + 7_200_000, { ipDays: 7 })).masked, 0);
+});
+
+test("a pass that deletes the newest rows keeps masking rows that reuse their ids", async (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, "telemetry.sqlite");
+  const owner = await openTelemetryStore({ file, logger: quietLogger() });
+  cleanup(t, () => owner.close());
+  await owner.insertRequests([requestRow(1, { receivedAt: NOW - DAY_MS })]);
+  assert.equal((await owner.runRetention(NOW, { ipDays: 7 })).ok, true);
+  // The newest rows are past requestsDays, so the next pass deletes them and
+  // SQLite hands their ids out again.
+  await owner.insertRequests([requestRow(2, { receivedAt: NOW - 40 * DAY_MS }), requestRow(3, { receivedAt: NOW - 40 * DAY_MS })]);
+  const pass = await owner.runRetention(NOW + 60_000, { ipDays: 7 });
+  assert.equal(pass.deleted.requests, 2);
+  assert.equal((await owner.stats()).retention.maskedMaxId, 1);
+
+  // Another writer that does not mask on insert stores an old row raw; it
+  // gets id 2 again.
+  const raw = new sqlite.DatabaseSync(file);
+  try {
+    raw.prepare(`INSERT INTO requests (request_id, ingress, received_at, ended_at, protocol, op, method, path, status,
+      terminal_state, error_class, duration_ms, client_ip, user_agent) VALUES (?, 'import:entry', ?, ?, 'openai', 'chat',
+      'POST', '/v1/chat/completions', 200, 'completed', 'none', 1, '203.0.113.70', 'agent/9')`)
+      .run(requestId(9), NOW - 20 * DAY_MS, NOW - 20 * DAY_MS + 1);
+    assert.equal(raw.prepare("SELECT id FROM requests WHERE request_id = ?").get(requestId(9)).id, 2);
+  } finally {
+    raw.close();
+  }
+  assert.equal((await owner.runRetention(NOW + 120_000, { ipDays: 7 })).masked, 1);
+  assert.deepEqual(clientDataOf(file, requestId(9)), MASKED_V4);
 });
 
 test("rows written while a masking pass yields are masked even behind its cursor", async (t) => {
