@@ -212,3 +212,34 @@ test("the script runs as a CLI with the documented exit codes", async (t) => {
   assertPrivateOutput(`${dry.stdout}\n${dry.stderr}`, root);
   assert.equal((await run(["--write", "--root", root])).code, 1);
 });
+
+test("ENG-15 scan set: launch-store.json is scanned by default and .runtime/launch-files leftovers are reported", async (t) => {
+  const { root } = await buildTree(t);
+  await fsp.rm(path.join(root, "backups"), { recursive: true, force: true });
+  await fsp.rm(path.join(root, "vllm-manager", "logs", "jobs-ledger.json"));
+  const store = path.join(root, "llama-manager", "logs", "launch-store.json");
+  await writeJson(store, { schemaVersion: 1, launches: [{ launchId: "lch_FIXTURE", resolved: { argvRedacted: ["--api-key", FAKE_KEY] } }] });
+  const leftover = path.join(root, ".runtime", "launch-files", "lch_FIXTURE", "tabby.yml");
+  await fsp.mkdir(path.dirname(leftover), { recursive: true });
+  await fsp.writeFile(leftover, `api_key: ${FAKE_KEY}\n`, "utf8");
+  const before = await snapshot({ store, leftover });
+
+  const dry = await runMain(["--root", root]);
+  assert.equal(dry.code, 2);
+  assert.match(dry.stdout, /llama-manager\/logs\/launch-store\.json: 1 match/);
+  assert.match(dry.stdout, /\.runtime\/launch-files\/lch_FIXTURE\/tabby\.yml: leftover launch file/);
+  assertPrivateOutput(`${dry.stdout}\n${dry.stderr}`, root);
+  assert.deepEqual(await snapshot({ store, leftover }), before, "a dry run changes nothing");
+
+  const applied = await runMain(["--root", root, "--apply"]);
+  assert.equal(applied.code, 2, "the leftover launch file keeps the exit code at 2");
+  const after = await snapshot({ store, leftover });
+  assert.equal(after.store.includes(FAKE_KEY), false, "--apply scrubs the launch store");
+  assert.deepEqual(after.leftover, before.leftover, "a launch file is reported, never rewritten");
+  assertPrivateOutput(`${applied.stdout}\n${applied.stderr}`, root);
+
+  await fsp.rm(path.join(root, ".runtime"), { recursive: true, force: true });
+  assert.equal((await runMain(["--root", root])).code, 0);
+  assert.equal((await runMain(["--root", root, "--dry-run"])).code, 1, "no --dry-run flag");
+  assert.equal((await runMain(["--root", root, "--write"])).code, 1, "no --write flag");
+});

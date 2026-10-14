@@ -28,7 +28,7 @@
 // so a plan can be shown, hashed and stored as it is.
 
 const path = require("node:path");
-const { envAssignmentFlags, labelFlags, labelsFromFlags } = require("./_docker-segments");
+const { applyExtra, envAssignmentFlags, labelFlags, labelsFromFlags } = require("./_docker-segments");
 
 const HEALTH_CMD = "curl -fsS http://127.0.0.1:8000/health || exit 1";
 const HF_CACHE_TARGET = "/root/.cache/huggingface";
@@ -310,7 +310,7 @@ function managerDockerFlags(plan, ctx, options) {
 /** Assembles the LaunchCommand (01-engines §6) from the built parts. */
 function launchCommand(ctx, { flags, entrypoint = null, image, args, publish, secretEnv, metaPatch, logs }) {
   const secrets = ctx.secrets || {};
-  return {
+  return applyExtra({
     host: "docker",
     docker: { flags, entrypoint, image, args },
     publish,
@@ -320,7 +320,7 @@ function launchCommand(ctx, { flags, entrypoint = null, image, args, publish, se
     metaPatch,
     logs,
     redactions: [secrets.apiKey, secrets.hfToken].filter((value) => value !== undefined && value !== null && value !== "").map(String),
-  };
+  }, ctx.extra);
 }
 
 module.exports = {

@@ -1674,6 +1674,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
   admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
+  getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
+  modelStorage,
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller

@@ -37,7 +37,7 @@
 const path = require("node:path");
 const { normalizeGpuIds: defaultNormalizeGpuIds } = require("../../common-utils");
 const { publishArgsToDockerRunArgs: defaultPublishArgsToDockerRunArgs } = require("../../docker-utils");
-const { labelsFromFlags } = require("./_docker-segments");
+const { applyExtra, labelsFromFlags } = require("./_docker-segments");
 
 const ENGINE_ID = "llamacpp";
 // llama-server binds --api-key to LLAMA_API_KEY (common/arg.cpp, set_env); the
@@ -329,7 +329,7 @@ function buildCommand(plan, ctx, logs) {
   if (value("llamacpp.noMmap")) args.push("--no-mmap");
   if (value("llamacpp.noRepack")) args.push("--no-repack");
 
-  return {
+  return applyExtra({
     host: "docker",
     docker: { flags, entrypoint: null, image: runtimeImage, args },
     publish: activePublishArgs,
@@ -339,7 +339,7 @@ function buildCommand(plan, ctx, logs) {
     metaPatch: {},
     logs,
     redactions: Object.values(secretEnv).map(String).filter(Boolean),
-  };
+  }, ctx.extra);
 }
 
 // The server's normalizeDefaultTrueBoolean: on unless a value says off.

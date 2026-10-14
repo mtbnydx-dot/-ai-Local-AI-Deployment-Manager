@@ -119,6 +119,7 @@ function createVllmRuntimeCommandBuilder(deps) {
         env: { VLLM_START_TIMEOUT_MS: process.env.VLLM_START_TIMEOUT_MS },
       },
       secrets: { apiKey: opts.vllmApiKey, apiKeyRef: opts.runtimeApiKeyRef, hfToken: process.env.HF_TOKEN },
+      extra: { args: opts.extraArgs, env: opts.extraEnv },
       jobId: job.id,
       admission: { leaseId: opts.gpuAdmissionLeaseId, vramReservationMb: opts.vramReservationMb },
       launchId: null,

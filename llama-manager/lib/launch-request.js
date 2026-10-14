@@ -74,6 +74,8 @@ function createLlamaStartRuntimeRequest(deps) {
     imagePresence = null,
     admissionPreview = null,
     listContainers = null,
+    getIntrospection = null,
+    modelStorage = null,
   } = deps;
 
   /**
@@ -365,6 +367,8 @@ function createLlamaStartRuntimeRequest(deps) {
     imagePresence,
     admissionPreview,
     listContainers,
+    getIntrospection,
+    modelStorage,
   });
 
   async function startRuntimeRequest({ body = {} } = {}) {
