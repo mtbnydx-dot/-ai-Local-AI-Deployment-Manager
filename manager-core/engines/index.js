@@ -127,14 +127,11 @@ module.exports = {
   hosts,
   createDockerHost: dockerHost.createDockerHost,
   createDockerHostConfig: dockerHost.createDockerHostConfig,
-<<<<<<< HEAD
   // The runtime supervisor (01 §14): the one start pipeline both managers run.
   runtimeSupervisor,
   createRuntimeSupervisor: runtimeSupervisor.createRuntimeSupervisor,
-=======
   // ExternalHost (01 §20): health, model listing and resolveUpstream for registered endpoints.
   createExternalHost: externalHost.createExternalHost,
->>>>>>> feature/platform-overhaul-20261014
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,
