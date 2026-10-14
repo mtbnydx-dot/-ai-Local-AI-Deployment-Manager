@@ -278,11 +278,19 @@ async function setPrefs(context, prefs = {}, { baseUrl, storage = !baseUrl } = {
 }
 
 /**
- * Opens /system/ui-kit: the shell boots, then routes/system/ui-kit.js is
- * imported from the build snapshot and mounted into #app with the catalog of
- * `locale`. Resolves once every section is mounted.
+ * Opens /system/ui-kit on its own: app.js is replaced by a stub that only clears
+ * `aria-busy` (the shell would otherwise render the page inside its own chrome
+ * and call the status APIs), then routes/system/ui-kit.js is imported from the
+ * build snapshot and mounted into #app with the catalog of `locale`. Resolves
+ * once every section is mounted. The shell hosting the kit is covered by
+ * console-shell.spec.js.
  */
 async function openUiKit(page, baseUrl, { locale = "en-US", search = "" } = {}) {
+  await page.route(/\/c\/[^/]+\/app\.js$/, (route) => route.fulfill({
+    status: 200,
+    contentType: "text/javascript",
+    body: "document.getElementById('app')?.removeAttribute('aria-busy');\n",
+  }));
   await page.goto(`${baseUrl}system/ui-kit${search}`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#app")).not.toHaveAttribute("aria-busy", /.+/);
   const buildId = await page.locator('meta[name="console-build"]').getAttribute("content");

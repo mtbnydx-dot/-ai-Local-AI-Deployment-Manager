@@ -1,0 +1,13 @@
+{
+  "$locale": "zh-CN",
+  "$prefixes": ["access.", "pair.", "public.", "security.", "sessions."],
+  "pair.auto": "首次启动时，直接在本机打开控制台即可自动配对。",
+  "pair.body": "此浏览器尚未与本机控制台配对。请从平台启动器打开控制台（会自动配对），或在终端运行 {cmd}。",
+  "pair.cmd": "在本机终端运行：",
+  "pair.dismiss": "稍后再说",
+  "pair.expired": "配对链接已过期（有效期 120 秒），请重新获取。",
+  "pair.invalid": "该配对链接无效或已被使用，请重新获取。",
+  "pair.retry": "我已配对，重新检查",
+  "pair.stillUnpaired": "仍未配对。请先运行上面的命令，再重试。",
+  "pair.title": "此浏览器尚未配对"
+}

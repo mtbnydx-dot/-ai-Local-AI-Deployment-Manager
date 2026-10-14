@@ -787,14 +787,15 @@ async function smokeConsoleShell(page, baseUrl) {
   expect(await root.text()).toContain("本地模型服务统一入口");
   expect(root.headers()["content-security-policy"]).toBeUndefined();
 
-  for (const pathname of ["?ui=new", "overview", "deployments/vllm:primary"]) {
+  // The shell (CON-6) renders every path in its frame; a page that is not built yet shows the "still being built" page.
+  for (const [pathname, heading] of [["?ui=new", "总览"], ["overview", "总览"], ["deployments/vllm:primary", "部署"]]) {
     const response = await page.goto(`${baseUrl}${pathname}`, { waitUntil: "domcontentloaded" });
     expect(response.status(), pathname).toBe(200);
     expect(response.headers()["content-security-policy"], pathname).toBe(CONSOLE_CSP);
     await expect(page.locator("#app")).not.toHaveAttribute("aria-busy", /.+/);
-    await expect(page.locator("#app h1")).toHaveText("本地 AI 平台");
-    await expect(page).toHaveTitle("本地 AI 平台");
-    await expect(page.locator('#app a[href="/classic"]')).toHaveText("打开经典控制台");
+    await expect(page.locator("#app h1")).toHaveText(heading);
+    await expect(page).toHaveTitle(`${heading} · 本地 AI 平台`);
+    await expect(page.locator('#app nav a[href="/classic"]')).toHaveText("经典控制台");
     expect(await page.evaluate(() => window.__cspViolations), `${pathname} CSP violations`).toEqual([]);
   }
 
@@ -812,13 +813,16 @@ async function smokeConsoleShell(page, baseUrl) {
   await page.goto(`${baseUrl}overview`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.locator("#app h1")).toHaveText("Local AI Platform");
-  await expect(page.locator('#app a[href="/classic"]')).toHaveText("Open the classic console");
+  await expect(page.locator("#app h1")).toHaveText("Overview");
+  await expect(page).toHaveTitle("Overview · Local AI Platform");
+  await expect(page.locator('#app [data-testid="app-shell.pending"] a[href="/classic"]')).toHaveText("Open the classic console");
   expect(await page.evaluate(() => window.__cspViolations), "English shell CSP violations").toEqual([]);
 
   const classic = await page.request.get(`${baseUrl}classic`);
   expect(await classic.text()).toBe(await root.text());
-  expect(failures, "console shell frontend errors").toEqual([]);
+  // Pages that are not in the build yet answer 404 for their module; that is the "still being built" path, not a failure.
+  const unexpected = failures.filter((item) => !/\/c\/[0-9a-f]+\/routes\/|Failed to load resource/.test(item));
+  expect(unexpected, "console shell frontend errors").toEqual([]);
 }
 
 test.describe("manager frontends", () => {

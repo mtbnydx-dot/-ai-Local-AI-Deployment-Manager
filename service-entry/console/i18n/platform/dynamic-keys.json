@@ -1,0 +1,13 @@
+{
+  "prefixes": [
+    "platform.action.",
+    "platform.code.",
+    "platform.layer.",
+    "platform.mode.",
+    "platform.state.",
+    "platform.strip.overall.",
+    "platform.strip.plan.",
+    "platform.strip.status."
+  ],
+  "unused": []
+}

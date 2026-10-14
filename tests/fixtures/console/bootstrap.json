@@ -1,0 +1,69 @@
+{
+  "ok": true,
+  "buildId": "3f9c2a1b7d0e",
+  "role": "owner",
+  "access": {
+    "local": true,
+    "lanViewer": false,
+    "allowLanAdmin": false
+  },
+  "auth": {
+    "mode": "session",
+    "session": {
+      "role": "owner",
+      "via": "session",
+      "paired": true,
+      "autoPairAvailable": false
+    },
+    "csrf": "t"
+  },
+  "defaults": {
+    "locale": "zh-CN",
+    "theme": "auto",
+    "density": "comfortable"
+  },
+  "platform": {
+    "version": "0.2.0",
+    "commit": "c0146a7",
+    "contentHash": "3f9c2a1b7d0e",
+    "deployedAt": null
+  },
+  "managers": [
+    {
+      "id": "vllm",
+      "label": {
+        "zh": "vLLM / SGLang 管理器",
+        "en": "vLLM / SGLang manager"
+      },
+      "legacyUiPort": 5177
+    },
+    {
+      "id": "llama",
+      "label": {
+        "zh": "llama.cpp 管理器",
+        "en": "llama.cpp manager"
+      },
+      "legacyUiPort": 5178
+    }
+  ],
+  "gateway": {
+    "autoOpenAi": "/gateway/auto/openai/v1",
+    "autoClaude": "/gateway/auto/claude",
+    "consoleSession": false
+  },
+  "features": {
+    "events": true,
+    "mgmtProxy": true,
+    "engines": false,
+    "models": false,
+    "hub": false,
+    "telemetry": false,
+    "alerts": false,
+    "audit": false,
+    "session": true,
+    "access": false,
+    "public": false,
+    "platform": false,
+    "setup": false
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "updatedAt": "2026-10-14T08:00:00.000Z",
+  "instances": [
+    {
+      "id": "vllm:primary",
+      "instanceId": "vllm:primary",
+      "engineId": "vllm",
+      "lifecycleState": "stopped",
+      "running": false,
+      "models": []
+    }
+  ],
+  "settings": {}
+}

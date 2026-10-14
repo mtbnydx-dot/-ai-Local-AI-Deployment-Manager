@@ -1,0 +1,13 @@
+{
+  "$locale": "en-US",
+  "$prefixes": ["access.", "pair.", "public.", "security.", "sessions."],
+  "pair.auto": "On a first start, opening the console directly on this machine pairs it automatically.",
+  "pair.body": "This browser is not paired with the console yet. Open the console from the platform launcher (pairs automatically) or run {cmd} in a terminal.",
+  "pair.cmd": "Run this in a terminal on this machine:",
+  "pair.dismiss": "Not now",
+  "pair.expired": "The pairing link has expired (codes last 120 seconds). Request a new one.",
+  "pair.invalid": "That pairing link is invalid or has already been used. Request a new one.",
+  "pair.retry": "I have paired, check again",
+  "pair.stillUnpaired": "Still not paired. Run the command above, then try again.",
+  "pair.title": "This browser is not paired yet"
+}

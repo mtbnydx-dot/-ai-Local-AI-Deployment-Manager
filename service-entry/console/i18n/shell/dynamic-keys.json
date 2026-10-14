@@ -5,6 +5,7 @@
     "common.step.",
     "error.code.",
     "shell.nav.",
+    "shell.palette.group.",
     "status.",
     "uikit.tab.",
     "uikit.toast.",
@@ -15,10 +16,6 @@
     "deploy.list.count",
     "shell.boot.loading",
     "shell.boot.noscript",
-    "shell.conn.offline",
-    "shell.conn.polling",
-    "shell.readonly",
-    "shell.skip",
-    "shell.update"
+    "shell.boot.preview"
   ]
 }
