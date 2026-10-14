@@ -1,0 +1,1763 @@
+{
+  "schemaVersion": 1,
+  "note": "Legacy memory-estimator plans recorded after P0-RT-3 and ENG-12 (02 §21.2 fit.test.js).",
+  "records": [
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 27,
+        "contextTokens": 262144,
+        "bytesPerParam": 1,
+        "kvBytes": 2,
+        "arch": {
+          "layers": 64,
+          "kvLayers": 16,
+          "kvHeads": 4,
+          "headDim": 256,
+          "label": "request config",
+          "source": "request"
+        },
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.92
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "layers": 64,
+          "kvLayers": 16,
+          "kvHeads": 4,
+          "kvHeadsHigh": 4,
+          "headDim": 256,
+          "label": "request config",
+          "source": "request",
+          "confidence": "high"
+        },
+        "weightsGb": 25.14570951461792,
+        "kvGb": 16,
+        "kvGbHigh": 16,
+        "kvPerGpuHighGb": 16,
+        "perGpuHighGb": 44.437366275787355,
+        "judgedPerGpuGb": 44.437366275787355,
+        "archUncertain": false,
+        "archConfidence": "high",
+        "weightPerGpuBeforeOffloadGb": 25.14570951461792,
+        "kvPerGpuBeforeOffloadGb": 16,
+        "weightPerGpuGb": 25.14570951461792,
+        "kvPerGpuGb": 16,
+        "overheadPerGpuGb": 3.291656761169434,
+        "perGpuGb": 44.437366275787355,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.92,
+            "reserveGb": 1,
+            "usableGb": 87.94535156250001
+          }
+        ],
+        "minUsableGb": 87.94535156250001,
+        "overflowPerGpuGb": 0,
+        "status": "ok",
+        "recommendedCpuOffloadGb": 0,
+        "recommendedKvOffloadGb": 0
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 27,
+        "contextTokens": 131072,
+        "bytesPerParam": 1,
+        "kvBytes": 1,
+        "arch": {
+          "layers": 64,
+          "kvLayers": 16,
+          "kvHeads": 4,
+          "headDim": 256,
+          "label": "request config",
+          "source": "request"
+        },
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.7
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "layers": 64,
+          "kvLayers": 16,
+          "kvHeads": 4,
+          "kvHeadsHigh": 4,
+          "headDim": 256,
+          "label": "request config",
+          "source": "request",
+          "confidence": "high"
+        },
+        "weightsGb": 25.14570951461792,
+        "kvGb": 4,
+        "kvGbHigh": 4,
+        "kvPerGpuHighGb": 4,
+        "perGpuHighGb": 31.477366275787354,
+        "judgedPerGpuGb": 31.477366275787354,
+        "archUncertain": false,
+        "archConfidence": "high",
+        "weightPerGpuBeforeOffloadGb": 25.14570951461792,
+        "kvPerGpuBeforeOffloadGb": 4,
+        "weightPerGpuGb": 25.14570951461792,
+        "kvPerGpuGb": 4,
+        "overheadPerGpuGb": 2.3316567611694334,
+        "perGpuGb": 31.477366275787354,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.7,
+            "reserveGb": 1,
+            "usableGb": 66.91494140625
+          }
+        ],
+        "minUsableGb": 66.91494140625,
+        "overflowPerGpuGb": 0,
+        "status": "ok",
+        "recommendedCpuOffloadGb": 0,
+        "recommendedKvOffloadGb": 0
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 8,
+        "contextTokens": 8192,
+        "bytesPerParam": 2,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "maxParamsB": 8,
+          "layers": 32,
+          "kvHeads": 8,
+          "heads": 32,
+          "headDim": 128,
+          "label": "7B/8B heuristic",
+          "kvLayers": 32,
+          "kvHeadsHigh": 32,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "weightsGb": 14.901161193847656,
+        "kvGb": 1,
+        "kvGbHigh": 4,
+        "kvPerGpuHighGb": 4,
+        "perGpuHighGb": 20.41325408935547,
+        "judgedPerGpuGb": 20.41325408935547,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "weightPerGpuBeforeOffloadGb": 14.901161193847656,
+        "kvPerGpuBeforeOffloadGb": 1,
+        "weightPerGpuGb": 14.901161193847656,
+        "kvPerGpuGb": 1,
+        "overheadPerGpuGb": 1.2720928955078126,
+        "perGpuGb": 17.173254089355467,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "minUsableGb": 86.03349609375,
+        "overflowPerGpuGb": 0,
+        "status": "ok",
+        "recommendedCpuOffloadGb": 0,
+        "recommendedKvOffloadGb": 0
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 70,
+        "contextTokens": 32768,
+        "bytesPerParam": 2,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176
+          }
+        ],
+        "utilization": 0.9,
+        "mode": "tensor",
+        "tensorParallelSize": 2
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "maxParamsB": 80,
+          "layers": 80,
+          "kvHeads": 8,
+          "heads": 64,
+          "headDim": 128,
+          "label": "70B heuristic",
+          "kvLayers": 80,
+          "kvHeadsHigh": 64,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "weightsGb": 130.385160446167,
+        "kvGb": 10,
+        "kvGbHigh": 80,
+        "kvPerGpuHighGb": 40,
+        "perGpuHighGb": 113.60798664093018,
+        "judgedPerGpuGb": 113.60798664093018,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "weightPerGpuBeforeOffloadGb": 65.1925802230835,
+        "kvPerGpuBeforeOffloadGb": 5,
+        "weightPerGpuGb": 65.1925802230835,
+        "kvPerGpuGb": 5,
+        "overheadPerGpuGb": 5.61540641784668,
+        "perGpuGb": 75.80798664093018,
+        "splitFactor": 2,
+        "memorySplitFactor": 2,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576,
+            "totalGb": 24,
+            "usedGb": 0.9765625,
+            "freeGb": 23.0234375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176,
+            "totalGb": 24,
+            "usedGb": 0.390625,
+            "freeGb": 23.609375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          }
+        ],
+        "minUsableGb": 21.6,
+        "overflowPerGpuGb": 92.00798664093017,
+        "status": "fail",
+        "recommendedCpuOffloadGb": 65.1925802230835,
+        "recommendedKvOffloadGb": 184.01597328186034
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 70,
+        "contextTokens": 32768,
+        "bytesPerParam": 2,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176
+          }
+        ],
+        "utilization": 0.9,
+        "mode": "pipeline",
+        "pipelineParallelSize": 2
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "maxParamsB": 80,
+          "layers": 80,
+          "kvHeads": 8,
+          "heads": 64,
+          "headDim": 128,
+          "label": "70B heuristic",
+          "kvLayers": 80,
+          "kvHeadsHigh": 64,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "weightsGb": 130.385160446167,
+        "kvGb": 10,
+        "kvGbHigh": 80,
+        "kvPerGpuHighGb": 40,
+        "perGpuHighGb": 113.60798664093018,
+        "judgedPerGpuGb": 113.60798664093018,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "weightPerGpuBeforeOffloadGb": 65.1925802230835,
+        "kvPerGpuBeforeOffloadGb": 5,
+        "weightPerGpuGb": 65.1925802230835,
+        "kvPerGpuGb": 5,
+        "overheadPerGpuGb": 5.61540641784668,
+        "perGpuGb": 75.80798664093018,
+        "splitFactor": 2,
+        "memorySplitFactor": 2,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576,
+            "totalGb": 24,
+            "usedGb": 0.9765625,
+            "freeGb": 23.0234375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176,
+            "totalGb": 24,
+            "usedGb": 0.390625,
+            "freeGb": 23.609375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          }
+        ],
+        "minUsableGb": 21.6,
+        "overflowPerGpuGb": 92.00798664093017,
+        "status": "fail",
+        "recommendedCpuOffloadGb": 65.1925802230835,
+        "recommendedKvOffloadGb": 184.01597328186034
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 14,
+        "contextTokens": 65536,
+        "bytesPerParam": 2,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176
+          }
+        ],
+        "utilization": 0.9,
+        "mode": "data"
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "maxParamsB": 16,
+          "layers": 40,
+          "kvHeads": 8,
+          "heads": 40,
+          "headDim": 128,
+          "label": "14B heuristic",
+          "kvLayers": 40,
+          "kvHeadsHigh": 40,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "weightsGb": 26.0770320892334,
+        "kvGb": 10,
+        "kvGbHigh": 50,
+        "kvPerGpuHighGb": 50,
+        "perGpuHighGb": 82.16319465637207,
+        "judgedPerGpuGb": 82.16319465637207,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "weightPerGpuBeforeOffloadGb": 26.0770320892334,
+        "kvPerGpuBeforeOffloadGb": 10,
+        "weightPerGpuGb": 26.0770320892334,
+        "kvPerGpuGb": 10,
+        "overheadPerGpuGb": 2.886162567138672,
+        "perGpuGb": 38.96319465637207,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576,
+            "totalGb": 24,
+            "usedGb": 0.9765625,
+            "freeGb": 23.0234375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176,
+            "totalGb": 24,
+            "usedGb": 0.390625,
+            "freeGb": 23.609375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          }
+        ],
+        "minUsableGb": 21.6,
+        "overflowPerGpuGb": 60.56319465637207,
+        "status": "fail",
+        "recommendedCpuOffloadGb": 26.0770320892334,
+        "recommendedKvOffloadGb": 60.56319465637207
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 32,
+        "contextTokens": 32768,
+        "bytesPerParam": 2,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176
+          }
+        ],
+        "utilization": 0.85,
+        "cpuOffloadGb": 16
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "maxParamsB": 34,
+          "layers": 48,
+          "kvHeads": 8,
+          "heads": 40,
+          "headDim": 128,
+          "label": "27B/32B heuristic",
+          "kvLayers": 48,
+          "kvHeadsHigh": 40,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "weightsGb": 59.604644775390625,
+        "kvGb": 6,
+        "kvGbHigh": 30,
+        "kvPerGpuHighGb": 30,
+        "perGpuHighGb": 79.49301635742188,
+        "judgedPerGpuGb": 79.49301635742188,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "weightPerGpuBeforeOffloadGb": 59.604644775390625,
+        "kvPerGpuBeforeOffloadGb": 6,
+        "weightPerGpuGb": 43.604644775390625,
+        "kvPerGpuGb": 6,
+        "overheadPerGpuGb": 3.96837158203125,
+        "perGpuGb": 53.57301635742188,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 16,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576,
+            "totalGb": 24,
+            "usedGb": 0.9765625,
+            "freeGb": 23.0234375,
+            "utilization": 0.85,
+            "reserveGb": 1,
+            "usableGb": 20.4
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176,
+            "totalGb": 24,
+            "usedGb": 0.390625,
+            "freeGb": 23.609375,
+            "utilization": 0.85,
+            "reserveGb": 1,
+            "usableGb": 20.4
+          }
+        ],
+        "minUsableGb": 20.4,
+        "overflowPerGpuGb": 59.09301635742188,
+        "status": "fail",
+        "recommendedCpuOffloadGb": 59.604644775390625,
+        "recommendedKvOffloadGb": 59.09301635742188
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 32,
+        "contextTokens": 131072,
+        "bytesPerParam": 1,
+        "kvBytes": 1,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9,
+        "kvOffloadGb": 32
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "maxParamsB": 34,
+          "layers": 48,
+          "kvHeads": 8,
+          "heads": 40,
+          "headDim": 128,
+          "label": "27B/32B heuristic",
+          "kvLayers": 48,
+          "kvHeadsHigh": 40,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "weightsGb": 29.802322387695312,
+        "kvGb": 12,
+        "kvGbHigh": 60,
+        "kvPerGpuHighGb": 28,
+        "perGpuHighGb": 62.42650817871094,
+        "judgedPerGpuGb": 62.42650817871094,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "weightPerGpuBeforeOffloadGb": 29.802322387695312,
+        "kvPerGpuBeforeOffloadGb": 12,
+        "weightPerGpuGb": 29.802322387695312,
+        "kvPerGpuGb": 0,
+        "overheadPerGpuGb": 2.384185791015625,
+        "perGpuGb": 32.18650817871094,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 32,
+        "kvOffloadPerGpuGb": 32,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "minUsableGb": 86.03349609375,
+        "overflowPerGpuGb": 0,
+        "status": "ok",
+        "recommendedCpuOffloadGb": 0,
+        "recommendedKvOffloadGb": 32
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 27,
+        "contextTokens": 65536,
+        "bytesPerParam": 1,
+        "kvBytes": 2,
+        "arch": {
+          "layers": 64,
+          "kvLayers": 16,
+          "kvHeads": 4,
+          "headDim": 256,
+          "label": "request config",
+          "source": "request"
+        },
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9,
+        "multimodalReserveGb": 2.25
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "layers": 64,
+          "kvLayers": 16,
+          "kvHeads": 4,
+          "kvHeadsHigh": 4,
+          "headDim": 256,
+          "label": "request config",
+          "source": "request",
+          "confidence": "high"
+        },
+        "weightsGb": 25.14570951461792,
+        "kvGb": 4,
+        "kvGbHigh": 4,
+        "kvPerGpuHighGb": 4,
+        "perGpuHighGb": 33.727366275787354,
+        "judgedPerGpuGb": 33.727366275787354,
+        "archUncertain": false,
+        "archConfidence": "high",
+        "weightPerGpuBeforeOffloadGb": 25.14570951461792,
+        "kvPerGpuBeforeOffloadGb": 4,
+        "weightPerGpuGb": 25.14570951461792,
+        "kvPerGpuGb": 4,
+        "overheadPerGpuGb": 4.581656761169434,
+        "perGpuGb": 33.727366275787354,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "minUsableGb": 86.03349609375,
+        "overflowPerGpuGb": 0,
+        "status": "ok",
+        "recommendedCpuOffloadGb": 0,
+        "recommendedKvOffloadGb": 0
+      }
+    },
+    {
+      "engineId": "vllm",
+      "input": {
+        "paramsB": 120,
+        "contextTokens": 8192,
+        "bytesPerParam": 0.5,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [],
+        "utilization": 0.9
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "maxParamsB": null,
+          "layers": 96,
+          "kvHeads": 8,
+          "heads": 96,
+          "headDim": 128,
+          "label": "large model heuristic",
+          "kvLayers": 96,
+          "kvHeadsHigh": 96,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "weightsGb": 55.87935447692871,
+        "kvGb": 3,
+        "kvGbHigh": 36,
+        "kvPerGpuHighGb": 36,
+        "perGpuHighGb": 99.229702835083,
+        "judgedPerGpuGb": 99.229702835083,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "weightPerGpuBeforeOffloadGb": 55.87935447692871,
+        "kvPerGpuBeforeOffloadGb": 3,
+        "weightPerGpuGb": 55.87935447692871,
+        "kvPerGpuGb": 3,
+        "overheadPerGpuGb": 4.710348358154297,
+        "perGpuGb": 63.58970283508301,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [],
+        "minUsableGb": 0,
+        "overflowPerGpuGb": 0,
+        "status": "warn",
+        "recommendedCpuOffloadGb": 0,
+        "recommendedKvOffloadGb": 0
+      }
+    },
+    {
+      "engineId": "sglang",
+      "input": {
+        "paramsB": 180,
+        "contextTokens": 262144,
+        "bytesPerParam": 0.75,
+        "kvBytes": 1,
+        "arch": {
+          "layers": 48,
+          "kvLayers": 12,
+          "kvHeads": 2,
+          "headDim": 256
+        },
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.88
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "layers": 48,
+          "kvLayers": 12,
+          "kvHeads": 2,
+          "kvHeadsHigh": 2,
+          "headDim": 256,
+          "label": "model config",
+          "source": "config",
+          "confidence": "high"
+        },
+        "weightsGb": 125.7285475730896,
+        "kvGb": 3,
+        "kvGbHigh": 3,
+        "kvPerGpuHighGb": 3,
+        "perGpuHighGb": 139.02683137893678,
+        "judgedPerGpuGb": 139.02683137893678,
+        "archUncertain": false,
+        "archConfidence": "high",
+        "weightPerGpuBeforeOffloadGb": 125.7285475730896,
+        "kvPerGpuBeforeOffloadGb": 3,
+        "weightPerGpuGb": 125.7285475730896,
+        "kvPerGpuGb": 3,
+        "overheadPerGpuGb": 10.298283805847168,
+        "perGpuGb": 139.02683137893678,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.88,
+            "reserveGb": 1,
+            "usableGb": 84.121640625
+          }
+        ],
+        "minUsableGb": 84.121640625,
+        "overflowPerGpuGb": 54.90519075393678,
+        "status": "fail",
+        "recommendedCpuOffloadGb": 56.90519075393678,
+        "recommendedKvOffloadGb": 0
+      }
+    },
+    {
+      "engineId": "sglang",
+      "input": {
+        "paramsB": 35,
+        "contextTokens": 131072,
+        "bytesPerParam": 1,
+        "kvBytes": 2,
+        "arch": {
+          "layers": 40,
+          "kvLayers": 10,
+          "kvHeads": 2,
+          "headDim": 256
+        },
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.7
+      },
+      "expected": {
+        "engine": "vllm",
+        "arch": {
+          "layers": 40,
+          "kvLayers": 10,
+          "kvHeads": 2,
+          "kvHeadsHigh": 2,
+          "headDim": 256,
+          "label": "model config",
+          "source": "config",
+          "confidence": "high"
+        },
+        "weightsGb": 32.59629011154175,
+        "kvGb": 2.5,
+        "kvGbHigh": 2.5,
+        "kvPerGpuHighGb": 2.5,
+        "perGpuHighGb": 37.90399332046509,
+        "judgedPerGpuGb": 37.90399332046509,
+        "archUncertain": false,
+        "archConfidence": "high",
+        "weightPerGpuBeforeOffloadGb": 32.59629011154175,
+        "kvPerGpuBeforeOffloadGb": 2.5,
+        "weightPerGpuGb": 32.59629011154175,
+        "kvPerGpuGb": 2.5,
+        "overheadPerGpuGb": 2.80770320892334,
+        "perGpuGb": 37.90399332046509,
+        "splitFactor": 1,
+        "memorySplitFactor": 1,
+        "cpuOffloadPerGpuGb": 0,
+        "kvOffloadTotalGb": 0,
+        "kvOffloadPerGpuGb": 0,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.7,
+            "reserveGb": 1,
+            "usableGb": 66.91494140625
+          }
+        ],
+        "minUsableGb": 66.91494140625,
+        "overflowPerGpuGb": 0,
+        "status": "ok",
+        "recommendedCpuOffloadGb": 0,
+        "recommendedKvOffloadGb": 0
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 27,
+        "contextTokens": 32768,
+        "bytesPerParam": 0.56,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9,
+        "gpuLayers": "all"
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "maxParamsB": 34,
+          "layers": 48,
+          "kvHeads": 8,
+          "heads": 40,
+          "headDim": 128,
+          "label": "27B/32B heuristic",
+          "kvLayers": 48,
+          "kvHeadsHigh": 40,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "totalWeightsGb": 14.081597328186037,
+        "gpuWeightsGb": 14.081597328186037,
+        "cpuWeightsGb": 0,
+        "totalKvGb": 6,
+        "totalKvHighGb": 30,
+        "kvGb": 6,
+        "gpuKvGb": 6,
+        "gpuKvHighGb": 30,
+        "cpuKvGb": 0,
+        "overheadGb": 1.6065277862548828,
+        "totalGpuGb": 21.68812511444092,
+        "totalGpuHighGb": 47.60812511444092,
+        "judgedTotalGpuGb": 47.60812511444092,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "requestedGpuLayers": 48,
+        "totalLayers": 48,
+        "allocations": [
+          {
+            "gpu": {
+              "id": "0",
+              "name": "GPU 0",
+              "totalMb": 97887,
+              "usedMb": 600,
+              "freeMb": 97287,
+              "totalGb": 95.5927734375,
+              "usedGb": 0.5859375,
+              "freeGb": 95.0068359375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 86.03349609375
+            },
+            "weight": 86.03349609375,
+            "allocatedGb": 47.60812511444092,
+            "overflowGb": 0,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "peakGpuGb": 47.60812511444092,
+        "status": "ok",
+        "recommendedGpuLayers": 48
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 284,
+        "contextTokens": 32768,
+        "bytesPerParam": 0.34,
+        "kvBytes": 2,
+        "arch": {
+          "layers": 43,
+          "kvHeads": 1,
+          "headDim": 512
+        },
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9,
+        "gpuLayers": "all"
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "layers": 43,
+          "kvLayers": 43,
+          "kvHeads": 1,
+          "kvHeadsHigh": 1,
+          "headDim": 512,
+          "label": "model config",
+          "source": "config",
+          "confidence": "high"
+        },
+        "totalWeightsGb": 89.9285078048706,
+        "gpuWeightsGb": 89.9285078048706,
+        "cpuWeightsGb": 0,
+        "totalKvGb": 2.6875,
+        "totalKvHighGb": 2.6875,
+        "kvGb": 2.6875,
+        "gpuKvGb": 2.6875,
+        "gpuKvHighGb": 2.6875,
+        "cpuKvGb": 0,
+        "overheadGb": 7.409280624389648,
+        "totalGpuGb": 100.02528842926026,
+        "totalGpuHighGb": 100.02528842926026,
+        "judgedTotalGpuGb": 100.02528842926026,
+        "archUncertain": false,
+        "archConfidence": "high",
+        "requestedGpuLayers": 43,
+        "totalLayers": 43,
+        "allocations": [
+          {
+            "gpu": {
+              "id": "0",
+              "name": "GPU 0",
+              "totalMb": 97887,
+              "usedMb": 600,
+              "freeMb": 97287,
+              "totalGb": 95.5927734375,
+              "usedGb": 0.5859375,
+              "freeGb": 95.0068359375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 86.03349609375
+            },
+            "weight": 86.03349609375,
+            "allocatedGb": 100.02528842926026,
+            "overflowGb": 13.991792335510254,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "peakGpuGb": 100.02528842926026,
+        "status": "fail",
+        "recommendedGpuLayers": 34
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 70,
+        "contextTokens": 16384,
+        "bytesPerParam": 0.56,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176
+          }
+        ],
+        "utilization": 0.9,
+        "gpuLayers": 40,
+        "tensorSplitWeights": [
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "maxParamsB": 80,
+          "layers": 80,
+          "kvHeads": 8,
+          "heads": 64,
+          "headDim": 128,
+          "label": "70B heuristic",
+          "kvLayers": 80,
+          "kvHeadsHigh": 64,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "totalWeightsGb": 36.50784492492676,
+        "gpuWeightsGb": 18.25392246246338,
+        "cpuWeightsGb": 18.25392246246338,
+        "totalKvGb": 5,
+        "totalKvHighGb": 40,
+        "kvGb": 2.5,
+        "gpuKvGb": 2.5,
+        "gpuKvHighGb": 20,
+        "cpuKvGb": 2.5,
+        "overheadGb": 1.6603137969970703,
+        "totalGpuGb": 22.41423625946045,
+        "totalGpuHighGb": 41.31423625946045,
+        "judgedTotalGpuGb": 41.31423625946045,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "requestedGpuLayers": 40,
+        "totalLayers": 80,
+        "allocations": [
+          {
+            "gpu": {
+              "id": "0",
+              "name": "GPU 0",
+              "totalMb": 24576,
+              "usedMb": 1000,
+              "freeMb": 23576,
+              "totalGb": 24,
+              "usedGb": 0.9765625,
+              "freeGb": 23.0234375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 21.6
+            },
+            "weight": 1,
+            "allocatedGb": 20.657118129730225,
+            "overflowGb": 0,
+            "usableGb": 21.6
+          },
+          {
+            "gpu": {
+              "id": "1",
+              "name": "GPU 1",
+              "totalMb": 24576,
+              "usedMb": 400,
+              "freeMb": 24176,
+              "totalGb": 24,
+              "usedGb": 0.390625,
+              "freeGb": 23.609375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 21.6
+            },
+            "weight": 1,
+            "allocatedGb": 20.657118129730225,
+            "overflowGb": 0,
+            "usableGb": 21.6
+          }
+        ],
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576,
+            "totalGb": 24,
+            "usedGb": 0.9765625,
+            "freeGb": 23.0234375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176,
+            "totalGb": 24,
+            "usedGb": 0.390625,
+            "freeGb": 23.609375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          }
+        ],
+        "peakGpuGb": 20.657118129730225,
+        "status": "warn",
+        "recommendedGpuLayers": 38
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 70,
+        "contextTokens": 16384,
+        "bytesPerParam": 0.56,
+        "kvBytes": 1,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176
+          }
+        ],
+        "utilization": 0.9,
+        "gpuLayers": 80,
+        "tensorSplitWeights": [
+          3,
+          1
+        ]
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "maxParamsB": 80,
+          "layers": 80,
+          "kvHeads": 8,
+          "heads": 64,
+          "headDim": 128,
+          "label": "70B heuristic",
+          "kvLayers": 80,
+          "kvHeadsHigh": 64,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "totalWeightsGb": 36.50784492492676,
+        "gpuWeightsGb": 36.50784492492676,
+        "cpuWeightsGb": 0,
+        "totalKvGb": 2.5,
+        "totalKvHighGb": 20,
+        "kvGb": 2.5,
+        "gpuKvGb": 2.5,
+        "gpuKvHighGb": 20,
+        "cpuKvGb": 0,
+        "overheadGb": 3.120627593994141,
+        "totalGpuGb": 42.1284725189209,
+        "totalGpuHighGb": 61.0284725189209,
+        "judgedTotalGpuGb": 61.0284725189209,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "requestedGpuLayers": 80,
+        "totalLayers": 80,
+        "allocations": [
+          {
+            "gpu": {
+              "id": "0",
+              "name": "GPU 0",
+              "totalMb": 24576,
+              "usedMb": 1000,
+              "freeMb": 23576,
+              "totalGb": 24,
+              "usedGb": 0.9765625,
+              "freeGb": 23.0234375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 21.6
+            },
+            "weight": 3,
+            "allocatedGb": 45.77135438919068,
+            "overflowGb": 24.171354389190675,
+            "usableGb": 21.6
+          },
+          {
+            "gpu": {
+              "id": "1",
+              "name": "GPU 1",
+              "totalMb": 24576,
+              "usedMb": 400,
+              "freeMb": 24176,
+              "totalGb": 24,
+              "usedGb": 0.390625,
+              "freeGb": 23.609375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 21.6
+            },
+            "weight": 1,
+            "allocatedGb": 15.257118129730225,
+            "overflowGb": 0,
+            "usableGb": 21.6
+          }
+        ],
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 24576,
+            "usedMb": 1000,
+            "freeMb": 23576,
+            "totalGb": 24,
+            "usedGb": 0.9765625,
+            "freeGb": 23.0234375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          },
+          {
+            "id": "1",
+            "name": "GPU 1",
+            "totalMb": 24576,
+            "usedMb": 400,
+            "freeMb": 24176,
+            "totalGb": 24,
+            "usedGb": 0.390625,
+            "freeGb": 23.609375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 21.6
+          }
+        ],
+        "peakGpuGb": 45.77135438919068,
+        "status": "fail",
+        "recommendedGpuLayers": 52
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 8,
+        "contextTokens": 131072,
+        "bytesPerParam": 1.06,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9,
+        "gpuLayers": "auto",
+        "multimodalReserveGb": 1
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "maxParamsB": 8,
+          "layers": 32,
+          "kvHeads": 8,
+          "heads": 32,
+          "headDim": 128,
+          "label": "7B/8B heuristic",
+          "kvLayers": 32,
+          "kvHeadsHigh": 32,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "totalWeightsGb": 7.897615432739258,
+        "gpuWeightsGb": 7.897615432739258,
+        "cpuWeightsGb": 0,
+        "totalKvGb": 16,
+        "totalKvHighGb": 64,
+        "kvGb": 16,
+        "gpuKvGb": 16,
+        "gpuKvHighGb": 64,
+        "cpuKvGb": 0,
+        "overheadGb": 2.911809234619141,
+        "totalGpuGb": 26.8094246673584,
+        "totalGpuHighGb": 78.6494246673584,
+        "judgedTotalGpuGb": 78.6494246673584,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "requestedGpuLayers": 32,
+        "totalLayers": 32,
+        "allocations": [
+          {
+            "gpu": {
+              "id": "0",
+              "name": "GPU 0",
+              "totalMb": 97887,
+              "usedMb": 600,
+              "freeMb": 97287,
+              "totalGb": 95.5927734375,
+              "usedGb": 0.5859375,
+              "freeGb": 95.0068359375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 86.03349609375
+            },
+            "weight": 86.03349609375,
+            "allocatedGb": 78.6494246673584,
+            "overflowGb": 0,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "peakGpuGb": 78.6494246673584,
+        "status": "warn",
+        "recommendedGpuLayers": 32
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 32,
+        "contextTokens": 65536,
+        "bytesPerParam": 0.56,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9,
+        "gpuLayers": 0
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "maxParamsB": 34,
+          "layers": 48,
+          "kvHeads": 8,
+          "heads": 40,
+          "headDim": 128,
+          "label": "27B/32B heuristic",
+          "kvLayers": 48,
+          "kvHeadsHigh": 40,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "totalWeightsGb": 16.689300537109375,
+        "gpuWeightsGb": 0,
+        "cpuWeightsGb": 16.689300537109375,
+        "totalKvGb": 12,
+        "totalKvHighGb": 60,
+        "kvGb": 0,
+        "gpuKvGb": 0,
+        "gpuKvHighGb": 0,
+        "cpuKvGb": 12,
+        "overheadGb": 1.2,
+        "totalGpuGb": 1.2,
+        "totalGpuHighGb": 1.2,
+        "judgedTotalGpuGb": 1.2,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "requestedGpuLayers": 0,
+        "totalLayers": 48,
+        "allocations": [
+          {
+            "gpu": {
+              "id": "0",
+              "name": "GPU 0",
+              "totalMb": 97887,
+              "usedMb": 600,
+              "freeMb": 97287,
+              "totalGb": 95.5927734375,
+              "usedGb": 0.5859375,
+              "freeGb": 95.0068359375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 86.03349609375
+            },
+            "weight": 86.03349609375,
+            "allocatedGb": 1.2,
+            "overflowGb": 0,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "peakGpuGb": 1.2,
+        "status": "ok",
+        "recommendedGpuLayers": 46
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 32,
+        "contextTokens": 65536,
+        "bytesPerParam": 0.56,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287
+          }
+        ],
+        "utilization": 0.9,
+        "kvCacheGb": 12
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "maxParamsB": 34,
+          "layers": 48,
+          "kvHeads": 8,
+          "heads": 40,
+          "headDim": 128,
+          "label": "27B/32B heuristic",
+          "kvLayers": 48,
+          "kvHeadsHigh": 40,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "totalWeightsGb": 16.689300537109375,
+        "gpuWeightsGb": 16.689300537109375,
+        "cpuWeightsGb": 0,
+        "totalKvGb": 12,
+        "totalKvHighGb": 12,
+        "kvGb": 12,
+        "gpuKvGb": 12,
+        "gpuKvHighGb": 12,
+        "cpuKvGb": 0,
+        "overheadGb": 2.29514404296875,
+        "totalGpuGb": 30.984444580078126,
+        "totalGpuHighGb": 30.984444580078126,
+        "judgedTotalGpuGb": 30.984444580078126,
+        "archUncertain": false,
+        "archConfidence": "low",
+        "requestedGpuLayers": 48,
+        "totalLayers": 48,
+        "allocations": [
+          {
+            "gpu": {
+              "id": "0",
+              "name": "GPU 0",
+              "totalMb": 97887,
+              "usedMb": 600,
+              "freeMb": 97287,
+              "totalGb": 95.5927734375,
+              "usedGb": 0.5859375,
+              "freeGb": 95.0068359375,
+              "utilization": 0.9,
+              "reserveGb": 1,
+              "usableGb": 86.03349609375
+            },
+            "weight": 86.03349609375,
+            "allocatedGb": 30.98444458007813,
+            "overflowGb": 0,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "selectedGpus": [
+          {
+            "id": "0",
+            "name": "GPU 0",
+            "totalMb": 97887,
+            "usedMb": 600,
+            "freeMb": 97287,
+            "totalGb": 95.5927734375,
+            "usedGb": 0.5859375,
+            "freeGb": 95.0068359375,
+            "utilization": 0.9,
+            "reserveGb": 1,
+            "usableGb": 86.03349609375
+          }
+        ],
+        "peakGpuGb": 30.98444458007813,
+        "status": "ok",
+        "recommendedGpuLayers": 48
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "input": {
+        "paramsB": 4,
+        "contextTokens": 8192,
+        "bytesPerParam": 0.56,
+        "kvBytes": 2,
+        "arch": null,
+        "selectedGpus": [],
+        "utilization": 0.9
+      },
+      "expected": {
+        "engine": "llama.cpp",
+        "arch": {
+          "maxParamsB": 8,
+          "layers": 32,
+          "kvHeads": 8,
+          "heads": 32,
+          "headDim": 128,
+          "label": "7B/8B heuristic",
+          "kvLayers": 32,
+          "kvHeadsHigh": 32,
+          "source": "heuristic",
+          "confidence": "low"
+        },
+        "totalWeightsGb": 2.086162567138672,
+        "gpuWeightsGb": 2.086162567138672,
+        "cpuWeightsGb": 0,
+        "totalKvGb": 1,
+        "totalKvHighGb": 4,
+        "kvGb": 1,
+        "gpuKvGb": 1,
+        "gpuKvHighGb": 4,
+        "cpuKvGb": 0,
+        "overheadGb": 1.2,
+        "totalGpuGb": 4.286162567138672,
+        "totalGpuHighGb": 7.286162567138672,
+        "judgedTotalGpuGb": 7.286162567138672,
+        "archUncertain": true,
+        "archConfidence": "low",
+        "requestedGpuLayers": 32,
+        "totalLayers": 32,
+        "allocations": [],
+        "selectedGpus": [],
+        "peakGpuGb": 4.286162567138672,
+        "status": "warn",
+        "recommendedGpuLayers": 0
+      }
+    }
+  ]
+}
