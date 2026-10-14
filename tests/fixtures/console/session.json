@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "role": "owner",
+  "via": "session",
+  "paired": true,
+  "csrfToken": "t",
+  "autoPairAvailable": false,
+  "pairCommand": "platform admin pair"
+}

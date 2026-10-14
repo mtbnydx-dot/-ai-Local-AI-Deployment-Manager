@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "security": {
+    "exposure": "local",
+    "keyStore": {
+      "managersWithKeys": []
+    }
+  },
+  "managers": [
+    {
+      "id": "vllm",
+      "ok": true
+    },
+    {
+      "id": "llama",
+      "ok": true
+    }
+  ],
+  "components": {
+    "total": 2,
+    "online": 2,
+    "offline": [],
+    "unhealthy": [],
+    "items": [
+      {
+        "id": "vllm",
+        "online": true,
+        "healthy": true
+      },
+      {
+        "id": "llama",
+        "online": true,
+        "healthy": true
+      }
+    ]
+  }
+}

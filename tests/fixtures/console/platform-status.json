@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-14T08:00:00Z",
+  "build": {
+    "commit": "c0146a7d2f1e",
+    "contentHash": "3f9c2a1b7d0e"
+  },
+  "mode": "supervised",
+  "supervisor": {
+    "running": true,
+    "pid": 4242,
+    "startedAt": "2026-10-14T07:00:00Z",
+    "profile": "core",
+    "endpoint": "pipe"
+  },
+  "readiness": {
+    "overall": "degraded",
+    "layers": [
+      {
+        "id": "environment",
+        "status": "ok"
+      },
+      {
+        "id": "runtime",
+        "status": "ok",
+        "detail": "Docker 28.4.0 · RTX PRO 6000 · driver 581.15"
+      },
+      {
+        "id": "components",
+        "status": "ok",
+        "detail": "5/5 ready",
+        "counts": {
+          "ready": 5,
+          "total": 5
+        }
+      },
+      {
+        "id": "serving",
+        "status": "warn",
+        "code": "no_model_serving",
+        "action": {
+          "id": "restore-models",
+          "label": {
+            "zh-CN": "启动上次的模型",
+            "en-US": "Start last used model"
+          }
+        }
+      },
+      {
+        "id": "exposure",
+        "status": "ok",
+        "mode": "local"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "entry",
+      "kind": "node",
+      "state": "ready",
+      "desired": "running",
+      "owner": "supervisor",
+      "pid": 5120,
+      "ports": [
+        {
+          "name": "admin",
+          "port": 5176,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": 7380
+    }
+  ],
+  "models": {
+    "serving": 0,
+    "instances": []
+  },
+  "ops": {
+    "nightly": {
+      "ok": true,
+      "streak": 0,
+      "since": null
+    },
+    "backup": {
+      "ageHours": 4.5,
+      "ok": true
+    },
+    "pendingRestarts": []
+  }
+}

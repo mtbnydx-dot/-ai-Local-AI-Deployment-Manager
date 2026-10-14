@@ -1,0 +1,80 @@
+[
+  {
+    "id": "k3f9a2-1",
+    "type": "status",
+    "at": "2026-10-14T08:00:01.000Z",
+    "source": "entry",
+    "data": {
+      "reason": "manager_up",
+      "managerId": "vllm"
+    }
+  },
+  {
+    "id": "k3f9a2-2",
+    "type": "notification",
+    "at": "2026-10-14T08:00:02.000Z",
+    "source": "entry",
+    "data": {
+      "kind": "restore.offer",
+      "severity": "info",
+      "title": {
+        "zh": "上次的模型尚未恢复",
+        "en": "Last session's models are not running"
+      },
+      "body": {
+        "zh": "可以一键启动，不会替换正在运行的模型。",
+        "en": "Start them in one step; running models are never replaced."
+      },
+      "action": {
+        "label": {
+          "zh": "启动上次的模型",
+          "en": "Start last used model"
+        },
+        "apiCall": {
+          "method": "POST",
+          "path": "/api/platform/restore-models",
+          "body": {}
+        }
+      }
+    }
+  },
+  {
+    "id": "k3f9a2-3",
+    "type": "notification",
+    "at": "2026-10-14T08:00:03.000Z",
+    "source": "entry",
+    "data": {
+      "kind": "restore.conflict",
+      "severity": "warn",
+      "title": {
+        "zh": "有模型未恢复",
+        "en": "A model was not restored"
+      },
+      "body": {
+        "zh": "目标实例正在运行其他模型。",
+        "en": "Its instance is running another model."
+      },
+      "action": {
+        "label": {
+          "zh": "去部署页手动替换",
+          "en": "Replace manually"
+        },
+        "href": "/deployments?manager=vllm"
+      }
+    }
+  },
+  {
+    "id": "k3f9a2-4",
+    "type": "instances",
+    "at": "2026-10-14T08:00:04.000Z",
+    "source": "entry",
+    "data": {
+      "managerId": "vllm",
+      "changed": [
+        "vllm:primary"
+      ],
+      "removed": [],
+      "native": false
+    }
+  }
+]
