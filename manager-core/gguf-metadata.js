@@ -608,6 +608,10 @@ function normalizeGgufMetadata(input = {}) {
     generalType: metadata["general.type"],
   });
   const pattern = Array.isArray(slidingWindowPattern) ? slidingWindowPattern.map(Boolean) : null;
+  // Legacy semantics, kept because the legacy memory estimate reads it: a
+  // window without a pattern counts every layer as SWA. The model card does
+  // not inherit this (02 §5.1): from the widened `kv` a window-only file has
+  // an unknown layer split unless its family declares ggufSwaAllLayers.
   const slidingLayers = pattern ? pattern.filter(Boolean).length : slidingWindow ? blockCount : 0;
   const globalLayers = pattern && blockCount ? Math.max(0, blockCount - slidingLayers) : slidingWindow ? 0 : blockCount;
   return {

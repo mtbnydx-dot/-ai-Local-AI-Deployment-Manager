@@ -145,6 +145,12 @@ test("DeepSeek-V4 widened capture keeps the chat template, compress ratios, inde
   assert.equal(parsed.metadata["general.sampling.temp"], 1);
   assert.equal(parsed.architecture, "deepseek4");
   assert.deepEqual([parsed.layers, parsed.kvHeads, parsed.keyLength, parsed.contextLength], [43, 1, 512, 1048576]);
+
+  // A window without a pattern: the legacy fields still count every layer as
+  // SWA (the legacy estimate is unchanged); kv shows no pattern was declared,
+  // which is what the model card's topology goes by.
+  assert.deepEqual([parsed.slidingWindow, parsed.slidingLayers, parsed.slidingWindowPattern], [128, 43, null]);
+  assert.equal(Object.keys(kv).some((key) => key.endsWith("sliding_window_pattern")), false);
 });
 
 test("DeepSeek-V4 tensor bytes are exact: total 90.89 GiB, routed experts 82.69 GiB", async (t) => {
