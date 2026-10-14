@@ -14,12 +14,18 @@
 // Until the knowledge layers land (MOD-5..MOD-7), derived fields stay at
 // their "not matched" values: familyId null, support "unknown", parsers null.
 // Role detection and companion pairing are MOD-4; role stays null here.
+//
+// inspectRemote(request) (MOD-8, 02 §6) runs the same detectors over a
+// Hugging Face or ModelScope repository (remote/collect.js lists it, fetches
+// the small metadata files and Range-reads the weight headers), caches the
+// facts by (repo, revision sha) with a 24 h TTL and builds the same card.
 
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
 const { Worker } = require("node:worker_threads");
 const { createSingleFlightCache } = require("../single-flight-cache");
+const { redactSecrets } = require("../secret-redactor");
 const {
   cardIdFor, defaultCacheDir, fingerprintKey, isCardId, readCachedFacts, readCachedFactsSync, writeCachedFacts,
 } = require("./cache");
@@ -35,6 +41,8 @@ const { detectQuant } = require("./detectors/quant");
 const { buildTensorTable } = require("./detectors/safetensors");
 const { detectTemplate } = require("./detectors/template");
 const { buildTopology, writeWeights } = require("./detectors/topology");
+const { collectRemote, filesKeyOf, normalizeRequest, openRemote } = require("./remote/collect");
+const { RemoteError, TOTAL_BUDGET_MS } = require("./remote/range-reader");
 
 const INSPECTOR_VERSION = "1.0.0";
 const DEPTHS = Object.freeze(["full", "quick"]);
@@ -53,7 +61,17 @@ const STATUS_BY_CODE = Object.freeze({
   aborted: 499,
   inspect_timeout: 504,
   inspect_worker_failed: 500,
+  invalid_repo: 400,
+  endpoint_not_allowed: 400,
+  gated: 403,
+  repo_not_found: 404,
+  revision_not_found: 404,
+  rate_limited: 429,
+  network_unreachable: 502,
+  remote_error: 502,
 });
+const REMOTE_TTL_MS = 24 * 60 * 60 * 1000;
+const COMMIT_SHA = /^[0-9a-f]{40}$/i;
 
 const COPY = Object.freeze({
   formatFiles: {
@@ -130,6 +148,9 @@ function writeFormat(inv, facts, { gguf, table, transformers, quantMethod }) {
  * Runs every local detector over one folder and returns the raw facts:
  * { contentDigest, depth, data, evidence, warnings, errors, templateText }.
  * file: a folder-relative GGUF name for a single-file card.
+ * options.refine(facts, {inventory, depth, template}) -> {templateText?}: a
+ * hook for the remote inspector to add facts from the repository API (the
+ * in-process path only; the worker never receives a function).
  */
 async function collectLocalFacts(dir, options = {}) {
   const inv = options.inventory || await scanInventory(dir);
@@ -183,6 +204,7 @@ async function collectLocalFacts(dir, options = {}) {
     facts.set("/speculative/nativeMtp", mtpTensors > 0, { kind: "tensor-table", ref: stats.ref }, "detected", mtpTensors > 0 ? COPY.mtpPackaged : COPY.noMtp);
   }
 
+  const extra = typeof options.refine === "function" ? options.refine(facts, { inventory: inv, depth, template }) || {} : {};
   const contentDigest = await contentDigestForDir(inv.dir, { file, inventory: inv });
   return {
     contentDigest,
@@ -191,7 +213,7 @@ async function collectLocalFacts(dir, options = {}) {
     evidence: facts.evidence,
     warnings: facts.warnings,
     errors: facts.errors,
-    templateText: template?.text ?? null,
+    templateText: extra.templateText ?? template?.text ?? null,
   };
 }
 
@@ -287,7 +309,7 @@ function buildCard(cardId, entry, ref, { includeTemplate = false } = {}) {
     compatibleWith: null,
     customCode: withDefaults(SECTION_DEFAULTS.customCode, data.customCode),
     support: "unknown",
-    remote: null,
+    remote: entry.remote ? structuredClone(entry.remote) : null,
     evidence: facts.evidence || [],
     warnings: facts.warnings || [],
     errors: facts.errors || [],
@@ -505,7 +527,7 @@ function logCacheWrite(logger, error) {
 /**
  * inspectLocalDetailed(path, options) -> Promise<{card, cached, durationMs, key}>
  * options: depth "full"|"quick", refresh, signal, cacheDir, cache (false: no
- * cache reads or writes), includeTemplate, roots (library roots), inProcess
+ * cache reads or writes, in memory or on disk), includeTemplate, roots (library roots), inProcess
  * (run the detectors on this thread; tests only), timeoutMs, logger.
  */
 async function inspectLocalDetailed(target, options = {}) {
@@ -577,6 +599,134 @@ function getCard(cardId, { cacheDir, includeTemplate = false } = {}) {
   return buildCard(cardId, entry, entry.ref, { includeTemplate });
 }
 
+// ---------------------------------------------------------------------------
+// inspectRemote (MOD-8)
+
+function remoteInspectError(error, secrets) {
+  if (error instanceof InspectError || error?.name === "AbortError") return error;
+  const scrub = (text) => redactSecrets(String(text || "Remote inspection failed."), { secrets, minSecretLength: 4 });
+  if (!(error instanceof RemoteError)) return new InspectError("remote_error", scrub(error?.message));
+  const code = {
+    invalid_repo: "invalid_repo",
+    invalid_source: "invalid_repo",
+    endpoint_invalid: "endpoint_not_allowed",
+    endpoint_not_allowed: "endpoint_not_allowed",
+    gated: "gated",
+    repo_not_found: "repo_not_found",
+    revision_not_found: "revision_not_found",
+    rate_limited: "rate_limited",
+    timeout: "inspect_timeout",
+    budget_exhausted: "inspect_timeout",
+    unreachable: "network_unreachable",
+  }[error.code] || "remote_error";
+  return new InspectError(code, scrub(error.message));
+}
+
+async function remoteToken(token) {
+  const value = typeof token === "function" ? await token() : token;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * inspectRemoteDetailed({source, repo, revision, files?}, options) -> Promise<{card, cached, durationMs, key}>
+ * source "huggingface"/"hf" or "modelscope"; revision defaults to main
+ * (master on ModelScope); files narrows the GGUF variant (03 §10).
+ * options: fetchImpl, token (a string, or a function returning one; only
+ * Hugging Face ever sees it), endpoint, mirrors (the owner's configured
+ * mirror endpoints), signal, readRange (the hub's mirror-aware header reader,
+ * replacing remote/range-reader.js), refresh, cacheDir, cache (false: no cache
+ * reads or writes, in memory or on disk), includeTemplate, budgetMs (45 s), requestTimeoutMs (12 s),
+ * maxHeaderBytes (32 MiB, config models.remoteHeaderMaxBytes), now, logger.
+ * Errors are InspectError with code invalid_repo, endpoint_not_allowed, gated,
+ * repo_not_found, revision_not_found, rate_limited, inspect_timeout,
+ * network_unreachable or remote_error; none of them carries the token.
+ */
+async function inspectRemoteDetailed(request, options = {}) {
+  const started = performance.now();
+  let normalized;
+  try {
+    normalized = normalizeRequest(request);
+  } catch (error) {
+    throw remoteInspectError(error, []);
+  }
+  const { source, repo, revision } = normalized;
+  // Only Hugging Face is ever sent a token; the provider is not asked for ModelScope.
+  const sentToken = source === "hf" ? await remoteToken(options.token) : "";
+  const secrets = sentToken ? [sentToken] : [];
+  const cardId = cardIdFor({ kind: source, repo, revision });
+  const cacheDir = options.cacheDir || defaultCacheDir();
+  const useCache = options.cache !== false;
+  const now = typeof options.now === "function" ? options.now : Date.now;
+  const filesKey = filesKeyOf(normalized.requested);
+
+  const finish = (entry, cached) => {
+    remember(cardId, entry);
+    const card = buildCard(cardId, entry, entry.ref, { includeTemplate: options.includeTemplate === true });
+    return { card, cached, durationMs: Math.round(performance.now() - started), key: entry.key };
+  };
+  // Facts made without a token for a repository that refused it are not good
+  // enough once a token is available; a result shaped by a failure is not kept.
+  const reusable = (entry) => Boolean(entry) && entry.inspectorVersion === INSPECTOR_VERSION && entry.ref?.kind === source
+    && entry.ref.repo === repo && entry.fetch?.filesKey === filesKey && !entry.fetch.partial
+    && !(entry.fetch.unauthorized && sentToken && !entry.fetch.authenticated);
+  const fresh = (entry) => reusable(entry) && (COMMIT_SHA.test(revision) || now() - Date.parse(entry.fetch.fetchedAt) < REMOTE_TTL_MS);
+
+  // cache:false reads nothing from the memory or the cache file (and writes no file).
+  if (!options.refresh && useCache) {
+    const remembered = memory.get(cardId);
+    if (fresh(remembered)) return finish(remembered, true);
+    const stored = await readCachedFacts(cardId, { cacheDir });
+    if (fresh(stored)) return finish(stored, true);
+  }
+
+  const flightKey = `remote|${source}|${repo}|${revision}|${filesKey}|${options.refresh ? "refresh" : ""}`;
+  const outcome = await raceSignal(flights.get(flightKey, async () => {
+    let session;
+    try {
+      session = await openRemote(normalized, { ...options, token: sentToken });
+    } catch (error) {
+      throw remoteInspectError(error, secrets);
+    }
+    const writeEntry = (value) => (useCache
+      ? writeCachedFacts(cardId, value, { cacheDir }).catch((error) => logCacheWrite(options.logger, error))
+      : Promise.resolve());
+    // The same revision sha as the cached facts: nothing to refetch, only the TTL moves.
+    if (!options.refresh && useCache) {
+      const prior = memory.get(cardId) || await readCachedFacts(cardId, { cacheDir });
+      if (reusable(prior) && prior.key === session.key) {
+        const renewed = { ...prior, fetch: { ...prior.fetch, fetchedAt: new Date(now()).toISOString() } };
+        await writeEntry(renewed);
+        return { entry: renewed, cached: true };
+      }
+    }
+    let collected;
+    try {
+      collected = await collectRemote(session, { collectFacts: collectLocalFacts });
+    } catch (error) {
+      throw remoteInspectError(error, secrets);
+    }
+    const detected = {
+      key: session.key,
+      inspectorVersion: INSPECTOR_VERSION,
+      depth: collected.facts.depth,
+      contentDigest: collected.facts.contentDigest,
+      inspectedAt: new Date(now()).toISOString(),
+      ref: collected.ref,
+      remote: collected.remote,
+      fetch: { ...collected.fetch, fetchedAt: new Date(now()).toISOString(), authenticated: Boolean(sentToken) },
+      facts: collected.facts,
+    };
+    if (!detected.fetch.partial) await writeEntry(detected);
+    return { entry: detected, cached: false };
+  }, { ttlMs: 0 }), options.signal);
+  return finish(outcome.entry, outcome.cached);
+}
+
+/** inspectRemote(request, options) -> Promise<ModelCard> (see inspectRemoteDetailed). */
+async function inspectRemote(request, options = {}) {
+  return (await inspectRemoteDetailed(request, options)).card;
+}
+
 /** Test hook: forget remembered cards and stop the worker. */
 async function resetInspector() {
   memory.clear();
@@ -596,9 +746,12 @@ module.exports = {
   buildCard,
   collectLocalFacts,
   createWorkerRunner,
+  REMOTE_TOTAL_BUDGET_MS: TOTAL_BUDGET_MS,
   getCard,
   inspectLocal,
   inspectLocalDetailed,
+  inspectRemote,
+  inspectRemoteDetailed,
   resetInspector,
   resolveLocalTarget,
 };

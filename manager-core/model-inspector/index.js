@@ -12,12 +12,15 @@ const contentDigest = require("./content-digest");
 const evidence = require("./evidence");
 const inspect = require("./inspect");
 const jsonSchemaLite = require("./json-schema-lite");
+const rangeReader = require("./remote/range-reader");
 const topology = require("./detectors/topology");
 
 module.exports = {
   INSPECTOR_VERSION: inspect.INSPECTOR_VERSION,
   inspectLocal: inspect.inspectLocal,
   inspectLocalDetailed: inspect.inspectLocalDetailed,
+  inspectRemote: inspect.inspectRemote,
+  inspectRemoteDetailed: inspect.inspectRemoteDetailed,
   getCard: inspect.getCard,
   InspectError: inspect.InspectError,
   projectCard: cardSchema.projectCard,
@@ -39,6 +42,14 @@ module.exports = {
     defaultCacheDir: cache.defaultCacheDir,
   },
   cardIdFor: cache.cardIdFor,
+  // The Range reader of 02 §6.1, for a hub reader that wraps or replaces it.
+  remote: {
+    readRange: rangeReader.readRange,
+    createBudget: rangeReader.createBudget,
+    TOTAL_BUDGET_MS: rangeReader.TOTAL_BUDGET_MS,
+    REQUEST_TIMEOUT_MS: rangeReader.REQUEST_TIMEOUT_MS,
+    DEFAULT_MAX_BYTES: rangeReader.DEFAULT_MAX_BYTES,
+  },
   tensorClasses: topology.DEFAULT_TENSOR_CLASSES,
   jsonSchema: { compileSchema: jsonSchemaLite.compileSchema, validate: jsonSchemaLite.validate },
 };

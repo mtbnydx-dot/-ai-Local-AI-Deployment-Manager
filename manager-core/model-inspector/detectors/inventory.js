@@ -217,6 +217,9 @@ function transformersLayout(inv, set) {
 }
 
 function readBounded(inv, name, maxBytes) {
+  // A remote inventory (remote/collect.js) serves the bytes it fetched up
+  // front; it throws InventoryError file_too_large / read_failed itself.
+  if (inv.remote) return inv.remote.readFile(name, maxBytes);
   const entry = fileEntry(inv, name);
   const size = entry ? entry.size : fs.statSync(absolutePath(inv, name)).size;
   if (size > maxBytes) throw new InventoryError("file_too_large", `${name} is larger than ${maxBytes} bytes.`);

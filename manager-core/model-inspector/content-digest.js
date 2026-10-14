@@ -89,6 +89,17 @@ async function readGgufHead(file, size, fs = nodeFs) {
   }
 }
 
+// A remote inventory (remote/collect.js) fetched its small files up front; one
+// that was not fetched (too large, gated, failed) is unreadable, and the
+// remote layer then drops the digest instead of publishing a different one.
+function remoteChunks(inv, entry) {
+  try {
+    return [inv.remote.readFile(entry.name, MAX_HASHED_FILE_BYTES)];
+  } catch {
+    return null;
+  }
+}
+
 function isArrayValue(value) {
   return Array.isArray(value) || Boolean(value && typeof value === "object" && Object.hasOwn(value, "$array"));
 }
@@ -159,9 +170,10 @@ async function contentDigestForDir(dir, options = {}) {
       hash.update(`${label} ${entry.name} ${entry.size} unhashed\n`);
       return;
     }
-    const chunks = await readChunks(absolutePath(inv, entry.name), entry.size, fs);
+    const chunks = inv.remote ? remoteChunks(inv, entry) : await readChunks(absolutePath(inv, entry.name), entry.size, fs);
     if (!chunks) {
       hash.update(`${label} ${entry.name} ${entry.size} unreadable\n`);
+      inv.remote?.noteGap?.(entry.name);
       return;
     }
     hash.update(`${label} ${entry.name} ${entry.size}\n`);
@@ -175,9 +187,10 @@ async function contentDigestForDir(dir, options = {}) {
     // still covers the file by name and size.
     let header = null;
     try {
-      header = await readGgufHead(absolutePath(inv, entry.name), entry.size, fs);
+      header = inv.remote ? inv.remote.ggufHeader(entry.name, entry.size) : await readGgufHead(absolutePath(inv, entry.name), entry.size, fs);
     } catch {
       header = null;
+      inv.remote?.noteGap?.(entry.name);
     }
     if (header) hash.update(`gguf-kv ${entry.name}\n${JSON.stringify(canonicalGgufKv(header.kv))}\n`);
     else hash.update(`gguf-kv ${entry.name} unreadable\n`);
