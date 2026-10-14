@@ -1,8 +1,14 @@
 {
   "prefixes": [
+    "common.badge.",
+    "common.provenance.",
+    "common.step.",
     "error.code.",
     "shell.nav.",
-    "status."
+    "status.",
+    "uikit.tab.",
+    "uikit.toast.",
+    "uikit.variant."
   ],
   "unused": [
     "common.window.1h",
