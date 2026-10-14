@@ -793,17 +793,21 @@ function createStoreCore(options = {}) {
   }
 
   // Named queries live in query.js (TEL-11) and run here, next to the
-  // handle. Only own function exports are callable; names are never
-  // interpolated into SQL.
+  // handle, and so do the importers' worker-side steps (importers.js
+  // WORKER_CALLS, TEL-18). Only own function exports are callable; names are
+  // never interpolated into SQL.
   async function call(queryName, params) {
     assertOpen();
     const queries = loadQueries();
     const name = typeof queryName === "string" ? queryName : "";
-    if (!/^[a-z][A-Za-z0-9]*$/.test(name) || !queries || !Object.prototype.hasOwnProperty.call(queries, name)
-      || typeof queries[name] !== "function") {
-      throw storeError("unknown_query", "Unknown telemetry query.");
+    const has = (table) => Boolean(table) && Object.prototype.hasOwnProperty.call(table, name) && typeof table[name] === "function";
+    let handler = null;
+    if (/^[a-z][A-Za-z0-9]*$/.test(name)) {
+      if (has(queries)) handler = queries[name];
+      else if (has(require("./importers").WORKER_CALLS)) handler = require("./importers").WORKER_CALLS[name];
     }
-    return queries[name](db, params === undefined ? {} : params);
+    if (!handler) throw storeError("unknown_query", "Unknown telemetry query.");
+    return handler(db, params === undefined ? {} : params);
   }
 
   // The rollup settings of one run: the job configuration, overridden by the

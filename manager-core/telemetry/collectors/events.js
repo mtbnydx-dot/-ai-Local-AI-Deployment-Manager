@@ -626,6 +626,32 @@ function mcpToolCallRow(spec, line, offset, now) {
   });
 }
 
+// One benchmark run of a manager's benchmark history (/api/benchmarks, and
+// benchmark-history.json for the importers). Null for a run without a usable
+// id or time.
+function benchmarkEventRow(managerId, run) {
+  const id = slug(run?.id, 64);
+  const at = toMs(run?.at);
+  if (!id || at === null) return null;
+  const model = modelLabel(run.model);
+  return eventRow({
+    at,
+    type: "benchmark.run",
+    source: managerId,
+    managerId,
+    title: `Benchmark run: ${model || id}`,
+    data: {
+      runId: id,
+      model,
+      engineId: slug(run.engine, 32) || null,
+      label: text(run.label, 120) || null,
+      load: isPlainObject(run.load) ? run.load : null,
+      metrics: isPlainObject(run.metrics) ? run.metrics : null,
+    },
+    dedupeKey: `bench:${managerId}:${id}`,
+  });
+}
+
 // --- config --------------------------------------------------------------
 
 function flattenLeaves(value, prefix = "", out = new Map()) {
@@ -1410,26 +1436,8 @@ function createEventCollector(options = {}) {
       if (updatedAt && state.bench[managerId] === updatedAt) continue;
       const rows = [];
       for (const run of (Array.isArray(result.data.runs) ? result.data.runs : []).slice(0, MAX_BENCHMARK_RUNS)) {
-        const id = slug(run?.id, 64);
-        const at = toMs(run?.at);
-        if (!id || at === null) continue;
-        const model = modelLabel(run.model);
-        rows.push(eventRow({
-          at,
-          type: "benchmark.run",
-          source: managerId,
-          managerId,
-          title: `Benchmark run: ${model || id}`,
-          data: {
-            runId: id,
-            model,
-            engineId: slug(run.engine, 32) || null,
-            label: text(run.label, 120) || null,
-            load: isPlainObject(run.load) ? run.load : null,
-            metrics: isPlainObject(run.metrics) ? run.metrics : null,
-          },
-          dedupeKey: `bench:${managerId}:${id}`,
-        }));
+        const row = benchmarkEventRow(managerId, run);
+        if (row) rows.push(row);
       }
       enqueue(rows);
       if (updatedAt) {
@@ -1674,13 +1682,19 @@ module.exports = {
   SUBSCRIBED_TYPES,
   DOCKER_MIN_BACKOFF_MS,
   DOCKER_MAX_BACKOFF_MS,
+  benchmarkEventRow,
   changedKeys,
   createDockerEventSource,
   createEventCollector,
   dockerEventFromLine,
   dockerEventSourceFromEnv,
+  eventRow,
+  finiteOrNull,
   launchEventsFromJob,
   mcpToolCallRow,
   modelLabel,
   processExitRows,
+  slug,
+  text,
+  toMs,
 };
