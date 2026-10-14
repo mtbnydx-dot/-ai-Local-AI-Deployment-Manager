@@ -12,6 +12,9 @@
 //
 // publish() validates every payload and never throws into the caller's path:
 // a broken event is counted, logged once per type and reason, and dropped.
+// An accepted envelope is deeply frozen and shared by the publisher, every
+// subscriber, the ring and /api/events/recent, so no consumer can change what
+// the others see.
 
 const crypto = require("node:crypto");
 const { redactSecrets } = require("../../manager-core/secret-redactor");
@@ -170,6 +173,7 @@ const PAYLOAD_CHECKS = {
 };
 
 // Returns "" when the event may be published, otherwise the rejection reason.
+// publish() runs it on the JSON round trip of `data`, which is what is sent.
 function validateEvent(type, data, options = {}) {
   if (!EVENT_TYPE_SET.has(type)) return "unknown_type";
   if (!isPlainObject(data)) return "data_not_object";
@@ -205,6 +209,33 @@ function normalizeIp(value) {
   return String(value || "").replace(/^::ffff:/i, "").toLowerCase() || "unknown";
 }
 
+// Envelopes are JSON.parse output (plain objects, arrays and primitives), so
+// a recursive freeze needs no cycle check.
+function deepFreeze(value) {
+  if (value && typeof value === "object") {
+    Object.freeze(value);
+    for (const key of Object.keys(value)) deepFreeze(value[key]);
+  }
+  return value;
+}
+
+// Serialises an object payload, or returns "" when JSON cannot carry it as
+// an object (a cycle, a BigInt, a throwing getter, a toJSON() that returns
+// something else).
+function objectJson(value) {
+  let json;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return "";
+  }
+  return typeof json === "string" && json.startsWith("{") ? json : "";
+}
+
+function envelopeJson(head, dataJson) {
+  return `{"id":"${head.id}","type":${JSON.stringify(head.type)},"at":"${head.at}","source":"${head.source}","data":${dataJson}}`;
+}
+
 function frameFor(id, type, json) {
   return `id: ${id}\nevent: ${type}\ndata: ${json}\n\n`;
 }
@@ -236,8 +267,9 @@ function createEventBus(options = {}) {
   const bootId = BOOT_ID_RE.test(String(options.bootId || "")) ? String(options.bootId) : newBootId();
 
   let seq = 0;
-  // Ascending and contiguous: every delivered envelope is stored, and only
-  // the oldest are evicted, so ring[i].seq === ring[0].seq + i.
+  // Ascending and contiguous: a seq is taken only once nothing can fail, the
+  // envelope is stored before any consumer sees it, and only the oldest are
+  // evicted. locate() still checks, so a hole would mean resync, not a skip.
   const ring = [];
   let ringBytesUsed = 0;
   const subscribers = new Set();
@@ -267,15 +299,30 @@ function createEventBus(options = {}) {
   function reject(type, reason) {
     const key = EVENT_TYPE_SET.has(type) ? type : "(unknown)";
     bump(counters.rejected, key);
-    const logKey = `${key}:${reason}`;
-    if (loggedRejections.has(logKey)) return null;
-    loggedRejections.add(logKey);
-    warn(`events: rejected a ${key} event (${reason}); later ones with the same reason are counted, not logged`);
+    warnOnce(`${key}:${reason}`, `events: rejected a ${key} event (${reason}); later ones with the same reason are counted, not logged`);
     return null;
+  }
+
+  function warnOnce(key, line) {
+    if (loggedRejections.has(key)) return;
+    loggedRejections.add(key);
+    warn(line);
   }
 
   function cursorId() {
     return `${bootId}-${seq}`;
+  }
+
+  // An injected clock that throws or returns something that is not a time
+  // falls back to the system clock rather than breaking a publish or a timer.
+  function clockMs() {
+    try {
+      const value = Number(now());
+      if (Number.isFinite(value) && Math.abs(value) <= 8.64e15) return value;
+    } catch {
+      // Fall through.
+    }
+    return Date.now();
   }
 
   function publish(type, data, publishOptions = {}) {
@@ -283,26 +330,25 @@ function createEventBus(options = {}) {
       if (closed) return null;
       const typeName = typeof type === "string" ? type : "";
       const opts = isPlainObject(publishOptions) ? publishOptions : {};
-      const reason = validateEvent(typeName, data, opts);
+      if (!EVENT_TYPE_SET.has(typeName)) return reject(typeName, "unknown_type");
+      if (!isPlainObject(data)) return reject(typeName, "data_not_object");
+      const dataJson = objectJson(data);
+      if (!dataJson) return reject(typeName, "not_serialisable");
+      // The checks run on what is sent, so a toJSON() or a getter cannot swap
+      // a checked field for an unchecked one.
+      const sent = JSON.parse(dataJson);
+      const reason = validateEvent(typeName, sent, opts);
       if (reason) return reject(typeName, reason);
-      let dataJson;
-      try {
-        dataJson = JSON.stringify(data);
-      } catch {
-        return reject(typeName, "not_serialisable");
-      }
-      // toJSON() may turn an object into something else.
-      if (typeof dataJson !== "string" || !dataJson.startsWith("{")) return reject(typeName, "not_serialisable");
       const source = opts.source === undefined ? DEFAULT_SOURCES[typeName] : opts.source;
-      seq += 1;
-      const id = `${bootId}-${seq}`;
-      const at = new Date(Number(now())).toISOString();
-      const json = `{"id":"${id}","type":${JSON.stringify(typeName)},"at":"${at}","source":"${source}","data":${dataJson}}`;
-      // A parsed copy: consumers see JSON semantics and the publisher's later
-      // mutations cannot reach the ring.
-      const envelope = { id, type: typeName, at, source, data: JSON.parse(dataJson) };
+      // Everything that can fail runs before the seq is taken, so every seq
+      // reaches the ring.
+      const nextSeq = seq + 1;
+      const head = { id: `${bootId}-${nextSeq}`, type: typeName, at: new Date(clockMs()).toISOString(), source };
+      const json = envelopeJson(head, dataJson);
+      const envelope = deepFreeze({ ...head, data: sent });
+      seq = nextSeq;
       bump(counters.published, typeName);
-      queue.push({ seq, envelope, json, frame: "" });
+      queue.push({ seq: nextSeq, envelope, json, frame: "" });
       drain();
       return envelope;
     } catch (error) {
@@ -310,15 +356,17 @@ function createEventBus(options = {}) {
     }
   }
 
+  // store() and both deliveries contain their own failures, so one consumer
+  // can never cost another its copy or the ring its seq.
   function drain() {
     if (draining) return;
     draining = true;
     try {
       while (queue.length) {
         const item = queue.shift();
-        deliverToSubscribers(item.envelope);
-        deliverToClients(item);
         store(item);
+        deliverToClients(item);
+        deliverToSubscribers(item.envelope);
       }
     } finally {
       draining = false;
@@ -341,40 +389,60 @@ function createEventBus(options = {}) {
     return item.frame;
   }
 
-  // A viewer's copy of an envelope, or null when its type's redaction drops
-  // it. Without a registry nothing is shown (fail closed).
-  function redactedEnvelope(principal, envelope) {
-    let data = null;
+  // A viewer's copy of an envelope as {envelope, json}, or null when its
+  // type's redaction drops it. Without a registry nothing is shown (fail
+  // closed). A redaction that throws, or returns something JSON cannot carry
+  // as an object, drops the event for viewers only; owners, subscribers and
+  // the ring are untouched.
+  function viewerCopy(principal, envelope) {
     try {
       const registry = auth?.viewerRegistry;
-      data = registry && typeof registry.redactEvent === "function"
+      const data = registry && typeof registry.redactEvent === "function"
         ? registry.redactEvent(envelope.type, envelope.data, { via: principal.via || "" })
         : null;
-    } catch {
-      data = null;
+      if (!isPlainObject(data)) return null;
+      const dataJson = objectJson(data);
+      if (!dataJson) throw new Error("the redaction returned something JSON cannot carry as an object");
+      return {
+        envelope: deepFreeze({ id: envelope.id, type: envelope.type, at: envelope.at, source: envelope.source, data: JSON.parse(dataJson) }),
+        json: envelopeJson(envelope, dataJson),
+      };
+    } catch (error) {
+      warnOnce(`redaction:${envelope.type}`, `events: the viewer copy of a ${envelope.type} event failed and is dropped for viewers; later failures are not logged: ${error?.message || error}`);
+      return null;
     }
-    return isPlainObject(data) ? { ...envelope, data } : null;
   }
 
   function viewerFrame(client, envelope) {
-    const redacted = redactedEnvelope(client.principal, envelope);
-    return redacted ? frameFor(envelope.id, envelope.type, JSON.stringify(redacted)) : "";
+    const copy = viewerCopy(client.principal, envelope);
+    return copy ? frameFor(envelope.id, envelope.type, copy.json) : "";
+  }
+
+  function clientFrame(client, item) {
+    if (!client.accepts(item.envelope.type)) return "";
+    return client.redact ? viewerFrame(client, item.envelope) : ownerFrame(item);
   }
 
   function deliverToClients(item) {
     for (const client of [...clients]) {
-      if (!client.accepts(item.envelope.type)) continue;
-      const frame = client.redact ? viewerFrame(client, item.envelope) : ownerFrame(item);
-      if (frame) writeTo(client, frame);
+      try {
+        const frame = clientFrame(client, item);
+        if (frame) writeTo(client, frame);
+      } catch (error) {
+        // Only this client misses the frame; it is dropped and replays.
+        warnOnce(`deliver:${item.envelope.type}`, `events: delivering a ${item.envelope.type} event to a stream failed: ${error?.message || error}`);
+        dropClient(client, "error");
+      }
     }
   }
 
   function store(item) {
-    let stored = { seq: item.seq, envelope: item.envelope, json: item.json, bytes: Buffer.byteLength(item.json), frame: item.frame };
-    if (stored.bytes > storeCapBytes) {
+    item.bytes = Buffer.byteLength(item.json);
+    let stored = item;
+    if (item.bytes > storeCapBytes) {
       // Delivered live in full; a replaying client sees the marker and refetches.
-      const envelope = { ...item.envelope, data: { truncated: true } };
-      const json = JSON.stringify(envelope);
+      const envelope = deepFreeze({ ...item.envelope, data: { truncated: true } });
+      const json = envelopeJson(envelope, '{"truncated":true}');
       stored = { seq: item.seq, envelope, json, bytes: Buffer.byteLength(json), frame: "" };
       counters.truncated += 1;
     }
@@ -385,14 +453,32 @@ function createEventBus(options = {}) {
     }
   }
 
+  // Index of the first ring entry with a seq above `after`.
+  function ringIndexAfter(after) {
+    let low = 0;
+    let high = ring.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (ring[middle].seq <= after) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  }
+
   // Where a client that last saw `lastEventId` resumes, or why it cannot.
   function locate(lastEventId) {
+    const gap = (reason) => ({ gap: true, reason, items: [] });
     const parsed = parseEventId(lastEventId);
-    if (!parsed) return { gap: true, reason: "gap", items: [] };
-    if (parsed.bootId !== bootId) return { gap: true, reason: "restart", items: [] };
+    if (!parsed) return gap("gap");
+    if (parsed.bootId !== bootId) return gap("restart");
     const firstSeq = ring.length ? ring[0].seq : seq + 1;
-    if (parsed.seq > seq || parsed.seq < firstSeq - 1) return { gap: true, reason: "gap", items: [] };
-    return { gap: false, reason: "", items: ring.slice(parsed.seq - firstSeq + 1) };
+    if (parsed.seq > seq || parsed.seq < firstSeq - 1) return gap("gap");
+    const items = ring.slice(ringIndexAfter(parsed.seq));
+    // Found by seq, never by offset; a hole means a refetch, not a skip.
+    for (let index = 0; index < items.length; index += 1) {
+      if (items[index].seq !== parsed.seq + 1 + index) return gap("gap");
+    }
+    return { gap: false, reason: "", items };
   }
 
   function resolvePrincipal(req, opts) {
@@ -468,7 +554,7 @@ function createEventBus(options = {}) {
         stopHeartbeatWhenIdle();
         return;
       }
-      const ping = `: ping ${Number(now())}\n\n`;
+      const ping = `: ping ${clockMs()}\n\n`;
       for (const client of [...clients]) writeTo(client, ping);
     }, heartbeatMs);
     heartbeatTimer.unref?.();
@@ -518,12 +604,13 @@ function createEventBus(options = {}) {
     if (lastEventId) {
       const position = locate(lastEventId);
       if (position.gap) {
-        const envelope = { id: cursorId(), type: RESYNC_TYPE, at: new Date(Number(now())).toISOString(), source: "entry", data: { reason: position.reason } };
+        const envelope = { id: cursorId(), type: RESYNC_TYPE, at: new Date(clockMs()).toISOString(), source: "entry", data: { reason: position.reason } };
         res.write(frameFor(envelope.id, RESYNC_TYPE, JSON.stringify(envelope)));
       } else {
+        // clientFrame() contains a failing viewer copy, so one bad event
+        // cannot break the replay and send the client into a reconnect loop.
         for (const item of position.items) {
-          if (!client.accepts(item.envelope.type)) continue;
-          const frame = client.redact ? viewerFrame(client, item.envelope) : ownerFrame(item);
+          const frame = clientFrame(client, item);
           if (frame) res.write(frame);
         }
       }
@@ -569,7 +656,7 @@ function createEventBus(options = {}) {
     const visible = [];
     for (const item of items) {
       if (!filter.types.has(item.envelope.type)) continue;
-      const envelope = filter.redact ? redactedEnvelope(filter.principal, item.envelope) : item.envelope;
+      const envelope = filter.redact ? viewerCopy(filter.principal, item.envelope)?.envelope : item.envelope;
       if (envelope) visible.push(envelope);
     }
     // Paging forward from `since` returns the oldest events first and points

@@ -213,7 +213,8 @@ function createBuiltinViewerRegistry(options = {}) {
   }
 
   // A registered type passes through its redaction (none means unchanged);
-  // an unregistered type, or a redaction that throws, drops the event.
+  // an unregistered type, or a redaction that throws, drops the event. The
+  // bus hands in its frozen envelope data, so a redaction builds a new object.
   function redactEvent(type, data, ctx = {}) {
     const entry = events.get(String(type || ""));
     if (!entry) return null;

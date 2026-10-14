@@ -255,6 +255,32 @@ test("publish never throws, whatever it is handed", (t) => {
   assert.equal(bus.publish("status", circular), null);
 });
 
+test("validation runs on the serialised copy, so a toJSON() cannot slip an unchecked payload through", (t) => {
+  const { bus } = makeBus(t);
+  assert.equal(bus.publish("status", { reason: "x", toJSON: () => ({}) }), null, "a toJSON() that drops the reason");
+  const swapped = validNotification();
+  swapped.action.toJSON = () => ({ label: { zh: "查看", en: "Open" }, href: "https://evil.example/x" });
+  assert.equal(validateEvent("notification", swapped), "", "the object itself passes");
+  assert.equal(bus.publish("notification", swapped), null, "what would be sent is cross-origin");
+  const untitled = validNotification();
+  untitled.title = { zh: "标题", en: "Title", toJSON: () => ({ zh: "标题" }) };
+  assert.equal(bus.publish("notification", untitled), null, "title.en is dropped by toJSON()");
+  assert.equal(bus.stats().rejected.notification, 2);
+  const rebuilt = bus.publish("status", { toJSON: () => ({ reason: "from-toJSON" }) });
+  assert.deepEqual(rebuilt?.data, { reason: "from-toJSON" }, "a toJSON() whose output passes is published as sent");
+});
+
+test("a broken injected clock falls back to the system clock and costs no seq", (t) => {
+  for (const now of [() => { throw new Error("clock"); }, () => Number.NaN, () => 1e300]) {
+    const { bus } = makeBus(t, { now });
+    const first = bus.publish("status", { reason: "tick" });
+    assert.ok(first);
+    assert.equal(parseEventId(first.id).seq, 1);
+    assert.ok(Math.abs(Date.parse(first.at) - Date.now()) < 60_000);
+    assert.equal(parseEventId(bus.publish("status", { reason: "tock" }).id).seq, 2);
+  }
+});
+
 test("ids are <bootId>-<seq>, monotonic per process start", (t) => {
   const { bus } = makeBus(t);
   assert.match(bus.bootId, /^[0-9a-z]{6}$/);
@@ -491,6 +517,89 @@ test("viewers receive only status and instances, redacted, on SSE and /recent", 
   for (const stream of [viewer, owner, greedy, replay]) stream.close();
 });
 
+test("a viewer redaction JSON cannot carry drops only that viewer's frame and leaves no hole in the ring", (t) => {
+  const logger = silentLogger();
+  const auth = createRequestAuth({ security: fakeSecurity, logger });
+  // Later packages register their own redactors; these hand back a cycle and a BigInt.
+  auth.viewerRegistry.registerEventType({ owner: "03", type: "library", redact: (data) => { const out = { ...data }; out.self = out; return out; } });
+  auth.viewerRegistry.registerEventType({ owner: "03", type: "downloads", redact: () => ({ bytes: 10n }) });
+  const { bus } = makeBus(t, { auth, logger });
+  // The viewer connects first, so its failure would come before the owner's delivery.
+  const viewer = fakeExchange("127.0.0.2");
+  assert.ok(bus.handleSse(viewer.req, viewer.res, { role: "viewer" }));
+  const owner = fakeExchange("127.0.0.1");
+  assert.ok(bus.handleSse(owner.req, owner.res, { role: "owner" }));
+  const ids = [
+    bus.publish("status", { reason: "s1" }),
+    bus.publish("library", { x: 1 }),
+    bus.publish("downloads", { kind: "progress", jobs: [] }),
+    bus.publish("status", { reason: "s4" }),
+    bus.publish("library", { x: 2 }),
+    bus.publish("status", { reason: "s6" }),
+  ].map((envelope) => envelope?.id);
+  assert.deepEqual(ids.map((id) => parseEventId(id)?.seq), [1, 2, 3, 4, 5, 6], "every publish is accepted and numbered");
+  assert.deepEqual(bus.stats().rejected, {});
+  const idLines = (exchange) => exchange.res.chunks.filter((chunk) => chunk.startsWith("id: ")).map((chunk) => chunk.split("\n")[0].slice(4));
+  assert.deepEqual(idLines(owner), ids, "the owner after the viewer receives every event live");
+  assert.deepEqual(idLines(viewer), [ids[0], ids[3], ids[5]]);
+  assert.equal(viewer.res.destroyed, false);
+  assert.deepEqual(bus.recent({}).events.map((item) => item.id), ids, "the ring has no hole");
+  assert.equal(logger.lines.filter((line) => line.includes("viewer copy of a library event")).length, 1, "logged once per type");
+
+  // Replay after the failed events is gap-free, for owners and for viewers.
+  const replay = fakeExchange("127.0.0.3");
+  assert.ok(bus.handleSse(replay.req, replay.res, { role: "owner", lastEventId: ids[2] }));
+  assert.deepEqual(idLines(replay), ids.slice(3));
+  assert.equal(replay.res.chunks.some((chunk) => chunk.includes("event: resync")), false);
+  assert.deepEqual(bus.recent({ since: ids[1] }).events.map((item) => item.id), ids.slice(2));
+  const viewerReplay = fakeExchange("127.0.0.4");
+  assert.ok(bus.handleSse(viewerReplay.req, viewerReplay.res, { role: "viewer", lastEventId: `${bus.bootId}-0` }));
+  assert.equal(viewerReplay.res.status, 200);
+  assert.equal(viewerReplay.res.destroyed, false);
+  assert.deepEqual(idLines(viewerReplay), [ids[0], ids[3], ids[5]]);
+  assert.deepEqual(bus.recent({ role: "viewer" }).events.map((item) => item.id), [ids[0], ids[3], ids[5]]);
+});
+
+test("envelopes are frozen, so neither the publisher nor a subscriber can change what the others see", async (t) => {
+  const { bus, auth, logger } = makeBus(t);
+  const port = await serve(t, bus, auth);
+  const refused = [];
+  bus.subscribe((envelope) => {
+    try {
+      envelope.data.jobs.length = 0;
+    } catch (error) {
+      refused.push(error.name);
+    }
+    envelope.data.injected = "by-subscriber";
+  });
+  const seen = [];
+  bus.subscribe((envelope) => seen.push(envelope));
+  const original = { managerId: "vllm", jobs: [{ id: "j1" }], removed: [] };
+  const returned = bus.publish("jobs", structuredClone(original), { source: "vllm" });
+  assert.ok(returned);
+  assert.deepEqual(refused, ["TypeError"]);
+  assert.ok(logger.lines.some((line) => line.includes("subscriber threw")), "the throwing subscriber is contained");
+  assert.equal(seen[0], returned, "one shared envelope");
+  assert.throws(() => { returned.data.managerId = "mutated-by-publisher"; }, TypeError);
+  assert.throws(() => { returned.data.jobs[0].id = "j2"; }, TypeError);
+  assert.throws(() => { delete returned.data.removed; }, TypeError);
+  assert.throws(() => { returned.id = "x"; }, TypeError);
+
+  const recent = bus.recent({}).events[0];
+  assert.deepEqual(recent.data, original);
+  const replay = await openStream(port, "/api/events", { "last-event-id": `${bus.bootId}-0` });
+  await replay.waitFor((s) => s.events.length === 1);
+  assert.deepEqual(replay.events[0].data, recent, "SSE replay and /recent agree");
+  const polled = await getJson(port, "/api/events/recent");
+  assert.deepEqual(polled.body.events[0], recent);
+  replay.close();
+
+  bus.publish("status", { reason: "frozen-for-viewers", managerId: "vllm" });
+  const viewerCopy = bus.recent({ role: "viewer" }).events[0];
+  assert.equal(Object.isFrozen(viewerCopy), true);
+  assert.equal(Object.isFrozen(viewerCopy.data), true);
+});
+
 test("a principal with role none gets 401 on both routes", async (t) => {
   const stubAuth = createRequestAuth({
     security: fakeSecurity,
@@ -534,6 +643,37 @@ test("a client whose buffer passes the limit is dropped and the others keep rece
   bus.publish("status", { reason: "two" });
   assert.equal(fast.res.chunks.filter((chunk) => chunk.startsWith("id: ")).length, 2);
   assert.equal(slow.res.chunks.filter((chunk) => chunk.startsWith("id: ")).length, 1);
+});
+
+test("a reader that stops reading over a real socket is dropped once the response buffer passes the limit", async (t) => {
+  const { bus, auth } = makeBus(t, { maxBufferedBytes: 64 * 1024 });
+  const port = await serve(t, bus, auth);
+  const healthy = await openStream(port, "/api/events?types=status");
+  const stalled = await new Promise((resolve, reject) => {
+    const request = http.get({ host: "127.0.0.1", port, path: "/api/events?types=library" }, (res) => {
+      res.pause();
+      resolve(request);
+    });
+    request.on("error", reject);
+  });
+  t.after(() => stalled.destroy());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(bus.stats().clients, 2);
+  // The kernel socket buffers fill first; after that the server-side
+  // http.ServerResponse.writableLength grows until the bus drops the stream.
+  const pad = "x".repeat(32 * 1024);
+  const deadline = Date.now() + 10_000;
+  let sent = 0;
+  while (bus.stats().dropped.slow === 0 && Date.now() < deadline) {
+    for (let index = 0; index < 16; index += 1) bus.publish("library", { pad, index });
+    sent += 16 * pad.length;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(bus.stats().dropped.slow, 1, `still connected after ${sent} bytes`);
+  assert.equal(bus.stats().clients, 1);
+  bus.publish("status", { reason: "still-here" });
+  await healthy.waitFor((s) => s.events.some((frame) => frame.data.data.reason === "still-here"));
+  healthy.close();
 });
 
 test("a long replay may exceed the live limit until the socket drains once", (t) => {
