@@ -21,6 +21,8 @@ const API_SECRET_SENTINEL = "sk-API_SECRET_SENTINEL";
 const KEY_HASH_SENTINEL = "HASH_SENTINEL_SHOULD_NOT_RENDER";
 const AUDIT_SECRET_SENTINEL = "AUDIT_SECRET_SENTINEL";
 const FIXED_NOW = "2026-08-11T02:00:00.000Z";
+// The legacy billing page lives at /billing/classic since 07 CON-2 (/billing is the console route).
+const BILLING_PATH = "/billing/classic";
 
 let html;
 let server;
@@ -481,7 +483,7 @@ function startHarness() {
     server = http.createServer(async (req, res) => {
       try {
         const url = new URL(req.url, "http://127.0.0.1");
-        if (url.pathname === "/billing" || url.pathname === "/billing/") {
+        if (url.pathname === BILLING_PATH || url.pathname === `${BILLING_PATH}/`) {
           res.writeHead(200, {
             "content-type": "text/html; charset=utf-8",
             "content-length": Buffer.byteLength(html),
@@ -527,7 +529,7 @@ function attachDiagnostics(page) {
 }
 
 async function loadBilling(page) {
-  await page.goto(`${baseUrl}/billing/`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${baseUrl}${BILLING_PATH}`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
   await expect(page.locator("#billingWorkbench")).toHaveAttribute("aria-busy", "false");
 }
@@ -645,7 +647,7 @@ test("manager sidebars link to the local billing center and billing preserves th
     expect(tag).not.toContain("data-view=");
   }
 
-  await page.goto(`${baseUrl}/billing/?manager=vllm`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${baseUrl}${BILLING_PATH}?manager=vllm`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
   await expect(page.locator("#billingManagerName")).toHaveText("vLLM Manager");
   await expect(page.locator("#billingManagerContext")).toHaveText("vLLM · 5177");
@@ -800,7 +802,7 @@ test("template filters, future-date guard, exact multiplier preview, mapping, an
 
 test("complete API outage has an explicit error state and recovers through refresh", async ({ page }) => {
   scenario.failAll = true;
-  await page.goto(`${baseUrl}/billing/`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${baseUrl}${BILLING_PATH}`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#billingApiState")).toHaveText("计费接口不可用");
   await expect(page.locator("#billingNotice")).toBeVisible();
   await expect(page.locator("#billingNotice")).toContainText("后端接口尚未响应");
@@ -954,4 +956,34 @@ test("usage summary stays hidden when the API answers without summary rows", asy
   await expect(page.locator("#overviewSummaryHeading")).toHaveText("");
   await expect(page.locator("body")).not.toContainText("本期用量");
   await expect(page.locator("#overviewUsageRows")).toContainText("local/base-7b");
+});
+
+test("embed mode hides the copied sidebar and theme select and follows ?theme= without storing it", async ({ page }) => {
+  await page.goto(`${baseUrl}${BILLING_PATH}?embed=1&theme=dark`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
+  await expect(page.locator("html")).toHaveAttribute("data-embed", "1");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator(".manager-sidebar")).toBeHidden();
+  await expect(page.locator("#billingThemeMode")).toBeHidden();
+  await expect(page.getByRole("tab")).toHaveCount(5);
+  // The workbench takes the full width once the sidebar column is gone.
+  const widths = await page.evaluate(() => ({
+    main: document.querySelector(".billing-shell-main").getBoundingClientRect().width,
+    viewport: document.documentElement.clientWidth,
+  }));
+  expect(widths.main).toBeGreaterThanOrEqual(widths.viewport - 1);
+  expect(await page.evaluate(() => localStorage.getItem("billingThemeMode"))).toBeNull();
+
+  // The console reloads the frame with the new theme.
+  await page.goto(`${baseUrl}${BILLING_PATH}?embed=1&theme=light`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.goto(`${baseUrl}${BILLING_PATH}?embed=1`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.+/);
+
+  // Standalone, the page keeps its sidebar, its select and its own memory.
+  await page.goto(`${baseUrl}${BILLING_PATH}?theme=dark`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).not.toHaveAttribute("data-embed", /.+/);
+  await expect(page.locator(".manager-sidebar")).toBeVisible();
+  await expect(page.locator("#billingThemeMode")).toHaveValue("dark");
+  expect(await page.evaluate(() => localStorage.getItem("billingThemeMode"))).toBe("dark");
 });
