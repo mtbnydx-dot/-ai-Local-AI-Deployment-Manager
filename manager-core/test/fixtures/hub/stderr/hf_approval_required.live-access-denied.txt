@@ -1,0 +1,10 @@
+Fetching 3 files: 100%|##########| 3/3 [00:00<00:00, 1500.20it/s]
+Access denied. This repository requires approval.
+Visit the repository page to request access.
+Downloading (incoming) files ...
+Retrying request, attempt 1 of 0
+done checking
+Process exited after cleanup
+tail noise line one
+tail noise line two
+tail noise line three

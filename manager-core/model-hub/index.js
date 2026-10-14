@@ -18,6 +18,7 @@ const { firstExisting, looksLikePath } = require("../file-utils");
 const { createHubStore, hubWriterIsLive, HUB_FILES, STORE_SCHEMA_VERSION } = require("./store");
 const hubSettings = require("./settings");
 const { readHubConfig } = require("./config");
+const hubErrors = require("./errors");
 
 const DEFAULT_AI_ROOT = path.resolve(__dirname, "..", "..");
 // downloads.json is re-stamped this often while the hub runs; readers treat
@@ -97,6 +98,7 @@ function createModelHub(options = {}) {
   let downloads = { schemaVersion: STORE_SCHEMA_VERSION, jobs: [] };
   let migrationSteps = [];
   let storeErrors = [];
+  let transferErrors = { data: null, errors: [], freshness: null, source: "bundled" };
 
   function warn(line) {
     try {
@@ -110,12 +112,39 @@ function createModelHub(options = {}) {
     return { file: result.file, name, code: result.error.code, message: `${result.error.message}${extra ? ` ${extra}` : ""}` };
   }
 
+  // The error taxonomy's data file (03 §6.3). A bad entry is dropped and
+  // reported in status dataErrors; it never stops the hub.
+  function loadTransferErrors() {
+    const userDir = env.AI_REFERENCE_DATA_DIR || path.join(aiRoot, "config");
+    try {
+      transferErrors = hubErrors.loadTransferErrorData({ userDir, now: clock.now() });
+    } catch (error) {
+      transferErrors = { data: null, errors: [{ file: "", name: hubErrors.TRANSFER_ERRORS_FILE, code: "unreadable", message: "The error taxonomy data could not be loaded." }], freshness: null, source: "bundled" };
+      warn(`model hub: transfer error data failed to load: ${error?.message || error}`);
+    }
+    if (transferErrors.errors.length) warn(`model hub: ${transferErrors.errors.length} entr${transferErrors.errors.length === 1 ? "y" : "ies"} in ${hubErrors.TRANSFER_ERRORS_FILE} were dropped (see status dataErrors).`);
+    if (typeof options.registerStatusProvider === "function") {
+      try {
+        options.registerStatusProvider("hub-transfer-errors", () => ({
+          ok: transferErrors.errors.length === 0,
+          source: transferErrors.source,
+          asOf: transferErrors.data?.asOf || "",
+          stale: Boolean(transferErrors.freshness?.stale),
+          errors: transferErrors.errors.map(({ code, message }) => ({ code, message })),
+        }));
+      } catch (error) {
+        warn(`model hub: could not register the hub-transfer-errors status provider: ${error?.message || error}`);
+      }
+    }
+  }
+
   async function doStart() {
     state = "starting";
     storeErrors = [];
     const swept = await store.init();
     if (swept.removedTemps.length) warn(`model hub: removed ${swept.removedTemps.length} temp file(s) an interrupted write left in the data directory.`);
     settings.load();
+    loadTransferErrors();
 
     // The queue (HUB-7) owns the jobs; until then they are carried over as
     // they are. A corrupt ledger is kept aside, never overwritten.
@@ -209,7 +238,7 @@ function createModelHub(options = {}) {
       speedBps: 0,
       cli: { hf: cliInfo(hfCli), modelscope: cliInfo(modelScopeCli) },
       dataDir,
-      dataErrors: [...storeErrors, ...settings.errors()],
+      dataErrors: [...storeErrors, ...settings.errors(), ...transferErrors.errors],
       configErrors: Array.isArray(config.errors) ? config.errors : [],
       migration: { done: migrationDone() },
       features: { runAfter: false, rememberToken: Boolean(secretStore), models: Boolean(models) },
@@ -225,6 +254,9 @@ function createModelHub(options = {}) {
     stop,
     status,
     config: () => readConfig(),
+    // The loaded error taxonomy data (null before start), for the transfer
+    // engine's classifyTransferFailure/retryDecision calls.
+    transferErrorData: () => transferErrors.data,
     settings: {
       async get() {
         await settled();

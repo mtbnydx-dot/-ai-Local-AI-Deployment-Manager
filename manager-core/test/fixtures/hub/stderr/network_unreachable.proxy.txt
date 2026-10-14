@@ -1,0 +1,1 @@
+requests.exceptions.ProxyError: HTTPSConnectionPool(host='hf-mirror.com', port=443): Cannot connect to proxy. (407 Proxy Authentication Required)

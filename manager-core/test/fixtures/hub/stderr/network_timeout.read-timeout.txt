@@ -1,0 +1,1 @@
+requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='hf-mirror.com', port=443): Read timed out. (read timeout=10)

@@ -1,0 +1,1 @@
+modelscope.errors.NotExistError: The model org/private does not exist or you have no permission (HTTP 401)
