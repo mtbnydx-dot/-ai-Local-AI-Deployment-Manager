@@ -44,12 +44,19 @@ const ROOT = __dirname;
 const AI_ROOT = path.dirname(ROOT);
 const PLATFORM_MCP_ENV_FILE = process.env.PLATFORM_MCP_ENV_FILE || path.join(AI_ROOT, ".runtime", "platform-mcp", "server.env");
 const PROCESS_EXIT_LOG = path.join(ROOT, "logs", "process-exit.log");
+// The telemetry runtime (04): the gateway recorder (TEL-5), the store and the
+// collectors. It is set by startTelemetry() and cleared by stopTelemetry();
+// while it is null, or disabled (TELEMETRY_ENABLED=0), the gateway runs
+// exactly as before.
+let telemetry = null;
 // 401 风暴防护：同一客户端地址在窗口内连续鉴权失败即临时封禁，公网扫描者
 // 拿到的是廉价的 429 而不是每次一遍密钥库读取 + 访问日志。
 const authGuard = core.createAuthFailureGuard({
   maxFailures: Number(process.env.SERVICE_ENTRY_AUTH_FAIL_LIMIT || 20),
   windowMs: Number(process.env.SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS || 60) * 1000,
   banMs: Number(process.env.SERVICE_ENTRY_AUTH_BAN_SECONDS || 600) * 1000,
+  // security.ban in the telemetry events (04 §9 source 6).
+  onBan: (ban) => telemetry?.recordSecurityBan?.(ban),
 });
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
 const FLEET_SETTINGS_FILE = path.join(ROOT, "data", "fleet-settings.json");
@@ -166,8 +173,6 @@ let routeMounts = null;
 // The model hub (03), built once by startServiceEntry() and stopped by
 // shutdownSoon(). null in tests and when it could not be built.
 let modelHub = null;
-// 04 telemetry (store and collectors); created by startServiceEntry().
-let telemetryRuntime = null;
 let billingStore = null;
 let accessStore = null;
 let accessStoreFailure = null;
@@ -480,10 +485,16 @@ async function dispatchRouteModules(routes, req, res, url) {
 async function handleRequest(req, res, routes = null) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
+    // Every gateway request is recorded from here on, refusals included, and
+    // answers with the x-request-id the record minted (04 §6.5).
+    const gatewayRec = url.pathname.startsWith("/gateway/") ? beginGatewayRecord(req, res, url) : null;
     // Host whitelist + Origin check for mutating requests. Without this any page
     // the user has open can drive the entry over loopback.
     const hostCheck = security.checkRequest(req, url);
-    if (!hostCheck.ok) return sendJson(res, { error: hostCheck.message, code: hostCheck.code }, hostCheck.status);
+    if (!hostCheck.ok) {
+      gatewayRec?.reject({ status: hostCheck.status, code: hostCheck.code });
+      return sendJson(res, { error: hostCheck.message, code: hostCheck.code }, hostCheck.status);
+    }
     // 反向代理（deploy/public 的 Caddy）转发进来的请求只允许走 /gateway/*：
     // 控制台页面、管理 API、计费和文档都不该出现在公网上。
     if (!url.pathname.startsWith("/gateway/") && security.isProxiedRequest(req)) {
@@ -596,7 +607,7 @@ async function handleRequest(req, res, routes = null) {
       }
       const currentSettings = await getFleetSettings();
       const settings = await saveFleetSettings({ ...currentSettings, ...(body.settings || body) });
-      telemetryRuntime?.recordConfigChange("fleet", { before: currentSettings, after: settings });
+      telemetry?.recordConfigChange("fleet", { before: currentSettings, after: settings });
       const fleet = await buildServiceEntryFleetSnapshot(settings);
       return sendJson(res, { ok: true, settings, fleet });
     }
@@ -823,7 +834,16 @@ async function startServiceEntry() {
   routeMounts = await mountRouteModules({ ctx });
   // Every module has registered its viewer routes; a later one would be a bug.
   routeMounts.ctx.auth.viewerRegistry.freeze();
-  telemetryRuntime = startTelemetryRuntime(routeMounts.ctx);
+  // The gateway recorder, the store and the collectors (04). A store that
+  // cannot open leaves telemetry degraded; it never stops the entry.
+  await startTelemetry({
+    managers: MANAGERS,
+    managerClient: routeMounts.ctx.managerClient,
+    events: routeMounts.ctx.bus,
+    processExitLog: PROCESS_EXIT_LOG,
+  }).catch((error) => {
+    console.warn(core.redactSecrets(`service-entry: telemetry did not start: ${error?.message || error}`));
+  });
   server = createServiceEntryServer({ routes: routeMounts });
   server.on("error", (error) => {
     const detail = error?.code === "EADDRINUSE"
@@ -909,47 +929,18 @@ function logStartupSummary(state, { host = HOST, port = PORT, log = console.log,
   }
 }
 
-// Telemetry reads the bus, the manager client and the log files; it never
-// holds up startup or shutdown. Smoke runs (AI_FRONTEND_SMOKE=1) start
-// next to whatever listens on the default ports, so they run no collectors.
-function startTelemetryRuntime(ctx) {
-  if (process.env.AI_FRONTEND_SMOKE === "1") return null;
-  const runtime = createTelemetryRuntime({
-    aiRoot: AI_ROOT,
-    dataDir: path.join(ROOT, "data"),
-    managers: MANAGERS,
-    managerClient: ctx.managerClient,
-    events: ctx.bus,
-    processExitLog: PROCESS_EXIT_LOG,
-  });
-  runtime.start().catch((error) => console.warn(core.redactSecrets(`Telemetry failed to start: ${error?.message || error}`)));
-  return runtime;
-}
-
-async function stopTelemetryRuntime() {
-  const runtime = telemetryRuntime;
-  telemetryRuntime = null;
-  if (!runtime) return;
-  let guard = null;
-  await Promise.race([
-    runtime.stop().catch(() => {}),
-    new Promise((resolve) => {
-      guard = setTimeout(resolve, 3000);
-      guard.unref?.();
-    }),
-  ]);
-  clearTimeout(guard);
-}
-
 if (require.main === module) {
   core.installProcessExitLogging({
     label: "service-entry",
     file: PROCESS_EXIT_LOG,
     onSignal: async () => {
       await stopModelHub(modelHub);
-      await stopTelemetryRuntime();
       await security.revokeTrustToken().catch(() => {});
-      if (server) await new Promise((resolve) => server.close(resolve));
+      const closing = server ? new Promise((resolve) => server.close(resolve)) : null;
+      // In-flight records are finalised and flushed (2 s cap) even when open
+      // streams keep the server from closing.
+      await stopTelemetry();
+      if (closing) await closing;
     },
   });
   startServiceEntry().catch((error) => {
@@ -1331,11 +1322,6 @@ function shouldLogTtsAccess(req, res) {
   return /^\/gateway\/tts\/openai\/v1(?:\/|$)/i.test(pathname);
 }
 
-function appendTtsAccessLog(req, route, status, startedAt, error) {
-  if (!shouldLogTtsAccess(req, { statusCode: status })) return;
-  appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, null, error)).catch(() => {});
-}
-
 function createTtsBodyLimiter(maxBytes = TTS_GATEWAY_MAX_BODY_BYTES) {
   let total = 0;
   const limiter = new Transform({
@@ -1427,22 +1413,25 @@ async function proxyTtsGatewayRequest(req, res, url) {
   }
 
   const startedAt = Date.now();
+  const access = prepareEntryAccess(req, route, startedAt);
+  const rec = gatewayRecord(req);
   let auth = { ok: true, clientId: "", client: null, authRequired: false };
   if (!isTtsUiShellRequest(req, route)) {
     const ban = checkAuthBan(req);
     if (ban) {
-      appendTtsAccessLog(req, route, 429, startedAt, ban.message);
+      denyEntryRequest(req, access, { status: 429, message: ban.message, code: "auth_banned", log: shouldLogTtsAccess });
       return sendJson(res, { detail: ban.message, code: "auth_banned" }, 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
     }
     auth = await security.authorizeGatewayRequest(req);
     if (!auth.ok) {
       noteAuthResult(req, auth);
-      appendTtsAccessLog(req, route, auth.status, startedAt, auth.message);
+      denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code, log: shouldLogTtsAccess });
       const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
       return sendJson(res, { detail: auth.message, code: auth.code }, auth.status, headers);
     }
     noteAuthResult(req, auth);
     req.serviceEntryAuth = auth;
+    recordGatewayAuth(req, auth);
   }
 
   const rate = core.enterServiceRateLimit(
@@ -1452,7 +1441,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   );
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
-    appendTtsAccessLog(req, route, 429, startedAt, message);
+    denyEntryRequest(req, access, { status: 429, message, code: "rate_limit_exceeded", log: shouldLogTtsAccess });
     return sendJson(res, { detail: message, code: "rate_limit_exceeded" }, 429, {
       ...gatewayCorsHeaders(req),
       "retry-after": String(rate.retryAfterSeconds),
@@ -1462,7 +1451,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   const declaredLength = Number(req.headers?.["content-length"] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > TTS_GATEWAY_MAX_BODY_BYTES) {
     const message = `TTS request body exceeds ${TTS_GATEWAY_MAX_BODY_BYTES} bytes.`;
-    appendTtsAccessLog(req, route, 413, startedAt, message);
+    denyEntryRequest(req, access, { status: 413, message, code: "request_body_too_large", log: shouldLogTtsAccess });
     return sendJson(res, { detail: message, code: "request_body_too_large" }, 413, gatewayCorsHeaders(req));
   }
   // TTS 用量计费（F3）：持客户端 Key 的合成请求按秒数 / 字符数进账本，并检查每日秒数配额。
@@ -1471,7 +1460,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     ? { clientId: auth.client.id, managerId: auth.matchedManager || "tts", endpoint: synthesis.endpoint, kind: synthesis.kind, characters: 0, engine: "unknown" }
     : null;
   if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
-    appendTtsAccessLog(req, route, 503, startedAt, `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`);
+    denyEntryRequest(req, access, { status: 503, message: `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`, code: "tts_gateway_offline", log: shouldLogTtsAccess });
     return sendJson(res, { detail: UPSTREAM_DOWN_MESSAGE, code: "service_unavailable" }, 503, gatewayCorsHeaders(req));
   }
 
@@ -1486,11 +1475,9 @@ async function proxyTtsGatewayRequest(req, res, url) {
   target.search = url.search;
   const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
   const upstreamControl = createUpstreamControl(req, res, { timeoutMs: Math.min(ttsRequestTimeoutMs(req, route), Number(auth.client?.requestTimeoutSeconds || 7200) * 1000) });
-  const access = { error: "" };
-  logEntryGatewayAccessWhenDone(req, res, ({ status, terminalState, origin }) => buildEntryGatewayAccessEntry(
-    req, route, null, status, startedAt, null, access.error, "", { terminalState, origin },
-  ), shouldLogTtsAccess);
+  watchEntryAccess(req, res, access, shouldLogTtsAccess);
   let bodyLimitError = null;
+  let dispatched = false;
   let releaseTtsBody = () => {};
   try {
     let body;
@@ -1513,6 +1500,8 @@ async function proxyTtsGatewayRequest(req, res, url) {
       }
       meter.characters = countTtsCharacters(parsed, meter.kind);
       meter.engine = ttsEngineFromBody(parsed);
+      rec?.setRouting({ modelRequested: meter.engine, modelResolved: meter.engine });
+      rec?.setExtra({ ttsCharacters: meter.characters });
       meter.requestId = crypto.randomUUID();
       const copies = meter.kind === "batch" ? Math.max(1, new Set(parsed.engines || []).size) : 1;
       const estimatedMs = Math.ceil(Math.max(1000 * copies, meter.characters * 250 / Math.max(0.5, Number(parsed.speed) || 1)));
@@ -1520,7 +1509,9 @@ async function proxyTtsGatewayRequest(req, res, url) {
       if (!authorization.allowed) {
         upstreamControl.clear();
         access.error = String(authorization.code || "");
-        return sendJson(res, { detail: "TTS billing allowance is insufficient for this request.", code: authorization.code }, authorization.code === "billing_insufficient_balance" ? 402 : 429, gatewayCorsHeaders(req));
+        const deniedStatus = authorization.code === "billing_insufficient_balance" ? 402 : 429;
+        rec?.reject({ status: deniedStatus, code: authorization.code });
+        return sendJson(res, { detail: "TTS billing allowance is insufficient for this request.", code: authorization.code }, deniedStatus, gatewayCorsHeaders(req));
       }
       req.ttsRequestId = meter.requestId;
       body = buffered;
@@ -1529,6 +1520,8 @@ async function proxyTtsGatewayRequest(req, res, url) {
       limiter.once("error", (error) => { bodyLimitError = error; });
       body = Readable.toWeb(req.pipe(limiter));
     }
+    dispatched = true;
+    rec?.dispatched();
     const upstream = await fetch(target, {
       method: req.method,
       headers: buildTtsProxyHeaders(req.headers, req),
@@ -1537,6 +1530,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
       signal: upstreamControl.signal,
       redirect: "manual",
     });
+    rec?.headers(upstream.status, upstream.headers);
     const responseHeaders = buildResponseHeaders(upstream.headers, req);
     if (isTtsUiShellRequest(req, route)) {
       responseHeaders["content-security-policy"] = TTS_UI_CSP;
@@ -1547,7 +1541,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
       if (!upstream.ok) recordTtsUsageSafely({ ...meter, status: upstream.status, ok: false, audioMs: 0, durationSource: "missing" });
       res.once("finish", () => ttsReconciler.flush().catch(() => {}));
     }
-    forwardUpstreamBody(upstream, res, upstreamControl);
+    forwardUpstreamBody(upstream, res, upstreamControl, rec?.tap());
   } catch (error) {
     upstreamControl.clear();
     const failure = bodyLimitError || error?.cause || error;
@@ -1555,6 +1549,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     const message = status === 413 ? failure.message : "TTS gateway upstream is unavailable.";
     // Ambiguous transport failures retain their reservation until a durable completion receipt arrives.
     access.error = failure?.message || message;
+    rec?.fail({ status, code: failure?.code || "tts_gateway_proxy_error", phase: dispatched ? "upstream" : "pre_upstream" });
     if (!res.headersSent) {
       sendJson(res, { detail: message, code: failure?.code || "tts_gateway_proxy_error" }, status, gatewayCorsHeaders(req));
     } else if (!res.writableEnded) {
@@ -1573,25 +1568,28 @@ async function proxyGatewayRequest(req, res, url) {
     return res.end();
   }
   const startedAt = Date.now();
+  const access = prepareEntryAccess(req, route, startedAt);
+  const rec = gatewayRecord(req);
   // Authentication happens here, before the loopback hop, so the managers no
   // longer have to infer trust from a proxied socket address.
   const ban = checkAuthBan(req);
   if (ban) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, ban.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: 429, message: ban.message, code: "auth_banned" });
     return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
   }
   const auth = await security.authorizeGatewayRequest(req);
   noteAuthResult(req, auth);
   if (!auth.ok) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code });
     const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
     return sendJson(res, core.openAiGatewayError(auth.code, auth.message), auth.status, headers);
   }
   req.serviceEntryAuth = auth;
+  recordGatewayAuth(req, auth);
   const authorizedManagers = selectGatewayManagersForAuth(route.engine, auth);
   if (!authorizedManagers.length) {
     const message = "This service API key is not authorized for the requested model manager.";
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 403, startedAt, null, message)).catch(() => {});
+    denyEntryRequest(req, access, { status: 403, message, code: "manager_forbidden" });
     return sendJson(res, core.openAiGatewayError("manager_forbidden", message), 403, gatewayCorsHeaders(req));
   }
   const rate = core.enterServiceRateLimit(
@@ -1603,7 +1601,7 @@ async function proxyGatewayRequest(req, res, url) {
   );
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
+    denyEntryRequest(req, access, { status: 429, message, code: "rate_limit_exceeded" });
     return sendJson(
       res,
       core.openAiGatewayError("rate_limit_exceeded", message),
@@ -1617,7 +1615,7 @@ async function proxyGatewayRequest(req, res, url) {
   try {
     requireGatewayJsonContentType(req);
   } catch (error) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, error.status || 415, startedAt, null, error.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: error.status || 415, message: error.message, code: error.code || "unsupported_media_type" });
     return sendJson(res, core.openAiGatewayError(error.code || "unsupported_media_type", error.message), error.status || 415, gatewayCorsHeaders(req));
   }
   let body;
@@ -1631,7 +1629,7 @@ async function proxyGatewayRequest(req, res, url) {
       res.once("close", releaseBodyBudget);
     }
   } catch (error) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, error.status || 400, startedAt, null, error.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: error.status || 400, message: error.message, code: error.code || "invalid_request" });
     return sendJson(res, core.openAiGatewayError(error.code || "invalid_request", error.message), error.status || 400);
   }
   let requestBody = body;
@@ -1662,16 +1660,18 @@ async function proxyGatewayRequest(req, res, url) {
     }
     parsedBody = parsedBody || {};
   } catch (error) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, error.status || 400, startedAt, null, error.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: error.status || 400, message: error.message, code: error.code || "invalid_request" });
     return sendJson(res, core.openAiGatewayError(error.code || "invalid_request", error.message), error.status || 400, gatewayCorsHeaders(req));
   }
   const requestMetadata = summarizeGatewayRequestBody(parsedBody);
   const requestedModel = String(parsedBody?.model || "").trim();
+  rec?.setRouting({ modelRequested: requestedModel, stream: requestMetadata.stream });
+  rec?.setExtra({ toolSchemaCount: requestMetadata.toolSchemaCount });
   let fleetSettings;
   try {
     fleetSettings = await getFleetSettings();
   } catch (error) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 500, startedAt, requestMetadata, "Fleet settings are unavailable.")).catch(() => {});
+    denyEntryRequest(req, access, { status: 500, message: "Fleet settings are unavailable.", code: "fleet_settings_unavailable", metadata: requestMetadata });
     return sendJson(res, core.openAiGatewayError("fleet_settings_unavailable", "Fleet routing settings are unavailable."), 500);
   }
   const catalogs = await Promise.all(authorizedManagers.map((manager) => getManagerModelCatalog(manager)));
@@ -1688,14 +1688,15 @@ async function proxyGatewayRequest(req, res, url) {
   if (selection.error) {
     const status = Number(selection.status || 503);
     const message = selection.message || selection.reason || "No matching model service is available.";
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, status, startedAt, requestMetadata, message)).catch(() => {});
+    denyEntryRequest(req, access, { status, message, code: selection.error, metadata: requestMetadata });
     return sendJson(res, core.openAiGatewayError(selection.error, message), status, gatewayCorsHeaders(req));
   }
   const manager = selection.manager;
   const resolvedModel = String(selection.model?.id || "").trim();
+  recordGatewayRouting(req, selection, resolvedModel, requestedModel, requestMetadata);
   if (auth.client && !core.serviceClientAllowsModel(auth.client, resolvedModel)) {
     const message = "This service client is not allowed to use the selected model.";
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, 403, startedAt, requestMetadata, message, resolvedModel)).catch(() => {});
+    denyEntryRequest(req, access, { status: 403, message, code: "model_forbidden", manager, metadata: requestMetadata, resolvedModel });
     return sendJson(res, core.openAiGatewayError("model_forbidden", message), 403, gatewayCorsHeaders(req));
   }
   const genericModel = GENERIC_MODEL_ID_SET.has(requestedModel.toLowerCase());
@@ -1703,25 +1704,24 @@ async function proxyGatewayRequest(req, res, url) {
     ? rewriteRequestModelBody(requestBody, resolvedModel, parsedBody)
     : requestBody;
   if (!(await isManagerPortListening(manager.port))) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, 503, startedAt, requestMetadata, `${manager.name} is not listening on port ${manager.port}.`, resolvedModel)).catch(() => {});
+    denyEntryRequest(req, access, { status: 503, message: `${manager.name} is not listening on port ${manager.port}.`, code: "manager_offline", manager, metadata: requestMetadata, resolvedModel });
     return sendJson(res, core.openAiGatewayError("service_unavailable", UPSTREAM_DOWN_MESSAGE), 503);
   }
   let targetPath = "";
   try {
     targetPath = buildManagerGatewayPath(route);
   } catch (error) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, manager, error.status || 400, startedAt, requestMetadata, error.message, resolvedModel)).catch(() => {});
+    denyEntryRequest(req, access, { status: error.status || 400, message: error.message, code: error.code || "invalid_gateway_path", manager, metadata: requestMetadata, resolvedModel });
     return sendJson(res, core.openAiGatewayError(error.code || "invalid_gateway_path", error.message), error.status || 400, gatewayCorsHeaders(req));
   }
   if (!targetPath) return sendJson(res, core.openAiGatewayError("protocol_not_supported", `${manager.name} does not support ${route.protocol}.`), 404);
   const target = new URL(`http://127.0.0.1:${manager.port}${targetPath}`);
   target.search = url.search;
   const upstreamControl = createUpstreamControl(req, res);
-  const access = { error: "" };
-  logEntryGatewayAccessWhenDone(req, res, ({ status, terminalState, origin }) => buildEntryGatewayAccessEntry(
-    req, route, manager, status, startedAt, requestMetadata, access.error, resolvedModel, { terminalState, origin },
-  ));
+  Object.assign(access, { manager, metadata: requestMetadata, resolvedModel, error: "" });
+  watchEntryAccess(req, res, access);
   try {
+    rec?.dispatched();
     const upstream = await fetch(target, {
       method: req.method,
       headers: buildProxyHeaders(req.headers, req, {
@@ -1736,6 +1736,7 @@ async function proxyGatewayRequest(req, res, url) {
     bodyForUpstream = undefined;
     releaseBodyBudget();
     releaseCompressedBodyBudget();
+    rec?.headers(upstream.status, upstream.headers);
     // Tell the caller which engine and instance actually served the request.
     // `auto` routing is otherwise opaque: the same model name can land on vLLM
     // or llama.cpp depending on the fleet mode and current load.
@@ -1748,13 +1749,14 @@ async function proxyGatewayRequest(req, res, url) {
         selection.reason || "",
       ].map((part) => String(part).replace(/[^\w.:@/-]+/g, "_")).join(" "),
     });
-    forwardUpstreamBody(upstream, res, upstreamControl);
+    forwardUpstreamBody(upstream, res, upstreamControl, rec?.tap());
   } catch (error) {
     upstreamControl.clear();
     requestBody = undefined;
     bodyForUpstream = undefined;
     releaseBodyBudget();
     access.error = error.message;
+    rec?.fail({ status: error.status || (error.name === "TimeoutError" ? 504 : 502), code: error.name === "TimeoutError" ? "request_timeout" : "gateway_proxy_error", phase: "upstream" });
     if (!res.headersSent) {
       sendJson(res, core.openAiGatewayError("gateway_proxy_error", "gateway_proxy_error: upstream unavailable"), error.status || (error.name === "TimeoutError" ? 504 : 502));
     } else if (!res.writableEnded) {
@@ -1798,21 +1800,25 @@ function noteAuthResult(req, auth) {
 async function handleGatewayStatus(req, res, url) {
   const route = { engine: "auto", protocol: "status", rest: "status" };
   const startedAt = Date.now();
+  const access = prepareEntryAccess(req, route, startedAt);
   const ban = checkAuthBan(req);
   if (ban) {
+    gatewayRecord(req)?.reject({ status: 429, code: "auth_banned" });
     return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
   }
   const auth = await security.authorizeGatewayRequest(req);
   noteAuthResult(req, auth);
   if (!auth.ok) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code });
     const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
     return sendJson(res, core.openAiGatewayError(auth.code, auth.message), auth.status, headers);
   }
+  recordGatewayAuth(req, auth);
   const limitRpm = Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600);
   const rateKey = auth.client?.id || security.resolveClientAddress(req) || "anonymous";
   const rate = core.enterServiceRateLimit({ rateLimitRpm: limitRpm }, rateKey, entryRateBuckets);
   if (!rate.ok) {
+    gatewayRecord(req)?.reject({ status: 429, code: "rate_limit_exceeded" });
     return sendJson(res, core.openAiGatewayError("rate_limit_exceeded", `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`), 429, { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) });
   }
   const authorizedManagers = selectGatewayManagersForAuth("auto", auth);
@@ -1864,7 +1870,8 @@ async function handleGatewayStatus(req, res, url) {
       mcp: "/gateway/mcp",
     },
   };
-  appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 200, startedAt, null, "")).catch(() => {});
+  // A successful status read is a control request: counted, not logged (04 §5.5).
+  if (!gatewayRecord(req)) appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 200, startedAt, null, "")).catch(() => {});
   return sendJson(res, payload, 200, gatewayCorsHeaders(req));
 }
 
@@ -1892,6 +1899,8 @@ async function auxUpstreamCredential(service) {
 function buildAuxProxyHeaders(headers, req, credential) {
   const out = {};
   const drop = new Set(["host", "connection", "content-length", "authorization", "x-api-key", "api-key", "cookie", ...TRUST_HEADER_NAMES]);
+  const requestId = String(gatewayRecord(req)?.requestId || "");
+  if (requestId) drop.add("x-request-id");
   for (const [name, value] of Object.entries(headers || {})) {
     const key = String(name).toLowerCase();
     if (drop.has(key) || key.startsWith("proxy-")) continue;
@@ -1900,6 +1909,7 @@ function buildAuxProxyHeaders(headers, req, credential) {
   }
   if (credential) out.authorization = `Bearer ${credential}`;
   out["x-forwarded-for"] = security.resolveClientAddress(req) || "";
+  if (requestId) out["x-request-id"] = requestId;
   return out;
 }
 
@@ -1912,19 +1922,22 @@ async function proxyAuxGatewayRequest(req, res, url) {
   }
   const upstreamSpec = AUX_UPSTREAMS[route.service];
   const startedAt = Date.now();
+  const access = prepareEntryAccess(req, route, startedAt);
+  const rec = gatewayRecord(req);
   const ban = checkAuthBan(req);
   if (ban) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, ban.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: 429, message: ban.message, code: "auth_banned" });
     return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
   }
   const auth = await security.authorizeGatewayRequest(req);
   noteAuthResult(req, auth);
   if (!auth.ok) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, auth.status, startedAt, null, auth.message)).catch(() => {});
+    denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code });
     const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
     return sendJson(res, core.openAiGatewayError(auth.code, auth.message), auth.status, headers);
   }
   req.serviceEntryAuth = auth;
+  recordGatewayAuth(req, auth);
   const rate = core.enterServiceRateLimit(
     { rateLimitRpm: Number(auth.client?.rateLimitRpm || process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 600) },
     auth.client?.id ? `${auth.matchedManager}:${auth.client.id}` : security.resolveClientAddress(req) || "anonymous",
@@ -1932,7 +1945,7 @@ async function proxyAuxGatewayRequest(req, res, url) {
   );
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 429, startedAt, null, message)).catch(() => {});
+    denyEntryRequest(req, access, { status: 429, message, code: "rate_limit_exceeded" });
     return sendJson(res, core.openAiGatewayError("rate_limit_exceeded", message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) });
   }
   let targetPath;
@@ -1943,12 +1956,13 @@ async function proxyAuxGatewayRequest(req, res, url) {
   }
   const port = upstreamSpec.port();
   if (!(await isManagerPortListening(port))) {
-    appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, route, null, 503, startedAt, null, `${upstreamSpec.name} is not listening on port ${port}.`)).catch(() => {});
+    denyEntryRequest(req, access, { status: 503, message: `${upstreamSpec.name} is not listening on port ${port}.`, code: "manager_offline" });
     return sendJson(res, core.openAiGatewayError("service_unavailable", UPSTREAM_DOWN_MESSAGE), 503, gatewayCorsHeaders(req));
   }
   const declaredLength = Number(req.headers?.["content-length"] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > GATEWAY_MAX_BODY_BYTES) {
     const message = `Request body exceeds ${GATEWAY_MAX_BODY_BYTES} bytes.`;
+    rec?.reject({ status: 413, code: "request_body_too_large" });
     return sendJson(res, core.openAiGatewayError("request_body_too_large", message), 413, gatewayCorsHeaders(req));
   }
   if (!(await acquireEntryConcurrency(req, res, auth))) return;
@@ -1957,11 +1971,9 @@ async function proxyAuxGatewayRequest(req, res, url) {
   target.search = url.search;
   const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
   const upstreamControl = createUpstreamControl(req, res, { timeoutMs: upstreamSpec.timeoutMs });
-  const access = { error: "" };
-  logEntryGatewayAccessWhenDone(req, res, ({ status, terminalState, origin }) => buildEntryGatewayAccessEntry(
-    req, route, null, status, startedAt, null, access.error, "", { terminalState, origin },
-  ));
+  watchEntryAccess(req, res, access);
   let bodyLimitError = null;
+  let dispatched = false;
   try {
     let body;
     if (hasBody) {
@@ -1969,6 +1981,8 @@ async function proxyAuxGatewayRequest(req, res, url) {
       limiter.once("error", (error) => { bodyLimitError = error; });
       body = Readable.toWeb(req.pipe(limiter));
     }
+    dispatched = true;
+    rec?.dispatched();
     const upstream = await fetch(target, {
       method: req.method,
       headers: buildAuxProxyHeaders(req.headers, req, credential),
@@ -1977,13 +1991,15 @@ async function proxyAuxGatewayRequest(req, res, url) {
       signal: upstreamControl.signal,
       redirect: "manual",
     });
+    rec?.headers(upstream.status, upstream.headers);
     res.writeHead(upstream.status, buildResponseHeaders(upstream.headers, req));
-    forwardUpstreamBody(upstream, res, upstreamControl);
+    forwardUpstreamBody(upstream, res, upstreamControl, rec?.tap());
   } catch (error) {
     upstreamControl.clear();
     const failure = bodyLimitError || error?.cause || error;
     const status = Number(failure?.status || (error?.name === "TimeoutError" ? 504 : 502));
     access.error = failure?.message || "upstream unavailable";
+    rec?.fail({ status, code: failure?.code || (error?.name === "TimeoutError" ? "request_timeout" : "gateway_proxy_error"), phase: dispatched ? "upstream" : "pre_upstream" });
     if (!res.headersSent) {
       sendJson(res, core.openAiGatewayError(failure?.code || "gateway_proxy_error", status === 413 ? failure.message : `${upstreamSpec.name} upstream is unavailable.`), status, gatewayCorsHeaders(req));
     } else if (!res.writableEnded) {
@@ -2120,6 +2136,198 @@ function logEntryGatewayAccessWhenDone(req, res, buildEntry, shouldLog = null) {
   });
 }
 
+// --- request telemetry (04 TEL-5) ---------------------------------------------
+
+function telemetryRecorder() {
+  return telemetry && telemetry.recorder ? telemetry.recorder : null;
+}
+
+function gatewayRecord(req) {
+  return req?.telemetryRecord || null;
+}
+
+// One record per gateway request, started before any check so that a refusal
+// is a row too. The id is minted here, always: a client x-request-id is kept
+// as client_request_id and echoed as x-client-request-id, never forwarded or
+// used as a key (04 §5.1, contract change C1). Returns null while telemetry
+// is off, which leaves every code path below on its previous behaviour.
+function beginGatewayRecord(req, res, url) {
+  const recorder = telemetryRecorder();
+  if (!recorder) return null;
+  let rec = null;
+  try {
+    let clientIp = "";
+    try {
+      clientIp = security.resolveClientAddress(req) || "";
+    } catch {
+      clientIp = "";
+    }
+    rec = recorder.begin(req, res, {
+      ingress: "entry",
+      method: req.method,
+      path: url.pathname,
+      clientIp: clientIp || undefined,
+    });
+    res.setHeader("x-request-id", rec.requestId);
+    if (rec.clientRequestId) res.setHeader("x-client-request-id", rec.clientRequestId);
+  } catch (error) {
+    console.warn(core.redactSecrets(`service-entry: telemetry could not start a request record: ${error?.message || error}`));
+    return null;
+  }
+  req.telemetryRecord = rec;
+  // What the legacy access log needs beyond the row itself; the handlers fill
+  // it in as the request is routed.
+  req.entryAccess = { route: null, manager: null, metadata: null, resolvedModel: "", error: "", startedAt: Date.now(), origin: entryAccessOrigin(req) };
+  return rec;
+}
+
+// The per-request access context shared by a handler, the legacy access-log
+// writers and the telemetry row feed.
+function prepareEntryAccess(req, route, startedAt) {
+  const access = req.entryAccess || { manager: null, metadata: null, resolvedModel: "", error: "", origin: null };
+  access.route = route;
+  access.startedAt = startedAt;
+  access.origin = access.origin || entryAccessOrigin(req);
+  req.entryAccess = access;
+  return access;
+}
+
+// A refusal before any upstream call (04 §6.1 rec.reject). With a record the
+// finalised row feeds the access log; without one the entry is written now.
+function denyEntryRequest(req, access, { status, message = "", code = "", manager = null, metadata = null, resolvedModel = "", log = null }) {
+  access.manager = manager;
+  access.metadata = metadata;
+  access.resolvedModel = resolvedModel;
+  access.error = message;
+  const rec = gatewayRecord(req);
+  if (rec) {
+    rec.reject({ status, code });
+    return;
+  }
+  if (typeof log === "function" && !log(req, { statusCode: status })) return;
+  appendEntryGatewayAccessLog(buildEntryGatewayAccessEntry(req, access.route, manager, status, access.startedAt, metadata, message, resolvedModel)).catch(() => {});
+}
+
+// Success and failure after dispatch are written when the response is done.
+// With a record the row does that (one finish/close listener pair per response
+// is the recorder's, not a second one here).
+function watchEntryAccess(req, res, access, shouldLog = null) {
+  if (gatewayRecord(req)) return;
+  logEntryGatewayAccessWhenDone(req, res, ({ status, terminalState, origin }) => buildEntryGatewayAccessEntry(
+    req, access.route, access.manager, status, access.startedAt, access.metadata, access.error, access.resolvedModel, { terminalState, origin },
+  ), shouldLog);
+}
+
+// The credential's identity for the row (04 §5.3). A key that failed
+// authentication is never recorded, not even as a hash.
+function recordGatewayAuth(req, auth) {
+  const rec = gatewayRecord(req);
+  if (!rec || !auth?.ok) return;
+  let keyId = String(auth.keyId || auth.client?.id || "");
+  if (!keyId && auth.authRequired) {
+    try {
+      keyId = core.globalServiceBillingClientId({ apiKey: core.extractServiceApiKey(req.headers || {}, { acceptRawAuthorization: true }) });
+    } catch {
+      keyId = "";
+    }
+  }
+  const matched = findManager(auth.matchedManager);
+  rec.setAuth({
+    keyId,
+    customerId: auth.customerId || "",
+    authSource: core.serviceApiKeySource(req.headers || {}),
+    authManagerId: matched?.billingId || auth.matchedManager || "",
+  });
+}
+
+const RECORDED_ENGINE_IDS = new Set(["vllm", "sglang", "llamacpp"]);
+
+// legacy engine fields: "vllm"/"sglang" inside vllm-manager, "llama" in the
+// llama manager (00 §3).
+function recordedEngineId(instance, manager) {
+  const raw = String(instance?.engineId || "").trim().toLowerCase();
+  const engine = raw === "llama" ? "llamacpp" : raw;
+  if (RECORDED_ENGINE_IDS.has(engine)) return engine;
+  return manager?.id === "llama" ? "llamacpp" : "";
+}
+
+function recordGatewayRouting(req, selection, resolvedModel, requestedModel, metadata) {
+  const rec = gatewayRecord(req);
+  if (!rec) return;
+  const manager = selection.manager;
+  const instance = selection.instance || null;
+  const instanceId = String(instance?.instanceId || instance?.id || "");
+  rec.setRouting({
+    managerId: manager?.id || "",
+    fleetId: instance?.fleetId || (manager?.id && instanceId ? `${manager.id}:${instanceId}` : ""),
+    engineId: recordedEngineId(instance, manager),
+    runtimeId: instance?.runtimeId || "",
+    launchId: instance?.launchId || "",
+    modelRequested: requestedModel,
+    modelResolved: resolvedModel,
+    stream: metadata?.stream === true,
+    routeReason: selection.reason || "",
+  });
+  rec.setExtra({ toolSchemaCount: metadata?.toolSchemaCount || 0 });
+}
+
+// The recorder's onRow: keeps the legacy gateway-access.log fed, now from the
+// finalised row (real tokens, the minted request id, the terminal state), for
+// one more release (04 §6.5). telemetry.keepJsonlAccessLog=false turns it off.
+function handleTelemetryRow(row, { req } = {}) {
+  if (!req || !telemetry?.keepJsonlAccessLog()) return;
+  const access = req.entryAccess || {};
+  if (isTtsGatewayPath(String(req.url || "").split("?")[0]) && !shouldLogTtsAccess(req, { statusCode: row.status })) return;
+  const entry = buildEntryGatewayAccessEntry(
+    req, access.route || null, access.manager || null, row.status, access.startedAt || row.receivedAt,
+    access.metadata || null, access.error || "", access.resolvedModel || "",
+    { terminalState: row.terminalState, origin: access.origin || undefined, row },
+  );
+  appendEntryGatewayAccessLog(entry).catch(() => {});
+}
+
+// Starts the recorder and its store; called before the entry listens. With
+// telemetry.enabled false (TELEMETRY_ENABLED=0) nothing is recorded.
+async function startTelemetry(options = {}) {
+  if (telemetry) return telemetry;
+  // Smoke runs (AI_FRONTEND_SMOKE=1) start next to whatever listens on the
+  // default ports, so they run no recorder and no collectors.
+  if (process.env.AI_FRONTEND_SMOKE === "1") return null;
+  const runtime = createTelemetryRuntime({
+    aiRoot: AI_ROOT,
+    dataDir: path.join(ROOT, "data"),
+    getBillingStore,
+    ...options,
+    onRow: handleTelemetryRow,
+  });
+  await runtime.start();
+  telemetry = runtime;
+  return runtime;
+}
+
+// Finalises in-flight records, flushes (2 s cap) and closes the store.
+async function stopTelemetry(options = {}) {
+  const runtime = telemetry;
+  telemetry = null;
+  if (!runtime) return { ok: true };
+  // Telemetry never holds up shutdown for long.
+  let guard = null;
+  try {
+    return await Promise.race([
+      runtime.stop(options),
+      new Promise((resolve) => {
+        guard = setTimeout(() => resolve({ ok: true, timedOut: true }), 3000);
+        guard.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    console.warn(core.redactSecrets(`service-entry: telemetry did not stop cleanly: ${error?.message || error}`));
+    return { ok: false };
+  } finally {
+    clearTimeout(guard);
+  }
+}
+
 function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, body, error, resolvedModel = "", details = {}) {
   const parsedBody = Buffer.isBuffer(body)
     ? parseRequestJsonBody(body)
@@ -2128,9 +2336,14 @@ function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, bo
       : null;
   const headers = req.headers || {};
   const origin = details.origin || entryAccessOrigin(req);
+  // A finalised telemetry row (04 §6.5) carries the minted request id, the
+  // real token counts and the measured duration.
+  const row = details.row || null;
+  const promptTokens = Math.max(0, Number(row?.promptTokens) || 0);
+  const completionTokens = Math.max(0, Number(row?.outputTokens) || 0);
   return {
     at: new Date().toISOString(),
-    requestId: core.normalizeOpenAiGatewayRequestId(headers["x-request-id"]),
+    requestId: row ? row.requestId : core.normalizeOpenAiGatewayRequestId(headers["x-request-id"]),
     remoteAddress: origin.remoteAddress,
     socketAddress: origin.socketAddress,
     method: req.method,
@@ -2148,10 +2361,10 @@ function buildEntryGatewayAccessEntry(req, route, manager, status, startedAt, bo
     userAgent: headerValue(headers, "user-agent"),
     origin: headerValue(headers, "origin"),
     refererHost: headerHost(headers, "referer"),
-    durationMs: Date.now() - startedAt,
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
+    durationMs: row ? row.durationMs : Date.now() - startedAt,
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+    totalTokens: promptTokens + completionTokens,
     toolSchemaCount: Number.isFinite(Number(parsedBody?.toolSchemaCount))
       ? Math.max(0, Number(parsedBody.toolSchemaCount))
       : Array.isArray(parsedBody?.tools) ? parsedBody.tools.length : 0,
@@ -2591,6 +2804,10 @@ function buildProxyHeaders(headers, req = null, options = {}) {
     ...TRUST_HEADER_NAMES,
   ]);
   if (options.stripContentEncoding) stripped.add("content-encoding");
+  // With a request record the inbound x-request-id is never forwarded; the id
+  // the entry minted replaces it (04 §5.1, contract change C1).
+  const requestId = String(options.requestId || gatewayRecord(req)?.requestId || "");
+  if (requestId) stripped.add("x-request-id");
   for (const [key, value] of Object.entries(headers || {})) {
     const lower = key.toLowerCase();
     // Trust headers are dropped before being re-issued below, so a client
@@ -2612,15 +2829,23 @@ function buildProxyHeaders(headers, req = null, options = {}) {
   if (clientAddress) {
     output["x-forwarded-for"] = clientAddress;
   }
+  if (requestId) output["x-request-id"] = requestId;
   return output;
 }
 
 function buildResponseHeaders(headers, req) {
   const output = gatewayCorsHeaders(req);
+  const rec = gatewayRecord(req);
   for (const [key, value] of headers.entries()) {
     const lower = key.toLowerCase();
     if (["connection", "content-length", "transfer-encoding", "content-encoding", "keep-alive", "te", "trailer"].includes(lower) || lower.startsWith("proxy-")) continue;
+    // The caller sees the id of the record, whatever the upstream echoed.
+    if (rec && (lower === "x-request-id" || lower === "x-client-request-id")) continue;
     output[key] = value;
+  }
+  if (rec) {
+    output["x-request-id"] = rec.requestId;
+    if (rec.clientRequestId) output["x-client-request-id"] = rec.clientRequestId;
   }
   output["cache-control"] = output["cache-control"] || "no-store";
   return output;
@@ -2636,7 +2861,10 @@ function gatewayCorsHeaders(req) {
 function createUpstreamControl(req, res, options = {}) {
   const controller = new AbortController();
   const timeoutMs = Math.max(1000, Number(options.timeoutMs || process.env.SERVICE_ENTRY_GATEWAY_TIMEOUT_MS || 30 * 60 * 1000));
-  const timer = setTimeout(() => controller.abort(new Error("Gateway request timed out.")), timeoutMs);
+  const timer = setTimeout(() => {
+    gatewayRecord(req)?.timedOut();
+    controller.abort(new Error("Gateway request timed out."));
+  }, timeoutMs);
   timer.unref?.();
   const abort = () => {
     if (!res.writableEnded) controller.abort(new Error("Client disconnected."));
@@ -2911,8 +3139,9 @@ function shutdownSoon(options = {}) {
       if (exited) return;
       exited = true;
       Promise.resolve()
+        .then(() => stopTelemetry())
+        .catch(() => {})
         .then(() => core.flushAllAccessLogs())
-        .then(() => stopTelemetryRuntime())
         .catch(() => {})
         .finally(() => {
           closeBillingStore();
@@ -3015,6 +3244,9 @@ module.exports = {
   setEntryGatewayAccessSink,
   shouldLogTtsAccess,
   logEntryGatewayAccessWhenDone,
+  startTelemetry,
+  stopTelemetry,
+  getTelemetry: () => telemetry,
   logStartupSummary,
   mountRouteModules,
   // The live mount table (ctx.bus, ctx.auth) once startServiceEntry() ran.

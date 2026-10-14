@@ -213,6 +213,11 @@ function normalizeManagerInstances(manager = {}, payload = {}) {
       lifecycleState: hasOnlyLastKnownModels({ models }) && detectedLifecycleState === "ready"
         ? "loading"
         : detectedLifecycleState,
+      // What the manager reports about the engine behind the instance; the
+      // gateway recorder stamps it on each request row (04 TEL-5).
+      ...(instance.engine || instance.engineId ? { engineId: String(instance.engineId || instance.engine) } : {}),
+      ...(instance.runtime?.id ? { runtimeId: String(instance.runtime.id) } : {}),
+      ...(instance.launchId ? { launchId: String(instance.launchId) } : {}),
       image: instance.image || instance.container?.image || "",
       port: Number(instance.port || instance.endpoint?.port || 0) || null,
       localBaseUrl: instance.localBaseUrl || instance.endpoint?.localUrl || null,

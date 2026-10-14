@@ -243,7 +243,7 @@ function createEntrySecurity(options = {}) {
       "access-control-allow-headers": "authorization,content-type,x-api-key,anthropic-api-key,anthropic-version,api-key",
       // Routing is metadata about the request the caller just made, so a
       // browser client is allowed to read which engine served it.
-      "access-control-expose-headers": "x-local-ai-route",
+      "access-control-expose-headers": "x-request-id, x-client-request-id, x-local-ai-route",
       "access-control-max-age": "600",
     };
     if (!origin) return base;

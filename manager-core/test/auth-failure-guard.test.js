@@ -60,3 +60,20 @@ test("tracked entries are bounded", () => {
   for (let index = 0; index < 250; index += 1) guard.record(`10.0.0.${index}`);
   assert.ok(guard.describe().tracked <= 100);
 });
+
+test("onBan reports each ban once with the masked address, and never breaks record()", () => {
+  const time = clock(Date.UTC(2026, 9, 14, 8, 0, 0));
+  const bans = [];
+  const guard = createAuthFailureGuard({ maxFailures: 2, banMs: 60_000, now: time.now, onBan: (ban) => bans.push(ban) });
+  guard.record("203.0.113.9");
+  assert.deepEqual(bans, [], "no ban below the threshold");
+  assert.equal(guard.record("203.0.113.9").banned, true);
+  assert.deepEqual(bans, [{ ip: "203.0.113.9", ipMasked: "203.0.113.x", until: "2026-10-14T08:01:00.000Z", failures: 2 }]);
+  guard.check("203.0.113.9");
+  assert.equal(bans.length, 1, "a blocked request is not a new ban");
+
+  const throwing = createAuthFailureGuard({ maxFailures: 1, now: time.now, onBan: () => { throw new Error("sink down"); } });
+  const result = throwing.record("198.51.100.4");
+  assert.equal(result.banned, true);
+  assert.equal(throwing.check("198.51.100.4").banned, true);
+});

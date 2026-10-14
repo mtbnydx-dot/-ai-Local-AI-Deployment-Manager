@@ -203,6 +203,32 @@ test("proxy headers keep auth fields and remove hop-by-hop fields", () => {
   }, { token: entry.security.getTrustToken() }), "vision");
 });
 
+test("x-request-id: the minted req_ id replaces the client's, and is the only one forwarded", () => {
+  const minted = "req_k3m2q2x7p4a5c5d3h6j7";
+  const inbound = { "X-Request-Id": "client-supplied-id", authorization: "Bearer service-key", "content-type": "application/json" };
+  const peer = { socket: { remoteAddress: "192.168.1.100" }, headers: inbound };
+
+  // A record on the request (the recorder is running) wins over the client.
+  const recorded = entry.buildProxyHeaders(inbound, { ...peer, telemetryRecord: { requestId: minted } });
+  assert.match(recorded["x-request-id"], /^req_[a-z2-7]{20}$/);
+  assert.equal(recorded["x-request-id"], minted);
+  assert.deepEqual(Object.keys(recorded).filter((name) => name.toLowerCase() === "x-request-id"), ["x-request-id"], "the client's header is removed, not duplicated");
+  assert.equal(entry.buildProxyHeaders(inbound, peer, { requestId: minted })["x-request-id"], minted);
+
+  // Without a record (TELEMETRY_ENABLED=0) the headers are what they were.
+  const untouched = entry.buildProxyHeaders(inbound, peer);
+  assert.equal(untouched["X-Request-Id"], "client-supplied-id");
+  assert.equal(untouched["x-request-id"], undefined);
+
+  const aux = entry.buildAuxProxyHeaders(inbound, { ...peer, telemetryRecord: { requestId: minted } }, "upstream-credential");
+  assert.equal(aux["x-request-id"], minted);
+  assert.equal(Object.keys(aux).filter((name) => name.toLowerCase() === "x-request-id").length, 1);
+  assert.equal(entry.buildAuxProxyHeaders(inbound, peer, "upstream-credential")["x-request-id"], "client-supplied-id");
+
+  const tts = entry.buildTtsProxyHeaders(inbound, { ...peer, url: "/gateway/tts/api/jobs", method: "GET", telemetryRecord: { requestId: minted } });
+  assert.equal(tts["x-request-id"], minted);
+});
+
 test("gateway access entries contain metadata but not prompt content", () => {
   const route = entry.parseGatewayRoute("/gateway/auto/claude/v1/messages");
   const manager = entry.findManager("vllm");
