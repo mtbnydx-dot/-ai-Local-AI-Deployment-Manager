@@ -18,6 +18,8 @@ const expr = require("./expr");
 const dockerHost = require("./hosts/docker");
 const legacyAliases = require("./legacy-aliases");
 const metrics = require("./metrics");
+const introspect = require("./introspect");
+const runtimeFacts = require("./runtime-facts");
 const paramCatalog = require("./param-catalog");
 const registry = require("./registry");
 const routes = require("./routes");
@@ -72,6 +74,8 @@ module.exports = {
   // 00 §9.12): parsePrometheus, mapPrometheus and summarize for the 04
   // collector, the histogram helpers, and the per-manager instance sampler.
   metrics,
+  introspect,
+  runtimeFacts,
   // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
   adapters,
   adapterFor,

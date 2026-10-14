@@ -1,0 +1,8 @@
+Usage: trtllm-serve [OPTIONS] MODEL
+
+Options:
+  --tp_size INTEGER            Tensor parallel size.  [default: 1]
+  --host TEXT                  Host to bind.  [default: 127.0.0.1]
+  --backend [pytorch|tensorrt]  Inference backend.  [default: pytorch]
+  --trust_remote_code          Trust custom modeling code.
+  --help                       Show this message and exit.
