@@ -60,6 +60,10 @@ venvs/
 __pycache__/
 *.pyc
 
+# Owner config and the deploy stamp (docs/overhaul/06-ops.md, section 2.2)
+/config/
+/version.json
+
 # Secrets and local-only config
 .env
 .env.*
