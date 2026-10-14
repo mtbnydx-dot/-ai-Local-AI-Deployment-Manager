@@ -11,8 +11,18 @@
       miniStat,
       renderIcons,
       onApplyModelCheck,
+      api,
+      notify = () => {},
+      onHealthAction = () => {},
+      getLanguage = () => "zh-CN",
       options = {},
     } = deps;
+
+    // Remediation buttons from /api/tools/health actionDetails (08 P0-23). The
+    // UI sends a request only for an "api" action on this allowlist (the same
+    // one the server applies); a "command" action is copied, never run.
+    // Unknown kinds render nothing.
+    const HEALTH_API_ACTION_ALLOWLIST = new Set(["POST /api/docker/start"]);
 
     const copy = {
       healthEmpty: "点击检查后显示环境状态。",
@@ -55,8 +65,70 @@
             <strong>${escapeHtml(check.label)}</strong>
           </div>
           <p>${escapeHtml(check.detail || "")}</p>
+          ${renderHealthActions(check)}
         </article>
       `).join("");
+      if (!grid.__healthActionsBound) {
+        grid.__healthActionsBound = true;
+        grid.addEventListener("click", handleHealthAction);
+      }
+    }
+
+    function actionLabel(label) {
+      if (label && typeof label === "object") {
+        const en = getLanguage() === "en-US";
+        return String((en ? label.en : label.zh) || label.zh || label.en || "");
+      }
+      return String(label || "");
+    }
+
+    function isAllowedApiAction(method, path) {
+      return HEALTH_API_ACTION_ALLOWLIST.has(`${String(method || "").toUpperCase()} ${String(path || "")}`);
+    }
+
+    function renderHealthActions(check) {
+      const buttons = (Array.isArray(check.actionDetails) ? check.actionDetails : []).map((action) => {
+        const label = actionLabel(action?.label);
+        if (!label) return "";
+        if (action.kind === "api" && typeof api === "function" && isAllowedApiAction(action.method, action.path)) {
+          return `<button class="job-action-button primary" type="button" data-health-action="api" data-method="${escapeAttr(String(action.method).toUpperCase())}" data-path="${escapeAttr(action.path)}">${escapeHtml(label)}</button>`;
+        }
+        if (action.kind === "command" && typeof action.command === "string" && action.command) {
+          return `<code>${escapeHtml(action.command)}</code><button class="job-action-button" type="button" data-health-action="copy" data-command="${escapeAttr(action.command)}">${escapeHtml(label)}</button>`;
+        }
+        return "";
+      }).filter(Boolean);
+      return buttons.length ? `<div class="job-actions health-actions">${buttons.join("")}</div>` : "";
+    }
+
+    async function handleHealthAction(event) {
+      const button = event.target.closest("[data-health-action]");
+      if (!button) return;
+      const label = button.textContent.trim();
+      if (button.dataset.healthAction === "copy") {
+        const command = button.dataset.command || "";
+        try {
+          await navigator.clipboard.writeText(command);
+          notify("已复制命令", command, "success");
+        } catch {
+          notify("复制失败，请手动复制命令", command, "info");
+        }
+        return;
+      }
+      if (button.dataset.healthAction !== "api") return;
+      const { method, path } = button.dataset;
+      // Checked again at click time: the button carries its own method and path.
+      if (!isAllowedApiAction(method, path) || typeof api !== "function") return;
+      button.disabled = true;
+      try {
+        await api(path, { method, body: "{}" });
+        notify("已执行修复操作", label, "success");
+        await onHealthAction({ method, path });
+      } catch (error) {
+        notify("修复操作失败", error?.message || String(error || ""), "error");
+      } finally {
+        button.disabled = false;
+      }
     }
 
     function renderModelCheck() {

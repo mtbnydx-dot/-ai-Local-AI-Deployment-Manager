@@ -339,6 +339,45 @@ const UI_TEXT_TRANSLATIONS = {
   "当前没有被释放的实例。": "No instances are currently released.",
   "唤醒": "Wake",
   "忘记": "Forget",
+  "唤醒模型": "Wake model",
+  "唤醒任务已创建": "Wake task created",
+  "唤醒失败": "Wake failed",
+  "替换正在运行的模型": "Replace the running model",
+  "替换并唤醒": "Replace and wake",
+  "原 API Key 已不可用，请从启动页重新启动该模型。": "The original API key is no longer available. Start the model again from the launch page.",
+  "忘记休眠记录": "Forget the release record",
+  // 运行实例 → 按实例查看日志（08 P0-3）
+  "日志": "Logs",
+  "查看此实例的日志": "Show this instance's logs",
+  "查看主实例日志": "Show primary instance logs",
+  // 下载失败卡片、镜像测速建议、多存储位置磁盘面板（08 P0-8 / P0-13 / P0-11）
+  "此错误不会自动重试": "Not retried automatically",
+  "镜像测速": "Test mirror speed",
+  "对 huggingface.co、hf-mirror.com 和 ModelScope 各做一次计时下载并给出建议；点「应用建议」才会修改设置": "Times one download from huggingface.co, hf-mirror.com and ModelScope and suggests the fastest; settings change only when you click “Apply suggestion”",
+  "应用建议": "Apply suggestion",
+  "已应用测速建议": "Suggestion applied",
+  "应用测速建议失败": "Could not apply the suggestion",
+  "镜像可用，建议开启": "Mirror reachable, recommended",
+  "镜像不可用": "Mirror unreachable",
+  "镜像可用，但官方源更快，建议关闭镜像": "Mirror reachable, but the official source is faster; turning the mirror off is recommended",
+  "ModelScope 更快，建议改用 ModelScope 下载": "ModelScope is faster; downloading from ModelScope is recommended",
+  "存储位置": "Storage location",
+  "模型占用": "Used by models",
+  "默认": "Default",
+  "不可用": "Unavailable",
+  "原模型库": "Original model library",
+  // GGUF 架构不在已验证列表（08 P0-15）与下载前预检文案（08 P0-14）
+  "未知（未验证）": "Unknown (unverified)",
+  "该架构不在已验证的架构列表中，能否运行取决于当前 llama.cpp 版本。": "This architecture is not in the verified architecture list. Whether it runs depends on the current llama.cpp build.",
+  "需要在启动参数中勾选 trust-remote-code（会执行仓库内的 Python 代码）。": "Enable trust-remote-code in the launch options (this runs Python code from the repository).",
+  // 健康检查修复操作（08 P0-23）；按钮文字由服务端按语言给出，这里兜底切换语言前的中文
+  "启动 Docker": "Start Docker",
+  "复制拉取命令": "Copy pull command",
+  "安装下载工具：运行 install-download-cli.cmd": "Install the download tool: run install-download-cli.cmd",
+  "已复制命令": "Command copied",
+  "复制失败，请手动复制命令": "Copy failed; copy the command manually",
+  "已执行修复操作": "Remediation requested",
+  "修复操作失败": "Remediation failed",
   "测速历史与配置对比": "Benchmark history and configuration comparison",
   "每次测速都会连同当时的启动参数一起保存。勾选两条以上即可看出\"改了哪个参数、快了多少\"。": "Every benchmark is stored with the launch settings it ran under. Select two or more to see which setting changed and how much it helped.",
   "暂无测速记录。跑一次测速后，这里会连同当时的启动参数一起保存，供后续对比。": "No benchmark runs yet. After a run, it is stored here together with its launch settings for later comparison.",
@@ -394,7 +433,11 @@ const UI_TEXT_TRANSLATIONS = {
   "DSpark 接受率": "DSpark acceptance",
   "请求数": "Requests",
   "当前实例": "Current instance",
-  "当前输出速度": "Current output speed",
+  "输出速度（实时）": "Output speed (live)",
+  "输出速度（采样中）": "Output speed (sampling)",
+  "输出速度（多来源合计）": "Output speed (combined sources)",
+  "平均延迟（启动以来）": "Average latency (since start)",
+  // The access-log card (external-access.js) still renders the plain label.
   "平均延迟": "Average latency",
   "活跃 KV cache": "Active KV cache",
   "只表示当前正在推理的请求；聊天历史在 Open WebUI 侧保存": "Only active inference requests are shown. Chat history is stored by OpenWebUI.",
@@ -538,7 +581,11 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
   "生成": "Generate",
   "公网 Base URL": "Public base URL",
   "CORS 策略": "CORS policy",
-  "临时全开放：允许任意浏览器 Origin，并反射预检请求头；API Key、限流和模型权限仍独立生效。": "Temporarily open to any browser Origin and reflect preflight headers. API keys, rate limits, and model permissions still apply independently.",
+  "限制来源与请求头": "Restrict origins and headers",
+  "任意来源（需 API Key）": "Any origin (API key required)",
+  "允许公网网页访问本机/局域网地址（Private Network Access）": "Allow public websites to reach this private address (Private Network Access)",
+  "任意来源：允许任意浏览器 Origin 并反射预检请求头，但从不允许携带凭据；只在要求 API Key 时生效，限流和模型权限仍独立生效。": "Any origin: every browser Origin is allowed and preflight headers are reflected, but credentials are never allowed. This applies only while an API key is required; rate limits and model permissions still apply independently.",
+  "限制模式：只允许下方 Origin；请求头使用内置安全列表和额外允许列表。要选择任意来源，请先勾选“对外访问必须使用 API Key”。": "Restricted mode: only the origins below are allowed; request headers use the built-in safe list plus the additional allowlist. To allow any origin, first enable “Require API key for external access”.",
   "OpenAI 兼容接口": "OpenAI-compatible endpoint",
   "OpenCode 代理": "OpenCode proxy",
   "暴露 metrics": "Expose metrics",
@@ -871,6 +918,17 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
 });
 
 const UI_TRANSLATION_PATTERNS = [
+  // 统计速度来源标签与唤醒替换确认（08 P0-7 / P0-1）
+  [/^输出速度（近 (\d+) 秒平均）$/u, "Output speed ($1 s average)"],
+  [/^唤醒会停止并替换正在运行的「(.+)」。确定继续？$/u, "Waking will stop and replace the running model \"$1\". Continue?"],
+  [/^将按释放前的启动参数重新启动 (.+)。加载需要时间，期间会占用显存。$/u, "$1 will start again with the launch settings it had before release. Loading takes a while and uses VRAM meanwhile."],
+  [/^将删除 (.+) 的休眠记录，之后无法一键唤醒（模型文件和启动方案不受影响）。$/u, "The release record of $1 will be deleted, so it can no longer be woken with one click (model files and launch profiles are not affected)."],
+  [/^实例：(.+)$/u, "Instance: $1"],
+  [/^官方 (.+) · 镜像 (.+) · ModelScope (.+)$/u, (match, official, mirror, modelscope) => {
+    const probe = (value) => value.replace(/^失败（(.*)）$/u, (_all, reason) => `failed (${reason === "无响应" ? "no response" : reason})`);
+    return `Official ${probe(official)} · Mirror ${probe(mirror)} · ModelScope ${probe(modelscope)}`;
+  }],
+  [/^(.+)，置信度：按名称推断（未验证）。$/u, "$1, confidence: inferred from the name (unverified)."],
   // 闲置释放 / 测速历史：句子里带数值，只能按模式翻译
   [/^已开启：空闲超过 (.+) 分钟且没有排队请求的实例会被释放，启动参数会保留以便唤醒。$/u, "On: an instance idle for more than $1 minutes with nothing queued is released, and its launch settings are kept so it can be woken."],
   [/^(.+) 释放 · 约 (.+) GB 显存已释放 · 空闲 (.+) 分钟$/u, "Released $1 · about $2 GB of VRAM freed · idle $3 minutes"],
@@ -959,6 +1017,9 @@ const UI_TRANSLATION_PATTERNS = [
   [/^在线查找 (.+) 的 (.+) GGUF$/u, "Find $1 $2 GGUF online"],
   [/^没有匹配 (.+) 的文件，请换真实 GGUF 仓库或改成下载整个仓库。 模型盘剩余 (.+)。$/u, "No files match $1. Choose an actual GGUF repository or download the whole repository. Model drive free: $2."],
   [/^只下载匹配 (.+) 的文件。当前元数据没有匹配文件，请先确认仓库内真的存在 (.+)。$/u, "Download only files matching $1. No current metadata matches; confirm that $2 actually exists in the repository."],
+  // The GGUF presets (08 P0-12) now match files, so the matched form shows by default.
+  [/^只下载匹配 (.+) 的文件。当前元数据匹配 (\d+)\/(\d+) 个文件。$/u, "Download only files matching $1. Current metadata matches $2 of $3 files."],
+  [/^只下载匹配 (.+) 的文件。下载时会给 hf CLI 附加 include 过滤。$/u, "Download only files matching $1. The hf CLI gets an include filter at download time."],
   [/^自动重试 (\d+)\/(\d+) · 计划 (.+)$/u, "Automatic retry $1/$2 · Scheduled $3"],
   [/^自动重试 (.+)\/(.+)$/u, "Automatic retry $1/$2"],
   [/^温度 (.+)$/u, "Temperature $1"],
@@ -1004,6 +1065,17 @@ const UI_TRANSLATION_PATTERNS = [
 ];
 
 const UI_PARTIAL_TRANSLATIONS = [
+  // llama.cpp 下载预设说明（catalog.js MODEL_PRESETS）
+  [/单卡友好的日常中文模型。/g, "A single-GPU-friendly everyday Chinese model."],
+  [/质量和速度比较均衡。/g, "A good balance of quality and speed."],
+  [/更强推理，建议高显存或量化。/g, "Stronger reasoning; use a high-VRAM GPU or quantization."],
+  [/适合多卡或量化部署。/g, "Suited to multi-GPU or quantized deployment."],
+  [/推理蒸馏小规格。/g, "A small reasoning-distilled model."],
+  [/推理能力更稳，显存需求更高。/g, "Steadier reasoning with higher VRAM needs."],
+  [/建议多卡或量化版本。/g, "Multi-GPU or a quantized build is recommended."],
+  [/英文和通用任务稳定。/g, "Stable for English and general tasks."],
+  [/轻量 instruction 模型。/g, "A lightweight instruction model."],
+  [/中等规模通用模型，建议高显存。/g, "A mid-size general model; high VRAM recommended."],
   [/发现需要处理的问题/g, "Issues need attention"],
   [/Docker Desktop 引擎未就绪。请先用页面的一键 Docker 按钮启动 Docker Desktop，等状态变为可用后再启动模型。/g, "Docker Desktop is not ready. Start Docker Desktop with the Docker button, wait until it is available, then start the model."],
   [/已定稿 /g, "Finalized "],

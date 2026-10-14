@@ -22,18 +22,24 @@ const PRECISION_PRESETS = [
   { value: "base", label: "原始仓库 / 不筛选", quantFilter: "", launchQuantization: "" },
 ];
 
+// llama.cpp only loads GGUF, so every preset points at a GGUF repository and
+// pre-selects a quant the repository really has (08 P0-12). Official publisher
+// repos are used where one exists; DeepSeek, Meta, Google and Mistral publish
+// no ungated GGUF with Q4_K_M, so community quantizers fill in (open decision
+// O10). Qwen's own 0.6B GGUF ships Q8_0 only. Checked against the read-only
+// Hugging Face model API on 2026-10-14; none of these repos is gated.
 const MODEL_PRESETS = [
-  { developer: "Qwen", version: "Qwen3", spec: "0.6B", repo: "Qwen/Qwen3-0.6B", note: "轻量验证和低显存测试。" },
-  { developer: "Qwen", version: "Qwen3", spec: "4B", repo: "Qwen/Qwen3-4B", note: "单卡友好的日常中文模型。" },
-  { developer: "Qwen", version: "Qwen3", spec: "8B", repo: "Qwen/Qwen3-8B", note: "质量和速度比较均衡。" },
-  { developer: "Qwen", version: "Qwen3", spec: "14B", repo: "Qwen/Qwen3-14B", note: "更强推理，建议高显存或量化。" },
-  { developer: "Qwen", version: "Qwen3", spec: "32B", repo: "Qwen/Qwen3-32B", note: "适合多卡或量化部署。" },
-  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "7B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", note: "推理蒸馏小规格。" },
-  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "14B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", note: "推理能力更稳，显存需求更高。" },
-  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "32B", repo: "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", note: "建议多卡或量化版本。" },
-  { developer: "Meta", version: "Llama 3.1 Instruct", spec: "8B", repo: "meta-llama/Meta-Llama-3.1-8B-Instruct", note: "英文和通用任务稳定，可能需要授权 token。" },
-  { developer: "Google", version: "Gemma 3 IT", spec: "4B", repo: "google/gemma-3-4b-it", note: "轻量 instruction 模型，可能需要授权 token。" },
-  { developer: "Mistral", version: "Small Instruct", spec: "24B", repo: "mistralai/Mistral-Small-3.2-24B-Instruct-2506", note: "中等规模通用模型，建议高显存。" },
+  { developer: "Qwen", version: "Qwen3", spec: "0.6B", repo: "Qwen/Qwen3-0.6B-GGUF", precision: "q8_0", note: "轻量验证和低显存测试。" },
+  { developer: "Qwen", version: "Qwen3", spec: "4B", repo: "Qwen/Qwen3-4B-GGUF", precision: "q4_k_m", note: "单卡友好的日常中文模型。" },
+  { developer: "Qwen", version: "Qwen3", spec: "8B", repo: "Qwen/Qwen3-8B-GGUF", precision: "q4_k_m", note: "质量和速度比较均衡。" },
+  { developer: "Qwen", version: "Qwen3", spec: "14B", repo: "Qwen/Qwen3-14B-GGUF", precision: "q4_k_m", note: "更强推理，建议高显存或量化。" },
+  { developer: "Qwen", version: "Qwen3", spec: "32B", repo: "Qwen/Qwen3-32B-GGUF", precision: "q4_k_m", note: "适合多卡或量化部署。" },
+  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "7B", repo: "unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF", precision: "q4_k_m", note: "推理蒸馏小规格。" },
+  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "14B", repo: "unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF", precision: "q4_k_m", note: "推理能力更稳，显存需求更高。" },
+  { developer: "DeepSeek", version: "R1 Distill Qwen", spec: "32B", repo: "unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF", precision: "q4_k_m", note: "建议多卡或量化版本。" },
+  { developer: "Meta", version: "Llama 3.1 Instruct", spec: "8B", repo: "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF", precision: "q4_k_m", note: "英文和通用任务稳定。" },
+  { developer: "Google", version: "Gemma 3 IT", spec: "4B", repo: "unsloth/gemma-3-4b-it-GGUF", precision: "q4_k_m", note: "轻量 instruction 模型。" },
+  { developer: "Mistral", version: "Small Instruct", spec: "24B", repo: "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF", precision: "q4_k_m", note: "中等规模通用模型，建议高显存。" },
 ];
 
 const DTYPE_BYTES = {

@@ -62,6 +62,19 @@
       return { state: "warn", label: value, detail: value, explicit: true };
     }
     const rawState = text(value.state || value.status || value.level).toLowerCase();
+    // An architecture missing from the verified list comes back as status
+    // "unknown" with supported null (08 P0-15). It may still launch, so it is a
+    // warning, and it must never read as "兼容".
+    if (value.supported === null || rawState === "unknown") {
+      return {
+        state: "warn",
+        label: "未知（未验证）",
+        detail: text(value.detail || value.reason || value.message || value.note) || "该架构不在已验证的架构列表中，能否运行取决于当前 llama.cpp 版本。",
+        explicit: true,
+        requiredCommit: text(value.requiredCommit || value.minCommit || value.minimumCommit || value.minimumRevision),
+        image: text(value.image || value.runtimeImage || value.runtime?.image || value.version),
+      };
+    }
     const supported = value.supported ?? value.compatible ?? value.runnable ?? value.canRun;
     const state = supported === true || /^(?:ok|pass|supported|compatible|ready|runnable)$/.test(rawState)
       ? "ok"

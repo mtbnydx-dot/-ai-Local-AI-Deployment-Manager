@@ -52,7 +52,13 @@
       const mode = $("#exposureMode")?.value || "local";
       const publicUrl = $("#exposurePublicBaseUrl");
       const requireKey = $("#exposureRequireApiKey")?.checked;
-      const corsMode = $("#exposureCorsMode")?.value || "open";
+      // CORS is deny-by-default (08 P0-21): "any origin" is only offered while an
+      // API key is required, the same rule the server applies to a saved "open".
+      const corsSelect = $("#exposureCorsMode");
+      const openCorsOption = corsSelect?.querySelector("option[value='open']");
+      if (openCorsOption) openCorsOption.disabled = !requireKey;
+      if (corsSelect && !requireKey && corsSelect.value === "open") corsSelect.value = "restricted";
+      const corsMode = corsSelect?.value || "restricted";
       const allowedOrigins = $("#exposureAllowedOrigins");
       const allowedHeaders = $("#exposureAllowedHeaders");
       if (publicUrl) {
@@ -85,8 +91,10 @@
       }
       if (corsGuidance) {
         corsGuidance.textContent = corsMode === "open"
-          ? "临时全开放：允许任意浏览器 Origin，并反射预检请求头；API Key、限流和模型权限仍独立生效。"
-          : "限制模式：只允许下方 Origin；请求头使用内置安全列表和额外允许列表。";
+          ? "任意来源：允许任意浏览器 Origin 并反射预检请求头，但从不允许携带凭据；只在要求 API Key 时生效，限流和模型权限仍独立生效。"
+          : requireKey
+            ? "限制模式：只允许下方 Origin；请求头使用内置安全列表和额外允许列表。"
+            : "限制模式：只允许下方 Origin；请求头使用内置安全列表和额外允许列表。要选择任意来源，请先勾选“对外访问必须使用 API Key”。";
       }
     }
 
@@ -389,10 +397,11 @@
               <label>
                 <span>CORS 策略</span>
                 <select id="exposureCorsMode" name="corsMode">
-                  <option value="open">全部开放（临时）</option>
                   <option value="restricted">限制来源与请求头</option>
+                  <option value="open">任意来源（需 API Key）</option>
                 </select>
               </label>
+              <label class="check-row wide-field"><input id="exposureAllowPrivateNetwork" name="allowPrivateNetwork" type="checkbox" /><span>允许公网网页访问本机/局域网地址（Private Network Access）</span></label>
               <label class="wide-field"><span>浏览器允许来源（限制模式）</span><textarea id="exposureAllowedOrigins" name="allowedOrigins" rows="3" placeholder="每行一个完整 Origin，例如 capacitor://localhost 或 https://example.com"></textarea></label>
               <label class="wide-field"><span>额外允许请求头（限制模式）</span><textarea id="exposureAllowedHeaders" name="allowedHeaders" rows="2" placeholder="每行一个 Header，例如 user-agent 或 x-client-version；常用鉴权头已内置"></textarea></label>
               <div class="exposure-toggle-grid wide-field">

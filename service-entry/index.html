@@ -1,44 +1,21 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="auto">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>本地模型服务统一入口</title>
   <style>
+    /* 色板由 tokens.css 提供（data-theme="auto" 让它的深色块跟随系统）。这里只保留
+       tokens.css 没有的两个令牌，并为两种主题各定义一次；不要在这里重复定义同名令牌，
+       否则浅色值会盖过深色值，悬停按钮变成浅底浅字。 */
     :root {
       color-scheme: light dark;
-      --bg: #f3f6fb;
-      --surface: #ffffff;
-      --surface-2: #eef3f7;
       --surface-3: #e4ebf3;
-      --line: #d9e2ea;
-      --ink: #14202b;
-      --muted: #607284;
-      --blue: #2563eb;
-      --teal: #0f9f8f;
-      --green: #08783d;
-      --amber: #955000;
-      --red: #dc2626;
       --primary-bg: #1d4ed8;
-      --shadow: 0 14px 32px rgba(22, 34, 51, 0.09);
     }
+    :root[data-theme="dark"] { --surface-3: #223144; }
     @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0a1017;
-        --surface: #111923;
-        --surface-2: #192432;
-        --surface-3: #223144;
-        --line: #2b3a4a;
-        --ink: #e9f0f8;
-        --muted: #9aaec0;
-        --blue: #6aa4ff;
-        --teal: #2dd4bf;
-        --green: #4ade80;
-        --amber: #fbbf24;
-        --red: #f87171;
-        --primary-bg: #1d4ed8;
-        --shadow: 0 18px 38px rgba(0, 0, 0, 0.34);
-      }
+      :root[data-theme="auto"] { --surface-3: #223144; }
     }
     * { box-sizing: border-box; }
     .entry-nav {

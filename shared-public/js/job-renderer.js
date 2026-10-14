@@ -16,7 +16,34 @@
       showMeta = false,
       showLogActions = false,
       showVerifyActions = false,
+      getLanguage = () => "zh-CN",
     } = deps;
+
+    // A classified download failure (08 P0-8) carries everything the card needs
+    // in job.error ("<zh> / <en>" title) and meta.errorHint / meta.errorRetryable,
+    // so codes added later need no change here.
+    function pickLanguage(value) {
+      const en = getLanguage() === "en-US";
+      if (value && typeof value === "object") return String((en ? value.en : value.zh) || value.zh || value.en || "");
+      const text = String(value || "");
+      const parts = text.split(" / ");
+      if (parts.length !== 2 || !/\p{Script=Han}/u.test(parts[0]) || /\p{Script=Han}/u.test(parts[1])) return text;
+      return en ? parts[1] : parts[0];
+    }
+
+    function renderDownloadFailure(job) {
+      const meta = job.meta || {};
+      if (job.type !== "download" || job.status !== "failed" || !meta.errorCode) return "";
+      const title = pickLanguage(job.error) || meta.errorCode;
+      const hint = pickLanguage(meta.errorHint);
+      return `
+        <div class="form-note download-failure-card" data-download-error="${escapeAttr(meta.errorCode)}">
+          <strong class="job-error-text" data-no-i18n>${escapeHtml(title)}</strong>
+          ${hint ? `<p data-no-i18n>${escapeHtml(hint)}</p>` : ""}
+          ${meta.errorRetryable === false ? `<small class="download-failure-no-retry">此错误不会自动重试</small>` : ""}
+        </div>
+      `;
+    }
 
     function renderJobs() {
       const jobs = state.jobs || [];
@@ -46,18 +73,21 @@
       const priorityLabel = priority === "high" ? "高优先级" : priority === "low" ? "低优先级" : priority ? "普通优先级" : "";
       const retryCount = Number(job.meta?.retryCount || 0);
       const maxRetries = Number(job.meta?.maxRetries || 0);
-      const retryLabel = job.type === "download" && maxRetries > 0
+      // A failure classified as not retryable is never retried, so no counter.
+      const retryLabel = job.type === "download" && maxRetries > 0 && job.meta?.errorRetryable !== false
         ? `自动重试 ${retryCount}/${maxRetries}${job.meta?.retryScheduledAt ? ` · 计划 ${formatDateTime(job.meta.retryScheduledAt)}` : ""}`
         : "";
       const tail = compactLogText((job.logs || []).slice(-3).join(" | "), 420);
       const expanded = Boolean(showLogActions && state.expandedJobLogs?.has(job.id));
       const updatedAt = job.updatedAt || job.finishedAt || job.createdAt;
+      const failureCard = renderDownloadFailure(job);
       if (!showMeta) {
         return `
           <article class="job-row ${status.rowClass}">
             <div>
               <h4>${escapeHtml(job.title)}</h4>
               <p>${escapeHtml(tail || status.detail || job.type)}</p>
+              ${failureCard}
               ${renderJobProgress(job)}
             </div>
             <span class="pill ${status.pillClass}">${escapeHtml(status.label)}</span>
@@ -76,8 +106,9 @@
               <span>${escapeHtml(formatDateTime(updatedAt))}</span>
               ${priorityLabel ? `<span>${escapeHtml(priorityLabel)}</span>` : ""}
               ${retryLabel ? `<span>${escapeHtml(retryLabel)}</span>` : ""}
-              ${job.error ? `<span class="job-error-text">${escapeHtml(job.error)}</span>` : ""}
+              ${job.error && !failureCard ? `<span class="job-error-text">${escapeHtml(job.error)}</span>` : ""}
             </div>
+            ${failureCard}
             <p class="job-log-tail" data-no-i18n>${escapeHtml(tail || status.detail)}</p>
             ${renderJobProgress(job)}
             ${expanded ? `<pre class="job-log-full" data-no-i18n>${escapeHtml(compactLogText((job.logs || []).join("\n") || "暂无日志", 30000, true))}</pre>` : ""}

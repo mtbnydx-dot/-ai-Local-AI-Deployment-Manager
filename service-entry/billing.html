@@ -289,6 +289,8 @@
       border-radius: 7px;
       background: #fff;
     }
+    /* 总览里的原始请求记录最多 100 行，限制高度后在表格内滚动。 */
+    .table-wrap.scroll-y { max-height: 440px; overflow-y: auto; }
     table {
       width: 100%;
       min-width: 760px;
@@ -892,14 +894,14 @@
 
       <section class="panel">
         <div class="panel-head">
-          <div class="panel-title"><h2>近期用量</h2><p>按「客户 × 管理器/模型 × 月」聚合；预计消费按价格规则从 tokens 推算，已扣是写入不可变账本的实际扣款</p></div>
+          <div class="panel-title"><h2 id="overviewUsageHeading">最近请求（原始记录，最多 100 条）</h2><p>本月最近的逐条请求记录，未做聚合；按客户和月份的汇总视图会随遥测存储一起提供。消费与扣款明细见「用量与账本」</p></div>
           <button class="small" type="button" data-open-tab="usage">查看账本</button>
         </div>
         <div class="panel-body">
-          <div class="table-wrap">
+          <div class="table-wrap scroll-y">
             <table>
-              <thead><tr><th>周期</th><th>客户</th><th>管理器 / 模型</th><th>请求</th><th>Tokens</th><th>预计消费</th><th>已扣</th></tr></thead>
-              <tbody id="overviewUsageRows"><tr><td class="empty-cell" colspan="7">正在读取用量...</td></tr></tbody>
+              <thead><tr><th>时间</th><th>客户</th><th>管理器</th><th>模型</th><th>Tokens</th><th>状态</th></tr></thead>
+              <tbody id="overviewUsageRows"><tr><td class="empty-cell" colspan="6">正在读取用量...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -1089,12 +1091,12 @@
 
     <section class="tab-panel" id="usagePanel" role="tabpanel" aria-labelledby="usageTab" data-tab-panel="usage" hidden>
       <section class="panel">
-        <div class="panel-head"><div class="panel-title"><h2>本期用量</h2><p>预计消费按价格规则从 tokens 推算；已扣是实际写入不可变账本的扣款，两者出现差值属正常（如价格生效前的用量）</p></div></div>
+        <div class="panel-head"><div class="panel-title"><h2 id="billingUsageHeading">最近请求（原始记录，最多 100 条）</h2><p>本月最近的逐条请求记录，未做聚合。预计消费按价格规则从 tokens 推算；已扣是实际写入不可变账本的扣款，两者出现差值属正常（如价格生效前的用量）</p></div></div>
         <div class="panel-body">
           <div class="table-wrap">
             <table>
-              <thead><tr><th>周期</th><th>客户</th><th>管理器 / 模型</th><th>请求</th><th>输入 Tokens</th><th>输出 Tokens</th><th>预计消费</th><th>已扣</th><th>更新时间</th></tr></thead>
-              <tbody id="billingUsageRows"><tr><td class="empty-cell" colspan="9">正在读取本期用量...</td></tr></tbody>
+              <thead><tr><th>时间</th><th>客户</th><th>管理器 / 模型</th><th>输入 Tokens</th><th>输出 Tokens</th><th>预计消费</th><th>已扣</th><th>状态</th></tr></thead>
+              <tbody id="billingUsageRows"><tr><td class="empty-cell" colspan="8">正在读取请求记录...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -1558,7 +1560,11 @@
         managerId: safeText(source.managerId, 40),
         model: safeText(source.model ?? source.modelId, 160),
         period: safeText(source.period ?? source.billingPeriod ?? source.date ?? source.at, 60),
+        at: safeText(source.at ?? source.createdAt, 80),
         requests: integerFromApi(source.requests ?? source.requestCount, "1"),
+        httpStatus: integerFromApi(source.status ?? source.responseStatus, ""),
+        ok: source.ok === true ? true : source.ok === false ? false : null,
+        terminalState: safeText(source.terminalState, 40),
         inputTokens: integerFromApi(source.inputTokens, "0"),
         outputTokens: integerFromApi(source.outputTokens, "0"),
         totalTokens: integerFromApi(source.totalTokens ?? source.tokens, "0"),
@@ -1753,19 +1759,35 @@
 
     function renderOverviewUsage() {
       const body = document.querySelector("#overviewUsageRows");
-      const items = billingState.usage.slice(0, 20);
-      if (!items.length) return setEmptyTable(body, 7, billingState.loaded ? "暂无近期用量。" : "用量接口尚未提供数据。");
+      // 接口返回的是逐条原始请求（limit=100），不是按客户/月聚合的结果，所以这里逐行列出。
+      const items = billingState.usage.slice(0, 100);
+      if (!items.length) return setEmptyTable(body, 6, billingState.loaded ? "暂无最近请求。" : "用量接口尚未提供数据。");
       body.replaceChildren(...items.map(function (usage) {
         const row = node("tr");
-        addCell(row, usage.period || "—");
+        addCell(row, formatDateTime(usage.at || usage.updatedAt));
         addCell(row, customerLabel(usage.customerId));
-        addCell(row, managerLabel(usage.managerId) + (usage.model ? " · " + usage.model : ""));
-        addCell(row, formatInteger(usage.requests));
+        addCell(row, managerLabel(usage.managerId));
+        addCell(row, usage.model || "—");
         addCell(row, formatInteger(usage.totalTokens));
-        addCell(row, formatCredits(usage.projectedCost || usage.cost));
-        addCell(row, formatCredits(usage.debited || "0"));
+        addCell(row, usageStatusNode(usage), { node: true });
         return row;
       }));
+    }
+
+    const USAGE_TERMINAL_STATES = {
+      completed: ["完成", "ok"],
+      failed: ["失败", "fail"],
+      timeout: ["超时", "fail"],
+      cancelled: ["已取消", "warn"],
+      disconnected: ["连接中断", "warn"],
+      ambiguous: ["结果不明", "warn"],
+    };
+
+    function usageStatusNode(usage) {
+      const known = USAGE_TERMINAL_STATES[usage.terminalState];
+      const fallback = usage.ok === true ? ["成功", "ok"] : usage.ok === false ? ["失败", "fail"] : ["—", ""];
+      const [label, tone] = known || fallback;
+      return statusNode(usage.httpStatus ? label + " · " + usage.httpStatus : label, tone);
     }
 
     function renderCustomers() {
@@ -1848,18 +1870,17 @@
 
     function renderUsage() {
       const body = document.querySelector("#billingUsageRows");
-      if (!billingState.usage.length) return setEmptyTable(body, 9, billingState.loaded ? "本期暂无可计费用量。" : "用量接口尚未提供数据。");
+      if (!billingState.usage.length) return setEmptyTable(body, 8, billingState.loaded ? "本月暂无请求记录。" : "用量接口尚未提供数据。");
       body.replaceChildren(...billingState.usage.map(function (usage) {
         const row = node("tr");
-        addCell(row, usage.period || "—");
+        addCell(row, formatDateTime(usage.at || usage.updatedAt));
         addCell(row, customerLabel(usage.customerId));
         addCell(row, managerLabel(usage.managerId) + (usage.model ? " · " + usage.model : ""));
-        addCell(row, formatInteger(usage.requests));
         addCell(row, formatInteger(usage.inputTokens));
         addCell(row, formatInteger(usage.outputTokens));
         addCell(row, formatCredits(usage.projectedCost || usage.cost));
         addCell(row, formatCredits(usage.debited || "0"));
-        addCell(row, formatDateTime(usage.updatedAt));
+        addCell(row, usageStatusNode(usage), { node: true });
         return row;
       }));
     }
