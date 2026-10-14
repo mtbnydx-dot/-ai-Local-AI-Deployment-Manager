@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-glm45-air",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "GLM-4.5-Air",
+  "layout": "indexed",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic GLM-4.5-Air checkpoint: 128 routed experts plus one shared, first layer dense, layer 46 is the next-n (MTP) layer, <arg_key>/<arg_value> tool calls."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"LICENSE","bytes":1063,"kind":"placeholder"},
+    {"name":"README.md","bytes":8112,"kind":"placeholder"},
+    {"name":"chat_template.jinja","bytes":1283,"kind":"captured"},
+    {"name":"config.json","bytes":978,"kind":"captured"},
+    {"name":"generation_config.json","bytes":155,"kind":"captured"},
+    {"name":"model-00001-of-00010.safetensors","bytes":20460767576,"kind":"safetensors"},
+    {"name":"model-00002-of-00010.safetensors","bytes":23415179240,"kind":"safetensors"},
+    {"name":"model-00003-of-00010.safetensors","bytes":23415181232,"kind":"safetensors"},
+    {"name":"model-00004-of-00010.safetensors","bytes":23415181232,"kind":"safetensors"},
+    {"name":"model-00005-of-00010.safetensors","bytes":23415181232,"kind":"safetensors"},
+    {"name":"model-00006-of-00010.safetensors","bytes":23415181232,"kind":"safetensors"},
+    {"name":"model-00007-of-00010.safetensors","bytes":23415181232,"kind":"safetensors"},
+    {"name":"model-00008-of-00010.safetensors","bytes":23415181232,"kind":"safetensors"},
+    {"name":"model-00009-of-00010.safetensors","bytes":23415181232,"kind":"safetensors"},
+    {"name":"model-00010-of-00010.safetensors","bytes":10674728016,"kind":"safetensors"},
+    {"name":"model.safetensors.index.json","bytes":1651198,"kind":"index"},
+    {"name":"tokenizer.json","bytes":19970699,"kind":"placeholder"},
+    {"name":"tokenizer_config.json","bytes":259,"kind":"captured"}
+  ]
+}

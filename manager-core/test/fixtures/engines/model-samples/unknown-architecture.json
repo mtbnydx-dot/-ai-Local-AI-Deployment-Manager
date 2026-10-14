@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "unknown-architecture",
+  "description": "Checkpoint whose architecture no capability entry or preset knows.",
+  "entries": [
+    {
+      "path": "example-MadeUp-7B/config.json",
+      "json": {
+        "architectures": [
+          "MadeUpForCausalLM"
+        ],
+        "model_type": "made_up"
+      }
+    }
+  ]
+}

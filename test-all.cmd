@@ -13,67 +13,12 @@ rem Every step records its result and the run continues, so one red package
 rem no longer hides the state of the packages behind it. The exit code is 1
 rem when any step failed.
 
-call :check "vllm-manager\server.js"
-call :check "llama-manager\server.js"
-call :check "service-entry\server.js"
-if exist "%ROOT%search-gateway\server.js" call :check "search-gateway\server.js"
-call :check "tests\frontend-smoke.spec.cjs"
-call :check "tests\connection-status.spec.cjs"
-call :check "tts-platform\gateway\static\app.js"
-call :check "platform-mcp\scripts\validate-live.mjs"
-call :check "scripts\sqlite-snapshot.js"
-call :check "scripts\verify-backup.js"
-call :check "tests\billing-page.spec.cjs"
-call :check "scripts\check-i18n.js"
-call :check "manager-core\model-storage.js"
-call :check "manager-core\model-migration.js"
-call :check "manager-core\model-storage-routes.js"
-call :check "shared-public\js\model-storage-page.js"
-call :check "tests\model-storage.spec.cjs"
-call :checkps1 "build-github-release.ps1"
-call :checkps1 "scripts\install-download-cli.ps1"
-call :checkps1 "scripts\check-powershell-syntax.ps1"
-call :checkps1 "scripts\new-worktree.ps1"
-call :checkps1 "scripts\remove-worktree.ps1"
-call :checkps1 "scripts\deploy-worktree.ps1"
-call :checkps1 "scripts\start-platform-mcp.ps1"
-call :checkps1 "scripts\stop-platform-mcp.ps1"
-call :checkps1 "scripts\status-platform-mcp.ps1"
-call :checkps1 "scripts\update-platform.ps1"
-call :checkps1 "scripts\setup-public.ps1"
-call :checkps1 "scripts\backup-platform.ps1"
-call :checkps1 "scripts\nightly-e2e.ps1"
-call :checkps1 "tts-platform\scripts\runtime-root.ps1"
-call :checkps1 "tts-platform\scripts\install_gateway.ps1"
-call :checkps1 "tts-platform\scripts\start_all.ps1"
-call :checkps1 "tts-platform\scripts\start_gateway.ps1"
-call :checkps1 "tts-platform\scripts\stop_gateway.ps1"
-call :checkps1 "tts-platform\scripts\stop_workers.ps1"
-call :checkps1 "tts-platform\scripts\start_chatterbox.ps1"
-call :checkps1 "tts-platform\scripts\start_qwen.ps1"
-call :checkps1 "tts-platform\scripts\start_fish.ps1"
-call :checkps1 "tts-platform\scripts\start_step_docker.ps1"
-call :checkps1 "tts-platform\scripts\start_voxcpm.ps1"
-call :checkps1 "tts-platform\scripts\start_qwen_design.ps1"
-call :checkps1 "tts-platform\scripts\install_model.ps1"
-call :checkps1 "tts-platform\scripts\status.ps1"
-call :scriptEncoding
+rem Syntax checks discover their files (scripts\check-syntax.js): one step per
+rem language, each printing how many files it checked.
+call :syntax js
+call :syntax ps1
 call :findpy
-call :checkpy "tts-platform\gateway\main.py"
-call :checkpy "tts-platform\gateway\tts_config.py"
-call :checkpy "tts-platform\gateway\tts_schemas.py"
-call :checkpy "tts-platform\gateway\tts_storage.py"
-call :checkpy "tts-platform\gateway\tts_services.py"
-call :checkpy "tts-platform\gateway\tts_jobs.py"
-call :checkpy "tts-platform\gateway\tts_identity.py"
-call :checkpy "tts-platform\gateway\tts_receipts.py"
-call :checkpy "tts-platform\gateway\tts_catalog.py"
-call :checkpy "tts-platform\gateway\tts_lifecycle.py"
-call :checkpy "tts-platform\workers\chatterbox_worker.py"
-call :checkpy "tts-platform\workers\qwen_worker.py"
-call :checkpy "tts-platform\workers\step_server.py"
-call :checkpy "tts-platform\workers\voxcpm_worker.py"
-call :checkpy "tts-platform\workers\qwen_design_worker.py"
+call :syntax py
 call :testpy
 call :i18nReport
 call :testscripts
@@ -117,34 +62,28 @@ set /a SKIPCOUNT+=1
 echo Skipping %~1: %~2
 exit /b 0
 
-:check
-set "FILE=%~1"
-echo.
-echo == Syntax check %FILE% ==
-node --check "%ROOT%%FILE%"
-call :record "syntax %FILE%" %ERRORLEVEL%
-exit /b 0
-
-:checkps1
-set "FILE=%~1"
-echo.
-echo == Syntax check %FILE% ==
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\check-powershell-syntax.ps1" "%ROOT%%FILE%"
-call :record "syntax %FILE%" %ERRORLEVEL%
-exit /b 0
-
-:scriptEncoding
-rem Tracked *.cmd and *.ps1 files must be CRLF without a BOM. Outside a git
-rem work tree (live root, extracted release) the check exits 2 and is skipped.
-echo.
-echo == Script encoding check (*.cmd, *.ps1) ==
-node "%ROOT%scripts\check-script-encoding.js"
-set "CODE=%ERRORLEVEL%"
-if "%CODE%"=="2" (
-  call :skip "script encoding check" "not a git work tree"
+:syntax
+rem node scripts\check-syntax.js --lang js|ps1|py. Exit code 77 means the
+rem language's interpreter is missing, which is a skipped step.
+set "SYNTAX_LANG=%~1"
+if /i "%SYNTAX_LANG%"=="py" if not defined PYEXE (
+  call :skip "syntax py" "Python not found"
   exit /b 0
 )
-call :record "script encoding check" %CODE%
+echo.
+echo == Syntax check (%SYNTAX_LANG%) ==
+if /i "%SYNTAX_LANG%"=="py" goto syntaxPython
+node "%ROOT%scripts\check-syntax.js" --lang %SYNTAX_LANG%
+goto syntaxDone
+:syntaxPython
+node "%ROOT%scripts\check-syntax.js" --lang py --python "%PYEXE%"
+:syntaxDone
+set "CODE=%ERRORLEVEL%"
+if "%CODE%"=="77" (
+  call :skip "syntax %SYNTAX_LANG%" "interpreter not found"
+  exit /b 0
+)
+call :record "syntax %SYNTAX_LANG%" %CODE%
 exit /b 0
 
 :findpy
@@ -158,18 +97,6 @@ if not defined GATEWAY_PY if exist "%ROOT%..\..\tts-runtime\envs\gateway\Scripts
 if not defined GATEWAY_PY if defined AI_ROOT if exist "%AI_ROOT%\tts-runtime\envs\gateway\Scripts\python.exe" set "GATEWAY_PY=%AI_ROOT%\tts-runtime\envs\gateway\Scripts\python.exe"
 if defined GATEWAY_PY set "PYEXE=%GATEWAY_PY%"
 if not defined PYEXE where python >nul 2>nul && set "PYEXE=python"
-exit /b 0
-
-:checkpy
-set "FILE=%~1"
-if not defined PYEXE (
-  call :skip "syntax %FILE%" "Python not found"
-  exit /b 0
-)
-echo.
-echo == Syntax check %FILE% ==
-"%PYEXE%" -c "import ast,pathlib; ast.parse(pathlib.Path(r'%ROOT%%FILE%').read_text(encoding='utf-8'))"
-call :record "syntax %FILE%" %ERRORLEVEL%
 exit /b 0
 
 :testpy
@@ -200,8 +127,9 @@ call :record "i18n coverage report" %ERRORLEVEL%
 exit /b 0
 
 :testscripts
-rem Root script tests (scripts\test), including the release-manifest check that
-rem every tracked file is shipped or excluded with a reason.
+rem Root script tests (scripts\test): the release-manifest check that every
+rem tracked file is shipped or excluded with a reason, the check-syntax tests,
+rem and the hygiene test, which also holds the *.cmd/*.ps1 encoding rule.
 if not exist "%ROOT%package.json" (
   call :skip "scripts tests" "package.json not found"
   exit /b 0

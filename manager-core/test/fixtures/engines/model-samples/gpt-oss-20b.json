@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "gpt-oss-20b",
+  "description": "gpt-oss checkpoint matched by the capability matrix through its declared model_type.",
+  "entries": [
+    {
+      "path": "openai-gpt-oss-20b/config.json",
+      "json": {
+        "architectures": [
+          "GptOssForCausalLM"
+        ],
+        "model_type": "gpt_oss",
+        "quantization_config": {
+          "quant_method": "mxfp4"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-10-qwen36-moe-nvfp4-sm120",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/core.test.js › Qwen3.6 MoE NVFP4 uses the nightly runtime preset (inputs)",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "model": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+      "kvCacheDtype": "auto",
+      "hostGpus": [
+        {
+          "id": "0",
+          "name": "NVIDIA RTX PRO 5000 Blackwell",
+          "computeCap": "12.0"
+        }
+      ]
+    },
+    "launch": {},
+    "modelFixture": null
+  },
+  "expect": {
+    "preset": {
+      "id": "qwen3.6-moe-nvfp4",
+      "label": "Qwen3.6 MoE / NVFP4",
+      "image": "vllm/vllm-openai@sha256:754a391fb40c6106327042b97f4d3e32ec00376f3f3542bbc9fa9f4f06a95fbb",
+      "dtype": "bfloat16",
+      "forceTrustRemoteCode": true,
+      "attentionBackend": "flashinfer",
+      "moeBackend": "flashinfer_b12x",
+      "generationConfig": "vllm",
+      "reasoningParser": "qwen3",
+      "toolCallParser": "qwen3_xml",
+      "enableAutoToolChoice": true,
+      "kvCacheDtype": "fp8",
+      "maxNumBatchedTokens": 8192,
+      "asyncScheduling": true,
+      "notes": [
+        "uses vllm/vllm-openai:nightly because fixed release images can fail on Qwen3.6 ModelOpt NVFP4 weight layouts",
+        "adds --trust-remote-code for the rapidly moving Qwen3.6 architecture support path",
+        "adds --attention-backend flashinfer for the Qwen3.6 MoE path that previously validated locally",
+        "uses --moe-backend flashinfer_b12x on SM12x Blackwell to avoid the Marlin NVFP4 output degeneration seen on this host",
+        "uses --generation-config vllm because the checkpoint generation_config caused repeated ! output on this host",
+        "uses FP8 KV cache for the Qwen3.6 MoE ModelOpt checkpoint unless the launch form explicitly selects another dtype",
+        "adds --max-num-batched-tokens 8192 to satisfy Mamba cache align block sizing",
+        "leaves thinking mode to request-level chat_template_kwargs from the client",
+        "uses qwen3 reasoning parser and qwen3_xml tool parser from the NVIDIA launch guidance",
+        "Capability entry \"Qwen3.5 / Qwen3.6\" was matched by model name only; add config.json to the model directory for a declared identity."
+      ],
+      "env": {},
+      "reasoningParserPlugin": "",
+      "speculativeConfig": null,
+      "capabilities": {
+        "architecture": "",
+        "modelType": "",
+        "quantMethod": "",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "qwen3.5-3.6",
+          "label": "Qwen3.5 / Qwen3.6",
+          "matchedBy": "name",
+          "heuristic": true,
+          "confidence": "verified"
+        },
+        "reasoningParser": "qwen3",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "qwen3_xml",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": [
+          "Capability entry \"Qwen3.5 / Qwen3.6\" was matched by model name only; add config.json to the model directory for a declared identity."
+        ]
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

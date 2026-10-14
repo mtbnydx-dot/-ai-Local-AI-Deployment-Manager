@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-17-bnb-checkpoint",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/model-capabilities.test.js › the pinned vLLM 0.28 image blocks BNB checkpoints until vllm-bnb-plugin is added",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "model": "C:/fixture/models/unsloth-Llama-30B-bnb-4bit"
+    },
+    "launch": {
+      "modelArg": "/models/unsloth-Llama-30B-bnb-4bit",
+      "localPath": "C:/fixture/models/unsloth-Llama-30B-bnb-4bit"
+    },
+    "modelFixture": "llama-bnb-4bit"
+  },
+  "expect": {
+    "preset": {
+      "id": "model-llama",
+      "env": {},
+      "label": "LlamaForCausalLM capability profile",
+      "forceTrustRemoteCode": false,
+      "reasoningParser": "",
+      "reasoningParserPlugin": "",
+      "toolCallParser": "llama3_json",
+      "enableAutoToolChoice": true,
+      "speculativeConfig": null,
+      "unsupportedReason": "vLLM v0.28.0 / Transformers 5.15.1 no longer bundles BitsAndBytes loading; this verified image does not contain vllm-bnb-plugin. Install that plugin in a separate derived image or use a non-BNB checkpoint.",
+      "notes": [
+        "vLLM 0.28 moved BitsAndBytes loading to the out-of-tree vllm-bnb-plugin package."
+      ],
+      "capabilities": {
+        "architecture": "LlamaForCausalLM",
+        "modelType": "llama",
+        "quantMethod": "bitsandbytes_4bit",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "llama3",
+          "label": "Llama 3.x",
+          "matchedBy": "modelType",
+          "heuristic": false,
+          "confidence": "documented"
+        },
+        "reasoningParser": "",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "llama3_json",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "bitsandbytes_plugin_missing",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": [
+          "vLLM 0.28 moved BitsAndBytes loading to the out-of-tree vllm-bnb-plugin package."
+        ],
+        "unsupportedReason": "vLLM v0.28.0 / Transformers 5.15.1 no longer bundles BitsAndBytes loading; this verified image does not contain vllm-bnb-plugin. Install that plugin in a separate derived image or use a non-BNB checkpoint."
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

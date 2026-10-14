@@ -408,9 +408,11 @@ function createRequestAuth(options = {}) {
     viewerRegistry,
     redactFor,
     attach,
-    // "session" once 05's admin auth is attached (bootstrap auth.mode, 07 §2.5).
+    // "session" once 05's admin auth is attached (bootstrap auth.mode, 07 §2.5);
+    // PUB-25's admin auth still trusts loopback and says so through its mode.
     get mode() {
-      return adminAuth ? "session" : "loopback-trust";
+      if (!adminAuth) return "loopback-trust";
+      return typeof adminAuth.mode === "string" && adminAuth.mode ? adminAuth.mode : "session";
     },
   };
   if (options.viewerRegistry) attach({ viewerRegistry: options.viewerRegistry });

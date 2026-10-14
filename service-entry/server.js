@@ -16,7 +16,10 @@ const { parseAuxGatewayRoute, buildAuxUpstreamPath, parseEnvFileValue } = requir
 const { ttsSynthesisRoute, countTtsCharacters, ttsEngineFromBody, createWavDurationProbe, createJsonCollector, parseTtsJsonDuration } = require("./lib/tts-usage");
 const { signedTtsHeaders, createTtsReconciler } = require("./lib/tts-bridge");
 const { createEventBus } = require("./lib/events");
-const { createRequestAuth } = require("./lib/request-auth");
+const { createRequestAuth, redactInstancesEventForViewer, redactStatusEventForViewer } = require("./lib/request-auth");
+const { createViewerRegistry } = require("./lib/viewer-allowlist");
+const { createEntryAdminAuth, createMachineAuth } = require("./lib/machine-auth");
+const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -136,8 +139,8 @@ const security = createEntrySecurity({
 // ctx is one shared object (createRouteContext); modules read ctx.relay at call time.
 const ROUTE_MODULES = [
   "./lib/events", // ENT-EV1  /api/events, /api/events/recent
-  // "./lib/mgmt-proxy",          // ENT-EV2  /api/m/:managerId/*
-  // "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
+  "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
+  "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
   // "./lib/engine-routes",       // 01 ENG-19
   // "./lib/hub-routes",          // 03 HUB-7
   // "./lib/telemetry-routes",    // 04 TEL-*
@@ -217,12 +220,60 @@ function createServiceEntryServer(options = {}) {
   return httpServer;
 }
 
-// The one ctx object every route module receives (07 §2.7). auth and bus are
-// created here unless a caller (a test) supplies its own.
-function createRouteContext(overrides = {}) {
-  const auth = overrides.auth || createRequestAuth({ security });
-  const bus = overrides.bus || createEventBus({ auth, logger: console });
+// 05's access layer for one route context: the viewer registry with this
+// file's registrations, machine auth over the entry trust token, and the
+// admin auth whose guard runs before every route (05 §5.4, §5.7).
+function createEntryAccess(options = {}) {
+  const logger = options.logger || console;
+  const viewerRegistry = createViewerRegistry({ logger });
+  registerEntryRoutes(viewerRegistry);
+  let bus = null;
+  const machineAuth = createMachineAuth({
+    getToken: () => security.getTrustToken(),
+    viewerRegistry,
+    logger,
+    onFailure: (details) => {
+      try {
+        bus?.publish?.("security", { kind: "internal_auth_failed", ...details });
+      } catch {
+        // The bus never throws into a request; this is belt and braces.
+      }
+    },
+  });
+  const adminAuth = createEntryAdminAuth({ security, machineAuth, viewerRegistry });
   return {
+    viewerRegistry,
+    machineAuth,
+    adminAuth,
+    attachBus(value) {
+      bus = value || null;
+    },
+  };
+}
+
+// The access layer of each context made by createRouteContext(), kept out of
+// ctx so modules keep asking ctx.auth (07 §2.9).
+const entryAccessByContext = new WeakMap();
+let fallbackEntryAccess = null;
+
+function entryAccessFor(routes) {
+  const access = routes?.ctx ? entryAccessByContext.get(routes.ctx) : null;
+  if (access) return access;
+  // A server without a mount table (tests, createServiceEntryServer()) still
+  // runs the guard over this file's registrations.
+  if (!fallbackEntryAccess) fallbackEntryAccess = createEntryAccess();
+  return fallbackEntryAccess;
+}
+
+// The one ctx object every route module receives (07 §2.7). auth and bus are
+// created here unless a caller (a test) supplies its own; a supplied auth is
+// not what 05's guard consults, which keeps this context's own registry.
+function createRouteContext(overrides = {}) {
+  const access = createEntryAccess({ logger: overrides.logger || console });
+  const auth = overrides.auth || createRequestAuth({ security, adminAuth: access.adminAuth, viewerRegistry: access.viewerRegistry });
+  const bus = overrides.bus || createEventBus({ auth, logger: console });
+  access.attachBus(bus);
+  const ctx = {
     rootDir: ROOT,
     aiRoot: AI_ROOT,
     managers: MANAGERS.map(({ id, port }) => ({ id, port })),
@@ -237,6 +288,8 @@ function createRouteContext(overrides = {}) {
     auth,
     bus,
   };
+  entryAccessByContext.set(ctx, access);
+  return ctx;
 }
 
 // Mounts each module in order. A module that cannot be loaded or whose
@@ -320,13 +373,17 @@ async function handleRequest(req, res, routes = null) {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
     // Host whitelist + Origin check for mutating requests. Without this any page
     // the user has open can drive the entry over loopback.
-    const guard = security.checkRequest(req, url);
-    if (!guard.ok) return sendJson(res, { error: guard.message, code: guard.code }, guard.status);
+    const hostCheck = security.checkRequest(req, url);
+    if (!hostCheck.ok) return sendJson(res, { error: hostCheck.message, code: hostCheck.code }, hostCheck.status);
     // 反向代理（deploy/public 的 Caddy）转发进来的请求只允许走 /gateway/*：
     // 控制台页面、管理 API、计费和文档都不该出现在公网上。
     if (!url.pathname.startsWith("/gateway/") && security.isProxiedRequest(req)) {
       return sendJson(res, { error: "Only /gateway/* endpoints are served through the public proxy.", code: "public_proxy_gateway_only" }, 404);
     }
+    // 05's pre-dispatch guard: a signed machine request is verified and held
+    // to its scope, and a viewer reaches only registered routes, with the
+    // entry's redaction set on req.viewer for sendJson.
+    if (await entryAccessFor(routes).adminAuth.guard(req, res, url)) return;
     if (await handleBillingHttpRequest(req, res, url)) return;
     if (await dispatchRouteModules(routes, req, res, url)) return;
     if (req.method === "GET" && (url.pathname === "/billing" || url.pathname === "/billing/")) {
@@ -376,13 +433,13 @@ async function handleRequest(req, res, routes = null) {
       const managers = await Promise.all(MANAGERS.map((manager) => buildManagerStatus(manager, { force: url.searchParams.get("fresh") === "1" })));
       return sendJson(res, { ok: true, keys: summarizeServiceKeys(managers) });
     }
+    // Viewer copies of /api/security, /api/status, /api/fleet, the route
+    // preview and /api/gateway-access come from their registered redaction,
+    // which sendJson applies (registerEntryRoutes).
     if (req.method === "GET" && url.pathname === "/api/security") {
-      const allowed = security.checkManagementAccess(req);
-      const securityState = allowed.ok ? await security.describe() : security.describePublic();
-      return sendJson(res, { ok: true, security: securityState });
+      return sendJson(res, { ok: true, security: await security.describe() });
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
-      const detailed = security.checkManagementAccess(req).ok;
       const [managers, mcp, tts, search] = await Promise.all([
         Promise.all(MANAGERS.map(buildManagerStatus)),
         buildPlatformMcpStatus(),
@@ -409,7 +466,7 @@ async function handleRequest(req, res, routes = null) {
         keys: summarizeServiceKeys(managers),
         components: summarizeComponents(managers, mcp, tts, search),
       };
-      return sendJson(res, detailed ? payload : redactStatusForRemote(payload));
+      return sendJson(res, payload);
     }
     if (req.method === "GET" && url.pathname === "/api/mcp/status") {
       const allowed = security.checkManagementAccess(req);
@@ -417,8 +474,6 @@ async function handleRequest(req, res, routes = null) {
       return sendJson(res, await buildPlatformMcpStatus());
     }
     if (req.method === "GET" && url.pathname === "/api/fleet") {
-      const allowed = security.checkManagementAccess(req);
-      if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       return sendJson(res, await buildServiceEntryFleetSnapshot());
     }
     if (req.method === "POST" && url.pathname === "/api/fleet/settings") {
@@ -436,8 +491,6 @@ async function handleRequest(req, res, routes = null) {
       return sendJson(res, { ok: true, settings, fleet });
     }
     if (req.method === "POST" && url.pathname === "/api/fleet/route-preview") {
-      const allowed = security.checkManagementAccess(req);
-      if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       let body;
       try {
         body = await readJsonObjectBody(req, FLEET_API_MAX_BODY_BYTES);
@@ -451,7 +504,7 @@ async function handleRequest(req, res, routes = null) {
         limit: url.searchParams.get("limit"),
         maxLines: url.searchParams.get("maxLines"),
       });
-      return sendJson(res, security.checkManagementAccess(req).ok ? access : redactAccessForRemote(access));
+      return sendJson(res, access);
     }
     const managerStartMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/start$/);
     if (req.method === "POST" && managerStartMatch) {
@@ -529,6 +582,113 @@ function redactAccessForRemote(access) {
   };
 }
 
+function redactSecurityForViewer(body) {
+  return { ...body, security: security.describePublic(body?.security) };
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function pickFields(source, names) {
+  const input = plainObject(source);
+  const out = {};
+  for (const name of names) {
+    if (input[name] !== undefined) out[name] = input[name];
+  }
+  return out;
+}
+
+const VIEWER_INSTANCE_FIELDS = ["id", "fleetId", "instanceId", "instanceMode", "primary", "managerId", "managerName", "engine", "manager_engine", "running", "status", "lifecycleState", "gpuIds", "priority"];
+const VIEWER_MODEL_FIELDS = ["id", "manager_engine", "instance_id", "capabilities", "maxModelLen", "max_model_len", "lastKnown"];
+
+function redactFleetModelForViewer(model) {
+  return typeof model === "string" ? { id: model } : pickFields(model, VIEWER_MODEL_FIELDS);
+}
+
+// The viewer copy of GET /api/fleet and of POST /api/fleet/route-preview
+// (05 §5.4). Model ids, states, capabilities, GPU numbers and the routing
+// settings stay; paths, ports, container names, images, URLs, env, argv and
+// pids go. Fields are picked rather than deleted, so a field a manager adds
+// later stays hidden, and the generic viewer scrub runs last.
+function redactFleetForViewer(body) {
+  const input = plainObject(body);
+  let out;
+  if (input.request !== undefined || input.manager !== undefined || input.instance !== undefined) {
+    const manager = plainObject(input.manager);
+    const instance = plainObject(input.instance);
+    out = {
+      ...pickFields(input, ["ok", "status", "error", "message", "capability", "reason", "policy"]),
+      request: pickFields(input.request, ["engine", "protocol", "requestedModel"]),
+      manager: input.manager ? pickFields(manager, ["id", "name"]) : null,
+      instance: input.instance ? pickFields(instance, ["id", "instanceId", "primary", "status"]) : null,
+      model: input.model ? pickFields(input.model, ["id", "capabilities"]) : null,
+    };
+  } else {
+    out = {
+      ...pickFields(input, ["ok", "updatedAt", "error"]),
+      settings: pickFields(input.settings, ["mode", "reserveMb", "maxUtilizationPct", "preferEngine"]),
+      gpuMemory: input.gpuMemory ? {
+        ...pickFields(input.gpuMemory, ["totalMb", "usedMb", "freeMb", "reserveMb", "allocatableMb", "availableMb", "warningThresholdPct"]),
+        gpus: (Array.isArray(input.gpuMemory.gpus) ? input.gpuMemory.gpus : []).map((gpu) => pickFields(gpu, ["id", "index", "name", "totalMb", "usedMb", "freeMb", "allocatableMb", "availableMb"])),
+      } : null,
+      instances: (Array.isArray(input.instances) ? input.instances : []).map((instance) => ({
+        ...pickFields(instance, VIEWER_INSTANCE_FIELDS),
+        models: (Array.isArray(instance?.models) ? instance.models : []).map(redactFleetModelForViewer),
+      })),
+      slots: (Array.isArray(input.slots) ? input.slots : []).map((slot) => pickFields(slot, ["id", "label", "role", "capability", "state", "status", "managerId"])),
+      routing: pickFields(input.routing, ["mode", "genericModelIds", "capabilityCounts"]),
+    };
+  }
+  return redactManagerReadForViewer(out);
+}
+
+// Documents GET /docs/<name> serves; each is also a viewer route.
+const SERVED_DOCS = Object.freeze([
+  "client-setup-guide.md",
+  "billing-guide.md",
+  "mcp-platform-guide.md",
+  "model-service-platform-workplan.md",
+  "service-runbook.md",
+]);
+
+// 05 §5.4 baseline registrations (PUB-25) and the inline routes of this file.
+// Every GET the entry answers is declared here or by its route module; what
+// a viewer may not read is admin-only, which deny-by-default enforces anyway.
+function registerEntryRoutes(registry) {
+  const owner = "05";
+  for (const path of ["/", "/index.html", "/favicon.ico", "/shared-js/*", ...SERVED_DOCS.map((name) => `/docs/${name}`)]) {
+    registry.registerRoute({ owner, path });
+  }
+  // It answers the caller's own role (the session routes arrive with PUB-5).
+  registry.registerRoute({ owner, path: "/api/session" });
+  registry.registerRoute({ owner, path: "/api/status", redact: redactStatusForRemote });
+  registry.registerRoute({ owner, path: "/api/security", redact: redactSecurityForViewer });
+  registry.registerRoute({ owner, path: "/api/fleet", redact: redactFleetForViewer });
+  registry.registerReadOnlyPost({ owner, path: "/api/fleet/route-preview", redact: redactFleetForViewer });
+  registry.registerEventType({ owner, type: "status", redact: redactStatusEventForViewer });
+  registry.registerEventType({ owner, type: "instances", redact: redactInstancesEventForViewer });
+  // 04 §11.8 owns this one (TEL-12 facade) and keeps today's remote redaction.
+  registry.registerRoute({ owner: "04", path: "/api/gateway-access", redact: redactAccessForRemote });
+
+  const adminReads = [
+    "/api/keys", "/api/access/*", "/api/public/*", "/api/security/*", "/api/session/list", "/api/admin-tokens",
+    "/api/mcp/status", "/billing", "/billing/", "/api/billing/*",
+  ];
+  for (const path of adminReads) registry.registerAdminOnly({ owner, method: "GET", path });
+  const adminWrites = [
+    ["POST", "/api/fleet/settings"],
+    ["POST", "/api/managers/:managerId/start"],
+    ["POST", "/api/managers/:managerId/stop"],
+    ["POST", "/api/stop-all"],
+    ["POST", "/api/shutdown"],
+    ["POST", "/api/manager/shutdown"],
+    ["POST", "/api/billing/*"],
+    ["PATCH", "/api/billing/*"],
+  ];
+  for (const [method, path] of adminWrites) registry.registerAdminOnly({ owner, method, path });
+}
+
 async function startServiceEntry() {
   if (server) return server;
   // Open and migrate the billing database before publishing trust or accepting
@@ -543,6 +703,8 @@ async function startServiceEntry() {
   // The request-auth seam and the event bus come first, then every route
   // module; a module that fails to mount never stops the entry.
   routeMounts = await mountRouteModules({ ctx: createRouteContext() });
+  // Every module has registered its viewer routes; a later one would be a bug.
+  routeMounts.ctx.auth.viewerRegistry.freeze();
   server = createServiceEntryServer({ routes: routeMounts });
   server.on("error", (error) => {
     const detail = error?.code === "EADDRINUSE"
@@ -609,14 +771,7 @@ async function serveFile(res, filePath, contentType, extraHeaders = {}) {
 
 async function serveDoc(res, pathname) {
   const name = path.basename(String(pathname || ""));
-  const allowed = new Set([
-    "client-setup-guide.md",
-    "billing-guide.md",
-    "mcp-platform-guide.md",
-    "model-service-platform-workplan.md",
-    "service-runbook.md",
-  ]);
-  if (!allowed.has(name)) return sendJson(res, { error: "Document not found" }, 404);
+  if (!SERVED_DOCS.includes(name)) return sendJson(res, { error: "Document not found" }, 404);
   return serveFile(res, path.join(AI_ROOT, "docs", name), "text/markdown; charset=utf-8");
 }
 
@@ -2293,6 +2448,18 @@ function createUpstreamControl(req, res, options = {}) {
 }
 
 async function readRequestBody(req, maxBytes, options = {}) {
+  // The pre-dispatch guard already read a signed request's body to check its
+  // digest (05 §5.7); the stream is spent, so every reader starts here.
+  if (Buffer.isBuffer(req?.rawBody)) {
+    if (req.rawBody.length > maxBytes) {
+      const error = new Error("Request body too large for service-entry gateway.");
+      error.code = "request_body_too_large";
+      error.status = 413;
+      throw error;
+    }
+    const buffer = req.rawBody.length ? req.rawBody : undefined;
+    return options.holdReservation ? { buffer, release: () => {} } : buffer;
+  }
   const chunks = [];
   let total = 0;
   let reserved = 0;
@@ -2479,8 +2646,25 @@ function parseJsonSafe(text, fallback) {
   }
 }
 
+// Central viewer redaction (05 §5.4): the guard put the matched entry's
+// redaction on req.viewer, and every JSON answer below 400 passes through it,
+// so no route can forget it. A redaction that fails answers 500; the
+// unredacted body is never sent.
 function sendJson(res, data, status = 200, extraHeaders = {}) {
-  res.writeHead(status, {
+  let body = data;
+  let code = status;
+  const viewer = res?.req?.viewer;
+  if (viewer && typeof viewer.redact === "function" && code < 400) {
+    try {
+      body = viewer.redact(data, viewer.ctx || {});
+      if (body === undefined) throw new Error("the redaction returned nothing");
+    } catch (error) {
+      console.error(core.redactSecrets(`service-entry: viewer redaction failed; answering 500: ${error?.message || error}`));
+      body = { ok: false, error: { code: "internal_error", message: "Service entry error." } };
+      code = 500;
+    }
+  }
+  res.writeHead(code, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
@@ -2488,7 +2672,7 @@ function sendJson(res, data, status = 200, extraHeaders = {}) {
     "referrer-policy": "no-referrer",
     ...extraHeaders,
   });
-  res.end(JSON.stringify(data));
+  res.end(JSON.stringify(body));
 }
 
 function shutdownSoon(options = {}) {
@@ -2596,7 +2780,9 @@ module.exports = {
   readRequestBody,
   requireGatewayJsonContentType,
   redactAccessForRemote,
+  redactFleetForViewer,
   redactStatusForRemote,
+  registerEntryRoutes,
   resolveGatewayManager,
   rewriteRequestModelBody,
   saveFleetSettings,

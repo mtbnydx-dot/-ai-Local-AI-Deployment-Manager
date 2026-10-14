@@ -1,0 +1,477 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "kind": "engine",
+  "engineId": "llamacpp",
+  "docs": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+  "legacyIgnored": [
+    {
+      "field": "loadFormat",
+      "domId": "loadFormat",
+      "code": "param_ignored",
+      "reason": { "zh": "llama.cpp 总是按 GGUF 加载，这个选项从未传给引擎。", "en": "llama.cpp always loads GGUF; this option never reached the engine." }
+    }
+  ],
+  "params": [
+    {
+      "id": "contextLength",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--ctx-size", "transform": "ctxTimesConcurrency" },
+      "summary": { "zh": "每个并发槽位可用的 token 数；实际 --ctx-size 是它乘以最大并发请求。", "en": "The tokens each concurrent slot may use; the actual --ctx-size is this times Max concurrent requests." },
+      "help": {
+        "what": { "zh": "llama.cpp 把总上下文（--ctx-size）平均分给各个并发槽位，平台按每个槽位的长度乘以并发数来设置总量。", "en": "llama.cpp divides the total context (--ctx-size) evenly between its concurrent slots, so the platform sets the total to the per-slot length times the concurrency." }
+      },
+      "legacy": { "field": "maxModelLen", "domId": "maxModelLen" }
+    },
+    {
+      "id": "concurrency",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--parallel" },
+      "help": {
+        "what": { "zh": "对应 --parallel：同时服务的槽位数，KV 缓存按槽位平分。", "en": "Maps to --parallel: the number of slots served at once; the KV cache is shared out per slot." }
+      },
+      "legacy": { "field": "maxNumSeqs", "domId": "maxNumSeqs" }
+    },
+    {
+      "id": "servedName",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--alias" },
+      "legacy": { "field": "name", "domId": "servedName" }
+    },
+    {
+      "id": "speculative.method",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--spec-type" },
+      "choices": [
+        { "value": "auto", "label": { "zh": "按模型自动", "en": "Auto from the model" } },
+        { "value": "off", "label": { "zh": "关闭", "en": "Off" } },
+        { "value": "none", "label": { "zh": "关闭（none）", "en": "Off (none)" } },
+        { "value": "draft-mtp", "label": { "zh": "MTP", "en": "MTP" } },
+        { "value": "draft-dflash", "label": { "zh": "DFlash 草稿模型", "en": "DFlash draft model" } },
+        { "value": "draft-simple", "label": { "zh": "普通草稿模型", "en": "Plain draft model" } },
+        { "value": "ngram-simple", "label": { "zh": "N-gram（简单）", "en": "N-gram (simple)" } },
+        { "value": "ngram-cache", "label": { "zh": "N-gram（缓存）", "en": "N-gram (cache)" } }
+      ],
+      "platformDefault": "auto",
+      "legacy": { "field": "speculativeMode", "domId": "speculativeMode" }
+    },
+    {
+      "id": "speculative.numTokens",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--spec-draft-n-max" },
+      "platformDefault": 3,
+      "legacy": { "field": "numSpeculativeTokens", "domId": "numSpeculativeTokens" }
+    },
+    {
+      "id": "speculative.draftModel",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--model-draft", "transform": "containerPath" },
+      "legacy": { "field": "draftModel", "aliases": ["specDraftModel", "dflash"], "domId": "dflash" }
+    },
+    {
+      "id": "clientPreset",
+      "emit": { "mode": "adapter", "kind": "none" },
+      "legacy": { "field": "clientPreset", "domId": "clientPreset" }
+    },
+    {
+      "id": "apiKey",
+      "emit": { "mode": "adapter", "kind": "env", "env": "LLAMA_API_KEY" },
+      "legacy": { "field": "apiKey", "domId": "llamaApiKey" }
+    },
+    {
+      "id": "temperature",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--temp" },
+      "legacy": { "field": "temperature", "domId": null }
+    },
+    {
+      "id": "topP",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--top-p" },
+      "legacy": { "field": "topP", "aliases": ["top_p"], "domId": null }
+    },
+    {
+      "id": "topK",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--top-k" },
+      "legacy": { "field": "topK", "aliases": ["top_k"], "domId": null }
+    },
+    {
+      "id": "llamacpp.planningUtilization",
+      "group": "memory", "level": "expert", "order": 90,
+      "type": "float", "unit": "fraction",
+      "label": { "zh": "规划安全余量", "en": "Planning headroom" },
+      "summary": { "zh": "规划显存和多卡切分时按这个比例估算可用显存；llama.cpp 本身不会预留固定比例。", "en": "The share of GPU memory assumed usable when planning memory and multi-GPU splits; llama.cpp itself reserves no fixed fraction." },
+      "help": {
+        "what": { "zh": "只用于平台的显存规划和切分比例建议，不会作为参数传给 llama-server。", "en": "Only used by the platform's memory planning and split suggestions; it is not passed to llama-server." },
+        "whenToChange": { "zh": "同一张卡还要运行其它程序时调小，让规划留出更多余量。", "en": "Lower it when other programs share the GPU, so planning leaves more room." },
+        "tradeoffs": { "zh": "过高的估计可能让实际启动时显存不足。", "en": "An optimistic value can leave too little memory at the real start." }
+      },
+      "range": { "min": 0.05, "max": 1 },
+      "platformDefault": { "expr": { "if": [{ "eq": [{ "fact": "instance.mode" }, "parallel"] }, 0.7, 0.92] } },
+      "emit": { "mode": "adapter", "kind": "none" },
+      "legacy": { "field": "gpuMemoryUtilization", "domId": "gpuMemoryUtilization" }
+    },
+    {
+      "id": "llamacpp.gpuLayers",
+      "group": "memory", "level": "basic", "order": 20,
+      "type": "enum", "pattern": "^[0-9]{1,4}$", "unit": "layers",
+      "label": { "zh": "GPU 层数", "en": "Layers on GPU" },
+      "summary": { "zh": "放到显卡上的模型层数；其余层留在系统内存，由 CPU 计算。", "en": "How many model layers go on the GPU; the rest stay in system RAM and run on the CPU." },
+      "help": {
+        "what": { "zh": "对应 --n-gpu-layers。all 表示全部层；auto 会让 llama.cpp 按显存自动适配（--fit on）；也可以填写具体层数。", "en": "Maps to --n-gpu-layers. all puts every layer on the GPU; auto lets llama.cpp fit the layers to memory (--fit on); a number also works." },
+        "whenToChange": { "zh": "模型放不进显存时减少层数或选 auto。", "en": "Lower the count or choose auto when the model does not fit in GPU memory." },
+        "tradeoffs": { "zh": "留在 CPU 上的层越多，生成越慢。", "en": "The more layers stay on the CPU, the slower generation gets." }
+      },
+      "choices": [
+        { "value": "all", "label": { "zh": "全部层", "en": "All layers" } },
+        { "value": "auto", "label": { "zh": "按显存自动适配", "en": "Fit to memory automatically" } }
+      ],
+      "platformDefault": "999",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--n-gpu-layers" },
+      "vramEffect": "weights",
+      "legacy": { "field": "gpuLayers", "domId": "gpuLayers" }
+    },
+    {
+      "id": "llamacpp.fitTargetMb",
+      "group": "memory", "level": "expert", "order": 100,
+      "type": "int", "unit": "MiB",
+      "label": { "zh": "自动适配余量", "en": "Auto-fit headroom" },
+      "summary": { "zh": "自动适配显存时，每张卡预留的空闲显存。", "en": "The free memory each GPU keeps when layers are fitted automatically." },
+      "help": {
+        "what": { "zh": "对应 --fit on --fit-target。GPU 层数为 auto 时默认 1024 MiB。", "en": "Maps to --fit on --fit-target. With Layers on GPU set to auto the default is 1024 MiB." },
+        "whenToChange": { "zh": "自动适配后仍然显存不足时调大。", "en": "Raise it when memory still runs out after fitting." },
+        "tradeoffs": { "zh": "余量越大，放到显卡上的层越少。", "en": "More headroom puts fewer layers on the GPU." }
+      },
+      "range": { "min": 0, "max": 262144, "step": 1 },
+      "platformDefault": { "expr": { "if": [{ "eq": [{ "param": "llamacpp.gpuLayers" }, "auto"] }, 1024, null] } },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--fit-target", "omitWhen": [0, null] },
+      "appliesWhen": { "eq": [{ "param": "llamacpp.gpuLayers" }, "auto"] },
+      "legacy": { "field": "fitTargetMb", "aliases": ["fitTargetMib"], "domId": null }
+    },
+    {
+      "id": "llamacpp.fitCtx",
+      "group": "memory", "level": "expert", "order": 110,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "自动适配上下文", "en": "Auto-fit context" },
+      "summary": { "zh": "自动适配显存时按多长的上下文预留 KV 缓存。", "en": "The context length whose KV cache is reserved when layers are fitted automatically." },
+      "help": {
+        "what": { "zh": "对应 --fit-ctx。GPU 层数为 auto 时默认等于每请求上下文长度。", "en": "Maps to --fit-ctx. With Layers on GPU set to auto it defaults to the per-request context length." },
+        "whenToChange": { "zh": "实际使用的上下文远小于设置值、想多放几层到显卡时调小。", "en": "Lower it when real prompts are much shorter than the setting and you want more layers on the GPU." },
+        "tradeoffs": { "zh": "设得过小，长请求可能在运行中显存不足。", "en": "Too small, and long requests may run out of memory mid-way." }
+      },
+      "range": { "min": 0, "max": 4194304, "step": 1 },
+      "platformDefault": { "expr": { "if": [{ "eq": [{ "param": "llamacpp.gpuLayers" }, "auto"] }, { "param": "contextLength" }, null] } },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--fit-ctx", "omitWhen": [0, null] },
+      "appliesWhen": { "eq": [{ "param": "llamacpp.gpuLayers" }, "auto"] },
+      "legacy": { "field": "fitCtx", "domId": null }
+    },
+    {
+      "id": "llamacpp.batchSize",
+      "group": "capacity", "level": "advanced", "order": 60,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "逻辑批大小", "en": "Logical batch" },
+      "summary": { "zh": "一次提交处理的最大 token 数。", "en": "The most tokens submitted for processing at once." },
+      "help": {
+        "what": { "zh": "对应 --batch-size，主要影响预填充速度。", "en": "Maps to --batch-size and mainly affects prefill speed." },
+        "whenToChange": { "zh": "长提示词预填充慢、显存又有余量时调大。", "en": "Raise it when long prompts prefill slowly and memory allows." },
+        "tradeoffs": { "zh": "越大占用的计算缓冲越多。", "en": "Larger values need bigger compute buffers." }
+      },
+      "range": { "min": 1, "max": 1048576, "step": 1 },
+      "platformDefault": 2048,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--batch-size" },
+      "vramEffect": "activations",
+      "legacy": { "field": "batchSize", "domId": "batchSize" }
+    },
+    {
+      "id": "llamacpp.ubatchSize",
+      "group": "capacity", "level": "advanced", "order": 70,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "物理批大小", "en": "Physical batch" },
+      "summary": { "zh": "每次实际送进 GPU 计算的 token 数，不能大于逻辑批大小。", "en": "How many tokens actually go to the GPU per step; it cannot exceed the logical batch." },
+      "help": {
+        "what": { "zh": "对应 --ubatch-size。", "en": "Maps to --ubatch-size." },
+        "whenToChange": { "zh": "预填充时显存峰值过高就调小；显存充足时调大能加快预填充。", "en": "Lower it when prefill peaks too high in memory; raise it to prefill faster when memory is plentiful." },
+        "tradeoffs": { "zh": "越大计算缓冲越占显存。", "en": "Larger values make the compute buffers use more memory." }
+      },
+      "range": { "min": 1, "max": 1048576, "step": 1 },
+      "platformDefault": 512,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--ubatch-size" },
+      "vramEffect": "activations",
+      "legacy": { "field": "ubatchSize", "domId": "ubatchSize" }
+    },
+    {
+      "id": "llamacpp.cacheTypeK",
+      "group": "memory", "level": "basic", "order": 30,
+      "type": "enum",
+      "label": { "zh": "K 缓存精度", "en": "K cache type" },
+      "summary": { "zh": "KV 缓存中键（K）的数据类型；量化类型更省显存。", "en": "The data type of the keys (K) in the KV cache; quantized types save memory." },
+      "help": {
+        "what": { "zh": "对应 --cache-type-k。f16 为默认；q8_0 约省一半，q4_0 约省四分之三。", "en": "Maps to --cache-type-k. f16 is the default; q8_0 saves about half, q4_0 about three quarters." },
+        "whenToChange": { "zh": "需要更长上下文、显存不够时选 q8_0 或更低。", "en": "Choose q8_0 or lower when you need longer context than memory allows." },
+        "tradeoffs": { "zh": "精度越低，长上下文质量下降越明显。", "en": "Lower precision reduces long-context quality more noticeably." }
+      },
+      "choices": ["f16", "bf16", "f32", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"],
+      "choicesFrom": "introspect:--cache-type-k",
+      "platformDefault": "f16",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--cache-type-k" },
+      "vramEffect": "kv-dtype",
+      "legacy": { "field": "cacheTypeK", "aliases": ["kvCacheDtype"], "domId": "cacheTypeK" }
+    },
+    {
+      "id": "llamacpp.cacheTypeV",
+      "group": "memory", "level": "basic", "order": 40,
+      "type": "enum",
+      "label": { "zh": "V 缓存精度", "en": "V cache type" },
+      "summary": { "zh": "KV 缓存中值（V）的数据类型；量化类型需要开启 Flash Attention。", "en": "The data type of the values (V) in the KV cache; quantized types need Flash Attention." },
+      "help": {
+        "what": { "zh": "对应 --cache-type-v。量化的 V 缓存（q8_0、q5_1、q4_0 等）只能在 Flash Attention 为 on 或 auto 时使用。", "en": "Maps to --cache-type-v. A quantized V cache (q8_0, q5_1, q4_0 and so on) only works with Flash Attention on or auto." },
+        "whenToChange": { "zh": "需要更长上下文、显存不够时选 q8_0 或更低。", "en": "Choose q8_0 or lower when you need longer context than memory allows." },
+        "tradeoffs": { "zh": "精度越低，长上下文质量下降越明显。", "en": "Lower precision reduces long-context quality more noticeably." }
+      },
+      "choices": ["f16", "bf16", "f32", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"],
+      "choicesFrom": "introspect:--cache-type-v",
+      "platformDefault": "f16",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--cache-type-v" },
+      "vramEffect": "kv-dtype",
+      "legacy": { "field": "cacheTypeV", "aliases": ["kvCacheDtype"], "domId": "cacheTypeV" }
+    },
+    {
+      "id": "llamacpp.flashAttention",
+      "group": "memory", "level": "advanced", "order": 50,
+      "type": "enum",
+      "label": { "zh": "Flash Attention", "en": "Flash Attention" },
+      "summary": { "zh": "使用 Flash Attention 计算注意力，更快更省显存。", "en": "Computes attention with Flash Attention, which is faster and uses less memory." },
+      "help": {
+        "what": { "zh": "对应 --flash-attn。auto 由 llama.cpp 判断当前显卡和模型是否支持。", "en": "Maps to --flash-attn. auto lets llama.cpp decide whether this GPU and model support it." },
+        "whenToChange": { "zh": "排查输出异常时可以设为 off 对比。", "en": "Set it to off to compare when investigating bad output." },
+        "tradeoffs": { "zh": "设为 off 时不能使用量化的 V 缓存。", "en": "With off, a quantized V cache cannot be used." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动", "en": "Auto" } },
+        { "value": "on", "label": { "zh": "开", "en": "On" } },
+        { "value": "off", "label": { "zh": "关", "en": "Off" } }
+      ],
+      "platformDefault": "auto",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--flash-attn" },
+      "legacy": { "field": "flashAttention", "domId": "flashAttention" }
+    },
+    {
+      "id": "llamacpp.cacheReuse",
+      "group": "memory", "level": "expert", "order": 120,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "KV 平移复用块", "en": "KV shift-reuse chunk" },
+      "summary": { "zh": "提示词中间有改动时，按这个大小的块平移复用已缓存的 KV。", "en": "When a prompt changes in the middle, cached KV is shifted and reused in chunks of this size." },
+      "help": {
+        "what": { "zh": "对应 --cache-reuse，平台默认 512；0 表示关闭。", "en": "Maps to --cache-reuse; the platform default is 512 and 0 turns it off." },
+        "whenToChange": { "zh": "客户端经常改动对话中间的内容（例如压缩历史）时保持开启；排查缓存问题时设为 0。", "en": "Keep it on when clients often edit the middle of a conversation (history compression, for example); use 0 when investigating cache problems." },
+        "tradeoffs": { "zh": "块越小复用越多，但匹配开销越大。", "en": "Smaller chunks reuse more but cost more matching work." }
+      },
+      "range": { "min": 0, "max": 4096, "step": 1 },
+      "platformDefault": 512,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--cache-reuse", "omitWhen": [0, null] },
+      "legacy": { "field": "cacheReuse", "domId": "cacheReuse" }
+    },
+    {
+      "id": "llamacpp.splitMode",
+      "group": "parallelism", "level": "advanced", "order": 60,
+      "type": "enum",
+      "label": { "zh": "多卡切分方式", "en": "Split mode" },
+      "summary": { "zh": "模型如何分布到多张 GPU 上。", "en": "How the model is spread over several GPUs." },
+      "help": {
+        "what": { "zh": "对应 --split-mode。layer 按层分配，适合不同型号的显卡混用；row 按行切分每一层；none 只用一张卡。", "en": "Maps to --split-mode. layer assigns whole layers and suits mixed GPU models; row splits each layer by rows; none uses one GPU." },
+        "whenToChange": { "zh": "多卡运行时按显卡互联和型号选择；只选了一张卡时自动为 none。", "en": "Pick by GPU links and models when running on several GPUs; with one GPU selected it is none automatically." },
+        "tradeoffs": { "zh": "row 需要更多卡间通信，在 PCIe 上往往比 layer 慢。", "en": "row needs more GPU-to-GPU traffic and is often slower than layer over PCIe." }
+      },
+      "choices": [
+        { "value": "layer", "label": { "zh": "按层", "en": "By layer" } },
+        { "value": "row", "label": { "zh": "按行", "en": "By row" } },
+        { "value": "tensor", "label": { "zh": "按张量", "en": "By tensor" } },
+        { "value": "none", "label": { "zh": "单卡", "en": "Single GPU" } }
+      ],
+      "platformDefault": "layer",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--split-mode" },
+      "vramEffect": "split",
+      "legacy": { "field": "multiGpuMode", "aliases": ["splitMode"], "domId": "multiGpuMode" }
+    },
+    {
+      "id": "llamacpp.tensorSplit",
+      "group": "parallelism", "level": "advanced", "order": 70,
+      "type": "string", "maxLength": 256, "pattern": "^ *(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?: *[,/] *(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+))* *$",
+      "label": { "zh": "切分比例", "en": "Split ratios" },
+      "summary": { "zh": "各张 GPU 分到的模型比例，例如 24,8。留空按推荐方案自动计算。", "en": "The share of the model each GPU gets, for example 24,8. Empty computes the recommended split." },
+      "help": {
+        "what": { "zh": "对应 --tensor-split，按所选 GPU 的顺序填写。", "en": "Maps to --tensor-split, listed in the order of the selected GPUs." },
+        "whenToChange": { "zh": "显卡显存大小不同、自动比例不理想时。", "en": "When the GPUs have different memory sizes and the automatic split is poor." },
+        "tradeoffs": { "zh": "比例不合理会让某张卡先耗尽显存。", "en": "A poor split runs one GPU out of memory first." }
+      },
+      "emit": { "mode": "adapter", "kind": "csv", "flag": "--tensor-split" },
+      "appliesWhen": { "ne": [{ "param": "llamacpp.splitMode" }, "none"] },
+      "legacy": { "field": "tensorSplit", "domId": "tensorSplit" }
+    },
+    {
+      "id": "llamacpp.mainGpu",
+      "group": "parallelism", "level": "advanced", "order": 80,
+      "type": "int", "unit": "GPU index",
+      "label": { "zh": "主卡", "en": "Main GPU" },
+      "summary": { "zh": "放置中间结果和单卡计算的 GPU，按所选 GPU 内的序号计。", "en": "The GPU that holds intermediate results and single-GPU work, counted within the selected GPUs." },
+      "help": {
+        "what": { "zh": "对应 --main-gpu。", "en": "Maps to --main-gpu." },
+        "whenToChange": { "zh": "希望由显存最大或最快的那张卡承担主计算时。", "en": "When the GPU with the most memory or the fastest GPU should do the main work." },
+        "tradeoffs": { "zh": "主卡需要额外的显存余量。", "en": "The main GPU needs some extra memory headroom." }
+      },
+      "range": { "min": 0, "max": 63, "step": 1 },
+      "platformDefault": 0,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--main-gpu" },
+      "legacy": { "field": "mainGpu", "domId": "mainGpu" }
+    },
+    {
+      "id": "llamacpp.noMmap",
+      "group": "runtime-expert", "level": "expert", "order": 10,
+      "type": "bool",
+      "label": { "zh": "禁用 mmap", "en": "Disable mmap" },
+      "summary": { "zh": "不使用内存映射，启动时把模型完整读入内存。", "en": "Reads the whole model into memory at start instead of memory-mapping it." },
+      "help": {
+        "what": { "zh": "对应 --no-mmap。", "en": "Maps to --no-mmap." },
+        "whenToChange": { "zh": "模型在网络盘或 WSL 挂载目录上，mmap 读取很慢时。", "en": "When the model sits on a network drive or a WSL-mounted folder and mmap reads are slow." },
+        "tradeoffs": { "zh": "启动时占用更多系统内存。", "en": "Uses more system RAM at start." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--no-mmap" },
+      "legacy": { "field": "noMmap", "domId": null }
+    },
+    {
+      "id": "llamacpp.noRepack",
+      "group": "runtime-expert", "level": "expert", "order": 20,
+      "type": "bool",
+      "label": { "zh": "禁用权重重排", "en": "Disable repack" },
+      "summary": { "zh": "不为 CPU 计算重新排列权重布局。", "en": "Skips rearranging weights for CPU computation." },
+      "help": {
+        "what": { "zh": "对应 --no-repack。", "en": "Maps to --no-repack." },
+        "whenToChange": { "zh": "重排导致内存占用翻倍或启动过慢时。", "en": "When repacking doubles memory use or slows the start too much." },
+        "tradeoffs": { "zh": "留在 CPU 上的层计算会变慢。", "en": "Layers that stay on the CPU compute more slowly." }
+      },
+      "engineDefault": false,
+      "emit": { "mode": "adapter", "kind": "flag-bool", "flag": "--no-repack" },
+      "legacy": { "field": "noRepack", "domId": null }
+    },
+    {
+      "id": "llamacpp.reasoning",
+      "group": "reasoning-tools", "level": "basic", "order": 10,
+      "type": "enum",
+      "label": { "zh": "思考执行策略", "en": "Reasoning mode" },
+      "summary": { "zh": "是否让支持思考的模型先思考再回答。", "en": "Whether models that can reason think before answering." },
+      "help": {
+        "what": { "zh": "对应 --reasoning。auto 按模型的聊天模板决定。", "en": "Maps to --reasoning. auto follows the model's chat template." },
+        "whenToChange": { "zh": "希望强制开启或关闭思考时。", "en": "To force thinking on or off." },
+        "tradeoffs": { "zh": "思考会增加输出 token 和等待时间。", "en": "Thinking adds output tokens and waiting time." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动", "en": "Auto" } },
+        { "value": "on", "label": { "zh": "开", "en": "On" } },
+        { "value": "off", "label": { "zh": "关", "en": "Off" } }
+      ],
+      "platformDefault": "auto",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning" },
+      "legacy": { "field": "reasoning", "domId": "reasoningMode" }
+    },
+    {
+      "id": "llamacpp.reasoningFormat",
+      "group": "reasoning-tools", "level": "basic", "order": 20,
+      "type": "enum",
+      "label": { "zh": "思考输出格式", "en": "Reasoning format" },
+      "summary": { "zh": "思考内容放在哪里返回给客户端。", "en": "Where the thinking is returned to the client." },
+      "help": {
+        "what": { "zh": "对应 --reasoning-format。deepseek 放进 reasoning_content；deepseek-legacy 同时保留 <think> 标签；none 原样输出。", "en": "Maps to --reasoning-format. deepseek returns it as reasoning_content; deepseek-legacy also keeps the <think> tags; none returns the raw text." },
+        "whenToChange": { "zh": "客户端看不到思考内容，或思考标签混在回答里时。", "en": "When clients cannot see the thinking, or thinking tags are mixed into the answer." },
+        "tradeoffs": { "zh": "客户端必须支持所选格式才能正确显示。", "en": "Clients must support the chosen format to show it properly." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动", "en": "Auto" } },
+        { "value": "none", "label": { "zh": "原样输出", "en": "Raw output" } },
+        { "value": "deepseek", "label": { "zh": "deepseek（reasoning_content）", "en": "deepseek (reasoning_content)" } },
+        { "value": "deepseek-legacy", "label": { "zh": "deepseek-legacy（保留 think 标签）", "en": "deepseek-legacy (keeps think tags)" } }
+      ],
+      "platformDefault": "auto",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning-format" },
+      "legacy": { "field": "reasoningFormat", "aliases": ["reasoningParser"], "domId": "reasoningParser" }
+    },
+    {
+      "id": "llamacpp.reasoningEffort",
+      "group": "reasoning-tools", "level": "advanced", "order": 30,
+      "type": "enum",
+      "label": { "zh": "思考强度", "en": "Reasoning effort" },
+      "summary": { "zh": "支持强度控制的模型默认思考多深。", "en": "How deeply models with effort control think by default." },
+      "help": {
+        "what": { "zh": "对应 --reasoning-effort，需要运行时支持。default 使用模板默认值。", "en": "Maps to --reasoning-effort and needs runtime support. default keeps the template's value." },
+        "whenToChange": { "zh": "希望默认回答更快（调低）或更深入（调高）时。", "en": "To answer faster by default (lower) or more thoroughly (higher)." },
+        "tradeoffs": { "zh": "强度越高输出 token 越多、等待越久。", "en": "Higher effort produces more tokens and longer waits." }
+      },
+      "choices": [
+        { "value": "default", "label": { "zh": "模板默认", "en": "Template default" } },
+        "minimal", "low", "medium", "high", "xhigh", "max"
+      ],
+      "platformDefault": "default",
+      "requiresFeature": "reasoningEffort",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning-effort" },
+      "legacy": { "field": "reasoningEffort", "domId": "reasoningEffort" }
+    },
+    {
+      "id": "llamacpp.reasoningBudget",
+      "group": "reasoning-tools", "level": "advanced", "order": 40,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "思考预算", "en": "Reasoning budget" },
+      "summary": { "zh": "思考最多可用的 token 数；-1 表示不限制。", "en": "The most tokens thinking may use; -1 means no limit." },
+      "help": {
+        "what": { "zh": "对应 --reasoning-budget。0 表示禁止思考。", "en": "Maps to --reasoning-budget. 0 disables thinking." },
+        "whenToChange": { "zh": "思考过长、拖慢回答时设一个上限。", "en": "Set a cap when thinking runs long and slows answers down." },
+        "tradeoffs": { "zh": "上限过低可能影响复杂问题的回答质量。", "en": "Too low a cap can hurt answers to hard questions." }
+      },
+      "range": { "min": -1, "max": 4194304, "step": 1 },
+      "platformDefault": -1,
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--reasoning-budget" },
+      "legacy": { "field": "reasoningBudget", "domId": "reasoningBudget" }
+    },
+    {
+      "id": "llamacpp.textOnly",
+      "group": "multimodal", "level": "basic", "order": 10,
+      "type": "bool",
+      "label": { "zh": "仅文本模式", "en": "Text-only mode" },
+      "summary": { "zh": "不加载视觉投影器（mmproj），只处理文本。", "en": "Does not load the vision projector (mmproj) and handles text only." },
+      "help": {
+        "what": { "zh": "开启时不传 --mmproj（远程仓库传 --no-mmproj）；关闭后会自动查找 mmproj*.gguf 或使用指定的投影器。", "en": "When on, --mmproj is left out (--no-mmproj for remote repositories); when off, mmproj*.gguf is found automatically or the given projector is used." },
+        "whenToChange": { "zh": "需要处理图片输入时关闭。", "en": "Turn it off to handle image inputs." },
+        "tradeoffs": { "zh": "关闭后投影器会额外占用显存。", "en": "When off, the projector uses extra memory." }
+      },
+      "platformDefault": true,
+      "emit": { "mode": "adapter", "kind": "none" },
+      "vramEffect": "mmproj",
+      "legacy": { "field": "textOnlyMode", "aliases": ["languageModelOnly"], "domId": "textOnlyMode", "codec": "defaultTrueBool" }
+    },
+    {
+      "id": "llamacpp.mmproj",
+      "group": "multimodal", "level": "advanced", "order": 20,
+      "type": "path", "maxLength": 4096,
+      "label": { "zh": "视觉投影器", "en": "Vision projector" },
+      "summary": { "zh": "多模态模型使用的投影器（mmproj）文件；留空时在模型目录里自动查找。", "en": "The projector (mmproj) file for a multimodal model; empty finds one in the model folder." },
+      "help": {
+        "what": { "zh": "对应 --mmproj。", "en": "Maps to --mmproj." },
+        "whenToChange": { "zh": "目录里有多个投影器，或投影器放在别处时。", "en": "When the folder has several projectors, or the projector lives elsewhere." },
+        "tradeoffs": { "zh": "投影器必须与模型配套，否则图片理解会出错。", "en": "The projector must belong to the model, or image understanding goes wrong." }
+      },
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mmproj", "transform": "containerPath" },
+      "appliesWhen": { "eq": [{ "param": "llamacpp.textOnly" }, false] },
+      "vramEffect": "mmproj",
+      "legacy": { "field": "mmproj", "domId": "mmproj" }
+    },
+    {
+      "id": "llamacpp.mmprojDevice",
+      "group": "multimodal", "level": "advanced", "order": 30,
+      "type": "string", "maxLength": 64,
+      "label": { "zh": "投影器设备", "en": "Projector device" },
+      "summary": { "zh": "投影器运行在哪个设备上：auto、none 或设备名。", "en": "Which device runs the projector: auto, none or a device name." },
+      "help": {
+        "what": { "zh": "对应 --mmproj-device，需要运行时支持。", "en": "Maps to --mmproj-device and needs runtime support." },
+        "whenToChange": { "zh": "想把投影器放到另一张卡或 CPU 上、给主模型腾出显存时。", "en": "To move the projector to another GPU or the CPU and free memory for the main model." },
+        "tradeoffs": { "zh": "放到 CPU 上处理图片会变慢。", "en": "On the CPU, images are processed more slowly." }
+      },
+      "platformDefault": "auto",
+      "requiresFeature": "mmprojDevice",
+      "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mmproj-device" },
+      "appliesWhen": { "eq": [{ "param": "llamacpp.textOnly" }, false] },
+      "legacy": { "field": "mmprojDevice", "domId": "mmprojDevice" }
+    }
+  ]
+}

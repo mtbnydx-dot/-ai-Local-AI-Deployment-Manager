@@ -13,9 +13,27 @@
 // runs is the one CONFIG runs today.
 
 const descriptorSchema = require("./descriptor-schema");
+const dockerSegments = require("./adapters/_docker-segments");
+const expr = require("./expr");
+const legacyAliases = require("./legacy-aliases");
+const paramCatalog = require("./param-catalog");
 const registry = require("./registry");
 const routes = require("./routes");
 const runtimeManifest = require("../runtime-manifest");
+
+// Adapter code modules by descriptor.adapter (01 §6). An engine whose adapter
+// has no module here is not launchable through an adapter yet.
+const adapters = Object.freeze({
+  vllm: require("./adapters/vllm"),
+  sglang: require("./adapters/sglang"),
+  llamacpp: require("./adapters/llamacpp"),
+});
+
+/** descriptor (or its adapter id) -> adapter module, or null. */
+function adapterFor(descriptorOrAdapterId) {
+  const id = typeof descriptorOrAdapterId === "string" ? descriptorOrAdapterId : descriptorOrAdapterId?.adapter;
+  return typeof id === "string" && Object.hasOwn(adapters, id) ? adapters[id] : null;
+}
 
 module.exports = {
   descriptorSchema,
@@ -28,7 +46,24 @@ module.exports = {
   unknownEngineError: registry.unknownEngineError,
   registerEngineRoutes: routes.registerEngineRoutes,
   buildEnginesPayload: routes.buildEnginesPayload,
+  buildEngineSchemaPayload: routes.buildEngineSchemaPayload,
   validateDraftRequest: routes.validateDraftRequest,
+  // Parameter catalogs (01 §9), the expression language recipes and catalogs
+  // share (01 §10.2), and the legacy alias table (01 §9.5).
+  paramCatalog,
+  createParamCatalog: paramCatalog.createParamCatalog,
+  getParamCatalog: paramCatalog.getParamCatalog,
+  loadCatalog: paramCatalog.loadCatalog,
+  validateValues: paramCatalog.validateValues,
+  expr,
+  legacyAliases,
+  legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
+  legacyConfigToValues: legacyAliases.legacyConfigToValues,
+  valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,
+  // Engine adapters by descriptor `adapter` id (01 §6) and the one docker argv renderer.
+  adapters,
+  adapterFor,
+  renderRunArgs: dockerSegments.renderRunArgs,
   listRuntimes: runtimeManifest.listRuntimes,
   resolveManifestRuntime: runtimeManifest.resolveRuntime,
   runtimeForImage: runtimeManifest.runtimeForImage,

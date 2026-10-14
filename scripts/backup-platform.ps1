@@ -11,6 +11,12 @@ param(
 
 # Daily snapshot of the platform's small, valuable state:
 #   * service-entry\data\platform-billing.sqlite  (billing ledger; copied with VACUUM INTO)
+#   * service-entry\data\telemetry.sqlite  (telemetry and the audit-of-audit log; VACUUM INTO;
+#     AI_TELEMETRY_DB overrides the source path). Optional: the store runs degraded on an
+#     unreadable file and never repairs it (04-telemetry section 4.1), so a failed
+#     snapshot becomes a manifest warning and the rest of the backup still runs. So does an
+#     AI_TELEMETRY_DB that names no file. The store can grow to telemetry.maxDbMb (2 GB by
+#     default); VACUUM INTO copies live pages only, but each kept snapshot is that size.
 #   * TTS history database (tts-history.sqlite3) when present
 #   * service-entry\data\*.json, <manager>\logs\*.json ledgers, .runtime\gateway-trust is NOT copied
 # into backups\<yyyyMMdd-HHmm>\ with a manifest, pruning snapshots older than -KeepDays.
@@ -42,7 +48,7 @@ if (-not $ListOnly) {
     & icacls.exe $target /inheritance:r /grant:r "*$($currentSid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not protect backup credentials with a private ACL' }
 }
-$manifest = [ordered]@{ format = 'local-ai-platform-backup-v2'; at = (Get-Date).ToString("o"); root = $Root; files = @() }
+$manifest = [ordered]@{ format = 'local-ai-platform-backup-v2'; at = (Get-Date).ToString("o"); root = $Root; files = @(); warnings = @() }
 $planned = [System.Collections.Generic.List[object]]::new()
 
 # Root-relative paths (-like patterns) that are never copied: the secret store,
@@ -90,6 +96,18 @@ function Add-File([string]$source, [string]$relative, [string]$kind) {
     $manifest.files += [ordered]@{ path = $relative; kind = $kind; bytes = (Get-Item -LiteralPath $destination).Length; sha256 = $hash }
 }
 
+function Add-OptionalSqlite([string]$source, [string]$relative, [string]$warningCode) {
+    try {
+        Add-File $source $relative 'sqlite'
+    } catch {
+        $partial = Join-Path $target $relative
+        if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue }
+        $message = $_.Exception.Message
+        Write-Warning "Skipped ${relative}: $message"
+        $manifest.warnings += [ordered]@{ code = $warningCode; path = $relative; message = $message }
+    }
+}
+
 Add-File (Join-Path $Root "service-entry\data\platform-billing.sqlite") "service-entry\data\platform-billing.sqlite" "sqlite"
 Get-ChildItem -LiteralPath (Join-Path $Root "service-entry\data") -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
     Add-File $_.FullName ("service-entry\data\" + $_.Name) "json"
@@ -125,6 +143,17 @@ Add-File $ttsEnvFile 'config\tts.env' 'config'
 foreach ($relative in @('.runtime\platform-mcp\server.env','search-gateway\.env')) {
     Add-File (Join-Path $Root $relative) (Join-Path 'config' $relative) 'config'
 }
+# Last, after every must-keep file: telemetry is optional (see the header).
+$telemetryDb = if ($env:AI_TELEMETRY_DB) { $env:AI_TELEMETRY_DB } else { Join-Path $Root 'service-entry\data\telemetry.sqlite' }
+if (-not [IO.Path]::IsPathRooted($telemetryDb)) { $telemetryDb = Join-Path $Root $telemetryDb }
+if ($env:AI_TELEMETRY_DB -and -not (Test-Path -LiteralPath $telemetryDb -PathType Leaf)) {
+    # Add-File skips a missing source quietly; a configured location must not.
+    $message = "AI_TELEMETRY_DB names a file that does not exist: $telemetryDb"
+    Write-Warning "Skipped service-entry\data\telemetry.sqlite: $message"
+    $manifest.warnings += [ordered]@{ code = 'telemetry_db_missing'; path = 'service-entry\data\telemetry.sqlite'; message = $message }
+} else {
+    Add-OptionalSqlite $telemetryDb 'service-entry\data\telemetry.sqlite' 'telemetry_snapshot_failed'
+}
 
 if ($ListOnly) {
     ConvertTo-Json -InputObject @($planned.ToArray()) -Depth 3
@@ -132,7 +161,7 @@ if ($ListOnly) {
 }
 
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $target "backup-manifest.json") -Encoding UTF8
-Write-Host ("Backup written: {0} ({1} files)" -f $target, $manifest.files.Count)
+Write-Host ("Backup written: {0} ({1} files, {2} warnings)" -f $target, $manifest.files.Count, $manifest.warnings.Count)
 & node (Join-Path $PSScriptRoot 'verify-backup.js') $target
 if ($LASTEXITCODE -ne 0) { throw 'Backup verification failed; retention has not run.' }
 if ($NoPrune) { return }

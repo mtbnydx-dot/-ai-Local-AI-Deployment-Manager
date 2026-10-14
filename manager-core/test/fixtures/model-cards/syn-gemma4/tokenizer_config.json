@@ -1,0 +1,10 @@
+{
+  "add_bos_token": true,
+  "add_eos_token": false,
+  "bos_token": "<bos>",
+  "eos_token": "<eos>",
+  "model_max_length": 131072,
+  "pad_token": "<pad>",
+  "padding_side": "left",
+  "tokenizer_class": "GemmaTokenizer"
+}

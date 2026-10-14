@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-muse-glimmer-gguf",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "Muse-Glimmer-28B-GGUF",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic Muse Glimmer GGUF (retired family, blocked on every engine): Q4_K_M, 52 blocks with a 3:1 sliding-window pattern, chat template in tokenizer.chat_template."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"Muse-Glimmer-28B-Q4_K_M.gguf","bytes":15188330112,"kind":"gguf"},
+    {"name":"README.md","bytes":3550,"kind":"placeholder"}
+  ]
+}

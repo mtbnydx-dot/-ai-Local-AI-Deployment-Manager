@@ -1,0 +1,11 @@
+> docker run -d --name vllm-qwen38-27b --gpus device=0 --ipc host -p 127.0.0.1:8000:8000 -v <AI_ROOT>\models\Qwen-Qwen3.8-27B-FP8:/models/Qwen-Qwen3.8-27B-FP8:ro -e VLLM_API_KEY vllm/vllm-openai:v0.11.0 --model /models/Qwen-Qwen3.8-27B-FP8 --served-model-name qwen3.8-27b --max-model-len 1048576 --gpu-memory-utilization 0.6 --api-key <redacted>
+(APIServer pid=1) INFO 10-14 04:02:11 [api_server.py:1896] vLLM API server version 0.11.0
+(EngineCore_DP0 pid=239) INFO 10-14 04:02:37 [gpu_model_runner.py:2653] Model loading took 28.7520 GiB and 21.04 seconds
+(EngineCore_DP0 pid=239) INFO 10-14 04:02:58 [gpu_worker.py:298] Available KV cache memory: 26.03 GiB
+(EngineCore_DP0 pid=239) INFO 10-14 04:02:58 [kv_cache_utils.py:1087] GPU KV cache size: 426,432 tokens
+(EngineCore_DP0 pid=239) ERROR 10-14 04:02:58 [core.py:708] EngineCore failed to start.
+(EngineCore_DP0 pid=239) ERROR 10-14 04:02:58 [core.py:708] Traceback (most recent call last):
+(EngineCore_DP0 pid=239) ERROR 10-14 04:02:58 [core.py:708]   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_utils.py", line 690, in check_enough_kv_cache_memory
+(EngineCore_DP0 pid=239) ERROR 10-14 04:02:58 [core.py:708]     raise ValueError(
+(EngineCore_DP0 pid=239) ERROR 10-14 04:02:58 [core.py:708] ValueError: To serve at least one request with the models's max seq len (1048576), (64.00 GiB KV cache is needed, which is larger than the available KV cache memory (26.03 GiB). Based on the available memory, the estimated maximum model length is 426432. Try increasing `gpu_memory_utilization` or decreasing `max_model_len` when initializing the engine.
+(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-mamba2-gguf",
+  "synthetic": true,
+  "license": "cc0-1.0",
+  "licenseSource": "cli",
+  "folderName": "mamba2-2.7b-GGUF",
+  "layout": "single",
+  "capturedWith": {"tool":"scripts/capture-model-fixture.js","version":1},
+  "notes": ["Synthetic Mamba2 GGUF: 64 SSM blocks (inner 5120, state 128, 80 heads, one group), Q8_0, tied embeddings, base model without a chat template."],
+  "warnings": [],
+  "scrubbed": [],
+  "files": [
+    {"name":"README.md","bytes":1712,"kind":"placeholder"},
+    {"name":"mamba2-2.7b-Q8_0.gguf","bytes":2879099360,"kind":"gguf"}
+  ]
+}

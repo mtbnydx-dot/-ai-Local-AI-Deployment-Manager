@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-19-unknown-model",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › a checkpoint no preset or capability entry knows",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null
+  },
+  "input": {
+    "opts": {
+      "model": "C:/fixture/models/example-MadeUp-7B"
+    },
+    "launch": {
+      "modelArg": "/models/example-MadeUp-7B",
+      "localPath": "C:/fixture/models/example-MadeUp-7B"
+    },
+    "modelFixture": "unknown-architecture"
+  },
+  "expect": {
+    "preset": {
+      "id": "",
+      "env": {},
+      "label": "",
+      "forceTrustRemoteCode": false,
+      "reasoningParser": "",
+      "reasoningParserPlugin": "",
+      "toolCallParser": "",
+      "enableAutoToolChoice": false,
+      "speculativeConfig": null,
+      "notes": [],
+      "capabilities": {
+        "architecture": "MadeUpForCausalLM",
+        "modelType": "made_up",
+        "quantMethod": "",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "",
+          "label": "",
+          "matchedBy": "",
+          "heuristic": false,
+          "confidence": ""
+        },
+        "reasoningParser": "",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "",
+        "enableAutoToolChoice": false,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": []
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "id": "PRE-13-diffusiongemma-win32-blocked",
+  "kind": "preset",
+  "manager": "vllm",
+  "source": "vllm-manager/server.js resolveVllmRuntimePreset › vllm-manager/test/core.test.js › DiffusionGemma is blocked by default on Windows Docker WSL (inputs), platform win32",
+  "stubs": "none",
+  "env": {
+    "VLLM_QWEN_MOE_BACKEND": null,
+    "VLLM_GEMMA_USE_V2_MODEL_RUNNER": null,
+    "VLLM_GEMMA_MAX_NEW_TOKENS": null,
+    "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA": null,
+    "VLLM_ALLOW_MUSE_GLIMMER": null,
+    "platform": "win32"
+  },
+  "input": {
+    "opts": {
+      "model": "D:/AI/models/nv-community-diffusiongemma-26B-A4B-it-NVFP4"
+    },
+    "launch": {
+      "localPath": ""
+    },
+    "modelFixture": null
+  },
+  "expect": {
+    "preset": {
+      "id": "diffusion-gemma",
+      "label": "DiffusionGemma / Gemma4",
+      "image": "vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b",
+      "unsupportedReason": "DiffusionGemma NVFP4 在 Windows Docker/WSL 下当前不可稳定运行：V2 runner 会因 UVA 不可用启动失败，V1 fallback 可加载但首个 chat 请求可能触发 CUDA device-side assert。请改用常规 Gemma-4/Qwen，或在原生 Linux 上运行；确认要自行承担风险时设置 VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1。",
+      "env": {
+        "VLLM_USE_V2_MODEL_RUNNER": "0"
+      },
+      "forceTrustRemoteCode": true,
+      "enforceEager": true,
+      "attentionBackend": "TRITON_ATTN",
+      "reasoningParser": "gemma4",
+      "toolCallParser": "gemma4",
+      "enableAutoToolChoice": true,
+      "kvCacheDtype": "fp8",
+      "disablePrefixCaching": true,
+      "disableLanguageModelOnly": true,
+      "overrideGenerationConfig": "{\"max_new_tokens\":4096}",
+      "notes": [
+        "uses vllm/vllm-openai:gemma-compatible runtime",
+        "sets VLLM_USE_V2_MODEL_RUNNER=0 to avoid WSL UVA initialization failures",
+        "adds --attention-backend TRITON_ATTN",
+        "adds --enforce-eager to avoid CUDA graph profiling assertion failures",
+        "caps default generation to 4096 tokens so clients that omit max_tokens do not request the full context window",
+        "leaves thinking mode to request-level chat_template_kwargs from the client",
+        "uses gemma4 reasoning/tool parsers",
+        "blocked on this host: DiffusionGemma NVFP4 在 Windows Docker/WSL 下当前不可稳定运行：V2 runner 会因 UVA 不可用启动失败，V1 fallback 可加载但首个 chat 请求可能触发 CUDA device-side assert。请改用常规 Gemma-4/Qwen，或在原生 Linux 上运行；确认要自行承担风险时设置 VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1。",
+        "Capability entry \"Gemma 4 / DiffusionGemma\" was matched by model name only; add config.json to the model directory for a declared identity."
+      ],
+      "reasoningParserPlugin": "",
+      "speculativeConfig": null,
+      "capabilities": {
+        "architecture": "",
+        "modelType": "",
+        "quantMethod": "",
+        "nativeMtp": {
+          "layers": 0,
+          "declared": false,
+          "tensorCount": 0,
+          "evidence": "",
+          "inspected": false,
+          "supported": false
+        },
+        "speculativeConfig": null,
+        "speculativeDecision": {
+          "requested": "off",
+          "method": "off",
+          "tokens": 0,
+          "reason": "Speculative decoding is off in this profile."
+        },
+        "capabilityEntry": {
+          "id": "gemma4",
+          "label": "Gemma 4 / DiffusionGemma",
+          "matchedBy": "name",
+          "heuristic": true,
+          "confidence": "verified"
+        },
+        "reasoningParser": "gemma4",
+        "reasoningParserPlugin": "",
+        "toolCallParser": "gemma4",
+        "enableAutoToolChoice": true,
+        "forceTrustRemoteCode": false,
+        "unsupportedCode": "",
+        "isMuseGlimmer": false,
+        "museGlimmerOverride": false,
+        "runtimeMetadata": {
+          "repository": "vllm/vllm-openai",
+          "version": "v0.28.0"
+        },
+        "env": {},
+        "notes": [
+          "Capability entry \"Gemma 4 / DiffusionGemma\" was matched by model name only; add config.json to the model directory for a declared identity."
+        ]
+      }
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}

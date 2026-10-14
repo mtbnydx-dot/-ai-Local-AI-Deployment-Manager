@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "muse-glimmer",
+  "description": "Retired Muse Glimmer checkpoint identified by its config.",
+  "entries": [
+    {
+      "path": "meta-muse-glimmer/config.json",
+      "json": {
+        "architectures": [
+          "MuseGlimmerForConditionalGeneration"
+        ],
+        "model_type": "muse_glimmer",
+        "transformers_version": "5.15.0.dev0"
+      }
+    }
+  ]
+}

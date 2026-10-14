@@ -1,0 +1,30 @@
+> docker run -d --name vllm-qwen36-35b-a3b --gpus device=0 --ipc host -p 127.0.0.1:8000:8000 -v <AI_ROOT>\models\Qwen3.6-35B-A3B-NVFP4:/models/Qwen3.6-35B-A3B-NVFP4:ro -e VLLM_API_KEY vllm/vllm-openai:v0.11.0 --model /models/Qwen3.6-35B-A3B-NVFP4 --served-model-name qwen3.6-35b-a3b --max-model-len 131072 --gpu-memory-utilization 0.9 --api-key <redacted>
+INFO 10-14 07:41:12 [__init__.py:216] Automatically detected platform cuda.
+(APIServer pid=1) INFO 10-14 07:41:15 [api_server.py:1896] vLLM API server version 0.11.0
+(APIServer pid=1) INFO 10-14 07:41:15 [utils.py:328] non-default args: {'model': '/models/Qwen3.6-35B-A3B-NVFP4', 'served_model_name': ['qwen3.6-35b-a3b'], 'max_model_len': 131072, 'gpu_memory_utilization': 0.9}
+(APIServer pid=1) INFO 10-14 07:41:24 [model.py:547] Resolved architecture: Qwen3_5MoeForConditionalGeneration
+(APIServer pid=1) INFO 10-14 07:41:24 [model.py:1510] Using max model len 131072
+(APIServer pid=1) INFO 10-14 07:41:25 [modelopt.py:301] Detected ModelOpt NVFP4 checkpoint. Please note that the format is experimental and could change.
+(EngineCore_DP0 pid=245) INFO 10-14 07:41:38 [core.py:644] Waiting for init message from front-end.
+(EngineCore_DP0 pid=245) INFO 10-14 07:41:40 [gpu_model_runner.py:2602] Starting to load model /models/Qwen3.6-35B-A3B-NVFP4...
+(EngineCore_DP0 pid=245) INFO 10-14 07:41:41 [cuda.py:366] Using FlashInfer backend on V1 engine.
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708] EngineCore failed to start.
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708] Traceback (most recent call last):
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py", line 699, in run_engine_core
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]     engine_core = EngineCoreProc(*args, **kwargs)
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/model_loader/default_loader.py", line 264, in load_weights
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]     loaded_weights = model.load_weights(self.get_all_weights(model_config, model))
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_5.py", line 612, in load_weights
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]     weight_loader(param, loaded_weight, weight_name, shard_id=shard_id, expert_id=expert_id)
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/layer.py", line 1243, in weight_loader
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708]     loaded_weight = loaded_weight.narrow(shard_dim, shard_size * tp_rank, shard_size)
+(EngineCore_DP0 pid=245) ERROR 10-14 07:42:03 [core.py:708] RuntimeError: start (2048) + length (512) exceeds dimension size (2048).
+(EngineCore_DP0 pid=245) Process EngineCore_DP0:
+(EngineCore_DP0 pid=245) Traceback (most recent call last):
+(EngineCore_DP0 pid=245)   File "/usr/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+(EngineCore_DP0 pid=245)     self.run()
+(EngineCore_DP0 pid=245) RuntimeError: start (2048) + length (512) exceeds dimension size (2048).
+(APIServer pid=1) Traceback (most recent call last):
+(APIServer pid=1)   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/utils.py", line 785, in wait_for_engine_startup
+(APIServer pid=1)     raise RuntimeError("Engine core initialization failed. "
+(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}

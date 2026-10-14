@@ -1,0 +1,444 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-14",
+  "staleAfterDays": 180,
+  "kind": "common",
+  "groups": [
+    { "id": "model", "order": 10, "label": { "zh": "模型与模板", "en": "Model & template" } },
+    { "id": "capacity", "order": 20, "label": { "zh": "容量与并发", "en": "Capacity & concurrency" } },
+    { "id": "memory", "order": 30, "label": { "zh": "显存与 KV 缓存", "en": "Memory & KV cache" } },
+    { "id": "parallelism", "order": 40, "label": { "zh": "多卡与并行", "en": "Multi-GPU & parallelism" } },
+    { "id": "speculative", "order": 50, "label": { "zh": "推测解码", "en": "Speculative decoding" } },
+    { "id": "reasoning-tools", "order": 60, "label": { "zh": "思考与工具调用", "en": "Reasoning & tools" } },
+    { "id": "multimodal", "order": 70, "label": { "zh": "多模态", "en": "Multimodal" } },
+    { "id": "lora", "order": 80, "label": { "zh": "LoRA 适配器", "en": "LoRA adapters" } },
+    { "id": "sampling", "order": 90, "label": { "zh": "默认采样", "en": "Default sampling" } },
+    { "id": "network-security", "order": 100, "label": { "zh": "网络与安全", "en": "Network & security" } },
+    { "id": "runtime-expert", "order": 110, "label": { "zh": "运行时与专家选项", "en": "Runtime & expert" } }
+  ],
+  "params": [
+    {
+      "id": "contextLength",
+      "group": "capacity", "level": "basic", "order": 10,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "上下文长度（每请求）", "en": "Context length (per request)" },
+      "summary": { "zh": "单个请求最多可用的 token 数，包括提示词和生成内容。", "en": "The most tokens one request may use, prompt and output together." },
+      "help": {
+        "what": { "zh": "模型在一次请求里能看到的最大 token 数。更长的请求会被拒绝。", "en": "The largest number of tokens the model sees in one request. Longer requests are rejected." },
+        "whenToChange": { "zh": "处理长文档、长对话或整个代码库时调大；只做短问答时调小以节省显存。", "en": "Raise it for long documents, long chats or whole code bases; lower it for short questions to save memory." },
+        "tradeoffs": { "zh": "越大越占 KV 缓存显存，同样的显存能同时服务的长请求越少。", "en": "Larger values need more KV-cache memory, so fewer long requests fit at the same time." }
+      },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
+      "platformDefault": 8192,
+      "vramEffect": "kv-linear"
+    },
+    {
+      "id": "concurrency",
+      "group": "capacity", "level": "basic", "order": 20,
+      "type": "int", "unit": "requests",
+      "label": { "zh": "最大并发请求", "en": "Max concurrent requests" },
+      "summary": { "zh": "引擎同时处理的请求数上限，多出来的请求排队等待。", "en": "How many requests the engine serves at the same time; the rest wait in a queue." },
+      "help": {
+        "what": { "zh": "同时运行的请求（序列）数量上限。", "en": "The cap on requests (sequences) running at once." },
+        "whenToChange": { "zh": "多人或多个客户端同时使用时调大；单人使用长上下文时调小。", "en": "Raise it when several people or clients share the model; lower it for one user with long context." },
+        "tradeoffs": { "zh": "并发越高总吞吐越大，但每个请求分到的 KV 缓存越少，长请求更容易排队。", "en": "More concurrency raises total throughput, but each request gets less KV cache and long requests queue sooner." }
+      },
+      "range": { "min": 1, "max": 1024, "step": 1 },
+      "platformDefault": 4,
+      "vramEffect": "kv-linear"
+    },
+    {
+      "id": "servedName",
+      "group": "model", "level": "basic", "order": 10,
+      "type": "string", "maxLength": 128,
+      "label": { "zh": "服务名", "en": "Served model name" },
+      "summary": { "zh": "客户端在 API 请求里用来指定这个模型的名字。", "en": "The name clients use to pick this model in API requests." },
+      "help": {
+        "what": { "zh": "OpenAI 兼容接口 /v1/models 返回的模型名。留空时按模型目录或仓库名自动生成。", "en": "The model name listed by the OpenAI-compatible /v1/models endpoint. Empty means it is derived from the model folder or repository." },
+        "whenToChange": { "zh": "客户端配置里写死了某个模型名，或想给同一模型的不同启动方案起不同名字时。", "en": "When a client is configured with a fixed model name, or to tell launch variants of one model apart." },
+        "tradeoffs": { "zh": "改名后，仍按旧名字调用的客户端需要同步修改。", "en": "Clients that still call the old name must be updated." }
+      }
+    },
+    {
+      "id": "dtype",
+      "group": "model", "level": "advanced", "order": 20,
+      "type": "enum",
+      "label": { "zh": "计算精度", "en": "Compute dtype" },
+      "summary": { "zh": "权重与激活使用的浮点精度；auto 按模型配置选择。", "en": "The floating-point type for weights and activations; auto follows the model config." },
+      "help": {
+        "what": { "zh": "模型计算使用的数据类型。auto 读取模型 config.json 中的 torch_dtype。", "en": "The data type used for model computation. auto reads torch_dtype from the model's config.json." },
+        "whenToChange": { "zh": "较老的显卡不支持 BF16 时改为 float16；排查数值问题时可以试 float32。", "en": "Use float16 on older GPUs without BF16 support; try float32 when chasing numerical problems." },
+        "tradeoffs": { "zh": "float32 精度最高，但显存和速度代价都很大；float16 在部分模型上可能溢出。", "en": "float32 is the most precise but costs a lot of memory and speed; float16 can overflow on some models." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动（按模型）", "en": "Auto (from the model)" } },
+        { "value": "bfloat16", "label": { "zh": "BF16", "en": "BF16" } },
+        { "value": "float16", "label": { "zh": "FP16", "en": "FP16" } },
+        { "value": "half", "label": { "zh": "FP16（half）", "en": "FP16 (half)" } },
+        { "value": "float32", "label": { "zh": "FP32", "en": "FP32" } },
+        { "value": "float", "label": { "zh": "FP32（float）", "en": "FP32 (float)" } }
+      ],
+      "engineDefault": "auto",
+      "vramEffect": "weights"
+    },
+    {
+      "id": "quantization",
+      "group": "model", "level": "advanced", "order": 30,
+      "type": "enum", "pattern": "^[a-z0-9_.-]{1,64}$",
+      "label": { "zh": "权重量化方式", "en": "Weight quantization" },
+      "summary": { "zh": "权重使用的量化格式；留空时从模型配置自动识别。", "en": "The quantization format of the weights; empty detects it from the model config." },
+      "help": {
+        "what": { "zh": "量化权重的解码方式，例如 AWQ、GPTQ、FP8 或 NVFP4。模型 config.json 声明了 quant_method 时以模型为准。", "en": "How quantized weights are decoded, for example AWQ, GPTQ, FP8 or NVFP4. When the model's config.json declares quant_method, the model wins." },
+        "whenToChange": { "zh": "模型没有声明量化方式，或要把未量化的权重在线量化成 FP8 时。", "en": "When the model does not declare its quantization, or to quantize unquantized weights to FP8 while loading." },
+        "tradeoffs": { "zh": "格式选错会加载失败；在线量化省显存，但可能略微降低质量。", "en": "A wrong format fails to load; quantizing while loading saves memory but can cost a little quality." }
+      },
+      "choices": [
+        { "value": "awq", "label": { "zh": "AWQ", "en": "AWQ" } },
+        { "value": "gptq", "label": { "zh": "GPTQ", "en": "GPTQ" } },
+        { "value": "bitsandbytes", "label": { "zh": "BitsAndBytes", "en": "BitsAndBytes" } },
+        { "value": "fp8", "label": { "zh": "FP8", "en": "FP8" } },
+        { "value": "modelopt", "label": { "zh": "ModelOpt FP8", "en": "ModelOpt FP8" } },
+        { "value": "modelopt_fp4", "label": { "zh": "NVFP4（ModelOpt）", "en": "NVFP4 (ModelOpt)" } },
+        { "value": "compressed-tensors", "label": { "zh": "Compressed Tensors", "en": "Compressed Tensors" } }
+      ],
+      "choicesFrom": "introspect:--quantization",
+      "fromModel": true,
+      "vramEffect": "weights"
+    },
+    {
+      "id": "tokenizer",
+      "group": "model", "level": "expert", "order": 40,
+      "type": "path", "maxLength": 4096,
+      "label": { "zh": "分词器路径", "en": "Tokenizer path" },
+      "summary": { "zh": "单独指定分词器所在的目录或 Hugging Face 仓库。", "en": "A separate folder or Hugging Face repository for the tokenizer." },
+      "help": {
+        "what": { "zh": "默认使用模型目录里的分词器。GGUF 模型常常需要指向对应的原始仓库。", "en": "By default the tokenizer inside the model folder is used. GGUF models often need the original repository here." },
+        "whenToChange": { "zh": "模型目录缺少分词器文件，或 GGUF 转换出的分词器不准确时。", "en": "When the model folder has no tokenizer files, or the tokenizer converted from GGUF is inaccurate." },
+        "tradeoffs": { "zh": "分词器与模型不匹配会导致输出乱码。", "en": "A tokenizer that does not match the model produces garbled output." }
+      }
+    },
+    {
+      "id": "trustRemoteCode",
+      "group": "model", "level": "advanced", "order": 50,
+      "type": "bool",
+      "label": { "zh": "信任模型仓库代码", "en": "Trust model repository code" },
+      "summary": { "zh": "允许加载模型仓库自带的 Python 代码。", "en": "Allows the Python code shipped with the model repository to run." },
+      "help": {
+        "what": { "zh": "新架构或自定义架构的模型需要执行仓库里的建模代码才能加载。", "en": "New or custom architectures need the repository's modeling code to load." },
+        "whenToChange": { "zh": "模型说明要求 trust_remote_code，或加载时报告未知架构时。", "en": "When the model card asks for trust_remote_code, or loading reports an unknown architecture." },
+        "tradeoffs": { "zh": "会在容器里执行第三方代码，只对来源可信的模型开启。", "en": "Third-party code runs inside the container; turn it on only for models from sources you trust." }
+      },
+      "engineDefault": false
+    },
+    {
+      "id": "kvCacheDtype",
+      "group": "memory", "level": "basic", "order": 30,
+      "type": "enum",
+      "label": { "zh": "KV 缓存精度", "en": "KV cache precision" },
+      "summary": { "zh": "KV 缓存的数据类型；FP8 大约能省一半 KV 显存。", "en": "The data type of the KV cache; FP8 roughly halves KV memory." },
+      "help": {
+        "what": { "zh": "保存注意力键值（KV）使用的精度。auto 与模型计算精度相同。", "en": "The precision used to store attention keys and values. auto matches the model's compute dtype." },
+        "whenToChange": { "zh": "需要更长上下文或更多并发、而显存不够时选 FP8。", "en": "Choose FP8 when you need longer context or more concurrency than memory allows." },
+        "tradeoffs": { "zh": "FP8 KV 可能轻微影响长上下文质量，部分模型路径不支持。", "en": "FP8 KV can slightly reduce long-context quality, and some model paths do not support it." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动（同计算精度）", "en": "Auto (same as compute)" } },
+        { "value": "fp8", "label": { "zh": "FP8", "en": "FP8" } },
+        { "value": "fp8_e5m2", "label": { "zh": "FP8 E5M2", "en": "FP8 E5M2" } },
+        { "value": "fp8_e4m3", "label": { "zh": "FP8 E4M3", "en": "FP8 E4M3" } }
+      ],
+      "choicesFrom": "introspect:--kv-cache-dtype",
+      "engineDefault": "auto",
+      "vramEffect": "kv-dtype"
+    },
+    {
+      "id": "prefixCaching",
+      "group": "memory", "level": "advanced", "order": 60,
+      "type": "tristate",
+      "label": { "zh": "前缀缓存", "en": "Prefix caching" },
+      "summary": { "zh": "复用开头相同的提示词的计算结果，加快多轮对话和重复的系统提示。", "en": "Reuses work for prompts that start the same way, which speeds up multi-turn chats and repeated system prompts." },
+      "help": {
+        "what": { "zh": "默认（不设置）沿用引擎自己的行为；选择开或关会明确传给引擎。", "en": "Default (unset) keeps the engine's own behaviour; On or Off is passed to the engine explicitly." },
+        "whenToChange": { "zh": "排查与缓存相关的输出异常，或模型路径不支持前缀缓存时关闭。", "en": "Turn it off to rule out cache-related output problems, or when the model path does not support it." },
+        "tradeoffs": { "zh": "开启几乎总是更快，会用一部分 KV 缓存保存可复用的前缀。", "en": "On is almost always faster; it keeps part of the KV cache for reusable prefixes." }
+      },
+      "engineDefault": true,
+      "vramEffect": "none"
+    },
+    {
+      "id": "tensorParallel",
+      "group": "parallelism", "level": "advanced", "order": 10,
+      "type": "int", "unit": "GPUs",
+      "label": { "zh": "张量并行卡数", "en": "Tensor-parallel GPUs" },
+      "summary": { "zh": "把每一层切开，放到几张 GPU 上一起计算。", "en": "How many GPUs split each layer between them." },
+      "help": {
+        "what": { "zh": "张量并行在层内切分权重，需要 GPU 之间有高速互联。", "en": "Tensor parallelism splits the weights inside each layer and needs fast links between the GPUs." },
+        "whenToChange": { "zh": "单卡放不下模型，或想用多卡加快单个请求时。", "en": "When the model does not fit on one GPU, or to speed up single requests with several GPUs." },
+        "tradeoffs": { "zh": "卡数必须能整除注意力头数；卡间带宽不足时提速有限。", "en": "The GPU count must divide the attention heads; slow links limit the speed-up." }
+      },
+      "range": { "min": 1, "max": 64, "step": 1 },
+      "engineDefault": 1,
+      "vramEffect": "split"
+    },
+    {
+      "id": "pipelineParallel",
+      "group": "parallelism", "level": "expert", "order": 20,
+      "type": "int", "unit": "stages",
+      "label": { "zh": "流水线并行段数", "en": "Pipeline stages" },
+      "summary": { "zh": "把模型的层按顺序分成几段，放到不同的 GPU 上。", "en": "Splits the model's layers into consecutive stages on different GPUs." },
+      "help": {
+        "what": { "zh": "流水线并行按层分段，GPU 之间的通信量比张量并行少。", "en": "Pipeline parallelism splits by layer and needs less GPU-to-GPU traffic than tensor parallelism." },
+        "whenToChange": { "zh": "单卡放不下模型、而 GPU 之间只有 PCIe 等较慢的连接时。", "en": "When the model does not fit on one GPU and the GPUs only have slower links such as PCIe." },
+        "tradeoffs": { "zh": "单个请求的延迟通常高于张量并行，需要一定并发才能让各段都忙起来。", "en": "Single requests are usually slower than with tensor parallelism; it needs concurrency to keep every stage busy." }
+      },
+      "range": { "min": 1, "max": 64, "step": 1 },
+      "engineDefault": 1,
+      "vramEffect": "split"
+    },
+    {
+      "id": "dataParallel",
+      "group": "parallelism", "level": "expert", "order": 30,
+      "type": "int", "unit": "replicas",
+      "label": { "zh": "数据并行副本", "en": "Data-parallel replicas" },
+      "summary": { "zh": "在多张 GPU 上各放一份完整模型，分摊请求。", "en": "Runs a full copy of the model per GPU group and spreads requests across the copies." },
+      "help": {
+        "what": { "zh": "每个副本独立处理请求，总吞吐随副本数增加。", "en": "Each replica serves requests on its own, so total throughput grows with the replica count." },
+        "whenToChange": { "zh": "单卡放得下模型、需要更高总吞吐时。", "en": "When one GPU holds the model and you need more total throughput." },
+        "tradeoffs": { "zh": "每个副本都需要完整的权重显存，单个请求不会变快。", "en": "Every replica needs the full weight memory, and single requests do not get faster." }
+      },
+      "range": { "min": 1, "max": 64, "step": 1 },
+      "engineDefault": 1,
+      "vramEffect": "weights"
+    },
+    {
+      "id": "expertParallel",
+      "group": "parallelism", "level": "expert", "order": 40,
+      "type": "bool",
+      "label": { "zh": "MoE 专家并行", "en": "MoE expert parallel" },
+      "summary": { "zh": "把混合专家（MoE）模型的专家分到多张 GPU 上。", "en": "Spreads the experts of a mixture-of-experts (MoE) model across GPUs." },
+      "help": {
+        "what": { "zh": "只对 MoE 模型有效：不同专家放在不同的 GPU 上。", "en": "Only affects MoE models: different experts live on different GPUs." },
+        "whenToChange": { "zh": "多卡运行大型 MoE 模型、张量并行扩展效果不好时。", "en": "For large MoE models on several GPUs when tensor parallelism scales poorly." },
+        "tradeoffs": { "zh": "专家负载不均时，部分 GPU 会成为瓶颈。", "en": "Uneven expert load can make some GPUs the bottleneck." }
+      },
+      "engineDefault": false,
+      "vramEffect": "split"
+    },
+    {
+      "id": "reasoningParser",
+      "group": "reasoning-tools", "level": "basic", "order": 10,
+      "type": "enum",
+      "label": { "zh": "思考内容解析器", "en": "Reasoning parser" },
+      "summary": { "zh": "把模型的思考过程从回答里拆出来，放进 reasoning_content 字段。", "en": "Separates the model's thinking from the answer and returns it as reasoning_content." },
+      "help": {
+        "what": { "zh": "不同模型标记思考内容的方式不同，解析器要与模型匹配。自动建议会按模型选择；关闭则原样输出。", "en": "Models mark their thinking differently, so the parser must match the model. Auto suggests one for the model; Off returns the raw text." },
+        "whenToChange": { "zh": "客户端看到 <think> 标签混在回答里，或思考内容丢失时。", "en": "When clients see <think> tags mixed into the answer, or the thinking goes missing." },
+        "tradeoffs": { "zh": "选错解析器可能吞掉部分回答。", "en": "A wrong parser can swallow part of the answer." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动建议", "en": "Suggest automatically" } },
+        { "value": "none", "label": { "zh": "关闭（原样输出）", "en": "Off (raw output)" } },
+        "qwen3", "deepseek_r1", "deepseek_v3", "gptoss", "gemma4", "granite", "hunyuan_a13b", "kimi_k2",
+        "mistral", "nemotron_v3", "olmo3", "step3", "step3p5", "identity", "nano_v3"
+      ],
+      "choicesFrom": "introspect:--reasoning-parser"
+    },
+    {
+      "id": "toolCallParser",
+      "group": "reasoning-tools", "level": "basic", "order": 20,
+      "type": "enum",
+      "label": { "zh": "工具调用解析器", "en": "Tool-call parser" },
+      "summary": { "zh": "把模型输出的工具调用转换成 OpenAI 的 tool_calls 格式。", "en": "Turns the model's tool calls into OpenAI tool_calls." },
+      "help": {
+        "what": { "zh": "解析器要与模型的聊天模板匹配。自动建议会按模型推断；关闭则不解析工具调用。", "en": "The parser must match the model's chat template. Auto infers one from the model; Off leaves tool calls unparsed." },
+        "whenToChange": { "zh": "Claude Code、OpenWebUI 等客户端调用工具失败，或工具调用以普通文本出现时。", "en": "When clients such as Claude Code or OpenWebUI fail to call tools, or tool calls show up as plain text." },
+        "tradeoffs": { "zh": "选错解析器会让工具调用失败或混进回答。", "en": "A wrong parser makes tool calls fail or leak into the answer." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动建议", "en": "Suggest automatically" } },
+        { "value": "none", "label": { "zh": "关闭", "en": "Off" } },
+        "qwen3_coder", "qwen3_xml", "hermes", "deepseek_v3", "mistral", "llama3_json", "llama4_pythonic",
+        "xlam", "gemma4", "pythonic", "granite", "minimax"
+      ],
+      "choicesFrom": "introspect:--tool-call-parser"
+    },
+    {
+      "id": "autoToolChoice",
+      "group": "reasoning-tools", "level": "advanced", "order": 30,
+      "type": "bool",
+      "label": { "zh": "自动工具调用", "en": "Automatic tool choice" },
+      "summary": { "zh": "允许模型自己决定是否调用工具（tool_choice=auto）。", "en": "Lets the model decide by itself whether to call a tool (tool_choice=auto)." },
+      "help": {
+        "what": { "zh": "需要同时设置工具调用解析器才会生效。", "en": "Takes effect only together with a tool-call parser." },
+        "whenToChange": { "zh": "客户端只发送 tool_choice=required，或根本不用工具时可以关闭。", "en": "Turn it off when clients only send tool_choice=required, or use no tools at all." },
+        "tradeoffs": { "zh": "关闭后，没有明确要求工具的请求不会触发工具调用。", "en": "When off, requests that do not explicitly require a tool never call one." }
+      },
+      "platformDefault": true
+    },
+    {
+      "id": "reasoning.defaultEnabled",
+      "group": "reasoning-tools", "level": "advanced", "order": 40,
+      "type": "tristate",
+      "label": { "zh": "默认开启思考", "en": "Thinking on by default" },
+      "summary": { "zh": "客户端没有说明时，模型是否默认先思考再回答。", "en": "Whether the model thinks before answering when the client does not say." },
+      "help": {
+        "what": { "zh": "通过聊天模板参数 enable_thinking 设定默认值；客户端请求里的设置仍然优先。", "en": "Sets the chat template's default enable_thinking; a setting in the client's request still wins." },
+        "whenToChange": { "zh": "希望默认快速直接回答时选关；希望默认深入思考时选开。", "en": "Choose Off for quick direct answers by default, or On for deeper reasoning by default." },
+        "tradeoffs": { "zh": "思考会显著增加输出 token 数和等待时间。", "en": "Thinking adds many output tokens and waiting time." }
+      }
+    },
+    {
+      "id": "speculative.method",
+      "group": "speculative", "level": "basic", "order": 10,
+      "type": "enum",
+      "label": { "zh": "推测解码方式", "en": "Speculative decoding method" },
+      "summary": { "zh": "先用草稿预测几个 token，再一次性验证，以加快生成。", "en": "Drafts several tokens and verifies them in one step to speed up generation." },
+      "help": {
+        "what": { "zh": "可用方式取决于引擎和模型：MTP 需要模型自带多 token 预测层，草稿模型方式需要额外的小模型。", "en": "The methods available depend on the engine and model: MTP needs the model's own multi-token prediction layers, draft-model methods need an extra small model." },
+        "whenToChange": { "zh": "单个请求生成太慢、显存还有余量时开启；排查问题时关闭。", "en": "Turn it on when single requests generate too slowly and memory allows; turn it off when troubleshooting." },
+        "tradeoffs": { "zh": "额外占用显存；并发越高加速越小，草稿接受率低时甚至会变慢。", "en": "Uses extra memory; the gain shrinks at high concurrency and can become a slowdown when few drafts are accepted." }
+      },
+      "vramEffect": "draft"
+    },
+    {
+      "id": "speculative.numTokens",
+      "group": "speculative", "level": "advanced", "order": 20,
+      "type": "int", "unit": "tokens",
+      "label": { "zh": "每步草稿 token 数", "en": "Draft tokens per step" },
+      "summary": { "zh": "每一步先猜几个 token 再验证。", "en": "How many tokens are guessed before each verification step." },
+      "help": {
+        "what": { "zh": "草稿越长，猜中时加速越明显。", "en": "Longer drafts help more when the guesses are accepted." },
+        "whenToChange": { "zh": "输出可预测（例如代码）、接受率高时调大；接受率低时调小。", "en": "Raise it when output is predictable (code, for example) and acceptance is high; lower it when acceptance is low." },
+        "tradeoffs": { "zh": "猜错的 token 会浪费计算，设得过大反而变慢。", "en": "Rejected tokens waste compute, so too many slows generation down." }
+      },
+      "range": { "min": 1, "max": 16, "step": 1 },
+      "appliesWhen": { "notIn": [{ "param": "speculative.method" }, ["off", "none", null]] }
+    },
+    {
+      "id": "speculative.draftModel",
+      "group": "speculative", "level": "advanced", "order": 30,
+      "type": "path", "maxLength": 4096,
+      "label": { "zh": "草稿模型", "en": "Draft model" },
+      "summary": { "zh": "推测解码使用的小模型路径。", "en": "The path of the small model used for speculative decoding." },
+      "help": {
+        "what": { "zh": "留空时在模型目录附近自动查找可用的草稿模型。", "en": "Empty means a suitable draft model is looked up next to the model." },
+        "whenToChange": { "zh": "自动查找不到草稿模型，或想换用另一个草稿模型时。", "en": "When no draft model is found automatically, or to use a different one." },
+        "tradeoffs": { "zh": "草稿模型必须与主模型使用同一分词器，并会额外占用显存。", "en": "The draft must share the main model's tokenizer, and it uses extra memory." }
+      },
+      "appliesWhen": { "notIn": [{ "param": "speculative.method" }, ["off", "none", null]] },
+      "vramEffect": "draft"
+    },
+    {
+      "id": "clientPreset",
+      "group": "reasoning-tools", "level": "advanced", "order": 50,
+      "type": "enum",
+      "label": { "zh": "客户端预设", "en": "Client preset" },
+      "summary": { "zh": "按主要使用的客户端调整推荐值，本身不改变启动参数。", "en": "Tunes suggested values for your main client; it does not change launch flags by itself." },
+      "help": {
+        "what": { "zh": "用于控制台的推荐值和网关默认行为，例如 Claude Code 桥接或 OpenWebUI。", "en": "Used for console suggestions and gateway defaults, for example the Claude Code bridge or OpenWebUI." },
+        "whenToChange": { "zh": "主要使用的客户端变了时。", "en": "When your main client changes." },
+        "tradeoffs": { "zh": "只影响推荐值，实际行为以各参数的设置为准。", "en": "It only affects suggestions; the actual parameter values decide the behaviour." }
+      },
+      "choices": [
+        { "value": "openwebui", "label": { "zh": "Open WebUI", "en": "Open WebUI" } },
+        { "value": "claude-code", "label": { "zh": "Claude Code 桥接", "en": "Claude Code bridge" } },
+        { "value": "claude-cowork", "label": { "zh": "Claude Cowork 桥接", "en": "Claude Cowork bridge" } },
+        { "value": "generic", "label": { "zh": "通用 OpenAI 兼容", "en": "Generic OpenAI-compatible" } }
+      ],
+      "platformDefault": "openwebui"
+    },
+    {
+      "id": "apiKey",
+      "group": "network-security", "level": "basic", "order": 10,
+      "type": "string", "maxLength": 512, "secret": true,
+      "label": { "zh": "模型直连 API Key", "en": "Direct model API key" },
+      "summary": { "zh": "直接访问模型端口时需要提供的密钥；经网关访问不受影响。", "en": "The key needed to call the model port directly; access through the gateway is unaffected." },
+      "help": {
+        "what": { "zh": "设置后，绕过网关、直接访问引擎端口的请求必须带上这个密钥。密钥不会出现在启动命令或日志里。", "en": "When set, requests that reach the engine port directly, bypassing the gateway, must carry this key. It never appears in the launch command or the logs." },
+        "whenToChange": { "zh": "允许局域网设备直连模型端口时，强烈建议设置。", "en": "Strongly recommended when LAN devices can reach the model port directly." },
+        "tradeoffs": { "zh": "所有直连的客户端都要配置同一个密钥。", "en": "Every direct client needs the same key." }
+      }
+    },
+    {
+      "id": "temperature",
+      "group": "sampling", "level": "advanced", "order": 10,
+      "type": "float",
+      "label": { "zh": "默认温度", "en": "Default temperature" },
+      "summary": { "zh": "客户端没有指定时使用的采样温度。", "en": "The sampling temperature used when the client does not set one." },
+      "help": {
+        "what": { "zh": "温度越高输出越多样，越低越确定。", "en": "Higher temperature gives more varied output; lower gives more predictable output." },
+        "whenToChange": { "zh": "模型说明推荐了特定采样参数时。", "en": "When the model card recommends specific sampling values." },
+        "tradeoffs": { "zh": "这只是默认值，请求里的设置优先。", "en": "This is only a default; the value in a request wins." }
+      },
+      "range": { "min": 0, "max": 5 }
+    },
+    {
+      "id": "topP",
+      "group": "sampling", "level": "advanced", "order": 20,
+      "type": "float",
+      "label": { "zh": "默认 Top-p", "en": "Default top-p" },
+      "summary": { "zh": "客户端没有指定时使用的核采样阈值。", "en": "The nucleus-sampling threshold used when the client does not set one." },
+      "help": {
+        "what": { "zh": "只从累计概率达到这个值的候选 token 中采样。", "en": "Samples only from the most likely tokens whose probabilities add up to this value." },
+        "whenToChange": { "zh": "模型说明推荐了特定采样参数时。", "en": "When the model card recommends specific sampling values." },
+        "tradeoffs": { "zh": "越小输出越保守，越大越多样。", "en": "Smaller values give more conservative output, larger values more varied output." }
+      },
+      "range": { "min": 0, "max": 1 }
+    },
+    {
+      "id": "topK",
+      "group": "sampling", "level": "advanced", "order": 30,
+      "type": "int",
+      "label": { "zh": "默认 Top-k", "en": "Default top-k" },
+      "summary": { "zh": "客户端没有指定时，每一步只从概率最高的 k 个 token 中采样。", "en": "When the client does not say, each step samples only from the k most likely tokens." },
+      "help": {
+        "what": { "zh": "限制每一步候选 token 的数量。0 表示不限制。", "en": "Limits how many candidate tokens each step considers. 0 means no limit." },
+        "whenToChange": { "zh": "模型说明推荐了特定采样参数时。", "en": "When the model card recommends specific sampling values." },
+        "tradeoffs": { "zh": "越小输出越保守，越大越多样。", "en": "Smaller values give more conservative output, larger values more varied output." }
+      },
+      "range": { "min": 0, "max": 100000, "step": 1 }
+    },
+    {
+      "id": "chatTemplateKwargs",
+      "group": "reasoning-tools", "level": "expert", "order": 60,
+      "type": "json", "maxLength": 8192,
+      "label": { "zh": "聊天模板默认参数", "en": "Chat template default arguments" },
+      "summary": { "zh": "传给聊天模板的默认参数（JSON 对象），例如 enable_thinking。", "en": "Default arguments for the chat template, as a JSON object, such as enable_thinking." },
+      "help": {
+        "what": { "zh": "客户端请求里的 chat_template_kwargs 会覆盖同名的项。", "en": "chat_template_kwargs in a client request override matching keys." },
+        "whenToChange": { "zh": "模型模板支持额外的开关、需要统一默认值时。", "en": "When the model's template has extra switches you want to default." },
+        "tradeoffs": { "zh": "键名必须与模板一致，写错会被静默忽略。", "en": "Keys must match the template; unknown keys are silently ignored." }
+      }
+    },
+    {
+      "id": "vllm.loadFormat",
+      "group": "model", "level": "expert", "order": 60,
+      "type": "enum",
+      "label": { "zh": "权重加载格式", "en": "Weight load format" },
+      "summary": { "zh": "指定权重文件的格式；auto 按目录里的文件判断。", "en": "Which weight file format to load; auto decides from the files present." },
+      "help": {
+        "what": { "zh": "auto 在目录里只有 GGUF 文件时按 GGUF 加载，否则按 Hugging Face 格式加载。", "en": "auto loads GGUF when the folder only holds GGUF files, and the Hugging Face format otherwise." },
+        "whenToChange": { "zh": "目录里同时有多种格式、自动判断不对时。", "en": "When a folder holds several formats and auto picks the wrong one." },
+        "tradeoffs": { "zh": "vLLM 对 GGUF 的支持仍是实验性的。", "en": "vLLM's GGUF support is still experimental." }
+      },
+      "choices": [
+        { "value": "auto", "label": { "zh": "自动", "en": "Auto" } },
+        { "value": "hf", "label": { "zh": "HF / safetensors", "en": "HF / safetensors" } },
+        { "value": "gguf", "label": { "zh": "GGUF 单文件", "en": "Single GGUF file" } }
+      ],
+      "engineDefault": "auto"
+    },
+    {
+      "id": "generationConfig",
+      "group": "sampling", "level": "expert", "order": 40,
+      "type": "string", "maxLength": 4096,
+      "label": { "zh": "生成配置来源", "en": "Generation config source" },
+      "summary": { "zh": "默认采样参数的来源：模型自带、引擎内置或指定路径。", "en": "Where default sampling values come from: the model, the engine's built-in defaults, or a path." },
+      "help": {
+        "what": { "zh": "auto 读取模型的 generation_config.json；vllm 使用引擎内置默认值；也可以填写目录路径。", "en": "auto reads the model's generation_config.json; vllm uses the engine's built-in defaults; a folder path also works." },
+        "whenToChange": { "zh": "模型自带的生成配置导致异常输出（例如不停重复某个字符）时改为 vllm。", "en": "Switch to vllm when the model's own generation config causes bad output, such as one character repeating." },
+        "tradeoffs": { "zh": "改为 vllm 后，模型作者推荐的采样值不再生效。", "en": "With vllm, the sampling values the model author recommends no longer apply." }
+      }
+    }
+  ]
+}

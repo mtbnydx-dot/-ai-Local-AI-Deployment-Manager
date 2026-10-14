@@ -1,0 +1,17 @@
+{
+  "format": "safetensors",
+  "index": null,
+  "files": [
+    {"name":"adapter_model.safetensors","bytes":54560368,"headerBytes":34408,"tensors":256,"metadata":{"format":"pt"}}
+  ],
+  "groups": [
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.k_proj.lora_A.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[16,4096],"bytesEach":262144,"file":"adapter_model.safetensors"},
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.k_proj.lora_B.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[1024,16],"bytesEach":65536,"file":"adapter_model.safetensors"},
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.o_proj.lora_A.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[16,4096],"bytesEach":262144,"file":"adapter_model.safetensors"},
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.o_proj.lora_B.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[4096,16],"bytesEach":262144,"file":"adapter_model.safetensors"},
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.q_proj.lora_A.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[16,4096],"bytesEach":262144,"file":"adapter_model.safetensors"},
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.q_proj.lora_B.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[4096,16],"bytesEach":262144,"file":"adapter_model.safetensors"},
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.v_proj.lora_A.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[16,4096],"bytesEach":262144,"file":"adapter_model.safetensors"},
+    {"pattern":"base_model.model.model.layers.{L}.self_attn.v_proj.lora_B.weight","ranges":{"L":[0,31]},"dtype":"F32","shape":[1024,16],"bytesEach":65536,"file":"adapter_model.safetensors"}
+  ]
+}

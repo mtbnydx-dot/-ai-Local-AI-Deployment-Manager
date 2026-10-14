@@ -27,3 +27,7 @@ Caddyfile text eol=lf
 *.ico binary
 *.zip binary
 *.gguf binary
+
+# Vendored browser files are pinned by sha256 in shared-public/vendor/VENDOR.json,
+# so git stores and checks them out byte for byte (LICENSE files have no extension).
+shared-public/vendor/** -text

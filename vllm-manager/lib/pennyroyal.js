@@ -108,7 +108,54 @@ const PENNYROYAL_ROPE_OVERRIDE = JSON.stringify({ text_config: { rope_parameters
   partial_rotary_factor: 0.25, factor: 2, original_max_position_embeddings: 262144,
 } } });
 
+// The qualified launch data of the Pennyroyal profile, in the recipe "fixed"
+// shape the SGLang adapter consumes through its slots (01-engines §7): docker
+// flags and ai.runtime.* labels after the ai.sglang.* labels, the compiler
+// cache volume instead of the cache root, read-only model mounts, no HF cache
+// mount, restart "no", and the NEXTN/FR-Spec tail before --api-key. The env
+// stays on the preset. ENG-6 moves this into recipe pennyroyal-v251.
+function pennyroyalLaunchFixed(options = {}, preset = {}) {
+  return {
+    dockerFlags: ["--init", "--ulimit", "memlock=-1:-1"],
+    labels: [
+      "ai.runtime.profile=pennyroyal-v2.5.1-gpu-cache-only",
+      "ai.runtime.kv-dtype=fp8_e4m3",
+      "ai.runtime.speculative-mode=mtp",
+      "ai.runtime.cpu-cache=disabled",
+      "ai.runtime.online-fp8=true",
+      "ai.runtime.fr-spec=true",
+      "ai.runtime.speculative=nextn-frspec",
+      "ai.runtime.storage=ram-ple",
+      "ai.runtime.ple-dtype=fp8",
+      "ai.runtime.mamba-dtype=bfloat16",
+      "ai.runtime.linear-attn=flashinfer/flashinfer",
+      "ai.runtime.cache=gpu-radix; cpu-hicache/nixl disabled",
+      `ai.runtime.thinking=${options.sglangDisableThinkingByDefault ? "disabled-by-default" : "enabled-by-default"}`,
+      `ai.runtime.context-length=${options.maxModelLen}`,
+      `ai.runtime.max-total-tokens=${preset.maxTotalTokens}`,
+      "ai.runtime.chunked-prefill=4096",
+      "ai.runtime.fp4-backend=flashinfer_cutlass",
+    ],
+    args: ["--load-format", "safetensors", "--warmups=structured_output",
+      "--json-model-override-args", PENNYROYAL_ROPE_OVERRIDE,
+      "--gdn-mtp-cache-mode", "none",
+      "--chat-template", "/opt/pennyroyal/configs/pennyroyal/templates/froggeric-v22.5.jinja",
+      "--image-processor-backend", "pil", "--enable-request-time-stats-logging",
+      "--speculative-algorithm", "NEXTN", "--speculative-num-steps", "3",
+      "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", "4",
+      "--speculative-draft-model-quantization", "unquant",
+      "--speculative-token-map", "/opt/pennyroyal/configs/pennyroyal/frspec/flash-next-64k.pt",
+      "--watchdog-timeout", "1800"],
+    slots: {
+      restart: "no",
+      hfCacheMount: false,
+      modelMountReadOnly: true,
+      cacheMount: `type=volume,source=${PENNYROYAL_CACHE_VOLUME},target=/cache`,
+    },
+  };
+}
+
 module.exports = { PENNYROYAL_IMAGE, PENNYROYAL_CACHE_VOLUME, PENNYROYAL_DEFAULTS,
   PENNYROYAL_VRAM_RESERVATION_MIB, pennyroyalVramReservationMb,
   PENNYROYAL_TOKENIZER_SHA256, PENNYROYAL_ROPE_OVERRIDE,
-  isPennyroyalImage, pennyroyalOptionErrors, createPennyroyalPreset };
+  isPennyroyalImage, pennyroyalOptionErrors, createPennyroyalPreset, pennyroyalLaunchFixed };

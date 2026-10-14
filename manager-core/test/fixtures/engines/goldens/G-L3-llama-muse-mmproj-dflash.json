@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "id": "G-L3-llama-muse-mmproj-dflash",
+  "kind": "builder",
+  "manager": "llama",
+  "source": "llama-manager/test/runtime-command.test.js › llama runtime command auto-loads Muse mmproj and DFlash draft together",
+  "stubs": "llama-test-v2",
+  "env": {
+    "HF_TOKEN": null
+  },
+  "input": {
+    "config": {
+      "containerName": "llama-local",
+      "managerId": "llama-manager",
+      "hfCache": "D:/cache",
+      "modelsRoot": "D:/AI/models",
+      "image": "llama:regular",
+      "museImage": "local/llama.cpp:server-cuda-muse-62bf73d"
+    },
+    "launch": {
+      "modelArg": "/models/muse/muse-glimmer-dynamic.gguf",
+      "effectiveLoadFormat": "gguf",
+      "selectedGgufFile": "D:/AI/models/muse/muse-glimmer-dynamic.gguf",
+      "selectedModel": {
+        "path": "D:/AI/models/muse/muse-glimmer-dynamic.gguf",
+        "architecture": "muse-glimmer"
+      },
+      "ggufFiles": [],
+      "ggufInventory": {
+        "models": [
+          {},
+          {}
+        ]
+      },
+      "mmprojFiles": [
+        {
+          "path": "D:/AI/models/muse/mmproj-kquant.gguf",
+          "architecture": "clip"
+        }
+      ],
+      "draftFiles": [
+        {
+          "path": "D:/AI/models/muse/dflash-kquant.gguf",
+          "architecture": "dflash"
+        }
+      ]
+    },
+    "opts": {
+      "model": "D:/AI/models/muse",
+      "launch": {
+        "modelArg": "/models/muse/muse-glimmer-dynamic.gguf",
+        "effectiveLoadFormat": "gguf",
+        "selectedGgufFile": "D:/AI/models/muse/muse-glimmer-dynamic.gguf",
+        "selectedModel": {
+          "path": "D:/AI/models/muse/muse-glimmer-dynamic.gguf",
+          "architecture": "muse-glimmer"
+        },
+        "ggufFiles": [],
+        "ggufInventory": {
+          "models": [
+            {},
+            {}
+          ]
+        },
+        "mmprojFiles": [
+          {
+            "path": "D:/AI/models/muse/mmproj-kquant.gguf",
+            "architecture": "clip"
+          }
+        ],
+        "draftFiles": [
+          {
+            "path": "D:/AI/models/muse/dflash-kquant.gguf",
+            "architecture": "dflash"
+          }
+        ]
+      },
+      "port": 8080,
+      "networkAccess": "local",
+      "serviceHost": "127.0.0.1",
+      "gpuDeviceIds": [
+        "0"
+      ],
+      "textOnlyMode": false,
+      "languageModelOnly": false,
+      "multiGpuMode": "none",
+      "mainGpu": 0,
+      "name": "muse-glimmer",
+      "maxModelLen": 131072,
+      "maxNumSeqs": 1,
+      "batchSize": 2048,
+      "ubatchSize": 512,
+      "gpuLayers": "all",
+      "cacheTypeK": "q8_0",
+      "cacheTypeV": "q8_0",
+      "flashAttention": "auto",
+      "reasoning": "auto",
+      "reasoningFormat": "auto",
+      "speculativeMode": "auto",
+      "numSpeculativeTokens": 3
+    },
+    "job": {},
+    "modelFixture": null
+  },
+  "expect": {
+    "runArgs": [
+      "run",
+      "-d",
+      "--name",
+      "llama-local",
+      "--restart",
+      "on-failure:3",
+      "--label",
+      "ai.manager=llama-manager",
+      "--label",
+      "ai.manager.engine=llama",
+      "--label",
+      "ai.manager.job=",
+      "--label",
+      "ai.manager.instance=primary",
+      "--label",
+      "ai.manager.instance-mode=replace",
+      "--label",
+      "ai.manager.model=muse-glimmer",
+      "--label",
+      "ai.manager.port=8080",
+      "--label",
+      "ai.manager.gpu-ids=0",
+      "--label",
+      "ai.manager.vram-reservation-mb=0",
+      "--label",
+      "ai.manager.max-model-len=131072",
+      "--label",
+      "ai.manager.max-num-seqs=1",
+      "--label",
+      "ai.manager.gpu-memory-utilization=undefined",
+      "--label",
+      "ai.manager.gpu-layers=all",
+      "--label",
+      "ai.manager.cache-type-k=q8_0",
+      "--label",
+      "ai.manager.cache-type-v=q8_0",
+      "--label",
+      "ai.manager.tensor-split=",
+      "--label",
+      "ai.manager.speculative-mode=draft-dflash",
+      "--label",
+      "ai.manager.reasoning-effort=default",
+      "--label",
+      "ai.manager.reasoning-budget=-1",
+      "--label",
+      "ai.manager.mmproj-device=auto",
+      "--label",
+      "ai.manager.fit-target-mb=0",
+      "--label",
+      "ai.manager.fit-ctx=0",
+      "--label",
+      "ai.manager.mmproj=true",
+      "--label",
+      "ai.manager.draft-model=true",
+      "--label",
+      "ai.manager.text-only=false",
+      "--label",
+      "ai.manager.gpu-admission-lease=",
+      "--gpus",
+      "device=0",
+      "--ipc=host",
+      "-p",
+      "127.0.0.1:8080:8080",
+      "-v",
+      "D:/cache:/root/.cache/huggingface",
+      "-v",
+      "D:/AI/models:/models",
+      "-e",
+      "NVIDIA_VISIBLE_DEVICES=0",
+      "-e",
+      "CUDA_VISIBLE_DEVICES=0",
+      "-e",
+      "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+      "local/llama.cpp:server-cuda-muse-62bf73d",
+      "--model",
+      "/models/muse/muse-glimmer-dynamic.gguf",
+      "--alias",
+      "muse-glimmer",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8080",
+      "--ctx-size",
+      "131072",
+      "--parallel",
+      "1",
+      "--batch-size",
+      "2048",
+      "--ubatch-size",
+      "512",
+      "--n-gpu-layers",
+      "all",
+      "--split-mode",
+      "none",
+      "--main-gpu",
+      "0",
+      "--cache-type-k",
+      "q8_0",
+      "--cache-type-v",
+      "q8_0",
+      "--flash-attn",
+      "auto",
+      "--reasoning",
+      "auto",
+      "--reasoning-format",
+      "auto",
+      "--reasoning-budget",
+      "-1",
+      "--metrics",
+      "--jinja",
+      "--mmproj",
+      "/models/muse/mmproj-kquant.gguf",
+      "--spec-type",
+      "draft-dflash",
+      "--model-draft",
+      "/models/muse/dflash-kquant.gguf",
+      "--spec-draft-n-max",
+      "3",
+      "--temp",
+      "1",
+      "--top-p",
+      "0.95",
+      "--top-k",
+      "64"
+    ],
+    "activePublishArgs": [
+      "127.0.0.1:8080:8080"
+    ],
+    "secretEnvNames": [],
+    "secretEnv": {},
+    "runtimeImage": "local/llama.cpp:server-cuda-muse-62bf73d",
+    "runtimeEngine": null,
+    "jobMeta": null,
+    "logs": [
+      "GGUF model: using /models/muse/muse-glimmer-dynamic.gguf",
+      "Multiple GGUF model variants found; selected: muse-glimmer-dynamic.gguf",
+      "Muse Glimmer runtime image: local/llama.cpp:server-cuda-muse-62bf73d",
+      "Multimodal projector: D:/AI/models/muse/mmproj-kquant.gguf",
+      "Docker publish: -p 127.0.0.1:8080:8080",
+      "Context budget: 131072 tokens per slot x 1 slots = --ctx-size 131072.",
+      "DFlash draft model: D:/AI/models/muse/dflash-kquant.gguf",
+      "Muse Glimmer sampling defaults: temp=1, top-p=0.95, top-k=64."
+    ]
+  },
+  "history": [
+    {
+      "at": "2026-10-14",
+      "reason": "initial capture from the post-P0 merge head 7cc67a3"
+    }
+  ]
+}
