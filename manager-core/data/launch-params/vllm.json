@@ -192,14 +192,14 @@
       "label": { "zh": "每步调度 token 上限", "en": "Tokens scheduled per step" },
       "summary": { "zh": "每个调度步最多处理的 token 数，决定预填充分块的大小。", "en": "The most tokens processed per scheduler step, which sets the prefill chunk size." },
       "help": {
-        "what": { "zh": "对应 --max-num-batched-tokens。0 或不设置时使用引擎默认值。", "en": "Maps to --max-num-batched-tokens. 0 or unset uses the engine default." },
+        "what": { "zh": "对应 --max-num-batched-tokens。不设置时使用引擎默认值。", "en": "Maps to --max-num-batched-tokens. Unset uses the engine default." },
         "whenToChange": { "zh": "长提示词等很久才开始回答时调大；生成过程断断续续时调小。", "en": "Raise it when long prompts take a long time before the answer starts; lower it when generation stutters." },
         "tradeoffs": { "zh": "越大预填充越快，但激活显存越多，也会拉长其它请求的出字间隔。", "en": "Larger values prefill faster but use more activation memory and delay other requests' tokens." }
       },
-      "range": { "min": 0, "max": 4194304, "step": 1 },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-num-batched-tokens", "omitWhen": [0, null] },
       "vramEffect": "activations",
-      "legacy": { "field": "maxNumBatchedTokens", "domId": "maxNumBatchedTokens" }
+      "legacy": { "field": "maxNumBatchedTokens", "domId": "maxNumBatchedTokens", "unset": 0 }
     },
     {
       "id": "vllm.cpuOffloadGb",

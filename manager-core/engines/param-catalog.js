@@ -225,11 +225,11 @@ function checkChoices(choices, where, errors) {
 function checkLegacy(legacy, where, errors) {
   if (legacy === null) return;
   if (!isPlainObject(legacy)) {
-    errors.push({ path: where, code: "invalid_type", message: `${where} must be {field, aliases?, domId, codec?} or null.` });
+    errors.push({ path: where, code: "invalid_type", message: `${where} must be {field, aliases?, domId, codec?, unset?} or null.` });
     return;
   }
   for (const key of Object.keys(legacy)) {
-    if (!["field", "aliases", "domId", "codec"].includes(key)) errors.push({ path: joinPath(where, key), code: "unknown_field", message: `Unknown legacy field ${key}.` });
+    if (!["field", "aliases", "domId", "codec", "unset"].includes(key)) errors.push({ path: joinPath(where, key), code: "unknown_field", message: `Unknown legacy field ${key}.` });
   }
   if (typeof legacy.field !== "string" || !LEGACY_FIELD_PATTERN.test(legacy.field)) {
     errors.push({ path: joinPath(where, "field"), code: "required", message: "legacy.field must name the legacy body/config field." });
@@ -239,6 +239,10 @@ function checkLegacy(legacy, where, errors) {
   }
   if (legacy.domId !== undefined && legacy.domId !== null && (typeof legacy.domId !== "string" || !DOM_ID_PATTERN.test(legacy.domId))) {
     errors.push({ path: joinPath(where, "domId"), code: "invalid_value", message: "legacy.domId must be a DOM id or null." });
+  }
+  // The legacy spelling of "unset" when it is not an empty string (sglangMaxTotalTokens 0).
+  if (legacy.unset !== undefined && legacy.unset !== null && !["string", "number", "boolean"].includes(typeof legacy.unset)) {
+    errors.push({ path: joinPath(where, "unset"), code: "invalid_type", message: "legacy.unset must be a scalar." });
   }
   if (legacy.codec !== undefined && !LEGACY_CODECS.includes(legacy.codec)) {
     errors.push({ path: joinPath(where, "codec"), code: "invalid_value", message: `legacy.codec must be one of ${LEGACY_CODECS.join(", ")}.` });
@@ -832,6 +836,19 @@ function createParamCatalog(options = {}) {
     return state || load();
   }
 
+  // Every param id some catalog defines: the concepts plus each engine's own
+  // params. An id this engine does not bind is "not applicable" here (01
+  // §9.3), never an unknown parameter.
+  function knownParamIds(snapshot) {
+    const ids = new Set(snapshot.common.params.keys());
+    for (const engine of snapshot.engines.values()) {
+      for (const entry of [...engine.entries, ...engine.overrides.map((item) => item.entry)]) {
+        if (typeof entry?.id === "string" && expr.PARAM_ID_PATTERN.test(entry.id)) ids.add(entry.id);
+      }
+    }
+    return ids;
+  }
+
   // The merged, validated, frozen catalog of one engine (no runtime applied).
   function buildBase(engineId) {
     const snapshot = current();
@@ -840,13 +857,14 @@ function createParamCatalog(options = {}) {
     const errors = [];
     const groups = [...common.groups].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
     const groupOrder = new Map(groups.map((group) => [group.id, group.order]));
+    const allIds = knownParamIds(snapshot);
     if (!engine) {
       return finalizeCatalog({
         engineId,
         catalogVersion: common.asOf ? `+${common.asOf}` : "",
         groups,
         params: [],
-        notApplicable: [...common.params.keys()].sort(),
+        notApplicable: [...allIds].sort(),
         legacyIgnored: [],
         errors: [{ source: "registry", engineId, path: "", code: "catalog_missing", message: `Engine ${engineId} has no parameter catalog.` }],
       });
@@ -928,7 +946,7 @@ function createParamCatalog(options = {}) {
       catalogVersion: `${engine.asOf}+${common.asOf}`,
       groups,
       params: normalized,
-      notApplicable: [...common.params.keys()].filter((id) => !params.has(id)).sort(),
+      notApplicable: [...allIds].filter((id) => !params.has(id)).sort(),
       legacyIgnored,
       errors,
     });
@@ -943,11 +961,16 @@ function createParamCatalog(options = {}) {
       }
     }
     const compiled = new Map(catalog.params.map((param) => [param.id, compileParam(param)]));
+    // Every fact the catalog reads: expressions, plus the runtime features
+    // that gate params, so the schema's facts say which ones the runtime has.
     const factNames = new Set();
     for (const entry of compiled.values()) {
       for (const item of [entry.appliesWhen, entry.platformDefault, ...entry.rules.map((rule) => rule.when)]) {
         for (const name of item?.refs?.facts || []) factNames.add(name);
       }
+    }
+    for (const param of catalog.params) {
+      if (param.requiresFeature) factNames.add(`${expr.FEATURE_FACT_PREFIX}${param.requiresFeature}`);
     }
     const base = {
       engineId: catalog.engineId,
@@ -1198,6 +1221,8 @@ function buildSchemaPayload({ catalog, runtime = null, introspection = null, fac
     ...clone(param),
     platformDefaultValue: platformDefaultValue(param, catalog, { facts }),
   }));
+  // Only the groups this engine fills; the console renders them in order.
+  const usedGroups = new Set(params.map((param) => param.group));
   return {
     ok: true,
     engineId: catalog.engineId,
@@ -1215,7 +1240,7 @@ function buildSchemaPayload({ catalog, runtime = null, introspection = null, fac
       }
       : null,
     facts,
-    groups: clone(catalog.groups),
+    groups: clone(catalog.groups.filter((group) => usedGroups.has(group.id))),
     params,
     notApplicable: [...catalog.notApplicable],
     legacyIgnored: clone(catalog.legacyIgnored),

@@ -13,6 +13,7 @@
 //   {"user": id}                                  the explicit user value (unset → null)
 //   {"fact": name}                                a host/model/runtime/instance fact (unknown or null → UNKNOWN)
 //   {"env": NAME}                                 an allowlisted environment variable (no resolver → UNKNOWN, unset → null)
+//                                                 never a secret (API_KEY, TOKEN, ...: env_name_secret)
 //   {"const": value}                              any JSON value, taken verbatim
 //   {"<operator>": args}                          see OPERATORS
 //
@@ -37,6 +38,9 @@ const LIMITS = Object.freeze({ maxDepth: 32, maxNodes: 512, maxRegexLength: 200 
 const UNKNOWN = Symbol.for("local-ai.engines.expr.unknown");
 
 const ENV_NAME_PATTERN = /^(VLLM|SGLANG|LLAMA)_[A-Z0-9_]{1,48}$/;
+// Expressions feed argv, env and labels, so a secret never becomes readable,
+// even when a recipe lists it in inputs.env (VLLM_API_KEY, LLAMA_API_KEY...).
+const SECRET_ENV_PATTERN = /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)/;
 const PARAM_ID_PATTERN = /^[a-z][A-Za-z0-9]*(?:\.[a-z][A-Za-z0-9]*)*$/;
 const FEATURE_KEY_PATTERN = /^[a-z][A-Za-z0-9]{0,63}$/;
 
@@ -266,6 +270,10 @@ function compileExpr(ast, options = {}) {
       return null;
     }
     refs.envs.add(arg);
+    if (SECRET_ENV_PATTERN.test(arg)) {
+      fail(path, "env_name_secret", `Environment variable ${arg} holds a secret and cannot be read by an expression.`);
+      return null;
+    }
     if (!envAny && (!envAllowlist || !envAllowlist.has(arg))) {
       fail(path, "env_not_allowed", `Environment variable ${arg} is not in this expression's inputs.env allowlist.`);
       return null;
@@ -594,6 +602,7 @@ function truthState(value) {
 
 module.exports = {
   ENV_NAME_PATTERN,
+  SECRET_ENV_PATTERN,
   ExprError,
   FACT_NAMES,
   FEATURE_FACT_PREFIX,

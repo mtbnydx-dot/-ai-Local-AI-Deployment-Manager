@@ -168,10 +168,10 @@
         "whenToChange": { "zh": "需要限制显存占用，或让显存准入的预算可预测时。", "en": "To bound memory use and make the admission budget predictable." },
         "tradeoffs": { "zh": "越小越省显存，但长上下文的并发请求会排队。", "en": "Smaller saves memory; long concurrent requests queue." }
       },
-      "range": { "min": 0, "max": 4194304, "step": 1 },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-total-tokens", "omitWhen": [0, null] },
       "vramEffect": "kv-pool",
-      "legacy": { "field": "sglangMaxTotalTokens", "domId": "sglangMaxTotalTokens" }
+      "legacy": { "field": "sglangMaxTotalTokens", "domId": "sglangMaxTotalTokens", "unset": 0 }
     },
     {
       "id": "sglang.pageSize",
@@ -184,9 +184,9 @@
         "whenToChange": { "zh": "按已验证方案或注意力后端的要求设置。", "en": "Set it as a validated recipe or the attention backend requires." },
         "tradeoffs": { "zh": "页越大，前缀复用的粒度越粗，未填满的页浪费越多。", "en": "Bigger pages reuse prefixes more coarsely and waste more on partly filled pages." }
       },
-      "range": { "min": 0, "max": 4096, "step": 1 },
+      "range": { "min": 1, "max": 4096, "step": 1 },
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--page-size", "omitWhen": [0, null] },
-      "legacy": { "field": "sglangPageSize", "domId": "sglangPageSize" }
+      "legacy": { "field": "sglangPageSize", "domId": "sglangPageSize", "unset": 0 }
     },
     {
       "id": "sglang.chunkedPrefillSize",
@@ -199,11 +199,11 @@
         "whenToChange": { "zh": "预填充长提示词时显存峰值过高就调小。", "en": "Lower it when prefilling long prompts peaks too high in memory." },
         "tradeoffs": { "zh": "越小越省激活显存，但长提示词开始回答得更慢。", "en": "Smaller chunks save activation memory but make long prompts slower to start answering." }
       },
-      "range": { "min": 0, "max": 4194304, "step": 1 },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
       "platformDefault": 8192,
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--chunked-prefill-size" },
       "vramEffect": "activations",
-      "legacy": { "field": "sglangChunkedPrefillSize", "domId": "sglangChunkedPrefillSize" }
+      "legacy": { "field": "sglangChunkedPrefillSize", "domId": "sglangChunkedPrefillSize", "unset": 0 }
     },
     {
       "id": "sglang.maxRunningRequests",
@@ -352,10 +352,10 @@
         "whenToChange": { "zh": "按已验证方案设置。", "en": "Set it as a validated recipe says." },
         "tradeoffs": { "zh": "间隔越小前缀复用越细，但快照占用更多显存。", "en": "Shorter intervals reuse prefixes more finely, but snapshots use more memory." }
       },
-      "range": { "min": 0, "max": 4194304, "step": 1 },
+      "range": { "min": 1, "max": 4194304, "step": 1 },
       "requiresFeature": "mambaControls",
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--mamba-track-interval", "omitWhen": [0, null] },
-      "legacy": { "field": "sglangMambaTrackInterval", "domId": "sglangMambaTrackInterval" }
+      "legacy": { "field": "sglangMambaTrackInterval", "domId": "sglangMambaTrackInterval", "unset": 0 }
     },
     {
       "id": "sglang.maxMambaCacheSize",
@@ -368,11 +368,11 @@
         "whenToChange": { "zh": "按已验证方案设置；需要更多并发、显存又有余量时调大。", "en": "Set it as a validated recipe says; raise it for more concurrency when memory allows." },
         "tradeoffs": { "zh": "槽位越多越占显存。", "en": "More slots use more memory." }
       },
-      "range": { "min": 0, "max": 4096, "step": 1 },
+      "range": { "min": 1, "max": 4096, "step": 1 },
       "requiresFeature": "mambaControls",
       "emit": { "mode": "adapter", "kind": "flag-value", "flag": "--max-mamba-cache-size", "omitWhen": [0, null] },
       "vramEffect": "kv-pool",
-      "legacy": { "field": "sglangMaxMambaCacheSize", "domId": "sglangMaxMambaCacheSize" }
+      "legacy": { "field": "sglangMaxMambaCacheSize", "domId": "sglangMaxMambaCacheSize", "unset": 0 }
     },
     {
       "id": "sglang.dsparkBlockSize",
