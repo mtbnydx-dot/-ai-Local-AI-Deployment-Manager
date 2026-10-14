@@ -38,6 +38,7 @@ const METHODS = Object.freeze([
   "call",
   "runRollups",
   "runRetention",
+  "configureJobs",
   "getState",
   "setState",
   "stats",
@@ -118,6 +119,9 @@ async function openTelemetryStore(options = {}) {
     file: options.file,
     queryModule: options.queryModule ? String(options.queryModule) : undefined,
     retention: options.retention && typeof options.retention === "object" ? { ...options.retention } : undefined,
+    // Background rollup and retention jobs (store-worker.js). configureJobs()
+    // keeps this copy current, so a restarted worker resumes the same jobs.
+    jobs: options.jobs && typeof options.jobs === "object" ? JSON.parse(JSON.stringify(options.jobs)) : undefined,
   };
   const restartMinMs = clampInt(options.restartMinMs, 10, 60_000, 1000);
   const restartMaxMs = clampInt(options.restartMaxMs, restartMinMs, 600_000, 60_000);
@@ -366,6 +370,7 @@ async function openTelemetryStore(options = {}) {
         return Promise.resolve(null);
       case "runRollups":
       case "runRetention":
+      case "configureJobs":
         return Promise.resolve({ ok: false, skipped: true, reason: "store_unavailable" });
       case "stats":
         return Promise.resolve(degradedStats());
@@ -423,6 +428,14 @@ async function openTelemetryStore(options = {}) {
 
   const store = { close };
   for (const method of METHODS) store[method] = (...args) => invoke(method, args);
+  store.configureJobs = async (patch) => {
+    const result = await invoke("configureJobs", [patch]);
+    if (result && result.ok && result.jobs) {
+      const { scheduled, lastRuns, ...settings } = result.jobs;
+      coreOptions.jobs = settings;
+    }
+    return result;
+  };
   Object.defineProperty(store, "info", { enumerable: true, get: () => (info ? { ...info, mode } : null) });
   Object.defineProperty(store, "state", { enumerable: true, get: () => state });
   Object.defineProperty(store, STORE_WORKER, { value: () => worker });

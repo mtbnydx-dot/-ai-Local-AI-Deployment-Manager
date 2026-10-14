@@ -1,0 +1,81 @@
+{
+  "description": "nvidia-smi output fixtures for telemetry-gpu.test.js (04-telemetry.md §8). gpus[] is the per-field value table the fake driver answers any --query-gpu field list from; queryGpu.full.stdout is that table rendered for the full field list, as nvidia-smi prints it on Windows (CRLF, ', ' separators, nounits). GPU 0 reports the throttle mask 0x400 that the host shows today; GPU 1 reports N/A, [N/A] and [Not Supported] placeholders.",
+  "gpus": [
+    {
+      "index": "0",
+      "uuid": "GPU-00000000-0000-4000-8000-000000000000",
+      "name": "NVIDIA Example GPU 96GB",
+      "compute_cap": "12.0",
+      "memory.total": "97887",
+      "memory.used": "90112",
+      "utilization.gpu": "87",
+      "utilization.memory": "41",
+      "temperature.gpu": "71",
+      "temperature.memory": "N/A",
+      "power.draw": "412.35",
+      "power.limit": "600.00",
+      "enforced.power.limit": "585.00",
+      "fan.speed": "30",
+      "clocks.sm": "2520",
+      "clocks.mem": "13801",
+      "clocks.max.sm": "3090",
+      "pstate": "P1",
+      "clocks_event_reasons.active": "0x0000000000000400",
+      "clocks_throttle_reasons.active": "0x0000000000000400"
+    },
+    {
+      "index": "1",
+      "uuid": "GPU-11111111-1111-4111-8111-111111111111",
+      "name": "NVIDIA Example GPU 24GB",
+      "compute_cap": "8.9",
+      "memory.total": "24576",
+      "memory.used": "512",
+      "utilization.gpu": "0",
+      "utilization.memory": "0",
+      "temperature.gpu": "34",
+      "temperature.memory": "[N/A]",
+      "power.draw": "[N/A]",
+      "power.limit": "450.00",
+      "enforced.power.limit": "[N/A]",
+      "fan.speed": "[Not Supported]",
+      "clocks.sm": "210",
+      "clocks.mem": "405",
+      "clocks.max.sm": "2805",
+      "pstate": "P8",
+      "clocks_event_reasons.active": "0x0000000000000001",
+      "clocks_throttle_reasons.active": "0x0000000000000001"
+    }
+  ],
+  "queryGpu": {
+    "full": {
+      "fields": "index,uuid,name,memory.total,memory.used,utilization.gpu,utilization.memory,temperature.gpu,temperature.memory,power.draw,power.limit,enforced.power.limit,fan.speed,clocks.sm,clocks.mem,clocks.max.sm,pstate,clocks_event_reasons.active",
+      "stdout": "0, GPU-00000000-0000-4000-8000-000000000000, NVIDIA Example GPU 96GB, 97887, 90112, 87, 41, 71, N/A, 412.35, 600.00, 585.00, 30, 2520, 13801, 3090, P1, 0x0000000000000400\r\n1, GPU-11111111-1111-4111-8111-111111111111, NVIDIA Example GPU 24GB, 24576, 512, 0, 0, 34, [N/A], [N/A], 450.00, [N/A], [Not Supported], 210, 405, 2805, P8, 0x0000000000000001\r\n"
+    },
+    "legacy": {
+      "fields": "index,name,compute_cap,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,power.limit,fan.speed",
+      "stdout": "0, NVIDIA Example GPU 96GB, 12.0, 97887, 90112, 87, 71, 412.35, 600.00, 30\n"
+    },
+    "commaName": {
+      "fields": "index,uuid,name,power.draw,clocks_event_reasons.active",
+      "stdout": "0, GPU-00000000-0000-4000-8000-000000000000, NVIDIA Example GPU, Rev B, 120.50, 0x0000000000000000\n"
+    },
+    "noDevices": "No devices were found\r\n",
+    "invalidField": "Field \"clocks_event_reasons.active\" is not a valid field to query.\r\n",
+    "driverUnavailable": "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running.\r\n",
+    "deviceHandleUnknown": "Unable to determine the device handle for GPU0000:01:00.0: Unknown Error\r\n"
+  },
+  "computeApps": {
+    "wddm": {
+      "fields": "gpu_uuid,pid,process_name,used_memory",
+      "stdout": "GPU-00000000-0000-4000-8000-000000000000, 4242, C:\\Program Files\\Example\\example-server.exe, [N/A]\r\nGPU-00000000-0000-4000-8000-000000000000, 5150, C:\\Windows\\System32\\example-helper.exe, [N/A]\r\n"
+    },
+    "numbers": {
+      "fields": "gpu_uuid,pid,process_name,used_memory",
+      "stdout": "GPU-00000000-0000-4000-8000-000000000000, 101, /usr/bin/python3, 81920\nGPU-00000000-0000-4000-8000-000000000000, 102, /opt/example/llama-server, 2048\nGPU-11111111-1111-4111-8111-111111111111, 103, /opt/example/tool, with comma, [N/A]\n"
+    },
+    "plain": {
+      "fields": "pid,process_name,used_memory",
+      "stdout": "101, /usr/bin/python3, 81920\n"
+    }
+  }
+}

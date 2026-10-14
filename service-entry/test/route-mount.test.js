@@ -216,7 +216,9 @@ test("feature flags follow mounting for the real table", async () => {
   const routes = await entry.mountRouteModules({ ctx });
   assert.equal(routes.failed.length, 0, JSON.stringify(routes.failed));
   assert.equal(ctx.features.events, true);
-  assert.equal(ctx.relay, null, "no relay until ENT-EV3 is mounted");
+  // ENT-EV3 publishes the manager event relay; it answers no route.
+  assert.equal(typeof ctx.relay?.poke, "function");
+  assert.deepEqual(ctx.relay.status().map((item) => item.managerId), ["vllm", "llama"]);
   assert.deepEqual(ctx.managers.map((manager) => manager.id), ["vllm", "llama"]);
   for (const key of ["rootDir", "aiRoot", "security", "auth", "bus", "sendJson", "readJsonObjectBody", "logger", "now"]) {
     assert.ok(ctx[key], key);
