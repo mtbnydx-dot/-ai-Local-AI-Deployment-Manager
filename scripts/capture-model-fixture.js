@@ -112,6 +112,14 @@ const GGUF_VALUE_TYPES = Object.freeze({
 const GGUF_VALUE_TYPE_NAMES = Object.freeze(Object.fromEntries(Object.entries(GGUF_VALUE_TYPES).map(([name, id]) => [id, name])));
 const GGUF_FIXED_BYTES = Object.freeze({ 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 });
 
+// The Rust safetensors writer lays tensors out by dtype (this enum order,
+// descending), then by name. A tensor table records order:"dtype" for such a
+// file so the test writer can reproduce its offsets; name order is the default.
+const SAFETENSORS_DTYPE_ORDER = Object.freeze([
+  "BOOL", "F4", "F6_E2M3", "F6_E3M2", "U8", "I8", "F8_E5M2", "F8_E4M3", "F8_E8M0",
+  "I16", "U16", "F16", "BF16", "I32", "U32", "F32", "F64", "I64", "U64",
+]);
+
 // Release privacy scan (build-github-release.ps1) plus the redactor's HF token
 // shape. Fixtures must pass both the release scan and fixture-privacy.test.js.
 const CREDENTIAL_PATTERNS = Object.freeze([
@@ -298,11 +306,26 @@ function scrubCapturedFile(name, buffer, scrubbed, warnings) {
 }
 
 // ---------------------------------------------------------------------------
-// Tensor-name compression: numeric name segments become placeholders and a
-// group's placeholder values are a cartesian product of ranges.
+// Tensor-name compression: numbers in tensor and shard names become
+// placeholders, and a group's placeholder values are a cartesian product of
+// ranges. In a tensor name a numeric segment is {L} (after layers, blk, h),
+// {E} (after experts) or {N}, and a number ending a segment (shard_12) is {S}.
+// In a shard name every number is {F} ({F:5} keeps zero padding), except that
+// a shard holding a single layer names it {L} (layers-{L}.safetensors). S and
+// F placeholders with one value in a group are written back as text; a group
+// whose shard name still varies carries filePattern instead of file.
 
 const LAYER_SEGMENTS = /^(?:layers?|blk|blocks?|h)$/i;
 const EXPERT_SEGMENTS = /^experts?$/i;
+const INDEX_SEGMENT = /^(?:0|[1-9]\d{0,8})$/;
+const SUFFIXED_SEGMENT = /^(.*[_-])(0|[1-9]\d{0,8})$/;
+const PLACEHOLDER = /\{([A-Z]\d*)(?::(\d+))?\}/g;
+const INLINED_KEY = /^[SF]\d*$/;
+
+function nextKey(letter, counts) {
+  counts[letter] = (counts[letter] || 0) + 1;
+  return counts[letter] === 1 ? letter : `${letter}${counts[letter]}`;
+}
 
 function abstractTensorName(name) {
   if (/[{}]/.test(name)) return null;
@@ -311,16 +334,55 @@ function abstractTensorName(name) {
   const values = [];
   const counts = {};
   const pattern = segments.map((segment, index) => {
-    if (!/^(?:0|[1-9]\d{0,8})$/.test(segment)) return segment;
-    const previous = segments[index - 1] || "";
-    const letter = LAYER_SEGMENTS.test(previous) ? "L" : EXPERT_SEGMENTS.test(previous) ? "E" : "N";
-    counts[letter] = (counts[letter] || 0) + 1;
-    const key = counts[letter] === 1 ? letter : `${letter}${counts[letter]}`;
+    if (INDEX_SEGMENT.test(segment)) {
+      const previous = segments[index - 1] || "";
+      const key = nextKey(LAYER_SEGMENTS.test(previous) ? "L" : EXPERT_SEGMENTS.test(previous) ? "E" : "N", counts);
+      keys.push(key);
+      values.push(Number(segment));
+      return `{${key}}`;
+    }
+    const suffixed = SUFFIXED_SEGMENT.exec(segment);
+    if (!suffixed) return segment;
+    const key = nextKey("S", counts);
     keys.push(key);
-    values.push(Number(segment));
-    return `{${key}}`;
+    values.push(Number(suffixed[2]));
+    return `${suffixed[1]}{${key}}`;
   }).join(".");
   return { pattern, keys, values };
+}
+
+// `layer` is the tensor's {L} value when its shard holds that layer only.
+function abstractFileName(file, layer = null) {
+  if (/[{}]/.test(file)) return null;
+  const keys = [];
+  const values = [];
+  const counts = {};
+  let tied = false;
+  const pattern = file.replace(/\d+/g, (digits) => {
+    if (digits.length > 9) return digits;
+    const value = Number(digits);
+    const width = digits.length > 1 && digits.startsWith("0") ? `:${digits.length}` : "";
+    if (!tied && layer !== null && value === layer) {
+      tied = true;
+      return `{L${width}}`;
+    }
+    const key = nextKey("F", counts);
+    keys.push(key);
+    values.push(value);
+    return `{${key}${width}}`;
+  });
+  return { pattern, keys, values };
+}
+
+function fillPlaceholders(text, values) {
+  return text.replace(PLACEHOLDER, (token, key, width) => {
+    if (!Object.hasOwn(values, key)) return token;
+    return width ? String(values[key]).padStart(Number(width), "0") : String(values[key]);
+  });
+}
+
+function hasPlaceholder(text) {
+  return /\{[A-Z]\d*(?::\d+)?\}/.test(text);
 }
 
 // A range is [first, last] (step 1), {from, to, step} or {values:[...]}.
@@ -346,6 +408,11 @@ function expandRangeSpec(spec) {
     return output;
   }
   throw new Error(`Invalid range ${JSON.stringify(spec)}.`);
+}
+
+function singleValue(spec) {
+  if (Array.isArray(spec)) return spec[0] === spec[1] ? spec[0] : null;
+  return spec && Array.isArray(spec.values) && spec.values.length === 1 ? spec.values[0] : null;
 }
 
 // Splits a set of unique tuples into cartesian products of per-dimension
@@ -380,35 +447,105 @@ function decompose(tuples, dims) {
   return output;
 }
 
-// describe(tensor) returns the fields shared by a group, in output order.
+// Writes single-valued S and F placeholders back as text and renumbers the
+// others (S2 becomes S when S was written back). A single layer is written
+// into the shard name too, but stays a range of the tensor name.
+function finishGroup(pattern, filePattern, keys, specs) {
+  const fixed = {};
+  const kept = [];
+  keys.forEach((key, index) => {
+    const single = INLINED_KEY.test(key) ? singleValue(specs[index]) : null;
+    if (single === null) kept.push([key, specs[index]]);
+    else fixed[key] = single;
+  });
+  const renamed = {};
+  const counts = {};
+  for (const [key] of kept) renamed[key] = INLINED_KEY.test(key) ? nextKey(key[0], counts) : key;
+  const layer = singleValue(kept.find(([key]) => key === "L")?.[1]);
+  const rewrite = (text, extra = {}) => text.replace(PLACEHOLDER, (token, key, width) => {
+    const value = Object.hasOwn(fixed, key) ? fixed[key] : extra[key];
+    if (value !== undefined) return width ? String(value).padStart(Number(width), "0") : String(value);
+    return Object.hasOwn(renamed, key) ? `{${renamed[key]}${width ? `:${width}` : ""}}` : token;
+  });
+  return {
+    pattern: rewrite(pattern),
+    filePattern: filePattern === null ? null : rewrite(filePattern, layer === null ? {} : { L: layer }),
+    ranges: kept.length ? Object.fromEntries(kept.map(([key, spec]) => [renamed[key], spec])) : null,
+  };
+}
+
+// describe(tensor) returns the fields shared by a group, in output order; a
+// `file` field (the safetensors shard) is abstracted like the tensor name.
 function compressTensors(tensors, describe) {
+  const items = tensors.map((tensor) => ({ name: tensor.name, fields: describe(tensor), abstracted: abstractTensorName(tensor.name) }));
+  const layerOf = (abstracted) => {
+    const position = abstracted ? abstracted.keys.indexOf("L") : -1;
+    return position < 0 ? null : abstracted.values[position];
+  };
+  // A shard is tied to a layer when every layer tensor in it has that layer.
+  const shardLayers = new Map();
+  for (const item of items) {
+    const layer = layerOf(item.abstracted);
+    if (typeof item.fields.file !== "string" || layer === null) continue;
+    const seen = shardLayers.get(item.fields.file);
+    shardLayers.set(item.fields.file, seen === undefined || seen === layer ? layer : null);
+  }
   const groups = new Map();
   const literal = [];
-  for (const tensor of tensors) {
-    const fields = describe(tensor);
-    const abstracted = abstractTensorName(tensor.name);
-    if (!abstracted) {
-      literal.push({ name: tensor.name, ...fields });
+  for (const item of items) {
+    if (!item.abstracted) {
+      literal.push({ name: item.name, ...item.fields });
       continue;
     }
-    const key = JSON.stringify([abstracted.pattern, abstracted.keys, fields]);
+    const { file, ...shared } = item.fields;
+    const layer = layerOf(item.abstracted);
+    const shard = typeof file === "string" ? abstractFileName(file, layer !== null && shardLayers.get(file) === layer ? layer : null) : null;
+    const literalFile = Object.hasOwn(item.fields, "file") && !shard ? file : undefined;
+    const key = JSON.stringify([item.abstracted.pattern, item.abstracted.keys, shard?.pattern ?? null, shard?.keys ?? [], shared, literalFile ?? null]);
     let group = groups.get(key);
     if (!group) {
-      group = { pattern: abstracted.pattern, keys: abstracted.keys, fields, tuples: [] };
+      group = {
+        pattern: item.abstracted.pattern,
+        keys: [...item.abstracted.keys, ...(shard?.keys ?? [])],
+        filePattern: shard?.pattern ?? null,
+        literalFile,
+        shared,
+        tuples: [],
+      };
       groups.set(key, group);
     }
-    group.tuples.push(abstracted.values);
+    group.tuples.push(shard ? [...item.abstracted.values, ...shard.values] : item.abstracted.values);
   }
   const output = [];
   for (const group of groups.values()) {
     for (const specs of decompose(group.tuples, group.keys.length)) {
-      const entry = { pattern: group.pattern };
-      if (group.keys.length) entry.ranges = Object.fromEntries(group.keys.map((key, index) => [key, specs[index]]));
-      output.push(Object.assign(entry, group.fields));
+      const finished = finishGroup(group.pattern, group.filePattern, group.keys, specs);
+      const entry = { pattern: finished.pattern };
+      if (finished.ranges) entry.ranges = finished.ranges;
+      Object.assign(entry, group.shared);
+      if (finished.filePattern !== null) {
+        if (hasPlaceholder(finished.filePattern)) entry.filePattern = finished.filePattern;
+        else entry.file = finished.filePattern;
+      } else if (group.literalFile !== undefined) {
+        entry.file = group.literalFile;
+      }
+      output.push(entry);
     }
   }
   output.push(...literal);
   return output;
+}
+
+function firstRangeValue(spec) {
+  if (Array.isArray(spec)) return spec[0];
+  return Array.isArray(spec?.values) ? spec.values[0] : spec?.from;
+}
+
+// The shard of a group's first tensor; groups sort by it.
+function groupFile(group) {
+  if (group.filePattern === undefined) return group.file;
+  const first = Object.fromEntries(Object.entries(group.ranges || {}).map(([key, spec]) => [key, firstRangeValue(spec)]));
+  return fillPlaceholders(group.filePattern, first);
 }
 
 function groupSortKey(group) {
@@ -418,25 +555,33 @@ function groupSortKey(group) {
 function sortGroups(groups, fileOrder) {
   return groups.sort((left, right) => {
     if (fileOrder) {
-      const byFile = (fileOrder.get(left.file) ?? 0) - (fileOrder.get(right.file) ?? 0);
+      const byFile = (fileOrder.get(groupFile(left)) ?? 0) - (fileOrder.get(groupFile(right)) ?? 0);
       if (byFile) return byFile;
     }
     return compareNames(groupSortKey(left), groupSortKey(right));
   });
 }
 
-function expandGroupNames(group) {
-  if (group.name !== undefined) return [group.name];
-  const keys = Object.keys(group.ranges || {});
-  let names = [group.pattern];
-  for (const key of keys) {
-    const values = expandRangeSpec(group.ranges[key]);
-    const token = `{${key}}`;
+// Every tensor of a group as {name, file?}, the first range outermost.
+function expandGroupTensors(group) {
+  if (group.name !== undefined) return [group.file === undefined ? { name: group.name } : { name: group.name, file: group.file }];
+  let combos = [{}];
+  for (const [key, spec] of Object.entries(group.ranges || {})) {
+    const values = expandRangeSpec(spec);
     const next = [];
-    for (const name of names) for (const value of values) next.push(name.split(token).join(String(value)));
-    names = next;
+    for (const combo of combos) for (const value of values) next.push({ ...combo, [key]: value });
+    combos = next;
   }
-  return names;
+  return combos.map((combo) => {
+    const tensor = { name: fillPlaceholders(group.pattern, combo) };
+    if (group.filePattern !== undefined) tensor.file = fillPlaceholders(group.filePattern, combo);
+    else if (group.file !== undefined) tensor.file = group.file;
+    return tensor;
+  });
+}
+
+function expandGroupNames(group) {
+  return expandGroupTensors(group).map((tensor) => tensor.name);
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +639,32 @@ function readSafetensorsHeader(abs, fileBytes) {
   }
 }
 
+function compareSafetensorsDtype(left, right) {
+  return SAFETENSORS_DTYPE_ORDER.indexOf(right.dtype) - SAFETENSORS_DTYPE_ORDER.indexOf(left.dtype) || compareNames(left.name, right.name);
+}
+
+// "dtype" when the payload follows the Rust writer's order and not plain name
+// order; null for name order or an order no writer reproduces.
+function safetensorsLayoutOrder(tensors) {
+  const actual = tensors.map((tensor) => tensor.name).join("\u0000");
+  const byName = [...tensors].sort((left, right) => compareNames(left.name, right.name));
+  if (byName.map((tensor) => tensor.name).join("\u0000") === actual) return null;
+  const byDtype = [...tensors].sort(compareSafetensorsDtype);
+  return byDtype.map((tensor) => tensor.name).join("\u0000") === actual ? "dtype" : null;
+}
+
+// How an index file is laid out, so the test writer can match its size: no
+// fields for json.dumps(indent=2) plus a final newline (the writer default),
+// style "python" for Python's one-line default, newline:false when the file
+// does not end in a newline.
+function indexFormat(text) {
+  const format = {};
+  const body = text.replace(/\n$/, "");
+  if (body.startsWith("{\"") && !body.includes("\n") && body.includes("\": ")) format.style = "python";
+  if (!text.endsWith("\n")) format.newline = false;
+  return format;
+}
+
 function captureSafetensors(entries, indexEntry, warnings, scrubbed) {
   const files = [];
   const tensors = [];
@@ -508,6 +679,8 @@ function captureSafetensors(entries, indexEntry, warnings, scrubbed) {
       continue;
     }
     const record = { name: entry.name, bytes: entry.bytes, headerBytes: header.headerBytes, tensors: header.tensors.length };
+    const order = safetensorsLayoutOrder(header.tensors);
+    if (order) record.order = order;
     if (header.metadata) {
       const changes = [];
       const metadata = scrubJsonValue(header.metadata, "", changes);
@@ -527,11 +700,12 @@ function captureSafetensors(entries, indexEntry, warnings, scrubbed) {
   let index = null;
   if (indexEntry) {
     try {
-      const parsed = JSON.parse(readFileBounded(indexEntry.abs, MAX_INDEX_BYTES, "index_too_large").toString("utf8").replace(/^\uFEFF/, ""));
+      const text = readFileBounded(indexEntry.abs, MAX_INDEX_BYTES, "index_too_large").toString("utf8").replace(/^\uFEFF/, "");
+      const parsed = JSON.parse(text);
       const changes = [];
       const metadata = parsed?.metadata && typeof parsed.metadata === "object" ? scrubJsonValue(parsed.metadata, "", changes) : null;
       for (const pointer of changes) scrubbed.push({ file: indexEntry.name, pointer: `/metadata${pointer}`, reason: "absolute_path" });
-      index = { name: indexEntry.name, metadata: metadata && JSON.stringify(metadata).length <= MAX_METADATA_CHARS ? metadata : null };
+      index = { name: indexEntry.name, metadata: metadata && JSON.stringify(metadata).length <= MAX_METADATA_CHARS ? metadata : null, ...indexFormat(text) };
       const weightMap = parsed?.weight_map && typeof parsed.weight_map === "object" ? parsed.weight_map : {};
       const listed = new Set(Object.keys(weightMap));
       const present = new Set(tensors.map((tensor) => tensor.name));
@@ -1143,12 +1317,17 @@ module.exports = {
   GGUF_VALUE_TYPES,
   PERMISSIVE_LICENSES,
   PRIVACY_PATTERNS,
+  SAFETENSORS_DTYPE_ORDER,
+  abstractFileName,
   abstractTensorName,
   buildFixture,
+  compareSafetensorsDtype,
   compressTensors,
   decompose,
   expandGroupNames,
+  expandGroupTensors,
   expandRangeSpec,
+  fillPlaceholders,
   formatJson,
   ggmlTensorBytes,
   main,

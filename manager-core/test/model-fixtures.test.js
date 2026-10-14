@@ -6,6 +6,7 @@
 // the fixtures, scripts/capture-model-fixture.js and the test helpers in step.
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -76,16 +77,97 @@ test("the synthetic family fixtures are present and marked synthetic", () => {
   assert.equal(SYNTHETIC.length, 14);
 });
 
-for (const id of LIBRARY) {
-  const present = fs.existsSync(path.join(FIXTURES_ROOT, id, "manifest.json"));
-  test(`library fixture ${id}`, {
-    todo: present ? false : `owner capture: node scripts/capture-model-fixture.js --from <LIBRARY_ROOT>/<folder> --id ${id}`,
-  }, () => {
-    if (!present) return;
+test("the library fixtures are present and captured from real folders", () => {
+  const present = listFixtures();
+  for (const id of LIBRARY) {
+    assert.ok(present.includes(id), `${id} is missing (node scripts/capture-model-fixture.js --from <LIBRARY_ROOT>/<folder> --id ${id})`);
     const { manifest } = loadFixture(id);
-    assert.equal(manifest.synthetic, false);
-  });
+    assert.equal(manifest.synthetic, false, id);
+    assert.ok(manifest.notes.length > 0, `${id}: notes say what the fixture covers`);
+    if (!capture.PERMISSIVE_LICENSES.has(manifest.license)) {
+      assert.ok(manifest.notes.some((note) => note.includes("--allow-license")), `${id}: a non-permissive license is explained`);
+    }
+  }
+  assert.equal(LIBRARY.length, 7);
+});
+
+function templateSha(id) {
+  const text = fs.readFileSync(path.join(FIXTURES_ROOT, id, "chat_template.jinja"), "utf8").replace(/\r\n/g, "\n");
+  return crypto.createHash("sha256").update(text).digest("hex");
 }
+
+function tensorBytes(tensors, pattern = /./) {
+  return tensors.filter((tensor) => pattern.test(tensor.name)).reduce((sum, tensor) => sum + tensor.bytesEach, 0);
+}
+
+// The library facts 02 §1-§2 verified read-only; MOD-2/MOD-3 goldens build on them.
+test("the library fixtures keep the facts the model spec verified", () => {
+  const qwen38 = ["qwen38-27b-fp8", "qwen38-27b-fp8-indexed", "qwen38-flashnext-nvfp4"];
+  for (const id of qwen38) assert.ok(templateSha(id).startsWith("c3cf9e34abf4f9e3"), `${id}: Qwen3.8 template`);
+  assert.ok(templateSha("qwen36-35b-a3b-fp8").startsWith("e84f32a23fdda276"), "Qwen3.6 template");
+
+  const config = (id) => JSON.parse(fs.readFileSync(path.join(FIXTURES_ROOT, id, "config.json"), "utf8"));
+  for (const id of ["qwen38-27b-fp8", "qwen38-27b-fp8-indexed"]) {
+    const card = config(id);
+    assert.equal(card.model_type, "qwen3_5", id);
+    assert.deepEqual(card.architectures, ["Qwen3_5ForConditionalGeneration"], id);
+    assert.deepEqual([card.text_config.hidden_size, card.text_config.num_hidden_layers, card.text_config.vocab_size], [5120, 64, 248320], id);
+    const tensors = expandGroups(loadFixture(id).tensorTable.groups);
+    assert.equal(tensorBytes(tensors), 30866663264, `${id}: 28.75 GiB of weights`);
+    assert.ok(tensorBytes(tensors, /^mtp\./) > 0, `${id}: MTP tensors`);
+  }
+  assert.equal(loadFixture("qwen38-27b-fp8").manifest.layout, "indexed");
+  assert.ok(loadFixture("qwen38-27b-fp8").manifest.files.some((entry) => entry.name === "layers-63.safetensors"), "layers-N shards");
+  assert.equal(config("qwen36-35b-a3b-fp8").model_type, "qwen3_5_moe");
+
+  const flash = loadFixture("qwen38-flashnext-nvfp4");
+  assert.equal(config("qwen38-flashnext-nvfp4").model_type, "qwen4_exp");
+  assert.equal(config("qwen38-flashnext-nvfp4").text_config.num_experts, 512);
+  const quant = JSON.parse(fs.readFileSync(path.join(flash.dir, "hf_quant_config.json"), "utf8"));
+  assert.equal(quant.producer.name, "modelopt");
+  assert.equal(quant.quantization.quant_algo, "NVFP4");
+  assert.equal(flash.manifest.files.filter((entry) => entry.name.endsWith(".complete.json")).length, 192);
+  const flashTensors = expandGroups(flash.tensorTable.groups);
+  assert.ok(flashTensors.some((tensor) => /\.experts\.511\./.test(tensor.name)), "512 routed experts");
+  assert.ok(flashTensors.some((tensor) => /\.ple\./.test(tensor.name)), "PLE tensors");
+  assert.ok(flashTensors.some((tensor) => /\.indexer\./.test(tensor.name)), "indexer tensors");
+
+  const draft = loadFixture("qwen38-27b-dspark-draft");
+  const draftConfig = config("qwen38-27b-dspark-draft");
+  assert.deepEqual(draftConfig.architectures, ["DSparkDraftModel"]);
+  assert.deepEqual([draftConfig.hidden_size, draftConfig.vocab_size, draftConfig.num_target_layers], [5120, 248320, 64]);
+  assert.ok(draftConfig.auto_map && draftConfig.dflash_config, "auto_map and dflash_config");
+  for (const name of ["dflash.py", "dspark.py"]) assert.equal(draft.manifest.files.find((entry) => entry.name === name).kind, "placeholder", name);
+
+  const tooling = loadFixture("ple-quant-tooling");
+  assert.equal(tooling.manifest.layout, "custom");
+  assert.ok(!tooling.manifest.files.some((entry) => entry.name === "config.json"), "no config.json");
+  assert.ok(tooling.manifest.files.every((entry) => entry.kind !== "safetensors" || entry.name.startsWith("ples_int4/")), "weights only in ples_int4/");
+
+  const deepseek = loadFixture("deepseek-v4-flash-q2k-gguf").ggufHeader.files[0];
+  const kv = Object.fromEntries(deepseek.kv.map((entry) => [entry.key, entry.value]));
+  assert.equal(kv["general.architecture"], "deepseek4");
+  assert.equal(kv["deepseek4.block_count"], 43);
+  assert.equal(kv["deepseek4.attention.head_count_kv"], 1);
+  assert.equal(kv["deepseek4.attention.key_length"], 512);
+  assert.equal(kv["deepseek4.attention.sliding_window"], 128);
+  const ratios = kv["deepseek4.attention.compress_ratios"];
+  assert.equal(ratios.length, 44);
+  assert.deepEqual([...ratios.slice(0, 4), ratios[42], ratios[43]], [0, 0, 4, 128, 4, 0]);
+  assert.deepEqual([kv["deepseek4.attention.indexer.head_count"], kv["deepseek4.attention.indexer.key_length"], kv["deepseek4.attention.indexer.top_k"]], [64, 128, 512]);
+  assert.deepEqual([kv["deepseek4.expert_count"], kv["deepseek4.expert_used_count"], kv["deepseek4.expert_shared_count"]], [256, 6, 1]);
+  assert.equal(kv["deepseek4.nextn_predict_layers"], 1);
+  assert.ok("general.sampling.temp" in kv && "general.sampling.top_p" in kv, "sampling defaults");
+  assert.match(kv["tokenizer.chat_template"], /DSML/);
+  const ggufTensors = expandGroups(deepseek.groups);
+  const GiB = 1024 ** 3;
+  assert.equal(tensorBytes(ggufTensors, /_exps\./), 88785027072);
+  assert.equal((tensorBytes(ggufTensors, /_exps\./) / GiB).toFixed(2), "82.69");
+  assert.equal(tensorBytes(ggufTensors), 97586411868);
+  assert.equal((tensorBytes(ggufTensors, /^token_embd\./) / GiB).toFixed(2), "0.99");
+  assert.equal((tensorBytes(ggufTensors, /^output\.weight$/) / GiB).toFixed(2), "0.52");
+  assert.ok(ggufTensors.every((tensor) => tensor.bytesExact !== false), "every ggml type is known");
+});
 
 test("every fixture id is a known synthetic or library fixture", () => {
   const known = new Set([...SYNTHETIC, ...LIBRARY]);
@@ -202,10 +284,10 @@ for (const id of listFixtures()) {
     const materialized = await materializeFixture(id);
     t.after(materialized.cleanup);
     assert.equal(path.basename(materialized.dir), manifest.folderName);
-    if (manifest.synthetic) {
-      for (const file of materialized.files) {
-        if (file.sized) assert.ok(file.exact, `${file.name}: a synthetic fixture materializes byte-exact`);
-      }
+    // Headers, index files and sizes match the captured folder (tensor order
+    // and index style are recorded), so inspector goldens see true sizes.
+    for (const file of materialized.files) {
+      if (file.sized) assert.ok(file.exact, `${file.name}: materializes with its captured size`);
     }
     const built = capture.buildFixture({
       from: materialized.dir,

@@ -17,7 +17,7 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
-const { expandGroupNames } = require("../../../scripts/capture-model-fixture.js");
+const { expandGroupTensors } = require("../../../scripts/capture-model-fixture.js");
 const { buildGguf } = require("./gguf-writer");
 const { buildSafetensorsHeader } = require("./safetensors-writer");
 
@@ -58,12 +58,15 @@ function loadFixture(id, root = FIXTURES_ROOT) {
   };
 }
 
-/** Every tensor of a tensor-table or GGUF group list, with the group fields. */
+/**
+ * Every tensor of a tensor-table or GGUF group list, with the group fields;
+ * `file` is the tensor's shard (filePattern filled in), absent for GGUF.
+ */
 function expandGroups(groups) {
   const tensors = [];
   for (const group of groups || []) {
-    const { pattern, ranges, name, ...fields } = group;
-    for (const tensorName of expandGroupNames(group)) tensors.push({ name: tensorName, ...fields });
+    const { pattern, ranges, name, file, filePattern, ...fields } = group;
+    for (const tensor of expandGroupTensors(group)) tensors.push({ ...tensor, ...fields });
   }
   return tensors;
 }
@@ -132,7 +135,17 @@ async function resizeFiles(entries, { sizes = "auto", platform = process.platfor
   return result;
 }
 
-// weight_map values are relative to the index file, as Hugging Face writes them.
+// Python's json.dumps default: one line, ", " and ": " separators.
+function pythonJson(value) {
+  if (Array.isArray(value)) return `[${value.map(pythonJson).join(", ")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)}: ${pythonJson(item)}`).join(", ")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// weight_map values are relative to the index file, as Hugging Face writes
+// them. Keys are sorted; the captured style and final newline keep the size.
 function writeIndexFile(target, index, safetensorsFiles, tensorsByFile) {
   const weightMap = {};
   const base = path.posix.dirname(index.name);
@@ -141,8 +154,9 @@ function writeIndexFile(target, index, safetensorsFiles, tensorsByFile) {
     for (const tensor of tensorsByFile.get(record.name) || []) weightMap[tensor.name] = relative;
   }
   const sorted = Object.fromEntries(Object.keys(weightMap).sort().map((name) => [name, weightMap[name]]));
-  const content = `${JSON.stringify({ metadata: index.metadata || {}, weight_map: sorted }, null, 2)}\n`;
-  fs.writeFileSync(target, content, "utf8");
+  const value = { metadata: index.metadata || {}, weight_map: sorted };
+  const body = index.style === "python" ? pythonJson(value) : JSON.stringify(value, null, 2);
+  fs.writeFileSync(target, index.newline === false ? body : `${body}\n`, "utf8");
 }
 
 /**
@@ -182,7 +196,7 @@ async function materializeFixture(id, options = {}) {
       const tensors = (tensorsByFile.get(entry.name) || []).map((tensor) => ({
         name: tensor.name, dtype: tensor.dtype, shape: tensor.shape, bytes: tensor.bytesEach,
       }));
-      const built = buildSafetensorsHeader(tensors, { metadata: record.metadata || null, headerBytes: record.headerBytes });
+      const built = buildSafetensorsHeader(tensors, { metadata: record.metadata || null, headerBytes: record.headerBytes, order: record.order || null });
       await fsp.writeFile(file, built.header);
       exact.set(entry.name, built.exactHeader);
       toSize.push({ name: entry.name, file, bytes: Math.max(entry.bytes, built.totalBytes) });

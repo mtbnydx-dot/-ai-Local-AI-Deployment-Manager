@@ -14,7 +14,7 @@ const test = require("node:test");
 const capture = require("../../scripts/capture-model-fixture.js");
 const { buildGguf, writeGgufFile } = require("./helpers/gguf-writer");
 const { writeSafetensorsFile } = require("./helpers/safetensors-writer");
-const { expandGroups } = require("./helpers/fixture-materialize");
+const { expandGroups, materializeFixture } = require("./helpers/fixture-materialize");
 
 // Obviously fake values, assembled at runtime (release privacy scan).
 const FAKE_SK = ["sk", "-", "fakecapturekey0123456789abcdef"].join("");
@@ -211,6 +211,45 @@ test("--out inside --from, an existing fixture, --force and --dry-run", async (t
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "tiny", "manifest.json"), "utf8")).notes, ["re-captured"]);
 });
 
+test("dtype-ordered shards and a one-line index materialize with their captured sizes", async (t) => {
+  const work = await tempDir(t, "capture-layout-");
+  const source = path.join(work, "Rust-Ordered");
+  await fsp.mkdir(source);
+  const tensors = [
+    { name: "a.scale", dtype: "F32", shape: [] },
+    { name: "b.weight", dtype: "F8_E4M3", shape: [16, 16] },
+    { name: "c.norm", dtype: "BF16", shape: [16] },
+    { name: "d.weight", dtype: "F8_E4M3", shape: [16, 8] },
+  ];
+  const mixed = writeSafetensorsFile(path.join(source, "model-00001-of-00002.safetensors"), tensors, { order: "dtype" });
+  writeSafetensorsFile(path.join(source, "model-00002-of-00002.safetensors"), [{ name: "lm_head.weight", dtype: "BF16", shape: [32, 16] }]);
+  await fsp.truncate(path.join(source, "model-00001-of-00002.safetensors"), mixed.totalBytes);
+  await fsp.truncate(path.join(source, "model-00002-of-00002.safetensors"), 8 + 1024 + 32 * 16 * 2);
+  const weightMap = Object.fromEntries([...tensors.map((tensor) => [tensor.name, "model-00001-of-00002.safetensors"]), ["lm_head.weight", "model-00002-of-00002.safetensors"]]);
+  // Python json.dumps() default: one line, no final newline, keys unsorted.
+  const index = `{"metadata": {"total_size": 1234}, "weight_map": {${Object.entries(weightMap).reverse().map(([key, value]) => `"${key}": "${value}"`).join(", ")}}}`;
+  await writeTree(source, { "model.safetensors.index.json": index, "config.json": { model_type: "tiny" } });
+
+  const read = capture.readSafetensorsHeader(path.join(source, "model-00001-of-00002.safetensors"), mixed.totalBytes);
+  assert.deepEqual(read.tensors.map((tensor) => tensor.name), ["a.scale", "c.norm", "b.weight", "d.weight"]);
+
+  const out = path.join(work, "fixtures");
+  const result = await runMain(["--from", source, "--id", "rust-ordered", "--out", out, "--license", "mit"]);
+  assert.equal(result.code, 0, result.err);
+  const table = JSON.parse(fs.readFileSync(path.join(out, "rust-ordered", "tensor-table.json"), "utf8"));
+  assert.deepEqual(table.files.map((file) => file.order ?? null), ["dtype", null]);
+  assert.deepEqual(table.index, { name: "model.safetensors.index.json", metadata: { total_size: 1234 }, style: "python", newline: false });
+
+  const materialized = await materializeFixture("rust-ordered", { fixturesRoot: out });
+  t.after(materialized.cleanup);
+  for (const file of materialized.files) assert.ok(file.exact, `${file.name}: ${file.actualBytes} of ${file.bytes} bytes`);
+  const again = capture.readSafetensorsHeader(path.join(materialized.dir, "model-00001-of-00002.safetensors"), mixed.totalBytes);
+  assert.deepEqual(again.tensors.map((tensor) => [tensor.name, tensor.begin]), read.tensors.map((tensor) => [tensor.name, tensor.begin]));
+  const rebuilt = fs.readFileSync(path.join(materialized.dir, "model.safetensors.index.json"), "utf8");
+  assert.deepEqual(JSON.parse(rebuilt).weight_map, Object.fromEntries(Object.entries(weightMap).sort()));
+  assert.ok(!rebuilt.includes("\n"));
+});
+
 test("damaged headers and a partial index become warnings, not failures", async (t) => {
   const { source } = await makeSafetensorsModel(t);
   await fsp.writeFile(path.join(source, "model-00002-of-00002.safetensors"), Buffer.from([0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 1, 2, 3]));
@@ -330,6 +369,89 @@ test("tensor-name compression is exact for regular and irregular layouts", () =>
     const groups = capture.compressTensors(names.map((name) => ({ name })), () => ({ dtype: "BF16" }));
     const expanded = groups.flatMap((group) => capture.expandGroupNames(group));
     assert.deepEqual(expanded.sort(), [...names].sort());
+  }
+});
+
+test("shard names and segment suffixes compress with their tensors", () => {
+  assert.deepEqual(capture.abstractTensorName("model.layers.1.ple.ngram_embedding.shard_87.weight"), {
+    pattern: "model.layers.{L}.ple.ngram_embedding.shard_{S}.weight", keys: ["L", "S"], values: [1, 87],
+  });
+  assert.deepEqual(capture.abstractFileName("layer-00020-experts-0384-0511.safetensors", 20), {
+    pattern: "layer-{L:5}-experts-{F:4}-{F2:4}.safetensors", keys: ["F", "F2"], values: [384, 511],
+  });
+  assert.deepEqual(capture.abstractFileName("model-00001-of-00007.safetensors"), {
+    pattern: "model-{F:5}-of-{F2:5}.safetensors", keys: ["F", "F2"], values: [1, 7],
+  });
+  assert.equal(capture.fillPlaceholders("layer-{L:5}-{F}.x", { L: 7, F: 12 }), "layer-00007-12.x");
+
+  const describe = (tensor) => ({ dtype: "BF16", shape: [4], bytesEach: 8, file: tensor.file });
+  const layers = [];
+  for (let L = 0; L < 9; L += 1) {
+    layers.push({ name: `model.layers.${L}.mlp.down_proj.weight`, file: `layers-${L}.safetensors` });
+    if (L % 3 === 2) layers.push({ name: `model.layers.${L}.self_attn.q_proj.weight`, file: `layers-${L}.safetensors` });
+  }
+  layers.push({ name: "lm_head.weight", file: "outside.safetensors" }, { name: "model.norm.weight_scale_2", file: "outside.safetensors" });
+  const layerGroups = capture.compressTensors(layers, describe);
+  assert.deepEqual(layerGroups.find((group) => group.pattern === "model.layers.{L}.mlp.down_proj.weight"), {
+    pattern: "model.layers.{L}.mlp.down_proj.weight", ranges: { L: [0, 8] }, dtype: "BF16", shape: [4], bytesEach: 8, filePattern: "layers-{L}.safetensors",
+  });
+  assert.deepEqual(layerGroups.find((group) => group.pattern === "model.layers.{L}.self_attn.q_proj.weight").ranges, { L: { from: 2, to: 8, step: 3 } });
+  // A single suffix value is written back: no placeholder, no ranges.
+  assert.deepEqual(layerGroups.find((group) => group.pattern === "model.norm.weight_scale_2"), {
+    pattern: "model.norm.weight_scale_2", dtype: "BF16", shape: [4], bytesEach: 8, file: "outside.safetensors",
+  });
+
+  // Per-layer expert-range shards: one group per expert range across all layers.
+  const experts = [];
+  for (let L = 0; L < 3; L += 1) {
+    for (let E = 0; E < 8; E += 1) {
+      const range = E < 4 ? "0000-0003" : "0004-0007";
+      experts.push({ name: `model.layers.${L}.mlp.experts.${E}.up_proj.weight`, file: `layer-${String(L).padStart(5, "0")}-experts-${range}.safetensors` });
+    }
+  }
+  const expertGroups = capture.compressTensors(experts, describe);
+  assert.deepEqual(expertGroups.map((group) => [group.filePattern, group.ranges]), [
+    ["layer-{L:5}-experts-0000-0003.safetensors", { L: [0, 2], E: [0, 3] }],
+    ["layer-{L:5}-experts-0004-0007.safetensors", { L: [0, 2], E: [4, 7] }],
+  ]);
+
+  // The same tensor name in numbered shards; a shard holding two layers names no layer.
+  const shards = Array.from({ length: 5 }, (_, index) => ({ name: "weight_i4", file: `ples_int4/shard_${index}.safetensors` }));
+  shards.push(
+    { name: "model.layers.0.w.weight", file: "model-00001-of-00002.safetensors" },
+    { name: "model.layers.1.w.weight", file: "model-00001-of-00002.safetensors" },
+    { name: "model.layers.2.w.weight", file: "model-00002-of-00002.safetensors" },
+  );
+  const shardGroups = capture.compressTensors(shards, describe);
+  assert.deepEqual(shardGroups.find((group) => group.pattern === "weight_i4"), {
+    pattern: "weight_i4", ranges: { F: [0, 4] }, dtype: "BF16", shape: [4], bytesEach: 8, filePattern: "ples_int4/shard_{F}.safetensors",
+  });
+  assert.deepEqual(shardGroups.filter((group) => group.pattern === "model.layers.{L}.w.weight").map((group) => [group.file, group.ranges]), [
+    ["model-00001-of-00002.safetensors", { L: [0, 1] }],
+    ["model-00002-of-00002.safetensors", { L: [2, 2] }],
+  ]);
+
+  // Random shard assignments survive compress + expand with their files.
+  let seed = 11;
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  for (let round = 0; round < 25; round += 1) {
+    const tensors = [];
+    for (let L = 0; L < 10; L += 1) {
+      const perLayer = random() < 0.5;
+      for (let E = 0; E < 12; E += 1) {
+        if (random() < 0.3) continue;
+        const file = perLayer ? `layers-${L}.safetensors` : `model-${String(1 + Math.floor(random() * 3)).padStart(5, "0")}-of-00003.safetensors`;
+        tensors.push({ name: `model.layers.${L}.mlp.experts.${E}.down_proj.weight`, file });
+      }
+      tensors.push({ name: `model.layers.${L}.ple.shard_${Math.floor(random() * 4)}.weight`, file: `ple-${L % 2}.safetensors` });
+    }
+    const unique = Array.from(new Map(tensors.map((tensor) => [`${tensor.file}\u0000${tensor.name}`, tensor])).values());
+    const groups = capture.compressTensors(unique, describe);
+    const expanded = groups.flatMap((group) => capture.expandGroupTensors(group)).map((tensor) => `${tensor.file}\u0000${tensor.name}`);
+    assert.deepEqual(expanded.sort(), unique.map((tensor) => `${tensor.file}\u0000${tensor.name}`).sort());
   }
 });
 

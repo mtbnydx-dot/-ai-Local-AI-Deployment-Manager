@@ -6,6 +6,7 @@
 // file afterwards, so readers see the true file length.
 
 const fs = require("node:fs");
+const { compareSafetensorsDtype } = require("../../../scripts/capture-model-fixture.js");
 
 const DTYPE_BYTES = Object.freeze({
   BOOL: 1, U8: 1, I8: 1, F8_E5M2: 1, F8_E4M3: 1, F8_E8M0: 1,
@@ -27,13 +28,15 @@ function compareNames(left, right) {
 
 /**
  * tensors: [{name, dtype, shape, bytes?}]. They are laid out sorted by name,
+ * or with order "dtype" like the Rust writer (dtype descending, then name),
  * so the same set always gives the same header. headerBytes pads the JSON with
  * spaces to that length when it fits (a captured file's exact header size);
  * otherwise the JSON is padded to a multiple of 8, like the Rust writer.
  * Returns { header, headerBytes, payloadBytes, totalBytes, exactHeader }.
  */
-function buildSafetensorsHeader(tensors, { metadata = null, headerBytes } = {}) {
-  const sorted = [...tensors].sort((left, right) => compareNames(left.name, right.name));
+function buildSafetensorsHeader(tensors, { metadata = null, headerBytes, order = null } = {}) {
+  const compare = order === "dtype" ? compareSafetensorsDtype : (left, right) => compareNames(left.name, right.name);
+  const sorted = [...tensors].sort(compare);
   const entries = {};
   if (metadata) entries.__metadata__ = metadata;
   let offset = 0;
