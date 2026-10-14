@@ -182,6 +182,24 @@ function blockedError(reason, launch) {
   return error;
 }
 
+/**
+ * Runs an adapter build. Whatever it throws carries error.launch: the job.meta
+ * patch and the log lines produced before the failure, which the legacy
+ * builder had already written by then (a blocked preset, or a docker or path
+ * helper that throws), so the caller can replay them.
+ */
+function buildWithPartialEffects(build) {
+  const effects = { metaPatch: null, logs: [] };
+  try {
+    return build(effects);
+  } catch (error) {
+    if (error && typeof error === "object" && !error.launch && Object.isExtensible(error)) {
+      error.launch = { metaPatch: effects.metaPatch, logs: effects.logs.slice() };
+    }
+    throw error;
+  }
+}
+
 /** The GGUF lines of the legacy builder (both engines log them). */
 function ggufLogs(plan, ctx, logs) {
   const model = ctx.model || {};
@@ -307,6 +325,7 @@ function launchCommand(ctx, { flags, entrypoint = null, image, args, publish, se
 
 module.exports = {
   blockedError,
+  buildWithPartialEffects,
   effectivePlan,
   ggufLogs,
   jsonArg,

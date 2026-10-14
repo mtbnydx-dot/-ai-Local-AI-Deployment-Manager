@@ -15,6 +15,7 @@
 
 const {
   blockedError,
+  buildWithPartialEffects,
   effectivePlan,
   ggufLogs,
   jsonArg,
@@ -37,10 +38,14 @@ function maxRunningRequests(values) {
 
 /**
  * plan + ctx -> LaunchCommand. Throws { code: "blocked", findings, launch }
- * when the runtime preset (recipe) blocks the launch.
+ * when the runtime preset (recipe) blocks the launch; any other error it
+ * throws carries the same { launch: { metaPatch, logs } } of what came before.
  */
 function buildLaunch(input, ctx) {
-  const plan = effectivePlan(input);
+  return buildWithPartialEffects((effects) => buildCommand(effectivePlan(input), ctx, effects));
+}
+
+function buildCommand(plan, ctx, effects) {
   const values = plan.values;
   const fixed = plan.fixed || {};
   const slots = fixed.slots || {};
@@ -48,9 +53,10 @@ function buildLaunch(input, ctx) {
   const secrets = ctx.secrets || {};
   const image = ctx.runtime?.image;
   const engineLabel = ctx.descriptor?.legacy?.engineLabel || ENGINE_ID;
-  const logs = [];
+  const logs = effects.logs;
 
   const { metaPatch, blockedReason } = legacyPresetEffects(plan, { engineLabel, image, logs });
+  effects.metaPatch = metaPatch;
   if (blockedReason) throw blockedError(blockedReason, { metaPatch, logs });
   ggufLogs(plan, ctx, logs);
   const { flags, publish, secretEnv } = managerDockerFlags(plan, ctx, {

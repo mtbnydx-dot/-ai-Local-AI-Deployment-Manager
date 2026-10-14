@@ -298,6 +298,29 @@ test("a blocking preset throws before any docker helper runs and carries the par
   }
 });
 
+test("an error from a ctx helper carries the job effects produced before it", () => {
+  for (const engineId of ["vllm", "sglang"]) {
+    const plan = basePlan({
+      engineId,
+      values: { ...basePlan().values, tokenizer: "C:/fixture/models/tokenizer", "speculative.method": "DSPARK", "speculative.draftModel": "C:/fixture/models/draft" },
+      legacy: { preset: { id: "fixture-preset", label: "Fixture preset" }, runOptions: { maxNumSeqs: 4 }, quantization: {} },
+    });
+    const failure = new Error("fixture path failure");
+    const { ctx } = baseCtx(engineId, { toContainerPath: () => { throw failure; } });
+    assert.throws(() => engines.adapters[engineId].buildLaunch(plan, ctx), (error) => {
+      assert.equal(error, failure);
+      assert.equal(error.code, undefined);
+      assert.equal(error.launch.metaPatch.runtimePreset, "fixture-preset");
+      assert.deepEqual(error.launch.logs, [
+        `Runtime preset: Fixture preset; using ${engineId} image fixture/${engineId}:pinned.`,
+        "Docker publish: -p 127.0.0.1:8001:8000",
+        "GPU isolation: --gpus device=0",
+      ]);
+      return true;
+    });
+  }
+});
+
 test("a LAN launch without a key asks ctx for the LAN address only then", () => {
   const plan = basePlan({ instance: { ...basePlan().instance, networkAccess: "lan", serviceHost: "" } });
   const { ctx, calls } = baseCtx("vllm");

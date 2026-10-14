@@ -159,6 +159,24 @@ test("a blocking preset writes the legacy job effects and throws its reason with
   ]);
 });
 
+test("a helper that fails mid-build still leaves the job meta and lines written before it", () => {
+  const locked = new Error("model storage root is locked");
+  const { deps, logs, calls } = builderDeps({
+    resolveVllmRuntimePreset: () => ({ id: "fixture-preset", label: "Fixture preset" }),
+    windowsPathToContainerPath: () => { throw locked; },
+  });
+  const { buildVllmRuntimeCommand } = createVllmRuntimeCommandBuilder(deps);
+  const job = { id: "serve-locked", meta: {} };
+  assert.throws(() => buildVllmRuntimeCommand(job, { ...BASE_OPTS, tokenizer: "C:/fixture/models/tokenizer" }), (error) => error === locked);
+  assert.equal(job.meta.runtimePreset, "fixture-preset");
+  assert.deepEqual(calls, ["dockerPublishArgs", "scheduleJobsSave"]);
+  assert.deepEqual(logs, [
+    "Runtime preset: Fixture preset; using vllm image fixture/vllm:pinned.",
+    "Docker publish: -p 127.0.0.1:8002:8000",
+    "GPU isolation: --gpus device=0",
+  ]);
+});
+
 test("a preset quantization is emitted where the legacy builder emitted it: SGLang only", () => {
   const quantized = (engine) => builderDeps({
     effectiveLaunchQuantization: () => ({ value: "fp8", modelConfigMethod: "fp8" }),

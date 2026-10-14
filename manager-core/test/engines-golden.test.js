@@ -176,9 +176,9 @@ function vllmAdapterBridge(launches) {
           try {
             command = adapter.buildLaunch(plan, ctx);
           } catch (error) {
-            if (error.code !== "blocked") throw error;
-            replay(job, deps, error.launch);
-            throw new Error(error.message);
+            if (error?.launch) replay(job, deps, error.launch);
+            if (error?.code === "blocked") throw new Error(error.message);
+            throw error;
           }
           launches.push({ engineId, adapterId: adapter.id, plan, ctx, command });
           replay(job, deps, command);

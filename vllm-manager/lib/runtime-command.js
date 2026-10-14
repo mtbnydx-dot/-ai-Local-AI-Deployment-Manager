@@ -148,9 +148,11 @@ function createVllmRuntimeCommandBuilder(deps) {
     try {
       command = adapter.buildLaunch(plan, ctx);
     } catch (error) {
-      if (error?.code !== "blocked" || !error.launch) throw error;
-      applyLegacyEffects(job, error.launch);
-      throw new Error(error.message);
+      // The builder had written these before it failed; a blocked preset
+      // fails with its reason as a plain Error, as the builder's did.
+      if (error?.launch) applyLegacyEffects(job, error.launch);
+      if (error?.code === "blocked") throw new Error(error.message);
+      throw error;
     }
     applyLegacyEffects(job, command);
     return {
