@@ -464,13 +464,17 @@ function mapStrings(value, mapString) {
   return value;
 }
 
+// "<secret:name>" -> its fake value; any other text is returned unchanged.
+function resolveSecretPlaceholder(text) {
+  const secret = String(text).match(SECRET_PLACEHOLDER);
+  if (!secret) return text;
+  if (!Object.hasOwn(FAKE_SECRETS, secret[1])) throw new Error(`Unknown fixture secret "${secret[1]}".`);
+  return FAKE_SECRETS[secret[1]];
+}
+
 function materializeValue(value, env) {
   return mapStrings(value, (text) => {
-    const secret = text.match(SECRET_PLACEHOLDER);
-    if (secret) {
-      if (!Object.hasOwn(FAKE_SECRETS, secret[1])) throw new Error(`Unknown fixture secret "${secret[1]}".`);
-      return FAKE_SECRETS[secret[1]];
-    }
+    if (SECRET_PLACEHOLDER.test(text)) return resolveSecretPlaceholder(text);
     if (text === CANONICAL_ROOT || text.startsWith(`${CANONICAL_ROOT}/`)) {
       return path.join(env.root, ...text.slice(CANONICAL_ROOT.length).split("/").filter(Boolean));
     }
@@ -503,12 +507,8 @@ function applyCaseEnvironment(envSpec = {}) {
       continue;
     }
     savedEnv.push([name, Object.hasOwn(process.env, name) ? process.env[name] : undefined]);
-    const value = raw === null || raw === undefined ? null : mapStrings(String(raw), (text) => {
-      const secret = text.match(SECRET_PLACEHOLDER);
-      return secret ? FAKE_SECRETS[secret[1]] : text;
-    });
-    if (value === null || value === undefined) delete process.env[name];
-    else process.env[name] = value;
+    if (raw === null || raw === undefined) delete process.env[name];
+    else process.env[name] = resolveSecretPlaceholder(String(raw));
   }
   return () => {
     for (const [name, value] of savedEnv.reverse()) {
