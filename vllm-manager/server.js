@@ -6,6 +6,8 @@ const path = require("path");
 const crypto = require("crypto");
 const net = require("net");
 const core = require("../manager-core");
+const templateSignatures = require("../manager-core/model-inspector/template-signatures");
+const modelKnowledge = require("../manager-core/model-inspector/knowledge");
 const { describeDownloadError } = require("../manager-core/model-hub/errors");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
@@ -1510,7 +1512,10 @@ async function getModelConfigRequest(query = {}) {
     error.status = 400;
     throw error;
   }
-  return getModelConfig(model, source, String(query.quantization || "").trim());
+  return getModelConfig(model, source, String(query.quantization || "").trim(), {
+    runtimeId: String(query.runtimeId || "").trim(),
+    engine: String(query.engine || "").trim(),
+  });
 }
 
 async function getModelReadmeRequest(query = {}) {
@@ -1935,6 +1940,10 @@ function normalizeLaunchProfile(value) {
   };
 }
 
+function parserListsForLaunch(config) {
+  return cachedParserLists(String(config.runtimeImage || "").trim(), normalizeRuntimeEngine(config.engine));
+}
+
 function normalizeLaunchConfig(config = {}) {
   return {
     model: String(config.model || ""),
@@ -1960,9 +1969,9 @@ function normalizeLaunchConfig(config = {}) {
     languageModelOnly: Boolean(config.languageModelOnly),
     networkAccess: normalizeNetworkAccess(config.networkAccess),
     clientPreset: normalizeClientPreset(config.clientPreset),
-    reasoningParser: normalizeReasoningParser(config.reasoningParser),
+    reasoningParser: normalizeReasoningParser(config.reasoningParser, { lists: parserListsForLaunch(config) }),
     enableAutoToolChoice: config.enableAutoToolChoice !== false,
-    toolCallParser: normalizeToolCallParser(config.toolCallParser),
+    toolCallParser: normalizeToolCallParser(config.toolCallParser, { lists: parserListsForLaunch(config) }),
     multiGpuMode: String(config.multiGpuMode || "single"),
     gpuDeviceIds: Array.isArray(config.gpuDeviceIds) ? config.gpuDeviceIds.map(String) : [],
     tensorParallelSize: positiveInt(config.tensorParallelSize, 1),
@@ -3224,14 +3233,15 @@ function isPortInUseOnHost(port) {
 
 // 读取模型 config.json：本地模型从磁盘读，HF 从 resolve/main 拉。
 // 用于精确显存估算（真实层数/头数/维度）与原生上下文长度提示。
-async function getModelConfig(model, source = "huggingface", quantization = "") {
+async function getModelConfig(model, source = "huggingface", quantization = "", options = {}) {
   const input = String(model || "").trim();
+  const parserContext = await loadParserRuntimeContext(options);
   const local = describeLocalModelPath(input);
   if (local?.stat?.isDirectory()) {
     const configPath = path.join(local.path, "config.json");
     if (fs.existsSync(configPath)) {
       const raw = parseJsonSafe(await fsp.readFile(configPath, "utf8"), null);
-      if (raw) return { ...normalizeModelConfig(raw), ...summarizeModelConfigCapabilities(raw, input, local.path, quantization), source: "local", model: input, found: true };
+      if (raw) return { ...normalizeModelConfig(raw), ...summarizeModelConfigCapabilities(raw, input, local.path, quantization, parserContext), source: "local", model: input, found: true };
     }
     return { source: "local", model: input, found: false, reason: "本地目录没有 config.json（可能是 GGUF）。" };
   }
@@ -3259,10 +3269,90 @@ async function getModelConfig(model, source = "huggingface", quantization = "") 
   }
   const raw = parseJsonSafe(await response.text(), null);
   if (!raw) return { source: "huggingface", model: input, found: false, reason: "config.json 解析失败。" };
-  return { ...normalizeModelConfig(raw), ...summarizeModelConfigCapabilities(raw, input, "", quantization), source: "huggingface", model: input, found: true };
+  return { ...normalizeModelConfig(raw), ...summarizeModelConfigCapabilities(raw, input, "", quantization, parserContext), source: "huggingface", model: input, found: true };
 }
 
-function summarizeModelConfigCapabilities(raw, model, localPath = "", quantization = "") {
+// Parser lists of a runtime image (02 8.6): GET /api/model/config reads them
+// through engines.runtimeFacts.get (introspected choices, then the probe
+// registries). The lists are also remembered for a minute so the synchronous
+// launch normalizers can reject a parser the chosen image does not have.
+const PARSER_LIST_TTL_MS = 60_000;
+const parserListCache = new Map();
+let parserRuntimeFacts = null;
+
+function setParserRuntimeFacts(store) {
+  parserRuntimeFacts = store || null;
+  parserListCache.clear();
+}
+
+function parserEngineId(engine) {
+  const id = String(engine || "").trim().toLowerCase();
+  return id && engineRegistry.has(id) ? id : "vllm";
+}
+
+async function loadParserRuntimeContext(options = {}) {
+  const engineId = parserEngineId(options.engine);
+  let runtime = null;
+  try {
+    runtime = engineRegistry.resolveRuntime(engineId, options.runtimeId ? { runtimeId: options.runtimeId } : {});
+  } catch {
+    runtime = null;
+  }
+  const context = { engineId, runtimeId: runtime?.runtimeId || null, image: runtime?.image || null, facts: null };
+  if (!runtime) return context;
+  try {
+    context.facts = (await (parserRuntimeFacts || core.engines.runtimeFacts).get(runtime.runtimeId)) || null;
+  } catch {
+    context.facts = null;
+  }
+  parserListCache.set(runtime.runtimeId, { at: Date.now(), lists: templateSignatures.parserLists(context.facts) });
+  return context;
+}
+
+function cachedParserLists(runtimeImage, engine) {
+  const engineId = parserEngineId(engine);
+  let runtimeId = "";
+  try {
+    runtimeId = engineRegistry.resolveRuntime(engineId, runtimeImage ? { image: runtimeImage } : {}).runtimeId;
+  } catch {
+    return null;
+  }
+  const cached = parserListCache.get(runtimeId);
+  return cached && Date.now() - cached.at < PARSER_LIST_TTL_MS ? cached.lists : null;
+}
+
+function modelConfigCard(raw, model, localPath, quantMethod) {
+  const text = raw?.text_config || raw?.llm_config || raw?.language_config || {};
+  const name = String(model || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+  return {
+    ref: localPath ? { kind: "local", path: localPath } : { kind: "remote", repo: /^[^/\s]+\/[^/\s]+$/.test(String(model || "")) ? String(model) : undefined },
+    identity: {
+      modelType: raw?.model_type || null,
+      textModelType: text.model_type || null,
+      architectures: Array.isArray(raw?.architectures) ? raw.architectures : (Array.isArray(text.architectures) ? text.architectures : []),
+      displayName: name || null,
+    },
+    quant: { method: String(quantMethod || "").toLowerCase() || null },
+    template: { signatureId: null },
+  };
+}
+
+function resolveModelParsers(raw, model, localPath, quantMethod, parserContext = {}) {
+  const engineId = parserContext.engineId || "vllm";
+  const template = localPath ? templateSignatures.readLocalTemplate(localPath) : null;
+  return templateSignatures.resolveParsersSync(modelConfigCard(raw, model, localPath, quantMethod), engineId, {
+    knowledge: modelKnowledge.loadKnowledge(),
+    descriptor: engineRegistry.get(engineId),
+    facts: parserContext.facts || null,
+    runtimeId: parserContext.runtimeId || null,
+    image: parserContext.image || null,
+    quantMethod,
+    model,
+    templateText: template?.text || "",
+  });
+}
+
+function summarizeModelConfigCapabilities(raw, model, localPath = "", quantization = "", parserContext = {}) {
   // Prefer the user's chosen quantization over whatever is baked into config.json:
   // the dropdown is what actually ships to vLLM, and the MTP/compat decision
   // (e.g. auto-off for Qwen3.5/3.6 + NVFP4) must match it, not a stale file value.
@@ -3277,6 +3367,7 @@ function summarizeModelConfigCapabilities(raw, model, localPath = "", quantizati
     speculativeMode: "auto",
     numSpeculativeTokens: 1,
   });
+  const parsers = resolveModelParsers(raw, model, localPath, effectiveQuantization, parserContext);
   return {
     speculative: {
       enabled: Boolean(capabilities.speculativeConfig),
@@ -3291,8 +3382,9 @@ function summarizeModelConfigCapabilities(raw, model, localPath = "", quantizati
         || "",
     },
     capabilityEntry: capabilities.capabilityEntry || null,
-    recommendedReasoningParser: capabilities.reasoningParser || "",
-    recommendedToolCallParser: capabilities.toolCallParser || "",
+    recommendedReasoningParser: parsers.reasoningParser.value,
+    recommendedToolCallParser: parsers.toolCallParser.value,
+    parsers,
   };
 }
 
@@ -3393,49 +3485,37 @@ function normalizeQuantization(value) {
   throw error;
 }
 
-function normalizeReasoningParser(value) {
+// A parser name is checked against the runtime image's parser lists (introspected
+// choices or probe registries, 02 8.6) when they are known, and against the
+// name charset otherwise. A name that fails is an error the caller sees, never
+// an empty string: the old fixed allow-lists dropped unknown parsers silently.
+function normalizeParserName(value, kind, options = {}) {
   const parser = String(value || "").trim().toLowerCase();
-  const allowed = new Set([
-    "",
-    "auto",
-    "qwen3",
-    "deepseek_r1",
-    "deepseek_v3",
-    "gptoss",
-    "gemma4",
-    "granite",
-    "hunyuan_a13b",
-    "kimi_k2",
-    "mistral",
-    "nemotron_v3",
-    "olmo3",
-    "step3",
-    "step3p5",
-    "identity",
-    "nano_v3",
-  ]);
-  return allowed.has(parser) ? parser : "";
+  if (!parser) return "";
+  const label = kind === "tool" ? "工具调用解析器 / tool-call parser" : "思考解析器 / reasoning parser";
+  if (!/^[a-z0-9][a-z0-9_.-]{0,79}$/.test(parser)) {
+    const error = new Error(`${label} 名称含有非法字符 / invalid name: ${parser}`);
+    error.status = 400;
+    error.code = "invalid_parser_name";
+    throw error;
+  }
+  if (templateSignatures.ENGINE_KEYWORDS.has(parser)) return parser;
+  const names = options.lists?.[kind]?.names;
+  if (names && !names.some((name) => String(name).toLowerCase() === parser)) {
+    const error = new Error(`${label} “${parser}” 不在所选运行时镜像中 / is not available in the selected runtime image. 可用值 / available: ${names.join(", ")}`);
+    error.status = 400;
+    error.code = "parser_not_in_image";
+    throw error;
+  }
+  return parser;
 }
 
-function normalizeToolCallParser(value) {
-  const parser = String(value || "").trim().toLowerCase();
-  const allowed = new Set([
-    "",
-    "auto",
-    "qwen3_coder",
-    "qwen3_xml",
-    "hermes",
-    "deepseek_v3",
-    "mistral",
-    "llama3_json",
-    "llama4_pythonic",
-    "xlam",
-    "gemma4",
-    "pythonic",
-    "granite",
-    "minimax",
-  ]);
-  return allowed.has(parser) ? parser : "";
+function normalizeReasoningParser(value, options = {}) {
+  return normalizeParserName(value, "reasoning", options);
+}
+
+function normalizeToolCallParser(value, options = {}) {
+  return normalizeParserName(value, "tool", options);
 }
 
 function inferToolCallParser(model, preset = "generic") {
@@ -5524,6 +5604,10 @@ module.exports = {
   applyVllmRequestDefaults,
   normalizeModelConfig,
   summarizeModelConfigCapabilities,
+  setParserRuntimeFacts,
+  normalizeLaunchConfig,
+  normalizeReasoningParser,
+  normalizeToolCallParser,
   buildModelStats,
   withSpeedWindowSeconds,
   statsSampler,

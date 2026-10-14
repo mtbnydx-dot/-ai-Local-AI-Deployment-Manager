@@ -13,6 +13,7 @@ const evidence = require("./evidence");
 const inspect = require("./inspect");
 const jsonSchemaLite = require("./json-schema-lite");
 const knowledge = require("./knowledge");
+const templateSignatures = require("./template-signatures");
 const rangeReader = require("./remote/range-reader");
 const role = require("./detectors/role");
 const topology = require("./detectors/topology");
@@ -54,6 +55,16 @@ module.exports = {
     TOTAL_BUDGET_MS: rangeReader.TOTAL_BUDGET_MS,
     REQUEST_TIMEOUT_MS: rangeReader.REQUEST_TIMEOUT_MS,
     DEFAULT_MAX_BYTES: rangeReader.DEFAULT_MAX_BYTES,
+  },
+  // Chat template signatures and parser resolution (02 8.3, 8.6, MOD-7).
+  parsers: {
+    matchTemplate: templateSignatures.matchTemplate,
+    resolveParsers: templateSignatures.resolveParsers,
+    resolveParsersSync: templateSignatures.resolveParsersSync,
+    parserLists: templateSignatures.parserLists,
+    readLocalTemplate: templateSignatures.readLocalTemplate,
+    templateSha256: templateSignatures.templateSha256,
+    CATALOG_IDS: templateSignatures.CATALOG_IDS,
   },
   tensorClasses: topology.DEFAULT_TENSOR_CLASSES,
   jsonSchema: { compileSchema: jsonSchemaLite.compileSchema, validate: jsonSchemaLite.validate },
