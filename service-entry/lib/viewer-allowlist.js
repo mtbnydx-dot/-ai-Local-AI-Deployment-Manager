@@ -93,6 +93,9 @@ function createViewerRegistry(options = {}) {
     assertRedact(method, args.redact);
     const path = String(args.path);
     const taken = routes.find((route) => route.method === httpMethod && route.path === path);
+    // Declaring an admin-only route twice changes nothing, so the owner that
+    // implements a route 05's baseline already declared may declare it too.
+    if (taken && taken.access === ADMIN && access === ADMIN) return;
     if (taken) throw new Error(`${httpMethod} ${path} is already registered by ${taken.owner}`);
     routes.push({
       owner,

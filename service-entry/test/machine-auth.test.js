@@ -371,8 +371,9 @@ test("entry-call.js signs as system:cli with the trust file of its AI root", asy
 });
 
 // A stand-in entry that, like the entry after PUB-5, accepts the shutdown
-// only with a valid machine signature in scope.
-async function signatureOnlyEntry(t, token) {
+// only with a valid machine signature in scope; with acceptUnsigned it is an
+// entry from before PUB-5, which a loopback caller may stop without one.
+async function fixtureEntry(t, token, { acceptUnsigned = false } = {}) {
   const machine = createMachineAuth({ getToken: () => token });
   const seen = [];
   let unsigned = 0;
@@ -386,7 +387,10 @@ async function signatureOnlyEntry(t, token) {
     if (!machine.hasCredentials(req)) {
       unsigned += 1;
       req.resume();
-      return answer(401, { ok: false, error: { code: "admin_session_required" } });
+      if (!acceptUnsigned) return answer(401, { ok: false, error: { code: "admin_session_required" } });
+      answer(200, { ok: true });
+      setImmediate(() => server.close());
+      return undefined;
     }
     const signature = machine.verifySignature(req, url);
     const scope = signature.ok ? machine.authorize(signature.principal, req.method, url) : signature;
@@ -403,6 +407,20 @@ async function signatureOnlyEntry(t, token) {
     else resolve();
   }));
   return { port, seen, get unsigned() { return unsigned; }, server };
+}
+
+async function stopEnv(root, entryPort) {
+  const env = {
+    ...process.env,
+    AI_ROOT: root,
+    NODE_EXE: process.execPath,
+    SERVICE_ENTRY_PORT: String(entryPort),
+    // Nothing listens on these, so no manager is asked to stop.
+    VLLM_MANAGER_PORT: String(await unusedPort()),
+    LLAMA_MANAGER_PORT: String(await unusedPort()),
+  };
+  delete env.SERVICE_GATEWAY_TRUST_TOKEN;
+  return env;
 }
 
 function runCmd(file, env, timeoutMs = 90_000) {
@@ -428,18 +446,8 @@ test("stop-service-entry.cmd stops a fixture entry that requires signatures", { 
   const token = "fixture-entry-trust-token-0123456789abcdef";
   const root = tempRoot(t, "stop-entry-");
   writeTrustFile(root, token);
-  const fixture = await signatureOnlyEntry(t, token);
-  const env = {
-    ...process.env,
-    AI_ROOT: root,
-    NODE_EXE: process.execPath,
-    SERVICE_ENTRY_PORT: String(fixture.port),
-    // Nothing listens on these, so no manager is asked to stop.
-    VLLM_MANAGER_PORT: String(await unusedPort()),
-    LLAMA_MANAGER_PORT: String(await unusedPort()),
-  };
-  delete env.SERVICE_GATEWAY_TRUST_TOKEN;
-  const result = await runCmd(path.join(REPO_ROOT, "stop-service-entry.cmd"), env);
+  const fixture = await fixtureEntry(t, token);
+  const result = await runCmd(path.join(REPO_ROOT, "stop-service-entry.cmd"), await stopEnv(root, fixture.port));
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, new RegExp(`Stopped Service Entry on ${fixture.port}`));
   assert.match(result.stdout, /is not running/);
@@ -447,4 +455,17 @@ test("stop-service-entry.cmd stops a fixture entry that requires signatures", { 
   assert.equal(fixture.unsigned, 0, "the signed request was enough");
   assert.equal(fixture.server.listening, false);
   assert.equal(`${result.stdout}${result.stderr}`.includes(token), false);
+});
+
+test("stop-service-entry.cmd falls back to the unsigned request when it cannot sign", { skip: process.platform !== "win32" && "the launcher is a Windows .cmd" }, async (t) => {
+  // No trust file: entry-call.js cannot sign, and an entry from before PUB-5
+  // still takes the unsigned loopback shutdown.
+  const root = tempRoot(t, "stop-entry-unsigned-");
+  const fixture = await fixtureEntry(t, "fixture-entry-trust-token-0123456789abcdef", { acceptUnsigned: true });
+  const result = await runCmd(path.join(REPO_ROOT, "stop-service-entry.cmd"), await stopEnv(root, fixture.port));
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /did not accept the signed shutdown request: entry-call: internal_key_unavailable/);
+  assert.match(result.stdout, new RegExp(`Stopped Service Entry on ${fixture.port}`));
+  assert.deepEqual(fixture.seen, []);
+  assert.equal(fixture.unsigned, 1);
 });

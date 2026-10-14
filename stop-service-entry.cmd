@@ -25,7 +25,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "function Get-Listener([int]$port) { Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 }" ^
   "function Wait-PortClosed([int]$port, [int]$seconds) { $deadline=(Get-Date).AddSeconds($seconds); while ((Get-Date) -lt $deadline) { if (!(Get-Listener $port)) { return $true }; Start-Sleep -Milliseconds 250 }; return !(Get-Listener $port) }" ^
   "function Send-Shutdown([int]$port) { try { Invoke-RestMethod -UseBasicParsing -Method Post -Uri ('http://127.0.0.1:' + $port + '/api/manager/shutdown') -TimeoutSec 2 | Out-Null; return '' } catch { return $_.Exception.Message } }" ^
-  "function Send-SignedShutdown([int]$port) { try { $out=& $node $entryCall POST /api/manager/shutdown --port $port --timeout-ms 3000 --quiet 2>&1; if ($LASTEXITCODE -eq 0) { return '' }; return (($out | Out-String).Trim()) } catch { return $_.Exception.Message } }" ^
+  "function Send-SignedShutdown([int]$port) { try { $out=& $node $entryCall POST /api/manager/shutdown --port $port --timeout-ms 3000 --quiet 2>&1; if ($LASTEXITCODE -eq 0) { return '' }; return ((@($out) | ForEach-Object { [string]$_ }) -join ' ').Trim() } catch { return $_.Exception.Message } }" ^
   "$failed=@();" ^
   "foreach ($item in $items) {" ^
   "  $port=$item.Port;" ^

@@ -54,7 +54,15 @@ test("registration rules: GET-only viewer routes, one entry per route, frozen af
 
   registry.registerRoute({ owner: "05", path: "/api/x" });
   assert.throws(() => registry.registerAdminOnly({ owner: "07", method: "GET", path: "/api/x" }), /already registered by 05/);
+  assert.throws(() => registry.registerRoute({ owner: "07", path: "/api/x" }), /already registered by 05/);
   registry.registerAdminOnly({ owner: "05", method: "DELETE", path: "/api/x" });
+  // A second admin-only declaration of the same route is a no-op; turning an
+  // admin-only route into a viewer route is a conflict.
+  registry.registerAdminOnly({ owner: "05", method: "GET", path: "/api/access/*" });
+  registry.registerAdminOnly({ owner: "05-access", method: "GET", path: "/api/access/*" });
+  assert.equal(registry.inventory().filter((item) => item.path === "/api/access/*").length, 1);
+  assert.equal(registry.match("GET", "/api/access/keys").entry.owner, "05");
+  assert.throws(() => registry.registerRoute({ owner: "05-access", path: "/api/access/*" }), /already registered/);
 
   assert.equal(registry.frozen, false);
   registry.freeze();
