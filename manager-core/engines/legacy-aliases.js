@@ -17,7 +17,8 @@
 // back. Secret params (the API key) never enter values.
 
 const paramCatalog = require("./param-catalog");
-const { normalizeManagerId, unknownEngineError } = require("./registry");
+const registryModule = require("./registry");
+const { normalizeManagerId, unknownEngineError } = registryModule;
 const { normalizeGpuIds, normalizeNetworkAccess } = require("../common-utils");
 const { normalizeRuntimeInstanceMode } = require("../runtime-instance-utils");
 
@@ -440,6 +441,48 @@ function requestToLegacyRunOptions(plan) {
   return { ...runOptions };
 }
 
+/**
+ * legacyProfileToV2(profile, { managerId, registry?, paramCatalog? }) → a v2
+ * profile entry (01 §22). A v1 entry {id, name, description, source,
+ * updatedAt, config} gains {schemaVersion: 2, engineId, recipeId?, values,
+ * catalogVersion}; config is kept and recomputed from the values on top of
+ * itself, so an old reader sees the same flat config. An entry that cannot be
+ * converted (unknown engine, bad catalog) is returned as it is. A v2 entry
+ * keeps its values and gets its config recomputed.
+ */
+function legacyProfileToV2(profile, options = {}) {
+  if (!isPlainObject(profile) || !isPlainObject(profile.config)) return profile;
+  try {
+    const registry = options.registry || registryModule.getEngineRegistry();
+    const engineId = isPlainObject(profile) && profile.schemaVersion === 2 && profile.engineId
+      ? String(profile.engineId)
+      : registry.fromLegacy(String(profile.config.engine ?? ""), options.managerId);
+    if (!engineId || !registry.has(engineId)) return profile;
+    const catalog = catalogFor(engineId, options);
+    const values = profile.schemaVersion === 2 && isPlainObject(profile.values)
+      ? clone(profile.values)
+      : legacyConfigToValues(profile.config, engineId, { catalog });
+    const config = valuesToLegacyConfig(values, engineId, { catalog, base: profile.config });
+    let recipeId = profile.recipeId || "";
+    const image = String(profile.config.runtimeImage || "").trim();
+    if (!recipeId && image && LEGACY_IMAGE_PATTERN.test(image)) {
+      const selected = legacyRuntimeSelection(image, { engineId, registry, warnings: [] });
+      recipeId = selected.recipeId || "";
+    }
+    return {
+      ...profile,
+      schemaVersion: 2,
+      engineId,
+      ...(recipeId ? { recipeId } : {}),
+      values,
+      catalogVersion: String(catalog.catalogVersion || ""),
+      config,
+    };
+  } catch {
+    return profile;
+  }
+}
+
 module.exports = {
   CODECS,
   LAYOUT_PARAMS,
@@ -448,6 +491,7 @@ module.exports = {
   legacyBodyToRequest,
   legacyConfigToValues,
   legacyFieldSet,
+  legacyProfileToV2,
   requestToLegacyRunOptions,
   valuesToLegacyConfig,
 };

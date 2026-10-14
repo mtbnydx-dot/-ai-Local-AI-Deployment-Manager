@@ -90,6 +90,7 @@ module.exports = {
   legacyBodyToRequest: legacyAliases.legacyBodyToRequest,
   legacyConfigToValues: legacyAliases.legacyConfigToValues,
   valuesToLegacyConfig: legacyAliases.valuesToLegacyConfig,
+  legacyProfileToV2: legacyAliases.legacyProfileToV2,
   requestToLegacyRunOptions: legacyAliases.requestToLegacyRunOptions,
   // The launch-plan resolver (01 §11): POST /api/launch/plan and /api/start.
   launchPlan: resolveLaunchPlanModule,
