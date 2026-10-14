@@ -1,0 +1,163 @@
+{
+  "schema": "modelcard/v1",
+  "contentDigest": "sha256:21598912c77305b43cd50ecbc7054b934b445a5814b5456df5456b1b9ceb0841",
+  "inspectorVersion": "1.0.0",
+  "knowledgeDigest": null,
+  "origin": null,
+  "format": {
+    "kind": "safetensors",
+    "weightFiles": 128,
+    "weightBytes": 32000176128,
+    "complete": true,
+    "missing": [],
+    "layout": "custom"
+  },
+  "role": null,
+  "identity": {
+    "modelType": null,
+    "textModelType": null,
+    "architectures": null,
+    "ggufArchitecture": null,
+    "transformersVersion": null,
+    "baseModel": null,
+    "displayName": null,
+    "familyId": null,
+    "familyLabel": null,
+    "matchedBy": ""
+  },
+  "topology": {
+    "paramsTotal": 25600122880,
+    "paramsActive": null,
+    "hiddenSize": null,
+    "vocabSize": null,
+    "layers": null,
+    "heads": null,
+    "kvHeads": null,
+    "headDim": null,
+    "attention": null,
+    "moe": null,
+    "mtp": null,
+    "ple": null
+  },
+  "weights": {
+    "exact": true,
+    "totalBytes": 32000176128,
+    "tensorBytes": 32000153600,
+    "byDtype": {
+      "F16": 6400030720,
+      "U8": 25600122880
+    },
+    "byClass": {
+      "dense": 32000153600,
+      "experts": 0,
+      "embedding": 0,
+      "lmHead": 0,
+      "vision": 0,
+      "audio": 0,
+      "mtp": 0,
+      "ple": 0,
+      "other": 0
+    },
+    "expertsByLayer": null
+  },
+  "context": {
+    "native": null,
+    "ropeScaling": null,
+    "slidingWindow": null
+  },
+  "quant": {
+    "method": null,
+    "algo": null,
+    "weightBits": null,
+    "groupSize": null,
+    "activation": null,
+    "kvScheme": null,
+    "excludedModules": null,
+    "ggufFileType": null,
+    "ggufTensorTypes": null
+  },
+  "modalities": {
+    "input": [],
+    "output": null,
+    "visionTower": null,
+    "audioTower": null,
+    "projectorFiles": []
+  },
+  "template": {
+    "source": "none",
+    "sha256": null,
+    "bytes": null,
+    "signatureId": null,
+    "exact": null,
+    "toolFormat": null,
+    "reasoningFormat": null,
+    "thinking": null,
+    "systemRole": null
+  },
+  "parsers": null,
+  "sampling": null,
+  "speculative": {
+    "nativeMtp": false,
+    "draftOf": null,
+    "compatibleDrafts": null
+  },
+  "compatibleWith": null,
+  "customCode": {
+    "autoMap": null,
+    "files": ["ple_layer_quant.py","worker_image_quant.py"],
+    "trustRemoteCodeRequired": false
+  },
+  "support": "unknown",
+  "remote": null,
+  "evidence": [
+    {"fact":"/template/source","value":"none","source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/topology/paramsTotal","value":25600122880,"source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/exact","value":true,"source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected"},
+    {
+      "fact": "/weights/totalBytes",
+      "value": 32000176128,
+      "source": {
+        "kind": "tensor-table",
+        "ref": "ples_int4/*.safetensors"
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "按文件头布局计算的权重文件总大小（头、张量和对齐填充），即完整下载的大小；tensorBytes 只计张量。",
+        "en": "The weight files as their headers lay them out (header, tensors, padding): the size of a complete download. tensorBytes counts tensors only."
+      }
+    },
+    {"fact":"/weights/tensorBytes","value":32000153600,"source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/byDtype","source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected"},
+    {"fact":"/weights/byClass","source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected"},
+    {"fact":"/format/kind","value":"safetensors","source":{"kind":"file","ref":null},"confidence":"declared","note":{"zh":"来自文件夹列表（只读取文件大小）。","en":"From the folder listing (file sizes only)."}},
+    {"fact":"/format/weightFiles","value":128,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/weightBytes","value":32000176128,"source":{"kind":"file","ref":null},"confidence":"declared"},
+    {"fact":"/format/complete","value":true,"source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/format/layout","value":"custom","source":{"kind":"file","ref":null},"confidence":"detected"},
+    {"fact":"/customCode/files","source":{"kind":"file","ref":"ple_layer_quant.py"},"confidence":"declared"},
+    {
+      "fact": "/customCode/trustRemoteCodeRequired",
+      "value": false,
+      "source": {
+        "kind": "file",
+        "ref": null
+      },
+      "confidence": "detected",
+      "note": {
+        "zh": "没有 config.json 的 auto_map，也不需要运行模型自带的代码。",
+        "en": "No config.json auto_map; no model-supplied code needs to run."
+      }
+    },
+    {"fact":"/speculative/nativeMtp","value":false,"source":{"kind":"tensor-table","ref":"ples_int4/*.safetensors"},"confidence":"detected","note":{"zh":"没有找到 MTP 张量。","en":"No MTP tensors were found."}}
+  ],
+  "warnings": [
+    {
+      "code": "template_missing",
+      "message": {
+        "zh": "没有找到聊天模板（chat_template.jinja、tokenizer_config.json 或 GGUF），工具调用和思考格式未知。",
+        "en": "No chat template was found (chat_template.jinja, tokenizer_config.json or GGUF); the tool-call and reasoning formats are unknown."
+      }
+    }
+  ],
+  "errors": []
+}
