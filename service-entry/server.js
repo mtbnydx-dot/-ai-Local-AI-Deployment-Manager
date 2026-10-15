@@ -184,7 +184,7 @@ const ROUTE_MODULES = [
   "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
   "./lib/engine-routes", // 01 ENG-19  /api/engines, /api/engines/external/endpoints
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
-  "./lib/telemetry-routes", // 04 TEL-18  /api/telemetry/import (TEL-11 adds the query routes)
+  "./lib/telemetry-routes", // 04 TEL-11/18  /api/telemetry/* (query, export, settings, import)
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
   "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
   "./lib/access-internal-routes", // 05 PUB-10  /internal/access/* (verify, legacy manager key forwarders)
@@ -577,6 +577,8 @@ function createRouteContext(overrides = {}) {
     features: {},
     sendJson,
     readJsonObjectBody,
+    // The billing store, for the request-detail join of telemetry-routes (04 §11.6).
+    getBillingStore,
     // The access store (05 §6) and the legacy key migration, for access-routes.
     getAccessStore,
     accessMigration: {

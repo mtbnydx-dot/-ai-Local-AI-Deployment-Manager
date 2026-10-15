@@ -732,5 +732,6 @@ module.exports = {
   accessEventMatchesQuery,
   queryAccessLogEvents,
   formatAccessLogExport,
+  accessLogCsvCell,
   createServiceGatewayAccessLogStore,
 };
