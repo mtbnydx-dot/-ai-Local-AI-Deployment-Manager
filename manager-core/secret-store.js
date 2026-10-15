@@ -44,6 +44,10 @@ const ENTROPY_PREFIX = "local-ai-platform:";
 const LOCK_STALE_MS = 10000;
 const LOCK_WAIT_MS = 15000;
 const LOCK_RETRY_MS = 25;
+// How long a lock-file open may keep failing with a busy-file code before it is
+// reported as a real error.
+const LOCK_BUSY_GRACE_MS = 3000;
+const LOCK_BUSY_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 const DPAPI_TIMEOUT_MS = 30000;
 // A synchronous call blocks the event loop, so it gives up sooner.
 const DPAPI_SYNC_TIMEOUT_MS = 15000;
@@ -639,6 +643,7 @@ function createSecretStore({ aiRoot, namespace, dpapi, fsImpl = nodeFs, now = ()
 
   async function acquireLock() {
     const deadline = Date.now() + LOCK_WAIT_MS;
+    let transientUntil = 0;
     for (;;) {
       try {
         const handle = await fsImpl.promises.open(lockFile, "wx");
@@ -654,7 +659,17 @@ function createSecretStore({ aiRoot, namespace, dpapi, fsImpl = nodeFs, now = ()
           if (Date.now() > deadline) throw unavailable("The secret store directory cannot be created.", error);
           continue;
         }
-        if (error?.code !== "EEXIST") throw unavailable("The secret store lock cannot be taken.", error);
+        if (error?.code === "EEXIST") {
+          transientUntil = 0;
+        } else if (LOCK_BUSY_CODES.has(error?.code) && Date.now() < (transientUntil ||= Date.now() + LOCK_BUSY_GRACE_MS)) {
+          // Windows answers EPERM/EACCES/EBUSY (not EEXIST) while the previous
+          // holder's lock file is delete-pending, or while a scanner has it
+          // open. That is contention for a moment, not a permission problem.
+          await delay(LOCK_RETRY_MS);
+          continue;
+        } else {
+          throw unavailable("The secret store lock cannot be taken.", error);
+        }
       }
       try {
         const stat = fsImpl.statSync(lockFile);
