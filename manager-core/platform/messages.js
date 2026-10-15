@@ -53,6 +53,39 @@ const MESSAGES = Object.freeze({
     "zh-CN": "组件清单的数据日期是 {detail}，已超过建议的更新周期。",
     "en-US": "The component list data is dated {detail}, which is past its suggested refresh period.",
   },
+  // Supervisor notifications (06 §5.10): {label} is the component's label.
+  "notify.component.failed.title": {
+    "zh-CN": "{label}反复退出，已停止自动重启",
+    "en-US": "{label} keeps exiting and is no longer restarted",
+  },
+  "notify.component.failed.body": {
+    "zh-CN": "{label}已自动重启 {count} 次（{windowMin} 分钟内）仍然失败。最后一次退出原因：{reason}。请查看它的日志后手动启动。",
+    "en-US": "{label} was restarted {count} times within {windowMin} minutes and still failed. Last exit: {reason}. Check its log, then start it manually.",
+  },
+  "notify.component.recovered.title": {
+    "zh-CN": "{label}已恢复",
+    "en-US": "{label} recovered",
+  },
+  "notify.component.recovered.body": {
+    "zh-CN": "{label}在自动重启后重新就绪。",
+    "en-US": "{label} is ready again after an automatic restart.",
+  },
+  "notify.restart.executed.title": {
+    "zh-CN": "已执行排队的重启：{label}",
+    "en-US": "Queued restart done: {label}",
+  },
+  "notify.restart.executed.body": {
+    "zh-CN": "平台空闲后，{label}已按计划重启。",
+    "en-US": "{label} was restarted as planned once the platform was idle.",
+  },
+  "notify.restart.overdue.title": {
+    "zh-CN": "{label}的重启一直在等待空闲",
+    "en-US": "{label} is still waiting to restart",
+  },
+  "notify.restart.overdue.body": {
+    "zh-CN": "排队的重启已等待超过 {hours} 小时，因为平台一直忙碌（{blockers}）。它仍在排队；也可以在空闲时手动重启。",
+    "en-US": "The queued restart has waited more than {hours} hours because the platform stayed busy ({blockers}). It is still queued; you can also restart it manually when convenient.",
+  },
 });
 
 function interpolate(text, params) {
