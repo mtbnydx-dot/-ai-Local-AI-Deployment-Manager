@@ -87,7 +87,7 @@ export const ROUTES = Object.freeze([
   page("system.settings", "/system/settings", () => import("./routes/system/settings.js"), { section: "system", feature: "platform", spec: "06" }),
   page("system.updates", "/system/updates", () => import("./routes/system/updates.js"), { section: "system", feature: "platform", spec: "06" }),
   page("system.ops", "/system/ops", () => import("./routes/system/ops.js"), { section: "system", feature: "platform", spec: "06" }),
-  page("system.preferences", "/system/preferences", () => import("./routes/system/preferences.js"), { section: "system", ...OPEN }),
+  page("system.preferences", "/system/preferences", () => import("./routes/system/preferences.js"), { section: "system", titleKey: "prefs.title", ...OPEN }),
   page("system.ui-kit", "/system/ui-kit", () => import("./routes/system/ui-kit.js"), { section: "system", titleKey: "uikit.title", ...OPEN }),
 
   page("setup", "/setup", () => import("./routes/setup.js"), { section: "system", titleKey: "shell.title.setup", feature: "setup", spec: "06" }),
