@@ -190,6 +190,8 @@ const ROUTE_MODULES = [
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
   "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
   "./lib/access-internal-routes", // 05 PUB-10  /internal/access/* (verify, legacy manager key forwarders)
+  "./lib/model-card-routes", // 02 MOD-15  /api/models/{inspect,:id/*}, /api/launch/recommend
+  "./lib/knowledge-routes", // 02 MOD-15  /api/knowledge/*
   // "./lib/platform-routes",     // 06 OPS-13
 ];
 
@@ -577,6 +579,8 @@ function createRouteContext(overrides = {}) {
     features: {},
     sendJson,
     readJsonObjectBody,
+    // The host GPUs, for the model-card routes (02 MOD-15: compatibility, recommend, fit-grid).
+    getGpus: getEntryGpus,
     // The billing store, for the request-detail join of telemetry-routes (04 §11.6).
     getBillingStore,
     // The access store (05 §6) and the legacy key migration, for access-routes.
