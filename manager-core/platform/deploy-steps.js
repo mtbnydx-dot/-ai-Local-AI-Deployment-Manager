@@ -677,6 +677,70 @@ function restartComponents({ registry, manifest, prunedPaths = [], dependencyPac
   return { ids, reexec };
 }
 
+const REEXEC_WAIT_MS = 20000;
+const REEXEC_POLL_MS = 300;
+
+function restartError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+/**
+ * The restart adapter used by `platform post-deploy` (§9.3 step 5), over a
+ * control client ({ available(), request(method, route, {body, timeoutMs}) },
+ * 5.14). Without a reachable supervisor it throws supervisor_unavailable, which
+ * runRestart turns into the printed commands (exit 0). With one:
+ *   1. a `supervisor` change (reexec) calls POST /v1/reexec first and waits
+ *      for the new process (a different pid answering /v1/status); a re-exec
+ *      that does not complete throws reexec_failed and restarts nothing;
+ *   2. every component then gets POST /v1/components/:id/restart {when:"idle"}:
+ *      idle ones restart now, busy ones are queued (5.11) with their blockers.
+ * A failed single restart is recorded in `failed`, never thrown. Model
+ * containers are not components and never appear here.
+ * Test seams: sleep(ms), now().
+ */
+async function restartViaSupervisor({ ids = [], reexec = false, control, sleep, now = Date.now } = {}) {
+  if (!control || typeof control.request !== "function") throw restartError("supervisor_unavailable", "No supervisor control client.");
+  let up = false;
+  try { up = await control.available(); } catch { up = false; }
+  if (!up) throw restartError("supervisor_unavailable", "The supervisor is not running.");
+  const pause = typeof sleep === "function" ? sleep : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const outcome = { reexeced: false, restarted: [], queued: [], failed: [] };
+
+  if (reexec) {
+    const before = (await control.request("GET", "/v1/status", { timeoutMs: 3000 }))?.json?.supervisor?.pid ?? null;
+    const asked = await control.request("POST", "/v1/reexec", { body: {}, timeoutMs: 15000 });
+    if (!asked || asked.status >= 300) throw restartError("reexec_failed", "The supervisor refused the re-exec.");
+    const deadline = now() + REEXEC_WAIT_MS;
+    for (;;) {
+      await pause(REEXEC_POLL_MS);
+      try {
+        const status = await control.request("GET", "/v1/status", { timeoutMs: 2000 });
+        const pid = status?.json?.supervisor?.pid ?? null;
+        if (status?.status === 200 && pid !== null && pid !== before) break;
+      } catch { /* the pipe is briefly closed during the hand-off */ }
+      if (now() >= deadline) throw restartError("reexec_failed", "The re-exec did not complete.");
+    }
+    outcome.reexeced = true;
+  }
+
+  for (const id of ids) {
+    try {
+      const result = await control.request("POST", `/v1/components/${id}/restart`, { body: { when: "idle" }, timeoutMs: 15000 });
+      if (!result || result.status >= 300) {
+        outcome.failed.push({ id, code: String(result?.json?.error?.code || `http_${result?.status}`) });
+      } else if (result.json?.queued) {
+        outcome.queued.push({ id, blockers: Array.isArray(result.json.blockers) ? result.json.blockers : [] });
+      } else {
+        outcome.restarted.push(id);
+      }
+    } catch (error) {
+      if (error?.code === "supervisor_unavailable") throw error;
+      outcome.failed.push({ id, code: String(error?.code || "restart_failed") });
+    }
+  }
+  return outcome;
+}
+
 async function runRestart({ mode, ids, reexec, adapter }) {
   const commands = [];
   if (reexec) commands.push("platform supervisor reexec");
@@ -868,6 +932,7 @@ module.exports = {
   planMcpBuild,
   runMcpBuild,
   restartComponents,
+  restartViaSupervisor,
   protectedReason,
   defaultNpm,
 };
