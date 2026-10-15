@@ -118,7 +118,7 @@ test("exit codes: usage errors are 2, a bare call prints help, planned commands 
   assert.equal(bare.code, 2);
   assert.match(bare.out, /Usage/);
 
-  const planned = await world.cli(["start", "core"]);
+  const planned = await world.cli(["autostart", "status"]);
   assert.equal(planned.code, 1);
   assert.match(planned.err, /not available in this build yet/);
   for (const name of Object.keys(PLANNED)) assert.ok(!COMMANDS[name], `${name} is planned, not implemented`);
