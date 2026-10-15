@@ -7,6 +7,7 @@
 //   MOD-5   GET  /api/knowledge/status   this manager's loader domains
 //   MOD-13  POST /api/models/probe       needs docker, jobs, resolveModelPath
 //   MOD-16  POST /api/qualify            needs jobs, listInstances
+//   MOD-15  GET  /api/models/card        read-only card summary for legacy UIs
 // The entry reaches these through the management proxy (/api/m/:managerId/*),
 // which keeps the managers' own local-only gate for anything that writes.
 
@@ -49,6 +50,8 @@ function normalizeRouteDeps(deps = {}) {
     // probeDir, inspect, now, sleep, pollMs, scriptsDir, containerName, timeoutMs).
     resolveModelPath: functionOrNull(deps.resolveModelPath),
     probe: deps.probe && typeof deps.probe === "object" ? deps.probe : {},
+    // MOD-15: GET /api/models/card inspects with this (default: the local inspector).
+    inspect: functionOrNull(deps.inspect),
     // The background probe runs in flight, so a test (or a shutdown) can wait for them.
     probeRuns: new Set(),
     knowledge,
@@ -144,6 +147,38 @@ function errorBody(code, message, hint, extra = {}) {
 }
 
 /**
+ * GET /api/models/card?model= -> {ok, card}: the read-only card summary of a model
+ * in this manager's storage, paths redacted, for legacy UIs (02 section 17). It
+ * only reads the folder; the entry registers it for viewers with the same
+ * redaction as /api/models/:id/card.
+ */
+function cardHandler(context) {
+  return async (req, res) => {
+    const model = typeof req.query?.model === "string" ? req.query.model.trim() : "";
+    if (!model) return res.status(400).json(errorBody("invalid_request", "model is required."));
+    let target = null;
+    try {
+      target = context.resolveModelPath ? await context.resolveModelPath(model) : null;
+    } catch {
+      target = null;
+    }
+    if (!target) {
+      return res.status(404).json(errorBody("model_not_found", "The model is not on this manager's disk.", "Download or select a local model folder first."));
+    }
+    try {
+      const inspect = context.inspect || require("./model-inspector/inspect").inspectLocal;
+      const card = await inspect(String(target), {});
+      if (!card || !card.cardId) return res.status(422).json(errorBody("not_a_model", "The model could not be identified."));
+      const { projectCard } = require("./model-inspector/card-schema");
+      if (typeof res.set === "function") res.set("Cache-Control", "no-store");
+      return res.status(200).json({ ok: true, card: projectCard(card, { view: "summary", redactPaths: true }) });
+    } catch {
+      return res.status(422).json(errorBody("not_a_model", "The model could not be identified."));
+    }
+  };
+}
+
+/**
  * POST /api/models/probe {model, engineId, runtimeId?, allowRemoteCode?} -> 202
  * {ok, jobId, managerId}. The dry probe of 02 section 12 runs as a
  * `model-probe` job. Local-only like every manager write; a missing runtime
@@ -209,6 +244,7 @@ function registerModelInspectorRoutes(app, deps = {}) {
     res.status(200).json(payload);
   });
 
+  app.get("/api/models/card", cardHandler(context));
   app.post("/api/models/probe", probeHandler(context, new Map()));
 
   return context;
