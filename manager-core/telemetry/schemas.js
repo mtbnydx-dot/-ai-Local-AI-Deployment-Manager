@@ -10,7 +10,7 @@
 //   validate("summary", body) -> { ok, errors: ["current.requests: expected an integer"] }
 //   assertValid("summary", body)   throws a TypeError listing the first errors
 //
-// TEL-13 and TEL-19 add the alert and audit shapes next to these.
+// TEL-19 added the alert and audit shapes (alerts, auditStatus, auditChats).
 
 // --- a tiny combinator set ----------------------------------------------------
 
@@ -390,6 +390,94 @@ const settingsWrite = object({
   restartRequired: arrayOf(any),
 });
 
+// GET /api/telemetry/alerts (04 §13.4). The state column is ok, pending or
+// firing; "resolved" in the console copy is an ok row with resolvedAt set.
+const alerts = object({
+  ok: boolean,
+  rows: arrayOf(object({
+    ruleId: string,
+    scopeKey: string,
+    state: oneOf("ok", "pending", "firing"),
+    severity: oneOf("info", "warning", "critical"),
+    title: localized,
+    value: numberOrNull,
+    threshold: numberOrNull,
+    since: isoOrNull,
+    firedAt: isoOrNull,
+    resolvedAt: optional(isoOrNull),
+    ackedAt: isoOrNull,
+    silencedUntil: isoOrNull,
+    detail: optional(any),
+  })),
+  toastChannel: oneOf("available", "no_subscriber"),
+  degraded: optional(boolean),
+});
+
+// GET /api/audit/status (04 §16.5; audit-http.js). No conversation content.
+const auditStatus = object({
+  ok: boolean,
+  passwordFile: string,
+  openWebuiContainer: object({ exists: boolean, running: boolean }),
+  schedule: object({
+    enabled: boolean,
+    incrementalEveryMinutes: integer,
+    fullAtLocal: string,
+    needsRebaseline: boolean,
+    running: boolean,
+    nextIncrementalAt: isoOrNull,
+    nextFullAt: isoOrNull,
+  }),
+  lastRuns: object({
+    lastRunAt: isoOrNull,
+    lastOkAt: isoOrNull,
+    lastError: nullable(any),
+    lastSkip: nullable(any),
+    incremental: nullable(any),
+    full: nullable(any),
+  }),
+  chains: arrayOf(object({
+    fullAuditId: string,
+    createdAt: iso,
+    incrementals: integer,
+    chats: integer,
+    messages: integer,
+    bytes: integer,
+    active: boolean,
+  })),
+  retention: object({
+    policy: record(any),
+    plan: object({ remove: arrayOf(any), warnings: arrayOf(any), needsRebaseline: boolean }),
+  }),
+  index: object({
+    available: boolean,
+    chats: integer,
+    messages: integer,
+    lastIndexedAt: isoOrNull,
+    building: optional(boolean),
+  }),
+});
+
+// GET /api/audit/chats (04 §16.5): the list the console shows after the audit
+// session is unlocked. Titles and user names are content.
+const auditChats = object({
+  ok: boolean,
+  rows: arrayOf(object({
+    chatId: string,
+    title: string,
+    userName: stringOrNull,
+    userEmail: stringOrNull,
+    models: arrayOf(string),
+    createdAt: isoOrNull,
+    updatedAt: isoOrNull,
+    messageCount: integer,
+    auditId: string,
+    versions: integer,
+    archived: optional(boolean),
+  })),
+  nextCursor: stringOrNull,
+  index: optional(any),
+});
+
 // 00 §4.2
 const error = object({
   ok: oneOf(false),
@@ -412,6 +500,9 @@ const SCHEMAS = Object.freeze({
   status,
   settings,
   settingsWrite,
+  alerts,
+  auditStatus,
+  auditChats,
   error,
 });
 
