@@ -15,6 +15,7 @@ const { createModelHub } = require("../model-hub");
 const { createFitService } = require("../model-hub/fit");
 const { createDiscovery, encodeCursor, parseSearchQuery } = require("../model-hub/search");
 const { createPlanCache, createPlanner } = require("../model-hub/plan");
+const { createRunAfter } = require("../model-hub/run-after");
 const { resolveSelection } = require("../model-hub/selection");
 const { computeFilesetHash, identityKeyFor } = require("../model-hub/library");
 const { createModelStorage } = require("../model-storage");
@@ -553,4 +554,33 @@ test("the plan cache expires after ten minutes and keeps the 64 newest", () => {
   assert.equal(cache.get(ids[65]), null);
   assert.equal(cache.size, 0);
   assert.equal(cache.delete("pln_x"), false);
+});
+
+test("plan with runAfter: the advisory prospective plan joins the body, and a manager without support refuses with run_after_unavailable", async (t) => {
+  const requests = [];
+  let answer = { status: 200, json: { ok: true, errors: [], steps: [], planHash: "sha256:adv", admission: { verdict: "ok" } } };
+  const fetchImpl = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body), headers: init.headers });
+    return { status: answer.status, text: async () => JSON.stringify(answer.json) };
+  };
+  const runAfter = createRunAfter({ managers: [{ id: "llama", port: 1 }, { id: "vllm", port: 2 }], fetchImpl, getEngines: async () => [], logger: quietLogger() });
+  const { hub, log } = await startPlanHub(t, { hubOptions: { runAfter } });
+  const request = { engineId: "llamacpp", values: { contextLength: 8192 } };
+  const plan = await hub.plan({ ...Q4, runAfter: request });
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /^http:\/\/127\.0\.0\.1:1\/api\/launch\/plan$/);
+  assert.equal(requests[0].body.prospective, true);
+  assert.deepEqual(Object.keys(requests[0].body.model), ["card"]);
+  assert.ok(log.inspections.length >= 1 && typeof requests[0].body.model.card === "object");
+  assert.equal(Object.hasOwn(requests[0].body.model, "ref"), false);
+  assert.equal(plan.runAfter.engineId, "llamacpp");
+  assert.equal(plan.runAfter.managerId, "llama");
+  assert.equal(plan.runAfter.advice.planHash, "sha256:adv");
+  assert.equal((await hub.plan({ ...Q4 })).runAfter, null);
+  await assert.rejects(() => hub.plan({ ...Q4, runAfter: { engineId: "" } }), { code: "invalid_request", status: 400 });
+
+  answer = { status: 404, json: { error: "Not found" } };
+  await assert.rejects(() => hub.plan({ ...Q4, runAfter: request }), { code: "run_after_unavailable", status: 422 });
+  assert.equal((await hub.plan({ ...Q4 })).runAfter, null, "Download alone stays available");
+  assert.equal(hub.status().features.runAfter, true);
 });

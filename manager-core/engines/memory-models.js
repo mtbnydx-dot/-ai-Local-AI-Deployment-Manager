@@ -546,11 +546,14 @@ function keyPart(value, fallback) {
  * `${cacheTypeK}/${cacheTypeV}` for llama.cpp ("f16/f16" when unset);
  * maxTotalTokens is sglang.maxTotalTokens or "-". The calibration store key.
  */
+// The engines (and the legacy manager id) whose KV key is the llama.cpp K/V cache-type pair.
+const CACHE_TYPE_KV_ENGINES = new Set(["llamacpp", "llama"]);
+
 function paramsKey(plan = {}, engineId = null) {
   const source = isPlainObject(plan) ? plan : {};
   const values = plainValues(source.values);
   const engine = String(engineId || source.engineId || "");
-  const llama = engine === "llamacpp" || engine === "llama"
+  const llama = CACHE_TYPE_KV_ENGINES.has(engine)
     || (!engine && Object.keys(values).some((id) => id.startsWith("llamacpp.")));
   const kv = llama
     ? `${keyPart(values["llamacpp.cacheTypeK"], "f16")}/${keyPart(values["llamacpp.cacheTypeV"], "f16")}`

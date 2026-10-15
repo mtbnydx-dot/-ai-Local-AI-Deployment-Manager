@@ -30,6 +30,7 @@ const { createCliTransferEngine } = require("./transfer");
 const { createTransferMonitor } = require("./progress");
 const { createArtifactVerifier } = require("./verify");
 const { createDownloadQueue } = require("./queue");
+const { runHubMigration } = require("./migrate");
 const { computeUsage, createDiskGuard, reserveBytes, runCleanup } = require("./disk");
 const { REPO_RE } = require("./auth");
 const { compileIncludePatterns, resolveSelection } = require("./selection");
@@ -37,6 +38,7 @@ const { badRequest, fromProviderError, isPlainObject, nonEmpty } = require("./hu
 const { createFitService } = require("./fit");
 const { createDiscovery } = require("./search");
 const { createPlanCache, createPlanner } = require("./plan");
+const { createRunAfter, normalizeRunAfterRequest } = require("./run-after");
 
 const DEFAULT_AI_ROOT = path.resolve(__dirname, "..", "..");
 // downloads.json is re-stamped this often while the hub runs; readers treat
@@ -177,6 +179,11 @@ function createModelHub(options = {}) {
     ? options.monitorFactory
     : (job, hooks) => createTransferMonitor(job, { hfHome, clock, settings: () => settings.get(), ...hooks });
   const verifier = options.verifier || createArtifactVerifier({ fsStore: options.fsStore || null, clock });
+  // Download & Run (HUB-14, 03 §11): loopback plans and starts through the
+  // hosting manager. Tests pass `runAfter: null` to switch it off or a fake.
+  const runAfter = options.runAfter !== undefined
+    ? options.runAfter
+    : createRunAfter({ managers: options.managers, fetchImpl: options.fetchImpl, getEngines: options.getEngines, clock, logger });
   const queue = createDownloadQueue({
     store,
     engine,
@@ -190,7 +197,7 @@ function createModelHub(options = {}) {
     tokens,
     modelStorage,
     getBusyPaths: typeof options.getBusyPaths === "function" ? options.getBusyPaths : null,
-    runAfter: options.runAfter || null,
+    runAfter,
     errorData: () => transferErrors.data,
     clock,
     timers: options.timers,
@@ -269,6 +276,31 @@ function createModelHub(options = {}) {
     if (swept.removedTemps.length) warn(`model hub: removed ${swept.removedTemps.length} temp file(s) an interrupted write left in the data directory.`);
     settings.load();
     loadTransferErrors();
+
+    // 03 §16: import the managers' settings and download ledgers once. It
+    // runs before the queue takes downloads.json, and only while the hub owns
+    // downloads (a rolled-back hub leaves the managers' controllers alone).
+    // A failure is logged and retried on the next start; it never stops the
+    // hub.
+    if (options.aiRoot && options.migration !== false && readConfig().downloadsOwner === "hub") {
+      try {
+        const migrated = await runHubMigration({
+          aiRoot,
+          store,
+          settings,
+          modelStorage,
+          library,
+          logger,
+          events: options.events || null,
+          clock,
+          errorData: transferErrors.data || undefined,
+          ...(isPlainObject(options.migrationOptions) ? options.migrationOptions : {}),
+        });
+        migrationSteps = migrated.steps;
+      } catch (error) {
+        warn(`model hub: the migration from the managers failed: ${error?.message || error}`);
+      }
+    }
 
     // The queue owns the jobs. A corrupt ledger is kept aside, never
     // overwritten.
@@ -480,7 +512,7 @@ function createModelHub(options = {}) {
 
   // The plan cache and builder (03 §13.4); plans live 10 minutes.
   const plans = createPlanCache({ clock });
-  const planner = createPlanner({ fit, disk, settings: () => settings.get(), queue, auth, discovery, clock });
+  const planner = createPlanner({ fit, disk, settings: () => settings.get(), queue, auth, discovery, runAfter, clock });
 
   /**
    * plan(input, ctx) → the 03 §13.4 body (without ok). No side effects: it
@@ -494,6 +526,7 @@ function createModelHub(options = {}) {
     if (state !== "running") throw new hubErrors.HubError("hub_unavailable", "The model hub is not running.", { status: 503 });
     if (!isPlainObject(input)) throw badRequest("body", "The request body must be a plan object.");
     if (input.fit !== undefined && input.fit !== null && !isPlainObject(input.fit)) throw badRequest("fit", "fit must be an object.");
+    checkRunAfter(input.runAfter);
     const resolved = await resolveRequest(input, ctx);
     const body = await planner.build(resolved, input, { withFit: true });
     const cached = plans.put({
@@ -506,7 +539,7 @@ function createModelHub(options = {}) {
         source: resolved.source,
         transfer: { xet: resolved.xet },
         credential: { mode: resolved.credentialMode === "temp-token" ? "auto" : resolved.credentialMode },
-        runAfter: input.runAfter ?? null,
+        runAfter: checkRunAfter(input.runAfter),
         priority: resolved.priority,
       },
       credential: resolved.tokenRef ? { tokenRef: resolved.tokenRef, remember: resolved.remember } : null,
@@ -514,6 +547,15 @@ function createModelHub(options = {}) {
       localDir: resolved.localDir,
     });
     return { planId: cached.planId, expiresAt: cached.expiresAt, ...body };
+  }
+
+  // The runAfter request of a plan or a download: validated (400), and a hub
+  // without Download & Run refuses it (422 run_after_unavailable).
+  function checkRunAfter(value) {
+    if (value === undefined || value === null) return null;
+    const normalized = normalizeRunAfterRequest(value);
+    if (!runAfter) throw new hubErrors.HubError("run_after_unavailable", "Download & Run is not available in this hub.", { status: 422, details: { reason: "not_configured" } });
+    return normalized;
   }
 
   // enqueue from a cached plan: the target, the disk and the manifest SHA are
@@ -577,7 +619,7 @@ function createModelHub(options = {}) {
       origin,
       ownerManagerId: origin.kind === "manager-shim" ? origin.managerId : null,
       priority,
-      runAfter: request.runAfter ?? null,
+      runAfter: checkRunAfter(request.runAfter),
       artifact: {
         provider: namespace,
         repo,
@@ -628,7 +670,7 @@ function createModelHub(options = {}) {
       dataErrors: [...storeErrors, ...settings.errors(), ...transferErrors.errors, ...(library ? library.errors() : [])],
       configErrors: Array.isArray(config.errors) ? config.errors : [],
       migration: { done: migrationDone() },
-      features: { runAfter: false, rememberToken: Boolean(secretStore), models: Boolean(models) },
+      features: { runAfter: Boolean(runAfter), rememberToken: Boolean(secretStore), models: Boolean(models) },
       startedAt,
       ...(startError ? { startError } : {}),
     };
@@ -727,6 +769,8 @@ function createModelHub(options = {}) {
       pauseAll: () => queue.pauseAll(),
       resumeAll: () => queue.resumeAll(),
       remove: (id) => queue.remove(id),
+      // POST /downloads/:id/run { confirmReplace: true } (03 §11).
+      confirmRunAfter: (id, input) => queue.confirmRunAfter(id, input),
       aggregate: () => queue.aggregate(),
       busyPaths: () => queue.busyPaths(),
     },

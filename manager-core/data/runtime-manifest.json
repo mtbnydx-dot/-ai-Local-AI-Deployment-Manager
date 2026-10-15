@@ -191,6 +191,49 @@
         "script": ""
       },
       "notes": ["Kept only for rollback; Muse Glimmer launches are blocked."]
+    },
+    "lmdeploy": {
+      "label": "LMDeploy OpenAI server (experimental)",
+      "engineId": "lmdeploy",
+      "version": "v0.18.0",
+      "compatVersion": "0.18.0",
+      "status": "unpinned",
+      "features": {},
+      "repository": "openmmlab/lmdeploy",
+      "platform": "linux/amd64",
+      "verifiedComputeCapabilityMax": "9.0",
+      "notes": [
+        "Unpinned: the tag is not a digest. The owner pins a digest after verifying the image; until then it is pulled only on an explicit request.",
+        "Not verified on SM120 (Blackwell workstation) GPUs; plans warn engine_sm120_unverified."
+      ]
+    },
+    "trtllm": {
+      "label": "TensorRT-LLM trtllm-serve (experimental)",
+      "engineId": "trtllm",
+      "version": "1.3.0rc29",
+      "compatVersion": "1.3.0rc29",
+      "status": "unpinned",
+      "features": {},
+      "repository": "nvcr.io/nvidia/tensorrt-llm/release",
+      "platform": "linux/amd64",
+      "notes": [
+        "Unpinned release candidate tag. Pulled only on an explicit request; the image is large (tens of GiB).",
+        "trtllm-serve has no API-key option, so the port is published on loopback only."
+      ]
+    },
+    "tabbyapi": {
+      "label": "TabbyAPI (ExLlamaV3, experimental)",
+      "engineId": "tabbyapi",
+      "version": "cu13",
+      "compatVersion": null,
+      "status": "unpinned",
+      "features": {},
+      "repository": "ghcr.io/theroyallab/tabbyapi",
+      "platform": "linux/amd64",
+      "notes": [
+        "Unpinned moving tag (cu13). Pulled only on an explicit request.",
+        "Configured through generated config.yml and api_tokens.yml files, mounted read-only."
+      ]
     }
   }
 }

@@ -6,6 +6,9 @@ const crypto = require("crypto");
 const net = require("net");
 const core = require("../manager-core");
 const { describeDownloadError } = require("../manager-core/model-hub/errors");
+const { createHubClient } = require("../manager-core/model-hub/client");
+const { readHubConfig } = require("../manager-core/model-hub/config");
+const { registerHubShimRoutes } = require("../manager-core/model-hub/shim");
 const { createHfAuthService } = require("../manager-core/hf-auth");
 const { createLlamaStartRuntimeRequest } = require("./lib/launch-request");
 const { createLlamaDefaultLaunchProfiles } = require("./lib/default-profiles");
@@ -323,8 +326,10 @@ const {
 
 const llamaImageBuildInfoCache = new Map();
 
+// defaultSlot: the image is this manager's default llama.cpp slot, whose
+// pinned build stands in when neither the environment nor a label names one.
 function resolveConfiguredLlamaImageBuildInfo({
-  museGlimmer = false,
+  defaultSlot = true,
   image = "",
   buildEnv = "",
   revisionEnv = "",
@@ -345,7 +350,7 @@ function resolveConfiguredLlamaImageBuildInfo({
     build = `b${buildNumber}`;
   }
   if (!revision && labelRevision) revision = labelRevision;
-  if (!buildNumber && !museGlimmer && image === DEFAULT_LLAMA_IMAGE) {
+  if (!buildNumber && defaultSlot && image === DEFAULT_LLAMA_IMAGE) {
     buildNumber = DEFAULT_LLAMA_IMAGE_BUILD;
     build = `b${buildNumber}`;
     source = "pinned-default";
@@ -360,22 +365,48 @@ function resolveConfiguredLlamaImageBuildInfo({
   };
 }
 
+// The manifest runtime slots this manager configures: the image and the
+// environment that names its build and revision.
+const DEFAULT_LLAMA_SLOT = "llama";
+const LLAMA_IMAGE_SLOTS = Object.freeze({
+  llama: Object.freeze({ image: () => CONFIG.image, buildEnv: "LLAMA_IMAGE_BUILD", revisionEnv: "LLAMA_IMAGE_REVISION" }),
+  llamaMuse: Object.freeze({ image: () => CONFIG.museImage, buildEnv: "LLAMA_MUSE_IMAGE_BUILD", revisionEnv: "LLAMA_MUSE_IMAGE_REVISION" }),
+});
+
+// The slot a GGUF architecture runs on (D5): the runtime of the llama.cpp
+// recipe its family selects (the Muse Glimmer recipe pins llamaMuse), else
+// the default llama slot.
+function llamaImageSlot(architecture = "") {
+  const ggufArchitecture = String(architecture || "").trim().toLowerCase();
+  if (!ggufArchitecture) return DEFAULT_LLAMA_SLOT;
+  const subject = { ggufArchitecture, allowNameFallback: false };
+  const capabilityIds = core.loadModelCapabilityMatrix().entries
+    .filter((entry) => core.matchesCapabilityEntry(entry.id, subject))
+    .map((entry) => entry.id);
+  const top = capabilityIds.length
+    ? core.engines.recipes.matchRecipes({ engineId: "llamacpp", model: { capabilityIds } }).find((item) => item.eligible)
+    : null;
+  const ref = top?.recipe.runtime?.ref;
+  return ref && LLAMA_IMAGE_SLOTS[ref] ? ref : DEFAULT_LLAMA_SLOT;
+}
+
 async function getConfiguredLlamaImageBuildInfo(architecture = "") {
-  const museGlimmer = String(architecture || "").trim().toLowerCase() === "muse-glimmer";
-  const image = museGlimmer ? CONFIG.museImage : CONFIG.image;
-  const cacheKey = `${museGlimmer ? "muse" : "default"}:${image}`;
+  const slotKey = llamaImageSlot(architecture);
+  const slot = LLAMA_IMAGE_SLOTS[slotKey];
+  const image = slot.image();
+  const cacheKey = `${slotKey}:${image}`;
   const now = Date.now();
   const cached = llamaImageBuildInfoCache.get(cacheKey);
   if (cached?.value && cached.expiresAt > now) return cached.value;
-  const buildEnv = museGlimmer ? process.env.LLAMA_MUSE_IMAGE_BUILD : process.env.LLAMA_IMAGE_BUILD;
-  const revisionEnv = museGlimmer ? process.env.LLAMA_MUSE_IMAGE_REVISION : process.env.LLAMA_IMAGE_REVISION;
+  const buildEnv = process.env[slot.buildEnv];
+  const revisionEnv = process.env[slot.revisionEnv];
   const out = await docker([
     "image", "inspect", image,
     "--format", "{{json .Config.Labels}}",
   ], { rejectOnError: false }).catch(() => ({ stdout: "" }));
   const imageInspectText = String(out.stdout || "").trim();
   const value = resolveConfiguredLlamaImageBuildInfo({
-    museGlimmer,
+    defaultSlot: slotKey === DEFAULT_LLAMA_SLOT,
     image,
     buildEnv,
     revisionEnv,
@@ -860,6 +891,7 @@ const managerLifecycle = core.createManagerLifecycle({
     if (cacheHitMonitorTimer) clearInterval(cacheHitMonitorTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    hubShim?.close();
     sseHub.close();
     recipeWatcher?.close();
     core.interruptRunningDownloadJobs(jobs);
@@ -1241,8 +1273,30 @@ function isPortInUseOnHost(port) {
 // 任务快照改推送：下载/启动进行中不再靠 1 秒一次的 /api/jobs 轮询。
 const sseHub = core.createSseHub();
 app.get("/api/events", (req, res) => sseHub.handleRequest(req, res));
+// 03 §15 (HUB-13a): with hub.downloadsOwner "hub" the job routes and the SSE
+// `jobs` snapshot also carry this manager's hub downloads, read from the
+// entry through the signed shim client. The routes are registered before the
+// local job routes, which keep every other job. The frontend smoke tests start
+// real managers and must not call the entry this computer runs.
+const hubShim = readHubConfig(DEFAULT_AI_ROOT).downloadsOwner === "hub" && process.env.AI_FRONTEND_SMOKE !== "1"
+  ? registerHubShimRoutes(app, {
+    managerId: "llama",
+    client: createHubClient({
+      baseUrl: `http://127.0.0.1:${core.resolveEntryPort({ aiRoot: DEFAULT_AI_ROOT })}`,
+      managerId: "llama",
+      aiRoot: DEFAULT_AI_ROOT,
+    }),
+    isLocalRequest,
+    listLocalJobs: () => Array.from(jobs.values()).reverse(),
+    getLocalJob: (id) => jobs.get(id),
+    beforeReadJobs: () => healDownloadQueue(),
+    summarizeJob: core.summarizeJob,
+    onSnapshot: () => broadcastJobsSnapshot(),
+    hasListeners: () => sseHub.clientCount() > 0,
+  })
+  : null;
 function broadcastJobsSnapshot() {
-  sseHub.broadcastThrottled("jobs", () => Array.from(jobs.values()).reverse().map(core.summarizeJob), 700);
+  sseHub.broadcastThrottled("jobs", () => (hubShim ? hubShim.jobsSnapshot() : Array.from(jobs.values()).reverse().map(core.summarizeJob)), 700);
 }
 
 core.registerJobRoutes(app, {
@@ -1722,8 +1776,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   getRecipeStore: () => recipeStore,
   // The command preview: the adapter input runStartJob builds from these run
   // options; the plan carries the recipe the wrapper applied.
-  prepareLaunchCommand: (runOptions, { jobId }) => {
-    const { plan, ctx } = planLlamaLaunch({ id: jobId, meta: {} }, runOptions);
+  prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
+    const { plan, ctx } = planLlamaLaunch({ id: jobId, meta: {} }, prospective ? { ...runOptions, prospective: true } : runOptions);
     return { adapter: core.engines.adapters.llamacpp, plan, ctx, recipe: plan.recipe || null };
   },
   getHostGpus: async () => {
@@ -1734,6 +1788,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
   admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
+  // fromLaunchId (ENG-26): the stored spec POST /api/launch replays.
+  getLaunchSpec: (launchId) => launchStore.get(launchId),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
   // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (MOD-10 store).
@@ -1885,6 +1941,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
+  // POST /api/launch (ENG-26): /api/start for a LaunchRequestV2 or {fromLaunchId}.
+  startLaunch: ({ req, body }) => startRuntimeRequest({ req, body, v2Only: true }),
   managerId: "llama",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -1963,6 +2021,8 @@ if (require.main === module) {
     console.error(error);
     process.exitCode = 1;
   });
+  // The one signed upstream SSE that re-reads the hub downloads (03 §15).
+  hubShim?.startRelay();
   process.once("SIGINT", () => shutdownManager("SIGINT").catch((error) => console.error(error)));
   process.once("SIGTERM", () => shutdownManager("SIGTERM").catch((error) => console.error(error)));
 }
@@ -4230,7 +4290,7 @@ function llamaInstanceId(containerName, labels = {}) {
 }
 
 async function runStartJob(job, opts) {
-  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: job.meta?.launchSource || "api" });
+  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: job.meta?.launchSource || opts.launchSource || "api" });
 }
 
 // The run context the supervisor needs: the legacy run options, the llama
@@ -4242,6 +4302,8 @@ function llamaRunContext(opts) {
     engineId: "llamacpp",
     engineName: "llama.cpp",
     apiLabel: "llama.cpp API",
+    // mode add / onConflict: the supervisor re-checks the slot at its preflight (01 §11, 00 §9.3).
+    ...(opts.launchMode === "add" ? { mode: "add", onConflict: opts.onConflict === "skip" ? "skip" : "fail" } : {}),
     containerName: opts.containerName || CONFIG.containerName,
     instanceId: llamaInstanceId(opts.containerName || CONFIG.containerName, { "ai.manager.instance": opts.instanceId }),
     port: opts.port,
@@ -4288,6 +4350,8 @@ function delay(ms) {
 }
 
 module.exports = {
+  hubShim,
+  jobs,
   app,
   CONFIG,
   engineRegistry,

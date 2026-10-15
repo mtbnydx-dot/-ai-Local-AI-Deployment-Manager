@@ -435,7 +435,7 @@ test("start() prepares the data directory and stamps downloads.json; status() is
   const hfCli = path.join(root, "venvs", "download-cli", "Scripts", "hf.exe");
   fs.mkdirSync(path.dirname(hfCli), { recursive: true });
   fs.writeFileSync(hfCli, "");
-  const { hub, dataDir, logger } = makeHub(t, { root, hfCli, modelScopeCli: "modelscope" });
+  const { hub, dataDir, logger } = makeHub(t, { root, hfCli, modelScopeCli: "modelscope", options: { migration: false } });
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(path.join(dataDir, `.downloads.json.1.${Date.now()}.00000000.tmp`), "{");
 
@@ -463,7 +463,7 @@ test("start() prepares the data directory and stamps downloads.json; status() is
     dataErrors: [],
     configErrors: [],
     migration: { done: false },
-    features: { runAfter: false, rememberToken: false, models: false },
+    features: { runAfter: true, rememberToken: false, models: false },
     startedAt: "2026-10-14T08:00:00.000Z",
   });
   assert.deepEqual(hub.busy(), { downloads: 0, verifying: 0 });

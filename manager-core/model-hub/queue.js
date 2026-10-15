@@ -17,7 +17,8 @@
 //     runAfter, errorData, redactor, clock, timers, logger, pollMs, stopWaitMs })
 //   → { load, start, stop, enqueue, list, get, logs, history, pause, resume,
 //       cancel, retry, setPriority, reorder, startNow, pauseAll, resumeAll,
-//       remove, resumeCheck, aggregate, counts, busy, document, publicJob }
+//       remove, confirmRunAfter, resumeCheck, aggregate, counts, busy, document,
+//       publicJob }
 //
 // States (03 §7.1): queued, waiting (waitReason runtime-busy | disk |
 // concurrency | auth), resolving, downloading, materializing, verifying,
@@ -582,6 +583,36 @@ function createDownloadQueue(options = {}) {
     }
   }
 
+  // What Download & Run (run-after.js) may do with a job: merge its own
+  // progress into job.runAfter and raise notifications. Nothing else.
+  function runAfterHooks(job) {
+    return {
+      update: async (patch) => {
+        job.runAfter = { ...(isPlainObject(job.runAfter) ? job.runAfter : {}), ...patch };
+        job.updatedAt = nowIso();
+        appendLog(job, `Download & Run: ${job.runAfter.state || "updated"}${job.runAfter.error?.code ? ` (${job.runAfter.error.code})` : ""}.`);
+        await persist();
+        emitJob(job);
+        return publicJob(job);
+      },
+      notify: (kind, severity, title, body, action) => notify(job, kind, severity, title, body, action),
+    };
+  }
+
+  /** POST /downloads/:id/run { confirmReplace: true } (03 §11). */
+  async function confirmRunAfter(id, { confirmReplace = false } = {}) {
+    const job = mustFind(id);
+    if (confirmReplace !== true) {
+      throw new HubError("confirmation_required", "Confirm the launch with confirmReplace:true.", { status: 400, details: { field: "confirmReplace" } });
+    }
+    if (!runAfter || typeof runAfter.confirm !== "function") {
+      throw new HubError("run_after_unavailable", "Download & Run is not available.", { status: 422 });
+    }
+    if (job.state !== "ready") throw invalidState(job, "launched");
+    await runAfter.confirm(job, runAfterHooks(job));
+    return publicJob(job);
+  }
+
   async function completeJob(job, run, result) {
     job.retry.badFiles = [];
     let entryId = null;
@@ -617,7 +648,7 @@ function createDownloadQueue(options = {}) {
     }
     if (job.runAfter && runAfter && typeof runAfter.start === "function") {
       Promise.resolve()
-        .then(() => runAfter.start(job))
+        .then(() => runAfter.start(job, runAfterHooks(job)))
         .catch((error) => warn(`model hub: run-after failed for ${job.id}: ${error?.message || error}`));
     }
     compact();
@@ -941,6 +972,7 @@ function createDownloadQueue(options = {}) {
       retry: { count: Number(job.retry?.count) || 0 },
       error: job.error ? clone(job.error) : null,
       result: job.result ? clone(job.result) : null,
+      runAfter: job.runAfter ? clone(job.runAfter) : null,
     };
   }
 
@@ -1718,6 +1750,7 @@ function createDownloadQueue(options = {}) {
     pauseAll,
     resumeAll,
     remove,
+    confirmRunAfter,
     aggregate,
     counts,
     busy,

@@ -9,11 +9,14 @@ const core = require("../manager-core");
 const templateSignatures = require("../manager-core/model-inspector/template-signatures");
 const modelKnowledge = require("../manager-core/model-inspector/knowledge");
 const { describeDownloadError } = require("../manager-core/model-hub/errors");
+const { createHubClient } = require("../manager-core/model-hub/client");
+const { readHubConfig } = require("../manager-core/model-hub/config");
+const { registerHubShimRoutes } = require("../manager-core/model-hub/shim");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest, persistAsyncRuntimeFailure } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
-const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
+const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine, templateEngineOf } = require("./lib/runtime-command");
 const { buildVllmImagePullOptions: imagePullOptionsFor, createVllmRunContext, vllmInstanceId } = require("./lib/run-context");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService } = require("./lib/remote-models");
@@ -420,12 +423,17 @@ const {
   parseDockerPortPublish,
 } = core.createDockerPublishHelpers({ containerPort: 8000, getLanAddress });
 
+// Generated per-launch config files of docker-template engines (01 §19.1):
+// <AI_ROOT>/.runtime/launch-files/<launchId>/, deleted when the instance stops.
+const launchFiles = core.engines.createLaunchFiles({ root: DEFAULT_AI_ROOT });
+
 const {
   buildVllmRuntimeCommand,
   formatDockerPublishArgs,
   prepareLaunch,
   redactDockerArgs,
 } = createVllmRuntimeCommandBuilder({
+  launchFiles,
   getModelMountArgs: () => modelStorage.dockerMountArgs(),
   CONFIG,
   MANAGER_LABEL_KEY,
@@ -729,6 +737,7 @@ const managerLifecycle = core.createManagerLifecycle({
     clearInterval(idleUnloadTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    hubShim?.close();
     sseHub.close();
     recipeWatcher?.close();
     core.interruptRunningDownloadJobs(jobs);
@@ -1101,8 +1110,7 @@ async function listVllmModelCollections() {
       config,
       speculativeMode: "off",
     });
-    const blockReason = capabilities.unsupportedReason
-      || (isDiffusionGemmaModel(model.path, config) ? diffusionGemmaWindowsBlockReason() : "");
+    const blockReason = capabilities.unsupportedReason || recipeBlockReason(model.path, config);
     if (!blockReason) return model;
     const issue = finding("fail", "vLLM 运行时不兼容", blockReason);
     return {
@@ -1118,8 +1126,30 @@ async function listVllmModelCollections() {
 // 任务快照改推送：下载/启动进行中不再靠 1 秒一次的 /api/jobs 轮询。
 const sseHub = core.createSseHub();
 app.get("/api/events", (req, res) => sseHub.handleRequest(req, res));
+// 03 §15 (HUB-13a): with hub.downloadsOwner "hub" the job routes and the SSE
+// `jobs` snapshot also carry this manager's hub downloads, read from the
+// entry through the signed shim client. The routes are registered before the
+// local job routes, which keep every other job. The frontend smoke tests start
+// real managers and must not call the entry this computer runs.
+const hubShim = readHubConfig(DEFAULT_AI_ROOT).downloadsOwner === "hub" && process.env.AI_FRONTEND_SMOKE !== "1"
+  ? registerHubShimRoutes(app, {
+    managerId: "vllm",
+    client: createHubClient({
+      baseUrl: `http://127.0.0.1:${core.resolveEntryPort({ aiRoot: DEFAULT_AI_ROOT })}`,
+      managerId: "vllm",
+      aiRoot: DEFAULT_AI_ROOT,
+    }),
+    isLocalRequest,
+    listLocalJobs: () => Array.from(jobs.values()).reverse(),
+    getLocalJob: (id) => jobs.get(id),
+    beforeReadJobs: () => healDownloadQueue(),
+    summarizeJob: core.summarizeJob,
+    onSnapshot: () => broadcastJobsSnapshot(),
+    hasListeners: () => sseHub.clientCount() > 0,
+  })
+  : null;
 function broadcastJobsSnapshot() {
-  sseHub.broadcastThrottled("jobs", () => Array.from(jobs.values()).reverse().map(core.summarizeJob), 700);
+  sseHub.broadcastThrottled("jobs", () => (hubShim ? hubShim.jobsSnapshot() : Array.from(jobs.values()).reverse().map(core.summarizeJob)), 700);
 }
 
 core.registerJobRoutes(app, {
@@ -1680,10 +1710,11 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   // and the engine routes are created further down).
   getEngineRegistry: () => engineRegistry,
   getRecipeStore: () => recipeStore,
+  templateEngineFor: (engineId) => templateEngineOf(engineRegistry, engineId),
   // The command preview: the adapter input runStartJob builds from these run
   // options, and the recipe the legacy preset was rendered from.
-  prepareLaunchCommand: (runOptions, { jobId }) => {
-    const prepared = prepareLaunch({ id: jobId, meta: {} }, runOptions);
+  prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
+    const prepared = prepareLaunch({ id: jobId, meta: {} }, prospective ? { ...runOptions, prospective: true } : runOptions);
     return { ...prepared, recipe: core.engines.recipes.recipeForLegacyPreset(prepared.preset) };
   },
   getHostGpus: async () => {
@@ -1694,6 +1725,8 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
   admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
+  // fromLaunchId (ENG-26): the stored spec POST /api/launch replays.
+  getLaunchSpec: (launchId) => launchStore.get(launchId),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
   // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (MOD-10 store).
@@ -1841,6 +1874,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
+  // POST /api/launch (ENG-26): /api/start for a LaunchRequestV2 or {fromLaunchId}.
+  startLaunch: ({ req, body }) => startRuntimeRequest({ req, body, v2Only: true }),
   managerId: "vllm",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -1931,6 +1966,8 @@ if (require.main === module) {
     console.error(error);
     process.exitCode = 1;
   });
+  // The one signed upstream SSE that re-reads the hub downloads (03 §15).
+  hubShim?.startRelay();
   process.once("SIGINT", () => shutdownManager("SIGINT").catch((error) => console.error(error)));
   process.once("SIGTERM", () => shutdownManager("SIGTERM").catch((error) => console.error(error)));
 }
@@ -2163,21 +2200,40 @@ async function checkModelCompatibility(input = {}) {
     enableAutoToolChoice: true,
   });
   const local = describeLocalModelPath(model);
+  // Experimental docker-template engines (lmdeploy, trtllm, tabbyapi): no
+  // vLLM capability matrix applies; the model must be a local folder, because
+  // their images are started with --pull never and never download weights.
+  if (templateEngineOf(engineRegistry, runtimeEngine)) {
+    if (!local?.stat?.isDirectory()) {
+      findings.push(finding("fail", "模型目录", `${model} 不是本机可访问的模型目录。实验性引擎只加载本机目录，不会下载模型。`));
+    } else {
+      findings.push(finding("ok", "模型目录", local.path));
+    }
+    findings.push(finding("warn", "实验性引擎", "这个引擎的参数、显存估算和容器镜像都没有在本机验证过。"));
+    return core.buildCompatibilityReport({ model, recommendations, remote: null, findings });
+  }
   const lower = model.toLowerCase();
   const looksGguf = looksLikeGgufReference(model) || local?.ggufFiles?.length || lower.endsWith(".gguf");
   const localConfig = local ? readLocalModelConfig(local.path) : null;
-  const qwen38FlashNextNvfp4 = isQwen38FlashNextNvfp4Model(model, localConfig);
-  const requestedRuntimeImage = String(input.runtimeImage || "").trim();
-  const compatibilityRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang"
-    ? qwen38FlashNextNvfp4 ? CONFIG.sglangFlashNextImage : CONFIG.sglangImage
-    : CONFIG.image);
   // The recipe this request resolves to (an image that pins a recipe, else the
-  // top eligible one). Its legacy.check supplies the Pennyroyal and Flash-Next
-  // findings and recommendations below (ENG-6).
+  // top eligible one). Its legacy.check is the model-specific part of this
+  // report (D5, ENG-23): the Qwen3.8, Flash-Next, Pennyroyal, Qwen3.6 NVFP4 and
+  // DiffusionGemma findings and recommendations are recipe data, and an image
+  // it recommends is the runtime the capabilities are checked against.
   const recipeOptions = legacyRecipeOptions(input, runtimeEngine);
-  const recipeContext = legacyRecipeContext(input, model, localConfig, { speculativeMode: normalizeSpeculativeMode(input.speculativeMode) });
+  const recipeContext = legacyRecipeContext(input, { model, config: localConfig, localPath: local?.path }, { speculativeMode: normalizeSpeculativeMode(input.speculativeMode) });
   const recipeSelection = core.engines.recipes.selectLegacyRecipe(runtimeEngine, recipeOptions, recipeContext);
   const pennyroyal = Boolean(recipeSelection?.pinned);
+  const recipeCheck = recipeSelection?.recipe?.legacy?.check
+    ? await core.engines.recipes.legacyCompatibility(recipeSelection.recipe, recipeOptions, {
+      ...recipeContext,
+      mismatch: recipeSelection.mismatch,
+      localPath: local?.path,
+    })
+    : null;
+  const compatibilityRuntimeImage = String(input.runtimeImage || "").trim()
+    || recipeCheck?.recommendations.runtimeImage
+    || defaultImageFor(runtimeEngine);
   const capabilities = resolveVllmModelCapabilities({
     model,
     localPath: local?.path,
@@ -2186,7 +2242,6 @@ async function checkModelCompatibility(input = {}) {
     speculativeMode: input.speculativeMode || "off",
     numSpeculativeTokens: input.numSpeculativeTokens,
     runtimeMetadata: knownRuntimeImageMetadata(compatibilityRuntimeImage),
-    allowMuseGlimmer: envFlagEnabled(process.env.VLLM_ALLOW_MUSE_GLIMMER),
   });
   recommendations.speculativeMode = capabilities.speculativeConfig
     ? normalizeSpeculativeMode(input.speculativeMode, "off")
@@ -2214,23 +2269,7 @@ async function checkModelCompatibility(input = {}) {
     findings.push(finding("fail", "MTP 权重缺失", "当前 checkpoint 没有可验证的 mtp.* 张量；为避免加载失败，管理器不会仅凭 config 字段启动原生 MTP。"));
   }
   if (capabilities.unsupportedReason) {
-    findings.push(finding(
-      "fail",
-      capabilities.unsupportedCode === "muse_glimmer"
-        ? "Muse Glimmer 已弃用"
-        : capabilities.unsupportedCode === "bitsandbytes_plugin_missing"
-          ? "BitsAndBytes 插件缺失"
-          : "模型专用依赖缺失",
-      capabilities.unsupportedReason,
-    ));
-  }
-  if (capabilities.museGlimmerOverride) {
-    findings.push(finding(
-      "warn",
-      "Muse Glimmer 高风险绕过已启用",
-      capabilities.notes.find((note) => note.includes("VLLM_ALLOW_MUSE_GLIMMER=1"))
-        || "VLLM_ALLOW_MUSE_GLIMMER=1 已绕过默认阻断；管理器无法保证该检查点与当前 vLLM/Transformers 运行时兼容。",
-    ));
+    findings.push(finding("fail", UNSUPPORTED_TITLES[capabilities.unsupportedCode] || UNSUPPORTED_TITLES.default, capabilities.unsupportedReason));
   }
   if (looksGguf) {
     findings.push(finding("warn", "GGUF 模型", "vLLM 的 GGUF 支持偏实验；如果是常规 llama.cpp GGUF，优先用 llama.cpp/llama-server。"));
@@ -2266,11 +2305,9 @@ async function checkModelCompatibility(input = {}) {
     findings.push(finding("warn", "可能需要授权", "这类模型经常需要 Hugging Face token 或提前接受 license。"));
   }
   if (/nvfp4|fp4/i.test(model)) {
-    findings.push(finding("ok", "NVFP4/FP4 权重", qwen38FlashNextNvfp4 && runtimeEngine === "sglang"
-      ? "权重使用 NVFP4；Flash-Next QSA 当前必须保留 BF16 KV（界面选择 auto），不要启用 FP8 KV。"
-      : "KV cache 可单独用 FP8；权重量化方法优先按模型 config.json 声明。"));
+    findings.push(finding("ok", "NVFP4/FP4 权重", "KV cache 可单独用 FP8；权重量化方法优先按模型 config.json 声明。"));
     if (!recommendations.quantization) recommendations.quantization = "modelopt_fp4";
-    recommendations.kvCacheDtype = qwen38FlashNextNvfp4 && runtimeEngine === "sglang" ? "auto" : "fp8";
+    recommendations.kvCacheDtype = "fp8";
   } else if (/awq/i.test(model)) {
     recommendations.quantization = "awq";
   } else if (/gptq/i.test(model)) {
@@ -2283,47 +2320,35 @@ async function checkModelCompatibility(input = {}) {
     recommendations.reasoningParser = "qwen3";
     recommendations.toolCallParser = "qwen3_coder";
   }
-  const qwen38 = isQwen38Model(model, localConfig);
-  if (qwen38) {
-    findings.push(finding("ok", "Qwen3.8 专用运行时", runtimeEngine === "sglang"
-      ? qwen38FlashNextNvfp4
-        ? pennyroyal ? "将使用固定 digest 的 Pennyroyal v2.5.1。" : `将使用 ${CONFIG.sglangFlashNextImage}，包含 SM120 QSA 完整修复。`
-        : `将使用 SGLang ${DEFAULT_SGLANG_RELEASE.version} / FlashInfer / CPU feature transport。`
-      : `将使用已验证的 Qwen3.8 vLLM ${DEFAULT_VLLM_RELEASE.version}。`));
-    recommendations.engine = runtimeEngine;
-    recommendations.maxModelLen = Number(input.maxModelLen || 262144);
-    recommendations.maxNumSeqs = Number(input.maxNumSeqs || 4);
-    recommendations.gpuMemoryUtilization = Number(input.gpuMemoryUtilization || 0.8);
-    recommendations.kvCacheDtype = "auto";
-    recommendations.languageModelOnly = runtimeEngine === "vllm";
-    recommendations.enablePrefixCaching = true;
-    recommendations.reasoningParser = "qwen3";
-    recommendations.toolCallParser = "qwen3_coder";
-  }
-  if (recipeSelection?.recipe?.legacy?.check) {
-    const check = await core.engines.recipes.legacyCompatibility(recipeSelection.recipe, recipeOptions, {
-      ...recipeContext,
-      mismatch: recipeSelection.mismatch,
-      localPath: local?.path,
-    });
-    for (const item of check.findings) findings.push(finding(item.severity, item.title, item.detail));
-    if (check.complete) {
+  if (recipeCheck) {
+    for (const item of recipeCheck.findings) {
+      // A recipe finding that refines one of the generic findings above takes its place.
+      const at = item.replaces ? findings.findIndex((existing) => existing.title === item.title) : -1;
+      if (at >= 0) findings[at] = finding(item.severity, item.title, item.detail);
+      else if (!item.replaces) findings.push(finding(item.severity, item.title, item.detail));
+    }
+    if (recipeCheck.complete) {
       // A recipe that recommends its whole profile (Pennyroyal) replaces the form.
       Object.assign(recommendations, normalizeLaunchConfig({
-        ...check.recommendations,
+        ...recipeCheck.recommendations,
         model,
-        name: input.name || check.recommendations.name,
+        name: input.name || recipeCheck.recommendations.name,
         port: input.port || CONFIG.defaultPort,
       }));
     } else {
-      Object.assign(recommendations, check.recommendations);
+      Object.assign(recommendations, recipeCheck.recommendations);
+    }
+    for (const [field, value] of Object.entries(recipeCheck.defaults)) {
+      if (!recommendations[field]) recommendations[field] = value;
     }
   }
+  // DSpark needs an engine that runs it and a recipe that names its draft model.
+  const dsparkRecipe = (recipeSelection?.recipe?.validation || []).some((rule) => rule.kind === "draftArchitecture");
   if (normalizeSpeculativeMode(input.speculativeMode) === "dspark") {
     const draft = resolveDsparkDraftModel(input.draftModel);
-    if (runtimeEngine !== "sglang") {
+    if (!engineTraits(runtimeEngine).dspark) {
       findings.push(finding("fail", "vLLM DSpark 在本机不可用", "已实测 V2 runner 因 WSL UVA 失败，V1 会错误解析该 RadixArk checkpoint；请选择 SGLang。"));
-    } else if (!qwen38) {
+    } else if (!dsparkRecipe) {
       findings.push(finding("fail", "DSpark 主模型不匹配", "当前 DSpark 档只对 Qwen3.8 主模型开放。"));
     } else if (!draft.ok) {
       findings.push(finding("fail", "DSpark 草稿模型不可用", draft.reason));
@@ -2333,44 +2358,12 @@ async function checkModelCompatibility(input = {}) {
       recommendations.dsparkBlockSize = Math.min(32, Math.max(1, positiveInt(input.dsparkBlockSize, 7)));
       recommendations.speculativeMode = "dspark";
     }
-  } else if (runtimeEngine === "sglang" && !pennyroyal && normalizeSpeculativeMode(input.speculativeMode) !== "off") {
+  } else if (engineTraits(runtimeEngine).speculativeModes && !pennyroyal && normalizeSpeculativeMode(input.speculativeMode) !== "off") {
     findings.push(finding("fail", "SGLang 推测模式未开放", "SGLang 档当前只支持 off 或 dspark；请选择 DSpark 极速方案，或切回 vLLM 使用 MTP。"));
-  }
-  const qwen36MoeNvfp4 = !qwen38 && isQwen36MoeNvfp4Model(model, localConfig);
-  const qwen36DenseNvfp4 = !qwen38 && isQwen36DenseNvfp4Model(model, localConfig);
-  if (qwen36MoeNvfp4 || qwen36DenseNvfp4) {
-    findings.push(finding("warn", "Qwen3.6 / NVFP4 运行时", `该模型卡建议使用 vLLM nightly，并设置 --max-num-batched-tokens 8192；固定旧版镜像可能在 ModelOpt 权重布局处失败（例如 scale 名称或维度不匹配）。管理器启动时会自动使用 ${CONFIG.qwenMoeImage} 并补齐这些专用参数。`));
-    recommendations.quantization = "modelopt";
-    recommendations.kvCacheDtype = qwen36MoeNvfp4 ? "fp8" : "auto";
-    recommendations.reasoningParser = "qwen3";
-    recommendations.toolCallParser = "qwen3_xml";
-    recommendations.enableAutoToolChoice = true;
-    recommendations.loadFormat = "auto";
-    recommendations.maxNumBatchedTokens = 8192;
   }
   if (/deepseek/i.test(model)) {
     recommendations.reasoningParser = "deepseek_r1";
     recommendations.toolCallParser = "deepseek_v3";
-  }
-  if (isDiffusionGemmaModel(model, localConfig)) {
-    const runnerMode = gemmaModelRunnerEnvValue() === "0" ? "V1 runner（Windows/WSL UVA fallback）" : "V2 runner";
-    const windowsBlockReason = diffusionGemmaWindowsBlockReason();
-    findings.push(finding("warn", "DiffusionGemma / Gemma4 专用启动", `该架构需要 Gemma 专用 vLLM 镜像；管理器会自动使用 ${CONFIG.gemmaImage}、${runnerMode}，并补齐 trust-remote-code、TRITON_ATTN、gemma4 parser。Windows/WSL fallback 只用于绕过 V2 UVA 初始化失败，不代表推理稳定。`));
-    if (windowsBlockReason) {
-      findings.push(finding("fail", "Windows Docker/WSL 不建议启动", windowsBlockReason));
-    } else if (gemmaModelRunnerEnvValue() === "0") {
-      findings.push(finding("warn", "Windows Docker/WSL 推理风险", "当前环境下 V2 runner 会因为 WSL 不支持 pinned memory / UVA 失败；V1 fallback 可以加载，但 DiffusionGemma NVFP4 在首个 chat 请求可能触发 CUDA device-side assert。建议在原生 Linux 上用 V2 runner，或改用常规 Qwen/Gemma 模型。"));
-    }
-    recommendations.trustRemoteCode = true;
-    recommendations.reasoningParser = "gemma4";
-    recommendations.toolCallParser = "gemma4";
-    recommendations.enableAutoToolChoice = true;
-    recommendations.kvCacheDtype = "fp8";
-    recommendations.quantization = recommendations.quantization || "modelopt_fp4";
-    recommendations.loadFormat = "auto";
-    recommendations.maxNumSeqs = Math.min(Number(recommendations.maxNumSeqs || 4) || 4, 4);
-    recommendations.languageModelOnly = false;
-    recommendations.enablePrefixCaching = false;
   }
   if (/uncensored|abliterated|abliteration/i.test(model)) {
     findings.push(finding("info", "去审查/abliterated 标记", "适合本地测试，但建议在审计和访问控制上更谨慎。"));
@@ -2436,42 +2429,14 @@ function detectLogStage(text) {
   return text ? "starting / waiting" : "no container logs";
 }
 
+// The hint and suggestion texts live in the error-signature data (02 MOD-12);
+// these two stay as the callbacks summarizeDockerRuntimeLogs expects.
 function logIssueHint(message) {
-  const text = String(message || "").toLowerCase();
-  if (text.includes("mamba cache align") || text.includes("max_num_batched_tokens") || (text.includes("block_size") && text.includes("batched_tokens"))) return "这是 Qwen3.6 混合/Mamba cache align 下的调度 token 上限过低；把 --max-num-batched-tokens 提高到 8192 后重试。";
-  if (text.includes("w2_input_scale") || text.includes("modelopt_mixed") || text.includes("exceeds dimension size")) return "这是 Qwen3.6/NVFP4 的 ModelOpt 权重布局与当前 vLLM 加载器不匹配；优先换 vllm/vllm-openai:nightly 或模型卡指定的 vLLM 版本。";
-  if (text.includes("batchprefillwithpagedkvcache") || text.includes("illegal memory access")) return "这是 Qwen3.6/NVFP4 在 FlashInfer + FP8 KV prefill 路径上的 CUDA 崩溃风险；dense 模型改用 --attention-backend TRITON_ATTN，是否启用 thinking 由客户端请求决定。";
-  if (text.includes("here's a thinking process") || text.includes("!!!!!!!!!!!!!!!!")) return "这是 Qwen3.6/NVFP4 thinking 或生成退化循环；dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 由客户端按需传 chat_template_kwargs.enable_thinking 控制。";
-  if (text.includes("uva is not available")) return "这是 Windows Docker/WSL 的 pinned memory / UVA 限制；DiffusionGemma 的 V2 runner 需要 UVA，建议换原生 Linux 或使用非 DiffusionGemma 模型。";
-  if (text.includes("scattergatherkernel") || text.includes("device-side assert")) return "这是推理期 CUDA kernel 断言，不是端口或显存占满；DiffusionGemma NVFP4 在 Windows Docker/WSL fallback 路径下可能无法稳定生成。";
-  if (text.includes("out of memory") || text.includes("cuda")) return "降低 max_model_len / max_num_seqs，启用 FP8 KV cache，或降低 gpu-memory-utilization。";
-  if (text.includes("no such") || text.includes("not found")) return "检查模型路径、Docker 挂载目录和文件名。";
-  if (text.includes("trust_remote_code")) return "该模型可能需要开启 trust_remote_code。";
-  if (text.includes("token") || text.includes("gated")) return "检查 HF_TOKEN 和模型授权。";
-  if (text.includes("gguf")) return "GGUF 优先用 llama.cpp；若坚持 vLLM，确认 tokenizer/hf-config-path。";
-  return "打开日志页查看完整上下文，必要时用保守 Profile 重试。";
+  return core.models.rootCause.legacyHint(message, "vllm");
 }
 
 function buildLogSuggestions(issues, stage) {
-  const suggestions = [];
-  if (issues.some((item) => /mamba cache align|max_num_batched_tokens|block_size .*batched_tokens/i.test(item.message))) {
-    suggestions.push("Mamba cache align 断言：max_num_batched_tokens 太小，Qwen3.6 MoE/NVFP4 用 --max-num-batched-tokens 8192 后重试。");
-  }
-  if (issues.some((item) => /w2_input_scale|modelopt_mixed|qwen3_5\.py|exceeds dimension size/i.test(item.message))) {
-    suggestions.push("Qwen3.6/NVFP4 加载失败：当前 vLLM 镜像可能不支持该 ModelOpt 权重布局，换 vllm/vllm-openai:nightly 或模型卡指定版本后重试。");
-  }
-  if (issues.some((item) => /BatchPrefillWithPagedKVCache|illegal memory access|Here's a thinking process|!{16,}/i.test(item.message))) {
-    suggestions.push("Qwen3.6/NVFP4 推理退化或 FlashInfer prefill 崩溃：dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 开关应由客户端通过 chat_template_kwargs.enable_thinking 控制。");
-  }
-  if (issues.some((item) => /uva is not available|scattergatherkernel|device-side assert/i.test(item.message))) {
-    suggestions.push("DiffusionGemma NVFP4 当前在 Windows Docker/WSL 路径不稳：优先换原生 Linux + V2 runner，或改跑常规 Qwen/Gemma 模型。");
-  }
-  if (issues.some((item) => /out of memory|cuda/i.test(item.message))) suggestions.push("显存错误：先切到低显存保守模式或把上下文减半。");
-  if (issues.some((item) => /no such|not found/i.test(item.message))) suggestions.push("路径错误：从模型库选择本地模型并自动填入启动表单。");
-  if (issues.some((item) => /token|gated/i.test(item.message))) suggestions.push("授权错误：配置 HF_TOKEN 后重新下载或启动。");
-  if (!suggestions.length && stage !== "API ready") suggestions.push("如果长时间停在编译或 warmup，观察 GPU 利用率；首次启动慢通常正常。");
-  if (!suggestions.length) suggestions.push("当前日志没有明显错误。");
-  return suggestions;
+  return core.models.rootCause.legacySuggestions(issues, stage, "vllm");
 }
 
 const SERVICE_EXPOSURE_CHECK_OPTIONS = {
@@ -3758,69 +3723,6 @@ function readLocalModelConfig(localPath) {
   }
 }
 
-function isDiffusionGemmaModel(model, config = null) {
-  const text = String(model || "").toLowerCase();
-  const modelType = String(config?.model_type || config?.text_config?.model_type || "").toLowerCase();
-  const architectures = Array.isArray(config?.architectures) ? config.architectures.join(" ").toLowerCase() : "";
-  return text.includes("diffusiongemma")
-    || text.includes("diffusion_gemma")
-    || modelType === "diffusion_gemma"
-    || architectures.includes("diffusiongemma");
-}
-
-function qwen36Nvfp4ModelFlags(model, config = null) {
-  const text = String(model || "").toLowerCase();
-  const modelType = String(config?.model_type || config?.text_config?.model_type || "").toLowerCase();
-  const architectures = Array.isArray(config?.architectures) ? config.architectures.join(" ").toLowerCase() : "";
-  const quantization = JSON.stringify(config?.quantization_config || {}).toLowerCase();
-  const hasQuantizationConfig = Boolean(config?.quantization_config);
-  const qwen36Moe = text.includes("qwen3.6-35b-a3b")
-    || text.includes("qwen3_5_moe")
-    || modelType.includes("qwen3_5_moe")
-    || architectures.includes("qwen3_5moe")
-    || architectures.includes("qwen3_5_moe");
-  const qwen36Hybrid = text.includes("qwen3.6")
-    || text.includes("qwen3_6")
-    || text.includes("qwen3-6")
-    || modelType.includes("qwen3_5")
-    || architectures.includes("qwen3_5");
-  const modeloptNvfp4 = (!hasQuantizationConfig && text.includes("nvfp4"))
-    || quantization.includes("nvfp4")
-    || quantization.includes("w4a16_nvfp4")
-    || (quantization.includes("mixed_precision") && quantization.includes("modelopt"))
-    || (quantization.includes("modelopt") && quantization.includes("fp4"));
-  return { qwen36Moe, qwen36Hybrid, modeloptNvfp4 };
-}
-
-function isQwen36MoeNvfp4Model(model, config = null) {
-  const { qwen36Moe, modeloptNvfp4 } = qwen36Nvfp4ModelFlags(model, config);
-  return qwen36Moe && modeloptNvfp4;
-}
-
-function isQwen36DenseNvfp4Model(model, config = null) {
-  const { qwen36Moe, qwen36Hybrid, modeloptNvfp4 } = qwen36Nvfp4ModelFlags(model, config);
-  return qwen36Hybrid && !qwen36Moe && modeloptNvfp4;
-}
-
-function isQwen38Model(model, config = null) {
-  const text = String(model || "").toLowerCase();
-  const architectures = Array.isArray(config?.architectures) ? config.architectures.join(" ").toLowerCase() : "";
-  return /qwen3\.8(?:[^0-9]|$)/.test(text) || architectures.includes("qwen3_8");
-}
-
-function isQwen38Nvfp4Model(model, config = null) {
-  if (!isQwen38Model(model, config)) return false;
-  const quantization = JSON.stringify(config?.quantization_config || {}).toLowerCase();
-  return /nvfp4|fp4/.test(String(model || "").toLowerCase())
-    || quantization.includes("nvfp4")
-    || quantization.includes("nvfp4-pack-quantized");
-}
-
-function isQwen38FlashNextNvfp4Model(model, config = null) {
-  if (!isQwen38Nvfp4Model(model, config)) return false;
-  return core.matchesCapabilityEntry("qwen3.8-flash-next", { model, config: config || {} });
-}
-
 function resolveDsparkDraftModel(value = "") {
   const requested = String(value || "").trim();
   const candidate = requested ? modelStorage.fromContainerPath(requested) : path.join(CONFIG.modelsRoot, "RadixArk-Qwen3.8-27B-DSpark");
@@ -3845,50 +3747,6 @@ function selectedHostGpus(opts = {}) {
   return gpus.filter((gpu) => selectedIds.has(String(gpu.id)) || selectedIds.has(String(gpu.index)));
 }
 
-// The legacy name/config model classifiers (isQwen38Model, isQwen36*,
-// isDiffusionGemmaModel) as the model facts recipes match on (ENG-6). The
-// recipes name capability ids of the capability matrix plus conditions over
-// model.quantMethod and model.architectures; until the ModelCard supplies
-// those facts (02), this shim derives them from the same name and config
-// checks the old branches used, adding the canonical architecture where only
-// the name said so. ENG-23 deletes it together with the predicates.
-const LEGACY_ARCHITECTURE_HINTS = Object.freeze({
-  qwen36Moe: "Qwen3_5MoeForConditionalGeneration",
-  qwen36Dense: "Qwen3_5ForConditionalGeneration",
-  diffusionGemma: "DiffusionGemmaForBlockDiffusion",
-});
-
-function legacyModelFacts(model, config = null) {
-  const capabilityIds = [];
-  const architectures = Array.isArray(config?.architectures) ? config.architectures.map(String) : [];
-  const hint = (name) => {
-    if (!architectures.includes(name)) architectures.push(name);
-  };
-  let quantMethod = "other";
-  if (isQwen38Model(model, config)) {
-    capabilityIds.push("qwen3.8");
-    if (isQwen38FlashNextNvfp4Model(model, config)) capabilityIds.push("qwen3.8-flash-next");
-    if (isQwen38Nvfp4Model(model, config)) quantMethod = "nvfp4";
-  } else {
-    const flags = qwen36Nvfp4ModelFlags(model, config);
-    if (flags.qwen36Moe || flags.qwen36Hybrid) {
-      capabilityIds.push("qwen3.5-3.6");
-      hint(flags.qwen36Moe ? LEGACY_ARCHITECTURE_HINTS.qwen36Moe : LEGACY_ARCHITECTURE_HINTS.qwen36Dense);
-      if (flags.modeloptNvfp4) quantMethod = "nvfp4";
-    }
-  }
-  if (isDiffusionGemmaModel(model, config)) {
-    capabilityIds.push("gemma4");
-    hint(LEGACY_ARCHITECTURE_HINTS.diffusionGemma);
-  }
-  return {
-    capabilityIds,
-    ...(capabilityIds[0] ? { capabilityId: capabilityIds[0] } : {}),
-    quantMethod,
-    ...(architectures.length ? { architectures } : {}),
-  };
-}
-
 // The image this manager runs for a manifest runtime key; undefined for a
 // runtime it has no configured slot for (the registry answers for those).
 function runtimeImageForManifestKey(manifestKey) {
@@ -3901,20 +3759,67 @@ function runtimeImageForManifestKey(manifestKey) {
   }[manifestKey];
 }
 
+// The image each engine of this manager runs when nothing else names one.
+function defaultImageFor(engineId) {
+  return { vllm: CONFIG.image, sglang: CONFIG.sglangImage }[engineId] || CONFIG.image;
+}
+
+// What this manager does differently per engine it hosts. versionPaths are the
+// endpoints the running server reports its version on, in order; dspark: the
+// engine runs DSpark drafts here; speculativeModes: the only speculative modes
+// its legacy base preset opens (null: any the model supports); runtimeFacts:
+// "metrics" when the KV pool and concurrency facts come from the server's own
+// gauges rather than from the launch logs and serve jobs.
+const ENGINE_TRAITS = Object.freeze({
+  vllm: Object.freeze({ versionPaths: ["/version"], dspark: false, speculativeModes: null, runtimeFacts: "logs" }),
+  sglang: Object.freeze({ versionPaths: ["/get_server_info", "/version"], dspark: true, speculativeModes: ["off", "dspark"], runtimeFacts: "metrics" }),
+});
+
+function engineTraits(engineId) {
+  return ENGINE_TRAITS[engineId] || ENGINE_TRAITS.vllm;
+}
+
+// The engine's display name from its descriptor (vLLM, SGLang).
+function engineLabel(engineId) {
+  try {
+    return engineRegistry.get(engineId)?.label?.en || engineId;
+  } catch {
+    return engineId;
+  }
+}
+
+// The finding title of a model the capability scan cannot start, by its code.
+const UNSUPPORTED_TITLES = Object.freeze({
+  muse_glimmer: "Muse Glimmer 已弃用",
+  bitsandbytes_plugin_missing: "BitsAndBytes 插件缺失",
+  default: "模型专用依赖缺失",
+});
+
 // Everything recipe selection and rendering reads from this manager: the
-// recipe store, the model facts, the selected GPUs, the platform and the
-// environment the recipes allowlist, and the image slots of CONFIG.
-function legacyRecipeContext(opts, model, localConfig, extra = {}) {
+// recipe store, the model facts (the families knowledge over the reference,
+// its config.json and chat template; core.engines.legacyAliases), the
+// selected GPUs, the platform and the environment the recipes allowlist, and
+// the image slots of CONFIG.
+function legacyRecipeContext(opts, { model, config = null, localPath = "" } = {}, extra = {}) {
   return {
     store: recipeStore,
-    model: legacyModelFacts(model, localConfig),
+    model: core.engines.legacyAliases.legacyModelFacts({ model, config, localPath }),
     hostGpus: selectedHostGpus(opts),
     platform: process.platform,
     env: process.env,
     imageFor: runtimeImageForManifestKey,
-    defaultImage: (engineId) => (engineId === "sglang" ? CONFIG.sglangImage : CONFIG.image),
+    defaultImage: defaultImageFor,
     ...extra,
   };
+}
+
+// The block reasons of the vLLM recipe a local model selects with the
+// untouched form (DiffusionGemma on Windows Docker/WSL), joined; "" when the
+// recipe has none or the model selects no recipe.
+function recipeBlockReason(modelPath, config) {
+  const context = legacyRecipeContext({}, { model: modelPath, config, localPath: modelPath });
+  const selected = core.engines.recipes.selectLegacyRecipe("vllm", { engine: "vllm" }, context);
+  return selected ? core.engines.recipes.legacyOptionErrors(selected.recipe, {}, context).join(" ") : "";
 }
 
 // The body the recipes read: the speculative mode is the normalised one, as the
@@ -3926,9 +3831,11 @@ function legacyRecipeOptions(opts, runtimeEngine) {
 
 function resolveVllmRuntimePreset(opts = {}, launch = {}) {
   const runtimeEngine = normalizeRuntimeEngine(opts.engine);
+  // docker-template engines have no runtime presets or recipes (01 §19).
+  if (templateEngineOf(engineRegistry, runtimeEngine)) return {};
   const localConfig = readLocalModelConfig(launch.localPath);
   const requestedRuntimeImage = String(opts.runtimeImage || "").trim();
-  const baseRuntimeImage = requestedRuntimeImage || (runtimeEngine === "sglang" ? CONFIG.sglangImage : CONFIG.image);
+  const baseRuntimeImage = requestedRuntimeImage || defaultImageFor(runtimeEngine);
   const model = opts.model || launch.modelArg;
   const recipeOptions = legacyRecipeOptions(opts, runtimeEngine);
   // The capability scan runs on first use: a recipe that merges no model
@@ -3941,31 +3848,12 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
     speculativeMode: opts.speculativeMode,
     numSpeculativeTokens: opts.numSpeculativeTokens,
     runtimeMetadata: knownRuntimeImageMetadata(baseRuntimeImage),
-    allowMuseGlimmer: envFlagEnabled(process.env.VLLM_ALLOW_MUSE_GLIMMER),
   });
-  return core.engines.recipes.legacyRuntimePreset(runtimeEngine, recipeOptions, launch, legacyRecipeContext(opts, model, localConfig, {
+  return core.engines.recipes.legacyRuntimePreset(runtimeEngine, recipeOptions, launch, legacyRecipeContext(opts, { model, config: localConfig, localPath: launch.localPath }, {
     speculativeMode: normalizeSpeculativeMode(opts.speculativeMode),
     capabilities,
     resolveDraftModel: (value) => resolveDsparkDraftModel(value),
   }));
-}
-
-function gemmaModelRunnerEnvValue() {
-  const configured = String(process.env.VLLM_GEMMA_USE_V2_MODEL_RUNNER || "").trim().toLowerCase();
-  if (["1", "true", "yes", "on", "v2"].includes(configured)) return "1";
-  if (["0", "false", "no", "off", "v1"].includes(configured)) return "0";
-  // Docker Desktop on Windows runs Linux containers through WSL2. vLLM disables
-  // pinned memory there, so V2 Model Runner's UVA buffers fail during init.
-  return process.platform === "win32" ? "0" : "1";
-}
-
-function envFlagEnabled(value) {
-  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
-}
-
-function diffusionGemmaWindowsBlockReason(platform = process.platform, env = process.env) {
-  if (platform !== "win32" || envFlagEnabled(env.VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA)) return "";
-  return "DiffusionGemma NVFP4 在 Windows Docker/WSL 下当前不可稳定运行：V2 runner 会因 UVA 不可用启动失败，V1 fallback 可加载但首个 chat 请求可能触发 CUDA device-side assert。请改用常规 Gemma-4/Qwen，或在原生 Linux 上运行；确认要自行承担风险时设置 VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1。";
 }
 
 function previewVllmRuntimePreset(opts = {}) {
@@ -4089,6 +3977,17 @@ async function listManagedContainers() {
   return containers.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
 }
 
+// A stopped instance's generated launch files (a docker-template engine's
+// config and, for TabbyAPI, its api_tokens.yml) go with it. Best effort: the
+// container is already gone, and the scrub script reports any leftover.
+async function removeInstanceLaunchFiles(container) {
+  try {
+    await launchFiles.removeForContainer(container);
+  } catch (error) {
+    console.warn(`launch files of ${container?.name || "a stopped instance"} could not be removed: ${error.message}`);
+  }
+}
+
 async function removeManagedContainer(reason = "replace", containerName = CONFIG.containerName, expectedJobId = "") {
   const targetContainerName = normalizeDockerContainerName(containerName || CONFIG.containerName);
   // 生命周期操作要看实时容器状态，绕过快照缓存。
@@ -4112,6 +4011,7 @@ async function removeManagedContainer(reason = "replace", containerName = CONFIG
   const leaseId = String(container.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
   if (leaseId) await gpuAdmissionController.release(leaseId, reason || "container-stop").catch(() => {});
   await docker(["rm", "-f", targetContainerName]);
+  await removeInstanceLaunchFiles(container);
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
   clearRuntimeInstancesCache();
@@ -4171,8 +4071,7 @@ async function getRuntimeVersion(port, apiKey = "", engine = "vllm", image = "")
 }
 
 async function getRuntimeVersionFresh(port, apiKey = "", engine = "vllm", image = "") {
-  const paths = engine === "sglang" ? ["/get_server_info", "/version"] : ["/version"];
-  for (const endpointPath of paths) {
+  for (const endpointPath of engineTraits(engine).versionPaths) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}${endpointPath}`, {
         signal: AbortSignal.timeout(2500),
@@ -4291,7 +4190,7 @@ async function getRunningModelSummary(container = null, gpu = null, options = {}
     apiKeyRequired: Boolean(vllmApiKey),
     canUnload: activeContainer.exists,
     unloadStopsContainer: true,
-    note: `${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} keeps the model resident in the server process. Unloading stops only the managed runtime container.`,
+    note: `${engineLabel(runtimeEngine)} keeps the model resident in the server process. Unloading stops only the managed runtime container.`,
   };
 }
 
@@ -4409,6 +4308,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
   const leaseId = String(target.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
   if (leaseId) await gpuAdmissionController.release(leaseId, "instance-stop").catch(() => {});
   await docker(["rm", "-f", target.name]);
+  await removeInstanceLaunchFiles(target);
   const runtimeApiKeyRef = String(target.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
@@ -4650,7 +4550,8 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   const factModelHints = Array.from(new Set(servedModels
     .flatMap((model) => [model.id, model.root])
     .filter(Boolean)));
-  const persistedFacts = runtimeEngine === "sglang"
+  const metricsFacts = engineTraits(runtimeEngine).runtimeFacts === "metrics";
+  const persistedFacts = metricsFacts
     ? {}
     : await getPersistedRuntimeFacts(factModelHints, { engine: runtimeEngine }).catch(() => ({}));
   // Facts come from this container's logs and its own serve jobs (08 P0-3).
@@ -4665,7 +4566,7 @@ async function collectVllmMetricsSummaryFresh(container, gpu, options = {}) {
   }
   const servedById = Object.fromEntries(servedModels.map((model) => [model.id, model]));
   const metrics = parsePrometheusMetrics(metricsText);
-  if (runtimeEngine === "sglang") {
+  if (metricsFacts) {
     const sglangFacts = buildSglangRuntimeFacts(metrics, servedModels, container?.labels || {});
     facts = {
       ...core.mergeRuntimeFacts({}, sglangFacts),
@@ -5370,6 +5271,7 @@ function stopProgressTracker(job) {
 // error object and jobs/instances events on this hub; vLLM/SGLang keep the hard
 // runtime gate. pullRuntime is the job behind POST /api/runtimes/:id/pull.
 const runtimeSupervisor = core.engines.createRuntimeSupervisor({
+  launchFiles,
   managerId: CONFIG.managerId,
   ownerLabelValue: CONFIG.managerId,
   containerBaseName: CONFIG.containerName,
@@ -5434,7 +5336,7 @@ const vllmRunContext = createVllmRunContext({
 });
 
 async function runStartJob(job, opts) {
-  return runtimeSupervisor.start({ job, run: vllmRunContext(opts), source: job.meta?.launchSource || "api" });
+  return runtimeSupervisor.start({ job, run: vllmRunContext(opts), source: job.meta?.launchSource || opts.launchSource || "api" });
 }
 
 function delay(ms) {
@@ -5442,8 +5344,12 @@ function delay(ms) {
 }
 
 module.exports = {
+  hubShim,
+  jobs,
   app,
   CONFIG,
+  launchFiles,
+  removeInstanceLaunchFiles,
   engineRegistry,
   runtimeSupervisor,
   vllmRunContext,
@@ -5506,13 +5412,6 @@ module.exports = {
   checkModelCompatibility,
   knownRuntimeImageMetadata,
   resolveVllmRuntimePreset,
-  isDiffusionGemmaModel,
-  isQwen36MoeNvfp4Model,
-  isQwen36DenseNvfp4Model,
-  isQwen38Model,
-  isQwen38Nvfp4Model,
-  isQwen38FlashNextNvfp4Model,
   resolveDsparkDraftModel,
   parseDockerCreatedAtSeconds,
-  diffusionGemmaWindowsBlockReason,
 };

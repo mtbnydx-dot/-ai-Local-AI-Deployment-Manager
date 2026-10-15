@@ -976,14 +976,14 @@ function mount(ctx) {
       openWebuiContainer,
       containerStatus,
     });
-    return { http, scheduler };
+    return { http, scheduler, index };
   }
 
   function getRuntime() {
     if (!runtime) {
       runtime = buildRuntime();
       // Other entry modules ask this object for the audit session and the log.
-      ctx.audit = { checkSession: runtime.http.checkSession, logAccess: runtime.http.logAccess, sessions: runtime.http.sessions };
+      ctx.audit = { checkSession: runtime.http.checkSession, logAccess: runtime.http.logAccess, sessions: runtime.http.sessions, index: runtime.index };
     }
     return runtime;
   }

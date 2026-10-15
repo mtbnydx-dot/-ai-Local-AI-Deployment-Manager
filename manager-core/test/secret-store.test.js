@@ -368,6 +368,46 @@ test("writers in two store instances never lose an update, and a stale lock is t
   assert.equal(second.get("wh7"), "fixture-webhook-secret-7-0001");
 });
 
+test("a lock file that is busy or delete-pending (EPERM/EACCES/EBUSY on open) is contention, not an error", async (t) => {
+  const aiRoot = await tempRoot(t);
+  // Windows answers EPERM, not EEXIST, to an exclusive create while the previous
+  // holder's lock file is delete-pending; the first opens fail that way.
+  let refusals = 3;
+  const codes = ["EPERM", "EACCES", "EBUSY"];
+  const fsImpl = {
+    ...fs,
+    promises: {
+      ...fs.promises,
+      open: async (file, ...rest) => {
+        if (String(file).endsWith(".lock") && refusals > 0) {
+          refusals -= 1;
+          throw Object.assign(new Error("operation not permitted"), { code: codes[refusals % codes.length] });
+        }
+        return fs.promises.open(file, ...rest);
+      },
+    },
+  };
+  const store = createSecretStore({ aiRoot, namespace: "webhooks", dpapi: createFakeDpapi(), acl: noAcl, fsImpl });
+  await store.set("wh0", "fixture-webhook-secret-0-0001");
+  assert.equal(refusals, 0, "every refusal was retried");
+  assert.equal(store.get("wh0"), "fixture-webhook-secret-0-0001");
+  assert.equal(fs.existsSync(`${store.file}.lock`), false);
+
+  // A refusal that never clears is still reported, once the grace period is over.
+  const stuck = {
+    ...fs,
+    promises: {
+      ...fs.promises,
+      open: async (file, ...rest) => {
+        if (String(file).endsWith(".lock")) throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        return fs.promises.open(file, ...rest);
+      },
+    },
+  };
+  const blocked = createSecretStore({ aiRoot, namespace: "other", dpapi: createFakeDpapi(), acl: noAcl, fsImpl: stuck });
+  await assert.rejects(blocked.set("wh1", "fixture-webhook-secret-1-0001"), isUnavailable);
+});
+
 test("importLegacy keeps names, verifies before it replaces the file, and is idempotent", async (t) => {
   const aiRoot = await tempRoot(t);
   const legacy = path.join(aiRoot, ".runtime", "platform-mcp", "server.env");

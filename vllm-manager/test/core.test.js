@@ -466,9 +466,10 @@ test("model config capability summary enables MTP only when the local checkpoint
   }
 });
 
-test("Qwen3.8 detection does not confuse Qwen3-8B and DSpark container paths still require local evidence", () => {
-  assert.equal(manager.isQwen38Model("Qwen/Qwen3.8-27B"), true);
-  assert.equal(manager.isQwen38Model("Qwen/Qwen3-8B"), false);
+// The Qwen3.8 / Qwen3-8B, Qwen3.6 NVFP4, Flash-Next and DiffusionGemma
+// detection truth tables live in manager-core/test/engines-recipes.test.js
+// since ENG-23: the families knowledge and the recipes decide them.
+test("DSpark container paths still require local evidence", () => {
   assert.equal(manager.resolveDsparkDraftModel("/models/not-a-real-dspark-checkpoint").ok, false);
 });
 
@@ -670,47 +671,6 @@ test("memory estimate helper uses shared vLLM semantics for DP and TP", () => {
 });
 
 test("Qwen3.6 MoE NVFP4 uses the nightly runtime preset", () => {
-  const qwenMoeConfig = {
-    architectures: ["Qwen3_5MoeForConditionalGeneration"],
-    model_type: "qwen3_5_moe",
-    quantization_config: {
-      quant_method: "modelopt",
-      quant_algo: "MIXED_PRECISION",
-      kv: { quant_algo: "W4A16_NVFP4" },
-    },
-  };
-
-  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/nv-community-Qwen3.6-35B-A3B-NVFP4", qwenMoeConfig), true);
-  const qwenDenseConfig = {
-    architectures: ["Qwen3_5ForConditionalGeneration"],
-    model_type: "qwen3_5",
-    quantization_config: {
-      quant_method: "modelopt",
-      quant_algo: "MIXED_PRECISION",
-      lm_head: { quant_algo: "W4A16_NVFP4" },
-    },
-  };
-  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/nv-community-Qwen3.6-27B-NVFP4", qwenDenseConfig), false);
-  assert.equal(manager.isQwen36DenseNvfp4Model("D:/AI/models/nv-community-Qwen3.6-27B-NVFP4", qwenDenseConfig), true);
-  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/unsloth-Qwen3.6-27B-NVFP4", {
-    architectures: ["Qwen3_5ForConditionalGeneration"],
-    quantization_config: { quant_method: "compressed-tensors" },
-  }), false);
-  assert.equal(manager.isQwen36DenseNvfp4Model("D:/AI/models/unsloth-Qwen3.6-27B-NVFP4", {
-    architectures: ["Qwen3_5ForConditionalGeneration"],
-    quantization_config: { quant_method: "compressed-tensors" },
-  }), false);
-  assert.equal(manager.isQwen36MoeNvfp4Model("D:/AI/models/Qwen-Qwen3.6-27B-FP8", {
-    architectures: ["Qwen3_5ForConditionalGeneration"],
-    model_type: "qwen3_5",
-    quantization_config: { quant_method: "fp8" },
-  }), false);
-  assert.equal(manager.isQwen36DenseNvfp4Model("D:/AI/models/Qwen-Qwen3.6-27B-FP8", {
-    architectures: ["Qwen3_5ForConditionalGeneration"],
-    model_type: "qwen3_5",
-    quantization_config: { quant_method: "fp8" },
-  }), false);
-
   const preset = manager.resolveVllmRuntimePreset({
     model: "nvidia/Qwen3.6-35B-A3B-NVFP4",
     kvCacheDtype: "auto",
@@ -756,12 +716,6 @@ test("Qwen3.6 MoE NVFP4 uses the nightly runtime preset", () => {
 
 test("Qwen3.8 Flash-Next NVFP4 resolves to the patched SM120 SGLang profile", () => {
   const model = "RadixArk/Qwen3.8-Flash-Next-NVFP4";
-  assert.equal(manager.isQwen38FlashNextNvfp4Model(model, {
-    model_type: "qwen4_exp",
-    architectures: ["Qwen4ExpForConditionalGeneration"],
-    quantization_config: { quant_algo: "NVFP4" },
-  }), true);
-
   const preset = manager.resolveVllmRuntimePreset({
     engine: "sglang",
     model,
@@ -819,19 +773,50 @@ test("Qwen3.8 Flash-Next model-check blocks FP8 KV and speculative decoding in t
   assert.equal(oldWorkaround.findings.some((item) => item.title === "PLE CPU offload 未启用" && item.severity === "fail"), true);
 });
 
-test("DiffusionGemma is blocked by default on Windows Docker WSL", () => {
-  const diffusionConfig = {
-    architectures: ["DiffusionGemmaForBlockDiffusion"],
-    model_type: "diffusion_gemma",
-  };
-
-  assert.equal(manager.isDiffusionGemmaModel("D:/AI/models/nv-community-diffusiongemma-26B-A4B-it-NVFP4", diffusionConfig), true);
+test("DiffusionGemma resolves to its recipe preset", () => {
   assert.equal(manager.resolveVllmRuntimePreset({
     model: "D:/AI/models/nv-community-diffusiongemma-26B-A4B-it-NVFP4",
   }, { localPath: "" }).id, "diffusion-gemma");
-  assert.match(manager.diffusionGemmaWindowsBlockReason("win32", {}), /UVA.*device-side assert/);
-  assert.equal(manager.diffusionGemmaWindowsBlockReason("win32", { VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA: "1" }), "");
-  assert.equal(manager.diffusionGemmaWindowsBlockReason("linux", {}), "");
+});
+
+// ENG-23: the model-specific findings and recommendations of the model check
+// come from the selected recipe's legacy.check, not from family branches.
+test("model-check takes the Qwen3.8, Qwen3.6 NVFP4 and DiffusionGemma blocks from recipe data", async () => {
+  const qwen38 = await manager.checkModelCompatibility({ model: "Qwen/Qwen3.8-27B", engine: "vllm", remote: false });
+  assert.match(qwen38.findings.find((item) => item.title === "Qwen3.8 专用运行时")?.detail || "", /Qwen3\.8 vLLM/);
+  assert.equal(qwen38.recommendations.maxModelLen, 262144);
+  assert.equal(qwen38.recommendations.languageModelOnly, true);
+  assert.equal(qwen38.recommendations.toolCallParser, "qwen3_coder");
+  const qwen38Sglang = await manager.checkModelCompatibility({ model: "Qwen/Qwen3.8-27B", engine: "sglang", remote: false });
+  assert.match(qwen38Sglang.findings.find((item) => item.title === "Qwen3.8 专用运行时")?.detail || "", /FlashInfer/);
+  assert.equal(qwen38Sglang.recommendations.languageModelOnly, false);
+
+  const flashNext = await manager.checkModelCompatibility({ model: "RadixArk/Qwen3.8-Flash-Next-NVFP4", engine: "sglang", remote: false, speculativeMode: "off" });
+  const nvfp4 = flashNext.findings.filter((item) => item.title === "NVFP4/FP4 权重");
+  assert.equal(nvfp4.length, 1);
+  assert.match(nvfp4[0].detail, /BF16 KV/);
+  assert.match(flashNext.findings.find((item) => item.title === "Qwen3.8 专用运行时").detail, new RegExp(manager.CONFIG.sglangFlashNextImage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(flashNext.recommendations.kvCacheDtype, "auto");
+
+  const moe = await manager.checkModelCompatibility({ model: "nvidia/Qwen3.6-35B-A3B-NVFP4", remote: false });
+  assert.ok(moe.findings.find((item) => item.title === "Qwen3.6 / NVFP4 运行时")?.detail.includes(manager.CONFIG.qwenMoeImage));
+  assert.deepEqual(
+    [moe.recommendations.quantization, moe.recommendations.kvCacheDtype, moe.recommendations.toolCallParser, moe.recommendations.maxNumBatchedTokens],
+    ["modelopt", "fp8", "qwen3_xml", 8192],
+  );
+  const dense = await manager.checkModelCompatibility({ model: "nvidia/Qwen3.6-27B-NVFP4", remote: false });
+  assert.equal(dense.recommendations.kvCacheDtype, "auto");
+
+  const gemma = await manager.checkModelCompatibility({ model: "fixture/nv-community-diffusiongemma-26B-A4B-it", remote: false });
+  assert.ok(gemma.findings.find((item) => item.title === "DiffusionGemma / Gemma4 专用启动")?.detail.includes(manager.CONFIG.gemmaImage));
+  assert.equal(gemma.recommendations.quantization, "modelopt_fp4", "the recipe default fills an empty quantization");
+  assert.equal(gemma.recommendations.enablePrefixCaching, false);
+  if (process.platform === "win32" && !process.env.VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA) {
+    assert.equal(gemma.findings.find((item) => item.title === "Windows Docker/WSL 不建议启动")?.severity, "fail");
+  }
+
+  const plain = await manager.checkModelCompatibility({ model: "fixture/Meta-Llama-3-8B-Instruct", remote: false });
+  assert.equal(plain.findings.some((item) => ["Qwen3.8 专用运行时", "Qwen3.6 / NVFP4 运行时", "DiffusionGemma / Gemma4 专用启动"].includes(item.title)), false);
 });
 
 test("streamOpenAiAsClaude reports upstream failures as SSE error events", async () => {

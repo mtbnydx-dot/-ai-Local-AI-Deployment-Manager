@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "mig-v-ready",
+      "type": "download",
+      "title": "Download example-org/Example-8B (bf16)",
+      "status": "success",
+      "createdAt": "2026-09-01T10:00:00.000Z",
+      "updatedAt": "2026-09-01T10:30:00.000Z",
+      "finishedAt": "2026-09-01T10:30:00.000Z",
+      "exitCode": 0,
+      "error": null,
+      "progress": { "percent": 100 },
+      "logs": ["> hf download example-org/Example-8B", "done"],
+      "meta": {
+        "model": "example-org/Example-8B",
+        "outputName": "example-org-Example-8B",
+        "localDir": "<ROOT>/example-org-Example-8B",
+        "source": "huggingface",
+        "precision": "bf16",
+        "priority": "high",
+        "expectedBytes": 4098,
+        "expectedFiles": 2,
+        "fileManifest": [
+          { "name": "model.safetensors", "size": 4096, "sha256": "1111111111111111111111111111111111111111111111111111111111111111" },
+          { "name": "config.json", "size": 2, "sha256": "2222222222222222222222222222222222222222222222222222222222222222" }
+        ],
+        "transfer": { "hfMirror": false, "hfEndpoint": null, "hfTransfer": true, "tokenRef": null, "gated": false }
+      }
+    },
+    {
+      "id": "mig-v-coded",
+      "type": "download",
+      "title": "Download example-org/Gated-7B (bf16)",
+      "status": "failed",
+      "createdAt": "2026-09-02T10:00:00.000Z",
+      "updatedAt": "2026-09-02T10:05:00.000Z",
+      "finishedAt": "2026-09-02T10:05:00.000Z",
+      "exitCode": 1,
+      "error": "Hugging Face 登录无效 / Hugging Face sign-in is invalid",
+      "progress": { "percent": 3 },
+      "logs": ["401 Client Error: Unauthorized for url", "> exit 1"],
+      "meta": {
+        "model": "example-org/Gated-7B",
+        "outputName": "example-org-Gated-7B",
+        "localDir": "<ROOT>/example-org-Gated-7B",
+        "source": "huggingface",
+        "precision": "bf16",
+        "expectedBytes": 8000,
+        "errorCode": "hf_auth_invalid",
+        "errorRetryable": false,
+        "errorHint": { "zh": "请重新登录 Hugging Face。", "en": "Sign in to Hugging Face again." },
+        "transfer": { "hfMirror": false, "hfEndpoint": null, "hfTransfer": false, "tokenRef": null, "gated": true }
+      }
+    },
+    {
+      "id": "mig-v-uncoded",
+      "type": "download",
+      "title": "Download example-org/Big-70B (bf16)",
+      "status": "failed",
+      "createdAt": "2026-09-03T10:00:00.000Z",
+      "updatedAt": "2026-09-03T10:20:00.000Z",
+      "finishedAt": "2026-09-03T10:20:00.000Z",
+      "exitCode": 1,
+      "error": "download failed",
+      "progress": { "percent": 60 },
+      "logs": ["OSError: [Errno 28] No space left on device"],
+      "meta": {
+        "model": "example-org/Big-70B",
+        "outputName": "example-org-Big-70B",
+        "localDir": "<ROOT>/example-org-Big-70B",
+        "source": "huggingface",
+        "precision": "bf16",
+        "expectedBytes": 1000
+      }
+    },
+    {
+      "id": "mig-v-running",
+      "type": "download",
+      "title": "Download example-org/Token-3B (bf16)",
+      "status": "running",
+      "createdAt": "2026-09-04T10:00:00.000Z",
+      "updatedAt": "2026-09-04T10:10:00.000Z",
+      "finishedAt": null,
+      "exitCode": null,
+      "error": null,
+      "progress": { "percent": 40 },
+      "logs": ["downloading"],
+      "meta": {
+        "model": "example-org/Token-3B",
+        "outputName": "example-org-Token-3B",
+        "localDir": "<ROOT>/example-org-Token-3B",
+        "source": "huggingface",
+        "precision": "bf16",
+        "expectedBytes": 1000,
+        "transfer": { "hfMirror": false, "hfEndpoint": null, "hfTransfer": false, "tokenRef": "dlt_00112233445566778899aabbccddeeff", "gated": true }
+      }
+    },
+    {
+      "id": "mig-v-serve",
+      "type": "serve",
+      "title": "Serve something",
+      "status": "success",
+      "createdAt": "2026-09-05T10:00:00.000Z",
+      "logs": [],
+      "meta": {}
+    }
+  ]
+}
