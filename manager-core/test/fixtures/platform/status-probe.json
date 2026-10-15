@@ -1,0 +1,341 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-14T08:00:00.000Z",
+  "build": {
+    "commit": "c0146a7d2f1e",
+    "contentHash": "3f9c2a1b7d0e"
+  },
+  "mode": "probe",
+  "supervisor": {
+    "running": false
+  },
+  "readiness": {
+    "overall": "degraded",
+    "layers": [
+      {
+        "id": "environment",
+        "status": "ok"
+      },
+      {
+        "id": "runtime",
+        "status": "ok",
+        "detail": "Docker 28.4.0 · RTX PRO 6000 · driver 581.15"
+      },
+      {
+        "id": "components",
+        "status": "warn",
+        "detail": "2/3 ready",
+        "counts": {
+          "ready": 2,
+          "total": 3
+        },
+        "code": "components_not_ready",
+        "components": [
+          "llama-manager"
+        ]
+      },
+      {
+        "id": "serving",
+        "status": "ok",
+        "counts": {
+          "ready": 1,
+          "total": 1
+        }
+      },
+      {
+        "id": "exposure",
+        "status": "ok",
+        "mode": "local"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "docker",
+      "kind": "external",
+      "profile": "core",
+      "label": {
+        "zh-CN": "Docker 引擎",
+        "en-US": "Docker engine"
+      },
+      "state": "ready",
+      "owner": "none",
+      "pid": null,
+      "ports": [],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": {
+        "live": true,
+        "checkedAt": "2026-10-14T08:00:00.000Z"
+      },
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "entry",
+      "legacyId": "entry",
+      "kind": "node",
+      "profile": "core",
+      "label": {
+        "zh-CN": "统一入口",
+        "en-US": "Service entry"
+      },
+      "state": "ready",
+      "owner": "none",
+      "pid": 5120,
+      "ports": [
+        {
+          "name": "admin",
+          "port": 5176,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": {
+        "live": true,
+        "checkedAt": "2026-10-14T08:00:00.000Z"
+      },
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "service-entry-public",
+      "kind": "listener",
+      "profile": "core",
+      "label": {
+        "zh-CN": "公网入口监听",
+        "en-US": "Public listener"
+      },
+      "parent": "entry",
+      "state": "ready",
+      "owner": "none",
+      "pid": null,
+      "ports": [
+        {
+          "name": "public",
+          "port": 5186,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": {
+        "live": true,
+        "checkedAt": "2026-10-14T08:00:00.000Z"
+      },
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "vllm-manager",
+      "legacyId": "vllm",
+      "kind": "node",
+      "profile": "core",
+      "label": {
+        "zh-CN": "vLLM / SGLang 管理器",
+        "en-US": "vLLM / SGLang manager"
+      },
+      "state": "ready",
+      "owner": "none",
+      "pid": 5200,
+      "ports": [
+        {
+          "name": "api",
+          "port": 5177,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": {
+        "live": true,
+        "checkedAt": "2026-10-14T08:00:00.000Z"
+      },
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "llama-manager",
+      "legacyId": "llama",
+      "kind": "node",
+      "profile": "core",
+      "label": {
+        "zh-CN": "llama.cpp 管理器",
+        "en-US": "llama.cpp manager"
+      },
+      "state": "stopped",
+      "owner": "none",
+      "pid": null,
+      "ports": [
+        {
+          "name": "api",
+          "port": 5178,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": null,
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "platform-mcp",
+      "legacyId": "mcp",
+      "kind": "node",
+      "profile": "full",
+      "label": {
+        "zh-CN": "MCP 服务",
+        "en-US": "MCP server"
+      },
+      "state": "stopped",
+      "owner": "none",
+      "pid": null,
+      "ports": [
+        {
+          "name": "mcp",
+          "port": 5190,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": null,
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "tts-gateway",
+      "legacyId": "tts",
+      "kind": "process",
+      "profile": "full",
+      "label": {
+        "zh-CN": "语音网关",
+        "en-US": "TTS gateway"
+      },
+      "state": "stopped",
+      "owner": "none",
+      "pid": null,
+      "ports": [
+        {
+          "name": "http",
+          "port": 7000,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": null,
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "tts-workers",
+      "kind": "group",
+      "profile": "full",
+      "label": {
+        "zh-CN": "语音工作进程",
+        "en-US": "TTS workers"
+      },
+      "state": "stopped",
+      "owner": "none",
+      "pid": null,
+      "ports": [],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": null,
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "search-gateway",
+      "legacyId": "search",
+      "kind": "compose",
+      "profile": "full",
+      "label": {
+        "zh-CN": "联网搜索网关",
+        "en-US": "Web search gateway"
+      },
+      "state": "stopped",
+      "owner": "none",
+      "pid": null,
+      "ports": [
+        {
+          "name": "http",
+          "port": 5180,
+          "bind": "127.0.0.1"
+        },
+        {
+          "name": "searxng",
+          "port": 8180,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": null,
+      "pendingRestart": null,
+      "message": null
+    },
+    {
+      "id": "legacy-claude-proxy",
+      "kind": "external",
+      "profile": "none",
+      "label": {
+        "zh-CN": "旧版 Claude 代理",
+        "en-US": "Legacy Claude proxy"
+      },
+      "state": "stopped",
+      "owner": "none",
+      "pid": null,
+      "ports": [
+        {
+          "name": "http",
+          "port": 8001,
+          "bind": "127.0.0.1"
+        }
+      ],
+      "uptimeSec": null,
+      "restarts": null,
+      "lastExit": null,
+      "health": null,
+      "pendingRestart": null,
+      "message": null
+    }
+  ],
+  "models": {
+    "serving": 1,
+    "instances": [
+      {
+        "managerId": "vllm",
+        "instanceId": "primary",
+        "state": "ready",
+        "models": [
+          "qwen3.8"
+        ]
+      }
+    ]
+  },
+  "ops": {
+    "nightly": {
+      "ok": false,
+      "streak": 30,
+      "since": "2026-09-14"
+    },
+    "backup": {
+      "ageHours": 4.5,
+      "ok": true
+    },
+    "pendingRestarts": []
+  }
+}

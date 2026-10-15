@@ -118,11 +118,16 @@ module.exports.mergeExports = mergeExports;
 const PLATFORM_MODULES = Object.freeze({
   components: "./platform/components",
   config: "./platform/config",
+  control: "./platform/control",
   doctor: "./platform/doctor",
+  entryClient: "./platform/entry-client",
+  idle: "./platform/idle",
   launcher: "./platform/launcher",
   logs: "./platform/logs",
   messages: "./platform/messages",
   semver: "./platform/semver",
+  status: "./platform/status",
+  supervisor: "./platform/supervisor",
   version: "./platform/version",
   winproc: "./platform/winproc",
 });
