@@ -10,10 +10,11 @@ const templateSignatures = require("../manager-core/model-inspector/template-sig
 const modelKnowledge = require("../manager-core/model-inspector/knowledge");
 const { describeDownloadError } = require("../manager-core/model-hub/errors");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
-const { createVllmStartRuntimeRequest } = require("./lib/launch-request");
+const { createVllmStartRuntimeRequest, persistAsyncRuntimeFailure } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
 const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
+const { buildVllmImagePullOptions: imagePullOptionsFor, createVllmRunContext, vllmInstanceId } = require("./lib/run-context");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService } = require("./lib/remote-models");
 const { createHfAuthService } = require("./lib/hf-auth");
@@ -274,8 +275,6 @@ const {
   execFileAsync,
   docker,
   getDockerVersion: getDockerVersionFresh,
-  ensureDockerDaemonRunning,
-  checkDockerDaemon,
   getImageStatus: getImageStatusFresh,
   normalizeDockerContainerName,
 } = dockerRuntime;
@@ -444,20 +443,6 @@ let runtimeInstancesCache = { value: null, expiresAt: 0, promise: null };
 let automationMonitorTimer = null;
 let recentLaunches = [];
 const MAX_RECENT_LAUNCHES = 8;
-// 启动任务串行化：同一管理器内同一时刻只允许一个 serve 启动流程在跑，
-// 避免并发 docker run 竞争同一个容器名（vllm-local）造成 "container name already in use"。
-// 第二个启动请求会排队等待前一个完成（成功或失败）后再执行，保留"启动即替换"语义。
-const serveQueues = new Map();
-function serializeServeJob(work, queueKey = "replace") {
-  const key = String(queueKey || "replace");
-  const state = serveQueues.get(key) || { chain: Promise.resolve(), busy: false };
-  const queued = state.busy;
-  state.busy = true;
-  const result = state.chain.then(() => work());
-  state.chain = result.then(() => { state.busy = false; }, () => { state.busy = false; });
-  serveQueues.set(key, state);
-  return { result, queued };
-}
 let runtimeActivity = {
   initialized: false,
   lastActivityAt: null,
@@ -480,7 +465,7 @@ const jobsLedgerStore = core.createJobsLedgerStore({
   serveDetail: "运行时 API 与最小生成自检均已通过。",
   stopProgressTracker,
   onJobSuccess: (job) => {
-    if (job.type === "serve") recordRecentLaunch(job.meta);
+    if (job.type === "serve" && !job.meta?.skipped) recordRecentLaunch(job.meta);
     if (job.type === "download") assessDownloadedModelFit(job).catch(() => {});
   },
   onJobsChanged: () => broadcastJobsSnapshot(),
@@ -1847,6 +1832,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   appendLog,
   finishJob,
   failJob,
+  // POST /api/runtimes/:runtimeId/pull (ENG-11): the supervisor's pull job.
+  pullRuntime: (runtimeId, options) => runtimeSupervisor.pullRuntime(runtimeId, options),
 });
 
 // Model knowledge (docs/overhaul/02-models.md MOD-5): GET /api/knowledge/status lists the
@@ -1946,14 +1933,9 @@ async function loadRecentLaunches() {
 // 启动成功后记录配置，按 model+name 去重，最新的排最前
 function recordRecentLaunch(meta) {
   if (!meta || !meta.model) return;
+  // The LaunchStore record is marked running by the supervisor's commit stage.
   clearGatewayRuntimeCache();
   clearRuntimeInstancesCache();
-  if (meta.launchId) {
-    trackLaunch(() => launchStore.markStatus(meta.launchId, "running", {
-      event: "ready",
-      patch: { containerName: String(meta.containerName || CONFIG.containerName) },
-    }));
-  }
   const config = normalizeLaunchConfig(meta);
   const entry = {
     model: config.model,
@@ -4111,6 +4093,7 @@ async function removeManagedContainer(reason = "replace", containerName = CONFIG
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
   clearRuntimeInstancesCache();
+  runtimeSupervisor.emitInstances({ removed: [vllmInstanceId(CONFIG, targetContainerName, container.labels?.["ai.manager.instance"])] });
   return { removed: true, containerName: targetContainerName, owner: owner || null, jobId: containerJobId || null, reason };
 }
 
@@ -4408,6 +4391,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
   clearRuntimeInstancesCache();
+  runtimeSupervisor.emitInstances({ removed: [vllmInstanceId(CONFIG, target.name, target.labels?.["ai.manager.instance"])] });
   return { ok: true, id: requested, containerName: target.name, stopped: true };
 }
 
@@ -5058,8 +5042,8 @@ async function saveJobsLedgerNow() {
   return jobsLedgerStore.saveJobsLedgerNow();
 }
 
-function createJob(type, title, meta = {}) {
-  return jobsLedgerStore.createJob(type, title, meta);
+function createJob(type, title, meta = {}, options = {}) {
+  return jobsLedgerStore.createJob(type, title, meta, options);
 }
 
 function appendLog(job, data) {
@@ -5073,8 +5057,11 @@ function finishJob(job, meta = {}) {
 function failJob(job, error) {
   // 下载失败要带上新鲜的 failedAt，否则自动续传会把它当成重启前的旧任务跳过。
   if (job?.type === "download" && job.meta) job.meta.failedAt = Date.now();
+  // The supervisor fails a serve job itself; the caller's second failJob is a
+  // no-op and must not add a second "failed" launch event.
+  const wasActive = job?.status === "running" || job?.status === "queued";
   const result = jobsLedgerStore.failJob(job, error);
-  if (job?.type === "serve" && job.meta?.launchId) {
+  if (wasActive && job?.type === "serve" && job.meta?.launchId) {
     trackLaunch(() => launchStore.markStatus(job.meta.launchId, "failed", { event: "failed", detail: job.error || "" }));
   }
   return result;
@@ -5357,364 +5344,73 @@ function stopProgressTracker(job) {
   progressTimers.delete(job.id);
 }
 
+// runtime-supervisor (01 §14): the start pipeline with lifecycle phases, the job
+// error object and jobs/instances events on this hub; vLLM/SGLang keep the hard
+// runtime gate. pullRuntime is the job behind POST /api/runtimes/:id/pull.
+const runtimeSupervisor = core.engines.createRuntimeSupervisor({
+  managerId: CONFIG.managerId,
+  ownerLabelValue: CONFIG.managerId,
+  containerBaseName: CONFIG.containerName,
+  host: dockerHost,
+  launchStore,
+  events: sseHub,
+  secrets: runtimeApiKeyStore,
+  redactor: runtimeSecretRedactor,
+  runtimeGatePolicy: "enforce",
+  jobs: {
+    createJob,
+    appendLog,
+    setJobProgress,
+    scheduleJobsSave,
+    finishJob,
+    // job.meta.errorCode/findings are part of the failed job the ledger saves.
+    failJob: (job, error) => {
+      persistAsyncRuntimeFailure(job, error);
+      return failJob(job, error);
+    },
+  },
+  probes: {
+    nvidiaCompatibility: () => probeNvidiaRuntimeCompatibility(execFileAsync),
+    gpuStatus: getGpuStatusFresh,
+    portStatus: checkPortAvailability,
+  },
+  // Lifecycle readiness bypasses the short status cache: right after docker
+  // run, a cached "missing" would make rollback kill the new container.
+  getters: { containerStatus: getContainerStatusFresh, servedModels: getServedModelsFresh },
+  publishedPort: (ports) => parseDockerPortPublish(ports)?.port ?? null,
+  resolveRuntime: (runtimeId) => core.engines.findHostedRuntime(engineRegistry, "vllm", runtimeId),
+  imagePlatform: CONFIG.imagePlatform,
+  hooks: {
+    beforeStart: () => snapshotCurrentStats("before-start"),
+    afterChange: () => { clearGatewayRuntimeCache(); clearRuntimeInstancesCache(); },
+  },
+  timeouts: {
+    startMs: Math.max(60000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000)),
+    readyProbeMs: Math.max(60000, Number(process.env.VLLM_READY_PROBE_TIMEOUT_MS || 5 * 60 * 1000)),
+    probeRequestMs: Math.max(30000, Number(process.env.VLLM_READY_PROBE_REQUEST_TIMEOUT_MS || 180000)),
+  },
+  fetchImpl: fetch,
+  delay,
+});
+
+const vllmRunContext = createVllmRunContext({
+  CONFIG,
+  appendLog,
+  checkModelCompatibility,
+  getGpuStatus,
+  previewRuntimePreset: previewVllmRuntimePreset,
+  buildRuntimeCommand: buildVllmRuntimeCommand,
+  knownRuntimeImageMetadata,
+  stallMsForPreset: (preset) => core.engines.recipes.stallMsForPreset(preset, recipeStore),
+  redactDockerArgs,
+  dockerPublishArgs,
+  formatDockerPublishArgs,
+  extractLogIssues,
+  registry: engineRegistry,
+});
+
 async function runStartJob(job, opts) {
-  const queueKey = opts.instanceMode === "parallel" ? (opts.containerName || "parallel") : "replace";
-  const { result, queued } = serializeServeJob(() => runStartJobOnce(job, opts), queueKey);
-  if (queued) {
-    appendLog(job, "已有启动任务进行中，排队等待其完成后再启动，避免容器名冲突。");
-    setJobProgress(job, {
-      percent: 1,
-      stage: "等待前一个启动任务",
-      detail: "已有启动任务正在进行，排队等待其完成后再启动，避免容器名冲突。",
-    });
-  }
-  return result;
-}
-
-async function runStartJobOnce(job, opts) {
-  // 排队期间任务可能已被用户取消（cancel -> failJob）。拿到锁后若已不在 running 态，直接放弃，
-  // 避免给一个已取消的任务启动容器、再被 finishJob 复活。
-  if (job.status !== "running") {
-    appendLog(job, `任务已不再运行（status=${job.status}），跳过启动。`);
-    return;
-  }
-  // The launch record and its id (job.meta.launchId), which the builder emits
-  // as the ai.manager.launch-id label.
-  trackLaunch(() => launchStore.beginLaunch(job, opts, { source: job.meta?.launchSource || "api" }));
-  const compatibility = opts.modelCompatibility && typeof opts.modelCompatibility === "object"
-    ? opts.modelCompatibility
-    : await checkModelCompatibility({ ...opts, model: opts.model, remote: false });
-  if (!compatibility.ok) {
-    const issues = compatibility.findings.filter((item) => item.severity === "fail");
-    const detail = issues.map((item) => `${item.title}: ${item.detail}`).join("；") || "模型文件或运行时不兼容";
-    setJobProgress(job, {
-      percent: 2,
-      stage: "模型预检失败",
-      detail,
-      state: "fail",
-      issues: issues.map((item) => item.detail),
-    });
-    const error = new Error(`模型启动前校验失败：${detail}`);
-    error.code = issues.some((item) => /Muse Glimmer/i.test(`${item.title || ""} ${item.detail || ""}`))
-      ? "muse_glimmer_vllm_unsupported"
-      : "model_compatibility_failed";
-    error.findings = compatibility.findings || [];
-    throw error;
-  }
-  assertStartJobActive(job);
-  setJobProgress(job, {
-    percent: 3,
-    stage: "检查 Docker",
-    detail: "启动模型前先确认 Docker daemon 已经可用。",
-  });
-  let dockerReady = await checkDockerDaemon();
-  if (!dockerReady.ok) {
-    appendLog(job, dockerReady.raw || dockerReady.error);
-    setJobProgress(job, {
-      percent: 4,
-      stage: `启动 ${CONFIG.dockerRuntimeName}`,
-      detail: `Docker daemon 未就绪，正在自动启动 ${CONFIG.dockerRuntimeName} 并等待引擎可用。`,
-    });
-    appendLog(job, `Docker daemon is not ready; requesting ${CONFIG.dockerRuntimeName} startup.`);
-    dockerReady = await ensureDockerDaemonRunning(120000);
-  }
-  if (!dockerReady.ok) {
-    appendLog(job, dockerReady.raw || dockerReady.error);
-    setJobProgress(job, {
-      percent: 4,
-      stage: "Docker 未就绪",
-      detail: dockerReady.error,
-      state: "fail",
-      issues: [dockerReady.error],
-    });
-    throw new Error(dockerReady.error);
-  }
-  appendLog(job, dockerReady.alreadyRunning
-    ? `Docker daemon ready: ${dockerReady.version}`
-    : `${CONFIG.dockerRuntimeName} started; daemon ready: ${dockerReady.version}`);
-  for (const warning of opts.gpuWarnings || []) appendLog(job, `GPU selection warning: ${warning}`);
-  const gpuProbe = await getGpuStatus();
-  if (!gpuProbe.ok) {
-    appendLog(job, `GPU warning: 未检测到可用的 NVIDIA GPU（${gpuProbe.text || "nvidia-smi 不可用"}）。vLLM 官方镜像依赖 NVIDIA GPU，容器很可能启动失败。`);
-  }
-  let runtimeOpts = {
-    ...opts,
-    hostGpus: Array.isArray(gpuProbe.gpus) ? gpuProbe.gpus : [],
-  };
-
-  const runtimePreset = previewVllmRuntimePreset(runtimeOpts);
-  const requestedEngine = normalizeRuntimeEngine(runtimePreset.engine || runtimeOpts.engine);
-  const requestedEngineLabel = requestedEngine === "sglang" ? "SGLang" : "vLLM";
-  if (runtimePreset.unsupportedReason) {
-    appendLog(job, `Runtime preset blocked: ${runtimePreset.label || runtimePreset.id}`);
-    appendLog(job, runtimePreset.unsupportedReason);
-    setJobProgress(job, {
-      percent: 8,
-      stage: "当前环境不支持该模型",
-      detail: runtimePreset.unsupportedReason,
-      state: "fail",
-      issues: [runtimePreset.unsupportedReason],
-    });
-    const error = new Error(runtimePreset.unsupportedReason);
-    error.code = runtimePreset.capabilities?.unsupportedCode === "muse_glimmer"
-      ? "muse_glimmer_vllm_unsupported"
-      : "runtime_preset_unsupported";
-    error.findings = [{
-      severity: "fail",
-      title: runtimePreset.label || "Runtime preset unsupported",
-      detail: runtimePreset.unsupportedReason,
-    }];
-    throw error;
-  }
-  const runtimeImagePreview = runtimePreset.image || CONFIG.image;
-  const gpuCompatibilityProbe = await probeNvidiaRuntimeCompatibility(execFileAsync);
-  const runtimeCompatibility = assessVllmRuntimeCompatibility({
-    probe: gpuCompatibilityProbe,
-    selectedGpuIds: opts.gpuDeviceIds,
-    imageReference: runtimeImagePreview,
-    imageMetadata: knownRuntimeImageMetadata(runtimeImagePreview),
-    hostPlatform: process.platform,
-    hostArch: process.arch,
-    allowAnyCompatibleGpu: opts.multiGpuMode === "single"
-      && !opts.gpuSelectionExplicit
-      && !opts.gpuAdmissionFinalized,
-  });
-  for (const item of runtimeCompatibility.findings) {
-    appendLog(job, `Runtime compatibility [${item.severity}]: ${item.title}: ${item.detail}`);
-  }
-  if (!runtimeCompatibility.ok) {
-    const issues = runtimeCompatibility.findings.filter((item) => item.severity === "fail").map((item) => item.detail);
-    setJobProgress(job, {
-      percent: 8,
-      stage: `${requestedEngineLabel} 运行时不兼容`,
-      detail: issues.join("；") || runtimeCompatibility.summary,
-      state: "fail",
-      issues,
-    });
-    const error = new Error(`${requestedEngineLabel} 运行时预检失败：${issues.join("；") || runtimeCompatibility.summary}`);
-    error.code = "vllm_runtime_incompatible";
-    error.findings = runtimeCompatibility.findings;
-    throw error;
-  }
-
-  setJobProgress(job, {
-    percent: 8,
-    stage: "启动前预检",
-    detail: "正在校验端口、模型档案并生成完整 Docker 命令；此阶段不会停止当前模型。",
-  });
-  const targetContainerName = opts.containerName || CONFIG.containerName;
-  const portStatus = await checkPortAvailability(opts.port, targetContainerName).catch(() => null);
-  if (portStatus && !portStatus.available && !portStatus.isOwnContainer) {
-    appendLog(job, `Port check failed: ${portStatus.detail}`);
-    setJobProgress(job, {
-      percent: 18,
-      stage: "端口被占用",
-      detail: `${portStatus.detail} 请换一个端口或先停止占用方。`,
-      state: "fail",
-      issues: [portStatus.detail],
-    });
-    throw new Error(`端口 ${opts.port} 不可用：${portStatus.detail}`);
-  }
-
-  let { runArgs, activePublishArgs, runtimeImage, runtimeEngine, secretEnv } = buildVllmRuntimeCommand(job, runtimeOpts);
-
-  trackLaunch(() => launchStore.recordCommand(job.meta?.launchId, runArgs, { redact: (argv) => runtimeSecretRedactor.redactValue(argv) }));
-  // 启动预检要拿实时镜像状态，绕过快照缓存（DockerHost 不缓存镜像状态）。
-  const ensuredImage = await dockerHost.ensureImage(runtimeImage, {
-    policy: "auto",
-    ...buildVllmImagePullOptions(),
-    onMissing: ({ status }) => appendLog(job, `Runtime image preflight: ${status?.text || runtimeImage}. Pulling before current model is stopped.`),
-    onAttempt: ({ attempt, attempts }) => appendLog(job, `Docker image pull attempt ${attempt}/${attempts}: ${runtimeImage}`),
-    onFailure: ({ attempt, attempts, detail }) => appendLog(job, `Docker image pull ${attempt}/${attempts} failed: ${detail}`),
-  });
-  if (ensuredImage.pulled) appendLog(job, ensuredImage.result.stdout || ensuredImage.result.stderr);
-  assertStartJobActive(job);
-
-  await snapshotCurrentStats("before-start").catch(() => {});
-  setJobProgress(job, {
-    percent: 18,
-    stage: "创建可回滚切换点",
-    detail: `正在保留 ${targetContainerName} 的完整容器配置，若新实例失败会自动恢复。`,
-  });
-  let previousRuntimeApiKeyRef = "";
-  const prepareReplacement = async (admissionRequest = opts.gpuAdmissionRequest) => {
-    const previousContainer = await getContainerStatusFresh(targetContainerName);
-    previousRuntimeApiKeyRef = String(previousContainer.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
-    const previousGpuAdmissionLeaseId = String(previousContainer.labels?.["ai.manager.gpu-admission-lease"] || "");
-    if (admissionRequest && previousGpuAdmissionLeaseId) {
-      admissionRequest.retireLeaseIds = Array.from(new Set([
-        ...(Array.isArray(admissionRequest.retireLeaseIds) ? admissionRequest.retireLeaseIds : []),
-        previousGpuAdmissionLeaseId,
-      ]));
-    }
-    return core.beginContainerReplacement({
-      docker,
-      containerName: targetContainerName,
-      managerId: CONFIG.managerId,
-      ownerLabelKey: MANAGER_LABEL_KEY,
-      onEvent: (event) => {
-        if (event.type === "backup-ready") appendLog(job, `Rollback checkpoint ready: ${event.backupName}`);
-      },
-    });
-  };
-  const replacement = typeof opts.prepareGpuAdmission === "function"
-    ? await opts.prepareGpuAdmission(prepareReplacement)
-    : await prepareReplacement();
-
-  try {
-    if (typeof opts.prepareGpuAdmission === "function") {
-      runtimeOpts = {
-        ...opts,
-        hostGpus: Array.isArray(gpuProbe.gpus) ? gpuProbe.gpus : [],
-      };
-      const admittedRuntimePreset = previewVllmRuntimePreset(runtimeOpts);
-      const admittedRuntimeImage = admittedRuntimePreset.image || CONFIG.image;
-      const admittedCompatibility = assessVllmRuntimeCompatibility({
-        probe: gpuCompatibilityProbe,
-        selectedGpuIds: runtimeOpts.gpuDeviceIds,
-        imageReference: admittedRuntimeImage,
-        imageMetadata: knownRuntimeImageMetadata(admittedRuntimeImage),
-        hostPlatform: process.platform,
-        hostArch: process.arch,
-        allowAnyCompatibleGpu: false,
-      });
-      for (const item of admittedCompatibility.findings) {
-        appendLog(job, `Admitted GPU compatibility [${item.severity}]: ${item.title}: ${item.detail}`);
-      }
-      if (!admittedCompatibility.ok) {
-        const issues = admittedCompatibility.findings
-          .filter((item) => item.severity === "fail")
-          .map((item) => item.detail);
-        setJobProgress(job, {
-          percent: 30,
-          stage: "最终 GPU 与 vLLM 运行时不兼容",
-          detail: issues.join("；") || admittedCompatibility.summary,
-          state: "fail",
-          issues,
-        });
-        const error = new Error(`admission 选定的 GPU 未通过 vLLM 运行时硬校验：${issues.join("；") || admittedCompatibility.summary}`);
-        error.code = "vllm_runtime_incompatible";
-        error.findings = admittedCompatibility.findings;
-        throw error;
-      }
-      ({ runArgs, activePublishArgs, runtimeImage, runtimeEngine, secretEnv } = buildVllmRuntimeCommand(job, runtimeOpts));
-      trackLaunch(() => launchStore.recordCommand(job.meta?.launchId, runArgs, { redact: (argv) => runtimeSecretRedactor.redactValue(argv) }));
-    }
-    setJobProgress(job, {
-      percent: 32,
-      stage: "启动 Docker 容器",
-      detail: "Docker run 已开始；旧模型容器已保留为回滚点。",
-    });
-    const redactedLaunchCommand = `docker ${redactDockerArgs(runArgs, opts).join(" ")}`;
-    job.meta = {
-      ...(job.meta || {}),
-      launchCommand: redactedLaunchCommand,
-      runtimeLaunchStarted: true,
-      runtimeContainerCreated: false,
-    };
-    scheduleJobsSave(0);
-    appendLog(job, `> ${redactedLaunchCommand}`);
-    assertStartJobActive(job);
-    // DockerHost.create runs it: every attempt, including the name-conflict and
-    // LAN-bind retries, gets the secret env, with WSLENV under WSL (08 P0-4).
-    const launched = await dockerHost.create({ runArgs, publish: activePublishArgs, name: targetContainerName }, {
-      secretEnv,
-      lanFallback: opts.networkAccess === "lan",
-      bindRetryPublish: () => dockerPublishArgs(opts.port, "lan", "0.0.0.0"),
-      onRetry: (retry) => {
-        if (retry.kind === "name-conflict") {
-          appendLog(job, `容器名冲突，清理本次残留容器后重试：${retry.error.stderr || retry.error.message}`);
-          return;
-        }
-        activePublishArgs = retry.publish;
-        appendLog(job, `Docker specific LAN IP publish failed; retrying with wildcard bind. Original error: ${retry.error.stderr || retry.error.message}`);
-        appendLog(job, `Docker publish fallback: ${formatDockerPublishArgs(activePublishArgs)}`);
-        appendLog(job, `> docker ${redactDockerArgs(retry.runArgs, opts).join(" ")}`);
-      },
-    });
-    job.meta = { ...(job.meta || {}), runtimeContainerCreated: true };
-    scheduleJobsSave(0);
-    assertStartJobActive(job);
-    appendLog(job, launched.stdout || launched.stderr);
-
-    setJobProgress(job, {
-      percent: 45,
-      stage: "等待模型加载",
-      detail: `容器已创建，正在等待 ${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} API 返回 /v1/models。`,
-    });
-    const startTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_TIMEOUT_MS || 60 * 60 * 1000));
-    // Large RAM-PLE checkpoints on Windows bind mounts can spend more than
-    // ten minutes inside a quiet read. Keep the overall startup timeout and
-    // dead-container checks, but do not apply the small-model quiet limit.
-    const stallTimeoutMs = Math.max(60000, Number(process.env.VLLM_START_STALL_TIMEOUT_MS
-      || core.engines.recipes.stallMsForPreset(runtimePreset, recipeStore)
-      || 10 * 60 * 1000));
-    const result = await core.waitForRuntimeReady({
-      job,
-      port: opts.port,
-      apiKey: opts.vllmApiKey,
-      serviceUrl: opts.serviceUrl,
-      engineName: runtimeEngine === "sglang" ? "SGLang" : "vLLM",
-      apiLabel: `${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} API`,
-      containerName: targetContainerName,
-      startupTimeoutMs: startTimeoutMs,
-      stallTimeoutMs,
-      // Lifecycle readiness must bypass the short status cache: immediately
-      // after `docker run`, a cached "missing" result would make rollback
-      // kill the newly-created container before its first status refresh.
-      fetchServedModels: () => getServedModelsFresh(opts.port, opts.vllmApiKey),
-      getContainerStatus: getContainerStatusFresh,
-      docker,
-      // Log reads go through the DockerHost (01 §13); same `docker logs --tail N`.
-      readLogs: dockerHost.logs,
-      extractLogIssues,
-      setJobProgress,
-      appendLog,
-      finishJob,
-      delayFn: delay,
-      probeRuntime: ({ servedModels }) => core.probeOpenAiGeneration({
-        fetchImpl: fetch,
-        servedModels,
-        port: opts.port,
-        apiKey: opts.vllmApiKey,
-        timeoutMs: Math.max(30000, Number(process.env.VLLM_READY_PROBE_REQUEST_TIMEOUT_MS || 180000)),
-        maxTokens: 32,
-      }),
-      readyProbeTimeoutMs: Math.max(60000, Number(process.env.VLLM_READY_PROBE_TIMEOUT_MS || 5 * 60 * 1000)),
-      noLogIssue: `${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} 启动日志长时间无变化。`,
-      pollDetail: ({ elapsed, formatElapsed }) => `已等待 ${formatElapsed(elapsed)}。正在轮询 ${runtimeEngine === "sglang" ? "SGLang" : "vLLM"} API，并读取容器日志检查错误。`,
-    });
-    const replacementCommit = await replacement.commit().catch((error) => {
-      appendLog(job, `新模型已就绪，但清理回滚快照失败：${error.message}`);
-      return null;
-    });
-    if (replacementCommit?.committed && previousRuntimeApiKeyRef && previousRuntimeApiKeyRef !== opts.runtimeApiKeyRef) {
-      await runtimeApiKeyStore.remove(previousRuntimeApiKeyRef).catch(() => {});
-    }
-    clearGatewayRuntimeCache();
-    clearRuntimeInstancesCache();
-    return result;
-  } catch (error) {
-    const rollback = await replacement.rollback(error).catch((rollbackError) => ({ rollbackError }));
-    if (rollback?.restoredPrevious) appendLog(job, `新模型启动失败，已恢复原容器 ${targetContainerName}。`);
-    else if (rollback?.rollbackError) appendLog(job, `自动回滚失败：${rollback.rollbackError.message}`);
-    throw error;
-  }
-}
-
-function buildVllmImagePullOptions(env = process.env) {
-  return {
-    attempts: Math.max(1, Number(env.VLLM_IMAGE_PULL_RETRIES || 3)),
-    initialDelayMs: Math.max(0, Number(env.VLLM_IMAGE_PULL_RETRY_DELAY_MS || 3000)),
-    platform: CONFIG.imagePlatform,
-  };
-}
-
-function assertStartJobActive(job) {
-  if (job?.status === "running" && !job?.meta?.cancelRequested) return;
-  const error = new Error("启动任务已被取消，停止后续容器操作。");
-  error.code = "START_CANCELLED";
-  throw error;
+  return runtimeSupervisor.start({ job, run: vllmRunContext(opts), source: job.meta?.launchSource || "api" });
 }
 
 function delay(ms) {
@@ -5725,6 +5421,10 @@ module.exports = {
   app,
   CONFIG,
   engineRegistry,
+  runtimeSupervisor,
+  vllmRunContext,
+  getContainerStatusFresh,
+  getServedModelsFresh,
   instanceMetricsSampler,
   startManager,
   shutdownManager,
@@ -5778,7 +5478,7 @@ module.exports = {
   getModelConfigRequest,
   buildVllmMemoryEstimate,
   buildServerMemoryEstimate,
-  buildVllmImagePullOptions,
+  buildVllmImagePullOptions: (env = process.env) => imagePullOptionsFor(env, CONFIG.imagePlatform),
   checkModelCompatibility,
   knownRuntimeImageMetadata,
   resolveVllmRuntimePreset,

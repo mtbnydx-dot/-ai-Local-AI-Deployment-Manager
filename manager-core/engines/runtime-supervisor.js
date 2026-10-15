@@ -40,7 +40,10 @@
 //                      after admission when the admitted GPUs changed it
 //   redactArgs(argv) → redacted argv for job.meta.launchCommand and the log
 //   lanFallback, bindRetryPublish(error, publish)
-//   imagePolicy      "auto" (default) | "explicit"; onMissingImage({image, status})
+//   imagePolicy      "auto" (default) | "explicit" | (image) => policy;
+//                    onMissingImage({image, status}); pullOptions, pullLog
+//   preflight(job, { progress })   engine checks before anything changes
+//   gate             { releaseFor, options, allowAnyCompatibleGpu, errorCode }
 //   prepareAdmission(prepare) → checkpoint   caller-owned replace admission
 //   admissionRequest, lease                  supervisor-owned admission
 //   apiKeyRef, cleanup "supervisor" (default) | "caller"
@@ -49,12 +52,15 @@
 //           readyProbeMs, probeRequestMs, timeoutBudgetLog }
 //   plan, paramsKey, runtimeId, contentDigest   (afterReady context)
 
+const crypto = require("node:crypto");
 const { summarizeJob } = require("../job-routes");
 const runtimeManifest = require("../runtime-manifest");
 const { waitForRuntimeReady } = require("../runtime-wait");
 const { createProgressInferer, extractLogFacts, mergeLogFacts } = require("./log-phases");
 const { probeOpenAiGeneration } = require("../runtime-request-utils");
 const { redactSecrets } = require("../secret-redactor");
+const { BASE32_ALPHABET } = require("../telemetry/ids");
+const { isLocalBuildImage } = require("./hosts/docker");
 
 const LIFECYCLE_PHASES = Object.freeze(["pull", "admission", "container", "weights", "kv", "graphs", "api", "probe", "ready"]);
 const GATE_POLICIES = Object.freeze(["enforce", "warn"]);
@@ -72,6 +78,8 @@ const STAGES = Object.freeze({
   waitReady: Object.freeze({ phase: "weights", percent: 45, zh: "等待模型加载", en: "Waiting for the model to load" }),
   probe: Object.freeze({ phase: "probe", percent: 96, zh: "生成自检", en: "Generation self-check" }),
   commit: Object.freeze({ phase: "ready", percent: 100, zh: "服务已就绪", en: "Ready" }),
+  // The pull job's only stage (pullRuntime).
+  pull: Object.freeze({ phase: "pull", percent: 0, zh: "拉取镜像", en: "Pulling image" }),
 });
 
 // The failure code of a stage when the error carries none of its own.
@@ -86,6 +94,7 @@ const STAGE_FAILURE_CODES = Object.freeze({
   waitReady: "ready_timeout",
   probe: "probe_failed",
   commit: "commit_failed",
+  pull: "image_pull_failed",
 });
 
 const FACT_LOG_LINES = 2000;
@@ -95,6 +104,8 @@ const APIKEY_REF_LABEL = "ai.manager.api-key-ref";
 const LEASE_LABEL = "ai.manager.gpu-admission-lease";
 const RUNTIME_ID_LABEL = "ai.manager.runtime-id";
 const DEFAULT_AFTER_READY_MS = 30000;
+const PULL_JOB_TYPE = "image-pull";
+const PULL_JOB_ID_PATTERN = /^dl_[a-z2-7]{20}$/;
 
 const DEFAULT_TEXTS = Object.freeze({
   queuedLog: "已有启动任务进行中，排队等待其完成后再启动，避免容器名冲突。",
@@ -123,6 +134,23 @@ function textOf(value) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Pull job id (00 §9.2): dl_ + 20 base32 characters (100 random bits). */
+function newPullJobId(random = crypto.randomBytes) {
+  let output = "";
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of random(13)) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5 && output.length < 20) {
+      bits -= 5;
+      output += BASE32_ALPHABET[(buffer >> bits) & 31];
+    }
+    buffer &= (1 << bits) - 1;
+  }
+  return `dl_${output}`;
 }
 
 function supervisorError(code, message, status, extra = {}) {
@@ -254,21 +282,36 @@ async function probeNvidiaCompatibility(execFileAsync) {
  * manifest release (minimumComputeCapability, minimumBlackwellCudaVersion,
  * minimumDriverVersions, platform). → { ok, status, findings, gpus, summary }.
  * Whether a failure blocks is the caller's policy (enforce | warn).
+ *
+ * Generalised from vllm-manager's runtime-compatibility.js, whose behaviour
+ * these optional knobs reproduce:
+ *   allowAnyCompatibleGpu  an implicit single-GPU selection passes when any
+ *                          GPU is compatible (admission picks one; the
+ *                          admitted id is hard-checked again before create)
+ *   fallbackRelease        minimumComputeCapability / minimumBlackwellCudaVersion
+ *                          used when the release (or no release) declares none
+ *   checkImagePin          adds the "Immutable image pin" finding
+ *   unknownRelease         { title, detail } of the unknown-image warning
+ *   describeRelease(r)     the release part of the summary
  */
 function assessRuntimeGate(options = {}) {
   const probe = options.probe || {};
   const release = isPlainObject(options.release) ? options.release : null;
+  const fallback = isPlainObject(options.fallbackRelease) ? options.fallbackRelease : {};
   const imageReference = textOf(options.imageReference);
   const engineLabel = textOf(options.engineLabel) || "The runtime";
   const hostPlatform = textOf(options.hostPlatform) || process.platform;
   const hostArch = normalizeArchitecture(options.hostArch || process.arch);
-  const requested = Array.from(new Set((Array.isArray(options.selectedGpuIds) ? options.selectedGpuIds : [])
-    .map((id) => textOf(id)).filter(Boolean)));
+  const requestedInput = Array.isArray(options.selectedGpuIds) ? options.selectedGpuIds : String(options.selectedGpuIds || "").split(",");
+  const requested = Array.from(new Set(requestedInput.map((id) => textOf(id)).filter(Boolean)));
   const findings = [];
   const finding = (severity, title, detail) => findings.push({ severity, title, detail });
-  const finalize = (gpus) => {
-    const failures = findings.filter((item) => item.severity === "fail");
-    const warnings = findings.filter((item) => item.severity === "warn");
+  const describeRelease = typeof options.describeRelease === "function"
+    ? options.describeRelease
+    : (known) => `${known.version || "known build"}`;
+  const finalize = (gpus, list = findings) => {
+    const failures = list.filter((item) => item.severity === "fail");
+    const warnings = list.filter((item) => item.severity === "warn");
     const gpuSummary = gpus.map((gpu) => `${gpu.name || `GPU ${gpu.index}`} (SM ${gpu.computeCapability || "?"}, driver ${gpu.driverVersion || "?"})`).join("; ");
     return {
       ok: failures.length === 0,
@@ -276,30 +319,40 @@ function assessRuntimeGate(options = {}) {
       imageReference,
       release,
       gpus,
-      findings,
-      summary: `${release ? `${release.version || "known build"}` : "custom image metadata unknown"}; ${gpuSummary || "no compatible GPU"}`,
+      findings: list,
+      summary: `${release ? describeRelease(release) : "custom image metadata unknown"}; ${gpuSummary || "no compatible GPU"}`,
     };
   };
+  const gpuIdOf = (gpu) => String(gpu.id ?? gpu.index);
 
   if (!probe.ok || !Array.isArray(probe.gpus) || !probe.gpus.length) {
     finding("fail", "NVIDIA GPU probe", probe.error || `${engineLabel} requires an NVIDIA GPU, but none was detected.`);
     return finalize([]);
   }
+  if (options.allowAnyCompatibleGpu && !requested.length) {
+    const single = (ids) => assessRuntimeGate({ ...options, allowAnyCompatibleGpu: false, selectedGpuIds: ids });
+    const compatibleIds = probe.gpus.filter((gpu) => single([gpuIdOf(gpu)]).ok).map(gpuIdOf);
+    if (compatibleIds.length) {
+      const compatible = single(compatibleIds);
+      const rejected = probe.gpus.filter((gpu) => !compatibleIds.includes(gpuIdOf(gpu)));
+      return finalize(compatible.gpus, [
+        ...compatible.findings,
+        { severity: "ok", title: "Automatic GPU candidate selection", detail: `At least one compatible GPU is available for single-GPU admission: ${compatibleIds.join(", ")}. The admitted device will be checked again before container creation.` },
+        ...(rejected.length ? [{ severity: "warn", title: "Excluded GPU candidates", detail: `Incompatible automatic candidates were excluded from this early check: ${rejected.map(gpuIdOf).join(", ")}.` }] : []),
+      ]);
+    }
+  }
   const selected = requested.length
-    ? probe.gpus.filter((gpu) => requested.includes(String(gpu.id ?? gpu.index)))
+    ? probe.gpus.filter((gpu) => requested.includes(gpuIdOf(gpu)))
     : probe.gpus;
-  const missing = requested.filter((id) => !probe.gpus.some((gpu) => String(gpu.id ?? gpu.index) === id));
+  const missing = requested.filter((id) => !probe.gpus.some((gpu) => gpuIdOf(gpu) === id));
   if (missing.length) finding("fail", "GPU selection", `Selected GPU ${missing.join(", ")} is not reported by nvidia-smi.`);
   if (!selected.length) {
     finding("fail", "GPU selection", "No selected NVIDIA GPU remains after compatibility filtering.");
     return finalize(selected);
   }
-  if (!release) {
-    finding("warn", "Image metadata", `${imageReference || "The configured image"} is not in the runtime manifest; its CUDA and driver requirements cannot be verified automatically.`);
-    return finalize(selected);
-  }
 
-  const minimumCompute = Number(release.minimumComputeCapability);
+  const minimumCompute = Number(release?.minimumComputeCapability || fallback.minimumComputeCapability);
   if (Number.isFinite(minimumCompute) && minimumCompute > 0) {
     for (const gpu of selected) {
       const capability = Number(gpu.computeCapability);
@@ -312,6 +365,19 @@ function assessRuntimeGate(options = {}) {
       }
     }
   }
+  if (options.checkImagePin) {
+    if (!/@sha256:[0-9a-f]{64}$/i.test(imageReference)) {
+      finding("warn", "Immutable image pin", `${imageReference || "The configured image"} is not pinned to a Docker content digest.`);
+    } else {
+      finding("ok", "Immutable image pin", imageReference);
+    }
+  }
+  if (!release) {
+    const unknown = isPlainObject(options.unknownRelease) ? options.unknownRelease : {};
+    finding("warn", textOf(unknown.title) || "Image metadata", textOf(unknown.detail)
+      || `${imageReference || "The configured image"} is not in the runtime manifest; its CUDA and driver requirements cannot be verified automatically.`);
+    return finalize(selected);
+  }
 
   const imageArch = normalizeArchitecture(String(release.platform || "").split("/").at(-1));
   if (imageArch && hostArch && imageArch !== hostArch) {
@@ -320,10 +386,10 @@ function assessRuntimeGate(options = {}) {
     finding("ok", "Container architecture", `${release.platform} matches this host.`);
   }
 
-  const blackwellMinimumCuda = textOf(release.minimumBlackwellCudaVersion);
+  const cudaVersion = textOf(release.cudaVersion);
+  const blackwellMinimumCuda = textOf(release.minimumBlackwellCudaVersion || fallback.minimumBlackwellCudaVersion);
   const blackwell = selected.filter((gpu) => Number(gpu.computeCapability) >= 10);
   if (blackwellMinimumCuda && blackwell.length) {
-    const cudaVersion = textOf(release.cudaVersion);
     if (compareVersions(cudaVersion, blackwellMinimumCuda) < 0) {
       finding("fail", "Blackwell CUDA runtime", `SM ${blackwell.map((gpu) => gpu.computeCapability).join(", ")} requires CUDA ${blackwellMinimumCuda} or newer; the image declares CUDA ${cudaVersion || "unknown"}.`);
     } else {
@@ -333,14 +399,16 @@ function assessRuntimeGate(options = {}) {
 
   const requiredDriver = textOf(release.minimumDriverVersions?.[hostPlatform] || release.minimumDriverVersions?.linux);
   const driverVersions = Array.from(new Set(selected.map((gpu) => textOf(gpu.driverVersion || probe.driverVersion)).filter(Boolean)));
+  // The driver minimum belongs to the image's CUDA when the release declares one.
+  const driverSubject = cudaVersion ? `CUDA ${cudaVersion}` : engineLabel;
   if (!driverVersions.length) {
     finding("warn", "NVIDIA driver", "Driver version was not reported; CUDA runtime compatibility cannot be fully verified.");
   } else if (requiredDriver) {
     const unsupported = driverVersions.filter((version) => compareVersions(version, requiredDriver) < 0);
     if (unsupported.length) {
-      finding("fail", "NVIDIA driver", `${engineLabel} requires driver ${requiredDriver} or newer on ${hostPlatform}; detected ${unsupported.join(", ")}.`);
+      finding("fail", "NVIDIA driver", `${driverSubject} requires driver ${requiredDriver} or newer on ${hostPlatform}; detected ${unsupported.join(", ")}.`);
     } else {
-      finding("ok", "NVIDIA driver", `Driver ${driverVersions.join(", ")} satisfies the minimum (${requiredDriver}).`);
+      finding("ok", "NVIDIA driver", `Driver ${driverVersions.join(", ")} satisfies the ${cudaVersion ? `CUDA ${cudaVersion} ` : ""}minimum (${requiredDriver}).`);
     }
   }
   return finalize(selected);
@@ -527,6 +595,9 @@ function createRuntimeSupervisor(options = {}) {
   async function preflight(job, run, state) {
     state.stageKey = "preflight";
     progress(job, "preflight", { percent: 3, stage: texts.prepareStage, detail: texts.prepareDetail(run) });
+    // Engine-specific checks that change nothing (vLLM: the model and preset
+    // preflight). They may report their own fail progress and throw.
+    if (typeof run.preflight === "function") await run.preflight(job, { progress: (patch) => progress(job, "preflight", patch) });
 
     const managed = typeof host.list === "function"
       ? await host.list({ ownerLabelValue: "" }).catch(() => [])
@@ -573,16 +644,32 @@ function createRuntimeSupervisor(options = {}) {
     return { skipped: false };
   }
 
-  async function runtimeGate(job, run, command, { policy, label, stageKey, percent }) {
+  // The GPUs the launch runs on now: the run options are the caller's live
+  // object, so an admission that picked the devices shows up here.
+  function currentGpuIds(run) {
+    return Array.isArray(run.options?.gpuDeviceIds) ? run.options.gpuDeviceIds : run.gpuIds;
+  }
+
+  // run.gate (optional) adapts the gate to an engine: releaseFor(image),
+  // options (the assessRuntimeGate knobs), allowAnyCompatibleGpu (boolean or
+  // (run) => boolean, only before admission) and errorCode.
+  async function runtimeGate(job, run, command, { policy, label, stageKey, percent, admitted = false }) {
     if (typeof probes.nvidiaCompatibility !== "function") return null;
+    const gate = isPlainObject(run.gate) ? run.gate : {};
     const probe = await Promise.resolve().then(() => probes.nvidiaCompatibility()).catch((error) => ({ ok: false, gpus: [], error: error.message }));
-    const release = run.runtimeRelease !== undefined ? run.runtimeRelease : (safe("runtime lookup", () => runtimeForImage(command.image)) || null)?.release || null;
+    let release;
+    if (typeof gate.releaseFor === "function") release = safe("runtime lookup", () => gate.releaseFor(command.image)) || null;
+    else if (run.runtimeRelease !== undefined) release = run.runtimeRelease;
+    else release = (safe("runtime lookup", () => runtimeForImage(command.image)) || null)?.release || null;
+    const allowAny = typeof gate.allowAnyCompatibleGpu === "function" ? gate.allowAnyCompatibleGpu(run) : gate.allowAnyCompatibleGpu;
     const assessment = assessRuntimeGate({
+      ...(isPlainObject(gate.options) ? gate.options : {}),
       probe,
       release,
       imageReference: command.image,
       engineLabel: run.engineName,
-      selectedGpuIds: run.gpuIds,
+      selectedGpuIds: currentGpuIds(run),
+      allowAnyCompatibleGpu: !admitted && Boolean(allowAny),
     });
     for (const item of assessment.findings) log(job, `${label} [${item.severity}]: ${item.title}: ${item.detail}`);
     if (assessment.ok) return assessment;
@@ -598,7 +685,7 @@ function createRuntimeSupervisor(options = {}) {
       state: "fail",
       issues,
     });
-    throw supervisorError("runtime_incompatible", `${run.engineName} 运行时预检失败：${issues.join("；") || assessment.summary}`, 409, { findings: assessment.findings });
+    throw supervisorError(textOf(gate.errorCode) || "runtime_incompatible", `${run.engineName} 运行时预检失败：${issues.join("；") || assessment.summary}`, 409, { findings: assessment.findings });
   }
 
   function buildCommand(job, run, state) {
@@ -621,13 +708,20 @@ function createRuntimeSupervisor(options = {}) {
     state.stageKey = "image";
     const image = state.command.image;
     if (!image) return;
+    // run.pullOptions: attempts, initialDelayMs, platform of the implicit pull;
+    // run.pullLog: { attempt(info), failure(info) } → the manager's log lines.
+    const pullLog = isPlainObject(run.pullLog) ? run.pullLog : {};
     const ensured = await host.ensureImage(image, {
-      policy: run.imagePolicy || "auto",
+      ...(isPlainObject(run.pullOptions) ? run.pullOptions : {}),
+      policy: (typeof run.imagePolicy === "function" ? run.imagePolicy(image) : run.imagePolicy) || "auto",
       onMissing: async (missing) => {
         if (typeof run.onMissingImage === "function") await run.onMissingImage(missing);
         log(job, `Runtime image preflight: ${missing.status?.text || image}. Pulling before current model is stopped.`);
       },
-      onAttempt: ({ attempt, attempts, image: pulling }) => log(job, `正在拉取镜像 ${pulling}（第 ${attempt}/${attempts} 次）`),
+      onAttempt: (info) => log(job, typeof pullLog.attempt === "function"
+        ? pullLog.attempt(info)
+        : `正在拉取镜像 ${info.image || image}（第 ${info.attempt}/${info.attempts} 次）`),
+      ...(typeof pullLog.failure === "function" ? { onFailure: (info) => log(job, pullLog.failure(info)) } : {}),
     });
     if (ensured.pulled) log(job, ensured.result?.stdout || ensured.result?.stderr || `Pulled ${image}.`);
   }
@@ -910,7 +1004,7 @@ function createRuntimeSupervisor(options = {}) {
     if (typeof probes.gpuStatus !== "function") return null;
     const status = await Promise.resolve().then(() => probes.gpuStatus()).catch(() => null);
     const gpus = Array.isArray(status?.gpus) ? status.gpus : [];
-    const ids = (run.gpuIds || []).map(textOf).filter(Boolean);
+    const ids = (currentGpuIds(run) || []).map(textOf).filter(Boolean);
     const selected = ids.length ? gpus.filter((gpu) => ids.includes(String(gpu.id ?? gpu.index))) : gpus;
     const used = selected.map((gpu) => Number(gpu.usedMb)).filter(Number.isFinite);
     return used.length ? used.reduce((sum, value) => sum + value, 0) : null;
@@ -1019,7 +1113,7 @@ function createRuntimeSupervisor(options = {}) {
         progress(job, "replan", { percent: 30, stage: texts.checkpointStage, detail: `已获得显存准入，正在按准入的 GPU 重建 ${run.engineName} 启动命令。` });
         const rebuilt = buildCommand(job, run, state);
         if (runtimeGatePolicy === "enforce") {
-          await runtimeGate(job, run, rebuilt, { policy: "enforce", label: "Admitted GPU compatibility", stageKey: "replan", percent: 30 });
+          await runtimeGate(job, run, rebuilt, { policy: "enforce", label: "Admitted GPU compatibility", stageKey: "replan", percent: 30, admitted: true });
         }
         assertActive(job);
       }
@@ -1065,9 +1159,105 @@ function createRuntimeSupervisor(options = {}) {
     return result;
   }
 
+  // ---- pull jobs (01 §14 "Pull jobs", §21) ----
+
+  // image → its running pull job, so a second request joins it.
+  const pulls = new Map();
+
+  function pullStageText(image, percent) {
+    return { zh: `正在拉取镜像 ${image}：${percent}%`, en: `Pulling image ${image}: ${percent}%` };
+  }
+
+  /**
+   * POST /api/runtimes/:runtimeId/pull: `docker pull` as a job of type
+   * image-pull with id dl_<base32> and the single stage `pull`. Layer
+   * progress becomes the job percent and goes out as `jobs` events. It
+   * resolves to { job, existing } once the job exists and the pull runs on;
+   * while a pull of the same image runs, a request gets that job with
+   * existing:true. It never touches a container, a lease or a start queue.
+   * options.resolveRuntime(runtimeId) → { runtimeId, image, localBuild } or
+   * throws unknown_runtime; a local build is refused with runtime_local_build.
+   */
+  async function pullRuntime(runtimeId, pullOptions = {}) {
+    const id = textOf(runtimeId);
+    if (typeof options.resolveRuntime !== "function" || typeof jobs.createJob !== "function" || typeof host.pull !== "function") {
+      throw supervisorError("pull_unavailable", "Runtime image pulls are not available on this manager.", 503);
+    }
+    const runtime = options.resolveRuntime(id);
+    const image = textOf(runtime?.image);
+    if (!runtime || !image) throw supervisorError("unknown_runtime", `Unknown runtime: ${id || "(none)"}.`, 404);
+    if (runtime.localBuild || isLocalBuildImage(image)) {
+      throw supervisorError("runtime_local_build",
+        `运行时镜像 ${image} 由本机构建，无法拉取 / ${image} is built on this machine and cannot be pulled`,
+        422,
+        { hint: "请按运行时说明在本机重新构建该镜像 / Rebuild the image on this machine as its runtime notes describe" });
+    }
+    const running = pulls.get(image);
+    if (running && ["running", "queued"].includes(running.status)) return { job: running, existing: true };
+
+    const source = textOf(pullOptions.source) || "api";
+    const job = jobs.createJob(PULL_JOB_TYPE, `拉取镜像 / Pull ${image}`, {
+      runtimeId: textOf(runtime.runtimeId) || id,
+      engineId: textOf(runtime.engineId) || null,
+      image,
+      source,
+    }, { id: newPullJobId(options.random) });
+    pulls.set(image, job);
+    const platform = textOf(pullOptions.platform ?? options.imagePlatform ?? runtime.release?.platform);
+    let last = "";
+    const report = (snapshot = {}) => {
+      const percent = Math.max(0, Math.min(100, Math.round(Number(snapshot.percent) || 0)));
+      const layersTotal = Number(snapshot.layersTotal) || 0;
+      const layersDone = Number(snapshot.layersDone) || 0;
+      const fingerprint = `${percent}|${layersDone}|${layersTotal}`;
+      if (fingerprint === last) return;
+      last = fingerprint;
+      const stageText = pullStageText(image, percent);
+      enterPhase(job, "pull");
+      jobs.setJobProgress(job, {
+        percent,
+        stage: stageText.zh,
+        detail: layersTotal ? `${layersDone}/${layersTotal} layers` : stageText.en,
+        layersTotal,
+        layersDone,
+        phase: "pull",
+        stageKey: "pull",
+        stageText,
+      });
+      emitJob(job);
+    };
+    report({ percent: 0 });
+    log(job, `> docker pull ${platform ? `--platform ${platform} ` : ""}${image}`);
+    Promise.resolve()
+      .then(() => host.pull(image, { platform, onProgress: report }))
+      .then((result) => {
+        if (result?.digest) log(job, `Digest: ${result.digest}`);
+        report({ percent: 100 });
+        closePhase(job.lifecycle);
+        jobs.finishJob(job, { image, runtimeId: job.meta.runtimeId, digest: result?.digest || null });
+        emitJob(job, { force: true });
+      }, async (error) => {
+        if (error?.stderr) log(job, error.stderr);
+        try {
+          job.failure = await buildFailure(job, error, { stageKey: "pull", containerCreated: false, secretValues: [], engineId: job.meta.engineId });
+        } catch {
+          job.failure = { code: errorCodeOf(error) || "image_pull_failed", signatureId: null, phase: "pull", hint: null, logExcerpt: "" };
+        }
+        closePhase(job.lifecycle);
+        if (typeof jobs.failJob === "function") jobs.failJob(job, error);
+        emitJob(job, { force: true });
+      })
+      .finally(() => {
+        if (pulls.get(image) === job) pulls.delete(image);
+        if (typeof pullOptions.onSettled === "function") safe("pull onSettled", () => pullOptions.onSettled(job));
+      });
+    return { job, existing: false };
+  }
+
   return {
     config,
     start,
+    pullRuntime,
     emitInstances,
     emitJob,
     assessRuntimeGate,
@@ -1080,10 +1270,15 @@ module.exports = {
   INSTANCE_MODES,
   STAGES,
   STAGE_FAILURE_CODES,
+  PULL_JOB_TYPE,
+  PULL_JOB_ID_PATTERN,
   LOG_EXCERPT_LINES,
   LOG_EXCERPT_BYTES,
   createRuntimeSupervisor,
   assessRuntimeGate,
+  compareVersions,
+  normalizeArchitecture,
+  newPullJobId,
   probeNvidiaCompatibility,
   parseNvidiaCompatibilityCsv,
   labelsFromArgs,

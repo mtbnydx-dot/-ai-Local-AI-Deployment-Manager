@@ -71,6 +71,7 @@ module.exports = {
   buildEngineSchemaPayload: routes.buildEngineSchemaPayload,
   validateDraftRequest: routes.validateDraftRequest,
   readInstanceMetrics: routes.readInstanceMetrics,
+  findHostedRuntime: routes.findHostedRuntime,
   // Parameter catalogs (01 §9), the expression language recipes and catalogs
   // share (01 §10.2), and the legacy alias table (01 §9.5).
   paramCatalog,
