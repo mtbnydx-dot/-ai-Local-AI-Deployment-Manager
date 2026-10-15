@@ -219,9 +219,12 @@ test("a page that is not in the build shows the still-being-built page, and a re
     await expect(page.getByRole("link", { name: "Open the classic console" })).toHaveAttribute("href", "/classic");
     await expect(byId(page, "app-shell.update")).toHaveCount(0);
 
+    // Leave the unbuilt page first: the link of the page already shown does not navigate.
+    await nav(page).getByRole("link", { name: "System" }).click();
+    await expect(byId(page, "app-shell.pending")).toHaveCount(0);
     redeployed = true;
-    // Any page that is still not in the build will do (Audit was built by CON-18).
-    await nav(page).getByRole("link", { name: "Models" }).click();
+    // Any page that is still not in the build will do (Models is the one top-level page left).
+    await nav(page).getByRole("link", { name: "Models", exact: true }).click();
     await expect(byId(page, "app-shell.update")).toBeVisible();
     await expect(byId(page, "app-shell.update")).toContainText("The console was updated. Reload to use the new version.");
   } finally {
