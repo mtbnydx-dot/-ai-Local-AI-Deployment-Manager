@@ -944,6 +944,7 @@ async function startServiceEntry() {
   await startTelemetry({
     managers: MANAGERS,
     managerClient: routeMounts.ctx.managerClient,
+    getFleetCatalogs: () => getFleetCatalogs(),
     events: routeMounts.ctx.bus,
     processExitLog: PROCESS_EXIT_LOG,
   }).then((runtime) => {
