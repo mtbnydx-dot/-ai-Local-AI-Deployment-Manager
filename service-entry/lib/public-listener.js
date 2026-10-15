@@ -8,7 +8,10 @@
 // PUB-6 owns the skeleton: the Host allowlist, the cookie rule, /healthz,
 // /gateway/health, /robots.txt and the route classification. What answers a
 // route is injected, so later packages plug in without touching the table:
-//   deps.gateway(req, res, url, route)   key routes (the shared pipeline, 08)
+//   deps.gateway(req, res, url, route)   key routes (the shared pipeline, 08);
+//                                        route.gatewayPath is the ADMIN-form path
+//                                        and route.api the §8.1 mapping
+//                                        (lib/public-api.js, PUB-12)
 //   deps.portal.handle(req, res, url, route) -> boolean   portal shell,
 //                                        /assets/<buildId>/*, the *.json routes
 //                                        (lib/portal-routes.js, PUB-15: the asset
@@ -30,6 +33,7 @@
 // portal, and 503 service_unavailable for the key routes.
 
 const core = require("../../manager-core");
+const { gatewayPathFor, mapPublicRoute } = require("./public-api");
 const { newRequestId, sendPublicError } = require("./public-errors");
 
 const PORTAL_SHELL_PATHS = new Set(["/", "/status", "/models", "/docs", "/me", "/playground", "/announcements"]);
@@ -39,11 +43,6 @@ const PROBE_JSON_PATH = "/status.json";
 const MODEL_PAGE_RE = /^\/models\/[^/]+$/;
 const DOC_PAGE_RE = /^\/docs\/[a-z0-9][a-z0-9-]{0,63}$/;
 const ASSET_RE = /^\/assets\/[A-Za-z0-9._-]+\/.+$/;
-const ENGINE_ID = "[A-Za-z0-9][A-Za-z0-9._@-]{0,63}";
-// tts, mcp and search are gateway namespaces of their own, never engine ids.
-const GATEWAY_KEY_RE = new RegExp(`^/gateway/(?:auto|vllm|llama|external/${ENGINE_ID}|(?!(?:tts|mcp|search|health|status|me)/)${ENGINE_ID})/(?:openai|claude|opencode)(?:/.*)?$`);
-const GATEWAY_FIXED_KEY_PATHS = new Set(["/gateway/status", "/gateway/me", "/gateway/tts/openai/v1/audio/speech"]);
-const API_PREFIX_RE = /^\/(?:v1|anthropic\/v1|vllm\/v1|llama\/v1)(?:\/.*)?$/;
 // The portal documents are public and cheap; status, catalog and announcements
 // are rebuilt at most every 15 s anyway (05 §12.2). portal-config follows the
 // Host (LAN-only deployments) and the build id.
@@ -56,8 +55,11 @@ const JSON_CACHE = {
 const ROBOTS_TXT = "User-agent: *\nDisallow: /v1/\nDisallow: /anthropic/\nDisallow: /me\nDisallow: /playground\n";
 
 // The kind of a PUBLIC request: "healthz", "gateway_health", "robots",
-// "portal" (shell), "asset", "json" (portal data), "key" (needs an API key)
-// or "not_found". Pure; only the method and the path decide.
+// "portal" (shell), "asset", "json" (portal data), "key" (needs an API key),
+// "method_not_allowed" (a key route with the wrong method; `allow` lists the
+// right ones) or "not_found". Pure; only the method and the path decide. A
+// key route carries its §8.1 mapping as `api` and the ADMIN-form path as
+// `gatewayPath`.
 function classifyPublicRoute(method, pathname) {
   const verb = String(method || "GET").toUpperCase();
   const path = String(pathname || "/");
@@ -70,24 +72,10 @@ function classifyPublicRoute(method, pathname) {
     if (ASSET_RE.test(path) && !path.includes("..")) return { kind: "asset" };
     if (PORTAL_JSON_PATHS.has(path)) return { kind: "json" };
   }
-  if (API_PREFIX_RE.test(path) || GATEWAY_FIXED_KEY_PATHS.has(path) || GATEWAY_KEY_RE.test(path)) {
-    return { kind: "key", gatewayPath: gatewayPathFor(path) };
-  }
-  return { kind: "not_found" };
-}
-
-// The ADMIN-form path the existing gateway code understands (08 §8.1 keeps
-// the engine filter of each public prefix). Until the shared pipeline lands,
-// /v1/* is /gateway/auto/openai/v1/* and the Anthropic routes use the claude
-// protocol.
-function gatewayPathFor(path) {
-  if (path.startsWith("/gateway/")) return path;
-  if (path === "/v1/audio/speech") return "/gateway/tts/openai/v1/audio/speech";
-  if (/^\/v1\/messages(?:\/.*)?$/.test(path)) return `/gateway/auto/claude${path}`;
-  if (path.startsWith("/anthropic/v1")) return `/gateway/auto/claude${path.slice("/anthropic".length)}`;
-  if (path.startsWith("/vllm/v1")) return `/gateway/vllm/openai${path.slice("/vllm".length)}`;
-  if (path.startsWith("/llama/v1")) return `/gateway/llama/openai${path.slice("/llama".length)}`;
-  return `/gateway/auto/openai${path}`;
+  const api = mapPublicRoute(verb, path);
+  if (!api) return { kind: "not_found" };
+  if (api.methodNotAllowed) return { kind: "method_not_allowed", allow: api.allow };
+  return { kind: "key", gatewayPath: api.gatewayPath, api };
 }
 
 function sendText(req, res, status, text, headers = {}) {
@@ -208,6 +196,8 @@ function createPublicListener({ security, gateway = null, portal = null, data = 
           if (portal && typeof portal.handle === "function" && (await portal.handle(req, res, url, route)) === true) return undefined;
           if (res.headersSent) return undefined;
           return notFound();
+        case "method_not_allowed":
+          return sendPublicError(req, res, "method_not_allowed", { requestId, headers: { allow: route.allow } });
         case "key":
           if (typeof gateway !== "function") return sendPublicError(req, res, "service_unavailable", { requestId });
           return await gateway(req, res, url, route);

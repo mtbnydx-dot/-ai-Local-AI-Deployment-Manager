@@ -4,7 +4,8 @@
 // table, the Host rules and the ADMIN forwarded-header policy. Everything
 // runs on port 0 over loopback; no upstream is reachable (entry-harness points
 // every manager port at a closed one). The key flow (a v2 principal reaching a
-// fake manager, limits, CORS) belongs to the packages that build the pipeline.
+// fake manager, limits, CORS; items 4-8, PUB-12) starts at "the key flow" below,
+// with fake managers on the ports the entry read at load.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -340,4 +341,310 @@ test("createPublicServer tags requests as public", async (t) => {
   const answer = await request(server.address().port, "/v1/models", { headers: { host: "127.0.0.1" } });
   assert.deepEqual(answer.json, { kind: "public", lanBound: false });
   assert.ok(server instanceof http.Server);
+});
+
+// ---- the key flow (05 §17.2 items 4-8, PUB-12) ------------------------------------
+
+// Two fake managers on the ports the entry read at load. They answer the
+// catalog, advertise hop v2 and record every proxied request; a chat request
+// waits for release while `hold` is set.
+const CORS_ORIGIN = "https://app.example.com";
+const upstream = { hits: [], held: [], hold: false, servers: [], ready: false };
+
+test.after(async () => {
+  upstream.hold = false;
+  while (upstream.held.length) upstream.held.shift()();
+  for (const server of upstream.servers) {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+function fakeManager(managerId, models) {
+  return http.createServer((req, res) => {
+    const url = new URL(req.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/api/instances") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ instances: [{ id: "primary", primary: true, running: true, status: "running", models }] }));
+    }
+    if (url.pathname === "/api/manager/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, gatewayTrust: { version: 2, mode: "warn" } }));
+    }
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      upstream.hits.push({ manager: managerId, method: req.method, url: req.url, headers: { ...req.headers }, body: Buffer.concat(chunks).toString("utf8") });
+      const answer = () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "cmpl-test", choices: [], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }));
+      };
+      if (upstream.hold && url.pathname.endsWith("/chat/completions")) upstream.held.push(answer);
+      else answer();
+    });
+    return undefined;
+  });
+}
+
+async function withFleet(t) {
+  const { entry } = loaded;
+  if (!upstream.ready) {
+    const vllm = fakeManager("vllm", [{ id: "qwen-chat" }]);
+    const llama = fakeManager("llama", [{ id: "gemma-gguf" }]);
+    await new Promise((resolve) => vllm.listen(Number(process.env.VLLM_MANAGER_PORT), "127.0.0.1", resolve));
+    await new Promise((resolve) => llama.listen(Number(process.env.LLAMA_MANAGER_PORT), "127.0.0.1", resolve));
+    upstream.servers.push(vllm, llama);
+    upstream.ready = true;
+  }
+  for (const id of ["vllm", "llama"]) await entry.getManagerModelCatalog(entry.findManager(id), { force: true });
+  entry.resetManagerTrustCache();
+  entry.resetEntryRateLimitBuckets();
+  t.after(() => {
+    upstream.hold = false;
+    while (upstream.held.length) upstream.held.shift()();
+  });
+}
+
+let listenerKeySeq = 0;
+function makeKey(input = {}) {
+  listenerKeySeq += 1;
+  const { key, secret } = loaded.entry.getAccessStore().createKey({
+    class: "friend",
+    models: ["*"],
+    scopes: ["models.read", "chat", "messages"],
+    ...input,
+    name: `listeners key ${listenerKeySeq}`,
+  }, { actor: "test" });
+  return { id: key.id, secret };
+}
+
+const withKey = (key, headers = {}) => ({ authorization: `Bearer ${key.secret}`, ...headers });
+const chatBody = (body = {}) => ({ model: "qwen-chat", messages: [{ role: "user", content: "hi" }], ...body });
+const waitFor = async (check, label) => {
+  for (let index = 0; index < 300; index += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+};
+
+test("a PUBLIC request with a key reaches the fake manager with a signed v2 principal and context, without the key (05 §17.2 item 4)", async (t) => {
+  await withFleet(t);
+  const { entry } = loaded;
+  const started = await boot(t);
+  const key = makeKey({ limits: { maxOutputTokens: 64, maxConcurrent: 3 } });
+  const before = upstream.hits.length;
+  const answer = await asPublic(started, "/v1/chat/completions", {
+    method: "POST",
+    body: chatBody(),
+    headers: withKey(key, { "user-agent": "openai-python/1.50.0", "x-title": "Open WebUI", "x-api-key": key.secret, "api-key": key.secret, "x-service-entry-principal": "forged", "x-service-entry-context": "v1.forged" }),
+  });
+  assert.equal(answer.status, 200, answer.text);
+  const hit = upstream.hits.slice(before).find((item) => item.url === "/serve/v1/chat/completions");
+  assert.ok(hit, "the request reached the fake manager");
+  assert.equal(hit.manager, "vllm");
+  for (const name of ["authorization", "x-api-key", "api-key", "anthropic-api-key"]) assert.equal(hit.headers[name], undefined, `${name} never reaches a v2 manager`);
+  assert.doesNotMatch(JSON.stringify(hit.headers), new RegExp(key.secret.slice(-12)), "the key is nowhere in the hop");
+  assert.equal(hit.headers["x-request-id"], answer.headers["x-request-id"], "the request id of the hop is the one the client got");
+  assert.match(hit.headers["x-request-id"], /^req_[a-z2-7]{20}$/);
+
+  const token = entry.security.getTrustToken();
+  const hop = { method: "POST", originalUrl: hit.url, headers: hit.headers, socket: { remoteAddress: "127.0.0.1" } };
+  const verified = core.verifyEntryRequest(hop, { token });
+  assert.equal(verified.ok, true, JSON.stringify(verified));
+  assert.equal(verified.version, 2);
+  assert.equal(verified.requestId, answer.headers["x-request-id"]);
+  assert.equal(verified.principal.k, key.id);
+  assert.equal(verified.principal.l, "public");
+  assert.equal(verified.principal.p, "key");
+  assert.equal(verified.principal.mo, 64);
+  assert.equal(verified.principal.mc, 3);
+  assert.ok(verified.context, "the context travels on the hop");
+  assert.equal(verified.context.v, 1);
+  assert.equal(verified.context.src, "openwebui", "the source program from the client hint");
+  assert.equal(JSON.stringify(verified.context).includes(key.secret), false);
+  assert.notEqual(hit.headers["x-service-entry-principal"], "forged");
+  assert.notEqual(hit.headers["x-service-entry-context"], "v1.forged");
+  // The context is covered by the signature: swapping it fails the hop.
+  const swapped = core.verifyEntryRequest({ ...hop, headers: { ...hit.headers, "x-service-entry-context": `v1.${Buffer.from(JSON.stringify({ v: 1, src: "curl" })).toString("base64url")}` } }, { token });
+  assert.equal(swapped.ok, false);
+  // The body is the client's, plus the cap.
+  assert.deepEqual(JSON.parse(hit.body), { model: "qwen-chat", messages: [{ role: "user", content: "hi" }], max_tokens: 64 });
+});
+
+test("rate-limit headers are present, and rpm, tpm, quota and concurrency refuse with four distinct codes (item 5)", async (t) => {
+  await withFleet(t);
+  const started = await boot(t);
+  const post = (key, body = chatBody()) => asPublic(started, "/v1/chat/completions", { method: "POST", body, headers: withKey(key) });
+
+  // rpm
+  const rpmKey = makeKey({ limits: { rpm: 2, tpm: null, maxOutputTokens: 16 } });
+  const first = await post(rpmKey);
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.headers["x-ratelimit-limit-requests"], "2");
+  assert.equal(first.headers["x-ratelimit-remaining-requests"], "1");
+  assert.match(first.headers["x-ratelimit-reset-requests"], /^\d+s$/);
+  assert.equal((await post(rpmKey)).status, 200);
+  const rpm = await post(rpmKey);
+  assert.equal(rpm.status, 429);
+  assert.equal(rpm.json.error.code, "rate_limit_exceeded");
+  assert.ok(Number(rpm.headers["retry-after"]) >= 1);
+  assert.equal(rpm.headers["x-ratelimit-remaining-requests"], "0");
+
+  // tpm: the first request holds its reservation while it runs.
+  upstream.hold = true;
+  const tpmKey = makeKey({ limits: { rpm: 100, tpm: 700, maxOutputTokens: 600, maxConcurrent: 5 } });
+  const running = post(tpmKey);
+  await waitFor(() => upstream.held.length === 1, "the first request upstream");
+  const tpm = await post(tpmKey);
+  assert.equal(tpm.status, 429);
+  assert.equal(tpm.json.error.code, "tokens_rate_limit_exceeded");
+  assert.equal(tpm.headers["x-ratelimit-limit-tokens"], "700");
+  assert.ok(Number(tpm.headers["retry-after"]) >= 1);
+  upstream.hold = false;
+  while (upstream.held.length) upstream.held.shift()();
+  assert.equal((await running).status, 200);
+
+  // quota: one request a day.
+  const quotaKey = makeKey({ limits: { rpm: 100, tpm: null, dailyRequests: 1, maxOutputTokens: 16 } });
+  assert.equal((await post(quotaKey)).status, 200);
+  await waitFor(() => loaded.entry.getAccessStore().getUsage(quotaKey.id).day?.requests === 1, "the counters");
+  const quota = await post(quotaKey);
+  assert.equal(quota.status, 429);
+  assert.equal(quota.json.error.code, "insufficient_quota");
+  assert.equal(quota.json.error.param, "daily_requests");
+  assert.ok(Number(quota.headers["retry-after"]) >= 1);
+
+  // concurrency: one at a time, no queue.
+  upstream.hold = true;
+  const concurrencyKey = makeKey({ limits: { rpm: 100, tpm: null, maxConcurrent: 1, maxQueued: 0, maxOutputTokens: 16 } });
+  const busy = post(concurrencyKey);
+  await waitFor(() => upstream.held.length === 1, "the busy request upstream");
+  const concurrency = await post(concurrencyKey);
+  assert.equal(concurrency.status, 429);
+  assert.equal(concurrency.json.error.code, "concurrency_limit_exceeded");
+  assert.match(concurrency.headers["x-ratelimit-limit-requests"], /^\d+$/, "the headers ride on the refusal too");
+  upstream.hold = false;
+  while (upstream.held.length) upstream.held.shift()();
+  assert.equal((await busy).status, 200);
+  // The slot is free again.
+  assert.equal((await post(concurrencyKey)).status, 200);
+
+  const codes = [rpm, tpm, quota, concurrency].map((answer) => answer.json.error.code);
+  assert.equal(new Set(codes).size, 4, `distinct codes: ${codes.join(", ")}`);
+  for (const answer of [rpm, tpm, quota, concurrency]) assert.equal(answer.json.error.type, answer.json.error.code === "insufficient_quota" ? "insufficient_quota" : "rate_limit_error");
+});
+
+test("CORS: the preflight and the actual request follow the key's origins and never carry credentials (item 6)", async (t) => {
+  await withFleet(t);
+  const started = await boot(t);
+  const key = makeKey({ allowedOrigins: [CORS_ORIGIN], limits: { maxOutputTokens: 16 } });
+  const plain = makeKey({ limits: { maxOutputTokens: 16 } });
+
+  const preflight = await asPublic(started, "/v1/chat/completions", {
+    method: "OPTIONS",
+    headers: { origin: CORS_ORIGIN, "access-control-request-method": "POST", "access-control-request-headers": "authorization, content-type, x-stainless-lang" },
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers["access-control-allow-origin"], CORS_ORIGIN);
+  assert.match(preflight.headers["access-control-allow-methods"], /POST/);
+  assert.match(preflight.headers["access-control-allow-headers"], /x-stainless-lang/);
+  assert.equal(preflight.headers.vary, "Origin");
+  const strangerPreflight = await asPublic(started, "/v1/chat/completions", { method: "OPTIONS", headers: { origin: "https://evil.example.com", "access-control-request-method": "POST" } });
+  assert.equal(strangerPreflight.status, 204);
+  assert.equal(strangerPreflight.headers["access-control-allow-origin"], undefined);
+  assert.equal(strangerPreflight.headers["access-control-allow-methods"], undefined);
+
+  const actual = await asPublic(started, "/v1/chat/completions", { method: "POST", body: chatBody(), headers: withKey(key, { origin: CORS_ORIGIN }) });
+  assert.equal(actual.status, 200, actual.text);
+  assert.equal(actual.headers["access-control-allow-origin"], CORS_ORIGIN);
+  assert.match(actual.headers["access-control-expose-headers"], /x-request-id/);
+  assert.match(actual.headers["access-control-expose-headers"], /x-ratelimit-/);
+  const foreign = await asPublic(started, "/v1/chat/completions", { method: "POST", body: chatBody(), headers: withKey(key, { origin: "https://evil.example.com" }) });
+  assert.equal(foreign.status, 403);
+  assert.equal(foreign.json.error.code, "origin_not_allowed");
+  assert.equal(foreign.headers["access-control-allow-origin"], undefined);
+  const noOrigins = await asPublic(started, "/v1/chat/completions", { method: "POST", body: chatBody(), headers: withKey(plain, { origin: CORS_ORIGIN }) });
+  assert.equal(noOrigins.status, 403, "a key with no origins serves no browser");
+
+  for (const answer of [preflight, strangerPreflight, actual, foreign, noOrigins]) {
+    assert.equal(answer.headers["access-control-allow-credentials"], undefined);
+    assert.equal(answer.headers["access-control-allow-private-network"], undefined);
+  }
+});
+
+test("a browser Accept on an unknown or API PUBLIC path gets an HTML page; an API client gets JSON (item 7)", async (t) => {
+  const started = await boot(t);
+  const html = { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
+  for (const pathname of ["/nowhere", "/v1/nowhere", "/anthropic/v1/nowhere", "/vllm/v1/files"]) {
+    const browser = await asPublic(started, pathname, { headers: html });
+    assert.equal(browser.status, 404, pathname);
+    assert.match(browser.headers["content-type"], /text\/html/, pathname);
+    assert.match(browser.text, /req_[a-z2-7]{20}/, "the page quotes the request id");
+    const client = await asPublic(started, pathname, { headers: { accept: "application/json" } });
+    assert.equal(client.status, 404, pathname);
+    assert.match(client.headers["content-type"], /application\/json/);
+    if (pathname.startsWith("/anthropic/")) {
+      assert.equal(client.json.type, "error");
+      assert.equal(client.json.error.type, "not_found_error");
+    } else {
+      assert.equal(client.json.error.code, "not_found");
+    }
+    assert.equal(client.json.request_id, client.headers["x-request-id"]);
+  }
+  // An API path with a wrong method, and an Anthropic one, in their own shapes.
+  const wrong = await asPublic(started, "/v1/chat/completions", { headers: html });
+  assert.equal(wrong.status, 405);
+  assert.match(wrong.headers["content-type"], /text\/html/);
+  const wrongJson = await asPublic(started, "/anthropic/v1/messages", { headers: { accept: "application/json" } });
+  assert.equal(wrongJson.status, 405);
+  assert.equal(wrongJson.json.type, "error");
+  // A request that carries a key header is an API client whatever it accepts.
+  const keyed = await asPublic(started, "/v1/nowhere", { headers: { ...html, authorization: "Bearer sk-plat-fake" } });
+  assert.match(keyed.headers["content-type"], /application\/json/);
+});
+
+test("signed system principals on ADMIN: the supervisor may stop a manager, an unsigned caller may not, hub-shim is out of scope (item 8)", async (t) => {
+  const { entry } = loaded;
+  const internalAuth = require("../../manager-core/internal-auth");
+  const seen = [];
+  // The shutdown route is a spy: nothing is stopped.
+  const spy = {
+    name: "shutdown-spy",
+    mount(ctx) {
+      return {
+        async handle(req, res, url) {
+          if (req.method !== "POST" || url.pathname !== "/api/manager/shutdown") return false;
+          const who = ctx.auth.principal(req);
+          seen.push({ role: who.role, principal: who.principal });
+          ctx.sendJson(res, { ok: true });
+          return true;
+        },
+      };
+    },
+  };
+  const ctx = entry.createRouteContext({ logger: { log() {}, warn() {}, error() {} } });
+  const routes = await entry.mountRouteModules({ ctx, modules: [...entry.ROUTE_MODULES, spy] });
+  t.after(() => routes.close());
+  const started = await boot(t, { adminHandler: (req, res) => entry.handleRequest(req, res, routes) });
+  const token = entry.security.getTrustToken();
+  const target = "/api/manager/shutdown";
+  const signedAs = (principal) => asAdmin(started, target, {
+    method: "POST",
+    body: "{}",
+    headers: internalAuth.buildMachineHeaders(token, { method: "POST", pathWithQuery: target, principal, body: "{}", now: Date.now() }),
+  });
+
+  const supervisor = await signedAs("system:supervisor");
+  assert.equal(supervisor.status, 200, supervisor.text);
+  assert.deepEqual(seen, [{ role: "system", principal: "system:supervisor" }]);
+
+  const unsigned = await asAdmin(started, target, { method: "POST", body: {} });
+  assert.equal(unsigned.status, 401);
+  assert.equal(unsigned.json.error.code, "admin_session_required");
+
+  const shim = await signedAs("system:hub-shim:vllm");
+  assert.equal(shim.status, 403);
+  assert.equal(shim.json.error.code, "principal_scope_denied");
+  assert.equal(seen.length, 1, "only the supervisor's call reached the route");
 });
