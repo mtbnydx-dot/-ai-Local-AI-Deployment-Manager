@@ -66,7 +66,10 @@ function createVllmRuntimeCommandBuilder(deps) {
    * adapter on exactly what the manager would launch.
    */
   function prepareLaunch(job, opts) {
-    const launch = resolveLaunchModel(opts.model, opts.loadFormat);
+    // A prospective plan (01 §11) has no files to inspect: the path is only converted.
+    const launch = opts.prospective === true
+      ? { modelArg: windowsPathToContainerPath(opts.model), effectiveLoadFormat: opts.loadFormat || "auto", selectedGgufFile: "", ggufFiles: [], localPath: "" }
+      : resolveLaunchModel(opts.model, opts.loadFormat);
     const quantization = effectiveLaunchQuantization(opts.quantization, launch) || {};
     const runtimePreset = resolveVllmRuntimePreset(opts, launch) || {};
     const source = registry();

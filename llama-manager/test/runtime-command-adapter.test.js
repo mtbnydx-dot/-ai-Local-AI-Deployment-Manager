@@ -136,3 +136,25 @@ test("the wrapper re-exports the adapter's helpers", () => {
   assert.equal(runtimeCommand.normalizeLlamaSpeculativeMode("auto", "C:/store/qwen-MTP.gguf"), "draft-mtp");
   assert.equal(runtimeCommand.clampSpeculativeTokens(40), 16);
 });
+
+test("a prospective plan builds the command without resolving the model on disk (ENG-26)", () => {
+  let resolved = 0;
+  const strict = runtimeCommand.createLlamaRuntimeCommandBuilder({
+    CONFIG: { containerName: "llama-local", managerId: "llama-manager", hfCache: "C:/cache", modelsRoot: "C:/store", image: "llama:pinned", museImage: MUSE_IMAGE },
+    MANAGER_LABEL_KEY: "ai.manager",
+    MANAGER_ENGINE_LABEL_KEY: "ai.manager.engine",
+    MANAGER_APIKEY_REF_LABEL_KEY: "ai.manager.api-key-ref",
+    appendLog: () => {},
+    dockerGpuArg: () => "device=0",
+    dockerPublishArgs: () => ["127.0.0.1:8080:8080"],
+    publishArgsToDockerRunArgs: (args) => args.flatMap((arg) => ["-p", arg]),
+    normalizeGpuIds: (value) => value,
+    normalizeDefaultTrueBoolean: (value, fallback) => value ?? fallback,
+    windowsPathToContainerPath: (value) => String(value),
+    resolveLaunchModel: () => { resolved += 1; throw new Error("the files are not on disk"); },
+  });
+  assert.throws(() => strict.planLlamaLaunch({}, baseOptions({ model: "/models/<pending>" })), /not on disk/);
+  const { plan } = strict.planLlamaLaunch({}, baseOptions({ model: "/models/<pending>", prospective: true }));
+  assert.equal(resolved, 1, "the prospective call resolved nothing");
+  assert.ok(plan);
+});

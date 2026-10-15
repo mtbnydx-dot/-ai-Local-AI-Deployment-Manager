@@ -96,7 +96,10 @@ function createLlamaRuntimeCommandBuilder(deps) {
    * resolved here (filesystem I/O), as the builder did first.
    */
   function planLlamaLaunch(job, opts) {
-    const launch = opts.launch?.selectedModel ? opts.launch : resolveLaunchModel(opts.model, "gguf");
+    // A prospective plan (01 §11) has no GGUF files to inspect.
+    const launch = opts.launch?.selectedModel ? opts.launch
+      : opts.prospective === true ? { selectedModel: null, selectedGgufFile: "", ggufFiles: [] }
+        : resolveLaunchModel(opts.model, "gguf");
     const recipe = selectRecipe(opts, launch);
     const runtimeImage = String(opts.runtimeImage || (recipe ? slotImage(recipe.runtime.ref) : "") || CONFIG.image);
     const plan = llamacpp.planFromRunOptions(opts, { jobId: job?.id, recipe, normalizeDefaultTrueBoolean });
