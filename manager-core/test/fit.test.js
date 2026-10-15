@@ -388,6 +388,22 @@ test("estimate_drift and weights_mismatch come from the calibration records", ()
   assert.deepEqual(applied.calibration, { applied: true, samples: 4, source: "exact", driftRatio: null });
 });
 
+test("estimate_drift fires outside [0.9, 1.15] on the median of the last five records only", () => {
+  const record = (measured) => ({ estimated: { perGpuMb: { 0: 60000 } }, measured: { perGpuMb: { 0: measured }, logFacts: {} } });
+  const drift = (ratios) => fit.estimateFit(fitInput(), { memoryModels: recordingStub(), calibration: { records: ratios.map((ratio) => record(60000 * ratio)) }, suggestions: false }).calibration.driftRatio;
+  assert.equal(drift([1.16]), 1.16);
+  assert.equal(drift([0.89]), 0.89);
+  assert.equal(drift([0.9]), null);
+  assert.equal(drift([1.15]), null);
+  // Records older than the last five do not count: five steady launches after a wild one.
+  assert.equal(drift([2, 1, 1, 1, 1, 1]), null);
+  // The median, not the mean: one outlier among the last five does not trip it.
+  assert.equal(drift([1, 1, 1.5, 1, 1]), null);
+  assert.equal(drift([1.3, 1.3, 1.3, 1, 1]), 1.3);
+  // Records without a measured or estimated value are skipped.
+  assert.equal(fit.estimateFit(fitInput(), { memoryModels: recordingStub(), calibration: { records: [{ estimated: { perGpuMb: {} }, measured: { perGpuMb: {} } }] }, suggestions: false }).calibration.driftRatio, null);
+});
+
 test("calibrationFor is asked with engines.paramsKey output verbatim", () => {
   const seen = [];
   const calibrationFor = (card, engineId, runtimeId, paramsKey) => {
