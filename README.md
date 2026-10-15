@@ -46,6 +46,7 @@ This is a local AI service control panel for high-end personal workstations and 
 ├─ model-capability-tests/ # 长任务能力测试提示词
 ├─ vllm/                   # 轻量 vLLM helper 脚本
 ├─ deploy/public/          # 公网 TLS / OpenWebUI 可选模板
+├─ deploy/cloudflare/      # Cloudflare 隧道模板
 ├─ docs/                   # 使用手册与客户端连接指南
 ├─ package.json            # 根目录测试依赖，主要用于 Playwright smoke test
 ├─ playwright.config.cjs   # 浏览器烟测配置
@@ -212,7 +213,7 @@ start-service-entry.cmd lan
   - Docker Desktop 尚在启动时，搜索网关一步最多等待 `PLATFORM_DOCKER_WAIT_SECONDS` 秒（默认 90，每 3 秒检查一次）；Docker Desktop 未运行时立即给出提示。
   - `start-service-entry.cmd` 用 `GET /gateway/health` 判断入口就绪，任一组件未通过健康检查时退出码为 1 且不打开浏览器；`SERVICE_ENTRY_PORT`、`VLLM_MANAGER_PORT`、`LLAMA_MANAGER_PORT` 可改端口。管理器单独启动脚本同样沿用已设置的端口变量，旧日志轮转为 `.1`–`.3` 而不是删除。`stop-service-entry.cmd` 先请求正常关闭，10 秒后仍未退出时只强制结束 PID 文件中核对为 `node … server.js` 的进程。
 - 进程退出留痕：入口与两个管理器把 Ctrl+C / 控制台关闭 / 未捕获异常写入各自 `logs/process-exit.log`，并走正常关机流程；`start-service-entry.cmd` 现在把 stdout/stderr 落到 `logs/manager.out.log`（保留 3 份轮转）。
-- 公网模式：入口首页顶部显示“本机 / 局域网 / 公网”模式与上线检查清单（API Key 强制、管理端点仅本机、CORS、HTTPS、Caddy 路径、防火墙）。`deploy/public/Caddyfile` 只转发 `/gateway/*`，`scripts/setup-public.ps1` 生成 `.env` 并校验。鉴权失败风暴防护：`SERVICE_ENTRY_AUTH_FAIL_LIMIT`（默认 20 次/`SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS`=60 秒）后封禁 `SERVICE_ENTRY_AUTH_BAN_SECONDS`（600）秒，本机直连永不封禁。
+- 公网模式：入口首页顶部显示“本机 / 局域网 / 公网”模式与上线检查清单（API Key 强制、管理端点仅本机、CORS、HTTPS、Caddy 路径、防火墙）。`deploy/public/Caddyfile` 与 `deploy/cloudflare/` 只指向 PUBLIC 监听（5186），`scripts/setup-public.ps1` 把模板渲染到 `config/public/`（`-Apply` 才通过 `platform config set` 写设置）。鉴权失败风暴防护：`SERVICE_ENTRY_AUTH_FAIL_LIMIT`（默认 20 次/`SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS`=60 秒）后封禁 `SERVICE_ENTRY_AUTH_BAN_SECONDS`（600）秒，本机直连永不封禁。
 - 统一入口新增：`GET /gateway/status`（需 Key：可用模型、在线组件、本 Key 限流余量与 TTS 配额）、`/gateway/search/*`（搜索网关）、`/gateway/mcp`（MCP，只读）、`GET /api/keys` 与首页“密钥总览”（两管理器客户端 Key 的状态 / 最近使用 / 到期）。搜索网关启动时若入口监听局域网则自动以入口 auto 路由为上游。
 - 守护与备份：GPU 温度守护新增功耗墙提示（`powerGuardEnabled` 默认跟随温度守护，`powerLimitPct` 默认 97）；`scripts/backup-platform.ps1` 每日快照计费库 / TTS 历史库 / JSON 账本到 `backups/`（`-Register` 注册计划任务，`-KeepDays` 默认 14）；`scripts/nightly-e2e.ps1` 跑 test-all + 在线探活并写 `artifacts/nightly/`（`-Register` 每日 03:00）。
 - TTS 用量进入计费：客户端 Key 的合成请求按秒数 / 字符数记账并支持每日秒数配额，见 `docs/billing-guide.md`。
@@ -318,6 +319,7 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ model-capability-tests/ # Long-running model capability prompts
 ├─ vllm/                   # Lightweight vLLM helper scripts
 ├─ deploy/public/          # Optional public TLS / OpenWebUI templates
+├─ deploy/cloudflare/      # Cloudflare Tunnel templates
 ├─ docs/                   # Runbooks and client setup guides
 ├─ package.json            # Root test dependencies, mainly Playwright smoke tests
 ├─ playwright.config.cjs   # Browser smoke-test configuration
@@ -471,7 +473,7 @@ Behavior changes as of 2026-08-22: a stalled download (no byte growth for 5 minu
   - While Docker Desktop is still starting, the search-gateway step waits up to `PLATFORM_DOCKER_WAIT_SECONDS` (default 90, checked every 3 s). When Docker Desktop is not running at all, it prints the hint at once.
   - `start-service-entry.cmd` treats the entry as ready when `GET /gateway/health` answers, and exits 1 without opening a browser when any component fails its health check. `SERVICE_ENTRY_PORT`, `VLLM_MANAGER_PORT` and `LLAMA_MANAGER_PORT` change the ports. The per-manager start scripts also keep an already-set port variable, and they rotate old logs to `.1`–`.3` instead of deleting them. `stop-service-entry.cmd` asks each process to shut down, and after 10 s force-stops only a PID from the pid file that it verifies as `node … server.js`.
 - Exit traces: the entry and both managers write Ctrl+C / console close / uncaught errors to their own `logs/process-exit.log` and run the normal shutdown; `start-service-entry.cmd` now redirects stdout/stderr to `logs/manager.out.log` with three rotated copies.
-- Public mode: the entry page shows the local / LAN / public exposure and a go-live checklist (API key enforced, management local-only, CORS, HTTPS, Caddy paths, firewall). `deploy/public/Caddyfile` proxies only `/gateway/*`; `scripts/setup-public.ps1` writes `.env` and validates it. Auth-failure guard: `SERVICE_ENTRY_AUTH_FAIL_LIMIT` (20) failures within `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` (60) ban the source for `SERVICE_ENTRY_AUTH_BAN_SECONDS` (600); local direct callers are never banned.
+- Public mode: the entry page shows the local / LAN / public exposure and a go-live checklist (API key enforced, management local-only, CORS, HTTPS, Caddy paths, firewall). `deploy/public/Caddyfile` and `deploy/cloudflare/` target only the PUBLIC listener (5186); `scripts/setup-public.ps1` renders the templates into `config/public/` (settings change only with `-Apply`, through `platform config set`). Auth-failure guard: `SERVICE_ENTRY_AUTH_FAIL_LIMIT` (20) failures within `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` (60) ban the source for `SERVICE_ENTRY_AUTH_BAN_SECONDS` (600); local direct callers are never banned.
 - New entry surfaces: `GET /gateway/status` (key required: models, online components, this key's rate-limit remaining and TTS quota), `/gateway/search/*` (search gateway), `/gateway/mcp` (read-only MCP), `GET /api/keys` and the "密钥总览" section (client keys across both managers with state, last use and expiry). The search gateway picks the entry auto route as upstream when the entry listens on the LAN.
 - Guards and backups: the GPU temperature guard gained a power-wall hint (`powerGuardEnabled` follows the temperature guard, `powerLimitPct` default 97); `scripts/backup-platform.ps1` snapshots the billing database, TTS history and JSON ledgers into `backups/` daily (`-Register`, `-KeepDays` 14); `scripts/nightly-e2e.ps1` runs test-all plus live probes into `artifacts/nightly/` (`-Register` at 03:00).
 - TTS usage is billed: synthesis through a client key is metered by audio seconds and characters with a daily seconds quota; see `docs/billing-guide.md`.

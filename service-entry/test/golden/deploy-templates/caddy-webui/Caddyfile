@@ -1,0 +1,50 @@
+# Native Caddy in front of the PUBLIC listener (05-public.md section 14).
+# Template: scripts/setup-public.ps1 and /api/public/templates render it into
+# <AI_ROOT>/config/public/Caddyfile with the domains filled in. The domain placeholders
+# also work unrendered through "caddy run --envfile". The if/end marker lines
+# are template markers (comments to Caddy).
+{
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+chat.example.com {
+	encode zstd gzip
+	request_body {
+		max_size 256MB
+	}
+	reverse_proxy 127.0.0.1:3000 {
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+			response_header_timeout 30m
+		}
+	}
+}
+
+# Model API domain: every path goes to the PUBLIC listener (5186), which enforces the
+# path policy itself (no console, no management API). Caddy sets X-Forwarded-For from
+# the real peer, so trustedProxies uses clientIpHeader x-forwarded-for with cidrs
+# 127.0.0.1/32.
+models.example.com {
+	encode zstd gzip
+	request_body {
+		max_size 32MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy 127.0.0.1:5186 {
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+			response_header_timeout 30m
+		}
+	}
+}

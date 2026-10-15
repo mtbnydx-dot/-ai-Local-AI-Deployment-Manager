@@ -2,8 +2,12 @@
 
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 
+const deployTemplates = require("../lib/deploy-templates");
 const keyMigration = require("../lib/key-migration");
 const { PRESETS, createAccessRoutes } = require("../lib/access-routes");
 const { loadAccessConfig } = require("../lib/public-config");
@@ -77,6 +81,7 @@ function makeHarness(options = {}) {
     getBus: () => ({ publish: (type, data) => events.push({ type, data }) }),
     migration,
     settings,
+    aiRoot: options.aiRoot || "",
     logger: { warn() {}, error() {}, log() {} },
     now: () => fixture.clock.now,
   });
@@ -154,8 +159,8 @@ test("every route needs the owner: a viewer reads nothing, a write needs the CSR
 
 test("paths other packages own fall through, and an unsupported method on a served path answers 405", async () => {
   const h = makeHarness();
-  const templates = await h.call("GET", "/api/public/templates");
-  assert.equal(templates.handled, false);
+  const unowned = await h.call("GET", "/api/public/nothing-owned-here");
+  assert.equal(unowned.handled, false);
   assert.equal((await h.call("GET", "/api/status")).handled, false);
   const wrong = await h.call("DELETE", "/api/access/keys/k_x");
   assert.equal(wrong.status, 405);
@@ -534,4 +539,65 @@ test("mounted in the entry: the table lists the module, the routes need the real
   const plan = await request(port, "/api/access/migration/plan", { method: "POST", body: {}, owner });
   assert.equal(plan.status, 200, plan.text);
   assert.ok(Array.isArray(plan.json.plan.inserts));
+});
+
+test("templates: preview renders the files and commands from the saved base URL; write goes only to config/public and never overwrites unasked", async (t) => {
+  const aiRoot = fs.mkdtempSync(path.join(os.tmpdir(), "access-templates-"));
+  t.after(() => fs.rmSync(aiRoot, { recursive: true, force: true }));
+  const h = makeHarness({ aiRoot });
+  const expected = deployTemplates.planTemplates({ topology: "caddy", baseUrl: "https://api.example.com", config: {} });
+
+  assert.equal((await h.call("GET", "/api/public/templates?topology=caddy", { who: "viewer" })).status, 403);
+  const preview = await h.call("GET", "/api/public/templates?topology=caddy");
+  assert.equal(preview.status, 200);
+  assert.deepEqual(preview.json, { ok: true, files: expected.files, commands: expected.commands });
+  assert.ok(preview.json.commands.includes("platform config set listeners.public.baseUrl https://api.example.com"));
+  const withWebui = await h.call("GET", "/api/public/templates?topology=caddy&webuiDomain=chat.example.com");
+  assert.ok(withWebui.json.files.some((file) => file.name === "openwebui.compose.yaml"));
+  assert.equal((await h.call("GET", "/api/public/templates?topology=lan")).json.files.length, 0);
+  const badTopology = await h.call("GET", "/api/public/templates?topology=nginx");
+  assert.equal(badTopology.status, 400);
+  assert.equal(badTopology.json.errors[0].field, "topology");
+  assert.equal((await h.call("GET", "/api/public/templates")).status, 400);
+  assert.equal((await h.call("GET", "/api/public/templates?topology=caddy&webuiDomain=bad_domain")).json.errors[0].field, "webuiDomain");
+
+  const body = { topology: "caddy" };
+  assert.equal((await h.call("POST", "/api/public/templates/write", { body, who: "no-csrf" })).status, 403);
+  assert.ok([401, 403].includes((await h.call("POST", "/api/public/templates/write", { body, who: "viewer" })).status));
+  assert.deepEqual(fs.readdirSync(aiRoot), [], "a refused write touches nothing");
+
+  const written = await h.call("POST", "/api/public/templates/write", { body });
+  assert.equal(written.status, 200, written.text);
+  assert.deepEqual(written.json, { ok: true, written: ["config/public/Caddyfile"] });
+  assert.equal(fs.readFileSync(path.join(aiRoot, "config", "public", "Caddyfile"), "utf8"), expected.files[0].content);
+  assert.deepEqual(fs.readdirSync(aiRoot), ["config"]);
+
+  fs.writeFileSync(path.join(aiRoot, "config", "public", "Caddyfile"), "owner edit\n");
+  const again = await h.call("POST", "/api/public/templates/write", { body });
+  assert.equal(again.status, 409);
+  assert.equal(again.json.error.code, "template_exists");
+  assert.deepEqual(again.json.error.existing, ["Caddyfile"]);
+  assert.equal((await h.call("POST", "/api/public/templates/write", { body: { ...body, overwrite: "yes" } })).status, 400);
+  assert.equal(fs.readFileSync(path.join(aiRoot, "config", "public", "Caddyfile"), "utf8"), "owner edit\n");
+  const replaced = await h.call("POST", "/api/public/templates/write", { body: { ...body, overwrite: true }, who: "cli" });
+  assert.equal(replaced.status, 200);
+  assert.equal(fs.readFileSync(path.join(aiRoot, "config", "public", "Caddyfile"), "utf8"), expected.files[0].content);
+
+  const audit = h.store.listAudit({ action: "templates.write" }).items;
+  assert.equal(audit.length, 2);
+  assert.equal(JSON.stringify(audit).includes("reverse_proxy"), false, "the audit holds names, not file contents");
+
+  assert.equal((await h.call("POST", "/api/public/templates/write", { body: { topology: "nginx" } })).status, 400);
+  assert.deepEqual((await h.call("POST", "/api/public/templates/write", { body: { topology: "lan" } })).json, { ok: true, written: [] });
+});
+
+test("templates: no base URL, or no platform root, is a clear refusal", async () => {
+  const noUrl = makeHarness({ aiRoot: os.tmpdir(), settings: makeSettings({ listeners: { public: { port: 5186 } } }) });
+  const missing = await noUrl.call("GET", "/api/public/templates?topology=cloudflared-token");
+  assert.equal(missing.status, 400);
+  assert.equal(missing.json.error.code, "public_base_url_required");
+  const noRoot = makeHarness();
+  const refused = await noRoot.call("POST", "/api/public/templates/write", { body: { topology: "caddy" } });
+  assert.equal(refused.status, 503);
+  assert.equal(refused.json.error.code, "ai_root_unavailable");
 });

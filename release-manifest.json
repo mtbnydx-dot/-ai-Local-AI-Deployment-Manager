@@ -15,7 +15,8 @@
     "llama-manager",
     "model-capability-tests",
     "vllm",
-    "deploy/public"
+    "deploy/public",
+    "deploy/cloudflare"
   ],
   "files": [
     ".gitattributes",

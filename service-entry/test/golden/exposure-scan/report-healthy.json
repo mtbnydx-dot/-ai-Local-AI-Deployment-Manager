@@ -63,7 +63,7 @@
       "id": "tunnel_target",
       "state": "ok",
       "title": "access.check.tunnel_target",
-      "evidence": "config/public/config.yml send traffic to :404, :5186 only.",
+      "evidence": "config/public/config.yml send traffic to :5186 only.",
       "fix": "access.fix.tunnel_target"
     },
     {
@@ -192,7 +192,7 @@
         "from": "edge",
         "to": "public",
         "state": "ok",
-        "evidence": "config/public/config.yml send traffic to :404, :5186 only."
+        "evidence": "config/public/config.yml send traffic to :5186 only."
       },
       {
         "from": "edge",
