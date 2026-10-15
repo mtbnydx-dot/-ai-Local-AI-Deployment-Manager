@@ -51,6 +51,9 @@ function createOwnedRuntimeContainerResolver(options = {}) {
   const managerId = String(options.managerId || "");
   const ownerLabelKey = String(options.ownerLabelKey || "ai.manager");
   const engines = new Set((options.engines || []).map(String));
+  // ENG-13: a manager passes its own test (registry.hostedBy or an unknown
+  // engine) instead of a fixed engine list.
+  const isRuntimeContainer = typeof options.isRuntimeContainer === "function" ? options.isRuntimeContainer : null;
   return async function resolveOwnedRuntimeContainer(instance) {
     const requested = String(instance || "").trim();
     if (!requested || !managerId) return null;
@@ -64,7 +67,7 @@ function createOwnedRuntimeContainerResolver(options = {}) {
     const managed = await options.listManagedContainers();
     const target = (Array.isArray(managed) ? managed : []).find((container) => (
       container?.manager === managerId
-      && (!engines.size || engines.has(String(container.engine || "")))
+      && (isRuntimeContainer ? isRuntimeContainer(container) : (!engines.size || engines.has(String(container.engine || ""))))
       && (container.name === requested || container.labels?.["ai.manager.instance"] === requested)
     ));
     return target ? String(target.name) : null;

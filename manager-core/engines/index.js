@@ -30,6 +30,7 @@ const recipes = require("./recipes");
 const registry = require("./registry");
 const resolveLaunchPlanModule = require("./resolve-launch-plan");
 const routes = require("./routes");
+const instances = require("./instances");
 const runtimeManifest = require("../runtime-manifest");
 
 // Adapter code modules by descriptor.adapter (01 §6). An engine whose adapter
@@ -105,6 +106,8 @@ module.exports = {
   // 00 §9.12): parsePrometheus, mapPrometheus and summarize for the 04
   // collector, the histogram helpers, and the per-manager instance sampler.
   metrics,
+  instances,
+  createInstanceCatalog: instances.createInstanceCatalog,
   // The one engine-side memory estimator (01 §12, 00 §9.1): 02 fit.js calls
   // memoryModels.estimate with artifact inputs and keys calibrations by
   // paramsKey(plan).
