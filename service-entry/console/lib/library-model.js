@@ -11,6 +11,8 @@
 const KNOWN_VERIFICATION = Object.freeze(["ok", "warn", "fail", "unchecked"]);
 const KNOWN_UPDATE = Object.freeze(["unknown", "current", "available", "unsupported", "error"]);
 const MANAGER_IDS = Object.freeze(["vllm", "llama"]);
+// The roles a model can be launched as (wizard-state.js SERVABLE_ROLES): a draft, a projector or a tooling folder is not offered for Deploy.
+const SERVABLE_ROLES = Object.freeze(["main", "embedding", "reranker"]);
 
 function list(value) {
   return Array.isArray(value) ? value : [];
@@ -90,7 +92,7 @@ export function entryView(entry, roots = []) {
     path,
     kind: text(entry?.kind) || "folder",
     role: roleOf(entry),
-    runnable: entry?.runnable !== false && roleOf(entry) !== "tooling-only",
+    runnable: entry?.runnable !== false && (roleOf(entry) === "" || SERVABLE_ROLES.includes(roleOf(entry))),
     format: text(entry?.format),
     quant: text(entry?.quant),
     bytes: bytesOf(entry?.bytes),

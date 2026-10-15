@@ -60,6 +60,9 @@ test("entryView survives a sparse or hostile entry", () => {
   assert.equal(view.role, "draft");
   assert.deepEqual(view.engines, [{ engineId: "y", verdict: "ok" }], "blocked and unknown rows are no chip; an engine appears once");
   assert.equal(library.entryView(null).name, "");
+  const runnable = (role) => library.entryView({ id: "lib_x", path: "X:/m", card: { role } }).runnable;
+  assert.deepEqual(["main", "embedding", "reranker", ""].map(runnable), [true, true, true, true]);
+  assert.deepEqual(["draft", "mmproj", "adapter", "mtp-head", "tooling-only"].map(runnable), [false, false, false, false, false], "only a servable role is offered for Deploy");
 });
 
 test("provenanceText: repo@revision, a short sha, nothing without a repo", () => {
