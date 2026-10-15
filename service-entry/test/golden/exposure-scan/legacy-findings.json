@@ -1,0 +1,92 @@
+[
+  {
+    "id": "legacy.deploy_cloudflare",
+    "relPath": "deploy/cloudflare",
+    "kind": "config",
+    "risk": "high",
+    "evidence": "Untracked legacy tunnel files: Caddyfile.",
+    "recommendation": "access.legacy.config_tunnel",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'deploy\\cloudflare') -Destination $archive"
+  },
+  {
+    "id": "legacy.deploy_cloudflare_secrets",
+    "relPath": "deploy/cloudflare/secrets",
+    "kind": "secret-file",
+    "risk": "high",
+    "evidence": "Directory present. Its contents are never read.",
+    "recommendation": "access.legacy.secrets_tunnel",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'deploy\\cloudflare\\secrets') -Destination $archive"
+  },
+  {
+    "id": "legacy.router_192_168_1_1_html",
+    "relPath": "router-192-168-1-1.html",
+    "kind": "snapshot",
+    "risk": "high",
+    "evidence": "Router page snapshot (101 bytes) with 2 stok= occurrence(s). Values are not returned.",
+    "recommendation": "access.legacy.snapshot_router",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'router-192-168-1-1.html') -Destination $archive"
+  },
+  {
+    "id": "legacy.vllm_manager_logs_last_public_service_key_txt",
+    "relPath": "vllm-manager/logs/.last-public-service-key.txt",
+    "kind": "secret-file",
+    "risk": "high",
+    "evidence": "Plaintext key file present (29 bytes). Contents are not read.",
+    "recommendation": "access.legacy.secret_key_file",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'vllm-manager\\logs\\.last-public-service-key.txt') -Destination $archive"
+  },
+  {
+    "id": "legacy.vllm_manager_logs_manager_public_proxy_access_log",
+    "relPath": "vllm-manager/logs/manager-public-proxy-access.log",
+    "kind": "log",
+    "risk": "medium",
+    "evidence": "Log present (72 bytes, 3 lines). Contents are not returned.",
+    "recommendation": "access.legacy.log_public_proxy",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'vllm-manager\\logs\\manager-public-proxy-access.log') -Destination $archive"
+  },
+  {
+    "id": "legacy.vllm_manager_manager_public_proxy_js",
+    "relPath": "vllm-manager/manager-public-proxy.js",
+    "kind": "script",
+    "risk": "high",
+    "evidence": "File present (16 bytes).",
+    "recommendation": "access.legacy.script_public_proxy",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'vllm-manager\\manager-public-proxy.js') -Destination $archive"
+  },
+  {
+    "id": "legacy.vllm_manager_public_port_proxy_js",
+    "relPath": "vllm-manager/public-port-proxy.js",
+    "kind": "script",
+    "risk": "high",
+    "evidence": "File present (21 bytes).",
+    "recommendation": "access.legacy.script_public_proxy",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'vllm-manager\\public-port-proxy.js') -Destination $archive"
+  },
+  {
+    "id": "legacy.vllm_manager_start_manager_public_proxy_cmd",
+    "relPath": "vllm-manager/start-manager-public-proxy.cmd",
+    "kind": "script",
+    "risk": "medium",
+    "evidence": "File present (11 bytes).",
+    "recommendation": "access.legacy.script_launcher",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'vllm-manager\\start-manager-public-proxy.cmd') -Destination $archive"
+  },
+  {
+    "id": "legacy.vllm_manager_stop_manager_public_proxy_cmd",
+    "relPath": "vllm-manager/stop-manager-public-proxy.cmd",
+    "kind": "script",
+    "risk": "medium",
+    "evidence": "File present (11 bytes).",
+    "recommendation": "access.legacy.script_launcher",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'vllm-manager\\stop-manager-public-proxy.cmd') -Destination $archive"
+  },
+  {
+    "id": "legacy.vllm_manager_upnp_port_map_js",
+    "relPath": "vllm-manager/upnp-port-map.js",
+    "kind": "script",
+    "risk": "high",
+    "evidence": "File present (15 bytes).",
+    "recommendation": "access.legacy.script_upnp",
+    "suggestedCommand": "$root = '<AI_ROOT>'; $archive = Join-Path (Split-Path -Parent $root) 'ai-exposure-archive'; New-Item -ItemType Directory -Force -Path $archive | Out-Null; Move-Item -LiteralPath (Join-Path $root 'vllm-manager\\upnp-port-map.js') -Destination $archive"
+  }
+]

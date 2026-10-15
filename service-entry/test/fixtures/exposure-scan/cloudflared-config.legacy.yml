@@ -1,0 +1,6 @@
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/creds.json
+ingress:
+  - hostname: api.example.invalid
+    service: http://host.docker.internal:5177
+  - service: http_status:404
