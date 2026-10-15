@@ -40,7 +40,8 @@ class TemplateError extends Error {
 
 /** The tracked template sources, read from the repository checkout. */
 function loadTemplates(root = path.join(__dirname, "..", "..")) {
-  const read = (rel) => fs.readFileSync(path.join(root, ...rel.split("/")), "utf8");
+  // A checkout may hold CRLF in the text=auto files; the templates are LF.
+  const read = (rel) => fs.readFileSync(path.join(root, ...rel.split("/")), "utf8").replace(/\r\n/g, "\n");
   return {
     caddyfile: read("deploy/public/Caddyfile"),
     openwebuiCompose: read("deploy/public/openwebui.compose.yaml"),

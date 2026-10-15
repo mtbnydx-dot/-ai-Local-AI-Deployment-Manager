@@ -31,7 +31,7 @@ function checkGolden(relative, text) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, text);
   }
-  assert.equal(text, fs.readFileSync(file, "utf8"), `golden ${relative}`);
+  assert.equal(text, fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n"), `golden ${relative}`);
 }
 
 for (const [name, input] of Object.entries(CASES)) {
@@ -98,7 +98,7 @@ test("tracked deploy files contain only example domains, no secrets and no machi
   ];
   const credential = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\bAKIA[0-9A-Z]{16}\b/, /\bgh[pousr]_[A-Za-z0-9]{20,}\b/, /\bsk-[A-Za-z0-9_-]{20,}\b/, /\beyJ[A-Za-z0-9_-]{20,}/];
   for (const rel of files) {
-    const text = fs.readFileSync(path.join(ROOT, ...rel.split("/")), "utf8");
+    const text = fs.readFileSync(path.join(ROOT, ...rel.split("/")), "utf8").replace(/\r\n/g, "\n");
     for (const pattern of credential) assert.doesNotMatch(text, pattern, rel);
     assert.doesNotMatch(text, /[A-Za-z]:\\(?:Users|AI)\\|\/Users\/|\/home\/\w+/, `${rel}: no absolute machine path`);
     assert.doesNotMatch(text, /[\w.-]+@[\w-]+\.(?:com|net|org)\b/, `${rel}: no e-mail address`);
