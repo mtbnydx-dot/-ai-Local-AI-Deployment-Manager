@@ -1317,3 +1317,17 @@ dialog::backdrop {
 @media (max-width: 639px) {
   .deploy-tiles { gap: var(--sp-2); }
 }
+
+/* ---- System: doctor, settings, updates and operations (CON-24b) ---- */
+.doctor-fix { padding-inline-start: var(--sp-2); }
+.op-panel { padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-2); min-width: 0; }
+.op-log { max-height: 160px; margin: 0; padding: var(--sp-2) var(--sp-3); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); font-family: var(--font-mono); font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.trend { display: flex; align-items: flex-end; gap: 2px; height: 96px; padding-bottom: 1px; border-bottom: 1px solid var(--border-strong); }
+.trend-bar { flex: 1 1 0; min-width: 3px; border-radius: 2px 2px 0 0; box-sizing: border-box; }
+.trend-bar[data-state="pass"] { background: var(--success); }
+.trend-bar[data-state="fail"] { border: 1px solid var(--danger); background: repeating-linear-gradient(135deg, var(--danger) 0 3px, var(--danger-soft) 3px 6px); }
+.trend-bar[data-state="missing"] { border: 1px dashed var(--border-strong); background: transparent; }
+.trend-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); margin: 0; padding: 0; list-style: none; }
+.trend-legend li { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.trend-swatch { flex: none; width: 12px; height: 12px; min-width: 12px; border-radius: 2px; }
+.badge-wrap { max-width: 100%; border-radius: var(--radius-control); white-space: normal; overflow-wrap: anywhere; }

@@ -13,7 +13,8 @@
 // Locked fields are disabled with their reason. Secrets are write-only: the
 // input stays empty, the value is sent once and never echoed. DOM hooks:
 // id=<domId> on the control, data-field="<paramId>" and data-source on the
-// field wrapper.
+// field wrapper. In config mode (the System settings) every field is shown, so
+// there is no level switch, and the badge names the saved value's source.
 
 import {
   buildFormModel,
@@ -414,7 +415,7 @@ export function SchemaForm({
 
   return html`<div class="sf" data-mode=${mode} data-level=${model.level} data-testid=${testid || "schema-form.root"}>
     <div class="sf-toolbar">
-      ${catalogMode
+      ${catalogMode || mode === "config"
         ? null
         : html`<div class="sf-seg" role="group" aria-label=${t("engines.form.level.label")} data-testid="schema-form.levels">
           ${LEVELS.map((id) => html`<button key=${id} type="button" class="sf-seg-opt sf-level" aria-pressed=${model.level === id ? "true" : "false"} data-level=${id}

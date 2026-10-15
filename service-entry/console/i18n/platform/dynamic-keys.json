@@ -1,17 +1,26 @@
 {
   "prefixes": [
     "platform.action.",
+    "platform.autostart.method.",
+    "platform.autostart.status.",
     "platform.blocker.",
     "platform.code.",
+    "platform.doctor.group.",
+    "platform.doctor.status.",
     "platform.layer.",
     "platform.mode.",
+    "platform.nightly.",
+    "platform.operation.state.",
+    "platform.ops.task.",
     "platform.owner.",
     "platform.reason.",
+    "platform.source.",
     "platform.state.",
     "platform.strip.overall.",
     "platform.strip.plan.",
     "platform.strip.status.",
-    "platform.system.action."
+    "platform.system.action.",
+    "platform.updates.reason."
   ],
   "unused": []
 }
