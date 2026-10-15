@@ -1,6 +1,5 @@
 "use strict";
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -11,7 +10,7 @@ const internalAuth = require("../../manager-core/internal-auth");
 const { createMachineAuth, machineEventTypes, machineScopeAllows } = require("../lib/machine-auth");
 const { createViewerRegistry } = require("../lib/viewer-allowlist");
 const entryCall = require("../scripts/entry-call");
-const { listen, loadEntry, quietLogger, request, serveEntry, spyModule, unusedPort } = require("./helpers/entry-harness");
+const { loadEntry, quietLogger, request, serveEntry, spyModule } = require("./helpers/entry-harness");
 
 // 05 §5.7: machine principals on the ADMIN listener. Every request here goes
 // to an in-process entry on an ephemeral port; shutdown-like routes are
@@ -20,7 +19,6 @@ const { listen, loadEntry, quietLogger, request, serveEntry, spyModule, unusedPo
 // /api/hub/downloads itself), so they reach the spy.
 
 const LAN = "192.168.1.50";
-const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const SPY_CLAIMS = [
   "/api/hub/",
   "/api/hub",
@@ -343,7 +341,7 @@ test("failed signatures are reported as security internal_auth_failed, at most o
   assert.equal(JSON.stringify(events[0]).includes(token), false);
 });
 
-// --- entry-call.js and stop-service-entry.cmd ---------------------------------------
+// --- entry-call.js ---------------------------------------
 
 function captured() {
   const out = { text: "", write(chunk) { out.text += chunk; return true; } };
@@ -381,104 +379,4 @@ test("entry-call.js signs as system:cli with the trust file of its AI root", asy
   assert.match(usage.text, /must start with \/api\//);
   assert.equal(entryCall.parseArgs(["get", "/api/status"], { SERVICE_ENTRY_PORT: "6123", AI_ROOT: root }).port, 6123);
   for (const text of [stdout.text, stderr.text, missing.text]) assert.equal(text.includes(token), false);
-});
-
-// A stand-in entry that, like the entry after PUB-5, accepts the shutdown
-// only with a valid machine signature in scope; with acceptUnsigned it is an
-// entry from before PUB-5, which a loopback caller may stop without one.
-async function fixtureEntry(t, token, { acceptUnsigned = false } = {}) {
-  const machine = createMachineAuth({ getToken: () => token });
-  const seen = [];
-  let unsigned = 0;
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, "http://127.0.0.1");
-    const answer = (status, body) => {
-      res.writeHead(status, { "content-type": "application/json", connection: "close" });
-      res.end(JSON.stringify(body));
-    };
-    if (req.method !== "POST" || url.pathname !== "/api/manager/shutdown") return answer(404, { ok: false });
-    if (!machine.hasCredentials(req)) {
-      unsigned += 1;
-      req.resume();
-      if (!acceptUnsigned) return answer(401, { ok: false, error: { code: "admin_session_required" } });
-      answer(200, { ok: true });
-      setImmediate(() => server.close());
-      return undefined;
-    }
-    const signature = machine.verifySignature(req, url);
-    const scope = signature.ok ? machine.authorize(signature.principal, req.method, url) : signature;
-    const body = scope.ok ? await machine.verifyBody(req, url, signature.bodySha256) : scope;
-    if (!body.ok) return answer(body.status || 401, { ok: false, error: { code: body.code } });
-    seen.push(signature.principal);
-    answer(200, { ok: true });
-    setImmediate(() => server.close());
-  });
-  const port = await listen(server);
-  t.after(() => new Promise((resolve) => {
-    server.closeAllConnections?.();
-    if (server.listening) server.close(() => resolve());
-    else resolve();
-  }));
-  return { port, seen, get unsigned() { return unsigned; }, server };
-}
-
-async function stopEnv(root, entryPort) {
-  const env = {
-    ...process.env,
-    AI_ROOT: root,
-    NODE_EXE: process.execPath,
-    SERVICE_ENTRY_PORT: String(entryPort),
-    // Nothing listens on these, so no manager is asked to stop.
-    VLLM_MANAGER_PORT: String(await unusedPort()),
-    LLAMA_MANAGER_PORT: String(await unusedPort()),
-  };
-  delete env.SERVICE_GATEWAY_TRUST_TOKEN;
-  return env;
-}
-
-function runCmd(file, env, timeoutMs = 90_000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("cmd.exe", ["/d", "/c", file], { env, windowsHide: true });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`${path.basename(file)} did not finish:\n${stdout}\n${stderr}`));
-    }, timeoutMs);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-test("stop-service-entry.cmd stops a fixture entry that requires signatures", { skip: process.platform !== "win32" && "the launcher is a Windows .cmd" }, async (t) => {
-  const token = "fixture-entry-trust-token-0123456789abcdef";
-  const root = tempRoot(t, "stop-entry-");
-  writeTrustFile(root, token);
-  const fixture = await fixtureEntry(t, token);
-  const result = await runCmd(path.join(REPO_ROOT, "stop-service-entry.cmd"), await stopEnv(root, fixture.port));
-  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, new RegExp(`Stopped Service Entry on ${fixture.port}`));
-  assert.match(result.stdout, /is not running/);
-  assert.deepEqual(fixture.seen, ["system:cli"]);
-  assert.equal(fixture.unsigned, 0, "the signed request was enough");
-  assert.equal(fixture.server.listening, false);
-  assert.equal(`${result.stdout}${result.stderr}`.includes(token), false);
-});
-
-test("stop-service-entry.cmd falls back to the unsigned request when it cannot sign", { skip: process.platform !== "win32" && "the launcher is a Windows .cmd" }, async (t) => {
-  // No trust file: entry-call.js cannot sign, and an entry from before PUB-5
-  // still takes the unsigned loopback shutdown.
-  const root = tempRoot(t, "stop-entry-unsigned-");
-  const fixture = await fixtureEntry(t, "fixture-entry-trust-token-0123456789abcdef", { acceptUnsigned: true });
-  const result = await runCmd(path.join(REPO_ROOT, "stop-service-entry.cmd"), await stopEnv(root, fixture.port));
-  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /did not accept the signed shutdown request: entry-call: internal_key_unavailable/);
-  assert.match(result.stdout, new RegExp(`Stopped Service Entry on ${fixture.port}`));
-  assert.deepEqual(fixture.seen, []);
-  assert.equal(fixture.unsigned, 1);
 });

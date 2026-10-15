@@ -1699,6 +1699,24 @@ function resolveTargets(ctx, registry, components, args, fallback) {
   return { kind: "ids", ids: components.startOrder(registry, ids) };
 }
 
+/**
+ * The legacy launchers' words (06 §6.6, `--legacy-args`): for start, `all` is
+ * the full profile; `lan` means --lan, in either position. A shim that was
+ * given no profile keeps the old default, `core` (stop keeps its `all`).
+ */
+function legacyArgs({ args, flags }, { allIsFull = false } = {}) {
+  if (flags["legacy-args"] !== true) return { args, flags };
+  const words = [];
+  const mapped = { ...flags };
+  for (const word of args) {
+    if (/^lan$/i.test(word)) mapped.lan = true;
+    else if (allIsFull && /^all$/i.test(word)) words.push("full");
+    else if (/^all$/i.test(word)) words.push("all");
+    else words.push(word);
+  }
+  return { args: words.length ? words : ["core"], flags: mapped };
+}
+
 function selectedIds(components, registry, target) {
   return target.kind === "profile"
     ? components.startOrder(registry, components.selectProfile(registry, target.profile))
@@ -1774,7 +1792,8 @@ function componentUrls(ctx, spec, config, components) {
   return urls;
 }
 
-async function cmdStart(ctx, { args, flags }) {
+async function cmdStart(ctx, parsed) {
+  const { args, flags } = legacyArgs(parsed, { allIsFull: true });
   const timeoutMs = flags.timeout !== undefined ? Math.round(Number(flags.timeout) * 1000) : 180000;
   if (!(timeoutMs > 0)) throw new CliError(EXIT.USAGE, tr(ctx, "logs.bad", { option: "--timeout", value: flags.timeout }));
   const runtimeOverrides = {};
@@ -1910,7 +1929,8 @@ async function stopModelInstances(ctx, instances) {
   return failed;
 }
 
-async function cmdStop(ctx, { args, flags }) {
+async function cmdStop(ctx, parsed) {
+  const { args, flags } = legacyArgs(parsed);
   const config = loadConfig(ctx);
   const { registry, components } = loadRegistry(ctx, config);
   const target = resolveTargets(ctx, registry, components, args, "full");
@@ -2359,13 +2379,13 @@ const COMMANDS = {
   start: {
     usage: "start [core|full|<id>…] [--lan] [--public] [--save] [--restore-models] [--no-supervisor] [--no-browser] [--open] [--timeout s]",
     summary: { [ZH]: "启动平台或指定组件", [EN]: "Start the platform or selected components" },
-    spec: { bool: ["lan", "public", "save", "restore-models", "no-supervisor", "no-browser", "open", "json"], value: ["timeout"] },
+    spec: { bool: ["lan", "public", "save", "restore-models", "no-supervisor", "no-browser", "open", "json", "legacy-args"], value: ["timeout"] },
     run: cmdStart,
   },
   stop: {
     usage: "stop [<id>…|core|full|all] [--models] [--yes]",
     summary: { [ZH]: "停止组件", [EN]: "Stop components" },
-    spec: { bool: ["models", "yes"] },
+    spec: { bool: ["models", "yes", "legacy-args"] },
     run: cmdStop,
   },
   restart: {

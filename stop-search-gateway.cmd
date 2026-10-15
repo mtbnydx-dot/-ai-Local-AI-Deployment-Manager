@@ -1,8 +1,5 @@
 @echo off
 setlocal
-set "ROOT=%~dp0"
-set "SEARCH_ROOT=%ROOT%search-gateway"
-
-docker compose -f "%SEARCH_ROOT%\docker-compose.yml" down
-
-endlocal
+rem Legacy name kept (06 6.6): platform stop search-gateway.
+call "%~dp0platform.cmd" stop search-gateway
+exit /b %ERRORLEVEL%

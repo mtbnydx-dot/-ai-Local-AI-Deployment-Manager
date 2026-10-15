@@ -18,34 +18,35 @@ TTS 由独立脚本启动，统一入口负责健康展示、客户端 Key 校�
 
 ## 2. 启动
 
-本机模式：
+首次使用先看 [快速上手](getting-started.md)。日常操作都通过 `platform` 命令：
 
 ```bat
-.\start-service-entry.cmd
-.\start-tts-platform.cmd -NoBrowser
+platform start
+platform start full
+platform start --lan
+platform status
+platform doctor
+platform stop
 ```
 
-局域网模式：
+- `platform start`（等同 `platform start core`）启动统一入口和两个管理器，本机模式只监听 `127.0.0.1:5176`，浏览器以配对状态打开。`full` 再加 TTS 网关、MCP 和搜索网关（需要 Docker Desktop）。
+- `--lan` 让统一入口监听 `0.0.0.0:5176`，其它设备才能访问。管理器仍只监听 `managers.bindHost`（默认 `127.0.0.1`）；需要局域网直连管理器时在 `platform.json` 里设置，`platform doctor` 会报告。
+- `platform stop` 关闭控制台和管理器，不停止后台模型容器。需要卸载模型时，仍在对应管理器里使用“卸载模型”按钮；`platform stop --models` 会先列出并确认。
 
-```bat
-.\start-service-entry.cmd lan
-```
+旧脚本保留原名和参数，现在只是转调 `platform.cmd` 的短脚本：
 
-也可以直接双击：
+| 旧脚本 | 等同于 |
+|---|---|
+| `start-platform.cmd [core\|all] [lan]` | `platform start [core\|full] [--lan]` |
+| `start-service-entry.cmd [lan]`、`start-service-entry-lan.cmd` | `platform start core [--lan] --open`（`SERVICE_ENTRY_NO_BROWSER=1` 不开浏览器） |
+| `stop-service-entry.cmd`、`stop-platform.cmd [all]` | `platform stop entry vllm-manager llama-manager`、`platform stop core\|all` |
+| `status-service-entry.cmd`、`status-platform.cmd` | `platform status` |
+| `start\|stop\|status-platform-mcp.cmd` | `platform start\|stop\|status platform-mcp` |
+| `start\|stop-search-gateway.cmd` | `platform start\|stop search-gateway` |
+| `start-tts-platform.cmd [-GatewayOnly]` | `platform start tts-gateway tts-workers`（带 `-GatewayOnly` 时只启动网关） |
+| `vllm-manager\start-manager.cmd`、`llama-manager\start-manager.cmd`（及 `stop-manager.cmd`） | `platform start\|stop vllm-manager\|llama-manager`，启动后打开该管理器页面 |
 
-```bat
-.\start-service-entry-lan.cmd
-```
-
-本机模式只监听 `127.0.0.1:5176`。局域网模式会让统一入口监听 `0.0.0.0:5176`，其它设备才能访问。
-
-关闭控制台和管理器：
-
-```bat
-.\stop-service-entry.cmd
-```
-
-关闭脚本只关闭管理界面和管理器进程，不停止后台模型容器。需要卸载模型时，仍在对应管理器里使用“卸载模型”按钮。
+`status-tts-platform.cmd`、`update-platform.cmd` 和 `install-*.cmd` 不变。
 
 ## 3. 统一网关地址
 
@@ -162,7 +163,7 @@ llama.cpp：
 ## 9. 安全默认值
 
 - 默认启动脚本只开放本机。
-- 局域网模式需要显式执行 `start-service-entry.cmd lan`。
+- 局域网模式需要显式执行 `platform start --lan`（旧的 `start-service-entry.cmd lan` 等价）。
 - 对外服务建议始终启用 API Key。
 - 公网暴露前应使用反向代理、TLS、访问控制和速率限制。
 

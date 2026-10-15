@@ -1,4 +1,7 @@
 @echo off
 setlocal
-call "%~dp0start-service-entry.cmd" lan
-endlocal
+rem Legacy name kept (06 6.6): platform start core --lan. SERVICE_ENTRY_NO_BROWSER=1 keeps the browser closed.
+set "OPEN=--open" & if "%SERVICE_ENTRY_NO_BROWSER%"=="1" set "OPEN=--no-browser"
+set "LAN=--lan"
+call "%~dp0platform.cmd" start core %LAN% %OPEN%
+exit /b %ERRORLEVEL%

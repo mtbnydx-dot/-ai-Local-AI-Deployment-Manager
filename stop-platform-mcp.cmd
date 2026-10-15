@@ -1,4 +1,5 @@
 @echo off
 setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\stop-platform-mcp.ps1" -AiRoot "%~dp0."
+rem Legacy name kept (06 6.6): platform stop platform-mcp.
+call "%~dp0platform.cmd" stop platform-mcp
 exit /b %ERRORLEVEL%
