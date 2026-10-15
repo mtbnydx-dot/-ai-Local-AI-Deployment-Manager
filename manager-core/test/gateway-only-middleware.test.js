@@ -357,6 +357,35 @@ test("the gateway-only mode reader follows public.managersGatewayOnly at most ev
   assert.equal(core.normalizeGatewayOnlyMode(undefined), "warn", "the default is warn");
 });
 
+test("a real platform.json: enforce takes effect within 10 s without a restart, and bindHost 0.0.0.0 reopens the LAN (PUB-23)", async (t) => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const platformConfig = require("../platform/config");
+  const aiRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pub23-"));
+  t.after(() => fs.rmSync(aiRoot, { recursive: true, force: true }));
+  const env = {};
+  let clock = 0;
+  const reader = core.createGatewayOnlyModeReader({ aiRoot, env, now: () => clock });
+  assert.equal(reader(), "warn", "an empty config reads the default");
+
+  const written = await platformConfig.writeSection("public", { managersGatewayOnly: "enforce" }, { aiRoot, env, actor: "test" });
+  assert.equal(written.ok, true, JSON.stringify(written.errors));
+  clock = 9_999;
+  assert.equal(reader(), "warn", "still inside the 10 s window");
+  clock = 10_000;
+  assert.equal(reader(), "enforce", "applied without a restart");
+
+  const loopback = platformConfig.loadPlatformConfig({ aiRoot, env });
+  assert.equal(platformConfig.childEnv(loopback, "vllm-manager").env.VLLM_MANAGER_HOST, "127.0.0.1");
+  assert.equal(platformConfig.childEnv(loopback, "llama-manager").env.LLAMA_MANAGER_HOST, "127.0.0.1");
+  const bound = await platformConfig.writeSection("managers", { bindHost: "0.0.0.0" }, { aiRoot, env, actor: "test" });
+  assert.equal(bound.ok, true, JSON.stringify(bound.errors));
+  const lan = platformConfig.loadPlatformConfig({ aiRoot, env });
+  assert.equal(platformConfig.childEnv(lan, "vllm-manager").env.VLLM_MANAGER_HOST, "0.0.0.0");
+  assert.equal(platformConfig.childEnv(lan, "llama-manager").env.LLAMA_MANAGER_HOST, "0.0.0.0");
+});
+
 test("GET /api/manager/health advertises gatewayTrust { version: 2, mode } (the entry's key-strip switch)", async () => {
   const os = require("node:os");
   const path = require("node:path");
