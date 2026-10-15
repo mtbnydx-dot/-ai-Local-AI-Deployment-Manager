@@ -192,14 +192,35 @@ test("every timeseries metric has a zh and en label (07 CON-7b reads obs.metric.
   }
 });
 
-test("dynamic-keys.json covers the looked-up families and every key is used or listed", () => {
+// Every console module's source text, which is what "used" means for a key
+// that no dynamic prefix covers (the same rule as service-entry/test/console/i18n.test.js).
+function consoleSourceText() {
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "i18n") walk(full);
+      } else if (/\.m?js$/.test(entry.name)) {
+        out.push(fs.readFileSync(full, "utf8"));
+      }
+    }
+  };
+  walk(path.join(REPO_ROOT, "service-entry", "console"));
+  return out.join("\n");
+}
+
+test("dynamic-keys.json keeps TEL-19's looked-up families and every key is under a prefix, listed, or used by a console module", () => {
   const dynamic = readJson(path.join(AREA_DIR, "dynamic-keys.json"));
-  assert.deepEqual([...dynamic.prefixes].sort(), ["obs.alert.", "obs.err.", "obs.metric.", "obs.term."]);
+  // CON-17/18/19 add the keys their pages need (07 §3.7), and their dynamic families with them.
+  for (const prefix of ["obs.alert.", "obs.err.", "obs.metric.", "obs.term."]) assert.ok(dynamic.prefixes.includes(prefix), `${prefix} is missing`);
   const keys = keysOf(area("en-US"));
   for (const key of dynamic.unused) assert.ok(keys.includes(key), `${key} is listed as unused but does not exist`);
+  const sources = consoleSourceText();
   for (const key of keys) {
-    const covered = dynamic.prefixes.some((prefix) => key.startsWith(prefix)) || dynamic.unused.includes(key);
-    assert.ok(covered, `${key} is neither under a dynamic prefix nor listed`);
+    const covered = dynamic.prefixes.some((prefix) => key.startsWith(prefix)) || dynamic.unused.includes(key)
+      || ["\"", "'", "`"].some((quote) => sources.includes(`${quote}${key}${quote}`));
+    assert.ok(covered, `${key} is neither under a dynamic prefix, listed, nor used`);
   }
 });
 
