@@ -299,7 +299,7 @@ test("legacyBodyToRequest never coerces the engine (01 §3)", (t) => {
   assert.equal(aliases.legacyBodyToRequest({ model: "m", engine: "SGLang" }, vllmOptions).request.engineId, "sglang");
   assert.equal(aliases.legacyBodyToRequest({ model: "m" }, llamaOptions).request.engineId, "llamacpp");
   assert.equal(aliases.legacyBodyToRequest({ model: "m", engine: "llama" }, llamaOptions).request.engineId, "llamacpp");
-  for (const [engine, options] of [["bogus", vllmOptions], ["llama", vllmOptions], ["sglang", llamaOptions], ["lmdeploy", vllmOptions]]) {
+  for (const [engine, options] of [["bogus", vllmOptions], ["llama", vllmOptions], ["sglang", llamaOptions], ["mlc-llm", vllmOptions], ["lmdeploy", llamaOptions]]) {
     assert.throws(() => aliases.legacyBodyToRequest({ model: "m", engine }, options), (error) => error.status === 400 && error.code === "unknown_engine", engine);
   }
   assert.throws(() => aliases.legacyBodyToRequest([], vllmOptions), (error) => error.status === 400 && error.code === "invalid_body");

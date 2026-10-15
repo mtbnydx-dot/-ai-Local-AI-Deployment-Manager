@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 90,
+  "id": "trtllm",
+  "label": {
+    "zh": "TensorRT-LLM（实验）",
+    "en": "TensorRT-LLM (experimental)"
+  },
+  "description": {
+    "zh": "NVIDIA TensorRT-LLM 的 trtllm-serve（PyTorch 后端）。不支持 API Key，端口只发布到本机回环地址。实验性引擎，由通用 docker-template 适配器启动；镜像不会自动拉取。",
+    "en": "NVIDIA TensorRT-LLM's trtllm-serve (PyTorch backend). It has no API-key support, so its port is published on loopback only. Experimental engine launched by the generic docker-template adapter; its image is never pulled automatically."
+  },
+  "family": "openai-server",
+  "adapter": "docker-template",
+  "tier": 2,
+  "status": "experimental",
+  "hostManager": "vllm",
+  "legacy": {
+    "engineLabel": "trtllm",
+    "managerEngineField": "trtllm"
+  },
+  "artifactFormats": [
+    "safetensors",
+    "fp8",
+    "nvfp4",
+    "awq",
+    "gptq"
+  ],
+  "runtimes": {
+    "default": "trtllm",
+    "allowed": [
+      "trtllm"
+    ],
+    "allowCustomImage": true
+  },
+  "host": {
+    "kinds": [
+      "docker"
+    ],
+    "default": "docker",
+    "containerPort": 8000,
+    "ipc": "host",
+    "init": false,
+    "ulimits": [
+      "memlock=-1",
+      "stack=67108864"
+    ],
+    "restart": "on-failure:3",
+    "gpus": "required",
+    "allowLan": false,
+    "healthcheck": {
+      "cmd": "python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=4)\" || exit 1",
+      "interval": "30s",
+      "timeout": "5s",
+      "retries": 3
+    },
+    "cacheMounts": [
+      {
+        "configKey": "hfCache",
+        "target": "/root/.cache/huggingface"
+      }
+    ]
+  },
+  "api": {
+    "openaiBase": "/v1",
+    "models": "/v1/models",
+    "health": "/health",
+    "version": [
+      "/version"
+    ],
+    "ready": {
+      "kind": "models-list"
+    },
+    "probe": {
+      "kind": "chat-generation",
+      "maxTokens": 32
+    }
+  },
+  "apiSurface": {
+    "chat": true,
+    "completions": true,
+    "responses": false,
+    "messages": false,
+    "embeddings": false,
+    "rerank": false
+  },
+  "apiQuirks": {
+    "reasoningField": null
+  },
+  "catalog": "launch-params/trtllm.json",
+  "memoryModel": {
+    "kind": "free-fraction-after-weights",
+    "fractionParam": "trtllm.kvCacheFreeGpuMemoryFraction"
+  },
+  "capabilities": {
+    "parallelInstances": true,
+    "tensorParallel": true,
+    "pipelineParallel": false,
+    "dataParallel": false,
+    "expertParallel": false,
+    "speculative": [],
+    "autoParsers": {
+      "tool": null,
+      "reasoning": null
+    },
+    "lora": false,
+    "multiModel": false,
+    "hotLoad": false,
+    "sleepWake": false,
+    "roles": [
+      "chat"
+    ]
+  },
+  "knowledgeKeys": [],
+  "secrets": {
+    "apiKey": {
+      "mode": "unsupported"
+    }
+  },
+  "managedFlags": [
+    "--host",
+    "--port",
+    "--backend",
+    "--extra_llm_api_options"
+  ],
+  "extraEnvAllow": [
+    "TRTLLM_",
+    "TLLM_",
+    "NCCL_",
+    "PYTORCH_",
+    "TORCH_"
+  ],
+  "introspection": {
+    "entrypoint": "trtllm-serve",
+    "argv": [
+      "--help"
+    ],
+    "parser": "click"
+  },
+  "metricsMap": {
+    "path": "/metrics",
+    "format": "json",
+    "map": {
+      "requestsRunning": [
+        {
+          "pick": "numActiveRequests"
+        }
+      ],
+      "requestsWaiting": [
+        {
+          "pick": "numQueuedRequests"
+        }
+      ],
+      "kvUsageRatio": [
+        {
+          "ratio": [
+            "kvCacheStats.usedNumBlocks",
+            "kvCacheStats.maxNumBlocks"
+          ]
+        }
+      ]
+    }
+  },
+  "template": {
+    "entrypoint": "trtllm-serve",
+    "args": [
+      "{{model.containerPath}}",
+      {
+        "flag": "--host",
+        "value": "0.0.0.0"
+      },
+      {
+        "flag": "--port",
+        "value": "{{host.containerPort}}"
+      },
+      {
+        "flag": "--backend",
+        "value": "pytorch"
+      },
+      {
+        "flag": "--tp_size",
+        "value": "{{tensorParallel}}"
+      },
+      {
+        "flag": "--max_batch_size",
+        "value": "{{concurrency}}"
+      },
+      {
+        "flag": "--max_seq_len",
+        "value": "{{contextLength}}"
+      },
+      {
+        "flag": "--kv_cache_free_gpu_memory_fraction",
+        "value": "{{trtllm.kvCacheFreeGpuMemoryFraction}}"
+      },
+      {
+        "flag": "--reasoning_parser",
+        "value": "{{reasoningParser}}"
+      },
+      {
+        "flag": "--tool_parser",
+        "value": "{{toolCallParser}}"
+      },
+      {
+        "flag": "--extra_llm_api_options",
+        "value": "{{file.extra}}"
+      }
+    ],
+    "env": {},
+    "files": [
+      {
+        "id": "extra",
+        "target": "/launch-files/extra.yaml",
+        "format": "yaml",
+        "secret": false,
+        "content": {
+          "enable_iter_perf_stats": true,
+          "kv_cache_config": {
+            "dtype": "{{kvCacheDtype}}",
+            "enable_block_reuse": true
+          }
+        }
+      }
+    ],
+    "flagFormat": "space"
+  }
+}

@@ -4558,7 +4558,9 @@ test("shutdown helper terminates a live download process and marks it interrupte
   core.interruptRunningDownloadJobs(jobs);
   assert.equal(job.status, "interrupted");
   let alive = true;
-  const exitDeadline = Date.now() + 2_000;
+  // Termination goes through the OS (taskkill on Windows), which can take many
+  // seconds on a loaded machine; only a process that outlives this is a failure.
+  const exitDeadline = Date.now() + 30_000;
   do {
     await new Promise((resolve) => setTimeout(resolve, 50));
     try {

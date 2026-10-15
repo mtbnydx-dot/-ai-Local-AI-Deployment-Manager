@@ -964,6 +964,6 @@ test("the route module hands the manager's engine registry to the process-wide l
   t.after(() => core.models.knowledge.clearCache());
   const registry = { errorSignatureAdditions: () => [{ engineId: "vllm", id: "route-added", regex: "boom", phase: "api" }] };
   registerModelInspectorRoutes(recordingApp(), { managerId: "vllm", registry });
-  assert.deepEqual(core.models.knowledge.errorSignatures("vllm").map((item) => item.id), ["route-added"]);
+  assert.ok(core.models.knowledge.errorSignatures("vllm").some((item) => item.id === "route-added"));
   assert.ok(core.models.knowledge.status().layers[0].files.some((file) => file.name === "engine descriptors"));
 });

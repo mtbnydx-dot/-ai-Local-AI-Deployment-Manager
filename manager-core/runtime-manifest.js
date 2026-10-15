@@ -152,6 +152,36 @@ const FALLBACK_RUNTIMES = Object.freeze({
     version: "muse-62bf73d",
     revision: "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0",
   }),
+  // Experimental docker-template engines (01 §19.2): tags, not digests, until
+  // the owner pins one. Pulled only on an explicit request.
+  lmdeploy: Object.freeze({
+    label: "LMDeploy OpenAI server (experimental)",
+    engineId: "lmdeploy",
+    compatVersion: "0.18.0",
+    features: Object.freeze({}),
+    version: "v0.18.0",
+    repository: "openmmlab/lmdeploy",
+    platform: "linux/amd64",
+    verifiedComputeCapabilityMax: "9.0",
+  }),
+  trtllm: Object.freeze({
+    label: "TensorRT-LLM trtllm-serve (experimental)",
+    engineId: "trtllm",
+    compatVersion: "1.3.0rc29",
+    features: Object.freeze({}),
+    version: "1.3.0rc29",
+    repository: "nvcr.io/nvidia/tensorrt-llm/release",
+    platform: "linux/amd64",
+  }),
+  tabbyapi: Object.freeze({
+    label: "TabbyAPI (ExLlamaV3, experimental)",
+    engineId: "tabbyapi",
+    compatVersion: null,
+    features: Object.freeze({}),
+    version: "cu13",
+    repository: "ghcr.io/theroyallab/tabbyapi",
+    platform: "linux/amd64",
+  }),
 });
 
 function deepFreeze(value) {
