@@ -30,7 +30,7 @@ function CredentialsTable({ data, fmt }) {
     { id: "status", header: t("billing.col.status"), sort: (c) => c.active, cell: (c) => html`<${ActiveStatus} active=${c.active} />`, csv: (c) => (c.active ? "active" : "inactive") },
     { id: "updated", header: t("billing.col.updated"), sort: (c) => Date.parse(c.updatedAt) || 0, cell: (c) => fmt.dateTime(c.updatedAt), csv: (c) => c.updatedAt },
   ];
-  return html`<${DataTable} id="billing-credentials" columns=${columns} rows=${data.credentials} rowKey=${(c) => c.id} responsive="cards" caption=${t("billing.credentials.title")} exportName="billing-credentials"
+  return html`<${DataTable} id="billing-credentials" columns=${columns} rows=${data.credentials} rowKey=${(c) => c.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.credentials.title") })} exportName="billing-credentials"
     loading=${!data.settled && !data.loaded}
     empty=${html`<${EmptyTable} data=${data} titleKey="billing.empty.credentials" icon="key-round" testid="billing.credentials.empty" />`} />`;
 }
@@ -61,7 +61,7 @@ export default function CustomersTab({ data, section, query = {}, defaultManager
   return html`<div class="stack" data-testid="billing.customers">
     <${Card} title=${t("billing.manage.title")} level=${2} testid="billing.customers.card">
       <p class="muted small">${t("billing.manage.note")}</p>
-      <${DataTable} id="billing-customers" columns=${columns} rows=${data.customers} rowKey=${(c) => c.id} responsive="cards" caption=${t("billing.manage.title")} exportName="billing-customers"
+      <${DataTable} id="billing-customers" columns=${columns} rows=${data.customers} rowKey=${(c) => c.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.manage.title") })} exportName="billing-customers"
         loading=${!data.settled && !data.loaded}
         empty=${html`<${EmptyTable} data=${data} titleKey="billing.empty.customers" icon="boxes" testid="billing.customers.empty" />`} />
     <//>

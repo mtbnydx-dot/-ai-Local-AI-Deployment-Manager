@@ -260,6 +260,7 @@
   "billing.tab.overview": "Overview",
   "billing.tab.prices": "Plans & prices",
   "billing.tab.usage": "Usage & ledger",
+  "billing.tableOf": "{title} (table)",
   "billing.tabs.label": "Billing views",
   "billing.templates.allProviders": "All",
   "billing.templates.applied": "The official price template was applied atomically and the price rules are refreshed.",

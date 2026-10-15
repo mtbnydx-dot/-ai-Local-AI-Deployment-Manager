@@ -24,7 +24,7 @@ export default function AuditTab({ data }) {
   return html`<div class="stack" data-testid="billing.audit">
     <${Card} title=${t("billing.audit.title")} level=${2} testid="billing.audit.card">
       <p class="muted small">${t("billing.audit.note")}</p>
-      <${DataTable} id="billing-audit" columns=${columns} rows=${paged.rows} rowKey=${(e, index) => e.id || index} responsive="cards" caption=${t("billing.audit.title")} exportName="billing-audit"
+      <${DataTable} id="billing-audit" columns=${columns} rows=${paged.rows} rowKey=${(e, index) => e.id || index} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.audit.title") })} exportName="billing-audit"
         loading=${!data.settled && !data.loaded}
         source=${{ cursor: paged.cursor, loading: paged.loading, loadMore: paged.loadMore }}
         empty=${html`<${EmptyTable} data=${data} titleKey="billing.empty.audit" icon="file-search" testid="billing.audit.empty" />`} />

@@ -260,6 +260,7 @@
   "billing.tab.overview": "总览",
   "billing.tab.prices": "套餐与价格",
   "billing.tab.usage": "用量与账本",
+  "billing.tableOf": "{title}（表格）",
   "billing.tabs.label": "计费中心视图",
   "billing.templates.allProviders": "全部",
   "billing.templates.applied": "官方价格模板已原子套用，价格规则已刷新。",

@@ -42,7 +42,7 @@ function RawRequests({ data, fmt, filters, setFilters }) {
     ${model ? html`<${Button} size="sm" onClick=${() => setFilters({ customerId, model: "" })} testid="billing.usage.filter-model">${t("billing.usage.filterModel", { model })} ×<//>` : null}`;
   return html`<${Card} title=${html`<span data-testid="billing.usage.heading">${t("billing.usage.rawTitle")}</span>`} level=${2} testid="billing.usage.card">
     <p class="muted small">${t("billing.usage.rawNote")}</p>
-    <${DataTable} id="billing-usage" columns=${columns} rows=${rows} rowKey=${(u) => u.id} responsive="cards" caption=${t("billing.usage.rawTitle")} exportName="billing-usage"
+    <${DataTable} id="billing-usage" columns=${columns} rows=${rows} rowKey=${(u) => u.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.usage.rawTitle") })} exportName="billing-usage"
       loading=${first.status === "loading" && !first.data}
       source=${{ cursor: paged.cursor, loading: paged.loading, loadMore: paged.loadMore }}
       filters=${customerId || model ? chips : undefined}
@@ -64,7 +64,7 @@ function Ledger({ data, fmt }) {
   ];
   return html`<${Card} title=${t("billing.ledger.title")} level=${2} testid="billing.ledger.card">
     <p class="muted small">${t("billing.ledger.note")}</p>
-    <${DataTable} id="billing-ledger" columns=${columns} rows=${paged.rows} rowKey=${(e, index) => e.id || index} responsive="cards" caption=${t("billing.ledger.title")} exportName="billing-ledger"
+    <${DataTable} id="billing-ledger" columns=${columns} rows=${paged.rows} rowKey=${(e, index) => e.id || index} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.ledger.title") })} exportName="billing-ledger"
       loading=${!data.settled && !data.loaded}
       source=${{ cursor: paged.cursor, loading: paged.loading, loadMore: paged.loadMore }}
       empty=${html`<${EmptyTable} data=${data} titleKey="billing.empty.ledger" testid="billing.ledger.empty" />`} />

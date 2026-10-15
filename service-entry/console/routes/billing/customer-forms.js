@@ -8,6 +8,7 @@
 
 import { ConfirmDialog } from "../../components/confirm-dialog.js";
 import { availableClients, createIdempotencyKey, MANAGER_IDS, MODES, validateAdjustment, validateCredential, validateCustomer, validatePolicy } from "../../lib/billing-model.js";
+import { tk } from "../../lib/i18n.js";
 import { useServices } from "../../ui/context.js";
 import { html } from "../../ui/html.js";
 import { useEffect, useMemo, useState } from "../../ui/vendor.js";

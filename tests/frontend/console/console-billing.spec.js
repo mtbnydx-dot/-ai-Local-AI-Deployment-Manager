@@ -63,6 +63,7 @@ function freshScenario() {
     failAll: false,
     summaryShape: true,
     csrfRejectOnce: false,
+    refuseNextWrite: false,
     requireSession: false,
     customers: [{
       customerId: CUSTOMER_ID,
@@ -287,6 +288,10 @@ function billingApi(s) {
       s.csrfRejectOnce = false;
       return { status: 403, body: { ok: false, error: { code: "csrf_invalid", message: "Reload the page.", hint: "reload" } } };
     }
+    if (s.refuseNextWrite) {
+      s.refuseNextWrite = false;
+      return { status: 409, body: { ok: false, error: { code: "ledger_conflict", message: "MOCK ledger refused the entry.", hint: "retry" } } };
+    }
     return fn(request, route, record);
   };
   const patch = (list, id, body, field) => {
@@ -437,6 +442,7 @@ async function open(browser, { bootstrap = OWNER, theme = "light", locale = "en-
   scenario.summaryRequests = [];
   const mock = await mockConsoleApi(page, {
     "GET /api/platform/status": fixture("platform-status"),
+    "GET /api/platform/version": { ok: true, version: "0.2.0-git-2ad10e5ffe68", build: { commit: "2ad10e5ffe68", contentHash: "3f9c2a1b7d0e" }, newerCommits: 0 },
     "GET /api/fleet": fixture("fleet"),
     "GET /api/session": () => {
       scenario.sessionReads += 1;
@@ -652,7 +658,7 @@ test("customer, plan, credential and balance forms send bounded bodies with the 
 });
 
 test("a credit adjustment asks without typing, a bad form shows field errors and sends nothing", async ({ browser }) => {
-  const { context, page, mock } = await open(browser);
+  const { context, page, mock, scenario } = await open(browser);
   try {
     await load(page, "/billing/customers");
     await byId(page, "billing-adjustment-form.submit").click();
@@ -675,6 +681,7 @@ test("a credit adjustment asks without typing, a bad form shows field errors and
     await byId(page, "dialog.cancel").click();
     expect(callsOf(mock, "POST", "/api/billing/ledger/adjustments")).toHaveLength(0);
     // A server refusal stays on the form of the dialog.
+    scenario.refuseNextWrite = true;
     await byId(page, "billing-adjustment-form.submit").click();
     await byId(page, "dialog.confirm").click();
     await expect(page.locator("[role=status]").filter({ hasText: "written to the ledger" })).toHaveCount(0);
@@ -751,8 +758,11 @@ test("a stale CSRF token is re-read once and retried; an unpaired write shows th
     const screen = byId(page, "pairing-screen.root");
     await expect(screen).toBeVisible();
     await expect(byId(page, "pairing-screen.command")).toContainText("platform admin pair");
+    // Billing is an owner page: dismissing the overlay leaves the viewer on the route's own
+    // pairing gate, never on the forms.
     await byId(page, "pairing-screen.dismiss").click();
-    await expect(screen).toHaveCount(0);
+    await expect(screen).toBeVisible();
+    await expect(byId(page, "billing.root")).toHaveCount(0);
     expect(mock.csrfViolations).toEqual([]);
     expect(realFailures(failures)).toEqual([]);
   } finally {
@@ -987,13 +997,15 @@ test("raw requests and the ledger page on: load more appends the next page by cu
   const scenario = freshScenario();
   const row = (n) => ({ ...scenario.usage[0], usageId: `66666666-6666-4666-8666-${String(n).padStart(12, "0")}`, model: `local/page-${n}` });
   const apiOverrides = billingApi(scenario);
-  const { context, page, mock } = await open(browser, { scenario });
+  const { context, page } = await open(browser, { scenario });
+  const usageCursors = [];
   try {
     const firstUsage = Array.from({ length: 100 }, (_, index) => row(index));
     await page.route("**/api/billing/usage?**", async (route) => {
       const url = new URL(route.request().url());
       if (url.pathname !== "/api/billing/usage") return route.fallback();
       const second = url.searchParams.get("cursor") === "CURSOR_2";
+      usageCursors.push(url.searchParams.get("cursor"));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, items: second ? [row(1000)] : firstUsage, nextCursor: second ? null : "CURSOR_2" }) });
     });
     const firstLedger = Array.from({ length: 100 }, (_, index) => ({ ...scenario.ledger[0], entryId: `77777777-7777-4777-8777-${String(index).padStart(12, "0")}`, reason: `ledger-${index}` }));
@@ -1010,7 +1022,7 @@ test("raw requests and the ledger page on: load more appends the next page by cu
     await expect(raw.locator('[data-testid="data-table.row"]')).toHaveCount(101);
     await expect(raw).toContainText("local/page-1000");
     await expect(raw.locator('[data-testid="data-table.load-more"]')).toHaveCount(0);
-    expect(mock.calls.some((call) => call.path === "/api/billing/usage" && call.query.cursor === "CURSOR_2")).toBe(true);
+    expect(usageCursors).toEqual([null, "CURSOR_2"]);
     const ledger = byId(page, "billing.ledger.card");
     await expect(ledger.locator('[data-testid="data-table.row"]')).toHaveCount(100);
     await ledger.locator('[data-testid="data-table.load-more"]').click();

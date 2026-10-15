@@ -49,7 +49,7 @@ export function UsageSummary({ data, onDrill }) {
     <${Card} title=${t("billing.summary.heading")} level=${2}>
       <p class="muted small" data-testid="billing.summary.note">${t("billing.summary.note", period)}</p>
       <${DailyChart} daily=${data.usageDaily} fmt=${fmt} />
-      <div class="table-wrap" tabindex="0" role="region" aria-label=${t("billing.summary.heading")}>
+      <div class="table-wrap" tabindex="0" role="region" aria-label=${t("billing.tableOf", { title: t("billing.summary.heading") })}>
         <table class="table usage-summary-table">
           <thead><tr>${COLUMNS.map((name, index) => html`<th key=${name} scope="col" class=${index >= KEY_COLUMNS ? "num" : undefined}>${t(tk("billing.summary.col.", name))}</th>`)}</tr></thead>
           <tbody data-testid="billing.summary.rows">

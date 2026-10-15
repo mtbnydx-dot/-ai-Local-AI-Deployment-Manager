@@ -170,7 +170,7 @@ export function TemplatesSection({ data }) {
         <${Chip} pressed=${provider === ""} onClick=${() => setProvider("")} data-template-provider="" testid="billing.templates.provider">${t("billing.templates.allProviders")}<//>
         ${providers.map((name) => html`<${Chip} key=${name} pressed=${provider === name} onClick=${() => setProvider(name)} data-template-provider=${name} testid="billing.templates.provider">${name}<//>`)}
       </div>
-      <${DataTable} id="billing-templates" columns=${columns} rows=${rows} rowKey=${(item) => item.id} responsive="cards" caption=${t("billing.templates.title")} exportName="billing-price-templates"
+      <${DataTable} id="billing-templates" columns=${columns} rows=${rows} rowKey=${(item) => item.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.templates.title") })} exportName="billing-price-templates"
         loading=${!data.templates.length && !data.settled}
         filters=${html`<input class="input keys-search" type="search" maxlength="100" value=${search} placeholder=${t("billing.templates.search")} aria-label=${t("billing.templates.searchLabel")}
           onInput=${(event) => setSearch(event.currentTarget.value)} data-testid="billing.templates.search" />`}

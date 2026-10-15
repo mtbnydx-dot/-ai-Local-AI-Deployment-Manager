@@ -59,7 +59,7 @@ function PriceRules({ data, fmt }) {
   return html`<${Section} id="billing-price-rules">
     <${Card} title=${t("billing.prices.title")} level=${2} testid="billing.prices.card">
       <p class="muted small">${t("billing.prices.note")}</p>
-      <${DataTable} id="billing-prices" columns=${columns} rows=${rows} rowKey=${(p) => p.id} responsive="cards" caption=${t("billing.prices.title")} exportName="billing-prices"
+      <${DataTable} id="billing-prices" columns=${columns} rows=${rows} rowKey=${(p) => p.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.prices.title") })} exportName="billing-prices"
         loading=${!data.settled && !data.loaded}
         filters=${html`<${PriceFilters} filters=${filters} set=${(patch) => setFilters((current) => ({ ...current, ...patch }))} providers=${providers} data=${data} fmt=${fmt} />`}
         empty=${html`<${EmptyTable} data=${data} titleKey="billing.empty.prices" testid="billing.prices.empty" />`} />
@@ -77,7 +77,7 @@ function PlansTable({ data, fmt }) {
     { id: "mode", header: t("billing.col.defaultMode"), cell: (p) => fmt.mode(p.enforcementMode), csv: (p) => p.enforcementMode },
     { id: "status", header: t("billing.col.status"), cell: (p) => html`<${ActiveStatus} active=${p.active} />`, csv: (p) => (p.active ? "active" : "inactive") },
   ];
-  return html`<${DataTable} id="billing-plans" columns=${columns} rows=${data.plans} rowKey=${(p) => p.id} responsive="cards" caption=${t("billing.plans.title")} exportName="billing-plans"
+  return html`<${DataTable} id="billing-plans" columns=${columns} rows=${data.plans} rowKey=${(p) => p.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.plans.title") })} exportName="billing-plans"
     loading=${!data.settled && !data.loaded}
     empty=${html`<${EmptyTable} data=${data} titleKey="billing.empty.plans" testid="billing.plans.empty" />`} />`;
 }

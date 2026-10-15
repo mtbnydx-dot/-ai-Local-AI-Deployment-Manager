@@ -90,7 +90,7 @@ function RecentRequests({ data, fmt }) {
   return html`<${Card} title=${html`<span data-testid="billing.recent.heading">${t("billing.recent.title")}</span>`} level=${2} testid="billing.recent"
     actions=${html`<${Button} size="sm" href="/billing/usage" testid="billing.recent.ledger">${t("billing.recent.viewLedger")}<//>`}>
     <p class="muted small">${t("billing.recent.note")}</p>
-    <${DataTable} id="billing-recent" columns=${columns} rows=${rows} rowKey=${(u) => u.id} responsive="cards" caption=${t("billing.recent.title")} exportName="billing-recent-requests"
+    <${DataTable} id="billing-recent" columns=${columns} rows=${rows} rowKey=${(u) => u.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.recent.title") })} exportName="billing-recent-requests"
       loading=${!data.settled && !data.loaded}
       empty=${html`<${EmptyTable} data=${data} titleKey="billing.empty.recent" testid="billing.recent.empty" />`} />
   <//>`;
@@ -111,7 +111,7 @@ export default function OverviewTab({ data, defaults }) {
       <${Card} title=${t("billing.customers.title")} level=${2} testid="billing.overview.customers"
         actions=${html`<${Button} size="sm" href="/billing/customers" testid="billing.customers.viewAll">${t("billing.customers.viewAll")}<//>`}>
         <p class="muted small">${t("billing.customers.note")}</p>
-        <${DataTable} id="billing-overview-customers" columns=${columns} rows=${rows} rowKey=${(c) => c.id} responsive="cards" caption=${t("billing.customers.title")} exportName="billing-customers"
+        <${DataTable} id="billing-overview-customers" columns=${columns} rows=${rows} rowKey=${(c) => c.id} responsive="cards" caption=${t("billing.tableOf", { title: t("billing.customers.title") })} exportName="billing-customers"
           loading=${!data.settled && !data.loaded}
           filters=${html`<${CustomerFilters} filters=${filters} set=${(patch) => setFilters((current) => ({ ...current, ...patch }))} data=${data} fmt=${fmt} />`}
           empty=${html`<${EmptyTable} data=${data} titleKey=${data.customers.length ? "billing.empty.customersMatch" : "billing.empty.customers"} icon="boxes" testid="billing.customers.empty" />`} />
