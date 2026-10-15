@@ -1,0 +1,291 @@
+{
+  "ok": true,
+  "cardId": "mc_aaaaaaaaaaaaaaaaaaaa",
+  "goal": "balanced",
+  "notes": [
+    {
+      "zh": "方案按空显卡估算。",
+      "en": "Plans are estimated on empty GPUs."
+    }
+  ],
+  "gpuSets": [
+    {
+      "gpuIds": [
+        "0"
+      ],
+      "notes": [],
+      "plans": [
+        {
+          "planId": "pl_1",
+          "rank": 1,
+          "gpuIds": [
+            "0"
+          ],
+          "goal": "balanced",
+          "engineId": "vllm",
+          "runtimeId": "vllm@0.28.0",
+          "recipeId": null,
+          "title": {
+            "zh": "vLLM · 256K 上下文 · 4 路并发 · FP8 KV",
+            "en": "vLLM · 256K context · 4 sequences · FP8 KV"
+          },
+          "values": {
+            "contextLength": {
+              "value": 262144,
+              "source": "planner",
+              "reason": {
+                "zh": "模型原生上限",
+                "en": "The model's native limit"
+              }
+            },
+            "concurrency": {
+              "value": 4,
+              "source": "planner"
+            },
+            "kvCacheDtype": {
+              "value": "fp8",
+              "source": "planner",
+              "reason": {
+                "zh": "省一半 KV 显存",
+                "en": "Halves the KV memory"
+              }
+            }
+          },
+          "fit": {
+            "status": "ok",
+            "statusReasons": [],
+            "spill": false,
+            "policy": "static-fraction-of-free",
+            "perGpuMb": {
+              "0": 60000
+            },
+            "budgetMb": {
+              "0": 64000
+            },
+            "headroomMb": 4000,
+            "admissionRequestMb": 60000,
+            "kvPoolTokens": 200000,
+            "maxFullLengthRequests": 3,
+            "breakdown": {
+              "weights": 30000,
+              "kv": 20000,
+              "activations": 8000,
+              "draft": 1000,
+              "mmproj": 500,
+              "overhead": 500
+            },
+            "ram": {
+              "weights": 0,
+              "experts": 0,
+              "kv": 0
+            },
+            "offloadedMb": 0,
+            "confidence": "config"
+          },
+          "support": {
+            "verdict": "ok",
+            "reasons": []
+          },
+          "requiresProbe": false,
+          "meetsTarget": true,
+          "tradeoffs": [
+            {
+              "zh": "KV 缓存使用 fp8，显存减半，精度略有损失。",
+              "en": "The KV cache uses fp8: half the memory at a small precision cost."
+            }
+          ],
+          "validated": {
+            "ok": true,
+            "errors": [],
+            "warnings": [],
+            "admission": {
+              "verdict": "ok",
+              "message": ""
+            },
+            "planHash": "sha256:cccccccc",
+            "commandPreview": null
+          }
+        },
+        {
+          "planId": "pl_2",
+          "rank": 2,
+          "gpuIds": [
+            "0"
+          ],
+          "goal": "balanced",
+          "engineId": "llamacpp",
+          "runtimeId": "llamacpp@b6000",
+          "recipeId": null,
+          "title": {
+            "zh": "llama.cpp · 64K 上下文 · 2 层专家放内存",
+            "en": "llama.cpp · 64K context · experts of 2 layers in RAM"
+          },
+          "values": {
+            "contextLength": {
+              "value": 65536,
+              "source": "planner"
+            },
+            "concurrency": {
+              "value": 1,
+              "source": "planner"
+            },
+            "llamacpp.cacheTypeK": {
+              "value": "q8_0",
+              "source": "planner"
+            },
+            "llamacpp.nCpuMoe": {
+              "value": 2,
+              "source": "planner",
+              "reason": {
+                "zh": "把 3.8 GiB 路由专家放到内存",
+                "en": "moves 3.8 GiB of routed experts to RAM"
+              }
+            }
+          },
+          "fit": {
+            "status": "warn",
+            "statusReasons": [],
+            "spill": true,
+            "policy": "gguf-estimate",
+            "perGpuMb": {
+              "0": 60000
+            },
+            "budgetMb": {
+              "0": 64000
+            },
+            "headroomMb": 4000,
+            "admissionRequestMb": 60000,
+            "kvPoolTokens": 200000,
+            "maxFullLengthRequests": 3,
+            "breakdown": {
+              "weights": 30000,
+              "kv": 20000,
+              "activations": 8000,
+              "draft": 1000,
+              "mmproj": 500,
+              "overhead": 500
+            },
+            "ram": {
+              "weights": 0,
+              "experts": 3891,
+              "kv": 0
+            },
+            "offloadedMb": 3891,
+            "confidence": "config"
+          },
+          "support": {
+            "verdict": "warn",
+            "reasons": []
+          },
+          "requiresProbe": false,
+          "meetsTarget": true,
+          "tradeoffs": [
+            {
+              "zh": "路由专家在 CPU 上计算，生成速度会下降。",
+              "en": "Routed experts run on the CPU; generation is slower."
+            }
+          ],
+          "warnings": [
+            {
+              "code": "plan_not_validated",
+              "message": {
+                "zh": "没有经管理器校验这个方案。",
+                "en": "The manager did not validate this plan."
+              }
+            }
+          ],
+          "validated": null
+        },
+        {
+          "planId": "pl_3",
+          "rank": 3,
+          "gpuIds": [
+            "0"
+          ],
+          "goal": "balanced",
+          "engineId": "vllm",
+          "runtimeId": "vllm@0.28.0",
+          "recipeId": null,
+          "title": {
+            "zh": "vLLM · 1M 上下文",
+            "en": "vLLM · 1M context"
+          },
+          "values": {
+            "contextLength": {
+              "value": 1048576,
+              "source": "planner"
+            },
+            "concurrency": {
+              "value": 1,
+              "source": "planner"
+            }
+          },
+          "fit": {
+            "status": "fail",
+            "statusReasons": [],
+            "spill": false,
+            "policy": "static-fraction-of-free",
+            "perGpuMb": {
+              "0": 60000
+            },
+            "budgetMb": {
+              "0": 50000
+            },
+            "headroomMb": 0,
+            "admissionRequestMb": 60000,
+            "kvPoolTokens": 200000,
+            "maxFullLengthRequests": 3,
+            "breakdown": {
+              "weights": 30000,
+              "kv": 20000,
+              "activations": 8000,
+              "draft": 1000,
+              "mmproj": 500,
+              "overhead": 500
+            },
+            "ram": {
+              "weights": 0,
+              "experts": 0,
+              "kv": 0
+            },
+            "offloadedMb": 0,
+            "confidence": "config",
+            "overflowMb": 10000
+          },
+          "support": {
+            "verdict": "ok",
+            "reasons": []
+          },
+          "requiresProbe": false,
+          "meetsTarget": false,
+          "tradeoffs": [
+            {
+              "zh": "达不到该目标的上下文或并发要求。",
+              "en": "Falls short of the goal's context or concurrency target."
+            }
+          ],
+          "validated": {
+            "ok": false,
+            "errors": [
+              {
+                "field": "contextLength",
+                "code": "out_of_range",
+                "message": {
+                  "zh": "上下文超过模型原生上限。",
+                  "en": "The context is above the model's native limit."
+                }
+              }
+            ],
+            "warnings": [],
+            "admission": {
+              "verdict": "block",
+              "message": ""
+            },
+            "planHash": null,
+            "commandPreview": null
+          }
+        }
+      ]
+    }
+  ]
+}

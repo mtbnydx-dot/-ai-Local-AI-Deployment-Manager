@@ -1,0 +1,90 @@
+{
+  "ok": true,
+  "engineId": "vllm",
+  "planHash": "sha256:bbbbbbbb",
+  "prospective": false,
+  "runtime": {
+    "runtimeId": "vllm@0.28.0"
+  },
+  "recipe": null,
+  "values": {
+    "contextLength": {
+      "value": 131072,
+      "source": "engine-default"
+    },
+    "concurrency": {
+      "value": 1,
+      "source": "engine-default"
+    },
+    "kvCacheDtype": {
+      "value": "auto",
+      "source": "engine-default"
+    }
+  },
+  "overrides": [],
+  "errors": [],
+  "warnings": [],
+  "blockers": [],
+  "steps": [
+    {
+      "kind": "pull",
+      "image": "vllm/vllm-openai:v0.28.0",
+      "required": false,
+      "policy": "auto"
+    }
+  ],
+  "memory": {
+    "policy": "static-fraction-of-free",
+    "perGpuMb": {
+      "0": 60000
+    },
+    "breakdown": {
+      "weights": 30000,
+      "kv": 20000,
+      "activations": 8000,
+      "draft": 1000,
+      "mmproj": 500,
+      "overhead": 500
+    },
+    "admissionRequestMb": 60000,
+    "kvPoolTokens": 200000,
+    "maxFullLengthRequests": 3,
+    "headroomMb": 4000,
+    "budgetMb": {
+      "0": 64000
+    },
+    "status": "ok",
+    "spill": false,
+    "ram": {
+      "weights": 0,
+      "experts": 0,
+      "kv": 0
+    },
+    "suggestions": [
+      {
+        "code": "kv_fp8",
+        "param": "kvCacheDtype",
+        "to": "fp8",
+        "deltaMb": -8192,
+        "message": {
+          "zh": "fp8 KV 可省 8 GiB",
+          "en": "fp8 KV saves 8 GiB"
+        }
+      },
+      {
+        "code": "ctx_64k",
+        "param": "contextLength",
+        "to": 65536,
+        "deltaMb": -4096,
+        "message": {
+          "zh": "上下文降到 64K 可省 4 GiB",
+          "en": "A 64K context saves 4 GiB"
+        }
+      }
+    ]
+  },
+  "admission": {
+    "verdict": "ok",
+    "message": ""
+  }
+}
