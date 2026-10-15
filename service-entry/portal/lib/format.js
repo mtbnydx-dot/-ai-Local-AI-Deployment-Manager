@@ -87,3 +87,13 @@ export function modelMatches(model, query) {
 export function modelPath(id) {
   return `/models/${encodeURIComponent(String(id))}`;
 }
+
+/** 0.000125 -> "0.000125", 1.5 -> "1.5", 0 -> "0", 0.0000004 -> "<0.000001". */
+export function formatCredits(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  if (number === 0) return "0";
+  if (number < 0) return `-${formatCredits(-number)}`;
+  if (number < 0.000001) return "<0.000001";
+  return number.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
