@@ -403,3 +403,52 @@ test("filterCandidate applies before matching: generic ids pick allowed models, 
   // Without a filter nothing changes.
   assert.equal(fleet.selectFleetTarget(catalogs, { ...request, requestedModel: "qwen-chat", filterCandidate: undefined }).model.id, "qwen-chat");
 });
+
+// MOD-18 (02 section 16): published capabilities first, the name regex only as a labelled last resort.
+const PUBLISHED_TEXT_ONLY = { text: true, vision: false, audio: false, embedding: false, rerank: false, tools: false, reasoning: true, maxContext: 8192 };
+const PUBLISHED_VISION_TOOLS = { text: true, vision: true, audio: false, embedding: false, rerank: false, tools: true, reasoning: true, maxContext: 262144 };
+
+test("published instance capabilities beat the name regex and are labelled", () => {
+  const instances = fleet.normalizeManagerInstances(vllm, {
+    instances: [
+      // The name says vision and tools; the launch loaded the language model only and the tool check failed.
+      { id: "a", primary: true, running: true, status: "Up 1 hour", port: 8000, capabilities: PUBLISHED_TEXT_ONLY, capabilitySource: "published", models: [{ id: "Qwen3-VL-8B-Instruct" }] },
+      // The name says nothing; the card says vision and tools.
+      { id: "b", primary: false, running: true, status: "Up 1 hour", port: 8001, capabilities: PUBLISHED_VISION_TOOLS, capabilitySource: "published", models: [{ id: "my-finetune" }] },
+      // Descriptor defaults are not a published answer: the regex stays, labelled.
+      { id: "c", primary: false, running: true, status: "Up 1 hour", port: 8002, capabilities: { ...PUBLISHED_TEXT_ONLY, tools: true }, capabilitySource: "descriptor", models: [{ id: "Qwen3-VL-8B-Instruct" }] },
+      { id: "d", primary: false, running: true, status: "Up 1 hour", port: 8003, models: [{ id: "BAAI/bge-m3" }] },
+    ],
+  });
+  assert.deepEqual(instances[0].models[0].capabilities, ["text"]);
+  assert.equal(instances[0].models[0].capabilitySource, "published");
+  assert.equal(instances[0].capabilitySource, "published");
+  assert.deepEqual(instances[1].models[0].capabilities, ["text", "vision", "tools"]);
+  assert.deepEqual(instances[2].models[0].capabilities, ["text", "vision", "tools"]);
+  assert.equal(instances[2].models[0].capabilitySource, "name-inferred");
+  assert.equal(instances[2].capabilitySource, undefined);
+  assert.deepEqual(instances[3].models[0].capabilities, ["embedding"]);
+  assert.equal(instances[3].models[0].capabilitySource, "name-inferred");
+
+  // The flattened catalog keeps the answer and the label (a second pass must not relabel).
+  const flat = fleet.flattenCatalogModels(instances);
+  assert.deepEqual(flat.find((model) => model.instance_id === "a").capabilities, ["text"]);
+  assert.equal(flat.find((model) => model.instance_id === "a").capabilitySource, "published");
+  assert.equal(flat.find((model) => model.instance_id === "c").capabilitySource, "name-inferred");
+  assert.deepEqual(fleet.describeModelCapabilities({ id: "x", capabilities: ["text", "tools"] }), { capabilities: ["text", "tools"], source: "explicit" });
+});
+
+test("a vision request is routed by the published capabilities, not the model name", () => {
+  const instances = fleet.normalizeManagerInstances(vllm, {
+    instances: [
+      { id: "named-vl", primary: true, running: true, status: "Up 1 hour", port: 8000, capabilities: PUBLISHED_TEXT_ONLY, capabilitySource: "published", models: [{ id: "Qwen3-VL-8B-Instruct" }] },
+      { id: "plain", primary: false, running: true, status: "Up 1 hour", port: 8001, capabilities: PUBLISHED_VISION_TOOLS, capabilitySource: "published", models: [{ id: "my-finetune" }] },
+    ],
+  });
+  const catalog = { manager: vllm, listening: true, running: true, instances, models: fleet.flattenCatalogModels(instances), aliases: new Set() };
+  const request = { engine: "auto", protocol: "openai", path: "v1/chat/completions", mode: "multimodal", dryRun: true };
+  const image = fleet.selectFleetTarget([catalog], { ...request, body: { model: "auto", messages: [{ content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AA" } }] }] } });
+  assert.equal(image.model.id, "my-finetune");
+  const tools = fleet.selectFleetTarget([catalog], { ...request, body: { model: "auto", tools: [{ type: "function" }] } });
+  assert.equal(tools.model.id, "my-finetune");
+});

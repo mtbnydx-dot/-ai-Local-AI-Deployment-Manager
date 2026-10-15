@@ -16,6 +16,7 @@ const { normalizeManagerId } = require("./engines/registry");
 const probe = require("./model-inspector/probe");
 const qualify = require("./model-inspector/qualify");
 const hostRecords = require("./model-inspector/host-records");
+const { publishLaunchCapabilities } = require("./model-inspector/capabilities");
 const {
   collectStatusDomains, createPathDisplayer, defaultAiRoot, getKnowledgeLoader, registerStatusProvider,
 } = require("./model-inspector/knowledge");
@@ -71,6 +72,10 @@ function normalizeRouteDeps(deps = {}) {
     getCard: functionOrNull(deps.getCard),
     createBenchmark: functionOrNull(deps.createBenchmark),
     cardCacheDir: typeof deps.cardCacheDir === "string" && deps.cardCacheDir ? deps.cardCacheDir : undefined,
+    // MOD-18: launchStore receives the published capabilities (resolved.capabilities) after a
+    // qualification run; onCapabilities() lets the manager drop its cached instance list.
+    launchStore: deps.launchStore && typeof deps.launchStore === "object" ? deps.launchStore : null,
+    onCapabilities: functionOrNull(deps.onCapabilities),
     qualify: deps.qualify && typeof deps.qualify === "object" ? deps.qualify : {},
     qualifyRuns: new Set(),
     knowledge,
@@ -290,6 +295,12 @@ function qualifyHandler(context, inFlight) {
         launchOf: context.launchOf,
         getGpuStatus: context.getGpuStatus,
         getCard: context.getCard || ((cardId) => require("./model-inspector/inspect").getCard(cardId, { ...(cacheDir ? { cacheDir } : {}) })),
+        onHostRecord: ({ record, card, launch }) => {
+          if (!context.launchStore) return;
+          const launchId = launch?.launchId || record?.launchId;
+          const caps = publishLaunchCapabilities({ launchStore: context.launchStore, launchId, card, hostRecord: record });
+          if (caps && context.onCapabilities) context.onCapabilities();
+        },
         createBenchmark: context.createBenchmark || defaultCreateBenchmark(context),
         pushHostRecord: ({ record, jobId, log }) => {
           const internalClient = resolveInternalClient(context.internalClient);

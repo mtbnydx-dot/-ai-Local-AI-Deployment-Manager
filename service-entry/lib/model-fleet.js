@@ -82,15 +82,22 @@ function orderedCapabilities(values) {
   return CAPABILITY_ORDER.filter((capability) => found.has(capability));
 }
 
-function inferModelCapabilities(model = {}) {
+// Where a model's capability list comes from (02 section 16, MOD-18):
+//   "published"     the manager derived it from the ModelCard and the launch (and host records)
+//   "explicit"      the model entry itself names capabilities, tasks or modalities
+//   "name-inferred" last resort: a regex over the model name. Unverified, so consumers can label it.
+function describeModelCapabilities(model = {}) {
   const item = typeof model === "string" ? { id: model } : (model && typeof model === "object" ? model : {});
+  // Already described by an earlier pass over the same entry: keep the answer and its label.
+  if ((item.capabilitySource === "published" || item.capabilitySource === "name-inferred") && Array.isArray(item.capabilities)) {
+    return { capabilities: orderedCapabilities(item.capabilities), source: item.capabilitySource };
+  }
   const explicitTokens = [];
   collectCapabilityTokens(item.capabilities, explicitTokens);
   collectCapabilityTokens(item.tasks ?? item.task ?? item.pipeline_tag ?? item.pipelineTag, explicitTokens);
   collectCapabilityTokens(item.inputModalities ?? item.input_modalities ?? item.modalities, explicitTokens);
   const explicit = orderedCapabilities(explicitTokens);
-  if (explicit.length) return explicit;
-
+  if (explicit.length) return { capabilities: explicit, source: "explicit" };
   const name = [item.id, item.name, item.root, item.model_type, item.architecture]
     .filter(Boolean)
     .join(" ")
@@ -103,7 +110,16 @@ function inferModelCapabilities(model = {}) {
   if (/audio|whisper|speech|asr|transcri|tts|wav2vec|clap/.test(name)) inferred.push("audio");
   if (/(qwen|functionary|command-r|tool)/.test(name) && !/(embed|rerank)/.test(name)) inferred.push("tools");
   if (!inferred.length || /text|chat|instruct|coder|code|llm|qwen|llama|gemma|mistral|deepseek/.test(name)) inferred.unshift("text");
-  return orderedCapabilities(inferred);
+  return { capabilities: orderedCapabilities(inferred), source: "name-inferred" };
+}
+
+function inferModelCapabilities(model = {}) {
+  return describeModelCapabilities(model).capabilities;
+}
+
+function capabilityFields(model) {
+  const { capabilities, source } = describeModelCapabilities(model);
+  return { capabilities, capabilitySource: source };
 }
 
 function bodyContainsType(value, predicates, depth = 0) {
@@ -180,6 +196,10 @@ function normalizeManagerInstances(manager = {}, payload = {}) {
       : [];
   const managerId = String(manager.id || manager.engine || manager.name || "manager").trim().toLowerCase();
   return source.map((instance) => {
+    // Capabilities the manager published for this instance win over any name guess (02 section 16).
+    const published = instance.capabilitySource === "published" && instance.capabilities && typeof instance.capabilities === "object" && !Array.isArray(instance.capabilities)
+      ? orderedCapabilities(collectCapabilityTokens(instance.capabilities))
+      : null;
     const instanceId = String(instance.id || instance.instanceId || instance.containerName || "primary");
     const containerName = instance.containerName || instance.container?.name || "";
     const running = instance?.running === true || instance?.container?.running === true;
@@ -187,12 +207,14 @@ function normalizeManagerInstances(manager = {}, payload = {}) {
     const rawModels = Array.isArray(instance.models) ? instance.models : Array.isArray(instance.servedModels) ? instance.servedModels : [];
     const models = rawModels.map((model) => {
       const item = typeof model === "string" ? { id: model } : { ...(model || {}) };
+      const described = published ? { capabilities: published, source: "published" } : describeModelCapabilities(item);
       return {
         ...item,
         manager_engine: managerId,
         instance_id: instanceId,
         container_name: containerName,
-        capabilities: inferModelCapabilities(item),
+        capabilities: described.capabilities,
+        capabilitySource: described.source,
       };
     }).filter((model) => String(model.id || "").trim());
     const detectedLifecycleState = normalizeInstanceLifecycleState(instance, running, status);
@@ -220,6 +242,7 @@ function normalizeManagerInstances(manager = {}, payload = {}) {
       ...(instance.launchId ? { launchId: String(instance.launchId) } : {}),
       // 00 §4.1 additive fields, kept for the public model list (05 §8.3).
       ...(instance.capabilities && typeof instance.capabilities === "object" && !Array.isArray(instance.capabilities) ? { declaredCapabilities: instance.capabilities } : {}),
+      ...(published ? { capabilitySource: "published" } : {}),
       ...(instance.apiSurface && typeof instance.apiSurface === "object" ? { apiSurface: instance.apiSurface } : {}),
       ...(instance.lifecycle && typeof instance.lifecycle === "object" ? { lifecycle: { state: String(instance.lifecycle.state || "") } } : {}),
       image: instance.image || instance.container?.image || "",
@@ -263,7 +286,7 @@ function flattenCatalogModels(instances = []) {
         manager_engine: managerId,
         instance_id: instanceId,
         container_name: instance.containerName || "",
-        capabilities: inferModelCapabilities(model),
+        ...capabilityFields(model),
       });
     }
   }
@@ -292,7 +315,7 @@ function catalogCandidates(catalogs = []) {
         manager,
         managerId,
         instance,
-        model: { ...model, capabilities: inferModelCapabilities(model) },
+        model: { ...model, ...capabilityFields(model) },
         capabilities: inferModelCapabilities(model),
       });
     }
@@ -659,6 +682,7 @@ module.exports = {
   normalizeFleetMaxUtilizationPct,
   normalizeFleetSettings,
   inferModelCapabilities,
+  describeModelCapabilities,
   inferRequestCapability,
   normalizeInstanceLifecycleState,
   isLastKnownModel,

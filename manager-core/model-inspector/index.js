@@ -7,6 +7,7 @@
 // members (knowledge, parsers, compatibility, fit, ...) to this object.
 
 const cache = require("./cache");
+const capabilities = require("./capabilities");
 const calibration = require("./calibration");
 const cardEstimate = require("./card-estimate");
 const cardSchema = require("./card-schema");
@@ -77,6 +78,14 @@ module.exports = {
     readLocalTemplate: templateSignatures.readLocalTemplate,
     templateSha256: templateSignatures.templateSha256,
     CATALOG_IDS: templateSignatures.CATALOG_IDS,
+  },
+  // Published capabilities (02 section 16, MOD-18): the Instance.capabilities object and the fleet tokens.
+  capabilities: {
+    deriveCapabilities: capabilities.deriveCapabilities,
+    capabilityTokens: capabilities.capabilityTokens,
+    publishLaunchCapabilities: capabilities.publishLaunchCapabilities,
+    annotateLocalModels: capabilities.annotateLocalModels,
+    TOKEN_ORDER: capabilities.TOKEN_ORDER,
   },
   // Compatibility matrix (02 §9, MOD-11): one row per (engine, runtime) for a card.
   compatibility: {

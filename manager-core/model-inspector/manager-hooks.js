@@ -13,8 +13,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { createCalibrationStore } = require("./calibration");
+const { publishLaunchCapabilities } = require("./capabilities");
 const { observationFromFacts } = require("./observations");
-const { planFacts } = require("./plan-facts");
+const { planFacts, resolveCard } = require("./plan-facts");
 const rootCause = require("./root-cause");
 
 const CALIBRATION_FILE = "memory-calibration.json";
@@ -129,6 +130,28 @@ function managerHooks(options = {}) {
   }
 
   const resolveModelPath = typeof options.resolveModelPath === "function" ? options.resolveModelPath : storageResolver(options);
+
+  /**
+   * 02 section 16 (MOD-18): once the instance is ready, derive its capabilities from the
+   * card and the launch values and store them on the launch record, where the instance
+   * catalog reads them. options.launchStore receives them; options.onCapabilities() lets
+   * the manager drop its cached instance list. Failures are logged once and ignored.
+   */
+  async function publishCapabilities(args) {
+    try {
+      const store = options.launchStore;
+      if (!store || typeof store.get !== "function" || !args.launchId) return;
+      const record = store.get(args.launchId);
+      const ref = record?.spec?.model?.ref;
+      if (!ref) return;
+      const card = await resolveCard({ ref }, { resolveModelPath, ...(typeof inspectLocal === "function" ? { inspectLocal } : {}) });
+      if (!card) return;
+      const caps = publishLaunchCapabilities({ launchStore: store, launchId: args.launchId, card });
+      if (caps && typeof options.onCapabilities === "function") options.onCapabilities();
+    } catch (error) {
+      warnOnce(`capability publishing failed (ignored): ${error?.message || error}`);
+    }
+  }
   return {
     modelFacts: (model, factsOptions = {}) => planFacts(model, {
       ...factsOptions,
@@ -143,7 +166,10 @@ function managerHooks(options = {}) {
         return null;
       }
     },
-    afterReady,
+    afterReady: async (args = {}) => {
+      if (isPlainObject(args)) await publishCapabilities(args);
+      return afterReady(args);
+    },
     classifyFailure: (logText, context = {}) => {
       try {
         return rootCause.classifyFailure(logText, { ...context, ...(options.errorSignatures ? { signatures: options.errorSignatures } : {}) });

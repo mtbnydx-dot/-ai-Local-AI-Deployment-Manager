@@ -698,8 +698,8 @@ function instanceFor(mock, extra = {}) {
   };
 }
 
-async function routeFixture(t, { local = true, listJobs, instance, launchRecord = launch({ "speculative.method": "mtp" }), pushTo = null, found = true } = {}) {
-  const mock = await startMock(t);
+async function routeFixture(t, { local = true, listJobs, instance, launchRecord = launch({ "speculative.method": "mtp" }), pushTo = null, found = true, chat, routeExtra = {} } = {}) {
+  const mock = await startMock(t, chat ? { chat } : {});
   const ledger = jobsLedger();
   const registryModule = require("../engines/registry");
   const registered = new Map();
@@ -719,6 +719,7 @@ async function routeFixture(t, { local = true, listJobs, instance, launchRecord 
     getCard: (cardId) => (cardId === CARD_ID ? card() : null),
     internalClient: entry ? () => signedClient(entry.baseUrl) : null,
     qualify: { retryDelaysMs: [1000, 4000, 16000], sleep: async (ms) => { delays.push(ms); } },
+    ...routeExtra,
   });
   async function post(body, headers = {}) {
     const res = fakeResponse();
@@ -877,4 +878,36 @@ test("a benchmark is refused while a qualification runs on its port, and the oth
   jobs[0].status = "success";
   assert.equal((await post({ port: 8001 })).statusCode, 200, "free once the qualification ended");
   assert.equal(qualify.runningQualification(() => [{ type: "benchmark", status: "running", meta: { port: 8001 } }], { port: 8001 }), null);
+});
+
+test("MOD-18: a failed tool check unpublishes tools on the launch record, a passing run keeps them", async (t) => {
+  const { createLaunchStore } = require("../engines/launch-store");
+  const { createEngineRegistry } = require("../engines/registry");
+  const root = tempRoot(t, "qualify-caps-");
+  const registry = createEngineRegistry({ overrideDir: path.join(root, "config"), env: {} });
+  const launchStore = createLaunchStore({ file: path.join(root, "launch-store.json"), managerId: "vllm", registry });
+  launchStore.create({
+    engineId: "vllm",
+    model: { ref: "fixture-model", servedName: "test-model" },
+    instance: { mode: "replace", id: "primary", port: 8000, gpuIds: ["0"] },
+    values: { contextLength: 8192, toolCallParser: "qwen3_coder" },
+  }, { launchId: LAUNCH_ID, source: "ui", status: "running", containerName: "c" });
+  const changed = [];
+  const routeExtra = { launchStore, onCapabilities: () => changed.push("changed") };
+
+  const ok = await routeFixture(t, { routeExtra });
+  await ok.post({ instanceId: "primary", cardId: CARD_ID, checks: ["chat", "tool-call"] });
+  assert.equal(launchStore.get(LAUNCH_ID).resolved.capabilities.tools, true);
+  assert.equal(launchStore.get(LAUNCH_ID).resolved.capabilities.vision, true);
+
+  const broken = await routeFixture(t, {
+    routeExtra,
+    chat: (body, state) => (body.tools ? { json: completion({ content: "I will not call a tool." }) } : wellBehaved(body, state)),
+  });
+  await broken.post({ instanceId: "primary", cardId: CARD_ID, checks: ["chat", "tool-call"] });
+  const published = launchStore.get(LAUNCH_ID).resolved.capabilities;
+  assert.equal(published.tools, false, "a failed tool-call check unpublishes tools");
+  assert.equal(published.vision, true);
+  assert.equal(published.text, true);
+  assert.deepEqual(changed, ["changed", "changed"]);
 });
