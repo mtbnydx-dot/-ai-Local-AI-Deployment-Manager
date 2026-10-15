@@ -1,0 +1,19 @@
+INFO 10-14 08:01:02 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 10-14 08:01:02 [utils.py:253] non-default args: {'model': '/models/Example-8B', 'max_model_len': 32768, 'gpu_memory_utilization': 0.9}
+WARNING 10-14 08:01:09 [config.py:420] CUDA graph disabled for the draft model (incompatible with eager mode)
+INFO 10-14 08:01:15 [gpu_model_runner.py:2653] Starting to load model /models/Example-8B...
+INFO 10-14 08:01:16 [default_loader.py:267] Loading weights took 0.01 seconds
+Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:12<00:00,  3.10s/it]
+INFO 10-14 08:01:28 [gpu_model_runner.py:2653] Model loading took 14.9 GiB and 12.3 seconds
+INFO 10-14 08:01:40 [backends.py:548] torch.compile takes 21.5 s in total
+INFO 10-14 08:01:41 [monitor.py:34] torch.compile took 21.50 s in total
+INFO 10-14 08:01:55 [gpu_worker.py:298] Initial profiling/warmup run took 4.2 s
+INFO 10-14 08:01:56 [gpu_worker.py:298] Available KV cache memory: 52.34 GiB
+INFO 10-14 08:01:56 [kv_cache_utils.py:1087] GPU KV cache size: 428,800 tokens
+INFO 10-14 08:01:56 [kv_cache_utils.py:1091] Maximum concurrency for 32,768 tokens per request: 13.09x
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 67/67 [00:09<00:00,  7.30it/s]
+INFO 10-14 08:02:08 [gpu_model_runner.py:3480] Graph capturing finished in 12 secs, took 0.65 GiB
+INFO 10-14 08:02:08 [core.py:210] init engine (profile, create kv cache, warmup model) took 35.4 s
+INFO 10-14 08:02:09 [api_server.py:1900] Starting vLLM API server on http://0.0.0.0:8000
+INFO:     Application startup complete.

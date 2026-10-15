@@ -201,6 +201,18 @@ function validateRuntimeManifest(data) {
     if (runtime.envOverride !== undefined && !isImageEnvName(runtime.envOverride)) {
       errors.push(`${id}.envOverride must name an image variable (*_IMAGE, *_IMAGE_VERSION, *_IMAGE_DIGEST or *_IMAGE_TAG)`);
     }
+    // Native host binary (01 §13, ENG-22): a path below AI_ROOT and its sha256.
+    if (runtime.native !== undefined) {
+      if (!isPlainObject(runtime.native)) errors.push(`${id}.native must be an object`);
+      else {
+        const rel = String(runtime.native.path ?? "");
+        const escapes = rel.split(/[\\/]+/).some((part) => part === ".." || part === "");
+        if (!rel || escapes || path.isAbsolute(rel) || path.win32.isAbsolute(rel) || /[\u0000-\u001f]/.test(rel)) {
+          errors.push(`${id}.native.path must be a path relative to the platform root`);
+        }
+        if (!/^(?:sha256:)?[0-9a-f]{64}$/i.test(String(runtime.native.sha256 ?? ""))) errors.push(`${id}.native.sha256 must be a sha256 hex digest`);
+      }
+    }
     if (runtime.imageAliases !== undefined && (!Array.isArray(runtime.imageAliases) || runtime.imageAliases.some((alias) => typeof alias !== "string" || !alias.trim()))) {
       errors.push(`${id}.imageAliases must be a list of image references`);
     }
@@ -351,6 +363,7 @@ function buildRuntimeIdentity(runtimes) {
       status: inferRuntimeStatus(runtime, image),
       localBuild: Boolean(runtime.localBuild),
       envOverride: runtime.envOverride || null,
+      native: isPlainObject(runtime.native) ? { path: String(runtime.native.path), sha256: String(runtime.native.sha256).replace(/^sha256:/i, "").toLowerCase() } : null,
       release: effectiveRelease(key, runtime, runtimes),
     }));
   }

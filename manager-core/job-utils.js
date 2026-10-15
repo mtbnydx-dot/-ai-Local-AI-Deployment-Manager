@@ -156,6 +156,9 @@ function markJobSuccess(job, options = {}) {
       detail: options.serveDetail || "API 与最小生成自检均已通过。",
       state: "ok",
     }, { now });
+  } else if (job.type === "image-pull") {
+    // A finished image pull is complete whatever its layer count was.
+    job.progress = { ...(job.progress || {}), percent: 100, state: "ok", updatedAt: now };
   } else if (job.progress) {
     const totalBytes = Number(job.progress.totalBytes || job.meta.expectedBytes || 0);
     job.progress = {
