@@ -12,7 +12,10 @@
     "status.",
     "uikit.tab.",
     "uikit.toast.",
-    "uikit.variant."
+    "uikit.variant.",
+    "voice.action.",
+    "voice.confirm.",
+    "voice.type."
   ],
   "unused": [
     "common.window.1h",

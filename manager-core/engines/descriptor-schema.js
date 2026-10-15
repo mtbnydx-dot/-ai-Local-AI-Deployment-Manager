@@ -519,19 +519,29 @@ function validateLogPhases(out, value, path) {
   value.forEach((phase, index) => {
     const phasePath = joinPath(path, index);
     if (!requireObject(out, phase, phasePath)) return;
-    checkKnownKeys(out, phase, phasePath, ["match", "phase", "percent", "stageText", "fact"]);
+    checkKnownKeys(out, phase, phasePath, ["match", "phase", "percent", "stageText", "detailText", "fact"]);
     checkRegex(out, phase.match, joinPath(phasePath, "match"));
     checkEnum(out, phase.phase, joinPath(phasePath, "phase"), LIFECYCLE_PHASES, { required: true });
     if (phase.percent !== undefined && (typeof phase.percent !== "number" || phase.percent < 0 || phase.percent > 100)) {
       out.add(joinPath(phasePath, "percent"), "range", "percent must be a number between 0 and 100.");
     }
     checkLocalizedText(out, phase.stageText, joinPath(phasePath, "stageText"));
+    checkLocalizedText(out, phase.detailText, joinPath(phasePath, "detailText"));
   });
 }
 
-// logFacts and errorSignatures are shaped by ENG-24 and 02's error-signature
-// schema; here each entry only has to be an object whose regexes compile.
-function validatePatternEntries(out, value, path, { idRequired }) {
+const FACT_TYPES = Object.freeze(["number", "int", "string"]);
+const SIGNATURE_SEVERITIES = Object.freeze(["error", "warn"]);
+const SUGGESTION_KINDS = Object.freeze(["probe", "param", "runtime", "recipe", "docs", "action"]);
+
+function checkCaptureGroup(out, value, path) {
+  checkInteger(out, value, path, { min: 1, max: 9 });
+}
+
+// logFacts (01 §16.2): { id, match, group?, key?, type?, scale? }. A fact is
+// the last capture of `match`; a list `group` sums its captures, and `key` makes
+// the fact an object keyed by that capture (per-device buffers).
+function validateLogFacts(out, value, path) {
   if (value === undefined) return;
   if (!Array.isArray(value)) {
     out.add(path, "type", `${path} must be a list.`);
@@ -541,12 +551,79 @@ function validatePatternEntries(out, value, path, { idRequired }) {
   value.forEach((entry, index) => {
     const entryPath = joinPath(path, index);
     if (!requireObject(out, entry, entryPath)) return;
-    if (checkString(out, entry.id, joinPath(entryPath, "id"), { required: idRequired, pattern: /^[a-z][a-z0-9_.-]*$/ })) {
+    checkKnownKeys(out, entry, entryPath, ["id", "match", "group", "key", "type", "scale", "flags"]);
+    if (checkString(out, entry.id, joinPath(entryPath, "id"), { required: true, pattern: /^[a-z][A-Za-z0-9]*$/ })) {
       if (seen.has(entry.id)) out.add(joinPath(entryPath, "id"), "duplicate", `${path} repeats id "${entry.id}".`);
       seen.add(entry.id);
     }
-    for (const key of ["match", "regex"]) {
-      if (entry[key] !== undefined) checkRegex(out, entry[key], joinPath(entryPath, key));
+    checkRegex(out, entry.match, joinPath(entryPath, "match"));
+    if (Array.isArray(entry.group)) {
+      if (!entry.group.length) out.add(joinPath(entryPath, "group"), "type", "group must name at least one capture.");
+      entry.group.forEach((item, groupIndex) => checkCaptureGroup(out, item, joinPath(entryPath, "group", groupIndex)));
+    } else if (entry.group !== undefined) {
+      checkCaptureGroup(out, entry.group, joinPath(entryPath, "group"));
+    }
+    if (entry.key !== undefined) checkCaptureGroup(out, entry.key, joinPath(entryPath, "key"));
+    checkEnum(out, entry.type, joinPath(entryPath, "type"), FACT_TYPES);
+    if (entry.scale !== undefined && (typeof entry.scale !== "number" || !Number.isFinite(entry.scale))) {
+      out.add(joinPath(entryPath, "scale"), "type", "scale must be a finite number.");
+    }
+    checkString(out, entry.flags, joinPath(entryPath, "flags"), { pattern: /^[ims]{0,3}$/ });
+  });
+}
+
+// errorSignatures (00 §9.11, 02 §8.4): the 02 entry schema, engine-specific
+// additions only. `engines` is implied as [descriptor.id], so a generic ("*")
+// or foreign entry is refused here.
+function validateErrorSignatures(out, value, path, { engineId } = {}) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    out.add(path, "type", `${path} must be a list.`);
+    return;
+  }
+  const seenIds = new Set();
+  const seenCodes = new Set();
+  value.forEach((entry, index) => {
+    const entryPath = joinPath(path, index);
+    if (!requireObject(out, entry, entryPath)) return;
+    checkKnownKeys(out, entry, entryPath, [
+      "id", "code", "engines", "phase", "rootCause", "severity", "regex", "flags", "title", "hint", "explanation", "suggestions",
+    ]);
+    if (checkString(out, entry.id, joinPath(entryPath, "id"), { required: true, pattern: /^[a-z][a-z0-9_.-]*$/ })) {
+      if (seenIds.has(entry.id)) out.add(joinPath(entryPath, "id"), "duplicate", `${path} repeats id "${entry.id}".`);
+      seenIds.add(entry.id);
+    }
+    if (checkString(out, entry.code, joinPath(entryPath, "code"), { required: true, pattern: /^[a-z][a-z0-9_]{1,63}$/ })) {
+      if (seenCodes.has(entry.code)) out.add(joinPath(entryPath, "code"), "duplicate", `${path} repeats code "${entry.code}".`);
+      seenCodes.add(entry.code);
+    }
+    checkRegex(out, entry.regex, joinPath(entryPath, "regex"));
+    checkString(out, entry.flags, joinPath(entryPath, "flags"), { pattern: /^[ims]{0,3}$/ });
+    checkEnum(out, entry.phase, joinPath(entryPath, "phase"), LIFECYCLE_PHASES);
+    checkBoolean(out, entry.rootCause, joinPath(entryPath, "rootCause"));
+    checkEnum(out, entry.severity, joinPath(entryPath, "severity"), SIGNATURE_SEVERITIES);
+    for (const field of ["title", "hint", "explanation"]) checkLocalizedText(out, entry[field], joinPath(entryPath, field));
+    if (entry.engines !== undefined) {
+      const enginesPath = joinPath(entryPath, "engines");
+      if (checkStringList(out, entry.engines, enginesPath, { nonEmpty: true })
+        && entry.engines.some((item) => item === "*" || (engineId && item !== engineId))) {
+        out.add(enginesPath, "generic_signature", "A descriptor adds engine-specific signatures only; engines is implied as the descriptor id.");
+      }
+    }
+    if (entry.suggestions !== undefined) {
+      const suggestionsPath = joinPath(entryPath, "suggestions");
+      if (!Array.isArray(entry.suggestions)) {
+        out.add(suggestionsPath, "type", `${suggestionsPath} must be a list.`);
+      } else {
+        entry.suggestions.forEach((suggestion, suggestionIndex) => {
+          const itemPath = joinPath(suggestionsPath, suggestionIndex);
+          if (!requireObject(out, suggestion, itemPath)) return;
+          checkEnum(out, suggestion.kind, joinPath(itemPath, "kind"), SUGGESTION_KINDS, { required: true });
+          checkString(out, suggestion.param, joinPath(itemPath, "param"), { pattern: /^[A-Za-z][A-Za-z0-9._]{0,79}$/ });
+          checkBoolean(out, suggestion.security, joinPath(itemPath, "security"));
+          checkString(out, suggestion.action, joinPath(itemPath, "action"), { maxLength: 80 });
+        });
+      }
     }
   });
 }
@@ -640,8 +717,8 @@ function validateFull(out, obj, { newEngine }) {
   validateIntrospection(out, obj.introspection, "introspection");
   if (obj.metricsMap !== undefined) validateMetricsMap(out, obj.metricsMap, "metricsMap");
   validateLogPhases(out, obj.logPhases, "logPhases");
-  validatePatternEntries(out, obj.logFacts, "logFacts", { idRequired: false });
-  validatePatternEntries(out, obj.errorSignatures, "errorSignatures", { idRequired: true });
+  validateLogFacts(out, obj.logFacts, "logFacts");
+  validateErrorSignatures(out, obj.errorSignatures, "errorSignatures", { engineId: typeof obj.id === "string" ? obj.id : "" });
 
   if (obj.adapter === "docker-template") validateTemplate(out, obj.template, "template");
   else if (obj.template !== undefined) out.add("template", "field_not_applicable", "template is used only by the docker-template adapter.");
@@ -664,8 +741,8 @@ function validateOverridePatch(out, obj) {
   if (obj.runtimes !== undefined) validateRuntimes(out, obj.runtimes, "runtimes", { partial: true });
   if (obj.metricsMap !== undefined) validateMetricsMap(out, obj.metricsMap, "metricsMap");
   validateLogPhases(out, obj.logPhases, "logPhases");
-  validatePatternEntries(out, obj.logFacts, "logFacts", { idRequired: false });
-  validatePatternEntries(out, obj.errorSignatures, "errorSignatures", { idRequired: true });
+  validateLogFacts(out, obj.logFacts, "logFacts");
+  validateErrorSignatures(out, obj.errorSignatures, "errorSignatures", { engineId: typeof obj.id === "string" ? obj.id : "" });
 }
 
 /**
