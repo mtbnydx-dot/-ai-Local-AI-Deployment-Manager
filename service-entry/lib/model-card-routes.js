@@ -6,20 +6,25 @@
 //   POST /api/models/inspect              path | {source, repo, revision?, files?} -> ModelCard
 //   GET  /api/models/:id/card             ?view=summary|full&include=template
 //   GET  /api/models/:id/compatibility    ?gpus=0,1&engines=vllm,sglang,llamacpp
-//   GET  /api/models/:id/qualifications   host records of the card's contentDigest (read side only)
+//   GET  /api/models/:id/qualifications   host records of the card's contentDigest
+//   POST /api/models/:id/qualify          starts the qualification suite on a running instance (MOD-16)
+//   POST /api/models/:id/qualifications/import   pulls a host record the manager could not push
+//   POST /internal/models/host-records    the managers' signed push of a finished run (loopback + HMAC)
 //   POST /api/models/:id/probe            starts the dry probe on the manager that hosts the engine
 //   POST /api/launch/recommend            ranked plans per GPU set, validated by the managers
 //   POST /api/models/:id/fit-grid         KV dtype x concurrency -> largest context (side-effect free)
 //
-// The qualify, import and save-recipe routes belong to MOD-16 and MOD-17; they
-// add their handlers to this file. Every non-GET needs an owner session plus
+// The save-recipe route belongs to MOD-17 and adds its handler to this file.
+// The entry is the only writer of the host records. It also decides about
+// auto-qualification (models.autoQualify): it watches the relayed `jobs`
+// stream for a serve job that became ready and asks the manager to run the
+// light suite; the manager runs it and reports. Every non-GET needs an owner session plus
 // CSRF, or a tool token (auth.checkWrite, 05 PUB-5). A GET is readable by a
 // viewer only through the rows registered below, each with its redaction
 // (02 §17); the central sendJson applies it, so no handler has to remember
 // it. Errors use the 00 §4.2 envelope. Nothing here starts a container or
 // pulls an image: the probe and the plan validation go to the managers.
 
-const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
@@ -29,12 +34,29 @@ const core = require("../../manager-core");
 const { redactSecrets } = require("../../manager-core/secret-redactor");
 const { REQUEST_ID_RE, newRequestId, redactManagerReadForViewer } = require("./mgmt-proxy");
 const { resolvePrincipal } = require("./engine-routes");
+const internalAuth = require("../../manager-core/internal-auth");
+
+const { QUALIFY_JOB_TYPE, LIGHT_CHECKS } = core.models.qualify;
 
 const OWNER = "02";
 const MAX_BODY_BYTES = 256 * 1024;
 const PLAN_TIMEOUT_MS = 5000;
 const PLAN_CONCURRENCY = 4;
 const PROBE_TIMEOUT_MS = 60000;
+const QUALIFY_START_TIMEOUT_MS = 30000;
+const HOST_RECORDS_PATH = "/internal/models/host-records";
+const HOST_RECORDS_PREFIX = "/internal/models/";
+const INTERNAL_MAX_BODY_BYTES = 128 * 1024;
+// A qualification the entry started stays "known" for this long, so its manager can report it.
+const PENDING_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_PENDING = 200;
+// Auto-qualify looks only at serve jobs that finished moments ago.
+const AUTO_FRESH_MS = 10 * 60 * 1000;
+const AUTO_SEEN_LIMIT = 500;
+const AUTO_MODES = new Set(["first-launch", "off", "always"]);
+const JOB_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const FLEET_ID_RE = /^(vllm|llama):([A-Za-z0-9._:-]{1,128})$/;
+const QUALIFY_CHECKS = Object.freeze(["models", "chat", "reasoning-split", "tool-call", "json-output", "vision", "needle", "speculative", "throughput"]);
 const MAX_GPU_SETS = 8;
 const MAX_GPU_IDS = 16;
 const MAX_REMOTE_FILES = 64;
@@ -145,6 +167,8 @@ const viewerRoutes = Object.freeze([
 const adminOnlyRoutes = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/models/inspect" }),
   Object.freeze({ method: "POST", path: "/api/models/:id/probe" }),
+  Object.freeze({ method: "POST", path: "/api/models/:id/qualify" }),
+  Object.freeze({ method: "POST", path: "/api/models/:id/qualifications/import" }),
   Object.freeze({ method: "POST", path: "/api/models/:id/fit-grid" }),
   Object.freeze({ method: "POST", path: "/api/launch/recommend" }),
 ]);
@@ -274,6 +298,8 @@ const ID_ROUTES = Object.freeze([
   Object.freeze({ name: "compatibility", methods: ["GET"], re: /^\/api\/models\/([^/]+)\/compatibility$/ }),
   Object.freeze({ name: "qualifications", methods: ["GET"], re: /^\/api\/models\/([^/]+)\/qualifications$/ }),
   Object.freeze({ name: "probe", methods: ["POST"], re: /^\/api\/models\/([^/]+)\/probe$/ }),
+  Object.freeze({ name: "qualify", methods: ["POST"], re: /^\/api\/models\/([^/]+)\/qualify$/ }),
+  Object.freeze({ name: "qualificationsImport", methods: ["POST"], re: /^\/api\/models\/([^/]+)\/qualifications\/import$/ }),
   Object.freeze({ name: "fitGrid", methods: ["POST"], re: /^\/api\/models\/([^/]+)\/fit-grid$/ }),
 ]);
 
@@ -297,10 +323,17 @@ function match(pathname) {
 /**
  * createModelCardRoutes({ auth, sendJson, readJsonObjectBody, managerClient, models, getGpus,
  *   getHost, storage, modelsRoot, cacheDir, probeDir, hostRecordsFile, registry, remote,
- *   inspectLocalOptions, logger }) -> { handle(req, res, url) -> Promise<boolean> }.
+ *   inspectLocalOptions, logger, bus, managers, getTrustToken, readRequestBody, getAutoQualify,
+ *   now }) -> { handle(req, res, url) -> Promise<boolean>, settle(), close() }.
  * `models` is core.models (tests pass stubs for the parts they replace);
  * `managerClient` is the entry's shared client or a function returning it;
  * `remote` is extra inspectRemote options (a token provider, mirrors, fetchImpl).
+ * MOD-16: `bus` is the event bus (the `library` event, and the `jobs` stream that
+ * triggers auto-qualify; without it nothing is watched); `managers` is
+ * [{id, billingId}] and `getTrustToken` the entry's trust token, for the signed
+ * /internal/models/host-records; `getAutoQualify()` returns "first-launch" |
+ * "off" | "always" (platform.json models.autoQualify); settle() resolves when
+ * the auto-qualify work queued so far is done (tests).
  */
 function createModelCardRoutes(options = {}) {
   const auth = options.auth;
@@ -314,6 +347,14 @@ function createModelCardRoutes(options = {}) {
   const cacheDir = options.cacheDir || undefined;
   const remoteOptions = isPlainObject(options.remote) ? options.remote : {};
   const localOptions = isPlainObject(options.inspectLocalOptions) ? options.inspectLocalOptions : {};
+  const now = typeof options.now === "function" ? options.now : Date.now;
+  // The entry is the only writer of the host records (02 §13).
+  const hostRecordApi = models.hostRecords || core.models.hostRecords;
+  const hostRecordStore = options.hostRecordsFile ? hostRecordApi.createHostRecordStore({ file: options.hostRecordsFile }) : null;
+  // Qualifications this entry started, by manager job id: a manager's push is accepted
+  // only for one of these (jobId, fleetId, contentDigest), so no local process can inject
+  // `verified-on-host` evidence.
+  const pendingQualifications = new Map();
 
   function warn(line) {
     try {
@@ -543,7 +584,7 @@ function createModelCardRoutes(options = {}) {
 
   // --- GET /api/models/:id/card
 
-  function getCardRoute(res, url, id, who, requestId) {
+  async function getCardRoute(res, url, id, who, requestId) {
     const view = url.searchParams.get("view") || "summary";
     const includeTemplate = csvList(url.searchParams.get("include")).includes("template");
     if (!["summary", "full"].includes(view)) {
@@ -559,20 +600,18 @@ function createModelCardRoutes(options = {}) {
       cardNotFound(res, requestId);
       return;
     }
-    const projected = models.projectCard(card, view === "full" || includeTemplate ? { view: "full", includeTemplate } : { view: "summary" });
+    // Passed qualification checks add verified-on-host evidence (02 §13); the cached card is not changed.
+    const shown = hostRecordApi.withHostEvidence(card, await loadHostRecords(card.contentDigest));
+    const projected = models.projectCard(shown, view === "full" || includeTemplate ? { view: "full", includeTemplate } : { view: "summary" });
     send(res, 200, { ok: true, card: projected }, requestId);
   }
 
   // --- GET /api/models/:id/compatibility
 
   async function loadHostRecords(contentDigest) {
-    if (!contentDigest) return [];
-    const file = options.hostRecordsFile;
-    if (!file) return [];
+    if (!contentDigest || !hostRecordStore) return [];
     try {
-      const data = JSON.parse(await fs.promises.readFile(file, "utf8"));
-      const list = Array.isArray(data) ? data : Array.isArray(data?.records) ? data.records : [];
-      return list.filter((record) => isPlainObject(record) && record.contentDigest === contentDigest);
+      return await hostRecordStore.list(contentDigest);
     } catch {
       return [];
     }
@@ -729,6 +768,377 @@ function createModelCardRoutes(options = {}) {
       return;
     }
     send(res, 202, { ok: true, jobId: result.data?.jobId ?? null, managerId: result.data?.managerId || managerId }, requestId);
+  }
+
+  // --- MOD-16: qualification, host records, auto-qualify
+
+  function prunePending() {
+    const cutoff = now() - PENDING_TTL_MS;
+    for (const [jobId, item] of pendingQualifications) {
+      if (item.at < cutoff) pendingQualifications.delete(jobId);
+    }
+    while (pendingQualifications.size > MAX_PENDING) pendingQualifications.delete(pendingQualifications.keys().next().value);
+  }
+
+  function publishQualification(record) {
+    try {
+      options.bus?.publish?.("library", {
+        kind: "qualification",
+        cardId: record.cardId,
+        contentDigest: record.contentDigest,
+        recordId: record.id,
+        summary: hostRecordApi.summaryOf(record),
+      }, { source: "entry" });
+    } catch (error) {
+      warn(`model-card-routes: the library event was not published: ${error?.message || error}`);
+    }
+  }
+
+  /**
+   * Asks the manager to run a qualification and remembers the job it started.
+   * Resolves to {ok:true, jobId, managerId} or {ok:false, result} (the manager's answer).
+   */
+  async function startQualification({ managerId, instanceId, card, checks, needle, light, auto, requestId }) {
+    const managerClient = client();
+    if (!managerClient) return { ok: false, result: { status: 0, code: "manager_unreachable", data: null } };
+    const result = await managerClient.post(managerId, "qualify", {
+      instanceId,
+      cardId: card.cardId,
+      ...(Array.isArray(checks) ? { checks } : {}),
+      needle: needle === true,
+      ...(light ? { light: true } : {}),
+    }, { timeoutMs: QUALIFY_START_TIMEOUT_MS, ...(requestId ? { requestId } : {}) });
+    if (!result.ok) return { ok: false, result };
+    const jobId = typeof result.data?.jobId === "string" ? result.data.jobId : "";
+    if (jobId) {
+      prunePending();
+      pendingQualifications.set(jobId, {
+        jobId,
+        managerId,
+        fleetId: `${managerId}:${instanceId}`,
+        cardId: card.cardId,
+        contentDigest: card.contentDigest || null,
+        at: now(),
+        auto: auto === true,
+        recordId: null,
+      });
+    }
+    return { ok: true, jobId: jobId || null, managerId: result.data?.managerId || managerId };
+  }
+
+  // --- POST /api/models/:id/qualify
+
+  async function qualify(req, res, id, requestId) {
+    const body = await readBody(req, res, requestId);
+    if (!body) return;
+    const errors = [];
+    const fleet = typeof body.fleetId === "string" ? FLEET_ID_RE.exec(body.fleetId) : null;
+    if (!fleet) errors.push(fieldError("fleetId", "invalid", "fleetId must be <managerId>:<instanceId>, for example vllm:primary."));
+    if (body.checks !== undefined && (!Array.isArray(body.checks) || body.checks.length > QUALIFY_CHECKS.length || body.checks.some((check) => !QUALIFY_CHECKS.includes(check)))) {
+      errors.push(fieldError("checks", "invalid", `checks must be a list of: ${QUALIFY_CHECKS.join(", ")}.`));
+    }
+    if (body.needle !== undefined && typeof body.needle !== "boolean") errors.push(fieldError("needle", "invalid", "needle must be true or false."));
+    if (errors.length) {
+      sendError(res, 400, "invalid_request", "The qualify request is not valid.", { errors }, requestId);
+      return;
+    }
+    const card = loadCard(id);
+    if (!card) {
+      cardNotFound(res, requestId);
+      return;
+    }
+    const started = await startQualification({
+      managerId: fleet[1],
+      instanceId: fleet[2],
+      card,
+      checks: body.checks,
+      needle: body.needle === true,
+      requestId,
+    });
+    if (!started.ok) {
+      relayManagerFailure(res, started.result, fleet[1], requestId);
+      return;
+    }
+    send(res, 202, { ok: true, jobId: started.jobId, managerId: started.managerId }, requestId);
+  }
+
+  // --- the host-record store
+
+  async function recordQualification(record) {
+    const stored = await hostRecordStore.append(record);
+    if (!stored.duplicate) publishQualification(stored.record);
+    return stored;
+  }
+
+  // --- POST /api/models/:id/qualifications/import
+
+  async function importQualification(req, res, id, requestId) {
+    const body = await readBody(req, res, requestId);
+    if (!body) return;
+    const errors = [];
+    if (body.managerId !== "vllm" && body.managerId !== "llama") errors.push(fieldError("managerId", "invalid", "managerId must be vllm or llama."));
+    if (typeof body.jobId !== "string" || !JOB_ID_RE.test(body.jobId)) errors.push(fieldError("jobId", "invalid", "jobId must be a manager job id."));
+    if (errors.length) {
+      sendError(res, 400, "invalid_request", "The import request is not valid.", { errors }, requestId);
+      return;
+    }
+    const card = loadCard(id);
+    if (!card) {
+      cardNotFound(res, requestId);
+      return;
+    }
+    if (!hostRecordStore) {
+      sendError(res, 503, "host_records_unavailable", "The host-record store is not configured.", undefined, requestId);
+      return;
+    }
+    const managerClient = client();
+    if (!managerClient) {
+      sendError(res, 503, "manager_unreachable", "The manager client is not available.", undefined, requestId);
+      return;
+    }
+    const fetched = await managerClient.get(body.managerId, `jobs/${encodeURIComponent(body.jobId)}`, { requestId });
+    if (!fetched.ok) {
+      if (fetched.status === 404) {
+        sendError(res, 404, "job_not_found", "The manager has no such job.", undefined, requestId);
+        return;
+      }
+      relayManagerFailure(res, fetched, body.managerId, requestId);
+      return;
+    }
+    const job = isPlainObject(fetched.data) ? fetched.data : {};
+    if (job.type !== QUALIFY_JOB_TYPE) {
+      sendError(res, 404, "job_not_found", "That job is not a qualification.", undefined, requestId);
+      return;
+    }
+    const held = job.result?.hostRecord;
+    if (!isPlainObject(held)) {
+      sendError(res, 409, "no_host_record", "The job holds no host record.", { hint: "Wait for the qualification to finish." }, requestId);
+      return;
+    }
+    const { record, errors: recordErrors } = hostRecordApi.normalizeHostRecord(held);
+    if (!record) {
+      sendError(res, 422, "invalid_record", "The job's host record is not valid.", { errors: recordErrors }, requestId);
+      return;
+    }
+    const meta = isPlainObject(job.meta) ? job.meta : {};
+    if (record.contentDigest !== card.contentDigest || record.fleetId !== `${body.managerId}:${meta.instanceId}` || (meta.contentDigest && meta.contentDigest !== record.contentDigest)) {
+      sendError(res, 409, "job_mismatch", "The job's record does not belong to this model and instance.", undefined, requestId);
+      return;
+    }
+    if (await hostRecordStore.get(record.id)) {
+      sendError(res, 409, "already_recorded", "This qualification is already recorded.", undefined, requestId);
+      return;
+    }
+    await recordQualification(record);
+    const pending = pendingQualifications.get(body.jobId);
+    if (pending) pending.recordId = record.id;
+    send(res, 200, { ok: true, record }, requestId);
+  }
+
+  // --- POST /internal/models/host-records
+
+  function internalError(res, status, code, message, extra) {
+    sendJson(res, errorBody(code, message, extra), status);
+  }
+
+  function readRawBody(req, maxBytes) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      req.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > maxBytes) {
+          reject(Object.assign(new Error("too large"), { status: 413 }));
+          req.destroy?.();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("error", reject);
+    });
+  }
+
+  /**
+   * A manager's signed push of a finished qualification (02 §13, §19): loopback
+   * socket, 05 internal HMAC on the /internal/models/ prefix, and a record that
+   * matches a qualification this entry started (jobId, fleetId, contentDigest).
+   */
+  async function ingestHostRecord(req, res, url) {
+    if (String(req.method || "").toUpperCase() !== "POST") {
+      req.resume?.();
+      sendJson(res, errorBody("method_not_allowed", `${req.method} is not supported on ${HOST_RECORDS_PATH}.`), 405, { allow: "POST" });
+      return true;
+    }
+    let raw;
+    try {
+      const read = typeof options.readRequestBody === "function" ? options.readRequestBody : readRawBody;
+      raw = await read(req, INTERNAL_MAX_BODY_BYTES);
+    } catch (error) {
+      if (Number(error?.status) === 413) internalError(res, 413, "request_too_large", `The body may be at most ${INTERNAL_MAX_BODY_BYTES} bytes.`);
+      else internalError(res, 400, "invalid_request", "The request body could not be read.");
+      return true;
+    }
+    raw = raw || Buffer.alloc(0);
+    const managers = (Array.isArray(options.managers) ? options.managers : []).filter((item) => item?.id);
+    const names = (item) => [String(item.id).toLowerCase(), String(item.billingId || `${item.id}-manager`).toLowerCase()];
+    const token = typeof options.getTrustToken === "function" ? options.getTrustToken() : "";
+    const verified = internalAuth.verifyInternalRequest(req, raw, token, {
+      pathname: url.pathname,
+      pathPrefixes: [HOST_RECORDS_PREFIX],
+      allowedManagers: managers.flatMap(names),
+      now: now(),
+    });
+    const manager = verified.ok ? managers.find((item) => names(item).includes(verified.managerId)) : null;
+    if (!manager) {
+      internalError(res, 401, "internal_auth_failed", "Internal request authentication failed.");
+      return true;
+    }
+    let body = null;
+    try {
+      body = JSON.parse(raw.toString("utf8"));
+    } catch {
+      body = null;
+    }
+    if (!isPlainObject(body)) {
+      internalError(res, 400, "invalid_request", "The body must be a JSON object.");
+      return true;
+    }
+    if (!hostRecordStore) {
+      internalError(res, 503, "host_records_unavailable", "The host-record store is not configured.");
+      return true;
+    }
+    const { jobId, ...rest } = body;
+    const { record, errors } = hostRecordApi.normalizeHostRecord(rest);
+    if (typeof jobId !== "string" || !JOB_ID_RE.test(jobId)) errors.push(fieldError("jobId", "invalid", "jobId must be the manager job id."));
+    if (!record || errors.length) {
+      internalError(res, 422, "invalid_record", "The host record is not valid.", { errors });
+      return true;
+    }
+    const pending = pendingQualifications.get(jobId);
+    const mismatch = !pending
+      || pending.managerId !== manager.id
+      || pending.fleetId !== record.fleetId
+      || pending.contentDigest !== record.contentDigest
+      || pending.cardId !== record.cardId
+      || (pending.recordId && pending.recordId !== record.id);
+    if (mismatch) {
+      internalError(res, 409, "job_mismatch", "The record does not match a qualification this entry started.");
+      return true;
+    }
+    try {
+      const stored = await recordQualification(record);
+      pending.recordId = stored.record.id;
+      sendJson(res, { ok: true, id: stored.record.id, ...(stored.duplicate ? { duplicate: true } : {}) }, 200);
+    } catch (error) {
+      warn(`model-card-routes: a host record was not stored: ${error?.message || error}`);
+      internalError(res, 500, "internal_error", "Service entry error.");
+    }
+    return true;
+  }
+
+  // --- auto-qualify (02 §13, cross-check issue 27)
+
+  function autoMode() {
+    try {
+      const value = typeof options.getAutoQualify === "function" ? options.getAutoQualify() : "first-launch";
+      return AUTO_MODES.has(value) ? value : "first-launch";
+    } catch {
+      return "first-launch";
+    }
+  }
+
+  // The launch behind a serve job, with the instance that runs it: the manager's
+  // LaunchStore record (GET launches/:launchId, 01 §21.1) when it has one, else the
+  // instance list plus that instance's launch record.
+  async function resolveLaunch(managerId, launchId) {
+    const managerClient = client();
+    if (!managerClient) return null;
+    let record = null;
+    const direct = await managerClient.get(managerId, `launches/${encodeURIComponent(launchId)}`);
+    if (direct.ok && isPlainObject(direct.data)) record = isPlainObject(direct.data.launch) ? direct.data.launch : direct.data;
+    let instance = null;
+    const listed = await managerClient.get(managerId, "instances");
+    if (listed.ok && Array.isArray(listed.data?.instances)) {
+      instance = listed.data.instances.find((item) => item?.launchId === launchId) || null;
+    }
+    if (!record && instance) {
+      const viaInstance = await managerClient.get(managerId, `instances/${encodeURIComponent(instance.id)}/launch`);
+      if (viaInstance.ok && isPlainObject(viaInstance.data?.launch)) record = viaInstance.data.launch;
+    }
+    if (!record || !isPlainObject(record.spec)) return null;
+    return { record, instance };
+  }
+
+  const autoSeen = new Set();
+  const autoSkipped = new Set();
+  let autoQueue = Promise.resolve();
+
+  async function autoQualifyLaunch(managerId, launchId) {
+    const mode = autoMode();
+    if (mode === "off" || autoSkipped.has(launchId)) return;
+    const launch = await resolveLaunch(managerId, launchId);
+    if (!launch) return;
+    const spec = launch.record.spec;
+    const ref = spec.model?.ref;
+    if (typeof ref !== "string" || !ref) return;
+    let card = null;
+    try {
+      card = (await inspectLocalCard(ref, {}, undefined))?.card || null;
+    } catch {
+      card = null;
+    }
+    if (!card?.cardId || !card.contentDigest || holdsNoModel(card)) return;
+    const runtimeId = launch.instance?.runtime?.id || spec.runtimeId || null;
+    const recipeId = launch.instance?.recipeId || spec.recipeId || null;
+    const paramsKey = launch.record.resolved?.paramsKey || null;
+    if (mode === "first-launch" && hostRecordStore && runtimeId) {
+      if (await hostRecordStore.has({ contentDigest: card.contentDigest, runtimeId, recipeId, paramsKey })) return;
+    }
+    const instanceId = String(launch.instance?.id || spec.instance?.id || "primary");
+    const fleetId = `${managerId}:${instanceId}`;
+    for (const pending of pendingQualifications.values()) {
+      if (pending.fleetId === fleetId && !pending.recordId) return;
+    }
+    const started = await startQualification({
+      managerId,
+      instanceId,
+      card,
+      checks: [...LIGHT_CHECKS],
+      needle: false,
+      light: true,
+      auto: true,
+    });
+    // A busy instance (409 instance_busy) is not retried for this launch.
+    if (!started.ok) {
+      autoSkipped.add(launchId);
+      warn(`model-card-routes: auto-qualify of launch ${launchId} on ${fleetId} was not started (${started.result?.data?.error?.code || started.result?.code || started.result?.status}).`);
+    }
+  }
+
+  function onJobsEvent(envelope) {
+    const data = envelope?.data;
+    const managerId = data?.managerId;
+    if (managerId !== "vllm" && managerId !== "llama") return;
+    for (const job of Array.isArray(data.jobs) ? data.jobs : []) {
+      if (job?.type !== "serve" || job.status !== "success" || !job.id) continue;
+      const finished = Date.parse(job.finishedAt || job.updatedAt || "");
+      if (!Number.isFinite(finished) || now() - finished > AUTO_FRESH_MS) continue;
+      const key = `${managerId}:${job.id}`;
+      if (autoSeen.has(key)) continue;
+      autoSeen.add(key);
+      if (autoSeen.size > AUTO_SEEN_LIMIT) autoSeen.delete(autoSeen.values().next().value);
+      const launchId = typeof job.meta?.launchId === "string" ? job.meta.launchId : "";
+      if (!launchId || autoMode() === "off") continue;
+      autoQueue = autoQueue.then(() => autoQualifyLaunch(managerId, launchId)).catch((error) => {
+        warn(`model-card-routes: auto-qualify failed: ${error?.message || error}`);
+      });
+    }
+  }
+
+  let unsubscribeJobs = null;
+  if (options.bus && typeof options.bus.subscribe === "function" && options.autoQualify !== false) {
+    unsubscribeJobs = options.bus.subscribe(onJobsEvent, { types: ["jobs"] });
   }
 
   // --- POST /api/launch/recommend
@@ -1003,6 +1413,7 @@ function createModelCardRoutes(options = {}) {
 
   async function handle(req, res, url) {
     const pathname = String(url?.pathname || "");
+    if (pathname === HOST_RECORDS_PATH) return ingestHostRecord(req, res, url);
     if (!pathname.startsWith("/api/models/") && pathname !== "/api/launch/recommend") return false;
     const route = match(pathname);
     if (!route) return false;
@@ -1023,7 +1434,7 @@ function createModelCardRoutes(options = {}) {
           else sendError(res, 401, "admin_session_required", "This needs the console owner. Open the console on this machine.", { hint: "pair" }, requestId);
           return true;
         }
-        if (route.name === "card") getCardRoute(res, url, route.id, who, requestId);
+        if (route.name === "card") await getCardRoute(res, url, route.id, who, requestId);
         else if (route.name === "compatibility") await compatibility(res, url, route.id, requestId);
         else await qualifications(res, route.id, requestId);
         return true;
@@ -1037,6 +1448,8 @@ function createModelCardRoutes(options = {}) {
       if (route.name === "inspect") await inspect(req, res, requestId);
       else if (route.name === "recommend") await recommend(req, res, requestId);
       else if (route.name === "probe") await probe(req, res, route.id, requestId);
+      else if (route.name === "qualify") await qualify(req, res, route.id, requestId);
+      else if (route.name === "qualificationsImport") await importQualification(req, res, route.id, requestId);
       else await fitGrid(req, res, route.id, requestId);
     } catch (error) {
       sendInternal(res, error, `${requested} ${pathname}`, requestId);
@@ -1044,7 +1457,36 @@ function createModelCardRoutes(options = {}) {
     return true;
   }
 
-  return { handle };
+  function close() {
+    try {
+      unsubscribeJobs?.();
+    } catch {
+      // Already closed.
+    }
+    unsubscribeJobs = null;
+  }
+
+  // Resolves once the auto-qualify work queued so far is done (tests, shutdown).
+  async function settle() {
+    let current;
+    do {
+      current = autoQueue;
+      await current;
+    } while (current !== autoQueue);
+  }
+
+  return { handle, close, settle };
+}
+
+// models.autoQualify of platform.json (06 OPS-3 fragment data/platform-config.d/models.schema.json):
+// "first-launch" (default), "off" or "always".
+function readAutoQualify(aiRoot) {
+  try {
+    const value = core.platform.readSection("models", aiRoot ? { aiRoot } : {}).values?.autoQualify;
+    return AUTO_MODES.has(value) ? value : "first-launch";
+  } catch {
+    return "first-launch";
+  }
 }
 
 // Route module (07 §2.7). ctx.modelCards carries test seams and overrides
@@ -1068,6 +1510,11 @@ function mount(ctx) {
   const routes = createModelCardRoutes({
     getGpus: ctx.getGpus,
     hostRecordsFile: path.join(rootDir, "data", "model-host-records.json"),
+    bus: ctx.bus,
+    managers: ctx.managers,
+    getTrustToken: () => (typeof ctx.security?.getTrustToken === "function" ? ctx.security.getTrustToken() : ""),
+    readRequestBody: ctx.readRequestBody,
+    getAutoQualify: () => readAutoQualify(ctx.aiRoot),
     ...seams,
     aiRoot: ctx.aiRoot,
     rootDir,
@@ -1077,7 +1524,7 @@ function mount(ctx) {
     managerClient: () => ctx.managerClient,
     logger,
   });
-  return { handle: routes.handle };
+  return { handle: routes.handle, close: routes.close, settle: routes.settle };
 }
 
 module.exports = {
@@ -1093,6 +1540,7 @@ module.exports = {
   redactCardBodyForViewer,
   redactCompatibilityForViewer,
   redactManagerCardForViewer,
+  readAutoQualify,
   redactQualificationsForViewer,
   registerModelCardRoutes,
   requestIdOf,

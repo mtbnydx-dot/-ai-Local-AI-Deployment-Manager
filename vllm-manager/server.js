@@ -1913,6 +1913,7 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
 // launch parameter catalogs. The deps are what the probe (MOD-13) and the qualification
 // suite (MOD-16) routes added to the same module need: the local-request gate, this
 // manager's job functions, the docker runner, the instance lookup and its data directory.
+let modelInspectorInternalClient = null;
 core.registerModelInspectorRoutes(app, {
   managerId: "vllm",
   isLocalRequest,
@@ -1924,6 +1925,25 @@ core.registerModelInspectorRoutes(app, {
   resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }),
   registry: engineRegistry,
   paramCatalog: core.engines.getParamCatalog(),
+  // POST /api/qualify (MOD-16): the qualification suite runs against one instance with its own
+  // endpoint and key, then pushes the host record to the entry through the signed internal client.
+  findInstance: findRuntimeInstance,
+  apiKeyFor: (found) => getVllmApiKey(found.container),
+  launchOf: (found) => launchStore.resolveForInstance(found.state, {
+    jobsLedgerLookup: (jobId) => jobs.get(jobId) || null,
+    recentLaunches,
+  }),
+  listJobs: () => jobs.values(),
+  getGpuStatus,
+  internalClient: () => {
+    if (process.env.AI_FRONTEND_SMOKE === "1") return null;
+    modelInspectorInternalClient ||= core.internalAuth.createInternalClient({
+      managerId: CONFIG.managerId,
+      root: DEFAULT_AI_ROOT,
+      baseUrl: process.env.AI_BILLING_BASE_URL || undefined,
+    });
+    return modelInspectorInternalClient;
+  },
 });
 
 core.registerAuditRoutes(app, {
@@ -1956,6 +1976,7 @@ core.registerToolsRoutes(app, {
   createJob,
   normalizeBenchmarkRequest,
   runBenchmarkJob,
+  qualificationRunning: (config) => core.models.qualify.runningQualification(() => jobs.values(), { port: config.port }),
   failJob,
   benchmarkTitle: "Benchmark local model",
   verifyDownloadedModel,
