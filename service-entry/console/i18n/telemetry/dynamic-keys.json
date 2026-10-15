@@ -1,0 +1,35 @@
+{
+  "prefixes": [
+    "obs.alert.",
+    "obs.err.",
+    "obs.metric.",
+    "obs.term."
+  ],
+  "unused": [
+    "audit.accessLog",
+    "audit.chain",
+    "audit.chainBroken",
+    "audit.rebaseline",
+    "audit.title",
+    "audit.unlock",
+    "obs.gap",
+    "obs.idle",
+    "obs.importedLifetime",
+    "obs.kpi.cachedShare",
+    "obs.kpi.cost",
+    "obs.kpi.decodeTps",
+    "obs.kpi.energy",
+    "obs.kpi.errorRate",
+    "obs.kpi.gpuUtil",
+    "obs.kpi.requests",
+    "obs.kpi.tokensOut",
+    "obs.kpi.ttftP95",
+    "obs.lanReadOnly",
+    "obs.latencyFromGateway",
+    "obs.noMetric",
+    "obs.noPrice",
+    "obs.reservation",
+    "obs.title",
+    "obs.window"
+  ]
+}

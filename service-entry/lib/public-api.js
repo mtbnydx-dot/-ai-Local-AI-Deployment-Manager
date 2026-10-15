@@ -519,8 +519,8 @@ function modelReadOf(method, route, { anthropic = false } = {}) {
  *   getPrice     (caller, { id, source }, managerId) -> price|null
  *   getTtsModels () -> Promise<[{ id, name? }]>
  *   handlers     { gateway, status, tts, me }(req, res, url, route): the
- *                transport side, in server.js
- * -> { handle, sendModels, resolveAlias, buildModels }
+ *                transport side, in server.js (me is lib/me-routes.js)
+ * -> { handle, sendModels, resolveAlias, buildModels, availableModels }
  */
 function createPublicApi(deps = {}) {
   const now = typeof deps.now === "function" ? deps.now : Date.now;
@@ -633,6 +633,13 @@ function createPublicApi(deps = {}) {
     return deps.sendJson(res, anthropic ? anthropicModelsDocument(entries) : openAiModelsDocument(entries), 200, headers);
   }
 
+  // The models a caller may use, as the /v1/models entries (the "available"
+  // list of /v1/me, 05 §8.5), over the managers the caller may reach.
+  async function availableModels({ req, caller, managers }) {
+    const catalogs = await deps.getCatalogs(managers);
+    return buildModels({ req, caller, route: { engine: "auto", protocol: "openai", rest: "v1/models" }, catalogs });
+  }
+
   // The PUBLIC key routes (server.js passes the transport handlers). `route`
   // is the classifier's result with the mapping under route.api.
   async function handle(req, res, url, route) {
@@ -649,10 +656,11 @@ function createPublicApi(deps = {}) {
     return handlers.gateway(req, res, url, route);
   }
 
-  return { handle, sendModels, resolveAlias, buildModels, metaList };
+  return { handle, sendModels, resolveAlias, buildModels, availableModels, metaList };
 }
 
 module.exports = {
+  ME_ROUTES,
   OUTPUT_FIELDS,
   PRICING_UNIT,
   anthropicModelsDocument,

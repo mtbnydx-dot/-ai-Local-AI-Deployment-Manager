@@ -773,7 +773,8 @@ test("a viewer reaches nothing that is owner only, on the LAN and on loopback wi
       await request(port, target, { method, peer: LAN, ...(method === "GET" ? {} : { body: {} }) }),
       await asViewer(port, target, { method, ...(method === "GET" ? {} : { body: {} }) }),
     ]) {
-      assert.ok([401, 403].includes(response.status), `${method} ${target} answered ${response.status}`);
+      assert.equal(response.status, 401, `${method} ${target} answered ${response.status}`);
+      assert.equal(response.json.error.code, "admin_session_required", `${method} ${target}`);
       for (const secret of [SECRET_KEY, SECRET_CUSTOMER, SECRET_IP, "requestId"]) assert.equal(response.text.includes(secret), false);
     }
   }

@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "at": "2026-10-14T12:00:00.000Z",
+  "windowSeconds": 60,
+  "gateway": {
+    "inflight": 0,
+    "requestsPerMin": 2,
+    "outputTokensPerSec": 2.2,
+    "errorRate5m": 0,
+    "ttftP95Ms5m": 140,
+    "clientAborts5m": 0
+  },
+  "instances": [
+    {
+      "fleetId": "vllm:primary",
+      "engineId": "sglang",
+      "model": "model-a",
+      "state": "ready",
+      "idle": false,
+      "running": 0,
+      "waiting": 0,
+      "kvUsage": 0.2,
+      "outputTps": 10,
+      "vramReservationMb": null,
+      "sampleAt": "2026-10-14T11:59:50.000Z"
+    }
+  ],
+  "gpus": [
+    {
+      "index": 0,
+      "util": 50,
+      "memUsedMb": 40000,
+      "memTotalMb": 80000,
+      "tempC": 60,
+      "powerW": 300,
+      "powerLimitW": 600,
+      "throttle": []
+    }
+  ],
+  "alerts": {
+    "firing": 1,
+    "critical": 0
+  },
+  "collectors": {
+    "recorder": "ok",
+    "runtime": "ok",
+    "gpu": "ok",
+    "events": "ok",
+    "store": "ok"
+  }
+}
