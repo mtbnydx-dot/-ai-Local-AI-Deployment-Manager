@@ -177,6 +177,26 @@ const S = {
   "supervisor.reexecFailed": { [ZH]: "重新执行没有完成。", [EN]: "The re-exec did not complete." },
   "doctor.fixLater": { [ZH]: "doctor --fix 将随修复执行器一起提供。", [EN]: "doctor --fix arrives with the fix runner." },
   "doctor.summary": { [ZH]: "通过 {ok} · 警告 {warn} · 失败 {fail} · 信息 {info} · 跳过 {skip}", [EN]: "ok {ok} · warn {warn} · fail {fail} · info {info} · skipped {skip}" },
+  "setup.title": { [ZH]: "首次运行向导", [EN]: "First-run setup" },
+  "setup.unknownStep": { [ZH]: "未知的步骤：{step}（可选 {steps}）", [EN]: "Unknown step: {step} (one of {steps})" },
+  "setup.step": { [ZH]: "[{n}/{total}] {title}", [EN]: "[{n}/{total}] {title}" },
+  "setup.alreadyDone": { [ZH]: "已完成：{detail}", [EN]: "Already done: {detail}" },
+  "setup.alreadySkipped": { [ZH]: "已跳过。", [EN]: "Skipped." },
+  "setup.blocked": { [ZH]: "环境检查未通过，请先手动修复：", [EN]: "The environment check failed; fix these by hand first:" },
+  "setup.ask": { [ZH]: "运行这一步？{hint} ", [EN]: "Run this step? {hint} " },
+  "setup.askRoots": { [ZH]: "模型库目录（留空保持不变，多个用逗号分隔）：", [EN]: "Model folders (empty keeps the current ones; comma separated): " },
+  "setup.askEngines": { [ZH]: "要预拉取的引擎（vllm、llama、sglang，默认 vllm）：", [EN]: "Engines to pre-pull (vllm, llama, sglang; default vllm): " },
+  "setup.askLan": { [ZH]: "对局域网开放管理端？需要 API Key。[y/N] ", [EN]: "Open the admin listener to the LAN? It needs an API key. [y/N] " },
+  "setup.skippedStep": { [ZH]: "已跳过。", [EN]: "Skipped." },
+  "setup.stepDone": { [ZH]: "完成。", [EN]: "Done." },
+  "setup.stepFailed": { [ZH]: "步骤失败：{detail}", [EN]: "Step failed: {detail}" },
+  "setup.opsIntro": { [ZH]: "自动运行命令（不会自动执行）：", [EN]: "Automation commands (nothing runs without your yes):" },
+  "setup.opsAsk": { [ZH]: "现在运行这些命令？[y/N] ", [EN]: "Run these commands now? [y/N] " },
+  "setup.opsRan": { [ZH]: "已运行：{command}", [EN]: "Ran: {command}" },
+  "setup.firstModel": { [ZH]: "下一步：在控制台的“部署”向导里部署第一个模型（{url}）。", [EN]: "Next: deploy a first model from the console Deploy wizard ({url})." },
+  "setup.freeSpace": { [ZH]: "可用空间：{gb} GB", [EN]: "Free space: {gb} GB" },
+  "setup.complete": { [ZH]: "设置完成。", [EN]: "Setup is complete." },
+  "setup.incomplete": { [ZH]: "还有步骤未完成：{steps}。再次运行 platform setup 继续。", [EN]: "Some steps are not finished: {steps}. Run platform setup again to continue." },
   "doctor.unknownGroup": { [ZH]: "未知的检查组：{group}（可选 env、runtime、storage）", [EN]: "Unknown check group: {group} (env, runtime, storage)" },
 };
 
@@ -1724,6 +1744,171 @@ async function cmdSupervisor(ctx, { args, flags }) {
 }
 
 // ---------------------------------------------------------------------------
+// setup (first-run wizard, 06 §8)
+
+const SETUP_YES = /^\s*(y|yes|是)\s*$/i;
+
+function setupExec(ctx, file, args) {
+  if (ctx.exec) return ctx.exec(file, args);
+  const { execFile } = require("node:child_process");
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { cwd: ctx.aiRoot, env: ctx.env, windowsHide: true }, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function setupDoctorReport(ctx) {
+  const vault = ctx.vault();
+  const runDoctor = ctx.runDoctor || require("../manager-core/platform/doctor").runDoctor;
+  const report = await runDoctor({ aiRoot: ctx.aiRoot, env: ctx.env, getSecrets: () => vault.values(), ...(ctx.probes ? { probes: ctx.probes } : {}) });
+  try {
+    const dir = path.join(ctx.aiRoot, ".runtime", "platform");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "doctor-last.json"), JSON.stringify(report));
+  } catch {}
+  return report;
+}
+
+/** Runs one step: through the supervisor when it is up, otherwise in this process. */
+async function setupRunStep(ctx, setup, step, params) {
+  if (step === "images" && !(await supervisorUp(ctx))) {
+    const engines = params.engines || setup.DEFAULT_ENGINES;
+    const managers = [...new Set(engines.map((engine) => (engine === "llama" ? "llama-manager" : "vllm-manager")))];
+    await (ctx.startPlatform || cmdStart)(ctx, { args: managers, flags: {} });
+  }
+  if (await supervisorUp(ctx)) {
+    const started = await controlCall(ctx, "POST", `/v1/setup/${step}`, params);
+    if (started.status >= 300) throw new CliError(EXIT.FAILURE, tr(ctx, "error.failed", { detail: started.json?.error?.message || started.json?.error?.code || `HTTP ${started.status}` }));
+    const op = await pollOperation(ctx, started.json.opId, { timeoutMs: 45 * 60 * 1000, onLog: (line) => ctx.err(`    ${line}`) });
+    if (op.state !== "ok") return { ok: false, result: op.result, detail: op.result?.message || op.result?.code || op.state };
+    return { ok: true, result: op.result?.result };
+  }
+  const runner = setup.createSetupRunner({ aiRoot: ctx.aiRoot, env: ctx.env, now: ctx.now, ...(ctx.setupOptions || {}) });
+  try {
+    const done = await runner.runStep(step, params, { line: (line) => ctx.err(`    ${line}`), progress: () => {} });
+    return { ok: true, result: done.result };
+  } catch (error) {
+    return { ok: false, result: { code: error.code, ...(error.data || error.extra || {}) }, detail: error.message };
+  }
+}
+
+async function cmdSetup(ctx, { flags }) {
+  const setup = ctx.setup || require("../manager-core/platform/setup");
+  const stepIds = setup.STEP_IDS;
+  if (flags.step !== undefined && !stepIds.includes(flags.step)) throw usageError(ctx, tr(ctx, "setup.unknownStep", { step: flags.step, steps: stepIds.join(", ") }));
+  if (flags.exposure !== undefined && flags.exposure !== "lan" && flags.exposure !== "local") throw usageError(ctx, "--exposure local|lan");
+  const interactive = flags["non-interactive"] !== true && ctx.stdinIsTTY === true;
+  const yes = flags.yes === true;
+  const explicit = flags.step !== undefined;
+  const list = (value) => String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const confirm = async (hint, defaultYes) => {
+    const answer = await ask(ctx, tr(ctx, "setup.ask", { hint }));
+    return answer.trim() === "" ? defaultYes : SETUP_YES.test(answer);
+  };
+  const record = (id, state) => setup.recordStep(ctx.aiRoot, id, state, { now: ctx.now });
+
+  ctx.out(tr(ctx, "setup.title"));
+  const description = setup.describeSetup({ aiRoot: ctx.aiRoot, env: ctx.env, doctor: await setupDoctorReport(ctx) });
+  let failed = false;
+  const total = description.steps.length;
+  for (const entry of description.steps) {
+    if (explicit && entry.id !== flags.step) continue;
+    ctx.out("");
+    ctx.out(tr(ctx, "setup.step", { n: entry.index, total, title: pick(ctx, entry.title) }));
+    if (entry.status === "done") {
+      ctx.out(`  ${tr(ctx, "setup.alreadyDone", { detail: entry.detail })}`);
+      if (entry.recorded?.state !== "done") record(entry.id, "done");
+      continue;
+    }
+    if (entry.status === "skipped" && !explicit) { ctx.out(`  ${tr(ctx, "setup.alreadySkipped")}`); continue; }
+    if (entry.status === "blocked") {
+      ctx.out(`  ${tr(ctx, "setup.blocked")}`);
+      for (const item of entry.data?.blocking || []) {
+        ctx.out(`    ${item.id}: ${item.detail}`);
+        if (item.fix?.command) ctx.out(`      ${item.fix.command}`);
+      }
+      failed = true;
+      break;
+    }
+    if (entry.id === "storage" && entry.data?.freeBytes) ctx.out(`  ${tr(ctx, "setup.freeSpace", { gb: (entry.data.freeBytes / 1024 ** 3).toFixed(1) })}`);
+
+    // The ops step never registers anything on its own: the commands are shown
+    // and run only on a yes (default N; --yes answers it).
+    if (entry.id === "ops") {
+      const commands = setup.opsCommands({ aiRoot: ctx.aiRoot });
+      ctx.out(`  ${tr(ctx, "setup.opsIntro")}`);
+      for (const command of commands) ctx.out(`    ${command.display}`);
+      const run = interactive ? SETUP_YES.test(await ask(ctx, tr(ctx, "setup.opsAsk"))) : yes;
+      if (!run) { record("ops", "skipped"); ctx.out(`  ${tr(ctx, "setup.skippedStep")}`); continue; }
+      let allOk = true;
+      for (const command of commands) {
+        try { await setupExec(ctx, command.file, command.args); ctx.out(`  ${tr(ctx, "setup.opsRan", { command: command.display })}`); }
+        catch (error) { allOk = false; ctx.err(`  ${tr(ctx, "setup.stepFailed", { detail: `${command.display}: ${error.message || error}` })}`); }
+      }
+      record("ops", allOk ? "done" : "failed");
+      if (!allOk) failed = true;
+      continue;
+    }
+    if (entry.id === "first-model") {
+      ctx.out(`  ${tr(ctx, "setup.firstModel", { url: "/#/deploy" })}`);
+      record("first-model", "skipped");
+      continue;
+    }
+
+    // Optional steps run only on an explicit yes; the others default to yes.
+    const wanted = explicit || !entry.optional;
+    let proceed;
+    if (explicit && !interactive) proceed = true;
+    else if (!interactive) proceed = wanted || (yes && entry.id !== "tts");
+    else proceed = await confirm(wanted ? "[Y/n]" : "[y/N]", wanted);
+    if (!proceed) { record(entry.id, "skipped"); ctx.out(`  ${tr(ctx, "setup.skippedStep")}`); continue; }
+
+    const params = {};
+    if (entry.id === "storage") {
+      let roots = list(flags["model-root"]);
+      if (interactive && !flags["model-root"]) roots = list(await ask(ctx, tr(ctx, "setup.askRoots")));
+      if (roots.length) params.modelRoots = roots;
+      if (flags["hf-home"]) params.hfHome = String(flags["hf-home"]);
+    } else if (entry.id === "images") {
+      let engines = list(flags.engines);
+      if (interactive && !flags.engines) engines = list(await ask(ctx, tr(ctx, "setup.askEngines")));
+      if (engines.length) params.engines = engines;
+    } else if (entry.id === "exposure") {
+      let lan = flags.exposure === "lan";
+      if (interactive && flags.exposure === undefined) lan = SETUP_YES.test(await ask(ctx, tr(ctx, "setup.askLan")));
+      params.mode = lan ? "lan" : "local";
+    }
+
+    let outcome;
+    if (entry.id === "start") {
+      const code = await (ctx.startPlatform || cmdStart)(ctx, { args: ["core"], flags: {} });
+      outcome = code === EXIT.OK ? { ok: true } : { ok: false, detail: `platform start (exit ${code})` };
+      record("start", outcome.ok ? "done" : "failed");
+    } else {
+      outcome = await setupRunStep(ctx, setup, entry.id, params);
+    }
+    if (outcome.ok) {
+      ctx.out(`  ${tr(ctx, "setup.stepDone")}`);
+      if (entry.id === "exposure" && outcome.result?.firewall?.command) ctx.out(`    ${outcome.result.firewall.command}`);
+    } else {
+      ctx.err(`  ${tr(ctx, "setup.stepFailed", { detail: outcome.detail })}`);
+      for (const item of outcome.result?.blocking || []) ctx.err(`    ${item.id}: ${item.detail}${item.fix?.command ? ` (${item.fix.command})` : ""}`);
+      failed = true;
+      if (!explicit) break;
+    }
+  }
+
+  const after = setup.describeSetup({ aiRoot: ctx.aiRoot, env: ctx.env, doctor: null });
+  const pending = after.steps.filter((entry) => entry.status !== "skipped" && entry.status !== "done" && (!explicit || entry.id === flags.step));
+  ctx.out("");
+  if (!failed && !pending.length) {
+    if (!explicit) ctx.out(tr(ctx, "setup.complete"));
+    return EXIT.OK;
+  }
+  if (pending.length && !explicit) ctx.out(tr(ctx, "setup.incomplete", { steps: pending.map((entry) => entry.id).join(", ") }));
+  return failed ? EXIT.FAILURE : EXIT.OK;
+}
+
+// ---------------------------------------------------------------------------
 // Command table. Later packages add their commands here (and remove them from
 // PLANNED); `run` is (ctx, { args, flags }) -> exit code.
 
@@ -1800,6 +1985,12 @@ const COMMANDS = {
     spec: { bool: ["json"] },
     run: cmdSupervisor,
   },
+  setup: {
+    usage: "setup [--step id] [--yes] [--non-interactive] [--engines list] [--model-root list] [--hf-home path] [--exposure local|lan]",
+    summary: { [ZH]: "首次运行向导", [EN]: "First-run wizard" },
+    spec: { bool: ["yes", "non-interactive"], value: ["step", "engines", "model-root", "hf-home", "exposure"], max: 0 },
+    run: cmdSetup,
+  },
   exposure: {
     usage: "exposure scan [--json] | exposure setup [args…]",
     summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" },
@@ -1815,7 +2006,6 @@ const COMMANDS = {
 };
 
 const PLANNED = {
-  setup: { package: "OPS-14", usage: "setup [--step id] [--yes] [--non-interactive]", summary: { [ZH]: "首次运行向导", [EN]: "First-run wizard" } },
   admin: { package: "OPS-7c", usage: "admin pair [--open] [--ttl s]", summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" } },
   keys: { package: "OPS-7c", usage: "keys migrate [--dry-run|--report] [--json]", summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" } },
   autostart: { package: "OPS-12", usage: "autostart enable [--profile p] | disable | status", summary: { [ZH]: "登录自启动", [EN]: "Start at logon" } },

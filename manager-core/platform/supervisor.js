@@ -1265,6 +1265,19 @@ function createSupervisor(options = {}) {
       const op = startOperation("doctor-fix", ({ line, progress }) => runner.execute(plan, { line, progress }));
       return { opId: op.opId };
     },
+    // POST /v1/setup/:step (06 §8). prepare() rejects unknown steps and bad
+    // parameters before an operation exists; the step runs as a streamed
+    // "setup" operation. The ops step only reports its commands.
+    async runSetupStep(step, body = {}) {
+      const create = options.createSetupRunner || require("./setup").createSetupRunner;
+      const runner = create({
+        aiRoot, env, config, registry, supervisor: api, fetch: fetchImpl, now,
+        ...(options.setupOptions || {}),
+      });
+      const plan = await runner.prepare(step, body);
+      const op = startOperation("setup", ({ line, progress }) => runner.execute(plan, { line, progress }));
+      return { opId: op.opId, ...plan.immediate };
+    },
     async cancelPendingRestart(id) {
       const before = pending.length;
       pending = pending.filter((item) => item.id !== id);

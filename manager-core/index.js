@@ -129,6 +129,7 @@ const PLATFORM_MODULES = Object.freeze({
   messages: "./platform/messages",
   schedules: "./platform/schedules",
   semver: "./platform/semver",
+  setup: "./platform/setup",
   status: "./platform/status",
   supervisor: "./platform/supervisor",
   version: "./platform/version",
