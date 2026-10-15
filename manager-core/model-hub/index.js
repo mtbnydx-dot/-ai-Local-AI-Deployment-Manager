@@ -26,7 +26,6 @@ const { createTokenVault } = require("./tokens");
 const { createHubAuth } = require("./auth");
 const { createSourceProbe } = require("./sources");
 const { createProviders } = require("./providers");
-const { ProviderError } = require("./providers/http");
 const { createCliTransferEngine } = require("./transfer");
 const { createTransferMonitor } = require("./progress");
 const { createArtifactVerifier } = require("./verify");
@@ -34,6 +33,10 @@ const { createDownloadQueue } = require("./queue");
 const { computeUsage, createDiskGuard, reserveBytes, runCleanup } = require("./disk");
 const { REPO_RE } = require("./auth");
 const { compileIncludePatterns, resolveSelection } = require("./selection");
+const { badRequest, fromProviderError, isPlainObject, nonEmpty } = require("./hub-util");
+const { createFitService } = require("./fit");
+const { createDiscovery } = require("./search");
+const { createPlanCache, createPlanner } = require("./plan");
 
 const DEFAULT_AI_ROOT = path.resolve(__dirname, "..", "..");
 // downloads.json is re-stamped this often while the hub runs; readers treat
@@ -47,28 +50,6 @@ const SOURCES_BY_NAMESPACE = Object.freeze({ huggingface: ["huggingface", "hf-mi
 const CREDENTIAL_MODES = Object.freeze(["cached-login", "none"]);
 const XET_MODES = Object.freeze(["high-performance", "default", "off"]);
 const REVISION_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
-
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function nonEmpty(value) {
-  return typeof value === "string" && value.trim() !== "";
-}
-
-function badRequest(field, message) {
-  return new hubErrors.HubError("invalid_request", message, { status: 400, details: { field } });
-}
-
-// A provider failure while resolving a plan body, in the hub's taxonomy.
-function fromProviderError(error) {
-  if (!(error instanceof ProviderError)) return error;
-  const code = hubErrors.HUB_ERROR_CODES.includes(error.code) ? error.code
-    : hubErrors.HUB_ERROR_CODES.includes(error.baseCode) ? error.baseCode : String(error.code || "unknown");
-  const upstream = Number(error.status);
-  const status = hubErrors.HUB_ERROR_STATUS[code] || (upstream >= 400 && upstream < 600 ? upstream : 502);
-  return new hubErrors.HubError(code, error.message, { status, ...(error.details ? { details: error.details } : {}) });
-}
 
 /**
  * The download CLIs in the managers' discovery order (03 §3.1): the
@@ -133,13 +114,15 @@ function createModelHub(options = {}) {
   // One provider registry for the hub: the library's update check and identify
   // (03 §9) use the same sources policy and caches as search and enqueue.
   const providers = options.providers || createProviders({ settings, fetchImpl: options.fetchImpl, clock });
+  // 03 §10: the adapter over 02's core.models (and the bytes fallback while it is null).
+  const fit = options.fit || createFitService({ models, getGpus: options.getGpus, getCompatibilityContext: options.getCompatibilityContext, clock, logger });
   const library = options.modelStorage
     ? createLibrary({
       store,
       modelStorage: options.modelStorage,
       fsStore: options.fsStore || null,
       hfHome,
-      fit: options.fit || null,
+      fit,
       models,
       providers,
       events: options.events || null,
@@ -214,6 +197,9 @@ function createModelHub(options = {}) {
     logger,
     ...(isPlainObject(options.queueOptions) ? options.queueOptions : {}),
   });
+
+  // Search, repository detail and pasted links (03 §13.2, §13.3).
+  const discovery = createDiscovery({ providers, fit, library, queue, auth, settings: () => settings.get(), clock, logger });
 
   let state = "idle";
   let startPromise = null;
@@ -401,27 +387,16 @@ function createModelHub(options = {}) {
   }
 
   /**
-   * enqueue(input, ctx) → DownloadJob (03 §13 POST /downloads). `input` is a
-   * plan body (03 §13.4): provider, repo, revision, selection, target,
-   * source, transfer.xet, credential.mode, runAfter, priority and
-   * allowDuplicate. `ctx` carries { origin, credential }, where credential is
-   * what the route made of credential.hfToken ({ tokenRef, remember }); the
-   * token itself never reaches this function. The manifest is read fresh,
-   * the selection resolved and compiled, and the target comes from
-   * modelStorage.downloadTarget only (03 §17).
+   * resolveRequest(input, ctx) → everything a plan body (03 §13.4) resolves
+   * to, with no side effects: provider, repo, revision, the chosen source and
+   * why, the fresh manifest, the resolved selection and its compiled include
+   * patterns, the target from modelStorage.downloadTarget only (03 §17), the
+   * credential mode and the transfer options. `ctx.credential` is what the
+   * route made of credential.hfToken ({ tokenRef, remember }); the token
+   * itself never reaches this function. enqueue and plan share it, so a plan
+   * is exactly what the download will do.
    */
-  async function enqueue(input = {}, ctx = {}) {
-    await settled();
-    if (state !== "running") throw new hubErrors.HubError("hub_unavailable", "The model hub is not running.", { status: 503 });
-    if (readConfig().downloadsOwner === "manager") {
-      throw new hubErrors.HubError("hub_disabled", "Downloads are handled by the managers (hub.downloadsOwner is \"manager\").", { status: 409 });
-    }
-    if (!isPlainObject(input)) throw badRequest("body", "The request body must be a plan object.");
-    if (input.planId !== undefined && input.planId !== null) {
-      // Plans are cached by POST /api/hub/plan (HUB-10); until then every
-      // planId is unknown and the caller sends the plan body instead.
-      throw new hubErrors.HubError("plan_not_found", "The plan is unknown or has expired; plan the download again.", { status: 404, details: { planId: String(input.planId).slice(0, 80) } });
-    }
+  async function resolveRequest(input, ctx = {}) {
     if (!modelStorage) throw new hubErrors.HubError("hub_unavailable", "The model storage registry is not available.", { status: 503 });
     const current = settings.get();
     const provider = input.provider === undefined || input.provider === null ? "huggingface" : String(input.provider);
@@ -435,6 +410,7 @@ function createModelHub(options = {}) {
     if (input.target !== undefined && input.target !== null && !isPlainObject(input.target)) throw badRequest("target", "target must be an object.");
 
     let source = input.source === undefined || input.source === null || input.source === "auto" ? "auto" : String(input.source);
+    let sourceReason = source === "auto" ? "policy" : "explicit";
     if (source === "auto") {
       if (namespace === "modelscope") source = "modelscope";
       else source = provider === "hf-mirror" || current?.sources?.policy === "hf-mirror" ? "hf-mirror" : "huggingface";
@@ -442,8 +418,9 @@ function createModelHub(options = {}) {
     if (!SOURCES_BY_NAMESPACE[namespace].includes(source)) throw badRequest("source", `source must be one of ${SOURCES_BY_NAMESPACE[namespace].join(", ")}.`);
 
     let manifest;
+    let metadata;
     try {
-      const metadata = providers.forNamespace(namespace, source === "hf-mirror" ? "hf-mirror" : undefined);
+      metadata = providers.forNamespace(namespace, source === "hf-mirror" ? "hf-mirror" : undefined);
       manifest = await metadata.getRepo(repo, { revision });
     } catch (error) {
       throw fromProviderError(error);
@@ -451,6 +428,7 @@ function createModelHub(options = {}) {
     const notes = [];
     if (manifest?.gated && source === "hf-mirror" && current?.sources?.gatedUsesOfficial !== false) {
       source = "huggingface";
+      sourceReason = "gated-official";
       notes.push("gated repository: downloading from the official endpoint");
     }
     const artifact = resolveSelection(manifest, input.selection || {});
@@ -488,18 +466,118 @@ function createModelHub(options = {}) {
     const priority = input.priority === undefined || input.priority === null ? "normal" : String(input.priority);
     if (!["high", "normal", "low"].includes(priority)) throw badRequest("priority", "priority must be high, normal or low.");
 
-    const origin = isPlainObject(ctx.origin) ? { ...ctx.origin } : { kind: "console" };
     let volume = null;
     try {
       volume = disk.volumeOf(root?.path || localDir);
     } catch {
       volume = null;
     }
+    return {
+      provider, namespace, repo, revision, source, sourceReason, endpoint: sourceEndpoint(source), metadata, manifest, notes,
+      artifact, include, outputName, localDir, root, volume, credentialMode, tokenRef, remember, xet, priority,
+    };
+  }
+
+  // The plan cache and builder (03 §13.4); plans live 10 minutes.
+  const plans = createPlanCache({ clock });
+  const planner = createPlanner({ fit, disk, settings: () => settings.get(), queue, auth, discovery, clock });
+
+  /**
+   * plan(input, ctx) → the 03 §13.4 body (without ok). No side effects: it
+   * reads the manifest, the disk and the registry, and caches the plan under
+   * a planId for 10 minutes. `ctx.credential` is { tokenRef, remember } from
+   * a token the route put into the vault; the cached plan keeps the ref so a
+   * download from the planId uses the same credential.
+   */
+  async function plan(input = {}, ctx = {}) {
+    await settled();
+    if (state !== "running") throw new hubErrors.HubError("hub_unavailable", "The model hub is not running.", { status: 503 });
+    if (!isPlainObject(input)) throw badRequest("body", "The request body must be a plan object.");
+    if (input.fit !== undefined && input.fit !== null && !isPlainObject(input.fit)) throw badRequest("fit", "fit must be an object.");
+    const resolved = await resolveRequest(input, ctx);
+    const body = await planner.build(resolved, input, { withFit: true });
+    const cached = plans.put({
+      input: {
+        provider: resolved.provider,
+        repo: resolved.repo,
+        revision: resolved.revision,
+        selection: isPlainObject(input.selection) ? input.selection : {},
+        target: { rootId: resolved.root?.id || null, outputName: resolved.outputName },
+        source: resolved.source,
+        transfer: { xet: resolved.xet },
+        credential: { mode: resolved.credentialMode === "temp-token" ? "auto" : resolved.credentialMode },
+        runAfter: input.runAfter ?? null,
+        priority: resolved.priority,
+      },
+      credential: resolved.tokenRef ? { tokenRef: resolved.tokenRef, remember: resolved.remember } : null,
+      revisionSha: resolved.manifest.revisionSha || null,
+      localDir: resolved.localDir,
+    });
+    return { planId: cached.planId, expiresAt: cached.expiresAt, ...body };
+  }
+
+  // enqueue from a cached plan: the target, the disk and the manifest SHA are
+  // re-validated (03 §13.4), so a plan that no longer holds is refused
+  // instead of silently downloading something else.
+  async function resolvePlanRequest(input, ctx) {
+    const entry = plans.get(String(input.planId).slice(0, 80));
+    if (!entry) {
+      throw new hubErrors.HubError("plan_not_found", "The plan is unknown or has expired; plan the download again.", { status: 404, details: { planId: String(input.planId).slice(0, 80) } });
+    }
+    const merged = {
+      ...entry.input,
+      allowDuplicate: input.allowDuplicate === true,
+      ...(input.priority !== undefined && input.priority !== null ? { priority: input.priority } : {}),
+      ...(input.runAfter !== undefined ? { runAfter: input.runAfter } : {}),
+    };
+    const credential = isPlainObject(ctx.credential) && nonEmpty(ctx.credential.tokenRef) ? ctx.credential : entry.credential;
+    const resolved = await resolveRequest(merged, { ...ctx, credential });
+    if ((resolved.manifest.revisionSha || null) !== entry.revisionSha || resolved.localDir !== entry.localDir) {
+      plans.delete(entry.planId);
+      throw new hubErrors.HubError("plan_changed", "The repository or the target changed since the plan; plan the download again.", {
+        status: 409,
+        details: { planId: entry.planId, revisionSha: resolved.manifest.revisionSha || null, plannedRevisionSha: entry.revisionSha },
+      });
+    }
+    const revalidated = await planner.build(resolved, merged, { withFit: false });
+    if (revalidated.blocking.length) {
+      throw new hubErrors.HubError("plan_blocked", "The plan has blocking problems.", { status: 422, details: { blocking: revalidated.blocking } });
+    }
+    return { merged, resolved, planId: entry.planId };
+  }
+
+  /**
+   * enqueue(input, ctx) → DownloadJob (03 §13 POST /downloads). `input` is a
+   * planId (from plan()) or a plan body (03 §13.4): provider, repo, revision,
+   * selection, target, source, transfer.xet, credential.mode, runAfter,
+   * priority and allowDuplicate. `ctx` carries { origin, credential }, where
+   * credential is what the route made of credential.hfToken ({ tokenRef,
+   * remember }); the token itself never reaches this function. The manifest
+   * is read fresh, the selection resolved and compiled, and the target comes
+   * from modelStorage.downloadTarget only (03 §17).
+   */
+  async function enqueue(input = {}, ctx = {}) {
+    await settled();
+    if (state !== "running") throw new hubErrors.HubError("hub_unavailable", "The model hub is not running.", { status: 503 });
+    if (readConfig().downloadsOwner === "manager") {
+      throw new hubErrors.HubError("hub_disabled", "Downloads are handled by the managers (hub.downloadsOwner is \"manager\").", { status: 409 });
+    }
+    if (!isPlainObject(input)) throw badRequest("body", "The request body must be a plan object.");
+    let request = input;
+    let resolved;
+    let planId = null;
+    if (input.planId !== undefined && input.planId !== null) {
+      ({ merged: request, resolved, planId } = await resolvePlanRequest(input, ctx));
+    } else {
+      resolved = await resolveRequest(input, ctx);
+    }
+    const { namespace, repo, revision, source, manifest, notes, artifact, include, outputName, localDir, root, volume, credentialMode, tokenRef, remember, xet, priority } = resolved;
+    const origin = isPlainObject(ctx.origin) ? { ...ctx.origin } : { kind: "console" };
     const spec = {
       origin,
       ownerManagerId: origin.kind === "manager-shim" ? origin.managerId : null,
       priority,
-      runAfter: input.runAfter ?? null,
+      runAfter: request.runAfter ?? null,
       artifact: {
         provider: namespace,
         repo,
@@ -526,7 +604,9 @@ function createModelHub(options = {}) {
         include,
       },
     };
-    return queue.enqueue(spec, { allowDuplicate: input.allowDuplicate === true, markerMetadata: ctx.markerMetadata || null });
+    const job = await queue.enqueue(spec, { allowDuplicate: request.allowDuplicate === true, markerMetadata: ctx.markerMetadata || null });
+    if (planId) plans.delete(planId);
+    return job;
   }
 
   // GET /api/hub/status (03 §13). The viewer copy drops cli paths, dataDir
@@ -605,8 +685,30 @@ function createModelHub(options = {}) {
       : null,
     // GET /api/hub/tasks/:id: library tasks (rescan, verify, import, delete), in memory.
     tasks: { get: (id) => (library ? library.getTask(id) : null) },
-    // POST /api/hub/downloads: a plan body (or a planId once HUB-10 caches
-    // plans) becomes a queued DownloadJob (03 §8, §13).
+    // 03 §13.2-13.4: search, repository detail, the readme and file tree, pasted
+    // links and the plan sheet. Search and detail are read-only and also work
+    // while downloads belong to the managers.
+    fit,
+    search: async (query, ctx) => {
+      await settled();
+      return discovery.search(query, ctx);
+    },
+    getRepo: async (ref, opts) => {
+      await settled();
+      return discovery.getRepo(ref, opts);
+    },
+    getReadme: async (ref, opts) => {
+      await settled();
+      return discovery.getReadme(ref, opts);
+    },
+    listFiles: async (ref, opts) => {
+      await settled();
+      return discovery.listFiles(ref, opts);
+    },
+    resolveLink: (url) => discovery.resolveLink(url),
+    plan,
+    // POST /api/hub/downloads: a plan body or a planId (from plan()) becomes
+    // a queued DownloadJob (03 §8, §13).
     enqueue,
     // The queue operations behind /api/hub/downloads/* (03 §13).
     jobs: {

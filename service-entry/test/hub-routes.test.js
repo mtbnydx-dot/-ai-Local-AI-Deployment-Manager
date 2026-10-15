@@ -249,6 +249,10 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "GET", path: "/api/hub/library/:id", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/tasks/:id", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/storage/usage", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/search", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/repos/:provider/:owner/:name", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/repos/:provider/:owner/:name/readme", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/repos/:provider/:owner/:name/files", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/auth/huggingface", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/auth/huggingface/access", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/downloads", access: "viewer" },
@@ -267,6 +271,8 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "POST", path: "/api/hub/storage/cleanup", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/auth/huggingface/login", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/sources/probe", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/resolve-link", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/plan", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/reorder", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/pause-all", access: "admin" },
@@ -305,8 +311,8 @@ test("without a hub the routes answer 503 hub_unavailable, features.hub stays of
     assert.equal(response.json.error.code, "hub_unavailable");
     assert.equal(typeof response.json.error.hint, "string");
   }
-  const later = await request(port, "/api/hub/search", { owner });
-  assert.equal(later.status, 404, "a route of a later package is not answered here");
+  const later = await request(port, "/api/hub/not-a-route", { owner });
+  assert.equal(later.status, 404, "a path no package serves is not answered here");
   assert.deepEqual(later.json, { error: "Not found" });
 });
 
