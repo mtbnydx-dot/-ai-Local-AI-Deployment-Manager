@@ -495,19 +495,174 @@ function updateLaunchActionState() {
   button.dataset.transition = parallel ? "parallel" : running ? (same ? "restart" : "switch") : "start";
 }
 
-async function confirmLlamaLaunch(payload) {
+// ---- 启动计划审阅（ENG-21）：确认前调用 /api/launch/plan，显示步骤、命令、覆盖项与显存预检 ----
+// 计划不可用（旧版管理器、网络错误、形状不符）时退回原有确认，不拦截启动。
+function launchPlanCopy(zh, en) {
+  return effectiveLanguage() === "en-US" ? en : zh;
+}
+
+function launchPlanText(value) {
+  if (value && typeof value === "object") return String((effectiveLanguage() === "en-US" ? value.en : value.zh) || value.zh || value.en || "");
+  const text = String(value ?? "");
+  const index = text.indexOf(" / ");
+  if (index <= 0) return text;
+  return effectiveLanguage() === "en-US" ? text.slice(index + 3) : text.slice(0, index);
+}
+
+async function fetchLaunchPlan(payload) {
+  try {
+    const plan = await api("/api/launch/plan", { method: "POST", body: JSON.stringify(payload) });
+    return plan && typeof plan === "object" && Array.isArray(plan.steps) && Array.isArray(plan.blockers) ? plan : null;
+  } catch {
+    return null;
+  }
+}
+
+// Blockers and a block verdict stop the launch here; field errors are shown but the server stays their judge (400).
+function launchPlanBlocked(plan) {
+  return plan.blockers.length > 0 || plan.admission?.verdict === "block";
+}
+
+// 拉取镜像按钮只接受服务端计划给出的 POST /api/runtimes/<id>/pull。
+function launchPlanPullAction(blocker) {
+  const call = blocker?.action?.apiCall;
+  return call && String(call.method || "").toUpperCase() === "POST" && /^\/api\/runtimes\/[^/]+\/pull$/.test(String(call.path || "")) ? call : null;
+}
+
+function describeLaunchPlanStep(step) {
+  const c = launchPlanCopy;
+  if (step.kind === "pull") {
+    const policy = step.policy === "explicit" ? c("（需手动确认）", " (explicit confirm)") : "";
+    if (step.required === true) return c(`拉取镜像 ${step.image}${policy}`, `Pull image ${step.image}${policy}`);
+    if (step.required === false) return c(`镜像已就绪 ${step.image}`, `Image ready ${step.image}`);
+    return c(`镜像状态未知（Docker 不可用）${step.image}`, `Image state unknown (Docker unavailable) ${step.image}`);
+  }
+  if (step.kind === "replace") return c(`替换容器 ${step.containerName}（当前模型 ${step.model || "-"}）`, `Replace container ${step.containerName} (current model ${step.model || "-"})`);
+  if (step.kind === "start") {
+    const gpus = (step.gpuIds || []).join(", ") || c("自动", "auto");
+    return c(`启动容器 ${step.containerName} · 端口 ${step.port ?? "-"} · GPU ${gpus}`, `Start container ${step.containerName} · port ${step.port ?? "-"} · GPU ${gpus}`);
+  }
+  return String(step.kind || "");
+}
+
+function renderLaunchPlanReview(plan, status = {}) {
+  const c = launchPlanCopy;
+  const item = (text, attrs = "") => `<li ${attrs}>${escapeHtml(text)}</li>`;
+  const parts = [];
+  if (status.changed) parts.push(`<p class="launch-plan-notice" data-launch-plan-changed>${escapeHtml(c("启动配置在你确认后发生了变化，请重新检查后再启动。", "The launch plan changed after you reviewed it; review it again before starting."))}</p>`);
+  const fieldErrors = (plan.errors || []).map((error) => item(`${error.field ? `${error.field}: ` : ""}${launchPlanText(error.message)}`, `data-launch-plan-error="${escapeAttr(error.code || "")}"`));
+  if (fieldErrors.length) parts.push(`<div class="launch-plan-section launch-plan-problems"><strong>${escapeHtml(c("参数问题（服务器可能拒绝）", "Parameter problems (the server may refuse)"))}</strong><ul>${fieldErrors.join("")}</ul></div>`);
+  const problems = [
+    ...plan.blockers.map((blocker, index) => {
+      const action = launchPlanPullAction(blocker);
+      const label = status.pulling ? c("正在拉取…", "Pulling…") : launchPlanText(blocker.action?.label) || c("拉取镜像", "Pull image");
+      const button = action ? ` <button type="button" class="secondary-button" data-launch-plan-action="${index}"${status.pulling ? " disabled" : ""}>${escapeHtml(label)}</button>` : "";
+      return `<li data-launch-plan-blocker="${escapeAttr(blocker.code || "")}">${escapeHtml(launchPlanText(blocker.message))}${button}</li>`;
+    }),
+  ];
+  if (problems.length) parts.push(`<div class="launch-plan-section launch-plan-problems"><strong>${escapeHtml(c("必须先解决", "Resolve first"))}</strong><ul>${problems.join("")}</ul></div>`);
+  if (status.pulling) parts.push(`<p class="launch-plan-notice" data-launch-plan-pulling>${escapeHtml(c("镜像拉取任务已创建，完成后会自动重新检查。", "The image pull job was created; the plan is re-checked when it finishes."))} <button type="button" class="secondary-button" data-launch-plan-refresh>${escapeHtml(c("重新检查", "Check again"))}</button></p>`);
+  parts.push(`<div class="launch-plan-section"><strong>${escapeHtml(c("执行步骤", "Steps"))}</strong><ol>${plan.steps.map((step) => item(describeLaunchPlanStep(step), `data-launch-plan-step="${escapeAttr(step.kind || "")}"`)).join("")}</ol></div>`);
+  const overrides = plan.overrides || [];
+  if (overrides.length) {
+    parts.push(`<div class="launch-plan-section"><strong>${escapeHtml(c("参数被调整", "Overridden values"))}</strong><ul>${overrides.map((entry) => {
+      const reason = entry.reason ? ` — ${launchPlanText(entry.reason)}` : "";
+      return item(`${entry.param}: ${JSON.stringify(entry.from)} → ${JSON.stringify(entry.to)} (${entry.source || "-"})${reason}`, "data-launch-plan-override");
+    }).join("")}</ul></div>`);
+  }
+  const warnings = plan.warnings || [];
+  if (warnings.length) parts.push(`<div class="launch-plan-section"><strong>${escapeHtml(c("提示", "Warnings"))}</strong><ul>${warnings.map((warning) => item(launchPlanText(warning.message))).join("")}</ul></div>`);
+  const admission = plan.admission;
+  if (admission) {
+    const verdicts = { allow: c("通过", "allowed"), warn: c("有风险", "risky"), block: c("显存不足，已阻止", "blocked: not enough VRAM"), unknown: c("无法预检", "unknown") };
+    const perGpu = Object.entries(plan.memory?.perGpuMb || {}).map(([gpu, mb]) => `GPU ${gpu}: ${mb} MiB`).join(" · ");
+    parts.push(`<div class="launch-plan-section" data-launch-plan-memory="${escapeAttr(admission.verdict || "")}"><strong>${escapeHtml(c("显存预检", "Memory check"))}: ${escapeHtml(verdicts[admission.verdict] || String(admission.verdict || ""))}</strong>${admission.message ? `<span>${escapeHtml(launchPlanText(admission.message))}</span>` : ""}${perGpu ? `<span>${escapeHtml(perGpu)}</span>` : ""}</div>`);
+  }
+  const argv = plan.command?.argv;
+  if (Array.isArray(argv) && argv.length) {
+    const envNames = Object.keys(plan.command.env || {});
+    parts.push(`<details class="launch-plan-section"><summary>${escapeHtml(c("启动命令（已脱敏）", "Command (redacted)"))}</summary><pre class="launch-plan-command" data-launch-plan-command>${escapeHtml(argv.join(" "))}</pre>${envNames.length ? `<span>${escapeHtml(c("环境变量", "Environment"))}: ${escapeHtml(envNames.join(", "))}</span>` : ""}</details>`);
+  }
+  return parts.join("");
+}
+
+// 打开审阅对话框，返回 false（取消）或 { planHash }。对话框打开期间重新检查或拉取镜像会就地刷新计划。
+async function openLaunchPlanReview({ payload, plan, legacyHtml, title, confirmLabel, changed }) {
+  let current = plan;
+  let pulling = false;
+  let timer = 0;
+  const pending = uiArchitecture.confirmLaunch({
+    title,
+    body: `${legacyHtml}<div class="launch-plan" data-launch-plan></div>`,
+    confirmLabel,
+  });
+  const body = $("#launchConfirmBody");
+  const submit = $("#launchConfirmSubmit");
+  const paint = () => {
+    const host = body?.querySelector("[data-launch-plan]");
+    if (host) host.innerHTML = renderLaunchPlanReview(current, { changed, pulling });
+    if (submit) submit.disabled = launchPlanBlocked(current);
+  };
+  const recheck = async () => {
+    const next = await fetchLaunchPlan(payload);
+    if (!next) return;
+    if (next.planHash !== current.planHash) changed = false;
+    current = next;
+    if (!current.blockers.some((entry) => entry.code === "image_pull_required")) pulling = false;
+    paint();
+    if (!pulling) window.clearInterval(timer);
+  };
+  const onClick = async (event) => {
+    if (event.target.closest("[data-launch-plan-refresh]")) {
+      await recheck();
+      return;
+    }
+    const button = event.target.closest("[data-launch-plan-action]");
+    if (!button) return;
+    event.preventDefault();
+    const call = launchPlanPullAction(current.blockers[Number(button.dataset.launchPlanAction)]);
+    if (!call) return;
+    pulling = true;
+    paint();
+    try {
+      await api(call.path, { method: "POST", body: JSON.stringify(call.body || { confirm: true }) });
+      timer = window.setInterval(recheck, 3000);
+    } catch (error) {
+      pulling = false;
+      paint();
+      reportActionError(launchPlanCopy("镜像拉取失败", "Image pull failed"), error);
+    }
+  };
+  body?.addEventListener("click", onClick);
+  paint();
+  try {
+    return (await pending) ? { planHash: current.planHash || "" } : false;
+  } finally {
+    window.clearInterval(timer);
+    body?.removeEventListener("click", onClick);
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function confirmLlamaLaunch(payload, options = {}) {
   const { running, same, name } = llamaLaunchTransitionInfo();
   const parallel = payload.instanceMode === "parallel";
   const unsecuredLan = payload.networkAccess === "lan" && !String(payload.apiKey || "").trim();
-  if (!running && !unsecuredLan && !parallel) return true;
+  const plan = await fetchLaunchPlan(payload);
+  const blocked = plan ? launchPlanBlocked(plan) : false;
+  const changed = Boolean(options.changed && plan);
+  if (!running && !unsecuredLan && !parallel && !blocked && !changed) return { planHash: plan?.planHash || "" };
   const warning = unsecuredLan
     ? `<div class="launch-confirm-warning"><strong>局域网未设置 API Key</strong><span>同一网络的客户端可直接调用该模型。此项不会阻止启动。</span></div>`
     : "";
-  return uiArchitecture.confirmLaunch({
-    title: parallel ? "确认新增并行实例" : running ? (same ? "确认重启当前模型" : "确认切换模型") : "确认局域网启动",
-    body: `${renderLlamaLaunchReview()}${warning}`,
+  const dialog = {
+    title: parallel ? "确认新增并行实例" : running ? (same ? "确认重启当前模型" : "确认切换模型") : unsecuredLan ? "确认局域网启动" : "确认启动",
     confirmLabel: parallel ? "创建并行实例" : running ? (same ? "确认重启" : `切换到 ${name}`) : "仍然启动",
-  });
+  };
+  if (!plan) {
+    return await uiArchitecture.confirmLaunch({ ...dialog, body: `${renderLlamaLaunchReview()}${warning}` }) ? { planHash: "" } : false;
+  }
+  return openLaunchPlanReview({ payload, plan, legacyHtml: `${renderLlamaLaunchReview()}${warning}`, changed, ...dialog });
 }
 
 // ---- 按硬件门控：单卡机器隐藏异构双卡面板，插入第二张卡后自动恢复 ----
@@ -5348,13 +5503,24 @@ async function startService(event) {
   event.preventDefault();
   if (!validateLlamaLaunchForm(event.currentTarget)) return;
   const payload = buildLlamaLaunchPayload(event.currentTarget);
-  if (!await confirmLlamaLaunch(payload)) return;
+  let reviewed = await confirmLlamaLaunch(payload);
+  if (!reviewed) return;
   const clearBusy = setButtonBusy(event.submitter || event.currentTarget.querySelector("button[type='submit']"), "创建启动...");
   try {
-    await api("/api/start", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    // The plan hash makes the start equal to the reviewed plan; a changed plan (409) goes back to the review.
+    for (;;) {
+      try {
+        await api("/api/start", {
+          method: "POST",
+          body: JSON.stringify(reviewed.planHash ? { ...payload, expectedPlanHash: reviewed.planHash } : payload),
+        });
+        break;
+      } catch (error) {
+        if (error.code !== "plan_changed") throw error;
+        reviewed = await confirmLlamaLaunch(payload, { changed: true });
+        if (!reviewed) return;
+      }
+    }
     notify("启动任务已创建", `${payload.name || payload.model} · ${fmtTokens(payload.maxModelLen)} 上下文`, "success");
     await refreshJobs();
   } catch (error) {

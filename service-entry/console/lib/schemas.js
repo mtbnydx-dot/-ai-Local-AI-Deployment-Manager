@@ -238,6 +238,47 @@ export const KeyCreatedGuard = obj({
 });
 
 // ---------------------------------------------------------------------------
+// 05 §13.2, §13.3, §13.6: the exposure scan, the security overview, the bans
+
+const CHECK_STATES = ["ok", "warn", "fail", "unknown", "manual"];
+
+/** One check of an exposure report; `title` and `fix` are catalog keys (`access.check.<id>`, `access.fix.<id>`). */
+export const CheckGuard = obj({ id: str, state: oneOf(...CHECK_STATES), title: str, evidence: opt(str), fix: opt(str) });
+
+/** One legacy finding: reported, never acted on. */
+export const LegacyFindingGuard = obj({ id: str, relPath: str, kind: str, risk: oneOf("high", "medium"), evidence: opt(str), recommendation: opt(str), suggestedCommand: opt(str) });
+
+export const MapGuard = obj({
+  nodes: arr(obj({ id: str, label: opt(str), kind: opt(str) })),
+  edges: arr(obj({ from: str, to: str, state: oneOf(...CHECK_STATES), evidence: opt(str) })),
+});
+
+export const ExposureReportGuard = obj({ at: iso, status: opt(str), checks: arr(CheckGuard), legacy: arr(LegacyFindingGuard), map: MapGuard, probe: maybe(any) });
+
+/** GET /api/public/exposure and POST /api/public/exposure/scan. */
+export const ExposureAnswerGuard = obj({ ok: opt(bool), report: ExposureReportGuard });
+
+export const BanGuard = obj({ subject: str, kind: oneOf("ip", "cidr", "key"), reason: maybe(str), source: opt(str), createdAt: opt(iso), expiresAt: maybe(iso), active: opt(bool) });
+
+export const BanListGuard = obj({ ok: opt(bool), items: arr(BanGuard) });
+
+/** GET /api/security/overview. */
+export const SecurityOverviewGuard = obj({
+  ok: opt(bool),
+  authFailures: obj({ available: bool, series: arr(any), topIps: arr(obj({ ip: str, country: opt(str), count: num, banned: bool })) }),
+  bans: arr(BanGuard),
+  topKeys: arr(obj({ keyId: str, name: maybe(str), requests: num, tokens: num })),
+  anomalies: arr(obj({ rule: str, severity: str, keyId: opt(str), name: maybe(str), detail: opt(record(any)) })),
+  adminEvents: arr(any),
+});
+
+/** 05 §5.6 GET /api/session/list. */
+export const SessionListGuard = obj({
+  ok: opt(bool),
+  items: arr(obj({ id: str, createdAt: iso, lastSeenAt: maybe(iso), createdIp: maybe(str), userAgent: maybe(str), current: bool })),
+});
+
+// ---------------------------------------------------------------------------
 // 06: platform status, components, doctor
 
 export const ComponentGuard = obj({

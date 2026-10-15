@@ -2716,3 +2716,45 @@ pre {
   .idle-unload-form .field-row { grid-template-columns: 1fr; }
   .idle-unload-row { grid-template-columns: 1fr auto; }
 }
+
+.launch-plan {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.launch-plan-section {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.launch-plan-section ul,
+.launch-plan-section ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.launch-plan-problems {
+  border-color: var(--danger-ink);
+  color: var(--danger-ink);
+}
+
+.launch-plan-notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.launch-plan-command {
+  max-height: 160px;
+  margin: 6px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 11px;
+}
