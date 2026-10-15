@@ -96,6 +96,7 @@ async function setup() {
   process.env.VLLM_MANAGER_PORT = String(await listen(manager));
   process.env.LLAMA_MANAGER_PORT = String(await unusedPort());
   process.env.AI_BILLING_DB = path.join(tempDir, "billing.sqlite");
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(tempDir, "data");
   entry = require("../server");
   entry.setEntryGatewayAccessSink(async (event) => { captured.push(event); });
   entryServer = entry.createServiceEntryServer();

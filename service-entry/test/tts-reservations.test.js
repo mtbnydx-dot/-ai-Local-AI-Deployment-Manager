@@ -97,6 +97,7 @@ test("real entry and Python TTS enforce RPM, Hard balance and asynchronous meter
   await new Promise(resolve => socket.close(resolve));
   process.env.TTS_GATEWAY_PORT = String(port);
   process.env.AI_BILLING_DB = path.join(dir, "billing.sqlite");
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(dir, "data");
   const entry = require("../server");
   fs.writeFileSync(path.join(dir, "trust.json"), JSON.stringify({ token: entry.security.getTrustToken() }));
   const fixture = path.join(dir, "fixture.py");

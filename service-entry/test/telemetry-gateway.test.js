@@ -174,6 +174,7 @@ async function setup() {
   process.env.PLATFORM_MCP_PORT = String(await unusedPort());
   process.env.PLATFORM_MCP_ENV_FILE = path.join(tempDir, "platform-mcp.env");
   process.env.AI_BILLING_DB = path.join(tempDir, "billing.sqlite");
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(tempDir, "data");
   process.env.SERVICE_ENTRY_MODEL_CACHE_MS = "600000";
   process.env.SERVICE_ENTRY_STATUS_CACHE_MS = "600000";
   dbFile = path.join(tempDir, "telemetry.sqlite");

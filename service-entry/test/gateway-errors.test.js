@@ -70,6 +70,7 @@ async function setup() {
   process.env.SERVICE_ENTRY_MODEL_CACHE_MS = "60000";
   process.env.SERVICE_ENTRY_PORT_PROBE_CACHE_MS = "250";
   process.env.AI_BILLING_DB = path.join(tempDir, "billing.sqlite");
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(tempDir, "data");
   entry = require("../server");
   entry.setEntryGatewayAccessSink(async (event) => { captured.push(event); });
   entryServer = entry.createServiceEntryServer();

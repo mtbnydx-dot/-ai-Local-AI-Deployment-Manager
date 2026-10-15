@@ -52,6 +52,8 @@ async function loadEntry() {
   process.env.SERVICE_ENTRY_MODEL_CACHE_MS = "600000";
   process.env.PLATFORM_MCP_ENV_FILE = path.join(tempDir, "platform-mcp.env");
   process.env.AI_BILLING_DB = path.join(tempDir, "billing.sqlite");
+  // Every other file the entry keeps (hub, fleet and storage settings) goes to the temp dir too.
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(tempDir, "data");
   const entry = require("../../server");
   entry.setEntryGatewayAccessSink(async () => {});
   loaded = { entry, tempDir };

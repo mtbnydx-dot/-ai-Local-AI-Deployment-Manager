@@ -2374,6 +2374,40 @@ test("job route registrar handles download and engine-specific cancel actions", 
   assert.deepEqual(response.state.json[0], { ok: true, id: "serve-1", status: "cancelled" });
 });
 
+test("job routes keep the 4xx status and code of a failed resume or resume-check", async () => {
+  const routes = new Map();
+  const app = {
+    get(pathname, handler) { routes.set(`GET ${pathname}`, handler); },
+    post(pathname, handler) { routes.set(`POST ${pathname}`, handler); },
+  };
+  const makeResponse = () => {
+    const state = { statusCode: 200, json: [] };
+    const res = { status(code) { state.statusCode = code; return this; }, json(value) { state.json.push(value); return value; } };
+    return { res, state };
+  };
+  const jobs = new Map([["download-1", { id: "download-1", type: "download", status: "failed" }]]);
+  let failure = Object.assign(new Error("token expired"), { code: "hf_token_expired", status: 409 });
+  core.registerJobRoutes(app, {
+    jobs,
+    cancelDownloadJob: async () => {},
+    pauseDownloadJob: () => {},
+    resumeDownloadJob: () => { throw failure; },
+    inspectDownloadResume: async () => { throw failure; },
+  });
+  for (const key of ["POST /api/jobs/:id/resume", "GET /api/jobs/:id/resume-check"]) {
+    const response = makeResponse();
+    await routes.get(key)({ params: { id: "download-1" } }, response.res);
+    assert.equal(response.state.statusCode, 409, key);
+    assert.deepEqual(response.state.json[0], { error: "token expired", code: "hf_token_expired" }, key);
+  }
+  // Without its own status (or with a node errno code) a failure stays a 500 without a code.
+  failure = Object.assign(new Error("disk gone"), { code: "ENOENT" });
+  const response = makeResponse();
+  await routes.get("POST /api/jobs/:id/resume")({ params: { id: "download-1" } }, response.res);
+  assert.equal(response.state.statusCode, 500);
+  assert.deepEqual(response.state.json[0], { error: "disk gone" });
+});
+
 test("audit route registrar keeps auth gates and manager metadata centralized", async () => {
   const routes = new Map();
   const app = {

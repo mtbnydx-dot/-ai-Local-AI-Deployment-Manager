@@ -7,6 +7,15 @@ function sendError(res, status, error) {
   return res.status(status).json({ error });
 }
 
+// A failure that carries its own 4xx status (hf_token_expired is a 409) keeps
+// it; anything else stays a 500. `code` is added so the UI can branch on it.
+function sendFailure(res, error) {
+  const status = Number(error?.status);
+  const httpStatus = Number.isInteger(status) && status >= 400 && status < 500 ? status : 500;
+  const code = typeof error?.code === "string" && /^[a-z][a-z0-9_]*$/.test(error.code) ? error.code : "";
+  return res.status(httpStatus).json({ error: error?.message || String(error), ...(code ? { code } : {}) });
+}
+
 function summarizeJob(job) {
   if (!job || typeof job !== "object") return job;
   // `result` (a qualification's host record) is read from GET /api/jobs/:id, not relayed in lists or events.
@@ -101,7 +110,7 @@ function registerJobRoutes(app, deps = {}) {
       try {
         return res.json({ ok: true, id: job.id, status: job.status, ...(await inspectDownloadResume(job)) });
       } catch (error) {
-        return sendError(res, 500, error.message);
+        return sendFailure(res, error);
       }
     });
   }
@@ -114,7 +123,7 @@ function registerJobRoutes(app, deps = {}) {
       const resumed = await resumeDownloadJob(job);
       return res.json({ ok: true, id: resumed.id, status: resumed.status });
     } catch (error) {
-      return sendError(res, 500, error.message);
+      return sendFailure(res, error);
     }
   });
 }

@@ -150,7 +150,9 @@ function buildVllmLegacyEstimate(input = {}) {
   } else if (plan.status === "fail") {
     suggestions.push(`预计每卡超出约 ${plan.overflowPerGpuGb.toFixed(1)} GiB，可提高 CPU offload 或降低上下文。`);
   } else if (plan.status === "warn") {
-    suggestions.push("预计接近可用显存上限，建议预留更低的 gpu-memory-utilization 或减少并发。");
+    suggestions.push(sglang
+      ? "预计接近可用显存上限，建议降低静态显存比例（mem-fraction-static）、限制 KV 池大小（max-total-tokens）或减少并发。"
+      : "预计接近可用显存上限，建议预留更低的 gpu-memory-utilization 或减少并发。");
   } else {
     suggestions.push("当前配置预计可运行，并保留了基本运行时余量。");
   }

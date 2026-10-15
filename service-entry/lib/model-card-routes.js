@@ -427,7 +427,7 @@ function createModelCardRoutes(options = {}) {
       modelsRoot = modelsRoot || process.env.VLLM_MODELS_ROOT || path.join(options.aiRoot || path.resolve(__dirname, "..", ".."), "models");
       storage = core.createModelStorage({
         modelsRoot,
-        file: process.env.MODEL_STORAGE_FILE || path.join(options.rootDir || path.resolve(__dirname, ".."), "data", "model-storage.json"),
+        file: process.env.MODEL_STORAGE_FILE || path.join(options.dataDir || path.join(options.rootDir || path.resolve(__dirname, ".."), "data"), "model-storage.json"),
       });
     }
     return storage;
@@ -1680,9 +1680,10 @@ function mount(ctx) {
   registerModelCardRoutes(auth.viewerRegistry, warn);
   const seams = isPlainObject(ctx.modelCards) ? ctx.modelCards : {};
   const rootDir = ctx.rootDir || path.resolve(__dirname, "..");
+  const dataDir = ctx.dataDir || path.join(rootDir, "data");
   const routes = createModelCardRoutes({
     getGpus: ctx.getGpus,
-    hostRecordsFile: path.join(rootDir, "data", "model-host-records.json"),
+    hostRecordsFile: path.join(dataDir, "model-host-records.json"),
     bus: ctx.bus,
     managers: ctx.managers,
     getTrustToken: () => (typeof ctx.security?.getTrustToken === "function" ? ctx.security.getTrustToken() : ""),
@@ -1691,6 +1692,7 @@ function mount(ctx) {
     ...seams,
     aiRoot: ctx.aiRoot,
     rootDir,
+    dataDir,
     auth,
     sendJson: ctx.sendJson,
     readJsonObjectBody: ctx.readJsonObjectBody,

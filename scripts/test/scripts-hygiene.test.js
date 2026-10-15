@@ -196,6 +196,15 @@ test("every .ps1 file is CRLF and has a BOM only for non-ASCII text or on the al
   assert.deepEqual(problems, [], `Save these with CRLF line endings, and without a BOM unless they hold non-ASCII text:\n${describeProblems(problems)}`);
 });
 
+test("the BOM allowlist stays empty: the TTS scripts are plain ASCII without a BOM", (t) => {
+  assert.equal(ALLOW_BOM.size, 0, "new scripts must not be added to the BOM allowlist");
+  for (const file of ["start_all.ps1", "start_gateway.ps1", "status.ps1"]) {
+    const buffer = fs.readFileSync(path.join(ROOT, "tts-platform", "scripts", file));
+    assert.equal(hasNonAscii(buffer), false, `${file} holds non-ASCII text`);
+    assert.notDeepEqual([...buffer.subarray(0, 3)], [0xef, 0xbb, 0xbf], `${file} starts with a BOM`);
+  }
+});
+
 test("a planted BOM .cmd fails the encoding check", async (t) => {
   const root = await makeRoot(t, "scripts-hygiene-bom-");
   await writeFile(root, "start-planted.cmd", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("@echo off\r\necho planted\r\n")]));

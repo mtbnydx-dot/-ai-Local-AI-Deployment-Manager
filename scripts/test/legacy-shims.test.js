@@ -47,6 +47,8 @@ async function makeTree(t) {
 function run(tree, command, args, env = {}) {
   return new Promise((resolve, reject) => {
     const childEnv = { ...process.env, SHIM_LOG: tree.log, PLATFORM_NO_PAUSE: "1", ...env };
+    // Windows PowerShell 5.1 (the .ps1 wrappers) must not inherit the PSModulePath of a pwsh 7 session.
+    for (const key of Object.keys(childEnv)) if (key.toLowerCase() === "psmodulepath") delete childEnv[key];
     for (const key of ["FAKE_EXIT", "SERVICE_ENTRY_NO_BROWSER", "AI_ROOT", "NODE_EXE", "PLATFORM_MCP_PORT"]) {
       if (!(key in env)) delete childEnv[key];
     }

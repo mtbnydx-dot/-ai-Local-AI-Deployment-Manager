@@ -183,6 +183,17 @@ function isSourcedValue(entry) {
   return isPlainObject(entry) && Object.hasOwn(entry, "value") && (Object.keys(entry).length === 1 || Object.hasOwn(entry, "source"));
 }
 
+// Fills an SGLang admission request's empty KV pool cap from the resolved
+// values (recipe or preset defaults). Only a request that already has the
+// poolCappedTokens field (the fraction-of-free policy) is touched, and only
+// when nothing set a cap.
+function capPoolFromResolvedValues(admissionRequest, values) {
+  if (!isPlainObject(admissionRequest) || !Object.hasOwn(admissionRequest, "poolCappedTokens")) return;
+  if (Number(admissionRequest.poolCappedTokens) > 0) return;
+  const resolved = Math.floor(Number(plainValues(values)["sglang.maxTotalTokens"]));
+  if (Number.isFinite(resolved) && resolved > 0) admissionRequest.poolCappedTokens = resolved;
+}
+
 function plainValues(values) {
   const out = {};
   for (const [id, entry] of Object.entries(isPlainObject(values) ? values : {})) {
@@ -1051,6 +1062,11 @@ async function resolveLaunchPlan(request, ctx = {}) {
   });
 
   // 9. Memory and the admission preview (the launch admits for itself).
+  // A preset may cap the KV pool the user left blank (the Flash-Next NVFP4
+  // recipe sets --max-total-tokens from the context length). The engine then
+  // really runs capped, so admission may clamp to it; the request body alone
+  // would say "uncapped" and refuse a launch that fits.
+  capPoolFromResolvedValues(plan.legacy.admissionRequest, plan.values);
   plan.memory = memoryView(plan.legacy.admissionRequest, plan.legacy.memory);
   if (mode === "plan") {
     const artifact = await artifactMemory(ctx, { request, legacyBody, origin, engineId, descriptor, runtime, plan, runOptions, hostGpus, recipe: executedRecipe, calibrationFor });

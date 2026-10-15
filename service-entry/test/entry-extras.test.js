@@ -209,7 +209,11 @@ function loadEntryForAccess() {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  if (!process.env.AI_BILLING_DB) process.env.AI_BILLING_DB = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "entry-access-billing-")), "billing.sqlite");
+  if (!process.env.AI_BILLING_DB) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "entry-access-billing-"));
+    process.env.AI_BILLING_DB = path.join(dir, "billing.sqlite");
+    process.env.SERVICE_ENTRY_DATA_DIR = path.join(dir, "data");
+  }
   return require("../server");
 }
 

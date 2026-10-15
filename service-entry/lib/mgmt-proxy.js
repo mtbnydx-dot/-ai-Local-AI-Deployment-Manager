@@ -199,8 +199,45 @@ function isEventStream(headers) {
   return /^text\/event-stream\b/i.test(String(headers?.["content-type"] || ""));
 }
 
+// Reads and discards what is left of a request body, at most DRAIN_LIMIT_BYTES
+// or DRAIN_TIMEOUT_MS. Answering and closing while the client is still sending
+// leaves unread data on the socket, and the close then resets the connection
+// before the client has read the answer (ECONNRESET, mostly under load).
+const DRAIN_LIMIT_BYTES = 32 << 20;
+const DRAIN_TIMEOUT_MS = 5000;
+
+function drainRequest(req, seen = 0) {
+  return new Promise((resolve) => {
+    if (req.readableEnded || req.destroyed) {
+      resolve();
+      return;
+    }
+    let total = seen;
+    const timer = setTimeout(done, DRAIN_TIMEOUT_MS);
+    timer.unref?.();
+    function done() {
+      clearTimeout(timer);
+      req.off("data", onData);
+      req.off("end", done);
+      req.off("close", done);
+      req.off("error", done);
+      resolve();
+    }
+    function onData(chunk) {
+      total += chunk.length;
+      if (total > DRAIN_LIMIT_BYTES) done();
+    }
+    req.on("data", onData);
+    req.on("end", done);
+    req.on("close", done);
+    req.on("error", done);
+    req.resume();
+  });
+}
+
 // Buffers a request body up to `limit`. An oversized body is discarded rather
-// than cut off, so the 413 reaches a client that is still sending.
+// than cut off, and the 413 is held back until the client has finished sending
+// it (or the drain budget is spent), so it reaches a client that is still sending.
 function readRequestBody(req, limit) {
   // 05's guard already read a signed request's body into req.rawBody (05 §5.7).
   if (Buffer.isBuffer(req.rawBody)) {
@@ -209,8 +246,7 @@ function readRequestBody(req, limit) {
   return new Promise((resolve) => {
     const declared = Number(req.headers?.["content-length"]);
     if (Number.isFinite(declared) && declared > limit) {
-      req.resume();
-      resolve({ tooLarge: true });
+      drainRequest(req).then(() => resolve({ tooLarge: true }));
       return;
     }
     const chunks = [];
@@ -229,8 +265,13 @@ function readRequestBody(req, limit) {
       total += chunk.length;
       if (total > limit) {
         chunks.length = 0;
-        settle({ tooLarge: true });
-        req.resume();
+        // Hand the stream to the drain, which answers once the client is done.
+        settled = true;
+        req.off("data", onData);
+        req.off("end", onEnd);
+        req.off("error", onGone);
+        req.off("close", onGone);
+        drainRequest(req, total).then(() => resolve({ tooLarge: true }));
         return;
       }
       chunks.push(chunk);

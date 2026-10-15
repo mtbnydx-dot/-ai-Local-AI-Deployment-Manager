@@ -855,7 +855,7 @@ function mount(ctx) {
     if (ctx.telemetryStore) return Promise.resolve(ctx.telemetryStore);
     if (!ownedStore) {
       const { openTelemetryStore } = require("../../manager-core/telemetry/store");
-      const file = process.env.AI_TELEMETRY_DB || path.join(ctx.rootDir || path.join(ctx.aiRoot || ".", "service-entry"), "data", "telemetry.sqlite");
+      const file = process.env.AI_TELEMETRY_DB || path.join(ctx.dataDir || path.join(ctx.rootDir || path.join(ctx.aiRoot || ".", "service-entry"), "data"), "telemetry.sqlite");
       ownedStore = openTelemetryStore({ file, logger });
       ownedStore.then((opened) => {
         if (!ctx.telemetryStore) ctx.telemetryStore = opened;

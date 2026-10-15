@@ -10,6 +10,7 @@ const test = require("node:test");
 // in a temp dir.
 const ENTRY_TEMP = fs.mkdtempSync(path.join(os.tmpdir(), "entry-security-"));
 process.env.AI_BILLING_DB = path.join(ENTRY_TEMP, "billing.sqlite");
+process.env.SERVICE_ENTRY_DATA_DIR = path.join(ENTRY_TEMP, "data");
 test.after(() => {
   require.cache[require.resolve("../server")]?.exports.closeAccessStore();
   try {
