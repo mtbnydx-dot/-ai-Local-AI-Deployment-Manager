@@ -1099,6 +1099,8 @@ const UI_TRANSLATION_PATTERNS = [
 ];
 
 const UI_PARTIAL_TRANSLATIONS = [
+  // The pre-download check header joins this with the engine ("未识别架构 · vLLM"), so it can only be matched in part.
+  [/未识别架构/g, "Unrecognised architecture"],
   // llama.cpp 下载预设说明（catalog.js MODEL_PRESETS）
   [/单卡友好的日常中文模型。/g, "A single-GPU-friendly everyday Chinese model."],
   [/质量和速度比较均衡。/g, "A good balance of quality and speed."],
