@@ -45,6 +45,14 @@ const DEFAULTS = Object.freeze({
   gatewayRpm: FALLBACK_GATEWAY_RPM,
 });
 
+// Self-service buckets per key (05 §8.5): the /v1/me family has its own
+// 30/min bucket, rotation 3/hour, the origins editor 20/hour.
+const SELF_LIMITS = Object.freeze({
+  meta: Object.freeze({ capacity: 30, windowSeconds: 60 }),
+  rotate: Object.freeze({ capacity: 3, windowSeconds: 3600 }),
+  origins: Object.freeze({ capacity: 20, windowSeconds: 3600 }),
+});
+
 // Message lines the pipeline can show next to the taxonomy code.
 const BAN_MESSAGE = (seconds) => `Too many failed authentication attempts. Retry after ${seconds}s.`;
 
@@ -800,7 +808,27 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
   // { rpm, tpm, outputCap } with null for "no limit".
   function describeLimits(caller, listener = "admin") {
     const limits = limitsFor(caller, listener, null);
-    return { rpm: limits.rpm, tpm: limits.tpm, outputCap: limits.outputCap };
+    return { rpm: limits.rpm, tpm: limits.tpm, outputCap: limits.outputCap, maxConcurrent: limits.maxConcurrent ?? null };
+  }
+
+  // The caller's rpm and tpm buckets as they stand, without taking a token
+  // (the rate_limit block of /v1/me, 05 §8.5). tokens is null without a tpm limit.
+  function peekRate(caller, listener = "admin", { at = now() } = {}) {
+    const limits = limitsFor(caller, listener, null);
+    const view = (taken) => ({ limit: taken.limit, remaining: taken.remaining, reset_seconds: taken.resetSeconds });
+    const requests = buckets.peek(`rpm:${limits.subject}`, { capacity: limits.rpm, refillPerSec: limits.rpm / 60, cost: 1, now: at });
+    const tokens = limits.tpm === null ? null : buckets.peek(`tpm:${limits.subject}`, { capacity: limits.tpm, refillPerSec: limits.tpm / 60, cost: 1, now: at });
+    return { requests: view(requests), tokens: tokens ? view(tokens) : null };
+  }
+
+  // One token from a key's self-service bucket (SELF_LIMITS): /v1/me reads
+  // (meta), self rotation and the origins editor. These buckets are separate
+  // from the rpm and tpm ones, so reading /v1/me never costs inference quota.
+  function takeSelf(keyId, kind, { at = now() } = {}) {
+    const spec = SELF_LIMITS[kind];
+    if (!spec) throw new TypeError(`Unknown self-service bucket: ${kind}`);
+    const taken = buckets.take(`self:${kind}:key:${keyId}`, { capacity: spec.capacity, refillPerSec: spec.capacity / spec.windowSeconds, cost: 1, now: at });
+    return { ok: taken.ok, limit: taken.limit, remaining: taken.remaining, resetSeconds: taken.resetSeconds, retryAfterSeconds: taken.retryAfterSeconds };
   }
 
   // ---- quotas (§9.4) ------------------------------------------------------
@@ -969,6 +997,8 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
     enter,
     acquireConcurrency,
     describeLimits,
+    peekRate,
+    takeSelf,
     admitBody,
     settle,
     invalidateUsage,
@@ -981,6 +1011,7 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
 
 module.exports = {
   DEFAULTS,
+  SELF_LIMITS,
   createLimiter,
   createPersistentBanGuard,
   createShareGate,

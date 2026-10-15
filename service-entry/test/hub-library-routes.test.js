@@ -297,7 +297,7 @@ test("the hub publishes library events only through events.publish, with entry i
   assert.equal(hub.busy().verifying, 0);
 });
 
-test("a machine principal: system:mcp reads the library, a hub shim reaches no library route", async (t) => {
+test("a machine principal: system:mcp reads the library; a hub shim reads the list (HUB-13b) but reaches no library action", async (t) => {
   const { hub } = await readyHub(t);
   const { port, token } = await mountEntry(t, hub);
   const read = await signed(port, "GET", "/api/hub/library", { principal: "system:mcp", token });
@@ -306,9 +306,14 @@ test("a machine principal: system:mcp reads the library, a hub shim reaches no l
   const write = await signed(port, "POST", "/api/hub/library/rescan", { principal: "system:mcp", token, body: {} });
   assert.equal(write.status, 403);
   assert.equal(write.json.error.code, "principal_scope_denied", "05's guard keeps system:mcp read-only");
+  // The managers' storage shims find a model's entry by its path in the list.
   const shim = await signed(port, "GET", "/api/hub/library", { principal: "system:hub-shim:vllm", token });
-  assert.equal(shim.status, 403);
-  assert.equal(shim.json.error.code, "principal_route_forbidden");
+  assert.equal(shim.status, 200, shim.text);
+  for (const [method, target] of [["POST", "/api/hub/library/rescan"], ["GET", `/api/hub/library/${read.json.entries[0].id}`], ["POST", `/api/hub/library/${read.json.entries[0].id}/verify`]]) {
+    const refused = await signed(port, method, target, { principal: "system:hub-shim:vllm", token, ...(method === "POST" ? { body: {} } : {}) });
+    assert.equal(refused.status, 403, `${method} ${target}`);
+    assert.equal(refused.json.error.code, "principal_route_forbidden");
+  }
 });
 
 test("without a model storage the library routes answer 503, and the hub reports a corrupt library.json", async (t) => {
@@ -607,9 +612,10 @@ test("storage usage: roots with ids, models with rootId, no volumes; hidden lega
   assert.equal(shown.status, 200, shown.text);
   assert.equal((await request(port, "/api/hub/storage/usage")).json.roots.find((item) => item.id === "legacy").hidden, false);
 
+  // The disk-usage shim reads it (HUB-13b).
   const shim = await signed(port, "GET", "/api/hub/storage/usage", { principal: "system:hub-shim:vllm", token });
-  assert.equal(shim.status, 403);
-  assert.equal(shim.json.error.code, "principal_route_forbidden");
+  assert.equal(shim.status, 200, shim.text);
+  assert.deepEqual(shim.json.roots.map((item) => item.id), moved.json.roots.map((item) => item.id));
 });
 
 test("storage cleanup: confirm is required, targets are judged one by one and a viewer cannot call it", async (t) => {
@@ -647,7 +653,9 @@ test("the new routes are declared owner-only and the usage view is a registered 
   ]) {
     assert.ok(hubRoutes.HUB_ROUTES.some((item) => key(item) === route), `${route} is served`);
     assert.ok(adminOnly.has(route), `${route} is owner-only`);
-    assert.equal(hubRoutes.SHIM_ROUTES.some((item) => key(item) === route), false, `${route} is not a shim route`);
+    // The path-based storage shims (cleanup-incomplete, upstream-status, delete-local) call these three (HUB-13b).
+    const forShim = ["POST /api/hub/library/:id/check-update", "POST /api/hub/library/:id/cleanup-residue", "DELETE /api/hub/library/:id"].includes(route);
+    assert.equal(hubRoutes.SHIM_ROUTES.some((item) => key(item) === route), forShim, `${route} ${forShim ? "is" : "is not"} a shim route`);
   }
   assert.ok(hubRoutes.HUB_VIEWER_ROUTES.some((item) => key(item) === "GET /api/hub/storage/usage"));
   const redacted = hubRoutes.redactStorageUsageForViewer({

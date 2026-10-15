@@ -1,0 +1,60 @@
+{
+  "ok": true,
+  "passwordFile": "<redacted path>",
+  "openWebuiContainer": {
+    "exists": true,
+    "running": true
+  },
+  "schedule": {
+    "enabled": true,
+    "incrementalEveryMinutes": 60,
+    "fullAtLocal": "04:00",
+    "needsRebaseline": true,
+    "running": false,
+    "nextIncrementalAt": "2026-10-14T13:00:00.000Z",
+    "nextFullAt": "2026-10-15T04:00:00.000Z"
+  },
+  "lastRuns": {
+    "lastRunAt": null,
+    "lastOkAt": null,
+    "lastError": null,
+    "lastSkip": null,
+    "incremental": null,
+    "full": null
+  },
+  "chains": [
+    {
+      "fullAuditId": "20261001-full",
+      "createdAt": "2026-10-01T04:00:00.000Z",
+      "updatedAt": "2026-10-13T09:00:00.000Z",
+      "auditIds": [
+        "20261013-inc",
+        "20261001-full"
+      ],
+      "incrementals": 1,
+      "chats": 7,
+      "messages": 26,
+      "bytes": 45,
+      "active": true
+    }
+  ],
+  "retention": {
+    "policy": {
+      "maxExports": 30,
+      "maxAgeDays": 90,
+      "rebaselineDays": 7,
+      "maxChains": 8
+    },
+    "plan": {
+      "remove": [],
+      "warnings": [],
+      "needsRebaseline": true
+    }
+  },
+  "index": {
+    "available": true,
+    "chats": 2,
+    "messages": 4,
+    "lastIndexedAt": "2026-10-14T12:00:00.000Z"
+  }
+}

@@ -96,6 +96,18 @@ const S = {
   "config.invalid": { [ZH]: "配置有问题：", [EN]: "The configuration has problems:" },
   "config.initialized": { [ZH]: "已创建 {file}", [EN]: "Created {file}" },
   "config.exists": { [ZH]: "{file} 已存在，未改动。", [EN]: "{file} already exists and was left alone." },
+  "importEnv.none": { [ZH]: "没有找到可导入的平台环境变量。", [EN]: "No platform environment variables were found to import." },
+  "importEnv.row": { [ZH]: "{name} -> {key} = {value}{note}", [EN]: "{name} -> {key} = {value}{note}" },
+  "importEnv.invalid": { [ZH]: "  （值无效，已跳过）", [EN]: "  (invalid value, skipped)" },
+  "importEnv.dryRun": { [ZH]: "以上为预览。加 --apply 写入 platform.json 和密钥库。", [EN]: "That was a preview. Add --apply to write platform.json and the secret store." },
+  "importEnv.done": { [ZH]: "已导入 {count} 项。", [EN]: "Imported {count} setting(s)." },
+  "importEnv.removeNeedsApply": { [ZH]: "--remove-user-env 必须与 --apply 一起使用。", [EN]: "--remove-user-env only works together with --apply." },
+  "importEnv.needsTty": { [ZH]: "未删除用户环境变量：需要在交互式终端中确认。", [EN]: "User environment variables were not removed: confirmation needs an interactive terminal." },
+  "importEnv.confirmRemove": { [ZH]: "从用户环境变量（HKCU\\Environment）中删除 {names}？[y/N] ", [EN]: "Delete {names} from the user environment (HKCU\\Environment)? [y/N] " },
+  "importEnv.removed": { [ZH]: "已删除：{names}（已运行的程序需重新启动才会生效）", [EN]: "Removed: {names} (programs that are already running keep their copy until restarted)" },
+  "importEnv.removeKept": { [ZH]: "未删除用户环境变量。", [EN]: "User environment variables were kept." },
+  "importEnv.removeFailed": { [ZH]: "无法删除 {name}。", [EN]: "Could not delete {name}." },
+  "exposure.setupFailed": { [ZH]: "无法运行 setup-public.ps1：{detail}", [EN]: "Could not run setup-public.ps1: {detail}" },
   "config.secretSet": { [ZH]: "（已设置）", [EN]: "(set)" },
   "config.secretUnset": { [ZH]: "（未设置）", [EN]: "(not set)" },
   "deps.title": { [ZH]: "依赖状态", [EN]: "Dependencies" },
@@ -222,6 +234,8 @@ const usageError = (ctx, detail) => new CliError(EXIT.USAGE, tr(ctx, "error.usag
  * An unknown option or a missing value is a usage error.
  */
 function parseArgs(ctx, command, tokens, spec = {}) {
+  // A command that wraps another tool hands its tokens over untouched.
+  if (typeof spec.passthrough === "function" && spec.passthrough(tokens)) return { args: tokens.slice(), flags: {} };
   const bool = new Set(spec.bool || []);
   const value = new Set(spec.value || []);
   const optional = new Set(spec.optional || []);
@@ -842,8 +856,153 @@ async function cmdConfig(ctx, { args, flags }) {
     ctx.out(tr(ctx, "config.initialized", { file }));
     return EXIT.OK;
   }
-  if (sub === "import-env") throw new CliError(EXIT.FAILURE, tr(ctx, "error.notAvailable", { name: "config import-env", package: "OPS-16" }));
+  if (sub === "import-env") {
+    if (args.length > 1) throw usageError(ctx, "config import-env [--apply] [--remove-user-env]");
+    return importEnv(ctx, { flags });
+  }
   throw usageError(ctx, "config list|get <key>|set <key> <value>|unset <key>|validate|path|init");
+}
+
+// ---------------------------------------------------------------------------
+// config import-env (06 §4.7): move setx-era values into platform.json / the secret store
+
+function execFileAsync(ctx, file, args) {
+  const execFile = ctx.execFile || require("node:child_process").execFile;
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { windowsHide: true, timeout: 15000, encoding: "utf8" }, (error, stdout) => (error ? reject(error) : resolve(String(stdout || ""))));
+  });
+}
+
+/** HKCU\Environment as a Map(UPPERCASE name -> { name, value }); empty when reg.exe is unavailable. */
+async function readUserEnvironment(ctx) {
+  const found = new Map();
+  if (!ctx.execFile && process.platform !== "win32") return found;
+  let text = "";
+  try { text = await execFileAsync(ctx, "reg", ["query", "HKCU\\Environment"]); } catch { return found; }
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s+(\S+)\s+REG_(?:EXPAND_)?SZ\s*(.*)$/.exec(line);
+    if (match) found.set(match[1].toUpperCase(), { name: match[1], value: match[2].trim() });
+  }
+  return found;
+}
+
+async function importEnv(ctx, { flags }) {
+  const configApi = require("../manager-core/platform/config");
+  if (flags["remove-user-env"] && !flags.apply) throw new CliError(EXIT.USAGE, tr(ctx, "importEnv.removeNeedsApply"));
+  const schema = configApi.loadPlatformSchema();
+  const userEnv = await readUserEnvironment(ctx);
+  const processEnv = new Map(Object.entries(ctx.env).map(([name, value]) => [name.toUpperCase(), { name, value: String(value ?? "") }]));
+  // Per setting, the first mapped name that holds a value wins (alias order of the schema).
+  const picked = [];
+  for (const leaf of schema.leaves.values()) {
+    for (const entry of leaf.env) {
+      const upper = entry.name.toUpperCase();
+      const fromProcess = processEnv.get(upper);
+      const fromRegistry = userEnv.get(upper);
+      const value = fromProcess?.value?.trim() || fromRegistry?.value?.trim() || "";
+      if (!value) continue;
+      picked.push({ key: leaf.key, name: entry.name, secret: Boolean(leaf.secret), raw: value, registryName: fromRegistry?.name || null });
+      break;
+    }
+  }
+  // The loader's own env parser decides the typed value, so an import cannot disagree with a run.
+  let parsed = null;
+  if (picked.some((row) => !row.secret)) {
+    const env = Object.fromEntries(picked.filter((row) => !row.secret).map((row) => [row.name, row.raw]));
+    let secrets;
+    try { secrets = ctx.vault(); } catch { secrets = undefined; }
+    parsed = configApi.loadPlatformConfig({ aiRoot: ctx.aiRoot, env, ...(secrets ? { secrets } : {}) });
+  }
+  const rows = picked.map((row) => {
+    if (row.secret) return { ...row, value: null, valid: true };
+    const ok = parsed.sources[row.key] === "env" && !parsed.errors.some((entry) => entry.field === row.key);
+    return { ...row, value: ok ? parsed.values[row.key] : null, valid: ok };
+  });
+  const display = (row) => (row.secret ? "****" : JSON.stringify(row.value));
+  const report = rows.map((row) => ({ name: row.name, key: row.key, secret: row.secret, value: row.secret ? "****" : row.value, valid: row.valid, inUserEnvironment: Boolean(row.registryName) }));
+  const printRows = () => {
+    for (const row of rows) ctx.out(tr(ctx, "importEnv.row", { name: row.name, key: row.key, value: row.valid ? display(row) : "?", note: row.valid ? "" : tr(ctx, "importEnv.invalid") }));
+  };
+  if (!flags.apply) {
+    if (flags.json) ctx.json({ schemaVersion: 1, apply: false, settings: report });
+    else if (!rows.length) ctx.out(tr(ctx, "importEnv.none"));
+    else { printRows(); ctx.out(tr(ctx, "importEnv.dryRun")); }
+    return EXIT.OK;
+  }
+
+  const imported = [];
+  const plain = rows.filter((row) => !row.secret && row.valid);
+  if (plain.length) {
+    const result = await configApi.writePlatformConfig({ aiRoot: ctx.aiRoot, env: ctx.env, actor: "cli", set: Object.fromEntries(plain.map((row) => [row.key, row.value])) });
+    if (!result.ok) {
+      ctx.err(tr(ctx, "error.failed", { detail: result.error?.code || result.code || "config_invalid" }));
+      printConfigProblems(ctx, result.errors || (result.error ? [result.error] : []));
+      return EXIT.FAILURE;
+    }
+    imported.push(...plain);
+  }
+  for (const row of rows.filter((item) => item.secret)) {
+    let result;
+    try {
+      result = await configApi.setSecretLeaf(row.key, row.raw, { aiRoot: ctx.aiRoot, env: ctx.env, secrets: ctx.vault(), actor: "cli" });
+    } catch (error) { throw storeFailure(ctx, error); }
+    if (!result.ok) {
+      ctx.err(tr(ctx, "error.failed", { detail: result.error?.code || result.code || "secret_store_unavailable" }));
+      return EXIT.FAILURE;
+    }
+    imported.push(row);
+  }
+  if (flags.json) ctx.json({ schemaVersion: 1, apply: true, settings: report, imported: imported.map((row) => row.key) });
+  else {
+    printRows();
+    ctx.out(imported.length ? tr(ctx, "importEnv.done", { count: imported.length }) : tr(ctx, "importEnv.none"));
+  }
+
+  if (!flags["remove-user-env"]) return EXIT.OK;
+  // Registry removal cannot be undone from here, so it needs a person at a terminal.
+  const removable = imported.map((row) => row.registryName).filter((name) => name && /^[A-Za-z0-9_]+$/.test(name));
+  if (!removable.length) return EXIT.OK;
+  if (!ctx.stdinIsTTY) { ctx.err(tr(ctx, "importEnv.needsTty")); return EXIT.OK; }
+  const answer = await ask(ctx, tr(ctx, "importEnv.confirmRemove", { names: removable.join(", ") }));
+  if (!/^y(es)?$/i.test(String(answer || "").trim())) { ctx.out(tr(ctx, "importEnv.removeKept")); return EXIT.OK; }
+  const removed = [];
+  for (const name of removable) {
+    try {
+      await execFileAsync(ctx, "reg", ["delete", "HKCU\\Environment", "/v", name, "/f"]);
+      removed.push(name);
+    } catch { ctx.err(tr(ctx, "importEnv.removeFailed", { name })); }
+  }
+  if (removed.length) ctx.out(tr(ctx, "importEnv.removed", { names: removed.join(", ") }));
+  return removed.length === removable.length ? EXIT.OK : EXIT.FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// exposure (scan: OPS-7c; setup: thin wrapper over scripts/setup-public.ps1, 05 PUB-20)
+
+/** PowerShell takes -Name; accept the CLI-style --Name / --Name=value too. */
+function powerShellArgs(tokens) {
+  const out = [];
+  for (const token of tokens) {
+    const match = /^--([A-Za-z][A-Za-z0-9]*)(?:=(.*))?$/.exec(token);
+    if (!match) { out.push(token); continue; }
+    out.push(`-${match[1]}`);
+    if (match[2] !== undefined) out.push(match[2]);
+  }
+  return out;
+}
+
+async function cmdExposure(ctx, { args }) {
+  const [sub, ...rest] = args;
+  if (sub === "setup") {
+    const script = path.join(ctx.aiRoot, "scripts", "setup-public.ps1");
+    const argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...powerShellArgs(rest)];
+    const spawnSync = ctx.spawnSync || require("node:child_process").spawnSync;
+    const result = spawnSync("powershell", argv, { stdio: "inherit", windowsHide: true, cwd: ctx.aiRoot });
+    if (result.error) { ctx.err(tr(ctx, "exposure.setupFailed", { detail: result.error.code || result.error.message })); return EXIT.FAILURE; }
+    return typeof result.status === "number" ? result.status : EXIT.FAILURE;
+  }
+  if (sub === "scan") throw new CliError(EXIT.FAILURE, tr(ctx, "error.notAvailable", { name: "exposure scan", package: "OPS-7c" }));
+  throw usageError(ctx, "exposure scan [--json] | exposure setup [args…]");
 }
 
 // ---------------------------------------------------------------------------
@@ -1785,7 +1944,7 @@ const COMMANDS = {
     run: cmdVersion,
   },
   config: {
-    usage: "config list|get <k>|set <k> <v>|unset <k>|validate|path|init",
+    usage: "config list|get <k>|set <k> <v>|unset <k>|validate|path|init|import-env [--apply] [--remove-user-env]",
     summary: { [ZH]: "查看和修改平台配置（密钥请用 secrets）", [EN]: "Read and change the platform configuration (secrets go through secrets)" },
     spec: { bool: ["json", "apply", "remove-user-env"] },
     run: cmdConfig,
@@ -1832,6 +1991,12 @@ const COMMANDS = {
     spec: { bool: ["yes", "non-interactive"], value: ["step", "engines", "model-root", "hf-home", "exposure"], max: 0 },
     run: cmdSetup,
   },
+  exposure: {
+    usage: "exposure scan [--json] | exposure setup [args…]",
+    summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" },
+    spec: { bool: ["json"], passthrough: (tokens) => tokens[0] === "setup" },
+    run: cmdExposure,
+  },
   secrets: {
     usage: "secrets list|set <key>|clear <key>|copy <key>|migrate|export-legacy --namespace n",
     summary: { [ZH]: "管理密钥库（值从不出现在命令行或屏幕上）", [EN]: "Manage the secret store (values never appear on the command line or screen)" },
@@ -1843,7 +2008,6 @@ const COMMANDS = {
 const PLANNED = {
   admin: { package: "OPS-7c", usage: "admin pair [--open] [--ttl s]", summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" } },
   keys: { package: "OPS-7c", usage: "keys migrate [--dry-run|--report] [--json]", summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" } },
-  exposure: { package: "OPS-7c", usage: "exposure scan [--json] | exposure setup [args…]", summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" } },
   autostart: { package: "OPS-12", usage: "autostart enable [--profile p] | disable | status", summary: { [ZH]: "登录自启动", [EN]: "Start at logon" } },
   deploy: { package: "OPS-11b", usage: "deploy [--restart none|changed|all] [--skip-tests] [--no-prune] [--allow-live-drift] [--yes] [--dry-run]", summary: { [ZH]: "从工作区部署到线上目录", [EN]: "Deploy a worktree to the live root" } },
   "post-deploy": { package: "OPS-11a", usage: "post-deploy --manifest <path> [--restart …] [--no-prune] [--dry-run]", summary: { [ZH]: "部署后处理（内部使用）", [EN]: "Post-deploy steps (internal)" } },

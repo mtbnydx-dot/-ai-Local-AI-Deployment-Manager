@@ -356,6 +356,24 @@ const SHIM_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/pause" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/resume" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/cancel" }),
+  // The catalogue, estimate and link rows (HUB-13b): GET /api/remote-models and
+  // its variants, /api/download/estimate and precheck, /api/resolve-model-link.
+  // POST /api/download plans through POST /plan first (the token rule is the
+  // same as for POST /downloads).
+  Object.freeze({ method: "GET", path: "/api/hub/search" }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name" }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name/files" }),
+  Object.freeze({ method: "POST", path: "/api/hub/resolve-link" }),
+  Object.freeze({ method: "POST", path: "/api/hub/plan" }),
+  // The storage rows: disk-usage, cleanup-incomplete, upstream-status and
+  // delete-local, which find the library entry of a path first and wait for
+  // the delete task.
+  Object.freeze({ method: "GET", path: "/api/hub/storage/usage" }),
+  Object.freeze({ method: "GET", path: "/api/hub/library" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/cleanup-residue" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/check-update" }),
+  Object.freeze({ method: "DELETE", path: "/api/hub/library/:id" }),
+  Object.freeze({ method: "GET", path: "/api/hub/tasks/:id" }),
 ]);
 
 function routeKey(method, path) {
