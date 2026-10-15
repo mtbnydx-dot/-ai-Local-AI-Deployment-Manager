@@ -937,6 +937,7 @@ function hostOf(gpuStatus, gpuIds) {
  * setJobProgress}, listJobs, findInstance(id) -> {instance, container, state},
  * apiKeyFor(found), launchOf(found), getCard(cardId), createBenchmark(target)
  * -> async (input) => benchmark, getGpuStatus, internalClient, pushHostRecord,
+ * onHostRecord({record, card, launch, instance}) (publishes the capabilities),
  * fetchImpl, registry, inFlight (Map), now, sleep, retryDelaysMs}.
  */
 async function startQualifyJob(body, context = {}) {
@@ -1073,6 +1074,14 @@ async function executeQualifyJob({ job, found, target, card, launch, fleetId, pl
     });
     // The record stays on the job until the entry has stored it (section 13).
     job.result = { hostRecord: record, summary: result.summary, partial: result.partial, pushed: false };
+    // 02 section 16: the record's failed checks unpublish capabilities on the running instance's launch.
+    if (typeof context.onHostRecord === "function") {
+      try {
+        await context.onHostRecord({ record, card, launch, instance: target });
+      } catch (error) {
+        log(`Published capabilities not updated: ${error?.message || error}`);
+      }
+    }
     let pushed = null;
     const push = typeof context.pushHostRecord === "function" ? context.pushHostRecord : null;
     if (push) {

@@ -117,7 +117,7 @@ test("typed fields are added next to the legacy ones and never change them", (t)
 
   const legacyKeys = Object.keys(LEGACY);
   assert.deepEqual(Object.fromEntries(legacyKeys.map((key) => [key, merged[key]])), { ...LEGACY });
-  assert.deepEqual(Object.keys(typed).sort(), ["apiSurface", "capabilities", "engineFamily", "engineId", "launchId", "lifecycle", "recipeId", "runtime"]);
+  assert.deepEqual(Object.keys(typed).sort(), ["apiSurface", "capabilities", "capabilitySource", "engineFamily", "engineId", "launchId", "lifecycle", "recipeId", "runtime"]);
   assert.equal(typed.engineId, "sglang");
   assert.equal(typed.engineFamily, "sglang");
   assert.deepEqual(typed.runtime, { id: "sglang@0.5.17", version: typed.runtime.version, image: "example/sglang:0.5.17", digest: `sha256:${"a".repeat(64)}` });

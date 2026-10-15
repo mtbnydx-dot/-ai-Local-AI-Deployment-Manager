@@ -1159,7 +1159,8 @@ async function listVllmModelCollections() {
       verificationIssues: [...(model.verificationIssues || []), issue],
     };
   });
-  return { ...collections, local };
+  // 02 MOD-18: the fleet capability tokens of each local model, from its card.
+  return core.models.capabilities.annotateLocalModels({ ...collections, local }, { inspectLocal: core.models.inspectLocal });
 }
 
 // 任务快照改推送：下载/启动进行中不再靠 1 秒一次的 /api/jobs 轮询。
@@ -1682,7 +1683,7 @@ const {
 
 // 02 MOD-9b/MOD-10: one set of model hooks per manager (the calibration store is shared by
 // the PlanCtx's calibrationFor and the supervisor's afterReady).
-const modelHooks = core.models.managerHooks({ managerId: "vllm", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatusFresh, modelStorage, modelsRoot: CONFIG.modelsRoot });
+const modelHooks = core.models.managerHooks({ managerId: "vllm", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatusFresh, modelStorage, modelsRoot: CONFIG.modelsRoot, launchStore, onCapabilities: () => clearRuntimeInstancesCache() });
 
 const startRuntimeRequest = createVllmStartRuntimeRequest({
   resolveRequestedModel: value => { const input = modelStorage.fromContainerPath(value); if (!path.isAbsolute(input)) return input; const resolved = modelStorage.resolvePath(input); modelStorage.assertUnlocked([resolved]); return resolved; },
@@ -1916,6 +1917,9 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
 let modelInspectorInternalClient = null;
 core.registerModelInspectorRoutes(app, {
   managerId: "vllm",
+  // MOD-18: a qualification run republishes the instance capabilities through the launch record.
+  launchStore,
+  onCapabilities: () => clearRuntimeInstancesCache(),
   isLocalRequest,
   jobs: { createJob, appendLog, finishJob, failJob, setJobProgress },
   docker,

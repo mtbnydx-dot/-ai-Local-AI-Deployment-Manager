@@ -96,6 +96,13 @@ function declaredCapabilities({ descriptor, record, maxContext }) {
   };
 }
 
+// "published": record.resolved.capabilities, derived from the ModelCard and the launch by
+// 02 §16 (model-inspector/capabilities.js). "descriptor": only what the engine descriptor
+// says, so a consumer (service-entry model-fleet) falls back to its labelled name regex.
+function capabilitySourceOf(record) {
+  return isPlainObject(record?.resolved?.capabilities) ? "published" : "descriptor";
+}
+
 function apiSurfaceOf(descriptor) {
   const surface = isPlainObject(descriptor?.apiSurface) ? descriptor.apiSurface : {};
   const out = {};
@@ -184,6 +191,7 @@ function createInstanceCatalog(options = {}) {
       launchId: text(labels[LAUNCH_ID_LABEL_KEY]) || record?.launchId || null,
       lifecycle: lifecycleOf({ container, job, now }),
       capabilities: declaredCapabilities({ descriptor, record, maxContext }),
+      capabilitySource: capabilitySourceOf(record),
       apiSurface: apiSurfaceOf(descriptor),
     };
   }
@@ -224,6 +232,7 @@ function createInstanceCatalog(options = {}) {
         launchId: record.launchId || null,
         lifecycle: { state: "sleeping", phase: null, percent: 0, since: record.sleptAt || null, phaseHistory: [] },
         capabilities: declaredCapabilities({ descriptor, record: stored, maxContext: 0 }),
+        capabilitySource: capabilitySourceOf(stored),
         apiSurface: apiSurfaceOf(descriptor),
         sleep: {
           id,
