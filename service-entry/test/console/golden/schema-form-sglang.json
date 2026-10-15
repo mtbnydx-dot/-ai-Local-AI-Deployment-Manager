@@ -1,0 +1,2060 @@
+{
+  "basic": {
+    "engineId": "sglang",
+    "mode": "launch",
+    "level": "basic",
+    "counts": {
+      "visible": 14,
+      "hidden": 38,
+      "notApplicable": 60,
+      "changed": 10,
+      "errors": 0
+    },
+    "unplaced": [],
+    "groups": [
+      {
+        "id": "model",
+        "label": "Model & template",
+        "hiddenCount": 6,
+        "fields": [
+          {
+            "id": "servedName",
+            "domId": "servedName",
+            "widget": "text",
+            "type": "string",
+            "label": "Served model name",
+            "unit": null,
+            "flag": "--served-model-name",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3.8-flash-next",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": "qwen3.8-flash-next",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "trustRemoteCode",
+            "domId": "sf-trustRemoteCode",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Trust model repository code",
+            "unit": null,
+            "flag": "--trust-remote-code",
+            "level": "advanced",
+            "userValue": false,
+            "effective": {
+              "value": true,
+              "source": "recipe",
+              "reason": "Qwen3.8 needs repository code"
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": {
+              "kind": "recipe",
+              "reason": "Qwen3.8 needs repository code",
+              "value": true
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "capacity",
+        "label": "Capacity & concurrency",
+        "hiddenCount": 3,
+        "fields": [
+          {
+            "id": "contextLength",
+            "domId": "maxModelLen",
+            "widget": "number",
+            "type": "int",
+            "label": "Context length (per request)",
+            "unit": "tokens",
+            "flag": "--context-length",
+            "level": "basic",
+            "userValue": 262144,
+            "effective": {
+              "value": 262144,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": "262,144 = 256K",
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "concurrency",
+            "domId": "maxNumSeqs",
+            "widget": "number",
+            "type": "int",
+            "label": "Max concurrent requests",
+            "unit": "requests",
+            "flag": "--max-running-requests",
+            "level": "basic",
+            "userValue": 4,
+            "effective": {
+              "value": 4,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "memory",
+        "label": "Memory & KV cache",
+        "hiddenCount": 7,
+        "fields": [
+          {
+            "id": "sglang.memFractionStatic",
+            "domId": "gpuMemoryUtilization",
+            "widget": "number",
+            "type": "float",
+            "label": "Static memory fraction (of free VRAM at start)",
+            "unit": "fraction",
+            "flag": "--mem-fraction-static",
+            "level": "basic",
+            "userValue": 0.995,
+            "effective": {
+              "value": 0.995,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [
+              {
+                "code": "high_memory_fraction",
+                "message": "The static memory fraction 0.995 leaves almost no headroom for other processes",
+                "source": "plan"
+              }
+            ],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "kvCacheDtype",
+            "domId": "kvCacheDtype",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "KV cache precision",
+            "unit": null,
+            "flag": "--kv-cache-dtype",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "fp8",
+              "fp8_e5m2",
+              "fp8_e4m3"
+            ]
+          },
+          {
+            "id": "prefixCaching",
+            "domId": "disablePrefixCaching",
+            "widget": "tristate",
+            "type": "tristate",
+            "label": "Prefix caching",
+            "unit": null,
+            "flag": "--disable-radix-cache",
+            "level": "advanced",
+            "userValue": false,
+            "effective": {
+              "value": false,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.hicache.enable",
+            "domId": "sf-sglang-hicache-enable",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Hierarchical KV cache (RAM)",
+            "unit": null,
+            "flag": "--enable-hierarchical-cache",
+            "level": "expert",
+            "userValue": true,
+            "effective": {
+              "value": true,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.hicache.ratio",
+            "domId": "sf-sglang-hicache-ratio",
+            "widget": "number",
+            "type": "float",
+            "label": "RAM-to-VRAM cache ratio",
+            "unit": "x",
+            "flag": "--hicache-ratio",
+            "level": "expert",
+            "userValue": 2,
+            "effective": {
+              "value": 2,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "speculative",
+        "label": "Speculative decoding",
+        "hiddenCount": 4,
+        "fields": [
+          {
+            "id": "speculative.method",
+            "domId": "speculativeMode",
+            "widget": "select",
+            "type": "enum",
+            "label": "Speculative decoding method",
+            "unit": null,
+            "flag": "--speculative-algorithm",
+            "level": "basic",
+            "userValue": "dspark",
+            "effective": {
+              "value": "dspark",
+              "source": "planner",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "off",
+              "dspark",
+              "mtp",
+              "eagle",
+              "eagle3",
+              "nextn",
+              "standalone",
+              "ngram"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "reasoning-tools",
+        "label": "Reasoning & tools",
+        "hiddenCount": 3,
+        "fields": [
+          {
+            "id": "reasoningParser",
+            "domId": "reasoningParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Reasoning parser",
+            "unit": null,
+            "flag": "--reasoning-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3",
+              "source": "recipe",
+              "reason": "Validated parser for Qwen3.8"
+            },
+            "ghost": "qwen3",
+            "hint": null,
+            "changed": false,
+            "locked": {
+              "kind": "recipe",
+              "reason": "Validated parser for Qwen3.8",
+              "value": "qwen3"
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3",
+              "deepseek_r1",
+              "deepseek_v3",
+              "gptoss",
+              "gemma4",
+              "granite",
+              "hunyuan_a13b",
+              "kimi_k2",
+              "mistral",
+              "nemotron_v3",
+              "olmo3",
+              "step3",
+              "step3p5",
+              "identity",
+              "nano_v3"
+            ]
+          },
+          {
+            "id": "toolCallParser",
+            "domId": "toolCallParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Tool-call parser",
+            "unit": null,
+            "flag": "--tool-call-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3_coder",
+              "source": "recipe",
+              "reason": "Validated parser for Qwen3.8"
+            },
+            "ghost": "qwen3_coder",
+            "hint": null,
+            "changed": false,
+            "locked": {
+              "kind": "recipe",
+              "reason": "Validated parser for Qwen3.8",
+              "value": "qwen3_coder"
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3_coder",
+              "qwen3_xml",
+              "hermes",
+              "deepseek_v3",
+              "mistral",
+              "llama3_json",
+              "llama4_pythonic",
+              "xlam",
+              "gemma4",
+              "pythonic",
+              "granite",
+              "minimax"
+            ]
+          },
+          {
+            "id": "chatTemplateKwargs",
+            "domId": "sf-chatTemplateKwargs",
+            "widget": "json",
+            "type": "json",
+            "label": "Chat template default arguments",
+            "unit": null,
+            "flag": "--default-chat-template-kwargs",
+            "level": "expert",
+            "userValue": {
+              "enable_thinking": false
+            },
+            "effective": {
+              "value": {
+                "enable_thinking": false
+              },
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "network-security",
+        "label": "Network & security",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "apiKey",
+            "domId": "vllmApiKey",
+            "widget": "secret",
+            "type": "string",
+            "label": "Direct model API key",
+            "unit": null,
+            "flag": "--api-key",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null,
+              "redacted": true
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": "pending",
+            "choices": null
+          }
+        ]
+      }
+    ]
+  },
+  "expert": {
+    "engineId": "sglang",
+    "mode": "launch",
+    "level": "expert",
+    "counts": {
+      "visible": 52,
+      "hidden": 0,
+      "notApplicable": 60,
+      "changed": 10,
+      "errors": 0
+    },
+    "unplaced": [],
+    "groups": [
+      {
+        "id": "model",
+        "label": "Model & template",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "servedName",
+            "domId": "servedName",
+            "widget": "text",
+            "type": "string",
+            "label": "Served model name",
+            "unit": null,
+            "flag": "--served-model-name",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3.8-flash-next",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": "qwen3.8-flash-next",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "role",
+            "domId": "sf-role",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Model role",
+            "unit": null,
+            "flag": "--is-embedding",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "chat",
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": "chat",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "chat",
+              "embedding"
+            ]
+          },
+          {
+            "id": "dtype",
+            "domId": "launchDtype",
+            "widget": "select",
+            "type": "enum",
+            "label": "Compute dtype",
+            "unit": null,
+            "flag": "--dtype",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "bfloat16",
+              "float16",
+              "half",
+              "float32",
+              "float"
+            ]
+          },
+          {
+            "id": "quantization",
+            "domId": "launchQuantization",
+            "widget": "select",
+            "type": "enum",
+            "label": "Weight quantization",
+            "unit": null,
+            "flag": "--quantization",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "modelopt_fp4",
+              "source": "recipe",
+              "reason": "Qwen3.8 Flash-Next recipe"
+            },
+            "ghost": "modelopt_fp4",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "awq",
+              "gptq",
+              "bitsandbytes",
+              "fp8",
+              "modelopt",
+              "modelopt_fp4",
+              "compressed-tensors"
+            ]
+          },
+          {
+            "id": "tokenizer",
+            "domId": "sf-tokenizer",
+            "widget": "path",
+            "type": "path",
+            "label": "Tokenizer path",
+            "unit": null,
+            "flag": "--tokenizer-path",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "trustRemoteCode",
+            "domId": "sf-trustRemoteCode",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Trust model repository code",
+            "unit": null,
+            "flag": "--trust-remote-code",
+            "level": "advanced",
+            "userValue": false,
+            "effective": {
+              "value": true,
+              "source": "recipe",
+              "reason": "Qwen3.8 needs repository code"
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": {
+              "kind": "recipe",
+              "reason": "Qwen3.8 needs repository code",
+              "value": true
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.loadFormat",
+            "domId": "loadFormat",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Weight load format",
+            "unit": null,
+            "flag": "--load-format",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "hf",
+              "gguf",
+              "safetensors"
+            ]
+          },
+          {
+            "id": "hfOverrides",
+            "domId": "sf-hfOverrides",
+            "widget": "json",
+            "type": "json",
+            "label": "Override HF config (JSON)",
+            "unit": null,
+            "flag": "--json-model-override-args",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "capacity",
+        "label": "Capacity & concurrency",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "contextLength",
+            "domId": "maxModelLen",
+            "widget": "number",
+            "type": "int",
+            "label": "Context length (per request)",
+            "unit": "tokens",
+            "flag": "--context-length",
+            "level": "basic",
+            "userValue": 262144,
+            "effective": {
+              "value": 262144,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": "262,144 = 256K",
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "concurrency",
+            "domId": "maxNumSeqs",
+            "widget": "number",
+            "type": "int",
+            "label": "Max concurrent requests",
+            "unit": "requests",
+            "flag": "--max-running-requests",
+            "level": "basic",
+            "userValue": 4,
+            "effective": {
+              "value": 4,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.chunkedPrefillSize",
+            "domId": "sglangChunkedPrefillSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Chunked prefill size",
+            "unit": "tokens",
+            "flag": "--chunked-prefill-size",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 4096,
+              "source": "recipe",
+              "reason": null
+            },
+            "ghost": 4096,
+            "hint": "4,096 = 4K",
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.maxPrefillTokens",
+            "domId": "sf-sglang-maxPrefillTokens",
+            "widget": "number",
+            "type": "int",
+            "label": "Prefill tokens per batch",
+            "unit": "tokens",
+            "flag": "--max-prefill-tokens",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.maxRunningRequests",
+            "domId": "sf-sglang-maxRunningRequests",
+            "widget": "number",
+            "type": "int",
+            "label": "Effective running-request cap",
+            "unit": "requests",
+            "flag": "--max-running-requests",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "recipe",
+              "reason": "Mamba cache 8 → floor(8/5)=1 effective concurrent request"
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "memory",
+        "label": "Memory & KV cache",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "sglang.memFractionStatic",
+            "domId": "gpuMemoryUtilization",
+            "widget": "number",
+            "type": "float",
+            "label": "Static memory fraction (of free VRAM at start)",
+            "unit": "fraction",
+            "flag": "--mem-fraction-static",
+            "level": "basic",
+            "userValue": 0.995,
+            "effective": {
+              "value": 0.995,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [
+              {
+                "code": "high_memory_fraction",
+                "message": "The static memory fraction 0.995 leaves almost no headroom for other processes",
+                "source": "plan"
+              }
+            ],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "kvCacheDtype",
+            "domId": "kvCacheDtype",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "KV cache precision",
+            "unit": null,
+            "flag": "--kv-cache-dtype",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "fp8",
+              "fp8_e5m2",
+              "fp8_e4m3"
+            ]
+          },
+          {
+            "id": "prefixCaching",
+            "domId": "disablePrefixCaching",
+            "widget": "tristate",
+            "type": "tristate",
+            "label": "Prefix caching",
+            "unit": null,
+            "flag": "--disable-radix-cache",
+            "level": "advanced",
+            "userValue": false,
+            "effective": {
+              "value": false,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.maxTotalTokens",
+            "domId": "sglangMaxTotalTokens",
+            "widget": "number",
+            "type": "int",
+            "label": "KV pool size limit",
+            "unit": "tokens",
+            "flag": "--max-total-tokens",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 262144,
+              "source": "recipe",
+              "reason": null
+            },
+            "ghost": 262144,
+            "hint": "262,144 = 256K",
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.pageSize",
+            "domId": "sglangPageSize",
+            "widget": "number",
+            "type": "int",
+            "label": "KV page size",
+            "unit": "tokens",
+            "flag": "--page-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 64,
+              "source": "recipe",
+              "reason": null
+            },
+            "ghost": 64,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.pleOffloadEmbedding",
+            "domId": "sglangPleOffloadEmbedding",
+            "widget": "switch",
+            "type": "bool",
+            "label": "PLE embeddings in RAM",
+            "unit": null,
+            "flag": "--ple-offload-embedding",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.mambaSsmDtype",
+            "domId": "sglangMambaSsmDtype",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Mamba state dtype",
+            "unit": null,
+            "flag": "--mamba-ssm-dtype",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "bfloat16",
+              "float16",
+              "float32"
+            ]
+          },
+          {
+            "id": "sglang.mambaRadixCacheStrategy",
+            "domId": "sglangMambaRadixCacheStrategy",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Mamba cache strategy",
+            "unit": null,
+            "flag": "--mamba-radix-cache-strategy",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "extra_buffer",
+              "extra_buffer_lazy",
+              "no_buffer",
+              "auto"
+            ]
+          },
+          {
+            "id": "sglang.mambaTrackInterval",
+            "domId": "sglangMambaTrackInterval",
+            "widget": "number",
+            "type": "int",
+            "label": "Mamba track interval",
+            "unit": "tokens",
+            "flag": "--mamba-track-interval",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.maxMambaCacheSize",
+            "domId": "sglangMaxMambaCacheSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Mamba cache slots",
+            "unit": "slots",
+            "flag": "--max-mamba-cache-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 8,
+              "source": "recipe",
+              "reason": null
+            },
+            "ghost": 8,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.hicache.enable",
+            "domId": "sf-sglang-hicache-enable",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Hierarchical KV cache (RAM)",
+            "unit": null,
+            "flag": "--enable-hierarchical-cache",
+            "level": "expert",
+            "userValue": true,
+            "effective": {
+              "value": true,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.hicache.ratio",
+            "domId": "sf-sglang-hicache-ratio",
+            "widget": "number",
+            "type": "float",
+            "label": "RAM-to-VRAM cache ratio",
+            "unit": "x",
+            "flag": "--hicache-ratio",
+            "level": "expert",
+            "userValue": 2,
+            "effective": {
+              "value": 2,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "parallelism",
+        "label": "Multi-GPU & parallelism",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "tensorParallel",
+            "domId": "tensorParallelSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Tensor-parallel GPUs",
+            "unit": "GPUs",
+            "flag": "--tp-size",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "pipelineParallel",
+            "domId": "sf-pipelineParallel",
+            "widget": "number",
+            "type": "int",
+            "label": "Pipeline stages",
+            "unit": "stages",
+            "flag": "--pp-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "dataParallel",
+            "domId": "sf-dataParallel",
+            "widget": "number",
+            "type": "int",
+            "label": "Data-parallel replicas",
+            "unit": "replicas",
+            "flag": "--dp-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.epSize",
+            "domId": "sf-sglang-epSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Expert-parallel size",
+            "unit": "GPUs",
+            "flag": "--ep-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "expertParallel",
+            "domId": "sf-expertParallel",
+            "widget": "switch",
+            "type": "bool",
+            "label": "MoE expert parallel",
+            "unit": null,
+            "flag": "--ep-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "speculative",
+        "label": "Speculative decoding",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "speculative.method",
+            "domId": "speculativeMode",
+            "widget": "select",
+            "type": "enum",
+            "label": "Speculative decoding method",
+            "unit": null,
+            "flag": "--speculative-algorithm",
+            "level": "basic",
+            "userValue": "dspark",
+            "effective": {
+              "value": "dspark",
+              "source": "planner",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "off",
+              "dspark",
+              "mtp",
+              "eagle",
+              "eagle3",
+              "nextn",
+              "standalone",
+              "ngram"
+            ]
+          },
+          {
+            "id": "speculative.numTokens",
+            "domId": "numSpeculativeTokens",
+            "widget": "number",
+            "type": "int",
+            "label": "Draft tokens per step",
+            "unit": "tokens",
+            "flag": "--speculative-num-draft-tokens",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "speculative.draftModel",
+            "domId": "draftModel",
+            "widget": "path",
+            "type": "path",
+            "label": "Draft model",
+            "unit": null,
+            "flag": "--speculative-draft-model-path",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.dsparkBlockSize",
+            "domId": "dsparkBlockSize",
+            "widget": "number",
+            "type": "int",
+            "label": "DSpark block size",
+            "unit": "tokens",
+            "flag": "--speculative-dspark-block-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 7,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": 7,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.draftModelQuantization",
+            "domId": "sf-sglang-draftModelQuantization",
+            "widget": "text",
+            "type": "string",
+            "label": "Draft model quantization",
+            "unit": null,
+            "flag": "--speculative-draft-model-quantization",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "reasoning-tools",
+        "label": "Reasoning & tools",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "reasoningParser",
+            "domId": "reasoningParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Reasoning parser",
+            "unit": null,
+            "flag": "--reasoning-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3",
+              "source": "recipe",
+              "reason": "Validated parser for Qwen3.8"
+            },
+            "ghost": "qwen3",
+            "hint": null,
+            "changed": false,
+            "locked": {
+              "kind": "recipe",
+              "reason": "Validated parser for Qwen3.8",
+              "value": "qwen3"
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3",
+              "deepseek_r1",
+              "deepseek_v3",
+              "gptoss",
+              "gemma4",
+              "granite",
+              "hunyuan_a13b",
+              "kimi_k2",
+              "mistral",
+              "nemotron_v3",
+              "olmo3",
+              "step3",
+              "step3p5",
+              "identity",
+              "nano_v3"
+            ]
+          },
+          {
+            "id": "toolCallParser",
+            "domId": "toolCallParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Tool-call parser",
+            "unit": null,
+            "flag": "--tool-call-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3_coder",
+              "source": "recipe",
+              "reason": "Validated parser for Qwen3.8"
+            },
+            "ghost": "qwen3_coder",
+            "hint": null,
+            "changed": false,
+            "locked": {
+              "kind": "recipe",
+              "reason": "Validated parser for Qwen3.8",
+              "value": "qwen3_coder"
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3_coder",
+              "qwen3_xml",
+              "hermes",
+              "deepseek_v3",
+              "mistral",
+              "llama3_json",
+              "llama4_pythonic",
+              "xlam",
+              "gemma4",
+              "pythonic",
+              "granite",
+              "minimax"
+            ]
+          },
+          {
+            "id": "autoToolChoice",
+            "domId": "enableAutoToolChoice",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Automatic tool choice",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": true,
+              "source": "recipe",
+              "reason": "Enabled with the parser"
+            },
+            "ghost": true,
+            "hint": null,
+            "changed": false,
+            "locked": {
+              "kind": "recipe",
+              "reason": "Enabled with the parser",
+              "value": true
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "reasoning.defaultEnabled",
+            "domId": "sglangDisableThinkingByDefault",
+            "widget": "tristate",
+            "type": "tristate",
+            "label": "Thinking on by default",
+            "unit": null,
+            "flag": "--default-chat-template-kwargs",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "clientPreset",
+            "domId": "clientPreset",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Client preset",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "openwebui",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "openwebui",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "openwebui",
+              "claude-code",
+              "claude-cowork",
+              "generic"
+            ]
+          },
+          {
+            "id": "chatTemplateKwargs",
+            "domId": "sf-chatTemplateKwargs",
+            "widget": "json",
+            "type": "json",
+            "label": "Chat template default arguments",
+            "unit": null,
+            "flag": "--default-chat-template-kwargs",
+            "level": "expert",
+            "userValue": {
+              "enable_thinking": false
+            },
+            "effective": {
+              "value": {
+                "enable_thinking": false
+              },
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "multimodal",
+        "label": "Multimodal",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "sglang.mmFeatureTransport",
+            "domId": "sf-sglang-mmFeatureTransport",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Multimodal feature transport",
+            "unit": null,
+            "flag": "--mm-feature-transport",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "cpu"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "network-security",
+        "label": "Network & security",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "apiKey",
+            "domId": "vllmApiKey",
+            "widget": "secret",
+            "type": "string",
+            "label": "Direct model API key",
+            "unit": null,
+            "flag": "--api-key",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null,
+              "redacted": true
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": "pending",
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "runtime-expert",
+        "label": "Runtime & expert",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "sglang.attentionBackend",
+            "domId": "sglangAttentionBackend",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Attention backend",
+            "unit": null,
+            "flag": "--attention-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": "triton",
+              "source": "recipe",
+              "reason": null
+            },
+            "ghost": "triton",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "triton",
+              "flashinfer",
+              "qsa",
+              "fa4"
+            ]
+          },
+          {
+            "id": "sglang.fp4GemmBackend",
+            "domId": "sglangFp4GemmBackend",
+            "widget": "select",
+            "type": "enum",
+            "label": "NVFP4 GEMM backend",
+            "unit": null,
+            "flag": "--fp4-gemm-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": "flashinfer_cutlass",
+              "source": "recipe",
+              "reason": null
+            },
+            "ghost": "flashinfer_cutlass",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "flashinfer_cutlass",
+              "flashinfer_cudnn",
+              "flashinfer_cutedsl",
+              "flashinfer_trtllm",
+              "marlin"
+            ]
+          },
+          {
+            "id": "sglang.linearAttnPrefillBackend",
+            "domId": "sglangLinearAttnPrefillBackend",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Linear-attention prefill backend",
+            "unit": null,
+            "flag": "--linear-attn-prefill-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "triton",
+              "flashinfer",
+              "cutedsl"
+            ]
+          },
+          {
+            "id": "sglang.linearAttnDecodeBackend",
+            "domId": "sglangLinearAttnDecodeBackend",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Linear-attention decode backend",
+            "unit": null,
+            "flag": "--linear-attn-decode-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "flashinfer",
+              "triton",
+              "cutedsl"
+            ]
+          },
+          {
+            "id": "sglang.mambaSchedulerStrategy",
+            "domId": "sf-sglang-mambaSchedulerStrategy",
+            "widget": "text",
+            "type": "string",
+            "label": "Mamba scheduler strategy",
+            "unit": null,
+            "flag": "--mamba-scheduler-strategy",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.disablePrefillCudaGraph",
+            "domId": "sf-sglang-disablePrefillCudaGraph",
+            "widget": "switch",
+            "type": "bool",
+            "label": "No CUDA graphs for prefill",
+            "unit": null,
+            "flag": "--disable-prefill-cuda-graph",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.sleepOnIdle",
+            "domId": "sf-sglang-sleepOnIdle",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Sleep when idle",
+            "unit": null,
+            "flag": "--sleep-on-idle",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": true,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": true,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.enableMetrics",
+            "domId": "sf-sglang-enableMetrics",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Prometheus metrics",
+            "unit": null,
+            "flag": "--enable-metrics",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": true,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": true,
+            "hint": null,
+            "changed": false,
+            "locked": {
+              "kind": "managed",
+              "reason": null,
+              "value": null
+            },
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "sglang.cudaGraphMaxBs",
+            "domId": "sf-sglang-cudaGraphMaxBs",
+            "widget": "number",
+            "type": "int",
+            "label": "CUDA graph max batch size",
+            "unit": "requests",
+            "flag": "--cuda-graph-max-bs",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      }
+    ]
+  }
+}

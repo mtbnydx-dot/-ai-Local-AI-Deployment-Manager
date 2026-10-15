@@ -1,0 +1,2005 @@
+{
+  "basic": {
+    "engineId": "vllm",
+    "mode": "launch",
+    "level": "basic",
+    "counts": {
+      "visible": 12,
+      "hidden": 38,
+      "notApplicable": 62,
+      "changed": 7,
+      "errors": 3
+    },
+    "unplaced": [],
+    "groups": [
+      {
+        "id": "model",
+        "label": "Model & template",
+        "hiddenCount": 8,
+        "fields": [
+          {
+            "id": "servedName",
+            "domId": "servedName",
+            "widget": "text",
+            "type": "string",
+            "label": "Served model name",
+            "unit": null,
+            "flag": "--served-model-name",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3.8",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": "qwen3.8",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "hfOverrides",
+            "domId": "sf-hfOverrides",
+            "widget": "json",
+            "type": "json",
+            "label": "Override HF config (JSON)",
+            "unit": null,
+            "flag": "--hf-overrides",
+            "level": "expert",
+            "userValue": {
+              "rope_scaling": {
+                "type": "yarn"
+              }
+            },
+            "effective": {
+              "value": {
+                "rope_scaling": {
+                  "type": "yarn"
+                }
+              },
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "capacity",
+        "label": "Capacity & concurrency",
+        "hiddenCount": 1,
+        "fields": [
+          {
+            "id": "contextLength",
+            "domId": "maxModelLen",
+            "widget": "number",
+            "type": "int",
+            "label": "Context length (per request)",
+            "unit": "tokens",
+            "flag": "--max-model-len",
+            "level": "basic",
+            "userValue": 131072,
+            "effective": {
+              "value": 131072,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": "131,072 = 128K",
+            "changed": true,
+            "locked": null,
+            "error": {
+              "code": "out_of_range",
+              "message": "Context length 131072 does not fit in memory",
+              "source": "plan"
+            },
+            "warnings": [],
+            "suggestion": {
+              "value": 65536,
+              "why": "65536 fits in the current memory"
+            },
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "concurrency",
+            "domId": "maxNumSeqs",
+            "widget": "number",
+            "type": "int",
+            "label": "Max concurrent requests",
+            "unit": "requests",
+            "flag": "--max-num-seqs",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": 2,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": 2,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "memory",
+        "label": "Memory & KV cache",
+        "hiddenCount": 3,
+        "fields": [
+          {
+            "id": "vllm.gpuMemoryUtilization",
+            "domId": "gpuMemoryUtilization",
+            "widget": "number",
+            "type": "float",
+            "label": "VRAM reservation (whole GPU)",
+            "unit": "fraction",
+            "flag": "--gpu-memory-utilization",
+            "level": "basic",
+            "userValue": 5,
+            "effective": {
+              "value": 5,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": {
+              "code": "out_of_range",
+              "message": null,
+              "source": "client",
+              "bounds": {
+                "min": 0.05,
+                "max": 1
+              }
+            },
+            "warnings": [],
+            "suggestion": {
+              "value": 1,
+              "why": null
+            },
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "kvCacheDtype",
+            "domId": "kvCacheDtype",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "KV cache precision",
+            "unit": null,
+            "flag": "--kv-cache-dtype",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "fp8",
+              "fp8_e5m2",
+              "fp8_e4m3"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "parallelism",
+        "label": "Multi-GPU & parallelism",
+        "hiddenCount": 4,
+        "fields": [
+          {
+            "id": "tensorParallel",
+            "domId": "tensorParallelSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Tensor-parallel GPUs",
+            "unit": "GPUs",
+            "flag": "--tensor-parallel-size",
+            "level": "advanced",
+            "userValue": 2,
+            "effective": {
+              "value": 2,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": {
+              "code": "gpu_count_mismatch",
+              "message": "Tensor parallel 2 needs 2 GPUs but 1 is selected",
+              "source": "plan"
+            },
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "speculative",
+        "label": "Speculative decoding",
+        "hiddenCount": 2,
+        "fields": [
+          {
+            "id": "speculative.method",
+            "domId": "speculativeMode",
+            "widget": "select",
+            "type": "enum",
+            "label": "Speculative decoding method",
+            "unit": null,
+            "flag": "--speculative-config",
+            "level": "basic",
+            "userValue": "mtp",
+            "effective": {
+              "value": "mtp",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "off",
+              "auto",
+              "mtp",
+              "qwen3_next_mtp",
+              "ngram",
+              "eagle3",
+              "draft_model",
+              "dspark"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "reasoning-tools",
+        "label": "Reasoning & tools",
+        "hiddenCount": 5,
+        "fields": [
+          {
+            "id": "reasoningParser",
+            "domId": "reasoningParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Reasoning parser",
+            "unit": null,
+            "flag": "--reasoning-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3",
+              "source": "knowledge",
+              "reason": null
+            },
+            "ghost": "qwen3",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3",
+              "deepseek_r1",
+              "deepseek_v3",
+              "gptoss",
+              "gemma4",
+              "granite",
+              "hunyuan_a13b",
+              "kimi_k2",
+              "mistral",
+              "nemotron_v3",
+              "olmo3",
+              "step3",
+              "step3p5",
+              "identity",
+              "nano_v3"
+            ]
+          },
+          {
+            "id": "toolCallParser",
+            "domId": "toolCallParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Tool-call parser",
+            "unit": null,
+            "flag": "--tool-call-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3_coder",
+              "qwen3_xml",
+              "hermes",
+              "deepseek_v3",
+              "mistral",
+              "llama3_json",
+              "llama4_pythonic",
+              "xlam",
+              "gemma4",
+              "pythonic",
+              "granite",
+              "minimax"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "lora",
+        "label": "LoRA adapters",
+        "hiddenCount": 2,
+        "fields": [
+          {
+            "id": "lora.adapters",
+            "domId": "sf-lora-adapters",
+            "widget": "rows",
+            "type": "list",
+            "label": "LoRA adapters",
+            "unit": null,
+            "flag": "--lora-modules",
+            "level": "advanced",
+            "userValue": [
+              {
+                "name": "style",
+                "path": "C:/fixture/lora"
+              }
+            ],
+            "effective": {
+              "value": [
+                {
+                  "name": "style",
+                  "path": "C:/fixture/lora"
+                }
+              ],
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "network-security",
+        "label": "Network & security",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "apiKey",
+            "domId": "vllmApiKey",
+            "widget": "secret",
+            "type": "string",
+            "label": "Direct model API key",
+            "unit": null,
+            "flag": null,
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null,
+              "redacted": true
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": "clear",
+            "choices": null
+          }
+        ]
+      }
+    ]
+  },
+  "expert": {
+    "engineId": "vllm",
+    "mode": "launch",
+    "level": "expert",
+    "counts": {
+      "visible": 50,
+      "hidden": 0,
+      "notApplicable": 62,
+      "changed": 7,
+      "errors": 3
+    },
+    "unplaced": [],
+    "groups": [
+      {
+        "id": "model",
+        "label": "Model & template",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "servedName",
+            "domId": "servedName",
+            "widget": "text",
+            "type": "string",
+            "label": "Served model name",
+            "unit": null,
+            "flag": "--served-model-name",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3.8",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": "qwen3.8",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "role",
+            "domId": "sf-role",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Model role",
+            "unit": null,
+            "flag": "--runner",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "chat",
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": "chat",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "chat",
+              "embedding",
+              "rerank"
+            ]
+          },
+          {
+            "id": "dtype",
+            "domId": "launchDtype",
+            "widget": "select",
+            "type": "enum",
+            "label": "Compute dtype",
+            "unit": null,
+            "flag": "--dtype",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "bfloat16",
+              "float16",
+              "half",
+              "float32",
+              "float"
+            ]
+          },
+          {
+            "id": "quantization",
+            "domId": "launchQuantization",
+            "widget": "select",
+            "type": "enum",
+            "label": "Weight quantization",
+            "unit": null,
+            "flag": "--quantization",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "modelopt_fp4",
+              "source": "model",
+              "reason": "config.json quantization_config.quant_method"
+            },
+            "ghost": "modelopt_fp4",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "awq",
+              "gptq",
+              "bitsandbytes",
+              "fp8",
+              "modelopt",
+              "modelopt_fp4",
+              "compressed-tensors"
+            ]
+          },
+          {
+            "id": "tokenizer",
+            "domId": "ggufTokenizer",
+            "widget": "path",
+            "type": "path",
+            "label": "Tokenizer path",
+            "unit": null,
+            "flag": "--tokenizer",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "trustRemoteCode",
+            "domId": "sf-trustRemoteCode",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Trust model repository code",
+            "unit": null,
+            "flag": "--trust-remote-code",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.loadFormat",
+            "domId": "loadFormat",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Weight load format",
+            "unit": null,
+            "flag": "--load-format",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "hf",
+              "gguf"
+            ]
+          },
+          {
+            "id": "vllm.hfConfigPath",
+            "domId": "ggufHfConfigPath",
+            "widget": "path",
+            "type": "path",
+            "label": "HF config path",
+            "unit": null,
+            "flag": "--hf-config-path",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "chatTemplate",
+            "domId": "sf-chatTemplate",
+            "widget": "path",
+            "type": "path",
+            "label": "Chat template file",
+            "unit": null,
+            "flag": "--chat-template",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "hfOverrides",
+            "domId": "sf-hfOverrides",
+            "widget": "json",
+            "type": "json",
+            "label": "Override HF config (JSON)",
+            "unit": null,
+            "flag": "--hf-overrides",
+            "level": "expert",
+            "userValue": {
+              "rope_scaling": {
+                "type": "yarn"
+              }
+            },
+            "effective": {
+              "value": {
+                "rope_scaling": {
+                  "type": "yarn"
+                }
+              },
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "capacity",
+        "label": "Capacity & concurrency",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "contextLength",
+            "domId": "maxModelLen",
+            "widget": "number",
+            "type": "int",
+            "label": "Context length (per request)",
+            "unit": "tokens",
+            "flag": "--max-model-len",
+            "level": "basic",
+            "userValue": 131072,
+            "effective": {
+              "value": 131072,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": "131,072 = 128K",
+            "changed": true,
+            "locked": null,
+            "error": {
+              "code": "out_of_range",
+              "message": "Context length 131072 does not fit in memory",
+              "source": "plan"
+            },
+            "warnings": [],
+            "suggestion": {
+              "value": 65536,
+              "why": "65536 fits in the current memory"
+            },
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "concurrency",
+            "domId": "maxNumSeqs",
+            "widget": "number",
+            "type": "int",
+            "label": "Max concurrent requests",
+            "unit": "requests",
+            "flag": "--max-num-seqs",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": 2,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": 2,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.maxNumBatchedTokens",
+            "domId": "maxNumBatchedTokens",
+            "widget": "number",
+            "type": "int",
+            "label": "Tokens scheduled per step",
+            "unit": "tokens",
+            "flag": "--max-num-batched-tokens",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "memory",
+        "label": "Memory & KV cache",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "vllm.gpuMemoryUtilization",
+            "domId": "gpuMemoryUtilization",
+            "widget": "number",
+            "type": "float",
+            "label": "VRAM reservation (whole GPU)",
+            "unit": "fraction",
+            "flag": "--gpu-memory-utilization",
+            "level": "basic",
+            "userValue": 5,
+            "effective": {
+              "value": 5,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": {
+              "code": "out_of_range",
+              "message": null,
+              "source": "client",
+              "bounds": {
+                "min": 0.05,
+                "max": 1
+              }
+            },
+            "warnings": [],
+            "suggestion": {
+              "value": 1,
+              "why": null
+            },
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "kvCacheDtype",
+            "domId": "kvCacheDtype",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "KV cache precision",
+            "unit": null,
+            "flag": "--kv-cache-dtype",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "fp8",
+              "fp8_e5m2",
+              "fp8_e4m3"
+            ]
+          },
+          {
+            "id": "prefixCaching",
+            "domId": "disablePrefixCaching",
+            "widget": "tristate",
+            "type": "tristate",
+            "label": "Prefix caching",
+            "unit": null,
+            "flag": "--enable-prefix-caching",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": true,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": true,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.cpuOffloadGb",
+            "domId": "cpuOffloadGb",
+            "widget": "number",
+            "type": "float",
+            "label": "Weight offload to RAM (per GPU)",
+            "unit": "GiB",
+            "flag": "--cpu-offload-gb",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.kvOffloadingSize",
+            "domId": "kvOffloadingSize",
+            "widget": "number",
+            "type": "float",
+            "label": "KV offload to RAM (total)",
+            "unit": "GiB",
+            "flag": "--kv-offloading-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "parallelism",
+        "label": "Multi-GPU & parallelism",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "tensorParallel",
+            "domId": "tensorParallelSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Tensor-parallel GPUs",
+            "unit": "GPUs",
+            "flag": "--tensor-parallel-size",
+            "level": "advanced",
+            "userValue": 2,
+            "effective": {
+              "value": 2,
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": {
+              "code": "gpu_count_mismatch",
+              "message": "Tensor parallel 2 needs 2 GPUs but 1 is selected",
+              "source": "plan"
+            },
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "pipelineParallel",
+            "domId": "pipelineParallelSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Pipeline stages",
+            "unit": "stages",
+            "flag": "--pipeline-parallel-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "dataParallel",
+            "domId": "dataParallelSize",
+            "widget": "number",
+            "type": "int",
+            "label": "Data-parallel replicas",
+            "unit": "replicas",
+            "flag": "--data-parallel-size",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 1,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": 1,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "expertParallel",
+            "domId": "sf-expertParallel",
+            "widget": "switch",
+            "type": "bool",
+            "label": "MoE expert parallel",
+            "unit": null,
+            "flag": "--enable-expert-parallel",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.distributedExecutorBackend",
+            "domId": "sf-vllm-distributedExecutorBackend",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Distributed executor",
+            "unit": null,
+            "flag": "--distributed-executor-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": "auto",
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": "auto",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "mp",
+              "ray"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "speculative",
+        "label": "Speculative decoding",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "speculative.method",
+            "domId": "speculativeMode",
+            "widget": "select",
+            "type": "enum",
+            "label": "Speculative decoding method",
+            "unit": null,
+            "flag": "--speculative-config",
+            "level": "basic",
+            "userValue": "mtp",
+            "effective": {
+              "value": "mtp",
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "off",
+              "auto",
+              "mtp",
+              "qwen3_next_mtp",
+              "ngram",
+              "eagle3",
+              "draft_model",
+              "dspark"
+            ]
+          },
+          {
+            "id": "speculative.numTokens",
+            "domId": "numSpeculativeTokens",
+            "widget": "number",
+            "type": "int",
+            "label": "Draft tokens per step",
+            "unit": "tokens",
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": 3,
+              "source": "planner",
+              "reason": "Planner suggests 3"
+            },
+            "ghost": 3,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "speculative.draftModel",
+            "domId": "draftModel",
+            "widget": "path",
+            "type": "path",
+            "label": "Draft model",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "reasoning-tools",
+        "label": "Reasoning & tools",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "reasoningParser",
+            "domId": "reasoningParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Reasoning parser",
+            "unit": null,
+            "flag": "--reasoning-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": "qwen3",
+              "source": "knowledge",
+              "reason": null
+            },
+            "ghost": "qwen3",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3",
+              "deepseek_r1",
+              "deepseek_v3",
+              "gptoss",
+              "gemma4",
+              "granite",
+              "hunyuan_a13b",
+              "kimi_k2",
+              "mistral",
+              "nemotron_v3",
+              "olmo3",
+              "step3",
+              "step3p5",
+              "identity",
+              "nano_v3"
+            ]
+          },
+          {
+            "id": "toolCallParser",
+            "domId": "toolCallParser",
+            "widget": "select",
+            "type": "enum",
+            "label": "Tool-call parser",
+            "unit": null,
+            "flag": "--tool-call-parser",
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "none",
+              "qwen3_coder",
+              "qwen3_xml",
+              "hermes",
+              "deepseek_v3",
+              "mistral",
+              "llama3_json",
+              "llama4_pythonic",
+              "xlam",
+              "gemma4",
+              "pythonic",
+              "granite",
+              "minimax"
+            ]
+          },
+          {
+            "id": "autoToolChoice",
+            "domId": "enableAutoToolChoice",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Automatic tool choice",
+            "unit": null,
+            "flag": "--enable-auto-tool-choice",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": true,
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": true,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "reasoning.defaultEnabled",
+            "domId": "sf-reasoning-defaultEnabled",
+            "widget": "tristate",
+            "type": "tristate",
+            "label": "Thinking on by default",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "clientPreset",
+            "domId": "clientPreset",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Client preset",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": "openwebui",
+              "source": "platform-default",
+              "reason": null
+            },
+            "ghost": "openwebui",
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "openwebui",
+              "claude-code",
+              "claude-cowork",
+              "generic"
+            ]
+          },
+          {
+            "id": "chatTemplateKwargs",
+            "domId": "sf-chatTemplateKwargs",
+            "widget": "json",
+            "type": "json",
+            "label": "Chat template default arguments",
+            "unit": null,
+            "flag": "--default-chat-template-kwargs",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.reasoningParserPlugin",
+            "domId": "sf-vllm-reasoningParserPlugin",
+            "widget": "path",
+            "type": "path",
+            "label": "Reasoning parser plugin",
+            "unit": null,
+            "flag": "--reasoning-parser-plugin",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "multimodal",
+        "label": "Multimodal",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "vllm.languageModelOnly",
+            "domId": "languageModelOnly",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Language model only",
+            "unit": null,
+            "flag": "--language-model-only",
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.mmProcessorCacheGb",
+            "domId": "mmProcessorCacheGb",
+            "widget": "number",
+            "type": "float",
+            "label": "Multimodal preprocessor cache",
+            "unit": "GiB",
+            "flag": "--mm-processor-cache-gb",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": 4,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": 4,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "lora",
+        "label": "LoRA adapters",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "lora.adapters",
+            "domId": "sf-lora-adapters",
+            "widget": "rows",
+            "type": "list",
+            "label": "LoRA adapters",
+            "unit": null,
+            "flag": "--lora-modules",
+            "level": "advanced",
+            "userValue": [
+              {
+                "name": "style",
+                "path": "C:/fixture/lora"
+              }
+            ],
+            "effective": {
+              "value": [
+                {
+                  "name": "style",
+                  "path": "C:/fixture/lora"
+                }
+              ],
+              "source": "user",
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.lora.maxLoras",
+            "domId": "sf-vllm-lora-maxLoras",
+            "widget": "number",
+            "type": "int",
+            "label": "Max LoRAs in one batch",
+            "unit": "adapters",
+            "flag": "--max-loras",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.lora.maxRank",
+            "domId": "sf-vllm-lora-maxRank",
+            "widget": "number",
+            "type": "int",
+            "label": "LoRA max rank",
+            "unit": "rank",
+            "flag": "--max-lora-rank",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "sampling",
+        "label": "Default sampling",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "temperature",
+            "domId": "sf-temperature",
+            "widget": "number",
+            "type": "float",
+            "label": "Default temperature",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "topP",
+            "domId": "sf-topP",
+            "widget": "number",
+            "type": "float",
+            "label": "Default top-p",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "topK",
+            "domId": "sf-topK",
+            "widget": "number",
+            "type": "int",
+            "label": "Default top-k",
+            "unit": null,
+            "flag": null,
+            "level": "advanced",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "generationConfig",
+            "domId": "sf-generationConfig",
+            "widget": "text",
+            "type": "string",
+            "label": "Generation config source",
+            "unit": null,
+            "flag": "--generation-config",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.overrideGenerationConfig",
+            "domId": "sf-vllm-overrideGenerationConfig",
+            "widget": "json",
+            "type": "json",
+            "label": "Generation config override",
+            "unit": null,
+            "flag": "--override-generation-config",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "network-security",
+        "label": "Network & security",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "apiKey",
+            "domId": "vllmApiKey",
+            "widget": "secret",
+            "type": "string",
+            "label": "Direct model API key",
+            "unit": null,
+            "flag": null,
+            "level": "basic",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null,
+              "redacted": true
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": true,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": "clear",
+            "choices": null
+          }
+        ]
+      },
+      {
+        "id": "runtime-expert",
+        "label": "Runtime & expert",
+        "hiddenCount": 0,
+        "fields": [
+          {
+            "id": "vllm.enforceEager",
+            "domId": "sf-vllm-enforceEager",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Disable CUDA graphs (eager mode)",
+            "unit": null,
+            "flag": "--enforce-eager",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.asyncScheduling",
+            "domId": "sf-vllm-asyncScheduling",
+            "widget": "switch",
+            "type": "bool",
+            "label": "Async scheduling",
+            "unit": null,
+            "flag": "--async-scheduling",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": false,
+              "source": "engine-default",
+              "reason": null
+            },
+            "ghost": false,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.attentionBackend",
+            "domId": "sf-vllm-attentionBackend",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Attention backend",
+            "unit": null,
+            "flag": "--attention-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "FLASH_ATTN",
+              "FLASHINFER",
+              "TRITON_ATTN",
+              "FLEX_ATTENTION"
+            ]
+          },
+          {
+            "id": "vllm.moeBackend",
+            "domId": "sf-vllm-moeBackend",
+            "widget": "select",
+            "type": "enum",
+            "label": "MoE kernel backend",
+            "unit": null,
+            "flag": "--moe-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "auto",
+              "cutlass",
+              "emulation",
+              "flashinfer_b12x",
+              "flashinfer_cutedsl",
+              "flashinfer_cutlass",
+              "flashinfer_trtllm",
+              "marlin",
+              "triton",
+              "triton_unfused"
+            ]
+          },
+          {
+            "id": "vllm.linearBackend",
+            "domId": "sf-vllm-linearBackend",
+            "widget": "text",
+            "type": "string",
+            "label": "Linear layer backend",
+            "unit": null,
+            "flag": "--linear-backend",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": null
+          },
+          {
+            "id": "vllm.safetensorsLoadStrategy",
+            "domId": "sf-vllm-safetensorsLoadStrategy",
+            "widget": "segmented",
+            "type": "enum",
+            "label": "Safetensors load strategy",
+            "unit": null,
+            "flag": "--safetensors-load-strategy",
+            "level": "expert",
+            "userValue": null,
+            "effective": {
+              "value": null,
+              "source": null,
+              "reason": null
+            },
+            "ghost": null,
+            "hint": null,
+            "changed": false,
+            "locked": null,
+            "error": null,
+            "warnings": [],
+            "suggestion": null,
+            "appliesState": "true",
+            "secretState": null,
+            "choices": [
+              "lazy",
+              "eager",
+              "prefetch"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

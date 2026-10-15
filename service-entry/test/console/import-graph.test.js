@@ -16,6 +16,8 @@ const { CONSOLE_DIR, mapConsoleUrl } = await import("./loader.mjs");
 const KB = 1024;
 const BUDGETS = { appConsole: 160 * KB, appVendor: 30 * KB, routeModule: 60 * KB, catalog: 120 * KB };
 const LAZY_ONLY = ["uplot", "qrcode"];
+// Route-only libraries (the engine-config forms): loaded with their page module, never by app.js (07 §11 budgets app.js's closure).
+const ROUTE_ONLY_LIBS = new Set(["lib/expr.js", "lib/schema-form-model.js"]);
 
 const STATIC_IMPORT = /(?:^|[;\n}])\s*(?:import|export)\s+(?:[\w*{}\s,$]+\s+from\s+)?["']([^"']+)["']/g;
 const COMMENTS = /\/\*[\s\S]*?\*\/|(?<![:"'`\\])\/\/[^\n]*/g;
@@ -111,7 +113,7 @@ test("§11 budgets: app.js closure, the core library closure and lazy-only vendo
 
   // Everything CON-4 ships, imported together, must already fit what app.js may load.
   const core = new Map();
-  for (const file of consoleModules().filter((item) => /^(lib|ui)\//.test(rel(item)))) {
+  for (const file of consoleModules().filter((item) => /^(lib|ui)\//.test(rel(item)) && !ROUTE_ONLY_LIBS.has(rel(item)))) {
     for (const [dep, bytes] of closure(file)) core.set(dep, bytes);
   }
   const coreSizes = split(core);

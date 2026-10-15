@@ -1,0 +1,210 @@
+{
+  "ok": true,
+  "engineId": "sglang",
+  "catalogVersion": "2026-10-14+2026-10-14",
+  "planHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "prospective": false,
+  "runtime": {
+    "id": "sglang@0.5.17",
+    "image": "local/sglang:fixture"
+  },
+  "recipe": {
+    "id": "qwen38-flashnext-262k",
+    "status": "verified",
+    "label": {
+      "zh": "Qwen3.8 Flash-Next · SGLang · 262K 稳定档",
+      "en": "Qwen3.8 Flash-Next · SGLang · 262K stable"
+    },
+    "locks": [
+      {
+        "param": "trustRemoteCode",
+        "value": true,
+        "reason": {
+          "zh": "Qwen3.8 架构需要仓库代码",
+          "en": "Qwen3.8 needs repository code"
+        }
+      },
+      {
+        "param": "reasoningParser",
+        "value": "qwen3",
+        "reason": {
+          "zh": "Qwen3.8 已验证解析器",
+          "en": "Validated parser for Qwen3.8"
+        }
+      },
+      {
+        "param": "toolCallParser",
+        "value": "qwen3_coder",
+        "reason": {
+          "zh": "Qwen3.8 已验证解析器",
+          "en": "Validated parser for Qwen3.8"
+        }
+      },
+      {
+        "param": "autoToolChoice",
+        "value": true,
+        "reason": {
+          "zh": "随解析器开启",
+          "en": "Enabled with the parser"
+        }
+      }
+    ]
+  },
+  "values": {
+    "servedName": {
+      "value": "qwen3.8-flash-next",
+      "source": "user"
+    },
+    "contextLength": {
+      "value": 262144,
+      "source": "user"
+    },
+    "concurrency": {
+      "value": 4,
+      "source": "user"
+    },
+    "quantization": {
+      "value": "modelopt_fp4",
+      "source": "recipe",
+      "reason": "Qwen3.8 Flash-Next 配方 / Qwen3.8 Flash-Next recipe"
+    },
+    "trustRemoteCode": {
+      "value": true,
+      "source": "recipe",
+      "reason": "Qwen3.8 架构需要仓库代码 / Qwen3.8 needs repository code"
+    },
+    "reasoningParser": {
+      "value": "qwen3",
+      "source": "recipe",
+      "reason": "Qwen3.8 已验证解析器 / Validated parser for Qwen3.8"
+    },
+    "toolCallParser": {
+      "value": "qwen3_coder",
+      "source": "recipe",
+      "reason": "Qwen3.8 已验证解析器 / Validated parser for Qwen3.8"
+    },
+    "autoToolChoice": {
+      "value": true,
+      "source": "recipe",
+      "reason": "随解析器开启 / Enabled with the parser"
+    },
+    "sglang.memFractionStatic": {
+      "value": 0.995,
+      "source": "user"
+    },
+    "sglang.maxTotalTokens": {
+      "value": 262144,
+      "source": "recipe"
+    },
+    "sglang.maxRunningRequests": {
+      "value": 1,
+      "source": "recipe",
+      "reason": "Mamba cache 8 → floor(8/5)=1 有效并发 / Mamba cache 8 → floor(8/5)=1 effective concurrent request"
+    },
+    "sglang.pageSize": {
+      "value": 64,
+      "source": "recipe"
+    },
+    "sglang.chunkedPrefillSize": {
+      "value": 4096,
+      "source": "recipe"
+    },
+    "sglang.fp4GemmBackend": {
+      "value": "flashinfer_cutlass",
+      "source": "recipe"
+    },
+    "sglang.attentionBackend": {
+      "value": "triton",
+      "source": "recipe"
+    },
+    "sglang.maxMambaCacheSize": {
+      "value": 8,
+      "source": "recipe"
+    },
+    "kvCacheDtype": {
+      "value": "auto",
+      "source": "platform-default"
+    },
+    "tensorParallel": {
+      "value": 1,
+      "source": "platform-default"
+    },
+    "speculative.method": {
+      "value": "off",
+      "source": "engine-default"
+    }
+  },
+  "overrides": [
+    {
+      "param": "concurrency",
+      "from": 4,
+      "to": 1,
+      "source": "recipe",
+      "reason": "有效并发受 Mamba cache 限制 / Effective concurrency is limited by the Mamba cache"
+    }
+  ],
+  "errors": [],
+  "blockers": [],
+  "warnings": [
+    {
+      "field": "sglang.memFractionStatic",
+      "code": "high_memory_fraction",
+      "message": "静态显存比例 0.995 接近上限，其他进程可能无法使用显存 / The static memory fraction 0.995 leaves almost no headroom for other processes"
+    }
+  ],
+  "steps": [
+    {
+      "kind": "pull",
+      "runtimeId": "sglang@0.5.17",
+      "image": "local/sglang:fixture",
+      "required": false,
+      "policy": "auto"
+    },
+    {
+      "kind": "start",
+      "containerName": "fixture-sglang",
+      "port": 8000,
+      "gpuIds": [
+        "0"
+      ]
+    }
+  ],
+  "command": {
+    "argv": [
+      "docker",
+      "run",
+      "-d",
+      "--entrypoint",
+      "sglang",
+      "local/sglang:fixture",
+      "serve",
+      "--api-key",
+      "<redacted>"
+    ],
+    "env": {},
+    "labels": {
+      "ai.manager.recipe": "qwen38-flashnext-262k"
+    }
+  },
+  "memory": {
+    "perGpuMb": {
+      "0": 96801
+    },
+    "breakdown": {
+      "weights": 0,
+      "kv": 0,
+      "activations": 0,
+      "draft": 0,
+      "mmproj": 0,
+      "overhead": 0
+    },
+    "admissionRequestMb": 96801,
+    "kvPoolTokens": 262144,
+    "maxFullLengthRequests": 1,
+    "policy": "static-fraction-of-free"
+  },
+  "admission": {
+    "verdict": "warn",
+    "message": "按 89095 MiB 预留 / Reserved 89095 MiB"
+  }
+}

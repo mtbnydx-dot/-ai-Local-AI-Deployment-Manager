@@ -1,0 +1,5169 @@
+{
+  "ok": true,
+  "engineId": "vllm",
+  "catalogVersion": "2026-10-14+2026-10-14",
+  "runtime": {
+    "runtimeId": "vllm@0.28.0",
+    "manifestKey": "vllm",
+    "image": "vllm/vllm-openai@sha256:2286e8533ca8b6bc777594bae30524f1426ba46ca21797524e06df6a94b06635",
+    "status": "pinned",
+    "features": {
+      "bitsAndBytesPlugin": false
+    },
+    "introspected": false,
+    "introspectedAt": null,
+    "flagCount": null
+  },
+  "facts": {
+    "host.platform": "win32",
+    "host.anySm12x": true,
+    "host.maxComputeCap": 12,
+    "model.capabilityId": "qwen3.8",
+    "model.familyId": "qwen3.8",
+    "model.quantMethod": "modelopt_fp4",
+    "model.architectures": [
+      "Qwen3_8ForCausalLM"
+    ],
+    "model.nativeMtp.supported": true,
+    "runtime.id": "vllm@0.28.0",
+    "runtime.compatVersion": "0.28.0",
+    "instance.mode": null,
+    "runtime.features.bitsAndBytesPlugin": false
+  },
+  "groups": [
+    {
+      "id": "model",
+      "order": 10,
+      "label": {
+        "zh": "模型与模板",
+        "en": "Model & template"
+      }
+    },
+    {
+      "id": "capacity",
+      "order": 20,
+      "label": {
+        "zh": "容量与并发",
+        "en": "Capacity & concurrency"
+      }
+    },
+    {
+      "id": "memory",
+      "order": 30,
+      "label": {
+        "zh": "显存与 KV 缓存",
+        "en": "Memory & KV cache"
+      }
+    },
+    {
+      "id": "parallelism",
+      "order": 40,
+      "label": {
+        "zh": "多卡与并行",
+        "en": "Multi-GPU & parallelism"
+      }
+    },
+    {
+      "id": "speculative",
+      "order": 50,
+      "label": {
+        "zh": "推测解码",
+        "en": "Speculative decoding"
+      }
+    },
+    {
+      "id": "reasoning-tools",
+      "order": 60,
+      "label": {
+        "zh": "思考与工具调用",
+        "en": "Reasoning & tools"
+      }
+    },
+    {
+      "id": "multimodal",
+      "order": 70,
+      "label": {
+        "zh": "多模态",
+        "en": "Multimodal"
+      }
+    },
+    {
+      "id": "lora",
+      "order": 80,
+      "label": {
+        "zh": "LoRA 适配器",
+        "en": "LoRA adapters"
+      }
+    },
+    {
+      "id": "sampling",
+      "order": 90,
+      "label": {
+        "zh": "默认采样",
+        "en": "Default sampling"
+      }
+    },
+    {
+      "id": "network-security",
+      "order": 100,
+      "label": {
+        "zh": "网络与安全",
+        "en": "Network & security"
+      }
+    },
+    {
+      "id": "runtime-expert",
+      "order": 110,
+      "label": {
+        "zh": "运行时与专家选项",
+        "en": "Runtime & expert"
+      }
+    }
+  ],
+  "params": [
+    {
+      "id": "servedName",
+      "group": "model",
+      "level": "basic",
+      "order": 10,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "服务名",
+        "en": "Served model name"
+      },
+      "summary": {
+        "zh": "客户端在 API 请求里用来指定这个模型的名字。",
+        "en": "The name clients use to pick this model in API requests."
+      },
+      "help": {
+        "what": {
+          "zh": "OpenAI 兼容接口 /v1/models 返回的模型名。留空时按模型目录或仓库名自动生成。",
+          "en": "The model name listed by the OpenAI-compatible /v1/models endpoint. Empty means it is derived from the model folder or repository."
+        },
+        "whenToChange": {
+          "zh": "客户端配置里写死了某个模型名，或想给同一模型的不同启动方案起不同名字时。",
+          "en": "When a client is configured with a fixed model name, or to tell launch variants of one model apart."
+        },
+        "tradeoffs": {
+          "zh": "改名后，仍按旧名字调用的客户端需要同步修改。",
+          "en": "Clients that still call the old name must be updated."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 128,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--served-model-name"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "servedName",
+        "codec": "direct",
+        "field": "name"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--served-model-name",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--served-model-name",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "role",
+      "group": "model",
+      "level": "advanced",
+      "order": 15,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "模型用途",
+        "en": "Model role"
+      },
+      "summary": {
+        "zh": "这个模型是对话模型、向量（embedding）模型还是重排序模型。",
+        "en": "Whether this model is a chat model, an embedding model or a reranker."
+      },
+      "help": {
+        "what": {
+          "zh": "chat 不加任何参数；embedding 对应 --runner pooling --convert embed；rerank 对应 --runner pooling --convert classify。",
+          "en": "chat adds nothing; embedding maps to --runner pooling --convert embed; rerank maps to --runner pooling --convert classify."
+        },
+        "whenToChange": {
+          "zh": "启动向量模型或重排序模型时。对话模型保持默认。",
+          "en": "When you start an embedding or reranking model. Leave chat models at the default."
+        },
+        "tradeoffs": {
+          "zh": "embedding 和 rerank 实例不提供对话接口。",
+          "en": "Embedding and rerank instances do not serve the chat API."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "chat",
+          "label": {
+            "zh": "对话",
+            "en": "Chat"
+          }
+        },
+        {
+          "value": "embedding",
+          "label": {
+            "zh": "向量（embedding）",
+            "en": "Embedding"
+          }
+        },
+        {
+          "value": "rerank",
+          "label": {
+            "zh": "重排序",
+            "en": "Rerank"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "chat",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--runner",
+        "map": {
+          "chat": [],
+          "embedding": [
+            "--runner",
+            "pooling",
+            "--convert",
+            "embed"
+          ],
+          "rerank": [
+            "--runner",
+            "pooling",
+            "--convert",
+            "classify"
+          ]
+        }
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--runner",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--runner",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "dtype",
+      "group": "model",
+      "level": "advanced",
+      "order": 20,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "计算精度",
+        "en": "Compute dtype"
+      },
+      "summary": {
+        "zh": "权重与激活使用的浮点精度；auto 按模型配置选择。",
+        "en": "The floating-point type for weights and activations; auto follows the model config."
+      },
+      "help": {
+        "what": {
+          "zh": "模型计算使用的数据类型。auto 读取模型 config.json 中的 torch_dtype。",
+          "en": "The data type used for model computation. auto reads torch_dtype from the model's config.json."
+        },
+        "whenToChange": {
+          "zh": "较老的显卡不支持 BF16 时改为 float16；排查数值问题时可以试 float32。",
+          "en": "Use float16 on older GPUs without BF16 support; try float32 when chasing numerical problems."
+        },
+        "tradeoffs": {
+          "zh": "float32 精度最高，但显存和速度代价都很大；float16 在部分模型上可能溢出。",
+          "en": "float32 is the most precise but costs a lot of memory and speed; float16 can overflow on some models."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动（按模型）",
+            "en": "Auto (from the model)"
+          }
+        },
+        {
+          "value": "bfloat16",
+          "label": {
+            "zh": "BF16",
+            "en": "BF16"
+          }
+        },
+        {
+          "value": "float16",
+          "label": {
+            "zh": "FP16",
+            "en": "FP16"
+          }
+        },
+        {
+          "value": "half",
+          "label": {
+            "zh": "FP16（half）",
+            "en": "FP16 (half)"
+          }
+        },
+        {
+          "value": "float32",
+          "label": {
+            "zh": "FP32",
+            "en": "FP32"
+          }
+        },
+        {
+          "value": "float",
+          "label": {
+            "zh": "FP32（float）",
+            "en": "FP32 (float)"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "auto",
+      "platformDefault": "auto",
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--dtype"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "launchDtype",
+        "codec": "direct",
+        "field": "dtype"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--dtype",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--dtype",
+      "platformDefaultValue": "auto"
+    },
+    {
+      "id": "quantization",
+      "group": "model",
+      "level": "advanced",
+      "order": 30,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "权重量化方式",
+        "en": "Weight quantization"
+      },
+      "summary": {
+        "zh": "权重使用的量化格式；留空时从模型配置自动识别。",
+        "en": "The quantization format of the weights; empty detects it from the model config."
+      },
+      "help": {
+        "what": {
+          "zh": "量化权重的解码方式，例如 AWQ、GPTQ、FP8 或 NVFP4。模型 config.json 声明了 quant_method 时以模型为准。",
+          "en": "How quantized weights are decoded, for example AWQ, GPTQ, FP8 or NVFP4. When the model's config.json declares quant_method, the model wins."
+        },
+        "whenToChange": {
+          "zh": "模型没有声明量化方式，或要把未量化的权重在线量化成 FP8 时。",
+          "en": "When the model does not declare its quantization, or to quantize unquantized weights to FP8 while loading."
+        },
+        "tradeoffs": {
+          "zh": "格式选错会加载失败；在线量化省显存，但可能略微降低质量。",
+          "en": "A wrong format fails to load; quantizing while loading saves memory but can cost a little quality."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "awq",
+          "label": {
+            "zh": "AWQ",
+            "en": "AWQ"
+          }
+        },
+        {
+          "value": "gptq",
+          "label": {
+            "zh": "GPTQ",
+            "en": "GPTQ"
+          }
+        },
+        {
+          "value": "bitsandbytes",
+          "label": {
+            "zh": "BitsAndBytes",
+            "en": "BitsAndBytes"
+          }
+        },
+        {
+          "value": "fp8",
+          "label": {
+            "zh": "FP8",
+            "en": "FP8"
+          }
+        },
+        {
+          "value": "modelopt",
+          "label": {
+            "zh": "ModelOpt FP8",
+            "en": "ModelOpt FP8"
+          }
+        },
+        {
+          "value": "modelopt_fp4",
+          "label": {
+            "zh": "NVFP4（ModelOpt）",
+            "en": "NVFP4 (ModelOpt)"
+          }
+        },
+        {
+          "value": "compressed-tensors",
+          "label": {
+            "zh": "Compressed Tensors",
+            "en": "Compressed Tensors"
+          }
+        }
+      ],
+      "choicesFrom": "introspect:--quantization",
+      "pattern": "^[a-z0-9_.-]{1,64}$",
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--quantization"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "launchQuantization",
+        "codec": "direct",
+        "field": "quantization"
+      },
+      "appliesWhen": null,
+      "fromModel": true,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--quantization",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--quantization",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "tokenizer",
+      "group": "model",
+      "level": "expert",
+      "order": 40,
+      "type": "path",
+      "unit": null,
+      "label": {
+        "zh": "分词器路径",
+        "en": "Tokenizer path"
+      },
+      "summary": {
+        "zh": "单独指定分词器所在的目录或 Hugging Face 仓库。",
+        "en": "A separate folder or Hugging Face repository for the tokenizer."
+      },
+      "help": {
+        "what": {
+          "zh": "默认使用模型目录里的分词器。GGUF 模型常常需要指向对应的原始仓库。",
+          "en": "By default the tokenizer inside the model folder is used. GGUF models often need the original repository here."
+        },
+        "whenToChange": {
+          "zh": "模型目录缺少分词器文件，或 GGUF 转换出的分词器不准确时。",
+          "en": "When the model folder has no tokenizer files, or the tokenizer converted from GGUF is inaccurate."
+        },
+        "tradeoffs": {
+          "zh": "分词器与模型不匹配会导致输出乱码。",
+          "en": "A tokenizer that does not match the model produces garbled output."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": "containerPath",
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--tokenizer"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "ggufTokenizer",
+        "codec": "direct",
+        "field": "tokenizer"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--tokenizer",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--tokenizer",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "trustRemoteCode",
+      "group": "model",
+      "level": "advanced",
+      "order": 50,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "信任模型仓库代码",
+        "en": "Trust model repository code"
+      },
+      "summary": {
+        "zh": "允许加载模型仓库自带的 Python 代码。",
+        "en": "Allows the Python code shipped with the model repository to run."
+      },
+      "help": {
+        "what": {
+          "zh": "新架构或自定义架构的模型需要执行仓库里的建模代码才能加载。",
+          "en": "New or custom architectures need the repository's modeling code to load."
+        },
+        "whenToChange": {
+          "zh": "模型说明要求 trust_remote_code，或加载时报告未知架构时。",
+          "en": "When the model card asks for trust_remote_code, or loading reports an unknown architecture."
+        },
+        "tradeoffs": {
+          "zh": "会在容器里执行第三方代码，只对来源可信的模型开启。",
+          "en": "Third-party code runs inside the container; turn it on only for models from sources you trust."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--trust-remote-code"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": null,
+        "codec": "direct",
+        "field": "trustRemoteCode"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--trust-remote-code",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--trust-remote-code",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.loadFormat",
+      "group": "model",
+      "level": "expert",
+      "order": 60,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "权重加载格式",
+        "en": "Weight load format"
+      },
+      "summary": {
+        "zh": "指定权重文件的格式；auto 按目录里的文件判断。",
+        "en": "Which weight file format to load; auto decides from the files present."
+      },
+      "help": {
+        "what": {
+          "zh": "auto 在目录里只有 GGUF 文件时按 GGUF 加载，否则按 Hugging Face 格式加载。",
+          "en": "auto loads GGUF when the folder only holds GGUF files, and the Hugging Face format otherwise."
+        },
+        "whenToChange": {
+          "zh": "目录里同时有多种格式、自动判断不对时。",
+          "en": "When a folder holds several formats and auto picks the wrong one."
+        },
+        "tradeoffs": {
+          "zh": "vLLM 对 GGUF 的支持仍是实验性的。",
+          "en": "vLLM's GGUF support is still experimental."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动",
+            "en": "Auto"
+          }
+        },
+        {
+          "value": "hf",
+          "label": {
+            "zh": "HF / safetensors",
+            "en": "HF / safetensors"
+          }
+        },
+        {
+          "value": "gguf",
+          "label": {
+            "zh": "GGUF 单文件",
+            "en": "Single GGUF file"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "auto",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--load-format"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "loadFormat",
+        "codec": "direct",
+        "field": "loadFormat"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--load-format",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--load-format",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.hfConfigPath",
+      "group": "model",
+      "level": "expert",
+      "order": 70,
+      "type": "path",
+      "unit": null,
+      "label": {
+        "zh": "HF 配置路径",
+        "en": "HF config path"
+      },
+      "summary": {
+        "zh": "GGUF 模型使用的 Hugging Face 配置来源。",
+        "en": "The Hugging Face config source used for a GGUF model."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --hf-config-path，可以填写仓库名或目录。",
+          "en": "Maps to --hf-config-path; a repository name or a folder."
+        },
+        "whenToChange": {
+          "zh": "GGUF 文件里的配置不完整、vLLM 识别不出架构时。",
+          "en": "When the GGUF's embedded config is incomplete and vLLM cannot identify the architecture."
+        },
+        "tradeoffs": {
+          "zh": "配置与权重不匹配会加载失败或输出异常。",
+          "en": "A config that does not match the weights fails to load or produces bad output."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": "containerPath",
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--hf-config-path"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "ggufHfConfigPath",
+        "codec": "direct",
+        "field": "hfConfigPath"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--hf-config-path",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--hf-config-path",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "chatTemplate",
+      "group": "model",
+      "level": "advanced",
+      "order": 80,
+      "type": "path",
+      "unit": null,
+      "label": {
+        "zh": "聊天模板文件",
+        "en": "Chat template file"
+      },
+      "summary": {
+        "zh": "用你提供的 Jinja 聊天模板文件，替换模型自带的模板。",
+        "en": "Replaces the model's own template with a Jinja chat template file you provide."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --chat-template。文件必须在平台的模型存储目录下。",
+          "en": "Maps to --chat-template. The file must be under the platform's model storage roots."
+        },
+        "whenToChange": {
+          "zh": "模型自带模板有缺陷、缺少工具调用或思考开关，或者官方发布了修正后的模板时。",
+          "en": "When the model's own template is faulty, lacks tool calling or a thinking switch, or an official fixed template was published."
+        },
+        "tradeoffs": {
+          "zh": "模板和模型不匹配会让输出格式出错；只在确认模板来源可靠时使用。",
+          "en": "A template that does not fit the model breaks the output format; use it only when you trust where the template came from."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": "containerPath",
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--chat-template"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--chat-template",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--chat-template",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "hfOverrides",
+      "group": "model",
+      "level": "expert",
+      "order": 90,
+      "type": "json",
+      "unit": null,
+      "label": {
+        "zh": "覆盖 HF 配置（JSON）",
+        "en": "Override HF config (JSON)"
+      },
+      "summary": {
+        "zh": "用一个 JSON 对象覆盖模型 config.json 里的字段。",
+        "en": "Overrides fields of the model's config.json with a JSON object."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --hf-overrides。最长 8 KiB。扩展上下文时可填 {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}，辅助界面会帮你生成。",
+          "en": "Maps to --hf-overrides. At most 8 KiB. To extend the context use {\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":4,\"original_max_position_embeddings\":32768}}; a helper in the console builds it for you."
+        },
+        "whenToChange": {
+          "zh": "需要改模型配置而不想复制整个模型目录，例如用 YaRN 扩展上下文，或修正错误的架构名。",
+          "en": "When you need to change the model config without copying the model folder, for example to extend the context with YaRN or fix a wrong architecture name."
+        },
+        "tradeoffs": {
+          "zh": "字段写错或和权重不匹配会让加载失败或输出异常；它会改变模型行为，请对照模型卡。",
+          "en": "A wrong field or one that does not match the weights fails to load or garbles output; it changes model behaviour, so check it against the model card."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 8192,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "json",
+        "flag": "--hf-overrides"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--hf-overrides",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--hf-overrides",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "contextLength",
+      "group": "capacity",
+      "level": "basic",
+      "order": 10,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "上下文长度（每请求）",
+        "en": "Context length (per request)"
+      },
+      "summary": {
+        "zh": "单个请求最多可用的 token 数，包括提示词和生成内容。",
+        "en": "The most tokens one request may use, prompt and output together."
+      },
+      "help": {
+        "what": {
+          "zh": "模型在一次请求里能看到的最大 token 数。更长的请求会被拒绝。",
+          "en": "The largest number of tokens the model sees in one request. Longer requests are rejected."
+        },
+        "whenToChange": {
+          "zh": "处理长文档、长对话或整个代码库时调大；只做短问答时调小以节省显存。",
+          "en": "Raise it for long documents, long chats or whole code bases; lower it for short questions to save memory."
+        },
+        "tradeoffs": {
+          "zh": "越大越占 KV 缓存显存，同样的显存能同时服务的长请求越少。",
+          "en": "Larger values need more KV-cache memory, so fewer long requests fit at the same time."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 4194304,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": 8192,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-model-len"
+      },
+      "flags": null,
+      "vramEffect": "kv-linear",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "maxModelLen",
+        "codec": "direct",
+        "field": "maxModelLen"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-model-len",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-model-len",
+      "platformDefaultValue": 8192
+    },
+    {
+      "id": "concurrency",
+      "group": "capacity",
+      "level": "basic",
+      "order": 20,
+      "type": "int",
+      "unit": "requests",
+      "label": {
+        "zh": "最大并发请求",
+        "en": "Max concurrent requests"
+      },
+      "summary": {
+        "zh": "引擎同时处理的请求数上限，多出来的请求排队等待。",
+        "en": "How many requests the engine serves at the same time; the rest wait in a queue."
+      },
+      "help": {
+        "what": {
+          "zh": "同时运行的请求（序列）数量上限。",
+          "en": "The cap on requests (sequences) running at once."
+        },
+        "whenToChange": {
+          "zh": "多人或多个客户端同时使用时调大；单人使用长上下文时调小。",
+          "en": "Raise it when several people or clients share the model; lower it for one user with long context."
+        },
+        "tradeoffs": {
+          "zh": "并发越高总吞吐越大，但每个请求分到的 KV 缓存越少，长请求更容易排队。",
+          "en": "More concurrency raises total throughput, but each request gets less KV cache and long requests queue sooner."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 1024,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": 4,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-num-seqs"
+      },
+      "flags": null,
+      "vramEffect": "activations",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "maxNumSeqs",
+        "codec": "direct",
+        "field": "maxNumSeqs"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-num-seqs",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-num-seqs",
+      "platformDefaultValue": 4
+    },
+    {
+      "id": "vllm.maxNumBatchedTokens",
+      "group": "capacity",
+      "level": "advanced",
+      "order": 30,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "每步调度 token 上限",
+        "en": "Tokens scheduled per step"
+      },
+      "summary": {
+        "zh": "每个调度步最多处理的 token 数，决定预填充分块的大小。",
+        "en": "The most tokens processed per scheduler step, which sets the prefill chunk size."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --max-num-batched-tokens。不设置时使用引擎默认值。",
+          "en": "Maps to --max-num-batched-tokens. Unset uses the engine default."
+        },
+        "whenToChange": {
+          "zh": "长提示词等很久才开始回答时调大；生成过程断断续续时调小。",
+          "en": "Raise it when long prompts take a long time before the answer starts; lower it when generation stutters."
+        },
+        "tradeoffs": {
+          "zh": "越大预填充越快，但激活显存越多，也会拉长其它请求的出字间隔。",
+          "en": "Larger values prefill faster but use more activation memory and delay other requests' tokens."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 4194304,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-num-batched-tokens"
+      },
+      "flags": null,
+      "vramEffect": "activations",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "maxNumBatchedTokens",
+        "codec": "direct",
+        "field": "maxNumBatchedTokens",
+        "unset": 0
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-num-batched-tokens",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-num-batched-tokens",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.gpuMemoryUtilization",
+      "group": "memory",
+      "level": "basic",
+      "order": 10,
+      "type": "float",
+      "unit": "fraction",
+      "label": {
+        "zh": "显存预留比例（整卡）",
+        "en": "VRAM reservation (whole GPU)"
+      },
+      "summary": {
+        "zh": "vLLM 启动时按每张卡总显存的这个比例预留，其余留给其它程序。",
+        "en": "vLLM reserves this fraction of each GPU's total memory at start; the rest stays free for other programs."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --gpu-memory-utilization。预留量包括权重、激活和 KV 缓存，权重之外剩下的都用作 KV 缓存。",
+          "en": "Maps to --gpu-memory-utilization. The reservation covers weights, activations and KV cache; whatever is left after the weights becomes KV cache."
+        },
+        "whenToChange": {
+          "zh": "同一张卡还要运行其它模型或桌面程序时调小；独占显卡、需要更多 KV 缓存时调大。",
+          "en": "Lower it when other models or desktop apps share the GPU; raise it for a dedicated GPU that needs more KV cache."
+        },
+        "tradeoffs": {
+          "zh": "过高会与其它进程争抢显存、导致启动失败；过低则 KV 缓存不足，上下文或并发受限。",
+          "en": "Too high fights other processes for memory and can fail the start; too low leaves too little KV cache for context or concurrency."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 0.05,
+        "max": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": {
+        "expr": {
+          "if": [
+            {
+              "eq": [
+                {
+                  "fact": "instance.mode"
+                },
+                "parallel"
+              ]
+            },
+            0.7,
+            0.92
+          ]
+        }
+      },
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--gpu-memory-utilization"
+      },
+      "flags": null,
+      "vramEffect": "fraction",
+      "rules": [
+        {
+          "kind": "warnIf",
+          "when": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "fact": "instance.mode"
+                  },
+                  "parallel"
+                ]
+              },
+              {
+                "gt": [
+                  {
+                    "param": "vllm.gpuMemoryUtilization"
+                  },
+                  0.7
+                ]
+              }
+            ]
+          },
+          "code": "parallel_fraction_high",
+          "message": {
+            "zh": "并行实例与其它模型共用显卡，整卡预留比例超过 0.7 容易挤占其它实例。",
+            "en": "A parallel instance shares the GPU with other models; reserving more than 0.7 of it can crowd them out."
+          }
+        }
+      ],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "gpuMemoryUtilization",
+        "codec": "direct",
+        "field": "gpuMemoryUtilization"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--gpu-memory-utilization",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--gpu-memory-utilization",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "kvCacheDtype",
+      "group": "memory",
+      "level": "basic",
+      "order": 30,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "KV 缓存精度",
+        "en": "KV cache precision"
+      },
+      "summary": {
+        "zh": "KV 缓存的数据类型；FP8 大约能省一半 KV 显存。",
+        "en": "The data type of the KV cache; FP8 roughly halves KV memory."
+      },
+      "help": {
+        "what": {
+          "zh": "保存注意力键值（KV）使用的精度。auto 与模型计算精度相同。",
+          "en": "The precision used to store attention keys and values. auto matches the model's compute dtype."
+        },
+        "whenToChange": {
+          "zh": "需要更长上下文或更多并发、而显存不够时选 FP8。",
+          "en": "Choose FP8 when you need longer context or more concurrency than memory allows."
+        },
+        "tradeoffs": {
+          "zh": "FP8 KV 可能轻微影响长上下文质量，部分模型路径不支持。",
+          "en": "FP8 KV can slightly reduce long-context quality, and some model paths do not support it."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动（同计算精度）",
+            "en": "Auto (same as compute)"
+          }
+        },
+        {
+          "value": "fp8",
+          "label": {
+            "zh": "FP8",
+            "en": "FP8"
+          }
+        },
+        {
+          "value": "fp8_e5m2",
+          "label": {
+            "zh": "FP8 E5M2",
+            "en": "FP8 E5M2"
+          }
+        },
+        {
+          "value": "fp8_e4m3",
+          "label": {
+            "zh": "FP8 E4M3",
+            "en": "FP8 E4M3"
+          }
+        }
+      ],
+      "choicesFrom": "introspect:--kv-cache-dtype",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "auto",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--kv-cache-dtype"
+      },
+      "flags": null,
+      "vramEffect": "kv-dtype",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "kvCacheDtype",
+        "codec": "direct",
+        "field": "kvCacheDtype"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--kv-cache-dtype",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--kv-cache-dtype",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "prefixCaching",
+      "group": "memory",
+      "level": "advanced",
+      "order": 60,
+      "type": "tristate",
+      "unit": null,
+      "label": {
+        "zh": "前缀缓存",
+        "en": "Prefix caching"
+      },
+      "summary": {
+        "zh": "复用开头相同的提示词的计算结果，加快多轮对话和重复的系统提示。",
+        "en": "Reuses work for prompts that start the same way, which speeds up multi-turn chats and repeated system prompts."
+      },
+      "help": {
+        "what": {
+          "zh": "默认（不设置）沿用引擎自己的行为；选择开或关会明确传给引擎。",
+          "en": "Default (unset) keeps the engine's own behaviour; On or Off is passed to the engine explicitly."
+        },
+        "whenToChange": {
+          "zh": "排查与缓存相关的输出异常，或模型路径不支持前缀缓存时关闭。",
+          "en": "Turn it off to rule out cache-related output problems, or when the model path does not support it."
+        },
+        "tradeoffs": {
+          "zh": "开启几乎总是更快，会用一部分 KV 缓存保存可复用的前缀。",
+          "en": "On is almost always faster; it keeps part of the KV cache for reusable prefixes."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": true,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "bool-pair",
+        "flag": "--enable-prefix-caching",
+        "falseFlag": "--no-enable-prefix-caching"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [
+          "disablePrefixCaching"
+        ],
+        "domId": "disablePrefixCaching",
+        "codec": "prefixCachingPair",
+        "field": "enablePrefixCaching"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--enable-prefix-caching",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--enable-prefix-caching",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.cpuOffloadGb",
+      "group": "memory",
+      "level": "expert",
+      "order": 70,
+      "type": "float",
+      "unit": "GiB",
+      "label": {
+        "zh": "权重卸载到内存（每卡）",
+        "en": "Weight offload to RAM (per GPU)"
+      },
+      "summary": {
+        "zh": "每张卡把这么多 GiB 的权重放到系统内存，用到时再搬运。",
+        "en": "Moves this many GiB of weights per GPU to system RAM and streams them in when needed."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --cpu-offload-gb，用 PCIe 带宽换显存。",
+          "en": "Maps to --cpu-offload-gb; it trades PCIe bandwidth for GPU memory."
+        },
+        "whenToChange": {
+          "zh": "模型只差一点就能放进显卡时。",
+          "en": "When the model is only slightly too big for the GPU."
+        },
+        "tradeoffs": {
+          "zh": "每生成一个 token 都要搬运权重，速度会明显下降。",
+          "en": "Weights cross PCIe for every token, so generation slows down noticeably."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 0,
+        "max": 4096
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--cpu-offload-gb"
+      },
+      "flags": null,
+      "vramEffect": "offload",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "cpuOffloadGb",
+        "codec": "direct",
+        "field": "cpuOffloadGb"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--cpu-offload-gb",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--cpu-offload-gb",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.kvOffloadingSize",
+      "group": "memory",
+      "level": "expert",
+      "order": 80,
+      "type": "float",
+      "unit": "GiB",
+      "label": {
+        "zh": "KV 卸载到内存（总量）",
+        "en": "KV offload to RAM (total)"
+      },
+      "summary": {
+        "zh": "把最多这么多 GiB 的 KV 缓存放到系统内存，保留更多可复用的前缀。",
+        "en": "Keeps up to this many GiB of KV cache in system RAM so more reusable prefixes survive."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --kv-offloading-size，是所有卡的总量，不是每张卡。",
+          "en": "Maps to --kv-offloading-size; it is a total for all GPUs, not per GPU."
+        },
+        "whenToChange": {
+          "zh": "多轮对话或共享前缀很多、显存里的前缀缓存经常被挤掉时。",
+          "en": "When multi-turn chats or shared prefixes are common and the prefix cache in GPU memory keeps getting evicted."
+        },
+        "tradeoffs": {
+          "zh": "占用系统内存；从内存取回比重新计算快，但比显存慢。",
+          "en": "Uses system RAM; fetching from RAM beats recomputing but is slower than GPU memory."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 0,
+        "max": 4096
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          0,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--kv-offloading-size"
+      },
+      "flags": null,
+      "vramEffect": "offload",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "kvOffloadingSize",
+        "codec": "direct",
+        "field": "kvOffloadingSize"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--kv-offloading-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--kv-offloading-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "tensorParallel",
+      "group": "parallelism",
+      "level": "advanced",
+      "order": 10,
+      "type": "int",
+      "unit": "GPUs",
+      "label": {
+        "zh": "张量并行卡数",
+        "en": "Tensor-parallel GPUs"
+      },
+      "summary": {
+        "zh": "把每一层切开，放到几张 GPU 上一起计算。",
+        "en": "How many GPUs split each layer between them."
+      },
+      "help": {
+        "what": {
+          "zh": "张量并行在层内切分权重，需要 GPU 之间有高速互联。",
+          "en": "Tensor parallelism splits the weights inside each layer and needs fast links between the GPUs."
+        },
+        "whenToChange": {
+          "zh": "单卡放不下模型，或想用多卡加快单个请求时。",
+          "en": "When the model does not fit on one GPU, or to speed up single requests with several GPUs."
+        },
+        "tradeoffs": {
+          "zh": "卡数必须能整除注意力头数；卡间带宽不足时提速有限。",
+          "en": "The GPU count must divide the attention heads; slow links limit the speed-up."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": 1,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          1,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--tensor-parallel-size"
+      },
+      "flags": null,
+      "vramEffect": "split",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "tensorParallelSize",
+        "codec": "direct",
+        "field": "tensorParallelSize"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--tensor-parallel-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--tensor-parallel-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "pipelineParallel",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 20,
+      "type": "int",
+      "unit": "stages",
+      "label": {
+        "zh": "流水线并行段数",
+        "en": "Pipeline stages"
+      },
+      "summary": {
+        "zh": "把模型的层按顺序分成几段，放到不同的 GPU 上。",
+        "en": "Splits the model's layers into consecutive stages on different GPUs."
+      },
+      "help": {
+        "what": {
+          "zh": "流水线并行按层分段，GPU 之间的通信量比张量并行少。",
+          "en": "Pipeline parallelism splits by layer and needs less GPU-to-GPU traffic than tensor parallelism."
+        },
+        "whenToChange": {
+          "zh": "单卡放不下模型、而 GPU 之间只有 PCIe 等较慢的连接时。",
+          "en": "When the model does not fit on one GPU and the GPUs only have slower links such as PCIe."
+        },
+        "tradeoffs": {
+          "zh": "单个请求的延迟通常高于张量并行，需要一定并发才能让各段都忙起来。",
+          "en": "Single requests are usually slower than with tensor parallelism; it needs concurrency to keep every stage busy."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": 1,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          1,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--pipeline-parallel-size"
+      },
+      "flags": null,
+      "vramEffect": "split",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "pipelineParallelSize",
+        "codec": "direct",
+        "field": "pipelineParallelSize"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--pipeline-parallel-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--pipeline-parallel-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "dataParallel",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 30,
+      "type": "int",
+      "unit": "replicas",
+      "label": {
+        "zh": "数据并行副本",
+        "en": "Data-parallel replicas"
+      },
+      "summary": {
+        "zh": "在多张 GPU 上各放一份完整模型，分摊请求。",
+        "en": "Runs a full copy of the model per GPU group and spreads requests across the copies."
+      },
+      "help": {
+        "what": {
+          "zh": "每个副本独立处理请求，总吞吐随副本数增加。",
+          "en": "Each replica serves requests on its own, so total throughput grows with the replica count."
+        },
+        "whenToChange": {
+          "zh": "单卡放得下模型、需要更高总吞吐时。",
+          "en": "When one GPU holds the model and you need more total throughput."
+        },
+        "tradeoffs": {
+          "zh": "每个副本都需要完整的权重显存，单个请求不会变快。",
+          "en": "Every replica needs the full weight memory, and single requests do not get faster."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": 1,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          1,
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--data-parallel-size"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "dataParallelSize",
+        "codec": "direct",
+        "field": "dataParallelSize"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--data-parallel-size",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--data-parallel-size",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "expertParallel",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 40,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "MoE 专家并行",
+        "en": "MoE expert parallel"
+      },
+      "summary": {
+        "zh": "把混合专家（MoE）模型的专家分到多张 GPU 上。",
+        "en": "Spreads the experts of a mixture-of-experts (MoE) model across GPUs."
+      },
+      "help": {
+        "what": {
+          "zh": "只对 MoE 模型有效：不同专家放在不同的 GPU 上。",
+          "en": "Only affects MoE models: different experts live on different GPUs."
+        },
+        "whenToChange": {
+          "zh": "多卡运行大型 MoE 模型、张量并行扩展效果不好时。",
+          "en": "For large MoE models on several GPUs when tensor parallelism scales poorly."
+        },
+        "tradeoffs": {
+          "zh": "专家负载不均时，部分 GPU 会成为瓶颈。",
+          "en": "Uneven expert load can make some GPUs the bottleneck."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--enable-expert-parallel"
+      },
+      "flags": null,
+      "vramEffect": "split",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": null,
+        "codec": "direct",
+        "field": "enableExpertParallel"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--enable-expert-parallel",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--enable-expert-parallel",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.distributedExecutorBackend",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 50,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "分布式执行后端",
+        "en": "Distributed executor"
+      },
+      "summary": {
+        "zh": "多卡运行时，vLLM 用哪种方式管理工作进程。",
+        "en": "How vLLM manages its worker processes across GPUs."
+      },
+      "help": {
+        "what": {
+          "zh": "mp 用于单机多卡；ray 用于多台机器或集群。",
+          "en": "mp is for several GPUs on one host; ray is for several hosts or a cluster."
+        },
+        "whenToChange": {
+          "zh": "跨机器部署时选 ray。",
+          "en": "Choose ray when deploying across machines."
+        },
+        "tradeoffs": {
+          "zh": "ray 需要额外的集群组件，单机上通常没有好处。",
+          "en": "ray needs extra cluster components and rarely helps on a single host."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动",
+            "en": "Auto"
+          }
+        },
+        {
+          "value": "mp",
+          "label": {
+            "zh": "单机多进程（mp）",
+            "en": "Single host, multiprocessing (mp)"
+          }
+        },
+        {
+          "value": "ray",
+          "label": {
+            "zh": "多机或集群（ray）",
+            "en": "Multi-host or cluster (ray)"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": "auto",
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--distributed-executor-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [
+        {
+          "kind": "warnIf",
+          "when": {
+            "and": [
+              {
+                "eq": [
+                  {
+                    "param": "vllm.distributedExecutorBackend"
+                  },
+                  "ray"
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "fact": "host.platform"
+                  },
+                  "win32"
+                ]
+              }
+            ]
+          },
+          "code": "ray_unverified_on_wsl",
+          "message": {
+            "zh": "ray 后端在 Windows 的 Docker/WSL 环境下未经验证。",
+            "en": "The ray backend is unverified under Docker/WSL on Windows."
+          }
+        }
+      ],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": null,
+        "codec": "direct",
+        "field": "distributedExecutorBackend"
+      },
+      "appliesWhen": {
+        "or": [
+          {
+            "gt": [
+              {
+                "param": "tensorParallel"
+              },
+              1
+            ]
+          },
+          {
+            "gt": [
+              {
+                "param": "pipelineParallel"
+              },
+              1
+            ]
+          },
+          {
+            "gt": [
+              {
+                "param": "dataParallel"
+              },
+              1
+            ]
+          }
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--distributed-executor-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--distributed-executor-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "speculative.method",
+      "group": "speculative",
+      "level": "basic",
+      "order": 10,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "推测解码方式",
+        "en": "Speculative decoding method"
+      },
+      "summary": {
+        "zh": "先用草稿预测几个 token，再一次性验证，以加快生成。",
+        "en": "Drafts several tokens and verifies them in one step to speed up generation."
+      },
+      "help": {
+        "what": {
+          "zh": "可用方式取决于引擎和模型：MTP 需要模型自带多 token 预测层，草稿模型方式需要额外的小模型。",
+          "en": "The methods available depend on the engine and model: MTP needs the model's own multi-token prediction layers, draft-model methods need an extra small model."
+        },
+        "whenToChange": {
+          "zh": "单个请求生成太慢、显存还有余量时开启；排查问题时关闭。",
+          "en": "Turn it on when single requests generate too slowly and memory allows; turn it off when troubleshooting."
+        },
+        "tradeoffs": {
+          "zh": "额外占用显存；并发越高加速越小，草稿接受率低时甚至会变慢。",
+          "en": "Uses extra memory; the gain shrinks at high concurrency and can become a slowdown when few drafts are accepted."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "off",
+          "label": {
+            "zh": "关闭（稳定优先）",
+            "en": "Off (stability first)"
+          }
+        },
+        {
+          "value": "auto",
+          "label": {
+            "zh": "按模型自动（实验）",
+            "en": "Auto from the model (experimental)"
+          }
+        },
+        {
+          "value": "mtp",
+          "label": {
+            "zh": "MTP（模型自带多 token 预测）",
+            "en": "MTP (the model's own multi-token prediction)"
+          }
+        },
+        {
+          "value": "qwen3_next_mtp",
+          "label": {
+            "zh": "MTP（Qwen3-Next 写法）",
+            "en": "MTP (Qwen3-Next spelling)"
+          }
+        },
+        {
+          "value": "ngram",
+          "label": {
+            "zh": "N-gram（无需草稿模型）",
+            "en": "N-gram (no draft model)"
+          }
+        },
+        {
+          "value": "eagle3",
+          "label": {
+            "zh": "EAGLE3（需要草稿模型）",
+            "en": "EAGLE3 (needs a draft model)"
+          }
+        },
+        {
+          "value": "draft_model",
+          "label": {
+            "zh": "草稿模型（需要草稿模型）",
+            "en": "Draft model (needs a draft model)"
+          }
+        },
+        {
+          "value": "dspark",
+          "label": {
+            "zh": "DSpark（需 SGLang）",
+            "en": "DSpark (needs SGLang)"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": "off",
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "json",
+        "flag": "--speculative-config",
+        "format": "speculative-config"
+      },
+      "flags": null,
+      "vramEffect": "draft",
+      "rules": [
+        {
+          "kind": "errorIf",
+          "when": {
+            "and": [
+              {
+                "in": [
+                  {
+                    "param": "speculative.method"
+                  },
+                  [
+                    "mtp",
+                    "qwen3_next_mtp"
+                  ]
+                ]
+              },
+              {
+                "eq": [
+                  {
+                    "fact": "model.nativeMtp.supported"
+                  },
+                  false
+                ]
+              }
+            ]
+          },
+          "code": "mtp_not_in_checkpoint",
+          "message": {
+            "zh": "这个模型的权重里没有 MTP 层，不能使用 MTP 推测解码；请关闭推测解码或换用其他方式。",
+            "en": "This checkpoint has no MTP layers, so MTP speculative decoding cannot start; turn speculative decoding off or pick another method."
+          }
+        },
+        {
+          "kind": "errorIf",
+          "when": {
+            "and": [
+              {
+                "in": [
+                  {
+                    "param": "speculative.method"
+                  },
+                  [
+                    "eagle3",
+                    "draft_model"
+                  ]
+                ]
+              },
+              {
+                "or": [
+                  {
+                    "not": {
+                      "isSet": {
+                        "param": "speculative.draftModel"
+                      }
+                    }
+                  },
+                  {
+                    "eq": [
+                      {
+                        "param": "speculative.draftModel"
+                      },
+                      ""
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "code": "speculative_needs_draft_model",
+          "message": {
+            "zh": "这种推测解码方式必须指定草稿模型，请在“草稿模型”里选择一个，或换用其他方式。",
+            "en": "This speculative decoding method needs a draft model; choose one in “Draft model” or pick another method."
+          }
+        }
+      ],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "speculativeMode",
+        "codec": "direct",
+        "field": "speculativeMode"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--speculative-config",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--speculative-config",
+      "platformDefaultValue": "off"
+    },
+    {
+      "id": "speculative.numTokens",
+      "group": "speculative",
+      "level": "advanced",
+      "order": 20,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "每步草稿 token 数",
+        "en": "Draft tokens per step"
+      },
+      "summary": {
+        "zh": "每一步先猜几个 token 再验证。",
+        "en": "How many tokens are guessed before each verification step."
+      },
+      "help": {
+        "what": {
+          "zh": "草稿越长，猜中时加速越明显。",
+          "en": "Longer drafts help more when the guesses are accepted."
+        },
+        "whenToChange": {
+          "zh": "输出可预测（例如代码）、接受率高时调大；接受率低时调小。",
+          "en": "Raise it when output is predictable (code, for example) and acceptance is high; lower it when acceptance is low."
+        },
+        "tradeoffs": {
+          "zh": "猜错的 token 会浪费计算，设得过大反而变慢。",
+          "en": "Rejected tokens waste compute, so too many slows generation down."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 16,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": 1,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "speculative.method",
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "numSpeculativeTokens",
+        "codec": "direct",
+        "field": "numSpeculativeTokens"
+      },
+      "appliesWhen": {
+        "notIn": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "off",
+            "none",
+            null
+          ]
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": 1
+    },
+    {
+      "id": "speculative.draftModel",
+      "group": "speculative",
+      "level": "advanced",
+      "order": 30,
+      "type": "path",
+      "unit": null,
+      "label": {
+        "zh": "草稿模型",
+        "en": "Draft model"
+      },
+      "summary": {
+        "zh": "推测解码使用的小模型路径。",
+        "en": "The path of the small model used for speculative decoding."
+      },
+      "help": {
+        "what": {
+          "zh": "留空时在模型目录附近自动查找可用的草稿模型。",
+          "en": "Empty means a suitable draft model is looked up next to the model."
+        },
+        "whenToChange": {
+          "zh": "自动查找不到草稿模型，或想换用另一个草稿模型时。",
+          "en": "When no draft model is found automatically, or to use a different one."
+        },
+        "tradeoffs": {
+          "zh": "草稿模型必须与主模型使用同一分词器，并会额外占用显存。",
+          "en": "The draft must share the main model's tokenizer, and it uses extra memory."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": "containerPath",
+        "via": "speculative.method",
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "draft",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "draftModel",
+        "codec": "direct",
+        "field": "draftModel"
+      },
+      "appliesWhen": {
+        "notIn": [
+          {
+            "param": "speculative.method"
+          },
+          [
+            "off",
+            "none",
+            null
+          ]
+        ]
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": null
+    },
+    {
+      "id": "reasoningParser",
+      "group": "reasoning-tools",
+      "level": "basic",
+      "order": 10,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "思考内容解析器",
+        "en": "Reasoning parser"
+      },
+      "summary": {
+        "zh": "把模型的思考过程从回答里拆出来，放进 reasoning_content 字段。",
+        "en": "Separates the model's thinking from the answer and returns it as reasoning_content."
+      },
+      "help": {
+        "what": {
+          "zh": "不同模型标记思考内容的方式不同，解析器要与模型匹配。自动建议会按模型选择；关闭则原样输出。",
+          "en": "Models mark their thinking differently, so the parser must match the model. Auto suggests one for the model; Off returns the raw text."
+        },
+        "whenToChange": {
+          "zh": "客户端看到 <think> 标签混在回答里，或思考内容丢失时。",
+          "en": "When clients see <think> tags mixed into the answer, or the thinking goes missing."
+        },
+        "tradeoffs": {
+          "zh": "选错解析器可能吞掉部分回答。",
+          "en": "A wrong parser can swallow part of the answer."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动建议",
+            "en": "Suggest automatically"
+          }
+        },
+        {
+          "value": "none",
+          "label": {
+            "zh": "关闭（原样输出）",
+            "en": "Off (raw output)"
+          }
+        },
+        {
+          "value": "qwen3"
+        },
+        {
+          "value": "deepseek_r1"
+        },
+        {
+          "value": "deepseek_v3"
+        },
+        {
+          "value": "gptoss"
+        },
+        {
+          "value": "gemma4"
+        },
+        {
+          "value": "granite"
+        },
+        {
+          "value": "hunyuan_a13b"
+        },
+        {
+          "value": "kimi_k2"
+        },
+        {
+          "value": "mistral"
+        },
+        {
+          "value": "nemotron_v3"
+        },
+        {
+          "value": "olmo3"
+        },
+        {
+          "value": "step3"
+        },
+        {
+          "value": "step3p5"
+        },
+        {
+          "value": "identity"
+        },
+        {
+          "value": "nano_v3"
+        }
+      ],
+      "choicesFrom": "introspect:--reasoning-parser",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          "none",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--reasoning-parser"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "reasoningParser",
+        "codec": "direct",
+        "field": "reasoningParser"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--reasoning-parser",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--reasoning-parser",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "toolCallParser",
+      "group": "reasoning-tools",
+      "level": "basic",
+      "order": 20,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "工具调用解析器",
+        "en": "Tool-call parser"
+      },
+      "summary": {
+        "zh": "把模型输出的工具调用转换成 OpenAI 的 tool_calls 格式。",
+        "en": "Turns the model's tool calls into OpenAI tool_calls."
+      },
+      "help": {
+        "what": {
+          "zh": "解析器要与模型的聊天模板匹配。自动建议会按模型推断；关闭则不解析工具调用。",
+          "en": "The parser must match the model's chat template. Auto infers one from the model; Off leaves tool calls unparsed."
+        },
+        "whenToChange": {
+          "zh": "Claude Code、OpenWebUI 等客户端调用工具失败，或工具调用以普通文本出现时。",
+          "en": "When clients such as Claude Code or OpenWebUI fail to call tools, or tool calls show up as plain text."
+        },
+        "tradeoffs": {
+          "zh": "选错解析器会让工具调用失败或混进回答。",
+          "en": "A wrong parser makes tool calls fail or leak into the answer."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动建议",
+            "en": "Suggest automatically"
+          }
+        },
+        {
+          "value": "none",
+          "label": {
+            "zh": "关闭",
+            "en": "Off"
+          }
+        },
+        {
+          "value": "qwen3_coder"
+        },
+        {
+          "value": "qwen3_xml"
+        },
+        {
+          "value": "hermes"
+        },
+        {
+          "value": "deepseek_v3"
+        },
+        {
+          "value": "mistral"
+        },
+        {
+          "value": "llama3_json"
+        },
+        {
+          "value": "llama4_pythonic"
+        },
+        {
+          "value": "xlam"
+        },
+        {
+          "value": "gemma4"
+        },
+        {
+          "value": "pythonic"
+        },
+        {
+          "value": "granite"
+        },
+        {
+          "value": "minimax"
+        }
+      ],
+      "choicesFrom": "introspect:--tool-call-parser",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          "auto",
+          "none",
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--tool-call-parser"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "toolCallParser",
+        "codec": "direct",
+        "field": "toolCallParser"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--tool-call-parser",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--tool-call-parser",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "autoToolChoice",
+      "group": "reasoning-tools",
+      "level": "advanced",
+      "order": 30,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "自动工具调用",
+        "en": "Automatic tool choice"
+      },
+      "summary": {
+        "zh": "允许模型自己决定是否调用工具（tool_choice=auto）。",
+        "en": "Lets the model decide by itself whether to call a tool (tool_choice=auto)."
+      },
+      "help": {
+        "what": {
+          "zh": "需要同时设置工具调用解析器才会生效。",
+          "en": "Takes effect only together with a tool-call parser."
+        },
+        "whenToChange": {
+          "zh": "客户端只发送 tool_choice=required，或根本不用工具时可以关闭。",
+          "en": "Turn it off when clients only send tool_choice=required, or use no tools at all."
+        },
+        "tradeoffs": {
+          "zh": "关闭后，没有明确要求工具的请求不会触发工具调用。",
+          "en": "When off, requests that do not explicitly require a tool never call one."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": true,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--enable-auto-tool-choice"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "enableAutoToolChoice",
+        "codec": "direct",
+        "field": "enableAutoToolChoice"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--enable-auto-tool-choice",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--enable-auto-tool-choice",
+      "platformDefaultValue": true
+    },
+    {
+      "id": "reasoning.defaultEnabled",
+      "group": "reasoning-tools",
+      "level": "advanced",
+      "order": 40,
+      "type": "tristate",
+      "unit": null,
+      "label": {
+        "zh": "默认开启思考",
+        "en": "Thinking on by default"
+      },
+      "summary": {
+        "zh": "客户端没有说明时，模型是否默认先思考再回答。",
+        "en": "Whether the model thinks before answering when the client does not say."
+      },
+      "help": {
+        "what": {
+          "zh": "通过聊天模板参数 enable_thinking 设定默认值；客户端请求里的设置仍然优先。",
+          "en": "Sets the chat template's default enable_thinking; a setting in the client's request still wins."
+        },
+        "whenToChange": {
+          "zh": "希望默认快速直接回答时选关；希望默认深入思考时选开。",
+          "en": "Choose Off for quick direct answers by default, or On for deeper reasoning by default."
+        },
+        "tradeoffs": {
+          "zh": "思考会显著增加输出 token 数和等待时间。",
+          "en": "Thinking adds many output tokens and waiting time."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "chatTemplateKwargs",
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": null
+    },
+    {
+      "id": "clientPreset",
+      "group": "reasoning-tools",
+      "level": "advanced",
+      "order": 50,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "客户端预设",
+        "en": "Client preset"
+      },
+      "summary": {
+        "zh": "按主要使用的客户端调整推荐值，本身不改变启动参数。",
+        "en": "Tunes suggested values for your main client; it does not change launch flags by itself."
+      },
+      "help": {
+        "what": {
+          "zh": "用于控制台的推荐值和网关默认行为，例如 Claude Code 桥接或 OpenWebUI。",
+          "en": "Used for console suggestions and gateway defaults, for example the Claude Code bridge or OpenWebUI."
+        },
+        "whenToChange": {
+          "zh": "主要使用的客户端变了时。",
+          "en": "When your main client changes."
+        },
+        "tradeoffs": {
+          "zh": "只影响推荐值，实际行为以各参数的设置为准。",
+          "en": "It only affects suggestions; the actual parameter values decide the behaviour."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "openwebui",
+          "label": {
+            "zh": "Open WebUI",
+            "en": "Open WebUI"
+          }
+        },
+        {
+          "value": "claude-code",
+          "label": {
+            "zh": "Claude Code 桥接",
+            "en": "Claude Code bridge"
+          }
+        },
+        {
+          "value": "claude-cowork",
+          "label": {
+            "zh": "Claude Cowork 桥接",
+            "en": "Claude Cowork bridge"
+          }
+        },
+        {
+          "value": "generic",
+          "label": {
+            "zh": "通用 OpenAI 兼容",
+            "en": "Generic OpenAI-compatible"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": "openwebui",
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "clientPreset",
+        "codec": "direct",
+        "field": "clientPreset"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": "openwebui"
+    },
+    {
+      "id": "chatTemplateKwargs",
+      "group": "reasoning-tools",
+      "level": "expert",
+      "order": 60,
+      "type": "json",
+      "unit": null,
+      "label": {
+        "zh": "聊天模板默认参数",
+        "en": "Chat template default arguments"
+      },
+      "summary": {
+        "zh": "传给聊天模板的默认参数（JSON 对象），例如 enable_thinking。",
+        "en": "Default arguments for the chat template, as a JSON object, such as enable_thinking."
+      },
+      "help": {
+        "what": {
+          "zh": "客户端请求里的 chat_template_kwargs 会覆盖同名的项。",
+          "en": "chat_template_kwargs in a client request override matching keys."
+        },
+        "whenToChange": {
+          "zh": "模型模板支持额外的开关、需要统一默认值时。",
+          "en": "When the model's template has extra switches you want to default."
+        },
+        "tradeoffs": {
+          "zh": "键名必须与模板一致，写错会被静默忽略。",
+          "en": "Keys must match the template; unknown keys are silently ignored."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 8192,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "json",
+        "flag": "--default-chat-template-kwargs"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--default-chat-template-kwargs",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--default-chat-template-kwargs",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.reasoningParserPlugin",
+      "group": "reasoning-tools",
+      "level": "expert",
+      "order": 70,
+      "type": "path",
+      "unit": null,
+      "label": {
+        "zh": "思考解析器插件",
+        "en": "Reasoning parser plugin"
+      },
+      "summary": {
+        "zh": "模型目录里自带的思考解析器插件文件。",
+        "en": "A reasoning-parser plugin file shipped in the model folder."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --reasoning-parser-plugin，用于引擎还没有内置解析器的新模型。",
+          "en": "Maps to --reasoning-parser-plugin, for new models whose parser the engine does not ship yet."
+        },
+        "whenToChange": {
+          "zh": "模型说明要求加载自带的解析器插件时。",
+          "en": "When the model card asks you to load its own parser plugin."
+        },
+        "tradeoffs": {
+          "zh": "插件是模型仓库提供的 Python 代码，只用于可信来源的模型。",
+          "en": "The plugin is Python code from the model repository; use it only for models from trusted sources."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": "containerPath",
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--reasoning-parser-plugin"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--reasoning-parser-plugin",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--reasoning-parser-plugin",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.languageModelOnly",
+      "group": "multimodal",
+      "level": "advanced",
+      "order": 10,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "仅语言模型",
+        "en": "Language model only"
+      },
+      "summary": {
+        "zh": "多模态模型只加载文本部分，省下视觉编码器的显存。",
+        "en": "Loads only the text part of a multimodal model and saves the vision encoder's memory."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --language-model-only。开启后不能再处理图片输入。",
+          "en": "Maps to --language-model-only. Image inputs no longer work."
+        },
+        "whenToChange": {
+          "zh": "只做文本对话、显存紧张时。",
+          "en": "When you only chat in text and memory is tight."
+        },
+        "tradeoffs": {
+          "zh": "部分不是纯语言模型的架构不支持，这时会被忽略。",
+          "en": "Some architectures are not plain language models; for them it is ignored."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--language-model-only"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "languageModelOnly",
+        "codec": "direct",
+        "field": "languageModelOnly"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--language-model-only",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--language-model-only",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.mmProcessorCacheGb",
+      "group": "multimodal",
+      "level": "expert",
+      "order": 30,
+      "type": "float",
+      "unit": "GiB",
+      "label": {
+        "zh": "多模态预处理缓存",
+        "en": "Multimodal preprocessor cache"
+      },
+      "summary": {
+        "zh": "缓存图片等多模态输入的预处理结果，重复输入时更快。",
+        "en": "Caches preprocessed images and other multimodal inputs so repeats are faster."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --mm-processor-cache-gb，占用系统内存。0 表示关闭缓存。",
+          "en": "Maps to --mm-processor-cache-gb and uses system RAM. 0 turns the cache off."
+        },
+        "whenToChange": {
+          "zh": "内存紧张时调小或设为 0；经常重复发送相同图片时调大。",
+          "en": "Lower it or use 0 when RAM is tight; raise it when the same images are sent again and again."
+        },
+        "tradeoffs": {
+          "zh": "只占用系统内存，不影响显存。",
+          "en": "Uses system RAM only, not GPU memory."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 0,
+        "max": 1024
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": 4,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--mm-processor-cache-gb"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": {
+        "aliases": [],
+        "domId": "mmProcessorCacheGb",
+        "codec": "direct",
+        "field": "mmProcessorCacheGb"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--mm-processor-cache-gb",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--mm-processor-cache-gb",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "lora.adapters",
+      "group": "lora",
+      "level": "advanced",
+      "order": 10,
+      "type": "list",
+      "unit": null,
+      "label": {
+        "zh": "LoRA 适配器",
+        "en": "LoRA adapters"
+      },
+      "summary": {
+        "zh": "启动时加载的 LoRA 适配器，每个有名字和目录，最多 8 个。",
+        "en": "LoRA adapters loaded at launch, each with a name and a folder, up to 8."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --enable-lora --lora-modules 名字=路径 …。客户端在请求的 model 字段里写适配器名字即可使用。路径必须在平台的模型存储目录下。",
+          "en": "Maps to --enable-lora --lora-modules name=path …. Clients select an adapter by putting its name in the request's model field. Paths must be under the platform's model storage roots."
+        },
+        "whenToChange": {
+          "zh": "同一个基础模型要服务多个微调版本时。",
+          "en": "When one base model must serve several fine-tuned variants."
+        },
+        "tradeoffs": {
+          "zh": "开启 LoRA 会占用额外显存并略微降低吞吐；适配器的秩不能超过“LoRA 最大秩”。",
+          "en": "Enabling LoRA uses extra VRAM and lowers throughput slightly; an adapter's rank cannot exceed “LoRA max rank”."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "repeat",
+        "flag": "--lora-modules",
+        "format": "lora-modules"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": {
+        "maxItems": 8,
+        "fields": {
+          "name": {
+            "type": "string",
+            "required": true,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "path": {
+            "type": "string",
+            "required": true,
+            "maxLength": 4096
+          }
+        }
+      },
+      "availability": {
+        "state": "unverified",
+        "flag": "--lora-modules",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--lora-modules",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.lora.maxLoras",
+      "group": "lora",
+      "level": "expert",
+      "order": 20,
+      "type": "int",
+      "unit": "adapters",
+      "label": {
+        "zh": "同时加载的 LoRA 数",
+        "en": "Max LoRAs in one batch"
+      },
+      "summary": {
+        "zh": "同一批请求里最多能同时用到几个不同的 LoRA。",
+        "en": "How many different LoRAs one batch of requests may use at once."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --max-loras。只在配置了 LoRA 适配器时生效。",
+          "en": "Maps to --max-loras. It only takes effect when LoRA adapters are configured."
+        },
+        "whenToChange": {
+          "zh": "多个适配器会同时被不同请求使用时调大。",
+          "en": "Raise it when several adapters are used by different requests at the same time."
+        },
+        "tradeoffs": {
+          "zh": "每多一个槽位都会预留一份适配器显存。",
+          "en": "Every extra slot reserves another adapter's worth of VRAM."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--max-loras"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": {
+        "isSet": {
+          "param": "lora.adapters"
+        }
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-loras",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-loras",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.lora.maxRank",
+      "group": "lora",
+      "level": "expert",
+      "order": 30,
+      "type": "int",
+      "unit": "rank",
+      "label": {
+        "zh": "LoRA 最大秩",
+        "en": "LoRA max rank"
+      },
+      "summary": {
+        "zh": "允许加载的 LoRA 适配器的最大秩。",
+        "en": "The largest rank of a LoRA adapter that may be loaded."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --max-lora-rank，范围 1 到 512。必须不小于所有适配器的实际秩。",
+          "en": "Maps to --max-lora-rank, 1 to 512. It must be at least the real rank of every adapter."
+        },
+        "whenToChange": {
+          "zh": "适配器的秩大于默认上限，启动时报秩过大的错误时。",
+          "en": "When an adapter's rank is above the default limit and startup reports the rank as too large."
+        },
+        "tradeoffs": {
+          "zh": "上限越大，为每个槽位预留的显存越多。",
+          "en": "A higher limit reserves more VRAM for every slot."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 1,
+        "max": 512,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--max-lora-rank"
+      },
+      "flags": null,
+      "vramEffect": "weights",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": {
+        "isSet": {
+          "param": "lora.adapters"
+        }
+      },
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--max-lora-rank",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--max-lora-rank",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "temperature",
+      "group": "sampling",
+      "level": "advanced",
+      "order": 10,
+      "type": "float",
+      "unit": null,
+      "label": {
+        "zh": "默认温度",
+        "en": "Default temperature"
+      },
+      "summary": {
+        "zh": "客户端没有指定时使用的采样温度。",
+        "en": "The sampling temperature used when the client does not set one."
+      },
+      "help": {
+        "what": {
+          "zh": "温度越高输出越多样，越低越确定。",
+          "en": "Higher temperature gives more varied output; lower gives more predictable output."
+        },
+        "whenToChange": {
+          "zh": "模型说明推荐了特定采样参数时。",
+          "en": "When the model card recommends specific sampling values."
+        },
+        "tradeoffs": {
+          "zh": "这只是默认值，请求里的设置优先。",
+          "en": "This is only a default; the value in a request wins."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 0,
+        "max": 5
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "vllm.overrideGenerationConfig",
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": null
+    },
+    {
+      "id": "topP",
+      "group": "sampling",
+      "level": "advanced",
+      "order": 20,
+      "type": "float",
+      "unit": null,
+      "label": {
+        "zh": "默认 Top-p",
+        "en": "Default top-p"
+      },
+      "summary": {
+        "zh": "客户端没有指定时使用的核采样阈值。",
+        "en": "The nucleus-sampling threshold used when the client does not set one."
+      },
+      "help": {
+        "what": {
+          "zh": "只从累计概率达到这个值的候选 token 中采样。",
+          "en": "Samples only from the most likely tokens whose probabilities add up to this value."
+        },
+        "whenToChange": {
+          "zh": "模型说明推荐了特定采样参数时。",
+          "en": "When the model card recommends specific sampling values."
+        },
+        "tradeoffs": {
+          "zh": "越小输出越保守，越大越多样。",
+          "en": "Smaller values give more conservative output, larger values more varied output."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 0,
+        "max": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "vllm.overrideGenerationConfig",
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": null
+    },
+    {
+      "id": "topK",
+      "group": "sampling",
+      "level": "advanced",
+      "order": 30,
+      "type": "int",
+      "unit": null,
+      "label": {
+        "zh": "默认 Top-k",
+        "en": "Default top-k"
+      },
+      "summary": {
+        "zh": "客户端没有指定时，每一步只从概率最高的 k 个 token 中采样。",
+        "en": "When the client does not say, each step samples only from the k most likely tokens."
+      },
+      "help": {
+        "what": {
+          "zh": "限制每一步候选 token 的数量。0 表示不限制。",
+          "en": "Limits how many candidate tokens each step considers. 0 means no limit."
+        },
+        "whenToChange": {
+          "zh": "模型说明推荐了特定采样参数时。",
+          "en": "When the model card recommends specific sampling values."
+        },
+        "tradeoffs": {
+          "zh": "越小输出越保守，越大越多样。",
+          "en": "Smaller values give more conservative output, larger values more varied output."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": {
+        "min": 0,
+        "max": 100000,
+        "step": 1
+      },
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": "vllm.overrideGenerationConfig",
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "available",
+        "reason": {
+          "zh": "不对应运行时参数，由平台处理",
+          "en": "Not a runtime flag; the platform handles it"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": null
+    },
+    {
+      "id": "generationConfig",
+      "group": "sampling",
+      "level": "expert",
+      "order": 40,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "生成配置来源",
+        "en": "Generation config source"
+      },
+      "summary": {
+        "zh": "默认采样参数的来源：模型自带、引擎内置或指定路径。",
+        "en": "Where default sampling values come from: the model, the engine's built-in defaults, or a path."
+      },
+      "help": {
+        "what": {
+          "zh": "auto 读取模型的 generation_config.json；vllm 使用引擎内置默认值；也可以填写目录路径。",
+          "en": "auto reads the model's generation_config.json; vllm uses the engine's built-in defaults; a folder path also works."
+        },
+        "whenToChange": {
+          "zh": "模型自带的生成配置导致异常输出（例如不停重复某个字符）时改为 vllm。",
+          "en": "Switch to vllm when the model's own generation config causes bad output, such as one character repeating."
+        },
+        "tradeoffs": {
+          "zh": "改为 vllm 后，模型作者推荐的采样值不再生效。",
+          "en": "With vllm, the sampling values the model author recommends no longer apply."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 4096,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--generation-config"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--generation-config",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--generation-config",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.overrideGenerationConfig",
+      "group": "sampling",
+      "level": "expert",
+      "order": 50,
+      "type": "json",
+      "unit": null,
+      "label": {
+        "zh": "覆盖生成配置",
+        "en": "Generation config override"
+      },
+      "summary": {
+        "zh": "用 JSON 覆盖默认的生成参数，例如 max_new_tokens 或 temperature。",
+        "en": "Overrides default generation values as JSON, for example max_new_tokens or temperature."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --override-generation-config，在模型自带的生成配置之上生效。",
+          "en": "Maps to --override-generation-config and applies on top of the model's own generation config."
+        },
+        "whenToChange": {
+          "zh": "客户端不传 max_tokens 时会一直生成到上下文用完，需要给一个默认上限时。",
+          "en": "When clients that omit max_tokens would generate until the context runs out and you need a default cap."
+        },
+        "tradeoffs": {
+          "zh": "请求里明确给出的值仍然优先。",
+          "en": "Values a request states explicitly still win."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 8192,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "json",
+        "flag": "--override-generation-config"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--override-generation-config",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--override-generation-config",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "apiKey",
+      "group": "network-security",
+      "level": "basic",
+      "order": 10,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "模型直连 API Key",
+        "en": "Direct model API key"
+      },
+      "summary": {
+        "zh": "直接访问模型端口时需要提供的密钥；经网关访问不受影响。",
+        "en": "The key needed to call the model port directly; access through the gateway is unaffected."
+      },
+      "help": {
+        "what": {
+          "zh": "设置后，绕过网关、直接访问引擎端口的请求必须带上这个密钥。密钥不会出现在启动命令或日志里。",
+          "en": "When set, requests that reach the engine port directly, bypassing the gateway, must carry this key. It never appears in the launch command or the logs."
+        },
+        "whenToChange": {
+          "zh": "允许局域网设备直连模型端口时，强烈建议设置。",
+          "en": "Strongly recommended when LAN devices can reach the model port directly."
+        },
+        "tradeoffs": {
+          "zh": "所有直连的客户端都要配置同一个密钥。",
+          "en": "Every direct client needs the same key."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": 512,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "env",
+        "env": "VLLM_API_KEY"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": true,
+      "legacy": {
+        "aliases": [],
+        "domId": "vllmApiKey",
+        "codec": "direct",
+        "field": "apiKey"
+      },
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "reason": {
+          "zh": "未验证：经环境变量传递，尚未确认运行时读取它",
+          "en": "Unverified: passed as an environment variable the runtime is not yet confirmed to read"
+        }
+      },
+      "flag": null,
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.enforceEager",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 10,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "禁用 CUDA Graph（逐步执行）",
+        "en": "Disable CUDA graphs (eager mode)"
+      },
+      "summary": {
+        "zh": "不捕获 CUDA Graph，按逐步执行的方式运行。",
+        "en": "Skips CUDA graph capture and runs step by step."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --enforce-eager。启动更快、更省显存，但生成速度下降。",
+          "en": "Maps to --enforce-eager. It starts faster and uses less memory, but generates more slowly."
+        },
+        "whenToChange": {
+          "zh": "在捕获 CUDA Graph 的阶段崩溃或卡住时，用来排查和绕过。",
+          "en": "To work around crashes or hangs while CUDA graphs are being captured."
+        },
+        "tradeoffs": {
+          "zh": "解码速度会明显变慢。",
+          "en": "Decoding becomes noticeably slower."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--enforce-eager"
+      },
+      "flags": null,
+      "vramEffect": "activations",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--enforce-eager",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--enforce-eager",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.asyncScheduling",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 20,
+      "type": "bool",
+      "unit": null,
+      "label": {
+        "zh": "异步调度",
+        "en": "Async scheduling"
+      },
+      "summary": {
+        "zh": "让 CPU 调度与 GPU 计算同时进行，减少每一步的额外开销。",
+        "en": "Overlaps CPU scheduling with GPU work to cut the overhead of each step."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --async-scheduling。",
+          "en": "Maps to --async-scheduling."
+        },
+        "whenToChange": {
+          "zh": "已验证的方案需要它，或 CPU 调度成为瓶颈时。",
+          "en": "When a validated recipe needs it, or CPU scheduling is the bottleneck."
+        },
+        "tradeoffs": {
+          "zh": "这是较新的功能，与部分特性同时使用时可能不稳定。",
+          "en": "A newer feature that can be unstable together with some other features."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": false,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-bool",
+        "flag": "--async-scheduling"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--async-scheduling",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--async-scheduling",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.attentionBackend",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 30,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "注意力后端",
+        "en": "Attention backend"
+      },
+      "summary": {
+        "zh": "选择注意力计算使用的实现。",
+        "en": "Chooses the implementation used for attention."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --attention-backend。不设置时 vLLM 按显卡和模型自动选择。",
+          "en": "Maps to --attention-backend. Unset, vLLM picks one for the GPU and model."
+        },
+        "whenToChange": {
+          "zh": "自动选择的后端在当前显卡或模型上崩溃或输出异常时。",
+          "en": "When the automatically chosen backend crashes or misbehaves on this GPU or model."
+        },
+        "tradeoffs": {
+          "zh": "不同后端的速度和支持的功能不同，选错可能无法启动。",
+          "en": "Backends differ in speed and supported features; a wrong one may not start."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "FLASH_ATTN"
+        },
+        {
+          "value": "FLASHINFER"
+        },
+        {
+          "value": "TRITON_ATTN"
+        },
+        {
+          "value": "FLEX_ATTENTION"
+        }
+      ],
+      "choicesFrom": "introspect:--attention-backend",
+      "pattern": "^[A-Za-z0-9_]{1,64}$",
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--attention-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--attention-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--attention-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.moeBackend",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 40,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "MoE 计算后端",
+        "en": "MoE kernel backend"
+      },
+      "summary": {
+        "zh": "MoE 模型专家层使用的计算实现。",
+        "en": "The kernel implementation for a MoE model's expert layers."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --moe-backend。",
+          "en": "Maps to --moe-backend."
+        },
+        "whenToChange": {
+          "zh": "量化的 MoE 模型输出异常或速度不理想时，按已验证方案选择。",
+          "en": "When a quantized MoE model gives bad output or runs slowly, pick the backend a validated recipe names."
+        },
+        "tradeoffs": {
+          "zh": "部分后端只支持特定显卡架构，例如 flashinfer_b12x 需要 SM12x。",
+          "en": "Some backends need a specific GPU architecture; flashinfer_b12x, for example, needs SM12x."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "auto"
+        },
+        {
+          "value": "cutlass"
+        },
+        {
+          "value": "emulation"
+        },
+        {
+          "value": "flashinfer_b12x"
+        },
+        {
+          "value": "flashinfer_cutedsl"
+        },
+        {
+          "value": "flashinfer_cutlass"
+        },
+        {
+          "value": "flashinfer_trtllm"
+        },
+        {
+          "value": "marlin"
+        },
+        {
+          "value": "triton"
+        },
+        {
+          "value": "triton_unfused"
+        }
+      ],
+      "choicesFrom": "introspect:--moe-backend",
+      "pattern": null,
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--moe-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--moe-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--moe-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.linearBackend",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 50,
+      "type": "string",
+      "unit": null,
+      "label": {
+        "zh": "线性层后端",
+        "en": "Linear layer backend"
+      },
+      "summary": {
+        "zh": "量化线性层使用的计算实现。",
+        "en": "The kernel implementation for quantized linear layers."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --linear-backend。",
+          "en": "Maps to --linear-backend."
+        },
+        "whenToChange": {
+          "zh": "已验证的方案指定了线性层后端时。",
+          "en": "When a validated recipe names a linear backend."
+        },
+        "tradeoffs": {
+          "zh": "不匹配的后端可能无法加载权重或变慢。",
+          "en": "A mismatched backend may fail to load the weights or run slower."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+      "maxLength": 64,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--linear-backend"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--linear-backend",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--linear-backend",
+      "platformDefaultValue": null
+    },
+    {
+      "id": "vllm.safetensorsLoadStrategy",
+      "group": "runtime-expert",
+      "level": "expert",
+      "order": 60,
+      "type": "enum",
+      "unit": null,
+      "label": {
+        "zh": "safetensors 加载策略",
+        "en": "Safetensors load strategy"
+      },
+      "summary": {
+        "zh": "权重文件的读取方式；prefetch 会提前把文件读入内存。",
+        "en": "How weight files are read; prefetch reads the files ahead into memory."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --safetensors-load-strategy。",
+          "en": "Maps to --safetensors-load-strategy."
+        },
+        "whenToChange": {
+          "zh": "模型放在较慢的磁盘或网络存储上、加载很慢时可试 prefetch。",
+          "en": "Try prefetch when the model sits on slow or network storage and loading takes long."
+        },
+        "tradeoffs": {
+          "zh": "prefetch 加载时会占用更多系统内存。",
+          "en": "prefetch uses more system RAM while loading."
+        }
+      },
+      "docs": "https://docs.vllm.ai/en/latest/configuration/engine_args.html",
+      "range": null,
+      "choices": [
+        {
+          "value": "lazy"
+        },
+        {
+          "value": "eager"
+        },
+        {
+          "value": "prefetch"
+        }
+      ],
+      "choicesFrom": null,
+      "pattern": "^[a-z_]{1,32}$",
+      "maxLength": null,
+      "engineDefault": null,
+      "platformDefault": null,
+      "emit": {
+        "omitWhen": [
+          null
+        ],
+        "transform": null,
+        "via": null,
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--safetensors-load-strategy"
+      },
+      "flags": null,
+      "vramEffect": "none",
+      "rules": [],
+      "managed": false,
+      "secret": false,
+      "legacy": null,
+      "appliesWhen": null,
+      "fromModel": false,
+      "requiresFeature": null,
+      "item": null,
+      "availability": {
+        "state": "unverified",
+        "flag": "--safetensors-load-strategy",
+        "reason": {
+          "zh": "未验证：尚未检测这个运行时支持的参数",
+          "en": "Unverified: this runtime's flags have not been introspected"
+        }
+      },
+      "flag": "--safetensors-load-strategy",
+      "platformDefaultValue": null
+    }
+  ],
+  "notApplicable": [
+    "llamacpp.batchSize",
+    "llamacpp.cacheReuse",
+    "llamacpp.cacheTypeK",
+    "llamacpp.cacheTypeV",
+    "llamacpp.chatTemplateName",
+    "llamacpp.cpuMoe",
+    "llamacpp.fitCtx",
+    "llamacpp.fitTargetMb",
+    "llamacpp.flashAttention",
+    "llamacpp.gpuLayers",
+    "llamacpp.kvUnified",
+    "llamacpp.mainGpu",
+    "llamacpp.mmproj",
+    "llamacpp.mmprojDevice",
+    "llamacpp.nCpuMoe",
+    "llamacpp.noMmap",
+    "llamacpp.noRepack",
+    "llamacpp.overrideTensor",
+    "llamacpp.planningUtilization",
+    "llamacpp.reasoning",
+    "llamacpp.reasoningBudget",
+    "llamacpp.reasoningEffort",
+    "llamacpp.reasoningFormat",
+    "llamacpp.splitMode",
+    "llamacpp.swaFull",
+    "llamacpp.tensorSplit",
+    "llamacpp.textOnly",
+    "llamacpp.threads",
+    "llamacpp.threadsBatch",
+    "llamacpp.ubatchSize",
+    "rope.freqBase",
+    "rope.scale",
+    "rope.scaling",
+    "rope.yarnOrigCtx",
+    "sglang.attentionBackend",
+    "sglang.chunkedPrefillSize",
+    "sglang.cudaGraphMaxBs",
+    "sglang.disablePrefillCudaGraph",
+    "sglang.draftModelQuantization",
+    "sglang.dsparkBlockSize",
+    "sglang.enableMetrics",
+    "sglang.epSize",
+    "sglang.fp4GemmBackend",
+    "sglang.hicache.enable",
+    "sglang.hicache.ratio",
+    "sglang.linearAttnDecodeBackend",
+    "sglang.linearAttnPrefillBackend",
+    "sglang.mambaRadixCacheStrategy",
+    "sglang.mambaSchedulerStrategy",
+    "sglang.mambaSsmDtype",
+    "sglang.mambaTrackInterval",
+    "sglang.maxMambaCacheSize",
+    "sglang.maxPrefillTokens",
+    "sglang.maxRunningRequests",
+    "sglang.maxTotalTokens",
+    "sglang.memFractionStatic",
+    "sglang.mmFeatureTransport",
+    "sglang.pageSize",
+    "sglang.pleOffloadEmbedding",
+    "sglang.sleepOnIdle",
+    "sglang.speculativeEagleTopk",
+    "sglang.speculativeNumSteps"
+  ],
+  "legacyIgnored": [],
+  "recipes": [
+    {
+      "id": "qwen38-vllm-mtp3",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.8 · vLLM · FP8 + MTP-3",
+        "en": "Qwen3.8 · vLLM · FP8 + MTP-3"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "eligible": true,
+      "score": 55,
+      "reasons": [
+        "family"
+      ],
+      "locks": [
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_coder",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        }
+      ],
+      "values": {},
+      "profile": {
+        "id": "qwen38-vllm-mtp3-quality",
+        "name": "Qwen3.8 vLLM 稳定加速",
+        "description": "Qwen3.8 FP8 质量优先默认：专用 vLLM、MTP-3、前缀缓存、自动 KV，兼顾单请求与 4 路吞吐。",
+        "managerId": "vllm",
+        "order": 3,
+        "requirements": {
+          "minGpuCount": 1,
+          "minSingleGpuMemoryGb": 48
+        },
+        "values": {
+          "contextLength": 262144,
+          "concurrency": 4,
+          "vllm.gpuMemoryUtilization": 0.8,
+          "kvCacheDtype": "auto",
+          "prefixCaching": true,
+          "speculative.method": "mtp",
+          "speculative.numTokens": 3,
+          "reasoningParser": "qwen3",
+          "toolCallParser": "qwen3_coder",
+          "clientPreset": "openwebui",
+          "vllm.languageModelOnly": true
+        },
+        "legacy": {
+          "gpuDeviceIds": [
+            "0"
+          ],
+          "multiGpuMode": "single"
+        }
+      }
+    },
+    {
+      "id": "qwen38-dspark-vllm",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.8 · vLLM · DSpark（本机不可用）",
+        "en": "Qwen3.8 · vLLM · DSpark (unavailable on this host)"
+      },
+      "status": "blocked",
+      "source": "bundled",
+      "eligible": false,
+      "score": 0,
+      "reasons": [
+        "applies_when_false"
+      ],
+      "locks": [],
+      "values": {},
+      "profile": null
+    },
+    {
+      "id": "qwen38-vllm-nvfp4",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.8 · vLLM · NVFP4 容量档",
+        "en": "Qwen3.8 · vLLM · NVFP4 capacity"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "eligible": false,
+      "score": 75,
+      "reasons": [
+        "family",
+        "quant",
+        "applies_when_false"
+      ],
+      "locks": [
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_coder",
+          "reason": {
+            "zh": "该模型已验证的解析器",
+            "en": "Parser validated for this model"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        }
+      ],
+      "values": {
+        "vllm.safetensorsLoadStrategy": "prefetch"
+      },
+      "profile": {
+        "id": "qwen38-nvfp4-capacity",
+        "name": "Qwen3.8 NVFP4 容量档",
+        "description": "使用 NVFP4 权重与原生 MTP-3，显存更省；质量优先场景仍建议 FP8 稳定档。",
+        "managerId": "vllm",
+        "order": 5,
+        "requirements": {
+          "minGpuCount": 1,
+          "minSingleGpuMemoryGb": 32
+        },
+        "values": {
+          "contextLength": 262144,
+          "concurrency": 4,
+          "vllm.gpuMemoryUtilization": 0.8,
+          "kvCacheDtype": "auto",
+          "speculative.method": "mtp",
+          "speculative.numTokens": 3,
+          "reasoningParser": "qwen3",
+          "toolCallParser": "qwen3_coder",
+          "clientPreset": "openwebui",
+          "vllm.languageModelOnly": true
+        },
+        "legacy": {
+          "gpuDeviceIds": [
+            "0"
+          ],
+          "multiGpuMode": "single"
+        }
+      }
+    },
+    {
+      "id": "qwen36-dense-nvfp4-vllm",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.6 Dense · vLLM · NVFP4",
+        "en": "Qwen3.6 Dense · vLLM · NVFP4"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "eligible": false,
+      "score": 25,
+      "reasons": [
+        "family_mismatch",
+        "quant",
+        "applies_when_false"
+      ],
+      "locks": [
+        {
+          "param": "trustRemoteCode",
+          "value": true,
+          "reason": {
+            "zh": "该架构需要仓库代码",
+            "en": "This architecture needs repository code"
+          }
+        },
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+            "en": "Parser from the NVIDIA Qwen3.6 guidance"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_xml",
+          "reason": {
+            "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+            "en": "Parser from the NVIDIA Qwen3.6 guidance"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        }
+      ],
+      "values": {
+        "vllm.attentionBackend": "TRITON_ATTN",
+        "vllm.asyncScheduling": true,
+        "vllm.maxNumBatchedTokens": {
+          "expr": {
+            "max": [
+              8192,
+              {
+                "coalesce": [
+                  {
+                    "user": "vllm.maxNumBatchedTokens"
+                  },
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "profile": null
+    },
+    {
+      "id": "qwen36-nvfp4-vllm",
+      "kind": "model",
+      "label": {
+        "zh": "Qwen3.6 MoE · vLLM · NVFP4",
+        "en": "Qwen3.6 MoE · vLLM · NVFP4"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "eligible": false,
+      "score": 25,
+      "reasons": [
+        "family_mismatch",
+        "quant",
+        "applies_when_false"
+      ],
+      "locks": [
+        {
+          "param": "trustRemoteCode",
+          "value": true,
+          "reason": {
+            "zh": "该架构需要仓库代码",
+            "en": "This architecture needs repository code"
+          }
+        },
+        {
+          "param": "reasoningParser",
+          "value": "qwen3",
+          "reason": {
+            "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+            "en": "Parser from the NVIDIA Qwen3.6 guidance"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "qwen3_xml",
+          "reason": {
+            "zh": "Qwen3.6 NVIDIA 指南中的解析器",
+            "en": "Parser from the NVIDIA Qwen3.6 guidance"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        }
+      ],
+      "values": {
+        "vllm.moeBackend": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "in": [
+                      {
+                        "env": "VLLM_QWEN_MOE_BACKEND"
+                      },
+                      [
+                        "auto",
+                        "cutlass",
+                        "emulation",
+                        "flashinfer_b12x",
+                        "flashinfer_cutedsl",
+                        "flashinfer_cutlass",
+                        "flashinfer_trtllm",
+                        "marlin",
+                        "triton",
+                        "triton_unfused"
+                      ]
+                    ]
+                  },
+                  {
+                    "env": "VLLM_QWEN_MOE_BACKEND"
+                  },
+                  null
+                ]
+              },
+              {
+                "if": [
+                  {
+                    "fact": "host.anySm12x"
+                  },
+                  "flashinfer_b12x",
+                  "marlin"
+                ]
+              }
+            ]
+          }
+        },
+        "dtype": {
+          "expr": {
+            "if": [
+              {
+                "eq": [
+                  {
+                    "param": "vllm.moeBackend"
+                  },
+                  "flashinfer_b12x"
+                ]
+              },
+              "bfloat16",
+              null
+            ]
+          }
+        },
+        "vllm.attentionBackend": "flashinfer",
+        "generationConfig": "vllm",
+        "vllm.asyncScheduling": true,
+        "vllm.maxNumBatchedTokens": {
+          "expr": {
+            "max": [
+              8192,
+              {
+                "coalesce": [
+                  {
+                    "user": "vllm.maxNumBatchedTokens"
+                  },
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "profile": null
+    },
+    {
+      "id": "diffusiongemma-windows",
+      "kind": "model",
+      "label": {
+        "zh": "DiffusionGemma · vLLM · Gemma 专用运行时",
+        "en": "DiffusionGemma · vLLM · Gemma runtime"
+      },
+      "status": "experimental",
+      "source": "bundled",
+      "eligible": false,
+      "score": 0,
+      "reasons": [
+        "family_mismatch",
+        "applies_when_false"
+      ],
+      "locks": [
+        {
+          "param": "trustRemoteCode",
+          "value": true,
+          "reason": {
+            "zh": "该架构需要仓库代码",
+            "en": "This architecture needs repository code"
+          }
+        },
+        {
+          "param": "reasoningParser",
+          "value": "gemma4",
+          "reason": {
+            "zh": "Gemma4 解析器",
+            "en": "Gemma4 parser"
+          }
+        },
+        {
+          "param": "toolCallParser",
+          "value": "gemma4",
+          "reason": {
+            "zh": "Gemma4 解析器",
+            "en": "Gemma4 parser"
+          }
+        },
+        {
+          "param": "autoToolChoice",
+          "value": true,
+          "reason": {
+            "zh": "随解析器开启",
+            "en": "Enabled with the parser"
+          }
+        },
+        {
+          "param": "prefixCaching",
+          "value": false,
+          "reason": {
+            "zh": "DiffusionGemma 不支持前缀缓存",
+            "en": "DiffusionGemma does not support prefix caching"
+          }
+        }
+      ],
+      "values": {
+        "vllm.attentionBackend": "TRITON_ATTN",
+        "vllm.enforceEager": {
+          "expr": {
+            "eq": [
+              {
+                "coalesce": [
+                  {
+                    "if": [
+                      {
+                        "in": [
+                          {
+                            "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                          },
+                          [
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                            "v2"
+                          ]
+                        ]
+                      },
+                      "1",
+                      null
+                    ]
+                  },
+                  {
+                    "if": [
+                      {
+                        "in": [
+                          {
+                            "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                          },
+                          [
+                            "0",
+                            "false",
+                            "no",
+                            "off",
+                            "v1"
+                          ]
+                        ]
+                      },
+                      "0",
+                      null
+                    ]
+                  },
+                  {
+                    "if": [
+                      {
+                        "eq": [
+                          {
+                            "fact": "host.platform"
+                          },
+                          "win32"
+                        ]
+                      },
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "0"
+            ]
+          }
+        },
+        "vllm.overrideGenerationConfig": {
+          "expr": {
+            "json": {
+              "max_new_tokens": {
+                "coalesce": [
+                  {
+                    "if": [
+                      {
+                        "gte": [
+                          {
+                            "number": {
+                              "env": "VLLM_GEMMA_MAX_NEW_TOKENS"
+                            }
+                          },
+                          128
+                        ]
+                      },
+                      {
+                        "floorDiv": [
+                          {
+                            "number": {
+                              "env": "VLLM_GEMMA_MAX_NEW_TOKENS"
+                            }
+                          },
+                          1
+                        ]
+                      },
+                      null
+                    ]
+                  },
+                  4096
+                ]
+              }
+            }
+          }
+        }
+      },
+      "profile": null
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "scenario-blackwell-96gb-256k",
+      "kind": "scenario",
+      "label": {
+        "zh": "96GB 单卡 256K",
+        "en": "96 GB single GPU 256K"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "blackwell-96gb-256k",
+        "name": "96GB 单卡 256K",
+        "description": "RTX PRO 6000 / 80GB+ 单卡优先方案：单路长上下文，保守显存占用，适合本地 Claude。",
+        "managerId": "vllm",
+        "order": 6,
+        "requirements": {
+          "minGpuCount": 1,
+          "minSingleGpuMemoryGb": 80
+        },
+        "values": {
+          "contextLength": 262144,
+          "concurrency": 1,
+          "vllm.gpuMemoryUtilization": 0.9,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "claude-cowork",
+          "vllm.languageModelOnly": true
+        },
+        "legacy": {
+          "gpuDeviceIds": [
+            "0"
+          ],
+          "multiGpuMode": "single"
+        }
+      }
+    },
+    {
+      "id": "scenario-claude-long-context-64k",
+      "kind": "scenario",
+      "label": {
+        "zh": "Claude 长上下文 64K",
+        "en": "Claude long context 64K"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "claude-long-context-64k",
+        "name": "Claude 长上下文 64K",
+        "description": "本地 Claude 单人使用，启动更稳，适合日常编码和工具调用。",
+        "managerId": "vllm",
+        "order": 7,
+        "values": {
+          "contextLength": 65536,
+          "concurrency": 2,
+          "vllm.gpuMemoryUtilization": 0.9,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "claude-cowork"
+        }
+      }
+    },
+    {
+      "id": "scenario-claude-maximum-context",
+      "kind": "scenario",
+      "label": {
+        "zh": "Claude 极限上下文",
+        "en": "Claude maximum context"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "claude-maximum-context",
+        "name": "Claude 极限上下文",
+        "description": "冲 128K/192K/256K 时使用，牺牲并发换上下文。",
+        "managerId": "vllm",
+        "order": 8,
+        "values": {
+          "contextLength": 262144,
+          "concurrency": 1,
+          "vllm.gpuMemoryUtilization": 0.94,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "claude-cowork",
+          "vllm.languageModelOnly": true
+        }
+      }
+    },
+    {
+      "id": "scenario-low-vram-safe",
+      "kind": "scenario",
+      "label": {
+        "zh": "低显存保守模式",
+        "en": "Low-VRAM safe mode"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "low-vram-safe",
+        "name": "低显存保守模式",
+        "description": "启动失败或显存吃紧时先用这个排查。",
+        "managerId": "vllm",
+        "order": 10,
+        "requirements": {
+          "minGpuCount": 1
+        },
+        "values": {
+          "contextLength": 16384,
+          "concurrency": 1,
+          "vllm.gpuMemoryUtilization": 0.82,
+          "kvCacheDtype": "fp8",
+          "speculative.method": "off",
+          "clientPreset": "generic",
+          "vllm.languageModelOnly": true
+        }
+      }
+    },
+    {
+      "id": "scenario-openwebui-chat",
+      "kind": "scenario",
+      "label": {
+        "zh": "OpenWebUI 日常聊天",
+        "en": "OpenWebUI daily chat"
+      },
+      "status": "verified",
+      "source": "bundled",
+      "locks": [],
+      "values": {},
+      "profile": {
+        "id": "openwebui-chat",
+        "name": "OpenWebUI 日常聊天",
+        "description": "偏稳定和吞吐，适合 OpenWebUI 直接聊天。",
+        "managerId": "vllm",
+        "order": 9,
+        "values": {
+          "contextLength": 32768,
+          "concurrency": 4,
+          "vllm.gpuMemoryUtilization": 0.9,
+          "speculative.method": "off",
+          "reasoningParser": "auto",
+          "toolCallParser": "auto",
+          "clientPreset": "openwebui"
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "managerId": "vllm",
+  "generatedAt": "2026-10-14T00:00:00.000Z"
+}

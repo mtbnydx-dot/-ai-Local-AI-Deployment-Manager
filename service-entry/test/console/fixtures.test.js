@@ -21,6 +21,13 @@ const GUARDS = {
   status: schemas.StatusGuard,
   fleet: schemas.FleetGuard,
   events: arr(schemas.EventEnvelopeGuard, { dropInvalid: false }),
+  // CON-10 SchemaForm fixtures: real engine schema payloads and hand-built launch plans.
+  "schema-vllm": schemas.SchemaCatalogGuard,
+  "schema-sglang": schemas.SchemaCatalogGuard,
+  "schema-llamacpp": schemas.SchemaCatalogGuard,
+  "plan-vllm": schemas.LaunchPlanGuard,
+  "plan-sglang": schemas.LaunchPlanGuard,
+  "plan-llamacpp": schemas.LaunchPlanGuard,
 };
 
 function read(name) {
@@ -69,7 +76,7 @@ test("the fleet fixture has no routable instance, so the derived readiness reads
 test("fixtures hold no user names, machine names or absolute paths", () => {
   for (const file of fs.readdirSync(FIXTURE_DIR).filter((item) => item.endsWith(".json"))) {
     const text = fs.readFileSync(path.join(FIXTURE_DIR, file), "utf8");
-    assert.equal(/[A-Za-z]:\\|\/Users\/|\/home\/|@[\w-]+\.\w{2,}/.test(text), false, `${file} names a path or an address`);
+    assert.equal(/[A-Za-z]:\\|\/Users\/|\/home\/|@[\w-]+\.[A-Za-z]{2,}/.test(text), false, `${file} names a path or an address`);
   }
 });
 
