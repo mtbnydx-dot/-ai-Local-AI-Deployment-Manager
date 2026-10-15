@@ -2,10 +2,11 @@
 "use strict";
 
 // The `platform` CLI (docs/overhaul/06-ops.md §6). This file is the framework
-// (argument parsing, language, exit codes, the command table) plus the read
-// commands: doctor (report only), status, logs, version, open, config, deps
-// and secrets. Lifecycle, access and deploy commands register in COMMANDS from
-// later packages; until then they answer "not available yet" with exit 1.
+// (argument parsing, language, exit codes, the command table), the read
+// commands (doctor (report only), status, logs, version, open, config, deps
+// and secrets) and the lifecycle commands (start, stop, restart, supervise,
+// supervisor). Access and deploy commands register in COMMANDS from later
+// packages; until then they answer "not available yet" with exit 1.
 //
 // Only node built-ins are required at load time. Every platform module is
 // required inside the command that needs it, so `doctor` still starts on an
@@ -128,6 +129,40 @@ const S = {
   "secrets.exportExisting": { [ZH]: "{file} 已含有明文密钥，未覆盖。", [EN]: "{file} already holds plaintext secrets and was not overwritten." },
   "secrets.exported": { [ZH]: "已写入 {count} 个密钥到 {file}（明文，回滚完成后请删除）。", [EN]: "Wrote {count} secret(s) to {file} (plaintext; remove it once the rollback is over)." },
   "secrets.exportEmpty": { [ZH]: "{namespace} 里没有密钥，没有写入文件。", [EN]: "{namespace} holds no secrets; no file was written." },
+  "lifecycle.noSupervisor": { [ZH]: "监督进程没有运行。先运行：platform start", [EN]: "The supervisor is not running. Run: platform start" },
+  "start.preflight": { [ZH]: "启动前检查未通过：{detail}。下一步：{next}", [EN]: "Preflight blocked: {detail}. Next step: {next}" },
+  "start.noSqlite": { [ZH]: "此 Node.js 没有内置 node:sqlite", [EN]: "This Node.js has no built-in node:sqlite" },
+  "start.depsMissing": { [ZH]: "{package} 的依赖尚未安装", [EN]: "Dependencies of {package} are not installed" },
+  "start.mcpMissing": { [ZH]: "MCP 尚未构建", [EN]: "The MCP server is not built" },
+  "start.spawning": { [ZH]: "正在启动监督进程…", [EN]: "Starting the supervisor…" },
+  "start.supervisorTimeout": { [ZH]: "监督进程在 {seconds} 秒内没有就绪，请查看 logs/platform/supervisor.err.log", [EN]: "The supervisor was not ready within {seconds} s; see logs/platform/supervisor.err.log" },
+  "start.timeout": { [ZH]: "启动在 {seconds} 秒内未完成（仍在后台继续）。", [EN]: "Start did not finish within {seconds} s (it continues in the background)." },
+  "start.summary": { [ZH]: "已选组件：", [EN]: "Selected components:" },
+  "start.overridesNeedProfile": { [ZH]: "--lan / --public 只对 core、full 生效；指定组件时已忽略（用 --save 写入配置）。", [EN]: "--lan / --public apply to core and full only; ignored for named components (use --save to persist)." },
+  "stop.modelsListed": { [ZH]: "将停止的模型容器：{list}", [EN]: "Model containers to stop: {list}" },
+  "stop.noModels": { [ZH]: "没有正在运行的模型容器。", [EN]: "No model containers are running." },
+  "stop.modelsUnknown": { [ZH]: "无法读取模型容器列表（管理器未运行？）。", [EN]: "Cannot list model containers (managers not running?)." },
+  "stop.modelsKeep": { [ZH]: "模型容器会继续运行：{list}（加 --models 一并停止）", [EN]: "Model containers keep running: {list} (add --models to stop them too)" },
+  "stop.modelsNeedYes": { [ZH]: "--models 会停止模型容器；非交互终端需要 --yes 确认，已拒绝。", [EN]: "--models stops model containers; without a terminal it needs --yes. Refused." },
+  "stop.modelsConfirm": { [ZH]: "输入 stop 确认停止以上模型容器：", [EN]: "Type stop to stop the model containers above: " },
+  "stop.aborted": { [ZH]: "已取消。", [EN]: "Cancelled." },
+  "stop.modelStopped": { [ZH]: "已停止模型容器 {id}", [EN]: "Stopped model container {id}" },
+  "stop.modelFailed": { [ZH]: "无法停止模型容器 {id}：{detail}", [EN]: "Could not stop model container {id}: {detail}" },
+  "stop.stopped": { [ZH]: "已停止 {id}", [EN]: "Stopped {id}" },
+  "stop.done": { [ZH]: "完成。", [EN]: "Done." },
+  "stop.supervisorStill": { [ZH]: "监督进程没有按时退出。", [EN]: "The supervisor did not exit in time." },
+  "restart.busy": { [ZH]: "{id} 正忙：", [EN]: "{id} is busy:" },
+  "restart.needForce": { [ZH]: "非交互终端下已拒绝。可用 --when-idle 排队，或 --force 强制重启。", [EN]: "Refused without a terminal. Use --when-idle to queue it, or --force." },
+  "restart.confirm": { [ZH]: "仍要重启 {id} 吗？输入 yes 确认：", [EN]: "Restart {id} anyway? Type yes: " },
+  "restart.queued": { [ZH]: "{id} 已排队，空闲时重启：", [EN]: "{id} is queued and restarts when idle:" },
+  "restart.done": { [ZH]: "已重启 {id}", [EN]: "Restarted {id}" },
+  "restart.nothing": { [ZH]: "没有需要重启的组件。", [EN]: "No components to restart." },
+  "supervise.already": { [ZH]: "监督进程已在运行。", [EN]: "The supervisor is already running." },
+  "supervise.running": { [ZH]: "监督进程已启动（profile：{profile}）。", [EN]: "Supervisor running (profile: {profile})." },
+  "supervisor.running": { [ZH]: "监督进程运行中 · 进程 {pid} · profile {profile} · 启动于 {since}", [EN]: "Supervisor running · pid {pid} · profile {profile} · since {since}" },
+  "supervisor.stopped": { [ZH]: "监督进程已退出（组件继续运行）。", [EN]: "The supervisor exited (components keep running)." },
+  "supervisor.reexeced": { [ZH]: "监督进程已重新执行 · 新进程 {pid}", [EN]: "The supervisor re-executed · new pid {pid}" },
+  "supervisor.reexecFailed": { [ZH]: "重新执行没有完成。", [EN]: "The re-exec did not complete." },
   "doctor.fixLater": { [ZH]: "doctor --fix 将随修复执行器一起提供。", [EN]: "doctor --fix arrives with the fix runner." },
   "doctor.summary": { [ZH]: "通过 {ok} · 警告 {warn} · 失败 {fail} · 信息 {info} · 跳过 {skip}", [EN]: "ok {ok} · warn {warn} · fail {fail} · info {info} · skipped {skip}" },
   "doctor.unknownGroup": { [ZH]: "未知的检查组：{group}（可选 env、runtime、storage）", [EN]: "Unknown check group: {group} (env, runtime, storage)" },
@@ -241,6 +276,7 @@ function createContext(overrides = {}) {
     return vault;
   };
   let control = null;
+  ctx.refreshControl = () => { control = null; };
   ctx.control = () => {
     if (ctx.controlClient) return ctx.controlClient;
     if (!control) {
@@ -260,7 +296,7 @@ function loadConfig(ctx, { secrets } = {}) {
 
 function loadRegistry(ctx, config) {
   const components = require("../manager-core/platform/components");
-  const registry = components.loadComponentRegistry({ aiRoot: ctx.aiRoot, config, now: ctx.now() });
+  const registry = components.loadComponentRegistry({ aiRoot: ctx.aiRoot, config, now: ctx.now(), ...(ctx.registryFile ? { bundledFile: ctx.registryFile } : {}) });
   return { registry, components };
 }
 
@@ -1044,6 +1080,491 @@ async function cmdDoctor(ctx, { flags }) {
 }
 
 // ---------------------------------------------------------------------------
+// Lifecycle: start, stop, restart, supervise, supervisor (06 §5.1, §6.2)
+
+const PROFILE_WORDS = new Set(["core", "full", "all"]);
+const PASS_STATES = new Set(["ready", "external", "disabled", "not-installed"]);
+const SETTLED_LINE = /^(.+): (ready|failed|blocked|backoff|not-installed|external|stopped|unhealthy|unknown|disabled)$/;
+const SUPERVISOR_WAIT_MS = 10000;
+// Lifecycle calls queue behind the supervisor's own work (spawning, probing).
+const CONTROL_TIMEOUT_MS = 15000;
+
+function sleepFor(ctx, ms) {
+  return ctx.sleep ? ctx.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** A control request; an unreachable supervisor becomes exit 4 with the way to start one. */
+async function controlCall(ctx, method, route, body, timeoutMs) {
+  try {
+    return await ctx.control().request(method, route, { ...(body !== undefined ? { body } : {}), timeoutMs: timeoutMs || CONTROL_TIMEOUT_MS });
+  } catch (error) {
+    if (error?.code === "supervisor_unavailable") throw new CliError(EXIT.SUPERVISOR_UNAVAILABLE, tr(ctx, "lifecycle.noSupervisor"));
+    throw error;
+  }
+}
+
+function controlProblem(ctx, result) {
+  return new CliError(EXIT.FAILURE, tr(ctx, "error.failed", { detail: result.json?.error?.message || result.json?.error?.code || `HTTP ${result.status}` }));
+}
+
+async function supervisorUp(ctx) {
+  ctx.refreshControl();
+  try { return await ctx.control().available(); } catch { return false; }
+}
+
+async function waitForSupervisor(ctx, wanted, limitMs) {
+  const deadline = ctx.now() + limitMs;
+  for (;;) {
+    if ((await supervisorUp(ctx)) === wanted) return true;
+    if (ctx.now() >= deadline) return false;
+    await sleepFor(ctx, 200);
+  }
+}
+
+function defaultSpawnSupervisor(ctx, argv) {
+  const { spawn } = require("node:child_process");
+  const dir = path.join(ctx.aiRoot, "logs", "platform");
+  fs.mkdirSync(dir, { recursive: true });
+  const outFd = fs.openSync(path.join(dir, "supervisor.out.log"), "a");
+  const errFd = fs.openSync(path.join(dir, "supervisor.err.log"), "a");
+  try {
+    const child = spawn(process.execPath, [__filename, ...argv], {
+      cwd: ctx.aiRoot,
+      env: { ...ctx.env, AI_ROOT: ctx.aiRoot },
+      detached: true,
+      windowsHide: true,
+      stdio: ["ignore", outFd, errFd],
+    });
+    child.unref();
+    return child.pid;
+  } finally {
+    fs.closeSync(outFd);
+    fs.closeSync(errFd);
+  }
+}
+
+function spawnSupervisor(ctx, argv) {
+  return ctx.spawnSupervisor ? ctx.spawnSupervisor(argv) : defaultSpawnSupervisor(ctx, argv);
+}
+
+/** Resolve the positional targets: nothing (the fallback), a profile word, or component ids. */
+function resolveTargets(ctx, registry, components, args, fallback) {
+  const words = args.length ? args : [fallback];
+  const profiles = words.filter((word) => PROFILE_WORDS.has(word));
+  if (profiles.length) {
+    if (words.length > 1) throw usageError(ctx, words.join(" "));
+    return { kind: "profile", scope: profiles[0], profile: profiles[0] === "all" ? "full" : profiles[0] };
+  }
+  const ids = [];
+  for (const word of words) {
+    const spec = findSpec(registry, word);
+    if (!spec) throw new CliError(EXIT.USAGE, tr(ctx, "logs.unknownComponent", { id: word, known: registry.components.map((item) => item.id).join(", ") }));
+    if (!ids.includes(spec.id)) ids.push(spec.id);
+  }
+  return { kind: "ids", ids: components.startOrder(registry, ids) };
+}
+
+function selectedIds(components, registry, target) {
+  return target.kind === "profile"
+    ? components.startOrder(registry, components.selectProfile(registry, target.profile))
+    : target.ids;
+}
+
+/** Fast preflight (06 §6.2 start, step 1): node, sqlite, config, deps and the MCP build. */
+function preflight(ctx, { config, registry, ids }) {
+  const semver = require("../manager-core/platform/semver");
+  const range = registry.requirements?.node;
+  if (range && !semver.satisfies(process.versions.node, range)) {
+    return { detail: tr(ctx, "error.nodeRange", { range, current: process.versions.node }), next: "docs/getting-started.md" };
+  }
+  try { require("node:sqlite"); } catch {
+    return { detail: tr(ctx, "start.noSqlite"), next: "docs/getting-started.md" };
+  }
+  if (config.errors?.length) {
+    const first = config.errors[0];
+    return { detail: `${first.field || "config"}: ${first.code || first.message}`, next: "platform config validate" };
+  }
+  const bad = registry.errors.find((error) => ids.includes(error.id));
+  if (bad) return { detail: `${bad.id}: ${bad.code}`, next: "platform doctor" };
+  const missing = dependencyRows(ctx, registry).find((row) => row.live && row.status === "missing" && row.components.some((id) => ids.includes(id)));
+  if (missing) return { detail: tr(ctx, "start.depsMissing", { package: missing.package === "." ? "(root)" : missing.package }), next: "install-all.cmd" };
+  if (ids.includes("platform-mcp")) {
+    const mcp = mcpBuildRow(ctx, registry);
+    if (mcp && mcp.status === "missing") return { detail: tr(ctx, "start.mcpMissing"), next: "platform doctor --fix=env.mcp-dist" };
+  }
+  return null;
+}
+
+function lanAddress(ctx) {
+  if (ctx.lanAddress !== undefined) return ctx.lanAddress;
+  const interfaces = require("node:os").networkInterfaces();
+  for (const list of Object.values(interfaces)) {
+    for (const item of list || []) if (item.family === "IPv4" && !item.internal) return item.address;
+  }
+  return null;
+}
+
+async function pollOperation(ctx, opId, { timeoutMs, onLog }) {
+  const deadline = ctx.now() + timeoutMs;
+  let seen = 0;
+  for (;;) {
+    const result = await controlCall(ctx, "GET", `/v1/operations/${opId}`);
+    if (result.status !== 200) throw controlProblem(ctx, result);
+    const log = result.json.log || [];
+    for (; seen < log.length; seen += 1) onLog?.(log[seen]);
+    if (result.json.state !== "running") return result.json;
+    if (ctx.now() >= deadline) return { ...result.json, state: "timeout" };
+    await sleepFor(ctx, 150);
+  }
+}
+
+function startProgress(ctx, total) {
+  const began = ctx.now();
+  let count = 0;
+  return (line) => {
+    const match = SETTLED_LINE.exec(line);
+    if (!match) return;
+    count += 1;
+    const seconds = ((ctx.now() - began) / 1000).toFixed(1);
+    ctx.err(`[${count}/${Math.max(total, count)}] ${match[1]} … ${match[2]} (${seconds} s)`);
+  };
+}
+
+function componentUrls(ctx, spec, config, components) {
+  const resolved = components.resolveComponent(spec, { aiRoot: ctx.aiRoot, config });
+  const urls = Object.entries(resolved.urls || {}).map(([name, url]) => ({ name, url }));
+  const lan = (resolved.ports || []).filter((port) => port.enabled !== false && /^(0\.0\.0\.0|::)$/.test(String(port.bind || "")));
+  const address = lan.length ? lanAddress(ctx) : null;
+  if (address) for (const port of lan) urls.push({ name: `${port.name} (LAN)`, url: `http://${address}:${port.port}` });
+  return urls;
+}
+
+async function cmdStart(ctx, { args, flags }) {
+  const timeoutMs = flags.timeout !== undefined ? Math.round(Number(flags.timeout) * 1000) : 180000;
+  if (!(timeoutMs > 0)) throw new CliError(EXIT.USAGE, tr(ctx, "logs.bad", { option: "--timeout", value: flags.timeout }));
+  const runtimeOverrides = {};
+  if (flags.lan) runtimeOverrides["listeners.admin.lan"] = true;
+  if (flags.public) runtimeOverrides["listeners.public.lan"] = true;
+  const configApi = require("../manager-core/platform/config");
+  const config = configApi.loadPlatformConfig({ aiRoot: ctx.aiRoot, env: ctx.env, runtimeOverrides });
+  const { registry, components } = loadRegistry(ctx, config);
+  const target = resolveTargets(ctx, registry, components, args, "core");
+  const ids = selectedIds(components, registry, target);
+
+  const problem = preflight(ctx, { config, registry, ids });
+  if (problem) {
+    ctx.err(tr(ctx, "start.preflight", problem));
+    return EXIT.PREFLIGHT;
+  }
+  if (flags.save && Object.keys(runtimeOverrides).length) {
+    const saved = await configApi.writePlatformConfig({ aiRoot: ctx.aiRoot, env: ctx.env, actor: "cli", set: runtimeOverrides });
+    if (!saved.ok) {
+      ctx.err(tr(ctx, "error.failed", { detail: saved.error?.code || saved.code || "config_invalid" }));
+      return EXIT.FAILURE;
+    }
+    ctx.err(tr(ctx, "config.saved", { keys: Object.keys(runtimeOverrides).join(", ") }));
+  }
+  if (target.kind === "ids" && Object.keys(runtimeOverrides).length && !flags.save) ctx.err(tr(ctx, "start.overridesNeedProfile"));
+
+  if (!(await supervisorUp(ctx))) {
+    if (flags["no-supervisor"]) throw new CliError(EXIT.SUPERVISOR_UNAVAILABLE, tr(ctx, "lifecycle.noSupervisor"));
+    ctx.err(tr(ctx, "start.spawning"));
+    await spawnSupervisor(ctx, ["supervise", "--profile", "none"]);
+    if (!(await waitForSupervisor(ctx, true, SUPERVISOR_WAIT_MS))) throw new CliError(EXIT.SUPERVISOR_UNAVAILABLE, tr(ctx, "start.supervisorTimeout", { seconds: SUPERVISOR_WAIT_MS / 1000 }));
+  }
+
+  const progress = startProgress(ctx, ids.length);
+  let failure = null;
+  const operations = [];
+  if (target.kind === "profile") {
+    const result = await controlCall(ctx, "POST", `/v1/profiles/${target.profile}/start`, { runtimeOverrides, restoreModels: flags["restore-models"] === true });
+    if (result.status >= 300) throw controlProblem(ctx, result);
+    operations.push(result.json.opId);
+  } else {
+    for (const id of target.ids) {
+      const result = await controlCall(ctx, "POST", `/v1/components/${id}/start`, { wait: false });
+      if (result.status >= 300) {
+        ctx.err(tr(ctx, "error.failed", { detail: `${id}: ${result.json?.error?.message || result.json?.error?.code || result.status}` }));
+        failure = EXIT.FAILURE;
+        continue;
+      }
+      operations.push(result.json.opId);
+    }
+  }
+  for (const opId of operations) {
+    const op = await pollOperation(ctx, opId, { timeoutMs, onLog: progress });
+    if (op.state === "failed") {
+      ctx.err(tr(ctx, "error.failed", { detail: op.result?.message || op.result?.code || "start" }));
+      failure = EXIT.FAILURE;
+    } else if (op.state === "timeout") {
+      ctx.err(tr(ctx, "start.timeout", { seconds: Math.round(timeoutMs / 1000) }));
+      failure = EXIT.FAILURE;
+    }
+  }
+
+  const statusResult = await controlCall(ctx, "GET", "/v1/status");
+  const rows = new Map((statusResult.json?.components || []).map((row) => [row.id, row]));
+  const summary = ids.map((id) => {
+    const spec = findSpec(registry, id);
+    const row = rows.get(id) || { id, state: "unknown" };
+    return { row, spec, urls: componentUrls(ctx, spec, config, components) };
+  });
+  const allReady = summary.every((item) => PASS_STATES.has(item.row.state) || (item.row.kind === "listener" && item.row.state === "stopped" && item.row.reason === "disabled"));
+  if (flags.json) {
+    ctx.json({ ok: !failure && allReady, components: summary.map((item) => ({ ...item.row, urls: item.urls })) });
+  } else {
+    ctx.out(tr(ctx, "start.summary"));
+    const body = summary.map((item) => [item.row.id, item.row.state, item.row.pid ?? "-", pick(ctx, item.spec?.label) || "", item.urls.map((entry) => entry.url).join("  ")]);
+    for (const line of table([[tr(ctx, "col.id"), tr(ctx, "col.state"), tr(ctx, "col.pid"), tr(ctx, "col.name"), "URL"], ...body])) ctx.out(`  ${line}`);
+    for (const item of summary) {
+      if (!PASS_STATES.has(item.row.state)) ctx.out(`  ${item.row.id}: ${item.row.state}${item.row.reason ? ` (${item.row.reason})` : ""}${item.row.message ? ` ${item.row.message}` : ""}`);
+    }
+  }
+
+  const entry = summary.find((item) => item.row.id === "entry");
+  const wantsBrowser = flags.open === true || (config.values["cli.openBrowser"] === true && !flags["no-browser"]);
+  if (wantsBrowser && entry?.row.state === "ready") {
+    const url = entry.urls.find((item) => item.name === "admin")?.url;
+    if (url) {
+      try { await (ctx.openUrl || defaultOpenUrl)(`${url.replace(/\/+$/, "")}/`); } catch { ctx.err(tr(ctx, "open.failed", { url })); }
+    }
+  }
+  return failure || (allReady ? EXIT.OK : EXIT.FAILURE);
+}
+
+// -- stop ------------------------------------------------------------------
+
+async function listModelInstances(ctx, registry, components, config) {
+  const statusApi = require("../manager-core/platform/status");
+  const fetchImpl = ctx.fetch || ((...fetchArgs) => fetch(...fetchArgs));
+  const found = [];
+  let reached = false;
+  for (const id of ["vllm-manager", "llama-manager"]) {
+    const spec = findSpec(registry, id);
+    const origin = spec ? components.resolveComponent(spec, { aiRoot: ctx.aiRoot, config }).urls?.api : null;
+    if (!origin) continue;
+    try {
+      const response = await fetchImpl(`${origin}/api/instances`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(3000) });
+      if (!response.ok) continue;
+      const body = await response.json();
+      reached = true;
+      for (const instance of Array.isArray(body) ? body : Array.isArray(body?.instances) ? body.instances : []) {
+        const state = statusApi.instanceLifecycle(instance).key;
+        if (state === "stopped" || !instance?.id) continue;
+        found.push({ id: String(instance.id), manager: id, origin, state });
+      }
+    } catch {}
+  }
+  return { instances: found, reached };
+}
+
+async function stopModelInstances(ctx, instances) {
+  const fetchImpl = ctx.fetch || ((...fetchArgs) => fetch(...fetchArgs));
+  let failed = 0;
+  for (const item of instances) {
+    try {
+      const response = await fetchImpl(`${item.origin}/api/instances/${encodeURIComponent(item.id)}/stop`, { method: "POST", headers: { accept: "application/json" }, signal: AbortSignal.timeout(60000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      ctx.err(tr(ctx, "stop.modelStopped", { id: item.id }));
+    } catch (error) {
+      failed += 1;
+      ctx.err(tr(ctx, "stop.modelFailed", { id: item.id, detail: error?.message || String(error) }));
+    }
+  }
+  return failed;
+}
+
+async function cmdStop(ctx, { args, flags }) {
+  const config = loadConfig(ctx);
+  const { registry, components } = loadRegistry(ctx, config);
+  const target = resolveTargets(ctx, registry, components, args, "full");
+  if (!(await supervisorUp(ctx))) throw new CliError(EXIT.SUPERVISOR_UNAVAILABLE, tr(ctx, "lifecycle.noSupervisor"));
+
+  const managersInScope = target.kind === "profile" || target.ids.some((id) => id === "vllm-manager" || id === "llama-manager");
+  if (flags.models) {
+    const listed = await listModelInstances(ctx, registry, components, config);
+    ctx.err(listed.instances.length
+      ? tr(ctx, "stop.modelsListed", { list: listed.instances.map((item) => `${item.id} (${item.manager})`).join(", ") })
+      : tr(ctx, listed.reached ? "stop.noModels" : "stop.modelsUnknown"));
+    if (flags.yes !== true) {
+      if (!ctx.stdinIsTTY) {
+        ctx.err(tr(ctx, "stop.modelsNeedYes"));
+        return EXIT.BUSY;
+      }
+      const answer = String(await ask(ctx, tr(ctx, "stop.modelsConfirm"))).trim();
+      if (answer !== "stop") {
+        ctx.err(tr(ctx, "stop.aborted"));
+        return EXIT.BUSY;
+      }
+    }
+    if (await stopModelInstances(ctx, listed.instances)) return EXIT.FAILURE;
+  } else if (managersInScope) {
+    const listed = await listModelInstances(ctx, registry, components, config);
+    if (listed.instances.length) ctx.err(tr(ctx, "stop.modelsKeep", { list: listed.instances.map((item) => item.id).join(", ") }));
+  }
+
+  let failure = null;
+  if (target.kind === "profile") {
+    const result = await controlCall(ctx, "POST", "/v1/stop", { scope: target.scope === "all" ? "all" : target.profile, exitSupervisor: target.scope === "all" });
+    if (result.status >= 300) throw controlProblem(ctx, result);
+    // `stop all` makes the supervisor exit right after the operation ends, so
+    // the pipe may vanish between two polls: that is the success case.
+    const op = await pollOperation(ctx, result.json.opId, { timeoutMs: 180000, onLog: (line) => ctx.err(line) })
+      .catch((error) => { if (target.scope === "all" && error.exit === EXIT.SUPERVISOR_UNAVAILABLE) return { state: "ok" }; throw error; });
+    if (op.state !== "ok") { ctx.err(tr(ctx, "error.failed", { detail: op.result?.message || op.state })); failure = EXIT.FAILURE; }
+    if (target.scope === "all" && !(await waitForSupervisor(ctx, false, 10000))) {
+      ctx.err(tr(ctx, "stop.supervisorStill"));
+      failure = EXIT.FAILURE;
+    }
+  } else {
+    for (const id of components.stopOrder(registry, target.ids).filter((item) => target.ids.includes(item))) {
+      const result = await controlCall(ctx, "POST", `/v1/components/${id}/stop`, { wait: true }, 180000);
+      if (result.status >= 300) {
+        ctx.err(tr(ctx, "error.failed", { detail: `${id}: ${result.json?.error?.message || result.json?.error?.code || result.status}` }));
+        failure = EXIT.FAILURE;
+      } else ctx.err(tr(ctx, "stop.stopped", { id }));
+    }
+  }
+  if (!failure) ctx.out(tr(ctx, "stop.done"));
+  return failure || EXIT.OK;
+}
+
+// -- restart ---------------------------------------------------------------
+
+function describeBlocker(blocker) {
+  return `${blocker.kind || "busy"}${blocker.source ? ` (${blocker.source})` : ""}${blocker.title ? `: ${blocker.title}` : ""}`;
+}
+
+async function cmdRestart(ctx, { args, flags }) {
+  if (!args.length) throw usageError(ctx, "restart <id…|all>");
+  if (flags["if-idle"] && flags["when-idle"]) throw usageError(ctx, "--if-idle --when-idle");
+  const config = loadConfig(ctx);
+  const { registry, components } = loadRegistry(ctx, config);
+  if (!(await supervisorUp(ctx))) throw new CliError(EXIT.SUPERVISOR_UNAVAILABLE, tr(ctx, "lifecycle.noSupervisor"));
+
+  let ids;
+  if (args.length === 1 && args[0] === "all") {
+    const status = (await controlCall(ctx, "GET", "/v1/status")).json || {};
+    ids = components.startOrder(registry, (status.components || [])
+      .filter((row) => row.desired === "running" && !["listener", "external"].includes(row.kind))
+      .map((row) => row.id));
+  } else {
+    const target = resolveTargets(ctx, registry, components, args, "core");
+    if (target.kind !== "ids") throw usageError(ctx, args.join(" "));
+    ids = target.ids;
+  }
+  if (!ids.length) { ctx.out(tr(ctx, "restart.nothing")); return EXIT.OK; }
+
+  let failure = null;
+  const post = (id, force) => controlCall(ctx, "POST", `/v1/components/${id}/restart`, { when: flags["when-idle"] ? "idle" : "now", force });
+  for (const id of ids) {
+    let result = await post(id, flags.force === true);
+    if (result.status === 409 && result.json?.error?.code === "component_busy") {
+      const blockers = result.json.blockers || [];
+      ctx.err(tr(ctx, "restart.busy", { id }));
+      for (const blocker of blockers) ctx.err(`  - ${describeBlocker(blocker)}`);
+      if (flags["if-idle"] || !ctx.stdinIsTTY) {
+        if (!flags["if-idle"]) ctx.err(tr(ctx, "restart.needForce"));
+        return EXIT.BUSY;
+      }
+      const answer = String(await ask(ctx, tr(ctx, "restart.confirm", { id }))).trim().toLowerCase();
+      if (!/^(y|yes|是)$/.test(answer)) { ctx.err(tr(ctx, "stop.aborted")); return EXIT.BUSY; }
+      result = await post(id, true);
+    }
+    if (result.status >= 300) {
+      ctx.err(tr(ctx, "error.failed", { detail: `${id}: ${result.json?.error?.message || result.json?.error?.code || result.status}` }));
+      failure = EXIT.FAILURE;
+      continue;
+    }
+    if (result.json.queued) {
+      ctx.out(tr(ctx, "restart.queued", { id }));
+      for (const blocker of result.json.blockers || []) ctx.out(`  - ${describeBlocker(blocker)}`);
+      continue;
+    }
+    const op = await pollOperation(ctx, result.json.opId, { timeoutMs: 180000 });
+    if (op.state === "ok") ctx.out(tr(ctx, "restart.done", { id }));
+    else { ctx.err(tr(ctx, "error.failed", { detail: `${id}: ${op.result?.message || op.state}` })); failure = EXIT.FAILURE; }
+  }
+  return failure || EXIT.OK;
+}
+
+// -- supervise, supervisor --------------------------------------------------
+
+async function cmdSupervise(ctx, { flags }) {
+  const profile = flags.profile === "all" ? "full" : flags.profile || "core";
+  if (!["core", "full", "none"].includes(profile)) throw new CliError(EXIT.USAGE, tr(ctx, "logs.bad", { option: "--profile", value: flags.profile }));
+  const supervisorApi = require("../manager-core/platform/supervisor");
+  const control = require("../manager-core/platform/control");
+  let finish;
+  const exited = new Promise((resolve) => { finish = resolve; });
+  const options = {
+    aiRoot: ctx.aiRoot,
+    env: ctx.env,
+    profile,
+    restoreModels: flags["restore-models"] === true,
+    autostart: flags.autostart === true,
+    tokenStore: control.createControlTokenStore({ aiRoot: ctx.aiRoot, store: ctx.vault().store("platform-control") }),
+    log: (line) => ctx.out(`${new Date(ctx.now()).toISOString()} ${typeof line === "string" ? line : JSON.stringify(line)}`),
+    exit: (code) => finish(code || 0),
+    spawnSupervisor: (argv) => spawnSupervisor(ctx, argv),
+    waitForPipe: (ms) => waitForSupervisor(ctx, true, ms),
+    ...(ctx.superviseOptions || {}),
+  };
+  let started = await supervisorApi.startSupervisorProcess(options);
+  // A successor (re-exec) races the old process closing its pipe.
+  for (let attempt = 0; started.alreadyRunning && flags.takeover && attempt < 20; attempt += 1) {
+    await sleepFor(ctx, 300);
+    started = await supervisorApi.startSupervisorProcess(options);
+  }
+  if (started.alreadyRunning) {
+    ctx.out(tr(ctx, "supervise.already"));
+    return EXIT.OK;
+  }
+  ctx.out(tr(ctx, "supervise.running", { profile }));
+  const stop = () => { started.supervisor.shutdown({ leaveChildren: true }).catch(() => finish(1)); };
+  const signals = ctx.handleSignals === false ? [] : ["SIGINT", "SIGTERM", "SIGBREAK"];
+  for (const signal of signals) process.on(signal, stop);
+  const code = await exited;
+  for (const signal of signals) process.removeListener(signal, stop);
+  await started.close().catch(() => {});
+  return code;
+}
+
+async function cmdSupervisor(ctx, { args, flags }) {
+  const sub = args[0] || "status";
+  if (args.length > 1 || !["status", "stop", "reexec"].includes(sub)) throw usageError(ctx, "supervisor status|stop|reexec");
+  if (sub === "status") {
+    const result = await controlCall(ctx, "GET", "/v1/status");
+    if (result.status !== 200) throw controlProblem(ctx, result);
+    const info = result.json.supervisor || {};
+    if (flags.json) { ctx.json(info); return EXIT.OK; }
+    ctx.out(tr(ctx, "supervisor.running", { pid: info.pid ?? "-", profile: info.profile || "-", since: info.startedAt || "-" }));
+    return EXIT.OK;
+  }
+  if (sub === "stop") {
+    const result = await controlCall(ctx, "POST", "/v1/shutdown", { leaveChildren: true });
+    if (result.status >= 300) throw controlProblem(ctx, result);
+    if (!(await waitForSupervisor(ctx, false, 10000))) { ctx.err(tr(ctx, "stop.supervisorStill")); return EXIT.FAILURE; }
+    ctx.out(tr(ctx, "supervisor.stopped"));
+    return EXIT.OK;
+  }
+  const before = (await controlCall(ctx, "GET", "/v1/status")).json?.supervisor?.pid ?? null;
+  const result = await controlCall(ctx, "POST", "/v1/reexec", {});
+  if (result.status >= 300) throw controlProblem(ctx, result);
+  const deadline = ctx.now() + 20000;
+  for (;;) {
+    await sleepFor(ctx, 300);
+    ctx.refreshControl();
+    try {
+      const status = await ctx.control().request("GET", "/v1/status", { timeoutMs: 2000 });
+      const pid = status.json?.supervisor?.pid ?? null;
+      if (status.status === 200 && pid !== before) { ctx.out(tr(ctx, "supervisor.reexeced", { pid: pid ?? "-" })); return EXIT.OK; }
+    } catch {}
+    if (ctx.now() >= deadline) { ctx.err(tr(ctx, "supervisor.reexecFailed")); return EXIT.FAILURE; }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Command table. Later packages add their commands here (and remove them from
 // PLANNED); `run` is (ctx, { args, flags }) -> exit code.
 
@@ -1090,6 +1611,36 @@ const COMMANDS = {
     spec: { bool: ["json", "record"], value: ["install"], max: 0 },
     run: cmdDeps,
   },
+  start: {
+    usage: "start [core|full|<id>…] [--lan] [--public] [--save] [--restore-models] [--no-supervisor] [--no-browser] [--open] [--timeout s]",
+    summary: { [ZH]: "启动平台或指定组件", [EN]: "Start the platform or selected components" },
+    spec: { bool: ["lan", "public", "save", "restore-models", "no-supervisor", "no-browser", "open", "json"], value: ["timeout"] },
+    run: cmdStart,
+  },
+  stop: {
+    usage: "stop [<id>…|core|full|all] [--models] [--yes]",
+    summary: { [ZH]: "停止组件", [EN]: "Stop components" },
+    spec: { bool: ["models", "yes"] },
+    run: cmdStop,
+  },
+  restart: {
+    usage: "restart <id…|all> [--if-idle] [--when-idle] [--force]",
+    summary: { [ZH]: "重启组件", [EN]: "Restart components" },
+    spec: { bool: ["if-idle", "when-idle", "force"] },
+    run: cmdRestart,
+  },
+  supervise: {
+    usage: "supervise [--profile core|full|none] [--restore-models] [--autostart]",
+    summary: { [ZH]: "运行监督进程（前台）", [EN]: "Run the supervisor (foreground)" },
+    spec: { bool: ["restore-models", "autostart", "takeover"], value: ["profile"], max: 0 },
+    run: cmdSupervise,
+  },
+  supervisor: {
+    usage: "supervisor status|stop|reexec",
+    summary: { [ZH]: "管理监督进程", [EN]: "Manage the supervisor" },
+    spec: { bool: ["json"] },
+    run: cmdSupervisor,
+  },
   secrets: {
     usage: "secrets list|set <key>|clear <key>|copy <key>|migrate|export-legacy --namespace n",
     summary: { [ZH]: "管理密钥库（值从不出现在命令行或屏幕上）", [EN]: "Manage the secret store (values never appear on the command line or screen)" },
@@ -1100,11 +1651,6 @@ const COMMANDS = {
 
 const PLANNED = {
   setup: { package: "OPS-14", usage: "setup [--step id] [--yes] [--non-interactive]", summary: { [ZH]: "首次运行向导", [EN]: "First-run wizard" } },
-  start: { package: "OPS-7b", usage: "start [core|full|<id>…] [--lan] [--public] [--save] [--restore-models] [--no-supervisor] [--no-browser] [--open] [--timeout s]", summary: { [ZH]: "启动平台或指定组件", [EN]: "Start the platform or selected components" } },
-  stop: { package: "OPS-7b", usage: "stop [<id>…|core|full|all] [--models] [--yes]", summary: { [ZH]: "停止组件", [EN]: "Stop components" } },
-  restart: { package: "OPS-7b", usage: "restart <id…|all> [--if-idle] [--when-idle] [--force]", summary: { [ZH]: "重启组件", [EN]: "Restart components" } },
-  supervise: { package: "OPS-7b", usage: "supervise …", summary: { [ZH]: "运行监督进程", [EN]: "Run the supervisor" } },
-  supervisor: { package: "OPS-7b", usage: "supervisor status|stop|reexec", summary: { [ZH]: "管理监督进程", [EN]: "Manage the supervisor" } },
   admin: { package: "OPS-7c", usage: "admin pair [--open] [--ttl s]", summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" } },
   keys: { package: "OPS-7c", usage: "keys migrate [--dry-run|--report] [--json]", summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" } },
   exposure: { package: "OPS-7c", usage: "exposure scan [--json] | exposure setup [args…]", summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" } },
