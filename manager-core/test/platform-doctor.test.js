@@ -12,11 +12,11 @@ const { fixture, normalized, PINNED_IMAGE, AT } = require("./helpers/doctor-fixt
 function temporary(t) { const root = fs.mkdtempSync(path.join(os.tmpdir(), "platform-doctor-")); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; }
 function check(report, id) { const found = report.checks.find((row) => row.id === id); assert.ok(found, id); return found; }
 
-test("runDoctor emits the report contract and fixed fixture world matches golden part 1", async (t) => {
+test("runDoctor emits the report contract and fixed fixture world matches golden", async (t) => {
   const root = temporary(t), options = fixture(root), report = await runDoctor(options);
   assert.equal(report.schemaVersion, 1); assert.equal(report.at, AT); assert.equal(report.durationMs, 0);
-  assert.equal(report.checks.length, 21);
-  assert.deepEqual(report.summary, { ok: 14, warn: 2, fail: 1, info: 3, skip: 1 });
+  assert.equal(report.checks.length, 41);
+  assert.deepEqual(report.summary, { ok: 25, warn: 4, fail: 2, info: 6, skip: 4 });
   for (const row of report.checks) {
     assert.deepEqual(Object.keys(row), ["id", "group", "status", "title", "detail", "data", "durationMs", "fix", "actions"]);
     assert.ok(row.title["zh-CN"] && row.title["en-US"]);
