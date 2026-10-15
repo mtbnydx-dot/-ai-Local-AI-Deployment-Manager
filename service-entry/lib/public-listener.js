@@ -11,6 +11,10 @@
 //   deps.gateway(req, res, url, route)   key routes (the shared pipeline, 08)
 //   deps.portal.handle(req, res, url, route) -> boolean   portal shell,
 //                                        /assets/<buildId>/*, the *.json routes
+//   deps.preAuth(req, res, route) -> boolean   the ban check and the per-IP
+//                                  bucket (05 §9.2) before the JSON routes;
+//                                  true when it answered. Key routes run it in
+//                                  the gateway handler, after the record starts.
 //   deps.data.respond(pathname, req) -> object|null   the four portal JSON
 //                                        documents (status-sampler.js, PUB-14)
 // A route nobody serves yet answers like any unknown path (404) for the
@@ -106,7 +110,7 @@ function sendJsonBody(req, res, status, body, headers = {}) {
  *             /announcements.json and /portal-config.json
  * The returned handle never rejects.
  */
-function createPublicListener({ security, gateway = null, portal = null, data = null, logger = console } = {}) {
+function createPublicListener({ security, gateway = null, portal = null, data = null, preAuth = null, logger = console } = {}) {
   if (!security || typeof security.publicHostnames !== "function") throw new TypeError("createPublicListener needs the entry security (publicHostnames).");
 
   async function handle(req, res) {
@@ -145,6 +149,7 @@ function createPublicListener({ security, gateway = null, portal = null, data = 
         case "robots":
           return sendText(req, res, 200, ROBOTS_TXT, { "cache-control": "public, max-age=3600" });
         case "json":
+          if (typeof preAuth === "function" && (await preAuth(req, res, route)) === true) return undefined;
           if (data && typeof data.respond === "function") {
             let body;
             try {
