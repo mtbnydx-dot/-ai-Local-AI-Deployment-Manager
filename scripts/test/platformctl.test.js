@@ -440,7 +440,7 @@ test("config list/get/set/unset/validate/path/init work through the only writer"
   const list = await world.cli(["config", "list"]);
   assert.match(list.out, /listeners\.admin\.port = /);
   assert.equal((await world.cli(["config", "wat"])).code, 2);
-  assert.equal((await world.cli(["config", "import-env"])).code, 1, "import-env belongs to a later package");
+  assert.equal((await world.cli(["config", "import-env", "extra"])).code, 2, "import-env takes no positional argument");
 });
 
 test("config refuses secret keys and never shows a stored secret", async (t) => {
