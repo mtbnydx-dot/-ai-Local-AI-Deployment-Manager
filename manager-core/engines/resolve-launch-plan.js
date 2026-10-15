@@ -435,6 +435,10 @@ function envFlags(flags) {
   return out;
 }
 
+// A generated launch file is mounted from a directory named after the launch id
+// (`.../launch-files/lch_xxx/config.yml`); a plan and its launch differ only in that id.
+const LAUNCH_FILES_DIR = /([\\/]launch-files[\\/])lch_[A-Za-z0-9]+/g;
+
 function withoutHashExcludedLabels(argv) {
   const out = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -445,7 +449,7 @@ function withoutHashExcludedLabels(argv) {
         continue;
       }
     }
-    out.push(argv[index]);
+    out.push(typeof argv[index] === "string" ? argv[index].replace(LAUNCH_FILES_DIR, "$1<launch-id>") : argv[index]);
   }
   return out;
 }
@@ -477,8 +481,10 @@ function commandView(command) {
     if (!Object.hasOwn(env, name)) env[name] = value === null ? REDACTED : redactArgv([value], command.redactions)[0];
   }
   const labels = { ...(command.labels || {}) };
+  // Generated files are listed by name and target; their content is never shown (a secret file holds the key).
+  const files = (Array.isArray(command.files) ? command.files : []).map((file) => ({ id: file.id, target: file.target, secret: file.secret === true }));
   return {
-    view: { argv, env, labels },
+    view: { argv, env, labels, ...(files.length ? { files } : {}) },
     planHash: computePlanHash({
       image: command.docker?.image,
       argvRedacted: argv,
@@ -815,6 +821,8 @@ async function resolveLaunchPlan(request, ctx = {}) {
     return finish(plan);
   }
   const runOptions = normalized.runOptions;
+  // Notes the manager's normalisation wants shown (an API key an engine cannot use, LAN publishing it cannot offer).
+  for (const note of Array.isArray(normalized.warnings) ? normalized.warnings : []) warnings.push(clone(note));
   // Validated extraArgs/extraEnv ride on the run options (the adapters append
   // them last) and are recorded in job meta (01 §18). Absent when not given.
   const hasCustom = custom.args.length > 0 || Object.keys(custom.env).length > 0;
@@ -855,6 +863,12 @@ async function resolveLaunchPlan(request, ctx = {}) {
           message: splitBilingual(error.message),
           ...(Array.isArray(error.findings) ? { findings: clone(error.findings) } : {}),
         });
+      } else if (error?.status === 400 && typeof error.code === "string") {
+        // A value the engine's command template refuses (a path outside the model
+        // storage, a value that would become a flag, a missing key) is the
+        // request's fault, in plan and in launch alike (01 §19.1).
+        plan.legacy.failure = error;
+        errors.push({ field: String(error.field || "command"), code: error.code, message: String(error.message || error) });
       } else if (mode === "plan") {
         blockers.push(blocker("command_unavailable", `无法生成启动命令：${error?.message || error}`, `The launch command cannot be built: ${error?.message || error}`));
       } else {
@@ -864,6 +878,20 @@ async function resolveLaunchPlan(request, ctx = {}) {
     }
   }
   plan.legacy.preset = prepared?.preset || null;
+  // Findings of an adapter that has something to say about this launch (the
+  // docker-template engines: experimental, unverified GPU, no LAN key): a fail
+  // blocks, a warn is shown (01 §6 validate).
+  if (command && typeof prepared?.adapter?.validate === "function") {
+    try {
+      for (const item of prepared.adapter.validate(prepared.plan, prepared.ctx) || []) {
+        const message = item.detail || item.title || bilingual(item.code, item.code);
+        if (item.severity === "fail") blockers.push({ code: String(item.code), message: clone(message) });
+        else if (item.severity === "warn") warnings.push({ field: String(item.field || "engine"), code: String(item.code), message: joinBilingual(message) });
+      }
+    } catch {
+      // A finding that cannot be computed never blocks the launch.
+    }
+  }
   const executedRecipe = prepared ? prepared.recipe || prepared.plan?.recipe || null : requestedRecipe;
   if (origin === "v2" && requestedRecipe && prepared && executedRecipe?.id !== requestedRecipe.id) {
     errors.push(fieldError("recipeId", "recipe_not_applicable",

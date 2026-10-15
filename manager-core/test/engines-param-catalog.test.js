@@ -123,6 +123,8 @@ const SEED_PARAMS = {
 };
 
 const ENGINES = ["vllm", "sglang", "llamacpp"];
+// The experimental docker-template engines (ENG-18) ship a descriptor and a catalog too.
+const TEMPLATE_ENGINES = ["lmdeploy", "trtllm", "tabbyapi"];
 
 function emptyDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-params-"));
@@ -162,7 +164,7 @@ function i18nTexts(param) {
 test("the bundled catalogs load without errors, one per tier-1 engine descriptor", (t) => {
   const loader = bundledLoader(t);
   assert.deepEqual(loader.status().errors, []);
-  assert.deepEqual(loader.engineIds(), [...ENGINES].sort());
+  assert.deepEqual(loader.engineIds(), [...ENGINES, ...TEMPLATE_ENGINES].sort());
   const common = JSON.parse(fs.readFileSync(path.join(paramCatalog.BUNDLED_PARAMS_DIR, "common.json"), "utf8"));
   for (const engineId of ENGINES) {
     const descriptor = JSON.parse(fs.readFileSync(path.join(ENGINES_DATA_DIR, `${engineId}.json`), "utf8"));

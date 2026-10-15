@@ -424,6 +424,8 @@ function legacyBodyToRequest(body, options = {}) {
   if (image) Object.assign(request, legacyRuntimeSelection(image, { engineId, registry, warnings }));
   const apiKey = String(body.apiKey ?? "").trim();
   if (apiKey) request.apiKey = apiKey;
+  // The acknowledgements a launch needs (experimental engines, 01 §4.1) ride along unchanged.
+  if (Array.isArray(body.acknowledge)) request.acknowledge = body.acknowledge.map(String);
   if (multiGpuMode) request.legacy = { multiGpuMode };
   return { request, warnings };
 }

@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 90,
+  "kind": "engine",
+  "engineId": "trtllm",
+  "docs": "https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve.html",
+  "params": [
+    {
+      "id": "contextLength",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max_seq_len"
+      },
+      "legacy": {
+        "field": "maxModelLen",
+        "domId": "maxModelLen"
+      }
+    },
+    {
+      "id": "concurrency",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max_batch_size"
+      },
+      "legacy": {
+        "field": "maxNumSeqs",
+        "domId": "maxNumSeqs"
+      }
+    },
+    {
+      "id": "servedName",
+      "emit": {
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "help": {
+        "what": {
+          "zh": "trtllm-serve 没有服务名参数，模型以其路径对外；这个名字只用于平台的实例标签和统计。",
+          "en": "trtllm-serve has no served-name option and lists the model by its path; this name is used only for the platform's instance labels and statistics."
+        }
+      },
+      "legacy": {
+        "field": "name",
+        "domId": "servedName"
+      }
+    },
+    {
+      "id": "tensorParallel",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--tp_size"
+      },
+      "platformDefault": 1,
+      "legacy": {
+        "field": "tensorParallelSize",
+        "domId": "tensorParallelSize"
+      }
+    },
+    {
+      "id": "kvCacheDtype",
+      "choices": [
+        {
+          "value": "auto",
+          "label": {
+            "zh": "自动（同计算精度）",
+            "en": "Auto (same as compute)"
+          }
+        },
+        {
+          "value": "fp8",
+          "label": {
+            "zh": "FP8",
+            "en": "FP8"
+          }
+        },
+        {
+          "value": "nvfp4",
+          "label": {
+            "zh": "NVFP4",
+            "en": "NVFP4"
+          }
+        }
+      ],
+      "choicesFrom": null,
+      "emit": {
+        "mode": "catalog",
+        "kind": "template"
+      },
+      "help": {
+        "what": {
+          "zh": "写入 extra_llm_api_options 文件的 kv_cache_config.dtype。",
+          "en": "Written to kv_cache_config.dtype in the extra_llm_api_options file."
+        }
+      }
+    },
+    {
+      "id": "trtllm.kvCacheFreeGpuMemoryFraction",
+      "group": "memory",
+      "level": "basic",
+      "order": 10,
+      "type": "float",
+      "unit": "fraction",
+      "label": {
+        "zh": "KV 缓存比例（权重之外的空闲显存）",
+        "en": "KV cache fraction (of memory left after weights)"
+      },
+      "summary": {
+        "zh": "TensorRT-LLM 把加载权重后剩余显存的这个比例分给 KV 缓存。",
+        "en": "TensorRT-LLM gives this fraction of the memory left after the weights to the KV cache."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --kv_cache_free_gpu_memory_fraction。它是权重加载后空闲显存的比例。",
+          "en": "Maps to --kv_cache_free_gpu_memory_fraction. It is a fraction of the memory free after the weights load."
+        },
+        "whenToChange": {
+          "zh": "启动时报显存不足就调小；同卡还有其它程序时也应调小。",
+          "en": "Lower it when the start runs out of memory, or when other programs share the GPU."
+        },
+        "tradeoffs": {
+          "zh": "过高会让激活没有余量；过低则 KV 缓存变小，长上下文并发会排队。",
+          "en": "Too high leaves no room for activations; too low shrinks the KV cache and queues long concurrent requests."
+        }
+      },
+      "range": {
+        "min": 0.05,
+        "max": 0.95,
+        "step": 0.01
+      },
+      "engineDefault": 0.9,
+      "platformDefault": 0.9,
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--kv_cache_free_gpu_memory_fraction"
+      },
+      "vramEffect": "fraction",
+      "legacy": {
+        "field": "gpuMemoryUtilization",
+        "domId": "gpuMemoryUtilization"
+      }
+    },
+    {
+      "id": "reasoningParser",
+      "type": "string",
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$",
+      "maxLength": 48,
+      "label": {
+        "zh": "思考内容解析器",
+        "en": "Reasoning parser"
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --reasoning_parser，填 trtllm-serve 认识的解析器名称，例如 qwen3、deepseek-r1。",
+          "en": "Maps to --reasoning_parser; give a parser name trtllm-serve knows, for example qwen3 or deepseek-r1."
+        },
+        "whenToChange": {
+          "zh": "客户端看不到思考内容或工具调用时。",
+          "en": "When clients do not see the thinking or the tool calls."
+        },
+        "tradeoffs": {
+          "zh": "名称必须是 trtllm-serve 认识的解析器；留空表示不解析。",
+          "en": "The name must be a parser trtllm-serve knows; leave it empty to parse nothing."
+        }
+      },
+      "emit": {
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--reasoning_parser"
+      },
+      "order": 10
+    },
+    {
+      "id": "toolCallParser",
+      "type": "string",
+      "choices": null,
+      "choicesFrom": null,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$",
+      "maxLength": 48,
+      "label": {
+        "zh": "工具调用解析器",
+        "en": "Tool-call parser"
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --tool_parser，填 trtllm-serve 认识的解析器名称，例如 qwen3。",
+          "en": "Maps to --tool_parser; give a parser name trtllm-serve knows, for example qwen3."
+        },
+        "whenToChange": {
+          "zh": "客户端看不到思考内容或工具调用时。",
+          "en": "When clients do not see the thinking or the tool calls."
+        },
+        "tradeoffs": {
+          "zh": "名称必须是 trtllm-serve 认识的解析器；留空表示不解析。",
+          "en": "The name must be a parser trtllm-serve knows; leave it empty to parse nothing."
+        }
+      },
+      "emit": {
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--tool_parser"
+      },
+      "order": 20
+    }
+  ]
+}

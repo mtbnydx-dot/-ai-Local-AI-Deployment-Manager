@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 90,
+  "id": "tabbyapi",
+  "label": {
+    "zh": "TabbyAPI（实验）",
+    "en": "TabbyAPI (experimental)"
+  },
+  "description": {
+    "zh": "TabbyAPI + ExLlamaV3，加载 EXL3 量化模型；由生成的 config.yml 配置。实验性引擎，由通用 docker-template 适配器启动；镜像不会自动拉取。",
+    "en": "TabbyAPI with ExLlamaV3 for EXL3-quantized models, configured through a generated config.yml. Experimental engine launched by the generic docker-template adapter; its image is never pulled automatically."
+  },
+  "family": "openai-server",
+  "adapter": "docker-template",
+  "tier": 2,
+  "status": "experimental",
+  "hostManager": "vllm",
+  "legacy": {
+    "engineLabel": "tabbyapi",
+    "managerEngineField": "tabbyapi"
+  },
+  "artifactFormats": [
+    "exl3"
+  ],
+  "runtimes": {
+    "default": "tabbyapi",
+    "allowed": [
+      "tabbyapi"
+    ],
+    "allowCustomImage": true
+  },
+  "host": {
+    "kinds": [
+      "docker"
+    ],
+    "default": "docker",
+    "containerPort": 5000,
+    "ipc": "host",
+    "init": false,
+    "ulimits": [],
+    "restart": "on-failure:3",
+    "gpus": "required",
+    "allowLan": true,
+    "healthcheck": {
+      "cmd": "python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:5000/health', timeout=4)\" || exit 1",
+      "interval": "30s",
+      "timeout": "5s",
+      "retries": 3
+    },
+    "cacheMounts": []
+  },
+  "api": {
+    "openaiBase": "/v1",
+    "models": "/v1/models",
+    "health": "/health",
+    "ready": {
+      "kind": "models-list"
+    },
+    "probe": {
+      "kind": "chat-generation",
+      "maxTokens": 32
+    }
+  },
+  "apiSurface": {
+    "chat": true,
+    "completions": true,
+    "responses": false,
+    "messages": false,
+    "embeddings": false,
+    "rerank": false
+  },
+  "apiQuirks": {
+    "reasoningField": null
+  },
+  "catalog": "launch-params/tabbyapi.json",
+  "memoryModel": {
+    "kind": "weights-plus-kv",
+    "poolTokensParam": "tabbyapi.cacheSize"
+  },
+  "capabilities": {
+    "parallelInstances": true,
+    "tensorParallel": true,
+    "pipelineParallel": false,
+    "dataParallel": false,
+    "expertParallel": false,
+    "speculative": [
+      "draft_model"
+    ],
+    "autoParsers": {
+      "tool": null,
+      "reasoning": null
+    },
+    "lora": false,
+    "multiModel": false,
+    "hotLoad": false,
+    "sleepWake": false,
+    "roles": [
+      "chat"
+    ]
+  },
+  "knowledgeKeys": [],
+  "secrets": {
+    "apiKey": {
+      "mode": "file",
+      "file": "tokens"
+    }
+  },
+  "managedFlags": [],
+  "extraEnvAllow": [
+    "TABBY_",
+    "CUDA_",
+    "PYTORCH_"
+  ],
+  "template": {
+    "entrypoint": null,
+    "args": [],
+    "env": {},
+    "files": [
+      {
+        "id": "config",
+        "target": "/app/config.yml",
+        "format": "yaml",
+        "secret": false,
+        "content": {
+          "network": {
+            "host": "0.0.0.0",
+            "port": "{{host.containerPort}}",
+            "disable_auth": false
+          },
+          "model": {
+            "model_dir": "{{model.containerPath|dir}}",
+            "model_name": "{{model.containerPath|base}}",
+            "max_seq_len": "{{contextLength}}",
+            "cache_mode": "{{tabbyapi.cacheMode}}",
+            "cache_size": "{{tabbyapi.cacheSize}}",
+            "tensor_parallel": "{{tabbyapi.tensorParallel}}",
+            "gpu_split_auto": "{{tabbyapi.gpuSplitAuto}}"
+          },
+          "draft_model": {
+            "draft_model_dir": "{{speculative.draftModel|dir}}",
+            "draft_model_name": "{{speculative.draftModel|base}}"
+          }
+        }
+      },
+      {
+        "id": "tokens",
+        "target": "/app/api_tokens.yml",
+        "format": "yaml",
+        "secret": true,
+        "content": {
+          "api_key": "{{secrets.apiKey}}",
+          "admin_key": "{{secrets.adminKey}}"
+        }
+      }
+    ],
+    "flagFormat": "space"
+  }
+}

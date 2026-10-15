@@ -1,6 +1,8 @@
 const { isPennyroyalImage, pennyroyalRecipeMemory } = require("./pennyroyal");
 const { createLaunchPlanner } = require("../../manager-core/engines/resolve-launch-plan");
 const memoryModels = require("../../manager-core/engines/memory-models");
+const paramCatalog = require("../../manager-core/engines/param-catalog");
+const dockerTemplate = require("../../manager-core/engines/adapters/docker-template");
 
 function createVllmStartRuntimeRequest(deps) {
   const {
@@ -26,6 +28,8 @@ function createVllmStartRuntimeRequest(deps) {
     normalizeSpeculativeMode = (value) => String(value || "off").trim().toLowerCase(),
     normalizeRuntimeEngine = (value) => String(value || "vllm").trim().toLowerCase() === "sglang" ? "sglang" : "vllm",
     checkModelCompatibility = null,
+    // engineId → its docker-template descriptor, or null for vLLM and SGLang (01 §19).
+    templateEngineFor = () => null,
     getLanAddress,
     createJob,
     runStartJob,
@@ -88,13 +92,15 @@ function createVllmStartRuntimeRequest(deps) {
     const maxModelLen = boundedPositiveInteger(body.maxModelLen, 8192, "maxModelLen", 4_194_304);
     const maxNumSeqs = boundedPositiveInteger(body.maxNumSeqs, 4, "maxNumSeqs", 1024);
     const maxNumBatchedTokens = boundedNonNegativeInteger(body.maxNumBatchedTokens, 0, "maxNumBatchedTokens", 4_194_304);
+    const template = templateEngineFor(engine);
     const gpuMemoryUtilization = boundedNumber(
       body.gpuMemoryUtilization,
-      instanceMode === "parallel" ? 0.7 : 0.92,
+      templateDefaultFraction(template) ?? (instanceMode === "parallel" ? 0.7 : 0.92),
       "gpuMemoryUtilization",
       0.05,
       1,
     );
+    const notes = [];
     const cpuOffloadGb = nonNegativeNumber(body.cpuOffloadGb, 0);
     const kvOffloadingSize = nonNegativeNumber(body.kvOffloadingSize, 0);
     const mmProcessorCacheGb = optionalNonNegativeNumber(body.mmProcessorCacheGb);
@@ -129,8 +135,21 @@ function createVllmStartRuntimeRequest(deps) {
       ? inferToolCallParser(model, clientPreset)
       : requestedToolCallParser;
     const enableAutoToolChoice = Boolean(body.enableAutoToolChoice) && Boolean(toolCallParser);
-    const networkAccess = normalizeNetworkAccess(body.networkAccess);
-    const vllmApiKey = String(body.apiKey || "").trim();
+    let networkAccess = normalizeNetworkAccess(body.networkAccess);
+    let vllmApiKey = String(body.apiKey || "").trim();
+    if (template) {
+      // An engine that cannot enforce an API key is never offered on the LAN, and
+      // a key it cannot use is not stored (01 §18).
+      const label = template.label?.en || template.id;
+      if (networkAccess === "lan" && !dockerTemplate.lanAllowed(template)) {
+        networkAccess = "local";
+        notes.push(templateNote("networkAccess", "lan_unavailable", `${template.label?.zh || template.id} 不支持 API Key，端口只发布到本机回环地址，请通过网关访问`, `${label} has no API-key support; its port is published on loopback only and is reached through the gateway`));
+      }
+      if (vllmApiKey && template.secrets?.apiKey?.mode === "unsupported") {
+        vllmApiKey = "";
+        notes.push(templateNote("apiKey", "api_key_unsupported", `${template.label?.zh || template.id} 不支持 API Key，已忽略`, `${label} cannot enforce an API key; it was ignored`));
+      }
+    }
     const speculativeMode = normalizeSpeculativeMode(body.speculativeMode, "off");
     const numSpeculativeTokens = positiveInt(body.numSpeculativeTokens, 1);
     const runtimeImage = normalizeRuntimeImage(body.runtimeImage);
@@ -214,7 +233,15 @@ function createVllmStartRuntimeRequest(deps) {
     // engine start, and a capped KV pool (--max-total-tokens) lets admission
     // clamp to the safe budget and warn; the Pennyroyal recipe reserves its
     // measured footprint; an exact calibration replaces the SGLang fraction.
-    const memoryValues = engine === "sglang"
+    const memoryValues = template
+      ? {
+        contextLength: maxModelLen,
+        concurrency: maxNumSeqs,
+        kvCacheDtype: kvCacheDtype || "auto",
+        tensorParallel: tensorParallelSize,
+        ...(template.memoryModel?.fractionParam ? { [template.memoryModel.fractionParam]: gpuMemoryUtilization } : {}),
+      }
+      : engine === "sglang"
       ? {
         contextLength: maxModelLen,
         concurrency: maxNumSeqs,
@@ -243,8 +270,12 @@ function createVllmStartRuntimeRequest(deps) {
         ? pennyroyalRecipeMemory({ sglangMaxTotalTokens, maxModelLen })
         : null,
       calibration,
-    });
-    Object.assign(gpuAdmissionRequest, { requestedFraction: undefined }, memory.admissionRequest);
+    }, template ? { descriptor: template } : {});
+    // A docker-template engine's memory model needs the artifact's size to name
+    // an amount; without it admission reserves the planned fraction of the
+    // device, as it does for vLLM (the plan's memory block says it is coarse).
+    const namesAnAmount = ["requestedMb", "requestedFraction", "requestedFractionOfFree"].some((field) => Number(memory.admissionRequest?.[field]) > 0);
+    Object.assign(gpuAdmissionRequest, template && !namesAnAmount ? {} : { requestedFraction: undefined }, memory.admissionRequest || {});
     const jobMeta = {
       model,
       engine,
@@ -373,7 +404,7 @@ function createVllmStartRuntimeRequest(deps) {
       gpuAdmissionLeaseId: "",
       gpuAdmissionFinalized: false,
     };
-    return { runOptions, jobMeta, admissionRequest: gpuAdmissionRequest, memory };
+    return { runOptions, jobMeta, admissionRequest: gpuAdmissionRequest, memory, ...(notes.length ? { warnings: notes } : {}) };
   }
 
   const planner = createLaunchPlanner({
@@ -568,6 +599,23 @@ function persistAsyncRuntimeFailure(job, error) {
     errorCode,
     findings,
   };
+}
+
+// A plan warning ({ field, code, message }) with the bilingual text the resolver shows.
+function templateNote(field, code, zh, en) {
+  return { field, code, message: `${zh} / ${en}` };
+}
+
+// The catalog's literal default of the engine's memory fraction (lmdeploy 0.8, trtllm 0.9), else null.
+function templateDefaultFraction(template) {
+  const id = template?.memoryModel?.fractionParam;
+  if (!id) return null;
+  try {
+    const value = paramCatalog.getParamCatalog().loadCatalog(template.id).byId.get(id)?.platformDefault;
+    return typeof value === "number" && value > 0 && value <= 1 ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function boundedPositiveInteger(value, fallback, name, max) {
