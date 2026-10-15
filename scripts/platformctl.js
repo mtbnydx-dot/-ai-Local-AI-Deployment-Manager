@@ -4,9 +4,10 @@
 // The `platform` CLI (docs/overhaul/06-ops.md §6). This file is the framework
 // (argument parsing, language, exit codes, the command table), the read
 // commands (doctor (report only), status, logs, version, open, config, deps
-// and secrets) and the lifecycle commands (start, stop, restart, supervise,
-// supervisor). Access and deploy commands register in COMMANDS from later
-// packages; until then they answer "not available yet" with exit 1.
+// and secrets), the lifecycle commands (start, stop, restart, supervise,
+// supervisor) and the access commands (admin pair, keys migrate, exposure
+// scan; open and start pair the browser). Deploy commands register in COMMANDS
+// from later packages; until then they answer "not available yet" with exit 1.
 //
 // Only node built-ins are required at load time. Every platform module is
 // required inside the command that needs it, so `doctor` still starts on an
@@ -83,6 +84,24 @@ const S = {
   "open.opened": { [ZH]: "已打开 {url}", [EN]: "Opened {url}" },
   "open.unknownTarget": { [ZH]: "未知目标“{name}”。可选：{known}", [EN]: "Unknown target \"{name}\". Choose one of: {known}" },
   "open.failed": { [ZH]: "无法打开浏览器，请手动访问：{url}", [EN]: "Could not open the browser. Open this address yourself: {url}" },
+  "pair.hint": { [ZH]: "请在本机终端运行 platform admin pair 获取配对链接。", [EN]: "Run platform admin pair in a terminal on this machine to get a pairing link." },
+  "pair.badTtl": { [ZH]: "--ttl 必须是 1 到 600 之间的整数秒。", [EN]: "--ttl must be a whole number of seconds from 1 to 600." },
+  "pair.entryDown": { [ZH]: "入口服务没有响应（{origin}）。请先运行 platform start。", [EN]: "The entry is not answering ({origin}). Run platform start first." },
+  "pair.noKey": { [ZH]: "内部签名密钥不可用，无法生成配对链接。", [EN]: "The internal signing key is unavailable, so no pairing link can be minted." },
+  "pair.refused": { [ZH]: "入口拒绝了请求：{detail}", [EN]: "The entry refused the request: {detail}" },
+  "pair.opened": { [ZH]: "已在浏览器中打开配对链接（链接不会显示或记录）。", [EN]: "Opened a pairing link in the browser (the link is not shown or logged)." },
+  "keys.header": { [ZH]: "访问密钥迁移计划（只读，仅显示预览）", [EN]: "Access-key migration plan (read-only, previews only)" },
+  "keys.none": { [ZH]: "没有需要迁移的旧密钥。", [EN]: "No legacy keys to migrate." },
+  "keys.rows": { [ZH]: "将导入 {count} 个密钥：", [EN]: "{count} key(s) would be imported:" },
+  "keys.skipped": { [ZH]: "跳过 {count} 项：", [EN]: "{count} skipped:" },
+  "keys.warnings": { [ZH]: "警告 {count} 项：", [EN]: "{count} warning(s):" },
+  "keys.note": { [ZH]: "入口在启动时自动迁移（幂等）；此命令不会写入任何数据。", [EN]: "The entry migrates at start, idempotently. This command writes nothing." },
+  "keys.noReport": { [ZH]: "入口尚未生成迁移报告。", [EN]: "The entry has not produced a migration report yet." },
+  "keys.reportHeader": { [ZH]: "迁移报告（{at}）：已导入 {inserted}，跳过 {skipped}，警告 {warnings}", [EN]: "Migration report ({at}): {inserted} imported, {skipped} skipped, {warnings} warning(s)" },
+  "exposure.header": { [ZH]: "对外暴露检查（只读）", [EN]: "Exposure scan (read-only)" },
+  "exposure.unsupported": { [ZH]: "此平台不支持对外暴露检查。", [EN]: "The exposure scan is not supported on this platform." },
+  "exposure.legacy": { [ZH]: "旧版组件：{id}", [EN]: "Legacy component: {id}" },
+  "exposure.setupSoon": { [ZH]: "exposure setup 尚未在此版本提供。", [EN]: "exposure setup is not available in this build yet." },
   "config.secretViaStore": {
     [ZH]: "{key} 是密钥，不能用 config 命令设置。请运行：platform secrets set {key}",
     [EN]: "{key} is a secret and cannot be set with config. Run: platform secrets set {key}",
@@ -662,8 +681,53 @@ function defaultOpenUrl(url) {
   });
 }
 
-// Pairing (opening `…/#pair=<code>` for console and billing) is wired in by
-// the access-commands package; this opens the plain URL.
+// Mints a one-time pairing URL as system:cli (06 §5.16). Resolves to
+// { url } or { reason: "key" | "down" | "refused", detail }. The URL carries a
+// live code: callers print it to the terminal or hand it to the browser only.
+function createCliEntryClient(ctx, origin) {
+  const { createEntryClient } = require("../manager-core/platform/entry-client");
+  return createEntryClient({
+    aiRoot: ctx.aiRoot,
+    principal: "system:cli",
+    baseUrl: origin,
+    ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
+    ...(ctx.internalReadKey ? { readKey: ctx.internalReadKey } : {}),
+    ...(ctx.trustFile ? { trustFile: ctx.trustFile } : {}),
+  });
+}
+
+async function mintPairUrl(ctx, origin, { ttlSeconds = 120 } = {}) {
+  let result;
+  try {
+    result = await createCliEntryClient(ctx, origin).request("POST", "/api/session/pair-codes", { body: { ttlSeconds }, timeoutMs: 5000 });
+  } catch (error) {
+    return { reason: error?.code === "internal_key_unavailable" ? "key" : "down" };
+  }
+  const json = result.json || {};
+  if (result.status !== 200 || json.ok !== true || !/^https?:\/\/[^/\s]+\/#pair=\S+$/.test(String(json.url || ""))) {
+    return { reason: "refused", detail: String(json.error?.code || json.code || `HTTP ${result.status}`) };
+  }
+  return { url: json.url };
+}
+
+// Opens the entry in the browser: paired when signing works, else the plain
+// URL plus 05's pairing hint. Returns false when the browser could not be
+// opened. The paired URL is never printed.
+async function openPaired(ctx, origin, plainUrl) {
+  const pair = await mintPairUrl(ctx, origin);
+  if (!pair.url) ctx.err(tr(ctx, "pair.hint"));
+  try {
+    await (ctx.openUrl || defaultOpenUrl)(pair.url || plainUrl);
+  } catch {
+    ctx.err(tr(ctx, "open.failed", { url: plainUrl }));
+    return false;
+  }
+  return true;
+}
+
+// `open console|billing` pairs the browser first. Both open the paired
+// console root, which owns the #pair= fragment; the session then covers
+// /billing.
 async function cmdOpen(ctx, { args, flags }) {
   if (args.length > 1) throw usageError(ctx, "open [console|billing|vllm|llama|tts]");
   const name = args[0] || "console";
@@ -678,6 +742,11 @@ async function cmdOpen(ctx, { args, flags }) {
   const url = `${base.replace(/\/+$/, "")}${target.suffix}`;
   if (flags.json) { ctx.json({ target: name, url }); return EXIT.OK; }
   if (flags.print) { ctx.out(url); return EXIT.OK; }
+  if (target.component === "entry") {
+    if (!(await openPaired(ctx, base.replace(/\/+$/, ""), url))) return EXIT.FAILURE;
+    ctx.out(tr(ctx, "open.opened", { url }));
+    return EXIT.OK;
+  }
   try {
     await (ctx.openUrl || defaultOpenUrl)(url);
   } catch {
@@ -686,6 +755,159 @@ async function cmdOpen(ctx, { args, flags }) {
   }
   ctx.out(tr(ctx, "open.opened", { url }));
   return EXIT.OK;
+}
+
+// ---------------------------------------------------------------------------
+// admin / keys / exposure (05 C7)
+
+function entryOrigin(ctx, config) {
+  const { registry, components } = loadRegistry(ctx, config);
+  const spec = findSpec(registry, "entry");
+  const resolved = spec ? components.resolveComponent(spec, { aiRoot: ctx.aiRoot, config }) : null;
+  const base = resolved?.urls?.admin;
+  if (!base) throw new CliError(EXIT.FAILURE, tr(ctx, "error.failed", { detail: "entry has no admin address" }));
+  return base.replace(/\/+$/, "");
+}
+
+async function cmdAdmin(ctx, { args, flags }) {
+  if (args[0] !== "pair" || args.length > 1) throw usageError(ctx, "admin pair [--open] [--ttl s]");
+  let ttlSeconds = 120;
+  if (flags.ttl !== undefined) {
+    ttlSeconds = Number(flags.ttl);
+    if (!/^\d+$/.test(String(flags.ttl)) || ttlSeconds < 1 || ttlSeconds > 600) throw new CliError(EXIT.USAGE, tr(ctx, "pair.badTtl"));
+  }
+  const origin = entryOrigin(ctx, loadConfig(ctx));
+  const pair = await mintPairUrl(ctx, origin, { ttlSeconds });
+  if (!pair.url) {
+    if (pair.reason === "down") { ctx.err(tr(ctx, "pair.entryDown", { origin })); return EXIT.SUPERVISOR_UNAVAILABLE; }
+    if (pair.reason === "key") { ctx.err(tr(ctx, "pair.noKey")); ctx.err(tr(ctx, "pair.hint")); return EXIT.FAILURE; }
+    ctx.err(tr(ctx, "pair.refused", { detail: pair.detail }));
+    return EXIT.FAILURE;
+  }
+  if (flags.open) {
+    try {
+      await (ctx.openUrl || defaultOpenUrl)(pair.url);
+      ctx.out(tr(ctx, "pair.opened"));
+      return EXIT.OK;
+    } catch {
+      ctx.err(tr(ctx, "open.failed", { url: pair.url }));
+      return EXIT.FAILURE;
+    }
+  }
+  ctx.out(pair.url);
+  return EXIT.OK;
+}
+
+// Hashes and long key-like tokens never reach the terminal, whatever a legacy
+// file or a warning carries.
+function scrubText(value) {
+  return String(value ?? "").replace(/\b[0-9a-fA-F]{32,}\b/g, "[redacted]").replace(/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}/g, "[redacted]");
+}
+
+function scrubDeep(value) {
+  if (typeof value === "string") return scrubText(value);
+  if (Array.isArray(value)) return value.map(scrubDeep);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) if (!/hash/i.test(key)) out[key] = scrubDeep(item);
+    return out;
+  }
+  return value;
+}
+
+// 05's pure planner over the managers' legacy files, read-only. The billing
+// bindings and the store's existing ids belong to the entry, so this lists
+// what a first migration would import.
+async function planKeysLocally(ctx) {
+  const keyMigration = require("../service-entry/lib/key-migration");
+  const defs = [
+    { id: "vllm", billingId: ctx.env.VLLM_MANAGER_ID || "vllm-manager", root: path.join(ctx.aiRoot, "vllm-manager") },
+    { id: "llama", billingId: ctx.env.LLAMA_MANAGER_ID || "llama-manager", root: path.join(ctx.aiRoot, "llama-manager") },
+  ];
+  const warnings = [];
+  const managers = [];
+  for (const manager of defs) {
+    const files = await keyMigration.readLegacyKeyFiles(manager);
+    if (files.issues.length) {
+      for (const issue of files.issues) warnings.push({ code: "legacy_file_unreadable", managerId: manager.id, file: issue.file, reason: issue.code });
+      continue;
+    }
+    managers.push({ id: manager.id, billingId: manager.billingId, settings: files.settings, clients: files.clients });
+  }
+  const plan = keyMigration.planKeyMigration({ managers, bindings: [], existingKeyIds: [] });
+  return {
+    inserts: plan.inserts.map((record) => ({
+      keyId: record.id,
+      name: record.name,
+      source: record.legacy?.source || null,
+      class: record.class,
+      preview: record.preview || null,
+    })),
+    skipped: plan.skipped,
+    warnings: [...plan.warnings, ...warnings],
+  };
+}
+
+async function printMigrationReport(ctx, flags) {
+  const origin = entryOrigin(ctx, loadConfig(ctx));
+  let result;
+  try {
+    result = await createCliEntryClient(ctx, origin).request("GET", "/api/access/migration", { timeoutMs: 5000 });
+  } catch (error) {
+    if (error?.code === "internal_key_unavailable") { ctx.err(tr(ctx, "pair.noKey")); return EXIT.FAILURE; }
+    ctx.err(tr(ctx, "pair.entryDown", { origin }));
+    return EXIT.SUPERVISOR_UNAVAILABLE;
+  }
+  if (result.status !== 200 || result.json?.ok !== true) {
+    ctx.err(tr(ctx, "pair.refused", { detail: String(result.json?.error?.code || `HTTP ${result.status}`) }));
+    return EXIT.FAILURE;
+  }
+  const report = scrubDeep(result.json.report || null);
+  if (flags.json) { ctx.json({ report }); return EXIT.OK; }
+  if (!report) { ctx.out(tr(ctx, "keys.noReport")); return EXIT.OK; }
+  ctx.out(tr(ctx, "keys.reportHeader", { at: report.at || "-", inserted: report.counts?.inserted ?? 0, skipped: report.counts?.skipped ?? 0, warnings: report.counts?.warnings ?? 0 }));
+  for (const key of report.keys || []) ctx.out(`  ${key.keyId}  ${key.name || ""}  ${key.source || ""}`);
+  return EXIT.OK;
+}
+
+async function cmdKeys(ctx, { args, flags }) {
+  if (args[0] !== "migrate" || args.length > 1 || (flags["dry-run"] && flags.report)) throw usageError(ctx, "keys migrate [--dry-run|--report] [--json]");
+  if (flags.report) return printMigrationReport(ctx, flags);
+  const plan = scrubDeep(await planKeysLocally(ctx));
+  if (flags.json) { ctx.json({ dryRun: true, ...plan }); return EXIT.OK; }
+  ctx.out(tr(ctx, "keys.header"));
+  if (!plan.inserts.length && !plan.skipped.length && !plan.warnings.length) ctx.out(tr(ctx, "keys.none"));
+  if (plan.inserts.length) {
+    ctx.out(tr(ctx, "keys.rows", { count: plan.inserts.length }));
+    for (const line of table([[tr(ctx, "col.id"), tr(ctx, "col.name"), "source", "preview"], ...plan.inserts.map((row) => [row.keyId, row.name, row.source || "-", row.preview || "-"])])) ctx.out(`  ${line}`);
+  }
+  if (plan.skipped.length) {
+    ctx.out(tr(ctx, "keys.skipped", { count: plan.skipped.length }));
+    for (const item of plan.skipped) ctx.out(`  ${item.keyId || item.managerId || "-"}  ${item.reason}`);
+  }
+  if (plan.warnings.length) {
+    ctx.out(tr(ctx, "keys.warnings", { count: plan.warnings.length }));
+    for (const item of plan.warnings) ctx.out(`  ${item.code}${item.keyId ? `  ${item.keyId}` : item.managerId ? `  ${item.managerId}` : ""}`);
+  }
+  ctx.out(tr(ctx, "keys.note"));
+  return EXIT.OK;
+}
+
+async function cmdExposure(ctx, { args, flags }) {
+  if (args[0] === "setup") { ctx.err(tr(ctx, "exposure.setupSoon")); return EXIT.FAILURE; }
+  if (args[0] !== "scan" || args.length > 1) throw usageError(ctx, "exposure scan [--json] | exposure setup [args…]");
+  const configApi = require("../manager-core/platform/config");
+  const { loadAccessConfig } = require("../service-entry/lib/public-config");
+  const { runExposureScan } = require("../service-entry/lib/exposure-scan");
+  const config = loadAccessConfig({ readSection: (name) => configApi.readSection(name, { aiRoot: ctx.aiRoot, env: ctx.env }) });
+  const report = await runExposureScan({ aiRoot: ctx.aiRoot, config, now: ctx.now, ...(ctx.exposureOptions || {}) });
+  const failed = (report.checks || []).some((check) => check.state === "fail");
+  if (flags.json) { ctx.json(report); return failed ? EXIT.FAILURE : EXIT.OK; }
+  ctx.out(tr(ctx, "exposure.header"));
+  if (!(report.checks || []).length) ctx.out(tr(ctx, "exposure.unsupported"));
+  for (const check of report.checks || []) ctx.out(`  ${String(check.state).padEnd(7)} ${check.id}${check.evidence ? `  ${scrubText(check.evidence)}` : ""}`);
+  for (const finding of report.legacy || []) ctx.out(`  ${tr(ctx, "exposure.legacy", { id: finding.id || finding.kind || "-" })}`);
+  return failed ? EXIT.FAILURE : EXIT.OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -1326,7 +1548,8 @@ async function cmdStart(ctx, { args, flags }) {
   if (wantsBrowser && entry?.row.state === "ready") {
     const url = entry.urls.find((item) => item.name === "admin")?.url;
     if (url) {
-      try { await (ctx.openUrl || defaultOpenUrl)(`${url.replace(/\/+$/, "")}/`); } catch { ctx.err(tr(ctx, "open.failed", { url })); }
+      const origin = url.replace(/\/+$/, "");
+      await openPaired(ctx, origin, `${origin}/`);
     }
   }
   return failure || (allReady ? EXIT.OK : EXIT.FAILURE);
@@ -1647,13 +1870,28 @@ const COMMANDS = {
     spec: { bool: ["json", "yes"], value: ["namespace"] },
     run: cmdSecrets,
   },
+  admin: {
+    usage: "admin pair [--open] [--ttl s]",
+    summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" },
+    spec: { bool: ["open"], value: ["ttl"], max: 1 },
+    run: cmdAdmin,
+  },
+  keys: {
+    usage: "keys migrate [--dry-run|--report] [--json]",
+    summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" },
+    spec: { bool: ["dry-run", "report", "json"], max: 1 },
+    run: cmdKeys,
+  },
+  exposure: {
+    usage: "exposure scan [--json] | exposure setup [args…]",
+    summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" },
+    spec: { bool: ["json"], max: 1 },
+    run: cmdExposure,
+  },
 };
 
 const PLANNED = {
   setup: { package: "OPS-14", usage: "setup [--step id] [--yes] [--non-interactive]", summary: { [ZH]: "首次运行向导", [EN]: "First-run wizard" } },
-  admin: { package: "OPS-7c", usage: "admin pair [--open] [--ttl s]", summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" } },
-  keys: { package: "OPS-7c", usage: "keys migrate [--dry-run|--report] [--json]", summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" } },
-  exposure: { package: "OPS-7c", usage: "exposure scan [--json] | exposure setup [args…]", summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" } },
   autostart: { package: "OPS-12", usage: "autostart enable [--profile p] | disable | status", summary: { [ZH]: "登录自启动", [EN]: "Start at logon" } },
   deploy: { package: "OPS-11b", usage: "deploy [--restart none|changed|all] [--skip-tests] [--no-prune] [--allow-live-drift] [--yes] [--dry-run]", summary: { [ZH]: "从工作区部署到线上目录", [EN]: "Deploy a worktree to the live root" } },
   "post-deploy": { package: "OPS-11a", usage: "post-deploy --manifest <path> [--restart …] [--no-prune] [--dry-run]", summary: { [ZH]: "部署后处理（内部使用）", [EN]: "Post-deploy steps (internal)" } },
