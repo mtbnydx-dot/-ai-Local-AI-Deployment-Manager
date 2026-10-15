@@ -2365,42 +2365,14 @@ function detectLogStage(text) {
   return text ? "starting / waiting" : "no container logs";
 }
 
+// The hint and suggestion texts live in the error-signature data (02 MOD-12);
+// these two stay as the callbacks summarizeDockerRuntimeLogs expects.
 function logIssueHint(message) {
-  const text = String(message || "").toLowerCase();
-  if (text.includes("mamba cache align") || text.includes("max_num_batched_tokens") || (text.includes("block_size") && text.includes("batched_tokens"))) return "这是 Qwen3.6 混合/Mamba cache align 下的调度 token 上限过低；把 --max-num-batched-tokens 提高到 8192 后重试。";
-  if (text.includes("w2_input_scale") || text.includes("modelopt_mixed") || text.includes("exceeds dimension size")) return "这是 Qwen3.6/NVFP4 的 ModelOpt 权重布局与当前 vLLM 加载器不匹配；优先换 vllm/vllm-openai:nightly 或模型卡指定的 vLLM 版本。";
-  if (text.includes("batchprefillwithpagedkvcache") || text.includes("illegal memory access")) return "这是 Qwen3.6/NVFP4 在 FlashInfer + FP8 KV prefill 路径上的 CUDA 崩溃风险；dense 模型改用 --attention-backend TRITON_ATTN，是否启用 thinking 由客户端请求决定。";
-  if (text.includes("here's a thinking process") || text.includes("!!!!!!!!!!!!!!!!")) return "这是 Qwen3.6/NVFP4 thinking 或生成退化循环；dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 由客户端按需传 chat_template_kwargs.enable_thinking 控制。";
-  if (text.includes("uva is not available")) return "这是 Windows Docker/WSL 的 pinned memory / UVA 限制；DiffusionGemma 的 V2 runner 需要 UVA，建议换原生 Linux 或使用非 DiffusionGemma 模型。";
-  if (text.includes("scattergatherkernel") || text.includes("device-side assert")) return "这是推理期 CUDA kernel 断言，不是端口或显存占满；DiffusionGemma NVFP4 在 Windows Docker/WSL fallback 路径下可能无法稳定生成。";
-  if (text.includes("out of memory") || text.includes("cuda")) return "降低 max_model_len / max_num_seqs，启用 FP8 KV cache，或降低 gpu-memory-utilization。";
-  if (text.includes("no such") || text.includes("not found")) return "检查模型路径、Docker 挂载目录和文件名。";
-  if (text.includes("trust_remote_code")) return "该模型可能需要开启 trust_remote_code。";
-  if (text.includes("token") || text.includes("gated")) return "检查 HF_TOKEN 和模型授权。";
-  if (text.includes("gguf")) return "GGUF 优先用 llama.cpp；若坚持 vLLM，确认 tokenizer/hf-config-path。";
-  return "打开日志页查看完整上下文，必要时用保守 Profile 重试。";
+  return core.models.rootCause.legacyHint(message, "vllm");
 }
 
 function buildLogSuggestions(issues, stage) {
-  const suggestions = [];
-  if (issues.some((item) => /mamba cache align|max_num_batched_tokens|block_size .*batched_tokens/i.test(item.message))) {
-    suggestions.push("Mamba cache align 断言：max_num_batched_tokens 太小，Qwen3.6 MoE/NVFP4 用 --max-num-batched-tokens 8192 后重试。");
-  }
-  if (issues.some((item) => /w2_input_scale|modelopt_mixed|qwen3_5\.py|exceeds dimension size/i.test(item.message))) {
-    suggestions.push("Qwen3.6/NVFP4 加载失败：当前 vLLM 镜像可能不支持该 ModelOpt 权重布局，换 vllm/vllm-openai:nightly 或模型卡指定版本后重试。");
-  }
-  if (issues.some((item) => /BatchPrefillWithPagedKVCache|illegal memory access|Here's a thinking process|!{16,}/i.test(item.message))) {
-    suggestions.push("Qwen3.6/NVFP4 推理退化或 FlashInfer prefill 崩溃：dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 开关应由客户端通过 chat_template_kwargs.enable_thinking 控制。");
-  }
-  if (issues.some((item) => /uva is not available|scattergatherkernel|device-side assert/i.test(item.message))) {
-    suggestions.push("DiffusionGemma NVFP4 当前在 Windows Docker/WSL 路径不稳：优先换原生 Linux + V2 runner，或改跑常规 Qwen/Gemma 模型。");
-  }
-  if (issues.some((item) => /out of memory|cuda/i.test(item.message))) suggestions.push("显存错误：先切到低显存保守模式或把上下文减半。");
-  if (issues.some((item) => /no such|not found/i.test(item.message))) suggestions.push("路径错误：从模型库选择本地模型并自动填入启动表单。");
-  if (issues.some((item) => /token|gated/i.test(item.message))) suggestions.push("授权错误：配置 HF_TOKEN 后重新下载或启动。");
-  if (!suggestions.length && stage !== "API ready") suggestions.push("如果长时间停在编译或 warmup，观察 GPU 利用率；首次启动慢通常正常。");
-  if (!suggestions.length) suggestions.push("当前日志没有明显错误。");
-  return suggestions;
+  return core.models.rootCause.legacySuggestions(issues, stage, "vllm");
 }
 
 const SERVICE_EXPOSURE_CHECK_OPTIONS = {
