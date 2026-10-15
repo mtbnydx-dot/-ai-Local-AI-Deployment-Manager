@@ -136,7 +136,7 @@ test("LAN viewers are denied by default before any route code runs", async (t) =
 
   const denied = [
     ["GET", "/api/spy"],
-    ["GET", "/api/hub/downloads"],
+    ["GET", "/api/hub/downloads/dl_aaaaaaaaaaaaaaaa/logs"],
     ["GET", "/api/keys"],
     ["GET", "/api/mcp/status"],
     ["GET", "/billing"],

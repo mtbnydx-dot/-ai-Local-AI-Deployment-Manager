@@ -1,5 +1,31 @@
 const { redactSecrets } = require("./secret-redactor");
 
+const DEFAULT_ENTRY_PORT = 5176;
+
+function validPort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 0;
+}
+
+/**
+ * The service-entry port managers report in GET /api/config (00 §9.17):
+ * SERVICE_ENTRY_PORT, else the platform config listeners.admin.port (06
+ * readSection), else 5176. A config that cannot be read never stops /api/config.
+ */
+function resolveEntryPort({ env = process.env, readSection, aiRoot } = {}) {
+  const fromEnv = validPort(env?.SERVICE_ENTRY_PORT);
+  if (fromEnv) return fromEnv;
+  try {
+    const read = typeof readSection === "function" ? readSection : require("./platform/config").readSection;
+    const section = read("listeners", { env, ...(aiRoot ? { aiRoot } : {}) });
+    const fromConfig = validPort(section?.values?.admin?.port);
+    if (fromConfig) return fromConfig;
+  } catch {
+    // Fall through to the default.
+  }
+  return DEFAULT_ENTRY_PORT;
+}
+
 function registerManagerRoutes(app, deps = {}) {
   const {
     config,
@@ -48,6 +74,7 @@ function registerManagerRoutes(app, deps = {}) {
       managerPort: port,
       lanAddress,
       hasHfToken: hasHfToken(),
+      entryPort: resolveEntryPort({ env: deps.env, readSection: deps.readPlatformSection, aiRoot: deps.aiRoot }),
       ...getConfigExtras(),
     });
   });
@@ -442,5 +469,6 @@ module.exports = {
   createManagerApiSecretRedactionMiddleware,
   redactManagerSecrets,
   registerManagerRoutes,
+  resolveEntryPort,
   summarizeStatusJob,
 };

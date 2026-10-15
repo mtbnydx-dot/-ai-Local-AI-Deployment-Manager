@@ -131,3 +131,61 @@ test("settings: env beats the section, and the default database sits in the data
   assert.equal(resolveTelemetryConfig({ config: { enabled: false }, env: {}, dataDir }).enabled, false);
   assert.equal(resolveTelemetryConfig({ config: { enabled: false }, env: { TELEMETRY_ENABLED: "1" }, dataDir }).enabled, true);
 });
+
+test("the RuntimeCollector reads 01's route through the manager client and gateway rows feed llama latency", async () => {
+  const store = fakeStore();
+  const runtimeRows = [];
+  store.insertRuntimeSamples = async (batch) => {
+    runtimeRows.push(...batch);
+    return { accepted: batch.length, duplicates: 0, rejected: 0, dropped: 0, errors: [] };
+  };
+  const targets = [];
+  let scrapedAt = Date.parse("2026-10-14T08:00:10.000Z");
+  let tokens = 1000;
+  const client = {
+    async get(managerId, target, options) {
+      targets.push({ managerId, target, timeoutMs: options?.timeoutMs });
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          ok: true,
+          scrapeOk: true,
+          scrapedAt: new Date(scrapedAt).toISOString(),
+          raw: {
+            processStartSeconds: null,
+            models: [{ model: "demo", counters: { promptTokensTotal: tokens, generationTokensTotal: tokens }, gauges: { requestsRunning: 1, requestsWaiting: 0 }, histograms: {} }],
+          },
+        },
+      };
+    },
+  };
+  const timers = { setTimeout: () => ({ unref() {} }), clearTimeout() {} };
+  const runtime = createTelemetryRuntime({
+    aiRoot: os.tmpdir(),
+    dataDir: os.tmpdir(),
+    managers: [{ id: "llama", port: 1 }],
+    managerClient: client,
+    events: fakeBus(),
+    getFleetCatalogs: async () => [{ manager: { id: "llama" }, instances: [{ fleetId: "llama:primary", managerId: "llama", instanceId: "primary", engineId: "llamacpp", lifecycleState: "ready", models: [{ id: "demo" }] }] }],
+    env: {},
+    docker: false,
+    logger: null,
+    openStore: async () => store,
+    config: {},
+    timers,
+  });
+  await runtime.start();
+  const collector = runtime.collectors.runtime;
+  assert.ok(collector);
+  await collector.tick();
+  scrapedAt += 10_000;
+  tokens = 1500;
+  await collector.tick();
+  assert.deepEqual(targets[0], { managerId: "llama", target: "/api/instances/primary/metrics", timeoutMs: 3000 });
+  assert.equal(runtimeRows.length, 1);
+  assert.equal(runtimeRows[0].dPromptTokens, 500);
+  assert.equal(runtimeRows[0].latencySource, "gateway");
+  assert.equal(runtime.status().collectors.runtime.state, "ok");
+  await runtime.stop();
+});

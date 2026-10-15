@@ -44,7 +44,6 @@ const {
   positiveInt,
   clampNumber,
   lastIntegerMatch,
-  lastFloatMatch,
   countUniqueCaptures,
   averageCapture,
   normalizeNetworkAccess,
@@ -198,6 +197,22 @@ const billingClient = core.createBillingClient({
   managerId: CONFIG.managerId,
   root: DEFAULT_AI_ROOT,
 });
+// 05 §6.8, §7.2 (PUB-10): the legacy key routes forward to the entry's key
+// store, direct gateway calls follow public.managersGatewayOnly (read through
+// OPS-3 at most every 10 s), and /api/manager/health advertises hop v2 so the
+// entry stops forwarding API keys to this manager. The frontend smoke tests
+// start real managers; they must not call the entry this computer runs, so
+// there the key routes stay on this manager's legacy files.
+const legacyKeyForwarder = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.createLegacyKeyForwarder({
+  managerId: CONFIG.managerId,
+  root: DEFAULT_AI_ROOT,
+});
+const readGatewayOnlyMode = core.createGatewayOnlyModeReader({ aiRoot: DEFAULT_AI_ROOT });
+const gatewayTrustHealth = () => ({ gatewayTrust: { version: core.GATEWAY_TRUST_VERSION, mode: readGatewayOnlyMode() } });
+const logDirectGatewayCall = (event) => {
+  const more = event.suppressed ? ` (+${event.suppressed} more in the last minute)` : "";
+  console.warn(`[gateway] direct_manager_gateway: ${event.kind} ${event.path} from ${event.remoteAddress}${more}; use the platform endpoint instead.`);
+};
 const logBillingIntegrationIssue = ({ phase, requestId, code } = {}) => {
   if (["insufficient_quota", "request_limit_exceeded", "token_limit_exceeded", "spend_limit_exceeded", "customer_suspended"].includes(String(code || ""))) return;
   console.warn(`Billing ${String(phase || "request")} issue (${String(code || "unknown")}) for request ${String(requestId || "unknown")}.`);
@@ -375,13 +390,12 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
       message: "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。现有模型与镜像只保留作回滚，不会由此检查删除。",
     };
   }
-  // The capability matrix (manager-core/data/model-capabilities.json) owns
+  // The families v2 knowledge (manager-core/data/knowledge/families.json) owns
   // per-architecture llama.cpp requirements; the GGUF general.architecture is
-  // the declared identity here, so no name heuristics are involved.
-  const capability = normalized
-    ? core.resolveModelCapabilityEntry({ ggufArchitecture: normalized, allowNameFallback: false })
-    : { entry: null, id: "", matchedBy: "" };
-  const llamaCapabilities = capability.entry ? core.resolveEngineCapabilities(capability.entry, "llama", {}) : null;
+  // the declared identity (match.ggufArchitectures) here, so no name
+  // heuristics are involved.
+  const capability = core.models.compatibility.ggufArchitectureSupport(normalized);
+  const llamaCapabilities = capability.llamacpp ? core.resolveEngineCapabilities({ llama: capability.llamacpp }, "llama", {}) : null;
   const summary = { id: capability.id, label: capability.label, matchedBy: capability.matchedBy };
   if (llamaCapabilities?.supported === false) {
     return {
@@ -421,7 +435,7 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
   }
   // An architecture the matrix does not list is unknown, never "compatible"
   // (00 §4.4, 08 P0-15). Launch still goes ahead; the start job logs this.
-  if (normalized && !capability.entry) {
+  if (normalized && !capability.family) {
     return {
       architecture: normalized,
       status: "unknown",
@@ -500,10 +514,6 @@ const {
   getServiceClientsLedger,
   saveServiceClientsLedger,
   redactServiceClientsLedger,
-  createServiceClient,
-  updateServiceClient,
-  rotateServiceClientKey,
-  deleteServiceClient,
   resolveServiceClientForApiKey,
   recordServiceClientGatewayUsage,
 } = serviceClientsStore;
@@ -780,6 +790,9 @@ const serviceGatewayMiddleware = core.createServiceGatewayMiddleware({
   concurrencyBuckets: serviceConcurrencyBuckets,
   appendAccessLog: appendServiceGatewayAccessLog,
   corsAllowHeaders: "authorization,content-type,x-api-key,x-requested-with",
+  getGatewayOnlyMode: readGatewayOnlyMode,
+  verifyAccessKey: legacyKeyForwarder ? legacyKeyForwarder.verifyAccessKey : null,
+  onDirectGatewayCall: logDirectGatewayCall,
 });
 
 const { managerSecurityGuard } = core.createManagerSecurityGuard({
@@ -794,6 +807,7 @@ const { managerSecurityGuard } = core.createManagerSecurityGuard({
 
 const managerLifecycle = core.createManagerLifecycle({
   app,
+  getHealthExtras: gatewayTrustHealth,
   host: HOST,
   port: PORT,
   label: "llama.cpp Manager",
@@ -893,6 +907,7 @@ const operationalSnapshotStore = core.createManagerOperationalSnapshotStore({
 const getOperationalSnapshot = (request) => operationalSnapshotStore.getSnapshot(request);
 
 core.registerManagerRoutes(app, {
+  aiRoot: DEFAULT_AI_ROOT,
   idleUnload: {
     listSleeping: () => idleUnloadController.listSleeping(),
     saveSettings: (body) => idleUnloadController.saveSettings(body),
@@ -918,7 +933,7 @@ core.registerManagerRoutes(app, {
   getImageStatus: async () => (await getOperationalSnapshot()).image,
   getRunningModelSummary: async () => (await getOperationalSnapshot()).runtime,
   getManagerResourceSummary: async () => (await getOperationalSnapshot()).resources,
-  buildMemoryEstimate: buildLlamaMemoryEstimate,
+  buildMemoryEstimate: (body) => buildLlamaMemoryEstimate(body, { resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }) }),
   buildStatusExtras: ({ gpu }) => ({
     gpuPlan: buildLlamaGpuPlan(gpu, [], 0.92, "layer"),
   }),
@@ -940,12 +955,24 @@ core.registerServicePolicyRoutes(app, {
   getServiceExposureSettings,
   saveServiceExposureSettings,
   buildServiceExposurePayload,
-  getServiceClientsLedger,
   redactServiceClientsLedger,
-  createServiceClient,
-  updateServiceClient,
-  rotateServiceClientKey,
-  deleteServiceClient,
+  // The keys live in the entry's store; the legacy shapes come back (§6.8).
+  ...(legacyKeyForwarder
+    ? {
+      getServiceClientsLedger: legacyKeyForwarder.getServiceClientsLedger,
+      createServiceClient: legacyKeyForwarder.createServiceClient,
+      updateServiceClient: legacyKeyForwarder.updateServiceClient,
+      rotateServiceClientKey: legacyKeyForwarder.rotateServiceClientKey,
+      deleteServiceClient: legacyKeyForwarder.deleteServiceClient,
+      forwardGlobalKey: legacyKeyForwarder.forwardGlobalKey,
+    }
+    : {
+      getServiceClientsLedger,
+      createServiceClient: serviceClientsStore.createServiceClient,
+      updateServiceClient: serviceClientsStore.updateServiceClient,
+      rotateServiceClientKey: serviceClientsStore.rotateServiceClientKey,
+      deleteServiceClient: serviceClientsStore.deleteServiceClient,
+    }),
 });
 
 core.registerIntegrationRoutes(app, {
@@ -1069,6 +1096,9 @@ async function precheckDownloadRequest(query = {}) {
     getGpuStatus().catch(() => null),
   ]);
   const primaryGpu = gpu?.gpus?.[0] || null;
+  // Every selected GPU is judged (query gpus=0,1), not only the first.
+  const wantedGpus = String(query.gpus ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  const selectedGpus = (gpu?.gpus || []).filter((item) => !wantedGpus.length || wantedGpus.includes(String(item.index ?? item.id)));
   const assessment = core.assessDownloadCompatibility({
     engine: "llama",
     model: reference.model,
@@ -1080,6 +1110,7 @@ async function precheckDownloadRequest(query = {}) {
     gated: Boolean(estimate?.gated),
     runtime: { ...LLAMA_RUNTIME_RELEASE, version: `b${DEFAULT_LLAMA_IMAGE_BUILD}`, build: DEFAULT_LLAMA_IMAGE_BUILD },
     gpu: primaryGpu ? { computeCap: primaryGpu.computeCap, totalMb: primaryGpu.totalMb } : null,
+    gpus: selectedGpus.map((item) => ({ id: String(item.index ?? item.id ?? ""), computeCap: item.computeCap, totalMb: item.totalMb })),
   });
   return {
     ...assessment,
@@ -1614,7 +1645,7 @@ const runtimeRequestHandlers = core.createRuntimeRequestHandlers({
     primaryContainerName: CONFIG.containerName,
     managerId: CONFIG.managerId,
     ownerLabelKey: MANAGER_LABEL_KEY,
-    engines: ["llama"],
+    isRuntimeContainer: (container) => instanceCatalog.isHosted(container),
     getContainerStatus: (name) => getContainerStatus(name),
     listManagedContainers: () => listManagedContainers(),
   }),
@@ -1684,6 +1715,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   listContainers: () => listManagedContainers(),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
+  // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (null until MOD-10).
+  ...core.models.managerHooks({ managerId: "llama", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatus, modelStorage, modelsRoot: CONFIG.modelsRoot }),
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller
@@ -1785,9 +1818,50 @@ const instanceMetricsSampler = core.engines.metrics.createInstanceMetricsSampler
   getDerivedInputs: metricsDerivedInputs,
   adapterFor: core.engines.adapterFor,
 });
+// Typed instances (ENG-13): which containers are instances (registry.hostedBy, plus
+// unknown engines, which stay listed and stoppable) and the 00 §4.1 fields.
+const instanceCatalog = core.engines.createInstanceCatalog({
+  registry: engineRegistry,
+  managerId: "llama",
+  launchStore,
+  getJob: (jobId) => jobs.get(jobId) || null,
+  listSleeping: () => idleUnloadController.listSleeping(),
+});
+
+// One instance of GET /api/instances by id, with its container and the state
+// LaunchStore resolves records from. Running and stopped containers only.
+async function findRuntimeInstance(id) {
+  const summaries = await getRunningModelSummaries();
+  for (const runtime of summaries) {
+    const legacy = legacyRuntimeInstance(runtime);
+    if (legacy.id !== id && legacy.containerName !== id) continue;
+    const container = runtime.container || {};
+    return { instance: { ...legacy, ...instanceCatalog.typed(legacy, container) }, container, state: instanceCatalog.stateOf(legacy, container) };
+  }
+  return null;
+}
+
 const engineRoutes = core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
   recipeStore,
+  // GET /api/instances/:id/logs|launch and POST /api/instances/:id/relaunch (ENG-13).
+  docker,
+  resolveLogContainer: core.createOwnedRuntimeContainerResolver({
+    primaryContainerName: CONFIG.containerName,
+    managerId: CONFIG.managerId,
+    ownerLabelKey: MANAGER_LABEL_KEY,
+    isRuntimeContainer: (container) => instanceCatalog.isHosted(container),
+    getContainerStatus: (name) => getContainerStatus(name),
+    listManagedContainers: () => listManagedContainers(),
+  }),
+  redactLogs: runtimeSecretRedactor,
+  launchStore,
+  jobsLedgerLookup: (jobId) => jobs.get(jobId) || null,
+  listRecentLaunches: () => recentLaunches,
+  findInstance: findRuntimeInstance,
+  apiKeyFor: (found) => getLlamaApiKey(found.container),
+  startRuntime: startRuntimeRequest,
+  stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
   managerId: "llama",
@@ -1802,6 +1876,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   appendLog,
   finishJob,
   failJob,
+  // POST /api/runtimes/:runtimeId/pull (ENG-11): the supervisor's pull job.
+  pullRuntime: (runtimeId, options) => runtimeSupervisor.pullRuntime(runtimeId, options),
 });
 
 // Model knowledge (docs/overhaul/02-models.md MOD-5): GET /api/knowledge/status lists the
@@ -2261,10 +2337,18 @@ const SERVICE_EXPOSURE_CHECK_OPTIONS = {
   },
 };
 
+// gatewayOnly (05 §7.2) rides along; the client list is the entry's, or
+// this manager's legacy file while the entry is down.
 async function buildServiceExposurePayload(settings) {
+  return { ...(await buildServiceExposurePayloadSnapshot(settings)), gatewayOnly: readGatewayOnlyMode() };
+}
+
+async function buildServiceExposurePayloadSnapshot(settings) {
   const [snapshot, clientsLedger] = await Promise.all([
     getOperationalSnapshot(),
-    getServiceClientsLedger().catch(() => ({ clients: [] })),
+    (legacyKeyForwarder ? legacyKeyForwarder.getServiceClientsLedger() : getServiceClientsLedger())
+      .catch(() => getServiceClientsLedger())
+      .catch(() => ({ clients: [] })),
   ]);
   const { docker, container, runtime } = snapshot;
   const endpoint = runtime.endpoint || getContainerEndpoint(container);
@@ -2320,7 +2404,7 @@ async function listStatsSampleInstances() {
   const managed = await listManagedContainers().catch(() => []);
   for (const item of managed) {
     if (!item.running || item.name === CONFIG.containerName) continue;
-    if (item.manager !== CONFIG.managerId || item.engine !== "llama") continue;
+    if (item.manager !== CONFIG.managerId || !instanceCatalog.isKnownEngine(item)) continue;
     const container = await getContainerStatus(item.name);
     if (!container?.running) continue;
     instances.push({ id: item.labels?.["ai.manager.instance"] || item.name, primary: false, container });
@@ -3270,7 +3354,7 @@ async function getRunningModelSummaries() {
 function getRunningModelSummariesFresh() {
   runtimeInstancesCache.promise = Promise.resolve().then(async () => {
     const managed = (await listManagedContainers()).filter((container) => (
-      container.manager === CONFIG.managerId && container.engine === "llama"
+      container.manager === CONFIG.managerId && instanceCatalog.isHosted(container)
     ));
     const primary = await getContainerStatus(CONFIG.containerName);
     const primaryOwner = primary.labels?.[MANAGER_LABEL_KEY] || "";
@@ -3292,50 +3376,62 @@ function getRunningModelSummariesFresh() {
   return runtimeInstancesCache.promise;
 }
 
-async function listRuntimeInstancesRequest() {
+function legacyRuntimeInstance(runtime) {
+  const container = runtime.container || {};
+  const labels = container.labels || {};
+  const primary = container.name === CONFIG.containerName;
+  const servedModels = Array.isArray(runtime.servedModels) ? runtime.servedModels : [];
+  const enrichedModels = Array.isArray(runtime.models) && runtime.models.length ? runtime.models : servedModels;
+  const lastKnownModel = String(labels["ai.manager.model"] || "").trim();
+  const instanceModels = enrichedModels.length
+    ? enrichedModels
+    : lastKnownModel ? [{ id: lastKnownModel, lastKnown: true }] : [];
+  return {
+    id: llamaInstanceId(container.name, labels),
+    instanceMode: primary ? "replace" : labels["ai.manager.instance-mode"] || "parallel",
+    primary,
+    containerName: container.name,
+    running: Boolean(container.running),
+    status: container.status || "",
+    image: container.image || "",
+    port: runtime.endpoint?.port || Number(labels["ai.manager.port"] || 0),
+    gpuIds: normalizeGpuIds(labels["ai.manager.gpu-ids"] || ""),
+    vramReservationMb: Number(labels["ai.manager.vram-reservation-mb"] || 0),
+    gpuMemoryUtilization: Number(labels["ai.manager.gpu-memory-utilization"] || 0),
+    localBaseUrl: runtime.endpoint?.localUrl || null,
+    lanBaseUrl: runtime.endpoint?.lanUrl || null,
+    requestsTotal: instanceModels.reduce((sum, model) => sum + Number(model.requests || 0), 0),
+    activeRequests: instanceModels.reduce((sum, model) => sum + Number(model.runningRequests || 0), 0),
+    queuedRequests: instanceModels.reduce((sum, model) => sum + Number(model.waitingRequests || 0), 0),
+    models: instanceModels.map((model) => ({
+      id: model.id,
+      root: model.root || "",
+      maxModelLen: model.max_model_len || model.maxModelLen || null,
+      requestsTotal: Number.isFinite(Number(model.requests)) ? Number(model.requests) : 0,
+      runningRequests: Number.isFinite(Number(model.runningRequests)) ? Number(model.runningRequests) : null,
+      waitingRequests: Number.isFinite(Number(model.waitingRequests)) ? Number(model.waitingRequests) : null,
+      lastKnown: Boolean(model.lastKnown),
+    })),
+  };
+}
+
+// GET /api/instances[?include=sleeping]: the legacy item plus the typed fields
+// (01 §16.4). Sleeping records are listed only on request, so the default set
+// is the set of containers, as before.
+async function listRuntimeInstancesRequest({ query } = {}) {
   const summaries = await getRunningModelSummaries();
+  const includeRaw = Array.isArray(query?.include) ? query.include.join(",") : String(query?.include || "");
+  const includeSleeping = includeRaw.split(",").map((part) => part.trim().toLowerCase()).includes("sleeping");
+  const instances = summaries.map((runtime) => {
+    const legacy = legacyRuntimeInstance(runtime);
+    return { ...legacy, ...instanceCatalog.typed(legacy, runtime.container || {}) };
+  });
+  if (includeSleeping) instances.push(...await instanceCatalog.sleeping());
   return {
     ok: true,
     primaryContainer: CONFIG.containerName,
     supportsParallel: true,
-    instances: summaries.map((runtime) => {
-      const container = runtime.container || {};
-      const labels = container.labels || {};
-      const primary = container.name === CONFIG.containerName;
-      const servedModels = Array.isArray(runtime.servedModels) ? runtime.servedModels : [];
-      const enrichedModels = Array.isArray(runtime.models) && runtime.models.length ? runtime.models : servedModels;
-      const lastKnownModel = String(labels["ai.manager.model"] || "").trim();
-      const instanceModels = enrichedModels.length
-        ? enrichedModels
-        : lastKnownModel ? [{ id: lastKnownModel, lastKnown: true }] : [];
-      return {
-        id: llamaInstanceId(container.name, labels),
-        instanceMode: primary ? "replace" : labels["ai.manager.instance-mode"] || "parallel",
-        primary,
-        containerName: container.name,
-        running: Boolean(container.running),
-        status: container.status || "",
-        image: container.image || "",
-        port: runtime.endpoint?.port || Number(labels["ai.manager.port"] || 0),
-        gpuIds: normalizeGpuIds(labels["ai.manager.gpu-ids"] || ""),
-        vramReservationMb: Number(labels["ai.manager.vram-reservation-mb"] || 0),
-        gpuMemoryUtilization: Number(labels["ai.manager.gpu-memory-utilization"] || 0),
-        localBaseUrl: runtime.endpoint?.localUrl || null,
-        lanBaseUrl: runtime.endpoint?.lanUrl || null,
-        requestsTotal: instanceModels.reduce((sum, model) => sum + Number(model.requests || 0), 0),
-        activeRequests: instanceModels.reduce((sum, model) => sum + Number(model.runningRequests || 0), 0),
-        queuedRequests: instanceModels.reduce((sum, model) => sum + Number(model.waitingRequests || 0), 0),
-        models: instanceModels.map((model) => ({
-          id: model.id,
-          root: model.root || "",
-          maxModelLen: model.max_model_len || model.maxModelLen || null,
-          requestsTotal: Number.isFinite(Number(model.requests)) ? Number(model.requests) : 0,
-          runningRequests: Number.isFinite(Number(model.runningRequests)) ? Number(model.runningRequests) : null,
-          waitingRequests: Number.isFinite(Number(model.waitingRequests)) ? Number(model.waitingRequests) : null,
-          lastKnown: Boolean(model.lastKnown),
-        })),
-      };
-    }),
+    instances,
   };
 }
 
@@ -3349,7 +3445,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
     return { ok: true, id: requested, containerName: CONFIG.containerName, stopped: true };
   }
   const managed = (await listManagedContainers()).filter((container) => (
-    container.manager === CONFIG.managerId && container.engine === "llama"
+    container.manager === CONFIG.managerId && instanceCatalog.isHosted(container)
   ));
   const target = managed.find((container) => (
     container.name === requested
@@ -3731,14 +3827,9 @@ async function getLatestRuntimeFacts(modelHints = [], options = {}) {
     splitMode: latestServe?.meta?.multiGpuMode || null,
     tensorSplit: latestServe?.meta?.tensorSplit || null,
     gpuLayers: latestServe?.meta?.gpuLayers || null,
-    kvCacheTokens: lastIntegerMatch(text, /GPU KV cache size:\s*([\d,]+)\s*tokens/gi),
-    maxConcurrency: lastFloatMatch(text, /Maximum concurrency for\s*[\d,]+\s*tokens per request:\s*([\d.]+)x/gi),
-    modelLoadMemoryGiB: lastFloatMatch(text, /Model loading took\s*([\d.]+)\s*GiB memory/gi),
-    modelLoadSeconds: lastFloatMatch(text, /Model loading took\s*[\d.]+\s*GiB memory and\s*([\d.]+)\s*seconds/gi),
-    torchCompileSeconds: lastFloatMatch(text, /torch\.compile took\s*([\d.]+)\s*s/gi),
-    warmupSeconds: lastFloatMatch(text, /Initial profiling\/warmup run took\s*([\d.]+)\s*s/gi),
-    graphCaptureGiB: lastFloatMatch(text, /Graph capturing finished in\s*[\d.]+\s*secs,\s*took\s*([\d.]+)\s*GiB/gi),
-    engineInitSeconds: lastFloatMatch(text, /init engine .* took\s*([\d.]+)\s*s/gi),
+    // Engine-measured load facts come from the llamacpp descriptor's logFacts
+    // (01 §16.2), not from vLLM log patterns llama.cpp never prints.
+    logFacts: core.engines.extractLogFacts(engineRegistry.get("llamacpp"), text),
     llamaCompletedRequests: countUniqueCaptures(text, /slot\s+print_timing:.*?\|\s*task\s+(\d+)\s*\|.*?total time\s*=/gi),
     llamaAvgPromptEvalSeconds: averageCapture(text, /prompt eval time\s*=\s*([\d.]+)\s*ms/gi, 0.001),
     llamaAvgEvalSeconds: averageCapture(text, /\beval time\s*=\s*([\d.]+)\s*ms/gi, 0.001),
@@ -3765,8 +3856,8 @@ async function saveJobsLedgerNow() {
   return jobsLedgerStore.saveJobsLedgerNow();
 }
 
-function createJob(type, title, meta = {}) {
-  return jobsLedgerStore.createJob(type, title, meta);
+function createJob(type, title, meta = {}, options = {}) {
+  return jobsLedgerStore.createJob(type, title, meta, options);
 }
 
 function appendLog(job, data) {
@@ -4076,11 +4167,12 @@ const runtimeSupervisor = core.engines.createRuntimeSupervisor({
   containerBaseName: CONFIG.containerName,
   host: dockerHost,
   launchStore,
+  registry: engineRegistry,
   events: sseHub,
   secrets: runtimeApiKeyStore,
   redactor: runtimeSecretRedactor,
   runtimeGatePolicy: "warn",
-  jobs: { appendLog, setJobProgress, scheduleJobsSave, finishJob, failJob, assertActive: assertStartJobActive },
+  jobs: { createJob, appendLog, setJobProgress, scheduleJobsSave, finishJob, failJob, assertActive: assertStartJobActive },
   probes: {
     nvidiaCompatibility: () => core.engines.runtimeSupervisor.probeNvidiaCompatibility(execFileAsync),
     gpuStatus: getGpuStatusFresh,
@@ -4091,6 +4183,7 @@ const runtimeSupervisor = core.engines.createRuntimeSupervisor({
   // container or model list up to the cache TTL old.
   getters: { containerStatus: getContainerStatusFresh, servedModels: getServedModelsFresh },
   publishedPort: (ports) => parseDockerPortPublish(ports)?.port ?? null,
+  resolveRuntime: (runtimeId) => core.engines.findHostedRuntime(engineRegistry, "llama", runtimeId),
   hooks: {
     beforeStart: () => snapshotCurrentStats("before-start"),
     afterChange: () => clearRuntimeInstancesCache(),
@@ -4113,7 +4206,7 @@ function llamaInstanceId(containerName, labels = {}) {
 }
 
 async function runStartJob(job, opts) {
-  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: "api" });
+  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: job.meta?.launchSource || "api" });
 }
 
 // The run context the supervisor needs: the legacy run options, the llama

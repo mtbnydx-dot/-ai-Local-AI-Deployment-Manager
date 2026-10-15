@@ -33,7 +33,24 @@ const DEFAULT_OUTPUT = path.join(DATA_DIR, "knowledge", "families.json");
 //
 // Flash-Next outranks it: a Flash-Next repository name also contains "Qwen3.8",
 // and v1 resolved that by file order, which v2 replaces by priority.
+//
+// DiffusionGemma on Windows Docker/WSL (02 section 8.2, MOD-11): the policy
+// block that vllm-manager's diffusionGemmaWindowsBlockReason used to hold in
+// code is data on the Gemma family. It applies to the DiffusionGemma identities
+// only, on the WSL host platform, unless VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA is set.
 const ADJUSTMENTS = Object.freeze({
+  gemma4: (entry) => {
+    entry.blocks = [{
+      engines: ["vllm"],
+      when: { hostPlatform: "wsl", modelTypes: ["diffusiongemma", "diffusion_gemma"], architecturePatterns: ["^diffusiongemma"] },
+      unlessEnv: "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA",
+      code: "diffusion_gemma_windows",
+      reason: {
+        zh: "DiffusionGemma NVFP4 在 Windows Docker/WSL 下当前不可稳定运行：V2 runner 会因 UVA 不可用启动失败，V1 fallback 可加载但首个 chat 请求可能触发 CUDA device-side assert。请改用常规 Gemma-4/Qwen，或在原生 Linux 上运行；确认要自行承担风险时设置 VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1。",
+        en: "DiffusionGemma NVFP4 does not run reliably on Windows Docker/WSL: the V2 runner fails to start without UVA, and the V1 fallback loads but the first chat request may hit a CUDA device-side assert. Use regular Gemma-4/Qwen, run on native Linux, or set VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1 to accept the risk.",
+      },
+    }];
+  },
   "qwen3.8-flash-next": (entry) => {
     entry.priority = 30;
   },
@@ -61,7 +78,7 @@ function readJsonIfPresent(file) {
 }
 
 function orderedEntry(entry) {
-  const order = ["id", "label", "priority", "confidence", "match", "contextMax", "speculative", "engines", "download", "requires", "notes", "fixtures"];
+  const order = ["id", "label", "priority", "confidence", "match", "contextMax", "speculative", "engines", "blocks", "download", "requires", "notes", "fixtures"];
   const result = {};
   for (const key of order) if (entry[key] !== undefined) result[key] = entry[key];
   return result;

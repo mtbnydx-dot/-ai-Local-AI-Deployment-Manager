@@ -76,6 +76,8 @@ function createLlamaStartRuntimeRequest(deps) {
     listContainers = null,
     getIntrospection = null,
     modelStorage = null,
+    calibrationFor = null,
+    modelFacts = null,
   } = deps;
 
   /**
@@ -369,6 +371,8 @@ function createLlamaStartRuntimeRequest(deps) {
     listContainers,
     getIntrospection,
     modelStorage,
+    calibrationFor,
+    modelFacts,
   });
 
   async function startRuntimeRequest({ body = {} } = {}) {
@@ -406,7 +410,13 @@ function createLlamaStartRuntimeRequest(deps) {
     }
     let job;
     try {
-      job = createJob("serve", `Start ${name}`, { ...plan.legacy.jobMeta, gpuDeviceIds, gpuAdmission: admission });
+      job = createJob("serve", `Start ${name}`, {
+        ...plan.legacy.jobMeta,
+        gpuDeviceIds,
+        gpuAdmission: admission,
+        // A relaunch (ENG-13) records its launch with source "relaunch".
+        ...(body?.source === "relaunch" ? { launchSource: "relaunch" } : {}),
+      });
     } catch (error) {
       try {
         await admissionLease?.release?.("job-create-failed");

@@ -1,7 +1,10 @@
 {
   "prefixes": [
     "common.badge.",
+    "common.chart.annotation.",
+    "common.gpu.kind.",
     "common.provenance.",
+    "common.range.",
     "common.step.",
     "error.code.",
     "shell.nav.",
@@ -9,7 +12,10 @@
     "status.",
     "uikit.tab.",
     "uikit.toast.",
-    "uikit.variant."
+    "uikit.variant.",
+    "voice.action.",
+    "voice.confirm.",
+    "voice.type."
   ],
   "unused": [
     "common.window.1h",

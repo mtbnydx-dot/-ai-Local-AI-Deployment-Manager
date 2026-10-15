@@ -12,6 +12,7 @@ const MODULES = [
   "./gateway-trust",
   "./billing-client",
   "./billing-pending-queue",
+  "./legacy-key-forwarder",
   "./gateway-utils",
   "./access-log",
   "./prometheus-utils",

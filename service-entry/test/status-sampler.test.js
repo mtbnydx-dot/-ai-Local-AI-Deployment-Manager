@@ -352,6 +352,20 @@ test("portal-config follows the configured base or the request Host", async (t) 
   assert.deepEqual(lan.features, { playground: true, showPrices: false, tts: false });
 });
 
+test("portal-config carries the short commit for the footer only when the build has one", async (t) => {
+  const env = setup(t);
+  const make = (getBuildId) => sampler.createPublicData({ sampler: env.sampler, getCatalogs: async () => [], store: env.store, config: CONFIG, getBuildId, now: () => env.clock.ms });
+  const withCommit = await make(() => ({ contentHash: "abc123", commit: "0123456789abcdef0123" })).respond("/portal-config.json", { headers: { host: "x" } });
+  assert.equal(withCommit.commit, "0123456789ab");
+  for (const commit of [null, "", "not-a-hash", "<script>"]) {
+    const doc = await make(() => ({ contentHash: "abc123", commit })).respond("/portal-config.json", { headers: { host: "x" } });
+    assert.equal("commit" in doc, false, String(commit));
+  }
+  const failing = await make(() => { throw new Error("scan failed"); }).respond("/portal-config.json", { headers: { host: "x" } });
+  assert.equal(failing.buildId, "");
+  assert.equal("commit" in failing, false);
+});
+
 // Ports, paths, manager ids, container names, engine names and instance ids.
 const INTERNALS_RE = /(?:[A-Za-z]:\\|\\\\|\/models\/|\/home\/|\/root\/|\/tmp\/|(?:^|[^\d])(?:127\.0\.0\.1|localhost)|[\w.\]]:\d{2,5}(?![\d-])|\b(?:5176|5177|5186|18000)\b|vllm|llama|sglang|manager|container|instance|fleet|primary|secret|SERVICE_ENTRY_)/i;
 
