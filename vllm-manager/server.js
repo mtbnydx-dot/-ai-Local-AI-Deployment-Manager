@@ -16,7 +16,7 @@ const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest, persistAsyncRuntimeFailure } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
-const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
+const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine, templateEngineOf } = require("./lib/runtime-command");
 const { buildVllmImagePullOptions: imagePullOptionsFor, createVllmRunContext, vllmInstanceId } = require("./lib/run-context");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService } = require("./lib/remote-models");
@@ -407,12 +407,17 @@ const {
   parseDockerPortPublish,
 } = core.createDockerPublishHelpers({ containerPort: 8000, getLanAddress });
 
+// Generated per-launch config files of docker-template engines (01 §19.1):
+// <AI_ROOT>/.runtime/launch-files/<launchId>/, deleted when the instance stops.
+const launchFiles = core.engines.createLaunchFiles({ root: DEFAULT_AI_ROOT });
+
 const {
   buildVllmRuntimeCommand,
   formatDockerPublishArgs,
   prepareLaunch,
   redactDockerArgs,
 } = createVllmRuntimeCommandBuilder({
+  launchFiles,
   getModelMountArgs: () => modelStorage.dockerMountArgs(),
   CONFIG,
   MANAGER_LABEL_KEY,
@@ -1688,10 +1693,11 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   // and the engine routes are created further down).
   getEngineRegistry: () => engineRegistry,
   getRecipeStore: () => recipeStore,
+  templateEngineFor: (engineId) => templateEngineOf(engineRegistry, engineId),
   // The command preview: the adapter input runStartJob builds from these run
   // options, and the recipe the legacy preset was rendered from.
-  prepareLaunchCommand: (runOptions, { jobId }) => {
-    const prepared = prepareLaunch({ id: jobId, meta: {} }, runOptions);
+  prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
+    const prepared = prepareLaunch({ id: jobId, meta: {} }, prospective ? { ...runOptions, prospective: true } : runOptions);
     return { ...prepared, recipe: core.engines.recipes.recipeForLegacyPreset(prepared.preset) };
   },
   getHostGpus: async () => {
@@ -1702,6 +1708,8 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
   admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
+  // fromLaunchId (ENG-26): the stored spec POST /api/launch replays.
+  getLaunchSpec: (launchId) => launchStore.get(launchId),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
   // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (MOD-10 store).
@@ -1849,6 +1857,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
+  // POST /api/launch (ENG-26): /api/start for a LaunchRequestV2 or {fromLaunchId}.
+  startLaunch: ({ req, body }) => startRuntimeRequest({ req, body, v2Only: true }),
   managerId: "vllm",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -2172,6 +2182,18 @@ async function checkModelCompatibility(input = {}) {
     enableAutoToolChoice: true,
   });
   const local = describeLocalModelPath(model);
+  // Experimental docker-template engines (lmdeploy, trtllm, tabbyapi): no
+  // vLLM capability matrix applies; the model must be a local folder, because
+  // their images are started with --pull never and never download weights.
+  if (templateEngineOf(engineRegistry, runtimeEngine)) {
+    if (!local?.stat?.isDirectory()) {
+      findings.push(finding("fail", "模型目录", `${model} 不是本机可访问的模型目录。实验性引擎只加载本机目录，不会下载模型。`));
+    } else {
+      findings.push(finding("ok", "模型目录", local.path));
+    }
+    findings.push(finding("warn", "实验性引擎", "这个引擎的参数、显存估算和容器镜像都没有在本机验证过。"));
+    return core.buildCompatibilityReport({ model, recommendations, remote: null, findings });
+  }
   const lower = model.toLowerCase();
   const looksGguf = looksLikeGgufReference(model) || local?.ggufFiles?.length || lower.endsWith(".gguf");
   const localConfig = local ? readLocalModelConfig(local.path) : null;
@@ -2389,42 +2411,14 @@ function detectLogStage(text) {
   return text ? "starting / waiting" : "no container logs";
 }
 
+// The hint and suggestion texts live in the error-signature data (02 MOD-12);
+// these two stay as the callbacks summarizeDockerRuntimeLogs expects.
 function logIssueHint(message) {
-  const text = String(message || "").toLowerCase();
-  if (text.includes("mamba cache align") || text.includes("max_num_batched_tokens") || (text.includes("block_size") && text.includes("batched_tokens"))) return "这是 Qwen3.6 混合/Mamba cache align 下的调度 token 上限过低；把 --max-num-batched-tokens 提高到 8192 后重试。";
-  if (text.includes("w2_input_scale") || text.includes("modelopt_mixed") || text.includes("exceeds dimension size")) return "这是 Qwen3.6/NVFP4 的 ModelOpt 权重布局与当前 vLLM 加载器不匹配；优先换 vllm/vllm-openai:nightly 或模型卡指定的 vLLM 版本。";
-  if (text.includes("batchprefillwithpagedkvcache") || text.includes("illegal memory access")) return "这是 Qwen3.6/NVFP4 在 FlashInfer + FP8 KV prefill 路径上的 CUDA 崩溃风险；dense 模型改用 --attention-backend TRITON_ATTN，是否启用 thinking 由客户端请求决定。";
-  if (text.includes("here's a thinking process") || text.includes("!!!!!!!!!!!!!!!!")) return "这是 Qwen3.6/NVFP4 thinking 或生成退化循环；dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 由客户端按需传 chat_template_kwargs.enable_thinking 控制。";
-  if (text.includes("uva is not available")) return "这是 Windows Docker/WSL 的 pinned memory / UVA 限制；DiffusionGemma 的 V2 runner 需要 UVA，建议换原生 Linux 或使用非 DiffusionGemma 模型。";
-  if (text.includes("scattergatherkernel") || text.includes("device-side assert")) return "这是推理期 CUDA kernel 断言，不是端口或显存占满；DiffusionGemma NVFP4 在 Windows Docker/WSL fallback 路径下可能无法稳定生成。";
-  if (text.includes("out of memory") || text.includes("cuda")) return "降低 max_model_len / max_num_seqs，启用 FP8 KV cache，或降低 gpu-memory-utilization。";
-  if (text.includes("no such") || text.includes("not found")) return "检查模型路径、Docker 挂载目录和文件名。";
-  if (text.includes("trust_remote_code")) return "该模型可能需要开启 trust_remote_code。";
-  if (text.includes("token") || text.includes("gated")) return "检查 HF_TOKEN 和模型授权。";
-  if (text.includes("gguf")) return "GGUF 优先用 llama.cpp；若坚持 vLLM，确认 tokenizer/hf-config-path。";
-  return "打开日志页查看完整上下文，必要时用保守 Profile 重试。";
+  return core.models.rootCause.legacyHint(message, "vllm");
 }
 
 function buildLogSuggestions(issues, stage) {
-  const suggestions = [];
-  if (issues.some((item) => /mamba cache align|max_num_batched_tokens|block_size .*batched_tokens/i.test(item.message))) {
-    suggestions.push("Mamba cache align 断言：max_num_batched_tokens 太小，Qwen3.6 MoE/NVFP4 用 --max-num-batched-tokens 8192 后重试。");
-  }
-  if (issues.some((item) => /w2_input_scale|modelopt_mixed|qwen3_5\.py|exceeds dimension size/i.test(item.message))) {
-    suggestions.push("Qwen3.6/NVFP4 加载失败：当前 vLLM 镜像可能不支持该 ModelOpt 权重布局，换 vllm/vllm-openai:nightly 或模型卡指定版本后重试。");
-  }
-  if (issues.some((item) => /BatchPrefillWithPagedKVCache|illegal memory access|Here's a thinking process|!{16,}/i.test(item.message))) {
-    suggestions.push("Qwen3.6/NVFP4 推理退化或 FlashInfer prefill 崩溃：dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 开关应由客户端通过 chat_template_kwargs.enable_thinking 控制。");
-  }
-  if (issues.some((item) => /uva is not available|scattergatherkernel|device-side assert/i.test(item.message))) {
-    suggestions.push("DiffusionGemma NVFP4 当前在 Windows Docker/WSL 路径不稳：优先换原生 Linux + V2 runner，或改跑常规 Qwen/Gemma 模型。");
-  }
-  if (issues.some((item) => /out of memory|cuda/i.test(item.message))) suggestions.push("显存错误：先切到低显存保守模式或把上下文减半。");
-  if (issues.some((item) => /no such|not found/i.test(item.message))) suggestions.push("路径错误：从模型库选择本地模型并自动填入启动表单。");
-  if (issues.some((item) => /token|gated/i.test(item.message))) suggestions.push("授权错误：配置 HF_TOKEN 后重新下载或启动。");
-  if (!suggestions.length && stage !== "API ready") suggestions.push("如果长时间停在编译或 warmup，观察 GPU 利用率；首次启动慢通常正常。");
-  if (!suggestions.length) suggestions.push("当前日志没有明显错误。");
-  return suggestions;
+  return core.models.rootCause.legacySuggestions(issues, stage, "vllm");
 }
 
 const SERVICE_EXPOSURE_CHECK_OPTIONS = {
@@ -3819,6 +3813,8 @@ function legacyRecipeOptions(opts, runtimeEngine) {
 
 function resolveVllmRuntimePreset(opts = {}, launch = {}) {
   const runtimeEngine = normalizeRuntimeEngine(opts.engine);
+  // docker-template engines have no runtime presets or recipes (01 §19).
+  if (templateEngineOf(engineRegistry, runtimeEngine)) return {};
   const localConfig = readLocalModelConfig(launch.localPath);
   const requestedRuntimeImage = String(opts.runtimeImage || "").trim();
   const baseRuntimeImage = requestedRuntimeImage || defaultImageFor(runtimeEngine);
@@ -3963,6 +3959,17 @@ async function listManagedContainers() {
   return containers.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
 }
 
+// A stopped instance's generated launch files (a docker-template engine's
+// config and, for TabbyAPI, its api_tokens.yml) go with it. Best effort: the
+// container is already gone, and the scrub script reports any leftover.
+async function removeInstanceLaunchFiles(container) {
+  try {
+    await launchFiles.removeForContainer(container);
+  } catch (error) {
+    console.warn(`launch files of ${container?.name || "a stopped instance"} could not be removed: ${error.message}`);
+  }
+}
+
 async function removeManagedContainer(reason = "replace", containerName = CONFIG.containerName, expectedJobId = "") {
   const targetContainerName = normalizeDockerContainerName(containerName || CONFIG.containerName);
   // 生命周期操作要看实时容器状态，绕过快照缓存。
@@ -3986,6 +3993,7 @@ async function removeManagedContainer(reason = "replace", containerName = CONFIG
   const leaseId = String(container.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
   if (leaseId) await gpuAdmissionController.release(leaseId, reason || "container-stop").catch(() => {});
   await docker(["rm", "-f", targetContainerName]);
+  await removeInstanceLaunchFiles(container);
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
   clearRuntimeInstancesCache();
@@ -4282,6 +4290,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
   const leaseId = String(target.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
   if (leaseId) await gpuAdmissionController.release(leaseId, "instance-stop").catch(() => {});
   await docker(["rm", "-f", target.name]);
+  await removeInstanceLaunchFiles(target);
   const runtimeApiKeyRef = String(target.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
@@ -5244,6 +5253,7 @@ function stopProgressTracker(job) {
 // error object and jobs/instances events on this hub; vLLM/SGLang keep the hard
 // runtime gate. pullRuntime is the job behind POST /api/runtimes/:id/pull.
 const runtimeSupervisor = core.engines.createRuntimeSupervisor({
+  launchFiles,
   managerId: CONFIG.managerId,
   ownerLabelValue: CONFIG.managerId,
   containerBaseName: CONFIG.containerName,
@@ -5308,7 +5318,7 @@ const vllmRunContext = createVllmRunContext({
 });
 
 async function runStartJob(job, opts) {
-  return runtimeSupervisor.start({ job, run: vllmRunContext(opts), source: job.meta?.launchSource || "api" });
+  return runtimeSupervisor.start({ job, run: vllmRunContext(opts), source: job.meta?.launchSource || opts.launchSource || "api" });
 }
 
 function delay(ms) {
@@ -5320,6 +5330,8 @@ module.exports = {
   jobs,
   app,
   CONFIG,
+  launchFiles,
+  removeInstanceLaunchFiles,
   engineRegistry,
   runtimeSupervisor,
   vllmRunContext,

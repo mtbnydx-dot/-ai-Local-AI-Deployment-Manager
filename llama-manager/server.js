@@ -1759,8 +1759,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   getRecipeStore: () => recipeStore,
   // The command preview: the adapter input runStartJob builds from these run
   // options; the plan carries the recipe the wrapper applied.
-  prepareLaunchCommand: (runOptions, { jobId }) => {
-    const { plan, ctx } = planLlamaLaunch({ id: jobId, meta: {} }, runOptions);
+  prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
+    const { plan, ctx } = planLlamaLaunch({ id: jobId, meta: {} }, prospective ? { ...runOptions, prospective: true } : runOptions);
     return { adapter: core.engines.adapters.llamacpp, plan, ctx, recipe: plan.recipe || null };
   },
   getHostGpus: async () => {
@@ -1771,6 +1771,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
   admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
+  // fromLaunchId (ENG-26): the stored spec POST /api/launch replays.
+  getLaunchSpec: (launchId) => launchStore.get(launchId),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
   // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (MOD-10 store).
@@ -1922,6 +1924,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
+  // POST /api/launch (ENG-26): /api/start for a LaunchRequestV2 or {fromLaunchId}.
+  startLaunch: ({ req, body }) => startRuntimeRequest({ req, body, v2Only: true }),
   managerId: "llama",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -4268,7 +4272,7 @@ function llamaInstanceId(containerName, labels = {}) {
 }
 
 async function runStartJob(job, opts) {
-  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: job.meta?.launchSource || "api" });
+  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: job.meta?.launchSource || opts.launchSource || "api" });
 }
 
 // The run context the supervisor needs: the legacy run options, the llama
@@ -4280,6 +4284,8 @@ function llamaRunContext(opts) {
     engineId: "llamacpp",
     engineName: "llama.cpp",
     apiLabel: "llama.cpp API",
+    // mode add / onConflict: the supervisor re-checks the slot at its preflight (01 §11, 00 §9.3).
+    ...(opts.launchMode === "add" ? { mode: "add", onConflict: opts.onConflict === "skip" ? "skip" : "fail" } : {}),
     containerName: opts.containerName || CONFIG.containerName,
     instanceId: llamaInstanceId(opts.containerName || CONFIG.containerName, { "ai.manager.instance": opts.instanceId }),
     port: opts.port,

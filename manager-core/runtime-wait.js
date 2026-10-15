@@ -1,3 +1,8 @@
+// On container exit the wait reads this many log lines for root-cause analysis (02 MOD-12)
+// and keeps the older 260-line window for the job log delta and the issue scan.
+const EXIT_ANALYSIS_TAIL = 2000;
+const EXIT_WINDOW_TAIL = 260;
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -190,12 +195,15 @@ async function waitForRuntimeReady(options = {}) {
 
     if (!container.running) {
       await delayFn(1000);
-      const logText = await readLogs(containerName, { tail: 260 });
+      // The whole 2000-line tail is for root-cause analysis only; the job log, the
+      // issue scan and the progress snapshot keep the usual 260-line window.
+      const analysisText = await readLogs(containerName, { tail: EXIT_ANALYSIS_TAIL });
+      const logText = lastLines(analysisText, EXIT_WINDOW_TAIL);
       const deltaText = logSnapshotDelta(lastLogSnapshot, logText);
       if (deltaText) appendLog(job, deltaText);
       lastLogSnapshot = logText;
       const issues = extractLogIssues(logText);
-      recordRuntimeDiagnostics(job, { logText, issues, containerStatus: container.status || "stopped" });
+      recordRuntimeDiagnostics(job, { logText, analysisText, issues, containerStatus: container.status || "stopped" });
       setJobProgress(job, {
         percent: job.progress?.percent,
         stage: "容器已退出",
@@ -311,6 +319,11 @@ function inferStartupProgress(logText, elapsed, startupTimeoutMs) {
   };
 }
 
+function lastLines(text, count) {
+  const lines = String(text || "").split(/\r?\n/);
+  return lines.length > count ? lines.slice(-count).join("\n") : String(text || "");
+}
+
 function recordRuntimeDiagnostics(job, input = {}) {
   if (!job || typeof job !== "object") return;
   const issues = (input.issues || []).filter(Boolean);
@@ -318,16 +331,21 @@ function recordRuntimeDiagnostics(job, input = {}) {
   const logTail = input.logText
     ? String(input.logText).split(/\r?\n/).filter(Boolean).slice(-40).join("\n")
     : previous.lastLogTail || "";
+  const diagnostics = {
+    ...previous,
+    firstIssue: previous.firstIssue || issues[0] || "",
+    lastIssue: issues.at(-1) || previous.lastIssue || "",
+    lastContainerStatus: input.containerStatus || previous.lastContainerStatus || "",
+    lastLogTail: logTail,
+    updatedAt: new Date().toISOString(),
+  };
+  // The long tail for 02 root-cause analysis lives in memory only: non-enumerable, so it is
+  // never saved to the jobs ledger, serialised to a client or copied by a spread.
+  const analysisText = input.analysisText ? String(input.analysisText) : previous.analysisLogText || "";
+  if (analysisText) Object.defineProperty(diagnostics, "analysisLogText", { value: analysisText, enumerable: false, writable: true, configurable: true });
   job.meta = {
     ...(job.meta || {}),
-    runtimeDiagnostics: {
-      ...previous,
-      firstIssue: previous.firstIssue || issues[0] || "",
-      lastIssue: issues.at(-1) || previous.lastIssue || "",
-      lastContainerStatus: input.containerStatus || previous.lastContainerStatus || "",
-      lastLogTail: logTail,
-      updatedAt: new Date().toISOString(),
-    },
+    runtimeDiagnostics: diagnostics,
   };
 }
 

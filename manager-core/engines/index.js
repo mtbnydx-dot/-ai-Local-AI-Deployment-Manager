@@ -17,6 +17,9 @@ const dockerSegments = require("./adapters/_docker-segments");
 const expr = require("./expr");
 const dockerHost = require("./hosts/docker");
 const launchStore = require("./launch-store");
+const launchFiles = require("./launch-files");
+const templateGrammar = require("./template-grammar");
+const yamlEmit = require("./yaml-emit");
 const externalHost = require("./hosts/external");
 const nativeHost = require("./hosts/native");
 const legacyAliases = require("./legacy-aliases");
@@ -41,6 +44,7 @@ const adapters = Object.freeze({
   vllm: require("./adapters/vllm"),
   sglang: require("./adapters/sglang"),
   llamacpp: require("./adapters/llamacpp"),
+  "docker-template": require("./adapters/docker-template"),
   external: require("./adapters/external"),
 });
 
@@ -130,6 +134,13 @@ module.exports = {
   adapterFor,
   renderRunArgs: dockerSegments.renderRunArgs,
   LAUNCH_LABEL_KEYS: dockerSegments.LAUNCH_LABEL_KEYS,
+  // docker-template engines (01 §19, ENG-18): the template grammar, the YAML
+  // emitter for generated config files, and their per-launch directory.
+  templateGrammar,
+  yamlEmit,
+  emitYaml: yamlEmit.emitYaml,
+  launchFiles,
+  createLaunchFiles: launchFiles.createLaunchFiles,
   // LaunchStore (01 §15): launch records, launch-id adoption and the wake plan.
   launchStore,
   createLaunchStore: launchStore.createLaunchStore,

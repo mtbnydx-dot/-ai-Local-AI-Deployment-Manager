@@ -20,6 +20,7 @@ const { buildFacts, buildSchemaPayload, getParamCatalog, hostFactsFromGpus } = r
 const { matchRecipes } = require("./recipes");
 const { redactSecrets } = require("../secret-redactor");
 const { normalizeManagerId } = require("./registry");
+const { sendJsonError } = require("../runtime-routes");
 const { publicPlan } = require("./resolve-launch-plan");
 const { createRuntimeFacts } = require("./runtime-facts");
 const { summarizeJob } = require("../job-routes");
@@ -612,6 +613,21 @@ function registerEngineRoutes(app, deps = {}) {
           ...errorEnvelope(error.code || (status === 500 ? "launch_plan_failed" : "invalid_request"), error.message, error.hint),
           ...(error.details ? { details: clone(error.details) } : {}),
         });
+      }
+    });
+  }
+
+  // POST /api/launch (01 §11, 00 §9.3): /api/start for LaunchRequestV2 only (a
+  // legacy body is 400 v2_body_required), also {fromLaunchId, instance?,
+  // onConflict?, expectedPlanHash?, source?}. Same handler, responses and
+  // errors as /api/start: the job, the add/skip result, 409 plan_changed.
+  // Admission needs no extra check here; /api/start has none either.
+  if (typeof deps.startLaunch === "function") {
+    app.post("/api/launch", async (req, res) => {
+      try {
+        res.json(await deps.startLaunch({ req, body: req.body || {} }));
+      } catch (error) {
+        sendJsonError(res, error);
       }
     });
   }

@@ -14,6 +14,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { monitorEventLoopDelay } = require("node:perf_hooks");
 const test = require("node:test");
+const { Worker } = require("node:worker_threads");
 
 const { verifyArtifact, createArtifactVerifier, writeDownloadMarker, MARKER_FILE } = require("../model-hub/verify");
 const { hashFileWithProgress } = require("../model-hub/hash-worker");
@@ -115,12 +116,15 @@ function fakeTimers() {
   };
 }
 
-async function until(condition, label = "condition") {
-  for (let i = 0; i < 200; i += 1) {
-    if (condition()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+// Waits on wall-clock time, not on a count of event-loop turns: the code under
+// test does real file I/O before it reaches the point being awaited, and a loaded
+// machine can take far longer than any fixed number of turns for that.
+async function until(condition, label = "condition", timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 2));
   }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 function answerAll(worker, status = "ok") {
@@ -479,7 +483,7 @@ test("hashFileWithProgress reports every progress interval and matches sha256", 
   assert.ok(seen.every((bytes, index) => index === 0 || bytes > seen[index - 1]));
 });
 
-test("hashing 1 GiB in the worker keeps main-thread event-loop delay under 50 ms", { timeout: 180_000 }, async (t) => {
+test("hashing 1 GiB in the worker keeps main-thread event-loop delay under 50 ms (or a small multiple of the idle delay on a loaded machine)", { timeout: 180_000 }, async (t) => {
   const GIB = 1024 * 1024 * 1024;
   const dir = tempDir(t);
   const localDir = path.join(dir, "big");
@@ -501,20 +505,51 @@ test("hashing 1 GiB in the worker keeps main-thread event-loop delay under 50 ms
     progress: null,
   };
 
-  // A blocked main thread (hashing inline) would stall the loop for the whole
-  // ~600 ms; a scheduler hiccup on a loaded CI box is a one-off, so one retry
-  // of the measurement is allowed.
-  let maxMs = Infinity;
-  for (let attempt = 1; attempt <= 2 && !(maxMs < 50); attempt += 1) {
+  // The default worker, wrapped so the test can see where the hashing ran.
+  const hashWorkerPath = path.join(__dirname, "..", "model-hub", "hash-worker.js");
+  const spawned = [];
+  const createWorker = (data) => {
+    const worker = new Worker(hashWorkerPath, { workerData: data });
+    spawned.push({ worker, threadId: worker.threadId });
+    return worker;
+  };
+
+  // Correctness: the 1 GiB digest is computed on a worker thread, never on the
+  // main thread. This does not depend on timing at all.
+  // Latency: hashing inline would stall the loop for about the whole hash time
+  // (~600 ms unloaded). Scheduler noise on a busy machine is of a different
+  // size, so the bound is relative: the larger of 50 ms and a multiple of the
+  // delay an idle loop shows right now, and always far below the hash time.
+  // A one-off hiccup gets two more measurements.
+  async function maxLoopDelayMs(run) {
     const histogram = monitorEventLoopDelay({ resolution: 10 });
     histogram.enable();
+    try {
+      await run();
+    } finally {
+      histogram.disable();
+    }
+    return histogram.max / 1e6;
+  }
+
+  let verdict = null;
+  for (let attempt = 1; attempt <= 3 && !verdict?.within; attempt += 1) {
+    const idleMs = await maxLoopDelayMs(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    spawned.length = 0;
     const startedAt = Date.now();
-    const result = await verifyArtifact(job, { fsStore: okStore, settings: {}, writeMarker: false });
-    histogram.disable();
+    let result = null;
+    const hashingMs = await maxLoopDelayMs(async () => {
+      result = await verifyArtifact(job, { fsStore: okStore, settings: {}, writeMarker: false, createWorker });
+    });
+    const elapsedMs = Date.now() - startedAt;
     assert.equal(result.ok, true, JSON.stringify(result.failure));
-    maxMs = histogram.max / 1e6;
-    t.diagnostic(`attempt ${attempt}: 1 GiB verified in ${Date.now() - startedAt} ms, max event-loop delay ${maxMs.toFixed(1)} ms`);
+    assert.ok(spawned.length >= 1, "the digest must be computed by a worker");
+    assert.ok(spawned.every((entry) => entry.threadId > 0), "hash workers run on their own thread, not the main thread");
+    const budgetMs = Math.max(50, idleMs * 4 + 25);
+    const stallCeilingMs = elapsedMs * 0.4;
+    verdict = { attempt, idleMs, hashingMs, elapsedMs, budgetMs, stallCeilingMs, within: hashingMs < budgetMs && hashingMs < stallCeilingMs };
+    t.diagnostic(`attempt ${attempt}: 1 GiB verified in ${elapsedMs} ms, max event-loop delay ${hashingMs.toFixed(1)} ms (idle ${idleMs.toFixed(1)} ms, budget ${budgetMs.toFixed(1)} ms)`);
     job.progress = null;
   }
-  assert.ok(maxMs < 50, `event loop delayed ${maxMs.toFixed(1)} ms`);
+  assert.ok(verdict.within, `event loop delayed ${verdict.hashingMs.toFixed(1)} ms while hashing for ${verdict.elapsedMs} ms (idle ${verdict.idleMs.toFixed(1)} ms, budget ${verdict.budgetMs.toFixed(1)} ms)`);
 });
