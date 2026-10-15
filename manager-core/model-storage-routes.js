@@ -4,9 +4,30 @@ const fs = require("node:fs");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { storageReadJson, storageError } = require("./model-storage");
+const { hubWriterIsLive } = require("./model-hub/store");
 const run = promisify(execFile);
 
-function createStorageBusyPathProbe({ aiRoot, getJobs = () => [] } = {}) {
+// Hub jobs in these states may still write their folder (03 §8).
+const HUB_TERMINAL_STATES = new Set(["ready", "failed", "cancelled"]);
+
+// The hub's download jobs (03 §8): <AI_ROOT>/service-entry/data/hub/
+// downloads.json counts only while its writer is alive and its heartbeat is
+// under two minutes old, so a stale file never blocks a migration.
+function hubBusyPaths(file, { now = Date.now(), isPidAlive } = {}) {
+  const doc = storageReadJson(file, null);
+  if (!doc || typeof doc !== "object" || !Array.isArray(doc.jobs)) return [];
+  if (!hubWriterIsLive(doc, { now, ...(isPidAlive ? { isPidAlive } : {}) })) return [];
+  const result = [];
+  for (const job of doc.jobs) {
+    if (!job || typeof job !== "object" || HUB_TERMINAL_STATES.has(job.state)) continue;
+    const localDir = job.target?.localDir;
+    if (typeof localDir === "string" && path.isAbsolute(localDir)) result.push({ path: localDir, label: `下载任务 ${job.id}`, jobId: job.id });
+  }
+  return result;
+}
+
+function createStorageBusyPathProbe({ aiRoot, getJobs = () => [], hubDownloadsFile, runCommand = run, now, isPidAlive } = {}) {
+  const hubFile = hubDownloadsFile || path.join(aiRoot, "service-entry", "data", "hub", "downloads.json");
   return async function getBusyPaths() {
     const result = [];
     const addJobs = jobs => {
@@ -25,11 +46,12 @@ function createStorageBusyPathProbe({ aiRoot, getJobs = () => [] } = {}) {
       const data = storageReadJson(path.join(aiRoot, manager, "logs/jobs-ledger.json"), []);
       addJobs(Array.isArray(data) ? data : (data.jobs || []));
     }
+    result.push(...hubBusyPaths(hubFile, { now: typeof now === "function" ? now() : Date.now(), isPidAlive }));
     // Only use Mounts and names from inspect; never return container environments.
-    const { stdout } = await run("docker", ["ps", "-q"], { windowsHide: true, timeout: 6000 });
+    const { stdout } = await runCommand("docker", ["ps", "-q"], { windowsHide: true, timeout: 6000 });
     const ids = stdout.trim().split(/\s+/).filter(Boolean);
     if (ids.length) {
-      const response = await run("docker", ["inspect", ...ids], { windowsHide: true, timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
+      const response = await runCommand("docker", ["inspect", ...ids], { windowsHide: true, timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
       for (const container of JSON.parse(response.stdout)) for (const mount of container.Mounts || []) {
         if (mount.Type !== "bind") continue;
         let source = String(mount.Source || "");
@@ -61,4 +83,4 @@ function registerModelStorageRoutes(app, { storage, migration, isLocalRequest, p
   app.post("/api/model-storage/migrations/:id/cleanup", guard, action(req => migration.cleanupSource(req.params.id, req.body.confirmSource)));
 }
 
-module.exports = { createStorageBusyPathProbe, registerModelStorageRoutes };
+module.exports = { createStorageBusyPathProbe, hubBusyPaths, registerModelStorageRoutes };

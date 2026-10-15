@@ -354,6 +354,33 @@ function createHubStore(options = {}) {
     return { records, skipped };
   }
 
+  // Keeps the history records `keep(record)` accepts (the queue prunes
+  // records older than history.retentionDays at start, 03 §8). The file is
+  // replaced atomically in the same chain as appendHistory, so an append is
+  // never lost to the rewrite. Resolves to the number of records removed.
+  function rewriteHistory(keep) {
+    return enqueue(historyFile, async () => {
+      const { records } = readHistory();
+      const kept = records.filter((record) => keep(record));
+      const removed = records.length - kept.length;
+      if (!removed) return 0;
+      await fsp.mkdir(dataDir, { recursive: true });
+      const temp = tempPathFor(historyFile);
+      pendingTemps.add(temp);
+      try {
+        await io.writeFile(temp, kept.map((record) => `${JSON.stringify(record)}
+`).join(""));
+        await io.rename(temp, historyFile);
+      } catch (error) {
+        await fsp.rm(temp, { force: true }).catch(() => {});
+        throw error;
+      } finally {
+        pendingTemps.delete(temp);
+      }
+      return removed;
+    });
+  }
+
   // Resolves once every write handed in so far has settled.
   async function flush() {
     while (queues.size) {
@@ -376,6 +403,7 @@ function createHubStore(options = {}) {
     writeDownloads,
     appendHistory,
     readHistory,
+    rewriteHistory,
     flush,
   };
 }
