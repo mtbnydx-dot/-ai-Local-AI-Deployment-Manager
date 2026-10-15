@@ -18,10 +18,12 @@ const expr = require("./expr");
 const dockerHost = require("./hosts/docker");
 const launchStore = require("./launch-store");
 const externalHost = require("./hosts/external");
+const nativeHost = require("./hosts/native");
 const legacyAliases = require("./legacy-aliases");
 const memoryModels = require("./memory-models");
 const metrics = require("./metrics");
 const introspect = require("./introspect");
+const logPhases = require("./log-phases");
 const runtimeFacts = require("./runtime-facts");
 const runtimeSupervisor = require("./runtime-supervisor");
 const paramCatalog = require("./param-catalog");
@@ -30,6 +32,7 @@ const recipes = require("./recipes");
 const registry = require("./registry");
 const resolveLaunchPlanModule = require("./resolve-launch-plan");
 const routes = require("./routes");
+const instances = require("./instances");
 const runtimeManifest = require("../runtime-manifest");
 
 // Adapter code modules by descriptor.adapter (01 §6). An engine whose adapter
@@ -41,9 +44,10 @@ const adapters = Object.freeze({
   external: require("./adapters/external"),
 });
 
-// RuntimeHosts by kind (01 §13). Native (ENG-22) joins later.
+// RuntimeHosts by kind (01 §13). Native is off unless engines.native.enabled.
 const hosts = Object.freeze({
   docker: dockerHost,
+  native: nativeHost,
   external: externalHost,
 });
 
@@ -67,6 +71,7 @@ module.exports = {
   buildEngineSchemaPayload: routes.buildEngineSchemaPayload,
   validateDraftRequest: routes.validateDraftRequest,
   readInstanceMetrics: routes.readInstanceMetrics,
+  findHostedRuntime: routes.findHostedRuntime,
   // Parameter catalogs (01 §9), the expression language recipes and catalogs
   // share (01 §10.2), and the legacy alias table (01 §9.5).
   paramCatalog,
@@ -105,10 +110,16 @@ module.exports = {
   // 00 §9.12): parsePrometheus, mapPrometheus and summarize for the 04
   // collector, the histogram helpers, and the per-manager instance sampler.
   metrics,
+  instances,
+  createInstanceCatalog: instances.createInstanceCatalog,
   // The one engine-side memory estimator (01 §12, 00 §9.1): 02 fit.js calls
   // memoryModels.estimate with artifact inputs and keys calibrations by
   // paramsKey(plan).
   memoryModels,
+  // Descriptor-driven progress stages and measured facts from engine logs (01 §16.2).
+  logPhases,
+  createProgressInferer: logPhases.createProgressInferer,
+  extractLogFacts: logPhases.extractLogFacts,
   estimateMemory: memoryModels.estimate,
   paramsKey: memoryModels.paramsKey,
   MEMORY_CONSTANTS: memoryModels.MEMORY_CONSTANTS,
@@ -127,6 +138,9 @@ module.exports = {
   hosts,
   createDockerHost: dockerHost.createDockerHost,
   createDockerHostConfig: dockerHost.createDockerHostConfig,
+  // NativeProcessHost (01 §13, ENG-22): flag-gated; the registry hides the native kind while off.
+  createNativeHost: nativeHost.createNativeHost,
+  isNativeEnabled: nativeHost.isNativeEnabled,
   // The runtime supervisor (01 §14): the one start pipeline both managers run.
   runtimeSupervisor,
   createRuntimeSupervisor: runtimeSupervisor.createRuntimeSupervisor,

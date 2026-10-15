@@ -4,8 +4,8 @@
 //
 // One object owns the TelemetryStore (service-entry/data/telemetry.sqlite,
 // worker thread), the gateway recorder (TEL-5) and the collectors that run in
-// the entry (the EventCollector, TEL-9). The runtime and GPU collectors
-// (TEL-7, TEL-8), the query routes (TEL-11) and the internal ingest (TEL-6)
+// the entry (the EventCollector, TEL-9, and the RuntimeCollector, TEL-7). The runtime and GPU collectors
+// (TEL-8), the query routes (TEL-11) and the internal ingest (TEL-6)
 // attach to the same object.
 //
 // - The GatewayRecorder (manager-core/telemetry/recorder.js) is created with
@@ -29,6 +29,7 @@ const path = require("node:path");
 const { openTelemetryStore } = require("../../manager-core/telemetry/store");
 const { createEventCollector, dockerEventSourceFromEnv } = require("../../manager-core/telemetry/collectors/events");
 const { createGatewayRecorder } = require("../../manager-core/telemetry/recorder");
+const { createGatewayLatencyWindow, createRuntimeCollector } = require("../../manager-core/telemetry/collectors/runtime");
 const { redactSecrets } = require("../../manager-core/secret-redactor");
 
 const DEFAULT_DB_FILE = "telemetry.sqlite";
@@ -133,6 +134,10 @@ function normalizeLogger(logger) {
  * - managerClient: the entry's shared manager client (mgmt-proxy) with
  *   get(managerId, target) → {ok, status, data}.
  * - events: the ENT-EV bus.
+ * - getFleetCatalogs(): the entry's cached per-manager catalogs
+ *   ({instances:[…]}, 00 §4.1); the RuntimeCollector runs when it is given.
+ * - requestLatency({fleetId, model, fromMs, toMs}): gateway latency source for
+ *   engines without histograms; by default a window over the recorded rows.
  * - docker: a docker event source ({precheck, open}), false to skip docker,
  *   or {spawn, execFile} for the default one built from the environment.
  * Returns { start(), stop(), recorder, handleHttp, handleInternal, status(),
@@ -154,6 +159,7 @@ function createTelemetryRuntime(options = {}) {
 
   let store = null;
   let events = null;
+  let runtimeCollector = null;
   let started = false;
   let starting = null;
   let stopped = false;
@@ -187,11 +193,27 @@ function createTelemetryRuntime(options = {}) {
 
   // The recorder exists from creation and writes to whichever store is open;
   // with telemetry off there is none, so the gateway runs as it did before.
+  const getFleetCatalogs = typeof options.getFleetCatalogs === "function" ? options.getFleetCatalogs : null;
+  // Engines without latency histograms (llama.cpp) take TTFT and e2e from the
+  // gateway rows the recorder finalises (04 §7.2 step 6).
+  const latencyWindow = settings.enabled && getFleetCatalogs && typeof options.requestLatency !== "function"
+    ? createGatewayLatencyWindow({ now })
+    : null;
+  const onRow = typeof options.onRow === "function" ? options.onRow : null;
   const recorder = settings.enabled
     ? createGatewayRecorder({
       store: () => store,
       lookupCustomer,
-      onRow: typeof options.onRow === "function" ? options.onRow : null,
+      onRow: latencyWindow
+        ? (row, context) => {
+          try {
+            latencyWindow.add(row);
+          } catch {
+            // A latency window problem never reaches the response path.
+          }
+          return onRow ? onRow(row, context) : undefined;
+        }
+        : onRow,
       bufferMax: options.bufferMax,
       flushMs: options.flushMs,
       now,
@@ -236,6 +258,52 @@ function createTelemetryRuntime(options = {}) {
       logger: options.logger,
     });
     events.start();
+    startRuntimeCollector();
+  }
+
+  // The entry's cached instances (00 §4.1) as the RuntimeCollector reads them.
+  async function listFleetInstances() {
+    const catalogs = await getFleetCatalogs();
+    const out = [];
+    for (const catalog of Array.isArray(catalogs) ? catalogs : []) {
+      for (const instance of Array.isArray(catalog?.instances) ? catalog.instances : []) {
+        const models = Array.isArray(instance.models) ? instance.models.map((model) => String(model?.id || model || "")).filter(Boolean) : [];
+        out.push({
+          fleetId: instance.fleetId || `${instance.managerId || catalog.manager?.id}:${instance.instanceId || instance.id}`,
+          managerId: String(instance.managerId || catalog.manager?.id || ""),
+          instanceId: String(instance.instanceId || instance.id || ""),
+          engineId: instance.engineId || null,
+          runtimeId: instance.runtimeId || null,
+          launchId: instance.launchId || null,
+          lifecycleState: instance.lifecycleState || instance.lifecycle?.state || "",
+          external: instance.external === true || instance.engineId === "external",
+          model: models[0] || "",
+          models,
+        });
+      }
+    }
+    return out;
+  }
+
+  function startRuntimeCollector() {
+    if (!getFleetCatalogs || !client) return;
+    runtimeCollector = createRuntimeCollector({
+      store,
+      listFleetInstances,
+      fetchInstanceMetrics: (instance, { timeoutMs }) => client.get(
+        instance.managerId,
+        `/api/instances/${encodeURIComponent(instance.instanceId)}/metrics`,
+        { timeoutMs },
+      ),
+      fetchManagerStats: (managerId, { timeoutMs }) => client.get(managerId, "/api/stats", { timeoutMs }),
+      requestLatency: typeof options.requestLatency === "function" ? options.requestLatency : latencyWindow ? latencyWindow.query : null,
+      intervalMs: settings.sampleIntervalMs,
+      now: options.now,
+      timers: options.timers,
+      logger: options.logger,
+      events: options.events || null,
+    });
+    runtimeCollector.start();
   }
 
   function start() {
@@ -258,6 +326,9 @@ function createTelemetryRuntime(options = {}) {
     starting = null;
     const collector = events;
     events = null;
+    const runtime = runtimeCollector;
+    runtimeCollector = null;
+    if (runtime) await runtime.stop({ flushMs }).catch(() => {});
     if (collector) await collector.stop().catch(() => {});
     // In-flight records are finalised and written before the store closes.
     const deadline = now() + Math.max(0, Number(flushMs) || 0);
@@ -319,7 +390,10 @@ function createTelemetryRuntime(options = {}) {
       keepJsonlAccessLog: keepJsonlAccessLog(),
       store: store ? store.state : settings.enabled ? "stopped" : "disabled",
       lastError,
-      collectors: { events: events ? events.status() : null },
+      collectors: {
+        events: events ? events.status() : null,
+        runtime: runtimeCollector ? runtimeCollector.status() : null,
+      },
     };
   }
 
@@ -337,7 +411,7 @@ function createTelemetryRuntime(options = {}) {
     status,
     recordConfigChange,
     get collectors() {
-      return { events };
+      return { events, runtime: runtimeCollector };
     },
     get store() {
       return store;

@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const { buildRuntimeContainerName } = require("./runtime-instance-utils");
 // The wake matching and placement rules live with LaunchStore (01 §15.3), so
 // the legacy hooks and the store cannot drift apart.
@@ -88,6 +89,20 @@ function normalizeSleepRecord(value = {}) {
     ...(isLaunchId(value.launchId) ? { launchId: value.launchId } : {}),
     ...(value.spec && typeof value.spec === "object" && !Array.isArray(value.spec) ? { spec: value.spec } : {}),
   };
+}
+
+// The public sleep id (00 §9.17): `slp_` + 20 base32 characters derived from the
+// ledger id and the sleep time, so a record keeps one id for as long as it sleeps
+// and the ledger ids that P0-RT-2 callers use stay valid.
+const SLEEP_ID_PATTERN = /^slp_[a-z2-7]{20}$/;
+const SLEEP_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
+function sleepIdOf(record = {}) {
+  const id = String(record.id || "");
+  if (SLEEP_ID_PATTERN.test(id)) return id;
+  const digest = crypto.createHash("sha256").update(`${id}|${record.sleptAt || ""}`).digest();
+  let out = "";
+  for (let index = 0; index < 20; index += 1) out += SLEEP_ALPHABET[digest[index] % 32];
+  return `slp_${out}`;
 }
 
 function wakeRefusal(status, code, message, details) {
@@ -365,8 +380,16 @@ function createIdleUnloadController(options = {}) {
     }
   }
 
-  async function wake(id, wakeOptions = {}) {
+  // A slp_ id (sleepIdOf) names the same record as its ledger id.
+  async function canonicalSleepId(id) {
     const target = String(id || "").trim();
+    if (!SLEEP_ID_PATTERN.test(target)) return target;
+    const ledger = await readLedger();
+    return ledger.sleeping.find((item) => sleepIdOf(item) === target)?.id || target;
+  }
+
+  async function wake(id, wakeOptions = {}) {
+    const target = await canonicalSleepId(id);
     const pending = waking.get(target);
     // Concurrent callers (a UI click and an on-demand gateway wake) must share
     // one cold start rather than racing two containers onto the same GPU.
@@ -440,7 +463,7 @@ function createIdleUnloadController(options = {}) {
   }
 
   async function forget(id) {
-    const target = String(id || "").trim();
+    const target = await canonicalSleepId(id);
     const ledger = await readLedger();
     const before = ledger.sleeping.length;
     const removed = ledger.sleeping.filter((item) => item.id === target);
@@ -644,4 +667,5 @@ module.exports = {
   normalizeSleepLedger,
   normalizeSleepRecord,
   createIdleUnloadController,
+  sleepIdOf,
 };
