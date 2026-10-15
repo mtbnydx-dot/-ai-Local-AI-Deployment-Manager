@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "namespace": "models",
+  "owner": "02-models",
+  "asOf": "2026-10-15",
+  "staleAfterDays": 365,
+  "title": { "zh-CN": "模型验证", "en-US": "Model qualification" },
+  "properties": {
+    "autoQualify": {
+      "type": "string", "enum": ["first-launch", "off", "always"], "default": "first-launch",
+      "title": { "zh-CN": "启动后自动验证", "en-US": "Qualify after launch" },
+      "description": { "zh-CN": "模型服务就绪后，统一入口自动做一次轻量验证（连通、对话、思考分离、工具调用、JSON、图片、速度），约占用一分钟的模型时间。first-launch：同一模型、运行时和配置第一次启动时验证；always：每次启动都验证；off：只在手动点击时验证。验证不会和压测同时进行。", "en-US": "When a model service is ready, the entry runs one light qualification (reachability, chat, reasoning split, tool call, JSON, image, speed), about a minute of model time. first-launch: the first launch of a model, runtime and configuration; always: every launch; off: only when you press the button. A qualification never overlaps a benchmark." },
+      "env": ["AI_MODELS_AUTO_QUALIFY"], "envValues": { "first-launch": "first-launch", "off": "off", "always": "always" },
+      "consumers": ["entry"],
+      "restartRequired": [], "secret": false, "group": "managers"
+    }
+  }
+}

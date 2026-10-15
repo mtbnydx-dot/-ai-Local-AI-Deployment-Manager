@@ -16,6 +16,8 @@ function registerToolsRoutes(app, deps = {}) {
     normalizeBenchmarkRequest,
     runBenchmarkJob,
     failJob,
+    // MOD-16: (config) -> the active model-qualify job on the benchmark's port, or null.
+    qualificationRunning,
     benchmarkTitle = "Benchmark local model",
     verifyDownloadedModel,
     buildConnectionGuide,
@@ -91,7 +93,13 @@ function registerToolsRoutes(app, deps = {}) {
 
   app.post("/api/tools/benchmark", async (req, res) => {
     try {
-      const job = createJob("benchmark", benchmarkTitle, normalizeBenchmarkRequest(req.body || {}));
+      const config = normalizeBenchmarkRequest(req.body || {});
+      // A benchmark never overlaps a qualification of the same instance (02 section 13).
+      const running = typeof qualificationRunning === "function" ? qualificationRunning(config) : null;
+      if (running) {
+        return res.status(409).json({ error: "A model qualification is running on this instance; try again when it has finished.", code: "instance_busy", jobId: running.id });
+      }
+      const job = createJob("benchmark", benchmarkTitle, config);
       runBenchmarkJob(job, job.meta).catch((error) => failJob(job, error));
       res.json({ job });
     } catch (error) {

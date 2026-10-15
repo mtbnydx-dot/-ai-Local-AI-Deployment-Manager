@@ -6,7 +6,7 @@
 // routes here without touching either server.js again:
 //   MOD-5   GET  /api/knowledge/status   this manager's loader domains
 //   MOD-13  POST /api/models/probe       needs docker, jobs, resolveModelPath
-//   MOD-16  POST /api/qualify            needs jobs, listInstances
+//   MOD-16  POST /api/qualify            needs jobs, findInstance, apiKeyFor, launchOf, listJobs
 //   MOD-15  GET  /api/models/card        read-only card summary for legacy UIs
 // The entry reaches these through the management proxy (/api/m/:managerId/*),
 // which keeps the managers' own local-only gate for anything that writes.
@@ -14,6 +14,8 @@
 const path = require("node:path");
 const { normalizeManagerId } = require("./engines/registry");
 const probe = require("./model-inspector/probe");
+const qualify = require("./model-inspector/qualify");
+const hostRecords = require("./model-inspector/host-records");
 const {
   collectStatusDomains, createPathDisplayer, defaultAiRoot, getKnowledgeLoader, registerStatusProvider,
 } = require("./model-inspector/knowledge");
@@ -54,6 +56,23 @@ function normalizeRouteDeps(deps = {}) {
     inspect: functionOrNull(deps.inspect),
     // The background probe runs in flight, so a test (or a shutdown) can wait for them.
     probeRuns: new Set(),
+    // MOD-16: POST /api/qualify. findInstance(id) -> {instance, container, state} (the engine
+    // routes' lookup), apiKeyFor(found) -> the instance's runtime key, launchOf(found) -> its
+    // LaunchStore record, listJobs() -> this manager's jobs (to refuse a busy instance),
+    // getGpuStatus() for the host record, internalClient (or a function returning it) signs the
+    // host-record push, getCard(cardId) reads the card cache, createBenchmark(target) builds the
+    // throughput runner. `qualify` holds test seams (fetchImpl, now, sleep, retryDelaysMs, budgetMs).
+    findInstance: functionOrNull(deps.findInstance),
+    apiKeyFor: functionOrNull(deps.apiKeyFor),
+    launchOf: functionOrNull(deps.launchOf),
+    listJobs: functionOrNull(deps.listJobs),
+    getGpuStatus: functionOrNull(deps.getGpuStatus),
+    internalClient: deps.internalClient || null,
+    getCard: functionOrNull(deps.getCard),
+    createBenchmark: functionOrNull(deps.createBenchmark),
+    cardCacheDir: typeof deps.cardCacheDir === "string" && deps.cardCacheDir ? deps.cardCacheDir : undefined,
+    qualify: deps.qualify && typeof deps.qualify === "object" ? deps.qualify : {},
+    qualifyRuns: new Set(),
     knowledge,
     registry: deps.registry || null,
     paramCatalog: deps.paramCatalog || null,
@@ -216,6 +235,91 @@ function probeHandler(context, inFlight) {
   };
 }
 
+function resolveInternalClient(value) {
+  try {
+    const client = typeof value === "function" ? value() : value;
+    return client && typeof client.request === "function" ? client : null;
+  } catch {
+    return null;
+  }
+}
+
+// The throughput check runs the benchmark runner of 01 against this one instance. Its own
+// job is a placeholder, so the run is neither listed nor recorded in the benchmark history.
+function defaultCreateBenchmark(context) {
+  return ({ port, apiKey, servedModel, job }) => {
+    const { createBenchmarkRunner } = require("./benchmark-runner");
+    const runner = createBenchmarkRunner({
+      defaultPort: port,
+      runtimeLabel: "model service",
+      fetchImpl: context.qualify.fetchImpl,
+      timeoutMs: context.qualify.requestTimeoutMs,
+      getRunningModelSummary: async () => ({ container: { running: true }, endpoint: { port }, models: [{ id: servedModel }] }),
+      getHeaders: () => (apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+      appendLog: () => {},
+      setJobProgress: () => {},
+      finishJob: () => {},
+    });
+    return (input) => runner.runBenchmarkJob({ id: job?.id || "qualify", type: "benchmark", meta: {} }, input);
+  };
+}
+
+/**
+ * POST /api/qualify {instanceId, cardId, checks?, needle?, light?} -> 202
+ * {ok, jobId, managerId}. Runs the qualification suite of 02 section 13 as a
+ * `model-qualify` job against one running instance with the instance's own
+ * endpoint and key, then pushes the host record to the entry. Local-only like
+ * every manager write; 409 instance_busy while another qualification or a
+ * benchmark runs on the same instance.
+ */
+function qualifyHandler(context, inFlight) {
+  return async (req, res) => {
+    if (!context.isLocalRequest(req)) {
+      return res.status(403).json(errorBody("forbidden", "Qualification is only available to local callers."));
+    }
+    try {
+      const cacheDir = context.cardCacheDir;
+      const started = await qualify.startQualifyJob(req.body, {
+        ...context.qualify,
+        managerId: context.managerId,
+        registry: context.registry,
+        jobs: context.jobs,
+        listJobs: context.listJobs,
+        findInstance: context.findInstance,
+        apiKeyFor: context.apiKeyFor,
+        launchOf: context.launchOf,
+        getGpuStatus: context.getGpuStatus,
+        getCard: context.getCard || ((cardId) => require("./model-inspector/inspect").getCard(cardId, { ...(cacheDir ? { cacheDir } : {}) })),
+        createBenchmark: context.createBenchmark || defaultCreateBenchmark(context),
+        pushHostRecord: ({ record, jobId, log }) => {
+          const internalClient = resolveInternalClient(context.internalClient);
+          if (!internalClient) return Promise.resolve({ ok: false, attempts: 0, code: "no_internal_client" });
+          return hostRecords.pushHostRecord({
+            internalClient,
+            record,
+            jobId,
+            log,
+            ...(context.qualify.retryDelaysMs ? { delaysMs: context.qualify.retryDelaysMs } : {}),
+            ...(context.qualify.sleep ? { sleep: context.qualify.sleep } : {}),
+          });
+        },
+        inFlight,
+      });
+      context.qualifyRuns.add(started.done);
+      started.done.finally(() => context.qualifyRuns.delete(started.done));
+      return res.status(202).json({ ok: true, jobId: started.job.id, managerId: context.managerId });
+    } catch (error) {
+      if (!(error instanceof qualify.QualifyError)) {
+        return res.status(500).json(errorBody("qualify_failed", "Qualification could not be started."));
+      }
+      const extra = {};
+      if (error.jobId) extra.jobId = error.jobId;
+      if (error.errors) extra.errors = error.errors;
+      return res.status(error.status || 400).json(errorBody(error.code, error.message, error.hint, extra));
+    }
+  };
+}
+
 function registerModelInspectorRoutes(app, deps = {}) {
   const context = normalizeRouteDeps(deps);
 
@@ -246,6 +350,7 @@ function registerModelInspectorRoutes(app, deps = {}) {
 
   app.get("/api/models/card", cardHandler(context));
   app.post("/api/models/probe", probeHandler(context, new Map()));
+  app.post("/api/qualify", qualifyHandler(context, new Map()));
 
   return context;
 }

@@ -9,7 +9,8 @@ function sendError(res, status, error) {
 
 function summarizeJob(job) {
   if (!job || typeof job !== "object") return job;
-  const { logs, ...rest } = job;
+  // `result` (a qualification's host record) is read from GET /api/jobs/:id, not relayed in lists or events.
+  const { logs, result: _result, ...rest } = job;
   const list = Array.isArray(logs) ? logs : [];
   return {
     ...rest,

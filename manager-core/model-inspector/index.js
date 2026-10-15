@@ -22,6 +22,8 @@ const observations = require("./observations");
 const planFacts = require("./plan-facts");
 const planner = require("./planner");
 const probe = require("./probe");
+const qualify = require("./qualify");
+const hostRecords = require("./host-records");
 const rootCause = require("./root-cause");
 const templateSignatures = require("./template-signatures");
 const rangeReader = require("./remote/range-reader");
@@ -132,6 +134,34 @@ module.exports = {
     PROBE_LABEL: probe.PROBE_LABEL,
     PROBE_MARKER: probe.PROBE_MARKER,
     PROBE_JOB_TYPE: probe.PROBE_JOB_TYPE,
+  },
+  // Qualification suite and host records (02 section 13, MOD-16): fixed checks against one
+  // running instance, and the entry-owned record of the result.
+  qualify: {
+    runQualification: qualify.runQualification,
+    startQualifyJob: qualify.startQualifyJob,
+    planChecks: qualify.planChecks,
+    buildHostRecord: qualify.buildHostRecord,
+    createMetricsReader: qualify.createMetricsReader,
+    requestFields: qualify.requestFields,
+    runningQualification: qualify.runningQualification,
+    summarizeResults: qualify.summarizeResults,
+    CHECK_IDS: qualify.CHECK_IDS,
+    LIGHT_CHECKS: qualify.LIGHT_CHECKS,
+    QUALIFY_JOB_TYPE: qualify.QUALIFY_JOB_TYPE,
+    QualifyError: qualify.QualifyError,
+  },
+  hostRecords: {
+    createHostRecordStore: hostRecords.createHostRecordStore,
+    normalizeHostRecord: hostRecords.normalizeHostRecord,
+    pushHostRecord: hostRecords.pushHostRecord,
+    withHostEvidence: hostRecords.withHostEvidence,
+    evidenceForRecord: hostRecords.evidenceForRecord,
+    recordCovers: hostRecords.recordCovers,
+    summaryOf: hostRecords.summaryOf,
+    HOST_RECORDS_PATH: hostRecords.HOST_RECORDS_PATH,
+    PUSH_RETRY_DELAYS_MS: hostRecords.PUSH_RETRY_DELAYS_MS,
+    MAX_RECORDS_PER_DIGEST: hostRecords.MAX_RECORDS_PER_DIGEST,
   },
   storageResolver: managerHooks.storageResolver,
   cardEstimate: {

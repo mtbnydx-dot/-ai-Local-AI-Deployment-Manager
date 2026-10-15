@@ -38,6 +38,8 @@ function normalizePersistedJob(value, options = {}) {
     // error object survive a restart; jobs without them keep today's shape.
     ...(isPlainObject(value.lifecycle) ? { lifecycle: value.lifecycle } : {}),
     ...(isPlainObject(value.failure) ? { failure: value.failure } : {}),
+    // A model-qualify job keeps its host record here until the entry has stored it (02 section 13).
+    ...(isPlainObject(value.result) ? { result: value.result } : {}),
   };
 }
 

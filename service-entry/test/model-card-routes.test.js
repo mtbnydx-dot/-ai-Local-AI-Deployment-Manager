@@ -92,7 +92,7 @@ function planAnswer(overrides = {}) {
   }];
 }
 
-async function mountApp(t, { vllm = {}, llama = {}, vllmDown = false, llamaDown = false, models = {}, hostRecords = null, gpus = [FAKE_GPU], roots = null } = {}) {
+async function mountApp(t, { vllm = {}, llama = {}, vllmDown = false, llamaDown = false, models = {}, hostRecords = null, gpus = [FAKE_GPU], roots = null, cards = {} } = {}) {
   const { entry } = await loadEntry();
   const root = tempDir(t, "model-card-routes-");
   const library = path.join(root, "library");
@@ -118,6 +118,7 @@ async function mountApp(t, { vllm = {}, llama = {}, vllmDown = false, llamaDown 
       roots: roots || (() => [library, ...sharedParents]),
       inspectLocalOptions: { inProcess: true },
       models: { ...core.models, ...models },
+      ...cards,
     },
   });
   const routes = await entry.mountRouteModules({ ctx, modules: MODULES });
@@ -125,7 +126,7 @@ async function mountApp(t, { vllm = {}, llama = {}, vllmDown = false, llamaDown 
   assert.deepEqual(routes.failed, []);
   const port = await serveEntry(t, entry, routes);
   const owner = await ownerSession(entry, port);
-  return { entry, ctx, port, owner, library, cacheDir, hostRecordsFile, vllm: vllmManager, llama: llamaManager, registry: ctx.auth.viewerRegistry };
+  return { entry, ctx, routes, port, owner, library, cacheDir, hostRecordsFile, vllm: vllmManager, llama: llamaManager, registry: ctx.auth.viewerRegistry };
 }
 
 async function fixtureIn(t, app, id) {
@@ -248,7 +249,7 @@ test("writes need an owner session and a CSRF token", async (t) => {
   const noCsrf = await request(app.port, "/api/models/inspect", { method: "POST", body: { path: dir }, headers: { cookie: app.owner.cookie } });
   assert.equal(noCsrf.status, 403);
   assert.equal(noCsrf.json.error.code, "csrf_invalid");
-  for (const [route, body] of [["/api/launch/recommend", { path: dir }], ["/api/models/mc_aaaaaaaaaaaaaaaaaaaa/probe", { engineId: "vllm" }], ["/api/models/mc_aaaaaaaaaaaaaaaaaaaa/fit-grid", { engineId: "vllm" }]]) {
+  for (const [route, body] of [["/api/launch/recommend", { path: dir }], ["/api/models/mc_aaaaaaaaaaaaaaaaaaaa/probe", { engineId: "vllm" }], ["/api/models/mc_aaaaaaaaaaaaaaaaaaaa/fit-grid", { engineId: "vllm" }], ["/api/models/mc_aaaaaaaaaaaaaaaaaaaa/qualify", { fleetId: "vllm:primary" }], ["/api/models/mc_aaaaaaaaaaaaaaaaaaaa/qualifications/import", { managerId: "vllm", jobId: "j1" }]]) {
     const denied = await request(app.port, route, { method: "POST", body });
     assert.equal(denied.status, 401, route);
   }
@@ -740,6 +741,8 @@ test("the 05 registry holds every route of this module: viewer GETs with a redac
     "POST /api/launch/recommend admin",
     "POST /api/models/:id/fit-grid admin",
     "POST /api/models/:id/probe admin",
+    "POST /api/models/:id/qualifications/import admin",
+    "POST /api/models/:id/qualify admin",
     "POST /api/models/inspect admin",
   ].sort());
   for (const item of modelCardRoutes.viewerRoutes) {
@@ -788,4 +791,402 @@ test("redactCardBodyForViewer projects a full card to the summary and leaves err
 test("the module refuses to mount without the auth seam", () => {
   assert.throws(() => modelCardRoutes.mount({}), /ctx\.auth is missing/);
   assert.throws(() => modelCardRoutes.createModelCardRoutes({}), /request-auth seam/);
+});
+
+// --- MOD-16: qualify, host records, auto-qualify --------------------------------------------
+
+const internalAuth = require("../../manager-core/internal-auth");
+
+const HOST_RECORDS_URL = "/internal/models/host-records";
+
+function recordFor(card, extra = {}) {
+  return {
+    id: `qr_${"a".repeat(20)}`,
+    contentDigest: card.contentDigest,
+    cardId: card.cardId,
+    engineId: "vllm",
+    runtimeId: "vllm@0.28.0",
+    recipeId: null,
+    paramsKey: "8192|4|auto|0",
+    launchId: null,
+    fleetId: "vllm:primary",
+    host: { gpu: "Test GPU", computeCap: "12.0", driver: null },
+    at: "2026-10-15T00:00:00.000Z",
+    durationMs: 61000,
+    results: [
+      { check: "chat", status: "pass", detail: { zh: "回答：pong", en: "Answer: pong" }, metrics: {} },
+      { check: "tool-call", status: "pass", detail: { zh: "工具调用往返成功。", en: "Tool round trip works." }, metrics: {} },
+      { check: "vision", status: "fail", detail: { zh: "没有认出红色图片。", en: "The red image was not recognised." }, metrics: {} },
+    ],
+    observed: { peakMb: { 0: 4096 }, engineFacts: { servedModel: "m" } },
+    ...extra,
+  };
+}
+
+// A signed manager push (the same signing the managers use) over loopback.
+function pushRecord(app, body, { token, managerId = "vllm-manager", peer, signature = true } = {}) {
+  const text = JSON.stringify(body);
+  const secret = token || app.ctx.security.getTrustToken();
+  return request(app.port, HOST_RECORDS_URL, {
+    method: "POST",
+    body: text,
+    peer,
+    headers: signature ? internalAuth.buildInternalRequestHeaders(secret, "POST", HOST_RECORDS_URL, managerId, text) : {},
+  });
+}
+
+function startQualification(app, card, extra = {}) {
+  return request(app.port, `/api/models/${card.cardId}/qualify`, { method: "POST", owner: app.owner, body: { fleetId: "vllm:primary", ...extra } });
+}
+
+function libraryEvents(app) {
+  const seen = [];
+  const stop = app.ctx.bus.subscribe((envelope) => seen.push(envelope), { types: ["library"] });
+  return { seen, stop };
+}
+
+test("POST /api/models/:id/qualify starts the suite on the manager that hosts the instance and relays its errors", async (t) => {
+  let answer = () => [202, { ok: true, jobId: "job_q1", managerId: "vllm" }];
+  const app = await mountApp(t, { vllm: { "POST /api/qualify": (body) => answer(body) } });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const card = (await inspectOwned(app, dir)).json.card;
+  const started = await startQualification(app, card, { checks: ["chat", "tool-call"], needle: false });
+  assert.equal(started.status, 202, started.text);
+  assert.deepEqual({ ok: started.json.ok, jobId: started.json.jobId, managerId: started.json.managerId }, { ok: true, jobId: "job_q1", managerId: "vllm" });
+  const sent = app.vllm.seen.find((item) => item.path === "/api/qualify");
+  assert.deepEqual(sent.body, { instanceId: "primary", cardId: card.cardId, checks: ["chat", "tool-call"], needle: false });
+  assert.match(sent.headers["x-request-id"], /^req_/);
+  assert.equal(app.llama.seen.length, 0);
+
+  // Defaults: no checks (the manager's default set); llama instances go to the llama manager.
+  await request(app.port, `/api/models/${card.cardId}/qualify`, { method: "POST", owner: app.owner, body: { fleetId: "llama:inst-2", needle: true } });
+  assert.ok(app.llama.seen.some((item) => item.path === "/api/qualify" && item.body.instanceId === "inst-2" && item.body.needle === true && !("checks" in item.body)));
+
+  answer = () => [404, { ok: false, error: { code: "instance_not_found", message: "This manager has no such instance." } }];
+  const gone = await startQualification(app, card);
+  assert.equal(gone.status, 404);
+  assert.equal(gone.json.error.code, "instance_not_found");
+  answer = () => [409, { ok: false, error: { code: "instance_busy", message: "Another qualification or benchmark is running on this instance." }, jobId: "job_other" }];
+  const busy = await startQualification(app, card);
+  assert.equal(busy.status, 409);
+  assert.equal(busy.json.error.code, "instance_busy");
+  assert.equal(busy.json.jobId, "job_other");
+
+  const bad = await startQualification(app, card, { fleetId: "elsewhere", checks: ["nope"], needle: "yes" });
+  assert.equal(bad.status, 400);
+  assert.deepEqual(bad.json.errors.map((item) => item.field).sort(), ["checks", "fleetId", "needle"]);
+  const noCard = await request(app.port, "/api/models/mc_bbbbbbbbbbbbbbbbbbbb/qualify", { method: "POST", owner: app.owner, body: { fleetId: "vllm:primary" } });
+  assert.equal(noCard.status, 404);
+  assert.equal(noCard.json.error.code, "card_not_found");
+});
+
+test("a qualify of a manager that is not running answers 503 manager_unreachable", async (t) => {
+  const app = await mountApp(t, { vllmDown: true });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const card = (await inspectOwned(app, dir)).json.card;
+  const down = await startQualification(app, card);
+  assert.equal(down.status, 503);
+  assert.equal(down.json.error.code, "manager_unreachable");
+});
+
+test("POST /internal/models/host-records: signed, loopback, for a job the entry started; atomic write, library event, evidence", async (t) => {
+  const app = await mountApp(t, { vllm: { "POST /api/qualify": () => [202, { ok: true, jobId: "job_q1", managerId: "vllm" }] } });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const card = (await inspectOwned(app, dir)).json.card;
+  const events = libraryEvents(app);
+  t.after(events.stop);
+  const record = recordFor(card);
+
+  // Before any qualification was started: an unknown job is refused and nothing is written.
+  const unknown = await pushRecord(app, { ...record, jobId: "job_q1" });
+  assert.equal(unknown.status, 409);
+  assert.equal(unknown.json.error.code, "job_mismatch");
+  assert.equal(fs.existsSync(app.hostRecordsFile), false);
+
+  assert.equal((await startQualification(app, card)).status, 202);
+
+  // Authentication: no signature, a bad HMAC, a manager that is not one of ours, a non-loopback socket.
+  const unsigned = await pushRecord(app, { ...record, jobId: "job_q1" }, { signature: false });
+  assert.equal(unsigned.status, 401);
+  assert.equal(unsigned.json.error.code, "internal_auth_failed");
+  const forged = await pushRecord(app, { ...record, jobId: "job_q1" }, { token: "not-the-trust-token" });
+  assert.equal(forged.status, 401);
+  assert.equal(forged.json.error.code, "internal_auth_failed");
+  const stranger = await pushRecord(app, { ...record, jobId: "job_q1" }, { managerId: "other-manager" });
+  assert.equal(stranger.status, 401);
+  const remote = await pushRecord(app, { ...record, jobId: "job_q1" }, { peer: "192.168.1.50" });
+  assert.ok([401, 403].includes(remote.status), `a LAN peer is refused (${remote.status})`);
+  assert.equal(fs.existsSync(app.hostRecordsFile), false, "nothing is written by a refused caller");
+  assert.equal(events.seen.length, 0);
+
+  // The record must match the job: manager, fleet, digest, card.
+  const wrong = [
+    ["another manager", { ...record, fleetId: "llama:primary", jobId: "job_q1" }],
+    ["another instance", { ...record, fleetId: "vllm:other", jobId: "job_q1" }],
+    ["another model", { ...record, contentDigest: `sha256:${"f".repeat(64)}`, jobId: "job_q1" }],
+    ["another card", { ...record, cardId: "mc_bbbbbbbbbbbbbbbbbbbb", jobId: "job_q1" }],
+    ["another job", { ...record, jobId: "job_zzz" }],
+  ];
+  for (const [label, body] of wrong) {
+    const refused = await pushRecord(app, body);
+    assert.equal(refused.status, 409, label);
+    assert.equal(refused.json.error.code, "job_mismatch", label);
+  }
+  const llama = await pushRecord(app, { ...record, jobId: "job_q1" }, { managerId: "llama-manager" });
+  assert.equal(llama.status, 409, "the llama manager cannot report the vllm job");
+
+  const invalid = await pushRecord(app, { ...record, runtimeId: "", results: [], jobId: "job_q1" });
+  assert.equal(invalid.status, 422);
+  assert.equal(invalid.json.error.code, "invalid_record");
+  assert.ok(invalid.json.errors.some((item) => item.field === "runtimeId"));
+  assert.ok(invalid.json.errors.some((item) => item.field === "results"));
+  assert.equal((await pushRecord(app, { ...record })).status, 422, "a record without its jobId");
+
+  const stored = await pushRecord(app, { ...record, jobId: "job_q1" });
+  assert.equal(stored.status, 200, stored.text);
+  assert.deepEqual(stored.json, { ok: true, id: record.id });
+  const file = JSON.parse(fs.readFileSync(app.hostRecordsFile, "utf8"));
+  assert.equal(file.schemaVersion, 1);
+  assert.equal(file.records.length, 1);
+  assert.equal(file.records[0].id, record.id);
+  assert.deepEqual(fs.readdirSync(path.dirname(app.hostRecordsFile)).filter((name) => name.endsWith(".tmp")), []);
+
+  // One library event {kind: "qualification", ...} per stored record.
+  assert.equal(events.seen.length, 1);
+  assert.equal(events.seen[0].type, "library");
+  const { summary, ...data } = events.seen[0].data;
+  assert.deepEqual(data, { kind: "qualification", cardId: card.cardId, contentDigest: card.contentDigest, recordId: record.id });
+  assert.deepEqual(summary, { pass: 2, warn: 0, fail: 1, skip: 0, total: 3, runtimeId: "vllm@0.28.0" });
+
+  // A re-push of the same record (lost response) is idempotent; another record for the job is not accepted.
+  const again = await pushRecord(app, { ...record, jobId: "job_q1" });
+  assert.deepEqual(again.json, { ok: true, id: record.id, duplicate: true });
+  assert.equal(events.seen.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(app.hostRecordsFile, "utf8")).records.length, 1);
+  const second = await pushRecord(app, { ...recordFor(card, { id: `qr_${"b".repeat(20)}` }), jobId: "job_q1" });
+  assert.equal(second.status, 409);
+
+  // The records are listed (viewers without detail), and passes are verified-on-host evidence on the card.
+  const listed = await request(app.port, `/api/models/${card.cardId}/qualifications`, { owner: app.owner });
+  assert.equal(listed.json.records.length, 1);
+  assert.equal(listed.json.records[0].results[0].detail.en, "Answer: pong");
+  const viewer = await request(app.port, `/api/models/${card.cardId}/qualifications`);
+  assert.equal(viewer.status, 200);
+  assert.ok(!("detail" in viewer.json.records[0].results[0]));
+  assert.ok(!("driver" in viewer.json.records[0].host));
+  const full = await request(app.port, `/api/models/${card.cardId}/card?view=full`, { owner: app.owner });
+  const verified = full.json.card.evidence.filter((entry) => entry.confidence === "verified-on-host");
+  assert.deepEqual(verified.map((entry) => entry.fact).sort(), ["/capabilities/tools", "/identity"]);
+  assert.ok(verified.every((entry) => entry.source.kind === "qualification" && entry.source.ref === record.id));
+  const cached = await request(app.port, `/api/models/${card.cardId}/card?view=full`, { owner: app.owner });
+  assert.equal(cached.json.card.evidence.filter((entry) => entry.confidence === "verified-on-host").length, 2, "evidence is attached per read, never accumulated in the cache");
+  // The passing checks make the engine row verified-on-host support in the compatibility matrix.
+  const compat = await request(app.port, `/api/models/${card.cardId}/compatibility?engines=vllm`, { owner: app.owner });
+  assert.ok(compat.json.rows.some((row) => row.runtimeId === "vllm@0.28.0" && row.supportEvidence.some((item) => item.kind === "verified-on-host")));
+});
+
+test("the internal endpoint takes POST only and a bounded body", async (t) => {
+  const app = await mountApp(t);
+  const get = await request(app.port, HOST_RECORDS_URL);
+  assert.equal(get.status, 405);
+  assert.equal(get.headers.allow, "POST");
+  const big = await pushRecord(app, { junk: "x".repeat(200 * 1024) });
+  assert.equal(big.status, 413);
+  assert.equal(fs.existsSync(app.hostRecordsFile), false);
+});
+
+test("POST /api/models/:id/qualifications/import pulls the record a manager could not push", async (t) => {
+  const state = { job: null };
+  const app = await mountApp(t, { vllm: { "GET /api/jobs/job_q2": () => (state.job ? [200, state.job] : [404, { error: "Job not found" }]) } });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const card = (await inspectOwned(app, dir)).json.card;
+  const events = libraryEvents(app);
+  t.after(events.stop);
+  const url = `/api/models/${card.cardId}/qualifications/import`;
+  const post = (body) => request(app.port, url, { method: "POST", owner: app.owner, body });
+
+  assert.equal((await post({ managerId: "vllm", jobId: "job_q2" })).json.error.code, "job_not_found");
+  assert.equal((await post({ managerId: "nope", jobId: "bad id" })).status, 400);
+  state.job = { id: "job_q2", type: "model-probe", meta: {}, result: {} };
+  assert.equal((await post({ managerId: "vllm", jobId: "job_q2" })).json.error.code, "job_not_found", "only a qualification job");
+  state.job = { id: "job_q2", type: "model-qualify", status: "running", meta: { instanceId: "primary", contentDigest: card.contentDigest } };
+  const early = await post({ managerId: "vllm", jobId: "job_q2" });
+  assert.equal(early.status, 409);
+  assert.equal(early.json.error.code, "no_host_record");
+
+  const record = recordFor(card);
+  state.job = { id: "job_q2", type: "model-qualify", status: "success", meta: { instanceId: "primary", contentDigest: card.contentDigest }, result: { hostRecord: { ...record, contentDigest: `sha256:${"e".repeat(64)}` } } };
+  assert.equal((await post({ managerId: "vllm", jobId: "job_q2" })).json.error.code, "job_mismatch", "another model's record");
+  state.job.result.hostRecord = { ...record, fleetId: "vllm:other" };
+  assert.equal((await post({ managerId: "vllm", jobId: "job_q2" })).json.error.code, "job_mismatch", "another instance's record");
+  state.job.result.hostRecord = { ...record, runtimeId: "" };
+  assert.equal((await post({ managerId: "vllm", jobId: "job_q2" })).status, 422);
+
+  state.job.result.hostRecord = record;
+  const imported = await post({ managerId: "vllm", jobId: "job_q2" });
+  assert.equal(imported.status, 200, imported.text);
+  assert.equal(imported.json.record.id, record.id);
+  assert.equal(JSON.parse(fs.readFileSync(app.hostRecordsFile, "utf8")).records.length, 1);
+  assert.equal(events.seen.length, 1);
+  const again = await post({ managerId: "vllm", jobId: "job_q2" });
+  assert.equal(again.status, 409);
+  assert.equal(again.json.error.code, "already_recorded");
+  // Admin only: no session, no import.
+  assert.equal((await request(app.port, url, { method: "POST", body: { managerId: "vllm", jobId: "job_q2" } })).status, 401);
+});
+
+// A fake vllm manager that knows one launch (served from the instance list and its launch record).
+function launchManager(dir, { qualifyAnswer = () => [202, { ok: true, jobId: "job_auto", managerId: "vllm" }] } = {}) {
+  const launchId = "lch_aaaaaaaaaaaaaaaaaaaa";
+  const record = { launchId, spec: { engineId: "vllm", runtimeId: "vllm@0.28.0", recipeId: null, model: { ref: dir } }, resolved: { paramsKey: "8192|4|auto|0" } };
+  return {
+    launchId,
+    answers: {
+      "GET /api/instances": () => [200, { ok: true, instances: [{ id: "primary", launchId, runtime: { id: "vllm@0.28.0" }, recipeId: null }] }],
+      "GET /api/instances/primary/launch": () => [200, { ok: true, launch: record }],
+      "POST /api/qualify": (body) => qualifyAnswer(body),
+    },
+  };
+}
+
+function serveJob(id, launchId, extra = {}) {
+  return { id, type: "serve", status: "success", finishedAt: new Date().toISOString(), meta: { launchId }, ...extra };
+}
+
+function publishJobs(app, managerId, jobs) {
+  app.ctx.bus.publish("jobs", { managerId, jobs, removed: [] });
+}
+
+function moduleApi(app) {
+  return app.routes.modules.find((item) => item.name === "model-cards").api;
+}
+
+test("auto-qualify: a serve job that became ready starts the light suite once, only when models.autoQualify allows", async (t) => {
+  let mode = "first-launch";
+  const answers = {};
+  const app = await mountApp(t, { vllm: answers, cards: { getAutoQualify: () => mode } });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const launch = launchManager(dir);
+  Object.assign(answers, launch.answers);
+  const card = (await inspectOwned(app, dir)).json.card;
+  const launchId = launch.launchId;
+  const qualifyCalls = () => app.vllm.seen.filter((item) => item.method === "POST" && item.path === "/api/qualify");
+
+  // A non-serve job, a running serve job, a failed one, a stale one and one without a launch start nothing.
+  publishJobs(app, "vllm", [
+    { id: "dl1", type: "download", status: "success", finishedAt: new Date().toISOString(), meta: { launchId } },
+    serveJob("s0", launchId, { status: "running" }),
+    serveJob("s0b", launchId, { status: "failed" }),
+    serveJob("s0c", launchId, { finishedAt: "2026-01-01T00:00:00.000Z" }),
+    serveJob("s0d", ""),
+  ]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 0);
+
+  // mode off: nothing.
+  mode = "off";
+  publishJobs(app, "vllm", [serveJob("s1", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 0);
+
+  // first-launch: the light set, one request for throughput (light), on the instance of the launch.
+  mode = "first-launch";
+  publishJobs(app, "vllm", [serveJob("s2", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 1);
+  assert.deepEqual(qualifyCalls()[0].body, {
+    instanceId: "primary",
+    cardId: card.cardId,
+    checks: ["models", "chat", "reasoning-split", "tool-call", "json-output", "vision", "throughput"],
+    needle: false,
+    light: true,
+  });
+
+  // The same job again, or a stream update of the same job, does nothing.
+  publishJobs(app, "vllm", [serveJob("s2", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 1);
+
+  // While the first run is unreported, the same instance is not started again.
+  publishJobs(app, "vllm", [serveJob("s3", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 1);
+
+  // The report arrives: the host record exists, so first-launch skips; "always" qualifies again.
+  const record = recordFor(card);
+  assert.equal((await pushRecord(app, { ...record, jobId: "job_auto" })).status, 200);
+  publishJobs(app, "vllm", [serveJob("s4", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 1, "a covered (digest, runtime, params) is not qualified again");
+  mode = "always";
+  publishJobs(app, "vllm", [serveJob("s5", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 2);
+
+  // The llama manager's jobs are relayed too, but this launch is not known there: nothing happens.
+  mode = "first-launch";
+  publishJobs(app, "llama", [serveJob("l1", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(qualifyCalls().length, 2);
+});
+
+test("auto-qualify never retries a launch whose instance is busy (a benchmark or another qualification runs)", async (t) => {
+  const answers = {};
+  const app = await mountApp(t, { vllm: answers, cards: { getAutoQualify: () => "first-launch" } });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const launch = launchManager(dir, { qualifyAnswer: () => [409, { ok: false, error: { code: "instance_busy", message: "busy" } }] });
+  Object.assign(answers, launch.answers);
+  const calls = () => app.vllm.seen.filter((item) => item.method === "POST" && item.path === "/api/qualify").length;
+  publishJobs(app, "vllm", [serveJob("b1", launch.launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(calls(), 1);
+  publishJobs(app, "vllm", [serveJob("b2", launch.launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(calls(), 1, "the 409 is final for this launch");
+  assert.equal(fs.existsSync(app.hostRecordsFile), false);
+});
+
+test("auto-qualify reads the launch from GET launches/:launchId when the manager serves it, and skips what it cannot resolve", async (t) => {
+  const answers = {};
+  const app = await mountApp(t, { vllm: answers, cards: { getAutoQualify: () => "always" } });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const launchId = "lch_bbbbbbbbbbbbbbbbbbbb";
+  Object.assign(answers, {
+    [`GET /api/launches/${launchId}`]: () => [200, { ok: true, launch: { launchId, spec: { engineId: "vllm", runtimeId: "vllm@0.28.0", model: { ref: dir }, instance: { id: "second" } }, resolved: {} } }],
+    "GET /api/instances": () => [200, { ok: true, instances: [] }],
+    "POST /api/qualify": () => [202, { ok: true, jobId: "job_x", managerId: "vllm" }],
+  });
+  const calls = () => app.vllm.seen.filter((item) => item.method === "POST" && item.path === "/api/qualify");
+  publishJobs(app, "vllm", [serveJob("c1", launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(calls().length, 1);
+  assert.equal(calls()[0].body.instanceId, "second", "the launch's own instance id when the instance list does not show it");
+  // An unknown launch (no record anywhere) and a model outside the library start nothing.
+  publishJobs(app, "vllm", [serveJob("c2", "lch_cccccccccccccccccccc")]);
+  await moduleApi(app).settle();
+  assert.equal(calls().length, 1);
+  Object.assign(answers, { "GET /api/launches/lch_dddddddddddddddddddd": () => [200, { ok: true, launch: { launchId: "lch_dddddddddddddddddddd", spec: { engineId: "vllm", model: { ref: "/nowhere/outside" } } } }] });
+  publishJobs(app, "vllm", [serveJob("c3", "lch_dddddddddddddddddddd")]);
+  await moduleApi(app).settle();
+  assert.equal(calls().length, 1);
+});
+
+test("models.autoQualify is read from platform.json (first-launch by default), and the module stops listening when closed", async (t) => {
+  const root = tempDir(t, "auto-qualify-config-");
+  assert.equal(modelCardRoutes.readAutoQualify(root), "first-launch");
+  fs.mkdirSync(path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(path.join(root, "config", "platform.json"), JSON.stringify({ models: { autoQualify: "off" } }));
+  assert.equal(modelCardRoutes.readAutoQualify(root), "off");
+  fs.writeFileSync(path.join(root, "config", "platform.json"), JSON.stringify({ models: { autoQualify: "sometimes" } }));
+  assert.equal(modelCardRoutes.readAutoQualify(root), "first-launch", "an invalid value falls back to the default");
+
+  const answers = {};
+  const app = await mountApp(t, { vllm: answers, cards: { getAutoQualify: () => "always" } });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const launch = launchManager(dir);
+  Object.assign(answers, launch.answers);
+  moduleApi(app).close();
+  publishJobs(app, "vllm", [serveJob("z1", launch.launchId)]);
+  await moduleApi(app).settle();
+  assert.equal(app.vllm.seen.filter((item) => item.path === "/api/qualify").length, 0);
 });
