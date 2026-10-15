@@ -18,14 +18,10 @@ import { Button } from "../../components/button.js";
 import { Card } from "../../components/card.js";
 import { ConfirmDialog } from "../../components/confirm-dialog.js";
 import { DataTable } from "../../components/data-table.js";
-import { Drawer } from "../../components/drawer.js";
 import { EmptyState } from "../../components/empty-state.js";
-import { useLayerAction } from "../../components/layer-action.js";
-import { LogViewer } from "../../components/log-viewer.js";
 import { PageHeader } from "../../components/page-header.js";
 import { Skeleton } from "../../components/skeleton.js";
 import { StatusBadge } from "../../components/status-badge.js";
-import { readQueryParam } from "../../components/tabs.js";
 import { describeError } from "../../lib/api.js";
 import { tk } from "../../lib/i18n.js";
 import { PlatformStatusGuard, StatusGuard } from "../../lib/schemas.js";
@@ -35,12 +31,13 @@ import { html } from "../../ui/html.js";
 import { useState } from "../../ui/vendor.js";
 import { actionRequest, actionsFor, blockersOf, degradeRows, isDeployRestart, platformRows, portConflictOf, stateTone, supervisorMissing } from "./model.js";
 import { SystemNav } from "./subnav.js";
+import { LazyView } from "../deployment-detail/lazy.js";
 
 const LOGS_PREFIX = "logs:";
 const DASH = "—";
 
 function initialLogsId() {
-  const value = readQueryParam("drawer");
+  const value = new URLSearchParams(globalThis.location?.search || "").get("drawer");
   return value && value.startsWith(LOGS_PREFIX) ? value.slice(LOGS_PREFIX.length) : null;
 }
 
@@ -48,7 +45,7 @@ function StateCell({ row }) {
   const { t, has } = useT();
   const conflict = portConflictOf(row);
   let detail = "";
-  if (conflict) detail = t("platform.portConflict", { port: conflict.port, image: conflict.image || DASH, pid: conflict.pid ?? DASH });
+  if (conflict) detail = t("platform.portConflict", { port: String(conflict.port), image: conflict.image || DASH, pid: conflict.pid === null ? DASH : String(conflict.pid) });
   else if (row.reason) detail = has(tk("platform.reason.", row.reason)) ? t(tk("platform.reason.", row.reason)) : row.reason;
   else if (row.message) detail = row.message;
   return html`<div class="stack-sm" data-testid=${`system.state.${row.id}`}>
@@ -65,7 +62,7 @@ function ExitCell({ row }) {
   if (!exit) return DASH;
   const reason = typeof exit.reason === "string" && exit.reason ? (has(tk("platform.reason.", exit.reason)) ? t(tk("platform.reason.", exit.reason)) : exit.reason) : "";
   const exitCode = exit.code === null || exit.code === undefined ? null : Number(exit.code);
-  const code = Number.isFinite(exitCode) && exitCode !== 0 ? t("platform.system.exitCode", { code: exitCode }) : "";
+  const code = Number.isFinite(exitCode) && exitCode !== 0 ? t("platform.system.exitCode", { code: String(exitCode) }) : "";
   const when = exit.at ? fmt.relative(exit.at) : "";
   return html`<span data-testid="system.exit">${[reason, code, when].filter(Boolean).join(" · ") || DASH}</span>`;
 }
@@ -91,11 +88,11 @@ export default function System() {
   const platformOn = Boolean(bootstrap?.features?.platform);
   const platform = useQuery(["platform"], () => api.get("/api/platform/status", { guard: PlatformStatusGuard }), { ttlMs: 5000, refetchMs: 15000, enabled: platformOn });
   const status = useQuery(["status"], () => api.get("/api/status", { guard: StatusGuard }), { ttlMs: 10000, refetchMs: 15000 });
-  const layerAction = useLayerAction();
   const [busy, setBusy] = useState("");
   const [stopping, setStopping] = useState(null);
   const [busyAsk, setBusyAsk] = useState(null);
   const [stopAll, setStopAll] = useState(false);
+  const [startingSupervisor, setStartingSupervisor] = useState(false);
   const [logsId, setLogsId] = useState(initialLogsId);
   const [supervisorGone, setSupervisorGone] = useState(false);
 
@@ -104,11 +101,18 @@ export default function System() {
   const rows = degraded ? degradeRows(status.data) : platformRows(platform.data, pick);
   const loading = source.data === undefined && source.status !== "error";
   const failed = source.data === undefined && source.status === "error";
-  const missing = !degraded && (supervisorMissing(platform.data) || (supervisorGone && platform.data?.supervisor?.running !== true));
+  const missing = !degraded && (supervisorMissing(platform.data) || supervisorGone);
   const supervisor = platform.data?.supervisor;
 
   function refresh() {
     for (const prefix of [["platform"], ["status"], ["fleet"]]) cache.invalidate(prefix);
+  }
+
+  async function startSupervisor() {
+    await api.post("/api/platform/supervisor/start", {});
+    setSupervisorGone(false);
+    refresh();
+    toasts?.push?.({ level: "success", title: t("platform.action.startSupervisor"), body: t("platform.strip.started") });
   }
 
   function failure(row, error) {
@@ -124,6 +128,7 @@ export default function System() {
     const request = actionRequest(row, action);
     if (!request) return null;
     const answer = await api.post(request.path, request.body);
+    setSupervisorGone(false);
     refresh();
     if (action === "restartIdle") toasts?.push?.({ level: "success", title: row.label, body: t("platform.system.queued", { component: row.label }) });
     else toasts?.push?.({ level: "success", title: row.label, body: t("platform.strip.started") });
@@ -199,13 +204,13 @@ export default function System() {
     ${!owner ? html`<p class="muted" data-testid="system.viewer-note">${t("shell.readonly")}</p>` : null}
     ${missing ? html`<div class="notice notice-warn" role="status" data-testid="system.supervisor-banner">
       <span class="grow">${t("platform.supervisor.missing")}</span>
-      ${owner ? html`<${Button} size="sm" variant="primary" onClick=${() => layerAction.start({ id: "start-supervisor" })} testid="system.supervisor-start">${t("platform.action.startSupervisor")}<//>` : null}
+      ${owner ? html`<${Button} size="sm" variant="primary" onClick=${() => setStartingSupervisor(true)} testid="system.supervisor-start">${t("platform.action.startSupervisor")}<//>` : null}
     </div>` : null}
     ${degraded ? html`<div class="notice" role="status" data-testid="system.degraded">
       <div class="stack-sm grow"><strong>${t("platform.system.degraded.title")}</strong><span>${t("platform.system.degraded.body")}</span></div>
     </div>` : null}
     <${Card} title=${t("platform.system.table")} level=${2} testid="system.components">
-      <${DataTable} id="system-components" caption=${t("platform.system.table")} columns=${columns} rows=${rows} rowKey="id" responsive="cards" empty=${empty}
+      <${DataTable} id="system-components" caption=${t("platform.system.tableCaption")} columns=${columns} rows=${rows} rowKey="id" responsive="cards" empty=${empty}
         exportName="platform-components" testid="system.table" />
     <//>
     ${owner ? html`<${Card} title=${t("platform.system.danger.title")} tone="danger" level=${2} testid="system.danger">
@@ -214,7 +219,8 @@ export default function System() {
         <${Button} variant="danger" icon="power" onClick=${() => setStopAll(true)} testid="system.stop-all">${t("platform.system.danger.stop")}<//>
       </div>
     <//>` : null}
-    ${layerAction.dialog}
+    <${ConfirmDialog} open=${startingSupervisor} title=${t("platform.action.startSupervisor")} body=${t("platform.strip.supervisorBody")}
+      confirmLabel=${t("platform.action.startSupervisor")} onConfirm=${startSupervisor} onClose=${() => setStartingSupervisor(false)} testid="system.supervisor-confirm" />
     <${ConfirmDialog} open=${Boolean(stopping)} tone="danger" title=${stopping ? t("platform.system.stop.title", { component: stopping.label }) : ""}
       body=${stopping ? t("platform.system.stop.body", { component: stopping.label }) : ""} confirmLabel=${t("platform.system.action.stop")}
       onConfirm=${() => send(stopping, "stop").catch((error) => {
@@ -230,9 +236,6 @@ export default function System() {
         await api.post("/api/stop-all");
         toasts?.push?.({ level: "success", title: t("platform.system.danger.stop"), body: t("platform.system.danger.stopped") });
       }} onClose=${() => setStopAll(false)} testid="system.stop-all-confirm" />
-    <${Drawer} open=${Boolean(logsRow)} width=${840} title=${logsRow ? t("platform.system.logs.title", { component: logsRow.label }) : ""} urlId=${logsRow ? `${LOGS_PREFIX}${logsRow.id}` : undefined}
-      onClose=${() => setLogsId(null)} testid="system.logs">
-      ${logsRow ? html`<${LogViewer} key=${logsRow.id} source=${{ kind: "component", id: logsRow.id }} label=${t("platform.system.logs.title", { component: logsRow.label })} testid="system.log-viewer" />` : null}
-    <//>
+    ${logsRow ? html`<${LazyView} load=${() => import("./logs.js")} name="ComponentLogs" row=${logsRow} onClose=${() => setLogsId(null)} />` : null}
   </div>`;
 }

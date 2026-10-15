@@ -129,5 +129,6 @@
   "platform.system.stop.title": "Stop {component}?",
   "platform.system.subtitle": "Every platform component, its state and what you can do with it.",
   "platform.system.supervisor.running": "Supervisor running · {profile}",
-  "platform.system.table": "Platform components"
+  "platform.system.table": "Platform components",
+  "platform.system.tableCaption": "Component states and actions"
 }

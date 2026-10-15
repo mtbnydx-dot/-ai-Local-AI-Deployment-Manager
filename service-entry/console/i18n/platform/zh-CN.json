@@ -129,5 +129,6 @@
   "platform.system.stop.title": "停止 {component}？",
   "platform.system.subtitle": "平台的每个组件、它的状态，以及可以对它做的操作。",
   "platform.system.supervisor.running": "守护进程运行中 · {profile}",
-  "platform.system.table": "平台组件"
+  "platform.system.table": "平台组件",
+  "platform.system.tableCaption": "组件状态与操作"
 }
