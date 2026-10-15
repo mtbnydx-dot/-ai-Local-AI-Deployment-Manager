@@ -1,20 +1,21 @@
 {
   "prefixes": [
     "hub.action.",
+    "hub.detail.access.",
+    "hub.detail.tab.",
     "hub.fit.",
     "hub.library.provenance.",
+    "hub.library.verification.",
     "hub.state.",
+    "hub.storage.badge.",
+    "hub.storage.state.",
     "hub.wait."
   ],
   "unused": [
     "hub.error.fallback",
     "hub.error.notRetried",
-    "hub.library.duplicate",
-    "hub.library.update.available",
-    "hub.storage.root.hidden",
     "hub.token.label",
     "hub.token.localOnly",
-    "hub.token.remember",
-    "hub.unavailable"
+    "hub.token.remember"
   ]
 }

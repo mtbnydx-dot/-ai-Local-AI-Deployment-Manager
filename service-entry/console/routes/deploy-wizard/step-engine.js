@@ -14,7 +14,6 @@
 
 import { describeError } from "../../lib/api.js";
 import { engineIndex, recommendedKey, viewRows, whyReasons } from "../../lib/compat-model.js";
-import { findJob, jobView } from "../../lib/engines-model.js";
 import { EnginesResponseGuard } from "../../lib/schemas.js";
 import { inspectRequest, patchDraft } from "../../lib/wizard-state.js";
 import { Button } from "../../components/button.js";
@@ -22,8 +21,7 @@ import { Card } from "../../components/card.js";
 import { CompatMatrix } from "../../components/compat-matrix.js";
 import { ConfirmDialog } from "../../components/confirm-dialog.js";
 import { EmptyState } from "../../components/empty-state.js";
-import { needsRemoteCode, remoteCodeFiles } from "../../components/model-card.js";
-import { ProgressRow } from "../../components/progress-row.js";
+import { needsRemoteCode } from "../../components/model-card.js";
 import { Skeleton } from "../../components/skeleton.js";
 import { useServices } from "../../ui/context.js";
 import { useQuery, useT } from "../../ui/hooks.js";
@@ -31,61 +29,12 @@ import { html } from "../../ui/html.js";
 import { useEffect, useMemo, useRef, useState } from "../../ui/vendor.js";
 import { compatKey, loadCompatibility, useCard } from "./card-source.js";
 import { guards } from "./guards.js";
+import { ProbeJob, RemoteCodeBody } from "./probe-job.js";
 
 const enc = encodeURIComponent;
-const SAFETY_REFRESH_MS = 5000;
 const EXPERIMENTAL_ACK = "experimental-engine";
 
-// ---- a probe job ---------------------------------------------------------------------------
-
-// Follows one probe through the same cache key the entry's `jobs` events merge into; a slow refetch is the safety net.
-function ProbeJob({ managerId, jobId, engineLabel, onDone }) {
-  const services = useServices();
-  const { api } = services;
-  const { t } = useT();
-  const jobs = useQuery(["m", managerId, "jobs"], () => api.manager(managerId).get("/jobs", { query: { fields: "summary" } }), { ttlMs: 2000 });
-  const refetch = useRef(jobs.refetch);
-  refetch.current = jobs.refetch;
-  const view = jobView(findJob(jobs.data, jobId));
-  const reported = useRef(false);
-  useEffect(() => {
-    refetch.current();
-  }, [jobId]);
-  useEffect(() => {
-    if (view?.done) return undefined;
-    const timer = globalThis.setInterval(() => {
-      if (!services.visibility?.hidden?.()) refetch.current();
-    }, SAFETY_REFRESH_MS);
-    return () => globalThis.clearInterval(timer);
-  }, [Boolean(view?.done)]);
-  useEffect(() => {
-    if (!view?.done || reported.current) return;
-    reported.current = true;
-    onDone(view);
-  }, [view?.state]);
-  if (view?.state === "success") {
-    return html`<div class="notice notice-success" role="status" data-testid="wizard.probe" data-state="success">${t("models.wizard.engine.probeDone", { engine: engineLabel })}</div>`;
-  }
-  if (view?.state === "failed") {
-    return html`<div class="notice notice-danger" role="alert" data-testid="wizard.probe" data-state="failed">
-      ${t("models.wizard.engine.probeFailed", { engine: engineLabel })} <span data-user-content="" data-testid="wizard.probe.error">${view.error}</span>
-    </div>`;
-  }
-  return html`<div data-testid="wizard.probe" data-state=${view?.state || "starting"}>
-    <${ProgressRow} label=${t("models.wizard.engine.probing", { engine: engineLabel })} percent=${view ? view.percent : null} testid="wizard.probe.progress" />
-  </div>`;
-}
-
 // ---- the page ------------------------------------------------------------------------------
-
-function RemoteCodeBody({ card }) {
-  const { t } = useT();
-  const files = remoteCodeFiles(card);
-  return html`<div class="stack-sm" data-testid="wizard.remote-code">
-    <p>${t("models.remoteCode.confirm", { files: files.length ? files.join(", ") : t("models.card.customCodeYes") })}</p>
-    <ul class="stack-sm" data-testid="wizard.remote-code.files">${files.map((file) => html`<li key=${file}><code class="code-inline" data-user-content="">${file}</code></li>`)}</ul>
-  </div>`;
-}
 
 export default function StepEngine({ draft, update }) {
   const services = useServices();

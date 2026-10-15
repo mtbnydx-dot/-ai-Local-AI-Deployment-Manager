@@ -515,6 +515,37 @@ export const LibraryEntryGuard = obj({
   bytes: maybe(num),
 });
 
+/** 03 §13: `GET /api/hub/library` (every page of it has these fields). */
+export const LibraryListGuard = obj({
+  entries: arr(LibraryEntryGuard),
+  roots: opt(arr(obj({ id: str, label: opt(str), path: maybe(str), mode: opt(str), default: opt(bool), online: opt(bool) }))),
+  nextCursor: maybe(str),
+  total: opt(int),
+});
+
+/** 03 §13.5: `GET /api/hub/storage/usage`, which extends 08 P0-DL-3's disk usage. */
+export const StorageUsageGuard = obj({
+  roots: arr(obj({
+    id: str,
+    label: opt(str),
+    path: maybe(str),
+    default: opt(bool),
+    volume: maybe(str),
+    freeBytes: maybe(num),
+    totalBytes: maybe(num),
+    usedByModelsBytes: opt(num),
+    modelCount: opt(int),
+    incompleteBytes: opt(num),
+    pendingBytes: opt(num),
+    hidden: opt(bool),
+  })),
+  models: opt(arr(any)),
+  hfCache: maybe(obj({ hubBytes: opt(num), xetBytes: opt(num), modelscopeBytes: opt(num), freeBytes: maybe(num), volume: maybe(str) })),
+  residues: opt(arr(obj({ entryId: str, incompleteBytes: opt(num), busy: opt(bool) }))),
+  orphanPartials: opt(arr(obj({ jobId: str, bytes: opt(num) }))),
+  duplicates: opt(arr(obj({ entryIds: arr(str), reclaimableBytes: opt(num) }))),
+});
+
 // ---------------------------------------------------------------------------
 // 04: telemetry
 
