@@ -15,7 +15,9 @@ const { listen, loadEntry, quietLogger, request, serveEntry, spyModule, unusedPo
 
 // 05 §5.7: machine principals on the ADMIN listener. Every request here goes
 // to an in-process entry on an ephemeral port; shutdown-like routes are
-// answered by a spy module, so nothing ever stops.
+// answered by a spy module, so nothing ever stops. Hub-scope requests use
+// /api/hub/spy-downloads, which no hub route serves (HUB-7 answers
+// /api/hub/downloads itself), so they reach the spy.
 
 const LAN = "192.168.1.50";
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -126,8 +128,8 @@ test("the principal × route scope matrix of 05 §5.7", async () => {
 test("signed principals reach exactly their scope; out of scope is 403 principal_scope_denied", async (t) => {
   const { spy, port, token } = await mountEntry(t);
   const allowed = [
-    ["system:hub-shim:vllm", "GET", "/api/hub/downloads"],
-    ["system:hub-shim:llama", "POST", "/api/hub/downloads", { repo: "demo/model" }],
+    ["system:hub-shim:vllm", "GET", "/api/hub/spy-downloads"],
+    ["system:hub-shim:llama", "POST", "/api/hub/spy-downloads", { repo: "demo/model" }],
     ["system:supervisor", "POST", "/api/manager/shutdown"],
     ["system:supervisor", "POST", "/api/shutdown"],
     ["system:supervisor", "GET", "/api/platform/busy"],
@@ -152,7 +154,7 @@ test("signed principals reach exactly their scope; out of scope is 403 principal
     ["system:cli", "GET", "/api/session/list"],
     ["system:cli", "GET", "/billing"],
     ["system:mcp", "GET", "/api/keys"],
-    ["system:mcp", "POST", "/api/hub/downloads"],
+    ["system:mcp", "POST", "/api/hub/spy-downloads"],
   ];
   const before = spy.seen.length;
   for (const [principal, method, target] of denied) {
@@ -189,7 +191,7 @@ test("a bad, stale, misplaced or tampered signature is 401 and never falls back 
     ["61 s old", { now: Date.now() - 61_000 }, "internal_signature_expired"],
     ["61 s ahead", { now: Date.now() + 61_000 }, "internal_signature_expired"],
     ["wrong token", { token: "not-the-entry-token" }, "internal_signature_invalid"],
-    ["query swapped", { sign: { pathWithQuery: "/api/hub/downloads?state=done" } }, "internal_signature_invalid"],
+    ["query swapped", { sign: { pathWithQuery: "/api/hub/spy-downloads?state=done" } }, "internal_signature_invalid"],
     ["method swapped", { sign: { method: "POST" } }, "internal_signature_invalid"],
     ["principal swapped", { headers: { "x-ai-internal-principal": "system:hub-shim:llama" } }, "internal_signature_invalid"],
     ["unknown principal", { headers: { "x-ai-internal-principal": "system:root" } }, "internal_signature_invalid"],
@@ -197,20 +199,20 @@ test("a bad, stale, misplaced or tampered signature is 401 and never falls back 
     ["LAN socket", { peer: LAN }, "internal_signature_invalid"],
   ];
   for (const [label, options, code] of cases) {
-    const response = await signed(port, "GET", "/api/hub/downloads?state=active", { principal, token, ...options });
+    const response = await signed(port, "GET", "/api/hub/spy-downloads?state=active", { principal, token, ...options });
     assert.equal(response.status, 401, label);
     assert.equal(response.json.error.code, code, label);
     assert.equal(response.text.includes(token), false, label);
   }
   // A lone principal header is an incomplete signature, not an anonymous call.
-  const partial = await request(port, "/api/hub/downloads", { headers: { "x-ai-internal-principal": principal } });
+  const partial = await request(port, "/api/hub/spy-downloads", { headers: { "x-ai-internal-principal": principal } });
   assert.equal(partial.status, 401);
   // Proxied requests stop at the proxied-request guard before any of this.
-  const proxied = await signed(port, "GET", "/api/hub/downloads", { principal, token, headers: { "x-forwarded-for": "203.0.113.9" } });
+  const proxied = await signed(port, "GET", "/api/hub/spy-downloads", { principal, token, headers: { "x-forwarded-for": "203.0.113.9" } });
   assert.equal(proxied.status, 404);
   assert.equal(proxied.json.code, "public_proxy_gateway_only");
   // cf-ray is in the shared forwarding list (05 §4), so it stops there too.
-  const ray = await signed(port, "GET", "/api/hub/downloads?state=active", { principal, token, headers: { "cf-ray": "8d2f0c1e3a" } });
+  const ray = await signed(port, "GET", "/api/hub/spy-downloads?state=active", { principal, token, headers: { "cf-ray": "8d2f0c1e3a" } });
   assert.equal(ray.status, 404);
   assert.equal(ray.json.code, "public_proxy_gateway_only");
   assert.deepEqual(spy.seen, []);
@@ -219,31 +221,31 @@ test("a bad, stale, misplaced or tampered signature is 401 and never falls back 
 test("a body digest mismatch is 401 before the handler runs; an oversized body is 413", async (t) => {
   const { spy, port, token } = await mountEntry(t);
   const principal = "system:hub-shim:llama";
-  const mismatch = await signed(port, "POST", "/api/hub/downloads", { principal, token, body: '{"repo":"other/model"}', sign: { body: '{"repo":"demo/model"}' } });
+  const mismatch = await signed(port, "POST", "/api/hub/spy-downloads", { principal, token, body: '{"repo":"other/model"}', sign: { body: '{"repo":"demo/model"}' } });
   assert.equal(mismatch.status, 401);
   assert.equal(mismatch.json.error.code, "internal_signature_invalid");
 
   const big = JSON.stringify({ pad: "x".repeat(1024 * 1024) });
-  const oversized = await signed(port, "POST", "/api/hub/downloads", { principal, token, body: big });
+  const oversized = await signed(port, "POST", "/api/hub/spy-downloads", { principal, token, body: big });
   assert.equal(oversized.status, 413);
   assert.equal(oversized.json.error.code, "request_too_large");
   assert.deepEqual(spy.seen, [], "neither request reached the route");
 
-  const good = await signed(port, "POST", "/api/hub/downloads", { principal, token, body: '{"repo":"demo/model"}' });
+  const good = await signed(port, "POST", "/api/hub/spy-downloads", { principal, token, body: '{"repo":"demo/model"}' });
   assert.equal(good.status, 200);
   assert.deepEqual(spy.seen.map((item) => item.body), [{ repo: "demo/model" }]);
 });
 
 test("a bare x-hub-shim header grants nothing", async (t) => {
   const { spy, port } = await mountEntry(t);
-  const lan = await request(port, "/api/hub/downloads", { peer: LAN, headers: { "x-hub-shim": "1" } });
+  const lan = await request(port, "/api/hub/spy-downloads", { peer: LAN, headers: { "x-hub-shim": "1" } });
   assert.equal(lan.status, 401);
   assert.equal(lan.json.error.code, "admin_session_required", "a LAN caller stays an anonymous viewer");
   assert.deepEqual(spy.seen, []);
 
   // On loopback it is judged like any request without credentials: a
   // viewer since PUB-5, never a machine principal, so the write is refused.
-  const loopback = await request(port, "/api/hub/downloads", { method: "POST", body: {}, headers: { "x-hub-shim": "vllm" } });
+  const loopback = await request(port, "/api/hub/spy-downloads", { method: "POST", body: {}, headers: { "x-hub-shim": "vllm" } });
   assert.equal(loopback.status, 401);
   assert.equal(loopback.json.error.code, "admin_session_required");
   assert.deepEqual(spy.seen, []);

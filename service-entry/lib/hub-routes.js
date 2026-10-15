@@ -3,7 +3,8 @@
 // Model hub routes (03 §13), mounted for /api/hub/ by one line in the entry's
 // route-mount table. HUB-1 serves GET /api/hub/status and GET/PUT
 // /api/hub/settings; HUB-8 adds the library list, detail, rescan, verify and
-// identify routes and the task poll. The later hub packages add their rows to
+// identify routes and the task poll; HUB-7 adds the download queue routes
+// (/api/hub/downloads*) and the viewer redaction of the `downloads` event. The later hub packages add their rows to
 // HUB_ROUTES; a path may name segments (/api/hub/library/:id).
 // A path this module does not serve falls through to the entry's 404.
 //
@@ -111,6 +112,56 @@ function redactHfAccessForViewer(body) {
   return isPlainObject(body) ? { ok: body.ok, granted: Boolean(body.granted), status: body.status } : body;
 }
 
+// 03 §13.1: a viewer sees a download with its folder as "rootLabel/
+// outputName", never the absolute path, the process id, the token reference,
+// the error detail or the log.
+function redactDownloadJobForViewer(job) {
+  if (!isPlainObject(job)) return job;
+  const out = omit(job, "logs");
+  if (isPlainObject(job.target)) {
+    const label = String(job.target.rootLabel || "(library)");
+    out.target = { ...job.target, localDir: `${label}/${String(job.target.outputName || "")}` };
+  }
+  if (isPlainObject(job.transfer)) {
+    out.transfer = omit(omit(job.transfer, "pid"), "pidStartedAt");
+    if (isPlainObject(job.transfer.options)) out.transfer.options = omit(job.transfer.options, "tokenRef");
+  }
+  if (isPlainObject(job.error)) out.error = omit(job.error, "detail");
+  if (isPlainObject(job.retry) && isPlainObject(job.retry.lastError)) out.retry = { ...job.retry, lastError: omit(job.retry.lastError, "detail") };
+  return out;
+}
+
+function redactDownloadListForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  return Array.isArray(body.jobs) ? { ...body, jobs: body.jobs.map(redactDownloadJobForViewer) } : body;
+}
+
+function redactDownloadHistoryForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  return Array.isArray(body.records) ? { ...body, records: body.records.map(redactDownloadJobForViewer) } : body;
+}
+
+function redactDownloadDetailForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  return isPlainObject(body.job) ? { ...body, job: redactDownloadJobForViewer(body.job) } : body;
+}
+
+// The resume check names files relative to the job folder already; only the
+// folder itself becomes root-relative.
+function redactResumeCheckForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  const out = { ...body };
+  if (body.localDir !== undefined) out.localDir = `${String(body.rootLabel || "(library)")}/${String(body.outputName || "")}`;
+  return out;
+}
+
+// The `downloads` event (07 { kind, jobs, aggregate }) for viewers: the
+// downloads redactor applied to each job.
+function redactDownloadsEventForViewer(data) {
+  if (!isPlainObject(data)) return null;
+  return Array.isArray(data.jobs) ? { ...data, jobs: data.jobs.map(redactDownloadJobForViewer) } : data;
+}
+
 // Every route this module serves.
 const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/status", handler: "status" }),
@@ -126,6 +177,23 @@ const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login", handler: "authLogin" }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", handler: "authAccess" }),
   Object.freeze({ method: "POST", path: "/api/hub/sources/probe", handler: "sourcesProbe" }),
+  // The download queue (HUB-7, 03 §13). Literal segments come before :id.
+  Object.freeze({ method: "GET", path: "/api/hub/downloads", handler: "downloadsList" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads", handler: "downloadsCreate" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/history", handler: "downloadsHistory" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/reorder", handler: "downloadsReorder" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/pause-all", handler: "downloadsPauseAll" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/resume-all", handler: "downloadsResumeAll" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id", handler: "downloadGet" }),
+  Object.freeze({ method: "DELETE", path: "/api/hub/downloads/:id", handler: "downloadRemove" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id/logs", handler: "downloadLogs" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id/resume-check", handler: "downloadResumeCheck" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/pause", handler: "downloadPause" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/resume", handler: "downloadResume" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/retry", handler: "downloadRetry" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/start-now", handler: "downloadStartNow" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/cancel", handler: "downloadCancel" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/priority", handler: "downloadPriority" }),
 ]);
 
 // "/api/hub/library/:id" → a matcher for the pathname; named segments are one
@@ -152,19 +220,19 @@ function decodeSegment(value) {
   }
 }
 
-// Every row whose path matches the pathname, with the named segments of the
-// first match (a literal segment and a named one never both match the same
-// request in this table).
+// Every row whose path matches the pathname, in table order, each with its
+// own named segments (/downloads/history matches both the literal row and
+// /downloads/:id; the literal row comes first and wins for its method).
 function matchRoutes(pathname) {
   const rows = [];
-  let params = {};
+  const paramsByRow = new Map();
   for (const matcher of ROUTE_MATCHERS) {
     const found = matcher.regex.exec(pathname);
     if (!found) continue;
-    if (!rows.length) params = Object.fromEntries(matcher.names.map((name, index) => [name, decodeSegment(found[index + 1])]));
     rows.push(matcher.route);
+    paramsByRow.set(matcher.route, Object.fromEntries(matcher.names.map((name, index) => [name, decodeSegment(found[index + 1])])));
   }
-  return { rows, params };
+  return { rows, paramsByRow };
 }
 
 // The viewer registrations of 03 §13.1, registered at mount. Settings hold
@@ -177,11 +245,16 @@ const HUB_VIEWER_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", redact: redactHubTaskBodyForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface", redact: redactHfAuthForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", redact: redactHfAccessForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads", redact: redactDownloadListForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/history", redact: redactDownloadHistoryForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id", redact: redactDownloadDetailForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id/resume-check", redact: redactResumeCheckForViewer }),
 ]);
 
 // Event types a viewer may receive (03 §13.1), with their redaction.
 const HUB_VIEWER_EVENTS = Object.freeze([
   Object.freeze({ type: "library", redact: redactLibraryEventForViewer }),
+  Object.freeze({ type: "downloads", redact: redactDownloadsEventForViewer }),
 ]);
 
 // Declared owner-only, so 05's route inventory sees them.
@@ -192,6 +265,18 @@ const HUB_ADMIN_ONLY_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify" }),
   Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login" }),
   Object.freeze({ method: "POST", path: "/api/hub/sources/probe" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/reorder" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/pause-all" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/resume-all" }),
+  Object.freeze({ method: "DELETE", path: "/api/hub/downloads/:id" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id/logs" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/pause" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/resume" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/retry" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/start-now" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/cancel" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/priority" }),
 ]);
 
 // The hub calls a manager shim may make (03 §15 table); the shim rows of
@@ -205,6 +290,16 @@ const SHIM_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login" }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access" }),
   Object.freeze({ method: "POST", path: "/api/hub/sources/probe" }),
+  // POST /api/download, GET /api/jobs and /api/jobs/:id[/logs|/pause|/resume|
+  // /cancel|/resume-check] of the managers (03 §15).
+  Object.freeze({ method: "POST", path: "/api/hub/downloads" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id/logs" }),
+  Object.freeze({ method: "GET", path: "/api/hub/downloads/:id/resume-check" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/pause" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/resume" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/cancel" }),
 ]);
 
 function routeKey(method, path) {
@@ -500,6 +595,41 @@ function createHubRoutes(options = {}) {
     return null;
   }
 
+  // The origin of a write (03 §8.1): a signed shim is always manager-shim
+  // with the signed manager id; everyone else is the console.
+  function originOf(req, who, body) {
+    const requestId = typeof req.headers?.["x-request-id"] === "string" ? req.headers["x-request-id"].slice(0, 80) : null;
+    if (who.kind === "shim") {
+      return { kind: "manager-shim", managerId: who.managerId, clientLocal: isPlainObject(body?.origin) && body.origin.clientLocal === true, ...(requestId ? { requestId } : {}) };
+    }
+    return { kind: "console", ...(requestId ? { requestId } : {}) };
+  }
+
+  function queueOrFail(res) {
+    if (hub.jobs && typeof hub.enqueue === "function") return hub.jobs;
+    sendError(res, 503, "hub_unavailable", "The download queue is not available.", { hint: "Restart service-entry and check its log for the hub start error." });
+    return null;
+  }
+
+  // Runs a queue call and answers with its result; HubErrors carry their
+  // status and code (404 download_not_found, 409 invalid_state, …).
+  async function queueCall(res, what, call, respond) {
+    let result;
+    try {
+      result = await call();
+    } catch (error) {
+      sendHubError(res, error, what);
+      return;
+    }
+    respond(result);
+  }
+
+  function optionalBoolean(res, body, field) {
+    if (body[field] === undefined || typeof body[field] === "boolean") return true;
+    sendError(res, 400, "invalid_request", `${field} must be true or false.`, { details: { field } });
+    return false;
+  }
+
   const handlers = {
     status(req, res, url, who) {
       sendRead(req, res, url.pathname, hub.status(), who);
@@ -660,6 +790,186 @@ function createHubRoutes(options = {}) {
       }
     },
 
+    // --- downloads (HUB-7, 03 §13) ---
+
+    async downloadsList(req, res, url, who) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const query = {};
+      for (const key of ["state", "owner", "include", "limit", "cursor"]) {
+        const value = url.searchParams.get(key);
+        if (value !== null) query[key] = value;
+      }
+      await queueCall(res, "listing the downloads", () => jobs.list(query), (result) => sendRead(req, res, url.pathname, { ok: true, ...result }, who));
+    },
+
+    // POST /downloads takes a plan body (03 §13.4) or a planId. A
+    // credential.hfToken goes into the vault first (loopback owner or a
+    // clientLocal shim only); the job carries the tokenRef alone.
+    async downloadsCreate(req, res, url, who) {
+      if (!queueOrFail(res)) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      let credential = null;
+      try {
+        credential = await acceptHubCredential({ hub, req, who, body });
+      } catch (error) {
+        sendHubError(res, error, "accepting the download credential");
+        return;
+      }
+      const input = omit(omit(body, "credential"), "origin");
+      if (isPlainObject(body.credential) && body.credential.mode !== undefined) input.credential = { mode: body.credential.mode };
+      try {
+        const job = await hub.enqueue(input, { origin: originOf(req, who, body), credential });
+        sendJson(res, { ok: true, job }, 201);
+      } catch (error) {
+        // A token that no job holds is released at once.
+        if (credential?.tokenRef) Promise.resolve().then(() => hub.tokens.release(credential.tokenRef)).catch(() => {});
+        sendHubError(res, error, "queueing a download");
+      }
+    },
+
+    async downloadsHistory(req, res, url, who) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const query = {};
+      for (const key of ["q", "provider", "state", "limit", "cursor"]) {
+        const value = url.searchParams.get(key);
+        if (value !== null) query[key] = value;
+      }
+      await queueCall(res, "reading the download history", () => jobs.history(query), (result) => sendRead(req, res, url.pathname, { ok: true, ...result }, who));
+    },
+
+    async downloadGet(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const job = jobs.get(params.id);
+      if (!job) {
+        sendError(res, 404, "download_not_found", "No such download.");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, job }, who);
+    },
+
+    async downloadLogs(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const tail = url.searchParams.get("tail");
+      await queueCall(res, "reading a download log", () => jobs.logs(params.id, { tail: tail === null ? undefined : tail }), (result) => sendJson(res, { ok: true, lines: result.lines, total: result.total }));
+    },
+
+    async downloadResumeCheck(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      await queueCall(res, "checking a download before resume", () => jobs.resumeCheck(params.id), (result) => sendRead(req, res, url.pathname, { ok: true, ...result }, who));
+    },
+
+    async downloadPause(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      await queueCall(res, "pausing a download", () => jobs.pause(params.id), (job) => sendJson(res, { ok: true, job }));
+    },
+
+    // resume { refreshTransferOptions?, source?, credential?: { hfToken, remember } };
+    // a waiting/auth job needs the credential (03 §12).
+    async downloadResume(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (!optionalBoolean(res, body, "refreshTransferOptions")) return;
+      if (body.source !== undefined && body.source !== null && typeof body.source !== "string") {
+        sendError(res, 400, "invalid_request", "source must be a string.", { details: { field: "source" } });
+        return;
+      }
+      let credential = null;
+      try {
+        credential = await acceptHubCredential({ hub, req, who, body });
+      } catch (error) {
+        sendHubError(res, error, "accepting the download credential");
+        return;
+      }
+      try {
+        const job = await jobs.resume(params.id, { refreshTransferOptions: body.refreshTransferOptions === true, source: body.source ?? undefined, credential });
+        sendJson(res, { ok: true, job });
+      } catch (error) {
+        if (credential?.tokenRef) Promise.resolve().then(() => hub.tokens.release(credential.tokenRef)).catch(() => {});
+        sendHubError(res, error, "resuming a download");
+      }
+    },
+
+    async downloadRetry(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      await queueCall(res, "retrying a download", () => jobs.retry(params.id), (job) => sendJson(res, { ok: true, job }));
+    },
+
+    async downloadStartNow(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (!optionalBoolean(res, body, "force")) return;
+      await queueCall(res, "starting a download now", () => jobs.startNow(params.id, { force: body.force === true }), (job) => sendJson(res, { ok: true, job }));
+    },
+
+    // cancel { deletePartial?, confirm?: outputName } → { ok, job, reclaimedBytes }.
+    async downloadCancel(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (!optionalBoolean(res, body, "deletePartial")) return;
+      if (body.confirm !== undefined && body.confirm !== null && typeof body.confirm !== "string") {
+        sendError(res, 400, "invalid_request", "confirm must be a string.", { details: { field: "confirm" } });
+        return;
+      }
+      await queueCall(res, "cancelling a download", () => jobs.cancel(params.id, { deletePartial: body.deletePartial === true, confirm: body.confirm ?? undefined }), (result) => sendJson(res, { ok: true, job: result.job, reclaimedBytes: result.reclaimedBytes }));
+    },
+
+    async downloadPriority(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      await queueCall(res, "changing a download priority", () => jobs.setPriority(params.id, body.priority), (job) => sendJson(res, { ok: true, job }));
+    },
+
+    async downloadsReorder(req, res) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      await queueCall(res, "reordering the downloads", () => jobs.reorder(body.ids), (list) => sendJson(res, { ok: true, jobs: list }));
+    },
+
+    async downloadsPauseAll(req, res) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      await queueCall(res, "pausing every download", () => jobs.pauseAll(), (result) => sendJson(res, { ok: true, affected: result.affected }));
+    },
+
+    async downloadsResumeAll(req, res) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      await queueCall(res, "resuming every download", () => jobs.resumeAll(), (result) => sendJson(res, { ok: true, affected: result.affected }));
+    },
+
+    async downloadRemove(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      req.resume?.();
+      await queueCall(res, "removing a download record", () => jobs.remove(params.id), () => sendJson(res, { ok: true }));
+    },
+
     // PUT takes a partial patch, bare or as { settings }, and answers the
     // full settings (03 §14). A shim's signed body also carries origin
     // (03 §15), which is request metadata, not a setting.
@@ -700,7 +1010,7 @@ function createHubRoutes(options = {}) {
   async function handle(req, res, url) {
     const pathname = String(url?.pathname || "");
     if (!pathname.startsWith(PREFIX)) return false;
-    const { rows, params } = matchRoutes(pathname);
+    const { rows, paramsByRow } = matchRoutes(pathname);
     if (!rows.length) return false;
     const requested = String(req.method || "GET").toUpperCase();
     const method = requested === "HEAD" ? "GET" : requested;
@@ -721,7 +1031,7 @@ function createHubRoutes(options = {}) {
       sendError(res, 503, "hub_unavailable", "The model hub is not running.", { hint: "Restart service-entry and check its log for the hub start error." });
       return true;
     }
-    await handlers[route.handler](req, res, url, who, params);
+    await handlers[route.handler](req, res, url, who, paramsByRow.get(route) || {});
     return true;
   }
 
@@ -787,8 +1097,14 @@ module.exports = {
   name: "hub",
   acceptHubCredential,
   isLoopbackSocket,
+  redactDownloadDetailForViewer,
+  redactDownloadHistoryForViewer,
+  redactDownloadJobForViewer,
+  redactDownloadListForViewer,
+  redactDownloadsEventForViewer,
   redactHfAccessForViewer,
   redactHfAuthForViewer,
+  redactResumeCheckForViewer,
   redactHubStatusForViewer,
   redactHubTaskBodyForViewer,
   redactLibraryDetailForViewer,

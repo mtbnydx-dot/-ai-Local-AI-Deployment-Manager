@@ -3,7 +3,8 @@ const crypto = require("node:crypto");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
+const { promisify } = require("node:util");
 const { pipeline, Readable, Transform } = require("node:stream");
 const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
@@ -1081,6 +1082,70 @@ function createPublicPortalData() {
   }
 }
 
+// Gateway requests holding or waiting for a concurrency slot right now.
+function entryGatewayInFlight(buckets = entryConcurrencyBuckets, queues = entryConcurrencyQueues) {
+  let count = 0;
+  for (const value of buckets.values()) count += Math.max(0, Number(value) || 0);
+  for (const queue of queues.values()) count += Array.isArray(queue) ? queue.filter((waiter) => waiter && !waiter.cancelled).length : 0;
+  return count;
+}
+
+/**
+ * The runtime load the hub's idle-only queue reads (03 §8):
+ * { busy, known, detail[] }. Busy while any fleet model has running or
+ * waiting requests, any instance is loading (weights compete with the
+ * download for the disk) or the gateway has requests in flight. A manager
+ * that is unreachable counts as not busy and makes the result known: false.
+ */
+function summarizeRuntimeLoad(catalogs = [], { gatewayInFlight = 0 } = {}) {
+  let busy = false;
+  let known = true;
+  const detail = [];
+  for (const catalog of Array.isArray(catalogs) ? catalogs : []) {
+    const managerId = String(catalog?.manager?.id || "");
+    if (!catalog || catalog.listening === false || catalog.error) {
+      known = false;
+      detail.push({ managerId, known: false });
+      continue;
+    }
+    let requests = 0;
+    for (const model of Array.isArray(catalog.models) ? catalog.models : []) {
+      const running = Number(model?.runningRequests);
+      const waiting = Number(model?.waitingRequests);
+      requests += (Number.isFinite(running) ? running : 0) + (Number.isFinite(waiting) ? waiting : 0);
+    }
+    const loading = (Array.isArray(catalog.instances) ? catalog.instances : [])
+      .filter((instance) => String(instance?.lifecycleState || instance?.lifecycle?.state || "").toLowerCase() === "loading").length;
+    if (requests > 0 || loading > 0) busy = true;
+    detail.push({ managerId, known: true, requests, loading });
+  }
+  const inFlight = Math.max(0, Number(gatewayInFlight) || 0);
+  if (inFlight > 0) busy = true;
+  detail.push({ source: "gateway", inFlight });
+  return { busy, known, detail };
+}
+
+async function getEntryRuntimeLoad() {
+  const catalogs = await getFleetCatalogs().catch(() => []);
+  return summarizeRuntimeLoad(catalogs, { gatewayInFlight: entryGatewayInFlight() });
+}
+
+let entryGpuRuntime = null;
+
+// [{ id, name, totalMb, freeMb, computeCap }] from nvidia-smi (03 §3.1);
+// an empty list when there is no NVIDIA GPU or the query fails.
+async function getEntryGpus() {
+  if (!entryGpuRuntime) entryGpuRuntime = core.createGpuRuntime({ execFileAsync: promisify(execFile) });
+  const status = await entryGpuRuntime.getGpuStatus().catch(() => ({ gpus: [] }));
+  return (Array.isArray(status?.gpus) ? status.gpus : []).map((gpu) => ({
+    id: String(gpu.id ?? gpu.index ?? ""),
+    name: String(gpu.name || ""),
+    totalMb: Number.isFinite(gpu.totalMb) ? gpu.totalMb : null,
+    freeMb: Number.isFinite(gpu.totalMb) && Number.isFinite(gpu.usedMb) ? Math.max(0, gpu.totalMb - gpu.usedMb) : null,
+    computeCap: gpu.computeCap || null,
+  }));
+}
+
 // The entry's one model hub (03 §3): data under service-entry/data/hub, the
 // download CLIs in the managers' discovery order. Building it touches no
 // file; a hub that cannot be built leaves its routes answering 503.
@@ -1107,6 +1172,12 @@ function createEntryHub({ events = null } = {}) {
       modelScopeCli,
       events,
       managers: MANAGERS.map(({ id, port }) => ({ id, port })),
+      // The idle-only queue (03 §8) and the fit (03 §10) read the platform
+      // through these two providers.
+      getRuntimeLoad: getEntryRuntimeLoad,
+      getGpus: getEntryGpus,
+      // Cancel-and-delete refuses a folder a running container mounts (03 §8).
+      getBusyPaths: core.createStorageBusyPathProbe({ aiRoot: AI_ROOT }),
       logger: console,
     });
   } catch (error) {
@@ -3298,6 +3369,8 @@ module.exports = {
   buildProxyHeaders,
   buildServiceEntryFleetSnapshot,
   collectEntryGatewayAccessStats,
+  entryGatewayInFlight,
+  summarizeRuntimeLoad,
   createUpstreamControl,
   createTtsBodyLimiter,
   createRouteContext,
