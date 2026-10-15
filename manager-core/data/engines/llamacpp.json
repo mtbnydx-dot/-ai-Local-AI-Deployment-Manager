@@ -80,7 +80,20 @@
       "kvUsageRatio": [{ "name": "llamacpp:kv_cache_usage_ratio", "kind": "gauge" }, { "derive": "busySlots/nSlots" }]
     }
   },
-  "logPhases": [],
-  "logFacts": [],
-  "errorSignatures": []
+  "logPhases": [
+    {"match":"server is listening on","phase":"api","percent":92,"stageText":{"zh":"启动收尾","en":"Finishing startup"},"detailText":{"zh":"服务进程已报告启动完成，正在等待 API 就绪。","en":"The server reported startup complete; waiting for the API."}},
+    {"match":"llama_kv_cache\\w*:|KV buffer size","phase":"kv","percent":76,"stageText":{"zh":"分配 KV cache","en":"Allocating KV cache"},"detailText":{"zh":"正在分配 KV cache。","en":"Allocating the KV cache."}},
+    {"match":"offloaded \\d+/\\d+ layers to GPU","phase":"weights","percent":72,"stageText":{"zh":"加载权重","en":"Loading weights"},"detailText":{"zh":"权重已加载，正在分析显存。","en":"Weights are loaded; profiling memory."}},
+    {"match":"load_tensors:","phase":"weights","percent":68,"stageText":{"zh":"加载权重","en":"Loading weights"},"detailText":{"zh":"正在加载模型权重。","en":"Loading the model weights."}}
+  ],
+  "logFacts": [
+    {"id":"layersOnGpu","match":"offloaded (\\d+)/\\d+ layers to GPU","type":"int"},
+    {"id":"layersTotal","match":"offloaded \\d+/(\\d+) layers to GPU","type":"int"},
+    {"id":"modelBufferMiB","match":"(CUDA\\d+) model buffer size\\s*=\\s*([\\d.]+) MiB","key":1,"group":2},
+    {"id":"kvBufferMiB","match":"(CUDA\\d+) KV buffer size\\s*=\\s*([\\d.]+) MiB","key":1,"group":2},
+    {"id":"computeBufferMiB","match":"(CUDA\\d+) compute buffer size\\s*=\\s*([\\d.]+) MiB","key":1,"group":2}
+  ],
+  "errorSignatures": [
+    {"id":"llama-mmproj-missing","code":"mmproj_missing","phase":"container","rootCause":true,"severity":"error","regex":"Multimodal mode requires an mmproj|No mmproj-\\S*\\.gguf file found","title":{"zh":"多模态模式缺少 mmproj 文件","en":"Multimodal mode has no mmproj file"},"hint":{"zh":"把 mmproj GGUF 放在模型目录，或指定 mmproj 路径，或改为纯文本模式。","en":"Put the mmproj GGUF next to the model, set the mmproj path, or switch to text-only mode."},"explanation":{"zh":"启动配置要求图片输入，但没有找到视觉投影器文件。","en":"The launch asks for image input but no vision projector file was found."},"suggestions":[{"kind":"param","param":"llamacpp.mmproj"},{"kind":"param","param":"llamacpp.textOnly","to":true}]}
+  ]
 }
