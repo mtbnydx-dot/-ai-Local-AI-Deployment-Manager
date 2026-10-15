@@ -515,8 +515,9 @@ test("manager sidebars link to the local billing center and billing preserves th
 
   await page.locator("#billingThemeMode").selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await textContrast(page.locator("#billingRefreshBtn")), "dark primary action stays readable").toBeGreaterThanOrEqual(4.5);
-  expect(await textContrast(page.locator(".manager-sidebar a[aria-current='page']")), "dark sidebar current link stays readable").toBeGreaterThanOrEqual(3);
+  // Colours animate on a theme change, so the ratio is polled until the transition has settled.
+  await expect.poll(() => textContrast(page.locator("#billingRefreshBtn")), { message: "dark primary action stays readable" }).toBeGreaterThanOrEqual(4.5);
+  await expect.poll(() => textContrast(page.locator(".manager-sidebar a[aria-current='page']")), { message: "dark sidebar current link stays readable" }).toBeGreaterThanOrEqual(3);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#billingThemeMode")).toHaveValue("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
