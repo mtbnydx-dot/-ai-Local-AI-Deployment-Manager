@@ -36,7 +36,41 @@ function classify(name) {
   return "main";
 }
 
+// With a model card (options.card, or options.cardFor(group) in listGgufVariants)
+// the verdict comes from 02's estimateFit (llama.cpp, empty-GPU budget): ok is
+// "fits", warn "tight", fail "exceeds". Without a card only the file size is
+// known and the bytes heuristic below stays.
+function fitForCard(card, options) {
+  const totalMb = Number(options.gpuTotalMb || 0);
+  if (!(totalMb > 0)) return { status: "unknown", ratio: null, note: "未读取到显存信息。" };
+  const { estimateFit } = require("./model-inspector/fit");
+  const result = estimateFit({
+    card,
+    engineId: options.engineId || "llamacpp",
+    values: options.values || {},
+    gpuIds: ["0"],
+    host: { gpus: [{ id: "0", name: "GPU 0", totalMb, freeMb: totalMb, usedMb: 0 }] },
+    budgetBasis: "empty-gpu",
+  }, { suggestions: false });
+  const peakMb = Math.max(0, ...Object.values(result.perGpuMb || {}).map(Number).filter(Number.isFinite));
+  const ratio = peakMb / totalMb;
+  const status = result.status === "fail" ? "exceeds" : result.status === "warn" ? "tight" : "fits";
+  const note = status === "fits"
+    ? `约占显存 ${(ratio * 100).toFixed(0)}%，可以整模型放进 GPU。`
+    : status === "tight"
+      ? `约占显存 ${(ratio * 100).toFixed(0)}%，上下文需要保守，或放部分层到 CPU。`
+      : `需要约 ${(peakMb / 1024).toFixed(1)} GB，超过显存，只能把部分层放到 CPU。`;
+  return { status, ratio, note, spill: result.spill, source: "estimateFit" };
+}
+
 function fitFor(bytes, options = {}) {
+  if (options.card && typeof options.card === "object") {
+    try {
+      return fitForCard(options.card, options);
+    } catch {
+      // fall through to the bytes heuristic
+    }
+  }
   const totalMb = Number(options.gpuTotalMb || 0);
   if (!(bytes > 0) || !(totalMb > 0)) return { status: "unknown", ratio: null, note: "未读取到显存信息。" };
   const overheadMb = Number(options.overheadMb ?? 1024);
@@ -87,7 +121,7 @@ function listGgufVariants(siblings, options = {}) {
       fileCount: group.files.length,
       multiPart: group.shards > 0,
       complete: group.shards === 0 || group.shards === group.expectedShards,
-      fit: fitFor(group.bytes, options),
+      fit: fitFor(group.bytes, typeof options.cardFor === "function" ? { ...options, card: options.cardFor(group) || options.card } : options),
       // vLLM only loads single-file GGUF; the llama manager handles shards.
       vllmLoadable: group.shards === 0 && group.files.length === 1,
     }))
