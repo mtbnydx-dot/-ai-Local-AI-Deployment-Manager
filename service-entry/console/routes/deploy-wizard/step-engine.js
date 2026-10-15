@@ -36,7 +36,7 @@ const EXPERIMENTAL_ACK = "experimental-engine";
 
 // ---- the page ------------------------------------------------------------------------------
 
-export default function StepEngine({ draft, update }) {
+export default function StepEngine({ draft, update, plan, catalog, launch, goto }) {
   const services = useServices();
   const { api, cache, toasts, i18n } = services;
   const { t, pick, tk } = useT();
@@ -135,7 +135,7 @@ export default function StepEngine({ draft, update }) {
       ${views.length ? html`<${CompatMatrix} rows=${compat.data.rows} engines=${index}
         selected=${draft.engineId ? { engineId: draft.engineId, runtimeId: draft.runtimeId } : null} probing=${starting}
         onSelect=${onSelect} onProbe=${onProbe} onOverride=${onOverride} />` : null}
-      ${Object.values(jobs).map((job) => html`<${ProbeJob} key=${job.jobId} managerId=${job.managerId} jobId=${job.jobId} engineLabel=${job.label} onDone=${probeDone} />`)}
+      ${Object.values(jobs).map((job) => html`<${ProbeJob} key=${job.jobId} managerId=${job.managerId} jobId=${job.jobId} engineLabel=${job.label} onDone=${probeDone} wizard=${{ draft, plan, catalog, update, launch, goto }} />`)}
     <//>
     ${views.length ? html`<details class="compat-why" data-testid="wizard.engine.why">
       <summary>${t("models.wizard.engine.why")}</summary>

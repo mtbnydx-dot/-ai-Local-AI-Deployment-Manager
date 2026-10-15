@@ -1442,3 +1442,21 @@ dialog::backdrop {
 @media (max-width: 639px) {
   .family-variant-actions { width: 100%; }
 }
+
+/* ---- Deployment wizard: steps 4 to 7, command preview, root-cause panel (CON-12) ---- */
+.notice-info { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
+.kv-row { display: contents; }
+.wizard-choice { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; border: 0; }
+.wizard-choice-opt { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); cursor: pointer; }
+.wizard-choice-opt:hover { border-color: var(--border-strong); }
+.wizard-choice-opt.is-selected { border-color: var(--accent); background: var(--accent-soft); }
+.wizard-choice-hint { display: block; }
+.wizard-launch-bar { padding-block-start: var(--sp-2); flex-wrap: wrap; }
+.command-lines { margin: 0; padding: 0; padding-inline-end: 7.5em; list-style: none; }
+.command-line { display: flex; align-items: baseline; gap: var(--sp-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.command-custom { background: var(--accent-soft); border-radius: var(--r-1); }
+.command-redacted { color: var(--text-muted); }
+.command-badge { flex: none; }
+.root-cause-actions { margin: 0; padding: 0; list-style: none; }
+.root-cause-action { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); }
+.root-cause-title { font-size: var(--fs-4, 1.1em); }

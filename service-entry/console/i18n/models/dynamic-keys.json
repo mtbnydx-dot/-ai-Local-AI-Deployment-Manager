@@ -8,8 +8,11 @@
     "models.knowledge.tab.",
     "models.role.",
     "models.verdict.",
+    "models.wizard.cap.template.",
     "models.wizard.engine.why.",
     "models.wizard.model.fit.",
+    "models.wizard.review.fact.",
+    "models.wizard.review.gate.",
     "models.wizard.step."
   ],
   "unused": [

@@ -5,24 +5,30 @@
 // own Python code.
 
 import { findJob, jobView } from "../../lib/engines-model.js";
+import { jobFailure } from "../../lib/launch-model.js";
 import { remoteCodeFiles } from "../../components/model-card.js";
 import { ProgressRow } from "../../components/progress-row.js";
 import { useServices } from "../../ui/context.js";
 import { useQuery, useT } from "../../ui/hooks.js";
 import { html } from "../../ui/html.js";
 import { useEffect, useRef } from "../../ui/vendor.js";
+import { LazyPart } from "./lazy-part.js";
 
 const SAFETY_REFRESH_MS = 5000;
+const loadProbeFailure = () => import("./probe-failure.js");
 
 // Follows one probe through the same cache key the entry's `jobs` events merge into; a slow refetch is the safety net.
-export function ProbeJob({ managerId, jobId, engineLabel, onDone }) {
+export function ProbeJob({ managerId, jobId, engineLabel, onDone, wizard }) {
   const services = useServices();
   const { api } = services;
   const { t } = useT();
   const jobs = useQuery(["m", managerId, "jobs"], () => api.manager(managerId).get("/jobs", { query: { fields: "summary" } }), { ttlMs: 2000 });
   const refetch = useRef(jobs.refetch);
   refetch.current = jobs.refetch;
-  const view = jobView(findJob(jobs.data, jobId));
+  const raw = findJob(jobs.data, jobId);
+  const view = jobView(raw);
+  // A job that carries the 00 §9.11 error object gets the root-cause card; an older one keeps the plain notice.
+  const failure = view?.state === "failed" && raw?.failure && typeof raw.failure === "object" ? jobFailure(raw) : null;
   const reported = useRef(false);
   useEffect(() => {
     refetch.current();
@@ -41,6 +47,9 @@ export function ProbeJob({ managerId, jobId, engineLabel, onDone }) {
   }, [view?.state]);
   if (view?.state === "success") {
     return html`<div class="notice notice-success" role="status" data-testid="wizard.probe" data-state="success">${t("models.wizard.engine.probeDone", { engine: engineLabel })}</div>`;
+  }
+  if (failure) {
+    return html`<div data-testid="wizard.probe" data-state="failed"><${LazyPart} id="probe-failure" loader=${loadProbeFailure} props=${{ failure, wizard }} /></div>`;
   }
   if (view?.state === "failed") {
     return html`<div class="notice notice-danger" role="alert" data-testid="wizard.probe" data-state="failed">

@@ -59,7 +59,7 @@ function FieldErrors({ errors, catalog, onSuggestion }) {
 }
 
 function Blockers({ blockers, onGoto }) {
-  const { t, pick } = useT();
+  const { t, tk, pick, has } = useT();
   if (!blockers.length) return null;
   return html`<ul class="stack-sm plan-problems" data-testid="wizard.plan-blockers">
     ${blockers.map((blocker, index) => {
@@ -68,7 +68,7 @@ function Blockers({ blockers, onGoto }) {
       return html`<li key=${index} class="notice notice-warn plan-problem" data-code=${blocker.code} data-step=${step} data-testid="wizard.plan-blocker">
         <span class="grow">
           <strong>${t("models.wizard.plan.blocker")}</strong>
-          <span data-user-content=""> ${pick(blocker.message) || blocker.code}</span>
+          <span data-user-content=""> ${pick(blocker.message) || (has(tk("engines.err.", blocker.code)) ? t(tk("engines.err.", blocker.code), isObject(blocker.details) ? blocker.details : {}) : blocker.code)}</span>
         </span>
         <${Button} size="sm" onClick=${() => onGoto?.(step)} testid="wizard.plan-fix">${(action && pick(action.label)) || t("models.wizard.plan.fix")}<//>
       </li>`;

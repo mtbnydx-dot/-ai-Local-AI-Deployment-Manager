@@ -18,6 +18,14 @@
 // the fit bar under contextLength that follows the plan, the fit solver over a
 // mocked fit-grid with its suggestion-chip fallback on 404, a label for every
 // memory policy, the RAM bar on a spill, and the copy in both languages.
+//
+// Part 3 (CON-12; 02 §18 R-UI-6) is steps 4 to 7 and the quick paths: the capability
+// settings, the detected template format and the companions that pair; access (a red
+// warning for LAN without a key); Review (overrides with reasons, the image step and
+// its pull, the redacted command, the diff vs the last launch, Launch gated on errors,
+// blockers and a block verdict, the replace confirmation); Launch (expectedPlanHash, a
+// 409 plan_changed back to Review with a diff, every phase from pushed jobs events, the
+// root-cause card for a failed launch or probe and its suggestions); start-last-used.
 const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -1143,3 +1151,918 @@ for (const [sizeName, size] of Object.entries(SIZES)) {
     });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Part 3: steps 4 to 7 and the quick paths (CON-12)
+
+const REV_DRAFT_ID = "wd_review000001";
+const REV_PATH = "C:/fixture/models/example-MadeUp-7B";
+const JOB_ID = "job_launch_1";
+const PULL_JOB_ID = "dl_pull_1";
+const FAKE_LEAK = "fake-live-key-value";
+const RAW_KEY_3 = /\b(?:models\.(?:wizard|rootCause|card)|engines\.(?:phase|plan|err|job|group)|common\.(?:command|diff))\.[A-Za-z]/;
+const PHASES = ["pull", "admission", "container", "weights", "kv", "graphs", "api", "probe", "ready"];
+const PHASE_LABEL = {
+  pull: ["Pulling image", "拉取镜像"], admission: ["VRAM admission", "显存准入"], container: ["Creating container", "创建容器"],
+  weights: ["Loading weights", "加载权重"], kv: ["Allocating KV cache", "分配 KV 缓存"], graphs: ["Capturing CUDA graphs", "捕获 CUDA graphs"],
+  api: ["Starting API server", "启动 API 服务"], probe: ["Generation self-test", "生成自检"], ready: ["Ready", "就绪"],
+};
+
+// Installed before the console loads: the console's EventSource is a fake the test pushes frames into (window.__emit).
+function installFakeEventSource() {
+  const sources = [];
+  let counter = 0;
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 0;
+      this.listeners = {};
+      sources.push(this);
+      setTimeout(() => {
+        this.readyState = 1;
+        if (typeof this.onopen === "function") this.onopen({});
+      }, 0);
+    }
+    addEventListener(type, handler) {
+      (this.listeners[type] ||= []).push(handler);
+    }
+    close() {
+      this.readyState = 2;
+    }
+  }
+  window.EventSource = FakeEventSource;
+  window.__emit = (type, data, source = "vllm") => {
+    counter += 1;
+    const envelope = { id: String(counter), type, at: new Date().toISOString(), source, data };
+    for (const es of sources) {
+      for (const handler of es.listeners[type] || []) handler({ data: JSON.stringify(envelope), lastEventId: String(counter) });
+    }
+  };
+}
+
+function reviewDraft(patch = {}) {
+  return JSON.stringify({
+    v: 1,
+    id: REV_DRAFT_ID,
+    step: "review",
+    modelRef: { kind: "local", entryId: null, path: REV_PATH, cardId: MAIN },
+    engineId: "vllm",
+    managerId: "vllm",
+    runtimeId: "vllm@0.28.0",
+    gpus: ["0"],
+    instance: { mode: "replace", targetInstanceId: "primary", servedName: "example-served", port: 8000 },
+    ...patch,
+  });
+}
+
+function reviewState() {
+  return {
+    ...createState(),
+    plan: "plan-review",
+    replace: true,
+    planPatch: null,
+    planHash: "sha256:review01",
+    context: null,
+    start: "ok",
+    startHash: null,
+    launches: "ok",
+    jobs: [],
+    pulled: false,
+    signatures: "ok",
+    idle: { enabled: true, idleMinutes: 30, wakeOnDemand: true, excludeModels: [] },
+  };
+}
+
+// The plan the mocked manager answers; `planPatch` changes it for one scenario.
+function reviewPlan(state) {
+  const plan = wizard(state.plan);
+  if (state.plan === "plan-review") {
+    plan.planHash = state.planHash;
+    if (!state.replace) plan.steps = plan.steps.filter((step) => step.kind !== "replace");
+    if (state.context) plan.values.contextLength = { value: state.context, source: "recipe" };
+  }
+  if (state.pulled && state.plan === "plan-pull-required") {
+    Object.assign(plan, { ok: true, planHash: "sha256:pulled01", blockers: [] });
+    plan.steps[0] = { ...plan.steps[0], required: false };
+  }
+  return state.planPatch ? { ...plan, ...state.planPatch } : plan;
+}
+
+function jobSummary(patch = {}) {
+  return {
+    id: JOB_ID,
+    type: "serve",
+    status: "running",
+    progress: { phase: "pull", percent: 10, stageKey: "image", stageText: { zh: "检查运行时镜像", en: "Checking the runtime image" } },
+    lifecycle: { phase: "pull", phaseHistory: [{ phase: "pull", at: "2026-10-16T00:00:00Z", durationMs: null }] },
+    logs: ["checking the image"],
+    ...patch,
+  };
+}
+
+function reviewApi(state, extra = {}) {
+  const runtime = encodeURIComponent("example@experimental");
+  return {
+    "POST /api/m/vllm/launch/plan": () => reviewPlan(state),
+    "GET /api/m/vllm/launches": () => (state.launches === "ok" ? wizard("launches") : NOT_FOUND),
+    "GET /api/m/vllm/recent-launches": { launches: [] },
+    "GET /api/m/vllm/idle-unload": () => ({ ok: true, settings: state.idle, sleeping: [] }),
+    "GET /api/m/vllm/instances": { instances: [] },
+    "GET /api/m/vllm/jobs": () => ({ jobs: state.jobs }),
+    [`GET /api/m/vllm/jobs/${JOB_ID}`]: () => ({ job: jobSummary({ logs: ["line one of the launch log", "line two of the launch log"] }) }),
+    "POST /api/m/vllm/start": (request, route, record) => {
+      if (state.start === "conflict") {
+        state.start = "ok";
+        state.context = 65536;
+        state.planHash = "sha256:review02";
+        return { status: 409, body: { ok: false, code: "plan_changed", error: "The launch plan changed after you reviewed it.", plan: { ...reviewPlan(state), planHash: "sha256:review02" } } };
+      }
+      if (state.start === "error") return { status: 422, body: { ok: false, code: "instance_conflict", error: "Instance primary is already running another model." } };
+      state.jobs = [jobSummary()];
+      return { job: { id: JOB_ID, type: "serve" }, launchId: "lch_cccccccccccccccccccc", plan: { planHash: state.startHash || record.body.expectedPlanHash || "sha256:review01", verdict: "ok", warnings: [], overrides: state.startOverrides || [] } };
+    },
+    [`POST /api/m/vllm/runtimes/${runtime}/pull`]: () => {
+      state.jobs = [{ id: PULL_JOB_ID, type: "image-pull", status: "running", progress: { percent: 20 } }];
+      state.pulled = true;
+      return { status: 202, body: { ok: true, job: { id: PULL_JOB_ID, type: "image-pull" } } };
+    },
+    "GET /api/knowledge": () => (state.signatures === "ok" ? wizard("error-signatures") : NOT_FOUND),
+    "POST /api/m/vllm/tools/profiles": { ok: true, profile: { id: "my-profile", name: "My profile" } },
+    ...extra,
+  };
+}
+
+async function openReview({ browser, state = reviewState(), draft, api = {}, size, theme, locale, query = "", step = "review", storage }) {
+  const made = await newPage(browser, { api: reviewApi(state, api), state, size, theme, locale });
+  await made.context.addInitScript(installFakeEventSource);
+  // The seed draft goes in once; a reload then finds what the page itself stored.
+  await made.context.addInitScript((items) => {
+    for (const [name, value] of Object.entries(items)) if (window.sessionStorage.getItem(name) === null) window.sessionStorage.setItem(name, value);
+  }, storage || { "console.wizard.draft": reviewDraft({ step, ...draft }) });
+  await open(made.page, query);
+  await expect(byId(made.page, "wizard")).toHaveAttribute("data-step", step);
+  return made;
+}
+
+const emit = (page, type, data) => page.evaluate(({ type: kind, data: body }) => window.__emit(kind, body), { type, data });
+const emitJob = (page, patch) => emit(page, "jobs", { managerId: "vllm", jobs: [jobSummary(patch)], full: false });
+const startCalls = (mock) => callsTo(mock, "POST", "/api/m/vllm/start");
+const pageText = async (page) => (await page.locator("body").innerText()).replace(/\s+/g, " ");
+const phase = (page, id) => page.locator(`[data-testid="wizard.phase.${id}"]`);
+
+function jobAt(id, extra = {}) {
+  const index = PHASES.indexOf(id);
+  const history = PHASES.slice(0, index + 1).map((name, at) => ({ phase: name, at: "2026-10-16T00:00:00Z", durationMs: at < index ? 1500 + at * 100 : null }));
+  return { progress: { phase: id, percent: Math.round(((index + 1) / PHASES.length) * 100), stageKey: id, stageText: { zh: "进行中", en: "In progress" } }, lifecycle: { phase: id, phaseHistory: history }, ...extra };
+}
+
+test("step 4: reasoning and tool settings, the detected template format with its evidence, and the draft heads that pair", async ({ browser }) => {
+  const mainCard = wizard("card-main");
+  Object.assign(mainCard.card.topology, { hiddenSize: 5120, vocabSize: 248320, layers: 64 });
+  const draftCard = wizard("card-draft");
+  draftCard.card.compatibleWith = { hiddenSize: 5120, vocabSize: 248320, targetLayers: 64 };
+  const otherCard = wizard("card-custom");
+  otherCard.card.compatibleWith = { hiddenSize: 2048, vocabSize: 32000 };
+  const { context, page, failures } = await openReview({
+    browser, step: "capabilities",
+    api: {
+      [`GET /api/models/${MAIN}/card`]: mainCard,
+      [`GET /api/models/${DRAFT}/card`]: draftCard,
+      [`GET /api/models/${CUSTOM}/card`]: otherCard,
+      "GET /api/hub/library": { entries: [
+        { path: "C:/fixture/models/example-draft-head", displayName: "example-draft-head", card: { cardId: DRAFT, role: "draft" } },
+        { path: "C:/fixture/models/example-other-head", displayName: "example-other-head", card: { cardId: CUSTOM, role: "draft" } },
+        { path: REV_PATH, displayName: "example-MadeUp-7B", card: { cardId: MAIN, role: "main" } },
+      ] },
+    },
+  });
+  try {
+    const form = byId(page, "wizard.cap.schema-form");
+    await expect(form).toBeVisible();
+    await expect(form.locator('[data-group="reasoning-tools"]')).toBeVisible();
+    await expect(form.locator('[data-group="speculative"]')).toBeVisible();
+    await expect(form.locator('[data-group="capacity"]')).toHaveCount(0);
+    await expect(form.locator('[data-group="network-security"]')).toHaveCount(0);
+
+    const template = byId(page, "wizard.cap.template");
+    await expect(template).toContainText("Detected template format");
+    const tool = template.locator('[data-fact="toolFormat"]');
+    await expect(tool).toContainText("hermes-json");
+    await expect(tool.locator('[data-testid="evidence-chip.root"]')).toHaveAttribute("data-confidence", "detected");
+    await expect(template.locator('[data-fact="reasoningFormat"] [data-testid="evidence-chip.root"]')).toHaveAttribute("data-confidence", "unknown");
+
+    // Only the draft head that fits the model is offered, and nothing is applied until it is chosen.
+    await expect(byId(page, "wizard.cap.companion")).toHaveCount(1);
+    await expect(byId(page, "wizard.cap.companion")).toContainText("example-draft-head");
+    expect(JSON.parse(await storedDraft(page)).values["speculative.draftModel"]).toBeUndefined();
+    await byId(page, "wizard.cap.companion-use").click();
+    await expect.poll(async () => JSON.parse(await storedDraft(page)).values["speculative.draftModel"]).toBe("C:/fixture/models/example-draft-head");
+    await expect(byId(page, "wizard.cap.companion-use")).toBeDisabled();
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("step 5: local or LAN, an automatic key that is never shown, a red warning for LAN without a key, the gateway and the idle policy", async ({ browser }) => {
+  const state = reviewState();
+  const { context, page, mock } = await openReview({ browser, state, step: "access" });
+  try {
+    await expect(byId(page, "wizard.access.network-choice")).toBeVisible();
+    await expect(page.locator('[data-testid="wizard.access.network-choice"] [data-option="local"] input')).toBeChecked();
+    await expect(byId(page, "wizard.access.key-note")).toBeVisible();
+    await expect(byId(page, "wizard.access.lan-warning")).toHaveCount(0);
+    await expect(byId(page, "wizard.access.served")).toHaveText("example-served");
+    await expect(byId(page, "wizard.access.port")).toHaveText("8000 (this computer only)");
+    await expect(byId(page, "wizard.access.idle-state")).toContainText("unloaded after 30 minutes idle");
+    await expect(byId(page, "wizard.access.idle-state")).toContainText("wakes up on demand");
+
+    await page.locator('[data-testid="wizard.access.network-choice"] [data-option="lan"] input').check();
+    await expect.poll(() => planCalls(mock).at(-1)?.body.instance.networkAccess).toBe("lan");
+    await expect(byId(page, "wizard.access.port")).toHaveText("8000 (local network)");
+    await expect(byId(page, "wizard.access.lan-warning")).toHaveCount(0);
+    await page.locator('[data-testid="wizard.access.key-choice"] [data-option="none"] input').check();
+    const warning = byId(page, "wizard.access.lan-warning");
+    await expect(warning).toBeVisible();
+    await expect(warning).toHaveAttribute("role", "alert");
+    await expect(warning).toContainText("Open to the local network with no key");
+    const stored = JSON.parse(await storedDraft(page));
+    expect(stored.access).toEqual({ networkAccess: "lan", apiKey: "none" });
+    // The status of the step in the strip: a warning, not an error.
+    await expect(page.locator('[data-testid="stepper.step"]').nth(4)).toHaveAttribute("data-state", "active");
+    await page.locator('[data-testid="wizard.access.key-choice"] [data-option="auto"] input').check();
+    await expect(warning).toHaveCount(0);
+    await expect(byId(page, "wizard.access.key-note")).toContainText("Access & keys");
+  } finally {
+    await context.close();
+  }
+
+  // An excluded model and a manager without the policy route.
+  state.idle = { enabled: true, idleMinutes: 15, wakeOnDemand: false, excludeModels: ["example-served"] };
+  const excluded = await openReview({ browser, state, step: "access" });
+  try {
+    await expect(byId(excluded.page, "wizard.access.idle-state")).toContainText("is on the idle-unload exclude list");
+  } finally {
+    await excluded.context.close();
+  }
+  const missing = await openReview({ browser, state: reviewState(), step: "access", api: { "GET /api/m/vllm/idle-unload": NOT_FOUND } });
+  try {
+    await expect(byId(missing.page, "wizard.access.gateway")).toBeVisible();
+    await expect(byId(missing.page, "wizard.access.idle")).toHaveCount(0);
+  } finally {
+    await missing.context.close();
+  }
+});
+
+test("Review: summary, steps, the image step, overrides with reasons, effective values with provenance, the redacted command and the diff vs the last launch", async ({ browser }) => {
+  const leaking = wizard("plan-review");
+  leaking.command.argv.push("--api-key", FAKE_LEAK);
+  leaking.command.env.EXTRA_API_KEY = FAKE_LEAK;
+  const state = reviewState();
+  state.planPatch = { command: leaking.command };
+  const { context, page, mock, failures } = await openReview({ browser, state, draft: { extraArgs: ["--schedule-policy", "lpm"] } });
+  try {
+    await expect(byId(page, "wizard.step.review")).toBeVisible();
+    const summary = byId(page, "wizard.review.summary");
+    await expect(summary.locator('[data-fact="model"]')).toContainText("example-MadeUp-7B");
+    await expect(summary.locator('[data-fact="engine"]')).toContainText("vllm");
+    await expect(summary.locator('[data-fact="recipe"]')).toContainText("example-recipe");
+
+    const steps = byId(page, "wizard.review.step");
+    await expect(steps).toHaveCount(2);
+    await expect(steps.first()).toHaveText('Will stop and replace the running model "running-model-1"');
+    await expect(steps.nth(1)).toHaveText("Start vllm-local on port 8000, GPU 0");
+
+    // A stable image that is pulled first: nothing to do, and it says so.
+    await expect(byId(page, "wizard.image.state")).toHaveAttribute("data-state", "auto");
+    await expect(byId(page, "wizard.image.auto")).toHaveText("The image vllm/vllm-openai:v0.28.0 is pulled first, before any model is replaced");
+    await expect(byId(page, "wizard.image.pull")).toHaveCount(0);
+
+    // Overrides as a DiffTable with the reason.
+    const overrides = byId(page, "wizard.review.overrides-diff");
+    await expect(overrides.locator("thead th")).toHaveText(["Setting", "Current", "New", "Source", "Reason"]);
+    expect(await cellRows(overrides)).toEqual([["Max concurrent requests", "4", "1", "recipe", "Effective concurrency is limited by the Mamba cache"]]);
+
+    // Every value with where it comes from, read-only.
+    const values = byId(page, "wizard.review.schema-form");
+    await expect(values).toBeVisible();
+    await expect(values.locator('[data-field="concurrency"]')).toHaveAttribute("data-source", "recipe");
+    await expect(values.locator('[data-field="contextLength"]')).toHaveAttribute("data-source", "user");
+    await expect(values.locator('[data-field="contextLength"] [data-testid="schema-form.number"]')).toBeDisabled();
+
+    // The redacted command: one token per line, <redacted> kept, custom args marked, a leaked key hidden by the console as well.
+    const lines = byId(page, "command-preview.line");
+    await expect(lines.filter({ hasText: "VLLM_API_KEY=<redacted>" })).toHaveCount(1);
+    await expect(lines.filter({ hasText: "--max-model-len" })).toHaveCount(1);
+    await expect(page.locator('[data-testid="command-preview.line"][data-custom="true"]')).toHaveText(["--schedule-policy Custom", "lpm Custom"]);
+    await expect(page.locator('[data-testid="command-preview.env-row"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="command-preview.env-row"] td')).toHaveText(["<redacted>", "<redacted>"]);
+    expect(await page.content()).not.toContain(FAKE_LEAK);
+    expect(await pageText(page)).not.toContain(FAKE_LEAK);
+
+    // Against the last successful launch of this model: only what differs, and the failed attempt is ignored.
+    const last = byId(page, "wizard.last.diff");
+    expect(await cellRows(last)).toEqual([["Context length (per request)", "65536", "131072", "user"]]);
+    expect(callsTo(mock, "GET", "/api/m/vllm/launches")).not.toHaveLength(0);
+    await expect(byId(page, "wizard.launch")).toBeEnabled();
+    await expect(byId(page, "wizard.review.gate")).toHaveCount(0);
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+
+  // Before the LaunchStore route exists the legacy recent-launches list stands in.
+  const legacy = reviewState();
+  legacy.launches = "missing";
+  const fallback = await openReview({
+    browser, state: legacy,
+    api: {
+      "GET /api/m/vllm/recent-launches": { launches: [{ model: REV_PATH, name: "example-served", launchedAt: "2026-10-01T00:00:00Z", config: { engine: "vllm", maxModelLen: 65536 } }] },
+      "GET /api/m/vllm/engines/vllm/schema": fixture("schema-vllm"),
+    },
+  });
+  try {
+    await expect(byId(fallback.page, "wizard.last")).toBeVisible();
+    await expect(fallback.page.locator('[data-testid="wizard.last.diff"], [data-testid="wizard.last.none"]').first()).toBeVisible();
+  } finally {
+    await fallback.context.close();
+  }
+});
+
+for (const [name, patch, reason] of [
+  ["a plan error", { ok: false, errors: [{ field: "contextLength", code: "out_of_range", message: "Too large." }] }, "errors"],
+  ["a blocker", { ok: false, blockers: [{ code: "insufficient_vram", message: { zh: "显存不足", en: "Not enough free VRAM" } }] }, "blockers"],
+  ["a block verdict", { admission: { verdict: "block", message: "No room." } }, "admission"],
+  ["a preview-only plan", { prospective: true }, "prospective"],
+]) {
+  test(`Launch is disabled by ${name} and says why`, async ({ browser }) => {
+    const state = reviewState();
+    state.planPatch = patch;
+    const { context, page, mock } = await openReview({ browser, state });
+    try {
+      await expect(byId(page, "wizard.step.review")).toBeVisible();
+      await expect(byId(page, "wizard.launch")).toBeDisabled();
+      await expect(page.locator(`[data-testid="wizard.review.gate"] [data-reason="${reason}"]`)).toBeVisible();
+      await byId(page, "wizard.launch").click({ force: true, trial: true }).catch(() => undefined);
+      expect(startCalls(mock)).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+test("image_pull_required: the pull asks first, sends {confirm:true}, follows the job and asks for a new plan", async ({ browser }) => {
+  const state = reviewState();
+  state.plan = "plan-pull-required";
+  const runtimePath = `/api/m/vllm/runtimes/${encodeURIComponent("example@experimental")}/pull`;
+  const { context, page, mock } = await openReview({ browser, state, draft: { runtimeId: "example@experimental" } });
+  try {
+    await expect(byId(page, "wizard.image.state")).toHaveAttribute("data-state", "explicit");
+    await expect(byId(page, "wizard.image.step")).toHaveText("Pull image example/experimental:1 (size unknown)");
+    await expect(byId(page, "wizard.image.blocker")).toContainText("Experimental images are never pulled automatically");
+    await expect(byId(page, "wizard.image.command-text")).toHaveText("docker pull example/experimental:1");
+    await expect(byId(page, "wizard.launch")).toBeDisabled();
+
+    // Asking comes first; cancelling pulls nothing.
+    await byId(page, "wizard.image.pull").click();
+    const dialog = byId(page, "wizard.image.confirm");
+    await expect(dialog).toContainText("Pull example/experimental:1?");
+    await expect(dialog).toContainText("This only downloads the image; no running model is stopped.");
+    expect(callsTo(mock, "POST", runtimePath)).toHaveLength(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    expect(callsTo(mock, "POST", runtimePath)).toHaveLength(0);
+
+    const plans = planCalls(mock).length;
+    await byId(page, "wizard.image.pull").click();
+    await byId(page, "wizard.image.confirm").locator('[data-testid="dialog.confirm"]').click();
+    await expect.poll(() => callsTo(mock, "POST", runtimePath).length).toBe(1);
+    expect(callsTo(mock, "POST", runtimePath)[0].body).toEqual({ confirm: true });
+    const progress = byId(page, "wizard.image.job");
+    await expect(progress).toBeVisible();
+    await expect(progress).toHaveAttribute("data-state", "running");
+    await emit(page, "jobs", { managerId: "vllm", jobs: [{ id: PULL_JOB_ID, type: "image-pull", status: "running", progress: { percent: 60 } }], full: false });
+    await expect(page.locator('[data-testid="engine-job.progress"] [role="progressbar"]')).toHaveAttribute("aria-valuenow", "60");
+    // The pull ends: the plan is asked for again, the blocker goes and Launch opens up.
+    await emit(page, "jobs", { managerId: "vllm", jobs: [{ id: PULL_JOB_ID, type: "image-pull", status: "success", progress: { percent: 100 } }], full: false });
+    await expect(byId(page, "wizard.image.state")).toHaveAttribute("data-state", "present", { timeout: 10000 });
+    expect(planCalls(mock).length).toBeGreaterThan(plans);
+    await expect(byId(page, "wizard.launch")).toBeEnabled();
+  } finally {
+    await context.close();
+  }
+});
+
+test("a locally built image that is missing shows the rebuild hint instead of a Pull button", async ({ browser }) => {
+  const state = reviewState();
+  state.plan = "plan-pull-required";
+  state.planPatch = { blockers: [{ code: "runtime_local_build_missing", message: { zh: "本地镜像缺失", en: "Local image missing" } }] };
+  const { context, page } = await openReview({ browser, state });
+  try {
+    await expect(byId(page, "wizard.image.state")).toHaveAttribute("data-state", "local-build");
+    await expect(byId(page, "wizard.image.local")).toContainText("The locally built image example/experimental:1 is missing and cannot be pulled");
+    await expect(byId(page, "wizard.image.pull")).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("Launch sends expectedPlanHash, then every phase follows the jobs events with the server's own text for an unknown stage", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  const { context, page, mock } = await openReview({ browser, state });
+  try {
+    await byId(page, "wizard.launch").click();
+    await expect(byId(page, "wizard.step.launch")).toBeVisible();
+    expect(startCalls(mock)).toHaveLength(1);
+    expect(startCalls(mock)[0].body).toMatchObject({ engineId: "vllm", expectedPlanHash: "sha256:review01", model: { ref: REV_PATH }, instance: { mode: "replace" } });
+    expect(JSON.stringify(startCalls(mock)[0].body)).not.toContain("apiKey");
+
+    // The plan said the image is pulled first: pull is active, with its progress.
+    await expect(phase(page, "pull")).toHaveAttribute("data-state", "active");
+    await expect(byId(page, "wizard.launch.pull")).toContainText("Pulling image vllm/vllm-openai:v0.28.0: 10%");
+    await expect(page.locator('[data-testid="wizard.launch.stepper"] [aria-current="step"]')).toContainText("Pulling image");
+
+    for (const id of PHASES.slice(0, -1)) {
+      await emitJob(page, jobAt(id));
+      await expect(phase(page, id)).toHaveAttribute("data-state", "active");
+      const at = PHASES.indexOf(id);
+      for (const earlier of PHASES.slice(0, at)) await expect(phase(page, earlier)).toHaveAttribute("data-state", "done");
+      for (const later of PHASES.slice(at + 1)) await expect(phase(page, later)).toHaveAttribute("data-state", "pending");
+      // A stageKey that names a phase shows the phase label; nothing else is needed for it.
+      if (at > 0) await expect(byId(page, "wizard.launch.pull")).toHaveCount(0);
+    }
+    // Durations of the finished phases.
+    await expect(byId(page, "wizard.launch.stepper").locator('[data-testid="stepper.step"]').first()).toContainText(/Done.*sec/);
+
+    // An unknown stageKey shows the bilingual text the server sent.
+    await emitJob(page, { progress: { phase: "weights", percent: 50, stageKey: "waitReady", stageText: { zh: "等待模型加载", en: "Waiting for the model to load" } }, lifecycle: { phase: "weights", phaseHistory: jobAt("weights").lifecycle.phaseHistory } });
+    await expect(byId(page, "wizard.launch.stepper").locator('[data-testid="stepper.step"][data-state="active"]')).toContainText("Waiting for the model to load");
+
+    await emitJob(page, { status: "success", ...jobAt("ready") });
+    await expect(byId(page, "wizard.step.launch")).toHaveAttribute("data-state", "success");
+    for (const id of PHASES) await expect(phase(page, id)).toHaveAttribute("data-state", "done");
+    const success = byId(page, "wizard.launch.success");
+    await expect(success).toBeVisible();
+    await expect(byId(page, "wizard.launch.playground")).toHaveAttribute("href", "/playground?model=example-served");
+    await expect(byId(page, "wizard.launch.view")).toHaveAttribute("href", "/deployments/vllm%3Aprimary");
+    await expect(byId(page, "wizard.launch.qualify")).toHaveText("Qualify this deployment");
+    await expect(byId(page, "wizard.launch.copy")).toBeVisible();
+    // The draft is used up: nothing is kept and leaving does not ask.
+    await expect.poll(() => storedDraft(page)).toBeNull();
+    await byId(page, "wizard.launch.view").click();
+    await expect(page).toHaveURL(/\/deployments\/vllm%3Aprimary/);
+    await expect(byId(page, "wizard.discard")).toHaveCount(0);
+    // The log tail of the job.
+    expect(callsTo(mock, "GET", `/api/m/vllm/jobs/${JOB_ID}`).length).toBeGreaterThan(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("the log tail of the launch job shows on the Launch step", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  const { context, page } = await openReview({ browser, state });
+  try {
+    await byId(page, "wizard.launch").click();
+    const log = byId(page, "wizard.launch.log");
+    await expect(log).toContainText("line one of the launch log");
+    await expect(log).toContainText("line two of the launch log");
+  } finally {
+    await context.close();
+  }
+});
+
+test("a 409 plan_changed returns to Review with the new plan and a diff; nothing started; the next launch uses the new hash", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  state.start = "conflict";
+  const { context, page, mock } = await openReview({ browser, state });
+  try {
+    const plans = planCalls(mock).length;
+    await byId(page, "wizard.launch").click();
+    const change = byId(page, "wizard.review.change");
+    await expect(change).toBeVisible();
+    await expect(change).toContainText("The plan changed before launch; review it again");
+    expect(await cellRows(byId(page, "wizard.review.change-diff"))).toEqual([["Context length (per request)", "131072", "65536", "recipe"]]);
+    await expect(byId(page, "wizard.step.review")).toBeVisible();
+    expect(startCalls(mock)).toHaveLength(1);
+    expect(startCalls(mock)[0].body.expectedPlanHash).toBe("sha256:review01");
+    // The new plan is asked for, and no job exists.
+    await expect.poll(() => planCalls(mock).length).toBeGreaterThan(plans);
+    expect(state.jobs).toEqual([]);
+    await expect(byId(page, "wizard.launch")).toBeEnabled();
+    await byId(page, "wizard.launch").click();
+    await expect(byId(page, "wizard.step.launch")).toBeVisible();
+    expect(startCalls(mock)).toHaveLength(2);
+    expect(startCalls(mock)[1].body.expectedPlanHash).toBe("sha256:review02");
+  } finally {
+    await context.close();
+  }
+});
+
+test("without ENG-2 a plan that differs at launch shows the non-blocking notice with its overrides", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  state.startHash = "sha256:launched99";
+  state.startOverrides = [{ param: "concurrency", from: 1, to: 2, source: "planner", reason: { zh: "启动时重新计算", en: "Recomputed at launch" } }];
+  const { context, page } = await openReview({ browser, state });
+  try {
+    await byId(page, "wizard.launch").click();
+    const notice = byId(page, "wizard.launch.changed");
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute("role", "status");
+    await expect(notice).toContainText("The plan changed at launch; view the difference");
+    await expect(byId(page, "wizard.launch.progress")).toBeVisible();
+    await byId(page, "wizard.launch.changed-toggle").click();
+    expect(await cellRows(byId(page, "wizard.launch.changed-diff"))).toEqual([["Max concurrent requests", "1", "2", "planner", "Recomputed at launch"]]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("replace mode asks first and names what is replaced; cancel starts nothing", async ({ browser }) => {
+  const { context, page, mock } = await openReview({ browser });
+  try {
+    await byId(page, "wizard.launch").click();
+    const dialog = byId(page, "wizard.replace");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Replace vllm-local (running-model-1)?");
+    await expect(dialog).toContainText("In-flight requests are cut.");
+    expect(startCalls(mock)).toHaveLength(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    expect(startCalls(mock)).toHaveLength(0);
+    await byId(page, "wizard.launch").click();
+    await byId(page, "wizard.replace").getByRole("button", { name: "Replace and launch" }).click();
+    await expect(byId(page, "wizard.step.launch")).toBeVisible();
+    expect(startCalls(mock)).toHaveLength(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a launch the manager refuses stays on Review as a banner", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  state.start = "error";
+  const { context, page, mock } = await openReview({ browser, state });
+  try {
+    await byId(page, "wizard.launch").click();
+    await expect(byId(page, "wizard.review.error")).toContainText("Instance primary is already running another model.");
+    await expect(byId(page, "wizard.step.review")).toBeVisible();
+    expect(startCalls(mock)).toHaveLength(1);
+    await expect(byId(page, "wizard.launch")).toBeEnabled();
+  } finally {
+    await context.close();
+  }
+});
+
+const FAILED = {
+  status: "failed",
+  error: "start failed",
+  failure: {
+    code: "cuda_oom", signatureId: "cuda-oom", phase: "kv",
+    hint: { zh: "降低上下文长度或并发。", en: "Lower the context length or concurrency." },
+    logExcerpt: "torch.OutOfMemoryError: CUDA out of memory.\nTried to allocate 20.00 GiB.",
+  },
+  ...jobAt("kv"),
+};
+
+async function launchAndFail(browser, { failed = FAILED, state = reviewState(), api = {}, locale } = {}) {
+  state.replace = false;
+  const made = await openReview({ browser, state, api, locale });
+  await byId(made.page, "wizard.launch").click();
+  await expect(byId(made.page, "wizard.step.launch")).toBeVisible();
+  // The job list is read first; a frame for a list the console does not hold yet is dropped on purpose.
+  await expect(phase(made.page, "pull")).toHaveAttribute("data-state", "active");
+  await emitJob(made.page, failed);
+  await expect(byId(made.page, "wizard.launch.failure")).toBeVisible();
+  return made;
+}
+
+test("a failed launch is one root-cause card: title and suggestions from the looked-up signature, the failed phase, the redacted log", async ({ browser }) => {
+  const { context, page, mock } = await launchAndFail(browser);
+  try {
+    const panel = byId(page, "wizard.launch.failure");
+    await expect(byId(page, "wizard.step.launch")).toHaveAttribute("data-state", "failed");
+    await expect(panel.locator('[data-testid="root-cause.title"]')).toHaveText("Out of memory while allocating the KV cache");
+    await expect(panel.locator('[data-testid="root-cause.hint"]')).toHaveText("Lower the context length or concurrency.");
+    await expect(panel.locator('[data-testid="root-cause.phase"]')).toContainText("Failed in: Allocating KV cache");
+    await expect(panel.locator('[data-testid="root-cause.explanation"]')).toHaveText("The memory needed is more than what is free.");
+    await expect(panel.locator('[data-testid="root-cause.log"]')).toContainText("CUDA out of memory");
+    await expect(panel.locator('[data-testid="root-cause.signature"]')).toHaveText("cuda-oom");
+    await expect(panel.locator('[data-testid="root-cause.code"]')).toHaveText("cuda_oom");
+    // The Stepper marks the failed phase.
+    await expect(phase(page, "kv")).toHaveAttribute("data-state", "error");
+    await expect(phase(page, "weights")).toHaveAttribute("data-state", "done");
+    await expect(phase(page, "graphs")).toHaveAttribute("data-state", "pending");
+    // The signature list is read once.
+    expect(callsTo(mock, "GET", "/api/knowledge").length).toBe(1);
+    expect(callsTo(mock, "GET", "/api/knowledge")[0].query.kind).toBe("error-signatures");
+    // Suggestions: two settings, the probe and the runtimes tab.
+    await expect(panel.locator('[data-kind="param"]')).toHaveCount(2);
+    await expect(panel.locator('[data-kind="probe"]')).toHaveCount(1);
+    await expect(panel.locator('[data-testid="root-cause.runtime"]')).toHaveAttribute("href", "/engines/vllm?tab=runtimes");
+  } finally {
+    await context.close();
+  }
+});
+
+test("applying a suggestion returns to Review with the change as a diff and never relaunches", async ({ browser }) => {
+  const { context, page, mock } = await launchAndFail(browser);
+  try {
+    expect(startCalls(mock)).toHaveLength(1);
+    await page.locator('[data-testid="root-cause.suggestion"][data-param="contextLength"] [data-testid="root-cause.apply"]').click();
+    await expect(byId(page, "wizard.step.review")).toBeVisible();
+    const change = byId(page, "wizard.review.change");
+    await expect(change).toContainText("Suggestion applied; confirm before launching again");
+    expect(await cellRows(byId(page, "wizard.review.change-diff"))).toEqual([["Context length (per request)", "131072", "65536"]]);
+    expect(JSON.parse(await storedDraft(page)).values.contextLength).toBe(65536);
+    // The plan is asked for again with the change; nothing was started a second time.
+    await expect.poll(() => planCalls(mock).at(-1)?.body.values.contextLength).toBe(65536);
+    expect(startCalls(mock)).toHaveLength(1);
+    await expect(byId(page, "wizard.launch")).toBeEnabled();
+    // The suggestion goes away with the dismiss.
+    await byId(page, "wizard.review.change-dismiss").click();
+    await expect(change).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a suggestion with security impact asks first; the probe suggestion goes to the engine step", async ({ browser }) => {
+  const trust = { ...FAILED, failure: { ...FAILED.failure, code: "trust_remote_code_required", signatureId: "trust-remote-code", phase: "weights" }, ...jobAt("weights") };
+  const { context, page, mock } = await launchAndFail(browser, { failed: trust });
+  try {
+    const row = page.locator('[data-testid="root-cause.suggestion"][data-param="trustRemoteCode"]');
+    await expect(row).toContainText("Security impact");
+    await row.locator('[data-testid="root-cause.apply"]').click();
+    const dialog = byId(page, "root-cause.security");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("lets the model run its own code");
+    await expect(byId(page, "wizard.step.launch")).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    expect(JSON.parse(await storedDraft(page)).values.trustRemoteCode).toBeUndefined();
+    await row.locator('[data-testid="root-cause.apply"]').click();
+    await byId(page, "root-cause.security").getByRole("button", { name: "Apply and review" }).click();
+    await expect(byId(page, "wizard.step.review")).toBeVisible();
+    await expect.poll(async () => JSON.parse(await storedDraft(page)).values.trustRemoteCode).toBe(true);
+    expect(startCalls(mock)).toHaveLength(1);
+  } finally {
+    await context.close();
+  }
+
+  const second = await launchAndFail(browser);
+  try {
+    await second.page.locator('[data-testid="root-cause.probe"]').click();
+    await expect(byId(second.page, "wizard.step.engine")).toBeVisible();
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("an admission failure keeps details.knobs as Apply chips", async ({ browser }) => {
+  const admission = { ...FAILED, failure: { code: "insufficient_vram", signatureId: null, phase: "admission", hint: null, logExcerpt: "" }, meta: { errorDetails: { knobs: [{ param: "vllm.gpuMemoryUtilization", suggestion: 0.8 }] } }, ...jobAt("admission") };
+  const { context, page } = await launchAndFail(browser, { failed: admission });
+  try {
+    const knob = page.locator('[data-testid="root-cause.knob"][data-param="vllm.gpuMemoryUtilization"]');
+    await expect(knob).toBeVisible();
+    await expect(knob).toContainText("0.8");
+    await knob.locator('[data-testid="root-cause.knob-apply"]').click();
+    await expect(byId(page, "wizard.step.review")).toBeVisible();
+    expect(await cellRows(byId(page, "wizard.review.change-diff"))).toEqual([["VRAM reservation (whole GPU)", "—", "0.8"]]);
+    expect(JSON.parse(await storedDraft(page)).values["vllm.gpuMemoryUtilization"]).toBe(0.8);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a suggestion that asks the planner takes the value from launch/recommend, and falls back to the step when there is none", async ({ browser }) => {
+  const planner = { ...FAILED, failure: { ...FAILED.failure, signatureId: "planner-sig" } };
+  const signatures = { ok: true, entries: [{ id: "planner-sig", code: "cuda_oom", title: { zh: "x", en: "Planner sig" }, suggestions: [{ kind: "param", param: "contextLength", to: "planner" }] }] };
+  const { context, page, mock } = await launchAndFail(browser, {
+    failed: planner,
+    api: {
+      "GET /api/knowledge": signatures,
+      "POST /api/launch/recommend": { ok: true, cardId: MAIN, goal: "balanced", gpuSets: [{ gpuIds: ["0"], plans: [{ planId: "pl_1", engineId: "vllm", values: { contextLength: { value: 49152, reason: "fits" } } }] }] },
+    },
+  });
+  try {
+    await page.locator('[data-testid="root-cause.suggestion"][data-param="contextLength"] [data-testid="root-cause.apply"]').click();
+    await expect(byId(page, "wizard.step.review")).toBeVisible();
+    expect(callsTo(mock, "POST", "/api/launch/recommend")[0].body).toMatchObject({ cardId: MAIN, goal: "balanced", gpuSets: [["0"]] });
+    expect(JSON.parse(await storedDraft(page)).values.contextLength).toEqual({ value: 49152, source: "planner" });
+  } finally {
+    await context.close();
+  }
+
+  const none = await launchAndFail(browser, {
+    failed: planner,
+    api: { "GET /api/knowledge": signatures, "POST /api/launch/recommend": NOT_FOUND },
+  });
+  try {
+    await none.page.locator('[data-testid="root-cause.suggestion"][data-param="contextLength"] [data-testid="root-cause.apply"]').click();
+    await expect(byId(none.page, "wizard")).toHaveAttribute("data-step", "resources");
+  } finally {
+    await none.context.close();
+  }
+});
+
+test("a failed dry probe is the same root-cause card, and applying its suggestion goes to Review", async ({ browser }) => {
+  const failedProbe = { jobs: [{
+    id: "job_probe_1", type: "model-probe", status: "failed",
+    error: "probe failed",
+    failure: { code: "cuda_oom", signatureId: "cuda-oom", phase: "kv", hint: { zh: "先降低上下文。", en: "Lower the context first." }, logExcerpt: "probe: CUDA out of memory" },
+  }] };
+  const state = createState();
+  const { context, page } = await newPage(browser, { state, api: { "GET /api/m/vllm/jobs": failedProbe, "GET /api/knowledge": wizard("error-signatures") } });
+  try {
+    await toEngineStep(page);
+    await row(page, "lmdeploy").locator('[data-testid="compat.probe"]').click();
+    const panel = byId(page, "wizard.probe.failure");
+    await expect(panel).toBeVisible({ timeout: 15000 });
+    await expect(panel).toContainText("Why the dry probe failed");
+    await expect(panel.locator('[data-testid="root-cause.title"]')).toHaveText("Out of memory while allocating the KV cache");
+    await expect(panel.locator('[data-testid="root-cause.log"]')).toContainText("probe: CUDA out of memory");
+    await panel.locator('[data-testid="root-cause.suggestion"][data-param="kvCacheDtype"] [data-testid="root-cause.apply"]').click();
+    await expect(byId(page, "wizard")).toHaveAttribute("data-step", "review");
+  } finally {
+    await context.close();
+  }
+});
+
+test("start-last-used reaches Review in one click, with the last launch's settings, and drops the query", async ({ browser }) => {
+  const state = reviewState();
+  const recent = { launches: [
+    { model: REV_PATH, name: "example-served", launchedAt: "2026-10-01T00:00:00Z", config: { engine: "vllm", maxModelLen: 65536, port: 8001 } },
+    { model: "C:/fixture/models/example-other", name: "other", launchedAt: "2026-09-01T00:00:00Z", config: { engine: "vllm", maxModelLen: 4096 } },
+  ] };
+  const made = await newPage(browser, { state, api: reviewApi(state, { "GET /api/m/vllm/recent-launches": recent, "GET /api/m/vllm/engines/vllm/schema": fixture("schema-vllm") }) });
+  await made.context.addInitScript(installFakeEventSource);
+  try {
+    await open(made.page, "?manager=vllm&from=recent&step=review");
+    await expect(byId(made.page, "wizard")).toHaveAttribute("data-step", "review");
+    await expect(byId(made.page, "wizard.step.review")).toBeVisible();
+    await expect(byId(made.page, "wizard.review.summary").locator('[data-fact="model"]')).toContainText("example-MadeUp-7B");
+    await expect.poll(() => planCalls(made.mock).at(-1)?.body.model.ref).toBe(REV_PATH);
+    expect(planCalls(made.mock).at(-1)?.body.instance.port).toBe(8001);
+    await expect(made.page).toHaveURL(/\/deployments\/new$/);
+    await expect(byId(made.page, "wizard.launch")).toBeVisible();
+    // The draft is kept, so a reload does not start the quick path again.
+    await expect.poll(async () => JSON.parse(await storedDraft(made.page))?.step).toBe("review");
+  } finally {
+    await made.context.close();
+  }
+
+  const second = await newPage(browser, { state: reviewState(), api: reviewApi(state, { "GET /api/m/vllm/recent-launches": recent, "GET /api/m/vllm/engines/vllm/schema": fixture("schema-vllm") }) });
+  await second.context.addInitScript(installFakeEventSource);
+  try {
+    await open(second.page, "?manager=vllm&from=recent&recent=1&step=review");
+    await expect.poll(() => planCalls(second.mock).at(-1)?.body.model.ref).toBe("C:/fixture/models/example-other");
+  } finally {
+    await second.context.close();
+  }
+
+  // Nothing to start from: the wizard says so and stays usable.
+  const empty = await newPage(browser, { state: reviewState(), api: reviewApi(state, { "GET /api/m/vllm/recent-launches": { launches: [] } }) });
+  await empty.context.addInitScript(installFakeEventSource);
+  try {
+    await open(empty.page, "?manager=vllm&from=recent&step=review");
+    await expect(byId(empty.page, "wizard.notice")).toContainText("No recent launch was found.");
+  } finally {
+    await empty.context.close();
+  }
+});
+
+test("Save as profile sends the sparse values and the catalog version, and never a secret", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  const { context, page, mock } = await openReview({ browser, state, draft: { values: { contextLength: 65536, apiKey: "fake-typed-key" } } });
+  try {
+    await byId(page, "wizard.profile.open").click();
+    await byId(page, "wizard.profile.name").fill("My profile");
+    await byId(page, "wizard.profile.save").click();
+    await expect.poll(() => callsTo(mock, "POST", "/api/m/vllm/tools/profiles").length).toBe(1);
+    const body = callsTo(mock, "POST", "/api/m/vllm/tools/profiles")[0].body;
+    expect(body).toMatchObject({ name: "My profile", schemaVersion: 2, engineId: "vllm", values: { contextLength: 65536 }, catalogVersion: "2026-10-14+2026-10-14" });
+    expect(JSON.stringify(body)).not.toContain("fake-typed-key");
+    await expect(byId(page, "wizard.profile.form")).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a reload on the Launch step finds the job again", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  const { context, page } = await openReview({ browser, state });
+  try {
+    await byId(page, "wizard.launch").click();
+    await expect(byId(page, "wizard.step.launch")).toBeVisible();
+    state.jobs = [jobSummary(jobAt("weights"))];
+    await page.reload();
+    await expect(byId(page, "wizard.step.launch")).toBeVisible();
+    await expect(phase(page, "weights")).toHaveAttribute("data-state", "active");
+  } finally {
+    await context.close();
+  }
+});
+
+for (const locale of ["en-US", "zh-CN"]) {
+  test(`${locale}: steps 4 to 7 show no raw keys and the right language`, async ({ browser }) => {
+    const state = reviewState();
+    state.replace = false;
+    const { context, page } = await openReview({ browser, state, locale, step: "capabilities" });
+    try {
+      const texts = {};
+      await expect(byId(page, "wizard.cap.template-facts")).toBeVisible();
+      texts.capabilities = await page.locator("main").innerText();
+      await byId(page, "wizard.next").click();
+      await expect(byId(page, "wizard.access.idle-state")).toBeVisible();
+      texts.access = await page.locator("main").innerText();
+      await byId(page, "wizard.next").click();
+      await expect(byId(page, "wizard.launch")).toBeVisible();
+      texts.review = await page.locator("main").innerText();
+      await byId(page, "wizard.launch").click();
+      await expect(byId(page, "wizard.step.launch")).toBeVisible();
+      await expect(phase(page, "pull")).toHaveAttribute("data-state", "active");
+      await emitJob(page, { status: "failed", error: "x", failure: { ...FAILED.failure }, ...jobAt("kv") });
+      await expect(byId(page, "wizard.launch.failure")).toBeVisible();
+      texts.failure = await page.locator("main").innerText();
+      for (const [name, text] of Object.entries(texts)) {
+        expect(text, `${locale} ${name}`).not.toMatch(RAW_KEY_3);
+        if (locale === "en-US") expect(text, `${locale} ${name}`).not.toMatch(HAN);
+        else expect(text, `${locale} ${name}`).toMatch(HAN);
+      }
+      if (locale === "zh-CN") {
+        expect(texts.review).toContain("被调整的设置");
+        expect(texts.review).toContain("有效并发受 Mamba cache 限制");
+        expect(texts.review).toContain("与上次成功启动对比");
+        expect(texts.failure).toContain("启动失败的根本原因");
+        expect(texts.failure).toContain("失败阶段：分配 KV 缓存");
+        expect(texts.access).toContain("自动生成");
+        expect(texts.capabilities).toContain("检测到的模板格式");
+        for (const id of PHASES) await expect(phase(page, id)).toHaveText(PHASE_LABEL[id][1]);
+      } else {
+        for (const id of PHASES) await expect(phase(page, id)).toHaveText(PHASE_LABEL[id][0]);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+for (const [sizeName, size] of Object.entries(SIZES)) {
+  for (const theme of ["light", "dark"]) {
+    test(`${sizeName} ${theme}: Review, the pull step, Launch and the failure card fit the screen and pass the accessibility checks`, async ({ browser }) => {
+      const state = reviewState();
+      const { context, page } = await openReview({ browser, state, size, theme, draft: { extraArgs: ["--schedule-policy", "lpm"] } });
+      try {
+        await expect(byId(page, "wizard.last.diff")).toBeVisible();
+        await expect(byId(page, "wizard.review.schema-form")).toBeVisible();
+        await expectNoOverflow(page);
+        await expectNoA11yViolations(page, { label: `wizard review ${theme} ${sizeName}` });
+        await byId(page, "wizard.launch").click();
+        await byId(page, "wizard.replace").getByRole("button", { name: "Replace and launch" }).click();
+        await expect(byId(page, "wizard.step.launch")).toBeVisible();
+        await expect(phase(page, "pull")).toHaveAttribute("data-state", "active");
+        await emitJob(page, { status: "failed", error: "x", failure: { ...FAILED.failure }, ...jobAt("kv") });
+        await expect(byId(page, "wizard.launch.failure")).toBeVisible();
+        await expectNoOverflow(page);
+        await expectNoA11yViolations(page, { label: `wizard launch failure ${theme} ${sizeName}` });
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
+
+test("steps 4 and 5 fit the phone screen and pass the accessibility checks in both themes", async ({ browser }) => {
+  for (const theme of ["light", "dark"]) {
+    for (const step of ["capabilities", "access"]) {
+      const { context, page } = await openReview({ browser, step, size: SIZES.phone, theme });
+      try {
+        await expect(byId(page, `wizard.step.${step}`)).toBeVisible();
+        await expectNoOverflow(page);
+        await expectNoA11yViolations(page, { label: `wizard ${step} ${theme} phone` });
+      } finally {
+        await context.close();
+      }
+    }
+  }
+});
+
+test("the explicit pull card passes the accessibility checks", async ({ browser }) => {
+  const state = reviewState();
+  state.plan = "plan-pull-required";
+  const { context, page } = await openReview({ browser, state });
+  try {
+    await expect(byId(page, "wizard.image.explicit")).toBeVisible();
+    await expectNoOverflow(page);
+    await expectNoA11yViolations(page, { label: "wizard review pull required" });
+  } finally {
+    await context.close();
+  }
+});

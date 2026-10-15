@@ -1,0 +1,74 @@
+{
+  "ok": true,
+  "kind": "error-signatures",
+  "entries": [
+    {
+      "id": "cuda-oom",
+      "code": "cuda_oom",
+      "engines": [
+        "*"
+      ],
+      "phase": "kv",
+      "rootCause": true,
+      "severity": "error",
+      "title": {
+        "zh": "显存不足，无法分配 KV 缓存",
+        "en": "Out of memory while allocating the KV cache"
+      },
+      "hint": {
+        "zh": "降低上下文长度或并发，或改用 fp8 KV。",
+        "en": "Lower the context length or concurrency, or use an fp8 KV cache."
+      },
+      "explanation": {
+        "zh": "所需显存超过了可用显存。",
+        "en": "The memory needed is more than what is free."
+      },
+      "suggestions": [
+        {
+          "kind": "param",
+          "param": "contextLength",
+          "to": 65536
+        },
+        {
+          "kind": "param",
+          "param": "kvCacheDtype",
+          "to": "fp8"
+        },
+        {
+          "kind": "probe"
+        },
+        {
+          "kind": "runtime",
+          "action": "newer-image"
+        }
+      ]
+    },
+    {
+      "id": "trust-remote-code",
+      "code": "trust_remote_code_required",
+      "engines": [
+        "vllm",
+        "sglang"
+      ],
+      "phase": "weights",
+      "rootCause": true,
+      "severity": "error",
+      "title": {
+        "zh": "模型需要运行自带的代码",
+        "en": "The model needs to run its own code"
+      },
+      "hint": {
+        "zh": "确认信任发布者后启用。",
+        "en": "Enable it once you trust the publisher."
+      },
+      "suggestions": [
+        {
+          "kind": "param",
+          "param": "trustRemoteCode",
+          "to": true,
+          "security": true
+        }
+      ]
+    }
+  ]
+}
