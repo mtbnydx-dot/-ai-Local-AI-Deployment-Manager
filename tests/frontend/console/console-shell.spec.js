@@ -220,7 +220,8 @@ test("a page that is not in the build shows the still-being-built page, and a re
     await expect(byId(page, "app-shell.update")).toHaveCount(0);
 
     redeployed = true;
-    await nav(page).getByRole("link", { name: "Audit" }).click();
+    // Any page that is still not in the build will do (Audit was built by CON-18).
+    await nav(page).getByRole("link", { name: "Models" }).click();
     await expect(byId(page, "app-shell.update")).toBeVisible();
     await expect(byId(page, "app-shell.update")).toContainText("The console was updated. Reload to use the new version.");
   } finally {
