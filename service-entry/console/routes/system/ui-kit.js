@@ -29,6 +29,7 @@ const SECTIONS = [
   () => import("./ui-kit/overlays.js"),
   () => import("./ui-kit/display.js"),
   () => import("./ui-kit/data.js"),
+  () => import("./ui-kit/charts.js"),
 ];
 
 function UiKit() {
