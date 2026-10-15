@@ -1,18 +1,36 @@
 {
   "prefixes": [
+    "access.apiError.",
     "access.attention.",
     "access.audit.action.",
+    "access.check.",
     "access.class.",
     "access.clients.route.",
     "access.customers.state.",
     "access.err.",
+    "access.fix.",
     "access.index.",
+    "access.legacy.",
     "access.listener.",
     "access.metric.",
     "access.migration.warning.",
+    "access.portal.audience.",
+    "access.portal.severity.",
     "access.preset.",
     "access.rotate.overlap.",
-    "access.status."
+    "access.status.",
+    "public.baseUrl.err.",
+    "public.map.node.",
+    "public.state.",
+    "public.steps.",
+    "public.topology.",
+    "security.ban.duration.",
+    "security.ban.err.",
+    "security.ban.kind.",
+    "security.bans.source.",
+    "security.risk.",
+    "security.rule.",
+    "security.severity."
   ],
   "unused": []
 }

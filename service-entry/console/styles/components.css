@@ -1187,6 +1187,59 @@ dialog::backdrop {
 .clients-value { white-space: normal; overflow-wrap: anywhere; }
 .clients-rows dd { margin: 0; }
 
+/* ---- Access pages (CON-21: public access wizard, security, sessions, portal) ---- */
+.pw-layout { display: grid; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); gap: var(--sp-6); align-items: start; }
+@media (max-width: 899px) {
+  .pw-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.pw-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: var(--sp-3); }
+.pw-card { position: relative; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-4); border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-1); cursor: pointer; }
+.pw-card input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.pw-card:hover { background: var(--surface-2); }
+.pw-card[data-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.pw-card:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.pw-card-title { font-weight: 600; }
+.pw-nav { margin-top: var(--sp-2); padding-top: var(--sp-4); border-top: 1px solid var(--border); }
+.pw-file summary { cursor: pointer; padding: var(--sp-1) 0; }
+
+.checks { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.check-row { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border); }
+.check-row:last-child { border-bottom: 0; }
+.check-evidence { overflow-wrap: anywhere; }
+
+.xmap { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; }
+.xmap-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-1); }
+.xmap-svg { display: block; width: 100%; min-width: 640px; height: auto; }
+.xmap-node rect { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.5; }
+.xmap-node[data-state="warn"] rect { stroke: var(--warn); stroke-width: 2.5; }
+.xmap-node[data-state="fail"] rect { stroke: var(--danger); stroke-width: 3; }
+.xmap-node text { fill: var(--text); font-size: 13px; font-weight: 600; }
+.xmap-edge line { stroke-width: 2; stroke-linecap: round; }
+.xmap-edge polygon { stroke: none; }
+.xmap-chip { fill: var(--surface-1); stroke-width: 1.5; }
+.xmap-glyph { fill: var(--text); font-size: 11px; font-weight: 700; }
+.xmap-edge-ok line,
+.xmap-edge-ok .xmap-chip { stroke: var(--success); }
+.xmap-edge-ok polygon { fill: var(--success); }
+.xmap-edge-warn line,
+.xmap-edge-warn .xmap-chip { stroke: var(--warn); }
+.xmap-edge-warn line { stroke-width: 3; stroke-dasharray: 8 5; }
+.xmap-edge-warn polygon { fill: var(--warn); }
+.xmap-edge-fail line,
+.xmap-edge-fail .xmap-chip { stroke: var(--danger); }
+.xmap-edge-fail line { stroke-width: 4; }
+.xmap-edge-fail polygon { fill: var(--danger); }
+.xmap-edge-unknown line,
+.xmap-edge-unknown .xmap-chip,
+.xmap-edge-manual line,
+.xmap-edge-manual .xmap-chip { stroke: var(--text-muted); }
+.xmap-edge-unknown line,
+.xmap-edge-manual line { stroke-dasharray: 2 6; }
+.xmap-edge-unknown polygon,
+.xmap-edge-manual polygon { fill: var(--text-muted); }
+.xmap-edge:hover line { stroke-width: 5; }
+.xmap-table td { height: auto; padding-block: var(--sp-2); }
+
 /* ---- Billing (CON-27) ---- */
 .billing-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
 .billing-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--sp-4); align-items: start; }
