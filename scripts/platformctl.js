@@ -175,6 +175,16 @@ const S = {
   "supervisor.stopped": { [ZH]: "监督进程已退出（组件继续运行）。", [EN]: "The supervisor exited (components keep running)." },
   "supervisor.reexeced": { [ZH]: "监督进程已重新执行 · 新进程 {pid}", [EN]: "The supervisor re-executed · new pid {pid}" },
   "supervisor.reexecFailed": { [ZH]: "重新执行没有完成。", [EN]: "The re-exec did not complete." },
+  "autostart.enabled": { [ZH]: "已开启登录自启动（{method}）。", [EN]: "Start at logon is on ({method})." },
+  "autostart.runKey": { [ZH]: "计划任务被拒绝，已改用当前用户的注册表启动项。", [EN]: "The scheduled task was denied; the per-user Run key is used instead." },
+  "autostart.disabled": { [ZH]: "已关闭登录自启动。", [EN]: "Start at logon is off." },
+  "autostart.worktree": { [ZH]: "此目录是 git 工作区，自启动应指向线上目录。确需如此请加 --allow-worktree。", [EN]: "This root is a git worktree; autostart should point at the live root. Add --allow-worktree if you really mean it." },
+  "autostart.failed": { [ZH]: "无法注册自启动：{detail}", [EN]: "Could not register autostart: {detail}" },
+  "autostart.status": { [ZH]: "自启动：{state} · 方式 {method} · 路径 {action} · 与当前目录{match} · 上次结果 {result}", [EN]: "Autostart: {state} · method {method} · path {action} · {match} the current root · last result {result}" },
+  "autostart.on": { [ZH]: "已开启", [EN]: "on" },
+  "autostart.off": { [ZH]: "未开启", [EN]: "off" },
+  "autostart.matches": { [ZH]: "一致", [EN]: "matches" },
+  "autostart.differs": { [ZH]: "不一致", [EN]: "differs from" },
   "doctor.fixLater": { [ZH]: "doctor --fix 将随修复执行器一起提供。", [EN]: "doctor --fix arrives with the fix runner." },
   "doctor.summary": { [ZH]: "通过 {ok} · 警告 {warn} · 失败 {fail} · 信息 {info} · 跳过 {skip}", [EN]: "ok {ok} · warn {warn} · fail {fail} · info {info} · skipped {skip}" },
   "setup.title": { [ZH]: "首次运行向导", [EN]: "First-run setup" },
@@ -1682,6 +1692,7 @@ async function cmdSupervise(ctx, { flags }) {
     profile,
     restoreModels: flags["restore-models"] === true,
     autostart: flags.autostart === true,
+    takeover: flags.takeover === true,
     tokenStore: control.createControlTokenStore({ aiRoot: ctx.aiRoot, store: ctx.vault().store("platform-control") }),
     log: (line) => ctx.out(`${new Date(ctx.now()).toISOString()} ${typeof line === "string" ? line : JSON.stringify(line)}`),
     exit: (code) => finish(code || 0),
@@ -1740,6 +1751,43 @@ async function cmdSupervisor(ctx, { args, flags }) {
       if (status.status === 200 && pid !== before) { ctx.out(tr(ctx, "supervisor.reexeced", { pid: pid ?? "-" })); return EXIT.OK; }
     } catch {}
     if (ctx.now() >= deadline) { ctx.err(tr(ctx, "supervisor.reexecFailed")); return EXIT.FAILURE; }
+  }
+}
+
+// 06 §6.5. `enable` registers the logon task (HKCU Run value as the fallback),
+// `disable` removes both, `status` reports method, path and last result.
+async function cmdAutostart(ctx, { args, flags }) {
+  const sub = args[0] || "status";
+  if (args.length > 1 || !["enable", "disable", "status"].includes(sub)) throw usageError(ctx, "autostart enable [--profile p] | disable | status");
+  const autostart = require("../manager-core/platform/autostart");
+  const injected = ctx.autostartOptions || {};
+  if (sub === "status") {
+    const info = await autostart.status({ aiRoot: ctx.aiRoot, ...injected });
+    if (flags.json) { ctx.json(info); return EXIT.OK; }
+    ctx.out(tr(ctx, "autostart.status", {
+      state: tr(ctx, info.registered ? "autostart.on" : "autostart.off"), method: info.method || "-", action: info.action || "-",
+      match: info.matchesRoot === null ? "-" : tr(ctx, info.matchesRoot ? "autostart.matches" : "autostart.differs"), result: info.lastResult ?? "-",
+    }));
+    return EXIT.OK;
+  }
+  if (sub === "disable") {
+    const result = await autostart.disable(injected).catch((error) => { throw new CliError(EXIT.FAILURE, tr(ctx, "autostart.failed", { detail: error.message })); });
+    if (flags.json) { ctx.json(result); return EXIT.OK; }
+    ctx.out(tr(ctx, "autostart.disabled"));
+    return EXIT.OK;
+  }
+  const profile = flags.profile || "core";
+  if (!autostart.PROFILES.includes(profile)) throw new CliError(EXIT.USAGE, tr(ctx, "logs.bad", { option: "--profile", value: flags.profile }));
+  try {
+    const result = await autostart.enable({ aiRoot: ctx.aiRoot, profile, allowWorktree: flags["allow-worktree"] === true, node: ctx.execPath, ...injected });
+    if (flags.json) { ctx.json(result); return EXIT.OK; }
+    if (result.method === "run-key") ctx.out(tr(ctx, "autostart.runKey"));
+    ctx.out(tr(ctx, "autostart.enabled", { method: result.method }));
+    return EXIT.OK;
+  } catch (error) {
+    if (error.code === "worktree_root") throw new CliError(EXIT.PREFLIGHT, tr(ctx, "autostart.worktree"));
+    if (error instanceof CliError) throw error;
+    throw new CliError(EXIT.FAILURE, tr(ctx, "autostart.failed", { detail: error.message }));
   }
 }
 
@@ -1991,6 +2039,12 @@ const COMMANDS = {
     spec: { bool: ["yes", "non-interactive"], value: ["step", "engines", "model-root", "hf-home", "exposure"], max: 0 },
     run: cmdSetup,
   },
+  autostart: {
+    usage: "autostart enable [--profile p] [--allow-worktree] | disable | status [--json]",
+    summary: { [ZH]: "登录自启动", [EN]: "Start at logon" },
+    spec: { bool: ["json", "allow-worktree"], value: ["profile"] },
+    run: cmdAutostart,
+  },
   exposure: {
     usage: "exposure scan [--json] | exposure setup [args…]",
     summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" },
@@ -2008,7 +2062,6 @@ const COMMANDS = {
 const PLANNED = {
   admin: { package: "OPS-7c", usage: "admin pair [--open] [--ttl s]", summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" } },
   keys: { package: "OPS-7c", usage: "keys migrate [--dry-run|--report] [--json]", summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" } },
-  autostart: { package: "OPS-12", usage: "autostart enable [--profile p] | disable | status", summary: { [ZH]: "登录自启动", [EN]: "Start at logon" } },
   deploy: { package: "OPS-11b", usage: "deploy [--restart none|changed|all] [--skip-tests] [--no-prune] [--allow-live-drift] [--yes] [--dry-run]", summary: { [ZH]: "从工作区部署到线上目录", [EN]: "Deploy a worktree to the live root" } },
   "post-deploy": { package: "OPS-11a", usage: "post-deploy --manifest <path> [--restart …] [--no-prune] [--dry-run]", summary: { [ZH]: "部署后处理（内部使用）", [EN]: "Post-deploy steps (internal)" } },
   update: { package: "OPS-11b", usage: "update [--check]", summary: { [ZH]: "更新线上目录", [EN]: "Update the live root" } },
