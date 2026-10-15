@@ -1,0 +1,9 @@
+[
+  {
+    "family": "ipv4",
+    "listenAddress": "*",
+    "listenPort": 8080,
+    "connectAddress": "127.0.0.1",
+    "connectPort": 5176
+  }
+]

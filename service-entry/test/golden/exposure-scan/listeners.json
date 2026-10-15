@@ -1,0 +1,56 @@
+[
+  {
+    "address": "fe80::1c2d:3e4f:5a6b:7c8d",
+    "port": 139,
+    "pid": 4,
+    "scope": "lan"
+  },
+  {
+    "address": "127.0.0.1",
+    "port": 5176,
+    "pid": 4120,
+    "scope": "loopback"
+  },
+  {
+    "address": "0.0.0.0",
+    "port": 5177,
+    "pid": 5004,
+    "scope": "wildcard"
+  },
+  {
+    "address": "127.0.0.1",
+    "port": 5178,
+    "pid": 5216,
+    "scope": "loopback"
+  },
+  {
+    "address": "::1",
+    "port": 5180,
+    "pid": 7020,
+    "scope": "loopback"
+  },
+  {
+    "address": "127.0.0.1",
+    "port": 5186,
+    "pid": 4120,
+    "scope": "loopback"
+  },
+  {
+    "address": "::",
+    "port": 5190,
+    "pid": 7312,
+    "scope": "wildcard"
+  },
+  {
+    "address": "192.168.1.20",
+    "port": 8000,
+    "pid": 9100,
+    "scope": "lan"
+  },
+  {
+    "address": "0.0.0.0",
+    "port": 55177,
+    "pid": 6660,
+    "scope": "wildcard"
+  }
+]

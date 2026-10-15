@@ -1,0 +1,8 @@
+api.example.invalid {
+	reverse_proxy 127.0.0.1:5186 {
+		flush_interval -1
+		transport http {
+			response_header_timeout 30m
+		}
+	}
+}
