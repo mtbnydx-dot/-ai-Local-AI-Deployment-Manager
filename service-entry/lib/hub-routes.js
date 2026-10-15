@@ -235,6 +235,7 @@ const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/start-now", handler: "downloadStartNow" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/cancel", handler: "downloadCancel" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/priority", handler: "downloadPriority" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/run", handler: "downloadRun" }),
 ]);
 
 // "/api/hub/library/:id" → a matcher for the pathname; named segments are one
@@ -331,6 +332,7 @@ const HUB_ADMIN_ONLY_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/start-now" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/cancel" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/priority" }),
+  Object.freeze({ method: "POST", path: "/api/hub/downloads/:id/run" }),
 ]);
 
 // The hub calls a manager shim may make (03 §15 table); the shim rows of
@@ -1212,6 +1214,17 @@ function createHubRoutes(options = {}) {
       const body = await readBody(req, res);
       if (body === false) return;
       await queueCall(res, "changing a download priority", () => jobs.setPriority(params.id, body.priority), (job) => sendJson(res, { ok: true, job }));
+    },
+
+    // run { confirmReplace: true } → { ok, runAfter, job }: the confirmation of a
+    // Download & Run that would replace a running instance (03 §11).
+    async downloadRun(req, res, url, who, params) {
+      const jobs = queueOrFail(res);
+      if (!jobs) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (!optionalBoolean(res, body, "confirmReplace")) return;
+      await queueCall(res, "running a download", () => jobs.confirmRunAfter(params.id, { confirmReplace: body.confirmReplace === true }), (job) => sendJson(res, { ok: true, runAfter: job.runAfter ?? null, job }));
     },
 
     async downloadsReorder(req, res) {
