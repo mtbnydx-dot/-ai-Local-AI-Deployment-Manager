@@ -18,6 +18,7 @@ const expr = require("./expr");
 const dockerHost = require("./hosts/docker");
 const launchStore = require("./launch-store");
 const externalHost = require("./hosts/external");
+const nativeHost = require("./hosts/native");
 const legacyAliases = require("./legacy-aliases");
 const memoryModels = require("./memory-models");
 const metrics = require("./metrics");
@@ -41,9 +42,10 @@ const adapters = Object.freeze({
   external: require("./adapters/external"),
 });
 
-// RuntimeHosts by kind (01 §13). Native (ENG-22) joins later.
+// RuntimeHosts by kind (01 §13). Native is off unless engines.native.enabled.
 const hosts = Object.freeze({
   docker: dockerHost,
+  native: nativeHost,
   external: externalHost,
 });
 
@@ -127,6 +129,9 @@ module.exports = {
   hosts,
   createDockerHost: dockerHost.createDockerHost,
   createDockerHostConfig: dockerHost.createDockerHostConfig,
+  // NativeProcessHost (01 §13, ENG-22): flag-gated; the registry hides the native kind while off.
+  createNativeHost: nativeHost.createNativeHost,
+  isNativeEnabled: nativeHost.isNativeEnabled,
   // The runtime supervisor (01 §14): the one start pipeline both managers run.
   runtimeSupervisor,
   createRuntimeSupervisor: runtimeSupervisor.createRuntimeSupervisor,
