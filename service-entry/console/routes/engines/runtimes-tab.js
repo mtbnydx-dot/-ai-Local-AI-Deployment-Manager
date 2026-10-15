@@ -6,8 +6,9 @@
 //   Introspect  POST /api/m/:id/engines/:engineId/runtimes/:runtimeId/introspect (a short-lived container, 01 §17)
 //   Pull image  POST /api/m/:id/runtimes/:runtimeId/pull (a `dl_` job of type image-pull, 01 §21.1)
 // The job is followed with JobProgress, which reads the same jobs the entry
-// events update. A manager without the pull route answers 404 and the dialog
-// says so; the `docker pull` command stays copyable either way.
+// events update. The pull route is the supervisor job of ENG-11 (`{ok, existing, job}`);
+// an older manager answers 404 and the dialog says so. The `docker pull` command
+// stays copyable either way.
 
 import { dockerPullCommand, introspectAllowed, flagsSnapshot, pullAllowed, runtimeState } from "../../lib/engines-model.js";
 import { tk } from "../../lib/i18n.js";
