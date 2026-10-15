@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "from": "@now-1h",
+  "to": "@now",
+  "current": { "requests": 57, "errorRate": 0.01, "ttftP95Ms": 640, "outputTokens": 21000 },
+  "previous": { "requests": 40, "errorRate": 0.02, "ttftP95Ms": 700, "outputTokens": 15000 },
+  "coverage": 1,
+  "source": "rollup_1m"
+}

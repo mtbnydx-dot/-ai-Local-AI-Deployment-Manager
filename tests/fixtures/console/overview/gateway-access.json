@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "updatedAt": "@now",
+  "totals": {
+    "requests": { "total": 1240, "success": 1200, "error": 40, "errorRate": 0.032258064516129 },
+    "tokens": { "input": 2100000, "output": 440000, "total": 2540000 },
+    "latency": { "p95Ms": 14100 }
+  },
+  "external": { "requests": { "total": 0, "success": 0, "error": 0, "errorRate": 0 }, "tokens": { "input": 0, "output": 0, "total": 0 } },
+  "local": { "requests": { "total": 1240, "success": 1200, "error": 40, "errorRate": 0.032258064516129 }, "tokens": { "input": 2100000, "output": 440000, "total": 2540000 } },
+  "recent": []
+}

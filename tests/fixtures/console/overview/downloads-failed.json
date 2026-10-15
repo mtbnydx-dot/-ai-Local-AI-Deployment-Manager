@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "jobs": [
+    { "id": "dl-1", "state": "failed", "createdAt": "@now-5h", "updatedAt": "@now-4h", "artifact": { "provider": "hf", "repo": "demo/model-8b" }, "error": { "code": "network", "title": { "zh": "网络中断", "en": "Network interrupted" } } }
+  ]
+}

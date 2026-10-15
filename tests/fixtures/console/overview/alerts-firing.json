@@ -1,0 +1,5 @@
+{
+  "rows": [
+    { "ruleId": "gpu.temp.high", "scopeKey": "gpu:0", "state": "firing", "severity": "critical", "title": { "zh": "GPU 温度过高", "en": "GPU temperature is high" }, "value": 91, "threshold": 88, "since": "@now-30m", "firedAt": "@now-30m" }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "rows": [
+    { "id": 12, "at": "@now-5m", "type": "launch.ready", "severity": "info", "source": "entry", "managerId": "vllm", "fleetId": "vllm:primary", "title": "Launch ready in 545 s" },
+    { "id": 11, "at": "@now-50m", "type": "alert.fired", "severity": "warn", "source": "telemetry", "title": "GPU temperature is high" }
+  ],
+  "nextCursor": null
+}

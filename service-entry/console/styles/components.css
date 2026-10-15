@@ -1125,6 +1125,24 @@ dialog::backdrop {
 .sf-json { display: flex; flex-direction: column; gap: var(--sp-1); width: 100%; }
 .sf-json-input { font-family: var(--font-mono); font-size: var(--fs-sm); }
 
+/* ---- Overview page (CON-8) ---- */
+.overview-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-4); }
+.overview-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--sp-4); align-items: start; }
+.stat-note { min-height: var(--lh-sm); }
+.overview-banner { align-items: center; flex-wrap: wrap; }
+.overview-list { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.overview-item { display: flex; align-items: flex-start; gap: var(--sp-3); flex-wrap: wrap; }
+.overview-item-text { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.overview-activity { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.overview-activity li { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
+.overview-activity time { flex: none; min-width: 5.5em; }
+@media (max-width: 1023px) {
+  .overview-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 639px) {
+  .overview-tiles { gap: var(--sp-2); }
+}
 /* ---- Billing embed (CON-22) ---- */
 .billing-frame {
   display: block;
