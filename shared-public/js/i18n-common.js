@@ -893,6 +893,7 @@ Object.assign(UI_TEXT_TRANSLATIONS, {
   "数量上限": "Result limit",
   "Hugging Face 账号": "Hugging Face account",
   "本机尚未连接 Hugging Face 账号": "This machine is not connected to a Hugging Face account",
+  "正在检查本机登录状态...": "Checking the sign-in status on this machine...",
   "本机已连接": "Connected on this machine",
   "下载 gated 模型前需要连接 Hugging Face 账号": "Connect a Hugging Face account before downloading gated models",
   "推荐用官方 CLI 在本机登录；Token 不经过网页，也不会写入平台日志。": "Log in locally with the official CLI; the token never passes through the web page or the platform logs.",
