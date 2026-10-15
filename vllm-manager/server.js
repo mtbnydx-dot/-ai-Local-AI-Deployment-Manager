@@ -1861,6 +1861,8 @@ core.registerModelInspectorRoutes(app, {
   docker,
   listInstances: listRuntimeInstancesRequest,
   dataDir: path.join(__dirname, "data"),
+  // POST /api/models/probe (MOD-13) maps the model reference to a folder or file in storage.
+  resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }),
   registry: engineRegistry,
   paramCatalog: core.engines.getParamCatalog(),
 });
