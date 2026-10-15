@@ -553,6 +553,151 @@ test("env and host-fact inputs reproduce today's outputs: DiffusionGemma, Qwen M
 });
 
 // ---------------------------------------------------------------------------
+// Model-family truth tables (D5, ENG-23)
+// ---------------------------------------------------------------------------
+// vllm-manager's isQwen38Model, isQwen36MoeNvfp4Model, isQwen36DenseNvfp4Model,
+// isQwen38FlashNextNvfp4Model, isDiffusionGemmaModel and
+// diffusionGemmaWindowsBlockReason are gone: the families knowledge
+// (legacyAliases.legacyModelFacts) and recipe selection answer the same
+// questions. Each row is one assertion vllm-manager/test/core.test.js held,
+// with the recipe the old predicate led to (null: none of them).
+
+const QWEN36_MOE_CONFIG = {
+  architectures: ["Qwen3_5MoeForConditionalGeneration"],
+  model_type: "qwen3_5_moe",
+  quantization_config: { quant_method: "modelopt", quant_algo: "MIXED_PRECISION", kv: { quant_algo: "W4A16_NVFP4" } },
+};
+const QWEN36_DENSE_CONFIG = {
+  architectures: ["Qwen3_5ForConditionalGeneration"],
+  model_type: "qwen3_5",
+  quantization_config: { quant_method: "modelopt", quant_algo: "MIXED_PRECISION", lm_head: { quant_algo: "W4A16_NVFP4" } },
+};
+const COMPRESSED_TENSORS_CONFIG = { architectures: ["Qwen3_5ForConditionalGeneration"], quantization_config: { quant_method: "compressed-tensors" } };
+const QWEN36_FP8_CONFIG = { architectures: ["Qwen3_5ForConditionalGeneration"], model_type: "qwen3_5", quantization_config: { quant_method: "fp8" } };
+const FLASH_NEXT_CONFIG = { model_type: "qwen4_exp", architectures: ["Qwen4ExpForConditionalGeneration"], quantization_config: { quant_algo: "NVFP4" } };
+const DIFFUSION_GEMMA_CONFIG = { architectures: ["DiffusionGemmaForBlockDiffusion"], model_type: "diffusion_gemma" };
+
+function familyContext(model, config = null, extra = {}) {
+  return {
+    store: recipes.getRecipeStore(),
+    model: engines.legacyAliases.legacyModelFacts({ model, config }),
+    hostGpus: [],
+    platform: "linux",
+    env: {},
+    ...extra,
+  };
+}
+
+function selectedRecipe(engineId, model, config = null, opts = {}) {
+  return recipes.selectLegacyRecipe(engineId, { engine: engineId, ...opts }, familyContext(model, config))?.recipe.id || null;
+}
+
+const FAMILY_TRUTH_TABLE = [
+  // [old predicate and its answer, engine, model, config, family the facts name (or not), recipe]
+  ["isQwen38Model true", "vllm", "Qwen/Qwen3.8-27B", null, "qwen3.8", "qwen38-vllm-mtp3"],
+  ["isQwen38Model true", "sglang", "Qwen/Qwen3.8-27B", null, "qwen3.8", "qwen38-sglang"],
+  ["isQwen38Model false", "vllm", "Qwen/Qwen3-8B", null, "!qwen3.8", null],
+  ["isQwen38Model false", "sglang", "Qwen/Qwen3-8B", null, "!qwen3.8", null],
+  ["isQwen36MoeNvfp4Model true", "vllm", "models/nv-community-Qwen3.6-35B-A3B-NVFP4", QWEN36_MOE_CONFIG, "qwen3.5-3.6", "qwen36-nvfp4-vllm"],
+  ["isQwen36MoeNvfp4Model false, isQwen36DenseNvfp4Model true", "vllm", "models/nv-community-Qwen3.6-27B-NVFP4", QWEN36_DENSE_CONFIG, "qwen3.5-3.6", "qwen36-dense-nvfp4-vllm"],
+  ["isQwen36MoeNvfp4Model and isQwen36DenseNvfp4Model false", "vllm", "models/unsloth-Qwen3.6-27B-NVFP4", COMPRESSED_TENSORS_CONFIG, "qwen3.5-3.6", null],
+  ["isQwen36MoeNvfp4Model and isQwen36DenseNvfp4Model false", "vllm", "models/Qwen-Qwen3.6-27B-FP8", QWEN36_FP8_CONFIG, "qwen3.5-3.6", null],
+  ["isQwen36MoeNvfp4Model true (name only)", "vllm", "nvidia/Qwen3.6-35B-A3B-NVFP4", null, "qwen3.5-3.6", "qwen36-nvfp4-vllm"],
+  ["isQwen36DenseNvfp4Model true (name only)", "vllm", "nvidia/Qwen3.6-27B-NVFP4", null, "qwen3.5-3.6", "qwen36-dense-nvfp4-vllm"],
+  ["isQwen38FlashNextNvfp4Model true", "sglang", "RadixArk/Qwen3.8-Flash-Next-NVFP4", FLASH_NEXT_CONFIG, "qwen3.8-flash-next", "qwen38-flashnext-262k"],
+  ["isQwen38FlashNextNvfp4Model true (name only)", "sglang", "RadixArk/Qwen3.8-Flash-Next-NVFP4", null, "qwen3.8-flash-next", "qwen38-flashnext-262k"],
+  ["isQwen38FlashNextNvfp4Model true is also a Qwen3.8 model", "vllm", "RadixArk/Qwen3.8-Flash-Next-NVFP4", FLASH_NEXT_CONFIG, "qwen3.8", "qwen38-vllm-nvfp4"],
+  ["isDiffusionGemmaModel true", "vllm", "models/nv-community-diffusiongemma-26B-A4B-it-NVFP4", DIFFUSION_GEMMA_CONFIG, "gemma4", "diffusiongemma-windows"],
+  ["isDiffusionGemmaModel true (name only)", "vllm", "models/nv-community-diffusiongemma-26B-A4B-it-NVFP4", null, "gemma4", "diffusiongemma-windows"],
+];
+
+for (const [predicate, engineId, model, config, family, recipeId] of FAMILY_TRUTH_TABLE) {
+  test(`truth table: ${predicate} — ${model} on ${engineId} selects ${recipeId || "no model recipe"}`, () => {
+    const facts = engines.legacyAliases.legacyModelFacts({ model, config });
+    const wanted = family.replace(/^!/, "");
+    assert.equal(facts.capabilityIds.includes(wanted), !family.startsWith("!"), `${wanted} in ${facts.capabilityIds}`);
+    assert.equal(selectedRecipe(engineId, model, config), recipeId);
+  });
+}
+
+test("truth table: the Qwen3.6 facts carry the NVFP4 quantisation and the MoE or dense architecture", () => {
+  const facts = (model, config) => {
+    const { quantMethod, architectures = [] } = engines.legacyAliases.legacyModelFacts({ model, config });
+    return { quantMethod, architectures };
+  };
+  assert.deepEqual(facts("nvidia/Qwen3.6-35B-A3B-NVFP4", null), { quantMethod: "nvfp4", architectures: ["Qwen3_5MoeForConditionalGeneration"] });
+  assert.deepEqual(facts("nvidia/Qwen3.6-27B-NVFP4", null), { quantMethod: "nvfp4", architectures: ["Qwen3_5ForConditionalGeneration"] });
+  assert.deepEqual(facts("models/nv-community-Qwen3.6-27B-NVFP4", QWEN36_DENSE_CONFIG), { quantMethod: "nvfp4", architectures: ["Qwen3_5ForConditionalGeneration"] });
+  assert.equal(facts("models/unsloth-Qwen3.6-27B-NVFP4", COMPRESSED_TENSORS_CONFIG).quantMethod, "compressed-tensors");
+  assert.equal(facts("models/Qwen-Qwen3.6-27B-FP8", QWEN36_FP8_CONFIG).quantMethod, "fp8");
+  assert.deepEqual(facts("models/nv-community-diffusiongemma-26B-A4B-it-NVFP4", null).architectures, ["DiffusionGemmaForBlockDiffusion"]);
+});
+
+test("truth table: a Qwen3.8 export declaring qwen3_5 is Qwen3.8 by its chat template", (t) => {
+  const dir = tempDir(t, { "chat_template.jinja": "{%- if reasoning_effort %}{{ reasoning_effort }}{%- endif %}<tool_call><function=x><parameter=y>" });
+  const config = { model_type: "qwen3_5", architectures: ["Qwen3_5ForConditionalGeneration"] };
+  const withoutTemplate = engines.legacyAliases.legacyModelFacts({ model: "models/Qwen3.8-27B", config });
+  assert.deepEqual(withoutTemplate.capabilityIds, ["qwen3.5-3.6"], "declared qwen3_5 without template evidence is Qwen3.5/3.6");
+  const withTemplate = engines.legacyAliases.legacyModelFacts({ model: "models/Qwen3.8-27B", config, localPath: dir });
+  assert.equal(withTemplate.capabilityIds[0], "qwen3.8");
+  assert.equal(selectedRecipe("vllm", "models/Qwen3.8-27B", config), null);
+  const ctx = { ...familyContext("models/Qwen3.8-27B", config), model: withTemplate };
+  assert.equal(recipes.selectLegacyRecipe("vllm", { engine: "vllm" }, ctx)?.recipe.id, "qwen38-vllm-mtp3");
+});
+
+test("truth table: the DiffusionGemma Windows block is the recipe's blockIf (diffusionGemmaWindowsBlockReason)", () => {
+  const recipe = recipes.getRecipeStore().get("diffusiongemma-windows");
+  const reason = (platform, env) => recipes.legacyOptionErrors(recipe, {}, { hostGpus: [], platform, env }).join(" ");
+  assert.match(reason("win32", {}), /UVA.*device-side assert/);
+  assert.equal(reason("win32", { VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA: "1" }), "");
+  assert.equal(reason("linux", {}), "");
+});
+
+test("the model-check blocks of the old checkModelCompatibility are recipe data (legacy.check)", async () => {
+  const store = recipes.getRecipeStore();
+  const check = (recipeId, input, extra = {}) => recipes.legacyCompatibility(store.get(recipeId), input, familyContext(input.model, null, extra));
+  const vllmVersion = require("../runtime-manifest").getRuntimeRelease("vllm").version;
+
+  const qwen38 = await check("qwen38-vllm-mtp3", { model: "Qwen/Qwen3.8-27B", engine: "vllm" });
+  assert.deepEqual(qwen38.findings, [{ severity: "ok", title: "Qwen3.8 专用运行时", detail: `将使用已验证的 Qwen3.8 vLLM ${vllmVersion}。` }]);
+  assert.deepEqual(qwen38.recommendations, {
+    maxModelLen: 262144, maxNumSeqs: 4, gpuMemoryUtilization: 0.8, kvCacheDtype: "auto",
+    languageModelOnly: true, enablePrefixCaching: true, reasoningParser: "qwen3", toolCallParser: "qwen3_coder",
+  });
+  const sized = await check("qwen38-sglang", { model: "Qwen/Qwen3.8-27B", engine: "sglang", maxModelLen: 65536, maxNumSeqs: 2, gpuMemoryUtilization: 0.7 });
+  assert.deepEqual([sized.recommendations.maxModelLen, sized.recommendations.maxNumSeqs, sized.recommendations.gpuMemoryUtilization, sized.recommendations.languageModelOnly], [65536, 2, 0.7, false]);
+
+  const flashNext = await check("qwen38-flashnext-262k", { model: "RadixArk/Qwen3.8-Flash-Next-NVFP4", engine: "sglang", speculativeMode: "off" });
+  assert.deepEqual(flashNext.findings.slice(0, 2).map((item) => [item.title, Boolean(item.replaces)]), [["Qwen3.8 专用运行时", false], ["NVFP4/FP4 权重", true]]);
+  assert.match(flashNext.findings[0].detail, /SM120 QSA/);
+  assert.equal(flashNext.recommendations.maxNumSeqs, 1, "the Flash-Next values win over the Qwen3.8 ones");
+  assert.equal(flashNext.recommendations.kvCacheDtype, "auto");
+
+  const moe = await check("qwen36-nvfp4-vllm", { model: "nvidia/Qwen3.6-35B-A3B-NVFP4", engine: "vllm" });
+  assert.equal(moe.findings[0].title, "Qwen3.6 / NVFP4 运行时");
+  assert.equal(moe.recommendations.kvCacheDtype, "fp8");
+  assert.equal(moe.recommendations.maxNumBatchedTokens, 8192);
+  const dense = await check("qwen36-dense-nvfp4-vllm", { model: "nvidia/Qwen3.6-27B-NVFP4", engine: "vllm" });
+  assert.equal(dense.recommendations.kvCacheDtype, "auto");
+
+  const gemma = (platform, env) => check("diffusiongemma-windows", { model: "models/diffusiongemma-26B-NVFP4", engine: "vllm", maxNumSeqs: 8 }, { platform, env });
+  const windows = await gemma("win32", {});
+  assert.deepEqual(windows.findings.map((item) => [item.severity, item.title]), [["warn", "DiffusionGemma / Gemma4 专用启动"], ["fail", "Windows Docker/WSL 不建议启动"]]);
+  assert.match(windows.findings[0].detail, /V1 runner（Windows\/WSL UVA fallback）/);
+  assert.match(windows.findings[1].detail, /UVA.*device-side assert/);
+  const allowed = await gemma("win32", { VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA: "1" });
+  assert.deepEqual(allowed.findings.map((item) => item.title), ["DiffusionGemma / Gemma4 专用启动", "Windows Docker/WSL 推理风险"]);
+  const linux = await gemma("linux", {});
+  assert.deepEqual(linux.findings.map((item) => item.title), ["DiffusionGemma / Gemma4 专用启动"]);
+  assert.match(linux.findings[0].detail, /V2 runner/);
+  assert.equal(linux.recommendations.maxNumSeqs, 4);
+  assert.deepEqual(linux.defaults, { quantization: "modelopt_fp4" });
+
+  const penny = await check("pennyroyal-v251", { model: "RadixArk/Qwen3.8-Flash-Next-NVFP4", engine: "sglang" }, { mismatch: true });
+  assert.equal(penny.findings.some((item) => item.title === "Qwen3.8 专用运行时"), false, "ifMatched findings skip a mismatched model");
+});
+
+// ---------------------------------------------------------------------------
 // Legacy preset shim: PRE-* goldens
 // ---------------------------------------------------------------------------
 

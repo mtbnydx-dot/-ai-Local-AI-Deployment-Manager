@@ -3,6 +3,8 @@ const path = require("node:path");
 const { TextDecoder } = require("node:util");
 const { parseJsonSafe, waitForWritable } = require("./common-utils");
 const { normalizeRemoteAddress } = require("./network");
+const { newDirectRequestId } = require("./telemetry/ids");
+const { classifyOutcome } = require("./telemetry/error-class");
 const {
   GATEWAY_CLIENT_HEADER,
   GATEWAY_TIMESTAMP_HEADER,
@@ -331,11 +333,26 @@ function normalizeOpenAiGatewayRequestId(value) {
   return text;
 }
 
+// The verified entry hop of a request (hop v2, 05 PUB-10), or null when the
+// request is direct ingress: no hop, a v1 hop or a bad signature.
+function verifiedEntryHop(req) {
+  try {
+    const origin = resolveGatewayRequestOrigin(req);
+    if (!origin.viaGateway || !origin.trusted || origin.version !== 2) return null;
+    return origin;
+  } catch {
+    return null;
+  }
+}
+
+// An id the entry minted rides on the signed hop and wins over any header; a
+// direct call keeps a valid client id and otherwise gets a `mgr_` id (04 §5.1).
 function ensureOpenAiGatewayRequestId(req) {
-  const existing = normalizeOpenAiGatewayRequestId(
+  const hopId = req?.serviceGateway?.requestId ? "" : normalizeOpenAiGatewayRequestId(verifiedEntryHop(req)?.requestId);
+  const existing = hopId || normalizeOpenAiGatewayRequestId(
     req?.serviceGateway?.requestId || req?.headers?.[OPENAI_GATEWAY_REQUEST_ID_HEADER],
   );
-  const requestId = existing || crypto.randomUUID();
+  const requestId = existing || newDirectRequestId();
   if (req && typeof req === "object") {
     if (!req.serviceGateway || typeof req.serviceGateway !== "object") req.serviceGateway = {};
     req.serviceGateway.requestId = requestId;
@@ -1647,9 +1664,21 @@ function resolveAccessLogOrigin(req) {
   const fallback = normalizeRemoteAddress(req?.socket?.remoteAddress || req?.ip || "");
   try {
     const origin = resolveGatewayRequestOrigin(req);
-    return { address: origin.address || fallback, socketAddress: origin.socketAddress || fallback };
+    const hop = origin.viaGateway && origin.trusted && origin.version === 2 ? origin : null;
+    return {
+      address: origin.address || fallback,
+      socketAddress: origin.socketAddress || fallback,
+      // A verified hop v2 carries the identity the entry vouched for.
+      viaEntry: Boolean(hop),
+      hopRequestId: hop ? String(hop.requestId || "") : "",
+      keyId: hop && hop.principal && typeof hop.principal.k === "string" ? hop.principal.k : "",
+      // An unparseable or unknown-version context is no context (04 §5.2).
+      sourceProgram: hop && hop.context && hop.context.v === 1 && typeof hop.context.src === "string"
+        ? hop.context.src.slice(0, 64)
+        : "",
+    };
   } catch {
-    return { address: fallback, socketAddress: fallback };
+    return { address: fallback, socketAddress: fallback, viaEntry: false, hopRequestId: "", keyId: "", sourceProgram: "" };
   }
 }
 
@@ -1661,16 +1690,40 @@ function buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource
   const headers = req.headers || {};
   const terminalState = details.terminalState || "completed";
   const origin = details.origin || resolveAccessLogOrigin(req);
+  const status = terminalState === "client_abort" && !res.headersSent ? 499 : res.statusCode;
+  const requestId = normalizeOpenAiGatewayRequestId(
+    req.serviceGateway?.requestId || origin.hopRequestId || headers[OPENAI_GATEWAY_REQUEST_ID_HEADER],
+  );
+  // The id a direct client sent. Behind the entry the client's id is kept by
+  // the entry (client_request_id), not forwarded.
+  const clientRequestId = origin.viaEntry ? "" : normalizeOpenAiGatewayRequestId(headers[OPENAI_GATEWAY_REQUEST_ID_HEADER]);
+  const legacyClientId = req.serviceGateway?.clientId || "";
+  const outcome = classifyOutcome({
+    status,
+    code: usage.errorCode || "",
+    aborted: terminalState === "client_abort",
+    timedOut: terminalState === "timeout" || terminalState === "timed_out",
+    streamError: Boolean(usage.error) && status > 0 && status < 400,
+    phase: usage.resolvedModel || usage.resolvedInstance ? "upstream" : "pre_upstream",
+  });
   return {
     at: new Date().toISOString(),
-    requestId: normalizeOpenAiGatewayRequestId(req.serviceGateway?.requestId || headers[OPENAI_GATEWAY_REQUEST_ID_HEADER]),
+    requestId,
+    clientRequestId,
+    viaEntry: Boolean(origin.viaEntry),
+    keyId: origin.keyId || legacyClientId,
+    // Only a verified hop sets the slug; direct rows are classified from the
+    // user agent when the row is normalised (same rules, access-log.js).
+    ...(origin.sourceProgram ? { sourceProgram: origin.sourceProgram } : {}),
+    errorClass: outcome.errorClass,
+    firstByteMs: Number(details.firstByteMs) > 0 ? Math.round(Number(details.firstByteMs)) : 0,
     remoteAddress: origin.address,
     socketAddress: origin.socketAddress,
     method: req.method,
     path: String(req.originalUrl || req.url || "").split("?")[0],
     kind,
     // 499 (client closed request) when the client left before any header.
-    status: terminalState === "client_abort" && !res.headersSent ? 499 : res.statusCode,
+    status,
     terminalState,
     model: typeof body.model === "string" ? body.model.slice(0, 160) : "",
     resolvedModel: String(usage.resolvedModel || "").slice(0, 220),
@@ -1697,8 +1750,18 @@ function attachServiceGatewayAccessLog(req, res, kind, appendAccessLog) {
   const startedAt = Date.now();
   const authSource = serviceApiKeySource(req.headers || {});
   const origin = resolveAccessLogOrigin(req);
+  // firstByteMs: the first res.write or res.end, whichever comes first.
+  let firstByteMs = 0;
+  for (const method of ["write", "end"]) {
+    const original = res[method];
+    if (typeof original !== "function") continue;
+    res[method] = function firstByteProbe(...args) {
+      if (!firstByteMs) firstByteMs = Math.max(1, Date.now() - startedAt);
+      return original.apply(this, args);
+    };
+  }
   onResponseDone(res, ({ terminalState }) => {
-    const entry = buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource, { terminalState, origin });
+    const entry = buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource, { terminalState, origin, firstByteMs });
     const pending = appendAccessLog(entry);
     if (pending && typeof pending.catch === "function") pending.catch(() => {});
   });

@@ -36,8 +36,12 @@
 //   containerName, instanceId (the /api/instances id; default the name),
 //   port, gpuIds, warnings[]
 //   engineId, engineName, apiLabel
-//   buildCommand(job) → { runArgs, publish, image, secretEnv }; called again
-//                      after admission when the admitted GPUs changed it
+//   buildCommand(job) → { runArgs, publish, image, secretEnv, files? }; called
+//                      again after admission when the admitted GPUs changed it.
+//                      files are generated launch files (docker-template, 01
+//                      §19.1): written just before the container is created,
+//                      deleted again when the start fails, and when a replaced
+//                      container's own files are no longer needed
 //   redactArgs(argv) → redacted argv for job.meta.launchCommand and the log
 //   lanFallback, bindRetryPublish(error, publish)
 //   imagePolicy      "auto" (default) | "explicit" | (image) => policy;
@@ -103,6 +107,7 @@ const LOG_EXCERPT_BYTES = 4096;
 const APIKEY_REF_LABEL = "ai.manager.api-key-ref";
 const LEASE_LABEL = "ai.manager.gpu-admission-lease";
 const RUNTIME_ID_LABEL = "ai.manager.runtime-id";
+const LAUNCH_ID_LABEL = "ai.manager.launch-id";
 const DEFAULT_AFTER_READY_MS = 30000;
 const PULL_JOB_TYPE = "image-pull";
 const PULL_JOB_ID_PATTERN = /^dl_[a-z2-7]{20}$/;
@@ -436,6 +441,8 @@ function createRuntimeSupervisor(options = {}) {
   const registry = options.registry || null;
   const events = options.events || null;
   const secrets = options.secrets || null;
+  // Generated launch files (launch-files.js): { write(launchId, files), remove(launchId) }.
+  const launchFiles = options.launchFiles || null;
   const admission = options.admission || null;
   const redactor = options.redactor || null;
   const wait = options.waitForRuntimeReady || waitForRuntimeReady;
@@ -564,7 +571,11 @@ function createRuntimeSupervisor(options = {}) {
     const code = errorCodeOf(error) || waitStage?.code || STAGE_FAILURE_CODES[stageKey] || "start_failed";
     if (waitStage?.stage === "probe") enterPhase(job, "probe");
     const phase = job.lifecycle?.phase || STAGES[stageKey]?.phase || null;
-    let logText = textOf(job.meta?.runtimeDiagnostics?.lastLogTail);
+    // The wait loop keeps the last 2000 log lines of an exited container for analysis only
+    // (non-enumerable, never persisted); classification reads those, the stored excerpt stays small.
+    const diagnostics = job.meta?.runtimeDiagnostics;
+    let logText = textOf(diagnostics?.lastLogTail);
+    const analysisText = textOf(diagnostics?.analysisLogText);
     if (!logText && state.containerCreated && typeof host.logs === "function") {
       logText = await host.logs(state.containerName, { tail: LOG_EXCERPT_LINES }).catch(() => "");
     }
@@ -573,7 +584,7 @@ function createRuntimeSupervisor(options = {}) {
     let classified = null;
     if (typeof hooks.classifyFailure === "function") {
       try {
-        classified = await hooks.classifyFailure(logExcerpt, { engineId: state.engineId, phase, code, error: redact(error?.message, state.secretValues) });
+        classified = await hooks.classifyFailure(analysisText ? redact(analysisText, state.secretValues) : logExcerpt, { engineId: state.engineId, phase, code, error: redact(error?.message, state.secretValues) });
       } catch (classifyError) {
         log(job, `Failure classification skipped: ${classifyError.message}`);
       }
@@ -581,13 +592,33 @@ function createRuntimeSupervisor(options = {}) {
     const hint = isPlainObject(classified?.hint)
       ? { zh: textOf(classified.hint.zh) || null, en: textOf(classified.hint.en) || null }
       : null;
-    return {
-      code: textOf(classified?.code) || code,
-      signatureId: textOf(classified?.signatureId) || null,
+    const signatureId = textOf(classified?.signatureId) || null;
+    // A matched signature names the cause; an unmatched classification keeps the stage code
+    // but may still supply the traceback excerpt.
+    const classifiedExcerpt = typeof classified?.logExcerpt === "string" && classified.logExcerpt.trim()
+      ? tailExcerpt(redact(classified.logExcerpt, state.secretValues))
+      : "";
+    const failure = {
+      code: (signatureId && textOf(classified?.code)) || code,
+      signatureId,
       phase,
       hint,
-      logExcerpt,
+      logExcerpt: classifiedExcerpt || logExcerpt,
     };
+    // Additive fields of 02 §14, present only when a signature matched.
+    if (signatureId) {
+      if (isPlainObject(classified.title)) failure.title = classified.title;
+      if (isPlainObject(classified.explanation)) failure.explanation = classified.explanation;
+      if (typeof classified.exceptionType === "string") failure.exceptionType = classified.exceptionType;
+      if (Array.isArray(classified.suggestions)) failure.suggestions = classified.suggestions;
+    }
+    return failure;
+  }
+
+  // The legacy job.error string keeps its prefix; a matched signature appends its English title (02 §14).
+  function appendFailureTitle(job) {
+    const title = textOf(job.failure?.title?.en);
+    if (title && typeof job.error === "string" && !job.error.includes(title)) job.error = `${job.error} — ${title}`;
   }
 
   // ---- stages ----
@@ -750,6 +781,7 @@ function createRuntimeSupervisor(options = {}) {
     const prepare = async (admissionRequest = run.admissionRequest) => {
       const previous = await host.inspect(run.containerName, { fresh: true });
       state.previousApiKeyRef = textOf(previous.labels?.[apiKeyRefLabel]);
+      state.previousLaunchId = textOf(previous.labels?.[LAUNCH_ID_LABEL]);
       const previousLeaseId = textOf(previous.labels?.[leaseLabel]);
       if (admissionRequest && previousLeaseId) {
         admissionRequest.retireLeaseIds = Array.from(new Set([
@@ -778,6 +810,29 @@ function createRuntimeSupervisor(options = {}) {
     return prepare();
   }
 
+  // The files a docker-template engine mounts (01 §19.1). They are written
+  // here, after admission and right before the container, so a launch that
+  // fails earlier never leaves a secret file behind.
+  async function writeLaunchFiles(job, command, state) {
+    const files = Array.isArray(command.files) ? command.files : [];
+    if (!files.length) return;
+    const launchId = textOf(job.meta?.launchId);
+    if (!launchFiles || typeof launchFiles.write !== "function" || !launchId) {
+      throw supervisorError("launch_files_unavailable", "This launch needs generated config files, but the manager has no launch-files store.", 500);
+    }
+    state.launchFilesId = launchId;
+    await launchFiles.write(launchId, files);
+    state.launchFilesWritten = true;
+    log(job, `Wrote ${files.length} generated launch file(s): ${files.map((file) => file.id).join(", ")}${files.some((file) => file.secret) ? " (secret files are owner-only and deleted when the instance stops)" : ""}.`);
+  }
+
+  function removeLaunchFiles(launchId, why) {
+    if (!launchFiles || typeof launchFiles.remove !== "function" || !launchId) return Promise.resolve();
+    return Promise.resolve().then(() => launchFiles.remove(launchId)).catch((error) => {
+      safe(`launch files (${why})`, () => { throw error; });
+    });
+  }
+
   async function create(job, run, state) {
     state.stageKey = "create";
     const command = state.command;
@@ -788,6 +843,7 @@ function createRuntimeSupervisor(options = {}) {
       detail: run.mode === "add" ? texts.createDetailAdd : texts.createDetail,
     });
     const launchCommand = `docker ${redactArgv(run, command.runArgs, state).join(" ")}`;
+    await writeLaunchFiles(job, command, state);
     job.meta = { ...(job.meta || {}), launchCommand, runtimeLaunchStarted: true, runtimeContainerCreated: false };
     saveSoon();
     log(job, `> ${launchCommand}`);
@@ -930,6 +986,10 @@ function createRuntimeSupervisor(options = {}) {
     if (committed?.committed && state.previousApiKeyRef && state.previousApiKeyRef !== textOf(run.apiKeyRef) && secrets?.remove) {
       await Promise.resolve(secrets.remove(state.previousApiKeyRef)).catch(() => {});
     }
+    // The replaced instance is gone; so are the files it had mounted.
+    if (committed?.committed && state.previousLaunchId && state.previousLaunchId !== textOf(job.meta?.launchId)) {
+      await removeLaunchFiles(state.previousLaunchId, "replaced instance");
+    }
     const launchId = textOf(job.meta?.launchId);
     const labels = labelsFromArgs(state.command?.runArgs);
     if (launchStore && launchId && typeof launchStore.markStatus === "function") {
@@ -994,6 +1054,7 @@ function createRuntimeSupervisor(options = {}) {
     if (run.cleanup !== "caller" && textOf(run.apiKeyRef) && secrets?.remove) {
       await Promise.resolve(secrets.remove(textOf(run.apiKeyRef))).catch(() => {});
     }
+    if (state.launchFilesId) await removeLaunchFiles(state.launchFilesId, "failed start");
     if (state.containerCreated || state.checkpointCalled) {
       if (typeof hooks.afterChange === "function") safe("afterChange", () => hooks.afterChange({ job, containerName: run.containerName }));
       emitInstances({ changed: [run.instanceId] });
@@ -1132,6 +1193,7 @@ function createRuntimeSupervisor(options = {}) {
       closePhase(job.lifecycle);
       await rollback(job, run, state, checkpoint, error);
       if (typeof jobs.failJob === "function") jobs.failJob(job, error);
+      appendFailureTitle(job);
       emitJob(job, { force: true });
       throw error;
     }
@@ -1245,6 +1307,7 @@ function createRuntimeSupervisor(options = {}) {
         }
         closePhase(job.lifecycle);
         if (typeof jobs.failJob === "function") jobs.failJob(job, error);
+        appendFailureTitle(job);
         emitJob(job, { force: true });
       })
       .finally(() => {

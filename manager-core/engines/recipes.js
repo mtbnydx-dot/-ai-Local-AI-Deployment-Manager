@@ -57,6 +57,7 @@ const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 // The legacy SGLang base preset's fixed text (vllm-manager resolveVllmRuntimePreset).
 const SGLANG_BASE = Object.freeze({
+  engineId: "sglang",
   id: "sglang-openai-runtime",
   label: "SGLang OpenAI runtime",
   note: "uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000",
@@ -1074,7 +1075,7 @@ function presetFromRecipe(recipeId, legacyOpts = {}, launch = {}, ctx = {}) {
     if (capabilities === undefined) capabilities = typeof ctx.capabilities === "function" ? ctx.capabilities() : ctx.capabilities;
     return capabilities;
   };
-  const useBase = engineId === "sglang" && recipe?.legacy?.base !== false;
+  const useBase = engineId === SGLANG_BASE.engineId && recipe?.legacy?.base !== false;
   let preset = useBase ? sglangBasePreset(state, { ...ctx, image, capabilities: capabilitiesOf() }, mode, Boolean(rule)) : {};
   let reason = useBase ? preset.unsupportedReason : "";
   if (!recipe) {
@@ -1154,6 +1155,30 @@ function measuredMemoryMiB(recipeId, opts = {}, ctx = {}) {
   return Number.isFinite(memory?.measuredMiB) ? memory.measuredMiB : null;
 }
 
+/**
+ * The recipe memory an engine's runtime image pins (memory-models.js
+ * recipeMemory, 01 §12): an image that selects a recipe (legacy-aliases
+ * RUNTIME_RECIPES, the Pennyroyal image today) whose memory policy is
+ * "measured" reserves the recipe's measured MiB for the requested shared KV
+ * pool (sglangMaxTotalTokens, then maxModelLen or contextTokens). Null for any
+ * other image, engine or policy.
+ * → { policy: "measured", measuredMiB, estimatePolicy } | null.
+ */
+function pinnedRecipeMemory(engineId, image, options = {}, ctx = {}) {
+  const store = storeOf(ctx);
+  const runtime = legacyRuntime({ runtimeImage: image }, engineId, store);
+  const recipeId = runtime.manifestKey ? legacyAliases.RUNTIME_RECIPES[runtime.manifestKey] : null;
+  const recipe = recipeId ? store.get(recipeId) : null;
+  if (!recipe || recipe.engineId !== engineId || recipe.memory?.policy !== "measured") return null;
+  const source = isPlainObject(options) ? options : {};
+  const measuredMiB = measuredMemoryMiB(recipe, {
+    sglangMaxTotalTokens: source.sglangMaxTotalTokens,
+    maxModelLen: source.maxModelLen || source.contextTokens,
+  }, ctx) ?? measuredMemoryMiB(recipe, {}, ctx);
+  if (!Number.isFinite(measuredMiB)) return null;
+  return { policy: "measured", measuredMiB, estimatePolicy: recipe.memory.estimatePolicy || recipe.id + "_measured" };
+}
+
 /** The recipe a legacy runtime preset was rendered from, or null: how long its launch may stall (ms). */
 function stallMsForPreset(preset, store = getRecipeStore()) {
   const recipe = recipeForLegacyPreset(preset, store);
@@ -1183,8 +1208,12 @@ async function tokenizerFinding(rule, localPath) {
 /**
  * The findings and recommendations checkModelCompatibility shows for a recipe
  * (legacy.check), in its order: static findings, the model mismatch, the
- * blocks, and the validation rules (tokenizer hashes need ctx.localPath).
- * → { findings: [{ severity, title, detail }], recommendations: { legacyField: value }, complete }.
+ * blocks, and the validation rules (tokenizer hashes need ctx.localPath). A
+ * static finding may hold a condition (when), apply only to a matching model
+ * (ifMatched) and refine the manager's finding of its title (replaces);
+ * defaults fill only the form fields the manager left empty.
+ * → { findings: [{ severity, title, detail, replaces? }], recommendations: { legacyField: value },
+ *     defaults: { legacyField: value }, complete }.
  */
 async function legacyCompatibility(recipeId, input = {}, ctx = {}) {
   const store = storeOf(ctx);
@@ -1225,28 +1254,41 @@ async function legacyCompatibility(recipeId, input = {}, ctx = {}) {
         }
       }
     } else {
-      findings.push({ severity: item.severity, title: item.title.zh, detail: item.detail.zh });
+      if (item.ifMatched && ctx.mismatch) continue;
+      if (item.when !== undefined && !isTrue(item.when, state)) continue;
+      findings.push({
+        severity: item.severity,
+        title: renderText(item.title.zh, state).text,
+        detail: renderText(item.detail.zh, state).text,
+        ...(item.replaces ? { replaces: true } : {}),
+      });
     }
   }
-  const recommendations = check.recommendFromProfile ? profileLegacyConfig(recipe, store) : {};
-  for (const [field, template] of Object.entries(check.recommendations || {})) {
-    const rendered = renderTemplate(template, state);
-    if (rendered !== undefined) recommendations[field] = rendered;
-  }
+  const render = (templates, into) => {
+    for (const [field, template] of Object.entries(templates || {})) {
+      const rendered = renderTemplate(template, state);
+      if (rendered !== undefined) into[field] = rendered;
+    }
+    return into;
+  };
+  const recommendations = render(check.recommendations, check.recommendFromProfile ? profileLegacyConfig(recipe, store) : {});
   // complete: the recommendations are the recipe's whole launch profile, not a few fields.
-  return { findings, recommendations, complete: Boolean(check.recommendFromProfile) };
+  return { findings, recommendations, defaults: render(check.defaults, {}), complete: Boolean(check.recommendFromProfile) };
 }
 
 // ---------------------------------------------------------------------------
 // Builtin profiles
 // ---------------------------------------------------------------------------
 
+// Each manager's default engine, for a profile read without a registry.
+const MANAGER_DEFAULT_ENGINES = Object.freeze({ vllm: "vllm", llama: "llamacpp" });
+
 function profileEngineId(recipe, store) {
   if (recipe.engineId) return recipe.engineId;
   try {
     return store.registry().defaultEngineFor(recipe.profile.managerId);
   } catch {
-    return recipe.profile.managerId === "llama" ? "llamacpp" : "vllm";
+    return MANAGER_DEFAULT_ENGINES[recipe.profile.managerId] || MANAGER_DEFAULT_ENGINES.vllm;
   }
 }
 
@@ -1420,6 +1462,7 @@ module.exports = {
   matchRecipes,
   measuredMemoryMiB,
   mergeCapabilityPreset,
+  pinnedRecipeMemory,
   presetFromRecipe,
   profileLegacyConfig,
   recipeForLegacyPreset,

@@ -287,6 +287,8 @@ function createGatewayPipeline(deps = {}) {
     if (!caller.ok) return caller;
     req.serviceEntryAuth = caller;
     req.serviceEntryPrincipal = hopPrincipal(caller, listenerOf(req));
+    // 04 §5.2: the context rides the same signed hop as the principal.
+    req.serviceEntryContext = io.entryContext ? io.entryContext(req) : null;
     io.recordAuth?.(req, caller, {
       listener: listenerOf(req),
       principal: caller.kind === "console-session" ? "console-session" : "key",

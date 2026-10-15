@@ -35,6 +35,7 @@ const { createAdminAuth, registerSessionRoutes } = require("./lib/admin-session"
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
 const { createModelHub, discoverHubClis } = require("../manager-core/model-hub");
 const { createTelemetryRuntime } = require("./lib/telemetry-runtime");
+const { inferSourceProgram } = require("../manager-core/telemetry/source-program");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -183,7 +184,7 @@ const ROUTE_MODULES = [
   "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
   "./lib/engine-routes", // 01 ENG-19  /api/engines, /api/engines/external/endpoints
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
-  "./lib/telemetry-routes", // 04 TEL-18  /api/telemetry/import (TEL-11 adds the query routes)
+  "./lib/telemetry-routes", // 04 TEL-11/18  /api/telemetry/* (query, export, settings, import)
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
   "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
   "./lib/access-internal-routes", // 05 PUB-10  /internal/access/* (verify, legacy manager key forwarders)
@@ -576,6 +577,8 @@ function createRouteContext(overrides = {}) {
     features: {},
     sendJson,
     readJsonObjectBody,
+    // The billing store, for the request-detail join of telemetry-routes (04 §11.6).
+    getBillingStore,
     // The access store (05 §6) and the legacy key migration, for access-routes.
     getAccessStore,
     accessMigration: {
@@ -1206,6 +1209,12 @@ async function getEntryGpus() {
   }));
 }
 
+// The compatibility rows of 02 (03 §10) are evaluated against this host's GPUs;
+// runtimes, facts and knowledge come from 02's own defaults.
+async function getEntryCompatibilityContext() {
+  return { host: { gpus: await getEntryGpus() } };
+}
+
 // The entry's one model hub (03 §3): data under service-entry/data/hub, the
 // download CLIs in the managers' discovery order. Building it touches no
 // file; a hub that cannot be built leaves its routes answering 503.
@@ -1236,6 +1245,10 @@ function createEntryHub({ events = null } = {}) {
       // through these two providers.
       getRuntimeLoad: getEntryRuntimeLoad,
       getGpus: getEntryGpus,
+      // 02's model inspector (core.models): the fit, the remote cards and the
+      // compatibility rows of search, repository detail and the plan (03 §10).
+      models: core.models,
+      getCompatibilityContext: getEntryCompatibilityContext,
       // Cancel-and-delete refuses a folder a running container mounts (03 §8).
       getBusyPaths: core.createStorageBusyPathProbe({ aiRoot: AI_ROOT }),
       logger: console,
@@ -1922,6 +1935,7 @@ const gatewayPipeline = createGatewayPipeline({
     deny: denyEntryRequest,
     watch: (req, res, access) => watchEntryAccess(req, res, access),
     recordAuth: recordGatewayAuth,
+    entryContext: buildEntryHopContext,
     recordRouting: recordGatewayRouting,
     corsHeaders: gatewayCorsHeaders,
     sendJson,
@@ -2372,6 +2386,31 @@ function telemetryRecorder() {
 
 function gatewayRecord(req) {
   return req?.telemetryRecord || null;
+}
+
+// 04 §5.2: the entry's context for the signed manager hop. It holds only what
+// neither the principal nor the request id carries: the source-program slug
+// and the trusted-proxy country. Never the key, the customer or the user agent.
+function buildEntryHopContext(req) {
+  const headers = req?.headers || {};
+  const text = (name) => String(Array.isArray(headers[name]) ? headers[name][0] : headers[name] || "");
+  const context = {
+    v: 1,
+    src: inferSourceProgram({
+      userAgent: text("user-agent"),
+      origin: text("origin"),
+      referer: text("referer"),
+      path: String(req?.originalUrl || req?.url || "").split("?")[0],
+      xTitle: text("x-title") || text("x-ai-client"),
+    }) || "unknown",
+  };
+  try {
+    const country = security.identifyClient(req).country;
+    if (country) context.cc = country;
+  } catch {
+    // No country is a valid context.
+  }
+  return context;
 }
 
 // One record per gateway request, started before any check so that a refusal
@@ -3458,6 +3497,7 @@ module.exports = {
   buildManagerGatewayPath,
   buildManagerGatewayUrls,
   buildProxyHeaders,
+  buildEntryHopContext,
   managerGatewayTrustVersion,
   resetManagerTrustCache: () => managerTrustCache.clear(),
   buildServiceEntryFleetSnapshot,

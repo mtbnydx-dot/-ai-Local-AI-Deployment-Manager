@@ -1,0 +1,1 @@
+{ "queueMode": false, "autoRetryCount": 1, "autoRetryDelaySeconds": 5, "hfMirror": true, "hfTransfer": false, "verifyChecksums": false, "idleOnlyQueue": true }

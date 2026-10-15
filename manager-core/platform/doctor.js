@@ -1,7 +1,7 @@
 "use strict";
 
-// Report-only Doctor (06 §7). Fix execution belongs to OPS-9b and the CLI
-// belongs to OPS-7a. Every check receives the same memoized probe boundary.
+// Doctor (06 §7). runDoctor is report-only and every check receives the same
+// memoized probe boundary. Fix execution lives in doctor-fix.js (runFix).
 const path = require("node:path");
 const configApi = require("./config");
 const components = require("./components");
@@ -9,12 +9,15 @@ const { redactValue } = require("../secret-redactor");
 const { allSecretValues } = require("../secret-store");
 const { createDefaultProbes } = require("./doctor-probes");
 
-const CHECK_GROUPS = Object.freeze(["env", "runtime", "storage"]);
+const CHECK_GROUPS = Object.freeze(["env", "runtime", "storage", "network", "security", "ops"]);
 const STATUS_IDS = Object.freeze(["ok", "warn", "fail", "info", "skip"]);
 const CHECK_IDS = Object.freeze([
   "env.node-version", "env.node-sqlite", "env.deps.*", "env.mcp-dist", "env.download-cli", "env.python", "env.pwsh", "env.git",
   "runtime.docker-cli", "runtime.docker-daemon", "runtime.wsl", "runtime.wslconfig", "runtime.nvidia-driver", "runtime.images", "runtime.gpu-in-docker",
   "storage.ai-root", "storage.model-roots", "storage.hf-cache", "storage.docker-data", "storage.writable",
+  "net.ports", "net.orphans", "net.legacy-proxy", "net.firewall", "net.manager-bind", "net.search-upstream",
+  "sec.lan-keys", "sec.public", "sec.secret-store", "sec.plaintext-secrets",
+  "ops.supervisor", "ops.autostart", "ops.nightly", "ops.backup", "ops.deploy-drift", "ops.version", "ops.updates", "ops.config", "ops.config-shadowed", "ops.logs-size",
 ]);
 
 function selected(value) { return value === undefined ? null : new Set(Array.isArray(value) ? value : [value]); }
@@ -29,7 +32,7 @@ async function runDoctor(options = {}) {
   const registry = options.registry || components.loadComponentRegistry({ aiRoot, config, now: started });
   const getSecrets = options.getSecrets || (() => allSecretValues(aiRoot, { onError: (namespace, error) => { throw error; } }));
   const ctx = {
-    aiRoot, env, config, registry, platform: options.platform || process.platform, deep: options.deep === true,
+    aiRoot, env, config, registry, now: clock, platform: options.platform || process.platform, deep: options.deep === true,
     value: (key, fallback) => config.values?.[key] ?? config[key] ?? fallback,
     fix: (checkId, id, risk, zh, en, docs = "/docs/troubleshooting.md", extra = {}) => ({ id, risk, label: { "zh-CN": zh, "en-US": en }, command: `platform doctor --fix=${checkId}`, docs, ...extra }),
   };
@@ -72,4 +75,8 @@ async function runDoctor(options = {}) {
   return { schemaVersion: 1, at: new Date(started).toISOString(), durationMs: Math.max(0, milliseconds(clock) - started), summary, checks };
 }
 
-module.exports = { runDoctor, createDefaultProbes, CHECK_IDS, CHECK_GROUPS };
+// runFix lives in doctor-fix.js (it needs the supervisor); loaded lazily so a
+// report-only run never pulls in the executors.
+function runFix(body, options) { return require("./doctor-fix").runFix(body, options); }
+
+module.exports = { runDoctor, runFix, createDefaultProbes, CHECK_IDS, CHECK_GROUPS };

@@ -277,6 +277,31 @@ test("proxy headers to a v2-capable manager strip the key and carry the signed p
   assert.ok(keyless["x-service-entry-signature-v2"]);
 });
 
+test("the hop v2 carries the entry context under the same signature", () => {
+  const req = {
+    method: "POST",
+    socket: { remoteAddress: "192.168.1.100" },
+    headers: { "user-agent": "curl/8.0", "x-title": "Open WebUI", authorization: "Bearer service-key" },
+    telemetryRecord: { requestId: "req_abcdefghij234567abcd" },
+    serviceEntryPrincipal: { k: "vllm.egg", l: "admin", p: "key" },
+  };
+  req.serviceEntryContext = entry.buildEntryHopContext(req);
+  assert.equal(req.serviceEntryContext.v, 1);
+  assert.equal(req.serviceEntryContext.src, "openwebui");
+  assert.ok(Buffer.byteLength(JSON.stringify(req.serviceEntryContext)) <= 256);
+  assert.deepEqual(Object.keys(req.serviceEntryContext).filter((key) => !["v", "src", "cc"].includes(key)), []);
+
+  const headers = entry.buildProxyHeaders(req.headers, req, { hopVersion: 2, method: "POST", pathname: "/serve/v1/chat/completions" });
+  const token = entry.security.getTrustToken();
+  const hop = { method: "POST", originalUrl: "/serve/v1/chat/completions", headers, socket: { remoteAddress: "127.0.0.1" } };
+  const verified = core.verifyEntryRequest(hop, { token });
+  assert.equal(verified.ok, true);
+  assert.deepEqual(verified.context, req.serviceEntryContext);
+  const forged = Buffer.from(JSON.stringify({ v: 1, src: "claude-code" })).toString("base64url");
+  const tampered = core.verifyEntryRequest({ ...hop, headers: { ...headers, "x-service-entry-context": `v1.${forged}` } }, { token });
+  assert.equal(tampered.ok, false);
+});
+
 test("x-request-id: the minted req_ id replaces the client's, and is the only one forwarded", () => {
   const minted = "req_k3m2q2x7p4a5c5d3h6j7";
   const inbound = { "X-Request-Id": "client-supplied-id", authorization: "Bearer service-key", "content-type": "application/json" };

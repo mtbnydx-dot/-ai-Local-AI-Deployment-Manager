@@ -6,6 +6,8 @@
 // overrides, and the console's custom-engine drafts. It only reads its input;
 // "draft" applies the override rules and never writes anything.
 
+const templateGrammar = require("./template-grammar");
+
 const ENGINE_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
 const MANIFEST_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;
@@ -628,20 +630,32 @@ function validateErrorSignatures(out, value, path, { engineId } = {}) {
   });
 }
 
-function validateTemplate(out, value, path) {
-  if (!requireObject(out, value, path)) return;
-  const argsPath = joinPath(path, "args");
-  if (!Array.isArray(value.args)) {
-    out.add(argsPath, "type", `${argsPath} must be a list.`);
+// The docker-template grammar lives in template-grammar.js (shared with the
+// adapter that renders it). paramIds, when the caller knows the engine's
+// catalog, makes an unknown {{placeholder}} an error (01 §19.1).
+function validateTemplate(out, obj, { paramIds } = {}) {
+  const value = obj.template;
+  if (value === undefined) {
+    out.add("template", "required", "A docker-template engine needs a template.");
     return;
   }
-  value.args.forEach((item, index) => {
-    if (typeof item === "string") return;
-    if (!isPlainObject(item)) out.add(joinPath(argsPath, index), "type", "A template item is a string token or an object.");
-  });
+  for (const problem of templateGrammar.validateTemplate(value, { paramIds })) out.add(problem.path, problem.code, problem.message);
+  if (!isPlainObject(value)) return;
+  // The API key reaches the engine in the way the descriptor says (01 §18).
+  const key = isPlainObject(obj.secrets) && isPlainObject(obj.secrets.apiKey) ? obj.secrets.apiKey : null;
+  const files = Array.isArray(value.files) ? value.files.filter(isPlainObject) : [];
+  if (key?.mode === "file") {
+    const target = files.find((file) => file.id === key.file);
+    if (!target || target.secret !== true) {
+      out.add("secrets.apiKey.file", "secret_file_missing", "secrets.apiKey.file must name a template file marked secret:true.");
+    }
+  }
+  if (key?.mode !== "file" && files.some((file) => file.secret === true)) {
+    out.add("template.files", "secret_file_unused", "A secret template file holds the API key, so secrets.apiKey.mode must be \"file\".");
+  }
 }
 
-function validateFull(out, obj, { newEngine }) {
+function validateFull(out, obj, { newEngine, paramIds }) {
   checkKnownKeys(out, obj, "", DESCRIPTOR_FIELDS);
   if (checkInteger(out, obj.schemaVersion, "schemaVersion", { required: true, min: 1 }) && !SUPPORTED_SCHEMA_VERSIONS.includes(obj.schemaVersion)) {
     out.add("schemaVersion", "unsupported_schema_version", `schemaVersion ${obj.schemaVersion} is newer than this platform understands.`);
@@ -720,7 +734,7 @@ function validateFull(out, obj, { newEngine }) {
   validateLogFacts(out, obj.logFacts, "logFacts");
   validateErrorSignatures(out, obj.errorSignatures, "errorSignatures", { engineId: typeof obj.id === "string" ? obj.id : "" });
 
-  if (obj.adapter === "docker-template") validateTemplate(out, obj.template, "template");
+  if (obj.adapter === "docker-template") validateTemplate(out, obj, { paramIds });
   else if (obj.template !== undefined) out.add("template", "field_not_applicable", "template is used only by the docker-template adapter.");
   if (external) requireObject(out, obj.external, "external", { required: false });
   else if (obj.external !== undefined) out.add("external", "field_not_applicable", "external is used only by the external adapter.");
@@ -746,13 +760,15 @@ function validateOverridePatch(out, obj) {
 }
 
 /**
- * validateDescriptor(obj, { mode: "bundled"|"override"|"draft", knownIds? })
+ * validateDescriptor(obj, { mode: "bundled"|"override"|"draft", knownIds?, paramIds? })
  *   → { ok, errors: [{ path, code, message }], kind: "descriptor"|"override" }
  *
  * "bundled" checks a complete descriptor. "override" and "draft" treat an id
  * that already exists (a tier-1 id, or one of knownIds) as a partial override
  * limited to OVERRIDE_FIELDS, and anything else as a new engine that must use
- * a data-driven adapter. Nothing here touches the filesystem.
+ * a data-driven adapter. paramIds (the engine catalog's parameter ids) lets a
+ * docker-template descriptor's {{placeholders}} be checked against the catalog
+ * (01 §19.1). Nothing here touches the filesystem.
  */
 function validateDescriptor(obj, options = {}) {
   const mode = options.mode || "bundled";
@@ -769,7 +785,7 @@ function validateDescriptor(obj, options = {}) {
   const knownIds = new Set([...TIER1_ENGINE_IDS, ...(options.knownIds || [])]);
   const isOverride = mode !== "bundled" && typeof obj.id === "string" && knownIds.has(obj.id);
   if (isOverride) validateOverridePatch(out, obj);
-  else validateFull(out, obj, { newEngine: mode !== "bundled" });
+  else validateFull(out, obj, { newEngine: mode !== "bundled", paramIds: options.paramIds });
   return { ok: out.errors.length === 0, errors: out.errors, kind: isOverride ? "override" : "descriptor" };
 }
 

@@ -10,6 +10,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { userDataDir } = require("../reference-data");
 const runtimeManifest = require("../runtime-manifest");
+const paramCatalogModule = require("./param-catalog");
 const {
   ENGINE_ID_PATTERN,
   TIER1_ENGINE_IDS,
@@ -153,10 +154,10 @@ function introducedRuntimeProblems(merged, base, knownRuntimes) {
  * when loading it as an override file would apply it. merged is frozen and
  * set only when ok.
  */
-function evaluateOverride(entry, { mode, engines, knownRuntimes }) {
+function evaluateOverride(entry, { mode, engines, knownRuntimes, paramIdsFor = null }) {
   let kind = "descriptor";
   try {
-    const result = validateDescriptor(entry, { mode, knownIds: [...engines.keys()] });
+    const result = validateDescriptor(entry, { mode, knownIds: [...engines.keys()], paramIds: paramIdsFor ? paramIdsFor(entry) : undefined });
     kind = result.kind;
     if (!result.ok) return { ok: false, kind, errors: result.errors, merged: null };
     const base = kind === "override" ? engines.get(entry.id) || null : null;
@@ -164,7 +165,7 @@ function evaluateOverride(entry, { mode, engines, knownRuntimes }) {
     // The merged result must still be a complete, coherent descriptor
     // (runtimes.default inside runtimes.allowed, and so on) whose runtimes
     // resolve in the manifest.
-    let errors = validateDescriptor(merged, { mode: "bundled" }).errors;
+    let errors = validateDescriptor(merged, { mode: "bundled", paramIds: paramIdsFor ? paramIdsFor(merged) : undefined }).errors;
     if (!errors.length) errors = introducedRuntimeProblems(merged, base, knownRuntimes);
     if (errors.length) return { ok: false, kind, errors, merged: null };
     return { ok: true, kind, errors: [], merged: deepFreeze(merged) };
@@ -205,6 +206,21 @@ function createEngineRegistry(options = {}) {
   const overrideDir = options.overrideDir || path.join(userDataDir(), "engines");
   const env = options.env || process.env;
   const manifest = options.manifest || runtimeManifest;
+  // The parameter catalogs a docker-template descriptor's placeholders are
+  // checked against (01 §19.1); the process-wide loader unless one is given.
+  const catalogSource = options.paramCatalog || null;
+  function paramIdsFor(descriptor) {
+    if (descriptor?.adapter !== "docker-template" || typeof descriptor.id !== "string") return undefined;
+    try {
+      const loader = catalogSource || paramCatalogModule.getParamCatalog();
+      const catalog = loader.loadCatalog(descriptor.id);
+      // An engine without a catalog file (a custom one) can use the shared concepts only.
+      if (!catalog.params.length && typeof loader.commonParamIds === "function") return loader.commonParamIds();
+      return catalog.params.map((param) => param.id);
+    } catch {
+      return undefined;
+    }
+  }
   // engines.native.enabled (01 §13, ENG-22): boolean or () => boolean. The
   // default reads platform.json through readSection("engines") on every call.
   const nativeSource = options.nativeEnabled;
@@ -226,7 +242,7 @@ function createEngineRegistry(options = {}) {
         errors.push({ source: "bundled", file, path: "", code: "invalid_json", message: read.error.message });
         continue;
       }
-      const result = validateDescriptor(read.value, { mode: "bundled" });
+      const result = validateDescriptor(read.value, { mode: "bundled", paramIds: paramIdsFor(read.value) });
       const engineId = typeof read.value?.id === "string" ? read.value.id : "";
       if (!result.ok) {
         errors.push(...prefixErrors(result.errors, { source: "bundled", file, engineId }));
@@ -255,7 +271,7 @@ function createEngineRegistry(options = {}) {
       entries.forEach((entry, index) => {
         const where = Array.isArray(read.value) ? { file, index } : { file };
         const engineId = typeof entry?.id === "string" ? entry.id : "";
-        const verdict = evaluateOverride(entry, { mode: "override", engines, knownRuntimes });
+        const verdict = evaluateOverride(entry, { mode: "override", engines, knownRuntimes, paramIdsFor });
         if (!verdict.ok) {
           errors.push(...prefixErrors(verdict.errors, { source: "override", ...where, engineId }));
           overrides.push({ ...where, engineId, applied: false });
@@ -467,7 +483,7 @@ function createEngineRegistry(options = {}) {
    */
   function checkOverride(entry, { mode = "draft" } = {}) {
     const snapshot = current();
-    const { ok, kind, errors } = evaluateOverride(entry, { mode, engines: snapshot.engines, knownRuntimes: snapshot.knownRuntimes });
+    const { ok, kind, errors } = evaluateOverride(entry, { mode, engines: snapshot.engines, knownRuntimes: snapshot.knownRuntimes, paramIdsFor });
     return { ok, kind, errors };
   }
 

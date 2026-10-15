@@ -307,8 +307,10 @@ const {
 
 const llamaImageBuildInfoCache = new Map();
 
+// defaultSlot: the image is this manager's default llama.cpp slot, whose
+// pinned build stands in when neither the environment nor a label names one.
 function resolveConfiguredLlamaImageBuildInfo({
-  museGlimmer = false,
+  defaultSlot = true,
   image = "",
   buildEnv = "",
   revisionEnv = "",
@@ -329,7 +331,7 @@ function resolveConfiguredLlamaImageBuildInfo({
     build = `b${buildNumber}`;
   }
   if (!revision && labelRevision) revision = labelRevision;
-  if (!buildNumber && !museGlimmer && image === DEFAULT_LLAMA_IMAGE) {
+  if (!buildNumber && defaultSlot && image === DEFAULT_LLAMA_IMAGE) {
     buildNumber = DEFAULT_LLAMA_IMAGE_BUILD;
     build = `b${buildNumber}`;
     source = "pinned-default";
@@ -344,22 +346,48 @@ function resolveConfiguredLlamaImageBuildInfo({
   };
 }
 
+// The manifest runtime slots this manager configures: the image and the
+// environment that names its build and revision.
+const DEFAULT_LLAMA_SLOT = "llama";
+const LLAMA_IMAGE_SLOTS = Object.freeze({
+  llama: Object.freeze({ image: () => CONFIG.image, buildEnv: "LLAMA_IMAGE_BUILD", revisionEnv: "LLAMA_IMAGE_REVISION" }),
+  llamaMuse: Object.freeze({ image: () => CONFIG.museImage, buildEnv: "LLAMA_MUSE_IMAGE_BUILD", revisionEnv: "LLAMA_MUSE_IMAGE_REVISION" }),
+});
+
+// The slot a GGUF architecture runs on (D5): the runtime of the llama.cpp
+// recipe its family selects (the Muse Glimmer recipe pins llamaMuse), else
+// the default llama slot.
+function llamaImageSlot(architecture = "") {
+  const ggufArchitecture = String(architecture || "").trim().toLowerCase();
+  if (!ggufArchitecture) return DEFAULT_LLAMA_SLOT;
+  const subject = { ggufArchitecture, allowNameFallback: false };
+  const capabilityIds = core.loadModelCapabilityMatrix().entries
+    .filter((entry) => core.matchesCapabilityEntry(entry.id, subject))
+    .map((entry) => entry.id);
+  const top = capabilityIds.length
+    ? core.engines.recipes.matchRecipes({ engineId: "llamacpp", model: { capabilityIds } }).find((item) => item.eligible)
+    : null;
+  const ref = top?.recipe.runtime?.ref;
+  return ref && LLAMA_IMAGE_SLOTS[ref] ? ref : DEFAULT_LLAMA_SLOT;
+}
+
 async function getConfiguredLlamaImageBuildInfo(architecture = "") {
-  const museGlimmer = String(architecture || "").trim().toLowerCase() === "muse-glimmer";
-  const image = museGlimmer ? CONFIG.museImage : CONFIG.image;
-  const cacheKey = `${museGlimmer ? "muse" : "default"}:${image}`;
+  const slotKey = llamaImageSlot(architecture);
+  const slot = LLAMA_IMAGE_SLOTS[slotKey];
+  const image = slot.image();
+  const cacheKey = `${slotKey}:${image}`;
   const now = Date.now();
   const cached = llamaImageBuildInfoCache.get(cacheKey);
   if (cached?.value && cached.expiresAt > now) return cached.value;
-  const buildEnv = museGlimmer ? process.env.LLAMA_MUSE_IMAGE_BUILD : process.env.LLAMA_IMAGE_BUILD;
-  const revisionEnv = museGlimmer ? process.env.LLAMA_MUSE_IMAGE_REVISION : process.env.LLAMA_IMAGE_REVISION;
+  const buildEnv = process.env[slot.buildEnv];
+  const revisionEnv = process.env[slot.revisionEnv];
   const out = await docker([
     "image", "inspect", image,
     "--format", "{{json .Config.Labels}}",
   ], { rejectOnError: false }).catch(() => ({ stdout: "" }));
   const imageInspectText = String(out.stdout || "").trim();
   const value = resolveConfiguredLlamaImageBuildInfo({
-    museGlimmer,
+    defaultSlot: slotKey === DEFAULT_LLAMA_SLOT,
     image,
     buildEnv,
     revisionEnv,
@@ -1705,8 +1733,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   getRecipeStore: () => recipeStore,
   // The command preview: the adapter input runStartJob builds from these run
   // options; the plan carries the recipe the wrapper applied.
-  prepareLaunchCommand: (runOptions, { jobId }) => {
-    const { plan, ctx } = planLlamaLaunch({ id: jobId, meta: {} }, runOptions);
+  prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
+    const { plan, ctx } = planLlamaLaunch({ id: jobId, meta: {} }, prospective ? { ...runOptions, prospective: true } : runOptions);
     return { adapter: core.engines.adapters.llamacpp, plan, ctx, recipe: plan.recipe || null };
   },
   getHostGpus: async () => {
@@ -1717,6 +1745,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
   admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
+  // fromLaunchId (ENG-26): the stored spec POST /api/launch replays.
+  getLaunchSpec: (launchId) => launchStore.get(launchId),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
   // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (MOD-10 store).
@@ -1868,6 +1898,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
+  // POST /api/launch (ENG-26): /api/start for a LaunchRequestV2 or {fromLaunchId}.
+  startLaunch: ({ req, body }) => startRuntimeRequest({ req, body, v2Only: true }),
   managerId: "llama",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -4212,7 +4244,7 @@ function llamaInstanceId(containerName, labels = {}) {
 }
 
 async function runStartJob(job, opts) {
-  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: job.meta?.launchSource || "api" });
+  return runtimeSupervisor.start({ job, run: llamaRunContext(opts), source: job.meta?.launchSource || opts.launchSource || "api" });
 }
 
 // The run context the supervisor needs: the legacy run options, the llama
@@ -4224,6 +4256,8 @@ function llamaRunContext(opts) {
     engineId: "llamacpp",
     engineName: "llama.cpp",
     apiLabel: "llama.cpp API",
+    // mode add / onConflict: the supervisor re-checks the slot at its preflight (01 §11, 00 §9.3).
+    ...(opts.launchMode === "add" ? { mode: "add", onConflict: opts.onConflict === "skip" ? "skip" : "fail" } : {}),
     containerName: opts.containerName || CONFIG.containerName,
     instanceId: llamaInstanceId(opts.containerName || CONFIG.containerName, { "ai.manager.instance": opts.instanceId }),
     port: opts.port,

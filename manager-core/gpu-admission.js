@@ -386,6 +386,12 @@ function admissionKnob(request = {}) {
 // insufficient_vram details: SGLang's static fraction and KV pool cap, the
 // device fraction of vLLM, and llama.cpp's planning headroom.
 const SUGGESTED_POOL_TOKENS = 131072;
+// The device-fraction param of each engine (and legacy manager id) that has one.
+const DEVICE_FRACTION_PARAMS = Object.freeze({
+  vllm: "vllm.gpuMemoryUtilization",
+  llamacpp: "llamacpp.planningUtilization",
+  llama: "llamacpp.planningUtilization",
+});
 
 function admissionKnobs(request = {}, maxFraction = null) {
   const knob = admissionKnob(request);
@@ -399,7 +405,7 @@ function admissionKnobs(request = {}, maxFraction = null) {
   }
   if (knob === "device-fraction") {
     const engine = String(request.engine || "").toLowerCase();
-    const param = engine === "llama" || engine === "llamacpp" ? "llamacpp.planningUtilization" : "vllm.gpuMemoryUtilization";
+    const param = DEVICE_FRACTION_PARAMS[engine] || DEVICE_FRACTION_PARAMS.vllm;
     return [{ param, suggestion }];
   }
   return [];
