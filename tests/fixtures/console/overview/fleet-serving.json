@@ -1,0 +1,43 @@
+{
+  "updatedAt": "@now",
+  "instances": [
+    {
+      "id": "primary",
+      "instanceId": "primary",
+      "fleetId": "vllm:primary",
+      "managerId": "vllm",
+      "engineId": "sglang",
+      "runtime": { "id": "sglang-0.5.17", "version": "0.5.17" },
+      "lifecycleState": "ready",
+      "running": true,
+      "status": "running",
+      "port": 8000,
+      "models": [{ "id": "qwen3-demo-32b", "contextLength": 262144 }]
+    },
+    {
+      "id": "second",
+      "instanceId": "second",
+      "fleetId": "llama:second",
+      "managerId": "llama",
+      "engineId": "llamacpp",
+      "lifecycleState": "loading",
+      "running": true,
+      "status": "starting",
+      "lifecycle": { "state": "loading", "phase": "loading-weights", "percent": 42 },
+      "port": 8080,
+      "models": [{ "id": "demo-8b-q4" }]
+    },
+    {
+      "id": "idle",
+      "instanceId": "idle",
+      "fleetId": "vllm:idle",
+      "managerId": "vllm",
+      "engineId": "vllm",
+      "lifecycleState": "stopped",
+      "running": false,
+      "models": []
+    }
+  ],
+  "gpuMemory": { "totalMb": 97887, "usedMb": 90112 },
+  "settings": {}
+}

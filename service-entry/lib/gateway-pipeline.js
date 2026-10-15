@@ -21,14 +21,18 @@
 // The limiter (lib/limiter.js, 05 §9) runs inside it: the ban check before
 // authentication, the rpm bucket after it, then (once the model is chosen) the
 // tpm bucket and the quotas, and the public share gate before the upstream
-// call. Later packages plug in here: the usage tap and counters (PUB-11) and
-// the hop v2 principal (PUB-10, hopPrincipal below).
+// call. The usage tap (usage-tap.js, PUB-11) reads the usage out of the
+// response on its way to the client and settles the tpm reservation, adds the
+// key's counters once and records who used what (step 15); the hop v2
+// principal (PUB-10) is hopPrincipal below.
 
+const crypto = require("node:crypto");
 const core = require("../../manager-core");
 const keyPolicy = require("./key-policy");
 const { createLimiter } = require("./limiter");
 const modelFleet = require("./model-fleet");
 const { hasApiKeyHeader, lookupPublicError, sendPublicError } = require("./public-errors");
+const { createUsageTap } = require("./usage-tap");
 
 // §5.8: the chat family, the TTS family and debug.route (the playground shows
 // x-local-ai-route). Never mcp or search.
@@ -169,8 +173,11 @@ function sanitizeRoutePart(value) {
  *   io              server.js transport helpers (see handle())
  *   limiter         createLimiter() result (lib/limiter.js); a memory-only one is
  *                   made when absent (tests)
- *   usageTap, telemetry, billing, tts, config
- *                   accepted for the later packages (PUB-10/11); unused here
+ *   usageTap        createUsageTap-compatible factory (default: lib/usage-tap.js)
+ *   keysStore       the platform key store (object or getter): addUsage and touchKey
+ *   logger          optional, for warnings
+ *   telemetry, billing, tts, config
+ *                   accepted for the later packages; unused here
  */
 function createGatewayPipeline(deps = {}) {
   const security = deps.security;
@@ -181,6 +188,7 @@ function createGatewayPipeline(deps = {}) {
   const getFleetSettings = deps.getFleetSettings;
   const selectFleetTarget = typeof deps.selectFleetTarget === "function" ? deps.selectFleetTarget : modelFleet.selectFleetTarget;
   const io = deps.io || {};
+  const makeUsageTap = typeof deps.usageTap === "function" ? deps.usageTap : createUsageTap;
   const limiter = deps.limiter || createLimiter({
     config: () => (typeof security.accessConfig === "function" ? security.accessConfig() : {}),
   });
@@ -279,7 +287,12 @@ function createGatewayPipeline(deps = {}) {
     if (!caller.ok) return caller;
     req.serviceEntryAuth = caller;
     req.serviceEntryPrincipal = hopPrincipal(caller, listenerOf(req));
-    io.recordAuth?.(req, caller);
+    io.recordAuth?.(req, caller, {
+      listener: listenerOf(req),
+      principal: caller.kind === "console-session" ? "console-session" : "key",
+      country: identityOf(req).country || "",
+      endUser: endUserOf(req, caller),
+    });
     return caller;
   }
 
@@ -358,7 +371,97 @@ function createGatewayPipeline(deps = {}) {
     req.serviceEntryRateTicket = entered.ticket;
     req.serviceEntryRateProtocol = protocol;
     applyRateHeaders(req, res);
+    applyCors(req, res, caller);
     return entered;
+  }
+
+  // PUBLIC CORS of an authenticated request (05 §11): the Origin has passed
+  // the key's allowed_origins in key-policy, so it is echoed with the exposed
+  // headers. Never credentials, never private-network. {} elsewhere.
+  function corsFor(req, caller) {
+    if (listenerOf(req) !== "public" || caller?.kind !== "key" || !caller.key || typeof security.publicCorsHeaders !== "function") return {};
+    return { ...security.publicCorsHeaders(req, caller.key) };
+  }
+
+  function applyCors(req, res, caller) {
+    if (!res || res.headersSent || typeof res.setHeader !== "function") return;
+    for (const [name, value] of Object.entries(corsFor(req, caller))) res.setHeader(name, value);
+  }
+
+  // The hashed Open WebUI user of a key labelled app=openwebui (05 §15), else "".
+  function endUserOf(req, caller) {
+    if (caller?.kind !== "key" || String(caller.key?.labels?.app || "").toLowerCase() !== "openwebui") return "";
+    const raw = req.headers?.["x-openwebui-user-id"];
+    const text = String(Array.isArray(raw) ? raw[0] : raw || "").trim();
+    return text ? crypto.createHash("sha256").update(text).digest("hex").slice(0, 16) : "";
+  }
+
+  function keysStoreOf() {
+    const value = typeof deps.keysStore === "function" ? deps.keysStore() : deps.keysStore;
+    return value && typeof value.addUsage === "function" ? value : null;
+  }
+
+  // Step 15 (05 §8.2): what the key used, once per request, whichever way the
+  // request ended: the counters and the last-used stamp. `usage` is the tap's
+  // result, or null when nothing came back (a failed dispatch). Never throws
+  // into the response.
+  function noteKeyUsed(req, caller, usage, { failed = false } = {}) {
+    if (req.serviceEntryCounted) return;
+    req.serviceEntryCounted = true;
+    if (caller?.kind !== "key" || !caller.key?.id) return;
+    try {
+      const identity = identityOf(req);
+      const store = keysStoreOf();
+      if (!store) return;
+      store.addUsage(caller.key.id, {
+        requests: 1,
+        inputTokens: usage?.inputTokens || 0,
+        cachedInputTokens: usage?.cachedInputTokens || 0,
+        outputTokens: usage?.outputTokens || 0,
+        errors: failed ? 1 : 0,
+        tzOffsetMinutes: typeof limiter.quotaTzOffset === "function" ? limiter.quotaTzOffset() : undefined,
+      });
+      limiter.invalidateUsage?.(caller.key.id);
+      store.touchKey?.(caller.key.id, { ip: identity.ip, country: identity.country || "" });
+    } catch (error) {
+      deps.logger?.warn?.(core.redactSecrets(`gateway usage counters: ${error?.message || error}`));
+    }
+  }
+
+  // The usage tap on the way to the client (step 15). Returns the Transform
+  // forwardBody puts in the response path; when its result arrives the tpm
+  // reservation is settled with the real usage and the counters are added.
+  function tapUsage(req, caller, { route, upstream, parsedBody, upstreamControl, scope }) {
+    const failedStatus = upstream.status >= 400;
+    let tap;
+    try {
+      let estimatedInputTokens = 0;
+      try {
+        estimatedInputTokens = core.estimateOpenAiRequestInputTokens(parsedBody) || 0;
+      } catch {
+        estimatedInputTokens = 0;
+      }
+      tap = makeUsageTap({
+        protocol: route.protocol === "claude" ? "anthropic" : "openai",
+        endpoint: scope,
+        stream: parsedBody?.stream === true,
+        estimatedInputTokens,
+        contentType: upstream.headers?.get?.("content-type") || undefined,
+        status: upstream.status,
+        abortReason: () => upstreamControl?.abortReason || "",
+        onResult: (usage) => {
+          const measured = usage && usage.source !== "none";
+          req.serviceEntryUsage = measured
+            ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+            : (failedStatus ? { inputTokens: 0, outputTokens: 0 } : null);
+          if (req.serviceEntryReservation) limiter.settle(req.serviceEntryReservation, req.serviceEntryUsage);
+          noteKeyUsed(req, caller, usage, { failed: failedStatus || usage?.terminal === "upstream_error" || usage?.terminal === "timeout" });
+        },
+      });
+    } catch {
+      return null;
+    }
+    return tap.transform;
   }
 
   // Owner traffic (05 §9.5): everything on ADMIN, console-session included,
@@ -600,6 +703,21 @@ function createGatewayPipeline(deps = {}) {
         if (LIMIT_HEADER_RE.test(name)) delete responseHeaders[name];
       }
       Object.assign(responseHeaders, rateHeaders(req));
+      // PUBLIC CORS is ours alone (05 §11): nothing the upstream sent in that
+      // family survives.
+      if (listenerOf(req) === "public") {
+        for (const name of Object.keys(responseHeaders)) {
+          if (/^access-control-/i.test(name)) delete responseHeaders[name];
+        }
+        const cors = corsFor(req, caller);
+        if (cors.vary) {
+          const existing = Object.keys(responseHeaders).find((name) => name.toLowerCase() === "vary");
+          if (!existing) responseHeaders.vary = cors.vary;
+          else if (!/\borigin\b/i.test(String(responseHeaders[existing]))) responseHeaders[existing] = `${responseHeaders[existing]}, Origin`;
+          delete cors.vary;
+        }
+        Object.assign(responseHeaders, cors);
+      }
       // Which engine and instance served the request: `auto` routing is
       // otherwise opaque. Only for debug.route callers and the local owner.
       if (routeHeaderAllowed(req, caller)) {
@@ -608,7 +726,9 @@ function createGatewayPipeline(deps = {}) {
           .join(" ");
       }
       res.writeHead(upstream.status, responseHeaders);
-      io.forwardBody(upstream, res, upstreamControl, rec?.tap());
+      const usageTransform = tapUsage(req, caller, { route, upstream, parsedBody, upstreamControl, scope: scopeForModelRoute(route, req.method) });
+      const transforms = [usageTransform, rec?.tap()].filter(Boolean);
+      io.forwardBody(upstream, res, upstreamControl, transforms.length > 1 ? transforms : (transforms[0] || null));
     } catch (error) {
       upstreamControl.clear();
       requestBody = undefined;
@@ -617,6 +737,7 @@ function createGatewayPipeline(deps = {}) {
       access.error = error.message;
       const timeout = error.name === "TimeoutError";
       rec?.fail({ status: error.status || (timeout ? 504 : 502), code: timeout ? "request_timeout" : "gateway_proxy_error", phase: "upstream" });
+      noteKeyUsed(req, caller, null, { failed: true });
       if (!res.headersSent) {
         sendRefusal(req, res, {
           status: error.status || (timeout ? 504 : 502),

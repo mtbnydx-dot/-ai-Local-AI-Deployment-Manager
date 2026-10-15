@@ -341,3 +341,327 @@ test("redactLibraryEntryForViewer falls back to the root label and relative name
     nextCursor: null,
   });
 });
+
+// --- HUB-9: library actions and storage over HTTP -------------------------------------
+
+const crypto = require("node:crypto");
+
+function sha256Of(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+// A transfer engine that never finishes a transfer: jobs stay active until the hub stops.
+function idleEngine() {
+  return {
+    id: "cli",
+    supports: () => true,
+    start(job, hooks) {
+      const handle = {
+        jobId: job.id,
+        stopReason: null,
+        stop(reason) {
+          handle.stopReason = handle.stopReason || reason;
+          setImmediate(() => hooks.onExit({ code: null, stopReason: handle.stopReason, stderrTail: [] }));
+          return Promise.resolve();
+        },
+        stderrTail: () => [],
+      };
+      hooks.onSpawn({ pid: 4321, startedAt: new Date().toISOString() });
+      return handle;
+    },
+    async findOrphans() {
+      return [];
+    },
+  };
+}
+
+// A hub with a library root, a folder a hub download left (marker v2 with hashes), fake providers
+// whose manifest the test controls, and a busy-path probe the test controls.
+async function startActionsHub(t) {
+  const root = tempDir(t, "hub-library-actions-");
+  const modelsRoot = path.join(root, "models");
+  const libF = path.join(root, "libF");
+  fs.mkdirSync(modelsRoot, { recursive: true });
+  fs.mkdirSync(libF, { recursive: true });
+  const storage = createModelStorage({ modelsRoot, file: path.join(root, "service-entry", "data", "model-storage.json") });
+  storage.registerRoot({ path: libF, label: "Library F" });
+  const folder = path.join(libF, "tiny");
+  makeModel(folder);
+  const weight = fs.readFileSync(path.join(folder, "model.safetensors"));
+  put(folder, ".platform-download.json", JSON.stringify({
+    schemaVersion: 2, model: "acme/Tiny", source: "huggingface", precision: "FP8", provider: "huggingface", transport: "huggingface", createdAt: "2026-10-01T00:00:00.000Z",
+    revision: "main", revisionSha: SHA, files: [{ path: "model.safetensors", size: weight.length, sha256: sha256Of(weight) }],
+  }));
+  const state = {
+    busy: [],
+    manifest: {
+      repo: "acme/Tiny", revision: "main", revisionSha: "b".repeat(40), gated: false,
+      files: [
+        { path: "config.json", size: fs.statSync(path.join(folder, "config.json")).size, sha256: null, gitOid: "1".repeat(40) },
+        { path: "model.safetensors", size: 9000, sha256: "c".repeat(64) },
+        { path: "tokenizer.json", size: fs.statSync(path.join(folder, "tokenizer.json")).size, sha256: null, gitOid: "2".repeat(40) },
+      ],
+    },
+  };
+  const providers = { forNamespace: () => ({ getRepo: async () => state.manifest }), get: () => ({ getRepo: async () => state.manifest }) };
+  const events = recorder();
+  const hub = createModelHub({
+    aiRoot: root,
+    dataDir: path.join(root, "service-entry", "data", "hub"),
+    hfHome: path.join(root, "cache", "huggingface"),
+    env: {},
+    hfCli: "hf",
+    modelScopeCli: "modelscope",
+    logger: quietLogger(),
+    heartbeatMs: 3_600_000,
+    events,
+    transferEngine: idleEngine(),
+    providers,
+    modelStorage: storage,
+    libraryOptions: { watchMs: 0 },
+    getBusyPaths: async () => state.busy,
+    disk: { volumeOf: () => "X:", freeBytes: async () => 1e12, reserveBytes: () => 0 },
+    verifier: { verifyArtifact: async () => ({ ok: true, verifiedFiles: [] }) },
+    readConfig: () => ({ downloadsOwner: "hub", source: "default", errors: [] }),
+  });
+  await hub.start();
+  t.after(() => hub.stop());
+  const scan = await hub.library.rescan();
+  await waitLibraryTask(hub, scan.taskId);
+  const entry = (await hub.library.list({})).entries.find((item) => item.relativePath === "tiny");
+  return { hub, root, libF, folder, storage, state, entry, events };
+}
+
+test("check-update and update: the owner sees the diff, an update job enqueues into the same folder, a second one conflicts", async (t) => {
+  const { hub, folder, entry } = await startActionsHub(t);
+  const { port } = await mountEntry(t, hub);
+
+  const viewer = await request(port, `/api/hub/library/${entry.id}/check-update`, { method: "POST", peer: LAN, body: {} });
+  assert.deepEqual([viewer.status, viewer.json.error.code], [401, "admin_session_required"]);
+
+  const check = await request(port, `/api/hub/library/${entry.id}/check-update`, { method: "POST", body: {} });
+  assert.equal(check.status, 200, check.text);
+  assert.deepEqual(
+    [check.json.ok, check.json.update.status, check.json.update.remoteSha, check.json.update.changedFiles, check.json.update.bytesToDownload],
+    [true, "available", "b".repeat(40), 1, 9000],
+  );
+  assert.equal((await request(port, `/api/hub/library/${entry.id}`)).json.entry.update.status, "available");
+  assert.equal((await request(port, "/api/hub/library/lib_0000000000000000/check-update", { method: "POST", body: {} })).json.error.code, "library_entry_not_found");
+
+  // The folder's marker says precision FP8, which a fresh plan would not: the job exists only because the update matches the marker.
+  const updated = await request(port, `/api/hub/library/${entry.id}/update`, { method: "POST", body: {} });
+  assert.equal(updated.status, 201, updated.text);
+  const job = updated.json.job;
+  assert.match(job.id, /^dl_/);
+  assert.equal(job.origin.kind, "library-update");
+  assert.equal(job.origin.entryId, entry.id);
+  assert.equal(job.target.localDir, folder);
+  assert.equal(job.artifact.revisionSha, "b".repeat(40));
+  assert.deepEqual(job.artifact.files.map((file) => file.path).sort(), ["config.json", "model.safetensors", "tokenizer.json"]);
+
+  const again = await request(port, `/api/hub/library/${entry.id}/update`, { method: "POST", body: {} });
+  assert.deepEqual([again.status, again.json.error.code, again.json.error.details.existingJobId], [409, "already_downloading", job.id]);
+
+  // Nothing newer: 409 already_current, and an unknown entry 404.
+  const current = await startActionsHub(t);
+  current.state.manifest = { ...current.state.manifest, revisionSha: SHA };
+  const second = await mountEntry(t, current.hub);
+  const same = await request(second.port, `/api/hub/library/${current.entry.id}/update`, { method: "POST", body: {} });
+  assert.deepEqual([same.status, same.json.error.code], [409, "already_current"]);
+});
+
+test("delete: the confirmation, the busy guards and the task, with the folder gone and nothing else touched", async (t) => {
+  const { hub, folder, libF, entry, state } = await startActionsHub(t);
+  const { port } = await mountEntry(t, hub);
+  const sibling = path.join(libF, "sibling");
+  makeModel(sibling);
+
+  const viewer = await request(port, `/api/hub/library/${entry.id}`, { method: "DELETE", peer: LAN, body: { confirm: entry.displayName } });
+  assert.deepEqual([viewer.status, viewer.json.error.code], [401, "admin_session_required"]);
+  assert.ok(fs.existsSync(folder));
+
+  const noConfirm = await request(port, `/api/hub/library/${entry.id}`, { method: "DELETE", body: {} });
+  assert.deepEqual([noConfirm.status, noConfirm.json.error.code], [400, "confirm_required"]);
+  const wrong = await request(port, `/api/hub/library/${entry.id}`, { method: "DELETE", body: { confirm: "tiny" } });
+  assert.deepEqual([wrong.status, wrong.json.error.code], [400, "confirm_required"], "the display name, not the folder name");
+  const badType = await request(port, `/api/hub/library/${entry.id}`, { method: "DELETE", body: { confirm: 5 } });
+  assert.deepEqual([badType.status, badType.json.error.code], [400, "invalid_request"]);
+
+  state.busy = [{ path: folder, label: "container vllm-main" }];
+  const busy = await request(port, `/api/hub/library/${entry.id}`, { method: "DELETE", body: { confirm: entry.displayName } });
+  assert.deepEqual([busy.status, busy.json.error.code], [409, "path_busy"]);
+  assert.ok(fs.existsSync(folder), "a mounted folder is never deleted");
+  state.busy = [];
+
+  const missing = await request(port, "/api/hub/library/lib_0000000000000000", { method: "DELETE", body: { confirm: "x" } });
+  assert.deepEqual([missing.status, missing.json.error.code], [404, "library_entry_not_found"]);
+
+  const started = await request(port, `/api/hub/library/${entry.id}`, { method: "DELETE", body: { confirm: entry.displayName } });
+  assert.equal(started.status, 202, started.text);
+  const task = await pollTask(port, started.json.taskId);
+  assert.deepEqual([task.kind, task.state, task.entryId], ["delete", "succeeded", entry.id]);
+  assert.equal(fs.existsSync(folder), false);
+  assert.ok(fs.existsSync(sibling));
+  assert.equal((await request(port, `/api/hub/library/${entry.id}`)).status, 404);
+});
+
+test("cleanup-residue answers 409 while a job holds the folder, then removes only the residue", async (t) => {
+  const { hub, folder, entry } = await startActionsHub(t);
+  const { port } = await mountEntry(t, hub);
+  put(folder, "model-2.safetensors.incomplete", Buffer.alloc(250));
+  const rescan = await hub.library.rescan();
+  await waitLibraryTask(hub, rescan.taskId);
+
+  // An update job is active on the folder.
+  const updated = await request(port, `/api/hub/library/${entry.id}/update`, { method: "POST", body: {} });
+  assert.equal(updated.status, 201, updated.text);
+  const busy = await request(port, `/api/hub/library/${entry.id}/cleanup-residue`, { method: "POST", body: {} });
+  assert.deepEqual([busy.status, busy.json.error.code], [409, "path_busy"]);
+  assert.equal(busy.json.error.details.jobId, updated.json.job.id);
+  assert.ok(fs.existsSync(path.join(folder, "model-2.safetensors.incomplete")));
+
+  const cancelled = await request(port, `/api/hub/downloads/${updated.json.job.id}/cancel`, { method: "POST", body: {} });
+  assert.equal(cancelled.status, 200, cancelled.text);
+  const viewer = await request(port, `/api/hub/library/${entry.id}/cleanup-residue`, { method: "POST", peer: LAN, body: {} });
+  assert.equal(viewer.status, 401);
+  const done = await request(port, `/api/hub/library/${entry.id}/cleanup-residue`, { method: "POST", body: {} });
+  assert.equal(done.status, 200, done.text);
+  assert.deepEqual([done.json.ok, done.json.removed, done.json.removedBytes], [true, ["model-2.safetensors.incomplete"], 250]);
+  assert.ok(fs.existsSync(path.join(folder, "model.safetensors")));
+});
+
+test("import answers a task, and a cache repo name or target the library refuses answers 4xx", async (t) => {
+  const { hub, root, libF, entry } = await startActionsHub(t);
+  const hfHome = path.join(root, "cache", "huggingface");
+  const repoDir = path.join(hfHome, "hub", "models--acme--Cached");
+  put(repoDir, "refs/main", SHA);
+  put(repoDir, "blobs/aaa", Buffer.from("{}"));
+  put(repoDir, `snapshots/${SHA}/config.json`, Buffer.from(JSON.stringify({ model_type: "llama" })));
+  const weights = Buffer.alloc(1024, "w");
+  weights.writeBigUInt64LE(2n, 0);
+  weights.write("{}", 8, "latin1");
+  put(repoDir, `snapshots/${SHA}/model.safetensors`, weights);
+  const scan = await hub.library.rescan();
+  await waitLibraryTask(hub, scan.taskId);
+  const cached = (await hub.library.list({})).entries.find((item) => item.kind === "hf-cache-repo");
+  const { port } = await mountEntry(t, hub);
+  const libFRoot = (await request(port, "/api/hub/library")).json.roots.find((item) => item.label === "Library F");
+
+  const viewer = await request(port, `/api/hub/library/${cached.id}/import`, { method: "POST", peer: LAN, body: { rootId: libFRoot.id } });
+  assert.equal(viewer.status, 401);
+  const badType = await request(port, `/api/hub/library/${cached.id}/import`, { method: "POST", body: { outputName: 7 } });
+  assert.deepEqual([badType.status, badType.json.error.code], [400, "invalid_request"]);
+  const notCache = await request(port, `/api/hub/library/${entry.id}/import`, { method: "POST", body: { rootId: libFRoot.id } });
+  assert.deepEqual([notCache.status, notCache.json.error.code], [422, "import_unsupported"]);
+  const badTarget = await request(port, `/api/hub/library/${cached.id}/import`, { method: "POST", body: { rootId: libFRoot.id, outputName: "..\\x" } });
+  assert.deepEqual([badTarget.status, badTarget.json.error.code], [400, "invalid_target"]);
+
+  const started = await request(port, `/api/hub/library/${cached.id}/import`, { method: "POST", body: { rootId: libFRoot.id } });
+  assert.equal(started.status, 202, started.text);
+  const task = await pollTask(port, started.json.taskId);
+  assert.deepEqual([task.kind, task.state, task.progress.unit], ["import", "succeeded", "bytes"]);
+  assert.equal(task.result.outputName, "acme-Cached");
+  assert.equal(JSON.stringify(task).includes(JSON.stringify(libF).slice(1, -1)), false);
+  const marker = JSON.parse(fs.readFileSync(path.join(libF, "acme-Cached", ".platform-download.json"), "utf8"));
+  assert.deepEqual([marker.schemaVersion, marker.model, marker.revisionSha], [2, "acme/Cached", SHA]);
+  assert.ok(fs.existsSync(path.join(repoDir, `snapshots/${SHA}/model.safetensors`)), "the cache copy stays");
+  const created = await request(port, `/api/hub/library/${task.result.entryId}`);
+  assert.equal(created.json.entry.provenance.source, "platform-marker");
+});
+
+test("storage usage: roots with ids, models with rootId, no volumes; hidden legacy root; a viewer sees no absolute path", async (t) => {
+  const { hub, root, libF, entry, storage } = await startActionsHub(t);
+  const { port, token } = await mountEntry(t, hub);
+  put(path.join(libF, "tiny"), "x.safetensors.incomplete", Buffer.alloc(40));
+  const refreshed = await request(port, "/api/hub/storage/usage?refresh=1");
+  assert.equal(refreshed.status, 200, refreshed.text);
+
+  const owner = refreshed.json;
+  assert.equal(owner.ok, true);
+  assert.equal(Object.hasOwn(owner, "volumes"), false);
+  assert.deepEqual(owner.roots.map((item) => [item.id, item.default, item.hidden]), [["legacy", true, false], [owner.roots[1].id, false, false]], "the default root first");
+  const libFRoot = owner.roots.find((item) => item.label === "Library F");
+  assert.deepEqual([typeof libFRoot.id, libFRoot.legacy, libFRoot.modelCount, libFRoot.incompleteBytes], ["string", false, 1, 40]);
+  assert.match(libFRoot.volume, process.platform === "win32" ? /^[A-Z]:$/ : /^\//);
+  assert.ok(libFRoot.path.endsWith("libF"));
+  for (const field of ["freeBytes", "totalBytes", "usedByModelsBytes", "pendingBytes", "reserveBytes", "projectedFreeBytes"]) assert.equal(typeof libFRoot[field], "number", field);
+  assert.deepEqual(owner.models.map((model) => [model.name, model.rootId, model.entryId]), [["tiny", libFRoot.id, entry.id]]);
+  assert.equal(owner.models[0].path, path.join(libF, "tiny"));
+  assert.equal(owner.hfCache.path, path.join(root, "cache", "huggingface"));
+  assert.deepEqual(owner.residues.map((item) => [item.entryId, item.incompleteBytes, item.busy]), [[entry.id, 40, false]]);
+  assert.deepEqual([owner.orphanPartials, owner.duplicates], [[], []]);
+
+  // The viewer copy: no absolute path anywhere, the model as "Library F/tiny".
+  const viewer = await request(port, "/api/hub/storage/usage", { peer: LAN });
+  assert.equal(viewer.status, 200, viewer.text);
+  assert.equal(viewer.text.includes(root.replace(/\\/g, "\\\\")), false, "no absolute path reaches a viewer");
+  assert.ok(viewer.json.roots.every((item) => !("path" in item)));
+  assert.equal(viewer.json.hfCache.path, undefined);
+  assert.deepEqual(viewer.json.models.map((model) => model.path), ["Library F/tiny"]);
+
+  // Another root becomes the default: the empty legacy root is flagged hidden.
+  storage.setDefault(libFRoot.id);
+  const moved = await request(port, "/api/hub/storage/usage");
+  assert.deepEqual(moved.json.roots.map((item) => [item.label === "Library F" ? "F" : item.id, item.default, item.hidden]), [["F", true, false], ["legacy", false, true]]);
+  const shown = await request(port, "/api/hub/settings", { method: "PUT", body: { storage: { showLegacyRootWhenEmpty: true } } });
+  assert.equal(shown.status, 200, shown.text);
+  assert.equal((await request(port, "/api/hub/storage/usage")).json.roots.find((item) => item.id === "legacy").hidden, false);
+
+  const shim = await signed(port, "GET", "/api/hub/storage/usage", { principal: "system:hub-shim:vllm", token });
+  assert.equal(shim.status, 403);
+  assert.equal(shim.json.error.code, "principal_route_forbidden");
+});
+
+test("storage cleanup: confirm is required, targets are judged one by one and a viewer cannot call it", async (t) => {
+  const { hub, libF, entry } = await startActionsHub(t);
+  const { port } = await mountEntry(t, hub);
+  put(path.join(libF, "tiny"), "x.safetensors.incomplete", Buffer.alloc(40));
+  const rescan = await hub.library.rescan();
+  await waitLibraryTask(hub, rescan.taskId);
+
+  const viewer = await request(port, "/api/hub/storage/cleanup", { method: "POST", peer: LAN, body: { targets: [{ kind: "incomplete", entryId: entry.id }], confirm: true } });
+  assert.equal(viewer.status, 401);
+  const noConfirm = await request(port, "/api/hub/storage/cleanup", { method: "POST", body: { targets: [{ kind: "incomplete", entryId: entry.id }] } });
+  assert.deepEqual([noConfirm.status, noConfirm.json.error.code], [400, "confirm_required"]);
+  const noTargets = await request(port, "/api/hub/storage/cleanup", { method: "POST", body: { targets: "all", confirm: true } });
+  assert.deepEqual([noTargets.status, noTargets.json.error.code], [400, "invalid_request"]);
+  assert.ok(fs.existsSync(path.join(libF, "tiny", "x.safetensors.incomplete")));
+
+  const result = await request(port, "/api/hub/storage/cleanup", {
+    method: "POST",
+    body: { confirm: true, targets: [{ kind: "incomplete", entryId: entry.id }, { kind: "partial-download", jobId: "dl_unknown" }] },
+  });
+  assert.equal(result.status, 200, result.text);
+  assert.equal(result.json.ok, true);
+  assert.equal(result.json.reclaimedBytes, 40);
+  assert.deepEqual(result.json.results.map((item) => [item.kind, item.ok, item.error?.code ?? null]), [["incomplete", true, null], ["partial-download", false, "download_not_found"]]);
+  assert.equal(fs.existsSync(path.join(libF, "tiny", "x.safetensors.incomplete")), false);
+});
+
+test("the new routes are declared owner-only and the usage view is a registered viewer GET", () => {
+  const key = (route) => `${route.method} ${route.path}`;
+  const adminOnly = new Set(hubRoutes.HUB_ADMIN_ONLY_ROUTES.map(key));
+  for (const route of [
+    "POST /api/hub/library/:id/check-update", "POST /api/hub/library/:id/update", "POST /api/hub/library/:id/import",
+    "POST /api/hub/library/:id/cleanup-residue", "DELETE /api/hub/library/:id", "POST /api/hub/storage/cleanup",
+  ]) {
+    assert.ok(hubRoutes.HUB_ROUTES.some((item) => key(item) === route), `${route} is served`);
+    assert.ok(adminOnly.has(route), `${route} is owner-only`);
+    assert.equal(hubRoutes.SHIM_ROUTES.some((item) => key(item) === route), false, `${route} is not a shim route`);
+  }
+  assert.ok(hubRoutes.HUB_VIEWER_ROUTES.some((item) => key(item) === "GET /api/hub/storage/usage"));
+  const redacted = hubRoutes.redactStorageUsageForViewer({
+    roots: [{ id: "a", label: "Lib A", path: "C:\\m" }],
+    models: [{ name: "x", rootId: "a", path: "C:\\m\\x" }, { name: "y", rootId: "gone", path: "D:\\y" }],
+    hfCache: { path: "C:\\hf", hubBytes: 1 },
+    orphanPartials: [{ jobId: "dl_1", path: "C:\\m\\p", bytes: 5 }],
+    residues: [{ entryId: "lib_1" }],
+  });
+  assert.deepEqual(redacted, {
+    roots: [{ id: "a", label: "Lib A" }],
+    models: [{ name: "x", rootId: "a", path: "Lib A/x" }, { name: "y", rootId: "gone", path: "(library)/y" }],
+    hfCache: { hubBytes: 1 },
+    orphanPartials: [{ jobId: "dl_1", bytes: 5 }],
+    residues: [{ entryId: "lib_1" }],
+  });
+});

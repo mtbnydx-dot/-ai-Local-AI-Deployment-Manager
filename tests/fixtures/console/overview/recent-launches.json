@@ -1,0 +1,5 @@
+{
+  "launches": [
+    { "model": "qwen3-demo-32b", "name": "qwen3-demo", "launchedAt": "@now-1d", "config": {} }
+  ]
+}

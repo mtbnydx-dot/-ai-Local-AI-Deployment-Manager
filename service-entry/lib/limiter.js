@@ -908,6 +908,7 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
     admitBody,
     settle,
     invalidateUsage,
+    quotaTzOffset: tzOffset,
     headers,
     reset,
     describe,

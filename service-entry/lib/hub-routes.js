@@ -4,8 +4,11 @@
 // route-mount table. HUB-1 serves GET /api/hub/status and GET/PUT
 // /api/hub/settings; HUB-8 adds the library list, detail, rescan, verify and
 // identify routes and the task poll; HUB-7 adds the download queue routes
-// (/api/hub/downloads*) and the viewer redaction of the `downloads` event. The later hub packages add their rows to
-// HUB_ROUTES; a path may name segments (/api/hub/library/:id).
+// (/api/hub/downloads*) and the viewer redaction of the `downloads` event;
+// HUB-9 adds the library actions (check-update, update, import,
+// cleanup-residue, delete) and the root-aware /api/hub/storage/*. The later
+// hub packages add their rows to HUB_ROUTES; a path may name segments
+// (/api/hub/library/:id).
 // A path this module does not serve falls through to the entry's 404.
 //
 // Access (03 §13.1). Proxied requests never get here (the entry's proxied-
@@ -80,6 +83,22 @@ function redactLibraryListForViewer(body) {
 function redactLibraryDetailForViewer(body) {
   if (!isPlainObject(body)) return body;
   return isPlainObject(body.entry) ? { ...body, entry: redactLibraryEntryForViewer(body.entry) } : body;
+}
+
+// 03 §13.1: a viewer sees the storage view without absolute paths. A model's
+// path becomes "rootLabel/name"; the roots, the cache and the orphan partial
+// downloads lose theirs.
+function redactStorageUsageForViewer(body) {
+  if (!isPlainObject(body)) return body;
+  const out = { ...body };
+  const labels = new Map((Array.isArray(body.roots) ? body.roots : []).filter(isPlainObject).map((root) => [root.id, root.label]));
+  if (Array.isArray(body.roots)) out.roots = body.roots.map((root) => (isPlainObject(root) ? omit(root, "path") : root));
+  if (Array.isArray(body.models)) {
+    out.models = body.models.map((model) => (isPlainObject(model) ? { ...model, path: `${String(labels.get(model.rootId) || "(library)")}/${String(model.name || "")}` } : model));
+  }
+  if (isPlainObject(body.hfCache)) out.hfCache = omit(body.hfCache, "path");
+  if (Array.isArray(body.orphanPartials)) out.orphanPartials = body.orphanPartials.map((item) => (isPlainObject(item) ? omit(item, "path") : item));
+  return out;
 }
 
 // A task keeps its progress and a short error message; error.detail (a stack
@@ -172,7 +191,14 @@ const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/library/:id", handler: "libraryGet" }),
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/verify", handler: "libraryVerify" }),
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify", handler: "libraryIdentify" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/check-update", handler: "libraryCheckUpdate" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/update", handler: "libraryUpdate" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/import", handler: "libraryImport" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/cleanup-residue", handler: "libraryCleanupResidue" }),
+  Object.freeze({ method: "DELETE", path: "/api/hub/library/:id", handler: "libraryDelete" }),
   Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", handler: "taskGet" }),
+  Object.freeze({ method: "GET", path: "/api/hub/storage/usage", handler: "storageUsage" }),
+  Object.freeze({ method: "POST", path: "/api/hub/storage/cleanup", handler: "storageCleanup" }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface", handler: "authStatus" }),
   Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login", handler: "authLogin" }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", handler: "authAccess" }),
@@ -243,6 +269,7 @@ const HUB_VIEWER_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/library", redact: redactLibraryListForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/library/:id", redact: redactLibraryDetailForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", redact: redactHubTaskBodyForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/storage/usage", redact: redactStorageUsageForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface", redact: redactHfAuthForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", redact: redactHfAccessForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/downloads", redact: redactDownloadListForViewer }),
@@ -263,6 +290,12 @@ const HUB_ADMIN_ONLY_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/library/rescan" }),
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/verify" }),
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/check-update" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/update" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/import" }),
+  Object.freeze({ method: "POST", path: "/api/hub/library/:id/cleanup-residue" }),
+  Object.freeze({ method: "DELETE", path: "/api/hub/library/:id" }),
+  Object.freeze({ method: "POST", path: "/api/hub/storage/cleanup" }),
   Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login" }),
   Object.freeze({ method: "POST", path: "/api/hub/sources/probe" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads" }),
@@ -589,6 +622,13 @@ function createHubRoutes(options = {}) {
     sendError(res, 500, "internal_error", "Service entry error.");
   }
 
+  // An action that may reach the queue answers with the registry's errors
+  // (LibraryError) or the queue's (HubError).
+  function sendActionError(res, error, what) {
+    if (error instanceof HubError) sendHubError(res, error, what);
+    else sendLibraryError(res, error, what);
+  }
+
   function libraryOrFail(res) {
     if (hub.library) return hub.library;
     sendError(res, 503, "hub_unavailable", "The model library is not available.", { hint: "Restart service-entry and check its log for the hub start error." });
@@ -715,6 +755,110 @@ function createHubRoutes(options = {}) {
         sendJson(res, { ok: true, entry });
       } catch (error) {
         sendLibraryError(res, error, "identifying a library entry");
+      }
+    },
+
+    async libraryCheckUpdate(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      try {
+        const update = await library.checkUpdate(params.id);
+        sendJson(res, { ok: true, update });
+      } catch (error) {
+        sendActionError(res, error, "checking a library entry for updates");
+      }
+    },
+
+    async libraryUpdate(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      try {
+        const job = await library.update(params.id, { origin: originOf(req, who, body) });
+        sendJson(res, { ok: true, job }, 201);
+      } catch (error) {
+        sendActionError(res, error, "updating a library entry");
+      }
+    },
+
+    async libraryImport(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      for (const field of ["rootId", "outputName"]) {
+        if (body[field] !== undefined && body[field] !== null && typeof body[field] !== "string") {
+          sendError(res, 400, "invalid_request", `${field} must be a string.`, { details: { field } });
+          return;
+        }
+      }
+      try {
+        const started = await library.importCache(params.id, { rootId: body.rootId, outputName: body.outputName });
+        sendJson(res, { ok: true, taskId: started.taskId, task: started.task }, 202);
+      } catch (error) {
+        sendActionError(res, error, "importing a cached repository");
+      }
+    },
+
+    async libraryCleanupResidue(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      try {
+        const result = await library.cleanupResidue(params.id);
+        sendJson(res, { ok: true, removed: result.removed, removedBytes: result.removedBytes });
+      } catch (error) {
+        sendActionError(res, error, "cleaning residue");
+      }
+    },
+
+    async libraryDelete(req, res, url, who, params) {
+      const library = libraryOrFail(res);
+      if (!library) return;
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (body.confirm !== undefined && typeof body.confirm !== "string") {
+        sendError(res, 400, "invalid_request", "confirm must be the name of the model.", { details: { field: "confirm" } });
+        return;
+      }
+      try {
+        const started = await library.remove(params.id, { confirm: body.confirm });
+        sendJson(res, { ok: true, taskId: started.taskId, task: started.task }, 202);
+      } catch (error) {
+        sendActionError(res, error, "deleting a library entry");
+      }
+    },
+
+    async storageUsage(req, res, url, who) {
+      if (!hub.storage) {
+        sendError(res, 503, "hub_unavailable", "The model storage view is not available.", { hint: "Restart service-entry and check its log for the hub start error." });
+        return;
+      }
+      let usage;
+      try {
+        usage = await hub.storage.usage({ refresh: ["1", "true"].includes(url.searchParams.get("refresh")) });
+      } catch (error) {
+        sendActionError(res, error, "reading the storage usage");
+        return;
+      }
+      sendRead(req, res, url.pathname, usage, who);
+    },
+
+    async storageCleanup(req, res) {
+      if (!hub.storage) {
+        sendError(res, 503, "hub_unavailable", "The model storage view is not available.", { hint: "Restart service-entry and check its log for the hub start error." });
+        return;
+      }
+      const body = await readBody(req, res);
+      if (body === false) return;
+      try {
+        sendJson(res, await hub.storage.cleanup({ targets: body.targets, confirm: body.confirm }));
+      } catch (error) {
+        sendActionError(res, error, "cleaning up storage");
       }
     },
 
@@ -1111,6 +1255,7 @@ module.exports = {
   redactLibraryEntryForViewer,
   redactLibraryEventForViewer,
   redactLibraryListForViewer,
+  redactStorageUsageForViewer,
   registerHubRoutes,
   resolveHubPrincipal,
   tokenAllowed,

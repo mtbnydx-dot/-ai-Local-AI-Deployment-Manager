@@ -1619,6 +1619,10 @@ const {
   testRuntimeCompletionRequest,
 } = runtimeRequestHandlers;
 
+// 02 MOD-9b/MOD-10: one set of model hooks per manager (the calibration store is shared by
+// the PlanCtx's calibrationFor and the supervisor's afterReady).
+const modelHooks = core.models.managerHooks({ managerId: "vllm", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatusFresh, modelStorage, modelsRoot: CONFIG.modelsRoot });
+
 const startRuntimeRequest = createVllmStartRuntimeRequest({
   resolveRequestedModel: value => { const input = modelStorage.fromContainerPath(value); if (!path.isAbsolute(input)) return input; const resolved = modelStorage.resolvePath(input); modelStorage.assertUnlocked([resolved]); return resolved; },
   CONFIG,
@@ -1677,8 +1681,8 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   getLaunchSpec: (launchId) => launchStore.get(launchId),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
-  // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (null until MOD-10).
-  ...core.models.managerHooks({ managerId: "vllm", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatus, modelStorage, modelsRoot: CONFIG.modelsRoot }),
+  // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (MOD-10 store).
+  ...modelHooks,
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller
@@ -5385,6 +5389,8 @@ const runtimeSupervisor = core.engines.createRuntimeSupervisor({
   resolveRuntime: (runtimeId) => core.engines.findHostedRuntime(engineRegistry, "vllm", runtimeId),
   imagePlatform: CONFIG.imagePlatform,
   hooks: {
+    // 02 MOD-10: afterReady records the measured memory; classifyFailure is null until MOD-12.
+    ...modelHooks,
     beforeStart: () => snapshotCurrentStats("before-start"),
     afterChange: () => { clearGatewayRuntimeCache(); clearRuntimeInstancesCache(); },
   },

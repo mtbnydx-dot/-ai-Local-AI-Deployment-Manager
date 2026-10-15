@@ -7,6 +7,7 @@
 // members (knowledge, parsers, compatibility, fit, ...) to this object.
 
 const cache = require("./cache");
+const calibration = require("./calibration");
 const cardEstimate = require("./card-estimate");
 const cardSchema = require("./card-schema");
 const compatibility = require("./compatibility");
@@ -17,6 +18,7 @@ const inspect = require("./inspect");
 const jsonSchemaLite = require("./json-schema-lite");
 const knowledge = require("./knowledge");
 const managerHooks = require("./manager-hooks");
+const observations = require("./observations");
 const planFacts = require("./plan-facts");
 const planner = require("./planner");
 const templateSignatures = require("./template-signatures");
@@ -93,6 +95,11 @@ module.exports = {
     FIT_RESULT_SCHEMA: fit.FIT_RESULT_SCHEMA,
     MEMORY_POLICIES: fit.MEMORY_POLICIES,
   },
+  calibration: {
+    createCalibrationStore: calibration.createCalibrationStore,
+    calibrationFor: calibration.calibrationFor,
+  },
+  observations: { observationFromFacts: observations.observationFromFacts },
   // Plan facts and the per-manager hooks (02 §3.1, MOD-9b).
   planFacts: planFacts.planFacts,
   resolveCard: planFacts.resolveCard,

@@ -1125,6 +1125,68 @@ dialog::backdrop {
 .sf-json { display: flex; flex-direction: column; gap: var(--sp-1); width: 100%; }
 .sf-json-input { font-family: var(--font-mono); font-size: var(--fs-sm); }
 
+/* ---- Overview page (CON-8) ---- */
+.overview-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-4); }
+.overview-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--sp-4); align-items: start; }
+.stat-note { min-height: var(--lh-sm); }
+.overview-banner { align-items: center; flex-wrap: wrap; }
+.overview-list { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.overview-item { display: flex; align-items: flex-start; gap: var(--sp-3); flex-wrap: wrap; }
+.overview-item-text { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.overview-activity { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.overview-activity li { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
+.overview-activity time { flex: none; min-width: 5.5em; }
+@media (max-width: 1023px) {
+  .overview-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 639px) {
+  .overview-tiles { gap: var(--sp-2); }
+}
+
+/* ---- Access pages (CON-20: keys, key detail, clients) ---- */
+.keys-search { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+.keys-filter { width: auto; min-width: 140px; max-width: 100%; }
+.access-cards { list-style: none; margin: 0; padding: 0; }
+.access-card-item { display: flex; }
+.access-card-item > .card { width: 100%; }
+.kd-charts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+.kd-reset { grid-column: 1 / -1; }
+.keys-name { min-width: 11rem; }
+.keys-name a { overflow-wrap: anywhere; }
+
+.kf { gap: var(--sp-6); }
+.kf-group,
+.kf-presets,
+.kf-scopes,
+.kf-overlap { border: 0; padding: 0; margin: 0; min-width: 0; }
+.kf-group,
+.kf-scopes { display: flex; flex-direction: column; gap: var(--sp-4); }
+.kf-overlap { display: flex; flex-direction: column; gap: var(--sp-1); }
+.kf-legend { padding: 0; margin-bottom: var(--sp-3); font-size: var(--fs-md); font-weight: 600; }
+.kf-preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); gap: var(--sp-3); }
+.kf-preset { position: relative; display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3); border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-1); cursor: pointer; }
+.kf-preset input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.kf-preset:hover { background: var(--surface-2); }
+.kf-preset[data-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.kf-preset:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.kf-preset-title { font-weight: 600; }
+.kf-preset-body { color: var(--text-muted); font-size: var(--fs-sm); }
+.kf-scope-group { display: flex; flex-direction: column; gap: var(--sp-1); }
+.kf-scope-title { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
+.kf-scope-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: var(--sp-1) var(--sp-4); }
+.kf-scope { align-items: flex-start; }
+.kf-scope > span { display: flex; flex-direction: column; }
+.kf-limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: var(--sp-4); }
+
+.dialog[data-testid="share-card.root"] { width: min(720px, calc(100vw - 2 * var(--sp-4))); }
+.share-invite { max-height: 260px; margin: 0; padding: var(--sp-3); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.share-qr { display: flex; justify-content: center; }
+
+.clients-steps { display: flex; flex-direction: column; gap: var(--sp-1); margin: 0; padding-inline-start: var(--sp-5); }
+.clients-value { white-space: normal; overflow-wrap: anywhere; }
+.clients-rows dd { margin: 0; }
+
 /* ---- Billing embed (CON-22) ---- */
 .billing-frame {
   display: block;

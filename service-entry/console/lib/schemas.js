@@ -191,15 +191,50 @@ export const SessionGuard = obj({
   pairCommand: opt(str),
 });
 
-/** 05 §6 KeyRecord as the access APIs return it (never the secret). */
+/** 05 §6.5 KeyRecord as the access APIs return it (never the secret). */
 export const KeyGuard = obj({
   id: str,
   name: str,
   preview: opt(str),
   status: str,
   class: opt(str),
+  customerId: maybe(str),
+  holder: maybe(str),
   scopes: opt(arr(str)),
+  models: opt(arr(str)),
+  listeners: opt(arr(str)),
+  limits: opt(record(any)),
   expiresAt: maybe(iso),
+  createdAt: opt(iso),
+  lastUsedAt: maybe(iso),
+  lastUsedCountry: maybe(str),
+});
+
+/** 05 §13.1 GET /api/access/keys. */
+export const KeyListGuard = obj({ ok: opt(bool), items: arr(KeyGuard), nextCursor: maybe(str), counts: opt(record(any)) });
+
+/** 05 §6.6 / §13.1 one entry of GET /api/access/presets. */
+export const PresetGuard = obj({
+  id: str,
+  class: str,
+  scopes: arr(str),
+  models: arr(str),
+  listeners: arr(str),
+  limits: record(any),
+  expiresInDays: maybe(int),
+  requiresCustomer: bool,
+  labelKey: str,
+  descriptionKey: str,
+});
+
+export const PresetListGuard = obj({ ok: opt(bool), presets: arr(PresetGuard) });
+
+/** 05 §13.1 POST /api/access/keys: the secret and the invite block, returned once. */
+export const KeyCreatedGuard = obj({
+  ok: opt(bool),
+  key: KeyGuard,
+  secret: str,
+  share: obj({ openaiBase: str, anthropicBase: str, portalUrl: str, recommendedModel: maybe(str), snippetCurl: str }),
 });
 
 // ---------------------------------------------------------------------------

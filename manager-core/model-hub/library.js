@@ -4,8 +4,11 @@
 // the registered storage roots, the Hugging Face cache and the ModelScope
 // cache; backfills provenance (where a model came from) from the sources
 // that exist today; keeps entry ids stable across renames and migrations;
-// and links duplicates. Nothing here deletes or moves a file: the actions
-// that do (HUB-9) build on this registry.
+// and links duplicates. The actions of 03 §9.5 live here too: update check
+// and update (§9.4), delete, residue cleanup and the import of a Hugging Face
+// cache repository. They are the only code in the hub that removes or copies
+// model files, and each one is guarded (confirm, root, busy path) before it
+// touches the disk; none of them ever stops a container.
 //
 // Layout of this module:
 //   - pure helpers (walking, hashing the file set, quant and format guesses,
@@ -25,8 +28,10 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { Worker } = require("node:worker_threads");
 const { createModelFilesystemStore } = require("../model-filesystem-store");
-const { containsPath, pathKey } = require("../model-storage");
+const { containsPath, overlapsPath, pathKey } = require("../model-storage");
 const { redactSecrets } = require("../secret-redactor");
+const { resolveSelection } = require("./selection");
+const { writeDownloadMarker } = require("./verify");
 
 const LIBRARY_SCHEMA_VERSION = 1;
 const FILES_CAP = 5000;
@@ -42,6 +47,8 @@ const HF_CACHE_ROOT_ID = "hf-cache";
 const MS_CACHE_ROOT_ID = "modelscope-cache";
 const HF_CACHE_LABEL = "Hugging Face cache";
 const MS_CACHE_LABEL = "ModelScope cache";
+const TERMINAL_JOB_STATES = Object.freeze(["ready", "failed", "cancelled"]);
+const MARKER_FILE = ".platform-download.json";
 const CONFIDENCES = Object.freeze(["declared", "detected", "unverified", "unknown"]);
 
 const WEIGHT_RE = /\.(gguf|safetensors|bin|pt|pth)$/i;
@@ -363,6 +370,33 @@ async function readSmallJson(file, maxBytes = 1024 * 1024) {
   }
 }
 
+/**
+ * Bytes of the regular files under `root`. Links are not followed, so the
+ * blobs of a Hugging Face cache count once, and a vanished file counts zero.
+ */
+async function dirBytes(root) {
+  let total = 0;
+  async function walk(dir) {
+    let list;
+    try {
+      list = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const item of list) {
+      const full = path.join(dir, item.name);
+      try {
+        if (item.isDirectory()) await walk(full);
+        else if (item.isFile()) total += (await fsp.stat(full)).size;
+      } catch {
+        // A file that changes while it is counted is skipped.
+      }
+    }
+  }
+  await walk(root);
+  return total;
+}
+
 async function mapLimit(items, limit, mapper) {
   const results = new Array(items.length);
   let next = 0;
@@ -430,7 +464,7 @@ function scrubPaths(text) {
 /**
  * createLibrary({ store, modelStorage, fsStore, hfHome, fit, models, providers,
  * events, getSettings, aiRoot, ledgerFiles, migrationsDir, hashFile, clock,
- * logger, watchMs }) → Library (03 §3.1).
+ * logger, watchMs, enqueue, getJobs, getBusyPaths, disk }) → Library (03 §3.1).
  *
  * `store` is the hub store (library.json). `modelStorage` is required;
  * `fsStore`, `fit`, `models` and `providers` are optional and degrade
@@ -459,6 +493,14 @@ function createLibrary(options = {}) {
     : aiRoot ? ["vllm-manager", "llama-manager"].map((name) => path.join(aiRoot, name, "logs", "jobs-ledger.json")) : [];
   const migrationsDir = options.migrationsDir || (modelStorage.file ? path.join(path.dirname(modelStorage.file), "model-migrations") : null);
   const watchMs = Number.isFinite(Number(options.watchMs)) ? Number(options.watchMs) : STORAGE_WATCH_MS;
+  // The actions of 03 §9.5. enqueue(input, ctx) is the hub's (update needs
+  // it); getJobs() lists the queue's live jobs and getBusyPaths() is the
+  // storage probe (running containers, migration locks); disk measures the
+  // drive for an import. Each is optional and the action degrades safely.
+  const enqueue = typeof options.enqueue === "function" ? options.enqueue : null;
+  const getJobs = typeof options.getJobs === "function" ? options.getJobs : () => [];
+  const getBusyPaths = typeof options.getBusyPaths === "function" ? options.getBusyPaths : null;
+  const disk = options.disk && typeof options.disk.freeBytes === "function" ? options.disk : null;
 
   let entries = [];
   let scannedAt = null;
@@ -1728,6 +1770,512 @@ function createLibrary(options = {}) {
     return entry ? { entryId: entry.id, entry: toPublic(entry) } : null;
   }
 
+  // --- guards shared by the actions that touch files (03 §9.5, §17) ---
+
+  // Long actions are awaited by stop(), so a restart does not cut a copy short unannounced.
+  function track(promise) {
+    backgroundWork.add(promise);
+    promise.finally(() => backgroundWork.delete(promise)).catch(() => {});
+    return promise;
+  }
+
+  function liveJobs() {
+    try {
+      const list = getJobs();
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** A job that may still write the folder: any job not yet ready, failed or cancelled (paused and retrying included). */
+  function activeJobOn(target) {
+    return liveJobs().find((job) => job && !TERMINAL_JOB_STATES.includes(job.state) && job.target?.localDir && overlapsPath(job.target.localDir, target)) || null;
+  }
+
+  function pathBusy(label, details = {}) {
+    return new LibraryError("path_busy", "The folder is in use; nothing was changed.", {
+      status: 409,
+      hint: "Wait for the task to finish or cancel it, then try again.",
+      details: { usedBy: String(label).slice(0, 200), ...details },
+    });
+  }
+
+  /**
+   * Refuses (409 path_busy) while a queue job, a storage operation lock
+   * (migration, verification) or a running container uses the path. A probe
+   * that cannot answer refuses too: nothing is changed on a guess.
+   */
+  async function assertNotBusy(target) {
+    const job = activeJobOn(target);
+    if (job) throw pathBusy(`download ${job.id}`, { jobId: job.id, state: job.state });
+    if (getBusyPaths) {
+      let busy;
+      try {
+        busy = await getBusyPaths();
+      } catch (error) {
+        throw new LibraryError("path_busy", "The folder could not be checked for running containers; nothing was changed.", {
+          status: 409,
+          details: { reason: redactSecrets(String(error?.message || error)).slice(0, 200) },
+        });
+      }
+      const hit = (Array.isArray(busy) ? busy : []).find((item) => item && item.path && overlapsPath(item.path, target));
+      if (hit) throw pathBusy(hit.label || "a running task");
+    }
+    try {
+      modelStorage.assertUnlocked([target]);
+    } catch {
+      throw pathBusy("a storage operation");
+    }
+  }
+
+  function storageFailure(error, field = "target") {
+    const status = Number(error?.status);
+    return new LibraryError("invalid_target", String(error?.message || "The folder is not usable."), {
+      status: status === 503 ? 503 : status === 409 ? 409 : 400,
+      details: { field },
+    });
+  }
+
+  // --- update check and update (03 §9.4) ---
+
+  function providerFor(namespace) {
+    if (!providers) return null;
+    const id = namespace === "modelscope" ? "modelscope" : "huggingface";
+    if (typeof providers.forNamespace === "function") return providers.forNamespace(id);
+    if (typeof providers.get === "function") return providers.get(id);
+    return null;
+  }
+
+  function fileDiffers(local, remote) {
+    if (!local) return true;
+    if (local.sha256 && remote.sha256) return String(local.sha256).toLowerCase() !== String(remote.sha256).toLowerCase();
+    if (local.gitOid && remote.gitOid) return String(local.gitOid).toLowerCase() !== String(remote.gitOid).toLowerCase();
+    // No hash both sides can compare: a different size is a change, the same size is not.
+    return remote.size !== null && remote.size !== undefined && Number.isFinite(Number(remote.size)) && Number(local.size) !== Number(remote.size);
+  }
+
+  /**
+   * Compares an entry with the remote revision it came from. Returns
+   * { update, selection } and never throws for a provider problem: that is
+   * `update.status = "error"` (the entry keeps working). The selection is the
+   * artifact key when the remote still has it, else the entry's own paths.
+   */
+  async function inspectUpdate(entry) {
+    const provenance = entry.provenance || {};
+    const namespace = namespaceOf(provenance.provider);
+    const repo = cleanRepo(provenance.repo);
+    const checkedAt = nowIso();
+    const base = { status: "unsupported", remoteSha: null, changedFiles: 0, bytesToDownload: 0, checkedAt };
+    // Nothing to compare with: the console offers "identify" (03 §9.4).
+    if (!namespace || !repo || (provenance.confidence !== "declared" && provenance.confidence !== "detected")) return { update: { ...base, action: "identify" }, selection: null };
+    const provider = providerFor(namespace);
+    if (!provider || typeof provider.getRepo !== "function") {
+      return { update: { ...base, status: "error", error: { code: "hub_unavailable" } }, selection: null };
+    }
+    let manifest;
+    try {
+      manifest = await provider.getRepo(repo, { revision: provenance.revision || "main" });
+    } catch (error) {
+      return { update: { ...base, status: "error", remoteSha: entry.update?.remoteSha ?? null, error: { code: String(error?.code || "provider_error").slice(0, 60) } }, selection: null };
+    }
+    const remoteSha = cleanSha(manifest?.revisionSha);
+    const remoteFiles = Array.isArray(manifest?.files) ? manifest.files : [];
+    const remoteByPath = new Map(remoteFiles.filter((file) => file && typeof file.path === "string").map((file) => [file.path, file]));
+    let selected = null;
+    let selection = null;
+    if (provenance.artifactKey) {
+      try {
+        selected = resolveSelection(manifest, { artifactKey: provenance.artifactKey }).files;
+        selection = { artifactKey: provenance.artifactKey };
+      } catch {
+        selected = null;
+      }
+    }
+    if (!selected) {
+      selected = entry.files.map((file) => remoteByPath.get(file.path)).filter(Boolean);
+      selection = selected.length ? { files: selected.map((file) => file.path) } : null;
+    }
+    const sameRevision = Boolean(remoteSha && provenance.revisionSha && sameText(remoteSha, provenance.revisionSha));
+    let changedFiles = 0;
+    let bytesToDownload = 0;
+    if (!sameRevision) {
+      const local = new Map(entry.files.map((file) => [file.path, file]));
+      for (const remote of selected) {
+        if (!fileDiffers(local.get(remote.path), remote)) continue;
+        changedFiles += 1;
+        bytesToDownload += Number(remote.size) || 0;
+      }
+    }
+    const update = { status: changedFiles > 0 ? "available" : "current", remoteSha, changedFiles, bytesToDownload, checkedAt };
+    return { update, selection };
+  }
+
+  const updateChecks = new Map();
+
+  /**
+   * checkUpdate(id) → update { status, remoteSha, changedFiles,
+   * bytesToDownload, checkedAt }. The result is stored on the entry. An entry
+   * with no repo is `unsupported` (the console offers "identify"); a hub that
+   * cannot be reached is `error` with `error.code`, not an HTTP failure.
+   */
+  async function checkUpdate(id) {
+    const entry = findEntry(id);
+    if (!entry) throw new LibraryError("library_entry_not_found", "No such library entry.", { status: 404 });
+    const key = entry.id;
+    const running = updateChecks.get(key);
+    if (running) return running;
+    const run = (async () => {
+      const { update } = await inspectUpdate(entry);
+      const live = findEntry(key);
+      if (live) {
+        live.update = update;
+        await persist();
+        emitChanged([live.id]);
+      }
+      return JSON.parse(JSON.stringify(update));
+    })();
+    updateChecks.set(key, run);
+    try {
+      return await run;
+    } finally {
+      updateChecks.delete(key);
+    }
+  }
+
+  async function readMarkerFile(dir) {
+    const marker = await readSmallJson(path.join(dir, MARKER_FILE));
+    return isPlainObject(marker.value) ? marker.value : null;
+  }
+
+  /**
+   * update(id, ctx) → DownloadJob. Enqueues a job into the entry's own folder
+   * at the revision the check found (`origin.kind = "library-update"`); the
+   * CLI skips files whose local etag matches, so only the changed files
+   * transfer. A folder without a platform marker gets a v1 marker first (the
+   * same one a first download writes), because the queue resumes only into a
+   * folder whose marker names the same repo.
+   */
+  async function update(id, ctx = {}) {
+    const entry = findEntry(id);
+    if (!entry) throw new LibraryError("library_entry_not_found", "No such library entry.", { status: 404 });
+    if (!enqueue) throw new LibraryError("hub_unavailable", "The download queue is not available.", { status: 503 });
+    const snapshot = await modelStorage.snapshot();
+    const root = entry.rootId ? snapshot.roots.find((item) => item.id === entry.rootId) : null;
+    if (entry.kind !== "folder" || !root || root.mode === "model") {
+      throw new LibraryError("update_unsupported", "Only a model folder inside a library root can be updated in place.", {
+        status: 422,
+        hint: "Download the new revision as a new model instead.",
+      });
+    }
+    const { update: result, selection } = await inspectUpdate(entry);
+    const live = findEntry(entry.id);
+    if (live) {
+      live.update = result;
+      await persist();
+      emitChanged([live.id]);
+    }
+    if (result.status === "unsupported") {
+      throw new LibraryError("update_unsupported", "This model has no known repository, so there is nothing to compare with.", { status: 422, hint: "Identify the repository first." });
+    }
+    if (result.status === "error") {
+      throw new LibraryError("update_check_failed", "The remote revision could not be read.", { status: 502, details: { code: result.error?.code || "provider_error" } });
+    }
+    if (result.status === "current" || !selection) {
+      throw new LibraryError("already_current", "This model is already up to date.", { status: 409, details: { remoteSha: result.remoteSha } });
+    }
+    const provenance = entry.provenance;
+    const repo = cleanRepo(provenance.repo);
+    const outputName = path.basename(entry.path);
+    let marker = await readMarkerFile(entry.path);
+    if (!marker || !marker.model) {
+      const created = { model: repo, source: provenance.transport || provenance.provider || "huggingface", precision: entry.quant || "", createdAt: nowIso() };
+      const file = path.join(entry.path, MARKER_FILE);
+      const temp = `${file}.${process.pid}.tmp`;
+      await fsp.writeFile(temp, `${JSON.stringify(created, null, 2)}\n`);
+      await fsp.rename(temp, file);
+      marker = created;
+    }
+    const input = {
+      provider: namespaceOf(provenance.provider),
+      repo,
+      revision: provenance.revision || "main",
+      selection,
+      target: { rootId: entry.rootId, outputName },
+      allowDuplicate: true,
+    };
+    const origin = { ...(isPlainObject(ctx.origin) ? ctx.origin : {}), kind: "library-update", entryId: entry.id };
+    return enqueue(input, { origin, markerMetadata: { model: marker.model, source: marker.source, precision: marker.precision } });
+  }
+
+  // --- cleanup of .incomplete residue (03 §9.5) ---
+
+  async function refreshEntry(entry) {
+    const snapshot = await modelStorage.snapshot();
+    const candidate = candidateForPath(entry.path, snapshot);
+    if (candidate) await runScan({ onlyCandidates: [candidate] });
+    return findEntry(entry.id);
+  }
+
+  /**
+   * cleanupResidue(id) → { removed[], removedBytes }. Removes the `.incomplete`
+   * files of the folder and nothing else. 409 path_busy while a job is
+   * active, paused or retrying on it (the legacy rule), or the folder is
+   * locked.
+   */
+  async function cleanupResidue(id) {
+    const entry = findEntry(id);
+    if (!entry) throw new LibraryError("library_entry_not_found", "No such library entry.", { status: 404 });
+    if (entry.kind !== "folder" || !entry.rootId) {
+      throw new LibraryError("residue_unsupported", "Only a model folder inside a library root has residue to clean.", { status: 422 });
+    }
+    const job = activeJobOn(entry.path);
+    if (job) throw pathBusy(`download ${job.id}`, { jobId: job.id, state: job.state });
+    const cleaner = fsStore && typeof fsStore.cleanupIncompleteFiles === "function"
+      ? fsStore
+      : createModelFilesystemStore({ storage: modelStorage, modelsRoot: path.dirname(entry.path), hfCache: hfHome });
+    let result;
+    try {
+      result = await cleaner.cleanupIncompleteFiles(entry.path);
+    } catch (error) {
+      if (Number(error?.status) === 409) throw pathBusy("a storage operation");
+      throw storageFailure(error, "path");
+    }
+    await refreshEntry(entry);
+    emitChanged([entry.id]);
+    return { removed: result.removed, removedBytes: result.removedBytes };
+  }
+
+  // --- delete (03 §9.5, §17) ---
+
+  /**
+   * The folder a delete would remove, after the structural guards: never a
+   * root (nor a folder holding one), always inside the registered roots
+   * (resolvePath with allowRoot: false), and a Hugging Face or ModelScope
+   * cache repo only directly under its cache.
+   */
+  function deletionTarget(entry) {
+    const target = path.resolve(entry.path);
+    if (entry.kind === "hf-cache-repo" || entry.kind === "modelscope-cache") {
+      const base = path.join(hfHome, entry.kind === "hf-cache-repo" ? "hub" : "modelscope");
+      const direct = entry.kind === "hf-cache-repo" ? pathKey(path.dirname(target)) === pathKey(base) && path.basename(target).startsWith("models--") : containsPath(base, target) && pathKey(base) !== pathKey(target);
+      if (!direct) throw new LibraryError("invalid_target", "The cache folder is not where the cache keeps repositories.", { status: 400 });
+      return target;
+    }
+    return guardedFolder(target);
+  }
+
+  // The structural guards of every folder delete: never a root (nor a folder
+  // holding one), always inside a registered root, never a migrated-away path.
+  function guardedFolder(value) {
+    const target = path.resolve(value);
+    if (modelStorage.roots().some((root) => containsPath(target, root.path))) {
+      throw new LibraryError("root_not_deletable", "A model library root cannot be deleted, nor a folder that contains one.", {
+        status: 400,
+        hint: "Unregister the root in the storage settings instead.",
+      });
+    }
+    try {
+      modelStorage.resolvePath(target, { follow: false, allowRoot: false });
+    } catch (error) {
+      throw storageFailure(error, "path");
+    }
+    if (modelStorage.isRetired(target)) throw new LibraryError("invalid_target", "This folder was migrated; delete the migrated copy instead.", { status: 409 });
+    return target;
+  }
+
+  /**
+   * removeFolder(path) → bytes. Deletes a folder that is no library entry any
+   * more (the leftover of a failed or cancelled download) under the same
+   * guards as remove(); an entry registered at the path is dropped with it.
+   */
+  async function removeFolder(value) {
+    const target = guardedFolder(value);
+    await assertNotBusy(target);
+    const bytes = await dirBytes(target);
+    await fsp.rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    const gone = entries.filter((item) => pathKey(item.path) === pathKey(target));
+    if (gone.length) {
+      entries = entries.filter((item) => !gone.includes(item));
+      linkDuplicates(entries);
+      await persist();
+      emitChanged(gone.map((item) => item.id));
+    }
+    return bytes;
+  }
+
+  /**
+   * remove(id, { confirm }) → { taskId, task }. Guards run before anything
+   * is touched: the root guard, `confirm === displayName`, and the busy
+   * check (jobs, locks, mounted containers; a container is never stopped).
+   * The removal itself is a task and is idempotent: a folder that is already
+   * gone just drops the entry.
+   */
+  async function remove(id, { confirm } = {}) {
+    const entry = findEntry(id);
+    if (!entry) throw new LibraryError("library_entry_not_found", "No such library entry.", { status: 404 });
+    const target = deletionTarget(entry);
+    if (typeof confirm !== "string" || confirm !== entry.displayName) {
+      throw new LibraryError("confirm_required", "Type the model's name to delete it.", { status: 400, details: { field: "confirm", expected: "displayName" } });
+    }
+    const existing = activeTask("delete", entry.id);
+    if (existing) return { taskId: existing.id, task: publicTask(existing) };
+    await assertNotBusy(target);
+    const task = newTask("delete", entry.id);
+    task.key = entry.id;
+    task.progress = { done: 0, total: 1, unit: "folders" };
+    track(runTask(task, async (progress) => {
+      // The check ran a moment ago; a job may have started since.
+      await assertNotBusy(target);
+      const bytes = await dirBytes(target);
+      await fsp.rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      entries = entries.filter((item) => item.id !== entry.id);
+      linkDuplicates(entries);
+      await persist();
+      emitChanged([entry.id, ...entry.duplicates]);
+      progress({ done: 1, total: 1 });
+      return { entryId: entry.id, reclaimedBytes: bytes };
+    }));
+    return { taskId: task.id, task: publicTask(task) };
+  }
+
+  // --- import of a Hugging Face cache repository (03 §9.5) ---
+
+  /**
+   * importCache(id, { rootId, outputName }) → { taskId, task }. Copies the
+   * current snapshot's real files into `<root>/<outputName>`, hashes each in
+   * the worker, compares with the cache's recorded hash, and writes marker v2
+   * with the entry's provenance. The cache copy is kept. The target comes
+   * from modelStorage.downloadTarget and follows the target-occupied rule of
+   * a download (409): a folder with other files is refused, one with the
+   * same marker is resumed into.
+   */
+  async function importCache(id, input = {}) {
+    const entry = findEntry(id);
+    if (!entry) throw new LibraryError("library_entry_not_found", "No such library entry.", { status: 404 });
+    const repo = cleanRepo(entry.provenance?.repo);
+    if (entry.kind !== "hf-cache-repo" || !entry.cache?.currentSha || !repo) {
+      throw new LibraryError("import_unsupported", "Only a Hugging Face cache repository with a known name can be imported.", { status: 422 });
+    }
+    for (const field of ["rootId", "outputName"]) {
+      if (input[field] !== undefined && input[field] !== null && typeof input[field] !== "string") {
+        throw new LibraryError("invalid_request", `${field} must be a string.`, { status: 400, details: { field } });
+      }
+    }
+    const outputName = typeof input.outputName === "string" && input.outputName.trim() ? input.outputName.trim() : repo.replace("/", "-");
+    let target;
+    try {
+      target = modelStorage.downloadTarget(input.rootId || null, outputName);
+    } catch (error) {
+      throw storageFailure(error);
+    }
+    const key = `${entry.id}:${pathKey(target)}`;
+    const running = activeTask("import", key);
+    if (running) return { taskId: running.id, task: publicTask(running) };
+    const sha = entry.cache.currentSha;
+    const snapshotDir = path.join(entry.path, "snapshots", sha);
+    const tree = await walkTree(snapshotDir);
+    const files = tree.files.filter((file) => classifyFile(file.rel) === "payload");
+    if (!files.length) throw new LibraryError("import_empty", "The cached snapshot has no files to import.", { status: 422 });
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    if (disk) {
+      const free = Number(await Promise.resolve(disk.freeBytes(target)).catch(() => null));
+      if (Number.isFinite(free)) {
+        const reserve = typeof disk.reserveBytes === "function" ? Number(disk.reserveBytes(free)) || 0 : 0;
+        if (totalBytes > free - reserve) {
+          throw new LibraryError("disk_full", "The target drive does not have room for this import.", { status: 507, details: { freeBytes: free, reserveBytes: reserve, totalBytes } });
+        }
+      }
+    }
+    const busyJob = activeJobOn(target);
+    if (busyJob) throw pathBusy(`download ${busyJob.id}`, { jobId: busyJob.id, state: busyJob.state });
+    const provenance = entry.provenance;
+    const quant = entry.quant || "";
+    const transport = provenance.transport || provenance.provider || "huggingface";
+    const existed = fs.existsSync(target);
+    // The folder is locked like a migration's while files are copied into it.
+    const lockId = crypto.randomUUID();
+    try {
+      modelStorage.acquireOperation([target], "import", lockId);
+    } catch {
+      throw pathBusy("a storage operation");
+    }
+    try {
+      // The target-occupied rule, and the v1 marker a resume matches against.
+      modelStorage.prepareDownload(target, { model: repo, source: transport, precision: quant });
+    } catch (error) {
+      modelStorage.releaseOperation(lockId);
+      if (Number(error?.status) === 409) {
+        throw new LibraryError("target_occupied", "The target folder already holds other files.", { status: 409, hint: "Choose another folder name." });
+      }
+      throw storageFailure(error);
+    }
+    const task = newTask("import", entry.id);
+    task.key = key;
+    task.progress = { done: 0, total: totalBytes, unit: "bytes" };
+    const known = new Map(entry.files.map((file) => [file.path, { sha256: file.sha256 || null, gitOid: file.gitOid || null }]));
+    track(runTask(task, async (progress) => {
+      try {
+        const realRepo = await fsp.realpath(entry.path);
+        const copied = [];
+        let done = 0;
+        for (const file of files) {
+          // A stopping hub leaves the copy for the next import to resume into.
+          if (stopped) throw new LibraryError("hub_stopping", "The hub is stopping; repeat the import to continue.", { status: 503 });
+          const dest = path.join(target, ...file.rel.split("/"));
+          if (!containsPath(target, dest)) throw new LibraryError("unsafe_path", "A cached file name points outside the target folder.", { status: 400 });
+          const real = await fsp.realpath(file.full);
+          if (!containsPath(realRepo, real)) throw new LibraryError("import_unsafe_link", "A cached file links to a place outside the cache repository.", { status: 400 });
+          await fsp.mkdir(path.dirname(dest), { recursive: true });
+          const temp = `${dest}.incomplete`;
+          try {
+            await fsp.copyFile(real, temp);
+            const digest = (await hashFile(temp, { onProgress: (bytes) => progress({ done: done + bytes, total: totalBytes, unit: "bytes" }) })).toLowerCase();
+            const expected = known.get(file.rel) || { sha256: null, gitOid: null };
+            if (expected.sha256 && expected.sha256.toLowerCase() !== digest) {
+              throw new LibraryError("import_hash_mismatch", "A copied file does not match the hash the cache recorded.", { status: 422, details: { path: file.rel } });
+            }
+            await fsp.rename(temp, dest);
+            // The marker keeps the hub's convention: sha256 where the cache knew
+            // one, the git object id for the other files it knew, so the copy has
+            // the same fileset hash as the cache entry. Unknown files get the
+            // sha256 just computed.
+            copied.push({ path: file.rel, size: file.size, sha256: expected.sha256 ? digest : expected.gitOid ? null : digest, gitOid: expected.gitOid });
+          } finally {
+            await fsp.rm(temp, { force: true }).catch(() => {});
+          }
+          done += file.size;
+          progress({ done, total: totalBytes, unit: "bytes" });
+        }
+        await writeDownloadMarker({
+          id: null,
+          target: { localDir: target },
+          artifact: { provider: provenance.provider, repo, quant: quant || null, revision: provenance.revision || null, revisionSha: sha, artifactKey: provenance.artifactKey || null },
+          transfer: { options: { source: transport } },
+        }, { files: copied, clock });
+        const snapshot = await modelStorage.snapshot();
+        const candidate = candidateForPath(target, snapshot);
+        if (!candidate) throw new LibraryError("invalid_target", "The target folder is not a library folder.", { status: 400 });
+        await runScan({ onlyCandidates: [candidate] });
+        const created = entries.find((item) => pathKey(item.path) === pathKey(target));
+        emitChanged([entry.id, ...(created ? [created.id] : [])]);
+        return { entryId: created ? created.id : null, outputName, files: copied.length, bytes: done };
+      } catch (error) {
+        // A folder this import created holds nothing else: take it back.
+        if (!existed) await fsp.rm(target, { recursive: true, force: true }).catch(() => {});
+        throw error;
+      } finally {
+        modelStorage.releaseOperation(lockId);
+      }
+    }));
+    return { taskId: task.id, task: publicTask(task) };
+  }
+
+  /** Every entry without its file list, for the storage view. */
+  function all() {
+    return entries.map((entry) => toPublic(entry, { files: false }));
+  }
+
   // --- lifecycle ---
 
   function readStorageMtime() {
@@ -1782,6 +2330,13 @@ function createLibrary(options = {}) {
     rescan,
     verify,
     identify,
+    checkUpdate,
+    update,
+    importCache,
+    remove,
+    cleanupResidue,
+    removeFolder,
+    all,
     findByPath,
     registerFromJob,
     checkStorageChanged,
@@ -1811,6 +2366,7 @@ module.exports = {
   computeFilesetHash,
   createLibrary,
   deriveProvenance,
+  dirBytes,
   hashFileInWorker,
   identityKeyFor,
   repoCandidatesFromName,
