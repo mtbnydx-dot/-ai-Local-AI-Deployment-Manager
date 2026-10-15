@@ -3,16 +3,20 @@ const crypto = require("node:crypto");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
+const { promisify } = require("node:util");
 const { pipeline, Readable, Transform } = require("node:stream");
 const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
 const core = require("../manager-core");
 const { createEntrySecurity } = require("./lib/security");
 const { createGatewayPipeline, scopeForGatewayPath } = require("./lib/gateway-pipeline");
-const { newRequestId } = require("./lib/public-errors");
+const { createLimiter } = require("./lib/limiter");
+const { newRequestId, sendPublicError } = require("./lib/public-errors");
 const { startListeners, tagListener } = require("./lib/listeners");
 const { createPublicListener } = require("./lib/public-listener");
+const { createPortalRoutes } = require("./lib/portal-routes");
+const { createPublicData, startStatusSampler } = require("./lib/status-sampler");
 const { createBillingStore } = require("./lib/billing-store");
 const { createBillingHttpHandler, strictLocalBillingAdmin } = require("./lib/billing-http");
 const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview");
@@ -54,15 +58,20 @@ const PROCESS_EXIT_LOG = path.join(ROOT, "logs", "process-exit.log");
 // while it is null, or disabled (TELEMETRY_ENABLED=0), the gateway runs
 // exactly as before.
 let telemetry = null;
-// 401 风暴防护：同一客户端地址在窗口内连续鉴权失败即临时封禁，公网扫描者
-// 拿到的是廉价的 429 而不是每次一遍密钥库读取 + 访问日志。
-const authGuard = core.createAuthFailureGuard({
-  maxFailures: Number(process.env.SERVICE_ENTRY_AUTH_FAIL_LIMIT || 20),
-  windowMs: Number(process.env.SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS || 60) * 1000,
-  banMs: Number(process.env.SERVICE_ENTRY_AUTH_BAN_SECONDS || 600) * 1000,
+// The one limiter (05 §9, lib/limiter.js): rpm/tpm buckets, the per-IP
+// pre-auth bucket, quotas, the public share gate, and the persistent bans.
+// 401 风暴防护：同一客户端地址在窗口内连续鉴权失败即临时封禁（落在访问库里，
+// 重启不丢，再次触发时间逐级加长），公网扫描者拿到的是廉价的 429 而不是每次
+// 一遍密钥库读取 + 访问日志。Settings are read live from the access config;
+// SERVICE_ENTRY_RATE_LIMIT_RPM still wins for the keyless ADMIN gateway.
+const gatewayLimiter = createLimiter({
+  store: () => getAccessStore(),
+  config: () => security.accessConfig(),
+  gatewayRpm: () => Number(process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 0),
   // security.ban in the telemetry events (04 §9 source 6).
   onBan: (ban) => telemetry?.recordSecurityBan?.(ban),
 });
+const authGuard = gatewayLimiter.bans;
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
 const FLEET_SETTINGS_FILE = path.join(ROOT, "data", "fleet-settings.json");
 const BILLING_DB_FILE = process.env.AI_BILLING_DB || path.join(ROOT, "data", "platform-billing.sqlite");
@@ -90,7 +99,6 @@ const GATEWAY_TOTAL_BUFFER_BYTES = boundedByteLimit(
   512 * 1024 * 1024,
 );
 let gatewayBufferedBodyBytes = 0;
-const entryRateBuckets = new Map();
 const entryConcurrencyBuckets = new Map();
 const entryConcurrencyQueues = new Map();
 const ttsReconciler = createTtsReconciler({ getStore: () => getBillingStore(), getToken: () => security.getTrustToken(), getPort: () => TTS_GATEWAY_PORT, getKey: () => String(process.env.TTS_UPSTREAM_API_KEY || "").trim() });
@@ -109,6 +117,10 @@ const SERVICE_ENTRY_INSTANCE_HEADER = core.SERVICE_ENTRY_INSTANCE_HEADER || "x-s
 const SERVICE_ENTRY_INSTANCE_SIGNATURE_HEADER = core.SERVICE_ENTRY_INSTANCE_SIGNATURE_HEADER || "x-service-entry-instance-signature";
 // Headers a client must never be able to set: they are how a manager decides
 // whether a loopback hop really came from this process.
+// The credential headers a manager reads (gateway-utils extractServiceApiKey).
+const ENTRY_KEY_HEADERS = ["authorization", "x-api-key", "api-key", "anthropic-api-key", "anthropic_api_key"];
+// Client headers of these families never reach a manager (05 §7.1).
+const ENTRY_RESERVED_HEADER_PREFIXES = ["x-service-entry-", "x-ai-internal-", "x-ai-billing-"];
 const TRUST_HEADER_NAMES = [
   core.GATEWAY_MARKER_HEADER,
   core.GATEWAY_CLIENT_HEADER,
@@ -171,6 +183,8 @@ const ROUTE_MODULES = [
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
   "./lib/telemetry-routes", // 04 TEL-18  /api/telemetry/import (TEL-11 adds the query routes)
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
+  "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
+  "./lib/access-internal-routes", // 05 PUB-10  /internal/access/* (verify, legacy manager key forwarders)
   // "./lib/platform-routes",     // 06 OPS-13
 ];
 
@@ -183,6 +197,8 @@ let modelHub = null;
 let billingStore = null;
 let accessStore = null;
 let accessStoreFailure = null;
+// The status sampler behind the portal JSON documents (05 §12.2); it writes into the access store.
+let statusSampler = null;
 const managerModelCache = new Map();
 const managerStatusCache = new Map();
 // Manager liveness rarely flips, so a short probe cache turns the per-request
@@ -208,7 +224,14 @@ function getAccessStore() {
   if (accessStore) return accessStore;
   if (accessStoreFailure && Date.now() - accessStoreFailure.at < ACCESS_STORE_RETRY_MS) throw accessStoreFailure.error;
   try {
-    accessStore = createKeysStore({ DatabaseSync, file: ACCESS_DB_FILE });
+    accessStore = createKeysStore({
+      DatabaseSync,
+      file: ACCESS_DB_FILE,
+      // An admin ban or unban (06 §13.3) reaches the in-memory ban list.
+      onChange: (change) => {
+        if (change?.type === "ban") gatewayLimiter.bans.refresh();
+      },
+    });
     accessStoreFailure = null;
     return accessStore;
   } catch (error) {
@@ -219,6 +242,10 @@ function getAccessStore() {
 }
 
 function closeAccessStore() {
+  if (statusSampler) {
+    statusSampler.stop();
+    statusSampler = null;
+  }
   if (!accessStore) return;
   try {
     accessStore.close();
@@ -244,6 +271,19 @@ async function migrateLegacyKeys(options = {}) {
   });
 }
 
+// The dry run of migrateLegacyKeys (05 §13.1 migration/plan): the same inputs,
+// nothing written.
+async function planLegacyKeys(options = {}) {
+  const store = options.store || getAccessStore();
+  const managers = (options.managers || MANAGERS).map(({ id, billingId, root }) => ({ id, billingId, root }));
+  const billing = options.billingStore || getBillingStore();
+  return keyMigration.planLegacyKeyMigration({
+    store,
+    managers,
+    listBindings: () => keyMigration.listBillingBindings(billing),
+  });
+}
+
 // Entry start: open the access store and migrate before listening. Neither
 // failure stops the entry; the store is retried by its next caller and an
 // incomplete migration by the next start.
@@ -255,6 +295,8 @@ async function prepareAccessStore(options = {}) {
   } catch (error) {
     return { ok: false, code: error?.code || "access_store_unavailable" };
   }
+  // Persistent bans are loaded before the entry listens (05 §9.3).
+  gatewayLimiter.bans.refresh();
   try {
     const outcome = await migrateLegacyKeys({ ...options, store });
     if (outcome.ran) logKeyMigration(outcome, log);
@@ -299,6 +341,34 @@ const handleBillingHttpRequest = createBillingHttpHandler({
   isLocalAddress: core.isLocalAddress,
   extractHostname: core.extractHostname,
 });
+
+// gatewayTrust.version from a manager's GET /api/manager/health (05 §7.1),
+// cached 30 s per port (5 s after a failed probe). 0 means a legacy manager:
+// the key is forwarded as before.
+const MANAGER_TRUST_TTL_MS = 30 * 1000;
+const MANAGER_TRUST_FAILURE_TTL_MS = 5 * 1000;
+const managerTrustCache = new Map();
+
+async function managerGatewayTrustVersion(manager) {
+  const port = Number(manager?.port || 0);
+  if (!port) return 0;
+  const now = Date.now();
+  const cached = managerTrustCache.get(port);
+  if (cached && cached.expiresAt > now) return cached.version;
+  if (cached?.promise) return cached.promise;
+  const promise = fetchJson(`http://127.0.0.1:${port}/api/manager/health`, 2500)
+    .then((health) => {
+      const version = health.ok ? Math.max(0, Math.floor(Number(health.data?.gatewayTrust?.version) || 0)) : 0;
+      managerTrustCache.set(port, { version, expiresAt: Date.now() + (health.ok ? MANAGER_TRUST_TTL_MS : MANAGER_TRUST_FAILURE_TTL_MS) });
+      return version;
+    })
+    .catch(() => {
+      managerTrustCache.set(port, { version: 0, expiresAt: Date.now() + MANAGER_TRUST_FAILURE_TTL_MS });
+      return 0;
+    });
+  managerTrustCache.set(port, { version: cached?.version ?? 0, expiresAt: 0, promise });
+  return promise;
+}
 
 async function isManagerPortListening(port) {
   const now = Date.now();
@@ -358,6 +428,7 @@ function createPublicHandler(deps = {}) {
     gateway: deps.gateway === undefined ? serveGatewayRouteOnPublic : deps.gateway,
     portal: deps.portal || null,
     data: deps.data || null,
+    preAuth: deps.preAuth === undefined ? answerPublicPreAuth : deps.preAuth,
     logger: deps.logger || console,
   });
   return listener.handle;
@@ -377,6 +448,25 @@ function createPublicServer(deps = {}) {
   return httpServer;
 }
 
+// 05 §8.2 steps 3 and 4 on PUBLIC: a banned address, then the per-IP bucket
+// that runs before any key is looked up (§9.2). True when it answered.
+function answerPublicPreAuth(req, res) {
+  const identity = security.identifyClient(req);
+  const ban = gatewayLimiter.checkBan(identity);
+  if (ban) {
+    gatewayRecord(req)?.reject({ status: 429, code: "auth_banned" });
+    sendPublicError(req, res, "auth_banned", { retryAfterSeconds: ban.retryAfterSeconds });
+    return true;
+  }
+  const pre = gatewayLimiter.preAuth(identity);
+  if (!pre.ok) {
+    gatewayRecord(req)?.reject({ status: 429, code: "ip_rate_limited" });
+    sendPublicError(req, res, "ip_rate_limited", { retryAfterSeconds: pre.retryAfterSeconds });
+    return true;
+  }
+  return false;
+}
+
 // Key routes on PUBLIC run on their ADMIN-form path through the shared
 // gateway pipeline (05 §8.1, lib/gateway-pipeline.js). The listener tag makes
 // authorizeGatewayRequest demand a key, refusals use the 05 §10.2 codes, and
@@ -385,6 +475,7 @@ async function serveGatewayRouteOnPublic(req, res, url, route) {
   const target = new URL(route.gatewayPath + url.search, "http://public.invalid");
   req.url = `${target.pathname}${target.search}`;
   beginGatewayRecord(req, res, target);
+  if (answerPublicPreAuth(req, res)) return undefined;
   if (isTtsGatewayPath(target.pathname)) return proxyTtsGatewayRequest(req, res, target);
   if (req.method === "GET" && (target.pathname === "/gateway/status" || target.pathname === "/gateway/status/")) return handleGatewayStatus(req, res, target);
   return proxyGatewayRequest(req, res, target);
@@ -459,12 +550,20 @@ function createRouteContext(overrides = {}) {
   const ctx = {
     rootDir: ROOT,
     aiRoot: AI_ROOT,
-    managers: MANAGERS.map(({ id, port }) => ({ id, port })),
+    managers: MANAGERS.map(({ id, port, billingId }) => ({ id, port, billingId })),
     security,
+    getAccessStore,
+    readRequestBody,
     relay: null,
     features: {},
     sendJson,
     readJsonObjectBody,
+    // The access store (05 §6) and the legacy key migration, for access-routes.
+    getAccessStore,
+    accessMigration: {
+      plan: () => planLegacyKeys(),
+      apply: () => migrateLegacyKeys({ force: true }),
+    },
     logger: console,
     now: Date.now,
     ...overrides,
@@ -944,6 +1043,7 @@ async function startServiceEntry() {
   await startTelemetry({
     managers: MANAGERS,
     managerClient: routeMounts.ctx.managerClient,
+    getFleetCatalogs: () => getFleetCatalogs(),
     events: routeMounts.ctx.bus,
     processExitLog: PROCESS_EXIT_LOG,
   }).then((runtime) => {
@@ -956,7 +1056,7 @@ async function startServiceEntry() {
   // PUBLIC answers only its own route table. ADMIN failing to bind is fatal;
   // PUBLIC failing leaves ADMIN up and the console shows it red.
   const config = security.accessConfig();
-  const publicHandler = createPublicHandler();
+  const publicHandler = createPublicHandler({ portal: createPortalRoutes({ aiRoot: AI_ROOT, logger: console }), data: createPublicPortalData() });
   try {
     listeners = await startListeners({
       config,
@@ -994,6 +1094,94 @@ async function startServiceEntry() {
   return server;
 }
 
+// The portal's JSON documents (05 §12.2): the status sampler over the fleet
+// catalogs and the access store, and the four documents built from it. An
+// access store that cannot open leaves the documents out (the portal pages then
+// show their error state); it never stops the entry. Telemetry numbers appear
+// once the telemetry runtime offers statusStats().
+function createPublicPortalData() {
+  try {
+    const store = getAccessStore();
+    const config = () => security.accessConfig();
+    const telemetry = { statusStats: async (options) => routeMounts?.ctx?.telemetry?.statusStats?.(options) ?? null };
+    statusSampler = startStatusSampler({ getCatalogs: () => getFleetCatalogs(), telemetry, store, config, logger: console });
+    return createPublicData({
+      sampler: statusSampler,
+      getCatalogs: () => getFleetCatalogs(),
+      store,
+      config,
+      getBuildId: () => core.platform.getBuildId({ aiRoot: AI_ROOT }),
+    });
+  } catch (error) {
+    console.warn(core.redactSecrets(`The portal data could not start; its JSON routes answer 404: ${error?.message || error}`));
+    return null;
+  }
+}
+
+// Gateway requests holding or waiting for a concurrency slot right now.
+function entryGatewayInFlight(buckets = entryConcurrencyBuckets, queues = entryConcurrencyQueues) {
+  let count = 0;
+  for (const value of buckets.values()) count += Math.max(0, Number(value) || 0);
+  for (const queue of queues.values()) count += Array.isArray(queue) ? queue.filter((waiter) => waiter && !waiter.cancelled).length : 0;
+  return count;
+}
+
+/**
+ * The runtime load the hub's idle-only queue reads (03 §8):
+ * { busy, known, detail[] }. Busy while any fleet model has running or
+ * waiting requests, any instance is loading (weights compete with the
+ * download for the disk) or the gateway has requests in flight. A manager
+ * that is unreachable counts as not busy and makes the result known: false.
+ */
+function summarizeRuntimeLoad(catalogs = [], { gatewayInFlight = 0 } = {}) {
+  let busy = false;
+  let known = true;
+  const detail = [];
+  for (const catalog of Array.isArray(catalogs) ? catalogs : []) {
+    const managerId = String(catalog?.manager?.id || "");
+    if (!catalog || catalog.listening === false || catalog.error) {
+      known = false;
+      detail.push({ managerId, known: false });
+      continue;
+    }
+    let requests = 0;
+    for (const model of Array.isArray(catalog.models) ? catalog.models : []) {
+      const running = Number(model?.runningRequests);
+      const waiting = Number(model?.waitingRequests);
+      requests += (Number.isFinite(running) ? running : 0) + (Number.isFinite(waiting) ? waiting : 0);
+    }
+    const loading = (Array.isArray(catalog.instances) ? catalog.instances : [])
+      .filter((instance) => String(instance?.lifecycleState || instance?.lifecycle?.state || "").toLowerCase() === "loading").length;
+    if (requests > 0 || loading > 0) busy = true;
+    detail.push({ managerId, known: true, requests, loading });
+  }
+  const inFlight = Math.max(0, Number(gatewayInFlight) || 0);
+  if (inFlight > 0) busy = true;
+  detail.push({ source: "gateway", inFlight });
+  return { busy, known, detail };
+}
+
+async function getEntryRuntimeLoad() {
+  const catalogs = await getFleetCatalogs().catch(() => []);
+  return summarizeRuntimeLoad(catalogs, { gatewayInFlight: entryGatewayInFlight() });
+}
+
+let entryGpuRuntime = null;
+
+// [{ id, name, totalMb, freeMb, computeCap }] from nvidia-smi (03 §3.1);
+// an empty list when there is no NVIDIA GPU or the query fails.
+async function getEntryGpus() {
+  if (!entryGpuRuntime) entryGpuRuntime = core.createGpuRuntime({ execFileAsync: promisify(execFile) });
+  const status = await entryGpuRuntime.getGpuStatus().catch(() => ({ gpus: [] }));
+  return (Array.isArray(status?.gpus) ? status.gpus : []).map((gpu) => ({
+    id: String(gpu.id ?? gpu.index ?? ""),
+    name: String(gpu.name || ""),
+    totalMb: Number.isFinite(gpu.totalMb) ? gpu.totalMb : null,
+    freeMb: Number.isFinite(gpu.totalMb) && Number.isFinite(gpu.usedMb) ? Math.max(0, gpu.totalMb - gpu.usedMb) : null,
+    computeCap: gpu.computeCap || null,
+  }));
+}
+
 // The entry's one model hub (03 §3): data under service-entry/data/hub, the
 // download CLIs in the managers' discovery order. Building it touches no
 // file; a hub that cannot be built leaves its routes answering 503.
@@ -1020,6 +1208,12 @@ function createEntryHub({ events = null } = {}) {
       modelScopeCli,
       events,
       managers: MANAGERS.map(({ id, port }) => ({ id, port })),
+      // The idle-only queue (03 §8) and the fit (03 §10) read the platform
+      // through these two providers.
+      getRuntimeLoad: getEntryRuntimeLoad,
+      getGpus: getEntryGpus,
+      // Cancel-and-delete refuses a folder a running container mounts (03 §8).
+      getBusyPaths: core.createStorageBusyPathProbe({ aiRoot: AI_ROOT }),
       logger: console,
     });
   } catch (error) {
@@ -1550,7 +1744,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   const rec = gatewayRecord(req);
   let auth = { ok: true, clientId: "", client: null, authRequired: false };
   if (!isTtsUiShellRequest(req, route)) {
-    const ban = checkAuthBan(req);
+    const ban = gatewayPipeline.checkBan(req);
     if (ban) {
       denyEntryRequest(req, access, { status: 429, message: ban.message, code: "auth_banned", log: shouldLogTtsAccess });
       return sendJson(res, { detail: ban.message, code: "auth_banned" }, 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
@@ -1564,8 +1758,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     }
   }
 
-  const limit = gatewayPipeline.rateLimitFor(req, auth);
-  const rate = core.enterServiceRateLimit({ rateLimitRpm: limit.rpm }, limit.key, entryRateBuckets);
+  const rate = gatewayPipeline.enterRate(req, res, auth);
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
     denyEntryRequest(req, access, { status: 429, message, code: "rate_limit_exceeded", log: shouldLogTtsAccess });
@@ -1696,16 +1889,14 @@ const gatewayPipeline = createGatewayPipeline({
   getCatalogs: (managers) => Promise.all(managers.map((manager) => getManagerModelCatalog(manager))),
   getFleetSettings: () => getFleetSettings(),
   selectFleetTarget: (catalogs, request) => selectFleetTarget(catalogs, request),
+  limiter: gatewayLimiter,
   io: {
     prepareAccess: prepareEntryAccess,
     record: gatewayRecord,
     deny: denyEntryRequest,
     watch: (req, res, access) => watchEntryAccess(req, res, access),
-    checkAuthBan,
-    noteAuthResult,
     recordAuth: recordGatewayAuth,
     recordRouting: recordGatewayRouting,
-    enterRateLimit: ({ key, rpm }) => core.enterServiceRateLimit({ rateLimitRpm: rpm }, key, entryRateBuckets),
     corsHeaders: gatewayCorsHeaders,
     sendJson,
     isModelListRequest: isAggregatedModelListRequest,
@@ -1721,6 +1912,7 @@ const gatewayPipeline = createGatewayPipeline({
     createUpstreamControl: (req, res) => createUpstreamControl(req, res),
     fetch: (target, init) => fetch(target, init),
     buildProxyHeaders,
+    managerTrustVersion: managerGatewayTrustVersion,
     buildResponseHeaders,
     forwardBody: forwardUpstreamBody,
   },
@@ -1781,32 +1973,16 @@ async function readGatewayJsonBody(req, res) {
 
 // --- 401 storm guard ---------------------------------------------------------
 
-// Local, non-proxied callers are never banned: a misconfigured local client
-// should get a clear 401 every time rather than a ten-minute lockout.
-function authGuardKey(req) {
-  if (core.isLocalRequest(req) && !security.isProxiedRequest(req)) return "";
-  return security.resolveClientAddress(req) || "";
-}
-
+// Thin entry points over the limiter (lib/limiter.js, 05 §9.3) for the
+// handlers that run their own checks. Loopback and the trusted proxies'
+// own addresses are never banned: a misconfigured local client should get a
+// clear 401 every time rather than a lockout.
 function checkAuthBan(req) {
-  const key = authGuardKey(req);
-  if (!key) return null;
-  const ban = authGuard.check(key);
-  if (!ban.banned) return null;
-  return {
-    retryAfterSeconds: ban.retryAfterSeconds,
-    message: `Too many failed authentication attempts. Retry after ${ban.retryAfterSeconds}s.`,
-  };
+  return gatewayPipeline.checkBan(req);
 }
 
 function noteAuthResult(req, auth) {
-  const key = authGuardKey(req);
-  if (!key) return;
-  if (auth?.ok) {
-    authGuard.clear(key);
-    return;
-  }
-  if (auth?.status === 401) authGuard.record(key);
+  return gatewayLimiter.noteAuthResult(security.identifyClient(req), auth);
 }
 
 // --- /gateway/status ---------------------------------------------------------
@@ -1825,9 +2001,7 @@ async function handleGatewayStatus(req, res, url) {
     denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code });
     return gatewayPipeline.sendRefusal(req, res, { ...auth, headers: gatewayCorsHeaders(req) });
   }
-  const limit = gatewayPipeline.rateLimitFor(req, auth);
-  const limitRpm = limit.rpm;
-  const rate = core.enterServiceRateLimit({ rateLimitRpm: limitRpm }, limit.key, entryRateBuckets);
+  const rate = gatewayPipeline.enterRate(req, res, auth);
   if (!rate.ok) {
     gatewayRecord(req)?.reject({ status: 429, code: "rate_limit_exceeded" });
     return sendJson(res, core.openAiGatewayError("rate_limit_exceeded", `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`), 429, { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) });
@@ -1947,8 +2121,7 @@ async function proxyAuxGatewayRequest(req, res, url) {
     denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code });
     return gatewayPipeline.sendRefusal(req, res, { ...auth, headers: gatewayCorsHeaders(req) });
   }
-  const limit = gatewayPipeline.rateLimitFor(req, auth);
-  const rate = core.enterServiceRateLimit({ rateLimitRpm: limit.rpm }, limit.key, entryRateBuckets);
+  const rate = gatewayPipeline.enterRate(req, res, auth);
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
     denyEntryRequest(req, access, { status: 429, message, code: "rate_limit_exceeded" });
@@ -2828,6 +3001,10 @@ function buildManagerGatewayPath(route) {
   return "";
 }
 
+// options: requestId, instanceId, stripContentEncoding, and for a manager
+// that advertises gatewayTrust.version >= 2 (05 §7.1): hopVersion: 2 with
+// pathname (the manager-side path the hop is signed for), method, principal
+// and context (default req.serviceEntryPrincipal / req.serviceEntryContext).
 function buildProxyHeaders(headers, req = null, options = {}) {
   const output = {};
   const stripped = new Set([
@@ -2837,17 +3014,33 @@ function buildProxyHeaders(headers, req = null, options = {}) {
   ]);
   if (options.stripContentEncoding) stripped.add("content-encoding");
   // With a request record the inbound x-request-id is never forwarded; the id
-  // the entry minted replaces it (04 §5.1, contract change C1).
-  const requestId = String(options.requestId || gatewayRecord(req)?.requestId || "");
+  // the entry minted replaces it (04 §5.1, contract change C1). A v2 hop always
+  // carries the entry's req_ id: it is part of the signature.
+  const wantsV2 = Number(options.hopVersion || 0) >= 2;
+  const requestId = String(options.requestId || gatewayRecord(req)?.requestId || (wantsV2 ? req?.requestId : "") || "");
+  const hopV2 = wantsV2 && core.ENTRY_REQUEST_ID_RE.test(requestId);
   if (requestId) stripped.add("x-request-id");
+  // A v2 manager trusts the signed principal, so the key never crosses the
+  // hop; a legacy manager still checks it and gets it as before.
+  if (hopV2) for (const name of ENTRY_KEY_HEADERS) stripped.add(name);
   for (const [key, value] of Object.entries(headers || {})) {
     const lower = key.toLowerCase();
     // Trust headers are dropped before being re-issued below, so a client
-    // cannot forge the address this process vouches for.
+    // cannot forge the address this process vouches for, nor any header of
+    // the entry's own hop or internal signing families.
     if (stripped.has(lower) || lower.startsWith("proxy-")) continue;
+    if (ENTRY_RESERVED_HEADER_PREFIXES.some((prefix) => lower.startsWith(prefix))) continue;
     output[key] = value;
   }
-  const trustHeaders = security.trustHeaders(req);
+  const trustHeaders = hopV2
+    ? security.entryHeaders(req, {
+      method: options.method || req?.method,
+      pathname: options.pathname,
+      requestId,
+      principal: options.principal !== undefined ? options.principal : req?.serviceEntryPrincipal || null,
+      context: options.context !== undefined ? options.context : req?.serviceEntryContext || null,
+    })
+    : security.trustHeaders(req);
   Object.assign(output, trustHeaders);
   const instanceId = String(options.instanceId || "").trim();
   if (instanceId) {
@@ -3231,8 +3424,12 @@ module.exports = {
   buildManagerGatewayPath,
   buildManagerGatewayUrls,
   buildProxyHeaders,
+  managerGatewayTrustVersion,
+  resetManagerTrustCache: () => managerTrustCache.clear(),
   buildServiceEntryFleetSnapshot,
   collectEntryGatewayAccessStats,
+  entryGatewayInFlight,
+  summarizeRuntimeLoad,
   createUpstreamControl,
   createTtsBodyLimiter,
   createRouteContext,
@@ -3241,6 +3438,7 @@ module.exports = {
   getListeners: () => listeners,
   createPublicServer,
   createPublicHandler,
+  createPublicPortalData,
   dispatchRouteModules,
   emptyManagerCatalog,
   findManager,
@@ -3252,6 +3450,7 @@ module.exports = {
   getBillingStore,
   buildKeySummary,
   migrateLegacyKeys,
+  planLegacyKeys,
   prepareAccessStore,
   getFleetSettings,
   getManagerModelCatalog,
@@ -3295,8 +3494,10 @@ module.exports = {
   // The model hub once startServiceEntry() built it (03 §3).
   getModelHub: () => modelHub,
   flushTtsSettlements: () => ttsReconciler.flush(),
+  // The one limiter (05 §9): buckets, bans, the public share gate.
+  getLimiter: () => gatewayLimiter,
   resetEntryRateLimitBuckets() {
-    entryRateBuckets.clear();
+    gatewayLimiter.reset();
   },
   shutdownSoon,
   startServiceEntry,

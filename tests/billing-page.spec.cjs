@@ -536,6 +536,20 @@ function stopHarness() {
   return new Promise((resolve) => server.close(resolve));
 }
 
+// WCAG contrast ratio of a node's text colour on its own background (CON-22: contrast, not colour pins).
+async function textContrast(locator) {
+  return locator.evaluate((node) => {
+    const channels = (rgb) => rgb.match(/[\d.]+/g).slice(0, 3).map(Number);
+    const luminance = (rgb) => channels(rgb).map((value) => value / 255).map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    // The first mostly opaque background at or above the node (a highlighted link sits on its sidebar).
+    let surface = node;
+    const alpha = (rgb) => (rgb.match(/[\d.]+/g).length > 3 ? Number(rgb.match(/[\d.]+/g)[3]) : 1);
+    while (surface.parentElement && (getComputedStyle(surface).backgroundColor === 'transparent' || alpha(getComputedStyle(surface).backgroundColor) < 0.5)) surface = surface.parentElement;
+    const values = [luminance(getComputedStyle(node).color), luminance(getComputedStyle(surface).backgroundColor)].sort((a, b) => a - b);
+    return (values[1] + 0.05) / (values[0] + 0.05);
+  });
+}
+
 function attachDiagnostics(page) {
   const diagnostics = { consoleErrors: [], pageErrors: [] };
   page.on("console", (message) => {
@@ -602,7 +616,7 @@ test("standalone page exposes five tabs and renders hostile API text without sec
   await expect(page.locator("#billingManagerReturn")).toHaveAttribute("href", "http://127.0.0.1:5178/#service");
   await page.locator("#billingThemeMode").selectOption("light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await expect(page.locator(".manager-sidebar")).toHaveCSS("background-color", "rgb(16, 24, 32)");
+  expect(await textContrast(page.locator(".manager-sidebar a[aria-current='page']")), "sidebar current link stays readable").toBeGreaterThanOrEqual(3);
   const primaryContrast = await page.locator("#billingRefreshBtn").evaluate((node) => {
     const style = getComputedStyle(node);
     const luminance = (rgb) => rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
@@ -625,9 +639,10 @@ test("standalone page exposes five tabs and renders hostile API text without sec
   const overviewTab = page.getByRole("tab", { name: "总览", exact: true });
   const pricesTab = page.getByRole("tab", { name: "套餐与价格", exact: true });
   await pricesTab.click();
-  await expect(pricesTab).toHaveCSS("color", "rgb(23, 32, 42)");
-  await expect(pricesTab).toHaveCSS("background-color", "rgb(238, 243, 247)");
-  await expect(overviewTab).toHaveCSS("color", "rgb(101, 114, 130)");
+  expect(await textContrast(pricesTab), "selected tab text is readable").toBeGreaterThanOrEqual(4.5);
+  expect(await textContrast(overviewTab), "unselected tab text is readable").toBeGreaterThanOrEqual(3);
+  const [selectedColor, unselectedColor] = await Promise.all([pricesTab, overviewTab].map((tab) => tab.evaluate((node) => getComputedStyle(node).color)));
+  expect(selectedColor, "selected and unselected tabs differ").not.toBe(unselectedColor);
   const selectedTabStyle = await pricesTab.evaluate((node) => getComputedStyle(node).boxShadow);
   expect(selectedTabStyle, "selected tab keeps a visible inset indicator").toContain("inset");
   await expect(pricesTab).not.toHaveCSS("transition-property", /(^|, )(?:all|color|border|border-color|border-bottom-color)(, |$)/);
@@ -673,8 +688,8 @@ test("manager sidebars link to the local billing center and billing preserves th
 
   await page.locator("#billingThemeMode").selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.locator(".manager-sidebar")).toHaveCSS("background-color", "rgb(8, 15, 22)");
-  await expect(page.locator("#billingRefreshBtn")).toHaveCSS("background-color", "rgb(45, 212, 191)");
+  expect(await textContrast(page.locator("#billingRefreshBtn")), "dark primary action stays readable").toBeGreaterThanOrEqual(4.5);
+  expect(await textContrast(page.locator(".manager-sidebar a[aria-current='page']")), "dark sidebar current link stays readable").toBeGreaterThanOrEqual(3);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#billingThemeMode")).toHaveValue("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -1027,6 +1042,8 @@ test("embed mode hides the copied sidebar and theme select and follows ?theme= w
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator(".manager-sidebar")).toBeHidden();
   await expect(page.locator("#billingThemeMode")).toBeHidden();
+  // The manager refuses to be framed, so the return link leaves the iframe.
+  await expect(page.locator("#billingManagerReturn")).toHaveAttribute("target", "_top");
   await expect(page.getByRole("tab")).toHaveCount(5);
   // The workbench takes the full width once the sidebar column is gone.
   const widths = await page.evaluate(() => ({

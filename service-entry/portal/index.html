@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Portal shell (05 §12.1): the server fills the build id, import map and language placeholders below (lib/portal-routes.js). The page has no inline script or style except the import map, which the CSP admits by its hash. -->
+<html lang="%LANG%">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Model Service</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%230f766e%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%277%27 fill=%27none%27 stroke=%27white%27 stroke-width=%273%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/%BUILD_ID%/shared/styles/tokens.css">
+<link rel="stylesheet" href="/assets/%BUILD_ID%/styles/portal.css">
+%IMPORT_MAP%
+<script type="module" src="/assets/%BUILD_ID%/app.js"></script>
+</head>
+<body>
+<div id="app" class="portal-boot">
+<noscript>
+<p><span lang="en-US">JavaScript is required to use this page.</span> <span lang="zh-CN">需要启用 JavaScript。</span></p>
+</noscript>
+</div>
+</body>
+</html>

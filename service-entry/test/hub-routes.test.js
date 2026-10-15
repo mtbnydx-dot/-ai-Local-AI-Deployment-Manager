@@ -13,6 +13,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const internalAuth = require("../../manager-core/internal-auth");
+const { createModelStorage } = require("../../manager-core");
 const { createModelHub, defaultSettings } = require("../../manager-core/model-hub");
 const hubRoutes = require("../lib/hub-routes");
 const { loadEntry, ownerSession, quietLogger, request, serveEntry } = require("./helpers/entry-harness");
@@ -249,14 +250,33 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "GET", path: "/api/hub/tasks/:id", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/auth/huggingface", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/auth/huggingface/access", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/downloads", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/downloads/history", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/downloads/:id", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/downloads/:id/resume-check", access: "viewer" },
     { owner: "03", method: "PUT", path: "/api/hub/settings", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/library/rescan", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/library/:id/verify", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/library/:id/identify", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/auth/huggingface/login", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/sources/probe", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/reorder", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/pause-all", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/resume-all", access: "admin" },
+    { owner: "03", method: "DELETE", path: "/api/hub/downloads/:id", access: "admin" },
+    { owner: "03", method: "GET", path: "/api/hub/downloads/:id/logs", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/pause", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/resume", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/retry", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/start-now", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/cancel", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/priority", access: "admin" },
   ]);
-  assert.deepEqual(registry.inventory().filter((item) => item.method === "EVENT" && item.path === "library"), [{ owner: "03", method: "EVENT", path: "library", access: "viewer" }]);
+  assert.deepEqual(registry.inventory().filter((item) => item.method === "EVENT" && (item.path === "library" || item.path === "downloads")), [
+    { owner: "03", method: "EVENT", path: "library", access: "viewer" },
+    { owner: "03", method: "EVENT", path: "downloads", access: "viewer" },
+  ]);
 
   // HUB_VIEWER_ROUTES (or the owner-only list) covers every GET the module
   // serves, and the shim list names served routes only.
@@ -271,14 +291,14 @@ test("without a hub the routes answer 503 hub_unavailable, features.hub stays of
   const { ctx, port, owner } = await mountEntry(t);
   assert.equal(ctx.features.hub, false);
   assert.equal(ctx.auth.viewerRegistry.match("GET", "/api/hub/status").access, "viewer", "the registrations do not depend on the hub");
-  for (const [method, target] of [["GET", "/api/hub/status"], ["GET", "/api/hub/settings"], ["PUT", "/api/hub/settings"]]) {
-    const response = await request(port, target, { method, owner, ...(method === "PUT" ? { body: {} } : {}) });
+  for (const [method, target] of [["GET", "/api/hub/status"], ["GET", "/api/hub/settings"], ["PUT", "/api/hub/settings"], ["GET", "/api/hub/downloads"], ["POST", "/api/hub/downloads"]]) {
+    const response = await request(port, target, { method, owner, ...(method !== "GET" ? { body: {} } : {}) });
     assert.equal(response.status, 503, `${method} ${target}`);
     assert.equal(response.json.ok, false);
     assert.equal(response.json.error.code, "hub_unavailable");
     assert.equal(typeof response.json.error.hint, "string");
   }
-  const later = await request(port, "/api/hub/downloads", { owner });
+  const later = await request(port, "/api/hub/search", { owner });
   assert.equal(later.status, 404, "a route of a later package is not answered here");
   assert.deepEqual(later.json, { error: "Not found" });
 });
@@ -363,4 +383,238 @@ test("shutdownSoon stops the hub before the process exits, and a hung stop canno
   await new Promise((resolve) => entry.shutdownSoon({ server: null, hub: real.hub, delayMs: 0, graceMs: 2000, exit: resolve }));
   assert.equal(real.hub.state, "stopped");
   assert.equal(JSON.parse(fs.readFileSync(path.join(real.dataDir, "downloads.json"), "utf8")).writerPid, process.pid);
+});
+
+// --- downloads (HUB-7, 03 §13) ------------------------------------------------------
+
+const FAKE_HF_TOKEN = "hf_fakeRouteTokenForTestsOnly0000000";
+
+// A transfer engine that never spawns; a test ends an attempt with exit(code).
+function fakeTransferEngine() {
+  const started = [];
+  return {
+    started,
+    start(job, hooks) {
+      const handle = {
+        jobId: job.id,
+        stopReason: null,
+        done: false,
+        exit(code = 0) {
+          if (handle.done) return;
+          handle.done = true;
+          hooks.onExit({ code, stopReason: handle.stopReason, stderrTail: [] });
+        },
+        stop(reason) {
+          handle.stopReason = handle.stopReason || reason;
+          setImmediate(() => handle.exit(null));
+          return Promise.resolve();
+        },
+        stderrTail: () => [],
+      };
+      started.push(handle);
+      hooks.onSpawn({ pid: 4321, startedAt: new Date().toISOString() });
+      hooks.onLine("stdout", `fake transfer of ${job.artifact.repo}`);
+      return handle;
+    },
+    async findOrphans() {
+      return [];
+    },
+  };
+}
+
+function fakeManifest(repo) {
+  return {
+    repo,
+    revision: "main",
+    revisionSha: "d".repeat(40),
+    gated: false,
+    files: [
+      { path: "Model-Q4_K_M.gguf", size: 4096, sha256: "e".repeat(64) },
+      { path: "Model-Q8_0.gguf", size: 8192, sha256: "f".repeat(64) },
+      { path: "README.md", size: 10, sha256: null },
+    ],
+  };
+}
+
+async function startDownloadHub(t) {
+  const root = tempDir(t, "hub-downloads-");
+  const models = path.join(root, "models");
+  fs.mkdirSync(models, { recursive: true });
+  const engine = fakeTransferEngine();
+  const providers = { forNamespace: () => ({ getRepo: async (repo) => fakeManifest(repo) }), get: () => null };
+  const modelStorage = createModelStorage({ modelsRoot: models, file: path.join(root, "service-entry", "data", "model-storage.json") });
+  const hub = createModelHub({
+    aiRoot: root,
+    dataDir: path.join(root, "service-entry", "data", "hub"),
+    env: {},
+    hfCli: "hf",
+    modelScopeCli: "modelscope",
+    logger: quietLogger(),
+    heartbeatMs: 3_600_000,
+    transferEngine: engine,
+    providers,
+    modelStorage,
+    disk: { volumeOf: () => "X:", freeBytes: async () => 1e12, reserveBytes: () => 0 },
+    verifier: { verifyArtifact: async () => ({ ok: true, verifiedFiles: [] }) },
+    readConfig: () => ({ downloadsOwner: "hub", source: "default", errors: [] }),
+  });
+  await hub.start();
+  t.after(() => hub.stop());
+  return { hub, root, models, engine };
+}
+
+async function until(predicate, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timed out");
+}
+
+function escapedPath(value) {
+  return JSON.stringify(value).slice(1, -1);
+}
+
+test("download routes: enqueue, list, detail, history, logs, resume-check and every queue operation, with viewer redaction", async (t) => {
+  const { hub, root, models, engine } = await startDownloadHub(t);
+  const { port, owner, ctx } = await mountEntry(t, { hub });
+  const plan = { provider: "huggingface", repo: "org/Model-GGUF", selection: { artifactKey: "gguf:|Q4_K_M" } };
+
+  // Viewers never write; the owner enqueues (201) with a token that only the vault keeps.
+  const viewerWrite = await request(port, "/api/hub/downloads", { method: "POST", peer: LAN, body: plan });
+  assert.equal(viewerWrite.status, 401);
+  const created = await request(port, "/api/hub/downloads", { method: "POST", owner, body: { ...plan, credential: { hfToken: FAKE_HF_TOKEN } } });
+  assert.equal(created.status, 201, created.text);
+  const job = created.json.job;
+  assert.equal(job.origin.kind, "console");
+  assert.equal(job.transfer.options.credentialMode, "temp-token");
+  assert.equal(created.text.includes(FAKE_HF_TOKEN), false, "no token in any response");
+  await until(() => engine.started.length === 1);
+
+  const duplicate = await request(port, "/api/hub/downloads", { method: "POST", owner, body: plan });
+  assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.json.error.code, "already_downloading");
+  assert.equal(duplicate.json.error.details.existingJobId, job.id);
+  const bad = await request(port, "/api/hub/downloads", { method: "POST", owner, body: { repo: "org/Model-GGUF", selection: { artifactKey: "gguf:|NOPE" } } });
+  assert.equal(bad.status, 422);
+  assert.equal(bad.json.ok, false);
+  const lanToken = await request(port, "/api/hub/downloads", { method: "POST", peer: LAN, owner, body: { ...plan, credential: { hfToken: FAKE_HF_TOKEN } } });
+  assert.ok([401, 403].includes(lanToken.status), "a LAN caller never sends a token");
+
+  // Owner reads are complete; viewer reads are redacted.
+  const ownerList = await request(port, "/api/hub/downloads", { owner });
+  assert.equal(ownerList.status, 200);
+  const ownerJob = ownerList.json.jobs.find((item) => item.id === job.id);
+  assert.equal(ownerJob.target.localDir, path.join(models, "org-Model-GGUF"));
+  assert.equal(ownerJob.transfer.pid, 4321);
+  assert.match(ownerJob.transfer.options.tokenRef, /^dlt_/);
+  assert.equal(ownerList.json.aggregate.activeCount, 1);
+  const viewerList = await request(port, "/api/hub/downloads", { peer: LAN });
+  assert.equal(viewerList.status, 200);
+  const viewerJob = viewerList.json.jobs.find((item) => item.id === job.id);
+  assert.equal(viewerJob.target.localDir, `${ownerJob.target.rootLabel}/org-Model-GGUF`);
+  assert.equal(Object.hasOwn(viewerJob.transfer, "pid"), false);
+  assert.equal(Object.hasOwn(viewerJob.transfer.options, "tokenRef"), false);
+  assert.equal(viewerList.text.includes(root), false, "no host path reaches a viewer");
+  assert.equal(viewerList.text.includes(escapedPath(root)), false);
+  const viewerDetail = await request(port, `/api/hub/downloads/${job.id}`, { peer: LAN });
+  assert.equal(viewerDetail.status, 200);
+  assert.equal(viewerDetail.json.job.target.localDir, viewerJob.target.localDir);
+  assert.equal((await request(port, "/api/hub/downloads/dl_nosuchjobnosuchj", { owner })).status, 404);
+  assert.equal((await request(port, "/api/hub/downloads?state=bogus", { owner })).status, 400);
+
+  // Logs are owner-only; the resume check is root-relative for viewers.
+  const logs = await request(port, `/api/hub/downloads/${job.id}/logs?tail=5`, { owner });
+  assert.equal(logs.status, 200);
+  assert.ok(Array.isArray(logs.json.lines) && logs.json.total >= 1);
+  assert.equal((await request(port, `/api/hub/downloads/${job.id}/logs`, { peer: LAN })).status, 401);
+  const ownerCheck = await request(port, `/api/hub/downloads/${job.id}/resume-check`, { owner });
+  assert.equal(ownerCheck.status, 200);
+  assert.equal(ownerCheck.json.localDir, path.join(models, "org-Model-GGUF"));
+  const viewerCheck = await request(port, `/api/hub/downloads/${job.id}/resume-check`, { peer: LAN });
+  assert.equal(viewerCheck.json.localDir, viewerJob.target.localDir);
+  assert.equal(viewerCheck.text.includes(escapedPath(root)), false);
+
+  // Queue operations.
+  const second = await request(port, "/api/hub/downloads", { method: "POST", owner, body: { ...plan, selection: { artifactKey: "gguf:|Q8_0" }, target: { outputName: "second" } } });
+  assert.equal(second.status, 201, second.text);
+  const third = await request(port, "/api/hub/downloads", { method: "POST", owner, body: { ...plan, selection: { artifactKey: "gguf:|Q8_0" }, target: { outputName: "third" } } });
+  const secondId = second.json.job.id;
+  const thirdId = third.json.job.id;
+  const reordered = await request(port, "/api/hub/downloads/reorder", { method: "POST", owner, body: { ids: [thirdId, secondId] } });
+  assert.equal(reordered.status, 200, reordered.text);
+  assert.ok(reordered.json.jobs[0].queueOrder < reordered.json.jobs[1].queueOrder);
+  assert.equal((await request(port, "/api/hub/downloads/reorder", { method: "POST", owner, body: { ids: "x" } })).status, 400);
+  const priority = await request(port, `/api/hub/downloads/${secondId}/priority`, { method: "POST", owner, body: { priority: "high" } });
+  assert.equal(priority.json.job.priority, "high");
+  const startNow = await request(port, `/api/hub/downloads/${thirdId}/start-now`, { method: "POST", owner, body: { force: true } });
+  assert.equal(startNow.status, 200, startNow.text);
+  await until(() => engine.started.length === 2);
+  const paused = await request(port, `/api/hub/downloads/${job.id}/pause`, { method: "POST", owner, body: {} });
+  assert.equal(paused.json.job.state, "paused");
+  const resumed = await request(port, `/api/hub/downloads/${job.id}/resume`, { method: "POST", owner, body: { refreshTransferOptions: true } });
+  assert.equal(resumed.status, 200, resumed.text);
+  assert.ok(["queued", "waiting", "resolving", "downloading"].includes(resumed.json.job.state));
+  assert.equal((await request(port, `/api/hub/downloads/${job.id}/resume`, { method: "POST", owner, body: { refreshTransferOptions: "yes" } })).status, 400);
+  const retryActive = await request(port, `/api/hub/downloads/${job.id}/retry`, { method: "POST", owner, body: {} });
+  assert.equal(retryActive.status, 409);
+  assert.equal(retryActive.json.error.code, "invalid_state");
+  const pauseAll = await request(port, "/api/hub/downloads/pause-all", { method: "POST", owner, body: {} });
+  assert.equal(pauseAll.status, 200);
+  assert.equal(pauseAll.json.affected, 3);
+  const resumeAll = await request(port, "/api/hub/downloads/resume-all", { method: "POST", owner, body: {} });
+  assert.equal(resumeAll.json.affected, 3);
+
+  const wrongConfirm = await request(port, `/api/hub/downloads/${secondId}/cancel`, { method: "POST", owner, body: { deletePartial: true, confirm: "nope" } });
+  assert.equal(wrongConfirm.status, 400);
+  assert.equal(wrongConfirm.json.error.code, "confirm_required");
+  const cancelled = await request(port, `/api/hub/downloads/${secondId}/cancel`, { method: "POST", owner, body: { deletePartial: true, confirm: "second" } });
+  assert.equal(cancelled.status, 200, cancelled.text);
+  assert.equal(cancelled.json.job.state, "cancelled");
+  assert.equal(typeof cancelled.json.reclaimedBytes, "number");
+  assert.equal(fs.existsSync(path.join(models, "second")), false);
+  const terminal = await request(port, "/api/hub/downloads?include=terminal", { owner });
+  assert.ok(terminal.json.jobs.some((item) => item.id === secondId));
+  assert.equal((await request(port, "/api/hub/downloads", { owner })).json.jobs.some((item) => item.id === secondId), false);
+  assert.equal((await request(port, `/api/hub/downloads/${secondId}`, { method: "DELETE", peer: LAN })).status, 401);
+  const removed = await request(port, `/api/hub/downloads/${secondId}`, { method: "DELETE", owner });
+  assert.deepEqual(removed.json, { ok: true });
+  const history = await request(port, "/api/hub/downloads/history", { owner });
+  assert.equal(history.status, 200);
+  assert.equal(history.json.records[0].id, secondId);
+  const viewerHistory = await request(port, "/api/hub/downloads/history?q=second", { peer: LAN });
+  assert.equal(viewerHistory.json.records[0].target.localDir, `${ownerJob.target.rootLabel}/second`);
+  assert.equal(viewerHistory.text.includes(escapedPath(root)), false);
+
+  // The downloads event reaches viewers through the registered redactor.
+  const event = { kind: "job", jobs: [ownerJob], aggregate: ownerList.json.aggregate };
+  const redacted = ctx.auth.viewerRegistry.redactEvent("downloads", JSON.parse(JSON.stringify(event)), {});
+  assert.equal(redacted.jobs[0].target.localDir, viewerJob.target.localDir);
+  assert.equal(Object.hasOwn(redacted.jobs[0].transfer, "pid"), false);
+  assert.equal(JSON.stringify(redacted).includes(escapedPath(root)), false);
+});
+
+test("a signed shim enqueues as manager-shim and reaches only the shim download routes", async (t) => {
+  const { hub, engine } = await startDownloadHub(t);
+  const { port, token } = await mountEntry(t, { hub });
+  const principal = "system:hub-shim:llama";
+  const body = { provider: "huggingface", repo: "org/Shim-GGUF", selection: { artifactKey: "gguf:|Q4_K_M" }, origin: { kind: "console", managerId: "vllm", clientLocal: false } };
+  const created = await signed(port, "POST", "/api/hub/downloads", { principal, token, body });
+  assert.equal(created.status, 201, created.text);
+  assert.deepEqual([created.json.job.origin.kind, created.json.job.origin.managerId, created.json.job.ownerManagerId], ["manager-shim", "llama", "llama"]);
+  await until(() => engine.started.length === 1);
+  const list = await signed(port, "GET", "/api/hub/downloads?owner=llama&include=terminal&limit=60", { principal, token });
+  assert.equal(list.status, 200);
+  assert.equal(list.json.jobs.length, 1);
+  const id = created.json.job.id;
+  assert.equal((await signed(port, "GET", `/api/hub/downloads/${id}/logs`, { principal, token })).status, 200);
+  const forbidden = await signed(port, "POST", `/api/hub/downloads/${id}/start-now`, { principal, token, body: {} });
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.json.error.code, "principal_route_forbidden");
+  const noToken = await signed(port, "POST", "/api/hub/downloads", { principal, token, body: { ...body, repo: "org/Other-GGUF", credential: { hfToken: FAKE_HF_TOKEN } } });
+  assert.equal(noToken.status, 403, "clientLocal false never forwards a token");
+  assert.equal(noToken.json.error.code, "token_requires_local");
+  const cancel = await signed(port, "POST", `/api/hub/downloads/${id}/cancel`, { principal, token, body: {} });
+  assert.equal(cancel.status, 200, cancel.text);
 });

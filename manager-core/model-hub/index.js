@@ -7,9 +7,11 @@
 // createModelHub() only wires objects and touches no file. start() prepares
 // the data directory (sweeping temp files a crash left), loads the settings
 // and stamps downloads.json; stop() flushes everything and is what the
-// entry's shutdown awaits. This is the HUB-1 skeleton: store, settings, the
-// downloadsOwner flag and the status. Search, plan, queue, transfer, verify
-// and library come with the later HUB packages and hang off the same object.
+// entry's shutdown awaits. HUB-1 built the skeleton (store, settings, the
+// downloadsOwner flag, the status); HUB-7 adds the persistent download queue
+// (queue.js) with its transfer engine, progress monitor and verifier, and
+// enqueue from a plan body. Search and plan come with HUB-10 and hang off the
+// same object.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -24,6 +26,14 @@ const { createTokenVault } = require("./tokens");
 const { createHubAuth } = require("./auth");
 const { createSourceProbe } = require("./sources");
 const { createProviders } = require("./providers");
+const { ProviderError } = require("./providers/http");
+const { createCliTransferEngine } = require("./transfer");
+const { createTransferMonitor } = require("./progress");
+const { createArtifactVerifier } = require("./verify");
+const { createDownloadQueue } = require("./queue");
+const { createDiskGuard } = require("./disk");
+const { REPO_RE } = require("./auth");
+const { compileIncludePatterns, resolveSelection } = require("./selection");
 
 const DEFAULT_AI_ROOT = path.resolve(__dirname, "..", "..");
 // downloads.json is re-stamped this often while the hub runs; readers treat
@@ -33,8 +43,31 @@ const HEARTBEAT_MS = 30 * 1000;
 // often (03 §12).
 const TOKEN_SWEEP_MS = 60 * 60 * 1000;
 
+const SOURCES_BY_NAMESPACE = Object.freeze({ huggingface: ["huggingface", "hf-mirror"], modelscope: ["modelscope"] });
+const CREDENTIAL_MODES = Object.freeze(["cached-login", "none"]);
+const XET_MODES = Object.freeze(["high-performance", "default", "off"]);
+const REVISION_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function badRequest(field, message) {
+  return new hubErrors.HubError("invalid_request", message, { status: 400, details: { field } });
+}
+
+// A provider failure while resolving a plan body, in the hub's taxonomy.
+function fromProviderError(error) {
+  if (!(error instanceof ProviderError)) return error;
+  const code = hubErrors.HUB_ERROR_CODES.includes(error.code) ? error.code
+    : hubErrors.HUB_ERROR_CODES.includes(error.baseCode) ? error.baseCode : String(error.code || "unknown");
+  const upstream = Number(error.status);
+  const status = hubErrors.HUB_ERROR_STATUS[code] || (upstream >= 400 && upstream < 600 ? upstream : 502);
+  return new hubErrors.HubError(code, error.message, { status, ...(error.details ? { details: error.details } : {}) });
 }
 
 /**
@@ -131,6 +164,48 @@ function createModelHub(options = {}) {
   const sources = createSourceProbe({ auth, fetchImpl: options.fetchImpl, clock, ...(isPlainObject(options.sourceProbeOptions) ? options.sourceProbeOptions : {}) });
   const tokenSweepMs = Number(options.tokenSweepMs) > 0 ? Number(options.tokenSweepMs) : TOKEN_SWEEP_MS;
   const readConfig = typeof options.readConfig === "function" ? options.readConfig : () => readHubConfig(aiRoot, env);
+  const modelStorage = options.modelStorage || null;
+
+  // The download queue (HUB-7, 03 §8) and what it drives: the CLI transfer
+  // engine (03 §6), one progress monitor per attempt (§7.2) and the
+  // completion pipeline (§7.4). Tests replace any of them.
+  const disk = options.disk || createDiskGuard({ statfs: options.statfs });
+  const engine = options.transferEngine || createCliTransferEngine({
+    hfCli,
+    modelScopeCli,
+    hfHome,
+    dataDir,
+    spawnImpl: options.spawnImpl,
+    platform: options.platform,
+    tokens,
+    modelStorage,
+    env,
+    clock,
+  });
+  const monitorFactory = typeof options.monitorFactory === "function"
+    ? options.monitorFactory
+    : (job, hooks) => createTransferMonitor(job, { hfHome, clock, settings: () => settings.get(), ...hooks });
+  const verifier = options.verifier || createArtifactVerifier({ fsStore: options.fsStore || null, clock });
+  const queue = createDownloadQueue({
+    store,
+    engine,
+    monitorFactory,
+    verifier,
+    library,
+    settings: () => settings.get(),
+    busySignal: typeof options.getRuntimeLoad === "function" ? options.getRuntimeLoad : null,
+    disk,
+    events: options.events || null,
+    tokens,
+    modelStorage,
+    getBusyPaths: typeof options.getBusyPaths === "function" ? options.getBusyPaths : null,
+    runAfter: options.runAfter || null,
+    errorData: () => transferErrors.data,
+    clock,
+    timers: options.timers,
+    logger,
+    ...(isPlainObject(options.queueOptions) ? options.queueOptions : {}),
+  });
 
   let state = "idle";
   let startPromise = null;
@@ -201,8 +276,8 @@ function createModelHub(options = {}) {
     settings.load();
     loadTransferErrors();
 
-    // The queue (HUB-7) owns the jobs; until then they are carried over as
-    // they are. A corrupt ledger is kept aside, never overwritten.
+    // The queue owns the jobs. A corrupt ledger is kept aside, never
+    // overwritten.
     const current = store.readDownloads();
     if (current.error) {
       try {
@@ -215,6 +290,8 @@ function createModelHub(options = {}) {
     } else {
       downloads = { schemaVersion: current.value.schemaVersion, jobs: current.value.jobs };
     }
+    queue.load(downloads);
+    downloads = queue.document();
 
     const migrations = store.read("migrations");
     if (migrations.error) storeErrors.push(dataError(migrations, HUB_FILES.migrations));
@@ -234,9 +311,12 @@ function createModelHub(options = {}) {
         library.rescan().catch((error) => warn(`model hub: the start scan failed: ${error?.message || error}`));
       }
     }
+    // Restart semantics (03 §8): orphans, interrupted jobs, auth waits,
+    // retry timers and the delayed auto-resume.
+    await queue.start();
     heartbeat = setInterval(() => {
       if (state !== "running") return;
-      store.writeDownloads(downloads).catch((error) => warn(`model hub: downloads.json heartbeat failed: ${error?.message || error}`));
+      store.writeDownloads(queue.document()).catch((error) => warn(`model hub: downloads.json heartbeat failed: ${error?.message || error}`));
     }, heartbeatMs);
     heartbeat.unref?.();
     startedAt = new Date(clock.now()).toISOString();
@@ -268,6 +348,13 @@ function createModelHub(options = {}) {
       heartbeat = null;
       if (tokenSweep) clearInterval(tokenSweep);
       tokenSweep = null;
+      // In-process downloads become interrupted (autoResume) before the
+      // final write below.
+      try {
+        await queue.stop({ reason });
+      } catch (error) {
+        warn(`model hub: stopping the download queue failed (${reason}): ${error?.message || error}`);
+      }
       try {
         await library?.stop();
       } catch (error) {
@@ -280,7 +367,7 @@ function createModelHub(options = {}) {
       }
       if (wasRunning) {
         try {
-          store.writeDownloads(downloads, { sync: true });
+          store.writeDownloads(queue.document(), { sync: true });
         } catch (error) {
           warn(`model hub: final downloads.json write failed (${reason}): ${error?.message || error}`);
         }
@@ -298,19 +385,156 @@ function createModelHub(options = {}) {
     return migrationSteps.length > 0 && migrationSteps.every((step) => step.done === true);
   }
 
-  // GET /api/hub/status (03 §13). Queue counts stay 0 until the queue lands
-  // (HUB-7). The viewer copy drops cli paths, dataDir and dataErrors[].file.
+  function sourceEndpoint(source) {
+    const sources = settings.get()?.sources || {};
+    if (source === "hf-mirror") return String(sources.mirrorEndpoint || "https://hf-mirror.com");
+    if (source === "modelscope") return String(sources.modelScopeEndpoint || "https://www.modelscope.cn");
+    return String(sources.hfEndpoint || "https://huggingface.co");
+  }
+
+  /**
+   * enqueue(input, ctx) → DownloadJob (03 §13 POST /downloads). `input` is a
+   * plan body (03 §13.4): provider, repo, revision, selection, target,
+   * source, transfer.xet, credential.mode, runAfter, priority and
+   * allowDuplicate. `ctx` carries { origin, credential }, where credential is
+   * what the route made of credential.hfToken ({ tokenRef, remember }); the
+   * token itself never reaches this function. The manifest is read fresh,
+   * the selection resolved and compiled, and the target comes from
+   * modelStorage.downloadTarget only (03 §17).
+   */
+  async function enqueue(input = {}, ctx = {}) {
+    await settled();
+    if (state !== "running") throw new hubErrors.HubError("hub_unavailable", "The model hub is not running.", { status: 503 });
+    if (readConfig().downloadsOwner === "manager") {
+      throw new hubErrors.HubError("hub_disabled", "Downloads are handled by the managers (hub.downloadsOwner is \"manager\").", { status: 409 });
+    }
+    if (!isPlainObject(input)) throw badRequest("body", "The request body must be a plan object.");
+    if (input.planId !== undefined && input.planId !== null) {
+      // Plans are cached by POST /api/hub/plan (HUB-10); until then every
+      // planId is unknown and the caller sends the plan body instead.
+      throw new hubErrors.HubError("plan_not_found", "The plan is unknown or has expired; plan the download again.", { status: 404, details: { planId: String(input.planId).slice(0, 80) } });
+    }
+    if (!modelStorage) throw new hubErrors.HubError("hub_unavailable", "The model storage registry is not available.", { status: 503 });
+    const current = settings.get();
+    const provider = input.provider === undefined || input.provider === null ? "huggingface" : String(input.provider);
+    if (!["huggingface", "hf-mirror", "modelscope"].includes(provider)) throw badRequest("provider", "provider must be huggingface or modelscope.");
+    const namespace = provider === "modelscope" ? "modelscope" : "huggingface";
+    const repo = String(input.repo || "").trim();
+    if (!REPO_RE.test(repo)) throw badRequest("repo", "repo must look like owner/name.");
+    const revision = input.revision === undefined || input.revision === null || input.revision === "" ? "main" : String(input.revision);
+    if (!REVISION_RE.test(revision)) throw badRequest("revision", "The revision is not valid.");
+    if (input.selection !== undefined && input.selection !== null && !isPlainObject(input.selection)) throw badRequest("selection", "selection must be an object.");
+    if (input.target !== undefined && input.target !== null && !isPlainObject(input.target)) throw badRequest("target", "target must be an object.");
+
+    let source = input.source === undefined || input.source === null || input.source === "auto" ? "auto" : String(input.source);
+    if (source === "auto") {
+      if (namespace === "modelscope") source = "modelscope";
+      else source = provider === "hf-mirror" || current?.sources?.policy === "hf-mirror" ? "hf-mirror" : "huggingface";
+    }
+    if (!SOURCES_BY_NAMESPACE[namespace].includes(source)) throw badRequest("source", `source must be one of ${SOURCES_BY_NAMESPACE[namespace].join(", ")}.`);
+
+    let manifest;
+    try {
+      const metadata = providers.forNamespace(namespace, source === "hf-mirror" ? "hf-mirror" : undefined);
+      manifest = await metadata.getRepo(repo, { revision });
+    } catch (error) {
+      throw fromProviderError(error);
+    }
+    const notes = [];
+    if (manifest?.gated && source === "hf-mirror" && current?.sources?.gatedUsesOfficial !== false) {
+      source = "huggingface";
+      notes.push("gated repository: downloading from the official endpoint");
+    }
+    const artifact = resolveSelection(manifest, input.selection || {});
+    const include = compileIncludePatterns(artifact.files, manifest.files || []);
+
+    const outputName = nonEmpty(input.target?.outputName) ? input.target.outputName.trim() : repo.replace("/", "-");
+    let localDir;
+    let root;
+    try {
+      localDir = modelStorage.downloadTarget(nonEmpty(input.target?.rootId) ? input.target.rootId : null, outputName);
+      root = modelStorage.rootFor(localDir);
+    } catch (error) {
+      throw new hubErrors.HubError("invalid_target", String(error?.message || "The target folder is not usable."), { status: Number(error?.status) === 503 ? 503 : 400, details: { field: "target" } });
+    }
+
+    let credentialMode;
+    let tokenRef = null;
+    let remember = false;
+    if (isPlainObject(ctx.credential) && nonEmpty(ctx.credential.tokenRef)) {
+      if (source !== "huggingface") {
+        throw new hubErrors.HubError("token_not_allowed_on_mirror", "Only the official Hugging Face endpoint receives a token.", { status: 422 });
+      }
+      credentialMode = "temp-token";
+      tokenRef = ctx.credential.tokenRef;
+      remember = Boolean(ctx.credential.remember);
+    } else {
+      const mode = input.credential?.mode;
+      if (mode !== undefined && mode !== null && mode !== "auto" && !CREDENTIAL_MODES.includes(mode)) {
+        throw badRequest("credential.mode", "credential.mode must be auto, cached-login or none (temp-token needs credential.hfToken).");
+      }
+      credentialMode = source === "huggingface" ? (mode === "none" ? "none" : "cached-login") : "none";
+    }
+    const xet = input.transfer?.xet === undefined || input.transfer?.xet === null ? (current?.transfer?.xet || "high-performance") : String(input.transfer.xet);
+    if (!XET_MODES.includes(xet)) throw badRequest("transfer.xet", `transfer.xet must be one of ${XET_MODES.join(", ")}.`);
+    const priority = input.priority === undefined || input.priority === null ? "normal" : String(input.priority);
+    if (!["high", "normal", "low"].includes(priority)) throw badRequest("priority", "priority must be high, normal or low.");
+
+    const origin = isPlainObject(ctx.origin) ? { ...ctx.origin } : { kind: "console" };
+    let volume = null;
+    try {
+      volume = disk.volumeOf(root?.path || localDir);
+    } catch {
+      volume = null;
+    }
+    const spec = {
+      origin,
+      ownerManagerId: origin.kind === "manager-shim" ? origin.managerId : null,
+      priority,
+      runAfter: input.runAfter ?? null,
+      artifact: {
+        provider: namespace,
+        repo,
+        revision,
+        revisionSha: manifest.revisionSha || null,
+        artifactKey: artifact.artifactKey,
+        kind: artifact.kind,
+        format: artifact.format,
+        quant: artifact.quant ?? null,
+        companions: artifact.companions || [],
+        files: artifact.files.map((file) => ({
+          path: file.path,
+          size: Number(file.size) || 0,
+          sha256: file.sha256 || null,
+          ...(file.gitOid ? { gitOid: file.gitOid } : {}),
+          role: file.role || "weight",
+        })),
+        totalBytes: artifact.totalBytes,
+        ...(notes.length ? { notes } : {}),
+      },
+      target: { rootId: root?.id || null, rootLabel: root?.label || null, outputName, localDir, volume },
+      transfer: {
+        options: { source, endpoint: sourceEndpoint(source), xet: source === "modelscope" ? "default" : xet, credentialMode, tokenRef, remember },
+        include,
+      },
+    };
+    return queue.enqueue(spec, { allowDuplicate: input.allowDuplicate === true });
+  }
+
+  // GET /api/hub/status (03 §13). The viewer copy drops cli paths, dataDir
+  // and dataErrors[].file.
   function status() {
     const config = readConfig();
+    const counts = queue.counts();
     return {
       ok: true,
       state,
       owner: config.downloadsOwner,
       ownerSource: config.source,
-      active: 0,
-      queued: 0,
-      waiting: 0,
-      speedBps: 0,
+      active: counts.active,
+      queued: counts.queued,
+      waiting: counts.waiting,
+      speedBps: counts.speedBps,
       cli: { hf: cliInfo(hfCli), modelscope: cliInfo(modelScopeCli) },
       dataDir,
       dataErrors: [...storeErrors, ...settings.errors(), ...transferErrors.errors, ...(library ? library.errors() : [])],
@@ -358,8 +582,36 @@ function createModelHub(options = {}) {
     library,
     // GET /api/hub/tasks/:id: library tasks (rescan, verify), in memory.
     tasks: { get: (id) => (library ? library.getTask(id) : null) },
-    // 06 OPS-13's busy probe; the queue fills in downloads (HUB-7).
-    busy: () => ({ downloads: 0, verifying: library ? library.activeVerifications() : 0 }),
+    // POST /api/hub/downloads: a plan body (or a planId once HUB-10 caches
+    // plans) becomes a queued DownloadJob (03 §8, §13).
+    enqueue,
+    // The queue operations behind /api/hub/downloads/* (03 §13).
+    jobs: {
+      list: (query) => queue.list(query),
+      get: (id) => queue.get(id),
+      logs: (id, opts) => queue.logs(id, opts),
+      history: (query) => queue.history(query),
+      resumeCheck: (id) => queue.resumeCheck(id),
+      pause: (id) => queue.pause(id),
+      resume: (id, input = {}) => queue.resume(id, { ...input, sourceEndpoint }),
+      retry: (id) => queue.retry(id),
+      cancel: (id, input) => queue.cancel(id, input),
+      setPriority: (id, priority) => queue.setPriority(id, priority),
+      reorder: (ids) => queue.reorder(ids),
+      startNow: (id, input) => queue.startNow(id, input),
+      pauseAll: () => queue.pauseAll(),
+      resumeAll: () => queue.resumeAll(),
+      remove: (id) => queue.remove(id),
+      aggregate: () => queue.aggregate(),
+      busyPaths: () => queue.busyPaths(),
+    },
+    queue,
+    // 06 OPS-13's busy probe (blocker kind "download"): active transfers, and
+    // verifications of the queue and of the library.
+    busy: () => {
+      const queueBusy = queue.busy();
+      return { downloads: queueBusy.downloads, verifying: queueBusy.verifying + (library ? library.activeVerifications() : 0) };
+    },
     get state() {
       return state;
     },

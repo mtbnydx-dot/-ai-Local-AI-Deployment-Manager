@@ -155,6 +155,8 @@ test("real entry and Python TTS enforce RPM, Hard balance and asynchronous meter
     child.kill();
     await new Promise(resolve => child.exitCode !== null ? resolve() : child.once("exit", resolve));
     entry.getBillingStore().close();
+    // The ban check opens the access store beside the ledger (05 §9.3).
+    entry.closeAccessStore();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

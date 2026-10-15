@@ -139,3 +139,114 @@ test("GGUF variants are grouped by quant with shard totals, companions and VRAM 
   assert.equal(plan.model, "unsloth/Qwen3-30B-A3B-GGUF:Q4_K_M");
   assert.ok(plan.includeExtras.includes("*mmproj*.gguf"));
 });
+
+// ----- MOD-11: rows for every engine runtime and every selected GPU (02 section 9)
+
+const BNB_CONFIG = { model_type: "qwen3", architectures: ["Qwen3ForCausalLM"], quantization_config: { quant_method: "bitsandbytes" } };
+const BNB_SIBLINGS = [{ name: "config.json", size: 900 }, { name: "model.safetensors", size: 5e9 }];
+
+test("every engine runtime is judged: BNB is blocked only when no runtime can run it", () => {
+  const without = { engineId: "vllm", runtimeId: "vllm@0.28.0", version: "0.28.0", status: "pinned", release: { version: "v0.28.0", bitsAndBytesPlugin: false } };
+  const withPlugin = { engineId: "vllm", runtimeId: "vllm@0.29.0", version: "0.29.0", status: "pinned", release: { version: "v0.29.0", bitsAndBytesPlugin: true } };
+  const base = { engine: "vllm", model: "unsloth/Qwen3-32B-bnb-4bit", config: BNB_CONFIG, siblings: BNB_SIBLINGS };
+
+  const blocked = assessDownloadCompatibility({ ...base, runtimes: [without] });
+  const blockedFinding = blocked.findings.find((item) => item.code === "bitsandbytes_plugin_missing");
+  assert.equal(blocked.level, "block");
+  assert.equal(blockedFinding.severity, "block");
+  assert.deepEqual(blocked.runtimes, ["vllm@0.28.0"]);
+
+  const some = assessDownloadCompatibility({ ...base, runtimes: [without, withPlugin] });
+  assert.equal(some.ok, true, "one runtime with the plugin is enough to download");
+  const warned = some.findings.find((item) => item.code === "bitsandbytes_plugin_missing");
+  assert.equal(warned.severity, "warn");
+  assert.deepEqual(warned.runtimes, ["vllm@0.28.0"]);
+  assert.match(warned.detail, /vllm@0\.28\.0/);
+  assert.deepEqual(some.runtimes, ["vllm@0.28.0", "vllm@0.29.0"]);
+
+  // The runtime the caller names is judged together with the registry's own runtimes.
+  const named = assessDownloadCompatibility({ ...base, runtime: { version: "v9.9.9", bitsAndBytesPlugin: true } });
+  assert.equal(named.ok, true);
+  assert.ok(named.runtimes.includes("vllm@9.9.9"));
+  assert.ok(named.runtimes.length > 1, "registry runtimes of the engine are included");
+});
+
+test("every selected GPU is judged, not only the first", () => {
+  const flashNext = { engine: "vllm", model: "Qwen/Qwen3.8-Flash-Next-NVFP4", config: { model_type: "qwen4_exp" }, runtime: VLLM_RUNTIME };
+  const both = assessDownloadCompatibility({ ...flashNext, gpus: [{ id: "0", computeCap: "12.0", totalMb: 97887 }, { id: "1", computeCap: "12.0", totalMb: 97887 }] });
+  assert.ok(!both.findings.some((item) => item.code === "compute_capability"));
+  const mixed = assessDownloadCompatibility({ ...flashNext, gpus: [{ id: "0", computeCap: "12.0", totalMb: 97887 }, { id: "1", computeCap: "8.9", totalMb: 24000 }] });
+  const finding = mixed.findings.find((item) => item.code === "compute_capability");
+  assert.equal(finding.severity, "block");
+  assert.match(finding.detail, /GPU 1（SM 8\.9）/);
+  assert.equal(mixed.ok, false);
+  // The legacy single gpu field still works.
+  const legacy = assessDownloadCompatibility({ ...flashNext, gpu: { computeCap: "8.9", totalMb: 24000 } });
+  assert.ok(legacy.findings.some((item) => item.code === "compute_capability" && item.severity === "block"));
+
+  // Weights are spread over the selected GPUs: the VRAM check uses their sum.
+  const model = { engine: "vllm", model: "org/model", config: { model_type: "qwen3" }, runtime: VLLM_RUNTIME, bytes: 60 * 1024 ** 3 };
+  assert.ok(assessDownloadCompatibility({ ...model, gpus: [{ id: "0", computeCap: "12.0", totalMb: 49152 }] }).findings.some((item) => item.code === "vram_exceeded"));
+  const spread = assessDownloadCompatibility({ ...model, gpus: [{ id: "0", computeCap: "12.0", totalMb: 49152 }, { id: "1", computeCap: "12.0", totalMb: 49152 }] });
+  assert.ok(!spread.findings.some((item) => item.code === "vram_exceeded"));
+});
+
+test("a remote GGUF repository is identified by its GGUF architecture (input or remote card)", () => {
+  const siblings = [{ name: "model-Q4_K_M.gguf", size: 8e9 }];
+  const listed = assessDownloadCompatibility({ engine: "llama", model: "unsloth/Qwen3-8B-GGUF", config: null, siblings, ggufArchitecture: "qwen3" });
+  assert.equal(listed.capability.id, "qwen3");
+  assert.equal(listed.capability.matchedBy, "gguf");
+  assert.equal(listed.capability.confidence, "declared");
+  assert.ok(listed.findings.some((item) => item.code === "identity" && /按声明识别/.test(item.detail)));
+  assert.ok(!listed.findings.some((item) => item.code === "identity_unknown"));
+
+  const unlisted = assessDownloadCompatibility({ engine: "llama", model: "org/DeepSeek-V4-Flash-GGUF", config: null, siblings, ggufArchitecture: "deepseek4" });
+  const unlistedFinding = unlisted.findings.find((item) => item.code === "identity_unlisted");
+  assert.equal(unlistedFinding.severity, "warn", "unlisted is a warning now, with the same code");
+  assert.equal(unlisted.level, "warn");
+  assert.equal(unlisted.ok, true);
+  assert.equal(unlisted.capability.id, "");
+  assert.equal(unlisted.capability.confidence, "");
+
+  const remoteCard = { identity: { ggufArchitecture: "muse-glimmer", architectures: [] }, remote: { siblings } };
+  const muse = assessDownloadCompatibility({ engine: "llama", model: "x/y", config: null, card: remoteCard });
+  assert.equal(muse.level, "block");
+  assert.ok(muse.findings.some((item) => item.severity === "block" && /Muse Glimmer/.test(item.detail)));
+  assert.equal(muse.format.hasGguf, true, "the card's file list stands in for the siblings");
+
+  const fromCard = assessDownloadCompatibility({ engine: "llama", model: "unsloth/Qwen3-8B-GGUF", config: null, siblings, card: { identity: { ggufArchitecture: "qwen3" } } });
+  assert.equal(fromCard.capability.id, "qwen3");
+});
+
+test("capability.confidence is the fact confidence; the knowledge entry's own confidence is separate", () => {
+  const declared = assessDownloadCompatibility({ engine: "vllm", model: "Qwen/Qwen3-8B", config: { model_type: "qwen3" }, runtime: VLLM_RUNTIME });
+  assert.equal(declared.capability.confidence, "declared");
+  assert.equal(declared.capability.knowledgeConfidence, "documented");
+  const byName = assessDownloadCompatibility({ engine: "vllm", model: "Qwen/Qwen3-8B", config: { hidden_size: 4096 }, runtime: VLLM_RUNTIME });
+  assert.equal(byName.capability.confidence, "name-heuristic");
+  assert.match(byName.findings.find((item) => item.code === "identity").detail, /按名称推断（未验证）/);
+  // The trust_remote_code copy and code are P0-14's.
+  const remoteCode = assessDownloadCompatibility({ engine: "vllm", model: "org/Remote", config: { model_type: "nemotron_h", auto_map: { AutoModel: "m.M" } }, runtime: VLLM_RUNTIME });
+  const trust = remoteCode.findings.find((item) => item.code === "trust_remote_code");
+  assert.equal(trust.detail, "需要在启动参数中勾选 trust-remote-code（会执行仓库内的 Python 代码）。");
+});
+
+test("NVFP4 on an older GPU warns about the emulated fallback; DiffusionGemma follows the WSL block and its env bypass", () => {
+  const nvfp4 = assessDownloadCompatibility({
+    engine: "vllm",
+    model: "org/Model-NVFP4",
+    config: { model_type: "qwen3", quantization_config: { quant_method: "modelopt_fp4" } },
+    runtime: VLLM_RUNTIME,
+    gpu: { computeCap: "8.9", totalMb: 24000 },
+  });
+  assert.equal(nvfp4.findings.find((item) => item.code === "nvfp4_emulated").severity, "warn");
+  assert.equal(nvfp4.ok, true);
+
+  const diffusion = { engine: "vllm", model: "google/diffusiongemma", config: { model_type: "diffusiongemma", architectures: ["DiffusionGemmaForBlockDiffusion"] }, runtime: VLLM_RUNTIME, platform: "wsl" };
+  const blocked = assessDownloadCompatibility({ ...diffusion, env: {} });
+  assert.equal(blocked.findings.find((item) => item.code === "diffusion_gemma_windows").severity, "block");
+  assert.equal(blocked.ok, false);
+  const bypassed = assessDownloadCompatibility({ ...diffusion, env: { VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA: "1" } });
+  assert.ok(!bypassed.findings.some((item) => item.code === "diffusion_gemma_windows"));
+  assert.equal(bypassed.ok, true);
+});

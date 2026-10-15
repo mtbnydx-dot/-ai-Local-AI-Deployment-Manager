@@ -6,6 +6,10 @@
 //   GET  /api/engines/:engineId/schema     parameter catalog + availability + facts + recipes
 //   GET  /api/instances/:id/metrics        latest sampler snapshot (01 §16.1)
 //   POST /api/recipes/reload               re-read config/recipes (01 §10.3)
+//   GET  /api/instances/:id/logs           one instance's redacted log tail (ENG-13)
+//   GET  /api/instances/:id/launch         its LaunchStore record and redacted command
+//   POST /api/instances/:id/relaunch       start it again from that record (confirm:true)
+//   POST /api/runtimes/:runtimeId/pull     explicit image pull as a dl_ job (01 §14, §21.1)
 // Later packages (launch plan) add their routes here too.
 // Docker is touched only through the injected getImageStatus/listManagedContainers
 // reads, both cached, so a dashboard polling this route stays cheap. The metrics
@@ -14,10 +18,12 @@
 const { isPlainObject } = require("./descriptor-schema");
 const { buildFacts, buildSchemaPayload, getParamCatalog, hostFactsFromGpus } = require("./param-catalog");
 const { matchRecipes } = require("./recipes");
+const { redactSecrets } = require("../secret-redactor");
 const { normalizeManagerId } = require("./registry");
 const { sendJsonError } = require("../runtime-routes");
 const { publicPlan } = require("./resolve-launch-plan");
 const { createRuntimeFacts } = require("./runtime-facts");
+const { summarizeJob } = require("../job-routes");
 const { buildIntrospectionCommand, introspectRuntime, diffFlagSets, refineAutoParsers } = require("./introspect");
 
 const MAX_DRAFT_BYTES = 256 * 1024;
@@ -29,6 +35,11 @@ const ENGINE_ID_LABEL_KEY = "ai.manager.engine-id";
 const LEGACY_ENGINE_LABEL_KEY = "ai.manager.engine";
 const INSTANCE_MODES = Object.freeze(["replace", "parallel", "add"]);
 const MAX_QUERY_TEXT = 1024;
+const DEFAULT_LOG_TAIL = 200;
+const MAX_LOG_TAIL = 5000;
+// Same shape the managers accept for an instance id (runtime-request-utils).
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/;
+const RELAUNCH_LAUNCH_ID_WAIT_MS = 2000;
 
 // 00 §4.2 error envelope for the new admin JSON APIs.
 function errorEnvelope(code, message, hint) {
@@ -96,6 +107,22 @@ function createImagePresenceProbe(options = {}) {
   }
 
   return { present, imageId, clear: () => entries.clear() };
+}
+
+/**
+ * The runtime ref a manager can pull: runtimeId among the runtimes of the
+ * engines it hosts (env image overrides applied). Throws 404 unknown_runtime.
+ */
+function findHostedRuntime(registry, managerId, runtimeId) {
+  const id = String(runtimeId ?? "").trim();
+  const host = normalizeManagerId(managerId);
+  if (id) {
+    for (const engineId of registry.hostedBy(host)) {
+      const ref = registry.runtimesFor(engineId).find((item) => item.runtimeId === id);
+      if (ref) return { ...ref, engineId: ref.engineId || engineId };
+    }
+  }
+  throw httpError(404, "unknown_runtime", `Unknown runtime for this manager: ${id || "(none)"}.`);
 }
 
 /** counts() → { [engineId]: runningContainers } for this manager, or null when unknown. */
@@ -198,14 +225,14 @@ async function buildEnginesPayload(options = {}) {
       adapter: descriptor.adapter,
       tier: descriptor.tier,
       status: descriptor.status,
-      hostKinds: [...descriptor.host.kinds],
+      hostKinds: typeof registry.hostKindsFor === "function" ? registry.hostKindsFor(descriptor) : [...descriptor.host.kinds],
       artifactFormats: [...descriptor.artifactFormats],
       runtimes,
       capabilities: refineAutoParsers(descriptor.capabilities, defaultIntrospection),
       apiSurface: clone(descriptor.apiSurface || null),
       memoryModel: { kind: descriptor.memoryModel.kind },
       health: {
-        host: descriptor.host.default,
+        host: typeof registry.defaultHostKindFor === "function" ? registry.defaultHostKindFor(descriptor) : descriptor.host.default,
         hostReady: null,
         instances: null,
       },
@@ -420,6 +447,67 @@ function readInstanceMetrics(sampler, instanceId) {
   return { status: 200, payload };
 }
 
+function createLogRedactor(input) {
+  const custom = typeof input === "function" ? input
+    : (input && typeof input.redact === "function" ? (value) => input.redact(value) : null);
+  return (value) => {
+    if (!custom) return redactSecrets(value);
+    try {
+      return custom(value);
+    } catch {
+      return redactSecrets(value);
+    }
+  };
+}
+
+/** A copy of a JSON value with every string passed through the redactor. */
+function redactStrings(value, redact) {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map((item) => redactStrings(item, redact));
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactStrings(item, redact)]));
+}
+
+/** "docker run …" for a redacted argv: arguments with spaces or quotes are double-quoted. */
+function dockerCommandText(argv) {
+  const quote = (arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `"${arg.replace(/(["\\])/g, "\\$1")}"`);
+  const args = (Array.isArray(argv) ? argv : []).map(String);
+  return `docker ${args.map(quote).join(" ")}`.trim();
+}
+
+/** The LaunchStore spec of an instance as a LaunchRequestV2 (01 §4): what POST /api/start plans. */
+function relaunchRequest(record, { overrides, apiKey } = {}) {
+  const spec = record.spec || {};
+  const values = { ...(isPlainObject(spec.values) ? spec.values : {}), ...(isPlainObject(overrides?.values) ? overrides.values : {}) };
+  return {
+    engineId: spec.engineId,
+    ...(spec.runtimeId ? { runtimeId: spec.runtimeId } : {}),
+    ...(spec.recipeId ? { recipeId: spec.recipeId } : {}),
+    ...(spec.runtimeImage ? { runtime: { imageOverride: spec.runtimeImage } } : {}),
+    model: { ref: spec.model?.ref, ...(spec.model?.servedName ? { servedName: spec.model.servedName } : {}) },
+    instance: {
+      mode: spec.instance?.mode,
+      ...(spec.instance?.id ? { id: spec.instance.id } : {}),
+      ...(spec.instance?.port ? { port: spec.instance.port } : {}),
+      networkAccess: spec.instance?.networkAccess,
+      ...(spec.instance?.gpuIds?.length ? { gpuIds: [...spec.instance.gpuIds] } : {}),
+    },
+    values,
+    ...(spec.extraArgs?.length ? { extraArgs: [...spec.extraArgs] } : {}),
+    ...(isPlainObject(spec.extraEnv) && Object.keys(spec.extraEnv).length ? { extraEnv: { ...spec.extraEnv } } : {}),
+    ...(apiKey ? { apiKey } : {}),
+    source: "relaunch",
+    fromLaunchId: record.launchId,
+  };
+}
+
+/** The launch id the supervisor stamps on job.meta once the job starts building its command. */
+async function waitForLaunchId(job, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (!job?.meta?.launchId && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  return job?.meta?.launchId || null;
+}
+
 function registerEngineRoutes(app, deps = {}) {
   const { registry } = deps;
   if (!registry || typeof registry.hostedBy !== "function" || typeof registry.checkOverride !== "function") {
@@ -611,6 +699,145 @@ function registerEngineRoutes(app, deps = {}) {
     } catch (error) { return sendRuntimeError(res, error); }
   });
 
+  // Per-instance logs, launch record and relaunch (ENG-13). An instance id
+  // resolves through the manager's own instance list or its P0-RT-4 container
+  // resolver, never from a caller-provided container name.
+  const redactLogs = createLogRedactor(deps.redactLogs);
+  const redactArgv = (argv) => (Array.isArray(argv) ? argv : []).map((arg) => redactLogs(String(arg)));
+
+  async function findInstance(req) {
+    const id = typeof req.params?.id === "string" ? req.params.id.trim() : "";
+    if (!INSTANCE_ID_PATTERN.test(id) || typeof deps.findInstance !== "function") return null;
+    return deps.findInstance(id);
+  }
+
+  function unknownInstance(res, id) {
+    const shown = String(id ?? "").slice(0, 64);
+    return res.status(404).json(errorEnvelope("unknown_instance", `Unknown instance: ${shown || "(empty)"}`, "List this manager's instances with GET /api/instances."));
+  }
+
+  if (typeof deps.resolveLogContainer === "function" && typeof deps.docker === "function") {
+    app.get("/api/instances/:id/logs", async (req, res) => {
+      try {
+        const id = typeof req.params?.id === "string" ? req.params.id.trim() : "";
+        const containerName = INSTANCE_ID_PATTERN.test(id) ? await deps.resolveLogContainer(id) : null;
+        if (!containerName) return unknownInstance(res, id);
+        const requested = Math.floor(Number(queryText(req.query?.tail)));
+        const tail = Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_LOG_TAIL) : DEFAULT_LOG_TAIL;
+        const since = queryText(req.query?.since);
+        if (since && !Number.isFinite(Date.parse(since))) {
+          return res.status(400).json(errorEnvelope("invalid_since", "since must be an ISO 8601 time.", "Example: since=2026-10-14T08:00:00Z"));
+        }
+        const out = await deps.docker(["logs", "--tail", String(tail), ...(since ? ["--since", since] : []), String(containerName)], {
+          rejectOnError: false,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+        const raw = `${out?.stdout || ""}${out?.stderr || ""}`;
+        const lines = raw ? raw.replace(/\r?\n$/, "").split(/\r?\n/).length : 0;
+        return res.json({
+          ok: true,
+          instanceId: id,
+          containerName: String(containerName),
+          text: redactLogs(raw),
+          truncated: lines >= tail,
+          redacted: true,
+        });
+      } catch (error) {
+        return res.status(500).json(errorEnvelope("logs_unavailable", redactLogs(String(error?.message ?? ""))));
+      }
+    });
+  }
+
+  if (typeof deps.findInstance === "function" && deps.launchStore) {
+    const recordOf = (state) => deps.launchStore.resolveForInstance(state, {
+      jobsLedgerLookup: deps.jobsLedgerLookup,
+      recentLaunches: typeof deps.listRecentLaunches === "function" ? deps.listRecentLaunches() : undefined,
+    });
+
+    app.get("/api/instances/:id/launch", async (req, res) => {
+      try {
+        const found = await findInstance(req);
+        if (!found) return unknownInstance(res, req.params?.id);
+        const record = recordOf(found.state);
+        if (!record) return res.status(404).json(errorEnvelope("launch_not_found", "No launch record matches this instance."));
+        const launch = redactStrings(record, redactLogs);
+        const argv = redactArgv(record.resolved?.argvRedacted);
+        return res.json({ ok: true, launch, command: { argv, docker: dockerCommandText(argv) } });
+      } catch (error) {
+        return res.status(500).json(errorEnvelope("launch_unavailable", redactLogs(String(error?.message ?? ""))));
+      }
+    });
+
+    app.post("/api/instances/:id/relaunch", async (req, res) => {
+      if (!isAdminRequest(req)) return res.status(403).json(errorEnvelope("forbidden", "Relaunching an instance requires administrator access."));
+      if (req.body?.confirm !== true) return res.status(400).json(errorEnvelope("confirmation_required", "Confirm the relaunch with confirm:true."));
+      const overrides = req.body?.overrides;
+      if (overrides !== undefined && (!isPlainObject(overrides) || (overrides.values !== undefined && !isPlainObject(overrides.values)))) {
+        return res.status(400).json(errorEnvelope("invalid_body", "overrides must be {values:{…}}."));
+      }
+      const expectedPlanHash = req.body?.expectedPlanHash;
+      if (expectedPlanHash !== undefined && typeof expectedPlanHash !== "string") {
+        return res.status(400).json(errorEnvelope("invalid_body", "expectedPlanHash must be a string."));
+      }
+      if (typeof deps.startRuntime !== "function") return res.status(503).json(errorEnvelope("relaunch_unavailable", "This manager cannot start runtimes."));
+      try {
+        const found = await findInstance(req);
+        if (!found) return unknownInstance(res, req.params?.id);
+        const record = recordOf(found.state);
+        if (!record || record.partial) {
+          return res.status(409).json(errorEnvelope("launch_config_partial", "This instance has no complete launch record, so it cannot be relaunched.", "Start it again from the launch form."));
+        }
+        const apiKey = typeof deps.apiKeyFor === "function" ? String(await deps.apiKeyFor(found) || "") : "";
+        const body = relaunchRequest(record, { overrides, apiKey });
+        if (expectedPlanHash) {
+          if (typeof deps.planLaunch !== "function") return res.status(503).json(errorEnvelope("relaunch_unavailable", "This manager cannot plan launches."));
+          const plan = await deps.planLaunch(body);
+          if (plan.planHash !== expectedPlanHash) {
+            return res.status(409).json({
+              ...errorEnvelope("plan_changed", "The launch plan changed since it was shown.", "Review the new plan and confirm again."),
+              details: { expectedPlanHash, planHash: plan.planHash ?? null, plan: publicPlan(plan) },
+            });
+          }
+        }
+        // A parallel instance owns its container name, so it has to go first;
+        // a replace launch replaces the running container as its own plan step.
+        if (found.instance?.instanceMode === "parallel" && found.instance?.containerName && typeof deps.stopInstance === "function") {
+          await deps.stopInstance({ id: found.instance.id });
+        }
+        const started = await deps.startRuntime({ body });
+        const job = started?.job || null;
+        const launchId = await waitForLaunchId(job, deps.relaunchLaunchIdWaitMs ?? RELAUNCH_LAUNCH_ID_WAIT_MS);
+        return res.json({ job: clone(job), launchId, ...(started?.plan ? { plan: clone(started.plan) } : {}) });
+      } catch (error) {
+        const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 500;
+        return res.status(status).json({
+          ...errorEnvelope(error.code || (status === 500 ? "relaunch_failed" : "invalid_request"), redactLogs(String(error?.message ?? "")), error.hint),
+          ...(Array.isArray(error.errors) ? { errors: clone(error.errors) } : {}),
+          ...(error.details ? { details: clone(error.details) } : {}),
+        });
+      }
+    });
+  }
+
+  // The explicit pull behind the image_pull_required blocker (00 §9.2): an
+  // admin action with confirm:true that starts (or joins) an image-pull job.
+  // deps.pullRuntime is the supervisor's; this route never touches a
+  // container or a GPU lease.
+  app.post("/api/runtimes/:runtimeId/pull", async (req, res) => {
+    if (!isAdminRequest(req)) return res.status(403).json(errorEnvelope("forbidden", "Runtime image pulls require administrator access."));
+    if (req.body?.confirm !== true) {
+      return res.status(400).json(errorEnvelope("confirm_required", "Confirm the image pull with confirm:true.", "拉取镜像需要确认 / Confirm the pull first"));
+    }
+    if (typeof deps.pullRuntime !== "function") return res.status(503).json(errorEnvelope("pull_unavailable", "Runtime image pulls are not available on this manager."));
+    try {
+      // A finished pull changes what the plan's pull step and /api/engines see.
+      const { job, existing } = await deps.pullRuntime(req.params?.runtimeId, { source: "api", onSettled: () => presence?.clear() });
+      return res.status(202).json({ ok: true, existing: Boolean(existing), job: { ...summarizeJob(clone(job)), existing: Boolean(existing) } });
+    } catch (error) {
+      return res.status(error.status || 500).json(errorEnvelope(error.code || "pull_failed", error.message, error.hint));
+    }
+  });
+
   if (metricsSampler) {
     app.get("/api/instances/:id/metrics", (req, res) => {
       const { status, payload } = readInstanceMetrics(metricsSampler, req.params?.id);
@@ -628,6 +855,7 @@ module.exports = {
   createImagePresenceProbe,
   createInstanceCounter,
   errorEnvelope,
+  findHostedRuntime,
   readInstanceMetrics,
   registerEngineRoutes,
   validateDraftRequest,

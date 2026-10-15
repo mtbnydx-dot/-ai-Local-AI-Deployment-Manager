@@ -28,7 +28,8 @@
 //        admissionPreview?(admissionRequest, { mode, releasedMbByGpu }) → gpu-admission evaluate() result,
 //        listContainers?() → [{ name, running, labels }], platform?,
 //        getIntrospection?(runtime) → { flags[] } | null, modelStorage? (resolvePath, toContainerPath),
-//        calibrationFor?(card, engineId, runtimeId, paramsKey) → calibration | null }
+//        calibrationFor?(card, engineId, runtimeId, paramsKey) → calibration | null,
+//        modelFacts?(model, { engineId, runtimeId, hostFacts }) → Promise<02 planFacts | null> }
 //
 // calibrationFor is 02's calibration lookup (MOD-10) and defaults to
 // () => null. normalize gets it bound to this request's card, engine and
@@ -49,6 +50,7 @@ const extraArgs = require("./extra-args");
 const legacyAliases = require("./legacy-aliases");
 const paramCatalog = require("./param-catalog");
 const recipes = require("./recipes");
+const memoryModels = require("./memory-models");
 const registryModule = require("./registry");
 const { normalizeManagerId, unknownEngineError } = registryModule;
 const { renderRunArgs } = require("./adapters/_docker-segments");
@@ -569,6 +571,39 @@ function memoryView(admissionRequest, estimate = null) {
   return view;
 }
 
+// 02's artifact side of the plan's memory (MOD-9b, 02 §3.1, §10.1): when the
+// manager wires ctx.modelFacts and the model has a card (supplied, or read from
+// the folder model.ref names), the estimate is 01's memoryModels.estimate over
+// MemoryInputs.artifact, exactly the call estimateFit makes, so the plan and a
+// fit of the same card and values report the same perGpuMb, policy and
+// admissionRequestMb. Plan mode only; null (the legacy memory stands) when
+// there is no card or anything fails. The admission request the launch makes
+// stays the manager's.
+async function artifactMemory(ctx, { request, legacyBody, origin, engineId, descriptor, runtime, plan, runOptions, hostGpus, recipe, calibrationFor }) {
+  if (typeof ctx.modelFacts !== "function") return null;
+  if (plan.legacy.memory?.policy === "measured") return null;
+  try {
+    const model = origin === "v2" ? request.model : { ref: legacyBody?.model };
+    const runtimeId = runtime?.runtimeId || null;
+    const facts = await ctx.modelFacts(model, { engineId, runtimeId, hostFacts: { gpus: Array.isArray(hostGpus) ? hostGpus : [] } });
+    if (!facts || typeof facts.memoryInputs !== "function") return null;
+    const gpuIds = Array.isArray(runOptions?.gpuDeviceIds) && runOptions.gpuDeviceIds.length
+      ? runOptions.gpuDeviceIds.map(String)
+      : Array.isArray(request.instance?.gpuIds) ? request.instance.gpuIds.map(String) : [];
+    const recipeMemory = isPlainObject(recipe?.memory) ? recipe.memory : null;
+    const prepared = facts.memoryInputs(plainValues(plan.values), {
+      gpuIds,
+      instanceMode: runOptions?.instanceMode || request.instance?.mode,
+      recipeMemory,
+    });
+    const inputs = { ...prepared.inputs, calibration: (await calibrationFor(prepared.paramsKey)) || prepared.inputs.calibration || null };
+    const estimate = memoryModels.estimate(engineId, inputs, { descriptor });
+    return isPlainObject(estimate) ? { estimate, facts, artifact: prepared.artifact } : null;
+  } catch {
+    return null;
+  }
+}
+
 // What the running container in the replace slot holds now, by GPU, from its labels.
 function releasedMemory(container) {
   const labels = container?.labels || {};
@@ -989,6 +1024,20 @@ async function resolveLaunchPlan(request, ctx = {}) {
 
   // 9. Memory and the admission preview (the launch admits for itself).
   plan.memory = memoryView(plan.legacy.admissionRequest, plan.legacy.memory);
+  if (mode === "plan") {
+    const artifact = await artifactMemory(ctx, { request, legacyBody, origin, engineId, descriptor, runtime, plan, runOptions, hostGpus, recipe: executedRecipe, calibrationFor });
+    if (artifact) {
+      const { estimate } = artifact;
+      plan.memory = memoryView(estimate.admissionRequest || plan.legacy.admissionRequest, estimate);
+      if (isPlainObject(estimate.perGpuMb)) plan.memory.perGpuMb = clone(estimate.perGpuMb);
+      if (Number.isFinite(estimate.admissionRequestMb)) plan.memory.admissionRequestMb = estimate.admissionRequestMb;
+      plan.memory.artifact = {
+        cardId: artifact.artifact.cardId ?? null,
+        contentDigest: artifact.artifact.contentDigest ?? null,
+        confidence: artifact.artifact.confidence,
+      };
+    }
+  }
   if (mode === "plan" && plan.legacy.admissionRequest && typeof ctx.admissionPreview === "function") {
     let preview;
     try {
@@ -1150,7 +1199,7 @@ function launchSummary(plan) {
  * The managers' launch-request wiring: createLaunchPlanner({ managerId,
  * normalize, getEngineRegistry?, getRecipeStore?, paramCatalog?,
  * prepareLaunchCommand?, getHostGpus?, imagePresence?, admissionPreview?,
- * listContainers?, calibrationFor? }) → { plan(body), launch(body), runOptions(plan), summary(plan) }.
+ * listContainers?, calibrationFor?, modelFacts? }) → { plan(body), launch(body), runOptions(plan), summary(plan) }.
  * plan() is the POST /api/launch/plan body; launch() resolves the same plan
  * in launch mode and throws planLaunchError for a plan with problems.
  * The registry and recipe getters are read per request, so a manager can wire
@@ -1176,6 +1225,7 @@ function createLaunchPlanner(options = {}) {
       modelStorage: options.modelStorage || null,
       calibrationFor: hook("calibrationFor") || NO_CALIBRATION,
       getLaunchSpec: hook("getLaunchSpec"),
+      modelFacts: hook("modelFacts"),
     };
   }
   return {

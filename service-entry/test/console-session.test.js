@@ -36,12 +36,20 @@ let publicPort = 0;
 let dbFile = "";
 
 // A manager that serves /api/instances and echoes the proxied requests.
+// What the fake managers advertise in /api/manager/health (05 §7.1).
+let fakeTrustVersion = 2;
+
 function fakeManager(instances) {
   return http.createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (url.pathname === "/api/instances") {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ instances }));
+    }
+    // A current manager: hop v2 capable, so platform keys are served (05 §7.1).
+    if (url.pathname === "/api/manager/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(fakeTrustVersion ? { ok: true, gatewayTrust: { version: fakeTrustVersion, mode: "warn" } } : { ok: true }));
     }
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -299,7 +307,11 @@ test("console-session: a key header wins over the cookie; mcp and search are sco
   const before = upstreamHits.length;
   const keyed = await chat(adminPort, "qwen-chat", { owner, headers: { authorization: `Bearer ${secret}` } });
   assert.equal(keyed.status, 200);
-  assert.equal((await lastUpstream(before)).headers.authorization, `Bearer ${secret}`, "the key, not the session, is the caller");
+  // A v2 manager gets the key's signed principal instead of the key (05 §7.1).
+  const keyedHit = await lastUpstream(before);
+  assert.equal(keyedHit.headers.authorization, undefined);
+  const keyedPrincipal = JSON.parse(Buffer.from(keyedHit.headers["x-service-entry-principal"], "base64url").toString("utf8"));
+  assert.equal(keyedPrincipal.k, key.id, "the key, not the session, is the caller");
   // The key's own rules apply even with an owner cookie beside it.
   const notAllowed = await chat(adminPort, "gemma-gguf", { owner, headers: { authorization: `Bearer ${secret}` } });
   assert.deepEqual([notAllowed.status, notAllowed.json.error.code, notAllowed.json.error.param], [403, "model_not_allowed", "model"]);
@@ -400,4 +412,50 @@ test("x-local-ai-route goes only to debug.route keys and direct loopback callers
   const forwarded = await chat(adminPort, "qwen-chat", { headers: { ...plainAuth, "x-forwarded-for": "203.0.113.9" } });
   assert.equal(forwarded.status, 200);
   assert.equal(forwarded.headers["x-local-ai-route"], undefined);
+});
+
+test("hop v2: a legacy manager still gets the key; a platform-only key cannot be served there", async (t) => {
+  await setup();
+  withRequiredKey(t, "1");
+  const migrated = entry.getAccessStore().createKey({
+    id: "vllm.hop-legacy",
+    name: "migrated laptop",
+    class: "friend",
+    scopes: ["models.read", "chat"],
+    models: ["*"],
+    fleetAllow: ["vllm:*"],
+    billing: { scope: "vllm-manager", clientId: "hop-legacy" },
+    ttsOwner: "vllm:hop-legacy",
+    legacy: { managerId: "vllm", clientId: "hop-legacy", source: "service-clients" },
+  }, { actor: "test" });
+  const platform = createKey({ name: "platform only", scopes: ["models.read", "chat"] });
+
+  // v2-capable manager: neither key travels, the principal does.
+  entry.resetManagerTrustCache();
+  let before = upstreamHits.length;
+  assert.equal((await chat(adminPort, "qwen-chat", { headers: { authorization: `Bearer ${migrated.secret}` } })).status, 200);
+  const v2Hit = await lastUpstream(before);
+  assert.equal(v2Hit.headers.authorization, undefined);
+  assert.ok(v2Hit.headers["x-service-entry-signature-v2"]);
+  const principal = JSON.parse(Buffer.from(v2Hit.headers["x-service-entry-principal"], "base64url").toString("utf8"));
+  assert.deepEqual([principal.k, principal.b, principal.c], ["vllm.hop-legacy", "vllm-manager", "hop-legacy"]);
+
+  // A legacy manager (no gatewayTrust): the migrated key is forwarded as
+  // before, without a v2 signature; a platform-only key answers 503.
+  fakeTrustVersion = 0;
+  entry.resetManagerTrustCache();
+  t.after(() => {
+    fakeTrustVersion = 2;
+    entry.resetManagerTrustCache();
+  });
+  before = upstreamHits.length;
+  assert.equal((await chat(adminPort, "qwen-chat", { headers: { authorization: `Bearer ${migrated.secret}` } })).status, 200);
+  const legacyHit = await lastUpstream(before);
+  assert.equal(legacyHit.headers.authorization, `Bearer ${migrated.secret}`);
+  assert.equal(legacyHit.headers["x-service-entry-signature-v2"], undefined);
+  assert.equal(legacyHit.headers["x-service-entry-principal"], undefined);
+  before = upstreamHits.length;
+  const refused = await chat(adminPort, "qwen-chat", { headers: { authorization: `Bearer ${platform.secret}` } });
+  assert.equal(refused.status, 503);
+  assert.equal(upstreamHits.length, before, "nothing reached the legacy manager");
 });

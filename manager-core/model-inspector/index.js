@@ -7,13 +7,18 @@
 // members (knowledge, parsers, compatibility, fit, ...) to this object.
 
 const cache = require("./cache");
+const cardEstimate = require("./card-estimate");
 const cardSchema = require("./card-schema");
+const compatibility = require("./compatibility");
 const contentDigest = require("./content-digest");
 const evidence = require("./evidence");
 const fit = require("./fit");
 const inspect = require("./inspect");
 const jsonSchemaLite = require("./json-schema-lite");
 const knowledge = require("./knowledge");
+const managerHooks = require("./manager-hooks");
+const planFacts = require("./plan-facts");
+const planner = require("./planner");
 const templateSignatures = require("./template-signatures");
 const rangeReader = require("./remote/range-reader");
 const role = require("./detectors/role");
@@ -67,11 +72,19 @@ module.exports = {
     templateSha256: templateSignatures.templateSha256,
     CATALOG_IDS: templateSignatures.CATALOG_IDS,
   },
+  // Compatibility matrix (02 §9, MOD-11): one row per (engine, runtime) for a card.
+  compatibility: {
+    evaluateCompatibility: compatibility.evaluateCompatibility,
+    ggufArchitectureSupport: compatibility.ggufArchitectureSupport,
+    ROLE_TO_DESCRIPTOR: compatibility.ROLE_TO_DESCRIPTOR,
+  },
   // Memory fit (02 §10, MOD-9): artifact inputs for 01's memory models and grading.
   fit: {
     artifactMemoryInputs: fit.artifactMemoryInputs,
     kvBytes: fit.kvBytes,
     estimateFit: fit.estimateFit,
+    fitGrid: fit.fitGrid,
+    fitMemoryInputs: fit.fitMemoryInputs,
     legacyEstimate: fit.legacyEstimate,
     validateFitResult: fit.validateFitResult,
     resolveFitConstants: fit.resolveFitConstants,
@@ -79,6 +92,22 @@ module.exports = {
     FIT_CONSTANTS: fit.FIT_CONSTANTS,
     FIT_RESULT_SCHEMA: fit.FIT_RESULT_SCHEMA,
     MEMORY_POLICIES: fit.MEMORY_POLICIES,
+  },
+  // Plan facts and the per-manager hooks (02 §3.1, MOD-9b).
+  planFacts: planFacts.planFacts,
+  resolveCard: planFacts.resolveCard,
+  managerHooks: managerHooks.managerHooks,
+  // Launch planner (02 §11, MOD-14): ranked, diversified plans per GPU set.
+  planner: {
+    planLaunches: planner.planLaunches,
+    GOALS: planner.GOALS,
+    PLANNER_CONSTANTS: planner.PLANNER_CONSTANTS,
+  },
+  storageResolver: managerHooks.storageResolver,
+  cardEstimate: {
+    cardModeRequested: cardEstimate.cardModeRequested,
+    buildCardEstimate: cardEstimate.buildCardEstimate,
+    bodyToValues: cardEstimate.bodyToValues,
   },
   tensorClasses: topology.DEFAULT_TENSOR_CLASSES,
   jsonSchema: { compileSchema: jsonSchemaLite.compileSchema, validate: jsonSchemaLite.validate },

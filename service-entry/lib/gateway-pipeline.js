@@ -18,11 +18,15 @@
 // PUBLIC deletes the cookie on receipt (public-listener.js), so step 2 can
 // never happen there.
 //
-// Later packages plug in here: the limiter (PUB-9), the usage tap and
-// counters (PUB-11) and the hop v2 principal (PUB-10, hopPrincipal below).
+// The limiter (lib/limiter.js, 05 §9) runs inside it: the ban check before
+// authentication, the rpm bucket after it, then (once the model is chosen) the
+// tpm bucket and the quotas, and the public share gate before the upstream
+// call. Later packages plug in here: the usage tap and counters (PUB-11) and
+// the hop v2 principal (PUB-10, hopPrincipal below).
 
 const core = require("../../manager-core");
 const keyPolicy = require("./key-policy");
+const { createLimiter } = require("./limiter");
 const modelFleet = require("./model-fleet");
 const { hasApiKeyHeader, lookupPublicError, sendPublicError } = require("./public-errors");
 
@@ -63,7 +67,12 @@ const PUBLIC_CODE_FOR = Object.freeze({
 const TAXONOMY_ON_ADMIN = new Set([
   "missing_api_key", "invalid_api_key", "key_expired", "key_disabled", "scope_denied",
   "model_not_allowed", "origin_not_allowed", "ip_not_allowed", "csrf_invalid", "auth_unavailable",
+  // The limiter's checks (05 §9): new on ADMIN as well, so distinct codes.
+  "request_exceeds_tpm", "tokens_rate_limit_exceeded", "insufficient_quota", "overloaded",
 ]);
+
+// The rate-limit families the upstream may have sent itself: ours replace them.
+const LIMIT_HEADER_RE = /^(?:x-ratelimit-|x-quota-|anthropic-ratelimit-)/i;
 
 // The scope a model-gateway route needs (05 §6.3). Model listings need
 // models.read; every other OpenAI path is chat unless it names one of the
@@ -118,7 +127,8 @@ function keyMayUseManager(key, managerId) {
 }
 
 // The hop v2 principal (05 §7.1) for a caller, or null for a keyless one.
-// PUB-10 signs and sends it; until then it rides on req.serviceEntryPrincipal.
+// It rides on req.serviceEntryPrincipal; buildProxyHeaders signs it into the
+// hop for a manager that advertises gatewayTrust.version >= 2 (PUB-10).
 function hopPrincipal(caller, listener = "admin") {
   if (!caller || caller.ok !== true) return null;
   if (caller.kind === "console-session") return { ...CONSOLE_SESSION_PRINCIPAL };
@@ -137,6 +147,14 @@ function hopPrincipal(caller, listener = "admin") {
   };
 }
 
+// What a reservation is settled with when nothing settled it sooner: the
+// usage the tap left on the request (PUB-11), nothing used when the answer
+// was a failure, otherwise null (the admission estimate stays charged).
+function settlementUsage(req, res) {
+  if (req?.serviceEntryUsage) return req.serviceEntryUsage;
+  return Number(res?.statusCode) >= 400 ? { inputTokens: 0, outputTokens: 0 } : null;
+}
+
 function sanitizeRoutePart(value) {
   return String(value ?? "").replace(/[^\w.:@/-]+/g, "_");
 }
@@ -149,8 +167,10 @@ function sanitizeRoutePart(value) {
  *   getCatalogs     (managers) -> Promise<catalog[]>
  *   getFleetSettings () -> Promise<settings>
  *   io              server.js transport helpers (see handle())
- *   keysStore, limiter, usageTap, telemetry, billing, tts, config
- *                   accepted for the later packages (PUB-9/10/11); unused here
+ *   limiter         createLimiter() result (lib/limiter.js); a memory-only one is
+ *                   made when absent (tests)
+ *   usageTap, telemetry, billing, tts, config
+ *                   accepted for the later packages (PUB-10/11); unused here
  */
 function createGatewayPipeline(deps = {}) {
   const security = deps.security;
@@ -161,9 +181,20 @@ function createGatewayPipeline(deps = {}) {
   const getFleetSettings = deps.getFleetSettings;
   const selectFleetTarget = typeof deps.selectFleetTarget === "function" ? deps.selectFleetTarget : modelFleet.selectFleetTarget;
   const io = deps.io || {};
+  const limiter = deps.limiter || createLimiter({
+    config: () => (typeof security.accessConfig === "function" ? security.accessConfig() : {}),
+  });
 
   function listenerOf(req) {
     return security.listenerKind(req) === "public" ? "public" : "admin";
+  }
+
+  // The client identity the limiter judges (05 §4): ip, socketIp and the
+  // trusted-proxy flags. A stub security without it still yields an ip.
+  function identityOf(req) {
+    if (typeof security.identifyClient === "function") return security.identifyClient(req);
+    const ip = typeof security.resolveClientAddress === "function" ? security.resolveClientAddress(req) : "";
+    return { ip, socketIp: ip, missingHeader: false };
   }
 
   function hasScope(caller, scope) {
@@ -226,6 +257,11 @@ function createGatewayPipeline(deps = {}) {
     // A key's scope is judged by key-policy inside authorizeGatewayRequest;
     // this catches stores or stubs that did not.
     if (!hasScope(caller, scope)) return denial("scope_denied", { param: scope });
+    // An admin ban of this key (05 §9.3).
+    if (caller.kind === "key" && caller.key?.id) {
+      const banned = limiter.checkKeyBan(caller.key.id);
+      if (banned) return denial("auth_banned", { message: banned.message, retryAfterSeconds: banned.retryAfterSeconds });
+    }
     return caller;
   }
 
@@ -239,7 +275,7 @@ function createGatewayPipeline(deps = {}) {
   // principal and the telemetry identity.
   async function authorize(req, { scope = "" } = {}) {
     const caller = await resolveCaller(req, { scope });
-    io.noteAuthResult?.(req, caller);
+    limiter.noteAuthResult(identityOf(req), caller);
     if (!caller.ok) return caller;
     req.serviceEntryAuth = caller;
     req.serviceEntryPrincipal = hopPrincipal(caller, listenerOf(req));
@@ -294,22 +330,41 @@ function createGatewayPipeline(deps = {}) {
     return listenerOf(req) === "admin" && core.isLocalRequest(req) && !security.isProxiedRequest(req);
   }
 
-  // The entry's rpm bucket for a caller (PUB-9 replaces this with the limiter).
-  function rateLimitFor(req, caller) {
-    const envRpm = Number(process.env.SERVICE_ENTRY_RATE_LIMIT_RPM || 0);
-    if (caller?.kind === "console-session") {
-      let rpm = 600;
-      try {
-        rpm = Number(security.accessConfig().admin?.gatewayRpm) || rpm;
-      } catch {
-        // The schema default stands.
-      }
-      return { key: `console:${caller.sessionId}`, rpm: envRpm || rpm };
-    }
-    if (caller?.client?.id) {
-      return { key: `${caller.matchedManager || "platform"}:${caller.client.id}`, rpm: Number(caller.client.rateLimitRpm || envRpm || 600) };
-    }
-    return { key: security.resolveClientAddress(req) || "anonymous", rpm: envRpm || 600 };
+  // The ban check every gateway handler starts with (05 §8.2 step 3): null,
+  // or { retryAfterSeconds, message } for a banned address.
+  function checkBan(req) {
+    return limiter.checkBan(identityOf(req));
+  }
+
+  // The §9.6 headers for what the request's ticket has seen so far.
+  function rateHeaders(req) {
+    const ticket = req?.serviceEntryRateTicket;
+    if (!ticket) return {};
+    return limiter.headers(ticket, { protocol: req.serviceEntryRateProtocol || "" });
+  }
+
+  // Puts them on the response; a later refusal or the proxied answer carries
+  // them. Headers the response already holds are replaced.
+  function applyRateHeaders(req, res) {
+    if (!res || res.headersSent || typeof res.setHeader !== "function") return;
+    for (const [name, value] of Object.entries(rateHeaders(req))) res.setHeader(name, value);
+  }
+
+  // Takes one request from the caller's rpm bucket (05 §9.1) and reports the
+  // limits. Every gateway route, the model gateway and the TTS, search and
+  // status routes, calls it right after authentication.
+  function enterRate(req, res, caller, { protocol = "" } = {}) {
+    const entered = limiter.enter({ caller, identity: identityOf(req), listener: listenerOf(req) });
+    req.serviceEntryRateTicket = entered.ticket;
+    req.serviceEntryRateProtocol = protocol;
+    applyRateHeaders(req, res);
+    return entered;
+  }
+
+  // Owner traffic (05 §9.5): everything on ADMIN, console-session included,
+  // and PUBLIC keys of class owner.
+  function isOwnerTraffic(req, caller) {
+    return listenerOf(req) === "admin" || caller?.kind === "console-session" || caller?.key?.class === "owner";
   }
 
   // Sends a refusal. PUBLIC answers only in 05 §10.2 codes, in the protocol
@@ -356,7 +411,7 @@ function createGatewayPipeline(deps = {}) {
     const rec = io.record(req);
     // Authentication happens here, before the loopback hop, so the managers
     // no longer have to infer trust from a proxied socket address.
-    const ban = io.checkAuthBan(req);
+    const ban = checkBan(req);
     if (ban) {
       return refuse(req, res, access, { status: 429, code: "auth_banned", message: ban.message, retryAfterSeconds: ban.retryAfterSeconds });
     }
@@ -373,7 +428,7 @@ function createGatewayPipeline(deps = {}) {
         param: "model",
       });
     }
-    const rate = io.enterRateLimit(rateLimitFor(req, caller));
+    const rate = enterRate(req, res, caller, { protocol: route.protocol });
     if (!rate.ok) {
       return refuse(req, res, access, {
         status: 429,
@@ -384,6 +439,14 @@ function createGatewayPipeline(deps = {}) {
     }
     if (io.isModelListRequest(req, route)) {
       return io.sendModelList(req, res, route.engine, caller, authorizedManagers);
+    }
+    // From here on the request is model work: the owner's counts against the
+    // public share (05 §9.5) until the response is done.
+    const ownerTraffic = isOwnerTraffic(req, caller);
+    if (ownerTraffic) {
+      const ownerEnd = limiter.shareGate.ownerBegin();
+      res.once("finish", ownerEnd);
+      res.once("close", ownerEnd);
     }
     let body;
     try {
@@ -435,6 +498,28 @@ function createGatewayPipeline(deps = {}) {
     const manager = selection.manager;
     const resolvedModel = String(selection.model?.id || "").trim();
     io.recordRouting(req, selection, resolvedModel, requestedModel, requestMetadata);
+    // tpm, then the daily/monthly caps (05 §9.1, §9.4). The reservation is
+    // settled when the response is done; the usage tap (PUB-11) settles it
+    // earlier with the real usage.
+    const admitted = limiter.admitBody({ ticket: rate.ticket, caller, body: parsedBody, scope: scopeForModelRoute(route, req.method) });
+    applyRateHeaders(req, res);
+    if (!admitted.ok) {
+      return refuse(req, res, access, {
+        status: admitted.status,
+        code: admitted.code,
+        param: admitted.param || null,
+        retryAfterSeconds: admitted.retryAfterSeconds || null,
+        message: admitted.code === "request_exceeds_tpm" ? "The request is larger than the token rate limit of this key." : "A quota of this key is used up.",
+        metadata: requestMetadata,
+        resolvedModel,
+      });
+    }
+    if (admitted.reservation) {
+      req.serviceEntryReservation = admitted.reservation;
+      const settleOnEnd = () => limiter.settle(admitted.reservation, settlementUsage(req, res));
+      res.once("finish", settleOnEnd);
+      res.once("close", settleOnEnd);
+    }
     const genericModel = io.isGenericModel(requestedModel);
     const rewriteModel = genericModel && ["openai", "opencode"].includes(route.protocol);
     let bodyForUpstream = rewriteModel ? io.rewriteModelBody(requestBody, resolvedModel, parsedBody) : requestBody;
@@ -449,8 +534,43 @@ function createGatewayPipeline(deps = {}) {
       return refuse(req, res, access, { status: error.status || 400, code: error.code || "invalid_gateway_path", message: error.message, manager, metadata: requestMetadata, resolvedModel });
     }
     if (!targetPath) return sendRefusal(req, res, { status: 404, code: "protocol_not_supported", message: `${manager.name} does not support ${route.protocol}.` });
+    // The public share (05 §9.5): non-owner PUBLIC requests wait for a slot,
+    // fewer of them while the owner is working.
+    if (!ownerTraffic) {
+      const gate = new AbortController();
+      const abortWait = () => gate.abort();
+      res.once("close", abortWait);
+      const slot = await limiter.shareGate.acquire({ signal: gate.signal });
+      res.off("close", abortWait);
+      if (!slot.ok) {
+        if (slot.reason === "aborted") {
+          body.release();
+          return undefined;
+        }
+        body.release();
+        return refuse(req, res, access, {
+          status: 503,
+          code: "overloaded",
+          retryAfterSeconds: limiter.shareGate.retryAfterSeconds,
+          message: "Public capacity is full.",
+          manager,
+          metadata: requestMetadata,
+          resolvedModel,
+        });
+      }
+      res.once("finish", slot.release);
+      res.once("close", slot.release);
+    }
     const target = new URL(`http://127.0.0.1:${manager.port}${targetPath}`);
     target.search = url.search;
+    // Hop v2 (05 §7.1) when the manager advertises it: the key is stripped
+    // and the signed principal stands in for it. A legacy manager still gets
+    // the key, so a platform-only key (one it never knew) cannot be served.
+    const hopVersion = typeof io.managerTrustVersion === "function" ? Number(await io.managerTrustVersion(manager)) || 0 : 0;
+    if (hopVersion < 2 && caller.kind === "key" && caller.key && !caller.key.legacy) {
+      io.deny?.(req, access, { status: 503, message: `${manager.name} does not accept platform keys yet.`, code: "manager_upgrade_required", manager, metadata: requestMetadata, resolvedModel });
+      return sendRefusal(req, res, { status: 503, code: "service_unavailable", message: io.upstreamDownMessage });
+    }
     const upstreamControl = io.createUpstreamControl(req, res);
     Object.assign(access, { manager, metadata: requestMetadata, resolvedModel, error: "" });
     io.watch(req, res, access);
@@ -462,6 +582,9 @@ function createGatewayPipeline(deps = {}) {
         headers: io.buildProxyHeaders(req.headers, req, {
           instanceId,
           stripContentEncoding: Boolean(contentEncoding && rewriteModel),
+          hopVersion,
+          method: req.method,
+          pathname: target.pathname,
         }),
         body: bodyForUpstream,
         signal: upstreamControl.signal,
@@ -472,6 +595,11 @@ function createGatewayPipeline(deps = {}) {
       body.release();
       rec?.headers(upstream.status, upstream.headers);
       const responseHeaders = io.buildResponseHeaders(upstream.headers, req);
+      // Our §9.6 headers replace whatever the upstream sent in those families.
+      for (const name of Object.keys(responseHeaders)) {
+        if (LIMIT_HEADER_RE.test(name)) delete responseHeaders[name];
+      }
+      Object.assign(responseHeaders, rateHeaders(req));
       // Which engine and instance served the request: `auto` routing is
       // otherwise opaque. Only for debug.route callers and the local owner.
       if (routeHeaderAllowed(req, caller)) {
@@ -510,7 +638,10 @@ function createGatewayPipeline(deps = {}) {
     modelVisible,
     candidateFilter,
     routeHeaderAllowed,
-    rateLimitFor,
+    checkBan,
+    enterRate,
+    rateHeaders,
+    limiter,
     sendRefusal,
     hopPrincipal,
   };

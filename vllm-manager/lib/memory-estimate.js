@@ -101,7 +101,7 @@ function previewSglangAdmission(input, selectedGpus) {
   };
 }
 
-function buildVllmMemoryEstimate(input = {}) {
+function buildVllmLegacyEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
   if (input.engine === "sglang" && isPennyroyalImage(input.runtimeImage)) {
     const measured = estimateSglangMemory(input, pennyroyalRecipeMemory(input)).admissionRequest;
@@ -190,6 +190,21 @@ function buildVllmMemoryEstimate(input = {}) {
       memorySplitFactor: plan.memorySplitFactor,
     },
   };
+}
+
+// A body without a model card keeps the legacy path byte for byte and answers
+// synchronously. With a card (02 §10.7: cardId, or model with engineId /
+// runtimeId / gpuIds / values) the answer comes from estimateFit and is a
+// promise; the route awaits either.
+function buildVllmMemoryEstimate(input = {}, options = {}) {
+  if (!core.models.cardEstimate.cardModeRequested(input)) return buildVllmLegacyEstimate(input);
+  return core.models.cardEstimate.buildCardEstimate(input, {
+    managerFamily: "vllm",
+    hostGpus: normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []),
+    legacy: buildVllmLegacyEstimate,
+    admissionPolicy: input.admissionPolicy,
+    ...options,
+  });
 }
 
 module.exports = {
