@@ -1743,7 +1743,9 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
     return Array.isArray(status?.gpus) ? status.gpus : null;
   },
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
-  admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
+  // Frontend smoke runs (AI_FRONTEND_SMOKE=1) drive a real manager with a form the host GPU
+  // may not fit, so the plan skips the VRAM preview there instead of following the host.
+  admissionPreview: process.env.AI_FRONTEND_SMOKE === "1" ? undefined : (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
   // fromLaunchId (ENG-26): the stored spec POST /api/launch replays.
   getLaunchSpec: (launchId) => launchStore.get(launchId),
