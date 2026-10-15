@@ -1,0 +1,14 @@
+[
+  {
+    "directive": "service",
+    "host": "host.docker.internal",
+    "port": 5186,
+    "line": 3
+  },
+  {
+    "directive": "service",
+    "host": "http_status",
+    "port": 404,
+    "line": 6
+  }
+]

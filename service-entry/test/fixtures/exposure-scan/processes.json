@@ -1,0 +1,32 @@
+[
+    {
+        "ProcessId":  4120,
+        "Name":  "node.exe",
+        "CommandLine":  "\"C:\\Program Files\\nodejs\\node.exe\" \"<AI_ROOT>\\service-entry\\server.js\" --token FAKE-ENTRY-SECRET-DO-NOT-USE"
+    },
+    {
+        "ProcessId":  5004,
+        "Name":  "node.exe",
+        "CommandLine":  "node.exe <AI_ROOT>\\vllm-manager\\server.js"
+    },
+    {
+        "ProcessId":  5216,
+        "Name":  "node.exe",
+        "CommandLine":  "node.exe <AI_ROOT>\\llama-manager\\server.js"
+    },
+    {
+        "ProcessId":  6660,
+        "Name":  "node.exe",
+        "CommandLine":  "node.exe <AI_ROOT>\\vllm-manager\\manager-public-proxy.js --upstream 127.0.0.1:5177 --key FAKE-PROXY-KEY-DO-NOT-USE"
+    },
+    {
+        "ProcessId":  7020,
+        "Name":  "python.exe",
+        "CommandLine":  null
+    },
+    {
+        "ProcessId":  9100,
+        "Name":  "wslrelay.exe",
+        "CommandLine":  "wslrelay.exe --mode tcp"
+    }
+]

@@ -2,6 +2,8 @@
 // Admin access APIs (05 §13.1, PUB-18): platform keys, presets, the legacy
 // key migration, the access audit, the public settings, announcements and
 // public model metadata. A route module (07 §2.7) on the ADMIN listener.
+// PUB-19 adds the exposure report, scan and external probe (§13.2, §13.3)
+// and the security views and bans under /api/security/*.
 //
 // Every route is owner-only: a read needs an owner session or a machine
 // principal inside its scope, a write goes through auth.checkWrite() (owner
@@ -15,6 +17,7 @@ const core = require("../../manager-core");
 const policy = require("./key-policy");
 const keyMigration = require("./key-migration");
 const { KeysStoreError } = require("./keys-store");
+const { createSecurityOverview } = require("./security-overview");
 const { READ_SECTIONS, WRITABLE_SECTIONS, loadAccessConfig, updateAccessSection } = require("./public-config");
 
 const OWNER = "05";
@@ -108,6 +111,10 @@ const ACCESS_ADMIN_WRITE_ROUTES = Object.freeze([
   ["PATCH", "/api/public/announcements/:id"],
   ["DELETE", "/api/public/announcements/:id"],
   ["PUT", "/api/public/models/:modelId/meta"],
+  ["POST", "/api/public/exposure/scan"],
+  ["POST", "/api/public/probe"],
+  ["POST", "/api/security/bans"],
+  ["DELETE", "/api/security/bans/:subject"],
 ]);
 
 function isPlainObject(value) {
@@ -235,11 +242,14 @@ function migrationPlanView(planned) {
 
 /**
  * createAccessRoutes({ auth, sendJson, readJsonObjectBody, getStore, getSecurity, getBus,
- *   migration, settings, logger, now }) -> { handle(req, res, url) }
+ *   migration, settings, exposure, securityOverview, logger, now }) -> { handle(req, res, url) }
  *
  * getStore() returns the access store or throws (store unavailable).
  * migration is { plan(), apply() } (server.js binds the managers' files and
- * the billing bindings); settings is { readSection, writeSection } (OPS-3).
+ * the billing bindings); settings is { readSection, writeSection } (OPS-3);
+ * exposure is an exposure-scan.js scanner ({ report, probe }); securityOverview
+ * is { overview(query), events(query) } (security-overview.js), made from the
+ * store, the bus and the config when not given.
  */
 function createAccessRoutes(options = {}) {
   const { auth, sendJson, readJsonObjectBody } = options;
@@ -250,6 +260,7 @@ function createAccessRoutes(options = {}) {
   const getBus = typeof options.getBus === "function" ? options.getBus : () => null;
   const migration = options.migration || null;
   const settings = options.settings || {};
+  const exposure = options.exposure || null;
 
   function store() {
     const target = getStore();
@@ -315,6 +326,8 @@ function createAccessRoutes(options = {}) {
     if (security && typeof security.accessConfig === "function") return security.accessConfig();
     return loadAccessConfig({ readSection: settings.readSection });
   }
+
+  const security = options.securityOverview || createSecurityOverview({ getStore: store, getBus, getConfig: accessConfig, now });
 
   // ---- keys ---------------------------------------------------------------
 
@@ -557,6 +570,125 @@ function createAccessRoutes(options = {}) {
     return { status: 200, body: { ok: true, meta: target.upsertModelMeta(modelId, await body(req), { actor, ip }) } };
   }
 
+  // ---- exposure scan and probe (§13.2, §13.3) -------------------------------
+
+  // The audit row of a scan or probe. The report itself is never audited.
+  function auditAction(req, action, details = {}) {
+    try {
+      audit(store(), req, { action, targetType: "exposure", targetId: null, details });
+    } catch {
+      // The report is still returned when the audit store is unavailable.
+    }
+  }
+
+  async function exposureReport(force) {
+    if (!exposure) return envelope(503, "exposure_unavailable", "The exposure scan is not available.");
+    return { status: 200, body: { ok: true, report: await exposure.report({ force }) } };
+  }
+
+  async function exposureScan(req) {
+    const outcome = await exposureReport(true);
+    if (outcome.body.ok) auditAction(req, "exposure.scan", { status: outcome.body.report.status, ...outcome.body.report.summary });
+    return outcome;
+  }
+
+  function probeView(probe) {
+    return {
+      url: probe.url,
+      at: probe.at,
+      status: probe.status,
+      latencyMs: probe.latencyMs,
+      nonceObserved: probe.nonceObserved,
+      observed: {
+        viaProxy: probe.observed.viaProxy,
+        headerUsed: probe.observed.headerUsed,
+        socketIp: probe.observed.socketIp,
+        country: probe.observed.country,
+        forwardedOnUntrusted: probe.observed.forwardedOnUntrusted,
+      },
+      tls: probe.tls ? { validTo: probe.tls.validTo, authorized: probe.tls.authorized } : null,
+      error: probe.error || null,
+    };
+  }
+
+  async function exposureProbe(req) {
+    if (!exposure) return envelope(503, "exposure_unavailable", "The exposure scan is not available.");
+    const config = accessConfig();
+    if (!(config.listeners?.public?.baseUrl || config.publicOrigin)) {
+      return envelope(400, "public_base_url_required", "Set listeners.public.baseUrl to the public https address first; the probe calls that address.");
+    }
+    const probe = await exposure.probe();
+    auditAction(req, "exposure.probe", { status: probe.status, nonceObserved: probe.nonceObserved, viaProxy: probe.observed.viaProxy, error: probe.error?.code || null });
+    return { status: 200, body: { ok: true, probe: probeView(probe) } };
+  }
+
+  // ---- security views and bans (§13.3) ---------------------------------------
+
+  function securityOverviewRoute(url) {
+    return security.overview({ from: url.searchParams.get("from") || undefined, to: url.searchParams.get("to") || undefined })
+      .then((overview) => ({ status: 200, body: overview }));
+  }
+
+  async function securityEvents(url) {
+    let limit;
+    if (url.searchParams.get("limit")) {
+      limit = Number(url.searchParams.get("limit"));
+      if (!Number.isInteger(limit) || limit < 1 || limit > 200) return fieldError("limit", "out_of_range", "limit must be an integer between 1 and 200.");
+    }
+    const events = await security.events({ type: url.searchParams.get("type") || undefined, cursor: url.searchParams.get("cursor") || undefined, limit });
+    return { status: 200, body: events };
+  }
+
+  function listBansRoute(url) {
+    const includeExpired = ["1", "true"].includes(String(url.searchParams.get("includeExpired") || "").toLowerCase());
+    return { status: 200, body: { ok: true, items: store().listBans({ includeExpired }) } };
+  }
+
+  // A ban must never lock the owner out of the console they are using.
+  function coversCaller(input, callerIp) {
+    if (!callerIp || (input.kind !== "ip" && input.kind !== "cidr")) return false;
+    const caller = policy.parseIp(callerIp);
+    if (!caller) return false;
+    if (input.kind === "ip") return policy.normalizeIp(String(input.subject ?? "")) === policy.normalizeIp(callerIp);
+    const rule = policy.parseIpRule(input.subject);
+    return Boolean(rule && policy.ipMatchesRule(caller, rule));
+  }
+
+  function publishSecurity(data) {
+    try {
+      getBus()?.publish?.("security", data);
+    } catch {
+      // The event bus never fails a request.
+    }
+  }
+
+  async function createBan(req) {
+    const target = store();
+    const input = await body(req);
+    const { actor, ip } = actorOf(req);
+    if (coversCaller(input, ip)) {
+      const message = "That ban would cover the address you are using.";
+      return envelope(400, "cannot_ban_self", message, { errors: [{ field: "subject", code: "covers_caller", message }] });
+    }
+    const ban = target.upsertBan({
+      subject: input.subject,
+      kind: input.kind,
+      reason: input.reason,
+      expiresAt: input.expiresAt,
+      source: "admin",
+    }, { actor, ip });
+    publishSecurity({ kind: "ban", severity: "warning", subject: ban.subject, banKind: ban.kind, source: "admin", expiresAt: ban.expiresAt });
+    return { status: 201, body: { ok: true, ban } };
+  }
+
+  function removeBan(req, subject) {
+    const target = store();
+    const { actor, ip } = actorOf(req);
+    if (!target.removeBan(subject, { actor, ip })) return envelope(404, "ban_not_found", "Ban not found.");
+    publishSecurity({ kind: "unban", severity: "info", subject, source: "admin" });
+    return { status: 200, body: { ok: true, removed: true, subject } };
+  }
+
   // ---- dispatch -----------------------------------------------------------
 
   function decode(segment) {
@@ -590,11 +722,19 @@ function createAccessRoutes(options = {}) {
     ["DELETE", /^\/api\/public\/announcements\/([^/]+)$/, (req, url, id) => deleteAnnouncement(req, id)],
     ["GET", /^\/api\/public\/models\/([^/]+)\/meta$/, (req, url, id) => ({ status: 200, body: { ok: true, modelId: id, meta: store().getModelMeta(id) } })],
     ["PUT", /^\/api\/public\/models\/([^/]+)\/meta$/, (req, url, id) => putModelMeta(req, id)],
+    ["GET", /^\/api\/public\/exposure$/, () => exposureReport(false)],
+    ["POST", /^\/api\/public\/exposure\/scan$/, (req) => exposureScan(req)],
+    ["POST", /^\/api\/public\/probe$/, (req) => exposureProbe(req)],
+    ["GET", /^\/api\/security\/overview$/, (req, url) => securityOverviewRoute(url)],
+    ["GET", /^\/api\/security\/events$/, (req, url) => securityEvents(url)],
+    ["GET", /^\/api\/security\/bans$/, (req, url) => listBansRoute(url)],
+    ["POST", /^\/api\/security\/bans$/, (req) => createBan(req)],
+    ["DELETE", /^\/api\/security\/bans\/([^/]+)$/, (req, url, subject) => removeBan(req, subject)],
   ];
 
   async function handle(req, res, url) {
     const pathname = url.pathname;
-    if (!pathname.startsWith("/api/access/") && !pathname.startsWith("/api/public/")) return false;
+    if (!pathname.startsWith("/api/access/") && !pathname.startsWith("/api/public/") && !pathname.startsWith("/api/security/")) return false;
     const method = String(req.method || "GET").toUpperCase();
     let matched = null;
     let known = false;
@@ -606,8 +746,7 @@ function createAccessRoutes(options = {}) {
       matched = { handler, params: found.slice(1).map(decode) };
       break;
     }
-    // Paths another package owns (/api/public/exposure, probe, templates) fall
-    // through; so does a method this module does not serve on a path it does.
+    // Paths another package owns (/api/public/templates) fall through; so does a method this module does not serve on a path it does.
     if (!matched) {
       if (!known) return false;
       const refused = authorize(req, method !== "GET" && method !== "HEAD");
@@ -671,6 +810,8 @@ function mount(ctx) {
     getSecurity: () => ctx.security || null,
     getBus: () => ctx.bus || null,
     migration: ctx.accessMigration || null,
+    exposure: ctx.exposure || null,
+    securityOverview: ctx.securityOverview || null,
     settings: ctx.accessSettings || {
       readSection: (name) => core.platform.readSection(name, { ...(ctx.aiRoot ? { aiRoot: ctx.aiRoot } : {}), env: process.env }),
       writeSection: (name, patch, writeOptions) => core.platform.writeSection(name, patch, { ...(ctx.aiRoot ? { aiRoot: ctx.aiRoot } : {}), ...writeOptions }),

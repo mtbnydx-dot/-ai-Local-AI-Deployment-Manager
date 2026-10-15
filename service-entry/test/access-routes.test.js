@@ -154,8 +154,8 @@ test("every route needs the owner: a viewer reads nothing, a write needs the CSR
 
 test("paths other packages own fall through, and an unsupported method on a served path answers 405", async () => {
   const h = makeHarness();
-  const exposure = await h.call("GET", "/api/public/exposure");
-  assert.equal(exposure.handled, false);
+  const templates = await h.call("GET", "/api/public/templates");
+  assert.equal(templates.handled, false);
   assert.equal((await h.call("GET", "/api/status")).handled, false);
   const wrong = await h.call("DELETE", "/api/access/keys/k_x");
   assert.equal(wrong.status, 405);
