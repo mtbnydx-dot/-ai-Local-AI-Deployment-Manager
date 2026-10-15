@@ -325,16 +325,21 @@ function resolveRequestPrefs(req) {
 }
 
 /**
- * The default UI at / (07 C10): 06's console.defaultUi with
- * SERVICE_ENTRY_CONSOLE_DEFAULT taking precedence (OPS-3's env > file >
- * default). Anything unreadable is "classic".
+ * The default UI at / (07 C10, flipped to "new" by CON-26): 06's
+ * console.defaultUi with SERVICE_ENTRY_CONSOLE_DEFAULT taking precedence
+ * (OPS-3's env > file > default). OPS-3's schema default stays "classic" for
+ * its own consumers, so a value nothing has set (source "default") and an
+ * unreadable config both mean "new" here; only an explicit "classic" from the
+ * env, the file or the runtime layer reverts it.
  */
 function readDefaultUi({ aiRoot, env = process.env } = {}) {
   try {
     const section = core.platform.readSection("console", { aiRoot, env });
-    return section?.values?.defaultUi === "new" ? "new" : "classic";
+    const source = section?.sources?.["console.defaultUi"];
+    if (!source || source === "default") return "new";
+    return section?.values?.defaultUi === "classic" ? "classic" : "new";
   } catch {
-    return "classic";
+    return "new";
   }
 }
 

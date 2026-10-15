@@ -773,6 +773,34 @@ async function smokeBillingPage(page) {
 
 // 07 §2.3: the shell's policy. The smoke loads the new console under it and
 // fails on any violation the browser reports.
+// CON-26: the managers point at the new console with a host-relative link.
+async function smokeLegacyBanner(page, managerUrl, manager) {
+  const origin = new URL(managerUrl);
+  const config = await (await page.request.get(`${managerUrl}api/config`)).json();
+  const entryPort = String(config.entryPort || 5176);
+  await page.goto(`${managerUrl}#stats`, { waitUntil: "domcontentloaded" });
+  const link = page.locator("#legacyConsoleBanner a");
+  await expect(link).toBeVisible();
+  const href = new URL(await link.getAttribute("href"));
+  expect(href.hostname).toBe(origin.hostname);
+  expect(href.protocol).toBe(origin.protocol);
+  expect(href.port).toBe(entryPort);
+  expect(href.pathname).toBe("/");
+  expect(href.searchParams.get("from")).toBe(manager);
+  expect(href.searchParams.get("ui")).toBe("new");
+  expect(["auto", "light", "dark"]).toContain(href.searchParams.get("theme"));
+  expect(href.searchParams.get("lang")).toMatch(/^(zh-CN|en-US)$/);
+  expect(href.hash).toBe("#stats");
+  await page.goto(`${managerUrl}#download`, { waitUntil: "domcontentloaded" });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#legacyConsoleBanner a")).toBeVisible();
+  await page.locator("#legacyConsoleBanner button").click();
+  await expect(page.locator("#legacyConsoleBanner")).toHaveCount(0);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator("#legacyConsoleBanner")).toHaveCount(0);
+}
+
 const CONSOLE_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'none'";
 
 async function smokeConsoleShell(page, baseUrl) {
@@ -794,10 +822,13 @@ async function smokeConsoleShell(page, baseUrl) {
     });
   });
 
-  // / stays the classic console by default (07 C10).
+  // / is the new console by default (07 C10, CON-26); ?ui=classic is the per-request way back.
   const root = await page.request.get(baseUrl);
-  expect(await root.text()).toContain("本地模型服务统一入口");
-  expect(root.headers()["content-security-policy"]).toBeUndefined();
+  expect(root.headers()["content-security-policy"]).toBe(CONSOLE_CSP);
+  expect(await root.text()).toContain('name="console-build"');
+  const classicRoot = await page.request.get(`${baseUrl}?ui=classic`);
+  expect(await classicRoot.text()).toContain("本地模型服务统一入口");
+  expect(classicRoot.headers()["content-security-policy"]).toBeUndefined();
 
   // The shell (CON-6) renders every path in its frame; a page that is not built yet shows the "still being built" page (the overview and the deployments pages are built, CON-8 and CON-9).
   for (const [pathname, heading] of [["?ui=new", "总览"], ["overview", "总览"], ["system", "系统"]]) {
@@ -831,7 +862,15 @@ async function smokeConsoleShell(page, baseUrl) {
   expect(await page.evaluate(() => window.__cspViolations), "English shell CSP violations").toEqual([]);
 
   const classic = await page.request.get(`${baseUrl}classic`);
-  expect(await classic.text()).toBe(await root.text());
+  expect(await classic.text()).toBe(await classicRoot.text());
+  expect(await classic.text()).toContain('href="/?ui=new"');
+
+  // Old manager links land on the new pages: #stats with ?from=vllm is /observability, and the banner's theme and lang are kept.
+  await page.goto(`${baseUrl}?ui=new&from=vllm&theme=dark&lang=en-US#stats`, { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(new RegExp("/observability$"));
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.goto(`${baseUrl}#models`, { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(new RegExp("/deployments$"));
   // Pages that are not in the build yet answer 404 for their module; that is the "still being built" path, not a failure.
   // No manager runs here, so the overview's per-manager calls answer 502 and its lists simply stay empty.
   const unexpected = failures.filter((item) => !/\/c\/[0-9a-f]+\/routes\/|Failed to load resource|fetch 502: .*\/api\/m\//.test(item));
@@ -874,6 +913,8 @@ test.describe("manager frontends", () => {
     try {
       await smokePage(await context.newPage(), managers[0].url, "vLLM");
       await smokePage(await context.newPage(), managers[1].url, "llama");
+      await smokeLegacyBanner(await context.newPage(), managers[0].url, "vllm");
+      await smokeLegacyBanner(await context.newPage(), managers[1].url, "llama");
     } finally {
       await context.close();
     }
@@ -888,6 +929,7 @@ test.describe("manager frontends", () => {
         env: {
           SERVICE_ENTRY_HOST: "127.0.0.1",
           SERVICE_ENTRY_PORT: String(entryPort),
+          SERVICE_ENTRY_CONSOLE_DEFAULT: "classic",
         },
       }),
     ];
@@ -919,6 +961,7 @@ test.describe("manager frontends", () => {
           ...upstreams,
           SERVICE_ENTRY_HOST: "127.0.0.1",
           SERVICE_ENTRY_PORT: String(entryPort),
+          SERVICE_ENTRY_CONSOLE_DEFAULT: "classic",
           AI_BILLING_DB: path.join(dataDir, "billing.sqlite"),
         },
       }),
