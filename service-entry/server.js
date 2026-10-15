@@ -33,6 +33,7 @@ const { createViewerRegistry } = require("./lib/viewer-allowlist");
 const { createMachineAuth } = require("./lib/machine-auth");
 const { createAdminAuth, registerSessionRoutes } = require("./lib/admin-session");
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
+const platformRoutes = require("./lib/platform-routes");
 const { createModelHub, discoverHubClis } = require("../manager-core/model-hub");
 const { createTelemetryRuntime } = require("./lib/telemetry-runtime");
 const { inferSourceProgram } = require("../manager-core/telemetry/source-program");
@@ -144,7 +145,8 @@ const MANAGERS = [
     billingId: process.env.VLLM_MANAGER_ID || "vllm-manager",
     envPort: "VLLM_MANAGER_PORT",
     envHost: "VLLM_MANAGER_HOST",
-    defaultHost: process.env.VLLM_MANAGER_HOST || "0.0.0.0",
+    // Fallback when platform.json cannot be read: loopback, like the config default (V21).
+    defaultHost: process.env.VLLM_MANAGER_HOST || "127.0.0.1",
     mode: "safetensors / FP8 / NVFP4 / 工具调用 / 高吞吐",
     accent: "blue",
   },
@@ -156,7 +158,7 @@ const MANAGERS = [
     billingId: process.env.LLAMA_MANAGER_ID || "llama-manager",
     envPort: "LLAMA_MANAGER_PORT",
     envHost: "LLAMA_MANAGER_HOST",
-    defaultHost: process.env.LLAMA_MANAGER_HOST || "0.0.0.0",
+    defaultHost: process.env.LLAMA_MANAGER_HOST || "127.0.0.1",
     mode: "GGUF / 异构双卡 / 长上下文实验",
     accent: "teal",
   },
@@ -188,7 +190,7 @@ const ROUTE_MODULES = [
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
   "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
   "./lib/access-internal-routes", // 05 PUB-10  /internal/access/* (verify, legacy manager key forwarders)
-  // "./lib/platform-routes",     // 06 OPS-13
+  "./lib/platform-routes", // 06 OPS-13  /api/platform/* (status, components, doctor, config, operations), events bridge
 ];
 
 let server = null;
@@ -585,6 +587,13 @@ function createRouteContext(overrides = {}) {
       plan: () => planLegacyKeys(),
       apply: () => migrateLegacyKeys({ force: true }),
     },
+    // For platform-routes (06 OPS-13): the gateway streams in flight (the idle
+    // gate) and this file's own manager start, the fallback without a supervisor.
+    gatewayInFlight: () => entryGatewayInFlight(),
+    startManager: async (managerId) => {
+      const manager = findManager(managerId);
+      return manager ? startDetachedManager(manager) : null;
+    },
     logger: console,
     now: Date.now,
     ...overrides,
@@ -811,6 +820,8 @@ async function handleRequest(req, res, routes = null) {
         search,
         keys: buildKeySummary(managers),
         components: summarizeComponents(managers, mcp, tts, search),
+        // The last supervisor answer (06 §10.3); never waits for it.
+        platform: routes?.ctx?.platform?.summary?.() ?? null,
       };
       return sendJson(res, payload);
     }
@@ -859,6 +870,12 @@ async function handleRequest(req, res, routes = null) {
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const manager = findManager(managerStartMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
+      // The supervisor owns the manager when it is up (06 §10.3).
+      const delegated = await routes?.ctx?.platform?.delegateManager?.(manager.id, "start");
+      if (delegated?.delegated) {
+        const status = await buildManagerStatus(manager, { force: true });
+        return sendJson(res, { ok: delegated.ok, delegated: "supervisor", ready: Boolean(status?.ok), opId: delegated.opId, ...(delegated.error ? { error: delegated.error } : {}), status }, delegated.ok ? 200 : 502);
+      }
       return sendJson(res, await startDetachedManager(manager));
     }
     const managerStopMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/stop$/);
@@ -867,11 +884,22 @@ async function handleRequest(req, res, routes = null) {
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const manager = findManager(managerStopMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
+      const delegated = await routes?.ctx?.platform?.delegateManager?.(manager.id, "stop");
+      if (delegated?.delegated) {
+        const status = await buildManagerStatus(manager, { force: true });
+        return sendJson(res, { ok: delegated.ok, delegated: "supervisor", stopped: { ok: delegated.ok, via: "supervisor" }, opId: delegated.opId, ...(delegated.error ? { error: delegated.error } : {}), status }, delegated.ok ? 200 : 502);
+      }
       return sendJson(res, await stopManager(manager));
     }
     if (req.method === "POST" && url.pathname === "/api/stop-all") {
       const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
+      // With the supervisor up, one stop of the core profile stops the entry and
+      // both managers, and the supervisor stops restarting them (06 §10.3).
+      const delegated = await routes?.ctx?.platform?.delegateStopAll?.();
+      if (delegated?.delegated && delegated.ok) {
+        return sendJson(res, { ok: true, delegated: "supervisor", opId: delegated.opId, stopped: MANAGERS.map((manager) => ({ id: manager.id, via: "supervisor", ok: true })) });
+      }
       const stopped = await Promise.all(MANAGERS.map((manager) => postJson(`http://127.0.0.1:${manager.port}/api/manager/shutdown`)));
       sendJson(res, { ok: true, stopped });
       return shutdownSoon();
@@ -916,6 +944,7 @@ function redactStatusForRemote(payload) {
       clients: undefined,
       externalAccess: undefined,
     })),
+    platform: platformRoutes.redactPlatformSummaryForViewer(payload.platform),
   };
 }
 
@@ -1466,6 +1495,13 @@ async function buildSearchGatewayStatus(options = {}) {
   };
 }
 
+// `platform start <registry id>` (06 §10.3); the entry's short ids (vllm, tts,
+// mcp, search) map to the registry ids through the legacy table.
+function platformStartCommand(id) {
+  const legacy = core.platform.LEGACY_IDS || {};
+  return `platform start ${Object.hasOwn(legacy, id) ? legacy[id] : id}`;
+}
+
 // 一张离线清单：入口首页横幅和桌面通知都从这里取，谁离线、怎么拉起。
 function summarizeComponents(managers = [], mcp = null, tts = null, search = null) {
   const items = [];
@@ -1477,13 +1513,13 @@ function summarizeComponents(managers = [], mcp = null, tts = null, search = nul
       online: Boolean(manager.process?.portListening),
       healthy: Boolean(manager.ok),
       startable: true,
-      startCommand: `${manager.id === "vllm" ? "vllm-manager" : "llama-manager"}\\start-manager.cmd 或 start-service-entry.cmd`,
+      startCommand: platformStartCommand(manager.id),
       error: manager.error || "",
     });
   }
-  if (tts) items.push({ id: "tts", name: "TTS 语音平台", kind: "tts", online: Boolean(tts.listening), healthy: Boolean(tts.healthy), startable: false, startCommand: "start-tts-platform.cmd", error: tts.error || "" });
-  if (mcp) items.push({ id: "mcp", name: "MCP 工具服务", kind: "mcp", online: Boolean(mcp.listening), healthy: Boolean(mcp.healthy), startable: false, startCommand: "start-platform-mcp.cmd", error: mcp.error || "" });
-  if (search) items.push({ id: "search", name: "搜索网关", kind: "search", online: Boolean(search.listening), healthy: Boolean(search.healthy), startable: false, startCommand: "start-search-gateway.cmd（需要 Docker Desktop）", error: search.error || "" });
+  if (tts) items.push({ id: "tts", name: "TTS 语音平台", kind: "tts", online: Boolean(tts.listening), healthy: Boolean(tts.healthy), startable: false, startCommand: platformStartCommand("tts"), error: tts.error || "" });
+  if (mcp) items.push({ id: "mcp", name: "MCP 工具服务", kind: "mcp", online: Boolean(mcp.listening), healthy: Boolean(mcp.healthy), startable: false, startCommand: platformStartCommand("mcp"), error: mcp.error || "" });
+  if (search) items.push({ id: "search", name: "搜索网关", kind: "search", online: Boolean(search.listening), healthy: Boolean(search.healthy), startable: false, startCommand: platformStartCommand("search"), error: search.error || "" });
   const offline = items.filter((item) => !item.online);
   const unhealthy = items.filter((item) => item.online && !item.healthy);
   return {
@@ -1492,7 +1528,7 @@ function summarizeComponents(managers = [], mcp = null, tts = null, search = nul
     offline: offline.map((item) => item.id),
     unhealthy: unhealthy.map((item) => item.id),
     items,
-    allCommand: "start-platform.cmd all",
+    allCommand: "platform start full",
   };
 }
 
@@ -3284,8 +3320,24 @@ async function readJsonObjectBody(req, maxBytes) {
   return data;
 }
 
-async function startDetachedManager(manager) {
-  if (await core.isPortListening("127.0.0.1", manager.port)) {
+// The host and port a manager started by this process binds come from
+// platform.json (env > file > default; 127.0.0.1 unless managers.bindHost says
+// otherwise, 06 §10.3, V21). options: { aiRoot, env, spawn, readyTimeoutMs } for tests.
+function managerBindFor(manager, options = {}) {
+  try {
+    const section = core.platform.readSection("managers", { aiRoot: options.aiRoot || AI_ROOT, ...(options.env ? { env: options.env } : {}) });
+    const entry = section.values?.[manager.id];
+    const port = Number(entry?.port);
+    const host = typeof entry?.host === "string" && entry.host ? entry.host : manager.defaultHost;
+    return { host, port: Number.isInteger(port) && port > 0 && port < 65536 ? port : manager.port };
+  } catch {
+    return { host: manager.defaultHost, port: manager.port };
+  }
+}
+
+async function startDetachedManager(manager, options = {}) {
+  const bind = managerBindFor(manager, options);
+  if (await core.isPortListening("127.0.0.1", bind.port)) {
     return { ok: true, alreadyRunning: true, status: await buildManagerStatus(manager, { force: true }) };
   }
   await fs.mkdir(path.join(manager.root, "logs"), { recursive: true });
@@ -3294,8 +3346,8 @@ async function startDetachedManager(manager) {
   const err = fsSync.openSync(path.join(manager.root, "logs", "manager.err.log"), "a");
   const env = {
     ...process.env,
-    [manager.envPort]: String(manager.port),
-    [manager.envHost]: manager.defaultHost,
+    [manager.envPort]: String(bind.port),
+    [manager.envHost]: bind.host,
     // Env is a bootstrap fallback; managers prefer the published file so they
     // can follow entry token rotation without a manager restart.
     SERVICE_GATEWAY_TRUST_TOKEN: security.getTrustToken(),
@@ -3303,7 +3355,7 @@ async function startDetachedManager(manager) {
   };
   if (manager.id === "vllm") env.VLLM_MANAGER_ALLOW_REMOTE = env.VLLM_MANAGER_ALLOW_REMOTE || "0";
   if (manager.id === "llama") env.LLAMA_MANAGER_ALLOW_REMOTE = env.LLAMA_MANAGER_ALLOW_REMOTE || "0";
-  const child = spawn(nodeExe, ["server.js"], {
+  const child = (options.spawn || spawn)(nodeExe, ["server.js"], {
     cwd: manager.root,
     detached: true,
     windowsHide: true,
@@ -3317,7 +3369,7 @@ async function startDetachedManager(manager) {
   fsSync.closeSync(err);
   child.unref();
   await fs.writeFile(path.join(manager.root, ".manager.pid"), `${child.pid}\n`, "utf8");
-  const ready = await waitForManagerReady(manager, 12000);
+  const ready = await waitForManagerReady({ ...manager, port: bind.port }, options.readyTimeoutMs ?? 12000);
   return { ok: ready, pid: child.pid, ready, status: await buildManagerStatus(manager, { force: true }) };
 }
 
@@ -3575,4 +3627,5 @@ module.exports = {
   },
   shutdownSoon,
   startServiceEntry,
+  startDetachedManager,
 };
