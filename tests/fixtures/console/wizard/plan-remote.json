@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "engineId": "vllm",
+  "planHash": "sha256:bbbbbbbb",
+  "prospective": true,
+  "runtime": {
+    "runtimeId": "vllm@0.28.0"
+  },
+  "recipe": null,
+  "values": {
+    "contextLength": {
+      "value": 131072,
+      "source": "engine-default"
+    }
+  },
+  "overrides": [],
+  "errors": [],
+  "warnings": [
+    {
+      "code": "plan_prospective",
+      "field": "prospective",
+      "message": "Planned from the model card; it is recomputed once the files exist."
+    }
+  ],
+  "blockers": [],
+  "steps": [
+    {
+      "kind": "pull",
+      "image": "vllm/vllm-openai:v0.28.0",
+      "required": false,
+      "policy": "auto"
+    }
+  ],
+  "admission": {
+    "verdict": "ok",
+    "message": ""
+  }
+}

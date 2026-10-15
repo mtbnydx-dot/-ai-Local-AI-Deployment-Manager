@@ -1,0 +1,14 @@
+{
+  "prefixes": [
+    "models.card.fact.",
+    "models.card.modality.",
+    "models.compat.evidence.",
+    "models.confidence.",
+    "models.role.",
+    "models.verdict.",
+    "models.wizard.engine.why.",
+    "models.wizard.model.fit.",
+    "models.wizard.step."
+  ],
+  "unused": []
+}

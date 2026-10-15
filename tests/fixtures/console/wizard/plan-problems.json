@@ -1,0 +1,67 @@
+{
+  "ok": false,
+  "engineId": "vllm",
+  "planHash": null,
+  "prospective": false,
+  "runtime": {
+    "runtimeId": "vllm@0.28.0"
+  },
+  "recipe": null,
+  "values": {
+    "contextLength": {
+      "value": 131072,
+      "source": "engine-default"
+    }
+  },
+  "overrides": [],
+  "errors": [
+    {
+      "field": "contextLength",
+      "code": "out_of_range",
+      "message": "Context length must be at most 131072 for this model.",
+      "suggestion": {
+        "value": 131072,
+        "why": {
+          "zh": "模型原生上下文上限",
+          "en": "The model's native context"
+        }
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "code": "recipe_unverified",
+      "message": {
+        "zh": "没有配方",
+        "en": "No recipe applies"
+      }
+    }
+  ],
+  "blockers": [
+    {
+      "code": "insufficient_vram",
+      "message": {
+        "zh": "显存不足",
+        "en": "Not enough free VRAM"
+      },
+      "action": {
+        "label": {
+          "zh": "调整显存",
+          "en": "Adjust memory"
+        }
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "pull",
+      "image": "vllm/vllm-openai:v0.28.0",
+      "required": false,
+      "policy": "auto"
+    }
+  ],
+  "admission": {
+    "verdict": "block",
+    "message": "Not enough free VRAM"
+  }
+}

@@ -1,0 +1,209 @@
+{
+  "local-replace-minimal": {
+    "plan": {
+      "engineId": "vllm",
+      "model": {
+        "ref": "C:/fixture/models/example-7B"
+      },
+      "instance": {
+        "mode": "replace",
+        "networkAccess": "local"
+      },
+      "values": {}
+    },
+    "launch": {
+      "engineId": "vllm",
+      "model": {
+        "ref": "C:/fixture/models/example-7B"
+      },
+      "instance": {
+        "mode": "replace",
+        "networkAccess": "local"
+      },
+      "values": {},
+      "expectedPlanHash": "sha256:0123abcd"
+    }
+  },
+  "local-replace-values": {
+    "plan": {
+      "engineId": "vllm",
+      "runtimeId": "vllm@0.28.0",
+      "recipeId": "qwen38-flashnext-262k",
+      "model": {
+        "ref": "C:/fixture/models/example-7B",
+        "servedName": "example"
+      },
+      "instance": {
+        "mode": "replace",
+        "id": "primary",
+        "port": 8000,
+        "networkAccess": "lan",
+        "gpuIds": [
+          "0",
+          "1"
+        ]
+      },
+      "values": {
+        "contextLength": 131072,
+        "concurrency": 2,
+        "kvCacheDtype": "fp8"
+      },
+      "extraArgs": [
+        "--max-log-len",
+        "256"
+      ],
+      "extraEnv": {
+        "VLLM_LOGGING_LEVEL": "DEBUG"
+      },
+      "acknowledge": [
+        "experimental-engine"
+      ]
+    },
+    "launch": {
+      "engineId": "vllm",
+      "runtimeId": "vllm@0.28.0",
+      "recipeId": "qwen38-flashnext-262k",
+      "model": {
+        "ref": "C:/fixture/models/example-7B",
+        "servedName": "example"
+      },
+      "instance": {
+        "mode": "replace",
+        "id": "primary",
+        "port": 8000,
+        "networkAccess": "lan",
+        "gpuIds": [
+          "0",
+          "1"
+        ]
+      },
+      "values": {
+        "contextLength": 131072,
+        "concurrency": 2,
+        "kvCacheDtype": "fp8"
+      },
+      "extraArgs": [
+        "--max-log-len",
+        "256"
+      ],
+      "extraEnv": {
+        "VLLM_LOGGING_LEVEL": "DEBUG"
+      },
+      "acknowledge": [
+        "experimental-engine"
+      ],
+      "expectedPlanHash": "sha256:0123abcd"
+    }
+  },
+  "local-parallel-planner-value": {
+    "plan": {
+      "engineId": "llamacpp",
+      "model": {
+        "ref": "C:/fixture/models/example-7B"
+      },
+      "instance": {
+        "mode": "parallel",
+        "id": "vision",
+        "port": 8180,
+        "networkAccess": "local",
+        "gpuIds": [
+          "0"
+        ]
+      },
+      "values": {
+        "contextLength": {
+          "value": 65536,
+          "source": "planner"
+        },
+        "llamacpp.flashAttention": true
+      }
+    },
+    "launch": {
+      "engineId": "llamacpp",
+      "model": {
+        "ref": "C:/fixture/models/example-7B"
+      },
+      "instance": {
+        "mode": "parallel",
+        "id": "vision",
+        "port": 8180,
+        "networkAccess": "local",
+        "gpuIds": [
+          "0"
+        ]
+      },
+      "values": {
+        "contextLength": {
+          "value": 65536,
+          "source": "planner"
+        },
+        "llamacpp.flashAttention": true
+      },
+      "expectedPlanHash": "sha256:0123abcd"
+    }
+  },
+  "remote-prospective": {
+    "plan": {
+      "engineId": "vllm",
+      "prospective": true,
+      "model": {
+        "card": "mc_abcdefghijklmnopqrst",
+        "servedName": "example-remote"
+      },
+      "instance": {
+        "mode": "replace",
+        "networkAccess": "local"
+      },
+      "values": {
+        "contextLength": 32768
+      }
+    },
+    "launch": {
+      "engineId": "vllm",
+      "prospective": true,
+      "model": {
+        "card": "mc_abcdefghijklmnopqrst",
+        "servedName": "example-remote"
+      },
+      "instance": {
+        "mode": "replace",
+        "networkAccess": "local"
+      },
+      "values": {
+        "contextLength": 32768
+      },
+      "expectedPlanHash": "sha256:0123abcd"
+    }
+  },
+  "secret-value-moves-to-the-request": {
+    "plan": {
+      "engineId": "vllm",
+      "model": {
+        "ref": "C:/fixture/models/example-7B"
+      },
+      "instance": {
+        "mode": "replace",
+        "networkAccess": "local"
+      },
+      "apiKey": "fake-key-for-tests",
+      "values": {
+        "contextLength": 4096
+      }
+    },
+    "launch": {
+      "engineId": "vllm",
+      "model": {
+        "ref": "C:/fixture/models/example-7B"
+      },
+      "instance": {
+        "mode": "replace",
+        "networkAccess": "local"
+      },
+      "apiKey": "fake-key-for-tests",
+      "values": {
+        "contextLength": 4096
+      },
+      "expectedPlanHash": "sha256:0123abcd"
+    }
+  }
+}

@@ -815,6 +815,42 @@ dialog::backdrop {
 .stack-c7 { background: var(--chart-8); }
 .stack-free { background: var(--surface-3); }
 
+/* ---- Deployment wizard: steps 1 and 2, plan strip (CON-11) ---- */
+.wizard-models { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; max-height: 420px; overflow: auto; }
+.wizard-model { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); width: 100%; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text); text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+.wizard-model:hover:not(:disabled) { border-color: var(--border-strong); }
+.wizard-model[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.wizard-model:disabled { color: var(--text-muted); cursor: not-allowed; }
+.wizard-gpus { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.wizard-gpus li { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.wizard-nav { padding-block-start: var(--sp-2); }
+.plan-status { min-width: 0; }
+.plan-problems { margin: 0; padding: 0; list-style: none; }
+.plan-problem { align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+.plan-warnings { margin: 0; padding: 0; list-style: none; }
+.model-card-name { overflow-wrap: anywhere; }
+.model-card-facts th { width: 38%; font-weight: 600; text-align: start; }
+.model-card-facts td { overflow-wrap: anywhere; }
+.model-card-notes { margin: 0; padding: 0; list-style: none; }
+.evidence-chip { white-space: nowrap; }
+@media (max-width: 639px) {
+  .model-card-facts, .model-card-facts tbody, .model-card-facts tr, .model-card-facts th, .model-card-facts td { display: block; width: auto; }
+  .model-card-facts tr { padding-block: var(--sp-2); border-block-end: 1px solid var(--border); }
+  .model-card-facts th, .model-card-facts td { padding-block: 0; border: 0; }
+}
+.compat-list { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.compat-row { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-1); min-width: 0; }
+.compat-row[data-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.compat-row-ok { border-inline-start: 4px solid var(--success); }
+.compat-row-warn { border-inline-start: 4px solid var(--warn); }
+.compat-row-block { border-inline-start: 4px solid var(--danger); background: var(--surface-2); }
+.compat-row-unknown { border-inline-start: 4px solid var(--border-strong); background: var(--surface-2); }
+.compat-head { align-items: center; }
+.compat-reasons, .compat-evidence { display: flex; flex-direction: column; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.compat-reasons li { display: flex; gap: var(--sp-2); align-items: flex-start; overflow-wrap: anywhere; }
+.compat-evidence li { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+.compat-why summary { cursor: pointer; font-weight: 600; }
+
 /* DiffTable: removed values struck through, new values bold. */
 .diff-table th[scope="row"] { text-align: start; font-weight: 600; }
 

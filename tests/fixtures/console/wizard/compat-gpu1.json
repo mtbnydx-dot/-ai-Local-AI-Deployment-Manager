@@ -1,0 +1,111 @@
+{
+  "ok": true,
+  "cardId": "mc_aaaaaaaaaaaaaaaaaaaa",
+  "host": {
+    "gpus": [
+      {
+        "id": "1",
+        "name": "Test GPU B",
+        "totalMb": 24576,
+        "freeMb": 24000,
+        "usedMb": 576
+      }
+    ],
+    "ramBytes": 137438953472,
+    "platform": "win32"
+  },
+  "rows": [
+    {
+      "engineId": "vllm",
+      "runtimeId": "vllm@0.28.0",
+      "verdict": "ok",
+      "supportEvidence": [
+        {
+          "kind": "knowledge",
+          "ref": "families/example-family#vllm",
+          "confidence": "declared"
+        }
+      ],
+      "reasons": [],
+      "actions": [],
+      "fitPreview": {
+        "minimalFits": true,
+        "needsOffload": false,
+        "status": "fail"
+      }
+    },
+    {
+      "engineId": "sglang",
+      "runtimeId": "sglang@0.5.17",
+      "verdict": "ok",
+      "supportEvidence": [],
+      "reasons": [
+        {
+          "code": "arch_not_in_knowledge",
+          "level": "unknown",
+          "message": {
+            "zh": "知识库里没有这个架构。",
+            "en": "The knowledge base has no entry for this architecture."
+          }
+        }
+      ],
+      "actions": [],
+      "fitPreview": {
+        "status": "fail"
+      }
+    },
+    {
+      "engineId": "llamacpp",
+      "runtimeId": "llamacpp@b6000",
+      "verdict": "block",
+      "supportEvidence": [],
+      "reasons": [
+        {
+          "code": "format_not_supported",
+          "level": "block",
+          "message": {
+            "zh": "llama.cpp 只能运行 GGUF 文件。",
+            "en": "llama.cpp can only run GGUF files."
+          }
+        }
+      ],
+      "actions": [],
+      "fitPreview": null
+    },
+    {
+      "engineId": "lmdeploy",
+      "runtimeId": "lmdeploy@0.18.0",
+      "verdict": "unknown",
+      "supportEvidence": [],
+      "reasons": [
+        {
+          "code": "support_unverified",
+          "level": "unknown",
+          "message": {
+            "zh": "没有已验证的支持记录。",
+            "en": "No verified support record."
+          }
+        }
+      ],
+      "actions": [
+        {
+          "kind": "probe",
+          "label": {
+            "zh": "运行预检探针",
+            "en": "Run dry probe"
+          }
+        },
+        {
+          "kind": "override",
+          "label": {
+            "zh": "为此模型覆盖",
+            "en": "Override for this model"
+          }
+        }
+      ],
+      "fitPreview": {
+        "status": "fail"
+      }
+    }
+  ]
+}
