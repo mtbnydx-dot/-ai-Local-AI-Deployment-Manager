@@ -631,3 +631,15 @@ test("a signed shim enqueues as manager-shim and reaches only the shim download 
   const cancel = await signed(port, "POST", `/api/hub/downloads/${id}/cancel`, { principal, token, body: {} });
   assert.equal(cancel.status, 200, cancel.text);
 });
+
+test("the rollback flag (hub.downloadsOwner = manager) makes POST /api/hub/downloads answer 409 hub_disabled (HUB-12)", async (t) => {
+  const root = tempDir(t, "hub-routes-rollback-");
+  const dataDir = path.join(root, "service-entry", "data", "hub");
+  const hub = createModelHub({ aiRoot: root, dataDir, env: { AI_HUB_DOWNLOADS_OWNER: "manager" }, modelScopeCli: "modelscope", logger: quietLogger(), heartbeatMs: 3_600_000 });
+  await hub.start();
+  t.after(() => hub.stop());
+  const { port, owner } = await mountEntry(t, { hub });
+  const response = await request(port, "/api/hub/downloads", { method: "POST", owner, body: { provider: "huggingface", repo: "org/Model-GGUF" } });
+  assert.equal(response.status, 409, response.text);
+  assert.equal(response.json.error.code, "hub_disabled");
+});

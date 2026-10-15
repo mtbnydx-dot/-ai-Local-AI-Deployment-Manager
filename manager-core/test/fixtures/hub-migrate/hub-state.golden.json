@@ -1,0 +1,905 @@
+{
+  "jobs": [
+    {
+      "schemaVersion": 1,
+      "id": "dl_mig-l-cancelled",
+      "legacyIds": [
+        "mig-l-cancelled"
+      ],
+      "createdAt": "2026-09-07T10:00:00.000Z",
+      "updatedAt": "2026-09-07T10:01:00.000Z",
+      "startedAt": "2026-09-07T10:00:00.000Z",
+      "finishedAt": "2026-09-07T10:01:00.000Z",
+      "origin": {
+        "kind": "migration",
+        "managerId": "llama",
+        "requestId": null
+      },
+      "ownerManagerId": "llama",
+      "state": "cancelled",
+      "waitReason": null,
+      "phaseHistory": [
+        {
+          "phase": "cancelled",
+          "at": "2026-09-07T10:01:00.000Z"
+        }
+      ],
+      "priority": "normal",
+      "queueOrder": 1791963800006,
+      "pausedBy": null,
+      "autoResume": false,
+      "artifact": {
+        "provider": "huggingface",
+        "repo": "example-org/Dropped-GGUF",
+        "revision": "main",
+        "revisionSha": null,
+        "artifactKey": "gguf:|Q8_0",
+        "kind": "legacy-import",
+        "format": "gguf",
+        "quant": "Q8_0",
+        "companions": [],
+        "files": [],
+        "totalBytes": 0,
+        "manifestPending": true,
+        "legacySelection": {
+          "precision": "Q8_0",
+          "includeExtras": []
+        }
+      },
+      "target": {
+        "rootId": "legacy",
+        "rootLabel": "原模型库",
+        "outputName": "example-org-Dropped-GGUF",
+        "localDir": "<ROOT>/models/example-org-Dropped-GGUF",
+        "volume": "<VOLUME>"
+      },
+      "transfer": {
+        "engine": "cli",
+        "cli": "hf",
+        "attempt": 0,
+        "batches": 1,
+        "batchIndex": 0,
+        "pid": null,
+        "pidStartedAt": null,
+        "options": {
+          "source": "hf-mirror",
+          "endpoint": "https://hf-mirror.com",
+          "xet": "default",
+          "credentialMode": "cached-login",
+          "tokenRef": null,
+          "remember": false
+        },
+        "optionsHistory": []
+      },
+      "progress": {
+        "bytesDone": 0,
+        "bytesTotal": 0,
+        "percent": 1,
+        "speedBps": 0,
+        "speedEmaBps": 0,
+        "etaSeconds": null,
+        "filesDone": 0,
+        "filesTotal": 0,
+        "files": [],
+        "verify": {
+          "filesDone": 0,
+          "filesTotal": 0,
+          "bytesDone": 0
+        },
+        "samples": [],
+        "lastGrowthAt": null,
+        "updatedAt": "2026-09-07T10:01:00.000Z"
+      },
+      "retry": {
+        "count": 0,
+        "max": 1,
+        "nextAt": null,
+        "history": []
+      },
+      "error": null,
+      "advice": null,
+      "runAfter": null,
+      "result": null,
+      "bypassIdleOnce": false,
+      "forceSlot": false,
+      "logs": [
+        "cancelled by user",
+        "Imported from the manager ledger."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dl_mig-l-modelscope",
+      "legacyIds": [
+        "mig-l-modelscope"
+      ],
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "startedAt": "2026-09-08T10:00:00.000Z",
+      "finishedAt": null,
+      "origin": {
+        "kind": "migration",
+        "managerId": "llama",
+        "requestId": null
+      },
+      "ownerManagerId": "llama",
+      "state": "paused",
+      "waitReason": null,
+      "phaseHistory": [
+        {
+          "phase": "paused",
+          "at": "2026-10-14T08:00:00.000Z"
+        }
+      ],
+      "priority": "normal",
+      "queueOrder": 1791963800007,
+      "pausedBy": "migration",
+      "autoResume": false,
+      "artifact": {
+        "provider": "modelscope",
+        "repo": "example-org/Scope-GGUF",
+        "revision": "main",
+        "revisionSha": null,
+        "artifactKey": "gguf:|Q5_K_M",
+        "kind": "legacy-import",
+        "format": "gguf",
+        "quant": "Q5_K_M",
+        "companions": [],
+        "files": [],
+        "totalBytes": 3000,
+        "manifestPending": true,
+        "legacySelection": {
+          "precision": "Q5_K_M",
+          "includeExtras": []
+        }
+      },
+      "target": {
+        "rootId": "legacy",
+        "rootLabel": "原模型库",
+        "outputName": "example-org-Scope-GGUF",
+        "localDir": "<ROOT>/models/example-org-Scope-GGUF",
+        "volume": "<VOLUME>"
+      },
+      "transfer": {
+        "engine": "cli",
+        "cli": "modelscope",
+        "attempt": 0,
+        "batches": 1,
+        "batchIndex": 0,
+        "pid": null,
+        "pidStartedAt": null,
+        "options": {
+          "source": "modelscope",
+          "endpoint": "https://www.modelscope.cn",
+          "xet": "default",
+          "credentialMode": "cached-login",
+          "tokenRef": null,
+          "remember": false
+        },
+        "optionsHistory": []
+      },
+      "progress": {
+        "bytesDone": 1650,
+        "bytesTotal": 3000,
+        "percent": 55,
+        "speedBps": 0,
+        "speedEmaBps": 0,
+        "etaSeconds": null,
+        "filesDone": 0,
+        "filesTotal": 0,
+        "files": [],
+        "verify": {
+          "filesDone": 0,
+          "filesTotal": 0,
+          "bytesDone": 0
+        },
+        "samples": [],
+        "lastGrowthAt": null,
+        "updatedAt": "2026-09-08T10:30:00.000Z"
+      },
+      "retry": {
+        "count": 0,
+        "max": 1,
+        "nextAt": null,
+        "history": []
+      },
+      "error": null,
+      "advice": null,
+      "runAfter": null,
+      "result": null,
+      "bypassIdleOnce": false,
+      "forceSlot": false,
+      "logs": [
+        "interrupted by a manager restart",
+        "Imported from the manager ledger; paused until resumed."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dl_mig-l-queued",
+      "legacyIds": [
+        "mig-l-queued"
+      ],
+      "createdAt": "2026-09-06T10:00:00.000Z",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "startedAt": null,
+      "finishedAt": null,
+      "origin": {
+        "kind": "migration",
+        "managerId": "llama",
+        "requestId": null
+      },
+      "ownerManagerId": "llama",
+      "state": "paused",
+      "waitReason": null,
+      "phaseHistory": [
+        {
+          "phase": "paused",
+          "at": "2026-10-14T08:00:00.000Z"
+        }
+      ],
+      "priority": "normal",
+      "queueOrder": 1791963800005,
+      "pausedBy": "migration",
+      "autoResume": false,
+      "artifact": {
+        "provider": "huggingface",
+        "repo": "example-org/Small-GGUF",
+        "revision": "main",
+        "revisionSha": null,
+        "artifactKey": "gguf:|Q4_K_M",
+        "kind": "legacy-import",
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "companions": [],
+        "files": [],
+        "totalBytes": 2000,
+        "manifestPending": true,
+        "legacySelection": {
+          "precision": "Q4_K_M",
+          "includeExtras": [
+            "mmproj"
+          ]
+        }
+      },
+      "target": {
+        "rootId": "legacy",
+        "rootLabel": "原模型库",
+        "outputName": "example-org-Small-GGUF",
+        "localDir": "<ROOT>/models/example-org-Small-GGUF",
+        "volume": "<VOLUME>"
+      },
+      "transfer": {
+        "engine": "cli",
+        "cli": "hf",
+        "attempt": 0,
+        "batches": 1,
+        "batchIndex": 0,
+        "pid": null,
+        "pidStartedAt": null,
+        "options": {
+          "source": "hf-mirror",
+          "endpoint": "https://hf-mirror.com",
+          "xet": "default",
+          "credentialMode": "cached-login",
+          "tokenRef": null,
+          "remember": false
+        },
+        "optionsHistory": []
+      },
+      "progress": {
+        "bytesDone": 0,
+        "bytesTotal": 2000,
+        "percent": 0,
+        "speedBps": 0,
+        "speedEmaBps": 0,
+        "etaSeconds": null,
+        "filesDone": 0,
+        "filesTotal": 0,
+        "files": [],
+        "verify": {
+          "filesDone": 0,
+          "filesTotal": 0,
+          "bytesDone": 0
+        },
+        "samples": [],
+        "lastGrowthAt": null,
+        "updatedAt": "2026-09-06T10:00:00.000Z"
+      },
+      "retry": {
+        "count": 0,
+        "max": 1,
+        "nextAt": null,
+        "history": []
+      },
+      "error": null,
+      "advice": null,
+      "runAfter": null,
+      "result": null,
+      "bypassIdleOnce": false,
+      "forceSlot": false,
+      "logs": [
+        "queued",
+        "Imported from the manager ledger; paused until resumed."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dl_mig-v-coded",
+      "legacyIds": [
+        "mig-v-coded"
+      ],
+      "createdAt": "2026-09-02T10:00:00.000Z",
+      "updatedAt": "2026-09-02T10:05:00.000Z",
+      "startedAt": "2026-09-02T10:00:00.000Z",
+      "finishedAt": "2026-09-02T10:05:00.000Z",
+      "origin": {
+        "kind": "migration",
+        "managerId": "vllm",
+        "requestId": null
+      },
+      "ownerManagerId": "vllm",
+      "state": "failed",
+      "waitReason": null,
+      "phaseHistory": [
+        {
+          "phase": "failed",
+          "at": "2026-09-02T10:05:00.000Z"
+        }
+      ],
+      "priority": "normal",
+      "queueOrder": 1791963800002,
+      "pausedBy": null,
+      "autoResume": false,
+      "artifact": {
+        "provider": "huggingface",
+        "repo": "example-org/Gated-7B",
+        "revision": "main",
+        "revisionSha": null,
+        "artifactKey": "legacy:|bf16",
+        "kind": "legacy-import",
+        "format": "unknown",
+        "quant": "bf16",
+        "companions": [],
+        "files": [],
+        "totalBytes": 8000,
+        "manifestPending": true,
+        "legacySelection": {
+          "precision": "bf16",
+          "includeExtras": []
+        }
+      },
+      "target": {
+        "rootId": "legacy",
+        "rootLabel": "原模型库",
+        "outputName": "example-org-Gated-7B",
+        "localDir": "<ROOT>/models/example-org-Gated-7B",
+        "volume": "<VOLUME>"
+      },
+      "transfer": {
+        "engine": "cli",
+        "cli": "hf",
+        "attempt": 0,
+        "batches": 1,
+        "batchIndex": 0,
+        "pid": null,
+        "pidStartedAt": null,
+        "options": {
+          "source": "huggingface",
+          "endpoint": "https://huggingface.co",
+          "xet": "default",
+          "credentialMode": "cached-login",
+          "tokenRef": null,
+          "remember": false
+        },
+        "optionsHistory": []
+      },
+      "progress": {
+        "bytesDone": 240,
+        "bytesTotal": 8000,
+        "percent": 3,
+        "speedBps": 0,
+        "speedEmaBps": 0,
+        "etaSeconds": null,
+        "filesDone": 0,
+        "filesTotal": 0,
+        "files": [],
+        "verify": {
+          "filesDone": 0,
+          "filesTotal": 0,
+          "bytesDone": 0
+        },
+        "samples": [],
+        "lastGrowthAt": null,
+        "updatedAt": "2026-09-02T10:05:00.000Z"
+      },
+      "retry": {
+        "count": 0,
+        "max": 3,
+        "nextAt": null,
+        "history": []
+      },
+      "error": {
+        "code": "hf_auth_invalid",
+        "baseCode": "hf_auth_invalid",
+        "class": "auth",
+        "retryable": false,
+        "title": {
+          "zh": "Hugging Face Token 无效",
+          "en": "Invalid Hugging Face token"
+        },
+        "hint": {
+          "zh": "请重新登录 Hugging Face。",
+          "en": "Sign in to Hugging Face again."
+        },
+        "actions": [
+          "sign-in"
+        ],
+        "detail": "Hugging Face 登录无效 / Hugging Face sign-in is invalid",
+        "at": "2026-09-02T10:05:00.000Z"
+      },
+      "advice": null,
+      "runAfter": null,
+      "result": null,
+      "bypassIdleOnce": false,
+      "forceSlot": false,
+      "logs": [
+        "401 Client Error: Unauthorized for url",
+        "> exit 1",
+        "Imported from the manager ledger."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dl_mig-v-ready",
+      "legacyIds": [
+        "mig-v-ready"
+      ],
+      "createdAt": "2026-09-01T10:00:00.000Z",
+      "updatedAt": "2026-09-01T10:30:00.000Z",
+      "startedAt": "2026-09-01T10:00:00.000Z",
+      "finishedAt": "2026-09-01T10:30:00.000Z",
+      "origin": {
+        "kind": "migration",
+        "managerId": "vllm",
+        "requestId": null
+      },
+      "ownerManagerId": "vllm",
+      "state": "ready",
+      "waitReason": null,
+      "phaseHistory": [
+        {
+          "phase": "ready",
+          "at": "2026-09-01T10:30:00.000Z"
+        }
+      ],
+      "priority": "high",
+      "queueOrder": 1791963800001,
+      "pausedBy": null,
+      "autoResume": false,
+      "artifact": {
+        "provider": "huggingface",
+        "repo": "example-org/Example-8B",
+        "revision": "main",
+        "revisionSha": null,
+        "artifactKey": "legacy:|bf16",
+        "kind": "legacy-import",
+        "format": "safetensors",
+        "quant": "bf16",
+        "companions": [],
+        "files": [
+          {
+            "path": "model.safetensors",
+            "size": 4096,
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "role": "weight"
+          },
+          {
+            "path": "config.json",
+            "size": 2,
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "role": "sidecar"
+          }
+        ],
+        "totalBytes": 4098
+      },
+      "target": {
+        "rootId": "legacy",
+        "rootLabel": "原模型库",
+        "outputName": "example-org-Example-8B",
+        "localDir": "<ROOT>/models/example-org-Example-8B",
+        "volume": "<VOLUME>"
+      },
+      "transfer": {
+        "engine": "cli",
+        "cli": "hf",
+        "attempt": 0,
+        "batches": 1,
+        "batchIndex": 0,
+        "pid": null,
+        "pidStartedAt": null,
+        "options": {
+          "source": "huggingface",
+          "endpoint": "https://huggingface.co",
+          "xet": "high-performance",
+          "credentialMode": "cached-login",
+          "tokenRef": null,
+          "remember": false
+        },
+        "optionsHistory": []
+      },
+      "progress": {
+        "bytesDone": 4098,
+        "bytesTotal": 4098,
+        "percent": 100,
+        "speedBps": 0,
+        "speedEmaBps": 0,
+        "etaSeconds": null,
+        "filesDone": 0,
+        "filesTotal": 2,
+        "files": [],
+        "verify": {
+          "filesDone": 0,
+          "filesTotal": 0,
+          "bytesDone": 0
+        },
+        "samples": [],
+        "lastGrowthAt": null,
+        "updatedAt": "2026-09-01T10:30:00.000Z"
+      },
+      "retry": {
+        "count": 0,
+        "max": 3,
+        "nextAt": null,
+        "history": []
+      },
+      "error": null,
+      "advice": null,
+      "runAfter": null,
+      "result": null,
+      "bypassIdleOnce": false,
+      "forceSlot": false,
+      "logs": [
+        "> hf download example-org/Example-8B",
+        "done",
+        "Imported from the manager ledger."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dl_mig-v-running",
+      "legacyIds": [
+        "mig-v-running"
+      ],
+      "createdAt": "2026-09-04T10:00:00.000Z",
+      "updatedAt": "2026-10-14T08:00:00.000Z",
+      "startedAt": "2026-09-04T10:00:00.000Z",
+      "finishedAt": null,
+      "origin": {
+        "kind": "migration",
+        "managerId": "vllm",
+        "requestId": null
+      },
+      "ownerManagerId": "vllm",
+      "state": "paused",
+      "waitReason": null,
+      "phaseHistory": [
+        {
+          "phase": "paused",
+          "at": "2026-10-14T08:00:00.000Z"
+        }
+      ],
+      "priority": "normal",
+      "queueOrder": 1791963800004,
+      "pausedBy": "migration",
+      "autoResume": false,
+      "artifact": {
+        "provider": "huggingface",
+        "repo": "example-org/Token-3B",
+        "revision": "main",
+        "revisionSha": null,
+        "artifactKey": "legacy:|bf16",
+        "kind": "legacy-import",
+        "format": "unknown",
+        "quant": "bf16",
+        "companions": [],
+        "files": [],
+        "totalBytes": 1000,
+        "manifestPending": true,
+        "legacySelection": {
+          "precision": "bf16",
+          "includeExtras": []
+        }
+      },
+      "target": {
+        "rootId": "legacy",
+        "rootLabel": "原模型库",
+        "outputName": "example-org-Token-3B",
+        "localDir": "<ROOT>/models/example-org-Token-3B",
+        "volume": "<VOLUME>"
+      },
+      "transfer": {
+        "engine": "cli",
+        "cli": "hf",
+        "attempt": 0,
+        "batches": 1,
+        "batchIndex": 0,
+        "pid": null,
+        "pidStartedAt": null,
+        "options": {
+          "source": "huggingface",
+          "endpoint": "https://huggingface.co",
+          "xet": "default",
+          "credentialMode": "temp-token",
+          "tokenRef": null,
+          "remember": false
+        },
+        "optionsHistory": []
+      },
+      "progress": {
+        "bytesDone": 400,
+        "bytesTotal": 1000,
+        "percent": 40,
+        "speedBps": 0,
+        "speedEmaBps": 0,
+        "etaSeconds": null,
+        "filesDone": 0,
+        "filesTotal": 0,
+        "files": [],
+        "verify": {
+          "filesDone": 0,
+          "filesTotal": 0,
+          "bytesDone": 0
+        },
+        "samples": [],
+        "lastGrowthAt": null,
+        "updatedAt": "2026-09-04T10:10:00.000Z"
+      },
+      "retry": {
+        "count": 0,
+        "max": 3,
+        "nextAt": null,
+        "history": []
+      },
+      "error": null,
+      "advice": null,
+      "runAfter": null,
+      "result": null,
+      "bypassIdleOnce": false,
+      "forceSlot": false,
+      "logs": [
+        "downloading",
+        "Imported from the manager ledger; paused until resumed."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dl_mig-v-uncoded",
+      "legacyIds": [
+        "mig-v-uncoded"
+      ],
+      "createdAt": "2026-09-03T10:00:00.000Z",
+      "updatedAt": "2026-09-03T10:20:00.000Z",
+      "startedAt": "2026-09-03T10:00:00.000Z",
+      "finishedAt": "2026-09-03T10:20:00.000Z",
+      "origin": {
+        "kind": "migration",
+        "managerId": "vllm",
+        "requestId": null
+      },
+      "ownerManagerId": "vllm",
+      "state": "failed",
+      "waitReason": null,
+      "phaseHistory": [
+        {
+          "phase": "failed",
+          "at": "2026-09-03T10:20:00.000Z"
+        }
+      ],
+      "priority": "normal",
+      "queueOrder": 1791963800003,
+      "pausedBy": null,
+      "autoResume": false,
+      "artifact": {
+        "provider": "huggingface",
+        "repo": "example-org/Big-70B",
+        "revision": "main",
+        "revisionSha": null,
+        "artifactKey": "legacy:|bf16",
+        "kind": "legacy-import",
+        "format": "unknown",
+        "quant": "bf16",
+        "companions": [],
+        "files": [],
+        "totalBytes": 1000,
+        "manifestPending": true,
+        "legacySelection": {
+          "precision": "bf16",
+          "includeExtras": []
+        }
+      },
+      "target": {
+        "rootId": "legacy",
+        "rootLabel": "原模型库",
+        "outputName": "example-org-Big-70B",
+        "localDir": "<ROOT>/models/example-org-Big-70B",
+        "volume": "<VOLUME>"
+      },
+      "transfer": {
+        "engine": "cli",
+        "cli": "hf",
+        "attempt": 0,
+        "batches": 1,
+        "batchIndex": 0,
+        "pid": null,
+        "pidStartedAt": null,
+        "options": {
+          "source": "huggingface",
+          "endpoint": "https://huggingface.co",
+          "xet": "high-performance",
+          "credentialMode": "cached-login",
+          "tokenRef": null,
+          "remember": false
+        },
+        "optionsHistory": []
+      },
+      "progress": {
+        "bytesDone": 600,
+        "bytesTotal": 1000,
+        "percent": 60,
+        "speedBps": 0,
+        "speedEmaBps": 0,
+        "etaSeconds": null,
+        "filesDone": 0,
+        "filesTotal": 0,
+        "files": [],
+        "verify": {
+          "filesDone": 0,
+          "filesTotal": 0,
+          "bytesDone": 0
+        },
+        "samples": [],
+        "lastGrowthAt": null,
+        "updatedAt": "2026-09-03T10:20:00.000Z"
+      },
+      "retry": {
+        "count": 0,
+        "max": 3,
+        "nextAt": null,
+        "history": []
+      },
+      "error": {
+        "code": "disk_full",
+        "baseCode": "disk_full",
+        "class": "storage",
+        "retryable": false,
+        "title": {
+          "zh": "磁盘空间不足",
+          "en": "Disk full"
+        },
+        "hint": {
+          "zh": "目标磁盘空间不足，请清理或换一个模型存储位置。",
+          "en": "The target disk is full. Free space or choose another model storage location."
+        },
+        "actions": [
+          "free-space",
+          "choose-root"
+        ],
+        "detail": "download failed",
+        "at": "2026-09-03T10:20:00.000Z"
+      },
+      "advice": null,
+      "runAfter": null,
+      "result": null,
+      "bypassIdleOnce": false,
+      "forceSlot": false,
+      "logs": [
+        "OSError: [Errno 28] No space left on device",
+        "Imported from the manager ledger."
+      ]
+    }
+  ],
+  "settings": {
+    "schemaVersion": 1,
+    "sources": {
+      "policy": "huggingface",
+      "hfEndpoint": "https://huggingface.co",
+      "mirrorEndpoint": "https://hf-mirror.com",
+      "modelScopeEndpoint": "https://www.modelscope.cn",
+      "gatedUsesOfficial": true
+    },
+    "transfer": {
+      "xet": "high-performance",
+      "maxConcurrent": 1,
+      "stallMinutes": 10,
+      "materializeStallMinutes": 20
+    },
+    "verify": {
+      "sha256": true
+    },
+    "retry": {
+      "maxAttempts": 3,
+      "baseDelaySeconds": 20,
+      "maxDelaySeconds": 600,
+      "perClass": {
+        "network": true,
+        "server": true,
+        "watchdog": true,
+        "integrity": true,
+        "tooling": "once"
+      }
+    },
+    "queue": {
+      "idleOnly": false,
+      "idleGraceSeconds": 30,
+      "resumeOnStart": true,
+      "resumeDelaySeconds": 20
+    },
+    "storage": {
+      "reserveGb": 10,
+      "showLegacyRootWhenEmpty": false
+    },
+    "history": {
+      "keepRecords": 200,
+      "retentionDays": 365
+    },
+    "library": {
+      "rescanOnStart": true,
+      "updateCheck": "manual",
+      "identifyOnline": false
+    },
+    "notifications": {
+      "onReady": true,
+      "onFailure": true
+    }
+  },
+  "steps": [
+    {
+      "id": "settings-v1",
+      "done": true,
+      "counts": {
+        "applied": true,
+        "sources": 2
+      }
+    },
+    {
+      "id": "ledgers-v1",
+      "done": true,
+      "counts": {
+        "imported": 7,
+        "paused": 3,
+        "ready": 1,
+        "failed": 2,
+        "cancelled": 1,
+        "alreadyImported": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "snapshot-v1",
+      "done": true,
+      "counts": {
+        "files": 4
+      }
+    },
+    {
+      "id": "library-v1",
+      "done": true,
+      "counts": {
+        "linked": 0,
+        "unlinked": 0,
+        "rescan": false,
+        "reason": "no-library"
+      }
+    },
+    {
+      "id": "notify-v1",
+      "done": true,
+      "counts": {
+        "emitted": true,
+        "imported": 7,
+        "paused": 3
+      }
+    }
+  ]
+}
