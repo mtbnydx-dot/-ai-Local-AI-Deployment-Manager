@@ -1133,7 +1133,7 @@ function createDownloadQueue(options = {}) {
    * 409 already_downloading, already_in_library and target_occupied; 507
    * disk_full when the job alone cannot fit.
    */
-  async function enqueue(spec = {}, { allowDuplicate = false } = {}) {
+  async function enqueue(spec = {}, { allowDuplicate = false, markerMetadata = null } = {}) {
     if (!started || stopping) throw new HubError("hub_unavailable", "The download queue is not running.", { status: 503 });
     const artifact = isPlainObject(spec.artifact) ? clone(spec.artifact) : null;
     const target = isPlainObject(spec.target) ? clone(spec.target) : null;
@@ -1177,7 +1177,12 @@ function createDownloadQueue(options = {}) {
     }
     if (modelStorage && typeof modelStorage.prepareDownload === "function") {
       try {
-        modelStorage.prepareDownload(target.localDir, { model: artifact.repo, source: spec.transfer?.options?.source || artifact.provider, precision: artifact.quant || "" });
+        // A library update resumes into a folder whose marker says what it
+        // holds, so it matches against that marker (verbatim), not a fresh guess.
+        const metadata = isPlainObject(markerMetadata) && spec.origin?.kind === "library-update"
+          ? { model: markerMetadata.model, source: markerMetadata.source, precision: markerMetadata.precision }
+          : { model: artifact.repo, source: spec.transfer?.options?.source || artifact.provider, precision: artifact.quant || "" };
+        modelStorage.prepareDownload(target.localDir, metadata);
       } catch (error) {
         const status = Number(error?.status) || 409;
         if (status === 409) throw new HubError("target_occupied", "The target folder already holds other files.", { status: 409, hint: "Choose another folder name, or resume the original download." });
