@@ -132,6 +132,10 @@ const S = {
   "deps.recorded": { [ZH]: "已记录依赖状态：{count} 个包，MCP 构建：{mcp}", [EN]: "Recorded dependency state: {count} package(s), MCP build: {mcp}" },
   "deps.installed": { [ZH]: "{package}：{status}", [EN]: "{package}: {status}" },
   "deps.unknownPackage": { [ZH]: "没有这个包：{name}", [EN]: "No such package: {name}" },
+  "deploy.liveRoot": { [ZH]: "这里是线上运行根目录，不能从这里部署。请在源码工作区里运行：platform deploy", [EN]: "This is the live runtime root; it cannot deploy from here. Run from a source worktree: platform deploy" },
+  "deploy.noScript": { [ZH]: "找不到部署脚本：{path}", [EN]: "The deploy script was not found: {path}" },
+  "deploy.noShell": { [ZH]: "找不到 PowerShell，无法运行部署脚本。", [EN]: "PowerShell was not found; cannot run the deploy script." },
+  "update.notLive": { [ZH]: "这不是线上运行根目录（缺少 platform-repo.git 或 worktrees/main）。在 Git 工作区里请用 update-platform.cmd，或用 platform deploy 部署。", [EN]: "This is not a live runtime root (platform-repo.git or worktrees/main is missing). In a Git checkout use update-platform.cmd, or deploy with platform deploy." },
   "postDeploy.title": { [ZH]: "部署后处理", [EN]: "Post-deploy steps" },
   "postDeploy.titleDry": { [ZH]: "部署后处理（仅预览，不做任何更改）", [EN]: "Post-deploy steps (plan only, nothing is changed)" },
   "postDeploy.noManifest": { [ZH]: "需要 --manifest <部署清单路径>。", [EN]: "--manifest <path to deployment-manifest.json> is required." },
@@ -149,6 +153,11 @@ const S = {
   "postDeploy.version": { [ZH]: "version.json：{status}", [EN]: "version.json: {status}" },
   "postDeploy.restartNone": { [ZH]: "需要重启：{list}", [EN]: "restart required: {list}" },
   "postDeploy.restartNothing": { [ZH]: "无需重启组件。", [EN]: "No component needs a restart." },
+  "postDeploy.reexeced": { [ZH]: "监督进程已重新执行", [EN]: "The supervisor re-executed" },
+  "postDeploy.restarted": { [ZH]: "已重启：{list}", [EN]: "Restarted: {list}" },
+  "postDeploy.restartQueued": { [ZH]: "已排队，空闲时重启：{list}", [EN]: "Queued, restarts when idle: {list}" },
+  "postDeploy.restartFailed": { [ZH]: "重启失败：{list}", [EN]: "Restart failed: {list}" },
+  "postDeploy.restartManual": { [ZH]: "无法通过监督进程重启（{code}）。手动运行：", [EN]: "Could not restart through the supervisor ({code}). Run by hand:" },
   "postDeploy.restartRun": { [ZH]: "运行：{command}", [EN]: "Run: {command}" },
   "postDeploy.failed": { [ZH]: "部署后处理有步骤失败：{steps}", [EN]: "Post-deploy steps failed: {steps}" },
   "postDeploy.done": { [ZH]: "部署后处理完成。", [EN]: "Post-deploy steps finished." },
@@ -1348,6 +1357,16 @@ function printRestart(ctx, mode, ids, reexec, commands, dry) {
   if (mode !== "none" && !dry) for (const command of commands) ctx.out(tr(ctx, "postDeploy.restartRun", { command }));
 }
 
+function printRestartOutcome(ctx, outcome) {
+  if (outcome.reexeced) ctx.out(tr(ctx, "postDeploy.reexeced"));
+  if (outcome.restarted?.length) ctx.out(tr(ctx, "postDeploy.restarted", { list: outcome.restarted.join(", ") }));
+  if (outcome.queued?.length) {
+    ctx.out(tr(ctx, "postDeploy.restartQueued", { list: outcome.queued.map((item) => item.id).join(", ") }));
+    for (const item of outcome.queued) for (const blocker of item.blockers || []) ctx.out(`  - ${item.id}: ${describeBlocker(blocker)}`);
+  }
+  if (outcome.failed?.length) ctx.out(tr(ctx, "postDeploy.restartFailed", { list: outcome.failed.map((item) => `${item.id} (${item.code})`).join(", ") }));
+}
+
 function printPostDeployPlan(ctx, plan) {
   const [prune, deps, build, version, restart] = plan.steps;
   ctx.out(tr(ctx, "postDeploy.titleDry"));
@@ -1375,7 +1394,11 @@ function printPostDeployResult(ctx, result) {
   if (result.mcp) ctx.out(tr(ctx, "postDeploy.mcp", { status: result.mcp.status + (result.mcp.detail ? ` (${result.mcp.detail})` : "") }));
   if (result.version) ctx.out(tr(ctx, "postDeploy.version", { status: result.version.written ? "ok" : `failed (${result.version.code})` }));
   const restart = result.restartResult;
-  if (restart) printRestart(ctx, restart.mode, restart.ids, restart.reexec, restart.commands, false);
+  if (restart?.action === "requested") printRestartOutcome(ctx, restart.outcome || {});
+  else if (restart) {
+    if (restart.action === "commands" && restart.code && restart.code !== "supervisor_unavailable") ctx.out(tr(ctx, "postDeploy.restartManual", { code: restart.code }));
+    printRestart(ctx, restart.mode, restart.ids, restart.reexec, restart.commands, false);
+  }
   ctx.out(tr(ctx, result.ok ? "postDeploy.done" : "postDeploy.failed", { steps: result.failed.join(", ") }));
 }
 
@@ -1402,7 +1425,10 @@ async function cmdPostDeploy(ctx, { flags }) {
   const result = await steps.executePostDeploy({
     aiRoot: ctx.aiRoot, manifest, manifestFile, registry, restart: mode,
     noPrune: flags["no-prune"] === true, dryRun: flags["dry-run"] === true,
-    fs: ctx.fs, npm: ctx.npm, now: ctx.now, restartAdapter: ctx.restartAdapter,
+    fs: ctx.fs, npm: ctx.npm, now: ctx.now,
+    restartAdapter: ctx.restartAdapter || (mode === "none" ? undefined : (request) => steps.restartViaSupervisor({
+      ...request, control: ctx.control(), now: ctx.now, ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
+    })),
     ...(ctx.nodeVersion ? { nodeVersion: ctx.nodeVersion } : {}),
     log: (line) => ctx.err(line),
   });
@@ -1410,6 +1436,78 @@ async function cmdPostDeploy(ctx, { flags }) {
   else if (result.dryRun) printPostDeployPlan(ctx, result.plan);
   else printPostDeployResult(ctx, result);
   return result.ok ? EXIT.OK : EXIT.FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// deploy / update (06 §9.3, §9.4). Both wrap PowerShell scripts: the file copy,
+// drift and manifest logic stays in deploy-worktree.ps1.
+
+function isDirectory(target) {
+  try { return fs.statSync(target).isDirectory(); } catch { return false; }
+}
+
+/** A live runtime root has the bare repository and the main worktree beside the deployed files. */
+function isLiveRoot(root) {
+  return isDirectory(path.join(root, "platform-repo.git")) && isDirectory(path.join(root, "worktrees", "main"));
+}
+
+function defaultRunPowerShell(argv) {
+  const { spawn } = require("node:child_process");
+  const attempt = (command) => new Promise((resolve, reject) => {
+    const child = spawn(command, argv, { stdio: "inherit", windowsHide: true });
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code === null ? 1 : code));
+  });
+  return attempt("powershell.exe").catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+    return attempt("pwsh");
+  });
+}
+
+async function runScript(ctx, script, scriptArgs) {
+  const argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...scriptArgs];
+  try {
+    return await (ctx.runPowerShell || defaultRunPowerShell)(argv);
+  } catch (error) {
+    if (error?.code === "ENOENT") throw new CliError(EXIT.FAILURE, tr(ctx, "deploy.noShell"));
+    throw error;
+  }
+}
+
+async function cmdDeploy(ctx, { flags }) {
+  const mode = flags.restart === undefined ? "none" : String(flags.restart);
+  if (!["none", "changed", "all"].includes(mode)) throw usageError(ctx, tr(ctx, "postDeploy.badRestart"));
+  const sourceRoot = path.resolve(ctx.sourceRoot || path.join(__dirname, ".."));
+  if (isLiveRoot(sourceRoot) || !fs.existsSync(path.join(sourceRoot, ".git"))) throw new CliError(EXIT.USAGE, tr(ctx, "deploy.liveRoot"));
+  const script = path.join(sourceRoot, "scripts", "deploy-worktree.ps1");
+  if (!fs.existsSync(script)) throw new CliError(EXIT.FAILURE, tr(ctx, "deploy.noScript", { path: path.basename(script) }));
+  const args = ["-Restart", mode];
+  if (flags["skip-tests"]) args.push("-SkipTests");
+  if (flags["no-prune"]) args.push("-NoPrune");
+  if (flags["allow-live-drift"]) args.push("-AllowLiveDrift");
+  if (flags.yes) args.push("-Confirm:$false");
+  if (flags["dry-run"]) args.push("-WhatIf");
+  // Without AI_ROOT the script finds the live root from the worktree's place under it.
+  const target = ctx.env.AI_ROOT ? path.resolve(ctx.env.AI_ROOT) : null;
+  if (target && !samePath(target, sourceRoot)) args.push("-LiveRoot", target);
+  return runScript(ctx, script, args);
+}
+
+async function cmdUpdate(ctx, { flags }) {
+  if (!isLiveRoot(ctx.aiRoot)) throw new CliError(EXIT.USAGE, tr(ctx, "update.notLive"));
+  if (flags.check) {
+    const versionApi = require("../manager-core/platform/version");
+    const config = loadConfig(ctx);
+    const branch = config.values["updates.branch"];
+    const newer = await versionApi.countNewerCommits(ctx.aiRoot, { ...(branch ? { branch } : {}), fetch: true });
+    if (flags.json) { ctx.json(newer); return newer.error ? EXIT.FAILURE : EXIT.OK; }
+    if (newer.error) { ctx.err(tr(ctx, "version.newerUnknown", { detail: newer.error.message })); return EXIT.FAILURE; }
+    ctx.out(newer.behind > 0 ? tr(ctx, "version.newer", { count: newer.behind }) : tr(ctx, "version.upToDate"));
+    return EXIT.OK;
+  }
+  const script = path.join(ctx.aiRoot, "scripts", "update-platform.ps1");
+  if (!fs.existsSync(script)) throw new CliError(EXIT.FAILURE, tr(ctx, "deploy.noScript", { path: path.basename(script) }));
+  return runScript(ctx, script, ["-Delegate"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -2370,6 +2468,18 @@ const COMMANDS = {
     spec: { bool: ["json", "record"], value: ["install"], max: 0 },
     run: cmdDeps,
   },
+  deploy: {
+    usage: "deploy [--restart none|changed|all] [--skip-tests] [--no-prune] [--allow-live-drift] [--yes] [--dry-run]",
+    summary: { [ZH]: "从工作区部署到线上目录", [EN]: "Deploy a worktree to the live root" },
+    spec: { bool: ["skip-tests", "no-prune", "allow-live-drift", "yes", "dry-run"], value: ["restart"], max: 0 },
+    run: cmdDeploy,
+  },
+  update: {
+    usage: "update [--check] [--json]",
+    summary: { [ZH]: "更新线上目录", [EN]: "Update the live root" },
+    spec: { bool: ["check", "json"], max: 0 },
+    run: cmdUpdate,
+  },
   "post-deploy": {
     usage: "post-deploy --manifest <path> [--restart none|changed|all] [--no-prune] [--dry-run] [--json]",
     summary: { [ZH]: "部署后处理（内部使用，由部署脚本调用）", [EN]: "Post-deploy steps (internal; called by the deploy script)" },
@@ -2445,8 +2555,6 @@ const COMMANDS = {
 };
 
 const PLANNED = {
-  deploy: { package: "OPS-11b", usage: "deploy [--restart none|changed|all] [--skip-tests] [--no-prune] [--allow-live-drift] [--yes] [--dry-run]", summary: { [ZH]: "从工作区部署到线上目录", [EN]: "Deploy a worktree to the live root" } },
-  update: { package: "OPS-11b", usage: "update [--check]", summary: { [ZH]: "更新线上目录", [EN]: "Update the live root" } },
 };
 
 // ---------------------------------------------------------------------------

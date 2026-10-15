@@ -93,7 +93,7 @@ async function waitFor(predicate, message, timeoutMs = 4000) {
 // ---------------------------------------------------------------------------
 // Framework
 
-test("exit codes: usage errors are 2, a bare call prints help, planned commands answer 1", async (t) => {
+test("exit codes: usage errors are 2, a bare call prints help, update outside a live root answers 2", async (t) => {
   const world = makeWorld(t);
   assert.equal(EXIT.OK, 0);
   assert.equal(EXIT.FAILURE, 1);
@@ -118,9 +118,10 @@ test("exit codes: usage errors are 2, a bare call prints help, planned commands 
   assert.equal(bare.code, 2);
   assert.match(bare.out, /Usage/);
 
-  const planned = await world.cli(["update", "--check"]);
-  assert.equal(planned.code, 1);
-  assert.match(planned.err, /not available in this build yet/);
+  // OPS-11b implemented the last planned commands; update now explains itself outside a live root.
+  const update = await world.cli(["update", "--check"]);
+  assert.equal(update.code, 2);
+  assert.match(update.err, /not a live runtime root/);
   for (const name of Object.keys(PLANNED)) assert.ok(!COMMANDS[name], `${name} is planned, not implemented`);
 });
 

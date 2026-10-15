@@ -54,3 +54,30 @@ TTS 网关需要独立的 Python 3.12 环境和 `uv`：
 
 运行数据由 `.gitignore` 隔离，因此正常的 `git pull` 不会碰模型、缓存、`.env`、数据库、日志、TTS 音色和输出。不要对包含这些数据的目录执行 `git clean -x`。
 
+
+## 线上运行根目录（platform deploy / platform update）
+
+线上运行根目录（有 `platform-repo.git` 和 `worktrees\main`）不是 Git 工作区，直接运行 `update-platform.cmd` 会打印中英文提示并以退出码 2 结束，不会改动任何文件。请使用平台命令行：
+
+```powershell
+platform update            # 在线上根目录：拉取 worktrees\main 的更新（仅 fast-forward）并部署，包含测试和部署后处理
+platform update --check    # 只报告更新分支上有多少个更新的提交
+```
+
+`platform update` 等价于 `update-platform.ps1 -Delegate`：对 `worktrees\main` 执行 `git fetch --prune` 和 `git merge --ff-only @{u}`（没有上游时跳过合并），再运行该工作区的 `scripts\deploy-worktree.ps1 -LiveRoot <线上根目录>`。
+
+从源码工作区部署到线上根目录：
+
+```powershell
+platform deploy --dry-run                       # 只预览（-WhatIf），部署后处理也只打印计划
+platform deploy --yes --restart changed         # 部署并请求重启受影响的组件
+```
+
+`platform deploy` 只能在工作区里运行，在线上根目录里会被拒绝。参数对应 `deploy-worktree.ps1`：`--restart none|changed|all` → `-Restart`，`--skip-tests` → `-SkipTests`，`--no-prune` → `-NoPrune`，`--allow-live-drift` → `-AllowLiveDrift`，`--yes` → `-Confirm:$false`，`--dry-run` → `-WhatIf`。
+
+重启默认是 `none`：部署从不重启服务，只列出需要重启的组件。`changed` 把改动的文件映射到组件；`all` 覆盖全部可重启组件。两者都需要监督进程（`platform start` 启动）：
+
+- 改动涉及监督进程本身（`supervisor`）时，先重新执行（re-exec）监督进程，再重启组件。
+- 空闲的组件立即重启，正忙的（正在加载、下载、迁移、基准测试或有进行中的请求）排队，空闲后由监督进程重启。
+- 没有监督进程时只打印 `platform restart <组件…> --when-idle`，部署仍以退出码 0 结束。
+- 模型容器永远不会被重启。
