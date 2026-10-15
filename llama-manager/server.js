@@ -6,13 +6,16 @@ const crypto = require("crypto");
 const net = require("net");
 const core = require("../manager-core");
 const { describeDownloadError } = require("../manager-core/model-hub/errors");
+const { createHubClient } = require("../manager-core/model-hub/client");
+const { readHubConfig } = require("../manager-core/model-hub/config");
+const { registerHubShimRoutes } = require("../manager-core/model-hub/shim");
 const { createHfAuthService } = require("../manager-core/hf-auth");
 const { createLlamaStartRuntimeRequest } = require("./lib/launch-request");
 const { createLlamaDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildLlamaGpuPlan, normalizeLlamaSplitMode, suggestTensorSplit } = require("./lib/gpu-plan");
 const { buildLlamaMemoryEstimate } = require("./lib/memory-estimate");
 const { createLlamaRuntimeCommandBuilder } = require("./lib/runtime-command");
-const { createLlamaRemoteModelService } = require("./lib/remote-models");
+const { createLlamaRemoteModelService, LLAMA_REMOTE_PRECISION_ORDER, LLAMA_REMOTE_QUANT_KEYWORDS } = require("./lib/remote-models");
 const { createCacheHitTracker } = require("./lib/cache-hit-tracker");
 const {
   firstExisting,
@@ -209,6 +212,22 @@ const legacyKeyForwarder = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.c
 });
 const readGatewayOnlyMode = core.createGatewayOnlyModeReader({ aiRoot: DEFAULT_AI_ROOT });
 const gatewayTrustHealth = () => ({ gatewayTrust: { version: core.GATEWAY_TRUST_VERSION, mode: readGatewayOnlyMode() } });
+// 04 §6.7 (TEL-6): direct-ingress rows and legacy audit actions are reported to
+// the entry through the signed internal client, spooled while the entry is away.
+// Smoke runs must not call the entry this computer runs.
+const telemetryIngest = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.telemetry.createTelemetryIngestClient({
+  managerId: CONFIG.managerId,
+  internalClient: core.internalAuth.createInternalClient({
+    managerId: CONFIG.managerId,
+    root: DEFAULT_AI_ROOT,
+    baseUrl: process.env.AI_BILLING_BASE_URL || undefined,
+  }),
+  spoolFile: path.join(__dirname, "logs", "telemetry-spool.jsonl"),
+});
+const reportDirectRequest = telemetryIngest
+  ? (entry) => telemetryIngest.report("requests", [core.telemetry.directRequestRow(entry, { managerId: CONFIG.managerId })])
+  : null;
+const reportAuditAccess = telemetryIngest ? (entry) => telemetryIngest.report("audit-access", [entry]) : null;
 const logDirectGatewayCall = (event) => {
   const more = event.suppressed ? ` (+${event.suppressed} more in the last minute)` : "";
   console.warn(`[gateway] direct_manager_gateway: ${event.kind} ${event.path} from ${event.remoteAddress}${more}; use the platform endpoint instead.`);
@@ -821,6 +840,7 @@ const serviceGatewayMiddleware = core.createServiceGatewayMiddleware({
   getGatewayOnlyMode: readGatewayOnlyMode,
   verifyAccessKey: legacyKeyForwarder ? legacyKeyForwarder.verifyAccessKey : null,
   onDirectGatewayCall: logDirectGatewayCall,
+  reportDirectRequest,
 });
 
 const { managerSecurityGuard } = core.createManagerSecurityGuard({
@@ -871,6 +891,7 @@ const managerLifecycle = core.createManagerLifecycle({
     if (cacheHitMonitorTimer) clearInterval(cacheHitMonitorTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    hubShim?.close();
     sseHub.close();
     recipeWatcher?.close();
     core.interruptRunningDownloadJobs(jobs);
@@ -1085,6 +1106,41 @@ app.post("/opencode/v1/chat/completions", openAiGatewayHandlers.handleChatComple
 app.post("/serve/v1/rerank", openAiGatewayHandlers.handleRerank);
 app.post("/serve/v1/classify", openAiGatewayHandlers.handleClassify);
 
+// 03 §15 (HUB-13a, HUB-13b): with hub.downloadsOwner "hub" the download,
+// catalogue, settings, login and storage routes forward to the entry through
+// the signed shim client, and the job routes and the SSE `jobs` snapshot also
+// carry this manager's hub downloads. The shim registers before
+// core.registerModelRoutes and core.registerJobRoutes, so it wins over their
+// legacy handlers; the local job routes keep every other job. The frontend
+// smoke tests start real managers and must not call the entry this computer
+// runs.
+const hubShim = readHubConfig(DEFAULT_AI_ROOT).downloadsOwner === "hub" && process.env.AI_FRONTEND_SMOKE !== "1"
+  ? registerHubShimRoutes(app, {
+    managerId: "llama",
+    client: createHubClient({
+      baseUrl: `http://127.0.0.1:${core.resolveEntryPort({ aiRoot: DEFAULT_AI_ROOT })}`,
+      managerId: "llama",
+      aiRoot: DEFAULT_AI_ROOT,
+    }),
+    isLocalRequest,
+    listLocalJobs: () => Array.from(jobs.values()).reverse(),
+    getLocalJob: (id) => jobs.get(id),
+    beforeReadJobs: () => healDownloadQueue(),
+    summarizeJob: core.summarizeJob,
+    onSnapshot: () => broadcastJobsSnapshot(),
+    hasListeners: () => sseHub.clientCount() > 0,
+    listModels: listModelCollectionsWithRuntimeCompatibility,
+    precheckDownload: precheckDownloadRequest,
+    remote: remoteModelService,
+    precisionOrder: LLAMA_REMOTE_PRECISION_ORDER,
+    quantKeywords: LLAMA_REMOTE_QUANT_KEYWORDS,
+    deleteLocalModel: false,
+  })
+  : null;
+function broadcastJobsSnapshot() {
+  sseHub.broadcastThrottled("jobs", () => (hubShim ? hubShim.jobsSnapshot() : Array.from(jobs.values()).reverse().map(core.summarizeJob)), 700);
+}
+
 core.registerModelStorageRoutes(app, { storage: modelStorage, migration: modelMigration, isLocalRequest, publicDir: path.join(__dirname, "..", "shared-public") });
 
 core.registerModelRoutes(app, {
@@ -1108,7 +1164,9 @@ core.registerModelRoutes(app, {
 });
 
 // 下载前预检：远端 config.json + 文件清单过一遍能力矩阵 / 运行时清单 / GPU。
-async function precheckDownloadRequest(query = {}) {
+// `hub.estimate` (03 §15, HUB-13b) replaces the direct Hugging Face file listing
+// with the hub's (mirror-aware) one when the shim forwards this route.
+async function precheckDownloadRequest(query = {}, hub = {}) {
   const source = cleanDownloadSource(query.source || "huggingface");
   const reference = normalizeDownloadModelReference(query.model, query.precision);
   if (!reference.model) {
@@ -1117,9 +1175,11 @@ async function precheckDownloadRequest(query = {}) {
     throw error;
   }
   const [estimate, remoteConfig, gpu] = await Promise.all([
-    source === "huggingface"
-      ? remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision).catch((error) => ({ error: error.message }))
-      : Promise.resolve(null),
+    hub && hub.estimate !== undefined
+      ? Promise.resolve(hub.estimate)
+      : source === "huggingface"
+        ? remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision).catch((error) => ({ error: error.message }))
+        : Promise.resolve(null),
     remoteModelService.fetchRemoteModelConfig(reference.model, source).catch((error) => ({ ok: false, reason: error.message })),
     getGpuStatus().catch(() => null),
   ]);
@@ -1252,9 +1312,6 @@ function isPortInUseOnHost(port) {
 // 任务快照改推送：下载/启动进行中不再靠 1 秒一次的 /api/jobs 轮询。
 const sseHub = core.createSseHub();
 app.get("/api/events", (req, res) => sseHub.handleRequest(req, res));
-function broadcastJobsSnapshot() {
-  sseHub.broadcastThrottled("jobs", () => Array.from(jobs.values()).reverse().map(core.summarizeJob), 700);
-}
 
 core.registerJobRoutes(app, {
   jobs,
@@ -1928,6 +1985,8 @@ core.registerModelInspectorRoutes(app, {
   docker,
   listInstances: listRuntimeInstancesRequest,
   dataDir: path.join(__dirname, "data"),
+  // POST /api/models/probe (MOD-13) maps the model reference to a folder or file in storage.
+  resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }),
   registry: engineRegistry,
   paramCatalog: core.engines.getParamCatalog(),
 });
@@ -1947,6 +2006,7 @@ core.registerAuditRoutes(app, {
   listAuditExports,
   getAuditMarkdownPath,
   exportOpenWebuiAudit,
+  onAccess: reportAuditAccess,
 });
 
 core.registerToolsRoutes(app, {
@@ -1977,6 +2037,8 @@ if (require.main === module) {
     console.error(error);
     process.exitCode = 1;
   });
+  // The one signed upstream SSE that re-reads the hub downloads (03 §15).
+  hubShim?.startRelay();
   process.once("SIGINT", () => shutdownManager("SIGINT").catch((error) => console.error(error)));
   process.once("SIGTERM", () => shutdownManager("SIGTERM").catch((error) => console.error(error)));
 }
@@ -4304,6 +4366,8 @@ function delay(ms) {
 }
 
 module.exports = {
+  hubShim,
+  jobs,
   app,
   CONFIG,
   engineRegistry,

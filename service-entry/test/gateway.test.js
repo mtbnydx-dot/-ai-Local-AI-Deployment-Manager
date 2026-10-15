@@ -59,7 +59,11 @@ test("parses gateway routes and maps them to manager paths", () => {
 });
 
 test("rejects unknown gateway routes", () => {
-  assert.equal(entry.parseGatewayRoute("/gateway/unknown/openai/v1/models"), null);
+  // /gateway/<engineId>/… parses (00 §5); the pipeline answers 400 unknown_engine
+  // for an engine the fleet does not know (public-api.test.js).
+  assert.deepEqual(entry.parseGatewayRoute("/gateway/unknown/openai/v1/models"), { engine: "auto", engineId: "unknown", protocol: "openai", rest: "v1/models" });
+  assert.equal(entry.parseGatewayRoute("/gateway/tts/openai/v1/models"), null);
+  assert.equal(entry.parseGatewayRoute("/gateway/auto/nonsense/v1/models"), null);
   assert.equal(entry.parseGatewayRoute("/api/status"), null);
 });
 

@@ -5,13 +5,14 @@
 // with the facilities the later packages need, so those packages add their
 // routes here without touching either server.js again:
 //   MOD-5   GET  /api/knowledge/status   this manager's loader domains
-//   MOD-13  POST /api/models/probe       needs docker, jobs, dataDir
+//   MOD-13  POST /api/models/probe       needs docker, jobs, resolveModelPath
 //   MOD-16  POST /api/qualify            needs jobs, listInstances
 // The entry reaches these through the management proxy (/api/m/:managerId/*),
 // which keeps the managers' own local-only gate for anything that writes.
 
 const path = require("node:path");
 const { normalizeManagerId } = require("./engines/registry");
+const probe = require("./model-inspector/probe");
 const {
   collectStatusDomains, createPathDisplayer, defaultAiRoot, getKnowledgeLoader, registerStatusProvider,
 } = require("./model-inspector/knowledge");
@@ -43,6 +44,13 @@ function normalizeRouteDeps(deps = {}) {
     docker: functionOrNull(deps.docker),
     listInstances: functionOrNull(deps.listInstances),
     dataDir: typeof deps.dataDir === "string" && deps.dataDir ? deps.dataDir : null,
+    // MOD-13: maps the request's model reference to a folder or .gguf file in this
+    // manager's storage (storageResolver); `probe` holds test seams (runtimeFacts,
+    // probeDir, inspect, now, sleep, pollMs, scriptsDir, containerName, timeoutMs).
+    resolveModelPath: functionOrNull(deps.resolveModelPath),
+    probe: deps.probe && typeof deps.probe === "object" ? deps.probe : {},
+    // The background probe runs in flight, so a test (or a shutdown) can wait for them.
+    probeRuns: new Set(),
     knowledge,
     registry: deps.registry || null,
     paramCatalog: deps.paramCatalog || null,
@@ -131,6 +139,48 @@ function buildKnowledgeStatusPayload(context) {
   };
 }
 
+function errorBody(code, message, hint, extra = {}) {
+  return { ok: false, error: { code, message, ...(hint ? { hint } : {}) }, ...extra };
+}
+
+/**
+ * POST /api/models/probe {model, engineId, runtimeId?, allowRemoteCode?} -> 202
+ * {ok, jobId, managerId}. The dry probe of 02 section 12 runs as a
+ * `model-probe` job. Local-only like every manager write; a missing runtime
+ * image is 409 runtime_image_missing with the Pull action and is never pulled.
+ */
+function probeHandler(context, inFlight) {
+  return async (req, res) => {
+    if (!context.isLocalRequest(req)) {
+      return res.status(403).json(errorBody("forbidden", "The dry probe is only available to local callers."));
+    }
+    try {
+      const started = await probe.startProbeJob(req.body, {
+        ...context.probe,
+        managerId: context.managerId,
+        registry: context.registry,
+        docker: context.docker,
+        jobs: context.jobs,
+        resolveModelPath: context.resolveModelPath,
+        inFlight,
+      });
+      context.probeRuns.add(started.done);
+      started.done.finally(() => context.probeRuns.delete(started.done));
+      return res.status(202).json({ ok: true, jobId: started.job.id, managerId: context.managerId });
+    } catch (error) {
+      if (!(error instanceof probe.ProbeError)) {
+        return res.status(500).json(errorBody("probe_failed", "The dry probe could not be started."));
+      }
+      const extra = {};
+      if (error.action) extra.action = error.action;
+      if (error.runtimeId) extra.runtimeId = error.runtimeId;
+      if (error.jobId) extra.jobId = error.jobId;
+      if (error.errors) extra.errors = error.errors;
+      return res.status(error.status || 400).json(errorBody(error.code, error.message, error.hint, extra));
+    }
+  };
+}
+
 function registerModelInspectorRoutes(app, deps = {}) {
   const context = normalizeRouteDeps(deps);
 
@@ -158,6 +208,8 @@ function registerModelInspectorRoutes(app, deps = {}) {
     if (typeof res.set === "function") res.set("Cache-Control", "no-store");
     res.status(200).json(payload);
   });
+
+  app.post("/api/models/probe", probeHandler(context, new Map()));
 
   return context;
 }

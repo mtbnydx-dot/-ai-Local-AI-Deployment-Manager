@@ -773,7 +773,8 @@ test("a viewer reaches nothing that is owner only, on the LAN and on loopback wi
       await request(port, target, { method, peer: LAN, ...(method === "GET" ? {} : { body: {} }) }),
       await asViewer(port, target, { method, ...(method === "GET" ? {} : { body: {} }) }),
     ]) {
-      assert.ok([401, 403].includes(response.status), `${method} ${target} answered ${response.status}`);
+      assert.equal(response.status, 401, `${method} ${target} answered ${response.status}`);
+      assert.equal(response.json.error.code, "admin_session_required", `${method} ${target}`);
       for (const secret of [SECRET_KEY, SECRET_CUSTOMER, SECRET_IP, "requestId"]) assert.equal(response.text.includes(secret), false);
     }
   }
@@ -998,7 +999,7 @@ test("every 04 GET route the module serves is registered for viewers or declared
   const viewerPaths = inventory.filter((item) => item.access === "viewer").map((item) => item.path.replace("/api/telemetry/", "")).sort();
   assert.deepEqual(viewerPaths, ["alert-rules", "alerts", "baseline", "breakdown", "energy", "events", "launches", "lifecycle", "live", "status", "summary", "timeseries"]);
   const ownerOnly = inventory.filter((item) => item.access === "admin").map((item) => `${item.method} ${item.path.replace("/api/telemetry/", "")}`).sort();
-  assert.deepEqual(ownerOnly, ["GET export", "GET import/:runId", "GET requests", "GET requests/:requestId", "GET settings", "POST import", "PUT settings"]);
+  assert.deepEqual(ownerOnly, ["DELETE alert-rules/:ruleId", "GET export", "GET import/:runId", "GET requests", "GET requests/:requestId", "GET settings", "POST alert-rules", "POST alerts/:ruleId/ack", "POST alerts/:ruleId/silence", "POST alerts/test", "POST import", "PUT alert-rules/:ruleId", "PUT settings"]);
 });
 
 test("the shape validators reject drifted bodies", () => {

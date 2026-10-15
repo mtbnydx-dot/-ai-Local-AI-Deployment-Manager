@@ -1,0 +1,52 @@
+{
+  "ok": true,
+  "instances": [
+    {
+      "id": "primary",
+      "containerName": "vllm-local",
+      "running": true,
+      "status": "Up 2 hours (healthy)",
+      "port": 8000,
+      "engineId": "sglang",
+      "engineFamily": "sglang",
+      "runtime": { "id": "sglang@0.5.17", "version": "0.5.17", "image": "example/sglang:0.5.17", "digest": "sha256:0123456789abcdef" },
+      "recipeId": "qwen38-flashnext-262k",
+      "launchId": "lch_aaaaaaaaaaaaaaaaaaaa",
+      "lifecycle": {
+        "state": "ready",
+        "phase": "ready",
+        "percent": 100,
+        "since": "@now-2h",
+        "phaseHistory": [
+          { "phase": "admission", "at": "@now-3h", "durationMs": 1200 },
+          { "phase": "container", "at": "@now-3h", "durationMs": 8300 },
+          { "phase": "weights", "at": "@now-3h", "durationMs": 95000 },
+          { "phase": "kv", "at": "@now-3h", "durationMs": 14000 },
+          { "phase": "api", "at": "@now-2h", "durationMs": 4000 },
+          { "phase": "ready", "at": "@now-2h", "durationMs": null }
+        ]
+      },
+      "capabilities": { "text": true, "vision": false, "audio": false, "embedding": false, "rerank": false, "tools": true, "reasoning": true, "maxContext": 262144 },
+      "vramReservationMb": 88000,
+      "gpuIds": ["0"],
+      "models": [{ "id": "qwen3-demo-32b", "root": "qwen3-demo", "maxModelLen": 262144 }]
+    },
+    {
+      "id": "slp_demo000000000000000a",
+      "containerName": "vllm-local",
+      "running": false,
+      "status": "sleeping",
+      "port": 8001,
+      "engineId": "vllm",
+      "engineFamily": "vllm",
+      "runtime": { "id": "vllm@0.11.0", "version": "0.11.0", "image": "", "digest": null },
+      "recipeId": null,
+      "launchId": "lch_bbbbbbbbbbbbbbbbbbbb",
+      "lifecycle": { "state": "sleeping", "phase": null, "percent": 0, "since": "@now-1h", "phaseHistory": [] },
+      "vramReservationMb": 24000,
+      "gpuIds": [],
+      "models": [{ "id": "demo-moe-30b", "root": "", "maxModelLen": null, "lastKnown": true }],
+      "sleep": { "id": "slp_demo000000000000000a", "since": "@now-1h", "wakeable": true }
+    }
+  ]
+}

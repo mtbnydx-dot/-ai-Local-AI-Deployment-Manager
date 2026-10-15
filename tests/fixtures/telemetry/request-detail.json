@@ -1,0 +1,107 @@
+{
+  "ok": true,
+  "request": {
+    "id": 17,
+    "requestId": "req_aaaaaaaaaaaaaaaaaaar",
+    "clientRequestId": null,
+    "managerRequestId": "mgr_aaaaaaaaaaaaaaaaaaar",
+    "ingress": "entry",
+    "receivedAt": "2026-10-14T11:59:40.000Z",
+    "endedAt": "2026-10-14T11:59:40.800Z",
+    "managerId": "vllm",
+    "fleetId": "vllm:primary",
+    "engineId": "sglang",
+    "runtimeId": "sglang@0.5.17",
+    "launchId": "lch_aaaaaaaaaaaaaaaaaaaa",
+    "protocol": "openai",
+    "op": "chat",
+    "route": null,
+    "method": "POST",
+    "path": "/gateway/auto/openai/v1/chat/completions",
+    "modelRequested": "auto",
+    "modelResolved": "model-b",
+    "stream": true,
+    "keyId": "k_2",
+    "customerId": null,
+    "authSource": null,
+    "clientIp": "192.0.2.10",
+    "clientCountry": null,
+    "userAgent": "fixture-agent",
+    "originHost": null,
+    "sourceProgram": "openwebui",
+    "owuiUserId": null,
+    "owuiChatId": null,
+    "status": 200,
+    "terminalState": "completed",
+    "errorClass": "none",
+    "errorCode": null,
+    "queueMs": 3,
+    "upstreamHeadersMs": 140,
+    "ttftMs": 140,
+    "durationMs": 800,
+    "decodeTps": 23,
+    "promptTokens": 117,
+    "cachedTokens": 20,
+    "outputTokens": 67,
+    "reasoningTokens": null,
+    "usageSource": "reported",
+    "finishReason": "stop",
+    "bytesOut": null,
+    "enginePromptMs": null,
+    "engineDecodeTps": null,
+    "engineCachedTokens": null,
+    "extra": {
+      "toolSchemaCount": 0
+    }
+  },
+  "timeline": [
+    {
+      "at": "2026-10-14T11:59:40.000Z",
+      "mark": "received"
+    },
+    {
+      "mark": "dispatched",
+      "offsetMs": 3
+    },
+    {
+      "mark": "headers",
+      "offsetMs": 140
+    },
+    {
+      "mark": "first_token",
+      "offsetMs": 140
+    },
+    {
+      "mark": "done",
+      "offsetMs": 800
+    }
+  ],
+  "instance": {
+    "fleetId": "vllm:primary",
+    "engineId": "sglang",
+    "runtimeId": "sglang@0.5.17",
+    "launchId": "lch_aaaaaaaaaaaaaaaaaaaa",
+    "recipeId": "recipe-one",
+    "launch": {
+      "readyAt": "2026-10-14T11:01:01.000Z",
+      "summary": {
+        "contextLength": 262144,
+        "kvCacheDtype": "fp8"
+      }
+    },
+    "nearestSample": {
+      "at": "2026-10-14T11:59:40.000Z",
+      "running": 2,
+      "waiting": 0,
+      "kvUsage": 0.29
+    }
+  },
+  "events": [],
+  "billing": null,
+  "audit": {
+    "unlocked": false,
+    "linkable": true,
+    "chatId": null,
+    "candidates": []
+  }
+}

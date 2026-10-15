@@ -1,0 +1,100 @@
+{
+  "managers": [
+    {
+      "id": "vllm",
+      "name": "vLLM / SGLang Manager",
+      "ok": true,
+      "process": {
+        "portListening": true
+      },
+      "error": ""
+    },
+    {
+      "id": "llama",
+      "name": "llama.cpp Manager",
+      "ok": false,
+      "process": {
+        "portListening": false
+      },
+      "error": "offline"
+    }
+  ],
+  "mcp": {
+    "listening": true,
+    "healthy": true
+  },
+  "tts": {
+    "listening": true,
+    "healthy": false,
+    "error": "slow"
+  },
+  "search": {
+    "listening": false,
+    "healthy": false,
+    "error": "down"
+  },
+  "components": {
+    "total": 5,
+    "online": 3,
+    "offline": [
+      "llama",
+      "search"
+    ],
+    "unhealthy": [
+      "tts"
+    ],
+    "items": [
+      {
+        "id": "vllm",
+        "name": "vLLM / SGLang Manager",
+        "kind": "manager",
+        "online": true,
+        "healthy": true,
+        "startable": true,
+        "startCommand": "vllm-manager\\start-manager.cmd 或 start-service-entry.cmd",
+        "error": ""
+      },
+      {
+        "id": "llama",
+        "name": "llama.cpp Manager",
+        "kind": "manager",
+        "online": false,
+        "healthy": false,
+        "startable": true,
+        "startCommand": "llama-manager\\start-manager.cmd 或 start-service-entry.cmd",
+        "error": "offline"
+      },
+      {
+        "id": "tts",
+        "name": "TTS 语音平台",
+        "kind": "tts",
+        "online": true,
+        "healthy": false,
+        "startable": false,
+        "startCommand": "start-tts-platform.cmd",
+        "error": "slow"
+      },
+      {
+        "id": "mcp",
+        "name": "MCP 工具服务",
+        "kind": "mcp",
+        "online": true,
+        "healthy": true,
+        "startable": false,
+        "startCommand": "start-platform-mcp.cmd",
+        "error": ""
+      },
+      {
+        "id": "search",
+        "name": "搜索网关",
+        "kind": "search",
+        "online": false,
+        "healthy": false,
+        "startable": false,
+        "startCommand": "start-search-gateway.cmd（需要 Docker Desktop）",
+        "error": "down"
+      }
+    ],
+    "allCommand": "start-platform.cmd all"
+  }
+}

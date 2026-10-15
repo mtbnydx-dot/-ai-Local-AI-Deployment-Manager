@@ -703,19 +703,19 @@ test("the palette is a combobox over a listbox: keyboard, focus return and Enter
     await expect(page.locator("#main h1")).toBeFocused();
 
     await opener.click();
-    await expect(page.getByRole("combobox")).toBeFocused();
+    await expect(dialog.getByRole("combobox")).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(opener).toBeFocused();
 
     // Ctrl+K toggles it from anywhere.
     await page.keyboard.press("Control+k");
-    await expect(page.getByRole("combobox")).toBeFocused();
+    await expect(dialog.getByRole("combobox")).toBeFocused();
     await page.keyboard.press("Control+k");
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
     await page.keyboard.press("Control+k");
-    await page.getByRole("combobox").fill("zzzzqqqq");
+    await dialog.getByRole("combobox").fill("zzzzqqqq");
     await expect(page.getByText("No matches")).toBeVisible();
   } finally {
     await context.close();

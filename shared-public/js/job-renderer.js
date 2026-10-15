@@ -179,7 +179,9 @@
       const splitText = hasSplit
         ? `已定稿 ${fmtBytes(finalizedBytes)} · 传输中 ${fmtBytes(partialBytes)}`
         : "";
-      const detail = [speed, eta, splitText, progress.error].filter(Boolean).join(" · ");
+      // Hub downloads (03 §15) carry a bilingual phase label in progress.stage.
+      const stage = pickLanguage(progress.stage);
+      const detail = [stage, speed, eta, splitText, progress.error].filter(Boolean).join(" · ");
 
       return `
         <div class="job-progress">

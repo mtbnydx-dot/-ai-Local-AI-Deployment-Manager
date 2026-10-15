@@ -42,8 +42,8 @@
         {
           "path": "icons.js",
           "from": "scripts/vendor/lucide.full.min.js",
-          "sha256": "dde314533ebcc1a5b0bd5300b257212f4fc0cf9e578ec6ded1c0ec43a4866704",
-          "bytes": 6192
+          "sha256": "6d100199dec983498e4c65a3ec687287371c810e4a7b8cde1ab9d5e320794ae4",
+          "bytes": 7251
         },
         {
           "path": "LICENSE",

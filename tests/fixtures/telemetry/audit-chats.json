@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "rows": [
+    {
+      "chatId": "chat-2",
+      "title": "Translation help",
+      "userId": "user-1",
+      "userName": "Fixture User",
+      "userEmail": null,
+      "models": [
+        "model-b"
+      ],
+      "createdAt": "2026-10-13T08:30:00.000Z",
+      "updatedAt": "2026-10-13T08:40:00.000Z",
+      "messageCount": 2,
+      "archived": false,
+      "auditId": "20261013-inc",
+      "versions": 1
+    },
+    {
+      "chatId": "chat-1",
+      "title": "Planning notes",
+      "userId": "user-1",
+      "userName": "Fixture User",
+      "userEmail": null,
+      "models": [
+        "model-a"
+      ],
+      "createdAt": "2026-10-13T08:00:00.000Z",
+      "updatedAt": "2026-10-13T08:05:00.000Z",
+      "messageCount": 2,
+      "archived": false,
+      "auditId": "20261013-inc",
+      "versions": 1
+    }
+  ],
+  "nextCursor": null
+}

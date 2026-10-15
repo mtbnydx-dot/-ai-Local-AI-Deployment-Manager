@@ -21,6 +21,7 @@ const managerHooks = require("./manager-hooks");
 const observations = require("./observations");
 const planFacts = require("./plan-facts");
 const planner = require("./planner");
+const probe = require("./probe");
 const rootCause = require("./root-cause");
 const templateSignatures = require("./template-signatures");
 const rangeReader = require("./remote/range-reader");
@@ -116,6 +117,21 @@ module.exports = {
     planLaunches: planner.planLaunches,
     GOALS: planner.GOALS,
     PLANNER_CONSTANTS: planner.PLANNER_CONSTANTS,
+  },
+  // Pre-launch dry probe (02 section 12, MOD-13): sandboxed container per engine image.
+  probe: {
+    buildProbeCommand: probe.buildProbeCommand,
+    runProbe: probe.runProbe,
+    startProbeJob: probe.startProbeJob,
+    probeKey: probe.probeKey,
+    readProbeResult: probe.readProbeResult,
+    listProbeResults: probe.listProbeResults,
+    writeProbeResult: probe.writeProbeResult,
+    defaultProbeDir: probe.defaultProbeDir,
+    parseProbeOutput: probe.parseProbeOutput,
+    PROBE_LABEL: probe.PROBE_LABEL,
+    PROBE_MARKER: probe.PROBE_MARKER,
+    PROBE_JOB_TYPE: probe.PROBE_JOB_TYPE,
   },
   storageResolver: managerHooks.storageResolver,
   cardEstimate: {

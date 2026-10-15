@@ -1,0 +1,7 @@
+{
+  "files": [],
+  "commands": [
+    "cd <AI_ROOT>\\config\\public",
+    "platform config set listeners.public.host 0.0.0.0"
+  ]
+}

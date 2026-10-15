@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "instances": [
+    {
+      "id": "primary",
+      "containerName": "llama-local",
+      "running": false,
+      "status": "Exited (255) 4 weeks ago",
+      "port": 8080,
+      "engineId": "llamacpp",
+      "engineFamily": "llamacpp",
+      "runtime": { "id": "llamacpp@b10630", "version": "b10630", "image": "", "digest": null },
+      "lifecycle": { "state": "crashed", "phase": null, "percent": 0, "since": "@now-28d", "phaseHistory": [] },
+      "models": []
+    }
+  ]
+}

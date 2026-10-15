@@ -1,0 +1,55 @@
+{
+  "ok": true,
+  "dim": "model",
+  "rows": [
+    {
+      "key": "model-b",
+      "label": {
+        "zh": "model-b",
+        "en": "model-b"
+      },
+      "requests": 9,
+      "share": 0.5294,
+      "errorRate": 0.1111,
+      "promptTokens": 981,
+      "cachedTokens": 180,
+      "outputTokens": 409,
+      "ttftP95Ms": 193,
+      "durationP95Ms": 987.5,
+      "decodeTpsP50": 24.1667,
+      "firstSeen": "2026-10-14T11:02:00.000Z",
+      "lastSeen": "2026-10-14T11:59:40.000Z",
+      "sampleRequestIds": [
+        "req_aaaaaaaaaaaaaaaaaaar",
+        "req_aaaaaaaaaaaaaaaaaaap",
+        "req_aaaaaaaaaaaaaaaaaaan"
+      ]
+    },
+    {
+      "key": "model-a",
+      "label": {
+        "zh": "model-a",
+        "en": "model-a"
+      },
+      "requests": 8,
+      "share": 0.4706,
+      "errorRate": 0,
+      "promptTokens": 872,
+      "cachedTokens": 160,
+      "outputTokens": 416,
+      "ttftP95Ms": 194.1667,
+      "durationP95Ms": 987.5,
+      "decodeTpsP50": 24.1667,
+      "firstSeen": "2026-10-14T11:06:00.000Z",
+      "lastSeen": "2026-10-14T11:59:10.000Z",
+      "sampleRequestIds": [
+        "req_aaaaaaaaaaaaaaaaaaaq",
+        "req_aaaaaaaaaaaaaaaaaaao",
+        "req_aaaaaaaaaaaaaaaaaaam"
+      ]
+    }
+  ],
+  "total": {
+    "requests": 17
+  }
+}

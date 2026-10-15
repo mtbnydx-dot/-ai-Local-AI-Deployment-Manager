@@ -1,0 +1,13 @@
+# Locally managed Cloudflare Tunnel (05-public.md section 14). Rendered into
+# <AI_ROOT>/config/public/config.yml. Put the tunnel credentials file next to it as
+# credentials.json (created by "cloudflared tunnel create"; never commit it).
+tunnel: replace-with-your-tunnel-id
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: models.example.com
+    service: http://host.docker.internal:5186
+    originRequest:
+      connectTimeout: 10s
+      keepAliveTimeout: 90s
+  - service: http_status:404

@@ -118,7 +118,7 @@ test("exit codes: usage errors are 2, a bare call prints help, planned commands 
   assert.equal(bare.code, 2);
   assert.match(bare.out, /Usage/);
 
-  const planned = await world.cli(["start", "core"]);
+  const planned = await world.cli(["autostart", "status"]);
   assert.equal(planned.code, 1);
   assert.match(planned.err, /not available in this build yet/);
   for (const name of Object.keys(PLANNED)) assert.ok(!COMMANDS[name], `${name} is planned, not implemented`);
@@ -440,7 +440,7 @@ test("config list/get/set/unset/validate/path/init work through the only writer"
   const list = await world.cli(["config", "list"]);
   assert.match(list.out, /listeners\.admin\.port = /);
   assert.equal((await world.cli(["config", "wat"])).code, 2);
-  assert.equal((await world.cli(["config", "import-env"])).code, 1, "import-env belongs to a later package");
+  assert.equal((await world.cli(["config", "import-env", "extra"])).code, 2, "import-env takes no positional argument");
 });
 
 test("config refuses secret keys and never shows a stored secret", async (t) => {

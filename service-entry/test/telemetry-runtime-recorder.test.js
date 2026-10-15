@@ -67,7 +67,7 @@ test("settings come from the environment while platform.json has no telemetry se
   await configured.stop();
 });
 
-test("start and stop are idempotent, and the runtime serves nothing over HTTP yet", async (t) => {
+test("start and stop are idempotent, and the runtime serves no query routes yet", async (t) => {
   const root = tempRoot(t);
   const runtime = runtimeFor(root, { env: {} });
   assert.equal(runtime.status().started, false);
@@ -77,7 +77,8 @@ test("start and stop are idempotent, and the runtime serves nothing over HTTP ye
   assert.equal(runtime.status().started, true);
   assert.equal(runtime.recorder.stats().running, true);
   assert.equal(await runtime.handleHttp({}, {}, new URL("http://127.0.0.1/api/telemetry/status")), false);
-  assert.equal(await runtime.handleInternal({}, {}, new URL("http://127.0.0.1/internal/telemetry/requests")), false);
+  // TEL-6: /internal/telemetry/* is served (telemetry-ingest.test.js); any other path is left alone.
+  assert.equal(await runtime.handleInternal({}, {}, new URL("http://127.0.0.1/internal/billing/usage")), false);
   const first = await runtime.stop();
   assert.equal(first.ok, true);
   assert.equal(first.timedOut, false);
