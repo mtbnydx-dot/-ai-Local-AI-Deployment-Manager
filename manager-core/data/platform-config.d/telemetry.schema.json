@@ -31,9 +31,10 @@
       "env": ["STATS_SAMPLE_INTERVAL_MS"], "consumers": ["vllm-manager", "llama-manager"], "restartRequired": ["vllm-manager", "llama-manager"], "secret": false, "group": "telemetry"
     },
     "timezoneOffsetMinutes": {
-      "type": "integer", "minimum": -720, "maximum": 840, "default": 480,
+      "type": ["integer", "null"], "minimum": -720, "maximum": 840, "default": null,
+      "enum": [-720,-660,-600,-540,-480,-420,-360,-300,-240,-180,-120,-60,0,60,120,180,240,300,360,420,480,540,600,660,720,780,840],
       "title": { "zh-CN": "按天汇总所用时区", "en-US": "Time zone for daily totals" },
-      "description": { "zh-CN": "按天汇总使用的时区，以相对 UTC 的分钟数表示，必须是整小时（例如东八区为 480）。", "en-US": "The time zone used for daily totals, as minutes from UTC; it must be a whole number of hours (480 is UTC+08:00)." },
+      "description": { "zh-CN": "按天汇总使用的时区，以相对 UTC 的分钟数表示，必须是整小时（例如东八区为 480）；留空使用本机时区。", "en-US": "The time zone used for daily totals, as minutes from UTC; it must be a whole number of hours (480 is UTC+08:00). Empty uses this machine's time zone." },
       "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
     },
     "keepJsonlAccessLog": {

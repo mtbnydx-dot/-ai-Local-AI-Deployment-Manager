@@ -360,7 +360,8 @@ const { accessLogCsvCell } = require("../../manager-core/access-log");
 const query = require("../../manager-core/telemetry/query");
 const viewerRedaction = require("./telemetry-viewer");
 
-const QUERY_ENDPOINT_PATH = /^\/api\/telemetry\/([a-z][a-z-]{1,24})$/;
+const API_PREFIX = "/api/telemetry/";
+const ENDPOINT_NAME = /^[a-z][a-z-]{1,24}$/;
 const DETAIL_PATH = /^\/api\/telemetry\/requests\/([A-Za-z0-9._:-]{1,128})$/;
 const VIEWER_QUERIES = Object.freeze({
   summary: "summary",
@@ -629,7 +630,8 @@ function createQueryRoutes(options = {}) {
 
   // --- live ---------------------------------------------------------------------
 
-  async function live(req, res, caller) {
+  async function live(req, res, url, caller) {
+    query.parseQuery("live", url.searchParams, queryOptions());
     const runtime = getRuntime();
     const inflight = runtime && runtime.recorder && typeof runtime.recorder.inflight === "function" ? runtime.recorder.inflight() : 0;
     const mem = { now: clock(), inflight, collectors: collectorStates() };
@@ -1019,15 +1021,59 @@ function createQueryRoutes(options = {}) {
       sendError(res, 400, "invalid_request", "The settings were not saved because some values are not valid.", { errors: errors.map((error) => ({ ...error, message: error.message || `${error.field}: ${error.code}` })) });
       return;
     }
+    // A stale etag is refused before any secret is touched; writeSection checks it
+    // again under its lock.
+    const seen = settingValues().etag;
+    if (seen && seen !== ifMatch) {
+      sendJson(res, { ...errorBody("etag_mismatch", "The settings changed since you loaded them.", { hint: "Reload the settings and try again." }), etag: seen }, 409);
+      return;
+    }
+    // The signing secrets go to the secret store only, and only after the values
+    // validated. They are set before the write so a store that cannot take them
+    // leaves the settings alone (503); a write that fails afterwards puts the
+    // previous secrets back.
+    const secretStore = secretVault();
+    const applied = [];
+    const rollback = async () => {
+      for (const { id, previous } of applied.reverse()) {
+        try {
+          if (typeof previous === "string" && previous) await secretStore.set(WEBHOOK_SECRET_NAMESPACE, id, previous);
+          else await secretStore.clear(WEBHOOK_SECRET_NAMESPACE, id);
+        } catch {
+          // Nothing more can be done; the id stays configured without a changed secret.
+        }
+      }
+    };
+    for (const [id, value] of secrets) {
+      try {
+        if (!secretStore) throw Object.assign(new Error("no secret store"), { code: "secret_store_unavailable" });
+        let previous = null;
+        try {
+          previous = typeof secretStore.get === "function" ? await secretStore.get(WEBHOOK_SECRET_NAMESPACE, id) : null;
+        } catch {
+          previous = null;
+        }
+        if (value === null) await secretStore.clear(WEBHOOK_SECRET_NAMESPACE, id);
+        else await secretStore.set(WEBHOOK_SECRET_NAMESPACE, id, value);
+        applied.push({ id, previous });
+      } catch (error) {
+        warn(`telemetry-routes: the signing secret of webhook ${id} was not stored (${(error && error.code) || "error"})`);
+        await rollback();
+        sendError(res, 503, "secret_store_unavailable", "The signing secret could not be stored, so the settings were not saved.", { hint: "Check the secret store with the doctor, then try again." });
+        return;
+      }
+    }
     let result;
     try {
       result = await configApi().writeSection("telemetry", patch, { etag: ifMatch, actor: "owner" });
     } catch (error) {
       warn(`telemetry-routes: saving the settings failed (${(error && error.code) || "error"})`);
+      await rollback();
       sendError(res, 500, "settings_write_failed", "The settings could not be saved.");
       return;
     }
     if (!result || result.ok !== true) {
+      await rollback();
       const code = result && result.code === "config_conflict" ? "etag_mismatch" : String((result && result.code) || "config_invalid");
       const status = result && result.code === "config_conflict" ? 409 : Number(result && result.status) || 400;
       sendJson(res, {
@@ -1038,20 +1084,6 @@ function createQueryRoutes(options = {}) {
       }, status);
       return;
     }
-    // The values reach platform.json first; the signing secrets go to the
-    // secret store only, and are never echoed or logged.
-    const warnings = [];
-    const secretStore = secretVault();
-    for (const [id, value] of secrets) {
-      try {
-        if (!secretStore) throw Object.assign(new Error("no secret store"), { code: "secret_store_unavailable" });
-        if (value === null) await secretStore.clear(WEBHOOK_SECRET_NAMESPACE, id);
-        else await secretStore.set(WEBHOOK_SECRET_NAMESPACE, id, value);
-      } catch (error) {
-        warnings.push({ code: "secret_store_unavailable", id });
-        warn(`telemetry-routes: the signing secret of webhook ${id} was not stored (${(error && error.code) || "error"})`);
-      }
-    }
     for (const id of removed) {
       try {
         if (secretStore) await secretStore.clear(WEBHOOK_SECRET_NAMESPACE, id);
@@ -1061,7 +1093,7 @@ function createQueryRoutes(options = {}) {
     }
     const runtime = getRuntime();
     if (runtime && typeof runtime.recordConfigChange === "function") runtime.recordConfigChange("telemetry", { changed: result.changed || [] }, { actor: "owner" });
-    sendJson(res, { ok: true, etag: result.etag, changed: result.changed || [], restartRequired: result.restartRequired || [], ...(warnings.length ? { warnings } : {}) }, 200, { etag: `"${result.etag}"` });
+    sendJson(res, { ok: true, etag: result.etag, changed: result.changed || [], restartRequired: result.restartRequired || [] }, 200, { etag: `"${result.etag}"` });
   }
 
   // --- dispatch ------------------------------------------------------------------
@@ -1069,8 +1101,8 @@ function createQueryRoutes(options = {}) {
   async function handle(req, res, url) {
     const pathname = String(url && url.pathname ? url.pathname : "");
     const detail = DETAIL_PATH.exec(pathname);
-    const named = detail ? null : QUERY_ENDPOINT_PATH.exec(pathname);
-    const endpoint = detail ? "request-detail" : named ? named[1] : "";
+    const name = detail || !pathname.startsWith(API_PREFIX) ? "" : pathname.slice(API_PREFIX.length);
+    const endpoint = detail ? "request-detail" : ENDPOINT_NAME.test(name) ? name : "";
     if (!endpoint || (!detail && !GET_ENDPOINTS.has(endpoint))) return false;
     const requested = String(req.method || "GET").toUpperCase();
     const method = requested === "HEAD" ? "GET" : requested;
@@ -1091,8 +1123,11 @@ function createQueryRoutes(options = {}) {
     }
     try {
       if (detail) await requestDetail(req, res, url, detail[1]);
-      else if (endpoint === "live") await live(req, res, caller);
-      else if (endpoint === "status") respond(req, res, "status", caller, await statusBody());
+      else if (endpoint === "live") await live(req, res, url, caller);
+      else if (endpoint === "status") {
+        query.parseQuery("status", url.searchParams, queryOptions());
+        respond(req, res, "status", caller, await statusBody());
+      }
       else if (endpoint === "export") await exportRoute(req, res, url);
       else if (endpoint === "settings") {
         if (method === "PUT") await putSettings(req, res);

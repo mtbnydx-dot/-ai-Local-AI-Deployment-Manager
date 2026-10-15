@@ -78,6 +78,14 @@ function redactLive(body) {
 
 // --- /api/telemetry/summary ---------------------------------------------------
 
+// The summary has no key or customer breakdown, but its filters would still
+// let a viewer read one key's or one customer's totals.
+function redactSummaryQuery(input) {
+  const params = paramsOf(input);
+  const filter = OWNER_ONLY_FILTERS.find((name) => params.get(name) !== null && params.get(name) !== undefined);
+  return filter ? ownerRequired("Filtering by key or customer needs the owner.") : null;
+}
+
 function redactSummary(body) {
   if (!isPlainObject(body)) return body;
   const out = clone(body);
@@ -201,7 +209,7 @@ function redactStatus(body) {
 
 const TELEMETRY_VIEWER_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/telemetry/live", redact: redactLive }),
-  Object.freeze({ method: "GET", path: "/api/telemetry/summary", redact: redactSummary, endpoint: "summary" }),
+  Object.freeze({ method: "GET", path: "/api/telemetry/summary", redact: redactSummary, precheck: redactSummaryQuery, endpoint: "summary" }),
   Object.freeze({ method: "GET", path: "/api/telemetry/timeseries", redact: redactSeries, precheck: redactSeriesQuery, endpoint: "timeseries" }),
   Object.freeze({ method: "GET", path: "/api/telemetry/breakdown", redact: redactBreakdown, precheck: redactBreakdownQuery, endpoint: "breakdown" }),
   Object.freeze({ method: "GET", path: "/api/telemetry/events", redact: redactEvents, endpoint: "events" }),
@@ -278,5 +286,6 @@ module.exports = {
   redactSeriesQuery,
   redactStatus,
   redactSummary,
+  redactSummaryQuery,
   registerTelemetryViewerRoutes,
 };

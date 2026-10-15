@@ -1130,6 +1130,8 @@ const BREAKDOWN_METRICS = Object.freeze({
   requests: { value: (a) => a.requests },
   errorRate: { value: (a) => round(ratio(a.errors, a.requests)) },
   clientAbortRate: { value: (a) => round(ratio(a.aborts, a.requests)) },
+  lengthShare: { value: (a) => round(ratio(a.finLen, a.requests)) },
+  estimatedShare: { value: (a) => round(ratio(a.estimated, a.requests)) },
   promptTokens: { value: (a) => a.prompt },
   cachedTokens: { value: (a) => a.cached },
   outputTokens: { value: (a) => a.output },
@@ -1298,6 +1300,8 @@ function foldGroups(familyName, groups, top, groupBy) {
     for (const acc of group.buckets.values()) group.weight += family.weight(acc);
   }
   list.sort((a, b) => b.weight - a.weight || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  // An ungrouped series always exists, so a covered range without traffic is a line of zeros and a gap is a line of nulls.
+  if (!groupBy && !list.length) list.push({ key: "", buckets: new Map(), weight: 0 });
   if (!groupBy || list.length <= top) return { groups: list, otherGroups: 0 };
   const kept = list.slice(0, top);
   const other = { key: OTHER, other: true, buckets: new Map(), weight: 0 };
@@ -1385,7 +1389,12 @@ function timeseries(db, q) {
     });
     const covered = new Set();
     if (familyName === "req") {
-      for (const bucket of readCoverage(db, tiers, budget)) covered.add(Math.floor((bucket - origin) / stepMs));
+      // A covered minute covers every step inside it (steps under a minute exist on raw rows only).
+      for (const bucket of readCoverage(db, tiers, budget)) {
+        const first = Math.floor((bucket - origin) / stepMs);
+        const last = stepMs < MINUTE_MS ? Math.floor((bucket + MINUTE_MS - 1 - origin) / stepMs) : first;
+        for (let index = first; index <= last; index += 1) covered.add(index);
+      }
     }
     const folded = foldGroups(familyName, groups, q.top, groupBy);
     otherGroups = Math.max(otherGroups, folded.otherGroups);

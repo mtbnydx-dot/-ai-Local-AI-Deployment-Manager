@@ -81,6 +81,15 @@ test("redactSummary drops billing and active keys and marks the body as a viewer
   assert.equal(viewer.redactSummary({ ok: true, current: SUMMARY_PERIOD }).previous, undefined);
 });
 
+test("summary filters naming a key or a customer are refused for viewers, the other filters are not", () => {
+  for (const search of ["key_id=k_1", "customer_id=c_1", "model=m&customer_id=c_1"]) {
+    assert.equal(viewer.redactSummaryQuery(new URLSearchParams(search)).code, "owner_required", search);
+  }
+  for (const search of ["", "model=m&error_class=auth_failed", "manager_id=vllm&compare=previous"]) {
+    assert.equal(viewer.redactSummaryQuery(new URLSearchParams(search)), null, search);
+  }
+});
+
 test("series queries naming a key or a customer are refused for viewers before any SQL runs", () => {
   for (const search of ["groupBy=key", "groupBy=customer", "key_id=k_1", "customer_id=c_1", "metrics=req.count&groupBy=key&top=3"]) {
     const denied = viewer.redactSeriesQuery(new URLSearchParams(search));

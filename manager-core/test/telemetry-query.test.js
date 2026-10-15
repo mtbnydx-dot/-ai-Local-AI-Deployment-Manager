@@ -367,6 +367,17 @@ test("request counts are 0 where the recorder covered a bucket and null in a col
   assert.equal(valueAt(count, 7), null, "07:00 is not covered");
 });
 
+test("a covered minute covers every step inside it when the step is under a minute", async (t) => {
+  const { store } = await seed(t);
+  // 06:00-06:02 is covered (the recorder row exists) but carries no traffic.
+  const result = await run(store, "timeseries", "timeseries", `metrics=req.count&step=10&${range(BASE + 6 * HOUR_MS, BASE + 6 * HOUR_MS + 2 * MINUTE_MS)}`);
+  const points = result.series[0].points;
+  assert.equal(points.length, 12);
+  assert.ok(points.every(([, value]) => value === 0), "all six steps of a covered minute are 0, none is null");
+  const gap = await run(store, "timeseries", "timeseries", `metrics=req.count&step=10&${range(GAP_FROM, GAP_FROM + MINUTE_MS)}`);
+  assert.ok(gap.series[0].points.every(([, value]) => value === null), "an uncovered minute stays a gap");
+});
+
 test("groupBy keeps the top groups and folds the rest into other", async (t) => {
   const { store, all } = await seed(t);
   const result = await run(store, "timeseries", "timeseries", `metrics=req.count&groupBy=model&top=2&step=3600&${range(BASE, NOW)}`);
@@ -489,6 +500,12 @@ test("breakdown groups with shares, samples, sparklines and labels", async (t) =
   assert.equal(upstream.spark.length, 24);
   assert.equal(upstream.spark.reduce((a, b) => a + b, 0), upstream.requests);
   assert.deepEqual(Object.keys(upstream).filter((key) => ["ttftP95Ms", "durationP95Ms", "decodeTpsP50", "promptTokens", "cachedTokens", "outputTokens"].includes(key)).length, 6);
+  const lengths = await run(store, "breakdown", "breakdown", `dim=model&metrics=requests,lengthShare,estimatedShare&${range(BASE, NOW)}`);
+  for (const row of lengths.rows) {
+    const rows = all.filter((item) => item.modelResolved === row.key);
+    assert.equal(row.lengthShare, Math.round((rows.filter((item) => item.finishReason === "length").length / rows.length) * 10000) / 10000, `lengthShare of ${row.key}`);
+    assert.equal(typeof row.estimatedShare, "number");
+  }
   const sorted = await run(store, "breakdown", "breakdown", `dim=model&sort=requests&limit=2&${range(BASE, NOW)}`);
   assert.equal(sorted.rows.length, 2);
   assert.ok(sorted.rows[0].requests <= sorted.rows[1].requests, "no minus prefix sorts ascending");
