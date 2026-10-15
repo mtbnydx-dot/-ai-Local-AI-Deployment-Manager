@@ -3,19 +3,27 @@
     "hub.action.",
     "hub.detail.access.",
     "hub.detail.tab.",
+    "hub.discover.gated.",
+    "hub.discover.modality.",
+    "hub.discover.size.",
+    "hub.discover.sort.",
+    "hub.discover.source.",
+    "hub.discover.updated.",
+    "hub.downloads.priority.",
+    "hub.downloads.tab.",
     "hub.fit.",
     "hub.library.provenance.",
     "hub.library.verification.",
+    "hub.phase.",
+    "hub.plan.bar.",
+    "hub.plan.code.",
+    "hub.plan.companion.",
+    "hub.plan.hint.",
+    "hub.settings.",
     "hub.state.",
     "hub.storage.badge.",
     "hub.storage.state.",
     "hub.wait."
   ],
-  "unused": [
-    "hub.error.fallback",
-    "hub.error.notRetried",
-    "hub.token.label",
-    "hub.token.localOnly",
-    "hub.token.remember"
-  ]
+  "unused": []
 }
