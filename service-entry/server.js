@@ -181,6 +181,7 @@ const ROUTE_MODULES = [
   "./lib/events", // ENT-EV1  /api/events, /api/events/recent
   "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
   "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
+  "./lib/telemetry-runtime", // 04 TEL-6  /internal/telemetry/* (ADMIN only; managers' signed ingest)
   "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
   "./lib/engine-routes", // 01 ENG-19  /api/engines, /api/engines/external/endpoints
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
@@ -2569,6 +2570,10 @@ async function startTelemetry(options = {}) {
     aiRoot: AI_ROOT,
     dataDir: path.join(ROOT, "data"),
     getBillingStore,
+    // /internal/telemetry/* (TEL-6): verified with the entry trust token.
+    getTrustToken: () => security.getTrustToken(),
+    readRequestBody,
+    sendJson,
     ...options,
     onRow: handleTelemetryRow,
   });

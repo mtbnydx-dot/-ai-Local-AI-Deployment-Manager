@@ -155,7 +155,8 @@ module.exports.engines = require("./engines");
 // (core.telemetry.createStatsSampler, applyStatsWindows...) and its module is
 // core.telemetry.statsSampler.
 const statsSampler = require("./telemetry/collectors/manager-stats-sampler");
-module.exports.telemetry = Object.freeze({ ...statsSampler, statsSampler });
+const ingestClient = require("./telemetry/ingest-client");
+module.exports.telemetry = Object.freeze({ ...statsSampler, statsSampler, ...ingestClient, ingestClient });
 // The single secret store (06 OPS-3b); runtime-secret-store.js stays flat as its facade.
 module.exports.secrets = require("./secret-store");
 // The ModelCard v1 local inspector (02 MOD-3); a namespace like engines and secrets.

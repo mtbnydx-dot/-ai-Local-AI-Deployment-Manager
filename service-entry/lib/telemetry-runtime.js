@@ -31,12 +31,30 @@ const { createEventCollector, dockerEventSourceFromEnv } = require("../../manage
 const { createGatewayRecorder } = require("../../manager-core/telemetry/recorder");
 const { createGatewayLatencyWindow, createRuntimeCollector } = require("../../manager-core/telemetry/collectors/runtime");
 const { redactSecrets } = require("../../manager-core/secret-redactor");
+const internalAuth = require("../../manager-core/internal-auth");
+const { isLocalAddress, normalizeRemoteAddress } = require("../../manager-core/network");
+const { AUDIT_ACTIONS, AUDIT_OUTCOMES } = require("../../manager-core/telemetry/audit-access-log");
 
 const DEFAULT_DB_FILE = "telemetry.sqlite";
 const STOP_FLUSH_MS = 2000;
 // Live settings (§20 "live") are re-read at most this often, so a request
 // never pays for a platform.json stat.
 const LIVE_SETTINGS_TTL_MS = 5000;
+
+// Manager -> entry ingest (04 §6.7, TEL-6).
+const INTERNAL_PREFIX = "/internal/telemetry/";
+const INGEST_KINDS = Object.freeze(["requests", "events", "audit-access"]);
+const INGEST_MAX_BODY_BYTES = 1024 * 1024;
+const INGEST_MAX_ROWS = 200;
+const INGEST_FIELD_MAX = 512;
+const INGEST_DETAIL_MAX = 4096;
+const INGEST_CLOCK_SKEW_MS = 60 * 1000;
+const DIRECT_REQUEST_ID_RE = /^mgr_[A-Za-z0-9._:-]{1,124}$/;
+const EVENT_TYPE_RE = /^[a-z][a-z0-9_.]{0,63}$/;
+const DEFAULT_INGEST_MANAGERS = Object.freeze([
+  Object.freeze({ id: "vllm", billingId: "vllm-manager" }),
+  Object.freeze({ id: "llama", billingId: "llama-manager" }),
+]);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -381,6 +399,201 @@ function createTelemetryRuntime(options = {}) {
     }
   }
 
+  // ---- /internal/telemetry/* (04 §6.7, TEL-6) --------------------------------
+
+  const ingestManagers = managers.length
+    ? managers.map((manager) => ({ id: String(manager.id || ""), billingId: String(manager.billingId || manager.id || "") }))
+    : DEFAULT_INGEST_MANAGERS;
+  const sendIngestJson = typeof options.sendJson === "function"
+    ? options.sendJson
+    : (res, body, status = 200) => {
+      const text = JSON.stringify(body);
+      res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(text), "cache-control": "no-store" });
+      res.end(text);
+    };
+
+  function ingestError(res, status, code, message, extra = {}) {
+    sendIngestJson(res, { ok: false, error: { code, message }, ...extra }, status);
+    return true;
+  }
+
+  function clampText(value, max = INGEST_FIELD_MAX) {
+    return typeof value === "string" ? value.slice(0, max) : value;
+  }
+
+  // The caller's `at` is kept (arrival order, original time) unless it is not a
+  // plausible millisecond clock.
+  function plausibleAt(value) {
+    const at = Number(value);
+    return Number.isFinite(at) && at > 0 && at <= now() + INGEST_CLOCK_SKEW_MS ? Math.round(at) : now();
+  }
+
+  function directRequestRow(raw, manager) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: { code: "invalid_row" } };
+    const requestId = raw.requestId ?? raw.request_id;
+    if (String(raw.ingress ?? "") !== "direct") return { error: { code: "invalid_value", field: "ingress" } };
+    if (typeof requestId !== "string" || !DIRECT_REQUEST_ID_RE.test(requestId)) return { error: { code: "invalid_value", field: "request_id" } };
+    const row = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (key === "id" || key === "extra") continue;
+      row[key] = clampText(value);
+    }
+    row.requestId = requestId;
+    row.ingress = "direct";
+    // The signed manager decides the manager id; the body cannot claim another.
+    row.managerId = manager.id;
+    delete row.manager_id;
+    return { row };
+  }
+
+  function eventRow(raw, manager) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: { code: "invalid_row" } };
+    if (typeof raw.type !== "string" || !EVENT_TYPE_RE.test(raw.type)) return { error: { code: "invalid_value", field: "type" } };
+    const title = clampText(raw.title, 200);
+    if (typeof title !== "string" || !title) return { error: { code: "missing_field", field: "title" } };
+    let data = raw.data ?? null;
+    if (data !== null && JSON.stringify(data).length > INGEST_DETAIL_MAX) data = null;
+    return {
+      row: {
+        at: plausibleAt(raw.at),
+        type: raw.type,
+        severity: ["info", "warning", "critical"].includes(raw.severity) ? raw.severity : "info",
+        source: manager.id,
+        managerId: manager.id,
+        title,
+        data,
+        dedupeKey: typeof raw.dedupeKey === "string" && raw.dedupeKey ? raw.dedupeKey.slice(0, 200) : null,
+      },
+    };
+  }
+
+  function auditRow(raw, manager) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: { code: "invalid_row" } };
+    if (!AUDIT_ACTIONS.includes(raw.action)) return { error: { code: "invalid_value", field: "action" } };
+    const outcome = raw.outcome === undefined ? "ok" : raw.outcome;
+    if (!AUDIT_OUTCOMES.includes(outcome)) return { error: { code: "invalid_value", field: "outcome" } };
+    let detail = raw.detail ?? null;
+    if (detail !== null && JSON.stringify(detail).length > INGEST_DETAIL_MAX) detail = null;
+    return {
+      row: {
+        at: plausibleAt(raw.at),
+        source: manager.billingId,
+        actor: "legacy-local",
+        session: null,
+        clientIp: clampText(raw.clientIp ?? raw.client_ip ?? null, 64) || null,
+        userAgent: clampText(raw.userAgent ?? raw.user_agent ?? null, 256) || null,
+        action: raw.action,
+        target: clampText(raw.target ?? null, 256) || null,
+        outcome,
+        detail,
+      },
+    };
+  }
+
+  async function ingest(kind, rows, manager) {
+    const result = { accepted: 0, duplicates: 0, errors: [] };
+    const valid = [];
+    const build = kind === "requests" ? directRequestRow : kind === "events" ? eventRow : auditRow;
+    rows.forEach((raw, index) => {
+      const built = build(raw, manager);
+      if (built.error) result.errors.push({ index, ...built.error });
+      else valid.push({ index, row: built.row });
+    });
+    if (!valid.length) return result;
+    if (kind === "audit-access") {
+      // One append at a time, in arrival order: each row's hash covers the one before.
+      for (const entry of valid) {
+        await store.appendAuditAccess(entry.row);
+        result.accepted += 1;
+      }
+      return result;
+    }
+    const written = kind === "requests"
+      ? await store.insertRequests(valid.map((entry) => entry.row))
+      : await store.insertEvents(valid.map((entry) => entry.row));
+    if (Number(written?.dropped) > 0 && !Number(written?.accepted) && !Number(written?.duplicates)) {
+      throw Object.assign(new Error("telemetry store is not accepting writes"), { code: "telemetry_store_unavailable" });
+    }
+    result.accepted = Number(written?.accepted) || 0;
+    result.duplicates = Number(written?.duplicates) || 0;
+    for (const error of Array.isArray(written?.errors) ? written.errors : []) {
+      const source = valid[Number(error.index)];
+      result.errors.push({ index: source ? source.index : Number(error.index) || 0, code: String(error.code || "invalid_row"), ...(error.field ? { field: String(error.field) } : {}) });
+    }
+    return result;
+  }
+
+  async function handleInternal(req, res, url) {
+    const pathname = String(url && url.pathname ? url.pathname : "");
+    if (!pathname.startsWith(INTERNAL_PREFIX)) return false;
+    const kind = pathname.slice(INTERNAL_PREFIX.length);
+    if (!INGEST_KINDS.includes(kind)) {
+      req.resume?.();
+      return ingestError(res, 404, "not_found", "Not found.");
+    }
+    if (String(req.method || "").toUpperCase() !== "POST") {
+      req.resume?.();
+      return ingestError(res, 405, "method_not_allowed", "Use POST.");
+    }
+    const unauthorized = () => ingestError(res, 401, "telemetry_unauthorized", "Telemetry ingest authentication failed.");
+    // A non-loopback socket is refused before its body is read.
+    if (!isLocalAddress(normalizeRemoteAddress(req.socket?.remoteAddress || req.ip || ""))) {
+      req.resume?.();
+      return unauthorized();
+    }
+    let raw;
+    try {
+      raw = typeof options.readRequestBody === "function"
+        ? await options.readRequestBody(req, INGEST_MAX_BODY_BYTES)
+        : await readBoundedBody(req, INGEST_MAX_BODY_BYTES);
+    } catch (error) {
+      if (Number(error?.status) === 413) return ingestError(res, 413, "payload_too_large", "The ingest body is larger than 1 MiB.");
+      return ingestError(res, 400, "invalid_request", "The request body could not be read.");
+    }
+    raw = raw || Buffer.alloc(0);
+    const token = typeof options.getTrustToken === "function" ? options.getTrustToken() : "";
+    const verified = internalAuth.verifyInternalRequest(req, raw, token, {
+      pathname,
+      pathPrefixes: [INTERNAL_PREFIX],
+      allowedManagers: ingestManagers.map((manager) => manager.billingId),
+      now: now(),
+    });
+    if (!verified.ok) return unauthorized();
+    const manager = ingestManagers.find((item) => item.billingId === verified.managerId);
+    if (!manager) return unauthorized();
+    let body = null;
+    try {
+      body = JSON.parse(raw.toString("utf8"));
+    } catch {
+      body = null;
+    }
+    const rows = body && typeof body === "object" && !Array.isArray(body) ? body.rows : null;
+    if (!Array.isArray(rows)) return ingestError(res, 400, "invalid_rows", "The body must be {\"rows\": [...]}.");
+    if (rows.length > INGEST_MAX_ROWS) return ingestError(res, 413, "payload_too_large", `At most ${INGEST_MAX_ROWS} rows per call.`);
+    // Telemetry off: the managers' rows are acknowledged and not kept, so a
+    // manager does not grow a spool for an entry that records nothing.
+    if (!settings.enabled) {
+      sendIngestJson(res, { ok: true, accepted: 0, duplicates: 0, disabled: true }, 200);
+      return true;
+    }
+    if (!store || stopped) return ingestError(res, 503, "telemetry_unavailable", "The telemetry store is not available.");
+    let result;
+    try {
+      result = await ingest(kind, rows, manager);
+    } catch {
+      return ingestError(res, 503, "telemetry_unavailable", "The telemetry store is not available.");
+    }
+    if (result.errors.length) {
+      return ingestError(res, 400, "invalid_rows", "Some rows were rejected; the valid ones were accepted.", {
+        accepted: result.accepted,
+        duplicates: result.duplicates,
+        errors: result.errors.slice(0, 50),
+      });
+    }
+    sendIngestJson(res, { ok: true, accepted: result.accepted, duplicates: result.duplicates }, 200);
+    return true;
+  }
+
   function status() {
     return {
       enabled: settings.enabled,
@@ -407,7 +620,7 @@ function createTelemetryRuntime(options = {}) {
     keepJsonlAccessLog,
     // /api/telemetry/* (TEL-11) and /internal/telemetry/* (TEL-6).
     handleHttp: async () => false,
-    handleInternal: async () => false,
+    handleInternal,
     status,
     recordConfigChange,
     get collectors() {
@@ -420,7 +633,41 @@ function createTelemetryRuntime(options = {}) {
   return api;
 }
 
+// Fallback when no readRequestBody is injected (tests).
+async function readBoundedBody(req, maxBytes) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) throw Object.assign(new Error("body too large"), { status: 413 });
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+// Route module (07 section 2.7) for /internal/telemetry/*, mounted by one line in
+// the entry's table (ADMIN listener only, before the /api guards). server.js
+// puts the runtime on ctx.telemetry once it is started.
+function mount(ctx = {}) {
+  return {
+    async handle(req, res, url) {
+      if (!String(url?.pathname || "").startsWith(INTERNAL_PREFIX)) return false;
+      const runtime = ctx.telemetry;
+      if (runtime && typeof runtime.handleInternal === "function") return runtime.handleInternal(req, res, url);
+      req.resume?.();
+      const body = JSON.stringify({ ok: false, error: { code: "telemetry_unavailable", message: "Telemetry is not running." } });
+      res.writeHead(503, { "content-type": "application/json; charset=utf-8" });
+      res.end(body);
+      return true;
+    },
+  };
+}
+
 module.exports = {
+  INTERNAL_PREFIX,
+  mount,
+  name: "telemetry-internal",
   buildTailFiles,
   createTelemetryRuntime,
   mcpAuditLogFile,
