@@ -1,0 +1,141 @@
+[
+  {
+    "id": "dl_7k2m4q9x3c5vb8np",
+    "type": "download",
+    "title": "Download unsloth/Qwen3-8B-GGUF (Hugging Face)",
+    "status": "running",
+    "createdAt": "2026-10-14T08:00:00.000Z",
+    "updatedAt": "2026-10-14T08:05:00.000Z",
+    "finishedAt": null,
+    "exitCode": null,
+    "error": null,
+    "meta": {
+      "model": "unsloth/Qwen3-8B-GGUF",
+      "source": "huggingface",
+      "precision": "Q4_K_M",
+      "outputName": "unsloth-Qwen3-8B-GGUF",
+      "localDir": "X:\\models\\unsloth-Qwen3-8B-GGUF",
+      "priority": "normal",
+      "expectedBytes": 5028640000,
+      "expectedFiles": 3,
+      "retryCount": 1,
+      "maxRetries": 3,
+      "retryScheduledAt": null,
+      "hubJobId": "dl_7k2m4q9x3c5vb8np",
+      "phase": "downloading",
+      "includeExtras": [
+        "mmproj-F16.gguf"
+      ],
+      "errorCode": null,
+      "errorBaseCode": null,
+      "errorRetryable": null,
+      "errorHint": null,
+      "transfer": {
+        "hfMirror": true,
+        "hfEndpoint": "https://hf-mirror.com",
+        "hfTransfer": true,
+        "tokenRef": null,
+        "gated": false
+      }
+    },
+    "progress": {
+      "kind": "download",
+      "downloadedBytes": 2071000000,
+      "totalBytes": 5028640000,
+      "percent": 41.2,
+      "speedBytesPerSec": 126000000,
+      "etaSeconds": 23,
+      "finalizedBytes": 21043,
+      "partialBytes": 2070000000,
+      "incompleteFiles": 2,
+      "stage": {
+        "id": "downloading",
+        "zh": "下载中",
+        "en": "Downloading"
+      },
+      "updatedAt": "2026-10-14T08:05:00.000Z"
+    },
+    "logs": [
+      "line 5",
+      "line 6",
+      "line 7",
+      "line 8",
+      "line 9",
+      "line 10",
+      "line 11",
+      "line 12"
+    ],
+    "logCount": 40,
+    "logsTruncated": true
+  },
+  {
+    "id": "dl_2b3c4d5e6f7g2h3j",
+    "type": "download",
+    "title": "Download Qwen/Qwen3-8B (ModelScope)",
+    "status": "failed",
+    "createdAt": "2026-10-13T08:00:00.000Z",
+    "updatedAt": "2026-10-13T08:10:00.000Z",
+    "finishedAt": "2026-10-13T08:10:00.000Z",
+    "exitCode": 1,
+    "error": "需要登录 Hugging Face / Hugging Face login required",
+    "meta": {
+      "model": "Qwen/Qwen3-8B",
+      "source": "modelscope",
+      "precision": "",
+      "outputName": "Qwen-Qwen3-8B",
+      "localDir": "X:\\models\\Qwen-Qwen3-8B",
+      "priority": "high",
+      "expectedBytes": 1000,
+      "expectedFiles": 1,
+      "retryCount": 3,
+      "maxRetries": 3,
+      "retryScheduledAt": null,
+      "hubJobId": "dl_2b3c4d5e6f7g2h3j",
+      "phase": "failed",
+      "includeExtras": [],
+      "errorCode": "hf_login_required",
+      "errorBaseCode": "hf_auth_invalid",
+      "errorRetryable": false,
+      "errorHint": {
+        "zh": "先登录 Hugging Face 再重试。",
+        "en": "Sign in to Hugging Face, then retry."
+      },
+      "transfer": {
+        "hfMirror": false,
+        "hfEndpoint": "https://www.modelscope.cn",
+        "hfTransfer": false,
+        "tokenRef": null,
+        "gated": false
+      }
+    },
+    "progress": {
+      "kind": "download",
+      "downloadedBytes": 0,
+      "totalBytes": 1000,
+      "percent": 0,
+      "speedBytesPerSec": 0,
+      "etaSeconds": null,
+      "finalizedBytes": 0,
+      "partialBytes": 0,
+      "incompleteFiles": 1,
+      "stage": {
+        "id": "failed",
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "updatedAt": "2026-10-13T08:10:00.000Z"
+    },
+    "logs": [
+      "line 5",
+      "line 6",
+      "line 7",
+      "line 8",
+      "line 9",
+      "line 10",
+      "line 11",
+      "line 12"
+    ],
+    "logCount": 40,
+    "logsTruncated": true
+  }
+]

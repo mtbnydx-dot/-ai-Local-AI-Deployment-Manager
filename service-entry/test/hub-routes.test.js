@@ -196,6 +196,15 @@ test("a signed hub shim reaches SHIM_ROUTES only; a bad or missing signature nev
   const bare = await request(port, "/api/hub/settings", { method: "PUT", peer: LAN, headers: { "x-hub-shim": "vllm" }, body: { transfer: { maxConcurrent: 4 } } });
   assert.equal(bare.status, 401);
   assert.equal(bare.json.error.code, "admin_session_required");
+  // From loopback as well (HUB-13a): a local process that only claims to be a
+  // shim is a loopback viewer, which cannot write a setting or a download.
+  const local = await request(port, "/api/hub/settings", { method: "PUT", headers: { "x-hub-shim": "llama" }, body: { transfer: { maxConcurrent: 4 } } });
+  assert.equal(local.status, 401);
+  assert.equal(local.json.error.code, "admin_session_required");
+  const enqueue = await request(port, "/api/hub/downloads", { method: "POST", headers: { "x-hub-shim": "llama" }, body: { provider: "huggingface", repo: "org/Model", origin: { kind: "manager-shim", managerId: "llama", clientLocal: true } } });
+  assert.equal(enqueue.status, 401);
+  assert.equal(enqueue.json.error.code, "admin_session_required");
+  assert.deepEqual(hub.jobs.list({ include: "terminal" }).jobs, []);
   assert.deepEqual(readSettingsFile(settingsFile), before);
 });
 
