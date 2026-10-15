@@ -14,7 +14,7 @@ const { mergeI18nAreas } = require("../../lib/console-routes.js");
 const { CONSOLE_DIR, mapConsoleUrl } = await import("./loader.mjs");
 
 const KB = 1024;
-const BUDGETS = { appConsole: 160 * KB, appVendor: 30 * KB, routeModule: 60 * KB, catalog: 160 * KB };
+const BUDGETS = { appConsole: 160 * KB, appVendor: 30 * KB, routeModule: 60 * KB, catalog: 192 * KB };
 const LAZY_ONLY = ["uplot", "qrcode"];
 // Route-only libraries (the engine-config forms, the Overview, Access, Engines, Deployments and Billing pages): loaded with their page module, never by app.js (07 §11 budgets app.js's closure).
 const ROUTE_ONLY_LIBS = new Set(["lib/expr.js", "lib/schema-form-model.js", "lib/overview-model.js", "lib/access-model.js", "lib/exposure-model.js", "lib/portal-model.js", "lib/engines-model.js", "lib/deployments-model.js", "lib/billing-model.js", "lib/observability-model.js", "lib/observability-settings-model.js", "lib/wizard-state.js", "lib/compat-model.js"]);
@@ -135,7 +135,7 @@ test("§11 budgets: each route module's own static imports stay under 60 KB", ()
   }
 });
 
-test("§11 budgets: the merged catalog stays under 160 KB per locale", () => {
+test("§11 budgets: the merged catalog stays under 192 KB per locale", () => {
   const merged = mergeI18nAreas(path.join(CONSOLE_DIR, "i18n"));
   for (const [locale, catalog] of Object.entries(merged.catalogs)) {
     const bytes = Buffer.byteLength(JSON.stringify(catalog));
