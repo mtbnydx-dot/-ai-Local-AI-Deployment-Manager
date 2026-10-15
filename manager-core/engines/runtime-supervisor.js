@@ -564,7 +564,11 @@ function createRuntimeSupervisor(options = {}) {
     const code = errorCodeOf(error) || waitStage?.code || STAGE_FAILURE_CODES[stageKey] || "start_failed";
     if (waitStage?.stage === "probe") enterPhase(job, "probe");
     const phase = job.lifecycle?.phase || STAGES[stageKey]?.phase || null;
-    let logText = textOf(job.meta?.runtimeDiagnostics?.lastLogTail);
+    // The wait loop keeps the last 2000 log lines of an exited container for analysis only
+    // (non-enumerable, never persisted); classification reads those, the stored excerpt stays small.
+    const diagnostics = job.meta?.runtimeDiagnostics;
+    let logText = textOf(diagnostics?.lastLogTail);
+    const analysisText = textOf(diagnostics?.analysisLogText);
     if (!logText && state.containerCreated && typeof host.logs === "function") {
       logText = await host.logs(state.containerName, { tail: LOG_EXCERPT_LINES }).catch(() => "");
     }
@@ -573,7 +577,7 @@ function createRuntimeSupervisor(options = {}) {
     let classified = null;
     if (typeof hooks.classifyFailure === "function") {
       try {
-        classified = await hooks.classifyFailure(logExcerpt, { engineId: state.engineId, phase, code, error: redact(error?.message, state.secretValues) });
+        classified = await hooks.classifyFailure(analysisText ? redact(analysisText, state.secretValues) : logExcerpt, { engineId: state.engineId, phase, code, error: redact(error?.message, state.secretValues) });
       } catch (classifyError) {
         log(job, `Failure classification skipped: ${classifyError.message}`);
       }
@@ -581,13 +585,33 @@ function createRuntimeSupervisor(options = {}) {
     const hint = isPlainObject(classified?.hint)
       ? { zh: textOf(classified.hint.zh) || null, en: textOf(classified.hint.en) || null }
       : null;
-    return {
-      code: textOf(classified?.code) || code,
-      signatureId: textOf(classified?.signatureId) || null,
+    const signatureId = textOf(classified?.signatureId) || null;
+    // A matched signature names the cause; an unmatched classification keeps the stage code
+    // but may still supply the traceback excerpt.
+    const classifiedExcerpt = typeof classified?.logExcerpt === "string" && classified.logExcerpt.trim()
+      ? tailExcerpt(redact(classified.logExcerpt, state.secretValues))
+      : "";
+    const failure = {
+      code: (signatureId && textOf(classified?.code)) || code,
+      signatureId,
       phase,
       hint,
-      logExcerpt,
+      logExcerpt: classifiedExcerpt || logExcerpt,
     };
+    // Additive fields of 02 §14, present only when a signature matched.
+    if (signatureId) {
+      if (isPlainObject(classified.title)) failure.title = classified.title;
+      if (isPlainObject(classified.explanation)) failure.explanation = classified.explanation;
+      if (typeof classified.exceptionType === "string") failure.exceptionType = classified.exceptionType;
+      if (Array.isArray(classified.suggestions)) failure.suggestions = classified.suggestions;
+    }
+    return failure;
+  }
+
+  // The legacy job.error string keeps its prefix; a matched signature appends its English title (02 §14).
+  function appendFailureTitle(job) {
+    const title = textOf(job.failure?.title?.en);
+    if (title && typeof job.error === "string" && !job.error.includes(title)) job.error = `${job.error} — ${title}`;
   }
 
   // ---- stages ----
@@ -1132,6 +1156,7 @@ function createRuntimeSupervisor(options = {}) {
       closePhase(job.lifecycle);
       await rollback(job, run, state, checkpoint, error);
       if (typeof jobs.failJob === "function") jobs.failJob(job, error);
+      appendFailureTitle(job);
       emitJob(job, { force: true });
       throw error;
     }
@@ -1245,6 +1270,7 @@ function createRuntimeSupervisor(options = {}) {
         }
         closePhase(job.lifecycle);
         if (typeof jobs.failJob === "function") jobs.failJob(job, error);
+        appendFailureTitle(job);
         emitJob(job, { force: true });
       })
       .finally(() => {

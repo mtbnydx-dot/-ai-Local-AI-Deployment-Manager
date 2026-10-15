@@ -136,7 +136,7 @@ test("managerHooks returns all four callbacks and every one is a safe no-op unti
   assert.deepEqual(Object.keys(hooks).sort(), ["afterReady", "calibrationFor", "classifyFailure", "modelFacts"]);
   assert.equal(hooks.calibrationFor({}, "vllm", "vllm@x", "1|1|auto|-"), null);
   assert.equal(await hooks.afterReady({ launchId: "lch_x" }), null);
-  assert.equal(hooks.classifyFailure("log", { engineId: "vllm", phase: "start" }), null);
+  assert.equal(hooks.classifyFailure("", { engineId: "vllm", phase: "start" }), null);
 });
 
 test("without modelFacts, or with a model that has no card, the plan keeps the legacy memory view", async () => {

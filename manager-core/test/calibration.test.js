@@ -406,11 +406,12 @@ test("a failing hook never fails the job: a broken store and a failing GPU probe
   assert.deepEqual(JSON.parse(fs.readFileSync(probe.file, "utf8")).records[0].measured.perGpuMb, {});
 });
 
-test("managerHooks without a dataDir stays a safe no-op, and classifyFailure returns null", async () => {
+test("managerHooks without a dataDir stays a safe no-op, and classifyFailure is the root-cause matcher", async () => {
   const hooks = managerHooks({ managerId: "vllm" });
   assert.equal(hooks.calibrationFor({ contentDigest: DIGEST }, "vllm", "r", "k"), null);
   assert.equal(await hooks.afterReady({ ...READY }), null);
-  assert.equal(hooks.classifyFailure("some log text", { engineId: "vllm", phase: "weights" }), null);
+  assert.equal(hooks.classifyFailure("", { engineId: "vllm", phase: "weights" }), null);
+  assert.equal(hooks.classifyFailure("some log text", { engineId: "vllm", phase: "weights" }).code, "engine_start_failed");
   assert.deepEqual(Object.keys(hooks).sort(), ["afterReady", "calibrationFor", "classifyFailure", "modelFacts"]);
 });
 

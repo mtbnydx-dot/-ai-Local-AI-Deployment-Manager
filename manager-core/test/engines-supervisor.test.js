@@ -703,3 +703,30 @@ test("core.engines exposes the supervisor namespace", () => {
   assert.equal(core.engines.createRuntimeSupervisor, createRuntimeSupervisor);
   assert.equal(typeof core.engines.runtimeSupervisor.probeNvidiaCompatibility, "function");
 });
+
+test("root-cause hook: an exited container's log becomes job.failure and the legacy job.error keeps its prefix", async () => {
+  const fixture = require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures", "root-cause-samples", "vllm-port-in-use-with-secrets.log.fixture"), "utf8");
+  const longTail = `${Array.from({ length: 300 }, (_, index) => `earlier line ${index}`).join("\n")}\n${fixture}`;
+  const { host, calls } = fakeHost({ logs: longTail });
+  const jobs = fakeJobs();
+  const job = jobs.create();
+  const supervisor = supervisorFor({
+    host,
+    jobs,
+    calls,
+    hooks: { classifyFailure: core.models.managerHooks({}).classifyFailure },
+    getters: {
+      containerStatus: async () => ({ exists: true, running: false, status: "Exited (1)" }),
+      servedModels: async () => [],
+    },
+  });
+  await assert.rejects(supervisor.start({ job, run: runContext() }), /exited before becoming ready/);
+  assert.equal(job.failure.code, "port_in_use");
+  assert.equal(job.failure.signatureId, "port-in-use");
+  assert.ok(job.failure.hint.en && job.failure.hint.zh);
+  assert.match(job.failure.logExcerpt, /address already in use/);
+  assert.ok(job.failure.logExcerpt.split("\n").length <= 40);
+  assert.match(job.error, /^.*exited before becoming ready.* — The port is already in use$/, "the legacy prefix stays; the English title is appended");
+  assert.equal(job.failure.title.en, "The port is already in use");
+  assert.equal(JSON.stringify(job.meta.runtimeDiagnostics).includes("earlier line 0"), false, "the long analysis tail is never serialised");
+});
