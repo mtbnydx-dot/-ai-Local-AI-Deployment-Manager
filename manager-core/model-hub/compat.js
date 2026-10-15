@@ -6,6 +6,11 @@
 // here does I/O, and nothing here reads or returns a credential: the hub's
 // vault ref never leaves the hub (`meta.transfer.tokenRef` is always null).
 
+const { listGgufVariants } = require("../gguf-variants");
+const { groupPrecisionVariants } = require("../precision-variants");
+const remoteUtils = require("../remote-model-utils");
+const { safeOutputName } = require("../settings-stores");
+const { describeHubError } = require("./errors");
 const { isPlainObject, nonEmpty } = require("./hub-util");
 
 // Hub state → the legacy job status (03 §7.1 table).
@@ -229,15 +234,539 @@ function toLegacyError(body, fallbackMessage = "Model hub request failed.") {
   return output;
 }
 
+// --- download, discovery, settings, auth and storage (HUB-13b, 03 §15) --------
+//
+// The remaining rows of the shim table. Every function is pure: the shim does
+// the I/O and these turn hub objects into the legacy response shapes.
+
+const GIB = 1024 ** 3;
+const PROVIDER_URLS = Object.freeze({
+  huggingface: (id) => `https://huggingface.co/${id}`,
+  modelscope: (id) => `https://modelscope.cn/models/${id}`,
+});
+const LEGACY_PROBE_IDS = Object.freeze({ huggingface: "official", "hf-mirror": "mirror", modelscope: "modelscope" });
+const PROBE_LABELS = Object.freeze({ official: "huggingface.co", mirror: "hf-mirror.com", modelscope: "modelscope.cn" });
+const GATED_BLOCKING = Object.freeze({
+  hf_login_required: "login_required",
+  hf_approval_required: "approval_required",
+  gated_official_required: "official_required",
+});
+// The engines each manager can run (03 §13.2 engine badges, 00 §3 ids).
+const MANAGER_ENGINES = Object.freeze({ vllm: ["vllm", "sglang"], llama: ["llamacpp"] });
+// The one format a manager's engines load (null: not restricted to one); the
+// llama.cpp manager loads GGUF only, which the former " GGUF" query suffix asked for.
+const MANAGER_FORMATS = Object.freeze({ vllm: null, llama: "gguf" });
+const FEATURE_TERMS = Object.freeze({ distilled: "distill", uncensored: "uncensored", reasoning: "reasoning" });
+const NATIVE_QUANT_FACETS = Object.freeze({ GGUF: "gguf", FP8: "fp8", NVFP4: "nvfp4", MXFP4: "mxfp4", AWQ: "awq", GPTQ: "gptq" });
+
+function unique(values) {
+  return Array.from(new Set(values));
+}
+
+function repoUrl(provider, repo) {
+  return (PROVIDER_URLS[provider] || PROVIDER_URLS.huggingface)(repo);
+}
+
+function bilingualHint(code) {
+  const { hint } = describeHubError(code);
+  return `${hint.zh} / ${hint.en}`;
+}
+
+function formatGb(bytes) {
+  return `${(Number(bytes) / GIB).toFixed(1)} GB`;
+}
+
+/** "Q4_K_M 4.4 GB, Q8_0 8.1 GB": language-neutral, so an English page shows no Han text from it. */
+function suggestionText(suggestions) {
+  return (Array.isArray(suggestions) ? suggestions : []).slice(0, 8).map((item) => {
+    const label = String(item?.label || item?.quant || item?.artifactKey || "").trim();
+    return Number(item?.bytes) > 0 ? `${label} ${formatGb(item.bytes)}` : label;
+  }).filter(Boolean).join(", ");
+}
+
+function blockingToLegacy(item, { repo = "", access = null } = {}) {
+  const blocking = isPlainObject(item) ? item : {};
+  const code = String(blocking.code || "plan_blocked");
+  if (GATED_BLOCKING[code]) {
+    // The legacy gated error (createHfAccessError): 409 with the access status
+    // and the model page to request access on.
+    const url = access?.authorizationUrl || (repo ? `https://huggingface.co/${repo.split("/").map(encodeURIComponent).join("/")}` : null);
+    return {
+      status: 409,
+      body: { error: code === "gated_official_required" ? String(blocking.message || bilingualHint("hf_login_required")) : bilingualHint(code), code, accessStatus: access?.status || GATED_BLOCKING[code], authorizationUrl: url },
+    };
+  }
+  if (code === "disk_full") {
+    return { status: 400, body: { error: String(blocking.message || bilingualHint("disk_full")), code: "download_disk_full" } };
+  }
+  const body = { error: String(blocking.message || "The download is blocked."), code };
+  if (nonEmpty(blocking.hint)) body.hint = blocking.hint;
+  if (nonEmpty(blocking.existingJobId)) body.existingJobId = blocking.existingJobId;
+  return { status: code === "already_downloading" ? 409 : 422, body };
+}
+
+/**
+ * A hub failure of a download route as the legacy { status, body }
+ * (`{ error, code, existingJobId?, authorizationUrl?, accessStatus?,
+ * suggestions?, details? }`). `context` carries what only the shim knows: the
+ * requested `precision`, the manifest's `totalFiles`, the repo and the plan's
+ * access block.
+ */
+function toLegacyDownloadError(status, body, context = {}) {
+  const envelope = isPlainObject(body?.error) ? body.error : {};
+  const details = isPlainObject(envelope.details) ? envelope.details : {};
+  const code = nonEmpty(envelope.code) ? envelope.code : "hub_error";
+  if (code === "plan_blocked" && Array.isArray(details.blocking) && details.blocking.length) {
+    return blockingToLegacy(details.blocking[0], context);
+  }
+  if (code === "filter_no_match") {
+    const suggestions = Array.isArray(details.suggestions) ? details.suggestions : [];
+    const list = suggestionText(suggestions);
+    // The P0-RT-6 shape; the quant list rides in the text because the legacy
+    // pages show the message only.
+    return {
+      status: 422,
+      body: {
+        error: `${bilingualHint("filter_no_match")}${list ? ` (${list})` : ""}`,
+        code,
+        details: { precision: String(context.precision ?? details.precision ?? ""), totalFiles: Number.isInteger(context.totalFiles) ? context.totalFiles : null },
+        suggestions,
+      },
+    };
+  }
+  const legacy = toLegacyError(body);
+  if (nonEmpty(details.existingJobId)) legacy.existingJobId = details.existingJobId;
+  if (nonEmpty(details.authorizationUrl)) legacy.authorizationUrl = details.authorizationUrl;
+  if (nonEmpty(details.accessStatus)) legacy.accessStatus = details.accessStatus;
+  return { status: Number.isInteger(status) && status >= 400 ? status : 502, body: legacy };
+}
+
+/** Hub plan problems → the first blocking item as the legacy { status, body }, or null. */
+function planBlockingToLegacy(plan, repo) {
+  const first = Array.isArray(plan?.blocking) ? plan.blocking[0] : null;
+  return first ? blockingToLegacy(first, { repo, access: plan.access }) : null;
+}
+
+/**
+ * GET /api/download/estimate. `plan` is the hub plan body, `totalFiles` the
+ * repo's file count and `compiled` the include patterns of the plan's files.
+ */
+function toLegacyEstimate({ source, model, precision = "", plan, totalFiles = null, compiled = { mode: "all" }, diskFreeBytes = null }) {
+  const files = Array.isArray(plan?.artifact?.files) ? plan.artifact.files : [];
+  const access = isPlainObject(plan?.access) ? plan.access : {};
+  const gated = Boolean(access.gated);
+  const bytes = finiteOr(plan?.artifact?.totalBytes, 0);
+  return {
+    source,
+    model,
+    precision,
+    bytes: bytes || null,
+    fileCount: files.length,
+    includePatterns: compiled.mode === "include" ? [...compiled.patterns] : [],
+    filtered: compiled.mode === "include",
+    matchedFiles: files.length,
+    totalFiles: Number.isInteger(totalFiles) ? totalFiles : files.length,
+    gated,
+    gateMode: gated,
+    authorizationUrl: access.authorizationUrl || (source === "huggingface" ? repoUrl("huggingface", model) : null),
+    supported: true,
+    diskFreeBytes: diskFreeBytes === null || diskFreeBytes === undefined ? finiteOr(plan?.target?.freeBytes, null) : diskFreeBytes,
+  };
+}
+
+/** The estimate of a selection that matched nothing (the legacy "filtered, 0 matched" answer). */
+function emptyLegacyEstimate({ source, model, precision = "", totalFiles = null, diskFreeBytes = null }) {
+  return {
+    source,
+    model,
+    precision,
+    bytes: null,
+    fileCount: 0,
+    includePatterns: [],
+    filtered: true,
+    matchedFiles: 0,
+    totalFiles,
+    gated: false,
+    gateMode: false,
+    authorizationUrl: source === "huggingface" ? repoUrl("huggingface", model) : null,
+    supported: true,
+    diskFreeBytes,
+  };
+}
+
+// --- remote models ------------------------------------------------------------
+
+/**
+ * One hub search item as the legacy catalogue summary (every key the legacy
+ * pages read; keys the hub does not know are null or empty). `context` has the
+ * manager's `managerId`, `precisionOrder` and `quantKeywords`.
+ */
+function toLegacyRemoteModel(item, context = {}) {
+  const source = isPlainObject(item) ? item : {};
+  const id = String(source.repo || "");
+  const provider = source.provider === "modelscope" ? "modelscope" : "huggingface";
+  const author = String(source.author || id.split("/")[0] || "");
+  const tags = Array.isArray(source.tags) ? source.tags.map(String) : [];
+  const formats = Array.isArray(source.formats) ? source.formats.map((value) => String(value).toLowerCase()) : [];
+  const hasGguf = formats.includes("gguf");
+  const hasSafetensors = formats.some((value) => value !== "gguf");
+  const hubQuants = Array.isArray(source.quants) ? source.quants.map(String) : [];
+  const inferred = remoteUtils.inferRemoteQuantFormats({ id, tags, keywords: context.quantKeywords });
+  const quantFormats = unique([
+    ...inferred,
+    ...formats.filter((value) => !["gguf", "safetensors"].includes(value)).map((value) => value.toUpperCase()),
+    ...(hasGguf ? ["GGUF"] : []),
+    ...hubQuants.map((value) => value.toUpperCase()),
+  ]);
+  const paramsB = Number(source.paramsB) > 0 ? Number(source.paramsB) : null;
+  const lower = `${id} ${tags.join(" ")}`.toLowerCase();
+  const task = String(source.task || "");
+  const badges = [];
+  if (lower.includes("distill")) badges.push("distilled");
+  if (remoteUtils.isUncensoredText(lower)) badges.push("uncensored");
+  if (["image-text-to-text", "visual-question-answering", "image-to-text", "any-to-any"].includes(task.toLowerCase()) || /\b(vl|vision|multimodal|omni|image|video)\b/i.test(lower)) badges.push("multimodal");
+  badges.push(...quantFormats.slice(0, 5));
+  if (source.gated) badges.push("gated");
+  const engines = (Array.isArray(source.engines) ? source.engines : []).map((engine) => (typeof engine === "string" ? engine : engine?.engineId));
+  const wanted = MANAGER_ENGINES[context.managerId] || [];
+  const selection = remoteUtils.inferModelSelection({
+    id,
+    author,
+    tags,
+    source: provider,
+    quantFormats,
+    ...(context.precisionOrder ? { precisionOrder: context.precisionOrder } : {}),
+  });
+  return {
+    source: provider,
+    model: id,
+    id,
+    label: id,
+    author,
+    url: repoUrl(provider, id),
+    tags,
+    badges,
+    downloads: finiteOr(source.downloads, 0),
+    likes: finiteOr(source.likes, 0),
+    gated: Boolean(source.gated),
+    pipelineTag: task,
+    libraryName: "",
+    lastModified: source.lastModified || "",
+    createdAt: "",
+    hasConfig: hasSafetensors,
+    hasSafetensors,
+    hasGguf,
+    hasQuantizedFiles: remoteUtils.hasQuantizedRemoteFiles(quantFormats),
+    quantFormats,
+    paramsB,
+    sizeClass: remoteUtils.remoteSizeClass(paramsB),
+    fileSizeBytes: null,
+    largestFileBytes: null,
+    fileCount: 0,
+    summary: "",
+    selection,
+    outputName: safeOutputName(id.replace(/[\\/]/g, "-")),
+    runnable: engines.length ? engines.some((engine) => wanted.includes(engine)) : hasGguf === (MANAGER_FORMATS[context.managerId] === "gguf"),
+  };
+}
+
+/** The GET /search query (a URLSearchParams) of a normalized legacy catalogue request (03 §15). */
+function toHubSearchQuery(request = {}, { managerId = "" } = {}) {
+  const params = new URLSearchParams();
+  const terms = [String(request.search || "").trim(), FEATURE_TERMS[request.feature] || ""].filter(Boolean);
+  if (terms.length) params.set("q", terms.join(" "));
+  params.set("provider", request.source === "modelscope" ? "modelscope" : "huggingface");
+  params.set("sort", request.sort === "lastModified" ? "updated" : (request.sort || "trending"));
+  // The llama shim's former " GGUF" query suffix.
+  const managerFormat = MANAGER_FORMATS[managerId] || null;
+  if (managerFormat) params.append("facet", `format:${managerFormat}`);
+  if (request.task === "text") params.append("facet", "task:text-generation");
+  if (request.task === "vision") params.append("facet", "modality:vision");
+  if (request.feature === "moe") params.append("facet", "moe:true");
+  const native = NATIVE_QUANT_FACETS[String(request.quant || "")];
+  if (native && native !== managerFormat) params.append("facet", `format:${native}`);
+  if (["2026", "2025"].includes(String(request.freshness || ""))) params.append("facet", "updated:365d");
+  return params;
+}
+
+/** `{ models, limit, source, sort, ... }` of GET /api/remote-models. */
+function toLegacyRemoteSearch(request, items, context = {}) {
+  const wanted = Math.max(1, finiteOr(request.limit, 48));
+  const models = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const model = toLegacyRemoteModel(item, context);
+    if (!model.id) continue;
+    if (request.size && !remoteUtils.matchesRemoteSizeFilter(model, request.size)) continue;
+    if (request.quant && !remoteUtils.matchesRemoteQuantFilter(model, request.quant)) continue;
+    models.push(model);
+    if (models.length >= wanted) break;
+  }
+  return {
+    source: request.source,
+    sort: request.sort,
+    task: request.task,
+    feature: request.feature,
+    search: request.search,
+    limit: request.limit,
+    size: request.size,
+    freshness: request.freshness,
+    quant: request.quant,
+    models,
+  };
+}
+
+const LEGACY_FIT_STATUS = Object.freeze({ fits: "fits", tight: "tight", spills: "tight", "wont-fit": "exceeds", unknown: "unknown" });
+
+/** The legacy gguf-variants `fit` ({ status, ratio, note }) from a hub fit object. */
+function toLegacyFit(fit) {
+  const source = isPlainObject(fit) ? fit : {};
+  const status = LEGACY_FIT_STATUS[source.label] || "unknown";
+  const needed = Number(source.neededMb);
+  if (status === "unknown" || !(needed > 0)) return { status: "unknown", ratio: null, note: "未读取到显存信息。" };
+  const headroom = Number(source.headroomMb);
+  const overflow = Number(source.overflowMb);
+  const total = status === "exceeds" && overflow > 0 ? needed - overflow : Number.isFinite(headroom) ? needed + headroom : 0;
+  const ratio = total > 0 ? needed / total : null;
+  const percent = ratio === null ? "" : `约占显存 ${(ratio * 100).toFixed(0)}%，`;
+  const note = status === "fits"
+    ? `${percent}可以整模型放进 GPU。`
+    : status === "tight"
+      ? `${percent}上下文需要保守，或放部分层到 CPU。`
+      : `需要约 ${(needed / 1024).toFixed(1)} GB，超过显存，只能把部分层放到 CPU。`;
+  return { status, ratio, note, spill: source.spill === true, source: "hub" };
+}
+
+/**
+ * GET /api/remote-models/gguf-variants. `files` are the repo's { name, size }
+ * rows (the hub file listing), `detail` the hub repo detail (artifact fits and
+ * access). The variant groups come from the same listGgufVariants the hub's
+ * artifacts are built with, so `artifactKey = gguf:<directory>|<quant>` joins
+ * the two.
+ */
+function toLegacyGgufVariants({ model, source = "huggingface", selected = "", files = [], detail = null }) {
+  const listing = listGgufVariants(files);
+  const artifacts = new Map((Array.isArray(detail?.artifacts) ? detail.artifacts : []).map((artifact) => [artifact.artifactKey, artifact]));
+  return {
+    model,
+    source,
+    supported: true,
+    gated: Boolean(detail?.access?.gated),
+    selected: selected || "",
+    ...listing,
+    variants: listing.variants.map((variant) => {
+      const artifact = artifacts.get(`gguf:${variant.directory}|${variant.quant}`);
+      return {
+        ...variant,
+        files: variant.files.slice(0, 12),
+        fit: artifact ? toLegacyFit(artifact.fit) : variant.fit,
+      };
+    }),
+  };
+}
+
+/** GET /api/remote-models/precision-variants over the hub's sibling repos. */
+function toLegacyPrecisionVariants(model, siblingRepos, options = {}) {
+  const siblings = (Array.isArray(siblingRepos) ? siblingRepos : []).map((item) => ({ id: item?.repo })).filter((item) => item.id);
+  return groupPrecisionVariants(model, [{ id: model }, ...siblings].map((item) => ({ ...item, hasGguf: /gguf/i.test(item.id) })), options);
+}
+
+/** POST /api/resolve-model-link: the legacy reference, with the catalogue summary when the shim found one. */
+function toLegacyResolvedLink(link, item = null, context = {}) {
+  const provider = link?.provider === "modelscope" ? "modelscope" : "huggingface";
+  const model = String(link?.repo || "");
+  const reference = { source: provider, model, url: repoUrl(provider, model) };
+  const outputName = safeOutputName(model.replace(/[\\/]/g, "-"));
+  if (item) return { ...reference, ...toLegacyRemoteModel(item, context), url: reference.url, outputName };
+  return {
+    ...reference,
+    label: model,
+    tags: [],
+    downloads: null,
+    likes: null,
+    lastModified: null,
+    summary: provider === "modelscope" ? "已从 ModelScope 链接解析出模型 ID。下载时会使用 ModelScope 来源。" : "",
+    selection: remoteUtils.inferModelSelection({ id: model, author: model.split("/")[0], source: provider, ...(context.precisionOrder ? { precisionOrder: context.precisionOrder } : {}) }),
+    outputName,
+  };
+}
+
+// --- settings, source probe, auth ---------------------------------------------
+
+/** POST /api/download/mirror-probe: the hub's probe in the legacy shape. */
+function toLegacyProbe(result) {
+  const source = isPlainObject(result) ? result : {};
+  const rows = (Array.isArray(source.sources) ? source.sources : []).map((row) => {
+    const id = LEGACY_PROBE_IDS[row.source] || row.source;
+    return { ...row, source: id, label: row.label || PROBE_LABELS[id] || null, repo: row.repo || source.repo || "" };
+  });
+  const byId = (id) => rows.find((row) => row.source === id) || { source: id, label: PROBE_LABELS[id], ok: false, error: "not probed" };
+  const recommended = LEGACY_PROBE_IDS[source.recommended] || source.recommended || "official";
+  const modelscope = byId("modelscope");
+  return {
+    ok: source.ok !== false,
+    repo: source.repo || "",
+    file: source.file || "",
+    official: byId("official"),
+    mirror: byId("mirror"),
+    modelscope,
+    modelScopeRepo: modelscope.ok ? modelscope.repo || "" : "",
+    sources: rows,
+    recommended,
+    recommendedLabel: PROBE_LABELS[recommended] || recommended,
+    at: source.at || new Date().toISOString(),
+  };
+}
+
+/** GET /api/huggingface/auth/status (the vLLM shape). */
+function toLegacyAuthStatus(result) {
+  const source = isPlainObject(result) ? result : {};
+  return {
+    connected: Boolean(source.connected),
+    username: source.username || null,
+    orgs: Array.isArray(source.orgs) ? source.orgs : [],
+    source: source.source || null,
+    ...(source.reason ? { reason: source.reason } : {}),
+  };
+}
+
+/** GET /api/huggingface/access: the legacy gated check over the hub's access result. */
+function toLegacyAccess({ model, access, detail = null }) {
+  const result = isPlainObject(access) ? access : {};
+  const known = isPlainObject(detail?.access);
+  const gated = known ? Boolean(detail.access.gated) : result.granted !== true;
+  const authorizationUrl = result.authorizationUrl || detail?.access?.authorizationUrl || repoUrl("huggingface", model);
+  if (!gated) return { model, gated: false, granted: true, status: "public", authorizationUrl };
+  return { model, gated: true, granted: Boolean(result.granted), status: String(result.status || "check_failed"), username: result.username || null, authorizationUrl };
+}
+
+// --- storage ------------------------------------------------------------------
+
+/**
+ * GET /api/models/disk-usage: 08 P0-DL-3's shape. The top-level fields are the
+ * default root's (as the legacy store computed them), `roots[]` keeps its
+ * legacy keys and `models[].rootId`; every hub-only field (volume, pending and
+ * reserve bytes, hidden, entryId, residues, orphan partials, duplicates) is
+ * stripped.
+ */
+function toLegacyDiskUsage(usage) {
+  const source = isPlainObject(usage) ? usage : {};
+  const roots = (Array.isArray(source.roots) ? source.roots : []).map((root) => ({
+    id: root.id,
+    path: root.path,
+    label: root.label,
+    default: Boolean(root.default),
+    legacy: Boolean(root.legacy),
+    mode: root.mode === "model" ? "model" : "library",
+    available: root.available !== false,
+    freeBytes: root.freeBytes ?? null,
+    totalBytes: root.totalBytes ?? null,
+    usedByModelsBytes: finiteOr(root.usedByModelsBytes, 0),
+    modelCount: finiteOr(root.modelCount, 0),
+    incompleteBytes: finiteOr(root.incompleteBytes, 0),
+    incompleteFiles: finiteOr(root.incompleteFiles, 0),
+  }));
+  const primary = roots.find((root) => root.default) || roots[0] || null;
+  const models = (Array.isArray(source.models) ? source.models : []).map((model) => ({
+    name: model.name,
+    path: model.path,
+    rootId: model.rootId,
+    bytes: finiteOr(model.bytes, finiteOr(model.sizeBytes, 0)),
+    sizeBytes: finiteOr(model.sizeBytes, finiteOr(model.bytes, 0)),
+    incompleteFiles: finiteOr(model.incompleteFiles, 0),
+    incompleteBytes: finiteOr(model.incompleteBytes, 0),
+    incomplete: Boolean(model.incomplete),
+    modified: model.modified || null,
+  }));
+  const cache = isPlainObject(source.hfCache) ? source.hfCache : {};
+  return {
+    ok: true,
+    root: primary ? primary.path : "",
+    disk: primary ? { freeBytes: primary.freeBytes, totalBytes: primary.totalBytes } : null,
+    modelsBytes: primary ? primary.usedByModelsBytes : 0,
+    models,
+    roots,
+    hfCache: {
+      path: cache.path || "",
+      hubBytes: finiteOr(cache.hubBytes, 0),
+      xetBytes: finiteOr(cache.xetBytes, 0),
+      modelscopeBytes: finiteOr(cache.modelscopeBytes, 0),
+    },
+    incompleteBytes: primary ? primary.incompleteBytes : 0,
+    incompleteFiles: primary ? primary.incompleteFiles : 0,
+    updatedAt: source.updatedAt || new Date().toISOString(),
+  };
+}
+
+/** POST /api/models/cleanup-incomplete: `{ ok, path, removed, removedBytes }`. */
+function toLegacyCleanup(entryPath, result) {
+  const source = isPlainObject(result) ? result : {};
+  return {
+    ok: true,
+    path: entryPath,
+    removed: Array.isArray(source.removed) ? source.removed.map(String) : [],
+    removedBytes: finiteOr(source.removedBytes, 0),
+  };
+}
+
+/** GET /api/models/upstream-status over a library entry and its update check. */
+function toLegacyUpstreamStatus({ name, entry, update }) {
+  const provenance = isPlainObject(entry?.provenance) ? entry.provenance : {};
+  const repo = String(provenance.repo || "");
+  const status = isPlainObject(update) ? update : {};
+  const entryPath = entry?.path || "";
+  if (!repo || status.status === "unsupported") {
+    return { ok: false, name, path: entryPath, reason: "unknown_source", message: "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。" };
+  }
+  const updateAvailable = status.status === "available" ? true : status.status === "current" ? false : null;
+  const provider = provenance.provider === "modelscope" ? "modelscope" : "huggingface";
+  return {
+    ok: status.status !== "error",
+    name,
+    path: entryPath,
+    repo,
+    url: repoUrl(provider, repo),
+    lastModified: null,
+    downloadedAt: provenance.downloadedAt || null,
+    recordSource: provenance.source || "request",
+    updateAvailable,
+    remoteSha: status.remoteSha || null,
+    localSha: provenance.revisionSha || null,
+    message: status.status === "error"
+      ? "暂时无法读取上游仓库，请稍后重试。"
+      : updateAvailable === null
+        ? "缺少可比对的时间信息，仅显示上游最近更新时间。"
+        : updateAvailable
+          ? "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
+          : "本地已是最新：上游在下载之后没有更新。",
+  };
+}
+
 module.exports = {
   DETAIL_LOG_LINES,
   LEGACY_STATUS,
   STAGE_COPY,
   SUMMARY_LOG_LINES,
+  emptyLegacyEstimate,
   legacyStatusOf,
+  planBlockingToLegacy,
+  toHubSearchQuery,
+  toLegacyAccess,
+  toLegacyAuthStatus,
+  toLegacyCleanup,
+  toLegacyDiskUsage,
+  toLegacyDownloadError,
   toLegacyError,
+  toLegacyEstimate,
+  toLegacyFit,
+  toLegacyGgufVariants,
   toLegacyJob,
   toLegacyJobAction,
   toLegacyJobLogs,
+  toLegacyPrecisionVariants,
+  toLegacyProbe,
+  toLegacyRemoteModel,
+  toLegacyRemoteSearch,
+  toLegacyResolvedLink,
   toLegacyResumeCheck,
+  toLegacyUpstreamStatus,
 };
