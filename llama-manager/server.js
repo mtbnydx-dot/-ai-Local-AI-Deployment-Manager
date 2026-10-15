@@ -198,6 +198,22 @@ const billingClient = core.createBillingClient({
   managerId: CONFIG.managerId,
   root: DEFAULT_AI_ROOT,
 });
+// 05 §6.8, §7.2 (PUB-10): the legacy key routes forward to the entry's key
+// store, direct gateway calls follow public.managersGatewayOnly (read through
+// OPS-3 at most every 10 s), and /api/manager/health advertises hop v2 so the
+// entry stops forwarding API keys to this manager. The frontend smoke tests
+// start real managers; they must not call the entry this computer runs, so
+// there the key routes stay on this manager's legacy files.
+const legacyKeyForwarder = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.createLegacyKeyForwarder({
+  managerId: CONFIG.managerId,
+  root: DEFAULT_AI_ROOT,
+});
+const readGatewayOnlyMode = core.createGatewayOnlyModeReader({ aiRoot: DEFAULT_AI_ROOT });
+const gatewayTrustHealth = () => ({ gatewayTrust: { version: core.GATEWAY_TRUST_VERSION, mode: readGatewayOnlyMode() } });
+const logDirectGatewayCall = (event) => {
+  const more = event.suppressed ? ` (+${event.suppressed} more in the last minute)` : "";
+  console.warn(`[gateway] direct_manager_gateway: ${event.kind} ${event.path} from ${event.remoteAddress}${more}; use the platform endpoint instead.`);
+};
 const logBillingIntegrationIssue = ({ phase, requestId, code } = {}) => {
   if (["insufficient_quota", "request_limit_exceeded", "token_limit_exceeded", "spend_limit_exceeded", "customer_suspended"].includes(String(code || ""))) return;
   console.warn(`Billing ${String(phase || "request")} issue (${String(code || "unknown")}) for request ${String(requestId || "unknown")}.`);
@@ -500,10 +516,6 @@ const {
   getServiceClientsLedger,
   saveServiceClientsLedger,
   redactServiceClientsLedger,
-  createServiceClient,
-  updateServiceClient,
-  rotateServiceClientKey,
-  deleteServiceClient,
   resolveServiceClientForApiKey,
   recordServiceClientGatewayUsage,
 } = serviceClientsStore;
@@ -794,6 +806,9 @@ const serviceGatewayMiddleware = core.createServiceGatewayMiddleware({
   concurrencyBuckets: serviceConcurrencyBuckets,
   appendAccessLog: appendServiceGatewayAccessLog,
   corsAllowHeaders: "authorization,content-type,x-api-key,x-requested-with",
+  getGatewayOnlyMode: readGatewayOnlyMode,
+  verifyAccessKey: legacyKeyForwarder ? legacyKeyForwarder.verifyAccessKey : null,
+  onDirectGatewayCall: logDirectGatewayCall,
 });
 
 const { managerSecurityGuard } = core.createManagerSecurityGuard({
@@ -808,6 +823,7 @@ const { managerSecurityGuard } = core.createManagerSecurityGuard({
 
 const managerLifecycle = core.createManagerLifecycle({
   app,
+  getHealthExtras: gatewayTrustHealth,
   host: HOST,
   port: PORT,
   label: "llama.cpp Manager",
@@ -954,12 +970,24 @@ core.registerServicePolicyRoutes(app, {
   getServiceExposureSettings,
   saveServiceExposureSettings,
   buildServiceExposurePayload,
-  getServiceClientsLedger,
   redactServiceClientsLedger,
-  createServiceClient,
-  updateServiceClient,
-  rotateServiceClientKey,
-  deleteServiceClient,
+  // The keys live in the entry's store; the legacy shapes come back (§6.8).
+  ...(legacyKeyForwarder
+    ? {
+      getServiceClientsLedger: legacyKeyForwarder.getServiceClientsLedger,
+      createServiceClient: legacyKeyForwarder.createServiceClient,
+      updateServiceClient: legacyKeyForwarder.updateServiceClient,
+      rotateServiceClientKey: legacyKeyForwarder.rotateServiceClientKey,
+      deleteServiceClient: legacyKeyForwarder.deleteServiceClient,
+      forwardGlobalKey: legacyKeyForwarder.forwardGlobalKey,
+    }
+    : {
+      getServiceClientsLedger,
+      createServiceClient: serviceClientsStore.createServiceClient,
+      updateServiceClient: serviceClientsStore.updateServiceClient,
+      rotateServiceClientKey: serviceClientsStore.rotateServiceClientKey,
+      deleteServiceClient: serviceClientsStore.deleteServiceClient,
+    }),
 });
 
 core.registerIntegrationRoutes(app, {
@@ -2280,10 +2308,18 @@ const SERVICE_EXPOSURE_CHECK_OPTIONS = {
   },
 };
 
+// gatewayOnly (05 §7.2) rides along; the client list is the entry's, or
+// this manager's legacy file while the entry is down.
 async function buildServiceExposurePayload(settings) {
+  return { ...(await buildServiceExposurePayloadSnapshot(settings)), gatewayOnly: readGatewayOnlyMode() };
+}
+
+async function buildServiceExposurePayloadSnapshot(settings) {
   const [snapshot, clientsLedger] = await Promise.all([
     getOperationalSnapshot(),
-    getServiceClientsLedger().catch(() => ({ clients: [] })),
+    (legacyKeyForwarder ? legacyKeyForwarder.getServiceClientsLedger() : getServiceClientsLedger())
+      .catch(() => getServiceClientsLedger())
+      .catch(() => ({ clients: [] })),
   ]);
   const { docker, container, runtime } = snapshot;
   const endpoint = runtime.endpoint || getContainerEndpoint(container);

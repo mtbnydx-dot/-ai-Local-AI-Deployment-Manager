@@ -560,6 +560,19 @@ function createEntrySecurity(options = {}) {
     return core.buildGatewayTrustHeaders(trustToken, resolveClientAddress(req), Date.now());
   }
 
+  // Hop v2 (05 §7.1): v1 plus the request id, the caller's principal and 04's
+  // context, signed for the manager-side method and path.
+  function entryHeaders(req, { method, pathname, requestId, principal = null, context = null } = {}) {
+    return core.buildEntryHeaders(trustToken, {
+      method: method || req?.method || "GET",
+      pathname,
+      clientIp: resolveClientAddress(req),
+      requestId,
+      principal,
+      context,
+    }, Date.now());
+  }
+
   // --- Reporting ------------------------------------------------------------
 
   // Surfaces what is actually enforced right now, so the UI can stop inferring
@@ -758,6 +771,7 @@ function createEntrySecurity(options = {}) {
     revokeTrustToken,
     getTrustToken,
     trustHeaders,
+    entryHeaders,
     describe,
     describePublic,
   };

@@ -118,7 +118,8 @@ function keyMayUseManager(key, managerId) {
 }
 
 // The hop v2 principal (05 §7.1) for a caller, or null for a keyless one.
-// PUB-10 signs and sends it; until then it rides on req.serviceEntryPrincipal.
+// It rides on req.serviceEntryPrincipal; buildProxyHeaders signs it into the
+// hop for a manager that advertises gatewayTrust.version >= 2 (PUB-10).
 function hopPrincipal(caller, listener = "admin") {
   if (!caller || caller.ok !== true) return null;
   if (caller.kind === "console-session") return { ...CONSOLE_SESSION_PRINCIPAL };
@@ -451,6 +452,14 @@ function createGatewayPipeline(deps = {}) {
     if (!targetPath) return sendRefusal(req, res, { status: 404, code: "protocol_not_supported", message: `${manager.name} does not support ${route.protocol}.` });
     const target = new URL(`http://127.0.0.1:${manager.port}${targetPath}`);
     target.search = url.search;
+    // Hop v2 (05 §7.1) when the manager advertises it: the key is stripped
+    // and the signed principal stands in for it. A legacy manager still gets
+    // the key, so a platform-only key (one it never knew) cannot be served.
+    const hopVersion = typeof io.managerTrustVersion === "function" ? Number(await io.managerTrustVersion(manager)) || 0 : 0;
+    if (hopVersion < 2 && caller.kind === "key" && caller.key && !caller.key.legacy) {
+      io.deny?.(req, access, { status: 503, message: `${manager.name} does not accept platform keys yet.`, code: "manager_upgrade_required", manager, metadata: requestMetadata, resolvedModel });
+      return sendRefusal(req, res, { status: 503, code: "service_unavailable", message: io.upstreamDownMessage });
+    }
     const upstreamControl = io.createUpstreamControl(req, res);
     Object.assign(access, { manager, metadata: requestMetadata, resolvedModel, error: "" });
     io.watch(req, res, access);
@@ -462,6 +471,9 @@ function createGatewayPipeline(deps = {}) {
         headers: io.buildProxyHeaders(req.headers, req, {
           instanceId,
           stripContentEncoding: Boolean(contentEncoding && rewriteModel),
+          hopVersion,
+          method: req.method,
+          pathname: target.pathname,
         }),
         body: bodyForUpstream,
         signal: upstreamControl.signal,

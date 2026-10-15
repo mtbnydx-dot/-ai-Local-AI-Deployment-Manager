@@ -187,7 +187,10 @@ test("TTS lifecycle mutations are recognised and remain localhost-only", () => {
   }), false);
 });
 
-test("proxy headers keep auth fields and remove hop-by-hop fields", () => {
+// 05 §17.3 (PUB-10): split by what the manager advertises. A legacy manager
+// (no gatewayTrust in /api/manager/health) still checks the key, so it is
+// forwarded; a v2-capable one trusts the signed principal instead.
+test("proxy headers to a legacy manager keep auth fields and remove hop-by-hop fields", () => {
   const headers = entry.buildProxyHeaders(
     {
       host: "192.168.1.27:5176",
@@ -219,6 +222,59 @@ test("proxy headers keep auth fields and remove hop-by-hop fields", () => {
     headers,
     socket: { remoteAddress: "127.0.0.1" },
   }, { token: entry.security.getTrustToken() }), "vision");
+});
+
+test("proxy headers to a v2-capable manager strip the key and carry the signed principal", () => {
+  const minted = "req_abcdefghij234567abcd";
+  const principal = { k: "vllm.egg", b: "vllm-manager", c: "egg", t: "vllm:egg", l: "admin", p: "key", mo: 8192, mc: 2 };
+  const req = {
+    method: "POST",
+    socket: { remoteAddress: "192.168.1.100" },
+    telemetryRecord: { requestId: minted },
+    serviceEntryPrincipal: principal,
+  };
+  const headers = entry.buildProxyHeaders(
+    {
+      authorization: "Bearer service-key",
+      "x-api-key": "service-key",
+      "api-key": "service-key",
+      "anthropic-api-key": "service-key",
+      "content-type": "application/json",
+      "x-request-id": "client-supplied-id",
+      "x-service-entry-principal": "forged",
+      "x-service-entry-context": "v1.forged",
+      "x-ai-billing-manager": "vllm-manager",
+      "x-ai-internal-principal": "system:cli",
+    },
+    req,
+    { instanceId: "vision", hopVersion: 2, method: "POST", pathname: "/serve/v1/chat/completions" },
+  );
+  for (const name of ["authorization", "x-api-key", "api-key", "anthropic-api-key", "x-ai-billing-manager", "x-ai-internal-principal"]) {
+    assert.equal(headers[name], undefined, `${name} never reaches a v2 manager`);
+  }
+  assert.equal(headers["content-type"], "application/json");
+  assert.equal(headers["x-request-id"], minted);
+  assert.notEqual(headers["x-service-entry-principal"], "forged");
+  assert.equal(headers["x-service-entry-context"], undefined, "no context was attached, and the client's is gone");
+  assert.ok(headers["x-service-entry-signature-v2"]);
+  assert.ok(headers["x-service-entry-signature"], "v1 still travels for older managers");
+
+  const token = entry.security.getTrustToken();
+  const hop = { method: "POST", originalUrl: "/serve/v1/chat/completions?x=1", headers, socket: { remoteAddress: "127.0.0.1" } };
+  const verified = core.verifyEntryRequest(hop, { token });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.version, 2);
+  assert.equal(verified.clientAddress, "192.168.1.100");
+  assert.equal(verified.requestId, minted);
+  assert.deepEqual(verified.principal, principal);
+  assert.equal(core.resolveServiceEntrySelectedInstance(hop, { token }), "vision");
+  // Signed for this route only.
+  assert.equal(core.verifyEntryRequest({ ...hop, originalUrl: "/claude/v1/messages" }, { token }).ok, false);
+
+  // Without a principal (a keyless ADMIN caller) there is no principal header.
+  const keyless = entry.buildProxyHeaders({ "content-type": "application/json" }, { ...req, serviceEntryPrincipal: null }, { hopVersion: 2, pathname: "/serve/v1/models" });
+  assert.equal(keyless["x-service-entry-principal"], undefined);
+  assert.ok(keyless["x-service-entry-signature-v2"]);
 });
 
 test("x-request-id: the minted req_ id replaces the client's, and is the only one forwarded", () => {

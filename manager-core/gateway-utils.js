@@ -16,6 +16,7 @@ const {
   hasActiveServiceClients,
   hasGlobalServiceApiKey,
   globalServiceBillingClientId,
+  hashServiceApiKey,
   isGlobalServiceApiKeyAccepted,
   resolveEffectiveCorsMode,
   DEFAULT_GATEWAY_MAX_CONCURRENT,
@@ -1204,6 +1205,10 @@ function createOpenAiGatewayHandlers(options = {}) {
     let resolvedModel = String(body.model || "");
     let upstreamAbortReason = "";
     let billingAuthorization = null;
+    // On a hop v2 the billing principal is the entry's: clientId = principal.c
+    // charged against the binding of credentialManagerId = principal.b (05 §6.4).
+    const credentialManagerId = String(req.serviceGateway?.credentialManagerId || "");
+    const billingPrincipal = credentialManagerId ? { credentialManagerId } : {};
     const finalizeUsage = createOpenAiUsageFinalizer({
       recordUsage,
       clientId: req.serviceGateway?.clientId,
@@ -1219,6 +1224,7 @@ function createOpenAiGatewayHandlers(options = {}) {
             requestId: billingRequestId,
             externalRequestId: requestId,
             clientId: req.serviceGateway?.clientId || "",
+            ...billingPrincipal,
           };
         }
         if (billingAuthorization.bound === true) {
@@ -1226,6 +1232,7 @@ function createOpenAiGatewayHandlers(options = {}) {
             requestId: billingRequestId,
             externalRequestId: requestId,
             clientId: req.serviceGateway?.clientId || "",
+            ...billingPrincipal,
           };
         }
         return null;
@@ -1284,7 +1291,9 @@ function createOpenAiGatewayHandlers(options = {}) {
         : 0;
       if (req.serviceGateway?.clientId && typeof authorizeBilling === "function") {
         const clientId = req.serviceGateway.clientId;
-        const memo = authorizeTtlMs > 0 ? authorizeMemo.get(clientId) : null;
+        const memoKey = credentialManagerId ? `${credentialManagerId}
+${clientId}` : clientId;
+        const memo = authorizeTtlMs > 0 ? authorizeMemo.get(memoKey) : null;
         if (memo && memo.ok === true && memo.allowed !== false && (Date.now() - memo.at) <= authorizeTtlMs) {
           billingAuthorization = { ...memo.result, cached: true };
         } else {
@@ -1293,6 +1302,7 @@ function createOpenAiGatewayHandlers(options = {}) {
               requestId: billingRequestId,
               externalRequestId: requestId,
               clientId,
+              ...billingPrincipal,
               model,
               endpoint: `/v1/${upstreamPath}`,
               stream,
@@ -1319,6 +1329,7 @@ function createOpenAiGatewayHandlers(options = {}) {
                 requestId: billingRequestId,
                 externalRequestId: requestId,
                 clientId,
+                ...billingPrincipal,
                 model,
                 endpoint: `/v1/${upstreamPath}`,
                 stream,
@@ -1329,7 +1340,7 @@ function createOpenAiGatewayHandlers(options = {}) {
           }
         }
         if (billingAuthorization?.ok === true && billingAuthorization?.allowed !== false && authorizeTtlMs > 0) {
-          authorizeMemo.set(clientId, {
+          authorizeMemo.set(memoKey, {
             at: Date.now(),
             enforcementMode: String(billingAuthorization.enforcementMode || "").toLowerCase(),
             ok: true,
@@ -1795,6 +1806,70 @@ async function waitForServiceGatewayConcurrency(settings, clientKey, concurrency
   });
 }
 
+// --- Gateway-only modes (05 §7.2) --------------------------------------------
+
+const GATEWAY_ONLY_MODES = Object.freeze(["off", "warn", "enforce"]);
+const DEFAULT_GATEWAY_ONLY_MODE = "warn";
+const GATEWAY_ONLY_MODE_TTL_MS = 10 * 1000;
+const DEFAULT_GATEWAY_BACKSTOP_CONCURRENCY = 64;
+const ENTRY_BACKSTOP_CLIENT_KEY = "entry:backstop";
+const DIRECT_CALL_LOG_INTERVAL_MS = 60 * 1000;
+const GATEWAY_ONLY_MESSAGE = "Use the platform endpoint (port 5176 locally, 5186 public).";
+const DIRECT_DEPRECATION_LINK = '</docs/migrate-public>; rel="deprecation"';
+
+function normalizeGatewayOnlyMode(value, fallback = DEFAULT_GATEWAY_ONLY_MODE) {
+  const text = String(value ?? "").trim().toLowerCase();
+  return GATEWAY_ONLY_MODES.includes(text) ? text : fallback;
+}
+
+// public.managersGatewayOnly through OPS-3's readSection (env
+// MANAGER_GATEWAY_ONLY > platform.json > "warn"), read at most every 10 s so
+// a change applies without a restart. A config that cannot be read keeps the
+// last good mode, or the default.
+function createGatewayOnlyModeReader(options = {}) {
+  const ttlMs = Math.max(0, Number(options.ttlMs ?? GATEWAY_ONLY_MODE_TTL_MS));
+  const now = typeof options.now === "function" ? options.now : Date.now;
+  const readSection = typeof options.readSection === "function"
+    ? options.readSection
+    : (name, readOptions) => require("./platform/config").readSection(name, readOptions);
+  let cached = { mode: "", at: 0 };
+  return function readGatewayOnlyMode() {
+    const at = now();
+    if (cached.mode && at - cached.at < ttlMs) return cached.mode;
+    let mode = cached.mode || DEFAULT_GATEWAY_ONLY_MODE;
+    try {
+      const section = readSection("public", { aiRoot: options.aiRoot, env: options.env });
+      mode = normalizeGatewayOnlyMode(section?.values?.managersGatewayOnly, mode);
+    } catch {
+      // Keep the previous mode; the next read after the window retries.
+    }
+    cached = { mode, at };
+    return mode;
+  };
+}
+
+// A platform key verified by the entry (POST /internal/access/verify) in the
+// shape the legacy checks below already understand.
+function verifiedAccessClient(verified = {}) {
+  const limits = verified.limits && typeof verified.limits === "object" ? verified.limits : {};
+  const models = Array.isArray(verified.models) ? verified.models.map((item) => String(item || "")).filter(Boolean) : [];
+  const principal = verified.principal && typeof verified.principal === "object" ? verified.principal : {};
+  const positive = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : undefined);
+  return {
+    id: String(principal.c || verified.keyId || ""),
+    keyId: String(verified.keyId || ""),
+    name: String(verified.keyId || ""),
+    enabled: true,
+    allowedModels: models.includes("*") ? [] : models,
+    rateLimitRpm: positive(limits.rpm),
+    maxConcurrentRequests: positive(limits.maxConcurrent),
+    maxQueuedRequests: Number.isFinite(Number(limits.maxQueued)) && limits.maxQueued !== null ? Number(limits.maxQueued) : undefined,
+    queueTimeoutSeconds: positive(limits.queueTimeoutSeconds),
+    requestTimeoutSeconds: positive(limits.requestTimeoutSeconds),
+    expiresAt: verified.expiresAt || "",
+  };
+}
+
 function createServiceGatewayMiddleware(options = {}) {
   const {
     gatewayName = "local-manager",
@@ -1808,7 +1883,149 @@ function createServiceGatewayMiddleware(options = {}) {
     appendAccessLog = async () => {},
     corsAllowHeaders,
     acceptRawAuthorization = false,
+    // 05 §7.2. Without a reader the middleware keeps the legacy behaviour
+    // ("off"); the managers pass createGatewayOnlyModeReader().
+    getGatewayOnlyMode = null,
+    // (keyHash, { kind }) -> Promise<verify answer>; see legacy-key-forwarder.
+    verifyAccessKey = null,
+    backstopConcurrency = process.env.MANAGER_GATEWAY_BACKSTOP_CONCURRENCY,
+    onDirectGatewayCall = null,
   } = options;
+  const backstopSettings = {
+    maxConcurrentRequests: clampServiceGatewayNumber(backstopConcurrency, 1, 256, DEFAULT_GATEWAY_BACKSTOP_CONCURRENCY),
+  };
+  let directLog = { at: 0, suppressed: 0 };
+
+  function currentGatewayOnlyMode() {
+    if (typeof getGatewayOnlyMode !== "function") return "off";
+    try {
+      return normalizeGatewayOnlyMode(getGatewayOnlyMode());
+    } catch {
+      return DEFAULT_GATEWAY_ONLY_MODE;
+    }
+  }
+
+  // At most one log line a minute; the line counts the calls it stands for.
+  function noteDirectCall(req, kind, origin) {
+    if (typeof onDirectGatewayCall !== "function") return;
+    const at = Date.now();
+    if (at - directLog.at < DIRECT_CALL_LOG_INTERVAL_MS) {
+      directLog.suppressed += 1;
+      return;
+    }
+    const suppressed = directLog.suppressed;
+    directLog = { at, suppressed: 0 };
+    try {
+      onDirectGatewayCall({
+        event: "direct_manager_gateway",
+        kind,
+        path: String(req.originalUrl || req.url || "").split("?")[0].slice(0, 200),
+        remoteAddress: origin.address,
+        suppressed,
+      });
+    } catch {
+      // Logging never breaks the request.
+    }
+  }
+
+  // The key of a direct call: the entry's key store first (the plaintext
+  // never leaves this process, only its hash), the legacy files when the
+  // store cannot be asked. `unavailable` is set when the store could not
+  // answer and the mode does not allow the file fallback.
+  async function resolveDirectCredential(presentedKey, kind, settings, mode) {
+    if (presentedKey && typeof verifyAccessKey === "function") {
+      let verified;
+      try {
+        verified = await verifyAccessKey(hashServiceApiKey(presentedKey), { kind });
+      } catch (error) {
+        verified = { ok: false, code: error?.code || "key_store_unavailable", unavailable: true };
+      }
+      if (!verified?.unavailable) {
+        if (verified?.ok !== true) return { decided: true, client: null, clientId: "", credentialManagerId: "", accepted: false };
+        const principal = verified.principal && typeof verified.principal === "object" ? verified.principal : {};
+        const billed = Boolean(principal.b);
+        return {
+          decided: true,
+          client: verifiedAccessClient(verified),
+          clientId: billed ? String(principal.c || "") : "",
+          credentialManagerId: billed ? String(principal.b) : "",
+          keyId: String(verified.keyId || ""),
+          accepted: true,
+        };
+      }
+      // §18: with the entry down, "off" falls back to the legacy files and
+      // "warn" denies.
+      if (mode !== "off") return { unavailable: true };
+    }
+    const serviceClient = await resolveServiceClientForApiKey(presentedKey);
+    const globalKeyAccepted = isGlobalServiceApiKeyAccepted(presentedKey, settings);
+    return {
+      decided: false,
+      client: serviceClient,
+      clientId: serviceClient?.id || (globalKeyAccepted ? globalServiceBillingClientId(settings) : ""),
+      credentialManagerId: "",
+      accepted: Boolean(serviceClient) || globalKeyAccepted,
+    };
+  }
+
+  function armRelease(res, slot, settings, clientKey) {
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      slot.concurrency.release();
+      resolveNextServiceGatewayWaiter(settings, clientKey, concurrencyBuckets, concurrencyQueues);
+    };
+    res.once("finish", release);
+    res.once("close", release);
+  }
+
+  function armTimeout(res, timeoutMs) {
+    res.setTimeout?.(timeoutMs, () => {
+      if (!res.headersSent) res.status(504).json(openAiGatewayError("request_timeout", "Service gateway request timed out."));
+      if (!res.writableEnded) res.end();
+    });
+  }
+
+  // A verified hop v2: the entry already authenticated, authorized and
+  // rate-limited the caller, so its principal is trusted. Only a backstop
+  // concurrency cap per manager applies here; the exposure settings govern
+  // direct calls only (05 §6.8).
+  async function admitEntryHop(req, res, next, kind, settings, origin) {
+    if (req.method === "OPTIONS") return res.status(204).end();
+    const principal = origin.principal && typeof origin.principal === "object" ? origin.principal : null;
+    const effectiveSettings = { ...settings, ...backstopSettings };
+    const timeoutMs = Math.min(7200, Math.max(10, Number(settings.requestTimeoutSeconds || 600))) * 1000;
+    const slot = await waitForServiceGatewayConcurrency(effectiveSettings, ENTRY_BACKSTOP_CLIENT_KEY, concurrencyBuckets, concurrencyQueues, res, timeoutMs);
+    if (!slot.ok) {
+      if (slot.aborted || res.writableEnded) return undefined;
+      return serviceGatewayReject(res, slot.statusCode || 429, slot.code, slot.message);
+    }
+    armRelease(res, slot, effectiveSettings, ENTRY_BACKSTOP_CLIENT_KEY);
+    // b:null (console-session) and keyless ADMIN callers are not billed.
+    const billed = Boolean(principal?.b);
+    req.serviceGateway = {
+      kind,
+      settings: effectiveSettings,
+      baseSettings: settings,
+      client: null,
+      clientId: billed ? String(principal.c || "") : "",
+      credentialManagerId: billed ? String(principal.b) : "",
+      keyId: String(principal?.k || ""),
+      principal,
+      context: origin.context || null,
+      entryHop: origin.version,
+      requestId: origin.requestId,
+      clientKey: ENTRY_BACKSTOP_CLIENT_KEY,
+      timeoutMs,
+      queuedMs: slot.queuedMs || 0,
+      selectedInstanceId: resolveServiceEntrySelectedInstance(req),
+    };
+    res.setHeader("x-local-llm-gateway", gatewayName);
+    res.setHeader("x-local-llm-queued-ms", String(slot.queuedMs || 0));
+    armTimeout(res, timeoutMs);
+    return next();
+  }
 
   return async function serviceGatewayMiddleware(req, res, next) {
     try {
@@ -1816,9 +2033,25 @@ function createServiceGatewayMiddleware(options = {}) {
       const kind = getServiceGatewayKind(req, supportedKinds);
       if (!kind) return next();
       attachServiceGatewayAccessLog(req, res, kind, appendAccessLog);
+      const origin = resolveGatewayRequestOrigin(req);
+      if (origin.viaGateway && origin.trusted && origin.version === 2) {
+        return await admitEntryHop(req, res, next, kind, settings, origin);
+      }
+      // A valid v1 hop (an older entry) keeps the legacy path in every mode.
+      // Everything else is a direct call: no marker, or a forged or expired one.
+      const direct = !(origin.viaGateway && origin.trusted);
+      const mode = direct ? currentGatewayOnlyMode() : "off";
       const cors = applyServiceCorsHeaders(req, res, settings, corsAllowHeaders);
       if (!cors.ok) return serviceGatewayReject(res, 403, "origin_not_allowed", cors.message);
       if (req.method === "OPTIONS") return res.status(204).end();
+      if (direct && mode === "enforce") {
+        return serviceGatewayReject(res, 403, "gateway_only", GATEWAY_ONLY_MESSAGE);
+      }
+      if (direct && mode === "warn") {
+        res.setHeader("deprecation", "true");
+        res.setHeader("link", DIRECT_DEPRECATION_LINK);
+        noteDirectCall(req, kind, origin);
+      }
       if (!isServiceKindEnabled(settings, kind)) {
         return serviceGatewayReject(res, 404, "endpoint_disabled", `${kind} gateway is disabled by service exposure settings.`);
       }
@@ -1826,19 +2059,26 @@ function createServiceGatewayMiddleware(options = {}) {
         return serviceGatewayReject(res, 403, "local_only", "Service exposure mode is local-only.");
       }
       const presentedKey = extractServiceApiKey(req.headers || {}, { acceptRawAuthorization });
-      const clientsLedger = await getServiceClientsLedger();
-      const serviceClient = await resolveServiceClientForApiKey(presentedKey);
-      const globalKeyAccepted = isGlobalServiceApiKeyAccepted(presentedKey, settings);
+      const credential = await resolveDirectCredential(presentedKey, kind, settings, mode);
+      if (credential.unavailable) {
+        return serviceGatewayReject(res, 503, "key_store_unavailable", "The platform key store is unavailable; try again shortly.");
+      }
+      const serviceClient = credential.client;
       if (settings.enabled && settings.requireApiKey) {
-        if (!hasGlobalServiceApiKey(settings) && !hasActiveServiceClients(clientsLedger)) {
-          return serviceGatewayReject(res, 503, "api_key_not_configured", "API key is required, but no service API key is configured.");
+        // With the entry's store in play the legacy files no longer say
+        // whether any key exists, so a missing key is simply a 401.
+        if (!credential.decided && typeof verifyAccessKey !== "function") {
+          const clientsLedger = await getServiceClientsLedger();
+          if (!hasGlobalServiceApiKey(settings) && !hasActiveServiceClients(clientsLedger)) {
+            return serviceGatewayReject(res, 503, "api_key_not_configured", "API key is required, but no service API key is configured.");
+          }
         }
-        if (!globalKeyAccepted && !serviceClient) {
+        if (!credential.accepted) {
           return serviceGatewayReject(res, 401, "unauthorized", "Missing or invalid service API key.", { "www-authenticate": "Bearer" });
         }
       }
       const effectiveSettings = buildEffectiveServiceSettings(settings, serviceClient);
-      const clientKey = serviceClient?.id || serviceClientFingerprint(req, presentedKey);
+      const clientKey = serviceClient?.keyId ? `key:${serviceClient.keyId}` : serviceClient?.id || serviceClientFingerprint(req, presentedKey);
       const rate = enterServiceRateLimit(effectiveSettings, clientKey, rateBuckets);
       if (!rate.ok) {
         return serviceGatewayReject(res, 429, "rate_limit_exceeded", `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`, { "retry-after": String(rate.retryAfterSeconds) });
@@ -1849,22 +2089,15 @@ function createServiceGatewayMiddleware(options = {}) {
         if (concurrencySlot.aborted || res.writableEnded) return undefined;
         return serviceGatewayReject(res, concurrencySlot.statusCode || 429, concurrencySlot.code, concurrencySlot.message);
       }
-      let released = false;
-      const release = () => {
-        if (released) return;
-        released = true;
-        concurrencySlot.concurrency.release();
-        resolveNextServiceGatewayWaiter(effectiveSettings, clientKey, concurrencyBuckets, concurrencyQueues);
-      };
-      res.once("finish", release);
-      res.once("close", release);
-      const billingClientId = serviceClient?.id || (globalKeyAccepted ? globalServiceBillingClientId(settings) : "");
+      armRelease(res, concurrencySlot, effectiveSettings, clientKey);
       req.serviceGateway = {
         kind,
         settings: effectiveSettings,
         baseSettings: settings,
         client: serviceClient,
-        clientId: billingClientId,
+        clientId: credential.clientId,
+        ...(credential.credentialManagerId ? { credentialManagerId: credential.credentialManagerId } : {}),
+        ...(credential.keyId ? { keyId: credential.keyId } : {}),
         clientKey,
         timeoutMs,
         queuedMs: concurrencySlot.queuedMs || 0,
@@ -1872,10 +2105,7 @@ function createServiceGatewayMiddleware(options = {}) {
       };
       res.setHeader("x-local-llm-gateway", gatewayName);
       res.setHeader("x-local-llm-queued-ms", String(concurrencySlot.queuedMs || 0));
-      res.setTimeout?.(timeoutMs, () => {
-        if (!res.headersSent) res.status(504).json(openAiGatewayError("request_timeout", "Service gateway request timed out."));
-        if (!res.writableEnded) res.end();
-      });
+      armTimeout(res, timeoutMs);
       return next();
     } catch (error) {
       return serviceGatewayReject(res, 500, "gateway_error", error.message);
@@ -1942,5 +2172,9 @@ module.exports = {
   onResponseDone,
   buildServiceGatewayAccessLogEntry,
   attachServiceGatewayAccessLog,
+  GATEWAY_ONLY_MODES,
+  DEFAULT_GATEWAY_BACKSTOP_CONCURRENCY,
+  normalizeGatewayOnlyMode,
+  createGatewayOnlyModeReader,
   createServiceGatewayMiddleware,
 };
