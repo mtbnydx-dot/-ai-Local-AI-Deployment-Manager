@@ -277,7 +277,8 @@ function mapLegacyJob(legacy, options = {}) {
   const startedAt = status === "queued" ? null : createdAt;
   const options_ = transferOptionsOf(meta, options.legacySettings, options.hubSettings);
   const retryMax = Number.isFinite(Number(options.legacySettings?.autoRetryCount)) ? Number(options.legacySettings.autoRetryCount) : 0;
-  const ownerManagerId = options.managerId === "llama" || options.managerId === "vllm"
+  // A manager id (not a model family): the caller's own id wins, else the format decides.
+  const ownerManagerId = MANAGERS.some((manager) => manager.id === options.managerId)
     ? options.managerId
     : artifact.format === "gguf" ? "llama" : "vllm";
   const lastLogAt = updatedAt;
