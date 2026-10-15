@@ -112,3 +112,135 @@ test("job actions, logs, resume checks and errors keep the legacy shapes", () =>
   );
   assert.deepEqual(compat.toLegacyError(null), { error: "Model hub request failed.", code: "hub_error" });
 });
+
+// --- HUB-13b: download, catalogue, settings, auth and storage mappers ---------
+
+const os = require("node:os");
+const { createModelFilesystemStore } = require("../model-filesystem-store");
+const hubSettings = require("../model-hub/settings");
+
+function hubStorageUsage(roots, models) {
+  return {
+    ok: true,
+    roots: roots.map((root) => ({
+      ...root,
+      volume: "X:", available: true, pendingBytes: 0, reserveBytes: 10, projectedFreeBytes: 1, hidden: false,
+    })),
+    models: models.map((model) => ({ ...model, entryId: "lib_1111111111111111" })),
+    hfCache: { path: "X:/hf", volume: "X:", freeBytes: 5, hubBytes: 1, xetBytes: 2, modelscopeBytes: 3 },
+    residues: [{ entryId: "lib_1111111111111111", rootId: "main", incompleteFiles: 1, incompleteBytes: 1024, busy: false }],
+    orphanPartials: [],
+    duplicates: [],
+    updatedAt: "2026-10-14T08:00:00.000Z",
+  };
+}
+
+test("the disk-usage shim has exactly 08's shape: same keys at every level, hub-only fields stripped", async (t) => {
+  // 08 P0-DL-3's own producer over a temp tree, then the same tree as the hub reports it.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "hub-compat-usage-"));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const legacy = path.join(base, "lib-legacy");
+  const main = path.join(base, "lib-main");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.mkdirSync(path.join(main, "org__alpha"), { recursive: true });
+  fs.writeFileSync(path.join(main, "org__alpha", "model.safetensors"), Buffer.alloc(4096));
+  fs.mkdirSync(path.join(main, "org__beta", ".cache", "huggingface", "download"), { recursive: true });
+  fs.writeFileSync(path.join(main, "org__beta", ".cache", "huggingface", "download", "m.safetensors.abc.incomplete"), Buffer.alloc(1024));
+  const store = createModelFilesystemStore({
+    modelsRoot: legacy,
+    hfCache: path.join(base, "hf-home"),
+    listRoots: () => [
+      { id: "legacy", path: legacy, label: "Legacy", default: false, legacy: true },
+      { id: "main", path: main, label: "Main", default: true, legacy: false },
+    ],
+  });
+  const expected = await store.getDiskUsage();
+
+  const pickRoot = ({ id, path: rootPath, label, default: isDefault, legacy: isLegacy, mode, available, freeBytes, totalBytes, usedByModelsBytes, modelCount, incompleteBytes, incompleteFiles }) => (
+    { id, path: rootPath, label, default: isDefault, legacy: isLegacy, mode, available, freeBytes, totalBytes, usedByModelsBytes, modelCount, incompleteBytes, incompleteFiles });
+  const hub = hubStorageUsage(expected.roots.map(pickRoot), expected.models.map((model) => ({ ...model })));
+  const actual = compat.toLegacyDiskUsage(hub);
+  const keys = (value) => Object.keys(value).sort();
+  assert.deepEqual(keys(actual), keys(expected));
+  assert.deepEqual(keys(actual.roots[0]), keys(expected.roots[0]));
+  assert.deepEqual(keys(actual.models[0]), keys(expected.models[0]));
+  assert.deepEqual(keys(actual.hfCache), keys(expected.hfCache));
+  assert.deepEqual(keys(actual.disk), keys(expected.disk));
+  // The default root fills the legacy top-level fields, as the legacy store did.
+  assert.equal(actual.root, expected.root);
+  assert.equal(actual.modelsBytes, expected.modelsBytes);
+  assert.equal(actual.incompleteFiles, expected.incompleteFiles);
+  assert.equal(actual.incompleteBytes, expected.incompleteBytes);
+  assert.deepEqual(actual.roots.map((root) => root.id), ["main", "legacy"]);
+  assert.deepEqual(actual.models.map((model) => model.rootId), expected.models.map((model) => model.rootId));
+  const text = JSON.stringify(actual);
+  for (const hubOnly of ["volume", "pendingBytes", "reserveBytes", "projectedFreeBytes", "hidden", "entryId", "residues", "orphanPartials", "duplicates"]) assert.equal(text.includes(`"${hubOnly}"`), false, hubOnly);
+});
+
+test("the legacy fit maps the hub labels (wont-fit becomes exceeds, spills stays tight)", () => {
+  const cases = [["fits", "fits"], ["tight", "tight"], ["spills", "tight"], ["wont-fit", "exceeds"], ["unknown", "unknown"], [undefined, "unknown"]];
+  for (const [label, status] of cases) {
+    assert.equal(compat.toLegacyFit({ label, neededMb: 8000, headroomMb: 8000, overflowMb: 4000 }).status, status, String(label));
+  }
+  assert.deepEqual(compat.toLegacyFit({ label: "fits", neededMb: 6000, headroomMb: 18000 }), { status: "fits", ratio: 0.25, note: "约占显存 25%，可以整模型放进 GPU。", spill: false, source: "hub" });
+  assert.deepEqual(compat.toLegacyFit(null), { status: "unknown", ratio: null, note: "未读取到显存信息。" });
+});
+
+test("download failures keep the legacy error fields", () => {
+  const envelope = (code, message, details) => ({ ok: false, error: { code, message, ...(details ? { details } : {}) } });
+  const noMatch = compat.toLegacyDownloadError(422, envelope("filter_no_match", "x", { suggestions: [{ label: "Q4_K_M", bytes: 4 * 1024 ** 3 }, { label: "BF16", bytes: 0 }] }), { precision: "Q9", totalFiles: 7 });
+  assert.equal(noMatch.status, 422);
+  assert.equal(noMatch.body.code, "filter_no_match");
+  assert.deepEqual(noMatch.body.details, { precision: "Q9", totalFiles: 7 });
+  assert.match(noMatch.body.error, /Q4_K_M 4\.0 GB, BF16\)$/);
+  assert.equal(/\p{Script=Han}/u.test(noMatch.body.error.split(" / ")[1]), false, "the English half has no Han text");
+  const duplicate = compat.toLegacyDownloadError(409, envelope("already_downloading", "busy", { existingJobId: "dl_a" }));
+  assert.deepEqual([duplicate.status, duplicate.body.existingJobId, duplicate.body.code], [409, "dl_a", "already_downloading"]);
+  const race = compat.toLegacyDownloadError(422, envelope("plan_blocked", "blocked", { blocking: [{ code: "hf_approval_required", message: "m" }] }), { repo: "o/n", access: { status: "approval_required", authorizationUrl: "https://huggingface.co/o/n" } });
+  assert.deepEqual([race.status, race.body.code, race.body.accessStatus, race.body.authorizationUrl], [409, "hf_approval_required", "approval_required", "https://huggingface.co/o/n"]);
+  const disk = compat.planBlockingToLegacy({ blocking: [{ code: "disk_full", message: "full" }] }, "o/n");
+  assert.deepEqual([disk.status, disk.body.code], [400, "download_disk_full"]);
+  assert.equal(compat.planBlockingToLegacy({ blocking: [] }, "o/n"), null);
+  const official = compat.planBlockingToLegacy({ blocking: [{ code: "gated_official_required", message: "Use the official endpoint." }], access: { status: "official_required" } }, "o/n");
+  assert.deepEqual([official.status, official.body.error, official.body.accessStatus], [409, "Use the official endpoint.", "official_required"]);
+});
+
+test("the hub probe maps to the legacy official/mirror/modelscope fields", () => {
+  const probe = compat.toLegacyProbe({
+    ok: true, repo: "o/n", file: "config.json", recommended: "hf-mirror", at: "T",
+    sources: [
+      { source: "huggingface", ok: true, ms: 9, bytesPerSec: 1 },
+      { source: "hf-mirror", ok: true, ms: 2, bytesPerSec: 9 },
+      { source: "modelscope", ok: true, ms: 5, bytesPerSec: 3, repo: "ms/n" },
+    ],
+  });
+  assert.equal(probe.recommended, "mirror");
+  assert.equal(probe.recommendedLabel, "hf-mirror.com");
+  assert.equal(probe.official.source, "official");
+  assert.equal(probe.modelscope.ok, true);
+  assert.equal(probe.modelScopeRepo, "ms/n");
+  assert.deepEqual(probe.sources.map((row) => row.source), ["official", "mirror", "modelscope"]);
+  assert.equal(compat.toLegacyProbe({ ok: true, sources: [], recommended: "huggingface" }).recommended, "official");
+});
+
+test("upstream status, cleanup and access answers keep the legacy fields", () => {
+  const entry = { path: "X:/lib/m", provenance: { provider: "huggingface", repo: "o/n", revisionSha: "a".repeat(40), downloadedAt: "T", source: "hub-job" } };
+  const current = compat.toLegacyUpstreamStatus({ name: "m", entry, update: { status: "current", remoteSha: "a".repeat(40) } });
+  assert.deepEqual([current.ok, current.updateAvailable, current.localSha, current.remoteSha], [true, false, "a".repeat(40), "a".repeat(40)]);
+  const unknownDate = compat.toLegacyUpstreamStatus({ name: "m", entry, update: { status: "unknown" } });
+  assert.equal(unknownDate.updateAvailable, null);
+  assert.equal(compat.toLegacyUpstreamStatus({ name: "m", entry: { path: "X:/m", provenance: {} }, update: { status: "unsupported" } }).reason, "unknown_source");
+  assert.deepEqual(compat.toLegacyCleanup("X:/lib/m", { removed: ["a"], removedBytes: 5 }), { ok: true, path: "X:/lib/m", removed: ["a"], removedBytes: 5 });
+  assert.equal(compat.toLegacyAccess({ model: "o/n", access: { granted: true, status: "granted" }, detail: { access: { gated: false } } }).status, "public");
+  assert.deepEqual(compat.toLegacyAccess({ model: "o/n", access: { granted: false, status: "login_required" }, detail: null }), { model: "o/n", gated: true, granted: false, status: "login_required", username: null, authorizationUrl: "https://huggingface.co/o/n" });
+  assert.deepEqual(compat.toLegacyAuthStatus({ ok: true, connected: false, username: null, orgs: [], source: null, reason: "invalid_token" }), { connected: false, username: null, orgs: [], source: null, reason: "invalid_token" });
+});
+
+test("settings round-trip through the legacy seven keys", () => {
+  const settings = hubSettings.defaultSettings();
+  const legacy = hubSettings.toLegacy(settings);
+  const patch = hubSettings.fromLegacy({ ...legacy, hfMirror: true, queueMode: false }, { current: settings });
+  assert.equal(patch.sources.policy, "hf-mirror");
+  assert.equal(patch.transfer.maxConcurrent, 3);
+  assert.deepEqual(hubSettings.toLegacy(Object.assign(settings, { sources: { ...settings.sources, policy: "hf-mirror" } })).hfMirror, true);
+});

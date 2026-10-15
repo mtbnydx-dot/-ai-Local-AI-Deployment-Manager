@@ -646,6 +646,48 @@ test("a signed shim enqueues as manager-shim and reaches only the shim download 
   assert.equal(cancel.status, 200, cancel.text);
 });
 
+test("a signed shim reaches the catalogue, plan, storage and library rows of the HUB-13b shims, and nothing else", async (t) => {
+  const { hub } = await startDownloadHub(t);
+  const { port, token } = await mountEntry(t, { hub });
+  const principal = "system:hub-shim:vllm";
+  const reached = [
+    ["GET", "/api/hub/search?q=qwen&limit=2"],
+    ["GET", "/api/hub/repos/huggingface/org/Model"],
+    ["GET", "/api/hub/repos/huggingface/org/Model/files"],
+    ["POST", "/api/hub/resolve-link", { url: "org/Model" }],
+    ["POST", "/api/hub/plan", { provider: "huggingface", repo: "org/Model", origin: { kind: "manager-shim", managerId: "vllm", clientLocal: false } }],
+    ["GET", "/api/hub/storage/usage"],
+    ["GET", "/api/hub/library?limit=5"],
+    ["POST", "/api/hub/library/lib_0000000000000000/cleanup-residue", {}],
+    ["POST", "/api/hub/library/lib_0000000000000000/check-update", {}],
+    ["DELETE", "/api/hub/library/lib_0000000000000000", { confirm: "x" }],
+    ["GET", "/api/hub/tasks/tsk_0000000000000000"],
+  ];
+  for (const [method, target, body] of reached) {
+    const response = await signed(port, method, target, { principal, token, ...(body ? { body } : {}) });
+    assert.notEqual(response.status, 403, `${method} ${target}: ${response.text}`);
+    assert.notEqual(response.status, 401, `${method} ${target}`);
+  }
+  // What the shim table does not name stays owner-only.
+  for (const [method, target, body] of [
+    ["POST", "/api/hub/library/rescan", {}],
+    ["POST", "/api/hub/library/lib_0000000000000000/verify", {}],
+    ["POST", "/api/hub/library/lib_0000000000000000/identify", { provider: "huggingface", repo: "org/Model" }],
+    ["POST", "/api/hub/library/lib_0000000000000000/update", {}],
+    ["POST", "/api/hub/storage/cleanup", { targets: [], confirm: true }],
+    ["GET", "/api/hub/status"],
+    ["GET", "/api/hub/downloads/history"],
+  ]) {
+    const response = await signed(port, method, target, { principal, token, ...(body ? { body } : {}) });
+    assert.equal(response.status, 403, `${method} ${target}`);
+    assert.equal(response.json.error.code, "principal_route_forbidden");
+  }
+  // A plan from a caller the manager judged not local never takes a token.
+  const lan = await signed(port, "POST", "/api/hub/plan", { principal, token, body: { provider: "huggingface", repo: "org/Model", credential: { hfToken: FAKE_HF_TOKEN }, origin: { kind: "manager-shim", managerId: "vllm", clientLocal: false } } });
+  assert.equal(lan.status, 403);
+  assert.equal(lan.json.error.code, "token_requires_local");
+});
+
 test("the rollback flag (hub.downloadsOwner = manager) makes POST /api/hub/downloads answer 409 hub_disabled (HUB-12)", async (t) => {
   const root = tempDir(t, "hub-routes-rollback-");
   const dataDir = path.join(root, "service-entry", "data", "hub");

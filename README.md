@@ -267,6 +267,8 @@ npm run test:frontend-smoke
 
 其它电脑首次使用时从 GitHub 克隆并运行 `install-all.cmd`；之后运行 `update-platform.cmd` 即可进行只允许 fast-forward 的安全更新。更新器发现受控文件有本地修改、存在未推送提交或分叉历史时会拒绝覆盖，也不会重启服务或加载模型。完整流程见 [`docs/update-guide.md`](docs/update-guide.md)。
 
+平台出问题时先运行 `platform doctor`，每条修复建议都链接到 [`docs/troubleshooting.md`](docs/troubleshooting.md) 的对应小节（含密钥回滚步骤）。
+
 ### 构建 GitHub 发布包
 
 在项目根目录运行：
@@ -514,6 +516,8 @@ The source repository, feature worktrees, and the live `<AI_ROOT>` runtime are i
 ### GitHub Updates On Multiple Computers
 
 Clone the GitHub repository and run `install-all.cmd` on another computer. Later, use `update-platform.cmd` for a fast-forward-only update. It refuses tracked local edits, unpushed commits, and diverged history, and never restarts a service or loads a model. See [`docs/update-guide.md`](docs/update-guide.md).
+
+When something is wrong, run `platform doctor` first; every suggested fix links to a section of [`docs/troubleshooting.md`](docs/troubleshooting.md) (Chinese; includes the secret rollback steps).
 
 ### Build A GitHub Release Archive
 
