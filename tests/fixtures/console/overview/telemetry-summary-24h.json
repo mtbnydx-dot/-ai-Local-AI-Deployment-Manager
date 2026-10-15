@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "from": "@now-24h",
+  "to": "@now",
+  "current": { "requests": 1240, "errorRate": 0.03, "ttftP95Ms": 812, "outputTokens": 440000, "activeKeys": 6, "gpuUtilAvg": 41.5 },
+  "previous": { "requests": 1100, "errorRate": 0.02, "ttftP95Ms": 900, "outputTokens": 400000 },
+  "coverage": 0.98,
+  "source": "rollup_1h"
+}

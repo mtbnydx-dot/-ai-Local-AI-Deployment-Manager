@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "dryRun": true,
+  "plan": [
+    { "managerId": "vllm", "model": "qwen3-demo-32b", "action": "launch" },
+    { "managerId": "llama", "model": "demo-8b-q4", "action": "skip-running" }
+  ]
+}

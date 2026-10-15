@@ -1,0 +1,158 @@
+{
+  "ok": true,
+  "presets": [
+    {
+      "id": "friend",
+      "class": "friend",
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "completions",
+        "responses",
+        "messages",
+        "embeddings",
+        "self.rotate",
+        "self.origins"
+      ],
+      "models": [
+        "*"
+      ],
+      "listeners": [
+        "public"
+      ],
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "maxConcurrent": 2,
+        "dailyTokens": 2000000,
+        "maxOutputTokens": 8192
+      },
+      "expiresInDays": 90,
+      "requiresCustomer": false,
+      "labelKey": "access.preset.friend.title",
+      "descriptionKey": "access.preset.friend.description"
+    },
+    {
+      "id": "trial-7d",
+      "class": "trial",
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "messages"
+      ],
+      "models": [
+        "*"
+      ],
+      "listeners": [
+        "public"
+      ],
+      "limits": {
+        "rpm": 10,
+        "tpm": 50000,
+        "maxConcurrent": 1,
+        "dailyTokens": 500000,
+        "maxOutputTokens": 4096
+      },
+      "expiresInDays": 7,
+      "requiresCustomer": false,
+      "labelKey": "access.preset.trial-7d.title",
+      "descriptionKey": "access.preset.trial-7d.description"
+    },
+    {
+      "id": "paid",
+      "class": "customer",
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "completions",
+        "responses",
+        "messages",
+        "embeddings",
+        "self.rotate",
+        "self.origins",
+        "audio.speech"
+      ],
+      "models": [
+        "*"
+      ],
+      "listeners": [
+        "public"
+      ],
+      "limits": {
+        "rpm": 60,
+        "tpm": 400000,
+        "maxConcurrent": 4,
+        "maxOutputTokens": 16384
+      },
+      "expiresInDays": 365,
+      "requiresCustomer": true,
+      "labelKey": "access.preset.paid.title",
+      "descriptionKey": "access.preset.paid.description"
+    },
+    {
+      "id": "internal-app",
+      "class": "internal",
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "completions",
+        "embeddings",
+        "audio.speech"
+      ],
+      "models": [
+        "*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 600,
+        "maxConcurrent": 16
+      },
+      "expiresInDays": null,
+      "requiresCustomer": false,
+      "labelKey": "access.preset.internal-app.title",
+      "descriptionKey": "access.preset.internal-app.description"
+    },
+    {
+      "id": "owner-device",
+      "class": "owner",
+      "scopes": [
+        "models.read",
+        "chat",
+        "completions",
+        "responses",
+        "embeddings",
+        "messages",
+        "audio.speech",
+        "audio.clone",
+        "search",
+        "mcp",
+        "self.read",
+        "self.rotate",
+        "self.origins",
+        "debug.route"
+      ],
+      "models": [
+        "*"
+      ],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 600,
+        "maxConcurrent": 16
+      },
+      "expiresInDays": null,
+      "requiresCustomer": false,
+      "labelKey": "access.preset.owner-device.title",
+      "descriptionKey": "access.preset.owner-device.description"
+    }
+  ]
+}

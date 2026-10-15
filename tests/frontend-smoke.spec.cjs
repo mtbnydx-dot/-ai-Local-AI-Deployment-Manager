@@ -787,7 +787,7 @@ async function smokeConsoleShell(page, baseUrl) {
   expect(await root.text()).toContain("本地模型服务统一入口");
   expect(root.headers()["content-security-policy"]).toBeUndefined();
 
-  // The shell (CON-6) renders every path in its frame; a page that is not built yet shows the "still being built" page.
+  // The shell (CON-6) renders every path in its frame; a page that is not built yet shows the "still being built" page (the overview is built, CON-8).
   for (const [pathname, heading] of [["?ui=new", "总览"], ["overview", "总览"], ["deployments/vllm:primary", "部署"]]) {
     const response = await page.goto(`${baseUrl}${pathname}`, { waitUntil: "domcontentloaded" });
     expect(response.status(), pathname).toBe(200);
@@ -815,13 +815,14 @@ async function smokeConsoleShell(page, baseUrl) {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator("#app h1")).toHaveText("Overview");
   await expect(page).toHaveTitle("Overview · Local AI Platform");
-  await expect(page.locator('#app [data-testid="app-shell.pending"] a[href="/classic"]')).toHaveText("Open the classic console");
+  await expect(page.locator('#app [data-testid="overview.root"]')).toBeVisible();
   expect(await page.evaluate(() => window.__cspViolations), "English shell CSP violations").toEqual([]);
 
   const classic = await page.request.get(`${baseUrl}classic`);
   expect(await classic.text()).toBe(await root.text());
   // Pages that are not in the build yet answer 404 for their module; that is the "still being built" path, not a failure.
-  const unexpected = failures.filter((item) => !/\/c\/[0-9a-f]+\/routes\/|Failed to load resource/.test(item));
+  // No manager runs here, so the overview's per-manager calls answer 502 and its lists simply stay empty.
+  const unexpected = failures.filter((item) => !/\/c\/[0-9a-f]+\/routes\/|Failed to load resource|fetch 502: .*\/api\/m\//.test(item));
   expect(unexpected, "console shell frontend errors").toEqual([]);
 }
 

@@ -32,7 +32,7 @@ const { createTransferMonitor } = require("./progress");
 const { createArtifactVerifier } = require("./verify");
 const { createDownloadQueue } = require("./queue");
 const { runHubMigration } = require("./migrate");
-const { createDiskGuard } = require("./disk");
+const { computeUsage, createDiskGuard, reserveBytes, runCleanup } = require("./disk");
 const { REPO_RE } = require("./auth");
 const { compileIncludePatterns, resolveSelection } = require("./selection");
 
@@ -131,6 +131,9 @@ function createModelHub(options = {}) {
   const modelScopeCli = String(options.modelScopeCli || "");
   const secretStore = options.secretStore || null;
   const models = options.models || null;
+  // One provider registry for the hub: the library's update check and identify
+  // (03 §9) use the same sources policy and caches as search and enqueue.
+  const providers = options.providers || createProviders({ settings, fetchImpl: options.fetchImpl, clock });
   const library = options.modelStorage
     ? createLibrary({
       store,
@@ -139,19 +142,24 @@ function createModelHub(options = {}) {
       hfHome,
       fit: options.fit || null,
       models,
-      providers: options.providers || null,
+      providers,
       events: options.events || null,
       getSettings: () => settings.get(),
       aiRoot,
       clock,
       logger,
+      // The library actions (03 §9.5) reach the queue, the drive and the
+      // storage probe through these; they are only called after start.
+      enqueue: (input, ctx) => enqueue(input, ctx),
+      getJobs: () => queue.document().jobs,
+      getBusyPaths: typeof options.getBusyPaths === "function" ? options.getBusyPaths : null,
+      disk: { freeBytes: (target) => disk.freeBytes(target), reserveBytes: (free) => reserveBytes(free, settings.get()) },
       ...(isPlainObject(options.libraryOptions) ? options.libraryOptions : {}),
     })
     : null;
   // Temporary Hugging Face tokens (03 §12): memory-only unless the caller
   // asked to remember one and a secret store exists.
   const tokens = options.tokens || createTokenVault({ secretStore, clock, logger });
-  const providers = options.providers || createProviders({ settings, fetchImpl: options.fetchImpl, clock });
   const auth = createHubAuth({
     hfCli,
     hfHome,
@@ -544,7 +552,7 @@ function createModelHub(options = {}) {
         include,
       },
     };
-    return queue.enqueue(spec, { allowDuplicate: input.allowDuplicate === true });
+    return queue.enqueue(spec, { allowDuplicate: input.allowDuplicate === true, markerMetadata: ctx.markerMetadata || null });
   }
 
   // GET /api/hub/status (03 §13). The viewer copy drops cli paths, dataDir
@@ -603,10 +611,25 @@ function createModelHub(options = {}) {
     // (first weight file). sources.probe is the informational speed probe.
     auth: { status: auth.status, login: auth.login, access: auth.access },
     sources: { probe: sources.probe },
-    // The registry (03 §9), null until a modelStorage is given. Later
-    // packages add checkUpdate, update, importCache, remove and cleanupResidue.
+    // The registry and its actions (03 §9): list, get, rescan, verify,
+    // identify, checkUpdate, update, importCache, remove, cleanupResidue and
+    // findByPath. Null until a modelStorage is given.
     library,
-    // GET /api/hub/tasks/:id: library tasks (rescan, verify), in memory.
+    // GET /api/hub/storage/usage and POST /api/hub/storage/cleanup (03 §13.5);
+    // null without a model storage, like the library.
+    storage: library && modelStorage
+      ? {
+        async usage(opts = {}) {
+          await settled();
+          return computeUsage({ modelStorage, library, queue, hfHome, settings: () => settings.get(), statfs: options.statfs, clock, refresh: opts.refresh === true });
+        },
+        async cleanup(input = {}) {
+          await settled();
+          return runCleanup({ library, queue, targets: input.targets, confirm: input.confirm });
+        },
+      }
+      : null,
+    // GET /api/hub/tasks/:id: library tasks (rescan, verify, import, delete), in memory.
     tasks: { get: (id) => (library ? library.getTask(id) : null) },
     // POST /api/hub/downloads: a plan body (or a planId once HUB-10 caches
     // plans) becomes a queued DownloadJob (03 §8, §13).

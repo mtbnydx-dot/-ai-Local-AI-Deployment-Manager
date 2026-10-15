@@ -29,6 +29,18 @@ const { lookupPublicError } = require("./public-errors");
 const MANAGEMENT_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const KEY_STORE_CACHE_MS = 5000;
 const KEY_STORE_ISSUE_LOG_MS = 60_000;
+// PUBLIC CORS (05 §11).
+const PUBLIC_ORIGINS_TTL_MS = 5_000;
+const PUBLIC_STAINLESS_RE = /^x-stainless-[a-z0-9-]+$/;
+const PUBLIC_CORS_ALLOW_HEADERS = ["authorization", "content-type", "x-api-key", "api-key", "anthropic-api-key", "anthropic-version", "anthropic-beta"];
+const PUBLIC_CORS_EXPOSE_HEADERS = [
+  "x-request-id", "retry-after",
+  "x-ratelimit-limit-requests", "x-ratelimit-remaining-requests", "x-ratelimit-reset-requests",
+  "x-ratelimit-limit-tokens", "x-ratelimit-remaining-tokens", "x-ratelimit-reset-tokens",
+  "x-quota-remaining-tokens-day", "x-quota-remaining-tokens-month",
+  "anthropic-ratelimit-requests-limit", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-requests-reset",
+  "anthropic-ratelimit-tokens-limit", "anthropic-ratelimit-tokens-remaining", "anthropic-ratelimit-tokens-reset",
+];
 
 // Gateway callers may be anyone on the LAN or the internet, so their error
 // text never carries paths, ports or env switches. The detail goes to the
@@ -99,6 +111,7 @@ function createEntrySecurity(options = {}) {
   const keysStoreOption = options.keysStore || null;
   let keyStoreCache = { value: null, expiresAt: 0, promise: null };
   let keyStoreIssueLog = { detail: "", at: 0 };
+  let publicOriginsCache = { at: 0, value: null };
   const logError = typeof options.logError === "function" ? options.logError : console.error;
   const warn = typeof options.warn === "function" ? options.warn : console.warn;
   // Security events (05 §15): the entry wires the event bus here. Never throws.
@@ -373,7 +386,70 @@ function createEntrySecurity(options = {}) {
     return {
       ...base,
       "access-control-allow-origin": allowedOrigins.includes("*") ? "*" : origin,
-      ...(allowedOrigins.includes("*") ? {} : { "access-control-allow-credentials": "true" }),
+      vary: "Origin",
+    };
+  }
+
+  // --- PUBLIC CORS: deny by default, per key (05 §11) ------------------------
+  // Never access-control-allow-credentials and never
+  // access-control-allow-private-network (V10): PUBLIC has no ambient
+  // credentials, the key travels in a header.
+
+  // The union of allowed_origins across usable keys, cached briefly: the
+  // access store is read at most every PUBLIC_ORIGINS_TTL_MS, and a key
+  // change is picked up by invalidatePublicOrigins() or the next refresh.
+  function publicOrigins() {
+    const at = Date.now();
+    if (publicOriginsCache.value && at - publicOriginsCache.at < PUBLIC_ORIGINS_TTL_MS) return publicOriginsCache.value;
+    let list = [];
+    try {
+      const store = accessStore();
+      if (typeof store.activeOrigins === "function") list = store.activeOrigins(new Date(at));
+    } catch {
+      list = [];
+    }
+    const value = { wildcard: list.includes("*"), origins: new Set(list.map((item) => keyPolicy.normalizeOrigin(item)).filter(Boolean)) };
+    publicOriginsCache = { at, value };
+    return value;
+  }
+
+  function invalidatePublicOrigins() {
+    publicOriginsCache = { at: 0, value: null };
+  }
+
+  // The headers of a PUBLIC preflight. Allowed only when the Origin is in the
+  // union of the active keys' origins; otherwise only vary (a 204 with no
+  // allow headers). The key is not known yet: preflights carry none.
+  function publicPreflightHeaders(req) {
+    const raw = String(req.headers?.origin || "").trim();
+    const headers = { vary: "Origin" };
+    if (!raw) return headers;
+    const canonical = keyPolicy.normalizeOrigin(raw);
+    const known = publicOrigins();
+    if (!canonical || canonical === "*" || !(known.wildcard || known.origins.has(canonical))) return headers;
+    const requested = String(req.headers?.["access-control-request-headers"] || "")
+      .split(",")
+      .map((name) => name.trim().toLowerCase())
+      .filter((name) => PUBLIC_STAINLESS_RE.test(name));
+    const allowHeaders = [...new Set([...PUBLIC_CORS_ALLOW_HEADERS, ...requested])];
+    return {
+      "access-control-allow-origin": raw,
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": allowHeaders.join(", "),
+      "access-control-max-age": "600",
+      vary: "Origin",
+    };
+  }
+
+  // The headers of an authenticated PUBLIC request: the Origin has passed the
+  // key's allowed_origins (key-policy origin_not_allowed), so it is echoed
+  // and the response headers a browser client needs are exposed.
+  function publicCorsHeaders(req, key) {
+    const raw = String(req.headers?.origin || "").trim();
+    if (!raw || !key || !keyPolicy.originAllowed(key, raw)) return {};
+    return {
+      "access-control-allow-origin": raw,
+      "access-control-expose-headers": PUBLIC_CORS_EXPOSE_HEADERS.join(", "),
       vary: "Origin",
     };
   }
@@ -535,6 +611,9 @@ function createEntrySecurity(options = {}) {
       listener,
       ip: resolveClientAddress(req),
       scope,
+      // PUBLIC judges the Origin against the key's allowed_origins (05 §11);
+      // ADMIN has its own console origin rules.
+      ...(listener === "public" ? { origin: req.headers?.origin } : {}),
       exposeSearch: accessConfig().public?.exposeSearch === true,
     });
     if (!verdict.ok) return gatewayDenial(verdict.code, { reason: verdict.reason, param: verdict.param || null, keyId: found.key.id });
@@ -792,6 +871,9 @@ function createEntrySecurity(options = {}) {
     },
     listenerKind: listenerKindOf,
     corsHeaders,
+    publicPreflightHeaders,
+    publicCorsHeaders,
+    invalidatePublicOrigins,
     authorizeGatewayRequest,
     loadKeyStores,
     invalidateKeyStores,

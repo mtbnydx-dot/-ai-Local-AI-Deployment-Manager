@@ -1,0 +1,7 @@
+{
+  "jobs": [
+    { "id": "job-9", "type": "launch", "title": "Launch demo-70b", "status": "failed", "createdAt": "@now-3h", "updatedAt": "@now-2h", "finishedAt": "@now-2h", "error": { "code": "oom", "message": "Out of GPU memory" } },
+    { "id": "job-3", "type": "launch", "title": "Launch old", "status": "failed", "createdAt": "@now-50h", "updatedAt": "@now-49h", "finishedAt": "@now-49h" },
+    { "id": "job-4", "type": "launch", "title": "Launch fine", "status": "success", "createdAt": "@now-1h", "updatedAt": "@now-1h", "finishedAt": "@now-1h" }
+  ]
+}

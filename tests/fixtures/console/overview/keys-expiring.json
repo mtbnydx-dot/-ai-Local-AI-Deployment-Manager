@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "items": [
+    { "id": "key_a1", "name": "demo-client", "status": "active", "class": "app", "expiresAt": "@now+2d" }
+  ],
+  "nextCursor": null,
+  "counts": { "active": 1 }
+}

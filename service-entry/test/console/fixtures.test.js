@@ -28,6 +28,10 @@ const GUARDS = {
   "plan-vllm": schemas.LaunchPlanGuard,
   "plan-sglang": schemas.LaunchPlanGuard,
   "plan-llamacpp": schemas.LaunchPlanGuard,
+  // CON-20 Access fixtures: the 05 §13.1 key list, presets and the one-time create answer.
+  "access-keys": schemas.KeyListGuard,
+  "access-presets": schemas.PresetListGuard,
+  "access-key-created": schemas.KeyCreatedGuard,
 };
 
 function read(name) {
