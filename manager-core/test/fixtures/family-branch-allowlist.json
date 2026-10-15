@@ -117,14 +117,6 @@
       "expires": "2027-04-30"
     },
     {
-      "file": "manager-core/precision-variants.js",
-      "pattern": "flashNext",
-      "count": 5,
-      "owner": "02 models (MOD-21)",
-      "reason": "Model-family note: an NVFP4 sibling repo that the v1 capability matrix matches as qwen3.8-flash-next is labelled with the Flash-Next SGLang image. It goes with the v1 matrix shim that MOD-21 deletes.",
-      "expires": "2027-04-30"
-    },
-    {
       "file": "manager-core/stats-ledger-store.js",
       "pattern": "=== \"sglang\"",
       "count": 2,
@@ -134,18 +126,10 @@
     },
     {
       "file": "vllm-manager/lib/model-capabilities.js",
-      "pattern": "isQwen3",
-      "count": 2,
-      "owner": "02 models (MOD-21)",
-      "reason": "Name inference in the v1 capability module (automatic MTP stays off for Qwen3.5-3.8 ModelOpt NVFP4); MOD-21 deletes this module's name inference and predicates.",
-      "expires": "2027-04-30"
-    },
-    {
-      "file": "vllm-manager/lib/model-capabilities.js",
       "pattern": "museGlimmer",
       "count": 1,
       "owner": "02 models (MOD-21)",
-      "reason": "The retired museGlimmerOverride result field, always false, which model-capabilities.test.js still asserts; MOD-21 migrates that test and drops the field.",
+      "reason": "The retired museGlimmerOverride result field, always false: the 01 PRE-* preset goldens record it in every capabilities object, so it stays until those goldens are recaptured. No decision reads it; the blocked-family verdict comes from the families data.",
       "expires": "2027-04-30"
     }
   ]

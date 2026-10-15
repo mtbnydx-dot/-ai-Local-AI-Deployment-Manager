@@ -514,3 +514,29 @@ test("running llama facts are recovered from non-secret container labels", () =>
     dflash: true,
   });
 });
+
+test("model-check reads no reasoning format or sampling from a model family name (MOD-21)", async () => {
+  const token = process.env.HF_TOKEN;
+  delete process.env.HF_TOKEN;
+  try {
+    for (const model of ["Qwen/Qwen3.6-27B-GGUF", "deepseek-ai/DeepSeek-R1-GGUF", "org/Plain-7B-GGUF"]) {
+      const report = await manager.checkModelCompatibility({ model, remote: false });
+      // llama.cpp reads the format from the chat template ("auto", the descriptor's autoParsers).
+      assert.equal(report.recommendations.reasoningFormat, "auto", model);
+      assert.equal(report.recommendations.topK, undefined, model);
+    }
+    const gated = await manager.checkModelCompatibility({ model: "meta-llama/Llama-3.1-8B-Instruct-GGUF", remote: false });
+    assert.ok(gated.findings.some((item) => item.title === "可能需要授权"));
+    const open = await manager.checkModelCompatibility({ model: "org/Plain-7B-GGUF", remote: false });
+    assert.equal(open.findings.some((item) => item.title === "可能需要授权"), false);
+  } finally {
+    if (token !== undefined) process.env.HF_TOKEN = token;
+  }
+});
+
+test("GGUF sampling recommendations come from the family the architecture declares", () => {
+  const { familySamplingRecommendation } = require("../lib/memory-estimate");
+  assert.deepEqual(familySamplingRecommendation("muse-glimmer"), { temperature: 1, topP: 0.95, topK: 64 });
+  assert.deepEqual(familySamplingRecommendation("llama"), {});
+  assert.deepEqual(familySamplingRecommendation(""), {});
+});

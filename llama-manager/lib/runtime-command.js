@@ -1,6 +1,7 @@
 const { redactSecrets } = require("../../manager-core/secret-redactor");
 const runtimeManifest = require("../../manager-core/runtime-manifest");
 const engines = require("../../manager-core/engines");
+const knowledge = require("../../manager-core/model-inspector/knowledge");
 const llamacpp = require("../../manager-core/engines/adapters/llamacpp");
 const { renderRunArgs } = require("../../manager-core/engines/adapters/_docker-segments");
 
@@ -17,7 +18,6 @@ const ENGINE_ID = llamacpp.id;
 // sampling values. The resolver selects recipes by plan (ENG-7); until then
 // this wrapper applies it the way the old branch did, by architecture or name.
 // The adapter reads only the recipe, never the model family.
-const MUSE_GLIMMER_RECIPE_ID = "llama-muse-glimmer";
 
 function createLlamaRuntimeCommandBuilder(deps) {
   const {
@@ -48,11 +48,18 @@ function createLlamaRuntimeCommandBuilder(deps) {
     return args.map((arg) => redactSecrets(String(arg), { secrets, patterns: false, minSecretLength: 6 }));
   }
 
+  // The llama.cpp model recipe of the model's family (01 recipe match by
+  // familyId): the family comes from the families data, by the selected GGUF's
+  // declared architecture, or by the families' name patterns when the GGUF
+  // declares none. No model name is matched here (D5).
   function selectRecipe(opts, launch) {
     const architecture = String(launch.selectedModel?.architecture || "").trim().toLowerCase();
-    return architecture === "muse-glimmer" || /muse[-_. ]glimmer/i.test(String(opts.model || ""))
-      ? engines.recipes.getRecipeStore().get(MUSE_GLIMMER_RECIPE_ID)
-      : null;
+    const name = String(opts.model || "").trim();
+    const familyId = knowledge.matchFamily({ identity: { ggufArchitecture: architecture || null, displayName: name || null } }).entry?.id;
+    if (!familyId) return null;
+    const match = engines.recipes.matchRecipes({ engineId: "llamacpp", model: { familyId } })
+      .find((item) => item.eligible && item.reasons.includes("family"));
+    return match?.recipe || null;
   }
 
   // The images this manager runs for its manifest runtimes; CONFIG applied

@@ -1,14 +1,19 @@
 "use strict";
 
 // Generates manager-core/data/knowledge/families.json (families v2, with
-// capabilityIdAliases) from manager-core/data/model-capabilities.json
-// (docs/overhaul/02-models.md section 8.5, MOD-6).
+// capabilityIdAliases) from a capabilities v1 file (docs/overhaul/02-models.md
+// section 8.5, MOD-6).
 //
-//   node scripts/migrate-capabilities-v1.js            write families.json
-//   node scripts/migrate-capabilities-v1.js --check    exit 2 when families.json is out of date
-//   node scripts/migrate-capabilities-v1.js --dry-run  print the summary, write nothing
-//   --input <file>   v1 file (default manager-core/data/model-capabilities.json)
+//   node scripts/migrate-capabilities-v1.js --input <v1 file>            write families.json
+//   node scripts/migrate-capabilities-v1.js --input <v1 file> --check    exit 2 when families.json is out of date
+//   node scripts/migrate-capabilities-v1.js --input <v1 file> --dry-run  print the summary, write nothing
+//   --input <file>   v1 file (required)
 //   --output <file>  families file (default manager-core/data/knowledge/families.json)
+//
+// MOD-21 retired manager-core/data/model-capabilities.json: families.json is
+// the bundled source now. The last bundled v1 file is kept as the test fixture
+// manager-core/test/fixtures/model-capabilities-v1.json, from which this script
+// still reproduces families.json byte for byte (knowledge-migration.test.js).
 //
 // The conversion itself is manager-core/model-inspector/migrate-v1.js, the
 // module the knowledge loader also runs on a user's own v1 file. This script
@@ -22,7 +27,6 @@ const path = require("node:path");
 const { convertCapabilitiesV1 } = require("../manager-core/model-inspector/migrate-v1");
 
 const DATA_DIR = path.join(__dirname, "..", "manager-core", "data");
-const DEFAULT_INPUT = path.join(DATA_DIR, "model-capabilities.json");
 const DEFAULT_OUTPUT = path.join(DATA_DIR, "knowledge", "families.json");
 
 // Qwen3.8 rekey (02 section 2 and 8.2): real checkpoints declare model_type
@@ -38,7 +42,22 @@ const DEFAULT_OUTPUT = path.join(DATA_DIR, "knowledge", "families.json");
 // block that vllm-manager's diffusionGemmaWindowsBlockReason used to hold in
 // code is data on the Gemma family. It applies to the DiffusionGemma identities
 // only, on the WSL host platform, unless VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA is set.
+//
+// Family sampling defaults (02 section 8.5, MOD-21): the request defaults that
+// vllm-manager's applyVllmRequestDefaults kept for Qwen3.5-3.8 names and the
+// llama.cpp Muse recommendation kept in code are the families' `sampling`
+// (generation_config names). Muse's name pattern accepts the separators its
+// repository names use ("Muse-Glimmer", "Muse_Glimmer"), which the vLLM
+// capability module used to normalise away in code.
+const QWEN_SAMPLING = Object.freeze({ temperature: 1.0, top_p: 0.95, top_k: 20 });
 const ADJUSTMENTS = Object.freeze({
+  "muse-glimmer": (entry) => {
+    entry.match.namePatterns = ["muse[-_. ]?glimmer"];
+    entry.sampling = { temperature: 1.0, top_p: 0.95, top_k: 64 };
+  },
+  "qwen3.5-3.6": (entry) => {
+    entry.sampling = { ...QWEN_SAMPLING };
+  },
   gemma4: (entry) => {
     entry.blocks = [{
       engines: ["vllm"],
@@ -53,16 +72,18 @@ const ADJUSTMENTS = Object.freeze({
   },
   "qwen3.8-flash-next": (entry) => {
     entry.priority = 30;
+    entry.sampling = { ...QWEN_SAMPLING };
   },
   "qwen3.8": (entry) => {
     entry.priority = 20;
+    entry.sampling = { ...QWEN_SAMPLING };
     entry.match.modelTypes = [...new Set([...(entry.match.modelTypes || []), "qwen3_5", "qwen3_5_moe"])];
     entry.match.require = [{ templateSignature: ["qwen38-xml-effort"], forModelTypes: ["qwen3_5", "qwen3_5_moe"] }];
     entry.fixtures = ["qwen38-27b-fp8", "qwen38-27b-fp8-indexed"];
   },
 });
 
-const USAGE = "Usage: node scripts/migrate-capabilities-v1.js [--check] [--dry-run] [--input <file>] [--output <file>]";
+const USAGE = "Usage: node scripts/migrate-capabilities-v1.js --input <v1 file> [--check] [--dry-run] [--output <file>]";
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -78,7 +99,7 @@ function readJsonIfPresent(file) {
 }
 
 function orderedEntry(entry) {
-  const order = ["id", "label", "priority", "confidence", "match", "contextMax", "speculative", "engines", "blocks", "download", "requires", "notes", "fixtures"];
+  const order = ["id", "label", "priority", "confidence", "match", "contextMax", "speculative", "sampling", "engines", "blocks", "download", "requires", "notes", "fixtures"];
   const result = {};
   for (const key of order) if (entry[key] !== undefined) result[key] = entry[key];
   return result;
@@ -104,7 +125,7 @@ function generateFamilies({ v1, existing = null, runtimeIdForKey } = {}) {
 }
 
 function parseArgs(argv) {
-  const options = { check: false, dryRun: false, input: DEFAULT_INPUT, output: DEFAULT_OUTPUT, help: false };
+  const options = { check: false, dryRun: false, input: "", output: DEFAULT_OUTPUT, help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--check") options.check = true;
@@ -131,6 +152,11 @@ function run(argv, io = { log: console.log, error: console.error }) {
   if (options.help) {
     io.log(USAGE);
     return 0;
+  }
+  if (!options.input) {
+    io.error(`--input is required: manager-core/data/model-capabilities.json was retired, and families.json is the bundled source.
+${USAGE}`);
+    return 1;
   }
   try {
     const { families, warnings } = generateFamilies({ v1: readJson(options.input), existing: readJsonIfPresent(options.output) });
@@ -161,4 +187,4 @@ if (require.main === module) {
   process.exitCode = run(process.argv.slice(2));
 }
 
-module.exports = { ADJUSTMENTS, DEFAULT_INPUT, DEFAULT_OUTPUT, generateFamilies, run };
+module.exports = { ADJUSTMENTS, DEFAULT_OUTPUT, generateFamilies, run };

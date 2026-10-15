@@ -975,7 +975,7 @@ const UI_TRANSLATION_PATTERNS = [
   [/^预计下载约 (.+)（(.+) 个文件）。模型盘剩余 (.+)，空间充足。$/u, "Estimated download about $1 ($2 files). The model disk has $3 free, which is enough."],
   [/^预计下载约 (.+)（(.+) 个文件）。请确认本地磁盘空间充足。$/u, "Estimated download about $1 ($2 files). Make sure the local disk has enough space."],
   [/^预计下载约 (.+)（(.+) 个文件），但模型盘剩余 (.+)，磁盘空间可能不足，请清理或换盘。$/u, "Estimated download about $1 ($2 files), but the model disk has only $3 free; space may run out, so clean up or switch disks."],
-  [/^Flash-Next 稳定路径：完整 SM120 QSA 修复、BF16 KV、PLE→RAM、GDN prefill Triton \/ decode FlashInfer。Mamba cache (.+) 下当前有效并发为 (.+)。$/u, "Flash-Next stable path: full SM120 QSA fix, BF16 KV, PLE→RAM, GDN prefill Triton / decode FlashInfer. Effective concurrency with Mamba cache $1 is currently $2."],
+  [/^(\S+) 稳定路径：完整 SM120 QSA 修复、BF16 KV、PLE→RAM、GDN prefill Triton \/ decode FlashInfer。Mamba cache (.+) 下当前有效并发为 (.+)。$/u, "$1 stable path: full SM120 QSA fix, BF16 KV, PLE→RAM, GDN prefill Triton / decode FlashInfer. Effective concurrency with Mamba cache $2 is currently $3."],
   [/^已填入原始仓库 ID。(.+) 量化版通常由第三方发布、仓库名不固定，点下方「在线查找」按真实仓库筛选更稳妥。$/u, "The original repository ID is filled in. $1 quantized builds are usually published by third parties under varying names; use “Search online” below to filter by the real repository."],
   // 下载前预检 / GGUF 变体 / 精度仓
   [/^其余 (\d+) 项检查$/u, "$1 more check(s)"],

@@ -51,6 +51,20 @@ function parseMemoryEstimateWeights(value) {
     .filter((item) => Number.isFinite(item) && item > 0);
 }
 
+// The sampling defaults of the family a GGUF architecture declares (families
+// data `sampling`, generation_config names) as llama.cpp launch fields, or {}.
+function familySamplingRecommendation(architecture) {
+  const ggufArchitecture = String(architecture || "").trim().toLowerCase();
+  if (!ggufArchitecture) return {};
+  const sampling = core.models.knowledge.matchFamily({ identity: { ggufArchitecture } }).entry?.sampling;
+  if (!sampling || typeof sampling !== "object") return {};
+  const fields = {};
+  if (Number.isFinite(sampling.temperature)) fields.temperature = sampling.temperature;
+  if (Number.isFinite(sampling.top_p)) fields.topP = sampling.top_p;
+  if (Number.isFinite(sampling.top_k)) fields.topK = sampling.top_k;
+  return fields;
+}
+
 function buildLlamaLegacyEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
   const variant = input.variant || input.selectedVariant || input.modelMetadata || null;
@@ -155,11 +169,7 @@ function buildLlamaLegacyEstimate(input = {}) {
       availableMmproj: input.mmproj?.path || "",
       draftModel: input.dflash?.path || input.draft?.path || "",
       speculativeMode: explicitDraftBytes > 0 ? "draft-dflash" : speculativeMode,
-      ...(String(variant.architecture || "").toLowerCase() === "muse-glimmer" ? {
-        temperature: 1,
-        topP: 0.95,
-        topK: 64,
-      } : {}),
+      ...familySamplingRecommendation(variant.architecture),
     } : null,
     recommendations: {
       status: plan.status,
@@ -188,6 +198,7 @@ function buildLlamaMemoryEstimate(input = {}, options = {}) {
 
 module.exports = {
   buildLlamaMemoryEstimate,
+  familySamplingRecommendation,
   normalizeMemoryEstimateArch,
   normalizeMemoryEstimateGpus,
   parseMemoryEstimateWeights,

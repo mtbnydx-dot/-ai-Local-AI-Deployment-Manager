@@ -153,6 +153,8 @@ test("model-check keeps retired Muse Glimmer blocked without deleting local file
     const finding = report.findings.find((item) => item.title === "Muse Glimmer 已弃用");
     assert.equal(finding?.severity, "fail");
     assert.match(finding.detail, /retired/);
+    // The blocked family's finding carries the job error code (no title matching).
+    assert.equal(finding.errorCode, "muse_glimmer_vllm_unsupported");
     assert.equal(await fs.stat(path.join(dir, "config.json")).then((stat) => stat.isFile()), true);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });

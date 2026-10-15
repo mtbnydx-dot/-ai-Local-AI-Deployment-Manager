@@ -18,7 +18,7 @@ const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
 const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine, templateEngineOf } = require("./lib/runtime-command");
 const { buildVllmImagePullOptions: imagePullOptionsFor, createVllmRunContext, vllmInstanceId } = require("./lib/run-context");
-const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
+const { DSPARK_MODE, normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService, VLLM_REMOTE_PRECISION_ORDER, VLLM_REMOTE_QUANT_KEYWORDS } = require("./lib/remote-models");
 const { createHfAuthService } = require("./lib/hf-auth");
 const {
@@ -2312,7 +2312,10 @@ async function checkModelCompatibility(input = {}) {
     findings.push(finding("fail", "MTP 权重缺失", "当前 checkpoint 没有可验证的 mtp.* 张量；为避免加载失败，管理器不会仅凭 config 字段启动原生 MTP。"));
   }
   if (capabilities.unsupportedReason) {
-    findings.push(finding("fail", UNSUPPORTED_TITLES[capabilities.unsupportedCode] || UNSUPPORTED_TITLES.default, capabilities.unsupportedReason));
+    findings.push({
+      ...finding("fail", UNSUPPORTED_TITLES[capabilities.unsupportedCode] || UNSUPPORTED_TITLES.default, capabilities.unsupportedReason),
+      ...(capabilities.isMuseGlimmer ? { errorCode: `${capabilities.unsupportedCode}_vllm_unsupported` } : {}),
+    });
   }
   if (looksGguf) {
     findings.push(finding("warn", "GGUF 模型", "vLLM 的 GGUF 支持偏实验；如果是常规 llama.cpp GGUF，优先用 llama.cpp/llama-server。"));
@@ -2344,7 +2347,7 @@ async function checkModelCompatibility(input = {}) {
   } else if (path.isAbsolute(model)) {
     findings.push(finding("fail", "本地路径不存在", model));
   }
-  if (/^(meta-llama|google|mistralai)\//i.test(model) && !process.env.HF_TOKEN) {
+  if (likelyGatedRepo(model) && !process.env.HF_TOKEN) {
     findings.push(finding("warn", "可能需要授权", "这类模型经常需要 Hugging Face token 或提前接受 license。"));
   }
   if (/nvfp4|fp4/i.test(model)) {
@@ -2357,11 +2360,6 @@ async function checkModelCompatibility(input = {}) {
     recommendations.quantization = "gptq";
   } else if (/fp8/i.test(model)) {
     recommendations.quantization = "fp8";
-  }
-  if (/qwen3\.?6|qwen3/i.test(model)) {
-    findings.push(finding("ok", "Qwen 工具调用", "推荐 --reasoning-parser qwen3 与 --tool-call-parser qwen3_coder。"));
-    recommendations.reasoningParser = "qwen3";
-    recommendations.toolCallParser = "qwen3_coder";
   }
   if (recipeCheck) {
     for (const item of recipeCheck.findings) {
@@ -2386,9 +2384,10 @@ async function checkModelCompatibility(input = {}) {
     }
   }
   // DSpark needs an engine that runs it and a recipe that names its draft model.
-  const dsparkRecipe = (recipeSelection?.recipe?.validation || []).some((rule) => rule.kind === "draftArchitecture");
-  if (normalizeSpeculativeMode(input.speculativeMode) === "dspark") {
-    const draft = resolveDsparkDraftModel(input.draftModel);
+  const draftRule = (recipeSelection?.recipe?.validation || []).find((rule) => rule.kind === "draftArchitecture");
+  const dsparkRecipe = Boolean(draftRule);
+  if (normalizeSpeculativeMode(input.speculativeMode) === DSPARK_MODE) {
+    const draft = resolveDsparkDraftModel(input.draftModel, draftRule);
     if (!engineTraits(runtimeEngine).dspark) {
       findings.push(finding("fail", "vLLM DSpark 在本机不可用", "已实测 V2 runner 因 WSL UVA 失败，V1 会错误解析该 RadixArk checkpoint；请选择 SGLang。"));
     } else if (!dsparkRecipe) {
@@ -2403,10 +2402,6 @@ async function checkModelCompatibility(input = {}) {
     }
   } else if (engineTraits(runtimeEngine).speculativeModes && !pennyroyal && normalizeSpeculativeMode(input.speculativeMode) !== "off") {
     findings.push(finding("fail", "SGLang 推测模式未开放", "SGLang 档当前只支持 off 或 dspark；请选择 DSpark 极速方案，或切回 vLLM 使用 MTP。"));
-  }
-  if (/deepseek/i.test(model)) {
-    recommendations.reasoningParser = "deepseek_r1";
-    recommendations.toolCallParser = "deepseek_v3";
   }
   if (/uncensored|abliterated|abliteration/i.test(model)) {
     findings.push(finding("info", "去审查/abliterated 标记", "适合本地测试，但建议在审计和访问控制上更谨慎。"));
@@ -2435,17 +2430,16 @@ function finding(severity, title, detail) {
   return core.compatibilityFinding(severity, title, detail);
 }
 
+// Parser defaults for a model known only by its name or path (02 section 8.6):
+// the families' name patterns pick the family and its vLLM parsers answer
+// (quant-scoped rules read the name too); a name no family claims gets none.
+// The checkpoint's own config and chat template refine this once they are read.
+function nameOnlyParsers(model) {
+  return resolveModelParsers(null, model, "", "", { engineId: "vllm" });
+}
+
 function inferReasoningParser(model) {
-  const text = String(model || "").toLowerCase();
-  if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "nano_v3";
-  if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) return "gemma4";
-  if (text.includes("qwen3")) return "qwen3";
-  if (text.includes("deepseek-r1") || text.includes("deepseek_r1")) return "deepseek_r1";
-  if (text.includes("deepseek")) return "deepseek_v3";
-  if (text.includes("gpt-oss") || text.includes("gptoss")) return "gptoss";
-  if (text.includes("kimi")) return "kimi_k2";
-  if (text.includes("mistral")) return "mistral";
-  return "";
+  return nameOnlyParsers(model).reasoningParser.value;
 }
 
 async function summarizeRuntimeLogs(options = {}) {
@@ -3667,23 +3661,10 @@ function normalizeToolCallParser(value, options = {}) {
   return normalizeParserName(value, "tool", options);
 }
 
-function inferToolCallParser(model, preset = "generic") {
-  // 工具调用格式由模型的 chat template 决定；preset 只保留在签名里兼容调用点。
-  const text = String(model || "").toLowerCase();
-  if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "qwen3_coder";
-  if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) {
-    return "gemma4";
-  }
-  if (text.includes("qwen3.6") || text.includes("qwen3.8") || text.includes("qwen3-") || text.includes("qwen/qwen3") || text.includes("qwen3_coder") || text.includes("qwen3-coder")) {
-    return "qwen3_coder";
-  }
-  if (text.includes("qwen2.5") || text.includes("qwq") || text.includes("qwen")) return "hermes";
-  if (text.includes("deepseek")) return "deepseek_v3";
-  if (text.includes("mistral")) return "mistral";
-  if (text.includes("llama-3") || text.includes("llama3")) return "llama3_json";
-  if (text.includes("xlam")) return "xlam";
-  if (text.includes("granite")) return "granite";
-  return "";
+// The tool-call format is decided by the model's chat template; the preset stays
+// in the signature for the launch request's call shape.
+function inferToolCallParser(model, _preset = "generic") {
+  return nameOnlyParsers(model).toolCallParser.value;
 }
 
 // Delegates to manager-core so the manager, service-entry, and the Host
@@ -3755,6 +3736,15 @@ function readLocalModelQuantizationMethod(localPath) {
   return normalizeQuantization(String(config?.quantization_config?.quant_method || ""));
 }
 
+// Hugging Face organisations whose repositories usually need a token or an
+// accepted licence: a download hint about the publisher, not a model family.
+const GATED_HF_ORGS = new Set(["meta-llama", "google", "mistralai"]);
+
+function likelyGatedRepo(model) {
+  const org = /^([^/\\]+)\//.exec(String(model || ""))?.[1];
+  return Boolean(org) && GATED_HF_ORGS.has(org.toLowerCase());
+}
+
 function readLocalModelConfig(localPath) {
   if (!localPath) return null;
   const configPath = path.join(localPath, "config.json");
@@ -3766,9 +3756,15 @@ function readLocalModelConfig(localPath) {
   }
 }
 
-function resolveDsparkDraftModel(value = "") {
+// The draft model a DSpark recipe names: its validation rule (recipe data)
+// gives the draft architecture and the default folder; the defaults below are
+// the bundled qwen38-dspark recipes' values for callers without a rule.
+const DSPARK_DRAFT_DEFAULTS = Object.freeze({ architecture: "DSparkDraftModel", defaultDir: "RadixArk-Qwen3.8-27B-DSpark" });
+
+function resolveDsparkDraftModel(value = "", rule = {}) {
+  const architecture = String(rule?.architecture || DSPARK_DRAFT_DEFAULTS.architecture);
   const requested = String(value || "").trim();
-  const candidate = requested ? modelStorage.fromContainerPath(requested) : path.join(CONFIG.modelsRoot, "RadixArk-Qwen3.8-27B-DSpark");
+  const candidate = requested ? modelStorage.fromContainerPath(requested) : path.join(CONFIG.modelsRoot, String(rule?.defaultDir || DSPARK_DRAFT_DEFAULTS.defaultDir));
   let resolved;
   try { resolved = modelStorage.resolvePath(path.isAbsolute(candidate) ? candidate : path.resolve(CONFIG.modelsRoot, candidate)); }
   catch (error) { return { path: candidate, ok: false, reason: error.message }; }
@@ -3777,8 +3773,8 @@ function resolveDsparkDraftModel(value = "") {
   if (!fs.existsSync(resolved) || !config) {
     return { path: resolved, ok: false, reason: `未找到 DSpark 草稿模型或 config.json：${resolved}` };
   }
-  if (!architectures.some((name) => /DSparkDraftModel/i.test(name))) {
-    return { path: resolved, ok: false, reason: `草稿模型不是 DSparkDraftModel：${resolved}` };
+  if (!architectures.some((name) => name.toLowerCase().includes(architecture.toLowerCase()))) {
+    return { path: resolved, ok: false, reason: `草稿模型不是 ${architecture}：${resolved}` };
   }
   return { path: resolved, ok: true, reason: "" };
 }
@@ -3895,7 +3891,7 @@ function resolveVllmRuntimePreset(opts = {}, launch = {}) {
   return core.engines.recipes.legacyRuntimePreset(runtimeEngine, recipeOptions, launch, legacyRecipeContext(opts, { model, config: localConfig, localPath: launch.localPath }, {
     speculativeMode: normalizeSpeculativeMode(opts.speculativeMode),
     capabilities,
-    resolveDraftModel: (value) => resolveDsparkDraftModel(value),
+    resolveDraftModel: (value, rule) => resolveDsparkDraftModel(value, rule),
   }));
 }
 
@@ -4081,13 +4077,37 @@ function vllmAuthHeaders(apiKey, base = {}) {
   return apiKey ? { ...base, authorization: `Bearer ${apiKey}` } : base;
 }
 
+// Request sampling keys a family's `sampling` may default (generation_config
+// names, which vLLM's OpenAI server accepts as request fields).
+const REQUEST_SAMPLING_KEYS = Object.freeze(["temperature", "top_p", "top_k", "min_p", "repetition_penalty"]);
+const familySamplingCache = { knowledge: null, byName: new Map() };
+
+// The sampling defaults of the family the served name belongs to (families
+// data, name patterns), or null. Cached per knowledge snapshot.
+function familySamplingForName(name) {
+  const key = String(name || "");
+  if (!key) return null;
+  const knowledge = modelKnowledge.loadKnowledge();
+  if (familySamplingCache.knowledge !== knowledge || familySamplingCache.byName.size > 256) {
+    familySamplingCache.knowledge = knowledge;
+    familySamplingCache.byName = new Map();
+  }
+  if (!familySamplingCache.byName.has(key)) {
+    const sampling = modelKnowledge.matchFamily(modelConfigCard(null, key, "", ""), knowledge).entry?.sampling;
+    familySamplingCache.byName.set(key, sampling && typeof sampling === "object" ? sampling : null);
+  }
+  return familySamplingCache.byName.get(key);
+}
+
 function applyVllmRequestDefaults(body = {}, _runtime = null, model = "", context = {}) {
   if (context.upstreamPath && context.upstreamPath !== "chat/completions") return body;
-  if (!/qwen3_(?:5|6|8)|qwen3\.(?:5|6|8)/i.test(String(model || body.model || ""))) return body;
+  const sampling = familySamplingForName(model || body.model);
+  if (!sampling) return body;
   const next = { ...body };
-  if (body.temperature === undefined || body.temperature === null || body.temperature === "") next.temperature = 1.0;
-  if (body.top_p === undefined || body.top_p === null || body.top_p === "") next.top_p = 0.95;
-  if (body.top_k === undefined || body.top_k === null || body.top_k === "") next.top_k = 20;
+  for (const key of REQUEST_SAMPLING_KEYS) {
+    if (sampling[key] === undefined || sampling[key] === null) continue;
+    if (body[key] === undefined || body[key] === null || body[key] === "") next[key] = sampling[key];
+  }
   return next;
 }
 

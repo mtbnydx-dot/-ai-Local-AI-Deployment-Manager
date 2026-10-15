@@ -3,11 +3,12 @@
 // Capabilities v1 -> families v2 (docs/overhaul/02-models.md section 8.5).
 //
 // convertCapabilitiesV1(v1Json) turns a model-capabilities.json (the format
-// manager-core/data/model-capabilities.json used before the knowledge layers)
-// into a families v2 file plus the capabilityIdAliases table (v1 id -> family
-// id). The knowledge loader runs it on <AI_ROOT>/config/model-capabilities.json
-// (layer 2, never rewritten) and scripts/migrate-capabilities-v1.js uses it to
-// generate the bundled families.json.
+// manager-core/data/model-capabilities.json used before the knowledge layers;
+// MOD-21 retired that file) into a families v2 file plus the
+// capabilityIdAliases table (v1 id -> family id). The knowledge loader runs it
+// on <AI_ROOT>/config/model-capabilities.json (layer 2, never rewritten) and
+// scripts/migrate-capabilities-v1.js uses it to generate the bundled
+// families.json from the last v1 file (a test fixture now).
 //
 // familyToV1Entry(family) is the inverse view: the model-capability-matrix shim
 // projects every v2 family back to the v1 entry shape so /api/capability-data,

@@ -94,8 +94,13 @@
           "muse-glimmer"
         ],
         "namePatterns": [
-          "museglimmer"
+          "muse[-_. ]?glimmer"
         ]
+      },
+      "sampling": {
+        "temperature": 1,
+        "top_p": 0.95,
+        "top_k": 64
       },
       "engines": {
         "vllm": {
@@ -210,6 +215,11 @@
           "en": "Flash-Next on SM120 is validated with NEXTN inside SGLang only; vLLM MTP stays off."
         }
       },
+      "sampling": {
+        "temperature": 1,
+        "top_p": 0.95,
+        "top_k": 20
+      },
       "engines": {
         "vllm": {
           "support": "verified",
@@ -307,6 +317,11 @@
           "en": "Qwen3.8 packages MTP tensors; auto MTP stays off on ModelOpt/NVFP4 checkpoints until acceptance is validated."
         }
       },
+      "sampling": {
+        "temperature": 1,
+        "top_p": 0.95,
+        "top_k": 20
+      },
       "engines": {
         "vllm": {
           "support": "verified",
@@ -369,6 +384,11 @@
         "reason": {
           "en": "Native MTP is used in auto mode when packaged tensors are found; ModelOpt/NVFP4 cards keep it off."
         }
+      },
+      "sampling": {
+        "temperature": 1,
+        "top_p": 0.95,
+        "top_k": 20
       },
       "engines": {
         "vllm": {

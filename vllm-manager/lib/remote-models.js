@@ -548,7 +548,7 @@ function matchesRemoteFeature(model, feature) {
   if (feature === "distilled") return (model.badges || []).includes("distilled") || /distill/.test(text);
   if (feature === "uncensored") return (model.badges || []).includes("uncensored") || core.isUncensoredText(text);
   if (feature === "moe") return /\bmoe\b|mixture-of-expert|\ba\d{1,3}b\b|-a\d{1,3}b/.test(text);
-  if (feature === "reasoning") return /reasoning|thinking|\br1\b|qwq|deepseek-r1|-think/.test(text);
+  if (feature === "reasoning") return /reasoning|thinking|\br1\b|qwq|-think/.test(text);
   return true;
 }
 

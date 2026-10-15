@@ -22,7 +22,8 @@ const { convertCapabilitiesV1, familyToV1Entry } = require("../model-inspector/m
 const { generateFamilies, run: runMigrationScript } = require("../../scripts/migrate-capabilities-v1");
 
 const DATA_DIR = path.join(__dirname, "..", "data");
-const V1_FILE = path.join(DATA_DIR, "model-capabilities.json");
+// MOD-21 retired the bundled v1 matrix; its last version is this fixture.
+const V1_FILE = path.join(__dirname, "fixtures", "model-capabilities-v1.json");
 const FAMILIES_FILE = path.join(DATA_DIR, "knowledge", "families.json");
 const QWEN38_SIGNATURE = "qwen38-xml-effort";
 const ENGINES = ["vllm", "sglang", "llama"];
@@ -49,6 +50,8 @@ function freshMatrix() {
 // The v1 entry as the shim must answer it. Qwen3.8 is the one documented
 // rekey: the llama.cpp architectures moved into match.ggufArchitectures and the
 // family also claims the qwen3_5 types (guarded by the template signature).
+// Muse Glimmer's name pattern accepts the separators of its repository names
+// (MOD-21), which the vLLM capability module used to normalise away in code.
 function expectedV1(entry) {
   const expected = clone(entry);
   if (entry.id === "qwen3.8") {
@@ -56,6 +59,7 @@ function expectedV1(entry) {
     expected.match.modelTypes = [...entry.match.modelTypes, "qwen3_5", "qwen3_5_moe"];
     delete expected.llama.ggufArchitectures;
   }
+  if (entry.id === "muse-glimmer") expected.match.namePatterns = ["muse[-_. ]?glimmer"];
   return expected;
 }
 
@@ -163,13 +167,14 @@ test("convertCapabilitiesV1 reports instead of guessing: bad input throws, bad e
 
 // ----- the generated bundled file
 
-test("the bundled families.json is generated from model-capabilities.json and is up to date", () => {
+test("the bundled families.json is generated from the last v1 matrix and is up to date", () => {
   const { families } = generateFamilies({ v1, existing: bundled });
   assert.deepEqual(families, bundled);
   const out = [];
-  const code = runMigrationScript(["--check"], { log: (line) => out.push(line), error: (line) => out.push(line) });
+  const code = runMigrationScript(["--check", "--input", V1_FILE], { log: (line) => out.push(line), error: (line) => out.push(line) });
   assert.equal(code, 0, out.join("\n"));
   assert.equal(runMigrationScript(["--bogus"], { log() {}, error() {} }), 1);
+  assert.equal(runMigrationScript(["--check"], { log() {}, error() {} }), 1, "the retired default input is not read");
 });
 
 test("--check fails on a stale file and --dry-run writes nothing", () => {
@@ -177,15 +182,15 @@ test("--check fails on a stale file and --dry-run writes nothing", () => {
   try {
     const output = path.join(dir, "families.json");
     const quiet = { log() {}, error() {} };
-    assert.equal(runMigrationScript(["--check", "--output", output], quiet), 2);
-    assert.equal(runMigrationScript(["--dry-run", "--output", output], quiet), 0);
+    assert.equal(runMigrationScript(["--check", "--input", V1_FILE, "--output", output], quiet), 2);
+    assert.equal(runMigrationScript(["--dry-run", "--input", V1_FILE, "--output", output], quiet), 0);
     assert.equal(fs.existsSync(output), false);
-    assert.equal(runMigrationScript(["--output", output], quiet), 0);
-    assert.equal(runMigrationScript(["--check", "--output", output], quiet), 0);
+    assert.equal(runMigrationScript(["--input", V1_FILE, "--output", output], quiet), 0);
+    assert.equal(runMigrationScript(["--check", "--input", V1_FILE, "--output", output], quiet), 0);
     const written = JSON.parse(fs.readFileSync(output, "utf8"));
     assert.equal(written.entries.length, 14);
     fs.writeFileSync(output, JSON.stringify({ ...written, asOf: "2020-01-01", entries: [] }));
-    assert.equal(runMigrationScript(["--check", "--output", output], quiet), 2);
+    assert.equal(runMigrationScript(["--check", "--input", V1_FILE, "--output", output], quiet), 2);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -282,7 +287,7 @@ test("the matrix description keeps the shape /api/capability-data and the UI rea
   assert.equal(described.entries.length, 14);
   for (const item of described.entries) {
     assert.deepEqual(Object.keys(item).sort(), ["confidence", "contextMax", "download", "id", "label", "llama", "match", "notes", "sglang", "vllm"]);
-    const original = v1.entries.find((entry) => entry.id === item.id);
+    const original = expectedV1(v1.entries.find((entry) => entry.id === item.id));
     if (item.id === "qwen3.8") continue;
     assert.deepEqual(item.match, original.match);
     assert.deepEqual(item.vllm, original.vllm || null);
@@ -365,6 +370,24 @@ test("familyIdForCapabilityId covers every v1 id and every capabilityIds value i
   }
   assert.equal(knowledgeModule.familyIdForCapabilityId("no-such-capability"), null);
   assert.equal(knowledgeModule.familyIdForCapabilityId(""), null);
+});
+
+test("MOD-21: the bundled v1 matrix is gone; recipes match by familyId and a capabilityIds model still matches through the alias table", () => {
+  assert.equal(fs.existsSync(path.join(DATA_DIR, "model-capabilities.json")), false);
+  const recipes = require("../engines/recipes");
+  recipes.clearRecipeStoreCache();
+  const models = recipes.getRecipeStore().list({ kind: "model" });
+  assert.ok(models.length > 0);
+  for (const recipe of models) assert.equal(recipe.match?.capabilityIds, undefined, recipe.id);
+  for (const familyId of new Set(models.map((recipe) => recipe.match?.familyId).filter(Boolean))) {
+    assert.ok(bundled.entries.some((entry) => entry.id === familyId), familyId);
+    assert.equal(knowledgeModule.familyIdForCapabilityId(familyId), familyId);
+  }
+  for (const model of [{ familyId: "qwen3.8" }, { capabilityIds: ["qwen3.8"] }, { capabilityId: "qwen3.8" }]) {
+    const hit = recipes.matchRecipes({ engineId: "sglang", model }).find((item) => item.recipe.id === "qwen38-sglang");
+    assert.equal(hit.eligible, true, JSON.stringify(model));
+    assert.ok(hit.reasons.includes("family"), JSON.stringify(model));
+  }
 });
 
 // ----- Qwen3.8 rekey at the card level
