@@ -4,8 +4,9 @@
 // the range, filters and auto-refresh round-trip through the URL; the chart
 // table view and the annotations render; every 04 §19 edge state shows its
 // copy (metric not reported, idle instance, collection gap, no price,
-// read-only view); axe is clean. CON-18 adds the Requests explorer to this
-// spec (brush to filter, request detail). The real service-entry serves the
+// read-only view); axe is clean. The last part (CON-18) covers the Requests
+// explorer and the request detail: brush to filter, facets and filters in the
+// URL, load more, the waterfall, billing, instance and the audit link. The real service-entry serves the
 // console and the API is mocked in the browser (helpers/console-harness.js).
 const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
@@ -198,6 +199,7 @@ function telemetryApi(extra = {}) {
     "GET /api/telemetry/baseline": BASELINE,
     "GET /api/telemetry/status": STATUS,
     "GET /api/telemetry/settings": SETTINGS,
+    "GET /api/telemetry/requests": telemetry("requests"),
     ...extra,
   };
 }
@@ -883,6 +885,355 @@ for (const theme of ["light", "dark"]) {
           await open(page, route);
           await settled(page);
           if (route !== "observability/settings") await expect(page.locator("[data-testid='time-series-chart.canvas'], [data-testid='obs.gantt'], [data-testid='obs.classes']").first()).toBeVisible();
+          await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+          await expectNoA11yViolations(page, { label: `${route} ${theme} ${size}` });
+          await noOverflow(page, `${route} ${theme} ${size}`);
+        }
+        expect(realFailures(failures)).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Requests (CON-18): the explorer and the request detail
+
+const REQUESTS = telemetry("requests");
+const DETAIL = telemetry("request-detail");
+const DETAIL_ID = "req_aaaaaaaaaaaaaaaaaaar";
+const PAGE_TWO = {
+  ok: true,
+  rows: [
+    { ...REQUESTS.rows[4], id: 12, requestId: "req_aaaaaaaaaaaaaaaaaaam", receivedAt: "2026-10-14T11:40:00.000Z" },
+    { ...REQUESTS.rows[3], id: 11, requestId: "req_aaaaaaaaaaaaaaaaaaal", receivedAt: "2026-10-14T11:30:00.000Z" },
+  ],
+  nextCursor: null,
+};
+const DETAIL_FULL = {
+  ...DETAIL,
+  billing: {
+    usage: { usageId: "usg_1", chargedMicrocredits: "0", projectedMicrocredits: "1834", usageSource: "reported", terminalState: "completed", decisionCode: "billing_shadow_allowed" },
+    reservation: { enforcementMode: "shadow", decisionCode: "billing_shadow_allowed", reservationMicrocredits: "4096" },
+  },
+  events: [{ id: 1201, type: "container.health", at: "2026-10-14T11:59:30.000Z", title: "Container healthy" }],
+};
+
+const requestApi = (extra = {}) => telemetryApi({
+  [`GET /api/telemetry/requests/${DETAIL_ID}`]: DETAIL_FULL,
+  "GET /api/telemetry/requests": (request) => (params(request).cursor ? PAGE_TWO : { ...REQUESTS, nextCursor: "cursor-1" }),
+  ...extra,
+});
+
+const lastCall = (calls) => calls[calls.length - 1];
+
+test("requests: the first page asks for facets and the window, rows show the result and open the detail, the export link carries the filters", async ({ browser }) => {
+  const { context, page, mock, failures } = await newPage(browser, { api: requestApi() });
+  try {
+    await open(page, "observability/requests?range=6h&model=model-a");
+    await settled(page);
+    const first = callsOf(mock, "requests")[0];
+    expect(first.query).toMatchObject({ facets: "1", limit: "100", model: "model-a" });
+    expect(Date.parse(first.query.to) - Date.parse(first.query.from)).toBe(6 * 3600 * 1000);
+    // The chart above the table: request count stacked by status class over the same window.
+    const series = withParam(callsOf(mock, "timeseries"), "metrics", "req.count");
+    expect(series).toHaveLength(1);
+    expect(series[0].query).toMatchObject({ groupBy: "status_class", model: "model-a" });
+    await expect(byId(page, "obs.req.chart").locator("[data-window]").first()).toHaveAttribute("data-window", "Last 6 h");
+
+    const rows = byId(page, "obs.req.table").locator("tbody tr");
+    await expect(rows).toHaveCount(5);
+    await expect(rows.first()).toContainText("req_aaaaaaaaaaaaaaaaaaar");
+    await expect(rows.first()).toContainText("200");
+    await expect(rows.first()).toContainText("Completed");
+    await expect(rows.nth(4)).toContainText("499");
+    await expect(rows.nth(4)).toContainText("Cancelled by client");
+    const link = rows.first().locator("[data-testid='obs.req.open']");
+    await expect(link).toHaveAttribute("href", /^\/observability\/requests\/req_aaaaaaaaaaaaaaaaaaar\?.*range=6h/);
+
+    // Server-side export: kind, format, the window and the filters the export accepts.
+    const exportHref = await byId(page, "data-table.export-server").getAttribute("href");
+    const exported = new URL(exportHref, entry.url);
+    expect(exported.pathname).toBe("/api/telemetry/export");
+    expect(Object.fromEntries(exported.searchParams)).toMatchObject({ kind: "requests", format: "csv", model: "model-a" });
+    expect(Date.parse(exported.searchParams.get("to")) - Date.parse(exported.searchParams.get("from"))).toBe(6 * 3600 * 1000);
+
+    await link.click();
+    await expect(page).toHaveURL(/\/observability\/requests\/req_aaaaaaaaaaaaaaaaaaar\?/);
+    await expect(byId(page, "obs.req.detail")).toBeVisible();
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("requests: brushing the chart narrows the window and the table follows", async ({ browser }) => {
+  const { context, page, mock } = await newPage(browser, { api: requestApi() });
+  try {
+    await open(page, "observability/requests");
+    await settled(page);
+    const before = callsOf(mock, "requests").length;
+    const widthBefore = (q) => Date.parse(q.to) - Date.parse(q.from);
+    expect(widthBefore(callsOf(mock, "requests")[0].query)).toBe(24 * 3600 * 1000);
+    const canvas = byId(page, "obs.req.chart.chart").locator(".u-over");
+    await expect(canvas).toBeVisible();
+    const box = await canvas.boundingBox();
+    await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await expect(page).toHaveURL(/[?&]from=.*&to=|[?&]to=.*&from=/);
+    await expect.poll(() => callsOf(mock, "requests").length).toBeGreaterThan(before);
+    const narrowed = lastCall(callsOf(mock, "requests")).query;
+    expect(widthBefore(narrowed)).toBeLessThan(3600 * 1000);
+    expect(widthBefore(narrowed)).toBeGreaterThan(0);
+    // The chart asks for the same narrowed window.
+    const chart = lastCall(withParam(callsOf(mock, "timeseries"), "metrics", "req.count")).query;
+    expect(chart.from).toBe(narrowed.from);
+    expect(chart.to).toBe(narrowed.to);
+    // The brushed window is a custom range: the picker no longer marks a preset.
+    await expect(byId(page, "time-range-picker.24h")).not.toHaveAttribute("aria-pressed", "true");
+  } finally {
+    await context.close();
+  }
+});
+
+test("requests: facets and filters live in the URL, narrow the table and the chart, and can be removed", async ({ browser }) => {
+  const { context, page, mock } = await newPage(browser, { api: requestApi() });
+  try {
+    await open(page, "observability/requests?range=24h");
+    await settled(page);
+    const facet = (group, value) => byId(page, "obs.req.facets").locator(`[data-facet='${group}'] [data-value='${value}']`);
+    await expect(facet("status_class", "5xx")).toContainText("1");
+    await expect(facet("model", "model-b")).toContainText("9");
+
+    // A request-only facet becomes a request-only parameter, and the chart follows it.
+    await facet("status_class", "5xx").click();
+    await expect(page).toHaveURL(/status_class=5xx/);
+    await expect.poll(() => lastCall(callsOf(mock, "requests")).query.status_class).toBe("5xx");
+    await expect.poll(() => lastCall(withParam(callsOf(mock, "timeseries"), "metrics", "req.count")).query.status_class).toBe("5xx");
+    await expect(facet("status_class", "5xx")).toHaveAttribute("aria-pressed", "true");
+    await expect(byId(page, "obs.req.chips").locator("[data-filter='status_class']")).toContainText("5xx");
+
+    // A common-filter facet goes to the shared filter, in the header's chips.
+    await facet("model", "model-a").click();
+    await expect(page).toHaveURL(/model=model-a/);
+    await expect.poll(() => lastCall(callsOf(mock, "requests")).query.model).toBe("model-a");
+    await expect(byId(page, "obs.chips").locator("[data-filter='model']")).toContainText("model-a");
+
+    // A second value of the same facet joins the list.
+    await facet("model", "model-b").click();
+    await expect.poll(() => lastCall(callsOf(mock, "requests")).query.model).toBe("model-a,model-b");
+
+    // Thresholds and the result filter come from the form.
+    await byId(page, "obs.req.filters.toggle").click();
+    await byId(page, "obs.req.filter.min_ttft_ms").fill("500");
+    await byId(page, "obs.req.filter.terminal_state").selectOption("client_abort");
+    await byId(page, "obs.req.apply").click();
+    await expect(page).toHaveURL(/min_ttft_ms=500/);
+    await expect(page).toHaveURL(/terminal_state=client_abort/);
+    await expect.poll(() => lastCall(callsOf(mock, "requests")).query).toMatchObject({ min_ttft_ms: "500", terminal_state: "client_abort", status_class: "5xx" });
+    // Thresholds are not chart parameters (04 answers unknown_parameter), so the chart never gets them.
+    for (const call of withParam(callsOf(mock, "timeseries"), "metrics", "req.count")) expect(call.query.min_ttft_ms).toBeUndefined();
+
+    // Removing a chip removes its parameter.
+    await byId(page, "obs.req.chips").locator("[data-filter='min_ttft_ms'] [data-testid='obs.req.chip.remove']").click();
+    await expect(page).not.toHaveURL(/min_ttft_ms/);
+    await byId(page, "obs.req.clear").click();
+    await expect(page).not.toHaveURL(/status_class|terminal_state/);
+    await expect(page).toHaveURL(/model=model-a/);
+  } finally {
+    await context.close();
+  }
+});
+
+test("requests: an id search ignores the window and says so; load more appends the next page without facets", async ({ browser }) => {
+  const { context, page, mock } = await newPage(browser, { api: requestApi() });
+  try {
+    await open(page, "observability/requests?range=1h");
+    await settled(page);
+    const rows = byId(page, "obs.req.table").locator("tbody tr");
+    await expect(rows).toHaveCount(5);
+    await byId(page, "data-table.load-more").click();
+    await expect(rows).toHaveCount(7);
+    const more = callsOf(mock, "requests").find((call) => call.query.cursor);
+    expect(more.query.cursor).toBe("cursor-1");
+    expect(more.query.facets).toBeUndefined();
+    expect(more.query.from).toBe(callsOf(mock, "requests")[0].query.from);
+    await expect(byId(page, "data-table.load-more")).toHaveCount(0);
+
+    await byId(page, "obs.req.filters.toggle").click();
+    await byId(page, "obs.req.filter.q").fill("req_aaaaaa");
+    await byId(page, "obs.req.apply").click();
+    await expect(byId(page, "obs.req.q-note")).toBeVisible();
+    await expect.poll(() => lastCall(callsOf(mock, "requests")).query.q).toBe("req_aaaaaa");
+    const search = lastCall(callsOf(mock, "requests")).query;
+    expect(search.from).toBeUndefined();
+    expect(search.to).toBeUndefined();
+    // Text the server would refuse never leaves the form.
+    await byId(page, "obs.req.filter.q").fill("a b;c");
+    await byId(page, "obs.req.apply").click();
+    await expect(page).not.toHaveURL(/[?&]q=/);
+  } finally {
+    await context.close();
+  }
+});
+
+test("requests: no match reads as empty with its next action; a failing page offers Retry", async ({ browser }) => {
+  let failing = true;
+  const { context, page } = await newPage(browser, {
+    api: requestApi({ "GET /api/telemetry/requests": () => (failing ? { status: 503, body: { ok: false, error: { code: "telemetry_unavailable", message: "down" } } } : { ok: true, rows: [], nextCursor: null, facets: {} }) }),
+  });
+  try {
+    await open(page, "observability/requests?model=nothing");
+    await expect(byId(page, "obs.req.error")).toBeVisible();
+    failing = false;
+    await byId(page, "obs.req.error").locator("[data-testid='obs.retry']").click();
+    await expect(byId(page, "obs.req.empty")).toBeVisible();
+    await expect(byId(page, "obs.req.empty").locator("[data-testid='empty-state.action']")).toContainText("Clear filters");
+  } finally {
+    await context.close();
+  }
+});
+
+test("request detail: the waterfall draws one bar per interval, with billing, the instance and launch links, events and the audit state", async ({ browser }) => {
+  const { context, page, mock, failures } = await newPage(browser, { api: requestApi() });
+  try {
+    await open(page, `observability/requests/${DETAIL_ID}?range=6h&model=model-a`);
+    await expect(byId(page, "obs.req.detail")).toBeVisible();
+    // The detail endpoint takes no query parameters (04 answers unknown_parameter).
+    const detailCalls = mock.find("GET", `/api/telemetry/requests/${DETAIL_ID}`);
+    expect(detailCalls).toHaveLength(1);
+    expect(detailCalls[0].query).toEqual({});
+    expect(detailCalls[0].headers["x-audit-session"]).toBeUndefined();
+    await expect(page.locator("#main h1")).toHaveText("Request");
+
+    const rows = byId(page, "obs.waterfall.row");
+    await expect(rows).toHaveCount(4);
+    expect(await rows.evaluateAll((nodes) => nodes.map((node) => node.dataset.kind))).toEqual(["queue", "upstream", "prefill", "decode"]);
+    await expect(rows.nth(0)).toContainText("Queued in the gateway");
+    await expect(rows.nth(3)).toContainText("Generating");
+    await expect(rows.nth(3)).toContainText("660 ms");
+    const widths = await byId(page, "obs.waterfall.bar").evaluateAll((nodes) => nodes.map((node) => [node.style.left, node.style.width]));
+    expect(widths).toHaveLength(4);
+    // 3 ms queued, 137 ms waiting, 0 ms to the first token, 660 ms generating, of 800 ms.
+    expect(Number.parseFloat(widths[3][0])).toBeCloseTo(17.5, 1);
+    expect(Number.parseFloat(widths[3][1])).toBeCloseTo(82.5, 1);
+    expect(Number.parseFloat(widths[2][1])).toBe(0);
+    await expect(byId(page, "obs.waterfall.marks").locator("tbody tr")).toHaveCount(5);
+    await expect(byId(page, "obs.waterfall.total")).toContainText("800 ms");
+
+    await expect(byId(page, "obs.req.state")).toContainText("Completed");
+    await expect(byId(page, "obs.req.facts")).toContainText("req_aaaaaaaaaaaaaaaaaaar");
+    await expect(byId(page, "obs.req.facts")).toContainText("model-b");
+
+    // Billing: amounts are decimal credits from the microcredit strings.
+    await expect(byId(page, "obs.req.billing.usage")).toContainText("0.001834 credits");
+    await expect(byId(page, "obs.req.billing.usage")).toContainText("billing_shadow_allowed");
+    await expect(byId(page, "obs.req.billing.reservation")).toContainText("0.004096 credits");
+
+    // Instance and launch.
+    await expect(byId(page, "obs.req.fleet-link")).toHaveAttribute("href", "/deployments/vllm%3Aprimary");
+    await expect(byId(page, "obs.req.launch-link")).toHaveAttribute("href", "/deployments/vllm%3Aprimary?tab=config");
+    await expect(byId(page, "obs.req.launch.summary")).toContainText("262144");
+    await expect(byId(page, "obs.req.sample")).toContainText("29%");
+    await expect(byId(page, "obs.req.event")).toContainText("container.health");
+
+    // Audit: locked, the request came from OpenWebUI.
+    await expect(byId(page, "obs.req.audit.locked")).toBeVisible();
+    await expect(byId(page, "obs.req.audit.unlock")).toHaveAttribute("href", "/audit/conversations");
+
+    // Back keeps the list view.
+    await byId(page, "obs.req.back").click();
+    await expect(page).toHaveURL(/\/observability\/requests\?.*range=6h/);
+    await expect(page).toHaveURL(/model=model-a/);
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("request detail: an unlocked audit links the conversation and the candidates; an unknown id says so", async ({ browser }) => {
+  const linked = { ...DETAIL_FULL, audit: { unlocked: true, linkable: true, chatId: "chat-1", candidates: [{ chatId: "chat-2", title: "Translation help", auditId: "20261013-inc", messageId: "m1", offsetSeconds: -42 }] } };
+  const { context, page } = await newPage(browser, {
+    api: requestApi({
+      [`GET /api/telemetry/requests/${DETAIL_ID}`]: linked,
+      "GET /api/telemetry/requests/req_zzzzzzzzzzzzzzzzzzzz": { status: 404, body: { ok: false, error: { code: "request_not_found", message: "No such request" } } },
+    }),
+  });
+  try {
+    await open(page, `observability/requests/${DETAIL_ID}`);
+    await expect(byId(page, "obs.req.audit.chat")).toHaveAttribute("href", "/audit/conversations?chat=chat-1");
+    const candidate = byId(page, "obs.req.audit.candidate");
+    await expect(candidate).toHaveAttribute("href", "/audit/conversations?chat=chat-2&auditId=20261013-inc");
+    await expect(candidate).toContainText("Translation help");
+    await open(page, "observability/requests/req_zzzzzzzzzzzzzzzzzzzz");
+    await expect(byId(page, "obs.req.missing")).toContainText("Request not found");
+  } finally {
+    await context.close();
+  }
+});
+
+test("request detail: a request without a timeline or billing says so instead of drawing an empty chart", async ({ browser }) => {
+  const bare = { ...DETAIL_FULL, timeline: [], billing: null, instance: null, events: [], audit: { unlocked: false, linkable: false, chatId: null, candidates: [] } };
+  const { context, page } = await newPage(browser, { api: requestApi({ [`GET /api/telemetry/requests/${DETAIL_ID}`]: bare }) });
+  try {
+    await open(page, `observability/requests/${DETAIL_ID}`);
+    await expect(byId(page, "obs.waterfall.empty")).toBeVisible();
+    await expect(byId(page, "obs.req.billing.none")).toBeVisible();
+    await expect(byId(page, "obs.req.events.none")).toBeVisible();
+    await expect(byId(page, "obs.req.audit.none")).toBeVisible();
+    await expect(byId(page, "obs.req.instance")).toContainText("No instance is recorded");
+  } finally {
+    await context.close();
+  }
+});
+
+test("requests and the detail speak Chinese, and the English pages have no Han outside user content", async ({ browser }) => {
+  const zh = await newPage(browser, { locale: "zh-CN", api: requestApi() });
+  try {
+    await open(zh.page, "observability/requests");
+    await settled(zh.page);
+    await expect(zh.page.locator("#main h1")).toHaveText("请求");
+    await expect(byId(zh.page, "obs.req.facets")).toContainText("状态类别");
+    await open(zh.page, `observability/requests/${DETAIL_ID}`);
+    await expect(byId(zh.page, "obs.waterfall.row").first()).toContainText("在网关排队");
+    await expect(byId(zh.page, "obs.req.billing.usage")).toContainText("点数");
+  } finally {
+    await zh.context.close();
+  }
+  for (const route of ["observability/requests", `observability/requests/${DETAIL_ID}`]) {
+    const en = await newPage(browser, { locale: "en-US", api: requestApi() });
+    try {
+      await open(en.page, route);
+      await expect(en.page.locator("#main [data-testid='obs.req.detail'], #main [data-testid='obs.req.table']").first()).toBeVisible();
+      const han = await en.page.evaluate(() => {
+        const found = [];
+        const walker = document.createTreeWalker(document.querySelector("#main"), NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (/\p{Script=Han}/u.test(node.textContent) && !node.parentElement.closest("[data-user-content]")) found.push(node.textContent.trim().slice(0, 40));
+        }
+        return found;
+      });
+      expect(han, route).toEqual([]);
+    } finally {
+      await en.context.close();
+    }
+  }
+});
+
+for (const theme of ["light", "dark"]) {
+  for (const size of ["desktop", "phone"]) {
+    test(`requests and the request detail have no axe findings and no overflow, ${theme} at ${SIZES[size].width}`, async ({ browser }) => {
+      test.setTimeout(180_000);
+      const { context, page, failures } = await newPage(browser, { size: SIZES[size], theme, api: requestApi() });
+      try {
+        for (const route of ["observability/requests", `observability/requests/${DETAIL_ID}`]) {
+          await open(page, route);
+          await expect(page.locator("[data-testid='obs.req.table'], [data-testid='obs.req.detail']").first()).toBeVisible();
+          await expect(byId(page, "obs.loading")).toHaveCount(0);
           await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
           await expectNoA11yViolations(page, { label: `${route} ${theme} ${size}` });
           await noOverflow(page, `${route} ${theme} ${size}`);

@@ -1,5 +1,17 @@
 {
   "prefixes": [
+    "audit.action.",
+    "audit.err.",
+    "audit.family.",
+    "audit.filter.",
+    "audit.mode.",
+    "audit.nav.",
+    "audit.outcome.",
+    "audit.reason.",
+    "audit.role.",
+    "audit.set.",
+    "audit.unit.",
+    "audit.warn.",
     "obs.alert.",
     "obs.collector.",
     "obs.collectorState.",
@@ -9,6 +21,10 @@
     "obs.metric.",
     "obs.page.",
     "obs.panel.by.",
+    "obs.req.facet.",
+    "obs.req.filter.",
+    "obs.req.mark.",
+    "obs.req.seg.",
     "obs.set.",
     "obs.settings.error.",
     "obs.settings.group.",
@@ -20,13 +36,6 @@
     "obs.unit."
   ],
   "unused": [
-    "audit.accessLog",
-    "audit.chain",
-    "audit.chainBroken",
-    "audit.indexBuilding",
-    "audit.rebaseline",
-    "audit.title",
-    "audit.unlock",
     "obs.window"
   ]
 }

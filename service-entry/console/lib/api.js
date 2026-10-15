@@ -196,7 +196,7 @@ export function createApiClient({ fetchImpl, timeoutMs = 15000, csrfToken = null
   async function send(path, options = {}, allowRetry = true) {
     const method = String(options.method || "GET").toUpperCase();
     const url = `${base}${withQuery(path, options.query)}`;
-    const headers = { accept: "application/json", ...(options.headers || {}) };
+    const headers = { accept: options.text ? "text/markdown, text/plain;q=0.9" : "application/json", ...(options.headers || {}) };
     let body;
     if (options.body !== undefined) {
       headers["content-type"] = "application/json";
@@ -248,6 +248,8 @@ export function createApiClient({ fetchImpl, timeoutMs = 15000, csrfToken = null
       else if (status === 410 || error.code === "console_stale") notify(onStale, error);
       throw error;
     }
+    // options.text: the caller wants a text body (the audit Markdown export), not JSON.
+    if (options.text) return raw;
     if (parsed.text !== undefined) {
       throw simpleError("bad_response", status, requestId, managerId, `HTTP ${status}: the response is not JSON.`);
     }

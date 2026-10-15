@@ -30,3 +30,4 @@ export function LazyView({ load, name = "default", ...props }) {
 
 export const loadChart = () => import("../../components/time-series-chart.js");
 export const loadLegacy = () => import("./legacy.js");
+export const loadRequestsTable = () => import("./requests-table.js");
