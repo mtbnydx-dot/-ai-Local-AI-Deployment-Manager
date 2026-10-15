@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "engineId": "sglang",
+  "runtimeId": "sglang@0.5.17",
+  "imageId": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "flags": {
+    "capturedAt": "2026-10-19T09:30:00.000Z",
+    "argv": ["run", "--rm", "--entrypoint", "python", "image", "-m", "sglang.launch_server", "--help"],
+    "rawSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "flags": [
+      { "flag": "--tp-size", "aliases": ["--tp"], "takesValue": true, "valueHint": "TP_SIZE", "choices": [], "default": 1, "env": null, "help": "Tensor parallel size.", "group": "parallel" },
+      { "flag": "--kv-cache-dtype", "aliases": [], "takesValue": true, "valueHint": "DTYPE", "choices": ["auto", "fp8_e5m2", "fp8_e4m3"], "default": "auto", "env": null, "help": "KV cache dtype.", "group": "memory" }
+    ]
+  },
+  "registries": null,
+  "diff": {
+    "added": ["--enable-pleoffload", "--linear-attn-backend"],
+    "removed": ["--disable-radix-cache-legacy"],
+    "renamed": [{ "from": "--max-total-tokens-legacy", "to": "--max-total-tokens", "evidence": "alias" }],
+    "choicesChanged": [{ "flag": "--kv-cache-dtype", "added": ["fp8_e4m3"], "removed": ["fp8_e5m2_legacy"] }],
+    "defaultsChanged": [{ "flag": "--schedule-conservativeness", "from": 1, "to": 0.8 }],
+    "catalogMissing": ["--flashinfer-workspace"],
+    "catalogUnmapped": ["--enable-pleoffload"]
+  }
+}
