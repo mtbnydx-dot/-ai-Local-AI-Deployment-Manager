@@ -739,6 +739,7 @@ test("the 05 registry holds every route of this module: viewer GETs with a redac
     "GET /api/models/:id/compatibility viewer",
     "GET /api/models/:id/qualifications viewer",
     "POST /api/launch/recommend admin",
+    "POST /api/launches/:launchId/save-recipe admin",
     "POST /api/models/:id/fit-grid admin",
     "POST /api/models/:id/probe admin",
     "POST /api/models/:id/qualifications/import admin",
@@ -751,7 +752,7 @@ test("the 05 registry holds every route of this module: viewer GETs with a redac
     assert.equal(typeof found.entry.redact, "function", item.path);
   }
   for (const item of modelCardRoutes.adminOnlyRoutes) {
-    const found = app.registry.match(item.method, item.path.replace(":id", "mc_aaaaaaaaaaaaaaaaaaaa"));
+    const found = app.registry.match(item.method, item.path.replace(":id", "mc_aaaaaaaaaaaaaaaaaaaa").replace(":launchId", "lch_aaaaaaaaaaaaaaaaaaaa"));
     assert.equal(found.access, "admin", `${item.method} ${item.path}`);
   }
   // 05 §5.4: the proxy's unregistered reads stay owner-only.
@@ -1189,4 +1190,332 @@ test("models.autoQualify is read from platform.json (first-launch by default), a
   publishJobs(app, "vllm", [serveJob("z1", launch.launchId)]);
   await moduleApi(app).settle();
   assert.equal(app.vllm.seen.filter((item) => item.path === "/api/qualify").length, 0);
+});
+
+// --- MOD-17: save a working launch as a recipe ----------------------------------------------
+
+const FAKE_SECRET = "sk-test-0123456789abcdefghijklmnop";
+const SAVE_LAUNCH_ID = "lch_bbbbbbbbbbbbbbbbbbbb";
+
+// The LaunchStore record of a working launch: effective values with provenance, plus the fields a recipe must not copy.
+function savedLaunchRecord(dir, extra = {}) {
+  return {
+    launchId: SAVE_LAUNCH_ID,
+    managerId: "vllm",
+    status: "running",
+    jobId: "job_serve1",
+    spec: {
+      engineId: "vllm",
+      runtimeId: "vllm@0.28.0",
+      recipeId: null,
+      model: { ref: dir, servedName: "served-model", contentDigest: null },
+      instance: { mode: "replace", id: "primary", port: 8000, networkAccess: "local", gpuIds: ["0"] },
+      values: { contextLength: 8192, concurrency: 4 },
+      extraArgs: ["--some-flag", "value"],
+      extraEnv: { MY_TOKEN: FAKE_SECRET },
+      secrets: { apiKeyRef: "ref-1" },
+    },
+    resolved: {
+      paramsKey: "8192|4|auto|0",
+      values: {
+        contextLength: { value: 8192, source: "user" },
+        concurrency: { value: 4, source: "planner" },
+        trustRemoteCode: { value: true, source: "model" },
+        kvCacheDtype: { value: "auto", source: "engine-default" },
+        prefixCaching: { value: true, source: "platform-default" },
+        servedName: { value: "served-model", source: "user" },
+        tokenizer: { value: path.join(os.tmpdir(), "tokenizer-dir"), source: "user" },
+        apiKey: { value: FAKE_SECRET, source: "user" },
+      },
+    },
+    ...extra,
+  };
+}
+
+// The fixtures carry no family; this wrapper gives the inspected model one.
+function familyModels() {
+  return {
+    inspectLocalDetailed: async (...args) => {
+      const result = await core.models.inspectLocalDetailed(...args);
+      return { ...result, card: { ...result.card, identity: { ...result.card.identity, familyId: "qwen3.5" } } };
+    },
+  };
+}
+
+function seedHostRecords(app, records) {
+  fs.writeFileSync(app.hostRecordsFile, JSON.stringify({ schemaVersion: 1, records }));
+}
+
+// `holder.value` is the launch record the fake manager serves from GET /api/launches/:launchId.
+async function mountSaveApp(t, holder, { vllm = {}, llama = {}, launchOn = "vllm", models = familyModels(), ...rest } = {}) {
+  const recipesDir = path.join(tempDir(t, "save-recipe-"), "config", "recipes");
+  const reload = () => [200, { ok: true, errors: [] }];
+  const serve = { [`GET /api/launches/${SAVE_LAUNCH_ID}`]: () => [200, { ok: true, launch: holder.value }] };
+  const app = await mountApp(t, {
+    vllm: { "POST /api/recipes/reload": reload, ...(launchOn === "vllm" ? serve : {}), ...vllm },
+    llama: { "POST /api/recipes/reload": reload, ...(launchOn === "llama" ? serve : {}), ...llama },
+    models,
+    cards: { recipesDir },
+    ...rest,
+  });
+  const dir = await fixtureIn(t, app, "qwen38-27b-fp8");
+  const card = (await inspectOwned(app, dir)).json.card;
+  holder.value = savedLaunchRecord(dir);
+  return { app, dir, card, recipesDir };
+}
+
+function saveRecipe(app, body, { launchId = SAVE_LAUNCH_ID, owner = app.owner } = {}) {
+  return request(app.port, `/api/launches/${launchId}/save-recipe`, {
+    method: "POST",
+    owner,
+    body: { recipeId: "my-verified-recipe", title: { zh: "我的配方", en: "My recipe" }, scope: "family", ...body },
+  });
+}
+
+test("save-recipe writes a validated recipe from a qualified launch, reloads both managers and the planner matches it", async (t) => {
+  const holder = {};
+  const { app, card, recipesDir, dir } = await mountSaveApp(t, holder);
+  seedHostRecords(app, [recordFor(card)]);
+
+  const saved = await saveRecipe(app, { locks: ["contextLength"], notes: "Works well for chat." });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  assert.equal(saved.json.ok, true);
+  assert.equal(saved.json.recipeId, "my-verified-recipe");
+  assert.equal(saved.json.path, "config/recipes/my-verified-recipe.json");
+  assert.deepEqual(saved.json.reloaded, { vllm: true, llama: true });
+  assert.deepEqual(saved.json.warnings, []);
+
+  // The file is the recipe of the response and validates with 01's recipe schema.
+  const file = path.join(recipesDir, "my-verified-recipe.json");
+  const text = fs.readFileSync(file, "utf8");
+  const recipe = JSON.parse(text);
+  assert.deepEqual(recipe, saved.json.recipe);
+  const verdict = core.engines.recipeSchema.validateRecipe(recipe, {
+    catalogs: core.engines.getParamCatalog(),
+    registry: core.engines.getEngineRegistry(),
+    validateValues: core.engines.paramCatalog.validateValues,
+    mode: "override",
+  });
+  assert.deepEqual(verdict.errors, []);
+  assert.deepEqual(verdict.warnings, [], "no deprecated alias warning");
+
+  // Identity is the family (never capability ids); an exact-model digest only for "this-model".
+  assert.equal(recipe.kind, "model");
+  assert.equal(recipe.status, "verified");
+  assert.equal(recipe.engineId, "vllm");
+  assert.deepEqual(recipe.runtime, { ref: "vllm", allowOverride: true });
+  assert.equal(recipe.match.familyId, "qwen3.5");
+  assert.equal(recipe.match.contentDigest, undefined);
+  assert.equal(Object.hasOwn(recipe.match, "capabilityIds"), false);
+  assert.equal(recipe.match.runtimeId, "vllm@0.28.0");
+  assert.deepEqual(recipe.match.quant, ["fp8"]);
+  assert.equal(recipe.match.minComputeCapability, "12.0");
+
+  // Only what the owner, the planner or the model chose; locks and evidence are filled in.
+  assert.deepEqual(recipe.values, { contextLength: 8192, concurrency: 4, trustRemoteCode: true });
+  assert.deepEqual(recipe.locks.map((lock) => [lock.param, lock.value]), [["contextLength", 8192]]);
+  assert.deepEqual(recipe.notes, [{ zh: "Works well for chat.", en: "Works well for chat." }]);
+  assert.equal(recipe.label.en, "My recipe");
+  assert.equal(recipe.evidence.gpu, "Test GPU");
+  assert.equal(recipe.evidence.date, "2026-10-15");
+  assert.equal(recipe.evidence.jobId, "job_serve1");
+  assert.equal(recipe.evidence.launchId, SAVE_LAUNCH_ID);
+  assert.equal(recipe.evidence.hostRecordId, `qr_${"a".repeat(20)}`);
+  assert.equal(recipe.evidence.measuredPeakMb, 4096);
+
+  // No secrets, host paths, extraArgs or extraEnv anywhere in the file.
+  for (const forbidden of [FAKE_SECRET, "extraArgs", "extraEnv", "--some-flag", "MY_TOKEN", "apiKey", "tokenizer", "servedName", "ref-1", os.tmpdir(), dir]) {
+    assert.equal(text.includes(forbidden), false, `${forbidden} is not written`);
+  }
+
+  // Both managers were asked to reload.
+  for (const manager of [app.vllm, app.llama]) {
+    assert.equal(manager.seen.filter((item) => item.method === "POST" && item.path === "/api/recipes/reload").length, 1);
+  }
+
+  // The planner (01 matchRecipes) picks the saved recipe up for that model on this runtime.
+  const store = core.engines.createRecipeStore({ overrideDir: recipesDir });
+  assert.equal(store.get("my-verified-recipe")?.status, "verified");
+  const matches = core.engines.matchRecipes({
+    engineId: "vllm",
+    model: { familyId: "qwen3.5", contentDigest: card.contentDigest, quantMethod: "fp8" },
+    hostFacts: { platform: "win32", maxComputeCap: "12.0", maxGpuMemoryGb: 96 },
+    runtime: { runtimeId: "vllm@0.28.0", manifestKey: "vllm" },
+  }, store);
+  const mine = matches.find((item) => item.recipe.id === "my-verified-recipe");
+  assert.ok(mine, "the saved recipe is a candidate");
+  assert.equal(mine.eligible, true);
+  assert.ok(mine.reasons.includes("family"));
+  assert.equal(matches[0].recipe.id, "my-verified-recipe", "it ranks first for its model");
+  const other = core.engines.matchRecipes({ engineId: "vllm", model: { familyId: "another-family" }, runtime: { runtimeId: "vllm@0.28.0", manifestKey: "vllm" } }, store);
+  assert.equal(other.find((item) => item.recipe.id === "my-verified-recipe").eligible, false);
+});
+
+test("save-recipe for this exact model pins the content digest next to the family", async (t) => {
+  const holder = {};
+  const { app, card, recipesDir } = await mountSaveApp(t, holder);
+  // Qualified through the launch id itself, with no paramsKey in common.
+  seedHostRecords(app, [recordFor(card, { launchId: SAVE_LAUNCH_ID, paramsKey: "other" })]);
+  const saved = await saveRecipe(app, { scope: "this-model", recipeId: "exact-model-recipe" });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  const recipe = JSON.parse(fs.readFileSync(path.join(recipesDir, "exact-model-recipe.json"), "utf8"));
+  assert.equal(recipe.match.contentDigest, card.contentDigest.replace(/^sha256:/, ""));
+  assert.equal(Object.hasOwn(recipe.match, "capabilityIds"), false);
+  const store = core.engines.createRecipeStore({ overrideDir: recipesDir });
+  const hit = core.engines.matchRecipes({ engineId: "vllm", model: { contentDigest: card.contentDigest }, runtime: { runtimeId: "vllm@0.28.0", manifestKey: "vllm" } }, store)
+    .find((item) => item.recipe.id === "exact-model-recipe");
+  assert.equal(hit.eligible, true);
+  assert.ok(hit.reasons.includes("content_digest"));
+});
+
+test("save-recipe refuses without a passing chat check on this launch", async (t) => {
+  const holder = {};
+  const { app, card, recipesDir } = await mountSaveApp(t, holder);
+  const result = (check, status) => [{ check, status, detail: { zh: "x", en: "x" }, metrics: {} }];
+  const refused = async (label) => {
+    const answer = await saveRecipe(app, {});
+    assert.equal(answer.status, 409, label);
+    assert.equal(answer.json.error.code, "not_qualified", label);
+    assert.match(answer.json.error.hint, /qualification first/i);
+    assert.equal(fs.existsSync(recipesDir), false, `${label}: nothing written`);
+  };
+  await refused("no record at all");
+  seedHostRecords(app, [recordFor(card, { results: result("chat", "fail") })]);
+  await refused("chat failed");
+  seedHostRecords(app, [recordFor(card, { results: result("tool-call", "pass") })]);
+  await refused("no chat check");
+  seedHostRecords(app, [recordFor(card, { paramsKey: "another|params" })]);
+  await refused("a pass for different parameters");
+  seedHostRecords(app, [recordFor(card, { runtimeId: "vllm@0.27.0" })]);
+  await refused("a pass for another runtime");
+  assert.equal(app.vllm.seen.filter((item) => item.path === "/api/recipes/reload").length, 0, "nothing reloaded");
+});
+
+test("save-recipe answers recipe_exists unless overwrite is sent, and never replaces a bundled recipe", async (t) => {
+  const holder = {};
+  const { app, card, recipesDir } = await mountSaveApp(t, holder);
+  seedHostRecords(app, [recordFor(card)]);
+  assert.equal((await saveRecipe(app, {})).status, 200);
+  const file = path.join(recipesDir, "my-verified-recipe.json");
+  const first = fs.readFileSync(file, "utf8");
+
+  const again = await saveRecipe(app, { title: { zh: "新", en: "Newer" } });
+  assert.equal(again.status, 409);
+  assert.equal(again.json.error.code, "recipe_exists");
+  assert.equal(fs.readFileSync(file, "utf8"), first, "the file is untouched");
+
+  const replaced = await saveRecipe(app, { title: { zh: "新", en: "Newer" }, overwrite: true });
+  assert.equal(replaced.status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).label.en, "Newer");
+
+  const bundledId = fs.readdirSync(core.engines.recipes.BUNDLED_RECIPES_DIR).find((name) => name.endsWith(".json")).replace(/\.json$/, "");
+  const bundled = await saveRecipe(app, { recipeId: bundledId, overwrite: true });
+  assert.equal(bundled.status, 409);
+  assert.equal(bundled.json.error.code, "recipe_exists");
+  assert.equal(fs.existsSync(path.join(recipesDir, `${bundledId}.json`)), false);
+});
+
+test("save-recipe warns recipe_reload_failed when a manager does not reload, and keeps the file", async (t) => {
+  const holder = {};
+  const { app, card, recipesDir } = await mountSaveApp(t, holder, {
+    llama: { "POST /api/recipes/reload": () => [500, { ok: false, error: { code: "recipe_reload_failed", message: "boom" } }] },
+  });
+  seedHostRecords(app, [recordFor(card)]);
+  const saved = await saveRecipe(app, {});
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.json.reloaded, { vllm: true, llama: false });
+  assert.equal(saved.json.warnings.length, 1);
+  assert.equal(saved.json.warnings[0].code, "recipe_reload_failed");
+  assert.deepEqual(saved.json.warnings[0].managers, ["llama"]);
+  assert.equal(fs.existsSync(path.join(recipesDir, "my-verified-recipe.json")), true);
+});
+
+test("save-recipe warns recipe_reload_failed when a manager is not running", async (t) => {
+  const holder = {};
+  const { app, card } = await mountSaveApp(t, holder, { llamaDown: true });
+  seedHostRecords(app, [recordFor(card)]);
+  const saved = await saveRecipe(app, {});
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.json.reloaded, { vllm: true, llama: false });
+  assert.equal(saved.json.warnings[0].code, "recipe_reload_failed");
+});
+
+test("save-recipe reports field errors as 422 recipe_invalid and writes nothing", async (t) => {
+  const holder = {};
+  const { app, dir, card, recipesDir } = await mountSaveApp(t, holder);
+  seedHostRecords(app, [recordFor(card)]);
+
+  // A lock on a value the recipe does not pin.
+  const lock = await saveRecipe(app, { locks: ["kvCacheDtype"] });
+  assert.equal(lock.status, 422);
+  assert.equal(lock.json.error.code, "recipe_invalid");
+  assert.deepEqual(lock.json.errors.map((item) => [item.field, item.code]), [["locks[0]", "lock_not_in_values"]]);
+
+  // A launch whose runtime is not a runtime of its engine.
+  holder.value = savedLaunchRecord(dir, { spec: { ...savedLaunchRecord(dir).spec, runtimeId: "vllm@9.9.9" } });
+  seedHostRecords(app, [recordFor(card, { runtimeId: "vllm@9.9.9" })]);
+  const runtime = await saveRecipe(app, {});
+  assert.equal(runtime.status, 422);
+  assert.ok(runtime.json.errors.some((item) => item.field === "runtime.ref"));
+
+  // A value that looks like a secret never reaches the file.
+  holder.value = savedLaunchRecord(dir);
+  holder.value.resolved.values.chatTemplateKwargs = { value: { note: FAKE_SECRET }, source: "user" };
+  seedHostRecords(app, [recordFor(card)]);
+  const secret = await saveRecipe(app, {});
+  assert.equal(secret.status, 422);
+  assert.ok(secret.json.errors.some((item) => item.code === "secret_in_recipe"));
+  assert.equal(JSON.stringify(secret.json).includes(FAKE_SECRET), false);
+
+  // A launch with nothing the owner, the planner or the model chose.
+  holder.value = savedLaunchRecord(dir);
+  holder.value.resolved.values = { kvCacheDtype: { value: "auto", source: "engine-default" } };
+  const empty = await saveRecipe(app, {});
+  assert.equal(empty.status, 422);
+  assert.ok(empty.json.errors.some((item) => item.field === "values"));
+  assert.equal(fs.existsSync(recipesDir), false);
+});
+
+test("save-recipe for a model of an unknown family needs the exact-model scope", async (t) => {
+  const holder = {};
+  const { app, card, recipesDir } = await mountSaveApp(t, holder, { models: {} });
+  seedHostRecords(app, [recordFor(card)]);
+  const family = await saveRecipe(app, {});
+  assert.equal(family.status, 422);
+  assert.deepEqual(family.json.errors.map((item) => item.code), ["family_unknown"]);
+  const exact = await saveRecipe(app, { scope: "this-model" });
+  assert.equal(exact.status, 200, JSON.stringify(exact.json));
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(recipesDir, "my-verified-recipe.json"), "utf8")).match, "familyId"), false);
+});
+
+test("save-recipe validates the body, finds the launch on either manager and needs the owner", async (t) => {
+  const holder = {};
+  const { app, card, recipesDir } = await mountSaveApp(t, holder, { launchOn: "llama" });
+  holder.value.managerId = "llama";
+  seedHostRecords(app, [recordFor(card)]);
+
+  const bad = await saveRecipe(app, { recipeId: "Not Valid", scope: "everything", title: { zh: "", en: "x" }, locks: "contextLength", overwrite: "yes" });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.json.error.code, "invalid_request");
+  assert.deepEqual(bad.json.errors.map((item) => item.field).sort(), ["locks", "overwrite", "recipeId", "scope", "title"]);
+
+  assert.equal((await saveRecipe(app, {}, { launchId: "lch_zzzzzzzzzzzzzzzzzzzz" })).json.error.code, "launch_not_found");
+  assert.equal((await saveRecipe(app, {}, { launchId: "not-a-launch" })).status, 404);
+
+  const anonymous = await request(app.port, `/api/launches/${SAVE_LAUNCH_ID}/save-recipe`, { method: "POST", body: { recipeId: "x-y" } });
+  assert.ok([401, 403].includes(anonymous.status), `an anonymous caller is refused (${anonymous.status})`);
+  const getRead = await request(app.port, `/api/launches/${SAVE_LAUNCH_ID}/save-recipe`, { owner: app.owner });
+  assert.equal(getRead.status, 405);
+
+  // The launch is kept by the llama manager here (the vllm manager does not know it); the same recipe is written.
+  const saved = await saveRecipe(app, {});
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  assert.equal(fs.existsSync(path.join(recipesDir, "my-verified-recipe.json")), true);
+});
+
+test("save-recipe answers 503 when no manager that could hold the launch answers", async (t) => {
+  const { app } = await mountSaveApp(t, {}, { vllmDown: true, llamaDown: true, launchOn: "none" });
+  const result = await saveRecipe(app, {});
+  assert.equal(result.status, 503);
+  assert.equal(result.json.error.code, "manager_unreachable");
 });

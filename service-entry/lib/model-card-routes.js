@@ -13,8 +13,8 @@
 //   POST /api/models/:id/probe            starts the dry probe on the manager that hosts the engine
 //   POST /api/launch/recommend            ranked plans per GPU set, validated by the managers
 //   POST /api/models/:id/fit-grid         KV dtype x concurrency -> largest context (side-effect free)
+//   POST /api/launches/:launchId/save-recipe   a working, qualified launch -> config/recipes/<id>.json (MOD-17)
 //
-// The save-recipe route belongs to MOD-17 and adds its handler to this file.
 // The entry is the only writer of the host records. It also decides about
 // auto-qualification (models.autoQualify): it watches the relayed `jobs`
 // stream for a serve job that became ready and asks the manager to run the
@@ -25,6 +25,7 @@
 // it. Errors use the 00 §4.2 envelope. Nothing here starts a container or
 // pulls an image: the probe and the plan validation go to the managers.
 
+const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
@@ -35,6 +36,7 @@ const { redactSecrets } = require("../../manager-core/secret-redactor");
 const { REQUEST_ID_RE, newRequestId, redactManagerReadForViewer } = require("./mgmt-proxy");
 const { resolvePrincipal } = require("./engine-routes");
 const internalAuth = require("../../manager-core/internal-auth");
+const { atomicWriteJsonFile } = require("../../manager-core/file-utils");
 
 const { QUALIFY_JOB_TYPE, LIGHT_CHECKS } = core.models.qualify;
 
@@ -62,6 +64,12 @@ const MAX_GPU_IDS = 16;
 const MAX_REMOTE_FILES = 64;
 const CARD_PATH = /^mc_[a-z2-7]{20}$/;
 const READ_METHODS = new Set(["GET", "HEAD"]);
+const LAUNCH_ID_RE = /^lch_[a-z2-7]{20}$/;
+const RECIPE_ID_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const RECIPE_SCOPES = new Set(["family", "this-model"]);
+const RECIPE_RELOAD_TIMEOUT_MS = 5000;
+const MAX_RECIPE_LOCKS = 32;
+const MANAGER_IDS = Object.freeze(["vllm", "llama"]);
 const REMOTE_SOURCES = new Set(["huggingface", "hf", "modelscope"]);
 const KV_DTYPE_PATTERN = /^[A-Za-z0-9_.-]{1,24}$/;
 
@@ -171,6 +179,7 @@ const adminOnlyRoutes = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/models/:id/qualifications/import" }),
   Object.freeze({ method: "POST", path: "/api/models/:id/fit-grid" }),
   Object.freeze({ method: "POST", path: "/api/launch/recommend" }),
+  Object.freeze({ method: "POST", path: "/api/launches/:launchId/save-recipe" }),
 ]);
 
 /**
@@ -301,6 +310,7 @@ const ID_ROUTES = Object.freeze([
   Object.freeze({ name: "qualify", methods: ["POST"], re: /^\/api\/models\/([^/]+)\/qualify$/ }),
   Object.freeze({ name: "qualificationsImport", methods: ["POST"], re: /^\/api\/models\/([^/]+)\/qualifications\/import$/ }),
   Object.freeze({ name: "fitGrid", methods: ["POST"], re: /^\/api\/models\/([^/]+)\/fit-grid$/ }),
+  Object.freeze({ name: "saveRecipe", methods: ["POST"], re: /^\/api\/launches\/([^/]+)\/save-recipe$/ }),
 ]);
 
 function match(pathname) {
@@ -1051,8 +1061,7 @@ function createModelCardRoutes(options = {}) {
   // The launch behind a serve job, with the instance that runs it: the manager's
   // LaunchStore record (GET launches/:launchId, 01 §21.1) when it has one, else the
   // instance list plus that instance's launch record.
-  async function resolveLaunch(managerId, launchId) {
-    const managerClient = client();
+  async function resolveLaunch(managerId, launchId, managerClient = client()) {
     if (!managerClient) return null;
     let record = null;
     const direct = await managerClient.get(managerId, `launches/${encodeURIComponent(launchId)}`);
@@ -1069,6 +1078,169 @@ function createModelCardRoutes(options = {}) {
     if (!record || !isPlainObject(record.spec)) return null;
     return { record, instance };
   }
+
+  // --- POST /api/launches/:launchId/save-recipe (02 §15, MOD-17)
+
+  function recipesDir() {
+    if (options.recipesDir) return options.recipesDir;
+    return path.join(options.aiRoot || path.resolve(__dirname, "..", ".."), "config", "recipes");
+  }
+
+  // The launch on whichever manager keeps it: {found:{managerId, record, instance}} or {found:null, unreachable}.
+  async function findLaunch(launchId, requestId) {
+    const managerClient = client();
+    if (!managerClient) return { found: null, unreachable: true };
+    const ids = Array.isArray(options.managers) && options.managers.length
+      ? MANAGER_IDS.filter((id) => options.managers.some((item) => item?.id === id))
+      : MANAGER_IDS;
+    let silent = 0;
+    for (const managerId of ids) {
+      // Counts the answers that never came, so "no such launch" is not claimed for a manager that is down.
+      const counting = {
+        get: async (id, target, getOptions) => {
+          const result = await managerClient.get(id, target, { ...(getOptions || {}), ...(requestId ? { requestId } : {}) });
+          if (result?.status === 0) silent += 1;
+          return result;
+        },
+      };
+      const launch = await resolveLaunch(managerId, launchId, counting);
+      if (launch) return { found: { managerId, ...launch }, unreachable: false };
+    }
+    return { found: null, unreachable: silent > 0 };
+  }
+
+  async function reloadRecipes(requestId) {
+    const managerClient = client();
+    const reloaded = {};
+    for (const managerId of MANAGER_IDS) {
+      let result = null;
+      try {
+        result = managerClient ? await managerClient.post(managerId, "recipes/reload", {}, { timeoutMs: RECIPE_RELOAD_TIMEOUT_MS, ...(requestId ? { requestId } : {}) }) : null;
+      } catch {
+        result = null;
+      }
+      reloaded[managerId] = Boolean(result?.ok);
+    }
+    return reloaded;
+  }
+
+  async function saveRecipe(req, res, launchId, requestId) {
+    const body = await readBody(req, res, requestId);
+    if (!body) return;
+    const errors = [];
+    if (typeof body.recipeId !== "string" || body.recipeId.length > 64 || !RECIPE_ID_RE.test(body.recipeId)) {
+      errors.push(fieldError("recipeId", "invalid", "recipeId is a kebab-case id (a-z, 0-9 and single dashes, at most 64 characters)."));
+    }
+    const titled = (value) => typeof value === "string" && value.trim() && value.length <= 200;
+    if (!isPlainObject(body.title) || !titled(body.title.zh) || !titled(body.title.en)) errors.push(fieldError("title", "invalid", "title needs zh and en text."));
+    if (!RECIPE_SCOPES.has(body.scope)) errors.push(fieldError("scope", "invalid", "scope is family or this-model."));
+    if (body.locks !== undefined && (!Array.isArray(body.locks) || body.locks.length > MAX_RECIPE_LOCKS || body.locks.some((id) => typeof id !== "string" || !id || id.length > 80))) {
+      errors.push(fieldError("locks", "invalid", `locks is a list of at most ${MAX_RECIPE_LOCKS} parameter ids.`));
+    }
+    if (body.notes !== undefined && body.notes !== null && typeof body.notes !== "string" && !isPlainObject(body.notes)) {
+      errors.push(fieldError("notes", "invalid", "notes is text or {zh, en}."));
+    }
+    if (body.overwrite !== undefined && typeof body.overwrite !== "boolean") errors.push(fieldError("overwrite", "invalid", "overwrite must be true or false."));
+    if (errors.length) {
+      sendError(res, 400, "invalid_request", "The save-recipe request is not valid.", { errors }, requestId);
+      return;
+    }
+    if (!LAUNCH_ID_RE.test(launchId)) {
+      sendError(res, 404, "launch_not_found", "No launch is known under this id.", undefined, requestId);
+      return;
+    }
+
+    const { found, unreachable } = await findLaunch(launchId, requestId);
+    if (!found) {
+      if (unreachable) sendError(res, 503, "manager_unreachable", "A manager that could hold this launch is not running or not answering.", { hint: "Start the managers, then try again." }, requestId);
+      else sendError(res, 404, "launch_not_found", "No manager knows this launch.", undefined, requestId);
+      return;
+    }
+    const spec = found.record.spec;
+
+    // The model's card: the one a qualification of this launch reported, else the model the launch served.
+    let card = null;
+    if (hostRecordStore) {
+      const bound = (await hostRecordStore.all()).filter((item) => item.launchId === launchId && item.cardId);
+      for (const item of bound) {
+        card = loadCard(item.cardId);
+        if (card) break;
+      }
+    }
+    if (!card && typeof spec.model?.ref === "string" && spec.model.ref) {
+      try {
+        card = (await inspectLocalCard(spec.model.ref, {}, undefined))?.card || null;
+      } catch (error) {
+        if (sendCodedError(res, error, requestId)) return;
+        card = null;
+      }
+    }
+    if (!card?.contentDigest) {
+      sendError(res, 409, "not_qualified", "The model of this launch has no card, so no qualification can be matched.", { hint: "Run qualification first." }, requestId);
+      return;
+    }
+
+    // A passing chat check on this exact launch (or on an equal digest + runtime + recipe/params) is the gate.
+    const coverage = {
+      contentDigest: card.contentDigest,
+      runtimeId: spec.runtimeId || null,
+      recipeId: spec.recipeId || found.instance?.recipeId || null,
+      paramsKey: found.record.resolved?.paramsKey || null,
+    };
+    const passing = (await loadHostRecords(card.contentDigest))
+      .filter((item) => item.launchId === launchId || hostRecordApi.recordCovers(item, coverage))
+      .filter((item) => Array.isArray(item.results) && item.results.some((result) => result.check === "chat" && result.status === "pass"))
+      .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    if (!passing.length) {
+      sendError(res, 409, "not_qualified", "This launch has no passing chat check on this host.", { hint: "Run qualification first." }, requestId);
+      return;
+    }
+
+    const file = path.join(recipesDir(), `${body.recipeId}.json`);
+    if (fs.existsSync(path.join(core.engines.recipes.BUNDLED_RECIPES_DIR, `${body.recipeId}.json`))) {
+      sendError(res, 409, "recipe_exists", "A bundled recipe has this id; pick another.", { details: { source: "bundled" } }, requestId);
+      return;
+    }
+    if (body.overwrite !== true && fs.existsSync(file)) {
+      sendError(res, 409, "recipe_exists", "A recipe with this id already exists.", { hint: "Send overwrite:true to replace it.", details: { source: "user" } }, requestId);
+      return;
+    }
+
+    const drafted = models.recipeDraft.draftRecipeFromLaunch(found.record, card, passing[0], {
+      recipeId: body.recipeId,
+      scope: body.scope,
+      locks: body.locks,
+      title: body.title,
+      notes: body.notes,
+      platform: process.platform,
+      now: now(),
+    });
+    if (!drafted.recipe) {
+      const fields = drafted.errors.map((item) => fieldError(item.path || "recipe", item.code, redactSecrets(String(item.message || ""))));
+      sendError(res, 422, "recipe_invalid", "The recipe built from this launch is not valid.", { errors: fields }, requestId);
+      return;
+    }
+
+    await atomicWriteJsonFile(file, drafted.recipe);
+    const reloaded = await reloadRecipes(requestId);
+    const warnings = [];
+    if (!reloaded.vllm || !reloaded.llama) {
+      warnings.push({
+        code: "recipe_reload_failed",
+        message: bilingual("配方已保存，但管理器没有及时重新加载；稍后会自动生效。", "The recipe is saved, but a manager did not reload it in time; it is picked up shortly."),
+        managers: MANAGER_IDS.filter((id) => !reloaded[id]),
+      });
+    }
+    send(res, 200, {
+      ok: true,
+      recipeId: body.recipeId,
+      path: `config/recipes/${body.recipeId}.json`,
+      recipe: drafted.recipe,
+      reloaded,
+      warnings,
+    }, requestId);
+  }
+
 
   const autoSeen = new Set();
   const autoSkipped = new Set();
@@ -1414,7 +1586,7 @@ function createModelCardRoutes(options = {}) {
   async function handle(req, res, url) {
     const pathname = String(url?.pathname || "");
     if (pathname === HOST_RECORDS_PATH) return ingestHostRecord(req, res, url);
-    if (!pathname.startsWith("/api/models/") && pathname !== "/api/launch/recommend") return false;
+    if (!pathname.startsWith("/api/models/") && !pathname.startsWith("/api/launches/") && pathname !== "/api/launch/recommend") return false;
     const route = match(pathname);
     if (!route) return false;
     const requested = String(req.method || "GET").toUpperCase();
@@ -1450,6 +1622,7 @@ function createModelCardRoutes(options = {}) {
       else if (route.name === "probe") await probe(req, res, route.id, requestId);
       else if (route.name === "qualify") await qualify(req, res, route.id, requestId);
       else if (route.name === "qualificationsImport") await importQualification(req, res, route.id, requestId);
+      else if (route.name === "saveRecipe") await saveRecipe(req, res, route.id, requestId);
       else await fitGrid(req, res, route.id, requestId);
     } catch (error) {
       sendInternal(res, error, `${requested} ${pathname}`, requestId);

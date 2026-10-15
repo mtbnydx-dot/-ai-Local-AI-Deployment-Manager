@@ -24,6 +24,7 @@ const planner = require("./planner");
 const probe = require("./probe");
 const qualify = require("./qualify");
 const hostRecords = require("./host-records");
+const recipeDraft = require("./recipe-draft");
 const rootCause = require("./root-cause");
 const templateSignatures = require("./template-signatures");
 const rangeReader = require("./remote/range-reader");
@@ -162,6 +163,10 @@ module.exports = {
     HOST_RECORDS_PATH: hostRecords.HOST_RECORDS_PATH,
     PUSH_RETRY_DELAYS_MS: hostRecords.PUSH_RETRY_DELAYS_MS,
     MAX_RECORDS_PER_DIGEST: hostRecords.MAX_RECORDS_PER_DIGEST,
+  },
+  recipeDraft: {
+    draftRecipeFromLaunch: recipeDraft.draftRecipeFromLaunch,
+    SCOPES: recipeDraft.SCOPES,
   },
   storageResolver: managerHooks.storageResolver,
   cardEstimate: {
