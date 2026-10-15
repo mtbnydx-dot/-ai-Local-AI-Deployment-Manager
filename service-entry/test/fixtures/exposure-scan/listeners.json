@@ -1,0 +1,52 @@
+[
+    {
+        "LocalAddress":  "::",
+        "LocalPort":  5190,
+        "OwningProcess":  7312
+    },
+    {
+        "LocalAddress":  "127.0.0.1",
+        "LocalPort":  5186,
+        "OwningProcess":  4120
+    },
+    {
+        "LocalAddress":  "127.0.0.1",
+        "LocalPort":  5176,
+        "OwningProcess":  4120
+    },
+    {
+        "LocalAddress":  "0.0.0.0",
+        "LocalPort":  5177,
+        "OwningProcess":  5004
+    },
+    {
+        "LocalAddress":  "127.0.0.1",
+        "LocalPort":  5178,
+        "OwningProcess":  5216
+    },
+    {
+        "LocalAddress":  "0.0.0.0",
+        "LocalPort":  55177,
+        "OwningProcess":  6660
+    },
+    {
+        "LocalAddress":  "::1",
+        "LocalPort":  5180,
+        "OwningProcess":  7020
+    },
+    {
+        "LocalAddress":  "192.168.1.20",
+        "LocalPort":  8000,
+        "OwningProcess":  9100
+    },
+    {
+        "LocalAddress":  "fe80::1c2d:3e4f:5a6b:7c8d%12",
+        "LocalPort":  139,
+        "OwningProcess":  4
+    },
+    {
+        "LocalAddress":  "0.0.0.0",
+        "LocalPort":  5177,
+        "OwningProcess":  5004
+    }
+]
