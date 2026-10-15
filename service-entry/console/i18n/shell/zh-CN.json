@@ -1,6 +1,10 @@
 {
   "$locale": "zh-CN",
   "$prefixes": ["shell.", "common.", "status.", "error.", "overview.", "deploy.", "playground.", "billing.", "voice.", "prefs.", "uikit.", "notify."],
+  "billing.frame.title": "计费中心",
+  "billing.localOnly.action": "返回总览",
+  "billing.localOnly.body": "计费只能由平台所在机器上的所有者管理。",
+  "billing.localOnly.title": "计费管理仅限本机",
   "common.badge.error": "错误",
   "common.badge.info": "提示",
   "common.badge.loading": "加载中",

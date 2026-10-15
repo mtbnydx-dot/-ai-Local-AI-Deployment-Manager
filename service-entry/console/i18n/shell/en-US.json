@@ -1,6 +1,10 @@
 {
   "$locale": "en-US",
   "$prefixes": ["shell.", "common.", "status.", "error.", "overview.", "deploy.", "playground.", "billing.", "voice.", "prefs.", "uikit.", "notify."],
+  "billing.frame.title": "Billing center",
+  "billing.localOnly.action": "Back to Overview",
+  "billing.localOnly.body": "Billing can only be managed from the machine that runs the platform, signed in as its owner.",
+  "billing.localOnly.title": "Billing administration is local-only",
   "common.badge.error": "Error",
   "common.badge.info": "Info",
   "common.badge.loading": "Loading",

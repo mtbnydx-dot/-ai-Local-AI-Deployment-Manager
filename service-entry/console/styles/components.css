@@ -1124,3 +1124,14 @@ dialog::backdrop {
 .sf-secret .input { flex: 1 1 200px; }
 .sf-json { display: flex; flex-direction: column; gap: var(--sp-1); width: 100%; }
 .sf-json-input { font-family: var(--font-mono); font-size: var(--fs-sm); }
+
+/* ---- Billing embed (CON-22) ---- */
+.billing-frame {
+  display: block;
+  width: 100%;
+  height: calc(100dvh - 11rem);
+  min-height: 30rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
