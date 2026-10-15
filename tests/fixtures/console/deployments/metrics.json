@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "fleetId": "vllm:primary",
+  "managerId": "vllm",
+  "instanceId": "primary",
+  "engineId": "sglang",
+  "runtimeId": "sglang@0.5.17",
+  "scrapedAt": "@now",
+  "scrapeOk": true,
+  "errorCode": null,
+  "metrics": {
+    "kvUsageRatio": 0.31,
+    "requestsRunning": 1,
+    "ttftSeconds": { "avg": 0.44, "p50": 0.31, "p95": 1.2, "count": 912 }
+  },
+  "raw": { "models": [] },
+  "facts": { "kvTokens": 262144, "maxConcurrency": 1, "weightsGiB": 38.2 },
+  "unsupported": ["gauges.requestsWaiting", "histograms.queueSeconds"]
+}

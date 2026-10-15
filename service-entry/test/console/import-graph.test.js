@@ -17,7 +17,7 @@ const KB = 1024;
 const BUDGETS = { appConsole: 160 * KB, appVendor: 30 * KB, routeModule: 60 * KB, catalog: 120 * KB };
 const LAZY_ONLY = ["uplot", "qrcode"];
 // Route-only libraries (the engine-config forms, the Overview and Access pages): loaded with their page module, never by app.js (07 §11 budgets app.js's closure).
-const ROUTE_ONLY_LIBS = new Set(["lib/expr.js", "lib/schema-form-model.js", "lib/overview-model.js", "lib/access-model.js"]);
+const ROUTE_ONLY_LIBS = new Set(["lib/expr.js", "lib/schema-form-model.js", "lib/overview-model.js", "lib/access-model.js", "lib/deployments-model.js"]);
 
 const STATIC_IMPORT = /(?:^|[;\n}])\s*(?:import|export)\s+(?:[\w*{}\s,$]+\s+from\s+)?["']([^"']+)["']/g;
 const COMMENTS = /\/\*[\s\S]*?\*\/|(?<![:"'`\\])\/\/[^\n]*/g;

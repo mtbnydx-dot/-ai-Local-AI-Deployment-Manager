@@ -11,6 +11,7 @@
 // button. Column fields: id, header, cell(row), sort (true, or a function
 // returning the sort value), align, width, hideable, defaultHidden and csv
 // (a function returning the CSV value, or false to leave the column out).
+// `rowAttrs(row)` returns extra attributes for a row (data-render-key).
 
 import { toCsv } from "../lib/csv.js";
 import { safeUrl } from "../lib/url.js";
@@ -158,6 +159,7 @@ export function DataTable({
   rows = [],
   source,
   rowKey,
+  rowAttrs,
   onRowClick,
   filters,
   pageSize = 50,
@@ -217,7 +219,9 @@ export function DataTable({
   const sortable = (column) => Boolean(column.sort);
   const ariaSort = (column) => (!sortable(column) ? undefined : sort?.id === column.id ? (sort.dir === "asc" ? "ascending" : "descending") : "none");
   const clickable = typeof onRowClick === "function";
-  const rowProps = (row) => (clickable
+  // rowAttrs(row) adds attributes to a row, such as data-render-key for a keyed list (07 §6.2).
+  const extraAttrs = (row) => (typeof rowAttrs === "function" ? rowAttrs(row) || {} : {});
+  const rowProps = (row) => ({ ...extraAttrs(row), ...(clickable
     ? {
         tabindex: "0",
         "data-clickable": "true",
@@ -229,7 +233,7 @@ export function DataTable({
           }
         },
       }
-    : {});
+    : {}) });
 
   const emptyView = empty ?? html`<p class="muted" data-testid="data-table.empty">${t("common.table.empty")}</p>`;
   const toolbar = html`<div class="table-toolbar row" data-testid="data-table.toolbar">
