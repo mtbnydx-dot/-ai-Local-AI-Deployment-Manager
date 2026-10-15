@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "at": "@now",
+  "windowSeconds": 60,
+  "gateway": { "inflight": 1, "requestsPerMin": 14, "outputTokensPerSec": 92.4, "errorRate5m": 0, "ttftP95Ms5m": 640, "clientAborts5m": 0 },
+  "instances": [
+    { "fleetId": "vllm:primary", "engineId": "sglang", "model": "qwen3-demo-32b", "state": "ready", "idle": false, "running": 1, "waiting": 0, "kvUsage": 0.31, "outputTps": 92.4, "vramReservationMb": 88000, "sampleAt": "@now" }
+  ],
+  "gpus": [{ "index": 0, "util": 87, "memUsedMb": 72625, "memTotalMb": 97887 }],
+  "alerts": { "firing": 0, "critical": 0 },
+  "collectors": {}
+}

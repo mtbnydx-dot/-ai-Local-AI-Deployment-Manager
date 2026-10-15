@@ -799,8 +799,8 @@ async function smokeConsoleShell(page, baseUrl) {
   expect(await root.text()).toContain("本地模型服务统一入口");
   expect(root.headers()["content-security-policy"]).toBeUndefined();
 
-  // The shell (CON-6) renders every path in its frame; a page that is not built yet shows the "still being built" page (the overview is built, CON-8).
-  for (const [pathname, heading] of [["?ui=new", "总览"], ["overview", "总览"], ["deployments/vllm:primary", "部署"]]) {
+  // The shell (CON-6) renders every path in its frame; a page that is not built yet shows the "still being built" page (the overview and the deployments pages are built, CON-8 and CON-9).
+  for (const [pathname, heading] of [["?ui=new", "总览"], ["overview", "总览"], ["system", "系统"]]) {
     const response = await page.goto(`${baseUrl}${pathname}`, { waitUntil: "domcontentloaded" });
     expect(response.status(), pathname).toBe(200);
     expect(response.headers()["content-security-policy"], pathname).toBe(CONSOLE_CSP);

@@ -6,6 +6,15 @@
     "common.provenance.",
     "common.range.",
     "common.step.",
+    "deploy.capability.",
+    "deploy.chart.",
+    "deploy.endpoint.",
+    "deploy.fact.",
+    "deploy.metrics.span.",
+    "deploy.metrics.tile.",
+    "deploy.phase.",
+    "deploy.routing.mode.",
+    "deploy.state.",
     "error.code.",
     "overview.jobStatus.",
     "overview.reason.",
@@ -22,7 +31,6 @@
   ],
   "unused": [
     "common.window.1h",
-    "deploy.list.count",
     "shell.boot.loading",
     "shell.boot.noscript",
     "shell.boot.preview"

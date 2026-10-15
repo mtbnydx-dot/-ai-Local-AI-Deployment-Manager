@@ -1,0 +1,47 @@
+{
+  "ok": true,
+  "updatedAt": "@now",
+  "settings": { "mode": "balanced", "reserveMb": 8192, "maxUtilizationPct": 85, "preferEngine": "auto" },
+  "gpuMemory": { "totalMb": 97887, "usedMb": 72625, "freeMb": 25262, "reserveMb": 8192, "allocatableMb": 17070, "warningThresholdPct": 85 },
+  "instances": [
+    {
+      "id": "primary",
+      "instanceId": "primary",
+      "fleetId": "vllm:primary",
+      "primary": true,
+      "managerId": "vllm",
+      "managerName": "vLLM Manager",
+      "engine": "vllm",
+      "engineId": "sglang",
+      "runtimeId": "sglang@0.5.17",
+      "launchId": "lch_aaaaaaaaaaaaaaaaaaaa",
+      "containerName": "vllm-local",
+      "running": true,
+      "lifecycleState": "ready",
+      "status": "Up 2 hours (healthy)",
+      "port": 8000,
+      "localBaseUrl": "http://local-demo.invalid:8000/v1",
+      "lanBaseUrl": "http://lan-demo.invalid:8000/v1",
+      "gpuIds": ["0"],
+      "models": [{ "id": "qwen3-demo-32b", "contextLength": 262144, "capabilities": ["text", "tools"] }]
+    },
+    {
+      "id": "primary",
+      "instanceId": "primary",
+      "fleetId": "llama:primary",
+      "primary": true,
+      "managerId": "llama",
+      "managerName": "llama.cpp Manager",
+      "engine": "llama",
+      "containerName": "llama-local",
+      "running": false,
+      "lifecycleState": "crashed",
+      "status": "Exited (255) 4 weeks ago",
+      "port": 8080,
+      "models": []
+    }
+  ],
+  "slots": [],
+  "routing": { "mode": "balanced", "capabilityCounts": { "text": 1, "vision": 0, "audio": 0, "embedding": 0, "rerank": 0, "tools": 1 } },
+  "gatewayBase": "http://local-demo.invalid:5176/gateway/auto/openai"
+}
