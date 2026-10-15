@@ -36,8 +36,12 @@
 //   containerName, instanceId (the /api/instances id; default the name),
 //   port, gpuIds, warnings[]
 //   engineId, engineName, apiLabel
-//   buildCommand(job) → { runArgs, publish, image, secretEnv }; called again
-//                      after admission when the admitted GPUs changed it
+//   buildCommand(job) → { runArgs, publish, image, secretEnv, files? }; called
+//                      again after admission when the admitted GPUs changed it.
+//                      files are generated launch files (docker-template, 01
+//                      §19.1): written just before the container is created,
+//                      deleted again when the start fails, and when a replaced
+//                      container's own files are no longer needed
 //   redactArgs(argv) → redacted argv for job.meta.launchCommand and the log
 //   lanFallback, bindRetryPublish(error, publish)
 //   imagePolicy      "auto" (default) | "explicit" | (image) => policy;
@@ -103,6 +107,7 @@ const LOG_EXCERPT_BYTES = 4096;
 const APIKEY_REF_LABEL = "ai.manager.api-key-ref";
 const LEASE_LABEL = "ai.manager.gpu-admission-lease";
 const RUNTIME_ID_LABEL = "ai.manager.runtime-id";
+const LAUNCH_ID_LABEL = "ai.manager.launch-id";
 const DEFAULT_AFTER_READY_MS = 30000;
 const PULL_JOB_TYPE = "image-pull";
 const PULL_JOB_ID_PATTERN = /^dl_[a-z2-7]{20}$/;
@@ -436,6 +441,8 @@ function createRuntimeSupervisor(options = {}) {
   const registry = options.registry || null;
   const events = options.events || null;
   const secrets = options.secrets || null;
+  // Generated launch files (launch-files.js): { write(launchId, files), remove(launchId) }.
+  const launchFiles = options.launchFiles || null;
   const admission = options.admission || null;
   const redactor = options.redactor || null;
   const wait = options.waitForRuntimeReady || waitForRuntimeReady;
@@ -774,6 +781,7 @@ function createRuntimeSupervisor(options = {}) {
     const prepare = async (admissionRequest = run.admissionRequest) => {
       const previous = await host.inspect(run.containerName, { fresh: true });
       state.previousApiKeyRef = textOf(previous.labels?.[apiKeyRefLabel]);
+      state.previousLaunchId = textOf(previous.labels?.[LAUNCH_ID_LABEL]);
       const previousLeaseId = textOf(previous.labels?.[leaseLabel]);
       if (admissionRequest && previousLeaseId) {
         admissionRequest.retireLeaseIds = Array.from(new Set([
@@ -802,6 +810,29 @@ function createRuntimeSupervisor(options = {}) {
     return prepare();
   }
 
+  // The files a docker-template engine mounts (01 §19.1). They are written
+  // here, after admission and right before the container, so a launch that
+  // fails earlier never leaves a secret file behind.
+  async function writeLaunchFiles(job, command, state) {
+    const files = Array.isArray(command.files) ? command.files : [];
+    if (!files.length) return;
+    const launchId = textOf(job.meta?.launchId);
+    if (!launchFiles || typeof launchFiles.write !== "function" || !launchId) {
+      throw supervisorError("launch_files_unavailable", "This launch needs generated config files, but the manager has no launch-files store.", 500);
+    }
+    state.launchFilesId = launchId;
+    await launchFiles.write(launchId, files);
+    state.launchFilesWritten = true;
+    log(job, `Wrote ${files.length} generated launch file(s): ${files.map((file) => file.id).join(", ")}${files.some((file) => file.secret) ? " (secret files are owner-only and deleted when the instance stops)" : ""}.`);
+  }
+
+  function removeLaunchFiles(launchId, why) {
+    if (!launchFiles || typeof launchFiles.remove !== "function" || !launchId) return Promise.resolve();
+    return Promise.resolve().then(() => launchFiles.remove(launchId)).catch((error) => {
+      safe(`launch files (${why})`, () => { throw error; });
+    });
+  }
+
   async function create(job, run, state) {
     state.stageKey = "create";
     const command = state.command;
@@ -812,6 +843,7 @@ function createRuntimeSupervisor(options = {}) {
       detail: run.mode === "add" ? texts.createDetailAdd : texts.createDetail,
     });
     const launchCommand = `docker ${redactArgv(run, command.runArgs, state).join(" ")}`;
+    await writeLaunchFiles(job, command, state);
     job.meta = { ...(job.meta || {}), launchCommand, runtimeLaunchStarted: true, runtimeContainerCreated: false };
     saveSoon();
     log(job, `> ${launchCommand}`);
@@ -954,6 +986,10 @@ function createRuntimeSupervisor(options = {}) {
     if (committed?.committed && state.previousApiKeyRef && state.previousApiKeyRef !== textOf(run.apiKeyRef) && secrets?.remove) {
       await Promise.resolve(secrets.remove(state.previousApiKeyRef)).catch(() => {});
     }
+    // The replaced instance is gone; so are the files it had mounted.
+    if (committed?.committed && state.previousLaunchId && state.previousLaunchId !== textOf(job.meta?.launchId)) {
+      await removeLaunchFiles(state.previousLaunchId, "replaced instance");
+    }
     const launchId = textOf(job.meta?.launchId);
     const labels = labelsFromArgs(state.command?.runArgs);
     if (launchStore && launchId && typeof launchStore.markStatus === "function") {
@@ -1018,6 +1054,7 @@ function createRuntimeSupervisor(options = {}) {
     if (run.cleanup !== "caller" && textOf(run.apiKeyRef) && secrets?.remove) {
       await Promise.resolve(secrets.remove(textOf(run.apiKeyRef))).catch(() => {});
     }
+    if (state.launchFilesId) await removeLaunchFiles(state.launchFilesId, "failed start");
     if (state.containerCreated || state.checkpointCalled) {
       if (typeof hooks.afterChange === "function") safe("afterChange", () => hooks.afterChange({ job, containerName: run.containerName }));
       emitInstances({ changed: [run.instanceId] });

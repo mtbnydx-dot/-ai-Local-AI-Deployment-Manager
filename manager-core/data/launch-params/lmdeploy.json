@@ -1,0 +1,225 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 90,
+  "kind": "engine",
+  "engineId": "lmdeploy",
+  "docs": "https://lmdeploy.readthedocs.io/en/latest/llm/api_server.html",
+  "params": [
+    {
+      "id": "contextLength",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--session-len"
+      },
+      "legacy": {
+        "field": "maxModelLen",
+        "domId": "maxModelLen"
+      }
+    },
+    {
+      "id": "concurrency",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--max-batch-size"
+      },
+      "legacy": {
+        "field": "maxNumSeqs",
+        "domId": "maxNumSeqs"
+      }
+    },
+    {
+      "id": "servedName",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--model-name"
+      },
+      "legacy": {
+        "field": "name",
+        "domId": "servedName"
+      }
+    },
+    {
+      "id": "tensorParallel",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--tp"
+      },
+      "platformDefault": 1,
+      "legacy": {
+        "field": "tensorParallelSize",
+        "domId": "tensorParallelSize"
+      }
+    },
+    {
+      "id": "apiKey",
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--api-keys"
+      },
+      "help": {
+        "what": {
+          "zh": "LMDeploy 只能通过 --api-keys 启动参数接收密钥；平台会在命令、日志和界面中把它替换为 <redacted>。",
+          "en": "LMDeploy takes the key only as the --api-keys launch flag; the platform replaces it with <redacted> in commands, logs and the console."
+        }
+      },
+      "legacy": {
+        "field": "apiKey",
+        "domId": "vllmApiKey"
+      }
+    },
+    {
+      "id": "lmdeploy.cacheMaxEntryCount",
+      "group": "memory",
+      "level": "basic",
+      "order": 10,
+      "type": "float",
+      "unit": "fraction",
+      "label": {
+        "zh": "KV 缓存比例（权重之外的空闲显存）",
+        "en": "KV cache fraction (of memory left after weights)"
+      },
+      "summary": {
+        "zh": "LMDeploy 把加载权重后剩余显存的这个比例分给 KV 缓存。",
+        "en": "LMDeploy gives this fraction of the memory left after the weights to the KV cache."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --cache-max-entry-count。它是权重加载后空闲显存的比例，不是整卡比例。",
+          "en": "Maps to --cache-max-entry-count. It is a fraction of the memory free after the weights load, not of the whole GPU."
+        },
+        "whenToChange": {
+          "zh": "启动时报显存不足就调小；同卡还有其它程序时也应调小。",
+          "en": "Lower it when the start runs out of memory, or when other programs share the GPU."
+        },
+        "tradeoffs": {
+          "zh": "过高会让激活和 CUDA Graph 没有余量；过低则可同时处理的上下文变短。",
+          "en": "Too high leaves no room for activations and CUDA graphs; too low shortens the context that fits at once."
+        }
+      },
+      "range": {
+        "min": 0.05,
+        "max": 0.95,
+        "step": 0.01
+      },
+      "engineDefault": 0.8,
+      "platformDefault": 0.8,
+      "emit": {
+        "mode": "adapter",
+        "kind": "flag-value",
+        "flag": "--cache-max-entry-count"
+      },
+      "vramEffect": "fraction",
+      "legacy": {
+        "field": "gpuMemoryUtilization",
+        "domId": "gpuMemoryUtilization"
+      }
+    },
+    {
+      "id": "lmdeploy.backend",
+      "group": "runtime-expert",
+      "level": "advanced",
+      "order": 10,
+      "type": "enum",
+      "label": {
+        "zh": "推理后端",
+        "en": "Inference backend"
+      },
+      "summary": {
+        "zh": "LMDeploy 的推理后端：TurboMind 或 PyTorch。",
+        "en": "LMDeploy's inference backend: TurboMind or PyTorch."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --backend。留空时 LMDeploy 按模型自动选择，通常是 TurboMind。",
+          "en": "Maps to --backend. Empty lets LMDeploy choose for the model, usually TurboMind."
+        },
+        "whenToChange": {
+          "zh": "TurboMind 不支持某个模型，或需要 LoRA 适配器（仅 PyTorch 后端）时。",
+          "en": "When TurboMind does not support a model, or when LoRA adapters are needed (PyTorch backend only)."
+        },
+        "tradeoffs": {
+          "zh": "两个后端支持的模型、量化和功能不同，速度也不同。",
+          "en": "The backends differ in supported models, quantization and features, and in speed."
+        }
+      },
+      "choices": [
+        {
+          "value": "turbomind",
+          "label": {
+            "zh": "TurboMind",
+            "en": "TurboMind"
+          }
+        },
+        {
+          "value": "pytorch",
+          "label": {
+            "zh": "PyTorch",
+            "en": "PyTorch"
+          }
+        }
+      ],
+      "choicesFrom": "introspect:--backend",
+      "emit": {
+        "mode": "catalog",
+        "kind": "flag-value",
+        "flag": "--backend"
+      }
+    },
+    {
+      "id": "lora.adapters",
+      "group": "lora",
+      "level": "advanced",
+      "order": 10,
+      "type": "list",
+      "label": {
+        "zh": "LoRA 适配器",
+        "en": "LoRA adapters"
+      },
+      "summary": {
+        "zh": "启动时加载的 LoRA 适配器，每个有名字和目录，最多 8 个。",
+        "en": "LoRA adapters loaded at launch, each with a name and a folder, up to 8."
+      },
+      "help": {
+        "what": {
+          "zh": "对应 --adapters 名字=路径。仅 PyTorch 后端支持；路径必须在平台的模型存储目录下。",
+          "en": "Maps to --adapters name=path. Supported by the PyTorch backend only; paths must be under the platform's model storage roots."
+        },
+        "whenToChange": {
+          "zh": "同一个基础模型要服务多个微调版本时。",
+          "en": "When one base model must serve several fine-tuned variants."
+        },
+        "tradeoffs": {
+          "zh": "适配器占用额外显存；LMDeploy 的 TurboMind 后端会忽略或拒绝它们。",
+          "en": "Adapters use extra VRAM; the TurboMind backend ignores or rejects them."
+        }
+      },
+      "item": {
+        "maxItems": 8,
+        "fields": {
+          "name": {
+            "type": "string",
+            "required": true,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "path": {
+            "type": "string",
+            "required": true,
+            "maxLength": 4096
+          }
+        }
+      },
+      "emit": {
+        "mode": "catalog",
+        "kind": "template"
+      },
+      "vramEffect": "weights"
+    }
+  ]
+}

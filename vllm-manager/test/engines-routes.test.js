@@ -26,11 +26,11 @@ function registeredRoutes(app) {
     .flatMap((layer) => Object.keys(layer.route.methods).map((method) => `${method.toUpperCase()} ${layer.route.path}`));
 }
 
-test("the vLLM manager registers the engine routes and hosts vllm and sglang", () => {
+test("the vLLM manager registers the engine routes and hosts vllm, sglang and the three template engines", () => {
   const routes = registeredRoutes(manager.app);
   assert.ok(routes.includes("GET /api/engines"));
   assert.ok(routes.includes("POST /api/engines/descriptors/validate"));
-  assert.deepEqual(manager.engineRegistry.hostedBy("vllm"), ["vllm", "sglang"]);
+  assert.deepEqual(manager.engineRegistry.hostedBy("vllm"), ["vllm", "sglang", "lmdeploy", "tabbyapi", "trtllm"]);
   assert.deepEqual(manager.engineRegistry.errors(), []);
 });
 
@@ -105,7 +105,8 @@ test("GET /api/engines and the descriptor validator answer over HTTP", async (t)
   assert.equal(listing.status, 200);
   const body = await listing.json();
   assert.equal(body.managerId, "vllm");
-  assert.deepEqual(body.engines.map((engine) => engine.engineId), ["vllm", "sglang"]);
+  assert.deepEqual(body.engines.map((engine) => engine.engineId), ["vllm", "sglang", "lmdeploy", "tabbyapi", "trtllm"]);
+  assert.deepEqual(body.engines.filter((engine) => engine.status === "experimental").map((engine) => engine.engineId), ["lmdeploy", "tabbyapi", "trtllm"], "the template engines are listed as experimental");
   const sglang = body.engines.find((engine) => engine.engineId === "sglang");
   assert.deepEqual(sglang.runtimes.map((runtime) => runtime.runtimeId), [
     "sglang@0.5.17",

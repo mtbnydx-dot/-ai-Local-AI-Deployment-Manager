@@ -11,8 +11,11 @@ const engines = require("../../manager-core/engines");
 // secretEnv } while writing the same job.meta, log lines and ledger save.
 
 const MANAGER_ID = "vllm";
-// The adapters this wrapper can feed from legacy run options.
+// The adapters this wrapper can feed from legacy run options. docker-template
+// (01 §19) engines are fed from the catalog instead: their values are the run
+// options mapped through the engine's own legacy bindings.
 const LEGACY_BUILDER_ADAPTERS = new Set(["vllm", "sglang"]);
+const TEMPLATE_ADAPTER = "docker-template";
 const LEGACY_ENGINES = new Set(["vllm", "sglang"]);
 const FRACTION_PARAMS = Object.freeze({ vllm: "vllm.gpuMemoryUtilization", sglang: "sglang.memFractionStatic" });
 // Engines whose legacy branch emitted a preset's quantization. The vLLM branch
@@ -39,6 +42,8 @@ function createVllmRuntimeCommandBuilder(deps) {
     effectiveLaunchQuantization,
     resolveVllmRuntimePreset,
     engineRegistry = null,
+    // Generated launch files (manager-core/engines/launch-files.js), for docker-template engines.
+    launchFiles = null,
   } = deps;
 
   function registry() {
@@ -66,6 +71,8 @@ function createVllmRuntimeCommandBuilder(deps) {
    * adapter on exactly what the manager would launch.
    */
   function prepareLaunch(job, opts) {
+    const templateEngine = templateEngineOf(registry(), opts.engine);
+    if (templateEngine) return prepareTemplateLaunch(job, opts, templateEngine);
     // A prospective plan (01 §11) has no files to inspect: the path is only converted.
     const launch = opts.prospective === true
       ? { modelArg: windowsPathToContainerPath(opts.model), effectiveLoadFormat: opts.loadFormat || "auto", selectedGgufFile: "", ggufFiles: [], localPath: "" }
@@ -139,6 +146,74 @@ function createVllmRuntimeCommandBuilder(deps) {
     return { engineId, adapter, plan, ctx, preset: runtimePreset };
   }
 
+  /**
+   * A docker-template engine (lmdeploy, trtllm, tabbyapi, custom ones): the
+   * plan's values are the run options read through the engine's catalog
+   * (legacy bindings) plus the catalog values a v2 request set, and the
+   * adapter renders the descriptor's template (manager-core/engines/adapters/docker-template.js).
+   */
+  function prepareTemplateLaunch(job, opts, descriptor) {
+    const source = registry();
+    const engineId = descriptor.id;
+    const adapter = engines.adapterFor(descriptor);
+    const runtime = templateRuntimeRef(source, engineId, opts.runtimeImage);
+    const catalog = engines.loadCatalog(engineId, { runtime });
+    const launch = resolveLaunchModel(opts.model, opts.loadFormat);
+    const plan = {
+      engineId,
+      values: withCatalogValues(engines.legacyConfigToValues(opts, engineId, { catalog }), opts.catalogValues),
+      fixed: { args: [], env: {}, labels: [], dockerFlags: [], slots: {} },
+      recipeId: "",
+      instance: {
+        id: opts.instanceId,
+        mode: opts.instanceMode,
+        port: opts.port,
+        networkAccess: opts.networkAccess,
+        serviceHost: opts.serviceHost,
+        containerName: opts.containerName,
+        gpuIds: opts.gpuDeviceIds,
+      },
+      legacy: { preset: {}, runOptions: opts, quantization: {} },
+    };
+    const ctx = {
+      descriptor,
+      runtime,
+      catalog,
+      host: {
+        kind: "docker",
+        containerPort: descriptor.host?.containerPort ?? 8000,
+        config: {
+          modelsRoot: CONFIG.modelsRoot,
+          hfCache: CONFIG.hfCache,
+          imagePlatform: CONFIG.imagePlatform,
+          containerName: CONFIG.containerName,
+          managerLabelValue: CONFIG.managerId,
+        },
+        labelKeys: { manager: MANAGER_LABEL_KEY, engine: MANAGER_ENGINE_LABEL_KEY, apiKeyRef: MANAGER_APIKEY_REF_LABEL_KEY },
+        modelMountArgs: getModelMountArgs(),
+        launchFiles,
+      },
+      model: { ...launch, ref: opts.model },
+      hostFacts: {
+        platform: process.platform,
+        gpus: Array.isArray(opts.hostGpus) ? opts.hostGpus : [],
+        env: { VLLM_START_TIMEOUT_MS: process.env.VLLM_START_TIMEOUT_MS },
+      },
+      secrets: { apiKey: opts.vllmApiKey, apiKeyRef: opts.runtimeApiKeyRef },
+      extra: { args: opts.extraArgs, env: opts.extraEnv },
+      jobId: job.id,
+      admission: { leaseId: opts.gpuAdmissionLeaseId, vramReservationMb: opts.vramReservationMb },
+      launchId: opts.launchId || job?.meta?.launchId || null,
+      toContainerPath: windowsPathToContainerPath,
+      dockerGpuArg,
+      dockerPublishArgs,
+      publishArgsToDockerRunArgs,
+      normalizeGpuIds,
+      lanAddress: getLanAddress,
+    };
+    return { engineId, adapter, plan, ctx, preset: {} };
+  }
+
   // job.meta, the ledger save and the log lines the legacy builder wrote.
   function applyLegacyEffects(job, { metaPatch, logs }) {
     if (metaPatch) {
@@ -168,6 +243,8 @@ function createVllmRuntimeCommandBuilder(deps) {
       runtimePreset: preset,
       runtimeEngine: safeCall(() => registry().toLegacy(engineId), engineId) || engineId,
       secretEnv: command.secretEnv,
+      // Generated launch files (docker-template): the supervisor writes them before the container.
+      ...(Array.isArray(command.files) && command.files.length ? { files: command.files } : {}),
     };
   }
 
@@ -301,6 +378,23 @@ function legacyFixedData(opts, preset) {
   return fixed;
 }
 
+/** The registered docker-template engine this manager hosts for a legacy engine value, else null. */
+function templateEngineOf(source, value) {
+  return safeCall(() => {
+    const mapped = source.fromLegacy(value, MANAGER_ID);
+    const descriptor = source.hostedBy(MANAGER_ID).includes(mapped) ? source.get(mapped) : null;
+    return descriptor?.adapter === TEMPLATE_ADAPTER && engines.adapterFor(descriptor) ? descriptor : null;
+  }, null);
+}
+
+/** The runtime a template launch runs: the requested image, else the engine's default runtime (env overrides applied). */
+function templateRuntimeRef(source, engineId, requestedImage) {
+  const image = String(requestedImage || "").trim();
+  const ref = image ? source.resolveRuntime(engineId, { image }) : source.defaultRuntime(engineId);
+  if (!ref) throw new Error(`Engine ${engineId} has no runtime to launch.`);
+  return { ...ref, image: image || ref.image };
+}
+
 // The image the launch runs always wins; the manifest identity is attached
 // when the registry knows it, and an unknown image runs as a custom runtime.
 function runtimeRef(source, engineId, image) {
@@ -326,7 +420,7 @@ function normalizeRuntimeEngine(value, registry = null) {
     const source = registry || engines.getEngineRegistry();
     const mapped = source.fromLegacy(value, MANAGER_ID);
     const descriptor = source.hostedBy(MANAGER_ID).includes(mapped) ? source.get(mapped) : null;
-    return descriptor && LEGACY_BUILDER_ADAPTERS.has(descriptor.adapter) && engines.adapterFor(descriptor) ? mapped : "";
+    return descriptor && (LEGACY_BUILDER_ADAPTERS.has(descriptor.adapter) || descriptor.adapter === TEMPLATE_ADAPTER) && engines.adapterFor(descriptor) ? mapped : "";
   }, "");
   return engineId || legacyRuntimeEngine(value);
 }
@@ -336,4 +430,4 @@ function legacyRuntimeEngine(value) {
   return LEGACY_ENGINES.has(text) ? text : "vllm";
 }
 
-module.exports = { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine };
+module.exports = { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine, templateEngineOf };

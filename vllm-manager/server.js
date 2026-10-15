@@ -13,7 +13,7 @@ const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest, persistAsyncRuntimeFailure } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildVllmMemoryEstimate } = require("./lib/memory-estimate");
-const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine } = require("./lib/runtime-command");
+const { createVllmRuntimeCommandBuilder, normalizeRuntimeEngine, templateEngineOf } = require("./lib/runtime-command");
 const { buildVllmImagePullOptions: imagePullOptionsFor, createVllmRunContext, vllmInstanceId } = require("./lib/run-context");
 const { normalizeSpeculativeMode, resolveVllmModelCapabilities } = require("./lib/model-capabilities");
 const { createVllmRemoteModelService } = require("./lib/remote-models");
@@ -404,12 +404,17 @@ const {
   parseDockerPortPublish,
 } = core.createDockerPublishHelpers({ containerPort: 8000, getLanAddress });
 
+// Generated per-launch config files of docker-template engines (01 §19.1):
+// <AI_ROOT>/.runtime/launch-files/<launchId>/, deleted when the instance stops.
+const launchFiles = core.engines.createLaunchFiles({ root: DEFAULT_AI_ROOT });
+
 const {
   buildVllmRuntimeCommand,
   formatDockerPublishArgs,
   prepareLaunch,
   redactDockerArgs,
 } = createVllmRuntimeCommandBuilder({
+  launchFiles,
   getModelMountArgs: () => modelStorage.dockerMountArgs(),
   CONFIG,
   MANAGER_LABEL_KEY,
@@ -1662,6 +1667,7 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   // and the engine routes are created further down).
   getEngineRegistry: () => engineRegistry,
   getRecipeStore: () => recipeStore,
+  templateEngineFor: (engineId) => templateEngineOf(engineRegistry, engineId),
   // The command preview: the adapter input runStartJob builds from these run
   // options, and the recipe the legacy preset was rendered from.
   prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
@@ -2148,6 +2154,18 @@ async function checkModelCompatibility(input = {}) {
     enableAutoToolChoice: true,
   });
   const local = describeLocalModelPath(model);
+  // Experimental docker-template engines (lmdeploy, trtllm, tabbyapi): no
+  // vLLM capability matrix applies; the model must be a local folder, because
+  // their images are started with --pull never and never download weights.
+  if (templateEngineOf(engineRegistry, runtimeEngine)) {
+    if (!local?.stat?.isDirectory()) {
+      findings.push(finding("fail", "模型目录", `${model} 不是本机可访问的模型目录。实验性引擎只加载本机目录，不会下载模型。`));
+    } else {
+      findings.push(finding("ok", "模型目录", local.path));
+    }
+    findings.push(finding("warn", "实验性引擎", "这个引擎的参数、显存估算和容器镜像都没有在本机验证过。"));
+    return core.buildCompatibilityReport({ model, recommendations, remote: null, findings });
+  }
   const lower = model.toLowerCase();
   const looksGguf = looksLikeGgufReference(model) || local?.ggufFiles?.length || lower.endsWith(".gguf");
   const localConfig = local ? readLocalModelConfig(local.path) : null;
@@ -3767,6 +3785,8 @@ function legacyRecipeOptions(opts, runtimeEngine) {
 
 function resolveVllmRuntimePreset(opts = {}, launch = {}) {
   const runtimeEngine = normalizeRuntimeEngine(opts.engine);
+  // docker-template engines have no runtime presets or recipes (01 §19).
+  if (templateEngineOf(engineRegistry, runtimeEngine)) return {};
   const localConfig = readLocalModelConfig(launch.localPath);
   const requestedRuntimeImage = String(opts.runtimeImage || "").trim();
   const baseRuntimeImage = requestedRuntimeImage || defaultImageFor(runtimeEngine);
@@ -3911,6 +3931,17 @@ async function listManagedContainers() {
   return containers.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
 }
 
+// A stopped instance's generated launch files (a docker-template engine's
+// config and, for TabbyAPI, its api_tokens.yml) go with it. Best effort: the
+// container is already gone, and the scrub script reports any leftover.
+async function removeInstanceLaunchFiles(container) {
+  try {
+    await launchFiles.removeForContainer(container);
+  } catch (error) {
+    console.warn(`launch files of ${container?.name || "a stopped instance"} could not be removed: ${error.message}`);
+  }
+}
+
 async function removeManagedContainer(reason = "replace", containerName = CONFIG.containerName, expectedJobId = "") {
   const targetContainerName = normalizeDockerContainerName(containerName || CONFIG.containerName);
   // 生命周期操作要看实时容器状态，绕过快照缓存。
@@ -3934,6 +3965,7 @@ async function removeManagedContainer(reason = "replace", containerName = CONFIG
   const leaseId = String(container.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
   if (leaseId) await gpuAdmissionController.release(leaseId, reason || "container-stop").catch(() => {});
   await docker(["rm", "-f", targetContainerName]);
+  await removeInstanceLaunchFiles(container);
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
   clearRuntimeInstancesCache();
@@ -4230,6 +4262,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
   const leaseId = String(target.labels?.["ai.manager.gpu-admission-lease"] || "").trim();
   if (leaseId) await gpuAdmissionController.release(leaseId, "instance-stop").catch(() => {});
   await docker(["rm", "-f", target.name]);
+  await removeInstanceLaunchFiles(target);
   const runtimeApiKeyRef = String(target.labels?.[MANAGER_APIKEY_REF_LABEL_KEY] || "");
   if (runtimeApiKeyRef) await runtimeApiKeyStore.remove(runtimeApiKeyRef).catch(() => {});
   clearGatewayRuntimeCache();
@@ -5192,6 +5225,7 @@ function stopProgressTracker(job) {
 // error object and jobs/instances events on this hub; vLLM/SGLang keep the hard
 // runtime gate. pullRuntime is the job behind POST /api/runtimes/:id/pull.
 const runtimeSupervisor = core.engines.createRuntimeSupervisor({
+  launchFiles,
   managerId: CONFIG.managerId,
   ownerLabelValue: CONFIG.managerId,
   containerBaseName: CONFIG.containerName,
@@ -5266,6 +5300,8 @@ function delay(ms) {
 module.exports = {
   app,
   CONFIG,
+  launchFiles,
+  removeInstanceLaunchFiles,
   engineRegistry,
   runtimeSupervisor,
   vllmRunContext,

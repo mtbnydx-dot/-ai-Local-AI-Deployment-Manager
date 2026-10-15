@@ -17,11 +17,14 @@ function createDockerPublishHelpers(options = {}) {
     return args[args.length - 1] || `127.0.0.1:${port}:${containerPort}`;
   }
 
-  function dockerPublishArgs(port, networkAccess, serviceHost) {
-    if (networkAccess !== "lan") return [`127.0.0.1:${port}:${containerPort}`];
+  // targetPort: the port inside the container; engines that do not listen on the
+  // helpers' containerPort (docker-template engines, 01 §19) pass their own.
+  function dockerPublishArgs(port, networkAccess, serviceHost, targetPort = containerPort) {
+    const inner = Number(targetPort) || containerPort;
+    if (networkAccess !== "lan") return [`127.0.0.1:${port}:${inner}`];
     const lanHost = normalizeLanBindHost(serviceHost);
-    if (isWildcardHost(lanHost)) return [`0.0.0.0:${port}:${containerPort}`];
-    return [`127.0.0.1:${port}:${containerPort}`, `${lanHost}:${port}:${containerPort}`];
+    if (isWildcardHost(lanHost)) return [`0.0.0.0:${port}:${inner}`];
+    return [`127.0.0.1:${port}:${inner}`, `${lanHost}:${port}:${inner}`];
   }
 
   function normalizeLanBindHost(value) {
