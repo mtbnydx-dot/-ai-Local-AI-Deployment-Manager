@@ -145,3 +145,136 @@ test("auxiliary gateway routes map search and MCP paths and reject the rest", ()
   assert.equal(parseEnvFileValue("A=1\nPLATFORM_MCP_API_KEY=abc def \nB=2", "PLATFORM_MCP_API_KEY"), "abc def");
   assert.equal(parseEnvFileValue("", "PLATFORM_MCP_API_KEY"), "");
 });
+
+// --- /api/gateway-access and /api/status entry.gatewayAccess facade (04 TEL-12) ---
+
+const ACCESS_KEYS = ["ok", "updatedAt", "logPath", "privacy", "totals", "external", "local", "clients", "paths", "models", "authSources", "kinds", "statuses", "timeline", "recent"];
+
+// The key skeleton of a payload: plain objects recurse to a fixed depth, a list stands
+// for the keys of its first element (group items carry data-keyed maps below that).
+function keySkeleton(value, depth = 0) {
+  if (Array.isArray(value)) return value.length ? { item: Object.keys(value[0]).sort() } : [];
+  if (value && typeof value === "object") {
+    if (depth >= 2) return "object";
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, keySkeleton(value[key], depth + 1)]));
+  }
+  return typeof value;
+}
+
+function accessRow(index, receivedAt, extra = {}) {
+  return {
+    requestId: `req_${String(index).padStart(20, "0")}`,
+    ingress: "entry",
+    receivedAt,
+    endedAt: receivedAt + 500,
+    protocol: "openai",
+    op: "chat",
+    method: "POST",
+    path: "/gateway/auto/openai/v1/chat/completions",
+    modelRequested: "auto",
+    modelResolved: "model-a",
+    stream: false,
+    keyId: "key_test",
+    authSource: "bearer",
+    clientIp: "127.0.0.1",
+    userAgent: "test-agent",
+    sourceProgram: "curl",
+    status: 200,
+    terminalState: "completed",
+    errorClass: "none",
+    durationMs: 500,
+    promptTokens: 10,
+    outputTokens: 20,
+    usageSource: "reported",
+    ...extra,
+  };
+}
+
+async function withAccessStore(t, rows) {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { openTelemetryStore } = require("../../manager-core/telemetry/store");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "entry-access-"));
+  const store = await openTelemetryStore({ file: path.join(base, "telemetry.sqlite"), inProcess: true, logger: null });
+  t.after(async () => {
+    await store.close({ flushMs: 0 });
+    fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  assert.equal((await store.insertRequests(rows)).rejected, 0);
+  return store;
+}
+
+function loadEntryForAccess() {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  if (!process.env.AI_BILLING_DB) process.env.AI_BILLING_DB = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "entry-access-billing-")), "billing.sqlite");
+  return require("../server");
+}
+
+test("gateway access facade keeps its shape, uses a 1 h window and drops TTS polling", async (t) => {
+  const core = require("../../manager-core");
+  const entry = loadEntryForAccess();
+  const now = Date.now();
+  const MIN = 60_000;
+  const store = await withAccessStore(t, [
+    accessRow(1, now - 5 * MIN),
+    accessRow(2, now - 4 * MIN, { clientIp: "203.0.113.9", status: 500, terminalState: "failed", errorClass: "upstream_5xx", modelResolved: "model-b" }),
+    accessRow(3, now - 3 * MIN, { ingress: "public", clientIp: "127.0.0.1", authSource: "x-api-key" }),
+    // Older than the window: only a wider window sees it.
+    accessRow(4, now - 90 * MIN, { path: "/gateway/auto/openai/v1/embeddings", op: "embeddings" }),
+    // A stray TTS poll row must not reach paths or recent.
+    accessRow(5, now - 2 * MIN, { method: "GET", path: "/gateway/tts/api/jobs/job_1", protocol: "tts", op: "other", route: "tts" }),
+    accessRow(6, now - 1 * MIN, { method: "POST", path: "/gateway/tts/openai/v1/audio/speech", protocol: "tts", op: "speech", route: "tts" }),
+  ]);
+
+  const result = await entry.collectEntryGatewayAccessStats({ store, now, limit: 50, maxLines: 5 });
+  assert.deepEqual(Object.keys(result), ACCESS_KEYS);
+  assert.equal(result.ok, true);
+  assert.equal(result.logPath, "telemetry.sqlite");
+  assert.equal(result.totals.requests.total, 4);
+  assert.equal(result.external.requests.total, 2, "a non-local client address or public ingress is external");
+  assert.equal(result.local.requests.total, 2);
+  const paths = result.paths.map((item) => item.key || item.name || item.label || item.value || Object.values(item)[0]);
+  assert.ok(!paths.some((value) => String(value).includes("/gateway/tts/api/jobs")), "TTS polling is not listed in paths");
+  assert.ok(paths.some((value) => String(value).includes("audio/speech")), "TTS synthesis is");
+  assert.ok(!paths.some((value) => String(value).includes("embeddings")), "outside the 1 h window");
+  assert.ok(!result.recent.some((event) => event.path.includes("/gateway/tts/api/jobs")));
+  assert.equal(result.recent.length, 4);
+  assert.ok(result.recent[0].atMs >= result.recent[1].atMs, "newest first");
+
+  // Deep key comparison with what the log-based computation produced.
+  const lan = core.getLanAddress();
+  const legacyEvents = [
+    { at: new Date(now - MIN).toISOString(), remoteAddress: "203.0.113.9", method: "POST", path: "/x", kind: "openai", status: 200, model: "m", authSource: "bearer", inputTokens: 1, outputTokens: 2 },
+    { at: new Date(now - 2 * MIN).toISOString(), remoteAddress: "127.0.0.1", method: "POST", path: "/y", kind: "openai", status: 500, model: "m", authSource: "bearer" },
+  ].map((entryRow) => core.normalizeAccessEvent(entryRow, lan));
+  const legacy = {
+    ok: true,
+    updatedAt: new Date(now).toISOString(),
+    logPath: "x",
+    privacy: "x",
+    totals: core.summarizeAccessEvents(legacyEvents, now),
+    external: core.summarizeAccessEvents(legacyEvents.filter((e) => e.external), now),
+    local: core.summarizeAccessEvents(legacyEvents.filter((e) => !e.external), now),
+    clients: core.groupAccessEvents(legacyEvents.filter((e) => e.external), (e) => e.remoteAddress || "unknown", { limit: 40 }),
+    paths: core.groupAccessEvents(legacyEvents, (e) => e.path || "-", { limit: 30 }),
+    models: core.groupAccessEvents(legacyEvents, (e) => e.model || "-", { limit: 30 }),
+    authSources: core.groupAccessEvents(legacyEvents, (e) => e.authSource || "none", { limit: 20 }),
+    kinds: core.groupAccessEvents(legacyEvents, (e) => e.kind || "-", { limit: 10 }),
+    statuses: core.groupAccessEvents(legacyEvents, (e) => String(e.status || 0), { limit: 20 }),
+    timeline: core.buildAccessTimeline(legacyEvents, now),
+    recent: legacyEvents.slice().reverse(),
+  };
+  const skeleton = keySkeleton(result);
+  const expected = keySkeleton(legacy);
+  for (const key of ACCESS_KEYS) {
+    assert.deepEqual(skeleton[key], expected[key], `shape of ${key}`);
+  }
+
+  // A wider window sees the older row.
+  const wide = await entry.collectEntryGatewayAccessStats({ store, now, window: "3h" });
+  assert.equal(wide.totals.requests.total, 5);
+  assert.ok(wide.paths.some((item) => JSON.stringify(item).includes("embeddings")));
+});
