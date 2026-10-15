@@ -118,7 +118,7 @@ test("exit codes: usage errors are 2, a bare call prints help, planned commands 
   assert.equal(bare.code, 2);
   assert.match(bare.out, /Usage/);
 
-  const planned = await world.cli(["autostart", "status"]);
+  const planned = await world.cli(["update", "--check"]);
   assert.equal(planned.code, 1);
   assert.match(planned.err, /not available in this build yet/);
   for (const name of Object.keys(PLANNED)) assert.ok(!COMMANDS[name], `${name} is planned, not implemented`);
@@ -505,7 +505,138 @@ test("deps reports lockfile, node_modules and MCP build state from a temp root",
   assert.equal(rows.packages.find((row) => row.package === "llama-manager").status, "stale");
   assert.equal(rows.mcp.status, "stale");
 
-  assert.equal((await world.cli(["deps", "--record"])).code, 1, "--record arrives with post-deploy");
+  // --record stamps what is installed now (install-all.cmd calls it last).
+  const recorded = await world.cli(["deps", "--record"]);
+  assert.equal(recorded.code, 0, recorded.err);
+  assert.match(recorded.out, /Recorded dependency state: 3 package\(s\), MCP build: recorded/);
+  const fresh = JSON.parse((await world.cli(["deps", "--json"])).out);
+  assert.equal(fresh.ok, true);
+  assert.equal(fresh.mcp.status, "ok");
+  const savedState = JSON.parse(fs.readFileSync(path.join(world.root, ".runtime", "platform", "deps-state.json"), "utf8"));
+  assert.equal(savedState.schemaVersion, 1);
+  assert.equal(savedState.packages["llama-manager"].lockSha256, rows.packages.find((row) => row.package === "llama-manager").lockHash);
+});
+
+test("deps --install runs a staged npm ci for one package and reports it", async (t) => {
+  const world = makeWorld(t);
+  const dir = path.join(world.root, "llama-manager");
+  fs.mkdirSync(path.join(dir, "node_modules"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), "{}\n");
+  fs.writeFileSync(path.join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {} }));
+  const calls = [];
+  const npm = async (args, { cwd }) => {
+    calls.push({ args, cwd });
+    fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const done = await world.cli(["deps", "--install", "llama-manager"], { ctx: { npm } });
+  assert.equal(done.code, 0, done.err);
+  assert.match(done.out, /llama-manager: installed/);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args.slice(0, 1), ["ci"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(world.root, ".runtime", "platform", "deps-state.json"), "utf8")).packages["llama-manager"].lockSha256.length, 64);
+  const unknown = await world.cli(["deps", "--install", "no-such-package"], { ctx: { npm } });
+  assert.equal(unknown.code, 2);
+  const failing = await world.cli(["deps", "--install", "llama-manager", "--json"], { ctx: { npm: async () => ({ code: 1, stdout: "", stderr: "npm error" }) } });
+  assert.equal(failing.code, 1);
+  assert.equal(JSON.parse(failing.out).packages[0].status, "failed");
+});
+
+// ---------------------------------------------------------------------------
+// post-deploy
+
+const POST_COMMIT = "c0146a7d2f1e5b9a8c7d6e5f4a3b2c1d0e9f8a7b";
+
+function postDeployWorld(t) {
+  const world = makeWorld(t);
+  const sha = (text) => crypto.createHash("sha256").update(text).digest("hex");
+  fs.mkdirSync(path.join(world.root, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(world.root, "scripts", "stale.js"), "stale");
+  fs.writeFileSync(path.join(world.root, "scripts", "current.js"), "current");
+  const write = (stamp, deployedAt, files) => {
+    const dir = path.join(world.root, "artifacts", "worktree-deploy-backups", stamp);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "deployment-manifest.json");
+    const data = {
+      schemaVersion: 1, deployedAt, branch: "feature/example", commit: POST_COMMIT, liveRoot: world.root,
+      archive: "<RELEASE>\\local-model-service-platform-v0.2.0-git-c0146a7d2f1e.zip", archiveSha256: "a".repeat(64), files,
+    };
+    // As Windows PowerShell 5.1 writes it: BOM and CRLF.
+    fs.writeFileSync(file, `﻿${JSON.stringify(data, null, 4).replace(/\n/g, "\r\n")}`);
+    return { file, dir };
+  };
+  write("20261001-100000-aaaaaaaaaaaa", "2026-10-01T10:00:00+08:00", [
+    { path: "scripts\\stale.js", kind: "release", action: "created", beforeSha256: null, afterSha256: sha("stale") },
+    { path: "scripts\\current.js", kind: "release", action: "created", beforeSha256: null, afterSha256: sha("current") },
+  ]);
+  const second = write("20261014-100000-bbbbbbbbbbbb", "2026-10-14T10:00:00+08:00", [
+    { path: "scripts\\current.js", kind: "release", action: "unchanged", beforeSha256: sha("current"), afterSha256: sha("current") },
+  ]);
+  return { world, manifest: second.file, backup: second.dir };
+}
+
+test("post-deploy validates its arguments", async (t) => {
+  const { world, manifest } = postDeployWorld(t);
+  assert.equal((await world.cli(["post-deploy"])).code, 2);
+  assert.equal((await world.cli(["post-deploy", "--manifest", manifest, "--restart", "sometimes"])).code, 2);
+  const missing = await world.cli(["post-deploy", "--manifest", path.join(world.root, "nope.json")]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.err, /Cannot read the deployment manifest/);
+  const foreign = path.join(world.root, "foreign.json");
+  fs.writeFileSync(foreign, JSON.stringify({ liveRoot: path.join(os.tmpdir(), "some-other-root"), files: [] }));
+  const refused = await world.cli(["post-deploy", "--manifest", foreign]);
+  assert.equal(refused.code, 1);
+  assert.match(refused.err, /belongs to another root/);
+  assert.ok(fs.existsSync(path.join(world.root, "scripts", "stale.js")));
+});
+
+test("post-deploy --dry-run prints the plan and changes nothing", async (t) => {
+  const { world, manifest } = postDeployWorld(t);
+  const before = allFileText(world.root);
+  const plan = await world.cli(["post-deploy", "--manifest", manifest, "--dry-run", "--restart", "changed"]);
+  assert.equal(plan.code, 0, plan.err);
+  assert.match(plan.out, /plan only, nothing is changed/);
+  assert.match(plan.out, /would remove 1 file\(s\), keep 0/);
+  assert.match(plan.out, /remove scripts\\stale\.js/);
+  assert.match(plan.out, /version\.json: write 0\.2\.0-git-c0146a7d2f1e/);
+  assert.equal(allFileText(world.root), before);
+  assert.equal(fs.existsSync(path.join(world.root, "version.json")), false);
+  const json = JSON.parse((await world.cli(["post-deploy", "--manifest", manifest, "--dry-run", "--json"])).out);
+  assert.equal(json.dryRun, true);
+  assert.deepEqual(json.plan.steps.map((step) => step.id), ["prune", "dependencies", "mcp-build", "version", "restart"]);
+  const zh = await world.cli(["post-deploy", "--manifest", manifest, "--dry-run", "--lang", "zh"]);
+  assert.match(zh.out, /仅预览/);
+});
+
+test("post-deploy prunes, writes version.json and post-deploy.json, and honours --no-prune", async (t) => {
+  const { world, manifest, backup } = postDeployWorld(t);
+  const kept = await world.cli(["post-deploy", "--manifest", manifest, "--no-prune"]);
+  assert.equal(kept.code, 0, kept.err);
+  assert.match(kept.out, /Prune: skipped/);
+  assert.ok(fs.existsSync(path.join(world.root, "scripts", "stale.js")));
+
+  const done = await world.cli(["post-deploy", "--manifest", manifest, "--restart", "none"]);
+  assert.equal(done.code, 0, done.err);
+  assert.match(done.out, /Prune: 1 stale file\(s\)/);
+  assert.match(done.out, /Post-deploy steps finished/);
+  assert.equal(fs.existsSync(path.join(world.root, "scripts", "stale.js")), false);
+  assert.equal(fs.readFileSync(path.join(backup, "pruned", "scripts", "stale.js"), "utf8"), "stale");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(world.root, "version.json"), "utf8")).commit, POST_COMMIT);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(backup, "post-deploy.json"), "utf8")).pruned, ["scripts\\stale.js"]);
+  assert.equal(fs.readFileSync(path.join(backup, "post-deploy.json"), "utf8").includes(JSON.stringify(world.root).slice(1, -1)), false, "no absolute path in the deploy result");
+});
+
+test("post-deploy exits 1 and names the failed step when npm fails", async (t) => {
+  const { world, manifest } = postDeployWorld(t);
+  const dir = path.join(world.root, "vllm-manager");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), "{}\n");
+  fs.writeFileSync(path.join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {} }));
+  const failed = await world.cli(["post-deploy", "--manifest", manifest], { ctx: { npm: async () => ({ code: 1, stdout: "", stderr: "npm error" }) } });
+  assert.equal(failed.code, 1);
+  assert.match(failed.out, /Post-deploy steps failed: dependencies/);
+  assert.match(failed.out, /vllm-manager: failed/);
+  assert.equal(fs.existsSync(path.join(world.root, "version.json")), true, "the files are deployed, so the stamp is written");
 });
 
 // ---------------------------------------------------------------------------

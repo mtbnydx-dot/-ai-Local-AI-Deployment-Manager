@@ -32,6 +32,10 @@ const GUARDS = {
   "access-keys": schemas.KeyListGuard,
   "access-presets": schemas.PresetListGuard,
   "access-key-created": schemas.KeyCreatedGuard,
+  // CON-21: the exposure scan (a real 05 golden), the security overview (generated from the real module) and the session list.
+  "access-exposure": schemas.ExposureAnswerGuard,
+  "access-security": schemas.SecurityOverviewGuard,
+  "access-sessions": schemas.SessionListGuard,
   // CON-16 Engines fixtures: the entry aggregate, the external endpoints and a flags response with its diff.
   engines: schemas.EnginesResponseGuard,
   "engines-external": schemas.ExternalEndpointsGuard,

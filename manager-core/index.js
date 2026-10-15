@@ -116,9 +116,11 @@ module.exports.mergeExports = mergeExports;
 // computeLiveDrift...) and the registry's (loadComponentRegistry,
 // resolveComponent, startOrder...) are also on the namespace itself.
 const PLATFORM_MODULES = Object.freeze({
+  autostart: "./platform/autostart",
   components: "./platform/components",
   config: "./platform/config",
   control: "./platform/control",
+  deploySteps: "./platform/deploy-steps",
   doctor: "./platform/doctor",
   doctorCli: "./platform/doctor-cli",
   doctorFix: "./platform/doctor-fix",
@@ -129,6 +131,7 @@ const PLATFORM_MODULES = Object.freeze({
   messages: "./platform/messages",
   schedules: "./platform/schedules",
   semver: "./platform/semver",
+  setup: "./platform/setup",
   status: "./platform/status",
   supervisor: "./platform/supervisor",
   version: "./platform/version",

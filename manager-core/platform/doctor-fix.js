@@ -338,7 +338,7 @@ function createFixRunner(options = {}) {
     return { checkId: plan.checkId, fixId: plan.fix.id, ...(result && typeof result === "object" ? { result } : {}) };
   }
 
-  return { prepare, execute: executePlan, runFix: async (body, io) => executePlan(await prepare(body), io), collectFixes };
+  return { prepare, execute: executePlan, runFix: async (body, io) => executePlan(await prepare(body), io), collectFixes, executors };
 }
 
 function runFix(body, options = {}) {

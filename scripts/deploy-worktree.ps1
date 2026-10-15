@@ -12,7 +12,18 @@ param(
 
   [switch]$AllowLiveDrift,
 
-  [switch]$DriftOnly
+  [switch]$DriftOnly,
+
+  # What to do with the components the deploy touched (06 section 9.3). Nothing
+  # is restarted by default; 'changed' and 'all' go through the supervisor.
+  [ValidateSet('none', 'changed', 'all')]
+  [string]$Restart = 'none',
+
+  # Keep stale deploy artifacts instead of pruning them (with a backup).
+  [switch]$NoPrune,
+
+  # Copy the files only: no prune, dependency, build, version.json or restart step.
+  [switch]$SkipPostDeploy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +57,38 @@ function Assert-ChildPath {
     throw "Refusing a path outside $Parent`: $fullPath"
   }
   return $fullPath
+}
+
+# Post-deploy steps (06 section 9.3) run through the platform CLI. A real deploy
+# uses the newly deployed copy in the live root; the -WhatIf preview uses this
+# worktree's copy, because the live root may not have the new CLI yet. Either
+# way the CLI works on the live root named in AI_ROOT.
+function Invoke-PostDeploy {
+  param(
+    [Parameter(Mandatory = $true)][string]$CliRoot,
+    [Parameter(Mandatory = $true)][string]$AiRoot,
+    [Parameter(Mandatory = $true)][string]$ManifestPath,
+    [switch]$Preview
+  )
+
+  $cli = Join-Path (Join-Path $CliRoot 'scripts') 'platformctl.js'
+  if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
+    throw "The platform CLI is missing: $cli"
+  }
+  $node = if ([string]::IsNullOrWhiteSpace($env:NODE_EXE)) { 'node' } else { $env:NODE_EXE }
+  $cliArgs = @($cli, 'post-deploy', '--manifest', $ManifestPath, '--restart', $Restart)
+  if ($NoPrune) { $cliArgs += '--no-prune' }
+  if ($Preview) { $cliArgs += '--dry-run' }
+
+  $previousAiRoot = $env:AI_ROOT
+  try {
+    $env:AI_ROOT = $AiRoot
+    # Out-Host keeps the CLI output out of this function's return value.
+    & $node @cliArgs | Out-Host
+    return [int]$LASTEXITCODE
+  } finally {
+    if ($null -eq $previousAiRoot) { Remove-Item Env:AI_ROOT -ErrorAction SilentlyContinue } else { $env:AI_ROOT = $previousAiRoot }
+  }
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -144,6 +187,12 @@ if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
   throw "Version contains unsupported characters: $Version"
 }
 
+# Staging only writes below this worktree's artifacts folder, and the -WhatIf preview
+# needs the extracted release to compare against the live root, so staging runs
+# for real even under -WhatIf. Only the live root is protected by ShouldProcess.
+$callerWhatIfPreference = $WhatIfPreference
+$WhatIfPreference = $false
+
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $releaseRoot = Join-Path $sourceRoot "artifacts\worktree-deploy\$stamp-$shortCommit"
 if (Test-Path -LiteralPath $releaseRoot) {
@@ -194,6 +243,7 @@ if ($IncludeLocalExtensions) {
 $uniqueItems = @($deployItems | Group-Object { $_.Relative.ToLowerInvariant() } | ForEach-Object { $_.Group | Select-Object -First 1 })
 $backupRoot = Join-Path $liveFull "artifacts\worktree-deploy-backups\$stamp-$shortCommit"
 Assert-ChildPath -Path $backupRoot -Parent $liveFull | Out-Null
+$WhatIfPreference = $callerWhatIfPreference
 
 Write-Host "Prepared deployment"
 Write-Host "  Branch:      $branch"
@@ -205,6 +255,40 @@ Write-Host "  Archive:     $zipPath"
 Write-Host "  SHA256:      $actualHash"
 
 if (-not $PSCmdlet.ShouldProcess($liveFull, "Back up and deploy $($uniqueItems.Count) source files from commit $shortCommit")) {
+  if (-not $SkipPostDeploy) {
+    # Preview the post-steps against the manifest this deploy would write. The
+    # live root is only read; the plan manifest lives in the release staging folder.
+    $plannedRecords = [System.Collections.Generic.List[object]]::new()
+    foreach ($item in $uniqueItems) {
+      $target = Join-Path $liveFull $item.Relative
+      $sourceHash = (Get-FileHash -LiteralPath $item.Source -Algorithm SHA256).Hash.ToLowerInvariant()
+      $targetExists = Test-Path -LiteralPath $target -PathType Leaf
+      $targetHash = if ($targetExists) { (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+      $plannedAction = if ($targetHash -eq $sourceHash) { 'unchanged' } elseif ($targetExists) { 'updated' } else { 'created' }
+      $plannedRecords.Add([pscustomobject]@{
+        path = $item.Relative; kind = $item.Kind; action = $plannedAction; beforeSha256 = $targetHash; afterSha256 = $sourceHash
+      })
+    }
+    $planManifest = [ordered]@{
+      schemaVersion = 1
+      deployedAt = (Get-Date).ToString('o')
+      sourceWorktree = $sourceRoot
+      branch = $branch
+      commit = $commit
+      liveRoot = $liveFull
+      archive = $zipPath
+      archiveSha256 = $actualHash
+      includeLocalExtensions = [bool]$IncludeLocalExtensions
+      liveDrift = @($liveDrift)
+      files = @($plannedRecords)
+    }
+    $planPath = Join-Path $releaseRoot 'plan-deployment-manifest.json'
+    $planManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $planPath -Encoding UTF8
+    $planCode = Invoke-PostDeploy -CliRoot $sourceRoot -AiRoot $liveFull -ManifestPath $planPath -Preview
+    if ($planCode -ne 0) {
+      Write-Warning "The post-deploy preview failed (exit $planCode)."
+    }
+  }
   return
 }
 
@@ -257,5 +341,30 @@ $manifest = [ordered]@{
 $manifestPath = Join-Path $backupRoot 'deployment-manifest.json'
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-Write-Host 'Deployment completed. No manager or model process was restarted.'
 Write-Host "Backup manifest: $manifestPath"
+
+if ($SkipPostDeploy) {
+  Write-Host 'Files deployed. Post-deploy steps were skipped (-SkipPostDeploy).'
+  Write-Host "Run later: platform post-deploy --manifest `"$manifestPath`""
+  Write-Host 'Deployment completed. No manager or model process was restarted.'
+  return
+}
+
+$postDeployCode = Invoke-PostDeploy -CliRoot $liveFull -AiRoot $liveFull -ManifestPath $manifestPath
+if ($postDeployCode -ne 0) {
+  $failedSteps = 'unknown'
+  $resultPath = Join-Path $backupRoot 'post-deploy.json'
+  if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+    try {
+      $postResult = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+      if ($postResult.failed) { $failedSteps = (@($postResult.failed) -join ', ') }
+    } catch { }
+  }
+  throw ('Files are deployed; post-steps failed: {0}; run: platform post-deploy --manifest "{1}"' -f $failedSteps, $manifestPath)
+}
+
+if ($Restart -eq 'none') {
+  Write-Host 'Deployment completed. No manager or model process was restarted.'
+} else {
+  Write-Host 'Deployment completed. Model containers were not restarted.'
+}

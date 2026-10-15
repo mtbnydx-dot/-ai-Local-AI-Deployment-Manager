@@ -150,7 +150,6 @@ test("exposure setup passes its arguments through to setup-public.ps1 and return
 
   const bare = await world.cli(["exposure"]);
   assert.equal(bare.code, 2);
-  assert.equal((await world.cli(["exposure", "scan"])).code, 1, "scan belongs to OPS-7c");
 });
 
 // ---------------------------------------------------------------------------

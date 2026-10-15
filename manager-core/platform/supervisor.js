@@ -5,8 +5,9 @@
 // idle gate with pending restarts, operations and events. Spawning, stop
 // strategies and identity records belong to launcher.js, port and process
 // facts to winproc.js, the pipe API to control.js and machine-signed entry
-// calls to entry-client.js. Restore, toasts, the nightly watch and the full
-// re-exec takeover are OPS-12; the hand-off here only leaves children alone.
+// calls to entry-client.js. Restore (restore.js), toasts (toasts.js), the
+// working set, the nightly and backup watch and the re-exec hand-off (which
+// only leaves children alone) are OPS-12.
 //
 // Every clock, process, probe and network boundary is injectable, so the
 // tests drive the whole state machine on a fake clock. No code path here
@@ -21,6 +22,9 @@ const statusApi = require("./status");
 const idleApi = require("./idle");
 const logFiles = require("./logs");
 const messages = require("./messages");
+const schedules = require("./schedules");
+const { createRestorer, WORKING_SET_MS } = require("./restore");
+const { createToaster } = require("./toasts");
 const winprocDefault = require("./winproc");
 const { controlError } = require("./control");
 
@@ -32,6 +36,9 @@ const DOCTOR_MS = 30 * 60 * 1000;
 const STATUS_DEBOUNCE_MS = 1000;
 const INSTANCES_CACHE_MS = 5000;
 const KEYS_CACHE_MS = 60 * 1000;
+const WATCH_MS = 10 * 60 * 1000;
+const TOAST_SYNC_MS = 30 * 1000;
+const BACKUP_STALE_HOURS = 36;
 const PENDING_DEADLINE_MS = 6 * 60 * 60 * 1000;
 const EVENTS_MAX_BYTES = 10 * 1024 * 1024;
 const EVENTS_KEEP = 3;
@@ -90,7 +97,8 @@ function basename(value) {
  * ensureDocker(spec, timeoutMs), collectBlockers({components}), entryClient,
  * fetch, runDoctor, readOps, getBuildId, loadHook, secrets, logs, redactor,
  * clock { now, setTimeout, clearTimeout }, pid, spawnSupervisor, waitForPipe,
- * closeControl, reopenControl, exit, log }.
+ * closeControl, reopenControl, exit, log, restoreModels (true forces `auto`),
+ * takeover, showToast }.
  */
 function createSupervisor(options = {}) {
   const aiRoot = path.resolve(options.aiRoot || path.join(__dirname, "../.."));
@@ -104,6 +112,8 @@ function createSupervisor(options = {}) {
   const desiredFile = path.join(platformDir, "desired.json");
   const pendingFile = path.join(platformDir, "pending-restarts.json");
   const doctorFile = path.join(platformDir, "doctor-last.json");
+  const workingSetFile = path.join(platformDir, "working-set.json");
+  const watchFile = path.join(platformDir, "watch-state.json");
   const eventsFile = path.join(aiRoot, "logs", "platform", "events.jsonl");
   const winproc = options.winproc || winprocDefault;
   const logs = options.logs || logFiles;
@@ -133,6 +143,11 @@ function createSupervisor(options = {}) {
   let keysCache = { at: -Infinity, value: null };
   let pending = (readJsonFile(pendingFile, []) || []).filter((item) => item && typeof item.id === "string");
   const desiredSaved = readJsonFile(desiredFile, {}) || {};
+  const watchState = readJsonFile(watchFile, {}) || {};
+  let restoreRequested = options.restoreModels === true;
+  const restoreHandled = new Set();
+  let restoreChain = Promise.resolve();
+  let toastSubscription = null;
 
   function getEntryClient() {
     if (entryClient) return entryClient;
@@ -246,8 +261,22 @@ function createSupervisor(options = {}) {
       }
       return zhEn(out);
     };
-    return emit("notification", { kind, severity, title: text("title"), body: text("body"), ...extra });
+    const data = { kind, severity, title: text("title"), body: text("body"), ...extra };
+    const event = emit("notification", data);
+    if (toastEnabled()) toaster.local(data);
+    return event;
   }
+  function toastEnabled() {
+    return config.values?.["supervisor.notifications.toast"] === true;
+  }
+  const toaster = createToaster({ now, showToast: options.showToast, env, log: (line) => log(line) });
+  const restorer = createRestorer({
+    workingSetFile, fetch: (...args) => fetchImpl(...args), now, sleep, log: (line) => log(line),
+    notify: (kind, severity, key, params, extra) => notify(kind, severity, key, params, extra),
+    managers: () => [...records.values()].filter((rec) => MANAGER_IDS[rec.id] && rec.spec.urls?.api).map((rec) => ({
+      managerId: MANAGER_IDS[rec.id], componentId: rec.id, origin: rec.spec.urls.api, live: LIVE_STATES.has(rec.state),
+    })),
+  });
   function scheduleStatus() {
     if (statusTimer || closed) return;
     statusTimer = later(STATUS_DEBOUNCE_MS, async () => {
@@ -555,6 +584,7 @@ function createSupervisor(options = {}) {
     scheduleLiveness(rec, generation);
     afterReady(rec, generation);
     for (const child of listenerChildren(rec.id)) probeListener(child);
+    if (MANAGER_IDS[rec.id]) onManagerReady(rec);
   }
 
   async function afterReady(rec, generation) {
@@ -879,6 +909,8 @@ function createSupervisor(options = {}) {
       rec.desired = "stopped";
       persistDesired();
     }
+    // The last working set is saved before a supervisor-requested manager stop (§5.12).
+    if (MANAGER_IDS[rec.id] && LIVE_STATES.has(rec.state)) { try { await restorer.writeWorkingSet(); } catch {} }
     cancel(rec.timers.backoff);
     cancel(rec.timers.liveness);
     cancel(rec.timers.stable);
@@ -1006,6 +1038,82 @@ function createSupervisor(options = {}) {
           blockers: [...new Set(blockers.map((blocker) => blocker.kind))].join(", "),
         }, { dedupeKey: `restart.overdue:${item.id}` });
       }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Restore models, the nightly and backup watch, toasts (§5.10, §5.12)
+
+  function restoreMode() {
+    if (restoreRequested) return "auto";
+    const value = config.values?.["supervisor.restoreModels"];
+    return value === "off" || value === "auto" ? value : "offer";
+  }
+
+  // Restores run one at a time; `only` limits a run to the manager that just became ready.
+  function queueRestore(only) {
+    const previous = restoreChain;
+    const op = startOperation("restore", async ({ line }) => {
+      await previous;
+      return restorer.run({ line, only });
+    });
+    restoreChain = op.done.then(() => {}, () => {});
+    return op;
+  }
+
+  async function onManagerReady(rec, { force = false } = {}) {
+    const managerId = MANAGER_IDS[rec.id];
+    if (!managerId || (restoreHandled.has(rec.id) && !force)) return;
+    const mode = restoreMode();
+    if (mode === "off") return;
+    restoreHandled.add(rec.id);
+    try {
+      if (mode === "auto") { await queueRestore(managerId).done; return; }
+      const missing = (await restorer.plan({ only: managerId })).filter((item) => item.action !== "skip-running");
+      if (missing.length) restorer.offer(missing.length);
+    } catch (error) {
+      log({ code: "restore_failed", message: String(error?.code || error?.message || error) });
+    }
+  }
+
+  async function watchTick() {
+    const latest = path.join(aiRoot, schedules.NIGHTLY_DIR, "latest.json");
+    let mtime = null;
+    try { mtime = fs.statSync(latest).mtimeMs; } catch {}
+    let changed = false;
+    if (mtime !== null && watchState.nightlyMtime !== mtime) {
+      watchState.nightlyMtime = mtime;
+      changed = true;
+      const report = readJsonFile(latest, null);
+      // One notification per report: the mtime is the report's identity and survives a supervisor restart.
+      if (report && report.ok !== true) {
+        const nightly = schedules.readNightly(aiRoot, { now });
+        notify("nightly.failed", "error", "nightly.failed", { n: Math.max(1, nightly.streak || 1), date: nightly.since || iso(mtime).slice(0, 10) }, { dedupeKey: `nightly.failed:${mtime}` });
+      }
+    }
+    const backup = schedules.readBackup(aiRoot, { now });
+    if (backup.available && backup.ageHours > BACKUP_STALE_HOURS && watchState.backupStale !== backup.stamp) {
+      watchState.backupStale = backup.stamp;
+      changed = true;
+      notify("backup.stale", "warn", "backup.stale", { hours: Math.floor(backup.ageHours) }, { dedupeKey: `backup.stale:${backup.stamp}` });
+    }
+    if (changed) { try { writeJsonFile(watchFile, watchState); } catch (error) { log({ code: "watch_write_failed", message: String(error?.code || error) }); } }
+  }
+
+  // One SSE subscription to the entry while supervisor.notifications.toast is on (a live setting).
+  function syncToasts() {
+    if (closed) return;
+    if (toastEnabled() && !toastSubscription) {
+      try {
+        toastSubscription = getEntryClient().events(["notification", "platform"], (envelope) => { toaster.remote(envelope); }, {
+          client: "supervisor", onError: (error) => log({ code: "toast_stream_error", message: String(error?.code || error?.message || error) }),
+        });
+      } catch (error) {
+        log({ code: "toast_stream_failed", message: String(error?.code || error?.message || error) });
+      }
+    } else if (!toastEnabled() && toastSubscription) {
+      try { toastSubscription.close?.(); } catch {}
+      toastSubscription = null;
     }
   }
 
@@ -1147,6 +1255,12 @@ function createSupervisor(options = {}) {
       every(DOCKER_PROBE_MS, dockerTick);
       every(PENDING_CHECK_MS, pendingTick);
       every(COPY_TRUNCATE_MS, copyTruncateTick);
+      every(WORKING_SET_MS, () => restorer.writeWorkingSet());
+      every(WATCH_MS, watchTick);
+      every(TOAST_SYNC_MS, syncToasts);
+      watchTick().catch(() => {});
+      syncToasts();
+      if (options.takeover) notify("supervisor.reexec", "info", "supervisor.reexec", {}, { dedupeKey: "supervisor.reexec" });
       if (options.runDoctor !== false) {
         runDoctorTick();
         every(DOCTOR_MS, runDoctorTick);
@@ -1193,7 +1307,8 @@ function createSupervisor(options = {}) {
       if (restartOptions.wait && done) await done;
       return rest;
     },
-    async startProfile(name, { runtimeOverrides: overrides } = {}) {
+    async startProfile(name, { runtimeOverrides: overrides, restoreModels } = {}) {
+      if (restoreModels === true) restoreRequested = true;
       componentsApi.selectProfile(registry, name);
       if (overrides && typeof overrides === "object") {
         runtimeOverrides = { ...overrides };
@@ -1204,6 +1319,19 @@ function createSupervisor(options = {}) {
       profile = name === "all" ? "full" : name;
       const ids = componentsApi.selectProfile(registry, profile);
       const op = startOperation("start", ({ line }) => runStart(ids, { line }));
+      // Managers that were already ready are not started again, so they get their restore here.
+      if (restoreModels === true) {
+        op.done.then(() => { for (const rec of records.values()) if (MANAGER_IDS[rec.id] && rec.state === "ready") onManagerReady(rec); });
+      }
+      return { opId: op.opId };
+    },
+    // §5.12: the same add-only plan as `auto`, on request (console button, CLI). dryRun has no side effects.
+    async restoreModels({ dryRun = false } = {}) {
+      if (dryRun === true) {
+        const plan = (await restorer.plan()).map(({ componentId, ...item }) => item);
+        return { dryRun: true, plan };
+      }
+      const op = queueRestore();
       return { opId: op.opId };
     },
     async stopScope({ scope = "all", models = false, confirm = false, exitSupervisor } = {}) {
@@ -1265,6 +1393,19 @@ function createSupervisor(options = {}) {
       const op = startOperation("doctor-fix", ({ line, progress }) => runner.execute(plan, { line, progress }));
       return { opId: op.opId };
     },
+    // POST /v1/setup/:step (06 §8). prepare() rejects unknown steps and bad
+    // parameters before an operation exists; the step runs as a streamed
+    // "setup" operation. The ops step only reports its commands.
+    async runSetupStep(step, body = {}) {
+      const create = options.createSetupRunner || require("./setup").createSetupRunner;
+      const runner = create({
+        aiRoot, env, config, registry, supervisor: api, fetch: fetchImpl, now,
+        ...(options.setupOptions || {}),
+      });
+      const plan = await runner.prepare(step, body);
+      const op = startOperation("setup", ({ line, progress }) => runner.execute(plan, { line, progress }));
+      return { opId: op.opId, ...plan.immediate };
+    },
     async cancelPendingRestart(id) {
       const before = pending.length;
       pending = pending.filter((item) => item.id !== id);
@@ -1322,6 +1463,8 @@ function createSupervisor(options = {}) {
     },
     close() {
       closed = true;
+      try { toastSubscription?.close?.(); } catch {}
+      toastSubscription = null;
       for (const handle of [...timers]) cancel(handle);
       for (const rec of records.values()) {
         const waiters = rec.readyWaiters.splice(0);

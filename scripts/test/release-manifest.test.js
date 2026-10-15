@@ -365,6 +365,26 @@ test("every repository file is shipped or excluded with a reason", (t) => {
   assert.deepEqual(problems, [], report("release-manifest.json does not account for these files:", problems, SHIP_OR_EXCLUDE));
 });
 
+test("the model hub ships its code, console copy and fixtures but never its runtime data", (t) => {
+  const repositoryFiles = repositoryFilesOrSkip(t);
+  if (!repositoryFiles) return;
+  const hubPrefixes = ["manager-core/model-hub/", "service-entry/console/i18n/hub/", "manager-core/test/fixtures/hub/"];
+  const hubFiles = repositoryFiles.filter((file) => hubPrefixes.some((prefix) => file.startsWith(prefix))
+    || file === "service-entry/lib/hub-routes.js" || file === "service-entry/test/hub-i18n.test.js");
+  assert.ok(hubFiles.includes("manager-core/model-hub/index.js"));
+  assert.ok(hubFiles.includes("service-entry/lib/hub-routes.js"));
+  assert.ok(hubFiles.includes("service-entry/console/i18n/hub/en-US.json"));
+  // The hub keeps downloads.json, history and logs under service-entry/data/hub
+  // (03 section 3). None of it is tracked, and a stray file must not ship.
+  const runtimeFiles = ["service-entry/data/hub/downloads.json", "service-entry/data/hub/logs/job.txt", "service-entry/data/hub/library.json"];
+  const { shipped, problems } = classifyRelease(manifest, [...hubFiles, ...runtimeFiles], privacyRulesFor(ROOT));
+  assert.deepEqual(problems.filter((problem) => !problem.startsWith("service-entry/data/hub/")), [], problems.join(", "));
+  for (const file of hubFiles) assert.ok(shipped.has(file), file + " must ship");
+  for (const file of runtimeFiles) assert.ok(!shipped.has(file), file + " must not ship");
+  assert.ok(list(manifest.runtimeDataDirectories).includes("service-entry/data"));
+  assert.ok(list(manifest.extraFiles).includes("docs/model-storage-guide.md"));
+});
+
 test("every listed file and directory exists and README-linked docs ship", (t) => {
   const repositoryFiles = repositoryFilesOrSkip(t);
   if (!repositoryFiles) return;
