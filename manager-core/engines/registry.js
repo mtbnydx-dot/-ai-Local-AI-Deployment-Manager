@@ -205,6 +205,9 @@ function createEngineRegistry(options = {}) {
   const overrideDir = options.overrideDir || path.join(userDataDir(), "engines");
   const env = options.env || process.env;
   const manifest = options.manifest || runtimeManifest;
+  // engines.native.enabled (01 §13, ENG-22): boolean or () => boolean. The
+  // default reads platform.json through readSection("engines") on every call.
+  const nativeSource = options.nativeEnabled;
   let state = null;
 
   function load(loadOptions = {}) {
@@ -323,6 +326,27 @@ function createEngineRegistry(options = {}) {
     const descriptor = ENGINE_ID_PATTERN.test(id) ? get(id) : null;
     if (!descriptor) throw unknownEngineError(engineId);
     return descriptor;
+  }
+
+  function nativeEnabled() {
+    if (typeof nativeSource === "function") return Boolean(nativeSource());
+    if (typeof nativeSource === "boolean") return nativeSource;
+    return require("./hosts/native").isNativeEnabled({ env });
+  }
+
+  // host.kinds without "native" while the flag is off, so the console and the
+  // planner never offer a host that cannot run.
+  function hostKindsFor(engineId) {
+    const descriptor = typeof engineId === "object" && engineId ? engineId : get(engineId);
+    const kinds = descriptor?.host?.kinds || [];
+    return nativeEnabled() ? [...kinds] : kinds.filter((kind) => kind !== "native");
+  }
+
+  // host.default, or the first visible kind when the default is hidden.
+  function defaultHostKindFor(engineId) {
+    const descriptor = typeof engineId === "object" && engineId ? engineId : get(engineId);
+    const kinds = hostKindsFor(descriptor);
+    return kinds.includes(descriptor?.host?.default) ? descriptor.host.default : kinds[0] || "";
   }
 
   function hostedBy(managerId) {
@@ -484,12 +508,14 @@ function createEngineRegistry(options = {}) {
     bundledIds: () => current().bundledIds,
     checkOverride,
     defaultEngineFor,
+    defaultHostKindFor,
     defaultRuntime,
     errorSignatureAdditions,
     errors,
     fromLegacy,
     get,
     has,
+    hostKindsFor,
     hostedBy,
     list,
     pullPolicy,
