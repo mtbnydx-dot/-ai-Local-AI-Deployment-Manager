@@ -11,7 +11,8 @@
 // - Logs: the LogViewer polls the manager's per-instance log with `since` and
 //   appends without repeating lines.
 // - Config: the LaunchStore record as a read-only SchemaForm and the redacted
-//   command. Clone and Save as profile open the wizard.
+//   command. Clone and Save as profile open the wizard. The qualification block
+//   (verify the deployment, Save as recipe; CON-31) sits below.
 // - Relaunch never starts anything here: it opens the wizard's Review step.
 // - Wake sends the sleep record id and asks before it replaces a running model.
 //
@@ -156,7 +157,8 @@ export default function DeploymentDetail({ params = {}, query = {} }) {
     { id: "requests", label: t("deploy.tab.requests"), disabled: !telemetry },
     { id: "events", label: t("deploy.tab.events") },
   ];
-  const initial = readQueryParam("tab") || query?.tab;
+  // The wizard's old "Qualify this deployment" link (?qualify=1) lands on the Config tab, where the qualification block lives.
+  const initial = readQueryParam("tab") || query?.tab || (readQueryParam("qualify") ? "config" : "");
   const [tab, setTab] = useState(() => (DETAIL_TABS.includes(initial) && !tabsList.find((item) => item.id === initial)?.disabled ? initial : "overview"));
   const active = tabsList.find((item) => item.id === tab)?.disabled ? "overview" : tab;
 

@@ -1,6 +1,7 @@
 // The Config tab of a deployment (07 §6.2): the LaunchStore record as a
 // read-only SchemaForm, the redacted command, Clone as new and Save as profile
-// (both open the wizard, which owns launching and saving).
+// (both open the wizard, which owns launching and saving), and the qualification
+// block (CON-31, qualify.js) with Save as recipe.
 
 import { cloneHref } from "../../lib/deployments-model.js";
 import { describeError } from "../../lib/api.js";
@@ -10,11 +11,14 @@ import { Card } from "../../components/card.js";
 import { CodeBlock } from "../../components/code-block.js";
 import { EmptyState } from "../../components/empty-state.js";
 import { SchemaForm } from "../../components/schema-form.js";
+import { modelRefOf } from "../../lib/qualify-model.js";
 import { useServices } from "../../ui/context.js";
 import { useQuery, useT } from "../../ui/hooks.js";
 import { html } from "../../ui/html.js";
+import { LazyView } from "./lazy.js";
 
 const enc = encodeURIComponent;
+const loadQualify = () => import("./qualify.js");
 
 export function ConfigTab({ row, owner }) {
   const services = useServices();
@@ -55,5 +59,7 @@ export function ConfigTab({ row, owner }) {
     <${Card} title=${t("deploy.config.command")} testid="deploy.config.command">
       ${argv.length ? html`<${CodeBlock} code=${argv.join("\n")} language="docker" />` : html`<p class="muted">${t("deploy.config.noCommand")}</p>`}
     <//>
+    <${LazyView} load=${loadQualify} name="QualifyBlock" framed=${true} managerId=${row.managerId} fleetId=${row.fleetId || row.key} launchId=${record.launchId || row.launchId || ""}
+      modelRef=${modelRefOf(record)} engineId=${engineId} values=${record.resolved?.values || null} modelName=${record.spec?.model?.servedName || ""} canStart=${row.state === "ready"} />
   </div>`;
 }
