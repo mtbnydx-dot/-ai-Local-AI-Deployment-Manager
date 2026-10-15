@@ -1,0 +1,14 @@
+
+Listen on ipv4:             Connect to ipv4:
+
+Address         Port        Address         Port
+--------------- ----------  --------------- ----------
+0.0.0.0         55177       127.0.0.1       5177
+192.168.1.20    8443        127.0.0.1       5186
+
+Listen on ipv6:             Connect to ipv6:
+
+Address         Port        Address         Port
+--------------- ----------  --------------- ----------
+::              55178       ::1             5178
+

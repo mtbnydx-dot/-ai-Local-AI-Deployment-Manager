@@ -1,0 +1,18 @@
+# Legacy public proxy: straight to the managers (bypasses the entry).
+api.example.invalid {
+	encode zstd gzip
+	@vllm path /vllm/*
+	handle @vllm {
+		reverse_proxy 127.0.0.1:5177 {
+			flush_interval -1
+		}
+	}
+	handle /llama/* {
+		reverse_proxy http://localhost:5178 # llama manager
+	}
+	respond 404
+}
+
+chat.example.invalid {
+	reverse_proxy 127.0.0.1:3000
+}

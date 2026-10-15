@@ -21,6 +21,11 @@
 //                                  the gateway handler, after the record starts.
 //   deps.data.respond(pathname, req) -> object|null   the four portal JSON
 //                                        documents (status-sampler.js, PUB-14)
+//   deps.probeRecorder.observe(nonce, observation)   the external probe's nonce
+//                                        recorder (exposure-scan.js, PUB-19): a
+//                                        GET /status.json?probe=<nonce> that the
+//                                        probe registered is recorded with the
+//                                        socket and header PUBLIC saw
 // A route nobody serves yet answers like any unknown path (404) for the
 // portal, and 503 service_unavailable for the key routes.
 
@@ -29,6 +34,8 @@ const { newRequestId, sendPublicError } = require("./public-errors");
 
 const PORTAL_SHELL_PATHS = new Set(["/", "/status", "/models", "/docs", "/me", "/playground", "/announcements"]);
 const PORTAL_JSON_PATHS = new Set(["/portal-config.json", "/status.json", "/catalog.json", "/announcements.json"]);
+// The external probe (05 §13.3) asks for this document with ?probe=<nonce>.
+const PROBE_JSON_PATH = "/status.json";
 const MODEL_PAGE_RE = /^\/models\/[^/]+$/;
 const DOC_PAGE_RE = /^\/docs\/[a-z0-9][a-z0-9-]{0,63}$/;
 const ASSET_RE = /^\/assets\/[A-Za-z0-9._-]+\/.+$/;
@@ -114,7 +121,7 @@ function sendJsonBody(req, res, status, body, headers = {}) {
  *             /announcements.json and /portal-config.json
  * The returned handle never rejects.
  */
-function createPublicListener({ security, gateway = null, portal = null, data = null, preAuth = null, logger = console } = {}) {
+function createPublicListener({ security, gateway = null, portal = null, data = null, preAuth = null, probeRecorder = null, logger = console } = {}) {
   if (!security || typeof security.publicHostnames !== "function") throw new TypeError("createPublicListener needs the entry security (publicHostnames).");
 
   // The portal CSS for the HTML error pages; never throws.
@@ -123,6 +130,26 @@ function createPublicListener({ security, gateway = null, portal = null, data = 
       return typeof portal?.errorStylesheets === "function" ? portal.errorStylesheets() : [];
     } catch {
       return [];
+    }
+  }
+
+  // §13.3: remembers how a probe request arrived (which socket, which trusted
+  // header). Only nonces the admin probe registered are kept; it never throws
+  // and never changes the response.
+  function recordProbe(req, url) {
+    try {
+      const nonce = url.searchParams.get("probe");
+      if (!nonce || !probeRecorder || typeof probeRecorder.observe !== "function" || typeof security.identifyClient !== "function") return;
+      const identity = security.identifyClient(req);
+      probeRecorder.observe(nonce, {
+        socketIp: identity.socketIp,
+        viaProxy: identity.viaProxy,
+        headerUsed: identity.headerUsed,
+        country: identity.country,
+        forwardedOnUntrusted: identity.forwardedOnUntrusted,
+      });
+    } catch {
+      // The probe is advisory.
     }
   }
 
@@ -163,6 +190,7 @@ function createPublicListener({ security, gateway = null, portal = null, data = 
         case "robots":
           return sendText(req, res, 200, ROBOTS_TXT, { "cache-control": "public, max-age=3600" });
         case "json":
+          if (url.pathname === PROBE_JSON_PATH) recordProbe(req, url);
           if (typeof preAuth === "function" && (await preAuth(req, res, route)) === true) return undefined;
           if (data && typeof data.respond === "function") {
             let body;
