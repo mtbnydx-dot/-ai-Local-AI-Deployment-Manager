@@ -307,6 +307,7 @@ export function buildFormModel({ catalog, plan = null, values = {}, engineId, lo
   const byId = new Map(params.map((param) => [param.id, param]));
   const activeMode = MODES.includes(mode) ? mode : "launch";
   const catalogMode = activeMode === "catalog";
+  const configMode = activeMode === "config";
   const terms = fold(query).split(/\s+/).filter(Boolean);
   const rank = levelRank(level);
   const planErrors = [...(Array.isArray(plan?.errors) ? plan.errors : []), ...(Array.isArray(fieldErrors) ? fieldErrors : [])];
@@ -352,6 +353,8 @@ export function buildFormModel({ catalog, plan = null, values = {}, engineId, lo
     } else {
       result = { value: null, source: null, reason: null };
     }
+    // Config mode (06 settings): the badge names where the saved value comes from, whatever is being edited.
+    if (configMode && isPlainObject(planned)) result = { ...result, source: planned.source ?? null };
     computing.delete(id);
     memo.set(id, result);
     return result;
@@ -438,7 +441,9 @@ export function buildFormModel({ catalog, plan = null, values = {}, engineId, lo
     const effective = effectiveOf(param);
     const state = secret ? secretState(userValues, id) : null;
     const userValue = entry.value;
-    const changed = secret ? state !== "unchanged" : isSet(userValue);
+    // Config mode shows the saved value as the explicit one, so only a different value counts as an edit.
+    const saved = configMode && isPlainObject(planValues[id]) ? planValues[id].value ?? null : null;
+    const changed = secret ? state !== "unchanged" : configMode ? isSet(userValue) && !sameValue(userValue, saved) : isSet(userValue);
     const lock = locks.get(id);
     const availability = param.availability
       ? { state: param.availability.state || "unverified", reason: pickText(param.availability.reason, locale) || null }
