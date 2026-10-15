@@ -17,6 +17,8 @@ const { startListeners, tagListener } = require("./lib/listeners");
 const { createPublicListener } = require("./lib/public-listener");
 const { createPortalRoutes } = require("./lib/portal-routes");
 const { createPublicData, startStatusSampler } = require("./lib/status-sampler");
+const { createExposureScanner } = require("./lib/exposure-scan");
+const { createSecurityOverview } = require("./lib/security-overview");
 const { createBillingStore } = require("./lib/billing-store");
 const { createBillingHttpHandler, strictLocalBillingAdmin } = require("./lib/billing-http");
 const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview");
@@ -429,6 +431,7 @@ function createPublicHandler(deps = {}) {
     gateway: deps.gateway === undefined ? serveGatewayRouteOnPublic : deps.gateway,
     portal: deps.portal || null,
     data: deps.data || null,
+    probeRecorder: deps.probeRecorder || null,
     preAuth: deps.preAuth === undefined ? answerPublicPreAuth : deps.preAuth,
     logger: deps.logger || console,
   });
@@ -548,6 +551,21 @@ function createRouteContext(overrides = {}) {
   const bus = overrides.bus || createEventBus({ auth, logger: console });
   access.attachBus(bus);
   security.setEventSink((data) => bus.publish("security", data));
+  // The exposure scan and the security views (05 §13.2, §13.3). Nothing runs
+  // until the owner asks (or the checklist reads the cached report), and the
+  // checklist of /api/security reads the last scan without starting one.
+  const securityOverview = overrides.securityOverview || createSecurityOverview({
+    getStore: () => getAccessStore(),
+    getBus: () => bus,
+    getConfig: () => security.accessConfig(),
+  });
+  const exposure = overrides.exposure || createExposureScanner({
+    aiRoot: AI_ROOT,
+    getConfig: () => security.accessConfig(),
+    getSignals: () => securityOverview.signals(),
+    logger: overrides.logger || console,
+  });
+  security.setExposureReport(() => exposure.cached());
   const ctx = {
     rootDir: ROOT,
     aiRoot: AI_ROOT,
@@ -570,6 +588,8 @@ function createRouteContext(overrides = {}) {
     ...overrides,
     auth,
     bus,
+    exposure,
+    securityOverview,
   };
   entryAccessByContext.set(ctx, access);
   return ctx;
@@ -1044,6 +1064,7 @@ async function startServiceEntry() {
   await startTelemetry({
     managers: MANAGERS,
     managerClient: routeMounts.ctx.managerClient,
+    getFleetCatalogs: () => getFleetCatalogs(),
     events: routeMounts.ctx.bus,
     processExitLog: PROCESS_EXIT_LOG,
   }).then((runtime) => {
@@ -1056,7 +1077,11 @@ async function startServiceEntry() {
   // PUBLIC answers only its own route table. ADMIN failing to bind is fatal;
   // PUBLIC failing leaves ADMIN up and the console shows it red.
   const config = security.accessConfig();
-  const publicHandler = createPublicHandler({ portal: createPortalRoutes({ aiRoot: AI_ROOT, logger: console }), data: createPublicPortalData() });
+  const publicHandler = createPublicHandler({
+    portal: createPortalRoutes({ aiRoot: AI_ROOT, logger: console }),
+    data: createPublicPortalData(),
+    probeRecorder: routeMounts.ctx.exposure?.recorder || null,
+  });
   try {
     listeners = await startListeners({
       config,

@@ -1369,6 +1369,8 @@
       }
       const returnLink = document.querySelector("#billingManagerReturn");
       returnLink.href = manager.baseUrl + "/#service";
+      // 嵌入时管理器页面禁止被框住：返回链接在整个窗口里打开，而不是在 iframe 内。
+      if (document.documentElement.dataset.embed === "1") { returnLink.target = "_top"; returnLink.rel = "noopener"; }
       returnLink.title = "返回 " + manager.name;
       returnLink.setAttribute("aria-label", "返回 " + manager.name);
 
