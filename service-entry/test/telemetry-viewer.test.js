@@ -246,8 +246,10 @@ test("every 04 GET route is registered for viewers with its redaction or is owne
   assert.equal(redactions.size, viewer.TELEMETRY_VIEWER_ROUTES.length);
   assert.equal(registry.match("PUT", "/api/telemetry/settings").access, "admin");
   assert.equal(registry.match("POST", "/api/telemetry/import").access, "admin");
+  for (const audit of AUDIT_ROUTES) registry.registerAdminOnly({ owner: "04", method: audit.method, path: audit.path });
   for (const audit of AUDIT_ROUTES) {
-    // 05's route inventory lists audit routes through audit-http; none is a viewer route.
+    // audit-http declares every /api/audit/* route owner-only at mount; none is a viewer route.
+    assert.equal(registry.match(audit.method, audit.path.replace(/:[A-Za-z]+/g, "x"))?.access, "admin", `${audit.method} ${audit.path}`);
     assert.notEqual(registry.match(audit.method, audit.path.replace(/:[A-Za-z]+/g, "x"))?.access, "viewer", `${audit.method} ${audit.path}`);
   }
 });

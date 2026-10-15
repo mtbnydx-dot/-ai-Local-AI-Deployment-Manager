@@ -45,6 +45,8 @@ const STOP_FLUSH_MS = 2000;
 // Live settings (§20 "live") are re-read at most this often, so a request
 // never pays for a platform.json stat.
 const LIVE_SETTINGS_TTL_MS = 5000;
+// telemetry.live is published this often while somebody listens (04 section 12).
+const LIVE_PUBLISH_MS = 5000;
 
 // Manager -> entry ingest (04 §6.7, TEL-6).
 const INTERNAL_PREFIX = "/internal/telemetry/";
@@ -156,7 +158,8 @@ function normalizeLogger(logger) {
  * - managers: the entry's MANAGERS ({id, root, port}).
  * - managerClient: the entry's shared manager client (mgmt-proxy) with
  *   get(managerId, target) → {ok, status, data}.
- * - events: the ENT-EV bus.
+ * - events: the ENT-EV bus. The runtime publishes telemetry.live on it every
+ *   5 s, and only while events.subscriberCount({types:["telemetry.live"]}) > 0.
  * - getFleetCatalogs(): the entry's cached per-manager catalogs
  *   ({instances:[…]}, 00 §4.1); the RuntimeCollector runs when it is given.
  * - requestLatency({fleetId, model, fromMs, toMs}): gateway latency source for
@@ -289,6 +292,70 @@ function createTelemetryRuntime(options = {}) {
     events.start();
     startRuntimeCollector();
     startAlerts();
+    startLivePublisher();
+  }
+
+  // --- telemetry.live (TEL-19, 04 section 12) ---
+
+  const liveTimers = options.timers && typeof options.timers.setTimeout === "function" ? options.timers : { setTimeout, clearTimeout };
+  let liveTimer = null;
+  let liveBusy = false;
+
+  // The collector states of the 11.1 object, as the route reports them.
+  function liveCollectorStates() {
+    const detail = {
+      events: events ? events.status() : null,
+      runtime: runtimeCollector ? runtimeCollector.status() : null,
+    };
+    const state = (value) => (value && (value.state === "ok" || value.state === "idle") ? "ok" : "degraded");
+    return {
+      recorder: recorder && recorder.running ? "ok" : "degraded",
+      runtime: state(detail.runtime),
+      gpu: "degraded",
+      events: state(detail.events),
+      store: store && store.state === "ready" ? "ok" : "degraded",
+    };
+  }
+
+  async function publishLive() {
+    const bus = options.events;
+    if (!bus || typeof bus.publish !== "function" || typeof bus.subscriberCount !== "function") return false;
+    if (!store || store.state !== "ready" || typeof store.call !== "function") return false;
+    let listeners = 0;
+    try {
+      listeners = bus.subscriberCount({ types: ["telemetry.live"] });
+    } catch {
+      return false;
+    }
+    if (!(listeners > 0)) return false;
+    const inflight = recorder && typeof recorder.inflight === "function" ? recorder.inflight() : 0;
+    const body = await store.call("live", { now: now(), inflight, collectors: liveCollectorStates() });
+    if (stopped || !body) return false;
+    bus.publish("telemetry.live", body);
+    return true;
+  }
+
+  function scheduleLive() {
+    if (stopped || liveTimer) return;
+    liveTimer = liveTimers.setTimeout(async () => {
+      liveTimer = null;
+      if (liveBusy) return scheduleLive();
+      liveBusy = true;
+      try {
+        await publishLive();
+      } catch (error) {
+        log("warn", `telemetry.live was not published: ${String(error?.message || error)}`);
+      } finally {
+        liveBusy = false;
+        scheduleLive();
+      }
+      return undefined;
+    }, LIVE_PUBLISH_MS);
+    if (liveTimer && typeof liveTimer.unref === "function") liveTimer.unref();
+  }
+
+  function startLivePublisher() {
+    if (options.events && typeof options.events.subscriberCount === "function") scheduleLive();
   }
 
   // The entry's cached instances (00 §4.1) as the RuntimeCollector reads them.
@@ -513,6 +580,10 @@ function createTelemetryRuntime(options = {}) {
 
   async function stop({ flushMs = STOP_FLUSH_MS } = {}) {
     stopped = true;
+    if (liveTimer) {
+      liveTimers.clearTimeout(liveTimer);
+      liveTimer = null;
+    }
     if (starting) await starting;
     starting = null;
     const collector = events;

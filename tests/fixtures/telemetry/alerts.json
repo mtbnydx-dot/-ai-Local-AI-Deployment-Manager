@@ -1,0 +1,40 @@
+{
+  "ok": true,
+  "rows": [
+    {
+      "ruleId": "gpu_temp_high",
+      "scopeKey": "gpu:0",
+      "state": "firing",
+      "severity": "warning",
+      "title": {
+        "zh": "GPU 0 温度过高",
+        "en": "GPU 0 temperature high"
+      },
+      "value": 91,
+      "threshold": 85,
+      "since": "2026-10-14T11:50:00.000Z",
+      "firedAt": "2026-10-14T11:50:00.000Z",
+      "resolvedAt": null,
+      "ackedAt": null,
+      "silencedUntil": null
+    },
+    {
+      "ruleId": "upstream_errors",
+      "scopeKey": "fleet:vllm:primary",
+      "state": "ok",
+      "severity": "warning",
+      "title": {
+        "zh": "上游错误率偏高",
+        "en": "Upstream error rate is high"
+      },
+      "value": 0.01,
+      "threshold": 0.05,
+      "since": "2026-10-14T11:30:00.000Z",
+      "firedAt": "2026-10-14T11:20:00.000Z",
+      "resolvedAt": "2026-10-14T11:30:00.000Z",
+      "ackedAt": null,
+      "silencedUntil": null
+    }
+  ],
+  "toastChannel": "no_subscriber"
+}
