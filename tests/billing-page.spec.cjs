@@ -5,7 +5,6 @@ const path = require("node:path");
 const {
   CATALOG_VERSION,
   PRICE_TEMPLATE_CATALOG,
-  previewPriceTemplateApplications,
 } = require("../service-entry/lib/billing-price-templates");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -14,14 +13,15 @@ const LLAMA_INDEX_HTML = path.join(ROOT, "llama-manager", "public", "index.html"
 const VLLM_INDEX_HTML = path.join(ROOT, "vllm-manager", "public", "index.html");
 const PLAN_ID = "11111111-1111-4111-8111-111111111111";
 const CUSTOMER_ID = "22222222-2222-4222-8222-222222222222";
-const CREATED_CUSTOMER_ID = "33333333-3333-4333-8333-333333333333";
-const CREATED_PLAN_ID = "44444444-4444-4444-8444-444444444444";
 const XSS_SENTINEL = '<img src=x onerror="window.__billingXss=1">XSS_SENTINEL';
 const API_SECRET_SENTINEL = "sk-API_SECRET_SENTINEL";
 const KEY_HASH_SENTINEL = "HASH_SENTINEL_SHOULD_NOT_RENDER";
 const AUDIT_SECRET_SENTINEL = "AUDIT_SECRET_SENTINEL";
 const FIXED_NOW = "2026-08-11T02:00:00.000Z";
 // The legacy billing page lives at /billing/classic since 07 CON-2 (/billing is the console route).
+// CON-27 ported the forms, CSRF retry, template, aggregate and overflow pins to
+// tests/frontend/console/console-billing.spec.js; this file keeps what only the
+// classic page can show (its sidebar, manager return context, outage state, embed mode).
 const BILLING_PATH = "/billing/classic";
 
 let html;
@@ -46,8 +46,6 @@ function freshScenario() {
     // GET /api/session (05 §5.6): a paired owner whose CSRF token is "t".
     session: { ok: true, role: "owner", via: "session", paired: true, csrfToken: "t", autoPairAvailable: false, pairCommand: "platform admin pair" },
     sessionReads: 0,
-    csrfRejectOnce: false,
-    requireSession: false,
     customers: [{
       customerId: CUSTOMER_ID,
       externalRef: "CRM-XSS",
@@ -306,30 +304,6 @@ function usageSummaryPayload(url) {
   };
 }
 
-function previewTemplates(body) {
-  return previewPriceTemplateApplications(body, { clock: () => new Date(FIXED_NOW) });
-}
-
-function appliedPrice(item) {
-  return {
-    priceId: "99999999-9999-4999-8999-999999999999",
-    planId: item.planId,
-    managerId: item.managerId,
-    model: item.modelPattern,
-    modelPattern: item.modelPattern,
-    inputPerMillionMicrocredits: item.inputPerMillionMicrocredits,
-    cachedInputPerMillionMicrocredits: item.cachedInputPerMillionMicrocredits,
-    outputPerMillionMicrocredits: item.outputPerMillionMicrocredits,
-    sourceTemplateId: item.templateId,
-    sourceCatalogVersion: item.catalogVersion,
-    sourceSnapshotDate: item.snapshotDate,
-    sourceUrl: item.sourceUrl,
-    effectiveFrom: item.effectiveAt || FIXED_NOW,
-    effectiveTo: null,
-    active: true,
-  };
-}
-
 async function handleApi(req, res, url) {
   if (scenario.failAll) {
     sendJson(res, 503, { ok: false, code: "mock_unavailable", message: "MOCK 计费后端暂不可用" });
@@ -339,13 +313,6 @@ async function handleApi(req, res, url) {
   const method = String(req.method || "GET").toUpperCase();
   const body = method === "GET" ? null : await readJson(req);
   scenario.requests.push({ method, path: url.pathname, body, csrf: req.headers["x-csrf-token"] || null });
-  if (method !== "GET" && scenario.requireSession) {
-    return sendJson(res, 401, { ok: false, error: { code: "admin_session_required", message: "Pair this browser first.", hint: "pair" } });
-  }
-  if (method !== "GET" && (scenario.csrfRejectOnce || req.headers["x-csrf-token"] !== scenario.session.csrfToken)) {
-    scenario.csrfRejectOnce = false;
-    return sendJson(res, 403, { ok: false, error: { code: "csrf_invalid", message: "Reload the page.", hint: "reload" } });
-  }
 
   if (method === "GET" && url.pathname === "/api/status") return sendJson(res, 200, statusPayload());
   if (method === "GET" && url.pathname === "/api/billing/overview") return sendJson(res, 200, nextOverview());
@@ -359,132 +326,6 @@ async function handleApi(req, res, url) {
   if (method === "GET" && url.pathname === "/api/billing/audit-events") return sendJson(res, 200, { ok: true, items: scenario.auditEvents });
   if (method === "GET" && url.pathname === "/api/billing/templates") {
     return sendJson(res, 200, { ok: true, catalogVersion: CATALOG_VERSION, items: scenario.templates });
-  }
-
-  if (method === "POST" && url.pathname === "/api/billing/customers") {
-    const customer = {
-      customerId: CREATED_CUSTOMER_ID,
-      externalRef: body.externalRef || "",
-      name: body.name,
-      status: "active",
-      planId: body.planId || null,
-      enforcementMode: body.enforcementMode,
-      creditLimitMicrocredits: "0",
-      monthlyTokenLimit: body.monthlyTokenLimit,
-      monthlyRequestLimit: body.monthlyRequestLimit,
-      balanceMicrocredits: "0",
-      reservedMicrocredits: "0",
-      availableMicrocredits: "0",
-      updatedAt: FIXED_NOW,
-    };
-    scenario.customers.push(customer);
-    return sendJson(res, 201, { ok: true, customer });
-  }
-
-  if (method === "POST" && url.pathname === "/api/billing/plans") {
-    const plan = {
-      planId: CREATED_PLAN_ID,
-      code: body.code,
-      name: body.name,
-      currency: body.currency,
-      monthlyPriceMicrocredits: "25000000",
-      includedMicrocredits: "100000000",
-      monthlyTokenLimit: body.monthlyTokenLimit,
-      monthlyRequestLimit: body.monthlyRequestLimit,
-      enforcementMode: body.enforcementMode,
-      active: true,
-      updatedAt: FIXED_NOW,
-    };
-    scenario.plans.push(plan);
-    return sendJson(res, 201, { ok: true, plan });
-  }
-
-  if (method === "POST" && url.pathname === "/api/billing/credentials") {
-    const binding = {
-      bindingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      customerId: body.customerId,
-      managerId: body.managerId,
-      serviceClientId: body.serviceClientId,
-      label: "已绑定的脱敏客户端",
-      active: true,
-      updatedAt: FIXED_NOW,
-      keyHash: KEY_HASH_SENTINEL,
-      apiKey: API_SECRET_SENTINEL,
-    };
-    scenario.credentials.push(binding);
-    return sendJson(res, 201, { ok: true, binding });
-  }
-
-  if (method === "POST" && url.pathname === "/api/billing/prices") {
-    const price = {
-      priceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-      ...body,
-      model: body.modelPattern,
-      inputPerMillionMicrocredits: body.inputMicrocreditsPerMillion,
-      cachedInputPerMillionMicrocredits: body.cachedInputMicrocreditsPerMillion,
-      outputPerMillionMicrocredits: body.outputMicrocreditsPerMillion,
-      effectiveFrom: FIXED_NOW,
-      effectiveTo: null,
-    };
-    scenario.prices.push(price);
-    return sendJson(res, 201, { ok: true, price });
-  }
-
-  if (method === "POST" && url.pathname === "/api/billing/ledger/adjustments") {
-    const negative = String(body.amountCredits).startsWith("-");
-    const [whole, fraction = ""] = String(body.amountCredits).replace(/^-/, "").split(".");
-    const deltaMicrocredits = (BigInt(whole) * 1000000n + BigInt(fraction.padEnd(6, "0"))).toString();
-    const entry = {
-      entryId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-      at: FIXED_NOW,
-      customerId: body.customerId,
-      entryType: "manual_adjustment",
-      deltaMicrocredits: negative ? `-${deltaMicrocredits}` : deltaMicrocredits,
-      requestId: null,
-      idempotencyKey: body.idempotencyKey,
-      reason: body.reason,
-      actorId: "local-admin",
-    };
-    scenario.ledger.unshift(entry);
-    return sendJson(res, 201, { ok: true, entry });
-  }
-
-  const policyMatch = url.pathname.match(/^\/api\/billing\/customers\/([^/]+)\/policy$/);
-  const customerMatch = url.pathname.match(/^\/api\/billing\/customers\/([^/]+)$/);
-  const planMatch = url.pathname.match(/^\/api\/billing\/plans\/([^/]+)$/);
-  if (method === "PATCH" && policyMatch) {
-    const customer = scenario.customers.find((item) => item.customerId === decodeURIComponent(policyMatch[1]));
-    if (customer) Object.assign(customer, body, { updatedAt: FIXED_NOW });
-    return sendJson(res, customer ? 200 : 404, customer ? { ok: true, customer } : { ok: false, message: "not found" });
-  }
-  if (method === "PATCH" && customerMatch) {
-    const customer = scenario.customers.find((item) => item.customerId === decodeURIComponent(customerMatch[1]));
-    if (customer) Object.assign(customer, body, { updatedAt: FIXED_NOW });
-    return sendJson(res, customer ? 200 : 404, customer ? { ok: true, customer } : { ok: false, message: "not found" });
-  }
-  if (method === "PATCH" && planMatch) {
-    const plan = scenario.plans.find((item) => item.planId === decodeURIComponent(planMatch[1]));
-    if (plan) Object.assign(plan, body, { updatedAt: FIXED_NOW });
-    return sendJson(res, plan ? 200 : 404, plan ? { ok: true, plan } : { ok: false, message: "not found" });
-  }
-
-  if (method === "POST" && url.pathname === "/api/billing/templates/preview") {
-    try {
-      return sendJson(res, 200, { ok: true, ...previewTemplates(body) });
-    } catch (error) {
-      return sendJson(res, error.status || 400, { ok: false, code: error.code || "mock_preview_error", message: error.message });
-    }
-  }
-
-  if (method === "POST" && url.pathname === "/api/billing/templates/apply") {
-    try {
-      const preview = previewTemplates(body);
-      const prices = preview.items.map(appliedPrice);
-      scenario.prices.unshift(...prices);
-      return sendJson(res, 200, { ok: true, catalogVersion: CATALOG_VERSION, appliedAt: FIXED_NOW, items: prices });
-    } catch (error) {
-      return sendJson(res, error.status || 400, { ok: false, code: error.code || "mock_apply_error", message: error.message });
-    }
   }
 
   return sendJson(res, 404, { ok: false, code: "mock_unhandled_route", message: `${method} ${url.pathname} was not mocked` });
@@ -563,20 +404,6 @@ async function loadBilling(page) {
   await page.goto(`${baseUrl}${BILLING_PATH}`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
   await expect(page.locator("#billingWorkbench")).toHaveAttribute("aria-busy", "false");
-}
-
-async function openDetails(page, selector) {
-  const opened = await page.locator(selector).evaluate((node) => {
-    const details = node.matches("details") ? node : node.closest("details");
-    if (!details) return false;
-    details.open = true;
-    return true;
-  });
-  expect(opened, `${selector} is not inside a details editor`).toBe(true);
-}
-
-function requestFor(method, requestPath) {
-  return scenario.requests.findLast((request) => request.method === method && request.path === requestPath);
 }
 
 test.describe.configure({ mode: "serial" });
@@ -688,193 +515,12 @@ test("manager sidebars link to the local billing center and billing preserves th
 
   await page.locator("#billingThemeMode").selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await textContrast(page.locator("#billingRefreshBtn")), "dark primary action stays readable").toBeGreaterThanOrEqual(4.5);
-  expect(await textContrast(page.locator(".manager-sidebar a[aria-current='page']")), "dark sidebar current link stays readable").toBeGreaterThanOrEqual(3);
+  // Colours animate on a theme change, so the ratio is polled until the transition has settled.
+  await expect.poll(() => textContrast(page.locator("#billingRefreshBtn")), { message: "dark primary action stays readable" }).toBeGreaterThanOrEqual(4.5);
+  await expect.poll(() => textContrast(page.locator(".manager-sidebar a[aria-current='page']")), { message: "dark sidebar current link stays readable" }).toBeGreaterThanOrEqual(3);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#billingThemeMode")).toHaveValue("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-});
-
-test("customer, plan, credential, and balance forms issue bounded mutations and refresh the mock state", async ({ page }) => {
-  await loadBilling(page);
-
-  const customerForm = page.locator("#billingCustomerForm");
-  await customerForm.locator('[name="name"]').fill("新客户 Alpha");
-  await customerForm.locator('[name="externalRef"]').fill("CRM-2002");
-  await customerForm.locator('[name="planId"]').selectOption(PLAN_ID);
-  await customerForm.locator('[name="enforcementMode"]').selectOption("hard");
-  await customerForm.locator('[name="creditLimit"]').fill("125.000001");
-  await customerForm.locator('[name="monthlyTokenLimit"]').fill("9000000");
-  await customerForm.locator('[name="monthlyRequestLimit"]').fill("12000");
-  await customerForm.getByRole("button", { name: "创建客户" }).click();
-  await expect.poll(() => requestFor("POST", "/api/billing/customers")).toBeTruthy();
-  await expect(page.locator("#overviewCustomerRows")).toContainText("新客户 Alpha");
-  expect(requestFor("POST", "/api/billing/customers").body).toEqual({
-    name: "新客户 Alpha",
-    externalRef: "CRM-2002",
-    planId: PLAN_ID,
-    enforcementMode: "hard",
-    creditLimit: "125.000001",
-    monthlyTokenLimit: "9000000",
-    monthlyRequestLimit: "12000",
-  });
-
-  await page.getByRole("tab", { name: "套餐与价格", exact: true }).click();
-  await openDetails(page, "#billingPlanForm");
-  const planForm = page.locator("#billingPlanForm");
-  await planForm.locator('[name="code"]').fill("TEAM");
-  await planForm.locator('[name="name"]').fill("团队套餐");
-  await planForm.locator('[name="currency"]').fill("USD");
-  await planForm.locator('[name="enforcementMode"]').selectOption("hard");
-  await planForm.locator('[name="monthlyPrice"]').fill("25");
-  await planForm.locator('[name="includedCredits"]').fill("100");
-  await planForm.locator('[name="monthlyTokenLimit"]').fill("20000000");
-  await planForm.locator('[name="monthlyRequestLimit"]').fill("30000");
-  await planForm.getByRole("button", { name: "创建套餐" }).click();
-  await expect.poll(() => requestFor("POST", "/api/billing/plans")).toBeTruthy();
-  await expect(page.locator("#billingPlanRows")).toContainText("团队套餐");
-
-  await page.getByRole("tab", { name: "客户与凭证", exact: true }).click();
-  await openDetails(page, "#billingCredentialEditor");
-  const credentialForm = page.locator("#billingCredentialForm");
-  await credentialForm.locator('[name="customerId"]').selectOption(CUSTOMER_ID);
-  await credentialForm.locator('[name="managerId"]').selectOption("vllm-manager");
-  await expect(credentialForm.locator('[name="serviceClientId"]')).toBeEnabled();
-  await credentialForm.locator('[name="serviceClientId"]').selectOption("vllm-public-client");
-  await credentialForm.getByRole("button", { name: "保存绑定" }).click();
-  await expect.poll(() => requestFor("POST", "/api/billing/credentials")).toBeTruthy();
-  await expect(page.locator("#billingCredentialRows")).toContainText("vllm-public-client");
-  expect(requestFor("POST", "/api/billing/credentials").body).toEqual({
-    customerId: CUSTOMER_ID,
-    managerId: "vllm-manager",
-    serviceClientId: "vllm-public-client",
-  });
-
-  const adjustmentForm = page.locator("#billingAdjustmentForm");
-  await adjustmentForm.locator('[name="customerId"]').selectOption(CUSTOMER_ID);
-  await adjustmentForm.locator('[name="amountCredits"]').fill("-10.500001");
-  await adjustmentForm.locator('[name="reason"]').fill("退款差额调整");
-  page.once("dialog", async (dialog) => {
-    expect(dialog.type()).toBe("confirm");
-    expect(dialog.message()).toContain("不可逆的扣款记录");
-    expect(dialog.message()).toContain("-10.500001");
-    await dialog.accept();
-  });
-  await adjustmentForm.getByRole("button", { name: "提交调整" }).click();
-  await expect.poll(() => requestFor("POST", "/api/billing/ledger/adjustments")).toBeTruthy();
-  const adjustment = requestFor("POST", "/api/billing/ledger/adjustments").body;
-  expect(adjustment.customerId).toBe(CUSTOMER_ID);
-  expect(adjustment.amountCredits).toBe("-10.500001");
-  expect(adjustment.reason).toBe("退款差额调整");
-  expect(adjustment.idempotencyKey).toMatch(/^manual-[a-f0-9-]+$/i);
-  await page.getByRole("tab", { name: "用量与账本", exact: true }).click();
-  await expect(page.locator("#billingLedgerRows")).toContainText("退款差额调整");
-  await expect(page.locator("#billingLedgerRows")).toContainText("-10.500001 积分");
-
-  // Every write carried the session's CSRF token (05 §5.5).
-  const writes = scenario.requests.filter((request) => request.method !== "GET");
-  expect(writes.length).toBeGreaterThanOrEqual(4);
-  expect(writes.map((request) => request.csrf)).toEqual(writes.map(() => "t"));
-});
-
-test("a stale CSRF token is re-read once and retried; an unpaired write shows the pairing screen", async ({ page }) => {
-  await loadBilling(page);
-  const customerForm = page.locator("#billingCustomerForm");
-  const createCustomer = async (name) => {
-    await customerForm.locator('[name="name"]').fill(name);
-    await customerForm.locator('[name="planId"]').selectOption(PLAN_ID);
-    await customerForm.getByRole("button", { name: "创建客户" }).click();
-  };
-
-  // The page reads /api/session at its first write.
-  await createCustomer("首个客户");
-  await expect(page.locator("#overviewCustomerRows")).toContainText("首个客户");
-
-  // The token rotated (the entry restarted): one 403 csrf_invalid, one fresh
-  // GET /api/session, one retry with the new token.
-  scenario.session = { ...scenario.session, csrfToken: "t2" };
-  scenario.csrfRejectOnce = true;
-  const readsBefore = scenario.sessionReads;
-  await createCustomer("重试客户");
-  await expect(page.locator("#overviewCustomerRows")).toContainText("重试客户");
-  const attempts = scenario.requests.filter((request) => request.method === "POST" && request.path === "/api/billing/customers");
-  expect(attempts.map((request) => request.csrf)).toEqual(["t", "t", "t2"]);
-  expect(scenario.sessionReads).toBe(readsBefore + 1);
-
-  // No owner session: the pairing screen names the pairing command.
-  scenario.requireSession = true;
-  await createCustomer("未配对客户");
-  const overlay = page.locator("#pairingOverlay");
-  await expect(overlay).toBeVisible();
-  await expect(overlay).toContainText("此浏览器尚未与本机控制台配对");
-  await expect(overlay).toContainText("This browser is not paired with the console yet");
-  await expect(overlay.locator("code").first()).toHaveText("platform admin pair");
-  await overlay.getByRole("button", { name: "稍后 / Later" }).click();
-  await expect(overlay).toBeHidden();
-  // The refused requests are the expected resource errors of this test.
-  const diagnostics = diagnosticsByPage.get(page);
-  expect(diagnostics.consoleErrors.every((message) => /40[13]/.test(message))).toBe(true);
-  diagnostics.consoleErrors.length = 0;
-});
-
-test("template filters, future-date guard, exact multiplier preview, mapping, and confirmed apply work end to end", async ({ page }) => {
-  await loadBilling(page);
-  await page.getByRole("tab", { name: "套餐与价格", exact: true }).click();
-
-  const future = PRICE_TEMPLATE_CATALOG.find((template) => template.effectiveFrom && Date.parse(template.effectiveFrom) > Date.parse(FIXED_NOW));
-  expect(future, "catalog fixture needs a future effectiveFrom template").toBeTruthy();
-  const futureButton = page.locator(`[data-template-id="${future.id}"]`);
-  await expect(futureButton).toBeDisabled();
-  await expect(futureButton).toHaveAttribute("title", "未生效");
-
-  await page.locator('[data-template-provider="Anthropic"]').click();
-  await expect(page.locator("#billingTemplateRows")).toContainText("Claude Opus 5");
-  await expect(page.locator("#billingTemplateRows")).not.toContainText("GPT-5.6 Terra");
-  await page.locator('[data-template-provider=""]').click();
-  await page.locator("#templateSearch").fill("GPT-5.6 Terra");
-
-  const templateId = "openai:gpt-5.6-terra:standard:le-272k";
-  await page.locator(`[data-template-id="${templateId}"]`).click();
-  const form = page.locator("#billingTemplateApplyForm");
-  await form.locator('[name="managerId"]').selectOption("llama-manager");
-  await form.locator('[name="planId"]').selectOption(PLAN_ID);
-  await form.locator('[name="modelPattern"]').fill("local/qwen3-terra-*");
-  await form.locator('[name="creditsPerUsd"]').fill("1.234567");
-  await form.locator('[name="markupBps"]').fill("12345");
-  await form.getByRole("button", { name: "预览变更" }).click();
-
-  await expect.poll(() => requestFor("POST", "/api/billing/templates/preview")).toBeTruthy();
-  const previewRequest = requestFor("POST", "/api/billing/templates/preview");
-  expect(previewRequest.body).toEqual({
-    items: [{
-      templateId,
-      managerId: "llama-manager",
-      modelPattern: "local/qwen3-terra-*",
-      planId: PLAN_ID,
-    }],
-    creditsPerUsd: "1.234567",
-    markupBps: "12345",
-  });
-  const expectedPreview = previewTemplates(previewRequest.body).items[0];
-  const previewText = (await page.locator("#templatePreviewBox").innerText()).replace(/[\s,]/g, "");
-  expect(previewText).toContain(expectedPreview.inputPerMillionMicrocredits);
-  expect(previewText).toContain(expectedPreview.cachedInputPerMillionMicrocredits);
-  expect(previewText).toContain(expectedPreview.outputPerMillionMicrocredits);
-  await expect(page.locator("#templateApplyConfirmBtn")).toBeEnabled();
-
-  // Any mapping/rate change invalidates the signed preview until previewed again.
-  await form.locator('[name="modelPattern"]').fill("local/qwen3-terra-changed-*");
-  await expect(page.locator("#templateApplyConfirmBtn")).toBeDisabled();
-  await form.locator('[name="modelPattern"]').fill("local/qwen3-terra-*");
-  await form.getByRole("button", { name: "预览变更" }).click();
-  await expect(page.locator("#templateApplyConfirmBtn")).toBeEnabled();
-
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.locator("#templateApplyConfirmBtn").click();
-  await expect.poll(() => requestFor("POST", "/api/billing/templates/apply")).toBeTruthy();
-  expect(requestFor("POST", "/api/billing/templates/apply").body).toEqual(previewRequest.body);
-  await expect(page.locator("#billingPriceRows")).toContainText("local/qwen3-terra-*");
-  await expect(page.locator("#billingPriceRows")).toContainText(templateId);
 });
 
 test("complete API outage has an explicit error state and recovers through refresh", async ({ page }) => {
@@ -897,142 +543,6 @@ test("complete API outage has an explicit error state and recovers through refre
   await page.locator("#billingRefreshBtn").click();
   await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
   await expect(page.locator("#billingNotice")).toBeHidden();
-});
-
-test("390px viewport has no page-level horizontal overflow", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await loadBilling(page);
-  await page.getByRole("tab", { name: "套餐与价格", exact: true }).click();
-
-  const dimensions = await page.evaluate(() => ({
-    innerWidth: window.innerWidth,
-    clientWidth: document.documentElement.clientWidth,
-    documentScrollWidth: document.documentElement.scrollWidth,
-    bodyScrollWidth: document.body.scrollWidth,
-    managerNav: document.querySelector(".manager-nav")?.getBoundingClientRect().toJSON(),
-    activeBilling: document.querySelector(".manager-nav a.active")?.getBoundingClientRect().toJSON(),
-  }));
-  expect(dimensions.innerWidth).toBe(390);
-  expect(dimensions.documentScrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
-  expect(dimensions.bodyScrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
-  expect(dimensions.activeBilling.left).toBeGreaterThanOrEqual(dimensions.managerNav.left - 1);
-  expect(dimensions.activeBilling.right).toBeLessThanOrEqual(dimensions.managerNav.right + 1);
-  await expect(page.locator("#billingTemplateRows")).toBeVisible();
-});
-
-const SUMMARY_COPY = {
-  zh: {
-    heading: "本期用量（按客户 × 模型 × 月汇总）",
-    columns: ["客户", "模型", "月份", "请求", "成功", "输入 Tokens", "缓存 Tokens", "输出 Tokens", "预计消费", "已扣"],
-    note: "统计区间 2026-08-01 至 2026-08-31（UTC+08:00）",
-    unbound: "未绑定客户",
-    projected: "9,007,199,254.740993 积分",
-    charged: "4.5 积分",
-    total: "合计",
-    caption: "每日 Tokens（峰值 3,015）",
-    bar: "2026-08-10：1 次请求 · 1,500 Tokens · 预计 1.75 积分",
-  },
-  en: {
-    heading: "Usage this period (by customer × model × month)",
-    columns: ["Customer", "Model", "Month", "Requests", "Succeeded", "Input tokens", "Cached tokens", "Output tokens", "Projected", "Charged"],
-    note: "Period 2026-08-01 to 2026-08-31 (UTC+08:00)",
-    unbound: "Unbound customer",
-    projected: "9,007,199,254.740993 credits",
-    charged: "4.5 credits",
-    total: "Total",
-    caption: "Daily tokens (peak 3,015)",
-    bar: "2026-08-10 · requests 1 · tokens 1,500 · projected 1.75 credits",
-  },
-};
-
-async function expectUsageSummary(page, copy, lang) {
-  const panel = page.locator("#overviewSummaryPanel");
-  await expect(panel).toBeVisible();
-  await expect(panel).toHaveAttribute("lang", lang);
-  await expect(page.locator("#overviewSummaryHeading")).toHaveText(copy.heading);
-  await expect(page.locator("#overviewSummaryNote")).toContainText(copy.note);
-  await expect(page.locator("#overviewSummaryHead th")).toHaveText(copy.columns);
-  const rows = page.locator("#overviewSummaryRows tr");
-  await expect(rows).toHaveCount(2);
-  await expect(rows.nth(0).locator("td")).toHaveText([
-    XSS_SENTINEL, "local/base-7b", "2026-08", "3", "2", "3,600", "600", "900", copy.projected, copy.charged,
-  ]);
-  await expect(rows.nth(1).locator("td").first()).toHaveText(copy.unbound);
-  await expect(page.locator("#overviewSummaryTotals td")).toHaveText([
-    copy.total, "", "", "4", "3", "3,610", "600", "905", copy.projected, copy.charged,
-  ]);
-  await expect(panel.locator("img")).toHaveCount(0);
-  expect(await page.evaluate(() => window.__billingXss)).toBeUndefined();
-
-  // The daily chart is inline SVG: one slot per day of August, a bar per day with usage.
-  await expect(page.locator("#overviewDailyChartCaption")).toHaveText(copy.caption);
-  await expect(page.locator("#overviewDailyChartSvg")).toHaveAttribute("viewBox", "0 0 310 100");
-  const bars = page.locator("#overviewDailyChartSvg rect.usage-chart-bar");
-  await expect(bars).toHaveCount(2);
-  expect(await bars.first().locator("title").textContent()).toBe(copy.bar);
-  await expect(page.locator("#overviewDailyChartAxis span")).toHaveText(["08-01", "08-16", "08-31"]);
-
-  // P0-17's raw table keeps its heading and columns below the aggregate.
-  await expect(page.locator("#overviewUsageHeading")).toHaveText("最近请求（原始记录，最多 100 条）");
-  await expect(page.locator("table:has(#overviewUsageRows) thead th")).toHaveText(["时间", "客户", "管理器", "模型", "Tokens", "状态"]);
-  await expect(page.locator("section.panel:has(#overviewUsageRows)")).not.toContainText("随遥测存储一起提供");
-  const layout = await page.evaluate(() => {
-    const summary = document.querySelector("#overviewSummaryPanel");
-    const raw = document.querySelector("#overviewUsageRows").closest("section.panel");
-    const summaryBox = summary.getBoundingClientRect();
-    const head = summary.querySelector(".panel-head");
-    const chart = document.querySelector("#overviewDailyChartSvg").getBoundingClientRect();
-    return {
-      before: Boolean(summary.compareDocumentPosition(raw) & Node.DOCUMENT_POSITION_FOLLOWING),
-      summaryBottom: summaryBox.bottom,
-      rawTop: raw.getBoundingClientRect().top,
-      summaryLeft: summaryBox.left,
-      summaryRight: summaryBox.right,
-      chartRight: chart.right,
-      headScrollWidth: head.scrollWidth,
-      headClientWidth: head.clientWidth,
-      clientWidth: document.documentElement.clientWidth,
-      documentScrollWidth: document.documentElement.scrollWidth,
-      bodyScrollWidth: document.body.scrollWidth,
-    };
-  });
-  expect(layout.before, "the aggregate precedes the raw table").toBe(true);
-  expect(layout.summaryBottom).toBeLessThanOrEqual(layout.rawTop);
-  expect(layout.documentScrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
-  expect(layout.bodyScrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
-  expect(layout.summaryLeft).toBeGreaterThanOrEqual(-1);
-  expect(layout.summaryRight).toBeLessThanOrEqual(layout.clientWidth + 1);
-  expect(layout.chartRight).toBeLessThanOrEqual(layout.summaryRight + 1);
-  expect(layout.headScrollWidth).toBeLessThanOrEqual(layout.headClientWidth + 1);
-}
-
-test("overview aggregates this period by customer × model × month above the raw table in zh and en at 390px", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await loadBilling(page);
-  expect(scenario.summaryRequests.map((request) => request.groupBy).sort()).toEqual(["customer,model,month", "day"]);
-  expect(scenario.summaryRequests.every((request) => /^-?\d+$/.test(request.tzOffsetMinutes || ""))).toBe(true);
-  await expectUsageSummary(page, SUMMARY_COPY.zh, "zh-CN");
-
-  // English follows the consoles' languageMode preference...
-  await page.evaluate(() => localStorage.setItem("languageMode", "en-US"));
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
-  await expectUsageSummary(page, SUMMARY_COPY.en, "en-US");
-
-  // ...and an explicit ?lang= wins over it.
-  await page.goto(new URL("?lang=zh-CN", page.url()).href, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("#billingApiState")).toHaveText("仅本机管理 · API 正常");
-  await expectUsageSummary(page, SUMMARY_COPY.zh, "zh-CN");
-});
-
-test("usage summary stays hidden when the API answers without summary rows", async ({ page }) => {
-  // The shape of an entry without the summary route behind a generic stub.
-  await page.route("**/api/billing/usage/summary**", (route) => route.fulfill({ json: { ok: true, items: [] } }));
-  await loadBilling(page);
-  await expect(page.locator("#overviewSummaryPanel")).toBeHidden();
-  await expect(page.locator("#overviewSummaryHeading")).toHaveText("");
-  await expect(page.locator("body")).not.toContainText("本期用量");
-  await expect(page.locator("#overviewUsageRows")).toContainText("local/base-7b");
 });
 
 test("embed mode hides the copied sidebar and theme select and follows ?theme= without storing it", async ({ page }) => {

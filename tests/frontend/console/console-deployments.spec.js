@@ -89,6 +89,9 @@ async function withBootstrap(context, patch) {
 function baseApi(extra = {}) {
   return {
     "GET /api/status": JSON.parse(fs.readFileSync(path.join(FIXTURES, "status.json"), "utf8")),
+    // The platform module is mounted (OPS-13), so the shell strip polls its status and version too.
+    "GET /api/platform/status": fixture("platform-status", ""),
+    "GET /api/platform/version": { ok: true, version: "0.2.0-git-2ad10e5ffe68", build: { commit: "2ad10e5ffe68", contentHash: "3f9c2a1b7d0e" }, newerCommits: 0 },
     "GET /api/fleet": fixture("fleet"),
     "GET /api/m/vllm/instances": fixture("instances-vllm"),
     "GET /api/m/llama/instances": fixture("instances-llama"),
