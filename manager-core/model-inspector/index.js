@@ -8,6 +8,7 @@
 
 const cache = require("./cache");
 const cardSchema = require("./card-schema");
+const compatibility = require("./compatibility");
 const contentDigest = require("./content-digest");
 const evidence = require("./evidence");
 const fit = require("./fit");
@@ -66,6 +67,12 @@ module.exports = {
     readLocalTemplate: templateSignatures.readLocalTemplate,
     templateSha256: templateSignatures.templateSha256,
     CATALOG_IDS: templateSignatures.CATALOG_IDS,
+  },
+  // Compatibility matrix (02 §9, MOD-11): one row per (engine, runtime) for a card.
+  compatibility: {
+    evaluateCompatibility: compatibility.evaluateCompatibility,
+    ggufArchitectureSupport: compatibility.ggufArchitectureSupport,
+    ROLE_TO_DESCRIPTOR: compatibility.ROLE_TO_DESCRIPTOR,
   },
   // Memory fit (02 §10, MOD-9): artifact inputs for 01's memory models and grading.
   fit: {

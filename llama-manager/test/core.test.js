@@ -400,6 +400,17 @@ test("an architecture missing from the capability matrix is unknown, not compati
   assert.equal(empty.supported, true);
 });
 
+test("the GGUF architecture lookup reads families v2: DeepSeek-V4 is unknown, a family's gguf names are known (MOD-11)", () => {
+  const deepseek4 = manager.evaluateLlamaArchitectureRuntimeCompatibility("deepseek4", { buildNumber: 10630 });
+  assert.equal(deepseek4.status, "unknown");
+  assert.equal(deepseek4.supported, null);
+  assert.equal(deepseek4.capability.id, "");
+  // A gguf name of a listed family without a minimum build keeps not-required.
+  assert.equal(manager.evaluateLlamaArchitectureRuntimeCompatibility("qwen3moe", {}).status, "not-required");
+  const known = manager.evaluateLlamaArchitectureRuntimeCompatibility("qwen3", {});
+  assert.deepEqual(known.capability, { id: "qwen3", label: known.capability.label, matchedBy: "gguf" });
+});
+
 test("memory estimate consumes GGUF variant metadata and component bytes", () => {
   const variant = {
     path: "D:/AI/models/muse/model.gguf",
