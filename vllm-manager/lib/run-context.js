@@ -8,6 +8,7 @@
 
 const { VLLM_GATE_OPTIONS } = require("./runtime-compatibility");
 const { normalizeRuntimeEngine } = require("./runtime-command");
+const engines = require("../../manager-core/engines");
 
 const DEFAULT_STALL_TIMEOUT_MS = 10 * 60 * 1000;
 const LOCAL_BUILD_IMAGE = /^local\//i;
@@ -48,6 +49,20 @@ function imagePullPolicyFor(registry, engineId, image) {
     const descriptor = registry.get?.(engineId);
     return descriptor?.tier === 1 && descriptor?.status === "stable" ? "auto" : "explicit";
   }
+}
+
+// The engine display name from its descriptor (vLLM, SGLang): the given
+// registry first, then the bundled one.
+function engineLabel(registry, engineId) {
+  for (const source of [registry, engines.getEngineRegistry()]) {
+    try {
+      const label = source?.get?.(engineId)?.label?.en;
+      if (label) return label;
+    } catch {
+      // Not known to this registry.
+    }
+  }
+  return engineId;
 }
 
 function modelCompatibilityError(compatibility) {
@@ -97,12 +112,12 @@ function createVllmRunContext(deps = {}) {
     } catch {
       // The preflight reports a preset that cannot be resolved.
     }
-    const engineName = engine === "sglang" ? "SGLang" : "vLLM";
+    const engineName = engineLabel(deps.registry, engine);
     const containerName = opts.containerName || CONFIG.containerName;
 
     return {
       options: opts,
-      engineId: engine === "sglang" ? "sglang" : "vllm",
+      engineId: engine,
       engineName,
       apiLabel: `${engineName} API`,
       containerName,
@@ -155,7 +170,7 @@ function createVllmRunContext(deps = {}) {
       },
       // The plan's pull step (00 §9.2): "auto" pulls a missing stable tier-1
       // image before the checkpoint, as before; "explicit" never pulls.
-      imagePolicy: (image) => (deps.registry ? imagePullPolicyFor(deps.registry, engine === "sglang" ? "sglang" : "vllm", image) : "auto"),
+      imagePolicy: (image) => (deps.registry ? imagePullPolicyFor(deps.registry, engine, image) : "auto"),
       pullOptions: buildVllmImagePullOptions(env, CONFIG.imagePlatform),
       pullLog: {
         attempt: ({ attempt, attempts, image }) => `Docker image pull attempt ${attempt}/${attempts}: ${image}`,

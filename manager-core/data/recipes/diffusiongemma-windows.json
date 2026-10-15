@@ -233,6 +233,12 @@
       "message": {
         "zh": "DiffusionGemma NVFP4 在 Windows Docker/WSL 下当前不可稳定运行：V2 runner 会因 UVA 不可用启动失败，V1 fallback 可加载但首个 chat 请求可能触发 CUDA device-side assert。请改用常规 Gemma-4/Qwen，或在原生 Linux 上运行；确认要自行承担风险时设置 VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1。",
         "en": "DiffusionGemma NVFP4 does not run reliably under Windows Docker/WSL: the V2 runner fails because UVA is unavailable, and the V1 fallback loads but the first chat request can trigger a CUDA device-side assert. Use a regular Gemma-4 or Qwen model, run on native Linux, or set VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA=1 to accept the risk."
+      },
+      "check": {
+        "title": {
+          "zh": "Windows Docker/WSL 不建议启动",
+          "en": "Not recommended on Windows Docker/WSL"
+        }
       }
     }
   ],
@@ -414,6 +420,75 @@
           },
           4096
         ]
+      },
+      "runnerMode": {
+        "if": [
+          {
+            "eq": [
+              {
+                "coalesce": [
+                  {
+                    "if": [
+                      {
+                        "in": [
+                          {
+                            "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                          },
+                          [
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                            "v2"
+                          ]
+                        ]
+                      },
+                      "1",
+                      null
+                    ]
+                  },
+                  {
+                    "if": [
+                      {
+                        "in": [
+                          {
+                            "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                          },
+                          [
+                            "0",
+                            "false",
+                            "no",
+                            "off",
+                            "v1"
+                          ]
+                        ]
+                      },
+                      "0",
+                      null
+                    ]
+                  },
+                  {
+                    "if": [
+                      {
+                        "eq": [
+                          {
+                            "fact": "host.platform"
+                          },
+                          "win32"
+                        ]
+                      },
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "0"
+            ]
+          },
+          "V1 runner（Windows/WSL UVA fallback）",
+          "V2 runner"
+        ]
       }
     },
     "notesEn": [
@@ -473,6 +548,172 @@
       "overrideGenerationConfig": {
         "recipe": "vllm.overrideGenerationConfig",
         "format": "json"
+      }
+    },
+    "check": {
+      "findings": [
+        {
+          "severity": "warn",
+          "title": {
+            "zh": "DiffusionGemma / Gemma4 专用启动",
+            "en": "DiffusionGemma / Gemma4 launch"
+          },
+          "detail": {
+            "zh": "该架构需要 Gemma 专用 vLLM 镜像；管理器会自动使用 {{recipe.runtimeImage}}、{{var:runnerMode}}，并补齐 trust-remote-code、TRITON_ATTN、gemma4 parser。Windows/WSL fallback 只用于绕过 V2 UVA 初始化失败，不代表推理稳定。",
+            "en": "This architecture needs the Gemma vLLM image; the manager starts {{recipe.runtimeImage}} with the {{var:runnerMode}} and adds trust-remote-code, TRITON_ATTN and the gemma4 parsers. The Windows/WSL fallback only avoids the V2 UVA initialisation failure; it does not make inference stable."
+          }
+        },
+        {
+          "from": "blockIf"
+        },
+        {
+          "severity": "warn",
+          "title": {
+            "zh": "Windows Docker/WSL 推理风险",
+            "en": "Windows Docker/WSL inference risk"
+          },
+          "detail": {
+            "zh": "当前环境下 V2 runner 会因为 WSL 不支持 pinned memory / UVA 失败；V1 fallback 可以加载，但 DiffusionGemma NVFP4 在首个 chat 请求可能触发 CUDA device-side assert。建议在原生 Linux 上用 V2 runner，或改用常规 Qwen/Gemma 模型。",
+            "en": "Here the V2 runner fails because WSL has no pinned memory / UVA; the V1 fallback loads, but DiffusionGemma NVFP4 can hit a CUDA device-side assert on the first chat request. Prefer the V2 runner on native Linux, or a regular Qwen/Gemma model."
+          },
+          "when": {
+            "and": [
+              {
+                "not": {
+                  "and": [
+                    {
+                      "eq": [
+                        {
+                          "fact": "host.platform"
+                        },
+                        "win32"
+                      ]
+                    },
+                    {
+                      "not": {
+                        "in": [
+                          {
+                            "env": "VLLM_ALLOW_WINDOWS_DIFFUSION_GEMMA"
+                          },
+                          [
+                            "1",
+                            "true",
+                            "yes",
+                            "on"
+                          ]
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "eq": [
+                  {
+                    "coalesce": [
+                      {
+                        "if": [
+                          {
+                            "in": [
+                              {
+                                "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                              },
+                              [
+                                "1",
+                                "true",
+                                "yes",
+                                "on",
+                                "v2"
+                              ]
+                            ]
+                          },
+                          "1",
+                          null
+                        ]
+                      },
+                      {
+                        "if": [
+                          {
+                            "in": [
+                              {
+                                "env": "VLLM_GEMMA_USE_V2_MODEL_RUNNER"
+                              },
+                              [
+                                "0",
+                                "false",
+                                "no",
+                                "off",
+                                "v1"
+                              ]
+                            ]
+                          },
+                          "0",
+                          null
+                        ]
+                      },
+                      {
+                        "if": [
+                          {
+                            "eq": [
+                              {
+                                "fact": "host.platform"
+                              },
+                              "win32"
+                            ]
+                          },
+                          "0",
+                          "1"
+                        ]
+                      }
+                    ]
+                  },
+                  "0"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "recommendations": {
+        "trustRemoteCode": true,
+        "reasoningParser": "gemma4",
+        "toolCallParser": "gemma4",
+        "enableAutoToolChoice": true,
+        "kvCacheDtype": "fp8",
+        "loadFormat": "auto",
+        "maxNumSeqs": {
+          "expr": {
+            "min": [
+              {
+                "coalesce": [
+                  {
+                    "if": [
+                      {
+                        "gt": [
+                          {
+                            "user": "concurrency"
+                          },
+                          0
+                        ]
+                      },
+                      {
+                        "user": "concurrency"
+                      },
+                      null
+                    ]
+                  },
+                  2
+                ]
+              },
+              4
+            ]
+          }
+        },
+        "languageModelOnly": false,
+        "enablePrefixCaching": false
+      },
+      "defaults": {
+        "quantization": "modelopt_fp4"
       }
     }
   },

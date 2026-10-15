@@ -76,6 +76,97 @@
       "uses SGLang 0.5.17 with the OpenAI-compatible API on container port 8000",
       "uses FlashInfer on SM120; FA3 is not supported on this host",
       "uses CPU multimodal feature transport to avoid Docker Desktop/WSL CUDA IPC failures"
-    ]
+    ],
+    "check": {
+      "findings": [
+        {
+          "severity": "ok",
+          "title": {
+            "zh": "Qwen3.8 专用运行时",
+            "en": "Qwen3.8 runtime"
+          },
+          "detail": {
+            "zh": "将使用 SGLang {{manifest:sglang.version}} / FlashInfer / CPU feature transport。",
+            "en": "Uses SGLang {{manifest:sglang.version}} with FlashInfer and the CPU feature transport."
+          }
+        }
+      ],
+      "recommendations": {
+        "maxModelLen": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "contextLength"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "contextLength"
+                  },
+                  null
+                ]
+              },
+              262144
+            ]
+          }
+        },
+        "maxNumSeqs": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "concurrency"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "concurrency"
+                  },
+                  null
+                ]
+              },
+              4
+            ]
+          }
+        },
+        "gpuMemoryUtilization": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "sglang.memFractionStatic"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "sglang.memFractionStatic"
+                  },
+                  null
+                ]
+              },
+              0.8
+            ]
+          }
+        },
+        "kvCacheDtype": "auto",
+        "languageModelOnly": false,
+        "enablePrefixCaching": true,
+        "reasoningParser": "qwen3",
+        "toolCallParser": "qwen3_coder"
+      }
+    }
   }
 }

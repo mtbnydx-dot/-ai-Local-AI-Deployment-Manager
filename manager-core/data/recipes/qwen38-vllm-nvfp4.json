@@ -98,6 +98,97 @@
       "safetensorsLoadStrategy": {
         "recipe": "vllm.safetensorsLoadStrategy"
       }
+    },
+    "check": {
+      "findings": [
+        {
+          "severity": "ok",
+          "title": {
+            "zh": "Qwen3.8 专用运行时",
+            "en": "Qwen3.8 runtime"
+          },
+          "detail": {
+            "zh": "将使用已验证的 Qwen3.8 vLLM {{manifest:vllm.version}}。",
+            "en": "Uses the validated Qwen3.8 vLLM {{manifest:vllm.version}}."
+          }
+        }
+      ],
+      "recommendations": {
+        "maxModelLen": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "contextLength"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "contextLength"
+                  },
+                  null
+                ]
+              },
+              262144
+            ]
+          }
+        },
+        "maxNumSeqs": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "concurrency"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "concurrency"
+                  },
+                  null
+                ]
+              },
+              4
+            ]
+          }
+        },
+        "gpuMemoryUtilization": {
+          "expr": {
+            "coalesce": [
+              {
+                "if": [
+                  {
+                    "gt": [
+                      {
+                        "user": "vllm.gpuMemoryUtilization"
+                      },
+                      0
+                    ]
+                  },
+                  {
+                    "user": "vllm.gpuMemoryUtilization"
+                  },
+                  null
+                ]
+              },
+              0.8
+            ]
+          }
+        },
+        "kvCacheDtype": "auto",
+        "languageModelOnly": true,
+        "enablePrefixCaching": true,
+        "reasoningParser": "qwen3",
+        "toolCallParser": "qwen3_coder"
+      }
     }
   },
   "profile": {

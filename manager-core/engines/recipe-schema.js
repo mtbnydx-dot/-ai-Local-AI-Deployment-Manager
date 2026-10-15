@@ -768,7 +768,7 @@ function checkLegacyCheck(report, recipe, scope, manifestOk) {
     report.error("legacy.check", "invalid_type", "legacy.check is an object.");
     return;
   }
-  checkUnknownFields(report, check, new Set(["blockTitle", "findings", "recommendations", "recommendFromProfile"]), "legacy.check");
+  checkUnknownFields(report, check, new Set(["blockTitle", "findings", "recommendations", "defaults", "recommendFromProfile"]), "legacy.check");
   checkI18n(report, check.blockTitle, "legacy.check.blockTitle", { required: false });
   if (check.recommendFromProfile !== undefined && typeof check.recommendFromProfile !== "boolean") {
     report.error("legacy.check.recommendFromProfile", "invalid_type", "recommendFromProfile is a boolean.");
@@ -788,20 +788,31 @@ function checkLegacyCheck(report, recipe, scope, manifestOk) {
           if (item.codes !== undefined) checkStringList(report, item.codes, `${where}.codes`, { pattern: CODE_PATTERN });
           return;
         }
-        checkUnknownFields(report, item, new Set(["severity", "title", "detail"]), where);
+        // when: the finding's condition; ifMatched: only for a model the recipe
+        // matches (not a pinned-image mismatch); replaces: it refines the
+        // manager's finding of the same title and is shown only in its place.
+        checkUnknownFields(report, item, new Set(["severity", "title", "detail", "when", "ifMatched", "replaces"]), where);
         if (!["ok", "warn", "fail", "info"].includes(item.severity)) report.error(`${where}.severity`, "invalid_value", "severity is ok, warn, fail or info.");
         checkI18n(report, item.title, `${where}.title`);
         checkI18n(report, item.detail, `${where}.detail`);
+        if (item.when !== undefined) checkExpr(report, item.when, `${where}.when`, scope);
+        for (const flag of ["ifMatched", "replaces"]) {
+          if (item[flag] !== undefined && typeof item[flag] !== "boolean") report.error(`${where}.${flag}`, "invalid_type", `${flag} is a boolean.`);
+        }
       });
     }
   }
-  if (check.recommendations !== undefined) {
-    if (!isPlainObject(check.recommendations)) report.error("legacy.check.recommendations", "invalid_type", "recommendations maps legacy fields to values.");
-    else {
-      for (const [field, value] of Object.entries(check.recommendations)) {
-        if (!LEGACY_FIELD_PATTERN.test(field)) report.error(`legacy.check.recommendations.${field}`, "invalid_value", "A legacy field is a camelCase name.");
-        else checkTemplateValue(report, value, `legacy.check.recommendations.${field}`, scope, { manifestOk });
-      }
+  // recommendations replace the form's fields; defaults fill only the fields
+  // the check left empty.
+  for (const key of ["recommendations", "defaults"]) {
+    if (check[key] === undefined) continue;
+    if (!isPlainObject(check[key])) {
+      report.error(`legacy.check.${key}`, "invalid_type", `${key} maps legacy fields to values.`);
+      continue;
+    }
+    for (const [field, value] of Object.entries(check[key])) {
+      if (!LEGACY_FIELD_PATTERN.test(field)) report.error(`legacy.check.${key}.${field}`, "invalid_value", "A legacy field is a camelCase name.");
+      else checkTemplateValue(report, value, `legacy.check.${key}.${field}`, scope, { manifestOk });
     }
   }
 }

@@ -1,6 +1,7 @@
-const { isPennyroyalImage, pennyroyalRecipeMemory } = require("./pennyroyal");
 const { createLaunchPlanner } = require("../../manager-core/engines/resolve-launch-plan");
 const memoryModels = require("../../manager-core/engines/memory-models");
+const recipes = require("../../manager-core/engines/recipes");
+const { normalizeRuntimeEngine: registryRuntimeEngine } = require("./runtime-command");
 
 function createVllmStartRuntimeRequest(deps) {
   const {
@@ -24,7 +25,7 @@ function createVllmStartRuntimeRequest(deps) {
     inferToolCallParser,
     normalizeNetworkAccess,
     normalizeSpeculativeMode = (value) => String(value || "off").trim().toLowerCase(),
-    normalizeRuntimeEngine = (value) => String(value || "vllm").trim().toLowerCase() === "sglang" ? "sglang" : "vllm",
+    normalizeRuntimeEngine = registryRuntimeEngine,
     checkModelCompatibility = null,
     getLanAddress,
     createJob,
@@ -214,7 +215,8 @@ function createVllmStartRuntimeRequest(deps) {
     // engine start, and a capped KV pool (--max-total-tokens) lets admission
     // clamp to the safe budget and warn; the Pennyroyal recipe reserves its
     // measured footprint; an exact calibration replaces the SGLang fraction.
-    const memoryValues = engine === "sglang"
+    const freeFraction = memoryModels.memoryModelFor(engine)?.kind === "static-fraction-of-free";
+    const memoryValues = freeFraction
       ? {
         contextLength: maxModelLen,
         concurrency: maxNumSeqs,
@@ -239,9 +241,7 @@ function createVllmStartRuntimeRequest(deps) {
     const memory = memoryModels.estimate(engine, {
       values: memoryValues,
       mode: instanceMode,
-      recipeMemory: engine === "sglang" && isPennyroyalImage(runtimeImage)
-        ? pennyroyalRecipeMemory({ sglangMaxTotalTokens, maxModelLen })
-        : null,
+      recipeMemory: recipes.pinnedRecipeMemory(engine, runtimeImage, { sglangMaxTotalTokens, maxModelLen }),
       calibration,
     });
     Object.assign(gpuAdmissionRequest, { requestedFraction: undefined }, memory.admissionRequest);
@@ -403,7 +403,8 @@ function createVllmStartRuntimeRequest(deps) {
     // SGLang requests with a KV pool cap (the fraction of free memory, or a
     // calibration) are the ones admission may clamp; job.meta.admission
     // reports that decision. The Pennyroyal measured request has no cap.
-    const sglangClampable = engine === "sglang" && Object.hasOwn(gpuAdmissionRequest || {}, "poolCappedTokens");
+    const sglangClampable = memoryModels.memoryModelFor(engine)?.kind === "static-fraction-of-free"
+      && Object.hasOwn(gpuAdmissionRequest || {}, "poolCappedTokens");
     const admissionPolicy = plan.memory?.policy || "static-fraction-of-free";
     let admissionLease = null;
     if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {

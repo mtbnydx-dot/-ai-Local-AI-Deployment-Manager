@@ -499,9 +499,6 @@
     ],
     "check": {
       "recommendations": {
-        "runtimeImage": {
-          "text": "{{recipe.runtimeImage}}"
-        },
         "maxModelLen": {
           "expr": {
             "coalesce": [
@@ -549,8 +546,15 @@
             ]
           }
         },
-        "quantization": "modelopt_fp4",
         "kvCacheDtype": "auto",
+        "languageModelOnly": false,
+        "enablePrefixCaching": true,
+        "reasoningParser": "qwen3",
+        "toolCallParser": "qwen3_coder",
+        "runtimeImage": {
+          "text": "{{recipe.runtimeImage}}"
+        },
+        "quantization": "modelopt_fp4",
         "trustRemoteCode": true,
         "speculativeMode": "off",
         "sglangMaxTotalTokens": {
@@ -680,6 +684,29 @@
         "sglangDisableThinkingByDefault": true
       },
       "findings": [
+        {
+          "severity": "ok",
+          "title": {
+            "zh": "Qwen3.8 专用运行时",
+            "en": "Qwen3.8 runtime"
+          },
+          "detail": {
+            "zh": "将使用 {{recipe.runtimeImage}}，包含 SM120 QSA 完整修复。",
+            "en": "Uses {{recipe.runtimeImage}} with the complete SM120 QSA fixes."
+          }
+        },
+        {
+          "severity": "ok",
+          "title": {
+            "zh": "NVFP4/FP4 权重",
+            "en": "NVFP4/FP4 weights"
+          },
+          "detail": {
+            "zh": "权重使用 NVFP4；Flash-Next QSA 当前必须保留 BF16 KV（界面选择 auto），不要启用 FP8 KV。",
+            "en": "The weights are NVFP4; Flash-Next QSA must keep BF16 KV for now (choose auto) and must not enable FP8 KV."
+          },
+          "replaces": true
+        },
         {
           "severity": "ok",
           "title": {
