@@ -34,9 +34,48 @@ test("public checklist fails the key item when a public deployment has no enforc
   // SERVICE_ENTRY_ALLOW_LAN_ADMIN maps to listeners.admin.lan (OPS-3), so
   // ADMIN is LAN-bound here even though the constructor host is loopback.
   assert.equal(byId["loopback-bind"].state, "warn");
-  assert.equal(byId["caddy-paths"].state, "manual");
+  assert.equal(byId["caddy-paths"], undefined, "caddy-paths is now proxy-target (05 §13.1)");
+  assert.equal(byId["proxy-target"].state, "manual", "without a scan the item stays manual");
+  assert.equal(byId.firewall.state, "manual");
   assert.equal(security.describePublic(state).exposure, "public");
   assert.equal(security.describePublic(state).publicChecklist, undefined, "LAN callers do not get the checklist");
+});
+
+test("public checklist maps proxy-target and firewall from the exposure scan and keeps every other id", async (t) => {
+  withCleanEnv(t);
+  process.env.SERVICE_ENTRY_PUBLIC_BASE_URL = "https://models.example.com";
+  const check = (id, state, evidence = "") => ({ id, state, title: `access.check.${id}`, evidence, fix: `access.fix.${id}` });
+  let report = {
+    at: "2026-10-15T00:00:00.000Z",
+    checks: [
+      check("tunnel_target", "fail", "legacy_tunnel_bypasses_entry"),
+      check("legacy_proxy", "ok"),
+      check("firewall_profiles", "ok"),
+      check("wildcard_listeners", "warn", "5190 listens on all interfaces"),
+    ],
+  };
+  const security = createEntrySecurity({ host: "127.0.0.1", managers: [], exposureReport: () => report });
+  const ids = (state) => state.publicChecklist.map((item) => item.id);
+  let state = await security.describe();
+  assert.deepEqual(ids(state), ["api-key", "lan-admin", "cors", "https", "loopback-bind", "rate-limit", "proxy-target", "firewall"]);
+  let byId = Object.fromEntries(state.publicChecklist.map((item) => [item.id, item]));
+  assert.equal(byId["proxy-target"].state, "fail");
+  assert.equal(byId["proxy-target"].detail, "legacy_tunnel_bypasses_entry");
+  assert.equal(byId.firewall.state, "warn", "the worst of the firewall and wildcard checks");
+  assert.equal(byId.firewall.detail, "5190 listens on all interfaces");
+
+  report = { checks: [check("tunnel_target", "ok"), check("firewall_profiles", "unknown"), check("wildcard_listeners", "unknown")] };
+  state = await security.describe();
+  byId = Object.fromEntries(state.publicChecklist.map((item) => [item.id, item]));
+  assert.equal(byId["proxy-target"].state, "ok");
+  assert.equal(byId.firewall.state, "manual", "unknown checks stay manual");
+
+  // A scan that throws or returns nothing never breaks the security view.
+  security.setExposureReport(() => { throw new Error("scan failed"); });
+  state = await security.describe();
+  assert.equal(state.publicChecklist.find((item) => item.id === "proxy-target").state, "manual");
+  security.setExposureReport(null);
+  assert.equal((await security.describe()).publicChecklist.find((item) => item.id === "firewall").state, "manual");
 });
 
 test("public checklist is informational on a loopback-only install", async (t) => {

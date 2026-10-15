@@ -171,6 +171,7 @@ const ROUTE_MODULES = [
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
   "./lib/telemetry-routes", // 04 TEL-18  /api/telemetry/import (TEL-11 adds the query routes)
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
+  "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
   // "./lib/platform-routes",     // 06 OPS-13
 ];
 
@@ -241,6 +242,19 @@ async function migrateLegacyKeys(options = {}) {
     listBindings: () => keyMigration.listBillingBindings(billing),
     force: options.force === true,
     actor: "migration",
+  });
+}
+
+// The dry run of migrateLegacyKeys (05 §13.1 migration/plan): the same inputs,
+// nothing written.
+async function planLegacyKeys(options = {}) {
+  const store = options.store || getAccessStore();
+  const managers = (options.managers || MANAGERS).map(({ id, billingId, root }) => ({ id, billingId, root }));
+  const billing = options.billingStore || getBillingStore();
+  return keyMigration.planLegacyKeyMigration({
+    store,
+    managers,
+    listBindings: () => keyMigration.listBillingBindings(billing),
   });
 }
 
@@ -465,6 +479,12 @@ function createRouteContext(overrides = {}) {
     features: {},
     sendJson,
     readJsonObjectBody,
+    // The access store (05 §6) and the legacy key migration, for access-routes.
+    getAccessStore,
+    accessMigration: {
+      plan: () => planLegacyKeys(),
+      apply: () => migrateLegacyKeys({ force: true }),
+    },
     logger: console,
     now: Date.now,
     ...overrides,
@@ -3252,6 +3272,7 @@ module.exports = {
   getBillingStore,
   buildKeySummary,
   migrateLegacyKeys,
+  planLegacyKeys,
   prepareAccessStore,
   getFleetSettings,
   getManagerModelCatalog,
