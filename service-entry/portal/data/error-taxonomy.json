@@ -1,0 +1,901 @@
+{
+  "schemaVersion": 1,
+  "errors": [
+    {
+      "code": "missing_api_key",
+      "status": 401,
+      "anthropicStatus": 401,
+      "openaiType": "authentication_error",
+      "anthropicType": "authentication_error",
+      "message": "Missing API key. Send it in the Authorization header as 'Bearer <key>'.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "需要 API 密钥",
+          "explanation": "此接口需要 API 密钥，但请求中没有携带。",
+          "steps": [
+            "在 Authorization 请求头中以 Bearer <密钥> 的形式发送密钥。",
+            "Anthropic 客户端也可以用 x-api-key 请求头发送。",
+            "如果还没有密钥，请向服务管理员申请。"
+          ]
+        },
+        "en-US": {
+          "title": "API key required",
+          "explanation": "This endpoint needs an API key, and the request did not include one.",
+          "steps": [
+            "Send the key in the Authorization header as Bearer <key>.",
+            "Anthropic clients can send it in the x-api-key header instead.",
+            "If you have no key yet, ask the service owner for one."
+          ]
+        }
+      }
+    },
+    {
+      "code": "invalid_api_key",
+      "status": 401,
+      "anthropicStatus": 401,
+      "openaiType": "authentication_error",
+      "anthropicType": "authentication_error",
+      "message": "Invalid API key. Check the key; it may be mistyped or may have been rotated.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "API 密钥无效",
+          "explanation": "请求中的密钥与任何有效密钥都不匹配，可能输错了，也可能已被轮换。",
+          "steps": [
+            "从管理员分享的位置重新复制密钥，注意不要带多余空格。",
+            "如果密钥已轮换，请改用新密钥。",
+            "同一地址多次认证失败会被暂时封禁。"
+          ]
+        },
+        "en-US": {
+          "title": "API key not recognized",
+          "explanation": "The key in the request does not match any active key. It may be mistyped or may have been rotated.",
+          "steps": [
+            "Copy the key again from where the owner shared it, without extra spaces.",
+            "If the key was rotated, use the new one.",
+            "Repeated failures from one address are blocked for a while."
+          ]
+        }
+      }
+    },
+    {
+      "code": "key_expired",
+      "status": 401,
+      "anthropicStatus": 401,
+      "openaiType": "authentication_error",
+      "anthropicType": "authentication_error",
+      "message": "This API key has expired. Ask the service owner to renew it.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "API 密钥已过期",
+          "explanation": "此密钥已超过有效期，无法继续使用。",
+          "steps": [
+            "请联系服务管理员续期或签发新密钥。"
+          ]
+        },
+        "en-US": {
+          "title": "API key expired",
+          "explanation": "This key has passed its expiry date and no longer works.",
+          "steps": [
+            "Ask the service owner to renew the key or issue a new one."
+          ]
+        }
+      }
+    },
+    {
+      "code": "key_disabled",
+      "status": 403,
+      "anthropicStatus": 403,
+      "openaiType": "permission_error",
+      "anthropicType": "permission_error",
+      "message": "This API key is disabled or has been revoked.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "API 密钥已停用",
+          "explanation": "服务管理员已停用或吊销此密钥。",
+          "steps": [
+            "请联系服务管理员确认能否恢复，或申请新密钥。"
+          ]
+        },
+        "en-US": {
+          "title": "API key disabled",
+          "explanation": "The service owner has disabled or revoked this key.",
+          "steps": [
+            "Ask the service owner whether the key can be re-enabled, or request a new one."
+          ]
+        }
+      }
+    },
+    {
+      "code": "scope_denied",
+      "status": 403,
+      "anthropicStatus": 403,
+      "openaiType": "permission_error",
+      "anthropicType": "permission_error",
+      "message": "This API key is not allowed to use this endpoint.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "此密钥无权访问该接口",
+          "explanation": "密钥有效，但不包含访问此接口的权限。",
+          "steps": [
+            "在“我的密钥”页面查看密钥可用的接口。",
+            "如需使用，请让服务管理员为密钥添加相应权限。"
+          ]
+        },
+        "en-US": {
+          "title": "Endpoint not allowed for this key",
+          "explanation": "The key is valid but does not include permission for this endpoint.",
+          "steps": [
+            "Check which endpoints your key may use on the My Key page.",
+            "Ask the service owner to add the permission if you need it."
+          ]
+        }
+      }
+    },
+    {
+      "code": "model_not_allowed",
+      "status": 403,
+      "anthropicStatus": 403,
+      "openaiType": "permission_error",
+      "anthropicType": "permission_error",
+      "message": "This API key is not allowed to use the requested model.",
+      "param": "model",
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "此密钥无权使用该模型",
+          "explanation": "密钥有效，但不允许使用请求的模型。",
+          "steps": [
+            "通过 /v1/models 查看密钥可用的模型。",
+            "如需使用，请让服务管理员把该模型加入密钥的允许列表。"
+          ]
+        },
+        "en-US": {
+          "title": "Model not allowed for this key",
+          "explanation": "The key is valid but may not use the requested model.",
+          "steps": [
+            "List the models your key may use at /v1/models.",
+            "Ask the service owner to add the model to your key."
+          ]
+        }
+      }
+    },
+    {
+      "code": "origin_not_allowed",
+      "status": 403,
+      "anthropicStatus": 403,
+      "openaiType": "permission_error",
+      "anthropicType": "permission_error",
+      "message": "Requests from this web origin are not allowed for this API key. Add the origin under My Key.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "网页来源不被允许",
+          "explanation": "此密钥不接受来自发起请求的网页来源。",
+          "steps": [
+            "在“我的密钥”中添加该网页的来源。",
+            "服务端程序不发送来源，不受此限制。"
+          ]
+        },
+        "en-US": {
+          "title": "Web origin not allowed",
+          "explanation": "This key does not accept requests from the web page that sent this one.",
+          "steps": [
+            "Add the page's origin under My Key.",
+            "Server-side clients send no origin and are not affected."
+          ]
+        }
+      }
+    },
+    {
+      "code": "ip_not_allowed",
+      "status": 403,
+      "anthropicStatus": 403,
+      "openaiType": "permission_error",
+      "anthropicType": "permission_error",
+      "message": "Requests from this IP address are not allowed for this API key.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "IP 地址不被允许",
+          "explanation": "此密钥只接受来自指定 IP 地址的请求，而本次请求来自其他地址。",
+          "steps": [
+            "请从允许的网络调用，或让服务管理员添加你的地址。"
+          ]
+        },
+        "en-US": {
+          "title": "IP address not allowed",
+          "explanation": "This key accepts requests only from specific IP addresses, and this request came from another one.",
+          "steps": [
+            "Call from an allowed network, or ask the service owner to add your address."
+          ]
+        }
+      }
+    },
+    {
+      "code": "csrf_invalid",
+      "status": 403,
+      "anthropicStatus": 403,
+      "openaiType": "permission_error",
+      "anthropicType": "permission_error",
+      "message": "The console session check failed. Reload the console and try again.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "控制台会话校验失败",
+          "explanation": "控制台请求缺少安全令牌，或令牌已经过期。",
+          "steps": [
+            "刷新控制台页面后重试。",
+            "如果反复出现，请重新配对控制台。"
+          ]
+        },
+        "en-US": {
+          "title": "Console session check failed",
+          "explanation": "The console request was missing its security token, or the token is out of date.",
+          "steps": [
+            "Reload the console page and try again.",
+            "If it keeps happening, pair the console again."
+          ]
+        }
+      }
+    },
+    {
+      "code": "model_not_found",
+      "status": 404,
+      "anthropicStatus": 404,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "not_found_error",
+      "message": "The requested model does not exist or is not published. List the available models at /v1/models.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "找不到模型",
+          "explanation": "没有已发布的模型使用请求中的名称。",
+          "steps": [
+            "通过 /v1/models 查看可用模型，并准确复制模型 id。",
+            "模型也可能暂时离线，请查看状态页。"
+          ]
+        },
+        "en-US": {
+          "title": "Model not found",
+          "explanation": "No published model has the requested name.",
+          "steps": [
+            "List the available models at /v1/models and copy the id exactly.",
+            "The model may also be offline for now; see the status page."
+          ]
+        }
+      }
+    },
+    {
+      "code": "not_found",
+      "status": 404,
+      "anthropicStatus": 404,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "not_found_error",
+      "message": "The requested resource was not found.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "页面不存在",
+          "explanation": "此地址下没有任何内容。",
+          "steps": [
+            "检查地址是否输错。",
+            "从首页或文档页重新进入。"
+          ]
+        },
+        "en-US": {
+          "title": "Page not found",
+          "explanation": "There is nothing at this address.",
+          "steps": [
+            "Check the address for typos.",
+            "Start again from the home page or the docs."
+          ]
+        }
+      }
+    },
+    {
+      "code": "method_not_allowed",
+      "status": 405,
+      "anthropicStatus": 405,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "not_found_error",
+      "message": "This HTTP method is not allowed for this endpoint.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "不支持的请求方法",
+          "explanation": "此地址不接受该 HTTP 方法。",
+          "steps": [
+            "请查阅 API 文档，确认此接口要求的方法。"
+          ]
+        },
+        "en-US": {
+          "title": "Method not allowed",
+          "explanation": "This address does not accept this HTTP method.",
+          "steps": [
+            "Check the API docs for the method this endpoint expects."
+          ]
+        }
+      }
+    },
+    {
+      "code": "invalid_request",
+      "status": 400,
+      "anthropicStatus": 400,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "invalid_request_error",
+      "message": "The request is invalid.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "请求无效",
+          "explanation": "请求缺少必填字段，或包含服务无法接受的值。",
+          "steps": [
+            "对照 API 文档检查请求内容。",
+            "向管理员求助时请附上请求 ID。"
+          ]
+        },
+        "en-US": {
+          "title": "Invalid request",
+          "explanation": "The request is missing a required field or has a value the service cannot accept.",
+          "steps": [
+            "Compare the request with the API docs.",
+            "Quote the request ID if you ask the owner for help."
+          ]
+        }
+      }
+    },
+    {
+      "code": "invalid_json",
+      "status": 400,
+      "anthropicStatus": 400,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "invalid_request_error",
+      "message": "The request body is not valid JSON.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "JSON 格式错误",
+          "explanation": "请求体无法解析为 JSON。",
+          "steps": [
+            "请发送合法的 JSON 对象，并把 content-type 设为 application/json。"
+          ]
+        },
+        "en-US": {
+          "title": "Invalid JSON",
+          "explanation": "The request body could not be parsed as JSON.",
+          "steps": [
+            "Send a valid JSON object with content-type application/json."
+          ]
+        }
+      }
+    },
+    {
+      "code": "max_tokens_exceeded",
+      "status": 400,
+      "anthropicStatus": 400,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "invalid_request_error",
+      "message": "The requested maximum output tokens exceed the limit for this API key.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "超出输出长度上限",
+          "explanation": "请求的最大输出长度超过了此密钥的上限。",
+          "steps": [
+            "把 max_tokens（或 max_completion_tokens）降到“我的密钥”中显示的上限以内，或者不填，自动使用上限。"
+          ]
+        },
+        "en-US": {
+          "title": "Output limit exceeded",
+          "explanation": "The requested maximum output length is above the limit for this key.",
+          "steps": [
+            "Lower max_tokens (or max_completion_tokens) to the limit shown on My Key, or leave it out to use the limit."
+          ]
+        }
+      }
+    },
+    {
+      "code": "request_exceeds_tpm",
+      "status": 400,
+      "anthropicStatus": 400,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "invalid_request_error",
+      "message": "This request needs more tokens than the per-minute token limit of this API key allows. Reduce the input or the maximum output tokens.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "单个请求超过每分钟令牌上限",
+          "explanation": "这一个请求需要的令牌数就超过了密钥每分钟的上限，按原样发送永远无法成功。",
+          "steps": [
+            "缩短输入，或降低最大输出长度。",
+            "如需更高的每分钟令牌上限，请联系服务管理员。"
+          ]
+        },
+        "en-US": {
+          "title": "Request larger than the token rate limit",
+          "explanation": "This single request needs more tokens than the key may use per minute, so it can never succeed as sent.",
+          "steps": [
+            "Shorten the input or lower the maximum output.",
+            "Ask the service owner for a higher tokens-per-minute limit."
+          ]
+        }
+      }
+    },
+    {
+      "code": "unknown_engine",
+      "status": 400,
+      "anthropicStatus": 400,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "invalid_request_error",
+      "message": "Unknown engine in the request path.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "未知引擎",
+          "explanation": "请求路径中指定的引擎不存在。",
+          "steps": [
+            "改用 auto 路由，或在文档中核对引擎名称。"
+          ]
+        },
+        "en-US": {
+          "title": "Unknown engine",
+          "explanation": "The engine named in the request path does not exist.",
+          "steps": [
+            "Use the auto route, or check the engine name in the docs."
+          ]
+        }
+      }
+    },
+    {
+      "code": "request_too_large",
+      "status": 413,
+      "anthropicStatus": 413,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "request_too_large",
+      "message": "The request body is too large.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "请求体过大",
+          "explanation": "请求体超过了服务允许的大小。",
+          "steps": [
+            "减少单次请求的数据量，例如减少或压缩图片。"
+          ]
+        },
+        "en-US": {
+          "title": "Request too large",
+          "explanation": "The request body is larger than the service accepts.",
+          "steps": [
+            "Send less data in one request, for example fewer or smaller images."
+          ]
+        }
+      }
+    },
+    {
+      "code": "unsupported_media_type",
+      "status": 415,
+      "anthropicStatus": 415,
+      "openaiType": "invalid_request_error",
+      "anthropicType": "invalid_request_error",
+      "message": "Unsupported content type. Send the request body as JSON with content-type application/json.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "不支持的内容类型",
+          "explanation": "此接口不接受该请求体的内容类型。",
+          "steps": [
+            "请以 JSON 发送，并把 content-type 设为 application/json。"
+          ]
+        },
+        "en-US": {
+          "title": "Unsupported content type",
+          "explanation": "The request body has a content type this endpoint does not accept.",
+          "steps": [
+            "Send JSON with content-type application/json."
+          ]
+        }
+      }
+    },
+    {
+      "code": "ip_rate_limited",
+      "status": 429,
+      "anthropicStatus": 429,
+      "openaiType": "rate_limit_error",
+      "anthropicType": "rate_limit_error",
+      "message": "Too many requests from this address. Retry after the time in the retry-after header.",
+      "param": null,
+      "retryAfter": true,
+      "copy": {
+        "zh-CN": {
+          "title": "该地址请求过于频繁",
+          "explanation": "此网络地址在短时间内发送了过多请求。",
+          "steps": [
+            "等待 retry-after 响应头给出的时间后再重试。"
+          ]
+        },
+        "en-US": {
+          "title": "Too many requests from this address",
+          "explanation": "This network address sent too many requests in a short time.",
+          "steps": [
+            "Wait for the time given in the retry-after header, then try again."
+          ]
+        }
+      }
+    },
+    {
+      "code": "auth_banned",
+      "status": 429,
+      "anthropicStatus": 429,
+      "openaiType": "rate_limit_error",
+      "anthropicType": "rate_limit_error",
+      "message": "Too many failed authentication attempts from this address. Retry after the time in the retry-after header.",
+      "param": null,
+      "retryAfter": true,
+      "copy": {
+        "zh-CN": {
+          "title": "已被暂时封禁",
+          "explanation": "此地址认证失败的次数过多，已被暂时封禁。",
+          "steps": [
+            "等待 retry-after 响应头给出的时间后再重试。",
+            "重试前请确认客户端发送的是正确的密钥。"
+          ]
+        },
+        "en-US": {
+          "title": "Temporarily blocked",
+          "explanation": "Too many failed authentication attempts came from this address, so it is blocked for a while.",
+          "steps": [
+            "Wait for the time given in the retry-after header, then try again.",
+            "Check that your client sends the right key before retrying."
+          ]
+        }
+      }
+    },
+    {
+      "code": "rate_limit_exceeded",
+      "status": 429,
+      "anthropicStatus": 429,
+      "openaiType": "rate_limit_error",
+      "anthropicType": "rate_limit_error",
+      "message": "Request rate limit reached for this API key. Back off and retry after the time in the retry-after header.",
+      "param": null,
+      "retryAfter": true,
+      "copy": {
+        "zh-CN": {
+          "title": "已达到请求频率上限",
+          "explanation": "此密钥每分钟的请求数超过了上限。",
+          "steps": [
+            "等待 retry-after 响应头给出的时间后再重试。",
+            "在“我的密钥”中查看限额。"
+          ]
+        },
+        "en-US": {
+          "title": "Request rate limit reached",
+          "explanation": "This key sent more requests per minute than its limit allows.",
+          "steps": [
+            "Wait for the time given in the retry-after header, then try again.",
+            "Check the limits on My Key."
+          ]
+        }
+      }
+    },
+    {
+      "code": "tokens_rate_limit_exceeded",
+      "status": 429,
+      "anthropicStatus": 429,
+      "openaiType": "rate_limit_error",
+      "anthropicType": "rate_limit_error",
+      "message": "Token rate limit reached for this API key. Back off and retry after the time in the retry-after header.",
+      "param": null,
+      "retryAfter": true,
+      "copy": {
+        "zh-CN": {
+          "title": "已达到令牌速率上限",
+          "explanation": "此密钥每分钟使用的令牌数超过了上限。",
+          "steps": [
+            "等待 retry-after 响应头给出的时间后再重试。",
+            "缩短请求，或降低最大输出长度。"
+          ]
+        },
+        "en-US": {
+          "title": "Token rate limit reached",
+          "explanation": "This key used more tokens per minute than its limit allows.",
+          "steps": [
+            "Wait for the time given in the retry-after header, then try again.",
+            "Send shorter requests or lower the maximum output."
+          ]
+        }
+      }
+    },
+    {
+      "code": "concurrency_limit_exceeded",
+      "status": 429,
+      "anthropicStatus": 429,
+      "openaiType": "rate_limit_error",
+      "anthropicType": "rate_limit_error",
+      "message": "Too many concurrent requests for this API key. Wait for a running request to finish.",
+      "param": null,
+      "retryAfter": true,
+      "copy": {
+        "zh-CN": {
+          "title": "并发请求过多",
+          "explanation": "此密钥正在进行的请求数已达上限。",
+          "steps": [
+            "等待正在进行的请求完成后再发送新的请求。"
+          ]
+        },
+        "en-US": {
+          "title": "Too many requests at once",
+          "explanation": "This key already has as many requests running as it is allowed.",
+          "steps": [
+            "Wait for a running request to finish before sending another."
+          ]
+        }
+      }
+    },
+    {
+      "code": "insufficient_quota",
+      "status": 429,
+      "anthropicStatus": 429,
+      "openaiType": "insufficient_quota",
+      "anthropicType": "rate_limit_error",
+      "message": "The quota for this API key is used up. It resets at the start of the next period.",
+      "param": null,
+      "retryAfter": true,
+      "copy": {
+        "zh-CN": {
+          "title": "额度已用完",
+          "explanation": "此密钥的每日、每月或计费额度已经用完。",
+          "steps": [
+            "等待额度重置，retry-after 响应头给出了剩余时间。",
+            "如需更多额度，请联系服务管理员。"
+          ]
+        },
+        "en-US": {
+          "title": "Quota used up",
+          "explanation": "This key has used up its daily, monthly or billing quota.",
+          "steps": [
+            "Wait for the quota to reset; the retry-after header gives the time.",
+            "Ask the service owner for a larger quota."
+          ]
+        }
+      }
+    },
+    {
+      "code": "overloaded",
+      "status": 503,
+      "anthropicStatus": 529,
+      "openaiType": "server_error",
+      "anthropicType": "overloaded_error",
+      "message": "The service is at capacity. Retry shortly.",
+      "param": null,
+      "retryAfter": true,
+      "copy": {
+        "zh-CN": {
+          "title": "服务繁忙",
+          "explanation": "公共容量当前已全部占用。",
+          "steps": [
+            "请几秒后重试。"
+          ]
+        },
+        "en-US": {
+          "title": "Service at capacity",
+          "explanation": "All public capacity is in use right now.",
+          "steps": [
+            "Retry in a few seconds."
+          ]
+        }
+      }
+    },
+    {
+      "code": "model_unavailable",
+      "status": 503,
+      "anthropicStatus": 503,
+      "openaiType": "server_error",
+      "anthropicType": "api_error",
+      "message": "The requested model is not available right now. Check the service status page.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "模型暂不可用",
+          "explanation": "请求的模型存在，但当前没有运行。",
+          "steps": [
+            "查看状态页，稍后再试。"
+          ]
+        },
+        "en-US": {
+          "title": "Model not available",
+          "explanation": "The requested model exists but is not running right now.",
+          "steps": [
+            "Check the status page, then retry later."
+          ]
+        }
+      }
+    },
+    {
+      "code": "service_unavailable",
+      "status": 503,
+      "anthropicStatus": 503,
+      "openaiType": "server_error",
+      "anthropicType": "api_error",
+      "message": "The service is temporarily unavailable. Check the service status page.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "服务暂时不可用",
+          "explanation": "服务暂时无法处理请求。",
+          "steps": [
+            "查看状态页，稍后再试。"
+          ]
+        },
+        "en-US": {
+          "title": "Service unavailable",
+          "explanation": "The service is temporarily unable to handle requests.",
+          "steps": [
+            "Check the status page, then retry later."
+          ]
+        }
+      }
+    },
+    {
+      "code": "auth_unavailable",
+      "status": 503,
+      "anthropicStatus": 503,
+      "openaiType": "server_error",
+      "anthropicType": "api_error",
+      "message": "Authentication is temporarily unavailable. Retry shortly.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "认证暂不可用",
+          "explanation": "当前无法校验密钥，出于安全考虑暂时拒绝请求。",
+          "steps": [
+            "查看状态页，稍后再试。"
+          ]
+        },
+        "en-US": {
+          "title": "Authentication unavailable",
+          "explanation": "Keys cannot be checked right now, so requests are refused for safety.",
+          "steps": [
+            "Check the status page, then retry later."
+          ]
+        }
+      }
+    },
+    {
+      "code": "billing_unavailable",
+      "status": 503,
+      "anthropicStatus": 503,
+      "openaiType": "server_error",
+      "anthropicType": "api_error",
+      "message": "Billing is temporarily unavailable. Retry shortly.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "计费暂不可用",
+          "explanation": "当前无法记录用量，计费请求已暂停。",
+          "steps": [
+            "查看状态页，稍后再试。"
+          ]
+        },
+        "en-US": {
+          "title": "Billing unavailable",
+          "explanation": "Usage cannot be recorded right now, so billed requests are paused.",
+          "steps": [
+            "Check the status page, then retry later."
+          ]
+        }
+      }
+    },
+    {
+      "code": "upstream_error",
+      "status": 502,
+      "anthropicStatus": 502,
+      "openaiType": "server_error",
+      "anthropicType": "api_error",
+      "message": "The model service returned an error. Quote the request_id when reporting it.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "模型服务出错",
+          "explanation": "模型服务在处理请求时返回了错误。",
+          "steps": [
+            "重试请求。",
+            "如果持续失败，请把请求 ID 提供给服务管理员。"
+          ]
+        },
+        "en-US": {
+          "title": "Model service error",
+          "explanation": "The model service returned an error while handling the request.",
+          "steps": [
+            "Retry the request.",
+            "If it keeps failing, give the request ID to the service owner."
+          ]
+        }
+      }
+    },
+    {
+      "code": "upstream_timeout",
+      "status": 504,
+      "anthropicStatus": 504,
+      "openaiType": "server_error",
+      "anthropicType": "api_error",
+      "message": "The model service did not respond in time. Quote the request_id when reporting it.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "模型服务超时",
+          "explanation": "模型服务未能及时响应。",
+          "steps": [
+            "长时间生成请使用 stream: true。",
+            "如果持续失败，请把请求 ID 提供给服务管理员。"
+          ]
+        },
+        "en-US": {
+          "title": "Model service timed out",
+          "explanation": "The model service did not answer in time.",
+          "steps": [
+            "Use stream: true for long generations.",
+            "If it keeps failing, give the request ID to the service owner."
+          ]
+        }
+      }
+    },
+    {
+      "code": "internal_error",
+      "status": 500,
+      "anthropicStatus": 500,
+      "openaiType": "server_error",
+      "anthropicType": "api_error",
+      "message": "Internal error. Quote the request_id when reporting it.",
+      "param": null,
+      "retryAfter": false,
+      "copy": {
+        "zh-CN": {
+          "title": "内部错误",
+          "explanation": "服务内部出现了问题。",
+          "steps": [
+            "重试请求。",
+            "如果持续失败，请把请求 ID 提供给服务管理员。"
+          ]
+        },
+        "en-US": {
+          "title": "Internal error",
+          "explanation": "Something went wrong inside the service.",
+          "steps": [
+            "Retry the request.",
+            "If it keeps failing, give the request ID to the service owner."
+          ]
+        }
+      }
+    }
+  ]
+}

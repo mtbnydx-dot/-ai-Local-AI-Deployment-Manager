@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 90,
+  "clients": [
+    {
+      "id": "curl-chat",
+      "name": "curl: chat",
+      "group": "curl",
+      "versionTested": "curl 8.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "bash",
+      "code": "curl {{OPENAI_BASE}}/chat/completions \\\n  -H \"Authorization: Bearer {{KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\": \"{{MODEL}}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "curl-stream",
+      "name": "curl: streaming chat",
+      "group": "curl",
+      "versionTested": "curl 8.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "bash",
+      "code": "curl -N {{OPENAI_BASE}}/chat/completions \\\n  -H \"Authorization: Bearer {{KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\": \"{{MODEL}}\", \"stream\": true, \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "curl-embeddings",
+      "name": "curl: embeddings",
+      "group": "curl",
+      "modality": "embedding",
+      "versionTested": "curl 8.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "bash",
+      "code": "curl {{OPENAI_BASE}}/embeddings \\\n  -H \"Authorization: Bearer {{KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\": \"{{MODEL}}\", \"input\": \"The quick brown fox\"}'",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "curl-tts",
+      "name": "curl: text to speech",
+      "group": "curl",
+      "modality": "audio",
+      "versionTested": "curl 8.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "bash",
+      "code": "curl {{OPENAI_BASE}}/audio/speech \\\n  -H \"Authorization: Bearer {{KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\": \"{{MODEL}}\", \"input\": \"Hello from the local model service.\", \"voice\": \"alloy\"}' \\\n  --output speech.mp3",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "python-openai",
+      "name": "Python: openai",
+      "group": "sdk",
+      "versionTested": "openai-python 1.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "python",
+      "code": "from openai import OpenAI\n\nclient = OpenAI(base_url=\"{{OPENAI_BASE}}\", api_key=\"{{KEY}}\")\n\nreply = client.chat.completions.create(\n    model=\"{{MODEL}}\",\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(reply.choices[0].message.content)",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "node-openai",
+      "name": "Node.js: openai",
+      "group": "sdk",
+      "versionTested": "openai-node 4.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "javascript",
+      "code": "import OpenAI from \"openai\";\n\nconst client = new OpenAI({ baseURL: \"{{OPENAI_BASE}}\", apiKey: \"{{KEY}}\" });\n\nconst reply = await client.chat.completions.create({\n  model: \"{{MODEL}}\",\n  messages: [{ role: \"user\", content: \"Hello\" }],\n});\nconsole.log(reply.choices[0].message.content);",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "python-anthropic",
+      "name": "Python: anthropic",
+      "group": "sdk",
+      "versionTested": "anthropic-sdk-python 0.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "python",
+      "code": "from anthropic import Anthropic\n\nclient = Anthropic(base_url=\"{{ANTHROPIC_BASE}}\", api_key=\"{{KEY}}\")\n\nreply = client.messages.create(\n    model=\"{{MODEL}}\",\n    max_tokens=512,\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(reply.content[0].text)",
+      "fields": [
+        "ANTHROPIC_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "group": "agents",
+      "versionTested": "Claude Code 2.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "bash",
+      "code": "export ANTHROPIC_BASE_URL=\"{{ANTHROPIC_BASE}}\"\nexport ANTHROPIC_AUTH_TOKEN=\"{{KEY}}\"\nexport ANTHROPIC_MODEL=\"{{MODEL}}\"\nclaude",
+      "fields": [
+        "ANTHROPIC_BASE",
+        "KEY",
+        "MODEL"
+      ],
+      "note_zh": "在 PowerShell 中把 export 换成 $env:名称 = \"值\"。",
+      "note_en": "In PowerShell, write $env:NAME = \"value\" instead of export."
+    },
+    {
+      "id": "openwebui",
+      "name": "Open WebUI",
+      "group": "chat",
+      "versionTested": "Open WebUI 0.x",
+      "asOf": "2026-10-15",
+      "kind": "steps",
+      "steps_zh": [
+        "打开 管理员面板 → 设置 → 外部连接（Connections）。",
+        "在 OpenAI API 一栏点「+」，把 URL 填为 {{OPENAI_BASE}}。",
+        "密钥填 {{KEY}}，保存后模型列表会自动出现。"
+      ],
+      "steps_en": [
+        "Open Admin Panel → Settings → Connections.",
+        "Under OpenAI API click \"+\" and set the URL to {{OPENAI_BASE}}.",
+        "Set the key to {{KEY}} and save; the model list fills in by itself."
+      ],
+      "fields": [
+        "OPENAI_BASE",
+        "KEY"
+      ]
+    },
+    {
+      "id": "chatbox",
+      "name": "Chatbox",
+      "group": "chat",
+      "versionTested": "Chatbox 1.x",
+      "asOf": "2026-10-15",
+      "kind": "steps",
+      "steps_zh": [
+        "打开 设置 → 模型提供方，添加自定义提供方，类型选「OpenAI API 兼容」。",
+        "API 域名填 {{BASE}}，API 路径填 /v1/chat/completions。",
+        "API 密钥填 {{KEY}}，模型填 {{MODEL}}。"
+      ],
+      "steps_en": [
+        "Open Settings → Model Provider and add a custom provider of type OpenAI API compatible.",
+        "Set the API host to {{BASE}} and the API path to /v1/chat/completions.",
+        "Set the API key to {{KEY}} and the model to {{MODEL}}."
+      ],
+      "fields": [
+        "BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "cherry-studio",
+      "name": "Cherry Studio",
+      "group": "chat",
+      "versionTested": "Cherry Studio 1.x",
+      "asOf": "2026-10-15",
+      "kind": "steps",
+      "steps_zh": [
+        "打开 设置 → 模型服务，添加提供商，类型选 OpenAI。",
+        "API 地址填 {{BASE}}，API 密钥填 {{KEY}}。",
+        "点「添加」，把模型 ID {{MODEL}} 加进列表。"
+      ],
+      "steps_en": [
+        "Open Settings → Model Services and add a provider of type OpenAI.",
+        "Set the API address to {{BASE}} and the API key to {{KEY}}.",
+        "Click Add and put the model ID {{MODEL}} in the list."
+      ],
+      "fields": [
+        "BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "nextchat",
+      "name": "NextChat",
+      "group": "chat",
+      "versionTested": "NextChat 2.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "bash",
+      "code": "BASE_URL={{BASE}}\nOPENAI_API_KEY={{KEY}}",
+      "fields": [
+        "BASE",
+        "KEY"
+      ],
+      "note_zh": "Web 版需要先在「我的密钥」里把你的网站来源（origin）加入允许列表，浏览器才能跨域调用。",
+      "note_en": "A web deployment must first have its web origin added under My Key, otherwise the browser blocks the cross-origin call."
+    },
+    {
+      "id": "lobechat",
+      "name": "LobeChat",
+      "group": "chat",
+      "versionTested": "LobeChat 1.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "bash",
+      "code": "OPENAI_PROXY_URL={{OPENAI_BASE}}\nOPENAI_API_KEY={{KEY}}",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY"
+      ],
+      "note_zh": "Web 版需要先在「我的密钥」里把你的网站来源（origin）加入允许列表，浏览器才能跨域调用。",
+      "note_en": "A web deployment must first have its web origin added under My Key, otherwise the browser blocks the cross-origin call."
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "group": "editors",
+      "versionTested": "Cursor 1.x",
+      "asOf": "2026-10-15",
+      "kind": "steps",
+      "steps_zh": [
+        "打开 设置 → Models，打开 OpenAI API Key 并填入 {{KEY}}。",
+        "打开「Override OpenAI Base URL」，填 {{OPENAI_BASE}}。",
+        "点「Add Model」添加 {{MODEL}}，再点验证。"
+      ],
+      "steps_en": [
+        "Open Settings → Models and turn on the OpenAI API key; enter {{KEY}}.",
+        "Turn on Override OpenAI Base URL and enter {{OPENAI_BASE}}.",
+        "Click Add Model, add {{MODEL}}, then click Verify."
+      ],
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "continue",
+      "name": "Continue",
+      "group": "editors",
+      "versionTested": "Continue 1.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "yaml",
+      "code": "name: Local Model Service\nversion: 1.0.0\nschema: v1\nmodels:\n  - name: Local Model Service\n    provider: openai\n    model: {{MODEL}}\n    apiBase: {{OPENAI_BASE}}\n    apiKey: {{KEY}}",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ],
+      "note_zh": "保存到 Continue 的 config.yaml。",
+      "note_en": "Save it as Continue's config.yaml."
+    },
+    {
+      "id": "cline",
+      "name": "Cline",
+      "group": "editors",
+      "versionTested": "Cline 3.x",
+      "asOf": "2026-10-15",
+      "kind": "steps",
+      "steps_zh": [
+        "打开 Cline 设置，API Provider 选「OpenAI Compatible」。",
+        "Base URL 填 {{OPENAI_BASE}}，API Key 填 {{KEY}}。",
+        "Model ID 填 {{MODEL}}。"
+      ],
+      "steps_en": [
+        "Open Cline's settings and choose OpenAI Compatible as the API provider.",
+        "Set Base URL to {{OPENAI_BASE}} and API Key to {{KEY}}.",
+        "Set Model ID to {{MODEL}}."
+      ],
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    },
+    {
+      "id": "tts-openai",
+      "name": "Text to speech: openai audio.speech",
+      "group": "tts",
+      "modality": "audio",
+      "versionTested": "openai-python 1.x",
+      "asOf": "2026-10-15",
+      "kind": "code",
+      "language": "python",
+      "code": "from openai import OpenAI\n\nclient = OpenAI(base_url=\"{{OPENAI_BASE}}\", api_key=\"{{KEY}}\")\n\nwith client.audio.speech.with_streaming_response.create(\n    model=\"{{MODEL}}\",\n    voice=\"alloy\",\n    input=\"Hello from the local model service.\",\n) as response:\n    response.stream_to_file(\"speech.mp3\")",
+      "fields": [
+        "OPENAI_BASE",
+        "KEY",
+        "MODEL"
+      ]
+    }
+  ]
+}
