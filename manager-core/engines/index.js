@@ -22,6 +22,7 @@ const legacyAliases = require("./legacy-aliases");
 const memoryModels = require("./memory-models");
 const metrics = require("./metrics");
 const introspect = require("./introspect");
+const logPhases = require("./log-phases");
 const runtimeFacts = require("./runtime-facts");
 const runtimeSupervisor = require("./runtime-supervisor");
 const paramCatalog = require("./param-catalog");
@@ -109,6 +110,10 @@ module.exports = {
   // memoryModels.estimate with artifact inputs and keys calibrations by
   // paramsKey(plan).
   memoryModels,
+  // Descriptor-driven progress stages and measured facts from engine logs (01 §16.2).
+  logPhases,
+  createProgressInferer: logPhases.createProgressInferer,
+  extractLogFacts: logPhases.extractLogFacts,
   estimateMemory: memoryModels.estimate,
   paramsKey: memoryModels.paramsKey,
   MEMORY_CONSTANTS: memoryModels.MEMORY_CONSTANTS,

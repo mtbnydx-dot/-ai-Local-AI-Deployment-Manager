@@ -1,0 +1,12 @@
+[2026-10-14 08:01:03] server_args=ServerArgs(model_path='/models/Example-8B', tp_size=1, mem_fraction_static=0.85, disable_cuda_graph=False, cuda_graph_max_bs=64)
+[2026-10-14 08:01:20 TP0] Init torch distributed begin.
+[2026-10-14 08:01:22 TP0] Load weight begin. avail mem=94.20 GB
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:11<00:00,  2.80s/it]
+[2026-10-14 08:01:35 TP0] Load weight end. type=LlamaForCausalLM, dtype=torch.bfloat16, avail mem=79.31 GB, mem usage=14.89 GB.
+[2026-10-14 08:01:36 TP0] KV Cache is allocated. #tokens: 524288, K size: 31.50 GB, V size: 31.50 GB
+[2026-10-14 08:01:36 TP0] Memory pool end. avail mem=16.20 GB
+[2026-10-14 08:01:37 TP0] max_total_num_tokens=524288, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=2048, context_len=32768
+[2026-10-14 08:01:38 TP0] Capture cuda graph begin. This can take up to several minutes. avail mem=15.90 GB
+[2026-10-14 08:01:50 TP0] Capture cuda graph end. Time elapsed: 12.10 s. mem usage=0.80 GB.
+[2026-10-14 08:01:52] INFO:     Application startup complete.
+[2026-10-14 08:01:53] The server is fired up and ready to roll!

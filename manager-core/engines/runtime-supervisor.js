@@ -52,6 +52,7 @@
 const { summarizeJob } = require("../job-routes");
 const runtimeManifest = require("../runtime-manifest");
 const { waitForRuntimeReady } = require("../runtime-wait");
+const { createProgressInferer, extractLogFacts, mergeLogFacts } = require("./log-phases");
 const { probeOpenAiGeneration } = require("../runtime-request-utils");
 const { redactSecrets } = require("../secret-redactor");
 
@@ -87,6 +88,7 @@ const STAGE_FAILURE_CODES = Object.freeze({
   commit: "commit_failed",
 });
 
+const FACT_LOG_LINES = 2000;
 const LOG_EXCERPT_LINES = 40;
 const LOG_EXCERPT_BYTES = 4096;
 const APIKEY_REF_LABEL = "ai.manager.api-key-ref";
@@ -362,6 +364,8 @@ function createRuntimeSupervisor(options = {}) {
   const timeouts = options.timeouts || {};
   const texts = { ...DEFAULT_TEXTS, ...(options.texts || {}) };
   const launchStore = options.launchStore || null;
+  // The engine registry whose descriptors carry logPhases and logFacts (01 §16.2).
+  const registry = options.registry || null;
   const events = options.events || null;
   const secrets = options.secrets || null;
   const admission = options.admission || null;
@@ -718,6 +722,26 @@ function createRuntimeSupervisor(options = {}) {
     assertActive(job);
   }
 
+  function descriptorOf(run) {
+    try {
+      return registry && run.engineId ? registry.get(run.engineId) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Folds the facts in a log window into state.logFacts (01 §16.2). A log read
+  // is never fatal to the launch, so a bad pattern or an odd payload is dropped.
+  function captureLogFacts(state, descriptor, logs) {
+    if (!descriptor?.logFacts?.length) return;
+    try {
+      const text = typeof logs === "string" ? logs : logs && typeof logs === "object" ? `${logs.stdout || ""}${logs.stderr || ""}` : "";
+      state.logFacts = mergeLogFacts(state.logFacts, extractLogFacts(descriptor, text));
+    } catch {
+      // facts are best-effort evidence
+    }
+  }
+
   async function waitReady(job, run, state) {
     state.stageKey = "waitReady";
     const waitOptions = run.wait || {};
@@ -726,6 +750,10 @@ function createRuntimeSupervisor(options = {}) {
       stage: texts.loadingStage,
       detail: textOf(waitOptions.loadingDetail) || texts.loadingDetail(run),
     });
+    const descriptor = descriptorOf(run);
+    const inferProgress = typeof waitOptions.inferProgress === "function"
+      ? waitOptions.inferProgress
+      : descriptor?.logPhases?.length ? createProgressInferer(descriptor) : undefined;
     const startupTimeoutMs = Number(waitOptions.startMs ?? timeouts.startMs) || 30 * 60 * 1000;
     const stallSource = waitOptions.stallMs ?? timeouts.stallMs;
     const stallTimeoutMs = typeof stallSource === "function" ? Number(stallSource(run)) || 0 : Number(stallSource) || 0;
@@ -764,8 +792,12 @@ function createRuntimeSupervisor(options = {}) {
         ? () => fetchServedModels(run.port, waitOptions.apiKey)
         : async () => [],
       getContainerStatus,
-      readLogs: (name, readOptions) => host.logs(name, readOptions),
-      inferProgress: waitOptions.inferProgress,
+      readLogs: async (name, readOptions) => {
+        const logs = await host.logs(name, readOptions);
+        captureLogFacts(state, descriptor, logs);
+        return logs;
+      },
+      inferProgress,
       extractLogIssues: waitOptions.extractLogIssues || (() => []),
       setJobProgress: (target, patch = {}) => {
         const phase = waitPhaseOf(patch.stage) || target.lifecycle?.phase || "weights";
@@ -782,6 +814,11 @@ function createRuntimeSupervisor(options = {}) {
       noLogIssue: waitOptions.noLogIssue,
       pollDetail: waitOptions.pollDetail,
     });
+    // The wait only sees a short tail; one deeper read catches facts that
+    // scrolled out between polls (weights and KV lines come early).
+    if (descriptor?.logFacts?.length && typeof host.logs === "function") {
+      captureLogFacts(state, descriptor, await Promise.resolve(host.logs(run.containerName, { tail: FACT_LOG_LINES })).catch(() => ""));
+    }
     return readyMeta || {};
   }
 
