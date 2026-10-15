@@ -154,7 +154,7 @@ test("the skip link reaches the main landmark and a classic link leaves the cons
     await page.keyboard.press("Enter");
     await expect(page.locator("#main")).toBeFocused();
     expect(new URL(page.url()).hash).toBe("#main");
-    await expect(byId(page, "sidebar.classic")).toHaveAttribute("href", "/classic");
+    await expect(byId(page, "sidebar.classic"), "the classic console is retired (CON-28)").toHaveCount(0);
   } finally {
     await context.close();
   }
@@ -218,7 +218,6 @@ test("a page that is not in the build shows the still-being-built page, and a re
     await context.route("**/routes/setup.js", (route) => route.fulfill({ status: 404, contentType: "text/plain", body: "not found" }));
     await page.goto(`${entry.url}setup`);
     await expect(byId(page, "app-shell.pending")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open the classic console" })).toHaveAttribute("href", "/classic");
     await expect(byId(page, "app-shell.update")).toHaveCount(0);
 
     // Leave the unbuilt page first: the link of the page already shown does not navigate.

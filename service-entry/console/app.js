@@ -33,7 +33,7 @@ const BOOTSTRAP_ELEMENT_ID = "console-bootstrap";
 const APP_ELEMENT_ID = "app";
 const LOCALES = Object.freeze(["zh-CN", "en-US"]);
 const DEFAULT_LOCALE = "zh-CN";
-const CLASSIC_HREF = "/classic";
+const RELOAD_HREF = "/overview";
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -86,15 +86,15 @@ function paragraph(doc, value) {
   return node;
 }
 
-/** The page shown when the console cannot start: the product name and the way back to the classic console. */
+/** The page shown when the console cannot start: the product name and a way to try again. */
 export function renderHoldingPage(doc, root, catalog, { failed = true } = {}) {
   const main = doc.createElement("main");
   main.className = "console-holding";
   const heading = doc.createElement("h1");
   heading.textContent = text(catalog, "shell.product");
   const link = doc.createElement("a");
-  link.href = CLASSIC_HREF;
-  link.textContent = text(catalog, "shell.boot.openClassic");
+  link.href = RELOAD_HREF;
+  link.textContent = text(catalog, "shell.boot.reload");
   const action = doc.createElement("p");
   action.append(link);
   main.append(heading, paragraph(doc, text(catalog, failed ? "shell.boot.failed" : "shell.boot.preview")), action);

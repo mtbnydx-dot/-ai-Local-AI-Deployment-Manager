@@ -43,7 +43,6 @@ export function Sidebar({ groups, role = "viewer", section = null, collapsed = f
       </div>`)}
     </div>
     <div class="sidebar-foot">
-      <a class="nav-link nav-small" href="/classic" data-testid="sidebar.classic"><span class=${compact ? "sr-only" : "nav-label"}>${t("shell.classic")}</span><${Icon} name="external-link" size="sm" /></a>
       ${drawer ? null : collapsed
         ? html`<${Button} ...${toggle} icon="panel-left-open" aria-expanded="false" />`
         : html`<${Button} ...${toggle} icon="panel-left-close" aria-expanded="true" />`}

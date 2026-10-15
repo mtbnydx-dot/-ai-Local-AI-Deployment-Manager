@@ -22,7 +22,8 @@
 //
 // Routes (§2.4): / (the shell when the default UI is "new", otherwise
 // declined so the inline classic handler answers), the SPA prefixes with an
-// HTML Accept, /classic, /billing/classic, /c/<buildId>/… and
+// HTML Accept, /classic (a redirect to /overview since CON-28, the old page only
+// while no snapshot exists), /billing/classic, /c/<buildId>/… and
 // GET /api/console/bootstrap. The default UI is 06's console.defaultUi,
 // with SERVICE_ENTRY_CONSOLE_DEFAULT taking precedence (OPS-3 resolves it),
 // and ?ui=new|classic overrides it for one request of /.
@@ -832,6 +833,13 @@ function createConsoleRoutes(options = {}) {
       return true;
     }
     if (pathname === "/classic") {
+      // Retired (CON-28): the console answers. With no snapshot at all the old
+      // page is still the last resort, so a broken build never leaves a blank.
+      if (await refresh({ force: dev })) {
+        res.writeHead(302, { location: "/overview", ...PAGE_HEADERS });
+        res.end();
+        return true;
+      }
       await servePage(res, classicHtml);
       return true;
     }

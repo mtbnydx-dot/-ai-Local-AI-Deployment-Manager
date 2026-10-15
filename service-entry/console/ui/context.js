@@ -11,6 +11,13 @@ import { createContext, useContext } from "./vendor.js";
 
 export const ServicesContext = createContext(null);
 
+/**
+ * The level a heading nested at this point of a page should have (axe
+ * heading-order): a page's own content sits under its h1, so 2; a Card gives
+ * its children title level + 1. EmptyState reads it when no level is passed.
+ */
+export const HeadingLevelContext = createContext(2);
+
 const REQUIRED = ["api", "cache", "i18n"];
 
 /**
