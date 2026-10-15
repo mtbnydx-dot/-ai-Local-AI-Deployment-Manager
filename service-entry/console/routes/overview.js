@@ -8,8 +8,8 @@
 // Before 04 (no `features.telemetry`) the tiles fall back to the entry's own
 // gateway log and say so: tiles 1 and 2 read GET /api/gateway-access over the
 // last 2,000 log lines, tile 3 shows "—", and the activity comes from the
-// event ring (/api/events/recent) since the entry started. The builders below
-
+// event ring (/api/events/recent) since the entry started. The pure builders live
+// in lib/overview-model.js.
 
 import { tk } from "../lib/i18n.js";
 import {
