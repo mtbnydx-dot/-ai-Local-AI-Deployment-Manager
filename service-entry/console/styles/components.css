@@ -851,6 +851,52 @@ dialog::backdrop {
 .compat-evidence li { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .compat-why summary { cursor: pointer; font-weight: 600; }
 
+/* ---- Deployment wizard: step 3 resources, plan cards, fit bar, fit solver (CON-11b) ---- */
+.wizard-res { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+@media (min-width: 1024px) {
+  .wizard-res { grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); }
+}
+.wizard-res-main { min-width: 0; }
+.wizard-res-panel { position: sticky; top: var(--sp-4); min-width: 0; max-height: calc(100vh - var(--sp-8)); overflow: auto; }
+.wizard-res-chip { position: sticky; bottom: var(--sp-3); z-index: var(--z-sticky); display: flex; justify-content: flex-end; pointer-events: none; }
+.wizard-res-chip-btn { pointer-events: auto; cursor: pointer; border-color: var(--border-strong); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.wizard-gpu-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.wizard-gpu-card { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); width: 100%; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text); text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+.wizard-gpu-card:hover { border-color: var(--border-strong); }
+.wizard-gpu-card[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent); }
+.goal-chip { cursor: pointer; border-color: var(--border-strong); }
+.goal-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.goal-chip:disabled { cursor: not-allowed; color: var(--text-muted); }
+.plan-set-title { font-size: var(--fs-md); }
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.plan-card { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-1); }
+.plan-card[data-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.plan-card[data-validated="failed"] { border-inline-start: 4px solid var(--danger); }
+.plan-card[data-validated="ok"] { border-inline-start: 4px solid var(--success); }
+.plan-card-title { overflow-wrap: anywhere; }
+.plan-card-head { align-items: center; gap: var(--sp-2); }
+.plan-card-foot { margin-block-start: auto; align-items: center; }
+.plan-card-sub { margin: 0; font-weight: 600; }
+.plan-card-errors, .plan-tradeoffs, .plan-notes { margin: 0; padding-inline-start: var(--sp-4); }
+.plan-values { display: grid; gap: 2px; margin: 0; }
+.plan-values > div { display: flex; justify-content: space-between; gap: var(--sp-3); }
+.plan-values dt { overflow-wrap: anywhere; }
+.plan-values dd { margin: 0; text-align: end; }
+.fit-bar { display: grid; gap: var(--sp-2); min-width: 0; }
+.fit-bar-ram { min-width: 0; }
+.sf-extras .sf-fit { flex: 1 1 100%; min-width: 0; }
+.fit-solver-title { margin: 0; font-size: var(--fs-md); }
+.fit-grid th, .fit-grid td { vertical-align: top; }
+.fit-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-width: 88px; padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text); text-align: start; cursor: pointer; }
+.fit-cell:hover:not(:disabled) { border-color: var(--border-strong); }
+.fit-cell-fits { border-inline-start: 4px solid var(--success); }
+.fit-cell-spill { border-inline-start: 4px solid var(--warn); }
+.fit-cell-none { border-inline-start: 4px solid var(--danger); background: var(--surface-2); color: var(--text-muted); cursor: not-allowed; }
+.fit-cell[data-current="true"] { box-shadow: 0 0 0 2px var(--accent); }
+.fit-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.fit-delta-save { color: var(--success-ink); }
+.fit-delta-cost { color: var(--warn-ink); }
+
 /* DiffTable: removed values struck through, new values bold. */
 .diff-table th[scope="row"] { text-align: start; font-weight: 600; }
 

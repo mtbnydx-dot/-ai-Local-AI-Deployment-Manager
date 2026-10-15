@@ -11,6 +11,13 @@
 // sessionStorage never holds a secret or an extraEnv value; leaving asks
 // before the draft is discarded. The real service-entry serves the console;
 // the API is mocked in the browser (helpers/console-harness.js).
+//
+// Part 2 (CON-11b; 02 §18 R-UI-3, R-UI-4) is step 3: instance, GPUs, goal chips
+// that call launch/recommend and show plan cards (validated state, trade-offs,
+// a fit bar), a pick that shows a diff before Apply sets the planner provenance,
+// the fit bar under contextLength that follows the plan, the fit solver over a
+// mocked fit-grid with its suggestion-chip fallback on 404, a label for every
+// memory policy, the RAM bar on a spill, and the copy in both languages.
 const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -644,6 +651,492 @@ for (const [sizeName, size] of Object.entries(SIZES)) {
         await row(page, "lmdeploy").locator('[data-testid="compat.override"]').click();
         await expect(byId(page, "wizard.engine.warn")).toBeVisible();
         await expectNoA11yViolations(page, { label: `wizard warning dialog ${theme} ${sizeName}` });
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Part 2: step 3, resources, plans and fit (CON-11b)
+
+const RES_DRAFT_ID = "wd_resources0001";
+const POLICIES = ["device-fraction", "static-fraction-of-free", "free-fraction-after-weights", "weights-plus-kv", "gguf-estimate", "measured", "server-reported"];
+const POLICY_LABEL = {
+  "device-fraction": ["Fraction of the whole GPU", "整卡比例"],
+  "static-fraction-of-free": ["Fraction of free memory", "空闲显存比例"],
+  "free-fraction-after-weights": ["Fraction left after the weights", "权重后剩余比例"],
+  "weights-plus-kv": ["Weights plus KV", "权重加 KV"],
+  "gguf-estimate": ["GGUF estimate", "GGUF 估算"],
+  measured: ["Measured on this host", "本机实测"],
+  "server-reported": ["Reported by the engine", "引擎上报"],
+};
+const RAW_KEY_2 = /\bmodels\.(?:wizard|card|compat|confidence|role|verdict|remoteCode|goal|fit|plan)\.[A-Za-z]/;
+
+function resourcesDraft(patch = {}) {
+  return JSON.stringify({
+    v: 1,
+    id: RES_DRAFT_ID,
+    step: "resources",
+    modelRef: { kind: "local", entryId: null, path: "C:/fixture/models/example-MadeUp-7B", cardId: MAIN },
+    engineId: "vllm",
+    managerId: "vllm",
+    runtimeId: "vllm@0.28.0",
+    gpus: ["0"],
+    ...patch,
+  });
+}
+
+function resourcesState() {
+  return { ...createState(), plan: "plan-resources", policy: "static-fraction-of-free", spill: false, grid: true, recommend: 200, busyPorts: [], blockAbove: 64000 };
+}
+
+// The launch plan the mocked manager answers: the memory follows the context length asked for, so the fit bar has something to follow.
+function resourcesPlan(state, body) {
+  const plan = wizard("plan-resources");
+  const asked = body?.values?.contextLength;
+  const context = Number(asked && typeof asked === "object" ? asked.value : asked) || 131072;
+  const kv = Math.round((20000 * context) / 131072);
+  const total = 30000 + kv + 8000 + 1000 + 500 + 500;
+  plan.values.contextLength = { value: context, source: asked ? "user" : "engine-default" };
+  Object.assign(plan.memory.breakdown, { kv });
+  plan.memory.perGpuMb = { 0: total };
+  plan.memory.admissionRequestMb = total;
+  plan.memory.headroomMb = Math.max(0, 64000 - total);
+  plan.memory.policy = state.policy;
+  if (state.spill) {
+    plan.memory.spill = true;
+    plan.memory.ram = { weights: 0, experts: 2048, kv: 0 };
+  }
+  plan.admission = total > state.blockAbove ? { verdict: "block", message: "The reservation is larger than the free memory." } : { verdict: "ok", message: "" };
+  return plan;
+}
+
+function resourcesApi(state, extra = {}) {
+  return {
+    "POST /api/m/vllm/launch/plan": (request, route, record) => resourcesPlan(state, record.body),
+    "POST /api/m/llama/launch/plan": () => fixture("plan-llamacpp"),
+    "GET /api/m/llama/engines/llamacpp/schema": fixture("schema-llamacpp"),
+    "GET /api/m/vllm/port-check": (request, route, record) => {
+      const port = Number(record.query.port);
+      return state.busyPorts.includes(port) ? { port, available: false, reason: "os", detail: `Port ${port} is used by another process.` } : { port, available: true, detail: `Port ${port} is free.` };
+    },
+    "POST /api/launch/recommend": () => (state.recommend === 200 ? wizard("recommend") : { status: state.recommend, body: { ok: false, error: { code: state.recommend === 404 ? "endpoint_unavailable" : "internal_error", message: "No." } } }),
+    [`POST /api/models/${MAIN}/fit-grid`]: () => (state.grid ? wizard("fit-grid") : NOT_FOUND),
+    ...extra,
+  };
+}
+
+async function openResources({ browser, state = resourcesState(), draft, api = {}, size, theme, locale }) {
+  const made = await newPage(browser, { api: resourcesApi(state, api), state, size, theme, locale, storage: { "console.wizard.draft": resourcesDraft(draft) } });
+  await open(made.page);
+  await expect(byId(made.page, "wizard")).toHaveAttribute("data-step", "resources");
+  await expect(byId(made.page, "wizard.step.resources")).toBeVisible();
+  return made;
+}
+
+const contextInput = (page) => page.locator('[data-field="contextLength"] [data-testid="schema-form.number"]');
+const lastPlanBody = (mock) => planCalls(mock).at(-1)?.body;
+const draftOf = async (page) => JSON.parse(await storedDraft(page));
+const recommendCalls = (mock) => callsTo(mock, "POST", "/api/launch/recommend");
+const goal = (page, name) => page.locator(`[data-testid="wizard.res.goal"][data-goal="${name}"]`);
+const card = (page, planId) => page.locator(`[data-testid="plan-cards.card"][data-plan-id="${planId}"]`);
+const cellRows = (dialog) => dialog.locator('[data-testid="diff-table.row"]').evaluateAll((trs) => trs.map((tr) => [...tr.querySelectorAll("th, td")].map((cell) => cell.textContent.trim())));
+
+test("step 3: instance, GPU cards, goal chips, settings and the resource panel are in place; the port is checked live", async ({ browser }) => {
+  const state = resourcesState();
+  state.busyPorts = [8001];
+  const { context, page, mock, failures } = await openResources({ browser, state });
+  try {
+    await expect(byId(page, "wizard.res.instance")).toBeVisible();
+    await expect(page.locator('[data-testid="wizard.res.mode-option"][data-mode="replace"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(byId(page, "wizard.res.gpu")).toHaveCount(2);
+    await expect(page.locator('[data-testid="wizard.res.gpu"][data-gpu="0"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-testid="wizard.res.gpu"][data-gpu="0"]')).toContainText("88 GiB free of 96 GiB");
+    await expect(page.locator('[data-testid="wizard.res.gpu"][data-gpu="0"]')).toContainText("8 GiB used by others");
+    await expect(byId(page, "wizard.res.goal")).toHaveCount(4);
+    await expect(byId(page, "wizard.res.goal").first()).toHaveText("Longest context");
+    await expect(byId(page, "wizard.res.goal").nth(2)).toHaveText("High throughput");
+    // The form shows this step's groups only.
+    await expect(contextInput(page)).toBeVisible();
+    await expect(page.locator('[data-field="reasoningParser"]')).toHaveCount(0);
+    // The plan drives the panel: verdict, GPU bar, KV pool and the policy label.
+    await expect(byId(page, "wizard.res.verdict")).toContainText("Fits");
+    await expect(byId(page, "wizard.res.gpu-bar")).toHaveCount(1);
+    await expect(byId(page, "wizard.res.kv-pool")).toHaveText("Reserves 58.6 GiB → KV pool ≈ 19.5 GiB ≈ 200,000 tokens ≈ 3 full-length requests");
+    // The port is checked as it is typed (debounced), and a taken port says so.
+    await byId(page, "wizard.res.port").fill("8002");
+    await expect(byId(page, "wizard.res.port-status")).toHaveAttribute("data-state", "free");
+    await byId(page, "wizard.res.port").fill("8001");
+    await expect(byId(page, "wizard.res.port-status")).toHaveAttribute("data-state", "busy");
+    await expect(byId(page, "wizard.res.port-status")).toContainText("The port is taken: Port 8001 is used by another process.");
+    expect(callsTo(mock, "GET", "/api/m/vllm/port-check").map((call) => call.query.port)).toEqual(["8002", "8001"]);
+    await expect.poll(async () => (await draftOf(page)).instance.port).toBe(8001);
+    // A second GPU joins the set, and the plan is asked again for both.
+    await page.locator('[data-testid="wizard.res.gpu"][data-gpu="1"]').click();
+    await expect.poll(async () => (await draftOf(page)).gpus).toEqual(["0", "1"]);
+    await expect.poll(() => lastPlanBody(mock)?.instance?.gpuIds).toEqual(["0", "1"]);
+    // Parallel mode drops the replace target.
+    await expect(byId(page, "wizard.res.target")).toBeVisible();
+    await page.locator('[data-testid="wizard.res.mode-option"][data-mode="parallel"]').click();
+    await expect(byId(page, "wizard.res.target")).toHaveCount(0);
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a goal chip calls launch/recommend; the cards show validated state, trade-offs and a fit bar, and hand catalog ids over unchanged (R-UI-3, R-UI-4)", async ({ browser }) => {
+  const { context, page, mock, failures } = await openResources({ browser });
+  try {
+    expect(recommendCalls(mock)).toHaveLength(0);
+    await goal(page, "balanced").click();
+    await expect(byId(page, "plan-cards.card")).toHaveCount(3);
+    expect(recommendCalls(mock)).toHaveLength(1);
+    expect(recommendCalls(mock)[0].body).toEqual({ cardId: MAIN, goal: "balanced", gpuSets: [["0"]] });
+    await expect(goal(page, "balanced")).toHaveAttribute("aria-pressed", "true");
+    await expect(byId(page, "plan-cards.set")).toHaveAttribute("data-gpus", "0");
+    await expect(byId(page, "wizard.res.plan-notes")).toContainText("Plans are estimated on empty GPUs.");
+    // validated: ok, null (not validated) and failed with its errors.
+    await expect(card(page, "pl_1").locator('[data-testid="plan-cards.validated"]')).toHaveAttribute("data-state", "ok");
+    await expect(card(page, "pl_1")).toContainText("Validated");
+    await expect(card(page, "pl_2").locator('[data-testid="plan-cards.validated"]')).toHaveAttribute("data-state", "unvalidated");
+    await expect(card(page, "pl_2")).toContainText("Not validated");
+    await expect(card(page, "pl_3").locator('[data-testid="plan-cards.validated"]')).toHaveAttribute("data-state", "failed");
+    await expect(card(page, "pl_3")).toContainText("Validation failed");
+    await expect(card(page, "pl_3").locator('[data-testid="plan-cards.errors"]')).toContainText("The context is above the model's native limit.");
+    // Trade-offs, engine@runtime and the title.
+    await expect(card(page, "pl_1").locator('[data-testid="plan-cards.tradeoffs"]')).toContainText("The KV cache uses fp8");
+    await expect(card(page, "pl_2").locator('[data-testid="plan-cards.engine"]')).toHaveText("llamacpp@b6000");
+    await expect(card(page, "pl_1").locator('[data-testid="plan-cards.title"]')).toContainText("vLLM · 256K context");
+    // Each card has a fit bar with the six segments; a spill adds the RAM bar.
+    await expect(card(page, "pl_1").locator('[data-testid="fit-bar.segment"]')).toHaveCount(6);
+    await expect(card(page, "pl_1").locator('[data-testid="fit-bar.ram"]')).toHaveCount(0);
+    await expect(card(page, "pl_2").locator('[data-testid="fit-bar.ram"]')).toBeVisible();
+    await expect(card(page, "pl_2").locator('[data-testid="fit-bar.spill"]')).toContainText("Some weights or KV sit in system RAM; expect lower speed");
+    // The catalog ids are the planner's, not renamed.
+    const params = await card(page, "pl_2").locator('[data-testid="plan-cards.value"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-param")));
+    expect(params).toEqual(["contextLength", "concurrency", "llamacpp.cacheTypeK", "llamacpp.nCpuMoe"]);
+    // Choosing another goal asks again.
+    await goal(page, "throughput").click();
+    await expect.poll(() => recommendCalls(mock).length).toBe(2);
+    expect(recommendCalls(mock)[1].body.goal).toBe("throughput");
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a pick shows a diff first; only Apply copies the values in, marked planner (provenance), and the plan request carries them", async ({ browser }) => {
+  const { context, page, mock, failures } = await openResources({ browser });
+  try {
+    await goal(page, "balanced").click();
+    await card(page, "pl_1").locator('[data-testid="plan-cards.pick"]').click();
+    const dialog = byId(page, "wizard.res.diff");
+    await expect(dialog).toBeVisible();
+    await expect(byId(page, "wizard.res.engine-change")).toHaveCount(0);
+    // The diff is against the current values: context 131072 → 262144, concurrency 1 → 4, KV auto → fp8.
+    expect(await cellRows(dialog)).toEqual([
+      ["Context length (per request)", "131072", "262144", "planner"],
+      ["Max concurrent requests", "1", "4", "planner"],
+      ["KV cache precision", "auto", "fp8", "planner"],
+    ]);
+    // Nothing is applied yet.
+    expect((await draftOf(page)).values ?? {}).toEqual({});
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    expect((await draftOf(page)).values ?? {}).toEqual({});
+    // Apply.
+    await card(page, "pl_1").locator('[data-testid="plan-cards.pick"]').click();
+    await byId(page, "wizard.res.diff").getByRole("button", { name: "Apply plan" }).click();
+    await expect(byId(page, "wizard.res.diff")).toBeHidden();
+    const stored = await draftOf(page);
+    expect(stored.values).toEqual({
+      contextLength: { value: 262144, source: "planner" },
+      concurrency: { value: 4, source: "planner" },
+      kvCacheDtype: { value: "fp8", source: "planner" },
+    });
+    expect(stored.goal).toBe("balanced");
+    expect(stored.gpus).toEqual(["0"]);
+    await expect(card(page, "pl_1")).toHaveAttribute("data-selected", "true");
+    // The form shows the planner provenance and the next plan request carries it.
+    await expect(page.locator('[data-field="contextLength"]')).toHaveAttribute("data-source", "planner");
+    await expect(contextInput(page)).toHaveValue("262144");
+    await expect.poll(() => lastPlanBody(mock)?.values?.contextLength).toEqual({ value: 262144, source: "planner" });
+    expect(lastPlanBody(mock).values.kvCacheDtype).toEqual({ value: "fp8", source: "planner" });
+    // Editing an applied value makes it the user's own.
+    await contextInput(page).fill("65536");
+    await expect.poll(async () => (await draftOf(page)).values.contextLength).toBe(65536);
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a plan of another engine confirms the engine change first, then shows the diff; Apply switches engine, runtime and manager", async ({ browser }) => {
+  const { context, page, mock, failures } = await openResources({ browser, draft: { values: { "vllm.cpuOffloadGb": 4, contextLength: 4096 } } });
+  try {
+    await goal(page, "balanced").click();
+    await card(page, "pl_2").locator('[data-testid="plan-cards.pick"]').click();
+    const confirm = byId(page, "wizard.res.engine-change");
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toContainText("This plan runs on llamacpp@b6000; you chose vllm@0.28.0.");
+    await expect(byId(page, "wizard.res.diff")).toHaveCount(0);
+    await confirm.getByRole("button", { name: "Review the changes" }).click();
+    const dialog = byId(page, "wizard.res.diff");
+    await expect(dialog).toBeVisible();
+    const first = dialog.locator('[data-testid="diff-table.row"]').first();
+    await expect(first).toContainText("Engine");
+    await expect(first).toContainText("vllm@0.28.0");
+    await expect(first).toContainText("llamacpp@b6000");
+    expect((await draftOf(page)).engineId).toBe("vllm");
+    await dialog.getByRole("button", { name: "Apply plan" }).click();
+    await expect.poll(async () => (await draftOf(page)).engineId).toBe("llamacpp");
+    const stored = await draftOf(page);
+    expect(stored).toMatchObject({ managerId: "llama", runtimeId: "llamacpp@b6000", recipeId: "", goal: "balanced", gpus: ["0"] });
+    expect(stored.values["llamacpp.nCpuMoe"]).toEqual({ value: 2, source: "planner" });
+    expect(stored.values).not.toHaveProperty("vllm.cpuOffloadGb");
+    expect(stored.values.contextLength).toEqual({ value: 65536, source: "planner" });
+    // The plan is now asked of the llama manager.
+    await expect.poll(() => callsTo(mock, "POST", "/api/m/llama/launch/plan").length).toBeGreaterThan(0);
+    expect(callsTo(mock, "POST", "/api/m/llama/launch/plan").at(-1).body).toMatchObject({ engineId: "llamacpp", runtimeId: "llamacpp@b6000" });
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("cancelling the engine change leaves the draft untouched", async ({ browser }) => {
+  const { context, page } = await openResources({ browser });
+  try {
+    await goal(page, "balanced").click();
+    await card(page, "pl_2").locator('[data-testid="plan-cards.pick"]').click();
+    await byId(page, "wizard.res.engine-change").getByRole("button", { name: "Cancel" }).click();
+    await expect(byId(page, "wizard.res.engine-change")).toBeHidden();
+    await expect(byId(page, "wizard.res.diff")).toHaveCount(0);
+    expect(await draftOf(page)).toMatchObject({ engineId: "vllm", managerId: "vllm" });
+  } finally {
+    await context.close();
+  }
+});
+
+test("recommend failures: a missing endpoint says so, an error is a banner with Retry", async ({ browser }) => {
+  const state = resourcesState();
+  state.recommend = 404;
+  const { context, page, mock } = await openResources({ browser, state });
+  try {
+    await goal(page, "low-vram").click();
+    await expect(byId(page, "wizard.res.goal-unavailable")).toHaveText("This platform version cannot recommend plans yet.");
+    state.recommend = 500;
+    await goal(page, "balanced").click();
+    await expect(byId(page, "wizard.res.goal-error")).toBeVisible();
+    state.recommend = 200;
+    await byId(page, "wizard.res.goal-retry").click();
+    await expect(byId(page, "plan-cards.card")).toHaveCount(3);
+    expect(recommendCalls(mock).map((call) => call.body.goal)).toEqual(["low-vram", "balanced", "balanced"]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("the fit bar under contextLength follows the debounced plan (R-UI-3)", async ({ browser }) => {
+  const { context, page, mock, failures } = await openResources({ browser });
+  try {
+    const bar = byId(page, "wizard.res.context-fitbar");
+    await expect(bar).toBeVisible();
+    await expect(page.locator('[data-field="contextLength"] [data-testid="wizard.res.context-fitbar"]')).toHaveCount(1);
+    await expect(bar.locator('[data-testid="fit-bar.segment"]')).toHaveCount(6);
+    const kinds = await bar.locator('[data-testid="fit-bar.segment"]').evaluateAll((spans) => spans.map((span) => span.getAttribute("data-kind")));
+    expect(kinds).toEqual(["weights", "kv", "activations", "draft", "mmproj", "headroom"]);
+    await expect(bar).toHaveAttribute("data-used", "60000");
+    await expect(bar.locator('[data-kind="kv"]').first()).toHaveAttribute("data-mb", "20000");
+    await expect(bar.locator('[data-testid="fit-bar.legend"][data-kind="activations"]')).toContainText("Activations & graphs");
+    // A longer context: the plan is asked once more (debounced), the KV segment grows and the verdict turns.
+    const before = planCalls(mock).length;
+    await contextInput(page).fill("262144");
+    await expect(bar).toHaveAttribute("data-used", "80000");
+    await expect(bar.locator('[data-kind="kv"]').first()).toHaveAttribute("data-mb", "40000");
+    expect(planCalls(mock).length - before).toBe(1);
+    await expect(byId(page, "wizard.res.verdict")).toContainText("Does not fit");
+    await expect(byId(page, "wizard.res.admission-message")).toContainText("The reservation is larger than the free memory.");
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a spill adds the RAM bar and the spill note to the fit bar and the resource panel", async ({ browser }) => {
+  const state = resourcesState();
+  const { context, page } = await openResources({ browser, state });
+  try {
+    await expect(byId(page, "fit-bar.ram")).toHaveCount(0);
+    state.spill = true;
+    await contextInput(page).fill("131071");
+    await expect(byId(page, "wizard.res.context-fitbar").locator('[data-testid="fit-bar.ram"]')).toBeVisible();
+    await expect(byId(page, "wizard.res.context-fitbar").locator('[data-testid="fit-bar.spill"]')).toContainText("Some weights or KV sit in system RAM");
+    await expect(byId(page, "wizard.res.ram").locator('[data-testid="fit-bar.ram-segment"]')).toHaveCount(3);
+    await expect(byId(page, "wizard.res.ram").locator('[data-testid="fit-bar.ram-segment"][data-kind="experts"]')).toHaveAttribute("data-mb", "2048");
+    await expect(byId(page, "wizard.res.ram")).toContainText("Expert weights in RAM");
+  } finally {
+    await context.close();
+  }
+});
+
+test("the fit solver renders the fit-grid; a cell opens a diff, then Apply sets the three settings", async ({ browser }) => {
+  const { context, page, mock, failures } = await openResources({ browser });
+  try {
+    await expect(byId(page, "wizard.res.solver")).toHaveAttribute("data-mode", "grid");
+    const calls = callsTo(mock, "POST", `/api/models/${MAIN}/fit-grid`);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toMatchObject({ engineId: "vllm", runtimeId: "vllm@0.28.0", gpuIds: ["0"], kvDtypes: ["auto", "fp8", "fp8_e5m2"], concurrency: [1, 2, 4, 8] });
+    await expect(byId(page, "fit-solver.cell")).toHaveCount(8);
+    // Color and text: fits, uses RAM, does not fit; the limit that stops the next step is written out.
+    const cellAt = (kv, count) => page.locator(`[data-testid="fit-solver.cell"][data-kv="${kv}"][data-concurrency="${count}"]`);
+    await expect(cellAt("auto", 1)).toHaveAttribute("data-tone", "fits");
+    await expect(cellAt("auto", 1)).toContainText("256K");
+    await expect(cellAt("auto", 1)).toContainText("At the model's own limit");
+    await expect(cellAt("fp8", 4)).toHaveAttribute("data-tone", "spill");
+    await expect(cellAt("fp8", 4)).toContainText("Uses RAM");
+    await expect(cellAt("auto", 8)).toHaveAttribute("data-tone", "none");
+    await expect(cellAt("auto", 8)).toBeDisabled();
+    await expect(cellAt("auto", 4)).toContainText("Limited by VRAM");
+    await expect(cellAt("auto", 1)).toHaveAttribute("data-current", "true");
+    // A cell opens the diff; Apply sets context, concurrency and KV dtype as the user's own values.
+    await cellAt("fp8", 2).click();
+    const dialog = byId(page, "fit-solver.dialog");
+    await expect(dialog).toBeVisible();
+    expect(await cellRows(dialog)).toEqual([
+      ["Context length (per request)", "131072", "262144"],
+      ["Max concurrent requests", "1", "2"],
+      ["KV cache precision", "auto", "fp8"],
+    ]);
+    expect((await draftOf(page)).values ?? {}).toEqual({});
+    await dialog.getByRole("button", { name: "Apply" }).click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(async () => (await draftOf(page)).values).toEqual({ contextLength: 262144, concurrency: 2, kvCacheDtype: "fp8" });
+    await expect.poll(() => lastPlanBody(mock)?.values).toMatchObject({ contextLength: 262144, concurrency: 2, kvCacheDtype: "fp8" });
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("without fit-grid (404) the solver falls back to the FitResult suggestions as Apply chips with their size", async ({ browser }) => {
+  const state = resourcesState();
+  state.grid = false;
+  const { context, page, failures } = await openResources({ browser, state });
+  try {
+    await expect(byId(page, "wizard.res.solver")).toHaveAttribute("data-mode", "suggestions");
+    await expect(byId(page, "fit-solver.unavailable")).toBeVisible();
+    await expect(byId(page, "fit-solver.cell")).toHaveCount(0);
+    const chips = byId(page, "fit-solver.chip");
+    await expect(chips).toHaveCount(2);
+    await expect(chips.first()).toContainText("fp8 KV saves 8 GiB");
+    await expect(chips.first().locator('[data-testid="fit-solver.delta"]')).toHaveText("−8 GiB");
+    await chips.first().click();
+    await expect.poll(async () => (await draftOf(page)).values).toEqual({ kvCacheDtype: "fp8" });
+    await expect(page.locator('[data-field="kvCacheDtype"]')).toHaveAttribute("data-source", "user");
+    expect(realFailures(failures)).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("every memory.policy value has a label (with its name in mono); an unknown policy shows only its raw name", async ({ browser }) => {
+  const state = resourcesState();
+  const { context, page } = await openResources({ browser, state });
+  try {
+    let asked = 100000;
+    for (const policy of [...POLICIES, "future-policy"]) {
+      state.policy = policy;
+      asked += 1;
+      await contextInput(page).fill(String(asked));
+      const label = page.locator(`[data-testid="wizard.res.policy"][data-policy="${policy}"]`);
+      await expect(label).toBeVisible();
+      if (policy === "future-policy") {
+        await expect(label).toHaveText("future-policy");
+        await expect(label.locator('[data-testid="wizard.res.policy-raw"]')).toBeVisible();
+      } else {
+        await expect(label).toContainText(POLICY_LABEL[policy][0]);
+        await expect(label.locator("code")).toHaveText(policy);
+      }
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+for (const locale of ["en-US", "zh-CN"]) {
+  test(`${locale}: step 3, its plan cards, fit bar and solver show no raw keys and the right language`, async ({ browser }) => {
+    const state = resourcesState();
+    state.spill = true;
+    const { context, page } = await openResources({ browser, state, locale });
+    try {
+      await goal(page, "max-context").click();
+      await expect(byId(page, "plan-cards.card")).toHaveCount(3);
+      await expect(byId(page, "fit-solver.cell")).toHaveCount(8);
+      await expect(byId(page, "fit-bar.ram").first()).toBeVisible();
+      const text = await page.locator("main").innerText();
+      expect(text, `${locale} step 3`).not.toMatch(RAW_KEY_2);
+      if (locale === "en-US") {
+        expect(text).not.toMatch(HAN);
+        await expect(goal(page, "low-vram")).toHaveText("Low VRAM");
+        await expect(card(page, "pl_1")).toContainText("Validated");
+      } else {
+        expect(text).toMatch(HAN);
+        await expect(goal(page, "max-context")).toHaveText("最长上下文");
+        await expect(goal(page, "balanced")).toHaveText("均衡");
+        await expect(goal(page, "throughput")).toHaveText("高吞吐");
+        await expect(goal(page, "low-vram")).toHaveText("省显存");
+        await expect(card(page, "pl_1")).toContainText("已校验");
+        await expect(card(page, "pl_2")).toContainText("未校验");
+        await expect(card(page, "pl_3")).toContainText("校验未通过");
+        await expect(byId(page, "wizard.res.verdict")).toContainText("可启动");
+        await expect(card(page, "pl_2").locator('[data-testid="fit-bar.spill"]')).toContainText("部分权重或 KV 放在内存，速度会下降");
+        await expect(byId(page, "wizard.res.policy")).toContainText("空闲显存比例");
+        await expect(byId(page, "wizard.res.kv-pool")).toContainText("预留 58.6 GiB → KV 池约 19.5 GiB ≈ 200,000 tokens ≈ 3 个满长请求");
+        await expect(byId(page, "fit-bar.legend").first()).toContainText("权重");
+      }
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+for (const [sizeName, size] of Object.entries(SIZES)) {
+  for (const theme of ["light", "dark"]) {
+    test(`${sizeName} ${theme}: step 3 fits the screen and passes the accessibility checks`, async ({ browser }) => {
+      const state = resourcesState();
+      state.spill = true;
+      const { context, page } = await openResources({ browser, state, size, theme });
+      try {
+        await goal(page, "balanced").click();
+        await expect(byId(page, "plan-cards.card")).toHaveCount(3);
+        if (sizeName === "phone") {
+          // Below md the resource panel is a chip that opens a Drawer.
+          await expect(byId(page, "wizard.res.aside")).toHaveCount(0);
+          await expect(byId(page, "wizard.res.chip")).toContainText("Resources");
+          await expect(byId(page, "wizard.res.chip")).toContainText("Fits");
+        } else {
+          await expect(byId(page, "wizard.res.aside")).toBeVisible();
+          await expect(byId(page, "wizard.res.chip")).toHaveCount(0);
+        }
+        await expectNoOverflow(page);
+        await expectNoA11yViolations(page, { label: `wizard resources ${theme} ${sizeName}` });
+        if (sizeName === "phone") {
+          await byId(page, "wizard.res.chip").click();
+          const drawer = byId(page, "wizard.res.drawer");
+          await expect(drawer).toBeVisible();
+          await expect(drawer.locator('[data-testid="wizard.res.verdict"]')).toContainText("Fits");
+          await expect(drawer.locator('[data-testid="fit-solver.cell"]')).toHaveCount(8);
+          await expectNoOverflow(page);
+          await expectNoA11yViolations(page, { label: `wizard resources drawer ${theme} ${sizeName}` });
+        } else {
+          await card(page, "pl_1").locator('[data-testid="plan-cards.pick"]').click();
+          await expect(byId(page, "wizard.res.diff")).toBeVisible();
+          await expectNoA11yViolations(page, { label: `wizard plan diff ${theme} ${sizeName}` });
+        }
       } finally {
         await context.close();
       }

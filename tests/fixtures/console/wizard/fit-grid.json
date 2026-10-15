@@ -1,0 +1,74 @@
+{
+  "ok": true,
+  "cardId": "mc_aaaaaaaaaaaaaaaaaaaa",
+  "engineId": "vllm",
+  "runtimeId": "vllm@0.28.0",
+  "native": 262144,
+  "durationMs": 40,
+  "cells": [
+    {
+      "kvDtype": "auto",
+      "concurrency": 1,
+      "maxContext": 262144,
+      "limitedBy": "native",
+      "status": "ok",
+      "spill": false
+    },
+    {
+      "kvDtype": "fp8",
+      "concurrency": 1,
+      "maxContext": 262144,
+      "limitedBy": "native",
+      "status": "ok",
+      "spill": false
+    },
+    {
+      "kvDtype": "auto",
+      "concurrency": 2,
+      "maxContext": 131072,
+      "limitedBy": "vram",
+      "status": "ok",
+      "spill": false
+    },
+    {
+      "kvDtype": "fp8",
+      "concurrency": 2,
+      "maxContext": 262144,
+      "limitedBy": "native",
+      "status": "ok",
+      "spill": false
+    },
+    {
+      "kvDtype": "auto",
+      "concurrency": 4,
+      "maxContext": 65536,
+      "limitedBy": "vram",
+      "status": "ok",
+      "spill": false
+    },
+    {
+      "kvDtype": "fp8",
+      "concurrency": 4,
+      "maxContext": 131072,
+      "limitedBy": "vram",
+      "status": "warn",
+      "spill": true
+    },
+    {
+      "kvDtype": "auto",
+      "concurrency": 8,
+      "maxContext": 0,
+      "limitedBy": "vram",
+      "status": "fail",
+      "spill": false
+    },
+    {
+      "kvDtype": "fp8",
+      "concurrency": 8,
+      "maxContext": 65536,
+      "limitedBy": "vram",
+      "status": "ok",
+      "spill": false
+    }
+  ]
+}
