@@ -802,7 +802,7 @@ async function handleRequest(req, res, routes = null) {
           pid: process.pid,
           uptimeSeconds: process.uptime(),
           gateway: buildEntryGatewayUrls(),
-          gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20, maxLines: 2000 }),
+          gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20 }),
           exitLog: PROCESS_EXIT_LOG,
         },
         managers,
@@ -849,7 +849,7 @@ async function handleRequest(req, res, routes = null) {
     if (req.method === "GET" && url.pathname === "/api/gateway-access") {
       const access = await collectEntryGatewayAccessStats({
         limit: url.searchParams.get("limit"),
-        maxLines: url.searchParams.get("maxLines"),
+        window: url.searchParams.get("window"),
       });
       return sendJson(res, access);
     }
@@ -2733,32 +2733,129 @@ function setEntryGatewayAccessSink(sink) {
   };
 }
 
-// 状态页每 5 秒都会带上网关访问统计；重读日志尾部并全量聚合交给短 TTL 单飞缓存。
+// 状态页每 5 秒都会带上网关访问统计；窗口聚合交给短 TTL 单飞缓存。
 const ENTRY_ACCESS_STATS_CACHE_MS = Math.max(0, Number(process.env.MODEL_ACCESS_STATS_CACHE_MS ?? 10_000));
 const entryAccessStatsCache = core.createSingleFlightCache({ ttlMs: ENTRY_ACCESS_STATS_CACHE_MS, maxEntries: 16 });
+// 04 §17.2: the facade is computed over an explicit time window (default 1 h).
+const ENTRY_ACCESS_DEFAULT_WINDOW_MS = 60 * 60 * 1000;
+const ENTRY_ACCESS_MAX_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ENTRY_ACCESS_PAGE_ROWS = 500;
+const ENTRY_ACCESS_MAX_ROWS = 20000;
+const ENTRY_ACCESS_STORE_LABEL = "telemetry.sqlite";
 
-async function collectEntryGatewayAccessStats(options = {}) {
-  const limit = Math.min(500, Math.max(20, Number(options.limit || 120)));
-  const maxLines = Math.min(50000, Math.max(limit, Number(options.maxLines || 12000)));
-  if (ENTRY_ACCESS_STATS_CACHE_MS > 0) {
-    return entryAccessStatsCache.get(`gateway:${limit}:${maxLines}`, () => collectEntryGatewayAccessStatsFresh(limit, maxLines));
-  }
-  return collectEntryGatewayAccessStatsFresh(limit, maxLines);
+// "30m", "1h", "2d" (or bare milliseconds); anything else is the 1 h default.
+function parseEntryAccessWindow(value) {
+  const match = String(value ?? "").trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/);
+  if (!match) return ENTRY_ACCESS_DEFAULT_WINDOW_MS;
+  const unit = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2] || "ms"];
+  const ms = Number(match[1]) * unit;
+  if (!Number.isFinite(ms) || ms <= 0) return ENTRY_ACCESS_DEFAULT_WINDOW_MS;
+  return Math.min(ENTRY_ACCESS_MAX_WINDOW_MS, Math.max(60_000, Math.round(ms)));
 }
 
-async function collectEntryGatewayAccessStatsFresh(limit, maxLines) {
+// options: { limit, window, maxLines (accepted and ignored), store, now }.
+async function collectEntryGatewayAccessStats(options = {}) {
+  const limit = Math.min(500, Math.max(20, Number(options.limit || 120)));
+  const windowMs = parseEntryAccessWindow(options.window);
+  const store = options.store || telemetry?.store || null;
+  const run = () => collectEntryGatewayAccessStatsFresh({ limit, windowMs, store, now: options.now });
+  // An injected store (tests) is never cached across calls.
+  if (ENTRY_ACCESS_STATS_CACHE_MS > 0 && !options.store && !options.now) {
+    return entryAccessStatsCache.get(`gateway:${limit}:${windowMs}`, run);
+  }
+  return run();
+}
+
+// A requests row of the telemetry store as the legacy access-log entry the
+// core summarisers expect.
+function requestRowToAccessEntry(row) {
+  const failed = row.errorClass && row.errorClass !== "none";
+  return {
+    at: row.receivedAt,
+    requestId: row.requestId,
+    clientRequestId: row.clientRequestId || "",
+    remoteAddress: row.clientIp || "",
+    method: row.method,
+    path: row.path,
+    kind: row.protocol,
+    status: row.status,
+    terminalState: row.terminalState,
+    model: row.modelRequested || "",
+    resolvedModel: row.modelResolved || "",
+    stream: row.stream,
+    authSource: row.authSource || "",
+    clientId: row.keyId || "",
+    userAgent: row.userAgent || "",
+    origin: row.originHost || "",
+    durationMs: row.durationMs,
+    queuedMs: row.queueMs,
+    inputTokens: row.promptTokens,
+    outputTokens: row.outputTokens,
+    error: failed ? String(row.errorCode || row.errorClass) : "",
+    ingress: row.ingress,
+  };
+}
+
+// Polling of the TTS workbench is not an access worth listing (the legacy log
+// skipped it too); the store keeps it as control counts, this guards a stray row.
+function isTtsPollRow(entry) {
+  if (!isTtsGatewayPath(entry.path)) return false;
+  return !shouldLogTtsAccess({ method: entry.method, url: entry.path }, { statusCode: entry.status });
+}
+
+async function readEntryAccessEventsFromStore(store, fromMs, toMs) {
+  const entries = [];
+  let cursor = null;
+  while (entries.length < ENTRY_ACCESS_MAX_ROWS) {
+    const page = await store.call("listRequests", {
+      from: fromMs, to: toMs, limit: ENTRY_ACCESS_PAGE_ROWS, filters: {}, cursor, rangeExplicit: true,
+    });
+    for (const row of page.rows || []) {
+      if (row.extra && row.extra.dupOf) continue;
+      entries.push(requestRowToAccessEntry(row));
+    }
+    if (!page.nextCursor) break;
+    try {
+      const decoded = JSON.parse(Buffer.from(String(page.nextCursor), "base64url").toString("utf8"));
+      cursor = { t: Number(decoded.t), id: Number(decoded.id) };
+    } catch {
+      break;
+    }
+  }
+  return entries;
+}
+
+async function collectEntryGatewayAccessStatsFresh({ limit, windowMs, store, now: nowOption }) {
+  const now = Number.isFinite(Number(nowOption)) ? Number(nowOption) : Date.now();
   const lanAddress = core.getLanAddress();
-  const events = (await readEntryGatewayAccessEvents(maxLines))
-    .map((entry) => core.normalizeAccessEvent(entry, lanAddress))
-    .filter((entry) => entry.atMs > 0)
+  const storeReady = Boolean(store) && (!store.state || store.state === "ready");
+  let entries;
+  if (storeReady) {
+    try {
+      entries = await readEntryAccessEventsFromStore(store, now - windowMs, now + 1);
+    } catch {
+      entries = null;
+    }
+  }
+  // Telemetry off or its store unavailable: the legacy log, cut to the window.
+  const fromStore = Array.isArray(entries);
+  if (!fromStore) entries = await readEntryGatewayAccessEvents(12000);
+  const events = entries
+    .filter((entry) => !isTtsPollRow(entry))
+    .map((entry) => {
+      const event = core.normalizeAccessEvent(entry, lanAddress);
+      // 04 §17.2: public ingress counts as external whatever the address.
+      if (entry.ingress === "public") event.external = true;
+      return event;
+    })
+    .filter((entry) => entry.atMs >= now - windowMs && entry.atMs > 0)
     .sort((a, b) => a.atMs - b.atMs);
   const external = events.filter((entry) => entry.external);
   const local = events.filter((entry) => !entry.external);
-  const now = Date.now();
   return {
     ok: true,
-    updatedAt: new Date().toISOString(),
-    logPath: GATEWAY_ACCESS_LOG,
+    updatedAt: new Date(now).toISOString(),
+    logPath: fromStore ? ENTRY_ACCESS_STORE_LABEL : GATEWAY_ACCESS_LOG,
     privacy: "service-entry 只记录统一网关访问元数据，不记录提示词或响应正文。",
     totals: core.summarizeAccessEvents(events, now),
     external: core.summarizeAccessEvents(external, now),
