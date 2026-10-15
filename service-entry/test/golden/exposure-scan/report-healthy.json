@@ -1,0 +1,272 @@
+{
+  "at": "2026-10-15T12:00:00.000Z",
+  "status": "ok",
+  "platform": "win32",
+  "summary": {
+    "ok": 17,
+    "warn": 0,
+    "fail": 0,
+    "unknown": 0,
+    "manual": 1
+  },
+  "checks": [
+    {
+      "id": "public_listener",
+      "state": "ok",
+      "title": "access.check.public_listener",
+      "evidence": "Port 5186 listens on 127.0.0.1:5186. Held by service-entry (pid 100).",
+      "fix": "access.fix.public_listener"
+    },
+    {
+      "id": "admin_bind",
+      "state": "ok",
+      "title": "access.check.admin_bind",
+      "evidence": "Port 5176 listens on 127.0.0.1:5176.",
+      "fix": "access.fix.admin_bind"
+    },
+    {
+      "id": "wildcard_listeners",
+      "state": "ok",
+      "title": "access.check.wildcard_listeners",
+      "evidence": "No manager or engine port listens on all interfaces.",
+      "fix": "access.fix.wildcard_listeners"
+    },
+    {
+      "id": "firewall_profiles",
+      "state": "ok",
+      "title": "access.check.firewall_profiles",
+      "evidence": "All 3 firewall profiles are enabled.",
+      "fix": "access.fix.firewall_profiles"
+    },
+    {
+      "id": "legacy_proxy",
+      "state": "ok",
+      "title": "access.check.legacy_proxy",
+      "evidence": "No legacy proxy process, port 55177 listener or portproxy rule to 5176-5178.",
+      "fix": "access.fix.legacy_proxy"
+    },
+    {
+      "id": "tunnel_running",
+      "state": "ok",
+      "title": "access.check.tunnel_running",
+      "evidence": "Container public-cloudflared-1 is running (Up 2 days).",
+      "fix": "access.fix.tunnel_running"
+    },
+    {
+      "id": "tunnel_ready",
+      "state": "ok",
+      "title": "access.check.tunnel_ready",
+      "evidence": "cloudflared reports ready (HTTP 200).",
+      "fix": "access.fix.tunnel_ready"
+    },
+    {
+      "id": "tunnel_target",
+      "state": "ok",
+      "title": "access.check.tunnel_target",
+      "evidence": "config/public/config.yml send traffic to :404, :5186 only.",
+      "fix": "access.fix.tunnel_target"
+    },
+    {
+      "id": "external_probe",
+      "state": "ok",
+      "title": "access.check.external_probe",
+      "evidence": "Reached PUBLIC through a proxy in 142 ms (header cf-connecting-ip, country DE).",
+      "fix": "access.fix.external_probe"
+    },
+    {
+      "id": "tls",
+      "state": "ok",
+      "title": "access.check.tls",
+      "evidence": "The certificate is valid until 2027-01-13T12:00:00.000Z.",
+      "fix": "access.fix.tls"
+    },
+    {
+      "id": "dns",
+      "state": "ok",
+      "title": "access.check.dns",
+      "evidence": "api.example.invalid resolves.",
+      "fix": "access.fix.dns"
+    },
+    {
+      "id": "trusted_proxy_match",
+      "state": "ok",
+      "title": "access.check.trusted_proxy_match",
+      "evidence": "The probe arrived from 127.0.0.1, which is in trustedProxies.cidrs.",
+      "fix": "access.fix.trusted_proxy_match"
+    },
+    {
+      "id": "managers_gateway_only",
+      "state": "ok",
+      "title": "access.check.managers_gateway_only",
+      "evidence": "Managers accept calls from the entry only.",
+      "fix": "access.fix.managers_gateway_only"
+    },
+    {
+      "id": "admin_via_proxy",
+      "state": "ok",
+      "title": "access.check.admin_via_proxy",
+      "evidence": "No request reached ADMIN through a proxy in the last 24 h.",
+      "fix": "access.fix.admin_via_proxy"
+    },
+    {
+      "id": "keys_hygiene",
+      "state": "ok",
+      "title": "access.check.keys_hygiene",
+      "evidence": "1 active key(s) look tidy.",
+      "fix": "access.fix.keys_hygiene"
+    },
+    {
+      "id": "plaintext_key_files",
+      "state": "ok",
+      "title": "access.check.plaintext_key_files",
+      "evidence": "No plaintext public key file.",
+      "fix": "access.fix.plaintext_key_files"
+    },
+    {
+      "id": "router_snapshots",
+      "state": "ok",
+      "title": "access.check.router_snapshots",
+      "evidence": "No router page snapshots.",
+      "fix": "access.fix.router_snapshots"
+    },
+    {
+      "id": "upnp",
+      "state": "manual",
+      "title": "access.check.upnp",
+      "evidence": "UPnP port mappings live in the router; check its admin page.",
+      "fix": "access.fix.upnp"
+    }
+  ],
+  "legacy": [],
+  "map": {
+    "nodes": [
+      {
+        "id": "internet",
+        "label": "Internet",
+        "kind": "network"
+      },
+      {
+        "id": "edge",
+        "label": "Cloudflare / Caddy",
+        "kind": "proxy"
+      },
+      {
+        "id": "public",
+        "label": "PUBLIC listener",
+        "kind": "listener"
+      },
+      {
+        "id": "admin",
+        "label": "ADMIN listener",
+        "kind": "listener"
+      },
+      {
+        "id": "managers",
+        "label": "Managers",
+        "kind": "service"
+      },
+      {
+        "id": "engines",
+        "label": "Engines",
+        "kind": "service"
+      },
+      {
+        "id": "lan",
+        "label": "LAN",
+        "kind": "network"
+      },
+      {
+        "id": "loopback",
+        "label": "This machine",
+        "kind": "network"
+      }
+    ],
+    "edges": [
+      {
+        "from": "internet",
+        "to": "edge",
+        "state": "ok",
+        "evidence": "Container public-cloudflared-1 is running (Up 2 days)."
+      },
+      {
+        "from": "edge",
+        "to": "public",
+        "state": "ok",
+        "evidence": "config/public/config.yml send traffic to :404, :5186 only."
+      },
+      {
+        "from": "edge",
+        "to": "admin",
+        "state": "ok",
+        "evidence": "No request reached ADMIN through a proxy in the last 24 h."
+      },
+      {
+        "from": "edge",
+        "to": "managers",
+        "state": "ok",
+        "evidence": "No legacy proxy process, port 55177 listener or portproxy rule to 5176-5178."
+      },
+      {
+        "from": "public",
+        "to": "managers",
+        "state": "ok",
+        "evidence": "Managers accept calls from the entry only."
+      },
+      {
+        "from": "admin",
+        "to": "managers",
+        "state": "ok",
+        "evidence": "Managers accept calls from the entry only."
+      },
+      {
+        "from": "managers",
+        "to": "engines",
+        "state": "ok",
+        "evidence": "No manager or engine port listens on all interfaces."
+      },
+      {
+        "from": "lan",
+        "to": "admin",
+        "state": "ok",
+        "evidence": "Port 5176 listens on 127.0.0.1:5176."
+      },
+      {
+        "from": "lan",
+        "to": "public",
+        "state": "ok",
+        "evidence": "Port 5186 listens on 127.0.0.1:5186. Held by service-entry (pid 100)."
+      },
+      {
+        "from": "lan",
+        "to": "managers",
+        "state": "ok",
+        "evidence": "No manager or engine port listens on all interfaces."
+      },
+      {
+        "from": "loopback",
+        "to": "admin",
+        "state": "ok",
+        "evidence": "Port 5176 listens on 127.0.0.1:5176."
+      }
+    ]
+  },
+  "probe": {
+    "url": "https://api.example.invalid/status.json?probe=FAKEnonce0123456789",
+    "at": "2026-10-15T11:59:00.000Z",
+    "status": 200,
+    "latencyMs": 142,
+    "nonceObserved": true,
+    "observed": {
+      "viaProxy": true,
+      "headerUsed": "cf-connecting-ip",
+      "socketIp": "127.0.0.1",
+      "country": "DE",
+      "forwardedOnUntrusted": false
+    },
+    "tls": {
+      "validTo": "2027-01-13T12:00:00.000Z",
+      "authorized": true
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,62 @@
+[
+  {
+    "id": "3f9c2a7d41be",
+    "name": "public-cloudflared-1",
+    "image": "cloudflare/cloudflared:2026.9.0",
+    "state": "running",
+    "status": "Up 2 days",
+    "ports": [
+      {
+        "hostIp": "127.0.0.1",
+        "hostPort": 20241,
+        "containerPort": 2000,
+        "proto": "tcp"
+      }
+    ],
+    "managed": false
+  },
+  {
+    "id": "a1b2c3d4e5f6",
+    "name": "vllm-primary",
+    "image": "vllm/vllm-openai:v0.12.0",
+    "state": "running",
+    "status": "Up 26 hours (healthy)",
+    "ports": [
+      {
+        "hostIp": "0.0.0.0",
+        "hostPort": 8000,
+        "containerPort": 8000,
+        "proto": "tcp"
+      },
+      {
+        "hostIp": "::",
+        "hostPort": 8000,
+        "containerPort": 8000,
+        "proto": "tcp"
+      }
+    ],
+    "managed": true
+  },
+  {
+    "id": "ffeeddccbbaa",
+    "name": "sglang-demo",
+    "image": "lmsysorg/sglang:v0.5.4",
+    "state": "exited",
+    "status": "Exited (0) 2 hours ago",
+    "ports": [
+      {
+        "hostIp": "127.0.0.1",
+        "hostPort": 30000,
+        "containerPort": 30000,
+        "proto": "tcp"
+      },
+      {
+        "hostIp": "127.0.0.1",
+        "hostPort": 30001,
+        "containerPort": 30001,
+        "proto": "tcp"
+      }
+    ],
+    "managed": true
+  }
+]

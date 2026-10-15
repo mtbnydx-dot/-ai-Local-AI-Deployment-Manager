@@ -1,0 +1,23 @@
+[
+  {
+    "family": "ipv4",
+    "listenAddress": "0.0.0.0",
+    "listenPort": 55177,
+    "connectAddress": "127.0.0.1",
+    "connectPort": 5177
+  },
+  {
+    "family": "ipv4",
+    "listenAddress": "192.168.1.20",
+    "listenPort": 8443,
+    "connectAddress": "127.0.0.1",
+    "connectPort": 5186
+  },
+  {
+    "family": "ipv6",
+    "listenAddress": "::",
+    "listenPort": 55178,
+    "connectAddress": "::1",
+    "connectPort": 5178
+  }
+]
