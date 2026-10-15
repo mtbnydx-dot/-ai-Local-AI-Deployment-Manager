@@ -7,10 +7,20 @@
 // API-key ref stay with launch-request.js (cleanup "caller"), as on llama.
 
 const { VLLM_GATE_OPTIONS } = require("./runtime-compatibility");
-const { normalizeRuntimeEngine } = require("./runtime-command");
 const engines = require("../../manager-core/engines");
+const { normalizeRuntimeEngine, templateEngineOf } = require("./runtime-command");
 
 const DEFAULT_STALL_TIMEOUT_MS = 10 * 60 * 1000;
+// The runtime gate of a docker-template engine (01 §19): the manifest's own
+// release (cuda, driver, architecture) when it names one, an unpinned-image
+// warning otherwise, and no vLLM fallback numbers.
+const TEMPLATE_GATE_OPTIONS = Object.freeze({
+  checkImagePin: true,
+  unknownRelease: Object.freeze({
+    title: "Image metadata",
+    detail: "This image is not described by the runtime manifest, so its CUDA and driver requirements cannot be verified automatically.",
+  }),
+});
 const LOCAL_BUILD_IMAGE = /^local\//i;
 
 function buildVllmImagePullOptions(env = process.env, platform = "") {
@@ -112,14 +122,21 @@ function createVllmRunContext(deps = {}) {
     } catch {
       // The preflight reports a preset that cannot be resolved.
     }
-    const engineName = engineLabel(deps.registry, engine);
+    // A docker-template engine (lmdeploy, trtllm, tabbyapi...) runs through the
+    // same pipeline with its own name, port, pull policy and runtime gate.
+    const template = deps.registry ? templateEngineOf(deps.registry, engine) : null;
+    const engineName = template ? (template.label?.en || template.id) : engineLabel(deps.registry, engine);
+    const engineId = template ? template.id : engine;
+    const containerPort = template?.host?.containerPort;
     const containerName = opts.containerName || CONFIG.containerName;
 
     return {
       options: opts,
-      engineId: engine,
+      engineId,
       engineName,
       apiLabel: `${engineName} API`,
+      // mode add / onConflict: the supervisor re-checks the slot at its preflight (01 §11, 00 §9.3).
+      ...(opts.launchMode === "add" ? { mode: "add", onConflict: opts.onConflict === "skip" ? "skip" : "fail" } : {}),
       containerName,
       instanceId: vllmInstanceId(CONFIG, containerName, opts.instanceId),
       port: opts.port,
@@ -130,7 +147,7 @@ function createVllmRunContext(deps = {}) {
       admissionRequest: opts.gpuAdmissionRequest,
       prepareAdmission: typeof opts.prepareGpuAdmission === "function" ? opts.prepareGpuAdmission : undefined,
       lanFallback: opts.networkAccess === "lan",
-      bindRetryPublish: () => deps.dockerPublishArgs(opts.port, "lan", "0.0.0.0"),
+      bindRetryPublish: () => deps.dockerPublishArgs(opts.port, "lan", "0.0.0.0", containerPort),
       formatPublish: deps.formatDockerPublishArgs,
       redactArgs: (argv) => deps.redactDockerArgs(argv, opts),
       async preflight(job, { progress }) {
@@ -157,20 +174,20 @@ function createVllmRunContext(deps = {}) {
       },
       buildCommand: (job) => {
         const built = deps.buildRuntimeCommand(job, withHostGpus());
-        return { runArgs: built.runArgs, publish: built.activePublishArgs, image: built.runtimeImage, secretEnv: built.secretEnv };
+        return { runArgs: built.runArgs, publish: built.activePublishArgs, image: built.runtimeImage, secretEnv: built.secretEnv, ...(built.files ? { files: built.files } : {}) };
       },
       // Enforced before admission on the built image; an implicit single-GPU
       // selection passes when any GPU fits, and the admitted one is checked
       // again before the container is created.
       gate: {
-        releaseFor: deps.knownRuntimeImageMetadata,
-        options: VLLM_GATE_OPTIONS,
+        ...(template ? {} : { releaseFor: deps.knownRuntimeImageMetadata }),
+        options: template ? { ...TEMPLATE_GATE_OPTIONS, engineLabel: engineName } : VLLM_GATE_OPTIONS,
         allowAnyCompatibleGpu: () => opts.multiGpuMode === "single" && !opts.gpuSelectionExplicit && !opts.gpuAdmissionFinalized,
-        errorCode: "vllm_runtime_incompatible",
+        errorCode: template ? "runtime_incompatible" : "vllm_runtime_incompatible",
       },
       // The plan's pull step (00 §9.2): "auto" pulls a missing stable tier-1
       // image before the checkpoint, as before; "explicit" never pulls.
-      imagePolicy: (image) => (deps.registry ? imagePullPolicyFor(deps.registry, engine, image) : "auto"),
+      imagePolicy: (image) => (deps.registry ? imagePullPolicyFor(deps.registry, engineId, image) : "auto"),
       pullOptions: buildVllmImagePullOptions(env, CONFIG.imagePlatform),
       pullLog: {
         attempt: ({ attempt, attempts, image }) => `Docker image pull attempt ${attempt}/${attempts}: ${image}`,

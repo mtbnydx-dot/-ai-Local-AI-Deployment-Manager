@@ -3,11 +3,11 @@
   "at": "2026-10-14T08:00:00.000Z",
   "durationMs": 0,
   "summary": {
-    "ok": 14,
-    "warn": 2,
-    "fail": 1,
-    "info": 3,
-    "skip": 1
+    "ok": 25,
+    "warn": 4,
+    "fail": 2,
+    "info": 6,
+    "skip": 4
   },
   "checks": [
     {
@@ -544,6 +544,472 @@
             "writable": true
           }
         ]
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "net.ports",
+      "group": "network",
+      "status": "ok",
+      "title": {
+        "zh-CN": "端口占用",
+        "en-US": "Port ownership"
+      },
+      "detail": "Every registered port that is in use belongs to its own component.",
+      "data": {
+        "ports": [
+          {
+            "componentId": "vllm-manager",
+            "port": 5177,
+            "address": "127.0.0.1",
+            "pid": 4101,
+            "image": "node.exe",
+            "owner": "expected"
+          }
+        ]
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "net.orphans",
+      "group": "network",
+      "status": "ok",
+      "title": {
+        "zh-CN": "遗留进程",
+        "en-US": "Orphan processes"
+      },
+      "detail": "No orphan platform processes or stale pid files were found.",
+      "data": {
+        "orphans": [],
+        "stalePidFiles": []
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "net.legacy-proxy",
+      "group": "network",
+      "status": "ok",
+      "title": {
+        "zh-CN": "旧版 Claude 代理",
+        "en-US": "Legacy Claude proxy"
+      },
+      "detail": "The deprecated Claude proxy is not running and has no logon entry.",
+      "data": {
+        "running": false,
+        "runValue": false
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "net.firewall",
+      "group": "network",
+      "status": "skip",
+      "title": {
+        "zh-CN": "防火墙入站规则",
+        "en-US": "Firewall inbound rule"
+      },
+      "detail": "LAN access is off, so no inbound firewall rule is needed.",
+      "data": {
+        "reason": "lan_off"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "net.manager-bind",
+      "group": "network",
+      "status": "ok",
+      "title": {
+        "zh-CN": "管理器监听地址",
+        "en-US": "Manager bind address"
+      },
+      "detail": "Both managers listen only on their configured host.",
+      "data": {
+        "managers": [
+          {
+            "manager": "vllm",
+            "componentId": "vllm-manager",
+            "port": 5177,
+            "configuredHost": "127.0.0.1",
+            "addresses": [
+              "127.0.0.1"
+            ],
+            "state": "bound"
+          },
+          {
+            "manager": "llama",
+            "componentId": "llama-manager",
+            "port": 5178,
+            "configuredHost": "127.0.0.1",
+            "addresses": [],
+            "state": "stopped"
+          }
+        ]
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "net.search-upstream",
+      "group": "network",
+      "status": "ok",
+      "title": {
+        "zh-CN": "搜索网关上游",
+        "en-US": "Search gateway upstream"
+      },
+      "detail": "The search gateway will call the upstream chosen from setting.",
+      "data": {
+        "source": "setting",
+        "url": "http://host.docker.internal:5186/v1"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "sec.lan-keys",
+      "group": "security",
+      "status": "skip",
+      "title": {
+        "zh-CN": "局域网访问需要 API Key",
+        "en-US": "LAN access requires API keys"
+      },
+      "detail": "No listener is open to the LAN.",
+      "data": {
+        "reason": "lan_off"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "sec.public",
+      "group": "security",
+      "status": "skip",
+      "title": {
+        "zh-CN": "公网访问配置",
+        "en-US": "Public exposure"
+      },
+      "detail": "No public base URL is configured.",
+      "data": {
+        "reason": "public_off"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "sec.secret-store",
+      "group": "security",
+      "status": "ok",
+      "title": {
+        "zh-CN": "密钥库保护",
+        "en-US": "Secret store protection"
+      },
+      "detail": "Every secret namespace is protected and owner-only.",
+      "data": {
+        "namespaces": [
+          {
+            "namespace": "runtime.vllm",
+            "protection": "dpapi-user",
+            "entries": 2,
+            "parse": "ok",
+            "unprotect": "ok",
+            "aclWide": false,
+            "aclChecked": true
+          }
+        ]
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "sec.plaintext-secrets",
+      "group": "security",
+      "status": "warn",
+      "title": {
+        "zh-CN": "明文密钥文件",
+        "en-US": "Plaintext secret files"
+      },
+      "detail": "1 plaintext secret file(s) exist outside the secret store.",
+      "data": {
+        "files": [
+          {
+            "path": "vllm-manager/logs/runtime-api-keys.json",
+            "kind": "runtime-keys",
+            "migratable": true
+          }
+        ]
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "secrets-migrate",
+        "risk": "confirm",
+        "label": {
+          "zh-CN": "把明文密钥迁移到密钥库",
+          "en-US": "Migrate plaintext secrets into the secret store"
+        },
+        "command": "platform doctor --fix=sec.plaintext-secrets",
+        "docs": "/docs/troubleshooting.md#secrets"
+      },
+      "actions": [
+        "secrets-migrate"
+      ]
+    },
+    {
+      "id": "ops.supervisor",
+      "group": "ops",
+      "status": "info",
+      "title": {
+        "zh-CN": "平台监督进程",
+        "en-US": "Platform supervisor"
+      },
+      "detail": "The supervisor is not running; start it with `platform start`.",
+      "data": {
+        "running": false
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "supervisor-docs",
+        "risk": "manual",
+        "label": {
+          "zh-CN": "运行 platform start 启动",
+          "en-US": "Run `platform start`"
+        },
+        "command": "platform start",
+        "docs": "/docs/troubleshooting.md#ops"
+      },
+      "actions": [
+        "supervisor-docs"
+      ]
+    },
+    {
+      "id": "ops.autostart",
+      "group": "ops",
+      "status": "info",
+      "title": {
+        "zh-CN": "开机自启动",
+        "en-US": "Autostart"
+      },
+      "detail": "Autostart is not registered.",
+      "data": {
+        "method": null,
+        "registered": false
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "autostart-docs",
+        "risk": "manual",
+        "label": {
+          "zh-CN": "运行 platform autostart enable 注册（不会自动注册）",
+          "en-US": "Run `platform autostart enable` (never registered automatically)"
+        },
+        "command": "platform autostart enable",
+        "docs": "/docs/troubleshooting.md#ops"
+      },
+      "actions": [
+        "autostart-docs"
+      ]
+    },
+    {
+      "id": "ops.nightly",
+      "group": "ops",
+      "status": "fail",
+      "title": {
+        "zh-CN": "夜间自检",
+        "en-US": "Nightly check"
+      },
+      "detail": "The nightly check has failed 30 nights in a row (since 2026-09-15).",
+      "data": {
+        "ok": false,
+        "passed": 5,
+        "failed": 2,
+        "at": "2026-10-14T03:05:00.000Z",
+        "ageHours": 4.9,
+        "streak": 30,
+        "since": "2026-09-15",
+        "trendDays": 30,
+        "task": null
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "nightly-docs",
+        "risk": "manual",
+        "label": {
+          "zh-CN": "查看夜间自检报告",
+          "en-US": "Review the nightly report"
+        },
+        "command": "platform doctor --fix=ops.nightly",
+        "docs": "/docs/troubleshooting.md#ops"
+      },
+      "actions": [
+        "nightly-docs"
+      ]
+    },
+    {
+      "id": "ops.backup",
+      "group": "ops",
+      "status": "ok",
+      "title": {
+        "zh-CN": "备份",
+        "en-US": "Backup"
+      },
+      "detail": "The newest backup is recent and has the expected format.",
+      "data": {
+        "stamp": "20261014-0200",
+        "at": "2026-10-14T02:00:00.000Z",
+        "ageHours": 6,
+        "format": "local-ai-platform-backup-v2",
+        "files": 120,
+        "warnings": 0,
+        "task": null
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "ops.deploy-drift",
+      "group": "ops",
+      "status": "warn",
+      "title": {
+        "zh-CN": "部署漂移",
+        "en-US": "Deploy drift"
+      },
+      "detail": "1 deployed file(s) were edited in the live root and will be overwritten by the next deploy.",
+      "data": {
+        "count": 1,
+        "files": [
+          {
+            "path": "service-entry/server.js",
+            "error": null
+          }
+        ]
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "deploy-drift-docs",
+        "risk": "manual",
+        "label": {
+          "zh-CN": "把直接修改移植回源分支",
+          "en-US": "Port the live edits back to the source branch"
+        },
+        "command": "platform doctor --fix=ops.deploy-drift",
+        "docs": "/docs/troubleshooting.md#ops"
+      },
+      "actions": [
+        "deploy-drift-docs"
+      ]
+    },
+    {
+      "id": "ops.version",
+      "group": "ops",
+      "status": "ok",
+      "title": {
+        "zh-CN": "版本记录",
+        "en-US": "Version record"
+      },
+      "detail": "Version 0.2.0-git-abcdef012345 is recorded in version.json.",
+      "data": {
+        "source": "version.json",
+        "version": "0.2.0-git-abcdef012345",
+        "commit": "abcdef012345",
+        "branch": "main",
+        "deployedAt": "2026-10-13T12:00:00.000Z"
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "ops.updates",
+      "group": "ops",
+      "status": "info",
+      "title": {
+        "zh-CN": "可用更新",
+        "en-US": "Available updates"
+      },
+      "detail": "2 newer commit(s) are available.",
+      "data": {
+        "available": true,
+        "behind": 2,
+        "ref": "refs/heads/main",
+        "fetched": false,
+        "error": null
+      },
+      "durationMs": 0,
+      "fix": {
+        "id": "updates-docs",
+        "risk": "manual",
+        "label": {
+          "zh-CN": "运行 platform update",
+          "en-US": "Run `platform update`"
+        },
+        "command": "platform update",
+        "docs": "/docs/troubleshooting.md#ops"
+      },
+      "actions": [
+        "updates-docs"
+      ]
+    },
+    {
+      "id": "ops.config",
+      "group": "ops",
+      "status": "ok",
+      "title": {
+        "zh-CN": "平台配置",
+        "en-US": "Platform configuration"
+      },
+      "detail": "platform.json is valid.",
+      "data": {
+        "errors": [],
+        "warnings": []
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "ops.config-shadowed",
+      "group": "ops",
+      "status": "ok",
+      "title": {
+        "zh-CN": "环境变量覆盖配置",
+        "en-US": "Environment shadowing configuration"
+      },
+      "detail": "No environment variable overrides a configuration key.",
+      "data": {
+        "shadowed": []
+      },
+      "durationMs": 0,
+      "fix": null,
+      "actions": []
+    },
+    {
+      "id": "ops.logs-size",
+      "group": "ops",
+      "status": "ok",
+      "title": {
+        "zh-CN": "日志占用空间",
+        "en-US": "Log size"
+      },
+      "detail": "The log folder is within its size limit.",
+      "data": {
+        "bytes": 4096,
+        "files": 3,
+        "truncated": false,
+        "warnBytes": 2147483648
       },
       "durationMs": 0,
       "fix": null,

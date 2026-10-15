@@ -3,5 +3,174 @@
   "kind": "error-signatures",
   "asOf": "2026-10-14",
   "staleAfterDays": 180,
-  "entries": []
+  "entries": [
+    {
+      "id": "transformers-unknown-arch", "code": "transformers_unknown_arch", "engines": ["vllm", "sglang"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "model type `([^`]+)` but Transformers does not recognize this architecture",
+      "title": { "zh": "镜像中的 Transformers 不认识模型类型 {1}", "en": "Transformers in this image does not know model type {1}" },
+      "hint": { "zh": "运行预检探针，或换用更新的运行时镜像。", "en": "Run the dry probe, or use a newer runtime image." },
+      "explanation": { "zh": "检查点比运行时镜像新，或需要自定义建模代码。", "en": "The checkpoint is newer than the runtime image, or it needs custom modeling code." },
+      "suggestions": [ { "kind": "probe" }, { "kind": "param", "param": "trustRemoteCode", "to": true, "security": true }, { "kind": "runtime", "action": "newer-image" } ]
+    },
+    {
+      "id": "llama-unknown-arch", "code": "llama_unknown_arch", "engines": ["llamacpp"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "unknown model architecture: '([^']+)'",
+      "title": { "zh": "llama.cpp 不认识模型架构 {1}", "en": "llama.cpp does not know model architecture {1}" },
+      "hint": { "zh": "换用支持该架构的更新 llama.cpp 镜像，或改用其他引擎。", "en": "Use a newer llama.cpp image that supports this architecture, or another engine." },
+      "explanation": { "zh": "GGUF 声明的架构不在当前 llama.cpp 构建的支持列表中。", "en": "The architecture declared by the GGUF is not supported by this llama.cpp build." },
+      "suggestions": [ { "kind": "probe" }, { "kind": "runtime", "action": "newer-image" } ]
+    },
+    {
+      "id": "cuda-buffer-alloc", "code": "cuda_buffer_alloc", "engines": ["llamacpp"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "failed to allocate (CUDA\\d+) buffer of size (\\d+)",
+      "title": { "zh": "{1} 显存缓冲区分配失败（{2} 字节）", "en": "Failed to allocate a {1} buffer of {2} bytes" },
+      "hint": { "zh": "减少放在 GPU 上的层数或把 MoE 专家放到 CPU，或降低上下文长度。", "en": "Put fewer layers on the GPU or keep MoE experts on the CPU, or lower the context length." },
+      "explanation": { "zh": "模型权重或缓冲区超过所选 GPU 的可用显存。", "en": "The weights or buffers do not fit into the free memory of the selected GPU." },
+      "suggestions": [ { "kind": "param", "param": "llamacpp.nCpuMoe", "to": "planner" }, { "kind": "param", "param": "llamacpp.gpuLayers", "to": "planner" } ]
+    },
+    {
+      "id": "vllm-kv-too-small", "code": "kv_too_small", "engines": ["vllm"], "phase": "kv", "rootCause": true, "severity": "error",
+      "regex": "(?:larger than the maximum number of tokens that can be stored in KV cache|No available memory for the cache blocks|larger than the available KV cache memory)",
+      "title": { "zh": "KV cache 放不下单个请求的最大上下文", "en": "The KV cache cannot hold one request at the maximum context" },
+      "hint": { "zh": "降低上下文长度或并发数，或改用 FP8 KV cache。", "en": "Lower the context length or concurrency, or use an FP8 KV cache." },
+      "explanation": { "zh": "权重加载后剩余显存不足以容纳最大上下文的 KV cache。", "en": "After the weights are loaded, the remaining memory cannot hold the KV cache for the maximum context." },
+      "suggestions": [ { "kind": "param", "param": "contextLength", "to": "planner" }, { "kind": "param", "param": "concurrency", "to": "planner" }, { "kind": "param", "param": "kvCacheDtype", "to": "fp8" } ]
+    },
+    {
+      "id": "mamba-align-batched-tokens", "code": "mamba_align_batched_tokens", "engines": ["vllm"], "phase": "kv", "rootCause": true, "severity": "error",
+      "regex": "mamba cache align|block_size[^\\n]{0,80}batched_tokens",
+      "title": { "zh": "Mamba cache align 要求更大的调度 token 上限", "en": "Mamba cache align needs a larger scheduling token limit" },
+      "hint": { "zh": "这是 Qwen3.6 混合/Mamba cache align 下的调度 token 上限过低；把 --max-num-batched-tokens 提高到 8192 后重试。", "en": "The scheduling token limit is too low for hybrid/Mamba cache align (Qwen3.6); raise --max-num-batched-tokens to 8192 and retry." },
+      "explanation": { "zh": "Mamba cache align 断言：max_num_batched_tokens 太小，Qwen3.6 MoE/NVFP4 用 --max-num-batched-tokens 8192 后重试。", "en": "Mamba cache align assertion: max_num_batched_tokens is too small; retry Qwen3.6 MoE/NVFP4 with --max-num-batched-tokens 8192." },
+      "suggestions": [ { "kind": "param", "param": "vllm.maxNumBatchedTokens", "to": "planner" } ]
+    },
+    {
+      "id": "modelopt-layout-mismatch", "code": "modelopt_layout_mismatch", "engines": ["vllm"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "w2_input_scale|modelopt_mixed|exceeds dimension size",
+      "title": { "zh": "ModelOpt 权重布局与当前 vLLM 加载器不匹配", "en": "The ModelOpt weight layout does not match this vLLM loader" },
+      "hint": { "zh": "这是 Qwen3.6/NVFP4 的 ModelOpt 权重布局与当前 vLLM 加载器不匹配；优先换 vllm/vllm-openai:nightly 或模型卡指定的 vLLM 版本。", "en": "The Qwen3.6/NVFP4 ModelOpt weight layout does not match this vLLM loader; prefer vllm/vllm-openai:nightly or the vLLM version named on the model card." },
+      "explanation": { "zh": "Qwen3.6/NVFP4 加载失败：当前 vLLM 镜像可能不支持该 ModelOpt 权重布局，换 vllm/vllm-openai:nightly 或模型卡指定版本后重试。", "en": "Qwen3.6/NVFP4 failed to load: this vLLM image may not support the ModelOpt weight layout; retry with vllm/vllm-openai:nightly or the version named on the model card." },
+      "suggestions": [ { "kind": "probe" }, { "kind": "runtime", "action": "newer-image" } ]
+    },
+    {
+      "id": "deepgemm-sf-transform", "code": "deepgemm_sf_transform", "engines": ["vllm"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "Unknown SF transformation",
+      "title": { "zh": "DeepGEMM 预热遇到未知的缩放因子变换", "en": "DeepGEMM warm-up hit an unknown scale-factor transformation" },
+      "hint": { "zh": "关闭 DeepGEMM（VLLM_USE_DEEP_GEMM=0）或换用更新的运行时镜像。", "en": "Disable DeepGEMM (VLLM_USE_DEEP_GEMM=0) or use a newer runtime image." },
+      "explanation": { "zh": "当前镜像的 DeepGEMM 内核不支持该 GPU 架构或量化格式的缩放因子布局。", "en": "The DeepGEMM kernels in this image do not support the scale-factor layout of this GPU architecture or quantization." },
+      "suggestions": [ { "kind": "runtime", "action": "newer-image" } ]
+    },
+    {
+      "id": "flashinfer-prefill-crash", "code": "flashinfer_prefill_crash", "engines": ["vllm"], "phase": "api", "rootCause": true, "severity": "error",
+      "regex": "BatchPrefillWithPagedKVCache|illegal memory access",
+      "title": { "zh": "FlashInfer prefill 内核发生 CUDA 崩溃", "en": "The FlashInfer prefill kernel crashed with a CUDA error" },
+      "hint": { "zh": "这是 Qwen3.6/NVFP4 在 FlashInfer + FP8 KV prefill 路径上的 CUDA 崩溃风险；dense 模型改用 --attention-backend TRITON_ATTN，是否启用 thinking 由客户端请求决定。", "en": "Qwen3.6/NVFP4 can crash in CUDA on the FlashInfer + FP8 KV prefill path; for dense models use --attention-backend TRITON_ATTN. Thinking is chosen by the client request." },
+      "explanation": { "zh": "Qwen3.6/NVFP4 推理退化或 FlashInfer prefill 崩溃：dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 开关应由客户端通过 chat_template_kwargs.enable_thinking 控制。", "en": "Qwen3.6/NVFP4 generation degraded or the FlashInfer prefill crashed: use TRITON_ATTN for dense models and flashinfer_b12x with generation-config vllm for SM12x MoE; thinking is controlled by the client through chat_template_kwargs.enable_thinking." },
+      "suggestions": [ { "kind": "param", "param": "vllm.attentionBackend", "to": "TRITON_ATTN" } ]
+    },
+    {
+      "id": "thinking-degenerate-output", "code": "degenerate_output", "engines": ["vllm"], "phase": "api", "rootCause": false, "severity": "warn",
+      "regex": "here's a thinking process|!{16}",
+      "title": { "zh": "生成内容退化为循环或重复符号", "en": "Generation degenerated into a loop or repeated symbols" },
+      "hint": { "zh": "这是 Qwen3.6/NVFP4 thinking 或生成退化循环；dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 由客户端按需传 chat_template_kwargs.enable_thinking 控制。", "en": "Qwen3.6/NVFP4 thinking or generation degenerated into a loop; use TRITON_ATTN for dense models and flashinfer_b12x with generation-config vllm for SM12x MoE. Thinking is chosen by the client through chat_template_kwargs.enable_thinking." },
+      "explanation": { "zh": "Qwen3.6/NVFP4 推理退化或 FlashInfer prefill 崩溃：dense 模型使用 TRITON_ATTN，SM12x MoE 使用 flashinfer_b12x + generation-config vllm；thinking 开关应由客户端通过 chat_template_kwargs.enable_thinking 控制。", "en": "Qwen3.6/NVFP4 generation degraded or the FlashInfer prefill crashed: use TRITON_ATTN for dense models and flashinfer_b12x with generation-config vllm for SM12x MoE; thinking is controlled by the client through chat_template_kwargs.enable_thinking." }
+    },
+    {
+      "id": "wsl-uva-missing", "code": "wsl_uva_missing", "engines": ["vllm"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "UVA is not available",
+      "title": { "zh": "Windows Docker/WSL 不提供 UVA（固定内存）", "en": "UVA (pinned memory) is not available under Windows Docker/WSL" },
+      "hint": { "zh": "这是 Windows Docker/WSL 的 pinned memory / UVA 限制；DiffusionGemma 的 V2 runner 需要 UVA，建议换原生 Linux 或使用非 DiffusionGemma 模型。", "en": "This is the pinned-memory / UVA limit of Windows Docker/WSL; the DiffusionGemma V2 runner needs UVA, so use native Linux or a non-DiffusionGemma model." },
+      "explanation": { "zh": "DiffusionGemma NVFP4 当前在 Windows Docker/WSL 路径不稳：优先换原生 Linux + V2 runner，或改跑常规 Qwen/Gemma 模型。", "en": "DiffusionGemma NVFP4 is unstable on the Windows Docker/WSL path: prefer native Linux with the V2 runner, or run a regular Qwen/Gemma model." }
+    },
+    {
+      "id": "cuda-kernel-assert", "code": "cuda_kernel_assert", "engines": ["vllm"], "phase": "api", "rootCause": true, "severity": "error",
+      "regex": "ScatterGatherKernel|device-side assert",
+      "title": { "zh": "推理期 CUDA kernel 断言失败", "en": "A CUDA kernel assertion failed during inference" },
+      "hint": { "zh": "这是推理期 CUDA kernel 断言，不是端口或显存占满；DiffusionGemma NVFP4 在 Windows Docker/WSL fallback 路径下可能无法稳定生成。", "en": "This is a CUDA kernel assertion during inference, not a port or memory problem; DiffusionGemma NVFP4 may not generate reliably on the Windows Docker/WSL fallback path." },
+      "explanation": { "zh": "DiffusionGemma NVFP4 当前在 Windows Docker/WSL 路径不稳：优先换原生 Linux + V2 runner，或改跑常规 Qwen/Gemma 模型。", "en": "DiffusionGemma NVFP4 is unstable on the Windows Docker/WSL path: prefer native Linux with the V2 runner, or run a regular Qwen/Gemma model." }
+    },
+    {
+      "id": "trust-remote-code", "code": "trust_remote_code_required", "engines": ["vllm", "sglang"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "(?:option|argument|pass|set)[^\\n]{0,60}trust_remote_code|requires you to execute the (?:configuration|modeling)",
+      "title": { "zh": "该模型需要执行自定义代码（trust_remote_code）", "en": "This model needs custom code (trust_remote_code)" },
+      "hint": { "zh": "该模型可能需要开启 trust_remote_code。", "en": "This model may need trust_remote_code enabled." },
+      "explanation": { "zh": "模型仓库带有自定义建模代码；开启前请先审阅代码，它会在容器内执行。", "en": "The model repository ships custom modeling code; review it before enabling, because it runs inside the container." },
+      "suggestions": [ { "kind": "param", "param": "trustRemoteCode", "to": true, "security": true } ]
+    },
+    {
+      "id": "port-in-use", "code": "port_in_use", "engines": ["*"], "phase": "container", "rootCause": true, "severity": "error",
+      "regex": "address already in use",
+      "title": { "zh": "端口已被占用", "en": "The port is already in use" },
+      "hint": { "zh": "换一个未占用的端口，或停止占用该端口的进程后重试。", "en": "Pick a free port, or stop the process that holds it, then retry." },
+      "explanation": { "zh": "服务进程无法绑定所选端口，通常是另一个实例或进程已在使用它。", "en": "The server could not bind the selected port; usually another instance or process already uses it." }
+    },
+    {
+      "id": "cuda-oom", "code": "cuda_oom", "engines": ["*"], "phase": "kv", "rootCause": true, "severity": "error",
+      "regex": "CUDA out of memory|out of memory",
+      "title": { "zh": "GPU 显存不足", "en": "The GPU ran out of memory" },
+      "hint": { "zh": "降低 max_model_len / max_num_seqs，启用 FP8 KV cache，或降低 gpu-memory-utilization。", "en": "Lower max_model_len / max_num_seqs, enable the FP8 KV cache, or lower gpu-memory-utilization." },
+      "explanation": { "zh": "显存错误：先切到低显存保守模式或把上下文减半。", "en": "Memory error: switch to the low-memory conservative profile or halve the context." },
+      "suggestions": [ { "kind": "param", "param": "contextLength", "to": "planner" }, { "kind": "param", "param": "concurrency", "to": "planner" }, { "kind": "param", "param": "kvCacheDtype", "to": "fp8" } ]
+    },
+    {
+      "id": "hf-gated-token", "code": "hf_gated_token", "engines": ["*"], "phase": "weights", "rootCause": true, "severity": "error",
+      "regex": "gated repo|401 Client Error|Invalid token",
+      "title": { "zh": "模型仓库需要授权或令牌无效", "en": "The model repository is gated or the token is invalid" },
+      "hint": { "zh": "检查 HF_TOKEN 和模型授权。", "en": "Check HF_TOKEN and your access to the model." },
+      "explanation": { "zh": "授权错误：配置 HF_TOKEN 后重新下载或启动。", "en": "Authorization error: set HF_TOKEN, then download or start again." }
+    },
+    {
+      "id": "model-path-missing", "code": "model_path_missing", "engines": ["*"], "phase": "container", "rootCause": false, "severity": "error",
+      "regex": "No such file or directory",
+      "title": { "zh": "找不到模型或挂载的文件", "en": "A model or mounted file was not found" },
+      "hint": { "zh": "检查模型路径、Docker 挂载目录和文件名。", "en": "Check the model path, the Docker mount and the file name." },
+      "explanation": { "zh": "路径错误：从模型库选择本地模型并自动填入启动表单。", "en": "Path error: pick the local model from the library so the launch form is filled in for you." }
+    },
+    {
+      "id": "legacy-batched-tokens-mention", "code": "legacy_batched_tokens", "engines": ["vllm"], "phase": "kv", "rootCause": false, "severity": "warn",
+      "regex": "max_num_batched_tokens",
+      "title": { "zh": "日志提到 max_num_batched_tokens", "en": "The log mentions max_num_batched_tokens" },
+      "hint": { "zh": "这是 Qwen3.6 混合/Mamba cache align 下的调度 token 上限过低；把 --max-num-batched-tokens 提高到 8192 后重试。", "en": "The scheduling token limit is too low for hybrid/Mamba cache align (Qwen3.6); raise --max-num-batched-tokens to 8192 and retry." },
+      "explanation": { "zh": "Mamba cache align 断言：max_num_batched_tokens 太小，Qwen3.6 MoE/NVFP4 用 --max-num-batched-tokens 8192 后重试。", "en": "Mamba cache align assertion: max_num_batched_tokens is too small; retry Qwen3.6 MoE/NVFP4 with --max-num-batched-tokens 8192." }
+    },
+    {
+      "id": "legacy-modelopt-file", "code": "legacy_modelopt_file", "engines": ["vllm"], "phase": "weights", "rootCause": false, "severity": "warn",
+      "regex": "qwen3_5\\.py",
+      "title": { "zh": "日志来自 Qwen3.5/3.6 模型文件", "en": "The log comes from the Qwen3.5/3.6 model file" },
+      "explanation": { "zh": "Qwen3.6/NVFP4 加载失败：当前 vLLM 镜像可能不支持该 ModelOpt 权重布局，换 vllm/vllm-openai:nightly 或模型卡指定版本后重试。", "en": "Qwen3.6/NVFP4 failed to load: this vLLM image may not support the ModelOpt weight layout; retry with vllm/vllm-openai:nightly or the version named on the model card." }
+    },
+    {
+      "id": "legacy-cuda-mention", "code": "legacy_cuda_mention", "engines": ["*"], "phase": "kv", "rootCause": false, "severity": "warn",
+      "regex": "cuda",
+      "title": { "zh": "日志提到 CUDA", "en": "The log mentions CUDA" },
+      "hint": { "zh": "降低 max_model_len / max_num_seqs，启用 FP8 KV cache，或降低 gpu-memory-utilization。", "en": "Lower max_model_len / max_num_seqs, enable the FP8 KV cache, or lower gpu-memory-utilization." },
+      "explanation": { "zh": "显存错误：先切到低显存保守模式或把上下文减半。", "en": "Memory error: switch to the low-memory conservative profile or halve the context." }
+    },
+    {
+      "id": "legacy-not-found-mention", "code": "legacy_not_found", "engines": ["*"], "phase": "container", "rootCause": false, "severity": "warn",
+      "regex": "no such|not found",
+      "title": { "zh": "日志提到文件未找到", "en": "The log mentions something was not found" },
+      "hint": { "zh": "检查模型路径、Docker 挂载目录和文件名。", "en": "Check the model path, the Docker mount and the file name." },
+      "explanation": { "zh": "路径错误：从模型库选择本地模型并自动填入启动表单。", "en": "Path error: pick the local model from the library so the launch form is filled in for you." }
+    },
+    {
+      "id": "legacy-trust-remote-code-mention", "code": "legacy_trust_remote_code", "engines": ["vllm", "sglang"], "phase": "weights", "rootCause": false, "severity": "warn",
+      "regex": "trust_remote_code",
+      "title": { "zh": "日志提到 trust_remote_code", "en": "The log mentions trust_remote_code" },
+      "hint": { "zh": "该模型可能需要开启 trust_remote_code。", "en": "This model may need trust_remote_code enabled." }
+    },
+    {
+      "id": "legacy-token-mention", "code": "legacy_token_mention", "engines": ["*"], "phase": "weights", "rootCause": false, "severity": "warn",
+      "regex": "token|gated",
+      "title": { "zh": "日志提到令牌或授权", "en": "The log mentions a token or gated access" },
+      "hint": { "zh": "检查 HF_TOKEN 和模型授权。", "en": "Check HF_TOKEN and your access to the model." },
+      "explanation": { "zh": "授权错误：配置 HF_TOKEN 后重新下载或启动。", "en": "Authorization error: set HF_TOKEN, then download or start again." }
+    },
+    {
+      "id": "legacy-gguf-on-vllm", "code": "gguf_on_vllm", "engines": ["vllm"], "phase": "weights", "rootCause": false, "severity": "warn",
+      "regex": "gguf",
+      "title": { "zh": "vLLM 日志提到 GGUF", "en": "The vLLM log mentions GGUF" },
+      "hint": { "zh": "GGUF 优先用 llama.cpp；若坚持 vLLM，确认 tokenizer/hf-config-path。", "en": "Prefer llama.cpp for GGUF; if you insist on vLLM, check the tokenizer / hf-config-path." }
+    }
+  ]
 }

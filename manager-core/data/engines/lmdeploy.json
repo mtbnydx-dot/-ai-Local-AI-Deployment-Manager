@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 90,
+  "id": "lmdeploy",
+  "label": {
+    "zh": "LMDeploy（实验）",
+    "en": "LMDeploy (experimental)"
+  },
+  "description": {
+    "zh": "LMDeploy api_server（TurboMind / PyTorch 后端）。实验性引擎，由通用 docker-template 适配器启动；镜像不会自动拉取。",
+    "en": "LMDeploy api_server (TurboMind / PyTorch backends). Experimental engine launched by the generic docker-template adapter; its image is never pulled automatically."
+  },
+  "family": "openai-server",
+  "adapter": "docker-template",
+  "tier": 2,
+  "status": "experimental",
+  "hostManager": "vllm",
+  "legacy": {
+    "engineLabel": "lmdeploy",
+    "managerEngineField": "lmdeploy"
+  },
+  "artifactFormats": [
+    "safetensors",
+    "awq"
+  ],
+  "runtimes": {
+    "default": "lmdeploy",
+    "allowed": [
+      "lmdeploy"
+    ],
+    "allowCustomImage": true
+  },
+  "host": {
+    "kinds": [
+      "docker"
+    ],
+    "default": "docker",
+    "containerPort": 23333,
+    "ipc": "host",
+    "init": false,
+    "ulimits": [],
+    "restart": "on-failure:3",
+    "gpus": "required",
+    "allowLan": true,
+    "healthcheck": {
+      "cmd": "python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:23333/health', timeout=4)\" || exit 1",
+      "interval": "30s",
+      "timeout": "5s",
+      "retries": 3
+    },
+    "cacheMounts": [
+      {
+        "configKey": "hfCache",
+        "target": "/root/.cache/huggingface"
+      }
+    ]
+  },
+  "api": {
+    "openaiBase": "/v1",
+    "models": "/v1/models",
+    "health": "/health",
+    "version": [
+      "/version"
+    ],
+    "ready": {
+      "kind": "models-list"
+    },
+    "probe": {
+      "kind": "chat-generation",
+      "maxTokens": 32
+    }
+  },
+  "apiSurface": {
+    "chat": true,
+    "completions": true,
+    "responses": false,
+    "messages": false,
+    "embeddings": false,
+    "rerank": false
+  },
+  "apiQuirks": {
+    "reasoningField": null
+  },
+  "catalog": "launch-params/lmdeploy.json",
+  "memoryModel": {
+    "kind": "free-fraction-after-weights",
+    "fractionParam": "lmdeploy.cacheMaxEntryCount"
+  },
+  "capabilities": {
+    "parallelInstances": true,
+    "tensorParallel": true,
+    "pipelineParallel": false,
+    "dataParallel": false,
+    "expertParallel": false,
+    "speculative": [],
+    "autoParsers": {
+      "tool": null,
+      "reasoning": null
+    },
+    "lora": true,
+    "multiModel": false,
+    "hotLoad": false,
+    "sleepWake": false,
+    "roles": [
+      "chat"
+    ]
+  },
+  "knowledgeKeys": [],
+  "secrets": {
+    "apiKey": {
+      "mode": "flag",
+      "flag": "--api-keys"
+    }
+  },
+  "managedFlags": [
+    "--server-name",
+    "--server-port",
+    "--model-name",
+    "--api-keys",
+    "--enable-metrics"
+  ],
+  "extraEnvAllow": [
+    "LMDEPLOY_",
+    "NCCL_",
+    "PYTORCH_",
+    "TORCH_",
+    "TRITON_"
+  ],
+  "introspection": {
+    "entrypoint": "lmdeploy",
+    "argv": [
+      "serve",
+      "api_server",
+      "--help"
+    ],
+    "parser": "argparse"
+  },
+  "metricsMap": {
+    "path": "/metrics",
+    "format": "prometheus",
+    "map": {}
+  },
+  "template": {
+    "entrypoint": "lmdeploy",
+    "args": [
+      "serve",
+      "api_server",
+      "{{model.containerPath}}",
+      {
+        "flag": "--server-name",
+        "value": "0.0.0.0"
+      },
+      {
+        "flag": "--server-port",
+        "value": "{{host.containerPort}}"
+      },
+      {
+        "flag": "--model-name",
+        "value": "{{servedName}}"
+      },
+      {
+        "flag": "--session-len",
+        "value": "{{contextLength}}"
+      },
+      {
+        "flag": "--max-batch-size",
+        "value": "{{concurrency}}"
+      },
+      {
+        "flag": "--tp",
+        "value": "{{tensorParallel}}"
+      },
+      {
+        "flag": "--cache-max-entry-count",
+        "value": "{{lmdeploy.cacheMaxEntryCount}}"
+      },
+      {
+        "flag": "--backend",
+        "value": "{{lmdeploy.backend}}"
+      },
+      {
+        "args": [
+          "--enable-metrics"
+        ],
+        "when": {
+          "const": true
+        }
+      },
+      {
+        "repeat": "{{lora.adapters}}",
+        "args": [
+          "--adapters",
+          "{{item.name}}={{item.path}}"
+        ]
+      }
+    ],
+    "env": {},
+    "files": [],
+    "flagFormat": "space"
+  }
+}

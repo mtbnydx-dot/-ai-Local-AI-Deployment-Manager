@@ -105,11 +105,11 @@ test("GET /api/engines returns the three engines across both managers with their
   assert.equal(llamaBody.managerId, "llama");
   assert.ok(Number.isFinite(Date.parse(vllmBody.generatedAt)));
   assert.deepEqual(vllmBody.errors, []);
-  assert.deepEqual(vllmBody.engines.map((engine) => engine.engineId), ["vllm", "sglang"]);
+  assert.deepEqual(vllmBody.engines.map((engine) => engine.engineId), ["vllm", "sglang", "lmdeploy", "tabbyapi", "trtllm"]);
   assert.deepEqual(llamaBody.engines.map((engine) => engine.engineId), ["llamacpp"]);
 
   const engines = [...vllmBody.engines, ...llamaBody.engines];
-  assert.equal(engines.length, 3);
+  assert.equal(engines.length, 6);
   const runtimeIds = engines.flatMap((engine) => engine.runtimes.map((runtime) => runtime.runtimeId));
   for (const runtimeId of ACCEPTANCE_RUNTIME_IDS) assert.ok(runtimeIds.includes(runtimeId), runtimeId);
   assert.equal(new Set(runtimeIds).size, runtimeIds.length);
@@ -201,7 +201,7 @@ test("a bad override is listed in errors[] and the engines are still served", as
   const res = await call(app, "GET /api/engines");
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.ok, true);
-  assert.deepEqual(res.body.engines.map((engine) => [engine.engineId, engine.status]), [["vllm", "stable"], ["sglang", "stable"]]);
+  assert.deepEqual(res.body.engines.map((engine) => [engine.engineId, engine.status]), [["vllm", "stable"], ["sglang", "stable"], ["lmdeploy", "experimental"], ["tabbyapi", "experimental"], ["trtllm", "experimental"]]);
   assert.deepEqual(res.body.errors.map((item) => [path.basename(item.file), item.source, item.code]).sort(), [
     ["broken.json", "override", "invalid_json"],
     ["sglang.json", "override", "default_runtime_unresolved"],
@@ -280,7 +280,7 @@ test("GET /api/engines never shows a secret that override data names as an image
   assert.equal(res.statusCode, 200);
   assert.ok(!JSON.stringify(res.body).includes(secret), "the secret is not in the payload");
   assert.ok(!images.calls.includes(secret), "the secret never reaches docker image inspect");
-  assert.deepEqual(res.body.engines.map((engine) => engine.engineId), ["vllm", "sglang"]);
+  assert.deepEqual(res.body.engines.map((engine) => engine.engineId), ["vllm", "sglang", "lmdeploy", "tabbyapi", "trtllm"]);
   const pennyroyal = res.body.engines[1].runtimes.find((runtime) => runtime.manifestKey === "sglangPennyroyal");
   assert.equal(Object.hasOwn(pennyroyal, "imageOverrideEnv"), false);
   // Both problems are reported: the manifest falls back to the bundled table

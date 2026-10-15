@@ -367,7 +367,9 @@ test("every param in the real launch-params catalogs renders", () => {
     const loaded = catalogs.loadCatalog(engineId, {});
     const payload = core.engines.paramCatalog.buildSchemaPayload({ catalog: loaded, facts: {} });
     const known = new Set(payload.groups.map((group) => group.id));
-    assert.ok(payload.params.length > 40, `${engineId} has params`);
+    // The tier-2 template engines ship a short catalog (shared concepts plus a few engine params).
+    const minimum = ["lmdeploy", "trtllm", "tabbyapi"].includes(engineId) ? 5 : 40;
+    assert.ok(payload.params.length > minimum, `${engineId} has params`);
     const seen = new Set();
     for (const level of LEVELS) {
       const model = buildFormModel({ catalog: payload, values: {}, locale: "en-US", level });

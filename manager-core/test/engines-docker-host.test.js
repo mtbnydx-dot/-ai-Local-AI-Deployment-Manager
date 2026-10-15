@@ -342,14 +342,14 @@ test("runtime-wait uses the inferProgress and readLogs hooks when given", async 
   assert.ok(options.job.finished);
 });
 
-test("runtime-wait reads exited-container logs through readLogs with tail 260", async () => {
+test("runtime-wait reads exited-container logs through readLogs with tail 2000 for root-cause analysis", async () => {
   const reads = [];
   const options = waitOptions({
     getContainerStatus: async () => ({ exists: true, running: false, status: "exited" }),
     readLogs: async (name, readOptions) => { reads.push([name, readOptions.tail]); return "boom"; },
   });
   await assert.rejects(waitForRuntimeReady(options), /exited before becoming ready/);
-  assert.deepEqual(reads, [["c1", 260]]);
+  assert.deepEqual(reads, [["c1", 2000]]);
 });
 
 test("runtime-wait keeps docker logs as the default reader", async () => {
@@ -359,5 +359,5 @@ test("runtime-wait keeps docker logs as the default reader", async () => {
     docker: async (args) => { dockerCalls.push(args); return { stdout: "out", stderr: "err" }; },
   });
   await assert.rejects(waitForRuntimeReady(options), /exited before becoming ready/);
-  assert.deepEqual(dockerCalls, [["logs", "--tail", "260", "c1"]]);
+  assert.deepEqual(dockerCalls, [["logs", "--tail", "2000", "c1"]]);
 });

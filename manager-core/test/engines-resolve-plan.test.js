@@ -115,7 +115,11 @@ function fakeVllmManager(options = {}) {
     windowsPathToContainerPath: toContainerPath,
     normalizeGpuIds,
     getLanAddress: () => "192.168.1.27",
-    resolveLaunchModel: (model) => ({ modelArg: toContainerPath(model), effectiveLoadFormat: "auto", localPath: model }),
+    resolveLaunchModel: (model) => {
+      calls.push("resolveLaunchModel");
+      if (options.missingModelFiles) throw new Error(`model files are missing: ${model}`);
+      return { modelArg: toContainerPath(model), effectiveLoadFormat: "auto", localPath: model };
+    },
     effectiveLaunchQuantization: () => ({ value: "", modelConfigMethod: "" }),
     resolveVllmRuntimePreset: (opts) => ({
       ...(options.preset || {}),
@@ -152,6 +156,7 @@ function fakeVllmManager(options = {}) {
     normalizeNetworkAccess: (value) => (value === "lan" ? "lan" : "local"),
     checkModelCompatibility: async () => {
       calls.push("checkModelCompatibility");
+      if (options.missingModelFiles) throw new Error("model files are missing");
       return { ok: true, findings: [] };
     },
     getLanAddress: () => "192.168.1.27",
@@ -179,8 +184,9 @@ function fakeVllmManager(options = {}) {
     },
     deleteRuntimeApiKey: async () => calls.push("deleteRuntimeApiKey"),
     getEngineRegistry: () => registry,
-    prepareLaunchCommand: (runOptions, { jobId }) => {
-      const prepared = builder.prepareLaunch({ id: jobId, meta: {} }, runOptions);
+    getLaunchSpec: (launchId) => options.launchSpecs?.[launchId] || null,
+    prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
+      const prepared = builder.prepareLaunch({ id: jobId, meta: {} }, prospective ? { ...runOptions, prospective: true } : runOptions);
       return { ...prepared, recipe: engines.recipes.recipeForLegacyPreset(prepared.preset) };
     },
     getHostGpus: async () => {
@@ -597,11 +603,12 @@ test("gpu-admission evaluate() previews the P0-RT-3 decision without a lock or a
   assert.equal(unknown.code, "vram_telemetry_unavailable");
 });
 
-test("v2 parts of later packages are plan errors, not silent drops", async () => {
+test("a prospective plan needs a card; an unknown instance mode is a plan error (ENG-26 supersedes the ENG-7 stubs)", async () => {
   const host = fakeVllmManager();
-  const plan = await host.start.planLaunch(v2Body({ prospective: true, instance: { mode: "add" }, extraArgs: ["--x"] }));
+  const plan = await host.start.planLaunch(v2Body({ prospective: true, instance: { mode: "sideways" }, extraArgs: ["--x"] }));
+  assert.deepEqual(plan.errors.map((item) => item.code).sort(), ["instance_mode_unsupported", "required"]);
+  assert.equal(plan.errors.find((item) => item.code === "required").field, "model.card");
   // extraArgs became real in ENG-15: without introspection an unknown flag is a warning.
-  assert.deepEqual(plan.errors.map((item) => item.code).sort(), ["instance_mode_unsupported", "prospective_unsupported"]);
   assert.ok(plan.warnings.some((item) => item.code === "extra_arg_unverified"));
 });
 
@@ -752,4 +759,231 @@ test("P0 flags: a v2 request's catalog-only values reach the planned command, a 
   const bad = await host.start.planLaunch(v2Body({ values: { contextLength: 65536, concurrency: 4, "speculative.method": "eagle3" } }));
   assert.equal(bad.ok, false);
   assert.ok(bad.errors.some((item) => item.field === "speculative.method" && item.code === "speculative_needs_draft_model"));
+});
+
+// ---------------------------------------------------------------------------
+// ENG-26: POST /api/launch, add/skip, expectedPlanHash, fromLaunchId,
+// prospective plans and planner provenance (01-engines §11)
+// ---------------------------------------------------------------------------
+
+const LAUNCH_ID = "lch_aaaaaaaaaaaaaaaaaaaa";
+const STARTED_CALLS = ["createJob", "acquireGpuAdmission", "saveRuntimeApiKey", "runStartJob"];
+
+/** /api/launch (v2 only), /api/launch/plan and /api/start over one fake vLLM manager. */
+function mountLaunchRoutes(host) {
+  const app = recordingApp();
+  engines.registerEngineRoutes(app, {
+    registry: host.registry,
+    managerId: "vllm",
+    isLocalRequest: () => true,
+    planLaunch: (body) => host.start.planLaunch(body),
+    startLaunch: ({ req, body }) => host.start({ req, body, v2Only: true }),
+  });
+  core.registerRuntimeRoutes(app, { startRuntime: host.start });
+  return app;
+}
+
+function occupiedPrimary(model = "Other-Model") {
+  return [{ name: "vllm-local", running: true, ports: "127.0.0.1:8000->8000/tcp", labels: { "ai.manager.model": model } }];
+}
+
+function addBody(extra = {}) {
+  return v2Body({ instance: { mode: "add", networkAccess: "local", gpuIds: ["0"] }, ...extra });
+}
+
+function launched(host) {
+  return STARTED_CALLS.filter((name) => host.calls.includes(name));
+}
+
+test("expectedPlanHash: a mismatch is 409 plan_changed with the new plan, before any job, lease or Docker call", async () => {
+  const host = fakeVllmManager();
+  const app = mountLaunchRoutes(host);
+  const plan = (await call(app, "POST /api/launch/plan", { body: v2Body() })).body;
+  assert.match(plan.planHash, /^sha256:[0-9a-f]{64}$/);
+
+  host.calls.length = 0;
+  for (const route of ["POST /api/launch", "POST /api/start"]) {
+    const stale = await call(app, route, { body: v2Body({ expectedPlanHash: `sha256:${"0".repeat(64)}` }) });
+    assert.equal(stale.statusCode, 409, route);
+    assert.equal(stale.body.ok, false);
+    assert.equal(stale.body.code, "plan_changed");
+    assert.ok(stale.body.error);
+    assert.equal(stale.body.plan.planHash, plan.planHash);
+    assert.equal(Object.hasOwn(stale.body.plan, "legacy"), false);
+  }
+  assert.deepEqual(launched(host), []);
+  assert.equal(host.calls.some((name) => name.startsWith("imagePresence") || name === "listContainers" || name.startsWith("admissionPreview")), false, host.calls.join(","));
+
+  const fresh = await call(app, "POST /api/launch", { body: v2Body({ expectedPlanHash: plan.planHash }) });
+  assert.equal(fresh.statusCode, 200);
+  assert.equal(fresh.body.plan.planHash, plan.planHash);
+  assert.equal(host.started.length, 1);
+});
+
+test("add + skip on an occupied slot answers 200 skipped:true: no job, no lease, nothing stopped", async () => {
+  const host = fakeVllmManager({ containers: occupiedPrimary("Qwen3.8-27B-FP8") });
+  const app = mountLaunchRoutes(host);
+  const res = await call(app, "POST /api/launch", { body: addBody({ onConflict: "skip" }) });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, {
+    ok: true,
+    skipped: true,
+    reason: "instance_running",
+    conflict: { instanceId: "primary", containerName: "vllm-local", model: "Qwen3.8-27B-FP8" },
+  });
+  assert.deepEqual(launched(host), []);
+  assert.ok(host.calls.includes("listContainers"));
+  assert.equal(host.calls.some((name) => /stop|remove|unload/i.test(name)), false);
+  assert.equal(host.started.length, 0);
+});
+
+test("add + fail (the default) on an occupied slot is 409 instance_conflict; a plan shows the blocker", async () => {
+  const host = fakeVllmManager({ containers: occupiedPrimary() });
+  const app = mountLaunchRoutes(host);
+  for (const extra of [{}, { onConflict: "fail" }]) {
+    const res = await call(app, "POST /api/launch", { body: addBody(extra) });
+    assert.equal(res.statusCode, 409);
+    assert.equal(res.body.code, "instance_conflict");
+    assert.equal(res.body.ok, false);
+  }
+  assert.deepEqual(launched(host), []);
+  const plan = (await call(app, "POST /api/launch/plan", { body: addBody({ onConflict: "skip" }) })).body;
+  assert.equal(plan.ok, false);
+  const conflict = plan.blockers.find((item) => item.code === "instance_conflict");
+  assert.equal(conflict.conflict.containerName, "vllm-local");
+  assert.equal(plan.steps.some((step) => step.kind === "replace"), false);
+});
+
+test("add on a free slot starts without a replace checkpoint; a port held by another container is a conflict", async () => {
+  const host = fakeVllmManager({ containers: [{ name: "vllm-local-other", running: true, ports: "127.0.0.1:8001->8000/tcp", labels: { "ai.manager.instance": "other", "ai.manager.model": "M" } }] });
+  const app = mountLaunchRoutes(host);
+  const free = await call(app, "POST /api/launch", { body: addBody() });
+  assert.equal(free.statusCode, 200, JSON.stringify(free.body));
+  await settle();
+  const run = host.started[0].runOptions;
+  assert.equal(run.launchMode, "add");
+  assert.equal(run.onConflict, "fail");
+  assert.equal(run.containerName, "vllm-local");
+  assert.equal(run.prepareGpuAdmission, undefined);
+  assert.ok(host.calls.includes("acquireGpuAdmission"));
+
+  const parallel = await call(app, "POST /api/launch", { body: addBody({ instance: { mode: "add", id: "second", port: 8002, networkAccess: "local", gpuIds: ["0"] } }) });
+  assert.equal(parallel.statusCode, 200, JSON.stringify(parallel.body));
+  await settle();
+  assert.equal(host.started[1].runOptions.containerName, "vllm-local-second");
+
+  const taken = await call(app, "POST /api/launch", { body: addBody({ instance: { mode: "add", id: "third", port: 8001, networkAccess: "local", gpuIds: ["0"] }, onConflict: "skip" }) });
+  assert.equal(taken.statusCode, 200);
+  assert.equal(taken.body.skipped, true);
+  assert.deepEqual(taken.body.conflict, { instanceId: "other", containerName: "vllm-local-other", model: "M" });
+  assert.equal(host.started.length, 2);
+});
+
+test("onConflict needs mode add and a known value", async () => {
+  const host = fakeVllmManager();
+  const replace = await host.start.planLaunch(v2Body({ onConflict: "skip" }));
+  assert.deepEqual(replace.errors.map((item) => item.code), ["on_conflict_requires_add"]);
+  const odd = await host.start.planLaunch(addBody({ onConflict: "retry" }));
+  assert.deepEqual(odd.errors.map((item) => item.code), ["invalid_value"]);
+});
+
+test("fromLaunchId replays a stored spec with the given placement", async () => {
+  const spec = {
+    engineId: "vllm",
+    runtimeId: null,
+    recipeId: null,
+    model: { ref: MODEL, servedName: "" },
+    // A replace-mode launch stores the id it derived from the model name.
+    instance: { mode: "replace", id: "qwen3-8-27b-fp8", port: 8000, networkAccess: "local", gpuIds: ["0"] },
+    values: { contextLength: 65536, concurrency: 4 },
+    extraArgs: [],
+    extraEnv: {},
+    secrets: { apiKeyRef: "" },
+  };
+  const launchSpecs = { [LAUNCH_ID]: { launchId: LAUNCH_ID, spec } };
+  const restore = { fromLaunchId: LAUNCH_ID, instance: { mode: "add" }, onConflict: "skip", source: "restore" };
+
+  const busy = fakeVllmManager({ launchSpecs, containers: occupiedPrimary() });
+  const skipped = await call(mountLaunchRoutes(busy), "POST /api/launch", { body: restore });
+  assert.equal(skipped.statusCode, 200);
+  assert.equal(skipped.body.skipped, true);
+  assert.equal(skipped.body.conflict.instanceId, "primary");
+  assert.deepEqual(launched(busy), []);
+
+  const free = fakeVllmManager({ launchSpecs });
+  const app = mountLaunchRoutes(free);
+  const res = await call(app, "POST /api/launch", { body: restore });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  await settle();
+  const run = free.started[0].runOptions;
+  assert.equal(run.model, MODEL);
+  assert.equal(run.maxModelLen, 65536);
+  assert.equal(run.launchMode, "add");
+  assert.equal(run.launchSource, "restore");
+  assert.equal(run.containerName, "vllm-local");
+  // The same spec can be planned first.
+  const plan = (await call(app, "POST /api/launch/plan", { body: { fromLaunchId: LAUNCH_ID, instance: { mode: "add" } } })).body;
+  assert.equal(plan.ok, true);
+
+  const unknown = await call(app, "POST /api/launch", { body: { fromLaunchId: "lch_bbbbbbbbbbbbbbbbbbbb" } });
+  assert.equal(unknown.statusCode, 404);
+  assert.equal(unknown.body.code, "unknown_launch");
+  const badType = await call(app, "POST /api/launch", { body: { fromLaunchId: LAUNCH_ID, expectedPlanHash: 5 } });
+  assert.equal(badType.statusCode, 400);
+});
+
+test("a prospective plan from a card needs no files; launching it is 400 prospective_not_launchable", async () => {
+  const host = fakeVllmManager({ missingModelFiles: true });
+  const app = mountLaunchRoutes(host);
+  const card = { id: "card-fixture", familyId: "qwen3.8", name: "Qwen3.8-27B-FP8" };
+  const body = v2Body({ prospective: true, model: { card } });
+  const res = await call(app, "POST /api/launch/plan", { body });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.prospective, true, JSON.stringify(res.body.errors.concat(res.body.blockers)));
+  assert.equal(res.body.ok, true, JSON.stringify(res.body.errors.concat(res.body.blockers)));
+  assert.ok(res.body.warnings.some((item) => item.code === "plan_prospective"));
+  assert.ok(res.body.command.argv.includes("/models/<pending>"));
+  assert.equal(host.calls.includes("resolveLaunchModel"), false);
+  assert.equal(host.calls.includes("checkModelCompatibility"), false);
+
+  const withRef = (await call(app, "POST /api/launch/plan", { body: v2Body({ prospective: true, model: { ref: "C:/fixture/models/Future", card } }) })).body;
+  assert.equal(withRef.ok, true);
+  assert.ok(withRef.command.argv.includes("/models/Future"));
+
+  const noCard = (await call(app, "POST /api/launch/plan", { body: v2Body({ prospective: true, model: {} }) })).body;
+  assert.equal(noCard.ok, false);
+  assert.equal(noCard.errors[0].field, "model.card");
+
+  host.calls.length = 0;
+  for (const route of ["POST /api/launch", "POST /api/start"]) {
+    const launch = await call(app, route, { body });
+    assert.equal(launch.statusCode, 400, route);
+    assert.equal(launch.body.code, "prospective_not_launchable");
+  }
+  assert.deepEqual(launched(host), []);
+  // Without the flag the same body is an ordinary plan.
+  const real = (await call(app, "POST /api/launch/plan", { body: v2Body({ model: { ref: MODEL, card } }) })).body;
+  assert.equal(real.prospective, false);
+});
+
+test("{value, source:\"planner\"} values carry provenance planner next to user values", async () => {
+  const host = fakeVllmManager();
+  const plan = await host.start.planLaunch(v2Body({ values: { contextLength: { value: 32768, source: "planner", reason: "fits" }, concurrency: 2 } }));
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors.concat(plan.blockers)));
+  assert.equal(plan.values.contextLength.value, 32768);
+  assert.equal(plan.values.contextLength.source, "planner");
+  assert.equal(plan.values.concurrency.source, "user");
+});
+
+test("POST /api/launch is v2 only: a legacy body is 400 v2_body_required, /api/start still takes it", async () => {
+  const host = fakeVllmManager();
+  const app = mountLaunchRoutes(host);
+  const legacy = await call(app, "POST /api/launch", { body: legacyBody() });
+  assert.equal(legacy.statusCode, 400);
+  assert.equal(legacy.body.code, "v2_body_required");
+  assert.deepEqual(launched(host), []);
+  const array = await call(app, "POST /api/launch", { body: [] });
+  assert.equal(array.statusCode, 400);
+  assert.equal((await call(app, "POST /api/start", { body: legacyBody() })).statusCode, 200);
+  assert.equal((await call(app, "POST /api/launch", { body: v2Body() })).statusCode, 200);
 });

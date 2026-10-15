@@ -285,6 +285,7 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "POST", path: "/api/hub/downloads/:id/start-now", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/:id/cancel", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/:id/priority", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/run", access: "admin" },
   ]);
   assert.deepEqual(registry.inventory().filter((item) => item.method === "EVENT" && (item.path === "library" || item.path === "downloads")), [
     { owner: "03", method: "EVENT", path: "library", access: "viewer" },
@@ -561,6 +562,10 @@ test("download routes: enqueue, list, detail, history, logs, resume-check and ev
   assert.equal((await request(port, "/api/hub/downloads/reorder", { method: "POST", owner, body: { ids: "x" } })).status, 400);
   const priority = await request(port, `/api/hub/downloads/${secondId}/priority`, { method: "POST", owner, body: { priority: "high" } });
   assert.equal(priority.json.job.priority, "high");
+  // Download & Run confirmation (03 §11): needs the explicit flag, a known job and a ready download.
+  assert.equal((await request(port, `/api/hub/downloads/${secondId}/run`, { method: "POST", owner, body: {} })).status, 400);
+  assert.equal((await request(port, `/api/hub/downloads/${secondId}/run`, { method: "POST", owner, body: { confirmReplace: true } })).status, 409);
+  assert.equal((await request(port, "/api/hub/downloads/dl_nosuchjobnosuchj/run", { method: "POST", owner, body: { confirmReplace: true } })).status, 404);
   const startNow = await request(port, `/api/hub/downloads/${thirdId}/start-now`, { method: "POST", owner, body: { force: true } });
   assert.equal(startNow.status, 200, startNow.text);
   await until(() => engine.started.length === 2);
