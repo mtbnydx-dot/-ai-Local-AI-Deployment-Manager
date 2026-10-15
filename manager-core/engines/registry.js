@@ -451,6 +451,21 @@ function createEngineRegistry(options = {}) {
     return current().errors;
   }
 
+  /**
+   * The descriptors' errorSignatures[] as one flat list in the 02 entry schema
+   * (01 §16.3). `engines` is implied as [descriptor.id]; 02's knowledge loader
+   * adds the list to its bundled layer. Entries are copies the caller may keep.
+   */
+  function errorSignatureAdditions() {
+    const entries = [];
+    for (const descriptor of current().engines.values()) {
+      for (const entry of Array.isArray(descriptor.errorSignatures) ? descriptor.errorSignatures : []) {
+        entries.push({ ...clone(entry), engines: [descriptor.id] });
+      }
+    }
+    return entries;
+  }
+
   function status() {
     const snapshot = current();
     return {
@@ -470,6 +485,7 @@ function createEngineRegistry(options = {}) {
     checkOverride,
     defaultEngineFor,
     defaultRuntime,
+    errorSignatureAdditions,
     errors,
     fromLegacy,
     get,
