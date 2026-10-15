@@ -1,5 +1,4 @@
 const core = require("../../manager-core");
-const { isPennyroyalImage, pennyroyalRecipeMemory } = require("./pennyroyal");
 
 // SGLang bodies go through the engine memory model (01-engines §12), so this
 // preview and the launch ask admission for the same request.
@@ -103,8 +102,11 @@ function previewSglangAdmission(input, selectedGpus) {
 
 function buildVllmLegacyEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
-  if (input.engine === "sglang" && isPennyroyalImage(input.runtimeImage)) {
-    const measured = estimateSglangMemory(input, pennyroyalRecipeMemory(input)).admissionRequest;
+  // A runtime image that pins a measured recipe (the Pennyroyal SGLang image)
+  // reserves the recipe's measured footprint.
+  const recipeMemory = core.engines.recipes.pinnedRecipeMemory(String(input.engine || ""), input.runtimeImage, input);
+  if (recipeMemory) {
+    const measured = estimateSglangMemory(input, recipeMemory).admissionRequest;
     const perGpuGb = measured.requestedMb / 1024;
     const minUsableGb = selectedGpus.length ? Math.min(...selectedGpus.map(gpu => gpu.freeGb)) : 0;
     const status = selectedGpus.length && perGpuGb > minUsableGb ? "fail" : "warn";
@@ -139,7 +141,8 @@ function buildVllmLegacyEstimate(input = {}) {
     multimodalReserveGb: Math.max(0, memoryEstimateNumber(input.multimodalReserveGb, input.arch?.isMultimodal ? 2 : 0)) + speculativeReserveGb,
   });
   plan.speculativeReserveGb = speculativeReserveGb;
-  const sglang = input.engine === "sglang";
+  // SGLang bodies: a fraction of the memory free at engine start (descriptor memoryModel).
+  const sglang = core.engines.memoryModels.memoryModelFor(String(input.engine || ""))?.kind === "static-fraction-of-free";
   const admissionPreview = sglang ? previewSglangAdmission(input, selectedGpus) : null;
   const suggestions = [];
   if (!plan.selectedGpus.length) {

@@ -12,8 +12,9 @@ const RUNTIME_MANIFEST_PATH = require.resolve("../runtime-manifest");
 const { storageReadJson } = require("../model-storage");
 const { createDockerHostConfig } = require("../engines/hosts/docker");
 const { createEngineRegistry } = require("../engines/registry");
+const { createOpsProbes } = require("./doctor-probes-ops");
 
-const WINDOWS_FACTS_SCRIPT = `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $errors=@(); function Collect($name,$work) { try { & $work } catch { $script:errors += $name; @() } }; $pwsh=Get-Command pwsh.exe -ErrorAction SilentlyContinue; [pscustomobject]@{ powershell=@{present=$true;version=$PSVersionTable.PSVersion.ToString()}; pwsh=@{present=[bool]$pwsh;path=$(if($pwsh){$pwsh.Source}else{''});version=$(if($pwsh){[Diagnostics.FileVersionInfo]::GetVersionInfo($pwsh.Source).ProductVersion}else{''})}; totalMemoryBytes=(Collect 'memory' { (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory }); processes=@(Collect 'processes' {Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath,CommandLine,CreationDate}); firewall=@(Collect 'firewall' {Get-NetFirewallPortFilter | Select-Object LocalPort,RemotePort,Protocol}); tasks=@(Collect 'tasks' {Get-ScheduledTask | Where-Object {$_.TaskName -like 'LocalAIPlatform*'} | Select-Object TaskName,State,Actions}); runKeys=@(Collect 'runKeys' {Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -ErrorAction Stop | Select-Object * -ExcludeProperty PS*}); errors=$errors } | ConvertTo-Json -Depth 6 -Compress`;
+const WINDOWS_FACTS_SCRIPT = `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $errors=@(); function Collect($name,$work) { try { & $work } catch { $script:errors += $name; @() } }; $pwsh=Get-Command pwsh.exe -ErrorAction SilentlyContinue; [pscustomobject]@{ powershell=@{present=$true;version=$PSVersionTable.PSVersion.ToString()}; pwsh=@{present=[bool]$pwsh;path=$(if($pwsh){$pwsh.Source}else{''});version=$(if($pwsh){[Diagnostics.FileVersionInfo]::GetVersionInfo($pwsh.Source).ProductVersion}else{''})}; totalMemoryBytes=(Collect 'memory' { (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory }); processes=@(Collect 'processes' {Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath,CommandLine,CreationDate}); firewall=@(Collect 'firewall' { $ports=@{}; Get-NetFirewallPortFilter | ForEach-Object { $ports[$_.InstanceID]=$_ }; $apps=@{}; Get-NetFirewallApplicationFilter | ForEach-Object { $apps[$_.InstanceID]=$_ }; Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow | ForEach-Object { $p=$ports[$_.InstanceID]; $a=$apps[$_.InstanceID]; [pscustomobject]@{Name=$_.DisplayName;Profile=[string]$_.Profile;Protocol=$(if($p){[string]$p.Protocol}else{''});LocalPort=$(if($p){@($p.LocalPort) -join ','}else{''});Program=$(if($a){[string]$a.Program}else{''})} } }); tasks=@(Collect 'tasks' {Get-ScheduledTask | Where-Object {$_.TaskName -like 'LocalAIPlatform*'} | ForEach-Object { $i=Get-ScheduledTaskInfo -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue; [pscustomobject]@{TaskName=$_.TaskName;State=[string]$_.State;Actions=@($_.Actions | ForEach-Object { [pscustomobject]@{Execute=$_.Execute;Arguments=$_.Arguments} });LastRunTime=$(if($i -and $i.LastRunTime.Year -gt 1999){$i.LastRunTime.ToUniversalTime().ToString('o')}else{$null});LastTaskResult=$(if($i){$i.LastTaskResult}else{$null});NextRunTime=$(if($i -and $i.NextRunTime.Year -gt 1999){$i.NextRunTime.ToUniversalTime().ToString('o')}else{$null})} }}); runKeys=@(Collect 'runKeys' {Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -ErrorAction Stop | Select-Object * -ExcludeProperty PS*}); userEnvNames=@(Collect 'userEnv' {(Get-Item 'HKCU:\\Environment').Property}); errors=$errors } | ConvertTo-Json -Depth 6 -Compress`;
 
 function sha256(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
 function readJson(file, fallback = null) { return storageReadJson(file, fallback); }
@@ -128,7 +129,7 @@ function createDefaultProbes(ctx = {}, options = {}) {
       return { present: true, version: String(output).match(/\d+\.\d+(?:\.\d+)?/)?.[0] || null };
     } catch (error) { if (["ENOENT", "ENOTDIR"].includes(error.code)) return { present: false, version: null }; throw error; }
   }
-  return {
+  const defaults = {
     isWorktree: () => fs.existsSync(path.join(aiRoot, ".git")),
     nodeVersion: () => process.version,
     sqlite: () => typeof require("node:sqlite").DatabaseSync === "function",
@@ -234,6 +235,7 @@ function createDefaultProbes(ctx = {}, options = {}) {
       }));
     },
   };
+  return Object.assign(defaults, createOpsProbes(ctx, { execute, docker, windowsFacts, execFile, options }));
 }
 
 module.exports = { createDefaultProbes, hashBuildInputs, lockVersionsMatch, parseWsl, decodeWsl, parseWslConfig, parseGpuCsv, WINDOWS_FACTS_SCRIPT };

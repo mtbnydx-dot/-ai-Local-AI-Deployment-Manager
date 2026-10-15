@@ -21,6 +21,7 @@ const managerHooks = require("./manager-hooks");
 const observations = require("./observations");
 const planFacts = require("./plan-facts");
 const planner = require("./planner");
+const rootCause = require("./root-cause");
 const templateSignatures = require("./template-signatures");
 const rangeReader = require("./remote/range-reader");
 const role = require("./detectors/role");
@@ -104,6 +105,12 @@ module.exports = {
   planFacts: planFacts.planFacts,
   resolveCard: planFacts.resolveCard,
   managerHooks: managerHooks.managerHooks,
+  // Root-cause classification of a failed start (02 §14, MOD-12).
+  rootCause: {
+    classifyFailure: rootCause.classifyFailure,
+    legacyHint: rootCause.legacyHint,
+    legacySuggestions: rootCause.legacySuggestions,
+  },
   // Launch planner (02 §11, MOD-14): ranked, diversified plans per GPU set.
   planner: {
     planLaunches: planner.planLaunches,

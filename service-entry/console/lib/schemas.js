@@ -337,6 +337,38 @@ export const EngineDescriptorGuard = obj({
   capabilities: maybe(record(any)),
 });
 
+/** 01 §21.2 `GET /api/engines`: both managers' engines, the managers that did not answer (`errors[]`) and the external endpoints. */
+export const EnginesResponseGuard = obj({
+  engines: arr(EngineGuard),
+  errors: opt(arr(any)),
+  managers: opt(arr(any)),
+  external: maybe(obj({ endpoints: opt(arr(any)) })),
+});
+
+/** 01 §20, §21.3: an external endpoint as an owner or a viewer reads it. It never carries a key. */
+export const ExternalEndpointGuard = obj({
+  endpointId: str,
+  label: opt(str),
+  kind: opt(str),
+  enabled: opt(bool),
+  baseUrl: opt(str),
+  hostClass: opt(str),
+  health: maybe(record(any)),
+});
+
+/** 01 §21.2 `GET /api/engines/external/endpoints`. */
+export const ExternalEndpointsGuard = obj({ endpoints: arr(ExternalEndpointGuard) });
+
+/** 01 §17, §21.1 `GET …/flags[?against=]`: the snapshot (`flags`) and, with `against`, the diff. */
+export const FlagsResponseGuard = obj({ diff: maybe(record(any)), flags: maybe(record(any)), snapshot: maybe(record(any)) });
+
+/** 01 §4, §21.1 `POST /api/engines/descriptors/validate`. */
+export const DescriptorValidationGuard = obj({
+  ok: bool,
+  kind: opt(str),
+  errors: arr(obj({ path: opt(str), code: opt(str), message: opt(str) })),
+});
+
 // ---------------------------------------------------------------------------
 // 02: model cards, compatibility, fit, plans
 

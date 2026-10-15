@@ -11,6 +11,11 @@ function sendJsonError(res, error, fallbackStatus = 500) {
     payload.errors = error.errors;
     if (error.hint) payload.hint = String(error.hint);
   }
+  // plan_changed (01 §11): the plan as it is now, so the caller can review it.
+  if (error.planView && typeof error.planView === "object") {
+    payload.ok = false;
+    payload.plan = error.planView;
+  }
   res.status(error.status || fallbackStatus).json(payload);
 }
 
@@ -151,4 +156,5 @@ function registerRuntimeRoutes(app, deps = {}) {
 
 module.exports = {
   registerRuntimeRoutes,
+  sendJsonError,
 };

@@ -26,6 +26,7 @@
     "playwright.config.cjs",
     "SYNC_POLICY.md",
     "release-manifest.json",
+    "platform.cmd",
     "install-all.cmd",
     "install-download-cli.cmd",
     "test-all.cmd",

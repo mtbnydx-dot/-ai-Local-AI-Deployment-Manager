@@ -143,6 +143,30 @@
       "asyncScheduling": {
         "recipe": "vllm.asyncScheduling"
       }
+    },
+    "check": {
+      "findings": [
+        {
+          "severity": "warn",
+          "title": {
+            "zh": "Qwen3.6 / NVFP4 运行时",
+            "en": "Qwen3.6 / NVFP4 runtime"
+          },
+          "detail": {
+            "zh": "该模型卡建议使用 vLLM nightly，并设置 --max-num-batched-tokens 8192；固定旧版镜像可能在 ModelOpt 权重布局处失败（例如 scale 名称或维度不匹配）。管理器启动时会自动使用 {{recipe.runtimeImage}} 并补齐这些专用参数。",
+            "en": "The model card recommends vLLM nightly with --max-num-batched-tokens 8192; an older pinned image can fail on the ModelOpt weight layout (scale names or shapes). The manager starts {{recipe.runtimeImage}} and adds these settings."
+          }
+        }
+      ],
+      "recommendations": {
+        "quantization": "modelopt",
+        "kvCacheDtype": "auto",
+        "reasoningParser": "qwen3",
+        "toolCallParser": "qwen3_xml",
+        "enableAutoToolChoice": true,
+        "loadFormat": "auto",
+        "maxNumBatchedTokens": 8192
+      }
     }
   },
   "evidence": {

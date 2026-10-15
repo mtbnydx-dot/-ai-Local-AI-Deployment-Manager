@@ -94,7 +94,7 @@ function templateDraft(overrides = {}) {
 
 test("every bundled descriptor validates and is named after its id", () => {
   const files = fs.readdirSync(BUNDLED_DIR).filter((name) => name.endsWith(".json")).sort();
-  assert.deepEqual(files, ["external.json", "llamacpp.json", "sglang.json", "vllm.json"]);
+  assert.deepEqual(files, ["external.json", "llamacpp.json", "lmdeploy.json", "sglang.json", "tabbyapi.json", "trtllm.json", "vllm.json"]);
   for (const file of files) {
     const descriptor = JSON.parse(fs.readFileSync(path.join(BUNDLED_DIR, file), "utf8"));
     const result = validateDescriptor(descriptor, { mode: "bundled" });
@@ -104,8 +104,9 @@ test("every bundled descriptor validates and is named after its id", () => {
     assert.equal(descriptor.schemaVersion, 1);
     assert.match(descriptor.asOf, /^\d{4}-\d{2}-\d{2}$/);
     assert.ok(descriptor.staleAfterDays > 0);
-    assert.equal(descriptor.tier, descriptor.adapter === "external" ? 3 : 1);
-    assert.equal(descriptor.status, "stable");
+    assert.equal(descriptor.tier, { external: 3, "docker-template": 2 }[descriptor.adapter] || 1);
+    // The docker-template engines ship experimental (01 §19.2); the rest are stable.
+    assert.equal(descriptor.status, descriptor.adapter === "docker-template" ? "experimental" : "stable");
   }
 });
 
@@ -199,7 +200,7 @@ test("an invalid override is reported with its file and the bundled descriptor s
     "c-bad-default.json": { id: "sglang", runtimes: { default: "sglangNowhere" } },
   });
   const registry = core.engines.createEngineRegistry({ overrideDir, env: {} });
-  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp", "external"]);
+  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp", "external", "lmdeploy", "tabbyapi", "trtllm"]);
   assert.equal(registry.get("vllm").status, "stable");
   assert.equal(registry.get("sglang").runtimes.default, "sglang");
 
@@ -239,7 +240,7 @@ test("an override can add a data-driven engine whose runtime is in the manifest"
   const registry = core.engines.createEngineRegistry({ overrideDir, env: {} });
   assert.deepEqual(registry.errors(), []);
   assert.equal(registry.get("lmdeploy-lab").adapter, "docker-template");
-  assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang", "lmdeploy-lab"]);
+  assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang", "lmdeploy", "lmdeploy-lab", "tabbyapi", "trtllm"]);
   assert.deepEqual(registry.runtimesFor("lmdeploy-lab").map((ref) => [ref.runtimeId, ref.status, ref.default, ref.pullPolicy]), [
     ["lmdeploy-lab@0.10.2", "unpinned", true, "explicit"],
   ]);
@@ -250,7 +251,7 @@ test("a new engine whose runtimes do not resolve is dropped and reported, not fa
   const overrideDir = makeOverrideDir(t, { "lmdeploy-lab.json": templateDraft() });
   const registry = core.engines.createEngineRegistry({ overrideDir, env: {} });
   assert.equal(registry.has("lmdeploy-lab"), false);
-  assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang"]);
+  assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang", "lmdeploy", "tabbyapi", "trtllm"]);
   const expected = [
     ["override", "lmdeploy-lab", "runtimes.allowed[0]", "unknown_runtime"],
     ["override", "lmdeploy-lab", "runtimes.default", "default_runtime_unresolved"],

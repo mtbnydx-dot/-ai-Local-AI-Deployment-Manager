@@ -58,6 +58,12 @@ function normalizeAccessEvent(entry = {}, lanAddress = "") {
     toolSchemaCount: Number(entry.toolSchemaCount || 0),
     toolUseCount: Number(entry.toolUseCount || 0),
     error: String(entry.error || ""),
+    // TEL-2: the request identity the hop v2 gives a manager.
+    clientRequestId: String(entry.clientRequestId || "").slice(0, 128),
+    viaEntry: entry.viaEntry === true,
+    keyId: String(entry.keyId || entry.clientId || "").slice(0, 128),
+    errorClass: String(entry.errorClass || "").slice(0, 40),
+    firstByteMs: Math.max(0, Number(entry.firstByteMs) || 0),
   };
   normalized.sourceProgram = inferAccessSourceProgram({
     ...entry,
@@ -442,6 +448,8 @@ const ACCESS_LOG_EXPORT_FIELDS = [
   "at", "remoteAddress", "external", "sourceProgram", "clientId", "method", "path", "kind", "status",
   "model", "resolvedModel", "stream", "authSource", "durationMs", "queuedMs", "inputTokens", "outputTokens",
   "totalTokens", "stopReason", "toolSchemaCount", "toolUseCount", "userAgent", "origin", "refererHost", "error",
+  // TEL-2 columns are appended so the CSV order stays stable for existing readers.
+  "requestId", "terminalState", "clientRequestId", "viaEntry", "keyId", "errorClass", "firstByteMs",
 ];
 
 function formatAccessLogExport(events, format = "csv") {
@@ -724,5 +732,6 @@ module.exports = {
   accessEventMatchesQuery,
   queryAccessLogEvents,
   formatAccessLogExport,
+  accessLogCsvCell,
   createServiceGatewayAccessLogStore,
 };

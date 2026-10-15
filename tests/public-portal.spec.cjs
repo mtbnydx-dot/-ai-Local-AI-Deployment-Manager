@@ -579,12 +579,12 @@ test.describe("keyboard and accessibility", () => {
   });
 
   for (const [scheme, lang] of [["light", "en"], ["dark", "zh-CN"]]) {
-    test(`axe finds nothing blocking on the status and models pages (${scheme}, ${lang})`, async ({ browser }) => {
+    test(`axe finds nothing blocking on the status, models, announcements and docs pages (${scheme}, ${lang})`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: scheme });
       const page = await context.newPage();
       state.announcements = ANNOUNCEMENTS;
       state.status = overall("degraded");
-      for (const route of ["/status", "/models", "/models/qwen3.8-35b-a3b", "/announcements"]) {
+      for (const route of ["/status", "/models", "/models/qwen3.8-35b-a3b", "/announcements", "/docs", "/docs/quickstart", "/docs/errors", "/docs/clients"]) {
         await goto(page, `${route}?lang=${lang}`);
         await expect(page.locator("main")).not.toBeEmpty();
         await page.waitForLoadState("networkidle");
@@ -593,6 +593,129 @@ test.describe("keyboard and accessibility", () => {
       await context.close();
     });
   }
+});
+
+// PUB-16: docs, snippets and the errors page.
+test.describe("docs", () => {
+  const withSessionKey = (page) => page.addInitScript((key) => window.sessionStorage.setItem("portal.key", key), FAKE_KEY);
+
+  test("the index lists every docs page and the nav reaches each one", async ({ page }) => {
+    await goto(page, "/docs?lang=en");
+    await expect(page.locator("h1")).toHaveText("Docs");
+    await expect(page.locator(".docs-index a")).toHaveCount(10);
+    await page.getByRole("link", { name: "Quick start" }).first().click();
+    await expect(page).toHaveURL(/\/docs\/quickstart$/);
+    await expect(page.locator("h1")).toHaveText("Quick start");
+    await page.getByRole("navigation", { name: "Docs pages" }).getByRole("link", { name: "Privacy" }).click();
+    await expect(page.locator("h1")).toHaveText("Privacy");
+    await expect(page).toHaveTitle(/Privacy · Local Model Service/);
+  });
+
+  test("quickstart injects the configured base URLs, a catalog model and $API_KEY, never a key", async ({ page }) => {
+    await withSessionKey(page);
+    await goto(page, "/docs/quickstart?lang=en");
+    const article = page.locator(".docs-article");
+    await expect(article.locator("h1")).toHaveText("Quick start");
+    await expect(article).toContainText(`${baseUrl}/v1`);
+    await expect(article).toContainText(`${baseUrl}/anthropic`);
+    await expect(article).toContainText("qwen3.8-35b-a3b");
+    await expect(article).toContainText("$API_KEY");
+    expect(await article.innerText()).not.toContain(FAKE_KEY);
+    expect(await article.innerText()).not.toContain("{{");
+  });
+
+  test("client snippets carry the base URL and $API_KEY; the key appears only after the opt-in", async ({ page }) => {
+    await withSessionKey(page);
+    await goto(page, "/docs/clients?lang=en");
+    const python = page.locator('[data-client="python-openai"]');
+    await expect(python).toContainText(`base_url="${baseUrl}/v1"`);
+    await expect(python).toContainText('api_key="$API_KEY"');
+    await expect(page.locator('[data-client="claude-code"]')).toContainText(`ANTHROPIC_BASE_URL="${baseUrl}/anthropic"`);
+    await expect(page.locator('[data-client="chatbox"]')).toContainText(baseUrl);
+    await expect(page.locator('[data-client="nextchat"]')).toContainText("My Key");
+    await expect(page.locator("[data-client]")).toHaveCount(17);
+    await expect(page.locator(".docs-checked")).toContainText("Checked on");
+    for (const entry of await page.locator("[data-client]").all()) await expect(entry).toContainText("Tested with");
+    expect(await page.locator("main").innerText()).not.toContain(FAKE_KEY);
+
+    await page.getByLabel("Insert my key").check();
+    await expect(python).toContainText(`api_key="${FAKE_KEY}"`);
+    await page.getByLabel("Insert my key").uncheck();
+    await expect(python).toContainText('api_key="$API_KEY"');
+    expect(await page.locator("main").innerText()).not.toContain(FAKE_KEY);
+  });
+
+  test("without a key the opt-in is disabled and the model field changes every snippet", async ({ page }) => {
+    await goto(page, "/docs/clients?lang=en");
+    await expect(page.getByLabel("Insert my key")).toBeDisabled();
+    await page.getByLabel("Model in the examples").fill("my-model");
+    await expect(page.locator('[data-client="curl-chat"]')).toContainText('"model": "my-model"');
+    await expect(page.locator('[data-client="continue"]')).toContainText("model: my-model");
+  });
+
+  test("the errors page is generated from the taxonomy and /docs/errors#<code> lands on its entry", async ({ page }) => {
+    const { PUBLIC_ERROR_TAXONOMY } = require("../service-entry/lib/public-errors");
+    await goto(page, "/docs/errors?lang=en#rate_limit_exceeded");
+    await expect(page.locator(".error-doc")).toHaveCount(PUBLIC_ERROR_TAXONOMY.length);
+    const target = page.locator("#rate_limit_exceeded");
+    await expect(target).toContainText("429");
+    await expect(target).toContainText("rate_limit_error");
+    await expect(target).toContainText("retry-after");
+    await expect(target).toBeInViewport();
+    await goto(page, "/docs/errors?lang=zh#missing_api_key");
+    await expect(page.locator("#missing_api_key")).toContainText("需要 API 密钥");
+    await expect(page.locator("#missing_api_key")).toContainText("HTTP 401");
+  });
+
+  test("the server-rendered error page links to the matching docs entry", async ({ page }) => {
+    await goto(page, "/status");
+    const response = await page.goto(`${baseUrl}/no-such-page`);
+    expect(response.status()).toBe(404);
+    const href = await page.locator('a[href^="/docs/errors#"]').getAttribute("href");
+    expect(href).toBe("/docs/errors#not_found");
+    await page.goto(`${baseUrl}/docs/errors?lang=en#${href.split("#")[1]}`);
+    await expect(page.locator("#not_found")).toBeInViewport();
+  });
+
+  test("the privacy page lists the logged fields, the unlogged content and the audit notice", async ({ page }) => {
+    await goto(page, "/docs/privacy?lang=en");
+    const article = page.locator(".docs-article");
+    await expect(article).toContainText("What is logged");
+    for (const field of ["key id", "token counts", "timings", "network address"]) await expect(article).toContainText(field);
+    await expect(article).toContainText("The prompt and the response of an API request are not stored");
+    await expect(article).toContainText("30 days");
+    await expect(article).toContainText("may audit them");
+    await goto(page, "/docs/privacy?lang=zh");
+    await expect(page.locator(".docs-article")).toContainText("提示词和回答内容不会被保存");
+  });
+
+  test("an unknown docs page says so; the footer privacy link works", async ({ page }) => {
+    await goto(page, "/docs/no-such-page?lang=en");
+    await expect(page.locator("h1")).toHaveText("Page not found");
+    await goto(page, "/status?lang=en");
+    await page.getByRole("contentinfo").getByRole("link", { name: "Privacy" }).click();
+    await expect(page).toHaveURL(/\/docs\/privacy$/);
+    await expect(page.locator("h1")).toHaveText("Privacy");
+  });
+
+  test("English docs show no Han text outside code, and nothing overflows at 390 px", async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await context.newPage();
+    const failures = await collectFailures(page);
+    for (const route of ["/docs", "/docs/quickstart", "/docs/api", "/docs/streaming", "/docs/tools", "/docs/vision", "/docs/tts", "/docs/errors", "/docs/limits", "/docs/privacy", "/docs/clients"]) {
+      await goto(page, `${route}?lang=en`);
+      await expect(page.locator("main")).not.toBeEmpty();
+      await page.waitForLoadState("networkidle");
+      await expect(page.locator("main .notice-loading")).toHaveCount(0);
+      expect(await hanOutsideCode(page), route).toEqual([]);
+      await expectNoOverflow(page);
+    }
+    await goto(page, "/docs/clients?lang=zh");
+    await page.waitForLoadState("networkidle");
+    await expectNoOverflow(page);
+    await failures.expectNone();
+    await context.close();
+  });
 });
 
 // Last on purpose: it moves the build id, which leaves the snapshot on a newer id.

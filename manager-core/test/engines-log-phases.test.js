@@ -231,9 +231,10 @@ test("the 02 knowledge loader accepts the descriptor additions without reporting
     flushIntervalMs: 0,
   });
   t.after(() => loader.close?.());
-  assert.deepEqual(loader.errorSignatures("vllm").map((entry) => entry.id), ["vllm-flag-unknown"]);
-  assert.deepEqual(loader.errorSignatures("sglang").map((entry) => entry.id), ["sglang-flag-unknown"]);
-  assert.deepEqual(loader.errorSignatures("llamacpp").map((entry) => entry.id), ["llama-mmproj-missing"]);
+  // The descriptor additions sit beside the bundled 02 signatures (MOD-12).
+  for (const [engineId, id] of [["vllm", "vllm-flag-unknown"], ["sglang", "sglang-flag-unknown"], ["llamacpp", "llama-mmproj-missing"]]) {
+    assert.ok(loader.errorSignatures(engineId).some((entry) => entry.id === id && entry.layer === "bundled"), id);
+  }
   const problems = loader.status().errors || [];
   assert.deepEqual(problems.filter((item) => item.severity === "error"), []);
 });

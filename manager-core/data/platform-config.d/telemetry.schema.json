@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "namespace": "telemetry",
+  "owner": "04-telemetry",
+  "asOf": "2026-10-15",
+  "staleAfterDays": 365,
+  "title": { "zh-CN": "遥测", "en-US": "Telemetry" },
+  "properties": {
+    "enabled": {
+      "type": "boolean", "default": true,
+      "title": { "zh-CN": "启用遥测", "en-US": "Enable telemetry" },
+      "description": { "zh-CN": "关闭后入口服务不再记录请求、采样和事件，网关本身不受影响。修改后需要重启入口服务。", "en-US": "When off, the entry stops recording requests, samples and events; the gateway itself is unaffected. A change needs the entry restarted." },
+      "env": ["TELEMETRY_ENABLED"], "consumers": ["entry"], "restartRequired": ["entry"], "secret": false, "group": "telemetry"
+    },
+    "dbPath": {
+      "type": "string", "format": "path", "default": "",
+      "title": { "zh-CN": "遥测数据库位置", "en-US": "Telemetry database location" },
+      "description": { "zh-CN": "遥测数据库文件的位置，留空使用入口服务 data 目录下的 telemetry.sqlite。修改后需要重启入口服务。", "en-US": "Where the telemetry database file lives; empty uses telemetry.sqlite in the entry's data folder. A change needs the entry restarted." },
+      "env": ["AI_TELEMETRY_DB"], "consumers": ["entry"], "restartRequired": ["entry"], "secret": false, "group": "telemetry"
+    },
+    "sampleIntervalMs": {
+      "type": "integer", "minimum": 5000, "maximum": 60000, "default": 10000,
+      "title": { "zh-CN": "入口采样间隔", "en-US": "Entry sampling interval" },
+      "description": { "zh-CN": "入口服务采集模型运行指标和显卡数据的间隔，单位毫秒，范围 5000 到 60000。", "en-US": "How often the entry samples runtime metrics and GPU data, in milliseconds, from 5000 to 60000." },
+      "env": ["TELEMETRY_SAMPLE_INTERVAL_MS"], "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+    },
+    "managerSampleIntervalMs": {
+      "type": "integer", "minimum": 5000, "maximum": 60000, "default": 10000,
+      "title": { "zh-CN": "管理器统计采样间隔", "en-US": "Manager stats sampling interval" },
+      "description": { "zh-CN": "两个模型管理器各自统计吞吐量的采样间隔，单位毫秒。修改后需要重启两个管理器。", "en-US": "How often each model manager samples its own throughput statistics, in milliseconds. A change needs both managers restarted." },
+      "env": ["STATS_SAMPLE_INTERVAL_MS"], "consumers": ["vllm-manager", "llama-manager"], "restartRequired": ["vllm-manager", "llama-manager"], "secret": false, "group": "telemetry"
+    },
+    "timezoneOffsetMinutes": {
+      "type": ["integer", "null"], "minimum": -720, "maximum": 840, "default": null,
+      "enum": [-720,-660,-600,-540,-480,-420,-360,-300,-240,-180,-120,-60,0,60,120,180,240,300,360,420,480,540,600,660,720,780,840],
+      "title": { "zh-CN": "按天汇总所用时区", "en-US": "Time zone for daily totals" },
+      "description": { "zh-CN": "按天汇总使用的时区，以相对 UTC 的分钟数表示，必须是整小时（例如东八区为 480）；留空使用本机时区。", "en-US": "The time zone used for daily totals, as minutes from UTC; it must be a whole number of hours (480 is UTC+08:00). Empty uses this machine's time zone." },
+      "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+    },
+    "keepJsonlAccessLog": {
+      "type": "boolean", "default": true,
+      "title": { "zh-CN": "保留旧版访问日志文件", "en-US": "Keep the legacy access-log file" },
+      "description": { "zh-CN": "继续把网关请求写入旧版的访问日志文件，供还在读取它的脚本使用；新页面不依赖它。", "en-US": "Keep writing gateway requests to the legacy access-log file for scripts that still read it. The new pages do not depend on it." },
+      "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+    },
+    "maxDbMb": {
+      "type": "integer", "minimum": 256, "maximum": 65536, "default": 2048,
+      "title": { "zh-CN": "数据库大小上限", "en-US": "Database size limit" },
+      "description": { "zh-CN": "遥测数据库超过这个大小（MB）时，会先清理较旧的请求明细和原始采样。", "en-US": "When the telemetry database grows past this size (MB), older request rows and raw samples are pruned first." },
+      "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+    },
+    "exportMaxRows": {
+      "type": "integer", "minimum": 1000, "maximum": 1000000, "default": 200000,
+      "title": { "zh-CN": "单次导出行数上限", "en-US": "Rows per export" },
+      "description": { "zh-CN": "一次导出最多包含的行数，超过的部分会被截断并在文件末尾标注。", "en-US": "The most rows one export holds; the rest is cut off and the file says so at its end." },
+      "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+    },
+    "retention": {
+      "type": "object",
+      "properties": {
+        "requestsDays": {
+          "type": "integer", "minimum": 7, "maximum": 365, "default": 30,
+          "title": { "zh-CN": "请求明细保留时长", "en-US": "Keep request rows for" },
+          "description": { "zh-CN": "单条请求记录保留的天数，范围 7 到 365。更早的数据只留下汇总。", "en-US": "How many days single request rows are kept, from 7 to 365. Older data stays only as totals." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "ipDays": {
+          "type": "integer", "minimum": 1, "maximum": 365, "default": 30,
+          "title": { "zh-CN": "IP 与客户端信息保留时长", "en-US": "Keep IP and client info for" },
+          "description": { "zh-CN": "请求记录里的 IP 和客户端标识保留的天数，不能超过请求明细保留天数；到期后会被打码。", "en-US": "How many days the address and client details of a request row are kept; it cannot exceed the request-row period. After that they are masked." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "samplesHours": {
+          "type": "integer", "minimum": 12, "maximum": 336, "default": 48,
+          "title": { "zh-CN": "原始采样保留时长", "en-US": "Keep raw samples for" },
+          "description": { "zh-CN": "每 10 秒一条的运行指标和显卡原始采样保留的小时数，范围 12 到 336。", "en-US": "How many hours the 10-second runtime and GPU samples are kept, from 12 to 336." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "minuteDays": {
+          "type": "integer", "minimum": 1, "maximum": 365, "default": 14,
+          "title": { "zh-CN": "分钟汇总保留时长", "en-US": "Keep minute totals for" },
+          "description": { "zh-CN": "按分钟汇总的数据保留的天数。", "en-US": "How many days the per-minute totals are kept." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "hourDays": {
+          "type": "integer", "minimum": 1, "maximum": 3650, "default": 400,
+          "title": { "zh-CN": "小时汇总保留时长", "en-US": "Keep hourly totals for" },
+          "description": { "zh-CN": "按小时汇总的数据保留的天数。按天汇总的数据永久保留。", "en-US": "How many days the hourly totals are kept. Daily totals are kept forever." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "eventsDays": {
+          "type": "integer", "minimum": 1, "maximum": 3650, "default": 400,
+          "title": { "zh-CN": "事件保留时长", "en-US": "Keep events for" },
+          "description": { "zh-CN": "一般事件保留的天数；启动、实例、容器、配置和封禁类事件永久保留。", "en-US": "How many days ordinary events are kept; launch, instance, container, configuration and ban events are kept forever." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        }
+      }
+    },
+    "energy": {
+      "type": "object",
+      "properties": {
+        "pricePerKwh": {
+          "type": ["number", "null"], "minimum": 0, "default": null,
+          "title": { "zh-CN": "电价", "en-US": "Electricity price" },
+          "description": { "zh-CN": "每千瓦时的电价；留空表示不计算电费，页面只显示用电量。", "en-US": "The price per kilowatt-hour; empty means no cost is calculated and the pages show energy only." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "currency": {
+          "type": "string", "pattern": "^[A-Z]{3}$", "default": "CNY",
+          "title": { "zh-CN": "币种", "en-US": "Currency" },
+          "description": { "zh-CN": "电费显示的币种，三位大写字母代码（例如 CNY、USD）。", "en-US": "The currency of the electricity cost, a three-letter upper-case code such as CNY or USD." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "tariffs": {
+          "type": "array", "default": [],
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "from": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+              "to": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+              "pricePerKwh": { "type": "number", "minimum": 0 }
+            }
+          },
+          "title": { "zh-CN": "分时电价", "en-US": "Time-of-use tariffs" },
+          "description": { "zh-CN": "按本地时间划分的分时电价，每项包含起止时间和每千瓦时电价；时段可以跨过午夜，但不能互相重叠。", "en-US": "Time-of-use prices by local time, each with a start, an end and a price per kilowatt-hour. A window may cross midnight but windows may not overlap." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        },
+        "hostBaselineWatts": {
+          "type": "integer", "minimum": 0, "maximum": 2000, "default": 0,
+          "title": { "zh-CN": "主机基础功耗", "en-US": "Host baseline power" },
+          "description": { "zh-CN": "显卡以外的整机固定功耗（瓦）。它只会加进用电量统计的总计里，并标注为“已配置的主机基础功耗”。", "en-US": "The constant power draw of the rest of the machine, in watts. It is added to the energy totals only, labelled as the configured host baseline." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        }
+      }
+    },
+    "alerts": {
+      "type": "object",
+      "properties": {
+        "webhooks": {
+          "type": "array", "default": [],
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" },
+              "url": { "type": "string", "pattern": "^https?://" },
+              "format": { "type": "string", "enum": ["generic", "feishu", "dingtalk", "wecom", "slack"] },
+              "minSeverity": { "type": "string", "enum": ["info", "warning", "critical"] }
+            }
+          },
+          "title": { "zh-CN": "告警推送地址", "en-US": "Alert webhooks" },
+          "description": { "zh-CN": "告警触发时推送到的地址列表，每项有编号、地址、消息格式和最低推送级别。签名密钥不保存在这里，而是单独存放在密钥库中。", "en-US": "Where alerts are pushed, each with an id, a URL, a message format and a minimum severity. Signing secrets are not kept here; they live in the secret store." },
+          "consumers": ["entry"], "restartRequired": false, "secret": false, "group": "telemetry"
+        }
+      }
+    }
+  }
+}

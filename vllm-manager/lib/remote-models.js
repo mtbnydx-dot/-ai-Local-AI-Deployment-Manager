@@ -552,13 +552,25 @@ function matchesRemoteFeature(model, feature) {
   return true;
 }
 
+// An engine (legacy label or engine id) that loads GGUF artifacts only, from
+// its descriptor's artifactFormats (llama.cpp).
+function ggufOnlyEngine(engine) {
+  try {
+    const registry = core.engines.getEngineRegistry();
+    const formats = registry.get(registry.fromLegacy(engine))?.artifactFormats || [];
+    return formats.length > 0 && formats.every((format) => format === "gguf");
+  } catch {
+    return false;
+  }
+}
+
 function remotePipelineAllowed(model, engine) {
   const tag = String(model.pipelineTag || "").toLowerCase();
   const tags = (model.tags || []).map((item) => String(item).toLowerCase());
   const id = String(model.id || "").toLowerCase();
   if (/(^|[\/_.\-\s])(embed|embedding|rerank|reranker|ranker)/.test(id)) return false;
   if (["sentence-similarity", "text-ranking", "translation", "summarization", "question-answering", "fill-mask", "feature-extraction", "text-classification", "token-classification", "zero-shot-classification", "image-classification", "zero-shot-image-classification", "image-feature-extraction", "text-to-image", "image-to-image", "automatic-speech-recognition", "text-to-speech"].includes(tag)) return false;
-  if (engine === "llama") return model.hasGguf;
+  if (ggufOnlyEngine(engine)) return model.hasGguf;
   if (["text-generation", "image-text-to-text", "visual-question-answering", "image-to-text", "text2text-generation", "conversational"].includes(tag)) return true;
   if (!tag && (model.hasSafetensors || model.hasGguf || model.hasConfig)) return true;
   if (tags.some((item) => ["text-generation", "transformers", "safetensors", "gguf"].includes(item))) return true;

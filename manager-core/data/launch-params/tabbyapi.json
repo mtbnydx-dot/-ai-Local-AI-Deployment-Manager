@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 90,
+  "kind": "engine",
+  "engineId": "tabbyapi",
+  "docs": "https://github.com/theroyallab/tabbyAPI/wiki/2.-Configuration",
+  "params": [
+    {
+      "id": "contextLength",
+      "emit": {
+        "mode": "adapter",
+        "kind": "template"
+      },
+      "legacy": {
+        "field": "maxModelLen",
+        "domId": "maxModelLen"
+      },
+      "help": {
+        "what": {
+          "zh": "写入 config.yml 的 model.max_seq_len。",
+          "en": "Written to model.max_seq_len in config.yml."
+        }
+      }
+    },
+    {
+      "id": "servedName",
+      "emit": {
+        "mode": "adapter",
+        "kind": "none"
+      },
+      "help": {
+        "what": {
+          "zh": "TabbyAPI 以模型目录名对外；这个名字只用于平台的实例标签和统计。",
+          "en": "TabbyAPI lists the model by its folder name; this name is used only for the platform's instance labels and statistics."
+        }
+      },
+      "legacy": {
+        "field": "name",
+        "domId": "servedName"
+      }
+    },
+    {
+      "id": "apiKey",
+      "emit": {
+        "mode": "adapter",
+        "kind": "template"
+      },
+      "help": {
+        "what": {
+          "zh": "TabbyAPI 从 api_tokens.yml 读取密钥。平台为本次启动生成该文件（仅当前用户可读），实例停止时删除。必须设置。",
+          "en": "TabbyAPI reads its keys from api_tokens.yml. The platform writes that file for this launch (readable by the current user only) and deletes it when the instance stops. A key is required."
+        }
+      },
+      "legacy": {
+        "field": "apiKey",
+        "domId": "vllmApiKey"
+      }
+    },
+    {
+      "id": "speculative.draftModel",
+      "appliesWhen": null,
+      "emit": {
+        "mode": "catalog",
+        "kind": "template"
+      },
+      "help": {
+        "what": {
+          "zh": "写入 config.yml 的 draft_model.draft_model_dir 和 draft_model_name；必须是 EXL3 草稿模型。",
+          "en": "Written to draft_model.draft_model_dir and draft_model_name in config.yml; it must be an EXL3 draft model."
+        }
+      }
+    },
+    {
+      "id": "tabbyapi.cacheMode",
+      "group": "memory",
+      "level": "basic",
+      "order": 10,
+      "type": "enum",
+      "label": {
+        "zh": "KV 缓存精度",
+        "en": "KV cache precision"
+      },
+      "summary": {
+        "zh": "TabbyAPI 的 KV 缓存量化：FP16、Q8、Q6 或 Q4。",
+        "en": "TabbyAPI's KV cache quantization: FP16, Q8, Q6 or Q4."
+      },
+      "help": {
+        "what": {
+          "zh": "写入 config.yml 的 model.cache_mode。留空时用 TabbyAPI 默认值（FP16）。",
+          "en": "Written to model.cache_mode in config.yml. Empty uses TabbyAPI's default (FP16)."
+        },
+        "whenToChange": {
+          "zh": "需要更长上下文而显存不够时选 Q8 或 Q6。",
+          "en": "Choose Q8 or Q6 when you need a longer context than memory allows."
+        },
+        "tradeoffs": {
+          "zh": "越低越省显存，但可能轻微影响质量。",
+          "en": "Lower precision saves memory but can slightly reduce quality."
+        }
+      },
+      "choices": [
+        {
+          "value": "FP16",
+          "label": {
+            "zh": "FP16",
+            "en": "FP16"
+          }
+        },
+        {
+          "value": "Q8",
+          "label": {
+            "zh": "Q8",
+            "en": "Q8"
+          }
+        },
+        {
+          "value": "Q6",
+          "label": {
+            "zh": "Q6",
+            "en": "Q6"
+          }
+        },
+        {
+          "value": "Q4",
+          "label": {
+            "zh": "Q4",
+            "en": "Q4"
+          }
+        }
+      ],
+      "emit": {
+        "mode": "catalog",
+        "kind": "template"
+      },
+      "vramEffect": "kv-dtype"
+    },
+    {
+      "id": "tabbyapi.cacheSize",
+      "group": "memory",
+      "level": "basic",
+      "order": 20,
+      "type": "int",
+      "unit": "tokens",
+      "label": {
+        "zh": "KV 缓存容量",
+        "en": "KV cache size"
+      },
+      "summary": {
+        "zh": "TabbyAPI 预分配的 KV 缓存 token 数，所有并发请求共用。",
+        "en": "The number of tokens of KV cache TabbyAPI allocates up front, shared by all concurrent requests."
+      },
+      "help": {
+        "what": {
+          "zh": "写入 config.yml 的 model.cache_size。留空时等于上下文长度。显存准入按权重加上这部分 KV 估算。",
+          "en": "Written to model.cache_size in config.yml. Empty equals the context length. VRAM admission estimates the weights plus this KV cache."
+        },
+        "whenToChange": {
+          "zh": "要同时服务多个请求时，设为上下文长度的倍数。",
+          "en": "Set it to a multiple of the context length to serve several requests at once."
+        },
+        "tradeoffs": {
+          "zh": "越大越占显存。",
+          "en": "Larger sizes use more VRAM."
+        }
+      },
+      "range": {
+        "min": 256,
+        "max": 4194304,
+        "step": 256
+      },
+      "emit": {
+        "mode": "catalog",
+        "kind": "template"
+      },
+      "vramEffect": "kv-pool"
+    },
+    {
+      "id": "tabbyapi.tensorParallel",
+      "group": "parallelism",
+      "level": "advanced",
+      "order": 10,
+      "type": "bool",
+      "label": {
+        "zh": "张量并行",
+        "en": "Tensor parallel"
+      },
+      "summary": {
+        "zh": "把模型的每一层切分到所选的所有 GPU 上。",
+        "en": "Split every layer across all selected GPUs."
+      },
+      "help": {
+        "what": {
+          "zh": "写入 config.yml 的 model.tensor_parallel。关闭时 TabbyAPI 按层分配 GPU。",
+          "en": "Written to model.tensor_parallel in config.yml. Off lets TabbyAPI place whole layers on separate GPUs."
+        },
+        "whenToChange": {
+          "zh": "多张 GPU 之间有高速互联，想加快单个请求时。",
+          "en": "When several GPUs have fast links and you want faster single requests."
+        },
+        "tradeoffs": {
+          "zh": "需要 GPU 间带宽，并非所有模型架构都支持。",
+          "en": "It needs inter-GPU bandwidth and not every architecture supports it."
+        }
+      },
+      "platformDefault": false,
+      "emit": {
+        "mode": "catalog",
+        "kind": "template"
+      },
+      "vramEffect": "split"
+    },
+    {
+      "id": "tabbyapi.gpuSplitAuto",
+      "group": "parallelism",
+      "level": "expert",
+      "order": 20,
+      "type": "bool",
+      "label": {
+        "zh": "自动分配 GPU 显存",
+        "en": "Automatic GPU split"
+      },
+      "summary": {
+        "zh": "让 TabbyAPI 自动决定每张 GPU 加载多少层。",
+        "en": "Let TabbyAPI decide how much of the model each GPU holds."
+      },
+      "help": {
+        "what": {
+          "zh": "写入 config.yml 的 model.gpu_split_auto。",
+          "en": "Written to model.gpu_split_auto in config.yml."
+        },
+        "whenToChange": {
+          "zh": "只有想手工划分显存时才关闭。",
+          "en": "Turn it off only to split memory by hand."
+        },
+        "tradeoffs": {
+          "zh": "关闭后需要自己在配置里给出分配，平台目前没有这个入口。",
+          "en": "Off needs a manual split in the config, which the platform has no field for yet."
+        }
+      },
+      "platformDefault": true,
+      "emit": {
+        "mode": "catalog",
+        "kind": "template"
+      }
+    }
+  ]
+}

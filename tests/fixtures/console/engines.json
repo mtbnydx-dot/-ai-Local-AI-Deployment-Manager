@@ -1,0 +1,198 @@
+{
+  "ok": true,
+  "generatedAt": "2026-10-20T10:00:00.000Z",
+  "managers": [
+    { "managerId": "vllm", "ok": true, "generatedAt": "2026-10-20T10:00:00.000Z" },
+    { "managerId": "llama", "ok": true, "generatedAt": "2026-10-20T10:00:00.000Z" }
+  ],
+  "engines": [
+    {
+      "engineId": "vllm",
+      "managerId": "vllm",
+      "label": { "zh": "vLLM", "en": "vLLM" },
+      "description": { "zh": "vLLM OpenAI 兼容服务", "en": "The vLLM OpenAI-compatible server" },
+      "family": "vllm",
+      "adapter": "vllm",
+      "tier": 1,
+      "status": "stable",
+      "hostKinds": ["docker"],
+      "artifactFormats": ["safetensors", "awq", "gptq", "fp8"],
+      "runtimes": [
+        {
+          "runtimeId": "vllm@0.28.0",
+          "manifestKey": "vllm",
+          "label": "vLLM OpenAI server",
+          "version": "v0.28.0",
+          "image": "vllm/vllm-openai:v0.28.0",
+          "default": true,
+          "present": true,
+          "introspected": true,
+          "features": { "bitsAndBytesPlugin": false },
+          "status": "pinned",
+          "localBuild": false,
+          "pullPolicy": "auto"
+        }
+      ],
+      "capabilities": {
+        "parallelInstances": true, "tensorParallel": true, "pipelineParallel": true, "dataParallel": true, "expertParallel": true,
+        "lora": true, "multiModel": false, "hotLoad": false, "sleepWake": true,
+        "speculative": ["ngram"], "roles": ["chat", "embedding"], "autoParsers": { "tool": "auto", "reasoning": null }
+      },
+      "apiSurface": { "chat": true, "completions": true, "responses": true, "messages": false, "embeddings": true, "rerank": false },
+      "memoryModel": { "kind": "device-fraction" },
+      "health": { "host": "docker", "hostReady": true, "instances": 1 }
+    },
+    {
+      "engineId": "sglang",
+      "managerId": "vllm",
+      "label": { "zh": "SGLang", "en": "SGLang" },
+      "family": "sglang",
+      "adapter": "sglang",
+      "tier": 1,
+      "status": "stable",
+      "hostKinds": ["docker"],
+      "artifactFormats": ["safetensors", "fp8", "nvfp4"],
+      "runtimes": [
+        {
+          "runtimeId": "sglang@0.5.17",
+          "manifestKey": "sglang",
+          "label": "SGLang runtime",
+          "version": "0.5.17",
+          "image": "lmsysorg/sglang:v0.5.17",
+          "default": true,
+          "present": true,
+          "introspected": true,
+          "features": {},
+          "status": "pinned",
+          "localBuild": false,
+          "pullPolicy": "auto"
+        },
+        {
+          "runtimeId": "sglang@0.5.18",
+          "manifestKey": "sglangNext",
+          "label": "SGLang next",
+          "version": "0.5.18",
+          "image": "lmsysorg/sglang:v0.5.18",
+          "default": false,
+          "present": false,
+          "introspected": false,
+          "features": { "linearAttnBackends": true },
+          "status": "experimental",
+          "localBuild": false,
+          "pullPolicy": "explicit"
+        },
+        {
+          "runtimeId": "sglang@flashnext",
+          "manifestKey": "sglangFlashNext",
+          "label": "SGLang Flash-Next (local build)",
+          "version": "local",
+          "image": "local/sglang:flashnext",
+          "default": false,
+          "present": false,
+          "introspected": false,
+          "features": { "pleOffload": true },
+          "status": "unpinned",
+          "localBuild": true,
+          "pullPolicy": "never"
+        }
+      ],
+      "capabilities": {
+        "parallelInstances": true, "tensorParallel": true, "pipelineParallel": false, "dataParallel": true, "expertParallel": true,
+        "lora": true, "multiModel": false, "hotLoad": false, "sleepWake": true,
+        "speculative": ["nextn"], "roles": ["chat"], "autoParsers": { "tool": null, "reasoning": null }
+      },
+      "apiSurface": { "chat": true, "completions": true, "responses": false, "messages": false, "embeddings": true, "rerank": false },
+      "memoryModel": { "kind": "static-fraction-of-free" },
+      "health": { "host": "docker", "hostReady": true, "instances": 0 }
+    },
+    {
+      "engineId": "lmdeploy",
+      "managerId": "vllm",
+      "label": { "zh": "LMDeploy", "en": "LMDeploy" },
+      "family": "openai-server",
+      "adapter": "docker-template",
+      "tier": 2,
+      "status": "experimental",
+      "hostKinds": ["docker"],
+      "artifactFormats": ["safetensors", "awq"],
+      "runtimes": [
+        {
+          "runtimeId": "lmdeploy@0.18.0",
+          "manifestKey": "lmdeploy",
+          "label": "LMDeploy",
+          "version": "v0.18.0",
+          "image": "openmmlab/lmdeploy:v0.18.0",
+          "default": true,
+          "present": false,
+          "introspected": false,
+          "features": {},
+          "status": "unpinned",
+          "localBuild": false,
+          "pullPolicy": "explicit"
+        }
+      ],
+      "capabilities": {
+        "parallelInstances": false, "tensorParallel": true, "pipelineParallel": false, "dataParallel": false, "expertParallel": false,
+        "lora": false, "multiModel": false, "hotLoad": false, "sleepWake": false,
+        "speculative": [], "roles": ["chat"], "autoParsers": { "tool": null, "reasoning": null }
+      },
+      "apiSurface": { "chat": true, "completions": true, "responses": false, "messages": false, "embeddings": false, "rerank": false },
+      "memoryModel": { "kind": "free-fraction-after-weights" },
+      "health": { "host": "docker", "hostReady": true, "instances": 0 }
+    },
+    {
+      "engineId": "llamacpp",
+      "managerId": "llama",
+      "label": { "zh": "llama.cpp", "en": "llama.cpp" },
+      "family": "llamacpp",
+      "adapter": "llamacpp",
+      "tier": 1,
+      "status": "stable",
+      "hostKinds": ["docker"],
+      "artifactFormats": ["gguf"],
+      "runtimes": [
+        {
+          "runtimeId": "llamacpp@b6000",
+          "manifestKey": "llamacpp",
+          "label": "llama.cpp server (CUDA)",
+          "version": "b6000",
+          "image": "ghcr.io/ggml-org/llama.cpp:server-cuda",
+          "default": true,
+          "present": null,
+          "introspected": false,
+          "features": {},
+          "status": "pinned",
+          "localBuild": false,
+          "pullPolicy": "auto"
+        }
+      ],
+      "capabilities": {
+        "parallelInstances": true, "tensorParallel": false, "pipelineParallel": false, "dataParallel": false, "expertParallel": false,
+        "lora": true, "multiModel": false, "hotLoad": false, "sleepWake": false,
+        "speculative": [], "roles": ["chat", "embedding", "rerank"], "autoParsers": { "tool": null, "reasoning": null }
+      },
+      "apiSurface": { "chat": true, "completions": true, "responses": false, "messages": false, "embeddings": true, "rerank": true },
+      "memoryModel": { "kind": "gguf-estimate" },
+      "health": { "host": "docker", "hostReady": null, "instances": null }
+    }
+  ],
+  "external": {
+    "engineId": "external",
+    "endpoints": [
+      {
+        "endpointId": "ollama-local",
+        "label": "Ollama (this PC)",
+        "kind": "ollama",
+        "baseUrl": "http://localhost:11434/v1",
+        "apiKeyRef": "",
+        "enabled": true,
+        "routing": { "includeInAuto": false },
+        "hostClass": "loopback",
+        "health": { "state": "ready", "ok": true, "latencyMs": 12, "status": 200, "models": 3, "checkedAt": "2026-10-20T10:00:00.000Z" }
+      }
+    ]
+  },
+  "errors": [
+    { "managerId": "vllm", "source": "override", "engineId": "mybox", "path": "runtimes.allowed[0]", "code": "unknown_runtime", "message": "Runtime mybox is not in the runtime manifest." }
+  ]
+}

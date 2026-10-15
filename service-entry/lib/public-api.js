@@ -505,34 +505,6 @@ function modelReadOf(method, route, { anthropic = false } = {}) {
   return null;
 }
 
-// The context JSON of hop v2 (04 §5.2): the source program and the trusted
-// country. Never the key, the customer or the user agent.
-function entryContextOf(req, identity, inferSourceProgram) {
-  const headers = req?.headers || {};
-  const first = (name) => {
-    const value = headers[name];
-    return String(Array.isArray(value) ? value[0] : value || "");
-  };
-  let src = "";
-  try {
-    src = String(inferSourceProgram({
-      xTitle: first("x-title"),
-      aiClient: first("x-ai-client"),
-      userAgent: first("user-agent"),
-      path: String(req?.url || "").split("?")[0],
-      origin: first("origin"),
-      referer: first("referer"),
-    }) || "");
-  } catch {
-    src = "";
-  }
-  const context = { v: 1 };
-  if (src) context.src = src.slice(0, 40);
-  const country = String(identity?.country || "").toUpperCase();
-  if (/^[A-Z]{2}$/.test(country)) context.cc = country;
-  return context;
-}
-
 // ---------------------------------------------------------------------------
 // The module wired by server.js
 
@@ -687,7 +659,6 @@ module.exports = {
   applyOutputCap,
   buildModelEntries,
   createPublicApi,
-  entryContextOf,
   formatCredits,
   gatewayPathFor,
   mapPublicRoute,

@@ -33,6 +33,9 @@ const EXPECTED_RUNTIME_IDS = Object.freeze({
   sglangFlashNextNvme: "sglang@flashnext-nvme-ple-20260831",
   llama: "llamacpp@b10630",
   llamaMuse: "llamacpp@muse-62bf73d",
+  lmdeploy: "lmdeploy@0.18.0",
+  trtllm: "trtllm@1.3.0rc29",
+  tabbyapi: "tabbyapi@cu13",
 });
 
 // The image literals knownRuntimeImageMetadata matched (vllm-manager/server.js).
@@ -102,7 +105,9 @@ test("legacy engine values map through the §3 table in both directions", (t) =>
     ["", "llama", "llamacpp"],
     ["llamacpp", "llama", "llamacpp"],
     ["mystery-engine", "vllm", "unknown"],
-    ["lmdeploy", "vllm", "unknown"],
+    ["lmdeploy", "vllm", "lmdeploy"],
+    ["tabbyapi", "vllm", "tabbyapi"],
+    ["mlc-llm", "vllm", "unknown"],
     ["", "nowhere", "unknown"],
   ];
   for (const [value, managerId, expected] of cases) {
@@ -115,12 +120,12 @@ test("legacy engine values map through the §3 table in both directions", (t) =>
 
 test("hostedBy lists the engines each manager hosts", (t) => {
   const registry = createRegistry(t);
-  assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang"]);
-  assert.deepEqual(registry.hostedBy("vllm-manager"), ["vllm", "sglang"]);
+  assert.deepEqual(registry.hostedBy("vllm"), ["vllm", "sglang", "lmdeploy", "tabbyapi", "trtllm"]);
+  assert.deepEqual(registry.hostedBy("vllm-manager"), ["vllm", "sglang", "lmdeploy", "tabbyapi", "trtllm"]);
   assert.deepEqual(registry.hostedBy("llama"), ["llamacpp"]);
   assert.deepEqual(registry.hostedBy("entry"), ["external"]);
   assert.deepEqual(registry.hostedBy("other"), []);
-  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp", "external"]);
+  assert.deepEqual(registry.list().map((descriptor) => descriptor.id), ["vllm", "sglang", "llamacpp", "external", "lmdeploy", "tabbyapi", "trtllm"]);
 });
 
 test("every key of the bundled JSON manifest maps to exactly one runtimeId and engineId", (t) => {

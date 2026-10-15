@@ -249,6 +249,10 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "GET", path: "/api/hub/library/:id", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/tasks/:id", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/storage/usage", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/search", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/repos/:provider/:owner/:name", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/repos/:provider/:owner/:name/readme", access: "viewer" },
+    { owner: "03", method: "GET", path: "/api/hub/repos/:provider/:owner/:name/files", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/auth/huggingface", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/auth/huggingface/access", access: "viewer" },
     { owner: "03", method: "GET", path: "/api/hub/downloads", access: "viewer" },
@@ -267,6 +271,8 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "POST", path: "/api/hub/storage/cleanup", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/auth/huggingface/login", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/sources/probe", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/resolve-link", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/plan", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/reorder", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/pause-all", access: "admin" },
@@ -279,6 +285,7 @@ test("the mount registers the viewer routes and events, declares the writes owne
     { owner: "03", method: "POST", path: "/api/hub/downloads/:id/start-now", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/:id/cancel", access: "admin" },
     { owner: "03", method: "POST", path: "/api/hub/downloads/:id/priority", access: "admin" },
+    { owner: "03", method: "POST", path: "/api/hub/downloads/:id/run", access: "admin" },
   ]);
   assert.deepEqual(registry.inventory().filter((item) => item.method === "EVENT" && (item.path === "library" || item.path === "downloads")), [
     { owner: "03", method: "EVENT", path: "library", access: "viewer" },
@@ -305,8 +312,8 @@ test("without a hub the routes answer 503 hub_unavailable, features.hub stays of
     assert.equal(response.json.error.code, "hub_unavailable");
     assert.equal(typeof response.json.error.hint, "string");
   }
-  const later = await request(port, "/api/hub/search", { owner });
-  assert.equal(later.status, 404, "a route of a later package is not answered here");
+  const later = await request(port, "/api/hub/not-a-route", { owner });
+  assert.equal(later.status, 404, "a path no package serves is not answered here");
   assert.deepEqual(later.json, { error: "Not found" });
 });
 
@@ -555,6 +562,10 @@ test("download routes: enqueue, list, detail, history, logs, resume-check and ev
   assert.equal((await request(port, "/api/hub/downloads/reorder", { method: "POST", owner, body: { ids: "x" } })).status, 400);
   const priority = await request(port, `/api/hub/downloads/${secondId}/priority`, { method: "POST", owner, body: { priority: "high" } });
   assert.equal(priority.json.job.priority, "high");
+  // Download & Run confirmation (03 §11): needs the explicit flag, a known job and a ready download.
+  assert.equal((await request(port, `/api/hub/downloads/${secondId}/run`, { method: "POST", owner, body: {} })).status, 400);
+  assert.equal((await request(port, `/api/hub/downloads/${secondId}/run`, { method: "POST", owner, body: { confirmReplace: true } })).status, 409);
+  assert.equal((await request(port, "/api/hub/downloads/dl_nosuchjobnosuchj/run", { method: "POST", owner, body: { confirmReplace: true } })).status, 404);
   const startNow = await request(port, `/api/hub/downloads/${thirdId}/start-now`, { method: "POST", owner, body: { force: true } });
   assert.equal(startNow.status, 200, startNow.text);
   await until(() => engine.started.length === 2);
@@ -624,4 +635,16 @@ test("a signed shim enqueues as manager-shim and reaches only the shim download 
   assert.equal(noToken.json.error.code, "token_requires_local");
   const cancel = await signed(port, "POST", `/api/hub/downloads/${id}/cancel`, { principal, token, body: {} });
   assert.equal(cancel.status, 200, cancel.text);
+});
+
+test("the rollback flag (hub.downloadsOwner = manager) makes POST /api/hub/downloads answer 409 hub_disabled (HUB-12)", async (t) => {
+  const root = tempDir(t, "hub-routes-rollback-");
+  const dataDir = path.join(root, "service-entry", "data", "hub");
+  const hub = createModelHub({ aiRoot: root, dataDir, env: { AI_HUB_DOWNLOADS_OWNER: "manager" }, modelScopeCli: "modelscope", logger: quietLogger(), heartbeatMs: 3_600_000 });
+  await hub.start();
+  t.after(() => hub.stop());
+  const { port, owner } = await mountEntry(t, { hub });
+  const response = await request(port, "/api/hub/downloads", { method: "POST", owner, body: { provider: "huggingface", repo: "org/Model-GGUF" } });
+  assert.equal(response.status, 409, response.text);
+  assert.equal(response.json.error.code, "hub_disabled");
 });
