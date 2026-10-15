@@ -1889,6 +1889,8 @@ const gatewayPipeline = createGatewayPipeline({
   getFleetSettings: () => getFleetSettings(),
   selectFleetTarget: (catalogs, request) => selectFleetTarget(catalogs, request),
   limiter: gatewayLimiter,
+  keysStore: () => getAccessStore(),
+  logger: console,
   io: {
     prepareAccess: prepareEntryAccess,
     record: gatewayRecord,
@@ -2198,17 +2200,20 @@ function requireGatewayJsonContentType(req) {
   }
 }
 
+// `transform` is one pass-through Transform or a list of them (the usage tap
+// and the telemetry tap), applied in order.
 function forwardUpstreamBody(upstream, res, upstreamControl, transform = null) {
+  const transforms = (Array.isArray(transform) ? transform : [transform]).filter(Boolean);
   if (!upstream?.body) {
     upstreamControl.clear();
     if (!res.writableEnded) res.end();
-    if (transform && typeof transform.end === "function") transform.end();
+    for (const item of transforms) if (typeof item.end === "function") item.end();
     return;
   }
   const stream = typeof upstream.body.getReader === "function"
     ? Readable.fromWeb(upstream.body)
     : upstream.body;
-  if (transform) pipeline(stream, transform, res, () => upstreamControl.clear());
+  if (transforms.length) pipeline(stream, ...transforms, res, () => upstreamControl.clear());
   else pipeline(stream, res, () => upstreamControl.clear());
 }
 
@@ -2419,12 +2424,12 @@ function watchEntryAccess(req, res, access, shouldLog = null) {
 
 // The credential's identity for the row (04 §5.3). A key that failed
 // authentication is never recorded, not even as a hash.
-function recordGatewayAuth(req, auth) {
+function recordGatewayAuth(req, auth, identity = {}) {
   const rec = gatewayRecord(req);
   if (!rec || !auth?.ok) return;
   // The owner's console (05 §5.8, §15): no key, recorded as the console.
   if (auth.kind === "console-session") {
-    rec.setAuth({ keyId: null, customerId: null, authSource: "console-session", authManagerId: null });
+    rec.setAuth({ keyId: null, customerId: null, authSource: "console-session", authManagerId: null, ...identity });
     return;
   }
   let keyId = String(auth.keyId || auth.client?.id || "");
@@ -2441,6 +2446,7 @@ function recordGatewayAuth(req, auth) {
     customerId: auth.customerId || "",
     authSource: core.serviceApiKeySource(req.headers || {}),
     authManagerId: auth.key?.billing?.scope || matched?.billingId || auth.matchedManager || "",
+    ...identity,
   });
 }
 
@@ -3083,7 +3089,11 @@ function buildResponseHeaders(headers, req) {
 function gatewayCorsHeaders(req) {
   // PUBLIC has no ambient CORS: per-key origins are the pipeline's (05 §11),
   // and the env origins of the keyless ADMIN gateway never apply there.
-  if (security.listenerKind(req) === "public") return {};
+  if (security.listenerKind(req) === "public") {
+    // The one ambient answer is the preflight (05 §11): it carries no key, so
+    // the union of the active keys' origins decides.
+    return String(req.method || "").toUpperCase() === "OPTIONS" ? security.publicPreflightHeaders(req) : {};
+  }
   return security.corsHeaders(req);
 }
 

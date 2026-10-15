@@ -57,7 +57,7 @@ const MIN_DECODE_WINDOW_MS = 100;
 const RECORDED_CONTROL_STATUSES = new Set([401, 403, 429]);
 const USER_AGENT_MAX = 240;
 const SHORT_TEXT_MAX = 160;
-const EXTRA_KEYS = new Set(["toolSchemaCount", "toolUseCount", "ttsCharacters", "audioMs", "routeReason", "dupOf"]);
+const EXTRA_KEYS = new Set(["toolSchemaCount", "toolUseCount", "ttsCharacters", "audioMs", "routeReason", "dupOf", "principal", "listener", "endUser"]);
 const RETRYABLE_STORE_CODES = new Set(["telemetry_store_busy", "telemetry_store_restarting", "telemetry_store_crashed"]);
 
 function headerText(headers, name, max = USER_AGENT_MAX) {
@@ -371,6 +371,12 @@ function createGatewayRecorder(options = {}) {
         if (auth.customerId !== undefined) state.customerId = textOrNull(auth.customerId);
         if (auth.authSource !== undefined) state.authSource = textOrNull(auth.authSource, 64);
         if (auth.authManagerId !== undefined) state.authManagerId = textOrNull(auth.authManagerId, 64);
+        // 05 §15 (contract C5): who and where from; the row's extra holds the
+        // principal, listener and hashed end user.
+        if (auth.country) state.clientCountry = textOrNull(auth.country, 8);
+        for (const name of ["principal", "listener", "endUser"]) {
+          if (auth[name]) state.extra[name] = String(auth[name]).slice(0, 80);
+        }
         return handle;
       },
       setRouting(routing = {}) {

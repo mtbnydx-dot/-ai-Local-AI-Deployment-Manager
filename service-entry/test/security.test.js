@@ -376,6 +376,10 @@ test("CORS does not reflect arbitrary origins", (t) => {
   process.env.SERVICE_ENTRY_ALLOWED_ORIGINS = "https://chat.example.com";
   const allowed = security.corsHeaders(req("127.0.0.1", { origin: "https://chat.example.com" }));
   assert.equal(allowed["access-control-allow-origin"], "https://chat.example.com");
+  // The echo stays for the ADMIN env origins, but never with credentials or
+  // private-network access (05 §11, PUB-11).
+  assert.equal(allowed["access-control-allow-credentials"], undefined);
+  assert.equal(allowed["access-control-allow-private-network"], undefined);
   assert.equal(
     security.corsHeaders(req("127.0.0.1", { origin: "https://evil.example.com" }))["access-control-allow-origin"],
     undefined,
