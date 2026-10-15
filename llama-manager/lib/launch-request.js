@@ -12,7 +12,7 @@ const {
   findSiblingGgufFilesSync,
 } = require("../../manager-core");
 
-const { createLaunchPlanner } = require("../../manager-core/engines/resolve-launch-plan");
+const { createLaunchPlanner, skippedResult } = require("../../manager-core/engines/resolve-launch-plan");
 
 const LLAMA_CONTEXT_ESTIMATE_MAX_MB = 512 * 1024;
 
@@ -76,6 +76,7 @@ function createLlamaStartRuntimeRequest(deps) {
     listContainers = null,
     getIntrospection = null,
     modelStorage = null,
+    getLaunchSpec = null,
     calibrationFor = null,
     modelFacts = null,
   } = deps;
@@ -87,9 +88,11 @@ function createLlamaStartRuntimeRequest(deps) {
    * POST /api/launch/plan alike; a plan always runs the VRAM estimate, which a
    * launch runs only when it admits.
    */
-  async function normalizeStartBody(body = {}, { mode = "launch" } = {}) {
-    const model = resolveRequestedModel(cleanRequired(body.model, "model"));
-    const launchResolution = typeof resolveLaunchModel === "function" ? resolveLaunchModel(model, "gguf") : null;
+  async function normalizeStartBody(body = {}, { mode = "launch", prospective = false } = {}) {
+    // A prospective plan (01 §11) names a path that does not exist yet: nothing is read from disk and
+    // the GGUF-based VRAM estimate is skipped (the plan has no memory block until the files exist).
+    const model = prospective ? cleanRequired(body.model, "model") : resolveRequestedModel(cleanRequired(body.model, "model"));
+    const launchResolution = typeof resolveLaunchModel === "function" && !prospective ? resolveLaunchModel(model, "gguf") : null;
     // An unverified architecture (supported === null) still launches; the start
     // job carries the message so a failure can be traced to it (08 P0-15).
     let unverifiedCompatibility = null;
@@ -202,7 +205,7 @@ function createLlamaStartRuntimeRequest(deps) {
     const estimateGpuDeviceIds = gpuDeviceIds.length
       ? gpuDeviceIds
       : Array.isArray(gpuPlan.selectedGpuIds) ? gpuPlan.selectedGpuIds : [];
-    const estimate = (mode === "plan" || typeof acquireGpuAdmission === "function" || typeof acquireGpuAdmissionAfterPrepare === "function")
+    const estimate = !prospective && (mode === "plan" || typeof acquireGpuAdmission === "function" || typeof acquireGpuAdmissionAfterPrepare === "function")
       ? await estimateParallelVram({
         model,
         launch: launchResolution,
@@ -371,13 +374,16 @@ function createLlamaStartRuntimeRequest(deps) {
     listContainers,
     getIntrospection,
     modelStorage,
+    getLaunchSpec,
     calibrationFor,
     modelFacts,
   });
 
-  async function startRuntimeRequest({ body = {} } = {}) {
+  async function startRuntimeRequest({ body = {}, v2Only = false } = {}) {
     // alias → resolver → requestToLegacyRunOptions: what was planned is what runs.
-    const plan = await planner.launch(body);
+    const plan = await planner.launch(body, { v2Only });
+    // An add on an occupied slot with onConflict "skip": no job, no lease, nothing stopped.
+    if (plan.legacy.skip) return skippedResult(plan);
     const runOptions = planner.runOptions(plan);
     const gpuAdmissionRequest = plan.legacy.admissionRequest;
     const { gpu, tensorSplit, mainGpuInput, unverifiedCompatibility } = plan.legacy.extras;
@@ -385,8 +391,10 @@ function createLlamaStartRuntimeRequest(deps) {
     let { gpuDeviceIds, gpuPlan, mainGpu } = runOptions;
     let effectiveTensorSplit = runOptions.tensorSplit;
     let admissionLease = null;
-    if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
-      admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
+    // An add stops nothing, so it admits up front like a parallel instance.
+    const addsInstance = runOptions.launchMode === "add";
+    if ((instanceMode === "parallel" || addsInstance) && typeof acquireGpuAdmission === "function") {
+      admissionLease = await acquireGpuAdmission(addsInstance ? { ...gpuAdmissionRequest, instanceMode: "parallel" } : gpuAdmissionRequest);
     } else if (instanceMode === "replace"
       && typeof acquireGpuAdmission === "function"
       && typeof acquireGpuAdmissionAfterPrepare !== "function") {
@@ -470,7 +478,7 @@ function createLlamaStartRuntimeRequest(deps) {
       return admissionLease;
     };
     if (admissionLease) attachAdmissionLease(admissionLease);
-    if (instanceMode === "replace" && typeof acquireGpuAdmissionAfterPrepare === "function") {
+    if (instanceMode === "replace" && !addsInstance && typeof acquireGpuAdmissionAfterPrepare === "function") {
       runOptions.gpuAdmissionRequest = gpuAdmissionRequest;
       runOptions.prepareGpuAdmission = async (prepare) => {
         const prepared = await acquireGpuAdmissionAfterPrepare(gpuAdmissionRequest, prepare);

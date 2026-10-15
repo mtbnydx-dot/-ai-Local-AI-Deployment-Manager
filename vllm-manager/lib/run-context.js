@@ -120,6 +120,8 @@ function createVllmRunContext(deps = {}) {
       engineId: engine,
       engineName,
       apiLabel: `${engineName} API`,
+      // mode add / onConflict: the supervisor re-checks the slot at its preflight (01 §11, 00 §9.3).
+      ...(opts.launchMode === "add" ? { mode: "add", onConflict: opts.onConflict === "skip" ? "skip" : "fail" } : {}),
       containerName,
       instanceId: vllmInstanceId(CONFIG, containerName, opts.instanceId),
       port: opts.port,

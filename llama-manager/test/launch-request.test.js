@@ -445,3 +445,31 @@ test("a verified architecture adds no compatibility note, and an unsupported one
     (error) => error.status === 409 && error.code === "llama_runtime_arch_unsupported",
   );
 });
+
+test("an add launch (ENG-26) skips an occupied slot without a job, and a prospective plan reads no file", async () => {
+  const calls = [];
+  const request = minimalLlamaRequest({
+    createJob: (type, title, meta) => { calls.push("createJob"); return { id: "add-job", type, title, meta, status: "running", logs: [] }; },
+    runStartJob: async (job, runOptions) => { calls.push(`runStartJob:${runOptions.launchMode}`); job.status = "success"; },
+    acquireGpuAdmission: async (admissionRequest) => {
+      calls.push(`acquire:${admissionRequest.instanceMode}`);
+      return { summary: { id: "lease-add", requestedTotalMb: 1, reservations: [] }, startHeartbeat: () => () => {}, commit: async () => {}, release: async () => {} };
+    },
+    resolveLaunchModel: () => {
+      calls.push("resolveLaunchModel");
+      return { selectedModel: { path: "C:/store/model.gguf", architecture: "llama" } };
+    },
+    listContainers: async () => [{ name: "llama-local", running: true, ports: "127.0.0.1:8080->8080/tcp", labels: { "ai.manager.model": "Held" } }],
+  });
+  const body = { engineId: "llamacpp", model: { ref: "C:/store/model.gguf" }, instance: { mode: "add", networkAccess: "local" }, values: {}, onConflict: "skip" };
+  const skipped = await request({ body, v2Only: true });
+  assert.deepEqual(skipped, { ok: true, skipped: true, reason: "instance_running", conflict: { instanceId: "primary", containerName: "llama-local", model: "Held" } });
+  assert.equal(calls.some((name) => name.startsWith("createJob") || name.startsWith("acquire") || name.startsWith("runStartJob")), false);
+
+  const readsBefore = calls.filter((name) => name === "resolveLaunchModel").length;
+  const prospective = await request.planLaunch({ engineId: "llamacpp", prospective: true, model: { card: { id: "card-fixture" } }, instance: { mode: "replace" }, values: {} });
+  assert.equal(prospective.prospective, true);
+  assert.equal(calls.filter((name) => name === "resolveLaunchModel").length, readsBefore, "no model file is read for a prospective plan");
+  await assert.rejects(request({ body: { engineId: "llamacpp", prospective: true, model: { card: { id: "card-fixture" } }, instance: { mode: "replace" }, values: {} }, v2Only: true }),
+    (error) => error.status === 400 && error.code === "prospective_not_launchable");
+});

@@ -91,6 +91,9 @@ const BLOCKER_STATUS = Object.freeze({
   instance_conflict: 409,
   insufficient_vram: 409,
 });
+const INSTANCE_MODES = Object.freeze(["replace", "parallel", "add"]);
+// The placeholder model path of a prospective plan without model.ref (01 §11).
+const PENDING_MODEL_PATH = "/models/<pending>";
 // LaunchRequestV2 top-level fields and their JSON types (a wrong type is a malformed body).
 const V2_FIELD_TYPES = Object.freeze({
   engineId: "string",
@@ -226,7 +229,7 @@ function canonicalJson(value) {
 
 /** A LaunchRequestV2 rather than a legacy /api/start body (whose model is a string). */
 function isV2Request(body) {
-  return isPlainObject(body) && (typeof body.engineId === "string"
+  return isPlainObject(body) && (typeof body.engineId === "string" || typeof body.fromLaunchId === "string"
     || isPlainObject(body.model) || isPlainObject(body.values) || isPlainObject(body.instance));
 }
 
@@ -382,14 +385,21 @@ function safeApplyRecipe(recipe, values, facts) {
  * through the alias table, the request fields as the old form fields, and
  * vllm-manager's multiGpuMode from the parallel sizes.
  */
-function synthesizeLegacyBody(request, { engineId, registry, catalog, runtime, explicitRuntime, values }) {
+function isPrimaryId(id) {
+  return String(id ?? "").trim().toLowerCase() === "primary";
+}
+
+function synthesizeLegacyBody(request, { engineId, registry, catalog, runtime, explicitRuntime, values, prospective = false }) {
   const body = legacyAliases.valuesToLegacyConfig(values, engineId, { catalog });
   const model = isPlainObject(request.model) ? request.model : {};
   const instance = isPlainObject(request.instance) ? request.instance : {};
-  body.model = String(model.ref ?? "").trim();
+  body.model = String(model.ref ?? "").trim() || (prospective ? PENDING_MODEL_PATH : "");
   if (!isBlank(model.servedName)) body.name = String(model.servedName).trim();
   body.engine = registry.toLegacy(engineId);
-  if (!isBlank(instance.mode)) body.instanceMode = instance.mode;
+  // "add" starts on the primary slot (the replace naming) or on a parallel slot
+  // named by instance.id; the resolver marks the run options launchMode "add".
+  if (instance.mode === "add") body.instanceMode = isBlank(instance.id) || isPrimaryId(instance.id) ? "replace" : "parallel";
+  else if (!isBlank(instance.mode)) body.instanceMode = instance.mode;
   if (!isBlank(instance.id)) body.instanceId = instance.id;
   if (!isBlank(instance.port)) body.port = instance.port;
   if (!isBlank(instance.networkAccess)) body.networkAccess = instance.networkAccess;
@@ -408,6 +418,37 @@ function synthesizeLegacyBody(request, { engineId, registry, catalog, runtime, e
     body.multiGpuMode = layout;
   }
   return body;
+}
+
+/**
+ * The running managed container that holds the slot an add would start on (its
+ * container name or its published port), as { instanceId, containerName, model },
+ * or null. A container that is not running does not hold a slot here; the
+ * supervisor still refuses a name that exists.
+ */
+async function findSlotConflict(runOptions, ctx) {
+  if (typeof ctx.listContainers !== "function") return null;
+  let containers;
+  try {
+    containers = await ctx.listContainers();
+  } catch {
+    return null;
+  }
+  const port = Number(runOptions.port);
+  const holder = (Array.isArray(containers) ? containers : []).find((item) => {
+    if (!item?.running) return false;
+    if (item.name === runOptions.containerName) return true;
+    if (!Number.isInteger(port)) return false;
+    return [...String(item.ports || "").matchAll(/:(\d+)->/g)].some((match) => Number(match[1]) === port);
+  });
+  if (!holder) return null;
+  return {
+    instanceId: holder.name === runOptions.containerName
+      ? (runOptions.instanceMode === "replace" ? "primary" : String(runOptions.instanceId || holder.name))
+      : String(holder.labels?.["ai.manager.instance"] || holder.name),
+    containerName: holder.name,
+    model: String(holder.labels?.["ai.manager.model"] || holder.model || ""),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -726,15 +767,30 @@ async function resolveLaunchPlan(request, ctx = {}) {
       "这是实验性引擎，启动前需要确认（acknowledge: experimental-engine）",
       "This is an experimental engine; acknowledge it before launching (acknowledge: experimental-engine)"));
   }
+  const prospective = origin === "v2" && request.prospective === true;
+  const addMode = origin === "v2" && instance.mode === "add";
   if (origin === "v2") {
-    // Parts of LaunchRequestV2 the resolver does not launch yet (ENG-26).
-    if (request.prospective === true) {
-      errors.push(fieldError("prospective", "prospective_unsupported", "这个管理器还不能为未下载的模型生成计划", "This manager cannot plan a model that is not on disk yet"));
+    if (prospective) {
+      // A plan from the model card alone (00 §9.2); it can never be launched.
+      plan.prospective = true;
+      if (mode === "launch") {
+        errors.push(fieldError("prospective", "prospective_not_launchable", "模型文件尚未就绪，只能预览计划，不能启动", "The model files are not in place yet; the plan is a preview and cannot be launched"));
+      } else if (!isPlainObject(request.model?.card)) {
+        errors.push(fieldError("model.card", "required", "预览计划需要提供模型卡（model.card）", "A prospective plan needs the model card (model.card)"));
+      }
+      warnings.push(fieldError("prospective", "plan_prospective", "计划基于模型卡生成；文件下载完成后会重新计算。", "Planned from the model card; it is recomputed once the files exist."));
     }
-    if (instance.mode !== undefined && !["replace", "parallel"].includes(instance.mode)) {
-      errors.push(fieldError("instance.mode", "instance_mode_unsupported", `不支持的实例模式“${String(instance.mode).slice(0, 32)}”；可选 replace、parallel`, `Unsupported instance mode "${String(instance.mode).slice(0, 32)}"; use replace or parallel`));
+    if (instance.mode !== undefined && !INSTANCE_MODES.includes(instance.mode)) {
+      errors.push(fieldError("instance.mode", "instance_mode_unsupported", `不支持的实例模式“${String(instance.mode).slice(0, 32)}”；可选 replace、parallel、add`, `Unsupported instance mode "${String(instance.mode).slice(0, 32)}"; use replace, parallel or add`));
     }
-    if (isBlank(request.model?.ref)) errors.push(fieldError("model.ref", "required", "请选择模型", "Choose a model"));
+    if (request.onConflict !== undefined && request.onConflict !== null) {
+      if (!["fail", "skip"].includes(request.onConflict)) {
+        errors.push(fieldError("onConflict", "invalid_value", "onConflict 只能是 fail 或 skip", "onConflict must be fail or skip"));
+      } else if (!addMode) {
+        errors.push(fieldError("onConflict", "on_conflict_requires_add", "onConflict 只能和 instance.mode \"add\" 一起使用", "onConflict only applies with instance.mode \"add\""));
+      }
+    }
+    if (!prospective && isBlank(request.model?.ref)) errors.push(fieldError("model.ref", "required", "请选择模型", "Choose a model"));
   }
 
   // 2. Catalog and values (a legacy body is checked by its own normalisation).
@@ -791,7 +847,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
 
   // The legacy run options: the manager's own normalisation of the body.
   const merged = requestedApplied ? { ...user, ...requestedApplied.values } : user;
-  const body = legacyBody || synthesizeLegacyBody(request, { engineId, registry, catalog, runtime, explicitRuntime, values: merged });
+  const body = legacyBody || synthesizeLegacyBody(request, { engineId, registry, catalog, runtime, explicitRuntime, values: merged, prospective });
   // 02's calibration for this card, engine, runtime and paramsKey (01 §12);
   // a failing lookup only means no calibration.
   const lookupCalibration = typeof ctx.calibrationFor === "function" ? ctx.calibrationFor : NO_CALIBRATION;
@@ -805,7 +861,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
   };
   let normalized;
   try {
-    normalized = await ctx.normalize(body, { mode, calibrationFor });
+    normalized = await ctx.normalize(body, { mode, calibrationFor, prospective, card });
   } catch (error) {
     recordFailure(plan, error);
     return finish(plan);
@@ -815,6 +871,24 @@ async function resolveLaunchPlan(request, ctx = {}) {
     return finish(plan);
   }
   const runOptions = normalized.runOptions;
+  if (origin === "v2" && typeof request.source === "string" && request.source.trim()) runOptions.launchSource = request.source.trim().slice(0, 32);
+  if (addMode) {
+    // 00 §9.3: an add never stops anything. The slot is checked here, before
+    // any job, lease or Docker action; the supervisor checks it again.
+    runOptions.launchMode = "add";
+    runOptions.onConflict = request.onConflict === "skip" ? "skip" : "fail";
+    const conflict = await findSlotConflict(runOptions, ctx);
+    if (conflict) {
+      blockers.push(blocker("instance_conflict",
+        `实例 ${conflict.instanceId} 正在运行“${conflict.model}”，未做任何改动`,
+        `Instance ${conflict.instanceId} is already running "${conflict.model}"; nothing was changed`,
+        { conflict }));
+      if (mode === "launch") {
+        if (runOptions.onConflict === "skip" && errors.length === 0) plan.legacy.skip = { conflict };
+        return finish(plan);
+      }
+    }
+  }
   // Validated extraArgs/extraEnv ride on the run options (the adapters append
   // them last) and are recorded in job meta (01 §18). Absent when not given.
   const hasCustom = custom.args.length > 0 || Object.keys(custom.env).length > 0;
@@ -846,7 +920,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
       // A keyed launch stores its key first; the plan shows the label it will get.
       const keyed = API_KEY_OPTIONS.some((field) => !isBlank(runOptions[field]));
       const keyRef = runOptions.runtimeApiKeyRef || (keyed ? PLAN_KEY_REF : "");
-      prepared = await ctx.prepareCommand({ ...runOptions, runtimeApiKeyRef: keyRef, hostGpus: hostGpus || [] }, { jobId: PLAN_JOB_ID, launchId: PLAN_LAUNCH_ID });
+      prepared = await ctx.prepareCommand({ ...runOptions, runtimeApiKeyRef: keyRef, hostGpus: hostGpus || [] }, { jobId: PLAN_JOB_ID, launchId: PLAN_LAUNCH_ID, prospective, card });
       command = prepared.adapter.buildLaunch(prepared.plan, prepared.ctx);
     } catch (error) {
       if (error?.code === "blocked") {
@@ -932,7 +1006,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
       }));
   }
   let slot = null;
-  if (mode === "plan" && runOptions.instanceMode === "replace" && typeof ctx.listContainers === "function") {
+  if (mode === "plan" && runOptions.instanceMode === "replace" && !addMode && typeof ctx.listContainers === "function") {
     try {
       const containers = await ctx.listContainers();
       slot = (Array.isArray(containers) ? containers : []).find((item) => item?.running && item.name === runOptions.containerName) || null;
@@ -967,7 +1041,7 @@ async function resolveLaunchPlan(request, ctx = {}) {
   if (mode === "plan" && plan.legacy.admissionRequest && typeof ctx.admissionPreview === "function") {
     let preview;
     try {
-      preview = await ctx.admissionPreview(plan.legacy.admissionRequest, { mode: runOptions.instanceMode, releasedMbByGpu: releasedMemory(slot) });
+      preview = await ctx.admissionPreview(plan.legacy.admissionRequest, { mode: addMode ? "parallel" : runOptions.instanceMode, releasedMbByGpu: releasedMemory(slot) });
     } catch (error) {
       preview = { verdict: "unknown", code: error?.code || "vram_admission_unavailable", message: String(error?.message || error) };
     }
@@ -991,6 +1065,57 @@ async function resolveLaunchPlan(request, ctx = {}) {
 }
 
 /**
+ * {fromLaunchId, instance?, onConflict?, expectedPlanHash?, source?} → the
+ * LaunchRequestV2 of the stored LaunchStore spec (01 §11): restore and
+ * relaunch replay what ran, with the given placement. Any other body is
+ * returned as it is. The stored API key is never replayed (the spec only holds
+ * a reference); the replayed instance runs as the spec's own settings say.
+ */
+function expandLaunchRequest(body, ctx = {}) {
+  if (!isPlainObject(body) || body.fromLaunchId === undefined || body.fromLaunchId === null) return body;
+  if (typeof ctx.getLaunchSpec !== "function") {
+    const error = new Error("The launch store is not available on this manager.");
+    error.status = 501;
+    error.code = "launch_store_unavailable";
+    throw error;
+  }
+  const record = ctx.getLaunchSpec(body.fromLaunchId);
+  const spec = isPlainObject(record?.spec) ? record.spec : null;
+  if (!spec) {
+    const error = new Error(`No stored launch ${String(body.fromLaunchId).slice(0, 64)}.`);
+    error.status = 404;
+    error.code = "unknown_launch";
+    throw error;
+  }
+  const stored = isPlainObject(spec.instance) ? spec.instance : {};
+  const override = isPlainObject(body.instance) ? body.instance : {};
+  const instance = {};
+  for (const [key, value] of Object.entries({ ...stored, ...override })) {
+    if (value !== null && value !== undefined && value !== "" && !(Array.isArray(value) && !value.length)) instance[key] = clone(value);
+  }
+  // A replace-mode launch always ran on the primary slot; its stored id is only
+  // the name it was derived from, so a new placement keeps no such id.
+  if (stored.mode !== "parallel" && instance.mode !== "parallel" && (isBlank(override.id) || override.id === stored.id)) delete instance.id;
+  const request = {
+    engineId: spec.engineId,
+    ...(spec.runtimeId ? { runtimeId: spec.runtimeId } : {}),
+    ...(spec.recipeId ? { recipeId: spec.recipeId } : {}),
+    ...(spec.runtimeImage && !spec.runtimeId ? { runtime: { imageOverride: spec.runtimeImage } } : {}),
+    model: { ref: spec.model?.ref || "", ...(spec.model?.servedName ? { servedName: spec.model.servedName } : {}) },
+    instance,
+    values: clone(spec.values || {}),
+    ...(Array.isArray(spec.extraArgs) && spec.extraArgs.length ? { extraArgs: clone(spec.extraArgs) } : {}),
+    ...(isPlainObject(spec.extraEnv) && Object.keys(spec.extraEnv).length ? { extraEnv: clone(spec.extraEnv) } : {}),
+    ...(body.onConflict !== undefined ? { onConflict: body.onConflict } : {}),
+    ...(body.expectedPlanHash !== undefined ? { expectedPlanHash: body.expectedPlanHash } : {}),
+    ...(body.source !== undefined ? { source: body.source } : {}),
+  };
+  const malformed = checkLaunchBody(request);
+  if (malformed) throw malformed;
+  return request;
+}
+
+/**
  * body + ctx → LaunchPlan: the plan route and the launch both start here.
  * Throws 400 for a malformed body and for an unknown engine; every other
  * problem is in the plan (ok:false with errors[] and blockers[]).
@@ -998,6 +1123,10 @@ async function resolveLaunchPlan(request, ctx = {}) {
 async function planLaunch(body, ctx = {}) {
   const malformed = checkLaunchBody(body);
   if (malformed) throw malformed;
+  if (ctx.v2Only && !isV2Request(body)) {
+    throw badRequest("v2_body_required", "POST /api/launch takes a LaunchRequestV2 or {fromLaunchId}; send a legacy body to /api/start.");
+  }
+  body = expandLaunchRequest(body, ctx);
   const registry = ctx.registry;
   const managerId = normalizeManagerId(ctx.managerId);
   const loader = ctx.paramCatalog || paramCatalog.getParamCatalog();
@@ -1035,6 +1164,20 @@ function planLaunchError(plan) {
     if (!error.plan) Object.defineProperty(error, "plan", { value: plan, enumerable: false, writable: true });
   }
   return error;
+}
+
+/** The 409 a launch throws when expectedPlanHash no longer matches (01 §11): before any job, lease or container action. */
+function planChangedError(plan) {
+  const error = new Error("The launch plan changed after it was reviewed; review it again before starting. / 启动配置在你确认后发生了变化，请重新检查后再启动。");
+  error.status = 409;
+  error.code = "plan_changed";
+  error.planView = publicPlan(plan);
+  return error;
+}
+
+/** The 200 body of an add that skipped an occupied slot (01 §11, 00 §9.3). */
+function skippedResult(plan) {
+  return { ok: true, skipped: true, reason: "instance_running", conflict: clone(plan.legacy.skip.conflict) };
 }
 
 /** The JSON body of a plan (00 §4.3): its enumerable fields, which hold no secret. */
@@ -1081,13 +1224,24 @@ function createLaunchPlanner(options = {}) {
       getIntrospection: hook("getIntrospection"),
       modelStorage: options.modelStorage || null,
       calibrationFor: hook("calibrationFor") || NO_CALIBRATION,
+      getLaunchSpec: hook("getLaunchSpec"),
       modelFacts: hook("modelFacts"),
     };
   }
   return {
     plan: (body) => planLaunch(body, context("plan")),
-    async launch(body) {
-      const plan = await planLaunch(body, context("launch"));
+    /**
+     * Resolves the plan in launch mode. Returns the plan to run, or the plan
+     * of an add that skipped (plan.legacy.skip = { conflict }: no job, no
+     * lease). Throws plan_changed when expectedPlanHash no longer matches,
+     * and planLaunchError for a plan with problems. options.v2Only is
+     * POST /api/launch: a legacy body is 400 v2_body_required.
+     */
+    async launch(body, { v2Only = false } = {}) {
+      const plan = await planLaunch(body, { ...context("launch"), v2Only });
+      if (plan.legacy?.skip) return plan;
+      const expected = isPlainObject(body) ? (body.expectedPlanHash ?? null) : null;
+      if (typeof expected === "string" && expected && plan.planHash && expected !== plan.planHash) throw planChangedError(plan);
       if (!plan.ok) throw planLaunchError(plan);
       return plan;
     },
@@ -1105,13 +1259,16 @@ module.exports = {
   commandView,
   computePlanHash,
   createLaunchPlanner,
+  expandLaunchRequest,
   isV2Request,
   launchSummary,
+  planChangedError,
   planLaunch,
   planLaunchError,
   publicPlan,
   requestToLegacyRunOptions: legacyAliases.requestToLegacyRunOptions,
   resolveLaunchPlan,
+  skippedResult,
   splitBilingual,
   toLaunchRequest,
 };

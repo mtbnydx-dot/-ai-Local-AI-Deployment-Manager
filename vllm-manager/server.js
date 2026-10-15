@@ -1664,8 +1664,8 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   getRecipeStore: () => recipeStore,
   // The command preview: the adapter input runStartJob builds from these run
   // options, and the recipe the legacy preset was rendered from.
-  prepareLaunchCommand: (runOptions, { jobId }) => {
-    const prepared = prepareLaunch({ id: jobId, meta: {} }, runOptions);
+  prepareLaunchCommand: (runOptions, { jobId, prospective }) => {
+    const prepared = prepareLaunch({ id: jobId, meta: {} }, prospective ? { ...runOptions, prospective: true } : runOptions);
     return { ...prepared, recipe: core.engines.recipes.recipeForLegacyPreset(prepared.preset) };
   },
   getHostGpus: async () => {
@@ -1676,6 +1676,8 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   imagePresence: (image) => engineRoutes?.presence?.present(image) ?? null,
   admissionPreview: (request, options) => gpuAdmissionController.evaluate(request, options),
   listContainers: () => listManagedContainers(),
+  // fromLaunchId (ENG-26): the stored spec POST /api/launch replays.
+  getLaunchSpec: (launchId) => launchStore.get(launchId),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
   // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (MOD-10 store).
@@ -1823,6 +1825,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
+  // POST /api/launch (ENG-26): /api/start for a LaunchRequestV2 or {fromLaunchId}.
+  startLaunch: ({ req, body }) => startRuntimeRequest({ req, body, v2Only: true }),
   managerId: "vllm",
   ownerLabelValue: CONFIG.managerId,
   isLocalRequest,
@@ -5280,7 +5284,7 @@ const vllmRunContext = createVllmRunContext({
 });
 
 async function runStartJob(job, opts) {
-  return runtimeSupervisor.start({ job, run: vllmRunContext(opts), source: job.meta?.launchSource || "api" });
+  return runtimeSupervisor.start({ job, run: vllmRunContext(opts), source: job.meta?.launchSource || opts.launchSource || "api" });
 }
 
 function delay(ms) {

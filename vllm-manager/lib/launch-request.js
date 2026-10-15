@@ -1,4 +1,4 @@
-const { createLaunchPlanner } = require("../../manager-core/engines/resolve-launch-plan");
+const { createLaunchPlanner, skippedResult } = require("../../manager-core/engines/resolve-launch-plan");
 const memoryModels = require("../../manager-core/engines/memory-models");
 const recipes = require("../../manager-core/engines/recipes");
 const { normalizeRuntimeEngine: registryRuntimeEngine } = require("./runtime-command");
@@ -56,6 +56,7 @@ function createVllmStartRuntimeRequest(deps) {
     getIntrospection = null,
     modelStorage = null,
     calibrationFor = null,
+    getLaunchSpec = null,
     modelFacts = null,
   } = deps;
 
@@ -67,8 +68,9 @@ function createVllmStartRuntimeRequest(deps) {
    * the alias table writes. calibrationFor(paramsKey) is the resolver's 02
    * calibration lookup for this request (01-engines §12), null until MOD-10.
    */
-  async function normalizeStartBody(body = {}, { calibrationFor: lookupCalibration = null } = {}) {
-    const model = resolveRequestedModel(cleanRequired(body.model, "model"));
+  async function normalizeStartBody(body = {}, { calibrationFor: lookupCalibration = null, prospective = false } = {}) {
+    // A prospective plan (01 §11) names a path that does not exist yet: nothing is resolved on disk.
+    const model = prospective ? cleanRequired(body.model, "model") : resolveRequestedModel(cleanRequired(body.model, "model"));
     const name = String(body.name || deriveName(model));
     const engine = normalizeRuntimeEngine(body.engine);
     const instanceMode = normalizeRuntimeInstanceMode(body.instanceMode);
@@ -167,7 +169,7 @@ function createVllmStartRuntimeRequest(deps) {
     const serviceUrl = `http://${serviceHost}:${port}/v1`;
 
     let modelCompatibility = null;
-    if (typeof checkModelCompatibility === "function") {
+    if (typeof checkModelCompatibility === "function" && !prospective) {
       modelCompatibility = await checkModelCompatibility({
         ...body,
         model,
@@ -390,12 +392,15 @@ function createVllmStartRuntimeRequest(deps) {
     getIntrospection,
     modelStorage,
     calibrationFor,
+    getLaunchSpec,
     modelFacts,
   });
 
-  async function startRuntimeRequest({ body = {} } = {}) {
+  async function startRuntimeRequest({ body = {}, v2Only = false } = {}) {
     // alias → resolver → requestToLegacyRunOptions: what was planned is what runs.
-    const plan = await planner.launch(body);
+    const plan = await planner.launch(body, { v2Only });
+    // An add on an occupied slot with onConflict "skip": no job, no lease, nothing stopped.
+    if (plan.legacy.skip) return skippedResult(plan);
     const runOptions = planner.runOptions(plan);
     const gpuAdmissionRequest = plan.legacy.admissionRequest;
     const { name, engine, instanceMode, containerName, vllmApiKey } = runOptions;
@@ -407,8 +412,10 @@ function createVllmStartRuntimeRequest(deps) {
       && Object.hasOwn(gpuAdmissionRequest || {}, "poolCappedTokens");
     const admissionPolicy = plan.memory?.policy || "static-fraction-of-free";
     let admissionLease = null;
-    if (instanceMode === "parallel" && typeof acquireGpuAdmission === "function") {
-      admissionLease = await acquireGpuAdmission(gpuAdmissionRequest);
+    // An add stops nothing, so it admits up front like a parallel instance.
+    const addsInstance = runOptions.launchMode === "add";
+    if ((instanceMode === "parallel" || addsInstance) && typeof acquireGpuAdmission === "function") {
+      admissionLease = await acquireGpuAdmission(addsInstance ? { ...gpuAdmissionRequest, instanceMode: "parallel" } : gpuAdmissionRequest);
     } else if (instanceMode === "replace"
       && typeof acquireGpuAdmission === "function"
       && typeof acquireGpuAdmissionAfterPrepare !== "function") {
@@ -484,7 +491,7 @@ function createVllmStartRuntimeRequest(deps) {
       return admissionLease;
     };
     if (admissionLease) attachAdmissionLease(admissionLease);
-    if (instanceMode === "replace" && typeof acquireGpuAdmissionAfterPrepare === "function") {
+    if (instanceMode === "replace" && !addsInstance && typeof acquireGpuAdmissionAfterPrepare === "function") {
       runOptions.gpuAdmissionRequest = gpuAdmissionRequest;
       runOptions.prepareGpuAdmission = async (prepare) => {
         const prepared = await acquireGpuAdmissionAfterPrepare(gpuAdmissionRequest, prepare);
