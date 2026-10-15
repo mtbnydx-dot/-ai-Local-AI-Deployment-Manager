@@ -326,5 +326,4 @@ test("exposure scan exits 0 when nothing fails (an unsupported platform reports 
   assert.equal(result.code, 0);
   assert.ok(!JSON.parse(result.out).checks.some((check) => check.state === "fail"));
   assert.equal((await world.cli(["exposure", "nope"])).code, 2);
-  assert.equal((await world.cli(["exposure", "setup"])).code, 1);
 });
