@@ -604,7 +604,8 @@ test("SSE 503 falls back to polling via /recent, retries SSE with ?lastEventId= 
           ? { status: 200, contentType: "text/event-stream", headers: STREAM_HEADERS, body: `retry: 3600000\n\n${sse("k3f9a2-6", "resync", { reason: "gap" })}` }
           : { status: 503, body: { ok: false, error: { code: "too_many_streams" } } };
       },
-      "GET /api/events/recent": { ok: true, bootId: "k3f9a2", events: [RECENT_EVENT], lastId: "k3f9a2-5", gap: false },
+      // Like the real endpoint, nothing newer than `since` comes back, so later polls replay no event.
+      "GET /api/events/recent": (request) => ({ ok: true, bootId: "k3f9a2", events: new URL(request.url()).searchParams.get("since") ? [] : [RECENT_EVENT], lastId: "k3f9a2-5", gap: false }),
     },
   });
   try {
@@ -613,7 +614,8 @@ test("SSE 503 falls back to polling via /recent, retries SSE with ?lastEventId= 
     const banner = byId(page, "connection-banner.root");
     await expect(banner).toHaveAttribute("data-state", "polling");
     await expect(banner).toContainText("Live updates interrupted; refreshing on a timer");
-    const recent = () => mock.find("GET", "/api/events/recent");
+    // The event client asks without a limit; the Overview's own activity list asks with limit=20.
+    const recent = () => mock.find("GET", "/api/events/recent").filter((call) => !call.query.limit);
     await expect.poll(() => recent().length).toBeGreaterThanOrEqual(1);
     expect(recent()[0].query.since).toBeUndefined();
 
@@ -898,6 +900,7 @@ for (const theme of ["light", "dark"]) {
         await page.goto(`${entry.url}overview`);
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         await expect(byId(page, "status-strip.overall")).toBeVisible();
+        await expect(page.locator("#main h1")).toBeVisible();
         await expectNoA11yViolations(page, { label: `${theme} ${size} base` });
         await expectNoOverflow(page);
 

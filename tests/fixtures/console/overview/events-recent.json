@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "lastId": "k3f9a2-4",
+  "gap": false,
+  "events": [
+    { "id": "k3f9a2-1", "type": "status", "at": "@now-20m", "source": "entry", "data": { "reason": "manager_up", "managerId": "vllm" } },
+    { "id": "k3f9a2-2", "type": "jobs", "at": "@now-10m", "source": "vllm", "data": { "managerId": "vllm", "jobs": [{ "id": "job-1", "type": "launch", "title": "Launch demo", "status": "running" }], "removed": [] } },
+    { "id": "k3f9a2-3", "type": "instances", "at": "@now-5m", "source": "entry", "data": { "managerId": "vllm", "changed": [{ "id": "primary" }], "removed": [], "native": false } },
+    { "id": "k3f9a2-4", "type": "notification", "at": "@now-1m", "source": "entry", "data": { "kind": "restore.offer", "severity": "info", "title": { "zh": "上次的模型尚未恢复", "en": "Last session's models are not running" } } }
+  ]
+}

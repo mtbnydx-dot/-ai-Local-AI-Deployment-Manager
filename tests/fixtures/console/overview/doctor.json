@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "at": "@now",
+  "durationMs": 1800,
+  "summary": { "ok": 12, "warn": 1, "fail": 1, "info": 2, "skip": 0 },
+  "checks": [
+    { "id": "runtime.docker-daemon", "group": "runtime", "status": "fail", "title": { "zh-CN": "Docker 引擎", "en-US": "Docker engine" }, "detail": "The engine is not running.", "fix": { "id": "start-docker", "risk": "confirm" } },
+    { "id": "env.python", "group": "env", "status": "warn", "title": { "zh-CN": "Python", "en-US": "Python" }, "detail": "Python 3.9 found." },
+    { "id": "env.node-version", "group": "env", "status": "ok", "title": { "zh-CN": "Node 版本", "en-US": "Node version" } }
+  ]
+}
