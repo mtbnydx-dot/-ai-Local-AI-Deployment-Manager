@@ -1171,7 +1171,7 @@ const alertsModule = require("../../manager-core/telemetry/alerts");
 const ALERT_RULES_PATH = "/api/telemetry/alert-rules";
 const ALERTS_PATH = "/api/telemetry/alerts";
 const ALERT_RULE_PATH = /^\/api\/telemetry\/alert-rules\/([a-z][a-z0-9_]{2,47})$/;
-const ALERT_ACTION_PATH = /^\/api\/telemetry\/alerts\/([a-z][a-z0-9_]{2,47})\/(ack|silence)$/;
+const ALERT_ACTION_PATH = new RegExp(`^${ALERTS_PATH}/([a-z][a-z0-9_]{2,47})/(ack|silence)$`);
 const ALERT_BODY_BYTES = 16 * 1024;
 const ALERT_LIST_LIMIT_MAX = 500;
 const TEST_CHANNELS = Object.freeze(["inapp", "toast", "webhook"]);
@@ -1384,7 +1384,7 @@ function createAlertRoutes(options = {}) {
 
   async function handle(req, res, url) {
     const pathname = String(url && url.pathname ? url.pathname : "");
-    if (!pathname.startsWith("/api/telemetry/alert")) return false;
+    if (!pathname.startsWith(ALERTS_PATH) && !pathname.startsWith(ALERT_RULES_PATH)) return false;
     const rule = ALERT_RULE_PATH.exec(pathname);
     const action = ALERT_ACTION_PATH.exec(pathname);
     let route = "";
