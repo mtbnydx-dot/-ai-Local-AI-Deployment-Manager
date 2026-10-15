@@ -13,6 +13,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { startFakeHub } = require("./fake-hub");
+const { installRouteHandlers } = require("./hub-shim-routes-suite");
 
 const HUB_JOB_ID = "dl_7k2m4q9x3c5vb8np";
 const LEGACY_HUB_JOB_ID = "dl_2b3c4d5e6f7g2h3j";
@@ -300,6 +301,35 @@ function runHubShimSuite({ managerId, serverPath, express }) {
       lan.closeAllConnections?.();
       await new Promise((resolve) => lan.close(resolve));
     }
+  });
+
+  // HUB-13b: the manager registers the shim before core.registerModelRoutes,
+  // so the legacy download, catalogue, settings, login and storage handlers
+  // never answer in hub mode. Each request below reaches the fake hub and
+  // none touches the real engines, Hugging Face or the machine's disks.
+  test("the model routes are the shim's: legacy handlers never answer in hub mode", async () => {
+    installRouteHandlers(hub, { managerId });
+    const start = hub.state.requests.length;
+    const settings = await (await fetch(`${base}/api/download/settings`)).json();
+    assert.equal(settings.autoRetryCount, 3);
+    const catalogue = await (await fetch(`${base}/api/remote-models?limit=12&source=huggingface`)).json();
+    assert.ok(Array.isArray(catalogue.models) && catalogue.models.length >= 1);
+    const usage = await (await fetch(`${base}/api/models/disk-usage`)).json();
+    assert.equal(usage.ok, true);
+    assert.equal(usage.roots[0].id, "r_main");
+    const auth = await (await fetch(`${base}/api/huggingface/auth/status`)).json();
+    assert.equal(auth.username, "fake-user", "llama gains the login routes too");
+    const estimate = await fetch(`${base}/api/download/estimate?model=example-org%2FExample-8B-GGUF&precision=Q4_K_M`);
+    assert.equal(estimate.status, 200);
+    assert.equal((await estimate.json()).supported, true);
+    const probe = await (await fetch(`${base}/api/download/mirror-probe`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).json();
+    assert.equal(probe.recommended, "mirror");
+    const calls = hub.state.requests.slice(start).map((item) => `${item.method} ${item.url.split("?")[0]}`);
+    for (const expected of ["GET /api/hub/settings", "GET /api/hub/search", "GET /api/hub/storage/usage", "GET /api/hub/auth/huggingface", "POST /api/hub/plan", "POST /api/hub/sources/probe"]) {
+      assert.ok(calls.includes(expected), expected);
+    }
+    assert.ok(hub.state.requests.slice(start).every((item) => item.principal === `system:hub-shim:${managerId}`));
+    hub.state.handlers = [];
   });
 
   test("an unreachable entry is hub_unavailable without a fallback queue", async () => {

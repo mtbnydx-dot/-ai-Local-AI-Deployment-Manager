@@ -44,7 +44,10 @@ async function mountEntry(t) {
   const { entry } = await loadEntry();
   const spy = spyModule(SPY_CLAIMS);
   const ctx = entry.createRouteContext({ logger: quietLogger() });
-  const routes = await entry.mountRouteModules({ ctx, modules: [...entry.ROUTE_MODULES, spy] });
+  // The spy stands in for the platform module (OPS-13), whose own tests cover
+  // /api/platform/busy; the scope table is what this file asserts.
+  const modules = entry.ROUTE_MODULES.filter((spec) => spec !== "./lib/platform-routes");
+  const routes = await entry.mountRouteModules({ ctx, modules: [...modules, spy] });
   t.after(() => routes.close());
   assert.deepEqual(routes.failed, []);
   const port = await serveEntry(t, entry, routes);

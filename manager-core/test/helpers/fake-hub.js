@@ -6,7 +6,10 @@
 // over method + path + query + principal + ts + sha256(body), from a loopback
 // socket. Unsigned or badly signed requests get 401 and never reach a route.
 // It serves the hub download routes the shim calls and a downloads SSE stream
-// the test can push events into. Nothing here talks to a real service.
+// the test can push events into. Other hub routes (HUB-13b) are answered by
+// `state.handlers`: [{ method, match: path | RegExp, handle({ req, url, body,
+// state }) → { status?, json } }], set by the test. Nothing here talks to a
+// real service.
 
 const http = require("node:http");
 const internalAuth = require("../../internal-auth");
@@ -31,6 +34,7 @@ async function startFakeHub({ token = FAKE_TRUST_TOKEN, jobs = [], logs = {} } =
     streams: new Set(),
     // "ok" | "hub-down" (503 hub_unavailable) | "reject" (401 for everything)
     mode: "ok",
+    handlers: [],
   };
 
   function find(id) {
@@ -47,6 +51,12 @@ async function startFakeHub({ token = FAKE_TRUST_TOKEN, jobs = [], logs = {} } =
       return;
     }
     if (state.mode === "hub-down") return json(res, 503, envelope("hub_unavailable", "The model hub is not running."));
+    for (const handler of state.handlers) {
+      const matches = handler.match instanceof RegExp ? handler.match.test(url.pathname) : handler.match === url.pathname;
+      if (handler.method !== req.method || !matches) continue;
+      const answer = handler.handle({ req, url, body, state });
+      if (answer) return json(res, answer.status || 200, answer.json);
+    }
     if (parts[0] !== "api" || parts[1] !== "hub" || parts[2] !== "downloads") return json(res, 404, envelope("not_found", "No route."));
     if (req.method === "GET" && parts.length === 3) {
       const owner = url.searchParams.get("owner");

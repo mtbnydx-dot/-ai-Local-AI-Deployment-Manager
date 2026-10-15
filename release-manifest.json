@@ -62,7 +62,8 @@
     "docs/qwen38-acceleration-guide.md",
     "docs/service-runbook.md",
     "docs/model-storage-guide.md",
-    "docs/update-guide.md"
+    "docs/update-guide.md",
+    "docs/troubleshooting.md"
   ],
   "runtimeDataDirectories": [
     "service-entry/data",
