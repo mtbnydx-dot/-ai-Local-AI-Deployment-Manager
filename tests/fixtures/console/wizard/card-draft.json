@@ -1,0 +1,135 @@
+{
+  "ok": true,
+  "cached": false,
+  "durationMs": 9,
+  "card": {
+    "schema": "modelcard/v1",
+    "cardId": "mc_bbbbbbbbbbbbbbbbbbbb",
+    "contentDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    "ref": {
+      "kind": "local",
+      "path": "C:/fixture/models/example-draft-head",
+      "displayPath": "example-draft-head",
+      "file": null
+    },
+    "format": {
+      "kind": "safetensors",
+      "weightFiles": 4,
+      "weightBytes": 15032385536,
+      "complete": true
+    },
+    "role": {
+      "value": "draft",
+      "runnable": false
+    },
+    "identity": {
+      "modelType": "example",
+      "architectures": [
+        "DraftHeadModel"
+      ],
+      "displayName": "example-draft-head",
+      "familyId": null,
+      "matchedBy": ""
+    },
+    "topology": {
+      "paramsTotal": 7600000000,
+      "layers": 28
+    },
+    "weights": {
+      "exact": true,
+      "totalBytes": 15032385536
+    },
+    "context": {
+      "native": 131072
+    },
+    "quant": {
+      "method": "none"
+    },
+    "modalities": {
+      "input": [
+        "text",
+        "image"
+      ],
+      "output": [
+        "text"
+      ]
+    },
+    "template": {
+      "toolFormat": "hermes-json",
+      "reasoningFormat": "think-tags"
+    },
+    "customCode": {
+      "autoMap": null,
+      "files": [],
+      "trustRemoteCodeRequired": false
+    },
+    "support": "unknown",
+    "warnings": [],
+    "errors": [],
+    "evidence": [
+      {
+        "fact": "/identity/modelType",
+        "value": null,
+        "confidence": "declared",
+        "source": {
+          "kind": "file",
+          "ref": "config.json#/model_type"
+        }
+      },
+      {
+        "fact": "/identity/architectures",
+        "value": null,
+        "confidence": "declared",
+        "source": {
+          "kind": "file",
+          "ref": "config.json#/architectures"
+        }
+      },
+      {
+        "fact": "/identity/familyId",
+        "value": null,
+        "confidence": "name-heuristic",
+        "source": {
+          "kind": "file",
+          "ref": "folder name"
+        }
+      },
+      {
+        "fact": "/format/kind",
+        "value": null,
+        "confidence": "detected",
+        "source": {
+          "kind": "file",
+          "ref": "model.safetensors.index.json"
+        }
+      },
+      {
+        "fact": "/weights/totalBytes",
+        "value": null,
+        "confidence": "verified-on-host",
+        "source": {
+          "kind": "file",
+          "ref": "qualification"
+        }
+      },
+      {
+        "fact": "/topology/paramsTotal",
+        "value": null,
+        "confidence": "detected",
+        "source": {
+          "kind": "file",
+          "ref": "tensor table"
+        }
+      },
+      {
+        "fact": "/template/toolFormat",
+        "value": null,
+        "confidence": "detected",
+        "source": {
+          "kind": "file",
+          "ref": "chat_template.jinja"
+        }
+      }
+    ]
+  }
+}

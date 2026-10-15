@@ -1,0 +1,86 @@
+{
+  "ok": true,
+  "cached": false,
+  "durationMs": 11,
+  "card": {
+    "schema": "modelcard/v1",
+    "cardId": "mc_dddddddddddddddddddd",
+    "contentDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    "ref": {
+      "kind": "local",
+      "path": "C:/fixture/models/example-custom-code",
+      "displayPath": "example-custom-code",
+      "file": null
+    },
+    "format": {
+      "kind": "safetensors",
+      "weightFiles": 4,
+      "weightBytes": 15032385536,
+      "complete": true
+    },
+    "role": {
+      "value": "main",
+      "runnable": true
+    },
+    "identity": {
+      "modelType": "madeup",
+      "architectures": [
+        "MadeUpForCausalLM"
+      ],
+      "displayName": "example-custom-code",
+      "familyId": null,
+      "matchedBy": ""
+    },
+    "topology": {
+      "paramsTotal": 7600000000,
+      "layers": 28
+    },
+    "weights": {
+      "exact": true,
+      "totalBytes": 15032385536
+    },
+    "context": {
+      "native": 131072
+    },
+    "quant": {
+      "method": "none"
+    },
+    "modalities": {
+      "input": [
+        "text",
+        "image"
+      ],
+      "output": [
+        "text"
+      ]
+    },
+    "template": {
+      "toolFormat": "hermes-json",
+      "reasoningFormat": "think-tags"
+    },
+    "customCode": {
+      "autoMap": {
+        "AutoModel": "modeling_madeup.MadeUpModel"
+      },
+      "files": [
+        "modeling_madeup.py",
+        "configuration_madeup.py"
+      ],
+      "trustRemoteCodeRequired": true
+    },
+    "support": "unknown",
+    "warnings": [],
+    "errors": [],
+    "evidence": [
+      {
+        "fact": "/identity/modelType",
+        "value": null,
+        "confidence": "declared",
+        "source": {
+          "kind": "file",
+          "ref": "config.json#/model_type"
+        }
+      }
+    ]
+  }
+}

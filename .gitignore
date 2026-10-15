@@ -29,6 +29,9 @@ jobs-ledger.json
 
 # Downloaded models and local caches
 models/
+# The console's models area (catalogs and pages) is source, not downloaded models (07 §3.7).
+!service-entry/console/i18n/models/
+!service-entry/console/routes/models/
 cache/
 .cache/
 
