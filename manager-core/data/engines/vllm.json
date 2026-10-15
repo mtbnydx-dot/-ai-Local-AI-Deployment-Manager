@@ -97,7 +97,26 @@
       "queueSeconds": [{ "name": "vllm:request_queue_time_seconds", "kind": "histogram" }]
     }
   },
-  "logPhases": [],
-  "logFacts": [],
-  "errorSignatures": []
+  "logPhases": [
+    {"match":"application startup complete|uvicorn running|startup complete","phase":"api","percent":92,"stageText":{"zh":"启动收尾","en":"Finishing startup"},"detailText":{"zh":"服务进程已报告启动完成，正在等待 API 就绪。","en":"The server reported startup complete; waiting for the API."}},
+    {"match":"\\b(?:capturing|capture)\\b[^\\r\\n]*cuda graphs?","phase":"graphs","percent":82,"stageText":{"zh":"捕获 CUDA graphs","en":"Capturing CUDA graphs"},"detailText":{"zh":"正在捕获 CUDA graphs。","en":"Capturing CUDA graphs."}},
+    {"match":"loading weights|loading model weights|loaded weights|load weight (?:begin|end)|loading base model","phase":"weights","percent":68,"stageText":{"zh":"加载权重","en":"Loading weights"},"detailText":{"zh":"正在加载模型权重。","en":"Loading the model weights."}},
+    {"match":"Model loading took [\\d.]+ GiB","phase":"weights","percent":72,"stageText":{"zh":"加载权重","en":"Loading weights"},"detailText":{"zh":"权重已加载，正在分析显存。","en":"Weights are loaded; profiling memory."}},
+    {"match":"Available KV cache memory: [\\d.]+ GiB|GPU KV cache size: [\\d,]+ tokens","phase":"kv","percent":76,"stageText":{"zh":"分配 KV cache","en":"Allocating KV cache"},"detailText":{"zh":"正在分配 KV cache。","en":"Allocating the KV cache."}}
+  ],
+  "logFacts": [
+    {"id":"weightsGiB","match":"Model loading took ([\\d.]+) GiB"},
+    {"id":"modelLoadSeconds","match":"Model loading took [\\d.]+ GiB(?: memory)? and ([\\d.]+) seconds"},
+    {"id":"kvGiB","match":"Available KV cache memory: ([\\d.]+) GiB"},
+    {"id":"kvTokens","match":"GPU KV cache size: ([\\d,]+) tokens","type":"int"},
+    {"id":"maxConcurrency","match":"Maximum concurrency for [\\d,]+ tokens per request: ([\\d.]+)x"},
+    {"id":"maxContextTokens","match":"Maximum concurrency for ([\\d,]+) tokens per request","type":"int"},
+    {"id":"torchCompileSeconds","match":"torch\\.compile took ([\\d.]+) s"},
+    {"id":"warmupSeconds","match":"Initial profiling/warmup run took ([\\d.]+) s"},
+    {"id":"graphCaptureGiB","match":"Graph capturing finished in [\\d.]+ secs, took ([\\d.]+) GiB"},
+    {"id":"engineInitSeconds","match":"init engine .* took ([\\d.]+) s"}
+  ],
+  "errorSignatures": [
+    {"id":"vllm-flag-unknown","code":"flag_unknown","phase":"container","rootCause":true,"severity":"error","regex":"unrecognized arguments: (--\\S+)","title":{"zh":"运行时不认识参数 {1}","en":"The runtime does not recognize argument {1}"},"hint":{"zh":"刷新运行时的参数自省，或移除该额外参数。","en":"Refresh the runtime flag introspection, or remove that extra argument."},"explanation":{"zh":"镜像比启动参数旧，或额外参数拼写有误。","en":"The image is older than the argument, or the extra argument is misspelled."},"suggestions":[{"kind":"action","action":"introspect"}]}
+  ]
 }
