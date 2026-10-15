@@ -4,7 +4,9 @@
 // route-mount table. HUB-1 serves GET /api/hub/status and GET/PUT
 // /api/hub/settings; HUB-8 adds the library list, detail, rescan, verify and
 // identify routes and the task poll; HUB-7 adds the download queue routes
-// (/api/hub/downloads*) and the viewer redaction of the `downloads` event. The later hub packages add their rows to
+// (/api/hub/downloads*) and the viewer redaction of the `downloads` event;
+// HUB-10 adds search, repository detail (with readme and files), link
+// resolution and the plan sheet. The later hub packages add their rows to
 // HUB_ROUTES; a path may name segments (/api/hub/library/:id).
 // A path this module does not serve falls through to the entry's 404.
 //
@@ -80,6 +82,13 @@ function redactLibraryListForViewer(body) {
 function redactLibraryDetailForViewer(body) {
   if (!isPlainObject(body)) return body;
   return isPlainObject(body.entry) ? { ...body, entry: redactLibraryEntryForViewer(body.entry) } : body;
+}
+
+// 03 §13.1: search, repository detail, readme and files are public metadata:
+// fetchedFrom stays, warnings[].detail (an upstream error code) goes.
+function redactDiscoveryForViewer(body) {
+  if (!isPlainObject(body) || !Array.isArray(body.warnings)) return body;
+  return { ...body, warnings: body.warnings.map((warning) => (isPlainObject(warning) ? omit(warning, "detail") : warning)) };
 }
 
 // A task keeps its progress and a short error message; error.detail (a stack
@@ -177,6 +186,13 @@ const HUB_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login", handler: "authLogin" }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", handler: "authAccess" }),
   Object.freeze({ method: "POST", path: "/api/hub/sources/probe", handler: "sourcesProbe" }),
+  // Search, repository detail, link resolution and the plan sheet (HUB-10, 03 §13).
+  Object.freeze({ method: "GET", path: "/api/hub/search", handler: "search" }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name", handler: "repoGet" }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name/readme", handler: "repoReadme" }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name/files", handler: "repoFiles" }),
+  Object.freeze({ method: "POST", path: "/api/hub/resolve-link", handler: "resolveLink" }),
+  Object.freeze({ method: "POST", path: "/api/hub/plan", handler: "planCreate" }),
   // The download queue (HUB-7, 03 §13). Literal segments come before :id.
   Object.freeze({ method: "GET", path: "/api/hub/downloads", handler: "downloadsList" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads", handler: "downloadsCreate" }),
@@ -243,6 +259,10 @@ const HUB_VIEWER_ROUTES = Object.freeze([
   Object.freeze({ method: "GET", path: "/api/hub/library", redact: redactLibraryListForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/library/:id", redact: redactLibraryDetailForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/tasks/:id", redact: redactHubTaskBodyForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/search", redact: redactDiscoveryForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name", redact: redactDiscoveryForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name/readme", redact: redactDiscoveryForViewer }),
+  Object.freeze({ method: "GET", path: "/api/hub/repos/:provider/:owner/:name/files", redact: redactDiscoveryForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface", redact: redactHfAuthForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/auth/huggingface/access", redact: redactHfAccessForViewer }),
   Object.freeze({ method: "GET", path: "/api/hub/downloads", redact: redactDownloadListForViewer }),
@@ -265,6 +285,8 @@ const HUB_ADMIN_ONLY_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: "/api/hub/library/:id/identify" }),
   Object.freeze({ method: "POST", path: "/api/hub/auth/huggingface/login" }),
   Object.freeze({ method: "POST", path: "/api/hub/sources/probe" }),
+  Object.freeze({ method: "POST", path: "/api/hub/resolve-link" }),
+  Object.freeze({ method: "POST", path: "/api/hub/plan" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/reorder" }),
   Object.freeze({ method: "POST", path: "/api/hub/downloads/pause-all" }),
@@ -790,6 +812,116 @@ function createHubRoutes(options = {}) {
       }
     },
 
+    // --- discovery and the plan sheet (HUB-10, 03 §13.2-13.4) ---
+
+    async search(req, res, url, who) {
+      if (typeof hub.search !== "function") {
+        sendError(res, 503, "hub_unavailable", "Search is not available.");
+        return;
+      }
+      const query = {};
+      for (const key of ["q", "provider", "sort", "limit", "cursor", "context"]) {
+        const value = url.searchParams.get(key);
+        if (value !== null) query[key] = value;
+      }
+      const facets = url.searchParams.getAll("facet");
+      if (facets.length) query.facets = facets;
+      let result;
+      try {
+        result = await hub.search(query, {});
+      } catch (error) {
+        sendHubError(res, error, "searching");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, ...result }, who);
+    },
+
+    async repoGet(req, res, url, who, params) {
+      let result;
+      try {
+        result = await hub.getRepo(params, {
+          revision: url.searchParams.get("revision") ?? undefined,
+          contextTokens: url.searchParams.get("context") ?? undefined,
+          gpuIds: url.searchParams.get("gpuIds") ?? undefined,
+          engineId: url.searchParams.get("engineId") ?? undefined,
+        });
+      } catch (error) {
+        sendHubError(res, error, "reading a repository");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, ...result }, who);
+    },
+
+    async repoReadme(req, res, url, who, params) {
+      let result;
+      try {
+        result = await hub.getReadme(params, { revision: url.searchParams.get("revision") ?? undefined });
+      } catch (error) {
+        sendHubError(res, error, "reading a readme");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, ...result }, who);
+    },
+
+    async repoFiles(req, res, url, who, params) {
+      let result;
+      try {
+        result = await hub.listFiles(params, {
+          revision: url.searchParams.get("revision") ?? undefined,
+          cursor: url.searchParams.get("cursor") ?? undefined,
+          limit: url.searchParams.get("limit") ?? undefined,
+        });
+      } catch (error) {
+        sendHubError(res, error, "listing repository files");
+        return;
+      }
+      sendRead(req, res, url.pathname, { ok: true, ...result }, who);
+    },
+
+    // { url } → { provider, repo, revision, file? }; the link is read as text
+    // and nothing is fetched.
+    async resolveLink(req, res) {
+      const body = await readBody(req, res);
+      if (body === false) return;
+      if (typeof body.url !== "string") {
+        sendError(res, 400, "invalid_request", "url must be a string.", { details: { field: "url" } });
+        return;
+      }
+      try {
+        sendJson(res, { ok: true, ...hub.resolveLink(body.url) });
+      } catch (error) {
+        sendHubError(res, error, "resolving a link");
+      }
+    },
+
+    // The plan sheet has no side effects except the plan cache and, for a
+    // credential.hfToken, the vault entry the cached plan keeps (loopback
+    // owner or a clientLocal shim only, like POST /downloads).
+    async planCreate(req, res, url, who) {
+      if (typeof hub.plan !== "function") {
+        sendError(res, 503, "hub_unavailable", "Planning is not available.");
+        return;
+      }
+      const body = await readBody(req, res);
+      if (body === false) return;
+      let credential = null;
+      try {
+        credential = await acceptHubCredential({ hub, req, who, body });
+      } catch (error) {
+        sendHubError(res, error, "accepting the plan credential");
+        return;
+      }
+      const input = omit(omit(body, "credential"), "origin");
+      if (isPlainObject(body.credential) && body.credential.mode !== undefined) input.credential = { mode: body.credential.mode };
+      try {
+        const result = await hub.plan(input, { credential });
+        sendJson(res, { ok: true, ...result });
+      } catch (error) {
+        if (credential?.tokenRef) Promise.resolve().then(() => hub.tokens.release(credential.tokenRef)).catch(() => {});
+        sendHubError(res, error, "planning a download");
+      }
+    },
+
     // --- downloads (HUB-7, 03 §13) ---
 
     async downloadsList(req, res, url, who) {
@@ -1105,6 +1237,7 @@ module.exports = {
   redactHfAccessForViewer,
   redactHfAuthForViewer,
   redactResumeCheckForViewer,
+  redactDiscoveryForViewer,
   redactHubStatusForViewer,
   redactHubTaskBodyForViewer,
   redactLibraryDetailForViewer,

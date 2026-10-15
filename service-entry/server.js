@@ -1181,6 +1181,12 @@ async function getEntryGpus() {
   }));
 }
 
+// The compatibility rows of 02 (03 §10) are evaluated against this host's GPUs;
+// runtimes, facts and knowledge come from 02's own defaults.
+async function getEntryCompatibilityContext() {
+  return { host: { gpus: await getEntryGpus() } };
+}
+
 // The entry's one model hub (03 §3): data under service-entry/data/hub, the
 // download CLIs in the managers' discovery order. Building it touches no
 // file; a hub that cannot be built leaves its routes answering 503.
@@ -1211,6 +1217,10 @@ function createEntryHub({ events = null } = {}) {
       // through these two providers.
       getRuntimeLoad: getEntryRuntimeLoad,
       getGpus: getEntryGpus,
+      // 02's model inspector (core.models): the fit, the remote cards and the
+      // compatibility rows of search, repository detail and the plan (03 §10).
+      models: core.models,
+      getCompatibilityContext: getEntryCompatibilityContext,
       // Cancel-and-delete refuses a folder a running container mounts (03 §8).
       getBusyPaths: core.createStorageBusyPathProbe({ aiRoot: AI_ROOT }),
       logger: console,
