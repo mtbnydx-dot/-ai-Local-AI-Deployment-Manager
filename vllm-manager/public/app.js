@@ -43,6 +43,7 @@ const state = {
   compressionInsights: null,
   modelNotes: { notes: {} },
   modelConfig: { key: "", data: null, loading: false },
+  memoryEstimate: { signature: "", result: null, error: "" },
   recentLaunches: [],
   modelPickerOpen: false,
   modelPickerSource: "all",
@@ -71,7 +72,7 @@ function withFlightGuard(fn) {
 }
 const { fmtBytes, fmtNumber, fmtTokens, fmtPct, fmtRate, fmtMoney, escapeHtml, escapeAttr } = window.VllmFormat;
 const { api, auditApi } = window.VllmApi.create(() => state.auditToken);
-const { DOWNLOAD_SOURCES, PRECISION_PRESETS, MODEL_PRESETS, DTYPE_BYTES, KV_DTYPE_BYTES, QUANTIZATION_PROFILES, ICON_FALLBACKS } = window.VllmCatalog;
+const { DOWNLOAD_SOURCES, PRECISION_PRESETS, MODEL_PRESETS, ICON_FALLBACKS } = window.VllmCatalog;
 const {
   normalizedOptions,
   normalizedPrecisionOptions,
@@ -3268,28 +3269,77 @@ function updateMemoryEstimate() {
   const root = $("#memoryEstimate");
   if (!root) return;
 
-  const estimate = estimateMemoryUsage();
-  updateContextPresetState(estimate.contextTokens, estimate);
+  // The form side only: weights, KV and overhead come from the manager's
+  // /api/memory-estimate for the model card (02 §10.7), never from the name.
+  const base = collectMemoryEstimateInputs();
   updateContextHumanHint();
 
   if (isPennyroyalLaunch()) {
-    renderPennyroyalMemoryEstimate(estimate);
-    scheduleServerMemoryEstimate(estimate);
+    updateContextPresetState(base.contextTokens, null);
+    renderPennyroyalMemoryEstimate(base);
+    scheduleServerMemoryEstimate(base);
     return;
   }
 
-  if (!estimate.paramsB) {
-    root.innerHTML = `<div class="empty compact">没有从模型名里识别到 7B、14B、27B 这类规格。填入模型 ID 或本地路径后会自动估算。</div>`;
-    $("#memoryGpuBars").innerHTML = "";
-    $("#memoryEstimateNote").innerHTML = `
-      <strong class="warn">等待模型规格</strong>
-      <span>显存估算依赖参数量；如果模型名没有规格，可以把保存名称改成包含 27B、70B 这样的标记。</span>
-    `;
+  const gate = cardEstimateGate(base.model);
+  if (gate.state !== "ready") {
+    updateContextPresetState(base.contextTokens, null);
+    renderMemoryEstimateWaiting(gate);
     return;
   }
 
-  renderVllmMemoryEstimate(estimate);
-  scheduleServerMemoryEstimate(estimate);
+  const stored = state.memoryEstimate;
+  const cached = stored.signature === JSON.stringify(buildVllmMemoryEstimatePayload(base)) ? stored : null;
+  if (cached?.result) {
+    const estimate = mergeVllmServerMemoryEstimate(base, cached.result);
+    updateContextPresetState(estimate.contextTokens, estimate);
+    renderVllmMemoryEstimate(estimate);
+  } else {
+    updateContextPresetState(base.contextTokens, null);
+    renderPendingMemoryEstimate(base, cached?.error || "");
+  }
+  scheduleServerMemoryEstimate(base);
+}
+
+// Whether the manager can build a model card for the launch form's model. A
+// card needs the model's files: a local path, or a repository whose config the
+// /api/model/config call just read (offline or unknown ids stay "unavailable"
+// instead of posting an estimate that can only fail).
+function cardEstimateGate(model) {
+  const text = String(model || "").trim();
+  if (!text || !(looksLikePathInput(text) || /^[^/\s:]+\/[^/\s]+/.test(text))) return { state: "no-model" };
+  if (isGgufLaunchActive() && looksLikePathInput(text)) return { state: "ready" };
+  if (state.modelConfig.key !== modelConfigCacheKey() || state.modelConfig.loading) return { state: "loading" };
+  if (state.modelConfig.data?.found) return { state: "ready" };
+  return { state: "unavailable", reason: String(state.modelConfig.data?.reason || "") };
+}
+
+function canRequestCardEstimate(model) {
+  return cardEstimateGate(model).state === "ready";
+}
+
+function renderMemoryEstimateWaiting(gate) {
+  const [message, title, detail] = {
+    "no-model": ["填入模型 ID（owner/repo）或本地路径后，会按模型卡自动估算显存。", "等待模型", "显存估算由后端按模型卡（权重字节、KV 结构）计算，不再根据模型名猜测参数量。"],
+    loading: ["正在读取模型信息...", "读取模型信息", "读到模型 config 后，后端会按模型卡给出显存估算。"],
+    unavailable: ["没有读到这个模型的信息，暂时无法估算显存。", "估算不可用", "离线、模型 ID 不存在或没有访问权限时无法建立模型卡；下载模型或填入本地路径后会自动估算。"],
+  }[gate.state];
+  $("#memoryEstimate").innerHTML = `<div class="empty compact">${escapeHtml(message)}</div>`;
+  $("#memoryGpuBars").innerHTML = "";
+  $("#memoryEstimateNote").innerHTML = `
+    <strong class="warn">${escapeHtml(title)}</strong>
+    <span>${escapeHtml(detail)}</span>
+  `;
+}
+
+function renderPendingMemoryEstimate(estimate, errorMessage = "") {
+  const root = $("#memoryEstimate");
+  if (!root) return;
+  root.innerHTML = `<div class="empty compact">${errorMessage ? "后端暂时无法为这个模型生成估算。" : "正在向后端请求显存估算..."}</div>`;
+  $("#memoryGpuBars").innerHTML = "";
+  $("#memoryEstimateNote").innerHTML = errorMessage
+    ? `<strong class="warn">估算不可用</strong><span>${escapeHtml(errorMessage)}</span>`
+    : `<strong class="warn">估算中</strong><span>权重与 KV 结构取自模型卡，后端返回后会显示每卡占用。</span>`;
 }
 
 function renderPennyroyalMemoryEstimate(estimate) {
@@ -3310,7 +3360,7 @@ function renderVllmMemoryEstimate(estimate) {
   const root = $("#memoryEstimate");
   if (!root) return;
   root.innerHTML = [
-    { label: "模型规模", value: `${formatGbNumber(estimate.paramsB)}B`, detail: estimate.archLabel },
+    { label: "模型权重", value: `${formatGbNumber(estimate.weightsGb)} GB`, detail: estimate.archLabel },
     { label: "每卡权重", value: `${formatGbNumber(estimate.weightPerGpuGb)} GB`, detail: estimate.weightDetail },
     { label: "每卡 KV cache", value: `${formatGbNumber(estimate.kvPerGpuGb)} GB`, detail: estimate.kvDetail },
     { label: "每张 GPU", value: `${formatGbNumber(estimate.perGpuGb)} GB`, detail: estimate.splitLabel },
@@ -3327,8 +3377,9 @@ function renderVllmMemoryEstimate(estimate) {
 }
 
 function scheduleServerMemoryEstimate(estimate) {
-  if (!estimate?.paramsB) return;
   if (memoryEstimateTimer) clearTimeout(memoryEstimateTimer);
+  const pennyroyal = isPennyroyalLaunch();
+  if (!pennyroyal && !canRequestCardEstimate(estimate?.model)) return;
   const requestId = ++memoryEstimateSeq;
   const payload = buildVllmMemoryEstimatePayload(estimate);
   // 启动参数没有变化时不重复请求服务端估算（状态轮询也会触发本函数）
@@ -3342,23 +3393,28 @@ function scheduleServerMemoryEstimate(estimate) {
       });
       if (requestId !== memoryEstimateSeq) return;
       memoryEstimateSignature = signature;
-      renderVllmMemoryEstimate(mergeVllmServerMemoryEstimate(estimate, result));
-    } catch {
-      // The immediate in-browser estimate stays visible if the backend estimate is unavailable.
+      state.memoryEstimate = { signature, result, error: "" };
+      const merged = mergeVllmServerMemoryEstimate(estimate, result);
+      if (!pennyroyal) updateContextPresetState(merged.contextTokens, merged);
+      renderVllmMemoryEstimate(merged);
+    } catch (error) {
+      if (requestId !== memoryEstimateSeq) return;
+      memoryEstimateSignature = signature;
+      state.memoryEstimate = { signature, result: null, error: error?.message || String(error) };
+      if (!pennyroyal) renderPendingMemoryEstimate(estimate, state.memoryEstimate.error);
     }
   }, 250);
 }
 
 function buildVllmMemoryEstimatePayload(estimate) {
-  return {
-    engine: $("#runtimeEngine")?.value || "vllm",
+  const engine = $("#runtimeEngine")?.value || "vllm";
+  const payload = {
+    engine,
     runtimeImage: $("#runtimeImage")?.value || "",
     sglangMaxTotalTokens: Number($("#sglangMaxTotalTokens")?.value || 0),
-    paramsB: estimate.paramsB,
     contextTokens: estimate.contextTokens,
-    bytesPerParam: estimate.bytesPerParam,
-    kvBytes: estimate.kvBytes,
-    arch: estimate.arch,
+    maxNumSeqs: estimate.maxNumSeqs,
+    kvCacheDtype: estimate.kvCacheDtype,
     selectedGpus: estimate.selectedGpus,
     gpuMemoryUtilization: estimate.utilization,
     multiGpuMode: $("#multiGpuMode")?.value || "single",
@@ -3367,9 +3423,17 @@ function buildVllmMemoryEstimatePayload(estimate) {
     cpuOffloadGb: estimate.cpuOffloadGb,
     kvOffloadingSize: estimate.kvOffloadingSize,
     multimodalReserveGb: estimate.languageModelOnly ? 0 : estimate.multimodalReserveGb,
+    languageModelOnly: estimate.languageModelOnly,
     speculativeMode: effectiveSpeculativeModeForEstimate(),
     numSpeculativeTokens: Number($("#numSpeculativeTokens")?.value || 1),
   };
+  // Card mode (02 §10.7): the model plus an engine id asks for the estimate
+  // from the model card. Pennyroyal keeps its recipe-measured legacy body.
+  if (!isPennyroyalLaunch() && estimate.model) {
+    payload.model = estimate.model;
+    payload.engineId = engine;
+  }
+  return payload;
 }
 
 function mergeVllmServerMemoryEstimate(estimate, result) {
@@ -3383,35 +3447,60 @@ function mergeVllmServerMemoryEstimate(estimate, result) {
     : estimate.selectedGpus;
   const minFreeGb = selectedGpus.length ? Math.min(...selectedGpus.map((gpu) => Number(gpu.freeGb || 0))) : 0;
   const memorySplitFactor = plan.memorySplitFactor || estimate.memorySplitFactor || 1;
+  const weightsGb = Number(plan.weightsGb ?? 0);
+  const kvGb = Number(plan.kvGb ?? 0);
+  const kvGbHigh = Number(plan.kvGbHigh ?? kvGb);
+  const perGpuGb = Number(plan.perGpuGb ?? 0);
+  const weightPerGpuGb = Number(plan.weightPerGpuGb ?? weightsGb / memorySplitFactor);
+  const kvPerGpuGb = Number(plan.kvPerGpuGb ?? kvGb / memorySplitFactor);
+  const overheadGb = Number(plan.overheadPerGpuGb ?? 0);
+  const minUsableGb = Number(plan.minUsableGb ?? estimate.minUsableGb ?? 0);
+  // vLLM 把权重/overhead 之外的显存全部做成 KV 池；并发上限受池子能装多少 token 限制
+  const kvPerTokenGb = estimate.contextTokens ? kvGb / estimate.contextTokens : 0;
+  const kvPoolGb = Math.max(0, (minUsableGb - weightPerGpuGb - overheadGb) * memorySplitFactor);
+  const kvPoolTokens = kvPerTokenGb ? Math.floor(kvPoolGb / kvPerTokenGb) : 0;
+  const concurrentFullSeqs = estimate.contextTokens ? Math.floor(kvPoolTokens / estimate.contextTokens) : 0;
+  const confidence = result.card?.confidence ?? result.fit?.confidence;
+  const cardLabel = confidence === "exact"
+    ? "来自模型卡 · 精确权重字节"
+    : confidence === "measured"
+      ? "来自模型卡 · 含实测校准"
+      : confidence === "config"
+        ? "来自模型卡 · 按 config 结构推算"
+        : "来自模型卡 · 启发式估算";
   return {
     ...estimate,
     serverBacked: true,
     serverRecommendations: result.recommendations || null,
     status: plan.status || estimate.status,
-    weightsGb: plan.weightsGb ?? estimate.weightsGb,
-    kvGb: plan.kvGb ?? estimate.kvGb,
-    totalGb: (plan.perGpuGb || estimate.perGpuGb) * memorySplitFactor,
+    weightsGb,
+    kvGb,
+    totalGb: perGpuGb * memorySplitFactor,
     splitFactor: plan.splitFactor || estimate.splitFactor,
     memorySplitFactor,
-    perGpuGb: plan.perGpuGb ?? estimate.perGpuGb,
-    weightPerGpuBeforeOffloadGb: plan.weightPerGpuBeforeOffloadGb ?? estimate.weightPerGpuBeforeOffloadGb,
-    kvPerGpuBeforeOffloadGb: plan.kvPerGpuBeforeOffloadGb ?? estimate.kvPerGpuBeforeOffloadGb,
-    weightPerGpuGb: plan.weightPerGpuGb ?? estimate.weightPerGpuGb,
-    kvPerGpuGb: plan.kvPerGpuGb ?? estimate.kvPerGpuGb,
-    overheadGb: plan.overheadPerGpuGb ?? estimate.overheadGb,
+    perGpuGb,
+    weightPerGpuBeforeOffloadGb: plan.weightPerGpuBeforeOffloadGb ?? weightPerGpuGb,
+    kvPerGpuBeforeOffloadGb: plan.kvPerGpuBeforeOffloadGb ?? kvPerGpuGb,
+    weightPerGpuGb,
+    kvPerGpuGb,
+    overheadGb,
     selectedGpus,
-    minUsableGb: plan.minUsableGb ?? estimate.minUsableGb,
+    minUsableGb,
     minFreeGb: minFreeGb || estimate.minFreeGb,
-    overflowPerGpuGb: plan.overflowPerGpuGb ?? estimate.overflowPerGpuGb,
-    recommendedCpuOffloadGb: plan.recommendedCpuOffloadGb ?? estimate.recommendedCpuOffloadGb,
-    recommendedKvOffloadingSize: plan.recommendedKvOffloadGb ?? estimate.recommendedKvOffloadingSize,
+    overflowPerGpuGb: Number(plan.overflowPerGpuGb ?? 0),
+    recommendedCpuOffloadGb: Number(plan.recommendedCpuOffloadGb ?? estimate.cpuOffloadGb),
+    recommendedKvOffloadingSize: Number(plan.recommendedKvOffloadGb ?? estimate.kvOffloadingSize),
     systemMemoryAssistGb: (plan.cpuOffloadPerGpuGb || 0) * memorySplitFactor + (plan.kvOffloadTotalGb || 0),
-    estimateConfidence: plan.arch?.source === "config" ? "high" : estimate.estimateConfidence,
-    // 读不到模型结构时后端给的是区间（GQA 下限 ↔ MHA 上限），判定走上限。
-    archUncertain: Boolean(plan.archUncertain),
-    kvGbHigh: plan.kvGbHigh ?? estimate.kvGb,
-    perGpuHighGb: plan.perGpuHighGb ?? estimate.perGpuGb,
-    judgedPerGpuGb: plan.judgedPerGpuGb ?? plan.perGpuGb ?? estimate.perGpuGb,
+    estimateConfidence: confidence === "exact" || confidence === "measured" ? "high" : confidence === "config" ? "medium" : confidence ? "medium-low" : "low",
+    archFromConfig: confidence === "exact" || confidence === "config" || confidence === "measured",
+    archLabel: cardLabel,
+    // 读不到模型结构时后端给的是区间（低 ↔ 高），判定走上限。
+    archUncertain: Boolean(plan.archUncertain) || kvGbHigh > kvGb * 1.0001,
+    kvGbHigh,
+    perGpuHighGb: Number(plan.perGpuHighGb ?? perGpuGb),
+    judgedPerGpuGb: Number(plan.judgedPerGpuGb ?? plan.perGpuHighGb ?? perGpuGb),
+    kvPoolTokens,
+    concurrentFullSeqs,
     splitLabel: `${estimate.splitLabel} · 后端校准`,
   };
 }
@@ -3497,6 +3586,8 @@ async function fetchModelConfigForLaunch() {
   if (!model || isGgufLaunchActive()) {
     state.modelConfig = { key: model, data: null, loading: false };
     updateMemoryEstimate();
+    updateReasoningNote();
+    updateToolCallNote();
     return;
   }
   // Quantization is part of the capability decision (e.g. NVFP4 forces auto-MTP
@@ -3519,6 +3610,8 @@ async function fetchModelConfigForLaunch() {
     state.modelConfig = { key: cacheKey, data: { found: false, reason: error.message }, loading: false };
   }
   updateMemoryEstimate();
+  updateReasoningNote();
+  updateToolCallNote();
   updateLaunchOptionStates();
 }
 
@@ -3531,144 +3624,71 @@ function getLaunchModelConfig() {
   return null;
 }
 
-function estimateMemoryUsage(contextOverride) {
+// The launch form's side of a memory estimate. Every number that depends on the
+// model (weights, KV, overhead) is filled in by mergeVllmServerMemoryEstimate
+// from /api/memory-estimate, which reads the model card (02 §10.7, MOD-19).
+function collectMemoryEstimateInputs() {
   const model = $("#startModel")?.value.trim() || "";
-  const contextTokens = contextOverride != null
-    ? Math.max(512, Number(contextOverride))
-    : Math.max(512, Number($("#maxModelLen")?.value || 8192));
-  const paramsB = inferParamBillions(model);
+  const contextTokens = Math.max(512, Number($("#maxModelLen")?.value || 8192));
   const dtype = $("#launchDtype")?.value || "auto";
   const kvCacheDtype = $("#kvCacheDtype")?.value || "auto";
   const cpuOffloadGb = Math.max(0, Number($("#cpuOffloadGb")?.value || 0));
   const kvOffloadingSize = Math.max(0, Number($("#kvOffloadingSize")?.value || 0));
   const mmProcessorCacheGb = Math.max(0, Number($("#mmProcessorCacheGb")?.value || 0));
   const languageModelOnly = $("#languageModelOnly")?.checked || false;
-  const selectedQuant = getLaunchQuantizationProfile(model);
-  const dtypeBytes = DTYPE_BYTES[dtype] || 2;
-  const bytesPerParam = selectedQuant.bytesPerParam || dtypeBytes;
-  const kvBytes = KV_DTYPE_BYTES[kvCacheDtype] || dtypeBytes;
+  const quantSelect = $("#launchQuantization");
+  const quantLabel = (quantSelect?.selectedOptions?.[0]?.textContent || "").trim() || "Auto";
   const cfg = getLaunchModelConfig();
   const rawCfg = state.modelConfig.key === modelConfigCacheKey() ? state.modelConfig.data : null;
   const configGated = Boolean(rawCfg && rawCfg.gated && !rawCfg.hasToken);
-  // 有 config.json 时用真实层数/KV 头数/headDim，估算精度远高于按模型名猜；
-  // 混合模型（linear/mamba + full_attention）只用注意力层数算 KV
-  const attentionLayers = Number(cfg?.numAttentionLayers) || cfg?.numHiddenLayers;
-  const arch = (cfg && cfg.numHiddenLayers && cfg.numKeyValueHeads && cfg.headDim)
-    ? {
-        layers: cfg.numHiddenLayers,
-        kvLayers: attentionLayers,
-        kvHeads: cfg.numKeyValueHeads,
-        headDim: cfg.headDim,
-        weightMultiplier: 1,
-        label: attentionLayers && attentionLayers < cfg.numHiddenLayers
-          ? `${cfg.numHiddenLayers} 层（注意力 ${attentionLayers}）· KV heads ${cfg.numKeyValueHeads} · headDim ${cfg.headDim}（来自 config）`
-          : `${cfg.numHiddenLayers} 层 · KV heads ${cfg.numKeyValueHeads} · headDim ${cfg.headDim}（来自 config）`,
-        fromConfig: true,
-      }
-    : estimateArchitecture(paramsB, model);
-  const nativeMaxTokens = cfg?.maxPositionEmbeddings || null;
-  const rawWeightsGb = paramsB ? paramsB * 1_000_000_000 * bytesPerParam / 1024 ** 3 : 0;
-  const weightsGb = rawWeightsGb * (arch?.weightMultiplier || 1);
-  const kvGb = paramsB && arch
-    ? contextTokens * 2 * (arch.kvLayers || arch.layers) * arch.kvHeads * arch.headDim * kvBytes / 1024 ** 3
-    : 0;
   const splitFactor = getParallelMemorySplitFactor();
-  const memorySplitFactor = splitFactor;
-  // vLLM defines cpu-offload-gb as a per-GPU budget. Apply it after TP/PP memory split.
-  const weightPerGpuBeforeOffloadGb = weightsGb / memorySplitFactor;
-  const kvPerGpuBeforeOffloadGb = kvGb / memorySplitFactor;
-  const kvOffloadPerGpuGb = kvOffloadingSize / memorySplitFactor;
-  const weightPerGpuGb = Math.max(0, weightPerGpuBeforeOffloadGb - cpuOffloadGb);
-  const kvPerGpuGb = Math.max(0, kvPerGpuBeforeOffloadGb - kvOffloadPerGpuGb);
-  const gpuWeightsGb = weightPerGpuGb * memorySplitFactor;
-  const gpuKvGb = kvPerGpuGb * memorySplitFactor;
-  const multimodalReserveGb = languageModelOnly ? 0 : Math.min(2, mmProcessorCacheGb * 0.25);
-  const overheadGb = paramsB ? Math.max(1.2, (weightPerGpuGb + kvPerGpuGb) * 0.08) + multimodalReserveGb : 0;
-  const perGpuGb = weightPerGpuGb + kvPerGpuGb + overheadGb;
-  const totalGb = perGpuGb * memorySplitFactor;
-  const utilization = Math.min(0.999, Math.max(0.1, Number($("#gpuMemoryUtilization")?.value || 0.9)));
   const selectedGpus = getSelectedGpuObjects().map(normalizeVllmPlanGpu);
-  const minUsableGb = selectedGpus.length
-    ? Math.min(...selectedGpus.map((gpu) => Number(gpu.usableGb || 0)))
-    : 0;
-  const minFreeGb = selectedGpus.length
-    ? Math.min(...selectedGpus.map((gpu) => Number(gpu.freeGb || 0)))
-    : 0;
-  const status = !selectedGpus.length ? "warn" : perGpuGb <= minUsableGb * 0.9 ? "ok" : perGpuGb <= minUsableGb ? "warn" : "fail";
-  const overflowPerGpuGb = selectedGpus.length ? Math.max(0, perGpuGb - minUsableGb) : 0;
-  const remainingGpuWeightPerGpuGb = Math.max(0, weightPerGpuGb);
-  const cpuFixPerGpuGb = Math.min(remainingGpuWeightPerGpuGb, overflowPerGpuGb > 0 ? overflowPerGpuGb + 2 : 0);
-  const residualOverflowPerGpuGb = Math.max(0, overflowPerGpuGb - cpuFixPerGpuGb);
-  const recommendedCpuOffloadGb = overflowPerGpuGb > 0
-    ? Math.min(weightPerGpuBeforeOffloadGb, cpuOffloadGb + cpuFixPerGpuGb)
-    : cpuOffloadGb;
-  const recommendedKvOffloadingSize = residualOverflowPerGpuGb > 0
-    ? kvOffloadingSize + residualOverflowPerGpuGb * memorySplitFactor + 2
-    : kvOffloadingSize;
-  const systemMemoryAssistGb = cpuOffloadGb * memorySplitFactor + kvOffloadingSize;
-  const estimateConfidence = arch?.fromConfig ? "high" : cfg ? "medium" : paramsB ? "medium-low" : "low";
-
-  // vLLM 把权重/overhead 之外的显存全部做成 KV 池；并发上限受池子能装多少 token 限制
-  const maxNumSeqs = Math.max(1, Number($("#maxNumSeqs")?.value || 1));
-  const kvPerTokenGb = paramsB && arch && contextTokens ? kvGb / contextTokens : 0;
-  const totalBudgetGb = minUsableGb * memorySplitFactor;
-  const kvPoolGb = Math.max(0, totalBudgetGb - gpuWeightsGb - overheadGb * memorySplitFactor);
-  const kvPoolTokens = kvPerTokenGb ? Math.floor(kvPoolGb / kvPerTokenGb) : 0;
-  const concurrentFullSeqs = contextTokens ? Math.floor(kvPoolTokens / contextTokens) : 0;
-
+  const minUsableGb = selectedGpus.length ? Math.min(...selectedGpus.map((gpu) => Number(gpu.usableGb || 0))) : 0;
+  const minFreeGb = selectedGpus.length ? Math.min(...selectedGpus.map((gpu) => Number(gpu.freeGb || 0))) : 0;
+  const multimodalReserveGb = languageModelOnly ? 0 : Math.min(2, mmProcessorCacheGb * 0.25);
   return {
     model,
     contextTokens,
-    maxNumSeqs,
-    kvPoolTokens,
-    concurrentFullSeqs,
-    paramsB,
-    bytesPerParam,
-    kvBytes,
-    arch,
+    maxNumSeqs: Math.max(1, Number($("#maxNumSeqs")?.value || 1)),
+    kvPoolTokens: 0,
+    concurrentFullSeqs: 0,
     dtype,
     kvCacheDtype,
     kvLabel: kvCacheDtype === "auto" ? `${dtype} KV` : `${kvCacheDtype} KV`,
-    quantLabel: selectedQuant.label,
-    quantValue: selectedQuant.value,
-    quantNote: selectedQuant.note,
-    weightsGb,
-    kvGb,
-    gpuWeightsGb,
-    gpuKvGb,
+    quantLabel,
+    quantNote: "按模型卡的权重字节估算",
+    weightsGb: 0,
+    kvGb: 0,
     cpuOffloadGb,
     kvOffloadingSize,
     mmProcessorCacheGb,
     languageModelOnly,
     multimodalReserveGb,
-    overheadGb,
-    totalGb,
+    overheadGb: 0,
+    totalGb: 0,
     splitFactor,
-    memorySplitFactor,
-    perGpuGb,
-    weightPerGpuBeforeOffloadGb,
-    kvPerGpuBeforeOffloadGb,
-    weightPerGpuGb,
-    kvPerGpuGb,
-    kvOffloadPerGpuGb,
+    memorySplitFactor: splitFactor,
+    perGpuGb: 0,
+    weightPerGpuGb: 0,
+    kvPerGpuGb: 0,
     selectedGpus,
-    utilization,
+    utilization: Math.min(0.999, Math.max(0.1, Number($("#gpuMemoryUtilization")?.value || 0.9))),
     minUsableGb,
     minFreeGb,
-    overflowPerGpuGb,
-    recommendedCpuOffloadGb,
-    recommendedKvOffloadingSize,
-    systemMemoryAssistGb,
-    estimateConfidence,
-    status,
+    overflowPerGpuGb: 0,
+    recommendedCpuOffloadGb: cpuOffloadGb,
+    recommendedKvOffloadingSize: kvOffloadingSize,
+    systemMemoryAssistGb: 0,
+    estimateConfidence: "low",
+    status: "warn",
+    serverBacked: false,
     splitLabel: getParallelSplitLabel(splitFactor),
-    archFromConfig: Boolean(arch?.fromConfig),
-    nativeMaxTokens,
+    nativeMaxTokens: cfg?.maxPositionEmbeddings || null,
     configQuantMethod: cfg?.quantMethod || "",
     configGated,
     configLoading: state.modelConfig.loading && state.modelConfig.key === modelConfigCacheKey(),
-    archLabel: arch ? arch.label || `${arch.layers} 层 · KV heads ${arch.kvHeads}` : "按模型名估算",
-    weightDetail: cpuOffloadGb > 0 ? `${selectedQuant.label} · 每卡 CPU offload ${formatGbNumber(cpuOffloadGb)} GB` : selectedQuant.label,
+    archLabel: "等待模型卡",
+    weightDetail: cpuOffloadGb > 0 ? `${quantLabel} · 每卡 CPU offload ${formatGbNumber(cpuOffloadGb)} GB` : quantLabel,
     kvDetail: `${fmtNumber(contextTokens)} tokens · ${kvCacheDtype === "auto" ? `${dtype} KV` : `${kvCacheDtype} KV`}${kvOffloadingSize > 0 ? ` · KV offload 总 ${formatGbNumber(kvOffloadingSize)} GB` : ""}`,
   };
 }
@@ -3717,9 +3737,9 @@ function renderMemoryEstimateNote(estimate) {
     : " 未开启仅语言模式，多模态模型会保留视觉/视频相关开销。";
   const confidenceText = {
     high: "高：已读取模型 config 的层数/KV 结构",
-    medium: "中：已读取部分 config，参数量仍按名称/量化推断",
-    "medium-low": "中低：按模型名参数量和常见架构估算",
-    low: "低：缺少参数量或 config",
+    medium: "中：按模型 config 的层数/KV 结构推算",
+    "medium-low": "中低：模型卡信息不完整，按启发式估算",
+    low: "低：缺少模型卡",
   }[estimate.estimateConfidence] || "中低";
   // 未读到 config 时 GQA/MHA 无法区分，KV 可能差 4 倍。给区间并按上限判定，
   // 避免"估算说没问题、启动就 OOM"。
@@ -3794,8 +3814,19 @@ function renderMemoryEstimateNote(estimate) {
   `;
 }
 
+// Per-GPU GiB at another context length, scaled from the server's estimate:
+// the KV cache grows linearly with tokens and the runtime overhead is 8 % of
+// weights + KV. The base is the figure the verdict was judged on.
+function projectPerGpuGb(estimate, tokens) {
+  const split = estimate.memorySplitFactor || 1;
+  const kvPerGpuHigh = (estimate.kvGbHigh ?? estimate.kvGb ?? 0) / split;
+  const base = estimate.judgedPerGpuGb ?? estimate.perGpuGb;
+  const scale = estimate.contextTokens ? tokens / estimate.contextTokens : 1;
+  return Math.max(0, base + kvPerGpuHigh * (scale - 1) * 1.08);
+}
+
 function updateContextPresetState(contextTokens, estimate = null) {
-  const canFit = estimate && estimate.paramsB && estimate.selectedGpus.length;
+  const canFit = estimate && estimate.serverBacked && estimate.kvGb > 0 && estimate.selectedGpus.length;
   const nativeMax = estimate?.nativeMaxTokens || 0;
   document.querySelectorAll("[data-context-preset]").forEach((button) => {
     const presetTokens = Number(button.dataset.contextPreset);
@@ -3807,8 +3838,8 @@ function updateContextPresetState(contextTokens, estimate = null) {
       button.title = beyondNative ? `超过模型原生上下文 ${fmtTokens(nativeMax)}，需 RoPE 扩展` : "";
       return;
     }
-    // 用同一套估算逻辑算出每个预设上下文在所选 GPU 上的占用，给按钮着色
-    const perGpu = estimateMemoryUsage(presetTokens).perGpuGb;
+    // 按后端估算外推每个预设上下文在所选 GPU 上的占用，给按钮着色
+    const perGpu = projectPerGpuGb(estimate, presetTokens);
     const ratio = estimate.minUsableGb ? perGpu / estimate.minUsableGb : 0;
     const fit = ratio <= 0.9 ? "fit-ok" : ratio <= 1 ? "fit-warn" : "fit-fail";
     button.classList.add(fit);
@@ -3820,9 +3851,9 @@ function updateContextPresetState(contextTokens, estimate = null) {
 // 在所选 GPU 上二分出能稳妥运行（status=ok）的最大上下文长度
 // 默认不超过模型原生上下文（超出需 RoPE 扩展，可能降质且 vLLM 默认会报错）
 function recommendMaxContext(estimate) {
-  if (!estimate?.paramsB || !estimate.selectedGpus.length || !estimate.minUsableGb) return null;
+  if (!estimate?.serverBacked || !(estimate.kvGb > 0) || !estimate.selectedGpus.length || !estimate.minUsableGb) return null;
   const ceiling = estimate.nativeMaxTokens || 1048576;
-  const fitsAt = (tokens) => estimateMemoryUsage(tokens).perGpuGb <= estimate.minUsableGb * 0.9;
+  const fitsAt = (tokens) => projectPerGpuGb(estimate, tokens) <= estimate.minUsableGb * 0.9;
   if (!fitsAt(2048)) return 0; // 连最小上下文都放不下
   let low = 2048;
   let high = ceiling;
@@ -3849,38 +3880,6 @@ function getParallelSplitLabel(splitFactor) {
   return "单卡或未分摊";
 }
 
-function getLaunchQuantizationProfile(model) {
-  if (isGgufLaunchActive()) return detectGgufQuantizationProfile(model);
-  const explicit = $("#launchQuantization")?.value || "";
-  const detected = explicit || detectQuantizationFromText(model);
-  const profile = QUANTIZATION_PROFILES[detected] || QUANTIZATION_PROFILES[""];
-  return {
-    ...profile,
-    value: detected,
-    label: explicit ? profile.label : detected ? `Auto → ${profile.label}` : "Auto / BF16-FP16",
-  };
-}
-
-function detectGgufQuantizationProfile(model) {
-  const lower = String(model || "").toLowerCase();
-  const match = lower.match(/\b(?:i?q)?q([2-8])(?:_[a-z0-9]+)*/);
-  const bits = match ? Number(match[1]) : 4;
-  const bytesPerParam = {
-    2: 0.34,
-    3: 0.45,
-    4: 0.56,
-    5: 0.68,
-    6: 0.8,
-    8: 1.05,
-  }[bits] || 0.56;
-  return {
-    label: `GGUF Q${bits}`,
-    bytesPerParam,
-    note: "GGUF 文件已预量化，vLLM 启动时不再叠加 AWQ/GPTQ/Compressed",
-    value: "gguf",
-  };
-}
-
 function detectQuantizationFromText(value) {
   const lower = String(value || "").toLowerCase();
   if (lower.includes("nvfp4") || lower.includes("mxfp4") || lower.includes("fp4")) return "modelopt_fp4";
@@ -3903,30 +3902,6 @@ function inferParamBillions(value) {
     .map((match) => Number(match[1]) * (match[2].toUpperCase() === "M" ? 0.001 : 1))
     .filter((size) => Number.isFinite(size) && size > 0);
   return sizes.length ? Math.max(...sizes) : 0;
-}
-
-function estimateArchitecture(paramsB, model) {
-  if (!paramsB) return null;
-  const lower = String(model || "").toLowerCase();
-  const qwenLike = lower.includes("qwen");
-  const llamaLike = lower.includes("llama") || lower.includes("aeon");
-  if ((lower.includes("qwen3.6") || lower.includes("qwen3.8") || lower.includes("qwen3_5") || lower.includes("qwen3-5")) && paramsB >= 20 && paramsB <= 35) {
-    return {
-      layers: 64,
-      kvLayers: 16,
-      kvHeads: 4,
-      headDim: 256,
-      weightMultiplier: 1.2,
-      label: "Qwen3.6 混合架构 · 16 层 full attention KV",
-    };
-  }
-  if (paramsB <= 1) return { layers: qwenLike ? 28 : 24, kvHeads: 8, headDim: 128 };
-  if (paramsB <= 4) return { layers: qwenLike ? 36 : 32, kvHeads: 8, headDim: 128 };
-  if (paramsB <= 9) return { layers: 36, kvHeads: llamaLike ? 8 : 8, headDim: 128 };
-  if (paramsB <= 15) return { layers: 48, kvHeads: 8, headDim: 128 };
-  if (paramsB <= 35) return { layers: 64, kvHeads: 8, headDim: 128 };
-  if (paramsB <= 80) return { layers: 80, kvHeads: 8, headDim: 128 };
-  return { layers: 96, kvHeads: 8, headDim: 128 };
 }
 
 function formatGbNumber(value) {
@@ -3962,14 +3937,33 @@ function updateParallelDefaults() {
   renderVllmGpuPlan();
 }
 
+// The suggested parsers come from the server's /api/model/config answer
+// (`parsers`, 02 §8.6: knowledge, template signature or the engine's own
+// auto-detection). Nothing here looks at the model name.
+function cardParserValue(kind) {
+  const entry = getLaunchModelConfig()?.parsers?.[kind];
+  return entry && typeof entry.value === "string" ? entry.value : "";
+}
+
+// A parser the card names may not be in the static list; the select gets an
+// option for it instead of dropping the value.
+function setParserSelectValue(select, value) {
+  if (value && !Array.from(select.options).some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.appendChild(option);
+  }
+  select.value = value;
+}
+
 function updateReasoningNote() {
-  const model = $("#startModel")?.value || "";
   const preset = $("#clientPreset")?.value || "openwebui";
   const select = $("#reasoningParser");
   if (!select) return;
-  const suggested = inferReasoningParser(model, preset);
+  const suggested = cardParserValue("reasoningParser");
   if (!state.reasoningParserTouched) {
-    select.value = suggested || "";
+    setParserSelectValue(select, suggested || (getLaunchModelConfig() ? "" : "auto"));
   }
   const active = select.value === "auto" ? suggested : select.value;
   const presetText = {
@@ -3985,28 +3979,13 @@ function updateReasoningNote() {
   `;
 }
 
-function inferReasoningParser(model, preset) {
-  const text = String(model || "").toLowerCase();
-  if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "nano_v3";
-  if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) return "gemma4";
-  if (text.includes("qwen3") || text.includes("qwen-3") || text.includes("qwen3.5") || text.includes("qwen3.6") || text.includes("qwen3.8")) return "qwen3";
-  if (text.includes("deepseek") && text.includes("r1")) return "deepseek_r1";
-  if (text.includes("deepseek") && text.includes("v3")) return "deepseek_v3";
-  if (text.includes("gpt-oss") || text.includes("gptoss")) return "gptoss";
-  if (text.includes("kimi")) return "kimi_k2";
-  if (text.includes("mistral")) return "mistral";
-  if (text.includes("granite")) return "granite";
-  return "";
-}
-
 function updateToolCallNote() {
-  const model = $("#startModel")?.value || "";
   const preset = $("#clientPreset")?.value || "openwebui";
   const select = $("#toolCallParser");
   if (!select) return;
-  const suggested = inferToolCallParser(model, preset);
+  const suggested = cardParserValue("toolCallParser");
   if (!state.toolCallParserTouched) {
-    select.value = suggested || "auto";
+    setParserSelectValue(select, suggested || (getLaunchModelConfig() ? "" : "auto"));
   }
   const active = select.value === "auto" ? suggested : select.value;
   const enabled = $("#enableAutoToolChoice")?.checked && Boolean(active);
@@ -4023,21 +4002,6 @@ function updateToolCallNote() {
     <strong>${escapeHtml(enabled ? active : "关闭")}</strong>
     <span>${escapeHtml(flagText)} ${escapeHtml(presetText)}</span>
   `;
-}
-
-function inferToolCallParser(model, preset) {
-  // 工具调用格式由模型的 chat template 决定，与接入客户端无关；preset 只保留
-  // 在签名里以兼容既有调用点。
-  const text = String(model || "").toLowerCase();
-  if (text.includes("nemotron-3-nano") || text.includes("nemotron_3_nano")) return "qwen3_coder";
-  if (text.includes("diffusiongemma") || text.includes("diffusion_gemma") || text.includes("gemma4") || text.includes("gemma-4")) return "gemma4";
-  if (text.includes("qwen3.6") || text.includes("qwen3.8") || text.includes("qwen3-") || text.includes("qwen/qwen3") || text.includes("qwen3_coder") || text.includes("qwen3-coder")) return "qwen3_coder";
-  if (text.includes("qwen2.5") || text.includes("qwq") || text.includes("qwen")) return "hermes";
-  if (text.includes("deepseek")) return "deepseek_v3";
-  if (text.includes("mistral")) return "mistral";
-  if (text.includes("llama-3") || text.includes("llama3")) return "llama3_json";
-  if (text.includes("xlam")) return "xlam";
-  return "";
 }
 
 let portCheckTimer = null;
@@ -4081,7 +4045,7 @@ async function runPortCheck() {
 }
 
 // 一键最优配置：用 config + GPU + 推荐器自动填关键参数
-function autoTuneLaunch() {
+async function autoTuneLaunch() {
   const cfg = getLaunchModelConfig();
   const gpus = getSelectedGpuObjects();
   if (!gpus.length) {
@@ -4113,14 +4077,25 @@ function autoTuneLaunch() {
   if (!cfg?.quantMethod) $("#kvCacheDtype").value = "fp8";
   applied.push(`KV ${$("#kvCacheDtype").value}`);
   updateMemoryEstimate();
-  // 推荐上下文（已含原生封顶 + 显存适配），需要先有一版 estimate
-  const estimate = estimateMemoryUsage();
+  // 推荐上下文（已含原生封顶 + 显存适配）：向后端要一版当前参数的估算再外推
+  const base = collectMemoryEstimateInputs();
+  let estimate = base;
+  if (canRequestCardEstimate(base.model)) {
+    try {
+      const result = await api("/api/memory-estimate", { method: "POST", body: JSON.stringify(buildVllmMemoryEstimatePayload(base)) });
+      estimate = mergeVllmServerMemoryEstimate(base, result);
+    } catch {
+      // 没有后端估算时不推荐上下文
+    }
+  }
   const recommended = recommendMaxContext(estimate);
   if (recommended && recommended > 0) {
     $("#maxModelLen").value = String(recommended);
     applied.push(`上下文 ${fmtTokens(recommended)}`);
   } else if (recommended === 0) {
     notify("显存不足", "即使最小上下文也放不下，建议降低精度、增加并行或换更大显存 GPU。", "error");
+  } else if (recommended === null) {
+    applied.push("上下文未调整（暂无后端估算）");
   }
   updateMemoryEstimate();
   notify("已自动调优", applied.join(" · ") || "已套用推荐参数", "success");
@@ -5522,10 +5497,10 @@ function buildVllmLaunchPayload(formElement) {
   payload.kvCacheDtype = String(payload.kvCacheDtype || "auto");
   payload.clientPreset = String(payload.clientPreset || "openwebui");
   payload.reasoningParser = payload.reasoningParser === "auto"
-    ? inferReasoningParser(payload.model, payload.clientPreset)
+    ? cardParserValue("reasoningParser")
     : String(payload.reasoningParser || "");
   payload.toolCallParser = payload.toolCallParser === "auto"
-    ? inferToolCallParser(payload.model, payload.clientPreset)
+    ? cardParserValue("toolCallParser")
     : String(payload.toolCallParser || "");
   payload.enableAutoToolChoice = form.get("enableAutoToolChoice") === "on" && Boolean(payload.toolCallParser);
   payload.port = Number(payload.port || 8000);

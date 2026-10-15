@@ -41,6 +41,9 @@ const state = {
   gpuSelectionTouched: false,
   gpuSignature: "",
   reasoningParserTouched: false,
+  // What the server's model card says about the model in the launch form (02 §8.6):
+  // {model, reasoningFormat, imageInput}. Filled from server answers only.
+  modelCard: { model: "", reasoningFormat: "", imageInput: false },
   tensorSplitTouched: false,
   modelPickerOpen: false,
   modelPickerSource: "all",
@@ -2773,7 +2776,8 @@ function applyLaunchProfile(config = {}, options = {}) {
   set("#networkAccess", config.networkAccess);
   set("#clientPreset", config.clientPreset);
   set("#reasoningMode", config.reasoning);
-  set("#reasoningParser", config.reasoningFormat);
+  rememberModelCard(config);
+  setReasoningFormatValue(config.reasoningFormat);
   set("#reasoningEffort", config.reasoningEffort);
   set("#reasoningBudget", config.reasoningBudget);
   set("#multiGpuMode", config.multiGpuMode);
@@ -3266,7 +3270,7 @@ function updateTextOnlyNote() {
   const enabled = $("#textOnlyMode")?.checked !== false;
   const en = effectiveLanguage() === "en-US";
   const hasMmproj = Boolean(getSelectedGgufInfo()?.components?.some((component) => component.kind === "mmproj"));
-  const multimodalHint = hasMmproj || isLikelyMultimodalModel(model)
+  const multimodalHint = hasMmproj || cardHasImageInput(model)
     ? en
       ? " An optional mmproj is available or likely; it is loaded only after text-only mode is turned off."
       : " 检测到可选 mmproj（或模型可能支持视觉）；只有关闭仅文本模式后才会加载。"
@@ -3295,8 +3299,38 @@ function handleTextOnlyModeChange() {
   updateMemoryEstimate();
 }
 
-function isLikelyMultimodalModel(value) {
-  return /(?:\bvl\b|vision|visual|multimodal|multi-modal|mmproj|llava|bakllava|moondream|internvl|qwen\d*(?:\.\d+)?-vl|qwen-vl|gemma-3|omni|audio)/i.test(String(value || ""));
+// The card's modalities (02 §6) decide whether a projector is likely; the
+// model name is never inspected.
+function cardHasImageInput(model) {
+  const card = state.modelCard;
+  return Boolean(card.imageInput) && normalizePathKey(card.model) === normalizePathKey(model);
+}
+
+// Remembers the card facts a server answer (launch recommendation, saved
+// profile) carries for a model: the resolved --reasoning-format and the
+// card's input modalities.
+function rememberModelCard(config = {}) {
+  const format = String(config.reasoningFormat || config.parsers?.llamacpp?.reasoningFormat || "").trim();
+  const input = config.card?.modalities?.input || config.modalities?.input;
+  if (!format && !Array.isArray(input)) return;
+  state.modelCard = {
+    model: String(config.model || $("#startModel")?.value || "").trim(),
+    reasoningFormat: format,
+    imageInput: Array.isArray(input) && input.includes("image"),
+  };
+}
+
+function setReasoningFormatValue(value) {
+  const select = $("#reasoningParser");
+  const text = String(value ?? "");
+  if (!select || !text) return;
+  if (!Array.from(select.options).some((option) => option.value === text)) {
+    const option = document.createElement("option");
+    option.value = text;
+    option.textContent = text;
+    select.appendChild(option);
+  }
+  select.value = text;
 }
 
 function isGgufLaunchActive() {
@@ -3380,7 +3414,7 @@ function estimateMemoryUsage(contextOverride = null) {
   const mmprojBytes = Number(selected?.components?.find((component) => component.kind === "mmproj")?.fileBytes || 0);
   const draftBytes = Number(selected?.components?.find((component) => component.kind === "dflash")?.fileBytes || 0);
   const multimodalReserveGb = !textOnlyMode
-    ? mmprojBytes ? mmprojBytes / 1024 ** 3 : paramsB && isLikelyMultimodalModel(model) ? 1.5 : 0
+    ? mmprojBytes ? mmprojBytes / 1024 ** 3 : paramsB && cardHasImageInput(model) ? 1.5 : 0
     : 0;
   const draftReserveGb = effectiveLlamaSpeculativeModeForEstimate().startsWith("draft-") ? draftBytes / 1024 ** 3 : 0;
   const overheadGb = paramsB ? Math.max(1.2, (weightsGb + kvGb) * 0.08) + multimodalReserveGb + draftReserveGb : 0;
@@ -3983,14 +4017,23 @@ function normalizeFrontendPlanGpu(gpu, visibleIndex) {
   return { ...normalized, currentFreeGb, capacityMode: replacingManagedContainer ? "replacement" : "current" };
 }
 
+// --reasoning-format for the form: the card's value when a server answer named
+// one for this model; otherwise llama.cpp's own detection ("auto") or, for the
+// generic client preset, "none". No model-name matching.
+function suggestedReasoningFormat(model, preset) {
+  const card = state.modelCard;
+  if (card.reasoningFormat && normalizePathKey(card.model) === normalizePathKey(model)) return card.reasoningFormat;
+  return preset === "generic" ? "none" : "auto";
+}
+
 function updateReasoningNote() {
   const model = $("#startModel")?.value || "";
   const preset = $("#clientPreset")?.value || "openwebui";
   const select = $("#reasoningParser");
   if (!select) return;
-  const suggested = inferReasoningParser(model, preset);
+  const suggested = suggestedReasoningFormat(model, preset);
   if (!state.reasoningParserTouched) {
-    select.value = suggested || "";
+    setReasoningFormatValue(suggested);
   }
   const active = select.value === "auto" ? suggested : select.value;
   const presetText = {
@@ -4006,13 +4049,6 @@ function updateReasoningNote() {
     <strong>${escapeHtml(active || "auto")}</strong>
     <span>${escapeHtml(parserText)} 这里设置服务默认格式；支持请求级模板参数的客户端仍可按单次请求控制是否思考。 ${escapeHtml(presetText)}</span>
   `;
-}
-
-function inferReasoningParser(model, preset) {
-  const text = String(model || "").toLowerCase();
-  if (text.includes("deepseek") || text.includes("qwen3") || text.includes("qwen-3") || text.includes("think")) return "deepseek";
-  if (preset === "generic") return "none";
-  return "auto";
 }
 
 function renderNetworkNote() {
@@ -5389,7 +5425,7 @@ function buildLlamaLaunchPayload(formElement) {
   payload.networkAccess = String(payload.networkAccess || "local");
   payload.clientPreset = String(payload.clientPreset || "openwebui");
   payload.reasoningFormat = payload.reasoningFormat === "auto"
-    ? inferReasoningParser(payload.model, payload.clientPreset)
+    ? suggestedReasoningFormat(payload.model, payload.clientPreset)
     : String(payload.reasoningFormat || "auto");
   payload.reasoning = String(payload.reasoning || "auto");
   payload.reasoningEffort = String(payload.reasoningEffort || "default");
