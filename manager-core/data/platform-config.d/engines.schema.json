@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "namespace": "engines",
+  "owner": "01-engines",
+  "asOf": "2026-10-15",
+  "staleAfterDays": 365,
+  "title": { "zh-CN": "推理引擎", "en-US": "Inference engines" },
+  "properties": {
+    "native": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean", "default": false,
+          "title": { "zh-CN": "原生进程运行时", "en-US": "Native process runtime" },
+          "description": { "zh-CN": "允许管理器直接启动清单中登记并校验过 sha256 的本机程序（如 llama-server.exe），而不是容器。默认关闭；开启前请确认程序来源可信。修改后需要重启两个管理器。", "en-US": "Lets the managers start a local program that the runtime manifest registers and whose sha256 matches (for example llama-server.exe) instead of a container. Off by default; turn it on only for a trusted binary. A change needs both managers restarted." },
+          "env": ["AI_ENGINES_NATIVE_ENABLED"],
+          "consumers": [],
+          "restartRequired": ["vllm-manager", "llama-manager"], "secret": false, "group": "managers"
+        }
+      }
+    }
+  }
+}
