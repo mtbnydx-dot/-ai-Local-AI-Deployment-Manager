@@ -48,6 +48,15 @@ test("SGLang memory estimate previews the clamped admission of the Flash-Next 26
   assert.match(result.recommendations.suggestions[0], /^SGLang 静态显存比例按空闲显存折算需要 96801 MiB/);
 });
 
+test("SGLang suggestions never name the vLLM utilization flag", () => {
+  for (const overrides of [{}, { sglangMaxTotalTokens: "" }, { gpuMemoryUtilization: 0.5 }]) {
+    const result = buildVllmMemoryEstimate(flashNextBody({ admissionPolicy: POLICY, ...overrides }));
+    assert.equal(result.engine, "sglang");
+    assert.ok(result.recommendations.suggestions.length > 0);
+    for (const text of result.recommendations.suggestions) assert.doesNotMatch(text, /gpu-memory-utilization/);
+  }
+});
+
 test("SGLang memory estimate previews the refusal of an uncapped pool with maxFraction", () => {
   const result = buildVllmMemoryEstimate(flashNextBody({ sglangMaxTotalTokens: "", admissionPolicy: POLICY }));
   assert.equal(result.engine, "sglang");

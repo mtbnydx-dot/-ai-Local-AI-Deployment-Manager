@@ -80,8 +80,13 @@ const gatewayLimiter = createLimiter({
 });
 const authGuard = gatewayLimiter.bans;
 const GATEWAY_ACCESS_LOG = path.join(ROOT, "logs", "gateway-access.log");
-const FLEET_SETTINGS_FILE = path.join(ROOT, "data", "fleet-settings.json");
-const BILLING_DB_FILE = process.env.AI_BILLING_DB || path.join(ROOT, "data", "platform-billing.sqlite");
+// SERVICE_ENTRY_DATA_DIR moves every file the entry keeps under service-entry/data
+// (the SQLite stores, the hub, fleet and storage settings). Tests start many
+// entries at once, and each one gets its own temp directory so that no two
+// processes open the same database.
+const DATA_DIR = process.env.SERVICE_ENTRY_DATA_DIR ? path.resolve(process.env.SERVICE_ENTRY_DATA_DIR) : path.join(ROOT, "data");
+const FLEET_SETTINGS_FILE = path.join(DATA_DIR, "fleet-settings.json");
+const BILLING_DB_FILE = process.env.AI_BILLING_DB || path.join(DATA_DIR, "platform-billing.sqlite");
 // The platform access store lives beside the billing ledger (05 §6).
 const ACCESS_DB_FILE = path.join(path.dirname(BILLING_DB_FILE), ACCESS_STORE_FILENAME);
 const ACCESS_STORE_RETRY_MS = 30_000;
@@ -574,6 +579,7 @@ function createRouteContext(overrides = {}) {
   security.setExposureReport(() => exposure.cached());
   const ctx = {
     rootDir: ROOT,
+    dataDir: DATA_DIR,
     aiRoot: AI_ROOT,
     managers: MANAGERS.map(({ id, port, billingId }) => ({ id, port, billingId })),
     security,
@@ -1269,12 +1275,12 @@ function createEntryHub({ events = null } = {}) {
     const modelsRoot = process.env.VLLM_MODELS_ROOT || path.join(AI_ROOT, "models");
     const modelStorage = core.createModelStorage({
       modelsRoot,
-      file: process.env.MODEL_STORAGE_FILE || path.join(ROOT, "data", "model-storage.json"),
+      file: process.env.MODEL_STORAGE_FILE || path.join(DATA_DIR, "model-storage.json"),
     });
     const fsStore = core.createModelFilesystemStore({ storage: modelStorage, modelsRoot, hfCache: hfHome, listRoots: () => modelStorage.roots() });
     return createModelHub({
       aiRoot: AI_ROOT,
-      dataDir: path.join(ROOT, "data", "hub"),
+      dataDir: path.join(DATA_DIR, "hub"),
       hfHome,
       modelStorage,
       fsStore,
@@ -2745,7 +2751,7 @@ async function startTelemetry(options = {}) {
   if (process.env.AI_FRONTEND_SMOKE === "1") return null;
   const runtime = createTelemetryRuntime({
     aiRoot: AI_ROOT,
-    dataDir: path.join(ROOT, "data"),
+    dataDir: DATA_DIR,
     getBillingStore,
     // /internal/telemetry/* (TEL-6): verified with the entry trust token.
     getTrustToken: () => security.getTrustToken(),

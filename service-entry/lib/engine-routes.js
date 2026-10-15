@@ -762,7 +762,7 @@ function mount(ctx) {
     set: (namespace, name, value) => (vault || (vault = require("../../manager-core/secret-store").createSecretVault({ aiRoot: ctx.aiRoot }))).set(namespace, name, value),
     remove: (namespace, name) => (vault || (vault = require("../../manager-core/secret-store").createSecretVault({ aiRoot: ctx.aiRoot }))).remove(namespace, name),
   };
-  const file = ctx.externalEndpointsFile || path.join(ctx.rootDir || path.resolve(__dirname, ".."), "data", "external-endpoints.json");
+  const file = ctx.externalEndpointsFile || path.join(ctx.dataDir || path.join(ctx.rootDir || path.resolve(__dirname, ".."), "data"), "external-endpoints.json");
   const store = createEndpointStore({ file });
   const host = ctx.externalHost || createExternalHost({ secrets, now: ctx.now });
   const routes = createEngineRoutes({

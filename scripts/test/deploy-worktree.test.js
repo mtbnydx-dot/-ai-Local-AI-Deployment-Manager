@@ -105,14 +105,17 @@ test("Get-LiveDrift still parses the manifest after post-deploy", { skip: proces
   assert.ok(fs.readFileSync(file).equals(bytes), "post-deploy never rewrites the manifest");
 
   const script = `$ErrorActionPreference = 'Stop'\n${driftFunction}\n$drift = @(Get-LiveDrift -LiveRootPath $env:FIXTURE_ROOT)\n$drift | ConvertTo-Json -Compress -AsArray`;
+  // Windows PowerShell 5.1 below a pwsh 7 session must not inherit pwsh's PSModulePath: it then
+  // cannot load its own utility module and Get-FileHash is "not recognized".
+  const psEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath")), FIXTURE_ROOT: root };
   const ps = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"], {
-    input: script, encoding: "utf8", env: { ...process.env, FIXTURE_ROOT: root }, windowsHide: true,
+    input: script, encoding: "utf8", env: psEnv, windowsHide: true,
   });
   if (ps.error || ps.status !== 0) {
     // Windows PowerShell 5.1 has no -AsArray; fall back to the default shape.
     const fallback = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"], {
       input: `$ErrorActionPreference = 'Stop'\n${driftFunction}\n@(Get-LiveDrift -LiveRootPath $env:FIXTURE_ROOT) | ConvertTo-Json -Compress`,
-      encoding: "utf8", env: { ...process.env, FIXTURE_ROOT: root }, windowsHide: true,
+      encoding: "utf8", env: psEnv, windowsHide: true,
     });
     assert.equal(fallback.status, 0, fallback.stderr);
     ps.stdout = fallback.stdout;

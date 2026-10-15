@@ -1000,6 +1000,7 @@ async function setupEntry() {
   }
   process.env.PLATFORM_MCP_ENV_FILE = path.join(tempDir, "platform-mcp.env");
   process.env.AI_BILLING_DB = path.join(tempDir, "billing.sqlite");
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(tempDir, "data");
   const entry = require("../server");
   entry.setEntryGatewayAccessSink(async () => {});
   entrySetup = { entry, vllm, llama, tempDir };

@@ -23,14 +23,10 @@ const { spawnSync } = require("node:child_process");
 const DEFAULT_ROOT = path.resolve(__dirname, "..");
 const SCRIPT_PATTERN = /\.(cmd|ps1)$/i;
 const SKIP_DIRECTORIES = new Set(["node_modules", ".git"]);
-// Existing TTS scripts saved with a BOM. They carry Chinese text and are run
-// by Windows PowerShell as well as pwsh, so the BOM stays until they are
-// rewritten as ASCII. New files must not be added here.
-const ALLOW_BOM = new Set([
-  "tts-platform/scripts/start_all.ps1",
-  "tts-platform/scripts/start_gateway.ps1",
-  "tts-platform/scripts/status.ps1",
-]);
+// Scripts that may keep a BOM. The three TTS scripts that needed one were
+// rewritten as ASCII (P0-FU), so the list is empty and stays that way: new
+// files must not be added here.
+const ALLOW_BOM = new Set([]);
 
 function toPosix(relativePath) {
   return relativePath.split(path.sep).join("/");

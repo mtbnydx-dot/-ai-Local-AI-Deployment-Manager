@@ -5432,11 +5432,7 @@ async function resolveModelLink() {
       <strong>${escapeHtml(result.label || result.model)}</strong>
       <span>${escapeHtml(result.source === "modelscope" ? "ModelScope" : "Hugging Face")} · ${escapeHtml(result.summary || "已解析成功，可以开始下载。")}${escapeHtml(mirrorHint)}</span>
     `;
-    if (mirrorHint && $("#downloadHfMirror")) {
-      $("#downloadHfMirror").checked = true;
-      // 后端按已保存设置取镜像开关，勾选后立即持久化，否则下载仍会直连 HF。
-      api("/api/download/settings", { method: "POST", body: JSON.stringify({ hfMirror: true }) }).catch(() => {});
-    }
+    // 只提示，不改全局设置：镜像开关由用户自己勾选并保存（08 P0-13）。
     return result;
   } catch (error) {
     $("#linkResolveResult").textContent = error.message;

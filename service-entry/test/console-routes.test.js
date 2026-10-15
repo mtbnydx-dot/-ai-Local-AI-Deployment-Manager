@@ -899,6 +899,7 @@ async function loadEntry() {
   process.env.SERVICE_ENTRY_MODEL_CACHE_MS = "600000";
   process.env.PLATFORM_MCP_ENV_FILE = path.join(tempDir, "platform-mcp.env");
   process.env.AI_BILLING_DB = path.join(tempDir, "billing.sqlite");
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(tempDir, "data");
   entry = require("../server");
   entry.setEntryGatewayAccessSink(async () => {});
   return entry;

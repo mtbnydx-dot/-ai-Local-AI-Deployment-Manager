@@ -3,7 +3,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
-const { getFreePort, startManager } = require("./frontend/helpers/console-harness.js");
+const { getFreePort, setPrefs, startManager } = require("./frontend/helpers/console-harness.js");
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -715,6 +715,9 @@ test.describe("manager frontends", () => {
 
     // Without a preference cookie the browser language picks the shell language.
     const context = await browser.newContext({ locale: "zh-CN" });
+    // The entry has its own empty state, so the first visitor is the owner of a
+    // first run and would be sent to /setup. This test is about the shell.
+    await setPrefs(context, { dismissedSetup: true });
     try {
       await smokeConsoleShell(await context.newPage(), managers[0].url);
     } finally {

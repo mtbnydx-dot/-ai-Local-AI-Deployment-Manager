@@ -616,6 +616,37 @@ test("502 manager_unreachable, 504 manager_timeout and 413 body_too_large use th
   assert.deepEqual(logger.lines.log.slice(logged).filter((line) => line.includes("answers again")).length, 1);
 });
 
+test("an oversized chunked body is drained before the 413, so a client that keeps sending still reads it", async (t) => {
+  const vllm = await fakeManager(t, "vllm", { "/api/start": (req, res) => { res.writeHead(200); res.end("{}"); } });
+  const proxy = mgmt.createMgmtProxy({ managers: managerList(vllm), auth: legacyAuth(), logger: quietLogger() });
+  t.after(() => proxy.close());
+  const port = await proxyServer(t, proxy);
+  // No content-length: the proxy only learns the body is too large after 2 MiB, while
+  // the client still has several MiB to send, written slowly in pieces.
+  const result = await new Promise((resolve, reject) => {
+    const request = http.request({ host: "127.0.0.1", port, path: "/api/m/vllm/start", method: "POST", headers: { "content-type": "application/json", "transfer-encoding": "chunked" }, agent: false }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({ status: response.statusCode, text: Buffer.concat(chunks).toString("utf8") }));
+    });
+    request.on("error", reject);
+    const piece = Buffer.alloc(512 * 1024, 0x61);
+    let sent = 0;
+    const next = () => {
+      if (sent >= 12) {
+        request.end();
+        return;
+      }
+      sent += 1;
+      request.write(piece, () => setTimeout(next, 5));
+    };
+    next();
+  });
+  assert.equal(result.status, 413);
+  assert.equal(JSON.parse(result.text).error.code, "body_too_large");
+  assert.equal(vllm.seen.length, 0, "nothing reached the manager");
+});
+
 test("a write gets the longer write deadline, so a slow manager action is not cut off at the read timeout", async (t) => {
   const vllm = await fakeManager(t, "vllm", {
     // Answers after 300 ms, like POST /api/docker/start waiting for Docker.
@@ -959,6 +990,7 @@ async function setupEntry() {
   }
   process.env.PLATFORM_MCP_ENV_FILE = path.join(tempDir, "platform-mcp.env");
   process.env.AI_BILLING_DB = path.join(tempDir, "billing.sqlite");
+  process.env.SERVICE_ENTRY_DATA_DIR = path.join(tempDir, "data");
   entry = require("../server");
   entry.setEntryGatewayAccessSink(async () => {});
   return { entry, vllm: entryVllm };

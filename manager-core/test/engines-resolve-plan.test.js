@@ -525,6 +525,22 @@ test("a missing local build blocks with runtime_local_build_missing and is never
   assert.equal(plan.blockers[0].action, undefined);
 });
 
+test("a pool cap the preset applies counts as the SGLang admission cap when the request left it blank", async () => {
+  // The Flash-Next preset caps the pool at the context length when sglangMaxTotalTokens is empty.
+  const host = fakeVllmManager({ preset: { maxTotalTokens: 262144 } });
+  const body = legacyBody({ engine: "sglang", maxModelLen: "262144", maxNumSeqs: "1", gpuMemoryUtilization: "0.995" });
+  const blank = await host.start.planLaunch(body);
+  assert.equal(blank.memory.admissionRequest.requestedFractionOfFree, 0.995);
+  assert.equal(blank.memory.admissionRequest.poolCappedTokens, 262144, JSON.stringify(blank.memory.admissionRequest));
+  assert.equal(blank.memory.kvPoolTokens, 262144);
+  // An explicit cap wins over the recipe's default.
+  const explicit = await host.start.planLaunch({ ...body, sglangMaxTotalTokens: "131072" });
+  assert.equal(explicit.memory.admissionRequest.poolCappedTokens, 131072);
+  // vLLM has no pool cap field, so nothing is added to it.
+  const vllm = await host.start.planLaunch(legacyBody());
+  assert.equal(Object.hasOwn(vllm.memory.admissionRequest, "poolCappedTokens"), false);
+});
+
 test("an admission block is blocker insufficient_vram in the plan; the launch keeps the acquire 409", async () => {
   const host = fakeVllmManager({
     admissionPreview: async () => ({

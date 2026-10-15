@@ -165,7 +165,6 @@ const UI_TEXT_TRANSLATIONS = {
   "vLLM 只支持单文件 GGUF；这个量化被切成多个分片，请改用 llama.cpp 管理器，或选择单文件量化。": "vLLM only supports single-file GGUF; this quantization is split into shards. Use the llama.cpp manager or pick a single-file quantization.",
   "vLLM 的 GGUF 支持是实验性的，还需要原始模型的 tokenizer/config。通常在 llama.cpp 上运行更稳。": "vLLM's GGUF support is experimental and still needs the original tokenizer/config. It usually runs more reliably on llama.cpp.",
   "仓库里没有 config.json，vLLM 无法识别模型结构。": "The repository has no config.json, so vLLM cannot recognise the model structure.",
-  "该模型带自定义建模代码，启动时会自动开启 trust-remote-code。": "This model ships custom modelling code; trust-remote-code is enabled automatically at launch.",
   "仓库自带解析器插件，下载后即可使用。": "The repository ships the parser plugin; it is usable right after download.",
   "仓库里没有这个解析器插件文件，下载后需要手动放进模型目录。": "The repository lacks this parser plugin file; place it in the model directory manually after download.",
   "仓库为 gated，下载前需要本机已登录并接受条款。": "The repository is gated; log in on this machine and accept the terms before downloading.",

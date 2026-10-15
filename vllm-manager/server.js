@@ -97,6 +97,10 @@ const DEFAULT_QWEN_MOE_VLLM_IMAGE = core.runtimeImageReference("vllmQwenMoe");
 const DEFAULT_SGLANG_IMAGE = `${DEFAULT_SGLANG_RELEASE.repository}@${DEFAULT_SGLANG_RELEASE.platformDigest}`;
 const DEFAULT_SGLANG_FLASH_NEXT_IMAGE = core.runtimeImageReference("sglangFlashNext");
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
+// VLLM_MANAGER_STATE_DIR moves logs/ and data/ (ledgers, settings, the usage database) out of the
+// package folder. Tests start several managers at once and give each its own
+// temp directory; a normal install leaves it unset.
+const STATE_DIR = process.env.VLLM_MANAGER_STATE_DIR ? path.resolve(process.env.VLLM_MANAGER_STATE_DIR) : __dirname;
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
@@ -171,25 +175,25 @@ const CONFIG = {
   managerId: process.env.VLLM_MANAGER_ID || "vllm-manager",
   defaultPort: Number(process.env.VLLM_PORT || 8000),
   pidFile: process.env.VLLM_MANAGER_PID_FILE || path.join(__dirname, ".manager.pid"),
-  statsLedger: path.join(__dirname, "logs", "stats-ledger.json"),
-  metricsHistory: path.join(__dirname, "logs", "metrics-history.json"),
-  benchmarkHistory: path.join(__dirname, "logs", "benchmark-history.json"),
-  idleUnloadSettings: path.join(__dirname, "logs", "idle-unload-settings.json"),
-  idleUnloadSleeping: path.join(__dirname, "logs", "idle-unload-sleeping.json"),
-  managerBackups: path.join(__dirname, "logs", "backups"),
-  jobsLedger: path.join(__dirname, "logs", "jobs-ledger.json"),
-  claudeCompressionSettings: path.join(__dirname, "logs", "claude-context-compression.json"),
-  launchProfiles: path.join(__dirname, "logs", "launch-profiles.json"),
-  recentLaunches: path.join(__dirname, "logs", "recent-launches.json"),
-  launchStore: path.join(__dirname, "logs", "launch-store.json"),
-  downloadSettings: path.join(__dirname, "logs", "download-settings.json"),
-  modelNotes: path.join(__dirname, "logs", "model-notes.json"),
-  automationSettings: path.join(__dirname, "logs", "automation-settings.json"),
-  serviceExposureSettings: path.join(__dirname, "logs", "service-exposure-settings.json"),
-  serviceClients: path.join(__dirname, "logs", "service-clients.json"),
-  serviceUsageDb: path.join(__dirname, "logs", "service-usage.sqlite"),
-  serviceGatewayAccessLog: path.join(__dirname, "logs", "service-gateway-access.log"),
-  runtimeApiKeys: path.join(__dirname, "logs", "runtime-api-keys.json"),
+  statsLedger: path.join(STATE_DIR, "logs", "stats-ledger.json"),
+  metricsHistory: path.join(STATE_DIR, "logs", "metrics-history.json"),
+  benchmarkHistory: path.join(STATE_DIR, "logs", "benchmark-history.json"),
+  idleUnloadSettings: path.join(STATE_DIR, "logs", "idle-unload-settings.json"),
+  idleUnloadSleeping: path.join(STATE_DIR, "logs", "idle-unload-sleeping.json"),
+  managerBackups: path.join(STATE_DIR, "logs", "backups"),
+  jobsLedger: path.join(STATE_DIR, "logs", "jobs-ledger.json"),
+  claudeCompressionSettings: path.join(STATE_DIR, "logs", "claude-context-compression.json"),
+  launchProfiles: path.join(STATE_DIR, "logs", "launch-profiles.json"),
+  recentLaunches: path.join(STATE_DIR, "logs", "recent-launches.json"),
+  launchStore: path.join(STATE_DIR, "logs", "launch-store.json"),
+  downloadSettings: path.join(STATE_DIR, "logs", "download-settings.json"),
+  modelNotes: path.join(STATE_DIR, "logs", "model-notes.json"),
+  automationSettings: path.join(STATE_DIR, "logs", "automation-settings.json"),
+  serviceExposureSettings: path.join(STATE_DIR, "logs", "service-exposure-settings.json"),
+  serviceClients: path.join(STATE_DIR, "logs", "service-clients.json"),
+  serviceUsageDb: path.join(STATE_DIR, "logs", "service-usage.sqlite"),
+  serviceGatewayAccessLog: path.join(STATE_DIR, "logs", "service-gateway-access.log"),
+  runtimeApiKeys: path.join(STATE_DIR, "logs", "runtime-api-keys.json"),
   auditRoot: process.env.AI_AUDIT_ROOT || defaultAiPath("audit-logs"),
   openWebuiContainer: process.env.OPEN_WEBUI_CONTAINER || "open-webui",
   claudeDefaultMaxTokens: Math.min(65536, Math.max(1024, positiveInt(process.env.VLLM_CLAUDE_DEFAULT_MAX_TOKENS || 8192, 8192))),
@@ -252,7 +256,7 @@ const telemetryIngest = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.tele
     root: DEFAULT_AI_ROOT,
     baseUrl: process.env.AI_BILLING_BASE_URL || undefined,
   }),
-  spoolFile: path.join(__dirname, "logs", "telemetry-spool.jsonl"),
+  spoolFile: path.join(STATE_DIR, "logs", "telemetry-spool.jsonl"),
 });
 const reportDirectRequest = telemetryIngest
   ? (entry) => telemetryIngest.report("requests", [core.telemetry.directRequestRow(entry, { managerId: CONFIG.managerId })])
@@ -267,7 +271,7 @@ const logBillingIntegrationIssue = ({ phase, requestId, code } = {}) => {
   console.warn(`Billing ${String(phase || "request")} issue (${String(code || "unknown")}) for request ${String(requestId || "unknown")}.`);
 };
 const billingPendingQueue = core.createBillingPendingQueue({
-  file: path.join(__dirname, "logs", "billing-pending.json"),
+  file: path.join(STATE_DIR, "logs", "billing-pending.json"),
   readJsonFile,
   writeJsonFile,
   authorize: (...args) => billingClient.authorize(...args),
@@ -315,10 +319,12 @@ const {
   normalizeLaunchGpuSelection,
 } = gpuRuntime;
 const getGpuStatus = () => runtimeSnapshotCache.get("gpu", getGpuStatusFresh);
+// Admission reads the GPU fresh: in replace mode the read after prepare must
+// see the memory freed by the stopped container, not a snapshot cached before it.
 const gpuAdmissionController = core.createGpuAdmissionController({
   root: process.env.MODEL_GPU_ADMISSION_ROOT,
   managerId: CONFIG.managerId,
-  getGpuStatus,
+  getGpuStatus: getGpuStatusFresh,
 });
 
 // /api/memory-estimate previews SGLang admission with the live admission
@@ -556,7 +562,7 @@ const {
 } = claudeCompressionSettingsStore;
 const AUDIT_PASSWORD_FILE = process.env.AI_AUDIT_PASSWORD_FILE || path.join(CONFIG.auditRoot, "audit-admin-password.txt");
 const AUDIT_LEGACY_PASSWORD_FILES = [
-  path.join(__dirname, "logs", "audit-admin-password.txt"),
+  path.join(STATE_DIR, "logs", "audit-admin-password.txt"),
 ];
 const auditStore = core.createAuditStore({
   auditRoot: CONFIG.auditRoot,
@@ -1683,7 +1689,7 @@ const {
 
 // 02 MOD-9b/MOD-10: one set of model hooks per manager (the calibration store is shared by
 // the PlanCtx's calibrationFor and the supervisor's afterReady).
-const modelHooks = core.models.managerHooks({ managerId: "vllm", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatusFresh, modelStorage, modelsRoot: CONFIG.modelsRoot, launchStore, onCapabilities: () => clearRuntimeInstancesCache() });
+const modelHooks = core.models.managerHooks({ managerId: "vllm", dataDir: path.join(STATE_DIR, "data"), gpuStatus: getGpuStatusFresh, modelStorage, modelsRoot: CONFIG.modelsRoot, launchStore, onCapabilities: () => clearRuntimeInstancesCache() });
 
 const startRuntimeRequest = createVllmStartRuntimeRequest({
   resolveRequestedModel: value => { const input = modelStorage.fromContainerPath(value); if (!path.isAbsolute(input)) return input; const resolved = modelStorage.resolvePath(input); modelStorage.assertUnlocked([resolved]); return resolved; },
@@ -1924,7 +1930,7 @@ core.registerModelInspectorRoutes(app, {
   jobs: { createJob, appendLog, finishJob, failJob, setJobProgress },
   docker,
   listInstances: listRuntimeInstancesRequest,
-  dataDir: path.join(__dirname, "data"),
+  dataDir: path.join(STATE_DIR, "data"),
   // POST /api/models/probe (MOD-13) maps the model reference to a folder or file in storage.
   resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }),
   registry: engineRegistry,

@@ -1,4 +1,4 @@
-﻿# 一键启动语音克隆聚合平台：检测缺哪个服务就补哪个，全部就绪后按需打开浏览器。
+# Start the voice-cloning aggregation platform: start whichever service is missing, then open the browser once everything is ready.
 [CmdletBinding()]
 param(
     [switch]$NoBrowser,
@@ -25,9 +25,9 @@ function Test-Port($port) {
 
 function Start-Worker($name, $port, $script) {
     if (Test-Port $port) {
-        Write-Host "[$name] 已在运行 (端口 $port)" -ForegroundColor Green
+        Write-Host "[$name] already running (port $port)" -ForegroundColor Green
     } else {
-        Write-Host "[$name] 启动中……" -ForegroundColor Yellow
+        Write-Host "[$name] starting..." -ForegroundColor Yellow
         $slug = [System.IO.Path]::GetFileNameWithoutExtension($script)
         $outLog = Join-Path $logRoot "$slug.out.log"
         $errLog = Join-Path $logRoot "$slug.err.log"
@@ -41,30 +41,30 @@ function Start-Worker($name, $port, $script) {
     }
 }
 
-Write-Host "==== 语音克隆聚合平台 ====" -ForegroundColor Cyan
-Start-Worker "网关"           $gatewayPort "start_gateway.ps1"
+Write-Host "==== Voice-cloning aggregation platform ====" -ForegroundColor Cyan
+Start-Worker "Gateway"        $gatewayPort "start_gateway.ps1"
 if (-not $GatewayOnly) {
     Start-Worker "Chatterbox V3"  7011 "start_chatterbox.ps1"
     Start-Worker "Qwen3-TTS"      7012 "start_qwen.ps1"
     Start-Worker "Fish S2 Pro"    7013 "start_fish.ps1"
 }
 
-# Step-Audio-EditX：镜像存在且 Docker 在运行才启动
+# Step-Audio-EditX starts only when its image exists and Docker is running
 if (-not $GatewayOnly -and -not (Test-Port 7014)) {
     $dockerOk = $false
     try { docker info 2>$null | Out-Null; $dockerOk = ($LASTEXITCODE -eq 0) } catch {}
     if ($dockerOk -and (docker images -q step-audio-editx 2>$null)) {
-        Write-Host "[Step-Audio] 启动 Docker 容器……" -ForegroundColor Yellow
+        Write-Host "[Step-Audio] starting the Docker container..." -ForegroundColor Yellow
         & "$s\start_step_docker.ps1"
     } else {
-        Write-Host "[Step-Audio] 跳过（Docker 未运行或镜像未构建）" -ForegroundColor DarkGray
+        Write-Host "[Step-Audio] skipped (Docker is not running or the image is not built)" -ForegroundColor DarkGray
     }
 } elseif (-not $GatewayOnly) {
-    Write-Host "[Step-Audio] 已在运行 (端口 7014)" -ForegroundColor Green
+    Write-Host "[Step-Audio] already running (port 7014)" -ForegroundColor Green
 }
 
-# 等网关就绪再开浏览器
-Write-Host "等待网关就绪……"
+# Wait for the gateway before opening the browser
+Write-Host "Waiting for the gateway..."
 $deadline = (Get-Date).AddSeconds(60)
 $ready = $false
 $gatewayBase = "http://127.0.0.1:$gatewayPort"
@@ -92,4 +92,4 @@ $uiUrl = if ($env:TTS_PUBLIC_URL) {
 if (-not $NoBrowser) {
     Start-Process $uiUrl
 }
-Write-Host "完成！界面: $uiUrl （引擎第一次生成时才加载模型，首次会慢一点）" -ForegroundColor Cyan
+Write-Host "Done. UI: $uiUrl (each engine loads its model on first use, so the first generation is slower)" -ForegroundColor Cyan

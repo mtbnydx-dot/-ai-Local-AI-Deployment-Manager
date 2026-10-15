@@ -10,6 +10,7 @@ const zlib = require("node:zlib");
 // sessions, live in a temp dir for this file.
 const ENTRY_TEMP = fs.mkdtempSync(path.join(os.tmpdir(), "entry-gateway-"));
 process.env.AI_BILLING_DB = path.join(ENTRY_TEMP, "billing.sqlite");
+process.env.SERVICE_ENTRY_DATA_DIR = path.join(ENTRY_TEMP, "data");
 
 const core = require("../../manager-core");
 const entry = require("../server");

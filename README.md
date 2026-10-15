@@ -176,6 +176,7 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 | `SERVICE_ENTRY_ALLOW_LAN_ADMIN` | `0` | `1` = 允许局域网设备启停管理器、查看完整状态 |
 | `SERVICE_ENTRY_ALLOWED_ORIGINS` | 空 | 逗号分隔的浏览器 Origin 白名单；`*` 表示全放行 |
 | `SERVICE_ENTRY_ALLOWED_HOSTS` | 空 | 额外 Host 白名单，用于反向代理域名 |
+| `SERVICE_ENTRY_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | 逗号分隔的可信代理地址段（平台配置 `trustedProxies.cidrs`）。只有来自这些地址的请求才会采信转发头里的客户端 IP。cloudflared 在本机进程运行时保持默认；只有 cloudflared 跑在容器里时才加入 Docker Desktop 网关所在地址段 |
 | `SEARCH_GATEWAY_ALLOW_NO_KEY` | `false` | `true` = 允许 search-gateway 无密钥对外服务 |
 | `AI_AUDIT_MAX_EXPORTS` / `AI_AUDIT_MAX_AGE_DAYS` | `30` / `90` | 审计导出保留份数与天数，`0` = 不限制 |
 
@@ -443,6 +444,7 @@ Generate API keys from the manager's service/external access page. Do not put re
 | `SERVICE_ENTRY_ALLOW_LAN_ADMIN` | `0` | `1` = let LAN devices start/stop managers and read full status |
 | `SERVICE_ENTRY_ALLOWED_ORIGINS` | empty | Comma-separated browser Origin allowlist; `*` allows all |
 | `SERVICE_ENTRY_ALLOWED_HOSTS` | empty | Extra Host allowlist for reverse-proxy domains |
+| `SERVICE_ENTRY_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | Comma-separated trusted proxy address ranges (platform config `trustedProxies.cidrs`). Forwarded client-IP headers are believed only from these addresses. Keep the default when cloudflared runs as a local process; add the Docker Desktop gateway range only if cloudflared runs in a container |
 | `SEARCH_GATEWAY_ALLOW_NO_KEY` | `false` | `true` = let search-gateway serve without a key |
 | `AI_AUDIT_MAX_EXPORTS` / `AI_AUDIT_MAX_AGE_DAYS` | `30` / `90` | Audit export retention by count and age; `0` disables the limit |
 

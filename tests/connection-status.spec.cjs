@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const { createStateDir } = require("./frontend/helpers/console-harness.js");
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -59,20 +60,29 @@ async function startManager({ cwd, env, port }) {
     ? { LLAMA_MANAGER_PID_FILE: path.join(ROOT, "test-results", `.llama-manager-${port}.pid`) }
     : { VLLM_MANAGER_PID_FILE: path.join(ROOT, "test-results", `.vllm-manager-${port}.pid`) };
   const pidFile = isolatedPidEnv.LLAMA_MANAGER_PID_FILE || isolatedPidEnv.VLLM_MANAGER_PID_FILE;
+  // Its own state folder: parallel workers must not share databases or ledgers.
+  const state = await createStateDir();
   const child = spawn(process.execPath, ["server.js"], {
     cwd,
-    env: { ...process.env, ...isolatedPidEnv, ...env, AI_FRONTEND_SMOKE: "1", NO_COLOR: "1" },
+    env: { ...process.env, ...state.env, ...isolatedPidEnv, ...env, AI_FRONTEND_SMOKE: "1", NO_COLOR: "1" },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.resume();
   child.stderr.resume();
-  await waitForHttp(`http://127.0.0.1:${port}/`);
+  try {
+    await waitForHttp(`http://127.0.0.1:${port}/`);
+  } catch (error) {
+    await killProcessTree(child);
+    await state.remove();
+    throw error;
+  }
   return {
     url: `http://127.0.0.1:${port}/`,
     stop: async () => {
       await killProcessTree(child);
       await fs.rm(pidFile, { force: true }).catch(() => {});
+      await state.remove();
     },
   };
 }

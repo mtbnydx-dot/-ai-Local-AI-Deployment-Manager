@@ -5468,7 +5468,7 @@ async function resolveModelLink(event) {
       <strong>${escapeHtml(result.label || result.model)}</strong>
       <span>${escapeHtml(result.source === "modelscope" ? "ModelScope" : "Hugging Face")} · ${escapeHtml(result.summary || "已解析成功，可以开始下载。")}${escapeHtml(mirrorHint)}</span>
     `;
-    if (mirrorHint && $("#downloadHfMirror")) $("#downloadHfMirror").checked = true;
+    // 只提示，不勾选：后端按已保存的设置取镜像开关，镜像开关由用户自己勾选并保存（08 P0-13）。
     notify("链接解析完成", result.model || result.label || url, "success");
     return result;
   } catch (error) {

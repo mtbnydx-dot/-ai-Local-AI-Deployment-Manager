@@ -76,6 +76,10 @@ const HOST = process.env.LLAMA_MANAGER_HOST || "127.0.0.1";
 const SHARED_PUBLIC_JS_DIR = path.join(__dirname, "..", "shared-public", "js");
 const ALLOW_REMOTE_MANAGEMENT = process.env.LLAMA_MANAGER_ALLOW_REMOTE === "1";
 const DEFAULT_AI_ROOT = process.env.AI_ROOT || path.resolve(__dirname, "..");
+// LLAMA_MANAGER_STATE_DIR moves logs/ and data/ (ledgers, settings, the usage database) out of the
+// package folder. Tests start several managers at once and give each its own
+// temp directory; a normal install leaves it unset.
+const STATE_DIR = process.env.LLAMA_MANAGER_STATE_DIR ? path.resolve(process.env.LLAMA_MANAGER_STATE_DIR) : __dirname;
 const DEFAULT_DEVTOOLS_ROOT = process.env.DEVTOOLS_ROOT || "";
 // Pinned llama.cpp images come from manager-core/data/runtime-manifest.json
 // (config/ override supported); environment variables still win.
@@ -140,26 +144,26 @@ const CONFIG = {
   defaultPort: Number(process.env.LLAMA_PORT || 8080),
   startupTimeoutMs: positiveTimeoutMs(process.env.LLAMA_STARTUP_TIMEOUT_MS, 20 * 60 * 1000),
   pidFile: process.env.LLAMA_MANAGER_PID_FILE || path.join(__dirname, ".manager.pid"),
-  statsLedger: path.join(__dirname, "logs", "stats-ledger.json"),
-  cacheHitLedger: path.join(__dirname, "logs", "cache-hit-ledger.json"),
-  metricsHistory: path.join(__dirname, "logs", "metrics-history.json"),
-  benchmarkHistory: path.join(__dirname, "logs", "benchmark-history.json"),
-  idleUnloadSettings: path.join(__dirname, "logs", "idle-unload-settings.json"),
-  idleUnloadSleeping: path.join(__dirname, "logs", "idle-unload-sleeping.json"),
-  managerBackups: path.join(__dirname, "logs", "backups"),
-  jobsLedger: path.join(__dirname, "logs", "jobs-ledger.json"),
-  downloadSettings: path.join(__dirname, "logs", "download-settings.json"),
-  claudeCompressionSettings: path.join(__dirname, "logs", "claude-context-compression.json"),
-  launchProfiles: path.join(__dirname, "logs", "launch-profiles.json"),
-  recentLaunches: path.join(__dirname, "logs", "recent-launches.json"),
-  launchStore: path.join(__dirname, "logs", "launch-store.json"),
-  modelNotes: path.join(__dirname, "logs", "model-notes.json"),
-  automationSettings: path.join(__dirname, "logs", "automation-settings.json"),
-  serviceExposureSettings: path.join(__dirname, "logs", "service-exposure-settings.json"),
-  serviceClients: path.join(__dirname, "logs", "service-clients.json"),
-  serviceUsageDb: path.join(__dirname, "logs", "service-usage.sqlite"),
-  serviceGatewayAccessLog: path.join(__dirname, "logs", "service-gateway-access.log"),
-  runtimeApiKeys: path.join(__dirname, "logs", "runtime-api-keys.json"),
+  statsLedger: path.join(STATE_DIR, "logs", "stats-ledger.json"),
+  cacheHitLedger: path.join(STATE_DIR, "logs", "cache-hit-ledger.json"),
+  metricsHistory: path.join(STATE_DIR, "logs", "metrics-history.json"),
+  benchmarkHistory: path.join(STATE_DIR, "logs", "benchmark-history.json"),
+  idleUnloadSettings: path.join(STATE_DIR, "logs", "idle-unload-settings.json"),
+  idleUnloadSleeping: path.join(STATE_DIR, "logs", "idle-unload-sleeping.json"),
+  managerBackups: path.join(STATE_DIR, "logs", "backups"),
+  jobsLedger: path.join(STATE_DIR, "logs", "jobs-ledger.json"),
+  downloadSettings: path.join(STATE_DIR, "logs", "download-settings.json"),
+  claudeCompressionSettings: path.join(STATE_DIR, "logs", "claude-context-compression.json"),
+  launchProfiles: path.join(STATE_DIR, "logs", "launch-profiles.json"),
+  recentLaunches: path.join(STATE_DIR, "logs", "recent-launches.json"),
+  launchStore: path.join(STATE_DIR, "logs", "launch-store.json"),
+  modelNotes: path.join(STATE_DIR, "logs", "model-notes.json"),
+  automationSettings: path.join(STATE_DIR, "logs", "automation-settings.json"),
+  serviceExposureSettings: path.join(STATE_DIR, "logs", "service-exposure-settings.json"),
+  serviceClients: path.join(STATE_DIR, "logs", "service-clients.json"),
+  serviceUsageDb: path.join(STATE_DIR, "logs", "service-usage.sqlite"),
+  serviceGatewayAccessLog: path.join(STATE_DIR, "logs", "service-gateway-access.log"),
+  runtimeApiKeys: path.join(STATE_DIR, "logs", "runtime-api-keys.json"),
   auditRoot: process.env.AI_AUDIT_ROOT || defaultAiPath("audit-logs"),
   openWebuiContainer: process.env.OPEN_WEBUI_CONTAINER || "open-webui",
 };
@@ -221,7 +225,7 @@ const telemetryIngest = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.tele
     root: DEFAULT_AI_ROOT,
     baseUrl: process.env.AI_BILLING_BASE_URL || undefined,
   }),
-  spoolFile: path.join(__dirname, "logs", "telemetry-spool.jsonl"),
+  spoolFile: path.join(STATE_DIR, "logs", "telemetry-spool.jsonl"),
 });
 const reportDirectRequest = telemetryIngest
   ? (entry) => telemetryIngest.report("requests", [core.telemetry.directRequestRow(entry, { managerId: CONFIG.managerId })])
@@ -236,7 +240,7 @@ const logBillingIntegrationIssue = ({ phase, requestId, code } = {}) => {
   console.warn(`Billing ${String(phase || "request")} issue (${String(code || "unknown")}) for request ${String(requestId || "unknown")}.`);
 };
 const billingPendingQueue = core.createBillingPendingQueue({
-  file: path.join(__dirname, "logs", "billing-pending.json"),
+  file: path.join(STATE_DIR, "logs", "billing-pending.json"),
   readJsonFile,
   writeJsonFile,
   authorize: (...args) => billingClient.authorize(...args),
@@ -288,10 +292,12 @@ const {
   normalizeLaunchGpuSelection,
 } = gpuRuntime;
 const getGpuStatus = () => runtimeSnapshotCache.get("gpu", getGpuStatusFresh);
+// Admission reads the GPU fresh: in replace mode the read after prepare must
+// see the memory freed by the stopped container, not a snapshot cached before it.
 const gpuAdmissionController = core.createGpuAdmissionController({
   root: process.env.MODEL_GPU_ADMISSION_ROOT,
   managerId: CONFIG.managerId,
-  getGpuStatus,
+  getGpuStatus: getGpuStatusFresh,
 });
 
 const remoteModelService = createLlamaRemoteModelService();
@@ -714,7 +720,7 @@ const {
   normalizeClaudeCompressionSettings,
 } = claudeCompressionSettingsStore;
 const AUDIT_LEGACY_PASSWORD_FILES = [
-  path.join(__dirname, "logs", "audit-admin-password.txt"),
+  path.join(STATE_DIR, "logs", "audit-admin-password.txt"),
 ];
 const auditStore = core.createAuditStore({
   auditRoot: CONFIG.auditRoot,
@@ -1734,7 +1740,7 @@ const {
 
 // 02 MOD-9b/MOD-10: one set of model hooks per manager (the calibration store is shared by
 // the PlanCtx's calibrationFor and the supervisor's afterReady).
-const modelHooks = core.models.managerHooks({ managerId: "llama", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatusFresh, modelStorage, modelsRoot: CONFIG.modelsRoot, launchStore, onCapabilities: () => clearRuntimeInstancesCache() });
+const modelHooks = core.models.managerHooks({ managerId: "llama", dataDir: path.join(STATE_DIR, "data"), gpuStatus: getGpuStatusFresh, modelStorage, modelsRoot: CONFIG.modelsRoot, launchStore, onCapabilities: () => clearRuntimeInstancesCache() });
 
 const startRuntimeRequest = createLlamaStartRuntimeRequest({
   resolveRequestedModel: value => { const input = modelStorage.fromContainerPath(value); if (!path.isAbsolute(input)) return input; const resolved = modelStorage.resolvePath(input); modelStorage.assertUnlocked([resolved]); return resolved; },
@@ -1981,7 +1987,7 @@ core.registerModelInspectorRoutes(app, {
   jobs: { createJob, appendLog, finishJob, failJob, setJobProgress },
   docker,
   listInstances: listRuntimeInstancesRequest,
-  dataDir: path.join(__dirname, "data"),
+  dataDir: path.join(STATE_DIR, "data"),
   // POST /api/models/probe (MOD-13) maps the model reference to a folder or file in storage.
   resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }),
   registry: engineRegistry,

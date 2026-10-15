@@ -86,8 +86,35 @@ function killProcessTree(child) {
   });
 }
 
+/**
+ * A fresh temp directory for one spawned service, and the env that moves its
+ * state into it: the entry's SQLite stores and settings, and a manager's
+ * ledgers, settings and usage database. Playwright runs spec files in
+ * parallel workers; without this every entry shares service-entry/data and
+ * every manager shares its logs folder, so a second process meets the first
+ * one's open database ("database is locked") or its leftover ledgers.
+ * @returns {Promise<{ dir, env, remove() }>}
+ */
+async function createStateDir() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-smoke-state-"));
+  return {
+    dir,
+    env: {
+      SERVICE_ENTRY_DATA_DIR: path.join(dir, "entry-data"),
+      VLLM_MANAGER_STATE_DIR: path.join(dir, "vllm-manager"),
+      LLAMA_MANAGER_STATE_DIR: path.join(dir, "llama-manager"),
+      // Overrides that would point back at a shared file (an empty value is "unset").
+      AI_BILLING_DB: "",
+      AI_TELEMETRY_DB: "",
+      MODEL_STORAGE_FILE: "",
+    },
+    remove: () => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {}),
+  };
+}
+
 async function startManager({ cwd, env, port, fakeGpu = true }) {
   const logs = [];
+  const state = await createStateDir();
   const usesTempModels = !env.VLLM_MODELS_ROOT && !env.LLAMA_MODELS_ROOT && !process.env.VLLM_MODELS_ROOT && !process.env.LLAMA_MODELS_ROOT;
   const tempModelsRoot = usesTempModels ? await fs.mkdtemp(path.join(os.tmpdir(), "ai-smoke-models-")) : "";
   for (const name of tempModelsRoot ? SMOKE_MODEL_DIRS : []) {
@@ -100,6 +127,7 @@ async function startManager({ cwd, env, port, fakeGpu = true }) {
     env: {
       ...process.env,
       ...(tempModelsRoot ? { VLLM_MODELS_ROOT: tempModelsRoot, LLAMA_MODELS_ROOT: tempModelsRoot } : {}),
+      ...state.env,
       ...env,
       AI_FRONTEND_SMOKE: "1",
       NO_COLOR: "1",
@@ -118,6 +146,7 @@ async function startManager({ cwd, env, port, fakeGpu = true }) {
   } catch (error) {
     await killProcessTree(child);
     if (tempModelsRoot) await fs.rm(tempModelsRoot, { recursive: true, force: true }).catch(() => {});
+    await state.remove();
     throw new Error(`${error.message}\n${logs.join("").slice(-4000)}`);
   }
   return {
@@ -127,6 +156,7 @@ async function startManager({ cwd, env, port, fakeGpu = true }) {
       await killProcessTree(child);
       if (pidFile) await fs.rm(pidFile, { force: true }).catch(() => {});
       if (tempModelsRoot) await fs.rm(tempModelsRoot, { recursive: true, force: true }).catch(() => {});
+      await state.remove();
     },
   };
 }
@@ -334,6 +364,7 @@ module.exports = {
   ROOT,
   DEFAULT_SESSION,
   collectFailures,
+  createStateDir,
   expectEmptyStorage,
   expectNoA11yViolations: axe.expectNoA11yViolations,
   expectNoOverflow,

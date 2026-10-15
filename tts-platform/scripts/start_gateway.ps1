@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'runtime-root.ps1')
 $runtimeRoot = Get-TtsRuntimeRoot
 $env:TTS_RUNTIME_ROOT = $runtimeRoot
