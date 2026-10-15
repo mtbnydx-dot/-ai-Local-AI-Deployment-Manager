@@ -35,6 +35,7 @@ const { createAdminAuth, registerSessionRoutes } = require("./lib/admin-session"
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
 const { createModelHub, discoverHubClis } = require("../manager-core/model-hub");
 const { createTelemetryRuntime } = require("./lib/telemetry-runtime");
+const { inferSourceProgram } = require("../manager-core/telemetry/source-program");
 const {
   DEFAULT_CLAUDE_MODEL_ALIASES,
   GENERIC_MODEL_IDS,
@@ -1932,6 +1933,7 @@ const gatewayPipeline = createGatewayPipeline({
     deny: denyEntryRequest,
     watch: (req, res, access) => watchEntryAccess(req, res, access),
     recordAuth: recordGatewayAuth,
+    entryContext: buildEntryHopContext,
     recordRouting: recordGatewayRouting,
     corsHeaders: gatewayCorsHeaders,
     sendJson,
@@ -2382,6 +2384,31 @@ function telemetryRecorder() {
 
 function gatewayRecord(req) {
   return req?.telemetryRecord || null;
+}
+
+// 04 §5.2: the entry's context for the signed manager hop. It holds only what
+// neither the principal nor the request id carries: the source-program slug
+// and the trusted-proxy country. Never the key, the customer or the user agent.
+function buildEntryHopContext(req) {
+  const headers = req?.headers || {};
+  const text = (name) => String(Array.isArray(headers[name]) ? headers[name][0] : headers[name] || "");
+  const context = {
+    v: 1,
+    src: inferSourceProgram({
+      userAgent: text("user-agent"),
+      origin: text("origin"),
+      referer: text("referer"),
+      path: String(req?.originalUrl || req?.url || "").split("?")[0],
+      xTitle: text("x-title") || text("x-ai-client"),
+    }) || "unknown",
+  };
+  try {
+    const country = security.identifyClient(req).country;
+    if (country) context.cc = country;
+  } catch {
+    // No country is a valid context.
+  }
+  return context;
 }
 
 // One record per gateway request, started before any check so that a refusal
@@ -3468,6 +3495,7 @@ module.exports = {
   buildManagerGatewayPath,
   buildManagerGatewayUrls,
   buildProxyHeaders,
+  buildEntryHopContext,
   managerGatewayTrustVersion,
   resetManagerTrustCache: () => managerTrustCache.clear(),
   buildServiceEntryFleetSnapshot,
