@@ -1,0 +1,134 @@
+/* Observability pages (07 §6.7): the header, filters, tile grids, the TTFT
+ * heatmap and the lifecycle Gantt. Shades and states use the token colors and
+ * patterns, never color alone; there are no inline style attributes. */
+
+.obs-page { min-width: 0; }
+.obs-header { min-width: 0; }
+
+.obs-subnav {
+  display: flex;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.obs-subnav-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-3);
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-weight: 550;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.obs-subnav-link:hover { color: var(--text); background: var(--surface-2); }
+.obs-subnav-link[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
+
+.obs-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+
+.obs-filters > summary { cursor: pointer; list-style: none; }
+.obs-filters > summary::-webkit-details-marker { display: none; }
+.obs-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.obs-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.obs-chip-remove {
+  min-width: 24px;
+  min-height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-md);
+  line-height: 1;
+  cursor: pointer;
+}
+.obs-chip-remove:hover { background: var(--surface-3); }
+
+.obs-window { margin: 0 0 var(--sp-2); }
+.obs-notes { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
+.obs-gap { margin: var(--sp-1) 0 0; }
+.obs-subtitle { margin: 0 0 var(--sp-1); font-size: var(--fs-md); font-weight: 600; }
+
+.obs-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--sp-3); }
+.obs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); align-items: start; }
+.obs-engine-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.obs-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--sp-3); }
+
+.obs-alerts { align-items: flex-start; flex-wrap: wrap; }
+.obs-alert-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-1); }
+.obs-gpus { display: flex; flex-direction: column; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.obs-badges { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0 0 var(--sp-2); padding: 0; list-style: none; }
+.obs-badges .badge { max-width: 100%; height: auto; padding-block: var(--sp-1); white-space: normal; flex-wrap: wrap; }
+.obs-badges .badge span { min-width: 0; overflow-wrap: anywhere; }
+.obs-samples, .obs-failures { display: flex; flex-direction: column; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.obs-row-link { cursor: pointer; }
+.obs-share { width: 6rem; height: 0.6rem; vertical-align: middle; accent-color: var(--chart-1); }
+.obs-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--sp-2); margin: 0; }
+.obs-facts dt { color: var(--text-muted); }
+.obs-facts dd { margin: 0; font-weight: 600; }
+.obs-sources { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); margin: 0 0 var(--sp-3); padding: 0; border: 0; }
+.obs-sources legend { padding: 0; margin-bottom: var(--sp-1); font-weight: 600; }
+.obs-tariffs { margin: var(--sp-3) 0 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.obs-tariffs legend { padding: 0; font-weight: 600; }
+.obs-tariff { align-items: flex-end; }
+
+/* TTFT heatmap: shades 1..5 of the first chart color; empty cells stay unpainted. */
+.heat-frame { display: flex; gap: var(--sp-2); align-items: stretch; }
+.heat-axis { display: flex; flex-direction: column; justify-content: space-between; margin: 0; padding: 0; list-style: none; text-align: right; white-space: nowrap; }
+.heat-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 14rem;
+  border: 1px solid var(--border);
+  background: repeating-linear-gradient(45deg, transparent 0 6px, var(--surface-2) 6px 7px);
+}
+.heat-cell { fill: var(--chart-1); }
+.heat-1 { fill-opacity: 0.2; }
+.heat-2 { fill-opacity: 0.4; }
+.heat-3 { fill-opacity: 0.6; }
+.heat-4 { fill-opacity: 0.8; }
+.heat-5 { fill-opacity: 1; }
+.heat-range, .gantt-range { display: flex; justify-content: space-between; margin: var(--sp-1) 0 0; font-size: var(--fs-xs); color: var(--text-muted); }
+
+/* Lifecycle Gantt: state is a pattern as well as a color. */
+.gantt-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); margin: 0 0 var(--sp-3); padding: 0; list-style: none; }
+.gantt-legend li { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.gantt-rows { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.gantt-row { display: grid; grid-template-columns: minmax(8rem, 14rem) minmax(0, 1fr); gap: var(--sp-3); align-items: center; }
+.gantt-label { min-width: 0; overflow-wrap: anywhere; }
+.gantt-track { position: relative; height: 1.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.gantt-bar { position: absolute; top: 0; bottom: 0; min-width: 2px; }
+.gantt-swatch { display: inline-block; width: 18px; height: 12px; border: 1px solid var(--border-strong); border-radius: 3px; }
+.gantt-ready { background: var(--chart-2); }
+.gantt-loading { background: repeating-linear-gradient(45deg, var(--chart-1) 0 4px, var(--surface-1) 4px 8px); }
+.gantt-sleeping { background: repeating-linear-gradient(90deg, var(--chart-8) 0 2px, var(--surface-1) 2px 5px); }
+.gantt-crashed { background: repeating-linear-gradient(-45deg, var(--danger) 0 3px, var(--surface-1) 3px 6px); }
+
+@media (max-width: 1023px) {
+  .obs-grid, .obs-engine-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 639px) {
+  .gantt-row { grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+  .obs-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
+  .heat-grid { height: 10rem; }
+}
