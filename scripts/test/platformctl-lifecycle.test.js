@@ -307,6 +307,30 @@ test("stop --models without --yes in a non-TTY refuses before anything is stoppe
   assert.equal(fake.calls.filter((call) => call[0] === "stopScope").length, 1);
 });
 
+test("--legacy-args maps the old launcher words: lan is --lan, no profile is core, and all is the full profile", async (t) => {
+  const world = makeWorld(t);
+  installFakePackages(world.root);
+  const fake = await serveFake(t, world);
+  for (const args of [["lan"], []]) {
+    await world.cli(["start", ...args, "--legacy-args", "--no-browser"]);
+  }
+  assert.deepEqual(fake.calls.map((call) => [call[1], call[2].runtimeOverrides]), [
+    ["core", { "listeners.admin.lan": true }],
+    ["core", {}],
+  ]);
+  // The full profile includes the MCP server, which the fake root has not built.
+  const full = await world.cli(["start", "all", "lan", "--legacy-args", "--no-browser"]);
+  assert.equal(full.code, EXIT.PREFLIGHT);
+  assert.match(full.err, /MCP server is not built/);
+});
+
+test("stop --legacy-args with no word stops core, like the old stop-platform.cmd", async (t) => {
+  const world = makeWorld(t);
+  const fake = await serveFake(t, world);
+  assert.equal((await world.cli(["stop", "--legacy-args"])).code, 0);
+  assert.deepEqual(fake.calls.filter((call) => call[0] === "stopScope").map((call) => call[1].scope), ["core"]);
+});
+
 test("stop without --models says that model containers keep running; named ids stop in reverse order", async (t) => {
   const world = makeWorld(t);
   const fake = await serveFake(t, world);

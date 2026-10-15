@@ -10,8 +10,8 @@
 // The request is signed with the entry trust token
 // (<AI_ROOT>/.gateway-trust.json; AI_ROOT defaults to the platform root this
 // script lives in), so it keeps working once loopback callers without
-// credentials are viewers (PUB-5). stop-service-entry.cmd signs the entry
-// shutdown with it until OPS-8 replaces that script with `platform stop`.
+// credentials are viewers (PUB-5). The legacy stop scripts reach the entry
+// through `platform stop` now; this helper stays for operator scripts.
 //
 // It prints the JSON answer (never the token) unless --quiet, and exits 0 for
 // a 2xx answer, 1 for any other answer and 2 when no call could be made (bad

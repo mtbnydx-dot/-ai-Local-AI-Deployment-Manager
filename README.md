@@ -55,11 +55,12 @@ This is a local AI service control panel for high-end personal workstations and 
 ├─ install-tts-gateway.cmd # 用 uv 创建 TTS 网关 Python 3.12 环境
 ├─ update-platform.cmd     # 从 GitHub 安全 fast-forward 更新并复测
 ├─ test-all.cmd            # 运行核心测试
-├─ start-service-entry.cmd # 启动本机模式
-├─ start-platform-mcp.cmd  # 启动 loopback MCP 服务
+├─ platform.cmd            # 平台命令行（setup / start / stop / status / doctor）
+├─ start-service-entry.cmd # 旧名：platform start core
+├─ start-platform-mcp.cmd  # 旧名：platform start platform-mcp
 ├─ start-tts-platform.cmd  # 启动 TTS 网关与语音 worker
 ├─ status-tts-platform.cmd # 查看 TTS 端口与引擎状态
-└─ start-service-entry-lan.cmd # 启动局域网模式
+└─ start-service-entry-lan.cmd # 旧名：platform start core --lan
 ```
 
 Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口字段见 [Qwen3.8-27B 本地加速与管理平台指南](docs/qwen38-acceleration-guide.md)。
@@ -69,7 +70,7 @@ Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口
 ### 系统要求
 
 - Windows 10/11。
-- Node.js `^22.22.2 || ^24.15.0 || >=26`：22.x 需 22.22.2 及以上，24.x 需 24.15.0 及以上，或 26 及更新版本（23、25 不在支持范围内）。search-gateway 依赖的 jsdom 要求这个范围；`start-service-entry.cmd` 启动前会检查版本，不符合时直接退出。
+- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`：22.x 需 22.22.2 及以上，24.x 需 24.15.0 及以上，或 26 及更新版本（23、25 不在支持范围内）。search-gateway 依赖的 jsdom 要求这个范围；`platform` 启动前会检查版本，不符合时直接退出。
 - Docker Desktop。
 - NVIDIA 驱动；运行 vLLM/llama.cpp CUDA 容器时需要可用 GPU。
 - Chrome 或 Edge；前端 smoke test 默认使用本机 Chrome，也可以设置 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` 使用 Edge。
@@ -81,15 +82,13 @@ Qwen3.8-27B 的 vLLM MTP、SGLang DSpark 实测结果、管理器预设和接口
 在发布目录根部运行：
 
 ```cmd
-install-all.cmd
-install-download-cli.cmd
-install-tts-gateway.cmd
-start-service-entry.cmd
-start-platform-mcp.cmd
-start-tts-platform.cmd -GatewayOnly -NoBrowser
+install-all
+install-download-cli
+platform setup
+platform start
 ```
 
-`install-download-cli.cmd` 创建独立的 `venvs\download-cli` 环境（需要 Python 3.10+），管理器用其中的 `hf` 和 `modelscope` 命令下载模型；不使用 TTS 时可跳过 `install-tts-gateway.cmd` 和最后一行。也可以用 `start-platform.cmd` 一次启动入口和两个管理器，见下文“统一启动”。运行测试属于开发步骤，见“测试”一节。
+`install-download-cli` 创建独立的 `venvs\download-cli` 环境（需要 Python 3.10+），管理器用其中的 `hf` 和 `modelscope` 命令下载模型。`platform setup` 是首次运行向导（检查环境、选择模型目录、选择引擎和访问范围），`platform start` 启动入口和两个管理器；`platform start full` 再加 TTS、MCP 和搜索网关。需要 TTS 时另外运行 `install-tts-gateway.cmd`。完整步骤见 `docs/getting-started.md`，日常操作见 `docs/service-runbook.md`。运行测试属于开发步骤，见“测试”一节。
 
 模型、缓存和运行数据默认保存在发布目录内。需要放到其它磁盘时，请在启动前设置 `AI_ROOT`；也可以分别用 `VLLM_MODELS_ROOT`、`LLAMA_MODELS_ROOT`、`HF_HOME` 和 `TTS_RUNTIME_ROOT` 覆盖模型、缓存或 TTS 运行目录。
 
@@ -102,14 +101,10 @@ http://127.0.0.1:5176/
 如果要让局域网其它设备访问：
 
 ```cmd
-start-service-entry-lan.cmd
+platform start --lan
 ```
 
-或：
-
-```cmd
-start-service-entry.cmd lan
-```
+旧脚本 `start-service-entry-lan.cmd`、`start-service-entry.cmd lan` 仍可用，等同于 `platform start core --lan`。管理器默认只监听 `127.0.0.1`；需要局域网直连管理器时在 `platform.json` 里设置 `managers.bindHost`。
 
 ### 常用接口地址
 
@@ -207,12 +202,12 @@ start-service-entry.cmd lan
 
 ### 统一启动、公网模式与运维（2026-09-03）
 
-- `start-platform.cmd [core|all] [lan]` 一次拉起入口 + 两个管理器（`all` 再加 TTS、MCP、搜索网关，搜索网关需要 Docker Desktop）；`stop-platform.cmd [all]`、`status-platform.cmd` 对应停止与查看。各组件原有脚本保留。入口首页出现离线组件横幅（可一键拉起管理器，可选桌面通知）。
-  - 结束时按所选档位逐个组件显示 `OK` / `FAILED` / `SKIPPED`（`core` 只列 5176-5178），有失败时退出码为 1；双击运行时会在结尾暂停，设置 `PLATFORM_NO_PAUSE=1` 可关闭。
-  - `all` 默认只启动 TTS 网关、不打开浏览器；四个语音 worker 会加载大模型，需要时先设置 `TTS_START_WORKERS=1`。`stop-platform.cmd all` 会同时停止由启动脚本拉起的 worker（`tts-platform\scripts\stop_workers.ps1`，只结束能核对身份的进程）。
-  - Docker Desktop 尚在启动时，搜索网关一步最多等待 `PLATFORM_DOCKER_WAIT_SECONDS` 秒（默认 90，每 3 秒检查一次）；Docker Desktop 未运行时立即给出提示。
-  - `start-service-entry.cmd` 用 `GET /gateway/health` 判断入口就绪，任一组件未通过健康检查时退出码为 1 且不打开浏览器；`SERVICE_ENTRY_PORT`、`VLLM_MANAGER_PORT`、`LLAMA_MANAGER_PORT` 可改端口。管理器单独启动脚本同样沿用已设置的端口变量，旧日志轮转为 `.1`–`.3` 而不是删除。`stop-service-entry.cmd` 先请求正常关闭，10 秒后仍未退出时只强制结束 PID 文件中核对为 `node … server.js` 的进程。
-- 进程退出留痕：入口与两个管理器把 Ctrl+C / 控制台关闭 / 未捕获异常写入各自 `logs/process-exit.log`，并走正常关机流程；`start-service-entry.cmd` 现在把 stdout/stderr 落到 `logs/manager.out.log`（保留 3 份轮转）。
+- `platform start [core|full] [--lan]` 一次拉起入口 + 两个管理器（`full` 再加 TTS、MCP、搜索网关，搜索网关需要 Docker Desktop）；`platform stop`、`platform status`、`platform doctor` 对应停止、查看和自检。旧脚本 `start-platform.cmd [core|all] [lan]`、`stop-platform.cmd [all]`、`status-platform.cmd`、`start-service-entry.cmd`、`stop-service-entry.cmd` 等保留原名和参数，现在只是转调 `platform.cmd` 的短脚本。入口首页出现离线组件横幅（可一键拉起管理器，可选桌面通知）。
+  - `platform start` 结束时按组件显示状态与地址，有失败时退出码非 0；`start-platform.cmd` 双击运行时仍会在结尾暂停，设置 `PLATFORM_NO_PAUSE=1` 可关闭。
+  - `full` 默认只启动 TTS 网关；四个语音 worker 会加载大模型，需要时先设置 `TTS_START_WORKERS=1`（或运行 `start-tts-platform.cmd`）。
+  - Docker Desktop 尚在启动时最多等待 `docker.waitTimeoutSec` 秒（默认 120；旧环境变量 `PLATFORM_DOCKER_WAIT_SECONDS` 仍被识别）。
+  - `start-service-entry.cmd` 现在不再向管理器注入 `0.0.0.0`：管理器按 `managers.bindHost`（默认 `127.0.0.1`）监听，浏览器以配对状态打开；`SERVICE_ENTRY_NO_BROWSER=1` 保持浏览器关闭。`SERVICE_ENTRY_PORT`、`VLLM_MANAGER_PORT`、`LLAMA_MANAGER_PORT` 仍可改端口。
+- 进程退出留痕：入口与两个管理器把 Ctrl+C / 控制台关闭 / 未捕获异常写入各自 `logs/process-exit.log`，并走正常关机流程；组件的 stdout/stderr 落到各自的 `logs/`（保留轮转副本）。
 - 公网模式：入口首页顶部显示“本机 / 局域网 / 公网”模式与上线检查清单（API Key 强制、管理端点仅本机、CORS、HTTPS、Caddy 路径、防火墙）。`deploy/public/Caddyfile` 与 `deploy/cloudflare/` 只指向 PUBLIC 监听（5186），`scripts/setup-public.ps1` 把模板渲染到 `config/public/`（`-Apply` 才通过 `platform config set` 写设置）。鉴权失败风暴防护：`SERVICE_ENTRY_AUTH_FAIL_LIMIT`（默认 20 次/`SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS`=60 秒）后封禁 `SERVICE_ENTRY_AUTH_BAN_SECONDS`（600）秒，本机直连永不封禁。
 - 统一入口新增：`GET /gateway/status`（需 Key：可用模型、在线组件、本 Key 限流余量与 TTS 配额）、`/gateway/search/*`（搜索网关）、`/gateway/mcp`（MCP，只读）、`GET /api/keys` 与首页“密钥总览”（两管理器客户端 Key 的状态 / 最近使用 / 到期）。搜索网关启动时若入口监听局域网则自动以入口 auto 路由为上游。
 - 守护与备份：GPU 温度守护新增功耗墙提示（`powerGuardEnabled` 默认跟随温度守护，`powerLimitPct` 默认 97）；`scripts/backup-platform.ps1` 每日快照计费库 / TTS 历史库 / JSON 账本到 `backups/`（`-Register` 注册计划任务，`-KeepDays` 默认 14）；`scripts/nightly-e2e.ps1` 跑 test-all + 在线探活并写 `artifacts/nightly/`（`-Register` 每日 03:00）。
@@ -330,17 +325,18 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 ├─ install-tts-gateway.cmd # Create the Python 3.12 TTS gateway environment with uv
 ├─ update-platform.cmd     # Safe fast-forward GitHub update and validation
 ├─ test-all.cmd            # Run core tests
-├─ start-service-entry.cmd # Start local-only mode
-├─ start-platform-mcp.cmd  # Start the loopback MCP service
+├─ platform.cmd            # Platform CLI (setup / start / stop / status / doctor)
+├─ start-service-entry.cmd # Legacy name: platform start core
+├─ start-platform-mcp.cmd  # Legacy name: platform start platform-mcp
 ├─ start-tts-platform.cmd  # Start the TTS gateway and workers
 ├─ status-tts-platform.cmd # Inspect TTS listeners and engines
-└─ start-service-entry-lan.cmd # Start LAN mode
+└─ start-service-entry-lan.cmd # Legacy name: platform start core --lan
 ```
 
 ### Requirements
 
 - Windows 10/11.
-- Node.js `^22.22.2 || ^24.15.0 || >=26`: 22.x from 22.22.2, 24.x from 24.15.0, or 26 and later (23 and 25 are not supported). The search gateway's jsdom dependency requires this range; `start-service-entry.cmd` checks the version and exits before starting anything when it does not match.
+- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`: 22.x from 22.22.2, 24.x from 24.15.0, or 26 and later (23 and 25 are not supported). The search gateway's jsdom dependency requires this range; `platform` checks the version and exits before starting anything when it does not match.
 - Docker Desktop.
 - NVIDIA driver and GPU access for vLLM/llama.cpp CUDA containers.
 - Chrome or Edge. The frontend smoke test uses local Chrome by default; set `PLAYWRIGHT_BROWSER_CHANNEL=msedge` to use Edge.
@@ -352,15 +348,13 @@ powershell -ExecutionPolicy Bypass -File .\build-github-release.ps1
 From the release root:
 
 ```cmd
-install-all.cmd
-install-download-cli.cmd
-install-tts-gateway.cmd
-start-service-entry.cmd
-start-platform-mcp.cmd
-start-tts-platform.cmd -GatewayOnly -NoBrowser
+install-all
+install-download-cli
+platform setup
+platform start
 ```
 
-`install-download-cli.cmd` creates the separate `venvs\download-cli` environment (Python 3.10+ required) whose `hf` and `modelscope` commands the managers use for model downloads. Skip `install-tts-gateway.cmd` and the last line if you do not use TTS. `start-platform.cmd` starts the entry and both managers in one step; see "Unified Startup" below. Running the tests is a developer step; see "Testing".
+`install-download-cli` creates the separate `venvs\download-cli` environment (Python 3.10+ required) whose `hf` and `modelscope` commands the managers use for model downloads. `platform setup` is the first-run wizard (checks the environment, picks model folders, engines and who may connect), and `platform start` starts the entry and both managers; `platform start full` adds TTS, MCP and the search gateway. Run `install-tts-gateway.cmd` as well when you use TTS. The full walk-through is `docs/getting-started.md`; daily operation is `docs/service-runbook.md`. Running the tests is a developer step; see "Testing".
 
 Models, caches, and runtime data are stored inside the release directory by default. Set `AI_ROOT` before startup to use another drive, or override `VLLM_MODELS_ROOT`, `LLAMA_MODELS_ROOT`, `HF_HOME`, and `TTS_RUNTIME_ROOT` individually.
 
@@ -373,14 +367,10 @@ http://127.0.0.1:5176/
 To serve other LAN devices:
 
 ```cmd
-start-service-entry-lan.cmd
+platform start --lan
 ```
 
-or:
-
-```cmd
-start-service-entry.cmd lan
-```
+The old scripts `start-service-entry-lan.cmd` and `start-service-entry.cmd lan` still work and mean `platform start core --lan`. The managers bind `127.0.0.1` by default; set `managers.bindHost` in `platform.json` to reach them directly over the LAN.
 
 ### Common Endpoint URLs
 
@@ -469,12 +459,12 @@ Behavior changes as of 2026-08-22: a stalled download (no byte growth for 5 minu
 
 ### Unified Startup, Public Mode And Operations (2026-09-03)
 
-- `start-platform.cmd [core|all] [lan]` starts the entry and both managers (`all` adds TTS, MCP and the Docker-based search gateway); `stop-platform.cmd [all]` and `status-platform.cmd` stop and inspect. The entry page shows an offline-component banner with one-click manager start and optional desktop notifications.
-  - At the end it prints `OK` / `FAILED` / `SKIPPED` for each component of the chosen profile (`core` lists only 5176-5178) and exits 1 when something failed. A double-clicked run pauses at the end; `PLATFORM_NO_PAUSE=1` turns that off.
-  - `all` starts only the TTS gateway and opens no browser. The four voice workers load large models, so set `TTS_START_WORKERS=1` first when you want them. `stop-platform.cmd all` also stops the workers that the launcher started (`tts-platform\scripts\stop_workers.ps1`, which ends only processes whose identity it can verify).
-  - While Docker Desktop is still starting, the search-gateway step waits up to `PLATFORM_DOCKER_WAIT_SECONDS` (default 90, checked every 3 s). When Docker Desktop is not running at all, it prints the hint at once.
-  - `start-service-entry.cmd` treats the entry as ready when `GET /gateway/health` answers, and exits 1 without opening a browser when any component fails its health check. `SERVICE_ENTRY_PORT`, `VLLM_MANAGER_PORT` and `LLAMA_MANAGER_PORT` change the ports. The per-manager start scripts also keep an already-set port variable, and they rotate old logs to `.1`–`.3` instead of deleting them. `stop-service-entry.cmd` asks each process to shut down, and after 10 s force-stops only a PID from the pid file that it verifies as `node … server.js`.
-- Exit traces: the entry and both managers write Ctrl+C / console close / uncaught errors to their own `logs/process-exit.log` and run the normal shutdown; `start-service-entry.cmd` now redirects stdout/stderr to `logs/manager.out.log` with three rotated copies.
+- `platform start [core|full] [--lan]` starts the entry and both managers (`full` adds TTS, MCP and the Docker-based search gateway); `platform stop`, `platform status` and `platform doctor` stop, inspect and self-check. The old scripts `start-platform.cmd [core|all] [lan]`, `stop-platform.cmd [all]`, `status-platform.cmd`, `start-service-entry.cmd`, `stop-service-entry.cmd` and the rest keep their names and arguments, and are now short shims that call `platform.cmd`. The entry page shows an offline-component banner with one-click manager start and optional desktop notifications.
+  - `platform start` ends with each component's state and address and exits non-zero when something failed. A double-clicked `start-platform.cmd` still pauses at the end; `PLATFORM_NO_PAUSE=1` turns that off.
+  - `full` starts only the TTS gateway. The four voice workers load large models, so set `TTS_START_WORKERS=1` first when you want them (or run `start-tts-platform.cmd`).
+  - While Docker Desktop is still starting, the CLI waits up to `docker.waitTimeoutSec` (default 120); the old `PLATFORM_DOCKER_WAIT_SECONDS` variable is still understood.
+  - `start-service-entry.cmd` no longer injects `0.0.0.0` into the managers: they bind `managers.bindHost` (default `127.0.0.1`), and the browser opens paired. `SERVICE_ENTRY_NO_BROWSER=1` keeps the browser closed. `SERVICE_ENTRY_PORT`, `VLLM_MANAGER_PORT` and `LLAMA_MANAGER_PORT` still change the ports.
+- Exit traces: the entry and both managers write Ctrl+C / console close / uncaught errors to their own `logs/process-exit.log` and run the normal shutdown; component stdout/stderr go to their own `logs/` with rotated copies.
 - Public mode: the entry page shows the local / LAN / public exposure and a go-live checklist (API key enforced, management local-only, CORS, HTTPS, Caddy paths, firewall). `deploy/public/Caddyfile` and `deploy/cloudflare/` target only the PUBLIC listener (5186); `scripts/setup-public.ps1` renders the templates into `config/public/` (settings change only with `-Apply`, through `platform config set`). Auth-failure guard: `SERVICE_ENTRY_AUTH_FAIL_LIMIT` (20) failures within `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` (60) ban the source for `SERVICE_ENTRY_AUTH_BAN_SECONDS` (600); local direct callers are never banned.
 - New entry surfaces: `GET /gateway/status` (key required: models, online components, this key's rate-limit remaining and TTS quota), `/gateway/search/*` (search gateway), `/gateway/mcp` (read-only MCP), `GET /api/keys` and the "密钥总览" section (client keys across both managers with state, last use and expiry). The search gateway picks the entry auto route as upstream when the entry listens on the LAN.
 - Guards and backups: the GPU temperature guard gained a power-wall hint (`powerGuardEnabled` follows the temperature guard, `powerLimitPct` default 97); `scripts/backup-platform.ps1` snapshots the billing database, TTS history and JSON ledgers into `backups/` daily (`-Register`, `-KeepDays` 14); `scripts/nightly-e2e.ps1` runs test-all plus live probes into `artifacts/nightly/` (`-Register` at 03:00).
