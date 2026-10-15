@@ -212,6 +212,22 @@ const legacyKeyForwarder = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.c
 });
 const readGatewayOnlyMode = core.createGatewayOnlyModeReader({ aiRoot: DEFAULT_AI_ROOT });
 const gatewayTrustHealth = () => ({ gatewayTrust: { version: core.GATEWAY_TRUST_VERSION, mode: readGatewayOnlyMode() } });
+// 04 §6.7 (TEL-6): direct-ingress rows and legacy audit actions are reported to
+// the entry through the signed internal client, spooled while the entry is away.
+// Smoke runs must not call the entry this computer runs.
+const telemetryIngest = process.env.AI_FRONTEND_SMOKE === "1" ? null : core.telemetry.createTelemetryIngestClient({
+  managerId: CONFIG.managerId,
+  internalClient: core.internalAuth.createInternalClient({
+    managerId: CONFIG.managerId,
+    root: DEFAULT_AI_ROOT,
+    baseUrl: process.env.AI_BILLING_BASE_URL || undefined,
+  }),
+  spoolFile: path.join(__dirname, "logs", "telemetry-spool.jsonl"),
+});
+const reportDirectRequest = telemetryIngest
+  ? (entry) => telemetryIngest.report("requests", [core.telemetry.directRequestRow(entry, { managerId: CONFIG.managerId })])
+  : null;
+const reportAuditAccess = telemetryIngest ? (entry) => telemetryIngest.report("audit-access", [entry]) : null;
 const logDirectGatewayCall = (event) => {
   const more = event.suppressed ? ` (+${event.suppressed} more in the last minute)` : "";
   console.warn(`[gateway] direct_manager_gateway: ${event.kind} ${event.path} from ${event.remoteAddress}${more}; use the platform endpoint instead.`);
@@ -824,6 +840,7 @@ const serviceGatewayMiddleware = core.createServiceGatewayMiddleware({
   getGatewayOnlyMode: readGatewayOnlyMode,
   verifyAccessKey: legacyKeyForwarder ? legacyKeyForwarder.verifyAccessKey : null,
   onDirectGatewayCall: logDirectGatewayCall,
+  reportDirectRequest,
 });
 
 const { managerSecurityGuard } = core.createManagerSecurityGuard({
@@ -1975,6 +1992,7 @@ core.registerAuditRoutes(app, {
   listAuditExports,
   getAuditMarkdownPath,
   exportOpenWebuiAudit,
+  onAccess: reportAuditAccess,
 });
 
 core.registerToolsRoutes(app, {

@@ -1746,7 +1746,10 @@ function buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource
   };
 }
 
-function attachServiceGatewayAccessLog(req, res, kind, appendAccessLog) {
+// reportDirect(entry): direct-ingress rows (no valid v2 hop) are also sent to
+// the entry (04 §6.7, TEL-6). A request the entry routed is recorded by the
+// entry, so it is never reported here as well.
+function attachServiceGatewayAccessLog(req, res, kind, appendAccessLog, reportDirect = null) {
   const startedAt = Date.now();
   const authSource = serviceApiKeySource(req.headers || {});
   const origin = resolveAccessLogOrigin(req);
@@ -1764,6 +1767,14 @@ function attachServiceGatewayAccessLog(req, res, kind, appendAccessLog) {
     const entry = buildServiceGatewayAccessLogEntry(req, res, kind, startedAt, authSource, { terminalState, origin, firstByteMs });
     const pending = appendAccessLog(entry);
     if (pending && typeof pending.catch === "function") pending.catch(() => {});
+    if (typeof reportDirect === "function" && !entry.viaEntry) {
+      try {
+        const reported = reportDirect(entry);
+        if (reported && typeof reported.catch === "function") reported.catch(() => {});
+      } catch {
+        // Telemetry reporting never reaches the response path.
+      }
+    }
   });
 }
 
@@ -1953,6 +1964,8 @@ function createServiceGatewayMiddleware(options = {}) {
     verifyAccessKey = null,
     backstopConcurrency = process.env.MANAGER_GATEWAY_BACKSTOP_CONCURRENCY,
     onDirectGatewayCall = null,
+    // (accessLogEntry) -> void; reports a direct-ingress row to the entry (TEL-6).
+    reportDirectRequest = null,
   } = options;
   const backstopSettings = {
     maxConcurrentRequests: clampServiceGatewayNumber(backstopConcurrency, 1, 256, DEFAULT_GATEWAY_BACKSTOP_CONCURRENCY),
@@ -2095,7 +2108,7 @@ function createServiceGatewayMiddleware(options = {}) {
       const settings = await getServiceExposureSettings();
       const kind = getServiceGatewayKind(req, supportedKinds);
       if (!kind) return next();
-      attachServiceGatewayAccessLog(req, res, kind, appendAccessLog);
+      attachServiceGatewayAccessLog(req, res, kind, appendAccessLog, reportDirectRequest);
       const origin = resolveGatewayRequestOrigin(req);
       if (origin.viaGateway && origin.trusted && origin.version === 2) {
         return await admitEntryHop(req, res, next, kind, settings, origin);

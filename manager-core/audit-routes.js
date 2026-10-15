@@ -39,7 +39,32 @@ function registerAuditRoutes(app, deps = {}) {
     getAuditMarkdownPath,
     exportOpenWebuiAudit,
     streamMarkdownFile = defaultStreamMarkdownFile,
+    // 04 §16.4 (TEL-6): each audit action is also reported to the entry's
+    // audit_access_log. Optional and never allowed to affect an answer.
+    onAccess = null,
   } = deps;
+
+  function access(req, action, outcome, extra = {}) {
+    if (typeof onAccess !== "function") return;
+    try {
+      const headers = req?.headers || {};
+      const pending = onAccess({
+        at: Date.now(),
+        source: managerName || "manager",
+        actor: "legacy-local",
+        session: null,
+        clientIp: String(req?.socket?.remoteAddress || req?.ip || "").slice(0, 64) || null,
+        userAgent: String(headers["user-agent"] || "").slice(0, 256) || null,
+        action,
+        outcome,
+        target: extra.target ?? null,
+        detail: extra.detail ?? null,
+      });
+      if (pending && typeof pending.catch === "function") pending.catch(() => {});
+    } catch {
+      // Reporting never changes what the audit route answers.
+    }
+  }
 
   app.get("/api/audit/status", async (_req, res) => {
     try {
@@ -61,8 +86,12 @@ function registerAuditRoutes(app, deps = {}) {
   app.post("/api/audit/login", async (req, res) => {
     try {
       const valid = await verifyAuditPassword(String(req.body?.password || ""));
-      if (!valid) return res.status(401).json({ error: INVALID_PASSWORD });
+      if (!valid) {
+        access(req, "login_failed", "denied");
+        return res.status(401).json({ error: INVALID_PASSWORD });
+      }
       const session = createAuditSession();
+      access(req, "login_ok", "ok");
       return res.json({ ok: true, ...session });
     } catch (error) {
       return res.status(500).json({ error: error.message });
@@ -72,41 +101,59 @@ function registerAuditRoutes(app, deps = {}) {
   app.post("/api/audit/logout", async (req, res) => {
     const auth = getAuditAuth(req);
     if (auth.token) destroyAuditSession(auth.token);
+    access(req, "logout", "ok");
     res.json({ ok: true });
   });
 
   app.get("/api/audit/exports", async (req, res) => {
     const auth = requireAuditAuth(req);
-    if (!auth.ok) return res.status(auth.status).json({ error: auth.message });
+    if (!auth.ok) {
+      access(req, "list_exports", "denied");
+      return res.status(auth.status).json({ error: auth.message });
+    }
     try {
-      return res.json({ ok: true, auditRoot, exports: await listAuditExports() });
+      const exportsList = await listAuditExports();
+      access(req, "list_exports", "ok");
+      return res.json({ ok: true, auditRoot, exports: exportsList });
     } catch (error) {
+      access(req, "list_exports", "error");
       return res.status(500).json({ error: error.message });
     }
   });
 
   app.get("/api/audit/exports/:auditId/markdown", async (req, res) => {
     const auth = requireAuditAuth(req);
-    if (!auth.ok) return res.status(auth.status).json({ error: auth.message });
+    const target = String(req.params?.auditId || "").slice(0, 128);
+    if (!auth.ok) {
+      access(req, "view_markdown", "denied", { target });
+      return res.status(auth.status).json({ error: auth.message });
+    }
     try {
       const file = await getAuditMarkdownPath(req.params.auditId);
+      access(req, "view_markdown", "ok", { target });
       return streamMarkdownFile(file, res);
     } catch (error) {
+      access(req, "view_markdown", "error", { target });
       return res.status(error.status || 500).json({ error: error.message });
     }
   });
 
   app.post("/api/audit/export", async (req, res) => {
     const auth = requireAuditAuth(req);
-    if (!auth.ok) return res.status(auth.status).json({ error: auth.message });
+    if (!auth.ok) {
+      access(req, "export_manual", "denied");
+      return res.status(auth.status).json({ error: auth.message });
+    }
     try {
       const audit = await exportOpenWebuiAudit("manual", {
         manager: managerName,
         requestedBy: "local-admin",
         note: String(req.body?.note || ""),
       });
+      access(req, "export_manual", "ok", { target: String(audit?.auditId || audit?.id || "").slice(0, 128) || null });
       return res.json(audit);
     } catch (error) {
+      access(req, "export_manual", "error");
       return res.status(500).json({ error: error.message });
     }
   });
