@@ -1417,3 +1417,28 @@ dialog::backdrop {
 .trend-legend li { display: inline-flex; align-items: center; gap: var(--sp-1); }
 .trend-swatch { flex: none; width: 12px; height: 12px; min-width: 12px; border-radius: 2px; }
 .badge-wrap { max-width: 100%; border-radius: var(--radius-control); white-space: normal; overflow-wrap: anywhere; }
+
+/* ---- Models: discover, download plan sheet and downloads (CON-15) ---- */
+.family-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); align-items: start; }
+.family-card { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4); min-width: 0; }
+.family-variants, .download-list, .download-files, .plan-probe, .plan-warnings { margin: 0; padding: 0; list-style: none; }
+.family-variants, .download-list, .download-files { display: flex; flex-direction: column; gap: var(--sp-2); }
+.plan-probe { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); }
+.plan-warnings { display: flex; flex-direction: column; gap: var(--sp-2); }
+.family-variant { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-2) 0; border-top: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
+.family-variant:first-child { border-top: 0; }
+.family-variant-actions { flex: none; }
+.plan-choices { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; margin: 0; padding: 0; border: 0; }
+.plan-choice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); cursor: pointer; }
+.plan-choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.plan-bars { display: flex; flex-direction: column; gap: var(--sp-3); }
+.download-job { min-width: 0; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); }
+.download-job[data-focus="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.download-job[draggable="true"] { cursor: grab; }
+.download-job.is-dragging { opacity: 0.5; }
+.failure-detail { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
+.spark { flex: none; color: var(--chart-1); }
+.downloads-summary { gap: var(--sp-4); }
+@media (max-width: 639px) {
+  .family-variant-actions { width: 100%; }
+}
