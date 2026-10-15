@@ -48,14 +48,17 @@ async function startTelemetry(t) {
   return { base, root, store, dbFile };
 }
 
-async function mountEntry(t, { root, store }) {
+async function mountEntry(t, { root, store }, overrides = {}) {
   const { entry } = await loadEntry();
+  const { telemetry, ...rest } = overrides;
+  const logger = quietLogger();
   const ctx = entry.createRouteContext({
-    logger: quietLogger(),
+    logger,
     aiRoot: root,
     rootDir: path.join(root, "service-entry"),
     managers: [{ id: "vllm", port: 1 }, { id: "llama", port: 2 }],
-    telemetry: { store },
+    telemetry: { store, ...telemetry },
+    ...rest,
   });
   const notifications = [];
   ctx.bus.subscribe((envelope) => notifications.push(envelope), { types: ["notification"] });
@@ -64,7 +67,7 @@ async function mountEntry(t, { root, store }) {
   assert.deepEqual(routes.failed, []);
   const port = await serveEntry(t, entry, routes);
   owners.set(port, await ownerSession(entry, port));
-  return { entry, ctx, port, notifications };
+  return { entry, ctx, port, notifications, logger };
 }
 
 async function finished(port, runId) {
