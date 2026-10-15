@@ -15,7 +15,7 @@ const { createLlamaDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildLlamaGpuPlan, normalizeLlamaSplitMode, suggestTensorSplit } = require("./lib/gpu-plan");
 const { buildLlamaMemoryEstimate } = require("./lib/memory-estimate");
 const { createLlamaRuntimeCommandBuilder } = require("./lib/runtime-command");
-const { createLlamaRemoteModelService } = require("./lib/remote-models");
+const { createLlamaRemoteModelService, LLAMA_REMOTE_PRECISION_ORDER, LLAMA_REMOTE_QUANT_KEYWORDS } = require("./lib/remote-models");
 const { createCacheHitTracker } = require("./lib/cache-hit-tracker");
 const {
   firstExisting,
@@ -1089,6 +1089,41 @@ app.post("/opencode/v1/chat/completions", openAiGatewayHandlers.handleChatComple
 app.post("/serve/v1/rerank", openAiGatewayHandlers.handleRerank);
 app.post("/serve/v1/classify", openAiGatewayHandlers.handleClassify);
 
+// 03 §15 (HUB-13a, HUB-13b): with hub.downloadsOwner "hub" the download,
+// catalogue, settings, login and storage routes forward to the entry through
+// the signed shim client, and the job routes and the SSE `jobs` snapshot also
+// carry this manager's hub downloads. The shim registers before
+// core.registerModelRoutes and core.registerJobRoutes, so it wins over their
+// legacy handlers; the local job routes keep every other job. The frontend
+// smoke tests start real managers and must not call the entry this computer
+// runs.
+const hubShim = readHubConfig(DEFAULT_AI_ROOT).downloadsOwner === "hub" && process.env.AI_FRONTEND_SMOKE !== "1"
+  ? registerHubShimRoutes(app, {
+    managerId: "llama",
+    client: createHubClient({
+      baseUrl: `http://127.0.0.1:${core.resolveEntryPort({ aiRoot: DEFAULT_AI_ROOT })}`,
+      managerId: "llama",
+      aiRoot: DEFAULT_AI_ROOT,
+    }),
+    isLocalRequest,
+    listLocalJobs: () => Array.from(jobs.values()).reverse(),
+    getLocalJob: (id) => jobs.get(id),
+    beforeReadJobs: () => healDownloadQueue(),
+    summarizeJob: core.summarizeJob,
+    onSnapshot: () => broadcastJobsSnapshot(),
+    hasListeners: () => sseHub.clientCount() > 0,
+    listModels: listModelCollectionsWithRuntimeCompatibility,
+    precheckDownload: precheckDownloadRequest,
+    remote: remoteModelService,
+    precisionOrder: LLAMA_REMOTE_PRECISION_ORDER,
+    quantKeywords: LLAMA_REMOTE_QUANT_KEYWORDS,
+    deleteLocalModel: false,
+  })
+  : null;
+function broadcastJobsSnapshot() {
+  sseHub.broadcastThrottled("jobs", () => (hubShim ? hubShim.jobsSnapshot() : Array.from(jobs.values()).reverse().map(core.summarizeJob)), 700);
+}
+
 core.registerModelStorageRoutes(app, { storage: modelStorage, migration: modelMigration, isLocalRequest, publicDir: path.join(__dirname, "..", "shared-public") });
 
 core.registerModelRoutes(app, {
@@ -1112,7 +1147,9 @@ core.registerModelRoutes(app, {
 });
 
 // 下载前预检：远端 config.json + 文件清单过一遍能力矩阵 / 运行时清单 / GPU。
-async function precheckDownloadRequest(query = {}) {
+// `hub.estimate` (03 §15, HUB-13b) replaces the direct Hugging Face file listing
+// with the hub's (mirror-aware) one when the shim forwards this route.
+async function precheckDownloadRequest(query = {}, hub = {}) {
   const source = cleanDownloadSource(query.source || "huggingface");
   const reference = normalizeDownloadModelReference(query.model, query.precision);
   if (!reference.model) {
@@ -1121,9 +1158,11 @@ async function precheckDownloadRequest(query = {}) {
     throw error;
   }
   const [estimate, remoteConfig, gpu] = await Promise.all([
-    source === "huggingface"
-      ? remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision).catch((error) => ({ error: error.message }))
-      : Promise.resolve(null),
+    hub && hub.estimate !== undefined
+      ? Promise.resolve(hub.estimate)
+      : source === "huggingface"
+        ? remoteModelService.getHuggingFaceDownloadEstimate(reference.model, reference.precision).catch((error) => ({ error: error.message }))
+        : Promise.resolve(null),
     remoteModelService.fetchRemoteModelConfig(reference.model, source).catch((error) => ({ ok: false, reason: error.message })),
     getGpuStatus().catch(() => null),
   ]);
@@ -1256,31 +1295,6 @@ function isPortInUseOnHost(port) {
 // 任务快照改推送：下载/启动进行中不再靠 1 秒一次的 /api/jobs 轮询。
 const sseHub = core.createSseHub();
 app.get("/api/events", (req, res) => sseHub.handleRequest(req, res));
-// 03 §15 (HUB-13a): with hub.downloadsOwner "hub" the job routes and the SSE
-// `jobs` snapshot also carry this manager's hub downloads, read from the
-// entry through the signed shim client. The routes are registered before the
-// local job routes, which keep every other job. The frontend smoke tests start
-// real managers and must not call the entry this computer runs.
-const hubShim = readHubConfig(DEFAULT_AI_ROOT).downloadsOwner === "hub" && process.env.AI_FRONTEND_SMOKE !== "1"
-  ? registerHubShimRoutes(app, {
-    managerId: "llama",
-    client: createHubClient({
-      baseUrl: `http://127.0.0.1:${core.resolveEntryPort({ aiRoot: DEFAULT_AI_ROOT })}`,
-      managerId: "llama",
-      aiRoot: DEFAULT_AI_ROOT,
-    }),
-    isLocalRequest,
-    listLocalJobs: () => Array.from(jobs.values()).reverse(),
-    getLocalJob: (id) => jobs.get(id),
-    beforeReadJobs: () => healDownloadQueue(),
-    summarizeJob: core.summarizeJob,
-    onSnapshot: () => broadcastJobsSnapshot(),
-    hasListeners: () => sseHub.clientCount() > 0,
-  })
-  : null;
-function broadcastJobsSnapshot() {
-  sseHub.broadcastThrottled("jobs", () => (hubShim ? hubShim.jobsSnapshot() : Array.from(jobs.values()).reverse().map(core.summarizeJob)), 700);
-}
 
 core.registerJobRoutes(app, {
   jobs,
