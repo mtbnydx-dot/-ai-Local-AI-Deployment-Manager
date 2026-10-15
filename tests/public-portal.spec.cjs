@@ -1042,7 +1042,7 @@ test.describe("my key (PUB-17)", () => {
     const day = page.getByTestId("quota-day");
     await expect(day.locator(".pace")).toHaveAttribute("data-pace", "ahead");
     await expect(day).toContainText("1,500,000 of 2,000,000 tokens used (75%)");
-    await expect(day).toContainText(/At this pace, runs out ~\d/);
+    await expect(day).toContainText(/At this pace, runs out ~(\d|[A-Z][a-z]{2} \d)/);
     await expect(day).toContainText("Resets");
     const markerX = Number(await day.locator(".pace-marker").getAttribute("x1"));
     const midnight = new Date();
