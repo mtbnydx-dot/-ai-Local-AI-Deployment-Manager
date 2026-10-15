@@ -216,6 +216,20 @@ function pushUniqueModelAlias(result, seen, alias) {
   result.push(value);
 }
 
+// Short versioned aliases a client may send for a served model ("Qwen3.6-27B"
+// also answers to "qwen3.6"). The stems are alias data, not a branch per model
+// family (D5): a lower-case name stem, an optional letter before the version
+// (DeepSeek's "r") and the alias prefix.
+const VERSIONED_ALIAS_STEMS = Object.freeze([
+  { stem: "qwen", infix: "", prefix: "qwen" },
+  { stem: "llama", infix: "", prefix: "llama" },
+  { stem: "gemma", infix: "", prefix: "gemma" },
+  { stem: "deepseek", infix: "r", prefix: "deepseek-r" },
+].map((item) => Object.freeze({
+  prefix: item.prefix,
+  regex: new RegExp(`(?:^|[^a-z0-9])${item.stem}[-_\\s]?${item.infix ? `${item.infix}[-_\\s]?(\\d+)` : "(\\d+(?:\\.\\d+)?)"}`, "i"),
+})));
+
 function deriveOpenAiGatewayModelAliases(modelId) {
   const id = String(typeof modelId === "string" ? modelId : modelId?.id || "").trim();
   if (!id) return [];
@@ -226,14 +240,10 @@ function deriveOpenAiGatewayModelAliases(modelId) {
   const candidates = [id, bare].filter(Boolean);
   for (const candidate of candidates) {
     const text = candidate.toLowerCase();
-    const qwen = text.match(/(?:^|[^a-z0-9])qwen[-_\s]?(\d+(?:\.\d+)?)/i);
-    if (qwen) pushUniqueModelAlias(result, seen, `qwen${qwen[1]}`);
-    const llama = text.match(/(?:^|[^a-z0-9])llama[-_\s]?(\d+(?:\.\d+)?)/i);
-    if (llama) pushUniqueModelAlias(result, seen, `llama${llama[1]}`);
-    const gemma = text.match(/(?:^|[^a-z0-9])gemma[-_\s]?(\d+(?:\.\d+)?)/i);
-    if (gemma) pushUniqueModelAlias(result, seen, `gemma${gemma[1]}`);
-    const deepseek = text.match(/(?:^|[^a-z0-9])deepseek[-_\s]?r[-_\s]?(\d+)/i);
-    if (deepseek) pushUniqueModelAlias(result, seen, `deepseek-r${deepseek[1]}`);
+    for (const { regex, prefix } of VERSIONED_ALIAS_STEMS) {
+      const version = text.match(regex);
+      if (version) pushUniqueModelAlias(result, seen, `${prefix}${version[1]}`);
+    }
   }
   return result;
 }

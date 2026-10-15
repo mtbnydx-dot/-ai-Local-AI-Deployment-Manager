@@ -242,6 +242,21 @@ test("parsersByQuant: ModelOpt/NVFP4 weights use qwen3_xml for the tool parser, 
   assert.equal(fp8.toolCallParser.value, "qwen3_coder");
 });
 
+// Migrated from vllm-manager/test/model-capabilities.test.js (MOD-21): parsers
+// follow the declared checkpoint and its quantization, never a name.
+test("parsers by checkpoint format: Qwen3.6 NVFP4 is qwen3_xml, Qwen3.8 NVFP4 keeps qwen3_coder, Qwen3-8B is not Qwen3.8", () => {
+  const resolve = (identity, method) => signatures.resolveParsersSync({ identity, quant: { method } }, "vllm", { knowledge, descriptor: NO_PARSERS });
+  const qwen36 = resolve({ modelType: null, architectures: ["Qwen3_5MoeForConditionalGeneration"] }, "modelopt");
+  assert.deepEqual([qwen36.familyId, qwen36.toolCallParser.value, qwen36.reasoningParser.value], ["qwen3.5-3.6", "qwen3_xml", "qwen3"]);
+  const qwen36Fp8 = resolve({ modelType: null, architectures: ["Qwen3_5ForConditionalGeneration"] }, "fp8");
+  assert.equal(qwen36Fp8.toolCallParser.value, "qwen3_coder");
+  const qwen38 = resolve({ modelType: null, architectures: ["Qwen3_8ForConditionalGeneration"] }, "modelopt");
+  assert.deepEqual([qwen38.familyId, qwen38.toolCallParser.value], ["qwen3.8", "qwen3_coder"]);
+  const qwen3EightB = signatures.resolveParsersSync({ identity: { modelType: null, architectures: ["Qwen3ForCausalLM"], displayName: "Qwen3-8B" }, quant: { method: "fp8" } }, "vllm", { knowledge, descriptor: NO_PARSERS });
+  assert.notEqual(qwen3EightB.familyId, "qwen3.8");
+  assert.notEqual(qwen3EightB.toolCallParser.value, "qwen3_coder", "Qwen3-8B must not be mistaken for the Qwen3.8 family");
+});
+
 test("parser lists come from a stub engines.runtimeFacts.get: introspected choices first, then probe registries", async () => {
   const calls = [];
   const stored = facts({ tool: ["hermes", "qwen3_coder"], registries: { toolParsers: ["only-registry"], reasoningParsers: ["qwen3", "deepseek_r1"] } });

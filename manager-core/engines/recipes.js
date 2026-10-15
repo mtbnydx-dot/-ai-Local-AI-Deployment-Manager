@@ -54,6 +54,8 @@ const SCORES = Object.freeze({ contentDigest: 80, familyId: 50, capabilityIds: 5
 // hand-made preset keeps its argv.
 const LEGACY_DOCKER_SLOTS = Object.freeze(["restart", "hfCacheMount", "modelMountReadOnly", "cacheMount"]);
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+// The DSpark speculative mode (a draft-model method, not a model family).
+const DSPARK_MODE = "dspark";
 
 // The legacy SGLang base preset's fixed text (vllm-manager resolveVllmRuntimePreset).
 const SGLANG_BASE = Object.freeze({
@@ -956,7 +958,7 @@ function sglangBasePreset(state, ctx, mode, handlesDspark) {
   const thinkingOff = value("reasoning.defaultEnabled") === false;
   let unsupportedReason = "";
   if (!SGLANG_BASE.speculativeModes.includes(mode)) unsupportedReason = `SGLang 档当前只开放 off 或 dspark，不会静默转换 ${mode}。`;
-  else if (mode === "dspark" && !handlesDspark) unsupportedReason = SGLANG_BASE.dsparkReason;
+  else if (mode === DSPARK_MODE && !handlesDspark) unsupportedReason = SGLANG_BASE.dsparkReason;
   return {
     id: SGLANG_BASE.id,
     label: SGLANG_BASE.label,
@@ -987,7 +989,7 @@ function sglangBasePreset(state, ctx, mode, handlesDspark) {
     disablePrefillCudaGraph: value("sglang.disablePrefillCudaGraph") === true,
     mmFeatureTransport: textOf(value("sglang.mmFeatureTransport")),
     speculativeConfig: null,
-    speculativeAlgorithm: mode === "dspark" ? "DSPARK" : "",
+    speculativeAlgorithm: mode === DSPARK_MODE ? "DSPARK" : "",
     draftModel: "",
     dsparkBlockSize: Math.min(32, Math.max(1, positiveInt(value("sglang.dsparkBlockSize"), 7))),
     draftModelQuantization: "unquant",
@@ -1062,7 +1064,7 @@ function presetFromRecipe(recipeId, legacyOpts = {}, launch = {}, ctx = {}) {
   const mode = String(ctx.speculativeMode || state.user["speculative.method"] || "off");
   const rule = draftRule(recipe);
   let draft = { path: "", ok: true, reason: "" };
-  if (rule && mode === "dspark" && typeof ctx.resolveDraftModel === "function") {
+  if (rule && mode === DSPARK_MODE && typeof ctx.resolveDraftModel === "function") {
     draft = ctx.resolveDraftModel(textOf(state.user["speculative.draftModel"]), { architecture: rule.architecture, defaultDir: rule.defaultDir }) || draft;
   }
   state.placeholders["draft.path"] = draft.path || "";

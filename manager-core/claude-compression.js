@@ -414,7 +414,8 @@ function isErrorLine(line) {
 }
 
 function isPathConfigLine(line) {
-  return /[A-Za-z]:\\|\/[\w.-]+\/[\w.-]+|https?:\/\/|127\.0\.0\.1|localhost|:\d{2,5}\b|--[a-z0-9-]+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+|Qwen|DeepSeek|Claude|OpenWebUI|vLLM|llama|Docker|GPU|NVFP4|FP8|GGUF/i.test(line);
+  // A model is recognised by a parameter-size suffix ("-27B"), not by a family name (D5).
+  return /[A-Za-z]:\\|\/[\w.-]+\/[\w.-]+|https?:\/\/|127\.0\.0\.1|localhost|:\d{2,5}\b|--[a-z0-9-]+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+|\b[A-Za-z][\w.]*-\d+(?:\.\d+)?B\b|Claude|OpenWebUI|vLLM|llama|Docker|GPU|NVFP4|FP8|GGUF/i.test(line);
 }
 
 function isCommandLine(line) {

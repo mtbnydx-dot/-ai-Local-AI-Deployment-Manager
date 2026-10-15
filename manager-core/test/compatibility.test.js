@@ -264,6 +264,19 @@ test("Muse Glimmer is blocked on every engine, whatever VLLM_ALLOW_MUSE_GLIMMER 
   }
 });
 
+// Migrated from vllm-manager/test/model-capabilities.test.js (MOD-21): the
+// Muse identity rule now lives in the families data, not in a name predicate.
+test("Muse identity prefers the declared config and falls back to the repository name with any separator", () => {
+  const nameOnly = (displayName) => synth({ identity: { modelType: null, textModelType: null, architectures: [], ggufArchitecture: null, transformersVersion: null, displayName } });
+  for (const name of ["meta-models-Muse-Glimmer-30B-GGUF", "Muse_Glimmer-30B", "Muse Glimmer 30B"]) {
+    const row = rowOf(rowsFor(nameOnly(name), { env: { VLLM_ALLOW_MUSE_GLIMMER: "1" } }), "vllm");
+    assert.equal(row.verdict, "block", name);
+    assert.equal(reasonOf(row, "family_blocked").level, "block", name);
+  }
+  const declaredLlama = synth({ identity: { modelType: "llama", textModelType: null, architectures: ["LlamaForCausalLM"], ggufArchitecture: null, transformersVersion: "4.51.0", displayName: "Muse-Glimmer-30B" } });
+  assert.equal(reasonOf(rowOf(rowsFor(declaredLlama), "vllm"), "family_blocked"), undefined);
+});
+
 test("a safetensors card is blocked on llama.cpp and a GGUF card on SGLang, from the descriptor's artifactFormats", () => {
   const rows = rowsFor(synth());
   assert.equal(rowOf(rows, "llamacpp").verdict, "block");

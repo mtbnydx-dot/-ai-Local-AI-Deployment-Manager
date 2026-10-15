@@ -13,7 +13,7 @@ const { createHfAuthService } = require("../manager-core/hf-auth");
 const { createLlamaStartRuntimeRequest } = require("./lib/launch-request");
 const { createLlamaDefaultLaunchProfiles } = require("./lib/default-profiles");
 const { buildLlamaGpuPlan, normalizeLlamaSplitMode, suggestTensorSplit } = require("./lib/gpu-plan");
-const { buildLlamaMemoryEstimate } = require("./lib/memory-estimate");
+const { buildLlamaMemoryEstimate, familySamplingRecommendation } = require("./lib/memory-estimate");
 const { createLlamaRuntimeCommandBuilder } = require("./lib/runtime-command");
 const { createLlamaRemoteModelService, LLAMA_REMOTE_PRECISION_ORDER, LLAMA_REMOTE_QUANT_KEYWORDS } = require("./lib/remote-models");
 const { createCacheHitTracker } = require("./lib/cache-hit-tracker");
@@ -83,7 +83,6 @@ const LLAMA_RUNTIME_RELEASE = core.getRuntimeRelease("llama") || {};
 const LLAMA_MUSE_RUNTIME_RELEASE = core.getRuntimeRelease("llamaMuse") || {};
 const DEFAULT_LLAMA_IMAGE = process.env.LLAMA_IMAGE_DIGEST || core.runtimeImageReference("llama") || "ghcr.io/ggml-org/llama.cpp@sha256:3e847b7b8d616411d4dd8f3d1a79caf02cc7a66b6b92c8212156ea73835bf7f3";
 const DEFAULT_LLAMA_IMAGE_BUILD = Number(LLAMA_RUNTIME_RELEASE.build || 10630);
-const MUSE_GLIMMER_MINIMUM_LLAMA_REVISION = LLAMA_MUSE_RUNTIME_RELEASE.revision || "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0";
 const DEFAULT_MUSE_LLAMA_IMAGE = LLAMA_MUSE_RUNTIME_RELEASE.image || "local/llama.cpp:server-cuda-muse-62bf73d";
 const MANAGER_LABEL_KEY = "ai.manager";
 const MANAGER_ENGINE_LABEL_KEY = "ai.manager.engine";
@@ -426,19 +425,9 @@ async function getLlamaArchitectureRuntimeCompatibility(architecture) {
 
 function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {}) {
   const normalized = String(architecture || "").trim().toLowerCase();
-  if (normalized === "muse-glimmer") {
-    return {
-      architecture: normalized,
-      status: "unsupported",
-      supported: false,
-      runtime,
-      capability: { id: "muse-glimmer", matchedBy: "gguf" },
-      minimumRevision: MUSE_GLIMMER_MINIMUM_LLAMA_REVISION,
-      message: "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。现有模型与镜像只保留作回滚，不会由此检查删除。",
-    };
-  }
   // The families v2 knowledge (manager-core/data/knowledge/families.json) owns
-  // per-architecture llama.cpp requirements; the GGUF general.architecture is
+  // per-architecture llama.cpp requirements, a retired family (support
+  // "blocked", Muse Glimmer today) included; the GGUF general.architecture is
   // the declared identity (match.ggufArchitectures) here, so no name
   // heuristics are involved.
   const capability = core.models.compatibility.ggufArchitectureSupport(normalized);
@@ -451,7 +440,8 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
       supported: false,
       runtime,
       capability: summary,
-      message: llamaCapabilities.unsupportedReason || `${capability.label} 不支持在 llama.cpp 上启动。`,
+      // Blocking never deletes: the weights and images stay where they are.
+      message: `${llamaCapabilities.unsupportedReason || `${capability.label} 不支持在 llama.cpp 上启动。`}现有模型与镜像不会由此检查删除。`,
     };
   }
   const minimumBuild = Number(llamaCapabilities?.minimumBuild || 0);
@@ -2226,7 +2216,9 @@ function safeProfileId(value) {
 }
 
 function isLikelyMultimodalModel(value) {
-  return /(?:\bvl\b|vision|visual|multimodal|multi-modal|mmproj|llava|bakllava|moondream|internvl|qwen\d*(?:\.\d+)?-vl|qwen-vl|gemma-3|omni|audio)/i.test(String(value || ""));
+  // Generic modality words only; a GGUF projector file next to the model is
+  // the evidence that counts (inventory.mmproj), never a model family name.
+  return /(?:\bvl\b|vision|visual|multimodal|multi-modal|mmproj|llava|bakllava|moondream|internvl|omni|audio)/i.test(String(value || ""));
 }
 
 function applySafeGgufRuntimeRecommendations(recommendations, selectedGguf, inventory = {}) {
@@ -2294,14 +2286,9 @@ async function checkModelCompatibility(input = {}) {
     findings.push(finding("warn", "远程仓库可能不是 GGUF", "llama.cpp 远程加载最适合 *-GGUF 仓库；普通 HF safetensors 仓库通常不能直接跑。"));
   }
 
-  if (/^(meta-llama|google|mistralai)\//i.test(model) && !process.env.HF_TOKEN) {
+  if (likelyGatedRepo(model) && !process.env.HF_TOKEN) {
     findings.push(finding("warn", "可能需要授权", "这类模型经常需要 Hugging Face token 或提前接受 license。"));
   }
-  if (/qwen/i.test(model)) {
-    findings.push(finding("ok", "Qwen / Claude 桥", "建议 Claude 桥使用工具桥接模式；reasoning-format 可先用 deepseek，若客户端显示异常再切 none。"));
-    recommendations.reasoningFormat = "deepseek";
-  }
-  if (/deepseek/i.test(model)) recommendations.reasoningFormat = "deepseek";
   if (/uncensored|abliterated|abliteration/i.test(model)) {
     findings.push(finding("info", "去审查/abliterated 标记", "建议配合审计导出和本机访问控制使用。"));
   }
@@ -2337,11 +2324,8 @@ async function checkModelCompatibility(input = {}) {
       recommendations.draftModel = ggufSelection.inventory.drafts[0].path;
       recommendations.speculativeMode = "draft-dflash";
     }
-    if (String(selectedGguf.architecture || "").toLowerCase() === "muse-glimmer") {
-      recommendations.temperature = 1;
-      recommendations.topP = 0.95;
-      recommendations.topK = 64;
-    }
+    // The family's sampling defaults (families data), by the declared GGUF architecture.
+    Object.assign(recommendations, familySamplingRecommendation(selectedGguf.architecture));
   }
   if (isLikelyMultimodalModel(model) || ggufSelection?.inventory?.mmproj?.length) {
     const projector = ggufSelection?.inventory?.mmproj?.[0]
@@ -2403,10 +2387,20 @@ function finding(severity, title, detail) {
   return core.compatibilityFinding(severity, title, detail);
 }
 
-function inferLlamaReasoningFormat(model) {
-  const text = String(model || "").toLowerCase();
-  if (text.includes("qwen") || text.includes("deepseek")) return "deepseek";
-  return "none";
+// llama.cpp reads the reasoning format from the model's own chat template
+// ("auto", the engine descriptor's autoParsers value); no model name is
+// consulted (02 section 8.5).
+function inferLlamaReasoningFormat(_model) {
+  return engineRegistry.get("llamacpp")?.capabilities?.autoParsers?.reasoning || "auto";
+}
+
+// Hugging Face organisations whose repositories usually need a token or an
+// accepted licence: a download hint about the publisher, not a model family.
+const GATED_HF_ORGS = new Set(["meta-llama", "google", "mistralai"]);
+
+function likelyGatedRepo(model) {
+  const org = /^([^/\\]+)\//.exec(String(model || ""))?.[1];
+  return Boolean(org) && GATED_HF_ORGS.has(org.toLowerCase());
 }
 
 async function summarizeRuntimeLogs(options = {}) {

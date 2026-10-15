@@ -41,7 +41,6 @@ function baseNameOf(repoId) {
 
 function engineSupport(precision, options = {}) {
   const vllmRuntime = options.vllmRuntime || getRuntimeRelease("vllm") || {};
-  const flashNext = Boolean(options.flashNext);
   const support = { vllm: "ok", sglang: "ok", llama: "block", notes: [] };
   switch (precision) {
     case "GGUF":
@@ -62,7 +61,11 @@ function engineSupport(precision, options = {}) {
       support.notes.push(`${precision} 是其它推理框架的格式，本平台两个引擎都不能加载。`);
       break;
     case "NVFP4":
-      support.notes.push(flashNext ? "NVFP4 + Flash-Next 走本地 SGLang SM120 镜像。" : "NVFP4 需要 Blackwell 以上 GPU；vLLM 用 modelopt_fp4 加载。");
+      // A family that pins its own SGLang image for these weights says so in
+      // the families data (sglang.image); no model name is matched here.
+      support.notes.push(options.sglangImage
+        ? `${options.familyLabel} 的 NVFP4 权重走本地 SGLang 专用镜像。`
+        : "NVFP4 需要 Blackwell 以上 GPU；vLLM 用 modelopt_fp4 加载。");
       break;
     case "MXFP4":
       support.notes.push("MXFP4 主要用于 gpt-oss；其他模型请确认引擎版本支持。");
@@ -83,8 +86,13 @@ function groupPrecisionVariants(model, candidates, options = {}) {
     if (baseNameOf(id) !== base) continue;
     seen.add(id.toLowerCase());
     const precision = detectPrecision(id);
-    const flashNext = matrix.matchesCapabilityEntry("qwen3.8-flash-next", { model: id });
-    const support = engineSupport(precision, { ...options, flashNext });
+    // The first family (in matrix order) that matches this repository and pins
+    // an SGLang image for NVFP4 weights; a lookup, so it counts no name hit.
+    const pinned = matrix.loadModelCapabilityMatrix().entries.find((entry) => (
+      matrix.resolveEngineCapabilities(entry, "sglang", { quantMethod: "nvfp4", model: id })?.image
+      && matrix.matchesCapabilityEntry(entry.id, { model: id })
+    ));
+    const support = engineSupport(precision, { ...options, sglangImage: Boolean(pinned), familyLabel: pinned?.label || "" });
     variants.push({
       id,
       precision,

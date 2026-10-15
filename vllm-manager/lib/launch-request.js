@@ -207,9 +207,9 @@ function createVllmStartRuntimeRequest(deps) {
           .join("；");
         const error = new Error(`模型启动前校验失败：${details || "模型文件或运行时不兼容"}`);
         error.status = 422;
-        if (blockingFindings.some((item) => /Muse Glimmer/i.test(`${item.title || ""} ${item.detail || ""}`))) {
-          error.code = "muse_glimmer_vllm_unsupported";
-        }
+        // A finding of a family the runtime refuses carries its job error code.
+        const coded = blockingFindings.find((item) => item.errorCode);
+        if (coded) error.code = coded.errorCode;
         error.findings = modelCompatibility?.findings || [];
         throw error;
       }

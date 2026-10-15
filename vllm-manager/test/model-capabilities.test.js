@@ -3,9 +3,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+// The vLLM capability module reads the families data through the capability
+// matrix shim (MOD-21): every decision below comes from a family entry (its
+// parsers, speculative default, quant rules and support), none from a name
+// predicate. The same expectations at the knowledge level live in
+// manager-core/test/compatibility.test.js and template-signatures.test.js.
 const {
   inspectPackagedMtpTensors,
-  isMuseGlimmerModel,
   normalizeSpeculativeMode,
   resolveSpeculativeConfig,
   resolveVllmModelCapabilities,
@@ -123,13 +127,43 @@ test("Muse Glimmer is blocked before vLLM container startup", () => {
   assert.equal(fromModelName.unsupportedCode, "muse_glimmer");
 });
 
-test("Muse identity prefers config and only falls back to normalized Windows/repository names", () => {
-  assert.equal(isMuseGlimmerModel({
-    model_type: "llama",
-    architectures: ["LlamaForCausalLM"],
-  }, "D:\\AI\\models\\Muse-Glimmer-30B"), false);
-  assert.equal(isMuseGlimmerModel({}, "D:\\AI\\models\\meta-models-Muse-Glimmer-30B-GGUF"), true);
-  assert.equal(isMuseGlimmerModel({}, "meta-models/Muse_Glimmer-30B"), true);
+test("Muse identity prefers config and only falls back to Windows/repository names", () => {
+  const declaredLlama = resolveVllmModelCapabilities({
+    model: "D:\\AI\\models\\Muse-Glimmer-30B",
+    config: { model_type: "llama", architectures: ["LlamaForCausalLM"] },
+  });
+  assert.notEqual(declaredLlama.unsupportedCode, "muse_glimmer");
+  assert.equal(declaredLlama.isMuseGlimmer, false);
+  for (const model of ["D:\\AI\\models\\meta-models-Muse-Glimmer-30B-GGUF", "meta-models/Muse_Glimmer-30B"]) {
+    const byName = resolveVllmModelCapabilities({ model, config: {} });
+    assert.equal(byName.unsupportedCode, "muse_glimmer", model);
+    assert.equal(byName.capabilityEntry.heuristic, true, model);
+  }
+});
+
+test("auto MTP follows the family's vLLM speculative default, and explicit MTP stays an opt-in", () => {
+  const flashNext = {
+    architectures: ["Qwen4ExpForCausalLM"],
+    model_type: "qwen4_exp",
+    mtp_num_hidden_layers: 1,
+    quantization_config: { quant_method: "fp8" },
+  };
+  withMtpIndex((localPath) => {
+    // The Flash-Next family keeps vLLM MTP off in auto mode even with packaged tensors.
+    assert.equal(resolveSpeculativeConfig({ model: "org/Qwen3.8-Flash-Next-FP8", config: flashNext, localPath, requestedMode: "auto" }), null);
+    const capabilities = resolveVllmModelCapabilities({ model: "org/Qwen3.8-Flash-Next-FP8", config: flashNext, localPath, speculativeMode: "auto" });
+    assert.equal(capabilities.speculativeDecision.method, "off");
+    assert.match(capabilities.speculativeDecision.reason, /vLLM MTP stays off/);
+    assert.deepEqual(resolveSpeculativeConfig({ model: "org/Qwen3.8-Flash-Next-FP8", config: flashNext, localPath, requestedMode: "mtp" }), {
+      method: "mtp",
+      num_speculative_tokens: 1,
+    });
+    // A checkpoint no family knows uses its packaged MTP tensors in auto mode.
+    assert.deepEqual(resolveSpeculativeConfig({ model: "org/Unknown-7B", config: { model_type: "made_up", mtp_num_hidden_layers: 1 }, localPath, requestedMode: "auto" }), {
+      method: "mtp",
+      num_speculative_tokens: 1,
+    });
+  });
 });
 
 test("Muse retirement policy cannot be bypassed by the legacy environment flag", () => {

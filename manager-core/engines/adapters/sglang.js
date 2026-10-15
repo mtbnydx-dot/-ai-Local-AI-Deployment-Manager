@@ -28,6 +28,9 @@ const { emitCatalogArgs, skipSpeculativeWhen } = require("./_catalog-emit");
 
 const ENGINE_ID = "sglang";
 const ENTRYPOINT = "sglang";
+// DSpark is a speculative-decoding method (the --speculative-algorithm value),
+// not a model family.
+const DSPARK_ALGORITHM = "DSPARK";
 const CONTAINER_PORT = "8000";
 const DEFAULT_CHUNKED_PREFILL_SIZE = 8192;
 const DEFAULT_DSPARK_BLOCK_SIZE = 7;
@@ -132,9 +135,9 @@ function buildCommand(plan, ctx, effects) {
   }
   // Only DSPARK has a generic emission today; recipes that pin another
   // speculative method (NEXTN/FR-Spec) carry it in their fixed args.
-  if (String(values["speculative.method"] || "").toUpperCase() === "DSPARK") {
+  if (String(values["speculative.method"] || "").toUpperCase() === DSPARK_ALGORITHM) {
     args.push(
-      "--speculative-algorithm", "DSPARK",
+      "--speculative-algorithm", DSPARK_ALGORITHM,
       "--speculative-draft-model-path", ctx.toContainerPath(values["speculative.draftModel"]),
       "--speculative-dspark-block-size", String(values["sglang.dsparkBlockSize"] || DEFAULT_DSPARK_BLOCK_SIZE),
       "--speculative-draft-model-quantization", values["sglang.draftModelQuantization"] || "unquant"

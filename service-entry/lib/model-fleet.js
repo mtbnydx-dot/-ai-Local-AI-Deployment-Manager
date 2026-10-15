@@ -109,7 +109,10 @@ function describeModelCapabilities(model = {}) {
   if (reranker) inferred.push("rerank");
   if (/audio|whisper|speech|asr|transcri|tts|wav2vec|clap/.test(name)) inferred.push("audio");
   if (/(qwen|functionary|command-r|tool)/.test(name) && !/(embed|rerank)/.test(name)) inferred.push("tools");
-  if (!inferred.length || /text|chat|instruct|coder|code|llm|qwen|llama|gemma|mistral|deepseek/.test(name)) inferred.unshift("text");
+  // Text is the default: only an embedding, rerank or audio-only name drops it
+  // (vision and tool-calling models chat too). No family name is consulted.
+  const nonChat = inferred.some((capability) => capability === "embedding" || capability === "rerank" || capability === "audio");
+  if (!nonChat || /text|chat|instruct|coder|code|llm/.test(name)) inferred.unshift("text");
   return { capabilities: orderedCapabilities(inferred), source: "name-inferred" };
 }
 

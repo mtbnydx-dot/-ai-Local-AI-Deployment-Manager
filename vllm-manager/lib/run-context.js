@@ -79,17 +79,17 @@ function modelCompatibilityError(compatibility) {
   const issues = (compatibility.findings || []).filter((item) => item.severity === "fail");
   const detail = issues.map((item) => `${item.title}: ${item.detail}`).join("；") || "模型文件或运行时不兼容";
   const error = new Error(`模型启动前校验失败：${detail}`);
-  error.code = issues.some((item) => /Muse Glimmer/i.test(`${item.title || ""} ${item.detail || ""}`))
-    ? "muse_glimmer_vllm_unsupported"
-    : "model_compatibility_failed";
+  // A finding of a family the runtime refuses carries its job error code.
+  error.code = issues.find((item) => item.errorCode)?.errorCode || "model_compatibility_failed";
   error.findings = compatibility.findings || [];
   return { error, detail, issues: issues.map((item) => item.detail) };
 }
 
 function presetUnsupportedError(preset) {
   const error = new Error(preset.unsupportedReason);
-  error.code = preset.capabilities?.unsupportedCode === "muse_glimmer"
-    ? "muse_glimmer_vllm_unsupported"
+  // isMuseGlimmer is the capability scan's blocked-family verdict (legacy name).
+  error.code = preset.capabilities?.isMuseGlimmer && preset.capabilities.unsupportedCode
+    ? `${preset.capabilities.unsupportedCode}_vllm_unsupported`
     : "runtime_preset_unsupported";
   error.findings = [{
     severity: "fail",

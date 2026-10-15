@@ -38,7 +38,7 @@ test("vLLM launch request builds serve job metadata and run options", async () =
       compatibilityCalls.push(input);
       return compatibilityOk
         ? { ok: true, findings: [] }
-        : { ok: false, findings: [{ severity: "fail", title: "Muse Glimmer 尚不支持 vLLM", detail: "Use llama-manager to launch the local GGUF variant instead." }] };
+        : { ok: false, findings: [{ severity: "fail", title: "Muse Glimmer 尚不支持 vLLM", detail: "Use llama-manager to launch the local GGUF variant instead.", errorCode: "muse_glimmer_vllm_unsupported" }] };
     },
     getLanAddress: () => "192.168.1.27",
     createJob: (type, title, meta) => ({ id: "serve-1", type, title, meta }),

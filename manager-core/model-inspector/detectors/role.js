@@ -24,7 +24,9 @@ const { fileEntry, filesOfKind } = require("./inventory");
 
 const ROLES = Object.freeze(["main", "draft", "mtp-head", "mmproj", "adapter", "embedding", "reranker", "tooling-only"]);
 const RUNNABLE_ROLES = Object.freeze(["main", "embedding", "reranker"]);
-const DRAFT_ARCHITECTURE = /(Draft|Eagle\d?|DFlash|DSpark|Medusa)(Model|ForCausalLM)?$/i;
+// Speculative-decoding draft heads, named by their method (not a model family).
+const DRAFT_METHODS = Object.freeze(["Draft", "Eagle\\d?", "DFlash", "DSpark", "Medusa"]);
+const DRAFT_ARCHITECTURE = new RegExp(`(${DRAFT_METHODS.join("|")})(Model|ForCausalLM)?$`, "i");
 const DRAFT_CONFIG_KEYS = Object.freeze(["dflash_config", "eagle_config", "num_target_layers"]);
 const EMBEDDING_ARCHITECTURE = /(EmbeddingModel|^BertModel|^XLMRobertaModel)$/;
 const PROJECTOR_ARCHITECTURE = /Projector/i;

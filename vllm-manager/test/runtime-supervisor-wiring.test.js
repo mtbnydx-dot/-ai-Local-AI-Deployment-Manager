@@ -275,7 +275,7 @@ test("the model and preset preflight fail the job before Docker is touched", asy
   const { host, calls } = fakeHost({ present: true });
   const jobs = fakeJobs();
   const { factory } = runContextFactory({
-    checkModelCompatibility: async () => ({ ok: false, findings: [{ severity: "fail", title: "Muse Glimmer 尚不支持 vLLM", detail: "Use llama-manager." }] }),
+    checkModelCompatibility: async () => ({ ok: false, findings: [{ severity: "fail", title: "Muse Glimmer 尚不支持 vLLM", detail: "Use llama-manager.", errorCode: "muse_glimmer_vllm_unsupported" }] }),
   });
   const supervisor = supervisorFor(host, jobs);
   const job = jobs.create();

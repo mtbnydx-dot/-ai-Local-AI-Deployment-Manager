@@ -13,8 +13,8 @@ const path = require("node:path");
 // expiry that has not passed. A new branch fails here, and so does a stale or
 // expired entry.
 //
-// 02 MOD-21 appends its name-inference patterns to PATTERNS and its scopes to
-// SCOPES; it adds allowlist entries only with a reason and an expiry.
+// 02 MOD-21 appended its name-inference tokens (FAMILY_TOKENS) and the entry
+// and shared browser scopes to SCOPES; the allowlist holds no entry for them.
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const ALLOWLIST_FILE = path.join(__dirname, "fixtures", "family-branch-allowlist.json");
@@ -32,15 +32,50 @@ const PATTERNS = [
   "supportsB10630",
 ].map((id) => ({ id, regex: new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g") }));
 
+// 02 MOD-21: the model-family tokens of name inference (02-models §20). Each is
+// a case-insensitive regex source, and the allowlist names it by that source.
+// A token is a hit only where code decides on a model name: inside a regex
+// literal or a new RegExp(...) source string, and inside a string literal that
+// is compared (an equality on either side, a case label, or the argument of
+// includes, startsWith, endsWith, indexOf, lastIndexOf, has, match or search).
+// The same word in a message, a label, a table key or a comment is not a hit.
+// 02 takes no allowlist entry for these tokens: model names are matched by the
+// families data (match.namePatterns), never by code.
+const FAMILY_TOKENS = [
+  "qwen\\d",
+  "deepseek",
+  "gemma",
+  "glm",
+  "kimi",
+  "mistral",
+  "llama3",
+  "gpt-oss",
+  "nemotron",
+  "muse",
+  "flash.?next",
+  "dspark",
+  "pennyroyal",
+].map((id) => ({ id, regex: new RegExp(id, "gi") }));
+
+const STRING_LITERAL = String.raw`"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|` + "`(?:\\\\.|[^`\\\\\\n])*`";
+// A slash that starts an expression (after an operator, a bracket, return or
+// an arrow) opens a regex literal; a slash after a value is a division.
+const REGEX_LITERAL = /(?:^|[=(,:[!&|?{};>]|\breturn|\btypeof)\s*(\/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*)/g;
+const COMPARED_STRING = new RegExp(String.raw`(?:[!=]==?\s*|\.(?:includes|startsWith|endsWith|indexOf|lastIndexOf|has|match|search)\(\s*|\bcase\s+|\bnew RegExp\(\s*)(${STRING_LITERAL})|(${STRING_LITERAL})\s*[!=]==?`, "g");
+
 // Where the guard looks: a directory scanned recursively (skipping
 // node_modules and the named subdirectories) or its own *.js files only,
-// minus the files that hold the legacy name tables by design.
+// minus the files that hold the legacy name tables by design. A scope marked
+// familyTokensOnly is scanned for FAMILY_TOKENS alone: the entry and the shared
+// browser scripts dispatch on manager ids ("vllm", "llama") by design.
 const SCOPES = [
   { dir: "manager-core", recursive: true, skipDirs: ["test"], exclude: ["manager-core/engines/legacy-aliases.js", "manager-core/engines/registry.js"] },
   { files: ["vllm-manager/server.js"] },
   { dir: "vllm-manager/lib" },
   { files: ["llama-manager/server.js"] },
   { dir: "llama-manager/lib" },
+  { dir: "service-entry/lib", recursive: true, familyTokensOnly: true },
+  { dir: "shared-public/js", recursive: true, familyTokensOnly: true, exclude: ["shared-public/js/lucide.min.js"] },
 ];
 
 const toPosix = (file) => file.split(path.sep).join("/");
@@ -59,30 +94,61 @@ function listJs(dir, { recursive = false, skipDirs = [], suffix = ".js" } = {}) 
   return out;
 }
 
-function scopeFiles() {
-  const files = new Set();
+// file -> true when only FAMILY_TOKENS apply to it.
+function scopeMap() {
+  const files = new Map();
   for (const scope of SCOPES) {
     const listed = scope.files || listJs(scope.dir, scope);
-    for (const file of listed) if (!(scope.exclude || []).includes(file)) files.add(toPosix(file));
+    for (const file of listed) {
+      if ((scope.exclude || []).includes(file)) continue;
+      const key = toPosix(file);
+      files.set(key, Boolean(scope.familyTokensOnly) && files.get(key) !== false);
+    }
   }
-  return [...files].sort();
+  return files;
+}
+
+function scopeFiles() {
+  return [...scopeMap().keys()].sort();
+}
+
+// The regex literals and compared string literals of one source text; comment
+// lines are skipped.
+function decidingLiterals(text) {
+  const literals = [];
+  for (const line of text.split("\n")) {
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
+    for (const match of line.matchAll(REGEX_LITERAL)) literals.push(match[1]);
+    for (const match of line.matchAll(COMPARED_STRING)) literals.push(match[1] || match[2]);
+  }
+  return literals;
 }
 
 // pattern id -> number of hits in one source text.
-function countHits(text) {
+function countHits(text, { familyTokensOnly = false } = {}) {
   const counts = new Map();
-  for (const pattern of PATTERNS) {
-    const count = (text.match(pattern.regex) || []).length;
-    if (count) counts.set(pattern.id, count);
+  if (!familyTokensOnly) {
+    for (const pattern of PATTERNS) {
+      const count = (text.match(pattern.regex) || []).length;
+      if (count) counts.set(pattern.id, count);
+    }
+  }
+  for (const literal of decidingLiterals(text)) {
+    for (const token of FAMILY_TOKENS) {
+      const count = (literal.match(token.regex) || []).length;
+      if (count) counts.set(token.id, (counts.get(token.id) || 0) + count);
+    }
   }
   return counts;
 }
 
 // "file\u0000pattern" -> number of hits.
 function scanHits(files) {
+  const scopes = scopeMap();
   const hits = new Map();
   for (const file of files) {
-    for (const [id, count] of countHits(fs.readFileSync(path.join(REPO_ROOT, file), "utf8"))) hits.set(`${file}\u0000${id}`, count);
+    const text = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+    for (const [id, count] of countHits(text, { familyTokensOnly: scopes.get(file) })) hits.set(`${file}\u0000${id}`, count);
   }
   return hits;
 }
@@ -97,9 +163,13 @@ function today() {
 
 test("the scope holds the managers and manager-core, and every scanned file exists", () => {
   const files = scopeFiles();
-  for (const file of ["vllm-manager/server.js", "llama-manager/server.js", "manager-core/engines/recipes.js", "manager-core/engines/adapters/sglang.js", "vllm-manager/lib/pennyroyal.js"]) {
+  for (const file of ["vllm-manager/server.js", "llama-manager/server.js", "manager-core/engines/recipes.js", "manager-core/engines/adapters/sglang.js", "vllm-manager/lib/pennyroyal.js", "service-entry/lib/model-fleet.js", "shared-public/js/i18n-common.js"]) {
     assert.ok(files.includes(file), file);
   }
+  assert.equal(files.includes("shared-public/js/lucide.min.js"), false);
+  const scopes = scopeMap();
+  assert.equal(scopes.get("service-entry/lib/model-fleet.js"), true);
+  assert.equal(scopes.get("vllm-manager/server.js"), false);
   assert.equal(files.some((file) => file.startsWith("manager-core/test/")), false);
   assert.equal(files.includes("manager-core/engines/legacy-aliases.js"), false);
   assert.equal(files.includes("manager-core/engines/registry.js"), false);
@@ -110,7 +180,7 @@ test("the allowlist is well formed: owner, reason and an unexpired expiry per fi
   assert.equal(allowlist.schemaVersion, 1);
   assert.ok(Array.isArray(allowlist.entries));
   const files = new Set(scopeFiles());
-  const patterns = new Set(PATTERNS.map((pattern) => pattern.id));
+  const patterns = new Set([...PATTERNS, ...FAMILY_TOKENS].map((pattern) => pattern.id));
   const seen = new Set();
   for (const entry of allowlist.entries) {
     const label = `${entry.file} ${entry.pattern}`;
@@ -174,6 +244,47 @@ test("each pattern finds the branches it stands for, and only those", () => {
   // An engine id looked up in a table, a config slot that names an image and
   // a comparison with a named constant are not hits.
   assert.equal(countHits("const image = { sglang: CONFIG.sglangImage }[engineId]; CONFIG.sglangFlashNextImage; if (engine === ENGINE) {}").size, 0);
+});
+
+test("02's family tokens have no allowlist entry: model names are matched by data, not code", () => {
+  const tokens = new Set(FAMILY_TOKENS.map((token) => token.id));
+  assert.deepEqual(readAllowlist().entries.filter((entry) => tokens.has(entry.pattern)).map((entry) => `${entry.file} ${entry.pattern}`), []);
+});
+
+test("each family token finds name inference in regex literals and compared strings, and only there", () => {
+  const quote = String.fromCharCode(34);
+  const q = (text) => `${quote}${text}${quote}`;
+  const sample = [
+    "if (/qwen3_(?:5|6|8)/i.test(model)) {}",
+    `if (text.includes(${q("deepseek-r1")}) || text.includes(${q("deepseek")})) {}`,
+    "const vision = /gemma-3|glm-4v/.test(name);",
+    `if (${q("kimi")} === family) {}`,
+    `switch (name) { case ${q("mistral")}: break; }`,
+    `if (name.startsWith('llama3')) {}`,
+    "const harmony = names.some((name) => /gpt-oss/.test(name));",
+    `if (name.endsWith(${q("nemotron")})) {}`,
+    `if (arch !== ${q("muse-glimmer")}) {}`,
+    `const flash = new RegExp(${q("flash-next")}, "i");`,
+    `if (mode === ${q("dspark")}) {}`,
+    "return /pennyroyal/i.test(image);",
+  ].join(String.fromCharCode(10));
+  const counts = countHits(sample, { familyTokensOnly: true });
+  assert.deepEqual(
+    FAMILY_TOKENS.map((token) => [token.id, counts.get(token.id)]),
+    FAMILY_TOKENS.map((token) => [token.id, token.id === "deepseek" ? 2 : 1]),
+  );
+  // Messages, labels, table keys, identifiers, comments and divisions are not
+  // decisions on a model name.
+  const quiet = [
+    `findings.push(finding(${q("ok")}, ${q("Qwen3.8 DSpark")}, ${q("Muse Glimmer is retired")}));`,
+    `const label = { ${q("qwen3.8")}: ${q("Qwen3.8")} }[familyId];`,
+    "const isQwen38 = family.priority / weight / 2;",
+    "// if (name === 'deepseek') the old code branched here",
+    " * /gemma/ used to match by name",
+    `const DSPARK_MODE = ${q("dspark")};`,
+    "if (mode === DSPARK_MODE) {}",
+  ].join(String.fromCharCode(10));
+  assert.equal(countHits(quiet, { familyTokensOnly: true }).size, 0);
 });
 
 test("this is the only family-branch guard: no other test carries the pattern list or an allowlist", () => {
