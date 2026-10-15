@@ -32,7 +32,8 @@ import { html } from "../../ui/html.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "../../ui/vendor.js";
 import { useCard } from "./card-source.js";
 import { PlanStatus } from "./plan-status.js";
-import { loadLaunchDraft, loadProfileDraft, quickPathOf } from "./quick-paths.js";
+import { loadLaunchDraft, loadProfileDraft, loadRecentDraft, quickPathOf } from "./quick-paths.js";
+import { useLaunch } from "./use-launch.js";
 import { usePlan } from "./use-plan.js";
 
 const enc = encodeURIComponent;
@@ -60,6 +61,7 @@ function initialDraft(storage, query) {
       return createDraft(quick.seed);
     case "clone":
     case "profile":
+    case "recent":
       return createDraft({ managerId: quick.managerId, ...step });
     default:
       return stored ? patchDraft(stored, step) : createDraft(step);
@@ -80,7 +82,8 @@ function LazyStep({ id, props }) {
       alive = false;
     };
   }, [id]);
-  if (state.id !== id) return html`<div aria-busy="true" data-testid="wizard.step-loading"><${Skeleton} shape="line" rows=${5} /></div>`;
+  // The skeleton shows until the module has loaded; the "still being built" panel is for a module that is not in the build.
+  if (state.id !== id || (!state.Component && !state.failed)) return html`<div aria-busy="true" data-testid="wizard.step-loading"><${Skeleton} shape="line" rows=${5} /></div>`;
   if (state.failed || !state.Component) {
     return html`<div data-testid=${`wizard.step.${id}`} data-pending="true"><${EmptyState} icon="info" title=${t("models.wizard.pending")} body=${t("models.wizard.pendingBody")}
       action=${{ label: t("models.wizard.back"), onClick: () => props.goto(STEP_IDS[Math.max(0, STEP_IDS.indexOf(id) - 1)]) }} /></div>`;
@@ -99,12 +102,11 @@ export default function DeployWizardPage({ query = {} }) {
   const [draft, setDraft] = useState(() => seeded.current.draft || seeded.current);
   const quick = useMemo(() => quickPathOf(query), []);
   const [notice, setNotice] = useState(seeded.current.missing ? "draftMissing" : "");
-  const [quickState, setQuickState] = useState(quick.kind === "clone" || quick.kind === "profile" ? "loading" : "idle");
+  const [quickState, setQuickState] = useState(quick.kind === "clone" || quick.kind === "profile" || quick.kind === "recent" ? "loading" : "idle");
   const [profile, setProfile] = useState(null);
   const [discard, setDiscard] = useState(null);
   const keepOnLeave = useRef(false);
   const dirtyRef = useRef(false);
-  dirtyRef.current = isDirty(draft);
 
   const update = useCallback((change) => setDraft((current) => {
     const next = typeof change === "function" ? change(current) : patchDraft(current, change);
@@ -124,12 +126,6 @@ export default function DeployWizardPage({ query = {} }) {
     { ttlMs: 60000, enabled: Boolean(draft.managerId && draft.engineId) },
   );
   const catalog = draft.managerId && draft.engineId ? catalogQuery.data ?? null : null;
-
-  // The draft survives a reload, minus its secrets.
-  useEffect(() => {
-    if (isDirty(draft)) storage.sessionSet(DRAFT_STORAGE_KEY, serializeDraft(draft, catalog));
-    else storage.sessionRemove(DRAFT_STORAGE_KEY);
-  }, [draft, catalog]);
 
   // The plan of the draft; a remote model is planned from its full card (00 §9.2).
   const { card } = useCard(draft.modelRef);
@@ -152,14 +148,18 @@ export default function DeployWizardPage({ query = {} }) {
 
   // Quick paths that need a request: a stored launch (clone) or a saved profile.
   useEffect(() => {
-    if (quick.kind !== "clone" && quick.kind !== "profile") return undefined;
+    if (quick.kind !== "clone" && quick.kind !== "profile" && quick.kind !== "recent") return undefined;
     let alive = true;
-    const step = STEP_IDS.includes(query.step) ? query.step : quick.kind === "profile" ? "review" : "model";
+    const step = STEP_IDS.includes(query.step) ? query.step : quick.kind === "profile" || quick.kind === "recent" ? "review" : "model";
     (async () => {
       try {
         if (quick.kind === "clone") {
           const cloned = await loadLaunchDraft(api, quick.managerId, quick.launchId, { id: draft.id, step });
           if (alive) update(() => cloned);
+        } else if (quick.kind === "recent") {
+          const recent = await loadRecentDraft(api, quick.managerId, quick.index, { id: draft.id, step });
+          if (alive && recent) update(() => recent);
+          else if (alive) setNotice("recentMissing");
         } else {
           const loaded = await loadProfileDraft(api, quick.managerId, quick.profileId, { id: draft.id, step });
           if (alive && loaded) setProfile(loaded);
@@ -221,7 +221,20 @@ export default function DeployWizardPage({ query = {} }) {
       keepOnLeave.current = false;
     });
   }, [router]);
+  // The launch the Review step starts and the Launch step follows (use-launch.js).
+  const launch = useLaunch({ draft, plan, catalog, card: draft.modelRef?.kind === "remote" ? card : undefined, storage, goto });
+  const settled = launch.state.settled;
+  // A launch that is under way (or done) has used the draft: leaving does not ask to discard it.
+  dirtyRef.current = isDirty(draft) && !settled && !(launch.state.status === "started" && launch.state.jobState === "running");
+
+  // The draft survives a reload, minus its secrets. A launch that reached ready has used it up.
+  useEffect(() => {
+    if (isDirty(draft) && !settled) storage.sessionSet(DRAFT_STORAGE_KEY, serializeDraft(draft, catalog));
+    else storage.sessionRemove(DRAFT_STORAGE_KEY);
+  }, [draft, catalog, settled]);
+
   function startOver() {
+    launch.reset();
     storage.sessionRemove(DRAFT_STORAGE_KEY);
     setDraft(createDraft());
     setNotice("");
@@ -238,14 +251,14 @@ export default function DeployWizardPage({ query = {} }) {
     return { id, label: t(tk("models.wizard.step.", id)), state };
   });
   const canNext = draft.step === "model" ? Boolean(draft.modelRef) : draft.step === "engine" ? Boolean(draft.engineId && draft.managerId) : true;
-  const stepProps = { draft, update, plan, catalog, goto, leaveTo, status };
+  const stepProps = { draft, update, plan, catalog, goto, leaveTo, status, launch };
 
   const profileRows = profile ? diffValues(draft.values, profile.draft.values, profile.catalog, { locale }) : [];
   return html`<div class="stack" data-testid="wizard" data-step=${draft.step} data-draft=${draft.id}>
     <${PageHeader} title=${t("models.wizard.title")} subtitle=${t("models.wizard.subtitle")}
       actions=${html`<${Button} variant="ghost" onClick=${() => setDiscard({ resolve: null })} testid="wizard.reset" disabled=${!isDirty(draft)}>${t("models.wizard.reset")}<//>`} />
     ${notice ? html`<div class="notice notice-warn" role="status" data-testid="wizard.notice">
-      <span class="grow" data-user-content="">${notice === "draftMissing" ? t("models.wizard.draftMissing") : notice === "profileMissing" ? t("models.wizard.profileMissing") : notice}</span>
+      <span class="grow" data-user-content="">${notice === "draftMissing" ? t("models.wizard.draftMissing") : notice === "profileMissing" ? t("models.wizard.profileMissing") : notice === "recentMissing" ? t("models.wizard.recentMissing") : notice}</span>
       <${Button} size="sm" variant="ghost" onClick=${() => setNotice("")}>${t("common.dismiss")}<//>
     </div>` : null}
     ${quickState === "loading" ? html`<div aria-busy="true" data-testid="wizard.quick-loading"><${Skeleton} shape="line" rows=${2} /></div>` : null}

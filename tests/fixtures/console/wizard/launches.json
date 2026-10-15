@@ -1,0 +1,55 @@
+{
+  "ok": true,
+  "launches": [
+    {
+      "launchId": "lch_bbbbbbbbbbbbbbbbbbbb",
+      "status": "failed",
+      "partial": true,
+      "spec": {
+        "model": {
+          "ref": "C:/fixture/models/example-MadeUp-7B"
+        }
+      },
+      "resolved": {
+        "values": {
+          "contextLength": {
+            "value": 1024,
+            "source": "user"
+          }
+        }
+      }
+    },
+    {
+      "launchId": "lch_aaaaaaaaaaaaaaaaaaaa",
+      "status": "running",
+      "spec": {
+        "model": {
+          "ref": "C:/fixture/models/example-MadeUp-7B"
+        },
+        "values": {
+          "contextLength": 65536
+        }
+      },
+      "resolved": {
+        "values": {
+          "contextLength": {
+            "value": 65536,
+            "source": "user"
+          },
+          "concurrency": {
+            "value": 1,
+            "source": "recipe"
+          },
+          "kvCacheDtype": {
+            "value": "auto",
+            "source": "engine-default"
+          },
+          "reasoningParser": {
+            "value": "qwen3",
+            "source": "model"
+          }
+        }
+      }
+    }
+  ]
+}

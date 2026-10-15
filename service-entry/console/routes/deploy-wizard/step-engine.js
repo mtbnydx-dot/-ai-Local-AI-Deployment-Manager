@@ -15,6 +15,7 @@
 import { describeError } from "../../lib/api.js";
 import { engineIndex, recommendedKey, viewRows, whyReasons } from "../../lib/compat-model.js";
 import { findJob, jobView } from "../../lib/engines-model.js";
+import { jobFailure } from "../../lib/launch-model.js";
 import { EnginesResponseGuard } from "../../lib/schemas.js";
 import { inspectRequest, patchDraft } from "../../lib/wizard-state.js";
 import { Button } from "../../components/button.js";
@@ -31,22 +32,27 @@ import { html } from "../../ui/html.js";
 import { useEffect, useMemo, useRef, useState } from "../../ui/vendor.js";
 import { compatKey, loadCompatibility, useCard } from "./card-source.js";
 import { guards } from "./guards.js";
+import { LazyPart } from "./lazy-part.js";
 
 const enc = encodeURIComponent;
 const SAFETY_REFRESH_MS = 5000;
+const loadProbeFailure = () => import("./probe-failure.js");
 const EXPERIMENTAL_ACK = "experimental-engine";
 
 // ---- a probe job ---------------------------------------------------------------------------
 
 // Follows one probe through the same cache key the entry's `jobs` events merge into; a slow refetch is the safety net.
-function ProbeJob({ managerId, jobId, engineLabel, onDone }) {
+function ProbeJob({ managerId, jobId, engineLabel, onDone, wizard }) {
   const services = useServices();
   const { api } = services;
   const { t } = useT();
   const jobs = useQuery(["m", managerId, "jobs"], () => api.manager(managerId).get("/jobs", { query: { fields: "summary" } }), { ttlMs: 2000 });
   const refetch = useRef(jobs.refetch);
   refetch.current = jobs.refetch;
-  const view = jobView(findJob(jobs.data, jobId));
+  const raw = findJob(jobs.data, jobId);
+  const view = jobView(raw);
+  // A job that carries the 00 §9.11 error object gets the root-cause card; an older one keeps the plain notice.
+  const failure = view?.state === "failed" && raw?.failure && typeof raw.failure === "object" ? jobFailure(raw) : null;
   const reported = useRef(false);
   useEffect(() => {
     refetch.current();
@@ -65,6 +71,9 @@ function ProbeJob({ managerId, jobId, engineLabel, onDone }) {
   }, [view?.state]);
   if (view?.state === "success") {
     return html`<div class="notice notice-success" role="status" data-testid="wizard.probe" data-state="success">${t("models.wizard.engine.probeDone", { engine: engineLabel })}</div>`;
+  }
+  if (failure) {
+    return html`<div data-testid="wizard.probe" data-state="failed"><${LazyPart} id="probe-failure" loader=${loadProbeFailure} props=${{ failure, wizard }} /></div>`;
   }
   if (view?.state === "failed") {
     return html`<div class="notice notice-danger" role="alert" data-testid="wizard.probe" data-state="failed">
@@ -87,7 +96,7 @@ function RemoteCodeBody({ card }) {
   </div>`;
 }
 
-export default function StepEngine({ draft, update }) {
+export default function StepEngine({ draft, update, plan, catalog, launch, goto }) {
   const services = useServices();
   const { api, cache, toasts, i18n } = services;
   const { t, pick, tk } = useT();
@@ -186,7 +195,7 @@ export default function StepEngine({ draft, update }) {
       ${views.length ? html`<${CompatMatrix} rows=${compat.data.rows} engines=${index}
         selected=${draft.engineId ? { engineId: draft.engineId, runtimeId: draft.runtimeId } : null} probing=${starting}
         onSelect=${onSelect} onProbe=${onProbe} onOverride=${onOverride} />` : null}
-      ${Object.values(jobs).map((job) => html`<${ProbeJob} key=${job.jobId} managerId=${job.managerId} jobId=${job.jobId} engineLabel=${job.label} onDone=${probeDone} />`)}
+      ${Object.values(jobs).map((job) => html`<${ProbeJob} key=${job.jobId} managerId=${job.managerId} jobId=${job.jobId} engineLabel=${job.label} onDone=${probeDone} wizard=${{ draft, plan, catalog, update, launch, goto }} />`)}
     <//>
     ${views.length ? html`<details class="compat-why" data-testid="wizard.engine.why">
       <summary>${t("models.wizard.engine.why")}</summary>
