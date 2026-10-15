@@ -546,10 +546,17 @@ test("streaming response ends before a slow billing settle", async () => {
 test("token estimate stays fast on a 1MB prompt and close to the previous heuristic", () => {
   const large = "你好世界".repeat(80_000);
   const body = { model: "local-current", messages: [{ role: "user", content: large }] };
-  const started = Date.now();
-  const estimated = gateway.estimateOpenAiRequestInputTokens(body);
-  const elapsed = Date.now() - started;
-  assert.ok(elapsed < 5, `estimate took ${elapsed}ms`);
+  // The best of a few runs: one run can be descheduled on a loaded machine, but
+  // a tokenizer-style implementation is slow on every run (hundreds of ms for
+  // 1 MB), so a generous bound on the fastest run still catches it.
+  let estimated = 0;
+  let elapsed = Infinity;
+  for (let run = 0; run < 5; run += 1) {
+    const started = process.hrtime.bigint();
+    estimated = gateway.estimateOpenAiRequestInputTokens(body);
+    elapsed = Math.min(elapsed, Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  assert.ok(elapsed < 40, `estimate took ${elapsed.toFixed(1)}ms at best`);
   assert.ok(estimated > 0);
   const bytes = Buffer.byteLength(large, "utf8");
   const coarse = Math.ceil((bytes / 4) * 1.1);
