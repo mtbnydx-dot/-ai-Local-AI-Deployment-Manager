@@ -27,6 +27,11 @@ let holdMode = false;
 function fakeManager(instances) {
   return http.createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
+    // A hop-v2 manager (05 §7.1): platform keys are only served by those.
+    if (url.pathname === "/api/manager/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, gatewayTrust: { version: 2, mode: "warn" } }));
+    }
     if (url.pathname === "/api/instances") {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ instances }));

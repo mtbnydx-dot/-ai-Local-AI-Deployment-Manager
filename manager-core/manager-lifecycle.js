@@ -62,14 +62,23 @@ function createManagerLifecycle(options = {}) {
     if (options.exitProcessOnShutdown) process.exit(0);
   }
 
+  // options.getHealthExtras() adds fields to GET /api/manager/health, such as
+  // gatewayTrust (05 §7.2); a failing extra never fails the health answer.
   async function buildManagerHealth(engine = options.engine) {
-    return buildProcessHealth({
+    const health = await buildProcessHealth({
       engine,
       managerId: options.managerId || "",
       host,
       port,
       pidFile,
     });
+    if (typeof options.getHealthExtras !== "function") return health;
+    try {
+      const extras = options.getHealthExtras();
+      return extras && typeof extras === "object" ? { ...health, ...extras } : health;
+    } catch {
+      return health;
+    }
   }
 
   return {

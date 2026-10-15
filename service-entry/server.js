@@ -117,6 +117,10 @@ const SERVICE_ENTRY_INSTANCE_HEADER = core.SERVICE_ENTRY_INSTANCE_HEADER || "x-s
 const SERVICE_ENTRY_INSTANCE_SIGNATURE_HEADER = core.SERVICE_ENTRY_INSTANCE_SIGNATURE_HEADER || "x-service-entry-instance-signature";
 // Headers a client must never be able to set: they are how a manager decides
 // whether a loopback hop really came from this process.
+// The credential headers a manager reads (gateway-utils extractServiceApiKey).
+const ENTRY_KEY_HEADERS = ["authorization", "x-api-key", "api-key", "anthropic-api-key", "anthropic_api_key"];
+// Client headers of these families never reach a manager (05 §7.1).
+const ENTRY_RESERVED_HEADER_PREFIXES = ["x-service-entry-", "x-ai-internal-", "x-ai-billing-"];
 const TRUST_HEADER_NAMES = [
   core.GATEWAY_MARKER_HEADER,
   core.GATEWAY_CLIENT_HEADER,
@@ -180,6 +184,7 @@ const ROUTE_MODULES = [
   "./lib/telemetry-routes", // 04 TEL-18  /api/telemetry/import (TEL-11 adds the query routes)
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
   "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
+  "./lib/access-internal-routes", // 05 PUB-10  /internal/access/* (verify, legacy manager key forwarders)
   // "./lib/platform-routes",     // 06 OPS-13
 ];
 
@@ -336,6 +341,34 @@ const handleBillingHttpRequest = createBillingHttpHandler({
   isLocalAddress: core.isLocalAddress,
   extractHostname: core.extractHostname,
 });
+
+// gatewayTrust.version from a manager's GET /api/manager/health (05 §7.1),
+// cached 30 s per port (5 s after a failed probe). 0 means a legacy manager:
+// the key is forwarded as before.
+const MANAGER_TRUST_TTL_MS = 30 * 1000;
+const MANAGER_TRUST_FAILURE_TTL_MS = 5 * 1000;
+const managerTrustCache = new Map();
+
+async function managerGatewayTrustVersion(manager) {
+  const port = Number(manager?.port || 0);
+  if (!port) return 0;
+  const now = Date.now();
+  const cached = managerTrustCache.get(port);
+  if (cached && cached.expiresAt > now) return cached.version;
+  if (cached?.promise) return cached.promise;
+  const promise = fetchJson(`http://127.0.0.1:${port}/api/manager/health`, 2500)
+    .then((health) => {
+      const version = health.ok ? Math.max(0, Math.floor(Number(health.data?.gatewayTrust?.version) || 0)) : 0;
+      managerTrustCache.set(port, { version, expiresAt: Date.now() + (health.ok ? MANAGER_TRUST_TTL_MS : MANAGER_TRUST_FAILURE_TTL_MS) });
+      return version;
+    })
+    .catch(() => {
+      managerTrustCache.set(port, { version: 0, expiresAt: Date.now() + MANAGER_TRUST_FAILURE_TTL_MS });
+      return 0;
+    });
+  managerTrustCache.set(port, { version: cached?.version ?? 0, expiresAt: 0, promise });
+  return promise;
+}
 
 async function isManagerPortListening(port) {
   const now = Date.now();
@@ -517,8 +550,10 @@ function createRouteContext(overrides = {}) {
   const ctx = {
     rootDir: ROOT,
     aiRoot: AI_ROOT,
-    managers: MANAGERS.map(({ id, port }) => ({ id, port })),
+    managers: MANAGERS.map(({ id, port, billingId }) => ({ id, port, billingId })),
     security,
+    getAccessStore,
+    readRequestBody,
     relay: null,
     features: {},
     sendJson,
@@ -1876,6 +1911,7 @@ const gatewayPipeline = createGatewayPipeline({
     createUpstreamControl: (req, res) => createUpstreamControl(req, res),
     fetch: (target, init) => fetch(target, init),
     buildProxyHeaders,
+    managerTrustVersion: managerGatewayTrustVersion,
     buildResponseHeaders,
     forwardBody: forwardUpstreamBody,
   },
@@ -2964,6 +3000,10 @@ function buildManagerGatewayPath(route) {
   return "";
 }
 
+// options: requestId, instanceId, stripContentEncoding, and for a manager
+// that advertises gatewayTrust.version >= 2 (05 §7.1): hopVersion: 2 with
+// pathname (the manager-side path the hop is signed for), method, principal
+// and context (default req.serviceEntryPrincipal / req.serviceEntryContext).
 function buildProxyHeaders(headers, req = null, options = {}) {
   const output = {};
   const stripped = new Set([
@@ -2973,17 +3013,33 @@ function buildProxyHeaders(headers, req = null, options = {}) {
   ]);
   if (options.stripContentEncoding) stripped.add("content-encoding");
   // With a request record the inbound x-request-id is never forwarded; the id
-  // the entry minted replaces it (04 §5.1, contract change C1).
-  const requestId = String(options.requestId || gatewayRecord(req)?.requestId || "");
+  // the entry minted replaces it (04 §5.1, contract change C1). A v2 hop always
+  // carries the entry's req_ id: it is part of the signature.
+  const wantsV2 = Number(options.hopVersion || 0) >= 2;
+  const requestId = String(options.requestId || gatewayRecord(req)?.requestId || (wantsV2 ? req?.requestId : "") || "");
+  const hopV2 = wantsV2 && core.ENTRY_REQUEST_ID_RE.test(requestId);
   if (requestId) stripped.add("x-request-id");
+  // A v2 manager trusts the signed principal, so the key never crosses the
+  // hop; a legacy manager still checks it and gets it as before.
+  if (hopV2) for (const name of ENTRY_KEY_HEADERS) stripped.add(name);
   for (const [key, value] of Object.entries(headers || {})) {
     const lower = key.toLowerCase();
     // Trust headers are dropped before being re-issued below, so a client
-    // cannot forge the address this process vouches for.
+    // cannot forge the address this process vouches for, nor any header of
+    // the entry's own hop or internal signing families.
     if (stripped.has(lower) || lower.startsWith("proxy-")) continue;
+    if (ENTRY_RESERVED_HEADER_PREFIXES.some((prefix) => lower.startsWith(prefix))) continue;
     output[key] = value;
   }
-  const trustHeaders = security.trustHeaders(req);
+  const trustHeaders = hopV2
+    ? security.entryHeaders(req, {
+      method: options.method || req?.method,
+      pathname: options.pathname,
+      requestId,
+      principal: options.principal !== undefined ? options.principal : req?.serviceEntryPrincipal || null,
+      context: options.context !== undefined ? options.context : req?.serviceEntryContext || null,
+    })
+    : security.trustHeaders(req);
   Object.assign(output, trustHeaders);
   const instanceId = String(options.instanceId || "").trim();
   if (instanceId) {
@@ -3367,6 +3423,8 @@ module.exports = {
   buildManagerGatewayPath,
   buildManagerGatewayUrls,
   buildProxyHeaders,
+  managerGatewayTrustVersion,
+  resetManagerTrustCache: () => managerTrustCache.clear(),
   buildServiceEntryFleetSnapshot,
   collectEntryGatewayAccessStats,
   entryGatewayInFlight,
