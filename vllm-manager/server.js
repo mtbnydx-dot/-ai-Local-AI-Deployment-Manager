@@ -790,6 +790,7 @@ const operationalSnapshotStore = core.createManagerOperationalSnapshotStore({
 const getOperationalSnapshot = (request) => operationalSnapshotStore.getSnapshot(request);
 
 core.registerManagerRoutes(app, {
+  aiRoot: DEFAULT_AI_ROOT,
   idleUnload: {
     listSleeping: () => idleUnloadController.listSleeping(),
     saveSettings: (body) => idleUnloadController.saveSettings(body),
@@ -1622,7 +1623,7 @@ const runtimeRequestHandlers = core.createRuntimeRequestHandlers({
     primaryContainerName: CONFIG.containerName,
     managerId: CONFIG.managerId,
     ownerLabelKey: MANAGER_LABEL_KEY,
-    engines: ["vllm", "sglang"],
+    isRuntimeContainer: (container) => instanceCatalog.isHosted(container),
     getContainerStatus: (name) => getContainerStatus(name),
     listManagedContainers: () => listManagedContainers(),
   }),
@@ -1788,9 +1789,50 @@ const instanceMetricsSampler = core.engines.metrics.createInstanceMetricsSampler
   headersFor: (container) => vllmAuthHeaders(getVllmApiKey(container)),
   adapterFor: core.engines.adapterFor,
 });
+// Typed instances (ENG-13): which containers are instances (registry.hostedBy, plus
+// unknown engines, which stay listed and stoppable) and the 00 §4.1 fields.
+const instanceCatalog = core.engines.createInstanceCatalog({
+  registry: engineRegistry,
+  managerId: "vllm",
+  launchStore,
+  getJob: (jobId) => jobs.get(jobId) || null,
+  listSleeping: () => idleUnloadController.listSleeping(),
+});
+
+// One instance of GET /api/instances by id, with its container and the state
+// LaunchStore resolves records from. Running and stopped containers only.
+async function findRuntimeInstance(id) {
+  const summaries = await getRunningModelSummaries();
+  for (const runtime of summaries) {
+    const legacy = legacyRuntimeInstance(runtime);
+    if (legacy.id !== id && legacy.containerName !== id) continue;
+    const container = runtime.container || {};
+    return { instance: { ...legacy, ...instanceCatalog.typed(legacy, container) }, container, state: instanceCatalog.stateOf(legacy, container) };
+  }
+  return null;
+}
+
 const engineRoutes = core.engines.registerEngineRoutes(app, {
   registry: engineRegistry,
   recipeStore,
+  // GET /api/instances/:id/logs|launch and POST /api/instances/:id/relaunch (ENG-13).
+  docker,
+  resolveLogContainer: core.createOwnedRuntimeContainerResolver({
+    primaryContainerName: CONFIG.containerName,
+    managerId: CONFIG.managerId,
+    ownerLabelKey: MANAGER_LABEL_KEY,
+    isRuntimeContainer: (container) => instanceCatalog.isHosted(container),
+    getContainerStatus: (name) => getContainerStatus(name),
+    listManagedContainers: () => listManagedContainers(),
+  }),
+  redactLogs: runtimeSecretRedactor,
+  launchStore,
+  jobsLedgerLookup: (jobId) => jobs.get(jobId) || null,
+  listRecentLaunches: () => recentLaunches,
+  findInstance: findRuntimeInstance,
+  apiKeyFor: (found) => getVllmApiKey(found.container),
+  startRuntime: startRuntimeRequest,
+  stopInstance: stopRuntimeInstanceRequest,
   // POST /api/launch/plan (ENG-7): the plan /api/start would execute, side-effect free.
   planLaunch: (body) => startRuntimeRequest.planLaunch(body),
   managerId: "vllm",
@@ -2513,7 +2555,7 @@ async function listStatsSampleInstances() {
   const managed = await listManagedContainers().catch(() => []);
   for (const item of managed) {
     if (!item.running || item.name === CONFIG.containerName) continue;
-    if (item.manager !== CONFIG.managerId || !["vllm", "sglang"].includes(item.engine)) continue;
+    if (item.manager !== CONFIG.managerId || !instanceCatalog.isKnownEngine(item)) continue;
     const container = await getContainerStatus(item.name);
     if (!container?.running) continue;
     instances.push({ id: item.labels?.["ai.manager.instance"] || item.name, primary: false, container });
@@ -4258,7 +4300,7 @@ async function getRunningModelSummaries() {
   if (runtimeInstancesCache.promise) return runtimeInstancesCache.promise;
   runtimeInstancesCache.promise = Promise.resolve().then(async () => {
     const managed = (await listManagedContainers()).filter((container) => (
-      container.manager === CONFIG.managerId && ["vllm", "sglang"].includes(container.engine)
+      container.manager === CONFIG.managerId && instanceCatalog.isHosted(container)
     ));
     const primary = await getContainerStatus(CONFIG.containerName);
     const primaryOwner = primary.labels?.[MANAGER_LABEL_KEY] || "";
@@ -4281,52 +4323,64 @@ async function getRunningModelSummaries() {
   return runtimeInstancesCache.promise;
 }
 
-async function listRuntimeInstancesRequest() {
+function legacyRuntimeInstance(runtime) {
+  const container = runtime.container || {};
+  const labels = container.labels || {};
+  const primary = container.name === CONFIG.containerName;
+  const servedModels = Array.isArray(runtime.servedModels) ? runtime.servedModels : [];
+  const enrichedModels = Array.isArray(runtime.models) && runtime.models.length ? runtime.models : servedModels;
+  const lastKnownModel = String(labels["ai.manager.model"] || "").trim();
+  const instanceModels = enrichedModels.length
+    ? enrichedModels
+    : lastKnownModel ? [{ id: lastKnownModel, lastKnown: true }] : [];
+  return {
+    id: primary ? "primary" : labels["ai.manager.instance"] || container.name,
+    instanceMode: primary ? "replace" : labels["ai.manager.instance-mode"] || "parallel",
+    primary,
+    containerName: container.name,
+    running: Boolean(container.running),
+    status: container.status || "",
+    image: container.image || "",
+    engine: normalizeRuntimeEngine(labels[MANAGER_ENGINE_LABEL_KEY]),
+    port: runtime.endpoint?.port || Number(labels["ai.manager.port"] || 0),
+    gpuIds: normalizeGpuIds(labels["ai.manager.gpu-ids"] || ""),
+    vramReservationMb: Number(labels["ai.manager.vram-reservation-mb"] || 0),
+    gpuMemoryUtilization: Number(labels["ai.manager.gpu-memory-utilization"] || 0),
+    maxNumBatchedTokens: Number(labels["ai.manager.max-num-batched-tokens"] || 0),
+    localBaseUrl: runtime.endpoint?.localUrl || null,
+    lanBaseUrl: runtime.endpoint?.lanUrl || null,
+    requestsTotal: instanceModels.reduce((sum, model) => sum + Number(model.requests || 0), 0),
+    activeRequests: instanceModels.reduce((sum, model) => sum + Number(model.runningRequests || 0), 0),
+    queuedRequests: instanceModels.reduce((sum, model) => sum + Number(model.waitingRequests || 0), 0),
+    models: instanceModels.map((model) => ({
+      id: model.id,
+      root: model.root || "",
+      maxModelLen: model.max_model_len || model.maxModelLen || null,
+      requestsTotal: Number.isFinite(Number(model.requests)) ? Number(model.requests) : 0,
+      runningRequests: Number.isFinite(Number(model.runningRequests)) ? Number(model.runningRequests) : null,
+      waitingRequests: Number.isFinite(Number(model.waitingRequests)) ? Number(model.waitingRequests) : null,
+      lastKnown: Boolean(model.lastKnown),
+    })),
+  };
+}
+
+// GET /api/instances[?include=sleeping]: the legacy item plus the typed fields
+// (01 §16.4). Sleeping records are listed only on request, so the default set
+// is the set of containers, as before.
+async function listRuntimeInstancesRequest({ query } = {}) {
   const summaries = await getRunningModelSummaries();
+  const includeRaw = Array.isArray(query?.include) ? query.include.join(",") : String(query?.include || "");
+  const includeSleeping = includeRaw.split(",").map((part) => part.trim().toLowerCase()).includes("sleeping");
+  const instances = summaries.map((runtime) => {
+    const legacy = legacyRuntimeInstance(runtime);
+    return { ...legacy, ...instanceCatalog.typed(legacy, runtime.container || {}) };
+  });
+  if (includeSleeping) instances.push(...await instanceCatalog.sleeping());
   return {
     ok: true,
     primaryContainer: CONFIG.containerName,
     supportsParallel: true,
-    instances: summaries.map((runtime) => {
-      const container = runtime.container || {};
-      const labels = container.labels || {};
-      const primary = container.name === CONFIG.containerName;
-      const servedModels = Array.isArray(runtime.servedModels) ? runtime.servedModels : [];
-      const enrichedModels = Array.isArray(runtime.models) && runtime.models.length ? runtime.models : servedModels;
-      const lastKnownModel = String(labels["ai.manager.model"] || "").trim();
-      const instanceModels = enrichedModels.length
-        ? enrichedModels
-        : lastKnownModel ? [{ id: lastKnownModel, lastKnown: true }] : [];
-      return {
-        id: primary ? "primary" : labels["ai.manager.instance"] || container.name,
-        instanceMode: primary ? "replace" : labels["ai.manager.instance-mode"] || "parallel",
-        primary,
-        containerName: container.name,
-        running: Boolean(container.running),
-        status: container.status || "",
-        image: container.image || "",
-        engine: normalizeRuntimeEngine(labels[MANAGER_ENGINE_LABEL_KEY]),
-        port: runtime.endpoint?.port || Number(labels["ai.manager.port"] || 0),
-        gpuIds: normalizeGpuIds(labels["ai.manager.gpu-ids"] || ""),
-        vramReservationMb: Number(labels["ai.manager.vram-reservation-mb"] || 0),
-        gpuMemoryUtilization: Number(labels["ai.manager.gpu-memory-utilization"] || 0),
-        maxNumBatchedTokens: Number(labels["ai.manager.max-num-batched-tokens"] || 0),
-        localBaseUrl: runtime.endpoint?.localUrl || null,
-        lanBaseUrl: runtime.endpoint?.lanUrl || null,
-        requestsTotal: instanceModels.reduce((sum, model) => sum + Number(model.requests || 0), 0),
-        activeRequests: instanceModels.reduce((sum, model) => sum + Number(model.runningRequests || 0), 0),
-        queuedRequests: instanceModels.reduce((sum, model) => sum + Number(model.waitingRequests || 0), 0),
-        models: instanceModels.map((model) => ({
-          id: model.id,
-          root: model.root || "",
-          maxModelLen: model.max_model_len || model.maxModelLen || null,
-          requestsTotal: Number.isFinite(Number(model.requests)) ? Number(model.requests) : 0,
-          runningRequests: Number.isFinite(Number(model.runningRequests)) ? Number(model.runningRequests) : null,
-          waitingRequests: Number.isFinite(Number(model.waitingRequests)) ? Number(model.waitingRequests) : null,
-          lastKnown: Boolean(model.lastKnown),
-        })),
-      };
-    }),
+    instances,
   };
 }
 
@@ -4340,7 +4394,7 @@ async function stopRuntimeInstanceRequest({ id } = {}) {
     return { ok: true, id: requested, containerName: CONFIG.containerName, stopped: true };
   }
   const managed = (await listManagedContainers()).filter((container) => (
-    container.manager === CONFIG.managerId && ["vllm", "sglang"].includes(container.engine)
+    container.manager === CONFIG.managerId && instanceCatalog.isHosted(container)
   ));
   const target = managed.find((container) => (
     container.name === requested
@@ -5326,7 +5380,7 @@ async function runStartJobOnce(job, opts) {
   }
   // The launch record and its id (job.meta.launchId), which the builder emits
   // as the ai.manager.launch-id label.
-  trackLaunch(() => launchStore.beginLaunch(job, opts));
+  trackLaunch(() => launchStore.beginLaunch(job, opts, { source: job.meta?.launchSource || "api" }));
   const compatibility = opts.modelCompatibility && typeof opts.modelCompatibility === "object"
     ? opts.modelCompatibility
     : await checkModelCompatibility({ ...opts, model: opts.model, remote: false });
