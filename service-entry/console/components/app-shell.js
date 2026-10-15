@@ -108,7 +108,7 @@ function PendingPage({ route }) {
   const { t } = useT();
   return html`<div class="stack" data-testid="app-shell.pending">
     <${PageHeader} title=${t(route.titleKey)} />
-    <${EmptyState} icon="info" level=${2} title=${t("shell.pending.title")} body=${t("shell.pending.body")} action=${{ label: t("shell.boot.openClassic"), href: "/classic" }} />
+    <${EmptyState} icon="info" level=${2} title=${t("shell.pending.title")} body=${t("shell.pending.body")} />
   </div>`;
 }
 

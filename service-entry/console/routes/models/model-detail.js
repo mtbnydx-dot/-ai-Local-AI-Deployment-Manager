@@ -136,7 +136,7 @@ function LocalDetail({ id, query }) {
 
   if (loaded.error && !loaded.data) {
     const missing = loaded.error.code === "library_entry_not_found";
-    return html`<div class="stack"><${ModelsNav} current="library" />
+    return html`<div class="stack"><${PageHeader} title=${t("shell.nav.models")} /><${ModelsNav} current="library" />
       <${EmptyState} testid="detail.missing" icon="triangle-alert" title=${t(missing ? "hub.detail.missing" : "hub.library.loadFailed")} body=${missing ? t("hub.detail.missingBody") : undefined}
         action=${{ label: t("hub.detail.backToLibrary"), href: "/models" }} /></div>`;
   }
@@ -226,7 +226,7 @@ function RemoteDetail({ params, query }) {
 
   if (detail.error && !detail.data) {
     const unavailable = degradable(detail.error);
-    return html`<div class="stack"><${ModelsNav} current="discover" />
+    return html`<div class="stack"><${PageHeader} title=${t("shell.nav.models")} /><${ModelsNav} current="discover" />
       <${EmptyState} testid="detail.unavailable" icon="triangle-alert" title=${t(unavailable ? "hub.unavailable" : "hub.detail.repoFailed")} body=${unavailable ? undefined : describeError(detail.error, i18n)}
         action=${{ label: t("hub.library.retry"), onClick: () => detail.refetch() }} /></div>`;
   }

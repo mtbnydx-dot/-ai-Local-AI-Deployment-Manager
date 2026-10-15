@@ -7,6 +7,7 @@ const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { judge, loadAllowlist, runAxe } = require("../helpers/axe.js");
 const {
   collectFailures,
@@ -634,6 +635,139 @@ test.describe("axe gate", () => {
       expect(judge(violations, { route: "/system/ui-kit" }).failing.length).toBeGreaterThan(0);
     } finally {
       await close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CON-28 sweep (07 §9, §11, §13.2): every route of the table, in both themes at
+// 1440 and 390, runs axe and must not scroll sideways. The shell hosts the
+// pages (the real app.js); the APIs a page reads are answered from the shared
+// fixtures where they exist and by the harness's 404 otherwise, so a page that
+// has no data shows its own empty or error state, and that state is held to the
+// same standard. The route list comes from console/routes.js, so a page added
+// later is swept without editing this file.
+
+const FIXTURES = path.resolve(__dirname, "..", "..", "fixtures");
+const BOOTSTRAP_BLOCK = /(<script type="application\/json" id="console-bootstrap">)([\s\S]*?)(<\/script>)/;
+const OWNER_BOOTSTRAP = {
+  role: "owner",
+  auth: { mode: "session", session: { role: "owner", via: "session", paired: true, autoPairAvailable: false }, csrf: "t" },
+  features: { platform: true, telemetry: true, alerts: true, audit: true, access: true, public: true, session: true, hub: true, models: true, engines: true, setup: true },
+};
+const PARAM_SAMPLES = {
+  fleetId: "vllm:primary",
+  entryId: "entry-1",
+  provider: "hf",
+  owner: "acme",
+  name: "demo-model",
+  engineId: "vllm",
+  requestId: "req-1",
+  keyId: "key-1",
+};
+const fixture = (file) => JSON.parse(fs.readFileSync(path.join(FIXTURES, file), "utf8"));
+
+async function loadRoutePaths() {
+  const { ROUTES } = await import(pathToFileURL(path.resolve(__dirname, "..", "..", "..", "service-entry", "console", "routes.js")).href);
+  return ROUTES.filter((route) => !route.redirect && route.path !== "*").map((route) => ({
+    name: route.name,
+    href: route.path.replace(/:([A-Za-z]+)/g, (_, key) => encodeURIComponent(PARAM_SAMPLES[key] ?? "sample")).replace(/^\//, ""),
+  }));
+}
+
+async function sweepContext(browser, { theme, size, role = "owner" }) {
+  const context = await browser.newContext({ viewport: SIZES[size], colorScheme: theme, locale: "en-US", reducedMotion: "reduce" });
+  await setPrefs(context, { theme, locale: "en-US", density: "comfortable" }, { baseUrl: entry.url });
+  const patch = role === "owner" ? OWNER_BOOTSTRAP : { role, auth: { ...OWNER_BOOTSTRAP.auth, session: { role, via: "session", paired: false, autoPairAvailable: false } }, features: OWNER_BOOTSTRAP.features };
+  const guarded = (handler) => async (route) => {
+    try {
+      await handler(route);
+    } catch (error) {
+      if (!/disposed|closed|aborted/i.test(String(error?.message))) throw error;
+    }
+  };
+  await context.route((url) => url.pathname === "/api/console/bootstrap", guarded(async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, body: JSON.stringify({ ...body, ...patch, features: { ...body.features, ...patch.features } }) });
+  }));
+  await context.route((url) => !/^\/(api|c|gateway)\//.test(url.pathname), guarded(async (route) => {
+    if (route.request().resourceType() !== "document") return route.fallback();
+    // The entry's admin guard answers /billing without a paired session with its static pairing page
+    // (covered by service-entry's tests), so the shell is fetched from /overview and served under /billing.
+    const asBilling = new URL(route.request().url()).pathname === "/billing";
+    const response = await route.fetch(asBilling ? { url: `${entry.url}overview` } : undefined);
+    const text = await response.text();
+    return route.fulfill({
+      response,
+      body: text.replace(BOOTSTRAP_BLOCK, (match, open, json, close) => {
+        const base = JSON.parse(json);
+        return `${open}${JSON.stringify({ ...base, ...patch, features: { ...base.features, ...patch.features } }).replace(/</g, String.fromCharCode(92) + "u003c")}${close}`;
+      }),
+    });
+  }));
+  const page = await context.newPage();
+  const failures = await collectFailures(page);
+  const api = await mockConsoleApi(page, {
+    "GET /api/status": fixture("console/status.json"),
+    "GET /api/platform/status": fixture("console/platform-status.json"),
+    "GET /api/fleet": fixture("console/fleet.json"),
+    "GET /api/telemetry/live": fixture("telemetry/live.json"),
+    "GET /api/platform/version": { ok: true, version: "0.2.0-git-2ad10e5ffe68", build: { commit: "2ad10e5ffe68", contentHash: "3f9c2a1b7d0e" }, newerCommits: 0 },
+    ...(role === "owner" ? {} : { session: { role, paired: false } }),
+  });
+  return { context, page, api, failures };
+}
+
+async function settle(page) {
+  await expect(page.locator("#main h1").first()).toBeVisible();
+  await expect(page.locator("#app")).not.toHaveAttribute("aria-busy", /.+/);
+  await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
+}
+
+test.describe("every route", () => {
+  for (const theme of ["light", "dark"]) {
+    for (const size of ["desktop", "phone"]) {
+      test(`axe is clean and nothing overflows on any route, ${theme} at ${SIZES[size].width}`, async ({ browser }) => {
+        test.setTimeout(900_000);
+        const only = (process.env.CONSOLE_SWEEP_ONLY || "").split(",").filter(Boolean);
+        const routes = (await loadRoutePaths()).filter((route) => !only.length || only.includes(route.name));
+        if (!only.length) expect(routes.length, "the route table is not empty").toBeGreaterThan(40);
+        const { context, page, failures } = await sweepContext(browser, { theme, size });
+        const problems = [];
+        try {
+          for (const route of [...routes, ...(only.length ? [] : [{ name: "not-found", href: "models/no-such-page" }])]) {
+            await page.goto(`${entry.url}${route.href}`);
+            try {
+              await settle(page);
+              await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+              await expectNoA11yViolations(page, { label: `${route.name} ${theme} ${size}` });
+              await expectNoOverflow(page);
+            } catch (error) {
+              problems.push(`${route.name} (/${route.href}): ${String(error.message).split("\n").slice(0, 12).join("\n")}`);
+            }
+          }
+          expect(problems.join("\n---\n"), "routes with findings").toBe("");
+          const real = failures.failures.filter((item) => !/Failed to load resource/.test(item));
+          expect(real, "frontend failures").toEqual([]);
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+
+  test("a viewer's forbidden page is axe-clean too, both themes at 390", async ({ browser }) => {
+    for (const theme of ["light", "dark"]) {
+      const { context, page } = await sweepContext(browser, { theme, size: "phone", role: "viewer" });
+      try {
+        await page.goto(`${entry.url}system/doctor`);
+        await settle(page);
+        await expectNoA11yViolations(page, { label: `viewer ${theme}` });
+        await expectNoOverflow(page);
+      } finally {
+        await context.close();
+      }
     }
   });
 });

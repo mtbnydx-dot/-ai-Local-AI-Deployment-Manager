@@ -370,6 +370,9 @@ test("build_id_unavailable keeps the previous snapshot, and with none yet / serv
   const redirect = await html(coldPort, "/overview");
   assert.equal(redirect.status, 302);
   assert.equal(redirect.headers.location, "/classic");
+  const rescue = await raw(coldPort, "/classic");
+  assert.equal(rescue.status, 200, "with no snapshot the old page is the rescue, so the redirect cannot loop");
+  assert.ok(rescue.body.equals(fs.readFileSync(path.join(tree.entryDir, "index.html"))));
   assert.equal(cold.bootstrap(fakeReq("127.0.0.1")).buildId, null);
 });
 
@@ -561,7 +564,7 @@ test("the real console catalogs merge without problems and with the same keys in
   const merged = mergeI18nAreas(path.join(ENTRY_DIR, "console", "i18n"));
   assert.deepEqual(merged.problems, []);
   assert.deepEqual(Object.keys(merged.catalogs["zh-CN"]), Object.keys(merged.catalogs["en-US"]));
-  for (const key of ["shell.product", "shell.boot.loading", "shell.boot.noscript", "shell.boot.preview", "shell.boot.openClassic", "shell.boot.failed"]) {
+  for (const key of ["shell.product", "shell.boot.loading", "shell.boot.noscript", "shell.boot.preview", "shell.boot.reload", "shell.boot.failed"]) {
     assert.ok(merged.catalogs["zh-CN"][key], key);
     assert.doesNotMatch(merged.catalogs["en-US"][key], /\p{Script=Han}/u, key);
   }
@@ -647,16 +650,14 @@ test("/ follows the default UI and ?ui= overrides it for one request", async (t)
   assert.equal((await raw(port, "/index.html")).status, 599, "/index.html stays the classic page");
 });
 
-test("/classic is the old index.html byte for byte, and /billing/classic is local-only and framable by the same origin", async (t) => {
+test("/classic redirects to /overview, and /billing/classic is local-only and framable by the same origin", async (t) => {
   withEnv(t);
   const tree = makeTree(t);
   const { routes } = makeRoutes(tree);
   const port = await serve(t, routes);
   const classic = await raw(port, "/classic");
-  assert.equal(classic.status, 200);
-  assert.ok(classic.body.equals(fs.readFileSync(path.join(tree.entryDir, "index.html"))));
-  assert.equal(classic.headers["content-type"], "text/html; charset=utf-8");
-  assert.equal(classic.headers["x-frame-options"], "DENY");
+  assert.equal(classic.status, 302);
+  assert.equal(classic.headers.location, "/overview");
   assert.equal(classic.headers["cache-control"], "no-store");
 
   for (const pathname of ["/billing/classic", "/billing/classic/?manager=vllm&embed=1&theme=dark"]) {
@@ -948,12 +949,10 @@ test("with the classic default the module declines / and /billing, and the inlin
     assert.deepEqual(comparableHeaders(after), comparableHeaders(before), pathname);
     assert.ok(after.body.equals(before.body), `${pathname} body`);
   }
-  // /classic is the bytes and headers / served before.
-  const before = await raw(plainPort, "/");
+  // /classic is retired (CON-28): it hands over to the console.
   const classic = await raw(port, "/classic");
-  assert.equal(classic.status, 200);
-  assert.deepEqual(comparableHeaders(classic), comparableHeaders(before));
-  assert.ok(classic.body.equals(before.body));
+  assert.equal(classic.status, 302);
+  assert.equal(classic.headers.location, "/overview");
   // /billing/classic from loopback through the whole entry.
   const billing = await raw(port, "/billing/classic?embed=1", { headers: owner.headers() });
   assert.equal(billing.status, 200);

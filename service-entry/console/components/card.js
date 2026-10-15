@@ -1,6 +1,7 @@
 // Card (07 §4.4): a titled <section>; the heading names the region.
 
 import { h, html } from "../ui/html.js";
+import { HeadingLevelContext } from "../ui/context.js";
 import { useId } from "../ui/vendor.js";
 
 // tone danger|flat; level is the title's heading level.
@@ -14,6 +15,6 @@ export function Card({ title, actions, tone, level = 2, id, testid, children }) 
       <span class="spacer"></span>
       ${actions ? html`<div class="row-nowrap">${actions}</div>` : null}
     </div>` : null}
-    ${children}
+    <${HeadingLevelContext.Provider} value=${level + 1}>${children}<//>
   </section>`;
 }

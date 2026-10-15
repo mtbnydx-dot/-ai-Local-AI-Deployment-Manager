@@ -402,297 +402,6 @@ async function smokePage(page, baseUrl, label) {
   expect(failures, `${label} frontend errors`).toEqual([]);
 }
 
-function buildFleetSmokeSnapshot(input = "balanced") {
-  const settings = {
-    mode: "balanced",
-    reserveMb: 8192,
-    maxUtilizationPct: 85,
-    preferEngine: "auto",
-    ...(typeof input === "string" ? { mode: input } : input || {}),
-  };
-  const totalMb = 97887;
-  const usedMb = 72625;
-  const freeMb = totalMb - usedMb;
-  // Keep the stub's API value reserve-limited so the page also proves it
-  // independently caps the displayed recommendation at the configured line.
-  const allocatableMb = Math.max(0, freeMb - settings.reserveMb);
-  return {
-    ok: true,
-    updatedAt: "2026-08-05T00:00:00.000Z",
-    settings,
-    gpuMemory: {
-      totalMb,
-      usedMb,
-      freeMb,
-      reserveMb: settings.reserveMb,
-      allocatableMb,
-      warningThresholdPct: settings.maxUtilizationPct,
-    },
-    instances: [
-      {
-        id: "primary",
-        instanceId: "primary",
-        primary: true,
-        managerId: "vllm",
-        managerName: "vLLM Manager",
-        engine: "vllm",
-        containerName: "vllm-local",
-        running: true,
-        lifecycleState: "ready",
-        status: "Up 2 hours (healthy)",
-        port: 8000,
-        localBaseUrl: "http://127.0.0.1:8000/v1",
-        models: [{ id: "nvidia-qwen3.6-27b-nvfp4", capabilities: ["text", "tools"] }],
-      },
-      {
-        id: "llama-primary",
-        instanceId: "primary",
-        primary: true,
-        managerId: "llama",
-        managerName: "llama.cpp Manager",
-        engine: "llama",
-        containerName: "llama-local",
-        running: false,
-        lifecycleState: "crashed",
-        status: "Exited (255) 4 weeks ago",
-        port: 8080,
-        models: [],
-      },
-    ],
-    slots: [
-      { id: "vision", label: "视觉模型槽位", role: "视觉 / 图像理解", state: "empty", status: "待加载", managerId: "vllm" },
-      { id: "embedding", label: "Embedding / Reranker 槽位", role: "向量 / 检索增强", state: "empty", status: "待加载", managerId: "vllm" },
-    ],
-    gatewayBase: "http://127.0.0.1:5176/gateway/auto/openai",
-    routing: {
-      mode: settings.mode,
-      capabilityCounts: { text: 1, vision: 0, audio: 0, embedding: 0, rerank: 0, tools: 1 },
-    },
-  };
-}
-
-async function smokeEntryPage(page, baseUrl) {
-  const failures = [];
-  let fleetSettings = { mode: "balanced", reserveMb: 8192, maxUtilizationPct: 85, preferEngine: "auto" };
-  let fleetReads = 0;
-  let delayNextFleetRead = false;
-  let delayedFleetReadStarted = Promise.resolve();
-  let resolveDelayedFleetReadStarted = () => {};
-  const settingsRequests = [];
-  const previewRequests = [];
-  // The x-csrf-token of every non-GET the page sent (05 §5.5).
-  const csrfHeaders = [];
-  page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
-  page.on("console", (message) => {
-    if (message.type() === "error") failures.push(`console: ${message.text()}`);
-  });
-  page.on("response", (response) => {
-    const type = response.request().resourceType();
-    if (["document", "script", "stylesheet"].includes(type) && response.status() >= 400) {
-      failures.push(`${type} ${response.status()}: ${response.url()}`);
-    }
-  });
-  await page.route("**/api/status", async (route) => {
-    const entryPort = Number(new URL(baseUrl).port);
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        ok: true,
-        entry: {
-          host: "127.0.0.1",
-          port: entryPort,
-          gateway: {
-            autoOpenAi: `${baseUrl}gateway/auto/openai`,
-            tts: `${baseUrl}gateway/tts/`,
-            ttsOpenAi: `${baseUrl}gateway/tts/openai/v1`,
-          },
-          gatewayAccess: { totals: { requests: {} }, recent: [], paths: [], timeline: [] },
-        },
-        managers: [],
-        tts: {
-          name: "TTS 语音克隆平台",
-          port: 7000,
-          listening: true,
-          healthy: true,
-          availableCount: 1,
-          totalCount: 2,
-          engines: [
-            { id: "fish", name: "Fish S2 Pro", type: "local", available: true, detail: "ready" },
-            { id: "qwen_local", name: "Qwen3-TTS", type: "local", available: false, detail: "offline" },
-          ],
-          gatewayUrls: {
-            local: `${baseUrl}gateway/tts/`,
-            localOpenAi: `${baseUrl}gateway/tts/openai/v1`,
-          },
-        },
-      }),
-    });
-  });
-  // A paired owner (05 §5.6); writes must carry its CSRF token.
-  await page.route("**/api/session", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ ok: true, role: "owner", via: "session", paired: true, csrfToken: "t", autoPairAvailable: false, pairCommand: "platform admin pair" }),
-    });
-  });
-  await page.route("**/api/fleet/settings", async (route) => {
-    const body = route.request().postDataJSON();
-    csrfHeaders.push(route.request().headers()["x-csrf-token"] || null);
-    settingsRequests.push(body);
-    fleetSettings = { ...fleetSettings, ...body };
-    const fleet = buildFleetSmokeSnapshot(fleetSettings);
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ ok: true, settings: fleet.settings, fleet }),
-    });
-  });
-  await page.route("**/api/fleet/route-preview", async (route) => {
-    const body = route.request().postDataJSON();
-    csrfHeaders.push(route.request().headers()["x-csrf-token"] || null);
-    previewRequests.push(body);
-    const unavailable = !["text", "tools"].includes(body.capability);
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(unavailable ? {
-        ok: false,
-        status: 503,
-        error: "capability_not_available",
-        message: `No running model provides the required ${body.capability} capability.`,
-        capability: body.capability,
-        reason: `No running model provides the required ${body.capability} capability.`,
-      } : {
-        ok: true,
-        status: 200,
-        capability: body.capability,
-        reason: `generic_${body.capability}`,
-        manager: { id: "vllm", name: "vLLM Manager", port: 5177 },
-        instance: { id: "primary", instanceId: "primary", primary: true, status: "ready", port: 8000 },
-        model: { id: "nvidia-qwen3.6-27b-nvfp4", capabilities: ["text", "tools"] },
-      }),
-    });
-  });
-  await page.route("**/api/fleet", async (route) => {
-    fleetReads += 1;
-    const responseSettings = { ...fleetSettings };
-    if (delayNextFleetRead) {
-      delayNextFleetRead = false;
-      resolveDelayedFleetReadStarted();
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(buildFleetSmokeSnapshot(responseSettings)),
-    });
-  });
-  // The classic console lives at /classic since 07 CON-2; / stays classic by default.
-  await page.goto(`${baseUrl}classic`, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("h1")).toContainText("本地模型服务统一入口");
-  await expect(page.locator("#entrySummary")).toBeVisible();
-  await expect(page.locator("#fleet")).toBeHidden();
-  await page.locator('[data-entry-nav="models"]').click();
-  await expect(page.locator("#fleetMainPanel")).toBeVisible();
-  await expect(page.locator("#fleetRoutingPanel")).toBeVisible();
-  await expect(page.locator("#fleetTitle")).toContainText("多模型舰队");
-  await expect(page.locator("#fleetMainPanel")).toContainText("所有已发现实例与能力槽位");
-  await expect(page.locator("#fleetMainPanel")).toContainText("已崩溃");
-  await expect(page.locator("#fleetMainPanel")).toContainText("1 个可路由 · 1 个非路由 · 共 2 个实例");
-  await expect(page.locator("#fleetMainPanel")).toContainText("API 可分配");
-  await expect(page.locator("#fleetMainPanel")).toContainText("16.7 GiB");
-  await expect(page.locator("#fleetMainPanel")).toContainText("保护线内上限");
-  await expect(page.locator("#fleetMainPanel")).toContainText("10.3 GiB");
-  await expect(page.locator("#managerGrid")).toBeVisible();
-  await page.locator('[data-entry-nav="voice"]').click();
-  await expect(page.locator('[data-render-key="tts-platform"]')).toContainText("TTS 语音克隆平台");
-  await expect(page.locator('[data-render-key="tts-platform"]')).toContainText("1 / 2");
-  await expect(page.locator('[data-render-key="tts-platform"] a[href="/gateway/tts/"]')).toBeVisible();
-  await page.locator('[data-entry-nav="clients"]').click();
-  await expect(page.locator("#entryAccessPanel")).toBeVisible();
-  await page.locator('[data-entry-nav="models"]').click();
-  await expect(page.locator(".app-signature")).toContainText("本地模型服务平台 · 2026");
-  await expect(page.locator("#lastUpdatedBadge")).toContainText("已刷新", { timeout: 15_000 });
-  await expect(page.locator("#fleetMainPanel")).not.toHaveAttribute("aria-live", /.+/);
-  await expect(page.locator("#fleetRoutingPanel")).not.toHaveAttribute("aria-live", /.+/);
-  await expect(page.locator("#fleetStatusAnnouncer")).toHaveAttribute("aria-live", "polite");
-
-  const primaryRow = page.locator('[data-render-key="vllm:primary"]');
-  const detailsButton = primaryRow.locator("[data-fleet-details]");
-  await detailsButton.click();
-  await expect(detailsButton).toHaveAttribute("aria-expanded", "true");
-  await page.evaluate(() => {
-    window.__smokeFleetRow = document.querySelector('[data-render-key="vllm:primary"]');
-    window.__smokeFleetDetailsButton = window.__smokeFleetRow?.querySelector("[data-fleet-details]");
-  });
-  const identityRefreshTarget = fleetReads + 1;
-  await page.evaluate(() => window.refresh());
-  await expect.poll(() => fleetReads).toBeGreaterThanOrEqual(identityRefreshTarget);
-  expect(await page.evaluate(() => (
-    window.__smokeFleetRow === document.querySelector('[data-render-key="vllm:primary"]')
-    && window.__smokeFleetDetailsButton === document.querySelector('[data-render-key="vllm:primary"] [data-fleet-details]')
-    && document.activeElement === window.__smokeFleetDetailsButton
-  )), "fleet refresh should retain keyed row/button identity and focus").toBe(true);
-  await expect(detailsButton).toHaveAttribute("aria-expanded", "true");
-
-  delayedFleetReadStarted = new Promise((resolve) => {
-    resolveDelayedFleetReadStarted = resolve;
-  });
-  delayNextFleetRead = true;
-  await page.locator("#fleetRefreshBtn").click();
-  await delayedFleetReadStarted;
-  await page.locator("[data-fleet-mode='multimodal']").click();
-  await expect(page.locator("#toast")).toContainText("舰队模式已保存：多模态优先");
-  await expect.poll(() => fleetReads).toBeGreaterThanOrEqual(3);
-  await expect(page.locator("[data-fleet-mode='multimodal']")).toHaveAttribute("aria-pressed", "true");
-  expect(settingsRequests).toEqual([{ mode: "multimodal" }]);
-
-  // 显存策略与路由预演默认折叠在 details 里，先展开再操作。
-  for (const summary of await page.locator(".fleet-collapse > summary").all()) {
-    await summary.click();
-  }
-  await expect(page.locator("#fleetMaxUtilizationPct")).toHaveValue("85");
-  await expect(page.locator("#fleetReserveGiB")).toHaveValue("8");
-  await page.locator("#fleetMaxUtilizationPct").fill("90.5");
-  await page.locator("#fleetReserveGiB").fill("6.5");
-  await page.locator("#fleetPolicySave").click();
-  await expect(page.locator("#toast")).toContainText("显存策略已保存：安全线 90.5%，预留 6.5 GiB");
-  await expect(page.locator("#fleetMainPanel")).toContainText("保护线 90.5%");
-  expect(settingsRequests).toEqual([
-    { mode: "multimodal" },
-    { maxUtilizationPct: 90.5, reserveMb: 6656 },
-  ]);
-
-  await page.locator("#fleetPreviewCapability").selectOption("vision");
-  await page.locator("#fleetPreviewModel").fill("nvidia-qwen3.6-27b-nvfp4");
-  await page.locator("#fleetPreviewSubmit").click();
-  await expect(page.locator("#fleetPreviewResult")).toContainText("capability_not_available");
-  await page.locator("#fleetPreviewCapability").selectOption("text");
-  await page.locator("#fleetPreviewModel").fill("");
-  await page.locator("#fleetPreviewSubmit").click();
-  await expect(page.locator("#fleetPreviewResult")).toContainText("将路由到 nvidia-qwen3.6-27b-nvfp4");
-  expect(previewRequests).toEqual([
-    { capability: "vision", engine: "auto", protocol: "openai", model: "nvidia-qwen3.6-27b-nvfp4" },
-    { capability: "text", engine: "auto", protocol: "openai" },
-  ]);
-  expect(JSON.stringify(previewRequests)).not.toMatch(/messages|prompt|content|image|audio/i);
-  expect(csrfHeaders.length).toBe(settingsRequests.length + previewRequests.length);
-  expect(csrfHeaders).toEqual(csrfHeaders.map(() => "t"));
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  const mobileShell = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    fleetWidth: document.querySelector("#fleetMainPanel")?.getBoundingClientRect().width || 0,
-  }));
-  expect(mobileShell.fleetWidth, "fleet workbench should stay visible on mobile").toBeGreaterThan(300);
-  expect(mobileShell.scrollWidth, "service-entry mobile page should not overflow horizontally")
-    .toBeLessThanOrEqual(mobileShell.clientWidth + 1);
-  expect(failures, "service-entry frontend errors").toEqual([]);
-}
-
 async function smokeBillingPage(page) {
   const failures = [];
   let adjustmentWrites = 0;
@@ -830,7 +539,7 @@ async function smokeConsoleShell(page, baseUrl) {
   expect(await classicRoot.text()).toContain("本地模型服务统一入口");
   expect(classicRoot.headers()["content-security-policy"]).toBeUndefined();
 
-  // The shell (CON-6) renders every path in its frame; a page that is not built yet shows the "still being built" page (the overview and the deployments pages are built, CON-8 and CON-9).
+  // The shell (CON-6) renders every path in its frame; every page is built.
   for (const [pathname, heading] of [["?ui=new", "总览"], ["overview", "总览"], ["system", "系统"]]) {
     const response = await page.goto(`${baseUrl}${pathname}`, { waitUntil: "domcontentloaded" });
     expect(response.status(), pathname).toBe(200);
@@ -838,7 +547,7 @@ async function smokeConsoleShell(page, baseUrl) {
     await expect(page.locator("#app")).not.toHaveAttribute("aria-busy", /.+/);
     await expect(page.locator("#app h1")).toHaveText(heading);
     await expect(page).toHaveTitle(`${heading} · 本地 AI 平台`);
-    await expect(page.locator('#app nav a[href="/classic"]')).toHaveText("经典控制台");
+    await expect(page.locator('#app nav a[href="/classic"]'), "the classic console link is gone").toHaveCount(0);
     expect(await page.evaluate(() => window.__cspViolations), `${pathname} CSP violations`).toEqual([]);
   }
 
@@ -861,9 +570,10 @@ async function smokeConsoleShell(page, baseUrl) {
   await expect(page.locator('#app [data-testid="overview.root"]')).toBeVisible();
   expect(await page.evaluate(() => window.__cspViolations), "English shell CSP violations").toEqual([]);
 
-  const classic = await page.request.get(`${baseUrl}classic`);
-  expect(await classic.text()).toBe(await classicRoot.text());
-  expect(await classic.text()).toContain('href="/?ui=new"');
+  // /classic is retired (CON-28): it hands over to the console.
+  const classic = await page.request.get(`${baseUrl}classic`, { maxRedirects: 0 });
+  expect(classic.status()).toBe(302);
+  expect(classic.headers().location).toBe("/overview");
 
   // Old manager links land on the new pages: #stats with ?from=vllm is /observability, and the banner's theme and lang are kept.
   await page.goto(`${baseUrl}?ui=new&from=vllm&theme=dark&lang=en-US#stats`, { waitUntil: "domcontentloaded" });
@@ -915,28 +625,6 @@ test.describe("manager frontends", () => {
       await smokePage(await context.newPage(), managers[1].url, "llama");
       await smokeLegacyBanner(await context.newPage(), managers[0].url, "vllm");
       await smokeLegacyBanner(await context.newPage(), managers[1].url, "llama");
-    } finally {
-      await context.close();
-    }
-  });
-
-  test("service-entry dashboard loads", async ({ browser }) => {
-    const entryPort = await getFreePort();
-    managers = [
-      await startManager({
-        cwd: path.join(ROOT, "service-entry"),
-        port: entryPort,
-        env: {
-          SERVICE_ENTRY_HOST: "127.0.0.1",
-          SERVICE_ENTRY_PORT: String(entryPort),
-          SERVICE_ENTRY_CONSOLE_DEFAULT: "classic",
-        },
-      }),
-    ];
-
-    const context = await browser.newContext();
-    try {
-      await smokeEntryPage(await context.newPage(), managers[0].url);
     } finally {
       await context.close();
     }
