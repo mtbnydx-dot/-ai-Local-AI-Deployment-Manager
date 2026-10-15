@@ -214,7 +214,7 @@ test("a page that is not in the build shows the still-being-built page, and a re
   try {
     await page.goto(`${entry.url}system/ui-kit`);
     await expect(page.locator('#main [data-ready="true"]')).toBeVisible();
-    await nav(page).getByRole("link", { name: "Playground" }).click();
+    await nav(page).getByRole("link", { name: "Billing" }).click();
     await expect(byId(page, "app-shell.pending")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open the classic console" })).toHaveAttribute("href", "/classic");
     await expect(byId(page, "app-shell.update")).toHaveCount(0);
