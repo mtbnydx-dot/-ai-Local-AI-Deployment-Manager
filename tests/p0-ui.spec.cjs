@@ -172,6 +172,32 @@ function statsPayload(speed = {}) {
   };
 }
 
+// What a manager reports with no container and no Docker engine. The real
+// /api/status shells out to the Docker CLI, which takes seconds (10 s or more
+// when the engine is down) and made every page here depend on that machine's
+// Docker state: the late init steps then ran in the middle of a test.
+function managerStatusPayload() {
+  const docker = "Docker Desktop 引擎未就绪。请先用页面的一键 Docker 按钮启动 Docker Desktop，等状态变为可用后再启动模型。";
+  return {
+    docker: { ok: false, cliOk: true, daemonOk: false, text: docker, daemonError: "stub" },
+    gpu: { ok: true, count: 1, name: "Stub GPU", totalMb: 97887, usedMb: 4096, util: 10, temp: 40, gpus: [{ index: 0, id: "0", name: "Stub GPU", computeCap: "12.0", totalMb: 97887, usedMb: 4096, util: 10, temp: 40 }] },
+    resources: {
+      gpuMemory: { totalMb: 97887, usedMb: 4096, freeMb: 93791, source: "p0 stub", note: "" },
+      managedContainers: [],
+      peerManagers: [],
+      peerRunningCount: 0,
+      hasPeerRunning: false,
+    },
+    container: { exists: false, running: false },
+    servedModels: [],
+    runningModels: [],
+    endpoint: { port: 8000, boundHost: "127.0.0.1", localHost: "127.0.0.1", lanHost: null, publishedHosts: [], host: "127.0.0.1", serviceUrl: "http://127.0.0.1:8000/v1", localUrl: "http://127.0.0.1:8000/v1", lanUrl: null },
+    image: { ok: false, text: docker, reason: "docker-daemon", raw: "stub" },
+    jobs: [],
+    apiKeyRequired: false,
+  };
+}
+
 function exposurePayload(settings = {}) {
   return {
     settings: {
@@ -233,6 +259,7 @@ async function openManagerPage(page, baseUrl, setup = async () => {}) {
   await page.route("**/api/download/estimate?*", (route) => route.fulfill({ json: { bytes: 1024, fileCount: 1, diskFreeBytes: 100 * 1024 ** 3 } }));
   await page.route("**/api/download/precheck?*", (route) => route.fulfill({ json: { ok: true, findings: [] } }));
   await page.route("**/api/stats", (route) => route.fulfill({ json: statsPayload() }));
+  await page.route("**/api/status", (route) => route.fulfill({ json: managerStatusPayload() }));
   // Job snapshots come from the stubs only; a long retry keeps EventSource quiet.
   await page.route("**/api/events", (route) => route.fulfill({ contentType: "text/event-stream", body: "retry: 600000\n\n" }));
   await setup();

@@ -1251,6 +1251,20 @@ function createSupervisor(options = {}) {
     async pendingRestarts() {
       return pending.map((item) => ({ ...item }));
     },
+    // POST /v1/doctor/fix (06 §7.3). prepare() rejects manual fixes and
+    // unconfirmed confirm fixes before any operation exists; the fix itself
+    // runs as a streamed "doctor-fix" operation.
+    async runFix(body = {}) {
+      const create = options.createFixRunner || require("./doctor-fix").createFixRunner;
+      const runner = create({
+        aiRoot, env, config, registry, supervisor: api, fetch: fetchImpl, winproc, now,
+        ...(options.redactor ? { redactor: options.redactor } : {}),
+        ...(options.fixOptions || {}),
+      });
+      const plan = await runner.prepare(body);
+      const op = startOperation("doctor-fix", ({ line, progress }) => runner.execute(plan, { line, progress }));
+      return { opId: op.opId };
+    },
     async cancelPendingRestart(id) {
       const before = pending.length;
       pending = pending.filter((item) => item.id !== id);

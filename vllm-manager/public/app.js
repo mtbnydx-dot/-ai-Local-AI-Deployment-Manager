@@ -1183,10 +1183,12 @@ async function init() {
     updateSidebarFoot();
     // Launch presets do not depend on Docker health, logs or exposure probes.
     refreshProfiles().catch((error) => renderToolError("#serviceProfileSummary", error));
+    // The instance list only needs /api/instances. It must not wait for the status call below, which
+    // shells out to the Docker CLI and takes seconds whenever the Docker engine is slow or down.
+    runtimeInstancesController.refresh({ silent: true }).catch(() => {});
     await Promise.all([refreshStatus(), refreshJobs(), refreshModels(), refreshModelNotes(), refreshLogs(), refreshServiceExposure(), refreshServiceClients()]);
     // Seeds lastSuccessAt so the freshness clock starts from a real load.
     connectionStatus.markSuccess();
-    runtimeInstancesController.refresh({ silent: true }).catch(() => {});
     managerBackupsController.refresh({ silent: true }).catch(() => {});
     refreshRemoteModels().catch((error) => {
       state.remoteError = error.message;

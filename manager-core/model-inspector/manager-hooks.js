@@ -7,7 +7,7 @@
 //   modelFacts(model, { engineId, hostFacts, runtimeId })  PlanCtx.modelFacts (planFacts; MOD-9b)
 //   calibrationFor(card, engineId, runtimeId, paramsKey)   PlanCtx.calibrationFor (calibration store; MOD-10)
 //   afterReady(args)                                       supervisor hooks.afterReady (records one observation; MOD-10)
-//   classifyFailure(logText, { engineId, phase })          supervisor hooks.classifyFailure (null until MOD-12)
+//   classifyFailure(logText, { engineId, phase })          supervisor hooks.classifyFailure (root-cause.js; MOD-12)
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -15,6 +15,7 @@ const path = require("node:path");
 const { createCalibrationStore } = require("./calibration");
 const { observationFromFacts } = require("./observations");
 const { planFacts } = require("./plan-facts");
+const rootCause = require("./root-cause");
 
 const CALIBRATION_FILE = "memory-calibration.json";
 const DEFAULT_SAMPLE_GAP_MS = 10000;
@@ -71,7 +72,7 @@ async function sampleGpus(gpuStatus, ids) {
 }
 
 /**
- * managerHooks({ managerId, dataDir, gpuStatus, modelStorage?, modelsRoot?, resolveModelPath?, inspectLocal? })
+ * managerHooks({ managerId, dataDir, gpuStatus, modelStorage?, modelsRoot?, resolveModelPath?, inspectLocal?, errorSignatures? })
  *   → { modelFacts, calibrationFor, afterReady, classifyFailure }.
  * resolveModelPath(ref) maps the manager's model reference (container path,
  * storage-relative name) to a host path, or returns null for a ref that is not
@@ -143,7 +144,14 @@ function managerHooks(options = {}) {
       }
     },
     afterReady,
-    classifyFailure: () => null,
+    classifyFailure: (logText, context = {}) => {
+      try {
+        return rootCause.classifyFailure(logText, { ...context, ...(options.errorSignatures ? { signatures: options.errorSignatures } : {}) });
+      } catch (error) {
+        warnOnce(`failure classification failed (ignored): ${error?.message || error}`);
+        return null;
+      }
+    },
   };
 }
 

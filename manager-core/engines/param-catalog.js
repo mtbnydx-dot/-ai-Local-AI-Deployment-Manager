@@ -22,7 +22,10 @@ const COMMON_FILE = "common.json";
 const PARAM_TYPES = Object.freeze(["int", "float", "bool", "tristate", "enum", "string", "path", "json", "list", "kv"]);
 const LEVELS = Object.freeze(["basic", "advanced", "expert"]);
 const EMIT_MODES = Object.freeze(["adapter", "catalog"]);
-const EMIT_KINDS = Object.freeze(["flag-value", "flag-bool", "bool-pair", "json", "repeat", "csv", "env", "none"]);
+// "template": the value reaches the engine through the descriptor's docker-template
+// (a flag, a config-file key or an env var that the template names), so the
+// parameter needs no flag of its own (01 §19, ENG-18).
+const EMIT_KINDS = Object.freeze(["flag-value", "flag-bool", "bool-pair", "json", "repeat", "csv", "env", "template", "none"]);
 const TRANSFORMS = Object.freeze(["containerPath", "ctxTimesConcurrency", "jsonStringify"]);
 // emit.format names how a list or composite value becomes argv (adapters/_catalog-emit.js).
 const EMIT_FORMATS = Object.freeze(["tensor-override", "lora-scaled", "lora-modules", "speculative-config"]);
@@ -1207,6 +1210,8 @@ function createParamCatalog(options = {}) {
     bundledDir,
     overrideDir,
     engineIds,
+    // The shared concepts (common.json) any engine may bind.
+    commonParamIds: () => [...current().common.params.keys()],
     errors,
     loadCatalog,
     reload: () => {

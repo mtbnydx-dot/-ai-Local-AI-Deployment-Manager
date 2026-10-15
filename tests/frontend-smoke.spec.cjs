@@ -129,6 +129,13 @@ async function smokePage(page, baseUrl, label) {
       body: JSON.stringify({ models: [], limit: 48, source: "huggingface", sort: "trending" }),
     });
   });
+  // The download form asks for a size estimate, a precheck and variants as soon
+  // as it has a model, including while the English audit below walks every view.
+  // Answering them here keeps those loading states from depending on the network
+  // (or on how long the manager takes to fail) when the audit looks at the page.
+  await page.route("**/api/download/estimate?*", route => route.fulfill({ json: { bytes: 1024, fileCount: 1, diskFreeBytes: 100 * 1024 ** 3 } }));
+  await page.route("**/api/download/precheck?*", route => route.fulfill({ json: { ok: true, findings: [] } }));
+  await page.route("**/api/remote-models/*-variants?*", route => route.fulfill({ json: { variants: [] } }));
   await page.route("**/api/service-exposure", async (route) => {
     const port = new URL(baseUrl).port || "5177";
     const modelId = `${label.toLowerCase()}-smoke-model-1`;
@@ -325,14 +332,13 @@ async function smokePage(page, baseUrl, label) {
   {
     // Both managers must render English without leftover Chinese in the primary views.
     await page.locator("#languageMode").selectOption("en-US");
-    await page.waitForTimeout(150);
+    await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
     const untranslated = [];
     for (const view of ["service", "models", "online-models", "download", "exposure", "external-access", "tools", "stats", "audit", "logs"]) {
       await page.locator(`[data-view='${view}']`).click();
       const visiblePanels = page.locator(`[data-view-panel='${view}']:visible`);
       await expect(visiblePanels.first()).toBeVisible();
-      await page.waitForTimeout(250);
-      const visibleHan = await visiblePanels.evaluateAll((panels) => {
+      const collectVisibleHan = () => visiblePanels.evaluateAll((panels) => {
         const values = new Set();
         for (const panel of panels) {
           const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
@@ -346,6 +352,15 @@ async function smokePage(page, baseUrl, label) {
         }
         return Array.from(values);
       });
+      // Text that is rendered after an async step (loading states, refreshed
+      // lists) is translated a moment later, so wait until the view has no
+      // visible Chinese rather than sleeping for a fixed time. Only text that
+      // is still Chinese when the wait runs out counts as untranslated.
+      let visibleHan = await collectVisibleHan();
+      await expect.poll(async () => {
+        visibleHan = await collectVisibleHan();
+        return visibleHan.length;
+      }, { timeout: 5_000, intervals: [50, 100, 250] }).toBe(0).catch(() => {});
       untranslated.push(...visibleHan.map((value) => `${view}: ${value}`));
     }
     expect(Array.from(new Set(untranslated)), `${label} English mode should not leave visible Chinese in primary views`).toEqual([]);
@@ -369,9 +384,6 @@ async function smokePage(page, baseUrl, label) {
   expect(await page.locator(".remote-model-card h4").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(250);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${label} online model browser fits a phone`).toBe(true);
   // Test catalog-to-download navigation separately from the baseline language audit.
-  await page.route("**/api/download/estimate?*", route => route.fulfill({ json: { bytes: 1024, fileCount: 1, diskFreeBytes: 100 * 1024 ** 3 } }));
-  await page.route("**/api/download/precheck?*", route => route.fulfill({ json: { ok: true, findings: [] } }));
-  await page.route("**/api/remote-models/*-variants?*", route => route.fulfill({ json: { variants: [] } }));
   await page.locator('[data-action="remote-download"]').click();
   await expect(page).toHaveURL(/#download$/);
   await expect(page.locator("#downloadModel")).toHaveValue(onlineModel.id);

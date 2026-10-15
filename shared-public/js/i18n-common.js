@@ -118,6 +118,10 @@ const UI_TEXT_TRANSLATIONS = {
   "下载前预检：可以下载，但要注意": "Pre-download check: ready, but pay attention",
   "下载前预检：已阻断": "Pre-download check: blocked",
   "正在做下载前兼容预检...": "Running the pre-download compatibility check...",
+  // The download size estimate box (vLLM and llama): its loading, unsupported and failed states.
+  "正在估算下载体积...": "Estimating download size...",
+  "ModelScope 暂不支持下载体积预估，下载时会显示实际进度。": "Download size estimates are not available for ModelScope; actual progress is shown while downloading.",
+  "无法读取该仓库的文件体积（可能是 gated 或私有），下载时会显示实际进度。": "The file sizes of this repository could not be read (it may be gated or private); actual progress is shown while downloading.",
   "预检未完成": "Pre-check did not finish",
   "通过": "OK",
   "提示": "Info",
@@ -1040,6 +1044,11 @@ const UI_TRANSLATION_PATTERNS = [
   [/^(.+) 个主变体$/u, "$1 main variants"],
   [/^正在联网查询模型\.\.\.$/u, "Searching online models..."],
   [/^在线查找 (.+) 的 (.+) GGUF$/u, "Find $1 $2 GGUF online"],
+  [/^体积预估失败：(.+)$/u, "Size estimate failed: $1"],
+  [/^没有匹配 (.+) 的文件，请换真实量化仓库或改成下载整个仓库。$/u, "No files match $1. Choose an actual quantized repository or download the whole repository."],
+  [/^没有匹配 (.+) 的文件，请换真实量化仓库或改成下载整个仓库。 模型盘剩余 (.+)。$/u, "No files match $1. Choose an actual quantized repository or download the whole repository. Model drive free: $2."],
+  [/^没有匹配 (.+) 的文件，请换真实 GGUF 仓库或改成下载整个仓库。$/u, "No files match $1. Choose an actual GGUF repository or download the whole repository."],
+  [/^无法读取该仓库的文件体积（可能是 gated 或私有），下载时会显示实际进度。 模型盘剩余 (.+)。$/u, "The file sizes of this repository could not be read (it may be gated or private); actual progress is shown while downloading. Model drive free: $1."],
   [/^没有匹配 (.+) 的文件，请换真实 GGUF 仓库或改成下载整个仓库。 模型盘剩余 (.+)。$/u, "No files match $1. Choose an actual GGUF repository or download the whole repository. Model drive free: $2."],
   [/^只下载匹配 (.+) 的文件。当前元数据没有匹配文件，请先确认仓库内真的存在 (.+)。$/u, "Download only files matching $1. No current metadata matches; confirm that $2 actually exists in the repository."],
   // The GGUF presets (08 P0-12) now match files, so the matched form shows by default.
@@ -1090,6 +1099,8 @@ const UI_TRANSLATION_PATTERNS = [
 ];
 
 const UI_PARTIAL_TRANSLATIONS = [
+  // The pre-download check header joins this with the engine ("未识别架构 · vLLM"), so it can only be matched in part.
+  [/未识别架构/g, "Unrecognised architecture"],
   // llama.cpp 下载预设说明（catalog.js MODEL_PRESETS）
   [/单卡友好的日常中文模型。/g, "A single-GPU-friendly everyday Chinese model."],
   [/质量和速度比较均衡。/g, "A good balance of quality and speed."],

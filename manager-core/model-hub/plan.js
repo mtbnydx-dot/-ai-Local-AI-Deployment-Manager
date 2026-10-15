@@ -116,6 +116,7 @@ function createPlanner(options = {}) {
   const queue = options.queue || null;
   const auth = options.auth || null;
   const discovery = options.discovery;
+  const runAfter = options.runAfter || null;
 
   function openJobs() {
     try {
@@ -225,12 +226,13 @@ function createPlanner(options = {}) {
     // Fit and compatibility from the selected artifact's own card.
     let fitBody = {};
     let compatibility = [];
+    let card = null;
     if (withFit) {
       const request = isPlainObject(input.fit) ? input.fit : {};
       const contextTokens = Number(request.contextTokens) > 0 ? Number(request.contextTokens) : DEFAULT_CONTEXT_TOKENS;
       const gpuIds = Array.isArray(request.gpuIds) && request.gpuIds.length ? request.gpuIds.map(String) : null;
       const engineId = request.engineId ? String(request.engineId) : fit.engineFor(artifact.format);
-      const card = await fit.inspect({
+      card = await fit.inspect({
         provider: inspectionProviderFor(resolved.metadata, manifest),
         namespace: resolved.namespace,
         repo: resolved.repo,
@@ -256,6 +258,12 @@ function createPlanner(options = {}) {
     const eta = basisBps && bytesToDownload > 0
       ? { seconds: Math.ceil(bytesToDownload / basisBps), basisBps: Math.round(basisBps), basis: "recent-average" }
       : { seconds: bytesToDownload === 0 ? 0 : null, basisBps: basisBps ? Math.round(basisBps) : null, basis: basisBps ? "recent-average" : "unknown" };
+
+    // Download & Run (03 §11): the advisory prospective plan from the remote card.
+    // A manager that cannot plan it throws 422 run_after_unavailable.
+    const runAfterBody = input.runAfter && runAfter && typeof runAfter.advise === "function"
+      ? await runAfter.advise({ request: input.runAfter, card })
+      : (input.runAfter ?? null);
 
     const blocking = [];
     const warnings = [];
@@ -319,7 +327,7 @@ function createPlanner(options = {}) {
       fit: fitBody,
       compatibility,
       eta,
-      runAfter: input.runAfter ?? null,
+      runAfter: runAfterBody,
       blocking,
       warnings,
     };

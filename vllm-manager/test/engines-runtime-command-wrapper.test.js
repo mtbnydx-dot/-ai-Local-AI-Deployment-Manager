@@ -35,6 +35,8 @@ const DESCRIPTORS = {
   vllm: { id: "vllm", adapter: "vllm", hostManager: "vllm", legacy: { engineLabel: "vllm" } },
   sglang: { id: "sglang", adapter: "sglang", hostManager: "vllm", legacy: { engineLabel: "sglang" } },
   lmdeploy: { id: "lmdeploy", adapter: "docker-template", hostManager: "vllm", legacy: {} },
+  // Hosted by vllm-manager but with no adapter module here: the wrapper cannot launch it.
+  "bare-lab": { id: "bare-lab", adapter: "no-such-adapter", hostManager: "vllm", legacy: {} },
   llamacpp: { id: "llamacpp", adapter: "llamacpp", hostManager: "llama", legacy: { engineLabel: "llama" } },
 };
 
@@ -88,8 +90,8 @@ test("normalizeRuntimeEngine delegates to the registry and falls back to the leg
   assert.equal(normalizeRuntimeEngine("sglang", renamed), "vllm");
   // Fallback: engines this wrapper cannot launch, other managers' engines,
   // unknown values and a registry that fails all keep the legacy answer.
-  const others = fakeRegistry({ lmdeploy: "lmdeploy", llama: "llamacpp", sglang: "sglang" }, DESCRIPTORS);
-  assert.equal(normalizeRuntimeEngine("lmdeploy", others), "vllm");
+  const others = fakeRegistry({ "bare-lab": "bare-lab", llama: "llamacpp", sglang: "sglang" }, DESCRIPTORS);
+  assert.equal(normalizeRuntimeEngine("bare-lab", others), "vllm");
   assert.equal(normalizeRuntimeEngine("llama", others), "vllm");
   assert.equal(normalizeRuntimeEngine("whatever", others), "vllm");
   assert.equal(normalizeRuntimeEngine("sglang", others), "sglang");
