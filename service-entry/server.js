@@ -14,6 +14,8 @@ const { createLimiter } = require("./lib/limiter");
 const { newRequestId, sendPublicError } = require("./lib/public-errors");
 const { startListeners, tagListener } = require("./lib/listeners");
 const { createPublicListener } = require("./lib/public-listener");
+const { createPortalRoutes } = require("./lib/portal-routes");
+const { createPublicData, startStatusSampler } = require("./lib/status-sampler");
 const { createBillingStore } = require("./lib/billing-store");
 const { createBillingHttpHandler, strictLocalBillingAdmin } = require("./lib/billing-http");
 const { summarizeServiceKeys, redactKeySummary } = require("./lib/key-overview");
@@ -189,6 +191,8 @@ let modelHub = null;
 let billingStore = null;
 let accessStore = null;
 let accessStoreFailure = null;
+// The status sampler behind the portal JSON documents (05 §12.2); it writes into the access store.
+let statusSampler = null;
 const managerModelCache = new Map();
 const managerStatusCache = new Map();
 // Manager liveness rarely flips, so a short probe cache turns the per-request
@@ -232,6 +236,10 @@ function getAccessStore() {
 }
 
 function closeAccessStore() {
+  if (statusSampler) {
+    statusSampler.stop();
+    statusSampler = null;
+  }
   if (!accessStore) return;
   try {
     accessStore.close();
@@ -1011,7 +1019,7 @@ async function startServiceEntry() {
   // PUBLIC answers only its own route table. ADMIN failing to bind is fatal;
   // PUBLIC failing leaves ADMIN up and the console shows it red.
   const config = security.accessConfig();
-  const publicHandler = createPublicHandler();
+  const publicHandler = createPublicHandler({ portal: createPortalRoutes({ aiRoot: AI_ROOT, logger: console }), data: createPublicPortalData() });
   try {
     listeners = await startListeners({
       config,
@@ -1047,6 +1055,30 @@ async function startServiceEntry() {
     console.warn(core.redactSecrets(`Model hub failed to start; its routes answer hub_unavailable: ${error?.message || error}`));
   });
   return server;
+}
+
+// The portal's JSON documents (05 §12.2): the status sampler over the fleet
+// catalogs and the access store, and the four documents built from it. An
+// access store that cannot open leaves the documents out (the portal pages then
+// show their error state); it never stops the entry. Telemetry numbers appear
+// once the telemetry runtime offers statusStats().
+function createPublicPortalData() {
+  try {
+    const store = getAccessStore();
+    const config = () => security.accessConfig();
+    const telemetry = { statusStats: async (options) => routeMounts?.ctx?.telemetry?.statusStats?.(options) ?? null };
+    statusSampler = startStatusSampler({ getCatalogs: () => getFleetCatalogs(), telemetry, store, config, logger: console });
+    return createPublicData({
+      sampler: statusSampler,
+      getCatalogs: () => getFleetCatalogs(),
+      store,
+      config,
+      getBuildId: () => core.platform.getBuildId({ aiRoot: AI_ROOT }),
+    });
+  } catch (error) {
+    console.warn(core.redactSecrets(`The portal data could not start; its JSON routes answer 404: ${error?.message || error}`));
+    return null;
+  }
 }
 
 // The entry's one model hub (03 §3): data under service-entry/data/hub, the
@@ -3274,6 +3306,7 @@ module.exports = {
   getListeners: () => listeners,
   createPublicServer,
   createPublicHandler,
+  createPublicPortalData,
   dispatchRouteModules,
   emptyManagerCatalog,
   findManager,

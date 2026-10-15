@@ -11,6 +11,10 @@
 //   deps.gateway(req, res, url, route)   key routes (the shared pipeline, 08)
 //   deps.portal.handle(req, res, url, route) -> boolean   portal shell,
 //                                        /assets/<buildId>/*, the *.json routes
+//                                        (lib/portal-routes.js, PUB-15: the asset
+//                                        snapshot, import map, CSP and 410)
+//   deps.portal.errorStylesheets() -> string[]   optional: the portal CSS for the
+//                                        server-rendered 404 page
 //   deps.preAuth(req, res, route) -> boolean   the ban check and the per-IP
 //                                  bucket (05 §9.2) before the JSON routes;
 //                                  true when it answered. Key routes run it in
@@ -113,6 +117,15 @@ function sendJsonBody(req, res, status, body, headers = {}) {
 function createPublicListener({ security, gateway = null, portal = null, data = null, preAuth = null, logger = console } = {}) {
   if (!security || typeof security.publicHostnames !== "function") throw new TypeError("createPublicListener needs the entry security (publicHostnames).");
 
+  // The portal CSS for the HTML error pages; never throws.
+  function portalStylesheets() {
+    try {
+      return typeof portal?.errorStylesheets === "function" ? portal.errorStylesheets() : [];
+    } catch {
+      return [];
+    }
+  }
+
   async function handle(req, res) {
     // PUBLIC has no ambient credentials: neither sessions nor console-session
     // exist here, so the cookie never reaches any handler.
@@ -141,6 +154,7 @@ function createPublicListener({ security, gateway = null, portal = null, data = 
       }
 
       const route = classifyPublicRoute(req.method, url.pathname);
+      const notFound = () => sendPublicError(req, res, "not_found", { requestId, stylesheets: portalStylesheets() });
       switch (route.kind) {
         case "healthz":
           return sendText(req, res, 200, "ok");
@@ -165,12 +179,12 @@ function createPublicListener({ security, gateway = null, portal = null, data = 
         case "asset":
           if (portal && typeof portal.handle === "function" && (await portal.handle(req, res, url, route)) === true) return undefined;
           if (res.headersSent) return undefined;
-          return sendPublicError(req, res, "not_found", { requestId });
+          return notFound();
         case "key":
           if (typeof gateway !== "function") return sendPublicError(req, res, "service_unavailable", { requestId });
           return await gateway(req, res, url, route);
         default:
-          return sendPublicError(req, res, "not_found", { requestId });
+          return notFound();
       }
     } catch (error) {
       logger?.error?.(core.redactSecrets(`public listener: ${error?.stack || error?.message || error}`));
