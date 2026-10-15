@@ -1,0 +1,20 @@
+[
+  {
+    "directive": "reverse_proxy",
+    "host": "127.0.0.1",
+    "port": 5177,
+    "line": 6
+  },
+  {
+    "directive": "reverse_proxy",
+    "host": "localhost",
+    "port": 5178,
+    "line": 11
+  },
+  {
+    "directive": "reverse_proxy",
+    "host": "127.0.0.1",
+    "port": 3000,
+    "line": 17
+  }
+]

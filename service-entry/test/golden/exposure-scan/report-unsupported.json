@@ -1,0 +1,254 @@
+{
+  "at": "2026-10-15T12:00:00.000Z",
+  "status": "unsupported",
+  "platform": "linux",
+  "summary": {
+    "ok": 0,
+    "warn": 0,
+    "fail": 0,
+    "unknown": 17,
+    "manual": 1
+  },
+  "checks": [
+    {
+      "id": "public_listener",
+      "state": "unknown",
+      "title": "access.check.public_listener",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.public_listener"
+    },
+    {
+      "id": "admin_bind",
+      "state": "unknown",
+      "title": "access.check.admin_bind",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.admin_bind"
+    },
+    {
+      "id": "wildcard_listeners",
+      "state": "unknown",
+      "title": "access.check.wildcard_listeners",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.wildcard_listeners"
+    },
+    {
+      "id": "firewall_profiles",
+      "state": "unknown",
+      "title": "access.check.firewall_profiles",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.firewall_profiles"
+    },
+    {
+      "id": "legacy_proxy",
+      "state": "unknown",
+      "title": "access.check.legacy_proxy",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.legacy_proxy"
+    },
+    {
+      "id": "tunnel_running",
+      "state": "unknown",
+      "title": "access.check.tunnel_running",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.tunnel_running"
+    },
+    {
+      "id": "tunnel_ready",
+      "state": "unknown",
+      "title": "access.check.tunnel_ready",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.tunnel_ready"
+    },
+    {
+      "id": "tunnel_target",
+      "state": "unknown",
+      "title": "access.check.tunnel_target",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.tunnel_target"
+    },
+    {
+      "id": "external_probe",
+      "state": "unknown",
+      "title": "access.check.external_probe",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.external_probe"
+    },
+    {
+      "id": "tls",
+      "state": "unknown",
+      "title": "access.check.tls",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.tls"
+    },
+    {
+      "id": "dns",
+      "state": "unknown",
+      "title": "access.check.dns",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.dns"
+    },
+    {
+      "id": "trusted_proxy_match",
+      "state": "unknown",
+      "title": "access.check.trusted_proxy_match",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.trusted_proxy_match"
+    },
+    {
+      "id": "managers_gateway_only",
+      "state": "unknown",
+      "title": "access.check.managers_gateway_only",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.managers_gateway_only"
+    },
+    {
+      "id": "admin_via_proxy",
+      "state": "unknown",
+      "title": "access.check.admin_via_proxy",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.admin_via_proxy"
+    },
+    {
+      "id": "keys_hygiene",
+      "state": "unknown",
+      "title": "access.check.keys_hygiene",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.keys_hygiene"
+    },
+    {
+      "id": "plaintext_key_files",
+      "state": "unknown",
+      "title": "access.check.plaintext_key_files",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.plaintext_key_files"
+    },
+    {
+      "id": "router_snapshots",
+      "state": "unknown",
+      "title": "access.check.router_snapshots",
+      "evidence": "Not supported on this platform.",
+      "fix": "access.fix.router_snapshots"
+    },
+    {
+      "id": "upnp",
+      "state": "manual",
+      "title": "access.check.upnp",
+      "evidence": "UPnP port mappings live in the router; check its admin page.",
+      "fix": "access.fix.upnp"
+    }
+  ],
+  "legacy": [],
+  "map": {
+    "nodes": [
+      {
+        "id": "internet",
+        "label": "Internet",
+        "kind": "network"
+      },
+      {
+        "id": "edge",
+        "label": "Cloudflare / Caddy",
+        "kind": "proxy"
+      },
+      {
+        "id": "public",
+        "label": "PUBLIC listener",
+        "kind": "listener"
+      },
+      {
+        "id": "admin",
+        "label": "ADMIN listener",
+        "kind": "listener"
+      },
+      {
+        "id": "managers",
+        "label": "Managers",
+        "kind": "service"
+      },
+      {
+        "id": "engines",
+        "label": "Engines",
+        "kind": "service"
+      },
+      {
+        "id": "lan",
+        "label": "LAN",
+        "kind": "network"
+      },
+      {
+        "id": "loopback",
+        "label": "This machine",
+        "kind": "network"
+      }
+    ],
+    "edges": [
+      {
+        "from": "internet",
+        "to": "edge",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "edge",
+        "to": "public",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "edge",
+        "to": "admin",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "edge",
+        "to": "managers",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "public",
+        "to": "managers",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "admin",
+        "to": "managers",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "managers",
+        "to": "engines",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "lan",
+        "to": "admin",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "lan",
+        "to": "public",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "lan",
+        "to": "managers",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      },
+      {
+        "from": "loopback",
+        "to": "admin",
+        "state": "unknown",
+        "evidence": "Not supported on this platform."
+      }
+    ]
+  },
+  "probe": null
+}

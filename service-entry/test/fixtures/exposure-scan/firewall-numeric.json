@@ -1,0 +1,5 @@
+[
+    { "Name": "Domain", "Enabled": 1 },
+    { "Name": "Private", "Enabled": 0 },
+    { "Name": "Public", "Enabled": 2 }
+]

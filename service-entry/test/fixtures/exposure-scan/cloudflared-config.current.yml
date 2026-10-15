@@ -1,0 +1,6 @@
+ingress:
+  - hostname: ${MODEL_API_DOMAIN}
+    service: http://host.docker.internal:5186
+    originRequest:
+      connectTimeout: 10s
+  - service: http_status:404
