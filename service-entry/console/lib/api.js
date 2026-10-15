@@ -69,7 +69,8 @@ function managerIdOf(url) {
 function mapFieldErrors(list) {
   if (!Array.isArray(list)) return [];
   return list.filter(isPlainObject).map((item) => ({
-    field: typeof item.field === "string" ? item.field : null,
+    // 01 engines report `path` where the 00 §4.2 envelope says `field`.
+    field: typeof item.field === "string" ? item.field : typeof item.path === "string" ? item.path : null,
     code: typeof item.code === "string" ? item.code : "invalid",
     message: typeof item.message === "string" ? item.message : "",
     suggestion: item.suggestion === undefined ? null : item.suggestion,

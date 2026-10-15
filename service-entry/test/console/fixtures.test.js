@@ -28,6 +28,10 @@ const GUARDS = {
   "plan-vllm": schemas.LaunchPlanGuard,
   "plan-sglang": schemas.LaunchPlanGuard,
   "plan-llamacpp": schemas.LaunchPlanGuard,
+  // CON-16 Engines fixtures: the entry aggregate, the external endpoints and a flags response with its diff.
+  engines: schemas.EnginesResponseGuard,
+  "engines-external": schemas.ExternalEndpointsGuard,
+  "engines-flags": schemas.FlagsResponseGuard,
 };
 
 function read(name) {

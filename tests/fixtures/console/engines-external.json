@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "engineId": "external",
+  "endpoints": [
+    {
+      "endpointId": "ollama-local",
+      "label": "Ollama (this PC)",
+      "kind": "ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "apiKeyRef": "",
+      "enabled": true,
+      "routing": { "includeInAuto": false },
+      "hostClass": "loopback",
+      "health": { "state": "ready", "ok": true, "latencyMs": 12, "status": 200, "models": 3, "checkedAt": "2026-10-20T10:00:00.000Z" }
+    },
+    {
+      "endpointId": "team-gateway",
+      "label": "Team gateway",
+      "kind": "openai",
+      "baseUrl": "https://gateway.example.com/v1",
+      "apiKeyRef": "engines.external:team-gateway",
+      "enabled": true,
+      "routing": { "includeInAuto": true },
+      "hostClass": "remote",
+      "health": { "state": "unauthorized", "ok": false, "latencyMs": 88, "status": 401, "models": null, "error": "unauthorized", "checkedAt": "2026-10-20T10:00:00.000Z" }
+    }
+  ]
+}

@@ -58,6 +58,10 @@ test("normalizeError maps each §3.4 response row", () => {
   assert.equal(envelope.requestId, "req_aaaaaaaaaaaaaaaaaaaa");
   assert.deepEqual(envelope.fieldErrors, [{ field: "contextLength", code: "out_of_range", message: "too big", suggestion: { value: 131072, why: "w" } }]);
 
+  // 01 engine routes name the field `path`; it is kept as the field.
+  const byPath = normalizeError({ status: 400, body: { ok: false, error: { code: "endpoint_invalid", message: "no" }, errors: [{ path: "baseUrl", code: "blocked_address", message: "m" }] } });
+  assert.deepEqual(byPath.fieldErrors.map((item) => [item.field, item.code]), [["baseUrl", "blocked_address"]]);
+
   assert.equal(normalizeError({ status: 409, body: { ok: false, error: "text", code: "instance_conflict" } }).code, "instance_conflict");
   assert.equal(normalizeError({ status: 500, body: { error: "boom" } }).code, "http_500");
   assert.equal(normalizeError({ status: 500, body: { error: "boom" } }).message, "boom");
