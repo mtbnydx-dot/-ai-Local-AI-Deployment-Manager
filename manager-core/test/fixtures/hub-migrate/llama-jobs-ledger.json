@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "mig-l-queued",
+      "type": "download",
+      "title": "Download example-org/Small-GGUF (Q4_K_M)",
+      "status": "queued",
+      "createdAt": "2026-09-06T10:00:00.000Z",
+      "updatedAt": "2026-09-06T10:00:00.000Z",
+      "finishedAt": null,
+      "progress": { "percent": 0 },
+      "logs": ["queued"],
+      "meta": {
+        "model": "example-org/Small-GGUF",
+        "outputName": "example-org-Small-GGUF",
+        "localDir": "<ROOT>/example-org-Small-GGUF",
+        "source": "huggingface",
+        "precision": "Q4_K_M",
+        "includeExtras": ["mmproj"],
+        "expectedBytes": 2000
+      }
+    },
+    {
+      "id": "mig-l-cancelled",
+      "type": "download",
+      "title": "Download example-org/Dropped-GGUF (Q8_0)",
+      "status": "cancelled",
+      "createdAt": "2026-09-07T10:00:00.000Z",
+      "updatedAt": "2026-09-07T10:01:00.000Z",
+      "finishedAt": "2026-09-07T10:01:00.000Z",
+      "progress": { "percent": 1 },
+      "logs": ["cancelled by user"],
+      "meta": {
+        "model": "example-org/Dropped-GGUF",
+        "outputName": "example-org-Dropped-GGUF",
+        "localDir": "<ROOT>/example-org-Dropped-GGUF",
+        "source": "huggingface",
+        "precision": "Q8_0"
+      }
+    },
+    {
+      "id": "mig-l-modelscope",
+      "type": "download",
+      "title": "Download example-org/Scope-GGUF (Q5_K_M)",
+      "status": "interrupted",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "updatedAt": "2026-09-08T10:30:00.000Z",
+      "finishedAt": null,
+      "progress": { "percent": 55 },
+      "logs": ["interrupted by a manager restart"],
+      "meta": {
+        "model": "example-org/Scope-GGUF",
+        "outputName": "example-org-Scope-GGUF",
+        "localDir": "<ROOT>/example-org-Scope-GGUF",
+        "source": "modelscope",
+        "precision": "Q5_K_M",
+        "expectedBytes": 3000
+      }
+    }
+  ]
+}

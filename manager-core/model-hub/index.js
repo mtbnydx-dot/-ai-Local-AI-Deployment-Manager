@@ -31,6 +31,7 @@ const { createCliTransferEngine } = require("./transfer");
 const { createTransferMonitor } = require("./progress");
 const { createArtifactVerifier } = require("./verify");
 const { createDownloadQueue } = require("./queue");
+const { runHubMigration } = require("./migrate");
 const { createDiskGuard } = require("./disk");
 const { REPO_RE } = require("./auth");
 const { compileIncludePatterns, resolveSelection } = require("./selection");
@@ -275,6 +276,31 @@ function createModelHub(options = {}) {
     if (swept.removedTemps.length) warn(`model hub: removed ${swept.removedTemps.length} temp file(s) an interrupted write left in the data directory.`);
     settings.load();
     loadTransferErrors();
+
+    // 03 §16: import the managers' settings and download ledgers once. It
+    // runs before the queue takes downloads.json, and only while the hub owns
+    // downloads (a rolled-back hub leaves the managers' controllers alone).
+    // A failure is logged and retried on the next start; it never stops the
+    // hub.
+    if (options.aiRoot && options.migration !== false && readConfig().downloadsOwner === "hub") {
+      try {
+        const migrated = await runHubMigration({
+          aiRoot,
+          store,
+          settings,
+          modelStorage,
+          library,
+          logger,
+          events: options.events || null,
+          clock,
+          errorData: transferErrors.data || undefined,
+          ...(isPlainObject(options.migrationOptions) ? options.migrationOptions : {}),
+        });
+        migrationSteps = migrated.steps;
+      } catch (error) {
+        warn(`model hub: the migration from the managers failed: ${error?.message || error}`);
+      }
+    }
 
     // The queue owns the jobs. A corrupt ledger is kept aside, never
     // overwritten.
