@@ -18,6 +18,7 @@ const jsonSchemaLite = require("./json-schema-lite");
 const knowledge = require("./knowledge");
 const managerHooks = require("./manager-hooks");
 const planFacts = require("./plan-facts");
+const planner = require("./planner");
 const templateSignatures = require("./template-signatures");
 const rangeReader = require("./remote/range-reader");
 const role = require("./detectors/role");
@@ -96,6 +97,12 @@ module.exports = {
   planFacts: planFacts.planFacts,
   resolveCard: planFacts.resolveCard,
   managerHooks: managerHooks.managerHooks,
+  // Launch planner (02 §11, MOD-14): ranked, diversified plans per GPU set.
+  planner: {
+    planLaunches: planner.planLaunches,
+    GOALS: planner.GOALS,
+    PLANNER_CONSTANTS: planner.PLANNER_CONSTANTS,
+  },
   storageResolver: managerHooks.storageResolver,
   cardEstimate: {
     cardModeRequested: cardEstimate.cardModeRequested,
