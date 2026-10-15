@@ -1,3 +1,6 @@
+# OpenWebUI behind the platform (05-public.md section 14). Template: render it with
+# scripts/setup-public.ps1 or /api/public/templates; WEBUI_DOMAIN is filled in, the
+# internal-app key is read from the .env next to the rendered file and is never rendered.
 name: openwebui-production
 
 services:
@@ -10,6 +13,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      ENABLE_SIGNUP: "false"
+      DEFAULT_USER_ROLE: "pending"
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
       WEBUI_URL: "https://${WEBUI_DOMAIN}"
       CORS_ALLOW_ORIGIN: "https://${WEBUI_DOMAIN}"
       WEBUI_SESSION_COOKIE_SECURE: "true"
@@ -18,8 +24,8 @@ services:
       WEBUI_AUTH_COOKIE_SAME_SITE: "lax"
       ENABLE_WEBSOCKET_SUPPORT: "true"
       AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST: "3"
-      OPENAI_API_BASE_URL: "http://host.docker.internal:5176/gateway/auto/openai/v1"
-      OPENAI_API_KEY: "${MODEL_GATEWAY_API_KEY:-local-gateway}"
+      OPENAI_API_BASE_URL: "http://host.docker.internal:5186/v1"
+      OPENAI_API_KEY: "${MODEL_GATEWAY_API_KEY:?create an internal-app key in the console first}"
       ENABLE_WEB_SEARCH: "true"
       RAG_WEB_SEARCH_ENGINE: "searxng"
       SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>&format=json"

@@ -165,3 +165,21 @@ curl http://<HOST>:5176/gateway/auto/claude/v1/messages \
 统一入口和管理器统计只记录访问元数据，不记录提示词和回答正文。
 
 如果需要完整对话审计，应只在受控本机上开启，并把查看页面放在密码保护后面。
+
+## 10. 公网访问（所有者上线顺序）
+
+公网访问只经过 PUBLIC 监听（`http://127.0.0.1:5186`，客户端地址 `https://<你的域名>/v1`）。控制台、管理 API 和各管理器端口永远不放进隧道或反向代理。模板位于 `deploy/cloudflare/`（推荐，只出站连接）和 `deploy/public/`（Caddy 加你自己的域名），说明见各目录的 README。
+
+平台只渲染文件，不会启动、停止或删除任何东西；密钥和隧道令牌由你自己创建和保管。
+
+1. 部署新版本。旧密钥会自动迁移，请查看迁移报告。
+2. 运行向导“公网访问”，或执行 `scripts\setup-public.ps1 -ModelApiDomain <你的域名> -Topology cloudflared-token`（也可选 `cloudflared-config`、`caddy`、`lan`）。文件写入 `<AI_ROOT>/config/public/`，已有文件不会被覆盖（需要时加 `-Overwrite`）。只有加 `-Apply` 才会通过 `platform config set` 写入 `listeners.public.baseUrl` 和 `trustedProxies.*`，否则只打印命令。然后把现有隧道的公网主机名指向 `http://host.docker.internal:5186`。这一步由所有者完成。
+3. 运行“外部探测”，确认 `viaProxy` 和读取到的头。
+4. 观察 `direct_manager_gateway` 事件降为零，再把管理器切换为 `enforce`。
+5. 处理“遗留项”扫描列出的旧脚本、日志和密钥文件；平台不会自动删除或停用，由你决定。
+
+客户端示例（Base URL 为 `https://<你的域名>/v1`，Key 在控制台“访问”页创建，只显示一次）：
+
+```bash
+curl https://<你的域名>/v1/models -H "Authorization: Bearer <API_KEY>"
+```

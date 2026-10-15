@@ -1,0 +1,15 @@
+{
+  "files": [
+    "Caddyfile",
+    "openwebui.compose.yaml"
+  ],
+  "commands": [
+    "cd <AI_ROOT>\\config\\public",
+    "caddy validate --config Caddyfile --adapter caddyfile",
+    "caddy run --config Caddyfile",
+    "platform config set listeners.public.baseUrl https://models.example.com",
+    "platform config set trustedProxies.clientIpHeader x-forwarded-for",
+    "platform config set trustedProxies.cidrs 127.0.0.1/32",
+    "docker compose --env-file .env -f openwebui.compose.yaml up -d"
+  ]
+}

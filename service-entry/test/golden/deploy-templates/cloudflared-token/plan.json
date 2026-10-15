@@ -1,0 +1,14 @@
+{
+  "files": [
+    "cloudflared.compose.yaml",
+    "cloudflared.env.example"
+  ],
+  "commands": [
+    "cd <AI_ROOT>\\config\\public",
+    "# paste TUNNEL_TOKEN into cloudflared.env yourself; the platform never creates it",
+    "Copy-Item cloudflared.env.example cloudflared.env",
+    "docker compose -f cloudflared.compose.yaml up -d",
+    "platform config set listeners.public.baseUrl https://models.example.com",
+    "platform config set trustedProxies.clientIpHeader cf-connecting-ip"
+  ]
+}

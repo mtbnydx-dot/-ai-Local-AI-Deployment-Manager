@@ -1,0 +1,15 @@
+{
+  "files": [
+    "cloudflared.compose.yaml",
+    "config.yml",
+    "openwebui.compose.yaml"
+  ],
+  "commands": [
+    "cd <AI_ROOT>\\config\\public",
+    "# edit config.yml (tunnel id) and put the tunnel credentials in credentials.json",
+    "docker compose -f cloudflared.compose.yaml up -d",
+    "platform config set listeners.public.baseUrl https://models.example.com",
+    "platform config set trustedProxies.clientIpHeader cf-connecting-ip",
+    "docker compose --env-file .env -f openwebui.compose.yaml up -d"
+  ]
+}
