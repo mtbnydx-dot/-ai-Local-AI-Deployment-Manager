@@ -140,7 +140,7 @@ export default function DeployWizardPage({ query = {} }) {
   // A quick path seeds a draft once. Its query is dropped from the address afterwards, so a reload brings the
   // stored draft back instead of starting the quick path again with a new draft id.
   const dropQuery = () => {
-    if (quick.kind !== "none" && quick.kind !== "draft") router?.navigate?.("/deployments/new", { replace: true });
+    if (quick.kind !== "none" && quick.kind !== "draft") router?.navigate?.(query.from === "setup" ? "/deployments/new?from=setup" : "/deployments/new", { replace: true });
   };
   useEffect(() => {
     if (quick.kind === "seed") dropQuery();

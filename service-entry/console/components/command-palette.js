@@ -45,6 +45,7 @@ export function buildCommands({ role = "viewer", i18n, other = null, instances =
   if (owner) {
     commands.push(entry("action:new-deployment", "actions", "shell.palette.newDeployment", { href: "/deployments/new", aliases: ["deploy", "launch", "wizard"] }));
     commands.push(entry("action:download-model", "actions", "shell.palette.downloadModel", { href: "/models/discover", aliases: ["download", "huggingface", "pull"] }));
+    commands.push(entry("action:setup", "actions", "platform.setup.title", { href: "/setup", aliases: ["setup", "first run", "wizard", "onboarding"] }));
     commands.push(entry("action:doctor", "actions", "shell.palette.runDoctor", { href: "/system/doctor", aliases: ["doctor", "check", "diagnose"] }));
   }
   if (actions.copyGateway) commands.push(entry("action:copy-gateway", "actions", "shell.palette.copyGateway", { run: actions.copyGateway, aliases: ["url", "endpoint", "openai"] }));

@@ -24,7 +24,7 @@ const OWNER = { role: "owner", auth: { mode: "session", session: { role: "owner"
 const VIEWER = { role: "viewer", auth: { mode: "session", session: { role: "viewer", via: "none", paired: false, autoPairAvailable: false }, csrf: null } };
 const VIEWER_SESSION = { ok: true, role: "viewer", paired: false, csrfToken: null, pairCommand: "platform admin pair" };
 const PLATFORM = { features: { platform: true } };
-const NO_PLATFORM = { features: { platform: false } };
+const NO_PLATFORM = { features: { platform: false, setup: false } };
 
 // Every 06 §5.2 state, one component each, labelled as the English catalog shows it.
 const STATE_LABELS = {

@@ -181,7 +181,7 @@ function parseBody(request) {
  * `(request, route) => value | undefined` (return undefined after calling
  * route.fulfill yourself). `/api/console/**` is passed through to the entry,
  * so the real bootstrap and snapshot still work. Defaults: `/api/session`
- * (owner, paired, csrfToken "t"), `/api/events` (an empty stream; `events:
+ * (owner, paired, csrfToken "t"), `/api/platform/setup` (setup finished), `/api/events` (an empty stream; `events:
  * false` gives 503 so the console falls back to polling; `events: [{ type,
  * data }]` replays frames with `id:` lines) and `/api/events/recent`.
  * Any other unmocked call answers 404 `not_mocked` and is listed in `unmocked`.
@@ -195,6 +195,8 @@ async function mockConsoleApi(page, overrides = {}) {
     "GET /api/session": () => json(sessionBody),
     "GET /api/events": () => (events === false ? json({ ok: false, error: { code: "events_unavailable" } }, 503) : { status: 200, contentType: "text/event-stream", headers: { "cache-control": "no-store" }, body: sseBody(events) }),
     "GET /api/events/recent": () => json({ ok: true, ...recent }),
+    // Boot step 8 (first-run routing) reads this for an owner on a build with the setup backend; "done" keeps every other spec where it opened.
+    "GET /api/platform/setup": () => json({ steps: [], completedAt: "2026-10-16T00:00:00.000Z", current: null }),
     ...routes,
   };
   const calls = [];
