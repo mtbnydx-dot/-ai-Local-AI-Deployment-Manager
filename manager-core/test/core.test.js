@@ -3306,6 +3306,17 @@ test("service gateway access log store reads JSONL and builds external stats", a
   assert.equal(Object.prototype.hasOwnProperty.call(recent.recent[0], "prompt"), false);
 });
 
+test("access log export keeps the legacy column order and appends the TEL-2 columns", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "service-access-export-"));
+  const store = core.createServiceGatewayAccessLogStore({ file: path.join(dir, "access.jsonl"), host: "127.0.0.1", port: 5177 });
+  await store.appendServiceGatewayAccessLog({ at: "2026-06-14T12:00:00.000Z", status: 200, path: "/serve/v1/models" });
+  const exported = await store.exportServiceGatewayAccessLogs({ format: "csv" });
+  const header = exported.text.replace(/^\uFEFF/, "").split(/\r?\n/)[0].split(",").map((cell) => cell.replace(/"/g, ""));
+  assert.deepEqual(header.slice(0, 8), ["at", "remoteAddress", "external", "sourceProgram", "clientId", "method", "path", "kind"]);
+  assert.equal(header[header.indexOf("error") + 1], "requestId");
+  assert.deepEqual(header.slice(-5), ["clientRequestId", "viaEntry", "keyId", "errorClass", "firstByteMs"]);
+});
+
 test("runtime wait resolves when served models appear", async () => {
   const job = { progress: {} };
   const progress = [];

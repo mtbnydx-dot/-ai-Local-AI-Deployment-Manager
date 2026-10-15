@@ -227,7 +227,7 @@ test("streaming OpenAI proxy preserves SSE bytes while parsing split final usage
 
   assert.deepEqual(Buffer.concat(response.state.chunks), wire);
   const requestId = request.serviceGateway.requestId;
-  assert.match(requestId, /^[0-9a-f-]{36}$/i);
+  assert.match(requestId, /^mgr_[a-z2-7]{20}$/);
   assert.equal(response.state.headers["x-request-id"], requestId);
   assert.equal(fetchCalls[0].options.headers["x-request-id"], requestId);
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body).stream_options, {
