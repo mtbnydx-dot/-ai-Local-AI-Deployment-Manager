@@ -1,0 +1,18 @@
+{
+  "prefixes": [
+    "access.attention.",
+    "access.audit.action.",
+    "access.class.",
+    "access.clients.route.",
+    "access.customers.state.",
+    "access.err.",
+    "access.index.",
+    "access.listener.",
+    "access.metric.",
+    "access.migration.warning.",
+    "access.preset.",
+    "access.rotate.overlap.",
+    "access.status."
+  ],
+  "unused": []
+}
