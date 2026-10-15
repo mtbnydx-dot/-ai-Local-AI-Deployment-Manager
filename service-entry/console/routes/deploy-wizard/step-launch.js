@@ -9,7 +9,8 @@
 //   Failure   the job error object in a RootCausePanel; the signature behind it is looked up
 //             once from GET /api/knowledge?kind=error-signatures. A suggestion changes the
 //             draft and goes back to Review with a DiffTable. Nothing relaunches by itself.
-//   Success   Open in Playground, Copy endpoint, View deployment, Qualify this deployment
+//   Success   Open in Playground, Copy endpoint, View deployment, Qualify this deployment (opens the
+//             qualification checklist and Save as recipe in place, CON-31)
 //   Notice    a plan that changed at launch (a manager before ENG-2 does not refuse it)
 
 import { jobFailure, jobPhases, jobState, knobsOf, runtimesHref, stageDetail, startOverrideRows, successLinks } from "../../lib/launch-model.js";
@@ -28,9 +29,11 @@ import { useQuery, useT } from "../../ui/hooks.js";
 import { html } from "../../ui/html.js";
 import { useEffect, useRef, useState } from "../../ui/vendor.js";
 import { useFailureActions, useSignature } from "./failure-actions.js";
+import { LazyPart } from "./lazy-part.js";
 
 const SAFETY_REFRESH_MS = 5000;
 const GATEWAY_FALLBACK = "/gateway/auto/openai/v1";
+const loadQualify = () => import("../deployment-detail/qualify.js");
 
 const plain = (entry) => (entry !== null && typeof entry === "object" && Object.hasOwn(entry, "value") ? entry.value : entry);
 
@@ -83,6 +86,7 @@ function PullProgress({ job, started }) {
 function Success({ draft, plan, started }) {
   const { toasts, bootstrap, i18n } = useServices();
   const { t } = i18n;
+  const [qualifying, setQualifying] = useState(false);
   const links = successLinks({
     managerId: started.managerId,
     instanceId: started.instanceId,
@@ -101,8 +105,18 @@ function Success({ draft, plan, started }) {
         <${Button} variant="primary" href=${links.playground} testid="wizard.launch.playground">${t("models.wizard.launch.playground")}<//>
         <${Button} onClick=${copyEndpoint} testid="wizard.launch.copy">${t("models.wizard.launch.copyEndpoint")}<//>
         <${Button} href=${links.deployment} testid="wizard.launch.view">${t("models.wizard.launch.view")}<//>
-        <${Button} href=${links.qualify} testid="wizard.launch.qualify">${t("models.wizard.launch.qualify")}<//>
+        <${Button} icon="circle-check" aria-expanded=${qualifying ? "true" : "false"} onClick=${() => setQualifying(!qualifying)} testid="wizard.launch.qualify">${t("models.wizard.launch.qualify")}<//>
       </div>
+      ${qualifying ? html`<${LazyPart} id="qualify" loader=${loadQualify} props=${{
+        managerId: started.managerId,
+        fleetId: links.fleetId,
+        launchId: started.launchId || "",
+        modelRef: draft.modelRef?.kind === "local" ? draft.modelRef : null,
+        engineId: draft.engineId,
+        values: plan.plan?.values || null,
+        modelName: draft.instance.servedName || draft.modelRef?.repo || draft.modelRef?.path || "",
+        compact: true,
+      }} />` : null}
     </div>
   <//>`;
 }

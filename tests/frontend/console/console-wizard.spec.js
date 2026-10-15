@@ -1607,6 +1607,10 @@ test("Launch sends expectedPlanHash, then every phase follows the jobs events wi
     await expect(byId(page, "wizard.launch.playground")).toHaveAttribute("href", "/playground?model=example-served");
     await expect(byId(page, "wizard.launch.view")).toHaveAttribute("href", "/deployments/vllm%3Aprimary");
     await expect(byId(page, "wizard.launch.qualify")).toHaveText("Qualify this deployment");
+    // CON-31: the action opens the qualification block in place (its requests are covered by console-deployments.spec.js).
+    await expect(byId(page, "wizard.launch.qualify")).toHaveAttribute("aria-expanded", "false");
+    await byId(page, "wizard.launch.qualify").click();
+    await expect(byId(page, "wizard.launch.qualify")).toHaveAttribute("aria-expanded", "true");
     await expect(byId(page, "wizard.launch.copy")).toBeVisible();
     // The draft is used up: nothing is kept and leaving does not ask.
     await expect.poll(() => storedDraft(page)).toBeNull();

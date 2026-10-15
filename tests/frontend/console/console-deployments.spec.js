@@ -6,7 +6,8 @@
 // that poll with `since` and append without repeating lines, Relaunch through
 // Review, Wake with the `slp_` id and the 409 `wake_would_replace_running`
 // confirmation, the metrics tiles with an `unsupported` key, and the phase
-// durations from `lifecycle.phaseHistory`. The real service-entry serves the
+// durations from `lifecycle.phaseHistory`. CON-31 adds qualification and Save as recipe
+// (the checklist from relayed jobs events, 422 inline errors, the overwrite dialog). The real service-entry serves the
 // console and the API is mocked in the browser (helpers/console-harness.js).
 const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
@@ -693,6 +694,288 @@ test("Routing: the route preview sends capability, engine, protocol and the mode
     await expect(byId(page, "deploy.routing.gateway")).toContainText("/gateway/llama/openai/v1");
   } finally {
     await context.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Qualification and Save as recipe (CON-31, 07 §6.2, 02 R-UI-5 and R-UI-7)
+
+const CARD_ID = "mc_demo000000000001";
+const LAUNCH_ID = "lch_aaaaaaaaaaaaaaaaaaaa";
+const QUALIFY_JOB = "job_qualify0001";
+const SAVE_PATH = `/api/launches/${LAUNCH_ID}/save-recipe`;
+
+// The console's EventSource is a fake the test pushes frames into (window.__emit), installed before the console loads.
+function installFakeEventSource() {
+  const sources = [];
+  let counter = 0;
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 0;
+      this.listeners = {};
+      sources.push(this);
+      setTimeout(() => {
+        this.readyState = 1;
+        if (typeof this.onopen === "function") this.onopen({});
+      }, 0);
+    }
+    addEventListener(type, handler) {
+      (this.listeners[type] ||= []).push(handler);
+    }
+    close() {
+      this.readyState = 2;
+    }
+  }
+  window.EventSource = FakeEventSource;
+  window.__emit = (type, data, source = "vllm") => {
+    counter += 1;
+    const envelope = { id: String(counter), type, at: new Date().toISOString(), source, data };
+    for (const es of sources) {
+      for (const handler of es.listeners[type] || []) handler({ data: JSON.stringify(envelope), lastEventId: String(counter) });
+    }
+  };
+}
+
+const qualifyJob = (patch = {}) => ({
+  id: QUALIFY_JOB,
+  type: "model-qualify",
+  status: "running",
+  createdAt: "2026-10-16T10:00:00Z",
+  meta: { fleetId: "vllm:primary", checks: ["models", "chat", "tool-call", "throughput"] },
+  logs: ["Qualifying vllm:primary (models, chat, tool-call, throughput)."],
+  progress: { percent: 0, stage: "验证 / Qualify: models", detail: "running", state: "running" },
+  ...patch,
+});
+
+const hostRecord = (patch = {}) => ({
+  id: "qr_demo0000000000000001",
+  contentDigest: "sha256:abc",
+  cardId: CARD_ID,
+  engineId: "sglang",
+  launchId: LAUNCH_ID,
+  fleetId: "vllm:primary",
+  at: "2026-10-16T10:01:00Z",
+  durationMs: 61000,
+  results: [
+    { check: "models", status: "pass", detail: { zh: "服务名一致", en: "Served name matches" }, metrics: {} },
+    { check: "chat", status: "pass", detail: { zh: "收到 pong", en: "Got a pong back" }, metrics: {} },
+    { check: "tool-call", status: "warn", detail: { zh: "多了一个参数", en: "One extra argument" }, metrics: {} },
+    { check: "throughput", status: "pass", detail: { zh: "42 tok/s", en: "42 tok/s" }, metrics: {} },
+  ],
+  ...patch,
+});
+
+// A page on the Config tab with a qualification backend that the test steers through `state`.
+async function openQualify(browser, { state = {}, api = {}, role = OWNER } = {}) {
+  const live = { job: null, records: [], ...state };
+  const opened = await newPage(browser, {
+    role,
+    api: {
+      "POST /api/models/inspect": { ok: true, card: { cardId: CARD_ID } },
+      [`GET /api/models/${CARD_ID}/qualifications`]: () => ({ ok: true, records: live.records }),
+      [`POST /api/models/${CARD_ID}/qualify`]: () => {
+        live.job = qualifyJob();
+        return { status: 202, body: { ok: true, jobId: QUALIFY_JOB, managerId: "vllm" } };
+      },
+      "GET /api/m/vllm/jobs": () => (live.job ? [live.job] : []),
+      ...api,
+    },
+  });
+  await opened.context.addInitScript(installFakeEventSource);
+  await opened.page.goto(detailUrl("?tab=config"));
+  return { ...opened, live };
+}
+
+const emitJobs = (page, jobs) => page.evaluate((list) => window.__emit("jobs", { managerId: "vllm", jobs: list, full: false }), jobs);
+const check = (page, id) => byId(page, "qualify.checklist").locator(`[data-check="${id}"]`);
+
+test("Qualify starts the job for this fleetId; the checklist follows the relayed jobs events; the host record adds each check's detail", async ({ browser }) => {
+  const { context, page, mock, live } = await openQualify(browser);
+  try {
+    await expect(byId(page, "qualify.root")).toBeVisible();
+    await expect(byId(page, "qualify.never")).toBeVisible();
+    await expect(byId(page, "qualify.save")).toBeDisabled();
+    await expect(byId(page, "qualify.save-hint")).toContainText("unlocks once the Basic chat check has passed");
+    expect(bodiesOf(mock.find("POST", "/api/models/inspect"))).toEqual([{ path: "<MODEL_DIR>/qwen3-demo-32b" }]);
+
+    await byId(page, "qualify.start").click();
+    await expect.poll(() => mock.find("POST", `/api/models/${CARD_ID}/qualify`).length).toBe(1);
+    expect(bodiesOf(mock.find("POST", `/api/models/${CARD_ID}/qualify`))).toEqual([{ fleetId: "vllm:primary" }]);
+    await expect(byId(page, "qualify.root")).toHaveAttribute("data-running", "true");
+    await expect(byId(page, "qualify.checklist").locator("[data-check]")).toHaveCount(4);
+    await expect(check(page, "models")).toHaveAttribute("data-status", "running");
+    await expect(check(page, "throughput")).toHaveAttribute("data-status", "pending");
+    await expect(check(page, "chat")).toContainText("Basic chat");
+
+    // The relayed event moves the list on without a refetch of the page.
+    live.job = qualifyJob({ logs: ["models: pass", "chat: pass"], progress: { percent: 50, stage: "验证 / Qualify: tool-call", detail: "running", state: "running" } });
+    await emitJobs(page, [live.job]);
+    await expect(check(page, "models")).toHaveAttribute("data-status", "pass");
+    await expect(check(page, "chat")).toHaveAttribute("data-status", "pass");
+    await expect(check(page, "tool-call")).toHaveAttribute("data-status", "running");
+    await expect(byId(page, "qualify.save")).toBeDisabled();
+
+    // The run ends and the entry has stored the record: statuses and details come from it.
+    live.records = [hostRecord()];
+    live.job = qualifyJob({ status: "success", meta: { fleetId: "vllm:primary", checks: ["models", "chat", "tool-call", "throughput"], hostRecordId: "qr_demo0000000000000001" }, logs: [] });
+    await emitJobs(page, [live.job]);
+    await expect(byId(page, "qualify.root")).toHaveAttribute("data-running", "false");
+    await expect(check(page, "tool-call")).toHaveAttribute("data-status", "warn");
+    await expect(check(page, "tool-call").locator('[data-testid="qualify-checklist.detail"]')).toHaveText("One extra argument");
+    await expect(check(page, "throughput")).toHaveAttribute("data-status", "pass");
+    await expect(byId(page, "qualify-checklist.summary")).toContainText("3 passed · 1 warnings · 0 failed · 0 skipped");
+    await expect(byId(page, "qualify.save")).toBeEnabled();
+    await expect(byId(page, "qualify.save-hint")).toHaveCount(0);
+    await expectNoA11yViolations(page, { label: "qualification block" });
+    expect(mock.csrfViolations).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a reload follows a qualification that is already running, and a failed one shows the failure card", async ({ browser }) => {
+  const running = qualifyJob({ logs: ["models: pass"], progress: { percent: 25, stage: "验证 / Qualify: chat", detail: "running", state: "running" } });
+  const { context, page, live } = await openQualify(browser, { state: { job: running } });
+  try {
+    await expect(byId(page, "qualify.root")).toHaveAttribute("data-running", "true");
+    await expect(check(page, "models")).toHaveAttribute("data-status", "pass");
+    await expect(check(page, "chat")).toHaveAttribute("data-status", "running");
+    live.job = qualifyJob({
+      status: "failed",
+      error: "The engine stopped answering during qualification.",
+      failure: { code: "qualify_server_stopped", signatureId: null, phase: "api", hint: { zh: "引擎在验证过程中停止应答，请查看实例日志。", en: "The engine stopped answering during qualification; check the instance logs." }, logExcerpt: "" },
+    });
+    await emitJobs(page, [live.job]);
+    await expect(byId(page, "qualify.root")).toHaveAttribute("data-running", "false");
+    await expect(byId(page, "qualify.failure")).toBeVisible();
+    await expect(byId(page, "qualify.failure")).toContainText("Why the qualification failed");
+    await expect(byId(page, "qualify.failure")).toContainText("The engine stopped answering during qualification");
+  } finally {
+    await context.close();
+  }
+});
+
+test("Save as recipe: 422 errors render inline, 409 recipe_exists asks before overwriting, the result links to the Recipes tab with the reload warning", async ({ browser }) => {
+  const saves = [];
+  const { context, page, mock } = await openQualify(browser, {
+    state: { records: [hostRecord()] },
+    api: {
+      [`POST ${SAVE_PATH}`]: (request) => {
+        const body = JSON.parse(request.postData());
+        saves.push(body);
+        if (saves.length === 1) {
+          return { status: 422, body: { ok: false, error: { code: "recipe_invalid", message: "The recipe built from this launch is not valid." }, errors: [
+            { field: "title", code: "invalid", message: "title needs zh and en text." },
+            { field: "match.familyId", code: "required", message: "familyId is missing." },
+          ] } };
+        }
+        if (!body.overwrite) {
+          return { status: 409, body: { ok: false, error: { code: "recipe_exists", message: "A recipe with this id already exists.", hint: "Send overwrite:true to replace it.", details: { source: "user" } } } };
+        }
+        return { ok: true, recipeId: body.recipeId, path: `config/recipes/${body.recipeId}.json`, recipe: { engineId: "sglang", id: body.recipeId }, reloaded: { vllm: true, llama: false },
+          warnings: [{ code: "recipe_reload_failed", message: { zh: "配方已保存，但管理器没有及时重新加载", en: "saved but not reloaded" }, managers: ["llama"] }] };
+      },
+    },
+  });
+  try {
+    await expect(byId(page, "qualify.save")).toBeEnabled();
+    await byId(page, "qualify.save").click();
+    const drawer = byId(page, "recipe-drawer.root");
+    await expect(drawer).toBeVisible();
+    // The form refuses an empty Chinese title before anything is sent.
+    await byId(page, "recipe-drawer.submit").click();
+    await expect(byId(page, "recipe-drawer.field.title-zh")).toContainText("Required");
+    expect(saves).toEqual([]);
+
+    await byId(page, "recipe-drawer.titleZh").fill("演示模型 已验证");
+    await byId(page, "recipe-drawer.scope").selectOption("this-model");
+    await byId(page, "recipe-drawer.lock.contextLength").check();
+    await byId(page, "recipe-drawer.submit").click();
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).toEqual({ recipeId: "qwen3-demo-32b-verified", title: { zh: "演示模型 已验证", en: "qwen3-demo-32b" }, scope: "this-model", locks: ["contextLength"] });
+    await expect(byId(page, "recipe-drawer.field.title-zh")).toContainText("title needs zh and en text.");
+    await expect(byId(page, "recipe-drawer.problems")).toContainText("match.familyId");
+    await expect(byId(page, "recipe-drawer.titleZh")).toHaveAttribute("aria-invalid", "true");
+
+    // 409: the dialog asks; Cancel sends nothing more.
+    await byId(page, "recipe-drawer.submit").click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("Overwrite recipe qwen3-demo-32b-verified?");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(saves).toHaveLength(2);
+    expect(saves[1].overwrite).toBeUndefined();
+
+    await byId(page, "recipe-drawer.submit").click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Overwrite" }).click();
+    await expect.poll(() => saves.length).toBe(4);
+    expect(saves[3]).toEqual({ ...saves[0], overwrite: true });
+    await expect(drawer).toHaveCount(0);
+    await expect(byId(page, "qualify.saved")).toBeVisible();
+    await expect(byId(page, "recipe-saved.ok")).toContainText("Recipe qwen3-demo-32b-verified saved");
+    await expect(byId(page, "recipe-saved.link")).toHaveAttribute("href", "/engines/sglang?tab=recipes&recipe=qwen3-demo-32b-verified");
+    await expect(byId(page, "recipe-saved.warning")).toHaveAttribute("data-warning", "recipe_reload_failed");
+    await expect(byId(page, "recipe-saved.warning")).toContainText("did not reload it in time");
+    expect(mock.csrfViolations).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a bundled recipe id cannot be overwritten, and not_qualified shows the server's hint", async ({ browser }) => {
+  let mode = "bundled";
+  const { context, page } = await openQualify(browser, {
+    state: { records: [hostRecord()] },
+    api: {
+      [`POST ${SAVE_PATH}`]: () => (mode === "bundled"
+        ? { status: 409, body: { ok: false, error: { code: "recipe_exists", message: "A bundled recipe has this id; pick another.", details: { source: "bundled" } } } }
+        : { status: 409, body: { ok: false, error: { code: "not_qualified", message: "This launch has no passing chat check on this host.", hint: "Run qualification first." } } }),
+    },
+  });
+  try {
+    await byId(page, "qualify.save").click();
+    await byId(page, "recipe-drawer.titleZh").fill("演示");
+    await byId(page, "recipe-drawer.submit").click();
+    await expect(byId(page, "recipe-drawer.field.recipeId")).toContainText("A built-in recipe already uses this ID");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    mode = "unqualified";
+    await byId(page, "recipe-drawer.submit").click();
+    await expect(byId(page, "recipe-drawer.error")).toContainText("Run qualification first.");
+  } finally {
+    await context.close();
+  }
+});
+
+test("Save as recipe stays disabled without a passing chat check", async ({ browser }) => {
+  const failing = hostRecord({ results: [{ check: "models", status: "pass", detail: null, metrics: {} }, { check: "chat", status: "fail", detail: { zh: "没有 pong", en: "No pong" }, metrics: {} }] });
+  const { context, page } = await openQualify(browser, { state: { records: [failing] } });
+  try {
+    await expect(check(page, "chat")).toHaveAttribute("data-status", "fail");
+    await expect(check(page, "chat")).toContainText("No pong");
+    await expect(byId(page, "qualify.save")).toBeDisabled();
+  } finally {
+    await context.close();
+  }
+});
+
+test("without the qualification endpoints (404) the block is hidden", async ({ browser }) => {
+  const { context, page } = await openQualify(browser, {
+    api: { [`GET /api/models/${CARD_ID}/qualifications`]: { status: 404, body: { error: "Not found" } } },
+  });
+  try {
+    await expect(byId(page, "deploy.config.values")).toBeVisible();
+    await expect.poll(() => page.locator('[data-testid="deploy.config.qualify"]').count()).toBe(0);
+    await expect(byId(page, "qualify.root")).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+  const second = await openQualify(browser, { api: { "POST /api/models/inspect": { status: 404, body: { error: "Not found" } } } });
+  try {
+    await expect(byId(second.page, "deploy.config.values")).toBeVisible();
+    await expect(byId(second.page, "deploy.config.qualify")).toHaveCount(0);
+  } finally {
+    await second.context.close();
   }
 });
 
