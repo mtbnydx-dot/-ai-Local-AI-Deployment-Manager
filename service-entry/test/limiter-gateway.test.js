@@ -43,7 +43,7 @@ function fakeManager(instances) {
       const answer = () => {
         if (res.writableEnded) return;
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "cmpl-test", choices: [], usage: { prompt_tokens: 3, completion_tokens: 4 } }));
+        res.end(JSON.stringify({ id: "cmpl-test", choices: [], usage: { prompt_tokens: 3, completion_tokens: fakeCompletionTokens } }));
       };
       if (holdMode && text.includes("hold")) held.push(answer);
       else answer();
@@ -138,8 +138,15 @@ test("a PUBLIC key's rpm is a bucket: headers on every answer, 429 rate_limit_ex
   assert.match(refused.headers["x-request-id"], /^req_/);
 });
 
-test("tpm: request_exceeds_tpm is 400 with the token headers; ordinary requests report the bucket", async () => {
+// What the fake manager reports as used. Since PUB-11 the tpm bucket is
+// settled with the real usage, so draining it takes requests that really use
+// tokens.
+let fakeCompletionTokens = 4;
+
+test("tpm: request_exceeds_tpm is 400 with the token headers; ordinary requests report the bucket", async (t) => {
   await setup();
+  fakeCompletionTokens = 100;
+  t.after(() => { fakeCompletionTokens = 4; });
   entry.resetEntryRateLimitBuckets();
   const { secret } = createKey({ limits: { rpm: 100, tpm: 500, maxOutputTokens: 100 } });
   const served = await chat(publicPort, secret, { body: { max_tokens: 50 } });
@@ -150,7 +157,8 @@ test("tpm: request_exceeds_tpm is 400 with the token headers; ordinary requests 
   assert.equal(huge.status, 400);
   assert.equal(huge.json.error.code, "request_exceeds_tpm");
   assert.equal(huge.headers["x-ratelimit-limit-tokens"], "500");
-  // Each request reserves its input plus 100 output tokens: the bucket runs dry.
+  // Each request reserves its input plus 100 output tokens and then uses
+  // them (the fake reports 100 completion tokens): the bucket runs dry.
   let drained = null;
   for (let index = 0; index < 8 && !drained; index += 1) {
     const attempt = await chat(publicPort, secret, { body: { max_tokens: 100 } });
