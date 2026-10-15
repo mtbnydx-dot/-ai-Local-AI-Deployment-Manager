@@ -1,0 +1,158 @@
+{
+  "ok": true,
+  "from": "2026-10-13T12:00:00.000Z",
+  "to": "2026-10-14T12:00:00.000Z",
+  "authFailures": {
+    "available": true,
+    "series": [
+      [
+        1791968400000,
+        4
+      ],
+      [
+        1791972000000,
+        11
+      ],
+      [
+        1791975600000,
+        160
+      ],
+      [
+        1791979200000,
+        24
+      ]
+    ],
+    "topIps": [
+      {
+        "ip": "203.0.113.9",
+        "country": "DE",
+        "count": 170,
+        "banned": true
+      },
+      {
+        "ip": "192.0.2.44",
+        "country": "US",
+        "count": 12,
+        "banned": false
+      }
+    ]
+  },
+  "bans": [
+    {
+      "subject": "198.51.100.0/24",
+      "kind": "cidr",
+      "reason": "scanner",
+      "source": "admin",
+      "strikes": 1,
+      "createdAt": "2026-10-14T12:00:00.000Z",
+      "expiresAt": null,
+      "createdBy": "test",
+      "active": true
+    },
+    {
+      "subject": "203.0.113.9",
+      "kind": "ip",
+      "reason": "auth failures",
+      "source": "admin",
+      "strikes": 1,
+      "createdAt": "2026-10-14T12:00:00.000Z",
+      "expiresAt": "2026-10-15T12:00:00.000Z",
+      "createdBy": "test",
+      "active": true
+    }
+  ],
+  "topKeys": [
+    {
+      "keyId": "k_0123456789abcdef",
+      "name": "Alice laptop",
+      "requests": 420,
+      "tokens": 91000
+    }
+  ],
+  "anomalies": [
+    {
+      "rule": "auth_storm",
+      "severity": "critical",
+      "detail": {
+        "failures": 140,
+        "windowMinutes": 10
+      }
+    },
+    {
+      "rule": "direct_manager_calls",
+      "severity": "warning",
+      "detail": {
+        "calls24h": 7
+      }
+    },
+    {
+      "rule": "new_country",
+      "severity": "warning",
+      "keyId": "k_0123456789abcdef",
+      "name": "Alice laptop",
+      "detail": {
+        "country": "FR",
+        "lastSeenBefore": "1970-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "rule": "tpm_spike",
+      "severity": "warning",
+      "keyId": "k_0123456789abcdef",
+      "name": "Alice laptop",
+      "detail": {
+        "lastHourTokens": 90000,
+        "hourlyP95": 9000,
+        "factor": 10
+      }
+    }
+  ],
+  "adminEvents": [
+    {
+      "id": 3,
+      "at": "2026-10-14T12:00:00.000Z",
+      "actor": "test",
+      "actorIp": null,
+      "action": "ban.upsert",
+      "targetType": "ban",
+      "targetId": "198.51.100.0/24",
+      "details": {
+        "kind": "cidr",
+        "reason": "scanner",
+        "expiresAt": null
+      }
+    },
+    {
+      "id": 2,
+      "at": "2026-10-14T12:00:00.000Z",
+      "actor": "test",
+      "actorIp": null,
+      "action": "ban.upsert",
+      "targetType": "ban",
+      "targetId": "203.0.113.9",
+      "details": {
+        "kind": "ip",
+        "reason": "auth failures",
+        "expiresAt": "2026-10-15T12:00:00.000Z"
+      }
+    },
+    {
+      "id": 1,
+      "at": "2026-10-14T12:00:00.000Z",
+      "actor": "test",
+      "actorIp": null,
+      "action": "key.create",
+      "targetType": "key",
+      "targetId": "k_0123456789abcdef",
+      "details": {
+        "name": "Alice laptop",
+        "class": "friend"
+      }
+    }
+  ],
+  "sources": {
+    "authFailures": "telemetry",
+    "topKeys": "telemetry",
+    "anomalies": "telemetry"
+  }
+}
