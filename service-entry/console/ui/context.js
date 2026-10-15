@@ -3,7 +3,8 @@
 // app.js creates them once per tab: api (lib/api.js), cache (lib/store.js),
 // events (lib/events.js), router (lib/router.js), i18n (lib/i18n.js),
 // formatters (lib/format.js), prefs (lib/prefs.js createPrefsStore), role (a
-// lib/store.js signal), toasts, visibility and the bootstrap. Components read
+// lib/store.js signal), audit (lib/audit-session.js, the audit unlock), toasts,
+// visibility and the bootstrap. Components read
 // them with useServices() or the narrower hooks in ui/hooks.js.
 
 import { createContext, useContext } from "./vendor.js";
@@ -14,8 +15,8 @@ const REQUIRED = ["api", "cache", "i18n"];
 
 /**
  * Freezes the service bag after checking the services every hook relies on.
- * Optional ones (events, router, formatters, prefs, role, toasts, visibility,
- * bootstrap) may be absent in tests and in the ui-kit page.
+ * Optional ones (events, router, formatters, prefs, role, audit, toasts,
+ * visibility, bootstrap) may be absent in tests and in the ui-kit page.
  */
 export function createServices(services) {
   for (const name of REQUIRED) {

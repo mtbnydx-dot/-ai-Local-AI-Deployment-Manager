@@ -37,7 +37,7 @@ function readSearch(services) {
 /**
  * The URL-backed view state of a page.
  * @returns {{ range, filters, refresh, rangeValid, rangeProblem, search, windowText, key,
- *   setRange(value), setFilters(patch), setRefresh(on), query(endpoint, extra), keyFor(endpoint), link(path, extra), refreshNow() }}
+ *   setRange(value), setFilters(patch), setRefresh(on), setExtra(patch), query(endpoint, extra), keyFor(endpoint), link(path, extra), refreshNow() }}
  */
 export function useObsState({ fallback = "24h" } = {}) {
   const services = useServices();
@@ -78,6 +78,10 @@ export function useObsState({ fallback = "24h" } = {}) {
     setRange: (value) => commit({ range: value }),
     setFilters: (filters) => commit({ filters }),
     setRefresh: (on) => commit({ refresh: on }),
+    /** Sets or removes (null) parameters only one page reads, such as the request-list filters. */
+    setExtra: (extra) => commit({ extra }),
+    /** The patchObsSearch patch of one change, applied in one step (a facet that touches a common filter or an extra). */
+    apply: (patch) => commit(patch),
     query: (endpoint, extra = {}) => queryFor(endpoint, state, Date.now(), extra),
     keyFor: (endpoint) => keyFor(endpoint, state),
     link: (path, extra = {}) => `${path}${carrySearch(search, extra)}`,
@@ -254,12 +258,13 @@ function Filters({ obs, live, readOnly }) {
 }
 
 /** The header every sub-page starts with. */
-export function ObsHeader({ obs, id, live, readOnly, bare = false }) {
+export function ObsHeader({ obs, id, live, readOnly, bare = false, title, trail }) {
   const services = useServices();
   const i18n = useT();
   const { t } = i18n;
   const role = useRole();
   const page = t(tk("obs.page.", id));
+  const crumbs = trail || [{ label: t("obs.title"), href: obs.link("/observability") }, { label: page }];
   const items = SUBPAGES.filter((item) => !(item.owner && role !== "owner"));
 
   async function copyLink() {
@@ -270,7 +275,7 @@ export function ObsHeader({ obs, id, live, readOnly, bare = false }) {
   }
 
   return html`<div class="stack-sm obs-header" data-testid="obs.header">
-    <${PageHeader} title=${page} breadcrumbs=${[{ label: t("obs.title"), href: obs.link("/observability") }, { label: page }]} />
+    <${PageHeader} title=${title || page} breadcrumbs=${crumbs} />
     <nav aria-label=${t("obs.subnav")} data-testid="obs.subnav">
       <ul class="obs-subnav">
         ${items.map((item) => html`<li key=${item.id}><a class="obs-subnav-link" href=${obs.link(item.path)} aria-current=${item.id === id ? "page" : undefined} data-testid=${`obs.nav.${item.id}`}>${t(tk("obs.page.", item.id))}</a></li>`)}
@@ -303,15 +308,17 @@ export function ObsHeader({ obs, id, live, readOnly, bare = false }) {
  * @param props.bare no time range or filters (Settings has no window)
  * @param props.ownerOnly the page is only for the owner (a viewer sees the notice, not the panels)
  * @param props.readOnly the answers said they are redacted (summary `viewer: true`)
+ * @param props.title a page title other than the sub-page name (the request detail names its request)
+ * @param props.trail the breadcrumbs for that title
  */
-export function ObsPage({ obs, id, ownerOnly = false, readOnly = false, bare = false, children, testid }) {
+export function ObsPage({ obs, id, ownerOnly = false, readOnly = false, bare = false, title, trail, children, testid }) {
   const { t } = useT();
   const features = useBootstrap().features || {};
   const role = useRole();
   const live = useLive({ enabled: Boolean(features.telemetry) });
   const redacted = isReadOnlyView(role, readOnly ? { viewer: true } : null);
   return html`<div class="stack obs-page" data-page=${id} data-testid=${testid || `obs.${id}.root`}>
-    <${ObsHeader} obs=${obs} id=${id} live=${live.data} readOnly=${redacted} bare=${bare} />
+    <${ObsHeader} obs=${obs} id=${id} live=${live.data} readOnly=${redacted} bare=${bare} title=${title} trail=${trail} />
     ${redacted ? html`<p class="notice notice-info" role="status" data-testid="obs.read-only">${t("obs.lanReadOnly")}</p>` : null}
     ${!features.telemetry ? html`<${LazyView} load=${loadLegacy} name="LegacyStats" obs=${obs} />` : ownerOnly && role !== "owner" ? null : children(obs)}
   </div>`;

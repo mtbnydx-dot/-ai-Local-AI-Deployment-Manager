@@ -15,6 +15,7 @@
 // downloads in parallel with them.
 
 import { createApiClient } from "./lib/api.js";
+import { createAuditSession } from "./lib/audit-session.js";
 import { runBootPair } from "./lib/boot-pair.js";
 import { applyEvent, createEventStream, EVENT_TYPES, VIEWER_EVENT_TYPES } from "./lib/events.js";
 import { createFormatters } from "./lib/format.js";
@@ -315,6 +316,7 @@ export async function boot({ doc, win = globalThis, fetchImpl, base, EventSource
   const services = createServices({
     api, cache, i18n, router, prefs, role, toasts, notifications, route, connection, pairing, stale, retryPairing, bootstrap,
     events: stream || undefined,
+    audit: createAuditSession(),
     formatters: createFormatters(locale),
     visibility: createVisibility(doc),
   });

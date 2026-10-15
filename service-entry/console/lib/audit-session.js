@@ -5,6 +5,8 @@
 // On the degrade path (an answer that still carries `token`) the token is
 // kept in this closure only, never in storage, and sent as x-audit-session.
 // Either way the unlock ends at expiresAt, on lock() or when the tab closes.
+// subscribe() tells the pages when that state changes, so a lock in one place
+// closes the content everywhere.
 
 const HEADER = "x-audit-session";
 
@@ -14,6 +16,17 @@ const HEADER = "x-audit-session";
 export function createAuditSession({ now = Date.now } = {}) {
   let token = null;
   let expiresAt = null;
+  const listeners = new Set();
+
+  function changed() {
+    for (const fn of [...listeners]) {
+      try {
+        fn();
+      } catch {
+        // One broken listener must not starve the others.
+      }
+    }
+  }
 
   function expired() {
     return expiresAt === null || now() >= expiresAt;
@@ -28,15 +41,24 @@ export function createAuditSession({ now = Date.now } = {}) {
     /** Takes the POST /api/audit/login answer; returns true when it unlocked. */
     unlock(answer) {
       clear();
-      if (!answer || answer.ok !== true) return false;
-      const until = Date.parse(answer.expiresAt);
-      if (Number.isNaN(until) || until <= now()) return false;
-      expiresAt = until;
-      if (typeof answer.token === "string" && answer.token) token = answer.token;
-      return true;
+      const ok = Boolean(answer && answer.ok === true);
+      const until = ok ? Date.parse(answer.expiresAt) : NaN;
+      if (ok && !Number.isNaN(until) && until > now()) {
+        expiresAt = until;
+        if (typeof answer.token === "string" && answer.token) token = answer.token;
+      }
+      changed();
+      return expiresAt !== null;
     },
     lock() {
+      const was = expiresAt !== null;
       clear();
+      if (was) changed();
+    },
+    /** Calls fn() whenever the unlock state changes; returns the unsubscribe function. */
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
     },
     active() {
       if (expired()) {

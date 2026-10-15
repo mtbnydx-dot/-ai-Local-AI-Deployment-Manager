@@ -123,12 +123,77 @@
 .gantt-sleeping { background: repeating-linear-gradient(90deg, var(--chart-8) 0 2px, var(--surface-1) 2px 5px); }
 .gantt-crashed { background: repeating-linear-gradient(-45deg, var(--danger) 0 3px, var(--surface-1) 3px 6px); }
 
+
+/* Requests explorer (07 §6.7): the facet sidebar next to the table. */
+.req-layout { display: grid; grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+.req-layout-single { grid-template-columns: minmax(0, 1fr); }
+.req-main { min-width: 0; }
+.req-facets { min-width: 0; }
+.req-facet-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.req-facet-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.req-facet-item:hover { background: var(--surface-2); }
+.req-facet-item[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.req-facet-name { min-width: 0; overflow-wrap: anywhere; align-self: center; }
+.req-facet-count { align-self: center; color: var(--text-muted); }
+.req-filter-form { margin-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
+.req-filters > summary { cursor: pointer; list-style: none; width: fit-content; }
+.req-filters > summary::-webkit-details-marker { display: none; }
+.req-events, .req-candidates { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.req-events li { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: baseline; }
+.req-facts dd { overflow-wrap: anywhere; }
+
+/* Request timeline waterfall (04 §11.6): bars on the request's own time axis; each row also says its duration. */
+.waterfall { display: flex; flex-direction: column; gap: var(--sp-3); }
+.wf-rows { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.wf-row { display: grid; grid-template-columns: minmax(8rem, 13rem) minmax(0, 1fr) minmax(5rem, 9rem); gap: var(--sp-3); align-items: center; }
+.wf-track { position: relative; height: 1.25rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.wf-bar { position: absolute; top: 0; bottom: 0; min-width: 2px; }
+.wf-queue { background: repeating-linear-gradient(45deg, var(--chart-3) 0 4px, var(--surface-1) 4px 8px); }
+.wf-upstream { background: repeating-linear-gradient(90deg, var(--chart-4) 0 2px, var(--surface-1) 2px 5px); }
+.wf-prefill { background: repeating-linear-gradient(-45deg, var(--chart-1) 0 4px, var(--surface-1) 4px 8px); }
+.wf-decode { background: var(--chart-2); }
+.wf-response { background: var(--chart-5); }
+.wf-other { background: var(--chart-8); }
+.wf-value { text-align: end; white-space: nowrap; }
+
+/* Audit pages (07 §6.8). */
+.audit-page { min-width: 0; }
+.audit-lock { align-items: center; }
+.audit-unlock { max-width: 28rem; }
+.audit-thread { display: flex; flex-direction: column; gap: var(--sp-3); }
+.audit-msg { padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-1); min-width: 0; }
+.audit-msg[data-role="user"] { border-inline-start: 4px solid var(--chart-1); }
+.audit-msg[data-role="assistant"] { border-inline-start: 4px solid var(--chart-2); }
+.audit-msg[data-role="system"], .audit-msg[data-role="tool"] { border-inline-start: 4px dashed var(--border-strong); }
+.audit-msg-head { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: baseline; margin-bottom: var(--sp-2); }
+.audit-msg-body { overflow-wrap: anywhere; }
+.audit-removable { background: var(--warn-soft); }
+.link-button { padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; text-align: start; text-decoration: underline; cursor: pointer; }
+.link-button:hover { text-decoration-thickness: 2px; }
+
 @media (max-width: 1023px) {
   .obs-grid, .obs-engine-grid { grid-template-columns: minmax(0, 1fr); }
+  .req-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 639px) {
   .gantt-row { grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+  .wf-row { grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+  .wf-value { text-align: start; }
   .obs-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
   .heat-grid { height: 10rem; }
 }

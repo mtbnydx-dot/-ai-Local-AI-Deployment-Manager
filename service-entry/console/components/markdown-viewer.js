@@ -60,6 +60,8 @@ function Blocks({ nodes, ctx }) {
   return nodes.map((node, index) => {
     switch (node.type) {
       case "heading":
+        // Untrusted text (audit conversations) must not shape the page outline: its headings read as bold lines.
+        if (ctx.flatHeadings) return html`<p key=${index} class="md-heading md-heading-flat"><strong><${Inline} nodes=${node.children} ctx=${ctx} /></strong></p>`;
         return h(`h${Math.min(6, Math.max(1, node.level + ctx.headingOffset))}`, { key: index, class: "md-heading" }, html`<${Inline} nodes=${node.children} ctx=${ctx} />`);
       case "paragraph":
         return html`<p key=${index}><${Inline} nodes=${node.children} ctx=${ctx} /></p>`;
@@ -86,11 +88,11 @@ function Blocks({ nodes, ctx }) {
 }
 
 // source markdown text; baseHref resolves relative links and images;
-// allowImages "same-origin" | "none"; headingOffset shifts # to h2 by default.
-export function MarkdownViewer({ source, baseHref, allowImages = "same-origin", headingOffset = 1, testid }) {
+// allowImages "same-origin" | "none"; headingOffset shifts # to h2 by default; flatHeadings renders headings as bold lines (untrusted text).
+export function MarkdownViewer({ source, baseHref, allowImages = "same-origin", headingOffset = 1, flatHeadings = false, testid }) {
   const { t } = useT();
   const tree = useMemo(() => parseMarkdown(source), [source]);
-  const ctx = { baseHref, origin: currentOrigin(), allowImages, headingOffset, blockedLabel: t("common.md.imageBlocked"), tableLabel: t("common.md.table") };
+  const ctx = { baseHref, origin: currentOrigin(), allowImages, headingOffset, flatHeadings, blockedLabel: t("common.md.imageBlocked"), tableLabel: t("common.md.table") };
   return html`<div class="markdown" data-testid=${testid || "markdown.root"}>
     <${Blocks} nodes=${tree.children} ctx=${ctx} />
     ${tree.truncated ? html`<p class="muted small" role="note" data-testid="markdown.truncated">${t("common.md.truncated")}</p>` : null}
