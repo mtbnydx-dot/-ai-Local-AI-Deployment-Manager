@@ -9,6 +9,9 @@ const core = require("../manager-core");
 const templateSignatures = require("../manager-core/model-inspector/template-signatures");
 const modelKnowledge = require("../manager-core/model-inspector/knowledge");
 const { describeDownloadError } = require("../manager-core/model-hub/errors");
+const { createHubClient } = require("../manager-core/model-hub/client");
+const { readHubConfig } = require("../manager-core/model-hub/config");
+const { registerHubShimRoutes } = require("../manager-core/model-hub/shim");
 const { createCcSwitchProviderTools } = require("./lib/ccswitch-provider");
 const { createVllmStartRuntimeRequest, persistAsyncRuntimeFailure } = require("./lib/launch-request");
 const { createVllmDefaultLaunchProfiles } = require("./lib/default-profiles");
@@ -712,6 +715,7 @@ const managerLifecycle = core.createManagerLifecycle({
     clearInterval(idleUnloadTimer);
     for (const timer of progressTimers.values()) clearInterval(timer);
     progressTimers.clear();
+    hubShim?.close();
     sseHub.close();
     recipeWatcher?.close();
     core.interruptRunningDownloadJobs(jobs);
@@ -1100,8 +1104,30 @@ async function listVllmModelCollections() {
 // 任务快照改推送：下载/启动进行中不再靠 1 秒一次的 /api/jobs 轮询。
 const sseHub = core.createSseHub();
 app.get("/api/events", (req, res) => sseHub.handleRequest(req, res));
+// 03 §15 (HUB-13a): with hub.downloadsOwner "hub" the job routes and the SSE
+// `jobs` snapshot also carry this manager's hub downloads, read from the
+// entry through the signed shim client. The routes are registered before the
+// local job routes, which keep every other job. The frontend smoke tests start
+// real managers and must not call the entry this computer runs.
+const hubShim = readHubConfig(DEFAULT_AI_ROOT).downloadsOwner === "hub" && process.env.AI_FRONTEND_SMOKE !== "1"
+  ? registerHubShimRoutes(app, {
+    managerId: "vllm",
+    client: createHubClient({
+      baseUrl: `http://127.0.0.1:${core.resolveEntryPort({ aiRoot: DEFAULT_AI_ROOT })}`,
+      managerId: "vllm",
+      aiRoot: DEFAULT_AI_ROOT,
+    }),
+    isLocalRequest,
+    listLocalJobs: () => Array.from(jobs.values()).reverse(),
+    getLocalJob: (id) => jobs.get(id),
+    beforeReadJobs: () => healDownloadQueue(),
+    summarizeJob: core.summarizeJob,
+    onSnapshot: () => broadcastJobsSnapshot(),
+    hasListeners: () => sseHub.clientCount() > 0,
+  })
+  : null;
 function broadcastJobsSnapshot() {
-  sseHub.broadcastThrottled("jobs", () => Array.from(jobs.values()).reverse().map(core.summarizeJob), 700);
+  sseHub.broadcastThrottled("jobs", () => (hubShim ? hubShim.jobsSnapshot() : Array.from(jobs.values()).reverse().map(core.summarizeJob)), 700);
 }
 
 core.registerJobRoutes(app, {
@@ -1912,6 +1938,8 @@ if (require.main === module) {
     console.error(error);
     process.exitCode = 1;
   });
+  // The one signed upstream SSE that re-reads the hub downloads (03 §15).
+  hubShim?.startRelay();
   process.once("SIGINT", () => shutdownManager("SIGINT").catch((error) => console.error(error)));
   process.once("SIGTERM", () => shutdownManager("SIGTERM").catch((error) => console.error(error)));
 }
@@ -5288,6 +5316,8 @@ function delay(ms) {
 }
 
 module.exports = {
+  hubShim,
+  jobs,
   app,
   CONFIG,
   engineRegistry,
