@@ -209,8 +209,9 @@ function createJobsLedgerStore(options = {}) {
     }
   }
 
-  function createJob(type, title, meta = {}) {
-    const job = createJobRecord(type, title, meta);
+  // options.id: a caller-minted id (pull jobs use dl_<base32>, 00 §9.2).
+  function createJob(type, title, meta = {}, options = {}) {
+    const job = createJobRecord(type, title, meta, options?.id ? { id: String(options.id) } : {});
     jobs.set(job.id, job);
     scheduleJobsSave(0);
     return job;

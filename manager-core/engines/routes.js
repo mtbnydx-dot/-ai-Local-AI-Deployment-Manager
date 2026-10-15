@@ -6,6 +6,7 @@
 //   GET  /api/engines/:engineId/schema     parameter catalog + availability + facts + recipes
 //   GET  /api/instances/:id/metrics        latest sampler snapshot (01 §16.1)
 //   POST /api/recipes/reload               re-read config/recipes (01 §10.3)
+//   POST /api/runtimes/:runtimeId/pull     explicit image pull as a dl_ job (01 §14, §21.1)
 // Later packages (launch plan) add their routes here too.
 // Docker is touched only through the injected getImageStatus/listManagedContainers
 // reads, both cached, so a dashboard polling this route stays cheap. The metrics
@@ -17,6 +18,7 @@ const { matchRecipes } = require("./recipes");
 const { normalizeManagerId } = require("./registry");
 const { publicPlan } = require("./resolve-launch-plan");
 const { createRuntimeFacts } = require("./runtime-facts");
+const { summarizeJob } = require("../job-routes");
 const { buildIntrospectionCommand, introspectRuntime, diffFlagSets, refineAutoParsers } = require("./introspect");
 
 const MAX_DRAFT_BYTES = 256 * 1024;
@@ -95,6 +97,22 @@ function createImagePresenceProbe(options = {}) {
   }
 
   return { present, imageId, clear: () => entries.clear() };
+}
+
+/**
+ * The runtime ref a manager can pull: runtimeId among the runtimes of the
+ * engines it hosts (env image overrides applied). Throws 404 unknown_runtime.
+ */
+function findHostedRuntime(registry, managerId, runtimeId) {
+  const id = String(runtimeId ?? "").trim();
+  const host = normalizeManagerId(managerId);
+  if (id) {
+    for (const engineId of registry.hostedBy(host)) {
+      const ref = registry.runtimesFor(engineId).find((item) => item.runtimeId === id);
+      if (ref) return { ...ref, engineId: ref.engineId || engineId };
+    }
+  }
+  throw httpError(404, "unknown_runtime", `Unknown runtime for this manager: ${id || "(none)"}.`);
 }
 
 /** counts() → { [engineId]: runningContainers } for this manager, or null when unknown. */
@@ -595,6 +613,25 @@ function registerEngineRoutes(app, deps = {}) {
     } catch (error) { return sendRuntimeError(res, error); }
   });
 
+  // The explicit pull behind the image_pull_required blocker (00 §9.2): an
+  // admin action with confirm:true that starts (or joins) an image-pull job.
+  // deps.pullRuntime is the supervisor's; this route never touches a
+  // container or a GPU lease.
+  app.post("/api/runtimes/:runtimeId/pull", async (req, res) => {
+    if (!isAdminRequest(req)) return res.status(403).json(errorEnvelope("forbidden", "Runtime image pulls require administrator access."));
+    if (req.body?.confirm !== true) {
+      return res.status(400).json(errorEnvelope("confirm_required", "Confirm the image pull with confirm:true.", "拉取镜像需要确认 / Confirm the pull first"));
+    }
+    if (typeof deps.pullRuntime !== "function") return res.status(503).json(errorEnvelope("pull_unavailable", "Runtime image pulls are not available on this manager."));
+    try {
+      // A finished pull changes what the plan's pull step and /api/engines see.
+      const { job, existing } = await deps.pullRuntime(req.params?.runtimeId, { source: "api", onSettled: () => presence?.clear() });
+      return res.status(202).json({ ok: true, existing: Boolean(existing), job: { ...summarizeJob(clone(job)), existing: Boolean(existing) } });
+    } catch (error) {
+      return res.status(error.status || 500).json(errorEnvelope(error.code || "pull_failed", error.message, error.hint));
+    }
+  });
+
   if (metricsSampler) {
     app.get("/api/instances/:id/metrics", (req, res) => {
       const { status, payload } = readInstanceMetrics(metricsSampler, req.params?.id);
@@ -612,6 +649,7 @@ module.exports = {
   createImagePresenceProbe,
   createInstanceCounter,
   errorEnvelope,
+  findHostedRuntime,
   readInstanceMetrics,
   registerEngineRoutes,
   validateDraftRequest,

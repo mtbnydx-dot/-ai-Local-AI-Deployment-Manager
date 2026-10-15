@@ -1802,6 +1802,8 @@ const engineRoutes = core.engines.registerEngineRoutes(app, {
   appendLog,
   finishJob,
   failJob,
+  // POST /api/runtimes/:runtimeId/pull (ENG-11): the supervisor's pull job.
+  pullRuntime: (runtimeId, options) => runtimeSupervisor.pullRuntime(runtimeId, options),
 });
 
 // Model knowledge (docs/overhaul/02-models.md MOD-5): GET /api/knowledge/status lists the
@@ -3765,8 +3767,8 @@ async function saveJobsLedgerNow() {
   return jobsLedgerStore.saveJobsLedgerNow();
 }
 
-function createJob(type, title, meta = {}) {
-  return jobsLedgerStore.createJob(type, title, meta);
+function createJob(type, title, meta = {}, options = {}) {
+  return jobsLedgerStore.createJob(type, title, meta, options);
 }
 
 function appendLog(job, data) {
@@ -4080,7 +4082,7 @@ const runtimeSupervisor = core.engines.createRuntimeSupervisor({
   secrets: runtimeApiKeyStore,
   redactor: runtimeSecretRedactor,
   runtimeGatePolicy: "warn",
-  jobs: { appendLog, setJobProgress, scheduleJobsSave, finishJob, failJob, assertActive: assertStartJobActive },
+  jobs: { createJob, appendLog, setJobProgress, scheduleJobsSave, finishJob, failJob, assertActive: assertStartJobActive },
   probes: {
     nvidiaCompatibility: () => core.engines.runtimeSupervisor.probeNvidiaCompatibility(execFileAsync),
     gpuStatus: getGpuStatusFresh,
@@ -4091,6 +4093,7 @@ const runtimeSupervisor = core.engines.createRuntimeSupervisor({
   // container or model list up to the cache TTL old.
   getters: { containerStatus: getContainerStatusFresh, servedModels: getServedModelsFresh },
   publishedPort: (ports) => parseDockerPortPublish(ports)?.port ?? null,
+  resolveRuntime: (runtimeId) => core.engines.findHostedRuntime(engineRegistry, "llama", runtimeId),
   hooks: {
     beforeStart: () => snapshotCurrentStats("before-start"),
     afterChange: () => clearRuntimeInstancesCache(),
