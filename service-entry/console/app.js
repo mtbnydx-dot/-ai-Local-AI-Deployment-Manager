@@ -4,8 +4,9 @@
 // the fragment before anything else runs; (2) the bootstrap the server
 // embedded and the preferences; (3) the catalog of the locale the server
 // chose; (4) the services; (5) legacy-bookmark redirects, done by the router;
-// (6) the App, after which `aria-busy` is cleared; (7) the event stream. Step 8
-// (first-run routing, CON-25) is not here yet. Nothing touches the DOM or
+// (6) the App, after which `aria-busy` is cleared; (7) the event stream; (8)
+// first-run routing for an owner whose setup is incomplete (CON-25, run after
+// the first render and never awaited by it). Nothing touches the DOM or
 // the network until boot() runs, so Node can import the module.
 //
 // The libraries (lib/, ui/) and the route table are this module's static
@@ -174,7 +175,19 @@ function desktopNotification(win, doc, prefs, i18n, entry) {
   }
 }
 
-/** Boot steps 1 to 7. Resolves with the services (for tests) or null when the console could not start. */
+// Step 8. Every failure is silent: the console is usable without the redirect.
+async function routeFirstRun({ api, cache, router, role, bootstrap, prefs }) {
+  try {
+    const model = await import("./lib/setup-model.js");
+    const target = await model.firstRunTarget({ api, cache, role, bootstrap, prefs });
+    const current = router.current;
+    if (target && model.isLandingPath(current?.pathname) && !model.isFromSetup(current?.query)) router.navigate(target, { replace: true });
+  } catch {
+    // No setup state, no redirect.
+  }
+}
+
+/** Boot steps 1 to 8. Resolves with the services (for tests) or null when the console could not start. */
 export async function boot({ doc, win = globalThis, fetchImpl, base, EventSourceImpl }) {
   const root = doc.getElementById(APP_ELEMENT_ID);
   if (!root) return null;
@@ -330,6 +343,12 @@ export async function boot({ doc, win = globalThis, fetchImpl, base, EventSource
     win.performance?.mark?.("console:first-render");
   } catch {
     // Marks are optional.
+  }
+
+  // 8. First-run routing. The setup model loads only for an owner with the setup backend; the owner is
+  // moved to /setup from the landing pages only, so a bookmark to another page is never taken away.
+  if (role.get() === "owner" && bootstrap.features?.setup && !prefs.get("dismissedSetup")) {
+    routeFirstRun({ api, cache, router, role: role.get(), bootstrap, prefs });
   }
   return services;
 }

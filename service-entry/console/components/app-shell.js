@@ -30,6 +30,7 @@ import { ErrorBoundary } from "./error-boundary.js";
 import { Icon } from "./icon.js";
 import { PageHeader } from "./page-header.js";
 import { PairingScreen } from "./pairing-screen.js";
+import { SetupReturnBar } from "./setup-return-bar.js";
 import { Sidebar } from "./sidebar.js";
 import { Skeleton } from "./skeleton.js";
 import { ToastHost } from "./toast.js";
@@ -288,6 +289,7 @@ export function AppShell({ nav = NAV_GROUPS, children }) {
         <div class="app-banners">
           <${ConnectionBanner} state=${connection.state} lastOkAt=${connection.lastOkAt} onRetry=${() => services.events?.reconnect?.()} />
           ${stale ? html`<${UpdateBanner} />` : null}
+          <${SetupReturnBar} query=${route?.query} />
           ${role === "viewer" ? html`<${ReadOnlyBanner} onHow=${services.bootstrap?.access?.local === false ? null : () => services.pairing?.set?.({ reason: "unpaired" })} />` : null}
         </div>
         ${pairing ? html`<${PairingGate} reason=${pairing.reason} onDismiss=${() => services.pairing.set(null)} />` : children}

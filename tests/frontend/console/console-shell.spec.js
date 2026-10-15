@@ -214,7 +214,8 @@ test("a page that is not in the build shows the still-being-built page, and a re
   try {
     await page.goto(`${entry.url}system/ui-kit`);
     await expect(page.locator('#main [data-ready="true"]')).toBeVisible();
-    // Every Models page is built now; Setup (its own package, not in the navigation) is the page that is not in the build.
+    // Every page is built now, so one module is made to answer 404 the way a path outside the build does.
+    await context.route("**/routes/setup.js", (route) => route.fulfill({ status: 404, contentType: "text/plain", body: "not found" }));
     await page.goto(`${entry.url}setup`);
     await expect(byId(page, "app-shell.pending")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open the classic console" })).toHaveAttribute("href", "/classic");
@@ -224,7 +225,7 @@ test("a page that is not in the build shows the still-being-built page, and a re
     await nav(page).getByRole("link", { name: "System" }).click();
     await expect(byId(page, "app-shell.pending")).toHaveCount(0);
     redeployed = true;
-    // Any page that is still not in the build will do; Setup has no link, so go there the way the router listens (popstate).
+    // The page that is not in the build has no link, so go there the way the router listens (popstate).
     await page.evaluate(() => {
       history.pushState(null, "", "/setup");
       globalThis.dispatchEvent(new PopStateEvent("popstate"));
@@ -426,7 +427,7 @@ test("the strip shows the no-model-serving state from a PlatformStatus fixture, 
 });
 
 test("the strip derives the same five layers from /api/status and /api/fleet before 06 lands", async ({ browser }) => {
-  const { context, page, mock } = await newPage(browser, { bootstrap: { ...OWNER, features: { platform: false } } });
+  const { context, page, mock } = await newPage(browser, { bootstrap: { ...OWNER, features: { platform: false, setup: false } } });
   try {
     await page.goto(`${entry.url}overview`);
     const strip = byId(page, "status-strip.root");

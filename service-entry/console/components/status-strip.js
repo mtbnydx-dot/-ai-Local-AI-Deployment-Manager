@@ -196,6 +196,7 @@ export function StatusStrip({ platform = null, status = null, fleet = null, live
     <${Chip} tone=${model.tone} icon=${model.overall === "loading" ? "loader-circle" : TONE_ICON[model.tone]} label=${overallLabel} testid="status-strip.overall" className="strip-overall">
       <div class="stack-sm">
         ${model.layers.map((layer) => html`<${LayerPanel} key=${layer.id} layer=${layer} problems=${model.problems} canAct=${canAct} onAction=${onAction} />`)}
+        ${canAct ? html`<p class="small"><a href="/setup" data-testid="status-strip.setup">${t("platform.setup.reenter")}</a></p>` : null}
       </div>
     <//>
     ${model.layers.map((layer) => html`<${Chip} key=${layer.id} tone=${layer.tone} icon=${TONE_ICON[layer.tone]} label=${t(tk("platform.layer.", layer.id))}
