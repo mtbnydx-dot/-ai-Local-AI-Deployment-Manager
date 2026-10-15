@@ -897,3 +897,665 @@ test("registerFromJob registers only a folder directly in a root and links the j
   assert.equal(library.get(result.entryId).provenance.source, "hub-job", "the job record outlives the next scan");
   assert.equal(library.get(result.entryId).id, result.entryId);
 });
+
+// --- HUB-9: library actions and root-aware storage --------------------------------
+
+const { computeUsage, runCleanup } = require("../model-hub/disk");
+
+const GIB = 1024 ** 3;
+
+// A path as it appears inside JSON text (backslashes doubled).
+function escaped(value) {
+  return JSON.stringify(value).slice(1, -1);
+}
+
+// A folder a hub download left: a marker v2 naming the repo, the revision and
+// every file's hash, so the entry has declared provenance and hashed files.
+function hubFolder(world, name, { root = world.libF, repo = "acme/Tiny-LM", sha = SHA_A, revision = "main", seed = "u", marker = {} } = {}) {
+  const dir = path.join(root, name);
+  const built = makeModel(dir, { seed });
+  markerV2(dir, {
+    model: repo, precision: "", revision, revisionSha: sha,
+    files: Object.entries(built).map(([file, info]) => ({ path: file, size: info.size, sha256: info.sha256 })),
+    ...marker,
+  });
+  return { dir, built };
+}
+
+// A remote manifest that matches the folder on disk file for file, with
+// `changes` applied per path (null removes the file).
+function remoteManifest(dir, built, { sha = SHA_B, repo = "acme/Tiny-LM", changes = {}, extra = [] } = {}) {
+  const files = [];
+  for (const name of fs.readdirSync(dir).filter((item) => !item.startsWith("."))) {
+    const size = fs.statSync(path.join(dir, name)).size;
+    files.push(built[name]
+      ? { path: name, size, sha256: built[name].sha256, gitOid: null, lfs: true }
+      : { path: name, size, sha256: null, gitOid: crypto.createHash("sha1").update(name).digest("hex"), lfs: false });
+  }
+  const out = [];
+  for (const file of [...files, ...extra]) {
+    const change = changes[file.path];
+    if (change === null) continue;
+    out.push(change ? { ...file, ...change } : file);
+  }
+  return { repo, revision: "main", revisionSha: sha, files: out };
+}
+
+function manifestProviders(factory) {
+  const calls = [];
+  return {
+    calls,
+    get(namespace) {
+      return {
+        async getRepo(repo, opts = {}) {
+          calls.push([namespace, repo, opts.revision]);
+          return typeof factory === "function" ? factory(repo, opts) : factory;
+        },
+      };
+    },
+  };
+}
+
+test("check-update diffs the entry's files with the remote revision by sha256 and gitOid", async (t) => {
+  const world = makeWorld(t);
+  const { dir, built } = hubFolder(world, "tiny");
+  const newWeight = "d".repeat(64);
+  let manifest = remoteManifest(dir, built, { sha: SHA_A });
+  const providers = manifestProviders(() => manifest);
+  const library = await world.open({ providers });
+  await world.scan();
+  const entry = await world.byName("Tiny-LM");
+  assert.equal(entry.update.status, "unknown");
+  assert.equal(entry.provenance.revisionSha, SHA_A);
+
+  // Same revision sha: current, and nothing is compared.
+  const same = await library.checkUpdate(entry.id);
+  assert.deepEqual([same.status, same.remoteSha, same.changedFiles, same.bytesToDownload], ["current", SHA_A, 0, 0]);
+  assert.deepEqual(providers.calls[0], ["huggingface", "acme/Tiny-LM", "main"], "the entry's own revision is asked for");
+  assert.equal(library.get(entry.id).update.status, "current", "the result is kept on the entry");
+
+  // A new revision with one changed weight (by sha256): available, with the bytes to fetch.
+  manifest = remoteManifest(dir, built, { sha: SHA_B, changes: { "model.safetensors": { sha256: newWeight, size: 5000 } } });
+  world.events.clear();
+  const available = await library.checkUpdate(entry.id);
+  assert.deepEqual([available.status, available.remoteSha, available.changedFiles, available.bytesToDownload], ["available", SHA_B, 1, 5000]);
+  assert.deepEqual(world.events.changed(), [entry.id]);
+
+  // A new revision that only moved the sha, with the same files: current.
+  manifest = remoteManifest(dir, built, { sha: SHA_C });
+  const moved = await library.checkUpdate(entry.id);
+  assert.deepEqual([moved.status, moved.remoteSha, moved.changedFiles], ["current", SHA_C, 0]);
+
+  // A file that is new in the selection counts, and so does a changed gitOid.
+  manifest = remoteManifest(dir, built, {
+    sha: SHA_B,
+    changes: { "config.json": { gitOid: "e".repeat(40), size: 77 } },
+    extra: [{ path: "model-extra.safetensors", size: 900, sha256: "f".repeat(64), gitOid: null, lfs: true }],
+  });
+  const withNew = await library.checkUpdate(entry.id);
+  // The extra file is not among the entry's files, so the path-based selection ignores it.
+  assert.deepEqual([withNew.status, withNew.changedFiles, withNew.bytesToDownload], ["available", 1, 77]);
+
+  // A remote that no longer has a file does not make it "changed".
+  manifest = remoteManifest(dir, built, { sha: SHA_B, changes: { "tokenizer.json": null } });
+  assert.equal((await library.checkUpdate(entry.id)).status, "current");
+
+  await assert.rejects(library.checkUpdate("lib_ffffffffffffffff"), { code: "library_entry_not_found", status: 404 });
+});
+
+test("check-update: no repo is unsupported, a hub failure is a recorded error, and the legacy timestamp rule is gone", async (t) => {
+  const world = makeWorld(t);
+  makeModel(path.join(world.libF, "no-origin"), { seed: "n" });
+  const { dir, built } = hubFolder(world, "tiny", { seed: "q" });
+  let failure = null;
+  const providers = manifestProviders(() => {
+    if (failure) throw failure;
+    return remoteManifest(dir, built, { sha: SHA_B });
+  });
+  const library = await world.open({ providers });
+  await world.scan();
+  const anon = await world.byName("no-origin");
+  const unsupported = await library.checkUpdate(anon.id);
+  assert.deepEqual([unsupported.status, unsupported.action], ["unsupported", "identify"], "the console offers to identify the repository");
+  assert.equal(providers.calls.length, 0, "an entry with no repo asks nothing");
+
+  const tiny = await world.byName("Tiny-LM");
+  failure = Object.assign(new Error("offline"), { code: "network_unreachable" });
+  const failed = await library.checkUpdate(tiny.id);
+  assert.deepEqual([failed.status, failed.error], ["error", { code: "network_unreachable" }]);
+  assert.equal(library.get(tiny.id).update.status, "error");
+  failure = null;
+  assert.equal((await library.checkUpdate(tiny.id)).status, "current", "the next check recovers");
+
+  // Without providers the check is an error entry, not a crash.
+  await library.stop();
+  const offline = await world.open({});
+  assert.equal((await offline.checkUpdate(tiny.id)).error.code, "hub_unavailable");
+});
+
+test("update enqueues a library-update job into the same folder, matching the folder's own marker", async (t) => {
+  const world = makeWorld(t);
+  const { dir, built } = hubFolder(world, "tiny", { marker: { precision: "FP8", source: "hf-mirror" } });
+  const noMarker = path.join(world.libF, "bare");
+  const bareBuilt = makeModel(noMarker, { seed: "b" });
+  hfMetadata(noMarker, "model.safetensors", SHA_A, bareBuilt["model.safetensors"].sha256);
+  const manifests = {
+    "acme/Tiny-LM": () => remoteManifest(dir, built, { sha: SHA_B, changes: { "model.safetensors": { sha256: "9".repeat(64), size: 6000 } } }),
+    "acme/bare": () => remoteManifest(noMarker, bareBuilt, { sha: SHA_B, repo: "acme/bare", changes: { "model.safetensors": { sha256: "8".repeat(64), size: 7000 } } }),
+  };
+  const providers = manifestProviders((repo) => manifests[repo]());
+  const enqueued = [];
+  const library = await world.open({
+    providers,
+    enqueue: async (input, ctx) => {
+      enqueued.push({ input, ctx });
+      return { id: "dl_testjob", state: "queued", origin: ctx.origin };
+    },
+  });
+  await world.scan();
+  const tiny = await world.byName("Tiny-LM");
+
+  const job = await library.update(tiny.id, { origin: { kind: "console", requestId: "req_1" } });
+  assert.equal(job.id, "dl_testjob");
+  const { input, ctx } = enqueued[0];
+  assert.deepEqual(input.target, { rootId: tiny.rootId, outputName: "tiny" }, "the same folder in the same root");
+  assert.deepEqual([input.provider, input.repo, input.revision, input.allowDuplicate], ["huggingface", "acme/Tiny-LM", "main", true]);
+  assert.deepEqual(input.selection.files.sort(), ["config.json", "model.safetensors", "tokenizer.json"], "the entry's own files, because there is no artifact key");
+  assert.deepEqual([ctx.origin.kind, ctx.origin.entryId, ctx.origin.requestId], ["library-update", tiny.id, "req_1"]);
+  assert.deepEqual(ctx.markerMetadata, { model: "acme/Tiny-LM", source: "hf-mirror", precision: "FP8" }, "the queue matches the marker verbatim");
+  assert.equal(library.get(tiny.id).update.status, "available");
+
+  // A folder with no marker gets the platform's v1 marker first, so the queue may resume into it.
+  const bare = await library.identify((await world.byName("bare")).id, { provider: "huggingface", repo: "acme/bare", force: true });
+  const bareJob = await library.update(bare.id);
+  assert.equal(bareJob.id, "dl_testjob");
+  const marker = JSON.parse(fs.readFileSync(path.join(noMarker, ".platform-download.json"), "utf8"));
+  assert.deepEqual([marker.model, marker.source], ["acme/bare", "huggingface"]);
+  assert.equal(enqueued[1].ctx.markerMetadata.model, "acme/bare");
+
+  // Nothing to update: 409 already_current, and nothing is enqueued.
+  manifests["acme/Tiny-LM"] = () => remoteManifest(dir, built, { sha: SHA_B });
+  await assert.rejects(library.update(tiny.id), { code: "already_current", status: 409 });
+  assert.equal(enqueued.length, 2);
+  // A failing hub: 502.
+  manifests["acme/Tiny-LM"] = () => {
+    throw Object.assign(new Error("down"), { code: "network_unreachable" });
+  };
+  await assert.rejects(library.update(tiny.id), { code: "update_check_failed", status: 502 });
+  await assert.rejects(library.update("lib_ffffffffffffffff"), { code: "library_entry_not_found" });
+});
+
+test("update refuses what cannot be updated in place: no repo, a model-root, a cache repo, no queue", async (t) => {
+  const world = makeWorld(t);
+  makeModel(path.join(world.libF, "no-origin"), { seed: "n" });
+  const solo = path.join(world.root, "solo");
+  const soloBuilt = makeModel(solo, { seed: "s" });
+  markerV2(solo, { model: "acme/Solo", revisionSha: SHA_A, files: [{ path: "model.safetensors", size: 4096, sha256: soloBuilt["model.safetensors"].sha256 }] });
+  world.storage.registerRoot({ path: solo, label: "Solo", mode: "model" });
+  makeHfCacheRepo(world.hfHome, "acme/Cached", SHA_A, { "config.json": Buffer.from("{}"), "model.safetensors": safetensorsBytes(512, "c") });
+  const providers = manifestProviders({ repo: "x/y", revisionSha: SHA_B, files: [] });
+  const library = await world.open({ providers, enqueue: async () => ({ id: "dl_x" }) });
+  await world.scan();
+  const listed = (await library.list({})).entries;
+  const byKind = (predicate) => listed.find(predicate);
+  await assert.rejects(library.update(byKind((e) => e.relativePath === "no-origin").id), { code: "update_unsupported", status: 422 });
+  await assert.rejects(library.update(byKind((e) => e.kind === "hf-cache-repo").id), { code: "update_unsupported", status: 422 });
+  await assert.rejects(library.update(byKind((e) => e.relativePath === "solo").id), { code: "update_unsupported", status: 422 });
+  await library.stop();
+  const noQueue = await world.open({ providers });
+  await assert.rejects(noQueue.update(byKind((e) => e.relativePath === "no-origin").id), { code: "hub_unavailable", status: 503 });
+});
+
+test("delete is guarded: the root, the confirmation and every busy source, and it never stops a container", async (t) => {
+  const world = makeWorld(t);
+  const solo = path.join(world.root, "solo");
+  makeModel(solo, { seed: "s" });
+  world.storage.registerRoot({ path: solo, label: "Solo", mode: "model" });
+  const victim = path.join(world.libF, "victim");
+  makeModel(victim, { seed: "v" });
+  const keeper = path.join(world.libF, "keeper");
+  makeModel(keeper, { seed: "k" });
+  const jobs = [];
+  const probes = [];
+  let probeResult = [];
+  const library = await world.open({
+    getJobs: () => jobs,
+    getBusyPaths: async () => {
+      probes.push(Date.now());
+      if (probeResult instanceof Error) throw probeResult;
+      return probeResult;
+    },
+  });
+  await world.scan();
+  const entry = await world.byName("victim");
+  const soloEntry = await world.byName("solo");
+
+  // The folder of a registered model root is never deletable, whatever the confirmation says.
+  await assert.rejects(library.remove(soloEntry.id, { confirm: soloEntry.displayName }), { code: "root_not_deletable", status: 400 });
+  assert.ok(fs.existsSync(solo));
+
+  // The confirmation must be the display name.
+  await assert.rejects(library.remove(entry.id, {}), { code: "confirm_required", status: 400 });
+  await assert.rejects(library.remove(entry.id, { confirm: "nope" }), { code: "confirm_required" });
+  await assert.rejects(library.remove(entry.id, { confirm: victim }), { code: "confirm_required" }, "the path is not the name");
+  assert.ok(fs.existsSync(victim));
+  await assert.rejects(library.remove("lib_ffffffffffffffff", { confirm: "x" }), { code: "library_entry_not_found", status: 404 });
+
+  // A queue job that may still write the folder, in any non-terminal state, refuses the delete.
+  for (const state of ["downloading", "paused", "queued", "retrying", "interrupted", "waiting"]) {
+    jobs.length = 0;
+    jobs.push({ id: "dl_busy", state, target: { localDir: victim } });
+    await assert.rejects(library.remove(entry.id, { confirm: entry.displayName }), { code: "path_busy", status: 409 }, state);
+  }
+  jobs.length = 0;
+  jobs.push({ id: "dl_done", state: "ready", target: { localDir: victim } }, { id: "dl_failed", state: "failed", target: { localDir: victim } });
+
+  // A container mount (the storage probe), and a probe that cannot answer.
+  probeResult = [{ path: victim, label: "container vllm-1" }];
+  await assert.rejects(library.remove(entry.id, { confirm: entry.displayName }), { code: "path_busy", details: { usedBy: "container vllm-1" } });
+  probeResult = new Error("docker is not answering");
+  await assert.rejects(library.remove(entry.id, { confirm: entry.displayName }), { code: "path_busy", status: 409 });
+  probeResult = [{ path: keeper, label: "container elsewhere" }];
+
+  // A migration or verification lock on the folder.
+  const lock = crypto.randomUUID();
+  world.storage.acquireOperation([victim], "migrate", lock);
+  await assert.rejects(library.remove(entry.id, { confirm: entry.displayName }), { code: "path_busy", status: 409 });
+  world.storage.releaseOperation(lock);
+  assert.ok(fs.existsSync(victim), "every refusal left the folder alone");
+  assert.ok(probes.length >= 3, "the busy probe was consulted");
+
+  // All clear: a task removes the folder and the entry, and only that.
+  world.events.clear();
+  const started = await library.remove(entry.id, { confirm: entry.displayName });
+  assert.match(started.taskId, /^tsk_/);
+  const task = await waitTask(library, started.taskId);
+  assert.equal(task.state, "succeeded", JSON.stringify(task.error));
+  assert.equal(task.result.entryId, entry.id);
+  assert.ok(task.result.reclaimedBytes > 4000);
+  assert.equal(fs.existsSync(victim), false);
+  assert.ok(fs.existsSync(keeper), "a sibling folder is untouched");
+  assert.ok(fs.existsSync(world.libF), "the root itself is untouched");
+  assert.equal(library.get(entry.id), null);
+  assert.ok(world.events.changed().includes(entry.id));
+  assert.equal(JSON.stringify(world.events.list).includes(escaped(victim)), false, "events carry no absolute path");
+
+  // Idempotent: a folder that vanished by hand just drops its entry.
+  probeResult = [];
+  const again = await world.byName("keeper");
+  fs.rmSync(keeper, { recursive: true });
+  const repeat = await waitTask(library, (await library.remove(again.id, { confirm: again.displayName })).taskId);
+  assert.equal(repeat.state, "succeeded");
+  assert.equal(library.get(again.id), null);
+});
+
+test("deleting a Hugging Face cache repository removes only its models-- folder, and a duplicate's link goes with it", async (t) => {
+  const world = makeWorld(t);
+  const files = { "config.json": Buffer.from(JSON.stringify({ model_type: "llama" })), "model.safetensors": safetensorsBytes(2048, "h") };
+  makeHfCacheRepo(world.hfHome, "acme/Cached", SHA_A, files);
+  const other = makeHfCacheRepo(world.hfHome, "acme/Other", SHA_B, files);
+  const library = await world.open();
+  await world.scan();
+  const cached = await world.byName("Cached");
+  const started = await library.remove(cached.id, { confirm: "Cached" });
+  const task = await waitTask(library, started.taskId);
+  assert.equal(task.state, "succeeded", JSON.stringify(task.error));
+  assert.equal(fs.existsSync(path.join(world.hfHome, "hub", "models--acme--Cached")), false);
+  assert.ok(fs.existsSync(other.repoDir));
+  assert.ok(fs.existsSync(path.join(world.hfHome, "hub")), "the cache folder stays");
+  assert.deepEqual((await world.byName("Other")).duplicates, [], "the removed entry no longer links");
+});
+
+test("cleanup-residue removes only .incomplete files and answers 409 while a job may resume the folder", async (t) => {
+  const world = makeWorld(t);
+  const dir = path.join(world.libF, "half");
+  makeModel(dir, { seed: "r" });
+  put(dir, "model-00002.safetensors.incomplete", Buffer.alloc(300));
+  put(dir, ".cache/huggingface/download/model.safetensors.incomplete", Buffer.alloc(200));
+  const jobs = [];
+  const library = await world.open({ getJobs: () => jobs });
+  await world.scan();
+  const entry = await world.byName("half");
+  assert.deepEqual([entry.residue.incompleteFiles, entry.residue.incompleteBytes], [2, 500]);
+
+  for (const state of ["downloading", "paused", "retrying", "queued", "waiting", "interrupted"]) {
+    jobs.length = 0;
+    jobs.push({ id: "dl_resume", state, target: { localDir: dir } });
+    await assert.rejects(library.cleanupResidue(entry.id), { code: "path_busy", status: 409 }, state);
+  }
+  assert.ok(fs.existsSync(path.join(dir, "model-00002.safetensors.incomplete")));
+  jobs.length = 0;
+  jobs.push({ id: "dl_resume", state: "paused", target: { localDir: dir } });
+  await assert.rejects(library.cleanupResidue(entry.id), (error) => error.details.jobId === "dl_resume" && error.details.state === "paused");
+
+  // A finished or failed job no longer resumes anything.
+  jobs.length = 0;
+  jobs.push({ id: "dl_old", state: "failed", target: { localDir: dir } }, { id: "dl_ok", state: "ready", target: { localDir: dir } });
+  world.events.clear();
+  const result = await library.cleanupResidue(entry.id);
+  assert.deepEqual(result.removed.sort(), [".cache/huggingface/download/model.safetensors.incomplete", "model-00002.safetensors.incomplete"]);
+  assert.equal(result.removedBytes, 500);
+  assert.ok(fs.existsSync(path.join(dir, "model.safetensors")) && fs.existsSync(path.join(dir, "config.json")), "payload files stay");
+  assert.deepEqual([library.get(entry.id).residue.incompleteFiles, library.get(entry.id).residue.incompleteBytes], [0, 0]);
+  assert.ok(world.events.changed().includes(entry.id));
+
+  // A lock on the folder (a migration) refuses too, and a cache repo has no residue action.
+  put(dir, "again.safetensors.incomplete", Buffer.alloc(10));
+  const lock = crypto.randomUUID();
+  world.storage.acquireOperation([dir], "migrate", lock);
+  await assert.rejects(library.cleanupResidue(entry.id), { code: "path_busy", status: 409 });
+  world.storage.releaseOperation(lock);
+  makeHfCacheRepo(world.hfHome, "acme/Cached", SHA_A, { "config.json": Buffer.from("{}"), "model.safetensors": safetensorsBytes(512, "c") });
+  await world.scan();
+  await assert.rejects(library.cleanupResidue((await world.byName("Cached")).id), { code: "residue_unsupported", status: 422 });
+});
+
+test("importing a Hugging Face cache repository copies the real files, hashes them and writes marker v2", async (t) => {
+  const world = makeWorld(t);
+  const weight = safetensorsBytes(3000, "m");
+  const files = { "config.json": Buffer.from(JSON.stringify({ model_type: "llama" })), "tokenizer.json": Buffer.from("{}"), "model.safetensors": weight, "sub/extra.safetensors": safetensorsBytes(700, "e") };
+  const cache = makeHfCacheRepo(world.hfHome, "acme/Cached-LM", SHA_A, files);
+  const library = await world.open({ disk: { freeBytes: () => 500 * GIB, reserveBytes: () => GIB } });
+  await world.scan();
+  const cached = await world.byName("Cached-LM");
+  assert.equal(cached.kind, "hf-cache-repo");
+
+  world.events.clear();
+  const started = await library.importCache(cached.id, { rootId: (await library.list({})).roots.find((root) => root.label === "Library F").id, outputName: "Cached-LM-copy" });
+  const task = await waitTask(library, started.taskId);
+  assert.equal(task.state, "succeeded", JSON.stringify(task.error));
+  const target = path.join(world.libF, "Cached-LM-copy");
+  assert.equal(fs.readFileSync(path.join(target, "model.safetensors")).equals(weight), true);
+  assert.ok(fs.existsSync(path.join(target, "sub", "extra.safetensors")), "subfolders are kept");
+  assert.equal(fs.lstatSync(path.join(target, "model.safetensors")).isSymbolicLink(), false, "real files, not links into the cache");
+  assert.deepEqual(fs.readdirSync(target, { recursive: true }).filter((name) => name.endsWith(".incomplete")), [], "no temp file is left");
+  assert.ok(fs.existsSync(cache.repoDir) && fs.existsSync(path.join(cache.repoDir, "snapshots", SHA_A, "model.safetensors")), "the cache copy is kept");
+
+  // Marker v2 with the provenance of the cache entry and a sha256 for every copied file.
+  const marker = JSON.parse(fs.readFileSync(path.join(target, ".platform-download.json"), "utf8"));
+  assert.equal(marker.schemaVersion, 2);
+  assert.deepEqual([marker.model, marker.provider, marker.revisionSha, marker.jobId], ["acme/Cached-LM", "huggingface", SHA_A, null]);
+  assert.ok(marker.createdAt && marker.completedAt);
+  const recorded = Object.fromEntries(marker.files.map((file) => [file.path, file]));
+  assert.equal(recorded["model.safetensors"].sha256, sha256Of(weight));
+  assert.equal(recorded["sub/extra.safetensors"].sha256, sha256Of(files["sub/extra.safetensors"]));
+  assert.equal(marker.files.length, 4);
+  // Where the cache knows a file by its git object id (links to etag-named blobs), the marker keeps that id; otherwise it is hashed here.
+  if (cache.linked) assert.deepEqual([recorded["config.json"].sha256, recorded["config.json"].gitOid], [null, crypto.createHash("sha1").update(files["config.json"]).digest("hex")]);
+  else assert.equal(recorded["config.json"].sha256, sha256Of(files["config.json"]));
+
+  // The new entry is registered from that marker, hashed, and linked to the cache entry as a duplicate.
+  const created = library.get(task.result.entryId);
+  assert.ok(created, "the task result names the new entry");
+  assert.equal(task.result.outputName, "Cached-LM-copy");
+  assert.deepEqual([created.kind, created.provenance.repo, created.provenance.revisionSha, created.provenance.source, created.provenance.confidence], ["folder", "acme/Cached-LM", SHA_A, "platform-marker", "declared"]);
+  assert.equal(created.files.find((file) => file.path === "model.safetensors").sha256, sha256Of(weight));
+  if (cache.linked) {
+    assert.deepEqual(created.duplicates, [cached.id]);
+    assert.ok(library.get(cached.id).duplicates.includes(created.id));
+  }
+  assert.equal(JSON.stringify(task).includes(escaped(target)), false, "the task carries no absolute path");
+  assert.ok(world.events.changed().includes(created.id));
+
+  // The same request again is a resume into the matching marker, not a refusal.
+  const second = await waitTask(library, (await library.importCache(cached.id, { outputName: "Cached-LM-copy", rootId: created.rootId })).taskId);
+  assert.equal(second.state, "succeeded", JSON.stringify(second.error));
+});
+
+test("import follows the target-occupied rule, checks hashes and space, and cleans up after itself", async (t) => {
+  const world = makeWorld(t);
+  const good = { "config.json": Buffer.from("{}"), "model.safetensors": safetensorsBytes(1500, "g") };
+  makeHfCacheRepo(world.hfHome, "acme/Good", SHA_A, good);
+  const bad = makeHfCacheRepo(world.hfHome, "acme/Bad", SHA_B, { "config.json": Buffer.from("{}"), "model.safetensors": safetensorsBytes(900, "b") });
+  // The cache names a blob by the sha256 of its content; damage the content under that name.
+  if (bad.linked) fs.writeFileSync(path.join(bad.repoDir, "blobs", fs.readdirSync(path.join(bad.repoDir, "blobs")).find((name) => name.length === 64)), safetensorsBytes(900, "X"));
+  put(world.libF, "taken/notes.txt", "mine");
+  makeModel(path.join(world.libF, "plain"), { seed: "p" });
+  let free = 500 * GIB;
+  const library = await world.open({ disk: { freeBytes: () => free, reserveBytes: () => GIB } });
+  await world.scan();
+  const goodEntry = await world.byName("Good");
+  const badEntry = await world.byName("Bad");
+  const libFId = (await library.list({})).roots.find((root) => root.label === "Library F").id;
+
+  // A folder with other files and no matching marker is refused, and its contents stay.
+  await assert.rejects(library.importCache(goodEntry.id, { rootId: libFId, outputName: "taken" }), { code: "target_occupied", status: 409 });
+  assert.equal(fs.readFileSync(path.join(world.libF, "taken", "notes.txt"), "utf8"), "mine");
+  assert.equal(fs.existsSync(path.join(world.libF, "taken", ".platform-download.json")), false);
+  // The target is the library's: a name with a separator, an unknown root, a folder entry.
+  await assert.rejects(library.importCache(goodEntry.id, { outputName: "../escape" }), { code: "invalid_target", status: 400 });
+  await assert.rejects(library.importCache(goodEntry.id, { rootId: "no-such-root", outputName: "x" }), { code: "invalid_target", status: 400 });
+  await assert.rejects(library.importCache((await world.byName("plain")).id, { outputName: "x" }), { code: "import_unsupported", status: 422 });
+  await assert.rejects(library.importCache(goodEntry.id, { outputName: 5 }), { code: "invalid_request" });
+
+  // Not enough room on the drive: 507 before anything is written.
+  free = 1000;
+  await assert.rejects(library.importCache(goodEntry.id, { rootId: libFId, outputName: "roomy" }), { code: "disk_full", status: 507 });
+  assert.equal(fs.existsSync(path.join(world.libF, "roomy")), false);
+  free = 500 * GIB;
+
+  // A copy that does not match the cache's recorded hash fails, and the folder this import created is taken back.
+  // (Without symbolic links the cache records no hash to compare with, so this needs a platform that allows them.)
+  if (bad.linked) {
+    const failed = await waitTask(library, (await library.importCache(badEntry.id, { rootId: libFId, outputName: "bad-copy" })).taskId);
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.error.code, "import_hash_mismatch");
+    assert.equal(fs.existsSync(path.join(world.libF, "bad-copy")), false);
+  } else {
+    t.diagnostic("symbolic links are not available here: the import hash-mismatch case was skipped");
+  }
+
+  // A lock held by another operation on the target is a busy path.
+  const lock = crypto.randomUUID();
+  world.storage.acquireOperation([path.join(world.libF, "locked")], "migrate", lock);
+  await assert.rejects(library.importCache(goodEntry.id, { rootId: libFId, outputName: "locked" }), { code: "path_busy", status: 409 });
+  world.storage.releaseOperation(lock);
+  assert.equal(fs.existsSync(path.join(world.libF, "locked")), false);
+  assert.deepEqual((await world.storage.snapshot()).operations, [], "no import lock leaks");
+});
+
+test("storage usage matches 03 13.5: roots with ids and volumes, models with rootId, no volumes key", async (t) => {
+  const world = makeWorld(t);
+  const { dir } = hubFolder(world, "alpha");
+  hubFolder(world, "beta", { root: world.modelsRoot, repo: "acme/Beta", seed: "z" });
+  put(path.join(world.libF, "alpha"), "model-2.safetensors.incomplete", Buffer.alloc(400));
+  makeHfCacheRepo(world.hfHome, "acme/Cached", SHA_A, { "config.json": Buffer.from("{}"), "model.safetensors": safetensorsBytes(512, "c") });
+  put(world.hfHome, "xet/chunk", Buffer.alloc(100));
+  const jobs = [];
+  const library = await world.open({ getJobs: () => jobs });
+  await world.scan();
+  const rootsList = (await library.list({})).roots;
+  const libFRoot = rootsList.find((root) => root.label === "Library F");
+  world.storage.setDefault(libFRoot.id);
+  const usage = await computeUsage({ modelStorage: world.storage, library, jobs: () => jobs, hfHome: world.hfHome, settings: { storage: { reserveGb: 10, showLegacyRootWhenEmpty: false } } });
+
+  assert.equal(usage.ok, true);
+  assert.equal(Object.hasOwn(usage, "volumes"), false);
+  assert.deepEqual(usage.roots.map((root) => root.id), [libFRoot.id, "legacy"], "the default root comes first");
+  const [main, legacy] = usage.roots;
+  assert.deepEqual([main.default, main.legacy, main.label, main.mode], [true, false, "Library F", "library"]);
+  assert.match(main.volume, process.platform === "win32" ? /^[A-Z]:$/ : /^\//);
+  assert.equal(main.modelCount, 1);
+  assert.equal(main.incompleteFiles, 1);
+  assert.equal(main.incompleteBytes, 400);
+  assert.ok(main.usedByModelsBytes > 4096);
+  assert.ok(main.freeBytes > 0 && main.totalBytes >= main.freeBytes);
+  assert.equal(main.pendingBytes, 0);
+  assert.equal(main.reserveBytes, Math.round(Math.max(main.freeBytes * 0.05, 10 * GIB)));
+  assert.equal(main.projectedFreeBytes, main.freeBytes, "nothing pending: the projection is the free space");
+  assert.equal(main.hidden, false);
+  assert.equal(legacy.legacy, true);
+  assert.equal(legacy.modelCount, 1);
+  assert.equal(legacy.hidden, false, "a legacy root with models is shown");
+
+  assert.deepEqual(usage.models.map((model) => [model.name, model.rootId]).sort(), [["alpha", libFRoot.id], ["beta", "legacy"]]);
+  const alpha = usage.models.find((model) => model.name === "alpha");
+  assert.deepEqual([alpha.path, alpha.incomplete, alpha.entryId], [dir, true, (await world.byName("alpha")).id]);
+  assert.equal(alpha.sizeBytes, alpha.bytes);
+
+  assert.equal(usage.hfCache.path, world.hfHome);
+  assert.ok(usage.hfCache.hubBytes > 0);
+  assert.equal(usage.hfCache.xetBytes, 100);
+  assert.equal(usage.hfCache.modelscopeBytes, 0);
+  assert.deepEqual(usage.residues, [{ entryId: alpha.entryId, rootId: libFRoot.id, incompleteFiles: 1, incompleteBytes: 400, busy: false }]);
+  assert.deepEqual(usage.orphanPartials, []);
+  assert.deepEqual(usage.duplicates, []);
+  assert.ok(Date.parse(usage.updatedAt));
+
+  // A job that may resume the folder makes its residue busy.
+  jobs.push({ id: "dl_p", state: "paused", target: { localDir: dir, rootId: libFRoot.id } });
+  assert.equal((await computeUsage({ modelStorage: world.storage, library, jobs: () => jobs, hfHome: world.hfHome })).residues[0].busy, true);
+});
+
+test("an empty legacy root is hidden once another root is the default, unless the setting or a job keeps it", async (t) => {
+  const world = makeWorld(t);
+  hubFolder(world, "only-in-f");
+  const jobs = [];
+  const library = await world.open({ getJobs: () => jobs });
+  await world.scan();
+  const libFRoot = (await library.list({})).roots.find((root) => root.label === "Library F");
+  const view = (settings, extra = {}) => computeUsage({ modelStorage: world.storage, library, jobs: () => jobs, hfHome: world.hfHome, settings, ...extra });
+
+  // While the legacy root is the default it is never hidden, empty or not.
+  const asDefault = await view({});
+  assert.deepEqual(asDefault.roots.map((root) => [root.id, root.default, root.hidden]), [["legacy", true, false], [libFRoot.id, false, false]]);
+
+  world.storage.setDefault(libFRoot.id);
+  const hidden = await view({ storage: { showLegacyRootWhenEmpty: false } });
+  assert.deepEqual(hidden.roots.map((root) => [root.id, root.default, root.legacy, root.hidden]), [[libFRoot.id, true, false, false], ["legacy", false, true, true]]);
+  assert.equal(hidden.roots.length, 2, "hidden roots are still listed, flagged for the console to omit");
+
+  const shown = await view({ storage: { showLegacyRootWhenEmpty: true } });
+  assert.equal(shown.roots.find((root) => root.id === "legacy").hidden, false);
+  // A job writing into the legacy root keeps it visible.
+  jobs.push({ id: "dl_l", state: "downloading", target: { localDir: path.join(world.modelsRoot, "incoming"), rootId: "legacy" } });
+  assert.equal((await view({})).roots.find((root) => root.id === "legacy").hidden, false);
+  jobs.length = 0;
+  // A model in it keeps it visible.
+  hubFolder(world, "back-home", { root: world.modelsRoot, repo: "acme/Home", seed: "h" });
+  await world.scan();
+  assert.equal((await view({})).roots.find((root) => root.id === "legacy").hidden, false);
+});
+
+test("pending and reserve are per drive: the remaining bytes of writing jobs are repeated on each root of that drive", async (t) => {
+  const world = makeWorld(t);
+  hubFolder(world, "a-model");
+  const library = await world.open();
+  await world.scan();
+  const volume = (await library.list({})).roots[0].volume;
+  const jobs = [
+    { id: "dl_1", state: "downloading", target: { localDir: path.join(world.libF, "x"), rootId: "r", volume }, artifact: { totalBytes: 1000 }, progress: { bytesDone: 400 } },
+    { id: "dl_2", state: "materializing", target: { localDir: path.join(world.modelsRoot, "y"), rootId: "legacy", volume }, artifact: { totalBytes: 500 }, progress: { bytesDone: 0 } },
+    { id: "dl_3", state: "queued", target: { localDir: path.join(world.libF, "z"), rootId: "r", volume }, artifact: { totalBytes: 9999 }, progress: {} },
+    { id: "dl_4", state: "downloading", target: { localDir: path.join(world.libF, "w"), rootId: "r", volume: "Q:" }, artifact: { totalBytes: 7777 }, progress: {} },
+  ];
+  const usage = await computeUsage({ modelStorage: world.storage, library, jobs: () => jobs, hfHome: world.hfHome });
+  assert.equal(usage.roots.length, 2);
+  for (const root of usage.roots) {
+    assert.equal(root.volume, volume);
+    assert.equal(root.pendingBytes, 600 + 500, "only writing jobs of this drive count, by what remains");
+    assert.equal(root.projectedFreeBytes, Math.max(0, root.freeBytes - 1100));
+  }
+  assert.equal(usage.roots[0].freeBytes, usage.roots[1].freeBytes, "two roots on one drive report the same free space");
+  assert.equal(usage.roots[0].reserveBytes, usage.roots[1].reserveBytes);
+});
+
+test("usage lists orphan partial downloads and duplicates, and refresh rescans the disk first", async (t) => {
+  const world = makeWorld(t);
+  const copy = path.join(world.libF, "copy");
+  const original = path.join(world.modelsRoot, "original");
+  const built = makeModel(original, { seed: "d" });
+  markerV2(original, { model: "acme/Dup", revisionSha: SHA_A, files: [{ path: "model.safetensors", size: 4096, sha256: built["model.safetensors"].sha256 }] });
+  fs.cpSync(original, copy, { recursive: true });
+  const orphanDir = path.join(world.libF, "failed-dl");
+  put(orphanDir, "model-1.safetensors.incomplete", Buffer.alloc(600));
+  const cancelledDir = path.join(world.libF, "cancelled-dl");
+  put(cancelledDir, "part.bin.incomplete", Buffer.alloc(100));
+  const jobs = [
+    { id: "dl_f", state: "failed", updatedAt: "2026-10-14T10:00:00.000Z", origin: { kind: "console" }, target: { localDir: orphanDir, rootId: "x" } },
+    { id: "dl_c", state: "cancelled", updatedAt: "2026-10-14T09:00:00.000Z", origin: { kind: "console" }, target: { localDir: cancelledDir, rootId: "x" } },
+    { id: "dl_gone", state: "failed", updatedAt: "2026-10-14T08:00:00.000Z", origin: { kind: "console" }, target: { localDir: path.join(world.libF, "never-created") } },
+    { id: "dl_upd", state: "failed", updatedAt: "2026-10-14T07:00:00.000Z", origin: { kind: "library-update" }, target: { localDir: copy, rootId: "x" } },
+  ];
+  const library = await world.open({ getJobs: () => jobs });
+  await world.scan();
+  const view = (extra = {}) => computeUsage({ modelStorage: world.storage, library, jobs: () => jobs, hfHome: world.hfHome, ...extra });
+  const usage = await view();
+  assert.deepEqual(usage.orphanPartials.map((item) => [item.jobId, item.reason, item.bytes]).sort(), [["dl_c", "cancelled", 100], ["dl_f", "failed", 600]]);
+  assert.equal(usage.orphanPartials[0].path.startsWith(world.libF), true);
+  assert.equal(usage.duplicates.length, 1);
+  const [group] = usage.duplicates;
+  assert.equal(group.entryIds.length, 2);
+  assert.equal(group.reclaimableBytes, usage.models.find((model) => model.name === "copy").sizeBytes, "all copies but one can go");
+
+  // An active job on the same folder is not an orphan.
+  jobs.push({ id: "dl_again", state: "queued", target: { localDir: orphanDir } });
+  assert.deepEqual((await view()).orphanPartials.map((item) => item.jobId), ["dl_c"]);
+  jobs.pop();
+
+  // The registry is served as it is; refresh sees what changed on disk.
+  makeModel(path.join(world.libF, "fresh"), { seed: "f" });
+  assert.equal((await view()).models.some((model) => model.name === "fresh"), false);
+  assert.equal((await view({ refresh: true })).models.some((model) => model.name === "fresh"), true);
+});
+
+test("storage cleanup needs confirm, judges every target alone and reports what it reclaimed", async (t) => {
+  const world = makeWorld(t);
+  const dir = path.join(world.libF, "half");
+  makeModel(dir, { seed: "r" });
+  put(dir, "model-2.safetensors.incomplete", Buffer.alloc(300));
+  const busyDir = path.join(world.libF, "busy-half");
+  makeModel(busyDir, { seed: "y" });
+  put(busyDir, "model-2.safetensors.incomplete", Buffer.alloc(50));
+  const orphanDir = path.join(world.libF, "failed-dl");
+  put(orphanDir, "model-1.safetensors.incomplete", Buffer.alloc(600));
+  const activeOrphan = path.join(world.libF, "resumed-dl");
+  put(activeOrphan, "model-1.safetensors.incomplete", Buffer.alloc(90));
+  const jobs = [
+    { id: "dl_f", state: "failed", updatedAt: "2026-10-14T10:00:00.000Z", origin: { kind: "console" }, target: { localDir: orphanDir } },
+    { id: "dl_r", state: "failed", updatedAt: "2026-10-14T10:00:00.000Z", origin: { kind: "console" }, target: { localDir: activeOrphan } },
+    { id: "dl_resume", state: "paused", target: { localDir: busyDir } },
+    { id: "dl_live", state: "downloading", target: { localDir: activeOrphan } },
+    { id: "dl_ready", state: "ready", target: { localDir: dir } },
+  ];
+  const library = await world.open({ getJobs: () => jobs });
+  await world.scan();
+  const half = await world.byName("half");
+  const busyHalf = await world.byName("busy-half");
+  const run = (input) => runCleanup({ library, jobs: () => jobs, ...input });
+
+  await assert.rejects(run({ targets: [{ kind: "incomplete", entryId: half.id }] }), { code: "confirm_required", status: 400 });
+  await assert.rejects(run({ targets: [{ kind: "incomplete", entryId: half.id }], confirm: "yes" }), { code: "confirm_required" });
+  await assert.rejects(run({ targets: [], confirm: true }), { code: "invalid_request", status: 400 });
+  await assert.rejects(run({ targets: [{ kind: "format-disk" }], confirm: true }), { code: "invalid_request" });
+  await assert.rejects(run({ targets: [{ kind: "partial-download", jobId: 5 }], confirm: true }), { code: "invalid_request" });
+  assert.ok(fs.existsSync(path.join(dir, "model-2.safetensors.incomplete")), "a refused request deletes nothing");
+
+  const result = await run({
+    confirm: true,
+    targets: [
+      { kind: "incomplete", entryId: half.id },
+      { kind: "incomplete", entryId: busyHalf.id },
+      { kind: "incomplete", entryId: "lib_ffffffffffffffff" },
+      { kind: "partial-download", jobId: "dl_f" },
+      { kind: "partial-download", jobId: "dl_r" },
+      { kind: "partial-download", jobId: "dl_missing" },
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.reclaimedBytes, 300 + 600);
+  assert.deepEqual(result.results.map((item) => [item.ok, item.error?.code ?? null, item.reclaimedBytes]), [
+    [true, null, 300],
+    [false, "path_busy", 0],
+    [false, "library_entry_not_found", 0],
+    [true, null, 600],
+    [false, "not_an_orphan", 0],
+    [false, "download_not_found", 0],
+  ]);
+  assert.equal(fs.existsSync(path.join(dir, "model-2.safetensors.incomplete")), false);
+  assert.ok(fs.existsSync(path.join(dir, "model.safetensors")), "the model itself stays");
+  assert.ok(fs.existsSync(path.join(busyDir, "model-2.safetensors.incomplete")), "a busy folder is untouched");
+  assert.equal(fs.existsSync(orphanDir), false, "an orphan partial download goes");
+  assert.ok(fs.existsSync(activeOrphan), "a folder an active job writes stays");
+  assert.ok(fs.existsSync(world.libF));
+});
