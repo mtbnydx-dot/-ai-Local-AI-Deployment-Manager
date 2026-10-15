@@ -3,7 +3,8 @@
 // key migration, the access audit, the public settings, announcements and
 // public model metadata. A route module (07 §2.7) on the ADMIN listener.
 // PUB-19 adds the exposure report, scan and external probe (§13.2, §13.3)
-// and the security views and bans under /api/security/*.
+// and the security views and bans under /api/security/*. PUB-20 adds the deploy
+// template preview and write (§13.3, §14).
 //
 // Every route is owner-only: a read needs an owner session or a machine
 // principal inside its scope, a write goes through auth.checkWrite() (owner
@@ -18,6 +19,7 @@ const policy = require("./key-policy");
 const keyMigration = require("./key-migration");
 const { KeysStoreError } = require("./keys-store");
 const { createSecurityOverview } = require("./security-overview");
+const deployTemplates = require("./deploy-templates");
 const { READ_SECTIONS, WRITABLE_SECTIONS, loadAccessConfig, updateAccessSection } = require("./public-config");
 
 const OWNER = "05";
@@ -113,6 +115,7 @@ const ACCESS_ADMIN_WRITE_ROUTES = Object.freeze([
   ["PUT", "/api/public/models/:modelId/meta"],
   ["POST", "/api/public/exposure/scan"],
   ["POST", "/api/public/probe"],
+  ["POST", "/api/public/templates/write"],
   ["POST", "/api/security/bans"],
   ["DELETE", "/api/security/bans/:subject"],
 ]);
@@ -261,6 +264,9 @@ function createAccessRoutes(options = {}) {
   const migration = options.migration || null;
   const settings = options.settings || {};
   const exposure = options.exposure || null;
+  const templatesAiRoot = options.aiRoot || "";
+  const templatesFs = options.templatesFs || undefined;
+  const templateSources = options.templates || undefined;
 
   function store() {
     const target = getStore();
@@ -622,6 +628,52 @@ function createAccessRoutes(options = {}) {
     return { status: 200, body: { ok: true, probe: probeView(probe) } };
   }
 
+  // ---- deploy templates (§13.3, §14) ------------------------------------------
+
+  function templateFailure(error) {
+    if (!(error instanceof deployTemplates.TemplateError)) throw error;
+    if (error.code === "invalid_topology") return fieldError("topology", "invalid", error.message);
+    if (error.code === "invalid_domain" && /webuiDomain/.test(error.message)) return fieldError("webuiDomain", "invalid", error.message);
+    return envelope(error.status || 400, error.code, error.message, error.existing ? { existing: error.existing } : {});
+  }
+
+  function templatePlan(topology, webuiDomain) {
+    return deployTemplates.planTemplates({
+      topology,
+      baseUrl: accessConfig().listeners?.public?.baseUrl || "",
+      config: webuiDomain ? { webuiDomain } : {},
+      ...(templateSources ? { templates: templateSources } : {}),
+    });
+  }
+
+  async function templatesPreview(url) {
+    try {
+      const plan = templatePlan(url.searchParams.get("topology") || "", url.searchParams.get("webuiDomain") || "");
+      return { status: 200, body: { ok: true, files: plan.files, commands: plan.commands } };
+    } catch (error) {
+      return templateFailure(error);
+    }
+  }
+
+  async function templatesWrite(req) {
+    const input = await body(req);
+    if (input.overwrite !== undefined && typeof input.overwrite !== "boolean") return fieldError("overwrite", "invalid", "overwrite must be true or false.");
+    if (input.webuiDomain !== undefined && typeof input.webuiDomain !== "string") return fieldError("webuiDomain", "invalid", "webuiDomain must be a hostname.");
+    try {
+      const plan = templatePlan(typeof input.topology === "string" ? input.topology : "", input.webuiDomain || "");
+      const result = await deployTemplates.writeTemplateFiles({
+        aiRoot: templatesAiRoot,
+        files: plan.files,
+        overwrite: input.overwrite === true,
+        ...(templatesFs ? { fsApi: templatesFs } : {}),
+      });
+      auditAction(req, "templates.write", { topology: input.topology, overwrite: input.overwrite === true, written: result.written });
+      return { status: 200, body: { ok: true, written: result.written } };
+    } catch (error) {
+      return templateFailure(error);
+    }
+  }
+
   // ---- security views and bans (§13.3) ---------------------------------------
 
   function securityOverviewRoute(url) {
@@ -725,6 +777,8 @@ function createAccessRoutes(options = {}) {
     ["GET", /^\/api\/public\/exposure$/, () => exposureReport(false)],
     ["POST", /^\/api\/public\/exposure\/scan$/, (req) => exposureScan(req)],
     ["POST", /^\/api\/public\/probe$/, (req) => exposureProbe(req)],
+    ["GET", /^\/api\/public\/templates$/, (req, url) => templatesPreview(url)],
+    ["POST", /^\/api\/public\/templates\/write$/, (req) => templatesWrite(req)],
     ["GET", /^\/api\/security\/overview$/, (req, url) => securityOverviewRoute(url)],
     ["GET", /^\/api\/security\/events$/, (req, url) => securityEvents(url)],
     ["GET", /^\/api\/security\/bans$/, (req, url) => listBansRoute(url)],
@@ -746,7 +800,7 @@ function createAccessRoutes(options = {}) {
       matched = { handler, params: found.slice(1).map(decode) };
       break;
     }
-    // Paths another package owns (/api/public/templates) fall through; so does a method this module does not serve on a path it does.
+    // Paths another package owns fall through; so does a method this module does not serve on a path it does.
     if (!matched) {
       if (!known) return false;
       const refused = authorize(req, method !== "GET" && method !== "HEAD");
@@ -811,6 +865,7 @@ function mount(ctx) {
     getBus: () => ctx.bus || null,
     migration: ctx.accessMigration || null,
     exposure: ctx.exposure || null,
+    aiRoot: ctx.aiRoot || "",
     securityOverview: ctx.securityOverview || null,
     settings: ctx.accessSettings || {
       readSection: (name) => core.platform.readSection(name, { ...(ctx.aiRoot ? { aiRoot: ctx.aiRoot } : {}), env: process.env }),

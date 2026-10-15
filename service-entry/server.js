@@ -12,9 +12,12 @@ const core = require("../manager-core");
 const { createEntrySecurity } = require("./lib/security");
 const { createGatewayPipeline, scopeForGatewayPath } = require("./lib/gateway-pipeline");
 const { createLimiter } = require("./lib/limiter");
-const { newRequestId, sendPublicError } = require("./lib/public-errors");
+const { lookupPublicError, newRequestId, sendPublicError } = require("./lib/public-errors");
 const { startListeners, tagListener } = require("./lib/listeners");
 const { createPublicListener } = require("./lib/public-listener");
+const { createPublicApi, modelReadOf, parseGatewayRoute } = require("./lib/public-api");
+const { createMeRoutes } = require("./lib/me-routes");
+const telemetryQuery = require("../manager-core/telemetry/query");
 const { createPortalRoutes } = require("./lib/portal-routes");
 const { createPublicData, startStatusSampler } = require("./lib/status-sampler");
 const { createExposureScanner } = require("./lib/exposure-scan");
@@ -33,6 +36,7 @@ const { createViewerRegistry } = require("./lib/viewer-allowlist");
 const { createMachineAuth } = require("./lib/machine-auth");
 const { createAdminAuth, registerSessionRoutes } = require("./lib/admin-session");
 const { redactManagerReadForViewer } = require("./lib/mgmt-proxy");
+const platformRoutes = require("./lib/platform-routes");
 const { createModelHub, discoverHubClis } = require("../manager-core/model-hub");
 const { createTelemetryRuntime } = require("./lib/telemetry-runtime");
 const { inferSourceProgram } = require("../manager-core/telemetry/source-program");
@@ -144,7 +148,8 @@ const MANAGERS = [
     billingId: process.env.VLLM_MANAGER_ID || "vllm-manager",
     envPort: "VLLM_MANAGER_PORT",
     envHost: "VLLM_MANAGER_HOST",
-    defaultHost: process.env.VLLM_MANAGER_HOST || "0.0.0.0",
+    // Fallback when platform.json cannot be read: loopback, like the config default (V21).
+    defaultHost: process.env.VLLM_MANAGER_HOST || "127.0.0.1",
     mode: "safetensors / FP8 / NVFP4 / 工具调用 / 高吞吐",
     accent: "blue",
   },
@@ -156,7 +161,7 @@ const MANAGERS = [
     billingId: process.env.LLAMA_MANAGER_ID || "llama-manager",
     envPort: "LLAMA_MANAGER_PORT",
     envHost: "LLAMA_MANAGER_HOST",
-    defaultHost: process.env.LLAMA_MANAGER_HOST || "0.0.0.0",
+    defaultHost: process.env.LLAMA_MANAGER_HOST || "127.0.0.1",
     mode: "GGUF / 异构双卡 / 长上下文实验",
     accent: "teal",
   },
@@ -181,6 +186,7 @@ const ROUTE_MODULES = [
   "./lib/events", // ENT-EV1  /api/events, /api/events/recent
   "./lib/mgmt-proxy", // ENT-EV2  /api/m/:managerId/*
   "./lib/manager-event-relay", // ENT-EV3  no routes; starts the relay and sets ctx.relay
+  "./lib/telemetry-runtime", // 04 TEL-6  /internal/telemetry/* (ADMIN only; managers' signed ingest)
   "./lib/console-routes", // CON-2  shell, /c/<buildId>/*, /classic, /billing/classic, /api/console/bootstrap
   "./lib/engine-routes", // 01 ENG-19  /api/engines, /api/engines/external/endpoints
   "./lib/hub-routes", // 03 HUB-1  /api/hub/* (reads ctx.hub)
@@ -188,7 +194,7 @@ const ROUTE_MODULES = [
   "./lib/audit-http", // 04 TEL-16  /api/audit/*
   "./lib/access-routes", // 05 PUB-18  /api/access/*, /api/public/{settings,announcements,models}
   "./lib/access-internal-routes", // 05 PUB-10  /internal/access/* (verify, legacy manager key forwarders)
-  // "./lib/platform-routes",     // 06 OPS-13
+  "./lib/platform-routes", // 06 OPS-13  /api/platform/* (status, components, doctor, config, operations), events bridge
 ];
 
 let server = null;
@@ -480,9 +486,7 @@ async function serveGatewayRouteOnPublic(req, res, url, route) {
   req.url = `${target.pathname}${target.search}`;
   beginGatewayRecord(req, res, target);
   if (answerPublicPreAuth(req, res)) return undefined;
-  if (isTtsGatewayPath(target.pathname)) return proxyTtsGatewayRequest(req, res, target);
-  if (req.method === "GET" && (target.pathname === "/gateway/status" || target.pathname === "/gateway/status/")) return handleGatewayStatus(req, res, target);
-  return proxyGatewayRequest(req, res, target);
+  return publicApi.handle(req, res, target, route);
 }
 
 // 05's access layer for one route context: the viewer registry with this
@@ -584,6 +588,13 @@ function createRouteContext(overrides = {}) {
     accessMigration: {
       plan: () => planLegacyKeys(),
       apply: () => migrateLegacyKeys({ force: true }),
+    },
+    // For platform-routes (06 OPS-13): the gateway streams in flight (the idle
+    // gate) and this file's own manager start, the fallback without a supervisor.
+    gatewayInFlight: () => entryGatewayInFlight(),
+    startManager: async (managerId) => {
+      const manager = findManager(managerId);
+      return manager ? startDetachedManager(manager) : null;
     },
     logger: console,
     now: Date.now,
@@ -771,6 +782,10 @@ async function handleRequest(req, res, routes = null) {
       if (req.method === "GET" && (url.pathname === "/gateway/status" || url.pathname === "/gateway/status/")) {
         return handleGatewayStatus(req, res, url);
       }
+      // The key's own view (05 §8.5); the same handler serves PUBLIC /v1/me.
+      if (url.pathname === "/gateway/me" || url.pathname.startsWith("/gateway/me/")) {
+        return meRoutes.handle(req, res, url);
+      }
       return proxyGatewayRequest(req, res, url);
     }
     if (req.method === "GET" && url.pathname === "/api/keys") {
@@ -802,7 +817,7 @@ async function handleRequest(req, res, routes = null) {
           pid: process.pid,
           uptimeSeconds: process.uptime(),
           gateway: buildEntryGatewayUrls(),
-          gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20, maxLines: 2000 }),
+          gatewayAccess: await collectEntryGatewayAccessStats({ limit: 20 }),
           exitLog: PROCESS_EXIT_LOG,
         },
         managers,
@@ -811,6 +826,8 @@ async function handleRequest(req, res, routes = null) {
         search,
         keys: buildKeySummary(managers),
         components: summarizeComponents(managers, mcp, tts, search),
+        // The last supervisor answer (06 §10.3); never waits for it.
+        platform: routes?.ctx?.platform?.summary?.() ?? null,
       };
       return sendJson(res, payload);
     }
@@ -849,7 +866,7 @@ async function handleRequest(req, res, routes = null) {
     if (req.method === "GET" && url.pathname === "/api/gateway-access") {
       const access = await collectEntryGatewayAccessStats({
         limit: url.searchParams.get("limit"),
-        maxLines: url.searchParams.get("maxLines"),
+        window: url.searchParams.get("window"),
       });
       return sendJson(res, access);
     }
@@ -859,6 +876,12 @@ async function handleRequest(req, res, routes = null) {
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const manager = findManager(managerStartMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
+      // The supervisor owns the manager when it is up (06 §10.3).
+      const delegated = await routes?.ctx?.platform?.delegateManager?.(manager.id, "start");
+      if (delegated?.delegated) {
+        const status = await buildManagerStatus(manager, { force: true });
+        return sendJson(res, { ok: delegated.ok, delegated: "supervisor", ready: Boolean(status?.ok), opId: delegated.opId, ...(delegated.error ? { error: delegated.error } : {}), status }, delegated.ok ? 200 : 502);
+      }
       return sendJson(res, await startDetachedManager(manager));
     }
     const managerStopMatch = url.pathname.match(/^\/api\/managers\/([^/]+)\/stop$/);
@@ -867,11 +890,22 @@ async function handleRequest(req, res, routes = null) {
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
       const manager = findManager(managerStopMatch[1]);
       if (!manager) return sendJson(res, { ok: false, error: "Unknown manager." }, 404);
+      const delegated = await routes?.ctx?.platform?.delegateManager?.(manager.id, "stop");
+      if (delegated?.delegated) {
+        const status = await buildManagerStatus(manager, { force: true });
+        return sendJson(res, { ok: delegated.ok, delegated: "supervisor", stopped: { ok: delegated.ok, via: "supervisor" }, opId: delegated.opId, ...(delegated.error ? { error: delegated.error } : {}), status }, delegated.ok ? 200 : 502);
+      }
       return sendJson(res, await stopManager(manager));
     }
     if (req.method === "POST" && url.pathname === "/api/stop-all") {
       const allowed = adminAuth.checkManagementAccess(req, { write: req.method !== "GET" });
       if (!allowed.ok) return sendJson(res, { ok: false, error: allowed.message, code: allowed.code }, allowed.status);
+      // With the supervisor up, one stop of the core profile stops the entry and
+      // both managers, and the supervisor stops restarting them (06 §10.3).
+      const delegated = await routes?.ctx?.platform?.delegateStopAll?.();
+      if (delegated?.delegated && delegated.ok) {
+        return sendJson(res, { ok: true, delegated: "supervisor", opId: delegated.opId, stopped: MANAGERS.map((manager) => ({ id: manager.id, via: "supervisor", ok: true })) });
+      }
       const stopped = await Promise.all(MANAGERS.map((manager) => postJson(`http://127.0.0.1:${manager.port}/api/manager/shutdown`)));
       sendJson(res, { ok: true, stopped });
       return shutdownSoon();
@@ -916,6 +950,7 @@ function redactStatusForRemote(payload) {
       clients: undefined,
       externalAccess: undefined,
     })),
+    platform: platformRoutes.redactPlatformSummaryForViewer(payload.platform),
   };
 }
 
@@ -1068,6 +1103,8 @@ async function startServiceEntry() {
     managerClient: routeMounts.ctx.managerClient,
     getFleetCatalogs: () => getFleetCatalogs(),
     events: routeMounts.ctx.bus,
+    // The alert engine reads the audit schedule from ctx.audit once audit-http has built it.
+    getAudit: () => routeMounts?.ctx?.audit || null,
     processExitLog: PROCESS_EXIT_LOG,
   }).then((runtime) => {
     // The telemetry routes (TEL-18) read the store through ctx at request time.
@@ -1466,6 +1503,13 @@ async function buildSearchGatewayStatus(options = {}) {
   };
 }
 
+// `platform start <registry id>` (06 §10.3); the entry's short ids (vllm, tts,
+// mcp, search) map to the registry ids through the legacy table.
+function platformStartCommand(id) {
+  const legacy = core.platform.LEGACY_IDS || {};
+  return `platform start ${Object.hasOwn(legacy, id) ? legacy[id] : id}`;
+}
+
 // 一张离线清单：入口首页横幅和桌面通知都从这里取，谁离线、怎么拉起。
 function summarizeComponents(managers = [], mcp = null, tts = null, search = null) {
   const items = [];
@@ -1477,13 +1521,13 @@ function summarizeComponents(managers = [], mcp = null, tts = null, search = nul
       online: Boolean(manager.process?.portListening),
       healthy: Boolean(manager.ok),
       startable: true,
-      startCommand: `${manager.id === "vllm" ? "vllm-manager" : "llama-manager"}\\start-manager.cmd 或 start-service-entry.cmd`,
+      startCommand: platformStartCommand(manager.id),
       error: manager.error || "",
     });
   }
-  if (tts) items.push({ id: "tts", name: "TTS 语音平台", kind: "tts", online: Boolean(tts.listening), healthy: Boolean(tts.healthy), startable: false, startCommand: "start-tts-platform.cmd", error: tts.error || "" });
-  if (mcp) items.push({ id: "mcp", name: "MCP 工具服务", kind: "mcp", online: Boolean(mcp.listening), healthy: Boolean(mcp.healthy), startable: false, startCommand: "start-platform-mcp.cmd", error: mcp.error || "" });
-  if (search) items.push({ id: "search", name: "搜索网关", kind: "search", online: Boolean(search.listening), healthy: Boolean(search.healthy), startable: false, startCommand: "start-search-gateway.cmd（需要 Docker Desktop）", error: search.error || "" });
+  if (tts) items.push({ id: "tts", name: "TTS 语音平台", kind: "tts", online: Boolean(tts.listening), healthy: Boolean(tts.healthy), startable: false, startCommand: platformStartCommand("tts"), error: tts.error || "" });
+  if (mcp) items.push({ id: "mcp", name: "MCP 工具服务", kind: "mcp", online: Boolean(mcp.listening), healthy: Boolean(mcp.healthy), startable: false, startCommand: platformStartCommand("mcp"), error: mcp.error || "" });
+  if (search) items.push({ id: "search", name: "搜索网关", kind: "search", online: Boolean(search.listening), healthy: Boolean(search.healthy), startable: false, startCommand: platformStartCommand("search"), error: search.error || "" });
   const offline = items.filter((item) => !item.online);
   const unhealthy = items.filter((item) => item.online && !item.healthy);
   return {
@@ -1492,7 +1536,7 @@ function summarizeComponents(managers = [], mcp = null, tts = null, search = nul
     offline: offline.map((item) => item.id),
     unhealthy: unhealthy.map((item) => item.id),
     items,
-    allCommand: "start-platform.cmd all",
+    allCommand: "platform start full",
   };
 }
 
@@ -1732,7 +1776,7 @@ async function acquireEntryConcurrency(req, res, auth) {
   const key = auth.client?.id ? `${auth.matchedManager}:${auth.client.id}` : security.resolveClientAddress(req) || "anonymous";
   const slot = await core.waitForServiceGatewayConcurrency(policy, key, entryConcurrencyBuckets, entryConcurrencyQueues, res, Math.min(7200, Number(policy.requestTimeoutSeconds || 600)) * 1000);
   if (!slot.ok) {
-    if (!slot.aborted && !res.writableEnded) sendJson(res, { detail: slot.message, code: slot.code }, slot.statusCode || 429, gatewayCorsHeaders(req));
+    if (!slot.aborted && !res.writableEnded) sendTtsRefusal(req, res, slot.statusCode || 429, slot.message, slot.code, gatewayCorsHeaders(req));
     return false;
   }
   let released = false;
@@ -1755,6 +1799,32 @@ function ttsRequestTimeoutMs(req, route) {
     ? process.env.SERVICE_ENTRY_TTS_HEALTH_TIMEOUT_MS
     : process.env.SERVICE_ENTRY_TTS_TIMEOUT_MS;
   return Math.max(1000, Number(configured || (quick ? 10_000 : 10 * 60 * 1000)));
+}
+
+// A TTS refusal: the TTS gateway's {detail, code} body on ADMIN, the 05 §10.2
+// taxonomy on PUBLIC (the OpenAI shape with a stable message, §10.1).
+const TTS_PUBLIC_CODES = Object.freeze({
+  request_body_too_large: "request_too_large",
+  tts_gateway_offline: "service_unavailable",
+  tts_gateway_proxy_error: "upstream_error",
+  invalid_gateway_path: "invalid_request",
+  concurrency_queue_full: "concurrency_limit_exceeded",
+  concurrency_queue_timeout: "concurrency_limit_exceeded",
+});
+
+function sendTtsRefusal(req, res, status, detail, code, headers = {}) {
+  if (security.listenerKind(req) !== "public") return sendJson(res, { detail, code }, status, headers);
+  const text = String(code || "");
+  const publicCode = TTS_PUBLIC_CODES[text]
+    || (/^billing_/.test(text) && [402, 429].includes(status) ? "insufficient_quota" : text);
+  const known = lookupPublicError(publicCode);
+  return gatewayPipeline.sendRefusal(req, res, {
+    status,
+    code: known ? publicCode : (status >= 500 ? "upstream_error" : "invalid_request"),
+    message: detail,
+    headers,
+    retryAfterSeconds: Number(headers["retry-after"]) || null,
+  });
 }
 
 async function proxyTtsGatewayRequest(req, res, url) {
@@ -1784,14 +1854,14 @@ async function proxyTtsGatewayRequest(req, res, url) {
     const ban = gatewayPipeline.checkBan(req);
     if (ban) {
       denyEntryRequest(req, access, { status: 429, message: ban.message, code: "auth_banned", log: shouldLogTtsAccess });
-      return sendJson(res, { detail: ban.message, code: "auth_banned" }, 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+      return sendTtsRefusal(req, res, 429, ban.message, "auth_banned", { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
     }
     auth = await gatewayPipeline.authorize(req, { scope: scopeForGatewayPath(url.pathname, req.method) });
     if (!auth.ok) {
       denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code, log: shouldLogTtsAccess });
       const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
-      // The TTS gateway keeps its {detail, code} shape; the code is 05 §10.2's.
-      return sendJson(res, { detail: auth.message, code: auth.code }, auth.status, headers);
+      // The TTS gateway keeps its {detail, code} shape on ADMIN; the code is 05 §10.2's.
+      return sendTtsRefusal(req, res, auth.status, auth.message, auth.code, headers);
     }
   }
 
@@ -1799,7 +1869,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
     denyEntryRequest(req, access, { status: 429, message, code: "rate_limit_exceeded", log: shouldLogTtsAccess });
-    return sendJson(res, { detail: message, code: "rate_limit_exceeded" }, 429, {
+    return sendTtsRefusal(req, res, 429, message, "rate_limit_exceeded", {
       ...gatewayCorsHeaders(req),
       "retry-after": String(rate.retryAfterSeconds),
     });
@@ -1809,7 +1879,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   if (Number.isFinite(declaredLength) && declaredLength > TTS_GATEWAY_MAX_BODY_BYTES) {
     const message = `TTS request body exceeds ${TTS_GATEWAY_MAX_BODY_BYTES} bytes.`;
     denyEntryRequest(req, access, { status: 413, message, code: "request_body_too_large", log: shouldLogTtsAccess });
-    return sendJson(res, { detail: message, code: "request_body_too_large" }, 413, gatewayCorsHeaders(req));
+    return sendTtsRefusal(req, res, 413, message, "request_body_too_large", gatewayCorsHeaders(req));
   }
   // TTS 用量计费（F3）：持客户端 Key 的合成请求按秒数 / 字符数进账本，并检查每日秒数配额。
   const synthesis = ttsSynthesisRoute({ rest: buildTtsGatewayPath(route).slice(1) }, req.method);
@@ -1818,7 +1888,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     : null;
   if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
     denyEntryRequest(req, access, { status: 503, message: `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`, code: "tts_gateway_offline", log: shouldLogTtsAccess });
-    return sendJson(res, { detail: UPSTREAM_DOWN_MESSAGE, code: "service_unavailable" }, 503, gatewayCorsHeaders(req));
+    return sendTtsRefusal(req, res, 503, UPSTREAM_DOWN_MESSAGE, "service_unavailable", gatewayCorsHeaders(req));
   }
 
   if (!(await acquireEntryConcurrency(req, res, auth))) return;
@@ -1868,7 +1938,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
         access.error = String(authorization.code || "");
         const deniedStatus = authorization.code === "billing_insufficient_balance" ? 402 : 429;
         rec?.reject({ status: deniedStatus, code: authorization.code });
-        return sendJson(res, { detail: "TTS billing allowance is insufficient for this request.", code: authorization.code }, deniedStatus, gatewayCorsHeaders(req));
+        return sendTtsRefusal(req, res, deniedStatus, "TTS billing allowance is insufficient for this request.", authorization.code, gatewayCorsHeaders(req));
       }
       req.ttsRequestId = meter.requestId;
       body = buffered;
@@ -1908,7 +1978,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     access.error = failure?.message || message;
     rec?.fail({ status, code: failure?.code || "tts_gateway_proxy_error", phase: dispatched ? "upstream" : "pre_upstream" });
     if (!res.headersSent) {
-      sendJson(res, { detail: message, code: failure?.code || "tts_gateway_proxy_error" }, status, gatewayCorsHeaders(req));
+      sendTtsRefusal(req, res, status, message, failure?.code || "tts_gateway_proxy_error", gatewayCorsHeaders(req));
     } else if (!res.writableEnded) {
       res.end();
     }
@@ -1926,6 +1996,7 @@ const gatewayPipeline = createGatewayPipeline({
   getCatalogs: (managers) => Promise.all(managers.map((manager) => getManagerModelCatalog(manager))),
   getFleetSettings: () => getFleetSettings(),
   selectFleetTarget: (catalogs, request) => selectFleetTarget(catalogs, request),
+  resolveModelAlias: (requested, context) => publicApi.resolveAlias(requested, context),
   limiter: gatewayLimiter,
   keysStore: () => getAccessStore(),
   logger: console,
@@ -1960,6 +2031,93 @@ const gatewayPipeline = createGatewayPipeline({
 
 async function proxyGatewayRequest(req, res, url) {
   return gatewayPipeline.handle(req, res, { url, route: parseGatewayRoute(url.pathname) });
+}
+
+// The public surface (05 §8, lib/public-api.js): the route dispatch of the
+// PUBLIC key routes, the enriched model lists and the alias resolution. This
+// file supplies the transport handlers and the data the lists join.
+let publicTtsModelsCache = { until: 0, value: [] };
+
+// The /v1/me family (05 §8.5, lib/me-routes.js): the key's own view on PUBLIC
+// and /gateway/me on ADMIN. Usage and recent requests come from the telemetry
+// store when it is ready (04 query layer, restricted to the key), else the
+// key's counters.
+function meTelemetryStore() {
+  const store = routeMounts?.ctx?.telemetry?.store;
+  return store && (!store.state || store.state === "ready") && typeof store.call === "function" ? store : null;
+}
+
+const meRoutes = createMeRoutes({
+  pipeline: () => gatewayPipeline,
+  limiter: gatewayLimiter,
+  keysStore: () => getAccessStore(),
+  config: () => security.accessConfig(),
+  billing: () => {
+    try {
+      return getBillingStore();
+    } catch {
+      return null;
+    }
+  },
+  telemetry: {
+    timeseries: async (params, { tzOffsetMinutes } = {}) => {
+      const store = meTelemetryStore();
+      if (!store) return null;
+      return store.call("timeseries", telemetryQuery.parseQuery("timeseries", params, { now: Date.now(), tzOffsetMinutes }));
+    },
+    requests: async (params) => {
+      const store = meTelemetryStore();
+      if (!store) return null;
+      return store.call("listRequests", telemetryQuery.parseQuery("requests", params, { now: Date.now() }));
+    },
+  },
+  listModels: (req, caller) => publicApi.availableModels({ req, caller, managers: gatewayPipeline.managersFor(caller, "auto") }),
+  sendJson,
+  corsHeaders: (req, caller) => (caller?.key && security.listenerKind(req) === "public" ? security.publicCorsHeaders(req, caller.key) : gatewayCorsHeaders(req)),
+  record: gatewayRecord,
+  clientIp: (req) => security.resolveClientAddress(req),
+  onKeyChanged: () => security.invalidatePublicOrigins?.(),
+  logger: console,
+});
+
+const publicApi = createPublicApi({
+  pipeline: () => gatewayPipeline,
+  getCatalogs: (managers) => Promise.all(managers.map((manager) => getManagerModelCatalog(manager))),
+  store: () => getAccessStore(),
+  config: () => security.accessConfig(),
+  limiter: gatewayLimiter,
+  sendJson,
+  getPrice: (caller, model, managerId) => resolvePublicModelPrice(caller, model, managerId),
+  getTtsModels: async () => {
+    // A list call must not probe the TTS gateway every time.
+    if (publicTtsModelsCache.until > Date.now()) return publicTtsModelsCache.value;
+    const tts = await buildTtsStatus();
+    const value = (tts.engines || []).filter((item) => item.available && item.id).map((item) => ({ id: String(item.id), name: String(item.name || item.label || item.id) }));
+    publicTtsModelsCache = { until: Date.now() + 10_000, value };
+    return value;
+  },
+  handlers: {
+    gateway: (req, res, url) => proxyGatewayRequest(req, res, url),
+    status: (req, res, url) => handleGatewayStatus(req, res, url),
+    tts: (req, res, url) => proxyTtsGatewayRequest(req, res, url),
+    me: (req, res, url) => meRoutes.handle(req, res, url),
+  },
+  logger: console,
+});
+
+// The price a key's plan puts on a model (05 §8.3): the plan of the customer
+// the key is bound to, else the default plan (prices with no plan). Null when
+// billing has no price or cannot be read.
+function resolvePublicModelPrice(caller, model, managerId) {
+  try {
+    const billing = getBillingStore();
+    const binding = caller?.key?.billing;
+    const customer = binding?.scope && binding?.clientId ? billing.lookupCustomerForCredential(binding.scope, binding.clientId) : null;
+    const planId = customer?.customerId ? billing.getCustomer(customer.customerId)?.planId || null : null;
+    return billing.resolveModelPrice({ planId, managerId: String(managerId || ""), model: String(model?.id || "") });
+  } catch {
+    return null;
+  }
 }
 
 // Reads, decodes and parses a model-gateway JSON body under the entry's body
@@ -2034,17 +2192,25 @@ async function handleGatewayStatus(req, res, url) {
   const ban = checkAuthBan(req);
   if (ban) {
     gatewayRecord(req)?.reject({ status: 429, code: "auth_banned" });
-    return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+    return gatewayPipeline.sendRefusal(req, res, { status: 429, code: "auth_banned", message: ban.message, retryAfterSeconds: ban.retryAfterSeconds, headers: gatewayCorsHeaders(req) });
   }
   const auth = await gatewayPipeline.authorize(req, { scope: scopeForGatewayPath(url.pathname, req.method) });
   if (!auth.ok) {
     denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code });
     return gatewayPipeline.sendRefusal(req, res, { ...auth, headers: gatewayCorsHeaders(req) });
   }
-  const rate = gatewayPipeline.enterRate(req, res, auth);
+  // A status read is a control request: it looks at the caller's rpm bucket
+  // (and honours it) but takes no token from it (05 §8.1, V6).
+  const rate = gatewayPipeline.enterRate(req, res, auth, { peek: true });
   if (!rate.ok) {
     gatewayRecord(req)?.reject({ status: 429, code: "rate_limit_exceeded" });
-    return sendJson(res, core.openAiGatewayError("rate_limit_exceeded", `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`), 429, { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) });
+    return gatewayPipeline.sendRefusal(req, res, {
+      status: 429,
+      code: "rate_limit_exceeded",
+      message: `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`,
+      retryAfterSeconds: rate.retryAfterSeconds,
+      headers: gatewayCorsHeaders(req),
+    });
   }
   const authorizedManagers = gatewayPipeline.managersFor(auth, "auto");
   const [catalogs, tts, search, mcp] = await Promise.all([
@@ -2082,7 +2248,7 @@ async function handleGatewayStatus(req, res, url) {
       matchedManager: auth.matchedManager || "",
       allowedModels: auth.client?.allowedModels || [],
     },
-    rateLimit: { limitPerMinute: limitRpm, remaining: rate.remaining, windowSeconds: 60 },
+    rateLimit: { limitPerMinute: rate.ticket?.rpm?.limit ?? null, remaining: rate.ticket?.rpm?.remaining ?? null, windowSeconds: 60 },
     quotas,
     models,
     managers,
@@ -2278,13 +2444,19 @@ function recordTtsUsageSafely(input) {
   }
 }
 
+// ADMIN lists the OpenAI-form models itself and proxies a single-model read.
+// PUBLIC answers every model read from the enriched catalog (05 §8.3): lists
+// and retrievals, OpenAI and Anthropic form alike.
 function isAggregatedModelListRequest(req, route) {
-  if (req.method !== "GET" || !["openai", "opencode"].includes(route.protocol)) return false;
-  const rest = String(route.rest || "").replace(/^\/+|\/+$/g, "");
-  return rest === "models" || rest === "v1/models";
+  if (security.listenerKind(req) === "public") return modelReadOf(req.method, route, { anthropic: true }) !== null;
+  return modelReadOf(req.method, route)?.kind === "list" && req.method === "GET";
 }
 
-async function sendAggregatedModelList(req, res, engine = "auto", auth = null, scopedManagers = null) {
+async function sendAggregatedModelList(req, res, engine = "auto", auth = null, scopedManagers = null, route = null) {
+  if (security.listenerKind(req) === "public") {
+    const managers = Array.isArray(scopedManagers) ? scopedManagers : gatewayPipeline.managersFor(auth, engine);
+    return publicApi.sendModels(req, res, { route: route || { engine, protocol: "openai", rest: "v1/models" }, caller: auth, managers, headers: gatewayCorsHeaders(req) });
+  }
   const managers = Array.isArray(scopedManagers)
     ? scopedManagers
     : gatewayPipeline.managersFor(auth, engine);
@@ -2571,6 +2743,10 @@ async function startTelemetry(options = {}) {
     aiRoot: AI_ROOT,
     dataDir: path.join(ROOT, "data"),
     getBillingStore,
+    // /internal/telemetry/* (TEL-6): verified with the entry trust token.
+    getTrustToken: () => security.getTrustToken(),
+    readRequestBody,
+    sendJson,
     ...options,
     onRow: handleTelemetryRow,
   });
@@ -2731,32 +2907,129 @@ function setEntryGatewayAccessSink(sink) {
   };
 }
 
-// 状态页每 5 秒都会带上网关访问统计；重读日志尾部并全量聚合交给短 TTL 单飞缓存。
+// 状态页每 5 秒都会带上网关访问统计；窗口聚合交给短 TTL 单飞缓存。
 const ENTRY_ACCESS_STATS_CACHE_MS = Math.max(0, Number(process.env.MODEL_ACCESS_STATS_CACHE_MS ?? 10_000));
 const entryAccessStatsCache = core.createSingleFlightCache({ ttlMs: ENTRY_ACCESS_STATS_CACHE_MS, maxEntries: 16 });
+// 04 §17.2: the facade is computed over an explicit time window (default 1 h).
+const ENTRY_ACCESS_DEFAULT_WINDOW_MS = 60 * 60 * 1000;
+const ENTRY_ACCESS_MAX_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ENTRY_ACCESS_PAGE_ROWS = 500;
+const ENTRY_ACCESS_MAX_ROWS = 20000;
+const ENTRY_ACCESS_STORE_LABEL = "telemetry.sqlite";
 
-async function collectEntryGatewayAccessStats(options = {}) {
-  const limit = Math.min(500, Math.max(20, Number(options.limit || 120)));
-  const maxLines = Math.min(50000, Math.max(limit, Number(options.maxLines || 12000)));
-  if (ENTRY_ACCESS_STATS_CACHE_MS > 0) {
-    return entryAccessStatsCache.get(`gateway:${limit}:${maxLines}`, () => collectEntryGatewayAccessStatsFresh(limit, maxLines));
-  }
-  return collectEntryGatewayAccessStatsFresh(limit, maxLines);
+// "30m", "1h", "2d" (or bare milliseconds); anything else is the 1 h default.
+function parseEntryAccessWindow(value) {
+  const match = String(value ?? "").trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/);
+  if (!match) return ENTRY_ACCESS_DEFAULT_WINDOW_MS;
+  const unit = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2] || "ms"];
+  const ms = Number(match[1]) * unit;
+  if (!Number.isFinite(ms) || ms <= 0) return ENTRY_ACCESS_DEFAULT_WINDOW_MS;
+  return Math.min(ENTRY_ACCESS_MAX_WINDOW_MS, Math.max(60_000, Math.round(ms)));
 }
 
-async function collectEntryGatewayAccessStatsFresh(limit, maxLines) {
+// options: { limit, window, maxLines (accepted and ignored), store, now }.
+async function collectEntryGatewayAccessStats(options = {}) {
+  const limit = Math.min(500, Math.max(20, Number(options.limit || 120)));
+  const windowMs = parseEntryAccessWindow(options.window);
+  const store = options.store || telemetry?.store || null;
+  const run = () => collectEntryGatewayAccessStatsFresh({ limit, windowMs, store, now: options.now });
+  // An injected store (tests) is never cached across calls.
+  if (ENTRY_ACCESS_STATS_CACHE_MS > 0 && !options.store && !options.now) {
+    return entryAccessStatsCache.get(`gateway:${limit}:${windowMs}`, run);
+  }
+  return run();
+}
+
+// A requests row of the telemetry store as the legacy access-log entry the
+// core summarisers expect.
+function requestRowToAccessEntry(row) {
+  const failed = row.errorClass && row.errorClass !== "none";
+  return {
+    at: row.receivedAt,
+    requestId: row.requestId,
+    clientRequestId: row.clientRequestId || "",
+    remoteAddress: row.clientIp || "",
+    method: row.method,
+    path: row.path,
+    kind: row.protocol,
+    status: row.status,
+    terminalState: row.terminalState,
+    model: row.modelRequested || "",
+    resolvedModel: row.modelResolved || "",
+    stream: row.stream,
+    authSource: row.authSource || "",
+    clientId: row.keyId || "",
+    userAgent: row.userAgent || "",
+    origin: row.originHost || "",
+    durationMs: row.durationMs,
+    queuedMs: row.queueMs,
+    inputTokens: row.promptTokens,
+    outputTokens: row.outputTokens,
+    error: failed ? String(row.errorCode || row.errorClass) : "",
+    ingress: row.ingress,
+  };
+}
+
+// Polling of the TTS workbench is not an access worth listing (the legacy log
+// skipped it too); the store keeps it as control counts, this guards a stray row.
+function isTtsPollRow(entry) {
+  if (!isTtsGatewayPath(entry.path)) return false;
+  return !shouldLogTtsAccess({ method: entry.method, url: entry.path }, { statusCode: entry.status });
+}
+
+async function readEntryAccessEventsFromStore(store, fromMs, toMs) {
+  const entries = [];
+  let cursor = null;
+  while (entries.length < ENTRY_ACCESS_MAX_ROWS) {
+    const page = await store.call("listRequests", {
+      from: fromMs, to: toMs, limit: ENTRY_ACCESS_PAGE_ROWS, filters: {}, cursor, rangeExplicit: true,
+    });
+    for (const row of page.rows || []) {
+      if (row.extra && row.extra.dupOf) continue;
+      entries.push(requestRowToAccessEntry(row));
+    }
+    if (!page.nextCursor) break;
+    try {
+      const decoded = JSON.parse(Buffer.from(String(page.nextCursor), "base64url").toString("utf8"));
+      cursor = { t: Number(decoded.t), id: Number(decoded.id) };
+    } catch {
+      break;
+    }
+  }
+  return entries;
+}
+
+async function collectEntryGatewayAccessStatsFresh({ limit, windowMs, store, now: nowOption }) {
+  const now = Number.isFinite(Number(nowOption)) ? Number(nowOption) : Date.now();
   const lanAddress = core.getLanAddress();
-  const events = (await readEntryGatewayAccessEvents(maxLines))
-    .map((entry) => core.normalizeAccessEvent(entry, lanAddress))
-    .filter((entry) => entry.atMs > 0)
+  const storeReady = Boolean(store) && (!store.state || store.state === "ready");
+  let entries;
+  if (storeReady) {
+    try {
+      entries = await readEntryAccessEventsFromStore(store, now - windowMs, now + 1);
+    } catch {
+      entries = null;
+    }
+  }
+  // Telemetry off or its store unavailable: the legacy log, cut to the window.
+  const fromStore = Array.isArray(entries);
+  if (!fromStore) entries = await readEntryGatewayAccessEvents(12000);
+  const events = entries
+    .filter((entry) => !isTtsPollRow(entry))
+    .map((entry) => {
+      const event = core.normalizeAccessEvent(entry, lanAddress);
+      // 04 §17.2: public ingress counts as external whatever the address.
+      if (entry.ingress === "public") event.external = true;
+      return event;
+    })
+    .filter((entry) => entry.atMs >= now - windowMs && entry.atMs > 0)
     .sort((a, b) => a.atMs - b.atMs);
   const external = events.filter((entry) => entry.external);
   const local = events.filter((entry) => !entry.external);
-  const now = Date.now();
   return {
     ok: true,
-    updatedAt: new Date().toISOString(),
-    logPath: GATEWAY_ACCESS_LOG,
+    updatedAt: new Date(now).toISOString(),
+    logPath: fromStore ? ENTRY_ACCESS_STORE_LABEL : GATEWAY_ACCESS_LOG,
     privacy: "service-entry 只记录统一网关访问元数据，不记录提示词或响应正文。",
     totals: core.summarizeAccessEvents(events, now),
     external: core.summarizeAccessEvents(external, now),
@@ -2774,16 +3047,6 @@ async function collectEntryGatewayAccessStatsFresh(limit, maxLines) {
 
 async function readEntryGatewayAccessEvents(maxLines = 12000) {
   return core.readAccessLogEvents(GATEWAY_ACCESS_LOG, maxLines, parseJsonSafe);
-}
-
-function parseGatewayRoute(pathname) {
-  const match = String(pathname || "").match(/^\/gateway\/(vllm|llama|auto)\/(openai|claude|opencode)(?:\/(.*))?$/);
-  if (!match) return null;
-  return {
-    engine: match[1],
-    protocol: match[2],
-    rest: String(match[3] || ""),
-  };
 }
 
 async function resolveGatewayManager(engine, protocol, requestedModel = "") {
@@ -3284,8 +3547,24 @@ async function readJsonObjectBody(req, maxBytes) {
   return data;
 }
 
-async function startDetachedManager(manager) {
-  if (await core.isPortListening("127.0.0.1", manager.port)) {
+// The host and port a manager started by this process binds come from
+// platform.json (env > file > default; 127.0.0.1 unless managers.bindHost says
+// otherwise, 06 §10.3, V21). options: { aiRoot, env, spawn, readyTimeoutMs } for tests.
+function managerBindFor(manager, options = {}) {
+  try {
+    const section = core.platform.readSection("managers", { aiRoot: options.aiRoot || AI_ROOT, ...(options.env ? { env: options.env } : {}) });
+    const entry = section.values?.[manager.id];
+    const port = Number(entry?.port);
+    const host = typeof entry?.host === "string" && entry.host ? entry.host : manager.defaultHost;
+    return { host, port: Number.isInteger(port) && port > 0 && port < 65536 ? port : manager.port };
+  } catch {
+    return { host: manager.defaultHost, port: manager.port };
+  }
+}
+
+async function startDetachedManager(manager, options = {}) {
+  const bind = managerBindFor(manager, options);
+  if (await core.isPortListening("127.0.0.1", bind.port)) {
     return { ok: true, alreadyRunning: true, status: await buildManagerStatus(manager, { force: true }) };
   }
   await fs.mkdir(path.join(manager.root, "logs"), { recursive: true });
@@ -3294,8 +3573,8 @@ async function startDetachedManager(manager) {
   const err = fsSync.openSync(path.join(manager.root, "logs", "manager.err.log"), "a");
   const env = {
     ...process.env,
-    [manager.envPort]: String(manager.port),
-    [manager.envHost]: manager.defaultHost,
+    [manager.envPort]: String(bind.port),
+    [manager.envHost]: bind.host,
     // Env is a bootstrap fallback; managers prefer the published file so they
     // can follow entry token rotation without a manager restart.
     SERVICE_GATEWAY_TRUST_TOKEN: security.getTrustToken(),
@@ -3303,7 +3582,7 @@ async function startDetachedManager(manager) {
   };
   if (manager.id === "vllm") env.VLLM_MANAGER_ALLOW_REMOTE = env.VLLM_MANAGER_ALLOW_REMOTE || "0";
   if (manager.id === "llama") env.LLAMA_MANAGER_ALLOW_REMOTE = env.LLAMA_MANAGER_ALLOW_REMOTE || "0";
-  const child = spawn(nodeExe, ["server.js"], {
+  const child = (options.spawn || spawn)(nodeExe, ["server.js"], {
     cwd: manager.root,
     detached: true,
     windowsHide: true,
@@ -3317,7 +3596,7 @@ async function startDetachedManager(manager) {
   fsSync.closeSync(err);
   child.unref();
   await fs.writeFile(path.join(manager.root, ".manager.pid"), `${child.pid}\n`, "utf8");
-  const ready = await waitForManagerReady(manager, 12000);
+  const ready = await waitForManagerReady({ ...manager, port: bind.port }, options.readyTimeoutMs ?? 12000);
   return { ok: ready, pid: child.pid, ready, status: await buildManagerStatus(manager, { force: true }) };
 }
 
@@ -3575,4 +3854,5 @@ module.exports = {
   },
   shutdownSoon,
   startServiceEntry,
+  startDetachedManager,
 };

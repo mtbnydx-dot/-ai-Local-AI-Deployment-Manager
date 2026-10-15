@@ -2,24 +2,26 @@
 param(
     [Parameter(Mandatory = $true)][string]$ModelApiDomain,
     [string]$WebUiDomain = "",
-    [string]$ApiKey = "",
-    [string]$PublicBaseUrl = "",
-    [string]$AllowedOrigins = "",
+    [ValidateSet("cloudflared-token", "cloudflared-config", "caddy", "lan")][string]$Topology = "cloudflared-token",
+    [switch]$Apply,
+    [switch]$Overwrite,
     [switch]$DryRun
 )
 
-# Prepares a public (Caddy) deployment of the model gateway:
-#   * writes deploy\public\.env (domains + gateway key) without echoing the key
+# Prepares a public deployment of the PUBLIC listener (port 5186), 05-public.md section 14:
+#   * validates the domain and renders the deploy templates into <AI_ROOT>\config\public\
+#     (untracked) with service-entry\lib\deploy-templates.js, the same renderer the
+#     console wizard uses; existing files are kept unless -Overwrite is given
 #   * validates the Caddyfile when caddy.exe is on PATH
-#   * prints the environment service-entry must run with and the go-live checklist
-# It never starts or restarts anything.
+#   * prints the 'platform config set' commands for the base URL and the trusted proxy;
+#     with -Apply it runs them (the only settings writer), without -Apply it only prints them
+# It never reads or writes keys or tunnel tokens, never touches environment variables, and
+# never starts or restarts anything. Owner sequence: deploy\public\README.md.
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$deployDir = Join-Path $root "deploy\public"
-$caddyfile = Join-Path $deployDir "Caddyfile"
-$envFile = Join-Path $deployDir ".env"
-$keyFile = Join-Path $root "vllm-manager\logs\.last-public-service-key.txt"
+$configDir = Join-Path $root "config\public"
+$renderer = Join-Path $root "service-entry\lib\deploy-templates.js"
 
 function Assert-Domain([string]$value, [string]$name) {
     if ($value -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$') {
@@ -33,70 +35,77 @@ if ($WebUiDomain) {
     $WebUiDomain = $WebUiDomain.Trim().ToLowerInvariant()
     Assert-Domain $WebUiDomain "WebUiDomain"
 }
-if (-not $PublicBaseUrl) { $PublicBaseUrl = "https://$ModelApiDomain" }
-if ($PublicBaseUrl -notmatch '^https://') { throw "PublicBaseUrl must start with https:// (keys travel in the Authorization header)." }
-if (-not $AllowedOrigins -and $WebUiDomain) { $AllowedOrigins = "https://$WebUiDomain" }
+$baseUrl = "https://$ModelApiDomain"
 
-if (-not $ApiKey) {
-    if (Test-Path -LiteralPath $keyFile) {
-        $ApiKey = (Get-Content -LiteralPath $keyFile -Raw).Trim()
-        Write-Host "Using the last public service key from vllm-manager\logs (not shown)."
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) { throw "Node.js is required to render the templates (see docs\getting-started.md)." }
+
+# One line, single quotes only, so every shell passes it through unchanged.
+$script = "const t=require(process.argv[1]);const a=process.argv.slice(2);(async()=>{try{const plan=t.planTemplates({topology:a[0],baseUrl:a[1],config:a[2]!=='-'?{webuiDomain:a[2]}:{}});let written=[];if(a[4]!=='1'){written=(await t.writeTemplateFiles({aiRoot:a[5],files:plan.files,overwrite:a[3]==='1'})).written}console.log(JSON.stringify({ok:true,files:plan.files.map(f=>f.name),commands:plan.commands,written}))}catch(e){console.log(JSON.stringify({ok:false,code:e.code||'error',message:e.message,existing:e.existing||[]}));process.exitCode=1}})()"
+$webUiArg = if ($WebUiDomain) { $WebUiDomain } else { "-" }
+$flagOverwrite = if ($Overwrite) { "1" } else { "0" }
+$flagDryRun = if ($DryRun) { "1" } else { "0" }
+$raw = & $node.Source -e $script $renderer $Topology $baseUrl $webUiArg $flagOverwrite $flagDryRun $root
+$result = $raw | Select-Object -Last 1 | ConvertFrom-Json
+if (-not $result.ok) {
+    if ($result.code -eq "template_exists") {
+        throw "These files already exist in config\public: $($result.existing -join ', '). Re-run with -Overwrite to replace them."
+    }
+    throw "Could not render the templates ($($result.code)): $($result.message)"
+}
+
+Write-Host ""
+if ($DryRun) {
+    Write-Host "(dry run: nothing written) Would render into ${configDir}:"
+    foreach ($name in $result.files) { Write-Host "  $name" }
+} elseif ($result.written.Count -gt 0) {
+    Write-Host "Wrote to ${configDir}:"
+    foreach ($item in $result.written) { Write-Host "  $item" }
+} else {
+    Write-Host "This topology renders no files."
+}
+
+$caddyfile = Join-Path $configDir "Caddyfile"
+if ($Topology -eq "caddy" -and -not $DryRun) {
+    $caddy = Get-Command caddy -ErrorAction SilentlyContinue
+    if ($caddy) {
+        Write-Host ""
+        Write-Host "Validating Caddyfile with $($caddy.Source)..."
+        & $caddy.Source validate --config $caddyfile --adapter caddyfile
+        if ($LASTEXITCODE -ne 0) { throw "Caddyfile validation failed." }
+        Write-Host "Caddyfile is valid."
+    } else {
+        Write-Host ""
+        Write-Host "caddy.exe not on PATH; skipped 'caddy validate'. Install Caddy and run: caddy validate --config Caddyfile --adapter caddyfile (from config\public)."
     }
 }
-if (-not $ApiKey) {
-    throw "No API key: pass -ApiKey or create a service key in a manager's 对外服务 page first."
-}
-if ($ApiKey.Length -lt 16) { throw "The API key looks too short to be a platform service key." }
 
-$envLines = @(
-    "WEBUI_DOMAIN=$(if ($WebUiDomain) { $WebUiDomain } else { 'chat.example.invalid' })",
-    "MODEL_API_DOMAIN=$ModelApiDomain",
-    "MODEL_GATEWAY_API_KEY=$ApiKey"
-)
-
+$settingCommands = @($result.commands | Where-Object { $_ -like "platform config set *" })
 Write-Host ""
-Write-Host "deploy\public\.env will contain:"
-Write-Host "  WEBUI_DOMAIN=$($envLines[0].Split('=')[1])"
-Write-Host "  MODEL_API_DOMAIN=$ModelApiDomain"
-Write-Host "  MODEL_GATEWAY_API_KEY=<hidden, $($ApiKey.Length) chars>"
-
-if (-not $DryRun) {
-    [System.IO.File]::WriteAllText($envFile, (($envLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "Wrote $envFile"
+if ($Apply) {
+    $platformCmd = Join-Path $root "platform.cmd"
+    foreach ($line in $settingCommands) {
+        $parts = $line.Substring("platform config set ".Length).Split(" ")
+        if ($DryRun) {
+            Write-Host "(dry run) $line"
+            continue
+        }
+        Write-Host "> $line"
+        & $platformCmd config set $parts[0] $parts[1]
+        if ($LASTEXITCODE -ne 0) { throw "platform config set $($parts[0]) failed." }
+    }
 } else {
-    Write-Host "(dry run: nothing written)"
-}
-
-$caddy = Get-Command caddy -ErrorAction SilentlyContinue
-if ($caddy) {
-    Write-Host ""
-    Write-Host "Validating Caddyfile with $($caddy.Source)..."
-    $env:WEBUI_DOMAIN = $envLines[0].Split('=')[1]
-    $env:MODEL_API_DOMAIN = $ModelApiDomain
-    & $caddy.Source validate --config $caddyfile --adapter caddyfile
-    if ($LASTEXITCODE -ne 0) { throw "Caddyfile validation failed." }
-    Write-Host "Caddyfile is valid."
-} else {
-    Write-Host ""
-    Write-Host "caddy.exe not on PATH; skipped 'caddy validate'. Install Caddy and rerun, or run: caddy validate --config deploy\public\Caddyfile --adapter caddyfile"
-}
-
-$caddyText = Get-Content -LiteralPath $caddyfile -Raw
-if ($caddyText -notmatch '@gateway path /gateway/\*') {
-    Write-Warning "The Caddyfile does not restrict the model API domain to /gateway/*; regenerate it from the repository."
+    Write-Host "Settings are not changed without -Apply. To set them yourself, run:"
+    foreach ($line in $settingCommands) { Write-Host "  $line" }
 }
 
 Write-Host ""
-Write-Host "Before starting the entry, set (setx or in the launching shell):"
-Write-Host "  SERVICE_ENTRY_REQUIRE_API_KEY=1"
-Write-Host "  SERVICE_ENTRY_PUBLIC_BASE_URL=$PublicBaseUrl"
-if ($AllowedOrigins) { Write-Host "  SERVICE_ENTRY_ALLOWED_ORIGINS=$AllowedOrigins" }
-Write-Host "  SERVICE_ENTRY_ALLOW_LAN_ADMIN=0"
+Write-Host "Next steps (you run these; nothing is started for you):"
+foreach ($line in $result.commands | Where-Object { $_ -notlike "platform config set *" }) { Write-Host "  $line" }
 Write-Host ""
-Write-Host "Go-live checklist (the entry page shows the same list live):"
-Write-Host "  [ ] Manager 对外服务 page requires the same API key"
-Write-Host "  [ ] Router/firewall: only 80/443 open; 5176/5177/5178/5180/5190/7000 closed"
-Write-Host "  [ ] Caddy started from deploy\public with: caddy run --envfile .env --config Caddyfile"
-Write-Host "  [ ] Entry started on loopback (start-service-entry.cmd, not 'lan')"
-Write-Host "  [ ] $PublicBaseUrl/gateway/health answers 200 and $PublicBaseUrl/ answers 404"
-Write-Host "  [ ] $PublicBaseUrl/gateway/status with the key lists the expected models"
+Write-Host "Go-live checklist (owner sequence, deploy\public\README.md):"
+Write-Host "  [ ] Point the tunnel or the router at $baseUrl -> the PUBLIC listener (port 5186) only"
+Write-Host "  [ ] Run the external probe in the console wizard and confirm viaProxy and the observed header"
+Write-Host "  [ ] Create keys in the console (Access); the platform shows each secret once"
+Write-Host "  [ ] Watch direct_manager_gateway events drop to zero, then switch the managers to enforce"
+Write-Host "  [ ] Act on the legacy findings yourself; the platform never deletes or stops them"

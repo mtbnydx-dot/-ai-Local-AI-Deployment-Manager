@@ -1,0 +1,3713 @@
+{
+  "vllm": {
+    "download": {
+      "status": 200,
+      "body": {
+        "job": {
+          "id": "dl_newjob0000000000",
+          "type": "download",
+          "title": "Download example-org/Example-8B-GGUF (Hugging Face)",
+          "status": "queued",
+          "createdAt": "2026-10-14T08:00:00.000Z",
+          "updatedAt": "2026-10-14T08:00:00.000Z",
+          "finishedAt": null,
+          "exitCode": null,
+          "error": null,
+          "meta": {
+            "model": "example-org/Example-8B-GGUF",
+            "source": "huggingface",
+            "precision": "Q4_K_M",
+            "outputName": "example-org-Example-8B-GGUF",
+            "localDir": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "priority": "normal",
+            "expectedBytes": 100,
+            "expectedFiles": 1,
+            "retryCount": 0,
+            "maxRetries": 3,
+            "retryScheduledAt": null,
+            "hubJobId": "dl_newjob0000000000",
+            "phase": "queued",
+            "includeExtras": [],
+            "errorCode": null,
+            "errorBaseCode": null,
+            "errorRetryable": null,
+            "errorHint": null,
+            "transfer": {
+              "hfMirror": false,
+              "hfEndpoint": "https://huggingface.co",
+              "hfTransfer": false,
+              "tokenRef": null,
+              "gated": false
+            }
+          },
+          "progress": {
+            "kind": "download",
+            "downloadedBytes": 0,
+            "totalBytes": 100,
+            "percent": 0,
+            "speedBytesPerSec": 0,
+            "etaSeconds": null,
+            "finalizedBytes": 0,
+            "partialBytes": 0,
+            "incompleteFiles": 1,
+            "stage": {
+              "id": "queued",
+              "zh": "排队中",
+              "en": "Queued"
+            },
+            "updatedAt": "2026-10-14T08:00:00.000Z"
+          },
+          "logs": [],
+          "logCount": 0,
+          "logsTruncated": false
+        }
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": "r_main",
+              "outputName": "my-copy"
+            },
+            "source": "huggingface",
+            "priority": "high",
+            "credential": {
+              "hfToken": "hf_fake_token_for_tests_only"
+            },
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        },
+        {
+          "call": "POST /api/hub/downloads",
+          "body": {
+            "planId": "pln_ok0000000000000",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-lan": {
+      "status": 200,
+      "body": {
+        "job": {
+          "id": "dl_newjob0000000000",
+          "type": "download",
+          "title": "Download example-org/Example-8B-GGUF (Hugging Face)",
+          "status": "queued",
+          "createdAt": "2026-10-14T08:00:00.000Z",
+          "updatedAt": "2026-10-14T08:00:00.000Z",
+          "finishedAt": null,
+          "exitCode": null,
+          "error": null,
+          "meta": {
+            "model": "example-org/Example-8B-GGUF",
+            "source": "huggingface",
+            "precision": "Q4_K_M",
+            "outputName": "example-org-Example-8B-GGUF",
+            "localDir": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "priority": "normal",
+            "expectedBytes": 100,
+            "expectedFiles": 1,
+            "retryCount": 0,
+            "maxRetries": 3,
+            "retryScheduledAt": null,
+            "hubJobId": "dl_newjob0000000000",
+            "phase": "queued",
+            "includeExtras": [],
+            "errorCode": null,
+            "errorBaseCode": null,
+            "errorRetryable": null,
+            "errorHint": null,
+            "transfer": {
+              "hfMirror": false,
+              "hfEndpoint": "https://huggingface.co",
+              "hfTransfer": false,
+              "tokenRef": null,
+              "gated": false
+            }
+          },
+          "progress": {
+            "kind": "download",
+            "downloadedBytes": 0,
+            "totalBytes": 100,
+            "percent": 0,
+            "speedBytesPerSec": 0,
+            "etaSeconds": null,
+            "finalizedBytes": 0,
+            "partialBytes": 0,
+            "incompleteFiles": 1,
+            "stage": {
+              "id": "queued",
+              "zh": "排队中",
+              "en": "Queued"
+            },
+            "updatedAt": "2026-10-14T08:00:00.000Z"
+          },
+          "logs": [],
+          "logCount": 0,
+          "logsTruncated": false
+        }
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": false
+            }
+          }
+        },
+        {
+          "call": "POST /api/hub/downloads",
+          "body": {
+            "planId": "pln_ok0000000000000",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": false
+            }
+          }
+        }
+      ]
+    },
+    "download-filter-no-match": {
+      "status": 422,
+      "body": {
+        "error": "所选精度没有匹配的文件，请换一个精度或选择“原始仓库”。 / No files match the selected precision. Pick another precision or \"original repository\". (Q2_K 3.1 GB, Q4_K_M 4.7 GB, Q5_K_M 5.4 GB, Q8_0 8.1 GB, BF16 15.3 GB)",
+        "code": "filter_no_match",
+        "details": {
+          "precision": "Q9_X",
+          "totalFiles": 10
+        },
+        "suggestions": [
+          {
+            "artifactKey": "gguf:|Q2_K",
+            "label": "Q2_K",
+            "quant": "Q2_K",
+            "bytes": 3282141632
+          },
+          {
+            "artifactKey": "gguf:|Q4_K_M",
+            "label": "Q4_K_M",
+            "quant": "Q4_K_M",
+            "bytes": 5027783488
+          },
+          {
+            "artifactKey": "gguf:|Q5_K_M",
+            "label": "Q5_K_M",
+            "quant": "Q5_K_M",
+            "bytes": 5851112768
+          },
+          {
+            "artifactKey": "gguf:|Q8_0",
+            "label": "Q8_0",
+            "quant": "Q8_0",
+            "bytes": 8709518528
+          },
+          {
+            "artifactKey": "gguf:BF16|BF16",
+            "label": "BF16",
+            "quant": "BF16",
+            "bytes": 16386765728
+          }
+        ]
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        }
+      ]
+    },
+    "download-duplicate": {
+      "status": 409,
+      "body": {
+        "error": "This folder is already being downloaded.",
+        "code": "already_downloading",
+        "hint": "wait",
+        "existingJobId": "dl_existing0000000000"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/dup-org/Dup-8B/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/dup-org/Dup-8B/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "dup-org/Dup-8B",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-gated": {
+      "status": 409,
+      "body": {
+        "error": "点击「登录」，在本机窗口完成登录后重试。 / Click Sign in, finish in the local window, then retry.",
+        "code": "hf_login_required",
+        "accessStatus": "login_required",
+        "authorizationUrl": "https://huggingface.co/gated-org/Locked-8B"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/gated-org/Locked-8B/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/gated-org/Locked-8B/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "gated-org/Locked-8B",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-disk-full": {
+      "status": 400,
+      "body": {
+        "error": "The target drive has too little free space.",
+        "code": "download_disk_full"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/full-org/Full-8B/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/full-org/Full-8B/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "full-org/Full-8B",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-repo-not-found": {
+      "status": 404,
+      "body": {
+        "error": "The repository was not found.",
+        "code": "repo_not_found"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/missing-org/Missing-Model/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/missing-org/Missing-Model/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "missing-org/Missing-Model",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-no-model": {
+      "status": 400,
+      "body": {
+        "error": "model is required"
+      },
+      "hub": []
+    },
+    "estimate": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "precision": "Q4_K_M",
+        "bytes": 5027790940,
+        "fileCount": 3,
+        "includePatterns": [
+          "*Q4_K_M*.gguf",
+          "README.md",
+          "config.json"
+        ],
+        "filtered": true,
+        "matchedFiles": 3,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": "r_main"
+            },
+            "source": "auto",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "estimate-whole-repo": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "precision": "",
+        "bytes": 40361223484,
+        "fileCount": 10,
+        "includePatterns": [],
+        "filtered": false,
+        "matchedFiles": 10,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": null,
+              "companions": [],
+              "files": [
+                ".gitattributes",
+                "BF16/Example-8B-BF16-00001-of-00002.gguf",
+                "BF16/Example-8B-BF16-00002-of-00002.gguf",
+                "Example-8B-Q2_K.gguf",
+                "Example-8B-Q4_K_M.gguf",
+                "Example-8B-Q5_K_M.gguf",
+                "Example-8B-Q8_0.gguf",
+                "README.md",
+                "config.json",
+                "mmproj-F16.gguf"
+              ],
+              "acceptIncomplete": true
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "estimate-no-match": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "precision": "Q9_X",
+        "bytes": null,
+        "fileCount": 0,
+        "includePatterns": [],
+        "filtered": true,
+        "matchedFiles": 0,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "GET /api/hub/storage/usage"
+        }
+      ]
+    },
+    "estimate-modelscope": {
+      "status": 200,
+      "body": {
+        "source": "modelscope",
+        "model": "ms-org/Ms-Model",
+        "precision": "",
+        "bytes": 40361223484,
+        "fileCount": 10,
+        "includePatterns": [],
+        "filtered": false,
+        "matchedFiles": 10,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": null,
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/modelscope/ms-org/Ms-Model/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/modelscope/ms-org/Ms-Model/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "modelscope",
+            "repo": "ms-org/Ms-Model",
+            "revision": "main",
+            "selection": {
+              "artifactKey": null,
+              "companions": [],
+              "files": [
+                ".gitattributes",
+                "BF16/Example-8B-BF16-00001-of-00002.gguf",
+                "BF16/Example-8B-BF16-00002-of-00002.gguf",
+                "Example-8B-Q2_K.gguf",
+                "Example-8B-Q4_K_M.gguf",
+                "Example-8B-Q5_K_M.gguf",
+                "Example-8B-Q8_0.gguf",
+                "README.md",
+                "config.json",
+                "mmproj-F16.gguf"
+              ],
+              "acceptIncomplete": true
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "precheck": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "findings": [],
+        "source": "huggingface"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "remote-models": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "sort": "trending",
+        "task": "all",
+        "feature": "all",
+        "search": "example",
+        "limit": 48,
+        "size": "",
+        "freshness": "auto",
+        "quant": "",
+        "models": [
+          {
+            "source": "huggingface",
+            "model": "example-org/Example-8B-GGUF",
+            "id": "example-org/Example-8B-GGUF",
+            "label": "example-org/Example-8B-GGUF",
+            "author": "example-org",
+            "url": "https://huggingface.co/example-org/Example-8B-GGUF",
+            "tags": [
+              "gguf",
+              "text-generation"
+            ],
+            "badges": [
+              "GGUF",
+              "Q4_K_M",
+              "Q8_0"
+            ],
+            "downloads": 120000,
+            "likes": 300,
+            "gated": false,
+            "pipelineTag": "text-generation",
+            "libraryName": "",
+            "lastModified": "2026-09-18T10:21:34.000Z",
+            "createdAt": "",
+            "hasConfig": false,
+            "hasSafetensors": false,
+            "hasGguf": true,
+            "hasQuantizedFiles": true,
+            "quantFormats": [
+              "GGUF",
+              "Q4_K_M",
+              "Q8_0"
+            ],
+            "paramsB": 8.19,
+            "sizeClass": "medium",
+            "fileSizeBytes": null,
+            "largestFileBytes": null,
+            "fileCount": 0,
+            "summary": "",
+            "selection": {
+              "developer": "example-org",
+              "modelVersion": "Example",
+              "spec": "8B",
+              "precision": "Q8_0",
+              "source": "huggingface",
+              "options": {
+                "developers": [
+                  "example-org"
+                ],
+                "modelVersions": [
+                  "Example"
+                ],
+                "specs": [
+                  "8B"
+                ],
+                "precisions": [
+                  "Q8_0",
+                  "Q4_K_M",
+                  "GGUF"
+                ]
+              }
+            },
+            "outputName": "example-org-Example-8B-GGUF",
+            "runnable": false
+          },
+          {
+            "source": "huggingface",
+            "model": "example-org/Example-8B-FP8",
+            "id": "example-org/Example-8B-FP8",
+            "label": "example-org/Example-8B-FP8",
+            "author": "example-org",
+            "url": "https://huggingface.co/example-org/Example-8B-FP8",
+            "tags": [
+              "fp8",
+              "vision"
+            ],
+            "badges": [
+              "multimodal",
+              "FP8",
+              "gated"
+            ],
+            "downloads": 4000,
+            "likes": 20,
+            "gated": true,
+            "pipelineTag": "image-text-to-text",
+            "libraryName": "",
+            "lastModified": "2026-09-10T08:00:00.000Z",
+            "createdAt": "",
+            "hasConfig": true,
+            "hasSafetensors": true,
+            "hasGguf": false,
+            "hasQuantizedFiles": true,
+            "quantFormats": [
+              "FP8"
+            ],
+            "paramsB": 8.19,
+            "sizeClass": "medium",
+            "fileSizeBytes": null,
+            "largestFileBytes": null,
+            "fileCount": 0,
+            "summary": "",
+            "selection": {
+              "developer": "example-org",
+              "modelVersion": "Example",
+              "spec": "8B",
+              "precision": "FP8",
+              "source": "huggingface",
+              "options": {
+                "developers": [
+                  "example-org"
+                ],
+                "modelVersions": [
+                  "Example"
+                ],
+                "specs": [
+                  "8B"
+                ],
+                "precisions": [
+                  "FP8"
+                ]
+              }
+            },
+            "outputName": "example-org-Example-8B-FP8",
+            "runnable": true
+          },
+          {
+            "source": "huggingface",
+            "model": "other-org/Big-70B-AWQ",
+            "id": "other-org/Big-70B-AWQ",
+            "label": "other-org/Big-70B-AWQ",
+            "author": "other-org",
+            "url": "https://huggingface.co/other-org/Big-70B-AWQ",
+            "tags": [
+              "awq"
+            ],
+            "badges": [
+              "AWQ"
+            ],
+            "downloads": 900,
+            "likes": 5,
+            "gated": false,
+            "pipelineTag": "text-generation",
+            "libraryName": "",
+            "lastModified": "2026-08-01T00:00:00.000Z",
+            "createdAt": "",
+            "hasConfig": true,
+            "hasSafetensors": true,
+            "hasGguf": false,
+            "hasQuantizedFiles": true,
+            "quantFormats": [
+              "AWQ"
+            ],
+            "paramsB": 70,
+            "sizeClass": "xlarge",
+            "fileSizeBytes": null,
+            "largestFileBytes": null,
+            "fileCount": 0,
+            "summary": "",
+            "selection": {
+              "developer": "other-org",
+              "modelVersion": "Big",
+              "spec": "70B",
+              "precision": "AWQ",
+              "source": "huggingface",
+              "options": {
+                "developers": [
+                  "other-org"
+                ],
+                "modelVersions": [
+                  "Big"
+                ],
+                "specs": [
+                  "70B"
+                ],
+                "precisions": [
+                  "AWQ"
+                ]
+              }
+            },
+            "outputName": "other-org-Big-70B-AWQ",
+            "runnable": true
+          }
+        ]
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/search?q=example&provider=huggingface&sort=trending&limit=48"
+        },
+        {
+          "call": "GET /api/hub/search?q=example&provider=huggingface&sort=trending&limit=46&cursor=o2"
+        }
+      ]
+    },
+    "remote-models-filtered": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "sort": "lastModified",
+        "task": "all",
+        "feature": "all",
+        "search": "",
+        "limit": 12,
+        "size": "xlarge",
+        "freshness": "auto",
+        "quant": "AWQ",
+        "models": [
+          {
+            "source": "huggingface",
+            "model": "other-org/Big-70B-AWQ",
+            "id": "other-org/Big-70B-AWQ",
+            "label": "other-org/Big-70B-AWQ",
+            "author": "other-org",
+            "url": "https://huggingface.co/other-org/Big-70B-AWQ",
+            "tags": [
+              "awq"
+            ],
+            "badges": [
+              "AWQ"
+            ],
+            "downloads": 900,
+            "likes": 5,
+            "gated": false,
+            "pipelineTag": "text-generation",
+            "libraryName": "",
+            "lastModified": "2026-08-01T00:00:00.000Z",
+            "createdAt": "",
+            "hasConfig": true,
+            "hasSafetensors": true,
+            "hasGguf": false,
+            "hasQuantizedFiles": true,
+            "quantFormats": [
+              "AWQ"
+            ],
+            "paramsB": 70,
+            "sizeClass": "xlarge",
+            "fileSizeBytes": null,
+            "largestFileBytes": null,
+            "fileCount": 0,
+            "summary": "",
+            "selection": {
+              "developer": "other-org",
+              "modelVersion": "Big",
+              "spec": "70B",
+              "precision": "AWQ",
+              "source": "huggingface",
+              "options": {
+                "developers": [
+                  "other-org"
+                ],
+                "modelVersions": [
+                  "Big"
+                ],
+                "specs": [
+                  "70B"
+                ],
+                "precisions": [
+                  "AWQ"
+                ]
+              }
+            },
+            "outputName": "other-org-Big-70B-AWQ",
+            "runnable": true
+          }
+        ]
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/search?provider=huggingface&sort=updated&facet=format%3Aawq&limit=12"
+        },
+        {
+          "call": "GET /api/hub/search?provider=huggingface&sort=updated&facet=format%3Aawq&limit=10&cursor=o2"
+        }
+      ]
+    },
+    "gguf-variants": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-GGUF",
+        "source": "huggingface",
+        "supported": true,
+        "gated": false,
+        "selected": "Q4_K_M",
+        "variants": [
+          {
+            "quant": "Q2_K",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q2_K.gguf",
+                "size": 3282141632
+              }
+            ],
+            "bytes": 3282141632,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "fits",
+              "ratio": 0.20833333333333334,
+              "note": "约占显存 21%，可以整模型放进 GPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "Q4_K_M",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q4_K_M.gguf",
+                "size": 5027783488
+              }
+            ],
+            "bytes": 5027783488,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "fits",
+              "ratio": 0.30833333333333335,
+              "note": "约占显存 31%，可以整模型放进 GPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "Q5_K_M",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q5_K_M.gguf",
+                "size": 5851112768
+              }
+            ],
+            "bytes": 5851112768,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "tight",
+              "ratio": 0.9243697478991597,
+              "note": "约占显存 92%，上下文需要保守，或放部分层到 CPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "Q8_0",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q8_0.gguf",
+                "size": 8709518528
+              }
+            ],
+            "bytes": 8709518528,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "tight",
+              "ratio": 1,
+              "note": "约占显存 100%，上下文需要保守，或放部分层到 CPU。",
+              "spill": true,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "BF16",
+            "directory": "BF16",
+            "files": [
+              {
+                "name": "BF16/Example-8B-BF16-00001-of-00002.gguf",
+                "size": 9993842240
+              },
+              {
+                "name": "BF16/Example-8B-BF16-00002-of-00002.gguf",
+                "size": 6392923488
+              }
+            ],
+            "bytes": 16386765728,
+            "fileCount": 2,
+            "multiPart": true,
+            "complete": true,
+            "fit": {
+              "status": "exceeds",
+              "ratio": 1.6666666666666667,
+              "note": "需要约 39.1 GB，超过显存，只能把部分层放到 CPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": false
+          }
+        ],
+        "mmproj": [
+          {
+            "name": "mmproj-F16.gguf",
+            "size": 1103892032,
+            "quant": "F16"
+          }
+        ],
+        "drafts": [],
+        "other": [],
+        "totalFiles": 7
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "gguf-variants-modelscope": {
+      "status": 200,
+      "body": {
+        "model": "ms-org/Ms-Model",
+        "source": "modelscope",
+        "supported": false,
+        "variants": [],
+        "mmproj": [],
+        "drafts": []
+      },
+      "hub": []
+    },
+    "precision-variants": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-GGUF",
+        "base": "example-8b",
+        "variants": [
+          {
+            "id": "example-org/Example-8B-FP8",
+            "precision": "FP8",
+            "isCurrent": false,
+            "downloads": 0,
+            "likes": 0,
+            "gated": false,
+            "hasGguf": false,
+            "support": {
+              "vllm": "ok",
+              "sglang": "ok",
+              "llama": "block",
+              "notes": []
+            },
+            "recommendedEngine": "vllm"
+          },
+          {
+            "id": "example-org/Example-8B-GGUF",
+            "precision": "GGUF",
+            "isCurrent": true,
+            "downloads": 0,
+            "likes": 0,
+            "gated": false,
+            "hasGguf": true,
+            "support": {
+              "vllm": "warn",
+              "sglang": "block",
+              "llama": "ok",
+              "notes": [
+                "GGUF 由 llama.cpp 直接运行；vLLM 只支持单文件 GGUF 且为实验特性。"
+              ]
+            },
+            "recommendedEngine": "llama"
+          },
+          {
+            "id": "unsloth/Example-8B-GGUF",
+            "precision": "GGUF",
+            "isCurrent": false,
+            "downloads": 0,
+            "likes": 0,
+            "gated": false,
+            "hasGguf": true,
+            "support": {
+              "vllm": "warn",
+              "sglang": "block",
+              "llama": "ok",
+              "notes": [
+                "GGUF 由 llama.cpp 直接运行；vLLM 只支持单文件 GGUF 且为实验特性。"
+              ]
+            },
+            "recommendedEngine": "llama"
+          }
+        ]
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "settings-get": {
+      "status": 200,
+      "body": {
+        "queueMode": true,
+        "autoRetryCount": 3,
+        "autoRetryDelaySeconds": 10,
+        "hfMirror": false,
+        "hfTransfer": true,
+        "verifyChecksums": true,
+        "idleOnlyQueue": false
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/settings"
+        }
+      ]
+    },
+    "settings-post": {
+      "status": 200,
+      "body": {
+        "queueMode": false,
+        "autoRetryCount": 5,
+        "autoRetryDelaySeconds": 10,
+        "hfMirror": true,
+        "hfTransfer": true,
+        "verifyChecksums": true,
+        "idleOnlyQueue": true
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/settings"
+        },
+        {
+          "call": "PUT /api/hub/settings",
+          "body": {
+            "settings": {
+              "transfer": {
+                "maxConcurrent": 3
+              },
+              "retry": {
+                "maxAttempts": 5
+              },
+              "sources": {
+                "policy": "hf-mirror"
+              },
+              "queue": {
+                "idleOnly": true
+              }
+            },
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "settings-post-empty": {
+      "status": 200,
+      "body": {
+        "queueMode": false,
+        "autoRetryCount": 5,
+        "autoRetryDelaySeconds": 10,
+        "hfMirror": true,
+        "hfTransfer": true,
+        "verifyChecksums": true,
+        "idleOnlyQueue": true
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/settings"
+        }
+      ]
+    },
+    "mirror-probe": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "repo": "example-org/Example-8B-GGUF",
+        "file": "config.json",
+        "official": {
+          "source": "official",
+          "label": "huggingface.co",
+          "ok": true,
+          "status": 206,
+          "ms": 900,
+          "bytes": 2097152,
+          "bytesPerSec": 100000,
+          "error": null,
+          "repo": "example-org/Example-8B-GGUF"
+        },
+        "mirror": {
+          "source": "mirror",
+          "label": "hf-mirror.com",
+          "ok": true,
+          "status": 206,
+          "ms": 200,
+          "bytes": 2097152,
+          "bytesPerSec": 2000000,
+          "error": null,
+          "repo": "example-org/Example-8B-GGUF"
+        },
+        "modelscope": {
+          "source": "modelscope",
+          "label": "modelscope.cn",
+          "ok": false,
+          "status": 404,
+          "ms": 100,
+          "bytes": 0,
+          "bytesPerSec": 0,
+          "error": "HTTP 404",
+          "repo": "qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "modelScopeRepo": "",
+        "sources": [
+          {
+            "source": "official",
+            "label": "huggingface.co",
+            "ok": true,
+            "status": 206,
+            "ms": 900,
+            "bytes": 2097152,
+            "bytesPerSec": 100000,
+            "error": null,
+            "repo": "example-org/Example-8B-GGUF"
+          },
+          {
+            "source": "mirror",
+            "label": "hf-mirror.com",
+            "ok": true,
+            "status": 206,
+            "ms": 200,
+            "bytes": 2097152,
+            "bytesPerSec": 2000000,
+            "error": null,
+            "repo": "example-org/Example-8B-GGUF"
+          },
+          {
+            "source": "modelscope",
+            "label": "modelscope.cn",
+            "ok": false,
+            "status": 404,
+            "ms": 100,
+            "bytes": 0,
+            "bytesPerSec": 0,
+            "error": "HTTP 404",
+            "repo": "qwen/Qwen2.5-0.5B-Instruct"
+          }
+        ],
+        "recommended": "mirror",
+        "recommendedLabel": "hf-mirror.com",
+        "at": "2026-10-14T08:00:00.000Z"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/sources/probe",
+          "body": {
+            "repo": "example-org/Example-8B-GGUF",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "mirror-probe-bare": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+        "file": "config.json",
+        "official": {
+          "source": "official",
+          "label": "huggingface.co",
+          "ok": true,
+          "status": 206,
+          "ms": 900,
+          "bytes": 2097152,
+          "bytesPerSec": 100000,
+          "error": null,
+          "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "mirror": {
+          "source": "mirror",
+          "label": "hf-mirror.com",
+          "ok": true,
+          "status": 206,
+          "ms": 200,
+          "bytes": 2097152,
+          "bytesPerSec": 2000000,
+          "error": null,
+          "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "modelscope": {
+          "source": "modelscope",
+          "label": "modelscope.cn",
+          "ok": false,
+          "status": 404,
+          "ms": 100,
+          "bytes": 0,
+          "bytesPerSec": 0,
+          "error": "HTTP 404",
+          "repo": "qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "modelScopeRepo": "",
+        "sources": [
+          {
+            "source": "official",
+            "label": "huggingface.co",
+            "ok": true,
+            "status": 206,
+            "ms": 900,
+            "bytes": 2097152,
+            "bytesPerSec": 100000,
+            "error": null,
+            "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+          },
+          {
+            "source": "mirror",
+            "label": "hf-mirror.com",
+            "ok": true,
+            "status": 206,
+            "ms": 200,
+            "bytes": 2097152,
+            "bytesPerSec": 2000000,
+            "error": null,
+            "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+          },
+          {
+            "source": "modelscope",
+            "label": "modelscope.cn",
+            "ok": false,
+            "status": 404,
+            "ms": 100,
+            "bytes": 0,
+            "bytesPerSec": 0,
+            "error": "HTTP 404",
+            "repo": "qwen/Qwen2.5-0.5B-Instruct"
+          }
+        ],
+        "recommended": "mirror",
+        "recommendedLabel": "hf-mirror.com",
+        "at": "2026-10-14T08:00:00.000Z"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/sources/probe",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "resolve-link-hf": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "url": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "id": "example-org/Example-8B-GGUF",
+        "label": "example-org/Example-8B-GGUF",
+        "author": "example-org",
+        "tags": [
+          "gguf",
+          "text-generation"
+        ],
+        "badges": [
+          "GGUF",
+          "Q4_K_M",
+          "Q8_0"
+        ],
+        "downloads": 120000,
+        "likes": 300,
+        "gated": false,
+        "pipelineTag": "text-generation",
+        "libraryName": "",
+        "lastModified": "2026-09-18T10:21:34.000Z",
+        "createdAt": "",
+        "hasConfig": false,
+        "hasSafetensors": false,
+        "hasGguf": true,
+        "hasQuantizedFiles": true,
+        "quantFormats": [
+          "GGUF",
+          "Q4_K_M",
+          "Q8_0"
+        ],
+        "paramsB": 8.19,
+        "sizeClass": "medium",
+        "fileSizeBytes": null,
+        "largestFileBytes": null,
+        "fileCount": 0,
+        "summary": "",
+        "selection": {
+          "developer": "example-org",
+          "modelVersion": "Example",
+          "spec": "8B",
+          "precision": "Q8_0",
+          "source": "huggingface",
+          "options": {
+            "developers": [
+              "example-org"
+            ],
+            "modelVersions": [
+              "Example"
+            ],
+            "specs": [
+              "8B"
+            ],
+            "precisions": [
+              "Q8_0",
+              "Q4_K_M",
+              "GGUF"
+            ]
+          }
+        },
+        "outputName": "example-org-Example-8B-GGUF",
+        "runnable": false
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/resolve-link",
+          "body": {
+            "url": "https://huggingface.co/example-org/Example-8B-GGUF"
+          }
+        },
+        {
+          "call": "GET /api/hub/search?q=example-org%2FExample-8B-GGUF&provider=huggingface&limit=10"
+        }
+      ]
+    },
+    "resolve-link-modelscope": {
+      "status": 200,
+      "body": {
+        "source": "modelscope",
+        "model": "ms-org/Ms-Model",
+        "url": "https://modelscope.cn/models/ms-org/Ms-Model",
+        "label": "ms-org/Ms-Model",
+        "tags": [],
+        "downloads": null,
+        "likes": null,
+        "lastModified": null,
+        "summary": "已从 ModelScope 链接解析出模型 ID。下载时会使用 ModelScope 来源。",
+        "selection": {
+          "developer": "ms-org",
+          "modelVersion": "Ms Model",
+          "spec": "未标注规格",
+          "precision": "原始 BF16/FP16",
+          "source": "modelscope",
+          "options": {
+            "developers": [
+              "ms-org"
+            ],
+            "modelVersions": [
+              "Ms Model"
+            ],
+            "specs": [
+              "未标注规格"
+            ],
+            "precisions": [
+              "原始 BF16/FP16"
+            ]
+          }
+        },
+        "outputName": "ms-org-Ms-Model"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/resolve-link",
+          "body": {
+            "url": "https://www.modelscope.cn/models/ms-org/Ms-Model"
+          }
+        }
+      ]
+    },
+    "resolve-link-bad": {
+      "status": 422,
+      "body": {
+        "error": "That link is not a model page.",
+        "code": "unrecognized_link"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/resolve-link",
+          "body": {
+            "url": "https://example.com/bad"
+          }
+        }
+      ]
+    },
+    "disk-usage": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "root": "X:/hub-fake/lib",
+        "disk": {
+          "freeBytes": 400000000000,
+          "totalBytes": 1000000000000
+        },
+        "modelsBytes": 5000000000,
+        "models": [
+          {
+            "name": "example-org-Example-8B-GGUF",
+            "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "rootId": "r_main",
+            "bytes": 5000000000,
+            "sizeBytes": 5000000000,
+            "incompleteFiles": 1,
+            "incompleteBytes": 1024,
+            "incomplete": true,
+            "modified": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "roots": [
+          {
+            "id": "r_main",
+            "path": "X:/hub-fake/lib",
+            "label": "Library",
+            "default": true,
+            "legacy": false,
+            "mode": "library",
+            "available": true,
+            "freeBytes": 400000000000,
+            "totalBytes": 1000000000000,
+            "usedByModelsBytes": 5000000000,
+            "modelCount": 1,
+            "incompleteBytes": 1024,
+            "incompleteFiles": 1
+          },
+          {
+            "id": "legacy",
+            "path": "X:/hub-fake/legacy",
+            "label": "Legacy",
+            "default": false,
+            "legacy": true,
+            "mode": "library",
+            "available": true,
+            "freeBytes": 400000000000,
+            "totalBytes": 1000000000000,
+            "usedByModelsBytes": 0,
+            "modelCount": 0,
+            "incompleteBytes": 0,
+            "incompleteFiles": 0
+          }
+        ],
+        "hfCache": {
+          "path": "X:/hub-fake/hf",
+          "hubBytes": 100,
+          "xetBytes": 0,
+          "modelscopeBytes": 0
+        },
+        "incompleteBytes": 1024,
+        "incompleteFiles": 1,
+        "updatedAt": "2026-10-14T08:00:00.000Z"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/storage/usage"
+        }
+      ]
+    },
+    "cleanup-incomplete-name": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+        "removed": [
+          ".cache/huggingface/download/model.safetensors.abc.incomplete"
+        ],
+        "removedBytes": 1024
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_1111111111111111/cleanup-residue",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "cleanup-incomplete-path": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+        "removed": [
+          ".cache/huggingface/download/model.safetensors.abc.incomplete"
+        ],
+        "removedBytes": 1024
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_1111111111111111/cleanup-residue",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "cleanup-incomplete-outside": {
+      "status": 400,
+      "body": {
+        "error": "路径必须位于已登记的模型库内，且不能是模型库本身。 / The path must be inside a configured model library and must not be the library itself.",
+        "code": "path_outside_roots"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        }
+      ]
+    },
+    "cleanup-incomplete-root": {
+      "status": 400,
+      "body": {
+        "error": "路径必须位于已登记的模型库内，且不能是模型库本身。 / The path must be inside a configured model library and must not be the library itself.",
+        "code": "path_outside_roots"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        }
+      ]
+    },
+    "cleanup-incomplete-busy": {
+      "status": 409,
+      "body": {
+        "error": "A download is still using this folder.",
+        "code": "library_entry_busy"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_2222222222222222/cleanup-residue",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "upstream-status": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "name": "example-org-Example-8B-GGUF",
+        "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+        "repo": "example-org/Example-8B-GGUF",
+        "url": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "lastModified": null,
+        "downloadedAt": "2026-10-01T00:00:00.000Z",
+        "recordSource": "hub-job",
+        "updateAvailable": true,
+        "remoteSha": "ffffffffffffffffffffffffffffffffffffffff",
+        "localSha": "c9cb71132e91c418ab146bdbefd9af2760a6340b",
+        "message": "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_1111111111111111/check-update",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "upstream-status-unknown": {
+      "status": 200,
+      "body": {
+        "ok": false,
+        "name": "mystery-model",
+        "path": "X:/hub-fake/lib/mystery-model",
+        "reason": "unknown_source",
+        "message": "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_2222222222222222/check-update",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "delete-local": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "name": "example-org-Example-8B-GGUF",
+        "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "DELETE /api/hub/library/lib_1111111111111111",
+          "body": {
+            "confirm": "example-org-Example-8B-GGUF",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        },
+        {
+          "call": "GET /api/hub/tasks/tsk_delete0000000"
+        },
+        {
+          "call": "GET /api/hub/tasks/tsk_delete0000000"
+        }
+      ]
+    },
+    "delete-local-busy": {
+      "status": 409,
+      "body": {
+        "error": "A download is still using this folder.",
+        "code": "library_entry_busy"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "DELETE /api/hub/library/lib_1111111111111111",
+          "body": {
+            "confirm": "example-org-Example-8B-GGUF",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        },
+        {
+          "call": "GET /api/hub/tasks/tsk_delete0000000"
+        }
+      ]
+    },
+    "delete-local-missing": {
+      "status": 404,
+      "body": {
+        "error": "本地模型目录不存在，可能已被删除。 / The model folder does not exist; it may have been deleted.",
+        "code": "library_entry_not_found"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        }
+      ]
+    },
+    "hf-auth-status": {
+      "status": 200,
+      "body": {
+        "connected": true,
+        "username": "fake-user",
+        "orgs": [
+          "fake-org"
+        ],
+        "source": "local-cli"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/auth/huggingface"
+        }
+      ]
+    },
+    "hf-auth-login": {
+      "status": 200,
+      "body": {
+        "launched": true,
+        "tokenUrl": "https://huggingface.co/settings/tokens"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/auth/huggingface/login",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "vllm",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "hf-access-public": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-GGUF",
+        "gated": false,
+        "granted": true,
+        "status": "public",
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/auth/huggingface/access?repo=example-org%2FExample-8B-GGUF"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "hf-access-gated": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-FP8",
+        "gated": true,
+        "granted": false,
+        "status": "approval_required",
+        "username": "fake-user",
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-FP8"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/auth/huggingface/access?repo=example-org%2FExample-8B-FP8"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-FP8"
+        }
+      ]
+    },
+    "hf-auth-lan-status": {
+      "status": 403,
+      "body": {
+        "error": "Hugging Face 账号状态仅允许从本机查看。"
+      },
+      "hub": []
+    },
+    "hf-auth-lan-login": {
+      "status": 403,
+      "body": {
+        "error": "Hugging Face 登录仅允许从本机发起。"
+      },
+      "hub": []
+    },
+    "hf-auth-lan-access": {
+      "status": 403,
+      "body": {
+        "error": "Hugging Face 授权复检仅允许从本机发起。"
+      },
+      "hub": []
+    },
+    "models-decorated": {
+      "status": 200,
+      "body": {
+        "local": [
+          {
+            "name": "example-org-Example-8B-GGUF",
+            "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "libraryEntryId": "lib_1111111111111111",
+            "provenance": {
+              "provider": "huggingface",
+              "repo": "example-org/Example-8B-GGUF",
+              "revisionSha": "c9cb71132e91c418ab146bdbefd9af2760a6340b",
+              "confidence": "declared"
+            }
+          },
+          {
+            "name": "unknown-model",
+            "path": "X:/hub-fake/lib/unknown-model"
+          }
+        ],
+        "cached": []
+      },
+      "hub": []
+    }
+  },
+  "llama": {
+    "download": {
+      "status": 200,
+      "body": {
+        "job": {
+          "id": "dl_newjob0000000000",
+          "type": "download",
+          "title": "Download example-org/Example-8B-GGUF (Hugging Face)",
+          "status": "queued",
+          "createdAt": "2026-10-14T08:00:00.000Z",
+          "updatedAt": "2026-10-14T08:00:00.000Z",
+          "finishedAt": null,
+          "exitCode": null,
+          "error": null,
+          "meta": {
+            "model": "example-org/Example-8B-GGUF",
+            "source": "huggingface",
+            "precision": "Q4_K_M",
+            "outputName": "example-org-Example-8B-GGUF",
+            "localDir": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "priority": "normal",
+            "expectedBytes": 100,
+            "expectedFiles": 1,
+            "retryCount": 0,
+            "maxRetries": 3,
+            "retryScheduledAt": null,
+            "hubJobId": "dl_newjob0000000000",
+            "phase": "queued",
+            "includeExtras": [],
+            "errorCode": null,
+            "errorBaseCode": null,
+            "errorRetryable": null,
+            "errorHint": null,
+            "transfer": {
+              "hfMirror": false,
+              "hfEndpoint": "https://huggingface.co",
+              "hfTransfer": false,
+              "tokenRef": null,
+              "gated": false
+            }
+          },
+          "progress": {
+            "kind": "download",
+            "downloadedBytes": 0,
+            "totalBytes": 100,
+            "percent": 0,
+            "speedBytesPerSec": 0,
+            "etaSeconds": null,
+            "finalizedBytes": 0,
+            "partialBytes": 0,
+            "incompleteFiles": 1,
+            "stage": {
+              "id": "queued",
+              "zh": "排队中",
+              "en": "Queued"
+            },
+            "updatedAt": "2026-10-14T08:00:00.000Z"
+          },
+          "logs": [],
+          "logCount": 0,
+          "logsTruncated": false
+        }
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": "r_main",
+              "outputName": "my-copy"
+            },
+            "source": "huggingface",
+            "priority": "high",
+            "credential": {
+              "hfToken": "hf_fake_token_for_tests_only"
+            },
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        },
+        {
+          "call": "POST /api/hub/downloads",
+          "body": {
+            "planId": "pln_ok0000000000000",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-lan": {
+      "status": 200,
+      "body": {
+        "job": {
+          "id": "dl_newjob0000000000",
+          "type": "download",
+          "title": "Download example-org/Example-8B-GGUF (Hugging Face)",
+          "status": "queued",
+          "createdAt": "2026-10-14T08:00:00.000Z",
+          "updatedAt": "2026-10-14T08:00:00.000Z",
+          "finishedAt": null,
+          "exitCode": null,
+          "error": null,
+          "meta": {
+            "model": "example-org/Example-8B-GGUF",
+            "source": "huggingface",
+            "precision": "Q4_K_M",
+            "outputName": "example-org-Example-8B-GGUF",
+            "localDir": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "priority": "normal",
+            "expectedBytes": 100,
+            "expectedFiles": 1,
+            "retryCount": 0,
+            "maxRetries": 3,
+            "retryScheduledAt": null,
+            "hubJobId": "dl_newjob0000000000",
+            "phase": "queued",
+            "includeExtras": [],
+            "errorCode": null,
+            "errorBaseCode": null,
+            "errorRetryable": null,
+            "errorHint": null,
+            "transfer": {
+              "hfMirror": false,
+              "hfEndpoint": "https://huggingface.co",
+              "hfTransfer": false,
+              "tokenRef": null,
+              "gated": false
+            }
+          },
+          "progress": {
+            "kind": "download",
+            "downloadedBytes": 0,
+            "totalBytes": 100,
+            "percent": 0,
+            "speedBytesPerSec": 0,
+            "etaSeconds": null,
+            "finalizedBytes": 0,
+            "partialBytes": 0,
+            "incompleteFiles": 1,
+            "stage": {
+              "id": "queued",
+              "zh": "排队中",
+              "en": "Queued"
+            },
+            "updatedAt": "2026-10-14T08:00:00.000Z"
+          },
+          "logs": [],
+          "logCount": 0,
+          "logsTruncated": false
+        }
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": false
+            }
+          }
+        },
+        {
+          "call": "POST /api/hub/downloads",
+          "body": {
+            "planId": "pln_ok0000000000000",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": false
+            }
+          }
+        }
+      ]
+    },
+    "download-filter-no-match": {
+      "status": 422,
+      "body": {
+        "error": "所选精度没有匹配的文件，请换一个精度或选择“原始仓库”。 / No files match the selected precision. Pick another precision or \"original repository\". (Q2_K 3.1 GB, Q4_K_M 4.7 GB, Q5_K_M 5.4 GB, Q8_0 8.1 GB, BF16 15.3 GB)",
+        "code": "filter_no_match",
+        "details": {
+          "precision": "Q9_X",
+          "totalFiles": 10
+        },
+        "suggestions": [
+          {
+            "artifactKey": "gguf:|Q2_K",
+            "label": "Q2_K",
+            "quant": "Q2_K",
+            "bytes": 3282141632
+          },
+          {
+            "artifactKey": "gguf:|Q4_K_M",
+            "label": "Q4_K_M",
+            "quant": "Q4_K_M",
+            "bytes": 5027783488
+          },
+          {
+            "artifactKey": "gguf:|Q5_K_M",
+            "label": "Q5_K_M",
+            "quant": "Q5_K_M",
+            "bytes": 5851112768
+          },
+          {
+            "artifactKey": "gguf:|Q8_0",
+            "label": "Q8_0",
+            "quant": "Q8_0",
+            "bytes": 8709518528
+          },
+          {
+            "artifactKey": "gguf:BF16|BF16",
+            "label": "BF16",
+            "quant": "BF16",
+            "bytes": 16386765728
+          }
+        ]
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        }
+      ]
+    },
+    "download-duplicate": {
+      "status": 409,
+      "body": {
+        "error": "This folder is already being downloaded.",
+        "code": "already_downloading",
+        "hint": "wait",
+        "existingJobId": "dl_existing0000000000"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/dup-org/Dup-8B/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/dup-org/Dup-8B/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "dup-org/Dup-8B",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-gated": {
+      "status": 409,
+      "body": {
+        "error": "点击「登录」，在本机窗口完成登录后重试。 / Click Sign in, finish in the local window, then retry.",
+        "code": "hf_login_required",
+        "accessStatus": "login_required",
+        "authorizationUrl": "https://huggingface.co/gated-org/Locked-8B"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/gated-org/Locked-8B/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/gated-org/Locked-8B/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "gated-org/Locked-8B",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-disk-full": {
+      "status": 400,
+      "body": {
+        "error": "The target drive has too little free space.",
+        "code": "download_disk_full"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/full-org/Full-8B/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/full-org/Full-8B/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "full-org/Full-8B",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-repo-not-found": {
+      "status": 404,
+      "body": {
+        "error": "The repository was not found.",
+        "code": "repo_not_found"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/missing-org/Missing-Model/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/missing-org/Missing-Model/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "missing-org/Missing-Model",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "priority": "normal",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "download-no-model": {
+      "status": 400,
+      "body": {
+        "error": "model is required"
+      },
+      "hub": []
+    },
+    "estimate": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "precision": "Q4_K_M",
+        "bytes": 5027790940,
+        "fileCount": 3,
+        "includePatterns": [
+          "*Q4_K_M*.gguf",
+          "README.md",
+          "config.json"
+        ],
+        "filtered": true,
+        "matchedFiles": 3,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": "gguf:|Q4_K_M",
+              "companions": [],
+              "files": null,
+              "acceptIncomplete": false
+            },
+            "target": {
+              "rootId": "r_main"
+            },
+            "source": "auto",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "estimate-whole-repo": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "precision": "",
+        "bytes": 40361223484,
+        "fileCount": 10,
+        "includePatterns": [],
+        "filtered": false,
+        "matchedFiles": 10,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "huggingface",
+            "repo": "example-org/Example-8B-GGUF",
+            "revision": "main",
+            "selection": {
+              "artifactKey": null,
+              "companions": [],
+              "files": [
+                ".gitattributes",
+                "BF16/Example-8B-BF16-00001-of-00002.gguf",
+                "BF16/Example-8B-BF16-00002-of-00002.gguf",
+                "Example-8B-Q2_K.gguf",
+                "Example-8B-Q4_K_M.gguf",
+                "Example-8B-Q5_K_M.gguf",
+                "Example-8B-Q8_0.gguf",
+                "README.md",
+                "config.json",
+                "mmproj-F16.gguf"
+              ],
+              "acceptIncomplete": true
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "estimate-no-match": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "precision": "Q9_X",
+        "bytes": null,
+        "fileCount": 0,
+        "includePatterns": [],
+        "filtered": true,
+        "matchedFiles": 0,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "GET /api/hub/storage/usage"
+        }
+      ]
+    },
+    "estimate-modelscope": {
+      "status": 200,
+      "body": {
+        "source": "modelscope",
+        "model": "ms-org/Ms-Model",
+        "precision": "",
+        "bytes": 40361223484,
+        "fileCount": 10,
+        "includePatterns": [],
+        "filtered": false,
+        "matchedFiles": 10,
+        "totalFiles": 10,
+        "gated": false,
+        "gateMode": false,
+        "authorizationUrl": null,
+        "supported": true,
+        "diskFreeBytes": 400000000000
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/modelscope/ms-org/Ms-Model/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/modelscope/ms-org/Ms-Model/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "POST /api/hub/plan",
+          "body": {
+            "provider": "modelscope",
+            "repo": "ms-org/Ms-Model",
+            "revision": "main",
+            "selection": {
+              "artifactKey": null,
+              "companions": [],
+              "files": [
+                ".gitattributes",
+                "BF16/Example-8B-BF16-00001-of-00002.gguf",
+                "BF16/Example-8B-BF16-00002-of-00002.gguf",
+                "Example-8B-Q2_K.gguf",
+                "Example-8B-Q4_K_M.gguf",
+                "Example-8B-Q5_K_M.gguf",
+                "Example-8B-Q8_0.gguf",
+                "README.md",
+                "config.json",
+                "mmproj-F16.gguf"
+              ],
+              "acceptIncomplete": true
+            },
+            "target": {
+              "rootId": null
+            },
+            "source": "auto",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "precheck": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "findings": [],
+        "source": "huggingface"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "remote-models": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "sort": "trending",
+        "task": "all",
+        "feature": "all",
+        "search": "example",
+        "limit": 48,
+        "size": "",
+        "freshness": "auto",
+        "quant": "",
+        "models": [
+          {
+            "source": "huggingface",
+            "model": "example-org/Example-8B-GGUF",
+            "id": "example-org/Example-8B-GGUF",
+            "label": "example-org/Example-8B-GGUF",
+            "author": "example-org",
+            "url": "https://huggingface.co/example-org/Example-8B-GGUF",
+            "tags": [
+              "gguf",
+              "text-generation"
+            ],
+            "badges": [
+              "GGUF",
+              "Q4_K_M",
+              "Q8_0"
+            ],
+            "downloads": 120000,
+            "likes": 300,
+            "gated": false,
+            "pipelineTag": "text-generation",
+            "libraryName": "",
+            "lastModified": "2026-09-18T10:21:34.000Z",
+            "createdAt": "",
+            "hasConfig": false,
+            "hasSafetensors": false,
+            "hasGguf": true,
+            "hasQuantizedFiles": true,
+            "quantFormats": [
+              "GGUF",
+              "Q4_K_M",
+              "Q8_0"
+            ],
+            "paramsB": 8.19,
+            "sizeClass": "medium",
+            "fileSizeBytes": null,
+            "largestFileBytes": null,
+            "fileCount": 0,
+            "summary": "",
+            "selection": {
+              "developer": "example-org",
+              "modelVersion": "Example",
+              "spec": "8B",
+              "precision": "Q8_0",
+              "source": "huggingface",
+              "options": {
+                "developers": [
+                  "example-org"
+                ],
+                "modelVersions": [
+                  "Example"
+                ],
+                "specs": [
+                  "8B"
+                ],
+                "precisions": [
+                  "Q8_0",
+                  "Q4_K_M",
+                  "GGUF"
+                ]
+              }
+            },
+            "outputName": "example-org-Example-8B-GGUF",
+            "runnable": true
+          }
+        ]
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/search?q=example&provider=huggingface&sort=trending&facet=format%3Agguf&limit=48"
+        }
+      ]
+    },
+    "remote-models-filtered": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "sort": "lastModified",
+        "task": "all",
+        "feature": "all",
+        "search": "",
+        "limit": 12,
+        "size": "xlarge",
+        "freshness": "auto",
+        "quant": "AWQ",
+        "models": []
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/search?provider=huggingface&sort=updated&facet=format%3Agguf&facet=format%3Aawq&limit=12"
+        }
+      ]
+    },
+    "gguf-variants": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-GGUF",
+        "source": "huggingface",
+        "supported": true,
+        "gated": false,
+        "selected": "Q4_K_M",
+        "variants": [
+          {
+            "quant": "Q2_K",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q2_K.gguf",
+                "size": 3282141632
+              }
+            ],
+            "bytes": 3282141632,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "fits",
+              "ratio": 0.20833333333333334,
+              "note": "约占显存 21%，可以整模型放进 GPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "Q4_K_M",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q4_K_M.gguf",
+                "size": 5027783488
+              }
+            ],
+            "bytes": 5027783488,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "fits",
+              "ratio": 0.30833333333333335,
+              "note": "约占显存 31%，可以整模型放进 GPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "Q5_K_M",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q5_K_M.gguf",
+                "size": 5851112768
+              }
+            ],
+            "bytes": 5851112768,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "tight",
+              "ratio": 0.9243697478991597,
+              "note": "约占显存 92%，上下文需要保守，或放部分层到 CPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "Q8_0",
+            "directory": "",
+            "files": [
+              {
+                "name": "Example-8B-Q8_0.gguf",
+                "size": 8709518528
+              }
+            ],
+            "bytes": 8709518528,
+            "fileCount": 1,
+            "multiPart": false,
+            "complete": true,
+            "fit": {
+              "status": "tight",
+              "ratio": 1,
+              "note": "约占显存 100%，上下文需要保守，或放部分层到 CPU。",
+              "spill": true,
+              "source": "hub"
+            },
+            "vllmLoadable": true
+          },
+          {
+            "quant": "BF16",
+            "directory": "BF16",
+            "files": [
+              {
+                "name": "BF16/Example-8B-BF16-00001-of-00002.gguf",
+                "size": 9993842240
+              },
+              {
+                "name": "BF16/Example-8B-BF16-00002-of-00002.gguf",
+                "size": 6392923488
+              }
+            ],
+            "bytes": 16386765728,
+            "fileCount": 2,
+            "multiPart": true,
+            "complete": true,
+            "fit": {
+              "status": "exceeds",
+              "ratio": 1.6666666666666667,
+              "note": "需要约 39.1 GB，超过显存，只能把部分层放到 CPU。",
+              "spill": false,
+              "source": "hub"
+            },
+            "vllmLoadable": false
+          }
+        ],
+        "mmproj": [
+          {
+            "name": "mmproj-F16.gguf",
+            "size": 1103892032,
+            "quant": "F16"
+          }
+        ],
+        "drafts": [],
+        "other": [],
+        "totalFiles": 7
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF/files?limit=2000&cursor=o6"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "gguf-variants-modelscope": {
+      "status": 200,
+      "body": {
+        "model": "ms-org/Ms-Model",
+        "source": "modelscope",
+        "supported": false,
+        "variants": [],
+        "mmproj": [],
+        "drafts": []
+      },
+      "hub": []
+    },
+    "precision-variants": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-GGUF",
+        "base": "example-8b",
+        "variants": [
+          {
+            "id": "example-org/Example-8B-FP8",
+            "precision": "FP8",
+            "isCurrent": false,
+            "downloads": 0,
+            "likes": 0,
+            "gated": false,
+            "hasGguf": false,
+            "support": {
+              "vllm": "ok",
+              "sglang": "ok",
+              "llama": "block",
+              "notes": []
+            },
+            "recommendedEngine": "vllm"
+          },
+          {
+            "id": "example-org/Example-8B-GGUF",
+            "precision": "GGUF",
+            "isCurrent": true,
+            "downloads": 0,
+            "likes": 0,
+            "gated": false,
+            "hasGguf": true,
+            "support": {
+              "vllm": "warn",
+              "sglang": "block",
+              "llama": "ok",
+              "notes": [
+                "GGUF 由 llama.cpp 直接运行；vLLM 只支持单文件 GGUF 且为实验特性。"
+              ]
+            },
+            "recommendedEngine": "llama"
+          },
+          {
+            "id": "unsloth/Example-8B-GGUF",
+            "precision": "GGUF",
+            "isCurrent": false,
+            "downloads": 0,
+            "likes": 0,
+            "gated": false,
+            "hasGguf": true,
+            "support": {
+              "vllm": "warn",
+              "sglang": "block",
+              "llama": "ok",
+              "notes": [
+                "GGUF 由 llama.cpp 直接运行；vLLM 只支持单文件 GGUF 且为实验特性。"
+              ]
+            },
+            "recommendedEngine": "llama"
+          }
+        ]
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "settings-get": {
+      "status": 200,
+      "body": {
+        "queueMode": true,
+        "autoRetryCount": 3,
+        "autoRetryDelaySeconds": 10,
+        "hfMirror": false,
+        "hfTransfer": true,
+        "verifyChecksums": true,
+        "idleOnlyQueue": false
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/settings"
+        }
+      ]
+    },
+    "settings-post": {
+      "status": 200,
+      "body": {
+        "queueMode": false,
+        "autoRetryCount": 5,
+        "autoRetryDelaySeconds": 10,
+        "hfMirror": true,
+        "hfTransfer": true,
+        "verifyChecksums": true,
+        "idleOnlyQueue": true
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/settings"
+        },
+        {
+          "call": "PUT /api/hub/settings",
+          "body": {
+            "settings": {
+              "transfer": {
+                "maxConcurrent": 3
+              },
+              "retry": {
+                "maxAttempts": 5
+              },
+              "sources": {
+                "policy": "hf-mirror"
+              },
+              "queue": {
+                "idleOnly": true
+              }
+            },
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "settings-post-empty": {
+      "status": 200,
+      "body": {
+        "queueMode": false,
+        "autoRetryCount": 5,
+        "autoRetryDelaySeconds": 10,
+        "hfMirror": true,
+        "hfTransfer": true,
+        "verifyChecksums": true,
+        "idleOnlyQueue": true
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/settings"
+        }
+      ]
+    },
+    "mirror-probe": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "repo": "example-org/Example-8B-GGUF",
+        "file": "config.json",
+        "official": {
+          "source": "official",
+          "label": "huggingface.co",
+          "ok": true,
+          "status": 206,
+          "ms": 900,
+          "bytes": 2097152,
+          "bytesPerSec": 100000,
+          "error": null,
+          "repo": "example-org/Example-8B-GGUF"
+        },
+        "mirror": {
+          "source": "mirror",
+          "label": "hf-mirror.com",
+          "ok": true,
+          "status": 206,
+          "ms": 200,
+          "bytes": 2097152,
+          "bytesPerSec": 2000000,
+          "error": null,
+          "repo": "example-org/Example-8B-GGUF"
+        },
+        "modelscope": {
+          "source": "modelscope",
+          "label": "modelscope.cn",
+          "ok": false,
+          "status": 404,
+          "ms": 100,
+          "bytes": 0,
+          "bytesPerSec": 0,
+          "error": "HTTP 404",
+          "repo": "qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "modelScopeRepo": "",
+        "sources": [
+          {
+            "source": "official",
+            "label": "huggingface.co",
+            "ok": true,
+            "status": 206,
+            "ms": 900,
+            "bytes": 2097152,
+            "bytesPerSec": 100000,
+            "error": null,
+            "repo": "example-org/Example-8B-GGUF"
+          },
+          {
+            "source": "mirror",
+            "label": "hf-mirror.com",
+            "ok": true,
+            "status": 206,
+            "ms": 200,
+            "bytes": 2097152,
+            "bytesPerSec": 2000000,
+            "error": null,
+            "repo": "example-org/Example-8B-GGUF"
+          },
+          {
+            "source": "modelscope",
+            "label": "modelscope.cn",
+            "ok": false,
+            "status": 404,
+            "ms": 100,
+            "bytes": 0,
+            "bytesPerSec": 0,
+            "error": "HTTP 404",
+            "repo": "qwen/Qwen2.5-0.5B-Instruct"
+          }
+        ],
+        "recommended": "mirror",
+        "recommendedLabel": "hf-mirror.com",
+        "at": "2026-10-14T08:00:00.000Z"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/sources/probe",
+          "body": {
+            "repo": "example-org/Example-8B-GGUF",
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "mirror-probe-bare": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+        "file": "config.json",
+        "official": {
+          "source": "official",
+          "label": "huggingface.co",
+          "ok": true,
+          "status": 206,
+          "ms": 900,
+          "bytes": 2097152,
+          "bytesPerSec": 100000,
+          "error": null,
+          "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "mirror": {
+          "source": "mirror",
+          "label": "hf-mirror.com",
+          "ok": true,
+          "status": 206,
+          "ms": 200,
+          "bytes": 2097152,
+          "bytesPerSec": 2000000,
+          "error": null,
+          "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "modelscope": {
+          "source": "modelscope",
+          "label": "modelscope.cn",
+          "ok": false,
+          "status": 404,
+          "ms": 100,
+          "bytes": 0,
+          "bytesPerSec": 0,
+          "error": "HTTP 404",
+          "repo": "qwen/Qwen2.5-0.5B-Instruct"
+        },
+        "modelScopeRepo": "",
+        "sources": [
+          {
+            "source": "official",
+            "label": "huggingface.co",
+            "ok": true,
+            "status": 206,
+            "ms": 900,
+            "bytes": 2097152,
+            "bytesPerSec": 100000,
+            "error": null,
+            "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+          },
+          {
+            "source": "mirror",
+            "label": "hf-mirror.com",
+            "ok": true,
+            "status": 206,
+            "ms": 200,
+            "bytes": 2097152,
+            "bytesPerSec": 2000000,
+            "error": null,
+            "repo": "Qwen/Qwen2.5-0.5B-Instruct"
+          },
+          {
+            "source": "modelscope",
+            "label": "modelscope.cn",
+            "ok": false,
+            "status": 404,
+            "ms": 100,
+            "bytes": 0,
+            "bytesPerSec": 0,
+            "error": "HTTP 404",
+            "repo": "qwen/Qwen2.5-0.5B-Instruct"
+          }
+        ],
+        "recommended": "mirror",
+        "recommendedLabel": "hf-mirror.com",
+        "at": "2026-10-14T08:00:00.000Z"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/sources/probe",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "resolve-link-hf": {
+      "status": 200,
+      "body": {
+        "source": "huggingface",
+        "model": "example-org/Example-8B-GGUF",
+        "url": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "id": "example-org/Example-8B-GGUF",
+        "label": "example-org/Example-8B-GGUF",
+        "author": "example-org",
+        "tags": [
+          "gguf",
+          "text-generation"
+        ],
+        "badges": [
+          "GGUF",
+          "Q4_K_M",
+          "Q8_0"
+        ],
+        "downloads": 120000,
+        "likes": 300,
+        "gated": false,
+        "pipelineTag": "text-generation",
+        "libraryName": "",
+        "lastModified": "2026-09-18T10:21:34.000Z",
+        "createdAt": "",
+        "hasConfig": false,
+        "hasSafetensors": false,
+        "hasGguf": true,
+        "hasQuantizedFiles": true,
+        "quantFormats": [
+          "GGUF",
+          "Q4_K_M",
+          "Q8_0"
+        ],
+        "paramsB": 8.19,
+        "sizeClass": "medium",
+        "fileSizeBytes": null,
+        "largestFileBytes": null,
+        "fileCount": 0,
+        "summary": "",
+        "selection": {
+          "developer": "example-org",
+          "modelVersion": "Example",
+          "spec": "8B",
+          "precision": "Q8_0",
+          "source": "huggingface",
+          "options": {
+            "developers": [
+              "example-org"
+            ],
+            "modelVersions": [
+              "Example"
+            ],
+            "specs": [
+              "8B"
+            ],
+            "precisions": [
+              "Q8_0",
+              "Q4_K_M",
+              "GGUF"
+            ]
+          }
+        },
+        "outputName": "example-org-Example-8B-GGUF",
+        "runnable": true
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/resolve-link",
+          "body": {
+            "url": "https://huggingface.co/example-org/Example-8B-GGUF"
+          }
+        },
+        {
+          "call": "GET /api/hub/search?q=example-org%2FExample-8B-GGUF&provider=huggingface&limit=10"
+        }
+      ]
+    },
+    "resolve-link-modelscope": {
+      "status": 200,
+      "body": {
+        "source": "modelscope",
+        "model": "ms-org/Ms-Model",
+        "url": "https://modelscope.cn/models/ms-org/Ms-Model",
+        "label": "ms-org/Ms-Model",
+        "tags": [],
+        "downloads": null,
+        "likes": null,
+        "lastModified": null,
+        "summary": "已从 ModelScope 链接解析出模型 ID。下载时会使用 ModelScope 来源。",
+        "selection": {
+          "developer": "ms-org",
+          "modelVersion": "Ms Model",
+          "spec": "未标注规格",
+          "precision": "原始 BF16/FP16",
+          "source": "modelscope",
+          "options": {
+            "developers": [
+              "ms-org"
+            ],
+            "modelVersions": [
+              "Ms Model"
+            ],
+            "specs": [
+              "未标注规格"
+            ],
+            "precisions": [
+              "原始 BF16/FP16"
+            ]
+          }
+        },
+        "outputName": "ms-org-Ms-Model"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/resolve-link",
+          "body": {
+            "url": "https://www.modelscope.cn/models/ms-org/Ms-Model"
+          }
+        }
+      ]
+    },
+    "resolve-link-bad": {
+      "status": 422,
+      "body": {
+        "error": "That link is not a model page.",
+        "code": "unrecognized_link"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/resolve-link",
+          "body": {
+            "url": "https://example.com/bad"
+          }
+        }
+      ]
+    },
+    "disk-usage": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "root": "X:/hub-fake/lib",
+        "disk": {
+          "freeBytes": 400000000000,
+          "totalBytes": 1000000000000
+        },
+        "modelsBytes": 5000000000,
+        "models": [
+          {
+            "name": "example-org-Example-8B-GGUF",
+            "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "rootId": "r_main",
+            "bytes": 5000000000,
+            "sizeBytes": 5000000000,
+            "incompleteFiles": 1,
+            "incompleteBytes": 1024,
+            "incomplete": true,
+            "modified": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "roots": [
+          {
+            "id": "r_main",
+            "path": "X:/hub-fake/lib",
+            "label": "Library",
+            "default": true,
+            "legacy": false,
+            "mode": "library",
+            "available": true,
+            "freeBytes": 400000000000,
+            "totalBytes": 1000000000000,
+            "usedByModelsBytes": 5000000000,
+            "modelCount": 1,
+            "incompleteBytes": 1024,
+            "incompleteFiles": 1
+          },
+          {
+            "id": "legacy",
+            "path": "X:/hub-fake/legacy",
+            "label": "Legacy",
+            "default": false,
+            "legacy": true,
+            "mode": "library",
+            "available": true,
+            "freeBytes": 400000000000,
+            "totalBytes": 1000000000000,
+            "usedByModelsBytes": 0,
+            "modelCount": 0,
+            "incompleteBytes": 0,
+            "incompleteFiles": 0
+          }
+        ],
+        "hfCache": {
+          "path": "X:/hub-fake/hf",
+          "hubBytes": 100,
+          "xetBytes": 0,
+          "modelscopeBytes": 0
+        },
+        "incompleteBytes": 1024,
+        "incompleteFiles": 1,
+        "updatedAt": "2026-10-14T08:00:00.000Z"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/storage/usage"
+        }
+      ]
+    },
+    "cleanup-incomplete-name": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+        "removed": [
+          ".cache/huggingface/download/model.safetensors.abc.incomplete"
+        ],
+        "removedBytes": 1024
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_1111111111111111/cleanup-residue",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "cleanup-incomplete-path": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+        "removed": [
+          ".cache/huggingface/download/model.safetensors.abc.incomplete"
+        ],
+        "removedBytes": 1024
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_1111111111111111/cleanup-residue",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "cleanup-incomplete-outside": {
+      "status": 400,
+      "body": {
+        "error": "路径必须位于已登记的模型库内，且不能是模型库本身。 / The path must be inside a configured model library and must not be the library itself.",
+        "code": "path_outside_roots"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        }
+      ]
+    },
+    "cleanup-incomplete-root": {
+      "status": 400,
+      "body": {
+        "error": "路径必须位于已登记的模型库内，且不能是模型库本身。 / The path must be inside a configured model library and must not be the library itself.",
+        "code": "path_outside_roots"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        }
+      ]
+    },
+    "cleanup-incomplete-busy": {
+      "status": 409,
+      "body": {
+        "error": "A download is still using this folder.",
+        "code": "library_entry_busy"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_2222222222222222/cleanup-residue",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "upstream-status": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "name": "example-org-Example-8B-GGUF",
+        "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+        "repo": "example-org/Example-8B-GGUF",
+        "url": "https://huggingface.co/example-org/Example-8B-GGUF",
+        "lastModified": null,
+        "downloadedAt": "2026-10-01T00:00:00.000Z",
+        "recordSource": "hub-job",
+        "updateAvailable": true,
+        "remoteSha": "ffffffffffffffffffffffffffffffffffffffff",
+        "localSha": "c9cb71132e91c418ab146bdbefd9af2760a6340b",
+        "message": "上游仓库在本地下载之后有更新，可重新下载获取新版本。"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_1111111111111111/check-update",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "upstream-status-unknown": {
+      "status": 200,
+      "body": {
+        "ok": false,
+        "name": "mystery-model",
+        "path": "X:/hub-fake/lib/mystery-model",
+        "reason": "unknown_source",
+        "message": "没有找到该目录的下载记录，无法确定上游仓库；可在请求中显式提供 model。"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/library?limit=500"
+        },
+        {
+          "call": "POST /api/hub/library/lib_2222222222222222/check-update",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "hf-auth-status": {
+      "status": 200,
+      "body": {
+        "connected": true,
+        "username": "fake-user",
+        "orgs": [
+          "fake-org"
+        ],
+        "source": "local-cli"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/auth/huggingface"
+        }
+      ]
+    },
+    "hf-auth-login": {
+      "status": 200,
+      "body": {
+        "launched": true,
+        "tokenUrl": "https://huggingface.co/settings/tokens"
+      },
+      "hub": [
+        {
+          "call": "POST /api/hub/auth/huggingface/login",
+          "body": {
+            "origin": {
+              "kind": "manager-shim",
+              "managerId": "llama",
+              "clientLocal": true
+            }
+          }
+        }
+      ]
+    },
+    "hf-access-public": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-GGUF",
+        "gated": false,
+        "granted": true,
+        "status": "public",
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-GGUF"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/auth/huggingface/access?repo=example-org%2FExample-8B-GGUF"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-GGUF"
+        }
+      ]
+    },
+    "hf-access-gated": {
+      "status": 200,
+      "body": {
+        "model": "example-org/Example-8B-FP8",
+        "gated": true,
+        "granted": false,
+        "status": "approval_required",
+        "username": "fake-user",
+        "authorizationUrl": "https://huggingface.co/example-org/Example-8B-FP8"
+      },
+      "hub": [
+        {
+          "call": "GET /api/hub/auth/huggingface/access?repo=example-org%2FExample-8B-FP8"
+        },
+        {
+          "call": "GET /api/hub/repos/huggingface/example-org/Example-8B-FP8"
+        }
+      ]
+    },
+    "hf-auth-lan-status": {
+      "status": 403,
+      "body": {
+        "error": "Hugging Face 账号状态仅允许从本机查看。"
+      },
+      "hub": []
+    },
+    "hf-auth-lan-login": {
+      "status": 403,
+      "body": {
+        "error": "Hugging Face 登录仅允许从本机发起。"
+      },
+      "hub": []
+    },
+    "hf-auth-lan-access": {
+      "status": 403,
+      "body": {
+        "error": "Hugging Face 授权复检仅允许从本机发起。"
+      },
+      "hub": []
+    },
+    "models-decorated": {
+      "status": 200,
+      "body": {
+        "local": [
+          {
+            "name": "example-org-Example-8B-GGUF",
+            "path": "X:/hub-fake/lib/example-org-Example-8B-GGUF",
+            "libraryEntryId": "lib_1111111111111111",
+            "provenance": {
+              "provider": "huggingface",
+              "repo": "example-org/Example-8B-GGUF",
+              "revisionSha": "c9cb71132e91c418ab146bdbefd9af2760a6340b",
+              "confidence": "declared"
+            }
+          },
+          {
+            "name": "unknown-model",
+            "path": "X:/hub-fake/lib/unknown-model"
+          }
+        ],
+        "cached": []
+      },
+      "hub": []
+    }
+  }
+}

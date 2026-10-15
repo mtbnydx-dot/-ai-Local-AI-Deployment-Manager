@@ -993,7 +993,7 @@ test("every exposure and security route is owner-only; writes need the CSRF toke
   }
   assert.equal((await h.call("POST", "/api/public/exposure/scan", { body: {}, who: "cli" })).status, 200);
   assert.equal((await h.call("GET", "/api/security/nothing")).handled, false, "an unknown path falls through");
-  assert.equal((await h.call("GET", "/api/public/templates")).handled, false, "PUB-20 owns the templates routes");
+  assert.equal((await h.call("GET", "/api/public/templates")).handled, true, "PUB-20 serves the templates routes in this module now");
 });
 
 test("GET /api/public/exposure answers the cached report; POST scan forces a scan and is audited without the report", async () => {

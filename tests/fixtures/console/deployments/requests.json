@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "rows": [
+    { "requestId": "req_AAAAAAAAAAAAAAAAAAAA", "receivedAt": "@now-5m", "durationMs": 18234, "ttftMs": 512, "terminalState": "completed", "errorClass": "none" },
+    { "requestId": "req_BBBBBBBBBBBBBBBBBBBB", "receivedAt": "@now-9m", "durationMs": 900, "ttftMs": null, "terminalState": "client_abort", "errorClass": "none" }
+  ],
+  "nextCursor": null
+}

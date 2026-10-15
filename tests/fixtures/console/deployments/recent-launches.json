@@ -1,0 +1,1 @@
+{ "launches": [{ "model": "<MODEL_DIR>/qwen3-demo-32b", "name": "qwen3-demo-32b", "launchedAt": "@now-1d", "config": {} }] }

@@ -328,7 +328,7 @@ function parseTunnelTargets(text) {
     const directive = TUNNEL_DIRECTIVE_RE.exec(line);
     if (!directive) return;
     // ${placeholders} and cloudflared's http_status:404 are not upstreams.
-    const rest = directive[2].replace(/\$\{[^}]*\}/g, "").replace(/http_status:\d+/gi, "");
+    const rest = directive[2].replace(/\$\{[^}]*\}/g, "").replace(/\bhttp_status:\d+/gi, "");
     TUNNEL_ADDRESS_RE.lastIndex = 0;
     let match;
     while ((match = TUNNEL_ADDRESS_RE.exec(rest)) !== null) {

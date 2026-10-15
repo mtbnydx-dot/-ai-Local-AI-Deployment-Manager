@@ -218,6 +218,10 @@ function normalizeManagerInstances(manager = {}, payload = {}) {
       ...(instance.engine || instance.engineId ? { engineId: String(instance.engineId || instance.engine) } : {}),
       ...(instance.runtime?.id ? { runtimeId: String(instance.runtime.id) } : {}),
       ...(instance.launchId ? { launchId: String(instance.launchId) } : {}),
+      // 00 §4.1 additive fields, kept for the public model list (05 §8.3).
+      ...(instance.capabilities && typeof instance.capabilities === "object" && !Array.isArray(instance.capabilities) ? { declaredCapabilities: instance.capabilities } : {}),
+      ...(instance.apiSurface && typeof instance.apiSurface === "object" ? { apiSurface: instance.apiSurface } : {}),
+      ...(instance.lifecycle && typeof instance.lifecycle === "object" ? { lifecycle: { state: String(instance.lifecycle.state || "") } } : {}),
       image: instance.image || instance.container?.image || "",
       port: Number(instance.port || instance.endpoint?.port || 0) || null,
       localBaseUrl: instance.localBaseUrl || instance.endpoint?.localUrl || null,
@@ -296,6 +300,41 @@ function catalogCandidates(catalogs = []) {
   return candidates;
 }
 
+// The engine behind a candidate (00 §3 engineId): what the instance reports,
+// else the one its manager hosts (vllm-manager: vllm, llama-manager: llamacpp).
+// `llama` is the legacy spelling of llamacpp.
+function candidateEngineId(candidate) {
+  const reported = String(candidate?.instance?.engineId || candidate?.instance?.engine_id || "").trim().toLowerCase();
+  const raw = reported && reported !== candidate?.managerId ? reported : "";
+  const engine = raw === "llama" ? "llamacpp" : raw;
+  if (engine) return engine;
+  return candidate?.managerId === "llama" ? "llamacpp" : String(candidate?.managerId || "");
+}
+
+// The engine ids the fleet can name: the built-in and shipped descriptors
+// plus whatever the catalogs report, running or not (a stopped sglang is
+// still a known engine, "no model running" and "no such engine" differ).
+const KNOWN_ENGINE_IDS = Object.freeze(["vllm", "sglang", "llamacpp", "lmdeploy", "trtllm", "tabbyapi"]);
+
+function knownEngineIds(catalogs = []) {
+  const ids = new Set(KNOWN_ENGINE_IDS);
+  for (const catalog of Array.isArray(catalogs) ? catalogs : []) {
+    const managerId = String(catalog?.manager?.id || "").toLowerCase();
+    for (const instance of Array.isArray(catalog?.instances) ? catalog.instances : []) {
+      const id = candidateEngineId({ managerId, instance });
+      if (id) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+// fleetId of a candidate: `${managerId}:${instanceId}` (00 §3); external
+// endpoints are `external:<endpointId>`.
+function candidateFleetId(candidate) {
+  const instanceId = String(candidate?.instance?.instanceId || candidate?.instance?.id || candidate?.model?.instance_id || "primary");
+  return `${String(candidate?.managerId || "").toLowerCase()}:${instanceId}`;
+}
+
 function targetError(error, capability, status, reason) {
   return { manager: null, instance: null, model: null, capability, reason, message: reason, error, status };
 }
@@ -338,6 +377,12 @@ function selectFleetTarget(catalogs, request = {}) {
   const mode = normalizeFleetMode(request.mode);
   let candidates = catalogCandidates(catalogs);
   if (["vllm", "llama"].includes(engine)) candidates = candidates.filter((item) => item.managerId === engine);
+  // /gateway/<engineId>/… and /gateway/external/<id>/… (00 §5) narrow by the
+  // engine behind the instance, or by the external endpoint.
+  const engineId = String(request.engineId || route.engineId || "").trim().toLowerCase();
+  if (engineId) candidates = candidates.filter((item) => candidateEngineId(item) === engineId);
+  const externalId = String(request.externalId || route.externalId || "").trim().toLowerCase();
+  if (externalId) candidates = candidates.filter((item) => candidateFleetId(item).toLowerCase() === `external:${externalId}`);
   // The caller's key filters (05 §8.1: modelAllowed/fleetAllowed) apply before
   // matching, so a generic id only ever picks among models the key may use.
   // A model that exists but is filtered out answers model_not_allowed, not
@@ -624,4 +669,8 @@ module.exports = {
   selectFleetTarget,
   rewriteRequestModelBody,
   buildFleetSnapshot,
+  candidateEngineId,
+  candidateFleetId,
+  knownEngineIds,
+  KNOWN_ENGINE_IDS,
 };

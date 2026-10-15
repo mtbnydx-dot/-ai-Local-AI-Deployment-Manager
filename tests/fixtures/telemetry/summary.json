@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "from": "2026-10-14T11:00:00.000Z",
+  "to": "2026-10-14T12:00:00.000Z",
+  "current": {
+    "requests": 17,
+    "errorRate": 0.0588,
+    "clientAbortRate": 0.1176,
+    "ttftP95Ms": 193.6364,
+    "durationP95Ms": 987.5,
+    "decodeTpsP50": 24.1667,
+    "promptTokens": 1853,
+    "cachedTokens": 340,
+    "outputTokens": 825,
+    "activeKeys": 3,
+    "gpuUtilAvg": 50,
+    "vramPeakMb": 40000,
+    "energyKwh": 0.3,
+    "energyCost": null,
+    "currency": "CNY"
+  },
+  "coverage": 1,
+  "source": "rollup_1m",
+  "previous": {
+    "requests": 0,
+    "errorRate": null,
+    "clientAbortRate": null,
+    "ttftP95Ms": null,
+    "durationP95Ms": null,
+    "decodeTpsP50": null,
+    "promptTokens": 0,
+    "cachedTokens": 0,
+    "outputTokens": 0,
+    "activeKeys": 0,
+    "gpuUtilAvg": null,
+    "vramPeakMb": null,
+    "energyKwh": null,
+    "energyCost": null,
+    "currency": "CNY"
+  }
+}

@@ -21,7 +21,9 @@
 // The limiter (lib/limiter.js, 05 §9) runs inside it: the ban check before
 // authentication, the rpm bucket after it, then (once the model is chosen) the
 // tpm bucket and the quotas, and the public share gate before the upstream
-// call. The usage tap (usage-tap.js, PUB-11) reads the usage out of the
+// call. The public surface (public-api.js, PUB-12) adds alias resolution,
+// the engineId / external routes and the key's max_tokens cap between the
+// model choice and the limiter. The usage tap (usage-tap.js, PUB-11) reads the usage out of the
 // response on its way to the client and settles the tpm reservation, adds the
 // key's counters once and records who used what (step 15); the hop v2
 // principal (PUB-10) is hopPrincipal below.
@@ -31,6 +33,7 @@ const core = require("../../manager-core");
 const keyPolicy = require("./key-policy");
 const { createLimiter } = require("./limiter");
 const modelFleet = require("./model-fleet");
+const { applyOutputCap } = require("./public-api");
 const { hasApiKeyHeader, lookupPublicError, sendPublicError } = require("./public-errors");
 const { createUsageTap } = require("./usage-tap");
 
@@ -71,6 +74,8 @@ const PUBLIC_CODE_FOR = Object.freeze({
 const TAXONOMY_ON_ADMIN = new Set([
   "missing_api_key", "invalid_api_key", "key_expired", "key_disabled", "scope_denied",
   "model_not_allowed", "origin_not_allowed", "ip_not_allowed", "csrf_invalid", "auth_unavailable",
+  // The public surface's request checks (05 §8.2 steps 9 and 10).
+  "max_tokens_exceeded", "unknown_engine",
   // The limiter's checks (05 §9): new on ADMIN as well, so distinct codes.
   "request_exceeds_tpm", "tokens_rate_limit_exceeded", "insufficient_quota", "overloaded",
 ]);
@@ -189,6 +194,8 @@ function createGatewayPipeline(deps = {}) {
   const selectFleetTarget = typeof deps.selectFleetTarget === "function" ? deps.selectFleetTarget : modelFleet.selectFleetTarget;
   const io = deps.io || {};
   const makeUsageTap = typeof deps.usageTap === "function" ? deps.usageTap : createUsageTap;
+  // (requested, { catalogs, caller, route }) -> model id | "": public_model_meta aliases (05 §8.1).
+  const resolveModelAlias = typeof deps.resolveModelAlias === "function" ? deps.resolveModelAlias : null;
   const limiter = deps.limiter || createLimiter({
     config: () => (typeof security.accessConfig === "function" ? security.accessConfig() : {}),
   });
@@ -368,8 +375,9 @@ function createGatewayPipeline(deps = {}) {
   // Takes one request from the caller's rpm bucket (05 §9.1) and reports the
   // limits. Every gateway route, the model gateway and the TTS, search and
   // status routes, calls it right after authentication.
-  function enterRate(req, res, caller, { protocol = "" } = {}) {
-    const entered = limiter.enter({ caller, identity: identityOf(req), listener: listenerOf(req) });
+  // peek: report the bucket without taking a token (/gateway/status, 05 §8.1).
+  function enterRate(req, res, caller, { protocol = "", peek = false } = {}) {
+    const entered = limiter.enter({ caller, identity: identityOf(req), listener: listenerOf(req), peek });
     req.serviceEntryRateTicket = entered.ticket;
     req.serviceEntryRateProtocol = protocol;
     applyRateHeaders(req, res);
@@ -533,6 +541,14 @@ function createGatewayPipeline(deps = {}) {
         param: "model",
       });
     }
+    // /gateway/<engineId>/… names an engine the fleet must know (00 §5);
+    // a typo is a 400, not an empty fleet.
+    if (route.engineId) {
+      const known = modelFleet.knownEngineIds(await getCatalogs(managersFor(null, "auto")));
+      if (!known.has(String(route.engineId).toLowerCase())) {
+        return refuse(req, res, access, { status: 400, code: "unknown_engine", param: "engine", message: "Unknown engine id." });
+      }
+    }
     const rate = enterRate(req, res, caller, { protocol: route.protocol });
     if (!rate.ok) {
       return refuse(req, res, access, {
@@ -543,7 +559,7 @@ function createGatewayPipeline(deps = {}) {
       });
     }
     if (io.isModelListRequest(req, route)) {
-      return io.sendModelList(req, res, route.engine, caller, authorizedManagers);
+      return io.sendModelList(req, res, route.engine, caller, authorizedManagers, route);
     }
     // From here on the request is model work: the owner's counts against the
     // public share (05 §9.5) until the response is done.
@@ -563,11 +579,16 @@ function createGatewayPipeline(deps = {}) {
         message: error.message,
       });
     }
-    const { parsedBody, contentEncoding } = body;
+    const { contentEncoding } = body;
+    let parsedBody = body.parsedBody;
     let requestBody = body.requestBody;
+    // Set when the body the client sent is no longer the body we forward
+    // (an alias or the output cap): it is re-serialized, uncompressed.
+    let bodyChanged = false;
     const requestMetadata = io.summarizeBody(parsedBody);
-    const requestedModel = String(parsedBody?.model || "").trim();
-    rec?.setRouting({ modelRequested: requestedModel, stream: requestMetadata.stream });
+    const clientModel = String(parsedBody?.model || "").trim();
+    let requestedModel = clientModel;
+    rec?.setRouting({ modelRequested: clientModel, stream: requestMetadata.stream });
     rec?.setExtra({ toolSchemaCount: requestMetadata.toolSchemaCount });
     let fleetSettings;
     try {
@@ -580,6 +601,15 @@ function createGatewayPipeline(deps = {}) {
     // route, so a model the key may not use answers model_not_allowed rather
     // than "not found".
     const catalogs = await getCatalogs(caller.key ? managersFor(null, route.engine) : authorizedManagers);
+    // A public alias names a model; it is resolved before routing and the
+    // body is rewritten to the model id (05 §8.1). The engine filter of the
+    // route is untouched, so /vllm/v1 plus an alias stays on vllm.
+    const aliasTarget = resolveModelAlias && requestedModel ? String(resolveModelAlias(requestedModel, { catalogs, caller, route }) || "").trim() : "";
+    if (aliasTarget && aliasTarget.toLowerCase() !== requestedModel.toLowerCase() && parsedBody && typeof parsedBody === "object") {
+      requestedModel = aliasTarget;
+      parsedBody = { ...parsedBody, model: aliasTarget };
+      bodyChanged = true;
+    }
     const selection = selectFleetTarget(catalogs, {
       engine: route.engine,
       protocol: route.protocol,
@@ -602,11 +632,30 @@ function createGatewayPipeline(deps = {}) {
     }
     const manager = selection.manager;
     const resolvedModel = String(selection.model?.id || "").trim();
-    io.recordRouting(req, selection, resolvedModel, requestedModel, requestMetadata);
+    io.recordRouting(req, selection, resolvedModel, clientModel, requestMetadata);
+    // 05 §8.2 step 10: a missing max_tokens gets the key's cap, an explicit
+    // one above it is refused.
+    const modelScope = scopeForModelRoute(route, req.method);
+    const capped = applyOutputCap(parsedBody, { cap: rate.ticket?.limits?.outputCap, scope: modelScope, rest: route.rest });
+    if (!capped.ok) {
+      return refuse(req, res, access, {
+        status: 400,
+        code: "max_tokens_exceeded",
+        param: capped.param,
+        message: `${capped.param} ${capped.requested} is above the limit of this key (${capped.cap}).`,
+        metadata: requestMetadata,
+        resolvedModel,
+      });
+    }
+    if (capped.injected) {
+      parsedBody = capped.body;
+      bodyChanged = true;
+    }
+    if (bodyChanged && !["GET", "HEAD"].includes(req.method)) requestBody = Buffer.from(JSON.stringify(parsedBody), "utf8");
     // tpm, then the daily/monthly caps (05 §9.1, §9.4). The reservation is
     // settled when the response is done; the usage tap (PUB-11) settles it
     // earlier with the real usage.
-    const admitted = limiter.admitBody({ ticket: rate.ticket, caller, body: parsedBody, scope: scopeForModelRoute(route, req.method) });
+    const admitted = limiter.admitBody({ ticket: rate.ticket, caller, body: parsedBody, scope: modelScope });
     applyRateHeaders(req, res);
     if (!admitted.ok) {
       return refuse(req, res, access, {
@@ -625,6 +674,23 @@ function createGatewayPipeline(deps = {}) {
       res.once("finish", settleOnEnd);
       res.once("close", settleOnEnd);
     }
+    // Step 12: the key's own concurrency queue (PUBLIC keys). The slot is
+    // held until the response is done.
+    const concurrency = await limiter.acquireConcurrency({ ticket: rate.ticket, res });
+    if (!concurrency.ok) {
+      body.release();
+      if (concurrency.aborted) return undefined;
+      return refuse(req, res, access, {
+        status: concurrency.status,
+        code: concurrency.code,
+        retryAfterSeconds: concurrency.retryAfterSeconds,
+        message: "Too many concurrent requests for this key.",
+        metadata: requestMetadata,
+        resolvedModel,
+      });
+    }
+    // "close" follows "finish" on a response that completed.
+    res.once("close", concurrency.release);
     const genericModel = io.isGenericModel(requestedModel);
     const rewriteModel = genericModel && ["openai", "opencode"].includes(route.protocol);
     let bodyForUpstream = rewriteModel ? io.rewriteModelBody(requestBody, resolvedModel, parsedBody) : requestBody;
@@ -686,7 +752,7 @@ function createGatewayPipeline(deps = {}) {
         method: req.method,
         headers: io.buildProxyHeaders(req.headers, req, {
           instanceId,
-          stripContentEncoding: Boolean(contentEncoding && rewriteModel),
+          stripContentEncoding: Boolean(contentEncoding && (rewriteModel || bodyChanged)),
           hopVersion,
           method: req.method,
           pathname: target.pathname,
@@ -761,6 +827,7 @@ function createGatewayPipeline(deps = {}) {
     modelVisible,
     candidateFilter,
     routeHeaderAllowed,
+    listenerOf,
     checkBan,
     enterRate,
     rateHeaders,

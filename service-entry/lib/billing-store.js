@@ -725,6 +725,23 @@ function createBillingStore(options = {}) {
     return candidates[0] || null;
   }
 
+  // Read-only: the price a plan puts on one model now, in microcredits per
+  // million tokens, or null. planId null is the default plan (prices that
+  // name no plan). Used by the public model list (05 §8.3); never throws on a
+  // missing price.
+  function resolveModelPrice(input = {}) {
+    const model = String(input.model || "").trim();
+    if (!model) return null;
+    const row = resolvePrice(input.planId || null, String(input.managerId || ""), model, isBlank(input.at) ? nowIso() : new Date(input.at).toISOString());
+    if (!row) return null;
+    const price = priceFromRow(row);
+    return {
+      input: price.inputPerMillionMicrocredits,
+      cachedInput: price.cachedInputPerMillionMicrocredits,
+      output: price.outputPerMillionMicrocredits,
+    };
+  }
+
   function authorizeRequest(input = {}) {
     const request = normalizeAuthorizeInput(input, uuid);
     return transaction(() => {
@@ -1481,6 +1498,7 @@ function createBillingStore(options = {}) {
     upsertPrice,
     applyPriceTemplates,
     listPrices,
+    resolveModelPrice,
     getRequest,
     listUsage,
     summarizeUsage,

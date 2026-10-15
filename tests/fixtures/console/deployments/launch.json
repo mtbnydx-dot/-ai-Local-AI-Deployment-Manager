@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "launch": {
+    "launchId": "lch_aaaaaaaaaaaaaaaaaaaa",
+    "managerId": "vllm",
+    "createdAt": "@now-3h",
+    "source": "ui",
+    "status": "running",
+    "spec": {
+      "engineId": "sglang",
+      "runtimeId": "sglang@0.5.17",
+      "recipeId": "qwen38-flashnext-262k",
+      "model": { "ref": "<MODEL_DIR>/qwen3-demo-32b", "servedName": "qwen3-demo-32b", "contentDigest": null },
+      "instance": { "mode": "replace", "id": "primary", "port": 8000, "networkAccess": "local", "gpuIds": ["0"] },
+      "values": { "contextLength": 262144, "servedName": "qwen3-demo-32b" },
+      "extraArgs": [],
+      "extraEnv": {},
+      "secrets": { "apiKeyRef": "" }
+    },
+    "resolved": {
+      "values": { "contextLength": { "value": 262144, "source": "user" }, "servedName": { "value": "qwen3-demo-32b", "source": "user" } },
+      "memory": { "policy": "static-fraction-of-free", "admissionRequestMb": 89321 },
+      "argvRedacted": ["run", "-d", "--name", "vllm-local", "-e", "API_KEY=<redacted>", "example/sglang:0.5.17"]
+    }
+  },
+  "command": { "argv": ["run", "-d", "--name", "vllm-local", "-e", "API_KEY=<redacted>", "example/sglang:0.5.17"], "docker": "docker run -d --name vllm-local" }
+}

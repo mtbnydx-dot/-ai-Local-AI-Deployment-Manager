@@ -4,10 +4,9 @@
 
 - 统一服务入口：`http://127.0.0.1:5176/`，这里只保留计费中心入口。
 - 独立计费中心：`http://127.0.0.1:5176/billing`。
-- 公网模型 API 保持不变：
-  - `https://api.zlk7301.com/vllm/v1`
-  - `https://api.zlk7301.com/llama/v1`
-- 计费管理 API 只接受直接连接到 localhost 的请求，不通过 Cloudflare Tunnel 或 Caddy 暴露。
+- 公网模型 API 只经 PUBLIC 监听（端口 5186）提供：`https://<你的域名>/v1`。旧的 `/vllm/v1`、`/llama/v1` 路径在 PUBLIC 上作为别名继续可用，密钥不变（迁移后的哈希）。
+- 计费管理 API 和控制台只在 ADMIN 监听（5176）上，不通过 Cloudflare Tunnel 或 Caddy 暴露；Caddy 与 cloudflared 模板只指向 5186。
+- 上线顺序（所有者操作，平台不会替你启动或删除任何东西）见 [客户端连接指南第 10 节](client-setup-guide.md#10-公网访问所有者上线顺序)。
 - 计费库只绑定现有服务客户端的 `managerId + serviceClientId`，不读取、保存或显示明文 API Key。
 
 ## 首次配置顺序
@@ -82,4 +81,4 @@
 
 - 中央计费覆盖两个管理器的 OpenAI 兼容公网路由。
 - 当前不包含在线支付、自动续费、发票或套餐包含积分的自动月度入账；余额由本机后台手工调整。
-- Claude/OpenCode 专用协议尚未接入中央扣费。当前公网 Caddy 也未开放这些协议。
+- Claude/OpenCode 专用协议尚未接入中央扣费。PUBLIC 监听也未开放这些协议。

@@ -1,0 +1,59 @@
+{
+  "comment": "Hub DownloadJob API shapes (03 §8.1, no logs) for the legacy compat goldens. No private paths or tokens.",
+  "jobs": [
+    {
+      "schemaVersion": 1, "id": "dl_7k2m4q9x3c5vb8np", "legacyIds": [],
+      "createdAt": "2026-10-14T08:00:00.000Z", "updatedAt": "2026-10-14T08:05:00.000Z", "startedAt": "2026-10-14T08:00:02.000Z", "finishedAt": null,
+      "origin": { "kind": "manager-shim", "managerId": "llama", "requestId": "mgr_abcdefghijklmnopqrst" },
+      "ownerManagerId": "llama",
+      "state": "downloading", "waitReason": null, "phaseHistory": [{ "phase": "queued", "at": "2026-10-14T08:00:00.000Z" }, { "phase": "downloading", "at": "2026-10-14T08:00:02.000Z" }],
+      "priority": "normal", "queueOrder": 1792000000123, "pausedBy": null, "autoResume": true,
+      "artifact": { "provider": "huggingface", "repo": "unsloth/Qwen3-8B-GGUF", "revision": "main", "revisionSha": "0123456789abcdef0123456789abcdef01234567",
+        "artifactKey": "gguf:|Q4_K_M", "kind": "gguf-quant", "format": "gguf", "quant": "Q4_K_M", "companions": ["mmproj-F16.gguf"],
+        "files": [
+          { "path": "Qwen3-8B-Q4_K_M.gguf", "size": 5027783488, "sha256": "0000000000000000000000000000000000000000000000000000000000000001", "role": "weight" },
+          { "path": "mmproj-F16.gguf", "size": 835495, "sha256": null, "role": "companion" },
+          { "path": "README.md", "size": 21043, "sha256": null, "gitOid": "0123456789abcdef0123456789abcdef01234567", "role": "sidecar" }
+        ],
+        "totalBytes": 5028640000 },
+      "target": { "rootId": "root-f", "rootLabel": "Library F", "outputName": "unsloth-Qwen3-8B-GGUF", "localDir": "X:\\models\\unsloth-Qwen3-8B-GGUF", "volume": "X:" },
+      "transfer": { "engine": "cli", "cli": "hf", "attempt": 2, "batches": 1, "batchIndex": 0, "pid": 12345, "pidStartedAt": "2026-10-14T08:00:02.000Z",
+        "options": { "source": "hf-mirror", "endpoint": "https://hf-mirror.com", "xet": "high-performance", "credentialMode": "temp-token", "tokenRef": "dlt_abcdefghijklmnop", "remember": false },
+        "optionsHistory": [] },
+      "progress": { "bytesDone": 2071000000, "bytesTotal": 5028640000, "percent": 41.2, "speedBps": 131000000, "speedEmaBps": 126000000, "etaSeconds": 23,
+        "filesDone": 1, "filesTotal": 3,
+        "files": [
+          { "path": "Qwen3-8B-Q4_K_M.gguf", "bytes": 2070000000, "size": 5027783488, "state": "partial" },
+          { "path": "mmproj-F16.gguf", "bytes": 0, "size": 835495, "state": "pending" },
+          { "path": "README.md", "bytes": 21043, "size": 21043, "state": "done" }
+        ],
+        "verify": { "filesDone": 0, "filesTotal": 1, "bytesDone": 0 }, "samples": [[1792000000000, 0]], "lastGrowthAt": "2026-10-14T08:05:00.000Z", "updatedAt": "2026-10-14T08:05:00.000Z" },
+      "retry": { "count": 1, "max": 3, "nextAt": null, "history": [{ "at": "2026-10-14T08:01:00.000Z", "code": "stall" }] },
+      "error": null, "advice": null, "runAfter": null, "result": null
+    },
+    {
+      "schemaVersion": 1, "id": "dl_2b3c4d5e6f7g2h3j", "legacyIds": ["job-legacy-1"],
+      "createdAt": "2026-10-13T08:00:00.000Z", "updatedAt": "2026-10-13T08:10:00.000Z", "startedAt": "2026-10-13T08:00:01.000Z", "finishedAt": "2026-10-13T08:10:00.000Z",
+      "origin": { "kind": "migration", "managerId": "llama", "requestId": null },
+      "ownerManagerId": "llama",
+      "state": "failed", "waitReason": null, "phaseHistory": [{ "phase": "failed", "at": "2026-10-13T08:10:00.000Z" }],
+      "priority": "high", "queueOrder": 1791900000000, "pausedBy": null, "autoResume": false,
+      "artifact": { "provider": "modelscope", "repo": "Qwen/Qwen3-8B", "revision": "master", "revisionSha": null,
+        "artifactKey": "safetensors:|", "kind": "weights", "format": "safetensors", "quant": null, "companions": [],
+        "files": [ { "path": "model.safetensors", "size": 1000, "sha256": null, "role": "weight" } ],
+        "totalBytes": 1000 },
+      "target": { "rootId": "root-default", "rootLabel": "Models", "outputName": "Qwen-Qwen3-8B", "localDir": "X:\\models\\Qwen-Qwen3-8B", "volume": "X:" },
+      "transfer": { "engine": "cli", "cli": "modelscope", "attempt": 3, "batches": 1, "batchIndex": 0, "pid": null, "pidStartedAt": null, "exitCode": 1,
+        "options": { "source": "modelscope", "endpoint": "https://www.modelscope.cn", "xet": "default", "credentialMode": "none", "tokenRef": null, "remember": false },
+        "optionsHistory": [] },
+      "progress": { "bytesDone": 0, "bytesTotal": 1000, "percent": 0, "speedBps": 0, "speedEmaBps": 0, "etaSeconds": null,
+        "filesDone": 0, "filesTotal": 1, "files": [], "verify": { "filesDone": 0, "filesTotal": 0, "bytesDone": 0 }, "samples": [], "lastGrowthAt": null, "updatedAt": "2026-10-13T08:10:00.000Z" },
+      "retry": { "count": 3, "max": 3, "nextAt": null, "history": [] },
+      "error": { "code": "hf_login_required", "baseCode": "hf_auth_invalid", "class": "auth", "retryable": false,
+        "title": { "zh": "需要登录 Hugging Face", "en": "Hugging Face login required" },
+        "hint": { "zh": "先登录 Hugging Face 再重试。", "en": "Sign in to Hugging Face, then retry." },
+        "actions": ["sign-in"], "detail": "401 Client Error <redacted>", "at": "2026-10-13T08:10:00.000Z" },
+      "advice": null, "runAfter": null, "result": null
+    }
+  ]
+}

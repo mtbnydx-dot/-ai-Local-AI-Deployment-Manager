@@ -281,7 +281,9 @@ test("the share gate shrinks to ownerActiveMaxConcurrent while owner traffic is 
   const baseline = gate.snapshot();
   assert.equal(baseline.effectiveConcurrency, baseline.maxConcurrent);
   holdMode = true;
-  const friend = createKey({ limits: { rpm: 1000, tpm: null, maxOutputTokens: 100 } });
+  // The key's own concurrency queue (05 §8.2 step 12) must not be what holds
+  // the third request back: the share gate is under test.
+  const friend = createKey({ limits: { rpm: 1000, tpm: null, maxOutputTokens: 100, maxConcurrent: 10 } });
   const owner = await ownerSession(entry, adminPort);
   const pending = [];
   try {

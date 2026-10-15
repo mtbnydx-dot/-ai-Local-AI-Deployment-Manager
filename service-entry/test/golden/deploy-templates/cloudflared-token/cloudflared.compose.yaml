@@ -1,0 +1,18 @@
+# Cloudflare Tunnel connector for the PUBLIC listener (05-public.md section 14).
+# This is a template: scripts/setup-public.ps1 and /api/public/templates render it
+# into <AI_ROOT>/config/public/ (untracked). Lines between "# @if" and "# @end"
+# belong to one tunnel mode only; the renderer keeps the block that matches.
+name: cloudflared-public
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2025.8.1
+    container_name: cloudflared-public
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
+    env_file:
+      - ./cloudflared.env
+    ports:
+      - "127.0.0.1:20241:2000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

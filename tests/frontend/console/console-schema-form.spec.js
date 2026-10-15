@@ -34,7 +34,13 @@ async function openDemo(browser, { theme = "light", size = "desktop", locale = "
   const page = await context.newPage();
   // The shell strip (CON-6) polls these two; the demo itself calls no API.
   const fixture = (name) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "fixtures", "console", `${name}.json`), "utf8"));
-  await mockConsoleApi(page, { "GET /api/status": fixture("status"), "GET /api/fleet": fixture("fleet") });
+  // The platform module is mounted (OPS-13), so the shell strip polls its status and version too.
+  await mockConsoleApi(page, {
+    "GET /api/status": fixture("status"),
+    "GET /api/fleet": fixture("fleet"),
+    "GET /api/platform/status": fixture("platform-status"),
+    "GET /api/platform/version": { ok: true, version: "0.2.0-git-2ad10e5ffe68", build: { commit: "2ad10e5ffe68", contentHash: "3f9c2a1b7d0e" }, newerCommits: 0 },
+  });
   const failures = await collectFailures(page);
   await page.goto(`${entry.url}system/ui-kit`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#app")).not.toHaveAttribute("aria-busy", /.+/);
