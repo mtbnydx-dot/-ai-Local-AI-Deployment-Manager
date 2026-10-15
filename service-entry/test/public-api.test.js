@@ -744,8 +744,11 @@ test("PUBLIC answers only routes of its table, with the right method", async () 
     else assert.equal(answer.status, 404, pathname);
   }
   assert.equal(hits.length, before, "an unknown path never reaches a manager");
-  // /v1/me is a route of the table; its handler is PUB-13's, so until then it is a plain 404.
-  assert.equal((await call(key, "/v1/me")).status, 404);
+  // /v1/me is a route of the table, served by me-routes.js (PUB-13): it needs self.read.
+  const noSelf = await call(key, "/v1/me");
+  assert.equal(noSelf.status, 403);
+  assert.equal(noSelf.json.error.code, "scope_denied");
+  assert.equal((await call(createKey({ scopes: ["self.read"] }), "/v1/me")).status, 200);
   // Speech is off when public.exposeTts is false.
   const speech = await call(createKey({ scopes: ["audio.speech"] }), "/v1/audio/speech", { method: "POST", body: { model: "tts-1", input: "hi" } });
   assert.ok([503, 429, 502, 404].includes(speech.status) && speech.json?.error, `speech: ${speech.status} ${speech.text}`);

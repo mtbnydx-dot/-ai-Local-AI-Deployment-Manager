@@ -16,6 +16,8 @@ const { lookupPublicError, newRequestId, sendPublicError } = require("./lib/publ
 const { startListeners, tagListener } = require("./lib/listeners");
 const { createPublicListener } = require("./lib/public-listener");
 const { createPublicApi, modelReadOf, parseGatewayRoute } = require("./lib/public-api");
+const { createMeRoutes } = require("./lib/me-routes");
+const telemetryQuery = require("../manager-core/telemetry/query");
 const { createPortalRoutes } = require("./lib/portal-routes");
 const { createPublicData, startStatusSampler } = require("./lib/status-sampler");
 const { createExposureScanner } = require("./lib/exposure-scan");
@@ -779,6 +781,10 @@ async function handleRequest(req, res, routes = null) {
       // 需 Key 的状态页：可用模型、在线组件、本 Key 的限流余量和配额。
       if (req.method === "GET" && (url.pathname === "/gateway/status" || url.pathname === "/gateway/status/")) {
         return handleGatewayStatus(req, res, url);
+      }
+      // The key's own view (05 §8.5); the same handler serves PUBLIC /v1/me.
+      if (url.pathname === "/gateway/me" || url.pathname.startsWith("/gateway/me/")) {
+        return meRoutes.handle(req, res, url);
       }
       return proxyGatewayRequest(req, res, url);
     }
@@ -2031,6 +2037,49 @@ async function proxyGatewayRequest(req, res, url) {
 // PUBLIC key routes, the enriched model lists and the alias resolution. This
 // file supplies the transport handlers and the data the lists join.
 let publicTtsModelsCache = { until: 0, value: [] };
+
+// The /v1/me family (05 §8.5, lib/me-routes.js): the key's own view on PUBLIC
+// and /gateway/me on ADMIN. Usage and recent requests come from the telemetry
+// store when it is ready (04 query layer, restricted to the key), else the
+// key's counters.
+function meTelemetryStore() {
+  const store = routeMounts?.ctx?.telemetry?.store;
+  return store && (!store.state || store.state === "ready") && typeof store.call === "function" ? store : null;
+}
+
+const meRoutes = createMeRoutes({
+  pipeline: () => gatewayPipeline,
+  limiter: gatewayLimiter,
+  keysStore: () => getAccessStore(),
+  config: () => security.accessConfig(),
+  billing: () => {
+    try {
+      return getBillingStore();
+    } catch {
+      return null;
+    }
+  },
+  telemetry: {
+    timeseries: async (params, { tzOffsetMinutes } = {}) => {
+      const store = meTelemetryStore();
+      if (!store) return null;
+      return store.call("timeseries", telemetryQuery.parseQuery("timeseries", params, { now: Date.now(), tzOffsetMinutes }));
+    },
+    requests: async (params) => {
+      const store = meTelemetryStore();
+      if (!store) return null;
+      return store.call("listRequests", telemetryQuery.parseQuery("requests", params, { now: Date.now() }));
+    },
+  },
+  listModels: (req, caller) => publicApi.availableModels({ req, caller, managers: gatewayPipeline.managersFor(caller, "auto") }),
+  sendJson,
+  corsHeaders: (req, caller) => (caller?.key && security.listenerKind(req) === "public" ? security.publicCorsHeaders(req, caller.key) : gatewayCorsHeaders(req)),
+  record: gatewayRecord,
+  clientIp: (req) => security.resolveClientAddress(req),
+  onKeyChanged: () => security.invalidatePublicOrigins?.(),
+  logger: console,
+});
+
 const publicApi = createPublicApi({
   pipeline: () => gatewayPipeline,
   getCatalogs: (managers) => Promise.all(managers.map((manager) => getManagerModelCatalog(manager))),
@@ -2051,6 +2100,7 @@ const publicApi = createPublicApi({
     gateway: (req, res, url) => proxyGatewayRequest(req, res, url),
     status: (req, res, url) => handleGatewayStatus(req, res, url),
     tts: (req, res, url) => proxyTtsGatewayRequest(req, res, url),
+    me: (req, res, url) => meRoutes.handle(req, res, url),
   },
   logger: console,
 });
