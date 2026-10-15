@@ -651,7 +651,11 @@ module.exports = {
   collectFleetModels,
   computeOverall,
   createPublicData,
+  displayNames,
+  instanceState,
+  modelFacts,
   publicAnnouncements,
+  publicId,
   publishedModels,
   startStatusSampler,
 };

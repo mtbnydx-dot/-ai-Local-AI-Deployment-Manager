@@ -1,0 +1,208 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen3.8-35b-a3b",
+      "object": "model",
+      "created": 1760400000,
+      "owned_by": "local",
+      "display_name": "Qwen3.8 35B A3B",
+      "aliases": [
+        "qwen3.8",
+        "chat"
+      ],
+      "family": "qwen3.8",
+      "parameters": "35B-A3B",
+      "quantization": "fp8",
+      "context_length": 262144,
+      "max_output_tokens": 8192,
+      "capabilities": {
+        "chat": true,
+        "completions": true,
+        "responses": false,
+        "messages": true,
+        "embeddings": false,
+        "vision": true,
+        "tools": true,
+        "reasoning": true,
+        "audio_speech": false
+      },
+      "controls": {
+        "reasoning_toggle": {
+          "on": {
+            "chat_template_kwargs": {
+              "enable_thinking": true
+            }
+          },
+          "off": {
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            }
+          }
+        }
+      },
+      "state": "ready",
+      "pricing": {
+        "unit": "credits_per_million_tokens",
+        "input": "0.50",
+        "cached_input": "0.05",
+        "output": "2.00"
+      },
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "max_output_tokens": 8192
+      }
+    },
+    {
+      "id": "bge-m3",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "display_name": "bge-m3",
+      "aliases": [],
+      "family": "bge",
+      "parameters": "568M",
+      "quantization": "fp16",
+      "context_length": 8192,
+      "max_output_tokens": null,
+      "capabilities": {
+        "chat": false,
+        "completions": false,
+        "responses": false,
+        "messages": false,
+        "embeddings": true,
+        "vision": false,
+        "tools": false,
+        "reasoning": false,
+        "audio_speech": false
+      },
+      "state": "ready",
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "max_output_tokens": 8192
+      }
+    },
+    {
+      "id": "gemma-3-4b-it-q4_k_m",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "display_name": "gemma-3-4b-it-q4_k_m",
+      "aliases": [],
+      "family": "gemma",
+      "parameters": "4B",
+      "quantization": "Q4_K_M",
+      "context_length": 32768,
+      "max_output_tokens": 8192,
+      "capabilities": {
+        "chat": true,
+        "completions": true,
+        "responses": true,
+        "messages": true,
+        "embeddings": false,
+        "vision": false,
+        "tools": false,
+        "reasoning": false,
+        "audio_speech": false
+      },
+      "state": "ready",
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "max_output_tokens": 8192
+      }
+    },
+    {
+      "id": "next-model-7b",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "display_name": "next-model-7b",
+      "aliases": [],
+      "family": "next",
+      "parameters": "7B",
+      "quantization": null,
+      "context_length": null,
+      "max_output_tokens": 8192,
+      "capabilities": {
+        "chat": true,
+        "completions": true,
+        "responses": true,
+        "messages": true,
+        "embeddings": false,
+        "vision": false,
+        "tools": false,
+        "reasoning": false,
+        "audio_speech": false
+      },
+      "state": "starting",
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "max_output_tokens": 8192
+      }
+    },
+    {
+      "id": "sleepy-model-8b",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "display_name": "sleepy-model-8b",
+      "aliases": [],
+      "family": "sleepy",
+      "parameters": "8B",
+      "quantization": null,
+      "context_length": null,
+      "max_output_tokens": 8192,
+      "capabilities": {
+        "chat": true,
+        "completions": true,
+        "responses": true,
+        "messages": true,
+        "embeddings": false,
+        "vision": false,
+        "tools": false,
+        "reasoning": false,
+        "audio_speech": false
+      },
+      "state": "sleeping",
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "max_output_tokens": 8192
+      }
+    },
+    {
+      "id": "tts-demo",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "display_name": "Demo voice",
+      "aliases": [],
+      "family": null,
+      "parameters": null,
+      "quantization": null,
+      "context_length": null,
+      "max_output_tokens": null,
+      "capabilities": {
+        "chat": false,
+        "completions": false,
+        "responses": false,
+        "messages": false,
+        "embeddings": false,
+        "vision": false,
+        "tools": false,
+        "reasoning": false,
+        "audio_speech": true
+      },
+      "state": "ready",
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "max_output_tokens": 8192
+      }
+    }
+  ]
+}

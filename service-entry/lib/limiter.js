@@ -38,7 +38,7 @@ const MAX_FAILURE_ENTRIES = 5000;
 
 // §3.4 defaults, used for any value the live config does not carry.
 const DEFAULTS = Object.freeze({
-  defaults: Object.freeze({ rpm: 60, tpm: 200000, maxOutputTokens: 8192 }),
+  defaults: Object.freeze({ rpm: 60, tpm: 200000, maxOutputTokens: 8192, maxConcurrent: 2, maxQueued: 4, queueTimeoutSeconds: 30 }),
   share: Object.freeze({ maxConcurrent: 4, maxQueued: 16, queueTimeoutSeconds: 30, ownerActiveMaxConcurrent: 2 }),
   preAuth: Object.freeze({ rpm: 120, burst: 30 }),
   authFailure: Object.freeze({ limit: 20, windowSeconds: 60, banSeconds: 600, maxBanSeconds: 86400 }),
@@ -642,6 +642,9 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
   // keyId -> { requests, tokens } held by requests that are still running.
   const inflight = new Map();
   const usageCache = new Map();
+  // subject -> in-flight count / waiters of the keys' own concurrency queues.
+  const concurrencyBuckets = new Map();
+  const concurrencyQueues = new Map();
   let warnedUsageAt = -Infinity;
 
   function resolveStore() {
@@ -714,7 +717,23 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
       const rpm = positive(limits.rpm) ?? (useDefaults ? int(defaults.rpm, DEFAULTS.defaults.rpm, 1, 1_000_000) : gateway);
       const tpm = positive(limits.tpm) ?? (useDefaults ? int(defaults.tpm, DEFAULTS.defaults.tpm, 1, 1_000_000_000) : null);
       const outputCap = positive(limits.maxOutputTokens) ?? (useDefaults ? int(defaults.maxOutputTokens, DEFAULTS.defaults.maxOutputTokens, 1, 10_000_000) : null);
-      return { subject: `key:${key.id}`, rpm: Math.floor(rpm), tpm: tpm === null ? null : Math.floor(tpm), outputCap, key };
+      // The key's own concurrency queue (§8.2 step 12) is a PUBLIC check; the
+      // managers and the ADMIN gateway keep theirs.
+      const maxConcurrent = listener === "public"
+        ? (positive(limits.maxConcurrent) ?? (useDefaults ? int(defaults.maxConcurrent, DEFAULTS.defaults.maxConcurrent, 1, 256) : null))
+        : null;
+      const maxQueued = positive(limits.maxQueued) ?? int(defaults.maxQueued, DEFAULTS.defaults.maxQueued, 0, 4096);
+      const queueTimeoutSeconds = positive(limits.queueTimeoutSeconds) ?? int(defaults.queueTimeoutSeconds, DEFAULTS.defaults.queueTimeoutSeconds, 1, 600);
+      return {
+        subject: `key:${key.id}`,
+        rpm: Math.floor(rpm),
+        tpm: tpm === null ? null : Math.floor(tpm),
+        outputCap,
+        maxConcurrent: maxConcurrent === null ? null : Math.floor(maxConcurrent),
+        maxQueued: Math.floor(maxQueued),
+        queueTimeoutSeconds: Math.floor(queueTimeoutSeconds),
+        key,
+      };
     }
     if (caller?.client?.id) {
       const rpm = positive(caller.client.rateLimitRpm) ?? gateway;
@@ -725,12 +744,16 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
 
   /**
    * enter({ caller, identity, listener }) -> { ok, ticket, code?, status?, retryAfterSeconds? }
-   * Takes one request from the caller's rpm bucket. The ticket carries what
-   * the headers report and what admitBody() needs.
+   * Takes one request from the caller's rpm bucket (or only looks, with
+   * peek: true). The ticket carries what the headers report and what
+   * admitBody() needs.
    */
-  function enter({ caller = null, identity = null, listener = "admin", at = now() } = {}) {
+  function enter({ caller = null, identity = null, listener = "admin", at = now(), peek = false } = {}) {
     const limits = limitsFor(caller, listener, identity);
-    const taken = buckets.take(`rpm:${limits.subject}`, { capacity: limits.rpm, refillPerSec: limits.rpm / 60, cost: 1, now: at });
+    // peek: a control read (/gateway/status, 05 §8.1) reports and honours the
+    // bucket without taking a token from it.
+    const spec = { capacity: limits.rpm, refillPerSec: limits.rpm / 60, cost: 1, now: at };
+    const taken = peek ? buckets.peek(`rpm:${limits.subject}`, spec) : buckets.take(`rpm:${limits.subject}`, spec);
     const ticket = {
       at,
       listener,
@@ -741,6 +764,43 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
     };
     if (taken.ok) return { ok: true, ticket };
     return { ok: false, ticket, status: 429, code: "rate_limit_exceeded", retryAfterSeconds: taken.retryAfterSeconds };
+  }
+
+  /**
+   * acquireConcurrency({ ticket, res, requestTimeoutMs }) ->
+   *   { ok: true, release } | { ok: false, aborted: true }
+   *   | { ok: false, status: 429, code: "concurrency_limit_exceeded", retryAfterSeconds }
+   * §8.2 step 12: a key with a concurrency limit runs that many requests at
+   * once; the next ones wait (maxQueued, queueTimeoutSeconds) and the rest
+   * are refused. Keys without a limit get a no-op release.
+   */
+  async function acquireConcurrency({ ticket, res, requestTimeoutMs = 30 * 60 * 1000 } = {}) {
+    const limits = ticket?.limits;
+    if (!limits || !limits.maxConcurrent) return { ok: true, release() {} };
+    const settings = { maxConcurrentRequests: limits.maxConcurrent, maxQueuedRequests: limits.maxQueued, queueTimeoutSeconds: limits.queueTimeoutSeconds };
+    const slot = await core.waitForServiceGatewayConcurrency(settings, limits.subject, concurrencyBuckets, concurrencyQueues, res, requestTimeoutMs);
+    if (!slot.ok) {
+      if (slot.aborted) return { ok: false, aborted: true };
+      return { ok: false, status: 429, code: "concurrency_limit_exceeded", retryAfterSeconds: slot.code === "concurrency_queue_timeout" ? limits.queueTimeoutSeconds : 1 };
+    }
+    let released = false;
+    return {
+      ok: true,
+      queuedMs: slot.queuedMs || 0,
+      release() {
+        if (released) return;
+        released = true;
+        slot.concurrency.release();
+        core.resolveNextServiceGatewayWaiter(settings, limits.subject, concurrencyBuckets, concurrencyQueues);
+      },
+    };
+  }
+
+  // The limits a caller is held to, for the model list and /v1/me (§8.3):
+  // { rpm, tpm, outputCap } with null for "no limit".
+  function describeLimits(caller, listener = "admin") {
+    const limits = limitsFor(caller, listener, null);
+    return { rpm: limits.rpm, tpm: limits.tpm, outputCap: limits.outputCap };
   }
 
   // ---- quotas (§9.4) ------------------------------------------------------
@@ -888,6 +948,8 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
 
   function reset() {
     buckets.clear();
+    concurrencyBuckets.clear();
+    concurrencyQueues.clear();
     inflight.clear();
     usageCache.clear();
   }
@@ -905,6 +967,8 @@ function createLimiter({ store = null, config = {}, now = Date.now, onBan = null
     checkKeyBan,
     noteAuthResult,
     enter,
+    acquireConcurrency,
+    describeLimits,
     admitBody,
     settle,
     invalidateUsage,

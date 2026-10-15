@@ -12,9 +12,10 @@ const core = require("../manager-core");
 const { createEntrySecurity } = require("./lib/security");
 const { createGatewayPipeline, scopeForGatewayPath } = require("./lib/gateway-pipeline");
 const { createLimiter } = require("./lib/limiter");
-const { newRequestId, sendPublicError } = require("./lib/public-errors");
+const { lookupPublicError, newRequestId, sendPublicError } = require("./lib/public-errors");
 const { startListeners, tagListener } = require("./lib/listeners");
 const { createPublicListener } = require("./lib/public-listener");
+const { createPublicApi, modelReadOf, parseGatewayRoute } = require("./lib/public-api");
 const { createPortalRoutes } = require("./lib/portal-routes");
 const { createPublicData, startStatusSampler } = require("./lib/status-sampler");
 const { createExposureScanner } = require("./lib/exposure-scan");
@@ -479,9 +480,7 @@ async function serveGatewayRouteOnPublic(req, res, url, route) {
   req.url = `${target.pathname}${target.search}`;
   beginGatewayRecord(req, res, target);
   if (answerPublicPreAuth(req, res)) return undefined;
-  if (isTtsGatewayPath(target.pathname)) return proxyTtsGatewayRequest(req, res, target);
-  if (req.method === "GET" && (target.pathname === "/gateway/status" || target.pathname === "/gateway/status/")) return handleGatewayStatus(req, res, target);
-  return proxyGatewayRequest(req, res, target);
+  return publicApi.handle(req, res, target, route);
 }
 
 // 05's access layer for one route context: the viewer registry with this
@@ -1719,7 +1718,7 @@ async function acquireEntryConcurrency(req, res, auth) {
   const key = auth.client?.id ? `${auth.matchedManager}:${auth.client.id}` : security.resolveClientAddress(req) || "anonymous";
   const slot = await core.waitForServiceGatewayConcurrency(policy, key, entryConcurrencyBuckets, entryConcurrencyQueues, res, Math.min(7200, Number(policy.requestTimeoutSeconds || 600)) * 1000);
   if (!slot.ok) {
-    if (!slot.aborted && !res.writableEnded) sendJson(res, { detail: slot.message, code: slot.code }, slot.statusCode || 429, gatewayCorsHeaders(req));
+    if (!slot.aborted && !res.writableEnded) sendTtsRefusal(req, res, slot.statusCode || 429, slot.message, slot.code, gatewayCorsHeaders(req));
     return false;
   }
   let released = false;
@@ -1742,6 +1741,32 @@ function ttsRequestTimeoutMs(req, route) {
     ? process.env.SERVICE_ENTRY_TTS_HEALTH_TIMEOUT_MS
     : process.env.SERVICE_ENTRY_TTS_TIMEOUT_MS;
   return Math.max(1000, Number(configured || (quick ? 10_000 : 10 * 60 * 1000)));
+}
+
+// A TTS refusal: the TTS gateway's {detail, code} body on ADMIN, the 05 §10.2
+// taxonomy on PUBLIC (the OpenAI shape with a stable message, §10.1).
+const TTS_PUBLIC_CODES = Object.freeze({
+  request_body_too_large: "request_too_large",
+  tts_gateway_offline: "service_unavailable",
+  tts_gateway_proxy_error: "upstream_error",
+  invalid_gateway_path: "invalid_request",
+  concurrency_queue_full: "concurrency_limit_exceeded",
+  concurrency_queue_timeout: "concurrency_limit_exceeded",
+});
+
+function sendTtsRefusal(req, res, status, detail, code, headers = {}) {
+  if (security.listenerKind(req) !== "public") return sendJson(res, { detail, code }, status, headers);
+  const text = String(code || "");
+  const publicCode = TTS_PUBLIC_CODES[text]
+    || (/^billing_/.test(text) && [402, 429].includes(status) ? "insufficient_quota" : text);
+  const known = lookupPublicError(publicCode);
+  return gatewayPipeline.sendRefusal(req, res, {
+    status,
+    code: known ? publicCode : (status >= 500 ? "upstream_error" : "invalid_request"),
+    message: detail,
+    headers,
+    retryAfterSeconds: Number(headers["retry-after"]) || null,
+  });
 }
 
 async function proxyTtsGatewayRequest(req, res, url) {
@@ -1771,14 +1796,14 @@ async function proxyTtsGatewayRequest(req, res, url) {
     const ban = gatewayPipeline.checkBan(req);
     if (ban) {
       denyEntryRequest(req, access, { status: 429, message: ban.message, code: "auth_banned", log: shouldLogTtsAccess });
-      return sendJson(res, { detail: ban.message, code: "auth_banned" }, 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+      return sendTtsRefusal(req, res, 429, ban.message, "auth_banned", { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
     }
     auth = await gatewayPipeline.authorize(req, { scope: scopeForGatewayPath(url.pathname, req.method) });
     if (!auth.ok) {
       denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code, log: shouldLogTtsAccess });
       const headers = { ...gatewayCorsHeaders(req), ...(auth.status === 401 ? { "www-authenticate": "Bearer" } : {}) };
-      // The TTS gateway keeps its {detail, code} shape; the code is 05 §10.2's.
-      return sendJson(res, { detail: auth.message, code: auth.code }, auth.status, headers);
+      // The TTS gateway keeps its {detail, code} shape on ADMIN; the code is 05 §10.2's.
+      return sendTtsRefusal(req, res, auth.status, auth.message, auth.code, headers);
     }
   }
 
@@ -1786,7 +1811,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   if (!rate.ok) {
     const message = `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`;
     denyEntryRequest(req, access, { status: 429, message, code: "rate_limit_exceeded", log: shouldLogTtsAccess });
-    return sendJson(res, { detail: message, code: "rate_limit_exceeded" }, 429, {
+    return sendTtsRefusal(req, res, 429, message, "rate_limit_exceeded", {
       ...gatewayCorsHeaders(req),
       "retry-after": String(rate.retryAfterSeconds),
     });
@@ -1796,7 +1821,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
   if (Number.isFinite(declaredLength) && declaredLength > TTS_GATEWAY_MAX_BODY_BYTES) {
     const message = `TTS request body exceeds ${TTS_GATEWAY_MAX_BODY_BYTES} bytes.`;
     denyEntryRequest(req, access, { status: 413, message, code: "request_body_too_large", log: shouldLogTtsAccess });
-    return sendJson(res, { detail: message, code: "request_body_too_large" }, 413, gatewayCorsHeaders(req));
+    return sendTtsRefusal(req, res, 413, message, "request_body_too_large", gatewayCorsHeaders(req));
   }
   // TTS 用量计费（F3）：持客户端 Key 的合成请求按秒数 / 字符数进账本，并检查每日秒数配额。
   const synthesis = ttsSynthesisRoute({ rest: buildTtsGatewayPath(route).slice(1) }, req.method);
@@ -1805,7 +1830,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     : null;
   if (!(await isManagerPortListening(TTS_GATEWAY_PORT))) {
     denyEntryRequest(req, access, { status: 503, message: `TTS gateway is not listening on port ${TTS_GATEWAY_PORT}.`, code: "tts_gateway_offline", log: shouldLogTtsAccess });
-    return sendJson(res, { detail: UPSTREAM_DOWN_MESSAGE, code: "service_unavailable" }, 503, gatewayCorsHeaders(req));
+    return sendTtsRefusal(req, res, 503, UPSTREAM_DOWN_MESSAGE, "service_unavailable", gatewayCorsHeaders(req));
   }
 
   if (!(await acquireEntryConcurrency(req, res, auth))) return;
@@ -1855,7 +1880,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
         access.error = String(authorization.code || "");
         const deniedStatus = authorization.code === "billing_insufficient_balance" ? 402 : 429;
         rec?.reject({ status: deniedStatus, code: authorization.code });
-        return sendJson(res, { detail: "TTS billing allowance is insufficient for this request.", code: authorization.code }, deniedStatus, gatewayCorsHeaders(req));
+        return sendTtsRefusal(req, res, deniedStatus, "TTS billing allowance is insufficient for this request.", authorization.code, gatewayCorsHeaders(req));
       }
       req.ttsRequestId = meter.requestId;
       body = buffered;
@@ -1895,7 +1920,7 @@ async function proxyTtsGatewayRequest(req, res, url) {
     access.error = failure?.message || message;
     rec?.fail({ status, code: failure?.code || "tts_gateway_proxy_error", phase: dispatched ? "upstream" : "pre_upstream" });
     if (!res.headersSent) {
-      sendJson(res, { detail: message, code: failure?.code || "tts_gateway_proxy_error" }, status, gatewayCorsHeaders(req));
+      sendTtsRefusal(req, res, status, message, failure?.code || "tts_gateway_proxy_error", gatewayCorsHeaders(req));
     } else if (!res.writableEnded) {
       res.end();
     }
@@ -1913,6 +1938,7 @@ const gatewayPipeline = createGatewayPipeline({
   getCatalogs: (managers) => Promise.all(managers.map((manager) => getManagerModelCatalog(manager))),
   getFleetSettings: () => getFleetSettings(),
   selectFleetTarget: (catalogs, request) => selectFleetTarget(catalogs, request),
+  resolveModelAlias: (requested, context) => publicApi.resolveAlias(requested, context),
   limiter: gatewayLimiter,
   keysStore: () => getAccessStore(),
   logger: console,
@@ -1946,6 +1972,49 @@ const gatewayPipeline = createGatewayPipeline({
 
 async function proxyGatewayRequest(req, res, url) {
   return gatewayPipeline.handle(req, res, { url, route: parseGatewayRoute(url.pathname) });
+}
+
+// The public surface (05 §8, lib/public-api.js): the route dispatch of the
+// PUBLIC key routes, the enriched model lists and the alias resolution. This
+// file supplies the transport handlers and the data the lists join.
+let publicTtsModelsCache = { until: 0, value: [] };
+const publicApi = createPublicApi({
+  pipeline: () => gatewayPipeline,
+  getCatalogs: (managers) => Promise.all(managers.map((manager) => getManagerModelCatalog(manager))),
+  store: () => getAccessStore(),
+  config: () => security.accessConfig(),
+  limiter: gatewayLimiter,
+  sendJson,
+  getPrice: (caller, model, managerId) => resolvePublicModelPrice(caller, model, managerId),
+  getTtsModels: async () => {
+    // A list call must not probe the TTS gateway every time.
+    if (publicTtsModelsCache.until > Date.now()) return publicTtsModelsCache.value;
+    const tts = await buildTtsStatus();
+    const value = (tts.engines || []).filter((item) => item.available && item.id).map((item) => ({ id: String(item.id), name: String(item.name || item.label || item.id) }));
+    publicTtsModelsCache = { until: Date.now() + 10_000, value };
+    return value;
+  },
+  handlers: {
+    gateway: (req, res, url) => proxyGatewayRequest(req, res, url),
+    status: (req, res, url) => handleGatewayStatus(req, res, url),
+    tts: (req, res, url) => proxyTtsGatewayRequest(req, res, url),
+  },
+  logger: console,
+});
+
+// The price a key's plan puts on a model (05 §8.3): the plan of the customer
+// the key is bound to, else the default plan (prices with no plan). Null when
+// billing has no price or cannot be read.
+function resolvePublicModelPrice(caller, model, managerId) {
+  try {
+    const billing = getBillingStore();
+    const binding = caller?.key?.billing;
+    const customer = binding?.scope && binding?.clientId ? billing.lookupCustomerForCredential(binding.scope, binding.clientId) : null;
+    const planId = customer?.customerId ? billing.getCustomer(customer.customerId)?.planId || null : null;
+    return billing.resolveModelPrice({ planId, managerId: String(managerId || ""), model: String(model?.id || "") });
+  } catch {
+    return null;
+  }
 }
 
 // Reads, decodes and parses a model-gateway JSON body under the entry's body
@@ -2020,17 +2089,25 @@ async function handleGatewayStatus(req, res, url) {
   const ban = checkAuthBan(req);
   if (ban) {
     gatewayRecord(req)?.reject({ status: 429, code: "auth_banned" });
-    return sendJson(res, core.openAiGatewayError("auth_banned", ban.message), 429, { ...gatewayCorsHeaders(req), "retry-after": String(ban.retryAfterSeconds) });
+    return gatewayPipeline.sendRefusal(req, res, { status: 429, code: "auth_banned", message: ban.message, retryAfterSeconds: ban.retryAfterSeconds, headers: gatewayCorsHeaders(req) });
   }
   const auth = await gatewayPipeline.authorize(req, { scope: scopeForGatewayPath(url.pathname, req.method) });
   if (!auth.ok) {
     denyEntryRequest(req, access, { status: auth.status, message: auth.message, code: auth.code });
     return gatewayPipeline.sendRefusal(req, res, { ...auth, headers: gatewayCorsHeaders(req) });
   }
-  const rate = gatewayPipeline.enterRate(req, res, auth);
+  // A status read is a control request: it looks at the caller's rpm bucket
+  // (and honours it) but takes no token from it (05 §8.1, V6).
+  const rate = gatewayPipeline.enterRate(req, res, auth, { peek: true });
   if (!rate.ok) {
     gatewayRecord(req)?.reject({ status: 429, code: "rate_limit_exceeded" });
-    return sendJson(res, core.openAiGatewayError("rate_limit_exceeded", `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`), 429, { ...gatewayCorsHeaders(req), "retry-after": String(rate.retryAfterSeconds) });
+    return gatewayPipeline.sendRefusal(req, res, {
+      status: 429,
+      code: "rate_limit_exceeded",
+      message: `Rate limit exceeded. Retry after ${rate.retryAfterSeconds}s.`,
+      retryAfterSeconds: rate.retryAfterSeconds,
+      headers: gatewayCorsHeaders(req),
+    });
   }
   const authorizedManagers = gatewayPipeline.managersFor(auth, "auto");
   const [catalogs, tts, search, mcp] = await Promise.all([
@@ -2068,7 +2145,7 @@ async function handleGatewayStatus(req, res, url) {
       matchedManager: auth.matchedManager || "",
       allowedModels: auth.client?.allowedModels || [],
     },
-    rateLimit: { limitPerMinute: limitRpm, remaining: rate.remaining, windowSeconds: 60 },
+    rateLimit: { limitPerMinute: rate.ticket?.rpm?.limit ?? null, remaining: rate.ticket?.rpm?.remaining ?? null, windowSeconds: 60 },
     quotas,
     models,
     managers,
@@ -2264,13 +2341,19 @@ function recordTtsUsageSafely(input) {
   }
 }
 
+// ADMIN lists the OpenAI-form models itself and proxies a single-model read.
+// PUBLIC answers every model read from the enriched catalog (05 §8.3): lists
+// and retrievals, OpenAI and Anthropic form alike.
 function isAggregatedModelListRequest(req, route) {
-  if (req.method !== "GET" || !["openai", "opencode"].includes(route.protocol)) return false;
-  const rest = String(route.rest || "").replace(/^\/+|\/+$/g, "");
-  return rest === "models" || rest === "v1/models";
+  if (security.listenerKind(req) === "public") return modelReadOf(req.method, route, { anthropic: true }) !== null;
+  return modelReadOf(req.method, route)?.kind === "list" && req.method === "GET";
 }
 
-async function sendAggregatedModelList(req, res, engine = "auto", auth = null, scopedManagers = null) {
+async function sendAggregatedModelList(req, res, engine = "auto", auth = null, scopedManagers = null, route = null) {
+  if (security.listenerKind(req) === "public") {
+    const managers = Array.isArray(scopedManagers) ? scopedManagers : gatewayPipeline.managersFor(auth, engine);
+    return publicApi.sendModels(req, res, { route: route || { engine, protocol: "openai", rest: "v1/models" }, caller: auth, managers, headers: gatewayCorsHeaders(req) });
+  }
   const managers = Array.isArray(scopedManagers)
     ? scopedManagers
     : gatewayPipeline.managersFor(auth, engine);
@@ -2735,16 +2818,6 @@ async function collectEntryGatewayAccessStatsFresh(limit, maxLines) {
 
 async function readEntryGatewayAccessEvents(maxLines = 12000) {
   return core.readAccessLogEvents(GATEWAY_ACCESS_LOG, maxLines, parseJsonSafe);
-}
-
-function parseGatewayRoute(pathname) {
-  const match = String(pathname || "").match(/^\/gateway\/(vllm|llama|auto)\/(openai|claude|opencode)(?:\/(.*))?$/);
-  if (!match) return null;
-  return {
-    engine: match[1],
-    protocol: match[2],
-    rest: String(match[3] || ""),
-  };
 }
 
 async function resolveGatewayManager(engine, protocol, requestedModel = "") {
