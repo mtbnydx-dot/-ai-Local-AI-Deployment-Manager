@@ -827,15 +827,18 @@ test("SERVICE_ENTRY_CONSOLE_DEFAULT beats console.defaultUi", (t) => {
   withEnv(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "console-default-ui-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  assert.equal(readDefaultUi({ aiRoot: root, env: {} }), "classic", "classic until CON-26");
+  assert.equal(readDefaultUi({ aiRoot: root, env: {} }), "new", "new since CON-26");
+  assert.equal(readDefaultUi({ aiRoot: root, env: { SERVICE_ENTRY_CONSOLE_DEFAULT: "classic" } }), "classic", "the env reverts it");
   assert.equal(readDefaultUi({ aiRoot: root, env: { SERVICE_ENTRY_CONSOLE_DEFAULT: "new" } }), "new");
   write(root, "config/platform.json", JSON.stringify({ schemaVersion: 1, console: { defaultUi: "new" } }));
   assert.equal(readDefaultUi({ aiRoot: root, env: {} }), "new");
   assert.equal(readDefaultUi({ aiRoot: root, env: { SERVICE_ENTRY_CONSOLE_DEFAULT: "classic" } }), "classic");
   write(root, "config/platform.json", JSON.stringify({ schemaVersion: 1, console: { defaultUi: "classic" } }));
   assert.equal(readDefaultUi({ aiRoot: root, env: { SERVICE_ENTRY_CONSOLE_DEFAULT: "new" } }), "new");
+  write(root, "config/platform.json", JSON.stringify({ schemaVersion: 1, console: { defaultUi: "classic" } }));
+  assert.equal(readDefaultUi({ aiRoot: root, env: {} }), "classic", "console.defaultUi=classic reverts it");
   write(root, "config/platform.json", "{ broken");
-  assert.equal(readDefaultUi({ aiRoot: root, env: {} }), "classic");
+  assert.equal(readDefaultUi({ aiRoot: root, env: {} }), "new");
 });
 
 test("the console's viewer paths are registered, and the legacy billing page stays owner-only", () => {
@@ -929,6 +932,7 @@ function comparableHeaders(response) {
 
 test("with the classic default the module declines / and /billing, and the inline handlers answer byte-identically", async (t) => {
   withEnv(t);
+  process.env.SERVICE_ENTRY_CONSOLE_DEFAULT = "classic";
   await loadEntry();
   const tree = makeTree(t);
   const plainPort = await startEntry(t);

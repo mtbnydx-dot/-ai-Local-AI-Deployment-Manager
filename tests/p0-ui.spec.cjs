@@ -305,7 +305,7 @@ test.describe("P0-22 console theme", () => {
     entry = await startManager({
       cwd: path.join(ROOT, "service-entry"),
       port,
-      env: { SERVICE_ENTRY_HOST: "127.0.0.1", SERVICE_ENTRY_PORT: String(port) },
+      env: { SERVICE_ENTRY_HOST: "127.0.0.1", SERVICE_ENTRY_PORT: String(port), SERVICE_ENTRY_CONSOLE_DEFAULT: "classic" },
     });
   });
 

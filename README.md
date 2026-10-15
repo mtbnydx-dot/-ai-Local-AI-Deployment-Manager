@@ -98,6 +98,8 @@ platform start
 http://127.0.0.1:5176/
 ```
 
+这是新版统一控制台（总览、部署、模型、引擎、Playground、观测、审计、访问、计费、语音、系统）。需要回到经典控制台时，打开 `http://127.0.0.1:5176/classic`，或设置环境变量 `SERVICE_ENTRY_CONSOLE_DEFAULT=classic`（也可在平台配置里设 `console.defaultUi` 为 `classic`）让根地址默认显示经典界面。vLLM / llama 管理器页面会显示一条可关闭的提示，链接到新版控制台。
+
 如果要让局域网其它设备访问：
 
 ```cmd
@@ -363,6 +365,8 @@ Open:
 ```text
 http://127.0.0.1:5176/
 ```
+
+This is the unified console (Overview, Deployments, Models, Engines, Playground, Observability, Audit, Access, Billing, Voice, System). To roll back to the classic console, open `http://127.0.0.1:5176/classic`, or set `SERVICE_ENTRY_CONSOLE_DEFAULT=classic` (or `console.defaultUi` to `classic` in the platform config) so the root address serves it by default. The vLLM and llama manager pages show a dismissible banner that links to the new console.
 
 To serve other LAN devices:
 

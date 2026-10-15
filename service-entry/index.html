@@ -313,6 +313,10 @@
       border-radius: 12px;
       background: var(--surface);
     }
+    /* Pointer to the unified console (CON-26). */
+    .new-console-banner { display: flex; justify-content: flex-end; margin-bottom: 8px; font-size: 13px; }
+    .new-console-banner a { color: var(--accent, #4CB8D4); font-weight: 600; text-decoration: none; }
+    .new-console-banner a:hover { text-decoration: underline; }
     /* Public-mode checklist and offline-component banners (Phase 4 D2 / H1). */
     #entryBanners { display: grid; gap: 10px; margin-bottom: 12px; }
     #entryBanners:empty { display: none; }
@@ -996,6 +1000,16 @@
 </head>
 <body>
   <main>
+    <div class="new-console-banner"><a id="newConsoleLink" href="/?ui=new">新版控制台 → / Try the new console →</a></div>
+    <script>
+      // Old section hashes (#models, #tasks, ...) follow the link; the console redirects them.
+      (function () {
+        const link = document.getElementById("newConsoleLink");
+        const sync = () => { link.setAttribute("href", "/?ui=new" + (/^#(pair|key)=/i.test(location.hash) ? "" : location.hash)); };
+        sync();
+        window.addEventListener("hashchange", sync);
+      })();
+    </script>
     <header>
       <div>
         <h1>本地模型服务统一入口</h1>
