@@ -1135,3 +1135,21 @@ dialog::backdrop {
   border-radius: var(--radius-card);
   background: var(--surface-1);
 }
+
+/* Playground (CON-13) */
+.pg-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+@media (max-width: 767px) { .pg-layout { grid-template-columns: minmax(0, 1fr); } }
+.pg-main { min-width: 0; }
+.pg-transcript { display: flex; flex-direction: column; gap: var(--sp-3); min-height: 240px; max-height: 60vh; overflow: auto; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-1); }
+.pg-turn { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); border-radius: var(--radius-control); border: 1px solid var(--border); min-width: 0; }
+.pg-user { background: var(--accent-soft); }
+.pg-assistant { background: var(--surface-2); }
+.pg-turn-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+.pg-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); color: var(--text-muted); font-size: var(--fs-sm); }
+.pg-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.pg-body-muted { color: var(--text-muted); }
+.pg-reasoning summary { cursor: pointer; color: var(--text-muted); }
+.pg-tool { min-width: 0; }
+.pg-error { margin: 0; color: var(--danger-ink); }
+.pg-composer { min-width: 0; }
+.pg-preset-on { background: var(--accent-soft); font-weight: 600; }
