@@ -193,6 +193,28 @@ test("start returns 1 when a selected component is not ready, and --open opens t
   assert.match(world.opened[0], /^http:\/\/127\.0\.0\.1:\d+\/$/);
 });
 
+test("start --open opens the paired URL without printing it, and the plain URL plus the hint without the internal key", async (t) => {
+  const world = makeWorld(t);
+  installFakePackages(world.root);
+  await serveFake(t, world, { status: { components: [{ id: "entry", kind: "node", state: "ready" }] } });
+  const calls = [];
+  const fetchStub = async (url, init) => {
+    calls.push([String(url), init.method, init.headers["x-ai-principal"] || init.headers["X-AI-Principal"] || null]);
+    return new Response(JSON.stringify({ ok: true, code: "ABCDEFGHJK", url: "http://127.0.0.1:5176/#pair=ABCDEFGHJK", expiresAt: "2026-10-14T08:02:00.000Z" }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const paired = await world.cli(["start", "entry", "--open"], { ctx: { fetch: fetchStub, internalReadKey: () => "fixture-internal-key-0123456789abcdefghijklmnop" } });
+  assert.equal(paired.code, 0, paired.err);
+  assert.deepEqual(world.opened, ["http://127.0.0.1:5176/#pair=ABCDEFGHJK"]);
+  assert.ok(!paired.out.includes("ABCDEFGHJK") && !paired.err.includes("ABCDEFGHJK"), "the code is never printed");
+  assert.ok(calls.some(([url, method]) => url.endsWith("/api/session/pair-codes") && method === "POST"));
+
+  world.opened.length = 0;
+  const plain = await world.cli(["start", "entry", "--open"], { ctx: { fetch: fetchStub, internalReadKey: () => "" } });
+  assert.equal(plain.code, 0, plain.err);
+  assert.match(world.opened[0], /^http:\/\/127\.0\.0\.1:\d+\/$/);
+  assert.match(plain.err, /Run platform admin pair in a terminal on this machine/);
+});
+
 test("start without a supervisor and --no-supervisor exits 4; unknown ids are usage errors", async (t) => {
   const world = makeWorld(t);
   installFakePackages(world.root);

@@ -18,7 +18,8 @@ export function isStaleError(error) {
   return error instanceof ApiError && error.status === 410 && error.code === "portal_stale";
 }
 
-async function readError(response) {
+/** The ApiError of a non-2xx response (OpenAI-shaped or portal-shaped JSON body). */
+export async function errorFromResponse(response) {
   let body = null;
   try {
     body = await response.json();
@@ -55,7 +56,7 @@ export async function fetchJson(path, { key = "", signal, method = "GET", body, 
     if (error?.name === "AbortError") throw error;
     throw new ApiError("Network error", { code: "network_error" });
   }
-  if (!response.ok) throw await readError(response);
+  if (!response.ok) throw await errorFromResponse(response);
   try {
     return await response.json();
   } catch {
@@ -69,3 +70,31 @@ export const getCatalog = (options) => fetchJson("/catalog.json", options);
 export const getAnnouncements = (options) => fetchJson("/announcements.json", options);
 /** The key's own model list (enriched /v1/models, 05 §8.3). */
 export const getKeyModels = (key, options) => fetchJson("/v1/models", { ...options, key });
+
+// ---- My Key (05 §8.5, §12.5) ------------------------------------------------
+
+/** GET /v1/me: the key's own description, limits, usage and quota. */
+export const getMe = (key, options) => fetchJson("/v1/me", { ...options, key });
+/** GET /v1/me/usage: day rows, optionally grouped by model (telemetry only). */
+export const getMeUsage = (key, { groupByModel = true } = {}, options) => fetchJson(`/v1/me/usage?group_by=${groupByModel ? "day,model" : "day"}`, { ...options, key });
+/** GET /v1/me/requests: the newest requests of the key (metadata only). */
+export const getMeRequests = (key, limit = 50, options) => fetchJson(`/v1/me/requests?limit=${Math.max(1, Math.min(100, Math.floor(limit)))}`, { ...options, key });
+/** POST /v1/me/rotate: the new secret is in the answer, once. */
+export const rotateOwnKey = (key, options) => fetchJson("/v1/me/rotate", { ...options, key, method: "POST", body: { confirm: true } });
+/** PUT /v1/me/origins: replaces the allowed browser origins. */
+export const saveOwnOrigins = (key, origins, options) => fetchJson("/v1/me/origins", { ...options, key, method: "PUT", body: { origins } });
+
+/** GET /v1/me/usage.csv with the key header -> { blob, filename }; the caller saves it. */
+export async function fetchUsageCsv(key, { signal } = {}) {
+  let response;
+  try {
+    response = await fetch("/v1/me/usage.csv", { credentials: "omit", signal, headers: { authorization: `Bearer ${key}`, accept: "text/csv" } });
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    throw new ApiError("Network error", { code: "network_error" });
+  }
+  if (!response.ok) throw await errorFromResponse(response);
+  const disposition = response.headers.get("content-disposition") || "";
+  const named = /filename="?([A-Za-z0-9._-]{1,80})"?/.exec(disposition);
+  return { blob: await response.blob(), filename: named ? named[1] : "usage.csv" };
+}

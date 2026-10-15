@@ -86,6 +86,55 @@ const MESSAGES = Object.freeze({
     "zh-CN": "排队的重启已等待超过 {hours} 小时，因为平台一直忙碌（{blockers}）。它仍在排队；也可以在空闲时手动重启。",
     "en-US": "The queued restart has waited more than {hours} hours because the platform stayed busy ({blockers}). It is still queued; you can also restart it manually when convenient.",
   },
+  // Restore, nightly, backup and re-exec notifications (06 §5.10, §5.12, §11).
+  "notify.restore.offer.title": {
+    "zh-CN": "上次使用的模型尚未运行",
+    "en-US": "Your last models are not running",
+  },
+  "notify.restore.offer.body": {
+    "zh-CN": "{count} 个上次运行的模型当前没有启动。需要时可以一键启动，平台不会替换正在运行的模型。",
+    "en-US": "{count} model(s) from your last session are not running. Start them with one click; running models are never replaced.",
+  },
+  "notify.restore.conflict.title": {
+    "zh-CN": "{model} 未恢复",
+    "en-US": "{model} was not restored",
+  },
+  "notify.restore.conflict.body": {
+    "zh-CN": "{model} 未恢复：目标实例正在运行其他模型。平台不会自动替换，请到部署页手动处理。",
+    "en-US": "{model} was not restored: its instance is running another model. The platform never replaces it automatically; replace it from Deployments if you want to.",
+  },
+  "notify.restore.blocked.title": {
+    "zh-CN": "恢复模型已停止",
+    "en-US": "Model restore stopped",
+  },
+  "notify.restore.blocked.body": {
+    "zh-CN": "显存不足，已停止恢复其余模型。",
+    "en-US": "Not enough GPU memory. Restoring the remaining models was stopped.",
+  },
+  "notify.nightly.failed.title": {
+    "zh-CN": "夜间自检失败",
+    "en-US": "The nightly check failed",
+  },
+  "notify.nightly.failed.body": {
+    "zh-CN": "夜间自检已连续 {n} 晚失败（自 {date} 起）。",
+    "en-US": "The nightly check has failed {n} nights in a row (since {date}).",
+  },
+  "notify.backup.stale.title": {
+    "zh-CN": "备份已过期",
+    "en-US": "The backup is out of date",
+  },
+  "notify.backup.stale.body": {
+    "zh-CN": "最近一次备份是 {hours} 小时前，超过 36 小时。",
+    "en-US": "The newest backup is {hours} hours old, more than 36 hours.",
+  },
+  "notify.supervisor.reexec.title": {
+    "zh-CN": "监督进程已重新执行",
+    "en-US": "The supervisor re-executed",
+  },
+  "notify.supervisor.reexec.body": {
+    "zh-CN": "监督进程已换成新版本，组件没有受到影响。",
+    "en-US": "The supervisor was replaced by a newer one. Components were not touched.",
+  },
 });
 
 function interpolate(text, params) {

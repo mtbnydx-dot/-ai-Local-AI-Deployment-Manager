@@ -8,6 +8,7 @@ call :install "llama-manager" || exit /b 1
 call :install "platform-mcp" || exit /b 1
 call :install "search-gateway" || exit /b 1
 call :build "platform-mcp" || exit /b 1
+call :record
 
 echo.
 echo All install steps completed.
@@ -42,3 +43,10 @@ call npm run build
 set "CODE=%ERRORLEVEL%"
 popd >nul
 exit /b %CODE%
+
+:record
+echo.
+echo == Recording dependency state ==
+call "%ROOT%platform.cmd" deps --record
+if errorlevel 1 echo Warning: the dependency state could not be recorded. Run platform deps --record later.
+exit /b 0

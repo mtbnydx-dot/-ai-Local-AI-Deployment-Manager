@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "id": "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "createdAt": "2026-10-10T08:00:00.000Z",
+      "lastSeenAt": "2026-10-14T11:58:00.000Z",
+      "createdIp": "192.0.2.10",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+      "current": true
+    },
+    {
+      "id": "f9e8d7c6b5a49382716059483726150a",
+      "createdAt": "2026-10-01T09:30:00.000Z",
+      "lastSeenAt": "2026-10-13T20:15:00.000Z",
+      "createdIp": "192.0.2.77",
+      "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      "current": false
+    }
+  ]
+}

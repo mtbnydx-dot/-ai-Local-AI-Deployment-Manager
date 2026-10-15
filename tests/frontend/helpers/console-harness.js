@@ -1,7 +1,9 @@
 // Shared harness for the console Playwright specs (07 §13.2, CON-5).
 //
 // Process helpers (moved here from frontend-smoke.spec.cjs):
-//   getFreePort, waitForHttp, killProcessTree, startManager
+//   getFreePort, waitForHttp, killProcessTree, startManager (the managers see one fixed GPU and a
+//   temp models root with a stub smoke model, so pages and the launch plan do not vary by host;
+//   fakeGpu: false keeps the host's nvidia-smi)
 // Console helpers:
 //   startEntry()                    service-entry on a free port, new console as the default UI
 //   mockConsoleApi(page, overrides) routes /api/** and /gateway/** inside the browser; nothing
@@ -14,11 +16,21 @@ const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 const { expect } = require("@playwright/test");
 const axe = require("./axe.js");
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
+// Model folders the smoke profile launches (frontend-smoke.spec.cjs applies the RadixArk profile).
+// The launch plan validates the local model folder (config, tokenizer, a weight file); these
+// stub folders live in a temp models root, so the plan has no blocker and no real model
+// library is read.
+const SMOKE_MODEL_DIRS = ["RadixArk-Qwen3.8-Flash-Next-NVFP4"];
+// A safetensors file is an 8-byte little-endian header length, then that many bytes of JSON.
+const EMPTY_SAFETENSORS = Buffer.concat([Buffer.from([2, 0, 0, 0, 0, 0, 0, 0]), Buffer.from("{}")]);
+const SMOKE_MODEL_FILES = { "params.json": "{}", "tokenizer.json": "{}", "model.safetensors": EMPTY_SAFETENSORS };
+const FAKE_NVIDIA_SMI = path.join(__dirname, "fake-nvidia-smi.js").split(path.sep).join("/");
 const UPSTREAM_PORT_ENV = ["VLLM_MANAGER_PORT", "LLAMA_MANAGER_PORT", "TTS_GATEWAY_PORT", "SEARCH_GATEWAY_PORT", "PLATFORM_MCP_PORT"];
 const DEFAULT_SESSION = Object.freeze({ ok: true, role: "owner", paired: true, csrfToken: "t", pairCommand: "platform admin pair" });
 
@@ -74,16 +86,24 @@ function killProcessTree(child) {
   });
 }
 
-async function startManager({ cwd, env, port }) {
+async function startManager({ cwd, env, port, fakeGpu = true }) {
   const logs = [];
+  const usesTempModels = !env.VLLM_MODELS_ROOT && !env.LLAMA_MODELS_ROOT && !process.env.VLLM_MODELS_ROOT && !process.env.LLAMA_MODELS_ROOT;
+  const tempModelsRoot = usesTempModels ? await fs.mkdtemp(path.join(os.tmpdir(), "ai-smoke-models-")) : "";
+  for (const name of tempModelsRoot ? SMOKE_MODEL_DIRS : []) {
+    await fs.mkdir(path.join(tempModelsRoot, name), { recursive: true });
+    for (const [file, text] of Object.entries(SMOKE_MODEL_FILES)) await fs.writeFile(path.join(tempModelsRoot, name, file), text);
+  }
   const pidFile = env.LLAMA_MANAGER_PID_FILE || env.VLLM_MANAGER_PID_FILE || "";
   const child = spawn(process.execPath, ["server.js"], {
     cwd,
     env: {
       ...process.env,
+      ...(tempModelsRoot ? { VLLM_MODELS_ROOT: tempModelsRoot, LLAMA_MODELS_ROOT: tempModelsRoot } : {}),
       ...env,
       AI_FRONTEND_SMOKE: "1",
       NO_COLOR: "1",
+      ...(fakeGpu ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --require "${FAKE_NVIDIA_SMI}"`.trim() } : {}),
     },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -97,6 +117,7 @@ async function startManager({ cwd, env, port }) {
     await waitForHttp(`http://127.0.0.1:${port}/`, 25_000);
   } catch (error) {
     await killProcessTree(child);
+    if (tempModelsRoot) await fs.rm(tempModelsRoot, { recursive: true, force: true }).catch(() => {});
     throw new Error(`${error.message}\n${logs.join("").slice(-4000)}`);
   }
   return {
@@ -105,6 +126,7 @@ async function startManager({ cwd, env, port }) {
     stop: async () => {
       await killProcessTree(child);
       if (pidFile) await fs.rm(pidFile, { force: true }).catch(() => {});
+      if (tempModelsRoot) await fs.rm(tempModelsRoot, { recursive: true, force: true }).catch(() => {});
     },
   };
 }

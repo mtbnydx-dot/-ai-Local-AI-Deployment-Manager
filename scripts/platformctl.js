@@ -4,9 +4,10 @@
 // The `platform` CLI (docs/overhaul/06-ops.md §6). This file is the framework
 // (argument parsing, language, exit codes, the command table), the read
 // commands (doctor (report only), status, logs, version, open, config, deps
-// and secrets) and the lifecycle commands (start, stop, restart, supervise,
-// supervisor). Access and deploy commands register in COMMANDS from later
-// packages; until then they answer "not available yet" with exit 1.
+// post-deploy (OPS-11a) and secrets), the lifecycle commands (start, stop, restart, supervise,
+// supervisor) and the access commands (admin pair, keys migrate, exposure
+// scan; open and start pair the browser). Deploy commands register in COMMANDS
+// from later packages; until then they answer "not available yet" with exit 1.
 //
 // Only node built-ins are required at load time. Every platform module is
 // required inside the command that needs it, so `doctor` still starts on an
@@ -83,6 +84,23 @@ const S = {
   "open.opened": { [ZH]: "已打开 {url}", [EN]: "Opened {url}" },
   "open.unknownTarget": { [ZH]: "未知目标“{name}”。可选：{known}", [EN]: "Unknown target \"{name}\". Choose one of: {known}" },
   "open.failed": { [ZH]: "无法打开浏览器，请手动访问：{url}", [EN]: "Could not open the browser. Open this address yourself: {url}" },
+  "pair.hint": { [ZH]: "请在本机终端运行 platform admin pair 获取配对链接。", [EN]: "Run platform admin pair in a terminal on this machine to get a pairing link." },
+  "pair.badTtl": { [ZH]: "--ttl 必须是 1 到 600 之间的整数秒。", [EN]: "--ttl must be a whole number of seconds from 1 to 600." },
+  "pair.entryDown": { [ZH]: "入口服务没有响应（{origin}）。请先运行 platform start。", [EN]: "The entry is not answering ({origin}). Run platform start first." },
+  "pair.noKey": { [ZH]: "内部签名密钥不可用，无法生成配对链接。", [EN]: "The internal signing key is unavailable, so no pairing link can be minted." },
+  "pair.refused": { [ZH]: "入口拒绝了请求：{detail}", [EN]: "The entry refused the request: {detail}" },
+  "pair.opened": { [ZH]: "已在浏览器中打开配对链接（链接不会显示或记录）。", [EN]: "Opened a pairing link in the browser (the link is not shown or logged)." },
+  "keys.header": { [ZH]: "访问密钥迁移计划（只读，仅显示预览）", [EN]: "Access-key migration plan (read-only, previews only)" },
+  "keys.none": { [ZH]: "没有需要迁移的旧密钥。", [EN]: "No legacy keys to migrate." },
+  "keys.rows": { [ZH]: "将导入 {count} 个密钥：", [EN]: "{count} key(s) would be imported:" },
+  "keys.skipped": { [ZH]: "跳过 {count} 项：", [EN]: "{count} skipped:" },
+  "keys.warnings": { [ZH]: "警告 {count} 项：", [EN]: "{count} warning(s):" },
+  "keys.note": { [ZH]: "入口在启动时自动迁移（幂等）；此命令不会写入任何数据。", [EN]: "The entry migrates at start, idempotently. This command writes nothing." },
+  "keys.noReport": { [ZH]: "入口尚未生成迁移报告。", [EN]: "The entry has not produced a migration report yet." },
+  "keys.reportHeader": { [ZH]: "迁移报告（{at}）：已导入 {inserted}，跳过 {skipped}，警告 {warnings}", [EN]: "Migration report ({at}): {inserted} imported, {skipped} skipped, {warnings} warning(s)" },
+  "exposure.header": { [ZH]: "对外暴露检查（只读）", [EN]: "Exposure scan (read-only)" },
+  "exposure.unsupported": { [ZH]: "此平台不支持对外暴露检查。", [EN]: "The exposure scan is not supported on this platform." },
+  "exposure.legacy": { [ZH]: "旧版组件：{id}", [EN]: "Legacy component: {id}" },
   "config.secretViaStore": {
     [ZH]: "{key} 是密钥，不能用 config 命令设置。请运行：platform secrets set {key}",
     [EN]: "{key} is a secret and cannot be set with config. Run: platform secrets set {key}",
@@ -111,7 +129,29 @@ const S = {
   "config.secretSet": { [ZH]: "（已设置）", [EN]: "(set)" },
   "config.secretUnset": { [ZH]: "（未设置）", [EN]: "(not set)" },
   "deps.title": { [ZH]: "依赖状态", [EN]: "Dependencies" },
-  "deps.notYet": { [ZH]: "deps {option} 将随部署后处理一起提供。", [EN]: "deps {option} arrives with the post-deploy package." },
+  "deps.recorded": { [ZH]: "已记录依赖状态：{count} 个包，MCP 构建：{mcp}", [EN]: "Recorded dependency state: {count} package(s), MCP build: {mcp}" },
+  "deps.installed": { [ZH]: "{package}：{status}", [EN]: "{package}: {status}" },
+  "deps.unknownPackage": { [ZH]: "没有这个包：{name}", [EN]: "No such package: {name}" },
+  "postDeploy.title": { [ZH]: "部署后处理", [EN]: "Post-deploy steps" },
+  "postDeploy.titleDry": { [ZH]: "部署后处理（仅预览，不做任何更改）", [EN]: "Post-deploy steps (plan only, nothing is changed)" },
+  "postDeploy.noManifest": { [ZH]: "需要 --manifest <部署清单路径>。", [EN]: "--manifest <path to deployment-manifest.json> is required." },
+  "postDeploy.badManifest": { [ZH]: "无法读取部署清单：{path}", [EN]: "Cannot read the deployment manifest: {path}" },
+  "postDeploy.badRestart": { [ZH]: "--restart 只能是 none、changed 或 all。", [EN]: "--restart must be none, changed or all." },
+  "postDeploy.otherRoot": { [ZH]: "该部署清单属于另一个目录（{root}），拒绝处理。", [EN]: "This manifest belongs to another root ({root}); refusing." },
+  "postDeploy.prune": { [ZH]: "清理旧文件：{count} 个（已备份到部署备份目录），保留 {kept} 个", [EN]: "Prune: {count} stale file(s) (backed up beside the deploy manifest), {kept} kept" },
+  "postDeploy.pruneDry": { [ZH]: "清理旧文件：将删除 {count} 个，保留 {kept} 个", [EN]: "Prune: would remove {count} file(s), keep {kept}" },
+  "postDeploy.pruneSkipped": { [ZH]: "清理旧文件：已跳过（--no-prune）", [EN]: "Prune: skipped (--no-prune)" },
+  "postDeploy.kept": { [ZH]: "  保留 {path}（{reason}）", [EN]: "  kept {path} ({reason})" },
+  "postDeploy.remove": { [ZH]: "  删除 {path}", [EN]: "  remove {path}" },
+  "postDeploy.dep": { [ZH]: "依赖 {package}：{status}", [EN]: "Dependencies {package}: {status}" },
+  "postDeploy.depNone": { [ZH]: "依赖：无需更新", [EN]: "Dependencies: up to date" },
+  "postDeploy.mcp": { [ZH]: "MCP 构建：{status}", [EN]: "MCP build: {status}" },
+  "postDeploy.version": { [ZH]: "version.json：{status}", [EN]: "version.json: {status}" },
+  "postDeploy.restartNone": { [ZH]: "需要重启：{list}", [EN]: "restart required: {list}" },
+  "postDeploy.restartNothing": { [ZH]: "无需重启组件。", [EN]: "No component needs a restart." },
+  "postDeploy.restartRun": { [ZH]: "运行：{command}", [EN]: "Run: {command}" },
+  "postDeploy.failed": { [ZH]: "部署后处理有步骤失败：{steps}", [EN]: "Post-deploy steps failed: {steps}" },
+  "postDeploy.done": { [ZH]: "部署后处理完成。", [EN]: "Post-deploy steps finished." },
   "deps.mcp": { [ZH]: "MCP 构建", [EN]: "MCP build" },
   "secrets.none": { [ZH]: "密钥库里还没有任何密钥。", [EN]: "The secret store is empty." },
   "secrets.unknownKey": {
@@ -175,8 +215,38 @@ const S = {
   "supervisor.stopped": { [ZH]: "监督进程已退出（组件继续运行）。", [EN]: "The supervisor exited (components keep running)." },
   "supervisor.reexeced": { [ZH]: "监督进程已重新执行 · 新进程 {pid}", [EN]: "The supervisor re-executed · new pid {pid}" },
   "supervisor.reexecFailed": { [ZH]: "重新执行没有完成。", [EN]: "The re-exec did not complete." },
+  "autostart.enabled": { [ZH]: "已开启登录自启动（{method}）。", [EN]: "Start at logon is on ({method})." },
+  "autostart.runKey": { [ZH]: "计划任务被拒绝，已改用当前用户的注册表启动项。", [EN]: "The scheduled task was denied; the per-user Run key is used instead." },
+  "autostart.disabled": { [ZH]: "已关闭登录自启动。", [EN]: "Start at logon is off." },
+  "autostart.worktree": { [ZH]: "此目录是 git 工作区，自启动应指向线上目录。确需如此请加 --allow-worktree。", [EN]: "This root is a git worktree; autostart should point at the live root. Add --allow-worktree if you really mean it." },
+  "autostart.failed": { [ZH]: "无法注册自启动：{detail}", [EN]: "Could not register autostart: {detail}" },
+  "autostart.status": { [ZH]: "自启动：{state} · 方式 {method} · 路径 {action} · 与当前目录{match} · 上次结果 {result}", [EN]: "Autostart: {state} · method {method} · path {action} · {match} the current root · last result {result}" },
+  "autostart.on": { [ZH]: "已开启", [EN]: "on" },
+  "autostart.off": { [ZH]: "未开启", [EN]: "off" },
+  "autostart.matches": { [ZH]: "一致", [EN]: "matches" },
+  "autostart.differs": { [ZH]: "不一致", [EN]: "differs from" },
   "doctor.fixLater": { [ZH]: "doctor --fix 将随修复执行器一起提供。", [EN]: "doctor --fix arrives with the fix runner." },
   "doctor.summary": { [ZH]: "通过 {ok} · 警告 {warn} · 失败 {fail} · 信息 {info} · 跳过 {skip}", [EN]: "ok {ok} · warn {warn} · fail {fail} · info {info} · skipped {skip}" },
+  "setup.title": { [ZH]: "首次运行向导", [EN]: "First-run setup" },
+  "setup.unknownStep": { [ZH]: "未知的步骤：{step}（可选 {steps}）", [EN]: "Unknown step: {step} (one of {steps})" },
+  "setup.step": { [ZH]: "[{n}/{total}] {title}", [EN]: "[{n}/{total}] {title}" },
+  "setup.alreadyDone": { [ZH]: "已完成：{detail}", [EN]: "Already done: {detail}" },
+  "setup.alreadySkipped": { [ZH]: "已跳过。", [EN]: "Skipped." },
+  "setup.blocked": { [ZH]: "环境检查未通过，请先手动修复：", [EN]: "The environment check failed; fix these by hand first:" },
+  "setup.ask": { [ZH]: "运行这一步？{hint} ", [EN]: "Run this step? {hint} " },
+  "setup.askRoots": { [ZH]: "模型库目录（留空保持不变，多个用逗号分隔）：", [EN]: "Model folders (empty keeps the current ones; comma separated): " },
+  "setup.askEngines": { [ZH]: "要预拉取的引擎（vllm、llama、sglang，默认 vllm）：", [EN]: "Engines to pre-pull (vllm, llama, sglang; default vllm): " },
+  "setup.askLan": { [ZH]: "对局域网开放管理端？需要 API Key。[y/N] ", [EN]: "Open the admin listener to the LAN? It needs an API key. [y/N] " },
+  "setup.skippedStep": { [ZH]: "已跳过。", [EN]: "Skipped." },
+  "setup.stepDone": { [ZH]: "完成。", [EN]: "Done." },
+  "setup.stepFailed": { [ZH]: "步骤失败：{detail}", [EN]: "Step failed: {detail}" },
+  "setup.opsIntro": { [ZH]: "自动运行命令（不会自动执行）：", [EN]: "Automation commands (nothing runs without your yes):" },
+  "setup.opsAsk": { [ZH]: "现在运行这些命令？[y/N] ", [EN]: "Run these commands now? [y/N] " },
+  "setup.opsRan": { [ZH]: "已运行：{command}", [EN]: "Ran: {command}" },
+  "setup.firstModel": { [ZH]: "下一步：在控制台的“部署”向导里部署第一个模型（{url}）。", [EN]: "Next: deploy a first model from the console Deploy wizard ({url})." },
+  "setup.freeSpace": { [ZH]: "可用空间：{gb} GB", [EN]: "Free space: {gb} GB" },
+  "setup.complete": { [ZH]: "设置完成。", [EN]: "Setup is complete." },
+  "setup.incomplete": { [ZH]: "还有步骤未完成：{steps}。再次运行 platform setup 继续。", [EN]: "Some steps are not finished: {steps}. Run platform setup again to continue." },
   "doctor.unknownGroup": { [ZH]: "未知的检查组：{group}（可选 env、runtime、storage）", [EN]: "Unknown check group: {group} (env, runtime, storage)" },
 };
 
@@ -676,8 +746,53 @@ function defaultOpenUrl(url) {
   });
 }
 
-// Pairing (opening `…/#pair=<code>` for console and billing) is wired in by
-// the access-commands package; this opens the plain URL.
+// Mints a one-time pairing URL as system:cli (06 §5.16). Resolves to
+// { url } or { reason: "key" | "down" | "refused", detail }. The URL carries a
+// live code: callers print it to the terminal or hand it to the browser only.
+function createCliEntryClient(ctx, origin) {
+  const { createEntryClient } = require("../manager-core/platform/entry-client");
+  return createEntryClient({
+    aiRoot: ctx.aiRoot,
+    principal: "system:cli",
+    baseUrl: origin,
+    ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
+    ...(ctx.internalReadKey ? { readKey: ctx.internalReadKey } : {}),
+    ...(ctx.trustFile ? { trustFile: ctx.trustFile } : {}),
+  });
+}
+
+async function mintPairUrl(ctx, origin, { ttlSeconds = 120 } = {}) {
+  let result;
+  try {
+    result = await createCliEntryClient(ctx, origin).request("POST", "/api/session/pair-codes", { body: { ttlSeconds }, timeoutMs: 5000 });
+  } catch (error) {
+    return { reason: error?.code === "internal_key_unavailable" ? "key" : "down" };
+  }
+  const json = result.json || {};
+  if (result.status !== 200 || json.ok !== true || !/^https?:\/\/[^/\s]+\/#pair=\S+$/.test(String(json.url || ""))) {
+    return { reason: "refused", detail: String(json.error?.code || json.code || `HTTP ${result.status}`) };
+  }
+  return { url: json.url };
+}
+
+// Opens the entry in the browser: paired when signing works, else the plain
+// URL plus 05's pairing hint. Returns false when the browser could not be
+// opened. The paired URL is never printed.
+async function openPaired(ctx, origin, plainUrl) {
+  const pair = await mintPairUrl(ctx, origin);
+  if (!pair.url) ctx.err(tr(ctx, "pair.hint"));
+  try {
+    await (ctx.openUrl || defaultOpenUrl)(pair.url || plainUrl);
+  } catch {
+    ctx.err(tr(ctx, "open.failed", { url: plainUrl }));
+    return false;
+  }
+  return true;
+}
+
+// `open console|billing` pairs the browser first. Both open the paired
+// console root, which owns the #pair= fragment; the session then covers
+// /billing.
 async function cmdOpen(ctx, { args, flags }) {
   if (args.length > 1) throw usageError(ctx, "open [console|billing|vllm|llama|tts]");
   const name = args[0] || "console";
@@ -692,6 +807,11 @@ async function cmdOpen(ctx, { args, flags }) {
   const url = `${base.replace(/\/+$/, "")}${target.suffix}`;
   if (flags.json) { ctx.json({ target: name, url }); return EXIT.OK; }
   if (flags.print) { ctx.out(url); return EXIT.OK; }
+  if (target.component === "entry") {
+    if (!(await openPaired(ctx, base.replace(/\/+$/, ""), url))) return EXIT.FAILURE;
+    ctx.out(tr(ctx, "open.opened", { url }));
+    return EXIT.OK;
+  }
   try {
     await (ctx.openUrl || defaultOpenUrl)(url);
   } catch {
@@ -700,6 +820,157 @@ async function cmdOpen(ctx, { args, flags }) {
   }
   ctx.out(tr(ctx, "open.opened", { url }));
   return EXIT.OK;
+}
+
+// ---------------------------------------------------------------------------
+// admin / keys / exposure (05 C7)
+
+function entryOrigin(ctx, config) {
+  const { registry, components } = loadRegistry(ctx, config);
+  const spec = findSpec(registry, "entry");
+  const resolved = spec ? components.resolveComponent(spec, { aiRoot: ctx.aiRoot, config }) : null;
+  const base = resolved?.urls?.admin;
+  if (!base) throw new CliError(EXIT.FAILURE, tr(ctx, "error.failed", { detail: "entry has no admin address" }));
+  return base.replace(/\/+$/, "");
+}
+
+async function cmdAdmin(ctx, { args, flags }) {
+  if (args[0] !== "pair" || args.length > 1) throw usageError(ctx, "admin pair [--open] [--ttl s]");
+  let ttlSeconds = 120;
+  if (flags.ttl !== undefined) {
+    ttlSeconds = Number(flags.ttl);
+    if (!/^\d+$/.test(String(flags.ttl)) || ttlSeconds < 1 || ttlSeconds > 600) throw new CliError(EXIT.USAGE, tr(ctx, "pair.badTtl"));
+  }
+  const origin = entryOrigin(ctx, loadConfig(ctx));
+  const pair = await mintPairUrl(ctx, origin, { ttlSeconds });
+  if (!pair.url) {
+    if (pair.reason === "down") { ctx.err(tr(ctx, "pair.entryDown", { origin })); return EXIT.SUPERVISOR_UNAVAILABLE; }
+    if (pair.reason === "key") { ctx.err(tr(ctx, "pair.noKey")); ctx.err(tr(ctx, "pair.hint")); return EXIT.FAILURE; }
+    ctx.err(tr(ctx, "pair.refused", { detail: pair.detail }));
+    return EXIT.FAILURE;
+  }
+  if (flags.open) {
+    try {
+      await (ctx.openUrl || defaultOpenUrl)(pair.url);
+      ctx.out(tr(ctx, "pair.opened"));
+      return EXIT.OK;
+    } catch {
+      ctx.err(tr(ctx, "open.failed", { url: pair.url }));
+      return EXIT.FAILURE;
+    }
+  }
+  ctx.out(pair.url);
+  return EXIT.OK;
+}
+
+// Hashes and long key-like tokens never reach the terminal, whatever a legacy
+// file or a warning carries.
+function scrubText(value) {
+  return String(value ?? "").replace(/\b[0-9a-fA-F]{32,}\b/g, "[redacted]").replace(/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}/g, "[redacted]");
+}
+
+function scrubDeep(value) {
+  if (typeof value === "string") return scrubText(value);
+  if (Array.isArray(value)) return value.map(scrubDeep);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) if (!/hash/i.test(key)) out[key] = scrubDeep(item);
+    return out;
+  }
+  return value;
+}
+
+// 05's pure planner over the managers' legacy files, read-only. The billing
+// bindings and the store's existing ids belong to the entry, so this lists
+// what a first migration would import.
+async function planKeysLocally(ctx) {
+  const keyMigration = require("../service-entry/lib/key-migration");
+  const defs = [
+    { id: "vllm", billingId: ctx.env.VLLM_MANAGER_ID || "vllm-manager", root: path.join(ctx.aiRoot, "vllm-manager") },
+    { id: "llama", billingId: ctx.env.LLAMA_MANAGER_ID || "llama-manager", root: path.join(ctx.aiRoot, "llama-manager") },
+  ];
+  const warnings = [];
+  const managers = [];
+  for (const manager of defs) {
+    const files = await keyMigration.readLegacyKeyFiles(manager);
+    if (files.issues.length) {
+      for (const issue of files.issues) warnings.push({ code: "legacy_file_unreadable", managerId: manager.id, file: issue.file, reason: issue.code });
+      continue;
+    }
+    managers.push({ id: manager.id, billingId: manager.billingId, settings: files.settings, clients: files.clients });
+  }
+  const plan = keyMigration.planKeyMigration({ managers, bindings: [], existingKeyIds: [] });
+  return {
+    inserts: plan.inserts.map((record) => ({
+      keyId: record.id,
+      name: record.name,
+      source: record.legacy?.source || null,
+      class: record.class,
+      preview: record.preview || null,
+    })),
+    skipped: plan.skipped,
+    warnings: [...plan.warnings, ...warnings],
+  };
+}
+
+async function printMigrationReport(ctx, flags) {
+  const origin = entryOrigin(ctx, loadConfig(ctx));
+  let result;
+  try {
+    result = await createCliEntryClient(ctx, origin).request("GET", "/api/access/migration", { timeoutMs: 5000 });
+  } catch (error) {
+    if (error?.code === "internal_key_unavailable") { ctx.err(tr(ctx, "pair.noKey")); return EXIT.FAILURE; }
+    ctx.err(tr(ctx, "pair.entryDown", { origin }));
+    return EXIT.SUPERVISOR_UNAVAILABLE;
+  }
+  if (result.status !== 200 || result.json?.ok !== true) {
+    ctx.err(tr(ctx, "pair.refused", { detail: String(result.json?.error?.code || `HTTP ${result.status}`) }));
+    return EXIT.FAILURE;
+  }
+  const report = scrubDeep(result.json.report || null);
+  if (flags.json) { ctx.json({ report }); return EXIT.OK; }
+  if (!report) { ctx.out(tr(ctx, "keys.noReport")); return EXIT.OK; }
+  ctx.out(tr(ctx, "keys.reportHeader", { at: report.at || "-", inserted: report.counts?.inserted ?? 0, skipped: report.counts?.skipped ?? 0, warnings: report.counts?.warnings ?? 0 }));
+  for (const key of report.keys || []) ctx.out(`  ${key.keyId}  ${key.name || ""}  ${key.source || ""}`);
+  return EXIT.OK;
+}
+
+async function cmdKeys(ctx, { args, flags }) {
+  if (args[0] !== "migrate" || args.length > 1 || (flags["dry-run"] && flags.report)) throw usageError(ctx, "keys migrate [--dry-run|--report] [--json]");
+  if (flags.report) return printMigrationReport(ctx, flags);
+  const plan = scrubDeep(await planKeysLocally(ctx));
+  if (flags.json) { ctx.json({ dryRun: true, ...plan }); return EXIT.OK; }
+  ctx.out(tr(ctx, "keys.header"));
+  if (!plan.inserts.length && !plan.skipped.length && !plan.warnings.length) ctx.out(tr(ctx, "keys.none"));
+  if (plan.inserts.length) {
+    ctx.out(tr(ctx, "keys.rows", { count: plan.inserts.length }));
+    for (const line of table([[tr(ctx, "col.id"), tr(ctx, "col.name"), "source", "preview"], ...plan.inserts.map((row) => [row.keyId, row.name, row.source || "-", row.preview || "-"])])) ctx.out(`  ${line}`);
+  }
+  if (plan.skipped.length) {
+    ctx.out(tr(ctx, "keys.skipped", { count: plan.skipped.length }));
+    for (const item of plan.skipped) ctx.out(`  ${item.keyId || item.managerId || "-"}  ${item.reason}`);
+  }
+  if (plan.warnings.length) {
+    ctx.out(tr(ctx, "keys.warnings", { count: plan.warnings.length }));
+    for (const item of plan.warnings) ctx.out(`  ${item.code}${item.keyId ? `  ${item.keyId}` : item.managerId ? `  ${item.managerId}` : ""}`);
+  }
+  ctx.out(tr(ctx, "keys.note"));
+  return EXIT.OK;
+}
+
+async function exposureScan(ctx, flags) {
+  const configApi = require("../manager-core/platform/config");
+  const { loadAccessConfig } = require("../service-entry/lib/public-config");
+  const { runExposureScan } = require("../service-entry/lib/exposure-scan");
+  const config = loadAccessConfig({ readSection: (name) => configApi.readSection(name, { aiRoot: ctx.aiRoot, env: ctx.env }) });
+  const report = await runExposureScan({ aiRoot: ctx.aiRoot, config, now: ctx.now, ...(ctx.exposureOptions || {}) });
+  const failed = (report.checks || []).some((check) => check.state === "fail");
+  if (flags.json) { ctx.json(report); return failed ? EXIT.FAILURE : EXIT.OK; }
+  ctx.out(tr(ctx, "exposure.header"));
+  if (!(report.checks || []).length) ctx.out(tr(ctx, "exposure.unsupported"));
+  for (const check of report.checks || []) ctx.out(`  ${String(check.state).padEnd(7)} ${check.id}${check.evidence ? `  ${scrubText(check.evidence)}` : ""}`);
+  for (const finding of report.legacy || []) ctx.out(`  ${tr(ctx, "exposure.legacy", { id: finding.id || finding.kind || "-" })}`);
+  return failed ? EXIT.FAILURE : EXIT.OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -971,7 +1242,7 @@ function powerShellArgs(tokens) {
   return out;
 }
 
-async function cmdExposure(ctx, { args }) {
+async function cmdExposure(ctx, { args, flags }) {
   const [sub, ...rest] = args;
   if (sub === "setup") {
     const script = path.join(ctx.aiRoot, "scripts", "setup-public.ps1");
@@ -981,7 +1252,7 @@ async function cmdExposure(ctx, { args }) {
     if (result.error) { ctx.err(tr(ctx, "exposure.setupFailed", { detail: result.error.code || result.error.message })); return EXIT.FAILURE; }
     return typeof result.status === "number" ? result.status : EXIT.FAILURE;
   }
-  if (sub === "scan") throw new CliError(EXIT.FAILURE, tr(ctx, "error.notAvailable", { name: "exposure scan", package: "OPS-7c" }));
+  if (sub === "scan" && rest.length === 0) return exposureScan(ctx, flags);
   throw usageError(ctx, "exposure scan [--json] | exposure setup [args…]");
 }
 
@@ -1005,7 +1276,7 @@ function dependencyRows(ctx, registry) {
     else if (recordedHash) status = recordedHash === lockHash ? "ok" : "stale";
     else if (versionsMatch === true) status = "ok";
     else status = versionsMatch === false ? "stale" : "unknown";
-    return { package: pkg.dir, live: pkg.live === true, components: pkg.components || [], installed, lockHash, recordedHash, versionsMatch, status, ...(pkg.live ? {} : { note: pkg.reason || "test-only" }) };
+    return { package: pkg.dir, live: pkg.live === true, components: pkg.components || [], installed, lockHash, recordedHash, versionsMatch, status, ...(saved?.pendingSwap ? { pendingSwap: true } : {}), ...(pkg.live ? {} : { note: pkg.reason || "test-only" }) };
   });
 }
 
@@ -1021,10 +1292,28 @@ function mcpBuildRow(ctx, registry) {
   return { package: pkg.dir, exists, currentHash, stampHash, status: !exists ? "missing" : currentHash && currentHash === stampHash ? "ok" : "stale" };
 }
 
+// deps --record / --install <pkg> (06 §6.2, §9.3): the machinery post-deploy uses.
+async function cmdDepsWrite(ctx, flags, registry) {
+  const steps = require("../manager-core/platform/deploy-steps");
+  const seams = { fs: ctx.fs, now: ctx.now, ...(ctx.nodeVersion ? { nodeVersion: ctx.nodeVersion } : {}) };
+  if (flags.install) {
+    const name = String(flags.install);
+    if (!registry.packages.some((pkg) => pkg.dir === name)) throw new CliError(EXIT.USAGE, tr(ctx, "deps.unknownPackage", { name }));
+    const done = await steps.runDependencies({ aiRoot: ctx.aiRoot, registry, only: [name], force: true, npm: ctx.npm, log: (line) => ctx.err(line), ...seams });
+    if (flags.json) ctx.json({ schemaVersion: 1, ...done });
+    else for (const item of done.packages) ctx.out(tr(ctx, "deps.installed", { package: item.package, status: item.status + (item.detail ? ` (${item.detail})` : "") }));
+    return done.packages.some((item) => item.status === "failed") ? EXIT.FAILURE : EXIT.OK;
+  }
+  const done = await steps.recordDependencyState({ aiRoot: ctx.aiRoot, registry, ...seams });
+  if (flags.json) ctx.json({ schemaVersion: 1, ...done });
+  else ctx.out(tr(ctx, "deps.recorded", { count: done.packages.filter((item) => item.status === "recorded").length, mcp: done.mcp ? done.mcp.status : "-" }));
+  return EXIT.OK;
+}
+
 async function cmdDeps(ctx, { flags }) {
-  if (flags.record || flags.install) throw new CliError(EXIT.FAILURE, tr(ctx, "deps.notYet", { option: flags.record ? "--record" : "--install" }));
   const config = loadConfig(ctx);
   const { registry } = loadRegistry(ctx, config);
+  if (flags.record || flags.install) return cmdDepsWrite(ctx, flags, registry);
   const packages = dependencyRows(ctx, registry);
   const mcp = mcpBuildRow(ctx, registry);
   const problems = packages.filter((row) => row.live && (row.status === "missing" || row.status === "stale")).length + (mcp && mcp.status !== "ok" ? 1 : 0);
@@ -1034,6 +1323,93 @@ async function cmdDeps(ctx, { flags }) {
   for (const line of table([["PACKAGE", "STATUS", "LOCK"], ...rows])) ctx.out(`  ${line}`);
   if (mcp) ctx.out(`  ${tr(ctx, "deps.mcp")}: ${mcp.status}`);
   return problems ? EXIT.FAILURE : EXIT.OK;
+}
+
+// ---------------------------------------------------------------------------
+// post-deploy (06 §9.3). deploy-worktree.ps1 calls it with the deploy backup's
+// manifest; the steps live in manager-core/platform/deploy-steps.js.
+
+const POST_DEPLOY_LIST_LIMIT = 40;
+
+function samePath(left, right) {
+  const norm = (value) => path.resolve(value).replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? norm(left).toLowerCase() === norm(right).toLowerCase() : norm(left) === norm(right);
+}
+
+function printList(ctx, key, items, render) {
+  for (const item of items.slice(0, POST_DEPLOY_LIST_LIMIT)) ctx.out(tr(ctx, key, render(item)));
+  if (items.length > POST_DEPLOY_LIST_LIMIT) ctx.out(`  … +${items.length - POST_DEPLOY_LIST_LIMIT}`);
+}
+
+function printRestart(ctx, mode, ids, reexec, commands, dry) {
+  if (!ids.length && !reexec) { ctx.out(tr(ctx, "postDeploy.restartNothing")); return; }
+  const list = [...(reexec ? ["supervisor"] : []), ...ids].join(", ");
+  if (mode === "none" || dry) ctx.out(tr(ctx, "postDeploy.restartNone", { list }));
+  if (mode !== "none" && !dry) for (const command of commands) ctx.out(tr(ctx, "postDeploy.restartRun", { command }));
+}
+
+function printPostDeployPlan(ctx, plan) {
+  const [prune, deps, build, version, restart] = plan.steps;
+  ctx.out(tr(ctx, "postDeploy.titleDry"));
+  if (prune.skipped) ctx.out(tr(ctx, "postDeploy.pruneSkipped"));
+  else {
+    ctx.out(tr(ctx, "postDeploy.pruneDry", { count: prune.candidates.length, kept: prune.kept.length }));
+    printList(ctx, "postDeploy.remove", prune.candidates, (item) => ({ path: item.path }));
+    printList(ctx, "postDeploy.kept", prune.kept, (item) => ({ path: item.path, reason: item.reason }));
+  }
+  const changes = deps.packages.filter((step) => step.action !== "ok" && step.action !== "skip");
+  if (!changes.length) ctx.out(tr(ctx, "postDeploy.depNone"));
+  for (const step of changes) ctx.out(tr(ctx, "postDeploy.dep", { package: step.package, status: `${step.action} (${step.reason})` }));
+  ctx.out(tr(ctx, "postDeploy.mcp", { status: build.needed ? `build (${build.reason})` : build.reason === "no_build_package" || build.reason === "package_missing" ? "-" : "current" }));
+  ctx.out(tr(ctx, "postDeploy.version", { status: `write ${version.version || version.commit || "-"}` }));
+  printRestart(ctx, restart.mode, restart.ids, restart.reexec, [], true);
+}
+
+function printPostDeployResult(ctx, result) {
+  ctx.out(tr(ctx, "postDeploy.title"));
+  ctx.out(result.pruneSkipped ? tr(ctx, "postDeploy.pruneSkipped") : tr(ctx, "postDeploy.prune", { count: result.pruned.length, kept: result.kept.length }));
+  printList(ctx, "postDeploy.kept", result.kept, (item) => ({ path: item.path, reason: item.reason }));
+  const changes = result.dependencies.filter((item) => item.status && item.status !== "ok" && item.status !== "skipped");
+  if (!changes.length) ctx.out(tr(ctx, "postDeploy.depNone"));
+  for (const item of changes) ctx.out(tr(ctx, "postDeploy.dep", { package: item.package || "-", status: item.status + (item.detail ? ` (${item.detail})` : "") }));
+  if (result.mcp) ctx.out(tr(ctx, "postDeploy.mcp", { status: result.mcp.status + (result.mcp.detail ? ` (${result.mcp.detail})` : "") }));
+  if (result.version) ctx.out(tr(ctx, "postDeploy.version", { status: result.version.written ? "ok" : `failed (${result.version.code})` }));
+  const restart = result.restartResult;
+  if (restart) printRestart(ctx, restart.mode, restart.ids, restart.reexec, restart.commands, false);
+  ctx.out(tr(ctx, result.ok ? "postDeploy.done" : "postDeploy.failed", { steps: result.failed.join(", ") }));
+}
+
+async function cmdPostDeploy(ctx, { flags }) {
+  if (!flags.manifest) throw usageError(ctx, tr(ctx, "postDeploy.noManifest"));
+  const mode = flags.restart === undefined ? "none" : String(flags.restart);
+  if (!["none", "changed", "all"].includes(mode)) throw usageError(ctx, tr(ctx, "postDeploy.badRestart"));
+  const manifestFile = path.resolve(String(flags.manifest));
+  let manifest = null;
+  try {
+    const text = fs.readFileSync(manifestFile, "utf8");
+    manifest = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch { /* reported below */ }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest) || !manifest.files) {
+    throw new CliError(EXIT.FAILURE, tr(ctx, "postDeploy.badManifest", { path: path.basename(manifestFile) }));
+  }
+  // A manifest names the live root it deployed to; never prune another one.
+  if (manifest.liveRoot && !samePath(String(manifest.liveRoot), ctx.aiRoot)) {
+    throw new CliError(EXIT.FAILURE, tr(ctx, "postDeploy.otherRoot", { root: path.basename(String(manifest.liveRoot)) }));
+  }
+  const config = loadConfig(ctx);
+  const { registry } = loadRegistry(ctx, config);
+  const steps = require("../manager-core/platform/deploy-steps");
+  const result = await steps.executePostDeploy({
+    aiRoot: ctx.aiRoot, manifest, manifestFile, registry, restart: mode,
+    noPrune: flags["no-prune"] === true, dryRun: flags["dry-run"] === true,
+    fs: ctx.fs, npm: ctx.npm, now: ctx.now, restartAdapter: ctx.restartAdapter,
+    ...(ctx.nodeVersion ? { nodeVersion: ctx.nodeVersion } : {}),
+    log: (line) => ctx.err(line),
+  });
+  if (flags.json) ctx.json(result);
+  else if (result.dryRun) printPostDeployPlan(ctx, result.plan);
+  else printPostDeployResult(ctx, result);
+  return result.ok ? EXIT.OK : EXIT.FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -1485,7 +1861,8 @@ async function cmdStart(ctx, { args, flags }) {
   if (wantsBrowser && entry?.row.state === "ready") {
     const url = entry.urls.find((item) => item.name === "admin")?.url;
     if (url) {
-      try { await (ctx.openUrl || defaultOpenUrl)(`${url.replace(/\/+$/, "")}/`); } catch { ctx.err(tr(ctx, "open.failed", { url })); }
+      const origin = url.replace(/\/+$/, "");
+      await openPaired(ctx, origin, `${origin}/`);
     }
   }
   return failure || (allReady ? EXIT.OK : EXIT.FAILURE);
@@ -1662,6 +2039,7 @@ async function cmdSupervise(ctx, { flags }) {
     profile,
     restoreModels: flags["restore-models"] === true,
     autostart: flags.autostart === true,
+    takeover: flags.takeover === true,
     tokenStore: control.createControlTokenStore({ aiRoot: ctx.aiRoot, store: ctx.vault().store("platform-control") }),
     log: (line) => ctx.out(`${new Date(ctx.now()).toISOString()} ${typeof line === "string" ? line : JSON.stringify(line)}`),
     exit: (code) => finish(code || 0),
@@ -1723,6 +2101,208 @@ async function cmdSupervisor(ctx, { args, flags }) {
   }
 }
 
+// 06 §6.5. `enable` registers the logon task (HKCU Run value as the fallback),
+// `disable` removes both, `status` reports method, path and last result.
+async function cmdAutostart(ctx, { args, flags }) {
+  const sub = args[0] || "status";
+  if (args.length > 1 || !["enable", "disable", "status"].includes(sub)) throw usageError(ctx, "autostart enable [--profile p] | disable | status");
+  const autostart = require("../manager-core/platform/autostart");
+  const injected = ctx.autostartOptions || {};
+  if (sub === "status") {
+    const info = await autostart.status({ aiRoot: ctx.aiRoot, ...injected });
+    if (flags.json) { ctx.json(info); return EXIT.OK; }
+    ctx.out(tr(ctx, "autostart.status", {
+      state: tr(ctx, info.registered ? "autostart.on" : "autostart.off"), method: info.method || "-", action: info.action || "-",
+      match: info.matchesRoot === null ? "-" : tr(ctx, info.matchesRoot ? "autostart.matches" : "autostart.differs"), result: info.lastResult ?? "-",
+    }));
+    return EXIT.OK;
+  }
+  if (sub === "disable") {
+    const result = await autostart.disable(injected).catch((error) => { throw new CliError(EXIT.FAILURE, tr(ctx, "autostart.failed", { detail: error.message })); });
+    if (flags.json) { ctx.json(result); return EXIT.OK; }
+    ctx.out(tr(ctx, "autostart.disabled"));
+    return EXIT.OK;
+  }
+  const profile = flags.profile || "core";
+  if (!autostart.PROFILES.includes(profile)) throw new CliError(EXIT.USAGE, tr(ctx, "logs.bad", { option: "--profile", value: flags.profile }));
+  try {
+    const result = await autostart.enable({ aiRoot: ctx.aiRoot, profile, allowWorktree: flags["allow-worktree"] === true, node: ctx.execPath, ...injected });
+    if (flags.json) { ctx.json(result); return EXIT.OK; }
+    if (result.method === "run-key") ctx.out(tr(ctx, "autostart.runKey"));
+    ctx.out(tr(ctx, "autostart.enabled", { method: result.method }));
+    return EXIT.OK;
+  } catch (error) {
+    if (error.code === "worktree_root") throw new CliError(EXIT.PREFLIGHT, tr(ctx, "autostart.worktree"));
+    if (error instanceof CliError) throw error;
+    throw new CliError(EXIT.FAILURE, tr(ctx, "autostart.failed", { detail: error.message }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// setup (first-run wizard, 06 §8)
+
+const SETUP_YES = /^\s*(y|yes|是)\s*$/i;
+
+function setupExec(ctx, file, args) {
+  if (ctx.exec) return ctx.exec(file, args);
+  const { execFile } = require("node:child_process");
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { cwd: ctx.aiRoot, env: ctx.env, windowsHide: true }, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function setupDoctorReport(ctx) {
+  const vault = ctx.vault();
+  const runDoctor = ctx.runDoctor || require("../manager-core/platform/doctor").runDoctor;
+  const report = await runDoctor({ aiRoot: ctx.aiRoot, env: ctx.env, getSecrets: () => vault.values(), ...(ctx.probes ? { probes: ctx.probes } : {}) });
+  try {
+    const dir = path.join(ctx.aiRoot, ".runtime", "platform");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "doctor-last.json"), JSON.stringify(report));
+  } catch {}
+  return report;
+}
+
+/** Runs one step: through the supervisor when it is up, otherwise in this process. */
+async function setupRunStep(ctx, setup, step, params) {
+  if (step === "images" && !(await supervisorUp(ctx))) {
+    const engines = params.engines || setup.DEFAULT_ENGINES;
+    const managers = [...new Set(engines.map((engine) => (engine === "llama" ? "llama-manager" : "vllm-manager")))];
+    await (ctx.startPlatform || cmdStart)(ctx, { args: managers, flags: {} });
+  }
+  if (await supervisorUp(ctx)) {
+    const started = await controlCall(ctx, "POST", `/v1/setup/${step}`, params);
+    if (started.status >= 300) throw new CliError(EXIT.FAILURE, tr(ctx, "error.failed", { detail: started.json?.error?.message || started.json?.error?.code || `HTTP ${started.status}` }));
+    const op = await pollOperation(ctx, started.json.opId, { timeoutMs: 45 * 60 * 1000, onLog: (line) => ctx.err(`    ${line}`) });
+    if (op.state !== "ok") return { ok: false, result: op.result, detail: op.result?.message || op.result?.code || op.state };
+    return { ok: true, result: op.result?.result };
+  }
+  const runner = setup.createSetupRunner({ aiRoot: ctx.aiRoot, env: ctx.env, now: ctx.now, ...(ctx.setupOptions || {}) });
+  try {
+    const done = await runner.runStep(step, params, { line: (line) => ctx.err(`    ${line}`), progress: () => {} });
+    return { ok: true, result: done.result };
+  } catch (error) {
+    return { ok: false, result: { code: error.code, ...(error.data || error.extra || {}) }, detail: error.message };
+  }
+}
+
+async function cmdSetup(ctx, { flags }) {
+  const setup = ctx.setup || require("../manager-core/platform/setup");
+  const stepIds = setup.STEP_IDS;
+  if (flags.step !== undefined && !stepIds.includes(flags.step)) throw usageError(ctx, tr(ctx, "setup.unknownStep", { step: flags.step, steps: stepIds.join(", ") }));
+  if (flags.exposure !== undefined && flags.exposure !== "lan" && flags.exposure !== "local") throw usageError(ctx, "--exposure local|lan");
+  const interactive = flags["non-interactive"] !== true && ctx.stdinIsTTY === true;
+  const yes = flags.yes === true;
+  const explicit = flags.step !== undefined;
+  const list = (value) => String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const confirm = async (hint, defaultYes) => {
+    const answer = await ask(ctx, tr(ctx, "setup.ask", { hint }));
+    return answer.trim() === "" ? defaultYes : SETUP_YES.test(answer);
+  };
+  const record = (id, state) => setup.recordStep(ctx.aiRoot, id, state, { now: ctx.now });
+
+  ctx.out(tr(ctx, "setup.title"));
+  const description = setup.describeSetup({ aiRoot: ctx.aiRoot, env: ctx.env, doctor: await setupDoctorReport(ctx) });
+  let failed = false;
+  const total = description.steps.length;
+  for (const entry of description.steps) {
+    if (explicit && entry.id !== flags.step) continue;
+    ctx.out("");
+    ctx.out(tr(ctx, "setup.step", { n: entry.index, total, title: pick(ctx, entry.title) }));
+    if (entry.status === "done") {
+      ctx.out(`  ${tr(ctx, "setup.alreadyDone", { detail: entry.detail })}`);
+      if (entry.recorded?.state !== "done") record(entry.id, "done");
+      continue;
+    }
+    if (entry.status === "skipped" && !explicit) { ctx.out(`  ${tr(ctx, "setup.alreadySkipped")}`); continue; }
+    if (entry.status === "blocked") {
+      ctx.out(`  ${tr(ctx, "setup.blocked")}`);
+      for (const item of entry.data?.blocking || []) {
+        ctx.out(`    ${item.id}: ${item.detail}`);
+        if (item.fix?.command) ctx.out(`      ${item.fix.command}`);
+      }
+      failed = true;
+      break;
+    }
+    if (entry.id === "storage" && entry.data?.freeBytes) ctx.out(`  ${tr(ctx, "setup.freeSpace", { gb: (entry.data.freeBytes / 1024 ** 3).toFixed(1) })}`);
+
+    // The ops step never registers anything on its own: the commands are shown
+    // and run only on a yes (default N; --yes answers it).
+    if (entry.id === "ops") {
+      const commands = setup.opsCommands({ aiRoot: ctx.aiRoot });
+      ctx.out(`  ${tr(ctx, "setup.opsIntro")}`);
+      for (const command of commands) ctx.out(`    ${command.display}`);
+      const run = interactive ? SETUP_YES.test(await ask(ctx, tr(ctx, "setup.opsAsk"))) : yes;
+      if (!run) { record("ops", "skipped"); ctx.out(`  ${tr(ctx, "setup.skippedStep")}`); continue; }
+      let allOk = true;
+      for (const command of commands) {
+        try { await setupExec(ctx, command.file, command.args); ctx.out(`  ${tr(ctx, "setup.opsRan", { command: command.display })}`); }
+        catch (error) { allOk = false; ctx.err(`  ${tr(ctx, "setup.stepFailed", { detail: `${command.display}: ${error.message || error}` })}`); }
+      }
+      record("ops", allOk ? "done" : "failed");
+      if (!allOk) failed = true;
+      continue;
+    }
+    if (entry.id === "first-model") {
+      ctx.out(`  ${tr(ctx, "setup.firstModel", { url: "/#/deploy" })}`);
+      record("first-model", "skipped");
+      continue;
+    }
+
+    // Optional steps run only on an explicit yes; the others default to yes.
+    const wanted = explicit || !entry.optional;
+    let proceed;
+    if (explicit && !interactive) proceed = true;
+    else if (!interactive) proceed = wanted || (yes && entry.id !== "tts");
+    else proceed = await confirm(wanted ? "[Y/n]" : "[y/N]", wanted);
+    if (!proceed) { record(entry.id, "skipped"); ctx.out(`  ${tr(ctx, "setup.skippedStep")}`); continue; }
+
+    const params = {};
+    if (entry.id === "storage") {
+      let roots = list(flags["model-root"]);
+      if (interactive && !flags["model-root"]) roots = list(await ask(ctx, tr(ctx, "setup.askRoots")));
+      if (roots.length) params.modelRoots = roots;
+      if (flags["hf-home"]) params.hfHome = String(flags["hf-home"]);
+    } else if (entry.id === "images") {
+      let engines = list(flags.engines);
+      if (interactive && !flags.engines) engines = list(await ask(ctx, tr(ctx, "setup.askEngines")));
+      if (engines.length) params.engines = engines;
+    } else if (entry.id === "exposure") {
+      let lan = flags.exposure === "lan";
+      if (interactive && flags.exposure === undefined) lan = SETUP_YES.test(await ask(ctx, tr(ctx, "setup.askLan")));
+      params.mode = lan ? "lan" : "local";
+    }
+
+    let outcome;
+    if (entry.id === "start") {
+      const code = await (ctx.startPlatform || cmdStart)(ctx, { args: ["core"], flags: {} });
+      outcome = code === EXIT.OK ? { ok: true } : { ok: false, detail: `platform start (exit ${code})` };
+      record("start", outcome.ok ? "done" : "failed");
+    } else {
+      outcome = await setupRunStep(ctx, setup, entry.id, params);
+    }
+    if (outcome.ok) {
+      ctx.out(`  ${tr(ctx, "setup.stepDone")}`);
+      if (entry.id === "exposure" && outcome.result?.firewall?.command) ctx.out(`    ${outcome.result.firewall.command}`);
+    } else {
+      ctx.err(`  ${tr(ctx, "setup.stepFailed", { detail: outcome.detail })}`);
+      for (const item of outcome.result?.blocking || []) ctx.err(`    ${item.id}: ${item.detail}${item.fix?.command ? ` (${item.fix.command})` : ""}`);
+      failed = true;
+      if (!explicit) break;
+    }
+  }
+
+  const after = setup.describeSetup({ aiRoot: ctx.aiRoot, env: ctx.env, doctor: null });
+  const pending = after.steps.filter((entry) => entry.status !== "skipped" && entry.status !== "done" && (!explicit || entry.id === flags.step));
+  ctx.out("");
+  if (!failed && !pending.length) {
+    if (!explicit) ctx.out(tr(ctx, "setup.complete"));
+    return EXIT.OK;
+  }
+  if (pending.length && !explicit) ctx.out(tr(ctx, "setup.incomplete", { steps: pending.map((entry) => entry.id).join(", ") }));
+  return failed ? EXIT.FAILURE : EXIT.OK;
+}
+
 // ---------------------------------------------------------------------------
 // Command table. Later packages add their commands here (and remove them from
 // PLANNED); `run` is (ctx, { args, flags }) -> exit code.
@@ -1770,6 +2350,12 @@ const COMMANDS = {
     spec: { bool: ["json", "record"], value: ["install"], max: 0 },
     run: cmdDeps,
   },
+  "post-deploy": {
+    usage: "post-deploy --manifest <path> [--restart none|changed|all] [--no-prune] [--dry-run] [--json]",
+    summary: { [ZH]: "部署后处理（内部使用，由部署脚本调用）", [EN]: "Post-deploy steps (internal; called by the deploy script)" },
+    spec: { bool: ["json", "no-prune", "dry-run"], value: ["manifest", "restart"], max: 0 },
+    run: cmdPostDeploy,
+  },
   start: {
     usage: "start [core|full|<id>…] [--lan] [--public] [--save] [--restore-models] [--no-supervisor] [--no-browser] [--open] [--timeout s]",
     summary: { [ZH]: "启动平台或指定组件", [EN]: "Start the platform or selected components" },
@@ -1800,6 +2386,18 @@ const COMMANDS = {
     spec: { bool: ["json"] },
     run: cmdSupervisor,
   },
+  setup: {
+    usage: "setup [--step id] [--yes] [--non-interactive] [--engines list] [--model-root list] [--hf-home path] [--exposure local|lan]",
+    summary: { [ZH]: "首次运行向导", [EN]: "First-run wizard" },
+    spec: { bool: ["yes", "non-interactive"], value: ["step", "engines", "model-root", "hf-home", "exposure"], max: 0 },
+    run: cmdSetup,
+  },
+  autostart: {
+    usage: "autostart enable [--profile p] [--allow-worktree] | disable | status [--json]",
+    summary: { [ZH]: "登录自启动", [EN]: "Start at logon" },
+    spec: { bool: ["json", "allow-worktree"], value: ["profile"] },
+    run: cmdAutostart,
+  },
   exposure: {
     usage: "exposure scan [--json] | exposure setup [args…]",
     summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" },
@@ -1812,15 +2410,22 @@ const COMMANDS = {
     spec: { bool: ["json", "yes"], value: ["namespace"] },
     run: cmdSecrets,
   },
+  admin: {
+    usage: "admin pair [--open] [--ttl s]",
+    summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" },
+    spec: { bool: ["open"], value: ["ttl"], max: 1 },
+    run: cmdAdmin,
+  },
+  keys: {
+    usage: "keys migrate [--dry-run|--report] [--json]",
+    summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" },
+    spec: { bool: ["dry-run", "report", "json"], max: 1 },
+    run: cmdKeys,
+  },
 };
 
 const PLANNED = {
-  setup: { package: "OPS-14", usage: "setup [--step id] [--yes] [--non-interactive]", summary: { [ZH]: "首次运行向导", [EN]: "First-run wizard" } },
-  admin: { package: "OPS-7c", usage: "admin pair [--open] [--ttl s]", summary: { [ZH]: "配对浏览器", [EN]: "Pair a browser" } },
-  keys: { package: "OPS-7c", usage: "keys migrate [--dry-run|--report] [--json]", summary: { [ZH]: "访问密钥迁移计划", [EN]: "Access-key migration plan" } },
-  autostart: { package: "OPS-12", usage: "autostart enable [--profile p] | disable | status", summary: { [ZH]: "登录自启动", [EN]: "Start at logon" } },
   deploy: { package: "OPS-11b", usage: "deploy [--restart none|changed|all] [--skip-tests] [--no-prune] [--allow-live-drift] [--yes] [--dry-run]", summary: { [ZH]: "从工作区部署到线上目录", [EN]: "Deploy a worktree to the live root" } },
-  "post-deploy": { package: "OPS-11a", usage: "post-deploy --manifest <path> [--restart …] [--no-prune] [--dry-run]", summary: { [ZH]: "部署后处理（内部使用）", [EN]: "Post-deploy steps (internal)" } },
   update: { package: "OPS-11b", usage: "update [--check]", summary: { [ZH]: "更新线上目录", [EN]: "Update the live root" } },
 };
 
