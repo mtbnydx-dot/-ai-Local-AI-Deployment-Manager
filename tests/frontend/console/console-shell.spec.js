@@ -214,9 +214,9 @@ test("a page that is not in the build shows the still-being-built page, and a re
   try {
     await page.goto(`${entry.url}system/ui-kit`);
     await expect(page.locator('#main [data-ready="true"]')).toBeVisible();
-    // Models is built now; Knowledge (its own package) is the page that is not in the build.
+    // Models is built now; Discover (its own package) is the page that is not in the build.
     await nav(page).getByRole("link", { name: "Models", exact: true }).click();
-    await byId(page, "models.nav.knowledge").click();
+    await byId(page, "models.nav.discover").click();
     await expect(byId(page, "app-shell.pending")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open the classic console" })).toHaveAttribute("href", "/classic");
     await expect(byId(page, "app-shell.update")).toHaveCount(0);
@@ -227,7 +227,7 @@ test("a page that is not in the build shows the still-being-built page, and a re
     redeployed = true;
     // Any page that is still not in the build will do.
     await nav(page).getByRole("link", { name: "Models", exact: true }).click();
-    await byId(page, "models.nav.knowledge").click();
+    await byId(page, "models.nav.discover").click();
     await expect(byId(page, "app-shell.update")).toBeVisible();
     await expect(byId(page, "app-shell.update")).toContainText("The console was updated. Reload to use the new version.");
   } finally {

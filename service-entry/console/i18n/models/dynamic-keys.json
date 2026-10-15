@@ -4,6 +4,8 @@
     "models.card.modality.",
     "models.compat.evidence.",
     "models.confidence.",
+    "models.knowledge.layer.",
+    "models.knowledge.tab.",
     "models.role.",
     "models.verdict.",
     "models.wizard.engine.why.",

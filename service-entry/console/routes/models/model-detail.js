@@ -150,6 +150,7 @@ function LocalDetail({ id, query }) {
     <${Button} onClick=${async () => {
       setCopied(await copy(card?.cardId || view.id || view.path));
     }} testid="detail.copy-id">${copied ? t("common.copied") : t("hub.detail.action.copyId")}<//>
+    ${card?.cardId ? html`<${Button} href=${`/models/knowledge?override=${enc(card.cardId)}`} testid="detail.edit-override">${t("models.knowledge.override.edit")}<//>` : null}
     ${hubUrl ? html`<${Button} href=${hubUrl} target="_blank" rel="noopener noreferrer" testid="detail.open-hub">${t("hub.detail.action.openHub")}<//>` : null}`;
 
   const panel = (active) => {
