@@ -391,13 +391,12 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
       message: "Muse Glimmer 已从本地栈弃用，llama-manager 不再启动该架构。现有模型与镜像只保留作回滚，不会由此检查删除。",
     };
   }
-  // The capability matrix (manager-core/data/model-capabilities.json) owns
+  // The families v2 knowledge (manager-core/data/knowledge/families.json) owns
   // per-architecture llama.cpp requirements; the GGUF general.architecture is
-  // the declared identity here, so no name heuristics are involved.
-  const capability = normalized
-    ? core.resolveModelCapabilityEntry({ ggufArchitecture: normalized, allowNameFallback: false })
-    : { entry: null, id: "", matchedBy: "" };
-  const llamaCapabilities = capability.entry ? core.resolveEngineCapabilities(capability.entry, "llama", {}) : null;
+  // the declared identity (match.ggufArchitectures) here, so no name
+  // heuristics are involved.
+  const capability = core.models.compatibility.ggufArchitectureSupport(normalized);
+  const llamaCapabilities = capability.llamacpp ? core.resolveEngineCapabilities({ llama: capability.llamacpp }, "llama", {}) : null;
   const summary = { id: capability.id, label: capability.label, matchedBy: capability.matchedBy };
   if (llamaCapabilities?.supported === false) {
     return {
@@ -437,7 +436,7 @@ function evaluateLlamaArchitectureRuntimeCompatibility(architecture, runtime = {
   }
   // An architecture the matrix does not list is unknown, never "compatible"
   // (00 §4.4, 08 P0-15). Launch still goes ahead; the start job logs this.
-  if (normalized && !capability.entry) {
+  if (normalized && !capability.family) {
     return {
       architecture: normalized,
       status: "unknown",
@@ -1097,6 +1096,9 @@ async function precheckDownloadRequest(query = {}) {
     getGpuStatus().catch(() => null),
   ]);
   const primaryGpu = gpu?.gpus?.[0] || null;
+  // Every selected GPU is judged (query gpus=0,1), not only the first.
+  const wantedGpus = String(query.gpus ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  const selectedGpus = (gpu?.gpus || []).filter((item) => !wantedGpus.length || wantedGpus.includes(String(item.index ?? item.id)));
   const assessment = core.assessDownloadCompatibility({
     engine: "llama",
     model: reference.model,
@@ -1108,6 +1110,7 @@ async function precheckDownloadRequest(query = {}) {
     gated: Boolean(estimate?.gated),
     runtime: { ...LLAMA_RUNTIME_RELEASE, version: `b${DEFAULT_LLAMA_IMAGE_BUILD}`, build: DEFAULT_LLAMA_IMAGE_BUILD },
     gpu: primaryGpu ? { computeCap: primaryGpu.computeCap, totalMb: primaryGpu.totalMb } : null,
+    gpus: selectedGpus.map((item) => ({ id: String(item.index ?? item.id ?? ""), computeCap: item.computeCap, totalMb: item.totalMb })),
   });
   return {
     ...assessment,
