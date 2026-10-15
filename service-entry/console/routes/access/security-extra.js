@@ -50,7 +50,7 @@ export function EventsCard() {
   return html`<${Card} title=${t("security.events.title")} testid="security.events">
     ${events.status === "error" && !events.data ? html`<${EmptyState} icon="triangle-alert" title=${t("security.events.failed")} body=${events.error?.message || ""} action=${{ label: t("access.retry"), onClick: events.refetch }} />`
       : html`<${DataTable} id="access-security-events" columns=${columns} rows=${rows} rowKey=${(row) => row.id ?? `${row.at}|${row.type}`} loading=${events.status === "loading" && !events.data} responsive="cards"
-        caption=${t("security.events.title")} filters=${filter} empty=${html`<p class="muted" data-testid="security.events.empty">${t("security.events.empty")}</p>`} />`}
+        caption=${t("security.events.caption")} filters=${filter} empty=${html`<p class="muted" data-testid="security.events.empty">${t("security.events.empty")}</p>`} />`}
   <//>`;
 }
 

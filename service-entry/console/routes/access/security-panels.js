@@ -60,7 +60,7 @@ export function KeysPanel({ keys }) {
     { id: "tokens", header: t("security.keys.tokens"), align: "end", sort: (row) => row.tokens, cell: (row) => fmt.integer(row.tokens), csv: (row) => row.tokens },
   ];
   return html`<${Card} title=${t("security.keys.title")} testid="security.keys">
-    <${DataTable} id="access-top-keys" columns=${columns} rows=${Array.isArray(keys) ? keys : []} rowKey=${(row) => row.keyId} responsive="cards" caption=${t("security.keys.title")}
+    <${DataTable} id="access-top-keys" columns=${columns} rows=${Array.isArray(keys) ? keys : []} rowKey=${(row) => row.keyId} responsive="cards" caption=${t("security.keys.caption")}
       empty=${html`<p class="muted" data-testid="security.keys.empty">${t("security.keys.empty")}</p>`} />
   <//>`;
 }

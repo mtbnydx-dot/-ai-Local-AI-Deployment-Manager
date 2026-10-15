@@ -1757,6 +1757,7 @@ test("the public access, security, portal and sessions pages are owner-only: a v
 
 async function openAllNewPages(page, visit) {
   await page.goto(urlOf("/access/public"));
+  await expect(stepOf(page, "topology")).toBeVisible();
   await visit("public topology");
   for (const step of ["baseUrl", "templates", "keys", "checks", "map", "golive"]) {
     await next(page);

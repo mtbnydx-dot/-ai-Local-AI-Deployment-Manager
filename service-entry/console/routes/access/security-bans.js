@@ -105,6 +105,6 @@ export function BansCard({ query, onAdd, onUnban }) {
     <p class="muted small">${t("security.bans.hint")}</p>
     ${query.status === "error" && !query.data ? html`<${EmptyState} icon="triangle-alert" title=${t("security.bans.failed")} body=${query.error?.message || ""} action=${{ label: t("access.retry"), onClick: query.refetch }} />`
       : html`<${DataTable} id="access-bans" columns=${columns} rows=${rows} rowKey=${(row) => row.subject} loading=${query.status === "loading" && !query.data} responsive="cards"
-        caption=${t("security.bans.title")} empty=${html`<p class="muted" data-testid="security.bans.empty">${t("security.bans.empty")}</p>`} />`}
+        caption=${t("security.bans.caption")} empty=${html`<p class="muted" data-testid="security.bans.empty">${t("security.bans.empty")}</p>`} />`}
   <//>`;
 }

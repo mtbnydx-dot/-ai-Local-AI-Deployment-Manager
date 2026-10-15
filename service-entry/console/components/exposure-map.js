@@ -49,7 +49,7 @@ export function ExposureMap({ map, testid }) {
       </svg>
     </div>
     <figcaption class="xsmall muted">${t("public.map.legend")}</figcaption>
-    <div class="table-wrap"><table class="table xmap-table" data-testid="exposure-map.table">
+    <div class="table-wrap" tabindex="0" role="region" aria-label=${t("public.map.caption")}><table class="table xmap-table" data-testid="exposure-map.table">
       <caption class="sr-only">${t("public.map.caption")}</caption>
       <thead><tr><th scope="col">${t("public.map.col.edge")}</th><th scope="col">${t("public.map.col.state")}</th><th scope="col">${t("public.map.col.evidence")}</th></tr></thead>
       <tbody>${layout.edges.map((edge) => html`<tr key=${edge.id} data-state=${edge.state} data-testid="exposure-map.row">

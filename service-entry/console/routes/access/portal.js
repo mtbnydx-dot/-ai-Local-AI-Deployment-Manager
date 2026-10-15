@@ -49,7 +49,7 @@ function Announcements({ onEdit, onNew, onDelete }) {
     <p class="muted small">${t("access.portal.announcements.hint")}</p>
     ${list.status === "error" && !list.data ? html`<${EmptyState} icon="triangle-alert" title=${t("access.portal.announcements.failed")} body=${list.error?.message || ""} action=${{ label: t("access.retry"), onClick: list.refetch }} />`
       : html`<${DataTable} id="access-announcements" columns=${columns} rows=${rows} rowKey=${(row) => row.id} loading=${list.status === "loading" && !list.data} responsive="cards"
-        caption=${t("access.portal.announcements.title")} empty=${html`<p class="muted" data-testid="portal.announcements.empty">${t("access.portal.announcements.empty")}</p>`} />`}
+        caption=${t("access.portal.announcements.caption")} empty=${html`<p class="muted" data-testid="portal.announcements.empty">${t("access.portal.announcements.empty")}</p>`} />`}
   <//>`;
 }
 

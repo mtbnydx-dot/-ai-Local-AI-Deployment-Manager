@@ -121,7 +121,7 @@ export default function Sessions() {
     <${Card} title=${t("sessions.list")} testid="sessions.list">
       ${list.status === "error" && !list.data ? html`<${EmptyState} icon="triangle-alert" title=${t("sessions.failed")} body=${list.error?.message || ""} action=${{ label: t("access.retry"), onClick: list.refetch }} />`
         : html`<${DataTable} id="access-sessions" columns=${columns} rows=${rows} rowKey=${(row) => row.id} loading=${list.status === "loading" && !list.data} responsive="cards"
-          caption=${t("sessions.list")} empty=${html`<p class="muted" data-testid="sessions.empty">${t("sessions.empty")}</p>`} />`}
+          caption=${t("sessions.caption")} empty=${html`<p class="muted" data-testid="sessions.empty">${t("sessions.empty")}</p>`} />`}
     <//>
     ${revoking ? html`<${ConfirmDialog} open tone="danger" title=${t(revoking.current ? "sessions.revoke.currentTitle" : "sessions.revoke.title")}
       body=${t(revoking.current ? "sessions.revoke.currentBody" : "sessions.revoke.body")}

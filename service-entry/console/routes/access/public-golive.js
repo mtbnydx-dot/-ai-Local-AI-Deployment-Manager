@@ -21,7 +21,7 @@ function CallersTables({ callers }) {
   if (!callers.total) return html`<p class="notice notice-success" role="status" data-testid="public.live.none">${t("public.live.none", { days: DIRECT_CALLER_DAYS })}</p>`;
   return html`<div class="stack" data-testid="public.live.callers">
     <p class="notice notice-warn" role="status" data-testid="public.live.warn">${t("public.live.warn", { count: callers.total, days: DIRECT_CALLER_DAYS })}</p>
-    ${callers.direct.length ? html`<div class="table-wrap"><table class="table" data-testid="public.live.direct">
+    ${callers.direct.length ? html`<div class="table-wrap" tabindex="0" role="region" aria-label=${t("public.live.directCaption")}><table class="table" data-testid="public.live.direct">
       <caption class="sr-only">${t("public.live.directCaption")}</caption>
       <thead><tr><th scope="col">${t("public.live.address")}</th><th scope="col">${t("public.live.kind")}</th><th scope="col">${t("public.live.path")}</th><th scope="col">${t("public.live.calls")}</th><th scope="col">${t("public.live.last")}</th></tr></thead>
       <tbody>${callers.direct.map((row) => html`<tr key=${row.id} data-testid="public.live.direct-row">
@@ -29,7 +29,7 @@ function CallersTables({ callers }) {
         <td class="num">${fmt.integer(row.count)}</td><td>${fmt.dateTime(row.lastAt, { style: "short" })}</td>
       </tr>`)}</tbody>
     </table></div>` : null}
-    ${callers.viaProxy.length ? html`<div class="table-wrap"><table class="table" data-testid="public.live.proxy">
+    ${callers.viaProxy.length ? html`<div class="table-wrap" tabindex="0" role="region" aria-label=${t("public.live.proxyCaption")}><table class="table" data-testid="public.live.proxy">
       <caption class="sr-only">${t("public.live.proxyCaption")}</caption>
       <thead><tr><th scope="col">${t("public.live.path")}</th><th scope="col">${t("public.live.headers")}</th><th scope="col">${t("public.live.calls")}</th><th scope="col">${t("public.live.last")}</th></tr></thead>
       <tbody>${callers.viaProxy.map((row) => html`<tr key=${row.id} data-testid="public.live.proxy-row">
