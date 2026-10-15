@@ -1,0 +1,102 @@
+{
+  "ok": true,
+  "roots": [
+    {
+      "id": "r_main",
+      "label": "Library X",
+      "path": "X:/models",
+      "mode": "library",
+      "default": true,
+      "legacy": false,
+      "volume": "X:",
+      "available": true,
+      "freeBytes": 1300000000000,
+      "totalBytes": 4000000000000,
+      "usedByModelsBytes": 2400000000000,
+      "modelCount": 2,
+      "incompleteFiles": 0,
+      "incompleteBytes": 0,
+      "pendingBytes": 0,
+      "reserveBytes": 65000000000,
+      "projectedFreeBytes": 1300000000000,
+      "hidden": false
+    },
+    {
+      "id": "r_second",
+      "label": "Library Y",
+      "path": "Y:/models",
+      "mode": "library",
+      "default": false,
+      "legacy": false,
+      "volume": "Y:",
+      "available": true,
+      "freeBytes": 1900000000000,
+      "totalBytes": 2000000000000,
+      "usedByModelsBytes": 7300000000,
+      "modelCount": 1,
+      "incompleteFiles": 2,
+      "incompleteBytes": 4000000000,
+      "pendingBytes": 5000000000,
+      "reserveBytes": 20000000000,
+      "projectedFreeBytes": 1895000000000,
+      "hidden": false
+    },
+    {
+      "id": "legacy",
+      "label": "Original library",
+      "path": "D:/old-models",
+      "mode": "library",
+      "default": false,
+      "legacy": true,
+      "volume": "D:",
+      "available": true,
+      "freeBytes": 600000000000,
+      "totalBytes": 1000000000000,
+      "usedByModelsBytes": 0,
+      "modelCount": 0,
+      "incompleteFiles": 0,
+      "incompleteBytes": 0,
+      "pendingBytes": 0,
+      "reserveBytes": 0,
+      "projectedFreeBytes": 600000000000,
+      "hidden": true
+    }
+  ],
+  "models": [],
+  "hfCache": {
+    "path": "D:/cache/huggingface",
+    "volume": "D:",
+    "freeBytes": 675000000000,
+    "hubBytes": 21000000000,
+    "xetBytes": 0,
+    "modelscopeBytes": 3000000000
+  },
+  "residues": [
+    {
+      "entryId": "lib_b2c3d4e5f6071829",
+      "rootId": "r_second",
+      "incompleteFiles": 2,
+      "incompleteBytes": 4000000000,
+      "busy": false
+    }
+  ],
+  "orphanPartials": [
+    {
+      "jobId": "dl_orphan01",
+      "rootId": "r_second",
+      "path": "Y:/models/half",
+      "bytes": 12000000000,
+      "reason": "failed"
+    }
+  ],
+  "duplicates": [
+    {
+      "entryIds": [
+        "lib_a1b2c3d4e5f60718",
+        "lib_c3d4e5f607182930"
+      ],
+      "reclaimableBytes": 8900000000
+    }
+  ],
+  "updatedAt": "2026-10-14T08:00:00.000Z"
+}

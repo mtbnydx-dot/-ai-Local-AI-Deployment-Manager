@@ -1,0 +1,395 @@
+{
+  "ok": true,
+  "entries": [
+    {
+      "id": "lib_a1b2c3d4e5f60718",
+      "kind": "folder",
+      "path": "X:/models/Qwen3-8B-FP8",
+      "rootId": "r_main",
+      "rootLabel": "Library X",
+      "volume": "X:",
+      "aliases": [],
+      "displayName": "Qwen3-8B-FP8",
+      "format": "safetensors",
+      "quant": "FP8",
+      "bytes": 8900000000,
+      "fileCount": 11,
+      "mtime": "2026-10-01T08:00:00.000Z",
+      "provenance": {
+        "provider": "huggingface",
+        "repo": "Qwen/Qwen3-8B-FP8",
+        "revision": "main",
+        "revisionSha": "40f1c0de8a1b2c3d4e5f60718293a4b5c6d7e8f9",
+        "source": "hub-job",
+        "confidence": "declared",
+        "downloadedAt": "2026-09-20T10:00:00.000Z",
+        "downloadJobId": "dl_job0001"
+      },
+      "identityKey": "hf:qwen/qwen3-8b-fp8@40f1c0de#abc",
+      "verification": {
+        "status": "ok",
+        "checksum": "verified",
+        "checkedAt": "2026-10-02T09:00:00.000Z",
+        "issues": []
+      },
+      "residue": {
+        "incompleteFiles": 0,
+        "incompleteBytes": 0
+      },
+      "update": {
+        "status": "available",
+        "remoteSha": "9f",
+        "changedFiles": 3,
+        "bytesToDownload": 120000000,
+        "checkedAt": "2026-10-03T09:00:00.000Z"
+      },
+      "card": {
+        "cardId": "mc_aaaaaaaaaaaaaaaaaaaa",
+        "role": "main",
+        "familyId": "qwen3",
+        "compatibility": [
+          {
+            "engineId": "vllm",
+            "runtimeId": "vllm@0.28.0",
+            "verdict": "ok"
+          },
+          {
+            "engineId": "sglang",
+            "runtimeId": "sglang@0.5.17",
+            "verdict": "ok"
+          }
+        ]
+      },
+      "duplicates": [
+        "lib_c3d4e5f607182930"
+      ],
+      "lastLaunchedAt": "2026-10-10T12:00:00.000Z",
+      "lastFailure": null,
+      "previousIds": []
+    },
+    {
+      "id": "lib_b2c3d4e5f6071829",
+      "kind": "folder",
+      "path": "Y:/models/gemma-3-12b-it-Q4_K_M",
+      "rootId": "r_second",
+      "rootLabel": "Library Y",
+      "volume": "Y:",
+      "aliases": [],
+      "displayName": "gemma-3-12b-it-Q4_K_M",
+      "format": "gguf",
+      "quant": "Q4_K_M",
+      "bytes": 7300000000,
+      "fileCount": 11,
+      "mtime": "2026-10-01T08:00:00.000Z",
+      "provenance": {
+        "provider": "huggingface",
+        "repo": "",
+        "revision": "main",
+        "revisionSha": "",
+        "source": "hub-job",
+        "confidence": "unknown"
+      },
+      "identityKey": "",
+      "verification": {
+        "status": "unchecked",
+        "checksum": "none",
+        "checkedAt": null,
+        "issues": []
+      },
+      "residue": {
+        "incompleteFiles": 2,
+        "incompleteBytes": 4000000000
+      },
+      "update": {
+        "status": "unsupported",
+        "remoteSha": null,
+        "changedFiles": 0,
+        "bytesToDownload": 0,
+        "checkedAt": null
+      },
+      "card": {
+        "cardId": "mc_bbbbbbbbbbbbbbbbbbbb",
+        "role": "main",
+        "familyId": "gemma3",
+        "compatibility": [
+          {
+            "engineId": "llamacpp",
+            "runtimeId": "llamacpp@b6000",
+            "verdict": "ok"
+          }
+        ]
+      },
+      "duplicates": [],
+      "lastLaunchedAt": null,
+      "lastFailure": null,
+      "previousIds": []
+    },
+    {
+      "id": "lib_c3d4e5f607182930",
+      "kind": "folder",
+      "path": "X:/models/Qwen3-8B-FP8-copy",
+      "rootId": "r_main",
+      "rootLabel": "Library X",
+      "volume": "X:",
+      "aliases": [],
+      "displayName": "Qwen3-8B-FP8-copy",
+      "format": "safetensors",
+      "quant": "FP8",
+      "bytes": 8900000000,
+      "fileCount": 11,
+      "mtime": "2026-10-01T08:00:00.000Z",
+      "provenance": {
+        "provider": "huggingface",
+        "repo": "Qwen/Qwen3-8B-FP8",
+        "revision": "main",
+        "revisionSha": "40f1c0de8a1b2c3d4e5f60718293a4b5c6d7e8f9",
+        "source": "hub-job",
+        "confidence": "detected"
+      },
+      "identityKey": "",
+      "verification": {
+        "status": "warn",
+        "checksum": "partial",
+        "checkedAt": "2026-10-02T09:00:00.000Z",
+        "issues": []
+      },
+      "residue": {
+        "incompleteFiles": 0,
+        "incompleteBytes": 0
+      },
+      "update": {
+        "status": "unknown",
+        "remoteSha": null,
+        "changedFiles": 0,
+        "bytesToDownload": 0,
+        "checkedAt": null
+      },
+      "card": {
+        "cardId": "mc_cccccccccccccccccccc",
+        "role": "main",
+        "familyId": "qwen3",
+        "compatibility": [
+          {
+            "engineId": "vllm",
+            "runtimeId": "vllm@0.28.0",
+            "verdict": "warn"
+          }
+        ]
+      },
+      "duplicates": [
+        "lib_a1b2c3d4e5f60718"
+      ],
+      "lastLaunchedAt": null,
+      "lastFailure": null,
+      "previousIds": []
+    },
+    {
+      "id": "lib_d4e5f60718293a4b",
+      "kind": "folder",
+      "path": "X:/models/sglang-tools",
+      "rootId": "r_main",
+      "rootLabel": "Library X",
+      "volume": "X:",
+      "aliases": [],
+      "displayName": "sglang-tools",
+      "format": "",
+      "quant": "",
+      "bytes": 2400000,
+      "fileCount": 11,
+      "mtime": "2026-10-01T08:00:00.000Z",
+      "provenance": {
+        "provider": "huggingface",
+        "repo": "",
+        "revision": "main",
+        "revisionSha": "",
+        "source": "hub-job",
+        "confidence": "unknown"
+      },
+      "identityKey": "",
+      "verification": {
+        "status": "unchecked",
+        "checksum": "none",
+        "checkedAt": null,
+        "issues": []
+      },
+      "residue": {
+        "incompleteFiles": 0,
+        "incompleteBytes": 0
+      },
+      "update": {
+        "status": "unknown",
+        "remoteSha": null,
+        "changedFiles": 0,
+        "bytesToDownload": 0,
+        "checkedAt": null
+      },
+      "card": {
+        "cardId": null,
+        "role": "tooling-only",
+        "familyId": null,
+        "compatibility": []
+      },
+      "duplicates": [],
+      "lastLaunchedAt": null,
+      "lastFailure": null,
+      "previousIds": [],
+      "runnable": false
+    },
+    {
+      "id": "lib_e5f60718293a4b5c",
+      "kind": "folder",
+      "path": "Z:/single/mymodel-root",
+      "rootId": "r_single",
+      "rootLabel": "Single model",
+      "volume": "Z:",
+      "aliases": [],
+      "displayName": "mymodel-root",
+      "format": "safetensors",
+      "quant": "BF16",
+      "bytes": 15000000000,
+      "fileCount": 11,
+      "mtime": "2026-10-01T08:00:00.000Z",
+      "provenance": {
+        "provider": "huggingface",
+        "repo": "",
+        "revision": "main",
+        "revisionSha": "",
+        "source": "hub-job",
+        "confidence": "unknown"
+      },
+      "identityKey": "",
+      "verification": {
+        "status": "fail",
+        "checksum": "none",
+        "checkedAt": "2026-10-02T09:00:00.000Z",
+        "issues": [
+          "model.safetensors is smaller than expected"
+        ]
+      },
+      "residue": {
+        "incompleteFiles": 0,
+        "incompleteBytes": 0
+      },
+      "update": {
+        "status": "unknown",
+        "remoteSha": null,
+        "changedFiles": 0,
+        "bytesToDownload": 0,
+        "checkedAt": null
+      },
+      "card": {
+        "cardId": "mc_dddddddddddddddddddd",
+        "role": "main",
+        "familyId": null,
+        "compatibility": []
+      },
+      "duplicates": [],
+      "lastLaunchedAt": null,
+      "lastFailure": null,
+      "previousIds": []
+    },
+    {
+      "id": "lib_f60718293a4b5c6d",
+      "kind": "hf-cache-repo",
+      "path": "D:/cache/huggingface/hub/models--Qwen--Qwen3-0.6B",
+      "rootId": null,
+      "rootLabel": "Hugging Face cache",
+      "volume": "D:",
+      "aliases": [],
+      "displayName": "models--Qwen--Qwen3-0.6B",
+      "format": "safetensors",
+      "quant": "BF16",
+      "bytes": 1200000000,
+      "fileCount": 11,
+      "mtime": "2026-10-01T08:00:00.000Z",
+      "provenance": {
+        "provider": "huggingface",
+        "repo": "Qwen/Qwen3-0.6B",
+        "revision": "main",
+        "revisionSha": "",
+        "source": "hf-cache-refs",
+        "confidence": "declared"
+      },
+      "identityKey": "",
+      "verification": {
+        "status": "unchecked",
+        "checksum": "none",
+        "checkedAt": null,
+        "issues": []
+      },
+      "residue": {
+        "incompleteFiles": 0,
+        "incompleteBytes": 0
+      },
+      "update": {
+        "status": "unknown",
+        "remoteSha": null,
+        "changedFiles": 0,
+        "bytesToDownload": 0,
+        "checkedAt": null
+      },
+      "card": {
+        "cardId": null,
+        "role": "main",
+        "familyId": null,
+        "compatibility": []
+      },
+      "duplicates": [],
+      "lastLaunchedAt": null,
+      "lastFailure": null,
+      "previousIds": []
+    }
+  ],
+  "roots": [
+    {
+      "id": "r_main",
+      "label": "Library X",
+      "path": "X:/models",
+      "mode": "library",
+      "default": true,
+      "legacy": false,
+      "volume": "X:",
+      "online": true,
+      "entryCount": 2,
+      "bytes": 17800000000
+    },
+    {
+      "id": "r_second",
+      "label": "Library Y",
+      "path": "Y:/models",
+      "mode": "library",
+      "default": false,
+      "legacy": false,
+      "volume": "Y:",
+      "online": true,
+      "entryCount": 1,
+      "bytes": 7300000000
+    },
+    {
+      "id": "r_single",
+      "label": "Single model",
+      "path": "Z:/single/mymodel-root",
+      "mode": "model",
+      "default": false,
+      "legacy": false,
+      "volume": "Z:",
+      "online": true,
+      "entryCount": 1,
+      "bytes": 15000000000
+    },
+    {
+      "id": "hf-cache",
+      "label": "Hugging Face cache",
+      "path": "D:/cache/huggingface/hub",
+      "mode": "cache",
+      "default": false,
+      "legacy": false,
+      "volume": "D:",
+      "online": true,
+      "entryCount": 1,
+      "bytes": 1200000000
+    }
+  ],
+  "nextCursor": null,
+  "total": 6
+}

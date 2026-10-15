@@ -1318,6 +1318,10 @@ dialog::backdrop {
 .pg-composer { min-width: 0; }
 .pg-preset-on { background: var(--accent-soft); font-weight: 600; }
 
+/* ---- Models pages (CON-14: library, storage, detail) ---- */
+.folder-list { max-height: 40vh; overflow-y: auto; align-items: flex-start; }
+.library-actions { flex-wrap: wrap; }
+
 /* ---- Deployments pages (CON-9: list, detail, routing) ---- */
 .deploy-filters { gap: var(--sp-3); flex-wrap: wrap; align-items: flex-end; }
 .deploy-filter { display: flex; flex-direction: column; gap: var(--sp-1); }

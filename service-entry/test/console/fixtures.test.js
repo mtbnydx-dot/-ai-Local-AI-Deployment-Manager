@@ -40,6 +40,9 @@ const GUARDS = {
   engines: schemas.EnginesResponseGuard,
   "engines-external": schemas.ExternalEndpointsGuard,
   "engines-flags": schemas.FlagsResponseGuard,
+  // CON-14 Models fixtures: the hub library list and the storage usage (03 §9.2, §13.5).
+  "models-library": schemas.LibraryListGuard,
+  "models-usage": schemas.StorageUsageGuard,
 };
 
 function read(name) {
