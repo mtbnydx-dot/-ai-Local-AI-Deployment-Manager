@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-10-15",
+  "staleAfterDays": 180,
+  "description": "The single allowlist of manager-core/test/no-family-branches.test.js (00 §9.11, 01 §26 ENG-23). Each entry allows exactly count hits of one pattern in one file, until it expires.",
+  "entries": [
+    {
+      "file": "manager-core/download-precheck.js",
+      "pattern": "=== \"vllm\"",
+      "count": 3,
+      "owner": "02 models (MOD-11, download precheck)",
+      "reason": "Engine-id dispatch, not a model family: the precheck applies each manager's artifact rules (GGUF for llama.cpp; config, safetensors and trust_remote_code for vLLM) keyed by the legacy engine id. Descriptor artifactFormats can replace it.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/download-precheck.js",
+      "pattern": "=== \"llama\"",
+      "count": 5,
+      "owner": "02 models (MOD-11, download precheck)",
+      "reason": "Engine-id dispatch, not a model family: the llama.cpp side of the same artifact rules (GGUF required, BNB blocked, the GGUF VRAM wording). Descriptor artifactFormats can replace it.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-hub/queue.js",
+      "pattern": "=== \"vllm\"",
+      "count": 1,
+      "owner": "03 hub",
+      "reason": "Validates the owner manager id of a queued download (llama or vllm); a manager-id check, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-hub/queue.js",
+      "pattern": "=== \"llama\"",
+      "count": 1,
+      "owner": "03 hub",
+      "reason": "Validates the owner manager id of a queued download (llama or vllm); a manager-id check, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/card-estimate.js",
+      "pattern": "=== \"sglang\"",
+      "count": 3,
+      "owner": "02 models (MOD-9b, /api/memory-estimate)",
+      "reason": "Maps a legacy estimate body to its engine and that engine's catalog memory params (sglang.memFractionStatic versus vllm.*); engine-id dispatch, not a model family. Descriptor memoryModel.fractionParam can replace it.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/card-estimate.js",
+      "pattern": "=== \"vllm\"",
+      "count": 1,
+      "owner": "02 models (MOD-9b, /api/memory-estimate)",
+      "reason": "The vLLM side of the same legacy body to catalog param mapping; engine-id dispatch, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/card-estimate.js",
+      "pattern": "=== \"llama\"",
+      "count": 1,
+      "owner": "02 models (MOD-9b, /api/memory-estimate)",
+      "reason": "Maps the llama manager id of a legacy estimate body to the llamacpp engine; a manager-id mapping, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/compatibility.js",
+      "pattern": "=== \"sglang\"",
+      "count": 2,
+      "owner": "02 models (MOD-11, compatibility matrix)",
+      "reason": "Suggested launch values per engine (tensor parallel and the SGLang catalog params) in the compatibility matrix; engine-id dispatch, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/compatibility.js",
+      "pattern": "=== \"vllm\"",
+      "count": 2,
+      "owner": "02 models (MOD-11, compatibility matrix)",
+      "reason": "Suggested launch values per engine (tensor parallel and the vLLM catalog params) in the compatibility matrix; engine-id dispatch, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/fit.js",
+      "pattern": "=== \"sglang\"",
+      "count": 2,
+      "owner": "02 models (MOD-9, artifact fit)",
+      "reason": "Artifact-side fit adjusts for SGLang catalog params (PLE embedding offload, the KV pool); engine-id dispatch, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/fit.js",
+      "pattern": "=== \"vllm\"",
+      "count": 5,
+      "owner": "02 models (MOD-9, artifact fit)",
+      "reason": "Artifact-side fit adjusts for vLLM catalog params (language-model-only, KV offloading, the device fraction); engine-id dispatch, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/fit.js",
+      "pattern": "=== \"llama\"",
+      "count": 1,
+      "owner": "02 models (MOD-9, artifact fit)",
+      "reason": "Treats the legacy llama manager id as the llamacpp engine for GGUF fits; a manager-id alias, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/planner.js",
+      "pattern": "=== \"sglang\"",
+      "count": 1,
+      "owner": "02 models (MOD-14, launch planner)",
+      "reason": "The planner sets the SGLang memory knob param when it plans a launch; engine-id dispatch, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/model-inspector/planner.js",
+      "pattern": "=== \"vllm\"",
+      "count": 1,
+      "owner": "02 models (MOD-14, launch planner)",
+      "reason": "The planner sets the vLLM memory knob param when it plans a launch; engine-id dispatch, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/precision-variants.js",
+      "pattern": "flashNext",
+      "count": 5,
+      "owner": "02 models (MOD-21)",
+      "reason": "Model-family note: an NVFP4 sibling repo that the v1 capability matrix matches as qwen3.8-flash-next is labelled with the Flash-Next SGLang image. It goes with the v1 matrix shim that MOD-21 deletes.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "manager-core/stats-ledger-store.js",
+      "pattern": "=== \"sglang\"",
+      "count": 2,
+      "owner": "04 telemetry",
+      "reason": "Stats queries for SGLang skip ledger rows written before rows carried an engine (those are vLLM rows); engine-id compatibility, not a model family.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "vllm-manager/lib/model-capabilities.js",
+      "pattern": "isQwen3",
+      "count": 2,
+      "owner": "02 models (MOD-21)",
+      "reason": "Name inference in the v1 capability module (automatic MTP stays off for Qwen3.5-3.8 ModelOpt NVFP4); MOD-21 deletes this module's name inference and predicates.",
+      "expires": "2027-04-30"
+    },
+    {
+      "file": "vllm-manager/lib/model-capabilities.js",
+      "pattern": "museGlimmer",
+      "count": 1,
+      "owner": "02 models (MOD-21)",
+      "reason": "The retired museGlimmerOverride result field, always false, which model-capabilities.test.js still asserts; MOD-21 migrates that test and drops the field.",
+      "expires": "2027-04-30"
+    }
+  ]
+}

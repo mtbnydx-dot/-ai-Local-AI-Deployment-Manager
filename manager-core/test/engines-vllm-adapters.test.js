@@ -335,13 +335,3 @@ test("a LAN launch without a key asks ctx for the LAN address only then", () => 
   engines.adapters.vllm.buildLaunch(plan, keyed.ctx);
   assert.deepEqual(keyed.calls, ["dockerPublishArgs"]);
 });
-
-// D5 / ENG-23: model behaviour comes from recipe data, never from a branch.
-test("the vllm and sglang adapters carry no model-family branch", () => {
-  const dir = path.join(__dirname, "..", "engines", "adapters");
-  const patterns = [/isQwen/, /isPennyroyal/, /isDiffusionGemma/, /flashNext/i, /museGlimmer/i, /=== "sglang"/, /=== "vllm"/, /=== "llama"/, /supportsB10630/];
-  for (const file of ["vllm.js", "sglang.js", "_vllm-manager.js", "_docker-segments.js"]) {
-    const code = fs.readFileSync(path.join(dir, file), "utf8");
-    for (const pattern of patterns) assert.equal(pattern.test(code), false, `${file} matches ${pattern}`);
-  }
-});

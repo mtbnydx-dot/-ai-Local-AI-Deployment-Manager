@@ -224,3 +224,109 @@ for (const fixture of vllmFixtures) {
     if (fixture.kind === "builder") assert.deepEqual(canonical(command.logs), expect.logs);
   });
 }
+
+// ---------------------------------------------------------------------------
+// The whole golden set (ENG-23)
+//
+// Moved from the managers' engines-golden-legacy tests, which ENG-23 deletes:
+// builder and profile fixtures run through the adapters above, preset
+// fixtures (PRE-*) through the recipe shim in engines-recipes.test.js, and the
+// request fixtures (R-*) here through the managers' launch-request
+// normalisation, which the launch-plan resolver drives. The set, the secret
+// channel and the host path separators are checked once for both managers.
+
+const byCode = new Map(fixtures.map((fixture) => [codeOf(fixture), fixture]));
+const REQUEST_CODES = ["R-L1", "R-L2", "R-V1", "R-V2", "R-V3"];
+const PRESET_CODES = [
+  "PRE-01", "PRE-02", "PRE-03", "PRE-04", "PRE-05", "PRE-06", "PRE-07", "PRE-08", "PRE-09", "PRE-10",
+  "PRE-11", "PRE-12", "PRE-13", "PRE-14", "PRE-15", "PRE-16a", "PRE-16b", "PRE-17", "PRE-18", "PRE-19",
+];
+
+test("the golden set holds every builder, profile, preset and request case of both managers", () => {
+  const expected = [...LLAMA_ADAPTER_CODES, ...VLLM_ADAPTER_CODES, ...PRESET_CODES, ...REQUEST_CODES].sort();
+  assert.deepEqual([...byCode.keys()].sort(), expected);
+  assert.equal(fixtures.length, expected.length);
+  for (const fixture of fixtures) {
+    assert.equal(fixture.schemaVersion, 1, fixture.id);
+    assert.ok(Array.isArray(fixture.history) && fixture.history.length > 0, fixture.id);
+    assert.equal(fixture.manager, codeOf(fixture).includes("L") ? "llama" : "vllm", fixture.id);
+  }
+});
+
+for (const code of REQUEST_CODES) {
+  test(`${code} is reproduced by the launch-request normalisation`, async () => {
+    const fixture = byCode.get(code);
+    assert.equal(fixture.kind, "request");
+    assert.deepEqual(await harness.runGoldenFixture(fixture), fixture.expect);
+  });
+}
+
+// A delivered key is recorded as the placeholder of its fake value, so these
+// assertions fail if the code hands the redaction marker on instead of the key.
+test("the goldens pin the secret channel by name and hold no key value", () => {
+  for (const fixture of fixtures) {
+    const text = JSON.stringify(fixture);
+    for (const secret of Object.values(harness.FAKE_SECRETS)) assert.equal(text.includes(secret), false, fixture.id);
+    if (fixture.kind === "builder" || fixture.kind === "profile") {
+      assert.ok(Array.isArray(fixture.expect.secretEnvNames), fixture.id);
+      assert.deepEqual(Object.keys(fixture.expect.secretEnv), fixture.expect.secretEnvNames, fixture.id);
+    }
+  }
+
+  const llamaKey = byCode.get("G-L2");
+  assert.equal(llamaKey.input.opts.llamaApiKey, "<secret:apiKey>");
+  assert.deepEqual(llamaKey.expect.secretEnvNames, ["HF_TOKEN", "LLAMA_API_KEY"]);
+  assert.deepEqual(llamaKey.expect.secretEnv, { HF_TOKEN: "<secret:hfToken>", LLAMA_API_KEY: "<secret:apiKey>" });
+  const imageIndex = llamaKey.expect.runArgs.indexOf(llamaKey.expect.runtimeImage);
+  // The four launch identity label pairs (01 §15.2) follow the secret env names.
+  assert.deepEqual(llamaKey.expect.runArgs.slice(imageIndex - 12, imageIndex - 8), ["-e", "HF_TOKEN", "-e", "LLAMA_API_KEY"]);
+  assert.equal(llamaKey.expect.runArgs[imageIndex - 7], "ai.manager.launch-id=");
+  assert.equal(llamaKey.expect.runArgs.includes("--api-key"), false);
+  assert.equal(JSON.stringify(llamaKey.expect.runArgs).includes("<secret:"), false);
+  const llamaRequest = byCode.get("R-L1").expect;
+  assert.equal(llamaRequest.runOptions.llamaApiKey, "<secret:apiKey>");
+  assert.equal(llamaRequest.runOptions.runtimeApiKeyRef, "ref-<secret:apiKey>");
+
+  const vllmKey = byCode.get("G-V1");
+  assert.equal(vllmKey.input.opts.vllmApiKey, "<secret:apiKey>");
+  assert.deepEqual(vllmKey.expect.secretEnvNames, ["HF_TOKEN", "VLLM_API_KEY"]);
+  assert.deepEqual(vllmKey.expect.secretEnv, { HF_TOKEN: "<secret:hfToken>", VLLM_API_KEY: "<secret:apiKey>" });
+  const keyAt = vllmKey.expect.runArgs.indexOf("VLLM_API_KEY");
+  assert.deepEqual(vllmKey.expect.runArgs.slice(keyAt - 1, keyAt + 1), ["-e", "VLLM_API_KEY"]);
+  assert.equal(vllmKey.expect.runArgs.includes("--api-key"), false);
+  assert.equal(JSON.stringify(vllmKey.expect.runArgs).includes("<secret:"), false);
+  // SGLang keeps --api-key in argv (08 O1): the real argv carries the key, so
+  // the golden holds its placeholder, not the redactor's marker.
+  const sglangKey = byCode.get("G-S3").expect;
+  assert.equal(sglangKey.runArgs[sglangKey.runArgs.indexOf("--api-key") + 1], "<secret:apiKey>");
+  assert.equal(sglangKey.runArgs.includes(harness.REDACTED), false);
+  assert.deepEqual(sglangKey.secretEnvNames, []);
+  assert.deepEqual(sglangKey.secretEnv, {});
+  const vllmRequest = byCode.get("R-V1").expect;
+  assert.equal(vllmRequest.compatibilityRequest.apiKey, "<secret:apiKey>");
+  assert.equal(vllmRequest.runOptions.vllmApiKey, "<secret:apiKey>");
+  assert.equal(vllmRequest.runOptions.runtimeApiKeyRef, "ref-<secret:apiKey>");
+  assert.equal(byCode.get("R-V3").expect.runOptions.vllmApiKey, "<secret:apiKey>");
+});
+
+// Host paths keep the separators the managers emit: the model library and
+// cache roots are native Windows paths in the mount arguments and job metadata.
+test("the profile goldens hold the host path separators the managers emit", { skip: process.platform !== "win32" && "the goldens are captured on Windows" }, () => {
+  // A native path under the canonical fixture root.
+  const native = (...parts) => [harness.CANONICAL_ROOT_BACKSLASH, ...parts].join("\\");
+  for (const code of ["P-L01", "P-L02", "P-L03", "P-L04", "P-L05"]) {
+    const { expect, input } = byCode.get(code);
+    assert.ok(expect.runArgs.includes(`${native("models")}:/models`), code);
+    assert.ok(expect.runArgs.includes(`${native("ai", "cache", "huggingface")}:/root/.cache/huggingface`), code);
+    assert.equal(expect.jobMeta.model, input.model, code);
+    assert.equal(expect.jobMeta.resolvedModel, native("models", "Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf"), code);
+  }
+  const penny = byCode.get("P-V01").expect;
+  assert.ok(penny.runArgs.includes(`${native("models")}:/models:ro`));
+  const dspark = byCode.get("P-V04").expect;
+  assert.ok(dspark.runArgs.includes(`${native("ai", "cache", "huggingface")}:/root/.cache/huggingface`));
+  assert.ok(dspark.runArgs.includes(`${native("models")}:/models`));
+  assert.equal(dspark.jobMeta.draftModel, native("models", "RadixArk-Qwen3.8-27B-DSpark"));
+  assert.equal(dspark.jobMeta.model, `${harness.CANONICAL_ROOT}/models/Qwen-Qwen3.8-27B-FP8`);
+  assert.equal(byCode.get("PRE-05").expect.preset.draftModel, native("models", "RadixArk-Qwen3.8-27B-DSpark"));
+});

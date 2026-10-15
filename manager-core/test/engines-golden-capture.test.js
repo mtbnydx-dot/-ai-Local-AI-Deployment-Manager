@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const harness = require("./helpers/engine-golden-stubs");
 
 // 01-engines §8.3: the capture harness. The goldens themselves are asserted by
-// the engines-golden-legacy tests of both managers.
+// engines-golden.test.js (adapters, requests) and engines-recipes.test.js (presets).
 const SCRIPT = path.join(harness.REPO_ROOT, "scripts", "capture-engine-goldens.js");
 const FIXTURES_DIR = path.dirname(harness.GOLDEN_DIR);
 

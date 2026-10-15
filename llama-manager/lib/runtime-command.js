@@ -58,9 +58,7 @@ function createLlamaRuntimeCommandBuilder(deps) {
   // The images this manager runs for its manifest runtimes; CONFIG applied
   // env > manifest the way the registry's envOverride does.
   function slotImage(manifestKey) {
-    if (manifestKey === "llama") return CONFIG.image;
-    if (manifestKey === "llamaMuse") return CONFIG.museImage;
-    return "";
+    return { llama: CONFIG.image, llamaMuse: CONFIG.museImage }[manifestKey] || "";
   }
 
   function manifestRuntime(selector) {
@@ -76,7 +74,7 @@ function createLlamaRuntimeCommandBuilder(deps) {
   // features; any other image resolves through the manifest, and one the
   // manifest does not know is a custom runtime with features {}, so every
   // gated control reads as unsupported. default marks the configured default
-  // image, which supportsB10630Controls compared against before.
+  // image, which the old b10630 feature check compared against.
   function resolveRuntime(image) {
     const slotKey = ["llama", "llamaMuse"].find((key) => slotImage(key) && slotImage(key) === image);
     const ref = (slotKey && manifestRuntime({ manifestKey: slotKey })) || manifestRuntime({ image });

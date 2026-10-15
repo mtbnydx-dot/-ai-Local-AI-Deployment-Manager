@@ -330,12 +330,12 @@ test("memory estimate helper keeps llama.cpp hetero split advice visible", () =>
 
 test("runtime compatibility keeps retired Muse blocked without deleting rollback metadata", () => {
   const mutableTagInfo = manager.resolveConfiguredLlamaImageBuildInfo({
-    museGlimmer: true,
+    defaultSlot: false,
     image: "local/llama.cpp:server-cuda-muse-62bf73d",
     imageInspectText: "null",
   });
   const labeledImageInfo = manager.resolveConfiguredLlamaImageBuildInfo({
-    museGlimmer: true,
+    defaultSlot: false,
     image: "local/llama.cpp:server-cuda-muse-62bf73d",
     imageInspectText: JSON.stringify({
       "org.opencontainers.image.revision": "62bf73d25c53b8161f8a22894d4f90c4aebbd7d0",

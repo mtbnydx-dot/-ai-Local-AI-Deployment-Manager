@@ -1161,6 +1161,18 @@
       },
       "findings": [
         {
+          "severity": "ok",
+          "title": {
+            "zh": "Qwen3.8 专用运行时",
+            "en": "Qwen3.8 runtime"
+          },
+          "detail": {
+            "zh": "将使用固定 digest 的 Pennyroyal v2.5.1。",
+            "en": "Uses Pennyroyal v2.5.1 at its pinned digest."
+          },
+          "ifMatched": true
+        },
+        {
           "from": "mismatch"
         },
         {

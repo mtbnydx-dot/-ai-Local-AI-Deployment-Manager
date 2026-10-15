@@ -307,8 +307,10 @@ const {
 
 const llamaImageBuildInfoCache = new Map();
 
+// defaultSlot: the image is this manager's default llama.cpp slot, whose
+// pinned build stands in when neither the environment nor a label names one.
 function resolveConfiguredLlamaImageBuildInfo({
-  museGlimmer = false,
+  defaultSlot = true,
   image = "",
   buildEnv = "",
   revisionEnv = "",
@@ -329,7 +331,7 @@ function resolveConfiguredLlamaImageBuildInfo({
     build = `b${buildNumber}`;
   }
   if (!revision && labelRevision) revision = labelRevision;
-  if (!buildNumber && !museGlimmer && image === DEFAULT_LLAMA_IMAGE) {
+  if (!buildNumber && defaultSlot && image === DEFAULT_LLAMA_IMAGE) {
     buildNumber = DEFAULT_LLAMA_IMAGE_BUILD;
     build = `b${buildNumber}`;
     source = "pinned-default";
@@ -344,22 +346,48 @@ function resolveConfiguredLlamaImageBuildInfo({
   };
 }
 
+// The manifest runtime slots this manager configures: the image and the
+// environment that names its build and revision.
+const DEFAULT_LLAMA_SLOT = "llama";
+const LLAMA_IMAGE_SLOTS = Object.freeze({
+  llama: Object.freeze({ image: () => CONFIG.image, buildEnv: "LLAMA_IMAGE_BUILD", revisionEnv: "LLAMA_IMAGE_REVISION" }),
+  llamaMuse: Object.freeze({ image: () => CONFIG.museImage, buildEnv: "LLAMA_MUSE_IMAGE_BUILD", revisionEnv: "LLAMA_MUSE_IMAGE_REVISION" }),
+});
+
+// The slot a GGUF architecture runs on (D5): the runtime of the llama.cpp
+// recipe its family selects (the Muse Glimmer recipe pins llamaMuse), else
+// the default llama slot.
+function llamaImageSlot(architecture = "") {
+  const ggufArchitecture = String(architecture || "").trim().toLowerCase();
+  if (!ggufArchitecture) return DEFAULT_LLAMA_SLOT;
+  const subject = { ggufArchitecture, allowNameFallback: false };
+  const capabilityIds = core.loadModelCapabilityMatrix().entries
+    .filter((entry) => core.matchesCapabilityEntry(entry.id, subject))
+    .map((entry) => entry.id);
+  const top = capabilityIds.length
+    ? core.engines.recipes.matchRecipes({ engineId: "llamacpp", model: { capabilityIds } }).find((item) => item.eligible)
+    : null;
+  const ref = top?.recipe.runtime?.ref;
+  return ref && LLAMA_IMAGE_SLOTS[ref] ? ref : DEFAULT_LLAMA_SLOT;
+}
+
 async function getConfiguredLlamaImageBuildInfo(architecture = "") {
-  const museGlimmer = String(architecture || "").trim().toLowerCase() === "muse-glimmer";
-  const image = museGlimmer ? CONFIG.museImage : CONFIG.image;
-  const cacheKey = `${museGlimmer ? "muse" : "default"}:${image}`;
+  const slotKey = llamaImageSlot(architecture);
+  const slot = LLAMA_IMAGE_SLOTS[slotKey];
+  const image = slot.image();
+  const cacheKey = `${slotKey}:${image}`;
   const now = Date.now();
   const cached = llamaImageBuildInfoCache.get(cacheKey);
   if (cached?.value && cached.expiresAt > now) return cached.value;
-  const buildEnv = museGlimmer ? process.env.LLAMA_MUSE_IMAGE_BUILD : process.env.LLAMA_IMAGE_BUILD;
-  const revisionEnv = museGlimmer ? process.env.LLAMA_MUSE_IMAGE_REVISION : process.env.LLAMA_IMAGE_REVISION;
+  const buildEnv = process.env[slot.buildEnv];
+  const revisionEnv = process.env[slot.revisionEnv];
   const out = await docker([
     "image", "inspect", image,
     "--format", "{{json .Config.Labels}}",
   ], { rejectOnError: false }).catch(() => ({ stdout: "" }));
   const imageInspectText = String(out.stdout || "").trim();
   const value = resolveConfiguredLlamaImageBuildInfo({
-    museGlimmer,
+    defaultSlot: slotKey === DEFAULT_LLAMA_SLOT,
     image,
     buildEnv,
     revisionEnv,

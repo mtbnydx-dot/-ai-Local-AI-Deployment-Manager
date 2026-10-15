@@ -38,6 +38,37 @@ const LAYOUT_PARAMS = Object.freeze({ tensor: "tensorParallel", pipeline: "pipel
 // Pennyroyal image is the Pennyroyal recipe today.
 const RUNTIME_RECIPES = Object.freeze({ sglangPennyroyal: "pennyroyal-v251" });
 
+// The canonical architecture a checkpoint of a family has when its name or
+// model_type says more than its config declares (a remote reference without
+// config.json, an older export): Qwen3.6 MoE versus dense, DiffusionGemma
+// inside gemma4. The recipes condition on model.architectures; the first hint
+// of a family whose text, model_type or declared architecture contains one of
+// its tokens adds its architecture. Data for the legacy fact shim below, which
+// 02's ModelCard replaces.
+const LEGACY_ARCHITECTURE_HINTS = Object.freeze([
+  Object.freeze({
+    familyId: "qwen3.5-3.6",
+    architecture: "Qwen3_5MoeForConditionalGeneration",
+    names: Object.freeze(["qwen3.6-35b-a3b", "qwen3_5_moe"]),
+    modelTypes: Object.freeze(["qwen3_5_moe"]),
+    architectures: Object.freeze(["qwen3_5moe", "qwen3_5_moe"]),
+  }),
+  Object.freeze({
+    familyId: "qwen3.5-3.6",
+    architecture: "Qwen3_5ForConditionalGeneration",
+    names: Object.freeze(["qwen3.6", "qwen3_6", "qwen3-6"]),
+    modelTypes: Object.freeze(["qwen3_5"]),
+    architectures: Object.freeze(["qwen3_5"]),
+  }),
+  Object.freeze({
+    familyId: "gemma4",
+    architecture: "DiffusionGemmaForBlockDiffusion",
+    names: Object.freeze(["diffusiongemma", "diffusion_gemma"]),
+    modelTypes: Object.freeze(["diffusion_gemma"]),
+    architectures: Object.freeze(["diffusiongemma"]),
+  }),
+]);
+
 const TEXT_TYPES = new Set(["string", "path", "enum"]);
 // Today's normalizeRuntimeImage (vllm-manager/lib/launch-request.js), which
 // still validates a legacy runtimeImage (01 §9.5).
@@ -483,15 +514,88 @@ function legacyProfileToV2(profile, options = {}) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Model facts for the legacy preset and model-check paths (D5, ENG-23)
+
+// The quantisation a checkpoint declares, read the same way for every family:
+// NVFP4 in any spelling of the quantization_config (ModelOpt FP4, a ModelOpt
+// mixed-precision export, an NVFP4 algorithm) is "nvfp4"; a checkpoint with no
+// quantization_config is NVFP4 when its name says FP4; otherwise the declared
+// quant_method, or "other".
+function legacyQuantMethod(model, config) {
+  const quantization = isPlainObject(config?.quantization_config) ? config.quantization_config : null;
+  if (!quantization) return /nvfp4|fp4/.test(String(model || "").toLowerCase()) ? "nvfp4" : "other";
+  const text = JSON.stringify(quantization).toLowerCase();
+  if (text.includes("nvfp4")) return "nvfp4";
+  if (text.includes("modelopt") && (text.includes("fp4") || text.includes("mixed_precision"))) return "nvfp4";
+  const method = String(quantization.quant_method || "").trim().toLowerCase();
+  return method || "other";
+}
+
+function containsAny(text, tokens) {
+  return Boolean(text) && tokens.some((token) => text.includes(token));
+}
+
+// The chat template signature of a local checkpoint (02 template signatures),
+// which the families data needs to tell a Qwen3.8 export that declares a
+// qwen3_5 model_type from Qwen3.5/3.6. Null without a template.
+function localTemplateSignature(localPath) {
+  if (!localPath) return null;
+  const templates = require("../model-inspector/template-signatures");
+  const template = templates.readLocalTemplate(localPath);
+  if (!template?.text) return null;
+  const knowledge = require("../model-inspector/knowledge").loadKnowledge();
+  return templates.matchTemplate(template.text, knowledge)?.signatureId || null;
+}
+
+/**
+ * legacyModelFacts({ model, config, localPath }) → { capabilityIds,
+ * capabilityId?, quantMethod, architectures? }: the model facts recipes match
+ * on, for callers that have a model reference and its config.json but no
+ * ModelCard yet. capabilityIds are every family of the knowledge data the
+ * checkpoint answers to (declared identity and chat template first, the name
+ * as the last resort), in the families' evaluation order; architectures are
+ * the declared ones plus the hints above for those families.
+ */
+function legacyModelFacts({ model = "", config = null, localPath = "" } = {}) {
+  const matrix = require("../model-capability-matrix");
+  const declared = isPlainObject(config) ? config : {};
+  const quantMethod = legacyQuantMethod(model, config);
+  const subject = { model: String(model || ""), config: declared, quantMethod, templateSignature: localTemplateSignature(localPath) };
+  const capabilityIds = matrix.loadModelCapabilityMatrix().entries
+    .filter((entry) => matrix.matchesCapabilityEntry(entry.id, subject))
+    .map((entry) => entry.id);
+  const architectures = Array.isArray(declared.architectures) ? declared.architectures.map(String) : [];
+  const text = String(model || "").toLowerCase();
+  const modelType = String(declared.model_type || declared.text_config?.model_type || "").toLowerCase();
+  const declaredText = architectures.join(" ").toLowerCase();
+  const hinted = new Set();
+  for (const hint of LEGACY_ARCHITECTURE_HINTS) {
+    if (hinted.has(hint.familyId) || !capabilityIds.includes(hint.familyId)) continue;
+    if (!containsAny(text, hint.names) && !containsAny(modelType, hint.modelTypes) && !containsAny(declaredText, hint.architectures)) continue;
+    hinted.add(hint.familyId);
+    if (!architectures.includes(hint.architecture)) architectures.push(hint.architecture);
+  }
+  return {
+    capabilityIds,
+    ...(capabilityIds[0] ? { capabilityId: capabilityIds[0] } : {}),
+    quantMethod,
+    ...(architectures.length ? { architectures } : {}),
+  };
+}
+
 module.exports = {
   CODECS,
+  LEGACY_ARCHITECTURE_HINTS,
   LAYOUT_PARAMS,
   REQUEST_FIELDS,
   RUNTIME_RECIPES,
   legacyBodyToRequest,
   legacyConfigToValues,
   legacyFieldSet,
+  legacyModelFacts,
   legacyProfileToV2,
+  legacyQuantMethod,
   requestToLegacyRunOptions,
   valuesToLegacyConfig,
 };
