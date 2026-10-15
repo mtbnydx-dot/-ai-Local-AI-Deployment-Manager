@@ -3,9 +3,10 @@
 
 // The `platform` CLI (docs/overhaul/06-ops.md §6). This file is the framework
 // (argument parsing, language, exit codes, the command table) plus the read
-// commands: doctor (report only), status, logs, version, open, config, deps
-// and secrets. Lifecycle, access and deploy commands register in COMMANDS from
-// later packages; until then they answer "not available yet" with exit 1.
+// commands: doctor (report only), status, logs, version, open, config, deps,
+// post-deploy (OPS-11a) and secrets. Lifecycle, access and the remaining deploy
+// commands register in COMMANDS from later packages; until then they answer
+// "not available yet" with exit 1.
 //
 // Only node built-ins are required at load time. Every platform module is
 // required inside the command that needs it, so `doctor` still starts on an
@@ -98,7 +99,29 @@ const S = {
   "config.secretSet": { [ZH]: "（已设置）", [EN]: "(set)" },
   "config.secretUnset": { [ZH]: "（未设置）", [EN]: "(not set)" },
   "deps.title": { [ZH]: "依赖状态", [EN]: "Dependencies" },
-  "deps.notYet": { [ZH]: "deps {option} 将随部署后处理一起提供。", [EN]: "deps {option} arrives with the post-deploy package." },
+  "deps.recorded": { [ZH]: "已记录依赖状态：{count} 个包，MCP 构建：{mcp}", [EN]: "Recorded dependency state: {count} package(s), MCP build: {mcp}" },
+  "deps.installed": { [ZH]: "{package}：{status}", [EN]: "{package}: {status}" },
+  "deps.unknownPackage": { [ZH]: "没有这个包：{name}", [EN]: "No such package: {name}" },
+  "postDeploy.title": { [ZH]: "部署后处理", [EN]: "Post-deploy steps" },
+  "postDeploy.titleDry": { [ZH]: "部署后处理（仅预览，不做任何更改）", [EN]: "Post-deploy steps (plan only, nothing is changed)" },
+  "postDeploy.noManifest": { [ZH]: "需要 --manifest <部署清单路径>。", [EN]: "--manifest <path to deployment-manifest.json> is required." },
+  "postDeploy.badManifest": { [ZH]: "无法读取部署清单：{path}", [EN]: "Cannot read the deployment manifest: {path}" },
+  "postDeploy.badRestart": { [ZH]: "--restart 只能是 none、changed 或 all。", [EN]: "--restart must be none, changed or all." },
+  "postDeploy.otherRoot": { [ZH]: "该部署清单属于另一个目录（{root}），拒绝处理。", [EN]: "This manifest belongs to another root ({root}); refusing." },
+  "postDeploy.prune": { [ZH]: "清理旧文件：{count} 个（已备份到部署备份目录），保留 {kept} 个", [EN]: "Prune: {count} stale file(s) (backed up beside the deploy manifest), {kept} kept" },
+  "postDeploy.pruneDry": { [ZH]: "清理旧文件：将删除 {count} 个，保留 {kept} 个", [EN]: "Prune: would remove {count} file(s), keep {kept}" },
+  "postDeploy.pruneSkipped": { [ZH]: "清理旧文件：已跳过（--no-prune）", [EN]: "Prune: skipped (--no-prune)" },
+  "postDeploy.kept": { [ZH]: "  保留 {path}（{reason}）", [EN]: "  kept {path} ({reason})" },
+  "postDeploy.remove": { [ZH]: "  删除 {path}", [EN]: "  remove {path}" },
+  "postDeploy.dep": { [ZH]: "依赖 {package}：{status}", [EN]: "Dependencies {package}: {status}" },
+  "postDeploy.depNone": { [ZH]: "依赖：无需更新", [EN]: "Dependencies: up to date" },
+  "postDeploy.mcp": { [ZH]: "MCP 构建：{status}", [EN]: "MCP build: {status}" },
+  "postDeploy.version": { [ZH]: "version.json：{status}", [EN]: "version.json: {status}" },
+  "postDeploy.restartNone": { [ZH]: "需要重启：{list}", [EN]: "restart required: {list}" },
+  "postDeploy.restartNothing": { [ZH]: "无需重启组件。", [EN]: "No component needs a restart." },
+  "postDeploy.restartRun": { [ZH]: "运行：{command}", [EN]: "Run: {command}" },
+  "postDeploy.failed": { [ZH]: "部署后处理有步骤失败：{steps}", [EN]: "Post-deploy steps failed: {steps}" },
+  "postDeploy.done": { [ZH]: "部署后处理完成。", [EN]: "Post-deploy steps finished." },
   "deps.mcp": { [ZH]: "MCP 构建", [EN]: "MCP build" },
   "secrets.none": { [ZH]: "密钥库里还没有任何密钥。", [EN]: "The secret store is empty." },
   "secrets.unknownKey": {
@@ -810,7 +833,7 @@ function dependencyRows(ctx, registry) {
     else if (recordedHash) status = recordedHash === lockHash ? "ok" : "stale";
     else if (versionsMatch === true) status = "ok";
     else status = versionsMatch === false ? "stale" : "unknown";
-    return { package: pkg.dir, live: pkg.live === true, components: pkg.components || [], installed, lockHash, recordedHash, versionsMatch, status, ...(pkg.live ? {} : { note: pkg.reason || "test-only" }) };
+    return { package: pkg.dir, live: pkg.live === true, components: pkg.components || [], installed, lockHash, recordedHash, versionsMatch, status, ...(saved?.pendingSwap ? { pendingSwap: true } : {}), ...(pkg.live ? {} : { note: pkg.reason || "test-only" }) };
   });
 }
 
@@ -826,10 +849,28 @@ function mcpBuildRow(ctx, registry) {
   return { package: pkg.dir, exists, currentHash, stampHash, status: !exists ? "missing" : currentHash && currentHash === stampHash ? "ok" : "stale" };
 }
 
+// deps --record / --install <pkg> (06 §6.2, §9.3): the machinery post-deploy uses.
+async function cmdDepsWrite(ctx, flags, registry) {
+  const steps = require("../manager-core/platform/deploy-steps");
+  const seams = { fs: ctx.fs, now: ctx.now, ...(ctx.nodeVersion ? { nodeVersion: ctx.nodeVersion } : {}) };
+  if (flags.install) {
+    const name = String(flags.install);
+    if (!registry.packages.some((pkg) => pkg.dir === name)) throw new CliError(EXIT.USAGE, tr(ctx, "deps.unknownPackage", { name }));
+    const done = await steps.runDependencies({ aiRoot: ctx.aiRoot, registry, only: [name], force: true, npm: ctx.npm, log: (line) => ctx.err(line), ...seams });
+    if (flags.json) ctx.json({ schemaVersion: 1, ...done });
+    else for (const item of done.packages) ctx.out(tr(ctx, "deps.installed", { package: item.package, status: item.status + (item.detail ? ` (${item.detail})` : "") }));
+    return done.packages.some((item) => item.status === "failed") ? EXIT.FAILURE : EXIT.OK;
+  }
+  const done = await steps.recordDependencyState({ aiRoot: ctx.aiRoot, registry, ...seams });
+  if (flags.json) ctx.json({ schemaVersion: 1, ...done });
+  else ctx.out(tr(ctx, "deps.recorded", { count: done.packages.filter((item) => item.status === "recorded").length, mcp: done.mcp ? done.mcp.status : "-" }));
+  return EXIT.OK;
+}
+
 async function cmdDeps(ctx, { flags }) {
-  if (flags.record || flags.install) throw new CliError(EXIT.FAILURE, tr(ctx, "deps.notYet", { option: flags.record ? "--record" : "--install" }));
   const config = loadConfig(ctx);
   const { registry } = loadRegistry(ctx, config);
+  if (flags.record || flags.install) return cmdDepsWrite(ctx, flags, registry);
   const packages = dependencyRows(ctx, registry);
   const mcp = mcpBuildRow(ctx, registry);
   const problems = packages.filter((row) => row.live && (row.status === "missing" || row.status === "stale")).length + (mcp && mcp.status !== "ok" ? 1 : 0);
@@ -839,6 +880,93 @@ async function cmdDeps(ctx, { flags }) {
   for (const line of table([["PACKAGE", "STATUS", "LOCK"], ...rows])) ctx.out(`  ${line}`);
   if (mcp) ctx.out(`  ${tr(ctx, "deps.mcp")}: ${mcp.status}`);
   return problems ? EXIT.FAILURE : EXIT.OK;
+}
+
+// ---------------------------------------------------------------------------
+// post-deploy (06 §9.3). deploy-worktree.ps1 calls it with the deploy backup's
+// manifest; the steps live in manager-core/platform/deploy-steps.js.
+
+const POST_DEPLOY_LIST_LIMIT = 40;
+
+function samePath(left, right) {
+  const norm = (value) => path.resolve(value).replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? norm(left).toLowerCase() === norm(right).toLowerCase() : norm(left) === norm(right);
+}
+
+function printList(ctx, key, items, render) {
+  for (const item of items.slice(0, POST_DEPLOY_LIST_LIMIT)) ctx.out(tr(ctx, key, render(item)));
+  if (items.length > POST_DEPLOY_LIST_LIMIT) ctx.out(`  … +${items.length - POST_DEPLOY_LIST_LIMIT}`);
+}
+
+function printRestart(ctx, mode, ids, reexec, commands, dry) {
+  if (!ids.length && !reexec) { ctx.out(tr(ctx, "postDeploy.restartNothing")); return; }
+  const list = [...(reexec ? ["supervisor"] : []), ...ids].join(", ");
+  if (mode === "none" || dry) ctx.out(tr(ctx, "postDeploy.restartNone", { list }));
+  if (mode !== "none" && !dry) for (const command of commands) ctx.out(tr(ctx, "postDeploy.restartRun", { command }));
+}
+
+function printPostDeployPlan(ctx, plan) {
+  const [prune, deps, build, version, restart] = plan.steps;
+  ctx.out(tr(ctx, "postDeploy.titleDry"));
+  if (prune.skipped) ctx.out(tr(ctx, "postDeploy.pruneSkipped"));
+  else {
+    ctx.out(tr(ctx, "postDeploy.pruneDry", { count: prune.candidates.length, kept: prune.kept.length }));
+    printList(ctx, "postDeploy.remove", prune.candidates, (item) => ({ path: item.path }));
+    printList(ctx, "postDeploy.kept", prune.kept, (item) => ({ path: item.path, reason: item.reason }));
+  }
+  const changes = deps.packages.filter((step) => step.action !== "ok" && step.action !== "skip");
+  if (!changes.length) ctx.out(tr(ctx, "postDeploy.depNone"));
+  for (const step of changes) ctx.out(tr(ctx, "postDeploy.dep", { package: step.package, status: `${step.action} (${step.reason})` }));
+  ctx.out(tr(ctx, "postDeploy.mcp", { status: build.needed ? `build (${build.reason})` : build.reason === "no_build_package" || build.reason === "package_missing" ? "-" : "current" }));
+  ctx.out(tr(ctx, "postDeploy.version", { status: `write ${version.version || version.commit || "-"}` }));
+  printRestart(ctx, restart.mode, restart.ids, restart.reexec, [], true);
+}
+
+function printPostDeployResult(ctx, result) {
+  ctx.out(tr(ctx, "postDeploy.title"));
+  ctx.out(result.pruneSkipped ? tr(ctx, "postDeploy.pruneSkipped") : tr(ctx, "postDeploy.prune", { count: result.pruned.length, kept: result.kept.length }));
+  printList(ctx, "postDeploy.kept", result.kept, (item) => ({ path: item.path, reason: item.reason }));
+  const changes = result.dependencies.filter((item) => item.status && item.status !== "ok" && item.status !== "skipped");
+  if (!changes.length) ctx.out(tr(ctx, "postDeploy.depNone"));
+  for (const item of changes) ctx.out(tr(ctx, "postDeploy.dep", { package: item.package || "-", status: item.status + (item.detail ? ` (${item.detail})` : "") }));
+  if (result.mcp) ctx.out(tr(ctx, "postDeploy.mcp", { status: result.mcp.status + (result.mcp.detail ? ` (${result.mcp.detail})` : "") }));
+  if (result.version) ctx.out(tr(ctx, "postDeploy.version", { status: result.version.written ? "ok" : `failed (${result.version.code})` }));
+  const restart = result.restartResult;
+  if (restart) printRestart(ctx, restart.mode, restart.ids, restart.reexec, restart.commands, false);
+  ctx.out(tr(ctx, result.ok ? "postDeploy.done" : "postDeploy.failed", { steps: result.failed.join(", ") }));
+}
+
+async function cmdPostDeploy(ctx, { flags }) {
+  if (!flags.manifest) throw usageError(ctx, tr(ctx, "postDeploy.noManifest"));
+  const mode = flags.restart === undefined ? "none" : String(flags.restart);
+  if (!["none", "changed", "all"].includes(mode)) throw usageError(ctx, tr(ctx, "postDeploy.badRestart"));
+  const manifestFile = path.resolve(String(flags.manifest));
+  let manifest = null;
+  try {
+    const text = fs.readFileSync(manifestFile, "utf8");
+    manifest = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch { /* reported below */ }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest) || !manifest.files) {
+    throw new CliError(EXIT.FAILURE, tr(ctx, "postDeploy.badManifest", { path: path.basename(manifestFile) }));
+  }
+  // A manifest names the live root it deployed to; never prune another one.
+  if (manifest.liveRoot && !samePath(String(manifest.liveRoot), ctx.aiRoot)) {
+    throw new CliError(EXIT.FAILURE, tr(ctx, "postDeploy.otherRoot", { root: path.basename(String(manifest.liveRoot)) }));
+  }
+  const config = loadConfig(ctx);
+  const { registry } = loadRegistry(ctx, config);
+  const steps = require("../manager-core/platform/deploy-steps");
+  const result = await steps.executePostDeploy({
+    aiRoot: ctx.aiRoot, manifest, manifestFile, registry, restart: mode,
+    noPrune: flags["no-prune"] === true, dryRun: flags["dry-run"] === true,
+    fs: ctx.fs, npm: ctx.npm, now: ctx.now, restartAdapter: ctx.restartAdapter,
+    ...(ctx.nodeVersion ? { nodeVersion: ctx.nodeVersion } : {}),
+    log: (line) => ctx.err(line),
+  });
+  if (flags.json) ctx.json(result);
+  else if (result.dryRun) printPostDeployPlan(ctx, result.plan);
+  else printPostDeployResult(ctx, result);
+  return result.ok ? EXIT.OK : EXIT.FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,6 +1218,12 @@ const COMMANDS = {
     spec: { bool: ["json", "record"], value: ["install"], max: 0 },
     run: cmdDeps,
   },
+  "post-deploy": {
+    usage: "post-deploy --manifest <path> [--restart none|changed|all] [--no-prune] [--dry-run] [--json]",
+    summary: { [ZH]: "部署后处理（内部使用，由部署脚本调用）", [EN]: "Post-deploy steps (internal; called by the deploy script)" },
+    spec: { bool: ["json", "no-prune", "dry-run"], value: ["manifest", "restart"], max: 0 },
+    run: cmdPostDeploy,
+  },
   secrets: {
     usage: "secrets list|set <key>|clear <key>|copy <key>|migrate|export-legacy --namespace n",
     summary: { [ZH]: "管理密钥库（值从不出现在命令行或屏幕上）", [EN]: "Manage the secret store (values never appear on the command line or screen)" },
@@ -1110,7 +1244,6 @@ const PLANNED = {
   exposure: { package: "OPS-7c", usage: "exposure scan [--json] | exposure setup [args…]", summary: { [ZH]: "对外暴露检查与设置", [EN]: "Exposure scan and setup" } },
   autostart: { package: "OPS-12", usage: "autostart enable [--profile p] | disable | status", summary: { [ZH]: "登录自启动", [EN]: "Start at logon" } },
   deploy: { package: "OPS-11b", usage: "deploy [--restart none|changed|all] [--skip-tests] [--no-prune] [--allow-live-drift] [--yes] [--dry-run]", summary: { [ZH]: "从工作区部署到线上目录", [EN]: "Deploy a worktree to the live root" } },
-  "post-deploy": { package: "OPS-11a", usage: "post-deploy --manifest <path> [--restart …] [--no-prune] [--dry-run]", summary: { [ZH]: "部署后处理（内部使用）", [EN]: "Post-deploy steps (internal)" } },
   update: { package: "OPS-11b", usage: "update [--check]", summary: { [ZH]: "更新线上目录", [EN]: "Update the live root" } },
 };
 

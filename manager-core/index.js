@@ -119,6 +119,7 @@ const PLATFORM_MODULES = Object.freeze({
   components: "./platform/components",
   config: "./platform/config",
   control: "./platform/control",
+  deploySteps: "./platform/deploy-steps",
   doctor: "./platform/doctor",
   doctorCli: "./platform/doctor-cli",
   doctorFix: "./platform/doctor-fix",
