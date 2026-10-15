@@ -12,7 +12,7 @@ import { useEffect, useId, useRef, useState } from "../ui/vendor.js";
 import { Button } from "./button.js";
 import { Dialog } from "./dialog.js";
 
-// typeToConfirm is compared exactly; onConfirm resolving closes via onClose('confirmed'), rejecting keeps it open.
+// body is text, or a node for a dialog that asks for more than a phrase (rotate asks for the overlap). typeToConfirm is compared exactly; onConfirm resolving closes via onClose('confirmed'), rejecting keeps it open.
 export function ConfirmDialog({ open, title, body, details = [], confirmLabel, cancelLabel, tone = "default", typeToConfirm, onConfirm, onClose, testid }) {
   const i18n = useT();
   const { t } = i18n;
@@ -53,7 +53,7 @@ export function ConfirmDialog({ open, title, body, details = [], confirmLabel, c
     <${Button} variant=${danger ? "danger" : "primary"} onClick=${confirm} busy=${busy} disabled=${!matches} testid="dialog.confirm"
       data-autofocus=${!typeToConfirm && !danger ? "" : undefined}>${confirmLabel || t("common.confirm")}<//>`;
   return html`<${Dialog} open=${open} title=${title} tone=${tone} dismissible=${!busy} onClose=${onClose} footer=${footer} testid=${testid || "confirm-dialog.root"}>
-    ${body ? html`<p>${body}</p>` : null}
+    ${typeof body === "string" ? html`<p>${body}</p>` : body || null}
     ${details.length ? html`<ul class="confirm-details">${details.map((line, index) => html`<li key=${index}>${line}</li>`)}</ul>` : null}
     ${typeToConfirm ? html`<div class="field confirm-type">
       <label class="field-label" for=${`${id}-in`}>${t("common.typeToConfirm")} <code class="code-inline" data-testid="dialog.expected">${typeToConfirm}</code></label>

@@ -1,0 +1,62 @@
+{
+  "ok": true,
+  "key": {
+    "id": "k_new66666666666666666",
+    "name": "Frank friend",
+    "preview": "sk-plat-Q…9xZk",
+    "status": "active",
+    "class": "friend",
+    "customerId": null,
+    "holder": "Frank",
+    "scopes": [
+      "models.read",
+      "self.read",
+      "chat",
+      "messages"
+    ],
+    "models": [
+      "*"
+    ],
+    "fleetAllow": [],
+    "listeners": [
+      "public"
+    ],
+    "limits": {
+      "rpm": 30,
+      "tpm": 100000,
+      "maxConcurrent": 2,
+      "maxQueued": null,
+      "queueTimeoutSeconds": null,
+      "requestTimeoutSeconds": null,
+      "dailyTokens": 2000000,
+      "monthlyTokens": null,
+      "dailyRequests": null,
+      "maxOutputTokens": 8192
+    },
+    "allowedOrigins": [],
+    "allowedIps": [],
+    "labels": {
+      "preset": "friend"
+    },
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+    "notes": null,
+    "billing": {
+      "scope": "platform",
+      "clientId": "k_new66666666666666666"
+    },
+    "legacy": null,
+    "createdAt": "2026-09-01T08:00:00.000Z",
+    "createdBy": "session:3f2a",
+    "lastUsedAt": null,
+    "lastUsedCountry": null,
+    "rotation": null
+  },
+  "secret": "sk-plat-TESTONLYFAKEKEY0000000000000000000000000",
+  "share": {
+    "openaiBase": "https://ai.example.test/v1",
+    "anthropicBase": "https://ai.example.test/anthropic",
+    "portalUrl": "https://ai.example.test/",
+    "recommendedModel": "qwen3.8-flash",
+    "snippetCurl": "curl https://ai.example.test/v1/chat/completions \\\n  -H \"Authorization: Bearer sk-plat-TESTONLYFAKEKEY0000000000000000000000000\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\":\"qwen3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}'"
+  }
+}

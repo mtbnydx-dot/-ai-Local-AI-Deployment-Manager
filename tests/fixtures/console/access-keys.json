@@ -1,0 +1,217 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "id": "k_alice22222222222222",
+      "name": "Alice laptop",
+      "preview": "sk-plat-Q…9xZk",
+      "status": "active",
+      "class": "friend",
+      "customerId": null,
+      "holder": "Alice",
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "messages"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [],
+      "listeners": [
+        "public"
+      ],
+      "limits": {
+        "rpm": 30,
+        "tpm": 100000,
+        "maxConcurrent": 2,
+        "maxQueued": null,
+        "queueTimeoutSeconds": null,
+        "requestTimeoutSeconds": null,
+        "dailyTokens": 2000000,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": 8192
+      },
+      "allowedOrigins": [],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": "2099-01-01T00:00:00.000Z",
+      "notes": null,
+      "billing": {
+        "scope": "platform",
+        "clientId": "k_alice22222222222222"
+      },
+      "legacy": null,
+      "createdAt": "2026-09-01T08:00:00.000Z",
+      "createdBy": "session:3f2a",
+      "lastUsedAt": "2026-10-14T08:00:00.000Z",
+      "lastUsedCountry": "DE",
+      "rotation": null
+    },
+    {
+      "id": "k_bob3333333333333333",
+      "name": "Bob trial",
+      "preview": "sk-plat-Q…9xZk",
+      "status": "active",
+      "class": "trial",
+      "customerId": null,
+      "holder": "Bob",
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "messages"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [],
+      "listeners": [
+        "public"
+      ],
+      "limits": {
+        "rpm": 10,
+        "tpm": 50000,
+        "maxConcurrent": null,
+        "maxQueued": null,
+        "queueTimeoutSeconds": null,
+        "requestTimeoutSeconds": null,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": "2020-01-01T00:00:00.000Z",
+      "notes": null,
+      "billing": {
+        "scope": "platform",
+        "clientId": "k_bob3333333333333333"
+      },
+      "legacy": null,
+      "createdAt": "2019-12-01T08:00:00.000Z",
+      "createdBy": "session:3f2a",
+      "lastUsedAt": "2019-12-30T08:00:00.000Z",
+      "lastUsedCountry": "US",
+      "rotation": null
+    },
+    {
+      "id": "k_carol444444444444444",
+      "name": "Carol app",
+      "preview": "sk-plat-Q…9xZk",
+      "status": "active",
+      "class": "internal",
+      "customerId": null,
+      "holder": "Carol",
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "messages"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [],
+      "listeners": [
+        "public",
+        "admin"
+      ],
+      "limits": {
+        "rpm": 600,
+        "tpm": null,
+        "maxConcurrent": 16,
+        "maxQueued": null,
+        "queueTimeoutSeconds": null,
+        "requestTimeoutSeconds": null,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": null,
+      "notes": null,
+      "billing": {
+        "scope": "platform",
+        "clientId": "k_carol444444444444444"
+      },
+      "legacy": null,
+      "createdAt": "2020-01-01T08:00:00.000Z",
+      "createdBy": "session:3f2a",
+      "lastUsedAt": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    },
+    {
+      "id": "k_dave5555555555555555",
+      "name": "Dave revoked",
+      "preview": "sk-plat-Q…9xZk",
+      "status": "revoked",
+      "class": "customer",
+      "customerId": "3f0c2b1e-8a47-4d6e-9b1a-5c2d7e9f0a11",
+      "holder": null,
+      "scopes": [
+        "models.read",
+        "self.read",
+        "chat",
+        "messages"
+      ],
+      "models": [
+        "*"
+      ],
+      "fleetAllow": [],
+      "listeners": [
+        "public"
+      ],
+      "limits": {
+        "rpm": null,
+        "tpm": null,
+        "maxConcurrent": null,
+        "maxQueued": null,
+        "queueTimeoutSeconds": null,
+        "requestTimeoutSeconds": null,
+        "dailyTokens": null,
+        "monthlyTokens": null,
+        "dailyRequests": null,
+        "maxOutputTokens": null
+      },
+      "allowedOrigins": [],
+      "allowedIps": [],
+      "labels": {},
+      "expiresAt": "2099-01-01T00:00:00.000Z",
+      "notes": null,
+      "billing": {
+        "scope": "platform",
+        "clientId": "k_dave5555555555555555"
+      },
+      "legacy": null,
+      "createdAt": "2026-08-01T08:00:00.000Z",
+      "createdBy": "session:3f2a",
+      "lastUsedAt": null,
+      "lastUsedCountry": null,
+      "rotation": null
+    }
+  ],
+  "nextCursor": null,
+  "counts": {
+    "total": 4,
+    "active": 3,
+    "disabled": 0,
+    "revoked": 1,
+    "expired": 1,
+    "byClass": {
+      "owner": 0,
+      "internal": 1,
+      "friend": 1,
+      "trial": 1,
+      "customer": 1
+    }
+  }
+}
