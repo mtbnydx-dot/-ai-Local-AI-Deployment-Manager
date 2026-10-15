@@ -4,9 +4,10 @@
 //
 // One object owns the TelemetryStore (service-entry/data/telemetry.sqlite,
 // worker thread), the gateway recorder (TEL-5) and the collectors that run in
-// the entry (the EventCollector, TEL-9, and the RuntimeCollector, TEL-7). The runtime and GPU collectors
-// (TEL-8), the query routes (TEL-11) and the internal ingest (TEL-6)
-// attach to the same object.
+// the entry (the EventCollector, TEL-9, and the RuntimeCollector, TEL-7) and
+// the alert engine with its notifier (TEL-13). The GPU collector (TEL-8), the
+// query routes (TEL-11) and the internal ingest (TEL-6) attach to the same
+// object.
 //
 // - The GatewayRecorder (manager-core/telemetry/recorder.js) is created with
 //   the runtime and writes through the store once it is open; rows that are
@@ -15,7 +16,8 @@
 //   the legacy gateway-access.log from finalised rows (§6.5).
 
 // - Events come in only through events.subscribe() on the ENT-EV bus; this
-//   module never publishes and never edits the bus. Manager `jobs` and
+//   module never edits the bus. The notifier of the alert engine is its one
+//   publisher, and only of "alerts" and "notification" (04 section 12). Manager `jobs` and
 //   `instances` arrive through ENT-EV's manager relay.
 // - Telemetry is never on a request's path. A store that cannot open leaves
 //   the store in degraded mode (writes are counted and dropped), a collector
@@ -25,12 +27,15 @@
 //   DOCKER_EXE), and only through `docker events`; telemetry never starts
 //   Docker Desktop or a WSL distro.
 
+const fs = require("node:fs");
 const path = require("node:path");
 const { openTelemetryStore } = require("../../manager-core/telemetry/store");
 const { createEventCollector, dockerEventSourceFromEnv } = require("../../manager-core/telemetry/collectors/events");
 const { createGatewayRecorder } = require("../../manager-core/telemetry/recorder");
 const { createGatewayLatencyWindow, createRuntimeCollector } = require("../../manager-core/telemetry/collectors/runtime");
 const { redactSecrets } = require("../../manager-core/secret-redactor");
+const { createAlertEngine, createManagerHealthSource, diskRootsFrom, readDiskFree } = require("../../manager-core/telemetry/alerts");
+const { createNotifier } = require("../../manager-core/telemetry/notify");
 
 const DEFAULT_DB_FILE = "telemetry.sqlite";
 const STOP_FLUSH_MS = 2000;
@@ -140,6 +145,10 @@ function normalizeLogger(logger) {
  *   engines without histograms; by default a window over the recorded rows.
  * - docker: a docker event source ({precheck, open}), false to skip docker,
  *   or {spawn, execFile} for the default one built from the environment.
+ * - alerts: false to run no alert engine; an object overrides its parts
+ *   ({intervalMs, sources, fetch, lookup, sleep, consoleBase}). secretStore is
+ *   the secret vault (get/has by namespace), getAudit() the entry's audit
+ *   object ({scheduler}) and events the bus the notifier publishes on.
  * Returns { start(), stop(), recorder, handleHttp, handleInternal, status(),
  * recordConfigChange(section, change, extra) }.
  */
@@ -160,6 +169,8 @@ function createTelemetryRuntime(options = {}) {
   let store = null;
   let events = null;
   let runtimeCollector = null;
+  let alertEngine = null;
+  let alertNotifier = null;
   let started = false;
   let starting = null;
   let stopped = false;
@@ -259,6 +270,7 @@ function createTelemetryRuntime(options = {}) {
     });
     events.start();
     startRuntimeCollector();
+    startAlerts();
   }
 
   // The entry's cached instances (00 §4.1) as the RuntimeCollector reads them.
@@ -306,6 +318,167 @@ function createTelemetryRuntime(options = {}) {
     runtimeCollector.start();
   }
 
+  // --- alerts (TEL-13) ---
+
+  let secretVault;
+  function vault() {
+    if (options.secretStore) return options.secretStore;
+    if (secretVault === undefined) {
+      try {
+        secretVault = require("../../manager-core/secret-store").createSecretVault({ aiRoot });
+      } catch {
+        secretVault = null;
+      }
+    }
+    return secretVault;
+  }
+
+  // The vault is opened on the first webhook that needs a secret, so a
+  // platform without webhooks never touches it.
+  const lazySecrets = {
+    async has(namespace, key) {
+      const target = vault();
+      if (!target) throw new Error("no secret store");
+      return target.has(namespace, key);
+    },
+    async get(namespace, key) {
+      const target = vault();
+      if (!target) throw new Error("no secret store");
+      return target.get(namespace, key);
+    },
+  };
+
+  let webhookCache = { at: 0, list: [] };
+  // telemetry.alerts.webhooks (04 section 13.3), live: re-read at most every 5 s.
+  function liveWebhooks() {
+    if (webhookCache.at && now() - webhookCache.at < LIVE_SETTINGS_TTL_MS) return webhookCache.list;
+    const given = configOption();
+    const section = isPlainObject(given) && Object.keys(given).length ? given : readTelemetrySection(aiRoot, env);
+    const list = isPlainObject(section.alerts) && Array.isArray(section.alerts.webhooks) ? section.alerts.webhooks : [];
+    webhookCache = { at: now(), list };
+    return list;
+  }
+
+  // The legacy GPU guards (manager-core/gpu-guard.js) are warn-only settings
+  // per manager. Their limits seed gpu_temp_high and gpu_power_cap once (04
+  // section 13.2); the strictest enabled limit of the managers wins. null
+  // means the settings could not be read, which does not use up the migration.
+  function readGuardSettings() {
+    if (!managers.length) return null;
+    let normalize;
+    try {
+      normalize = require("../../manager-core/settings-stores").normalizeAutomationSettings;
+    } catch {
+      return null;
+    }
+    let tempLimitC = null;
+    let powerLimitPct = null;
+    for (const manager of managers) {
+      if (!manager || !manager.root) continue;
+      let raw = {};
+      try {
+        raw = JSON.parse(fs.readFileSync(path.join(manager.root, "logs", "automation-settings.json"), "utf8").replace(/^\uFEFF/, ""));
+      } catch (error) {
+        if (error && error.code !== "ENOENT") return null;
+      }
+      const settings = normalize(raw);
+      if (settings.tempGuardEnabled) tempLimitC = tempLimitC === null ? settings.tempLimitC : Math.min(tempLimitC, settings.tempLimitC);
+      if (settings.powerGuardEnabled) powerLimitPct = powerLimitPct === null ? settings.powerLimitPct : Math.min(powerLimitPct, settings.powerLimitPct);
+    }
+    return { tempGuardEnabled: tempLimitC !== null, tempLimitC, powerGuardEnabled: powerLimitPct !== null, powerLimitPct };
+  }
+
+  // instance.down: a ready, non-external instance with three failed scrapes in
+  // a row (the RuntimeCollector's streak), or one whose lifecycle is crashed.
+  async function alertInstances() {
+    const list = await listFleetInstances();
+    const fleets = runtimeCollector ? (runtimeCollector.status().fleets || {}) : {};
+    return list
+      .filter((instance) => !instance.external)
+      .map((instance) => {
+        const lifecycleState = String(instance.lifecycleState || "").toLowerCase();
+        return {
+          fleetId: instance.fleetId,
+          lifecycleState,
+          expectedReady: lifecycleState === "ready",
+          failures: fleets[instance.fleetId] ? fleets[instance.fleetId].consecutiveFailures || 0 : 0,
+        };
+      });
+  }
+
+  // audit.export_failed and audit.chain_risk from the audit scheduler (TEL-16).
+  async function alertAudit() {
+    const audit = typeof options.getAudit === "function" ? options.getAudit() : null;
+    const scheduler = audit && audit.scheduler;
+    if (!scheduler || typeof scheduler.describe !== "function" || typeof scheduler.retention !== "function") return null;
+    const [described, kept] = await Promise.all([scheduler.describe(), scheduler.retention()]);
+    const exports = Array.isArray(kept.exports) ? kept.exports : [];
+    const hasFull = exports.some((item) => !item.mode || item.mode === "full");
+    let chainRisk = Boolean(kept.plan && kept.plan.needsRebaseline) || (exports.length > 0 && !hasFull);
+    // With no export at all and no schedule there is no chain to protect yet.
+    if (!exports.length) chainRisk = described.enabled ? true : null;
+    return { exportFailed: Boolean(described.lastError), chainRisk };
+  }
+
+  function alertCollectors() {
+    const out = [];
+    const t = now();
+    for (const [name, collector] of Object.entries(api.collectors)) {
+      if (!collector || typeof collector.status !== "function") continue;
+      const status = collector.status() || {};
+      const lastOkAt = Number.isFinite(status.lastOkAt) ? status.lastOkAt : Number.isFinite(status.lastTickAt) ? status.lastTickAt : null;
+      let ok = status.state === "ok" || status.state === "idle";
+      // A collector that is still ticking is fresh even while one of its
+      // sources is degraded (no Docker for the events collector, one manager
+      // down for the runtime collector); manager.down covers that.
+      if (name === "events") ok = status.state !== "stopped";
+      else if (name === "runtime" && Number.isFinite(status.lastTickAt) && Number.isFinite(status.intervalMs)) ok = ok || t - status.lastTickAt < 3 * status.intervalMs;
+      out.push({ name, ok, ...(lastOkAt !== null ? { lastOkAt } : {}) });
+    }
+    if (recorder) out.push({ name: "recorder", ok: Boolean(recorder.stats().running) });
+    return out;
+  }
+
+  function startAlerts() {
+    const extra = isPlainObject(options.alerts) ? options.alerts : {};
+    if (options.alerts === false || !store || typeof store.call !== "function") return;
+    alertNotifier = createNotifier({
+      events: options.events || null,
+      webhooks: liveWebhooks,
+      secretStore: lazySecrets,
+      fetch: extra.fetch,
+      lookup: extra.lookup,
+      sleep: extra.sleep,
+      now: options.now,
+      logger: options.logger,
+      record: (event) => (store ? store.insertEvents([event]) : null),
+      consoleBase: extra.consoleBase,
+    });
+    const health = client ? createManagerHealthSource({ managers, get: (managerId, target, getOptions) => client.get(managerId, target, getOptions) }) : null;
+    const sources = {
+      ...(getFleetCatalogs ? { instances: alertInstances } : {}),
+      ...(health ? { managers: () => health.poll() } : {}),
+      ...(aiRoot
+        ? { disks: () => readDiskFree(diskRootsFrom({ aiRoot, storageFile: env.MODEL_STORAGE_FILE || path.join(dataDir, "model-storage.json") })) }
+        : {}),
+      audit: alertAudit,
+      collectors: alertCollectors,
+      recorder: () => (recorder ? recorder.stats() : null),
+      ...(isPlainObject(extra.sources) ? extra.sources : {}),
+    };
+    alertEngine = createAlertEngine({
+      store: () => store,
+      notify: alertNotifier,
+      now: options.now,
+      intervalMs: extra.intervalMs,
+      sources,
+      readGuard: readGuardSettings,
+      timers: options.timers,
+      logger: options.logger,
+    });
+    alertEngine.start();
+  }
+
   function start() {
     if (!settings.enabled) return Promise.resolve(api);
     if (!starting) {
@@ -328,6 +501,12 @@ function createTelemetryRuntime(options = {}) {
     events = null;
     const runtime = runtimeCollector;
     runtimeCollector = null;
+    const engine = alertEngine;
+    const notifier = alertNotifier;
+    alertEngine = null;
+    alertNotifier = null;
+    if (engine) await engine.stop().catch(() => {});
+    if (notifier) await notifier.close().catch(() => {});
     if (runtime) await runtime.stop({ flushMs }).catch(() => {});
     if (collector) await collector.stop().catch(() => {});
     // In-flight records are finalised and written before the store closes.
@@ -394,6 +573,7 @@ function createTelemetryRuntime(options = {}) {
         events: events ? events.status() : null,
         runtime: runtimeCollector ? runtimeCollector.status() : null,
       },
+      alerts: alertEngine ? alertEngine.status() : null,
     };
   }
 
@@ -412,6 +592,10 @@ function createTelemetryRuntime(options = {}) {
     recordConfigChange,
     get collectors() {
       return { events, runtime: runtimeCollector };
+    },
+    // The alert engine (TEL-13); null while telemetry or the store is off.
+    get alerts() {
+      return alertEngine;
     },
     get store() {
       return store;

@@ -1068,6 +1068,8 @@ async function startServiceEntry() {
     managerClient: routeMounts.ctx.managerClient,
     getFleetCatalogs: () => getFleetCatalogs(),
     events: routeMounts.ctx.bus,
+    // The alert engine reads the audit schedule from ctx.audit once audit-http has built it.
+    getAudit: () => routeMounts?.ctx?.audit || null,
     processExitLog: PROCESS_EXIT_LOG,
   }).then((runtime) => {
     // The telemetry routes (TEL-18) read the store through ctx at request time.

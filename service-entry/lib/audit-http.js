@@ -983,7 +983,7 @@ function mount(ctx) {
     if (!runtime) {
       runtime = buildRuntime();
       // Other entry modules ask this object for the audit session and the log.
-      ctx.audit = { checkSession: runtime.http.checkSession, logAccess: runtime.http.logAccess, sessions: runtime.http.sessions, index: runtime.index };
+      ctx.audit = { checkSession: runtime.http.checkSession, logAccess: runtime.http.logAccess, sessions: runtime.http.sessions, index: runtime.index, scheduler: runtime.scheduler };
     }
     return runtime;
   }

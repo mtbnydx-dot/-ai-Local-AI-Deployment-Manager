@@ -2,8 +2,8 @@
 
 // Telemetry routes (04 §11), mounted for /api/telemetry/ by one line in the
 // entry's route-mount table. TEL-18 serves the import endpoints and TEL-11 the
-// query, export and settings endpoints (createQueryRoutes below); the alert
-// endpoints of TEL-13 add their rows later. A path this module does not
+// query, export and settings endpoints (createQueryRoutes below) and TEL-13
+// the alert endpoints (createAlertRoutes below). A path this module does not
 // serve falls through to the entry's 404.
 //
 //   POST /api/telemetry/import {sources, dryRun}  -> {ok, runId}
@@ -324,6 +324,13 @@ function createImportRoutes(options = {}) {
 const TELEMETRY_ADMIN_ONLY_ROUTES = Object.freeze([
   Object.freeze({ method: "POST", path: IMPORT_PATH }),
   Object.freeze({ method: "GET", path: `${IMPORT_PATH}/:runId` }),
+  // The alert writes (04 section 13.4); the two alert GETs are viewer routes.
+  Object.freeze({ method: "POST", path: "/api/telemetry/alert-rules" }),
+  Object.freeze({ method: "PUT", path: "/api/telemetry/alert-rules/:ruleId" }),
+  Object.freeze({ method: "DELETE", path: "/api/telemetry/alert-rules/:ruleId" }),
+  Object.freeze({ method: "POST", path: "/api/telemetry/alerts/test" }),
+  Object.freeze({ method: "POST", path: "/api/telemetry/alerts/:ruleId/ack" }),
+  Object.freeze({ method: "POST", path: "/api/telemetry/alerts/:ruleId/silence" }),
 ]);
 
 function registerTelemetryRoutes(registry, warn = () => {}) {
@@ -1145,6 +1152,282 @@ function createQueryRoutes(options = {}) {
   return { handle };
 }
 
+// --- alert routes (TEL-13) ----------------------------------------------------------
+//
+//   GET    /api/telemetry/alerts?state=firing|all&limit    owner, or viewer (redacted)
+//   GET    /api/telemetry/alert-rules                      owner, or viewer (redacted)
+//   POST   /api/telemetry/alert-rules                      owner: a custom rule (201)
+//   PUT    /api/telemetry/alert-rules/:ruleId              owner: partial update
+//   DELETE /api/telemetry/alert-rules/:ruleId              owner: custom rules only
+//   POST   /api/telemetry/alerts/:ruleId/ack | /silence    owner
+//   POST   /api/telemetry/alerts/test                      owner
+//
+// The engine (manager-core/telemetry/alerts.js) owns the rules, the states and
+// the validation; this module authenticates, parses and maps its errors onto
+// the 00 section 4.2 envelope. Every write is recorded as config.alerts.
+
+const alertsModule = require("../../manager-core/telemetry/alerts");
+
+const ALERT_RULES_PATH = "/api/telemetry/alert-rules";
+const ALERTS_PATH = "/api/telemetry/alerts";
+const ALERT_RULE_PATH = /^\/api\/telemetry\/alert-rules\/([a-z][a-z0-9_]{2,47})$/;
+const ALERT_ACTION_PATH = /^\/api\/telemetry\/alerts\/([a-z][a-z0-9_]{2,47})\/(ack|silence)$/;
+const ALERT_BODY_BYTES = 16 * 1024;
+const ALERT_LIST_LIMIT_MAX = 500;
+const TEST_CHANNELS = Object.freeze(["inapp", "toast", "webhook"]);
+const SCOPE_KEY = /^[A-Za-z0-9._:/@*-]{1,160}$/;
+
+function publicMetrics() {
+  return alertsModule.ALERT_METRICS.map(({ id, unit, scopes, label, filters }) => ({ id, unit, scopes: [...scopes], label: { ...label }, filters: [...filters] }));
+}
+
+/**
+ * createAlertRoutes({ auth, sendJson, readJsonObjectBody, getEngine,
+ *   getRuntime, logger, now }) → { handle(req, res, url) → Promise<boolean> }.
+ * getEngine() is the runtime's alert engine (null while telemetry is off).
+ */
+function createAlertRoutes(options = {}) {
+  const auth = options.auth;
+  if (!auth || typeof auth.principal !== "function" || typeof auth.checkWrite !== "function") {
+    throw new TypeError("createAlertRoutes needs the request-auth seam");
+  }
+  const sendJson = typeof options.sendJson === "function" ? options.sendJson : (res, data, status = 200, headers = {}) => {
+    res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers });
+    res.end(JSON.stringify(data));
+  };
+  const readJsonObjectBody = options.readJsonObjectBody;
+  const getEngine = typeof options.getEngine === "function" ? options.getEngine : () => null;
+  const getRuntime = typeof options.getRuntime === "function" ? options.getRuntime : () => null;
+  const logger = options.logger || console;
+
+  function warn(line) {
+    try {
+      (typeof logger.warn === "function" ? logger.warn : console.warn).call(logger, redactSecrets(String(line)));
+    } catch {
+      // Logging never breaks a request.
+    }
+  }
+
+  function sendError(res, status, code, message, extra) {
+    sendJson(res, errorBody(code, message, extra), status);
+  }
+
+  function recordChange(changed) {
+    const runtime = getRuntime();
+    if (runtime && typeof runtime.recordConfigChange === "function") runtime.recordConfigChange("alerts", { changed }, { actor: "owner" });
+  }
+
+  // An AlertError carries its status, code and field errors; anything else is a 500.
+  function fail(res, error) {
+    if (error && error.name === "AlertError") {
+      const errors = Array.isArray(error.errors) ? error.errors.map((item) => ({ ...item, message: item.message || `${item.field}: ${item.code}` })) : undefined;
+      const hint = error.code === "builtin_rule" ? "Disable the rule instead." : error.code === "telemetry_unavailable" ? "Check /api/telemetry/status." : undefined;
+      sendError(res, Number(error.status) || 400, error.code, error.message, { errors, hint });
+      return;
+    }
+    if (error && /^telemetry_store_/.test(String(error.code || ""))) {
+      sendError(res, 503, "telemetry_unavailable", "Telemetry is not available right now.", { hint: "Check /api/telemetry/status." });
+      return;
+    }
+    warn(`telemetry-routes: an alert request failed (${(error && error.code) || "error"}): ${error && error.message}`);
+    sendError(res, 500, "internal_error", "The alert request failed.");
+  }
+
+  function callerKind(req) {
+    const who = resolveCaller(auth, req);
+    return who;
+  }
+
+  // The central redaction of 05 runs in sendJson when req.viewer is set; the
+  // module redacts as well when it runs without that guard.
+  function respond(req, res, caller, body) {
+    const central = Boolean(req.viewer && typeof req.viewer.redact === "function");
+    sendJson(res, caller !== "owner" && !central ? viewerRedaction.redactAlerts(body) : body);
+  }
+
+  function requireOwner(req, res) {
+    let allowed;
+    try {
+      allowed = auth.checkWrite(req) || {};
+    } catch {
+      allowed = { ok: false, status: 401, code: "admin_session_required" };
+    }
+    if (allowed.ok) return true;
+    req.resume?.();
+    sendError(res, Number(allowed.status) || 403, String(allowed.code || "management_local_only"), String(allowed.message || "This action needs the console owner."));
+    return false;
+  }
+
+  async function readBody(req, res) {
+    try {
+      return await readJsonObjectBody(req, ALERT_BODY_BYTES);
+    } catch (error) {
+      if (Number(error && error.status) === 413) sendError(res, 413, "request_too_large", `The request body may be at most ${ALERT_BODY_BYTES} bytes.`);
+      else sendError(res, 400, "invalid_json", "The request body must be a JSON object.");
+      return null;
+    }
+  }
+
+  function requireEngine(res) {
+    const engine = getEngine();
+    if (engine) return engine;
+    sendError(res, 503, "telemetry_unavailable", "Telemetry is not available right now.", { hint: "Check /api/telemetry/status." });
+    return null;
+  }
+
+  function badParameter(res, name, code, message) {
+    sendError(res, 400, code, message, { errors: [{ field: name, code, message }] });
+  }
+
+  async function listAlerts(req, res, url, caller) {
+    let state = "firing";
+    let limit;
+    const seen = new Set();
+    for (const [key, value] of url.searchParams) {
+      if (seen.has(key)) return badParameter(res, key, "duplicate_parameter", `Parameter ${String(key).slice(0, 40)} was given twice.`);
+      seen.add(key);
+      if (key === "state") {
+        if (value !== "firing" && value !== "all") return badParameter(res, "state", "invalid_value", "state must be firing or all.");
+        state = value;
+      } else if (key === "limit") {
+        if (!/^\d{1,4}$/.test(value) || Number(value) < 1 || Number(value) > ALERT_LIST_LIMIT_MAX) return badParameter(res, "limit", "invalid_value", `limit must be between 1 and ${ALERT_LIST_LIMIT_MAX}.`);
+        limit = Number(value);
+      } else {
+        return badParameter(res, key, "unknown_parameter", `Unknown parameter: ${String(key).slice(0, 60)}.`);
+      }
+    }
+    const engine = getEngine();
+    if (!engine) {
+      respond(req, res, caller, { ok: true, rows: [], toastChannel: "no_subscriber", degraded: true });
+      return undefined;
+    }
+    const rows = await engine.listAlerts({ state, limit });
+    respond(req, res, caller, { ok: true, rows, toastChannel: engine.toastChannel() });
+    return undefined;
+  }
+
+  async function listRules(req, res, url, caller) {
+    for (const key of url.searchParams.keys()) return badParameter(res, key, "unknown_parameter", `Unknown parameter: ${String(key).slice(0, 60)}.`);
+    const engine = getEngine();
+    if (!engine) {
+      respond(req, res, caller, { ok: true, rules: [], metrics: publicMetrics(), toastChannel: "no_subscriber", degraded: true });
+      return undefined;
+    }
+    const rules = await engine.listRules();
+    respond(req, res, caller, { ok: true, rules, metrics: publicMetrics(), toastChannel: engine.toastChannel() });
+    return undefined;
+  }
+
+  async function createRule(req, res) {
+    if (!requireOwner(req, res)) return;
+    const body = await readBody(req, res);
+    if (!body) return;
+    const engine = requireEngine(res);
+    if (!engine) return;
+    const rule = await engine.createRule(body, { actor: "owner" });
+    recordChange([`${rule.ruleId}.created`]);
+    sendJson(res, { ok: true, rule }, 201);
+  }
+
+  async function updateRule(req, res, ruleId) {
+    if (!requireOwner(req, res)) return;
+    const body = await readBody(req, res);
+    if (!body) return;
+    const engine = requireEngine(res);
+    if (!engine) return;
+    const result = await engine.updateRule(ruleId, body, { actor: "owner" });
+    recordChange((result.changed || []).map((field) => `${ruleId}.${field}`));
+    sendJson(res, { ok: true, rule: result.rule });
+  }
+
+  async function deleteRule(req, res, ruleId) {
+    if (!requireOwner(req, res)) return;
+    req.resume?.();
+    const engine = requireEngine(res);
+    if (!engine) return;
+    await engine.deleteRule(ruleId);
+    recordChange([`${ruleId}.deleted`]);
+    sendJson(res, { ok: true, ruleId });
+  }
+
+  async function ackOrSilence(req, res, ruleId, action) {
+    if (!requireOwner(req, res)) return;
+    const body = await readBody(req, res);
+    if (!body) return;
+    const scopeKey = body.scopeKey === undefined ? "*" : body.scopeKey;
+    if (typeof scopeKey !== "string" || !SCOPE_KEY.test(scopeKey)) return badParameter(res, "scopeKey", "invalid_value", "scopeKey must be a scope key such as * or gpu:0.");
+    const engine = requireEngine(res);
+    if (!engine) return;
+    if (action === "ack") {
+      sendJson(res, await engine.ack(ruleId, scopeKey, { actor: "owner" }));
+      return;
+    }
+    if (body.until !== null && typeof body.until !== "string" && !Number.isFinite(body.until)) {
+      return badParameter(res, "until", "invalid_value", "until must be an ISO time, a time in milliseconds, or null.");
+    }
+    sendJson(res, await engine.silence(ruleId, scopeKey, body.until, { actor: "owner" }));
+  }
+
+  async function sendTest(req, res) {
+    if (!requireOwner(req, res)) return;
+    const body = await readBody(req, res);
+    if (!body) return;
+    for (const key of Object.keys(body)) if (key !== "channel" && key !== "webhookId") return badParameter(res, key, "unknown_key", `Unknown field ${String(key).slice(0, 40)}.`);
+    if (!TEST_CHANNELS.includes(body.channel)) return badParameter(res, "channel", "invalid_value", "channel must be inapp, toast or webhook.");
+    if (body.webhookId !== undefined && (typeof body.webhookId !== "string" || !WEBHOOK_ID.test(body.webhookId))) return badParameter(res, "webhookId", "invalid_value", "webhookId is not a valid webhook id.");
+    if (body.channel === "webhook" && body.webhookId === undefined) return badParameter(res, "webhookId", "required", "A webhook test needs a webhookId.");
+    const engine = requireEngine(res);
+    if (!engine) return;
+    const result = await engine.sendTest({ channel: body.channel, webhookId: body.webhookId });
+    sendJson(res, result, result.error === "webhook_not_found" ? 404 : 200);
+  }
+
+  async function handle(req, res, url) {
+    const pathname = String(url && url.pathname ? url.pathname : "");
+    if (!pathname.startsWith("/api/telemetry/alert")) return false;
+    const rule = ALERT_RULE_PATH.exec(pathname);
+    const action = ALERT_ACTION_PATH.exec(pathname);
+    let route = "";
+    let allowed = [];
+    if (pathname === ALERTS_PATH) { route = "alerts"; allowed = ["GET"]; }
+    else if (pathname === `${ALERTS_PATH}/test`) { route = "test"; allowed = ["POST"]; }
+    else if (pathname === ALERT_RULES_PATH) { route = "rules"; allowed = ["GET", "POST"]; }
+    else if (rule) { route = "rule"; allowed = ["PUT", "DELETE"]; }
+    else if (action) { route = action[2]; allowed = ["POST"]; }
+    else return false;
+    const requested = String(req.method || "GET").toUpperCase();
+    const method = requested === "HEAD" ? "GET" : requested;
+    if (!allowed.includes(method)) {
+      req.resume?.();
+      sendJson(res, errorBody("method_not_allowed", `${requested} is not supported on ${pathname}.`), 405, { allow: allowed.join(", ") });
+      return true;
+    }
+    const caller = callerKind(req);
+    if (caller === "none") {
+      req.resume?.();
+      sendError(res, 401, "admin_session_required", "This needs the console owner. Open the console on this machine.", { hint: "pair" });
+      return true;
+    }
+    try {
+      if (route === "alerts") await listAlerts(req, res, url, caller);
+      else if (route === "rules" && method === "GET") await listRules(req, res, url, caller);
+      else if (route === "rules") await createRule(req, res);
+      else if (route === "test") await sendTest(req, res);
+      else if (route === "rule" && method === "PUT") await updateRule(req, res, rule[1]);
+      else if (route === "rule") await deleteRule(req, res, rule[1]);
+      else await ackOrSilence(req, res, action[1], action[2]);
+    } catch (error) {
+      if (res.headersSent) {
+        warn(`telemetry-routes: an alert request failed after the headers were sent (${(error && error.code) || "error"})`);
+        res.destroy();
+      } else fail(res, error);
+    }
+    return true;
+  }
+
+  return { handle };
+}
+
 // Owner-only routes are declared so 05's inventory lists them; the viewer
 // routes of §11.8 are registered next to them (telemetry-viewer.js).
 function registerAllTelemetryRoutes(registry, warn) {
@@ -1181,6 +1464,14 @@ function mount(ctx) {
     logger,
     now: typeof ctx.now === "function" ? ctx.now : Date.now,
   });
+  const alertRoutes = createAlertRoutes({
+    auth,
+    sendJson: ctx.sendJson,
+    readJsonObjectBody: ctx.readJsonObjectBody,
+    getEngine: () => (ctx.telemetry && ctx.telemetry.alerts) || null,
+    getRuntime: () => ctx.telemetry || null,
+    logger,
+  });
   const queries = createQueryRoutes({
     auth,
     sendJson: ctx.sendJson,
@@ -1198,6 +1489,7 @@ function mount(ctx) {
   return {
     async handle(req, res, url) {
       if (await imports.handle(req, res, url)) return true;
+      if (await alertRoutes.handle(req, res, url)) return true;
       return queries.handle(req, res, url);
     },
     close() {
@@ -1210,6 +1502,7 @@ module.exports = {
   IMPORT_PATH,
   MAX_BODY_BYTES,
   TELEMETRY_ADMIN_ONLY_ROUTES,
+  createAlertRoutes,
   createImportRoutes,
   createQueryRoutes,
   importNotification,
