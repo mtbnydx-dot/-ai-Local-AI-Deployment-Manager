@@ -930,28 +930,23 @@ async function expectUsageSummary(page, copy) {
   expect(await bars.first().locator("title").textContent()).toBe(copy.bar);
   await expect(byId(page, "billing.summary.chart-axis").locator("span")).toHaveText(["08-01", "08-16", "08-31"]);
 
-  const layout = await page.evaluate(() => {
+  // Measured until the layout settles: the lazy cards and the chart finish after the first paint.
+  const measure = () => page.evaluate(() => {
     const summary = document.querySelector('[data-testid="billing.summary"]');
     const raw = document.querySelector('[data-testid="billing.recent"]');
     const box = summary.getBoundingClientRect();
     const chart = document.querySelector('[data-testid="billing.summary.chart-svg"]').getBoundingClientRect();
+    const width = document.documentElement.clientWidth;
     return {
-      before: Boolean(summary.compareDocumentPosition(raw) & Node.DOCUMENT_POSITION_FOLLOWING),
-      summaryBottom: box.bottom,
-      rawTop: raw.getBoundingClientRect().top,
-      summaryLeft: box.left,
-      summaryRight: box.right,
-      chartRight: chart.right,
-      clientWidth: document.documentElement.clientWidth,
-      documentScrollWidth: document.documentElement.scrollWidth,
+      "the aggregate precedes the raw table": Boolean(summary.compareDocumentPosition(raw) & Node.DOCUMENT_POSITION_FOLLOWING),
+      "the aggregate ends above the raw table": box.bottom <= raw.getBoundingClientRect().top,
+      "the page does not scroll sideways": document.documentElement.scrollWidth <= width + 1,
+      "the aggregate starts inside the page": box.left >= -1,
+      "the aggregate ends inside the page": box.right <= width + 1,
+      "the chart stays inside the aggregate": chart.right <= box.right + 1,
     };
   });
-  expect(layout.before, "the aggregate precedes the raw table").toBe(true);
-  expect(layout.summaryBottom).toBeLessThanOrEqual(layout.rawTop);
-  expect(layout.documentScrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
-  expect(layout.summaryLeft).toBeGreaterThanOrEqual(-1);
-  expect(layout.summaryRight).toBeLessThanOrEqual(layout.clientWidth + 1);
-  expect(layout.chartRight).toBeLessThanOrEqual(layout.summaryRight + 1);
+  await expect.poll(async () => Object.entries(await measure()).filter(([, ok]) => !ok).map(([name]) => name)).toEqual([]);
 }
 
 test("usage shows the usage/summary aggregates above the raw table, exact, in zh and en at 390 px", async ({ browser }) => {
