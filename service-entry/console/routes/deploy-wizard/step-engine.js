@@ -156,14 +156,10 @@ export default function StepEngine({ draft, update }) {
     if (card && needsRemoteCode(card)) setConsent(view);
     else startProbe(view, false);
   }
-  function probeDone(key) {
+  // The finished probe keeps its success or failure notice (a new probe of that row replaces it); the matrix is read again.
+  function probeDone() {
     cache.invalidate(["models", "compat"]);
     compat.refetch();
-    setJobs((current) => {
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
   }
 
   if (!ref) {
@@ -190,7 +186,7 @@ export default function StepEngine({ draft, update }) {
       ${views.length ? html`<${CompatMatrix} rows=${compat.data.rows} engines=${index}
         selected=${draft.engineId ? { engineId: draft.engineId, runtimeId: draft.runtimeId } : null} probing=${starting}
         onSelect=${onSelect} onProbe=${onProbe} onOverride=${onOverride} />` : null}
-      ${Object.entries(jobs).map(([key, job]) => html`<${ProbeJob} key=${job.jobId} managerId=${job.managerId} jobId=${job.jobId} engineLabel=${job.label} onDone=${() => probeDone(key)} />`)}
+      ${Object.values(jobs).map((job) => html`<${ProbeJob} key=${job.jobId} managerId=${job.managerId} jobId=${job.jobId} engineLabel=${job.label} onDone=${probeDone} />`)}
     <//>
     ${views.length ? html`<details class="compat-why" data-testid="wizard.engine.why">
       <summary>${t("models.wizard.engine.why")}</summary>

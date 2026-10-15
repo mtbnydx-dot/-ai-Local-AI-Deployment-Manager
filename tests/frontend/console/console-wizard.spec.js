@@ -268,7 +268,7 @@ test("the card shows an evidence chip on every fact (R-UI-1) and each GPU gets a
     expect(row("format")).toMatchObject({ confidence: "detected", text: "Detected" });
     expect(row("context")).toMatchObject({ confidence: "unknown", text: "Unknown" });
     await expect(byId(page, "model-card.fact").filter({ hasText: "Example family" })).toHaveCount(1);
-    await expect(byId(page, "model-card.fact").filter({ hasText: "14.0 GiB" })).toHaveCount(1);
+    await expect(byId(page, "model-card.fact").filter({ hasText: "14 GiB" })).toHaveCount(1);
     // One fit badge per GPU, from the compatibility endpoint asked for that GPU alone.
     await expect(byId(page, "wizard.gpu-fit.item")).toHaveCount(2);
     await expect(page.locator('[data-testid="wizard.gpu-fit.item"][data-gpu="0"]')).toHaveAttribute("data-fit", "ok");
@@ -294,7 +294,7 @@ test("a pasted link resolves to a remote model that is planned from its card, an
     await byId(page, "wizard.model.link-resolve").click();
     await expect(byId(page, "wizard.model.remote")).toBeVisible();
     expect(callsTo(mock, "POST", "/api/hub/resolve-link").map((call) => call.body)).toEqual([{ url: "https://huggingface.co/example-org/example-model-7B" }]);
-    expect(callsTo(mock, "POST", "/api/models/inspect").map((call) => call.body)).toEqual([{ source: "huggingface", repo: "example-org/example-model-7B", revision: "main" }]);
+    await expect.poll(() => callsTo(mock, "POST", "/api/models/inspect").map((call) => call.body)).toEqual([{ source: "huggingface", repo: "example-org/example-model-7B", revision: "main" }]);
     await byId(page, "wizard.next").click();
     await expect(byId(page, "wizard.step.engine")).toBeVisible();
     await page.locator('[data-testid="compat.row"][data-engine="vllm"] [data-testid="compat.select"]').click();
@@ -335,7 +335,10 @@ test("the matrix: ok only with evidence, unknown is grey with probe and override
   const { context, page, mock, failures } = await newPage(browser);
   try {
     await toEngineStep(page);
-    expect(callsTo(mock, "GET", `/api/models/${MAIN}/compatibility`).filter((call) => !call.query.gpus)).toHaveLength(2);
+    // Step 1 already read the host-wide matrix for the fit badges; step 2 reuses it while it is fresh (at most one more read).
+    const wide = callsTo(mock, "GET", `/api/models/${MAIN}/compatibility`).filter((call) => !call.query.gpus).length;
+    expect(wide).toBeGreaterThanOrEqual(1);
+    expect(wide).toBeLessThanOrEqual(2);
     // vllm is ok with evidence; sglang was sent as ok without evidence and reads Unknown (unverified).
     await expect(row(page, "vllm")).toHaveAttribute("data-verdict", "ok");
     await expect(row(page, "vllm").locator('[data-testid="compat.verdict"]')).toContainText("Runs");

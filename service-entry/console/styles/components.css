@@ -833,6 +833,11 @@ dialog::backdrop {
 .model-card-facts td { overflow-wrap: anywhere; }
 .model-card-notes { margin: 0; padding: 0; list-style: none; }
 .evidence-chip { white-space: nowrap; }
+@media (max-width: 639px) {
+  .model-card-facts, .model-card-facts tbody, .model-card-facts tr, .model-card-facts th, .model-card-facts td { display: block; width: auto; }
+  .model-card-facts tr { padding-block: var(--sp-2); border-block-end: 1px solid var(--border); }
+  .model-card-facts th, .model-card-facts td { padding-block: 0; border: 0; }
+}
 .compat-list { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
 .compat-row { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-1); min-width: 0; }
 .compat-row[data-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

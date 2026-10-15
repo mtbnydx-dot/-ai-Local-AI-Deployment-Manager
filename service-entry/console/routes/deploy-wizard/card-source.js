@@ -29,14 +29,17 @@ export async function loadCard(api, modelRef) {
   return body.card;
 }
 
-/** @returns {{ card, loading, error, refetch }}; `card` is null until the first answer. */
+/** @returns {{ card, loading, error, refetch }}; `card` is null until the first answer for this very model (never the previous model's card). */
 export function useCard(modelRef, { enabled = true } = {}) {
   const { api } = useServices();
-  const query = useQuery(["models", "card", modelKey(modelRef)], () => loadCard(api, modelRef), { ttlMs: 60000, enabled: enabled && Boolean(modelRef) });
+  const key = modelKey(modelRef);
+  const query = useQuery(["models", "card", key], async () => ({ key, card: await loadCard(api, modelRef) }), { ttlMs: 60000, enabled: enabled && Boolean(modelRef), keepPrevious: false });
   const active = enabled && Boolean(modelRef);
+  // useQuery shows the previous key's view for one render after the key changes; the key stored with the answer tells them apart.
+  const current = query.data?.key === key ? query.data.card : undefined;
   return {
-    card: active ? query.data ?? null : null,
-    loading: active && !query.error && query.data === undefined,
+    card: active ? current ?? null : null,
+    loading: active && !query.error && current === undefined,
     error: active ? query.error ?? null : null,
     refetch: query.refetch,
   };

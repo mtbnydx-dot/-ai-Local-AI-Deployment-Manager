@@ -141,6 +141,15 @@ export default function DeployWizardPage({ query = {} }) {
   const plan = usePlan(draft, { card: draft.modelRef?.kind === "remote" ? card : undefined, catalog });
   const status = useMemo(() => stepStatus(draft, plan.plan, catalog), [draft, plan.plan, catalog]);
 
+  // A quick path seeds a draft once. Its query is dropped from the address afterwards, so a reload brings the
+  // stored draft back instead of starting the quick path again with a new draft id.
+  const dropQuery = () => {
+    if (quick.kind !== "none" && quick.kind !== "draft") router?.navigate?.("/deployments/new", { replace: true });
+  };
+  useEffect(() => {
+    if (quick.kind === "seed") dropQuery();
+  }, []);
+
   // Quick paths that need a request: a stored launch (clone) or a saved profile.
   useEffect(() => {
     if (quick.kind !== "clone" && quick.kind !== "profile") return undefined;
@@ -156,7 +165,10 @@ export default function DeployWizardPage({ query = {} }) {
           if (alive && loaded) setProfile(loaded);
           else if (alive) setNotice("profileMissing");
         }
-        if (alive) setQuickState("idle");
+        if (alive) {
+          setQuickState("idle");
+          dropQuery();
+        }
       } catch (error) {
         if (alive) {
           setQuickState("error");
