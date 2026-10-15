@@ -76,6 +76,8 @@ function createLlamaStartRuntimeRequest(deps) {
     listContainers = null,
     getIntrospection = null,
     modelStorage = null,
+    calibrationFor = null,
+    modelFacts = null,
   } = deps;
 
   /**
@@ -369,6 +371,8 @@ function createLlamaStartRuntimeRequest(deps) {
     listContainers,
     getIntrospection,
     modelStorage,
+    calibrationFor,
+    modelFacts,
   });
 
   async function startRuntimeRequest({ body = {} } = {}) {

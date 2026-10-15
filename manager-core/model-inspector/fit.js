@@ -1178,15 +1178,12 @@ function suggestionsFor(ctx, constants) {
 }
 
 /**
- * estimateFit(FitInput, options) -> FitResult (02 §10.2).
- *
- * options: { memoryModels (01 engines/memory-models or a stub), catalog |
- * catalogs (01 param catalogs; default the bundled ones), calibrationFor
- * (card, engineId, runtimeId, paramsKey) | calibration, recipeMemory,
- * admissionPolicy { reserveMb, maxUtilizationPct }, fitConstants,
- * suggestions (false skips them) }.
+ * The shared front half of estimateFit and of the plan's memory inputs
+ * (MOD-9b): normalized values, selected GPUs, the artifact builder and the
+ * MemoryInputs assembler. A launch plan (plan-facts) and a fit for the same
+ * card, values and host report the same estimate because both go through here.
  */
-function estimateFit(fitInput = {}, options = {}) {
+function prepareFit(fitInput = {}, options = {}) {
   const input = isPlainObject(fitInput) ? fitInput : {};
   const constants = options.constants || resolveFitConstants(options.fitConstants);
   const engineId = String(input.engineId || "");
@@ -1221,6 +1218,41 @@ function estimateFit(fitInput = {}, options = {}) {
     calibration: calibrationOf(vals),
     legacy: null,
   });
+  return { input, constants, engineId, instanceMode, budgetBasis, card, assumptions, values, gpuIds, gpus, models, recipeMemory, build, calibrationOf, inputsFor };
+}
+
+/**
+ * fitMemoryInputs(FitInput, options) -> { inputs, artifact, values, paramsKey,
+ * assumptions, engineId }: the full 01 MemoryInputs of a fit, without running
+ * the estimate. Used by the launch plan's memory step.
+ */
+function fitMemoryInputs(fitInput = {}, options = {}) {
+  const prep = prepareFit(fitInput, options);
+  const artifact = prep.build(prep.values);
+  const inputs = prep.inputsFor(prep.values, artifact);
+  return {
+    engineId: prep.engineId,
+    inputs,
+    artifact,
+    values: prep.values,
+    paramsKey: paramsKeyFor(prep.models, prep.engineId, prep.values),
+    assumptions: [...prep.assumptions, ...artifact.assumptions],
+  };
+}
+
+/**
+ * estimateFit(FitInput, options) -> FitResult (02 §10.2).
+ *
+ * options: { memoryModels (01 engines/memory-models or a stub), catalog |
+ * catalogs (01 param catalogs; default the bundled ones), calibrationFor
+ * (card, engineId, runtimeId, paramsKey) | calibration, recipeMemory,
+ * admissionPolicy { reserveMb, maxUtilizationPct }, fitConstants,
+ * suggestions (false skips them) }.
+ */
+function estimateFit(fitInput = {}, options = {}) {
+  const {
+    input, constants, engineId, instanceMode, budgetBasis, card, assumptions, values, gpuIds, gpus, models, recipeMemory, build, inputsFor,
+  } = prepareFit(fitInput, options);
 
   const artifact = build(values);
   assumptions.push(...artifact.assumptions);
@@ -1293,6 +1325,226 @@ function estimateFit(fitInput = {}, options = {}) {
     assumptions,
   };
 }
+
+// ---------------------------------------------------------------------------
+// fitGrid (02 §10.8, MOD-9b)
+// ---------------------------------------------------------------------------
+
+// 02 §11's context ladder, intersected with the card's native context.
+const CONTEXT_LADDER = Object.freeze([524288, 262144, 131072, 65536, 32768, 16384, 8192]);
+const GRID_LIMITS = Object.freeze({ kvDtypes: 4, concurrency: 8, contexts: 16, evaluationsPerCell: 12, budgetMs: 2000 });
+const GRID_MEMO_MAX = 4000;
+const gridMemo = new Map();
+
+function gridError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = 400;
+  return error;
+}
+
+/** The ladder for a native context: native first, then the rungs below it, descending. */
+function contextLadder(native) {
+  const top = count(native);
+  const rungs = CONTEXT_LADDER.filter((rung) => !top || rung < top);
+  return top ? [top, ...rungs] : [...rungs];
+}
+
+function gridKvValues(engineId, dtype) {
+  return isLlama(engineId)
+    ? { "llamacpp.cacheTypeK": dtype, "llamacpp.cacheTypeV": dtype }
+    : { kvCacheDtype: dtype };
+}
+
+function limitedByReasons(reasons) {
+  const list = Array.isArray(reasons) ? reasons : [];
+  if (list.includes("engine") && !list.includes("vram")) return "engine";
+  if (list.includes("ram")) return "ram";
+  if (list.includes("engine")) return "engine";
+  return "vram";
+}
+
+function stableString(value) {
+  if (Array.isArray(value)) return `[${value.map(stableString).join(",")}]`;
+  if (isPlainObject(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableString(value[key])}`).join(",")}}`;
+  return JSON.stringify(value === undefined ? null : value);
+}
+
+/**
+ * fitGrid(FitInput, { kvDtypes, concurrency, contexts? }, options) -> FitGrid.
+ *
+ * For every (kvDtype, concurrency) cell a binary search over the context ladder
+ * (<= the card's native context) finds the largest contextLength whose status is
+ * not "fail"; limitedBy says why the next rung fails (native | vram | ram |
+ * engine). With contexts[] the result also carries a matrix. Bounds: <= 4 kv
+ * dtypes x <= 8 concurrency values, <= 12 evaluations per cell, a 2 s budget
+ * (cells cut short carry truncated:true). Side-effect free; evaluations are
+ * memoized per (cardId, engineId, runtimeId, paramsKey) plus a digest of the
+ * remaining inputs, so a repeated grid costs no estimate calls.
+ *
+ * options: estimateFit's options plus { now() -> ms, budgetMs, memo (a Map) }.
+ */
+function fitGrid(fitInput = {}, grid = {}, options = {}) {
+  const input = isPlainObject(fitInput) ? fitInput : {};
+  const card = isPlainObject(input.card) ? input.card : null;
+  if (!card) throw Object.assign(new Error("A fit grid needs a model card."), { code: "fit_input_invalid", status: 400 });
+  const engineId = String(input.engineId || "");
+  const defaults = isLlama(engineId) ? ["f16", "q8_0"] : ["auto", "fp8"];
+  const kvDtypes = [...new Set((Array.isArray(grid.kvDtypes) && grid.kvDtypes.length ? grid.kvDtypes : defaults).map(String))];
+  const concurrencies = [...new Set((Array.isArray(grid.concurrency) && grid.concurrency.length ? grid.concurrency : [1, 2, 4, 8])
+    .map((item) => Math.floor(Number(item))))];
+  const contexts = Array.isArray(grid.contexts)
+    ? [...new Set(grid.contexts.map((item) => Math.floor(Number(item))))]
+    : [];
+  if (kvDtypes.length > GRID_LIMITS.kvDtypes || concurrencies.length > GRID_LIMITS.concurrency || contexts.length > GRID_LIMITS.contexts) {
+    throw gridError("grid_too_large", `A fit grid takes at most ${GRID_LIMITS.kvDtypes} KV dtypes, ${GRID_LIMITS.concurrency} concurrency values and ${GRID_LIMITS.contexts} contexts.`);
+  }
+  if (concurrencies.some((item) => !(item >= 1)) || contexts.some((item) => !(item >= 1))) {
+    throw gridError("invalid_value", "Concurrency and contexts are positive integers.");
+  }
+
+  const now = typeof options.now === "function" ? options.now : () => Date.now();
+  const budgetMs = Number.isFinite(options.budgetMs) ? options.budgetMs : GRID_LIMITS.budgetMs;
+  const memo = options.memo instanceof Map ? options.memo : gridMemo;
+  const started = now();
+  const expired = () => now() - started >= budgetMs;
+  const models = options.memoryModels || defaultMemoryModels();
+  const native = count(card.context?.native) || null;
+  const ladder = contextLadder(native);
+  const baseValues = plainValues(input.values);
+  const stats = { evaluations: 0, memoHits: 0 };
+
+  const hostKey = stableString({
+    gpus: normalizeHostGpus(input.host?.gpus),
+    ramFreeBytes: input.host?.ramFreeBytes ?? null,
+    gpuIds: input.gpuIds ?? null,
+    basis: input.budgetBasis ?? null,
+    mode: input.instanceMode ?? null,
+    recipe: input.recipeMemory ?? null,
+    constants: options.fitConstants ?? null,
+  });
+  const evaluate = (contextLength, concurrency, dtype) => {
+    const values = { ...baseValues, ...gridKvValues(engineId, dtype), contextLength, concurrency };
+    let key = null;
+    try {
+      const rest = { ...values };
+      for (const id of ["contextLength", "concurrency", "kvCacheDtype", "llamacpp.cacheTypeK", "llamacpp.cacheTypeV", "sglang.maxTotalTokens"]) delete rest[id];
+      key = `${card.cardId || ""}|${card.contentDigest || ""}|${engineId}|${input.runtimeId || ""}|${paramsKeyFor(models, engineId, values)}|${stableString(rest)}|${hostKey}`;
+    } catch {
+      key = null;
+    }
+    if (key && memo.has(key)) {
+      stats.memoHits += 1;
+      const hit = memo.get(key);
+      memo.delete(key);
+      memo.set(key, hit);
+      return hit;
+    }
+    stats.evaluations += 1;
+    const fitResult = estimateFit({ ...input, values }, { ...options, suggestions: false });
+    const slim = Object.freeze({
+      status: fitResult.status,
+      spill: fitResult.spill,
+      perGpuMb: fitResult.perGpuMb,
+      reasons: fitResult.statusReasons || [],
+    });
+    if (key) {
+      memo.set(key, slim);
+      while (memo.size > GRID_MEMO_MAX) memo.delete(memo.keys().next().value);
+    }
+    return slim;
+  };
+
+  const cells = [];
+  let truncatedAny = false;
+  for (const dtype of kvDtypes) {
+    for (const concurrency of concurrencies) {
+      // The ladder is descending. Memory grows with context, so rung i passing
+      // means every later (smaller) rung passes: binary search for the first
+      // (largest) passing index; ladder.length stands for "nothing passes".
+      let evaluations = 0;
+      let truncated = false;
+      const known = new Map();
+      const probe = (index) => {
+        if (known.has(index)) return known.get(index);
+        if (evaluations >= GRID_LIMITS.evaluationsPerCell || expired()) {
+          truncated = true;
+          return null;
+        }
+        evaluations += 1;
+        const result = evaluate(ladder[index], concurrency, dtype);
+        known.set(index, result);
+        return result;
+      };
+      let lo = 0;
+      let hi = ladder.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        const result = probe(mid);
+        if (!result) break;
+        if (result.status === "fail") lo = mid + 1;
+        else hi = mid;
+      }
+      let best = null;
+      for (const [index, result] of known) {
+        if (result.status !== "fail" && (best === null || index < best)) best = index;
+      }
+      const chosen = best === null ? null : known.get(best);
+      let limitedBy = "native";
+      if (best === null) {
+        const lowest = known.get(ladder.length - 1) || [...known.values()].pop();
+        limitedBy = lowest ? limitedByReasons(lowest.reasons) : "vram";
+      } else if (best > 0) {
+        limitedBy = known.has(best - 1) ? limitedByReasons(known.get(best - 1).reasons) : "vram";
+      }
+      if (truncated) truncatedAny = true;
+      cells.push({
+        kvDtype: dtype,
+        concurrency,
+        maxContext: best === null ? 0 : ladder[best],
+        limitedBy,
+        status: chosen ? chosen.status : "fail",
+        spill: chosen ? chosen.spill : false,
+        ...(truncated ? { truncated: true } : {}),
+      });
+    }
+  }
+
+  let matrix;
+  if (contexts.length) {
+    matrix = [];
+    for (const dtype of kvDtypes) {
+      for (const concurrency of concurrencies) {
+        for (const contextLength of contexts) {
+          if (expired()) {
+            truncatedAny = true;
+            matrix.push({ contextLength, concurrency, kvDtype: dtype, status: null, spill: null, perGpuMb: null, truncated: true });
+            continue;
+          }
+          const result = evaluate(contextLength, concurrency, dtype);
+          matrix.push({ contextLength, concurrency, kvDtype: dtype, status: result.status, spill: result.spill, perGpuMb: result.perGpuMb });
+        }
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    cardId: card.cardId || null,
+    engineId,
+    runtimeId: input.runtimeId || null,
+    native,
+    ladder,
+    cells,
+    ...(matrix ? { matrix } : {}),
+    ...(truncatedAny ? { truncated: true } : {}),
+    durationMs: Math.max(0, Math.round(now() - started)),
+    stats,
+  };
+}
+
+fitGrid.clearMemo = () => gridMemo.clear();
+fitGrid.LIMITS = GRID_LIMITS;
 
 // ---------------------------------------------------------------------------
 // FitResult schema (00 §4.3 memory as amended by §9.1, plus 02 grading)
@@ -1375,9 +1627,12 @@ module.exports = {
   artifactMemoryInputs,
   estimateFit,
   fitConstantsFromConfig,
+  fitGrid,
+  fitMemoryInputs,
   kvBytes,
   legacyEstimate,
   normalizeFitValues,
+  normalizeHostGpus,
   resolveFitConstants,
   validateFitResult,
 };

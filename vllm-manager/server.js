@@ -301,7 +301,7 @@ async function buildServerMemoryEstimate(body = {}) {
       maxUtilizationPct: policy.maxUtilizationPct,
       startupMarginMb: gpuAdmissionController.startupMarginMb,
     },
-  });
+  }, { resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }) });
 }
 
 const remoteModelService = createVllmRemoteModelService();
@@ -1661,6 +1661,8 @@ const startRuntimeRequest = createVllmStartRuntimeRequest({
   listContainers: () => listManagedContainers(),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
+  // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (null until MOD-10).
+  ...core.models.managerHooks({ managerId: "vllm", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatus, modelStorage, modelsRoot: CONFIG.modelsRoot }),
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller

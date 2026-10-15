@@ -285,6 +285,17 @@ function estimateLlamaMemoryPlan({
   };
 }
 
+/**
+ * legacyEstimate(input, { engineId }) is the facade 02 §10.1 names: the legacy
+ * path of /api/memory-estimate (a body without a model card), reached through
+ * model-inspector/fit.js so card mode and legacy mode share one entry point.
+ * The two estimators above stay exactly as P0-RT-3 and ENG-12 left them.
+ * Required lazily: fit.js itself builds on this module.
+ */
+function legacyEstimate(input = {}, options = {}) {
+  return require("./model-inspector/fit").legacyEstimate(input, options);
+}
+
 module.exports = {
   bytesToGiB,
   estimateArchitecture,
@@ -293,4 +304,5 @@ module.exports = {
   normalizeGpuForEstimate,
   estimateVllmMemoryPlan,
   estimateLlamaMemoryPlan,
+  legacyEstimate,
 };

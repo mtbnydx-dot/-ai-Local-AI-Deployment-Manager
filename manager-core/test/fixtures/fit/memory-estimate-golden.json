@@ -1,0 +1,1018 @@
+{
+ "note": "Legacy /api/memory-estimate responses recorded from the wrappers before MOD-9b (llama: before plan.weightsGb). Fake GPUs only.",
+ "records": [
+  {
+   "manager": "vllm",
+   "name": "mcp vllm single",
+   "input": {
+    "paramsB": 27,
+    "contextTokens": 262144,
+    "bytesPerParam": 1,
+    "gpuMemoryUtilization": 0.9,
+    "cpuOffloadGb": 0,
+    "kvOffloadGb": 0,
+    "maxNumSeqs": 1,
+    "multiGpuMode": "single",
+    "tensorParallelSize": 1,
+    "speculativeMode": "off",
+    "numSpeculativeTokens": 1,
+    "selectedGpus": [
+     {
+      "id": "0",
+      "name": "GPU 0",
+      "totalMb": 97887,
+      "usedMb": 600,
+      "freeMb": 97287
+     }
+    ]
+   },
+   "expected": {
+    "ok": true,
+    "engine": "vllm",
+    "plan": {
+     "engine": "vllm",
+     "arch": {
+      "maxParamsB": 34,
+      "layers": 48,
+      "kvHeads": 8,
+      "heads": 40,
+      "headDim": 128,
+      "label": "27B/32B heuristic",
+      "kvLayers": 48,
+      "kvHeadsHigh": 40,
+      "source": "heuristic",
+      "confidence": "low"
+     },
+     "weightsGb": 25.14570951461792,
+     "kvGb": 48,
+     "kvGbHigh": 240,
+     "kvPerGpuHighGb": 240,
+     "perGpuHighGb": 286.35736627578734,
+     "judgedPerGpuGb": 286.35736627578734,
+     "archUncertain": true,
+     "archConfidence": "low",
+     "weightPerGpuBeforeOffloadGb": 25.14570951461792,
+     "kvPerGpuBeforeOffloadGb": 48,
+     "weightPerGpuGb": 25.14570951461792,
+     "kvPerGpuGb": 48,
+     "overheadPerGpuGb": 5.8516567611694335,
+     "perGpuGb": 78.99736627578736,
+     "splitFactor": 1,
+     "memorySplitFactor": 1,
+     "cpuOffloadPerGpuGb": 0,
+     "kvOffloadTotalGb": 0,
+     "kvOffloadPerGpuGb": 0,
+     "selectedGpus": [
+      {
+       "id": "0",
+       "name": "GPU 0",
+       "totalMb": 97887,
+       "usedMb": 600,
+       "freeMb": 97287,
+       "totalGb": 95.5927734375,
+       "usedGb": 0.5859375,
+       "freeGb": 95.0068359375,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 86.03349609375
+      }
+     ],
+     "minUsableGb": 86.03349609375,
+     "overflowPerGpuGb": 200.32387018203735,
+     "status": "fail",
+     "recommendedCpuOffloadGb": 25.14570951461792,
+     "recommendedKvOffloadGb": 200.32387018203735,
+     "speculativeReserveGb": 0
+    },
+    "recommendations": {
+     "status": "fail",
+     "summary": "预计会显存不足",
+     "suggestions": [
+      "预计每卡超出约 200.3 GiB，可提高 CPU offload 或降低上下文。",
+      "建议 CPU offload 至少设为 25.1 GiB/卡。",
+      "权重已难以下放时，可尝试 KV offload 总量 200.3 GiB。"
+     ],
+     "cpuOffloadGb": 25.14570951461792,
+     "kvOffloadingSize": 200.32387018203735,
+     "overflowPerGpuGb": 200.32387018203735,
+     "memorySplitFactor": 1
+    }
+   }
+  },
+  {
+   "manager": "vllm",
+   "name": "mcp vllm tensor two gpus",
+   "input": {
+    "paramsB": 70,
+    "contextTokens": 65536,
+    "bytesPerParam": 2,
+    "gpuMemoryUtilization": 0.9,
+    "maxNumSeqs": 4,
+    "multiGpuMode": "tensor",
+    "tensorParallelSize": 2,
+    "speculativeMode": "mtp",
+    "numSpeculativeTokens": 3,
+    "selectedGpus": [
+     {
+      "id": "0",
+      "name": "GPU 0",
+      "totalMb": 97887,
+      "usedMb": 600,
+      "freeMb": 97287
+     },
+     {
+      "id": "1",
+      "name": "GPU 1",
+      "totalMb": 49140,
+      "usedMb": 200,
+      "freeMb": 48940
+     }
+    ]
+   },
+   "expected": {
+    "ok": true,
+    "engine": "vllm",
+    "plan": {
+     "engine": "vllm",
+     "arch": {
+      "maxParamsB": 80,
+      "layers": 80,
+      "kvHeads": 8,
+      "heads": 64,
+      "headDim": 128,
+      "label": "70B heuristic",
+      "kvLayers": 80,
+      "kvHeadsHigh": 64,
+      "source": "heuristic",
+      "confidence": "low"
+     },
+     "weightsGb": 130.385160446167,
+     "kvGb": 20,
+     "kvGbHigh": 160,
+     "kvPerGpuHighGb": 80,
+     "perGpuHighGb": 159.05798664093018,
+     "judgedPerGpuGb": 159.05798664093018,
+     "archUncertain": true,
+     "archConfidence": "low",
+     "weightPerGpuBeforeOffloadGb": 65.1925802230835,
+     "kvPerGpuBeforeOffloadGb": 10,
+     "weightPerGpuGb": 65.1925802230835,
+     "kvPerGpuGb": 10,
+     "overheadPerGpuGb": 8.26540641784668,
+     "perGpuGb": 83.45798664093017,
+     "splitFactor": 2,
+     "memorySplitFactor": 2,
+     "cpuOffloadPerGpuGb": 0,
+     "kvOffloadTotalGb": 0,
+     "kvOffloadPerGpuGb": 0,
+     "selectedGpus": [
+      {
+       "id": "0",
+       "name": "GPU 0",
+       "totalMb": 97887,
+       "usedMb": 600,
+       "freeMb": 97287,
+       "totalGb": 95.5927734375,
+       "usedGb": 0.5859375,
+       "freeGb": 95.0068359375,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 86.03349609375
+      },
+      {
+       "id": "1",
+       "name": "GPU 1",
+       "totalMb": 49140,
+       "usedMb": 200,
+       "freeMb": 48940,
+       "totalGb": 47.98828125,
+       "usedGb": 0.1953125,
+       "freeGb": 47.79296875,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 43.189453125
+      }
+     ],
+     "minUsableGb": 43.189453125,
+     "overflowPerGpuGb": 115.86853351593018,
+     "status": "fail",
+     "recommendedCpuOffloadGb": 65.1925802230835,
+     "recommendedKvOffloadGb": 231.73706703186036,
+     "speculativeReserveGb": 2.25
+    },
+    "recommendations": {
+     "status": "fail",
+     "summary": "预计会显存不足",
+     "suggestions": [
+      "预计每卡超出约 115.9 GiB，可提高 CPU offload 或降低上下文。",
+      "建议 CPU offload 至少设为 65.2 GiB/卡。",
+      "权重已难以下放时，可尝试 KV offload 总量 231.7 GiB。",
+      "已为 mtp 推测解码额外预留约 2.3 GiB；最终是否提速应以接受率和输出吞吐为准。"
+     ],
+     "cpuOffloadGb": 65.1925802230835,
+     "kvOffloadingSize": 231.73706703186036,
+     "overflowPerGpuGb": 115.86853351593018,
+     "memorySplitFactor": 2
+    }
+   }
+  },
+  {
+   "manager": "vllm",
+   "name": "ui vllm with arch",
+   "input": {
+    "engine": "vllm",
+    "paramsB": 27,
+    "contextTokens": 131072,
+    "bytesPerParam": 1,
+    "kvBytes": 2,
+    "arch": {
+     "layers": 64,
+     "kvLayers": 16,
+     "kvHeads": 4,
+     "headDim": 256
+    },
+    "selectedGpus": [
+     {
+      "id": "0",
+      "name": "GPU 0",
+      "totalMb": 97887,
+      "usedMb": 600,
+      "freeMb": 97287
+     }
+    ],
+    "gpuMemoryUtilization": 0.92,
+    "multiGpuMode": "single",
+    "tensorParallelSize": 1,
+    "pipelineParallelSize": 1,
+    "cpuOffloadGb": 4,
+    "kvOffloadingSize": 2,
+    "speculativeMode": "off"
+   },
+   "expected": {
+    "ok": true,
+    "engine": "vllm",
+    "plan": {
+     "engine": "vllm",
+     "arch": {
+      "layers": 64,
+      "kvLayers": 16,
+      "kvHeads": 4,
+      "kvHeadsHigh": 4,
+      "headDim": 256,
+      "label": "request config",
+      "source": "request",
+      "confidence": "high"
+     },
+     "weightsGb": 25.14570951461792,
+     "kvGb": 8,
+     "kvGbHigh": 8,
+     "kvPerGpuHighGb": 6,
+     "perGpuHighGb": 29.317366275787354,
+     "judgedPerGpuGb": 29.317366275787354,
+     "archUncertain": false,
+     "archConfidence": "high",
+     "weightPerGpuBeforeOffloadGb": 25.14570951461792,
+     "kvPerGpuBeforeOffloadGb": 8,
+     "weightPerGpuGb": 21.14570951461792,
+     "kvPerGpuGb": 6,
+     "overheadPerGpuGb": 2.1716567611694337,
+     "perGpuGb": 29.317366275787354,
+     "splitFactor": 1,
+     "memorySplitFactor": 1,
+     "cpuOffloadPerGpuGb": 4,
+     "kvOffloadTotalGb": 2,
+     "kvOffloadPerGpuGb": 2,
+     "selectedGpus": [
+      {
+       "id": "0",
+       "name": "GPU 0",
+       "totalMb": 97887,
+       "usedMb": 600,
+       "freeMb": 97287,
+       "totalGb": 95.5927734375,
+       "usedGb": 0.5859375,
+       "freeGb": 95.0068359375,
+       "utilization": 0.92,
+       "reserveGb": 1,
+       "usableGb": 87.94535156250001
+      }
+     ],
+     "minUsableGb": 87.94535156250001,
+     "overflowPerGpuGb": 0,
+     "status": "ok",
+     "recommendedCpuOffloadGb": 4,
+     "recommendedKvOffloadGb": 2,
+     "speculativeReserveGb": 0
+    },
+    "recommendations": {
+     "status": "ok",
+     "summary": "预计可运行",
+     "suggestions": [
+      "当前配置预计可运行，并保留了基本运行时余量。"
+     ],
+     "cpuOffloadGb": 4,
+     "kvOffloadingSize": 2,
+     "overflowPerGpuGb": 0,
+     "memorySplitFactor": 1
+    }
+   }
+  },
+  {
+   "manager": "vllm",
+   "name": "sglang with admission policy",
+   "input": {
+    "engine": "sglang",
+    "paramsB": 35,
+    "contextTokens": 262144,
+    "bytesPerParam": 1,
+    "sglangMaxTotalTokens": 524288,
+    "gpuMemoryUtilization": 0.8,
+    "selectedGpus": [
+     {
+      "id": "0",
+      "name": "GPU 0",
+      "totalMb": 97887,
+      "usedMb": 600,
+      "freeMb": 97287
+     }
+    ],
+    "admissionPolicy": {
+     "reserveMb": 8192,
+     "maxUtilizationPct": 85,
+     "startupMarginMb": 1024
+    }
+   },
+   "expected": {
+    "ok": true,
+    "engine": "sglang",
+    "plan": {
+     "engine": "vllm",
+     "arch": {
+      "maxParamsB": 80,
+      "layers": 80,
+      "kvHeads": 8,
+      "heads": 64,
+      "headDim": 128,
+      "label": "70B heuristic",
+      "kvLayers": 80,
+      "kvHeadsHigh": 64,
+      "source": "heuristic",
+      "confidence": "low"
+     },
+     "weightsGb": 32.59629011154175,
+     "kvGb": 80,
+     "kvGbHigh": 640,
+     "kvPerGpuHighGb": 640,
+     "perGpuHighGb": 726.4039933204651,
+     "judgedPerGpuGb": 726.4039933204651,
+     "archUncertain": true,
+     "archConfidence": "low",
+     "weightPerGpuBeforeOffloadGb": 32.59629011154175,
+     "kvPerGpuBeforeOffloadGb": 80,
+     "weightPerGpuGb": 32.59629011154175,
+     "kvPerGpuGb": 80,
+     "overheadPerGpuGb": 9.00770320892334,
+     "perGpuGb": 121.6039933204651,
+     "splitFactor": 1,
+     "memorySplitFactor": 1,
+     "cpuOffloadPerGpuGb": 0,
+     "kvOffloadTotalGb": 0,
+     "kvOffloadPerGpuGb": 0,
+     "selectedGpus": [
+      {
+       "id": "0",
+       "name": "GPU 0",
+       "totalMb": 97887,
+       "usedMb": 600,
+       "freeMb": 97287,
+       "totalGb": 95.5927734375,
+       "usedGb": 0.5859375,
+       "freeGb": 95.0068359375,
+       "utilization": 0.8,
+       "reserveGb": 1,
+       "usableGb": 76.47421875
+      }
+     ],
+     "minUsableGb": 76.47421875,
+     "overflowPerGpuGb": 649.9297745704652,
+     "status": "fail",
+     "recommendedCpuOffloadGb": 32.59629011154175,
+     "recommendedKvOffloadGb": 649.9297745704652,
+     "speculativeReserveGb": 0,
+     "policy": "static-fraction-of-free",
+     "estimatePolicy": "sglang_mem_fraction_static_of_free",
+     "admissionPreview": {
+      "verdict": "ok",
+      "requestedMb": 77830,
+      "availableMb": 81579,
+      "reservedMb": 77830,
+      "clamped": false,
+      "maxFraction": 0.838,
+      "poolCappedTokens": 524288,
+      "basis": "policy-snapshot"
+     }
+    },
+    "recommendations": {
+     "status": "fail",
+     "summary": "预计会显存不足",
+     "suggestions": [
+      "预计每卡超出约 649.9 GiB，可提高 CPU offload 或降低上下文。",
+      "建议 CPU offload 至少设为 32.6 GiB/卡。",
+      "权重已难以下放时，可尝试 KV offload 总量 649.9 GiB。"
+     ],
+     "cpuOffloadGb": 32.59629011154175,
+     "kvOffloadingSize": 649.9297745704652,
+     "overflowPerGpuGb": 649.9297745704652,
+     "memorySplitFactor": 1
+    }
+   }
+  },
+  {
+   "manager": "llama",
+   "name": "mcp llama single",
+   "input": {
+    "paramsB": 27,
+    "contextTokens": 32768,
+    "bytesPerParam": 0.56,
+    "gpuMemoryUtilization": 0.9,
+    "maxNumSeqs": 1,
+    "multiGpuMode": "single",
+    "speculativeMode": "off",
+    "numSpeculativeTokens": 3,
+    "selectedGpus": [
+     {
+      "id": "0",
+      "name": "GPU 0",
+      "totalMb": 97887,
+      "usedMb": 600,
+      "freeMb": 97287
+     }
+    ]
+   },
+   "expected": {
+    "ok": true,
+    "engine": "llama.cpp",
+    "plan": {
+     "engine": "llama.cpp",
+     "arch": {
+      "maxParamsB": 34,
+      "layers": 48,
+      "kvHeads": 8,
+      "heads": 40,
+      "headDim": 128,
+      "label": "27B/32B heuristic",
+      "kvLayers": 48,
+      "kvHeadsHigh": 40,
+      "source": "heuristic",
+      "confidence": "low"
+     },
+     "totalWeightsGb": 14.081597328186037,
+     "gpuWeightsGb": 14.081597328186037,
+     "cpuWeightsGb": 0,
+     "totalKvGb": 6,
+     "totalKvHighGb": 30,
+     "kvGb": 6,
+     "gpuKvGb": 6,
+     "gpuKvHighGb": 30,
+     "cpuKvGb": 0,
+     "overheadGb": 1.6065277862548828,
+     "totalGpuGb": 21.68812511444092,
+     "totalGpuHighGb": 47.60812511444092,
+     "judgedTotalGpuGb": 47.60812511444092,
+     "archUncertain": true,
+     "archConfidence": "low",
+     "requestedGpuLayers": 48,
+     "totalLayers": 48,
+     "allocations": [
+      {
+       "gpu": {
+        "id": "0",
+        "name": "GPU 0",
+        "totalMb": 97887,
+        "usedMb": 600,
+        "freeMb": 97287,
+        "totalGb": 95.5927734375,
+        "usedGb": 0.5859375,
+        "freeGb": 95.0068359375,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 86.03349609375
+       },
+       "weight": 86.03349609375,
+       "allocatedGb": 47.60812511444092,
+       "overflowGb": 0,
+       "usableGb": 86.03349609375
+      }
+     ],
+     "selectedGpus": [
+      {
+       "id": "0",
+       "name": "GPU 0",
+       "totalMb": 97887,
+       "usedMb": 600,
+       "freeMb": 97287,
+       "totalGb": 95.5927734375,
+       "usedGb": 0.5859375,
+       "freeGb": 95.0068359375,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 86.03349609375
+      }
+     ],
+     "peakGpuGb": 47.60812511444092,
+     "status": "ok",
+     "recommendedGpuLayers": 48,
+     "parallelSlots": 1,
+     "speculativeReserveGb": 0
+    },
+    "metadata": null,
+    "selectedVariant": null,
+    "components": {
+     "mmprojBytes": 0,
+     "availableMmprojBytes": 0,
+     "draftBytes": 0
+    },
+    "recommendedConfig": null,
+    "recommendations": {
+     "status": "ok",
+     "summary": "预计可运行",
+     "suggestions": [
+      "当前配置预计可运行，并保留了基本运行时余量。"
+     ],
+     "recommendedGpuLayers": 48,
+     "totalLayers": 48,
+     "peakGpuGb": 47.60812511444092,
+     "allocations": [
+      {
+       "gpu": {
+        "id": "0",
+        "name": "GPU 0",
+        "totalMb": 97887,
+        "usedMb": 600,
+        "freeMb": 97287,
+        "totalGb": 95.5927734375,
+        "usedGb": 0.5859375,
+        "freeGb": 95.0068359375,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 86.03349609375
+       },
+       "weight": 86.03349609375,
+       "allocatedGb": 47.60812511444092,
+       "overflowGb": 0,
+       "usableGb": 86.03349609375
+      }
+     ]
+    }
+   }
+  },
+  {
+   "manager": "llama",
+   "name": "mcp llama two gpus draft",
+   "input": {
+    "paramsB": 70,
+    "contextTokens": 65536,
+    "bytesPerParam": 0.56,
+    "maxNumSeqs": 2,
+    "speculativeMode": "draft",
+    "numSpeculativeTokens": 4,
+    "selectedGpus": [
+     {
+      "id": "0",
+      "name": "GPU 0",
+      "totalMb": 97887,
+      "usedMb": 600,
+      "freeMb": 97287
+     },
+     {
+      "id": "1",
+      "name": "GPU 1",
+      "totalMb": 49140,
+      "usedMb": 200,
+      "freeMb": 48940
+     }
+    ]
+   },
+   "expected": {
+    "ok": true,
+    "engine": "llama.cpp",
+    "plan": {
+     "engine": "llama.cpp",
+     "arch": {
+      "maxParamsB": 80,
+      "layers": 80,
+      "kvHeads": 8,
+      "heads": 64,
+      "headDim": 128,
+      "label": "70B heuristic",
+      "kvLayers": 80,
+      "kvHeadsHigh": 64,
+      "source": "heuristic",
+      "confidence": "low"
+     },
+     "totalWeightsGb": 36.50784492492676,
+     "gpuWeightsGb": 36.50784492492676,
+     "cpuWeightsGb": 0,
+     "totalKvGb": 40,
+     "totalKvHighGb": 320,
+     "kvGb": 40,
+     "gpuKvGb": 40,
+     "gpuKvHighGb": 320,
+     "cpuKvGb": 0,
+     "overheadGb": 7.620627593994141,
+     "totalGpuGb": 84.1284725189209,
+     "totalGpuHighGb": 386.5284725189209,
+     "judgedTotalGpuGb": 386.5284725189209,
+     "archUncertain": true,
+     "archConfidence": "low",
+     "requestedGpuLayers": 80,
+     "totalLayers": 80,
+     "allocations": [
+      {
+       "gpu": {
+        "id": "0",
+        "name": "GPU 0",
+        "totalMb": 97887,
+        "usedMb": 600,
+        "freeMb": 97287,
+        "totalGb": 95.5927734375,
+        "usedGb": 0.5859375,
+        "freeGb": 95.0068359375,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 86.03349609375
+       },
+       "weight": 86.03349609375,
+       "allocatedGb": 257.3412542557463,
+       "overflowGb": 171.30775816199633,
+       "usableGb": 86.03349609375
+      },
+      {
+       "gpu": {
+        "id": "1",
+        "name": "GPU 1",
+        "totalMb": 49140,
+        "usedMb": 200,
+        "freeMb": 48940,
+        "totalGb": 47.98828125,
+        "usedGb": 0.1953125,
+        "freeGb": 47.79296875,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 43.189453125
+       },
+       "weight": 43.189453125,
+       "allocatedGb": 129.18721826317463,
+       "overflowGb": 85.99776513817463,
+       "usableGb": 43.189453125
+      }
+     ],
+     "selectedGpus": [
+      {
+       "id": "0",
+       "name": "GPU 0",
+       "totalMb": 97887,
+       "usedMb": 600,
+       "freeMb": 97287,
+       "totalGb": 95.5927734375,
+       "usedGb": 0.5859375,
+       "freeGb": 95.0068359375,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 86.03349609375
+      },
+      {
+       "id": "1",
+       "name": "GPU 1",
+       "totalMb": 49140,
+       "usedMb": 200,
+       "freeMb": 48940,
+       "totalGb": 47.98828125,
+       "usedGb": 0.1953125,
+       "freeGb": 47.79296875,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 43.189453125
+      }
+     ],
+     "peakGpuGb": 257.3412542557463,
+     "status": "fail",
+     "recommendedGpuLayers": 23,
+     "parallelSlots": 2,
+     "speculativeReserveGb": 1.5
+    },
+    "metadata": null,
+    "selectedVariant": null,
+    "components": {
+     "mmprojBytes": 0,
+     "availableMmprojBytes": 0,
+     "draftBytes": 0
+    },
+    "recommendedConfig": null,
+    "recommendations": {
+     "status": "fail",
+     "summary": "预计会显存不足",
+     "suggestions": [
+      "预计会溢出显存，建议把 GPU layers 降到 23/80 左右，让剩余层落到内存。",
+      "异构多卡建议 tensor split 按可用显存近似填写：95,48。",
+      "已为 draft 推测解码预留约 1.5 GiB。"
+     ],
+     "recommendedGpuLayers": 23,
+     "totalLayers": 80,
+     "peakGpuGb": 257.3412542557463,
+     "allocations": [
+      {
+       "gpu": {
+        "id": "0",
+        "name": "GPU 0",
+        "totalMb": 97887,
+        "usedMb": 600,
+        "freeMb": 97287,
+        "totalGb": 95.5927734375,
+        "usedGb": 0.5859375,
+        "freeGb": 95.0068359375,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 86.03349609375
+       },
+       "weight": 86.03349609375,
+       "allocatedGb": 257.3412542557463,
+       "overflowGb": 171.30775816199633,
+       "usableGb": 86.03349609375
+      },
+      {
+       "gpu": {
+        "id": "1",
+        "name": "GPU 1",
+        "totalMb": 49140,
+        "usedMb": 200,
+        "freeMb": 48940,
+        "totalGb": 47.98828125,
+        "usedGb": 0.1953125,
+        "freeGb": 47.79296875,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 43.189453125
+       },
+       "weight": 43.189453125,
+       "allocatedGb": 129.18721826317463,
+       "overflowGb": 85.99776513817463,
+       "usableGb": 43.189453125
+      }
+     ]
+    }
+   }
+  },
+  {
+   "manager": "llama",
+   "name": "ui llama with variant object, model and mmproj",
+   "input": {
+    "model": "/models/x.gguf",
+    "variant": {
+     "architecture": "qwen3",
+     "layers": 48,
+     "kvHeads": 4,
+     "headDim": 128,
+     "contextLength": 131072,
+     "fileBytes": 20000000000,
+     "parameterCount": 32000000000,
+     "paramsB": 32
+    },
+    "paramsB": 32,
+    "contextTokens": 16384,
+    "cacheTypeK": "q8_0",
+    "cacheTypeV": "q8_0",
+    "arch": {
+     "layers": 64,
+     "kvLayers": 16,
+     "kvHeads": 4,
+     "headDim": 256
+    },
+    "selectedGpus": [
+     {
+      "id": "0",
+      "name": "GPU 0",
+      "totalMb": 97887,
+      "usedMb": 600,
+      "freeMb": 97287
+     },
+     {
+      "id": "1",
+      "name": "GPU 1",
+      "totalMb": 49140,
+      "usedMb": 200,
+      "freeMb": 48940
+     }
+    ],
+    "gpuLayers": "30",
+    "tensorSplit": "2,1",
+    "textOnlyMode": false,
+    "mmproj": {
+     "fileBytes": 900000000,
+     "path": "/m/mmproj.gguf"
+    },
+    "maxNumSeqs": 2,
+    "speculativeMode": "off"
+   },
+   "expected": {
+    "ok": true,
+    "engine": "llama.cpp",
+    "plan": {
+     "engine": "llama.cpp",
+     "arch": {
+      "layers": 64,
+      "kvLayers": 16,
+      "kvHeads": 4,
+      "kvHeadsHigh": 4,
+      "headDim": 256,
+      "label": "request config",
+      "source": "request",
+      "confidence": "high"
+     },
+     "totalWeightsGb": 18.62645149230957,
+     "gpuWeightsGb": 8.731149137020111,
+     "cpuWeightsGb": 9.89530235528946,
+     "totalKvGb": 1.59375,
+     "totalKvHighGb": 1.59375,
+     "kvGb": 0.7470703125,
+     "gpuKvGb": 0.7470703125,
+     "gpuKvHighGb": 0.7470703125,
+     "cpuKvGb": 0.8466796875,
+     "overheadGb": 2.038190317153931,
+     "totalGpuGb": 11.516409766674041,
+     "totalGpuHighGb": 11.516409766674041,
+     "judgedTotalGpuGb": 11.516409766674041,
+     "archUncertain": false,
+     "archConfidence": "high",
+     "requestedGpuLayers": 30,
+     "totalLayers": 64,
+     "allocations": [
+      {
+       "gpu": {
+        "id": "0",
+        "name": "GPU 0",
+        "totalMb": 97887,
+        "usedMb": 600,
+        "freeMb": 97287,
+        "totalGb": 95.5927734375,
+        "usedGb": 0.5859375,
+        "freeGb": 95.0068359375,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 86.03349609375
+       },
+       "weight": 2,
+       "allocatedGb": 7.677606511116028,
+       "overflowGb": 0,
+       "usableGb": 86.03349609375
+      },
+      {
+       "gpu": {
+        "id": "1",
+        "name": "GPU 1",
+        "totalMb": 49140,
+        "usedMb": 200,
+        "freeMb": 48940,
+        "totalGb": 47.98828125,
+        "usedGb": 0.1953125,
+        "freeGb": 47.79296875,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 43.189453125
+       },
+       "weight": 1,
+       "allocatedGb": 3.838803255558014,
+       "overflowGb": 0,
+       "usableGb": 43.189453125
+      }
+     ],
+     "selectedGpus": [
+      {
+       "id": "0",
+       "name": "GPU 0",
+       "totalMb": 97887,
+       "usedMb": 600,
+       "freeMb": 97287,
+       "totalGb": 95.5927734375,
+       "usedGb": 0.5859375,
+       "freeGb": 95.0068359375,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 86.03349609375
+      },
+      {
+       "id": "1",
+       "name": "GPU 1",
+       "totalMb": 49140,
+       "usedMb": 200,
+       "freeMb": 48940,
+       "totalGb": 47.98828125,
+       "usedGb": 0.1953125,
+       "freeGb": 47.79296875,
+       "utilization": 0.9,
+       "reserveGb": 1,
+       "usableGb": 43.189453125
+      }
+     ],
+     "peakGpuGb": 7.677606511116028,
+     "status": "ok",
+     "recommendedGpuLayers": 64,
+     "parallelSlots": 2,
+     "speculativeReserveGb": 0
+    },
+    "metadata": {
+     "architecture": "qwen3",
+     "parameterCount": 32000000000,
+     "paramsB": 32,
+     "fileBytes": 20000000000,
+     "layers": 48,
+     "kvHeads": 4,
+     "headDim": 128,
+     "contextLength": 131072,
+     "slidingWindow": null,
+     "slidingLayers": null,
+     "globalLayers": null
+    },
+    "selectedVariant": {
+     "architecture": "qwen3",
+     "layers": 48,
+     "kvHeads": 4,
+     "headDim": 128,
+     "contextLength": 131072,
+     "fileBytes": 20000000000,
+     "parameterCount": 32000000000,
+     "paramsB": 32
+    },
+    "components": {
+     "mmprojBytes": 900000000,
+     "availableMmprojBytes": 900000000,
+     "draftBytes": 0
+    },
+    "recommendedConfig": {
+     "maxModelLen": 131072,
+     "maxNumSeqs": 1,
+     "cacheTypeK": "q8_0",
+     "cacheTypeV": "q8_0",
+     "gpuLayers": "all",
+     "textOnlyMode": true,
+     "languageModelOnly": true,
+     "mmproj": "",
+     "availableMmproj": "/m/mmproj.gguf",
+     "draftModel": "",
+     "speculativeMode": "off"
+    },
+    "recommendations": {
+     "status": "ok",
+     "summary": "预计可运行",
+     "suggestions": [
+      "当前配置预计可运行，并保留了基本运行时余量。",
+      "异构多卡建议 tensor split 按可用显存近似填写：95,48。"
+     ],
+     "recommendedGpuLayers": 64,
+     "totalLayers": 64,
+     "peakGpuGb": 7.677606511116028,
+     "allocations": [
+      {
+       "gpu": {
+        "id": "0",
+        "name": "GPU 0",
+        "totalMb": 97887,
+        "usedMb": 600,
+        "freeMb": 97287,
+        "totalGb": 95.5927734375,
+        "usedGb": 0.5859375,
+        "freeGb": 95.0068359375,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 86.03349609375
+       },
+       "weight": 2,
+       "allocatedGb": 7.677606511116028,
+       "overflowGb": 0,
+       "usableGb": 86.03349609375
+      },
+      {
+       "gpu": {
+        "id": "1",
+        "name": "GPU 1",
+        "totalMb": 49140,
+        "usedMb": 200,
+        "freeMb": 48940,
+        "totalGb": 47.98828125,
+        "usedGb": 0.1953125,
+        "freeGb": 47.79296875,
+        "utilization": 0.9,
+        "reserveGb": 1,
+        "usableGb": 43.189453125
+       },
+       "weight": 1,
+       "allocatedGb": 3.838803255558014,
+       "overflowGb": 0,
+       "usableGb": 43.189453125
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

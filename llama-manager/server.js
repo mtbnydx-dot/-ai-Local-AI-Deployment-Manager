@@ -932,7 +932,7 @@ core.registerManagerRoutes(app, {
   getImageStatus: async () => (await getOperationalSnapshot()).image,
   getRunningModelSummary: async () => (await getOperationalSnapshot()).runtime,
   getManagerResourceSummary: async () => (await getOperationalSnapshot()).resources,
-  buildMemoryEstimate: buildLlamaMemoryEstimate,
+  buildMemoryEstimate: (body) => buildLlamaMemoryEstimate(body, { resolveModelPath: core.models.storageResolver({ modelStorage, modelsRoot: CONFIG.modelsRoot }) }),
   buildStatusExtras: ({ gpu }) => ({
     gpuPlan: buildLlamaGpuPlan(gpu, [], 0.92, "layer"),
   }),
@@ -1698,6 +1698,8 @@ const startRuntimeRequest = createLlamaStartRuntimeRequest({
   listContainers: () => listManagedContainers(),
   getIntrospection: async (runtime) => (await engineRoutes?.runtimeFacts?.get(runtime.runtimeId))?.flags || null,
   modelStorage,
+  // 02 MOD-9b: modelFacts (artifact inputs for the plan's memory) and calibrationFor (null until MOD-10).
+  ...core.models.managerHooks({ managerId: "llama", dataDir: path.join(__dirname, "data"), gpuStatus: getGpuStatus, modelStorage, modelsRoot: CONFIG.modelsRoot }),
 });
 
 // Idle runtimes hold their weights and KV pool for nothing. The controller

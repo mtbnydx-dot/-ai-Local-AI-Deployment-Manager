@@ -55,6 +55,7 @@ function createVllmStartRuntimeRequest(deps) {
     getIntrospection = null,
     modelStorage = null,
     calibrationFor = null,
+    modelFacts = null,
   } = deps;
 
   /**
@@ -389,6 +390,7 @@ function createVllmStartRuntimeRequest(deps) {
     getIntrospection,
     modelStorage,
     calibrationFor,
+    modelFacts,
   });
 
   async function startRuntimeRequest({ body = {} } = {}) {

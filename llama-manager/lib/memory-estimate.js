@@ -51,7 +51,7 @@ function parseMemoryEstimateWeights(value) {
     .filter((item) => Number.isFinite(item) && item > 0);
 }
 
-function buildLlamaMemoryEstimate(input = {}) {
+function buildLlamaLegacyEstimate(input = {}) {
   const selectedGpus = normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []);
   const variant = input.variant || input.selectedVariant || input.modelMetadata || null;
   const arch = normalizeMemoryEstimateArch(input.arch || variant || input.modelConfig || input.config);
@@ -100,6 +100,8 @@ function buildLlamaMemoryEstimate(input = {}) {
   });
   plan.parallelSlots = parallelSlots;
   plan.speculativeReserveGb = speculativeReserveGb;
+  // platform-mcp reads plan.weightsGb: the GPU-resident weights (02 §10.7).
+  plan.weightsGb = plan.gpuWeightsGb;
   const suggestions = [];
   if (!plan.selectedGpus.length) {
     suggestions.push("没有传入 GPU 显存数据，只能给出模型本身的理论占用。");
@@ -169,6 +171,19 @@ function buildLlamaMemoryEstimate(input = {}) {
       allocations: plan.allocations,
     },
   };
+}
+
+// Same split as the vLLM wrapper: legacy bodies answer synchronously and
+// unchanged (plus plan.weightsGb); a card-mode body answers with a promise.
+function buildLlamaMemoryEstimate(input = {}, options = {}) {
+  if (!core.models.cardEstimate.cardModeRequested(input)) return buildLlamaLegacyEstimate(input);
+  return core.models.cardEstimate.buildCardEstimate(input, {
+    managerFamily: "llama",
+    hostGpus: normalizeMemoryEstimateGpus(input.selectedGpus || input.gpus || []),
+    legacy: buildLlamaLegacyEstimate,
+    admissionPolicy: input.admissionPolicy,
+    ...options,
+  });
 }
 
 module.exports = {
