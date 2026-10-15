@@ -79,7 +79,14 @@ export const ROUTES = Object.freeze([
   page("access.portal", "/access/portal", () => import("./routes/access/portal.js"), { section: "access", feature: "public", spec: "05" }),
   page("access.sessions", "/access/sessions", () => import("./routes/access/sessions.js"), { section: "access", feature: "session", spec: "05" }),
 
-  page("billing", "/billing", () => import("./routes/billing.js"), { section: "billing" }),
+  page("billing", "/billing", () => import("./routes/billing/index.js"), { section: "billing" }),
+  page("billing.customers", "/billing/customers", () => import("./routes/billing/index.js"), { section: "billing" }),
+  page("billing.credentials", "/billing/credentials", () => import("./routes/billing/index.js"), { section: "billing" }),
+  page("billing.plans", "/billing/plans", () => import("./routes/billing/index.js"), { section: "billing" }),
+  page("billing.prices", "/billing/prices", () => import("./routes/billing/index.js"), { section: "billing" }),
+  page("billing.usage", "/billing/usage", () => import("./routes/billing/index.js"), { section: "billing" }),
+  page("billing.ledger", "/billing/ledger", () => import("./routes/billing/index.js"), { section: "billing" }),
+  page("billing.audit", "/billing/audit", () => import("./routes/billing/index.js"), { section: "billing" }),
   page("voice", "/voice", () => import("./routes/voice.js"), { section: "voice", ...OPEN }),
 
   page("system", "/system", () => import("./routes/system/index.js"), { section: "system", feature: "platform", spec: "06", ...OPEN }),
