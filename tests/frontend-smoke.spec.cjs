@@ -9,6 +9,19 @@ const ROOT = path.resolve(__dirname, "..");
 
 async function verifyVllmSchedulerLaunch(page) {
   const launches = [];
+  // Keep scheduler-field checks independent of the host's runtime images.
+  await page.route("**/api/launch/plan", (route) => route.fulfill({
+    json: {
+      ok: true,
+      planHash: "sha256:smoke-scheduler",
+      steps: [],
+      blockers: [],
+      errors: [],
+      warnings: [],
+      overrides: [],
+      admission: { verdict: "allow" },
+    },
+  }));
   // Capture submissions at the browser boundary; never create a real GPU job.
   await page.route("**/api/start", async (route) => {
     launches.push(route.request().postDataJSON());
