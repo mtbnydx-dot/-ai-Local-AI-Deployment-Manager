@@ -2148,13 +2148,23 @@ function normalizeLaunchProfile(value) {
   if (!value || typeof value !== "object") return null;
   const name = String(value.name || value.label || "").trim();
   if (!name) return null;
-  const config = value.config && typeof value.config === "object" ? value.config : {};
+  const v2 = value.schemaVersion === 2
+    ? core.engines.legacyProfileToV2(value, { managerId: CONFIG.managerId, strict: true })
+    : null;
+  const config = v2 ? v2.config : value.config && typeof value.config === "object" ? value.config : {};
   return {
     id: safeProfileId(value.id || name),
     name: clipText(name, 80),
     description: clipText(String(value.description || ""), 180),
     source: value.source === "builtin" ? "builtin" : "user",
     updatedAt: value.updatedAt || new Date().toISOString(),
+    ...(v2 ? {
+      schemaVersion: 2,
+      engineId: v2.engineId,
+      ...(v2.recipeId ? { recipeId: v2.recipeId } : {}),
+      values: v2.values,
+      catalogVersion: v2.catalogVersion,
+    } : {}),
     config: normalizeLaunchConfig(config),
   };
 }

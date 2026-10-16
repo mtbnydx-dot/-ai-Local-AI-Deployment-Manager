@@ -481,23 +481,42 @@ function requestToLegacyRunOptions(plan) {
  * catalogVersion}; config is kept and recomputed from the values on top of
  * itself, so an old reader sees the same flat config. An entry that cannot be
  * converted (unknown engine, bad catalog) is returned as it is. A v2 entry
- * keeps its values and gets its config recomputed.
+ * keeps its sparse, non-secret catalog values and gets its config recomputed.
+ * Managers use strict mode for new v2 input; migrations remain best-effort.
  */
 function legacyProfileToV2(profile, options = {}) {
-  if (!isPlainObject(profile) || !isPlainObject(profile.config)) return profile;
+  if (!isPlainObject(profile)) return profile;
+  const v2 = profile.schemaVersion === 2;
+  if (!v2 && !isPlainObject(profile.config)) return profile;
   try {
     const registry = options.registry || registryModule.getEngineRegistry();
-    const engineId = isPlainObject(profile) && profile.schemaVersion === 2 && profile.engineId
-      ? String(profile.engineId)
+    const base = isPlainObject(profile.config) ? profile.config : {};
+    const engineId = v2
+      ? String(profile.engineId || "").trim()
       : registry.fromLegacy(String(profile.config.engine ?? ""), options.managerId);
-    if (!engineId || !registry.has(engineId)) return profile;
+    if (!engineId || !registry.has(engineId) || (options.strict && !registry.hostedBy(options.managerId).includes(engineId))) {
+      if (options.strict) throw unknownEngineError(engineId);
+      return profile;
+    }
     const catalog = catalogFor(engineId, options);
-    const values = profile.schemaVersion === 2 && isPlainObject(profile.values)
-      ? clone(profile.values)
-      : legacyConfigToValues(profile.config, engineId, { catalog });
-    const config = valuesToLegacyConfig(values, engineId, { catalog, base: profile.config });
-    let recipeId = profile.recipeId || "";
-    const image = String(profile.config.runtimeImage || "").trim();
+    const values = v2 ? {} : legacyConfigToValues(base, engineId, { catalog });
+    if (v2 && isPlainObject(profile.values)) {
+      // Keep only explicit catalog fields. Planner provenance, secrets, managed
+      // values and unknown fields must never enter a saved launch profile.
+      for (const param of catalog.params) {
+        if (param.secret || param.managed || !Object.hasOwn(profile.values, param.id)) continue;
+        const value = unwrapValue(profile.values[param.id]);
+        if (value !== undefined) values[param.id] = clone(value);
+      }
+    }
+    const config = valuesToLegacyConfig(values, engineId, {
+      catalog,
+      base: v2 ? { ...base, engine: registry.get(engineId).legacy?.managerEngineField || engineId } : base,
+    });
+    // Wizard instance.servedName lives in config.name, outside sparse values.
+    if (v2 && !Object.hasOwn(values, "servedName") && Object.hasOwn(base, "name")) config.name = clone(base.name);
+    let recipeId = typeof profile.recipeId === "string" ? profile.recipeId.trim() : "";
+    const image = String(base.runtimeImage || "").trim();
     if (!recipeId && image && LEGACY_IMAGE_PATTERN.test(image)) {
       const selected = legacyRuntimeSelection(image, { engineId, registry, warnings: [] });
       recipeId = selected.recipeId || "";
@@ -508,10 +527,13 @@ function legacyProfileToV2(profile, options = {}) {
       engineId,
       ...(recipeId ? { recipeId } : {}),
       values,
-      catalogVersion: String(catalog.catalogVersion || ""),
+      catalogVersion: v2 && typeof profile.catalogVersion === "string" && profile.catalogVersion.trim()
+        ? profile.catalogVersion.trim()
+        : String(catalog.catalogVersion || ""),
       config,
     };
-  } catch {
+  } catch (error) {
+    if (options.strict) throw error;
     return profile;
   }
 }
