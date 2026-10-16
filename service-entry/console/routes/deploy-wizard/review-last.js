@@ -65,20 +65,21 @@ export function LastLaunch({ draft, plan, catalog }) {
   return html`<${Card} title=${t("models.wizard.review.last.title")} testid="wizard.last">${content}<//>`;
 }
 
-export function SaveProfile({ draft, plan }) {
+export function SaveProfile({ draft, catalog }) {
   const { api, cache, toasts, i18n } = useServices();
   const { t } = i18n;
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const body = profileBody(draft, catalog, name);
   async function save(event) {
     event.preventDefault();
-    if (!name.trim() || busy) return;
+    if (!body.name || !body.catalogVersion || busy) return;
     setBusy(true);
     setError("");
     try {
-      await api.manager(draft.managerId).post("/tools/profiles", profileBody(draft, plan, name));
+      await api.manager(draft.managerId).post("/tools/profiles", body);
       cache?.invalidate?.(["m", draft.managerId, "profiles"]);
       toasts?.push?.({ level: "success", title: t("models.wizard.review.profile.saved", { name: name.trim() }) });
       setOpen(false);
@@ -94,7 +95,7 @@ export function SaveProfile({ draft, plan }) {
     <label class="sr-only" for="wizard-profile-name">${t("models.wizard.review.profile.name")}</label>
     <input id="wizard-profile-name" class="input" type="text" maxlength="80" autocomplete="off" value=${name} placeholder=${t("models.wizard.review.profile.name")}
       onInput=${(event) => setName(event.currentTarget.value)} data-testid="wizard.profile.name" />
-    <${Button} type="submit" variant="primary" busy=${busy} disabled=${!name.trim()} testid="wizard.profile.save">${t("models.wizard.review.profile.save")}<//>
+    <${Button} type="submit" variant="primary" busy=${busy} disabled=${!body.name || !body.catalogVersion} testid="wizard.profile.save">${t("models.wizard.review.profile.save")}<//>
     <${Button} variant="ghost" onClick=${() => setOpen(false)} testid="wizard.profile.cancel">${t("common.cancel")}<//>
     ${error ? html`<span class="field-error" role="alert" data-testid="wizard.profile.error">${error}</span>` : null}
   </form>`;

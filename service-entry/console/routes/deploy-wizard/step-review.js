@@ -124,7 +124,7 @@ export default function StepReview({ draft, plan, catalog, status, launch, goto 
     <//>
     <${LastLaunch} draft=${draft} plan=${plan.plan} catalog=${catalog} />
     <div class="row wizard-launch-bar" data-testid="wizard.review.bar">
-      <${SaveProfile} draft=${draft} plan=${plan.plan} />
+      <${SaveProfile} draft=${draft} catalog=${catalog} />
       <span class="grow"></span>
       <${Button} variant="primary" icon="rocket" disabled=${!gate.allowed} busy=${launch.state.status === "starting"} onClick=${click} testid="wizard.launch">${t("models.wizard.review.launch")}<//>
     </div>

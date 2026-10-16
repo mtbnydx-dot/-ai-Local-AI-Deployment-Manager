@@ -1958,6 +1958,44 @@ test("Save as profile sends the sparse values and the catalog version, and never
   }
 });
 
+test("Save as profile waits for the current catalog but does not need a completed launch plan", async ({ browser }) => {
+  const state = reviewState();
+  state.replace = false;
+  let releaseCatalog, releasePlan;
+  const catalogReady = new Promise((resolve) => { releaseCatalog = resolve; });
+  const planReady = new Promise((resolve) => { releasePlan = resolve; });
+  const { context, page, mock } = await openReview({
+    browser, state, draft: { values: { contextLength: 65536, apiKey: "fake-typed-key" } },
+    api: {
+      "GET /api/m/vllm/engines/vllm/schema": async () => { await catalogReady; return fixture("schema-vllm"); },
+      "POST /api/m/vllm/launch/plan": async () => { await planReady; return reviewPlan(state); },
+    },
+  });
+  try {
+    await byId(page, "wizard.profile.open").click();
+    await byId(page, "wizard.profile.name").fill("Early profile");
+    await expect(byId(page, "wizard.profile.save")).toBeDisabled();
+    // Native form submission must obey the same guard as the disabled button.
+    await byId(page, "wizard.profile.form").evaluate((form) => form.requestSubmit());
+    expect(callsTo(mock, "POST", "/api/m/vllm/tools/profiles")).toHaveLength(0);
+    await expect.poll(() => planCalls(mock).length).toBeGreaterThan(0);
+
+    releaseCatalog();
+    await expect(byId(page, "wizard.profile.save")).toBeEnabled();
+    await expect(byId(page, "wizard.plan-status")).toHaveAttribute("data-status", "updating");
+    await byId(page, "wizard.profile.save").click();
+    await expect.poll(() => callsTo(mock, "POST", "/api/m/vllm/tools/profiles").length).toBe(1);
+    const body = callsTo(mock, "POST", "/api/m/vllm/tools/profiles")[0].body;
+    expect(body).toMatchObject({ name: "Early profile", schemaVersion: 2, engineId: "vllm", values: { contextLength: 65536 }, catalogVersion: "2026-10-14+2026-10-14" });
+    expect(JSON.stringify(body)).not.toContain("fake-typed-key");
+    await expect(byId(page, "wizard.profile.form")).toHaveCount(0);
+  } finally {
+    releaseCatalog();
+    releasePlan();
+    await context.close();
+  }
+});
+
 test("a reload on the Launch step finds the job again", async ({ browser }) => {
   const state = reviewState();
   state.replace = false;

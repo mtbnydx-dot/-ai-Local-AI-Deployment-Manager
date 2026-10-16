@@ -277,7 +277,7 @@ test("the profile body holds the sparse values and the catalog version and never
     modelRef: { kind: "local", entryId: null, path: "/m/a" }, engineId: "llamacpp", managerId: "llama", recipeId: "r1",
     instance: { servedName: "served", port: 8001 }, values: { contextLength: 4096, apiKey: "fake-typed-key", "llamacpp.hfToken": "fake", empty: "" },
   });
-  const body = model.profileBody(draft, { catalogVersion: "2026-10-14+2026-10-14" }, "  My profile ");
+  const body = model.profileBody(draft, { engineId: "llamacpp", catalogVersion: "2026-10-14+2026-10-14" }, "  My profile ");
   assert.equal(body.name, "My profile");
   assert.equal(body.schemaVersion, 2);
   assert.deepEqual(body.values, { contextLength: 4096 });
@@ -286,6 +286,14 @@ test("the profile body holds the sparse values and the catalog version and never
   assert.equal(body.recipeId, "r1");
   assert.deepEqual(body.config, { model: "/m/a", engine: "llama.cpp", name: "served", port: 8001 });
   assert.ok(!JSON.stringify(body).includes("fake"));
+});
+
+test("a profile uses only the matching current engine catalog version", () => {
+  const draft = wizard.createDraft({ engineId: "vllm", managerId: "vllm" });
+  assert.equal(model.profileBody(draft, { engineId: "vllm", catalogVersion: " current-catalog " }, "Profile").catalogVersion, "current-catalog");
+  assert.equal(model.profileBody(draft, { engineId: "llamacpp", catalogVersion: "previous-engine" }, "Profile").catalogVersion, "");
+  assert.equal(model.profileBody(draft, { engineId: "vllm", catalogVersion: "  " }, "Profile").catalogVersion, "");
+  assert.equal(model.profileBody(draft, null, "Profile").catalogVersion, "");
 });
 
 // ---- steps 4 and 5 ----------------------------------------------------------------------------

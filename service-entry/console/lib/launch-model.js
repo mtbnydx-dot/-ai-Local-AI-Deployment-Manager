@@ -486,9 +486,10 @@ export function runtimesHref(engineId) {
 /**
  * The body of POST /api/m/:id/tools/profiles (07 §6.3 step 6): the sparse
  * values the user set, never a secret, with the catalog version they were made
- * against. `config` keeps the entry readable by managers that only know the flat shape.
+ * against, from the current engine's schema catalog. `config` keeps the entry
+ * readable by managers that only know the flat shape.
  */
-export function profileBody(draft, plan, name, { description = "" } = {}) {
+export function profileBody(draft, catalog, name, { description = "" } = {}) {
   const values = {};
   for (const [id, raw] of Object.entries(isObject(draft?.values) ? draft.values : {})) {
     const value = unwrap(raw);
@@ -496,14 +497,16 @@ export function profileBody(draft, plan, name, { description = "" } = {}) {
     values[id] = value;
   }
   const model = draft?.modelRef?.kind === "local" ? text(draft.modelRef.path) : "";
+  const engineId = text(draft?.engineId);
   return {
     name: text(name),
     description: text(description),
     schemaVersion: 2,
-    engineId: text(draft?.engineId),
+    engineId,
     ...(text(draft?.recipeId) ? { recipeId: text(draft.recipeId) } : {}),
     values,
-    catalogVersion: text(plan?.catalogVersion),
+    // Queries may retain the previous engine's catalog while the next one loads.
+    catalogVersion: engineId && text(catalog?.engineId) === engineId ? text(catalog?.catalogVersion) : "",
     config: {
       model,
       engine: draft?.engineId === "llamacpp" ? "llama.cpp" : text(draft?.engineId),
