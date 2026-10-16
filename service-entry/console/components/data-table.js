@@ -11,7 +11,10 @@
 // button. Column fields: id, header, cell(row), sort (true, or a function
 // returning the sort value), align, width, hideable, defaultHidden and csv
 // (a function returning the CSV value, or false to leave the column out).
+// layout="fixed" uses the total declared numeric widths of the visible columns.
 // `rowAttrs(row)` returns extra attributes for a row (data-render-key).
+// `layout: "fixed"` uses the visible numeric column widths as the table width;
+// other tables keep automatic layout. Hidden columns do not reserve space.
 
 import { toCsv } from "../lib/csv.js";
 import { safeUrl } from "../lib/url.js";
@@ -135,6 +138,13 @@ function cellOf(column, row) {
   return value === null || value === undefined || value === "" ? "—" : String(value);
 }
 
+function columnStyle(column) {
+  const width = column.width;
+  if (typeof width === "number" && Number.isFinite(width) && width >= 0) return { width: `${width}px` };
+  if (typeof width === "string" && width.trim()) return { width };
+  return undefined;
+}
+
 function ColumnChooser({ id, columns, visible, onToggle }) {
   const { t } = useT();
   const optional = columns.filter((column) => column.hideable);
@@ -167,6 +177,7 @@ export function DataTable({
   exportHref,
   empty,
   responsive = "scroll",
+  layout = "auto",
   caption,
   loading = false,
   testid,
@@ -183,6 +194,8 @@ export function DataTable({
 
   const visibleIds = useMemo(() => visibleColumnIds(columns, stored?.[id]), [columns, stored, id]);
   const shownColumns = columns.filter((column) => visibleIds.includes(column.id));
+  const fixed = layout === "fixed" && shownColumns.every((column) => typeof column.width === "number" && Number.isFinite(column.width) && column.width >= 0);
+  const tableStyle = fixed ? { tableLayout: "fixed", width: `${shownColumns.reduce((total, column) => total + column.width, 0)}px`, minWidth: "100%" } : undefined;
   const sortColumn = sort ? columns.find((column) => column.id === sort.id) : null;
   const sorted = useMemo(() => sortRows(rows, sortColumn, sort?.dir), [rows, sortColumn, sort?.dir]);
   const cards = responsive === "cards" && narrow;
@@ -272,11 +285,11 @@ export function DataTable({
   return html`<div class="data-table" data-mode=${windowed ? "windowed" : "table"} data-testid=${testid || "data-table.root"}>
     ${toolbar}
     <div class=${`table-wrap data-scroll${windowed ? " data-windowed" : ""}`} ref=${scroller} tabindex="0" role="region" aria-label=${name} onScroll=${windowed ? onScroll : undefined} data-testid="data-table.scroll">
-      <table class="table" aria-rowcount=${windowed ? sorted.length + 1 : undefined}>
+      <table class="table" style=${tableStyle} aria-rowcount=${windowed ? sorted.length + 1 : undefined}>
         <caption class="sr-only">${name}</caption>
         <thead><tr>
           ${shownColumns.map((column) => html`<th key=${column.id} scope="col" class=${column.align === "end" || column.align === "right" ? "num" : undefined}
-            aria-sort=${ariaSort(column)} data-column=${column.id}>
+            style=${columnStyle(column)} aria-sort=${ariaSort(column)} data-column=${column.id}>
             ${sortable(column)
               ? html`<button type="button" class="th-sort" onClick=${() => setSort(nextSort(sort, column.id))} data-testid="data-table.sort">
                   ${column.header}<span class="sort-mark" aria-hidden="true">${sort?.id === column.id ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}</span>
@@ -288,7 +301,8 @@ export function DataTable({
           ${topSpace ? html`<tr aria-hidden="true" class="row-spacer"><td colspan=${shownColumns.length} style=${{ height: `${topSpace}px`, padding: 0, border: 0 }}></td></tr>` : null}
           ${visibleRows.map((row, offset) => html`<tr key=${keyOf(rowKey, row, range.start + offset)} data-row="true" data-testid="data-table.row"
             aria-rowindex=${windowed ? range.start + offset + 2 : undefined} ...${rowProps(row)}>
-            ${shownColumns.map((column) => html`<td key=${column.id} class=${column.align === "end" || column.align === "right" ? "num" : undefined}>${cellOf(column, row)}</td>`)}
+            ${shownColumns.map((column) => html`<td key=${column.id} class=${column.align === "end" || column.align === "right" ? "num" : undefined}
+              style=${columnStyle(column)} data-column=${column.id}>${cellOf(column, row)}</td>`)}
           </tr>`)}
           ${bottomSpace ? html`<tr aria-hidden="true" class="row-spacer"><td colspan=${shownColumns.length} style=${{ height: `${bottomSpace}px`, padding: 0, border: 0 }}></td></tr>` : null}
         </tbody>

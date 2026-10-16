@@ -56,14 +56,14 @@ function NameCell({ view, byId }) {
   const fmt = useFormat();
   const href = view.routeId ? `/models/library/${enc(view.routeId)}` : null;
   const twin = view.duplicates.map((id) => byId.get(id)).find(Boolean);
-  return html`<div class="stack-sm">
-    <span class="row">
-      ${href ? html`<a href=${href} data-user-content="" data-testid="library.link">${view.name}</a>` : html`<span data-user-content="">${view.name}</span>`}
+  return html`<div class="stack-sm library-name">
+    <span class="row library-name-heading">
+      ${href ? html`<a class="library-model-name" href=${href} title=${view.name} data-user-content="" data-testid="library.link">${view.name}</a>` : html`<span class="library-model-name" title=${view.name} data-user-content="">${view.name}</span>`}
       ${view.cache ? html`<span class="badge badge-neutral">${t("hub.library.cache")}</span>` : null}
       ${twin ? html`<span class="badge badge-warn" title=${t("hub.library.duplicate", { name: twin.name, size: fmt.bytes(Math.min(twin.bytes, view.bytes)) })} data-testid="library.duplicate">${t("hub.library.duplicateBadge")}</span>` : null}
       ${view.residueFiles ? html`<span class="badge badge-warn" data-testid="library.residue">${t("hub.library.residue", { size: fmt.bytes(view.residueBytes) })}</span>` : null}
     </span>
-    ${view.path ? html`<span class="xsmall muted mono truncate" data-user-content="">${view.path}</span>` : null}
+    ${view.path ? html`<span class="xsmall muted mono truncate library-model-path" title=${view.path} data-user-content="">${view.path}</span>` : null}
   </div>`;
 }
 
@@ -96,8 +96,8 @@ function Filters({ filters, options, onChange, hubSource }) {
     </select>
   </label>`;
   const plain = (values) => values.map((value) => ({ value, label: value }));
-  return html`<div class="row deploy-filters" role="group" aria-label=${t("hub.library.filter.label")}>
-    <label class="deploy-filter">
+  return html`<div class="row deploy-filters library-filters" role="group" aria-label=${t("hub.library.filter.label")}>
+    <label class="deploy-filter library-search">
       <span class="small muted">${t("hub.library.filter.search")}</span>
       <input class="input" type="search" value=${filters.q} data-testid="library.filter.q" autocomplete="off"
         onInput=${(event) => onChange({ q: event.currentTarget.value })} />
@@ -132,24 +132,24 @@ export default function LibraryPage() {
   const totalBytes = views.reduce((sum, view) => sum + view.bytes, 0);
 
   const columns = [
-    { id: "name", header: t("hub.library.col.name"), sort: (view) => view.name.toLowerCase(), cell: (view) => html`<${NameCell} view=${view} byId=${byId} />`, csv: (view) => view.name },
-    { id: "role", hideable: true, header: t("hub.library.col.role"), sort: (view) => view.role, cell: (view) => html`<${RoleCell} view=${view} />`, csv: (view) => view.role, defaultHidden: !hubSource },
-    { id: "format", hideable: true, header: t("hub.library.col.format"), sort: (view) => view.format, cell: (view) => (view.format || view.quant
+    { id: "name", width: 360, header: t("hub.library.col.name"), sort: (view) => view.name.toLowerCase(), cell: (view) => html`<${NameCell} view=${view} byId=${byId} />`, csv: (view) => view.name },
+    { id: "role", width: 96, hideable: true, header: t("hub.library.col.role"), sort: (view) => view.role, cell: (view) => html`<${RoleCell} view=${view} />`, csv: (view) => view.role, defaultHidden: !hubSource },
+    { id: "format", width: 128, hideable: true, header: t("hub.library.col.format"), sort: (view) => view.format, cell: (view) => (view.format || view.quant
       ? html`<span class="mono small">${[view.format, view.quant].filter(Boolean).join(" · ")}</span>` : html`<span class="muted">—</span>`), csv: (view) => [view.format, view.quant].filter(Boolean).join(" ") },
-    { id: "size", header: t("hub.library.col.size"), align: "end", sort: (view) => view.bytes, cell: (view) => html`<span class="num">${view.bytes ? fmt.bytes(view.bytes) : "—"}</span>`, csv: (view) => view.bytes },
-    { id: "root", hideable: true, header: t("hub.library.col.root"), sort: (view) => view.rootLabel, cell: (view) => html`<span data-user-content="">${view.rootLabel || "—"}</span>`, csv: (view) => view.rootLabel },
-    { id: "engines", hideable: true, header: t("hub.library.col.engines"), cell: (view) => (view.engines.length
+    { id: "size", width: 96, header: t("hub.library.col.size"), align: "end", sort: (view) => view.bytes, cell: (view) => html`<span class="num">${view.bytes ? fmt.bytes(view.bytes) : "—"}</span>`, csv: (view) => view.bytes },
+    { id: "root", width: 104, hideable: true, header: t("hub.library.col.root"), sort: (view) => view.rootLabel, cell: (view) => html`<span data-user-content="">${view.rootLabel || "—"}</span>`, csv: (view) => view.rootLabel },
+    { id: "engines", width: 112, hideable: true, header: t("hub.library.col.engines"), cell: (view) => (view.engines.length
       ? html`<span class="row" data-testid="library.engines">${view.engines.map((chip) => html`<span key=${chip.engineId} class=${`badge ${chip.verdict === "ok" ? "badge-success" : "badge-warn"}`} data-engine=${chip.engineId}>${chip.engineId}</span>`)}</span>`
       : html`<span class="muted">—</span>`), csv: (view) => view.engines.map((chip) => chip.engineId).join(" "), defaultHidden: !hubSource },
-    { id: "verification", header: t("hub.library.col.verification"), sort: (view) => view.verification, cell: (view) => html`<${StatusBadge} status=${VERIFY_STATUS[view.verification] || "unknown"} label=${t(tk("hub.library.verification.", view.verification))} />`, csv: (view) => view.verification },
-    { id: "provenance", hideable: true, header: t("hub.library.col.provenance"), sort: (view) => view.provenance, cell: (view) => (view.provenance
-      ? html`<span class="stack-sm"><code class="code-inline" data-user-content="">${view.provenance}</code>
+    { id: "verification", width: 120, header: t("hub.library.col.verification"), sort: (view) => view.verification, cell: (view) => html`<${StatusBadge} status=${VERIFY_STATUS[view.verification] || "unknown"} label=${t(tk("hub.library.verification.", view.verification))} />`, csv: (view) => view.verification },
+    { id: "provenance", width: 200, hideable: true, header: t("hub.library.col.provenance"), sort: (view) => view.provenance, cell: (view) => (view.provenance
+      ? html`<span class="stack-sm library-provenance"><code class="code-inline library-repo" title=${view.provenance} data-user-content="">${view.provenance}</code>
         <span class="xsmall muted">${t(tk("hub.library.provenance.", view.provenanceConfidence))}</span></span>`
       : html`<span class="muted" data-testid="library.no-provenance">—</span>`), csv: (view) => view.provenance, defaultHidden: !hubSource },
-    { id: "update", hideable: true, header: t("hub.library.col.update"), sort: (view) => view.update, cell: (view) => html`<${UpdateCell} view=${view} />`, csv: (view) => view.update, defaultHidden: !hubSource },
-    { id: "lastUsed", hideable: true, header: t("hub.library.col.lastUsed"), sort: (view) => view.lastLaunchedAt || "", cell: (view) => (view.lastLaunchedAt
+    { id: "update", width: 124, hideable: true, header: t("hub.library.col.update"), sort: (view) => view.update, cell: (view) => html`<${UpdateCell} view=${view} />`, csv: (view) => view.update, defaultHidden: !hubSource },
+    { id: "lastUsed", width: 124, hideable: true, header: t("hub.library.col.lastUsed"), sort: (view) => view.lastLaunchedAt || "", cell: (view) => (view.lastLaunchedAt
       ? html`<time dateTime=${view.lastLaunchedAt} title=${fmt.dateTime(view.lastLaunchedAt)}>${fmt.relative(view.lastLaunchedAt)}</time>` : html`<span class="muted">—</span>`), csv: (view) => view.lastLaunchedAt },
-    ...(owner ? [{ id: "actions", header: html`<span class="sr-only">${t("hub.library.col.actions")}</span>`, hideable: false, csv: false, cell: (view) => html`<${RowActions} view=${view} owner=${owner} actions=${actions} />` }] : []),
+    ...(owner ? [{ id: "actions", width: 264, header: t("hub.library.col.actions"), hideable: false, csv: false, cell: (view) => html`<${RowActions} view=${view} owner=${owner} actions=${actions} />` }] : []),
   ];
 
   const headerActions = html`${owner && hubSource ? html`<${Button} busy=${Boolean(actions.busy["all:rescan"])} onClick=${() => actions.run.rescan()} testid="library.rescan">${t("hub.library.rescan")}<//>` : null}
@@ -160,18 +160,18 @@ export default function LibraryPage() {
     body = html`<${EmptyState} testid="library.unavailable" icon="triangle-alert" title=${t("hub.library.loadFailed")} body=${describeError(library.error, i18n)}
       action=${{ label: t("hub.library.retry"), onClick: () => library.refetch() }} />`;
   } else if (!data) {
-    body = html`<${DataTable} id="library" columns=${columns} rows=${[]} loading=${true} caption=${t("hub.library.title")} testid="library.table" />`;
+    body = html`<${DataTable} id="library" layout="fixed" columns=${columns} rows=${[]} loading=${true} caption=${t("hub.library.title")} testid="library.table" />`;
   } else {
     body = html`<div class="stack">
       ${hubSource ? null : html`<div class="notice notice-info" role="status" data-testid="library.degraded">${t("hub.library.degraded")}</div>`}
       ${data.views.length ? null : html`<${EmptyState} testid="library.empty" icon="boxes" title=${t("hub.library.empty")} body=${t("hub.library.emptyBody")}
         action=${{ label: t("hub.library.discover"), href: "/models/discover" }} />`}
-      ${data.views.length ? html`<${DataTable} id="library" columns=${columns} rows=${shown} rowKey=${(view) => view.key} caption=${t("hub.library.title")} exportName="library"
+      ${data.views.length ? html`<${DataTable} id="library" layout="fixed" columns=${columns} rows=${shown} rowKey=${(view) => view.key} caption=${t("hub.library.title")} exportName="library"
         filters=${html`<${Filters} filters=${filters} options=${options} hubSource=${hubSource} onChange=${(patch) => setFilters((current) => ({ ...current, ...patch }))} />`}
         empty=${html`<p class="muted" data-testid="library.no-match">${t("hub.library.noMatch")}</p>`} testid="library.table" />` : null}
     </div>`;
   }
-  return html`<div class="stack" data-testid="library" data-source=${data?.source || ""}>
+  return html`<div class="stack model-library" data-testid="library" data-source=${data?.source || ""}>
     <${PageHeader} title=${t("shell.nav.models")} subtitle=${data ? t("hub.library.subtitle", { count: data.views.length, size: fmt.bytes(totalBytes) }) : t("hub.library.title")} actions=${headerActions} />
     <${ModelsNav} current="library" />
     <${CapacityBars} query=${usage} />

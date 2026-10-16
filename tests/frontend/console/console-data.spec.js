@@ -16,12 +16,13 @@ test.afterAll(async () => {
   await entry?.stop();
 });
 
-async function openKit(browser, { size = { width: 1440, height: 960 } } = {}) {
+async function openKit(browser, { size = { width: 1440, height: 960 }, beforeOpen } = {}) {
   const context = await browser.newContext({ viewport: size, locale: "en-US", reducedMotion: "reduce", acceptDownloads: true });
   await setPrefs(context, { theme: "light", locale: "en-US", density: "comfortable" }, { baseUrl: entry.url });
   const page = await context.newPage();
   const api = await mockConsoleApi(page);
   const failures = await collectFailures(page);
+  await beforeOpen?.(page);
   await openUiKit(page, entry.url, { locale: "en-US" });
   return { context, page, api, failures };
 }
@@ -74,6 +75,67 @@ test("the column chooser is remembered per table across reloads", async ({ brows
     await expect(byTestId(page, "uikit.table-big").locator('th[data-column="score"]')).toHaveCount(1);
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("console.prefs.v1") || "{}"));
     expect(stored.tableColumns["uikit-table"]).toEqual(["name", "tokens", "note"]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("DataTable preserves column widths and fixed layout after toggling columns", async ({ browser }) => {
+  const { page, context, failures } = await openKit(browser, {
+    beforeOpen: (page) => page.route(/\/routes\/system\/ui-kit\/data\.js(?:\?|$)/, (route) => route.fulfill({
+      contentType: "text/javascript",
+      body: `
+        import { html } from "../../../ui/html.js";
+        import { DataTable } from "../../../components/data-table.js";
+        const columns = [
+          { id: "name", header: "Name", width: 180 },
+          { id: "source", header: "Source", width: "12rem", hideable: true },
+          { id: "note", header: "Note" },
+        ];
+        const fixedColumns = columns.map((column) => ({ ...column, width: { name: 180, source: 240, note: 160 }[column.id] }));
+        const rows = [{ id: "one", name: "Model", source: "owner/repository", note: "Unspecified width" }];
+        export default function WidthFixture() {
+          return html\`<div class="stack">
+            <\${DataTable} id="uikit-widths" caption="Column widths" columns=\${columns} rows=\${rows} testid="uikit.table-widths" />
+            <\${DataTable} id="uikit-fixed" caption="Fixed widths" columns=\${fixedColumns} rows=\${rows} layout="fixed" testid="uikit.table-fixed" />
+            <\${DataTable} id="uikit-mixed" caption="Mixed widths" columns=\${columns} rows=\${rows} layout="fixed" testid="uikit.table-mixed" />
+          </div>\`;
+        }
+      `,
+    })),
+  });
+  try {
+    const root = byTestId(page, "uikit.table-widths");
+    for (const id of ["uikit.table-widths", "uikit.table-mixed"]) {
+      await expect(byTestId(page, id).locator("table")).not.toHaveAttribute("style");
+    }
+    const assertWidths = async () => {
+      for (const [id, width] of [["name", "180px"], ["source", "12rem"], ["note", ""]]) {
+        for (const tag of ["th", "td"]) {
+          const cell = root.locator(`${tag}[data-column="${id}"]`);
+          await expect(cell).toHaveCount(1);
+          await expect.poll(() => cell.evaluate((element) => element.style.width)).toBe(width);
+        }
+      }
+    };
+    await assertWidths();
+    await root.locator('[data-testid="data-table.chooser-toggle"]').click();
+    await root.locator('[data-testid="data-table.column.source"]').uncheck();
+    await expect(root.locator('[data-column="source"]')).toHaveCount(0);
+    await root.locator('[data-testid="data-table.column.source"]').check();
+    await assertWidths();
+    const fixed = byTestId(page, "uikit.table-fixed");
+    const assertFixedWidth = (width) => expect.poll(() => fixed.locator("table").evaluate((element) => ({
+      layout: element.style.tableLayout, width: element.style.width, minWidth: element.style.minWidth,
+    }))).toEqual({ layout: "fixed", width, minWidth: "100%" });
+    await assertFixedWidth("580px");
+    await fixed.locator('[data-testid="data-table.chooser-toggle"]').click();
+    await fixed.locator('[data-testid="data-table.column.source"]').uncheck();
+    await expect(fixed.locator('[data-column="source"]')).toHaveCount(0);
+    await assertFixedWidth("340px");
+    await fixed.locator('[data-testid="data-table.column.source"]').check();
+    await assertFixedWidth("580px");
+    await failures.expectNone();
   } finally {
     await context.close();
   }

@@ -15,7 +15,7 @@ export function StackedBar({ total, parts = [], unit = "bytes", testid }) {
   const scale = Math.max(cap, used) || 1;
   const show = (value) => (unit === "bytes" ? fmt.bytes(value) : unit === "MiB" ? fmt.mib(value) : `${fmt.number(value)} ${unit}`);
   const share = (value) => fmt.percent(value / scale, 0);
-  return html`<div class="stacked-bar" data-testid=${testid || "stacked-bar.root"}>
+  return html`<div class="stacked-bar-summary" data-testid=${testid || "stacked-bar.root"}>
     <div class="small num">${show(used)} / ${show(cap)}</div>
     <div class="stack-track" aria-hidden="true">
       ${parts.map((part, index) => html`<span key=${part.id ?? index} class=${`stack-seg stack-c${index % 8}`} style=${{ width: `${(Math.max(0, part.value) / scale) * 100}%` }}></span>`)}

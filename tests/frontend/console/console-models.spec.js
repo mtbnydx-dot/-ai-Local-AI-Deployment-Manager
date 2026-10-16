@@ -193,6 +193,133 @@ test("the library lists every model with its columns, and the capacity bars come
   }
 });
 
+// Long repository and file names must remain readable with every optional column enabled.
+// A wide model table scrolls inside its region without widening the console shell.
+for (const [viewport, variants] of [
+  ["desktop", [{ locale: "en-US", theme: "light" }, { locale: "zh-CN", theme: "dark" }]],
+  ["phone", [{ locale: "zh-CN", theme: "light" }, { locale: "en-US", theme: "dark" }]],
+]) {
+  test("long library names and sources stay bounded with all 11 columns on " + viewport, async ({ browser }) => {
+    const screenshots = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "model-library-layout-"));
+    for (const variant of variants) {
+      const library = fixture("models-library");
+      const names = [
+        "Qwen3.5-397B-A17B-MXFP4-UD-Q4_K_XL-LongContext-262144-Community-Calibration-2026-10-14-00001-of-00009.gguf",
+        "MiniMax-M2.5-REAP-139B-A10B-NVFP4-Dynamic-262144-context-Instruct-Community-Quantization-2026-10-14",
+      ];
+      const paths = names.map((name) => "X:/models/huggingface/community-quantizations/long-context-calibration/verified-2026-10-14/production-candidates/" + name + "/snapshots/2026-10-14-final/" + name);
+      const repo = "community-long-context-calibration/Qwen3.5-397B-A17B-MXFP4-UD-Q4_K_XL-Instruct-262144-Community-Quantization";
+      const revision = "refs/pr/123/long-context-262144-calibration-for-community-quantization-2026-10-14";
+      const models = [ENTRY_A, ENTRY_B].map((id, index) => {
+        const model = library.entries.find((item) => item.id === id);
+        Object.assign(model, { displayName: names[index], path: paths[index] });
+        model.provenance = { ...model.provenance, repo, revision, revisionSha: "" };
+        return model;
+      });
+      const api = detailApi({
+        "GET /api/hub/library": () => library,
+        ...Object.fromEntries(models.map((model) => ["GET /api/hub/library/" + model.id, () => ({ ok: true, entry: { ...model, aliases: [], files: [] } })])),
+      });
+      const { context, page, failures } = await newPage(browser, { api, size: SIZES[viewport], ...variant });
+      try {
+        await openLibrary(page);
+        const table = byId(page, "library.table");
+        await table.locator('[data-testid="data-table.chooser-toggle"]').click();
+        for (const column of ["role", "format", "root", "engines", "provenance", "update", "lastUsed"]) {
+          await table.locator('[data-testid="data-table.column.' + column + '"]').check();
+        }
+        await table.locator('[data-testid="data-table.chooser-toggle"]').click();
+        const headers = table.locator("thead th[data-column]");
+        await expect(headers).toHaveCount(11);
+        const columnIds = await headers.evaluateAll((items) => items.map((item) => item.dataset.column));
+        const nameIndex = columnIds.indexOf("name");
+        const sourceIndex = columnIds.indexOf("provenance");
+        expect(nameIndex).toBeGreaterThanOrEqual(0);
+        expect(sourceIndex).toBeGreaterThanOrEqual(0);
+        for (const [index, model] of models.entries()) {
+          const row = table.locator('[data-testid="data-table.row"]:has(a[href="/models/library/' + model.id + '"])');
+          await expect(row.locator('[data-testid="library.link"]')).toHaveText(names[index]);
+          await expect(row.getByText(paths[index], { exact: true })).toBeVisible();
+          await expect(row.getByText(repo + "@" + revision, { exact: true })).toBeVisible();
+          const geometry = await row.evaluate((element, columns) => {
+            const cells = element.querySelectorAll("td");
+            const name = cells[columns.name].querySelector('[data-testid="library.link"]');
+            const source = cells[columns.source].querySelector("code");
+            return {
+              rowHeight: element.getBoundingClientRect().height,
+              nameWidth: cells[columns.name].getBoundingClientRect().width,
+              linkWidth: name.getBoundingClientRect().width,
+              sourceWidth: cells[columns.source].getBoundingClientRect().width,
+              sourceTextWidth: source.getBoundingClientRect().width,
+            };
+          }, { name: nameIndex, source: sourceIndex });
+          console.log("library layout " + JSON.stringify({ viewport, ...variant, model: index, ...geometry }));
+          expect(geometry.rowHeight, viewport + "/" + variant.locale + ": long model row height").toBeLessThanOrEqual(180);
+          expect(geometry.nameWidth, "name column remains usable").toBeGreaterThanOrEqual(300);
+          expect(geometry.linkWidth, "name does not collapse beside its badges").toBeGreaterThanOrEqual(200);
+          expect(geometry.sourceWidth, "repository column remains usable").toBeGreaterThanOrEqual(160);
+          expect(geometry.sourceTextWidth, "repository text does not become a one-character column").toBeGreaterThanOrEqual(120);
+        }
+
+        // Assert rendered capacity, not just hidden legend text in the DOM.
+        for (const root of [page.locator('[data-testid="capacity.root"][data-root="r_main"]'), byId(page, "capacity.cache")]) {
+          await expect(root.locator(".stack-legend")).toBeVisible();
+          await expect(root.locator('[data-testid="stacked-bar.part"]').first()).toBeVisible();
+          const track = root.locator(".stack-track");
+          await expect(track).toBeVisible();
+          expect((await track.boundingBox()).height, "capacity bar has a visible track").toBeGreaterThanOrEqual(12);
+        }
+
+        const scroll = table.locator('[data-testid="data-table.scroll"]');
+        const dimensions = await scroll.evaluate((element) => ({
+          left: element.getBoundingClientRect().left,
+          right: element.getBoundingClientRect().right,
+          client: element.clientWidth,
+          scroll: element.scrollWidth,
+          viewport: window.innerWidth,
+        }));
+        expect(dimensions.left).toBeGreaterThanOrEqual(-1);
+        expect(dimensions.right).toBeLessThanOrEqual(dimensions.viewport + 1);
+        expect(dimensions.scroll, "all columns are reachable through table scrolling").toBeGreaterThan(dimensions.client);
+        await expectNoOverflow(page);
+        const action = table.locator('[data-testid="library.actions"][data-entry="' + ENTRY_A + '"] [data-testid="library.deploy"]');
+        if (viewport === "desktop") {
+          expect(await scroll.evaluate((element) => element.scrollLeft)).toBe(0);
+          const initialAction = await action.boundingBox();
+          const initialScroll = await scroll.boundingBox();
+          expect(initialAction.x, "sticky actions are visible before horizontal scrolling").toBeGreaterThanOrEqual(initialScroll.x - 1);
+          expect(initialAction.x + initialAction.width).toBeLessThanOrEqual(initialScroll.x + initialScroll.width + 1);
+        }
+        const screenshotStem = path.join(screenshots, viewport + "-" + variant.locale + "-" + variant.theme);
+        await page.screenshot({ path: screenshotStem + "-names.png", fullPage: true });
+        console.log("library screenshot " + screenshotStem + "-names.png");
+        await scroll.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+        await expect(action).toBeVisible();
+        const actionBox = await action.boundingBox();
+        const scrollBox = await scroll.boundingBox();
+        expect(actionBox.x).toBeGreaterThanOrEqual(scrollBox.x - 1);
+        expect(actionBox.x + actionBox.width).toBeLessThanOrEqual(scrollBox.x + scrollBox.width + 1);
+        await expectNoOverflow(page);
+        await page.screenshot({ path: screenshotStem + "-actions.png", fullPage: true });
+        console.log("library screenshot " + screenshotStem + "-actions.png");
+
+        await scroll.evaluate((element) => { element.scrollLeft = 0; });
+        await byId(page, "library.filter.q").fill("00001-of-00009.gguf");
+        await expect(table.locator('[data-testid="data-table.row"]')).toHaveCount(1);
+        await expect(table.locator('[data-testid="library.link"]')).toHaveText(names[0]);
+        await byId(page, "library.filter.q").fill("");
+        await expect(table.locator('[data-testid="data-table.row"]')).toHaveCount(6);
+        await table.locator('a[data-testid="library.link"][href="/models/library/' + ENTRY_A + '"]').click();
+        await expect(byId(page, "model-detail")).toHaveAttribute("data-kind", "local");
+        await expect(page.locator("h1")).toHaveText(names[0]);
+        expect(realFailures(failures)).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    }
+  });
+}
+
 test("the facets narrow the table: root, format, runnable-on-engine, role and has-update", async ({ browser }) => {
   const { context, page } = await newPage(browser, { api: hubApi() });
   try {
