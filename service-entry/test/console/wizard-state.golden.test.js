@@ -591,6 +591,48 @@ test("fromLegacyProfile reads a v2 profile's sparse values and ignores a secret 
   assert.deepEqual(draft.values, { contextLength: 524288 });
 });
 
+test("a v2 profile's populated compatibility config never expands its sparse values", () => {
+  for (const [managerId, engineId, legacyEngine] of [["vllm", "vllm", "vllm"], ["vllm", "sglang", "sglang"], ["llama", "llamacpp", "llama.cpp"]]) {
+    const catalog = catalogOf(engineId);
+    const profile = {
+      schemaVersion: 2, engineId, recipeId: "saved-recipe",
+      values: { contextLength: 65536, apiKey: FAKE_KEY },
+      config: {
+        model: "C:/fixture/models/example-7B", engine: legacyEngine, name: "example", port: 8001,
+        instanceMode: "parallel", instanceId: "vision", networkAccess: "lan", gpuDeviceIds: ["0", "1"],
+        maxModelLen: 8192, maxNumSeqs: 4, gpuMemoryUtilization: 0.9,
+        enablePrefixCaching: false, disablePrefixCaching: false,
+        apiKey: FAKE_KEY, hfAccessToken: "hf_fake", runtimeImage: "example/image:1",
+      },
+    };
+    const before = clone(profile);
+    const draft = fromLegacyProfile(profile, catalog, { managerId });
+    assert.deepEqual(draft.values, { contextLength: 65536 }, engineId);
+    assert.equal(draft.engineId, engineId);
+    assert.equal(draft.recipeId, "saved-recipe");
+    assert.equal(draft.modelRef.path, profile.config.model);
+    assert.deepEqual(draft.instance, { mode: "parallel", targetInstanceId: "", instanceId: "vision", servedName: "example", port: 8001 });
+    assert.deepEqual(draft.gpus, ["0", "1"]);
+    assert.equal(draft.access.networkAccess, "lan");
+    assert.equal(draft.legacy.runtimeImage, "example/image:1");
+    const request = planRequest(draft, { catalog });
+    assert.deepEqual(request.values, { contextLength: 65536 });
+    assert.equal(request.model.servedName, "example");
+    assert.equal(JSON.stringify(draft).includes(FAKE_KEY), false);
+    assert.equal(JSON.stringify(draft).includes("hf_fake"), false);
+    assert.deepEqual(profile, before, "reading never mutates the saved profile");
+
+    const empty = fromLegacyProfile({ ...profile, values: {} }, catalog, { managerId });
+    assert.deepEqual(empty.values, {}, "an empty sparse profile leaves recipe defaults in charge");
+    const explicit = { servedName: "explicit", concurrency: { value: 2, source: "user" } };
+    const selected = fromLegacyProfile({ ...profile, values: explicit }, catalog, { managerId });
+    assert.deepEqual(selected.values, explicit);
+    assert.equal(selected.instance.servedName, "", "the explicit servedName parameter wins over the compatibility fallback");
+    selected.values.concurrency.value = 3;
+    assert.equal(explicit.concurrency.value, 2, "parameter values are cloned");
+  }
+});
+
 test("fromLegacyProfile agrees with manager-core's legacyConfigToValues on every builtin profile", () => {
   const core = require(path.join(ROOT, "manager-core"));
   const catalogs = core.engines.getParamCatalog();

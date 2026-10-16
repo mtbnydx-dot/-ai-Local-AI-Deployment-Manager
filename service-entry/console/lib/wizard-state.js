@@ -775,6 +775,7 @@ const LEGACY_ENGINES = Object.freeze({ llama: "llamacpp", "llama.cpp": "llamacpp
 export function fromLegacyProfile(profile, catalog, { managerId = "", seed = {} } = {}) {
   const source = isPlainObject(profile) ? profile : {};
   const config = isPlainObject(source.config) ? source.config : {};
+  const sparse = source.schemaVersion === 2 && isPlainObject(source.values);
   const params = (Array.isArray(catalog?.params) ? catalog.params : []).filter((param) => param && param.legacy && typeof param.legacy === "object");
   const values = {};
   const consumed = new Set();
@@ -782,6 +783,12 @@ export function fromLegacyProfile(profile, catalog, { managerId = "", seed = {} 
   for (const param of params) {
     if (param.secret) {
       for (const name of legacyFields(param)) if (present(config, name)) secrets.push(name);
+      continue;
+    }
+    // A v2 config is an old-reader view with manager defaults filled in;
+    // only its explicit values may override the selected recipe's defaults.
+    if (sparse) {
+      for (const name of legacyFields(param)) if (present(config, name)) consumed.add(name);
       continue;
     }
     const decoded = decodeParam(param, config);
@@ -802,6 +809,10 @@ export function fromLegacyProfile(profile, catalog, { managerId = "", seed = {} 
   };
   if (!blank(take("model"))) request.modelRef = { kind: "local", entryId: null, path: String(config.model).trim() };
   const instance = {};
+  if (sparse) {
+    const name = take("name");
+    if (!Object.hasOwn(values, "servedName") && !blank(name)) instance.servedName = String(name);
+  }
   const port = take("port");
   if (!blank(port)) instance.port = port;
   const mode = take("instanceMode");
