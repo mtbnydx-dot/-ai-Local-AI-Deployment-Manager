@@ -1435,11 +1435,17 @@ async function buildPlatformMcpStatus(options = {}) {
   const health = await getJson(`http://127.0.0.1:${port}/health`, 2500);
   const data = health.data && typeof health.data === "object" ? health.data : {};
   const healthy = Boolean(health.ok && data.ok && data.service === "local-ai-platform-mcp");
-  // 工具清单来自 /info（需 Bearer）。密钥只从平台根下的 server.env 读取，不外传。
+  // /info needs the upstream key; read the live vault after the MCP hook has
+  // migrated/generated it, even when the entry started before that hook.
   let tools = [];
   let policy = null;
   if (healthy) {
-    const key = await readPlatformMcpKey(options.envFile);
+    let key;
+    try {
+      key = await readPlatformMcpKey(options.envFile);
+    } catch {
+      return { ...base, error: "MCP credentials are unavailable." };
+    }
     if (key) {
       const info = await getJson(`http://127.0.0.1:${port}/info`, 2500, { authorization: `Bearer ${key}` });
       const infoData = info.data && typeof info.data === "object" ? info.data : {};
@@ -1463,9 +1469,27 @@ async function buildPlatformMcpStatus(options = {}) {
   };
 }
 
+let platformCredentialStore = null;
+
+function readPlatformCredential(name) {
+  // get() rechecks the file signature and unprotects only new blobs. Keeping
+  // the store avoids repeated DPAPI calls while still seeing later writes.
+  platformCredentialStore ||= core.secrets.createSecretStore({ aiRoot: AI_ROOT, namespace: "platform" });
+  return String(platformCredentialStore.get(name) || "").trim();
+}
+
+function explicitAuxCredentialEnv(name) {
+  // childEnv marks injected config values as a startup snapshot. A real env
+  // override wins; an injected snapshot must not hide a newer vault value.
+  const injected = String(process.env.PLATFORM_CONFIG_ENV_KEYS || "").split(/[;,]/).map((item) => item.trim());
+  return injected.includes(name) ? "" : String(process.env[name] || "").trim();
+}
+
 async function readPlatformMcpKey(envFile = PLATFORM_MCP_ENV_FILE) {
-  const fromEnv = String(process.env.PLATFORM_MCP_API_KEY || "").trim();
+  const fromEnv = explicitAuxCredentialEnv("PLATFORM_MCP_API_KEY");
   if (fromEnv.length >= 16) return fromEnv;
+  const fromStore = readPlatformCredential("platformMcp.apiKey");
+  if (fromStore.length >= 16) return fromStore;
   try {
     const text = await fs.readFile(envFile, "utf8");
     const key = parseEnvFileValue(text, "PLATFORM_MCP_API_KEY");
@@ -2288,8 +2312,10 @@ const AUX_UPSTREAMS = {
 
 async function auxUpstreamCredential(service) {
   if (service === "mcp") return readPlatformMcpKey();
-  const configured = String(process.env.SERVICE_ENTRY_SEARCH_GATEWAY_KEY || process.env.SEARCH_GATEWAY_API_KEY || "").trim();
+  const configured = explicitAuxCredentialEnv("SERVICE_ENTRY_SEARCH_GATEWAY_KEY") || explicitAuxCredentialEnv("SEARCH_GATEWAY_API_KEY");
   if (configured) return configured;
+  const fromStore = readPlatformCredential("search.apiKey");
+  if (fromStore) return fromStore;
   // start-search-gateway.cmd seeds the search key from the last public service
   // key file; read the same file so the entry can present it.
   try {
@@ -2361,8 +2387,15 @@ async function proxyAuxGatewayRequest(req, res, url) {
     rec?.reject({ status: 413, code: "request_body_too_large" });
     return sendJson(res, core.openAiGatewayError("request_body_too_large", message), 413, gatewayCorsHeaders(req));
   }
+  let credential;
+  try {
+    credential = await auxUpstreamCredential(route.service);
+  } catch {
+    // An unreadable protected store is not permission to reuse a legacy key.
+    denyEntryRequest(req, access, { status: 503, message: "Upstream credentials are unavailable.", code: "service_unavailable" });
+    return sendJson(res, core.openAiGatewayError("service_unavailable", "Upstream service is unavailable."), 503, gatewayCorsHeaders(req));
+  }
   if (!(await acquireEntryConcurrency(req, res, auth))) return;
-  const credential = await auxUpstreamCredential(route.service);
   const target = new URL(`http://127.0.0.1:${port}${targetPath}`);
   target.search = url.search;
   const hasBody = !["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase());
