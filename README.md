@@ -109,6 +109,8 @@ flowchart TB
 | Python 3.12 + `uv` + PowerShell 7 | 可选；仅 TTS 需要 |
 | Chrome 或 Edge | 仅开发测试（Playwright 烟测），可设 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` |
 
+可直接用于版本检查的 Node.js 范围：`^22.22.2 || ^24.15.0 || >=26.0.0`。
+
 根目录 `package.json` 是私有包，开发依赖（Playwright、axe-core）只用于测试。
 
 ### 4. 安装
@@ -710,6 +712,8 @@ Key points:
 | Python 3.10+ | Optional; only for the dedicated model-download environment (`install-download-cli`) |
 | Python 3.12 + `uv` + PowerShell 7 | Optional; only for TTS |
 | Chrome or Edge | Development only (Playwright smoke tests); set `PLAYWRIGHT_BROWSER_CHANNEL=msedge` to use Edge |
+
+The Node.js range to use in version checks is `^22.22.2 || ^24.15.0 || >=26.0.0`.
 
 The root `package.json` is private; its dev dependencies (Playwright, axe-core) exist only for tests.
 
