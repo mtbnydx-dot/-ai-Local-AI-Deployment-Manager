@@ -1325,11 +1325,14 @@ test("Discover: an empty result points to clearing the filters, a search error r
 });
 
 test("the wizard's embedded Discover offers Use this model, hands over a remote model ref and never touches the URL", async ({ browser }) => {
+  const selectedCard = wizard("card-remote");
+  selectedCard.card.ref = { ...selectedCard.card.ref, repo: "Qwen/Qwen3-8B-FP8", revision: "main" };
   const api = {
     ...discoverApi(),
     "GET /api/m/vllm/models": LEGACY_MODELS, "GET /api/m/llama/models": { local: [], remote: [] },
     "GET /api/m/vllm/instances": { instances: [] }, "GET /api/m/llama/instances": { instances: [] },
-    "POST /api/models/inspect": () => wizard("card-remote"),
+    "POST /api/models/inspect": () => selectedCard,
+    [`GET /api/models/${REMOTE_CARD}/card`]: () => selectedCard,
     [`GET /api/models/${REMOTE_CARD}/compatibility`]: () => ({ ...wizard("compat"), cardId: REMOTE_CARD }),
   };
   const { context, page, mock } = await newPage(browser, { api });
