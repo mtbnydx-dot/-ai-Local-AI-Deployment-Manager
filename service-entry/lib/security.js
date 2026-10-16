@@ -181,7 +181,11 @@ function createEntrySecurity(options = {}) {
   function policy() {
     const lanMode = adminLanBound();
     const requireApiKeyMode = normalizeRequireApiKeyMode(envText("SERVICE_ENTRY_REQUIRE_API_KEY", "auto"));
-    const allowLanAdmin = envFlag("SERVICE_ENTRY_ALLOW_LAN_ADMIN", false);
+    // LAN admin (owner decision): a LAN-bound ADMIN listener makes LAN devices
+    // the owner by default (admin.allowLanOwner, default true).
+    // SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 turns it off; =1 keeps meaning "allowed".
+    const lanAdminForcedOff = ["0", "false", "no", "off"].includes(envText("SERVICE_ENTRY_ALLOW_LAN_ADMIN").toLowerCase());
+    const allowLanAdmin = !lanAdminForcedOff && (envFlag("SERVICE_ENTRY_ALLOW_LAN_ADMIN", false) || (lanMode && accessConfig().admin?.allowLanOwner !== false));
     const allowedOrigins = envText("SERVICE_ENTRY_ALLOWED_ORIGINS")
       .split(/[;,]/)
       .map((item) => item.trim())
@@ -199,6 +203,7 @@ function createEntrySecurity(options = {}) {
       requireApiKey: requireApiKeyMode === "on" || (requireApiKeyMode === "auto" && (lanMode || publicMode)),
       requireApiKeyMode,
       allowLanAdmin,
+      lanAdminForcedOff,
       allowedOrigins,
       corsMode: allowedOrigins.length ? "restricted" : "deny",
     };
@@ -361,7 +366,7 @@ function createEntrySecurity(options = {}) {
       ok: false,
       status: 403,
       code: "management_local_only",
-      message: "Management endpoints are local-only. Set SERVICE_ENTRY_ALLOW_LAN_ADMIN=1 to allow LAN devices.",
+      message: "Management endpoints are local-only here (LAN admin is turned off). Remove SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 and set admin.allowLanOwner to allow LAN devices.",
     };
   }
 
@@ -727,7 +732,7 @@ function createEntrySecurity(options = {}) {
       publicChecklist: buildPublicChecklist(current, keyStatus, enforced, publicBaseUrl, report),
       switches: {
         SERVICE_ENTRY_REQUIRE_API_KEY: "auto | 1 | 0 — auto 表示仅在局域网模式下强制；不受信环境请设为 1",
-        SERVICE_ENTRY_ALLOW_LAN_ADMIN: "0 | 1 — 允许局域网设备访问管理端点",
+        SERVICE_ENTRY_ALLOW_LAN_ADMIN: "0 | 1 — 局域网模式下局域网设备默认是管理员；设为 0 关闭（也可设 admin.allowLanOwner=false）；admin.requirePairingOnLoopback=true 让本机也要配对",
         SERVICE_ENTRY_ALLOWED_ORIGINS: "逗号分隔的浏览器 Origin 白名单，留空表示不允许跨域",
         SERVICE_ENTRY_ALLOWED_HOSTS: "额外的 Host 白名单（反代域名）",
         SERVICE_ENTRY_TRUSTED_PROXIES: "逗号分隔的可信反向代理 IP / CIDR，只有它们带来的转发头会被采信；默认仅回环",
@@ -749,9 +754,12 @@ function createEntrySecurity(options = {}) {
         : current.requireApiKey
           ? "已要求 API Key，但没有可用密钥或密钥库不可读，网关会拒绝全部请求。"
           : "未强制 API Key。设置 SERVICE_ENTRY_REQUIRE_API_KEY=1，并在管理器“对外服务”页生成密钥。");
-    push("lan-admin", current.allowLanAdmin ? (exposed ? "fail" : "warn") : "ok",
-      "管理端点仅限本机",
-      current.allowLanAdmin ? "SERVICE_ENTRY_ALLOW_LAN_ADMIN=1，局域网设备可以启停管理器。公网部署必须关闭。" : "管理 API 只接受本机直连；经代理转发的请求一律拒绝。");
+    // Information, not a failure: LAN admin is open by default (owner
+    // decision). Only a declared public deployment gets a warning, since the
+    // PUBLIC listener itself never grants admin.
+    push("lan-admin", current.allowLanAdmin ? (current.publicMode ? "warn" : "info") : "ok",
+      "管理端点的访问范围",
+      current.allowLanAdmin ? "局域网设备无需配对即是管理员（可启停管理器）；本机同样直接是管理员。仅限可信网络；用 SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 或 admin.allowLanOwner=false 关闭。经代理转发的请求一律不是管理员。" : "管理 API 只接受本机直连；经代理转发的请求一律拒绝。");
     push("cors", current.allowedOrigins.includes("*") ? "fail" : "ok",
       "CORS 未放开为任意来源",
       current.allowedOrigins.length ? `允许的 Origin：${current.allowedOrigins.join(", ")}` : "未配置跨域来源（默认拒绝）。");
@@ -834,8 +842,8 @@ function createEntrySecurity(options = {}) {
     if (current.allowLanAdmin) {
       warnings.push({
         level: "warn",
-        title: "局域网管理已开启",
-        detail: "SERVICE_ENTRY_ALLOW_LAN_ADMIN=1，局域网设备可以启停管理器。仅在可信网络中使用。",
+        title: "局域网管理已开启（信息）",
+        detail: "局域网设备无需配对即是管理员，可以启停管理器。仅在可信网络中使用；用 SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 或 admin.allowLanOwner=false 关闭。",
       });
     }
     if (current.allowedOrigins.includes("*")) {

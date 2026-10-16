@@ -1050,7 +1050,7 @@ test("without a supervisor /api/status reports platform as not running once it h
 
 // --- startDetachedManager reads the bind from platform.json -----------------------------------
 
-test("startDetachedManager binds the readSection host and port, loopback by default", async (t) => {
+test("startDetachedManager binds the readSection host and port, all interfaces by default", async (t) => {
   const { entry } = await loadEntry();
   const aiRoot = tempDir(t, "detached-ai-root-");
   const managerRoot = tempDir(t, "detached-manager-");
@@ -1072,7 +1072,7 @@ test("startDetachedManager binds the readSection host and port, loopback by defa
   const first = await run({});
   assert.equal(first.pid, 4321);
   const defaults = spawned[0];
-  assert.equal(defaults.options.env.VLLM_MANAGER_HOST, "127.0.0.1", "managers.bindHost defaults to loopback (V21)");
+  assert.equal(defaults.options.env.VLLM_MANAGER_HOST, "0.0.0.0", "managers.bindHost defaults to all interfaces, as before PUB-23");
   assert.equal(defaults.options.env.VLLM_MANAGER_PORT, String(firstPort));
   assert.equal(defaults.options.env.VLLM_MANAGER_ALLOW_REMOTE, "0");
   assert.equal(defaults.options.cwd, managerRoot);

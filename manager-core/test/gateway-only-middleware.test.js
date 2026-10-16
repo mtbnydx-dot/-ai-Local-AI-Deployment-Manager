@@ -357,7 +357,7 @@ test("the gateway-only mode reader follows public.managersGatewayOnly at most ev
   assert.equal(core.normalizeGatewayOnlyMode(undefined), "warn", "the default is warn");
 });
 
-test("a real platform.json: enforce takes effect within 10 s without a restart, and bindHost 0.0.0.0 reopens the LAN (PUB-23)", async (t) => {
+test("a real platform.json: enforce takes effect within 10 s without a restart, and bindHost 127.0.0.1 closes the LAN (PUB-23 opt-out)", async (t) => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
@@ -376,14 +376,14 @@ test("a real platform.json: enforce takes effect within 10 s without a restart, 
   clock = 10_000;
   assert.equal(reader(), "enforce", "applied without a restart");
 
-  const loopback = platformConfig.loadPlatformConfig({ aiRoot, env });
-  assert.equal(platformConfig.childEnv(loopback, "vllm-manager").env.VLLM_MANAGER_HOST, "127.0.0.1");
-  assert.equal(platformConfig.childEnv(loopback, "llama-manager").env.LLAMA_MANAGER_HOST, "127.0.0.1");
-  const bound = await platformConfig.writeSection("managers", { bindHost: "0.0.0.0" }, { aiRoot, env, actor: "test" });
-  assert.equal(bound.ok, true, JSON.stringify(bound.errors));
   const lan = platformConfig.loadPlatformConfig({ aiRoot, env });
-  assert.equal(platformConfig.childEnv(lan, "vllm-manager").env.VLLM_MANAGER_HOST, "0.0.0.0");
+  assert.equal(platformConfig.childEnv(lan, "vllm-manager").env.VLLM_MANAGER_HOST, "0.0.0.0", "the default binds all interfaces, as before PUB-23");
   assert.equal(platformConfig.childEnv(lan, "llama-manager").env.LLAMA_MANAGER_HOST, "0.0.0.0");
+  const bound = await platformConfig.writeSection("managers", { bindHost: "127.0.0.1" }, { aiRoot, env, actor: "test" });
+  assert.equal(bound.ok, true, JSON.stringify(bound.errors));
+  const loopback = platformConfig.loadPlatformConfig({ aiRoot, env });
+  assert.equal(platformConfig.childEnv(loopback, "vllm-manager").env.VLLM_MANAGER_HOST, "127.0.0.1", "managers.bindHost=127.0.0.1 keeps them local");
+  assert.equal(platformConfig.childEnv(loopback, "llama-manager").env.LLAMA_MANAGER_HOST, "127.0.0.1");
 });
 
 test("GET /api/manager/health advertises gatewayTrust { version: 2, mode } (the entry's key-strip switch)", async () => {

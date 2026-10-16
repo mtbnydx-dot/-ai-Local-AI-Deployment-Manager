@@ -379,7 +379,11 @@ test("gateway access entries contain metadata but not prompt content", () => {
   assert.equal(JSON.stringify(event).includes("secret prompt content"), false);
 });
 
-test("entry server serves only whitelisted docs", async () => {
+test("entry server serves only whitelisted docs", async (t) => {
+  // The pairing model (admin.requirePairingOnLoopback on): no session, no owner.
+  process.env.SERVICE_ENTRY_REQUIRE_PAIRING = "1";
+  entry.security.refreshAccessConfig();
+  t.after(() => { delete process.env.SERVICE_ENTRY_REQUIRE_PAIRING; entry.security.refreshAccessConfig(); });
   const server = entry.createServiceEntryServer();
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();

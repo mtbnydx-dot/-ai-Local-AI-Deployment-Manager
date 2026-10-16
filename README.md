@@ -106,7 +106,9 @@ http://127.0.0.1:5176/
 platform start --lan
 ```
 
-旧脚本 `start-service-entry-lan.cmd`、`start-service-entry.cmd lan` 仍可用，等同于 `platform start core --lan`。管理器默认只监听 `127.0.0.1`；需要局域网直连管理器时在 `platform.json` 里设置 `managers.bindHost`。
+旧脚本 `start-service-entry-lan.cmd`、`start-service-entry.cmd lan` 仍可用，等同于 `platform start core --lan`。管理器默认监听 `0.0.0.0`（`managers.bindHost`，也可用 `VLLM_MANAGER_HOST` / `LLAMA_MANAGER_HOST`），管理页和管理 API 仍只接受本机，除非设置 `*_ALLOW_REMOTE=1`；想让管理器只监听本机，把 `managers.bindHost` 设为 `127.0.0.1`。
+
+访问权限的默认值：本机请求（按 socket 地址判断，转发头不算）直接就是管理员，不需要配对，新版控制台和经典页面都直接以管理员模式打开；`curl`、`platformctl`、PowerShell 等不带 `Origin` 的脚本可以直接写入。入口以局域网模式启动时（上面的 `--lan`），局域网设备默认也是管理员。浏览器的写请求必须与控制台同源（`Origin` / `Sec-Fetch-Site` 不一致返回 `csrf_invalid`）。公网监听端口（5186）从不授予管理员权限。需要收紧时：`admin.allowLanOwner=false` 或 `SERVICE_ENTRY_ALLOW_LAN_ADMIN=0` 让局域网设备只读；`admin.requirePairingOnLoopback=true`（环境变量 `SERVICE_ENTRY_REQUIRE_PAIRING=1`）要求本机也先配对（`platform admin pair`）；`managers.bindHost=127.0.0.1` 让管理器只监听本机。
 
 ### 常用接口地址
 
@@ -156,12 +158,12 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 
 ### 安全和隐私
 
-- 默认本机模式下，统一入口（5176）只监听 `127.0.0.1`。两个管理器（5177/5178）为了让 Docker 容器经 `host.docker.internal` 回连而监听 `0.0.0.0`：其它设备只能访问带 API Key 的模型网关接口，管理界面和管理 API 一律返回 403，除非显式设置 `VLLM_MANAGER_ALLOW_REMOTE=1` / `LLAMA_MANAGER_ALLOW_REMOTE=1`（默认 `0`）。不需要其它设备直连管理器时，建议在 Windows 防火墙中阻止 5177/5178 的入站连接。
+- 默认本机模式下，统一入口（5176）只监听 `127.0.0.1`。两个管理器（5177/5178）默认监听 `0.0.0.0`（`managers.bindHost`），Docker 容器可经 `host.docker.internal` 回连：其它设备只能访问带 API Key 的模型网关接口，管理界面和管理 API 一律返回 403，除非显式设置 `VLLM_MANAGER_ALLOW_REMOTE=1` / `LLAMA_MANAGER_ALLOW_REMOTE=1`（默认 `0`）。不需要其它设备直连管理器时，建议在 Windows 防火墙中阻止 5177/5178 的入站连接。
 - **统一入口是唯一的策略执行点**：`service-entry` 在转发前完成 Host/Origin 校验、API Key 鉴权和限流，再用签名请求头把真实客户端地址传给管理器。管理器只信任带有效签名的回环请求。
 - TTS 的 7000 与 worker 端口保持回环监听；局域网客户端只能经 `/gateway/tts/` 访问，并复用统一入口的客户端 Key。参考音色和生成音频属于本机运行数据，不进入 Git 或发布包。
 - 局域网模式（`start-service-entry.cmd lan`）**默认强制 API Key**。密钥在任一管理器的“对外服务”页生成，两个管理器的密钥都可用于统一网关。
 - 浏览器跨域默认拒绝，需要时用 `SERVICE_ENTRY_ALLOWED_ORIGINS` 显式放行。
-- 管理端点默认仅本机可用；局域网设备读取状态时会得到脱敏结果。
+- 本机请求默认就是管理员（无需配对）；入口以局域网模式启动时，局域网设备默认也是管理员（`admin.allowLanOwner`，`SERVICE_ENTRY_ALLOW_LAN_ADMIN=0` 可关闭，关闭后局域网设备读取状态时得到脱敏结果）。经反向代理转发的请求和公网监听端口永远不是管理员。`platform doctor` 会把“局域网管理员已开启”作为提示列出，不算失败。
 - 发布目录不会包含模型文件、缓存、日志、数据库、运行时账本、PID 文件、`.env` 或 `node_modules`。
 - 访问统计只记录元数据，例如来源 IP、路径、状态码、模型名、token 数和耗时；不记录提示词或响应正文。
 - 旧版本可能把模型的运行时 API Key 明文写进管理器任务账本。新版本在读取和写入账本时都会把密钥替换为 `<redacted>`。也可以在停止两个管理器后运行 `node scripts/scrub-job-ledgers.js` 预览清理结果（默认只读），确认后加 `--apply` 写回；该工具不会修改密钥存储。曾经出现在账本、日志或备份里的 Key 应视为已泄露：用新 Key 重启相关模型，再更新客户端配置。
@@ -173,7 +175,8 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `SERVICE_ENTRY_REQUIRE_API_KEY` | `auto` | `auto` = 仅局域网模式强制；`1` = 始终强制；`0` = 关闭鉴权（可信局域网免密） |
-| `SERVICE_ENTRY_ALLOW_LAN_ADMIN` | `0` | `1` = 允许局域网设备启停管理器、查看完整状态 |
+| `SERVICE_ENTRY_ALLOW_LAN_ADMIN` | 局域网模式下开启 | 局域网模式（`--lan`）下局域网设备默认是管理员，可启停管理器、查看完整状态；`0` = 关闭（等同 `admin.allowLanOwner=false`）。同时是 `listeners.admin.lan` 的环境变量：`1` = 让控制台监听局域网 |
+| `SERVICE_ENTRY_REQUIRE_PAIRING` | `0` | `1` = 本机请求也必须先配对或使用管理令牌（`admin.requirePairingOnLoopback`） |
 | `SERVICE_ENTRY_ALLOWED_ORIGINS` | 空 | 逗号分隔的浏览器 Origin 白名单；`*` 表示全放行 |
 | `SERVICE_ENTRY_ALLOWED_HOSTS` | 空 | 额外 Host 白名单，用于反向代理域名 |
 | `SERVICE_ENTRY_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | 逗号分隔的可信代理地址段（平台配置 `trustedProxies.cidrs`）。只有来自这些地址的请求才会采信转发头里的客户端 IP。cloudflared 在本机进程运行时保持默认；只有 cloudflared 跑在容器里时才加入 Docker Desktop 网关所在地址段 |
@@ -184,7 +187,6 @@ API Key 请在管理器的“服务提供/外来访问”页面生成。不要�
 
 ```cmd
 set SERVICE_ENTRY_REQUIRE_API_KEY=0
-set SERVICE_ENTRY_ALLOW_LAN_ADMIN=1
 start-service-entry.cmd lan
 ```
 
@@ -209,7 +211,7 @@ start-service-entry.cmd lan
   - `platform start` 结束时按组件显示状态与地址，有失败时退出码非 0；`start-platform.cmd` 双击运行时仍会在结尾暂停，设置 `PLATFORM_NO_PAUSE=1` 可关闭。
   - `full` 默认只启动 TTS 网关；四个语音 worker 会加载大模型，需要时先设置 `TTS_START_WORKERS=1`（或运行 `start-tts-platform.cmd`）。
   - Docker Desktop 尚在启动时最多等待 `docker.waitTimeoutSec` 秒（默认 120；旧环境变量 `PLATFORM_DOCKER_WAIT_SECONDS` 仍被识别）。
-  - `start-service-entry.cmd` 现在不再向管理器注入 `0.0.0.0`：管理器按 `managers.bindHost`（默认 `127.0.0.1`）监听，浏览器以配对状态打开；`SERVICE_ENTRY_NO_BROWSER=1` 保持浏览器关闭。`SERVICE_ENTRY_PORT`、`VLLM_MANAGER_PORT`、`LLAMA_MANAGER_PORT` 仍可改端口。
+  - `start-service-entry.cmd` 现在不再向管理器注入 `0.0.0.0`：管理器按 `managers.bindHost`（默认 `0.0.0.0`）监听，本机浏览器直接以管理员打开；`SERVICE_ENTRY_NO_BROWSER=1` 保持浏览器关闭。`SERVICE_ENTRY_PORT`、`VLLM_MANAGER_PORT`、`LLAMA_MANAGER_PORT` 仍可改端口。
 - 进程退出留痕：入口与两个管理器把 Ctrl+C / 控制台关闭 / 未捕获异常写入各自 `logs/process-exit.log`，并走正常关机流程；组件的 stdout/stderr 落到各自的 `logs/`（保留轮转副本）。
 - 公网模式：入口首页顶部显示“本机 / 局域网 / 公网”模式与上线检查清单（API Key 强制、管理端点仅本机、CORS、HTTPS、Caddy 路径、防火墙）。`deploy/public/Caddyfile` 与 `deploy/cloudflare/` 只指向 PUBLIC 监听（5186），`scripts/setup-public.ps1` 把模板渲染到 `config/public/`（`-Apply` 才通过 `platform config set` 写设置）。鉴权失败风暴防护：`SERVICE_ENTRY_AUTH_FAIL_LIMIT`（默认 20 次/`SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS`=60 秒）后封禁 `SERVICE_ENTRY_AUTH_BAN_SECONDS`（600）秒，本机直连永不封禁。
 - 统一入口新增：`GET /gateway/status`（需 Key：可用模型、在线组件、本 Key 限流余量与 TTS 配额）、`/gateway/search/*`（搜索网关）、`/gateway/mcp`（MCP，只读）、`GET /api/keys` 与首页“密钥总览”（两管理器客户端 Key 的状态 / 最近使用 / 到期）。搜索网关启动时若入口监听局域网则自动以入口 auto 路由为上游。
@@ -375,7 +377,9 @@ To serve other LAN devices:
 platform start --lan
 ```
 
-The old scripts `start-service-entry-lan.cmd` and `start-service-entry.cmd lan` still work and mean `platform start core --lan`. The managers bind `127.0.0.1` by default; set `managers.bindHost` in `platform.json` to reach them directly over the LAN.
+The old scripts `start-service-entry-lan.cmd` and `start-service-entry.cmd lan` still work and mean `platform start core --lan`. The managers bind `0.0.0.0` by default (`managers.bindHost`, or `VLLM_MANAGER_HOST` / `LLAMA_MANAGER_HOST`); their pages and management APIs still accept this machine only unless `*_ALLOW_REMOTE=1` is set. Set `managers.bindHost` to `127.0.0.1` to keep them local.
+
+Access defaults: a request from this machine (decided by the socket address, never by forwarded headers) is the owner without pairing, so the new console and the classic pages open straight into admin mode, and scripts without an `Origin` header (`curl`, `platformctl`, PowerShell) can write. When the entry runs in LAN mode (`--lan` above), LAN devices are the owner by default too. A browser write must be same-origin with the console (a mismatching `Origin` / `Sec-Fetch-Site` answers `csrf_invalid`). The public listener (5186) never grants admin. To tighten: `admin.allowLanOwner=false` or `SERVICE_ENTRY_ALLOW_LAN_ADMIN=0` makes LAN devices read-only; `admin.requirePairingOnLoopback=true` (env `SERVICE_ENTRY_REQUIRE_PAIRING=1`) requires pairing (`platform admin pair`) on this machine as well; `managers.bindHost=127.0.0.1` keeps the managers local.
 
 ### Common Endpoint URLs
 
@@ -427,11 +431,11 @@ Generate API keys from the manager's service/external access page. Do not put re
 
 ### Security And Privacy
 
-- In local mode the unified entry (5176) listens on `127.0.0.1` only. The two managers (5177/5178) listen on `0.0.0.0` so Docker containers can reach them through `host.docker.internal`. Other devices can use only their API-key model gateway routes; the management UI and API answer 403 unless `VLLM_MANAGER_ALLOW_REMOTE=1` / `LLAMA_MANAGER_ALLOW_REMOTE=1` is set (default `0`). If no other device needs direct manager access, block inbound 5177/5178 in Windows Firewall.
+- In local mode the unified entry (5176) listens on `127.0.0.1` only. The two managers (5177/5178) listen on `0.0.0.0` by default (`managers.bindHost`), so Docker containers can reach them through `host.docker.internal`. Other devices can use only their API-key model gateway routes; the management UI and API answer 403 unless `VLLM_MANAGER_ALLOW_REMOTE=1` / `LLAMA_MANAGER_ALLOW_REMOTE=1` is set (default `0`). If no other device needs direct manager access, block inbound 5177/5178 in Windows Firewall.
 - `service-entry` is the single policy enforcement point. It validates Host/Origin, authenticates the API key, and applies rate limits before proxying, then signs the loopback hop with the real client address. Managers treat an unsigned hop that claims to come from the gateway as remote.
 - LAN mode requires an API key by default. Generate one on either manager's service page; both managers' keys work at the unified gateway.
 - Browser CORS is deny-by-default; allow origins explicitly with `SERVICE_ENTRY_ALLOWED_ORIGINS`.
-- Management endpoints are local-only by default, and LAN status reads are redacted.
+- A request from this machine is the owner by default (no pairing). When the entry runs in LAN mode, LAN devices are the owner by default too (`admin.allowLanOwner`; `SERVICE_ENTRY_ALLOW_LAN_ADMIN=0` turns it off, and LAN status reads are then redacted). Proxied requests and the public listener are never the owner. `platform doctor` lists "LAN admin is open" as information, not as a failure.
 - The release mirror excludes model files, caches, logs, databases, runtime ledgers, PID files, `.env`, and `node_modules`.
 - Access statistics contain metadata only: source IP, path, status code, model name, token counts, and latency.
 - Older versions could write a model's runtime API key in plain text into the manager job ledgers. Current versions replace secrets with `<redacted>` whenever a ledger is read or written. To clean the files offline, stop both managers, run `node scripts/scrub-job-ledgers.js` to preview the changes (it is read-only by default), then add `--apply` to write them; the tool never touches the key store. Treat any key that ever appeared in a ledger, log, or backup as exposed: restart the affected models with new keys, then update the clients.
@@ -441,7 +445,8 @@ Generate API keys from the manager's service/external access page. Do not put re
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SERVICE_ENTRY_REQUIRE_API_KEY` | `auto` | `auto` = required only when bound off-loopback; `1` = always; `0` = disable auth (trusted LAN) |
-| `SERVICE_ENTRY_ALLOW_LAN_ADMIN` | `0` | `1` = let LAN devices start/stop managers and read full status |
+| `SERVICE_ENTRY_ALLOW_LAN_ADMIN` | on in LAN mode | In LAN mode (`--lan`) LAN devices are the owner by default and can start/stop managers and read full status; `0` turns that off (same as `admin.allowLanOwner=false`). It is also the env of `listeners.admin.lan`: `1` makes the console listen on the LAN |
+| `SERVICE_ENTRY_REQUIRE_PAIRING` | `0` | `1` = this machine must pair or use an admin token too (`admin.requirePairingOnLoopback`) |
 | `SERVICE_ENTRY_ALLOWED_ORIGINS` | empty | Comma-separated browser Origin allowlist; `*` allows all |
 | `SERVICE_ENTRY_ALLOWED_HOSTS` | empty | Extra Host allowlist for reverse-proxy domains |
 | `SERVICE_ENTRY_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | Comma-separated trusted proxy address ranges (platform config `trustedProxies.cidrs`). Forwarded client-IP headers are believed only from these addresses. Keep the default when cloudflared runs as a local process; add the Docker Desktop gateway range only if cloudflared runs in a container |
@@ -469,7 +474,7 @@ Behavior changes as of 2026-08-22: a stalled download (no byte growth for 5 minu
   - `platform start` ends with each component's state and address and exits non-zero when something failed. A double-clicked `start-platform.cmd` still pauses at the end; `PLATFORM_NO_PAUSE=1` turns that off.
   - `full` starts only the TTS gateway. The four voice workers load large models, so set `TTS_START_WORKERS=1` first when you want them (or run `start-tts-platform.cmd`).
   - While Docker Desktop is still starting, the CLI waits up to `docker.waitTimeoutSec` (default 120); the old `PLATFORM_DOCKER_WAIT_SECONDS` variable is still understood.
-  - `start-service-entry.cmd` no longer injects `0.0.0.0` into the managers: they bind `managers.bindHost` (default `127.0.0.1`), and the browser opens paired. `SERVICE_ENTRY_NO_BROWSER=1` keeps the browser closed. `SERVICE_ENTRY_PORT`, `VLLM_MANAGER_PORT` and `LLAMA_MANAGER_PORT` still change the ports.
+  - `start-service-entry.cmd` no longer injects `0.0.0.0` into the managers: they bind `managers.bindHost` (default `0.0.0.0`), and the browser opens straight into admin mode. `SERVICE_ENTRY_NO_BROWSER=1` keeps the browser closed. `SERVICE_ENTRY_PORT`, `VLLM_MANAGER_PORT` and `LLAMA_MANAGER_PORT` still change the ports.
 - Exit traces: the entry and both managers write Ctrl+C / console close / uncaught errors to their own `logs/process-exit.log` and run the normal shutdown; component stdout/stderr go to their own `logs/` with rotated copies.
 - Public mode: the entry page shows the local / LAN / public exposure and a go-live checklist (API key enforced, management local-only, CORS, HTTPS, Caddy paths, firewall). `deploy/public/Caddyfile` and `deploy/cloudflare/` target only the PUBLIC listener (5186); `scripts/setup-public.ps1` renders the templates into `config/public/` (settings change only with `-Apply`, through `platform config set`). Auth-failure guard: `SERVICE_ENTRY_AUTH_FAIL_LIMIT` (20) failures within `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` (60) ban the source for `SERVICE_ENTRY_AUTH_BAN_SECONDS` (600); local direct callers are never banned.
 - New entry surfaces: `GET /gateway/status` (key required: models, online components, this key's rate-limit remaining and TTS quota), `/gateway/search/*` (search gateway), `/gateway/mcp` (read-only MCP), `GET /api/keys` and the "密钥总览" section (client keys across both managers with state, last use and expiry). The search gateway picks the entry auto route as upstream when the entry listens on the LAN.

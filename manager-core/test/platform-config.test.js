@@ -185,18 +185,18 @@ test("the bundled schema loads cleanly, carries its data-file fields and every l
   assert.equal(Array.from(schema.leaves.keys()).some((key) => /^entry\.|^exposure\.(?:lan|public)/.test(key)), false);
 });
 
-test("defaults: managers bind 127.0.0.1, the classic console is the default UI and a missing file is valid", (t) => {
+test("defaults: managers bind 0.0.0.0 (managers.bindHost=127.0.0.1 keeps them local), the classic console is the default UI and a missing file is valid", (t) => {
   const root = tempRoot(t);
   const loaded = load(root);
   assert.deepEqual(loaded.errors, []);
   assert.deepEqual(loaded.warnings, []);
   assert.equal(loaded.exists, false);
   assert.equal(loaded.etag, "none");
-  assert.equal(loaded.values["managers.bindHost"], "127.0.0.1");
+  assert.equal(loaded.values["managers.bindHost"], "0.0.0.0");
   assert.equal(loaded.sources["managers.bindHost"], "default");
   assert.equal(loaded.values["console.defaultUi"], "classic");
   assert.equal(loaded.sources["console.defaultUi"], "default");
-  assert.equal(loaded.values["managers.vllm.host"], "127.0.0.1");
+  assert.equal(loaded.values["managers.vllm.host"], "0.0.0.0");
   assert.equal(loaded.sources["managers.vllm.host"], "derived");
   assert.equal(loaded.values["listeners.admin.host"], "127.0.0.1");
   assert.equal(loaded.values["listeners.admin.port"], 5176);
@@ -208,7 +208,7 @@ test("defaults: managers bind 127.0.0.1, the classic console is the default UI a
   assert.equal(loaded.get("admin.sessionDays"), 180);
 
   const managers = config.readSection("managers", { aiRoot: root, env: NO_ENV });
-  assert.deepEqual(managers.values, { bindHost: "127.0.0.1", vllm: { host: "127.0.0.1", port: 5177 }, llama: { host: "127.0.0.1", port: 5178 } });
+  assert.deepEqual(managers.values, { bindHost: "0.0.0.0", vllm: { host: "0.0.0.0", port: 5177 }, llama: { host: "0.0.0.0", port: 5178 } });
   assert.deepEqual(config.readSection("console", { aiRoot: root, env: NO_ENV }).values, { defaultUi: "classic" });
   assert.equal(fs.existsSync(path.join(root, "config")), false, "reading never creates files");
 });
@@ -314,17 +314,17 @@ test("PLATFORM_CONFIG_ENV_KEYS demotes injected env, so a child reports file or 
   assert.equal(shell.sources["listeners.admin.port"], "env");
   assert.equal("SERVICE_ENTRY_PORT" in config.childEnv(shell, "entry").env, false);
 
-  // With an empty platform.json both managers get *_MANAGER_HOST=127.0.0.1,
+  // With an empty platform.json both managers get *_MANAGER_HOST=0.0.0.0,
   // and MCP gets its URLs from the configured ports.
   const empty = load(tempRoot(t, { schemaVersion: 1 }));
-  assert.equal(config.childEnv(empty, "vllm-manager").env.VLLM_MANAGER_HOST, "127.0.0.1");
-  assert.equal(config.childEnv(empty, "llama-manager").env.LLAMA_MANAGER_HOST, "127.0.0.1");
+  assert.equal(config.childEnv(empty, "vllm-manager").env.VLLM_MANAGER_HOST, "0.0.0.0");
+  assert.equal(config.childEnv(empty, "llama-manager").env.LLAMA_MANAGER_HOST, "0.0.0.0");
   const mcp = config.childEnv(load(root), "platform-mcp").env;
   assert.equal(mcp.PLATFORM_MCP_SERVICE_ENTRY_URL, "http://127.0.0.1:6201");
   assert.equal(mcp.PLATFORM_MCP_VLLM_MANAGER_URL, "http://127.0.0.1:5177");
   assert.equal(mcp.PLATFORM_MCP_PORT, "5190");
   // A legacy id resolves through the registry.
-  assert.equal(config.childEnv(empty, "vllm", { components: [{ id: "vllm-manager", legacyId: "vllm" }] }).env.VLLM_MANAGER_HOST, "127.0.0.1");
+  assert.equal(config.childEnv(empty, "vllm", { components: [{ id: "vllm-manager", legacyId: "vllm" }] }).env.VLLM_MANAGER_HOST, "0.0.0.0");
 });
 
 test("childEnv injects secrets from the store only into their consumers, through env", async (t) => {
@@ -831,6 +831,7 @@ const LEGACY_ENV = [
   ["SERVICE_ENTRY_TRUSTED_PROXIES", "trustedProxies.cidrs", "127.0.0.1/32,10.1.0.0/16", ["127.0.0.1/32", "10.1.0.0/16"]],
   ["SERVICE_ENTRY_CLIENT_IP_HEADER", "trustedProxies.clientIpHeader", "x-real-ip", "x-real-ip"],
   ["SERVICE_ENTRY_REQUIRE_API_KEY", "exposure.requireApiKey", "on", "on"],
+  ["SERVICE_ENTRY_REQUIRE_PAIRING", "admin.requirePairingOnLoopback", "1", true],
   ["SERVICE_ENTRY_ALLOWED_ORIGINS", "exposure.allowedOrigins", "https://app.example.test", ["https://app.example.test"]],
   ["VLLM_MANAGER_HOST", "managers.vllm.host", "0.0.0.0", "0.0.0.0"],
   ["LLAMA_MANAGER_HOST", "managers.llama.host", "0.0.0.0", "0.0.0.0"],
@@ -1149,7 +1150,7 @@ test("describeEffectiveConfig groups every leaf with value, default, source and 
   assert.equal(items.length, Array.from(schema.leaves.values()).filter((item) => !item.secret).length);
   const bindHost = items.find((item) => item.key === "managers.bindHost");
   assert.equal(bindHost.value, "0.0.0.0");
-  assert.equal(bindHost.default, "127.0.0.1");
+  assert.equal(bindHost.default, "0.0.0.0");
   assert.equal(bindHost.source, "file");
   assert.deepEqual(bindHost.restartRequired, ["vllm-manager", "llama-manager"]);
   assert.equal(bindHost.owner, "06-ops");

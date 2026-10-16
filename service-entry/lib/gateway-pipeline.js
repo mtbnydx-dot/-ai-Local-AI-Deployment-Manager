@@ -224,7 +224,10 @@ function createGatewayPipeline(deps = {}) {
   // key header; a cookie that is invalid, expired, or not an owner session
   // falls back to the keyless rules.
   function consoleSessionOf(req) {
-    if (listenerOf(req) === "public" || !req?.headers?.cookie || hasApiKeyHeader(req.headers)) return null;
+    // A browser console request with no cookie is the implicit owner (this
+    // machine or the LAN, admin-session.js): it must say it is same-origin.
+    const sameOriginBrowser = String(req?.headers?.["sec-fetch-site"] || "").toLowerCase() === "same-origin";
+    if (listenerOf(req) === "public" || (!req?.headers?.cookie && !sameOriginBrowser) || hasApiKeyHeader(req.headers)) return null;
     const adminAuth = getAdminAuth(req);
     if (!adminAuth || typeof adminAuth.authenticate !== "function") return null;
     let who;
@@ -233,7 +236,8 @@ function createGatewayPipeline(deps = {}) {
     } catch {
       return null;
     }
-    if (!who || who.via !== "session" || who.role !== "owner" || !who.sessionId) return null;
+    const implicit = who?.implicit === true && sameOriginBrowser;
+    if (!who || who.role !== "owner" || !(implicit || (who.via === "session" && who.sessionId))) return null;
     let csrfOk = false;
     try {
       csrfOk = adminAuth.requireCsrf(req) === true;
@@ -245,7 +249,7 @@ function createGatewayPipeline(deps = {}) {
       kind: "console-session",
       principal: "console-session",
       listener: "admin",
-      sessionId: who.sessionId,
+      sessionId: who.sessionId || `implicit-${who.network || "local"}`,
       scopes: [...CONSOLE_SESSION_SCOPES],
       key: null,
       keyId: "",

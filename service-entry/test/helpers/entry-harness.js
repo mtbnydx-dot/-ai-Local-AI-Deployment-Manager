@@ -26,6 +26,7 @@ const CLEARED_ENV = [
   "SERVICE_ENTRY_PUBLIC_BASE_URL",
   "SERVICE_ENTRY_TRUSTED_PROXIES",
   "SERVICE_ENTRY_RATE_LIMIT_RPM",
+  "SERVICE_ENTRY_REQUIRE_PAIRING",
 ];
 const UPSTREAM_PORT_ENV = ["VLLM_MANAGER_PORT", "LLAMA_MANAGER_PORT", "TTS_GATEWAY_PORT", "SEARCH_GATEWAY_PORT", "PLATFORM_MCP_PORT"];
 const PEER_HEADER = "x-test-peer";
@@ -43,10 +44,15 @@ async function unusedPort() {
   return port;
 }
 
-async function loadEntry() {
+// pairing (default true): the suites written for the pairing model run with
+// admin.requirePairingOnLoopback on (SERVICE_ENTRY_REQUIRE_PAIRING=1), so a
+// loopback caller without a session is a viewer there. loadEntry({ pairing:
+// false }) keeps the shipped defaults (this machine is the owner).
+async function loadEntry({ pairing = true } = {}) {
   if (loaded) return loaded;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "entry-access-"));
   for (const name of CLEARED_ENV) delete process.env[name];
+  if (pairing) process.env.SERVICE_ENTRY_REQUIRE_PAIRING = "1";
   for (const name of UPSTREAM_PORT_ENV) process.env[name] = String(await unusedPort());
   process.env.SERVICE_ENTRY_STATUS_CACHE_MS = "600000";
   process.env.SERVICE_ENTRY_MODEL_CACHE_MS = "600000";

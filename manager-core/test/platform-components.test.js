@@ -392,10 +392,10 @@ test("golden: resolveComponent for every component under the default config", (t
     fs.writeFileSync(GOLDEN, `${JSON.stringify(actual, null, 2)}\n`);
   }
   assert.deepEqual(actual, JSON.parse(fs.readFileSync(GOLDEN, "utf8")));
-  // The golden's contract, spelled out: managers on loopback, the legacy remote switches off.
-  assert.equal(actual["vllm-manager"].env.VLLM_MANAGER_HOST, "127.0.0.1");
+  // The golden's contract, spelled out: managers on all interfaces (as before PUB-23), the legacy remote switches off.
+  assert.equal(actual["vllm-manager"].env.VLLM_MANAGER_HOST, "0.0.0.0");
   assert.equal(actual["vllm-manager"].env.VLLM_MANAGER_ALLOW_REMOTE, "0");
-  assert.equal(actual["llama-manager"].env.LLAMA_MANAGER_HOST, "127.0.0.1");
+  assert.equal(actual["llama-manager"].env.LLAMA_MANAGER_HOST, "0.0.0.0");
   assert.equal(actual["llama-manager"].env.LLAMA_MANAGER_ALLOW_REMOTE, "0");
   assert.equal(actual.entry.urls.admin, "http://127.0.0.1:5176");
   assert.equal(actual["service-entry-public"].urls.public, "http://127.0.0.1:5186");

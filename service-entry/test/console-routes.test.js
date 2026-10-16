@@ -687,25 +687,25 @@ test("/classic redirects to /overview, and /billing/classic is local-only and fr
 
 // --- role and config ------------------------------------------------------------
 
-test("before 05 the role is the legacy rule: loopback owner, LAN viewer, LAN with ALLOW_LAN_ADMIN owner", async (t) => {
+test("before 05 the role is the legacy rule: loopback owner, LAN owner when the entry is LAN-bound unless ALLOW_LAN_ADMIN=0", async (t) => {
   withEnv(t);
   const tree = makeTree(t);
   const { routes } = makeRoutes(tree);
   await routes.refresh();
   const local = routes.bootstrap(fakeReq("127.0.0.1"));
   assert.equal(local.role, "owner");
-  assert.deepEqual(local.access, { local: true, lanViewer: false, allowLanAdmin: false });
+  assert.deepEqual(local.access, { local: true, lanViewer: false, allowLanAdmin: true });
   assert.deepEqual(local.auth, { mode: "loopback-trust", session: null, csrf: null });
 
+  const admin = routes.bootstrap(fakeReq("192.168.0.60", { host: "192.168.0.10:5176" }));
+  assert.equal(admin.role, "owner", "a LAN-bound entry: LAN devices are the owner by default");
+  assert.deepEqual(admin.access, { local: false, lanViewer: false, allowLanAdmin: true });
+
+  process.env.SERVICE_ENTRY_ALLOW_LAN_ADMIN = "0";
   const lanReq = fakeReq("192.168.0.60", { host: "192.168.0.10:5176" });
   const lan = routes.bootstrap(lanReq);
   assert.equal(lan.role, "viewer");
   assert.deepEqual(lan.access, { local: false, lanViewer: true, allowLanAdmin: false });
-
-  process.env.SERVICE_ENTRY_ALLOW_LAN_ADMIN = "1";
-  const admin = routes.bootstrap(fakeReq("192.168.0.60", { host: "192.168.0.10:5176" }));
-  assert.equal(admin.role, "owner");
-  assert.deepEqual(admin.access, { local: false, lanViewer: false, allowLanAdmin: true });
 });
 
 test("the bootstrap has the §2.5 shape, features from the mount table and the build from getBuildId", async (t) => {
@@ -967,13 +967,21 @@ test("through the entry: the role comes from request-auth, a proxied / is 404 an
   const { ctx, routes } = await mountConsole(t, tree);
   const port = await startEntry(t, routes);
 
-  // The entry's PUB-5 admin auth: loopback without a session is a viewer,
-  // and a paired session is the owner with its CSRF token in the bootstrap.
+  // The entry's admin auth: this machine is the owner with no pairing and no
+  // session (the console opens in admin mode), and a paired session is the
+  // owner with its CSRF token in the bootstrap.
   const anonymous = JSON.parse((await raw(port, "/api/console/bootstrap")).body);
-  assert.equal(anonymous.role, "viewer");
+  assert.equal(anonymous.role, "owner");
   assert.equal(anonymous.auth.mode, "session");
-  assert.deepEqual({ ...anonymous.auth.session, autoPairAvailable: undefined }, { role: "viewer", via: "loopback", paired: false, autoPairAvailable: undefined });
+  assert.deepEqual({ ...anonymous.auth.session, autoPairAvailable: undefined }, { role: "owner", via: "loopback", paired: false, autoPairAvailable: undefined });
   assert.equal(anonymous.auth.csrf, null);
+  // The opt-out: with pairing required on this machine it is a viewer again.
+  process.env.SERVICE_ENTRY_REQUIRE_PAIRING = "1";
+  t.after(() => { delete process.env.SERVICE_ENTRY_REQUIRE_PAIRING; entry.security.refreshAccessConfig(); });
+  entry.security.refreshAccessConfig();
+  const pairingRequired = JSON.parse((await raw(port, "/api/console/bootstrap")).body);
+  assert.equal(pairingRequired.role, "viewer");
+  assert.deepEqual({ ...pairingRequired.auth.session, autoPairAvailable: undefined }, { role: "viewer", via: "loopback", paired: false, autoPairAvailable: undefined });
   const owner = await ownerSession(entry, port);
   const bootstrap = JSON.parse((await raw(port, "/api/console/bootstrap", { headers: owner.headers() })).body);
   assert.equal(bootstrap.role, "owner");

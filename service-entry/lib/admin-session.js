@@ -2,16 +2,27 @@
 
 // Admin authentication on the ADMIN listener (05 §5.1-§5.6).
 //
-// A loopback caller without credentials is a viewer (00 §9.8). Writes and
-// owner-only reads need one of:
+// Access defaults (owner decision, after 00 §9.8): a request whose SOCKET is
+// on this machine (127.0.0.1 / ::1, never decided by a forwarded header) is
+// the owner without pairing and without a session; a LAN socket on a LAN-bound
+// ADMIN listener is the owner too (admin.allowLanOwner, default true;
+// SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 turns it off). Opt-outs:
+//   admin.requirePairingOnLoopback=true   this machine must pair as well
+//   admin.allowLanOwner=false             LAN devices are viewers (a paired
+//                                         LAN session is refused with
+//                                         lan_owner_disabled)
+// An owner that shows no credential is the "implicit owner" (principal.implicit).
+// Its browser writes are protected without a token: a state-changing request
+// that carries Origin or Sec-Fetch-Site must be same-origin with the Host it
+// arrived on, otherwise csrf_invalid. A script without those headers (curl,
+// platformctl, PowerShell) writes as before. Explicit credentials still work:
 //   - the session cookie lai_admin=<sessionId>.<secret>, obtained by pairing
 //     (a single-use code, or the one-time first-run auto-pair), plus the
 //     x-csrf-token header on every non-GET;
 //   - an admin tool token (Authorization: Bearer pat_…), role owner;
 //   - a machine signature (machine-auth.js), held to its fixed scope.
-// A LAN socket is an owner only with admin.allowLanOwner, and only through
-// pairing. The store keeps sha256 of every secret; cookies, CSRF tokens and
-// pair codes are never logged.
+// The PUBLIC listener never grants any of this. The store keeps sha256 of
+// every secret; cookies, CSRF tokens and pair codes are never logged.
 //
 // createAdminAuth() also owns the single pre-dispatch guard (deny-by-default
 // for viewers through the viewer registry, CSRF, machine scope) and the
@@ -61,7 +72,8 @@ const DEFAULT_ADMIN = Object.freeze({
   sessionDays: 180,
   loopbackViewer: true,
   lanAnonymousViewer: true,
-  allowLanOwner: false,
+  allowLanOwner: true,
+  requirePairingOnLoopback: false,
 });
 
 class AdminAuthError extends Error {
@@ -266,6 +278,9 @@ function createAdminAuth(options = {}) {
   const readJson = typeof options.readJsonObjectBody === "function" ? options.readJsonObjectBody : readSmallJson;
   const sendError = typeof options.sendError === "function" ? options.sendError : writeError;
   const logger = options.logger || console;
+  // true when SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 was set explicitly: LAN owners
+  // are off whatever admin.allowLanOwner says.
+  const lanOwnerForcedOff = typeof options.lanOwnerForcedOff === "function" ? options.lanOwnerForcedOff : () => false;
   const principals = new WeakMap();
   const pairAttempts = new Map();
   let csrfKeyCache = { store: null, key: null };
@@ -291,6 +306,15 @@ function createAdminAuth(options = {}) {
     const admin = { ...DEFAULT_ADMIN, ...(value.admin || {}) };
     const port = Number(value.listeners?.admin?.port) || 5176;
     return { admin, port, lanBound: value.adminLanBound === true };
+  }
+
+  function lanOwnerAllowed(admin) {
+    if (admin.allowLanOwner !== true) return false;
+    try {
+      return lanOwnerForcedOff() !== true;
+    } catch {
+      return true;
+    }
   }
 
   // One warning a minute: a missing store means "no sessions", which keeps
@@ -429,8 +453,8 @@ function createAdminAuth(options = {}) {
     if (hasForwardingHeaders(req) || listenerKind(req) === "public") return { role: "none", principal: "", via: "none", redact: true };
     const local = core.isLocalRequest(req);
     const network = local ? "loopback" : "lan";
-    const { admin } = config();
-    const lanOwner = local || admin.allowLanOwner === true;
+    const { admin, lanBound } = config();
+    const lanOwner = local || lanOwnerAllowed(admin);
     const token = toolTokenFrom(req);
     if (token) {
       const owner = token.role === "owner" && lanOwner;
@@ -449,17 +473,46 @@ function createAdminAuth(options = {}) {
         ...(owner ? {} : { lanSession: true }),
       };
     }
+    // No credential: this machine (or a LAN device) is the owner by default.
+    // Only the socket address counts; forwarded headers returned above.
+    if (local ? admin.requirePairingOnLoopback !== true : lanBound && lanOwnerAllowed(admin)) {
+      return { role: "owner", principal: network, via: network, network, implicit: true, redact: false };
+    }
     const anonymous = local ? admin.loopbackViewer !== false : admin.lanAnonymousViewer !== false;
     return anonymous
       ? { role: "viewer", principal: network, via: network, network, redact: true }
       : { role: "none", principal: "", via: "none", network, redact: true };
   }
 
-  // true when the request passes the CSRF rule: a GET or HEAD, no session,
-  // or x-csrf-token equal to hmac(csrfKey, sessionId).
+  // The browser rule for an implicit owner. A request with neither Origin nor
+  // Sec-Fetch-Site is a script and passes. A browser request passes when its
+  // Origin has the Host the request arrived on (the Host allowlist runs in
+  // security.checkRequest before the guard) and Sec-Fetch-Site, if sent, is
+  // same-origin (or none, a typed address).
+  function sameOriginBrowserWrite(req) {
+    const origin = headerText(req?.headers, "origin");
+    const site = headerText(req?.headers, "sec-fetch-site").toLowerCase();
+    if (!origin && !site) return true;
+    if (site && site !== "same-origin" && site !== "none") return false;
+    if (!origin) return true;
+    let parsed;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      return false;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = headerText(req?.headers, "host").toLowerCase();
+    return Boolean(host) && parsed.host.toLowerCase() === host;
+  }
+
+  // true when the request passes the CSRF rule: a GET or HEAD, no session
+  // (an implicit owner is held to sameOriginBrowserWrite), or x-csrf-token
+  // equal to hmac(csrfKey, sessionId).
   function requireCsrf(req) {
     if (READ_METHODS.has(String(req?.method || "GET").toUpperCase())) return true;
     const who = authenticate(req);
+    if (who.implicit === true) return sameOriginBrowserWrite(req);
     if (who.via !== "session") return true;
     const target = store();
     if (!target) return false;
@@ -476,7 +529,7 @@ function createAdminAuth(options = {}) {
     if (who.lanSession) {
       return {
         ok: false, role: who.role, principal: who.principal, redact: true, status: 403, code: "lan_owner_disabled",
-        message: "Owner access from the LAN is turned off (admin.allowLanOwner).",
+        message: "Owner access from the LAN is turned off (admin.allowLanOwner or SERVICE_ENTRY_ALLOW_LAN_ADMIN=0).",
       };
     }
     return {
@@ -620,8 +673,8 @@ function createAdminAuth(options = {}) {
       // A loopback code is not redeemable from the LAN (it is burned).
       if (!used.lan) return invalid;
       const { admin, lanBound } = config();
-      if (!admin.allowLanOwner || !lanBound) {
-        return { ok: false, status: 403, code: "lan_owner_disabled", message: "Owner access from the LAN is turned off (admin.allowLanOwner)." };
+      if (!lanOwnerAllowed(admin) || !lanBound) {
+        return { ok: false, status: 403, code: "lan_owner_disabled", message: "Owner access from the LAN is turned off (admin.allowLanOwner or SERVICE_ENTRY_ALLOW_LAN_ADMIN=0)." };
       }
     }
     const row = newSessionRow(req, at);
@@ -639,7 +692,7 @@ function createAdminAuth(options = {}) {
     const { admin, port, lanBound } = config();
     let host = "127.0.0.1";
     if (lan) {
-      if (!admin.allowLanOwner || !lanBound) {
+      if (!lanOwnerAllowed(admin) || !lanBound) {
         throw new AdminAuthError(403, "lan_owner_disabled", "A LAN pairing code needs listeners.admin.lan and admin.allowLanOwner.");
       }
       host = String(getLanAddress() || "").trim();
@@ -669,10 +722,16 @@ function createAdminAuth(options = {}) {
   // Audit elevation (§5.6): only an owner session may elevate.
   function issueElevation(req, res, { scope = "audit", ttlSeconds = ELEVATION_TTL_SECONDS } = {}) {
     const who = authenticate(req);
-    if (who.role !== "owner" || who.via !== "session") {
+    if (who.role !== "owner" || (who.via !== "session" && who.implicit !== true)) {
       throw new AdminAuthError(403, "elevation_requires_session", "Only a paired console session can unlock this.");
     }
     if (scope !== "audit") throw new AdminAuthError(400, "invalid_request", "Unknown elevation scope.");
+    // An owner that is already trusted without pairing has nothing to unlock:
+    // there is no session to bind a cookie to, and checkElevation passes.
+    if (who.implicit === true) {
+      const ttl = Math.min(ELEVATION_MAX_TTL_SECONDS, Math.max(1, Math.floor(Number(ttlSeconds) || ELEVATION_TTL_SECONDS)));
+      return { expiresAt: iso(clockMs() + ttl * 1000) };
+    }
     const ttl = Math.min(ELEVATION_MAX_TTL_SECONDS, Math.max(1, Math.floor(Number(ttlSeconds) || ELEVATION_TTL_SECONDS)));
     const target = store({ required: true });
     const at = clockMs();
@@ -703,6 +762,7 @@ function createAdminAuth(options = {}) {
   // The cookie, an unexpired and unrevoked row, and the same live session.
   function checkElevation(req, scope = "audit") {
     const who = authenticate(req);
+    if (who.role === "owner" && who.implicit === true) return scope === "audit";
     if (who.role !== "owner" || who.via !== "session") return false;
     const found = elevationFrom(req);
     if (!found) return false;
@@ -987,7 +1047,7 @@ function createAdminAuth(options = {}) {
         const allowed = requireOwner(req, res);
         if (!allowed) return true;
         const who = authenticate(req);
-        if (who.role === "owner" && who.via !== "session" && who.via !== "token") throw new AdminAuthError(401, "admin_session_required", "Pair this browser first.");
+        if (who.role === "owner" && who.via !== "session" && who.via !== "token" && who.implicit !== true) throw new AdminAuthError(401, "admin_session_required", "Pair this browser first.");
         const body = await readBody(req);
         const ttlSeconds = body.ttlSeconds === undefined ? PAIR_CODE_TTL_SECONDS : body.ttlSeconds;
         const minted = mintPairCode({ actor: allowed.principal, ttlSeconds, lan: body.lan === true });

@@ -156,7 +156,7 @@ test("client policy survives entry auth while open local compatibility is preser
   assert.deepEqual(pick(await security.authorizeGatewayRequest(req("127.0.0.1", { authorization: "Bearer local-placeholder" }))), [false, 401, "invalid_api_key"]);
 });
 
-test("loopback without a session is a viewer; a session or token is the owner; LAN owners need allowLanOwner and pairing", (t) => {
+test("pairing mode: loopback without a session is a viewer; a session or token is the owner; LAN owners need allowLanOwner (paired or, on a LAN-bound listener, implicit)", (t) => {
   withCleanEnv(t);
   const fixture = makeAdminAuth();
   const write = (options) => fixture.auth.checkManagementAccess(fakeRequest({ method: "POST", url: "/api/stop-all", ...options }), { write: true });
@@ -177,12 +177,12 @@ test("loopback without a session is a viewer; a session or token is the owner; L
   // and a LAN owner also needs admin.allowLanOwner plus a paired session.
   const security = createEntrySecurity({ host: "0.0.0.0", managers: [], readSection: defaultAccessReader(t, { SERVICE_ENTRY_ALLOW_LAN_ADMIN: "1" }) });
   assert.equal(security.accessConfig().adminLanBound, true);
-  assert.equal(security.accessConfig().admin.allowLanOwner, false);
+  assert.equal(security.accessConfig().admin.allowLanOwner, true, "allowLanOwner defaults to true");
   fixture.setConfig({ admin: { allowLanOwner: false }, lanBound: true });
   assert.equal(write({ peer: "192.168.0.44" }).code, "admin_session_required");
   assert.throws(() => fixture.auth.mintPairCode({ actor: "test", lan: true }), (error) => error.code === "lan_owner_disabled");
   fixture.setConfig({ admin: { allowLanOwner: true }, lanBound: true });
-  assert.equal(write({ peer: "192.168.0.44" }).code, "admin_session_required", "allowLanOwner alone is no credential");
+  assert.equal(write({ peer: "192.168.0.44" }).ok, true, "allowLanOwner on a LAN-bound listener: the LAN device is the owner without pairing");
   const lanCode = fixture.auth.mintPairCode({ actor: "test", lan: true }).code;
   const lanPaired = fixture.auth.pairWithCode(fakeRequest({ method: "POST", peer: "192.168.0.44" }), lanCode);
   const lanHeaders = { cookie: cookiePair(lanPaired.setCookie), "x-csrf-token": lanPaired.csrfToken };
@@ -645,6 +645,10 @@ test("shutdown needs an owner session plus CSRF, an owner token or a cli/supervi
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const port = server.address().port;
+  // This test is about the pairing model, so it runs with the opt-out on.
+  process.env.SERVICE_ENTRY_REQUIRE_PAIRING = "1";
+  t.after(() => { delete process.env.SERVICE_ENTRY_REQUIRE_PAIRING; entry.security.refreshAccessConfig(); });
+  entry.security.refreshAccessConfig();
 
   // fetch() refuses to set Host, so drive these with the raw client. The guard
   // keys off the socket address, and a loopback test client is always "local";
