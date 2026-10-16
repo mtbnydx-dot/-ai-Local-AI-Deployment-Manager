@@ -176,7 +176,7 @@ function createSupervisor(options = {}) {
 
   function resolveSpec(spec) {
     if (!spec) return null;
-    return componentsApi.resolveComponent(spec, { aiRoot, config, runtime: { env } });
+    return componentsApi.resolveComponent(spec, { aiRoot, config, runtime: { env, secrets: getSecrets() } });
   }
 
   function record(id) {
@@ -476,9 +476,11 @@ function createSupervisor(options = {}) {
   // The spawn step of one component; the returned promise settles when the
   // component leaves "starting" (or at once when nothing was spawned).
   async function spawnStep(rec) {
-    const spec = rec.spec;
     if (closed) return rec.state;
     if (LIVE_STATES.has(rec.state) && rec.pid) return waitForState(rec);
+    // Store values can change after the supervisor starts (or before a
+    // requested restart). Resolve child env at the actual launch boundary.
+    const spec = rec.spec = resolveSpec(componentsApi.getComponent(registry, rec.id));
     if (spec.blocked) {
       setState(rec, "blocked", { reason: spec.blocked.reason || "registry-invalid" });
       return rec.state;
