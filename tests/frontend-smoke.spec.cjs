@@ -630,7 +630,7 @@ test.describe("manager frontends", () => {
     }
   });
 
-  // PUB-5 against a real entry with a fresh access store: the first browser
+  // PUB-5 with required pairing and a fresh access store: the first browser
   // that opens / auto-pairs (once) and is the owner of the classic console;
   // a second browser is a viewer until it opens a #pair= link minted by the
   // first, which pairs it and is stripped from the address bar.
@@ -650,6 +650,7 @@ test.describe("manager frontends", () => {
           SERVICE_ENTRY_HOST: "127.0.0.1",
           SERVICE_ENTRY_PORT: String(entryPort),
           SERVICE_ENTRY_CONSOLE_DEFAULT: "classic",
+          SERVICE_ENTRY_REQUIRE_PAIRING: "1",
           AI_BILLING_DB: path.join(dataDir, "billing.sqlite"),
         },
       }),
