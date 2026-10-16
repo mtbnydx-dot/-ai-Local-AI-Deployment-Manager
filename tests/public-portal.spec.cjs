@@ -723,9 +723,9 @@ test.describe("layout", () => {
     const darkPage = await dark.newPage();
     await goto(lightPage, "/status?lang=en");
     await goto(darkPage, "/status?lang=en");
-    expect(await lightPage.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(245, 247, 250)");
-    expect(await darkPage.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(11, 17, 24)");
-    expect(await darkPage.evaluate(() => getComputedStyle(document.querySelector(".status-hero")).backgroundColor)).toBe("rgb(18, 26, 36)");
+    await expect(lightPage.locator("body")).toHaveCSS("background-color", "rgb(245, 247, 250)");
+    await expect(darkPage.locator("body")).toHaveCSS("background-color", "rgb(11, 17, 24)");
+    await expect(darkPage.locator(".status-hero")).toHaveCSS("background-color", "rgb(18, 26, 36)");
     await light.close();
     await dark.close();
   });
