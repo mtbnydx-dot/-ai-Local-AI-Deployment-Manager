@@ -1988,6 +1988,10 @@ for (const locale of ["en-US", "zh-CN"]) {
       texts.access = await page.locator("main").innerText();
       await byId(page, "wizard.next").click();
       await expect(byId(page, "wizard.launch")).toBeVisible();
+      // Review renders its shell before the debounced plan and lazy values are ready.
+      await expect(byId(page, "wizard.plan-status")).toHaveAttribute("data-status", "ready");
+      await expect(byId(page, "wizard.review.overrides")).toBeVisible();
+      await expect(byId(page, "wizard.review.schema-form")).toBeVisible();
       texts.review = await page.locator("main").innerText();
       await byId(page, "wizard.launch").click();
       await expect(byId(page, "wizard.step.launch")).toBeVisible();
