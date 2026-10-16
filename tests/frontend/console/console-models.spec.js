@@ -1303,6 +1303,7 @@ test("plan sheet from a link: the artifact, the source and Download & deploy are
     await expect(byId(page, "plan")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(byId(page, "plan")).toHaveCount(0);
+    await expect(page).toHaveURL(`${entry.url}models/discover`);
     const params = new URL(page.url()).searchParams;
     expect([params.get("drawer"), params.get("repo"), params.get("provider")]).toEqual([null, null, null]);
   } finally {
