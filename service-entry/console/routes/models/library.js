@@ -1,17 +1,7 @@
-// /models (07 §6.4 "Library"): every model on this machine, with the capacity
-// of each storage root above it.
-//
-// Rows come from GET /api/hub/library (03 §9): name, role, format and quant,
-// size, root, engine chips (the engines a card is known to run on),
-// verification, provenance `repo@rev`, update state and last use. Facets: root,
-// format, runnable-on-engine, role, has-update. Actions per row: Deploy,
-// Verify, Check update, Update, Move (the Storage page's migration planner),
-// Probe (the detail page's Compatibility tab), clean up leftovers and Delete
-// (type-to-confirm, library-actions.js).
-//
-// Before the hub exists the rows are the managers' own listing
-// (`/api/m/{vllm,llama}/models`): name, size, format and verification are there,
-// provenance, update state and cards are not, and a banner says so (data.js).
+// /models: the local inventory and drive capacity (07 §6.4, 03 §9).
+// Hub rows carry facets, provenance, verification and owner actions. Until
+// the hub is available, data.js falls back to the managers and marks the
+// missing hub fields. Deletion stays type-to-confirm in library-actions.js.
 
 import { describeError } from "../../lib/api.js";
 import { EMPTY_FILTERS, applyFilters, canDelete, facetOptions } from "../../lib/library-model.js";
