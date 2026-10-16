@@ -1415,6 +1415,22 @@ test("file helpers resolve existing paths and keep queued JSON writes atomic", a
   assert.equal(leftovers.some((name) => name.includes(".tmp-") || name.endsWith(".lock")), false);
 });
 
+test("atomic replacement keeps its legacy fallback while rename-only callers preserve the final file", { skip: process.platform !== "win32" }, async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "manager-core-rename-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const temp = path.join(dir, "weight.incomplete");
+  const file = path.join(dir, "weight");
+  await fs.writeFile(temp, "new");
+  await fs.writeFile(file, "original");
+  t.mock.method(fs, "rename", async () => { throw Object.assign(new Error("locked"), { code: "EPERM" }); });
+  await assert.rejects(core.replaceFileAtomically(temp, file, 1, { fallbackToCopy: false }), { code: "EPERM" });
+  assert.equal(await fs.readFile(file, "utf8"), "original");
+  assert.equal(await fs.readFile(temp, "utf8"), "new");
+  await core.replaceFileAtomically(temp, file, 1);
+  assert.equal(await fs.readFile(file, "utf8"), "new", "existing JSON callers retain their fallback behaviour");
+  await assert.rejects(fs.stat(temp), { code: "ENOENT" });
+});
+
 test("manager lifecycle controls pid files, listen, health, and idempotent shutdown", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "manager-lifecycle-"));
   const pidFile = path.join(dir, "manager.pid");

@@ -141,7 +141,9 @@ async function atomicWriteJsonFile(file, value) {
 // destination open. Retry the atomic rename before resorting to a copy, since a
 // copy that dies midway leaves a truncated config -- exactly the state that
 // used to disable auth silently.
-async function replaceFileAtomically(temp, file, attempts = 12) {
+// Large verified files must stay rename-only: copying over the destination on
+// exhaustion could leave a truncated final file if the process stops midway.
+async function replaceFileAtomically(temp, file, attempts = 12, { fallbackToCopy = true } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       await fsp.rename(temp, file);
@@ -150,6 +152,7 @@ async function replaceFileAtomically(temp, file, attempts = 12) {
       const retryable = process.platform === "win32" && ["EPERM", "EACCES", "EBUSY"].includes(error.code);
       if (!retryable) throw error;
       if (attempt === attempts) {
+        if (!fallbackToCopy) throw error;
         await fsp.copyFile(temp, file);
         await fsp.rm(temp, { force: true });
         return;

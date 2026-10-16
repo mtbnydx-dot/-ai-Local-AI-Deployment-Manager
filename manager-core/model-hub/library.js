@@ -27,6 +27,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { Worker } = require("node:worker_threads");
+const { replaceFileAtomically } = require("../file-utils");
 const { createModelFilesystemStore } = require("../model-filesystem-store");
 const { containsPath, overlapsPath, pathKey } = require("../model-storage");
 const { redactSecrets } = require("../secret-redactor");
@@ -421,6 +422,7 @@ const fs = require("node:fs");
 const hash = crypto.createHash("sha256");
 let done = 0;
 let reported = 0;
+let result = null;
 const stream = fs.createReadStream(workerData.file, { highWaterMark: 4 * 1024 * 1024 });
 stream.on("data", (chunk) => {
   hash.update(chunk);
@@ -430,8 +432,10 @@ stream.on("data", (chunk) => {
     parentPort.postMessage({ type: "progress", done });
   }
 });
-stream.on("error", (error) => parentPort.postMessage({ type: "error", code: error.code || "error", message: error.message }));
-stream.on("end", () => parentPort.postMessage({ type: "done", sha256: hash.digest("hex"), bytes: done }));
+stream.on("error", (error) => { result = { type: "error", code: error.code || "error", message: error.message }; });
+stream.on("end", () => { result = { type: "done", sha256: hash.digest("hex"), bytes: done }; });
+// end means the bytes were read, not that Windows released the file handle.
+stream.on("close", () => parentPort.postMessage(result || { type: "error", code: "ERR_STREAM_PREMATURE_CLOSE", message: "Hash stream closed before EOF." }));
 `;
 
 function hashFileInWorker(file, { onProgress } = {}) {
@@ -441,8 +445,9 @@ function hashFileInWorker(file, { onProgress } = {}) {
     const finish = (fn, value) => {
       if (settled) return;
       settled = true;
-      worker.terminate().catch(() => {});
-      fn(value);
+      // Import may rename/remove this file as soon as hashing settles. Wait
+      // for the worker's cleanup on both success and failure before it can.
+      worker.terminate().catch(() => {}).then(() => fn(value));
     };
     worker.on("message", (message) => {
       if (message.type === "progress") onProgress?.(message.done);
@@ -2235,7 +2240,7 @@ function createLibrary(options = {}) {
             if (expected.sha256 && expected.sha256.toLowerCase() !== digest) {
               throw new LibraryError("import_hash_mismatch", "A copied file does not match the hash the cache recorded.", { status: 422, details: { path: file.rel } });
             }
-            await fsp.rename(temp, dest);
+            await replaceFileAtomically(temp, dest, 12, { fallbackToCopy: false });
             // The marker keeps the hub's convention: sha256 where the cache knew
             // one, the git object id for the other files it knew, so the copy has
             // the same fileset hash as the cache entry. Unknown files get the

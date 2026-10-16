@@ -11,9 +11,11 @@
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { Worker } = require("node:worker_threads");
 
 const { createModelFilesystemStore } = require("../model-filesystem-store");
 const { createModelStorage } = require("../model-storage");
@@ -1300,6 +1302,140 @@ test("importing a Hugging Face cache repository copies the real files, hashes th
   // The same request again is a resume into the matching marker, not a refusal.
   const second = await waitTask(library, (await library.importCache(cached.id, { outputName: "Cached-LM-copy", rootId: created.rootId })).taskId);
   assert.equal(second.state, "succeeded", JSON.stringify(second.error));
+});
+
+test("cache import waits for hash worker cleanup before publishing or removing its files", async (t) => {
+  const world = makeWorld(t);
+  makeHfCacheRepo(world.hfHome, "acme/Worker-Close", SHA_A, { "config.json": Buffer.from("{}"), "model.safetensors": safetensorsBytes(1500, "c") });
+  const library = await world.open();
+  await world.scan();
+  const entry = await world.byName("Worker-Close");
+  const rootId = (await library.list({})).roots.find((root) => root.label === "Library F").id;
+  const closing = new Set();
+  let workers = 0;
+  const terminate = Worker.prototype.terminate;
+  t.mock.method(Worker.prototype, "terminate", function () {
+    workers += 1;
+    closing.add(this);
+    return terminate.call(this).then(async (code) => {
+      // Model delayed OS cleanup after the worker has delivered its result.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      closing.delete(this);
+      return code;
+    });
+  });
+  const rename = fsp.rename;
+  t.mock.method(fsp, "rename", async (from, to) => {
+    if (String(from).endsWith(".incomplete")) assert.equal(closing.size, 0, "hash worker cleanup must finish before rename");
+    return rename(from, to);
+  });
+  const task = await waitTask(library, (await library.importCache(entry.id, { rootId, outputName: "copy" })).taskId);
+  assert.equal(task.state, "succeeded", JSON.stringify(task.error));
+  assert.equal(workers, 2, "both copied files used the real default hash worker");
+  assert.equal(closing.size, 0);
+});
+
+test("cache import retries transient Windows rename failures without recopying verified weights", { skip: process.platform !== "win32" }, async (t) => {
+  const world = makeWorld(t);
+  const weight = safetensorsBytes(1500, "r");
+  makeHfCacheRepo(world.hfHome, "acme/Rename-Retry", SHA_A, { "config.json": Buffer.from("{}"), "model.safetensors": weight });
+  const library = await world.open();
+  await world.scan();
+  const entry = await world.byName("Rename-Retry");
+  const rootId = (await library.list({})).roots.find((root) => root.label === "Library F").id;
+  const destination = path.join(world.libF, "copy", "model.safetensors");
+  const rename = fsp.rename;
+  const copyFile = fsp.copyFile;
+  const errors = ["EPERM", "EACCES", "EBUSY"];
+  let attempts = 0;
+  let copies = 0;
+  t.mock.method(fsp, "copyFile", async (from, to, ...rest) => {
+    if (to === `${destination}.incomplete`) copies += 1;
+    assert.notEqual(to, destination, "no direct copy into the final weight file");
+    return copyFile(from, to, ...rest);
+  });
+  t.mock.method(fsp, "rename", async (from, to) => {
+    if (to === destination) {
+      assert.equal(from, `${destination}.incomplete`);
+      const code = errors[attempts++];
+      if (code) throw Object.assign(new Error("temporary sharing violation"), { code });
+    }
+    return rename(from, to);
+  });
+  const task = await waitTask(library, (await library.importCache(entry.id, { rootId, outputName: "copy" })).taskId);
+  assert.equal(task.state, "succeeded", JSON.stringify(task.error));
+  assert.equal(attempts, 4);
+  assert.equal(copies, 1, "retry only publishes the already hashed temporary file");
+  assert.deepEqual(fs.readFileSync(destination), weight);
+  assert.equal(fs.existsSync(`${destination}.incomplete`), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(destination), ".platform-download.json"))).schemaVersion, 2);
+  assert.deepEqual((await world.storage.snapshot()).operations, []);
+});
+
+test("a permanently locked resume target keeps its final weight and fails after bounded rename retries", { skip: process.platform !== "win32" }, async (t) => {
+  const world = makeWorld(t);
+  const weight = safetensorsBytes(1500, "p");
+  makeHfCacheRepo(world.hfHome, "acme/Rename-Locked", SHA_A, { "config.json": Buffer.from("{}"), "model.safetensors": weight });
+  const library = await world.open();
+  await world.scan();
+  const entry = await world.byName("Rename-Locked");
+  const rootId = (await library.list({})).roots.find((root) => root.label === "Library F").id;
+  const first = await waitTask(library, (await library.importCache(entry.id, { rootId, outputName: "copy" })).taskId);
+  assert.equal(first.state, "succeeded", JSON.stringify(first.error));
+  const destination = path.join(world.libF, "copy", "model.safetensors");
+  const before = fs.statSync(destination);
+  const rename = fsp.rename;
+  const copyFile = fsp.copyFile;
+  let attempts = 0;
+  t.mock.method(fsp, "copyFile", async (from, to, ...rest) => {
+    assert.notEqual(to, destination, "exhaustion must never fall back to overwriting the final file");
+    return copyFile(from, to, ...rest);
+  });
+  t.mock.method(fsp, "rename", async (from, to) => {
+    if (to === destination) {
+      attempts += 1;
+      throw Object.assign(new Error("still locked"), { code: "EPERM" });
+    }
+    return rename(from, to);
+  });
+  const task = await waitTask(library, (await library.importCache(entry.id, { rootId, outputName: "copy" })).taskId);
+  assert.equal(task.state, "failed");
+  assert.equal(task.error.code, "EPERM");
+  assert.equal(attempts, 12);
+  assert.deepEqual(fs.readFileSync(destination), weight);
+  assert.equal(fs.statSync(destination).mtimeMs, before.mtimeMs, "the original final file was never rewritten");
+  assert.equal(fs.existsSync(`${destination}.incomplete`), false);
+  assert.deepEqual((await world.storage.snapshot()).operations, [], "the failed import releases its lock");
+});
+
+test("cache import fails immediately for nontransient rename errors and removes only its new folder", async (t) => {
+  const world = makeWorld(t);
+  const cache = makeHfCacheRepo(world.hfHome, "acme/Rename-Error", SHA_A, { "config.json": Buffer.from("{}"), "model.safetensors": safetensorsBytes(1500, "e") });
+  put(world.libF, "occupied/notes.txt", "keep me");
+  const library = await world.open();
+  await world.scan();
+  const entry = await world.byName("Rename-Error");
+  const rootId = (await library.list({})).roots.find((root) => root.label === "Library F").id;
+  const destination = path.join(world.libF, "copy", "model.safetensors");
+  const rename = fsp.rename;
+  let attempts = 0;
+  t.mock.method(fsp, "rename", async (from, to) => {
+    if (to === destination) {
+      attempts += 1;
+      throw Object.assign(new Error("I/O failure"), { code: "EIO" });
+    }
+    return rename(from, to);
+  });
+  await assert.rejects(library.importCache(entry.id, { rootId, outputName: "occupied" }), { code: "target_occupied", status: 409 });
+  assert.equal(attempts, 0, "occupied targets are refused before file publication");
+  assert.equal(fs.readFileSync(path.join(world.libF, "occupied", "notes.txt"), "utf8"), "keep me");
+  const task = await waitTask(library, (await library.importCache(entry.id, { rootId, outputName: "copy" })).taskId);
+  assert.equal(task.state, "failed");
+  assert.equal(task.error.code, "EIO");
+  assert.equal(attempts, 1);
+  assert.equal(fs.existsSync(path.join(world.libF, "copy")), false);
+  assert.equal(fs.existsSync(cache.repoDir), true, "the source cache is retained");
+  assert.deepEqual((await world.storage.snapshot()).operations, []);
 });
 
 test("import follows the target-occupied rule, checks hashes and space, and cleans up after itself", async (t) => {
