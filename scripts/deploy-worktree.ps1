@@ -81,14 +81,20 @@ function Invoke-PostDeploy {
   if ($Preview) { $cliArgs += '--dry-run' }
 
   $previousAiRoot = $env:AI_ROOT
+  $previousErrorActionPreference = $ErrorActionPreference
   try {
     $env:AI_ROOT = $AiRoot
+    # Windows PowerShell 5 can promote native stderr into error records when
+    # deployment output is captured. The CLI's exit code decides success.
+    $ErrorActionPreference = 'Continue'
     # Out-Host keeps the CLI output out of this function's return value.
     & $node @cliArgs | Out-Host
-    return [int]$LASTEXITCODE
+    $exitCode = $LASTEXITCODE
   } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     if ($null -eq $previousAiRoot) { Remove-Item Env:AI_ROOT -ErrorAction SilentlyContinue } else { $env:AI_ROOT = $previousAiRoot }
   }
+  return [int]$exitCode
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path

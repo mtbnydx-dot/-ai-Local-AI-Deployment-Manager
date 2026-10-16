@@ -65,6 +65,69 @@ test("post-deploy runs from the newly deployed CLI after the manifest is written
   assert.match(text, /\$planPath = Join-Path \$releaseRoot 'plan-deployment-manifest\.json'/);
 });
 
+// Evaluate only the shipped bridge and its failure handling, never a deploy.
+// The native child is a temporary Node CLI, including real stderr output.
+for (const nativeExitCode of [0, 23]) {
+  test(`Windows PowerShell 5 post-deploy tolerates stderr and preserves native exit ${nativeExitCode}`, { skip: process.platform !== "win32" }, (t) => {
+    const functionStart = text.indexOf("function Invoke-PostDeploy {");
+    const functionEnd = text.indexOf("\n}\n", functionStart) + 3;
+    assert.ok(functionStart > 0 && functionEnd > functionStart);
+    const callStart = text.indexOf("$postDeployCode = Invoke-PostDeploy -CliRoot $liveFull");
+    const callEnd = text.indexOf("\nif ($Restart -eq 'none')", callStart);
+    assert.ok(callStart > 0 && callEnd > callStart);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "post-deploy ps5-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, "scripts"));
+    fs.writeFileSync(path.join(root, "scripts", "platformctl.js"), [
+      'console.error("fixture MCP build progress on stderr");',
+      'console.log("FIXTURE_CHILD:" + JSON.stringify({args:process.argv.slice(2),aiRoot:process.env.AI_ROOT}));',
+      'process.exit(Number(process.env.FIXTURE_EXIT_CODE));',
+    ].join("\n"));
+    const harness = path.join(root, "bridge-test.ps1");
+    // A captured deploy log promotes native stderr into PS5 error records.
+    fs.writeFileSync(harness, [
+      "$ErrorActionPreference = 'Stop'",
+      "$Restart = 'none'",
+      "$NoPrune = $true",
+      "$env:AI_ROOT = 'fixture-original-root'",
+      "$env:NODE_EXE = $env:FIXTURE_NODE",
+      "$liveFull = $env:FIXTURE_ROOT",
+      "$manifestPath = Join-Path $liveFull 'deployment-manifest.json'",
+      "$backupRoot = Join-Path $liveFull 'no-backup'",
+      text.slice(functionStart, functionEnd),
+      "$failure = $null",
+      "try {",
+      ". {",
+      text.slice(callStart, callEnd),
+      "} 2>&1 | Out-Host",
+      "} catch { $failure = $_.Exception.Message }",
+      "[pscustomobject]@{psMajor=$PSVersionTable.PSVersion.Major;psEdition=$PSVersionTable.PSEdition;nativeCode=$postDeployCode;preference=[string]$ErrorActionPreference;aiRoot=$env:AI_ROOT;failure=$failure} | ConvertTo-Json -Compress | ForEach-Object { Write-Output ('FIXTURE_RESULT:' + $_) }",
+      "if ($failure) { exit 1 }",
+    ].join("\n"));
+    const env = {
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath")),
+      FIXTURE_ROOT: root, FIXTURE_NODE: process.execPath, FIXTURE_EXIT_CODE: String(nativeExitCode),
+    };
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness], { env, encoding: "utf8", windowsHide: true, timeout: 60000 });
+    assert.ifError(result.error);
+    const read = (prefix) => JSON.parse(result.stdout.split(/\r?\n/).find((line) => line.startsWith(prefix))?.slice(prefix.length) || "null");
+    const report = read("FIXTURE_RESULT:");
+    assert.ok(report, result.stderr || result.stdout);
+    assert.equal(report.psMajor, 5, "this regression runs in Windows PowerShell, not pwsh");
+    assert.equal(report.psEdition, "Desktop");
+    assert.equal(report.nativeCode, nativeExitCode, result.stderr);
+    assert.equal(report.preference, "Stop");
+    assert.equal(report.aiRoot, "fixture-original-root");
+    const child = read("FIXTURE_CHILD:");
+    assert.equal(child.aiRoot, root);
+    assert.deepEqual(child.args, ["post-deploy", "--manifest", path.join(root, "deployment-manifest.json"), "--restart", "none", "--no-prune"]);
+    assert.match(result.stdout + result.stderr, /fixture MCP build progress on stderr/);
+    assert.equal(result.status, nativeExitCode === 0 ? 0 : 1, result.stderr);
+    if (nativeExitCode === 0) assert.equal(report.failure, null);
+    else assert.match(report.failure, /Files are deployed; post-steps failed: unknown; run: platform post-deploy --manifest/);
+  });
+}
+
 // Get-LiveDrift as shipped, evaluated by Windows PowerShell on a manifest that
 // post-deploy has just processed.
 test("Get-LiveDrift still parses the manifest after post-deploy", { skip: process.platform !== "win32" }, async (t) => {
