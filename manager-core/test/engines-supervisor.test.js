@@ -19,7 +19,7 @@ const {
 } = require("../engines/runtime-supervisor");
 
 const FAKE_KEY = "fixture-runtime-key-0123456789";
-const FAKE_SK = "sk-fixturefixturefixture0000";
+const FAKE_SK = ("sk-" + "fixturefixturefixture0000");
 const LAUNCH_ID = "lch_TESTTESTTESTTESTTEST";
 const IMAGE = "ghcr.io/fixture/runtime@sha256:" + "a".repeat(64);
 

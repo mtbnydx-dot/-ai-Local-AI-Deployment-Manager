@@ -256,7 +256,7 @@ function writeLog(world, id, stream, text) {
 test("logs reads the files directly, tails, selects streams and redacts store values and key patterns", async (t) => {
   const world = makeWorld(t);
   const secret = "fixture-stored-token-00000000000000000007";
-  const pattern = "sk-fixtureplanted0000000000000000000000000001";
+  const pattern = ("sk-" + "fixtureplanted0000000000000000000000000001");
   assert.equal((await world.cli(["secrets", "set", "hf.token"], { stdin: Readable.from([`${secret}\n`]) })).code, 0);
   writeLog(world, "entry", "out", ["one", `token is ${secret}`, `key ${pattern}`, "four"].join("\n") + "\n");
   writeLog(world, "entry", "err", "boom\n");

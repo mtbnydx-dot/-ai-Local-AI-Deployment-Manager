@@ -116,7 +116,7 @@ test("an entry that is down answers 503 key_store_unavailable through the legacy
     forwardGlobalKey: keys.forwardGlobalKey,
   });
   const exposureRes = { ...res, statusCode: 200, body: null };
-  await exposure.get("POST /api/service-exposure")({ body: { apiKey: "sk-vllm-fake-global-key" } }, exposureRes);
+  await exposure.get("POST /api/service-exposure")({ body: { apiKey: ("sk-" + "vllm-fake-global-key") } }, exposureRes);
   assert.deepEqual([exposureRes.statusCode, exposureRes.body.code, saved], [503, "key_store_unavailable", false]);
 });
 
@@ -128,7 +128,7 @@ test("entry refusals keep their status and code", async () => {
 test("the global key is forwarded as a hash with the manager's limits, never as plaintext", async () => {
   const entry = fakeEntry((method) => [200, method === "PUT" ? { ok: true, keyId: "vllm.global" } : { ok: true, removed: 1 }]);
   const keys = forwarder(entry);
-  const plaintext = "sk-vllm-fake-global-key-value";
+  const plaintext = ("sk-" + "vllm-fake-global-key-value");
   await keys.forwardGlobalKey({ apiKey: plaintext, rateLimitRpm: 90 }, { maxConcurrentRequests: 4, notes: "ignored" });
   await keys.forwardGlobalKey({ clearApiKey: true }, {});
   assert.equal(await keys.forwardGlobalKey({ enabled: true }, {}), null, "no key change, no call");

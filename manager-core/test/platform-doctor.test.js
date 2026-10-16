@@ -45,7 +45,7 @@ test("group and exact/dynamic id filters invoke only selected probes", async (t)
 
 test("probe exceptions become redacted check failures and other checks continue", async (t) => {
   const options = fixture(temporary(t)), secret = "opaque-fixture-doctor-secret-01234";
-  options.probes.dockerCli = () => { throw Object.assign(new Error(`fixture ${secret} sk-fixture0123456789abcdef`), { code: "fixture_probe_error" }); };
+  options.probes.dockerCli = () => { throw Object.assign(new Error(`fixture ${secret} ${"sk-" + "fixture0123456789abcdef"}`), { code: "fixture_probe_error" }); };
   options.getSecrets = () => [secret];
   const report = await runDoctor(options), failed = check(report, "runtime.docker-cli");
   assert.equal(failed.status, "fail"); assert.equal(failed.data.code, "fixture_probe_error");

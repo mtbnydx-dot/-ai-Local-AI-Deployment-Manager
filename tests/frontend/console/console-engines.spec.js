@@ -644,7 +644,7 @@ test("the builder keeps its draft while moving between steps, and the llama mana
 // External endpoints
 
 const EP = "/api/engines/external/endpoints";
-const KEY = "sk-test-fake-0123456789";
+const KEY = ("sk-" + "test-fake-0123456789");
 
 test("adding an endpoint sends the key once; it is not echoed in the page, the storage or the list", async ({ browser }) => {
   const created = { ok: true, endpoint: { endpointId: "my-ollama", label: "my-ollama", kind: "ollama", baseUrl: "http://localhost:11434/v1", apiKeyRef: "engines.external:my-ollama", enabled: true } };

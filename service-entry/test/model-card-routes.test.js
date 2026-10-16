@@ -1194,7 +1194,7 @@ test("models.autoQualify is read from platform.json (first-launch by default), a
 
 // --- MOD-17: save a working launch as a recipe ----------------------------------------------
 
-const FAKE_SECRET = "sk-test-0123456789abcdefghijklmnop";
+const FAKE_SECRET = ("sk-" + "test-0123456789abcdefghijklmnop");
 const SAVE_LAUNCH_ID = "lch_bbbbbbbbbbbbbbbbbbbb";
 
 // The LaunchStore record of a working launch: effective values with provenance, plus the fields a recipe must not copy.

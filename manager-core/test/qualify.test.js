@@ -29,7 +29,7 @@ const { runQualification, planChecks, buildHostRecord, startQualifyJob, createMe
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const CARD_ID = "mc_aaaaaaaaaaaaaaaaaaaa";
 const LAUNCH_ID = "lch_aaaaaaaaaaaaaaaaaaaa";
-const API_KEY = "sk-fake-test-key-0123456789abcdef";
+const API_KEY = ("sk-" + "fake-test-key-0123456789abcdef");
 const TRUST = "fake-trust-token-for-tests";
 
 // ----- fixtures

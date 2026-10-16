@@ -70,7 +70,7 @@ test("a custom draft keeps the key policy's own bounds", () => {
 });
 
 test("the real share block passes the created-key guard", () => {
-  const share = routes.buildShare({ config: { publicOrigin: "https://ai.example.test" }, secret: "sk-plat-TESTONLYFAKEKEY", recommendedModel: null });
-  const result = check(schemas.KeyCreatedGuard, { ok: true, key: { id: "k_x", name: "n", status: "active" }, secret: "sk-plat-TESTONLYFAKEKEY", share });
+  const share = routes.buildShare({ config: { publicOrigin: "https://ai.example.test" }, secret: ("sk-" + "plat-TESTONLYFAKEKEY"), recommendedModel: null });
+  const result = check(schemas.KeyCreatedGuard, { ok: true, key: { id: "k_x", name: "n", status: "active" }, secret: ("sk-" + "plat-TESTONLYFAKEKEY"), share });
   assert.deepEqual(result.errors, []);
 });

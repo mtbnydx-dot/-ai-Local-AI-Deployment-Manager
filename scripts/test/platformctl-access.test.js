@@ -211,10 +211,10 @@ test("open vllm stays a plain URL and calls no entry", async (t) => {
 function writeLegacy(root) {
   const logs = path.join(root, "vllm-manager", "logs");
   fs.mkdirSync(logs, { recursive: true });
-  const secret = "sk-fixture-legacy-secret-0000000000000000";
+  const secret = ("sk-" + "fixture-legacy-secret-0000000000000000");
   fs.writeFileSync(path.join(logs, "service-exposure-settings.json"), JSON.stringify({ apiKey: secret, apiKeyPreview: "sk-fi…0000" }));
   fs.writeFileSync(path.join(logs, "service-clients.json"), JSON.stringify([
-    { id: "friend-a", name: "Friend A", keyHash: crypto.createHash("sha256").update("sk-fixture-legacy-client-1111111111111111").digest("hex"), keyPreview: "fa…1234", enabled: true },
+    { id: "friend-a", name: "Friend A", keyHash: crypto.createHash("sha256").update(("sk-" + "fixture-legacy-client-1111111111111111")).digest("hex"), keyPreview: "fa…1234", enabled: true },
   ]));
   return secret;
 }

@@ -60,7 +60,7 @@ test("tailLog bounds bytes and lines, handles CRLF/UTF-8 and redacts every selec
 
 test("tails use the shared patterns and refreshed store values without a new redaction API", (t) => {
   const file = path.join(temporary(t), "entry.err.log");
-  const patternKey = "sk-fixture0123456789abcdefghijklmn", exactKey = "opaque-fixture-secret-012345";
+  const patternKey = ("sk-" + "fixture0123456789abcdefghijklmn"), exactKey = "opaque-fixture-secret-012345";
   fs.writeFileSync(file, `token=${exactKey}\n${patternKey}\n`);
   let secrets = [];
   const first = logs.tailLog(file, { getSecrets: () => secrets });

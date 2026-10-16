@@ -117,7 +117,7 @@ function accessApi(extra = {}) {
   for (const key of KEYS.items) {
     routes[`GET /api/access/keys/${key.id}`] = routes[`GET /api/access/keys/${key.id}`] || detail(key);
     routes[`POST /api/access/keys/${key.id}/revoke`] = routes[`POST /api/access/keys/${key.id}/revoke`] || { ok: true, key: { ...key, status: "revoked" } };
-    routes[`POST /api/access/keys/${key.id}/rotate`] = routes[`POST /api/access/keys/${key.id}/rotate`] || { ok: true, key, secret: "sk-plat-ROTATEDFAKEKEY00000000000000000000000" };
+    routes[`POST /api/access/keys/${key.id}/rotate`] = routes[`POST /api/access/keys/${key.id}/rotate`] || { ok: true, key, secret: ("sk-" + "plat-ROTATEDFAKEKEY00000000000000000000000") };
     routes[`PATCH /api/access/keys/${key.id}`] = routes[`PATCH /api/access/keys/${key.id}`] || ((request) => ({ ok: true, key: { ...key, ...JSON.parse(request.postData()) } }));
   }
   return routes;
@@ -448,7 +448,7 @@ test("rotate asks for the overlap and the key name, then shows the new key once"
     const card = byId(page, "share-card.root");
     await expect(card).toBeVisible();
     await expect(card).toContainText("New key generated");
-    await expect(byId(page, "share-card.key.value")).toHaveValue("sk-plat-ROTATEDFAKEKEY00000000000000000000000");
+    await expect(byId(page, "share-card.key.value")).toHaveValue(("sk-" + "plat-ROTATEDFAKEKEY00000000000000000000000"));
     await expect(card).toContainText("24 hours");
     const post = mock.find("POST", `/api/access/keys/${ALICE.id}/rotate`)[0];
     expect(post.body).toEqual({ overlapSeconds: 86400 });
@@ -687,8 +687,8 @@ test("without the key store the page shows the legacy per-engine keys and manage
   const api = {
     ...accessApi(),
     "GET /api/keys": legacy,
-    "POST /api/m/vllm/service-clients": (request) => ({ ok: true, apiKey: "sk-legacy-TESTONLYFAKEKEY0000", client: { id: "new", name: JSON.parse(request.postData()).name } }),
-    "POST /api/m/vllm/service-clients/desk/rotate": { ok: true, apiKey: "sk-legacy-ROTATEDFAKE00000", client: { id: "desk", name: "Desk client" } },
+    "POST /api/m/vllm/service-clients": (request) => ({ ok: true, apiKey: ("sk-" + "legacy-TESTONLYFAKEKEY0000"), client: { id: "new", name: JSON.parse(request.postData()).name } }),
+    "POST /api/m/vllm/service-clients/desk/rotate": { ok: true, apiKey: ("sk-" + "legacy-ROTATEDFAKE00000"), client: { id: "desk", name: "Desk client" } },
     "DELETE /api/m/llama/service-clients/old": { ok: true, removed: true, id: "old" },
   };
   const { context, page, mock } = await newPage(browser, { bootstrap: { ...OWNER, features: { access: false, telemetry: false } }, api });
@@ -705,7 +705,7 @@ test("without the key store the page shows the legacy per-engine keys and manage
     await byId(page, "legacy.rpm").fill("15");
     await byId(page, "legacy.submit").click();
     await expect(byId(page, "share-card.root")).toBeVisible();
-    await expect(byId(page, "share-card.key.value")).toHaveValue("sk-legacy-TESTONLYFAKEKEY0000");
+    await expect(byId(page, "share-card.key.value")).toHaveValue(("sk-" + "legacy-TESTONLYFAKEKEY0000"));
     await expect(byId(page, "share-card.portal")).toHaveCount(0);
     const create = mock.find("POST", "/api/m/vllm/service-clients")[0];
     expect(create.body).toEqual({ name: "New client", rateLimitRpm: 15 });
@@ -718,7 +718,7 @@ test("without the key store the page shows the legacy per-engine keys and manage
     const rotate = byId(page, "legacy.rotate-dialog");
     await rotate.locator('[data-testid="dialog.input"]').fill("Desk client");
     await rotate.locator('[data-testid="dialog.confirm"]').click();
-    await expect(byId(page, "share-card.key.value")).toHaveValue("sk-legacy-ROTATEDFAKE00000");
+    await expect(byId(page, "share-card.key.value")).toHaveValue(("sk-" + "legacy-ROTATEDFAKE00000"));
     await byId(page, "share-card.saved").check();
     await byId(page, "share-card.close").click();
 

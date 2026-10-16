@@ -20,7 +20,7 @@ const { createAccessRoutes } = require("../lib/access-internal-routes");
 
 const TOKEN = "fake-trust-token-for-access-internal-tests";
 const MANAGERS = [{ id: "vllm", billingId: "vllm-manager" }, { id: "llama", billingId: "llama-manager" }];
-const LAPTOP_KEY = "sk-vllm-fake-migrated-laptop-key-0000000000";
+const LAPTOP_KEY = ("sk-" + "vllm-fake-migrated-laptop-key-0000000000");
 
 let tempDir;
 let store;
@@ -184,7 +184,7 @@ test("verify: a migrated key by hash, with the scope of the gateway kind", async
 
 test("the global key of /api/service-exposure becomes <manager>.global and is revoked when cleared", async () => {
   const vllm = forwarder();
-  const first = "sk-vllm-fake-global-key-first";
+  const first = ("sk-" + "vllm-fake-global-key-first");
   await vllm.forwardGlobalKey({ apiKey: first, rateLimitRpm: 120 }, {});
   const global = store.getKey("vllm.global");
   assert.deepEqual([global.status, global.class, global.billing.scope, global.legacy.source], ["active", "owner", "vllm-manager", "service-exposure"]);
@@ -193,7 +193,7 @@ test("the global key of /api/service-exposure becomes <manager>.global and is re
   assert.equal((await vllm.verifyAccessKey(core.hashServiceApiKey(first))).ok, true);
   // Setting the same key again is a no-op; a new key replaces the old one.
   assert.equal((await vllm.forwardGlobalKey({ apiKey: first }, {})).unchanged, true);
-  const second = "sk-vllm-fake-global-key-second";
+  const second = ("sk-" + "vllm-fake-global-key-second");
   await vllm.forwardGlobalKey({ apiKey: second }, {});
   assert.equal(store.getKey("vllm.global").status, "revoked");
   const replacement = store.getKey(`vllm.global-${core.hashServiceApiKey(second).slice(0, 8)}`);

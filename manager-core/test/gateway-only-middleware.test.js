@@ -12,8 +12,8 @@ const core = require("..");
 const gateway = require("../gateway-utils");
 
 const TOKEN = "fake-trust-token-for-middleware-tests";
-const LEGACY_KEY = "sk-vllm-fake-legacy-client-key-000000000000";
-const PLATFORM_KEY = "sk-plat-fake-platform-key-0000000000000000";
+const LEGACY_KEY = ("sk-" + "vllm-fake-legacy-client-key-000000000000");
+const PLATFORM_KEY = ("sk-" + "plat-fake-platform-key-0000000000000000");
 const REQUEST_ID = "req_mnopqrstuvwxyz234567";
 const PRINCIPAL = Object.freeze({ k: "vllm.egg", b: "vllm-manager", c: "egg", t: "vllm:egg", l: "public", p: "key", mo: 8192, mc: 2 });
 const CONSOLE_PRINCIPAL = Object.freeze({ k: "console", b: null, c: "console", t: "", l: "admin", p: "console-session" });

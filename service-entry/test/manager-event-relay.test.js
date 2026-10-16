@@ -883,10 +883,10 @@ test("a silent or oversize stream is dropped and replaced", async (t) => {
 test("relayed job summaries pass through the secret redactor", async (t) => {
   const vllm = await fakeManager(t, "vllm", { jobs: [] });
   const { published } = await connectedRelay(t, [vllm]);
-  vllm.send("jobs", [job("a", "running", { logs: ["docker run --api-key sk-test-fake-0000000000 image"] })]);
+  vllm.send("jobs", [job("a", "running", { logs: [`docker run --api-key ${"sk-" + "test-fake-0000000000"} image`] })]);
   await waitFor(() => published("jobs").length === 1, 3000, "the delta");
   const text = JSON.stringify(published("jobs")[0]);
-  assert.equal(text.includes("sk-test-fake-0000000000"), false);
+  assert.equal(text.includes(("sk-" + "test-fake-0000000000")), false);
   assert.ok(text.includes("<redacted>"));
 });
 

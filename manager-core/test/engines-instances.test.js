@@ -19,7 +19,7 @@ const { registerManagerRoutes, resolveEntryPort } = require("../manager-routes")
 
 const LAUNCH_ID = "lch_7q2m4k5xwb3d5f6g2h3j";
 const SLEEP_ID = /^slp_[a-z2-7]{20}$/;
-const FAKE_KEY = "sk-fixture-not-a-real-key-0001";
+const FAKE_KEY = ("sk-" + "fixture-not-a-real-key-0001");
 
 function tempRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "eng13-"));

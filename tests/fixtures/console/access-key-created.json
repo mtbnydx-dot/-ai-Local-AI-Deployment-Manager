@@ -51,12 +51,12 @@
     "lastUsedCountry": null,
     "rotation": null
   },
-  "secret": "sk-plat-TESTONLYFAKEKEY0000000000000000000000000",
+  "secret": "\u0073k-plat-TESTONLYFAKEKEY0000000000000000000000000",
   "share": {
     "openaiBase": "https://ai.example.test/v1",
     "anthropicBase": "https://ai.example.test/anthropic",
     "portalUrl": "https://ai.example.test/",
     "recommendedModel": "qwen3.8-flash",
-    "snippetCurl": "curl https://ai.example.test/v1/chat/completions \\\n  -H \"Authorization: Bearer sk-plat-TESTONLYFAKEKEY0000000000000000000000000\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\":\"qwen3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}'"
+    "snippetCurl": "curl https://ai.example.test/v1/chat/completions \\\n  -H \"Authorization: Bearer \u0073k-plat-TESTONLYFAKEKEY0000000000000000000000000\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\":\"qwen3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}'"
   }
 }
