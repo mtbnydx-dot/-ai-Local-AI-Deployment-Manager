@@ -61,8 +61,11 @@ function stubRegistry() {
   };
 }
 
-test("legacy matrix: loopback is owner, LAN is a redacting viewer, LAN admin makes LAN an owner", (t) => {
+test("legacy matrix: loopback is owner, a LAN-bound entry makes LAN the owner too, SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 makes it a redacting viewer", (t) => {
   const auth = seam(t);
+  const defaultLan = req("192.168.0.59");
+  assert.deepEqual(auth.principal(defaultLan), { role: "owner", principal: "lan", via: "lan", redact: false }, "a LAN-bound entry: LAN is the owner by default");
+  process.env.SERVICE_ENTRY_ALLOW_LAN_ADMIN = "0";
   assert.equal(auth.mode, "loopback-trust");
 
   const local = req("127.0.0.1");
@@ -279,6 +282,7 @@ test("with a stub 05 adminAuth, role, write check and event types come from it",
 
 test("redactFor applies the matched viewer entry and refuses unregistered paths", (t) => {
   const auth = seam(t);
+  process.env.SERVICE_ENTRY_ALLOW_LAN_ADMIN = "0";
   auth.viewerRegistry.registerRoute({
     owner: "07",
     path: "/api/m/:managerId/instances",

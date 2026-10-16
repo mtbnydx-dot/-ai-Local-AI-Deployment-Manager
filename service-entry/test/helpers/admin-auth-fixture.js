@@ -25,6 +25,11 @@ function adminConfig(overrides = {}) {
       loopbackViewer: true,
       lanAnonymousViewer: true,
       allowLanOwner: false,
+      // The unit suites exercise the pairing machinery, so the fixture runs in
+      // the pairing mode (the opt-outs); defaults: true uses the shipped
+      // defaults instead (this machine and a LAN-bound LAN are the owner).
+      requirePairingOnLoopback: true,
+      ...(overrides.defaults === true ? { allowLanOwner: true, requirePairingOnLoopback: false } : {}),
       ...admin,
     },
     listeners: { admin: { host: lanBound ? "0.0.0.0" : "127.0.0.1", port, lan: lanBound } },
@@ -35,7 +40,7 @@ function adminConfig(overrides = {}) {
 function makeAdminAuth(options = {}) {
   const clock = { now: options.start ?? Date.parse("2026-10-15T08:00:00.000Z") };
   const store = options.store || createKeysStore({ file: ":memory:", now: () => new Date(clock.now) });
-  let config = adminConfig(options.config);
+  let config = adminConfig({ ...options.config, defaults: options.defaults });
   const registry = createViewerRegistry({ logger: { warn() {}, error() {} } });
   registry.registerRoute({ owner: "test", path: "/" });
   registry.registerRoute({ owner: "test", path: "/api/status", redact: (body) => ({ ...body, secret: undefined }) });
@@ -55,6 +60,7 @@ function makeAdminAuth(options = {}) {
     aiRoot: options.aiRoot || "<AI_ROOT>",
     fileExists: (file) => files.has(file),
     getLanAddress: () => options.lanAddress ?? "192.168.1.10",
+    lanOwnerForcedOff: () => options.lanOwnerForcedOff === true,
     logger,
   });
   return {
@@ -67,7 +73,7 @@ function makeAdminAuth(options = {}) {
     files,
     logged,
     setConfig(next) {
-      config = adminConfig(next);
+      config = adminConfig({ defaults: options.defaults, ...next });
     },
   };
 }

@@ -169,14 +169,16 @@ test("search hook picks the upstream in the order of 06 §3.4", async (t) => {
   // The public listener switched off falls through to the admin route.
   const noPublic = await searchHook.prepare(searchContext(root, { SERVICE_ENTRY_ALLOW_LAN_ADMIN: "1", SERVICE_ENTRY_PUBLIC_LISTENER: "0" }));
   assert.equal(noPublic.upstream.source, "admin-lan");
-  // 4. The vLLM manager only for a wildcard host.
+  // 4. The vLLM manager only for a wildcard host (the managers.bindHost default).
+  const vllmDefault = await searchHook.prepare(searchContext(root, {}, { withUpstreamKey: false }));
+  assert.equal(vllmDefault.upstream.source, "vllm-manager");
   const vllm = await searchHook.prepare(searchContext(root, { VLLM_MANAGER_HOST: "0.0.0.0" }, { withUpstreamKey: false }));
   assert.deepEqual(vllm.env, { UPSTREAM_BASE_URL: "http://host.docker.internal:5177/serve/v1" });
   assert.equal(vllm.upstream.source, "vllm-manager");
   // None applies: blocked with the documented reason and no env.
-  const none = await searchHook.prepare(searchContext(root, {}, { withUpstreamKey: false }));
+  const none = await searchHook.prepare(searchContext(root, { VLLM_MANAGER_HOST: "127.0.0.1" }, { withUpstreamKey: false }));
   assert.deepEqual(none, { env: {}, blocked: { reason: "search-upstream-unreachable" } });
-  const loopbackOnly = await searchHook.prepare(searchContext(root, { SERVICE_ENTRY_PUBLIC_LISTENER: "0" }));
+  const loopbackOnly = await searchHook.prepare(searchContext(root, { SERVICE_ENTRY_PUBLIC_LISTENER: "0", VLLM_MANAGER_HOST: "127.0.0.1" }));
   assert.equal(loopbackOnly.blocked.reason, "search-upstream-unreachable");
 });
 

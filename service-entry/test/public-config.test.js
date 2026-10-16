@@ -53,7 +53,7 @@ test("defaults match the 05 section 3.4 table", () => {
   });
   assert.deepEqual(config.admin, {
     firstRunAutoPair: true, firstRunWindowMinutes: 30, sessionDays: 180, loopbackViewer: true,
-    lanAnonymousViewer: true, allowLanOwner: false, legacyProxyGateway: "serve", gatewayRpm: 600, extraHosts: [],
+    lanAnonymousViewer: true, allowLanOwner: true, requirePairingOnLoopback: false, legacyProxyGateway: "serve", gatewayRpm: 600, extraHosts: [],
   });
   assert.deepEqual(config.trustedProxies, { cidrs: ["127.0.0.1/32", "::1/128"], clientIpHeader: "cf-connecting-ip", countryHeader: "cf-ipcountry" });
   assert.deepEqual(config.exposure, { requireApiKey: "auto", allowedOrigins: [] });

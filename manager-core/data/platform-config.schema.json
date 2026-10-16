@@ -60,7 +60,7 @@
             "lan": {
               "type": "boolean", "default": false,
               "title": { "zh-CN": "局域网管理访问", "en-US": "LAN admin access" },
-              "description": { "zh-CN": "让局域网设备通过本机 IP 打开控制台。写操作仍需先配对设备，模型接口需要 API Key。", "en-US": "Let devices on your LAN open the console through this machine's IP. Changes still need a paired device, and model APIs need an API key." },
+              "description": { "zh-CN": "让局域网设备通过本机 IP 打开控制台。局域网设备默认即是管理员（可用「允许局域网管理员」关闭），模型接口需要 API Key。", "en-US": "Let devices on your LAN open the console through this machine's IP. LAN devices are the owner by default (turn that off with Allow the owner on the LAN), and model APIs need an API key." },
               "env": ["SERVICE_ENTRY_ALLOW_LAN_ADMIN"], "envParse": "flag01", "consumers": ["entry"],
               "derives": ["listeners.admin.host"], "restartRequired": ["entry"], "secret": false, "group": "access"
             }
@@ -111,7 +111,7 @@
         "firstRunAutoPair": {
           "type": "boolean", "default": true,
           "title": { "zh-CN": "首次启动自动配对", "en-US": "Pair automatically on first run" },
-          "description": { "zh-CN": "首次启动后的一段时间内，本机浏览器打开控制台即成为管理员，无需输入配对码。", "en-US": "For a short time after the first start, a browser on this machine that opens the console becomes the owner without a pairing code." },
+          "description": { "zh-CN": "仅在要求本机配对时生效：首次启动后的一段时间内，本机浏览器打开控制台即成为管理员，无需输入配对码。", "en-US": "Only used when pairing is required on this machine: for a short time after the first start, a browser on this machine that opens the console becomes the owner without a pairing code." },
           "restartRequired": false, "secret": false, "group": "access"
         },
         "firstRunWindowMinutes": {
@@ -129,7 +129,7 @@
         "loopbackViewer": {
           "type": "boolean", "default": true,
           "title": { "zh-CN": "本机免登录查看", "en-US": "View without signing in on this machine" },
-          "description": { "zh-CN": "本机浏览器无需登录即可查看状态（只读），修改设置仍需管理员登录。", "en-US": "Browsers on this machine can view status without signing in (read only). Changing settings still needs the owner session." },
+          "description": { "zh-CN": "仅在要求本机配对时生效：本机浏览器无需登录即可查看状态（只读），修改设置仍需管理员登录。", "en-US": "Only used when pairing is required on this machine: browsers here can view status without signing in (read only). Changing settings still needs the owner session." },
           "restartRequired": false, "secret": false, "group": "access"
         },
         "lanAnonymousViewer": {
@@ -139,9 +139,16 @@
           "restartRequired": false, "secret": false, "group": "access"
         },
         "allowLanOwner": {
-          "type": "boolean", "default": false,
+          "type": "boolean", "default": true,
           "title": { "zh-CN": "允许局域网管理员", "en-US": "Allow the owner on the LAN" },
-          "description": { "zh-CN": "允许已配对的局域网设备执行管理操作。关闭时局域网设备只能查看。", "en-US": "Let paired LAN devices make changes. When off, LAN devices can only view." },
+          "description": { "zh-CN": "控制台监听局域网时，局域网设备无需配对即可执行管理操作（默认开启）。关闭后局域网设备只能查看。SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 也会关闭。", "en-US": "When the console listens on the LAN, LAN devices can make changes without pairing (on by default). When off, LAN devices can only view. SERVICE_ENTRY_ALLOW_LAN_ADMIN=0 turns it off as well." },
+          "restartRequired": false, "secret": false, "group": "access"
+        },
+        "requirePairingOnLoopback": {
+          "type": "boolean", "default": false,
+          "title": { "zh-CN": "本机也需要配对", "en-US": "Require pairing on this machine too" },
+          "description": { "zh-CN": "默认本机请求直接就是管理员。开启后本机浏览器和脚本也必须先配对或使用管理令牌。", "en-US": "By default a request from this machine is the owner. When on, browsers and scripts on this machine must pair or use an admin token first." },
+          "env": ["SERVICE_ENTRY_REQUIRE_PAIRING"], "envParse": "flag01", "consumers": ["entry"],
           "restartRequired": false, "secret": false, "group": "access"
         },
         "legacyProxyGateway": {
@@ -210,16 +217,16 @@
       "type": "object",
       "properties": {
         "bindHost": {
-          "type": "string", "format": "hostname", "default": "127.0.0.1",
+          "type": "string", "format": "hostname", "default": "0.0.0.0",
           "title": { "zh-CN": "管理器监听地址", "en-US": "Manager listen address" },
-          "description": { "zh-CN": "vLLM 和 llama.cpp 管理器绑定的地址。默认只监听本机，局域网通过控制台访问；设为 0.0.0.0 可让局域网设备直接打开旧版管理器页面。", "en-US": "The address both model managers bind to. By default they listen on this machine only and the LAN goes through the console; set 0.0.0.0 to let LAN devices open the legacy manager pages directly." },
+          "description": { "zh-CN": "vLLM 和 llama.cpp 管理器绑定的地址。默认 0.0.0.0，局域网设备可以直接打开旧版管理器页面（管理操作仍默认只接受本机，见 *_ALLOW_REMOTE）；设为 127.0.0.1 则只监听本机。", "en-US": "The address both model managers bind to. The default 0.0.0.0 lets LAN devices open the legacy manager pages directly (management actions still stay local-only unless *_ALLOW_REMOTE is set); set 127.0.0.1 to listen on this machine only." },
           "derives": ["managers.vllm.host", "managers.llama.host"], "restartRequired": ["vllm-manager", "llama-manager"], "secret": false, "group": "managers"
         },
         "vllm": {
           "type": "object",
           "properties": {
             "host": {
-              "type": "string", "format": "hostname", "default": "127.0.0.1",
+              "type": "string", "format": "hostname", "default": "0.0.0.0",
               "title": { "zh-CN": "vLLM 管理器监听地址", "en-US": "vLLM manager listen address" },
               "description": { "zh-CN": "单独设置 vLLM / SGLang 管理器的监听地址；未设置时跟随“管理器监听地址”。", "en-US": "Sets the listen address of the vLLM / SGLang manager on its own. When unset it follows \"Manager listen address\"." },
               "env": ["VLLM_MANAGER_HOST"], "consumers": ["vllm-manager", "entry"], "restartRequired": ["vllm-manager"], "secret": false, "group": "managers"
@@ -238,7 +245,7 @@
           "type": "object",
           "properties": {
             "host": {
-              "type": "string", "format": "hostname", "default": "127.0.0.1",
+              "type": "string", "format": "hostname", "default": "0.0.0.0",
               "title": { "zh-CN": "llama.cpp 管理器监听地址", "en-US": "llama.cpp manager listen address" },
               "description": { "zh-CN": "单独设置 llama.cpp 管理器的监听地址；未设置时跟随“管理器监听地址”。", "en-US": "Sets the listen address of the llama.cpp manager on its own. When unset it follows \"Manager listen address\"." },
               "env": ["LLAMA_MANAGER_HOST"], "consumers": ["llama-manager", "entry"], "restartRequired": ["llama-manager"], "secret": false, "group": "managers"

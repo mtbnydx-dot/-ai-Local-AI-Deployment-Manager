@@ -153,8 +153,8 @@ const MANAGERS = [
     billingId: process.env.VLLM_MANAGER_ID || "vllm-manager",
     envPort: "VLLM_MANAGER_PORT",
     envHost: "VLLM_MANAGER_HOST",
-    // Fallback when platform.json cannot be read: loopback, like the config default (V21).
-    defaultHost: process.env.VLLM_MANAGER_HOST || "127.0.0.1",
+    // Fallback when platform.json cannot be read: the managers.bindHost default (all interfaces).
+    defaultHost: process.env.VLLM_MANAGER_HOST || "0.0.0.0",
     mode: "safetensors / FP8 / NVFP4 / 工具调用 / 高吞吐",
     accent: "blue",
   },
@@ -166,7 +166,7 @@ const MANAGERS = [
     billingId: process.env.LLAMA_MANAGER_ID || "llama-manager",
     envPort: "LLAMA_MANAGER_PORT",
     envHost: "LLAMA_MANAGER_HOST",
-    defaultHost: process.env.LLAMA_MANAGER_HOST || "127.0.0.1",
+    defaultHost: process.env.LLAMA_MANAGER_HOST || "0.0.0.0",
     mode: "GGUF / 异构双卡 / 长上下文实验",
     accent: "teal",
   },
@@ -525,6 +525,7 @@ function createEntryAccess(options = {}) {
     viewerRegistry,
     aiRoot: AI_ROOT,
     getLanAddress: core.getLanAddress,
+    lanOwnerForcedOff: () => security.policy().lanAdminForcedOff === true,
     sendJson,
     readJsonObjectBody,
     logger,
@@ -1330,7 +1331,7 @@ async function stopModelHub(hub, { reason = "shutdown", timeoutMs = 5000 } = {})
 function logStartupSummary(state, { host = HOST, port = PORT, log = console.log, warn = console.warn } = {}) {
   log(`Service entry listening on http://${host}:${port}`);
   log(`  gateway auth: ${state.requireApiKey ? "required" : "disabled"} (SERVICE_ENTRY_REQUIRE_API_KEY=${state.requireApiKeyMode})`);
-  log(`  lan admin:    ${state.allowLanAdmin ? "allowed" : "local only"} (SERVICE_ENTRY_ALLOW_LAN_ADMIN)`);
+  log(`  lan admin:    ${state.allowLanAdmin ? "open, LAN devices are the owner" : "local only"} (SERVICE_ENTRY_ALLOW_LAN_ADMIN, admin.allowLanOwner)`);
   log(`  cors:         ${state.corsMode}${state.allowedOrigins.length ? ` (${state.allowedOrigins.join(", ")})` : ""}`);
   if (state.lanMode && !state.requireApiKey) {
     warn("  WARNING: listening off-loopback with API key enforcement disabled.");
@@ -3558,8 +3559,8 @@ async function readJsonObjectBody(req, maxBytes) {
 }
 
 // The host and port a manager started by this process binds come from
-// platform.json (env > file > default; 127.0.0.1 unless managers.bindHost says
-// otherwise, 06 §10.3, V21). options: { aiRoot, env, spawn, readyTimeoutMs } for tests.
+// platform.json (env > file > default; 0.0.0.0 unless managers.bindHost says
+// otherwise, as before PUB-23; set managers.bindHost=127.0.0.1 to keep them local). options: { aiRoot, env, spawn, readyTimeoutMs } for tests.
 function managerBindFor(manager, options = {}) {
   try {
     const section = core.platform.readSection("managers", { aiRoot: options.aiRoot || AI_ROOT, ...(options.env ? { env: options.env } : {}) });

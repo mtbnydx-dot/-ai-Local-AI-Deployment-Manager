@@ -134,7 +134,7 @@ function createChecks(ctx) {
       const listeners = await ctx.probe("listeners");
       const rows = MANAGERS.map((manager) => {
         const port = Number(ctx.value(`managers.${manager.id}.port`, manager.defaultPort));
-        const configured = String(ctx.value(`managers.${manager.id}.host`, ctx.value("managers.bindHost", "127.0.0.1")));
+        const configured = String(ctx.value(`managers.${manager.id}.host`, ctx.value("managers.bindHost", "0.0.0.0")));
         const addresses = listeners.filter((item) => item.port === port).map((item) => item.address);
         const wildcard = addresses.some(isWildcard);
         const state = !addresses.length ? "stopped" : wildcard && !isWildcard(configured) ? "stale-wildcard" : wildcard ? "chosen-wildcard" : "bound";
@@ -143,7 +143,7 @@ function createChecks(ctx) {
       const stale = rows.filter((row) => row.state === "stale-wildcard"), chosen = rows.filter((row) => row.state === "chosen-wildcard");
       const fixes = stale.map((row) => ctx.fix("net.manager-bind", `restart:${row.componentId}`, "confirm", `重启 ${row.componentId}（空闲时）`, `Restart ${row.componentId} when idle`, "/docs/troubleshooting.md#network", { componentId: row.componentId, when: "idle" }));
       if (stale.length) return { status: "warn", detail: `${stale.map((row) => row.manager).join(", ")} listens on all interfaces although its configured host is ${stale[0].configuredHost}; this is usually a stale process from an old launcher.`, data: { managers: rows, fixes }, fix: fixes[0], actions: fixes.map((fix) => fix.id) };
-      if (chosen.length) return { status: "info", detail: `${chosen.map((row) => row.manager).join(", ")} deliberately listens on all interfaces (managers.bindHost).`, data: { managers: rows } };
+      if (chosen.length) return { status: "info", detail: `${chosen.map((row) => row.manager).join(", ")} listens on all interfaces (managers.bindHost, default 0.0.0.0; set 127.0.0.1 to keep the managers local).`, data: { managers: rows } };
       if (rows.every((row) => row.state === "stopped")) return { status: "skip", detail: "Neither manager is listening.", data: { managers: rows, reason: "managers_stopped" } };
       return { status: "ok", detail: "Both managers listen only on their configured host.", data: { managers: rows } };
     }),

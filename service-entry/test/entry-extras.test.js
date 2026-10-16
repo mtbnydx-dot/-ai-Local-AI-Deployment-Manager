@@ -29,7 +29,7 @@ test("public checklist fails the key item when a public deployment has no enforc
   assert.equal(state.exposure, "public");
   const byId = Object.fromEntries(state.publicChecklist.map((item) => [item.id, item]));
   assert.equal(byId["api-key"].state, "fail");
-  assert.equal(byId["lan-admin"].state, "fail");
+  assert.equal(byId["lan-admin"].state, "warn", "open LAN admin is information, a warning only in a public deployment, never a failure");
   assert.equal(byId.https.state, "fail", "http:// public base URL is flagged");
   // SERVICE_ENTRY_ALLOW_LAN_ADMIN maps to listeners.admin.lan (OPS-3), so
   // ADMIN is LAN-bound here even though the constructor host is loopback.
