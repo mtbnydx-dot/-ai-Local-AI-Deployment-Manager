@@ -89,7 +89,7 @@ flowchart TB
 - **模型中心**：Hugging Face / hf-mirror / ModelScope 搜索与下载队列，多存储根、模型迁移、完整性校验、版本更新检查，下载后可直接部署。
 - **模型体检**：模型卡（ModelCard）、兼容矩阵、无 GPU 的干跑探测、自动资格检查（qualify）、可分层覆盖的知识库。
 - **对外服务**：平台 API Key（预设、范围、限流、配额、来源限制）、公开 API（`/v1`、`/anthropic/v1`）、公共门户、Cloudflare 隧道/Caddy 模板、暴露面扫描。
-- **观测**：请求/运行时/GPU/能耗遥测（SQLite）、三档汇总、16 种告警指标、站内/Windows 通知/Webhook（飞书、钉钉、企业微信、Slack、通用）。
+- **观测**：请求/运行时/GPU/能耗遥测（SQLite）、三档汇总、16 条内置告警规则、站内/Windows 通知/Webhook（飞书、钉钉、企业微信、Slack、通用）。
 - **审计**：OpenWebUI 对话审计导出与索引，哈希链访问日志，定时导出与保留策略。
 - **计费**：本机计费中心（客户、凭据、套餐、价格、用量、账本），可先“影子”运行再强制。
 - **TTS 语音平台**：Chatterbox、Qwen3-TTS、Fish、Step-Audio、VoxCPM、Qwen VoiceDesign 以及外部 API 引擎，OpenAI Audio 兼容接口。
@@ -182,8 +182,8 @@ install-download-cli
 
 #### 下载
 
-- 来源：Hugging Face、hf-mirror、ModelScope；策略 `huggingface`（默认）/`hf-mirror`/`auto`（官方优先，网络类失败时单次降级到镜像）。受限（gated）仓库始终走官方端点。
-- 令牌：下载时输入的 HF 令牌只保存在入口进程内存里，用完即弃；勾选“记住”才写入加密密钥库。也可 `platform secrets set hf.token`。镜像和 ModelScope 不会收到令牌。
+- 来源：Hugging Face、hf-mirror、ModelScope；策略 `huggingface`（默认）/`hf-mirror`/`auto`；`huggingface` 与 `auto` 在官方端点出现网络类失败（不可达、超时、429、502-504）时，搜索和清单查询会单次降级到镜像并给出提示。受限（gated）仓库始终走官方端点。
+- 令牌：下载时输入的 HF 令牌只保存在入口进程内存里，任务完成或取消后释放（失败的任务 7 天后释放）；勾选“记住”才写入加密密钥库。也可 `platform secrets set hf.token`。镜像和 ModelScope 不会收到令牌。
 - 队列：全局持久队列，状态含排队/等待/解析/下载/落盘/校验/就绪/重试/暂停/中断/失败/取消，可暂停、继续、重试、调整优先级、排序；入口重启后自动续传。默认单任务并发（`transfer.maxConcurrent`），下载停滞（10 分钟无进展）会终止进程但保留已下载文件并按策略重试，默认校验 sha256。
 - 目标目录名默认是仓库名把 `/` 换成 `-`，可在计划里改；选择存储根即选择落点。
 
@@ -274,11 +274,11 @@ MCP:      http://127.0.0.1:5190/mcp
 | `exposure.requireApiKey` | `auto` | `SERVICE_ENTRY_REQUIRE_API_KEY` | `auto`/`on`/`off`；`auto` = 局域网或公网模式要求 Key |
 | `exposure.allowedOrigins` | `[]` | `SERVICE_ENTRY_ALLOWED_ORIGINS` | 浏览器 CORS 白名单 |
 | `trustedProxies.cidrs` | `127.0.0.1/32`, `::1/128` | `SERVICE_ENTRY_TRUSTED_PROXIES` | 只有这些地址发来的转发头才被采信 |
-| `managers.bindHost` | `0.0.0.0` | `VLLM_MANAGER_HOST` / `LLAMA_MANAGER_HOST` | 管理器监听地址 |
+| `managers.bindHost` | `0.0.0.0` | | 管理器监听地址；派生出 `managers.vllm.host` / `managers.llama.host`（环境变量 `VLLM_MANAGER_HOST` / `LLAMA_MANAGER_HOST`，可单独覆盖） |
 | `docker.ensureOnStart` | `start` | | `start` 启动 Docker Desktop 并等待、`wait` 只等待不启动、`off` 不等待 |
 | `docker.waitTimeoutSec` / `docker.wslDistro` | `120` / 空 | `PLATFORM_DOCKER_WAIT_SECONDS` / `DOCKER_WSL_DISTRO` | 等待 Docker；在指定 WSL 发行版里运行 docker |
 | `console.defaultUi` | 未设置时为新版控制台 | `SERVICE_ENTRY_CONSOLE_DEFAULT` | 设为 `classic` 回到经典界面 |
-| `cli.openBrowser` / `cli.lang` | `true` / `auto` | `PLATFORM_LANG` | `platform start` 是否开浏览器；CLI 语言 |
+| `cli.openBrowser` / `cli.lang` | `true` / `auto` | `SERVICE_ENTRY_NO_BROWSER`（`1` 即不开）/ `PLATFORM_LANG` | `platform start` 是否开浏览器；CLI 语言 |
 | `paths.hfHome` | `${AI_ROOT}/cache/huggingface` | `HF_HOME` | Hugging Face 缓存 |
 | `paths.ttsRuntimeRoot` | 空（`<AI_ROOT>\tts-runtime`） | `TTS_RUNTIME_ROOT` | TTS 运行时目录 |
 | `hub.downloadsOwner` | `hub` | `AI_HUB_DOWNLOADS_OWNER` | `hub` 由入口负责下载；`manager` 为回退（管理器自己的旧下载控制器） |
@@ -311,7 +311,7 @@ MCP:      http://127.0.0.1:5190/mcp
 | `MODEL_GPU_ADMISSION_RESERVE_MB` / `_MAX_UTILIZATION_PCT` / `_STARTUP_MARGIN_MB` | GPU 准入默认值 |
 | `MANAGER_STATUS_CACHE_MS`（2000）/ `STATS_SAMPLE_INTERVAL_MS`（10000，5000–60000） | 管理器状态缓存与统计采样 |
 | `MODEL_ACCESS_STATS_CACHE_MS` / `MODEL_REMOTE_SEARCH_CACHE_MS` / `MODEL_REMOTE_INFO_CACHE_MS` / `METRICS_HISTORY_FLUSH_MS` | 访问统计、在线搜索、模型信息缓存与指标落盘间隔 |
-| `SERVICE_ENTRY_AUTH_FAIL_LIMIT` / `_WINDOW_SECONDS` / `_BAN_SECONDS` | 鉴权失败封禁（默认 20 次/60 秒 → 封 600 秒） |
+| `SERVICE_ENTRY_AUTH_FAIL_LIMIT` / `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` / `SERVICE_ENTRY_AUTH_BAN_SECONDS` | 鉴权失败封禁（默认 20 次/60 秒 → 封 600 秒） |
 | `SERVICE_ENTRY_ALLOWED_HOSTS` | PUBLIC 额外 Host 白名单 |
 | `SEARCH_GATEWAY_API_KEY` / `SEARCH_GATEWAY_ALLOW_NO_KEY` | 搜索网关的 Key；无 Key 且非回环时需显式允许 |
 | `AI_AUDIT_MAX_EXPORTS` / `AI_AUDIT_MAX_AGE_DAYS` | 审计导出保留份数（30）与天数（90） |
@@ -335,7 +335,7 @@ MCP:      http://127.0.0.1:5190/mcp
 #### 默认行为
 
 - **本机即管理员**：来自本机的请求（按 socket 地址判断，转发头不算）直接是管理员，不需要配对或会话；新版控制台和经典页面都直接以管理员打开。`curl`、`platformctl`、PowerShell 等不带 `Origin` 的脚本可直接写入。
-- **局域网**：入口以局域网模式启动（`platform start --lan`，或 `listeners.admin.lan=true`）时，局域网设备默认也是管理员（`admin.allowLanOwner=true`）。局域网设备访问模型网关仍需要 API Key。
+- **局域网**：入口以局域网模式启动（`platform start --lan`，或 `listeners.admin.lan=true`）时，局域网设备默认也是管理员（`admin.allowLanOwner=true`）。局域网上的 API 客户端调用模型网关仍需要 API Key（控制台自己的 Playground 以管理员会话调用，不需要）。
 - **浏览器写请求必须同源**：带 `Origin` / `Sec-Fetch-Site` 的写请求必须与控制台同源，否则返回 `csrf_invalid`。
 - **永远不是管理员**：带转发头的请求（`X-Forwarded-*`、`CF-Connecting-IP` 等）和公共监听（5186）上的任何请求。转发头只能降级，不能提权。
 - **管理器**默认监听 `0.0.0.0`（便于 Docker 容器经 `host.docker.internal` 回连），但它们的管理页和管理 API 默认只接受本机，其它设备只能走入口网关；通过 `platform` 启动时这个监听地址由配置注入，手工直接运行 `server.js` 则只监听 `127.0.0.1`。
@@ -354,7 +354,7 @@ MCP:      http://127.0.0.1:5190/mcp
 | 管理器只接受入口转发的模型请求 | `platform config set public.managersGatewayOnly enforce`（先用默认 `warn` 观察日志里的 `direct_manager_gateway` 事件降到零） |
 | 模型网关一律要 Key | `platform config set exposure.requireApiKey on` |
 | 关闭公共监听 | `platform config set listeners.public.enabled false` |
-| 放行浏览器跨域 | `SERVICE_ENTRY_ALLOWED_ORIGINS=https://a.example,https://b.example`（`*` 会被体检标为失败） |
+| 放行浏览器跨域 | `SERVICE_ENTRY_ALLOWED_ORIGINS=https://a.example,https://b.example`（`*` 会在 访问与密钥 → 安全概览 里被标为失败） |
 | 额外的 Host / 反向代理域名 | ADMIN 用 `admin.extraHosts`；PUBLIC 用 `SERVICE_ENTRY_ALLOWED_HOSTS` |
 | 防火墙 | 不需要其它设备直连管理器时，在 Windows 防火墙阻止 5177/5178 入站；5180、5190、7000、8000、8080 也应保持对外关闭 |
 
@@ -420,7 +420,7 @@ PUBLIC 监听（5186）提供：`/v1/models`、`/v1/chat/completions`、`/v1/com
 - llama.cpp `b10630` CUDA 镜像（按摘要固定）。Muse 运行时已退役，仅保留回滚代码，启动会被阻断。
 - LMDeploy / TensorRT-LLM / TabbyAPI 为未固定摘要的标签，仅在显式请求时拉取。
 
-覆盖镜像用环境变量 `VLLM_IMAGE`、`VLLM_IMAGE_VERSION`、`VLLM_QWEN_MOE_IMAGE`、`VLLM_GEMMA_IMAGE`、`SGLANG_IMAGE`、`SGLANG_FLASH_NEXT_IMAGE`、`LLAMA_IMAGE`、`LLAMA_IMAGE_DIGEST`，或在启动请求里给 `runtime.imageOverride`。稳定引擎的固定镜像在启动前自动拉取；实验引擎和未固定/退役运行时需要显式拉取，否则计划里出现 `image_pull_required`（409），可在控制台点拉取或 `POST /api/runtimes/<runtimeId>/pull`。`docker run` 本身始终使用 `--pull never`。Qwen3.8-27B 的 vLLM MTP 与 SGLang DSpark 实测与参数见 [Qwen3.8-27B 本地加速与管理平台指南](docs/qwen38-acceleration-guide.md)。
+覆盖镜像用环境变量 `VLLM_IMAGE`、`VLLM_IMAGE_VERSION`、`VLLM_QWEN_MOE_IMAGE`、`VLLM_GEMMA_IMAGE`、`SGLANG_IMAGE`、`SGLANG_FLASH_NEXT_IMAGE`、`LLAMA_IMAGE`、`LLAMA_IMAGE_DIGEST`，或在启动请求里给 `runtime.imageOverride`。稳定引擎的固定镜像在启动前自动拉取；实验引擎和未固定/退役运行时需要显式拉取，否则计划里出现 `image_pull_required`（409），可在控制台点拉取或 `POST /api/runtimes/<runtimeId>/pull`。Qwen3.8-27B 的 vLLM MTP 与 SGLang DSpark 实测与参数见 [Qwen3.8-27B 本地加速与管理平台指南](docs/qwen38-acceleration-guide.md)。
 
 GGUF 目录里的 `dynamic`、`17gb` 等主文件是可替换的变体，不会相加；显存估算和启动命令始终使用当前选中的一个主变体。`mmproj` 是可选的视觉投影，DFlash GGUF 是可选的推测解码加速件，只有选中或自动匹配时才计入。
 
@@ -461,7 +461,7 @@ GGUF 目录里的 `dynamic`、`17gb` 等主文件是可替换的变体，不会�
 
 #### 告警与通知
 
-内置 16 条规则覆盖：实例/管理器宕机、上游错误率、鉴权风暴、队列饱和、KV 使用率、GPU 温度/功耗/降频、磁盘余量、审计导出失败/链风险、遥测停滞、封禁事件、计费不可用等；可停用、调阈值与渠道，也可新建自定义规则。渠道：站内、Windows 通知（由 supervisor 弹出）和 Webhook（通用/飞书/钉钉/企业微信/Slack，签名密钥存在密钥库，5 秒超时，按 1/5/30 秒重试，每个渠道每小时最多 20 条）。
+内置 16 条规则覆盖：实例/管理器宕机、上游错误率、鉴权风暴、队列饱和、KV 使用率、GPU 温度/功耗/降频、磁盘余量、审计导出失败/链风险、遥测停滞、封禁事件、计费不可用等；可停用、调阈值与渠道，也可新建自定义规则。渠道：站内、Windows 通知（由 supervisor 弹出，默认关闭，设置项 `supervisor.notifications.toast`）和 Webhook（通用/飞书/钉钉/企业微信/Slack，签名密钥存在密钥库，5 秒超时，按 1/5/30 秒重试，每个渠道每小时最多 20 条）。
 
 #### 审计
 
@@ -469,7 +469,7 @@ GGUF 目录里的 `dynamic`、`17gb` 等主文件是可替换的变体，不会�
 
 #### 计费
 
-计费中心（`/billing`）只对本机管理员开放，数据在 `service-entry\data\platform-billing.sqlite`：客户、凭据、套餐与价格、用量与账本；1 积分 = 1,000,000 微积分；TTS 按音频时长计量。执行模式可以先“影子”（只记账不拦截）再切换为强制。计费管理 API 不会通过隧道/Caddy 模板暴露。
+计费中心（`/billing`）只对本机管理员开放，数据在 `service-entry\data\platform-billing.sqlite`：客户、凭据、套餐与价格、用量与账本；1 积分 = 1,000,000 微积分；TTS 可按分钟或按千字符计价，并有按秒的日配额。执行模式可以先“影子”（只记账不拦截）再切换为强制。计费管理 API 不会通过隧道/Caddy 模板暴露。
 
 ### 14. 运维
 
@@ -480,7 +480,7 @@ GGUF 目录里的 `dynamic`、`17gb` 等主文件是可替换的变体，不会�
 #### supervisor 与开机自启
 
 ```cmd
-platform autostart enable [--profile core|full]
+platform autostart enable [--profile core|full|none]
 platform autostart status
 platform autostart disable
 ```
@@ -489,9 +489,9 @@ platform autostart disable
 
 #### 部署、更新与备份
 
-- **更新（git 克隆形态）**：`update-platform.cmd [-CheckOnly]`，仅 fast-forward，拒绝本地改动、未推送提交和分叉，之后运行 `test-all.cmd`；模型、缓存、`.env`、数据库、日志不受影响。详见 [更新指南](docs/update-guide.md)。
+- **更新（git 克隆形态）**：`update-platform.cmd [-CheckOnly]`，仅 fast-forward，拒绝本地改动、未推送提交和分叉，快进后依次运行 `install-all.cmd` 和 `test-all.cmd`（`-SkipInstall` / `-SkipTests` 可跳过）；模型、缓存、`.env`、数据库、日志不受影响。详见 [更新指南](docs/update-guide.md)。
 - **部署（运行目录由 git 管理时）**：运行目录从 `platform-repo.git` 的功能分支用 worktree 部署，见下一节；`platform deploy [--restart none|changed|all] [--dry-run] [--yes]`。部署后自动执行 post-deploy：清理过期产物、按需 `npm ci`、重建 MCP、写 `version.json`、按需通过 supervisor 重启（忙的组件排队到空闲；模型容器永不重启）。`platform update` 在运行目录里从 `worktrees\main` 拉取并部署。
-- **备份**：`scripts\backup-platform.ps1 [-Register] [-KeepDays 14]`：计费库、遥测库、入口 JSON、管理器账本、TTS 历史与音色等快照到 `backups\<时间戳>\`（带清单与 sha256，验证通过才清理旧备份，永不复制 `.runtime\secrets`）。`-Register` 注册每日 03:30 计划任务；备份不含模型和缓存。
+- **备份**：`scripts\backup-platform.ps1 [-Register] [-KeepDays 14]`：计费库、遥测库、入口 JSON、管理器账本、TTS 历史与音色等快照到 `backups\<时间戳>\`（带清单与 sha256，验证通过才清理旧备份，永不复制 `.runtime\secrets`）。`-Register` 注册每日 03:30 计划任务；备份不含模型、缓存和平台访问库（`platform-access.sqlite`，Key 哈希库）。
 - **夜间自检**：`scripts\nightly-e2e.ps1 [-Register]` 运行 `test-all` 和各组件探活，结果写 `artifacts\nightly\`。
 
 #### 日志
@@ -691,7 +691,7 @@ Key points:
 - **Model hub**: Hugging Face / hf-mirror / ModelScope search and a download queue, multiple storage roots, migration, integrity checks, update checks, download-and-run.
 - **Model checks**: ModelCards, a compatibility matrix, GPU-less dry-run probes, automatic qualification, and a layered, overridable knowledge base.
 - **Serving others**: platform API keys (presets, scopes, limits, quotas, origin/IP limits), a public API (`/v1`, `/anthropic/v1`), a public portal, Cloudflare tunnel / Caddy templates, an exposure scan.
-- **Observability**: request, runtime, GPU and energy telemetry (SQLite), three rollup grains, 16 alert metrics, in-app / Windows toast / webhook notifications (Feishu, DingTalk, WeCom, Slack, generic).
+- **Observability**: request, runtime, GPU and energy telemetry (SQLite), three rollup grains, 16 built-in alert rules, in-app / Windows toast / webhook notifications (Feishu, DingTalk, WeCom, Slack, generic).
 - **Audit**: OpenWebUI conversation audit export with a searchable index, a hash-chained access log, scheduled exports with retention.
 - **Billing**: a local billing center (customers, credentials, plans, prices, usage, ledger) that can run in shadow mode before enforcing.
 - **TTS platform**: Chatterbox, Qwen3-TTS, Fish, Step-Audio, VoxCPM, Qwen VoiceDesign and external API engines behind an OpenAI Audio-compatible API.
@@ -784,8 +784,8 @@ Instance modes: `replace` (the old container is renamed and kept as a rollback c
 
 #### Downloads
 
-- Sources: Hugging Face, hf-mirror, ModelScope. Policy `huggingface` (default), `hf-mirror` or `auto` (official first, one-shot mirror fallback on network-class failures). Gated repos always use the official endpoint.
-- Tokens: a Hugging Face token typed for a download lives only in the entry process memory and is discarded afterwards; tick "remember" to store it in the encrypted secret store, or run `platform secrets set hf.token`. Mirrors and ModelScope never receive it.
+- Sources: Hugging Face, hf-mirror, ModelScope. Policy `huggingface` (default), `hf-mirror` or `auto`; with `huggingface` and `auto`, search and manifest lookups fall back once to the mirror, with a warning, when the official endpoint fails in a network-class way (unreachable, timeout, 429, 502-504). Gated repos always use the official endpoint.
+- Tokens: a Hugging Face token typed for a download lives only in the entry process memory and is released when the job is ready or cancelled (7 days after a failure); tick "remember" to store it in the encrypted secret store, or run `platform secrets set hf.token`. Mirrors and ModelScope never receive it.
 - Queue: one global persistent queue (queued, waiting, resolving, downloading, materializing, verifying, ready, retrying, paused, interrupted, failed, cancelled) with pause, resume, retry, priority and reordering; interrupted jobs resume after an entry restart. One transfer at a time by default (`transfer.maxConcurrent`); a stalled download (10 minutes without progress) is terminated, keeps the files it has, and is retried by policy; sha256 verification is on by default.
 - The target folder name defaults to the repo name with `/` replaced by `-` and can be changed in the plan; choosing a storage root chooses the destination.
 
@@ -876,11 +876,11 @@ Cross-field validation: ports must not collide, and "reachable from the LAN + `e
 | `exposure.requireApiKey` | `auto` | `SERVICE_ENTRY_REQUIRE_API_KEY` | `auto` / `on` / `off`; `auto` = key required in LAN or public mode |
 | `exposure.allowedOrigins` | `[]` | `SERVICE_ENTRY_ALLOWED_ORIGINS` | Browser CORS allowlist |
 | `trustedProxies.cidrs` | `127.0.0.1/32`, `::1/128` | `SERVICE_ENTRY_TRUSTED_PROXIES` | Only forwarded headers from these addresses are believed |
-| `managers.bindHost` | `0.0.0.0` | `VLLM_MANAGER_HOST` / `LLAMA_MANAGER_HOST` | Manager listen address |
+| `managers.bindHost` | `0.0.0.0` | | Manager listen address; derives `managers.vllm.host` / `managers.llama.host` (env `VLLM_MANAGER_HOST` / `LLAMA_MANAGER_HOST` override them individually) |
 | `docker.ensureOnStart` | `start` | | `start` launches Docker Desktop and waits, `wait` only waits, `off` does not wait |
 | `docker.waitTimeoutSec` / `docker.wslDistro` | `120` / empty | `PLATFORM_DOCKER_WAIT_SECONDS` / `DOCKER_WSL_DISTRO` | Wait for Docker; run docker inside a WSL distro |
 | `console.defaultUi` | new console when unset | `SERVICE_ENTRY_CONSOLE_DEFAULT` | Set `classic` to bring the classic UI back |
-| `cli.openBrowser` / `cli.lang` | `true` / `auto` | `PLATFORM_LANG` | Whether `platform start` opens a browser; CLI language |
+| `cli.openBrowser` / `cli.lang` | `true` / `auto` | `SERVICE_ENTRY_NO_BROWSER` (`1` = do not open) / `PLATFORM_LANG` | Whether `platform start` opens a browser; CLI language |
 | `paths.hfHome` | `${AI_ROOT}/cache/huggingface` | `HF_HOME` | Hugging Face cache |
 | `paths.ttsRuntimeRoot` | empty (`<AI_ROOT>\tts-runtime`) | `TTS_RUNTIME_ROOT` | TTS runtime folder |
 | `hub.downloadsOwner` | `hub` | `AI_HUB_DOWNLOADS_OWNER` | `hub` = the entry owns downloads; `manager` = rollback to the managers' legacy controllers |
@@ -913,7 +913,7 @@ The complete list with Chinese and English descriptions is in `manager-core/data
 | `MODEL_GPU_ADMISSION_RESERVE_MB` / `_MAX_UTILIZATION_PCT` / `_STARTUP_MARGIN_MB` | GPU admission defaults |
 | `MANAGER_STATUS_CACHE_MS` (2000) / `STATS_SAMPLE_INTERVAL_MS` (10000, 5000-60000) | Manager status cache and stats sampling |
 | `MODEL_ACCESS_STATS_CACHE_MS` / `MODEL_REMOTE_SEARCH_CACHE_MS` / `MODEL_REMOTE_INFO_CACHE_MS` / `METRICS_HISTORY_FLUSH_MS` | Access-stats, online-search and model-info caches, and the metrics history flush interval |
-| `SERVICE_ENTRY_AUTH_FAIL_LIMIT` / `_WINDOW_SECONDS` / `_BAN_SECONDS` | Auth-failure ban (default 20 failures / 60 s -> 600 s ban) |
+| `SERVICE_ENTRY_AUTH_FAIL_LIMIT` / `SERVICE_ENTRY_AUTH_FAIL_WINDOW_SECONDS` / `SERVICE_ENTRY_AUTH_BAN_SECONDS` | Auth-failure ban (default 20 failures / 60 s -> 600 s ban) |
 | `SERVICE_ENTRY_ALLOWED_HOSTS` | Extra PUBLIC Host allowlist |
 | `SEARCH_GATEWAY_API_KEY` / `SEARCH_GATEWAY_ALLOW_NO_KEY` | Search gateway key; running keyless on a non-loopback bind must be explicitly allowed |
 | `AI_AUDIT_MAX_EXPORTS` / `AI_AUDIT_MAX_AGE_DAYS` | Audit export retention by count (30) and age in days (90) |
@@ -937,7 +937,7 @@ Secrets exist only in `<AI_ROOT>\.runtime\secrets\<namespace>.json`: each value 
 #### Defaults
 
 - **This machine is the owner.** A request from this machine (decided by the socket address, never by forwarded headers) is the owner with no pairing or session. The console, including the classic pages, opens straight into admin mode, and scripts without an `Origin` header (`curl`, `platformctl`, PowerShell) can write.
-- **LAN.** When the entry runs in LAN mode (`platform start --lan`, or `listeners.admin.lan=true`), LAN devices are the owner by default too (`admin.allowLanOwner=true`). LAN devices calling the model gateway still need an API key.
+- **LAN.** When the entry runs in LAN mode (`platform start --lan`, or `listeners.admin.lan=true`), LAN devices are the owner by default too (`admin.allowLanOwner=true`). API clients on the LAN calling the model gateway still need an API key (the console's own Playground uses the owner session and needs none).
 - **Browser writes must be same-origin.** A write carrying `Origin` / `Sec-Fetch-Site` must match the console, otherwise it answers `csrf_invalid`.
 - **Never the owner**: requests carrying forwarding headers (`X-Forwarded-*`, `CF-Connecting-IP`, ...) and anything on the public listener (5186). Forwarding headers can only demote, never promote.
 - **Managers** bind `0.0.0.0` by default (so Docker containers can reach them through `host.docker.internal`), but their pages and management API accept this machine only; other devices can use only the entry's gateway. Under `platform`, the bind address is injected from the config; running a manager's `server.js` by hand binds `127.0.0.1` only.
@@ -956,7 +956,7 @@ Secrets exist only in `<AI_ROOT>\.runtime\secrets\<namespace>.json`: each value 
 | Managers accept only entry-forwarded model requests | `platform config set public.managersGatewayOnly enforce` (first watch the `direct_manager_gateway` events drop to zero under the default `warn`) |
 | Always require an API key at the gateway | `platform config set exposure.requireApiKey on` |
 | Turn the public listener off | `platform config set listeners.public.enabled false` |
-| Allow browser cross-origin callers | `SERVICE_ENTRY_ALLOWED_ORIGINS=https://a.example,https://b.example` (`*` is flagged as a doctor failure) |
+| Allow browser cross-origin callers | `SERVICE_ENTRY_ALLOWED_ORIGINS=https://a.example,https://b.example` (`*` is flagged as a failure in Access and keys -> Security overview) |
 | Extra Host / reverse-proxy domains | ADMIN: `admin.extraHosts`; PUBLIC: `SERVICE_ENTRY_ALLOWED_HOSTS` |
 | Firewall | If no other device needs direct manager access, block inbound 5177/5178 in Windows Firewall; keep 5180, 5190, 7000, 8000 and 8080 closed to the outside too |
 
@@ -1022,7 +1022,7 @@ Runtime images are pinned in `manager-core/data/runtime-manifest.json` (overrida
 - llama.cpp `b10630` CUDA image (digest-pinned). The Muse runtime is retired: only rollback code remains and launches are blocked.
 - LMDeploy / TensorRT-LLM / TabbyAPI are tag-only (not digest-pinned) and pulled only on explicit request.
 
-Override images with `VLLM_IMAGE`, `VLLM_IMAGE_VERSION`, `VLLM_QWEN_MOE_IMAGE`, `VLLM_GEMMA_IMAGE`, `SGLANG_IMAGE`, `SGLANG_FLASH_NEXT_IMAGE`, `LLAMA_IMAGE`, `LLAMA_IMAGE_DIGEST`, or `runtime.imageOverride` in a launch request. Pinned images of stable engines are pulled automatically before launch; experimental engines and unpinned or retired runtimes need an explicit pull, otherwise the plan shows `image_pull_required` (409) - pull from the console or `POST /api/runtimes/<runtimeId>/pull`. `docker run` itself always uses `--pull never`. Measured Qwen3.8-27B vLLM MTP and SGLang DSpark results and parameters are in the [Qwen3.8-27B acceleration guide](docs/qwen38-acceleration-guide.md).
+Override images with `VLLM_IMAGE`, `VLLM_IMAGE_VERSION`, `VLLM_QWEN_MOE_IMAGE`, `VLLM_GEMMA_IMAGE`, `SGLANG_IMAGE`, `SGLANG_FLASH_NEXT_IMAGE`, `LLAMA_IMAGE`, `LLAMA_IMAGE_DIGEST`, or `runtime.imageOverride` in a launch request. Pinned images of stable engines are pulled automatically before launch; experimental engines and unpinned or retired runtimes need an explicit pull, otherwise the plan shows `image_pull_required` (409) - pull from the console or `POST /api/runtimes/<runtimeId>/pull`. Measured Qwen3.8-27B vLLM MTP and SGLang DSpark results and parameters are in the [Qwen3.8-27B acceleration guide](docs/qwen38-acceleration-guide.md).
 
 Main GGUFs such as `dynamic` and `17gb` in one directory are alternatives, not additive; estimation and launch use exactly one selected main variant. `mmproj` is an optional vision projector and the DFlash GGUF is an optional speculative-decoding accelerator; each counts only when selected or automatically matched.
 
@@ -1063,7 +1063,7 @@ The entry records every gateway request (metadata: route, model, key, status, TT
 
 #### Alerts and notifications
 
-16 built-in rules cover instance / manager down, upstream error rate, auth storms, queue saturation, KV usage, GPU temperature / power / throttling, free disk, audit export failure / chain risk, telemetry staleness, ban events and billing availability; you can disable them, tune thresholds and channels, or add custom rules. Channels: in-app, Windows toast (shown by the supervisor) and webhooks (generic / Feishu / DingTalk / WeCom / Slack; signing secrets live in the secret store; 5 s timeout, retries after 1 / 5 / 30 s; at most 20 notifications per hour per channel).
+16 built-in rules cover instance / manager down, upstream error rate, auth storms, queue saturation, KV usage, GPU temperature / power / throttling, free disk, audit export failure / chain risk, telemetry staleness, ban events and billing availability; you can disable them, tune thresholds and channels, or add custom rules. Channels: in-app, Windows toast (shown by the supervisor; off by default, setting `supervisor.notifications.toast`) and webhooks (generic / Feishu / DingTalk / WeCom / Slack; signing secrets live in the secret store; 5 s timeout, retries after 1 / 5 / 30 s; at most 20 notifications per hour per channel).
 
 #### Audit
 
@@ -1071,7 +1071,7 @@ The entry can export OpenWebUI conversations to Markdown on a schedule (hourly i
 
 #### Billing
 
-The billing center (`/billing`) is open to the local owner only; data lives in `service-entry\data\platform-billing.sqlite`: customers, credentials, plans and prices, usage and ledger; 1 credit = 1,000,000 microcredits; TTS is metered by audio duration. Enforcement can run in shadow mode first and be switched to hard later. The billing admin API is not exposed through the tunnel / Caddy templates.
+The billing center (`/billing`) is open to the local owner only; data lives in `service-entry\data\platform-billing.sqlite`: customers, credentials, plans and prices, usage and ledger; 1 credit = 1,000,000 microcredits; TTS can be priced per minute or per thousand characters, with a daily seconds quota. Enforcement can run in shadow mode first and be switched to hard later. The billing admin API is not exposed through the tunnel / Caddy templates.
 
 ### 14. Operations
 
@@ -1082,7 +1082,7 @@ The billing center (`/billing`) is open to the local owner only; data lives in `
 #### Supervisor and autostart
 
 ```cmd
-platform autostart enable [--profile core|full]
+platform autostart enable [--profile core|full|none]
 platform autostart status
 platform autostart disable
 ```
@@ -1091,9 +1091,9 @@ platform autostart disable
 
 #### Deploy, update and backup
 
-- **Update (git clone)**: `update-platform.cmd [-CheckOnly]` is fast-forward only, refuses local edits, unpushed commits and diverged history, then runs `test-all.cmd`; models, caches, `.env`, databases and logs are untouched. See the [update guide](docs/update-guide.md).
+- **Update (git clone)**: `update-platform.cmd [-CheckOnly]` is fast-forward only, refuses local edits, unpushed commits and diverged history, then after the fast-forward runs `install-all.cmd` and `test-all.cmd` (`-SkipInstall` / `-SkipTests` skip them); models, caches, `.env`, databases and logs are untouched. See the [update guide](docs/update-guide.md).
 - **Deploy (git-managed live root)**: the live root is deployed from feature branches of `platform-repo.git` through worktrees (next section): `platform deploy [--restart none|changed|all] [--dry-run] [--yes]`. After copying files, post-deploy prunes stale artifacts, runs `npm ci` where the lockfile changed, rebuilds the MCP, writes `version.json` and optionally restarts through the supervisor (busy components queue until idle; model containers are never restarted). `platform update` in the live root fetches `worktrees\main` and deploys it.
-- **Backup**: `scripts\backup-platform.ps1 [-Register] [-KeepDays 14]` snapshots the billing and telemetry databases, entry JSON, manager ledgers and TTS history / voices into `backups\<timestamp>\` with a sha256 manifest; old backups are pruned only after verification, and `.runtime\secrets` is never copied. `-Register` adds a daily 03:30 scheduled task. Models and caches are not backed up.
+- **Backup**: `scripts\backup-platform.ps1 [-Register] [-KeepDays 14]` snapshots the billing and telemetry databases, entry JSON, manager ledgers and TTS history / voices into `backups\<timestamp>\` with a sha256 manifest; old backups are pruned only after verification, and `.runtime\secrets` is never copied. `-Register` adds a daily 03:30 scheduled task. Models, caches and the access store (`platform-access.sqlite`, the key hash store) are not backed up.
 - **Nightly check**: `scripts\nightly-e2e.ps1 [-Register]` runs `test-all` plus live probes and writes `artifacts\nightly\`.
 
 #### Logs
