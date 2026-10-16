@@ -20,6 +20,7 @@ function createLauncher(options = {}) {
   const aiRoot = path.resolve(options.aiRoot || path.join(__dirname, "../.."));
   const stateDir = path.join(aiRoot, ".runtime", "platform", "state");
   const spawn = options.spawn || childProcess.spawn;
+  const platform = options.platform || process.platform;
   const run = promisify(options.execFile || childProcess.execFile);
   const winproc = options.winproc || winprocDefault;
   const logs = options.logs || logFiles;
@@ -100,7 +101,10 @@ function createLauncher(options = {}) {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         descriptors.push(fs.openSync(file, "a"));
       }
-      child = spawn(command, args, { cwd: component.cwd || aiRoot, env: component.env || process.env, detached: true, windowsHide: true, stdio: ["ignore", ...descriptors] });
+      // A detached Windows PowerShell host can exit before executing its script.
+      // Keep its window hidden and retain the same PID identity and tree stop.
+      const detached = !(platform === "win32" && /^(?:powershell|pwsh)\.exe$/i.test(path.win32.basename(command)));
+      child = spawn(command, args, { cwd: component.cwd || aiRoot, env: component.env || process.env, detached, windowsHide: true, stdio: ["ignore", ...descriptors] });
       await once(child, "spawn");
       child.unref?.();
     } finally { descriptors.forEach((fd) => fs.closeSync(fd)); }

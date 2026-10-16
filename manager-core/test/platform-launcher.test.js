@@ -77,6 +77,79 @@ test("start detaches with hidden windows and append FDs, then writes the full re
   assert.ok(!JSON.stringify(fixture.operations).includes(secret));
 });
 
+const WINDOWS_POWERSHELL_COMMANDS = [
+  "powershell.exe",
+  "PWSH.EXE",
+  "pwsh.exe",
+  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+];
+
+for (const command of WINDOWS_POWERSHELL_COMMANDS) {
+  test(`Windows ${command} starts without detaching and retains log, identity and tree-stop behavior`, async (t) => {
+    const fixture = world(t, { platform: "win32" });
+    const processInfo = { ...PROCESS, exe: command.includes("\\") ? command : `C:\\fixture\\bin\\${command}`, commandLine: `${command} -NoProfile -File fixture-start.ps1` };
+    fixture.setCurrent(processInfo);
+    const component = {
+      ...fixture.component,
+      id: "tts-gateway", kind: "process", command,
+      args: ["-NoProfile", "-File", "fixture-start.ps1"],
+      logs: { out: path.join(fixture.root, "append-out.log"), err: path.join(fixture.root, "append-err.log") },
+      stop: { strategy: "script-then-kill", script: [command, "-NoProfile", "-File", "fixture-stop.ps1"], tree: true, graceSec: 0 },
+    };
+    fs.writeFileSync(component.logs.out, "earlier stdout\n");
+    fs.writeFileSync(component.logs.err, "earlier stderr\n");
+    const started = await fixture.launcher.start(component);
+    assert.equal(started.ok, true);
+    const spawned = fixture.calls.find((call) => call[0] === "spawn");
+    assert.equal(spawned[1], command);
+    assert.deepEqual(spawned[2], component.args);
+    assert.equal(spawned[3].detached, false, "Windows PowerShell must keep its console association to execute the script");
+    assert.equal(spawned[3].windowsHide, true);
+    assert.equal(spawned[3].stdio[0], "ignore");
+    assert.equal(spawned[3].stdio.length, 3);
+    for (const fd of spawned[3].stdio.slice(1)) {
+      assert.equal(Number.isInteger(fd), true);
+      assert.throws(() => fs.fstatSync(fd), { code: "EBADF" }, "the parent closes its append handles after spawn");
+    }
+    assert.equal(fs.readFileSync(component.logs.out, "utf8"), "earlier stdout\nfake startup\n");
+    assert.equal(fs.readFileSync(component.logs.err, "utf8"), "earlier stderr\n");
+    assert.equal(fixture.calls.filter((call) => call[0] === "unref").length, 1);
+    const identity = fixture.launcher.readIdentity(component.id);
+    assert.equal(identity.pid, PROCESS.pid);
+    assert.equal(identity.exe, processInfo.exe);
+    assert.equal(identity.processCreatedAt, PROCESS.processCreatedAt);
+    assert.deepEqual(identity.logFiles, component.logs);
+    assert.deepEqual(started.identity, identity);
+
+    const stopped = await fixture.launcher.stop(component);
+    assert.equal(stopped.reason, "killed-by-supervisor");
+    const script = fixture.calls.find((call) => call[0] === "exec");
+    assert.equal(script[1], command);
+    assert.deepEqual(script[2], component.stop.script.slice(1));
+    assert.equal(script[3].windowsHide, true);
+    const killed = fixture.calls.find((call) => call[0] === "kill");
+    assert.equal(killed[1], PROCESS.pid);
+    assert.equal(killed[2].tree, true, "stopping the PowerShell wrapper must still include its Python child");
+    assert.deepEqual(killed[2].identity, identity);
+  });
+}
+
+test("non-Windows PowerShell names and Windows Node, Python and other executables remain detached", async (t) => {
+  const cases = [
+    ...["linux", "darwin"].flatMap((platform) => WINDOWS_POWERSHELL_COMMANDS.map((command) => ({ platform, command }))),
+    ...["node.exe", "C:\\fixture\\bin\\node.exe", "python.exe", "C:\\Python312\\python.exe", "pwsh-helper.exe", "powershell.exe.wrapper"].map((command) => ({ platform: "win32", command })),
+  ];
+  for (const { platform, command } of cases) {
+    const fixture = world(t, { platform });
+    const started = await fixture.launcher.start({ ...fixture.component, command });
+    assert.equal(started.ok, true);
+    const spawned = fixture.calls.find((call) => call[0] === "spawn");
+    assert.equal(spawned[3].detached, true, `${platform} ${command} keeps detached launching`);
+    assert.equal(spawned[3].windowsHide, true);
+  }
+});
+
 test("start returns existing for a matching live identity and refuses a recycled PID", async (t) => {
   const fixture = world(t);
   fixture.launcher.writeIdentity(fixture.record);
