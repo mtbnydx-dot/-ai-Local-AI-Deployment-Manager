@@ -19,7 +19,7 @@ const LONG_ID = "example-org/a-very-long-model-name-with-quantization-nvfp4-and-
 
 // The build id the portal routes see; the stale-build test moves it.
 const build = { hash: BUILD_ID };
-const state = {
+let state = {
   status: null, catalog: null, announcements: null, keyModels: null, requests: [], failStatus: false,
   // PUB-17: the keys the stub accepts, the /v1/me documents and the fake chat upstream.
   validKeys: new Set(), me: null, usage: null, myRequests: null, csv: "", rotateTo: "", puts: [], posts: [],
@@ -193,6 +193,9 @@ function requestsDoc(source = "telemetry") {
 const CSV_TEXT = "﻿date,requests,input_tokens\r\n2026-10-10,15,5500\r\n";
 
 function resetKeyStubs() {
+  // A previous page may close an unfinished stream after the next test starts.
+  // Keep that response's callbacks on its old fixture, not this test's counters.
+  state = { ...state };
   state.validKeys = new Set([FAKE_KEY]);
   state.me = meDoc();
   state.usage = usageDoc("telemetry");
@@ -209,30 +212,31 @@ function resetKeyStubs() {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function chatRoute(req, res) {
+  const chatState = state;
   const body = JSON.parse((await readBody(req)) || "{}");
-  state.chatBodies.push(body);
-  state.chatHeaders.push({ authorization: req.headers.authorization || "", accept: req.headers.accept || "", contentType: req.headers["content-type"] || "" });
-  if (!state.validKeys.has(bearerOf(req))) {
+  chatState.chatBodies.push(body);
+  chatState.chatHeaders.push({ authorization: req.headers.authorization || "", accept: req.headers.accept || "", contentType: req.headers["content-type"] || "" });
+  if (!chatState.validKeys.has(bearerOf(req))) {
     return sendJson(res, 401, { error: { message: "invalid", type: "authentication_error", code: "invalid_api_key", param: null }, request_id: "req_pg401" });
   }
-  if (state.chatMode === "limited") {
+  if (chatState.chatMode === "limited") {
     return sendJson(res, 429, { error: { message: "slow down", type: "rate_limit_error", code: "rate_limit_exceeded", param: null }, request_id: "req_pg429" });
   }
   res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
   res.on("close", () => {
-    if (!res.writableEnded) state.chatClosed += 1;
+    if (!res.writableEnded) chatState.chatClosed += 1;
   });
   const send = (value) => res.write(`data: ${typeof value === "string" ? value : JSON.stringify(value)}\n\n`);
   const delta = (content, extra = {}) => ({ id: "c1", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content, ...extra }, finish_reason: null }] });
   send(delta("", { role: "assistant" }));
   await delay(100);
-  if (state.chatMode === "thinking") send(delta("", { reasoning_content: "Let me think." }));
+  if (chatState.chatMode === "thinking") send(delta("", { reasoning_content: "Let me think." }));
   send(delta("Hello"));
-  if (state.chatMode === "hang") {
+  if (chatState.chatMode === "hang") {
     await new Promise((resolve) => res.on("close", resolve));
     return undefined;
   }
-  if (state.chatMode === "gated") await new Promise((resolve) => { state.release = resolve; });
+  if (chatState.chatMode === "gated") await new Promise((resolve) => { chatState.release = resolve; });
   await delay(150);
   send(delta(" world"));
   await delay(150);
@@ -1410,6 +1414,38 @@ test.describe("playground (PUB-17)", () => {
     await failures.expectNone();
   });
 
+  test("a late stream close cannot change the next test's chat fixture", async () => {
+    const previous = state;
+    previous.chatMode = "hang";
+    let request;
+    try {
+      await new Promise((resolve, reject) => {
+        request = http.request(`${baseUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${FAKE_KEY}`, "content-type": "application/json" },
+        }, (response) => {
+          let text = "";
+          response.on("error", reject);
+          response.on("data", (chunk) => {
+            text += chunk.toString();
+            if (text.includes('"content":"Hello"')) resolve();
+          });
+        });
+        request.on("error", reject);
+        request.end(JSON.stringify({ model: "qwen3.8-flash", stream: true, messages: [{ role: "user", content: "old stream" }] }));
+      });
+      // Reproduce the ordering that page teardown can produce between tests:
+      // reset first, then deliver the old response's close event.
+      resetKeyStubs();
+      request.destroy();
+      await expect.poll(() => previous.chatClosed).toBe(1);
+      expect(state.chatClosed).toBe(0);
+      expect(state.chatBodies).toEqual([]);
+    } finally {
+      request?.destroy();
+    }
+  });
+
   test("Stop aborts the request, keeps the partial answer and frees the form", async ({ page }) => {
     await withKey(page);
     state.chatMode = "hang";
@@ -1420,6 +1456,7 @@ test.describe("playground (PUB-17)", () => {
     await expect(page.getByTestId("stopped-note")).toHaveText("Stopped before the answer finished.");
     await expect(answer(page)).toHaveText("Hello");
     await expect.poll(() => state.chatClosed).toBe(1);
+    expect(state.chatBodies).toHaveLength(1);
     await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0);
     await page.getByLabel("Your message").fill("next");
     await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
