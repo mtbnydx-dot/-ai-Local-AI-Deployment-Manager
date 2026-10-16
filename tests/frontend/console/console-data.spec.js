@@ -153,10 +153,23 @@ test("the LogViewer pauses following on scroll-up and resumes with Jump to lates
     expect(await atBottom()).toBe(true);
 
     await box.hover();
+    // The wheel handler pauses following before native scrolling finishes.
+    await box.evaluate((element) => {
+      const before = element.scrollTop;
+      element.dataset.wheelScrollEnded = "false";
+      const onEnd = () => {
+        if (element.scrollTop >= before) return;
+        element.dataset.wheelScrollEnded = "true";
+        element.removeEventListener("scrollend", onEnd);
+      };
+      element.addEventListener("scrollend", onEnd);
+    });
     await page.mouse.wheel(0, -600);
     await expect(viewer).toHaveAttribute("data-following", "false");
     await expect(viewer.locator('[data-testid="log-viewer.follow"]')).toHaveAttribute("aria-pressed", "false");
     await expect(viewer.locator('[data-testid="log-viewer.jump"]')).toBeVisible();
+    await expect(box).toHaveAttribute("data-wheel-scroll-ended", "true");
+    await box.evaluate((element) => { delete element.dataset.wheelScrollEnded; });
     const top = await box.evaluate((element) => element.scrollTop);
     const count = await viewer.locator('[data-testid="log-viewer.line"]').count();
     await expect.poll(() => viewer.locator('[data-testid="log-viewer.line"]').count()).toBeGreaterThan(count);
