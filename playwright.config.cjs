@@ -36,6 +36,12 @@ function resolveBrowserChannel() {
 }
 
 const browserChannel = resolveBrowserChannel();
+// Let release checks bound concurrency on a host that is running other work.
+const workerText = String(process.env.PLAYWRIGHT_WORKERS || "").trim();
+const releaseWorkers = workerText ? Number(workerText) : undefined;
+if (workerText && (!Number.isInteger(releaseWorkers) || releaseWorkers < 1)) {
+  throw new Error("PLAYWRIGHT_WORKERS must be a positive integer");
+}
 
 module.exports = defineConfig({
   // Specs are discovered: any *.spec.{cjs,js,mjs} under tests/ runs without a
@@ -45,6 +51,7 @@ module.exports = defineConfig({
   timeout: 60_000,
   fullyParallel: false,
   retries: 0,
+  ...(releaseWorkers === undefined ? {} : { workers: releaseWorkers }),
   reporter: [["list"]],
   use: {
     browserName: "chromium",
